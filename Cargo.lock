@@ -1622,6 +1622,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dfa686283ad6dd069f105e5ab091b04c62850d3e4cf5d67debad1933f55023df"
 
 [[package]]
+name = "host-services"
+version = "0.1.0"
+
+[[package]]
 name = "icu_collections"
 version = "2.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2175,6 +2179,7 @@ dependencies = [
 name = "native-host"
 version = "0.1.0"
 dependencies = [
+ "host-services",
  "js-runtime",
  "rquickjs",
  "serde",
@@ -2183,6 +2188,7 @@ dependencies = [
  "sourcemap",
  "ui-bridge",
  "zgui",
+ "zgui-view",
 ]
 
 [[package]]

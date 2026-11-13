@@ -9,7 +9,7 @@ The implementation follows [the supplied specification](tsx-native-ui.md). Phase
 | Rust | 1.98.0, minimal profile plus rustfmt/clippy |
 | zgui | `80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a` |
 | Fontique | Root Cargo patch from the same zgui revision |
-| Native runtime | Same revision, with the documented [disabled-activation patch](../../vendor/README.md) |
+| Native runtime | Same revision, with the documented [activation, occlusion and timer patches](../../vendor/README.md) |
 | rquickjs | `73fcd6062ee615aeb2a4675cd32be67a56e93973`; Phase 0 `std`, Phase 1 adds `macro` for opaque native classes |
 | QuickJS-NG | Resolved submodule `6d46d07d04041b40f4f49eaa7fdebe44c314c699` |
 | Node | Tested build tooling on 26.13.0 |
@@ -30,6 +30,7 @@ pnpm ui:build --smoke
 pnpm smoke
 pnpm ui:build --app counter
 pnpm ui:build --app lists
+pnpm ui:build --app async
 pnpm ui:dev --app counter
 pnpm test:build
 cargo test -p js-runtime
@@ -39,6 +40,8 @@ env ZGUI_PLATFORM=wayland cargo run -p native-host -- --exit-after-ms 5000
 env ZGUI_PLATFORM=wayland cargo run -p native-host -- --bundle apps/examples/counter/dist
 env ZGUI_PLATFORM=wayland cargo run -p native-host -- --bundle apps/examples/lists/dist --exercise --exit-after-ms 12000
 env ZGUI_PLATFORM=wayland cargo test -p native-host native_tests::native_button_actions -- --ignored --exact --nocapture
+env ZGUI_PLATFORM=wayland cargo test -p native-host --bin native-host async_tests::native_async_delivery -- --ignored --exact --nocapture
+cargo test -p native-host --test native_timer
 ```
 
 `--smoke-module` executes the bundled Solid fixture in the actual embedded engine without creating a window. `--exit-after-ms` requests orderly event-loop shutdown, for native integration checks. The native baseline creates a dedicated Rust-owned mount region, installs a HostBinding, creates/updates native text from JavaScript, and schedules a native one-shot timer and an owned background completion with an explicit platform wake. These are integration harness behaviors, not the public SDK.
@@ -51,7 +54,17 @@ The build uses browser/production Solid export conditions and Babel's Universal 
 
 `Button` uses native control defaults, not JS keyboard synthesis. Native event props accept a function or null/undefined; a `Capture` suffix selects capture. `onFocus`/`onBlur` subscribe to bubbling `focusin`/`focusout`. Snapshots retain owned data and opaque node wrappers; cancellation methods expire when the synchronous handler returns. Pointerdown cancellation suppresses that event's focus default, not a later independent pointerup activation; cancelling pointerup suppresses its activation default. Event timestamps are monotonic milliseconds; pointer IDs are decimal strings and text-selection offsets are UTF-8 bytes.
 
-Unexpected nested native notifications are queued without cancellation authority. Each Promise job gets a separate bounded structural turn; wake delivery requests a frame even when the last job empties the queue. Native public timer/rAF/services remain Phase 4 work.
+Unexpected nested native notifications are queued without cancellation authority. Each Promise job gets a separate bounded structural turn; wake delivery requests a frame even when the last job empties the queue.
+
+## Scheduling and service contract
+
+Timer callbacks and rAF callbacks use native registrations and release their registration before invocation. Cancellation also removes callbacks already selected by native scheduling but not yet invoked in JS. rAF work runs before layout, including its Promise continuations, and stays pending while occluded; native timers and worker delivery continue without input.
+
+The host permits 1,024 scheduled/ready callbacks and 64 outstanding asset requests per session. Asset reads are limited to 1 MiB of UTF-8 from manifest-declared resources. A shared two-worker executor has a bounded 64-request queue; each session has a bounded completion inbox. Only owned data, IDs, cancellation flags and a platform waker cross threads. Cancellation is definitive at delivery; duplicate/stale completions cannot settle a request twice.
+
+Each owner checkpoint bounds completion, scheduled-callback and deferred-notification batches to 32 each, sharing a 10 ms deadline; individual JS entries retain their interrupt limit. Promise pumping additionally limits attempts to 256. Remaining work explicitly wakes the owner. Preflight rejects timer/frame/service creation; teardown stops delivery, cancels registrations and releases persistent roots before destroying the engine.
+
+See [`@zgui/services`](../../packages/services/README.md) for the typed request API and cancellation contract. Console formatting is bounded and does not invoke application getters or `toString`.
 
 ## Observed verification
 
@@ -75,6 +88,12 @@ Unexpected nested native notifications are queued without cancellation authority
 - Runtime ownership/rejection/deadline checks: 22 tests passed. Independent review found a diagnostic accessor could extend a job/cleanup deadline; the deadline clamp and regression passed, and read-only re-review reported no remaining findings.
 - Phase 3 real Wayland input gate: passed over 27 settled frames at scale 1.75. Pointer/Enter/Space each activate once; repeats do not; native focus and activation cancellation, capture/bubble stopping, handler replacement/removal, and 48 expired cancellation attempts passed. Cached-disabled focus and disabling during the same keydown cannot activate after the documented native patch. Shutdown retained zero nodes/wrappers.
 - `target/phase3-counter.png`: visually inspected the real counter with styled native Button; interactive binary started and exited with code 0.
+- Phase 4: 10 worker-executor tests and 8 real-engine request/callback lifecycle tests passed. Native SDK typechecks, async package build and 9 compiler tests passed.
+- Self-replenishing microtask regression passed: the pump yields after eight attempts; a subsequent owner entry cancels the chain, and the final pending job drains.
+- `target/async.png`: visually inspected real native text after timer, frame, Promise layout and Rust asset completion; orderly exit code 0.
+- Independent async ownership review found cancelled native timers retained closures until their original deadlines. Eager in-place reclamation and its focused vendored-module gate passed all 9 timer tests; read-only re-review reported no further findings.
+- Phase 4 real Wayland async gate passed before the independent timer-reclamation patch: timer and Rust task completed while occluded; rAF/Promise remained pending; the first visible fired frame contained the Promise row at 56 device px (32 CSS px × 1.75); all resource counts reached zero.
+- A later native rerun was blocked before JS attachment because the desktop became locked (`LockedHint=yes`), so no actual visible edge arrived. Startup diagnostics now distinguish this environment failure. Re-run the native gate after unlocking; no claim is made that the locked rerun passed.
 
 Environment: Linux x86_64 Wayland session; niri compositor reports `26.04 (v26.04-298-gad20c318-modified)`, CLI `26.04 (8ed0da4)`; Wayland client 1.26.0, xkbcommon 1.13.2, Fontconfig 2.18.3, Vulkan 1.4.363. No performance claims are made from this baseline.
 

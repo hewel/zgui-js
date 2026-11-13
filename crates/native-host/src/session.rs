@@ -4,7 +4,7 @@ use rquickjs::{Exception, Function, Persistent};
 use ui_bridge::{DeferredEvent, UiBridge, registry::NodeRegistry};
 use zgui::view::host::TimerId;
 use zgui::platform::{SurfaceId, WakeReason, Waker};
-use crate::{MountRegion, package::Package};
+use crate::{MountRegion, package::Package, work::{Arguments, Work}};
 
 type Result<T, E = Box<dyn Error>> = std::result::Result<T, E>;
 
@@ -12,6 +12,7 @@ pub(crate) struct Session {
     // Roots and bridge are declared before engine; this order is also safe on unwind.
     disposer: RefCell<Option<Persistent<Function<'static>>>>,
     pub(crate) bridge: Rc<UiBridge>,
+    work: Rc<Work>,
     engine: RefCell<Option<JsRuntime>>,
     pub(crate) region: MountRegion,
     pub(crate) timer: Cell<Option<TimerId>>,
@@ -25,11 +26,13 @@ pub(crate) struct Session {
 
 impl Session {
     /// Pure module preflight: bridge mutation is disabled until mount's turn.
-    pub(crate) fn prepare(region: MountRegion, package: Option<Rc<Package>>, generation: u64, waker: Arc<dyn Waker>, surface: SurfaceId) -> Result<Rc<Self>> {
+    pub(crate) fn prepare(region: MountRegion, package: Option<Rc<Package>>, generation: u64, waker: Arc<dyn Waker>, surface: SurfaceId, executor: host_services::Executor) -> Result<Rc<Self>> {
         let mut engine = JsRuntime::new(RuntimeLimits::default())?;
         let bridge = UiBridge::new(NodeRegistry::new(region.dom.clone(), region.root, 1, generation, 100_000));
+        let work = Work::new(region.host.clone(), package.clone(), generation, executor, waker.clone(), surface);
         engine.with_context(|ctx| {
             bridge.install(&ctx)?;
+            work.install(&ctx)?;
             ctx.globals().set("mountRoot", bridge.root(&ctx)?)
         })?;
         if let Some(package) = &package {
@@ -41,7 +44,7 @@ impl Session {
                 Ok(())
             }).map_err(|error| package.remap_diagnostic(error))?;
         }
-        let session = Rc::new(Self { disposer: RefCell::new(None), bridge, engine: RefCell::new(Some(engine)), region, timer: Cell::new(None), frames: Cell::new(0), package, deferred: RefCell::new(VecDeque::new()), fault: RefCell::new(None), waker, surface });
+        let session = Rc::new(Self { disposer: RefCell::new(None), bridge, work, engine: RefCell::new(Some(engine)), region, timer: Cell::new(None), frames: Cell::new(0), package, deferred: RefCell::new(VecDeque::new()), fault: RefCell::new(None), waker, surface });
         let weak = Rc::downgrade(&session);
         session.bridge.set_dispatcher(Rc::new(move |id, event| {
             if let Some(session) = weak.upgrade() { session.dispatch(id, event); }
@@ -50,6 +53,7 @@ impl Session {
     }
 
     pub(crate) fn mount(&self) -> Result<()> {
+        self.work.mounting();
         if let Some(package) = &self.package {
             self.region.host.install_stylesheet("application", &package.css);
             let mut engine = self.engine.borrow_mut();
@@ -65,6 +69,7 @@ impl Session {
         } else {
             self.update("globalThis.textNode = __zgui.createTextNode('JavaScript mounted'); __zgui.insertNode(mountRoot, textNode, null); 'JavaScript mounted'")?;
         }
+        self.work.mounted();
         Ok(())
     }
 
@@ -94,11 +99,26 @@ impl Session {
     pub(crate) fn checkpoint(&self) -> Result<bool> {
         if let Some(error) = self.fault.borrow_mut().take() { return Err(error.into()); }
         if self.bridge.is_disposed() { return Ok(false); }
-        let mut engine = self.engine.borrow_mut();
+        let Ok(mut engine) = self.engine.try_borrow_mut() else { self.wake_owner(); return Ok(false); };
         let Some(engine) = engine.as_mut() else { return Ok(false); };
         let end = Instant::now() + engine.limits().job_timeout;
         let max_jobs = engine.limits().max_jobs_per_pump;
         let mut worked = false;
+        for _ in 0..32 {
+            if Instant::now() >= end { break; }
+            let Some(completion) = self.work.next_completion() else { break; };
+            self.bridge.run_turn(|| engine.with_context(|ctx| self.work.settle(&ctx, completion))).map_err(|error| self.diagnostic(error))?;
+            worked = true;
+        }
+        for _ in 0..32 {
+            if Instant::now() >= end { break; }
+            let Some(call) = self.work.next_call() else { break; };
+            self.bridge.run_turn(|| engine.with_context(|ctx| {
+                let callback = call.callback.restore(&ctx)?;
+                match call.arguments { Arguments::Timer => callback.call::<_, ()>(()), Arguments::Frame(timestamp) => callback.call::<_, ()>((timestamp,)) }
+            })).map_err(|error| self.diagnostic(error))?;
+            worked = true;
+        }
         for _ in 0..32 {
             if Instant::now() >= end { break; }
             let Some(event) = self.deferred.borrow_mut().pop_front() else { break; };
@@ -118,7 +138,7 @@ impl Session {
             eprintln!("promise-rejection: id={} handled={} {}", rejection.id, rejection.handled, self.diagnostic(rejection.diagnostic));
         }
         if rejections.dropped_rejections != 0 { eprintln!("promise-rejection: evicted={} (tracking limit)", rejections.dropped_rejections); }
-        if engine.is_job_pending() || !self.deferred.borrow().is_empty() { self.wake_owner(); }
+        if engine.is_job_pending() || !self.deferred.borrow().is_empty() || self.work.has_ready() || self.work.has_completions() { self.wake_owner(); }
         Ok(worked)
     }
 
@@ -164,6 +184,7 @@ impl Session {
     }
 
     pub(crate) fn shutdown(&self) {
+        self.work.begin_stop();
         if let Some(timer) = self.timer.take() { self.region.host.cancel_timer(timer); }
         self.deferred.borrow_mut().clear();
         let disposer = self.disposer.borrow_mut().take();
@@ -173,10 +194,12 @@ impl Session {
                 if let Err(error) = result { eprintln!("disposer error: {}", self.diagnostic(error)); }
             }
         }
+        self.work.finish_stop();
         self.bridge.dispose();
         self.region.host.remove_stylesheet("application");
         if self.engine.borrow_mut().take().is_some() {
-            eprintln!("session-disposed: frames={} nodes={} wrappers={}", self.frames.get(), self.bridge.live_count(), self.bridge.wrapper_count());
+            let (timers, frames, requests) = self.work.counts();
+            eprintln!("session-disposed: frames={} nodes={} wrappers={} callbacks={} timers={} frame_callbacks={} requests={}", self.frames.get(), self.bridge.live_count(), self.bridge.wrapper_count(), self.bridge.callback_count(), timers, frames, requests);
         }
     }
 }

@@ -41,7 +41,7 @@ export function watchApplication(app, { root = workspaceRoot, appDirectory = pat
   });
   const watchers = [];
   try {
-    for (const directory of [appDirectory, path.join(root, "packages/ui"), path.join(root, "packages/build/src")]) {
+    for (const directory of [appDirectory, path.join(root, "packages/ui"), path.join(root, "packages/services"), path.join(root, "packages/build/src")]) {
       watchers.push(watch(directory, { recursive: true }, (_event, filename) => {
         const parts = filename?.toString().split(/[\\/]/) ?? [];
         if (parts.some(part => part === "dist" || part === ".zgui-generations" || part === "node_modules" || part.startsWith(".dist-"))) return;

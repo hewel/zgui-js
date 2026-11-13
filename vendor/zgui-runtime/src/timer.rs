@@ -76,11 +76,6 @@ pub struct Timers {
     entries: BinaryHeap<Reverse<Entry>>,
     /// The next identity, never reused.
     next: u64,
-    /// The identities that have been cancelled and not yet reached the top of the heap.
-    ///
-    /// Cancellation is lazy because a binary heap has no cheap removal, and a tooltip that is
-    /// scheduled and cancelled on every pointer move would otherwise cost a rebuild each time.
-    cancelled: rustc_hash::FxHashSet<TimerId>,
 }
 
 impl Timers {
@@ -91,10 +86,7 @@ impl Timers {
 
     /// How many entries are scheduled and not cancelled.
     pub fn len(&self) -> usize {
-        self.entries
-            .iter()
-            .filter(|entry| !self.cancelled.contains(&entry.0.id))
-            .count()
+        self.entries.len()
     }
 
     /// Whether nothing is scheduled.
@@ -128,22 +120,14 @@ impl Timers {
     ///
     /// Cancelling one that already fired, or one that was already cancelled, does nothing.
     pub fn cancel(&mut self, id: TimerId) {
-        self.cancelled.insert(id);
+        // Reclaim the closure now, not when its original deadline arrives.
+        // Otherwise schedule/cancel loops bypass callers' live-timer limits.
+        self.entries.retain(|entry| entry.0.id != id);
     }
 
     /// When the earliest live entry is due, and which window it belongs to.
-    ///
-    /// Cancelled entries are dropped from the front here rather than searched for, which is what
-    /// keeps the peek honest without making cancellation cost a rebuild.
     pub fn peek(&mut self) -> Option<(Instant, DocumentId)> {
-        while let Some(Reverse(entry)) = self.entries.peek() {
-            if self.cancelled.remove(&entry.id) {
-                self.entries.pop();
-                continue;
-            }
-            return Some((entry.deadline, entry.document));
-        }
-        None
+        self.entries.peek().map(|entry| (entry.0.deadline, entry.0.document))
     }
 
     /// The earliest deadline for one window, if it has one.
@@ -151,7 +135,7 @@ impl Timers {
         let _ = now;
         self.entries
             .iter()
-            .filter(|entry| entry.0.document == document && !self.cancelled.contains(&entry.0.id))
+            .filter(|entry| entry.0.document == document)
             .map(|entry| entry.0.deadline)
             .min()
     }
@@ -179,9 +163,6 @@ impl Timers {
             let Some(Reverse(entry)) = self.entries.pop() else {
                 break;
             };
-            if self.cancelled.remove(&entry.id) {
-                continue;
-            }
             if entry.document != document {
                 others.push(Reverse(entry));
                 continue;
@@ -413,5 +394,41 @@ mod tests {
         }
         assert_eq!(second_count.get(), 1);
         assert!(timers.peek().is_none());
+    }
+
+    #[test]
+    fn cancelling_long_deadlines_releases_callbacks_without_deadline_polling() {
+        let mut timers = Timers::new();
+        let now = Instant::now();
+        let (live_callback, live_count) = counting();
+        timers.schedule(DocumentId::FIRST, now, Duration::from_secs(1), Repeat::Once, live_callback);
+        for _ in 0..4096 {
+            let held = Rc::new(());
+            let weak = Rc::downgrade(&held);
+            let callback = Rc::new(move || { let _ = &held; });
+            let id = timers.schedule(DocumentId::FIRST, now, Duration::from_secs(u32::MAX as u64), Repeat::Once, callback);
+            timers.cancel(id);
+            timers.cancel(id);
+            assert!(weak.upgrade().is_none(), "cancelled callbacks must not retain resources until their deadline");
+        }
+        assert_eq!(timers.len(), 1);
+        for callback in timers.due(DocumentId::FIRST, now + Duration::from_secs(1)) { callback(); }
+        assert_eq!(live_count.get(), 1);
+        assert!(timers.is_empty());
+    }
+
+    #[test]
+    fn cancelling_rearmed_repeat_keeps_only_the_already_selected_callback() {
+        let mut timers = Timers::new();
+        let now = Instant::now();
+        let (callback, count) = counting();
+        let id = timers.schedule(DocumentId::FIRST, now, Duration::from_secs(1), Repeat::Every, callback);
+        let selected = timers.due(DocumentId::FIRST, now + Duration::from_secs(1));
+        timers.cancel(id);
+        timers.cancel(id);
+        for callback in selected { callback(); }
+        assert_eq!(count.get(), 1);
+        assert!(timers.peek_for(DocumentId::FIRST, now).is_none());
+        assert!(timers.due(DocumentId::FIRST, now + Duration::from_secs(10)).is_empty());
     }
 }

@@ -19,6 +19,7 @@
   "devDependencies": {
     "solid-js": "1.9.19",
     "@zgui/ui": "workspace:*",
+    "@zgui/services": "workspace:*",
     "typescript": "5.9.3"
   }
 }

@@ -891,6 +891,9 @@ impl Window {
     /// body waits for the next frame — and the store is never borrowed while a callback runs, so
     /// one may cancel, re-register or drop its own handle.
     fn run_frame_callbacks(&mut self, at: zgui_vocab::Timestamp) -> usize {
+        // Timer-driven housekeeping frames still run while hidden; they must
+        // not consume callbacks reserved for the next visible frame.
+        if self.occluded { return 0; }
         let due = self.host.take_frame_callbacks();
         for callback in &due {
             // Inside the non-reactive zone, exactly as a timer's callback is: a callback that

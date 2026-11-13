@@ -109,6 +109,9 @@ importers:
 
   .:
     devDependencies:
+      '@zgui/services':
+        specifier: workspace:*
+        version: link:packages/services
       '@zgui/ui':
         specifier: workspace:*
         version: link:packages/ui
@@ -118,6 +121,15 @@ importers:
       typescript:
         specifier: 5.9.3
         version: 5.9.3
+
+  apps/examples/async:
+    dependencies:
+      '@zgui/services':
+        specifier: workspace:*
+        version: link:../../../packages/services
+      '@zgui/ui':
+        specifier: workspace:*
+        version: link:../../../packages/ui
 
   apps/examples/counter:
     dependencies:
@@ -161,6 +173,8 @@ importers:
       '@jridgewell/trace-mapping':
         specifier: 0.3.31
         version: 0.3.31
+
+  packages/services: {}
 
   packages/ui:
     dependencies:

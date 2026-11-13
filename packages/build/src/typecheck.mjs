@@ -21,7 +21,12 @@ export function typecheckProject(configPath) {
 }
 
 export async function typecheckWorkspace(root = fileURLToPath(new URL("../../../", import.meta.url))) {
-  const configs = [path.join(root, "packages/ui/tsconfig.native.json"), path.join(root, "tests/types/tsconfig.json")];
+  const configs = [
+    path.join(root, "packages/ui/tsconfig.native.json"),
+    path.join(root, "packages/services/tsconfig.json"),
+    path.join(root, "tests/types/tsconfig.json"),
+    path.join(root, "tests/types/tsconfig.services.json"),
+  ];
   const examples = path.join(root, "apps/examples");
   let entries = [];
   try { entries = await readdir(examples, { withFileTypes: true }); }

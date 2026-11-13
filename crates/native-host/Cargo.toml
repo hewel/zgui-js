@@ -13,3 +13,7 @@ serde_json.workspace = true
 sha2.workspace = true
 rquickjs.workspace = true
 sourcemap.workspace = true
+host-services.workspace = true
+
+[dev-dependencies]
+zgui-view = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a", features = ["stub-backend"] }

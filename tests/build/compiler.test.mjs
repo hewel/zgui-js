@@ -106,6 +106,29 @@ test("real TSX bundles have one reactive runtime, composed maps, resources, and 
   assert.equal(await readFile(path.join(root, "app.mjs"), "utf8"), code, "old reader remains pinned to a complete generation");
 });
 
+test("native services bundle lazily with one Solid runtime and declared text assets", async t => {
+  const directory = await fixture(t);
+  const source = `import { readTextAsset } from "@zgui/services";\n` + validEntry.replace(
+    "return renderApp(() => <App />, root);",
+    'const request = readTextAsset("assets/message.txt"); request.cancel(); return renderApp(() => <App />, root);',
+  );
+  await writeFile(path.join(directory, "src/main.tsx"), source);
+  await mkdir(path.join(directory, "assets"));
+  await writeFile(path.join(directory, "assets/message.txt"), "Native text asset\n");
+  const { dist, manifest } = await buildApplication("fixture", { appDirectory: directory });
+  assert.deepEqual(manifest.assets, ["assets/message.txt"]);
+  assert.equal(await readFile(path.join(dist, manifest.assets[0]), "utf8"), "Native text asset\n");
+  const info = JSON.parse(await readFile(path.join(dist, "build-info.json"), "utf8"));
+  assert.ok(info.inputs.some(input => input.endsWith("packages/services/src/index.js")));
+  assert.equal(info.inputs.filter(input => /\/solid-js\/dist\/(?:solid|dev)\.js$/.test(input)).length, 1);
+  const code = await readFile(path.join(dist, manifest.entry), "utf8");
+  assert.match(code, /globalThis\.__zguiServices\.readTextAsset/);
+  validateModule(code, { bundled: true, entry: true });
+  assert.equal(globalThis.__zguiServices, undefined);
+  const module = await import(pathToFileURL(path.join(await realpath(dist), manifest.entry)));
+  assert.equal(typeof module.mount, "function", "service binding is not accessed before mount");
+});
+
 test("type errors, bad imports, and failed publication preserve the last complete generation", async t => {
   const directory = await fixture(t);
   const { dist, manifest } = await buildApplication("fixture", { appDirectory: directory });

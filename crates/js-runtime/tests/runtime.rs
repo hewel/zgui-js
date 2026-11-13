@@ -412,3 +412,21 @@ fn throwing_job_and_cleanup_do_not_extend_deadlines_to_format_accessors() {
         assert_eq!(runtime.evaluate_script("'usable'").unwrap(), "usable");
     }
 }
+
+#[test]
+fn self_replenishing_microtask_chain_yields_and_can_be_cancelled_by_next_entry() {
+    let mut runtime = JsRuntime::new(RuntimeLimits {
+        max_jobs_per_pump: 8,
+        job_timeout: Duration::from_secs(1),
+        ..RuntimeLimits::default()
+    }).unwrap();
+    runtime.evaluate_script("globalThis.running = true; globalThis.turns = 0; function again() { ++turns; if (running) queueMicrotask(again); } queueMicrotask(again); 'armed'").unwrap();
+    let pump = runtime.pump_jobs();
+    assert_eq!(pump.attempted_jobs, 8);
+    assert!(pump.has_pending_jobs && pump.budget_exhausted);
+    assert!(pump.diagnostics.is_empty());
+    assert_eq!(runtime.evaluate_script("running = false; String(turns)").unwrap(), "8");
+    let pump = runtime.pump_jobs();
+    assert_eq!(pump.attempted_jobs, 1);
+    assert!(!pump.has_pending_jobs);
+}

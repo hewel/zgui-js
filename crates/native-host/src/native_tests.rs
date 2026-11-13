@@ -252,6 +252,7 @@ fn native_button_actions() -> TestResult {
     let application = Application {
         native, pending, sessions: HashMap::new(), sender, inbox, exit_after: None,
         exit_armed: false, failure: failure.clone(), package: Some(package), exercise: false, generation: 0,
+        executor: host_services::Executor::new(2, 64)?,
     };
     let driver = NativeControls {
         inner: application, step: 0, finished: false, deadline: None,

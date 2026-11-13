@@ -1,6 +1,7 @@
 packages:
   - packages/build
   - packages/ui
+  - packages/services
   - apps/examples/*
 
 strictPeerDependencies: true

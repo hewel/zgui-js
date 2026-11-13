@@ -1,7 +1,10 @@
 mod package;
 mod session;
+mod work;
 #[cfg(test)]
 mod native_tests;
+#[cfg(test)]
+mod async_tests;
 
 use std::{cell::RefCell, collections::HashMap, error::Error, path::PathBuf, rc::{Rc, Weak}, sync::mpsc, time::Duration};
 use js_runtime::{JsRuntime, RuntimeLimits};
@@ -60,6 +63,7 @@ struct Application {
     package: Option<Rc<Package>>,
     exercise: bool,
     generation: u64,
+    executor: host_services::Executor,
 }
 impl Application {
     fn fail(&self, cx: &dyn PlatformCx, error: impl std::fmt::Display) {
@@ -73,7 +77,7 @@ impl Application {
             let document = region.document;
             self.generation = self.generation.checked_add(1).ok_or("session generation exhausted")?;
             let surface = self.native.windows().iter().find(|window| window.document_id() == document).ok_or("mount region has no window")?.surface().id();
-            let session = Session::prepare(region, self.package.clone(), self.generation, cx.waker(), surface)?;
+            let session = Session::prepare(region, self.package.clone(), self.generation, cx.waker(), surface, self.executor.clone())?;
             if let Some(window) = self.native.windows_mut().iter_mut().find(|window| window.document_id() == document) {
                 window.install_binding(Box::new(Binding(Rc::downgrade(&session))));
             }
@@ -193,7 +197,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let native_failure = native.failure();
     let failure = Rc::new(RefCell::new(None));
     let (sender, inbox) = mpsc::sync_channel(8);
-    let application = Application { native, pending, sessions: HashMap::new(), sender, inbox, exit_after, exit_armed: false, failure: failure.clone(), package, exercise, generation: 0 };
+    let application = Application { native, pending, sessions: HashMap::new(), sender, inbox, exit_after, exit_armed: false, failure: failure.clone(), package, exercise, generation: 0, executor: host_services::Executor::new(2, 64)? };
     eprintln!("zgui=80baa3c7 rquickjs=73fcd606 QuickJS-NG=6d46d07d fontique=patched platform-selection={}", std::env::var("ZGUI_PLATFORM").unwrap_or_else(|_| "desktop-auto".into()));
     let result = zgui::app::desktop()(Box::new(application));
     zgui::reactive::shutdown();
