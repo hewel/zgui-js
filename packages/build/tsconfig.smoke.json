@@ -1,0 +1,15 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    // Phase 0 imports upstream Solid directly; its declarations reference DOM types.
+    // This is not the later native SDK/application typing configuration.
+    "lib": ["ES2022", "DOM"],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "customConditions": ["browser", "production"],
+    "strict": true,
+    "noEmit": true,
+    "types": []
+  },
+  "include": ["../../tests/fixtures/solid-smoke.ts"]
+}

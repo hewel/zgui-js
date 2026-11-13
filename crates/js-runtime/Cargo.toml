@@ -1,0 +1,8 @@
+[package]
+name = "js-runtime"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+rquickjs.workspace = true

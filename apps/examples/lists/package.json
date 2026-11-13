@@ -1,0 +1,8 @@
+{
+  "name": "@zgui/example-lists",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@zgui/ui": "workspace:*"
+  }
+}

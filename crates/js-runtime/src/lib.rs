@@ -1,0 +1,620 @@
+//! Owner-thread QuickJS-NG harness, not a browser or a hostile-code sandbox.
+//!
+//! Engine access is explicit and synchronous. Native callbacks must use their supplied
+//! `Ctx`, stay short, and never re-enter this owner. Interrupts cannot preempt Rust code.
+//! Hosts wrap each `execute_job` in their structural turn, enforce the count and whole
+//! pump time from `limits`, and arrange a wake when `is_job_pending` remains true.
+//! Drain rejection updates after entries/jobs, outside any context entry. Updates are
+//! owned and keep stable IDs when a rejection is later handled. Drain again after
+//! diagnostic formatting, which can itself run getters and produce new rejections.
+//! Dropping the owner unregisters tracking and releases all tracker/module roots before
+//! the context and runtime; it does not invoke application disposal or pump more jobs.
+
+#![forbid(unsafe_code)]
+
+use rquickjs::{Context, Ctx, Function, Module, Object, Persistent, Runtime, Value};
+use std::{
+    cell::{Cell, RefCell},
+    collections::VecDeque,
+    fmt,
+    path::Path,
+    rc::Rc,
+    time::{Duration, Instant},
+};
+
+/// Initial desktop host policy, not application performance targets.
+#[derive(Clone, Debug)]
+pub struct RuntimeLimits {
+    /// Maximum synchronous script/callback/job execution: 50 ms by default.
+    pub entry_timeout: Duration,
+    /// Whole smoke bootstrap, including module jobs and runSmoke: 2 s by default.
+    pub bootstrap_timeout: Duration,
+    /// Bounded disposal entry policy: 20 ms by default, independent of normal entries.
+    pub cleanup_timeout: Duration,
+    /// Maximum attempted jobs per pump, including throwing jobs: 256 by default.
+    pub max_jobs_per_pump: usize,
+    /// Whole pump deadline, also applied inside each job: 10 ms by default.
+    pub job_timeout: Duration,
+    /// Engine allocator limit: 64 MiB. Does not cover native/GPU/Rust allocations.
+    /// Requires the default allocator; do not enable rquickjs rust-alloc/allocator.
+    pub memory_limit_bytes: usize,
+    /// Engine stack limit: 256 KiB by default.
+    pub stack_limit_bytes: usize,
+    /// Exception-property access has its own bounded formatting entry: 5 ms.
+    pub diagnostic_timeout: Duration,
+    /// Maximum bytes retained per message/stack, truncated on a UTF-8 boundary.
+    pub max_diagnostic_bytes: usize,
+    /// Maximum rejection identities retained for later-handled updates: 256.
+    /// Oldest identities are evicted on overflow, reported by `drain_rejections`.
+    pub max_tracked_rejections: usize,
+}
+
+impl Default for RuntimeLimits {
+    fn default() -> Self {
+        Self {
+            entry_timeout: Duration::from_millis(50),
+            bootstrap_timeout: Duration::from_secs(2),
+            cleanup_timeout: Duration::from_millis(20),
+            max_jobs_per_pump: 256,
+            job_timeout: Duration::from_millis(10),
+            memory_limit_bytes: 64 * 1024 * 1024,
+            stack_limit_bytes: 256 * 1024,
+            diagnostic_timeout: Duration::from_millis(5),
+            max_diagnostic_bytes: 16 * 1024,
+            max_tracked_rejections: 256,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DiagnosticKind {
+    Engine,
+    Exception,
+    Interrupted,
+    BudgetExceeded,
+    PendingModule,
+    InvalidLimits,
+    Io,
+}
+
+/// An owned diagnostic; no JS value, context, or runtime reference escapes in errors.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Diagnostic {
+    pub kind: DiagnosticKind,
+    pub phase: &'static str,
+    pub message: String,
+    pub stack: Option<String>,
+}
+
+impl Diagnostic {
+    fn new(kind: DiagnosticKind, phase: &'static str, message: impl Into<String>) -> Self {
+        Self {
+            kind,
+            phase,
+            message: message.into(),
+            stack: None,
+        }
+    }
+}
+
+impl fmt::Display for Diagnostic {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}: {}", self.phase, self.message)?;
+        if let Some(stack) = &self.stack {
+            write!(f, "\n{stack}")?;
+        }
+        Ok(())
+    }
+}
+
+impl std::error::Error for Diagnostic {}
+
+#[derive(Default)]
+struct InterruptState {
+    deadline: Cell<Option<Instant>>,
+    interrupted: Cell<bool>,
+}
+
+struct EntryGuard<'a>(&'a InterruptState);
+
+impl Drop for EntryGuard<'_> {
+    fn drop(&mut self) {
+        self.0.deadline.set(None);
+    }
+}
+
+/// Result of a single bounded turn. The host must schedule a real follow-up wake
+/// when `has_pending_jobs` is true; the harness never spins a UI event loop.
+#[derive(Debug)]
+pub struct JobPump {
+    pub attempted_jobs: usize,
+    pub has_pending_jobs: bool,
+    pub budget_exhausted: bool,
+    pub diagnostics: Vec<Diagnostic>,
+}
+
+/// An owned rejection state transition. An ID remains stable until handling or
+/// capacity eviction. The reason's stack retains its original generated source.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RejectionUpdate {
+    pub id: u64,
+    pub handled: bool,
+    pub diagnostic: Diagnostic,
+}
+
+/// Drain result. Evicted identities cannot report later handling; hosts should
+/// surface `dropped_rejections` rather than silently losing this observability.
+#[derive(Debug, Default)]
+pub struct RejectionDrain {
+    pub updates: Vec<RejectionUpdate>,
+    pub dropped_rejections: usize,
+}
+
+struct TrackedRejection {
+    id: u64,
+    promise: Persistent<Value<'static>>,
+    reason: Option<Persistent<Value<'static>>>,
+    diagnostic: Option<Diagnostic>,
+    handled: bool,
+}
+
+#[derive(Default)]
+struct RejectionTracker {
+    next_id: u64,
+    records: VecDeque<TrackedRejection>,
+    // At most two transitions per retained identity; no JS runs while borrowed.
+    pending: VecDeque<(u64, bool)>,
+    dropped: usize,
+}
+
+impl RejectionTracker {
+    fn track<'js>(&mut self, ctx: &Ctx<'js>, promise: Value<'js>, reason: Value<'js>, handled: bool, max: usize) {
+        let promise = Persistent::save(ctx, promise);
+        if let Some(record) = self.records.iter_mut().find(|record| record.promise == promise) {
+            if handled && !record.handled {
+                record.handled = true;
+                self.pending.push_back((record.id, true));
+            }
+            return;
+        }
+        if handled {
+            return;
+        }
+        if self.records.len() == max {
+            let oldest = self.records.pop_front().expect("nonzero tracking capacity");
+            self.pending.retain(|(id, _)| *id != oldest.id);
+            self.dropped = self.dropped.saturating_add(1);
+        }
+        self.next_id = self.next_id.checked_add(1).expect("rejection identity exhausted");
+        let id = self.next_id;
+        self.records.push_back(TrackedRejection {
+            id,
+            promise,
+            reason: Some(Persistent::save(ctx, reason)),
+            diagnostic: None,
+            handled: false,
+        });
+        self.pending.push_back((id, false));
+    }
+}
+
+pub struct JsRuntime {
+    // Drop clears both module and tracker roots before context/runtime destruction.
+    module: Option<Persistent<Object<'static>>>,
+    rejections: Rc<RefCell<RejectionTracker>>,
+    // Field declaration order is intentional: context releases before runtime.
+    context: Context,
+    runtime: Runtime,
+    interrupt: Rc<InterruptState>,
+    limits: RuntimeLimits,
+}
+
+impl JsRuntime {
+    pub fn new(limits: RuntimeLimits) -> Result<Self, Diagnostic> {
+        let now = Instant::now();
+        let durations = [
+            limits.entry_timeout,
+            limits.bootstrap_timeout,
+            limits.cleanup_timeout,
+            limits.job_timeout,
+            limits.diagnostic_timeout,
+        ];
+        if durations
+            .iter()
+            .any(|d| d.is_zero() || now.checked_add(*d).is_none())
+            || limits.max_jobs_per_pump == 0
+            || limits.max_tracked_rejections == 0
+            || limits.memory_limit_bytes == 0
+            || limits.stack_limit_bytes == 0
+            || limits.max_diagnostic_bytes == 0
+        {
+            return Err(Diagnostic::new(
+                DiagnosticKind::InvalidLimits,
+                "configuration",
+                "limits must be nonzero and deadlines must fit Instant",
+            ));
+        }
+        let runtime = Runtime::new().map_err(|e| {
+            Diagnostic::new(DiagnosticKind::Engine, "runtime creation", e.to_string())
+        })?;
+        runtime.set_memory_limit(limits.memory_limit_bytes);
+        runtime.set_max_stack_size(limits.stack_limit_bytes);
+        let interrupt = Rc::new(InterruptState::default());
+        let state = interrupt.clone();
+        runtime.set_interrupt_handler(Some(Box::new(move || {
+            let expired = state
+                .deadline
+                .get()
+                .is_some_and(|end| Instant::now() >= end);
+            if expired {
+                state.interrupted.set(true);
+            }
+            expired
+        })));
+        let context = Context::full(&runtime).map_err(|e| {
+            Diagnostic::new(DiagnosticKind::Engine, "context creation", e.to_string())
+        })?;
+        let rejections = Rc::new(RefCell::new(RejectionTracker::default()));
+        let tracker = rejections.clone();
+        let max = limits.max_tracked_rejections;
+        runtime.set_host_promise_rejection_tracker(Some(Box::new(move |ctx, promise, reason, handled| {
+            // Capture only: formatting here could recursively invoke this callback.
+            // Persistent::save uses the supplied Ctx and never takes the runtime lock.
+            tracker.borrow_mut().track(&ctx, promise, reason, handled, max);
+        })));
+        Ok(Self {
+            module: None,
+            rejections,
+            context,
+            runtime,
+            interrupt,
+            limits,
+        })
+    }
+
+    /// Enter the current context under the normal entry deadline. Install host
+    /// functions here with `Function::new`/`Func`; callbacks receive this same Ctx.
+    /// Return owned Rust data only. In particular, callers must not let Persistent
+    /// values outlive this owner, or clone context/runtime handles out of it.
+    /// This does not pump jobs; call `pump_jobs` after leaving the entry.
+    pub fn with_context<T>(
+        &mut self,
+        f: impl for<'js> FnOnce(Ctx<'js>) -> rquickjs::Result<T>,
+    ) -> Result<T, Diagnostic> {
+        self.enter(
+            "context entry",
+            Instant::now() + self.limits.entry_timeout,
+            f,
+        )
+    }
+
+    /// Enter for explicit application disposal under the cleanup deadline.
+    /// Throwing/interrupted disposal returns an owned diagnostic; the host must
+    /// continue releasing native resources and persistent roots after an error.
+    /// This does not pump jobs or automatically invoke a disposer when dropped.
+    pub fn with_cleanup_context<T>(
+        &mut self,
+        f: impl for<'js> FnOnce(Ctx<'js>) -> rquickjs::Result<T>,
+    ) -> Result<T, Diagnostic> {
+        self.enter_deadline("cleanup", Instant::now() + self.limits.cleanup_timeout, f)
+    }
+
+    /// Current policy, including `max_jobs_per_pump` and whole-pump `job_timeout`.
+    pub fn limits(&self) -> &RuntimeLimits {
+        &self.limits
+    }
+
+    /// Query only outside context entries/native callbacks, on the owner thread.
+    pub fn is_job_pending(&self) -> bool {
+        self.runtime.is_job_pending()
+    }
+
+    /// Attempt exactly one job outside every context entry. `true` means one
+    /// successful attempt, `false` an empty queue, and `Err` one failed attempt.
+    /// Both successful and failed attempts consume the caller's count budget.
+    /// The interrupt deadline is the earlier of the normal entry limit and the
+    /// supplied remaining whole-turn budget, including diagnostic accessor work.
+    pub fn execute_job(&mut self, budget: Duration) -> Result<bool, Diagnostic> {
+        self.interrupt.interrupted.set(false);
+        self.interrupt.deadline.set(Some(Instant::now() + budget.min(self.limits.entry_timeout)));
+        let _guard = EntryGuard(&self.interrupt);
+        // The runtime guard is released before entering JobException's context.
+        self.runtime.execute_pending_job().map_err(|exception| {
+            exception.0.with(|ctx| {
+                self.capture_error(&ctx, "pending job", rquickjs::Error::Exception)
+            })
+        })
+    }
+
+    /// Drain owned rejection transitions outside context entries. Reason formatting
+    /// shares one diagnostic deadline for the entire batch; getters may enqueue
+    /// updates for the next drain, but cannot reenter the tracker during capture.
+    /// Formatting is cached so a later handled update retains the original reason.
+    /// At most `max_tracked_rejections` promises and unformatted reasons are rooted;
+    /// oldest identities (and their undrained transitions) are evicted on overflow.
+    pub fn drain_rejections(&mut self) -> RejectionDrain {
+        let (pending, snapshots, dropped_rejections) = {
+            let mut tracker = self.rejections.borrow_mut();
+            let pending = std::mem::take(&mut tracker.pending);
+            let snapshots: Vec<_> = tracker.records.iter()
+                .filter(|record| pending.iter().any(|(id, _)| *id == record.id))
+                .map(|record| (record.id, record.reason.clone(), record.diagnostic.clone()))
+                .collect();
+            (pending, snapshots, std::mem::take(&mut tracker.dropped))
+        };
+        let mut diagnostics = Vec::with_capacity(snapshots.len());
+        if !snapshots.is_empty() {
+            self.interrupt.interrupted.set(false);
+            let end = Instant::now() + self.limits.diagnostic_timeout;
+            self.interrupt.deadline.set(Some(end));
+            let _guard = EntryGuard(&self.interrupt);
+            self.context.with(|ctx| {
+                for (id, reason, cached) in snapshots {
+                    let diagnostic = cached.unwrap_or_else(|| {
+                        let reason = reason.expect("unformatted rejection has a reason")
+                            .restore(&ctx).expect("tracker belongs to this runtime");
+                        if Instant::now() >= end {
+                            Diagnostic::new(DiagnosticKind::Exception, "promise rejection",
+                                truncate(format!("JavaScript threw {} (formatting budget exhausted)", reason.type_of().as_str()), self.limits.max_diagnostic_bytes))
+                        } else {
+                            diagnostic_value(&ctx, "promise rejection", reason, self.limits.max_diagnostic_bytes, end)
+                        }
+                    });
+                    diagnostics.push((id, diagnostic));
+                }
+            });
+        }
+        let updates = pending.iter().filter_map(|(id, handled)| {
+            diagnostics.iter().find(|(key, _)| key == id).map(|(_, diagnostic)| RejectionUpdate {
+                id: *id, handled: *handled, diagnostic: diagnostic.clone(),
+            })
+        }).collect();
+        let mut tracker = self.rejections.borrow_mut();
+        for (id, diagnostic) in diagnostics {
+            if let Some(record) = tracker.records.iter_mut().find(|record| record.id == id) {
+                record.diagnostic = Some(diagnostic);
+                record.reason = None;
+            }
+        }
+        tracker.records.retain(|record| !pending.iter().any(|(id, handled)| *id == record.id && *handled));
+        RejectionDrain { updates, dropped_rejections }
+    }
+
+    /// Evaluate a global script whose completion value must be a JS string.
+    /// Exceptions are captured while the context is live. Jobs are not auto-pumped.
+    pub fn evaluate_script(&mut self, source: &str) -> Result<String, Diagnostic> {
+        self.enter(
+            "script",
+            Instant::now() + self.limits.entry_timeout,
+            |ctx| ctx.eval(source),
+        )
+    }
+
+    /// Declare/evaluate a self-contained ESM artifact, observe its evaluation
+    /// Promise through the normal bounded job pump, then call synchronous runSmoke.
+    /// No loader, host I/O, Promise::finish, or context-level job pump is used.
+    /// An unsettled module with no runnable jobs is reported, never busy-waited.
+    pub fn run_smoke_module(&mut self, name: &str, source: &str) -> Result<String, Diagnostic> {
+        let bootstrap_end = Instant::now() + self.limits.bootstrap_timeout;
+        let namespace = self.evaluate_module_namespace(name, source, bootstrap_end)?;
+        self.enter("runSmoke", bootstrap_end, |ctx| {
+            let function: Function = namespace.restore(&ctx)?.get("runSmoke")?;
+            function.call(())
+        })
+    }
+
+    /// Evaluate a preflight module. Its namespace remains owned by this runtime.
+    pub fn load_module(&mut self, name: &str, source: &str) -> Result<(), Diagnostic> {
+        let end = Instant::now() + self.limits.bootstrap_timeout;
+        self.module = Some(self.evaluate_module_namespace(name, source, end)?);
+        Ok(())
+    }
+
+    /// Access exports without allowing borrowed JS values out of the entry.
+    pub fn with_module<T>(&mut self, action: impl for<'js> FnOnce(Ctx<'js>, Object<'js>) -> rquickjs::Result<T>) -> Result<T, Diagnostic> {
+        let namespace = self.module.as_ref().cloned().ok_or_else(|| Diagnostic::new(DiagnosticKind::Engine, "module", "no application module loaded"))?;
+        self.enter("module export", Instant::now() + self.limits.entry_timeout, |ctx| {
+            let object = namespace.restore(&ctx)?;
+            action(ctx, object)
+        })
+    }
+
+    fn evaluate_module_namespace(&mut self, name: &str, source: &str, bootstrap_end: Instant) -> Result<Persistent<Object<'static>>, Diagnostic> {
+        let (namespace, promise) = self.enter("module evaluation", bootstrap_end, |ctx| {
+            let module = Module::declare(ctx.clone(), name, source)?;
+            let (module, promise) = module.eval()?;
+            Ok((
+                Persistent::save(&ctx, module.namespace()?),
+                Persistent::save(&ctx, promise),
+            ))
+        })?;
+        loop {
+            let settled = self.enter("module settlement", bootstrap_end, |ctx| {
+                promise.clone().restore(&ctx)?.result::<()>().transpose()
+            })?;
+            if settled.is_some() {
+                break;
+            }
+            let turn = self.pump_jobs_until(bootstrap_end);
+            if let Some(diagnostic) = turn.diagnostics.into_iter().next() {
+                return Err(diagnostic);
+            }
+            if Instant::now() >= bootstrap_end {
+                return Err(Diagnostic::new(
+                    DiagnosticKind::BudgetExceeded,
+                    "module settlement",
+                    "bootstrap deadline exceeded",
+                ));
+            }
+            if !turn.has_pending_jobs {
+                // A final job may have settled the Promise and emptied the queue.
+                let settled = self.enter("module settlement", bootstrap_end, |ctx| {
+                    promise.clone().restore(&ctx)?.result::<()>().transpose()
+                })?;
+                if settled.is_some() {
+                    break;
+                }
+                return Err(Diagnostic::new(
+                    DiagnosticKind::PendingModule,
+                    "module settlement",
+                    "module Promise remains pending without runnable jobs; host I/O is unsupported",
+                ));
+            }
+        }
+        Ok(namespace)
+    }
+
+    pub fn run_smoke_module_file(&mut self, path: impl AsRef<Path>) -> Result<String, Diagnostic> {
+        let path = path.as_ref();
+        let source = std::fs::read_to_string(path).map_err(|e| {
+            Diagnostic::new(
+                DiagnosticKind::Io,
+                "module read",
+                format!("{}: {e}", path.display()),
+            )
+        })?;
+        self.run_smoke_module(&path.to_string_lossy(), &source)
+    }
+
+    /// Pump at most the configured attempted-job count and elapsed time. Throwing
+    /// jobs consume budget and their original exceptions are retained; later jobs
+    /// can still run. Invoke only between context entries, on the owner thread.
+    pub fn pump_jobs(&mut self) -> JobPump {
+        self.pump_jobs_until(Instant::now() + self.limits.job_timeout)
+    }
+
+    fn enter<T>(
+        &self,
+        phase: &'static str,
+        outer_end: Instant,
+        f: impl for<'js> FnOnce(Ctx<'js>) -> rquickjs::Result<T>,
+    ) -> Result<T, Diagnostic> {
+        self.enter_deadline(phase, outer_end.min(Instant::now() + self.limits.entry_timeout), f)
+    }
+
+    fn enter_deadline<T>(
+        &self,
+        phase: &'static str,
+        outer_end: Instant,
+        f: impl for<'js> FnOnce(Ctx<'js>) -> rquickjs::Result<T>,
+    ) -> Result<T, Diagnostic> {
+        if Instant::now() >= outer_end {
+            return Err(Diagnostic::new(
+                DiagnosticKind::BudgetExceeded,
+                phase,
+                "entry deadline exceeded",
+            ));
+        }
+        let end = outer_end;
+        self.interrupt.interrupted.set(false);
+        self.interrupt.deadline.set(Some(end));
+        let _guard = EntryGuard(&self.interrupt);
+        self.context
+            .with(|ctx| f(ctx.clone()).map_err(|error| self.capture_error(&ctx, phase, error)))
+    }
+
+    fn capture_error(
+        &self,
+        ctx: &Ctx<'_>,
+        phase: &'static str,
+        error: rquickjs::Error,
+    ) -> Diagnostic {
+        let interrupted = self.interrupt.interrupted.get();
+        if !error.is_exception() {
+            return Diagnostic::new(DiagnosticKind::Engine, phase, error.to_string());
+        }
+        let thrown = ctx.catch();
+        // Diagnostics may invoke accessors, but must never extend the entry/job
+        // deadline. Expired budgets retain a primitive/type-only diagnostic.
+        let formatting_end = Instant::now() + self.limits.diagnostic_timeout;
+        let end = self.interrupt.deadline.get().map_or(formatting_end, |active| active.min(formatting_end));
+        self.interrupt.deadline.set(Some(end));
+        let mut diagnostic = diagnostic_value(ctx, phase, thrown, self.limits.max_diagnostic_bytes, end);
+        if interrupted {
+            diagnostic.kind = DiagnosticKind::Interrupted;
+        }
+        diagnostic
+    }
+
+    fn pump_jobs_until(&mut self, outer_end: Instant) -> JobPump {
+        let end = outer_end.min(Instant::now() + self.limits.job_timeout);
+        let mut turn = JobPump {
+            attempted_jobs: 0,
+            has_pending_jobs: false,
+            budget_exhausted: false,
+            diagnostics: Vec::new(),
+        };
+        while turn.attempted_jobs < self.limits.max_jobs_per_pump && Instant::now() < end {
+            match self.execute_job(end.saturating_duration_since(Instant::now())) {
+                Ok(true) => turn.attempted_jobs += 1,
+                Ok(false) => break,
+                Err(diagnostic) => {
+                    turn.attempted_jobs += 1;
+                    turn.diagnostics.push(diagnostic);
+                }
+            }
+        }
+        turn.has_pending_jobs = self.is_job_pending();
+        turn.budget_exhausted = turn.has_pending_jobs
+            && (turn.attempted_jobs >= self.limits.max_jobs_per_pump || Instant::now() >= end);
+        turn
+    }
+}
+
+impl Drop for JsRuntime {
+    fn drop(&mut self) {
+        // The runtime owns the tracker closure, so field order alone cannot release
+        // its Rc and rooted contexts early enough.
+        self.runtime.set_host_promise_rejection_tracker(None);
+        self.rejections.borrow_mut().records.clear();
+        self.module = None;
+    }
+}
+
+fn truncate(mut text: String, max: usize) -> String {
+    if text.len() > max {
+        text.truncate(text.floor_char_boundary(max));
+    }
+    text
+}
+
+fn diagnostic_value(
+    ctx: &Ctx<'_>,
+    phase: &'static str,
+    value: Value<'_>,
+    max: usize,
+    deadline: Instant,
+) -> Diagnostic {
+    let mut diagnostic = Diagnostic::new(
+        DiagnosticKind::Exception,
+        phase,
+        format!("JavaScript threw {}", value.type_of().as_str()),
+    );
+    if let Some(string) = value.as_string() {
+        if let Ok(message) = string.to_string() {
+            diagnostic.message = truncate(message, max);
+        }
+    } else if let Some(number) = value.as_number() {
+        diagnostic.message = number.to_string();
+    } else if let Some(boolean) = value.as_bool() {
+        diagnostic.message = boolean.to_string();
+    } else if let Some(exception) = value.as_exception() {
+        for key in ["message", "stack"] {
+            if Instant::now() >= deadline { break; }
+            if let Ok(Some(text)) = exception.as_object().get::<_, Option<String>>(key) {
+                if key == "message" {
+                    diagnostic.message = truncate(text, max);
+                } else {
+                    diagnostic.stack = Some(truncate(text, max));
+                }
+            }
+            // A getter or conversion can throw: discard that secondary exception,
+            // not the owned original diagnostic, before subsequent engine use.
+            if ctx.has_exception() {
+                drop(ctx.catch());
+            }
+        }
+    }
+    diagnostic.message = truncate(diagnostic.message, max);
+    diagnostic
+}

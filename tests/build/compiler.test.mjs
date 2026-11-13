@@ -1,0 +1,191 @@
+import assert from "node:assert/strict";
+import { test } from "node:test";
+import { mkdtemp, mkdir, writeFile, readFile, readlink, realpath, rm, readdir, symlink } from "node:fs/promises";
+import { createRequire } from "node:module";
+import { createHash } from "node:crypto";
+import { pathToFileURL } from "node:url";
+import path from "node:path";
+import { buildApplication, bundle, contentDigest, publishGeneration, workspaceRoot } from "../../packages/build/src/build.mjs";
+import { validateModule } from "../../packages/build/src/validate.mjs";
+import { rebuildQueue, watchApplication } from "../../packages/build/src/watch.mjs";
+
+const require = createRequire(new URL("../../packages/build/package.json", import.meta.url));
+const { TraceMap, originalPositionFor } = require("@jridgewell/trace-mapping");
+const validEntry = `import { createSignal, renderApp } from "@zgui/ui";
+import type { NativeNode } from "@zgui/ui";
+export const hostApiVersion = 1;
+function App() {
+  const [count] = createSignal(0);
+  if (count() < 0) throw new Error("mapped failure");
+  return <text>Count: {count()}</text>;
+}
+export function mount(root: NativeNode): () => void {
+  return renderApp(() => <App />, root);
+}
+`;
+
+async function fixture(t) {
+  const directory = await mkdtemp(path.join(workspaceRoot, "tests/build/.fixture-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  await mkdir(path.join(directory, "src"));
+  await writeFile(path.join(directory, "package.json"), '{"type":"module"}\n');
+  await writeFile(path.join(directory, "tsconfig.json"), JSON.stringify({
+    compilerOptions: { target: "ES2022", module: "ESNext", moduleResolution: "Bundler", lib: ["ES2022"], types: [], strict: true, noEmit: true, jsx: "preserve", jsxImportSource: "@zgui/ui" },
+    include: ["src"],
+  }));
+  await writeFile(path.join(directory, "src/main.tsx"), validEntry);
+  return directory;
+}
+
+const entry = "export const hostApiVersion = 1; export function mount(root) { return () => {}; }";
+
+test("AST validation distinguishes nested async work from top-level execution", () => {
+  validateModule(`${entry}\nasync function work() { await Promise.resolve(); for await (const x of []) {} }`, { bundled: true, entry: true });
+  validateModule(`${entry}\nconst message = 'import(\"node:fs\") and await';`, { bundled: true, entry: true });
+  assert.throws(() => validateModule(`${entry}\nawait Promise.resolve();`), /Top-level await/);
+  assert.throws(() => validateModule(`${entry}\nfor await (const x of []) {}`), /Top-level await/);
+  assert.throws(() => validateModule(`${entry}\nclass C { [await Promise.resolve()]() {} }`), /Top-level await/);
+  assert.throws(() => validateModule(`${entry}\nfunction lazy() { return import('./lazy.js'); }`), /Dynamic imports/);
+  assert.throws(() => validateModule(`${entry}\nimport 'unresolved';`, { bundled: true }), /unresolved runtime import/);
+  assert.throws(() => validateModule(`${entry}\nexport * from 'external';`, { bundled: true }), /external re-export/);
+  assert.throws(() => validateModule(`${entry}\nconsole.log(document);`, { bundled: true }), /Unsupported runtime global: document/);
+  assert.throws(() => validateModule(`${entry}\nrequire('fs');`, { bundled: true }), /Runtime require/);
+});
+
+test("host exports must be stable version 1 and a synchronous mount function", () => {
+  validateModule("const version=1; const start=() => () => {}; export {version as hostApiVersion, start as mount};", { bundled: true, entry: true });
+  for (const code of [
+    "export const hostApiVersion=2; export function mount() {}",
+    "export let hostApiVersion=1; hostApiVersion=2; export function mount() {}",
+    "export const hostApiVersion=1;",
+    "export const hostApiVersion=1; export async function mount() {}",
+    "export const hostApiVersion=1; export const mount=42;",
+  ]) assert.throws(() => validateModule(code, { bundled: true, entry: true }), /Entry must export/);
+});
+
+test("real TSX bundles have one reactive runtime, composed maps, resources, and verifiable identity", async t => {
+  const directory = await fixture(t);
+  await writeFile(path.join(directory, "src/app.css"), "text { color: #123456; }\n");
+  await mkdir(path.join(directory, "assets/icons"), { recursive: true });
+  await writeFile(path.join(directory, "assets/icons/mark.bin"), Buffer.from([0, 255, 1, 42]));
+  const { dist, manifest } = await buildApplication("fixture", { appDirectory: directory });
+  assert.equal(manifest.hostApiVersion, 1);
+  assert.deepEqual(manifest.styles, ["app.css"]);
+  assert.deepEqual(manifest.assets, ["assets/icons/mark.bin"]);
+  const root = await realpath(dist);
+  const names = [manifest.entry, manifest.sourceMap, ...manifest.styles, ...manifest.assets].sort();
+  const files = new Map(await Promise.all(names.map(async name => [name, await readFile(path.join(root, name))])));
+  // Recompute independently, as the Rust loader does, rather than trusting the compiler helper.
+  const digest = createHash("sha256");
+  for (const name of names) digest.update(name).update("\0").update(files.get(name)).update("\0");
+  assert.equal(manifest.buildId, `sha256:${digest.digest("hex")}`);
+  const module = await import(pathToFileURL(path.join(root, manifest.entry)));
+  assert.equal(module.hostApiVersion, 1);
+  assert.equal(typeof module.mount, "function");
+  const code = files.get("app.mjs").toString();
+  const marker = code.indexOf('throw new Error("mapped failure")');
+  assert.ok(marker >= 0);
+  const prefix = code.slice(0, marker);
+  const generated = { line: prefix.split("\n").length, column: prefix.length - prefix.lastIndexOf("\n") - 1 };
+  const mapJson = JSON.parse(files.get("app.mjs.map"));
+  const original = originalPositionFor(new TraceMap(mapJson), generated);
+  assert.ok(original.source.endsWith("src/main.tsx"), JSON.stringify(original));
+  assert.equal(original.line, 6);
+  assert.ok(mapJson.sourcesContent.includes(validEntry));
+  const info = JSON.parse(await readFile(path.join(root, "build-info.json"), "utf8"));
+  assert.equal(info.packages["solid-js"], "1.9.19");
+  assert.equal(info.packages["babel-preset-solid"], "1.9.19");
+  assert.equal(info.engine.name, "QuickJS-NG");
+  assert.match(info.engine.revision, /^[a-f0-9]{40}$/);
+  assert.match(info.lockfile.digest, /^sha256:[a-f0-9]{64}$/);
+  assert.equal(contentDigest(new Map([...files, ["build-info.json", Buffer.from("not a resource")]]), manifest), manifest.buildId);
+  const firstTarget = await readlink(dist);
+  const second = await buildApplication("fixture", { appDirectory: directory });
+  assert.equal(second.manifest.buildId, manifest.buildId);
+  assert.notEqual(await readlink(dist), firstTarget);
+  assert.equal(await readFile(path.join(root, "app.mjs"), "utf8"), code, "old reader remains pinned to a complete generation");
+});
+
+test("type errors, bad imports, and failed publication preserve the last complete generation", async t => {
+  const directory = await fixture(t);
+  const { dist, manifest } = await buildApplication("fixture", { appDirectory: directory });
+  const target = await readlink(dist);
+  await writeFile(path.join(directory, "src/main.tsx"), validEntry + '\nconst wrong: number = "not a number";\n');
+  await assert.rejects(buildApplication("fixture", { appDirectory: directory }), /not assignable/);
+  assert.equal(await readlink(dist), target);
+  for (const specifier of ["solid-js/web", "solid-js/web/dist/server.js", "solid-js/dist/server.js", "node:fs", "fs", "./app.css"]) {
+    await writeFile(path.join(directory, "src/main.tsx"), `import ${JSON.stringify(specifier)};\n${validEntry}`);
+    await assert.rejects(bundle(path.join(directory, "src/main.tsx")), /Incompatible runtime import|Runtime resource imports/);
+  }
+  await assert.rejects(publishGeneration(directory, new Map([["app.mjs", Buffer.from("partial")], ["../escaped", Buffer.from("bad")]])), /Non-canonical resource/);
+  assert.equal(await readlink(dist), target);
+  assert.equal(JSON.parse(await readFile(path.join(dist, "manifest.json"), "utf8")).buildId, manifest.buildId);
+  assert.ok((await readdir(path.join(directory, ".zgui-generations"))).every(name => !name.startsWith(".building-")));
+});
+
+test("asset symlinks are rejected before publication", async t => {
+  const directory = await fixture(t);
+  await mkdir(path.join(directory, "assets"));
+  await symlink("../src/main.tsx", path.join(directory, "assets/link"));
+  await assert.rejects(buildApplication("fixture", { appDirectory: directory }), /regular files/);
+  await assert.rejects(readlink(path.join(directory, "dist")), { code: "ENOENT" });
+});
+
+function deferred() {
+  let resolve;
+  const promise = new Promise(done => { resolve = done; });
+  return { promise, resolve };
+}
+
+test("watch rebuild queue coalesces bursts and serializes edits arriving during a build", async () => {
+  const firstStarted = deferred();
+  const releaseFirst = deferred();
+  const secondFinished = deferred();
+  let calls = 0;
+  let active = 0;
+  const queue = rebuildQueue(async () => {
+    assert.equal(++active, 1);
+    calls++;
+    if (calls === 1) { firstStarted.resolve(); await releaseFirst.promise; }
+    active--;
+    return calls;
+  }, { delay: 0, onSuccess: result => { if (result === 2) secondFinished.resolve(); } });
+  try {
+    queue.request(); queue.request(); queue.request();
+    await firstStarted.promise;
+    queue.request(); queue.request();
+    releaseFirst.resolve();
+    await secondFinished.promise;
+    assert.equal(calls, 2);
+  } finally { await queue.close(); }
+});
+
+test("development watcher retains the good generation on errors and publishes recovery", { timeout: 30000 }, async t => {
+  const directory = await fixture(t);
+  const initial = deferred();
+  const failed = deferred();
+  const recovered = deferred();
+  let firstBuildId;
+  const watcher = watchApplication("fixture", {
+    appDirectory: directory,
+    onSuccess(result) {
+      if (!firstBuildId) {
+        firstBuildId = result.manifest.buildId;
+        initial.resolve(result);
+      } else if (result.manifest.buildId !== firstBuildId) recovered.resolve(result);
+    },
+    onError(error) { failed.resolve(error); },
+  });
+  try {
+    const { dist } = await initial.promise;
+    const target = await readlink(dist);
+    await writeFile(path.join(directory, "src/main.tsx"), validEntry + '\nconst invalid: number = "bad";\n');
+    assert.match((await failed.promise).message, /not assignable/);
+    assert.equal(await readlink(dist), target);
+    await writeFile(path.join(directory, "src/main.tsx"), validEntry.replace("Count:", "Total:"));
+    const result = await recovered.promise;
+    assert.notEqual(result.manifest.buildId, firstBuildId);
+    assert.notEqual(await readlink(dist), target);
+    assert.equal(JSON.parse(await readFile(path.join(dist, "manifest.json"), "utf8")).buildId, result.manifest.buildId);
+  } finally { await watcher.close(); }
+});

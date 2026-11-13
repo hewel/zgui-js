@@ -1,0 +1,67 @@
+[package]
+name = "zgui-runtime"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+description = "The zgui frame pipeline: style, layout, paint and draw in a window"
+repository = "https://github.com/zortax/zgui"
+homepage = "https://zgui.zortax.de"
+rust-version = "1.90"
+
+# Standalone snapshot of upstream 80baa3c7; sibling crates retain the same revision.
+[workspace]
+
+[dependencies]
+rustc-hash = "2.1"
+thiserror = "2.0.19"
+tracing = "0.1.44"
+zgui-a11y = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a" }
+zgui-atlas = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a" }
+zgui-anim = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a" }
+zgui-bits = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a" }
+zgui-color = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a" }
+zgui-css = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a" }
+zgui-dom = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a" }
+zgui-image = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a" }
+zgui-edit = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a" }
+zgui-geom = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a" }
+zgui-input = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a" }
+zgui-interned = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a" }
+zgui-layout = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a" }
+zgui-paint = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a" }
+zgui-platform = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a" }
+zgui-profile = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a" }
+zgui-reactive = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a" }
+zgui-render = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a" }
+zgui-scene = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a" }
+zgui-scroll = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a" }
+zgui-style = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a" }
+zgui-text = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a" }
+zgui-text-style = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a" }
+zgui-view = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a" }
+zgui-view-dom = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a" }
+zgui-vocab = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a" }
+
+[dev-dependencies]
+accesskit_consumer = "0.38.0"
+zgui-arena = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a" }
+zgui-elements = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a" }
+zgui-platform-headless = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a" }
+zgui-profile = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a", features = ["counters"] }
+zgui-testkit-scene = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a" }
+
+[lints.rust]
+missing_docs = "deny"
+unsafe_code = "deny"
+unreachable_pub = "warn"
+
+[lints.rustdoc]
+broken_intra_doc_links = "deny"
+private_intra_doc_links = "warn"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+undocumented_unsafe_blocks = "warn"
+
+[patch.crates-io]
+fontique = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a" }
