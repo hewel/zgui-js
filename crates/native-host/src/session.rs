@@ -1,4 +1,4 @@
-use std::{cell::{Cell, RefCell}, collections::VecDeque, error::Error, rc::Rc, sync::Arc, time::Instant};
+use std::{cell::{Cell, RefCell}, collections::{HashSet, VecDeque}, error::Error, rc::Rc, sync::Arc, time::Instant};
 use js_runtime::{JsRuntime, RuntimeLimits};
 use rquickjs::{Exception, Function, Persistent};
 use ui_bridge::{DeferredEvent, UiBridge, registry::NodeRegistry};
@@ -8,12 +8,27 @@ use crate::{MountRegion, package::Package, work::{Arguments, Work}};
 
 type Result<T, E = Box<dyn Error>> = std::result::Result<T, E>;
 
+#[derive(Debug, Default, PartialEq, Eq)]
+pub(crate) struct ResourceCounts {
+    pub nodes: usize,
+    pub wrappers: usize,
+    pub callbacks: usize,
+    pub timers: usize,
+    pub frame_callbacks: usize,
+    pub requests: usize,
+    pub engine_alive: bool,
+}
+
 pub(crate) struct Session {
     // Roots and bridge are declared before engine; this order is also safe on unwind.
     disposer: RefCell<Option<Persistent<Function<'static>>>>,
     pub(crate) bridge: Rc<UiBridge>,
     work: Rc<Work>,
     engine: RefCell<Option<JsRuntime>>,
+    shutdown_started: Cell<bool>,
+    mount_started: Cell<bool>,
+    stylesheet_installed: Cell<bool>,
+    pub(crate) generation: u64,
     pub(crate) region: MountRegion,
     pub(crate) timer: Cell<Option<TimerId>>,
     pub(crate) frames: Cell<usize>,
@@ -43,8 +58,21 @@ impl Session {
                 let _: Function = module.get("mount")?;
                 Ok(())
             }).map_err(|error| package.remap_diagnostic(error))?;
+            // Drain bootstrap continuations while every host-creation guard is
+            // still closed. Otherwise a top-level Promise could defer side effects
+            // until the first mounted checkpoint and bypass preflight.
+            let jobs = engine.pump_jobs();
+            if let Some(error) = jobs.diagnostics.into_iter().next() { return Err(package.remap_diagnostic(error).into()); }
+            if jobs.has_pending_jobs { return Err("preflight jobs exceeded their bounded pump".into()); }
+            let rejections = engine.drain_rejections();
+            if rejections.dropped_rejections != 0 { return Err("preflight rejection tracking limit exceeded".into()); }
+            let mut seen = HashSet::new();
+            for update in rejections.updates.into_iter().rev() {
+                if seen.insert(update.id) && !update.handled { return Err(package.remap_diagnostic(update.diagnostic).into()); }
+            }
+            if engine.is_job_pending() { return Err("preflight diagnostic accessors scheduled more jobs".into()); }
         }
-        let session = Rc::new(Self { disposer: RefCell::new(None), bridge, work, engine: RefCell::new(Some(engine)), region, timer: Cell::new(None), frames: Cell::new(0), package, deferred: RefCell::new(VecDeque::new()), fault: RefCell::new(None), waker, surface });
+        let session = Rc::new(Self { disposer: RefCell::new(None), bridge, work, engine: RefCell::new(Some(engine)), shutdown_started: Cell::new(false), mount_started: Cell::new(false), stylesheet_installed: Cell::new(false), generation, region, timer: Cell::new(None), frames: Cell::new(0), package, deferred: RefCell::new(VecDeque::new()), fault: RefCell::new(None), waker, surface });
         let weak = Rc::downgrade(&session);
         session.bridge.set_dispatcher(Rc::new(move |id, event| {
             if let Some(session) = weak.upgrade() { session.dispatch(id, event); }
@@ -53,9 +81,12 @@ impl Session {
     }
 
     pub(crate) fn mount(&self) -> Result<()> {
+        if self.shutdown_started.get() { return Err("cannot mount a retired session".into()); }
+        if self.mount_started.replace(true) { return Err("session mount was already attempted".into()); }
         self.work.mounting();
         if let Some(package) = &self.package {
             self.region.host.install_stylesheet("application", &package.css);
+            self.stylesheet_installed.set(true);
             let mut engine = self.engine.borrow_mut();
             let engine = engine.as_mut().ok_or("session disposed")?;
             let disposer = self.bridge.run_turn(|| engine.with_module(|ctx, module| {
@@ -78,7 +109,7 @@ impl Session {
     }
 
     fn dispatch(&self, id: u64, event: &mut zgui::view::EventCx<'_>) {
-        if self.bridge.is_disposed() { return; }
+        if self.shutdown_started.get() || self.bridge.is_disposed() { return; }
         let Ok(mut engine) = self.engine.try_borrow_mut() else {
             let mut queue = self.deferred.borrow_mut();
             if queue.len() == 256 {
@@ -179,28 +210,53 @@ impl Session {
         Ok(())
     }
 
+    pub(crate) fn record_fault(&self, error: String) {
+        if self.shutdown_started.get() { return; }
+        *self.fault.borrow_mut() = Some(error);
+        self.wake_owner();
+    }
+
     fn snapshot(&self) {
         eprintln!("native-text: {}", self.region.dom.text_content(self.region.root));
     }
 
+    pub(crate) fn counts(&self) -> ResourceCounts {
+        let (timers, frame_callbacks, requests) = self.work.counts();
+        ResourceCounts {
+            nodes: self.bridge.live_count(), wrappers: self.bridge.wrapper_count(),
+            callbacks: self.bridge.callback_count(), timers, frame_callbacks, requests,
+            engine_alive: self.engine.borrow().is_some(),
+        }
+    }
+
     pub(crate) fn shutdown(&self) {
+        // An old Rc may outlive replacement. A repeated shutdown must not remove
+        // the new generation's stylesheet or touch its native resources.
+        if self.shutdown_started.replace(true) { return; }
+        self.bridge.begin_stop();
         self.work.begin_stop();
         if let Some(timer) = self.timer.take() { self.region.host.cancel_timer(timer); }
         self.deferred.borrow_mut().clear();
+        self.fault.borrow_mut().take();
         let disposer = self.disposer.borrow_mut().take();
         if let Some(disposer) = disposer {
-            if !self.bridge.is_disposed() && let Some(engine) = self.engine.borrow_mut().as_mut() {
-                let result = self.bridge.run_turn(|| engine.with_cleanup_context(|ctx| disposer.restore(&ctx)?.call::<_, ()>(() )));
+            if let Some(engine) = self.engine.borrow_mut().as_mut() {
+                let cleanup = || engine.with_cleanup_context(|ctx| disposer.restore(&ctx)?.call::<_, ()>(()));
+                // A failed structural turn has already retired native handles.
+                // Still run pure JS cleanup, without reopening a disposed registry.
+                let result = if self.bridge.is_disposed() { cleanup() } else { self.bridge.run_turn(cleanup) };
                 if let Err(error) = result { eprintln!("disposer error: {}", self.diagnostic(error)); }
             }
         }
         self.work.finish_stop();
         self.bridge.dispose();
-        self.region.host.remove_stylesheet("application");
+        if self.stylesheet_installed.replace(false) { self.region.host.remove_stylesheet("application"); }
         if self.engine.borrow_mut().take().is_some() {
-            let (timers, frames, requests) = self.work.counts();
-            eprintln!("session-disposed: frames={} nodes={} wrappers={} callbacks={} timers={} frame_callbacks={} requests={}", self.frames.get(), self.bridge.live_count(), self.bridge.wrapper_count(), self.bridge.callback_count(), timers, frames, requests);
+            eprintln!("session-disposed: generation={} frames={} resources={:?}", self.generation, self.frames.get(), self.counts());
         }
     }
 }
 impl Drop for Session { fn drop(&mut self) { self.shutdown(); } }
+
+#[cfg(test)]
+mod tests;

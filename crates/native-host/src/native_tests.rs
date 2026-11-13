@@ -245,15 +245,10 @@ fn native_button_actions() -> TestResult {
     let native = zgui::app().with_title("zgui-js native Button acceptance gate").with_application_id("dev.zgui.js.native-controls")
         .with_size(760.0, 440.0).into_handler(move || Root(roots.clone()))?.into_runtime();
     let native_failure = native.failure();
-    let failure = Rc::new(RefCell::new(None));
     let failures = Rc::new(RefCell::new(Vec::new()));
     let completed = Rc::new(std::cell::Cell::new(false));
-    let (sender, inbox) = mpsc::sync_channel(8);
-    let application = Application {
-        native, pending, sessions: HashMap::new(), sender, inbox, exit_after: None,
-        exit_armed: false, failure: failure.clone(), package: Some(package), exercise: false, generation: 0,
-        executor: host_services::Executor::new(2, 64)?,
-    };
+    let application = Application::new(native, pending, Some(package))?;
+    let failure = application.failure.clone();
     let driver = NativeControls {
         inner: application, step: 0, finished: false, deadline: None,
         failures: failures.clone(), completed: completed.clone(),

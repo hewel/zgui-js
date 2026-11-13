@@ -16,7 +16,7 @@ Upstream `Window::run_frame_callbacks` drained callbacks even in a frame run for
 
 The frame-callback patch returns before draining when the window is occluded. Native timers, owner checkpoints and task completions continue; unocclusion releases the preserved callbacks before layout.
 
-Regression gate: `ZGUI_PLATFORM=wayland cargo test -p native-host async_tests::native_async_delivery -- --ignored --exact --nocapture`. Startup compositor visibility is consumed before controlled occlusion, so launch events cannot invalidate the scenario.
+Regression gate: `ZGUI_PLATFORM=wayland cargo test -p native-host async_tests::native_async_delivery -- --ignored --exact --nocapture`. The gate moves only its PID/app-ID-verified window to an inactive niri workspace by stable IPC ID, waits for settled native occlusion, then restores it. Timers and Rust completion must finish while rAF remains pending; the first visible fired frame must include the Promise layout change.
 
 ## Cancelled timer retention
 

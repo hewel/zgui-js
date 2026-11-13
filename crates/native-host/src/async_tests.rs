@@ -13,6 +13,7 @@ const FINAL_TEXT: &str = "Async statusTimer: firedFrame: firedPromise: layout up
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Stage {
     Mounting,
+    Hiding,
     Occluded,
     Visible,
     Finished,
@@ -22,8 +23,81 @@ struct NativeAsync {
     inner: Application,
     stage: Stage,
     deadline: Option<Instant>,
+    placement: Option<Placement>,
+    settled_at: Option<Instant>,
+    probe_at: Option<Instant>,
     failures: Rc<RefCell<Vec<String>>>,
     completed: Rc<Cell<bool>>,
+}
+
+struct Placement { window: u64, original_workspace: u64, hidden_workspace: u64 }
+
+fn niri_query(kind: &str) -> TestResult<serde_json::Value> {
+    let output = Command::new("niri").args(["msg", "--json", kind]).output()?;
+    if !output.status.success() { return Err(format!("niri {kind}: {}", String::from_utf8_lossy(&output.stderr)).into()); }
+    Ok(serde_json::from_slice(&output.stdout)?)
+}
+
+fn move_owned_window(window: u64, workspace: u64) -> TestResult {
+    use std::io::{BufRead, BufReader, Write};
+    // CLI indexes are relative to an output and can change. IPC IDs identify
+    // exactly the previously selected workspace without moving user focus.
+    let mut socket = std::os::unix::net::UnixStream::connect(
+        std::env::var_os("NIRI_SOCKET").ok_or("NIRI_SOCKET is absent")?)?;
+    socket.set_read_timeout(Some(Duration::from_secs(2)))?;
+    socket.set_write_timeout(Some(Duration::from_secs(2)))?;
+    serde_json::to_writer(&mut socket, &serde_json::json!({
+        "Action": { "MoveWindowToWorkspace": {
+            "window_id": window, "reference": { "Id": workspace }, "focus": false
+        }}
+    }))?;
+    socket.write_all(b"\n")?;
+    let mut line = String::new();
+    BufReader::new(socket).read_line(&mut line)?;
+    let reply: serde_json::Value = serde_json::from_str(&line)?;
+    if reply != serde_json::json!({"Ok": "Handled"}) {
+        return Err(format!("cannot move owned gate window: {reply}").into());
+    }
+    Ok(())
+}
+
+impl Placement {
+    fn hide_mapped_window() -> TestResult<Option<Self>> {
+        let windows = niri_query("windows")?;
+        let owned: Vec<_> = windows.as_array().ok_or("niri windows is not an array")?.iter()
+            .filter(|window| window["app_id"].as_str() == Some("dev.zgui.js.native-async")
+                && window["pid"].as_u64() == Some(u64::from(std::process::id()))).collect();
+        if owned.is_empty() { return Ok(None); }
+        if owned.len() != 1 { return Err(format!("expected one verified owned gate window, got {}", owned.len()).into()); }
+        let window = owned[0]["id"].as_u64().ok_or("window ID missing")?;
+        let original_workspace = owned[0]["workspace_id"].as_u64().ok_or("window workspace missing")?;
+        let workspaces = niri_query("workspaces")?;
+        let workspaces = workspaces.as_array().ok_or("niri workspaces is not an array")?;
+        let original = workspaces.iter().find(|workspace| workspace["id"].as_u64() == Some(original_workspace)).ok_or("original workspace missing")?;
+        let empty = workspaces.iter().find(|workspace| workspace["id"].as_u64() != Some(original_workspace)
+            && workspace["output"] == original["output"] && workspace["is_active"].as_bool() == Some(false)
+            && workspace.get("active_window_id").is_some_and(serde_json::Value::is_null)).ok_or("no inactive empty workspace on the same output")?;
+        let hidden_workspace = empty["id"].as_u64().ok_or("empty workspace ID missing")?;
+        move_owned_window(window, hidden_workspace)?;
+        eprintln!("async-native-placement: owned-window={window} original={original_workspace} hidden-workspace={hidden_workspace}");
+        let placement = Self { window, original_workspace, hidden_workspace };
+        Ok(Some(placement))
+    }
+
+    fn verify_hidden(&self) -> TestResult {
+        let windows = niri_query("windows")?;
+        let window = windows.as_array().ok_or("niri windows is not an array")?.iter()
+            .find(|window| window["id"].as_u64() == Some(self.window)).ok_or("owned window disappeared")?;
+        let workspaces = niri_query("workspaces")?;
+        let hidden = workspaces.as_array().ok_or("niri workspaces is not an array")?.iter()
+            .find(|workspace| workspace["id"].as_u64() == Some(self.hidden_workspace)).ok_or("hidden workspace disappeared")?;
+        if window["workspace_id"].as_u64() != Some(self.hidden_workspace) || hidden["is_active"].as_bool() != Some(false) {
+            return Err(format!("owned window is not on its inactive target workspace: window={window}, target={hidden}").into());
+        }
+        Ok(())
+    }
+
+    fn restore(&self) -> TestResult { move_owned_window(self.window, self.original_workspace) }
 }
 
 impl NativeAsync {
@@ -48,7 +122,7 @@ impl NativeAsync {
     fn occlude(&mut self, cx: &dyn PlatformCx) -> TestResult {
         let session = self.session()?;
         if session.frames.get() != 0 {
-            return Err("a native frame ran before controlled initial occlusion".into());
+            return Err("a JS-bound native frame ran before actual compositor occlusion".into());
         }
         let text = self.text()?;
         if text != INITIAL_TEXT {
@@ -58,17 +132,14 @@ impl NativeAsync {
         if window.box_with_class("promise-layout-row").is_some() {
             return Err("Promise row has a native box before its frame callback".into());
         }
-        let surface = window.surface().id();
-        // Only visibility is controlled. Timers, worker completion, redraws and JS jobs
-        // must all progress through the actual native event loop without input.
-        self.inner.surface_event(cx, surface, SurfaceEvent::Occluded(true));
+        if !window.is_occluded() { return Err("compositor has not occluded the owned test window".into()); }
         self.stage = Stage::Occluded;
         eprintln!("async-native-occluded: initial native text={text:?}");
         self.observe(cx, false)
     }
 
     fn observe(&mut self, cx: &dyn PlatformCx, native_frame: bool) -> TestResult {
-        if matches!(self.stage, Stage::Mounting | Stage::Finished) || cx.is_exiting() {
+        if matches!(self.stage, Stage::Mounting | Stage::Hiding | Stage::Finished) || cx.is_exiting() {
             return Ok(());
         }
         if let Some(error) = self.inner.failure.borrow().as_ref() {
@@ -95,10 +166,9 @@ impl NativeAsync {
                         return Err(format!("unexpected completed housekeeping text: {text:?}").into());
                     }
                     eprintln!("async-native-housekeeping: occluded=true text={text:?}");
-                    let surface = window.surface().id();
                     self.stage = Stage::Visible;
-                    self.inner.surface_event(cx, surface, SurfaceEvent::Occluded(false));
-                    // Unocclusion requests a real redraw; never drive a frame manually.
+                    self.placement.as_ref().ok_or("original window placement is absent")?.restore()?;
+                    // Only the compositor's real visible edge releases rAF.
                 }
             }
             Stage::Visible if native_frame && text.contains("Frame: fired") => {
@@ -129,7 +199,7 @@ impl NativeAsync {
                 self.stage = Stage::Finished;
                 cx.request_exit();
             }
-            Stage::Mounting | Stage::Visible | Stage::Finished => {}
+            Stage::Mounting | Stage::Hiding | Stage::Visible | Stage::Finished => {}
         }
         Ok(())
     }
@@ -138,8 +208,8 @@ impl NativeAsync {
 impl AppHandler for NativeAsync {
     fn surfaces_available(&mut self, cx: &dyn PlatformCx) {
         self.deadline = Some(cx.clock().now() + Duration::from_secs(20));
-        // Consume the compositor's initial configured/visible edge before mounting
-        // JS, so it cannot overwrite the controlled occlusion before the first rAF.
+        // Mount JS only after real compositor occlusion has settled. Mapping does
+        // not require keyboard focus or an initial Occluded(false) notification.
         self.inner.native.surfaces_available(cx);
     }
 
@@ -150,18 +220,14 @@ impl AppHandler for NativeAsync {
 
     fn surface_event(&mut self, cx: &dyn PlatformCx, surface: SurfaceId, event: SurfaceEvent) {
         if self.stage == Stage::Finished { return; }
-        if self.stage == Stage::Mounting {
-            if !event.is_input() {
-                eprintln!("async-native-startup: surface={surface:?} event={event:?}");
-            }
-            let configured_visible = matches!(event, SurfaceEvent::Occluded(false));
+        if matches!(self.stage, Stage::Mounting | Stage::Hiding) {
+            let visibility_edge = matches!(event, SurfaceEvent::Occluded(_));
+            if !event.is_input() { eprintln!("async-native-startup: stage={:?} surface={surface:?} event={event:?}", self.stage); }
             self.inner.native.surface_event(cx, surface, event);
-            if configured_visible && !cx.is_exiting() {
-                eprintln!("async-native-startup: actual visible edge consumed; mounting package");
-                self.inner.after_native(cx);
-                if !cx.is_exiting() {
-                    if let Err(error) = self.occlude(cx) { self.stop(cx, error); }
-                }
+            if self.stage == Stage::Hiding && visibility_edge {
+                self.settled_at = self.inner.native.windows().first().filter(|window| window.is_occluded())
+                    .map(|_| cx.clock().now() + Duration::from_millis(200));
+                self.probe_at = self.settled_at.is_none().then(|| cx.clock().now() + Duration::from_millis(50));
             }
             return;
         }
@@ -174,7 +240,7 @@ impl AppHandler for NativeAsync {
 
     fn wake(&mut self, cx: &dyn PlatformCx, reason: WakeReason) {
         if self.stage == Stage::Finished { return; }
-        if self.stage == Stage::Mounting {
+        if matches!(self.stage, Stage::Mounting | Stage::Hiding) {
             self.inner.native.wake(cx, reason);
         } else {
             self.inner.wake(cx, reason);
@@ -184,18 +250,47 @@ impl AppHandler for NativeAsync {
 
     fn idle(&mut self, cx: &dyn PlatformCx) -> IdlePolicy {
         if self.stage == Stage::Finished { return IdlePolicy::Block; }
+        if self.stage == Stage::Mounting {
+            match Placement::hide_mapped_window() {
+                Ok(Some(placement)) => {
+                    self.placement = Some(placement);
+                    self.stage = Stage::Hiding;
+                    self.probe_at = Some(cx.clock().now() + Duration::from_millis(50));
+                }
+                Ok(None) => {}
+                Err(error) => self.stop(cx, error),
+            }
+        }
         let policy = self.inner.idle(cx);
         // Native idle can itself service an already-due maintenance deadline.
         if let Err(error) = self.observe(cx, false) { self.stop(cx, error); }
+        let policy = self.settled_at.map_or(policy, |deadline| policy.merge(IdlePolicy::BlockUntil(deadline)));
+        let policy = self.probe_at.map_or(policy, |deadline| policy.merge(IdlePolicy::BlockUntil(deadline)));
         self.deadline.map_or(policy, |deadline| policy.merge(IdlePolicy::BlockUntil(deadline)))
     }
 
     fn deadline_reached(&mut self, cx: &dyn PlatformCx) {
         if self.stage == Stage::Finished { return; }
-        if self.stage == Stage::Mounting {
+        if matches!(self.stage, Stage::Mounting | Stage::Hiding) {
             self.inner.native.deadline_reached(cx);
         } else {
             self.inner.deadline_reached(cx);
+        }
+        if self.stage == Stage::Hiding && self.probe_at.is_some_and(|deadline| cx.clock().now() >= deadline) {
+            // The empty bootstrap has no animation. Give the backend bounded frame
+            // demand so its missed-callback occlusion detector can observe silence.
+            if let Some(window) = self.inner.native.windows().first() { window.request_frame(); }
+            self.probe_at = Some(cx.clock().now() + Duration::from_millis(50));
+        }
+        if self.stage == Stage::Hiding && self.settled_at.is_some_and(|deadline| cx.clock().now() >= deadline) {
+            self.settled_at = None;
+            if self.inner.native.windows().first().is_some_and(|window| window.is_occluded()) {
+                let result = self.placement.as_ref().ok_or("window placement is absent").map_err(Into::into)
+                    .and_then(Placement::verify_hidden);
+                if let Err(error) = result { self.stop(cx, error); return; }
+                self.inner.after_native(cx);
+                if !cx.is_exiting() && let Err(error) = self.occlude(cx) { self.stop(cx, error); }
+            }
         }
         if let Err(error) = self.observe(cx, false) { self.stop(cx, error); }
         if self.stage != Stage::Finished && self.deadline.is_some_and(|deadline| cx.clock().now() >= deadline) {
@@ -222,7 +317,7 @@ fn build_fixture(root: &Path) -> TestResult<PathBuf> {
 }
 
 #[test]
-#[ignore = "opens a real Wayland window; requires Node dependencies and a working GPU/compositor"]
+#[ignore = "moves only its owned niri window; requires an unlocked desktop, Node dependencies and GPU"]
 fn native_async_delivery() -> TestResult {
     if std::env::var("ZGUI_PLATFORM").as_deref() != Ok("wayland") {
         return Err("run this gate with ZGUI_PLATFORM=wayland; no headless or portable fallback is accepted".into());
@@ -241,17 +336,12 @@ fn native_async_delivery() -> TestResult {
         .into_handler(move || Root(roots.clone()))?
         .into_runtime();
     let native_failure = native.failure();
-    let failure = Rc::new(RefCell::new(None));
     let failures = Rc::new(RefCell::new(Vec::new()));
     let completed = Rc::new(Cell::new(false));
-    let (sender, inbox) = mpsc::sync_channel(8);
-    let application = Application {
-        native, pending, sessions: HashMap::new(), sender, inbox, exit_after: None,
-        exit_armed: false, failure: failure.clone(), package: Some(package), exercise: false, generation: 0,
-        executor: host_services::Executor::new(2, 64)?,
-    };
+    let application = Application::new(native, pending, Some(package))?;
+    let failure = application.failure.clone();
     let driver = NativeAsync {
-        inner: application, stage: Stage::Mounting, deadline: None,
+        inner: application, stage: Stage::Mounting, deadline: None, placement: None, settled_at: None, probe_at: None,
         failures: failures.clone(), completed: completed.clone(),
     };
     let result = zgui::app::desktop()(Box::new(driver));

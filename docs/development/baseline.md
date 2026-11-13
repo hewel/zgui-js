@@ -1,6 +1,6 @@
 # Implementation baseline
 
-The implementation follows [the supplied specification](tsx-native-ui.md). Phases 0–3 passed; Phase 4 is in progress. Later phase acceptance gates are not yet passed. Git was initialized during Phase 3; `0287d46` records the supplied specification. The first implementation commit covers verified Phases 0–3; each subsequent completed phase gets its own commit.
+The implementation follows [the supplied specification](tsx-native-ui.md). Phases 0–5 passed; Phase 6 is next. Later phase acceptance gates are not yet passed. Git was initialized during Phase 3; `0287d46` records the supplied specification. The first implementation commit covers verified Phases 0–3; each subsequent completed phase gets its own commit.
 
 ## Dependency policy
 
@@ -38,9 +38,11 @@ cargo run -p native-host -- --smoke-module target/solid-smoke.mjs
 env ZGUI_PLATFORM=wayland cargo run -p native-host
 env ZGUI_PLATFORM=wayland cargo run -p native-host -- --exit-after-ms 5000
 env ZGUI_PLATFORM=wayland cargo run -p native-host -- --bundle apps/examples/counter/dist
+env ZGUI_PLATFORM=wayland cargo run -p native-host -- --bundle apps/examples/counter/dist --watch
 env ZGUI_PLATFORM=wayland cargo run -p native-host -- --bundle apps/examples/lists/dist --exercise --exit-after-ms 12000
 env ZGUI_PLATFORM=wayland cargo test -p native-host native_tests::native_button_actions -- --ignored --exact --nocapture
 env ZGUI_PLATFORM=wayland cargo test -p native-host --bin native-host async_tests::native_async_delivery -- --ignored --exact --nocapture
+env ZGUI_PLATFORM=wayland cargo test -p native-host --bin native-host reload_tests::native_full_reload -- --ignored --exact --nocapture
 cargo test -p native-host --test native_timer
 ```
 
@@ -65,6 +67,14 @@ The host permits 1,024 scheduled/ready callbacks and 64 outstanding asset reques
 Each owner checkpoint bounds completion, scheduled-callback and deferred-notification batches to 32 each, sharing a 10 ms deadline; individual JS entries retain their interrupt limit. Promise pumping additionally limits attempts to 256. Remaining work explicitly wakes the owner. Preflight rejects timer/frame/service creation; teardown stops delivery, cancels registrations and releases persistent roots before destroying the engine.
 
 See [`@zgui/services`](../../packages/services/README.md) for the typed request API and cancellation contract. Console formatting is bounded and does not invoke application getters or `toString`.
+
+## Disposal and full reload
+
+`--watch` observes atomic package publication: the bundle path must resolve to a new immutable directory, as produced by `ui:dev`. A worker checks the canonical target every 500 ms, validates the complete package off-thread, and delivers owned data through a capacity-one inbox with an explicit owner wake. Editing files inside the same published directory is not a supported publication mechanism. Invalid publications leave the active generation untouched.
+
+Candidate preflight evaluates the module, validates exports/version and drains bounded initialization jobs while UI mutation, scheduling and services remain unavailable. Evaluation failure preserves the active app. Successful preflight explicitly retires the old session, replaces its weak HostBinding, and mounts a fresh generation. Mount or runtime failure cleans partial state and displays a Rust-owned diagnostic; native Retry mounts the last successful package in another fresh generation. Late worker, harness and Retry deliveries are generation-checked.
+
+Shutdown is idempotent. Stopping first rejects new nodes, insertion, listeners and async work, but permits cleanup. The JS disposer runs under a deadline even after bridge failure; a thrown cleanup error cannot skip native cancellation, root release or engine destruction. A retired/preflight-only session cannot remove its successor's stylesheet. Native handler registrations are revoked even when another owner retained the callback.
 
 ## Observed verification
 
@@ -92,8 +102,12 @@ See [`@zgui/services`](../../packages/services/README.md) for the typed request 
 - Self-replenishing microtask regression passed: the pump yields after eight attempts; a subsequent owner entry cancels the chain, and the final pending job drains.
 - `target/async.png`: visually inspected real native text after timer, frame, Promise layout and Rust asset completion; orderly exit code 0.
 - Independent async ownership review found cancelled native timers retained closures until their original deadlines. Eager in-place reclamation and its focused vendored-module gate passed all 9 timer tests; read-only re-review reported no further findings.
-- Phase 4 real Wayland async gate passed before the independent timer-reclamation patch: timer and Rust task completed while occluded; rAF/Promise remained pending; the first visible fired frame contained the Promise row at 56 device px (32 CSS px × 1.75); all resource counts reached zero.
-- A later native rerun was blocked before JS attachment because the desktop became locked (`LockedHint=yes`), so no actual visible edge arrived. Startup diagnostics now distinguish this environment failure. Re-run the native gate after unlocking; no claim is made that the locked rerun passed.
+- Phase 4 real niri occlusion gate passed after all native patches: timer and Rust task completed while occluded; rAF/Promise remained pending; the first visible fired frame contained the Promise row at 56 device px (32 CSS px × 1.75); all resource counts reached zero.
+- The gate verifies its own PID/app-ID window, moves it by stable IPC workspace ID without following focus, waits for settled real occlusion, and restores the original workspace. Startup does not require focus or an initial visibility notification. Bounded bootstrap frame probes let the backend detect missed compositor callbacks before JS starts; no synthetic occlusion events are used. Earlier startup assumptions, transient visibility and output-relative CLI workspace indexes were rejected during gate development.
+- Phase 5 focused checks passed: 29 host tests across package validation, callback/request ownership, watcher publication, Rust fallback and session lifecycle, plus 3 real-engine bridge-node tests. Coverage includes 32 teardown cycles, preflight microtasks, throwing/faulted cleanup, retained old sessions and worker completions crossing generations. Independent read-only lifecycle review reported no actionable findings.
+- Phase 5 real Wayland reload gate passed: evaluation failure preserved the active app; 16 replacements stabilized fresh resource counts and retired every generation to zero; native frame reclamation removed old layout rows; mount failure displayed the Rust fallback; native pointer activation of Retry recovered; stale Update/Retry messages had no effect.
+- `target/reload-fallback.png`: captured and visually inspected the real Rust diagnostic and native Retry button.
+- Production `--watch` smoke passed without input: an invalid atomic publication preserved the counter, the next valid publication mounted the async package, and both retired generations reached zero resources on clean shutdown. `target/watch-reload.png` visually confirmed timer, frame, Promise layout and Rust task completion after the watched reload.
 
 Environment: Linux x86_64 Wayland session; niri compositor reports `26.04 (v26.04-298-gad20c318-modified)`, CLI `26.04 (8ed0da4)`; Wayland client 1.26.0, xkbcommon 1.13.2, Fontconfig 2.18.3, Vulkan 1.4.363. No performance claims are made from this baseline.
 
@@ -103,8 +117,8 @@ Environment: Linux x86_64 Wayland session; niri compositor reports `26.04 (v26.0
 - [x] Phase 1: opaque handles, topology, turn-scoped invalidation and failed-construction reclamation.
 - [x] Phase 2: native SDK declarations, TSX packages, reconciliation and examples.
 - [x] Phase 3: properties, native cancellation, handler replacement and Button activation.
-- [ ] Phase 4: bounded jobs, timer/rAF lifetimes, asynchronous requests and idle/occluded delivery.
-- [ ] Phase 5: disposal, preflight, reload generations and fallback.
+- [x] Phase 4: bounded jobs, timer/rAF lifetimes, asynchronous requests and idle/occluded delivery.
+- [x] Phase 5: disposal, preflight, reload generations and fallback.
 - [ ] Phase 6: controlled editing, clipboard, selection, Chinese IME and accessibility.
 - [ ] Phase 7: layer-shell, monitor/scale/focus policy and typed desktop services.
 - [ ] Phase 8: only optimizations justified by measured bottlenecks.

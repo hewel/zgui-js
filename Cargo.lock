@@ -2188,7 +2188,9 @@ dependencies = [
  "sourcemap",
  "ui-bridge",
  "zgui",
+ "zgui-dom",
  "zgui-view",
+ "zgui-view-dom",
 ]
 
 [[package]]

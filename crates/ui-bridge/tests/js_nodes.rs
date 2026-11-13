@@ -82,3 +82,46 @@ fn failed_construction_releases_attached_and_never_linked_native_nodes() {
     let error = engine.evaluate_script("__zgui.createTextNode('after fault'); 'bad'").unwrap_err();
     assert!(error.message.contains("disposed"));
 }
+
+#[test]
+fn stopping_rejects_new_work_but_allows_listener_and_tree_cleanup() {
+    let document = Rc::new(RefCell::new(Document::new()));
+    let backend = Rc::new(DocumentDom::new(document));
+    let dom = DomHandle::from_rc(backend.clone());
+    let root = dom.create_element(ElementName::new("column"));
+    dom.insert(backend.root_node(), root, None);
+    let mut engine = JsRuntime::new(RuntimeLimits::default()).unwrap();
+    let bridge = UiBridge::new(NodeRegistry::new(dom.clone(), root, 9, 1, 100));
+    bridge.set_dispatcher(Rc::new(|_, _| {}));
+    engine.with_context(|ctx| { bridge.install(&ctx)?; ctx.globals().set("root", bridge.root(&ctx)?) }).unwrap();
+    bridge.run_turn(|| engine.evaluate_script(r#"
+        const control = __zgui.createElement('control');
+        __zgui.insertNode(root, control, null);
+        __zgui.setProperty(control, 'onClick', () => {});
+        'mounted'
+    "#)).unwrap();
+    assert_eq!(bridge.callback_count(), 1);
+    bridge.begin_stop();
+    bridge.run_turn(|| engine.evaluate_script(r#"
+        for (const create of [
+            () => __zgui.createElement('box'),
+            () => __zgui.createTextNode('late'),
+            () => __zgui.insertNode(root, control, null),
+            () => __zgui.setProperty(control, 'onClick', () => {})
+        ]) {
+            let rejected = false;
+            try { create(); } catch (error) { rejected = error.message.includes('stopping'); }
+            if (!rejected) throw Error('cleanup admitted new work');
+        }
+        __zgui.setProperty(control, 'onClick', null);
+        __zgui.clearRoot(root);
+        'cleaned'
+    "#)).unwrap();
+    backend.end_frame();
+    assert_eq!(dom.text_content(root), "");
+    assert!(dom.is_live(root));
+    assert_eq!(bridge.live_count(), 0);
+    assert_eq!(bridge.callback_count(), 0);
+    bridge.dispose();
+    assert_eq!(bridge.wrapper_count(), 0);
+}

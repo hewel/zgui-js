@@ -35,13 +35,14 @@ pub struct UiBridge {
     events: RefCell<events::Events>,
     dispatcher: RefCell<Option<Rc<events::Dispatcher>>>,
     active: Cell<bool>,
+    stopping: Cell<bool>,
     disposed: Cell<bool>,
 }
 
 impl UiBridge {
     pub fn new(registry: NodeRegistry) -> Rc<Self> {
         let events = RefCell::new(events::Events::new(registry.dom_handle()));
-        Rc::new(Self { registry: RefCell::new(registry), wrappers: RefCell::new(HashMap::new()), properties: RefCell::new(properties::Properties::default()), events, dispatcher: RefCell::new(None), active: Cell::new(false), disposed: Cell::new(false) })
+        Rc::new(Self { registry: RefCell::new(registry), wrappers: RefCell::new(HashMap::new()), properties: RefCell::new(properties::Properties::default()), events, dispatcher: RefCell::new(None), active: Cell::new(false), stopping: Cell::new(false), disposed: Cell::new(false) })
     }
 
     /// Finalizes detachments after successful entry; a failed update faults and
@@ -103,6 +104,9 @@ impl UiBridge {
         }
     }
 
+    /// Retiring owners may remove resources, but cannot allocate or register new work.
+    pub fn begin_stop(&self) { self.stopping.set(true); }
+
     pub fn dispose(&self) {
         self.events.borrow_mut().clear();
         if !self.disposed.replace(true) { self.registry.borrow_mut().dispose(); }
@@ -114,6 +118,12 @@ impl UiBridge {
     fn require_turn(&self, ctx: &Ctx<'_>) -> rquickjs::Result<()> {
         if self.disposed.get() { return Err(Exception::throw_reference(ctx, "native session is disposed")); }
         if !self.active.get() { return Err(Exception::throw_type(ctx, "native mutation outside a structural turn")); }
+        Ok(())
+    }
+
+    fn require_creation(&self, ctx: &Ctx<'_>) -> rquickjs::Result<()> {
+        self.require_turn(ctx)?;
+        if self.stopping.get() { return Err(Exception::throw_reference(ctx, "native session is stopping")); }
         Ok(())
     }
 
@@ -142,6 +152,7 @@ impl UiBridge {
             bridge.require_turn(&ctx)?;
             let handle = node.borrow().handle;
             if name.starts_with("on") {
+                if !value.is_null() && !value.is_undefined() { bridge.require_creation(&ctx)?; }
                 let native = bridge.registry.borrow().native(handle).map_err(|e| host_error(&ctx, e))?;
                 let dispatcher = bridge.dispatcher.borrow().clone().ok_or_else(|| Exception::throw_type(&ctx, "native event dispatcher not installed"))?;
                 return bridge.events.borrow_mut().set(&ctx, handle, native, &name, value, dispatcher);
@@ -157,14 +168,14 @@ impl UiBridge {
         let weak = Rc::downgrade(self);
         api.set("createElement", Func::from(move |ctx: Ctx<'js>, tag: String| {
             let bridge = owner(&weak, &ctx)?;
-            bridge.require_turn(&ctx)?;
+            bridge.require_creation(&ctx)?;
             let handle = bridge.registry.borrow_mut().create_element(&tag).map_err(|e| host_error(&ctx, e))?;
             bridge.wrap(&ctx, handle)
         }))?;
         let weak = Rc::downgrade(self);
         api.set("createTextNode", Func::from(move |ctx: Ctx<'js>, text: String| {
             let bridge = owner(&weak, &ctx)?;
-            bridge.require_turn(&ctx)?;
+            bridge.require_creation(&ctx)?;
             let handle = bridge.registry.borrow_mut().create_text(&text).map_err(|e| host_error(&ctx, e))?;
             bridge.wrap(&ctx, handle)
         }))?;
@@ -186,7 +197,7 @@ impl UiBridge {
         let weak = Rc::downgrade(self);
         api.set("insertNode", Func::from(move |ctx: Ctx<'js>, parent: Class<'js, NativeNode>, node: Class<'js, NativeNode>, anchor: Option<Class<'js, NativeNode>>| {
             let bridge = owner(&weak, &ctx)?;
-            bridge.require_turn(&ctx)?;
+            bridge.require_creation(&ctx)?;
             let parent = parent.borrow().handle;
             let node = node.borrow().handle;
             let anchor = anchor.map(|node| node.borrow().handle);
