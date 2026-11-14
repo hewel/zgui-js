@@ -1,3 +1,14 @@
+// The native host installs this before evaluation; functions resolve it lazily.
+declare const globalThis: {
+  readonly __zguiServices: {
+    readTextAsset(path: string): HostRequest<string>;
+    watchNiri(
+      onSnapshot: (snapshot: NiriSnapshot) => void,
+      onError: (error: HostServiceError) => void,
+    ): HostSubscription;
+  };
+};
+
 /** A native service failure; codes are host-defined, not a closed enumeration. */
 export interface HostServiceError extends Error {
   readonly code: string;
@@ -47,10 +58,12 @@ export interface NiriSnapshot {
  * Invalid arguments, lifecycle violations and admission failures throw synchronously.
  * Cancel in the UI owner's cleanup to release the subscription.
  */
-export declare function watchNiri(
+export function watchNiri(
   onSnapshot: (snapshot: NiriSnapshot) => void,
   onError: (error: HostServiceError) => void,
-): HostSubscription;
+): HostSubscription {
+  return globalThis.__zguiServices.watchNiri(onSnapshot, onError);
+}
 
 /** A host-owned asynchronous operation; cancellation does not return a Promise. */
 export interface HostRequest<T> {
@@ -69,4 +82,6 @@ export interface HostRequest<T> {
  * I/O, UTF-8 and size failures reject promise with an Error carrying a string code.
  * Call during mount, a lifecycle callback or an event, never module evaluation.
  */
-export declare function readTextAsset(path: string): HostRequest<string>;
+export function readTextAsset(path: string): HostRequest<string> {
+  return globalThis.__zguiServices.readTextAsset(path);
+}

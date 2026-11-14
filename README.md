@@ -13,6 +13,7 @@ There is **no WebView and no browser DOM**. The repository also includes an offs
 | Rust | `1.100.0`, pinned by `rust-toolchain.toml` |
 | Node.js | `>=26.13.0` |
 | pnpm | `12.18.0` |
+| TypeScript | `7.0.2`, installed locally by pnpm; no global compiler required |
 | Native build tools | A C/C++ toolchain capable of building QuickJS and the native dependencies |
 | Graphics | A graphics adapter and driver supported by the native wgpu renderer |
 
@@ -156,6 +157,8 @@ pnpm test:build
 cargo test --workspace --locked
 pnpm test:preview
 ```
+
+`pnpm typecheck` checks the native SDK packages, consumer type fixtures, and examples with the pinned local TypeScript 7.0.2 CLI. Application builds use the same synchronous `tsc --project … --noEmit` check before bundling and preserve compiler diagnostics on failure. The build tooling does not use the legacy TypeScript compiler API or fall back to a system `tsc`. Native consumer configs remain ES2022-only, without DOM or Node globals.
 
 `pnpm test:preview` builds the counter and native host before running the preview integration tests. Pixel-producing checks require a working graphics environment.
 

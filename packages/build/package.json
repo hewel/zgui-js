@@ -11,7 +11,7 @@
     "babel-preset-solid": "1.9.19",
     "esbuild": "0.28.2",
     "solid-js": "1.9.19",
-    "typescript": "5.9.3"
+    "typescript": "7.0.2"
   },
   "devDependencies": {
     "@jridgewell/trace-mapping": "0.3.31"

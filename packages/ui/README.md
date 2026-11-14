@@ -5,6 +5,17 @@ Native TSX components and reactive primitives for the zgui host. Use the package
 not browser elements. `renderApp` owns the mounted subtree and returns its
 idempotent disposer.
 
+The UI runtime is authored in strict TypeScript. This private workspace package
+exports its checked source directly, so application types and component
+implementations share one contract without a separate declaration build.
+Babel/esbuild erase types and bundle ES2022 JavaScript for QuickJS; the native host
+remains Rust.
+
+The package-local `#solid` import uses a native-only type contract for the pinned
+Solid runtime and resolves to `solid-js` when bundled. This intentionally avoids
+Solid's DOM JSX declarations. Native bridge types remain internal; application
+typechecking does not acquire browser or Node globals.
+
 ## Native images
 
 `<Image src="assets/icon.png" />` and intrinsic `<image src="assets/icon.png" />`

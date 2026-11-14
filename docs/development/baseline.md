@@ -19,10 +19,12 @@ Preview commands and phase acceptance are tracked in [preview verification](prev
 | Solid / babel-preset-solid | Exact registry versions 1.9.19 / 1.9.19 |
 | JSX compiler | babel-plugin-jsx-dom-expressions 0.40.14 |
 | Babel core / TypeScript preset | 7.29.13 / 7.29.7 |
-| esbuild / TypeScript | 0.28.2 / 5.9.3 |
+| esbuild / TypeScript | 0.28.2 / 7.0.2 |
 | Parley | 0.11.1 with `complex-scripts`; required for CJK layout segmentation |
 
 The Fontique patch is selected deliberately for parity with the audited upstream performance implementation; it is not presented as necessary for correctness. `pnpm-lock.yaml` and `Cargo.lock` record the resolved graphs. Phase 0 graph inspection confirmed patched Fontique 0.11.1 and rquickjs `std`; Phase 1 deliberately added `macro`.
+
+TypeScript is pinned to 7.0.2 in both the root and `@zgui/build` manifests. Its package root no longer exposes the legacy compiler API. Workspace checks and application preflight typechecks invoke the installed package's `bin/tsc` synchronously through the current Node executable with `--project … --noEmit`; compiler diagnostics remain the thrown error text. The CLI is resolved from `@zgui/build`'s local dependency, never from the shell or a global `tsc`. Babel/esbuild still perform runtime compilation; typechecking does not emit JavaScript or change native consumers' ES2022-only, DOM/Node-free environment.
 
 ## Commands currently implemented
 

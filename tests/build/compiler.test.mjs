@@ -9,6 +9,7 @@ import path from "node:path";
 import { buildApplication, bundle, contentDigest, publishGeneration, workspaceRoot } from "../../packages/build/src/build.mjs";
 import { validateModule } from "../../packages/build/src/validate.mjs";
 import { rebuildQueue, watchApplication } from "../../packages/build/src/watch.mjs";
+import { typecheckProject } from "../../packages/build/src/typecheck.mjs";
 
 const require = createRequire(new URL("../../packages/build/package.json", import.meta.url));
 const { TraceMap, originalPositionFor } = require("@jridgewell/trace-mapping");
@@ -39,6 +40,30 @@ async function fixture(t) {
 }
 
 const entry = "export const hostApiVersion = 1; export function mount(root) { return () => {}; }";
+
+test("local TypeScript CLI checks project paths literally, never emits, and preserves diagnostics", async t => {
+  const directory = await mkdtemp(path.join(workspaceRoot, "tests/build/.fixture-cli ; "));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  await mkdir(path.join(directory, "src"));
+  const config = path.join(directory, "tsconfig.json");
+  const source = path.join(directory, "src/main.ts");
+  await writeFile(config, JSON.stringify({
+    compilerOptions: { target: "ES2022", module: "ESNext", lib: ["ES2022"], types: [], strict: true, noEmit: false, outDir: "dist" },
+    include: ["src"],
+  }));
+  await writeFile(source, "export const value: number = 1;\n");
+  assert.equal(typecheckProject(config), undefined);
+  assert.ok(!(await readdir(directory)).includes("dist"));
+
+  await writeFile(source, 'export const value: number = "wrong";\n');
+  assert.throws(() => typecheckProject(config), error => {
+    assert.match(error.message, /main\.ts\(1,\d+\): error TS2322:/);
+    assert.match(error.message, /not assignable to type 'number'/);
+    return true;
+  });
+  assert.ok(!(await readdir(directory)).includes("dist"));
+  assert.throws(() => typecheckProject(path.join(directory, "missing.json")), /error TS5058:.*missing\.json/);
+});
 
 test("AST validation distinguishes nested async work from top-level execution", () => {
   validateModule(`${entry}\nasync function work() { await Promise.resolve(); for await (const x of []) {} }`, { bundled: true, entry: true });
@@ -120,7 +145,6 @@ test("native services bundle lazily with one Solid runtime and declared text ass
   assert.deepEqual(manifest.assets, ["assets/message.txt"]);
   assert.equal(await readFile(path.join(dist, manifest.assets[0]), "utf8"), "Native text asset\n");
   const info = JSON.parse(await readFile(path.join(dist, "build-info.json"), "utf8"));
-  assert.ok(info.inputs.some(input => input.endsWith("packages/services/src/index.js")));
   assert.equal(info.inputs.filter(input => /\/solid-js\/dist\/(?:solid|dev)\.js$/.test(input)).length, 1);
   const code = await readFile(path.join(dist, manifest.entry), "utf8");
   assert.match(code, /globalThis\.__zguiServices\.readTextAsset/);
@@ -215,7 +239,8 @@ test("development watcher retains the good generation on errors and publishes re
       schemaVersion: 1, attemptId: published.attemptId, app: "fixture", status: "published",
       previousDirectory: null, publicationDirectory: previousDirectory, buildId: firstBuildId, error: null,
     });
-    await writeFile(path.join(directory, "src/main.tsx"), validEntry + `\nconst invalid: number = "${"bad".repeat(1500)}";\n`);
+    const invalidDeclarations = Array.from({ length: 64 }, (_, index) => `const invalid${index}: number = "bad";`).join("\n");
+    await writeFile(path.join(directory, "src/main.tsx"), `${validEntry}\n${invalidDeclarations}\n`);
     const { error, status: failure } = await failed.promise;
     assert.match(error.message, /not assignable/);
     assert.ok(error.message.length > 2048);

@@ -1,22 +1,20 @@
-import ts from "typescript";
+import { execFileSync } from "node:child_process";
 import { readdir, access } from "node:fs/promises";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+const compilerCli = path.join(path.dirname(createRequire(import.meta.url).resolve("typescript/package.json")), "bin/tsc");
+
 export function typecheckProject(configPath) {
-  const loaded = ts.readConfigFile(configPath, ts.sys.readFile);
-  const parsed = loaded.error ? { errors: [loaded.error] } : ts.parseJsonConfigFileContent(loaded.config, ts.sys, path.dirname(configPath), { noEmit: true }, configPath);
-  let diagnostics = parsed.errors;
-  if (!diagnostics.length) {
-    const program = ts.createProgram({ rootNames: parsed.fileNames, options: parsed.options, projectReferences: parsed.projectReferences });
-    diagnostics = ts.getPreEmitDiagnostics(program);
-  }
-  if (diagnostics.length) {
-    throw new Error(ts.formatDiagnosticsWithColorAndContext(diagnostics, {
-      getCanonicalFileName: filename => filename,
-      getCurrentDirectory: ts.sys.getCurrentDirectory,
-      getNewLine: () => "\n",
-    }));
+  try {
+    execFileSync(process.execPath, [compilerCli, "--project", path.resolve(configPath), "--noEmit", "--pretty", "false"], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+  } catch (error) {
+    const diagnostics = `${error.stdout ?? ""}${error.stderr ?? ""}`.trim();
+    throw new Error(diagnostics || error.message, { cause: error });
   }
 }
 

@@ -1,6 +1,12 @@
 import { createElement, effect, mergeProps, spread } from "./renderer/index.js";
+import type { NativeNode, TextFieldProps, TextAreaProps } from "./types.js";
 
-function textControl(tag, role, name, props) {
+function textControl(
+  tag: "field" | "editor",
+  role: "textInput" | "multilineTextInput",
+  name: string,
+  props: TextFieldProps | TextAreaProps,
+): NativeNode {
   // Track spread shape changes without evaluating a lazy child getter.
   effect(() => {
     if ("children" in props) throw new TypeError(`${name} does not accept children; use value or defaultValue`);
@@ -10,10 +16,10 @@ function textControl(tag, role, name, props) {
   return control;
 }
 
-export function TextField(props = {}) {
+export function TextField(props: TextFieldProps = {}): NativeNode {
   return textControl("field", "textInput", "TextField", props);
 }
 
-export function TextArea(props = {}) {
+export function TextArea(props: TextAreaProps = {}): NativeNode {
   return textControl("editor", "multilineTextInput", "TextArea", props);
 }

@@ -1,6 +1,6 @@
 import type { ImageProps, NativeChild, NativeElementProps, NativeTextControlProps } from "./index.js";
 
-export namespace JSX {
+export declare namespace JSX {
   type Element = NativeChild;
   interface ElementChildrenAttribute { children: unknown; }
   interface IntrinsicElements {

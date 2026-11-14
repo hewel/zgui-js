@@ -1,10 +1,13 @@
 # Native services
 
-`@zgui/services` is separate from `@zgui/ui`. Its declarations use ES2022 only;
-no browser or Node globals are imported. Importing the module does not inspect
-the host. Calling a service forwards to the private native binding in the active
-session; start work from mount, lifecycle callbacks or events, not module
-evaluation/preflight or disposal. Cleanup may cancel existing work.
+`@zgui/services` is separate from `@zgui/ui`. Its implementation and public types
+share strict TypeScript source using ES2022 only; no browser or Node globals are
+imported. This private workspace package exports that source directly, and the
+application builder erases types before QuickJS execution. Importing the module
+does not inspect the host. Calling a service forwards to the private native
+binding in the active session; start work from mount, lifecycle callbacks or
+events, not module evaluation/preflight or disposal. Cleanup may cancel existing
+work.
 
 ```ts
 import { readTextAsset } from "@zgui/services";

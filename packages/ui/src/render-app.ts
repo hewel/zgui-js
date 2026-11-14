@@ -1,14 +1,23 @@
-import { createRoot } from "solid-js";
+import { createRoot } from "#solid";
 import { insert } from "./renderer/index.js";
+import type { NativeChild, NativeNode } from "./types.js";
+import type { NativeHost } from "./host.js";
 
-export function renderApp(code, root) {
-  let disposeRoot;
+declare const globalThis: NativeHost;
+
+/**
+ * Mount native children into a dedicated host root. Cleanup is idempotent and
+ * attempts both reactive disposal and native clear, including after mount failure.
+ * Host teardown separately cancels timers, requests, and callback registrations.
+ */
+export function renderApp(code: () => NativeChild, root: NativeNode): () => void {
+  let disposeRoot: (() => void) | undefined;
   let disposed = false;
 
   function dispose() {
     if (disposed) return;
     disposed = true;
-    const errors = [];
+    const errors: unknown[] = [];
     try {
       disposeRoot?.();
     } catch (error) {
