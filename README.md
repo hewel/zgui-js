@@ -10,7 +10,7 @@ There is **no WebView and no browser DOM**. The repository also includes an offs
 
 ```mermaid
 flowchart TB
-    Source["Application: TSX, TypeScript, CSS, assets"] --> Build["packages/build: tsc + Babel Solid transform + esbuild"]
+    Source["Application: TSX, TypeScript, CSS, assets"] --> Build["packages/build: tsc + Babel Solid transform + Rolldown"]
     Build --> Package["Immutable package: JavaScript, source map, styles, assets, manifest"]
     Package --> Host["native-host: QuickJS session, Solid reactivity, UI bridge"]
     Host <--> Native["Upstream zgui: native tree, input, layout, rendering"]
@@ -43,41 +43,57 @@ Dependencies and upstream revisions are pinned. Keep `Cargo.lock` and `pnpm-lock
 
 ## Quick start
 
-Run all commands from the repository root:
+From the repository root:
 
 ```sh
 pnpm install --frozen-lockfile
-pnpm ui:build --app counter
-cargo build -p native-host --locked
+pnpm dev --app counter
 ```
 
-Launch the counter in a Wayland session:
+One command builds the native host with Cargo, builds the application, opens its
+native window, and watches for changes. Cargo checks incremental freshness on
+each launch; ordinary application edits do not rebuild Rust. Platform selection
+uses upstream zgui's desktop detection; set `ZGUI_PLATFORM=wayland` to select
+Wayland explicitly.
 
-```sh
-env ZGUI_PLATFORM=wayland target/debug/native-host \
-  --bundle apps/examples/counter/dist
-```
-
-Click **Increment** to update the native **Count** and **Doubled** labels. For a bounded launch, append `--exit-after-ms 5000` to request an orderly shutdown after five seconds.
+Click **Increment** to update the native **Count** and **Doubled** labels.
+`pnpm dev --app counter --exit-after-ms 5000` requests a bounded native launch.
+Closing the window ends the development session. Ctrl+C stops the builder and
+its owned native/Cargo processes; a native failure exits rather than restarting
+silently. Native executable discovery respects Cargo's configured target directory.
 
 ### Development and reload
 
-Start the application builder in one terminal:
+The same commands work inside each example:
 
 ```sh
-pnpm ui:dev --app counter
+cd apps/examples/counter
+pnpm dev
+pnpm build
+pnpm preview
 ```
 
-Start the native host in another:
+`pnpm build` type-checks and publishes a package without opening a window.
+`pnpm preview` builds the app and host, then captures an offscreen native frame;
+it is not a browser preview server.
 
-```sh
-env ZGUI_PLATFORM=wayland target/debug/native-host \
-  --bundle apps/examples/counter/dist --watch
-```
+The `zgui` executable also accepts an application directory:
+`zgui dev /path/to/my-app`. Applications need `src/main.tsx`, `tsconfig.json`,
+their SDK dependencies, and `@zgui/build` for the CLI. No example-name allowlist
+is required. `zgui --help` lists options; root commands default to `counter`.
 
-The builder validates and publishes each application package atomically. The host then preflights the new package, retires the previous session, and mounts a fresh JavaScript generation.
+Development uses a persistent Rolldown watcher and a per-compiler Babel/Solid
+transform cache. [Rolldown 1.3.2 still rescans the module graph](https://github.com/rolldown/rolldown/blob/v1.3.2/crates/rolldown_watcher/src/watch_task.rs#L122-L123); unchanged source
+avoids repeated Babel transformation, not all bundler work. Type checking still
+gates publication. An initial build failure keeps the watcher alive and delays
+host launch; a later failure leaves the active package unchanged. Correcting the
+source publishes a new immutable generation and reloads the existing host.
 
-This is **full-session reload, not state-preserving HMR**. The `dist` path points to immutable generation directories; rebuild after source changes rather than editing an already published package.
+This is **full-session reload, not state-preserving HMR**. JavaScript, CSS, and
+assets publish atomically; rebuild rather than modifying an already published
+generation. `pnpm build --app counter --watch` is the lower-level builder-only
+entry for integrations that manage their own host. The former `ui:build` and
+`ui:dev` script names have been replaced by `build` and `dev`.
 
 ## Examples
 
@@ -92,23 +108,37 @@ Use the same build and launch commands with another application name:
 
 ## Offscreen previews
 
-Build the counter and native host as shown in [Quick start](#quick-start), then check the graphics, font, and native rendering environment:
+One command prepares the application and native host and runs the counter
+scenario. It captures the initial frame, performs a native pointer click, asserts
+`Count: 1`, and captures the updated frame:
+
+```sh
+pnpm preview --app counter \
+  --scenario preview/scenarios/counter-virtual.json \
+  --out target/preview-counter-001
+```
+
+Omit `--out` for a fresh automatically named directory under `target/`.
+Omit `--scenario` for the initial-frame capture. `--profile` and `--fixture`
+default to the repository's default profile and empty fixture.
+
+For continuous offscreen verification, use the same managed entry:
+
+```sh
+pnpm preview --app counter --watch \
+  --scenario preview/scenarios/counter-virtual.json
+```
+
+This starts the builder and preview supervisor, not a desktop host. It owns and
+cleans up the scenario workers; no second terminal is needed.
+
+Low-level diagnostics remain available after preparing the host (the path below
+assumes Cargo's default target directory):
 
 ```sh
 target/debug/native-host preview doctor \
   --profile preview/profiles/default.json \
   --out target/preview-doctor-001
-```
-
-Run the counter scenario. It captures the initial frame, performs a native pointer click, advances virtual time, asserts `Count: 1`, and captures the updated frame:
-
-```sh
-target/debug/native-host preview run \
-  --bundle apps/examples/counter/dist \
-  --profile preview/profiles/default.json \
-  --fixture preview/fixtures/empty.json \
-  --scenario preview/scenarios/counter-virtual.json \
-  --out target/preview-counter-001
 ```
 
 The default profile uses an 800×600 logical surface at 1.75× scale, producing 1400×1050 PNG images. Each run records a structured `result.json`, screenshots, native tree snapshots, frame evidence, and an artifact manifest. Stdout contains a bounded JSON summary.
@@ -154,7 +184,7 @@ cargo test --workspace --locked
 pnpm test:preview
 ```
 
-`pnpm typecheck` checks the native SDK packages, consumer type fixtures, and examples with the pinned local TypeScript 7.0.2 CLI. Application builds use the same synchronous `tsc --project … --noEmit` check before bundling and preserve compiler diagnostics on failure. The build tooling does not use the legacy TypeScript compiler API or fall back to a system `tsc`. Native consumer configs remain ES2022-only, without DOM or Node globals.
+`pnpm typecheck` checks the native SDK packages, consumer type fixtures, and examples with the pinned local TypeScript 7.0.2 CLI. Application builds use `tsc --project … --noEmit` before publication and preserve compiler diagnostics on failure. Development checks run in a cancellable child process. The build tooling does not use the legacy TypeScript compiler API or fall back to a system `tsc`. Native consumer configs remain ES2022-only, without DOM or Node globals.
 
 `pnpm test:preview` builds the counter and native host before running the preview integration tests. Pixel-producing checks require a working graphics environment.
 

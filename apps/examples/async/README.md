@@ -1,6 +1,6 @@
 # Async status
 
-Build with `pnpm ui:build --app async`, or watch with `pnpm ui:dev --app async`.
+Build with `pnpm build --app async`, or develop with `pnpm dev --app async`.
 The app uses `@zgui/ui` lifecycle hooks and public scheduling globals. No input
 or harness call is needed after mounting.
 

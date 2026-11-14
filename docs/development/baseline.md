@@ -26,25 +26,27 @@ below is retained and does not describe the currently shipped API or test suite.
 | Solid / babel-preset-solid | Exact registry versions 1.9.19 / 1.9.19 |
 | JSX compiler | babel-plugin-jsx-dom-expressions 0.40.14 |
 | Babel core / TypeScript preset | 7.29.13 / 7.29.7 |
-| esbuild / TypeScript | 0.28.2 / 7.0.2 |
+| Rolldown / TypeScript | 1.3.2 / 7.0.2 |
 | Parley | 0.11.1 with `complex-scripts`; required for CJK layout segmentation |
 
 The Fontique patch is selected deliberately for parity with the audited upstream performance implementation; it is not presented as necessary for correctness. `pnpm-lock.yaml` and `Cargo.lock` record the resolved graphs. Phase 0 graph inspection confirmed patched Fontique 0.11.1 and rquickjs `std`; Phase 1 deliberately added `macro`.
 
-TypeScript is pinned to 7.0.2 in both the root and `@zgui/build` manifests. Its package root no longer exposes the legacy compiler API. Workspace checks and application preflight typechecks invoke the installed package's `bin/tsc` synchronously through the current Node executable with `--project … --noEmit`; compiler diagnostics remain the thrown error text. The CLI is resolved from `@zgui/build`'s local dependency, never from the shell or a global `tsc`. Babel/esbuild still perform runtime compilation; typechecking does not emit JavaScript or change native consumers' ES2022-only, DOM/Node-free environment.
+TypeScript is pinned to 7.0.2 in both the root and `@zgui/build` manifests. Its package root no longer exposes the legacy compiler API. Workspace checks and one-shot application builds invoke the installed package's `bin/tsc` synchronously through the current Node executable with `--project … --noEmit`; development uses a cancellable asynchronous child. Compiler diagnostics remain the thrown error text. The CLI is resolved from `@zgui/build`'s local dependency, never from the shell or a global `tsc`. Babel/Rolldown perform runtime compilation; typechecking does not emit JavaScript or change native consumers' ES2022-only, DOM/Node-free environment.
 
 ## Commands currently implemented
 
 ```sh
 pnpm install --frozen-lockfile
 pnpm typecheck
-pnpm ui:build --smoke
+node packages/build/src/cli.mjs smoke
 pnpm smoke
-pnpm ui:build --app counter
-pnpm ui:build --app lists
-pnpm ui:build --app async
-pnpm ui:build --app editing
-pnpm ui:dev --app counter
+pnpm build --app counter
+pnpm build --app lists
+pnpm build --app async
+pnpm build --app editing
+pnpm dev --app counter
+pnpm preview --app counter
+pnpm preview --app counter --watch
 pnpm test:build
 cargo test -p js-runtime
 cargo run -p native-host -- --smoke-module target/solid-smoke.mjs
@@ -61,7 +63,27 @@ cargo test -p native-host --test native_timer
 
 `--smoke-module` executes the bundled Solid fixture in the actual embedded engine without creating a window. `--exit-after-ms` requests orderly event-loop shutdown, for native integration checks. The native baseline creates a dedicated Rust-owned mount region, installs a HostBinding, creates/updates native text from JavaScript, and schedules a native one-shot timer and an owned background completion with an explicit platform wake. These are integration harness behaviors, not the public SDK.
 
-The build uses browser/production Solid export conditions and Babel's Universal preset before esbuild. Graph validation rejects unresolved imports and browser/server renderers and verifies one production reactive Solid runtime. Packages include composed source maps and build metadata. The separate smoke fixture imports upstream Solid declarations; actual native applications use `@zgui/ui`'s ES2022-only declaration boundary without DOM or Node globals.
+The build uses browser/production Solid export conditions and Babel's Universal preset before Rolldown. Graph validation rejects unresolved imports and browser/server renderers and verifies one production reactive Solid runtime. Packages include composed source maps and build metadata with explicit module/chunk graphs. Development uses a persistent Rolldown watcher with source-keyed Babel/Solid transform caching; Rolldown 1.3.2's public watcher still rescans the module graph. Type checking gates atomic publication. `dev` owns Cargo preparation, the builder, and a single native host; `preview --watch` owns the builder and offscreen supervisor instead. The separate smoke fixture imports upstream Solid declarations; actual native applications use `@zgui/ui`'s ES2022-only declaration boundary without DOM or Node globals.
+
+### Managed development verification
+
+- `pnpm typecheck`: SDK, consumer fixtures, and all four examples passed.
+- `pnpm test:build`: 37 checks passed, including external application directories,
+  composed source maps, Babel transform caching, and process cancellation.
+- After removing publication deduplication, `node --test tests/build/compiler.test.mjs tests/preview/watch.test.mjs` passed all 20 checks. Recovery to the exact original source now produces a fresh preview run even when the build ID is unchanged.
+- `pnpm smoke` and `target/debug/native-host --smoke-module target/solid-smoke.mjs`
+  passed in Node and embedded QuickJS respectively.
+- `cargo test -p native-host --bin native-host --locked package::`: five package
+  integrity/source-map checks passed.
+- A real Wayland development session recovered from an initially invalid app,
+  retained its package after a later type error, reloaded changed TSX and CSS
+  through generations 1–3, and reaped its native child on SIGTERM.
+- Application-local `pnpm dev --exit-after-ms 1000` opened the counter and exited
+  cleanly with zero retained session resources.
+- Managed one-shot preview passed the counter click assertion and produced two
+  captures; managed `preview --watch` completed a real run and reaped its native
+  supervisor on SIGINT. These checks do not imply state-preserving HMR or partial
+  native module-graph scans.
 
 ## Native property and event contract
 
@@ -83,7 +105,7 @@ See [`@zgui/services`](../../packages/services/README.md) for the typed request 
 
 ## Disposal and full reload
 
-`--watch` observes atomic package publication: the bundle path must resolve to a new immutable directory, as produced by `ui:dev`. A worker checks the canonical target every 500 ms, validates the complete package off-thread, and delivers owned data through a capacity-one inbox with an explicit owner wake. Editing files inside the same published directory is not a supported publication mechanism. Invalid publications leave the active generation untouched.
+`--watch` observes atomic package publication: the bundle path must resolve to a new immutable directory, as produced by `pnpm dev` or `pnpm build --watch`. A worker checks the canonical target every 500 ms, validates the complete package off-thread, and delivers owned data through a capacity-one inbox with an explicit owner wake. Editing files inside the same published directory is not a supported publication mechanism. Invalid publications leave the active generation untouched.
 
 Candidate preflight evaluates the module, validates exports/version and drains bounded initialization jobs while UI mutation, scheduling and services remain unavailable. Evaluation failure preserves the active app. Successful preflight explicitly retires the old session, replaces its weak HostBinding, and mounts a fresh generation. Mount or runtime failure cleans partial state and displays a Rust-owned diagnostic; native Retry mounts the last successful package in another fresh generation. Late worker, harness and Retry deliveries are generation-checked.
 
@@ -211,8 +233,8 @@ The remaining counter and lists workload setup and native trace capture use:
 
 ```sh
 cargo build --release -p native-host
-pnpm ui:build --app counter
-pnpm ui:build --app lists
+pnpm build --app counter
+pnpm build --app lists
 env ZGUI_PLATFORM=wayland ZGUI_LATENCY=target/counter-run.jsonl \
   target/release/native-host --bundle apps/examples/counter/dist --exit-after-ms 10000
 env ZGUI_PLATFORM=wayland ZGUI_LATENCY=target/lists-run.jsonl \

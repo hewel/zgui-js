@@ -9,7 +9,8 @@ import path from "node:path";
 import { buildApplication, bundle, contentDigest, publishGeneration, workspaceRoot } from "../../packages/build/src/build.mjs";
 import { validateModule } from "../../packages/build/src/validate.mjs";
 import { rebuildQueue, watchApplication } from "../../packages/build/src/watch.mjs";
-import { typecheckProject } from "../../packages/build/src/typecheck.mjs";
+import { typecheckProject, typecheckProjectAsync } from "../../packages/build/src/typecheck.mjs";
+import { compilerOptions, outputOptions, compilationResult } from "../../packages/build/src/compiler.mjs";
 
 const require = createRequire(new URL("../../packages/build/package.json", import.meta.url));
 const { TraceMap, originalPositionFor } = require("@jridgewell/trace-mapping");
@@ -122,6 +123,10 @@ test("real TSX bundles have one reactive runtime, composed maps, resources, and 
   assert.equal(info.packages["solid-js"], "1.9.19");
   assert.equal(info.packages["babel-preset-solid"], "1.9.19");
   assert.equal(info.engine.name, "QuickJS-NG");
+  assert.equal(info.packages.rolldown, "1.3.2");
+  assert.equal(info.graph.chunks.length, 1);
+  assert.deepEqual(info.graph.chunks[0].imports, []);
+  assert.deepEqual(info.graph.chunks[0].dynamicImports, []);
   assert.match(info.engine.revision, /^[a-f0-9]{40}$/);
   assert.match(info.lockfile.digest, /^sha256:[a-f0-9]{64}$/);
   assert.equal(contentDigest(new Map([...files, ["build-info.json", Buffer.from("not a resource")]]), manifest), manifest.buildId);
@@ -145,7 +150,7 @@ test("native services bundle lazily with one Solid runtime and declared text ass
   assert.deepEqual(manifest.assets, ["assets/message.txt"]);
   assert.equal(await readFile(path.join(dist, manifest.assets[0]), "utf8"), "Native text asset\n");
   const info = JSON.parse(await readFile(path.join(dist, "build-info.json"), "utf8"));
-  assert.equal(info.inputs.filter(input => /\/solid-js\/dist\/(?:solid|dev)\.js$/.test(input)).length, 1);
+  assert.equal(info.graph.modules.filter(input => /\/solid-js\/dist\/(?:solid|dev)\.js$/.test(input)).length, 1);
   const code = await readFile(path.join(dist, manifest.entry), "utf8");
   assert.match(code, /globalThis\.__zguiServices\.readTextAsset/);
   validateModule(code, { bundled: true, entry: true });
@@ -177,6 +182,25 @@ test("asset symlinks are rejected before publication", async t => {
   await symlink("../src/main.tsx", path.join(directory, "assets/link"));
   await assert.rejects(buildApplication("fixture", { appDirectory: directory }), /regular files/);
   await assert.rejects(readlink(path.join(directory, "dist")), { code: "ENOENT" });
+});
+
+test("app-local dependencies resolve browser/production exports without external imports", async t => {
+  const directory = await fixture(t);
+  const dependency = path.join(directory, "node_modules/native-fixture");
+  await mkdir(dependency, { recursive: true });
+  await writeFile(path.join(dependency, "package.json"), JSON.stringify({
+    name: "native-fixture", type: "module",
+    exports: { browser: { production: "./native.js", default: "./wrong.js" }, default: "./wrong.js" },
+  }));
+  await writeFile(path.join(dependency, "native.js"), 'export const message = "browser-production-branch";');
+  await writeFile(path.join(dependency, "wrong.js"), 'throw new Error("wrong-resolution-branch");');
+  const source = path.join(directory, "src/main.tsx");
+  await writeFile(source, `import { message } from "native-fixture";\n${validEntry.replace("Count:", "{message}")}`);
+  const result = await bundle(source, { appDirectory: directory });
+  assert.match(result.files.get("app.mjs").toString(), /browser-production-branch/);
+  assert.ok(result.graph.modules.includes(path.join(dependency, "native.js")));
+  assert.ok(!result.graph.modules.includes(path.join(dependency, "wrong.js")));
+  assert.deepEqual(result.graph.chunks[0].imports, []);
 });
 
 function deferred() {
@@ -285,6 +309,124 @@ test("development watcher surfaces status publication failure instead of reporti
     await assert.rejects(realpath(path.join(directory, "dist")), { code: "ENOENT" });
     assert.deepEqual((await readdir(directory)).filter(name => name.startsWith(".zgui-build-status.json.")), []);
   } finally { await watcher.close(); }
+});
+
+test("persistent compiler caches real Babel transforms, prunes modules, and recovers after syntax errors", { timeout: 30000 }, async t => {
+  const directory = await fixture(t);
+  const source = path.join(directory, "src/main.tsx");
+  const dependency = path.join(directory, "src/message.ts");
+  const dependencySource = value => `export const message: string = ${JSON.stringify(value)};`;
+  const mainSource = suffix => `import { message } from "./message";\n${validEntry.replace("Count:", `{message}${suffix}`)}`;
+  await writeFile(dependency, dependencySource("incremental-one"));
+  await writeFile(source, mainSource("first"));
+  const { watch } = await import(require.resolve("rolldown"));
+  const { transformAsync } = require("@babel/core");
+  let transforms = 0;
+  let next = Promise.withResolvers();
+  const take = async () => {
+    const result = await next.promise;
+    next = Promise.withResolvers();
+    return result;
+  };
+  const options = compilerOptions(source, {
+    root: workspaceRoot, appDirectory: directory,
+    babelTransform(source, options) {
+      if (options.filename === dependency) transforms++;
+      return transformAsync(source, options);
+    },
+    plugins: [{
+      name: "observe-incremental-output",
+      generateBundle(_options, output) {
+        const result = compilationResult(Object.values(output), this.getModuleIds());
+        next.resolve({ result });
+        for (const filename of Object.keys(output)) delete output[filename];
+      },
+    }],
+  });
+  const start = () => watch({
+    ...options,
+    output: { ...outputOptions(), dir: path.join(directory, "compiler-output") },
+    watch: { buildDelay: 20 },
+  }).on("event", async event => {
+    if (event.code === "ERROR") next.resolve({ error: event.error });
+    if (event.code === "ERROR" || event.code === "BUNDLE_END") await event.result?.close();
+  });
+  let compiler = start();
+  try {
+    assert.ok((await take()).result);
+    assert.equal(transforms, 1);
+    await writeFile(source, mainSource("second"));
+    assert.match((await take()).result.files.get("app.mjs").toString(), /second/);
+    assert.equal(transforms, 1, "the persistent compiler must retain unchanged Babel transforms");
+    await writeFile(dependency, dependencySource("incremental-two"));
+    assert.match((await take()).result.files.get("app.mjs").toString(), /incremental-two/);
+    assert.equal(transforms, 2);
+    await writeFile(source, "export const broken = ;");
+    assert.ok((await take()).error);
+    await writeFile(source, mainSource("recovered"));
+    assert.match((await take()).result.files.get("app.mjs").toString(), /recovered/);
+    const beforePruning = transforms;
+    await writeFile(source, validEntry.replace("Count:", "detached"));
+    assert.ok(!(await take()).result.graph.modules.includes(dependency));
+    await writeFile(source, mainSource("reattached"));
+    assert.match((await take()).result.files.get("app.mjs").toString(), /reattached/);
+    assert.equal(transforms, beforePruning + 1, "removed modules must not retain cached transforms");
+    await compiler.close();
+    const beforeRestart = transforms;
+    compiler = start();
+    assert.ok((await take()).result);
+    assert.equal(transforms, beforeRestart + 1, "closing a compiler clears its transform cache");
+  } finally { await compiler.close(); }
+});
+
+test("development watcher publishes added resources and external dependency changes", { timeout: 30000 }, async t => {
+  const directory = await fixture(t);
+  const external = await mkdtemp(path.join(workspaceRoot, "tests/build/.dependency-"));
+  t.after(() => rm(external, { recursive: true, force: true }));
+  const dependency = path.join(external, "message.ts");
+  await writeFile(dependency, 'export const message = "external-one";');
+  const specifier = path.relative(path.join(directory, "src"), dependency).replace(/\.ts$/, "");
+  await writeFile(path.join(directory, "src/main.tsx"), `import { message } from ${JSON.stringify(specifier)};\n${validEntry.replace("Count:", "{message}")}`);
+  let next = Promise.withResolvers();
+  const take = async () => {
+    const result = await next.promise;
+    next = Promise.withResolvers();
+    return result;
+  };
+  const watcher = watchApplication("fixture", {
+    appDirectory: directory,
+    onSuccess(result) { next.resolve(result); },
+    onError(error) { next.reject(error); },
+  });
+  try {
+    const initial = await take();
+    assert.match(await readFile(path.join(initial.dist, "app.mjs"), "utf8"), /external-one/);
+    await writeFile(dependency, 'export const message = "external-two";');
+    const changed = await take();
+    assert.match(await readFile(path.join(changed.dist, "app.mjs"), "utf8"), /external-two/);
+    await mkdir(path.join(directory, "assets"));
+    await writeFile(path.join(directory, "assets/new.txt"), "new resource");
+    let resources;
+    do { resources = await take(); } while (!resources.manifest.assets.includes("assets/new.txt"));
+    assert.equal(await readFile(path.join(resources.dist, "assets/new.txt"), "utf8"), "new resource");
+    await writeFile(path.join(directory, "src/app.css"), "text { color: red; }");
+    let styled;
+    do { styled = await take(); } while (!styled.manifest.styles.includes("app.css"));
+    assert.equal(await readFile(path.join(styled.dist, "app.css"), "utf8"), "text { color: red; }");
+  } finally { await watcher.close(); }
+  await watcher.close();
+});
+
+test("async development typechecking preserves diagnostics and reaps cancellation", async t => {
+  const directory = await fixture(t);
+  const config = path.join(directory, "tsconfig.json");
+  await typecheckProjectAsync(config);
+  await writeFile(path.join(directory, "src/main.tsx"), `${validEntry}\nconst wrong: number = "bad";`);
+  await assert.rejects(typecheckProjectAsync(config), /not assignable/);
+  const controller = new AbortController();
+  const checking = typecheckProjectAsync(config, { signal: controller.signal });
+  controller.abort();
+  await assert.rejects(checking, { name: "AbortError" });
 });
 
 test("text controls reject children introduced by a reactive spread before evaluating them", async t => {

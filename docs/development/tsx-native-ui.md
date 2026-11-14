@@ -188,7 +188,7 @@ Implementation entry points: [Session](../../crates/native-host/src/session.rs),
 | `crates/host-services/` | Typed application/system services and completion messages |
 | `packages/ui/` | Proposed `@zgui/ui` SDK, native JSX types, components |
 | `packages/ui/src/renderer/` | Solid Universal adapter and compiler helper exports |
-| `packages/build/` | Babel/esbuild integration, package validation, watch mode |
+| `packages/build/` | Babel/Rolldown integration, package validation, managed development and watch mode |
 | `apps/examples/counter/` | First real TSX application |
 | `apps/examples/lists/` | Conditional content, list movement, cleanup |
 | `apps/examples/async/` | Timers, Promise work, service completion |
@@ -290,32 +290,34 @@ const babelOptions = {
 
 Pass the source filename for each transformation so the TypeScript preset distinguishes TS and TSX. Preserve source-map input/output.
 
-Solid must see the JSX structure. Do not run React's automatic JSX transform or esbuild's ordinary JSX lowering before the Solid transform. [S2] [B1]
+Solid must see the JSX structure. Do not run React's automatic JSX transform or a bundler's ordinary JSX lowering before the Solid transform. [S2] [B1]
 
 ### 4.5 Bundling configuration
 
-Proposed esbuild settings, with a Babel onLoad integration supplied by the build package:
+Rolldown settings, with a Babel `transform` hook supplied by the build package:
 
 ~~~js
 const buildOptions = {
-  entryPoints: ["src/main.tsx"],
-  outfile: "dist/app.mjs",
-  bundle: true,
-  format: "esm",
+  input: "src/main.tsx",
   platform: "neutral",
-  conditions: ["browser", "production"],
-  mainFields: ["module", "main"],
-  target: "es2022",
-  splitting: false,
-  sourcemap: "external",
-  metafile: true,
-  define: {
-    "process.env.NODE_ENV": '"production"'
+  resolve: {
+    conditionNames: ["browser", "production", "import", "default"],
+    mainFields: ["module", "main"]
+  },
+  transform: {
+    target: "es2022",
+    define: { "process.env.NODE_ENV": '"production"' }
+  },
+  output: {
+    format: "esm",
+    entryFileNames: "app.mjs",
+    sourcemap: "hidden",
+    codeSplitting: false
   }
 };
 ~~~
 
-The configuration object is an integration recipe, not a complete build script. The Babel plugin must return transformed JavaScript with usable source-map information. For development, deliberately select the development condition and matching NODE_ENV value, then run the same runtime compatibility tests.
+The configuration object is an integration recipe, not a complete build script. The Babel plugin returns transformed JavaScript with composed source maps. The package builder validates the resulting module/chunk graph and publishes an immutable generation; Rolldown never writes partial files into the active `dist` directory. Development retains the same production Solid runtime conditions and uses a persistent watcher with source-keyed Babel/Solid transform caching. Rolldown 1.3.2's public watcher still rescans the graph; this is not full graph-incremental compilation. Type checking gates publication; full-session reload does not imply state-preserving HMR.
 
 The `browser` export condition selects Solid's reactive implementation. It does not create DOM globals. Solid's `node`, `worker`, and `deno` branches select server code; do not add `worker` merely because a future host runs JS on a Rust worker thread.
 
@@ -1241,7 +1243,7 @@ Mixed text/elements and empty anchors behave correctly. A move preserves native 
 **Deliverables**
 
 - The proposed @zgui/ui/renderer helper exports.
-- Babel Universal transformation and esbuild bundling.
+- Babel Universal transformation and Rolldown bundling.
 - Native JSX types and a curated reactive API.
 - renderApp with coordinated reactive/native disposal.
 - Counter, conditional-content, and list examples.
@@ -1407,8 +1409,9 @@ Implement these scripts or equivalent documented commands as part of the workspa
 | Command | Intended behavior |
 | --- | --- |
 | pnpm typecheck | Type-check SDK declarations and examples with their appropriate configurations |
-| pnpm ui:build --app counter | Produce a validated counter package |
-| pnpm ui:dev --app counter | Watch, rebuild atomically, and notify the native host |
+| pnpm build --app counter | Produce a validated counter package |
+| pnpm dev --app counter | Prepare the host, watch atomic application builds, open a native window, and manage shutdown |
+| pnpm preview --app counter --watch | Prepare the host, watch builds, and rerun offscreen scenarios without a desktop host |
 | cargo test -p ui-bridge | Run bridge tests that do not need a live compositor |
 | cargo test -p js-runtime | Run real-engine lifecycle/job tests |
 | cargo run -p native-host -- --bundle apps/examples/counter/dist | Load the built package |
@@ -1625,7 +1628,7 @@ The links below identify the upstream contracts used by this specification. Vers
 - [S10] Solid compiler package manifest.
 - [S11] Universal component transformation and lazy children.
 - [B1] Babel TypeScript transformation.
-- [B2] esbuild platform, conditions, and bundling API.
+- [B2] Rolldown resolution, plugin hooks, and bundling API.
 
 [Z1]: https://github.com/zortax/zgui/blob/80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a/Cargo.toml
 [Z2]: https://github.com/zortax/zgui/blob/80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a/crates/zgui/src/app/mod.rs
@@ -1678,7 +1681,7 @@ The links below identify the upstream contracts used by this specification. Vers
 [S11]: https://github.com/ryansolid/dom-expressions/blob/v0.40.14/packages/babel-plugin-jsx-dom-expressions/src/shared/component.js
 
 [B1]: https://babeljs.io/docs/babel-preset-typescript
-[B2]: https://esbuild.github.io/api/
+[B2]: https://rolldown.rs/guide/getting-started
 
 
 

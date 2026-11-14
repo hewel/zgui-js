@@ -2,6 +2,14 @@
   "name": "@zgui/example-lists",
   "private": true,
   "type": "module",
+  "scripts": {
+    "dev": "zgui dev",
+    "build": "zgui build",
+    "preview": "zgui preview"
+  },
+  "devDependencies": {
+    "@zgui/build": "workspace:*"
+  },
   "dependencies": {
     "@zgui/ui": "workspace:*"
   }

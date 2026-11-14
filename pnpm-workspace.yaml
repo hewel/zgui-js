@@ -5,6 +5,3 @@ packages:
   - apps/examples/*
 
 strictPeerDependencies: true
-
-allowBuilds:
-  esbuild: true

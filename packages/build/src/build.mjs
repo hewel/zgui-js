@@ -3,11 +3,8 @@ import { createHash, randomUUID } from "node:crypto";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { transformAsync } from "@babel/core";
-import typescriptPreset from "@babel/preset-typescript";
-import solidPreset from "babel-preset-solid";
-import { build } from "esbuild";
-import { validateModule, validateImport, validateGraph } from "./validate.mjs";
+import { rolldown } from "rolldown";
+import { compilerOptions, outputOptions, compilationResult } from "./compiler.mjs";
 import { typecheckProject } from "./typecheck.mjs";
 
 export const workspaceRoot = fileURLToPath(new URL("../../../", import.meta.url));
@@ -20,47 +17,25 @@ export async function optionalFile(filename) {
   catch (error) { if (error.code === "ENOENT") return undefined; throw error; }
 }
 
-export function compilerPlugin() {
-  return {
-    name: "solid-universal-typescript",
-    setup(builder) {
-      builder.onResolve({ filter: /.*/ }, args => { validateImport(args.path); });
-      builder.onLoad({ filter: /\.[cm]?[jt]sx?$/ }, async ({ path: filename }) => {
-        const source = await readFile(filename, "utf8");
-        const transformed = await transformAsync(source, {
-          filename, babelrc: false, configFile: false, sourceMaps: "inline",
-          presets: [
-            [solidPreset, { generate: "universal", moduleName: "@zgui/ui/renderer", hydratable: false }],
-            [typescriptPreset, { onlyRemoveTypeImports: true, allExtensions: true, isTSX: /\.tsx$/.test(filename) }],
-          ],
-        });
-        if (!transformed?.code) throw new Error(`Babel emitted no JavaScript for ${filename}`);
-        validateModule(transformed.code, { filename });
-        return { contents: transformed.code, loader: "js", resolveDir: path.dirname(filename) };
-      });
+export async function bundle(entry, { root = workspaceRoot, appDirectory = path.dirname(entry), hostEntry = true, filename = "app.mjs" } = {}) {
+  let result;
+  const compiler = await rolldown(compilerOptions(entry, { root, appDirectory, plugins: [{
+    name: "capture-native-graph",
+    generateBundle(_options, output) {
+      result = compilationResult(Object.values(output), this.getModuleIds(), { entry: hostEntry });
     },
-  };
-}
-
-export async function bundle(entry, { root = workspaceRoot } = {}) {
-  const result = await build({
-    absWorkingDir: root, entryPoints: [entry], outfile: path.join(root, "app.mjs"),
-    bundle: true, format: "esm", platform: "neutral", conditions: ["browser", "production"],
-    mainFields: ["module", "main"], target: "es2022", splitting: false,
-    sourcemap: "linked", sourcesContent: true, metafile: true, write: false,
-    define: { "process.env.NODE_ENV": '"production"' }, plugins: [compilerPlugin()], logLevel: "silent",
-  });
-  const solidRuntime = validateGraph(result.metafile);
-  const files = new Map(result.outputFiles.map(file => [path.basename(file.path), Buffer.from(file.contents)]));
-  validateModule(files.get("app.mjs").toString(), { bundled: true, entry: true });
-  return { files, metafile: result.metafile, solidRuntime };
+  }] }));
+  try {
+    await compiler.generate(outputOptions(filename));
+    return result;
+  } finally { await compiler.close(); }
 }
 
 export function dependencyVersions() {
   const presetRequire = createRequire(require.resolve("babel-preset-solid"));
   const compilerRequire = createRequire(presetRequire.resolve("babel-plugin-jsx-dom-expressions"));
   return Object.fromEntries([
-    ...["solid-js", "babel-preset-solid", "@babel/core", "@babel/parser", "@babel/traverse", "@babel/preset-typescript", "esbuild", "typescript"]
+    ...["solid-js", "babel-preset-solid", "@babel/core", "@babel/parser", "@babel/traverse", "@babel/preset-typescript", "rolldown", "typescript"]
       .map(name => [name, require(`${name}/package.json`).version]),
     ["babel-plugin-jsx-dom-expressions", presetRequire("babel-plugin-jsx-dom-expressions/package.json").version],
     ["@babel/plugin-syntax-jsx", compilerRequire("@babel/plugin-syntax-jsx/package.json").version],
@@ -80,7 +55,7 @@ export async function buildInfo(root, result) {
     cargoLock: { path: "Cargo.lock", digest: sha256(cargoLock) },
     engine: { name: "QuickJS-NG", revision: engines[revision[2]], rquickjsVersion: revision[1], rquickjsRevision: revision[2] },
     conditions: ["browser", "production"], target: "es2022", solidRuntime: result.solidRuntime,
-    inputs: Object.keys(result.metafile.inputs),
+    graph: result.graph,
   };
 }
 
@@ -161,7 +136,12 @@ export async function publishGeneration(appDirectory, files) {
 export async function buildApplication(app, { root = workspaceRoot, appDirectory = path.join(root, "apps/examples", app) } = {}) {
   if (!/^[a-z][a-z0-9-]*$/.test(app)) throw new Error(`Invalid application name: ${app}`);
   typecheckProject(path.join(appDirectory, "tsconfig.json"));
-  const result = await bundle(path.join(appDirectory, "src/main.tsx"), { root });
+  const result = await bundle(path.join(appDirectory, "src/main.tsx"), { root, appDirectory });
+  return publishApplication(app, result, { root, appDirectory });
+}
+
+export async function publishApplication(app, result, { root, appDirectory, signal }) {
+  signal?.throwIfAborted();
   const files = result.files;
   const css = await optionalFile(path.join(appDirectory, "src/app.css"));
   if (css !== undefined) files.set("app.css", css);
@@ -172,8 +152,10 @@ export async function buildApplication(app, { root = workspaceRoot, appDirectory
     styles: css === undefined ? [] : ["app.css"], assets: [...assets.keys()].sort(),
   };
   manifest.buildId = contentDigest(files, manifest);
+  signal?.throwIfAborted();
   files.set("build-info.json", Buffer.from(json(await buildInfo(root, result))));
   files.set("manifest.json", Buffer.from(json(manifest)));
+  signal?.throwIfAborted();
   const dist = await publishGeneration(appDirectory, files);
   return { dist, manifest };
 }

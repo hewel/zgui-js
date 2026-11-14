@@ -184,7 +184,7 @@ identity with the native handle. Metadata-only changes have their own revision
 and request a real native validation frame without manufacturing a DOM write.
 
 ```sh
-pnpm ui:build --app counter
+pnpm build --app counter
 target/debug/native-host preview run \
   --bundle apps/examples/counter/dist \
   --profile preview/profiles/wall-static.json \
@@ -279,7 +279,7 @@ node --test tests/preview/final-input.test.mjs
 ## P3 — shared time, fixture providers and native resources
 
 ```sh
-pnpm ui:build --app counter
+pnpm build --app counter
 cargo build -p native-host
 target/debug/native-host preview run \
   --bundle apps/examples/counter/dist \
@@ -471,16 +471,14 @@ checks, not compositor transparency, IME or desktop-shell certification.
 
 ## P5 — atomic publication watch and generation-safe lifecycle
 
-Run the builder and preview observer separately:
+Run the managed builder and preview observer together:
 
 ```sh
-pnpm ui:dev --app counter
-target/debug/native-host preview watch \
-  --bundle apps/examples/counter/dist \
+pnpm preview --app counter --watch \
   --profile preview/profiles/default.json \
   --fixture preview/fixtures/empty.json \
   --scenario preview/scenarios/counter-virtual.json \
-  --out target/counter-watch --max-runs 64
+  --out target/counter-watch
 ```
 
 Watch requires the builder's atomic generation symlink, not mutable JS/CSS files.

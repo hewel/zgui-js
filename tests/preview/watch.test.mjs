@@ -111,7 +111,8 @@ async function observedFile(root, file) {
   });
 }
 
-test("real compile failure preserves explicitly historical success and recovery uses a fresh run", async t => {
+for (const restoreOriginal of [false, true]) {
+test(`real compile failure preserves historical success and recovers with ${restoreOriginal ? "original" : "changed"} source`, { timeout: 30000 }, async t => {
   const f = await fixture(t); await f.edit("initial");
   const builds = channel();
   const builder = watchApplication("watch-regression", { appDirectory: f.app,
@@ -132,8 +133,9 @@ test("real compile failure preserves explicitly historical success and recovery 
   assert.equal(failedIndex.lastSuccess.runId, first.runId);
   assert.equal(failedIndex.lastSuccess.historical, true);
   assert.deepEqual(await readFile(path.join(running.out, first.output, "captures/after.png")), originalPng);
-  await f.edit("recovered");
-  const second = await running.events.wait(row => row.event === "run.completed" && row.buildId !== first.buildId);
+  await f.edit(restoreOriginal ? "initial" : "recovered");
+  const second = await running.events.wait(row => row.event === "run.completed" && row.runId !== first.runId);
+  if (restoreOriginal) assert.equal(second.buildId, first.buildId);
   assert.equal(second.exitCode, 0);
   assert.notEqual(second.nativeRunId, first.nativeRunId);
   assert.notEqual(second.output, first.output);
@@ -142,8 +144,9 @@ test("real compile failure preserves explicitly historical success and recovery 
   assert.equal(final.latestAttempt.runId, second.runId);
   assert.equal(final.lastSuccess.historical, false);
   const tree = await json(path.join(running.out, second.output, "captures/after.tree.json"));
-  assert.equal(tree.nodes.find(node => node.testId === "value").text, "recovered clicked");
+  assert.equal(tree.nodes.find(node => node.testId === "value").text, restoreOriginal ? "initial clicked" : "recovered clicked");
 });
+}
 
 async function workerChildren(pid) {
   const tasks = await readdir(`/proc/${pid}/task`);

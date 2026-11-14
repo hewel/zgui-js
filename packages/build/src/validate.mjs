@@ -96,14 +96,14 @@ export function validateModule(code, { filename = "app.mjs", bundled = false, en
   return ast;
 }
 
-export function validateGraph(metafile) {
-  const inputs = Object.keys(metafile.inputs);
-  const runtimes = inputs.filter(input => /\/solid-js\/dist\/(?:solid|dev)\.js$/.test(input));
+export function validateGraph(graph) {
+  const runtimes = graph.modules.filter(input => /\/solid-js\/dist\/(?:solid|dev)\.js$/.test(input));
   if (runtimes.length !== 1) throw new Error(`Expected one reactive Solid runtime, found ${runtimes.length}`);
-  for (const input of inputs) {
+  for (const input of graph.modules) {
     if (/\/solid-js\/(?:web|.*server)|\/react-dom\//.test(input)) throw new Error(`Incompatible module graph: ${input}`);
   }
-  const modules = Object.entries(metafile.outputs).filter(([name]) => name.endsWith(".mjs"));
-  if (modules.length !== 1 || modules[0][1].imports.length) throw new Error("Expected one self-contained ESM artifact");
+  if (graph.chunks.length !== 1 || graph.chunks[0].imports.length || graph.chunks[0].dynamicImports.length) {
+    throw new Error("Expected one self-contained ESM artifact");
+  }
   return runtimes[0];
 }

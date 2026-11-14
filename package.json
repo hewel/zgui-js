@@ -12,11 +12,12 @@
     "typecheck": "node packages/build/src/typecheck.mjs",
     "typecheck:smoke": "tsc --project packages/build/tsconfig.smoke.json",
     "test:build": "node --test tests/build/*.test.mjs",
-    "ui:build": "node packages/build/src/cli.mjs",
+    "build": "node packages/build/src/cli.mjs build",
+    "dev": "node packages/build/src/cli.mjs dev",
+    "preview": "node packages/build/src/cli.mjs preview",
     "preview:check": "node packages/build/src/preview-check.mjs",
-    "test:preview": "pnpm ui:build --app counter && cargo build -p native-host && node --test tests/preview/*.test.mjs",
-    "ui:dev": "node packages/build/src/cli.mjs --watch",
-    "smoke": "pnpm ui:build --smoke && node packages/build/src/check-smoke.mjs"
+    "test:preview": "pnpm build --app counter && cargo build -p native-host --locked && node --test tests/preview/*.test.mjs",
+    "smoke": "node packages/build/src/cli.mjs smoke && node packages/build/src/check-smoke.mjs"
   },
   "devDependencies": {
     "@zgui/services": "workspace:*",

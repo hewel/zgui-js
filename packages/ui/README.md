@@ -8,7 +8,7 @@ idempotent disposer.
 The UI runtime is authored in strict TypeScript. This private workspace package
 exports its checked source directly, so application types and component
 implementations share one contract without a separate declaration build.
-Babel/esbuild erase types and bundle ES2022 JavaScript for QuickJS; the native host
+Babel/Rolldown erase types and bundle ES2022 JavaScript for QuickJS; the native host
 remains Rust.
 
 The package-local `#solid` import uses a native-only type contract for the pinned
@@ -101,8 +101,8 @@ native event handlers.
 
 ## Editing example
 
-Build with `pnpm ui:build --app editing`, or watch with
-`pnpm ui:dev --app editing`. The example uses real native controls and ordinary
+Build with `pnpm build --app editing`, or develop with
+`pnpm dev --app editing`. The example uses real native controls and ordinary
 TSX event handlers, without test hooks or a simulated bridge.
 
 | Class | Initial state / action |
