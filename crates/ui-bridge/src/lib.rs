@@ -171,6 +171,9 @@ impl UiBridge {
                 return bridge.events.borrow_mut().set(&ctx, handle, native, &name, value, dispatcher);
             }
             let mutation = properties::Mutation::parse(&ctx, &name, value)?;
+            if matches!(&mutation, properties::Mutation::Attribute("src", Some(_))) {
+                bridge.require_creation(&ctx)?;
+            }
             if let properties::Mutation::TestId(value) = mutation {
                 return bridge.registry.borrow_mut().set_test_id(handle, value).map_err(|error| host_error(&ctx, error));
             }
@@ -178,6 +181,9 @@ impl UiBridge {
                 let registry = bridge.registry.borrow();
                 if mutation.requires_editable() {
                     registry.require_editable(handle).map_err(|e| host_error(&ctx, e))?;
+                }
+                if matches!(mutation, properties::Mutation::Attribute("src", _)) {
+                    registry.require_image(handle).map_err(|e| host_error(&ctx, e))?;
                 }
                 (registry.dom_handle(), registry.native(handle).map_err(|e| host_error(&ctx, e))?)
             };

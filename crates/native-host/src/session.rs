@@ -13,7 +13,12 @@ type Result<T, E = Box<dyn Error>> = std::result::Result<T, E>;
 /// Execution and provider policy is fixed before the application module is evaluated.
 pub(crate) enum SessionPolicy {
     Live,
-    Preview { limits: RuntimeLimits, deadline: Rc<Cell<Instant>> },
+    Preview {
+        limits: RuntimeLimits,
+        deadline: Rc<Cell<Instant>>,
+        environment: Rc<crate::preview::clock::Environment>,
+        fixtures: Rc<crate::work::fixture::FixtureRuntime>,
+    },
 }
 
 #[derive(Debug, Default, PartialEq, Eq, serde::Serialize)]
@@ -57,13 +62,14 @@ impl Session {
     pub(crate) fn prepare(region: MountRegion, package: Option<Rc<Package>>, generation: u64, waker: Arc<dyn Waker>, surface: SurfaceId, executor: host_services::Executor, policy: SessionPolicy) -> Result<Rc<Self>> {
         let (limits, service_policy) = match &policy {
             SessionPolicy::Live => (RuntimeLimits::default(), ServicePolicy::Live),
-            SessionPolicy::Preview { limits, .. } => (limits.clone(), ServicePolicy::FixtureOnly),
+            SessionPolicy::Preview { limits, fixtures, .. } => (limits.clone(), ServicePolicy::Fixture(fixtures.clone())),
         };
         let mut engine = JsRuntime::new(limits)?;
         if let SessionPolicy::Preview { deadline, .. } = &policy { engine.set_enclosing_deadline(deadline.clone()); }
         let bridge = UiBridge::new(NodeRegistry::new(region.dom.clone(), region.root, 1, generation, 100_000), region.host.clone());
         let work = Work::new(region.host.clone(), package.clone(), generation, executor, waker.clone(), surface, service_policy);
         engine.with_context(|ctx| {
+            if let SessionPolicy::Preview { environment, .. } = &policy { environment.install(&ctx)?; }
             bridge.install(&ctx)?;
             work.install(&ctx)?;
             ctx.globals().set("mountRoot", bridge.root(&ctx)?)

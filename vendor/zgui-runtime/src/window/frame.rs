@@ -202,6 +202,21 @@ impl Window {
         }
     }
 
+    fn observe_image_demand(&mut self) -> bool {
+        if !self.images.restricted_sources() {
+            return self.images.observe_demand(&self.layout.borrow(), self.scale, None);
+        }
+        let layout = self.layout.borrow();
+        let placements = self.host.placements();
+        let document = self.document.borrow();
+        self.images.observe_demand(&layout, self.scale, Some(&crate::images::ImageVisibility {
+            surface: self.surface.size(),
+            clips: &self.scene.clips,
+            placements: &placements,
+            anim: &*document,
+        }))
+    }
+
     /// Presents the frame the renderer holds, now that the platform is ready for it.
     ///
     /// The frame was composed and its damage retired when it ran. This is only the copy to the
@@ -372,6 +387,7 @@ impl Window {
         // that *kicked* decodes is owed one more frame — the tasks it spawned have never been
         // polled, and an unpolled future has no waker for its completion to fire.
         mark("f.images");
+        self.images.audit_inline(&self.document, self.dom.revision());
         if self.images.settle(&self.document, &mut self.content) {
             self.request_frame();
         }
@@ -444,10 +460,7 @@ impl Window {
         // first moment the loader can know how many device pixels each image actually needs, and
         // the decode it kicks is sized by the answer.
         mark("f.image_demand");
-        if self
-            .images
-            .observe_demand(&self.layout.borrow(), self.scale)
-        {
+        if self.observe_image_demand() {
             self.request_frame();
         }
         // After layout, because a surface that has just opened has only now got the boxes that
@@ -470,10 +483,7 @@ impl Window {
         if self.images.has_arrivals() && self.images.settle(&self.document, &mut self.content) {
             self.request_frame();
         }
-        if self
-            .images
-            .observe_demand(&self.layout.borrow(), self.scale)
-        {
+        if self.observe_image_demand() {
             self.request_frame();
         }
         // Only when something under the pointer could have changed: every fragment that moved,
@@ -563,6 +573,16 @@ impl Window {
 
         mark("f.recycle");
         self.dom.end_frame();
+        // Detached document records remain readable through paint. Retire image requests only
+        // after that reclamation, including frames that did not need to paint: otherwise the
+        // last attached variant can remain reported ready forever when no later frame is owed.
+        {
+            let document = self.document.borrow();
+            self.images.retain(
+                |node| document.store().index_of(node).is_some(),
+                &mut self.content,
+            );
+        }
         mark("f.recycle.layout");
         // The box arena ends its frame here for the same reason the document's does, and it has to
         // be here rather than inside `lay_out`: a removed box stays readable until this call, and
@@ -1503,6 +1523,9 @@ impl Window {
         // route may decline a shape that changes every frame. A cold one would be built by it.
         self.content
             .set_vector_raster_ready(vector_before.initialized);
+        self.images.begin_paint(&self.content);
+        let observe_images = self.images.restricted_sources();
+        let image_refusals = std::cell::RefCell::new(Vec::new());
         self.content.begin_frame();
         // Every fragment destroyed since the last painted frame, drained here — after all of this
         // frame's layout passes, before the emit walk — so the paint cache's records die exactly
@@ -1594,6 +1617,11 @@ impl Window {
             let content = self
                 .content
                 .frame(&layout, &self.text, self.raster.as_ref());
+            let image_source = crate::images::PaintImages {
+                source: &content, images: &self.images, refusals: &image_refusals,
+            };
+            let replaced: &dyn zgui_paint::walk::order::ReplacedSource =
+                if observe_images { &image_source } else { &content };
             if !retired.is_empty() {
                 self.painter.retire(&retired, &mut self.scene, &content);
             }
@@ -1623,7 +1651,7 @@ impl Window {
                 glyph_placements: &content,
                 placements: Some(&placements),
                 highlights: self.carets.plan(),
-                replaced: &content,
+                replaced,
                 vectors: &vectors,
                 vector_masks: &content,
                 custom: self
@@ -1745,13 +1773,6 @@ impl Window {
             let document = self.document.borrow();
             self.vectors
                 .retain(|node| document.store().index_of(node).is_some());
-            // The image loader owes the same frame-end truth-telling: a node that left takes its
-            // attachment and its intrinsic claim with it, and a source nothing shows any more is
-            // only a cache entry, which the budget — not this — decides the fate of.
-            self.images.retain(
-                |node| document.store().index_of(node).is_some(),
-                &mut self.content,
-            );
         }
         // Before the scene is finished, which is where a sprite still carrying a name rather than a
         // placement is refused: the arrays are sorted there, and a placeholder has no texture to be
@@ -1765,7 +1786,7 @@ impl Window {
         // result: the bytes did not move, the geometry did not move, and the pixels are plausible.
         self.scene.check_spatial_dependencies();
         mark("p.upload");
-        match self.content.flush(self.renderer.texture_sink()) {
+        let upload_error = match self.content.flush(self.renderer.texture_sink()) {
             // Every queued write reached the device, so a shared attachment's tile can stand in
             // for its host texels from here on: the cache gives its copies back, and the loader
             // gives back its own for every tile the cache vouches is resident. Small pictures
@@ -1776,14 +1797,17 @@ impl Window {
                 let content = &self.content;
                 self.images
                     .release_uploaded(|handle| content.image_tile_resident(handle));
+                None
             }
             // A refused upload is not a reason to drop the frame: what did reach the device still
             // draws, and the tiles that did not stay queued for the next one — and every host
             // copy is kept, which is the safe direction.
             Err(error) => {
                 tracing::warn!(target: "zgui::paint", %error, "an atlas upload was refused");
+                observe_images.then(|| error.to_string())
             }
-        }
+        };
+        self.images.finish_paint(image_refusals.into_inner(), upload_error);
         // Uploaded pictures whose tiles this frame found gone — evicted, or lost with the device
         // — have no host copy to re-upload from; the loader decodes them again from their
         // sources, and the completion's wake brings the frame that shows them.

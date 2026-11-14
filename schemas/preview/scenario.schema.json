@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://zgui-js.local/schemas/preview/scenario.schema.json",
-  "title": "Preview scenario v1 (P2 native interaction)",
-  "description": "Closed input, at most 1 MiB. Implements settle, capture, pointer.move/click, key.press, text.commit and exact node assertions on main. Known later operations fail preflight with E_UNSUPPORTED_CAPABILITY; unknown operations and malformed supported payloads are E_SCHEMA. Step IDs and capture IDs are unique in their respective namespaces, checked by the loader. Explicit capabilities are unioned with inferred requirements: capture needs pixels; pointers need input.pointer; keys need input.keyboard; text commit needs input.text; assertions need tree.inspect; selector forms need selectors.test-id or selectors.semantic, and role/name assertions also need selectors.semantic. A virtual profile or requiredFrameTimeUs requires virtual-time, which wall mode rejects even if advertised by a caller.",
+  "title": "Preview scenario v1 (native interaction and deterministic time)",
+  "description": "Closed input, at most 1 MiB. Implements native main-surface input/assertions, bounded settle/capture, explicit virtual clock.advance, typed fixture service.emit/call assertions and resize/scale. Step IDs and capture IDs are unique in their namespaces. Capability declarations are unioned with inferred requirements. Virtual profiles, clock.advance and requiredFrameTimeUs require virtual-time; wall profiles reject virtual-time. Known future operations fail with E_UNSUPPORTED_CAPABILITY; malformed supported payloads fail with E_SCHEMA before application mount.",
   "type": "object",
   "additionalProperties": false,
   "required": ["schemaVersion", "id", "requiredCapabilities", "steps"],
@@ -24,7 +24,12 @@
           { "$ref": "#/$defs/pointerClick" },
           { "$ref": "#/$defs/keyPress" },
           { "$ref": "#/$defs/textCommit" },
-          { "$ref": "#/$defs/assert" }
+          { "$ref": "#/$defs/assert" },
+          { "$ref": "#/$defs/assertService" },
+          { "$ref": "#/$defs/clockAdvance" },
+          { "$ref": "#/$defs/serviceEmit" },
+          { "$ref": "#/$defs/surfaceResize" },
+          { "$ref": "#/$defs/surfaceScale" }
         ]
       }
     }
@@ -59,6 +64,13 @@
         "id": { "$ref": "#/$defs/safeId" },
         "op": { "const": "capture" },
         "captureId": { "$ref": "#/$defs/safeId" },
+        "allowedPendingAssets": {
+          "description": "Exact current visible pending native image request IDs. Infers assets.native-readiness. Stale, canceled, failed, duplicate and unknown IDs fail; this never permits a resource failure.",
+          "type": "array",
+          "maxItems": 4096,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/safeId" }
+        },
         "requiredFrameTimeUs": {
           "description": "Optional exact virtual validation-frame timestamp. A present value must be a nonnegative JSON integer literal, not null. Infers virtual-time and is unavailable in wall-clock profiles; it must never be silently ignored.",
           "type": "integer",
@@ -210,6 +222,78 @@
         "target": { "$ref": "#/$defs/target" },
         "check": { "$ref": "#/$defs/check" }
       }
+    },
+    "assertService": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "op", "serviceCall"],
+      "properties": {
+        "id": { "$ref": "#/$defs/safeId" },
+        "op": { "const": "assert" },
+        "serviceCall": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["service", "method", "count"],
+          "properties": {
+            "service": { "$ref": "#/$defs/safeId" },
+            "method": { "type": "string", "minLength": 1, "maxLength": 128 },
+            "count": { "type": "integer", "minimum": 0, "maximum": 18446744073709551615 },
+            "errorCode": { "type": "string", "minLength": 1, "maxLength": 512 }
+          }
+        }
+      }
+    },
+    "clockAdvance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "op", "byMs"],
+      "properties": {
+        "id": { "$ref": "#/$defs/safeId" },
+        "op": { "const": "clock.advance" },
+        "byMs": {
+          "description": "Nonnegative JSON integer literal. Cumulative advances must not exceed profile.limits.maxVirtualDurationMs. Visits native and fixture deadlines, then the exact endpoint; zero drains current work without moving time.",
+          "type": "integer", "minimum": 0, "maximum": 18446744073709551615
+        }
+      }
+    },
+    "serviceEmit": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "op", "channel", "value"],
+      "properties": {
+        "id": { "$ref": "#/$defs/safeId" },
+        "op": { "const": "service.emit" },
+        "channel": { "$ref": "#/$defs/safeId" },
+        "value": {
+          "description": "Closed provider-specific payload, validated against the configured fixture channel. Never invokes a live service.",
+          "type": "object"
+        }
+      }
+    },
+    "surfaceResize": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "op", "surface", "width", "height"],
+      "properties": {
+        "id": { "$ref": "#/$defs/safeId" },
+        "op": { "const": "surface.resize" },
+        "surface": { "$ref": "#/$defs/surface" },
+        "width": { "type": "integer", "minimum": 1, "maximum": 16384 },
+        "height": { "type": "integer", "minimum": 1, "maximum": 16384 }
+      },
+      "description": "Logical dimensions. The resulting physical extent must satisfy profile bounds at the current scale. Delivers a native resize without moving virtual time."
+    },
+    "surfaceScale": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "op", "surface", "scale"],
+      "properties": {
+        "id": { "$ref": "#/$defs/safeId" },
+        "op": { "const": "surface.scale" },
+        "surface": { "$ref": "#/$defs/surface" },
+        "scale": { "type": "number", "exclusiveMinimum": 0, "maximum": 8 }
+      },
+      "description": "Delivers one native scale/physical-size event without moving virtual time; current resource demand must become ready at the new scale."
     }
   }
 }

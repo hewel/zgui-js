@@ -1,5 +1,5 @@
 import {
-  Button, TextField, TextArea, For, Index, Show, batch, createEffect, createMemo, createSignal,
+  Image, Button, TextField, TextArea, For, Index, Show, batch, createEffect, createMemo, createSignal,
   onCleanup, onMount, renderApp, untrack,
 } from "@zgui/ui";
 import type { Component, NativeChild, NativeNode, NativeTextControlProps, ParentComponent, TextFieldProps, TextAreaProps } from "@zgui/ui";
@@ -41,6 +41,8 @@ const tree = <Container>
     onChange={event => console.log(event.value, event.selection)} />
   <field role="textInput" value={undefined} defaultValue="native" tabIndex={0} />
   <editor role="multilineTextInput" defaultValue={"one\n二"} readOnly />
+  <Image src={optional()} ariaLabel="Package icon" style={{ width: "32px", height: "32px" }} />
+  <image src={null} />
   <For each={[{ id: 1 }]}>{(item, index) => <text>{item.id}: {index()}</text>}</For>
   <Index each={["a"]}>{(item, index) => <text>{index}: {item()}</text>}</Index>
   <Show when={count()}>{value => <text>{value()}</text>}</Show>

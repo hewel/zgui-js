@@ -57,6 +57,7 @@ impl Driver {
         }));
         self.harness.pump();
         self.check()?;
+        self.settle(false)?;
         trace["burst"]=if button.is_some() { json!(["pointer.move","pointer.press","pointer.release"]) } else { json!(["pointer.move"]) };
         trace["button"]=json!(button);
         trace["timeUs"]=json!(timestamp.since_origin().as_micros());
@@ -81,6 +82,7 @@ impl Driver {
             SurfaceEvent::Key{state:KeyState::Released,event,modifiers:held,timestamp},SurfaceEvent::ModifiersChanged(Modifiers::NONE)]);
         self.harness.pump();
         self.check()?;
+        self.settle(false)?;
         Ok(json!({"key":key,"modifiers":modifiers,"burst":["modifiers","key.down","key.up","modifiers.clear"],"timeUs":timestamp.since_origin().as_micros()}))
     }
 
@@ -90,6 +92,7 @@ impl Driver {
         self.harness.deliver_all(surface,[SurfaceEvent::Ime(ImeEvent::Commit(text.into()))]);
         self.harness.pump();
         self.check()?;
+        self.settle(false)?;
         Ok(json!({"burst":["native.ime.commit"],"utf8Bytes":text.len()}))
     }
 

@@ -1,4 +1,4 @@
-import type { NativeChild, NativeElementProps, NativeTextControlProps } from "./index.js";
+import type { ImageProps, NativeChild, NativeElementProps, NativeTextControlProps } from "./index.js";
 
 export namespace JSX {
   type Element = NativeChild;
@@ -14,5 +14,6 @@ export namespace JSX {
     control: NativeElementProps;
     field: NativeTextControlProps;
     editor: NativeTextControlProps;
+    image: ImageProps;
   }
 }

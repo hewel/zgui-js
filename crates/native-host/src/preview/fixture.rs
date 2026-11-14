@@ -1,13 +1,10 @@
-//! Fixture-only preflight. P1 has no service or event implementations.
+//! Closed fixture preflight; providers share the production service boundary.
 use std::{
-    collections::BTreeMap,
     fs::{self, File},
     io::Read,
     path::Path,
 };
-
-use serde::{Deserialize, de::IgnoredAny};
-
+pub(crate) use crate::work::fixture::FixtureDefinition;
 use super::{Error, output::digest};
 
 const MAX_INPUT_BYTES: u64 = 1024 * 1024;
@@ -18,16 +15,9 @@ pub struct LoadedFixture {
     /// Exact input bytes, including whitespace, for the saved run inputs.
     pub original: Vec<u8>,
     pub digest: String,
+    pub definition: FixtureDefinition,
 }
 
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct FixtureInput {
-    schema_version: u32,
-    id: String,
-    services: BTreeMap<String, IgnoredAny>,
-    events: Vec<IgnoredAny>,
-}
 
 pub fn load(path: &Path) -> Result<LoadedFixture, Error> {
     let metadata = fs::metadata(path)
@@ -42,27 +32,17 @@ pub fn load(path: &Path) -> Result<LoadedFixture, Error> {
     if original.len() as u64 > MAX_INPUT_BYTES {
         return Err(invalid("fixture exceeds 1 MiB"));
     }
-    let id = parse(&original)?;
+    let definition = parse(&original)?;
+    let id = definition.id.clone();
     let digest = digest(&original);
-    Ok(LoadedFixture { id, original, digest })
+    Ok(LoadedFixture { id, original, digest, definition })
 }
 
-fn parse(bytes: &[u8]) -> Result<String, Error> {
-    let fixture: FixtureInput = serde_json::from_slice(bytes)
+fn parse(bytes: &[u8]) -> Result<FixtureDefinition, Error> {
+    let fixture: FixtureDefinition = serde_json::from_slice(bytes)
         .map_err(|error| invalid(format!("invalid fixture: {error}")))?;
-    if fixture.schema_version != 1 {
-        return Err(invalid("unsupported fixture schemaVersion; expected 1"));
-    }
-    if fixture.id.trim().is_empty() || fixture.id.chars().count() > 128 {
-        return Err(invalid("fixture id must contain 1..=128 characters of nonblank text"));
-    }
-    if !fixture.services.is_empty() {
-        return Err(Error::new("E_UNSUPPORTED_CAPABILITY", 2, "fixture service providers are unavailable in P1; services must be explicitly empty"));
-    }
-    if !fixture.events.is_empty() {
-        return Err(Error::new("E_UNSUPPORTED_CAPABILITY", 2, "fixture events are unavailable in P1; events must be explicitly empty"));
-    }
-    Ok(fixture.id)
+    fixture.validate().map_err(invalid)?;
+    Ok(fixture)
 }
 
 fn invalid(message: impl Into<String>) -> Error { Error::new("E_SCHEMA", 2, message) }
@@ -75,7 +55,7 @@ mod tests {
 
     #[test]
     fn empty_providers_and_events_are_explicit_not_defaulted() {
-        assert_eq!(parse(br#"{"schemaVersion":1,"id":"empty","services":{},"events":[]}"#).unwrap(), "empty");
+        assert_eq!(parse(br#"{"schemaVersion":1,"id":"empty","services":{},"events":[]}"#).unwrap().id, "empty");
         for bytes in [
             br#"{"schemaVersion":1,"id":"empty","events":[]}"#.as_slice(),
             br#"{"schemaVersion":1,"id":"empty","services":{}}"#.as_slice(),
@@ -96,15 +76,15 @@ mod tests {
     }
 
     #[test]
-    fn nonempty_providers_or_events_never_fall_back_to_live_services() {
-        for (services, events, diagnostic) in [
-            (json!({"audio":{"volume":0.4}}), json!([]), "service providers"),
-            (json!({}), json!([{"atMs":0,"channel":"audio","value":{"muted":true}}]), "events"),
+    fn unknown_providers_and_untyped_events_are_rejected_before_mount() {
+        for (services, events) in [
+            (json!({"audio":{"volume":0.4}}), json!([])),
+            (json!({}), json!([{"atMs":0,"channel":"audio","value":{"muted":true}}])),
+            (json!({"niri":{"provider":"live-niri","latencyMs":0,"initialState":{"windows":[],"workspaces":[]}}}), json!([])),
         ] {
-            let bytes = serde_json::to_vec(&json!({"schemaVersion":1,"id":"later","services":services,"events":events})).unwrap();
+            let bytes = serde_json::to_vec(&json!({"schemaVersion":1,"id":"invalid","services":services,"events":events})).unwrap();
             let error = parse(&bytes).unwrap_err();
-            assert_eq!((error.code, error.exit_code), ("E_UNSUPPORTED_CAPABILITY", 2));
-            assert!(error.message.contains(diagnostic));
+            assert_eq!((error.code, error.exit_code), ("E_SCHEMA", 2));
         }
     }
 

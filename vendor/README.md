@@ -64,4 +64,38 @@ This gate reproduced the initial-output race before the roundtrip fix. With
 sequence and requires a fresh live generation; this also reproduced the stale
 output-cache bug before its fix. Visual inspection remains a separate check.
 
+## Package image authority and capture readiness
+
+Package images retain verified immutable bytes rather than reopening ambient
+filesystem paths. `ImagePolicy::package_assets` preserves ordinary asynchronous
+native publication; `package_only` additionally stages complete worker batches
+in launch order for deterministic preview checkpoints. Neither path fabricates
+decoded pixels or substitutes a separate image renderer.
+
+`Window::replace_image_policy` is used after previous-owner shutdown and before
+new mount. It retires the old completion domain, pending source writes, bindings,
+intrinsics, shared image tiles and replay leases. Attribute-hook queue identity
+and monotonic request/atlas identities survive, so same-path reloads cannot reuse
+old package bytes or accept delayed old-generation completions.
+
+Resource snapshots distinguish decode/attachment from actual atlas allocation,
+successful texture upload and current residency. Native placed geometry, viewport,
+ancestor clips and current opacity determine which images are required. Offscreen
+images do not block capture, but become upload requirements when visible. Image
+retirement runs after DOM reclamation and before completed-frame observation,
+including paint-skipped frames; removed nodes cannot remain required resources.
+
+Regression gates in the standalone runtime:
+
+```sh
+cargo test --manifest-path vendor/zgui-runtime/Cargo.toml --test image_policy --test images_end_to_end
+cargo test --manifest-path vendor/zgui-runtime/Cargo.toml --lib delayed_
+cargo test --manifest-path vendor/zgui-runtime/Cargo.toml --lib live_package_images_
+```
+
+These cover real atlas refusal, viewport/clip/opacity transitions, controlled
+delayed decode publication, replacement/clear retirement and asynchronous
+same-path package replacement. The host's real GPU and Wayland pixel evidence is
+recorded in [preview verification](../docs/development/preview-verification.md#p3--shared-time-fixture-providers-and-native-resources).
+
 Remove each local patch only when an upgraded pinned upstream revision implements its contract and passes the corresponding gate. Do not silently drop patches on dependency updates.

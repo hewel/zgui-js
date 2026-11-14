@@ -52,6 +52,15 @@ use zgui_paint::ContentCache;
 
 use crate::replaced::IntrinsicTable;
 
+mod tasks;
+mod policy;
+mod paint;
+pub(crate) use paint::PaintImages;
+mod visibility;
+pub(crate) use visibility::ImageVisibility;
+use tasks::Tasks;
+use crate::image_policy::{ImageResource, ImageResources, ImageState};
+
 /// What one `src` string names.
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 enum SourceKey {
@@ -69,6 +78,10 @@ impl SourceKey {
         } else {
             Self::Path(src.to_owned())
         }
+    }
+
+    fn name(&self) -> &str {
+        match self { Self::Path(name) | Self::Bytes(name) => name }
     }
 }
 
@@ -139,6 +152,7 @@ struct Variant {
     handle: u64,
     /// Where the decode is.
     state: VariantState,
+    uploaded: bool,
 }
 
 impl Variant {
@@ -182,6 +196,8 @@ struct Entry {
     /// What makes "coldest first" true rather than a doc comment about hash order: eviction sorts
     /// the orphans by it and takes the oldest.
     orphaned_at: u64,
+    generation: u64,
+    failure: Option<String>,
 }
 
 impl Entry {
@@ -196,6 +212,8 @@ impl Entry {
             nodes: FxHashSet::default(),
             attach_owed: false,
             orphaned_at: 0,
+            generation: 0,
+            failure: None,
         }
     }
 
@@ -258,7 +276,7 @@ enum Arrival {
     /// A header probe's answer.
     Probe(Result<Size<u32, Device>, zgui_image::DecodeError>),
     /// One variant's decode.
-    Variant(Class, Result<DecodedVariant, zgui_image::DecodeError>),
+    Variant(Class, u64, Result<DecodedVariant, zgui_image::DecodeError>),
 }
 
 /// The `src` writes the attribute hook heard, waiting for the settle that applies them.
@@ -268,7 +286,7 @@ enum Arrival {
 type SourceQueue = Rc<RefCell<Vec<(NodeKey, Option<String>)>>>;
 
 /// The probes and decodes that finished, waiting for the same settle.
-type DecodeQueue = Rc<RefCell<Vec<(SourceKey, Arrival)>>>;
+type DecodeQueue = Rc<Tasks>;
 
 /// The loader: every source an `image` element of one window has named, and what became of it.
 pub(crate) struct ImageLoader {
@@ -295,6 +313,15 @@ pub(crate) struct ImageLoader {
     /// The subset of [`ImageLoader::held_bytes`] nothing pins: variants that are not attached,
     /// and every variant of a source no node shows.
     evictable_bytes: u64,
+    requests: FxHashMap<NodeKey, ImageResource>,
+    retired: std::collections::VecDeque<ImageResource>,
+    next_request: u64,
+    next_generation: u64,
+    revision: u64,
+    dropped: u64,
+    failures: Vec<String>,
+    graphics_failure: Option<String>,
+    audited_revision: Option<u64>,
 }
 
 impl ImageLoader {
@@ -305,13 +332,22 @@ impl ImageLoader {
             by_node: FxHashMap::default(),
             intrinsics,
             pending: Rc::new(RefCell::new(Vec::new())),
-            completed: Rc::new(RefCell::new(Vec::new())),
+            completed: Tasks::new(crate::ImagePolicy::default()),
             limits: zgui_image::Limits { max_dimension },
             next_handle: 0,
             kicked: 0,
             clock: 0,
             held_bytes: 0,
             evictable_bytes: 0,
+            requests: FxHashMap::default(),
+            retired: std::collections::VecDeque::new(),
+            next_request: 0,
+            next_generation: 0,
+            revision: 0,
+            dropped: 0,
+            failures: Vec::new(),
+            graphics_failure: None,
+            audited_revision: None,
         }
     }
 
@@ -322,7 +358,7 @@ impl ImageLoader {
 
     /// Whether anything is waiting for a settle: `src` writes, or finished background work.
     pub(crate) fn has_arrivals(&self) -> bool {
-        !self.pending.borrow().is_empty() || !self.completed.borrow().is_empty()
+        !self.pending.borrow().is_empty() || self.completed.has_ready()
     }
 
     /// Applies everything that arrived since the last frame: `src` writes, finished probes and
@@ -334,10 +370,9 @@ impl ImageLoader {
     /// [`Document::replaced_content_changed`], so the steps below this one rebuild exactly the
     /// boxes that need it.
     ///
-    /// Returns whether it spawned background tasks. The caller owes those a frame: a task spawned
-    /// *here* runs after the frame's own flush, so nothing has polled it yet, and a future that
-    /// has never been polled has registered no waker for its completion to fire. One more frame
-    /// polls it; from then on the wake edge carries it.
+    /// Returns whether live executor tasks need a polling frame. Strict package workers start
+    /// immediately and return false here: only `poll_barrier` publishes their complete batch and
+    /// requests the next frame. Waiting for those workers must not dispatch arbitrary RAF turns.
     #[must_use = "a settle that kicked work is owed the frame that will poll it"]
     pub(crate) fn settle(
         &mut self,
@@ -349,19 +384,21 @@ impl ImageLoader {
         let mut touched: Vec<NodeKey> = Vec::new();
 
         let pending = std::mem::take(&mut *self.pending.borrow_mut());
+        if !pending.is_empty() || self.completed.has_ready() { self.revision += 1; }
         for (node, src) in pending {
             self.set_source(node, src.as_deref(), content, &mut touched);
         }
 
-        let completed = std::mem::take(&mut *self.completed.borrow_mut());
-        for (key, arrival) in completed {
-            self.land(key, arrival, &mut touched);
+        let completed = self.completed.take();
+        for (key, generation, arrival) in completed {
+            self.land(key, generation, arrival, &mut touched);
         }
 
         self.ensure_and_attach(content, &mut touched);
         self.recount();
 
         if !touched.is_empty() {
+            self.revision += 1;
             let mut document = document.borrow_mut();
             for node in touched {
                 if let Some(index) = document.store().index_of(node) {
@@ -369,32 +406,47 @@ impl ImageLoader {
                 }
             }
         }
-        self.kicked != kicked_before
+        !self.completed.strict() && self.kicked != kicked_before
     }
 
     /// Reads what layout decided each picture's box is, and kicks the decodes those sizes need.
     ///
-    /// Runs after layout, which is the first moment the demand exists. A node with no fragment —
-    /// culled, or not laid out yet — keeps its last demand rather than forgetting it.
+    /// Decode sizing follows layout demand independently of required-visible capture policy.
+    /// Strict requests additionally use current native placed geometry, clipping and opacity to
+    /// decide whether an unuploaded variant can affect the surface.
     ///
-    /// Returns whether it spawned decode tasks, under the same contract as
-    /// [`ImageLoader::settle`]: the caller owes them a frame.
+    /// Returns whether live tasks need a polling frame, under [`ImageLoader::settle`]'s contract.
     #[must_use = "a demand that kicked decodes is owed the frame that will poll them"]
-    pub(crate) fn observe_demand(&mut self, layout: &LayoutStore, scale: f32) -> bool {
+    pub(crate) fn observe_demand(&mut self, layout: &LayoutStore, scale: f32, visibility: Option<&ImageVisibility<'_>>) -> bool {
         let kicked_before = self.kicked;
         let mut demands: FxHashMap<SourceKey, u32> = FxHashMap::default();
         for (node, key) in &self.by_node {
             let native = self.entries.get(key).and_then(|entry| entry.intrinsic);
             let demand = demand_of(layout, *node, native, scale);
+            if let Some(request) = self.requests.get_mut(node) {
+                let visible = match visibility {
+                    Some(view) => view.visible(layout, *node, native.is_none()),
+                    None => demand > 0 || (native.is_none() && layout.boxes_of(*node).iter().any(|box_| {
+                        layout.node(*box_).style.get_inherited_box().visibility
+                            == zgui_css::values::size::VisibilityValue::Visible
+                    })),
+                };
+                if request.visible != visible { self.revision += 1; }
+                request.visible = visible;
+            }
             if demand > 0 {
                 let entry = demands.entry(key.clone()).or_insert(0);
                 *entry = (*entry).max(demand);
             }
         }
+        for (key, entry) in &mut self.entries {
+            if !demands.contains_key(key) && entry.demanded.take().is_some() { self.revision += 1; }
+        }
         for (key, demand) in demands {
             let Some(entry) = self.entries.get_mut(&key) else {
                 continue;
             };
+            if entry.demanded != Some(demand) { self.revision += 1; }
             entry.demanded = Some(demand);
             ensure_variant(
                 entry,
@@ -405,7 +457,7 @@ impl ImageLoader {
                 &mut self.kicked,
             );
         }
-        self.kicked != kicked_before
+        !self.completed.strict() && self.kicked != kicked_before
     }
 
     /// Points `node` at `src`, or at nothing.
@@ -433,6 +485,7 @@ impl ImageLoader {
             content.remove_image(id);
             self.intrinsics.remove(id);
             self.by_node.remove(&node);
+            self.retire_request(node);
             touched.push(node);
         }
 
@@ -441,11 +494,24 @@ impl ImageLoader {
         };
         self.by_node.insert(node, key.clone());
         let id = ReplacedId::new(node);
+        if self.completed.denied(&key) {
+            self.policy_failure(&format!("image source is not a declared package asset: {}", key.name()));
+        }
+        self.next_request += 1;
+        self.requests.insert(node, ImageResource {
+            id: format!("image-{}", self.next_request), source: key.name().to_owned(),
+            generation: self.next_request, visible: false, requested_variant: None,
+            attached_variant: None, state: ImageState::Requested, failure: None,
+            uploaded: false,
+        });
 
         let entry = self.entries.entry(key.clone()).or_insert_with(|| {
             self.kicked += 1;
-            kick_probe(key.clone(), Rc::clone(&self.completed));
-            Entry::probing()
+            self.next_generation += 1;
+            kick_probe(key.clone(), self.next_generation, Rc::clone(&self.completed));
+            let mut entry = Entry::probing();
+            entry.generation = self.next_generation;
+            entry
         });
         entry.nodes.insert(node);
         // The intrinsic the node gets right now: the real one when the probe has answered for an
@@ -460,10 +526,11 @@ impl ImageLoader {
     }
 
     /// Files what one background task produced.
-    fn land(&mut self, key: SourceKey, arrival: Arrival, touched: &mut Vec<NodeKey>) {
+    fn land(&mut self, key: SourceKey, generation: u64, arrival: Arrival, touched: &mut Vec<NodeKey>) {
         let Some(entry) = self.entries.get_mut(&key) else {
             return;
         };
+        if entry.generation != generation { return; }
         match arrival {
             Arrival::Probe(Ok(native)) => {
                 entry.probe = Probe::Done;
@@ -477,19 +544,23 @@ impl ImageLoader {
             Arrival::Probe(Err(error)) => {
                 tracing::warn!(target: "zgui::images", src = ?key, "an image failed to probe: {error}");
                 entry.probe = Probe::Failed;
+                entry.failure = Some(error.to_string());
                 // The nodes stay claimed and unsized: a broken picture is a blank box, not a
                 // relayout.
                 touched.extend(entry.nodes.iter().copied());
             }
-            Arrival::Variant(class, Ok(decoded)) => {
+            Arrival::Variant(class, handle, Ok(decoded)) => {
                 if let Some(variant) = entry.variants.get_mut(&class) {
+                    if variant.handle != handle { return; }
                     variant.state = VariantState::Ready(decoded);
                     entry.attach_owed = true;
                 }
             }
-            Arrival::Variant(class, Err(error)) => {
+            Arrival::Variant(class, handle, Err(error)) => {
                 tracing::warn!(target: "zgui::images", src = ?key, "an image failed to decode: {error}");
                 if let Some(variant) = entry.variants.get_mut(&class) {
+                    if variant.handle != handle { return; }
+                    entry.failure = Some(error.to_string());
                     variant.state = VariantState::Failed;
                 }
                 touched.extend(entry.nodes.iter().copied());
@@ -577,10 +648,16 @@ impl ImageLoader {
     /// texels — see the constant. Returns how many bytes were given back.
     pub(crate) fn release_uploaded(&mut self, resident: impl Fn(u64) -> bool) -> u64 {
         let mut freed = 0;
+        let mut residency_changed = false;
         for entry in self.entries.values_mut() {
             for variant in entry.variants.values_mut() {
                 let held = variant.held_bytes();
-                if held <= RETAIN_SMALL_BYTES || !resident(variant.handle) {
+                let resident = resident(variant.handle);
+                if variant.uploaded != resident {
+                    variant.uploaded = resident;
+                    residency_changed = true;
+                }
+                if held <= RETAIN_SMALL_BYTES || !resident {
                     continue;
                 }
                 let VariantState::Ready(ready) = &variant.state else {
@@ -591,6 +668,7 @@ impl ImageLoader {
                 freed += held;
             }
         }
+        if residency_changed { self.revision += 1; }
         if freed > 0 {
             self.recount();
         }
@@ -603,8 +681,7 @@ impl ImageLoader {
     /// whose tile was evicted or lost with the device. Each one's attached variant goes back to
     /// pending and its decode is kicked from the source the loader kept.
     ///
-    /// Returns whether it spawned decode tasks, under the same contract as
-    /// [`ImageLoader::settle`]: the caller owes them a frame.
+    /// Returns whether live tasks need a polling frame, under [`ImageLoader::settle`]'s contract.
     #[must_use = "a re-decode that was kicked is owed the frame that will poll it"]
     pub(crate) fn redecode_missing(&mut self, missing: &[ReplacedId]) -> bool {
         let kicked_before = self.kicked;
@@ -614,6 +691,7 @@ impl ImageLoader {
             completed,
             limits,
             kicked,
+            revision,
             ..
         } = self;
         for id in missing {
@@ -631,18 +709,20 @@ impl ImageLoader {
             };
             if matches!(variant.state, VariantState::Uploaded { .. }) {
                 variant.state = VariantState::Pending;
+                variant.uploaded = false;
                 entry.attach_owed = true;
                 *kicked += 1;
-                kick_decode(key.clone(), active, Rc::clone(completed), *limits);
+                *revision += 1;
+                kick_decode(key.clone(), entry.generation, active, variant.handle, Rc::clone(completed), *limits);
             }
         }
-        self.kicked != kicked_before
+        !self.completed.strict() && self.kicked != kicked_before
     }
 
     /// Forgets the nodes that are gone, and the entries nothing shows any more.
     ///
-    /// The frame-end half, beside the vector cache's own `retain`. Entry removal here is what
-    /// bounds the map: an entry's texels are separately the budget's to trim.
+    /// Runs after document reclamation, even when painting was skipped. Entry removal here is
+    /// what bounds the map: an entry's texels are separately the budget's to trim.
     pub(crate) fn retain(&mut self, live: impl Fn(NodeKey) -> bool, content: &mut ContentCache) {
         self.clock += 1;
         let dead: Vec<NodeKey> = self
@@ -652,6 +732,7 @@ impl ImageLoader {
             .filter(|&node| !live(node))
             .collect();
         for node in dead {
+            self.retire_request(node);
             let key = self.by_node.remove(&node).expect("was just iterated");
             if let Some(entry) = self.entries.get_mut(&key) {
                 entry.nodes.remove(&node);
@@ -760,6 +841,7 @@ impl ImageLoader {
     /// re-decodes from the source. What this costs is the decode, which is the honest price of "a
     /// window with every cache empty".
     pub(crate) fn forget(&mut self, content: &mut ContentCache) {
+        self.revision += 1;
         self.entries.retain(|_, entry| {
             for variant in entry.variants.values() {
                 content.remove_shared_tile(variant.handle);
@@ -803,6 +885,18 @@ impl ImageLoader {
 
 #[cfg(test)]
 impl ImageLoader {
+    pub(crate) fn decoded_texels_for_tests(&self, src: &str) -> Option<Arc<Vec<u8>>> {
+        let entry = self.entries.get(&SourceKey::of(src))?;
+        match &entry.variants.get(&entry.active?)?.state {
+            VariantState::Ready(decoded) => Some(Arc::clone(&decoded.decoded.texels)),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn hold_next_for_tests(&self) -> std::sync::mpsc::Sender<()> {
+        self.completed.hold_next()
+    }
+
     /// Files a source as already probed, decoded at its own size, shown by `nodes` and attached,
     /// bypassing the async path.
     ///
@@ -827,6 +921,7 @@ impl ImageLoader {
             class,
             Variant {
                 handle: self.next_handle,
+                uploaded: false,
                 state: VariantState::Ready(DecodedVariant {
                     decoded: decoded.clone(),
                     mips: Vec::new(),
@@ -843,6 +938,8 @@ impl ImageLoader {
             nodes: nodes.iter().copied().collect(),
             attach_owed: false,
             orphaned_at: if nodes.is_empty() { self.clock } else { 0 },
+            generation: 0,
+            failure: None,
         };
         for &node in nodes {
             self.by_node.insert(node, key.clone());
@@ -907,10 +1004,11 @@ fn ensure_variant(
         target,
         Variant {
             handle: *next_handle,
+            uploaded: false,
             state: VariantState::Pending,
         },
     );
-    kick_decode(key.clone(), target, Rc::clone(completed), limits);
+    kick_decode(key.clone(), entry.generation, target, *next_handle, Rc::clone(completed), limits);
 }
 
 /// The longest edge any of `node`'s fragments asks the picture to have, in whole device pixels.
@@ -929,6 +1027,8 @@ fn demand_of(
     let native_long = |native: Size<u32, Device>| native.width.max(native.height).max(1) as f32;
     let mut long = 0.0f32;
     for box_ in layout.boxes_of(node) {
+        if layout.node(*box_).style.get_inherited_box().visibility
+            != zgui_css::values::size::VisibilityValue::Visible { continue; }
         for fragment in layout.fragments_of_box(*box_) {
             let Some(fragment) = layout.fragment(*fragment) else {
                 continue;
@@ -974,23 +1074,22 @@ fn intrinsic_of(native: Size<u32, Device>) -> Intrinsic {
 /// The task is spawned on the UI thread and owns nothing but the queue; the read itself runs on
 /// the blocking pool. The wake edge when it finishes is what requests the frame whose settle will
 /// apply the result.
-fn kick_probe(key: SourceKey, completed: DecodeQueue) {
-    let work = match &key {
-        SourceKey::Path(path) => {
-            let path = PathBuf::from(path);
-            zgui_reactive::blocking(move || zgui_image::probe_file(&path))
-        }
-        SourceKey::Bytes(url) => {
-            let bytes = zgui_image::bytes_for_url(url);
-            zgui_reactive::blocking(move || match bytes {
-                Some(bytes) => zgui_image::probe(&bytes),
-                None => Err(dropped_handle()),
-            })
-        }
-    };
-    zgui_reactive::spawn_local(async move {
-        let result = work.await;
-        completed.borrow_mut().push((key, Arrival::Probe(result)));
+fn kick_probe(key: SourceKey, generation: u64, completed: DecodeQueue) {
+    let package = completed.bytes(&key);
+    let input = key.clone();
+    let registered = if package.is_none() {
+        match &key { SourceKey::Bytes(url) => zgui_image::bytes_for_url(url), _ => None }
+    } else { None };
+    completed.start(key, generation, move || {
+        let result = match package {
+            Some(bytes) => bytes.and_then(|bytes| zgui_image::probe(&bytes)),
+            None => match input {
+                SourceKey::Path(path) => zgui_image::probe_file(&PathBuf::from(path)),
+                SourceKey::Bytes(_) => registered.ok_or_else(dropped_handle)
+                    .and_then(|bytes| zgui_image::probe(&bytes)),
+            },
+        };
+        Arrival::Probe(result)
     });
 }
 
@@ -998,35 +1097,27 @@ fn kick_probe(key: SourceKey, completed: DecodeQueue) {
 ///
 /// A variant whose long edge lands over [`STANDALONE_LONG_EDGE`] gets its levels of detail built
 /// on the same worker, so the frame thread never runs the filter.
-fn kick_decode(key: SourceKey, class: Class, completed: DecodeQueue, limits: zgui_image::Limits) {
-    let with_levels = |decoded: zgui_image::Decoded| {
-        let mips = if decoded.size.width.max(decoded.size.height) > STANDALONE_LONG_EDGE {
-            zgui_image::mip_chain(&decoded)
-        } else {
-            Vec::new()
-        };
-        DecodedVariant { decoded, mips }
-    };
-    let work = match &key {
-        SourceKey::Path(path) => {
-            let path = PathBuf::from(path);
-            zgui_reactive::blocking(move || {
-                zgui_image::decode_file_scaled(&path, class, limits).map(with_levels)
-            })
-        }
-        SourceKey::Bytes(url) => {
-            let bytes = zgui_image::bytes_for_url(url);
-            zgui_reactive::blocking(move || match bytes {
-                Some(bytes) => zgui_image::decode_scaled(&bytes, class, limits).map(with_levels),
-                None => Err(dropped_handle()),
-            })
-        }
-    };
-    zgui_reactive::spawn_local(async move {
-        let result = work.await;
-        completed
-            .borrow_mut()
-            .push((key, Arrival::Variant(class, result)));
+fn kick_decode(key: SourceKey, generation: u64, class: Class, handle: u64, completed: DecodeQueue, limits: zgui_image::Limits) {
+    let package = completed.bytes(&key);
+    let input = key.clone();
+    let registered = if package.is_none() {
+        match &key { SourceKey::Bytes(url) => zgui_image::bytes_for_url(url), _ => None }
+    } else { None };
+    completed.start(key, generation, move || {
+        let decoded = match package {
+            Some(bytes) => bytes.and_then(|bytes| zgui_image::decode_scaled(&bytes, class, limits)),
+            None => match input {
+                SourceKey::Path(path) => zgui_image::decode_file_scaled(&PathBuf::from(path), class, limits),
+                SourceKey::Bytes(_) => registered.ok_or_else(dropped_handle)
+                    .and_then(|bytes| zgui_image::decode_scaled(&bytes, class, limits)),
+            },
+        }.map(|decoded| {
+            let mips = if decoded.size.width.max(decoded.size.height) > STANDALONE_LONG_EDGE {
+                zgui_image::mip_chain(&decoded)
+            } else { Vec::new() };
+            DecodedVariant { decoded, mips }
+        });
+        Arrival::Variant(class, handle, decoded)
     });
 }
 
@@ -1046,6 +1137,7 @@ mod tests {
     fn ready(long: u32) -> Variant {
         Variant {
             handle: u64::from(long),
+            uploaded: false,
             state: VariantState::Ready(DecodedVariant {
                 decoded: zgui_image::Decoded {
                     size: Size::new(long, 1),
@@ -1134,6 +1226,7 @@ mod tests {
             128,
             Variant {
                 handle: 1,
+                uploaded: false,
                 state: VariantState::Pending,
             },
         );
@@ -1143,6 +1236,7 @@ mod tests {
             128,
             Variant {
                 handle: 1,
+                uploaded: false,
                 state: VariantState::Failed,
             },
         );

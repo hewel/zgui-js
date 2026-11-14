@@ -5786,6 +5786,7 @@ dependencies = [
 name = "zgui-runtime"
 version = "0.1.0"
 dependencies = [
+ "cssparser",
  "rustc-hash 2.1.3",
  "thiserror 2.0.21",
  "tracing",

@@ -277,7 +277,7 @@ fn validate(profile: &Profile) -> Result<(u32, u32)> {
     dimensions(&profile.surface)
 }
 
-fn dimensions(surface: &Surface) -> Result<(u32, u32)> {
+pub(crate) fn dimensions(surface: &Surface) -> Result<(u32, u32)> {
     in_range(u64::from(surface.width), 1, 16_384, "surface.width")?;
     in_range(u64::from(surface.height), 1, 16_384, "surface.height")?;
     if !surface.scale.is_finite() || surface.scale <= 0.0 || surface.scale > 8.0 {

@@ -6,6 +6,7 @@ use zgui::{platform::{SurfaceId, WakeReason, Waker}, view::{HostHandle, host::{F
 use crate::package::Package;
 
 mod niri;
+pub(crate) mod fixture;
 use niri::NiriListener;
 
 const MAX_SAFE_ID: u64 = 9_007_199_254_740_991;
@@ -22,8 +23,8 @@ enum NativeRegistration { Timer(TimerId), Frame(FrameRequestId) }
 struct Registration { native: NativeRegistration, callback: Persistent<Function<'static>> }
 struct Pending { resolve: Persistent<Function<'static>>, reject: Persistent<Function<'static>>, cancelled: Arc<AtomicBool> }
 
-#[derive(Clone, Copy)]
-pub(crate) enum ServicePolicy { Live, FixtureOnly }
+#[derive(Clone)]
+pub(crate) enum ServicePolicy { Live, Fixture(Rc<fixture::FixtureRuntime>) }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ContractFailure {
@@ -55,7 +56,6 @@ pub(crate) struct Work {
     inbox: RefCell<Option<Receiver<Completion>>>,
     wake: Arc<dyn Fn() + Send + Sync>,
     service_policy: ServicePolicy,
-    contract_failure: RefCell<Option<ContractFailure>>,
 }
 
 impl Work {
@@ -67,26 +67,26 @@ impl Work {
             pending_completion: RefCell::new(None), next_id: Cell::new(1), mode: Cell::new(Mode::Loading), generation, host, package, executor,
             sender: RefCell::new(Some(sender)), inbox: RefCell::new(Some(inbox)),
             wake: Arc::new(move || waker.wake(WakeReason::ReactiveWork { surfaces: vec![surface].into_boxed_slice() })),
-            service_policy, contract_failure: RefCell::new(None),
+            service_policy,
         })
     }
 
     pub(crate) fn contract_failure(&self) -> Option<ContractFailure> {
-        self.contract_failure.borrow().clone()
+        self.fixtures().and_then(|runtime| runtime.contract_failure())
     }
 
-    fn require_live_service(&self, ctx: &Ctx<'_>, service: &str) -> rquickjs::Result<()> {
-        if matches!(self.service_policy, ServicePolicy::FixtureOnly) {
-            let message = format!("preview fixture does not provide {service}");
-            self.contract_failure.borrow_mut().get_or_insert_with(|| ContractFailure {
-                code: "E_FIXTURE_MISSING_SERVICE",
-                message: message.clone(),
-            });
-            // Record before constructing a JS error: application accessors may
-            // themselves throw or reenter service calls.
-            return Err(ctx.throw(service_error(ctx, "E_FIXTURE_MISSING_SERVICE", &message)?.into_value()));
+    fn fixtures(&self) -> Option<&Rc<fixture::FixtureRuntime>> {
+        match &self.service_policy { ServicePolicy::Live => None, ServicePolicy::Fixture(runtime) => Some(runtime) }
+    }
+    fn fixture_error(&self, ctx: &Ctx<'_>, error: ContractFailure) -> rquickjs::Error {
+        match service_error(ctx, error.code, &error.message) {
+            Ok(error) => ctx.throw(error.into_value()),
+            Err(error) => error,
         }
-        Ok(())
+    }
+    fn malformed_service(&self, ctx: &Ctx<'_>, message: &str) -> rquickjs::Error {
+        if let Some(runtime) = self.fixtures() { self.fixture_error(ctx, runtime.malformed(message)) }
+        else { Exception::throw_type(ctx, message) }
     }
     pub(crate) fn mounting(&self) { self.mode.set(Mode::Mounting); }
     pub(crate) fn mounted(&self) { self.mode.set(Mode::Mounted); }
@@ -94,9 +94,16 @@ impl Work {
     pub(crate) fn next_call(&self) -> Option<ScheduledCall> { self.ready.borrow_mut().pop_front() }
     pub(crate) fn next_completion(&self) -> Option<Completion> {
         if self.mode.get() != Mode::Mounted { return None; }
+        if let Some(runtime) = self.fixtures() {
+            return match runtime.take(true)? {
+                fixture::Delivery::Asset { generation, id, result } => Some(Completion { generation, request_id: id, result }),
+                fixture::Delivery::Niri { .. } => unreachable!("asset queue head"),
+            };
+        }
         self.pending_completion.borrow_mut().take().or_else(|| self.inbox.borrow().as_ref()?.try_recv().ok())
     }
     pub(crate) fn has_completions(&self) -> bool {
+        if let Some(runtime) = self.fixtures() { return runtime.has_delivery(true); }
         if self.pending_completion.borrow().is_some() { return true; }
         let completion = self.inbox.borrow().as_ref().and_then(|inbox| inbox.try_recv().ok());
         let pending = completion.is_some();
@@ -166,10 +173,25 @@ impl Work {
         }
         let services = Object::new(ctx.clone())?;
         let weak = Rc::downgrade(self);
-        services.set("readTextAsset", Func::from(move |ctx: Ctx<'js>, path: String| owner(&weak, &ctx)?.read_asset(&ctx, path)))?;
+        services.set("readTextAsset", Func::from(move |ctx: Ctx<'js>, args: Rest<Value<'js>>| {
+            let owner = owner(&weak, &ctx)?;
+            if owner.fixtures().is_some() && (args.0.len() != 1 || !args.0[0].is_string()) {
+                return Err(owner.malformed_service(&ctx, "readTextAsset requires exactly one string path"));
+            }
+            let value = args.0.into_iter().next().unwrap_or_else(|| Value::new_undefined(ctx.clone()));
+            let path: String = rquickjs::FromJs::from_js(&ctx, value)?;
+            owner.read_asset(&ctx, path)
+        }))?;
         let weak = Rc::downgrade(self);
-        services.set("watchNiri", Func::from(move |ctx: Ctx<'js>, snapshot: Function<'js>, error: Function<'js>| {
-            owner(&weak, &ctx)?.watch_niri(&ctx, snapshot, error)
+        services.set("watchNiri", Func::from(move |ctx: Ctx<'js>, args: Rest<Value<'js>>| {
+            let owner = owner(&weak, &ctx)?;
+            if owner.fixtures().is_some() && (args.0.len() != 2 || args.0.iter().any(|value| !value.is_function())) {
+                return Err(owner.malformed_service(&ctx, "watchNiri requires exactly two callback functions"));
+            }
+            let mut args = args.0.into_iter();
+            let snapshot: Function = rquickjs::FromJs::from_js(&ctx, args.next().unwrap_or_else(|| Value::new_undefined(ctx.clone())))?;
+            let error: Function = rquickjs::FromJs::from_js(&ctx, args.next().unwrap_or_else(|| Value::new_undefined(ctx.clone())))?;
+            owner.watch_niri(&ctx, snapshot, error)
         }))?;
         ctx.globals().set("__zguiServices", services)?;
         Ok(())
@@ -221,11 +243,23 @@ impl Work {
     }
 
     fn read_asset<'js>(self: &Rc<Self>, ctx: &Ctx<'js>, path: String) -> rquickjs::Result<Object<'js>> {
-        self.require_creation(ctx)?;
-        let package = self.package.as_ref().ok_or_else(|| Exception::throw_type(ctx, "asset requests require a loaded package"))?;
-        if !package.manifest.assets.contains(&path) { return Err(Exception::throw_range(ctx, "asset is not declared in this package")); }
-        if self.requests.borrow().len() >= MAX_REQUESTS { return Err(Exception::throw_range(ctx, "outstanding request limit reached")); }
+        if let Some(runtime) = self.fixtures() { runtime.require_assets().map_err(|error| self.fixture_error(ctx, error))?; }
+        if let Err(error) = self.require_creation(ctx) {
+            if self.fixtures().is_some() { return Err(self.malformed_service(ctx, "readTextAsset is unavailable during preflight or disposal")); }
+            return Err(error);
+        }
+        if self.fixtures().is_none() {
+            let package = self.package.as_ref().ok_or_else(|| Exception::throw_type(ctx, "asset requests require a loaded package"))?;
+            if !package.manifest.assets.contains(&path) { return Err(Exception::throw_range(ctx, "asset is not declared in this package")); }
+        }
+        if self.requests.borrow().len() >= MAX_REQUESTS {
+            return Err(if self.fixtures().is_some() { self.malformed_service(ctx, "outstanding request limit reached") }
+                else { Exception::throw_range(ctx, "outstanding request limit reached") });
+        }
         let id = self.id(ctx)?;
+        if let Some(runtime) = self.fixtures() {
+            runtime.read_asset(self.generation, id, &path, self.package.as_deref()).map_err(|error| self.fixture_error(ctx, error))?;
+        }
         let (promise, resolve, reject) = ctx.promise()?;
         let cancelled = Arc::new(AtomicBool::new(false));
         let object = Object::new(ctx.clone())?;
@@ -233,6 +267,8 @@ impl Work {
         let weak = Rc::downgrade(self);
         object.set("cancel", Func::from(move |ctx: Ctx<'js>| owner(&weak, &ctx)?.cancel_request(&ctx, id)))?;
         self.requests.borrow_mut().insert(id, Pending { resolve: Persistent::save(ctx, resolve), reject: Persistent::save(ctx, reject), cancelled: cancelled.clone() });
+        if self.fixtures().is_some() { return Ok(object); }
+        let package = self.package.as_ref().expect("live package validated before request creation");
         let reply = self.sender.borrow().as_ref().expect("creation mode retains completion sender").clone();
         let request = Request { generation: self.generation, request_id: id, root: package.directory.clone(), path, max_bytes: MAX_ASSET_BYTES, cancelled, reply, wake: self.wake.clone() };
         if let Err(error) = self.executor.submit(request) {
@@ -247,13 +283,21 @@ impl Work {
         let pending = self.requests.borrow_mut().remove(&id);
         let Some(pending) = pending else { return Ok(()); };
         pending.cancelled.store(true, Ordering::Release);
+        if let Some(runtime) = self.fixtures() { runtime.cancel(id); }
         pending.reject.restore(ctx)?.call::<_, ()>((service_error(ctx, "Cancelled", "asset request cancelled")?,))
     }
 
     pub(crate) fn settle<'js>(&self, ctx: &Ctx<'js>, completion: Completion) -> rquickjs::Result<()> {
-        if completion.generation != self.generation || self.mode.get() != Mode::Mounted { return Ok(()); }
+        if completion.generation != self.generation || self.mode.get() != Mode::Mounted {
+            if let Some(runtime) = self.fixtures() { runtime.ignored(completion.request_id, "stale generation or inactive session"); }
+            return Ok(());
+        }
         let pending = self.requests.borrow_mut().remove(&completion.request_id);
-        let Some(pending) = pending else { return Ok(()); };
+        let Some(pending) = pending else {
+            if let Some(runtime) = self.fixtures() { runtime.ignored(completion.request_id, "request already settled or cancelled"); }
+            return Ok(());
+        };
+        if let Some(runtime) = self.fixtures() { runtime.delivered(completion.request_id, completion.result.is_err()); }
         match completion.result {
             Ok(text) => pending.resolve.restore(ctx)?.call::<_, ()>((text,)),
             Err(error) => pending.reject.restore(ctx)?.call::<_, ()>((service_error(ctx, error.code, &error.message)?,)),
@@ -263,6 +307,7 @@ impl Work {
     pub(crate) fn begin_stop(&self) {
         if self.mode.get() == Mode::Disposed { return; }
         self.mode.set(Mode::Stopping);
+        if let Some(runtime) = self.fixtures() { runtime.dispose(); }
         self.subscriptions.borrow_mut().clear();
         for pending in self.requests.borrow_mut().drain().map(|(_, pending)| pending) { pending.cancelled.store(true, Ordering::Release); }
         // Retired workers must not block the shared executor on a full old inbox.

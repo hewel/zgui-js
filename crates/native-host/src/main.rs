@@ -169,6 +169,10 @@ impl Application {
         // requests a frame. Both are explicit at this owner-thread boundary.
         let window = self.native.windows_mut().iter_mut().find(|window| window.document_id() == document)
             .expect("pure preflight cannot destroy its native window");
+        window.replace_image_policy(package.as_ref().map_or_else(
+            zgui::runtime::ImagePolicy::default,
+            |package|zgui::runtime::ImagePolicy::package_assets(package.image_assets()),
+        ));
         window.install_binding(Box::new(Binding(Rc::downgrade(&candidate))));
         eprintln!("binding-installed: {document:?} generation={generation}");
         if let Err(error) = candidate.mount() {

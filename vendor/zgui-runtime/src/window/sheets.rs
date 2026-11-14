@@ -17,6 +17,7 @@ impl Window {
     /// the end of the author origin, where it would begin winning against every sheet that used to
     /// beat it — so a theme that changed a colour would also, invisibly, change what wins.
     pub(crate) fn install_view_sheet(&mut self, name: &str, css: &str) {
+        if !self.images.audit_css(css) { return; }
         let document = self.document.borrow();
         let diagnostics = match self.view_sheets.get(name) {
             Some(handle) => {

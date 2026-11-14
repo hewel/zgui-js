@@ -252,11 +252,13 @@ fn cancelled_terminal_delivery_cannot_execute_error_prototype_code() {
 }
 
 #[test]
-fn fixture_only_policy_rejects_transport_construction_even_with_explicit_socket() {
+fn empty_fixture_rejects_transport_construction_even_with_explicit_socket() {
     let fixture = Fixture::new();
     let (sender, _) = mpsc::channel();
+    let environment = crate::preview::clock::Environment::new(Arc::new(zgui::platform::VirtualClock::new()), Some(0), 1);
+    let fixtures = fixture::FixtureRuntime::new(Default::default(), environment);
     let work = Work::new(HostHandle::from_rc(Rc::new(StubHost::default())), None, 1,
-        Executor::new(1, 8).unwrap(), Arc::new(ChannelWaker(sender)), SurfaceId::new(7), ServicePolicy::FixtureOnly);
+        Executor::new(1, 8).unwrap(), Arc::new(ChannelWaker(sender)), SurfaceId::new(7), ServicePolicy::Fixture(fixtures));
     let mut engine = JsRuntime::new(RuntimeLimits::default()).unwrap();
     work.mounting();
     let error = engine.with_context(|ctx| {

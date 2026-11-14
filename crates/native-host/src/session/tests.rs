@@ -31,7 +31,9 @@ impl Native {
         Session::prepare(self.region.clone(), Some(package), generation, self.waker.clone(), SurfaceId::new(7), self.executor.clone(), SessionPolicy::Live)
     }
     fn preview(&self, package: Rc<Package>, limits: RuntimeLimits, deadline: Rc<Cell<Instant>>) -> Result<Rc<Session>> {
-        Session::prepare(self.region.clone(), Some(package), 1, self.waker.clone(), SurfaceId::new(7), self.executor.clone(), SessionPolicy::Preview { limits, deadline })
+        let environment = crate::preview::clock::Environment::new(Arc::new(zgui::platform::VirtualClock::new()), Some(0), 1);
+        let fixtures = crate::work::fixture::FixtureRuntime::new(Default::default(), environment.clone());
+        Session::prepare(self.region.clone(), Some(package), 1, self.waker.clone(), SurfaceId::new(7), self.executor.clone(), SessionPolicy::Preview { limits, deadline, environment, fixtures })
     }
     fn text(&self) -> String { self.region.dom.text_content(self.region.root) }
     fn completion(&self, session: &Session) -> host_services::Completion {
@@ -369,4 +371,49 @@ fn rejected_mount_keeps_its_returned_disposer_for_cleanup() {
     session.shutdown();
     assert_eq!(called.get(),1);
     assert_eq!(session.counts(),ResourceCounts::default());
+}
+
+#[test]
+fn preview_installs_clock_before_module_evaluation_and_settles_fixture_through_owner_checkpoint() {
+    let fixture = Fixture::new(r#"
+        export const hostApiVersion = 1;
+        const evaluated = Date.now() + ':' + performance.now();
+        export function mount(root) {
+            const label = __zgui.createTextNode(evaluated);
+            __zgui.insertNode(root, label, null);
+            const request = __zguiServices.readTextAsset('test.txt');
+            request.promise.then(value => __zgui.replaceText(label, value + ':' + Date.now()));
+            return () => { request.cancel(); __zgui.clearRoot(root); };
+        }
+    "#, "");
+    let native = Native::new();
+    let clock = Arc::new(zgui::platform::VirtualClock::new());
+    clock.advance(Duration::from_millis(17));
+    let environment = crate::preview::clock::Environment::new(clock.clone(), Some(1234), 7);
+    let definition: crate::work::fixture::FixtureDefinition = serde_json::from_value(serde_json::json!({
+        "schemaVersion":1, "id":"session-service", "services": {
+            "assets":{"provider":"mock-text-assets-v1","latencyMs":5,"initialState":{"assets":{"test.txt":{}}}}
+        }, "events":[]
+    })).unwrap();
+    let fixtures = crate::work::fixture::FixtureRuntime::new(definition, environment.clone());
+    let session = Session::prepare(native.region.clone(), Some(fixture.package()), 1, native.waker.clone(),
+        SurfaceId::new(7), native.executor.clone(), SessionPolicy::Preview {
+            limits: RuntimeLimits::default(), deadline: Rc::new(Cell::new(Instant::now() + Duration::from_secs(5))),
+            environment, fixtures: fixtures.clone(),
+        }).unwrap();
+    session.mount().unwrap();
+    assert_eq!(native.text(), "1251:17");
+    assert_eq!(fixtures.next_deadline_us(), Some(22000));
+    assert!(!fixtures.release_due().unwrap());
+    session.checkpoint().unwrap();
+    assert_eq!(native.text(), "1251:17");
+    clock.advance(Duration::from_millis(5));
+    fixtures.release_due().unwrap();
+    session.checkpoint().unwrap();
+    assert_eq!(native.text(), "completed:1256");
+    fixtures.assert_calls("assets", "readTextAsset", 1, None).unwrap();
+    fixtures.finalize().unwrap();
+    session.shutdown();
+    assert_eq!(session.counts(), ResourceCounts::default());
+    assert!(fixtures.trace()["records"].as_array().unwrap().iter().any(|record| record["kind"] == "disposal"));
 }

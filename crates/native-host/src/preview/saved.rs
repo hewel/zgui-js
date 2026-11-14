@@ -72,6 +72,17 @@ fn validate_identity(tree:&Value,frame:&Value,result:&Value,capture:&str,tree_di
         || tree["metadataRevision"].as_u64().is_none() || tree["metadataRevision"]!=frame["metadataRevision"] {
         return Err(Error::new("E_OUTPUT_IO",8,"capture, tree and terminal run identities disagree"));
     }
+    let native_resources=frame["resources"].get("requiredAssetsReady").is_some();
+    for field in ["resourceRevision","surfaceConfiguration"] {
+        if native_resources || tree.get(field).is_some() || frame.get(field).is_some() {
+            if tree[field].as_u64().is_none() || tree[field]!=frame[field] {
+                return Err(Error::new("E_OUTPUT_IO",8,"capture resource/surface configuration identities disagree"));
+            }
+        }
+    }
+    if frame.get("resourceRevision").is_some() && frame["resourceRevision"]!=frame["resources"]["resourceRevision"] {
+        return Err(Error::new("E_OUTPUT_IO",8,"capture readiness belongs to another resource revision"));
+    }
     Ok(())
 }
 
@@ -265,6 +276,20 @@ mod tests {
             tree.as_object_mut().unwrap().remove("metadataRevision");
             frame.as_object_mut().unwrap().remove("metadataRevision");
             if let Some(value)=revision { tree["metadataRevision"]=value.clone(); frame["metadataRevision"]=value; }
+            assert!(validate_identity(&tree,&frame,&result,"initial","hash").is_err());
+        }
+        for field in ["resourceRevision","surfaceConfiguration"] {
+            let mut tree=tree.clone();
+            let mut frame=frame.clone();
+            for identity in ["resourceRevision","surfaceConfiguration"] { tree[identity]=json!(1);frame[identity]=json!(1); }
+            frame["resources"]=json!({"requiredAssetsReady":true,"resourceRevision":1});
+            tree[field]=json!(1);frame[field]=json!(2);
+            assert!(validate_identity(&tree,&frame,&result,"initial","hash").is_err());
+            frame[field]=json!(1);
+            validate_identity(&tree,&frame,&result,"initial","hash").unwrap();
+            tree.as_object_mut().unwrap().remove(field);frame.as_object_mut().unwrap().remove(field);
+            assert!(validate_identity(&tree,&frame,&result,"initial","hash").is_err());
+            tree[field]=Value::Null;frame[field]=Value::Null;
             assert!(validate_identity(&tree,&frame,&result,"initial","hash").is_err());
         }
         let mut frame=frame;

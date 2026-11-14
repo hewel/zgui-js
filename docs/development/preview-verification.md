@@ -267,3 +267,112 @@ cargo test -p ui-bridge --test properties test_ids_follow_native_ownership_witho
 cargo build -p native-host
 node --test tests/preview/final-input.test.mjs
 ```
+
+## P3 — shared time, fixture providers and native resources
+
+```sh
+pnpm ui:build --app counter
+cargo build -p native-host
+target/debug/native-host preview run \
+  --bundle apps/examples/counter/dist \
+  --profile preview/profiles/default.json \
+  --fixture preview/fixtures/empty.json \
+  --scenario preview/scenarios/counter-virtual.json \
+  --out target/preview-counter-virtual
+```
+
+The virtual profile's exact native clock is installed before module evaluation.
+`clock.advance` visits actual native/fixture deadlines and its exact endpoint;
+fractional native timer deadlines are not rounded to guessed frame intervals.
+`settle`, input, resource waits and resize/scale never advance virtual time.
+Future pacing is reported rather than hidden. Real execution deadlines remain
+independent, including while JS spins or continually queues jobs.
+
+Virtual `Date.now`, zero-argument construction and callable `Date()` share the
+configured epoch; explicit arguments, static methods and subclass construction
+retain Date semantics. Worker timezone is UTC. `performance.now()` reads native
+elapsed milliseconds; seeded `Math.random` uses `splitmix64-v1`. These policies
+and the verified shipped fonts are saved in `environment.json`.
+
+Fixture providers replace the existing `readTextAsset` and `watchNiri` boundaries,
+not application handlers. Missing providers cannot fall back to live services.
+Zero-latency requests return before delivery. Eligible fixture work is ordered
+by release time, declared events before request completions, then source order.
+`service.emit` changes typed fixture state only. An `assert` step with
+`serviceCall: {service, method, count, errorCode?}` checks exact calls and
+explicitly acknowledges matching injected errors.
+Unacknowledged injected errors fail finalization even when application code
+catches them. `services.json` retains bounded request/response/state/cancellation
+and disposal evidence. Wire objects reject positional arrays and duplicate fields.
+
+Native `<Image>`/`<image>` uses immutable verified package bytes, real decoding,
+native demand variants and the real paint atlas. Preview stages only complete
+worker batches in launch order; waiting neither executes JS nor advances time.
+Required visible images need current-generation attachment, successful texture
+upload and current atlas residency. Allocation refusal is an asset failure;
+upload/device refusal is a graphics failure. CSS URL/import/image-set references
+are explicitly rejected because the native painter does not implement them.
+
+Required visibility intersects native placed fragments with the physical viewport,
+ancestor clips and current opacity. An offscreen decoded image need not be
+uploaded to permit capture; making it visible restores the upload requirement.
+Live package sessions bind the same immutable bytes but retain ordinary asynchronous
+native publication. Replacing the image policy between owner shutdown and new mount
+retires old completion domains, attachments, caches and replay leases without
+reusing request or atlas identities.
+
+An explicit `allowedPendingAssets` list names current pending request IDs, never
+sources or stale generations. It can capture an already coherent placeholder
+before publishing worker arrivals, but cannot permit failures. Captures bind
+resource revision and requested surface configuration to their tree and genuine
+validation frame. Pixel presentation retains its own timestamp. Saved inspection
+checks these identities; a resize/scale returning to the old pixel extent does
+not make the old logical configuration current.
+
+### Observed gates
+
+| Case | Observed result |
+| --- | --- |
+| PV16 | Infinite JS under a frozen clock exits 5 with `E_JOB_BUDGET`; no virtual advance is required. |
+| PV17 | Infinite queued work is bounded; a throwing job exits 3 and preserves `original-p3-job-error`. |
+| PV18 | A 0.25 ms native timer fires at its actual deadline; equal-deadline cancellation preserves A→Promise ordering and suppresses B. |
+| PV19 | Resize/scale retain the held timestamp. A resize then scale returning to the original pixel extent cannot validate the old logical configuration or dispatch against it. |
+| PV20 | Native validation ordinals include genuine additional frames at 0, 40 and 80 ms; unchanged pixels retain their earlier presentation identity. |
+| PV21 | Loading captures succeed while 25/50 ms fixture responses remain pending; subsequent explicit advances render their results. |
+| PV22 | `service.emit` changes fixture state; missing assets/niri providers fail with exit 6. The absent-niri test's owned Unix sentinel observes zero live connections. |
+| PV23 | Same-deadline asset completions retain request order; two declared niri events retain source order. Zero-latency completion is deferred until after the caller returns. |
+| PV24 | Actual GPU captures cover placeholder→red→blue→clear, corrupt/remote failure, offscreen→visible, and real atlas exhaustion. Controlled delayed-worker tests reject stale replacement/clear completions. |
+| PV25 | Timeline reruns produce byte-identical PNGs and service traces, matching shipped font identities, UTC Date values, native performance time and seeded random values despite a Honolulu parent timezone. |
+| PV26 | Saved inspection enforces tree/frame/resource/configuration identities without GPU access. Complete artifact inventories verify 760 byte lengths and SHA-256 digests across the final v3/v4 matrices. |
+| PV27 | Held pacing/configuration and exact-time mismatch reject stale pixels with exit 5; the existing graphics boundary remains distinct from asset allocation failure. |
+
+Focused gates passed:
+
+- `cargo test -p native-host preview::`: 54 passed, one opt-in test ignored.
+- `cargo test -p native-host work::fixture::tests`: 16 passed.
+- Native runtime `image_policy` and `images_end_to_end`: nine passed;
+  `delayed_`: two passed; `live_package_images_`: one passed.
+- UI bridge property tests: 13 passed; image build test: one passed;
+  `pnpm typecheck` passed.
+- Real-GPU `tests/preview/surface-configuration.test.mjs` and
+  `tests/preview/final-input.test.mjs`: six passed.
+- The documented `counter-virtual.json` command exits 0 with two captures and
+  its count assertion passing. Successful final matrices include timeline,
+  deferred zero-latency delivery, explicitly acknowledged errors, declared events
+  and images. Expected failures retain their original category and stage;
+  an unacknowledged injected error fails at `fixture-finalize`.
+
+The actual Wayland host was also launched from `/tmp` with a package image and
+`--watch`. PID/app-ID/title-verified compositor screenshots each contain 3,136
+source-colored pixels: red in generation 1, blue after replacing the bytes at the
+same asset path and publishing generation 2. Both generations dispose with every
+resource count zero and the process exits cleanly. The compositor lacks grim's
+capture protocol, so this check used explicitly authorized niri window screenshots
+(which replace the clipboard), then restored the previous focused window.
+
+Independent review identified and closed stale surface-configuration acceptance,
+positional service assertion decoding, atlas readiness without upload, and
+offscreen visibility accounting. A focused follow-up found no remaining concrete
+stale-completion hole in the live package generation boundary. Test expectations
+do not require an invisible image to remain unuploaded: native eager upload is
+valid, while visibility and subsequent visible readiness are the contract.

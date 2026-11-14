@@ -40,11 +40,11 @@ pub fn command(args: Vec<String>) -> Result<Value,Error> {
     let (_,profile)=profile::read_profile(&options.common.profile,&options.common.overrides)?;
     // Capability/schema errors cannot execute the application, allocate a GPU, or claim a run.
     let scenario = scenario::load(&options.scenario,super::RUN_CAPABILITIES,profile.clock.is_virtual())?;
-    validate_steps(&scenario.scenario, &profile.limits)?;
+    validate_steps(&scenario.scenario, &profile)?;
     fixture::load(&options.fixture)?;
     let mut output=Output::create(options.common.out.as_deref().expect("required output"),profile.limits.max_output_bytes)?;
     let mut child=std::process::Command::new(std::env::current_exe().map_err(|error|Error::new("E_WORKER_CRASH",9,error.to_string()))?);
-    child.args(["preview","_run-worker"]).args(args).env("ZGUI_PREVIEW_PARENT_PID",std::process::id().to_string());
+    child.args(["preview","_run-worker"]).args(args).env("ZGUI_PREVIEW_PARENT_PID",std::process::id().to_string()).env("TZ","UTC");
     let report=supervisor::run(&mut child,Duration::from_millis(profile.limits.max_run_wall_ms));
     let mut result=match report {
         Ok(report) => {
@@ -99,6 +99,8 @@ pub fn worker(args: impl Iterator<Item=String>) -> supervisor::Report {
     let mut latest=Value::Null;
     let mut assertions_passed=0;
     let mut assertions_failed=0;
+    let mut timing_deterministic=false;
+    let mut fixture_runtime=None;
     let outcome=(|| -> Result<(),Fault> {
         let options=options(args)?;
         let (_,declared)=profile::read_profile(&options.common.profile,&options.common.overrides)?;
@@ -109,7 +111,8 @@ pub fn worker(args: impl Iterator<Item=String>) -> supervisor::Report {
         let profile=profile::load(&options.common.profile,&options.common.overrides)?;
         let fixture=fixture::load(&options.fixture)?;
         let scenario=scenario::load(&options.scenario,super::RUN_CAPABILITIES,profile.profile.clock.is_virtual())?;
-        validate_steps(&scenario.scenario, &profile.profile.limits)?;
+        validate_steps(&scenario.scenario, &profile.profile)?;
+        timing_deterministic=profile.profile.clock.is_virtual();
         scenario_id=json!(scenario.scenario.id);
         sink.borrow_mut().json("inputs/profile.json","resolved-profile",&profile.resolved_json)?;
         sink.borrow_mut().bytes("inputs/fixture.json","fixture",&fixture.original)?;
@@ -125,18 +128,24 @@ pub fn worker(args: impl Iterator<Item=String>) -> supervisor::Report {
         environment["scenario"]=json!({"id":scenario.scenario.id,"digest":scenario.digest,"requiredCapabilities":scenario.scenario.required_capabilities});
         environment["application"]=build.clone();
         environment["capabilities"]=super::capabilities(true);
-        environment["capabilityRevision"]=json!("native-preview-v1-p2");
+        environment["capabilityRevision"]=json!("native-preview-v1-p3");
         environment["inputPolicy"]=json!({"surfaceFocus":"main","dispatch":"one native deliver_all burst per action; no frame between low-level events","modifiers":"key-local; restored to none after key-up"});
-        environment["timingDeterministic"]=json!(false);
-        environment["random"]=json!({"seedApplied":false,"algorithm":null,"ambientMathRandom":"engine-default"});
+        environment["timingDeterministic"]=json!(timing_deterministic);
+        environment["clock"]=super::clock::Environment::configuration(
+            match profile.profile.clock { profile::Clock::Virtual{epoch_ms,..}=>Some(epoch_ms),profile::Clock::Wall{}=>None },
+            profile.profile.random.seed);
+        environment["random"]=environment["clock"]["random"].clone();
+        environment["resourcePublication"]=json!("complete-batch-launch-order-v1");
         environment["graphicsEvidence"]=json!("graphics.json");
         sink.borrow_mut().json("environment.json","environment",&environment)?;
         stage="mount";
         sink.borrow_mut().json("progress/action-000000.json","action-progress",&json!({"stage":stage,"actionSequence":0,"build":build}))?;
-        driver=Some(Driver::new(&profile,package,sink.clone(),started+Duration::from_millis(profile.profile.limits.max_run_wall_ms))?);
+        driver=Some(Driver::new(&profile,package,fixture.definition,sink.clone(),started+Duration::from_millis(profile.profile.limits.max_run_wall_ms))?);
         let active=driver.as_mut().expect("driver installed");
+        fixture_runtime=Some(active.fixtures.clone());
         sink.borrow_mut().json("graphics.json","graphics-environment",&active.graphics())?;
         active.check()?;
+        active.settle(false)?;
         for (index,step) in scenario.scenario.steps.iter().enumerate() {
             action=index as u64+1;
             step_id=Some(step.id().to_owned());
@@ -146,9 +155,8 @@ pub fn worker(args: impl Iterator<Item=String>) -> supervisor::Report {
             let step_started=Instant::now();
             let result=match step {
                 Step::Settle{..}=>active.settle(false),
-                Step::Capture{capture_id,required_frame_time_us,..}=> {
-                    debug_assert!(required_frame_time_us.is_none(),"preflight rejects exact time in wall profiles");
-                    active.capture(capture_id).inspect(|capture| { captures+=1; latest=capture.clone(); })
+                Step::Capture{capture_id,required_frame_time_us,allowed_pending_assets,..}=> {
+                    active.capture(capture_id,*required_frame_time_us,allowed_pending_assets).inspect(|capture| { captures+=1; latest=capture.clone(); })
                 }
                 Step::PointerMove{location,..}=>active.pointer(location,None),
                 Step::PointerClick{location,button,..}=>active.pointer(location,Some(*button)),
@@ -159,6 +167,15 @@ pub fn worker(args: impl Iterator<Item=String>) -> supervisor::Report {
                     if result.is_ok() { assertions_passed+=1; } else { assertions_failed+=1; }
                     result
                 }
+                Step::ClockAdvance{by_ms,..}=>active.advance(*by_ms),
+                Step::ServiceEmit{channel,value,..}=>active.emit(channel,value),
+                Step::AssertService{check,..}=> {
+                    let result=active.assert_service(check);
+                    if result.is_ok() { assertions_passed+=1; } else { assertions_failed+=1; }
+                    result
+                }
+                Step::SurfaceResize{surface,width,height,..}=>active.resize(*width,*height).map(|mut trace| { trace["surface"]=json!(surface); trace }),
+                Step::SurfaceScale{surface,scale,..}=>active.scale(*scale).map(|mut trace| { trace["surface"]=json!(surface); trace }),
             };
             if let Err(fault)=&result {
                 let summary=cause_summary(fault,stage,step_id.as_deref(),action);
@@ -175,6 +192,9 @@ pub fn worker(args: impl Iterator<Item=String>) -> supervisor::Report {
             steps.push(row);
             result?;
         }
+        stage="fixture-finalize";
+        step_id=None;
+        active.fixtures.finalize()?;
         Ok(())
     })();
     let mut failure=outcome.err();
@@ -229,10 +249,10 @@ pub fn worker(args: impl Iterator<Item=String>) -> supervisor::Report {
     let mut result=json!({"schemaVersion":1,"command":"run","runId":format!("run-{}",std::process::id()),
         "scenarioId":scenario_id,"generation":1,"status":if failure.is_none(){"passed"}else{"failed"},
         "exitCode":failure.as_ref().map_or(0,|fault|fault.error.exit_code),"assertions":{"passed":assertions_passed,"failed":assertions_failed},
-        "captureCount":captures,"build":compact_build(&build),"timingDeterministic":false,"teardown":teardown,
+        "captureCount":captures,"build":compact_build(&build),"timingDeterministic":timing_deterministic,"teardown":teardown,
         "firstError":failure.as_ref().map(|fault|cause_summary(fault,stage,step_id.as_deref(),action)),
         "failureEvidence":failure_evidence,"artifacts":{"manifest":"artifacts.json","environment":"environment.json",
-            "diagnostics":"diagnostics.jsonl","steps":"steps.jsonl","metrics":"metrics.json",
+            "diagnostics":"diagnostics.jsonl","steps":"steps.jsonl","metrics":"metrics.json","services":"services.json",
             "latestCapture":latest["png"],"latestTree":latest["tree"]}});
     if let Some(original)=original_error && original!=result["firstError"] { result["originalError"]=original; }
     if let Some(output)=output {
@@ -240,6 +260,7 @@ pub fn worker(args: impl Iterator<Item=String>) -> supervisor::Report {
             let mut output=output.borrow_mut();
             output.bytes("steps.jsonl","steps",&json_lines(&steps))?;
             output.bytes("diagnostics.jsonl","diagnostics",&json_lines(&diagnostics))?;
+            if let Some(fixtures)=&fixture_runtime { output.json("services.json","fixture-services",&fixtures.trace())?; }
             output.json("metrics.json","metrics",&json!({"wallDurationUs":started.elapsed().as_micros(),"nativeFrames":frames,
                 "captures":captures,"availability":{"wallDuration":true,"nativeFrames":true,"jsHeap":false,"mutationCost":false,"rss":false}}))?;
             output.seal_worker()
@@ -266,9 +287,21 @@ fn publication_failure(error:Error,previous:&Value)->Value {
     failed["originalError"]=if previous["originalError"].is_null() { previous["firstError"].clone() } else { previous["originalError"].clone() };
     failed
 }
-fn validate_steps(scenario:&scenario::Scenario,limits:&profile::Limits)->Result<(),Error> {
-    if scenario.steps.iter().any(|step|matches!(step,Step::Settle{timeout_ms:Some(timeout),..} if *timeout>limits.max_step_wall_ms)) {
-        return Err(Error::new("E_SCHEMA",2,"settle timeoutMs exceeds the profile's maxStepWallMs"));
+fn validate_steps(scenario:&scenario::Scenario,profile:&profile::Profile)->Result<(),Error> {
+    let mut surface=profile.surface.clone();
+    let mut advanced_ms=0_u64;
+    for step in &scenario.steps {
+        match step {
+            Step::Settle{timeout_ms:Some(timeout),..} if *timeout>profile.limits.max_step_wall_ms=>
+                return Err(Error::new("E_SCHEMA",2,"settle timeoutMs exceeds the profile's maxStepWallMs")),
+            Step::ClockAdvance{by_ms,..}=> {
+                advanced_ms=advanced_ms.checked_add(*by_ms).filter(|total|*total<=profile.limits.max_virtual_duration_ms)
+                    .ok_or_else(||Error::new("E_SCHEMA",2,"scenario advances beyond maxVirtualDurationMs"))?;
+            }
+            Step::SurfaceResize{width,height,..}=> { surface.width=*width;surface.height=*height;profile::dimensions(&surface)?; }
+            Step::SurfaceScale{scale,..}=> { surface.scale=*scale;profile::dimensions(&surface)?; }
+            _=>{}
+        }
     }
     Ok(())
 }

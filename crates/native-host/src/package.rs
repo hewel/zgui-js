@@ -27,6 +27,7 @@ pub struct Package {
     pub source_map_digest: String,
     source_map: sourcemap::DecodedMap,
     generated_entry: String,
+    assets: BTreeMap<String, std::sync::Arc<[u8]>>,
 }
 
 impl Package {
@@ -72,7 +73,19 @@ impl Package {
             css.push('\n');
         }
         let generated_entry = directory.join(&manifest.entry).to_string_lossy().into_owned();
-        Ok(Self { directory, manifest, source, css, source_map, generated_entry, source_map_digest })
+        let assets = manifest.assets.iter().map(|name| {
+            (name.clone(), std::sync::Arc::from(files.remove(name).expect("verified declared asset")))
+        }).collect();
+        Ok(Self { directory, manifest, source, css, source_map, generated_entry, source_map_digest, assets })
+    }
+
+    /// Immutable manifest-declared bytes from the integrity-verified package generation.
+    pub fn asset_bytes(&self, name: &str) -> Option<&[u8]> {
+        self.assets.get(name).map(AsRef::as_ref)
+    }
+
+    pub(crate) fn image_assets(&self) -> impl Iterator<Item = (String, std::sync::Arc<[u8]>)> + '_ {
+        self.assets.iter().map(|(name, bytes)| (name.clone(), std::sync::Arc::clone(bytes)))
     }
 
     /// Remap this package's generated entry frames to one-based original locations.
@@ -181,6 +194,35 @@ mod tests {
         assert_eq!(Package::load(&fixture.0).unwrap().source.as_bytes(), source);
         fs::write(fixture.0.join("app.mjs.map"), b"modified").unwrap();
         assert!(Package::load(&fixture.0).err().unwrap().to_string().contains("integrity mismatch"));
+    }
+
+    #[test]
+    fn declared_asset_access_is_verified_owned_and_excludes_other_package_files() {
+        let fixture = Fixture::new();
+        let source = b"export {};";
+        let map = br#"{"version":3,"sources":[],"names":[],"mappings":""}"#;
+        fixture.publish(source, map);
+        let payload = b"verified image or text bytes";
+        fs::write(fixture.0.join("asset.bin"), payload).unwrap();
+        fs::write(fixture.0.join("ambient.bin"), b"ambient").unwrap();
+        let mut manifest: serde_json::Value = serde_json::from_slice(&fs::read(fixture.0.join("manifest.json")).unwrap()).unwrap();
+        manifest["assets"] = serde_json::json!(["asset.bin"]);
+        let mut digest = Sha256::new();
+        for (name, bytes) in [("app.mjs", source.as_slice()), ("app.mjs.map", map.as_slice()), ("asset.bin", payload.as_slice())] {
+            digest.update(name.as_bytes()); digest.update([0]); digest.update(bytes); digest.update([0]);
+        }
+        manifest["buildId"] = serde_json::json!(format!("sha256:{:x}", digest.finalize()));
+        fs::write(fixture.0.join("manifest.json"), serde_json::to_vec(&manifest).unwrap()).unwrap();
+        let package = Package::load(&fixture.0).unwrap();
+        assert_eq!(package.asset_bytes("asset.bin"), Some(payload.as_slice()));
+        for name in ["ambient.bin", "app.mjs", "app.mjs.map", "manifest.json", "../asset.bin"] {
+            assert_eq!(package.asset_bytes(name), None);
+        }
+        fs::write(fixture.0.join("asset.bin"), b"replaced after verification").unwrap();
+        assert_eq!(package.asset_bytes("asset.bin"), Some(payload.as_slice()));
+        let retained = package.image_assets().next().unwrap().1;
+        assert_eq!(retained.as_ref(), payload);
+        assert!(Package::load(&fixture.0).is_err(), "a new load still verifies the changed bytes");
     }
 
     #[test]

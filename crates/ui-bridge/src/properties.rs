@@ -61,6 +61,13 @@ impl Mutation {
                 Ok(Self::Style(Style::Object(properties)))
             }
             "id" => Ok(Self::Attribute("id", string(value)?)),
+            "src" => {
+                let source = string(value)?;
+                if source.as_ref().is_some_and(|source| source.len() > 4096) {
+                    return Err(Exception::throw_type(ctx, "src exceeds 4096 UTF-8 bytes"));
+                }
+                Ok(Self::Attribute("src", source))
+            }
             "title" => Ok(Self::Attribute("title", string(value)?)),
             "tabIndex" if empty => Ok(Self::Attribute("tabindex", None)),
             "tabIndex" => {

@@ -5,6 +5,31 @@ Native TSX components and reactive primitives for the zgui host. Use the package
 not browser elements. `renderApp` owns the mounted subtree and returns its
 idempotent disposer.
 
+## Native images
+
+`<Image src="assets/icon.png" />` and intrinsic `<image src="assets/icon.png" />`
+use the production native image loader, including intrinsic sizing, decode demand,
+device-scale variants and GPU attachment. Import `Image` and `ImageProps` from
+`@zgui/ui`. A reactive `src` change retires the previous request; null or undefined
+clears it. Images do not accept children.
+
+Live and preview packages resolve image sources as exact manifest-declared asset
+paths backed by integrity-verified immutable bytes, independent of the host's
+working directory. Native CSS supports gradients but not URL-backed backgrounds;
+package policies reject CSS URL, import and image-set references rather than
+silently showing blank pixels. Live images use ordinary native asynchronous
+publication. Strict preview publication waits for a complete native worker batch
+and never advances the application clock.
+Live package reload retires old image requests, caches and replay leases before
+mounting the next owner, so identical paths cannot reuse a previous generation's pixels.
+Readiness additionally requires successful native texture upload and current atlas
+residency for the demanded variant. A native atlas allocation refusal is an asset
+failure, not a successfully rendered blank image; graphics-device upload errors
+remain distinct graphics failures.
+Only paint-visible resources block `required-visible` captures: native surface
+bounds, ancestor clips, transforms and current opacity determine that visibility.
+Offscreen source changes may remain decoded but unuploaded until brought into view.
+
 ## Native text controls
 
 ```tsx

@@ -65,7 +65,14 @@ export type TextAreaProps = Omit<NativeTextControlProps, "role">;
 export declare function TextField(props: TextFieldProps): NativeNode;
 /** Multiline native editor. Defaults to tabIndex 0 and owns the multilineTextInput role. */
 export declare function TextArea(props: TextAreaProps): NativeNode;
-export type NativeTag = "box" | "row" | "column" | "stack" | "text" | "label" | "scroll" | "control" | "field" | "editor";
+/** Native replaced image; pixels are decoded and attached by the native image loader. */
+export interface ImageProps extends Omit<NativeElementProps, "children"> {
+  children?: never;
+  /** Exact manifest asset path in package-only previews; null/undefined clears the source. */
+  src?: string | null;
+}
+export declare function Image(props: ImageProps): NativeNode;
+export type NativeTag = "image" | "box" | "row" | "column" | "stack" | "text" | "label" | "scroll" | "control" | "field" | "editor";
 export interface ReactiveOptions { name?: string; }
 export interface MemoOptions<T> extends ReactiveOptions {
   equals?: false | ((previous: T, next: T) => boolean);

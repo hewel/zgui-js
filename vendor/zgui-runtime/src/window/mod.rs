@@ -29,6 +29,8 @@ mod select;
 mod sheets;
 mod surface_focus;
 mod value;
+#[cfg(test)]
+mod resource_tests;
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -86,6 +88,8 @@ pub const ATLAS_SOFT_BYTES: u64 = 64 * 1024 * 1024;
 pub struct WindowContent {
     /// The application's own stylesheets, as text. They cascade in this order.
     pub stylesheets: Vec<String>,
+    /// Image source authority. Application policy cannot be overridden by a child window.
+    pub image_policy: crate::ImagePolicy,
     /// This window's own sheets, cascaded after the application's, in this order.
     ///
     /// For the window that is not the application: an inspector, a preferences panel, a palette.
@@ -110,6 +114,7 @@ impl WindowContent {
     pub(crate) fn layered_with(&self, window: &Self) -> Self {
         Self {
             stylesheets: self.stylesheets.clone(),
+            image_policy: self.image_policy.clone(),
             window_stylesheets: window
                 .stylesheets
                 .iter()
@@ -601,10 +606,11 @@ impl Window {
             ..zgui_atlas::AtlasLimits::default()
         };
         // The `- 2` keeps a maximal decode allocatable once the atlas pads the tile.
-        let images = crate::images::ImageLoader::new(
+        let mut images = crate::images::ImageLoader::new(
             Arc::clone(&replaced_images),
             (atlas_limits.max_texture_size - 2).max(1) as u32,
         );
+        images.configure(options.image_policy.clone());
         let sources = images.source_queue();
         let secure_changes: Rc<RefCell<Vec<zgui_dom::NodeKey>>> = Rc::default();
         let secure_heard = Rc::clone(&secure_changes);
@@ -639,6 +645,7 @@ impl Window {
             .iter()
             .chain(&options.window_stylesheets)
         {
+            if !images.audit_css(css) { continue; }
             let borrowed = document.borrow();
             let (handle, diagnostics) =
                 engine.add_sheet(&borrowed, SheetOrigin::Author, SheetSource::Text(css));
@@ -805,6 +812,37 @@ impl Window {
             handle,
             cursor: zgui_platform::CursorStyle::Default,
         }
+    }
+
+    /// Current owned native image readiness, including retired source generations.
+    pub fn image_resources(&self) -> crate::ImageResources {
+        self.images.resources(&self.content)
+    }
+
+    /// Replaces package authority between a stopped owner and the next owner's mount.
+    ///
+    /// Retires old image requests, cancels old completion publication, and releases image
+    /// attachments, intrinsic claims, paint replay leases and source caches. Existing source
+    /// assignments are not rebound: the new owner must mount under the new policy.
+    /// Request generations and atlas handles remain monotonic across replacements.
+    pub fn replace_image_policy(&mut self, policy: crate::ImagePolicy) {
+        self.painter.clear_records(&mut self.scene, &self.content.tile_owner());
+        self.images.replace_policy(policy, &self.document, &mut self.content);
+        self.damage = zgui_bits::DamageSet::full();
+        self.request_frame();
+    }
+
+    /// Monotonic readiness revision, independent of document mutations.
+    pub fn image_resource_revision(&self) -> u64 {
+        self.images.revision()
+    }
+
+    /// Stages a complete strict worker batch in launch order without entering JS or drawing.
+    /// False means workers remain outstanding; callers wait under their own real deadline.
+    pub fn poll_image_barrier(&mut self) -> bool {
+        let ready = self.images.poll_barrier();
+        if ready && self.images.has_arrivals() { self.request_frame(); }
+        ready
     }
 
     /// The handle the application holds this window by.

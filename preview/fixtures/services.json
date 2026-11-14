@@ -1,0 +1,40 @@
+{
+  "schemaVersion": 1,
+  "id": "scripted-services",
+  "services": {
+    "assets": {
+      "provider": "mock-text-assets-v1",
+      "latencyMs": 20,
+      "initialState": { "assets": { "assets/message.txt": {} } }
+    },
+    "niri": {
+      "provider": "mock-niri-v1",
+      "latencyMs": 0,
+      "initialState": {
+        "windows": [],
+        "workspaces": [
+          {
+            "id": "18446744073709551615", "index": 1, "name": "Preview", "output": "fixture-output",
+            "urgent": false, "active": true, "focused": true, "activeWindowId": null
+          }
+        ]
+      }
+    }
+  },
+  "events": [
+    {
+      "atMs": 50,
+      "channel": "niri.state",
+      "value": { "windows": [], "workspaces": [] }
+    },
+    {
+      "atMs": 100,
+      "channel": "assets.state",
+      "value": {
+        "assets": {
+          "assets/message.txt": { "error": { "code": "Io", "message": "scripted text service failure" } }
+        }
+      }
+    }
+  ]
+}

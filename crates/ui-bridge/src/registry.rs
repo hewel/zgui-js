@@ -55,6 +55,8 @@ pub enum BridgeError {
     TextParent,
     EditableParent,
     NotEditable,
+    NotImage,
+    ImageParent,
     WrongParent,
     InvalidAnchor,
     Cycle,
@@ -76,6 +78,8 @@ impl fmt::Display for BridgeError {
             Self::TextParent => f.write_str("text nodes cannot contain children"),
             Self::EditableParent => f.write_str("editable controls cannot contain reconciled children"),
             Self::NotEditable => f.write_str("value, defaultValue, and readOnly require a field or editor"),
+            Self::NotImage => f.write_str("src requires an image element"),
+            Self::ImageParent => f.write_str("image elements cannot contain reconciled children"),
             Self::WrongParent => f.write_str("node is not a child of the supplied parent"),
             Self::InvalidAnchor => f.write_str("insertion anchor is not a child of the supplied parent"),
             Self::Cycle => f.write_str("insertion would create a topology cycle"),
@@ -92,6 +96,7 @@ enum Kind {
     Field,
     Editor,
     Text,
+    Image,
 }
 
 struct Record {
@@ -206,6 +211,7 @@ impl NodeRegistry {
                         Kind::Element => "element",
                         Kind::Field => "field",
                         Kind::Editor => "editor",
+                        Kind::Image => "image",
                         Kind::Text => "text",
                     },
                 });
@@ -269,6 +275,7 @@ impl NodeRegistry {
         let kind = match tag {
             "field" => Kind::Field,
             "editor" => Kind::Editor,
+            "image" => Kind::Image,
             "box" | "row" | "column" | "stack" | "text" | "label" | "scroll" | "control" => Kind::Element,
             _ => return Err(BridgeError::UnsupportedTag(tag.to_owned())),
         };
@@ -306,6 +313,11 @@ impl NodeRegistry {
         }
     }
 
+    pub(crate) fn require_image(&self, node: Handle) -> Result<(), BridgeError> {
+        if self.validate(node)?.kind == Kind::Image { Ok(()) }
+        else { Err(BridgeError::NotImage) }
+    }
+
     pub fn insert(
         &mut self,
         parent: Handle,
@@ -323,6 +335,9 @@ impl NodeRegistry {
         }
         if matches!(self.records[&parent.token].kind, Kind::Field | Kind::Editor) {
             return Err(BridgeError::EditableParent);
+        }
+        if self.records[&parent.token].kind == Kind::Image {
+            return Err(BridgeError::ImageParent);
         }
         let anchor_native = if let Some(anchor) = anchor {
             let record = self.validate(anchor)?;

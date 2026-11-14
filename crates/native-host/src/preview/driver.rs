@@ -5,10 +5,12 @@ use zgui::{geom::{DevicePx, Size}, platform::{AppHandler, ColorScheme, IdlePolic
 use zgui_platform_headless::{Harness, Headless};
 
 use crate::{Binding, MountRegion, Root, package::Package, session::{ResourceCounts, Session, SessionPolicy}};
-use super::{Error, capture::{self, CaptureHandle}, inspect, output::Output, profile::{Limits, LoadedProfile}};
+use super::{Error, capture::{self, CaptureHandle}, clock::Environment, fixture::FixtureDefinition, inspect, output::Output, profile::{self, Limits, LoadedProfile, Surface}, resources};
+use crate::work::{ContractFailure,fixture::FixtureRuntime};
 use super::semantics::SemanticModel;
 
 mod actions;
+mod timeline;
 
 pub type SharedOutput = Rc<RefCell<Output>>;
 
@@ -18,6 +20,11 @@ pub struct Fault {
 }
 impl From<Error> for Fault {
     fn from(error: Error) -> Self { Self { error, diagnostic: None } }
+}
+impl From<ContractFailure> for Fault {
+    fn from(error:ContractFailure)->Self {
+        Error::new(error.code,if error.code=="E_ASSERTION"{4}else{6},error.message).into()
+    }
 }
 impl Fault {
     fn application(error: Box<dyn std::error::Error>) -> Self {
@@ -45,6 +52,8 @@ struct OwnedFrame {
     revision: u64,
     configuration: u64,
     metadata_revision: u64,
+    resource_revision: u64,
+    surface_configuration: u64,
     native_nodes: Vec<ui_bridge::registry::SnapshotNode>,
     presentation: u64,
     frame: Value,
@@ -58,11 +67,13 @@ struct Probe {
     build_id: String,
     action: Cell<u64>,
     frames: Cell<u64>,
+    surface_configuration: Cell<u64>,
     last: RefCell<Option<OwnedFrame>>,
     presentation: RefCell<Option<Value>>,
     fault: RefCell<Option<Error>>,
     surface: RefCell<Option<std::sync::Arc<zgui_platform_headless::OffscreenSurface>>>,
     semantics: RefCell<SemanticModel>,
+    environment: Rc<Environment>,
 }
 impl FrameProbe for Probe {
     fn frame_ended(&self, window: &Window) {
@@ -76,6 +87,10 @@ impl FrameProbe for Probe {
         }
         let Some(session) = self.session.borrow().upgrade() else { return; };
         if session.region.document != window.document_id() { return; }
+        let resources=match resources::snapshot(window,&[]) {
+            Ok(resources)=>resources,
+            Err(error)=>{ *self.fault.borrow_mut()=Some(error); return; }
+        };
         let state = self.capture.state();
         let stamp = json!({"ordinal":observation.ordinal,"timeUs":observation.timestamp.since_origin().as_micros(),
             "drawId":state.draw_id,"outcome":format!("{:?}",observation.outcome)});
@@ -91,13 +106,17 @@ impl FrameProbe for Probe {
         let mut tree = snapshot.tree;
         tree["buildId"] = json!(self.build_id);
         tree["presentationSequence"] = json!(state.presentation_id);
+        tree["resourceRevision"]=json!(window.image_resource_revision());
+        tree["surfaceConfiguration"]=json!(self.surface_configuration.get());
         let frame = json!({"schemaVersion":1,"buildId":self.build_id,"generation":session.generation,"surface":"main",
             "documentIdentity":format!("{:?}",window.document_id()),"actionSequence":self.action.get(),
             "requiredStateRevision":observation.document_revision,"validatedStateRevision":observation.document_revision,
             "layoutRevision":observation.layout_revision,"configurationId":state.configuration_id,
             "metadataRevision":snapshot.metadata_revision,
+            "resourceRevision":window.image_resource_revision(),
+            "surfaceConfiguration":self.surface_configuration.get(),
             "validationFrame":stamp,"pixelPresentation":presentation,"layoutDocumentCoherent":true,
-            "timingDeterministic":false,"resources":{"nativeReadinessAvailable":false,"generation":null},
+            "timingDeterministic":self.environment.is_virtual(),"resources":resources,
             "scale":window.surface().scale_factor(),"renderer":self.capture.metadata()});
         // Persist complete owned evidence before another callback can fail or block.
         // No readback, redraw request, signal write, or application entry occurs in this probe.
@@ -110,7 +129,8 @@ impl FrameProbe for Probe {
         if let Err(error) = publication { *self.fault.borrow_mut() = Some(error); return; }
         *self.last.borrow_mut() = Some(OwnedFrame { revision: observation.document_revision,
             configuration: state.configuration_id, presentation: state.presentation_id, frame, tree,
-            metadata_revision:snapshot.metadata_revision,native_nodes:snapshot.native_nodes });
+            metadata_revision:snapshot.metadata_revision,resource_revision:window.image_resource_revision(),
+            surface_configuration:self.surface_configuration.get(),native_nodes:snapshot.native_nodes });
     }
 }
 
@@ -126,6 +146,8 @@ struct PreviewHost {
     font_css: String,
     fault: Option<Fault>,
     requested_metadata: u64,
+    environment: Rc<Environment>,
+    fixtures: Rc<FixtureRuntime>,
 }
 impl PreviewHost {
     fn fail(&mut self, cx: &dyn PlatformCx, fault: Fault) {
@@ -146,7 +168,8 @@ impl PreviewHost {
                 self.fail(cx, Error::new("E_HOST_INVARIANT", 9, "mount region has no current surface").into()); return;
             };
             let prepared = Session::prepare(region, Some(self.package.clone()), 1, cx.waker(), window.surface().id(),
-                self.executor.clone(), SessionPolicy::Preview { limits:self.limits.clone(), deadline:self.deadline.clone() });
+                self.executor.clone(), SessionPolicy::Preview { limits:self.limits.clone(), deadline:self.deadline.clone(),
+                    environment:self.environment.clone(),fixtures:self.fixtures.clone() });
             let session = match prepared { Ok(session) => session, Err(error) => { self.fail(cx, Fault::application(error)); return; } };
             window.install_binding(Box::new(Binding(Rc::downgrade(&session))));
             *self.probe.session.borrow_mut() = Rc::downgrade(&session);
@@ -190,14 +213,27 @@ pub struct Driver {
     limits: Limits,
     opaque: bool,
     dimensions: (u32,u32),
+    surface: Surface,
+    environment: Rc<Environment>,
+    pub(super) fixtures: Rc<FixtureRuntime>,
+    maximum_time_us: u64,
 }
 impl Driver {
-    pub fn new(profile: &LoadedProfile, package: Rc<Package>, output: SharedOutput, run_deadline: Instant) -> Result<Self, Fault> {
+    pub fn new(profile: &LoadedProfile, package: Rc<Package>, fixture:FixtureDefinition, output: SharedOutput, run_deadline: Instant) -> Result<Self, Fault> {
+        let platform=Headless::new();
+        let (epoch,start)=match profile.profile.clock {
+            profile::Clock::Virtual{epoch_ms,start_us}=>(Some(epoch_ms),start_us),
+            profile::Clock::Wall{}=>(None,0),
+        };
+        platform.virtual_clock().advance(Duration::from_micros(start));
+        let environment=Environment::new(platform.clock(),epoch,profile.profile.random.seed);
+        let fixtures=FixtureRuntime::new(fixture,environment.clone());
         let capture = CaptureHandle::default();
         let probe = Rc::new(Probe { capture:capture.clone(),session:RefCell::new(Weak::new()),output,
             build_id:package.manifest.build_id.clone(),action:Cell::new(0),frames:Cell::new(0),
+            surface_configuration:Cell::new(0),
             last:RefCell::new(None),presentation:RefCell::new(None),fault:RefCell::new(None),
-            surface:RefCell::new(None),semantics:RefCell::new(SemanticModel::default()) });
+            surface:RefCell::new(None),semantics:RefCell::new(SemanticModel::default()),environment:environment.clone() });
         let pending = Rc::new(RefCell::new(Vec::new()));
         let fonts = profile.fonts.clone();
         let metrics = profile.fonts.clone();
@@ -211,6 +247,7 @@ impl Driver {
             .with_text_engine(Box::new(move ||Box::new(zgui_layout::Paragraphs::new(fonts.shaper()))))
             .with_glyph_raster(Box::new(move ||raster.raster()));
         app.attributes_mut().transparent = !surface.opaque;
+        app=resources::configure(app,&package);
         let mount_regions = pending.clone();
         let native = app.into_handler(move |cx| Box::new(zgui::view::View::build(Root(mount_regions.clone()), cx))).map_err(graphics_error)?;
         let deadline = Rc::new(Cell::new(run_deadline.min(Instant::now()+Duration::from_millis(profile.profile.limits.max_step_wall_ms))));
@@ -224,8 +261,8 @@ impl Driver {
         let host = PreviewHost { native,pending,package,session:None,
             executor:host_services::Executor::new(2,64).map_err(|error|Error::new("E_HOST_INVARIANT",9,error.to_string()))?,
             deadline:deadline.clone(),limits,probe:probe.clone(),
-            font_css:format!(":root {{ font-family:{}; }}",profile.font_family_css),fault:None,requested_metadata:0 };
-        let platform = Headless::new();
+            font_css:format!(":root {{ font-family:{}; }}",profile.font_family_css),fault:None,requested_metadata:0,
+            environment:environment.clone(),fixtures:fixtures.clone() };
         platform.set_color_scheme(Some(if profile.profile.theme == "dark" { ColorScheme::Dark } else { ColorScheme::Light }));
         let mut harness = Harness::over(platform, host);
         harness.hold_clock(true);
@@ -240,7 +277,8 @@ impl Driver {
             harness.deliver(surface_id, SurfaceEvent::Focused(true));
         }
         Ok(Self { harness,probe,capture,deadline,run_deadline,step_start_frame:Cell::new(0),limits:profile.profile.limits.clone(),
-            opaque:surface.opaque,dimensions:(profile.physical_width,profile.physical_height) })
+            opaque:surface.opaque,dimensions:(profile.physical_width,profile.physical_height),surface:surface.clone(),
+            environment,fixtures,maximum_time_us:start+profile.profile.limits.max_virtual_duration_ms*1000 })
     }
     pub fn begin_step(&self, action: u64, timeout_ms: Option<u64>) {
         self.probe.action.set(action);
@@ -261,6 +299,11 @@ impl Driver {
         self.harness.app().native.windows().iter().find(|window|window.document_id()==session.region.document)
             .ok_or_else(||Error::new("E_HOST_INVARIANT",9,"logical main surface has no current native window"))
     }
+    fn window_mut(&mut self)->Result<&mut Window,Error> {
+        let document=self.harness.app().session.as_ref().ok_or_else(||Error::new("E_HOST_INVARIANT",9,"no mounted session"))?.region.document;
+        self.harness.app_mut().native.windows_mut().iter_mut().find(|window|window.document_id()==document)
+            .ok_or_else(||Error::new("E_HOST_INVARIANT",9,"logical main surface has no current native window"))
+    }
     fn frame_current(&self) -> bool {
         let Ok(window) = self.window() else { return false; };
         let state = self.capture.state();
@@ -268,6 +311,8 @@ impl Driver {
         last.as_ref().is_some_and(|last| last.revision==window.dom().revision() && last.configuration==state.configuration_id
             && last.presentation==state.presentation_id && state.presented_draw.is_some()
             && self.harness.app().session.as_ref().is_some_and(|session|session.bridge.metadata_revision()==last.metadata_revision)
+            && last.resource_revision==window.image_resource_revision()
+            && last.surface_configuration==self.probe.surface_configuration.get()
             && window.completed_frame().is_some_and(|frame| frame.layout_document_coherent
                 && Some(frame.ordinal)==last.frame["validationFrame"]["ordinal"].as_u64()
                 && matches!(frame.outcome,FrameOutcome::Presented(_)|FrameOutcome::Skipped(SkipReason::Undamaged))))
@@ -276,32 +321,86 @@ impl Driver {
         self.harness.platform().has_pending_wakes()
             || self.window().ok().and_then(|window|self.harness.platform().offscreen(window.surface().id())).is_some_and(|surface|surface.has_pending_redraw())
             || self.harness.parked_deadline().is_some_and(|next|next<=self.harness.now())
+            || self.fixtures.next_deadline_us().is_some_and(|next|next<=self.environment.now_us())
     }
     pub fn readiness(&self) -> Value {
+        let resources=self.window().ok().map(|window|resources::snapshot(window,&[]));
+        let resource=resources.as_ref().and_then(|result|result.as_ref().ok());
         json!({"appReady":self.harness.app().session.is_some(),"currentWorkSettled":!self.runnable(),
-            "requiredAssetsReady":null,"nativeAssetReadinessAvailable":false,"frameCurrent":self.frame_current(),
-            "timeUs":self.harness.platform().clock().timestamp().since_origin().as_micros(),
-            "nextNativeDeadlineUs":self.harness.parked_deadline().map(|next|self.harness.platform().clock().timestamp().since_origin().as_micros()+next.saturating_duration_since(self.harness.now()).as_micros()),
+            "requiredAssetsReady":resource.map(|value|&value["requiredAssetsReady"]),"nativeAssetReadinessAvailable":true,"frameCurrent":self.frame_current(),
+            "resourceRevision":self.window().ok().map(Window::image_resource_revision),
+            "pendingAssets":resource.and_then(|value|value["pendingIds"].as_array()).map(|items|items.len()),
+            "timeUs":self.environment.now_us(),"nextFixtureDeadlineUs":self.fixtures.next_deadline_us(),
+            "nextNativeDeadlineUs":self.harness.parked_deadline().map(|next|next.saturating_duration_since(self.harness.platform().clock().origin()).as_micros()),
             "requiredMetadataRevision":self.harness.app().session.as_ref().map(|session|session.bridge.metadata_revision()),
             "requiredStateRevision":self.window().ok().map(|window|window.dom().revision()),"generation":1})
     }
+    fn notify_fixture(&self)->Result<(),Error> {
+        let surface=self.window()?.surface().id();
+        self.harness.platform().waker().wake(WakeReason::ReactiveWork{surfaces:vec![surface].into_boxed_slice()});
+        Ok(())
+    }
+    fn wait_asset_barrier(&mut self)->Result<(),Fault> {
+        self.check()?;
+        loop {
+            if self.window_mut()?.poll_image_barrier() { return Ok(()); }
+            self.check().map_err(|mut fault| {
+                if fault.error.code=="E_READINESS_TIMEOUT" { fault.error=Error::new("E_ASSET_TIMEOUT",5,"native resource publication exceeded its real deadline"); }
+                fault
+            })?;
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    }
+    fn pump_current(&mut self)->Result<(),Fault> {
+        self.wait_asset_barrier()?;
+        if !self.environment.is_virtual() {
+            self.harness.advance(Instant::now().saturating_duration_since(self.harness.now()));
+        }
+        if self.fixtures.release_due()? { self.notify_fixture()?; }
+        self.harness.pump();
+        self.check()
+    }
     pub fn settle(&mut self, require_frame: bool) -> Result<Value, Fault> {
         for _ in 0..self.limits.max_settle_turns {
-            self.check()?;
-            // Wall profiles mirror elapsed monotonic time, never a fabricated fixed frame step.
-            self.harness.advance(Instant::now().saturating_duration_since(self.harness.now()));
-            self.harness.pump();
-            self.check()?;
-            if !self.runnable() && (!require_frame || self.frame_current()) { return Ok(self.readiness()); }
+            self.pump_current()?;
             if matches!(self.capture.last_outcome(),Some(FrameOutcome::Skipped(SkipReason::DeviceUnavailable))) {
                 return Err(Error::new("E_DEVICE_LOST",7,"native graphics device became unavailable").into());
             }
+            if !self.runnable() && (!require_frame || self.frame_current()) { return Ok(self.readiness()); }
+            if !self.runnable() && self.environment.is_virtual() {
+                return Err(Error::new("E_CAPTURE_NOT_READY",5,"a future native deadline requires explicit clock.advance")
+                    .with_details(self.readiness()).into());
+            }
             if !self.runnable() { std::thread::sleep(Duration::from_millis(1)); }
         }
-        Err(Error::new("E_CAPTURE_NOT_READY",5,format!("bounded native pump did not reach readiness: {}",self.readiness())).into())
+        Err(Error::new("E_JOB_BUDGET",5,format!("bounded native pump exhausted current-work turns: {}",self.readiness())).into())
     }
-    pub fn capture(&mut self, id: &str) -> Result<Value, Fault> {
-        let readiness = self.settle(true)?;
+    pub fn capture(&mut self, id: &str,required_time:Option<u64>,allowed_pending:&[String]) -> Result<Value, Fault> {
+        if let Some(time)=required_time {
+            if time!=self.environment.now_us() {
+                return Err(Error::new("E_CAPTURE_NOT_READY",5,"requiredFrameTimeUs differs from the current virtual clock")
+                    .with_details(self.readiness()).into());
+            }
+            if self.probe.last.borrow().as_ref().and_then(|last|last.frame["validationFrame"]["timeUs"].as_u64())!=Some(time) {
+                self.window()?.request_frame();
+            }
+        }
+        // An explicit placeholder capture may reuse an already coherent frame before publishing
+        // asynchronous arrivals. Whether a worker happened to finish cannot change this decision.
+        if allowed_pending.is_empty() || !self.frame_current() || self.runnable() { self.settle(true)?; }
+        let mut resource=resources::snapshot(self.window()?,allowed_pending)?;
+        for _ in 0..self.limits.max_settle_turns {
+            if resource["requiredAssetsReady"]==true { break; }
+            self.settle(true)?;
+            resource=resources::snapshot(self.window()?,allowed_pending)?;
+        }
+        if resource["requiredAssetsReady"]!=true {
+            return Err(Error::new("E_ASSET_TIMEOUT",5,"visible resources did not reach current native demand").into());
+        }
+        let readiness=self.readiness();
+        if required_time.is_some_and(|time|self.probe.last.borrow().as_ref().and_then(|last|last.frame["validationFrame"]["timeUs"].as_u64())!=Some(time)) {
+            return Err(Error::new("E_CAPTURE_NOT_READY",5,"validation frame timestamp differs from requiredFrameTimeUs").with_details(readiness).into());
+        }
         let pixels = self.capture.read_current(self.window()?.renderer())?;
         self.check()?;
         if pixels.pixels.size().width != self.dimensions.0 as i32 || pixels.pixels.size().height != self.dimensions.1 as i32 {
@@ -317,6 +416,8 @@ impl Driver {
         let mut frame = last.frame.clone();
         frame["captureId"] = json!(id);
         frame["readiness"] = readiness;
+        frame["resources"]=resource;
+        frame["allowedPendingAssets"]=json!(allowed_pending);
         frame["physicalWidth"] = json!(pixels.pixels.size().width);
         frame["physicalHeight"] = json!(pixels.pixels.size().height);
         frame["pngDigest"] = json!(super::output::digest(&png));

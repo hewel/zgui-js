@@ -6,3 +6,4 @@ export {
 export { renderApp } from "./render-app.js";
 export { Button } from "./button.js";
 export { TextField, TextArea } from "./text-control.js";
+export { Image } from "./image.js";

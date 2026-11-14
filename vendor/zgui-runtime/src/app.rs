@@ -317,6 +317,12 @@ impl App {
         self
     }
 
+    /// Selects image source authority and publication policy before any window mounts.
+    pub fn with_image_policy(mut self, policy: crate::ImagePolicy) -> Self {
+        self.options.image_policy = policy;
+        self
+    }
+
     /// Installs what builds the renderer each window draws through.
     pub fn with_renderer(mut self, factory: RendererFactory) -> Self {
         self.renderer = Some(factory);

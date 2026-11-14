@@ -1,4 +1,4 @@
-import { TextField, TextArea, renderApp } from "@zgui/ui";
+import { Image, TextField, TextArea, renderApp } from "@zgui/ui";
 import type { NativeNode } from "@zgui/ui";
 
 // @ts-expect-error Browser document is not a host global.
@@ -45,8 +45,14 @@ const htmlField = <TextField type="password" />;
 const selectionSetter = <TextArea selectionStart={0} />;
 // @ts-expect-error Event selection is an owned read-only snapshot.
 const mutableSelection = <TextField onInput={event => { event.selection.start = 1; }} />;
-// @ts-expect-error Image assets have not passed their integration gate.
-const image = <image />;
+// @ts-expect-error Native image sources are strings, never browser source objects.
+const image = <image src={{ src: "assets/icon.png" }} />;
+// @ts-expect-error src belongs only to native image elements.
+const boxSource = <box src="assets/icon.png" />;
+// @ts-expect-error Native replaced images cannot reconcile children.
+const imageChildren = <Image src="assets/icon.png">Child</Image>;
+// @ts-expect-error Browser responsive image selection is not a supported contract.
+const imageSet = <image srcSet="assets/icon.png 2x" />;
 // @ts-expect-error Arbitrary native properties are not accepted.
 const property = <text arbitrary="unsupported" />;
 // @ts-expect-error HTML spellings are not aliases for native properties.

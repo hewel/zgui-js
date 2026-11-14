@@ -338,3 +338,53 @@ fn css_strings_deliberately_keep_native_error_recovery() {
     native.script("__zgui.setProperty(node, 'style', 'unknown-property: nope; width: 10px; height: invalid; --ok: 3px'); 'parse'");
     assert_eq!(native.style().0, BTreeSet::from(["width".into(), "--ok".into()]));
 }
+
+#[test]
+fn image_sources_use_real_native_attributes_and_cannot_leak_to_other_elements() {
+    let mut native = NativeProperties::new();
+    let heard = Rc::new(RefCell::new(Vec::new()));
+    let changes = Rc::clone(&heard);
+    native.backend.set_attribute_hook(Rc::new(move |_, name, value| {
+        if name.as_str() == "src" { changes.borrow_mut().push(value.map(str::to_owned)); }
+    }));
+    native.script(r#"
+        const image = __zgui.createElement('image');
+        __zgui.insertNode(root, image, null);
+        __zgui.setProperty(image, 'src', 'assets/first.png');
+        __zgui.setProperty(image, 'src', 'assets/second.png');
+        __zgui.setProperty(image, 'src', null);
+        __zgui.setProperty(image, 'src', 'assets/third.png');
+        __zgui.setProperty(image, 'src', undefined);
+        for (const target of [root, node, __zgui.createTextNode('text')]) {
+            let rejected = false;
+            try { __zgui.setProperty(target, 'src', 'ambient.png'); }
+            catch (error) { rejected = String(error).includes('src requires an image'); }
+            if (!rejected) throw Error('src accepted on non-image');
+        }
+        for (const invalid of [3, {}, false, 'x'.repeat(4097)]) {
+            let rejected = false;
+            try { __zgui.setProperty(image, 'src', invalid); } catch { rejected = true; }
+            if (!rejected) throw Error('invalid src accepted');
+        }
+        let childrenRejected = false;
+        try { __zgui.insertNode(image, __zgui.createTextNode('forbidden'), null); }
+        catch (error) { childrenRejected = String(error).includes('image elements cannot contain'); }
+        if (!childrenRejected) throw Error('image accepted children');
+        'sources'
+    "#);
+    assert_eq!(&*heard.borrow(), &[
+        Some("assets/first.png".into()), Some("assets/second.png".into()), None,
+        Some("assets/third.png".into()), None,
+    ]);
+    assert_eq!(native.bridge.snapshot(10).nodes[2].kind, "image");
+    assert_eq!(native.attribute("src"), None);
+    native.bridge.begin_stop();
+    native.script(r#"
+        let rejected = false;
+        try { __zgui.setProperty(image, 'src', 'assets/late.png'); }
+        catch (error) { rejected = error instanceof ReferenceError; }
+        if (!rejected) throw Error('retiring owner allocated image work');
+        __zgui.setProperty(image, 'src', null);
+        'retired'
+    "#);
+}

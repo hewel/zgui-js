@@ -31,12 +31,17 @@ pub struct Scenario {
 #[derive(Debug, Clone)]
 pub enum Step {
     Settle { id: String, timeout_ms: Option<u64> },
-    Capture { id: String, capture_id: String, required_frame_time_us: Option<u64> },
+    Capture { id: String, capture_id: String, required_frame_time_us: Option<u64>, allowed_pending_assets: Vec<String> },
     PointerMove { id: String, location: PointerLocation },
     PointerClick { id: String, location: PointerLocation, button: PointerButton },
     KeyPress { id: String, surface: String, key: Key, modifiers: Vec<Modifier> },
     TextCommit { id: String, surface: String, text: String },
     Assert { id: String, target: Target, check: Check },
+    ClockAdvance { id: String, by_ms: u64 },
+    ServiceEmit { id: String, channel: String, value: serde_json::Value },
+    AssertService { id: String, check: ServiceCallCheck },
+    SurfaceResize { id: String, surface: String, width: u32, height: u32 },
+    SurfaceScale { id: String, surface: String, scale: f64 },
 }
 
 impl Step {
@@ -45,7 +50,9 @@ impl Step {
             Self::Settle { id, .. } | Self::Capture { id, .. }
             | Self::PointerMove { id, .. } | Self::PointerClick { id, .. }
             | Self::KeyPress { id, .. } | Self::TextCommit { id, .. }
-            | Self::Assert { id, .. } => id,
+            | Self::Assert { id, .. } | Self::AssertService { id, .. }
+            | Self::ClockAdvance { id, .. } | Self::ServiceEmit { id, .. }
+            | Self::SurfaceResize { id, .. } | Self::SurfaceScale { id, .. } => id,
         }
     }
 
@@ -57,7 +64,11 @@ impl Step {
             Self::PointerClick { .. } => "pointer.click",
             Self::KeyPress { .. } => "key.press",
             Self::TextCommit { .. } => "text.commit",
-            Self::Assert { .. } => "assert",
+            Self::Assert { .. } | Self::AssertService { .. } => "assert",
+            Self::ClockAdvance { .. } => "clock.advance",
+            Self::ServiceEmit { .. } => "service.emit",
+            Self::SurfaceResize { .. } => "surface.resize",
+            Self::SurfaceScale { .. } => "surface.scale",
         }
     }
 }
@@ -143,6 +154,17 @@ pub enum Check {
     Value(String),
 }
 
+super::schema::object_struct! {
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    pub struct ServiceCallCheck {
+        pub service:String,
+        pub method:String,
+        pub count:u64,
+        #[serde(default, deserialize_with = "present", skip_serializing_if = "Option::is_none")]
+        pub error_code:Option<String>,
+    }
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct ScenarioInput {
@@ -169,26 +191,25 @@ enum StepInput {
     TextCommit(TextCommitInput),
     #[serde(rename = "assert")]
     Assert(AssertInput),
-    // Recognize unavailable operations only to reject them as capabilities, never
-    // to accept or execute their future payloads. Supported payloads stay closed.
     #[serde(rename = "clock.advance")]
-    ClockAdvance,
+    ClockAdvance(AdvanceInput),
+    #[serde(rename = "service.emit")]
+    ServiceEmit(EmitInput),
+    #[serde(rename = "surface.resize")]
+    SurfaceResize(ResizeInput),
+    #[serde(rename = "surface.scale")]
+    SurfaceScale(ScaleInput),
+    // Later operations remain explicit capability failures, never silently ignored.
     #[serde(rename = "pointer.drag")]
     PointerDrag,
     #[serde(rename = "wheel")]
     Wheel,
-    #[serde(rename = "service.emit")]
-    ServiceEmit,
     #[serde(rename = "ime.preedit")]
     ImePreedit,
     #[serde(rename = "ime.commit")]
     ImeCommit,
     #[serde(rename = "ime.cancel")]
     ImeCancel,
-    #[serde(rename = "surface.resize")]
-    SurfaceResize,
-    #[serde(rename = "surface.scale")]
-    SurfaceScale,
     #[serde(rename = "wait.until")]
     WaitUntil,
     #[serde(rename = "capture.sequence")]
@@ -212,6 +233,8 @@ struct CaptureInput {
     capture_id: String,
     #[serde(default, deserialize_with = "present_u64")]
     required_frame_time_us: Option<u64>,
+    #[serde(default)]
+    allowed_pending_assets:Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -270,8 +293,29 @@ struct KeyPressInput {
 struct TextCommitInput { id: String, surface: String, text: String }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct AssertInput {
+    id:String,
+    #[serde(default, deserialize_with = "present")]
+    target:Option<TargetInput>,
+    #[serde(default, deserialize_with = "present")]
+    check:Option<Check>,
+    #[serde(default, deserialize_with = "present")]
+    service_call:Option<ServiceCallCheck>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct AdvanceInput { id:String,by_ms:u64 }
+#[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct AssertInput { id: String, target: TargetInput, check: Check }
+struct EmitInput { id:String,channel:String,value:serde_json::Value }
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ResizeInput { id:String,surface:String,width:u32,height:u32 }
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ScaleInput { id:String,surface:String,scale:f64 }
 
 fn present<'de, D: Deserializer<'de>, T: Deserialize<'de>>(input: D) -> Result<Option<T>, D::Error> {
     T::deserialize(input).map(Some)
@@ -340,9 +384,14 @@ fn parse(bytes: &[u8], available: &[&str], virtual_profile: bool) -> Result<Scen
                 if input.required_frame_time_us.is_some() {
                     needs_virtual_time = true;
                 }
+                if input.allowed_pending_assets.len()>4096 || input.allowed_pending_assets.iter().any(|id|!safe_id(id))
+                    || input.allowed_pending_assets.iter().collect::<BTreeSet<_>>().len()!=input.allowed_pending_assets.len() {
+                    return Err(invalid("allowedPendingAssets must contain unique bounded resource IDs"));
+                }
+                if !input.allowed_pending_assets.is_empty() { require(&mut requirements,"assets.native-readiness"); }
                 Step::Capture {
                     id: input.id, capture_id: input.capture_id,
-                    required_frame_time_us: input.required_frame_time_us,
+                    required_frame_time_us: input.required_frame_time_us, allowed_pending_assets:input.allowed_pending_assets,
                 }
             }
             StepInput::PointerMove(input) => {
@@ -366,33 +415,62 @@ fn parse(bytes: &[u8], available: &[&str], virtual_profile: bool) -> Result<Scen
                 Step::TextCommit { id: input.id, surface: input.surface, text: input.text }
             }
             StepInput::Assert(input) => {
-                let target = target(input.target, &mut requirements)?;
-                require(&mut requirements, "tree.inspect");
-                if matches!(&input.check, Check::Role(_) | Check::Name(_)) {
-                    require(&mut requirements, "selectors.semantic");
+                match(input.target,input.check,input.service_call) {
+                    (Some(selected),Some(check),None)=>{
+                        let target=target(selected,&mut requirements)?;
+                        require(&mut requirements,"tree.inspect");
+                        if matches!(&check,Check::Role(_)|Check::Name(_)) { require(&mut requirements,"selectors.semantic"); }
+                        Step::Assert{id:input.id,target,check}
+                    }
+                    (None,None,Some(check))=>{
+                        if !safe_id(&check.service) || check.method.is_empty() || check.method.len()>128
+                            || check.error_code.as_ref().is_some_and(|code|code.is_empty() || code.len()>512) {
+                            return Err(invalid("serviceCall names and optional errorCode must be bounded nonempty strings"));
+                        }
+                        require(&mut requirements,"services.fixtures");
+                        Step::AssertService{id:input.id,check}
+                    }
+                    _=>return Err(invalid("assert requires exactly target/check or serviceCall")),
                 }
-                Step::Assert { id: input.id, target, check: input.check }
+            }
+            StepInput::ClockAdvance(input)=>{
+                needs_virtual_time=true;
+                Step::ClockAdvance{id:input.id,by_ms:input.by_ms}
+            }
+            StepInput::ServiceEmit(input)=>{
+                if !safe_id(&input.channel) || !input.value.is_object() { return Err(invalid("service.emit requires a bounded channel and typed object value")); }
+                require(&mut requirements,"services.fixtures");
+                Step::ServiceEmit{id:input.id,channel:input.channel,value:input.value}
+            }
+            StepInput::SurfaceResize(input)=>{
+                validate_surface(&input.surface)?;
+                if !(1..=16384).contains(&input.width) || !(1..=16384).contains(&input.height) { return Err(invalid("resize dimensions must be 1..16384 logical pixels")); }
+                require(&mut requirements,"surface.resize");
+                Step::SurfaceResize{id:input.id,surface:input.surface,width:input.width,height:input.height}
+            }
+            StepInput::SurfaceScale(input)=>{
+                validate_surface(&input.surface)?;
+                if !input.scale.is_finite() || input.scale<=0.0 || input.scale>8.0 { return Err(invalid("surface scale must be finite and in (0,8]")); }
+                require(&mut requirements,"surface.scale");
+                Step::SurfaceScale{id:input.id,surface:input.surface,scale:input.scale}
             }
             unsupported => {
                 let operation = match unsupported {
-                    StepInput::ClockAdvance => "clock.advance",
                     StepInput::PointerDrag => "pointer.drag",
                     StepInput::Wheel => "wheel",
-                    StepInput::ServiceEmit => "service.emit",
                     StepInput::ImePreedit => "ime.preedit",
                     StepInput::ImeCommit => "ime.commit",
                     StepInput::ImeCancel => "ime.cancel",
-                    StepInput::SurfaceResize => "surface.resize",
-                    StepInput::SurfaceScale => "surface.scale",
                     StepInput::WaitUntil => "wait.until",
                     StepInput::CaptureSequence => "capture.sequence",
                     StepInput::LifecycleReload => "lifecycle.reload",
                     StepInput::Settle(_) | StepInput::Capture(_)
                     | StepInput::PointerMove(_) | StepInput::PointerClick(_)
                     | StepInput::KeyPress(_) | StepInput::TextCommit(_)
-                    | StepInput::Assert(_) => unreachable!(),
+                    | StepInput::Assert(_) | StepInput::ClockAdvance(_) | StepInput::ServiceEmit(_)
+                    | StepInput::SurfaceResize(_) | StepInput::SurfaceScale(_) => unreachable!(),
                 };
-                return Err(unsupported_capability(format!("operation {operation} is unavailable in P2")));
+                return Err(unsupported_capability(format!("operation {operation} is unavailable")));
             }
         };
         steps.push(step);
@@ -582,7 +660,7 @@ mod tests {
 
     #[test]
     fn future_operations_fail_preflight_even_when_not_declared() {
-        for op in ["clock.advance", "pointer.drag", "wheel", "service.emit", "ime.preedit", "ime.commit", "ime.cancel", "surface.resize", "surface.scale", "wait.until", "capture.sequence", "lifecycle.reload"] {
+        for op in ["pointer.drag", "wheel", "ime.preedit", "ime.commit", "ime.cancel", "wait.until", "capture.sequence", "lifecycle.reload"] {
             let input = declaration(json!([{"id":"future","op":op,"target":{"surface":"main","testId":"counter"}}]));
             let error = check(&input, &["pixels", "virtual-time", "input.pointer"], true).unwrap_err();
             assert_eq!((error.code, error.exit_code), ("E_UNSUPPORTED_CAPABILITY", 2), "{op}: {error}");
@@ -758,6 +836,57 @@ mod tests {
             assert_eq!((error.code, error.exit_code), ("E_UNSUPPORTED_CAPABILITY", 2));
             assert!(error.message.contains("main"));
         }
+    }
+
+    #[test]
+    fn service_call_rejects_positional_arrays_and_duplicate_fields() {
+        schema_error(&declaration(json!([{"id":"x","op":"assert","serviceCall":["assets","readTextAsset",0]}])));
+        let bytes=br#"{"schemaVersion":1,"id":"test","requiredCapabilities":[],"steps":[{"id":"x","op":"assert","serviceCall":{"service":"assets","service":"niri","method":"readTextAsset","count":0}}]}"#;
+        assert_eq!(parse(bytes,&["services.fixtures"],false).unwrap_err().code,"E_SCHEMA");
+    }
+
+    #[test]
+    fn timeline_requires_virtual_time_and_fixture_assertions_are_exclusive() {
+        let advance=declaration(json!([{"id":"advance","op":"clock.advance","byMs":0}]));
+        assert_eq!(check(&advance,&["virtual-time"],false).unwrap_err().code,"E_UNSUPPORTED_CAPABILITY");
+        assert!(check(&advance,&["virtual-time"],true).is_ok());
+        let service=json!({"service":"assets","method":"readTextAsset","count":1,"errorCode":"Io"});
+        let input=declaration(json!([{"id":"verify","op":"assert","serviceCall":service}]));
+        assert_eq!(check(&input,&[],false).unwrap_err().code,"E_UNSUPPORTED_CAPABILITY");
+        let parsed=check(&input,&["services.fixtures"],false).unwrap();
+        assert!(matches!(&parsed.steps[0],Step::AssertService{check,..} if check.error_code.as_deref()==Some("Io")));
+        for extra in [
+            json!({"target":{"surface":"main","testId":"a"}}),
+            json!({"check":{"property":"exists","equals":true}}),
+            json!({"target":null}),json!({"check":null}),
+        ] {
+            let mut input=input.clone();
+            input["steps"][0].as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+            schema_error(&input);
+        }
+    }
+
+    #[test]
+    fn timeline_surface_and_pending_resource_payloads_reject_ambiguous_values() {
+        for step in [
+            json!({"id":"x","op":"clock.advance","byMs":null}),
+            json!({"id":"x","op":"clock.advance","byMs":-1}),
+            json!({"id":"x","op":"clock.advance","byMs":1.0}),
+            json!({"id":"x","op":"clock.advance","byMs":0,"sleep":1}),
+            json!({"id":"x","op":"service.emit","channel":"niri.state","value":null}),
+            json!({"id":"x","op":"service.emit","channel":"niri.state","value":[]}),
+            json!({"id":"x","op":"surface.resize","surface":"main","width":0,"height":1}),
+            json!({"id":"x","op":"surface.resize","surface":"main","width":1.0,"height":1}),
+            json!({"id":"x","op":"surface.scale","surface":"main","scale":0}),
+            json!({"id":"x","op":"surface.scale","surface":"main","scale":9}),
+            json!({"id":"x","op":"capture","captureId":"x","allowedPendingAssets":null}),
+            json!({"id":"x","op":"capture","captureId":"x","allowedPendingAssets":["image-1","image-1"]}),
+            json!({"id":"x","op":"assert","serviceCall":{"service":"assets","method":"readTextAsset","count":1,"errorCode":null}}),
+        ] { schema_error(&declaration(json!([step]))); }
+        for step in [
+            json!({"id":"x","op":"surface.resize","surface":"popup","width":10,"height":10}),
+            json!({"id":"x","op":"surface.scale","surface":"popup","scale":1.5}),
+        ] { assert_eq!(check(&declaration(json!([step])),&[],false).unwrap_err().code,"E_UNSUPPORTED_CAPABILITY"); }
     }
 
     struct InputFile(std::path::PathBuf);
