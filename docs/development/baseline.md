@@ -1,6 +1,6 @@
 # Implementation baseline
 
-The implementation follows [the supplied specification](tsx-native-ui.md). Phases 0–7 passed; Phase 8 records measurements before considering optimizations. Git was initialized during Phase 3; `0287d46` records the supplied specification. The first implementation commit covers verified Phases 0–3; each subsequent completed phase gets its own commit.
+The implementation follows [the supplied specification](tsx-native-ui.md). Phases 0–7 passed; Phase 8 recorded the limited release baseline below and introduces no speculative optimization. Git was initialized during Phase 3; `0287d46` records the supplied specification. The first implementation commit covers verified Phases 0–3; each subsequent completed phase gets its own commit.
 
 ## Dependency policy
 
@@ -172,7 +172,109 @@ any clipboard changed by screenshot capture afterward.
 - Real niri layer smoke passed without input: compositor IPC reported namespace `dev.zgui.js.panel`, output `DP-1`, top layer and keyboard mode `None`. Wayland requested size `0 × 360` and exclusive zone `360`; the compositor configured `2142 × 360` CSS pixels and fractional scale `210/120 = 1.75`. Real workspace/window data reached native TSX rows while idle. Shutdown reclaimed every resource, including the subscription, to zero. This run did not capture a screenshot.
 - Phase 7 full output-lifecycle gate passed after the desktop was unlocked and output changes were explicitly authorized. Three existing tiled windows each lost exactly 360 CSS pixels of height while the layer reserved its zone. DP-1 scale changed 1.75→2→1.75, with native redraws. Turning DP-1 off released generation 1 completely; turning it on recreated the layer and mounted generation 2 with a fresh live niri subscription. Both generations reached zero resources. All output geometries, prior focus and clipboard were restored. `target/native-panel-recreated.png` was visually inspected after recreation.
 
-Environment: Linux x86_64 Wayland session; niri compositor reports `26.04 (v26.04-298-gad20c318-modified)`, CLI `26.04 (8ed0da4)`; Wayland client 1.26.0, xkbcommon 1.13.2, Fontconfig 2.18.3, Vulkan 1.4.363. No performance claims are made from this baseline.
+Environment: Linux x86_64 Wayland session; niri compositor reports `26.04 (v26.04-298-gad20c318-modified)`, CLI `26.04 (8ed0da4)`; Wayland client 1.26.0, xkbcommon 1.13.2, Fontconfig 2.18.3, Vulkan 1.4.363. The following measurements describe these workloads only, not general engine or renderer speed.
+
+## Phase 8: measured optimization decision
+
+No optimization was selected. These small workloads do not establish a sustained
+bridge, reconciliation or job-pump bottleneck. Native startup paint is a visible
+cost, but the measurements do not isolate its causes or justify replacing the
+existing execution/ownership model.
+
+### Configuration and procedure
+
+- AMD Ryzen 9 7950X, 16 cores / 32 threads; Linux `7.3.3-1-cachyos`.
+- The pinned dependencies above, `cargo build --release -p native-host`, and
+  freshly built counter, lists and panel bundles. Release build and all three
+  bundle builds passed.
+- Real shared niri desktop, three outputs at scale 1.75; panel on DP-1. The
+  desktop was not isolated from compositor or user activity.
+- Three sequential runs per workload, ten seconds each, with native
+  `ZGUI_LATENCY` instrumentation enabled. No concurrent benchmark processes.
+- Counter and panel: sample process CPU/RSS for five seconds starting three
+  seconds after the host first-frame log. Lists: sample for 4.5 seconds starting
+  0.5 seconds after that log; `--exercise` performs four one-second-spaced native
+  button activations, exercising list reorder, branch toggling and Index updates.
+- CPU is the delta of `/proc/PID/stat` user plus system ticks; `CLK_TCK=100`.
+  RSS is `/proc/PID/status` `VmRSS`, not JavaScript heap usage.
+- Every measured run exited with code zero, logged clean shutdown and retired
+  the engine with every reported resource count zero. Prior window focus was
+  restored after the series.
+
+Reproduce the workload setup and native trace capture with:
+
+```sh
+cargo build --release -p native-host
+pnpm ui:build --app counter
+pnpm ui:build --app lists
+pnpm ui:build --app panel
+env ZGUI_PLATFORM=wayland ZGUI_LATENCY=target/counter-run.jsonl \
+  target/release/native-host --bundle apps/examples/counter/dist --exit-after-ms 10000
+env ZGUI_PLATFORM=wayland ZGUI_LATENCY=target/lists-run.jsonl \
+  target/release/native-host --bundle apps/examples/lists/dist --exercise --exit-after-ms 10000
+env ZGUI_PLATFORM=wayland ZGUI_LATENCY=target/panel-run.jsonl \
+  target/release/native-host --bundle apps/examples/panel/dist \
+  --layer-config apps/examples/panel/layer.json --exit-after-ms 10000
+```
+
+Use a fresh trace path per run: the native sink appends. The recorded bundle IDs
+were counter `sha256:0955f7ffdaad90434bd6751ae5b3e465a28f97800dd516edbe4e6a2f64499597`,
+lists `sha256:c29c10172f52be964c159c898ed1a93852974d567c1af335a7521aa5ad2626c6`,
+and panel `sha256:1378e7fcc9bec1eb4628ba33e51c7c03dc53126a995c08dad61e5bc32e62a089`.
+
+### Observed samples
+
+Each cell lists all three samples in run order; these are not confidence intervals.
+Startup is process launch to receipt of the host's first-frame log, **not**
+compositor presentation latency.
+
+| Workload | Startup log (ms) | End RSS (MiB) | Sampled process CPU (ms) | Whole-run native frames |
+| --- | --- | --- | --- | --- |
+| Counter | 53.565 / 53.703 / 58.993 | 76.23 / 75.93 / 76.64 | <10 / <10 / <10 | 3 / 3 / 210 |
+| Lists, four updates | 57.178 / 55.299 / 54.206 | 76.25 / 76.43 / 76.44 | <10 / 10 / 10 | 7 / 7 / 7 |
+| Live niri panel | 62.896 / 63.612 / 61.881 | 82.83 / 82.58 / 82.51 | <10 / <10 / <10 | 2 / 2 / 2 |
+
+Zero observed CPU ticks are reported as below the 10 ms sampling resolution, not
+zero work. Counter/panel RSS did not change within their sample windows. Lists
+RSS increased by 72 / 80 / 80 KiB across its four-update windows.
+
+Native stage maxima across each workload's three runs, including startup:
+
+| Workload | Frame (ms) | Restyle (ms) | Layout (ms) | Paint/draw (ms) |
+| --- | --- | --- | --- | --- |
+| Counter | 6.248 | 0.406 | 0.571 | 5.060 |
+| Lists | 7.338 | 0.469 | 0.782 | 6.069 |
+| Panel | 17.209 | 1.012 | 3.580 | 12.194 |
+
+Intervals use `f.begin`→`f.end`, `f.restyle`→`f.restyled`,
+`f.layout`→`d.postlayout` and `f.paint`→`f.painted`. They include instrumentation
+overhead; paint/draw is not a pure GPU execution measurement.
+
+Counter's third run contained 207 `Skipped(Undamaged)` frames within the first
+two trace seconds. The trace also records initial scale/configure transitions;
+it does not establish the cause of those extra frames. They are retained in the
+results, not discarded. No native frame/redraw-request marks appeared in the
+approximate steady counter/panel sampling windows. Each lists window contained
+four frame starts and eight redraw-request marks.
+
+Raw local traces are `target/phase8-counter-{2,3,4}.jsonl`,
+`target/phase8-lists-{1,2,3}.jsonl` and `target/phase8-panel-{1,2,3}.jsonl`.
+An earlier counter pilot (`phase8-counter-1.jsonl`, before the explicit bundle
+rebuild) took 287.377 ms to its first-frame log and is not included in the series.
+The series is warm-machine evidence, not a controlled cold-start benchmark.
+
+### Attribution limits
+
+The native trace starts after Wayland application construction. The startup log
+includes setup and evaluation but does not separate bundle IO, JS evaluation or
+mount CPU time. This baseline does not separately measure JS callbacks/job pumps,
+host mutation counts/time, JS heap size, outstanding wake requests or OS wake
+frequency. Native redraw marks are not OS wakeups, and RSS is not JS heap.
+The enabled trace buffer also contributes memory and timing overhead.
+
+These limits prevent claims that every measurement requested in specification
+§13.4 is already available, or that any proposed optimization would improve it.
+No before/after speedup is claimed because no performance code was changed.
 
 ## Acceptance tracking
 
@@ -184,4 +286,4 @@ Environment: Linux x86_64 Wayland session; niri compositor reports `26.04 (v26.0
 - [x] Phase 5: disposal, preflight, reload generations and fallback.
 - [x] Phase 6: controlled editing, clipboard, selection, Chinese IME and accessibility.
 - [x] Phase 7: layer-shell, monitor/scale/focus policy and typed desktop services.
-- [ ] Phase 8: only optimizations justified by measured bottlenecks.
+- [x] Phase 8: record release measurements and limits; select no unsupported optimization.
