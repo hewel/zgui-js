@@ -2184,6 +2184,8 @@ dependencies = [
 name = "native-host"
 version = "0.1.0"
 dependencies = [
+ "accesskit",
+ "accesskit_consumer",
  "host-services",
  "js-runtime",
  "libc",
@@ -2197,10 +2199,13 @@ dependencies = [
  "toml",
  "ui-bridge",
  "zgui",
+ "zgui-a11y",
+ "zgui-css",
  "zgui-dom",
  "zgui-layout",
  "zgui-platform-headless",
  "zgui-render-wgpu",
+ "zgui-testkit-scene",
  "zgui-view",
  "zgui-view-dom",
 ]
@@ -5910,6 +5915,24 @@ dependencies = [
  "thiserror 2.0.21",
  "usvg",
  "zgui-color",
+]
+
+[[package]]
+name = "zgui-testkit-scene"
+version = "0.1.0"
+source = "git+https://github.com/zortax/zgui?rev=80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a#80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a"
+dependencies = [
+ "smallvec",
+ "zgui-atlas",
+ "zgui-bits",
+ "zgui-color",
+ "zgui-geom",
+ "zgui-platform",
+ "zgui-profile",
+ "zgui-render",
+ "zgui-scene",
+ "zgui-text",
+ "zgui-text-style",
 ]
 
 [[package]]

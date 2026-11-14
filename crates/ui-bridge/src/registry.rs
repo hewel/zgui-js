@@ -22,12 +22,13 @@ impl Handle {
 }
 
 /// An owned bridge-tree record for Rust-side inspection, not a JavaScript value.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SnapshotNode {
     pub token: u64,
     pub parent: Option<u64>,
     pub native: NodeId,
     pub kind: &'static str,
+    pub test_id: Option<String>,
 }
 
 /// A bounded, stable preorder projection of the attached live bridge tree.
@@ -35,6 +36,7 @@ pub struct SnapshotNode {
 pub struct Snapshot {
     pub nodes: Vec<SnapshotNode>,
     pub truncated: bool,
+    pub metadata_revision: u64,
 }
 
 /// A rejected bridge operation. Validation happens before native mutation.
@@ -101,6 +103,7 @@ struct Record {
     previous: Option<u64>,
     next: Option<u64>,
     pending_detach: bool,
+    test_id: Option<String>,
 }
 
 impl Record {
@@ -114,6 +117,7 @@ impl Record {
             previous: None,
             next: None,
             pending_detach: false,
+            test_id: None,
         }
     }
 }
@@ -134,6 +138,7 @@ pub struct NodeRegistry {
     pending: Vec<u64>,
     turn_active: bool,
     disposed: bool,
+    metadata_revision: u64,
 }
 
 impl NodeRegistry {
@@ -164,6 +169,7 @@ impl NodeRegistry {
             pending: Vec::new(),
             turn_active: false,
             disposed: false,
+            metadata_revision: 0,
         }
     }
 
@@ -178,7 +184,7 @@ impl NodeRegistry {
     /// omitted by the limit. Native IDs remain valid only while their nodes live.
     /// This does not mutate the tree or enter JavaScript.
     pub fn snapshot(&self, max_nodes: usize) -> Snapshot {
-        let mut snapshot = Snapshot { nodes: Vec::new(), truncated: false };
+        let mut snapshot = Snapshot { nodes: Vec::new(), truncated: false, metadata_revision: self.metadata_revision };
         if self.disposed {
             return snapshot;
         }
@@ -194,6 +200,7 @@ impl NodeRegistry {
                     token,
                     parent: record.parent,
                     native: record.native,
+                    test_id: record.test_id.clone(),
                     kind: match record.kind {
                         Kind::Root => "root",
                         Kind::Element => "element",
@@ -221,6 +228,19 @@ impl NodeRegistry {
             };
         }
         snapshot
+    }
+
+    /// Revision of project-owned metadata, independent of native DOM/layout state.
+    pub fn metadata_revision(&self) -> u64 { self.metadata_revision }
+
+    /// Diagnostic metadata follows handle lifetime; it is not a native attribute.
+    pub fn set_test_id(&mut self, handle: Handle, value: Option<String>) -> Result<(), BridgeError> {
+        self.check_turn()?;
+        if self.validate(handle)?.test_id != value {
+            self.records.get_mut(&handle.token).expect("validated record").test_id = value;
+            self.metadata_revision += 1;
+        }
+        Ok(())
     }
 
     pub(crate) fn dom_handle(&self) -> DomHandle { self.dom.clone() }

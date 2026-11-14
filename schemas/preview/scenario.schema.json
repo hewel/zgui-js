@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://zgui-js.local/schemas/preview/scenario.schema.json",
-  "title": "Preview scenario v1 (P1 static capture)",
-  "description": "Closed input, at most 1 MiB. P1 implements only settle and capture with the wall-static profile. Known later operations are rejected before mount with E_UNSUPPORTED_CAPABILITY; unknown operations and malformed supported payloads are E_SCHEMA. Step IDs and capture IDs are unique in their respective namespaces, checked by the loader. Explicit capabilities are unioned with all inferred requirements: capture requires pixels, a virtual profile or requiredFrameTimeUs requires virtual-time. Wall mode rejects virtual-time even if explicitly advertised by a caller.",
+  "title": "Preview scenario v1 (P2 native interaction)",
+  "description": "Closed input, at most 1 MiB. Implements settle, capture, pointer.move/click, key.press, text.commit and exact node assertions on main. Known later operations fail preflight with E_UNSUPPORTED_CAPABILITY; unknown operations and malformed supported payloads are E_SCHEMA. Step IDs and capture IDs are unique in their respective namespaces, checked by the loader. Explicit capabilities are unioned with inferred requirements: capture needs pixels; pointers need input.pointer; keys need input.keyboard; text commit needs input.text; assertions need tree.inspect; selector forms need selectors.test-id or selectors.semantic, and role/name assertions also need selectors.semantic. A virtual profile or requiredFrameTimeUs requires virtual-time, which wall mode rejects even if advertised by a caller.",
   "type": "object",
   "additionalProperties": false,
   "required": ["schemaVersion", "id", "requiredCapabilities", "steps"],
@@ -12,14 +12,19 @@
     "requiredCapabilities": {
       "type": "array",
       "items": { "$ref": "#/$defs/safeId" },
-      "description": "Capabilities must be available before mount. Repeated declarations are deduplicated; omission never bypasses inferred requirements. P1 advertises pixels only."
+      "description": "Capabilities must be available before mount. Repeated declarations are deduplicated; omission never bypasses inferred requirements."
     },
     "steps": {
       "type": "array",
       "items": {
         "oneOf": [
           { "$ref": "#/$defs/settle" },
-          { "$ref": "#/$defs/capture" }
+          { "$ref": "#/$defs/capture" },
+          { "$ref": "#/$defs/pointerMove" },
+          { "$ref": "#/$defs/pointerClick" },
+          { "$ref": "#/$defs/keyPress" },
+          { "$ref": "#/$defs/textCommit" },
+          { "$ref": "#/$defs/assert" }
         ]
       }
     }
@@ -55,11 +60,155 @@
         "op": { "const": "capture" },
         "captureId": { "$ref": "#/$defs/safeId" },
         "requiredFrameTimeUs": {
-          "description": "Optional exact virtual validation-frame timestamp. A present value must be a nonnegative JSON integer literal, not null. Infers virtual-time and is unavailable with wall-static/P1; it must never be silently ignored.",
+          "description": "Optional exact virtual validation-frame timestamp. A present value must be a nonnegative JSON integer literal, not null. Infers virtual-time and is unavailable in wall-clock profiles; it must never be silently ignored.",
           "type": "integer",
           "minimum": 0,
           "maximum": 18446744073709551615
         }
+      }
+    },
+    "surface": {
+      "type": "string",
+      "const": "main",
+      "description": "Other logical surfaces fail preflight with E_UNSUPPORTED_CAPABILITY."
+    },
+    "target": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["surface", "testId"],
+          "properties": {
+            "surface": { "$ref": "#/$defs/surface" },
+            "testId": { "type": "string" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["surface", "role", "name"],
+          "properties": {
+            "surface": { "$ref": "#/$defs/surface" },
+            "role": { "type": "string" },
+            "name": { "type": "string" }
+          }
+        }
+      ]
+    },
+    "position": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["x", "y"],
+      "properties": {
+        "x": { "type": "number", "minimum": -1.7976931348623157e308, "maximum": 1.7976931348623157e308 },
+        "y": { "type": "number", "minimum": -1.7976931348623157e308, "maximum": 1.7976931348623157e308 }
+      },
+      "description": "Finite logical surface coordinates; position is not a selector."
+    },
+    "pointerLocation": {
+      "oneOf": [
+        {
+          "required": ["target"],
+          "not": { "anyOf": [{ "required": ["surface"] }, { "required": ["position"] }] }
+        },
+        {
+          "required": ["surface", "position"],
+          "not": { "required": ["target"] }
+        }
+      ]
+    },
+    "pointerMove": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "op"],
+      "allOf": [{ "$ref": "#/$defs/pointerLocation" }],
+      "properties": {
+        "id": { "$ref": "#/$defs/safeId" },
+        "op": { "const": "pointer.move" },
+        "target": { "$ref": "#/$defs/target" },
+        "surface": { "$ref": "#/$defs/surface" },
+        "position": { "$ref": "#/$defs/position" }
+      }
+    },
+    "pointerClick": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "op", "button"],
+      "allOf": [{ "$ref": "#/$defs/pointerLocation" }],
+      "properties": {
+        "id": { "$ref": "#/$defs/safeId" },
+        "op": { "const": "pointer.click" },
+        "target": { "$ref": "#/$defs/target" },
+        "surface": { "$ref": "#/$defs/surface" },
+        "position": { "$ref": "#/$defs/position" },
+        "button": { "type": "string", "enum": ["primary", "secondary", "middle"] }
+      }
+    },
+    "keyPress": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "op", "surface", "key"],
+      "properties": {
+        "id": { "$ref": "#/$defs/safeId" },
+        "op": { "const": "key.press" },
+        "surface": { "$ref": "#/$defs/surface" },
+        "key": {
+          "type": "string",
+          "enum": ["Tab", "Enter", "Escape", "Space", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Home", "End", "Backspace", "Delete"]
+        },
+        "modifiers": {
+          "type": "array",
+          "default": [],
+          "items": { "type": "string", "enum": ["Shift", "Control", "Alt", "Meta"] }
+        }
+      }
+    },
+    "textCommit": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "op", "surface", "text"],
+      "properties": {
+        "id": { "$ref": "#/$defs/safeId" },
+        "op": { "const": "text.commit" },
+        "surface": { "$ref": "#/$defs/surface" },
+        "text": { "type": "string" }
+      }
+    },
+    "check": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["property", "equals"],
+      "properties": {
+        "property": {
+          "type": "string",
+          "enum": ["exists", "text", "role", "name", "enabled", "focused", "visible", "value"]
+        },
+        "equals": { "type": ["boolean", "string"] }
+      },
+      "oneOf": [
+        {
+          "properties": {
+            "property": { "enum": ["exists", "enabled", "focused", "visible"] },
+            "equals": { "type": "boolean" }
+          }
+        },
+        {
+          "properties": {
+            "property": { "enum": ["text", "role", "name", "value"] },
+            "equals": { "type": "string" }
+          }
+        }
+      ]
+    },
+    "assert": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "op", "target", "check"],
+      "properties": {
+        "id": { "$ref": "#/$defs/safeId" },
+        "op": { "const": "assert" },
+        "target": { "$ref": "#/$defs/target" },
+        "check": { "$ref": "#/$defs/check" }
       }
     }
   }

@@ -6,6 +6,9 @@ use zgui_platform_headless::{Harness, Headless};
 
 use crate::{Binding, MountRegion, Root, package::Package, session::{ResourceCounts, Session, SessionPolicy}};
 use super::{Error, capture::{self, CaptureHandle}, inspect, output::Output, profile::{Limits, LoadedProfile}};
+use super::semantics::SemanticModel;
+
+mod actions;
 
 pub type SharedOutput = Rc<RefCell<Output>>;
 
@@ -41,6 +44,8 @@ impl Fault {
 struct OwnedFrame {
     revision: u64,
     configuration: u64,
+    metadata_revision: u64,
+    native_nodes: Vec<ui_bridge::registry::SnapshotNode>,
     presentation: u64,
     frame: Value,
     tree: Value,
@@ -56,12 +61,19 @@ struct Probe {
     last: RefCell<Option<OwnedFrame>>,
     presentation: RefCell<Option<Value>>,
     fault: RefCell<Option<Error>>,
+    surface: RefCell<Option<std::sync::Arc<zgui_platform_headless::OffscreenSurface>>>,
+    semantics: RefCell<SemanticModel>,
 }
 impl FrameProbe for Probe {
     fn frame_ended(&self, window: &Window) {
         let Some(observation) = window.completed_frame() else { return; };
         self.frames.set(observation.ordinal);
         if self.fault.borrow().is_some() { return; }
+        if let Some(surface) = self.surface.borrow().as_ref()
+            && let Err(error) = self.semantics.borrow_mut().consume(surface, window) {
+            *self.fault.borrow_mut() = Some(error);
+            return;
+        }
         let Some(session) = self.session.borrow().upgrade() else { return; };
         if session.region.document != window.document_id() { return; }
         let state = self.capture.state();
@@ -75,13 +87,15 @@ impl FrameProbe for Probe {
             FrameOutcome::Presented(_) | FrameOutcome::Skipped(SkipReason::Undamaged)) { return; }
         let Some(presentation) = self.presentation.borrow().clone() else { return; };
         if presentation["configurationId"].as_u64() != Some(state.configuration_id) { return; }
-        let mut tree = inspect::snapshot(window, &session, observation.ordinal);
+        let snapshot = inspect::snapshot(window, &session, observation.ordinal, &self.semantics.borrow());
+        let mut tree = snapshot.tree;
         tree["buildId"] = json!(self.build_id);
         tree["presentationSequence"] = json!(state.presentation_id);
         let frame = json!({"schemaVersion":1,"buildId":self.build_id,"generation":session.generation,"surface":"main",
             "documentIdentity":format!("{:?}",window.document_id()),"actionSequence":self.action.get(),
             "requiredStateRevision":observation.document_revision,"validatedStateRevision":observation.document_revision,
             "layoutRevision":observation.layout_revision,"configurationId":state.configuration_id,
+            "metadataRevision":snapshot.metadata_revision,
             "validationFrame":stamp,"pixelPresentation":presentation,"layoutDocumentCoherent":true,
             "timingDeterministic":false,"resources":{"nativeReadinessAvailable":false,"generation":null},
             "scale":window.surface().scale_factor(),"renderer":self.capture.metadata()});
@@ -95,7 +109,8 @@ impl FrameProbe for Probe {
         })();
         if let Err(error) = publication { *self.fault.borrow_mut() = Some(error); return; }
         *self.last.borrow_mut() = Some(OwnedFrame { revision: observation.document_revision,
-            configuration: state.configuration_id, presentation: state.presentation_id, frame, tree });
+            configuration: state.configuration_id, presentation: state.presentation_id, frame, tree,
+            metadata_revision:snapshot.metadata_revision,native_nodes:snapshot.native_nodes });
     }
 }
 
@@ -110,6 +125,7 @@ struct PreviewHost {
     probe: Rc<Probe>,
     font_css: String,
     fault: Option<Fault>,
+    requested_metadata: u64,
 }
 impl PreviewHost {
     fn fail(&mut self, cx: &dyn PlatformCx, fault: Fault) {
@@ -141,6 +157,16 @@ impl PreviewHost {
         }
         if let Some(session) = &self.session && let Err(error) = session.checkpoint() {
             self.fail(cx, Fault::application(error));
+            return;
+        }
+        if let Some(session) = &self.session {
+            let revision = session.bridge.metadata_revision();
+            if revision != self.requested_metadata {
+                self.requested_metadata = revision;
+                if let Some(window) = self.native.windows().iter().find(|window|window.document_id()==session.region.document) {
+                    window.request_frame();
+                }
+            }
         }
     }
 }
@@ -160,6 +186,7 @@ pub struct Driver {
     capture: CaptureHandle,
     deadline: Rc<Cell<Instant>>,
     run_deadline: Instant,
+    step_start_frame: Cell<u64>,
     limits: Limits,
     opaque: bool,
     dimensions: (u32,u32),
@@ -169,7 +196,8 @@ impl Driver {
         let capture = CaptureHandle::default();
         let probe = Rc::new(Probe { capture:capture.clone(),session:RefCell::new(Weak::new()),output,
             build_id:package.manifest.build_id.clone(),action:Cell::new(0),frames:Cell::new(0),
-            last:RefCell::new(None),presentation:RefCell::new(None),fault:RefCell::new(None) });
+            last:RefCell::new(None),presentation:RefCell::new(None),fault:RefCell::new(None),
+            surface:RefCell::new(None),semantics:RefCell::new(SemanticModel::default()) });
         let pending = Rc::new(RefCell::new(Vec::new()));
         let fonts = profile.fonts.clone();
         let metrics = profile.fonts.clone();
@@ -196,7 +224,7 @@ impl Driver {
         let host = PreviewHost { native,pending,package,session:None,
             executor:host_services::Executor::new(2,64).map_err(|error|Error::new("E_HOST_INVARIANT",9,error.to_string()))?,
             deadline:deadline.clone(),limits,probe:probe.clone(),
-            font_css:format!(":root {{ font-family:{}; }}",profile.font_family_css),fault:None };
+            font_css:format!(":root {{ font-family:{}; }}",profile.font_family_css),fault:None,requested_metadata:0 };
         let platform = Headless::new();
         platform.set_color_scheme(Some(if profile.profile.theme == "dark" { ColorScheme::Dark } else { ColorScheme::Light }));
         let mut harness = Harness::over(platform, host);
@@ -205,20 +233,26 @@ impl Driver {
             let surface_id = window.surface().id();
             if let Some(offscreen) = harness.platform().offscreen(surface_id) {
                 offscreen.set_refresh_rate_millihertz(Some(surface.refresh_rate_milli_hz));
+                *probe.surface.borrow_mut() = Some(offscreen);
             }
             harness.deliver(surface_id, SurfaceEvent::ScaleFactorChanged { scale_factor:surface.scale,
                 size:Size::new(DevicePx(profile.physical_width as f32),DevicePx(profile.physical_height as f32)) });
+            harness.deliver(surface_id, SurfaceEvent::Focused(true));
         }
-        Ok(Self { harness,probe,capture,deadline,run_deadline,limits:profile.profile.limits.clone(),
+        Ok(Self { harness,probe,capture,deadline,run_deadline,step_start_frame:Cell::new(0),limits:profile.profile.limits.clone(),
             opaque:surface.opaque,dimensions:(profile.physical_width,profile.physical_height) })
     }
     pub fn begin_step(&self, action: u64, timeout_ms: Option<u64>) {
         self.probe.action.set(action);
+        self.step_start_frame.set(self.probe.frames.get());
         self.deadline.set(self.run_deadline.min(Instant::now()+Duration::from_millis(timeout_ms.unwrap_or(self.limits.max_step_wall_ms).min(self.limits.max_step_wall_ms))));
     }
     pub fn check(&mut self) -> Result<(), Fault> {
         if let Some(fault) = self.harness.app_mut().fault.take() { return Err(fault); }
         if let Some(error) = self.probe.fault.borrow_mut().take() { return Err(error.into()); }
+        if self.probe.frames.get()-self.step_start_frame.get()>u64::from(self.limits.max_frames_per_step) {
+            return Err(Error::new("E_JOB_BUDGET",5,"native frame budget exhausted").into());
+        }
         if Instant::now() >= self.deadline.get() { return Err(Error::new("E_READINESS_TIMEOUT",5,"step exhausted its real wall-clock deadline").into()); }
         Ok(())
     }
@@ -233,6 +267,7 @@ impl Driver {
         let last = self.probe.last.borrow();
         last.as_ref().is_some_and(|last| last.revision==window.dom().revision() && last.configuration==state.configuration_id
             && last.presentation==state.presentation_id && state.presented_draw.is_some()
+            && self.harness.app().session.as_ref().is_some_and(|session|session.bridge.metadata_revision()==last.metadata_revision)
             && window.completed_frame().is_some_and(|frame| frame.layout_document_coherent
                 && Some(frame.ordinal)==last.frame["validationFrame"]["ordinal"].as_u64()
                 && matches!(frame.outcome,FrameOutcome::Presented(_)|FrameOutcome::Skipped(SkipReason::Undamaged))))
@@ -247,19 +282,16 @@ impl Driver {
             "requiredAssetsReady":null,"nativeAssetReadinessAvailable":false,"frameCurrent":self.frame_current(),
             "timeUs":self.harness.platform().clock().timestamp().since_origin().as_micros(),
             "nextNativeDeadlineUs":self.harness.parked_deadline().map(|next|self.harness.platform().clock().timestamp().since_origin().as_micros()+next.saturating_duration_since(self.harness.now()).as_micros()),
+            "requiredMetadataRevision":self.harness.app().session.as_ref().map(|session|session.bridge.metadata_revision()),
             "requiredStateRevision":self.window().ok().map(|window|window.dom().revision()),"generation":1})
     }
     pub fn settle(&mut self, require_frame: bool) -> Result<Value, Fault> {
-        let first_frame = self.probe.frames.get();
         for _ in 0..self.limits.max_settle_turns {
             self.check()?;
             // Wall profiles mirror elapsed monotonic time, never a fabricated fixed frame step.
             self.harness.advance(Instant::now().saturating_duration_since(self.harness.now()));
             self.harness.pump();
             self.check()?;
-            if self.probe.frames.get()-first_frame > u64::from(self.limits.max_frames_per_step) {
-                return Err(Error::new("E_JOB_BUDGET",5,"native frame budget exhausted").into());
-            }
             if !self.runnable() && (!require_frame || self.frame_current()) { return Ok(self.readiness()); }
             if matches!(self.capture.last_outcome(),Some(FrameOutcome::Skipped(SkipReason::DeviceUnavailable))) {
                 return Err(Error::new("E_DEVICE_LOST",7,"native graphics device became unavailable").into());

@@ -33,6 +33,17 @@ use crate::window::Window;
 const MAX_PASSES: u8 = 2;
 
 impl Window {
+    /// Maps a live view handle to the identifier published by this window's accessibility tree.
+    ///
+    /// The document backend owns both conversions. A retired handle or a handle from another
+    /// document has no mapping, even if its slot has since been reused.
+    #[must_use]
+    pub fn semantic_node_id(&self, node: zgui_view::NodeId) -> Option<u64> {
+        let key = zgui_view_dom::id::to_document(node)?;
+        self.document.borrow().store().index_of(key)?;
+        Some(zgui_a11y::to_a11y(key).0)
+    }
+
     /// Delivers every observed measurement that changed, and re-runs the reactive work if any did.
     ///
     /// Answers whether the frame owes another: reactive work the delivery's flush could not

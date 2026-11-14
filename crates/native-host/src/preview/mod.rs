@@ -9,6 +9,9 @@ mod fixture;
 mod inspect;
 mod run;
 mod scenario;
+mod semantics;
+mod selectors;
+mod saved;
 
 use std::path::PathBuf;
 use serde_json::{Value, json};
@@ -21,12 +24,15 @@ pub(crate) struct Error {
     pub code: &'static str,
     pub message: String,
     pub exit_code: u8,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub details: Option<Value>,
 }
 
 impl Error {
     pub fn new(code: &'static str, exit_code: u8, message: impl Into<String>) -> Self {
-        Self { code, message: message.into(), exit_code }
+        Self { code, message: message.into(), exit_code, details:None }
     }
+    pub fn with_details(mut self, details: Value) -> Self { self.details=Some(details); self }
 }
 
 impl std::fmt::Display for Error {
@@ -49,7 +55,8 @@ pub(crate) fn command(mut args: impl Iterator<Item = String>) -> u8 {
     let outcome = match command.as_str() {
         "doctor" => doctor(args.collect()),
         "run" => run::command(args.collect()),
-        _ => Err(Error::new("E_SCHEMA", 2, "expected preview doctor or run")),
+        "inspect" => saved::command(args.collect()),
+        _ => Err(Error::new("E_SCHEMA", 2, "expected preview doctor, run or inspect")),
     };
     let result = outcome.unwrap_or_else(|error| failure(&command, error));
     let code = result["exitCode"].as_u64().unwrap_or(9) as u8;
@@ -191,10 +198,15 @@ fn doctor_worker(args: impl Iterator<Item = String>) -> supervisor::Report {
 fn capabilities(pixels: bool) -> Value {
     json!({
         "pixels":pixels, "virtual-time":false,
-        "selectors.test-id":false, "selectors.semantic":false,
-        "input.pointer":false, "input.keyboard":false, "input.text":false, "input.ime":false,
+        "selectors.test-id":true, "selectors.semantic":true, "tree.inspect":true,
+        "input.pointer":true, "input.keyboard":true, "input.text":true, "input.ime":false,
         "assets.native-readiness":false, "capture.transparent":false, "capture.sequence":false,
         "surface.resize":false, "surface.scale":false, "surface.multiple":false,
         "lifecycle.reload":false, "source.node-location":false
     })
 }
+
+const RUN_CAPABILITIES: &[&str] = &[
+    "pixels", "selectors.test-id", "selectors.semantic", "tree.inspect",
+    "input.pointer", "input.keyboard", "input.text",
+];

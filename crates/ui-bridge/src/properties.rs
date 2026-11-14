@@ -18,6 +18,7 @@ pub(crate) enum Style { Empty, Text(String), Object(Vec<(String, Option<String>)
 
 pub(crate) enum Mutation {
     Class(Option<String>),
+    TestId(Option<String>),
     Style(Style),
     Attribute(&'static str, Option<String>),
     Disabled(bool),
@@ -37,6 +38,13 @@ impl Mutation {
         let string = |value| Option::<String>::from_js(ctx, value);
         match name {
             "class" => Ok(Self::Class(string(value)?)),
+            "testId" => {
+                let value = string(value)?;
+                if value.as_ref().is_some_and(|value| value.len() > 512) {
+                    return Err(Exception::throw_type(ctx, "testId exceeds 512 UTF-8 bytes"));
+                }
+                Ok(Self::TestId(value))
+            }
             "style" if empty => Ok(Self::Style(Style::Empty)),
             "style" if value.is_string() => Ok(Self::Style(Style::Text(String::from_js(ctx, value)?))),
             "style" => {

@@ -94,6 +94,44 @@ fn attributes_use_typed_native_names_and_both_empty_values_remove_them() {
 }
 
 #[test]
+fn test_ids_follow_native_ownership_without_changing_dom_attributes() {
+    let mut native = NativeProperties::new();
+    let revision = native.backend.revision();
+    native.script("__zgui.setProperty(node, 'testId', 'save'); 'set'");
+    let first = native.bridge.snapshot(10);
+    let token = first.nodes[1].token;
+    assert_eq!(first.nodes[1].test_id.as_deref(), Some("save"));
+    assert_eq!(native.backend.revision(), revision);
+    assert_eq!(native.attribute("testId"), None);
+    native.script("__zgui.setProperty(node, 'testId', 'save'); 'unchanged'");
+    assert_eq!(native.bridge.metadata_revision(), first.metadata_revision);
+    native.script("__zgui.setProperty(node, 'testId', 'renamed'); 'changed'");
+    assert!(native.bridge.metadata_revision() > first.metadata_revision);
+    assert_eq!(first.nodes[1].test_id.as_deref(), Some("save"), "saved evidence owns the old value");
+    for empty in ["null", "undefined"] {
+        native.script(&format!("__zgui.setProperty(node, 'testId', 'set'); __zgui.setProperty(node, 'testId', {empty}); 'clear'"));
+        assert_eq!(native.bridge.snapshot(10).nodes[1].test_id, None);
+    }
+    native.script(r#"
+        __zgui.setProperty(node, 'testId', 'save');
+        try { __zgui.setProperty(node, 'testId', '界'.repeat(171)); throw Error('accepted oversized testId'); }
+        catch (error) { if (!String(error).includes('512 UTF-8 bytes')) throw error; }
+        __zgui.removeNode(root, node);
+        'removed'
+    "#);
+    assert_eq!(native.bridge.snapshot(10).nodes.len(), 1);
+    native.script(r#"
+        const replacement = __zgui.createElement('control');
+        __zgui.setProperty(replacement, 'testId', 'save');
+        __zgui.insertNode(root, replacement, null);
+        'replacement'
+    "#);
+    let replacement = native.bridge.snapshot(10);
+    assert_ne!(replacement.nodes[1].token, token);
+    assert_eq!(replacement.nodes[1].test_id.as_deref(), Some("save"));
+}
+
+#[test]
 fn disabled_native_state_and_accessibility_stay_in_sync_without_erasing_other_state() {
     let mut native = NativeProperties::new();
     native.dom.set_ui_state(native.node, UiState::HOVER, true);

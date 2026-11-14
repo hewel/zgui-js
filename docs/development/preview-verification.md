@@ -167,3 +167,103 @@ zgui-runtime` cannot run its dev-dependencies. Independent review identified
 causal-error loss, fixture classification/teardown gaps and oversized control
 messages. Those paths were corrected and exercised by focused regressions and
 the public CLI.
+
+## P2 — native interaction and immutable inspection
+
+`testId` is application-owned diagnostic metadata, not a DOM/CSS attribute.
+It accepts at most 512 UTF-8 bytes; null/undefined clears it. Removal retires the
+identity with the native handle. Metadata-only changes have their own revision
+and request a real native validation frame without manufacturing a DOM write.
+
+```sh
+pnpm ui:build --app counter
+target/debug/native-host preview run \
+  --bundle apps/examples/counter/dist \
+  --profile preview/profiles/wall-static.json \
+  --fixture preview/fixtures/empty.json \
+  --scenario preview/scenarios/counter-static.json \
+  --out artifacts/preview/counter-interaction-new-run
+target/debug/native-host preview inspect \
+  --run artifacts/preview/counter-interaction-new-run \
+  --capture after-increment --test-id count-label \
+  --fields text,state,boundsLogical --max-nodes 1
+```
+
+Targets select one exact `testId` or native accessibility `role` plus `name`,
+always on `main`. Duplicate matches fail rather than choosing the first.
+Truncated topology, identity metadata or semantic names cannot certify a unique
+target or a negative existence assertion. Unknown/truncated assertion values
+fail explicitly rather than comparing a displayed prefix.
+
+Pointer actions use current native fragments, placements, clip bounds and hit
+testing; device coordinates are divided by surface scale once for native input.
+A bounded 5 × 5 search accepts only a point whose actual hit chain includes the
+target. Rejection is conservative, not proof that every possible point is
+obscured. Raw logical positions are explicitly untargeted. Each click delivers
+move/press/release as one native burst without an intermediate frame.
+The complete burst is pumped before the step returns, so even a final input
+executes its handler and owns any resulting failure. Frame budgets cover the
+whole step, including post-input dispatch.
+
+Keyboard actions deliver modifiers/down/up/modifier-clear as one native burst.
+`text.commit` uses the native IME commit path, not a value setter. The main
+headless surface is focused; modifiers are key-local. Native `preventDefault`
+and editing behavior remain authoritative.
+
+The AccessKit consumer applies the provider's ordered incremental updates,
+including focus, root replacement and unreachable-node retirement. Lost log
+continuity is fatal. `state.enabled` includes native disabled ancestors;
+`state.visible` means a positive CSS-visible native box, not an occlusion or
+pointer-reachability claim. Native editor `value` is separate from text/name;
+authored semantic-value overrides cannot establish the editor's actual value.
+
+Saved inspection verifies completed inventory entries, byte counts, SHA-256,
+and matching capture frame/tree identities. It never mounts an application or
+creates a renderer. Results select the requested capture, report the source
+run status separately, and contain the selected node before limited parent/child
+context. Fields are allowlisted; strings are bounded UTF-8 prefixes with explicit
+`truncatedFields`. `--max-nodes` is 1–100, `--max-depth` is 0–64, and cursors bind
+both snapshot digest and query. Responses remain within 8 KiB.
+
+### Observed gates
+
+| Gate | Result and evidence |
+| --- | --- |
+| PV09: real native activation | Passed. Counter changed from `Count: 0` to `Count: 1` through native pointer events, with coherent before/after captures. |
+| PV10: selector errors | Passed. Missing and duplicate IDs returned exit 4 with bounded candidates and frame identity; no fallback target. |
+| PV11: clipped/obscured targets | Passed. Fully clipped and covered controls failed without activation; partially clipped and transformed controls each activated through actual hit testing. Disabled ancestors and hidden controls also failed explicitly. |
+| PV12: scale conversion | Passed at 1, 1.25, 1.5, 1.75 and 2. Logical/device input coordinates and actual PNG extents matched; every run incremented once. |
+| PV13: keyboard defaults | Passed. Tab focused controls; Enter cancellation suppressed activation; Space activated. Native Home/Shift+ArrowRight selection followed by IME commit replaced `a` with `界`, producing `界bc` in both the editor and its input-event consumer. |
+| PV14: saved inspection | Passed with graphics disabled and an invalid Wayland endpoint. The selected initial/after captures returned different correct counter values; ten-node pagination was complete and a cursor from the other capture was rejected. |
+| PV15: incremental semantic tree | Passed. Ordered native-provider tests cover unchanged nodes, focus, root replacement and retirement. Public branch removal removed `Retired child` from the retained full semantic tree; metadata rename retired the old test ID. |
+
+The fifteen public runs are retained under `target/preview-p2-v1-*`. Every
+inventoried artifact's length/hash and terminal stdout/result agreement was
+checked. Counter and native editing PNGs were opened and visually inspected;
+they preserve the production rendering, including the counter's existing
+low-contrast styling.
+
+Focused checks passed: 12 scenario tests, 11 semantic-provider tests, three saved
+inspection pagination/cursor/identity tests, and one bridge metadata ownership test.
+The first semantic run exposed test fixtures reusing `Document::new()`'s
+`DocumentId::FIRST`; explicit distinct document IDs corrected the fixtures
+without weakening foreign-handle or retirement assertions.
+
+Independent review found that queued final input could return before native
+dispatch and that saved capture/run associations were unchecked. The fixes
+drain the native burst within its action, bind capture/build/generation and
+numeric metadata revision to the saved evidence, and reject incomplete identity.
+Three real-GPU CLI regressions exercise throwing final pointer, key and text
+handlers; all report the failure against that final action. The empty editor
+fixture needed explicit positive dimensions before it could receive input.
+The affected positive matrix was repeated under `target/preview-p2-v2-*`;
+the earlier negative-target cases remain valid.
+
+```sh
+cargo test -p native-host preview::scenario::tests
+cargo test -p native-host preview::semantics::tests
+cargo test -p native-host preview::saved::tests
+cargo test -p ui-bridge --test properties test_ids_follow_native_ownership_without_changing_dom_attributes
+cargo build -p native-host
+node --test tests/preview/final-input.test.mjs
+```

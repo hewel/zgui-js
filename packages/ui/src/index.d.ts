@@ -35,6 +35,8 @@ export interface NativeElementProps extends NativeEventProps {
   ref?: NativeRef;
   class?: string | null;
   id?: string | null;
+  /** Diagnostic identity, not a native/CSS attribute. At most 512 UTF-8 bytes; null clears. */
+  testId?: string | null;
   style?: NativeStyle | null;
   [custom: `--${string}`]: string | null | undefined;
   title?: string | null;

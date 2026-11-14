@@ -67,6 +67,27 @@ impl Window {
         world.chain_at(point).path().to_vec()
     }
 
+    /// Whether a live node or its descendant has a hit-eligible fragment at this device point.
+    ///
+    /// Unlike [`Window::chain_at`], this also sees fragments behind an overlapping element.
+    /// It uses the native clip, transform, rounded-corner and pointer-events tests, so callers can
+    /// distinguish an obscured point from one the target does not admit. It dispatches no input.
+    pub fn hit_contains(&self, node: zgui_view::NodeId, point: Point<DevicePx, Device>) -> bool {
+        let document = self.document.borrow();
+        let Some(target) = zgui_view_dom::id::to_document(node) else { return false; };
+        if document.store().index_of(target).is_none() { return false; }
+        let layout = self.layout.borrow();
+        for fragment in self.hit.hit(point, &self.scene.clips, &self.scene.spatial) {
+            let Some(key) = zgui_input::hit::element_of(&layout, fragment) else { continue; };
+            let mut index = document.store().index_of(key);
+            while let Some(at) = index {
+                if document.store().key_of(at) == target { return true; }
+                index = document.store().core(at).parent();
+            }
+        }
+        false
+    }
+
     /// Returns the element that holds `pointer`'s capture, if one does.
     ///
     /// A handler captures a pointer with

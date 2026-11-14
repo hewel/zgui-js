@@ -78,6 +78,9 @@ impl UiBridge {
         self.registry.borrow().snapshot(max_nodes)
     }
 
+    /// Diagnostic changes need a fresh validation frame even without native DOM changes.
+    pub fn metadata_revision(&self) -> u64 { self.registry.borrow().metadata_revision() }
+
     pub fn set_dispatcher(&self, dispatcher: Rc<dyn Fn(u64, &mut zgui::view::EventCx<'_>)>) {
         *self.dispatcher.borrow_mut() = Some(dispatcher);
     }
@@ -168,6 +171,9 @@ impl UiBridge {
                 return bridge.events.borrow_mut().set(&ctx, handle, native, &name, value, dispatcher);
             }
             let mutation = properties::Mutation::parse(&ctx, &name, value)?;
+            if let properties::Mutation::TestId(value) = mutation {
+                return bridge.registry.borrow_mut().set_test_id(handle, value).map_err(|error| host_error(&ctx, error));
+            }
             let (dom, native) = {
                 let registry = bridge.registry.borrow();
                 if mutation.requires_editable() {

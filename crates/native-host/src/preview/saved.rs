@@ -1,0 +1,274 @@
+//! Queries immutable capture evidence only. This module never constructs a runtime or renderer.
+use std::{collections::{HashMap,HashSet},io::Read,path::{Path,PathBuf}};
+use serde_json::{Value,json};
+use super::{Error,output::digest,scenario::{Selector,Target},selectors};
+
+const FIELDS:&[&str]=&["token","parent","surface","generation","kind","ownership","testId","role","name","text","value","state","boundsLogical","boundsDevice","boundsKind","source","textTruncated","testIdTruncated","nameTruncated","valueTruncated","pointerReachabilityVerified"];
+
+struct Options {
+    root:PathBuf,capture:String,target:Option<Target>,fields:Vec<String>,max_nodes:usize,max_depth:usize,cursor:Option<String>,
+}
+fn options(args:Vec<String>)->Result<Options,Error> {
+    let mut args=args.into_iter();
+    let mut seen=HashSet::new();
+    let(mut root,mut capture,mut test_id,mut role,mut name,mut cursor)=(None,None,None,None,None,None);
+    let mut fields="token,parent,testId,role,name,text,state,boundsLogical".to_owned();
+    let(mut max_nodes,mut max_depth)=(10,1);
+    while let Some(key)=args.next() {
+        if !seen.insert(key.clone()) { return Err(schema("duplicate inspect option")); }
+        let value=args.next().ok_or_else(||schema("inspect option has no value"))?;
+        match key.as_str() {
+            "--run"=>root=Some(PathBuf::from(value)),"--capture"=>capture=Some(value),
+            "--test-id"=>test_id=Some(value),"--role"=>role=Some(value),"--name"=>name=Some(value),
+            "--fields"=>fields=value,"--cursor"=>cursor=Some(value),
+            "--max-nodes"=>max_nodes=value.parse::<usize>().map_err(|_|schema("max-nodes must be an integer"))?,
+            "--max-depth"=>max_depth=value.parse::<usize>().map_err(|_|schema("max-depth must be an integer"))?,
+            _=>return Err(schema("unsupported inspect option")),
+        }
+    }
+    let capture=capture.ok_or_else(||schema("--capture is required to select an immutable version"))?;
+    if !super::scenario::safe_id(&capture) { return Err(schema("invalid capture ID")); }
+    if max_nodes==0 || max_nodes>100 || max_depth>64 { return Err(schema("max-nodes must be 1..100 and max-depth 0..64")); }
+    let fields:Vec<String>=fields.split(',').map(str::to_owned).collect();
+    if fields.is_empty() || fields.iter().any(|field|!FIELDS.contains(&field.as_str())) || fields.iter().collect::<HashSet<_>>().len()!=fields.len() {
+        return Err(schema("fields must be a nonempty, duplicate-free inspection allowlist"));
+    }
+    let target=match(test_id,role,name) {
+        (None,None,None)=>None,
+        (Some(id),None,None) if id.len()<=512=>Some(Target{surface:"main".into(),selector:Selector::TestId(id)}),
+        (None,Some(role),Some(name)) if role.len()<=128 && name.len()<=4096=>Some(Target{surface:"main".into(),selector:Selector::Semantic{role,name}}),
+        _=>return Err(schema("use test-id or role plus name, never both; selector strings must fit native metadata limits")),
+    };
+    Ok(Options{root:root.ok_or_else(||schema("--run is required"))?,capture,target,fields,max_nodes,max_depth,cursor})
+}
+
+pub fn command(args:Vec<String>)->Result<Value,Error> {
+    let options=options(args)?;
+    let root=options.root.canonicalize().map_err(io)?;
+    let manifest:Value=serde_json::from_slice(&read_file(&root,"artifacts.json",64*1024*1024)?).map_err(io)?;
+    if manifest["schemaVersion"]!=1 { return Err(schema("unsupported artifact inventory version")); }
+    let tree_path=format!("captures/{}.tree.json",options.capture);
+    let frame_path=format!("captures/{}.frame.json",options.capture);
+    let tree_bytes=verified(&root,&manifest,&tree_path,"capture-tree")?;
+    let frame_bytes=verified(&root,&manifest,&frame_path,"capture-frame")?;
+    let result:Value=serde_json::from_slice(&verified(&root,&manifest,"result.json","result")?).map_err(io)?;
+    let source_status=result["status"].as_str().filter(|status|matches!(*status,"passed"|"failed"))
+        .ok_or_else(||Error::new("E_OUTPUT_IO",8,"saved run has no terminal status"))?;
+    let tree:Value=serde_json::from_slice(&tree_bytes).map_err(io)?;
+    let frame:Value=serde_json::from_slice(&frame_bytes).map_err(io)?;
+    let tree_digest=digest(&tree_bytes);
+    validate_identity(&tree,&frame,&result,&options.capture,&tree_digest)?;
+    query(&tree,&tree_digest,&root.join(tree_path),source_status,&options)
+}
+
+fn validate_identity(tree:&Value,frame:&Value,result:&Value,capture:&str,tree_digest:&str)->Result<(),Error> {
+    if tree["schemaVersion"]!=1 || frame["schemaVersion"]!=1 || result["schemaVersion"]!=1 || result["command"]!="run"
+        || frame["captureId"]!=capture || frame["treeDigest"]!=tree_digest || frame["layoutDocumentCoherent"]!=true
+        || tree["buildId"].as_str().is_none_or(str::is_empty) || tree["buildId"]!=frame["buildId"] || tree["buildId"]!=result["build"]["buildId"]
+        || tree["generation"].as_u64().is_none() || tree["generation"]!=frame["generation"] || tree["generation"]!=result["generation"]
+        || tree["surface"]!="main" || tree["surface"]!=frame["surface"]
+        || tree["frameOrdinal"].as_u64().is_none() || tree["frameOrdinal"]!=frame["validationFrame"]["ordinal"]
+        || tree["presentationSequence"].as_u64().is_none() || tree["presentationSequence"]!=frame["pixelPresentation"]["sequence"]
+        || tree["metadataRevision"].as_u64().is_none() || tree["metadataRevision"]!=frame["metadataRevision"] {
+        return Err(Error::new("E_OUTPUT_IO",8,"capture, tree and terminal run identities disagree"));
+    }
+    Ok(())
+}
+
+fn query(tree:&Value,tree_digest:&str,path:&Path,source_status:&str,options:&Options)->Result<Value,Error> {
+    let nodes=tree["nodes"].as_array().ok_or_else(||Error::new("E_OUTPUT_IO",8,"saved tree has no node array"))?;
+    if nodes.is_empty() || nodes.len()>4096 { return Err(Error::new("E_OUTPUT_LIMIT",8,"saved tree exceeds the bounded native snapshot contract")); }
+    let selected=if let Some(target)=&options.target { selectors::unique(tree,target,false)?.expect("required target") } else { 0 };
+    let mut by_token=HashMap::with_capacity(nodes.len());
+    let mut depths=Vec::with_capacity(nodes.len());
+    let mut parents=Vec::with_capacity(nodes.len());
+    for (index,node) in nodes.iter().enumerate() {
+        let token=node["token"].as_str().ok_or_else(||Error::new("E_OUTPUT_IO",8,"saved node has no token"))?;
+        if token.len()>64 || by_token.contains_key(token) { return Err(Error::new("E_OUTPUT_IO",8,"saved tree has invalid or duplicate tokens")); }
+        let parent=match node["parent"].as_str() {
+            Some(parent)=>Some(*by_token.get(parent).ok_or_else(||Error::new("E_OUTPUT_IO",8,"saved tree is not parent-first"))?),
+            None if node["parent"].is_null()=>None,
+            _=>return Err(Error::new("E_OUTPUT_IO",8,"saved node parent is invalid")),
+        };
+        depths.push(parent.map_or(0_usize,|parent:usize|depths[parent]+1));
+        parents.push(parent);
+        by_token.insert(token,index);
+    }
+    let mut selected_nodes=vec![selected];
+    if let Some(parent)=parents[selected] { selected_nodes.push(parent); }
+    let mut depth_omitted=0;
+    for index in selected+1..nodes.len() {
+        if depths[index]<=depths[selected] { break; }
+        if depths[index]-depths[selected]<=options.max_depth { selected_nodes.push(index); } else { depth_omitted+=1; }
+    }
+    let query_digest=digest(&serde_json::to_vec(&json!({"capture":options.capture,"target":options.target,"fields":options.fields,"maxDepth":options.max_depth})).expect("query serializes"));
+    let prefix=format!("{}.{}.",tree_digest.trim_start_matches("sha256:"),query_digest.trim_start_matches("sha256:"));
+    let offset=match &options.cursor {
+        None=>0,
+        Some(cursor)=>cursor.strip_prefix(&prefix).and_then(|offset|offset.parse::<usize>().ok()).filter(|offset|*offset<selected_nodes.len())
+            .ok_or_else(||schema("cursor does not belong to this immutable snapshot and query"))?,
+    };
+    let mut result=json!({"schemaVersion":1,"command":"inspect","status":"passed","exitCode":0,
+        "sourceRunStatus":source_status,"artifact":path,"treeDigest":tree_digest,"buildId":tree["buildId"],"generation":tree["generation"],
+        "frameOrdinal":tree["frameOrdinal"],"presentationSequence":tree["presentationSequence"],"selectedToken":nodes[selected]["token"],
+        "nodes":[],"nextCursor":null,"truncation":{"pageRemaining":0,"depthOmitted":depth_omitted,
+            "sourceNodes":tree["truncation"]["nodes"].as_bool(),"sourceText":tree["truncation"]["text"].as_bool(),"fieldBytes":128}});
+    let base=serde_json::to_vec(&result).expect("inspection serializes").len();
+    let mut used=base+prefix.len()+24; // Reserve the longest cursor, including its offset.
+    let mut projected=Vec::new();
+    for index in selected_nodes.iter().skip(offset).take(options.max_nodes) {
+        let node=project(&nodes[*index],&options.fields);
+        let bytes=serde_json::to_vec(&node).expect("node serializes").len()+1;
+        if used+bytes+1>super::MAX_STDOUT_BYTES { break; }
+        used+=bytes;
+        projected.push(node);
+    }
+    if projected.is_empty() { return Err(Error::new("E_OUTPUT_LIMIT",8,"selected inspection row cannot fit the 8 KiB response limit")); }
+    let next=offset+projected.len();
+    result["nodes"]=json!(projected);
+    result["truncation"]["pageRemaining"]=json!(selected_nodes.len()-next);
+    if next<selected_nodes.len() { result["nextCursor"]=json!(format!("{prefix}{next}")); }
+    if serde_json::to_vec(&result).expect("inspection serializes").len()+1>super::MAX_STDOUT_BYTES {
+        return Err(Error::new("E_OUTPUT_LIMIT",8,"inspection exceeds 8 KiB"));
+    }
+    Ok(result)
+}
+
+fn project(node:&Value,fields:&[String])->Value {
+    let mut result=serde_json::Map::new();
+    let mut truncated=Vec::new();
+    for field in fields {
+        let value=&node[field];
+        let value=if let Some(text)=value.as_str() && text.len()>128 {
+            truncated.push(field);
+            json!(&text[..text.floor_char_boundary(128)])
+        } else { value.clone() };
+        result.insert(field.clone(),value);
+    }
+    result.insert("truncatedFields".into(),json!(truncated));
+    Value::Object(result)
+}
+fn verified(root:&Path,manifest:&Value,path:&str,role:&str)->Result<Vec<u8>,Error> {
+    let entries=manifest["artifacts"].as_array().ok_or_else(||Error::new("E_OUTPUT_IO",8,"artifact inventory has no entries"))?;
+    let mut matching=entries.iter().filter(|entry|entry["path"]==path);
+    let entry=matching.next().ok_or_else(||Error::new("E_OUTPUT_IO",8,"capture is absent from saved artifact inventory"))?;
+    if matching.next().is_some() || entry["status"]!="complete" || entry["role"]!=role {
+        return Err(Error::new("E_OUTPUT_IO",8,"capture artifact is duplicated, partial or has the wrong role"));
+    }
+    let bytes=read_file(root,path,8*1024*1024)?;
+    if entry["bytes"].as_u64()!=Some(bytes.len() as u64) || entry["digest"]!=digest(&bytes) {
+        return Err(Error::new("E_OUTPUT_IO",8,"saved capture failed its inventory digest"));
+    }
+    Ok(bytes)
+}
+fn read_file(root:&Path,relative:&str,limit:u64)->Result<Vec<u8>,Error> {
+    let mut path=root.to_owned();
+    for component in Path::new(relative).components() {
+        path.push(component);
+        if std::fs::symlink_metadata(&path).map_err(io)?.file_type().is_symlink() {
+            return Err(Error::new("E_OUTPUT_IO",8,"saved artifacts cannot be symlinks"));
+        }
+    }
+    let file=std::fs::File::open(path).map_err(io)?;
+    let metadata=file.metadata().map_err(io)?;
+    if !metadata.is_file() || metadata.len()>limit { return Err(Error::new("E_OUTPUT_LIMIT",8,"saved artifact is not a bounded regular file")); }
+    let mut bytes=Vec::with_capacity(metadata.len() as usize);
+    file.take(limit+1).read_to_end(&mut bytes).map_err(io)?;
+    if bytes.len() as u64>limit { return Err(Error::new("E_OUTPUT_LIMIT",8,"saved artifact grew beyond its read limit")); }
+    Ok(bytes)
+}
+fn schema(message:&str)->Error { Error::new("E_SCHEMA",2,message) }
+fn io(error:impl std::fmt::Display)->Error { Error::new("E_OUTPUT_IO",8,error.to_string()) }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn fixture()->Value {
+        json!({"schemaVersion":1,"surface":"main","generation":1,"buildId":"example","frameOrdinal":3,
+            "presentationSequence":2,"metadataRevision":1,"truncation":{"nodes":false,"text":false},
+            "nodes":[
+                {"token":"node-0","parent":null,"testId":null},
+                {"token":"node-1","parent":"node-0","testId":"selected"},
+                {"token":"node-2","parent":"node-1","testId":"child"},
+                {"token":"node-3","parent":"node-0","testId":"unrelated"}]})
+    }
+    fn selection()->Options {
+        options(["--run","unused","--capture","initial","--test-id","selected","--max-nodes","1","--fields","token,parent"].map(str::to_owned).to_vec()).unwrap()
+    }
+    #[test]
+    fn cursor_cannot_cross_snapshot_or_query_and_context_stays_in_selected_subtree() {
+        let tree=fixture();
+        let hash=digest(&serde_json::to_vec(&tree).unwrap());
+        let mut options=selection();
+        let first=query(&tree,&hash,Path::new("saved.tree.json"),"failed",&options).unwrap();
+        assert_eq!(first["nodes"][0]["token"],"node-1");
+        options.cursor=Some(first["nextCursor"].as_str().unwrap().to_owned());
+        assert!(query(&tree,"sha256:different",Path::new("saved.tree.json"),"failed",&options).is_err());
+        options.max_depth=0;
+        assert!(query(&tree,&hash,Path::new("saved.tree.json"),"failed",&options).is_err());
+        options.max_depth=1;
+        let parent=query(&tree,&hash,Path::new("saved.tree.json"),"failed",&options).unwrap();
+        assert_eq!(parent["nodes"][0]["token"],"node-0");
+        options.cursor=Some(parent["nextCursor"].as_str().unwrap().to_owned());
+        let child=query(&tree,&hash,Path::new("saved.tree.json"),"failed",&options).unwrap();
+        assert_eq!(child["nodes"][0]["token"],"node-2");
+        assert!(child["nextCursor"].is_null());
+        assert_eq!(child["sourceRunStatus"],"failed");
+    }
+    #[test]
+    fn byte_pagination_preserves_all_nodes_and_marks_utf8_prefixes() {
+        let mut tree=fixture();
+        tree["nodes"]=json!((0..80).map(|index|json!({
+            "token":format!("node-{index}"),"parent":(index>0).then_some("node-0"),
+            "name":"界".repeat(512),"text":"🙂".repeat(512)
+        })).collect::<Vec<_>>());
+        let hash=digest(&serde_json::to_vec(&tree).unwrap());
+        let mut options=options(["--run","unused","--capture","initial","--max-nodes","100","--fields","token,name,text"].map(str::to_owned).to_vec()).unwrap();
+        let mut tokens=HashSet::new();
+        let mut pages=0;
+        loop {
+            let page=query(&tree,&hash,Path::new("saved.tree.json"),"passed",&options).unwrap();
+            assert!(serde_json::to_vec(&page).unwrap().len()+1<=super::super::MAX_STDOUT_BYTES);
+            for node in page["nodes"].as_array().unwrap() {
+                assert!(tokens.insert(node["token"].as_str().unwrap().to_owned()));
+                assert_eq!(node["truncatedFields"],json!(["name","text"]));
+                assert!(node["name"].as_str().unwrap().len()<=128);
+                assert!(node["text"].as_str().unwrap().len()<=128);
+            }
+            pages+=1;
+            options.cursor=page["nextCursor"].as_str().map(str::to_owned);
+            if options.cursor.is_none() { break; }
+            assert!(pages<80);
+        }
+        assert_eq!(tokens.len(),80);
+        assert!(pages>1);
+    }
+    #[test]
+    fn internally_consistent_capture_cannot_belong_to_another_capture_or_run() {
+        let tree=fixture();
+        let frame=json!({"schemaVersion":1,"captureId":"initial","treeDigest":"hash","layoutDocumentCoherent":true,
+            "buildId":"example","generation":1,"surface":"main","metadataRevision":1,"validationFrame":{"ordinal":3},"pixelPresentation":{"sequence":2}});
+        let result=json!({"schemaVersion":1,"command":"run","build":{"buildId":"example"},"generation":1});
+        validate_identity(&tree,&frame,&result,"initial","hash").unwrap();
+        assert!(validate_identity(&tree,&frame,&result,"after","hash").is_err());
+        for (field,value) in [("buildId",json!("other-build")),("generation",json!(2))] {
+            let mut tree=tree.clone();
+            let mut frame=frame.clone();
+            tree[field]=value.clone();
+            frame[field]=value;
+            assert!(validate_identity(&tree,&frame,&result,"initial","hash").is_err());
+        }
+        for revision in [None,Some(Value::Null),Some(json!("1")),Some(json!(-1))] {
+            let mut tree=tree.clone();
+            let mut frame=frame.clone();
+            tree.as_object_mut().unwrap().remove("metadataRevision");
+            frame.as_object_mut().unwrap().remove("metadataRevision");
+            if let Some(value)=revision { tree["metadataRevision"]=value.clone(); frame["metadataRevision"]=value; }
+            assert!(validate_identity(&tree,&frame,&result,"initial","hash").is_err());
+        }
+        let mut frame=frame;
+        frame["layoutDocumentCoherent"]=json!(false);
+        assert!(validate_identity(&tree,&frame,&result,"initial","hash").is_err());
+    }
+}

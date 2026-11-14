@@ -39,7 +39,7 @@ pub fn command(args: Vec<String>) -> Result<Value,Error> {
     let options=options(args.iter().cloned())?;
     let (_,profile)=profile::read_profile(&options.common.profile,&options.common.overrides)?;
     // Capability/schema errors cannot execute the application, allocate a GPU, or claim a run.
-    let scenario = scenario::load(&options.scenario,&["pixels"],profile.clock.is_virtual())?;
+    let scenario = scenario::load(&options.scenario,super::RUN_CAPABILITIES,profile.clock.is_virtual())?;
     validate_steps(&scenario.scenario, &profile.limits)?;
     fixture::load(&options.fixture)?;
     let mut output=Output::create(options.common.out.as_deref().expect("required output"),profile.limits.max_output_bytes)?;
@@ -97,6 +97,8 @@ pub fn worker(args: impl Iterator<Item=String>) -> supervisor::Report {
     let mut cause_saved=false;
     let mut captures=0;
     let mut latest=Value::Null;
+    let mut assertions_passed=0;
+    let mut assertions_failed=0;
     let outcome=(|| -> Result<(),Fault> {
         let options=options(args)?;
         let (_,declared)=profile::read_profile(&options.common.profile,&options.common.overrides)?;
@@ -106,7 +108,7 @@ pub fn worker(args: impl Iterator<Item=String>) -> supervisor::Report {
         output=Some(sink.clone());
         let profile=profile::load(&options.common.profile,&options.common.overrides)?;
         let fixture=fixture::load(&options.fixture)?;
-        let scenario=scenario::load(&options.scenario,&["pixels"],profile.profile.clock.is_virtual())?;
+        let scenario=scenario::load(&options.scenario,super::RUN_CAPABILITIES,profile.profile.clock.is_virtual())?;
         validate_steps(&scenario.scenario, &profile.profile.limits)?;
         scenario_id=json!(scenario.scenario.id);
         sink.borrow_mut().json("inputs/profile.json","resolved-profile",&profile.resolved_json)?;
@@ -123,7 +125,8 @@ pub fn worker(args: impl Iterator<Item=String>) -> supervisor::Report {
         environment["scenario"]=json!({"id":scenario.scenario.id,"digest":scenario.digest,"requiredCapabilities":scenario.scenario.required_capabilities});
         environment["application"]=build.clone();
         environment["capabilities"]=super::capabilities(true);
-        environment["capabilityRevision"]=json!("native-preview-v1-p1");
+        environment["capabilityRevision"]=json!("native-preview-v1-p2");
+        environment["inputPolicy"]=json!({"surfaceFocus":"main","dispatch":"one native deliver_all burst per action; no frame between low-level events","modifiers":"key-local; restored to none after key-up"});
         environment["timingDeterministic"]=json!(false);
         environment["random"]=json!({"seedApplied":false,"algorithm":null,"ambientMathRandom":"engine-default"});
         environment["graphicsEvidence"]=json!("graphics.json");
@@ -137,7 +140,7 @@ pub fn worker(args: impl Iterator<Item=String>) -> supervisor::Report {
         for (index,step) in scenario.scenario.steps.iter().enumerate() {
             action=index as u64+1;
             step_id=Some(step.id().to_owned());
-            stage=match step { Step::Settle{..}=>"settle",Step::Capture{..}=>"capture" };
+            stage=step.op();
             active.begin_step(action,match step { Step::Settle{timeout_ms,..}=>*timeout_ms,_=>None });
             sink.borrow_mut().json(&format!("progress/action-{action:06}.json"),"action-progress",&json!({"stage":stage,"step":step.id(),"actionSequence":action,"build":build,"readiness":active.readiness()}))?;
             let step_started=Instant::now();
@@ -146,6 +149,15 @@ pub fn worker(args: impl Iterator<Item=String>) -> supervisor::Report {
                 Step::Capture{capture_id,required_frame_time_us,..}=> {
                     debug_assert!(required_frame_time_us.is_none(),"preflight rejects exact time in wall profiles");
                     active.capture(capture_id).inspect(|capture| { captures+=1; latest=capture.clone(); })
+                }
+                Step::PointerMove{location,..}=>active.pointer(location,None),
+                Step::PointerClick{location,button,..}=>active.pointer(location,Some(*button)),
+                Step::KeyPress{surface,key,modifiers,..}=>active.key(*key,modifiers).map(|mut trace| { trace["surface"]=json!(surface); trace }),
+                Step::TextCommit{surface,text,..}=>active.text(text).map(|mut trace| { trace["surface"]=json!(surface); trace }),
+                Step::Assert{target,check,..}=> {
+                    let result=active.assert_node(target,check);
+                    if result.is_ok() { assertions_passed+=1; } else { assertions_failed+=1; }
+                    result
                 }
             };
             if let Err(fault)=&result {
@@ -216,7 +228,7 @@ pub fn worker(args: impl Iterator<Item=String>) -> supervisor::Report {
     }
     let mut result=json!({"schemaVersion":1,"command":"run","runId":format!("run-{}",std::process::id()),
         "scenarioId":scenario_id,"generation":1,"status":if failure.is_none(){"passed"}else{"failed"},
-        "exitCode":failure.as_ref().map_or(0,|fault|fault.error.exit_code),"assertions":{"passed":0,"failed":0},
+        "exitCode":failure.as_ref().map_or(0,|fault|fault.error.exit_code),"assertions":{"passed":assertions_passed,"failed":assertions_failed},
         "captureCount":captures,"build":compact_build(&build),"timingDeterministic":false,"teardown":teardown,
         "firstError":failure.as_ref().map(|fault|cause_summary(fault,stage,step_id.as_deref(),action)),
         "failureEvidence":failure_evidence,"artifacts":{"manifest":"artifacts.json","environment":"environment.json",
@@ -247,7 +259,7 @@ fn compact_build(build:&Value)->Value {
 }
 fn cause_summary(fault:&Fault,stage:&str,step:Option<&str>,action:u64)->Value {
     json!({"code":fault.error.code,"message":fault.error.message.chars().take(768).collect::<String>(),
-        "stage":stage,"step":step,"actionSequence":action,"exitCode":fault.error.exit_code})
+        "stage":stage,"step":step,"actionSequence":action,"exitCode":fault.error.exit_code,"details":fault.error.details})
 }
 fn publication_failure(error:Error,previous:&Value)->Value {
     let mut failed=super::failure("run",error);
