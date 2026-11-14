@@ -2,6 +2,8 @@
 
 The implementation follows [the supplied specification](tsx-native-ui.md). Phases 0–7 passed; Phase 8 recorded the limited release baseline below and introduces no speculative optimization. Git was initialized during Phase 3; `0287d46` records the supplied specification. The first implementation commit covers verified Phases 0–3; each subsequent completed phase gets its own commit.
 
+Preview commands and phase acceptance are tracked in [preview verification](preview-verification.md).
+
 ## Dependency policy
 
 | Component | Selected identity |

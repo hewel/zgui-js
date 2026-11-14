@@ -2188,14 +2188,19 @@ dependencies = [
  "js-runtime",
  "libc",
  "parley",
+ "png",
  "rquickjs",
  "serde",
  "serde_json",
  "sha2",
  "sourcemap",
+ "toml",
  "ui-bridge",
  "zgui",
  "zgui-dom",
+ "zgui-layout",
+ "zgui-platform-headless",
+ "zgui-render-wgpu",
  "zgui-view",
  "zgui-view-dom",
 ]
@@ -5618,6 +5623,17 @@ dependencies = [
  "raw-window-handle",
  "thiserror 2.0.21",
  "zgui-geom",
+ "zgui-vocab",
+]
+
+[[package]]
+name = "zgui-platform-headless"
+version = "0.1.0"
+source = "git+https://github.com/zortax/zgui?rev=80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a#80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a"
+dependencies = [
+ "accesskit",
+ "zgui-geom",
+ "zgui-platform",
  "zgui-vocab",
 ]
 

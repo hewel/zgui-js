@@ -1,0 +1,32 @@
+{
+  "schemaVersion": 1,
+  "id": "desktop-800x600-175",
+  "surface": {
+    "name": "main",
+    "width": 800,
+    "height": 600,
+    "scale": 1.75,
+    "refreshRateMilliHz": 60000,
+    "opaque": true,
+    "background": "#17191fff"
+  },
+  "theme": "dark",
+  "locale": "en-US",
+  "direction": "ltr",
+  "timeZone": "UTC",
+  "clock": { "mode": "virtual", "epochMs": 1794614400000, "startUs": 0 },
+  "random": { "seed": 12345 },
+  "fonts": { "mode": "shipped-only", "manifest": "../fonts/fonts.json" },
+  "assets": { "mode": "package-only", "readiness": "required-visible" },
+  "limits": {
+    "maxRunWallMs": 15000,
+    "maxStepWallMs": 3000,
+    "maxJsEntryWallMs": 25,
+    "maxJobsPerPump": 1000,
+    "maxPumpWallMs": 50,
+    "maxSettleTurns": 64,
+    "maxFramesPerStep": 120,
+    "maxVirtualDurationMs": 60000,
+    "maxOutputBytes": 33554432
+  }
+}

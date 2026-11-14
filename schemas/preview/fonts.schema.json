@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://zgui-js.local/schemas/preview/fonts.schema.json",
+  "title": "Packaged preview font manifest v1",
+  "description": "Manifest at most 64 KiB. Fonts are loaded in faces order into a shipped-only collection; fallbackOrder is applied as escaped CSS family strings on the document root. The loader also enforces unique family aliases and requires each fallbackOrder alias to name a declared face. Paths are canonicalized under the manifest directory; symlink escapes are rejected. Each font is at most 32 MiB, all fonts at most 64 MiB, each license a nonempty UTF-8 file of at most 64 KiB. Every font SHA-256 and registration must succeed; system fallback is never enabled.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "faces", "fallbackOrder"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "faces": {
+      "type": "array", "minItems": 1, "maxItems": 16,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["family", "path", "sha256", "licensePath"],
+        "properties": {
+          "family": { "$ref": "#/$defs/alias" },
+          "path": { "$ref": "#/$defs/resourcePath" },
+          "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+          "licensePath": { "$ref": "#/$defs/resourcePath" }
+        }
+      }
+    },
+    "fallbackOrder": {
+      "type": "array", "minItems": 1, "maxItems": 16, "uniqueItems": true,
+      "items": { "$ref": "#/$defs/alias" }
+    }
+  },
+  "$defs": {
+    "alias": {
+      "type": "string", "minLength": 1, "maxLength": 128,
+      "allOf": [{ "pattern": "\\S" }, { "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*$" }]
+    },
+    "resourcePath": {
+      "type": "string", "minLength": 1, "maxLength": 1024,
+      "pattern": "^(?!/)(?!.*[\\\\\\u0000])(?!(?:.*\/)?\\.{1,2}(?:\/|$))[^/]+(?:/[^/]+)*$"
+    }
+  }
+}

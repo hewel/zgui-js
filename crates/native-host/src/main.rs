@@ -4,6 +4,7 @@ mod work;
 mod watcher;
 mod fallback;
 mod shell;
+mod preview;
 #[cfg(test)]
 mod native_tests;
 #[cfg(test)]
@@ -336,7 +337,11 @@ impl AppHandler for Application {
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
-    let mut args = std::env::args().skip(1);
+    let mut args = std::env::args().skip(1).peekable();
+    if args.peek().is_some_and(|arg| arg == "preview") {
+        args.next();
+        std::process::exit(i32::from(preview::command(args)));
+    }
     let mut exit_after = None;
     let mut bundle: Option<PathBuf> = None;
     let mut exercise = false;

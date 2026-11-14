@@ -1,0 +1,96 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://zgui-js.local/schemas/preview/profile.schema.json",
+  "title": "Preview profile v1",
+  "description": "Closed declaration, at most 64 KiB. Runtime additionally rounds physical extents floor(logical * scale + 0.5), requires each extent in 1..16384 and a product at most 16777216 pixels (64 MiB RGBA8). Clock start plus maxVirtualDurationMs must remain a safe integer in microseconds, and epoch plus elapsed time must remain inside the ECMAScript Date range. These arithmetic cross-field constraints are enforced by the loader before allocation. Only en-US, UTC, ltr, opaque surfaces, dark/light themes, packaged assets and shipped fonts are supported.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "id", "surface", "theme", "locale", "direction", "timeZone", "clock", "random", "fonts", "assets", "limits"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "\\S" },
+    "surface": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "width", "height", "scale", "refreshRateMilliHz", "opaque", "background"],
+      "properties": {
+        "name": { "const": "main" },
+        "width": { "type": "integer", "minimum": 1, "maximum": 16384 },
+        "height": { "type": "integer", "minimum": 1, "maximum": 16384 },
+        "scale": { "type": "number", "exclusiveMinimum": 0, "maximum": 8 },
+        "refreshRateMilliHz": { "type": "integer", "minimum": 1, "maximum": 1000000 },
+        "opaque": { "const": true },
+        "background": { "type": "string", "pattern": "^#[0-9a-fA-F]{6}[fF]{2}$" }
+      }
+    },
+    "theme": { "enum": ["dark", "light"] },
+    "locale": { "const": "en-US" },
+    "direction": { "const": "ltr" },
+    "timeZone": { "const": "UTC" },
+    "clock": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["mode"],
+          "properties": { "mode": { "const": "wall" } }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["mode", "epochMs", "startUs"],
+          "properties": {
+            "mode": { "const": "virtual" },
+            "epochMs": { "type": "integer", "minimum": 0, "maximum": 8640000000000000 },
+            "startUs": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 }
+          }
+        }
+      ]
+    },
+    "random": {
+      "description": "Seed for the declared preview random API; does not claim deterministic cryptographic or external randomness. The runtime records its algorithm/revision when that API is enabled.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["seed"],
+      "properties": { "seed": { "type": "integer", "minimum": 0, "maximum": 4294967295 } }
+    },
+    "fonts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode", "manifest"],
+      "properties": {
+        "mode": { "const": "shipped-only" },
+        "manifest": {
+          "description": "Relative to the profile directory. This explicitly declared manifest establishes an independent font root; parent segments are permitted here, never in face/license paths.",
+          "type": "string", "minLength": 1, "maxLength": 1024,
+          "pattern": "^(?!/)(?!.*[\\\\\\u0000])(?!(?:.*\/)?\\.(?:\/|$))[^/]+(?:/[^/]+)*$"
+        }
+      }
+    },
+    "assets": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode", "readiness"],
+      "properties": {
+        "mode": { "const": "package-only" },
+        "readiness": { "const": "required-visible" }
+      }
+    },
+    "limits": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["maxRunWallMs", "maxStepWallMs", "maxJsEntryWallMs", "maxJobsPerPump", "maxPumpWallMs", "maxSettleTurns", "maxFramesPerStep", "maxVirtualDurationMs", "maxOutputBytes"],
+      "properties": {
+        "maxRunWallMs": { "type": "integer", "minimum": 1, "maximum": 300000 },
+        "maxStepWallMs": { "type": "integer", "minimum": 1, "maximum": 60000 },
+        "maxJsEntryWallMs": { "type": "integer", "minimum": 1, "maximum": 1000 },
+        "maxJobsPerPump": { "type": "integer", "minimum": 1, "maximum": 100000 },
+        "maxPumpWallMs": { "type": "integer", "minimum": 1, "maximum": 1000 },
+        "maxSettleTurns": { "type": "integer", "minimum": 1, "maximum": 10000 },
+        "maxFramesPerStep": { "type": "integer", "minimum": 1, "maximum": 10000 },
+        "maxVirtualDurationMs": { "type": "integer", "minimum": 0, "maximum": 3600000 },
+        "maxOutputBytes": { "type": "integer", "minimum": 1, "maximum": 1073741824 }
+      }
+    }
+  }
+}

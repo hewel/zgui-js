@@ -16,6 +16,14 @@ sourcemap.workspace = true
 host-services.workspace = true
 # zgui-text-parley does not forward this feature; CJK layout analysis needs its dictionaries.
 parley = { version = "=0.11.1", default-features = false, features = ["complex-scripts"] }
+png = "=0.18.1"
+toml = "=1.2.1"
+zgui-platform-headless = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a" }
+zgui-render-wgpu = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a" }
+zgui-layout = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a" }
+
+[build-dependencies]
+sha2.workspace = true
 
 [dev-dependencies]
 zgui-view = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a", features = ["stub-backend"] }
