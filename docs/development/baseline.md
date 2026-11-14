@@ -104,9 +104,14 @@ compositor key (for example, `wtype -k F24` sent to its verified owned window).
 This supplies Wayland's required input serial for clipboard ownership; injected
 runtime events alone cannot authorize it. With `ZGUI_EDITING_WAYLAND_IME=1`, it
 then waits at `native-wayland-ime-ready` for actual Chinese composition and
-commit through the desktop IME. Clipboard contents are restored after the gate;
-its helper does not retain test-log descriptors. Do not run it concurrently with
-another clipboard or keyboard-input scenario.
+commit through the desktop IME. By default, the gate reads and restores the
+previous clipboard contents; its helper does not retain test-log descriptors.
+When reading the original clipboard is not authorized, explicitly authorize
+destructive replacement and set `ZGUI_EDITING_REPLACE_CLIPBOARD=1`. That mode
+neither reads nor restores the original selection and leaves test-owned contents
+in place. Do not run the gate concurrently with another clipboard or keyboard-input
+scenario. The real compositor/IME run is recorded in
+[preview P6 verification](preview-verification.md#p6--real-waylandniri-desktop-verification).
 
 ## Native desktop shell
 

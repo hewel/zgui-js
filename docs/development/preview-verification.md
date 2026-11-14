@@ -555,3 +555,135 @@ revision only after both PNG files proved byte-identical to P4; the native image
 was visually inspected again. Exact policy bytes, application build ID, typography
 and expected Count/Doubled behavior remain unchanged. Desktop output removal, real
 IME, compositor blending and live service parity remain separate P6 evidence.
+
+## P6 — real Wayland/niri desktop verification
+
+These are actual unlocked desktop observations, not headless surface-role
+declarations. The native/compiler baseline remains the one documented above and
+in [baseline.md](baseline.md). The compositor reports
+`26.04 (v26.04-298-gad20c318-modified)`; the installed niri CLI reports
+`26.04 (8ed0da4)`. DP-1 normally uses scale 1.75. The live service continues to use
+direct Unix-socket IPC rather than that CLI's incompatible event parser.
+
+Explicit authorization covered PID-verified owned-window keyboard/IME input,
+clipboard replacement without reading its old contents, temporary DP-1 scale
+changes and off/on, and full-output captures in the controlled test workspace.
+Output geometry and prior focus were restored after the scenarios; the editing
+scenario also restored the prior IME engine/activation state. The original
+clipboard was never read or restored. Screenshots themselves replace the
+clipboard under the same authorization.
+
+### Native editing and occlusion
+
+The rebuilt native test binary passed these opt-in gates:
+
+```sh
+ZGUI_PLATFORM=wayland ZGUI_EDITING_REPLACE_CLIPBOARD=1 \
+  ZGUI_EDITING_WAYLAND_IME=1 cargo test -p native-host --bin native-host \
+  editing_tests::native_text_editing -- --ignored --exact --nocapture
+
+ZGUI_PLATFORM=wayland cargo test -p native-host --bin native-host \
+  async_tests::native_async_delivery -- --ignored --exact --nocapture
+```
+
+The editing run used the compiled test executable directly to retain its exact
+PID. A temporary Wayland virtual-keyboard client sent F24 only after verifying
+the owned window and focus, supplying the real serial required for clipboard
+ownership. Controlled caret, native copy/cut/paste, undo, multiline movement,
+read-only/disabled behavior, focus and semantic IDs passed. Actual fcitx/Rime
+preedit (`n`, then `ni ha o`) committed `你虾哦`; the native controlled value and
+UTF-8 selection `9:9` matched the visible field. Both retired generations had zero
+resources.
+
+The occlusion gate moved only its owned window. While genuinely occluded, the
+timer and Rust service completed but the frame callback remained pending.
+Restoring visibility produced the frame callback, Promise-driven layout and
+visible updated row. Final teardown reported four frames and zero resources.
+
+### Placement, scaling and output lifecycle
+
+```sh
+ZGUI_PLATFORM=wayland ZGUI_SHELL_LIFECYCLE=1 \
+  cargo test -p native-host --bin native-host \
+  shell::proof::real_panel_layer -- --ignored --exact --nocapture
+```
+
+- Real niri layer inventory reported `dev.zgui.js.panel`, DP-1, `Top`, keyboard
+  `None`. Protocol requests used top/left/right anchors, zero margins and a 360px
+  exclusive zone. The existing compositor side bar also reserves horizontal space.
+  A normal owned window's settled height changed from 1220 to 860 logical pixels.
+  The panel did not acquire keyboard focus.
+- DP-1 changed 1.75→2→1.75. Moving the owned normal window DP-1→DP-2→DP-1 while
+  DP-1 used scale 2 produced fractional-scale preferences 240→210→240
+  (protocol units of 1/120), with IPC confirming its destination output.
+- Turning DP-1 off produced `logical: null` and retired generation 1. Turning it
+  on created document 1 instead of document 0, mounted generation 2 and delivered
+  fresh real workspace/window rows with exactly one subscription. The gate passed
+  in 9.27 seconds; both generations ended with all resource counts zero. P5's
+  separate stale-handle/callback tests cover the retired API ownership boundary.
+
+Protocol traces must go to regular files or continuously drained sinks. An
+earlier pipe-backed instrumentation attempt timed out during output removal;
+its trace is retained, not counted as a passing lifecycle run. Stopping the owned
+clients restored responsiveness. The regular-file run above passed. Likewise,
+`panel-placement.png` was taken before presentation and is rejected as visual
+evidence; `panel-presented.png` waits for compositor presentation feedback.
+An initial native frame log is not a compositor mapping/presentation barrier.
+
+### Actual compositor transparency
+
+Two temporary TSX packages used ordinary production `native-host --bundle`,
+`--layer-config` and, for the background only, `--watch`. An opaque top-layer
+background covered the test area; a transparent overlay-layer foreground held a
+300×200 logical-pixel `#ff000080` rectangle and an opaque red reference. Both
+surfaces used four anchors, zero margins/exclusive zone and keyboard `none`.
+An atomic package publication changed only the background from green to blue.
+The foreground retained its PID and generation throughout.
+
+Full-output captures after presentation showed:
+
+| Sample | Green background RGB | Blue background RGB |
+| --- | --- | --- |
+| Transparent area | 0, 255, 0 | 0, 0, 255 |
+| Half-alpha red | 128, 127, 0 | 128, 0, 127 |
+| Opaque reference | 255, 0, 0 | 255, 0, 0 |
+
+These are compositor-composited pixels, not an offscreen alpha-channel assertion.
+They describe this desktop's observed blending path, not a cross-compositor color
+management guarantee.
+
+### Live services, wakeups and idle limits
+
+The ordinary panel process, without watch mode, displayed real niri rows.
+Opening an owned counter window caused a new presentation and visible
+`Windows (13)` without injected UI input; closing it caused another presentation.
+A separate process with an absent `NIRI_SOCKET` displayed `Disconnected`, the
+actual `Io: No such file or directory` error and `No snapshot received`, rather
+than a successful empty desktop. It exited normally with zero resources.
+
+The five-second observation measured six CPU ticks at 100 Hz and 23 additional
+Wayland frame requests. It is **not a pure idle benchmark**: the protocol trace
+records real pointer enter/motion starting at 17:14:34.198581. There were no frame
+requests between 17:14:29.644859 and 17:14:34.199868, approximately 4.55 seconds;
+the next request follows that input. The complete mixed-activity panel run ended
+with 118 native frame passes and zero resources. No continuous artificial redraw
+loop was observed during the quiet interval; these numbers do not establish a
+general CPU or power budget.
+
+### Coverage and retained evidence
+
+PV37's real editing/IME path and PV39's compositor blending, fractional scale and
+output transitions passed. PV38's placement/focus/exclusive-zone portion passed.
+The public SDK does not implement layer-parent xdg-popups or interaction outside
+such popup bounds; the pinned backend rejects that parent path. No popup support
+is certified here, and a same-surface drawing is not presented as a popup proof.
+PV40 passed for the implemented niri and async asset-service paths and observed
+occlusion/wake behavior. Live audio and notification providers are not implemented
+and are **not passing cases**; preview fixtures do not certify those integrations.
+
+Local, untracked evidence is under `target/preview-p6-desktop`: `verification.json`
+records accepted PNG hashes, observed samples and limitations; `packages/`
+retains the three immutable compiled blending inputs, source maps and build-info;
+the named `.log` files retain real protocol/lifecycle observations. The desktop
+images and logs may contain window titles and are deliberately not committed.
+Temporary source packages and native input helper sources/binaries were removed.

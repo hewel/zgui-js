@@ -18,6 +18,11 @@ enum Step { Setup, AwaitKey, Start, Position, Type, Preedit, ChinesePreedit, Com
 struct ClipboardGuard { saved: Option<(String, Vec<u8>)>, restored: bool }
 impl ClipboardGuard {
     fn capture() -> TestResult<Self> {
+        // Explicit destructive test mode: exercise only test-owned selection
+        // data without reading or restoring any pre-existing clipboard offer.
+        if std::env::var("ZGUI_EDITING_REPLACE_CLIPBOARD").as_deref() == Ok("1") {
+            return Ok(Self { saved: None, restored: true });
+        }
         let types = Command::new("wl-paste").arg("--list-types").output()?;
         if !types.status.success() {
             if String::from_utf8_lossy(&types.stderr).contains("Nothing is copied") {
