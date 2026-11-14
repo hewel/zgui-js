@@ -8,7 +8,7 @@ Preview commands and phase acceptance are tracked in [preview verification](prev
 
 | Component | Selected identity |
 | --- | --- |
-| Rust | 1.98.0, minimal profile plus rustfmt/clippy |
+| Rust | 1.100.0, minimal profile plus rustfmt/clippy |
 | zgui | `80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a` |
 | Fontique | Root Cargo patch from the same zgui revision |
 | Native runtime / Wayland | Same revision, with the documented [local patches](../../vendor/README.md) |

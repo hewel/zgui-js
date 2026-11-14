@@ -10,7 +10,7 @@ There is **no WebView and no browser DOM**. The repository also includes an offs
 
 | Component | Requirement |
 | --- | --- |
-| Rust | `1.98.0`, pinned by `rust-toolchain.toml` |
+| Rust | `1.100.0`, pinned by `rust-toolchain.toml` |
 | Node.js | `>=26.13.0` |
 | pnpm | `12.18.0` |
 | Native build tools | A C/C++ toolchain capable of building QuickJS and the native dependencies |
