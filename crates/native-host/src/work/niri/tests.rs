@@ -44,7 +44,7 @@ impl Session {
     fn new(generation: u64) -> Self {
         let (sender, wakes) = mpsc::channel();
         let work = Work::new(HostHandle::from_rc(Rc::new(StubHost::default())), None, generation,
-            Executor::new(1, 8).unwrap(), Arc::new(ChannelWaker(sender)), SurfaceId::new(7));
+            Executor::new(1, 8).unwrap(), Arc::new(ChannelWaker(sender)), SurfaceId::new(7), ServicePolicy::Live);
         let mut engine = JsRuntime::new(RuntimeLimits::default()).unwrap();
         engine.with_context(|ctx| { work.install(&ctx)?; ctx.eval::<(), _>("globalThis.seen = []; globalThis.errors = [];") }).unwrap();
         Self { work, engine, wakes }
@@ -249,4 +249,25 @@ fn cancelled_terminal_delivery_cannot_execute_error_prototype_code() {
     session.deliver(selected);
     assert_eq!(session.eval("errors.length"), "0");
     assert_eq!(session.work.counts(), (0, 0, 0, 0));
+}
+
+#[test]
+fn fixture_only_policy_rejects_transport_construction_even_with_explicit_socket() {
+    let fixture = Fixture::new();
+    let (sender, _) = mpsc::channel();
+    let work = Work::new(HostHandle::from_rc(Rc::new(StubHost::default())), None, 1,
+        Executor::new(1, 8).unwrap(), Arc::new(ChannelWaker(sender)), SurfaceId::new(7), ServicePolicy::FixtureOnly);
+    let mut engine = JsRuntime::new(RuntimeLimits::default()).unwrap();
+    work.mounting();
+    let error = engine.with_context(|ctx| {
+        let callback: Function = ctx.eval("() => {}")?;
+        work.subscribe_niri(&ctx, Some(fixture.directory.join("socket")), callback.clone(), callback).map(|_| ())
+    }).unwrap_err();
+    assert!(error.message.contains("watchNiri"));
+    assert_eq!(work.contract_failure().unwrap().code, "E_FIXTURE_MISSING_SERVICE");
+    assert_eq!(work.counts().3, 0);
+    fixture.listener.set_nonblocking(true).unwrap();
+    assert_eq!(fixture.listener.accept().unwrap_err().kind(), std::io::ErrorKind::WouldBlock);
+    work.finish_stop();
+    assert!(work.contract_failure().is_some());
 }

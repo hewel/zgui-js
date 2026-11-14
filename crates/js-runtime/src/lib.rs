@@ -84,6 +84,8 @@ pub struct Diagnostic {
     pub phase: &'static str,
     pub message: String,
     pub stack: Option<String>,
+    /// Original generated stack, retained by a host when source mapping changes `stack`.
+    pub generated_stack: Option<String>,
 }
 
 impl Diagnostic {
@@ -93,6 +95,7 @@ impl Diagnostic {
             phase,
             message: message.into(),
             stack: None,
+            generated_stack: None,
         }
     }
 }
@@ -207,6 +210,7 @@ pub struct JsRuntime {
     runtime: Runtime,
     interrupt: Rc<InterruptState>,
     limits: RuntimeLimits,
+    enclosing_deadline: Option<Rc<Cell<Instant>>>,
 }
 
 impl JsRuntime {
@@ -269,6 +273,7 @@ impl JsRuntime {
             runtime,
             interrupt,
             limits,
+            enclosing_deadline: None,
         })
     }
 
@@ -304,6 +309,16 @@ impl JsRuntime {
         &self.limits
     }
 
+    /// Clamp all JavaScript entries, jobs, and diagnostic accessors to the owner's
+    /// current real deadline. Updating the cell changes the next entry's bound.
+    pub fn set_enclosing_deadline(&mut self, deadline: Rc<Cell<Instant>>) {
+        self.enclosing_deadline = Some(deadline);
+    }
+
+    fn clamp_deadline(&self, deadline: Instant) -> Instant {
+        self.enclosing_deadline.as_ref().map_or(deadline, |outer| deadline.min(outer.get()))
+    }
+
     /// Query only outside context entries/native callbacks, on the owner thread.
     pub fn is_job_pending(&self) -> bool {
         self.runtime.is_job_pending()
@@ -316,7 +331,11 @@ impl JsRuntime {
     /// supplied remaining whole-turn budget, including diagnostic accessor work.
     pub fn execute_job(&mut self, budget: Duration) -> Result<bool, Diagnostic> {
         self.interrupt.interrupted.set(false);
-        self.interrupt.deadline.set(Some(Instant::now() + budget.min(self.limits.entry_timeout)));
+        let end = self.clamp_deadline(Instant::now() + budget.min(self.limits.entry_timeout));
+        if Instant::now() >= end {
+            return Err(Diagnostic::new(DiagnosticKind::BudgetExceeded, "pending job", "entry deadline exceeded"));
+        }
+        self.interrupt.deadline.set(Some(end));
         let _guard = EntryGuard(&self.interrupt);
         // The runtime guard is released before entering JobException's context.
         self.runtime.execute_pending_job().map_err(|exception| {
@@ -345,7 +364,7 @@ impl JsRuntime {
         let mut diagnostics = Vec::with_capacity(snapshots.len());
         if !snapshots.is_empty() {
             self.interrupt.interrupted.set(false);
-            let end = Instant::now() + self.limits.diagnostic_timeout;
+            let end = self.clamp_deadline(Instant::now() + self.limits.diagnostic_timeout);
             self.interrupt.deadline.set(Some(end));
             let _guard = EntryGuard(&self.interrupt);
             self.context.with(|ctx| {
@@ -498,6 +517,7 @@ impl JsRuntime {
         outer_end: Instant,
         f: impl for<'js> FnOnce(Ctx<'js>) -> rquickjs::Result<T>,
     ) -> Result<T, Diagnostic> {
+        let outer_end = self.clamp_deadline(outer_end);
         if Instant::now() >= outer_end {
             return Err(Diagnostic::new(
                 DiagnosticKind::BudgetExceeded,
@@ -526,7 +546,7 @@ impl JsRuntime {
         let thrown = ctx.catch();
         // Diagnostics may invoke accessors, but must never extend the entry/job
         // deadline. Expired budgets retain a primitive/type-only diagnostic.
-        let formatting_end = Instant::now() + self.limits.diagnostic_timeout;
+        let formatting_end = self.clamp_deadline(Instant::now() + self.limits.diagnostic_timeout);
         let end = self.interrupt.deadline.get().map_or(formatting_end, |active| active.min(formatting_end));
         self.interrupt.deadline.set(Some(end));
         let mut diagnostic = diagnostic_value(ctx, phase, thrown, self.limits.max_diagnostic_bytes, end);
@@ -537,7 +557,7 @@ impl JsRuntime {
     }
 
     fn pump_jobs_until(&mut self, outer_end: Instant) -> JobPump {
-        let end = outer_end.min(Instant::now() + self.limits.job_timeout);
+        let end = self.clamp_deadline(outer_end.min(Instant::now() + self.limits.job_timeout));
         let mut turn = JobPump {
             attempted_jobs: 0,
             has_pending_jobs: false,

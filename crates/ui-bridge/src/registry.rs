@@ -21,6 +21,22 @@ impl Handle {
     }
 }
 
+/// An owned bridge-tree record for Rust-side inspection, not a JavaScript value.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SnapshotNode {
+    pub token: u64,
+    pub parent: Option<u64>,
+    pub native: NodeId,
+    pub kind: &'static str,
+}
+
+/// A bounded, stable preorder projection of the attached live bridge tree.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Snapshot {
+    pub nodes: Vec<SnapshotNode>,
+    pub truncated: bool,
+}
+
 /// A rejected bridge operation. Validation happens before native mutation.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum BridgeError {
@@ -154,6 +170,57 @@ impl NodeRegistry {
     /// Returns the boundary handle, which never exposes its native parent/siblings.
     pub fn root(&self) -> Handle {
         self.root
+    }
+
+    /// Copies at most `max_nodes` attached live records, including root token 0.
+    /// Detached and never-attached subtrees are excluded. A disposed registry or
+    /// dead root produces an empty snapshot; `truncated` means a live node was
+    /// omitted by the limit. Native IDs remain valid only while their nodes live.
+    /// This does not mutate the tree or enter JavaScript.
+    pub fn snapshot(&self, max_nodes: usize) -> Snapshot {
+        let mut snapshot = Snapshot { nodes: Vec::new(), truncated: false };
+        if self.disposed {
+            return snapshot;
+        }
+        let mut current = Some(0);
+        while let Some(token) = current {
+            let record = &self.records[&token];
+            if self.dom.is_live(record.native) {
+                if snapshot.nodes.len() == max_nodes {
+                    snapshot.truncated = true;
+                    break;
+                }
+                snapshot.nodes.push(SnapshotNode {
+                    token,
+                    parent: record.parent,
+                    native: record.native,
+                    kind: match record.kind {
+                        Kind::Root => "root",
+                        Kind::Element => "element",
+                        Kind::Field => "field",
+                        Kind::Editor => "editor",
+                        Kind::Text => "text",
+                    },
+                });
+                if let Some(child) = record.first {
+                    current = Some(child);
+                    continue;
+                }
+            }
+            // Ascend through completed subtrees without recursion or a work stack.
+            let mut completed = token;
+            current = loop {
+                let record = &self.records[&completed];
+                if record.next.is_some() {
+                    break record.next;
+                }
+                match record.parent {
+                    Some(parent) => completed = parent,
+                    None => break None,
+                }
+            };
+        }
+        snapshot
     }
 
     pub(crate) fn dom_handle(&self) -> DomHandle { self.dom.clone() }

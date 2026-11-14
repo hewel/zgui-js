@@ -19,11 +19,13 @@ pub(crate) struct NiriDelivery {
 
 impl Work {
     pub(super) fn watch_niri<'js>(self: &Rc<Self>, ctx: &Ctx<'js>, snapshot: Function<'js>, error: Function<'js>) -> rquickjs::Result<Object<'js>> {
+        self.require_live_service(ctx, "watchNiri")?;
         let path = std::env::var_os("NIRI_SOCKET").map(PathBuf::from);
         self.subscribe_niri(ctx, path, snapshot, error)
     }
 
     fn subscribe_niri<'js>(self: &Rc<Self>, ctx: &Ctx<'js>, path: Option<PathBuf>, snapshot: Function<'js>, error: Function<'js>) -> rquickjs::Result<Object<'js>> {
+        self.require_live_service(ctx, "watchNiri")?;
         self.require_creation(ctx)?;
         if self.subscriptions.borrow().len() >= MAX_SUBSCRIPTIONS {
             return Err(Exception::throw_range(ctx, "niri subscription limit reached"));

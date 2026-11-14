@@ -1,0 +1,9 @@
+{
+  "schemaVersion": 1,
+  "id": "counter-capture",
+  "requiredCapabilities": ["pixels"],
+  "steps": [
+    { "id": "ready", "op": "settle" },
+    { "id": "before", "op": "capture", "captureId": "initial" }
+  ]
+}

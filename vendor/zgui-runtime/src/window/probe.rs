@@ -13,6 +13,19 @@ use zgui_vocab::PointerId;
 use crate::window::Window;
 
 impl Window {
+    /// The most recently completed native frame, when this window has a frame probe.
+    ///
+    /// `None` before the first frame or when no probe was configured. Updated immediately before
+    /// [`FrameProbe::frame_ended`](crate::FrameProbe::frame_ended), after cleanup, even when the
+    /// renderer skipped drawing. Reading it never requests work or changes the window.
+    ///
+    /// The record is historical: later writes can advance `self.dom().revision()` without a new
+    /// frame. Compare that revision with the record before associating live tree data with it.
+    #[must_use]
+    pub fn completed_frame(&self) -> Option<crate::probe::CompletedFrame> {
+        self.completed_frame
+    }
+
     /// Throws away what this window holds about where things are, and builds it again.
     ///
     /// The index that answers what is under a point is kept up to date one entry at a time, by the

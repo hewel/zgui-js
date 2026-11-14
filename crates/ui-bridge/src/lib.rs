@@ -8,7 +8,7 @@ mod events;
 
 use std::{cell::{Cell, RefCell}, collections::HashMap, rc::{Rc, Weak}};
 use rquickjs::{class::Trace, function::{Func, Opt}, Class, Ctx, Exception, JsLifetime, Object, Persistent, Value};
-use registry::{BridgeError, Handle, NodeRegistry};
+use registry::{BridgeError, Handle, NodeRegistry, Snapshot};
 
 #[derive(Trace, JsLifetime)]
 #[rquickjs::class]
@@ -70,6 +70,13 @@ impl UiBridge {
     pub fn wrapper_count(&self) -> usize { self.wrappers.borrow().len() }
     pub fn is_disposed(&self) -> bool { self.disposed.get() }
     pub fn callback_count(&self) -> usize { self.events.borrow().len() }
+
+    /// Copies the attached live tree without entering JavaScript. The returned
+    /// snapshot owns its records and holds no registry borrow during subsequent
+    /// native queries. See [`NodeRegistry::snapshot`] for ordering and limits.
+    pub fn snapshot(&self, max_nodes: usize) -> Snapshot {
+        self.registry.borrow().snapshot(max_nodes)
+    }
 
     pub fn set_dispatcher(&self, dispatcher: Rc<dyn Fn(u64, &mut zgui::view::EventCx<'_>)>) {
         *self.dispatcher.borrow_mut() = Some(dispatcher);

@@ -105,7 +105,7 @@ pub use crate::embed::{
 pub use crate::error::AppError;
 pub use crate::frame_callbacks::FrameCallbacks;
 pub use crate::host::RuntimeHost;
-pub use crate::probe::FrameProbe;
+pub use crate::probe::{CompletedFrame, FrameProbe};
 pub use crate::replaced::{IntrinsicTable, ReplacedMux};
 pub use crate::selection::Selections;
 pub use crate::text::TextEngine;

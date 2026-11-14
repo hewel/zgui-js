@@ -4,6 +4,11 @@ mod inventory;
 mod output;
 mod profile;
 mod supervisor;
+mod driver;
+mod fixture;
+mod inspect;
+mod run;
+mod scenario;
 
 use std::path::PathBuf;
 use serde_json::{Value, json};
@@ -36,14 +41,15 @@ const MAX_STDOUT_BYTES: usize = 8 * 1024;
 
 pub(crate) fn command(mut args: impl Iterator<Item = String>) -> u8 {
     let command = args.next().unwrap_or_default();
-    if command == "_doctor-worker" {
-        let report = doctor_worker(args);
+    if command == "_doctor-worker" || command == "_run-worker" {
+        let report = if command == "_doctor-worker" { doctor_worker(args) } else { run::worker(args) };
         println!("{}", serde_json::to_string(&report).expect("worker report serializes"));
         return 0;
     }
     let outcome = match command.as_str() {
         "doctor" => doctor(args.collect()),
-        _ => Err(Error::new("E_SCHEMA", 2, "expected preview doctor")),
+        "run" => run::command(args.collect()),
+        _ => Err(Error::new("E_SCHEMA", 2, "expected preview doctor or run")),
     };
     let result = outcome.unwrap_or_else(|error| failure(&command, error));
     let code = result["exitCode"].as_u64().unwrap_or(9) as u8;

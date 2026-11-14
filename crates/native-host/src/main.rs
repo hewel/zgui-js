@@ -155,7 +155,7 @@ impl Application {
         self.generation = generation;
         // Candidate evaluation owns no native children or stylesheet and cannot
         // create work. Rejection must leave the active session untouched.
-        let candidate = match Session::prepare(region, package.clone(), generation, cx.waker(), surface, self.executor.clone()) {
+        let candidate = match Session::prepare(region, package.clone(), generation, cx.waker(), surface, self.executor.clone(), session::SessionPolicy::Live) {
             Ok(candidate) => candidate,
             Err(error) => {
                 let error = error.to_string();

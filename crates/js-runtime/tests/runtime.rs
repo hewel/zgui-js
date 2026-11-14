@@ -1,6 +1,6 @@
 use js_runtime::{DiagnosticKind, JsRuntime, RuntimeLimits};
 use rquickjs::Function;
-use std::{cell::RefCell, rc::Rc, time::{Duration, Instant}};
+use std::{cell::{Cell, RefCell}, rc::Rc, time::{Duration, Instant}};
 
 fn runtime() -> JsRuntime {
     JsRuntime::new(RuntimeLimits::default()).unwrap()
@@ -429,4 +429,63 @@ fn self_replenishing_microtask_chain_yields_and_can_be_cancelled_by_next_entry()
     let pump = runtime.pump_jobs();
     assert_eq!(pump.attempted_jobs, 1);
     assert!(!pump.has_pending_jobs);
+}
+
+#[test]
+fn owner_deadline_clamps_entries_jobs_and_cleanup_and_can_be_renewed() {
+    let mut runtime = runtime();
+    runtime.with_context(|ctx| ctx.eval::<Function, _>("() => { globalThis.jobRan = true; }")?.defer(())).unwrap();
+    let deadline = Rc::new(Cell::new(Instant::now() - Duration::from_millis(1)));
+    runtime.set_enclosing_deadline(deadline.clone());
+    let error = runtime.evaluate_script("globalThis.scriptRan = true; 'ran'").unwrap_err();
+    assert_eq!(error.kind, DiagnosticKind::BudgetExceeded);
+    assert_eq!(runtime.execute_job(Duration::from_secs(1)).unwrap_err().kind, DiagnosticKind::BudgetExceeded);
+    assert!(runtime.is_job_pending(), "an expired deadline may not consume the queued job");
+    let error = runtime.with_cleanup_context(|ctx| ctx.eval::<(), _>("globalThis.cleanupRan = true")).unwrap_err();
+    assert_eq!(error.phase, "cleanup");
+    assert_eq!(error.kind, DiagnosticKind::BudgetExceeded);
+    deadline.set(Instant::now() + Duration::from_secs(1));
+    assert_eq!(runtime.evaluate_script("String(globalThis.scriptRan) + '/' + String(globalThis.cleanupRan)").unwrap(), "undefined/undefined");
+    assert!(runtime.execute_job(Duration::from_secs(1)).unwrap());
+    assert_eq!(runtime.evaluate_script("String(jobRan)").unwrap(), "true");
+}
+
+#[test]
+fn owner_deadline_interrupts_running_script_job_and_cleanup() {
+    for phase in ["script", "job", "cleanup", "module"] {
+        let mut runtime = JsRuntime::new(RuntimeLimits {
+            entry_timeout: Duration::from_secs(2),
+            cleanup_timeout: Duration::from_secs(2),
+            job_timeout: Duration::from_secs(2),
+            ..RuntimeLimits::default()
+        }).unwrap();
+        if phase == "job" {
+            runtime.with_context(|ctx| ctx.eval::<Function, _>("() => { while (true) {} }")?.defer(())).unwrap();
+        }
+        let deadline = Rc::new(Cell::new(Instant::now() + Duration::from_millis(5)));
+        runtime.set_enclosing_deadline(deadline.clone());
+        let start = Instant::now();
+        let error = match phase {
+            "script" => runtime.evaluate_script("while (true) {}").unwrap_err(),
+            "job" => runtime.execute_job(Duration::from_secs(2)).unwrap_err(),
+            "cleanup" => runtime.with_cleanup_context(|ctx| ctx.eval::<(), _>("while (true) {}")).unwrap_err(),
+            _ => runtime.load_module("deadline.mjs", "while (true) {}").unwrap_err(),
+        };
+        assert!(matches!(error.kind, DiagnosticKind::Interrupted | DiagnosticKind::BudgetExceeded), "{phase}: {error}");
+        assert!(start.elapsed() < Duration::from_millis(500), "{phase} exceeded the enclosing real deadline");
+        deadline.set(Instant::now() + Duration::from_secs(1));
+        assert_eq!(runtime.evaluate_script("'renewed'").unwrap(), "renewed");
+    }
+}
+
+#[test]
+fn rejection_accessors_cannot_extend_an_expired_owner_deadline() {
+    let mut runtime = runtime();
+    runtime.evaluate_script("globalThis.readMessage = false; const reason = new Error(); Object.defineProperty(reason, 'message', { get() { readMessage = true; while (true) {} } }); Promise.reject(reason); 'queued'").unwrap();
+    let deadline = Rc::new(Cell::new(Instant::now() - Duration::from_millis(1)));
+    runtime.set_enclosing_deadline(deadline.clone());
+    let drain = runtime.drain_rejections();
+    assert_eq!(drain.updates.len(), 1);
+    deadline.set(Instant::now() + Duration::from_secs(1));
+    assert_eq!(runtime.evaluate_script("String(readMessage)").unwrap(), "false");
 }

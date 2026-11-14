@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://zgui-js.local/schemas/preview/fixture.schema.json",
+  "title": "Preview fixture v1 (P1 empty providers)",
+  "description": "Closed input, at most 1 MiB. Both empty services and empty events must be explicit. P1 rejects nonempty provider or event declarations before mount with E_UNSUPPORTED_CAPABILITY; typed providers and events arrive in P3. Missing providers never imply permission to construct live services. Saved artifacts preserve the exact input bytes and their SHA-256 digest.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "id", "services", "events"],
+  "properties": {
+    "schemaVersion": { "type": "integer", "const": 1 },
+    "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "\\S" },
+    "services": {
+      "type": "object",
+      "additionalProperties": false,
+      "maxProperties": 0
+    },
+    "events": {
+      "type": "array",
+      "items": false,
+      "maxItems": 0
+    }
+  }
+}

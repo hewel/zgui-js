@@ -22,6 +22,22 @@ enum NativeRegistration { Timer(TimerId), Frame(FrameRequestId) }
 struct Registration { native: NativeRegistration, callback: Persistent<Function<'static>> }
 struct Pending { resolve: Persistent<Function<'static>>, reject: Persistent<Function<'static>>, cancelled: Arc<AtomicBool> }
 
+#[derive(Clone, Copy)]
+pub(crate) enum ServicePolicy { Live, FixtureOnly }
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ContractFailure {
+    pub code: &'static str,
+    pub message: String,
+}
+
+impl std::fmt::Display for ContractFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}: {}", self.code, self.message)
+    }
+}
+impl std::error::Error for ContractFailure {}
+
 pub(crate) struct Work {
     registrations: RefCell<HashMap<u64, Registration>>,
     ready: RefCell<VecDeque<ScheduledCall>>,
@@ -38,10 +54,12 @@ pub(crate) struct Work {
     sender: RefCell<Option<SyncSender<Completion>>>,
     inbox: RefCell<Option<Receiver<Completion>>>,
     wake: Arc<dyn Fn() + Send + Sync>,
+    service_policy: ServicePolicy,
+    contract_failure: RefCell<Option<ContractFailure>>,
 }
 
 impl Work {
-    pub(crate) fn new(host: HostHandle, package: Option<Rc<Package>>, generation: u64, executor: Executor, waker: Arc<dyn Waker>, surface: SurfaceId) -> Rc<Self> {
+    pub(crate) fn new(host: HostHandle, package: Option<Rc<Package>>, generation: u64, executor: Executor, waker: Arc<dyn Waker>, surface: SurfaceId, service_policy: ServicePolicy) -> Rc<Self> {
         let (sender, inbox) = mpsc::sync_channel(MAX_REQUESTS);
         Rc::new(Self {
             registrations: RefCell::new(HashMap::new()), ready: RefCell::new(VecDeque::new()), requests: RefCell::new(HashMap::new()),
@@ -49,9 +67,27 @@ impl Work {
             pending_completion: RefCell::new(None), next_id: Cell::new(1), mode: Cell::new(Mode::Loading), generation, host, package, executor,
             sender: RefCell::new(Some(sender)), inbox: RefCell::new(Some(inbox)),
             wake: Arc::new(move || waker.wake(WakeReason::ReactiveWork { surfaces: vec![surface].into_boxed_slice() })),
+            service_policy, contract_failure: RefCell::new(None),
         })
     }
 
+    pub(crate) fn contract_failure(&self) -> Option<ContractFailure> {
+        self.contract_failure.borrow().clone()
+    }
+
+    fn require_live_service(&self, ctx: &Ctx<'_>, service: &str) -> rquickjs::Result<()> {
+        if matches!(self.service_policy, ServicePolicy::FixtureOnly) {
+            let message = format!("preview fixture does not provide {service}");
+            self.contract_failure.borrow_mut().get_or_insert_with(|| ContractFailure {
+                code: "E_FIXTURE_MISSING_SERVICE",
+                message: message.clone(),
+            });
+            // Record before constructing a JS error: application accessors may
+            // themselves throw or reenter service calls.
+            return Err(ctx.throw(service_error(ctx, "E_FIXTURE_MISSING_SERVICE", &message)?.into_value()));
+        }
+        Ok(())
+    }
     pub(crate) fn mounting(&self) { self.mode.set(Mode::Mounting); }
     pub(crate) fn mounted(&self) { self.mode.set(Mode::Mounted); }
     pub(crate) fn has_ready(&self) -> bool { !self.ready.borrow().is_empty() }

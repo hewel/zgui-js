@@ -259,7 +259,7 @@ impl Window {
     /// Every phase the tail of the frame runs, and no other: styling, box construction, layout and
     /// the two text phases. A repaint or an accessibility projection is not among them — those are
     /// serviced later in the *same* frame, by stages that run after this one.
-    fn owes_further_work(&self) -> bool {
+    pub(super) fn owes_further_work(&self) -> bool {
         const SERVICED: Dirty = Dirty::RESTYLE
             .union(Dirty::RECASCADE)
             .union(Dirty::REBUILD_BOX)

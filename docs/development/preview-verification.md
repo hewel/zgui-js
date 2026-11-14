@@ -80,3 +80,90 @@ that capability. `wall-static.json` is provided for P1/P2. TSX capture, selector
 semantic inspection, deterministic services, native asset readiness, transparent
 capture, watch and lifecycle capabilities remain unadvertised until their gates
 pass. Transparent byte conversion tests do not establish compositor transparency.
+
+## P1 — real TSX capture
+
+`preview run` now mounts the integrity-verified package through the production
+`Package`, `Session`, rquickjs runtime, UI bridge, native root and binding.
+The headless platform supplies real elapsed monotonic time in the explicitly
+nondeterministic wall profile. It does not invoke example `advance` functions.
+
+```sh
+target/debug/native-host preview run \
+  --bundle apps/examples/counter/dist \
+  --profile preview/profiles/wall-static.json \
+  --fixture preview/fixtures/empty.json \
+  --scenario preview/scenarios/counter-capture.json \
+  --out artifacts/preview/counter-new-run
+```
+
+Profile/fixture/scenario validation precedes application execution. P1 admits
+only explicit empty fixture services/events and `settle`/`capture`; virtual
+profiles and exact frame times fail capability negotiation. Step/capture IDs
+are bounded to 128 ASCII characters. A step timeout may lower, not raise, its
+profile limit. Native image readiness remains unavailable; the production
+bridge does not admit an image element.
+
+### Evidence and failure ownership
+
+The passive bridge snapshot contains only attached live nodes. Text traversal,
+node count and retained text bytes are bounded. Unknown semantics, enabled and
+visibility information remain null rather than inferred.
+
+The vendored runtime adds `Window::completed_frame()` without changing the
+probe callback. It records the actual native timestamp/outcome and the revision
+entering the last completed layout/fragment pass. Late writes or outstanding
+layout obligations cannot certify old geometry. An `Undamaged` validation
+retains the older pixel presentation identity; held, occluded and recovered
+frames cannot validate it.
+
+Complete owned tree/frame checkpoints are atomically saved before subsequent
+callbacks can fail. Captures include separate validation/presentation identities
+and hashes of the actual PNG and tree files. The controller verifies the sealed
+worker inventory and publishes the final result last; the control message stays
+small independently of the number of artifacts or verbose package IDs.
+
+Fixture violations stay fatal even when caught in JavaScript, including in
+disposers. Original generated and source-mapped stacks retain their producing
+build/map identity. The first cause is saved before failure readback or cleanup;
+later publication errors retain it as `originalError`. Recovery never executes
+application code or labels historical evidence as a fresh successful capture.
+
+### Observed gates
+
+| Gate | Result and evidence |
+| --- | --- |
+| PV05: production TSX path | Passed. Counter displays `Count: 0`, `Doubled: 0` and `Increment`; real 1400 × 1050 PNG visually checked. Final evidence: `target/preview-p1-v2-counter/`. |
+| PV06: package integrity/publication | Passed. Existing loader tests verify declared-resource integrity and source maps. A mixed entry/manifest bundle returned `E_BUNDLE` without mounting. |
+| PV07: actual source mapping | Passed. A compiled TSX mount exception retained generated `app.mjs` coordinates and mapped `src/main.tsx:7`, with the producing build/map digest. |
+| PV08: failed mount | Passed. No capture claimed; all eight resource counters/engine ownership returned to zero. |
+| Fixture-only construction | Passed. Caught and uncaught mount attempts and a caught disposer attempt returned `E_FIXTURE_MISSING_SERVICE`, never success. |
+| Teardown failure evidence | Passed. A throwing disposer returned `E_TEARDOWN`; historical tree/frame/PNG remained available, with no claim of clean teardown. |
+| Bounded control/artifacts | Passed. A 70 KiB package ID stayed in the detailed identity artifact while stdout remained bounded. An output-budget failure retained the original mapped JS error through controller publication failures. |
+| Graphics/watchdog | Passed. No adapter returned exit 7; a 1 ms watchdog returned exit 5 with teardown explicitly unverified. |
+
+Focused checks covered scenario/fixture preflight, session/provider policy,
+package integrity/mapping, bridge topology, enclosing JS deadlines, publication
+recovery and native frame coherence. The standalone native frame gate passed
+eight cases, including semantic-only undamaged frames and late no-op writes.
+Its first geometry test exposed a redundant observer write: that write really
+increments the view revision without requiring relayout. The corrected tests
+retain conservative rejection and verify the next explicit validation frame;
+the production coherence invariant was not weakened.
+
+```sh
+cargo test -p native-host preview::scenario
+cargo test -p native-host preview::fixture
+cargo test -p native-host session::tests
+cargo test -p native-host package::tests
+cargo test -p native-host preview::run::tests
+cargo test -p ui-bridge --test topology
+cargo test -p js-runtime owner_deadline
+cargo test --manifest-path vendor/zgui-runtime/Cargo.toml --offline --test held_frame
+```
+
+The native snapshot is a standalone workspace, so root `cargo test -p
+zgui-runtime` cannot run its dev-dependencies. Independent review identified
+causal-error loss, fixture classification/teardown gaps and oversized control
+messages. Those paths were corrected and exercised by focused regressions and
+the public CLI.

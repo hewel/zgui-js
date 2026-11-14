@@ -7,6 +7,13 @@ pub(crate) fn digest(bytes: &[u8]) -> String {
     format!("sha256:{:x}", Sha256::digest(bytes))
 }
 
+pub(crate) fn json_bytes(value: &Value) -> Result<Vec<u8>, Error> {
+    let mut bytes = serde_json::to_vec_pretty(value)
+        .map_err(|error| Error::new("E_OUTPUT_IO", 8, error.to_string()))?;
+    bytes.push(b'\n');
+    Ok(bytes)
+}
+
 const OWNER_FILE: &str = ".preview-owner";
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -125,11 +132,39 @@ impl Output {
         Ok(())
     }
 
+    /// Keep the control pipe bounded independently of the number of artifacts.
+    pub fn seal_worker(&mut self) -> Result<(), Error> {
+        let bytes = serde_json::to_vec(&self.entries).map_err(|error| Error::new("E_OUTPUT_IO", 8, error.to_string()))?;
+        self.bytes("worker-artifacts.json", "worker-inventory", &bytes)
+    }
+
+    /// Rehash completed files after the worker exits; accept its roles only when
+    /// every declared identity matches the actual exclusively owned directory.
+    pub fn restore_worker(&mut self) -> Result<(), Error> {
+        self.recover()?;
+        let seal = self.entries.iter().find(|entry| entry["path"] == "worker-artifacts.json")
+            .ok_or_else(|| Error::new("E_OUTPUT_IO", 8, "worker inventory was not published"))?.clone();
+        let bytes = fs::read(self.root.join("worker-artifacts.json")).map_err(io_error)?;
+        let mut entries: Vec<Value> = serde_json::from_slice(&bytes)
+            .map_err(|error| Error::new("E_OUTPUT_IO", 8, format!("invalid worker inventory: {error}")))?;
+        entries.sort_by(|left, right| left["path"].as_str().cmp(&right["path"].as_str()));
+        let recovered: Vec<_> = self.entries.iter().filter(|entry| entry["path"] != "worker-artifacts.json").collect();
+        if entries.len() != recovered.len() || entries.iter().zip(recovered).any(|(declared, actual)| {
+            declared["path"] != actual["path"] || declared["digest"] != actual["digest"]
+                || declared["bytes"] != actual["bytes"] || declared["status"] != "complete"
+        }) {
+            return Err(Error::new("E_OUTPUT_IO", 8, "worker inventory does not match retained artifact identities"));
+        }
+        let mut seal = seal;
+        seal["role"] = json!("worker-inventory");
+        seal["status"] = json!("complete");
+        entries.push(seal);
+        self.entries = entries;
+        Ok(())
+    }
+
     pub fn json(&mut self, name: &str, role: &str, value: &Value) -> Result<(), Error> {
-        let mut bytes = serde_json::to_vec_pretty(value)
-            .map_err(|error| Error::new("E_OUTPUT_IO", 8, error.to_string()))?;
-        bytes.push(b'\n');
-        self.bytes(name, role, &bytes)
+        self.bytes(name, role, &json_bytes(value)?)
     }
 
     pub fn bytes(&mut self, name: &str, role: &str, bytes: &[u8]) -> Result<(), Error> {

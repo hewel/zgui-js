@@ -303,6 +303,9 @@ impl Window {
         self.damage_after_layout = DamageSet::new();
         self.layout_passes = 0;
         self.scrolled_this_frame.clear();
+        if self.probe.is_some() {
+            self.probed_layout_revision = None;
+        }
 
         // The starvation probe. The retry deadline this frame was woken at is the one attempt the
         // latch allows, so the frame runs unlatched — its present is the probe — and the next
@@ -641,6 +644,16 @@ impl Window {
         // damage it answered, the layout it computed. The handle is cloned out first because the
         // probe is handed the window it is stored on.
         if let Some(probe) = self.probe.clone() {
+            let document_revision = self.dom.revision();
+            self.completed_frame = Some(crate::probe::CompletedFrame {
+                ordinal: self.completed_frame.map_or(1, |last| last.ordinal + 1),
+                timestamp,
+                outcome,
+                document_revision,
+                layout_revision: self.probed_layout_revision,
+                layout_document_coherent: self.probed_layout_revision == Some(document_revision)
+                    && !self.owes_further_work(),
+            });
             probe.frame_ended(self);
         }
 
@@ -1278,6 +1291,12 @@ impl Window {
     /// and the damage for it is collected by the fragment pass. Skipping that pass on a held frame
     /// paints nothing at all for every change that does not move a box.
     pub(crate) fn lay_out(&mut self) {
+        // Capture the input, not whatever callbacks or late delivery may leave behind. The
+        // stamp is published only if the fragment pass completes; an early exit invalidates it.
+        let probed_revision = self.probe.as_ref().map(|_| self.dom.revision());
+        if self.probe.is_some() {
+            self.probed_layout_revision = None;
+        }
         let device = DeviceStyle {
             scale: self.scale,
             ..DeviceStyle::default()
@@ -1429,6 +1448,9 @@ impl Window {
                     .outside_content(id)
                     .is_none_or(|outside| moved.binary_search(&outside).is_ok())
             });
+        }
+        if self.probe.is_some() {
+            self.probed_layout_revision = probed_revision;
         }
     }
 

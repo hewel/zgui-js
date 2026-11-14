@@ -6,7 +6,7 @@ use std::fmt::Write as _;
 type Result<T, E = Box<dyn Error>> = std::result::Result<T, E>;
 const MAX_RESOURCE_BYTES: u64 = 64 * 1024 * 1024;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Manifest {
     pub schema_version: u32,
@@ -24,6 +24,7 @@ pub struct Package {
     pub manifest: Manifest,
     pub source: String,
     pub css: String,
+    pub source_map_digest: String,
     source_map: sourcemap::DecodedMap,
     generated_entry: String,
 }
@@ -57,6 +58,7 @@ impl Package {
         if actual != manifest.build_id { return Err(format!("package integrity mismatch: expected {}, got {actual}", manifest.build_id).into()); }
         let source = String::from_utf8(files.remove(&manifest.entry).ok_or("missing entry")?)?;
         let map_bytes = files.get(&manifest.source_map).ok_or("missing source map")?;
+        let source_map_digest = format!("sha256:{:x}", Sha256::digest(map_bytes));
         // The decoder defaults missing fields, accepting even `{}`; require a
         // recognized map document before decoding and validating its mappings.
         if !sourcemap::is_sourcemap_slice(map_bytes) {
@@ -70,7 +72,7 @@ impl Package {
             css.push('\n');
         }
         let generated_entry = directory.join(&manifest.entry).to_string_lossy().into_owned();
-        Ok(Self { directory, manifest, source, css, source_map, generated_entry })
+        Ok(Self { directory, manifest, source, css, source_map, generated_entry, source_map_digest })
     }
 
     /// Remap this package's generated entry frames to one-based original locations.
@@ -116,7 +118,10 @@ impl Package {
             }
             offset += frame.len();
         }
-        if let Some(stack) = remapped { diagnostic.stack = Some(stack); }
+        if let Some(stack) = remapped {
+            if diagnostic.generated_stack.is_none() { diagnostic.generated_stack = diagnostic.stack.take(); }
+            diagnostic.stack = Some(stack);
+        }
         diagnostic
     }
 }
@@ -228,6 +233,8 @@ mod tests {
             assert_eq!(mapped.message, original.message);
             assert_eq!(mapped.kind, original.kind);
             assert_eq!(mapped.phase, original.phase);
+            assert_eq!(mapped.generated_stack, original.stack);
+            assert_eq!(package.remap_diagnostic(mapped.clone()), mapped);
             assert_eq!(mapped.stack.unwrap(), format!(
                 "    at fail (src/Counter.tsx:42:8)\n    at runSmoke (src/Counter.tsx:52:4)\n{foreign}{unrelated}",
             ));
@@ -237,6 +244,7 @@ mod tests {
             phase: "test",
             message: "leave app.mjs:2:13 in the message".into(),
             stack: Some(foreign),
+            generated_stack: None,
         };
         assert_eq!(package.remap_diagnostic(plain.clone()), plain);
         let no_stack = js_runtime::Diagnostic { stack: None, ..plain };

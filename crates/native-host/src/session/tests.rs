@@ -28,7 +28,10 @@ impl Native {
         Self { backend, host, region, waker: Arc::new(ChannelWaker(sender)), wakes, executor: host_services::Executor::new(2, 64).unwrap() }
     }
     fn prepare(&self, package: Rc<Package>, generation: u64) -> Result<Rc<Session>> {
-        Session::prepare(self.region.clone(), Some(package), generation, self.waker.clone(), SurfaceId::new(7), self.executor.clone())
+        Session::prepare(self.region.clone(), Some(package), generation, self.waker.clone(), SurfaceId::new(7), self.executor.clone(), SessionPolicy::Live)
+    }
+    fn preview(&self, package: Rc<Package>, limits: RuntimeLimits, deadline: Rc<Cell<Instant>>) -> Result<Rc<Session>> {
+        Session::prepare(self.region.clone(), Some(package), 1, self.waker.clone(), SurfaceId::new(7), self.executor.clone(), SessionPolicy::Preview { limits, deadline })
     }
     fn text(&self) -> String { self.region.dom.text_content(self.region.root) }
     fn completion(&self, session: &Session) -> host_services::Completion {
@@ -156,6 +159,11 @@ fn repeated_sessions_release_native_and_js_resources_even_when_cleanup_throws() 
         session.shutdown();
         session.shutdown();
         assert_eq!(session.counts(), ResourceCounts::default());
+        let cleanup = session.take_cleanup_failure().expect("throwing cleanup must remain observable after repeated shutdown");
+        assert_eq!(cleanup.phase, "cleanup");
+        assert_eq!(cleanup.message, "cleanup failed");
+        assert!(cleanup.stack.as_deref().unwrap().contains("app.mjs"));
+        assert!(session.take_cleanup_failure().is_none());
         native.backend.end_frame();
         assert!(native.backend.children(native.region.root).is_empty());
         assert_eq!(native.backend.handler_count(), 0);
@@ -240,4 +248,125 @@ fn promise_cancellation_runs_between_ready_service_completions() {
     assert_eq!(resolved, 1, "a ready completion queue starved its Promise cancellation");
     session.shutdown();
     assert_eq!(session.counts(), ResourceCounts::default());
+}
+
+#[test]
+fn preview_caught_fixture_violation_fails_preflight_and_mount() {
+    let native = Native::new();
+    for preflight in [true, false] {
+        let attempt = "try { __zguiServices.watchNiri(() => {}, () => {}); } catch (error) { if (error.code !== 'E_FIXTURE_MISSING_SERVICE') throw error; }";
+        let source = if preflight {
+            format!("{attempt}\n{SIMPLE}")
+        } else {
+            format!("export const hostApiVersion = 1; export function mount() {{ {attempt} return () => {{}}; }}")
+        };
+        let fixture = Fixture::new(&source, "");
+        let prepared = native.preview(fixture.package(), RuntimeLimits::default(), Rc::new(Cell::new(Instant::now() + Duration::from_secs(5))));
+        let error = if preflight {
+            prepared.err().expect("caught preflight violation must reject candidate")
+        } else {
+            let session = prepared.unwrap();
+            let error = session.mount().unwrap_err();
+            assert_eq!(session.counts().subscriptions, 0);
+            assert_eq!(session.contract_failure().unwrap().code, "E_FIXTURE_MISSING_SERVICE");
+            assert!(session.checkpoint().is_err());
+            session.shutdown();
+            assert_eq!(session.contract_failure().unwrap().code, "E_FIXTURE_MISSING_SERVICE");
+            error
+        };
+        let failure = error.downcast_ref::<ContractFailure>().expect("fixture failure must retain its type");
+        assert_eq!(failure.code, "E_FIXTURE_MISSING_SERVICE");
+        assert!(failure.message.contains("watchNiri"));
+    }
+}
+
+#[test]
+fn preview_rejections_reduce_handled_updates_but_fail_unhandled_and_eviction() {
+    for (source, capacity, expected) in [
+        ("const p = Promise.reject(Error('handled')); p.catch(() => {});", 256, None),
+        ("Promise.reject(Error('unhandled sentinel'));", 256, Some("unhandled sentinel")),
+        ("Promise.reject(Error('first')); Promise.reject(Error('second'));", 1, Some("rejection tracking limit exceeded")),
+    ] {
+        let fixture = Fixture::new(&format!("export const hostApiVersion = 1; export function mount() {{ {source} return () => {{}}; }}"), "");
+        let native = Native::new();
+        let session = native.preview(fixture.package(), RuntimeLimits { max_tracked_rejections: capacity, ..RuntimeLimits::default() }, Rc::new(Cell::new(Instant::now() + Duration::from_secs(5)))).unwrap();
+        session.mount().unwrap();
+        match expected {
+            Some(message) => {
+                let error = session.checkpoint().unwrap_err();
+                assert_eq!(error.downcast_ref::<js_runtime::Diagnostic>().unwrap().message, message);
+            }
+            None => { session.checkpoint().unwrap(); }
+        }
+        session.shutdown();
+        assert_eq!(session.counts(), ResourceCounts::default());
+    }
+}
+
+#[test]
+fn frame_checkpoint_retains_original_job_diagnostic() {
+    let fixture = Fixture::new(SIMPLE, "");
+    let native = Native::new();
+    let session = native.preview(fixture.package(), RuntimeLimits::default(), Rc::new(Cell::new(Instant::now() + Duration::from_secs(5)))).unwrap();
+    session.mount().unwrap();
+    session.engine.borrow_mut().as_mut().unwrap().with_context(|ctx| {
+        ctx.eval::<Function, _>("function originalJob() { throw Error('original job sentinel'); } originalJob")?.defer(())
+    }).unwrap();
+    session.frame_checkpoint();
+    let error = session.checkpoint().unwrap_err();
+    let diagnostic = error.downcast_ref::<js_runtime::Diagnostic>().expect("frame checkpoint must not stringify a job exception");
+    assert_eq!(diagnostic.message, "original job sentinel");
+    assert_eq!(diagnostic.phase, "pending job");
+    assert!(diagnostic.stack.as_deref().unwrap().contains("originalJob"));
+    session.shutdown();
+}
+
+#[test]
+fn preview_cleanup_retains_deadline_failure_and_releases_every_resource() {
+    let fixture = Fixture::new(SIMPLE, "");
+    let native = Native::new();
+    let deadline = Rc::new(Cell::new(Instant::now() + Duration::from_secs(5)));
+    let session = native.preview(fixture.package(), RuntimeLimits::default(), deadline.clone()).unwrap();
+    session.mount().unwrap();
+    deadline.set(Instant::now() - Duration::from_millis(1));
+    session.shutdown();
+    session.shutdown();
+    let diagnostic = session.take_cleanup_failure().expect("expired cleanup may not pass silently");
+    assert_eq!(diagnostic.kind, js_runtime::DiagnosticKind::BudgetExceeded);
+    assert_eq!(diagnostic.phase, "cleanup");
+    assert_eq!(session.counts(), ResourceCounts::default());
+    assert!(session.take_cleanup_failure().is_none());
+}
+
+#[test]
+fn preview_uncaught_fixture_violation_retains_its_category_across_entries() {
+    for statement in [
+        "__zguiServices.watchNiri(() => {}, () => {});",
+        "Promise.resolve().then(() => __zguiServices.watchNiri(() => {}, () => {}));",
+    ] {
+        let native = Native::new();
+        let fixture = Fixture::new(&format!("export const hostApiVersion=1; export function mount() {{ {statement} return () => {{}}; }}"), "");
+        let session = native.preview(fixture.package(), RuntimeLimits::default(), Rc::new(Cell::new(Instant::now()+Duration::from_secs(5)))).unwrap();
+        let failure = session.mount().and_then(|()|session.checkpoint().map(|_|())).unwrap_err();
+        assert_eq!(failure.downcast_ref::<ContractFailure>().unwrap().code,"E_FIXTURE_MISSING_SERVICE");
+        session.shutdown();
+        assert_eq!(session.counts(),ResourceCounts::default());
+    }
+}
+
+#[test]
+fn rejected_mount_keeps_its_returned_disposer_for_cleanup() {
+    let native = Native::new();
+    let fixture = Fixture::new("export const hostApiVersion=1; export function mount() { try { __zguiServices.watchNiri(() => {}, () => {}); } catch {} return () => recordCleanup(); }", "");
+    let session = native.preview(fixture.package(), RuntimeLimits::default(), Rc::new(Cell::new(Instant::now()+Duration::from_secs(5)))).unwrap();
+    let called = Rc::new(Cell::new(0));
+    let count = called.clone();
+    session.engine.borrow_mut().as_mut().unwrap().with_context(|ctx| {
+        ctx.globals().set("recordCleanup",Function::new(ctx.clone(),move ||count.set(count.get()+1))?)
+    }).unwrap();
+    assert!(session.mount().is_err());
+    session.shutdown();
+    session.shutdown();
+    assert_eq!(called.get(),1);
+    assert_eq!(session.counts(),ResourceCounts::default());
 }

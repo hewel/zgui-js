@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://zgui-js.local/schemas/preview/scenario.schema.json",
+  "title": "Preview scenario v1 (P1 static capture)",
+  "description": "Closed input, at most 1 MiB. P1 implements only settle and capture with the wall-static profile. Known later operations are rejected before mount with E_UNSUPPORTED_CAPABILITY; unknown operations and malformed supported payloads are E_SCHEMA. Step IDs and capture IDs are unique in their respective namespaces, checked by the loader. Explicit capabilities are unioned with all inferred requirements: capture requires pixels, a virtual profile or requiredFrameTimeUs requires virtual-time. Wall mode rejects virtual-time even if explicitly advertised by a caller.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "id", "requiredCapabilities", "steps"],
+  "properties": {
+    "schemaVersion": { "type": "integer", "const": 1 },
+    "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "\\S" },
+    "requiredCapabilities": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/safeId" },
+      "description": "Capabilities must be available before mount. Repeated declarations are deduplicated; omission never bypasses inferred requirements. P1 advertises pixels only."
+    },
+    "steps": {
+      "type": "array",
+      "items": {
+        "oneOf": [
+          { "$ref": "#/$defs/settle" },
+          { "$ref": "#/$defs/capture" }
+        ]
+      }
+    }
+  },
+  "$defs": {
+    "safeId": {
+      "description": "One safe path component matching [a-z0-9][a-z0-9._-]*; no separators, traversal components, whitespace or encoding escapes. The absolute end assertion also rejects a trailing newline.",
+      "type": "string",
+      "maxLength": 128,
+      "pattern": "^[a-z0-9][a-z0-9._-]*(?![\\s\\S])"
+    },
+    "settle": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "op"],
+      "properties": {
+        "id": { "$ref": "#/$defs/safeId" },
+        "op": { "const": "settle" },
+        "timeoutMs": {
+          "description": "Optional lower real per-step budget, in milliseconds. If present it must be a positive JSON integer literal, not null. The driver rejects values above profile.limits.maxStepWallMs; this option cannot raise a profile limit or add a sleep.",
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 18446744073709551615
+        }
+      }
+    },
+    "capture": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "op", "captureId"],
+      "properties": {
+        "id": { "$ref": "#/$defs/safeId" },
+        "op": { "const": "capture" },
+        "captureId": { "$ref": "#/$defs/safeId" },
+        "requiredFrameTimeUs": {
+          "description": "Optional exact virtual validation-frame timestamp. A present value must be a nonnegative JSON integer literal, not null. Infers virtual-time and is unavailable with wall-static/P1; it must never be silently ignored.",
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 18446744073709551615
+        }
+      }
+    }
+  }
+}

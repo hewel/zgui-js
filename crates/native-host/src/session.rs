@@ -5,10 +5,19 @@ use ui_bridge::{DeferredEvent, UiBridge, registry::NodeRegistry};
 use zgui::view::host::TimerId;
 use zgui::platform::{SurfaceId, WakeReason, Waker};
 use crate::{MountRegion, package::Package, work::{Arguments, Work}};
+pub(crate) use crate::work::ContractFailure;
+use crate::work::ServicePolicy;
 
 type Result<T, E = Box<dyn Error>> = std::result::Result<T, E>;
 
-#[derive(Debug, Default, PartialEq, Eq)]
+/// Execution and provider policy is fixed before the application module is evaluated.
+pub(crate) enum SessionPolicy {
+    Live,
+    Preview { limits: RuntimeLimits, deadline: Rc<Cell<Instant>> },
+}
+
+#[derive(Debug, Default, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub(crate) struct ResourceCounts {
     pub nodes: usize,
     pub wrappers: usize,
@@ -35,7 +44,9 @@ pub(crate) struct Session {
     pub(crate) frames: Cell<usize>,
     package: Option<Rc<Package>>,
     deferred: RefCell<VecDeque<DeferredEvent>>,
-    fault: RefCell<Option<String>>,
+    fault: RefCell<Option<Box<dyn Error>>>,
+    cleanup_failure: RefCell<Option<js_runtime::Diagnostic>>,
+    policy: SessionPolicy,
     checkpoint_cursor: Cell<usize>,
     waker: Arc<dyn Waker>,
     surface: SurfaceId,
@@ -43,17 +54,24 @@ pub(crate) struct Session {
 
 impl Session {
     /// Pure module preflight: bridge mutation is disabled until mount's turn.
-    pub(crate) fn prepare(region: MountRegion, package: Option<Rc<Package>>, generation: u64, waker: Arc<dyn Waker>, surface: SurfaceId, executor: host_services::Executor) -> Result<Rc<Self>> {
-        let mut engine = JsRuntime::new(RuntimeLimits::default())?;
+    pub(crate) fn prepare(region: MountRegion, package: Option<Rc<Package>>, generation: u64, waker: Arc<dyn Waker>, surface: SurfaceId, executor: host_services::Executor, policy: SessionPolicy) -> Result<Rc<Self>> {
+        let (limits, service_policy) = match &policy {
+            SessionPolicy::Live => (RuntimeLimits::default(), ServicePolicy::Live),
+            SessionPolicy::Preview { limits, .. } => (limits.clone(), ServicePolicy::FixtureOnly),
+        };
+        let mut engine = JsRuntime::new(limits)?;
+        if let SessionPolicy::Preview { deadline, .. } = &policy { engine.set_enclosing_deadline(deadline.clone()); }
         let bridge = UiBridge::new(NodeRegistry::new(region.dom.clone(), region.root, 1, generation, 100_000), region.host.clone());
-        let work = Work::new(region.host.clone(), package.clone(), generation, executor, waker.clone(), surface);
+        let work = Work::new(region.host.clone(), package.clone(), generation, executor, waker.clone(), surface, service_policy);
         engine.with_context(|ctx| {
             bridge.install(&ctx)?;
             work.install(&ctx)?;
             ctx.globals().set("mountRoot", bridge.root(&ctx)?)
         })?;
         if let Some(package) = &package {
-            engine.load_module(&package.directory.join(&package.manifest.entry).to_string_lossy(), &package.source).map_err(|error| package.remap_diagnostic(error))?;
+            let loaded = engine.load_module(&package.directory.join(&package.manifest.entry).to_string_lossy(), &package.source);
+            if let Some(failure) = work.contract_failure() { return Err(failure.into()); }
+            loaded.map_err(|error| package.remap_diagnostic(error))?;
             engine.with_module(|ctx, module| {
                 let version: rquickjs::Value = module.get("hostApiVersion")?;
                 if version.as_int() != Some(1) { return Err(Exception::throw_type(&ctx, "module hostApiVersion must equal manifest version 1")); }
@@ -64,17 +82,15 @@ impl Session {
             // still closed. Otherwise a top-level Promise could defer side effects
             // until the first mounted checkpoint and bypass preflight.
             let jobs = engine.pump_jobs();
+            if let Some(failure) = work.contract_failure() { return Err(failure.into()); }
             if let Some(error) = jobs.diagnostics.into_iter().next() { return Err(package.remap_diagnostic(error).into()); }
             if jobs.has_pending_jobs { return Err("preflight jobs exceeded their bounded pump".into()); }
-            let rejections = engine.drain_rejections();
-            if rejections.dropped_rejections != 0 { return Err("preflight rejection tracking limit exceeded".into()); }
-            let mut seen = HashSet::new();
-            for update in rejections.updates.into_iter().rev() {
-                if seen.insert(update.id) && !update.handled { return Err(package.remap_diagnostic(update.diagnostic).into()); }
-            }
+            let rejections = drain_rejections(&mut engine, true, Some(package));
+            if let Some(failure) = work.contract_failure() { return Err(failure.into()); }
+            rejections?;
             if engine.is_job_pending() { return Err("preflight diagnostic accessors scheduled more jobs".into()); }
         }
-        let session = Rc::new(Self { disposer: RefCell::new(None), bridge, work, engine: RefCell::new(Some(engine)), shutdown_started: Cell::new(false), mount_started: Cell::new(false), stylesheet_installed: Cell::new(false), generation, region, timer: Cell::new(None), frames: Cell::new(0), package, deferred: RefCell::new(VecDeque::new()), fault: RefCell::new(None), checkpoint_cursor: Cell::new(0), waker, surface });
+        let session = Rc::new(Self { disposer: RefCell::new(None), bridge, work, engine: RefCell::new(Some(engine)), shutdown_started: Cell::new(false), mount_started: Cell::new(false), stylesheet_installed: Cell::new(false), generation, region, timer: Cell::new(None), frames: Cell::new(0), package, deferred: RefCell::new(VecDeque::new()), fault: RefCell::new(None), cleanup_failure: RefCell::new(None), policy, checkpoint_cursor: Cell::new(0), waker, surface });
         let weak = Rc::downgrade(&session);
         session.bridge.set_dispatcher(Rc::new(move |id, event| {
             if let Some(session) = weak.upgrade() { session.dispatch(id, event); }
@@ -91,18 +107,26 @@ impl Session {
             self.stylesheet_installed.set(true);
             let mut engine = self.engine.borrow_mut();
             let engine = engine.as_mut().ok_or("session disposed")?;
-            let disposer = self.bridge.run_turn(|| engine.with_module(|ctx, module| {
+            let mounted = self.bridge.run_turn(|| engine.with_module(|ctx, module| {
                 let mount: Function = module.get("mount")?;
                 let disposer: Function = mount.call((self.bridge.root(&ctx)?,))?;
                 Ok(Persistent::save(&ctx, disposer))
-            })).map_err(|error| self.diagnostic(error))?;
-            *self.disposer.borrow_mut() = Some(disposer);
+            }));
+            match mounted {
+                Ok(disposer) => *self.disposer.borrow_mut() = Some(disposer),
+                Err(error) => {
+                    self.check_contract()?;
+                    return Err(self.diagnostic(error).into());
+                }
+            }
+            self.check_contract()?;
             eprintln!("mounted: package={} build={} nodes={}", package.manifest.id, package.manifest.build_id, self.bridge.live_count());
             self.snapshot();
         } else {
             self.update("globalThis.textNode = __zgui.createTextNode('JavaScript mounted'); __zgui.insertNode(mountRoot, textNode, null); 'JavaScript mounted'")?;
         }
         self.work.mounted();
+        self.check_contract()?;
         Ok(())
     }
 
@@ -124,17 +148,32 @@ impl Session {
         };
         let Some(engine) = engine.as_mut() else { return; };
         let result = self.bridge.run_turn(|| engine.with_context(|ctx| self.bridge.invoke_event(&ctx, id, event)));
-        if let Err(error) = result { *self.fault.borrow_mut() = Some(format!("event callback {id}: {}", self.diagnostic(error))); }
+        if let Err(error) = result { *self.fault.borrow_mut() = Some(self.diagnostic(error).into()); }
         // Cancellation is already applied and revoked before owner work is scheduled.
         self.wake_owner();
     }
 
     pub(crate) fn checkpoint(&self) -> Result<bool> {
-        if let Some(error) = self.fault.borrow_mut().take() { return Err(error.into()); }
+        let result = self.checkpoint_work();
+        // A native provider guard can throw during any job/event entry. Preserve
+        // its typed contract failure even when that entry returned a JS exception.
+        self.check_contract()?;
+        result
+    }
+
+    fn checkpoint_work(&self) -> Result<bool> {
+        if let Some(error) = self.fault.borrow_mut().take() { return Err(error); }
+        self.check_contract()?;
         if self.bridge.is_disposed() { return Ok(false); }
         let Ok(mut engine) = self.engine.try_borrow_mut() else { self.wake_owner(); return Ok(false); };
         let Some(engine) = engine.as_mut() else { return Ok(false); };
-        let end = Instant::now() + engine.limits().job_timeout;
+        let end = self.deadline(Instant::now() + engine.limits().job_timeout);
+        if Instant::now() >= end {
+            return Err(js_runtime::Diagnostic {
+                kind: js_runtime::DiagnosticKind::BudgetExceeded, phase: "checkpoint",
+                message: "enclosing deadline exceeded".into(), stack: None, generated_stack: None,
+            }.into());
+        }
         let max_jobs = engine.limits().max_jobs_per_pump;
         let mut worked = false;
         let mut remaining = [32, 32, 32, 32, max_jobs];
@@ -173,25 +212,39 @@ impl Session {
             };
             if attempted { worked = true; } else { remaining[phase] = 0; }
         }
-        let rejections = self.bridge.run_turn(|| Ok::<_, std::convert::Infallible>(engine.drain_rejections())).unwrap();
-        worked |= !rejections.updates.is_empty();
-        for rejection in rejections.updates {
-            eprintln!("promise-rejection: id={} handled={} {}", rejection.id, rejection.handled, self.diagnostic(rejection.diagnostic));
-        }
-        if rejections.dropped_rejections != 0 { eprintln!("promise-rejection: evicted={} (tracking limit)", rejections.dropped_rejections); }
+        worked |= self.bridge.run_turn(|| drain_rejections(engine, self.is_preview(), self.package.as_deref()))?;
+        self.check_contract()?;
         if engine.is_job_pending() || !self.deferred.borrow().is_empty() || self.work.has_ready() || self.work.has_completions() || self.work.has_subscriptions() { self.wake_owner(); }
         Ok(worked)
     }
 
     pub(crate) fn frame_checkpoint(&self) {
         if let Err(error) = self.checkpoint() {
-            *self.fault.borrow_mut() = Some(error.to_string());
+            *self.fault.borrow_mut() = Some(error);
             self.wake_owner();
         }
     }
 
     fn diagnostic(&self, error: js_runtime::Diagnostic) -> js_runtime::Diagnostic {
         match &self.package { Some(package) => package.remap_diagnostic(error), None => error }
+    }
+
+    fn is_preview(&self) -> bool { matches!(&self.policy, SessionPolicy::Preview { .. }) }
+
+    fn deadline(&self, end: Instant) -> Instant {
+        match &self.policy { SessionPolicy::Live => end, SessionPolicy::Preview { deadline, .. } => end.min(deadline.get()) }
+    }
+
+    /// A provider violation is sticky: catching the JavaScript exception cannot
+    /// turn an attempted live-service access into a successful preview.
+    pub(crate) fn contract_failure(&self) -> Option<ContractFailure> { self.work.contract_failure() }
+
+    fn check_contract(&self) -> Result<()> {
+        match self.contract_failure() { Some(failure) => Err(failure.into()), None => Ok(()) }
+    }
+
+    pub(crate) fn take_cleanup_failure(&self) -> Option<js_runtime::Diagnostic> {
+        self.cleanup_failure.borrow_mut().take()
     }
 
     pub(crate) fn advance(&self, external: bool) -> Result<()> {
@@ -222,7 +275,7 @@ impl Session {
 
     pub(crate) fn record_fault(&self, error: String) {
         if self.shutdown_started.get() { return; }
-        *self.fault.borrow_mut() = Some(error);
+        *self.fault.borrow_mut() = Some(error.into());
         self.wake_owner();
     }
 
@@ -255,7 +308,16 @@ impl Session {
                 // A failed structural turn has already retired native handles.
                 // Still run pure JS cleanup, without reopening a disposed registry.
                 let result = if self.bridge.is_disposed() { cleanup() } else { self.bridge.run_turn(cleanup) };
-                if let Err(error) = result { eprintln!("disposer error: {}", self.diagnostic(error)); }
+                if let Err(error) = result {
+                    let error = self.diagnostic(error);
+                    eprintln!("disposer error: {error}");
+                    *self.cleanup_failure.borrow_mut() = Some(error);
+                }
+                if self.is_preview() {
+                    if let Err(error) = drain_rejections(engine, true, self.package.as_deref()) {
+                        self.cleanup_failure.borrow_mut().get_or_insert(error);
+                    }
+                }
             }
         }
         self.work.finish_stop();
@@ -267,6 +329,45 @@ impl Session {
     }
 }
 impl Drop for Session { fn drop(&mut self) { self.shutdown(); } }
+
+/// Reduce both transitions of an identity before deciding whether it is unhandled.
+/// Formatting can produce further updates, so strict policy drains to quiescence
+/// within a bounded number of batches instead of losing accessor-created failures.
+fn drain_rejections(engine: &mut JsRuntime, strict: bool, package: Option<&Package>) -> std::result::Result<bool, js_runtime::Diagnostic> {
+    let mut worked = false;
+    for _ in 0..=engine.limits().max_tracked_rejections {
+        let rejections = engine.drain_rejections();
+        worked |= !rejections.updates.is_empty();
+        if rejections.dropped_rejections != 0 {
+            if strict {
+                return Err(js_runtime::Diagnostic {
+                    kind: js_runtime::DiagnosticKind::BudgetExceeded, phase: "promise rejection",
+                    message: "rejection tracking limit exceeded".into(), stack: None, generated_stack: None,
+                });
+            }
+            eprintln!("promise-rejection: evicted={} (tracking limit)", rejections.dropped_rejections);
+        }
+        let empty = rejections.updates.is_empty();
+        if !strict {
+            for rejection in rejections.updates {
+                let diagnostic = match package { Some(package) => package.remap_diagnostic(rejection.diagnostic), None => rejection.diagnostic };
+                eprintln!("promise-rejection: id={} handled={} {diagnostic}", rejection.id, rejection.handled);
+            }
+            return Ok(worked);
+        }
+        let mut seen = HashSet::new();
+        for rejection in rejections.updates.into_iter().rev() {
+            if !seen.insert(rejection.id) { continue; }
+            let diagnostic = match package { Some(package) => package.remap_diagnostic(rejection.diagnostic), None => rejection.diagnostic };
+            if !rejection.handled { return Err(diagnostic); }
+        }
+        if empty { return Ok(worked); }
+    }
+    Err(js_runtime::Diagnostic {
+        kind: js_runtime::DiagnosticKind::BudgetExceeded, phase: "promise rejection",
+        message: "rejection diagnostics did not quiesce".into(), stack: None, generated_stack: None,
+    })
+}
 
 #[cfg(test)]
 mod tests;

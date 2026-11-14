@@ -514,6 +514,10 @@ pub struct Window {
     binding: Box<dyn HostBinding>,
     /// What to tell about each frame after it has been produced.
     probe: Option<Rc<dyn crate::probe::FrameProbe>>,
+    /// Completed-frame evidence, retained only when a probe is installed.
+    completed_frame: Option<crate::probe::CompletedFrame>,
+    /// Input revision of this frame's last completed layout/fragment pass, for the probe.
+    probed_layout_revision: Option<u64>,
     /// What the accessibility tree was last told, and what it is owed.
     a11y: zgui_a11y::A11yBuilder,
     /// The elements this frame's fragment pass carried to a new position without changing.
@@ -791,6 +795,8 @@ impl Window {
             timers,
             binding: Box::new(NoBinding),
             probe: options.probe.clone(),
+            completed_frame: None,
+            probed_layout_revision: None,
             a11y: zgui_a11y::A11yBuilder::new(),
             a11y_moves: Vec::new(),
             moved_spaces: Vec::new(),

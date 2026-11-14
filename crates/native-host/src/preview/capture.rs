@@ -19,6 +19,14 @@ pub struct PresentedPixels {
     pub target: RenderTarget,
 }
 
+#[derive(Clone, Copy)]
+pub struct CaptureState {
+    pub draw_id: u64,
+    pub presentation_id: u64,
+    pub configuration_id: u64,
+    pub presented_draw: Option<u64>,
+}
+
 #[derive(Default)]
 struct State {
     requested: bool,
@@ -54,6 +62,14 @@ impl CaptureHandle {
 
     pub fn metadata(&self) -> serde_json::Value {
         self.0.borrow().metadata.clone()
+    }
+
+    pub fn state(&self) -> CaptureState {
+        let state = self.0.borrow();
+        CaptureState {
+            draw_id: state.draw_id, presentation_id: state.presentation_id,
+            configuration_id: state.configuration_id, presented_draw: state.presented_draw,
+        }
     }
 
     /// Reads an already-presented idle frame without drawing it again. The caller must supply

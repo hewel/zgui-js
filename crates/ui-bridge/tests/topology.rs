@@ -95,6 +95,64 @@ fn mixed_children_empty_anchors_and_moves_preserve_native_identity() {
 }
 
 #[test]
+fn snapshots_bound_attached_preorder_without_retaining_detached_subtrees() {
+    let native = NativeDocument::new();
+    let mut registry = native.registry(1, 1, 10);
+    let root = registry.root();
+    registry.begin_turn();
+    let sibling = registry.create_element("box").unwrap();
+    let branch = registry.create_element("row").unwrap();
+    let text = registry.create_text("mounted").unwrap();
+    let orphan = registry.create_element("box").unwrap();
+    let orphan_text = registry.create_text("never mounted").unwrap();
+    registry.insert(root, sibling, None).unwrap();
+    registry.insert(root, branch, Some(sibling)).unwrap();
+    registry.insert(branch, text, None).unwrap();
+    registry.insert(orphan, orphan_text, None).unwrap();
+    registry.finish_turn();
+
+    let snapshot = registry.snapshot(4);
+    assert!(!snapshot.truncated);
+    assert_eq!(
+        snapshot.nodes.iter().map(|node| (node.token, node.parent)).collect::<Vec<_>>(),
+        vec![(0, None), (branch.token(), Some(0)), (text.token(), Some(branch.token())), (sibling.token(), Some(0))],
+    );
+    for (node, handle) in snapshot.nodes.iter().zip([root, branch, text, sibling]) {
+        assert_eq!(node.native, registry.native(handle).unwrap());
+    }
+    assert_eq!(snapshot.nodes[0].kind, "root");
+    assert_eq!(snapshot.nodes[2].kind, "text");
+    let empty = registry.snapshot(0);
+    assert!(empty.nodes.is_empty());
+    assert!(empty.truncated);
+    let limited = registry.snapshot(2);
+    assert_eq!(limited.nodes, snapshot.nodes[..2]);
+    assert!(limited.truncated);
+
+    registry.begin_turn();
+    registry.remove(root, branch).unwrap();
+    // Removed nodes are still native-live until reclamation, but not attached.
+    assert!(native.dom.is_live(snapshot.nodes[2].native));
+    let detached = registry.snapshot(2);
+    assert_eq!(detached.nodes.iter().map(|node| node.token).collect::<Vec<_>>(), vec![0, sibling.token()]);
+    assert!(!detached.truncated);
+    registry.insert(root, branch, None).unwrap();
+    registry.finish_turn();
+    let reordered = registry.snapshot(4);
+    assert_eq!(
+        reordered.nodes.iter().map(|node| node.token).collect::<Vec<_>>(),
+        vec![0, sibling.token(), branch.token(), text.token()],
+    );
+    assert!(!reordered.truncated);
+    // Earlier evidence stays owned even when the live tree changes.
+    assert_eq!(snapshot.nodes[1].token, branch.token());
+    registry.dispose();
+    assert!(registry.snapshot(0).nodes.is_empty());
+    assert!(!registry.snapshot(0).truncated);
+    native.backend.end_frame();
+}
+
+#[test]
 fn reordering_a_list_matches_real_native_sibling_order() {
     let native = NativeDocument::new();
     let mut registry = native.registry(1, 1, 100);

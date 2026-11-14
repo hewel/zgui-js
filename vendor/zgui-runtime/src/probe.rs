@@ -39,11 +39,46 @@
 
 use crate::window::Window;
 
+/// Read-only evidence about one completed native frame.
+///
+/// Available through [`Window::completed_frame`] before [`FrameProbe::frame_ended`] is called,
+/// including frames the renderer held, recovered, or skipped. This does not imply presentation,
+/// resource readiness, or that another frame is not owed.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CompletedFrame {
+    /// One-based ordinal of completed frames on this probed window.
+    pub ordinal: u64,
+    /// The native frame moment, shared with this frame's timers and animations.
+    pub timestamp: zgui_vocab::Timestamp,
+    /// The actual result of this frame's paint/draw stage, not a cached renderer report.
+    pub outcome: zgui_render::FrameOutcome,
+    /// The document's view-mutation revision after all frame cleanup.
+    pub document_revision: u64,
+    /// The view-mutation revision entering the last completed layout/fragment pass.
+    ///
+    /// `None` when this frame completed no such pass. Sampled at layout, including relayouts
+    /// caused by scroll or geometry delivery, never inferred from the post-frame document.
+    /// A pass whose measurement gate reuses standing boxes still completes fragment composition
+    /// and records this frame's input revision, including semantic-only and undamaged frames.
+    pub layout_revision: Option<u64>,
+    /// Whether layout and the completed document can conservatively be associated.
+    ///
+    /// True only when a layout/fragment pass completed, no view mutation occurred since that
+    /// pass began, and no style, box, text, layout, or imperative-scroll obligation remains.
+    /// Late focus, observation, re-hit, or script callbacks therefore cannot certify a newer
+    /// document against older geometry. False may conservatively reject a harmless mutation.
+    ///
+    /// This describes frame completion, not a live guarantee: before inspecting later, also
+    /// compare [`Self::document_revision`] with `window.dom().revision()`. It says nothing about
+    /// whether this frame's pixels were presented; consult [`Self::outcome`] separately.
+    pub layout_document_coherent: bool,
+}
+
 /// Something told about each frame after it has been produced.
 ///
-/// Called with the window in the state the frame left it: the scene it emitted, the damage it
-/// answered, the layout it computed and the renderer's own report are all still the ones belonging
-/// to the frame that has just been presented.
+/// Called with the window in the state the frame left it. [`Window::completed_frame`] reports the
+/// actual outcome even when no presentation occurred, and whether late document mutations left
+/// its geometry coherent. The scene, layout and renderer report are still available for inspection.
 ///
 /// The method takes `&self` rather than `&mut self` because the window is borrowed for the call, so
 /// a probe that wanted to keep something writes it through a cell or a signal. That is not a

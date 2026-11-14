@@ -1,4 +1,6 @@
 /target/
+/vendor/*/target/
+/vendor/*/Cargo.lock
 /node_modules/
 **/node_modules/
 /apps/examples/*/dist
