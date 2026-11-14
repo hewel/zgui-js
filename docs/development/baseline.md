@@ -15,7 +15,7 @@ Preview commands and phase acceptance are tracked in [preview verification](prev
 | rquickjs | `73fcd6062ee615aeb2a4675cd32be67a56e93973`; Phase 0 `std`, Phase 1 adds `macro` for opaque native classes |
 | QuickJS-NG | Resolved submodule `6d46d07d04041b40f4f49eaa7fdebe44c314c699` |
 | Node | Tested build tooling on 26.13.0 |
-| pnpm | 12.3.4 |
+| pnpm | 12.18.0 |
 | Solid / babel-preset-solid | Exact registry versions 1.9.19 / 1.9.19 |
 | JSX compiler | babel-plugin-jsx-dom-expressions 0.40.14 |
 | Babel core / TypeScript preset | 7.29.13 / 7.29.7 |

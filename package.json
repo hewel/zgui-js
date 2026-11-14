@@ -3,10 +3,10 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "packageManager": "pnpm@12.3.4",
+  "packageManager": "pnpm@12.18.0",
   "engines": {
     "node": ">=26.13.0",
-    "pnpm": "12.3.4"
+    "pnpm": "12.18.0"
   },
   "scripts": {
     "typecheck": "node packages/build/src/typecheck.mjs",
@@ -19,9 +19,9 @@
     "smoke": "pnpm ui:build --smoke && node packages/build/src/check-smoke.mjs"
   },
   "devDependencies": {
-    "solid-js": "1.9.19",
-    "@zgui/ui": "workspace:*",
     "@zgui/services": "workspace:*",
+    "@zgui/ui": "workspace:*",
+    "solid-js": "1.9.19",
     "typescript": "5.9.3"
   }
 }
