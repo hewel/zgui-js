@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { readFileSync } from "node:fs";
 import { mkdtemp, mkdir, writeFile, readFile, readlink, realpath, rm, readdir, symlink } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { createHash } from "node:crypto";
@@ -185,6 +186,12 @@ test("watch rebuild queue coalesces bursts and serializes edits arriving during 
 
 test("development watcher retains the good generation on errors and publishes recovery", { timeout: 30000 }, async t => {
   const directory = await fixture(t);
+  const statusPath = path.join(directory, ".zgui-build-status.json");
+  const readStatus = () => {
+    const bytes = readFileSync(statusPath);
+    assert.ok(bytes.length <= 16 * 1024);
+    return JSON.parse(bytes);
+  };
   const initial = deferred();
   const failed = deferred();
   const recovered = deferred();
@@ -194,22 +201,64 @@ test("development watcher retains the good generation on errors and publishes re
     onSuccess(result) {
       if (!firstBuildId) {
         firstBuildId = result.manifest.buildId;
-        initial.resolve(result);
-      } else if (result.manifest.buildId !== firstBuildId) recovered.resolve(result);
+        initial.resolve({ result, status: readStatus() });
+      } else if (result.manifest.buildId !== firstBuildId) recovered.resolve({ result, status: readStatus() });
     },
-    onError(error) { failed.resolve(error); },
+    onError(error) { failed.resolve({ error, status: readStatus() }); },
   });
   try {
-    const { dist } = await initial.promise;
+    const { result: { dist }, status: published } = await initial.promise;
     const target = await readlink(dist);
-    await writeFile(path.join(directory, "src/main.tsx"), validEntry + '\nconst invalid: number = "bad";\n');
-    assert.match((await failed.promise).message, /not assignable/);
+    const previousDirectory = await realpath(dist);
+    assert.match(published.attemptId, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+    assert.deepEqual(published, {
+      schemaVersion: 1, attemptId: published.attemptId, app: "fixture", status: "published",
+      previousDirectory: null, publicationDirectory: previousDirectory, buildId: firstBuildId, error: null,
+    });
+    await writeFile(path.join(directory, "src/main.tsx"), validEntry + `\nconst invalid: number = "${"bad".repeat(1500)}";\n`);
+    const { error, status: failure } = await failed.promise;
+    assert.match(error.message, /not assignable/);
+    assert.ok(error.message.length > 2048);
+    assert.notEqual(failure.attemptId, published.attemptId);
+    assert.match(failure.attemptId, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+    assert.deepEqual(failure, {
+      schemaVersion: 1, attemptId: failure.attemptId, app: "fixture", status: "failed",
+      previousDirectory, publicationDirectory: null, buildId: null,
+      error: { code: "E_BUILD", message: error.message.slice(0, 2048) },
+    });
     assert.equal(await readlink(dist), target);
+    assert.equal(JSON.parse(await readFile(path.join(dist, "manifest.json"), "utf8")).buildId, firstBuildId);
     await writeFile(path.join(directory, "src/main.tsx"), validEntry.replace("Count:", "Total:"));
-    const result = await recovered.promise;
+    const { result, status: recovery } = await recovered.promise;
     assert.notEqual(result.manifest.buildId, firstBuildId);
     assert.notEqual(await readlink(dist), target);
     assert.equal(JSON.parse(await readFile(path.join(dist, "manifest.json"), "utf8")).buildId, result.manifest.buildId);
+    assert.notEqual(recovery.attemptId, failure.attemptId);
+    assert.deepEqual(recovery, {
+      schemaVersion: 1, attemptId: recovery.attemptId, app: "fixture", status: "published",
+      previousDirectory, publicationDirectory: await realpath(dist), buildId: result.manifest.buildId, error: null,
+    });
+    assert.deepEqual((await readdir(directory)).filter(name => name.startsWith(".zgui-build-status.json.")), []);
+  } finally { await watcher.close(); }
+});
+
+test("development watcher surfaces status publication failure instead of reporting success", { timeout: 30000 }, async t => {
+  const directory = await fixture(t);
+  await mkdir(path.join(directory, ".zgui-build-status.json"));
+  const failed = deferred();
+  let successes = 0;
+  const watcher = watchApplication("fixture", {
+    appDirectory: directory,
+    onSuccess() { successes++; },
+    onError(error) { failed.resolve(error); },
+  });
+  try {
+    const error = await failed.promise;
+    assert.equal(error.syscall, "rename");
+    assert.match(error.message, /\.zgui-build-status\.json/);
+    assert.equal(successes, 0);
+    await assert.rejects(realpath(path.join(directory, "dist")), { code: "ENOENT" });
+    assert.deepEqual((await readdir(directory)).filter(name => name.startsWith(".zgui-build-status.json.")), []);
   } finally { await watcher.close(); }
 });
 

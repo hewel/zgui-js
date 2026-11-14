@@ -458,3 +458,100 @@ pixels. No self-hosted CI runner was provisioned or exposed to untrusted PR code
 Local proof artifacts remain under `target/preview-p4-*`; throwaway application and
 policy inputs were removed after verification. These are native offscreen pixel
 checks, not compositor transparency, IME or desktop-shell certification.
+
+## P5 — atomic publication watch and generation-safe lifecycle
+
+Run the builder and preview observer separately:
+
+```sh
+pnpm ui:dev --app counter
+target/debug/native-host preview watch \
+  --bundle apps/examples/counter/dist \
+  --profile preview/profiles/default.json \
+  --fixture preview/fixtures/empty.json \
+  --scenario preview/scenarios/counter-virtual.json \
+  --out target/counter-watch --max-runs 64
+```
+
+Watch requires the builder's atomic generation symlink, not mutable JS/CSS files.
+It resolves and validates a complete package, rechecks the publication after
+validation, and pins that directory for an ordinary one-shot run controller.
+Pending publications coalesce; a superseded active worker is canceled and reaped
+before the next worker starts. Forced cancellation explicitly leaves clean JS
+teardown unverified. Linux workers have their own process group and a parent-death
+signal, including a startup parent-identity check.
+
+The builder atomically publishes `.zgui-build-status.json` beside `dist`. A failed
+compilation has an attempt UUID and diagnostic, not a fabricated package build ID.
+Its previous publication identity prevents stale status from blocking a newer
+manual publication. Status files and their temporary names do not trigger rebuilds.
+Each run revalidates the configured profile/fixture/scenario paths and saves the
+inputs it actually consumed; edits to those files alone are not build notifications.
+
+Watch stdout is bounded JSONL. `events.jsonl` retains the complete published events,
+and one atomic `index.json` contains `latestAttempt` and `lastSuccess`, avoiding torn
+multi-file pointer updates. Control `runId` and native worker `nativeRunId` are
+distinct and both retained. Failed builds have no current capture; previous success
+is explicitly historical. A superseded completion cannot promote either index.
+Run directories are immutable after their owner completes.
+
+`--max-runs` defaults to 64 and accepts 1–1024. The observer stops rather than deleting
+evidence when the run limit is reached; events are limited to `16 * maxRuns + 64`,
+8 KiB each, and each native run retains its profile output limit. Start a new output
+directory to continue. A run-limit exit reflects the latest attempt, not an older
+successful worker. SIGINT/SIGTERM stop the controller and join its owned run.
+An unread stdout pipe fails after a 250 ms delivery deadline; stderr backpressure
+also becomes an output failure. Descriptor flags are restored in reverse order,
+including shared `2>&1` descriptors.
+
+### Real native surface recreation
+
+Scenario operation `{ "id": "resume", "op": "surface.recreate", "surface": "main" }`
+requires `surface.recreate`. It performs actual headless Harness suspend/resume,
+not a document reset presented as compositor output testing. The old session
+disposes before new native IDs are bound. Probe, capture and accessibility ownership
+are retired; only current `Runtime.windows` selects main, never retained headless
+offscreen entries. Scale and logical geometry are reapplied to the replacement.
+
+Session generation increments while the run clock, RNG and fixture history continue.
+Retirement cancels only that generation's fixture registrations; run-unique request
+IDs prevent collisions with earlier ledger entries. Whole-run fixture disposal
+belongs to `Driver::finish`, not every session shutdown. Evidence filenames and
+recovery matching include generation, and final run metadata reports the current
+generation. Earlier complete captures remain inspectable without certifying stale
+pixels for the replacement surface.
+
+### Observed gates
+
+- Native preview Rust tests: 68 passed, one opt-in watchdog fixture ignored.
+  Fixture tests: 17 passed; live work tests: eight passed. Session tests: all 14
+  passed across the initial run and the focused corrected contract check.
+  `cargo build -p native-host` passed without warnings.
+- Build compiler/watcher tests: ten passed, including real compilation failure,
+  recovery and failed status publication.
+- Four public watch tests passed: real compile failure and recovery; frozen native
+  input canceled/reaped before the newest coalesced build starts; a late successful
+  worker excluded after a newer failed attempt; and an unread stdout pipe failing
+  promptly. Process coordination uses only owned processes.
+- The 20 existing preview integration tests passed, including exact baseline CI,
+  graphics/output failure categories, offline integrity and native input/configuration.
+- The new actual-GPU lifecycle scenario passed: replacement native IDs, preserved
+  clock/RNG, retired timer/request/subscription cancellation, four unique fixture
+  registrations, continued fixture events, coherent old/new captures, native input
+  and zero resources at both retirement and final teardown.
+- `target/preview-p5-surface-proof` contains three 800×600 native captures at scale 2.
+  Visual inspection confirms Count/Doubled reset from 1/2 to 0/0 on recreation and
+  return to 1/2 through input on the replacement. Surface IDs change 1→2, document
+  IDs 0→1, generation 1→2, and time remains 40,000 µs across recreation.
+- The actual unlocked Wayland `reload_tests::native_full_reload` gate passed:
+  failed evaluation preserves the active UI, 16 replacements retire to zero,
+  failed mount exposes the native Rust fallback, Retry recovers, and stale deliveries
+  have no effect. The prior focused window was restored.
+- Independent review closed startup-error masking, superseded-success promotion,
+  blocked-output cancellation and shared-descriptor restoration issues.
+
+The counter baseline was deliberately refreshed for the P5 capability/evidence
+revision only after both PNG files proved byte-identical to P4; the native image
+was visually inspected again. Exact policy bytes, application build ID, typography
+and expected Count/Doubled behavior remain unchanged. Desktop output removal, real
+IME, compositor blending and live service parity remain separate P6 evidence.

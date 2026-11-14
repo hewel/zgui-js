@@ -46,6 +46,18 @@ struct State {
 pub struct CaptureHandle(Rc<RefCell<State>>);
 
 impl CaptureHandle {
+    /// Release all presentation ownership before a native document is replaced.
+    /// Sequence counters stay monotonic; a new renderer must present before readback is valid.
+    pub fn retire(&self) {
+        let mut state = self.0.borrow_mut();
+        state.requested = false;
+        state.last_outcome = None;
+        state.presented_draw = None;
+        state.target = None;
+        state.device_identity = 0;
+        state.pixels = None;
+        state.metadata = serde_json::Value::Null;
+    }
     pub fn request(&self) {
         let mut state = self.0.borrow_mut();
         state.requested = true;

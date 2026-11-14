@@ -2,7 +2,7 @@
   "artifacts": [
     {
       "bytes": 8,
-      "digest": "sha256:7339ff8b46fb4f61fd58c0781699a1556c8c2b65a1ded9f020ddbf5b34086de1",
+      "digest": "sha256:161b542da27cec37c4e1d98b75b0f6d0581e718ce91fdd8ffcc49faefced1d5a",
       "path": ".preview-owner",
       "role": "run-ownership",
       "status": "complete"
@@ -57,8 +57,8 @@
       "status": "complete"
     },
     {
-      "bytes": 143123,
-      "digest": "sha256:ec9c786b80ea47f2a9a55fb50855623e2ac650b9cc0643bff8ae03024f2be419",
+      "bytes": 143153,
+      "digest": "sha256:1f1eed0e430649514541697d30ab03c1ced21f52e9d508088612a00e4bda9d32",
       "path": "environment.json",
       "role": "environment",
       "status": "complete"
@@ -66,56 +66,56 @@
     {
       "bytes": 2089,
       "digest": "sha256:e4b81ce4d3b6c410b73b9cc241d0c60e045b422cfdc230aade11267fd37046ad",
-      "path": "evidence/frame-0000000001.frame.json",
+      "path": "evidence/generation-0000000001-frame-0000000001.frame.json",
       "role": "validation-frame",
       "status": "complete"
     },
     {
       "bytes": 13835,
       "digest": "sha256:54dc60d730dbd7c7af7a12e1b3c4cab98964927e3bf5f71625a9592f07c9df65",
-      "path": "evidence/frame-0000000001.tree.json",
+      "path": "evidence/generation-0000000001-frame-0000000001.tree.json",
       "role": "validation-tree",
       "status": "complete"
     },
     {
       "bytes": 2085,
       "digest": "sha256:ac826d4f7cf1a8d7eeed9771bc7f7d6c2d4367edc12c5e4388fbc1b1d1182275",
-      "path": "evidence/frame-0000000002.frame.json",
+      "path": "evidence/generation-0000000001-frame-0000000002.frame.json",
       "role": "validation-frame",
       "status": "complete"
     },
     {
       "bytes": 13834,
       "digest": "sha256:46585c1ff49e3c29bc99bcdf612d75ceba4ec684e5a76b156a8f5ce15a428f11",
-      "path": "evidence/frame-0000000002.tree.json",
+      "path": "evidence/generation-0000000001-frame-0000000002.tree.json",
       "role": "validation-tree",
       "status": "complete"
     },
     {
       "bytes": 1906,
       "digest": "sha256:d3c77a415809acec1bced65aea0ed7fc9bf9ff14f307558bd424fcbccb740cb5",
-      "path": "evidence/frame-0000000003.frame.json",
+      "path": "evidence/generation-0000000001-frame-0000000003.frame.json",
       "role": "validation-frame",
       "status": "complete"
     },
     {
       "bytes": 13834,
       "digest": "sha256:c8538577f83e88842ec6faa2c02d0e4585bb55d85b059823e28d8a2202be633c",
-      "path": "evidence/frame-0000000003.tree.json",
+      "path": "evidence/generation-0000000001-frame-0000000003.tree.json",
       "role": "validation-tree",
       "status": "complete"
     },
     {
       "bytes": 1910,
       "digest": "sha256:e344eb0d59085ad25ea1be7da8c379e264ca4bb98e3f6563a5bf90cc5035ab79",
-      "path": "evidence/frame-0000000004.frame.json",
+      "path": "evidence/generation-0000000001-frame-0000000004.frame.json",
       "role": "validation-frame",
       "status": "complete"
     },
     {
       "bytes": 13834,
       "digest": "sha256:fb3d83771550f4afabd164eb68e2beb8e9aa38941b16b98607104078fb3fe9e5",
-      "path": "evidence/frame-0000000004.tree.json",
+      "path": "evidence/generation-0000000001-frame-0000000004.tree.json",
       "role": "validation-tree",
       "status": "complete"
     },
@@ -156,7 +156,7 @@
     },
     {
       "bytes": 212,
-      "digest": "sha256:d878775f5b44609a647faf176f5701c23f0381a905fcfabfcc6a3debf3402fb6",
+      "digest": "sha256:3cf1682f3b39343c44fe676f38de9aabfcd1679aef09295472e4326e85f29e8f",
       "path": "metrics.json",
       "role": "metrics",
       "status": "complete"
@@ -205,35 +205,35 @@
     },
     {
       "bytes": 698,
-      "digest": "sha256:af61a532624e5d89df7134f6faddfb2b62341639d41201556597944fab60bbd6",
+      "digest": "sha256:35a77a39011e551359d91e5c84df4fc23c942bd273a29c06379d362d9e611415",
       "path": "progress/result-000001.json",
       "role": "action-result",
       "status": "complete"
     },
     {
       "bytes": 1369,
-      "digest": "sha256:088c87fb3479b19a2cc629d6fd98bf460431e6ef0c37debdd2ae7ced733607bf",
+      "digest": "sha256:93f0d0d2a9363b3080deefb52953bef69a2daaffac34982636b4bb15248e49d6",
       "path": "progress/result-000002.json",
       "role": "action-result",
       "status": "complete"
     },
     {
       "bytes": 1085,
-      "digest": "sha256:962e6e58e21099f4f6d92f09abc721fb78f34ad93aa0f4859e235484beda7e75",
+      "digest": "sha256:d1894d34f5a973f9733094b443a5bec0abd92146e56d8a5ca091ca08db64c29a",
       "path": "progress/result-000003.json",
       "role": "action-result",
       "status": "complete"
     },
     {
       "bytes": 887,
-      "digest": "sha256:7c9a7e719da1220de473ad318a5e01be5ae98d3898309db8032bbf8b39887a8b",
+      "digest": "sha256:4ada6fe424ce16167cc21f1bd23d9b11e5fd6e0db138e5f3110d1471f9824fec",
       "path": "progress/result-000004.json",
       "role": "action-result",
       "status": "complete"
     },
     {
       "bytes": 732,
-      "digest": "sha256:61578ddc285b5c7c0eae53479d5ea744b6425c4a4dcd48ac224110978e7a84e6",
+      "digest": "sha256:cac2171625d9f30813546c689cacff25fd848b49a1097baab9161930d1a63f7f",
       "path": "progress/result-000005.json",
       "role": "action-result",
       "status": "complete"
@@ -247,21 +247,21 @@
     },
     {
       "bytes": 3691,
-      "digest": "sha256:25d18f005fbb1853249182976bcef0d4cc00f847c766022262f9849afdf45cbe",
+      "digest": "sha256:80fefaa904ee634894f1150ab120159c78ba1aaab8744f9a56f28b60072e324b",
       "path": "steps.jsonl",
       "role": "steps",
       "status": "complete"
     },
     {
-      "bytes": 6365,
-      "digest": "sha256:619754684339c3afd42e3930897950b52a99b79315b575c528999fe18e848bee",
+      "bytes": 6541,
+      "digest": "sha256:d3d347caee54cac330aabd4cac3e140586d151632c2feed047f5954679b1bae3",
       "path": "worker-artifacts.json",
       "role": "worker-inventory",
       "status": "complete"
     },
     {
       "bytes": 974,
-      "digest": "sha256:be5d6007ee4e810da7379b10c1e6e6fb96d5fd39d5b0176b8b431674ca9b657e",
+      "digest": "sha256:da95ab8f72167000f4c0ca42e67359dc5fd3772aa5a8f23ec826672915c9575f",
       "path": "result.json",
       "role": "result",
       "status": "complete"

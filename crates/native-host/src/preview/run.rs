@@ -3,11 +3,11 @@ use serde_json::{Value, json};
 use crate::package::Package;
 use super::{Error, driver::{Driver, Fault, SharedOutput}, fixture, inventory, output::Output, profile, scenario::{self, Step}, supervisor};
 
-struct Options {
-    bundle: PathBuf,
-    fixture: PathBuf,
-    scenario: PathBuf,
-    common: super::DoctorOptions,
+pub(super) struct Options {
+    pub(super) bundle: PathBuf,
+    pub(super) fixture: PathBuf,
+    pub(super) scenario: PathBuf,
+    pub(super) common: super::DoctorOptions,
 }
 fn options(args: impl Iterator<Item=String>) -> Result<Options,Error> {
     let mut args=args.peekable();
@@ -35,17 +35,26 @@ fn options(args: impl Iterator<Item=String>) -> Result<Options,Error> {
     })
 }
 
-pub fn command(args: Vec<String>) -> Result<Value,Error> {
+pub(super) fn validate(args: &[String]) -> Result<(Options, profile::Profile), Error> {
     let options=options(args.iter().cloned())?;
     let (_,profile)=profile::read_profile(&options.common.profile,&options.common.overrides)?;
     // Capability/schema errors cannot execute the application, allocate a GPU, or claim a run.
     let scenario = scenario::load(&options.scenario,super::RUN_CAPABILITIES,profile.clock.is_virtual())?;
     validate_steps(&scenario.scenario, &profile)?;
     fixture::load(&options.fixture)?;
+    Ok((options, profile))
+}
+
+pub fn command(args: Vec<String>) -> Result<Value,Error> {
+    controlled(args, None)
+}
+
+pub(super) fn controlled(args: Vec<String>, canceled: Option<&std::sync::atomic::AtomicBool>) -> Result<Value,Error> {
+    let (options, profile)=validate(&args)?;
     let mut output=Output::create(options.common.out.as_deref().expect("required output"),profile.limits.max_output_bytes)?;
     let mut child=std::process::Command::new(std::env::current_exe().map_err(|error|Error::new("E_WORKER_CRASH",9,error.to_string()))?);
     child.args(["preview","_run-worker"]).args(args).env("ZGUI_PREVIEW_PARENT_PID",std::process::id().to_string()).env("TZ","UTC");
-    let report=supervisor::run(&mut child,Duration::from_millis(profile.limits.max_run_wall_ms));
+    let report=supervisor::controlled(&mut child,Duration::from_millis(profile.limits.max_run_wall_ms),canceled);
     let mut result=match report {
         Ok(report) => {
             if let Err(error)=output.restore_worker() {
@@ -73,6 +82,10 @@ pub fn command(args: Vec<String>) -> Result<Value,Error> {
             failed
         }
     };
+    if result["firstError"]["code"]=="E_RUN_CANCELED" || result["terminationError"]["code"]=="E_RUN_CANCELED" {
+        result["cancellation"]=json!({"requested":true,"workerStopped":true,"cleanTeardownVerified":false});
+        if result["firstError"]["code"]=="E_RUN_CANCELED" { result["status"]=json!("canceled"); }
+    }
     if serde_json::to_vec(&result).expect("result serializes").len()+1>super::MAX_STDOUT_BYTES {
         result=publication_failure(Error::new("E_OUTPUT_LIMIT",8,"run summary exceeds 8 KiB"), &result);
     }
@@ -129,7 +142,7 @@ pub fn worker(args: impl Iterator<Item=String>) -> supervisor::Report {
         environment["scenario"]=json!({"id":scenario.scenario.id,"digest":scenario.digest,"requiredCapabilities":scenario.scenario.required_capabilities});
         environment["application"]=build.clone();
         environment["capabilities"]=super::capabilities(true);
-        environment["capabilityRevision"]=json!("native-preview-v1-p4");
+        environment["capabilityRevision"]=json!("native-preview-v1-p5");
         environment["hostRootStyleDigest"]=json!(super::output::digest(root_styles.as_bytes()));
         environment["inputPolicy"]=json!({"surfaceFocus":"main","dispatch":"one native deliver_all burst per action; no frame between low-level events","modifiers":"key-local; restored to none after key-up"});
         environment["timingDeterministic"]=json!(timing_deterministic);
@@ -178,6 +191,7 @@ pub fn worker(args: impl Iterator<Item=String>) -> supervisor::Report {
                 }
                 Step::SurfaceResize{surface,width,height,..}=>active.resize(*width,*height).map(|mut trace| { trace["surface"]=json!(surface); trace }),
                 Step::SurfaceScale{surface,scale,..}=>active.scale(*scale).map(|mut trace| { trace["surface"]=json!(surface); trace }),
+                Step::SurfaceRecreate{surface,..}=>active.recreate().map(|mut trace| { trace["surface"]=json!(surface); trace }),
             };
             if let Err(fault)=&result {
                 let summary=cause_summary(fault,stage,step_id.as_deref(),action);
@@ -212,6 +226,7 @@ pub fn worker(args: impl Iterator<Item=String>) -> supervisor::Report {
     let mut failure_evidence=json!({"available":false});
     let mut teardown=json!({"verified":true,"clean":true,"sessionCreated":false});
     let frames=driver.as_ref().map(Driver::frames).unwrap_or(0);
+    let generation=driver.as_ref().map(Driver::generation).unwrap_or(1);
     if let Some(active)=driver {
         if failure.is_some() {
             match active.failure_evidence() {
@@ -238,7 +253,7 @@ pub fn worker(args: impl Iterator<Item=String>) -> supervisor::Report {
     }
     if let Some(fault)=failure.as_ref() {
         diagnostics.insert(0,json!({"stage":stage,"step":step_id,"actionSequence":action,"build":build,
-            "generation":1,"error":fault.error,"diagnostic":fault.diagnostic}));
+            "generation":generation,"error":fault.error,"diagnostic":fault.diagnostic}));
         if !cause_saved && original_error.is_none() && let Some(output)=&output {
             let summary=cause_summary(fault,stage,step_id.as_deref(),action);
             original_error=Some(summary.clone());
@@ -249,7 +264,7 @@ pub fn worker(args: impl Iterator<Item=String>) -> supervisor::Report {
         }
     }
     let mut result=json!({"schemaVersion":1,"command":"run","runId":format!("run-{}",std::process::id()),
-        "scenarioId":scenario_id,"generation":1,"status":if failure.is_none(){"passed"}else{"failed"},
+        "scenarioId":scenario_id,"generation":generation,"status":if failure.is_none(){"passed"}else{"failed"},
         "exitCode":failure.as_ref().map_or(0,|fault|fault.error.exit_code),"assertions":{"passed":assertions_passed,"failed":assertions_failed},
         "captureCount":captures,"build":compact_build(&build),"timingDeterministic":timing_deterministic,"teardown":teardown,
         "firstError":failure.as_ref().map(|fault|cause_summary(fault,stage,step_id.as_deref(),action)),
@@ -324,12 +339,13 @@ fn recover_failure(output:&mut Output)->Result<Value,Error> {
         frame_path.clone()
     } else if let Some(tree)=&existing_tree {
         let ordinal=tree["frameOrdinal"].as_u64().ok_or_else(||Error::new("E_OUTPUT_IO",8,"failure tree has no frame identity"))?;
-        directory.join(format!("frame-{ordinal:010}.frame.json"))
+        let generation=tree["generation"].as_u64().ok_or_else(||Error::new("E_OUTPUT_IO",8,"failure tree has no generation"))?;
+        directory.join(format!("generation-{generation:010}-frame-{ordinal:010}.frame.json"))
     } else {
         let mut frames=match std::fs::read_dir(&directory) {
             Ok(entries)=>entries.collect::<Result<Vec<_>,_>>().map_err(|error|Error::new("E_OUTPUT_IO",8,error.to_string()))?
                 .into_iter().map(|entry|entry.path())
-                .filter(|path|path.file_name().and_then(|name|name.to_str()).is_some_and(|name|name.starts_with("frame-")&&name.ends_with(".frame.json"))).collect::<Vec<_>>(),
+                .filter(|path|path.file_name().and_then(|name|name.to_str()).is_some_and(|name|name.starts_with("generation-")&&name.ends_with(".frame.json"))).collect::<Vec<_>>(),
             Err(error) if error.kind()==std::io::ErrorKind::NotFound=>return Ok(json!({"available":false})),
             Err(error)=>return Err(Error::new("E_OUTPUT_IO",8,error.to_string())),
         };
@@ -342,7 +358,7 @@ fn recover_failure(output:&mut Output)->Result<Value,Error> {
         Some(tree)=>tree,
         None=>read_evidence(&source.with_file_name(source.file_name().expect("frame file").to_string_lossy().replace(".frame.json",".tree.json")))?,
     };
-    if frame["validationFrame"]["ordinal"]!=tree["frameOrdinal"] || frame["buildId"]!=tree["buildId"] {
+    if frame["generation"]!=tree["generation"] || frame["validationFrame"]["ordinal"]!=tree["frameOrdinal"] || frame["buildId"]!=tree["buildId"] {
         return Err(Error::new("E_OUTPUT_IO",8,"recovered frame and tree identities disagree"));
     }
     let mut pixels=output.root().join("failure/last-valid.png").is_file();
@@ -352,7 +368,7 @@ fn recover_failure(output:&mut Output)->Result<Value,Error> {
                 let path=entry.map_err(|error|Error::new("E_OUTPUT_IO",8,error.to_string()))?.path();
                 if !path.file_name().and_then(|name|name.to_str()).is_some_and(|name|name.ends_with(".frame.json")) { continue; }
                 let capture=read_evidence(&path)?;
-                if capture["buildId"]!=frame["buildId"] || capture["pixelPresentation"]!=frame["pixelPresentation"] { continue; }
+                if capture["generation"]!=frame["generation"] || capture["buildId"]!=frame["buildId"] || capture["pixelPresentation"]!=frame["pixelPresentation"] { continue; }
                 let png=path.with_file_name(path.file_name().expect("capture file").to_string_lossy().replace(".frame.json",".png"));
                 let bytes=std::fs::read(png).map_err(|error|Error::new("E_OUTPUT_IO",8,error.to_string()))?;
                 if capture["pngDigest"]!=super::output::digest(&bytes) { return Err(Error::new("E_OUTPUT_IO",8,"historical pixel identity mismatch")); }

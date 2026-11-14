@@ -55,7 +55,8 @@ fn validate_identity(tree:&Value,frame:&Value,result:&Value,capture:&str,tree_di
     if tree["schemaVersion"]!=1 || frame["schemaVersion"]!=1 || result["schemaVersion"]!=1 || result["command"]!="run"
         || frame["captureId"]!=capture || frame["treeDigest"]!=tree_digest || frame["layoutDocumentCoherent"]!=true
         || tree["buildId"].as_str().is_none_or(str::is_empty) || tree["buildId"]!=frame["buildId"] || tree["buildId"]!=result["build"]["buildId"]
-        || tree["generation"].as_u64().is_none() || tree["generation"]!=frame["generation"] || tree["generation"]!=result["generation"]
+        || tree["generation"].as_u64().is_none_or(|generation|generation==0 || result["generation"].as_u64().is_none_or(|current|generation>current))
+        || tree["generation"]!=frame["generation"]
         || tree["surface"]!="main" || tree["surface"]!=frame["surface"]
         || tree["frameOrdinal"].as_u64().is_none() || tree["frameOrdinal"]!=frame["validationFrame"]["ordinal"]
         || tree["presentationSequence"].as_u64().is_none() || tree["presentationSequence"]!=frame["pixelPresentation"]["sequence"]
@@ -426,6 +427,12 @@ mod tests {
             "buildId":"example","generation":1,"surface":"main","metadataRevision":1,"validationFrame":{"ordinal":3},"pixelPresentation":{"sequence":2}});
         let result=json!({"schemaVersion":1,"command":"run","build":{"buildId":"example"},"generation":1});
         validate_identity(&tree,&frame,&result,"initial","hash").unwrap();
+        let mut later_result=result.clone();
+        later_result["generation"]=json!(2);
+        validate_identity(&tree,&frame,&later_result,"initial","hash").unwrap();
+        let mut mismatched_frame=frame.clone();
+        mismatched_frame["generation"]=json!(2);
+        assert!(validate_identity(&tree,&mismatched_frame,&later_result,"initial","hash").is_err());
         assert!(validate_identity(&tree,&frame,&result,"after","hash").is_err());
         for (field,value) in [("buildId",json!("other-build")),("generation",json!(2))] {
             let mut tree=tree.clone();

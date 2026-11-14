@@ -189,7 +189,7 @@ fn cancelled_injected_errors_are_not_observed_or_acknowledged() {
 fn traces_are_lossy_but_assertions_and_disposal_are_not() {
     let h = Harness::new(definition(json!({"assets":assets(0)}), json!([])));
     for i in 1..=5000 {
-        h.runtime.admission("assets", "readTextAsset", i).unwrap();
+        h.runtime.admission("assets", "readTextAsset", i, 7).unwrap();
         h.runtime.cancel(i);
     }
     let trace = h.runtime.trace();
@@ -268,6 +268,40 @@ fn disposal_cancels_released_but_undelivered_errors_without_releasing_any_js_roo
     h.deliver();
     assert_eq!(h.script("seen.length + errors.length"), "0");
     assert_eq!(h.work.counts(), (0, 0, 0, 0));
+    h.runtime.finalize().unwrap();
+}
+#[test]
+fn retired_generation_preserves_fixture_ledger_events_and_new_registrations() {
+    let mut h=Harness::new(definition(json!({"assets":assets(20),"niri":niri(20)}),json!([
+        {"atMs":10,"channel":"niri.state","value":snapshot("after-resume")}
+    ])));
+    h.script("globalThis.oldRequest = __zguiServices.readTextAsset('test.txt'); oldRequest.promise.then(v => seen.push('old'), e => errors.push(e.code)); __zguiServices.watchNiri(v => seen.push('old-subscription'), e => errors.push(e.code));");
+    let old_ids: Vec<_> = h.runtime.state.borrow().calls.keys().copied().collect();
+    h.work.finish_stop();
+    assert_eq!(h.work.counts(),(0,0,0,0));
+    let work=Work::new(HostHandle::from_rc(Rc::new(StubHost::default())),Some(h._package.package()),8,
+        host_services::Executor::new(1,8).unwrap(),Arc::new(NoWake),SurfaceId::new(8),ServicePolicy::Fixture(h.runtime.clone()));
+    h.engine.with_context(|ctx|work.install(&ctx)).unwrap();
+    work.mounting(); work.mounted();
+    h.work=work;
+    h.script("__zguiServices.readTextAsset('test.txt').promise.then(v => seen.push('new'), e => errors.push(e.code)); __zguiServices.watchNiri(v => seen.push(v.workspaces[0].name), e => errors.push(e.code));");
+    let new_ids: Vec<_> = h.runtime.state.borrow().calls.keys().filter(|id|!old_ids.contains(id)).copied().collect();
+    assert_eq!(new_ids.len(),2);
+    assert!(new_ids.iter().all(|id|*id>*old_ids.last().unwrap()));
+    h.clock.advance(Duration::from_millis(20));
+    h.runtime.release_due().unwrap();
+    h.deliver();
+    assert_eq!(h.script("JSON.stringify(seen)"),r#"["new","after-resume"]"#);
+    assert_eq!(h.script("errors.length"),"0");
+    h.runtime.assert_calls("assets","readTextAsset",2,None).unwrap();
+    h.runtime.assert_calls("niri","watchNiri",2,None).unwrap();
+    assert!(!h.runtime.state.borrow().disposed);
+    h.work.finish_stop();
+    h.runtime.dispose();
+    assert!(h.runtime.state.borrow().disposed);
+    assert!(h.runtime.state.borrow().scheduled.is_empty());
+    assert!(h.runtime.state.borrow().deliveries.is_empty());
+    assert!(h.runtime.state.borrow().subscriptions.is_empty());
     h.runtime.finalize().unwrap();
 }
 

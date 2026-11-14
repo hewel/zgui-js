@@ -21,12 +21,13 @@
     "services.fixtures": true,
     "source.node-location": false,
     "surface.multiple": false,
+    "surface.recreate": true,
     "surface.resize": true,
     "surface.scale": true,
     "tree.inspect": true,
     "virtual-time": true
   },
-  "capabilityRevision": "native-preview-v1-p4",
+  "capabilityRevision": "native-preview-v1-p5",
   "clock": {
     "date": "virtual-utc",
     "epochMs": 1794614400000,
@@ -3577,7 +3578,7 @@
   "host": {
     "profile": "debug",
     "rustc": "rustc 1.98.0 (88d9e12ae 2026-08-18)",
-    "sourceTreeDigest": "sha256:3121f3d4d212630b67c7c4680a5d5eac853daf69485b9d480c707b9100fff952",
+    "sourceTreeDigest": "sha256:2ee8806dbc3a9efca65ca02ac870c55a0fece911d8abd0f36f1421f00f489605",
     "sourceTreeScope": "workspace Rust sources, manifests, lockfiles and local native patches; includes test sources",
     "target": "x86_64-unknown-linux-gnu",
     "version": "0.1.0"

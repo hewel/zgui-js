@@ -1,12 +1,12 @@
 {
   "schemaVersion": 1,
   "run": "run",
-  "artifactsDigest": "sha256:494937fe72174f33c02d53005e34a37f3c74e8e1de8cbc1eb1e714e693827e4b",
+  "artifactsDigest": "sha256:a1067fdc33d760dc266760f491d8550524eb0641ba6991c3d30804dc0b47666b",
   "policyDigest": "sha256:618dc201dcc2cc976d3b0ff41d440eca02b71b68c79b01d10814734b044bbeb9",
   "review": {
     "by": "coding-assistant",
-    "at": "2026-11-14T15:52:11Z",
-    "summary": "Reviewed both actual native GPU PNGs after restoring the shared live-host root typography, foreground and padding. Initial state shows Count: 0 and Doubled: 0; a native Increment click followed by an explicit 20 ms advance shows Count: 1 and Doubled: 2. The count assertion passed, both captures are coherent and teardown released every owner resource. Exact RGBA policy, no masks or tolerance; renderer/font/profile identities are retained in run/environment.json.",
+    "at": "2026-11-14T16:33:43Z",
+    "summary": "P5 native lifecycle capability and generation-qualified evidence refresh. Both initial and after-increment PNGs were checked byte-for-byte equal to the reviewed P4 baseline; the after-increment native image was visually inspected again. Count/Doubled remain 0/0 then 1/2 after native input and 20 ms advance. Assertion passed and all resources were released. Exact RGBA policy remains unchanged, with no masks or tolerance; only the successful run's environment/lifecycle evidence is refreshed.",
     "buildId": "sha256:091dac12816ddd62f33bb7afee57de723238934d92ce1e1dd97654403ece6497",
     "captures": [
       { "captureId": "initial", "surface": "main" },

@@ -1,7 +1,7 @@
 use super::{Error, output::OutputState};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::{io::Read, process::{Command, Stdio}, thread, time::{Duration, Instant}};
+use std::{io::{Read, Write}, process::{Command, Stdio}, sync::atomic::{AtomicBool, Ordering}, thread, time::{Duration, Instant}};
 
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -25,6 +25,29 @@ fn drain(mut reader: impl Read, maximum: usize) -> std::io::Result<(Vec<u8>, u64
 }
 
 pub(crate) fn run(command: &mut Command, timeout: Duration) -> Result<Report, Error> {
+    controlled(command, timeout, None)
+}
+
+pub(super) fn controlled(command: &mut Command, timeout: Duration, canceled: Option<&AtomicBool>) -> Result<Report, Error> {
+    // A terminal interrupt belongs to the controller. A dead controller must not
+    // leave its worker alive, including the race between fork and exec.
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::unix::process::CommandExt;
+        let parent = std::process::id() as libc::pid_t;
+        command.process_group(0);
+        unsafe {
+            command.pre_exec(move || {
+                if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL) != 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                if libc::getppid() != parent {
+                    return Err(std::io::Error::other("preview controller exited before worker startup"));
+                }
+                Ok(())
+            });
+        }
+    }
     let started = Instant::now();
     let mut child = command.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped())
         .spawn().map_err(|error| Error::new("E_WORKER_CRASH", 9, format!("cannot start preview worker: {error}")))?;
@@ -32,12 +55,17 @@ pub(crate) fn run(command: &mut Command, timeout: Duration) -> Result<Report, Er
     let stderr = child.stderr.take().expect("worker stderr pipe");
     let stdout = thread::spawn(move || drain(stdout, 64 * 1024));
     let stderr = thread::spawn(move || drain(stderr, 256 * 1024));
-    let mut expired = false;
+    let mut termination = None;
     let status = loop {
         match child.try_wait() {
             Ok(Some(status)) => break Ok(status),
+            Ok(None) if canceled.is_some_and(|flag| flag.load(Ordering::Acquire)) => {
+                termination = Some(Error::new("E_RUN_CANCELED", 5, "run canceled by controller; worker terminated, clean teardown unverified"));
+                let _ = child.kill();
+                break child.wait();
+            }
             Ok(None) if started.elapsed() >= timeout => {
-                expired = true;
+                termination = Some(Error::new("E_WATCHDOG", 5, format!("worker exceeded {} ms; terminated, clean teardown unverified", timeout.as_millis())));
                 let _ = child.kill();
                 break child.wait();
             }
@@ -53,11 +81,13 @@ pub(crate) fn run(command: &mut Command, timeout: Duration) -> Result<Report, Er
         .map_err(|error| Error::new("E_WORKER_CRASH", 9, error.to_string()))?;
     let stderr = stderr.join().map_err(|_| Error::new("E_WORKER_CRASH", 9, "worker log reader panicked"))?
         .map_err(|error| Error::new("E_WORKER_CRASH", 9, error.to_string()))?;
-    eprint!("{}", String::from_utf8_lossy(&stderr.0));
-    if stderr.1 > 0 { eprintln!("preview: dropped {} worker log bytes", stderr.1); }
-    if expired {
-        return Err(Error::new("E_WATCHDOG", 5, format!("worker exceeded {} ms; terminated, clean teardown unverified", timeout.as_millis())));
+    let mut log=std::io::stderr().lock();
+    log.write_all(&stderr.0).map_err(|error|Error::new("E_OUTPUT_IO",8,format!("cannot publish worker log: {error}")))?;
+    if stderr.1 > 0 {
+        writeln!(log,"preview: dropped {} worker log bytes",stderr.1)
+            .map_err(|error|Error::new("E_OUTPUT_IO",8,format!("cannot publish worker log: {error}")))?;
     }
+    if let Some(error) = termination { return Err(error); }
     let status = status.map_err(|error| Error::new("E_WORKER_CRASH", 9, error.to_string()))?;
     if !status.success() {
         return Err(Error::new("E_WORKER_CRASH", 9, format!("worker terminated with {status}; clean teardown unverified")));

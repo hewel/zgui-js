@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://zgui-js.local/schemas/preview/scenario.schema.json",
   "title": "Preview scenario v1 (native interaction and deterministic time)",
-  "description": "Closed input, at most 1 MiB. Implements native main-surface input/assertions, bounded settle/capture, explicit virtual clock.advance, typed fixture service.emit/call assertions and resize/scale. Step IDs and capture IDs are unique in their namespaces. Capability declarations are unioned with inferred requirements. Virtual profiles, clock.advance and requiredFrameTimeUs require virtual-time; wall profiles reject virtual-time. Known future operations fail with E_UNSUPPORTED_CAPABILITY; malformed supported payloads fail with E_SCHEMA before application mount.",
+  "description": "Closed input, at most 1 MiB. Implements native main-surface input/assertions, bounded settle/capture, explicit virtual clock.advance, typed fixture service.emit/call assertions and resize/scale/recreate. Step IDs and capture IDs are unique in their namespaces. Capability declarations are unioned with inferred requirements. Virtual profiles, clock.advance and requiredFrameTimeUs require virtual-time; wall profiles reject virtual-time. Known future operations fail with E_UNSUPPORTED_CAPABILITY; malformed supported payloads fail with E_SCHEMA before application mount.",
   "type": "object",
   "additionalProperties": false,
   "required": ["schemaVersion", "id", "requiredCapabilities", "steps"],
@@ -29,7 +29,8 @@
           { "$ref": "#/$defs/clockAdvance" },
           { "$ref": "#/$defs/serviceEmit" },
           { "$ref": "#/$defs/surfaceResize" },
-          { "$ref": "#/$defs/surfaceScale" }
+          { "$ref": "#/$defs/surfaceScale" },
+          { "$ref": "#/$defs/surfaceRecreate" }
         ]
       }
     }
@@ -294,6 +295,17 @@
         "scale": { "type": "number", "exclusiveMinimum": 0, "maximum": 8 }
       },
       "description": "Delivers one native scale/physical-size event without moving virtual time; current resource demand must become ready at the new scale."
+    },
+    "surfaceRecreate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "op", "surface"],
+      "properties": {
+        "id": { "$ref": "#/$defs/safeId" },
+        "op": { "const": "surface.recreate" },
+        "surface": { "$ref": "#/$defs/surface" }
+      },
+      "description": "Suspends and resumes the real native main document, disposing its session and creating a fresh generation. Clock, RNG and fixture scenario history continue; retired registrations and capture/accessibility mappings are canceled."
     }
   }
 }

@@ -253,7 +253,7 @@ enum Scheduled {
     Niri { generation: u64, id: u64 },
 }
 struct Subscription { generation: u64, active: bool }
-struct Call { service: &'static str, method: &'static str, error: Option<&'static str>, error_delivered: bool, acknowledged: bool }
+struct Call { generation: u64, service: &'static str, method: &'static str, error: Option<&'static str>, error_delivered: bool, acknowledged: bool }
 struct State {
     scheduled: BTreeMap<(u64, u8, u64), Scheduled>,
     deliveries: VecDeque<Delivery>,
@@ -262,6 +262,7 @@ struct State {
     niri_error: Option<InjectedError>,
     subscriptions: BTreeMap<u64, Subscription>,
     calls: BTreeMap<u64, Call>,
+    next_registration_id: u64,
     sequence: u64,
     trace: Vec<Value>, trace_bytes: usize, dropped: u64,
     failure: Option<ContractFailure>,
@@ -280,7 +281,7 @@ impl FixtureRuntime {
         Rc::new(Self { state: RefCell::new(State {
             scheduled, deliveries: VecDeque::new(), assets: definition.services.assets.as_ref().map(|p| p.initial_state.clone()),
             niri: definition.services.niri.as_ref().map(|p| p.initial_state.clone()), niri_error: definition.services.niri.as_ref().and_then(|p| p.error.clone()),
-            subscriptions: BTreeMap::new(), calls: BTreeMap::new(), sequence: 0, trace: vec![], trace_bytes: 0, dropped: 0, failure: invalid, disposed: false,
+            subscriptions: BTreeMap::new(), calls: BTreeMap::new(), next_registration_id: 1, sequence: 0, trace: vec![], trace_bytes: 0, dropped: 0, failure: invalid, disposed: false,
         }), definition, environment })
     }
     fn record(&self, state: &mut State, kind: &str, detail: Value) {
@@ -307,19 +308,26 @@ impl FixtureRuntime {
         if self.definition.services.assets.is_none() { return Err(self.fail(failure("E_FIXTURE_MISSING_SERVICE", "preview fixture does not provide readTextAsset"))); }
         Ok(())
     }
-    fn admission(&self, service: &'static str, method: &'static str, request_id: u64) -> Result<(), ContractFailure> {
+    pub(super) fn registration_id(&self) -> Option<u64> {
+        let mut state = self.state.borrow_mut();
+        let id = state.next_registration_id;
+        if state.disposed || id>super::MAX_SAFE_ID { return None; }
+        state.next_registration_id += 1;
+        Some(id)
+    }
+    fn admission(&self, service: &'static str, method: &'static str, request_id: u64, generation: u64) -> Result<(), ContractFailure> {
         if let Some(error) = self.contract_failure() { return Err(error); }
         let mut state = self.state.borrow_mut();
         if state.disposed { drop(state); return Err(self.malformed("fixture runtime is disposed")); }
         // Calls remain bounded independently of the lossy trace: exact assertions cannot rely on trace retention.
         if state.calls.len() >= 16384 { drop(state); return Err(self.malformed("fixture call limit reached")); }
         if state.calls.contains_key(&request_id) { drop(state); return Err(self.malformed("duplicate fixture request ID")); }
-        state.calls.insert(request_id, Call { service, method, error: None, error_delivered: false, acknowledged: false });
+        state.calls.insert(request_id, Call { generation, service, method, error: None, error_delivered: false, acknowledged: false });
         self.record(&mut state, "request", json!({"requestId":request_id,"service":service,"method":method}));
         Ok(())
     }
     pub(super) fn read_asset(&self, generation: u64, request_id: u64, path: &str, package: Option<&Package>) -> Result<(), ContractFailure> {
-        self.admission("assets", "readTextAsset", request_id)?;
+        self.admission("assets", "readTextAsset", request_id, generation)?;
         let Some(provider) = &self.definition.services.assets else { return Err(self.fail(failure("E_FIXTURE_MISSING_SERVICE", "preview fixture does not provide readTextAsset"))); };
         let behavior = self.state.borrow().assets.as_ref().and_then(|state| state.assets.get(path)).cloned();
         let Some(behavior) = behavior else { return Err(self.malformed(format!("fixture does not declare text asset {path}"))); };
@@ -335,7 +343,7 @@ impl FixtureRuntime {
         Ok(())
     }
     pub(super) fn subscribe(&self, generation: u64, request_id: u64) -> Result<(), ContractFailure> {
-        self.admission("niri", "watchNiri", request_id)?;
+        self.admission("niri", "watchNiri", request_id, generation)?;
         let Some(provider) = &self.definition.services.niri else { return Err(self.fail(failure("E_FIXTURE_MISSING_SERVICE", "preview fixture does not provide watchNiri"))); };
         let deadline = self.environment.now_us().checked_add(u64::from(provider.latency_ms) * 1000).ok_or_else(|| self.malformed("fixture deadline overflow"))?;
         let mut state = self.state.borrow_mut();
@@ -432,7 +440,13 @@ impl FixtureRuntime {
         state.deliveries.retain(|item| !matches!(item, Delivery::Asset { id: other, .. } | Delivery::Niri { id: other, .. } if *other == id));
         self.record(&mut state, "cancellation", json!({"requestId":id}));
     }
-    pub(super) fn dispose(&self) {
+    /// Retire only one session's registrations; scenario events and the exact call ledger survive.
+    pub(super) fn cancel_generation(&self, generation: u64) {
+        let ids: Vec<_> = self.state.borrow().calls.iter()
+            .filter_map(|(&id, call)|(call.generation==generation).then_some(id)).collect();
+        for id in ids { self.cancel(id); }
+    }
+    pub(crate) fn dispose(&self) {
         let mut state = self.state.borrow_mut();
         if state.disposed { return; }
         let scheduled = state.scheduled.len();

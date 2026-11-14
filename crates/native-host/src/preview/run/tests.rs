@@ -35,20 +35,21 @@ fn sealed_inventory_rejects_modified_worker_bytes() {
 fn recovery_completes_a_half_published_failure_without_overwriting_its_tree() {
     let directory=Directory::new();
     let mut output=Output::create(&directory.0,1024*1024).unwrap();
-    let tree=json!({"frameOrdinal":1,"buildId":"build-one","nodes":[{"text":"last complete state"}]});
-    let frame=json!({"validationFrame":{"ordinal":1},"buildId":"build-one","pixelPresentation":{"sequence":1}});
-    output.json("evidence/frame-0000000001.tree.json","validation-tree",&tree).unwrap();
-    output.json("evidence/frame-0000000001.frame.json","validation-frame",&frame).unwrap();
+    let tree=json!({"generation":1,"frameOrdinal":1,"buildId":"build-one","nodes":[{"text":"last complete state"}]});
+    let frame=json!({"generation":1,"validationFrame":{"ordinal":1},"buildId":"build-one","pixelPresentation":{"sequence":1}});
+    output.json("evidence/generation-0000000001-frame-0000000001.tree.json","validation-tree",&tree).unwrap();
+    output.json("evidence/generation-0000000001-frame-0000000001.frame.json","validation-frame",&frame).unwrap();
     output.json("failure/tree.json","failure-tree",&tree).unwrap();
     let before=std::fs::read(directory.0.join("failure/tree.json")).unwrap();
-    // A later complete frame cannot replace the failure's already selected identity.
-    output.json("evidence/frame-0000000002.tree.json","validation-tree",&json!({"frameOrdinal":2,"buildId":"build-one"})).unwrap();
-    output.json("evidence/frame-0000000002.frame.json","validation-frame",&json!({"validationFrame":{"ordinal":2},"buildId":"build-one"})).unwrap();
+    // A recreated surface may restart its ordinal; it cannot replace the failure's selected generation.
+    output.json("evidence/generation-0000000002-frame-0000000001.tree.json","validation-tree",&json!({"generation":2,"frameOrdinal":1,"buildId":"build-one"})).unwrap();
+    output.json("evidence/generation-0000000002-frame-0000000001.frame.json","validation-frame",&json!({"generation":2,"validationFrame":{"ordinal":1},"buildId":"build-one"})).unwrap();
     let result=recover_failure(&mut output).unwrap();
     assert_eq!(result["available"],true);
     assert_eq!(std::fs::read(directory.0.join("failure/tree.json")).unwrap(),before);
     let saved=read_evidence(&directory.0.join("failure/frame.json")).unwrap();
     assert_eq!(saved["validationFrame"]["ordinal"],1);
+    assert_eq!(saved["generation"],1);
     assert_eq!(saved["historical"],true);
     assert!(saved["satisfiesFailureRevision"].is_null());
     assert_eq!(recover_failure(&mut output).unwrap(),result);

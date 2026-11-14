@@ -5,4 +5,6 @@
 **/node_modules/
 /apps/examples/*/dist
 /apps/examples/*/.zgui-generations/
+/apps/examples/*/.zgui-build-status.json
+/apps/examples/*/.zgui-build-status.json.*.tmp
 /artifacts/preview/

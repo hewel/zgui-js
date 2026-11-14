@@ -3,6 +3,7 @@ use std::{cell::{Cell, RefCell}, rc::{Rc, Weak}, time::{Duration, Instant}};
 use serde_json::{Value, json};
 use zgui::{geom::{DevicePx, Size}, platform::{AppHandler, ColorScheme, IdlePolicy, PlatformCx, SurfaceEvent, SurfaceId, WakeReason}, render::{FrameOutcome, SkipReason}, runtime::{FrameProbe, Runtime, Window}};
 use zgui_platform_headless::{Harness, Headless};
+use zgui::platform::Surface as _;
 
 use crate::{Binding, MountRegion, Root, package::Package, session::{ResourceCounts, Session, SessionPolicy}};
 use super::{Error, capture::{self, CaptureHandle}, clock::Environment, fixture::FixtureDefinition, inspect, output::Output, profile::{self, Limits, LoadedProfile, Surface}, resources};
@@ -49,6 +50,7 @@ impl Fault {
 }
 
 struct OwnedFrame {
+    generation: u64,
     revision: u64,
     configuration: u64,
     metadata_revision: u64,
@@ -78,15 +80,16 @@ struct Probe {
 impl FrameProbe for Probe {
     fn frame_ended(&self, window: &Window) {
         let Some(observation) = window.completed_frame() else { return; };
-        self.frames.set(observation.ordinal);
+        self.frames.set(self.frames.get()+1);
         if self.fault.borrow().is_some() { return; }
+        let Some(session) = self.session.borrow().upgrade() else { return; };
+        if session.region.document != window.document_id()
+            || self.surface.borrow().as_ref().is_none_or(|surface|surface.id()!=window.surface().id()) { return; }
         if let Some(surface) = self.surface.borrow().as_ref()
             && let Err(error) = self.semantics.borrow_mut().consume(surface, window) {
             *self.fault.borrow_mut() = Some(error);
             return;
         }
-        let Some(session) = self.session.borrow().upgrade() else { return; };
-        if session.region.document != window.document_id() { return; }
         let resources=match resources::snapshot(window,&[]) {
             Ok(resources)=>resources,
             Err(error)=>{ *self.fault.borrow_mut()=Some(error); return; }
@@ -120,14 +123,14 @@ impl FrameProbe for Probe {
             "scale":window.surface().scale_factor(),"renderer":self.capture.metadata()});
         // Persist complete owned evidence before another callback can fail or block.
         // No readback, redraw request, signal write, or application entry occurs in this probe.
-        let stem = format!("evidence/frame-{:010}", observation.ordinal);
+        let stem = format!("evidence/generation-{:010}-frame-{:010}", session.generation, observation.ordinal);
         let publication = (|| {
             let mut output = self.output.borrow_mut();
             output.json(&format!("{stem}.tree.json"), "validation-tree", &tree)?;
             output.json(&format!("{stem}.frame.json"), "validation-frame", &frame)
         })();
         if let Err(error) = publication { *self.fault.borrow_mut() = Some(error); return; }
-        *self.last.borrow_mut() = Some(OwnedFrame { revision: observation.document_revision,
+        *self.last.borrow_mut() = Some(OwnedFrame { generation:session.generation, revision: observation.document_revision,
             configuration: state.configuration_id, presentation: state.presentation_id, frame, tree,
             metadata_revision:snapshot.metadata_revision,resource_revision:window.image_resource_revision(),
             surface_configuration:self.surface_configuration.get(),native_nodes:snapshot.native_nodes });
@@ -148,6 +151,8 @@ struct PreviewHost {
     requested_metadata: u64,
     environment: Rc<Environment>,
     fixtures: Rc<FixtureRuntime>,
+    generation: u64,
+    retired: Option<Value>,
 }
 impl PreviewHost {
     fn fail(&mut self, cx: &dyn PlatformCx, fault: Fault) {
@@ -167,7 +172,11 @@ impl PreviewHost {
             let Some(window) = self.native.windows_mut().iter_mut().find(|window| window.document_id() == region.document) else {
                 self.fail(cx, Error::new("E_HOST_INVARIANT", 9, "mount region has no current surface").into()); return;
             };
-            let prepared = Session::prepare(region, Some(self.package.clone()), 1, cx.waker(), window.surface().id(),
+            let Some(generation) = self.generation.checked_add(1) else {
+                self.fail(cx, Error::new("E_HOST_INVARIANT",9,"session generation exhausted").into()); return;
+            };
+            self.generation = generation;
+            let prepared = Session::prepare(region, Some(self.package.clone()), generation, cx.waker(), window.surface().id(),
                 self.executor.clone(), SessionPolicy::Preview { limits:self.limits.clone(), deadline:self.deadline.clone(),
                     environment:self.environment.clone(),fixtures:self.fixtures.clone() });
             let session = match prepared { Ok(session) => session, Err(error) => { self.fail(cx, Fault::application(error)); return; } };
@@ -195,7 +204,35 @@ impl PreviewHost {
 }
 impl AppHandler for PreviewHost {
     fn surfaces_available(&mut self, cx: &dyn PlatformCx) { self.native.surfaces_available(cx); self.after_native(cx); }
-    fn surfaces_lost(&mut self, cx: &dyn PlatformCx) { if let Some(session) = &self.session { session.shutdown(); } self.native.surfaces_lost(cx); }
+    fn surfaces_lost(&mut self, cx: &dyn PlatformCx) {
+        let deadline = self.deadline.get();
+        self.deadline.set(deadline.min(Instant::now()+Duration::from_millis(20)));
+        if let Some(session) = self.session.take() {
+            let before = session.counts();
+            session.shutdown();
+            let counts = session.counts();
+            self.retired = Some(json!({"generation":session.generation,"before":before,"resources":counts,
+                "clean":counts==ResourceCounts::default()}));
+            if let Some(error) = session.take_cleanup_failure() {
+                self.fail(cx, Error::new("E_TEARDOWN",9,error.to_string()).into());
+            } else if let Some(error) = session.contract_failure() {
+                self.fail(cx, Fault::application(error.into()));
+            } else if counts!=ResourceCounts::default() {
+                self.fail(cx, Error::new("E_TEARDOWN",9,"retired surface session retained resources").into());
+            }
+            drop(session);
+        }
+        self.deadline.set(deadline);
+        self.pending.borrow_mut().clear();
+        self.requested_metadata = 0;
+        *self.probe.session.borrow_mut() = Weak::new();
+        self.probe.surface.borrow_mut().take();
+        *self.probe.semantics.borrow_mut() = SemanticModel::default();
+        self.probe.last.borrow_mut().take();
+        self.probe.presentation.borrow_mut().take();
+        self.probe.capture.retire();
+        self.native.surfaces_lost(cx);
+    }
     fn surface_event(&mut self, cx: &dyn PlatformCx, surface: SurfaceId, event: SurfaceEvent) { if self.fault.is_none() { self.native.surface_event(cx, surface, event); self.after_native(cx); } }
     fn wake(&mut self, cx: &dyn PlatformCx, reason: WakeReason) { if self.fault.is_none() { self.native.wake(cx, reason); self.after_native(cx); } }
     fn idle(&mut self, cx: &dyn PlatformCx) -> IdlePolicy { if self.fault.is_some() { IdlePolicy::Block } else { self.native.idle(cx) } }
@@ -268,23 +305,57 @@ impl Driver {
             executor:host_services::Executor::new(2,64).map_err(|error|Error::new("E_HOST_INVARIANT",9,error.to_string()))?,
             deadline:deadline.clone(),limits,probe:probe.clone(),
             font_css:format!(":root {{ font-family:{}; }}",profile.font_family_css),fault:None,requested_metadata:0,
-            environment:environment.clone(),fixtures:fixtures.clone() };
+            environment:environment.clone(),fixtures:fixtures.clone(),generation:0,retired:None };
         platform.set_color_scheme(Some(if profile.profile.theme == "dark" { ColorScheme::Dark } else { ColorScheme::Light }));
         let mut harness = Harness::over(platform, host);
         harness.hold_clock(true);
-        if let Some(window) = harness.app().native.windows().first() {
-            let surface_id = window.surface().id();
-            if let Some(offscreen) = harness.platform().offscreen(surface_id) {
-                offscreen.set_refresh_rate_millihertz(Some(surface.refresh_rate_milli_hz));
-                *probe.surface.borrow_mut() = Some(offscreen);
-            }
-            harness.deliver(surface_id, SurfaceEvent::ScaleFactorChanged { scale_factor:surface.scale,
-                size:Size::new(DevicePx(profile.physical_width as f32),DevicePx(profile.physical_height as f32)) });
-            harness.deliver(surface_id, SurfaceEvent::Focused(true));
-        }
-        Ok(Self { harness,probe,capture,deadline,run_deadline,step_start_frame:Cell::new(0),limits:profile.profile.limits.clone(),
+        let mut driver = Self { harness,probe,capture,deadline,run_deadline,step_start_frame:Cell::new(0),limits:profile.profile.limits.clone(),
             opaque:surface.opaque,dimensions:(profile.physical_width,profile.physical_height),surface:surface.clone(),
-            environment,fixtures,maximum_time_us:start+profile.profile.limits.max_virtual_duration_ms*1000 })
+            environment,fixtures,maximum_time_us:start+profile.profile.limits.max_virtual_duration_ms*1000 };
+        driver.bind_surface()?;
+        Ok(driver)
+    }
+    fn bind_surface(&mut self) -> Result<(), Fault> {
+        self.check()?;
+        let surface = self.window()?.surface().id();
+        let offscreen = self.harness.platform().offscreen(surface)
+            .ok_or_else(||Error::new("E_HOST_INVARIANT",9,"current native main has no headless surface"))?;
+        offscreen.set_refresh_rate_millihertz(Some(self.surface.refresh_rate_milli_hz));
+        *self.probe.surface.borrow_mut() = Some(offscreen);
+        self.harness.deliver(surface, SurfaceEvent::ScaleFactorChanged { scale_factor:self.surface.scale,
+            size:Size::new(DevicePx(self.dimensions.0 as f32),DevicePx(self.dimensions.1 as f32)) });
+        self.harness.deliver(surface, SurfaceEvent::Focused(true));
+        self.window()?.request_frame();
+        self.check()
+    }
+    pub fn generation(&self) -> u64 { self.harness.app().generation }
+    /// Recreate the real native document while retaining run time, RNG and fixture history.
+    pub fn recreate(&mut self) -> Result<Value, Fault> {
+        self.check()?;
+        let old_surface = self.window()?.surface().id();
+        let old_document = format!("{:?}",self.window()?.document_id());
+        let old_generation = self.generation();
+        let time = self.environment.now_us();
+        self.harness.suspend();
+        self.check()?;
+        if !self.harness.app().native.windows().is_empty() {
+            return Err(Error::new("E_HOST_INVARIANT",9,"suspended runtime retained native windows").into());
+        }
+        // The native harness may retain old offscreen entries. Only Runtime.windows owns main.
+        self.harness.resume();
+        self.check()?;
+        let new_surface = self.window()?.surface().id();
+        let new_document = format!("{:?}",self.window()?.document_id());
+        if new_surface==old_surface || new_document==old_document || self.generation()!=old_generation+1 {
+            return Err(Error::new("E_HOST_INVARIANT",9,"surface resume did not create a fresh native generation").into());
+        }
+        self.probe.surface_configuration.set(self.probe.surface_configuration.get()+1);
+        self.bind_surface()?;
+        self.settle(true)?;
+        Ok(json!({"oldSurfaceId":format!("{old_surface:?}"),"newSurfaceId":format!("{new_surface:?}"),
+            "oldDocumentId":old_document,"newDocumentId":new_document,"oldGeneration":old_generation,
+            "generation":self.generation(),"fromTimeUs":time,"timeUs":self.environment.now_us(),
+            "retired":self.harness.app().retired,"readiness":self.readiness()}))
     }
     pub fn begin_step(&self, action: u64, timeout_ms: Option<u64>) {
         self.probe.action.set(action);
@@ -316,6 +387,7 @@ impl Driver {
         let last = self.probe.last.borrow();
         last.as_ref().is_some_and(|last| last.revision==window.dom().revision() && last.configuration==state.configuration_id
             && last.presentation==state.presentation_id && state.presented_draw.is_some()
+            && last.generation==self.generation()
             && self.harness.app().session.as_ref().is_some_and(|session|session.bridge.metadata_revision()==last.metadata_revision)
             && last.resource_revision==window.image_resource_revision()
             && last.surface_configuration==self.probe.surface_configuration.get()
@@ -339,7 +411,7 @@ impl Driver {
             "timeUs":self.environment.now_us(),"nextFixtureDeadlineUs":self.fixtures.next_deadline_us(),
             "nextNativeDeadlineUs":self.harness.parked_deadline().map(|next|next.saturating_duration_since(self.harness.platform().clock().origin()).as_micros()),
             "requiredMetadataRevision":self.harness.app().session.as_ref().map(|session|session.bridge.metadata_revision()),
-            "requiredStateRevision":self.window().ok().map(|window|window.dom().revision()),"generation":1})
+            "requiredStateRevision":self.window().ok().map(|window|window.dom().revision()),"generation":self.generation()})
     }
     fn notify_fixture(&self)->Result<(),Error> {
         let surface=self.window()?.surface().id();
@@ -461,6 +533,7 @@ impl Driver {
         self.deadline.set(self.run_deadline.min(Instant::now()+Duration::from_millis(20)));
         let previous_contract = self.harness.app().session.as_ref().and_then(|session|session.contract_failure()).is_some();
         self.harness.shut_down();
+        self.fixtures.dispose();
         let session = self.harness.app().session.as_ref();
         let counts = session.map(|session|session.counts()).unwrap_or_default();
         let cleanup = session.and_then(|session|session.take_cleanup_failure()).map(|error| {

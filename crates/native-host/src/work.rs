@@ -125,6 +125,9 @@ impl Work {
         Ok(())
     }
     fn id(&self, ctx: &Ctx<'_>) -> rquickjs::Result<u64> {
+        if let Some(runtime) = self.fixtures() {
+            return runtime.registration_id().ok_or_else(||Exception::throw_range(ctx, "host registration identifiers exhausted"));
+        }
         let id = self.next_id.get();
         if id > MAX_SAFE_ID { return Err(Exception::throw_range(ctx, "host registration identifiers exhausted")); }
         self.next_id.set(id + 1);
@@ -305,9 +308,9 @@ impl Work {
     }
 
     pub(crate) fn begin_stop(&self) {
-        if self.mode.get() == Mode::Disposed { return; }
+        if matches!(self.mode.get(), Mode::Stopping | Mode::Disposed) { return; }
         self.mode.set(Mode::Stopping);
-        if let Some(runtime) = self.fixtures() { runtime.dispose(); }
+        if let Some(runtime) = self.fixtures() { runtime.cancel_generation(self.generation); }
         self.subscriptions.borrow_mut().clear();
         for pending in self.requests.borrow_mut().drain().map(|(_, pending)| pending) { pending.cancelled.store(true, Ordering::Release); }
         // Retired workers must not block the shared executor on a full old inbox.

@@ -415,5 +415,4 @@ fn preview_installs_clock_before_module_evaluation_and_settles_fixture_through_o
     fixtures.finalize().unwrap();
     session.shutdown();
     assert_eq!(session.counts(), ResourceCounts::default());
-    assert!(fixtures.trace()["records"].as_array().unwrap().iter().any(|record| record["kind"] == "disposal"));
 }

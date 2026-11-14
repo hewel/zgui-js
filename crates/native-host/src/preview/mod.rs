@@ -13,6 +13,7 @@ mod semantics;
 mod selectors;
 mod saved;
 mod compare;
+mod watch;
 pub(crate) mod clock;
 mod resources;
 pub(crate) mod schema;
@@ -56,12 +57,13 @@ pub(crate) fn command(mut args: impl Iterator<Item = String>) -> u8 {
         println!("{}", serde_json::to_string(&report).expect("worker report serializes"));
         return 0;
     }
+    if command == "watch" { return watch::command(args.collect()); }
     let outcome = match command.as_str() {
         "doctor" => doctor(args.collect()),
         "run" => run::command(args.collect()),
         "inspect" => saved::command(args.collect()),
         "compare" => compare::command(args.collect()),
-        _ => Err(Error::new("E_SCHEMA", 2, "expected preview doctor, run, inspect or compare")),
+        _ => Err(Error::new("E_SCHEMA", 2, "expected preview doctor, run, inspect, compare or watch")),
     };
     let result = outcome.unwrap_or_else(|error| failure(&command, error));
     let code = result["exitCode"].as_u64().unwrap_or(9) as u8;
@@ -206,7 +208,7 @@ fn capabilities(pixels: bool) -> Value {
         "selectors.test-id":true, "selectors.semantic":true, "tree.inspect":true,
         "input.pointer":true, "input.keyboard":true, "input.text":true, "input.ime":false,
         "assets.native-readiness":true, "capture.transparent":false, "capture.sequence":false,
-        "surface.resize":true, "surface.scale":true, "surface.multiple":false,
+        "surface.resize":true, "surface.scale":true, "surface.recreate":true, "surface.multiple":false,
         "lifecycle.reload":false, "source.node-location":false
     })
 }
@@ -214,5 +216,5 @@ fn capabilities(pixels: bool) -> Value {
 const RUN_CAPABILITIES: &[&str] = &[
     "pixels", "selectors.test-id", "selectors.semantic", "tree.inspect",
     "input.pointer", "input.keyboard", "input.text",
-    "virtual-time", "services.fixtures", "assets.native-readiness", "surface.resize", "surface.scale",
+    "virtual-time", "services.fixtures", "assets.native-readiness", "surface.resize", "surface.scale", "surface.recreate",
 ];
