@@ -152,23 +152,48 @@ Do not copy ambiguous frame-count semantics: this specification's `capture.seque
 
 ### 3.1 Shared production path
 
+The implemented deterministic preview path uses a supervised process, not a second UI runtime:
+
 ~~~mermaid
 flowchart TB
-    Bundle["Application package"] --> Session["rquickjs session and UI bridge"]
-    Scenario["Scenario runner"] --> Input["Native input adapter"]
-    Input --> Native["zgui runtime and native tree"]
-    Session <--> Native
-    Fixtures["Fixture services and resources"] <--> Session
-    Clock["Virtual application clock"] --> Session
-    Clock --> Native
-    Native --> Renderer["Real offscreen renderer"]
-    Native --> Probe["Frame and semantic probe"]
-    Renderer --> Evidence["Frame evidence collector"]
-    Probe --> Evidence
-    Evidence --> Output["PNG and structured artifacts"]
+    Controller["preview CLI controller: deadline and process supervision"]
+    Inputs["Application package, profile, asset fixtures, scenario"]
+    subgraph Worker["One-shot worker process"]
+        Runner["Scenario runner"]
+        Input["Native input adapter"]
+        Session["Production Session: QuickJS, Solid and UI bridge"]
+        Fixtures["Asset-only FixtureRuntime: state, requests, call trace"]
+        Clock["Shared virtual application clock"]
+        Native["Upstream zgui: headless platform and real renderer"]
+        Capture["Frame-aligned GPU pixels and native tree"]
+        Runner --> Session
+        Runner --> Input
+        Runner -->|Advance virtual time| Clock
+        Runner -->|Emit fixture state and assert calls| Fixtures
+        Input --> Native
+        Session <--> Native
+        Fixtures <--> Session
+        Clock --> Session
+        Clock --> Native
+        Native --> Capture
+    end
+    Controller -->|Start and supervise| Runner
+    Inputs --> Runner
+    Capture --> Artifacts["Run artifacts: PNG, trees, traces and results"]
+    Fixtures --> Artifacts
+    Controller -->|Publish final result and inventory| Artifacts
+    Artifacts --> Inspect["preview inspect: saved native-tree queries"]
+    Artifacts --> Compare["preview compare: offline pixel comparison"]
+    Baseline["Reviewed baseline and comparison policy"] --> Compare
 ~~~
 
-Preview changes the platform, service providers, clock, and evidence sinks. It must not replace the application with a separate HTML page, a hand-authored lookalike, a fake TSX evaluator, or a different renderer.
+The diagram shows the default virtual-clock profile. Wall-clock profiles are explicitly nondeterministic. The controller enforces a real elapsed-time deadline even when application time is virtual.
+
+Preview changes the platform selection, asset-service provider, clock, and evidence sinks. It reuses the production package, `Session`, UI bridge, and upstream renderer. GPU capture still requires a supported graphics adapter; saved-artifact inspection and comparison do not open a graphics device.
+
+Fixture services cover packaged text assets only, not compositor state or live WM integration. Native images continue through the real resource/decoder/renderer path. Platform and compositor support remains upstream zgui's responsibility; offscreen evidence does not certify real-desktop focus, IME, or compositor behavior.
+
+Implementation entry points: [process supervisor](../../crates/native-host/src/preview/supervisor.rs), [run orchestration](../../crates/native-host/src/preview/run.rs), [native driver](../../crates/native-host/src/preview/driver.rs), [asset fixture runtime](../../crates/native-host/src/work/fixture.rs), and [saved-run comparison](../../crates/native-host/src/preview/compare.rs).
 
 A preview fixture may deliberately choose a component or route through a documented application launch parameter. Record those parameters. Do not add hidden branches that change layout or event behavior merely because preview is running.
 

@@ -139,22 +139,44 @@ Commit Cargo.lock, the JavaScript lockfile, the selected package-manager version
 
 ### 3.1 System boundaries
 
+The implemented runtime separates owner-thread JavaScript/native UI work from background resource reads:
+
 ~~~mermaid
 flowchart TB
-    Source["TSX, TypeScript, CSS, assets"] --> Build["Type check, Solid transform, bundle"]
-    Build --> Package["Versioned application package"]
-    Package --> VM["rquickjs session on UI thread"]
-    VM <--> Adapter["Native node and event adapter"]
-    Adapter <--> Zgui["zgui tree, input, layout, rendering"]
-    VM <--> Services["Typed host services"]
-    Services <--> Workers["Rust asynchronous tasks"]
-    Workers --> Inbox["Owned completion messages and wakeup"]
-    Inbox --> VM
+    subgraph Owner["Owner UI thread"]
+        Session["native-host::Session: preflight, mount, checkpoint, shutdown"]
+        subgraph VM["js-runtime: QuickJS-NG via rquickjs"]
+            App["Compiled application and Solid reactivity"]
+            UI["@zgui/ui: Solid Universal renderer"]
+            SDK["@zgui/services: readTextAsset"]
+            App --> UI
+            App --> SDK
+        end
+        Bridge["ui-bridge: generation-scoped nodes and callbacks"]
+        Work["native-host::Work: requests, timers, frame callbacks"]
+        Native["Upstream zgui: retained native tree and host binding"]
+        Session -.-> App
+        Session -.-> Bridge
+        Session -.-> Work
+        UI -->|Synchronous node operations| Bridge
+        Bridge -->|Native event callbacks| App
+        Bridge <--> Native
+        SDK --> Work
+        App -->|Timers and requestAnimationFrame| Work
+        Native -->|Timer and frame notifications| Work
+        Work -->|Promise settlement and scheduled callbacks| App
+    end
+    Work -->|Owned request, generation and cancellation flag| Workers["host-services::Executor: live text-asset reads"]
+    Workers -->|Owned completion and owner wakeup| Work
 ~~~
 
-The bridge owns the application-facing contract. zgui owns native UI behavior. Solid owns JavaScript reactivity. The task system owns blocking or asynchronous host work.
+Dotted edges denote session ownership. All JavaScript entry and native-tree mutation stay on the owner UI thread. Background workers receive owned Rust data, never JavaScript values or native node handles; the owner checks request/generation liveness before settling a completion.
 
-A single-threaded bridge does not need a serialized mutation protocol initially. Synchronous operations can mutate zgui's retained tree while layout and painting remain scheduled by zgui. Preserve a clear end-of-turn boundary so that a command transport can be added later.
+The bridge owns the application-facing node/event contract; Solid owns reactivity; zgui owns native UI behavior, rendering, and platform integration. `Work` supplies timers, frame callbacks, and the resource-service binding. There is no niri service, WM abstraction, or per-compositor backend in this library; supported platform and compositor behavior is determined by upstream zgui.
+
+Synchronous bridge operations mutate zgui's retained tree within a bounded JavaScript turn. Layout and painting remain scheduled by zgui. The session checkpoint interleaves resource completions, scheduled callbacks, native events, and Promise jobs so ready native work does not starve cancellation.
+
+Implementation entry points: [Session](../../crates/native-host/src/session.rs), [Work](../../crates/native-host/src/work.rs), [Solid renderer adapter](../../packages/ui/src/renderer/index.ts), and [resource executor](../../crates/host-services/src/lib.rs). For the build-to-platform overview, see [How it works](../../README.md#how-it-works).
 
 ### 3.2 Proposed workspace
 

@@ -6,6 +6,24 @@ zgui-js is an experimental native UI host. Applications are written in TypeScrip
 
 There is **no WebView and no browser DOM**. The repository also includes an offscreen preview system that uses the production application package, JavaScript runtime, UI bridge, and native renderer for scenario-based screenshots, assertions, and image comparisons.
 
+## How it works
+
+```mermaid
+flowchart TB
+    Source["Application: TSX, TypeScript, CSS, assets"] --> Build["packages/build: tsc + Babel Solid transform + esbuild"]
+    Build --> Package["Immutable package: JavaScript, source map, styles, assets, manifest"]
+    Package --> Host["native-host: QuickJS session, Solid reactivity, UI bridge"]
+    Host <--> Native["Upstream zgui: native tree, input, layout, rendering"]
+    Native -->|Live application| Desktop["Native platform backend: window and compositor"]
+    Native -->|Offscreen preview| Preview["Headless platform: real GPU frames and native UI evidence"]
+```
+
+Node.js is used for build tooling, not application execution. The host validates the package and runs its JavaScript on the owner UI thread; Solid updates native nodes through the bridge rather than a browser DOM.
+
+Platform and window-manager capabilities come from the pinned upstream zgui backend. zgui-js does not implement a WM adapter layer or compositor-specific services. Offscreen preview reuses the production session, bridge, and renderer; it is not a separate UI implementation.
+
+See the [runtime ownership diagram](docs/development/tsx-native-ui.md#31-system-boundaries) and [preview execution diagram](docs/development/preview-mode.md#31-shared-production-path) for the detailed boundaries.
+
 ## Requirements
 
 | Component | Requirement |
