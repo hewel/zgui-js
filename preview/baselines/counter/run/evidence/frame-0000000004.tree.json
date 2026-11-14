@@ -1,0 +1,556 @@
+{
+  "buildId": "sha256:091dac12816ddd62f33bb7afee57de723238934d92ce1e1dd97654403ece6497",
+  "frameOrdinal": 4,
+  "generation": 1,
+  "layoutVersion": 4,
+  "metadataRevision": 3,
+  "nodes": [
+    {
+      "boundsDevice": {
+        "height": 243.0,
+        "width": 1316.0,
+        "x": 42.0,
+        "y": 42.0
+      },
+      "boundsKind": "native-window-border-box",
+      "boundsLogical": {
+        "height": 138.85714285714286,
+        "width": 752.0,
+        "x": 24.0,
+        "y": 24.0
+      },
+      "generation": 1,
+      "kind": "root",
+      "name": null,
+      "nameTruncated": false,
+      "ownership": "application",
+      "parent": null,
+      "pointerReachabilityVerified": false,
+      "role": "genericContainer",
+      "source": null,
+      "state": {
+        "enabled": true,
+        "focused": false,
+        "visible": true
+      },
+      "surface": "main",
+      "testId": null,
+      "testIdTruncated": false,
+      "text": "Count: 1Doubled: 2Increment",
+      "textTruncated": false,
+      "token": "node-0",
+      "value": null,
+      "valueTruncated": false
+    },
+    {
+      "boundsDevice": {
+        "height": 243.0,
+        "width": 1316.0,
+        "x": 42.0,
+        "y": 42.0
+      },
+      "boundsKind": "native-window-border-box",
+      "boundsLogical": {
+        "height": 138.85714285714286,
+        "width": 752.0,
+        "x": 24.0,
+        "y": 24.0
+      },
+      "generation": 1,
+      "kind": "element",
+      "name": null,
+      "nameTruncated": false,
+      "ownership": "application",
+      "parent": "node-0",
+      "pointerReachabilityVerified": false,
+      "role": "genericContainer",
+      "source": null,
+      "state": {
+        "enabled": true,
+        "focused": false,
+        "visible": true
+      },
+      "surface": "main",
+      "testId": null,
+      "testIdTruncated": false,
+      "text": "Count: 1Doubled: 2Increment",
+      "textTruncated": false,
+      "token": "node-1",
+      "value": null,
+      "valueTruncated": false
+    },
+    {
+      "boundsDevice": {
+        "height": 58.0,
+        "width": 1316.0,
+        "x": 42.0,
+        "y": 42.0
+      },
+      "boundsKind": "native-window-border-box",
+      "boundsLogical": {
+        "height": 33.142857142857146,
+        "width": 752.0,
+        "x": 24.0,
+        "y": 24.0
+      },
+      "generation": 1,
+      "kind": "element",
+      "name": "Count:  1",
+      "nameTruncated": false,
+      "ownership": "application",
+      "parent": "node-1",
+      "pointerReachabilityVerified": false,
+      "role": "genericContainer",
+      "source": null,
+      "state": {
+        "enabled": true,
+        "focused": false,
+        "visible": true
+      },
+      "surface": "main",
+      "testId": "count-label",
+      "testIdTruncated": false,
+      "text": "Count: 1",
+      "textTruncated": false,
+      "token": "node-2",
+      "value": null,
+      "valueTruncated": false
+    },
+    {
+      "boundsDevice": {
+        "height": 0.0,
+        "width": 0.0,
+        "x": 42.0,
+        "y": 42.0
+      },
+      "boundsKind": "native-window-border-box",
+      "boundsLogical": {
+        "height": 0.0,
+        "width": 0.0,
+        "x": 24.0,
+        "y": 24.0
+      },
+      "generation": 1,
+      "kind": "text",
+      "name": null,
+      "nameTruncated": false,
+      "ownership": "application",
+      "parent": "node-2",
+      "pointerReachabilityVerified": false,
+      "role": null,
+      "source": null,
+      "state": {
+        "enabled": true,
+        "focused": false,
+        "visible": false
+      },
+      "surface": "main",
+      "testId": null,
+      "testIdTruncated": false,
+      "text": "Count: ",
+      "textTruncated": false,
+      "token": "node-3",
+      "value": null,
+      "valueTruncated": false
+    },
+    {
+      "boundsDevice": {
+        "height": 0.0,
+        "width": 0.0,
+        "x": 42.0,
+        "y": 42.0
+      },
+      "boundsKind": "native-window-border-box",
+      "boundsLogical": {
+        "height": 0.0,
+        "width": 0.0,
+        "x": 24.0,
+        "y": 24.0
+      },
+      "generation": 1,
+      "kind": "text",
+      "name": null,
+      "nameTruncated": false,
+      "ownership": "application",
+      "parent": "node-2",
+      "pointerReachabilityVerified": false,
+      "role": null,
+      "source": null,
+      "state": {
+        "enabled": true,
+        "focused": false,
+        "visible": false
+      },
+      "surface": "main",
+      "testId": null,
+      "testIdTruncated": false,
+      "text": "1",
+      "textTruncated": false,
+      "token": "node-6",
+      "value": null,
+      "valueTruncated": false
+    },
+    {
+      "boundsDevice": {
+        "height": 58.0,
+        "width": 1316.0,
+        "x": 42.0,
+        "y": 121.0
+      },
+      "boundsKind": "native-window-border-box",
+      "boundsLogical": {
+        "height": 33.142857142857146,
+        "width": 752.0,
+        "x": 24.0,
+        "y": 69.14285714285714
+      },
+      "generation": 1,
+      "kind": "element",
+      "name": "Doubled:  2",
+      "nameTruncated": false,
+      "ownership": "application",
+      "parent": "node-1",
+      "pointerReachabilityVerified": false,
+      "role": "genericContainer",
+      "source": null,
+      "state": {
+        "enabled": true,
+        "focused": false,
+        "visible": true
+      },
+      "surface": "main",
+      "testId": "doubled-label",
+      "testIdTruncated": false,
+      "text": "Doubled: 2",
+      "textTruncated": false,
+      "token": "node-4",
+      "value": null,
+      "valueTruncated": false
+    },
+    {
+      "boundsDevice": {
+        "height": 0.0,
+        "width": 0.0,
+        "x": 42.0,
+        "y": 121.0
+      },
+      "boundsKind": "native-window-border-box",
+      "boundsLogical": {
+        "height": 0.0,
+        "width": 0.0,
+        "x": 24.0,
+        "y": 69.14285714285714
+      },
+      "generation": 1,
+      "kind": "text",
+      "name": null,
+      "nameTruncated": false,
+      "ownership": "application",
+      "parent": "node-4",
+      "pointerReachabilityVerified": false,
+      "role": null,
+      "source": null,
+      "state": {
+        "enabled": true,
+        "focused": false,
+        "visible": false
+      },
+      "surface": "main",
+      "testId": null,
+      "testIdTruncated": false,
+      "text": "Doubled: ",
+      "textTruncated": false,
+      "token": "node-5",
+      "value": null,
+      "valueTruncated": false
+    },
+    {
+      "boundsDevice": {
+        "height": 0.0,
+        "width": 0.0,
+        "x": 42.0,
+        "y": 121.0
+      },
+      "boundsKind": "native-window-border-box",
+      "boundsLogical": {
+        "height": 0.0,
+        "width": 0.0,
+        "x": 24.0,
+        "y": 69.14285714285714
+      },
+      "generation": 1,
+      "kind": "text",
+      "name": null,
+      "nameTruncated": false,
+      "ownership": "application",
+      "parent": "node-4",
+      "pointerReachabilityVerified": false,
+      "role": null,
+      "source": null,
+      "state": {
+        "enabled": true,
+        "focused": false,
+        "visible": false
+      },
+      "surface": "main",
+      "testId": null,
+      "testIdTruncated": false,
+      "text": "2",
+      "textTruncated": false,
+      "token": "node-7",
+      "value": null,
+      "valueTruncated": false
+    },
+    {
+      "boundsDevice": {
+        "height": 85.0,
+        "width": 1316.0,
+        "x": 42.0,
+        "y": 200.0
+      },
+      "boundsKind": "native-window-border-box",
+      "boundsLogical": {
+        "height": 48.57142857142857,
+        "width": 752.0,
+        "x": 24.0,
+        "y": 114.28571428571429
+      },
+      "generation": 1,
+      "kind": "element",
+      "name": "Increment",
+      "nameTruncated": false,
+      "ownership": "application",
+      "parent": "node-1",
+      "pointerReachabilityVerified": false,
+      "role": "button",
+      "source": null,
+      "state": {
+        "enabled": true,
+        "focused": true,
+        "visible": true
+      },
+      "surface": "main",
+      "testId": "increment",
+      "testIdTruncated": false,
+      "text": "Increment",
+      "textTruncated": false,
+      "token": "node-8",
+      "value": null,
+      "valueTruncated": false
+    },
+    {
+      "boundsDevice": {
+        "height": 0.0,
+        "width": 0.0,
+        "x": 56.0,
+        "y": 214.0
+      },
+      "boundsKind": "native-window-border-box",
+      "boundsLogical": {
+        "height": 0.0,
+        "width": 0.0,
+        "x": 32.0,
+        "y": 122.28571428571429
+      },
+      "generation": 1,
+      "kind": "text",
+      "name": null,
+      "nameTruncated": false,
+      "ownership": "application",
+      "parent": "node-8",
+      "pointerReachabilityVerified": false,
+      "role": null,
+      "source": null,
+      "state": {
+        "enabled": true,
+        "focused": false,
+        "visible": false
+      },
+      "surface": "main",
+      "testId": null,
+      "testIdTruncated": false,
+      "text": "Increment",
+      "textTruncated": false,
+      "token": "node-9",
+      "value": null,
+      "valueTruncated": false
+    }
+  ],
+  "presentationSequence": 2,
+  "resourceRevision": 0,
+  "roots": [
+    "node-0"
+  ],
+  "schemaVersion": 1,
+  "semanticProjection": {
+    "available": true,
+    "baselineLost": false,
+    "focus": "a11y-79228162790965498699187224576",
+    "nodes": [
+      {
+        "enabled": true,
+        "focused": false,
+        "hidden": false,
+        "id": "a11y-79228162514264337593543950336",
+        "name": null,
+        "nameTruncated": false,
+        "parent": null,
+        "role": "window",
+        "value": null,
+        "valueTruncated": false
+      },
+      {
+        "enabled": true,
+        "focused": false,
+        "hidden": false,
+        "id": "a11y-79228162532711081667253501952",
+        "name": null,
+        "nameTruncated": false,
+        "parent": "a11y-79228162514264337593543950336",
+        "role": "genericContainer",
+        "value": null,
+        "valueTruncated": false
+      },
+      {
+        "enabled": true,
+        "focused": false,
+        "hidden": false,
+        "id": "a11y-79228162551157825740963053568",
+        "name": null,
+        "nameTruncated": false,
+        "parent": "a11y-79228162532711081667253501952",
+        "role": "genericContainer",
+        "value": null,
+        "valueTruncated": false
+      },
+      {
+        "enabled": true,
+        "focused": false,
+        "hidden": false,
+        "id": "a11y-79228162569604569814672605184",
+        "name": null,
+        "nameTruncated": false,
+        "parent": "a11y-79228162551157825740963053568",
+        "role": "genericContainer",
+        "value": null,
+        "valueTruncated": false
+      },
+      {
+        "enabled": true,
+        "focused": false,
+        "hidden": false,
+        "id": "a11y-79228162588051313888382156800",
+        "name": null,
+        "nameTruncated": false,
+        "parent": "a11y-79228162551157825740963053568",
+        "role": "genericContainer",
+        "value": null,
+        "valueTruncated": false
+      },
+      {
+        "enabled": true,
+        "focused": false,
+        "hidden": false,
+        "id": "a11y-79228162606498057962091708416",
+        "name": null,
+        "nameTruncated": false,
+        "parent": "a11y-79228162551157825740963053568",
+        "role": "genericContainer",
+        "value": null,
+        "valueTruncated": false
+      },
+      {
+        "enabled": true,
+        "focused": false,
+        "hidden": false,
+        "id": "a11y-79228162624944802035801260032",
+        "name": null,
+        "nameTruncated": false,
+        "parent": "a11y-79228162551157825740963053568",
+        "role": "genericContainer",
+        "value": null,
+        "valueTruncated": false
+      },
+      {
+        "enabled": true,
+        "focused": false,
+        "hidden": false,
+        "id": "a11y-79228162643391546109510811648",
+        "name": null,
+        "nameTruncated": false,
+        "parent": "a11y-79228162532711081667253501952",
+        "role": "genericContainer",
+        "value": null,
+        "valueTruncated": false
+      },
+      {
+        "enabled": true,
+        "focused": false,
+        "hidden": false,
+        "id": "a11y-79228162661838290183220363264",
+        "name": null,
+        "nameTruncated": false,
+        "parent": "a11y-79228162643391546109510811648",
+        "role": "genericContainer",
+        "value": null,
+        "valueTruncated": false
+      },
+      {
+        "enabled": true,
+        "focused": false,
+        "hidden": false,
+        "id": "a11y-79228162680285034256929914880",
+        "name": "Count:  1",
+        "nameTruncated": false,
+        "parent": "a11y-79228162661838290183220363264",
+        "role": "genericContainer",
+        "value": null,
+        "valueTruncated": false
+      },
+      {
+        "enabled": true,
+        "focused": false,
+        "hidden": false,
+        "id": "a11y-79228162717178522404349018112",
+        "name": "Doubled:  2",
+        "nameTruncated": false,
+        "parent": "a11y-79228162661838290183220363264",
+        "role": "genericContainer",
+        "value": null,
+        "valueTruncated": false
+      },
+      {
+        "enabled": true,
+        "focused": true,
+        "hidden": false,
+        "id": "a11y-79228162790965498699187224576",
+        "name": "Increment",
+        "nameTruncated": false,
+        "parent": "a11y-79228162661838290183220363264",
+        "role": "button",
+        "value": null,
+        "valueTruncated": false
+      }
+    ],
+    "root": "a11y-79228162514264337593543950336",
+    "truncation": {
+      "maxFieldBytes": 4096,
+      "maxNodes": 4096,
+      "maxTextBytes": 131072,
+      "nodes": false,
+      "text": false
+    },
+    "updatesConsumed": 2
+  },
+  "surface": "main",
+  "surfaceConfiguration": 0,
+  "truncation": {
+    "maxMetadataBytes": 131072,
+    "maxNodes": 4096,
+    "maxSemanticTextBytes": 131072,
+    "maxTextBytes": 131072,
+    "metadata": false,
+    "nodes": false,
+    "text": false
+  }
+}

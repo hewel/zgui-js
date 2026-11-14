@@ -366,7 +366,7 @@ fn read_bounded(path: &Path, maximum: u64) -> Result<Vec<u8>> {
 
 fn sha256(bytes: &[u8]) -> String { format!("{:x}", Sha256::digest(bytes)) }
 
-fn canonical(value: Value) -> Value {
+pub(super) fn canonical(value: Value) -> Value {
     match value {
         Value::Object(object) => {
             let mut entries: Vec<_> = object.into_iter().collect();

@@ -340,6 +340,9 @@ impl AppHandler for Application {
     }
 }
 
+pub(crate) const APPLICATION_STYLESHEET:&str =
+    ":root { background: #171b24; color: #edf2fa; font-family: sans-serif; font-size: 22px; padding: 24px; }";
+
 fn main() -> Result<(), Box<dyn Error>> {
     let mut args = std::env::args().skip(1).peekable();
     if args.peek().is_some_and(|arg| arg == "preview") {
@@ -380,7 +383,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let namespace = layer_config.as_ref().map_or("dev.zgui.js", |config| config.namespace.as_str());
     let native = zgui::app().with_title(package.as_ref().map_or("zgui-js integration baseline", |package| package.manifest.id.as_str())).with_application_id(namespace)
         .with_size(560.0, 180.0)
-        .with_stylesheet(":root { background: #171b24; color: #edf2fa; font-family: sans-serif; font-size: 22px; padding: 24px; }")
+        .with_stylesheet(APPLICATION_STYLESHEET)
         .into_handler(move || Root(roots.clone()))?.into_runtime();
     let native_failure = native.failure();
     let mut application = Application::new(native, pending, package)?;

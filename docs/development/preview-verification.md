@@ -376,3 +376,85 @@ offscreen visibility accounting. A focused follow-up found no remaining concrete
 stale-completion hole in the live package generation boundary. Test expectations
 do not require an invisible image to remain unuploaded: native eager upload is
 valid, while visibility and subsequent visible readiness are the contract.
+
+## P4 — reviewed native visual comparisons
+
+`native-host preview compare --baseline preview/baselines/counter --actual RUN_DIR
+--policy preview/comparison/strict.json --out NEW_DIR` compares saved captures
+without opening a graphics device or desktop connection. Exit codes are 0 for a
+policy pass, 2 for invalid policy or incompatible inputs, 4 for visual differences,
+and 8 for artifact integrity or output failures. `report.json` contains detailed
+compatibility and pixel evidence; stdout and `result.json` contain the same bounded
+summary. Incompatible pairs retain their original PNGs and receive no pixel score.
+
+The baseline envelope binds the exact consumed artifact inventory, reviewed policy
+bytes, source build ID and complete reviewed capture set. Every listed source
+artifact is hashed, including unrelated and explicitly excluded captures. Unlisted
+files, symlinks, FIFOs, malformed excluded PNGs and inconsistent frame/tree/image
+identities fail rather than producing a visual pass. Explicit capture subsets report
+their exclusions; the default requires identical, nonempty capture sets.
+
+Comparison requires matching deterministic inputs, shipped fonts, native root
+stylesheet, compiler/dependency identities, renderer/driver/color environment,
+physical dimensions, scale and capture/validation/presentation times. Application
+build IDs and whole host source-tree hashes remain reported rather than being
+required equal: a changed application is the intended comparison subject, and the
+host tree includes tooling/tests. This does not certify arbitrary host changes as
+rendering-equivalent; review renderer/root-style revisions and the reported source
+identity when changing native rendering behavior.
+
+Exact and explicitly reviewed tolerant policies score all RGBA channels, including
+RGB under zero alpha. Count and ratio budgets must both pass. Physical masks require
+reasons, count overlapping pixels once, reject whole-image coverage and never hide
+raw differences. No resizing, blurring, alpha exclusion or automatic threshold
+selection is performed. Tolerant passes still report `exactEqual: false`, raw
+differences and a diff PNG.
+
+### Baseline review and required CI entrypoint
+
+`preview/baselines/counter` contains the unchanged successful native run, policy and
+review envelope. Both PNGs were visually inspected: Count/Doubled change from 0/0 to
+1/2 after a native click, with the shared live-host 22px foreground typography and
+24px padding. Review caught a preview-only missing root stylesheet before baseline
+creation; preview now receives the same root defaults as the live host, and records
+the actual stylesheet digest. The committed policy is exact with no masks.
+
+To replace a baseline, first inspect a fresh successful run and its original PNGs,
+then deliberately replace the saved run and policy and record their exact SHA-256
+digests, build ID, capture set, reviewer, time and rationale in `baseline.json`.
+There is no automatic blessing or policy relaxation command.
+
+After building the counter and native host, run
+`pnpm preview:check --out NEW_ROOT`. It performs the native scenario and only then
+compares against the reviewed baseline, retaining both child summaries. A graphics
+failure is required failure, not a skip or comparison against historical output.
+This baseline is intentionally bound to its recorded AMD/RADV/Mesa environment;
+another driver or adapter must fail compatibility rather than silently normalize
+pixels. No self-hosted CI runner was provisioned or exposed to untrusted PR code.
+
+### Observed gates
+
+- `cargo test -p native-host preview::`: 67 passed, one opt-in test ignored;
+  `cargo build -p native-host` passed.
+- `node --test tests/preview/*.test.mjs`: 20 passed, zero skipped. This includes
+  genuine GPU baseline comparison, invalid Vulkan exit 7 without comparison,
+  output failure exit 8, offline comparisons, integrity and review-policy failures,
+  an explicitly allowed pending native image, and existing input/configuration gates.
+- A throwaway actual counter build changed the button accent from `#314665` to
+  `#b44665`. Both captures failed exact comparison with exit 4: 110,904 raw changed
+  pixels each, maximum channel delta 131, bounds `(42,200,1316,85)`. Original and
+  difference PNGs were inspected. A separately declared one-level tolerance also
+  rejected this change.
+- A subsequent actual build used `#324665`. The predeclared one-level tolerance
+  passed with zero over-threshold pixels while reporting 110,232 raw different
+  pixels per capture, maximum delta 1 and `exactEqual: false`. This isolated policy
+  did not alter the committed exact baseline.
+- A real run at logical width 801 produced 1402px-wide captures versus baseline
+  1400px. Comparison exited 2, retained original images, and scored neither pair.
+- Independent read-only review identified excluded-capture validation and allowed
+  pending-resource semantics as false-green risks. Both were corrected; focused
+  follow-up confirmed the boundaries and exact consumed-inventory binding.
+
+Local proof artifacts remain under `target/preview-p4-*`; throwaway application and
+policy inputs were removed after verification. These are native offscreen pixel
+checks, not compositor transparency, IME or desktop-shell certification.

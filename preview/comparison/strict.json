@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "mode": "exact",
+  "alpha": "include",
+  "captureSet": { "mode": "all" },
+  "masks": [],
+  "limits": {
+    "maxPixels": 67108864,
+    "maxOutputBytes": 268435456
+  }
+}

@@ -1,0 +1,29 @@
+{
+  "error": null,
+  "id": "after",
+  "op": "capture",
+  "readiness": {
+    "appReady": true,
+    "currentWorkSettled": true,
+    "frameCurrent": true,
+    "generation": 1,
+    "nativeAssetReadinessAvailable": true,
+    "nextFixtureDeadlineUs": null,
+    "nextNativeDeadlineUs": 2020000,
+    "pendingAssets": 0,
+    "requiredAssetsReady": true,
+    "requiredMetadataRevision": 3,
+    "requiredStateRevision": 37,
+    "resourceRevision": 0,
+    "timeUs": 20000
+  },
+  "result": {
+    "captureId": "after-increment",
+    "frame": "captures/after-increment.frame.json",
+    "png": "captures/after-increment.png",
+    "tree": "captures/after-increment.tree.json"
+  },
+  "sequence": 5,
+  "status": "passed",
+  "wallDurationUs": 397519
+}

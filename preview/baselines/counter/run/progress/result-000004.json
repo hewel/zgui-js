@@ -1,0 +1,40 @@
+{
+  "error": null,
+  "id": "verify",
+  "op": "assert",
+  "readiness": {
+    "appReady": true,
+    "currentWorkSettled": true,
+    "frameCurrent": true,
+    "generation": 1,
+    "nativeAssetReadinessAvailable": true,
+    "nextFixtureDeadlineUs": null,
+    "nextNativeDeadlineUs": 2000000,
+    "pendingAssets": 0,
+    "requiredAssetsReady": true,
+    "requiredMetadataRevision": 3,
+    "requiredStateRevision": 37,
+    "resourceRevision": 0,
+    "timeUs": 20000
+  },
+  "result": {
+    "actual": "Count: 1",
+    "expected": "Count: 1",
+    "frameOrdinal": 3,
+    "generation": 1,
+    "node": {
+      "name": "Count:  1",
+      "role": "genericContainer",
+      "testId": "count-label",
+      "token": "node-2"
+    },
+    "property": "text",
+    "requested": {
+      "surface": "main",
+      "testId": "count-label"
+    }
+  },
+  "sequence": 4,
+  "status": "passed",
+  "wallDurationUs": 92
+}

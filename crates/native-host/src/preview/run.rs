@@ -121,6 +121,7 @@ pub fn worker(args: impl Iterator<Item=String>) -> supervisor::Report {
         build=json!({"id":package.manifest.id,"buildId":package.manifest.build_id,"sourceMap":package.manifest.source_map,
             "sourceMapDigest":package.source_map_digest,"entryDigest":super::output::digest(package.source.as_bytes())});
         sink.borrow_mut().json("inputs/bundle.json","bundle-identity",&build)?;
+        let root_styles=super::driver::stylesheet(&profile);
         let mut environment=inventory::snapshot()?;
         environment["profileDigest"]=json!(profile.digest);
         environment["fonts"]=profile.font_evidence.clone();
@@ -128,7 +129,8 @@ pub fn worker(args: impl Iterator<Item=String>) -> supervisor::Report {
         environment["scenario"]=json!({"id":scenario.scenario.id,"digest":scenario.digest,"requiredCapabilities":scenario.scenario.required_capabilities});
         environment["application"]=build.clone();
         environment["capabilities"]=super::capabilities(true);
-        environment["capabilityRevision"]=json!("native-preview-v1-p3");
+        environment["capabilityRevision"]=json!("native-preview-v1-p4");
+        environment["hostRootStyleDigest"]=json!(super::output::digest(root_styles.as_bytes()));
         environment["inputPolicy"]=json!({"surfaceFocus":"main","dispatch":"one native deliver_all burst per action; no frame between low-level events","modifiers":"key-local; restored to none after key-up"});
         environment["timingDeterministic"]=json!(timing_deterministic);
         environment["clock"]=super::clock::Environment::configuration(
@@ -140,7 +142,7 @@ pub fn worker(args: impl Iterator<Item=String>) -> supervisor::Report {
         sink.borrow_mut().json("environment.json","environment",&environment)?;
         stage="mount";
         sink.borrow_mut().json("progress/action-000000.json","action-progress",&json!({"stage":stage,"actionSequence":0,"build":build}))?;
-        driver=Some(Driver::new(&profile,package,fixture.definition,sink.clone(),started+Duration::from_millis(profile.profile.limits.max_run_wall_ms))?);
+        driver=Some(Driver::new(&profile,package,fixture.definition,sink.clone(),started+Duration::from_millis(profile.profile.limits.max_run_wall_ms),root_styles)?);
         let active=driver.as_mut().expect("driver installed");
         fixture_runtime=Some(active.fixtures.clone());
         sink.borrow_mut().json("graphics.json","graphics-environment",&active.graphics())?;

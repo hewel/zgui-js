@@ -13,6 +13,8 @@
     "typecheck:smoke": "tsc --project packages/build/tsconfig.smoke.json",
     "test:build": "node --test tests/build/*.test.mjs",
     "ui:build": "node packages/build/src/cli.mjs",
+    "preview:check": "node packages/build/src/preview-check.mjs",
+    "test:preview": "pnpm ui:build --app counter && cargo build -p native-host && node --test tests/preview/*.test.mjs",
     "ui:dev": "node packages/build/src/cli.mjs --watch",
     "smoke": "pnpm ui:build --smoke && node packages/build/src/check-smoke.mjs"
   },

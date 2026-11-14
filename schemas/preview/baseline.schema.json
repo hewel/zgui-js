@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://zgui-js.local/schemas/preview/baseline.schema.json",
+  "title": "Reviewed native preview baseline v1",
+  "description": "baseline.json is at most 64 KiB. run/ retains an unchanged complete run; policy.json retains the exact reviewed policy. Digests bind both. Runtime rejects duplicate object fields and positional arrays. Review records provenance, not a cryptographic claim about the reviewer.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "run", "artifactsDigest", "policyDigest", "review"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "run": { "const": "run" },
+    "artifactsDigest": { "$ref": "#/$defs/digest" },
+    "policyDigest": { "$ref": "#/$defs/digest" },
+    "review": {
+      "type": "object", "additionalProperties": false,
+      "required": ["by", "at", "summary", "buildId", "captures"],
+      "properties": {
+        "by": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "\\S" },
+        "at": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "\\S" },
+        "summary": { "type": "string", "minLength": 1, "maxLength": 2048, "pattern": "\\S" },
+        "buildId": { "$ref": "#/$defs/digest" },
+        "captures": {
+          "type": "array", "minItems": 1, "maxItems": 4096, "uniqueItems": true,
+          "items": { "allOf": [
+            { "$ref": "comparison.schema.json#/$defs/key" },
+            { "properties": { "surface": { "const": "main" } } }
+          ] }
+        }
+      }
+    }
+  },
+  "$defs": { "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" } }
+}

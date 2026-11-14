@@ -218,8 +218,14 @@ pub struct Driver {
     pub(super) fixtures: Rc<FixtureRuntime>,
     maximum_time_us: u64,
 }
+pub(super) fn stylesheet(profile:&LoadedProfile)->String {
+    format!("{} :root {{ display:block; box-sizing:border-box; width:100%; height:100%; background-color:{}; {} }}",
+        crate::APPLICATION_STYLESHEET,profile.profile.surface.background,
+        if profile.profile.theme=="light" { "color:#171b24;" } else { "" })
+}
+
 impl Driver {
-    pub fn new(profile: &LoadedProfile, package: Rc<Package>, fixture:FixtureDefinition, output: SharedOutput, run_deadline: Instant) -> Result<Self, Fault> {
+    pub fn new(profile: &LoadedProfile, package: Rc<Package>, fixture:FixtureDefinition, output: SharedOutput, run_deadline: Instant, stylesheet:String) -> Result<Self, Fault> {
         let platform=Headless::new();
         let (epoch,start)=match profile.profile.clock {
             profile::Clock::Virtual{epoch_ms,start_us}=>(Some(epoch_ms),start_us),
@@ -241,7 +247,7 @@ impl Driver {
         let surface = &profile.profile.surface;
         let mut app = zgui::runtime::App::new().with_title("zgui TSX preview")
             .with_size(surface.width as f32, surface.height as f32)
-            .with_stylesheet(format!(":root {{ display:block; width:100%; height:100%; background-color:{}; }}",surface.background))
+            .with_stylesheet(stylesheet)
             .with_probe(probe.clone()).with_renderer(capture::renderer_factory(capture.clone()))
             .with_metrics(Box::new(move ||metrics.metrics()))
             .with_text_engine(Box::new(move ||Box::new(zgui_layout::Paragraphs::new(fonts.shaper()))))

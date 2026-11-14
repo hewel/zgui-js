@@ -1,0 +1,27 @@
+{
+  "actionSequence": 3,
+  "build": {
+    "buildId": "sha256:091dac12816ddd62f33bb7afee57de723238934d92ce1e1dd97654403ece6497",
+    "entryDigest": "sha256:7380aad903948ea92cd325d1aef527277c0691a40c62df9885d401ba86ae7884",
+    "id": "dev.example.counter",
+    "sourceMap": "app.mjs.map",
+    "sourceMapDigest": "sha256:b5032bd9fbd11c5cf427983f8d3deb27f08878b0dca8dd5794d0e743647b5041"
+  },
+  "readiness": {
+    "appReady": true,
+    "currentWorkSettled": true,
+    "frameCurrent": true,
+    "generation": 1,
+    "nativeAssetReadinessAvailable": true,
+    "nextFixtureDeadlineUs": null,
+    "nextNativeDeadlineUs": 2000000,
+    "pendingAssets": 0,
+    "requiredAssetsReady": true,
+    "requiredMetadataRevision": 3,
+    "requiredStateRevision": 37,
+    "resourceRevision": 0,
+    "timeUs": 0
+  },
+  "stage": "clock.advance",
+  "step": "advance"
+}

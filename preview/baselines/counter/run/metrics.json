@@ -1,0 +1,12 @@
+{
+  "availability": {
+    "jsHeap": false,
+    "mutationCost": false,
+    "nativeFrames": true,
+    "rss": false,
+    "wallDuration": true
+  },
+  "captures": 2,
+  "nativeFrames": 4,
+  "wallDurationUs": 1508705
+}

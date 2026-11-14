@@ -1,0 +1,18 @@
+{
+  "byteLimit": 1048576,
+  "droppedRecords": 0,
+  "recordLimit": 4096,
+  "records": [
+    {
+      "detail": {
+        "cancelledDeliveries": 0,
+        "cancelledScheduled": 0,
+        "cancelledSubscriptions": 0
+      },
+      "kind": "disposal",
+      "sequence": 1,
+      "timeUs": 20000
+    }
+  ],
+  "schemaVersion": 1
+}

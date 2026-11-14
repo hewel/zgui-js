@@ -14,6 +14,15 @@ pub(crate) fn json_bytes(value: &Value) -> Result<Vec<u8>, Error> {
     Ok(bytes)
 }
 
+pub(super) fn relative_path(name: &str) -> Result<&Path, Error> {
+    let path = Path::new(name);
+    if name.is_empty() || name.contains('\\') || name.split('/').any(|part| part.is_empty() || part == "." || part == "..")
+        || path.components().any(|part| !matches!(part, Component::Normal(_))) {
+        return Err(Error::new("E_OUTPUT_IO", 8, "artifact path must be canonical and relative"));
+    }
+    Ok(path)
+}
+
 const OWNER_FILE: &str = ".preview-owner";
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -196,11 +205,7 @@ impl Output {
 
     fn publish(&mut self, name: &str, bytes: &[u8]) -> Result<(), Error> {
         self.reserve(bytes.len())?;
-        let relative = Path::new(name);
-        if name.is_empty() || name.contains('\\') || name.split('/').any(|part| part.is_empty() || part == "." || part == "..")
-            || relative.components().any(|part| !matches!(part, Component::Normal(_))) {
-            return Err(Error::new("E_OUTPUT_IO", 8, "artifact path must be canonical and relative"));
-        }
+        let relative = relative_path(name)?;
         let path = self.root.join(relative);
         let mut parent = self.root.clone();
         if let Some(ancestors) = relative.parent() {

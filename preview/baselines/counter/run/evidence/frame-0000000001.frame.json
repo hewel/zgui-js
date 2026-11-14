@@ -1,0 +1,65 @@
+{
+  "actionSequence": 0,
+  "buildId": "sha256:091dac12816ddd62f33bb7afee57de723238934d92ce1e1dd97654403ece6497",
+  "configurationId": 2,
+  "documentIdentity": "DocumentId(0)",
+  "generation": 1,
+  "layoutDocumentCoherent": true,
+  "layoutRevision": 35,
+  "metadataRevision": 3,
+  "pixelPresentation": {
+    "configurationId": 2,
+    "drawId": 1,
+    "frame": {
+      "drawId": 1,
+      "ordinal": 1,
+      "outcome": "Presented(FrameStats { draw_calls: 4, vector_passes: 0, damage_px: 1470000, bytes_uploaded: 3140, memory: MemoryReport { fixed: 0, targets: 7864320, scratch: 0, atlases: 4194304, buffers: 534256 } })",
+      "timeUs": 0
+    },
+    "sequence": 1
+  },
+  "renderer": {
+    "adapter": "AMD Radeon RX 7900 XTX (RADV NAVI31)",
+    "additionalTransferConversion": false,
+    "alphaMode": "Opaque",
+    "backend": "Vulkan",
+    "compositorTransparencyValidated": false,
+    "conversionRevision": 1,
+    "device": 29772,
+    "deviceType": "DiscreteGpu",
+    "driver": "radv",
+    "driverInfo": "Mesa 26.2.6-arch3.1",
+    "pngColor": "straight-alpha-gamma-encoded",
+    "sceneFormat": "Bgra8Unorm",
+    "scratchFormat": "Rgba8Unorm",
+    "srgbTier": "Native",
+    "storedColor": "premultiplied-gamma-encoded",
+    "targetFormat": "Bgra8Unorm",
+    "vendor": 4098
+  },
+  "requiredStateRevision": 35,
+  "resourceRevision": 0,
+  "resources": {
+    "allowedPendingAssets": [],
+    "declaredAssets": [],
+    "droppedDeclaredAssets": 0,
+    "droppedRetiredResources": 0,
+    "pendingIds": [],
+    "publicationPolicy": "complete-batch-launch-order-v1",
+    "requiredAssetsReady": true,
+    "resourceRevision": 0,
+    "resources": []
+  },
+  "scale": 1.75,
+  "schemaVersion": 1,
+  "surface": "main",
+  "surfaceConfiguration": 0,
+  "timingDeterministic": true,
+  "validatedStateRevision": 35,
+  "validationFrame": {
+    "drawId": 1,
+    "ordinal": 1,
+    "outcome": "Presented(FrameStats { draw_calls: 4, vector_passes: 0, damage_px: 1470000, bytes_uploaded: 3140, memory: MemoryReport { fixed: 0, targets: 7864320, scratch: 0, atlases: 4194304, buffers: 534256 } })",
+    "timeUs": 0
+  }
+}

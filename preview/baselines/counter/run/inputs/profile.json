@@ -1,0 +1,44 @@
+{
+  "assets": {
+    "mode": "package-only",
+    "readiness": "required-visible"
+  },
+  "clock": {
+    "epochMs": 1794614400000,
+    "mode": "virtual",
+    "startUs": 0
+  },
+  "direction": "ltr",
+  "fonts": {
+    "manifest": "../fonts/fonts.json",
+    "mode": "shipped-only"
+  },
+  "id": "desktop-800x600-175",
+  "limits": {
+    "maxFramesPerStep": 120,
+    "maxJobsPerPump": 1000,
+    "maxJsEntryWallMs": 25,
+    "maxOutputBytes": 33554432,
+    "maxPumpWallMs": 50,
+    "maxRunWallMs": 15000,
+    "maxSettleTurns": 64,
+    "maxStepWallMs": 3000,
+    "maxVirtualDurationMs": 60000
+  },
+  "locale": "en-US",
+  "random": {
+    "seed": 12345
+  },
+  "schemaVersion": 1,
+  "surface": {
+    "background": "#17191fff",
+    "height": 600,
+    "name": "main",
+    "opaque": true,
+    "refreshRateMilliHz": 60000,
+    "scale": 1.75,
+    "width": 800
+  },
+  "theme": "dark",
+  "timeZone": "UTC"
+}

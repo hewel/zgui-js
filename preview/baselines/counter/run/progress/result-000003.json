@@ -1,0 +1,44 @@
+{
+  "error": null,
+  "id": "advance",
+  "op": "clock.advance",
+  "readiness": {
+    "appReady": true,
+    "currentWorkSettled": true,
+    "frameCurrent": true,
+    "generation": 1,
+    "nativeAssetReadinessAvailable": true,
+    "nextFixtureDeadlineUs": null,
+    "nextNativeDeadlineUs": 2000000,
+    "pendingAssets": 0,
+    "requiredAssetsReady": true,
+    "requiredMetadataRevision": 3,
+    "requiredStateRevision": 37,
+    "resourceRevision": 0,
+    "timeUs": 20000
+  },
+  "result": {
+    "advancedUs": 20000,
+    "fromTimeUs": 0,
+    "nativeFrames": 0,
+    "readiness": {
+      "appReady": true,
+      "currentWorkSettled": true,
+      "frameCurrent": true,
+      "generation": 1,
+      "nativeAssetReadinessAvailable": true,
+      "nextFixtureDeadlineUs": null,
+      "nextNativeDeadlineUs": 2000000,
+      "pendingAssets": 0,
+      "requiredAssetsReady": true,
+      "requiredMetadataRevision": 3,
+      "requiredStateRevision": 37,
+      "resourceRevision": 0,
+      "timeUs": 20000
+    },
+    "timeUs": 20000
+  },
+  "sequence": 3,
+  "status": "passed",
+  "wallDurationUs": 80
+}

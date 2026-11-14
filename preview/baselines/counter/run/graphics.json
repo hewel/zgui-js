@@ -1,0 +1,19 @@
+{
+  "adapter": "AMD Radeon RX 7900 XTX (RADV NAVI31)",
+  "additionalTransferConversion": false,
+  "alphaMode": "Opaque",
+  "backend": "Vulkan",
+  "compositorTransparencyValidated": false,
+  "conversionRevision": 1,
+  "device": 29772,
+  "deviceType": "DiscreteGpu",
+  "driver": "radv",
+  "driverInfo": "Mesa 26.2.6-arch3.1",
+  "pngColor": "straight-alpha-gamma-encoded",
+  "sceneFormat": "Bgra8Unorm",
+  "scratchFormat": "Rgba8Unorm",
+  "srgbTier": "Native",
+  "storedColor": "premultiplied-gamma-encoded",
+  "targetFormat": "Bgra8Unorm",
+  "vendor": 4098
+}

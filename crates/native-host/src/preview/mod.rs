@@ -12,6 +12,7 @@ mod scenario;
 mod semantics;
 mod selectors;
 mod saved;
+mod compare;
 pub(crate) mod clock;
 mod resources;
 pub(crate) mod schema;
@@ -59,7 +60,8 @@ pub(crate) fn command(mut args: impl Iterator<Item = String>) -> u8 {
         "doctor" => doctor(args.collect()),
         "run" => run::command(args.collect()),
         "inspect" => saved::command(args.collect()),
-        _ => Err(Error::new("E_SCHEMA", 2, "expected preview doctor, run or inspect")),
+        "compare" => compare::command(args.collect()),
+        _ => Err(Error::new("E_SCHEMA", 2, "expected preview doctor, run, inspect or compare")),
     };
     let result = outcome.unwrap_or_else(|error| failure(&command, error));
     let code = result["exitCode"].as_u64().unwrap_or(9) as u8;

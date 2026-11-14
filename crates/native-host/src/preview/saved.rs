@@ -1,6 +1,7 @@
-//! Queries immutable capture evidence only. This module never constructs a runtime or renderer.
+//! Bounded immutable run artifacts and saved-tree queries; never constructs a runtime or renderer.
 use std::{collections::{HashMap,HashSet},io::Read,path::{Path,PathBuf}};
 use serde_json::{Value,json};
+use sha2::{Digest, Sha256};
 use super::{Error,output::digest,scenario::{Selector,Target},selectors};
 
 const FIELDS:&[&str]=&["token","parent","surface","generation","kind","ownership","testId","role","name","text","value","state","boundsLogical","boundsDevice","boundsKind","source","textTruncated","testIdTruncated","nameTruncated","valueTruncated","pointerReachabilityVerified"];
@@ -44,21 +45,10 @@ fn options(args:Vec<String>)->Result<Options,Error> {
 
 pub fn command(args:Vec<String>)->Result<Value,Error> {
     let options=options(args)?;
-    let root=options.root.canonicalize().map_err(io)?;
-    let manifest:Value=serde_json::from_slice(&read_file(&root,"artifacts.json",64*1024*1024)?).map_err(io)?;
-    if manifest["schemaVersion"]!=1 { return Err(schema("unsupported artifact inventory version")); }
-    let tree_path=format!("captures/{}.tree.json",options.capture);
-    let frame_path=format!("captures/{}.frame.json",options.capture);
-    let tree_bytes=verified(&root,&manifest,&tree_path,"capture-tree")?;
-    let frame_bytes=verified(&root,&manifest,&frame_path,"capture-frame")?;
-    let result:Value=serde_json::from_slice(&verified(&root,&manifest,"result.json","result")?).map_err(io)?;
-    let source_status=result["status"].as_str().filter(|status|matches!(*status,"passed"|"failed"))
-        .ok_or_else(||Error::new("E_OUTPUT_IO",8,"saved run has no terminal status"))?;
-    let tree:Value=serde_json::from_slice(&tree_bytes).map_err(io)?;
-    let frame:Value=serde_json::from_slice(&frame_bytes).map_err(io)?;
-    let tree_digest=digest(&tree_bytes);
-    validate_identity(&tree,&frame,&result,&options.capture,&tree_digest)?;
-    query(&tree,&tree_digest,&root.join(tree_path),source_status,&options)
+    let run=SavedRun::open(&options.root)?;
+    let capture=run.capture(&options.capture)?;
+    query(&capture.tree,&capture.tree_digest,&run.root.join(format!("captures/{}.tree.json",options.capture)),
+        run.result["status"].as_str().expect("validated terminal status"),&options)
 }
 
 fn validate_identity(tree:&Value,frame:&Value,result:&Value,capture:&str,tree_digest:&str)->Result<(),Error> {
@@ -159,31 +149,205 @@ fn project(node:&Value,fields:&[String])->Value {
     result.insert("truncatedFields".into(),json!(truncated));
     Value::Object(result)
 }
-fn verified(root:&Path,manifest:&Value,path:&str,role:&str)->Result<Vec<u8>,Error> {
-    let entries=manifest["artifacts"].as_array().ok_or_else(||Error::new("E_OUTPUT_IO",8,"artifact inventory has no entries"))?;
-    let mut matching=entries.iter().filter(|entry|entry["path"]==path);
-    let entry=matching.next().ok_or_else(||Error::new("E_OUTPUT_IO",8,"capture is absent from saved artifact inventory"))?;
-    if matching.next().is_some() || entry["status"]!="complete" || entry["role"]!=role {
-        return Err(Error::new("E_OUTPUT_IO",8,"capture artifact is duplicated, partial or has the wrong role"));
+const MAX_FILE_BYTES:u64=64*1024*1024;
+const MAX_RUN_BYTES:u64=256*1024*1024;
+const MAX_ENTRIES:usize=65_536;
+
+super::schema::object_struct! {
+    #[serde(rename_all="camelCase")]
+    struct Inventory {
+        schema_version:u32,
+        artifacts:Vec<InventoryEntry>,
+        #[serde(rename="self",default)]
+        self_path:Option<String>,
     }
-    let bytes=read_file(root,path,8*1024*1024)?;
-    if entry["bytes"].as_u64()!=Some(bytes.len() as u64) || entry["digest"]!=digest(&bytes) {
-        return Err(Error::new("E_OUTPUT_IO",8,"saved capture failed its inventory digest"));
-    }
-    Ok(bytes)
 }
-fn read_file(root:&Path,relative:&str,limit:u64)->Result<Vec<u8>,Error> {
-    let mut path=root.to_owned();
-    for component in Path::new(relative).components() {
-        path.push(component);
-        if std::fs::symlink_metadata(&path).map_err(io)?.file_type().is_symlink() {
-            return Err(Error::new("E_OUTPUT_IO",8,"saved artifacts cannot be symlinks"));
-        }
+super::schema::object_struct! {
+    struct InventoryEntry {
+        path:String,
+        role:String,
+        status:String,
+        #[serde(default)]
+        bytes:Option<u64>,
+        #[serde(default)]
+        digest:Option<String>,
     }
-    let file=std::fs::File::open(path).map_err(io)?;
-    let metadata=file.metadata().map_err(io)?;
+}
+
+pub(super) struct SavedRun {
+    root:PathBuf,
+    entries:Vec<InventoryEntry>,
+    pub inventory_digest:String,
+    pub result:Value,
+}
+
+pub(super) struct SavedCapture {
+    pub tree:Value,
+    pub frame:Value,
+    pub tree_digest:String,
+}
+
+impl SavedRun {
+    pub fn open(path:&Path)->Result<Self,Error> {
+        let root=path.canonicalize().map_err(io)?;
+        let inventory_bytes=read_file(&root,"artifacts.json",MAX_FILE_BYTES)?;
+        let mut inventory:Inventory=serde_json::from_slice(&inventory_bytes).map_err(io)?;
+        if inventory.schema_version!=1 || inventory.self_path.as_deref().is_some_and(|path|path!="artifacts.json") {
+            return Err(schema("unsupported artifact inventory version or self identity"));
+        }
+        if inventory.artifacts.len()>MAX_ENTRIES { return Err(Error::new("E_OUTPUT_LIMIT",8,"saved inventory exceeds 65536 entries")); }
+        inventory.artifacts.sort_unstable_by(|left,right|left.path.cmp(&right.path));
+        for entry in &inventory.artifacts { super::output::relative_path(&entry.path)?; }
+        if inventory.artifacts.windows(2).any(|pair|pair[0].path==pair[1].path) {
+            return Err(io("saved inventory contains duplicate paths"));
+        }
+        let mut run=Self{root,entries:inventory.artifacts,inventory_digest:digest(&inventory_bytes),result:Value::Null};
+        run.result=run.json("result.json","result")?;
+        if !matches!(run.result["status"].as_str(),Some("passed"|"failed")) {
+            return Err(io("saved run has no terminal status"));
+        }
+        Ok(run)
+    }
+
+    pub fn root(&self)->&Path { &self.root }
+
+    fn entry(&self,path:&str)->Result<&InventoryEntry,Error> {
+        let index=self.entries.binary_search_by(|entry|entry.path.as_str().cmp(path))
+            .map_err(|_|io(format!("artifact is absent from saved inventory: {path}")))?;
+        let entry=&self.entries[index];
+        if entry.status!="complete" { return Err(io(format!("saved artifact is partial: {path}"))); }
+        Ok(entry)
+    }
+
+    pub fn verified(&self,path:&str,role:&str)->Result<Vec<u8>,Error> {
+        let entry=self.entry(path)?;
+        if entry.role!=role { return Err(io(format!("saved artifact has the wrong role: {path}"))); }
+        let bytes=read_file(&self.root,path,MAX_FILE_BYTES)?;
+        if entry.bytes!=Some(bytes.len() as u64) || entry.digest.as_deref()!=Some(digest(&bytes).as_str()) {
+            return Err(io(format!("saved artifact failed its inventory digest: {path}")));
+        }
+        Ok(bytes)
+    }
+
+    pub fn json(&self,path:&str,role:&str)->Result<Value,Error> {
+        serde_json::from_slice(&self.verified(path,role)?).map_err(io)
+    }
+
+    pub fn capture(&self,id:&str)->Result<SavedCapture,Error> {
+        if !super::scenario::safe_id(id) { return Err(schema("invalid capture ID")); }
+        let tree_bytes=self.verified(&format!("captures/{id}.tree.json"),"capture-tree")?;
+        let tree=serde_json::from_slice(&tree_bytes).map_err(io)?;
+        let frame=self.json(&format!("captures/{id}.frame.json"),"capture-frame")?;
+        let tree_digest=digest(&tree_bytes);
+        validate_identity(&tree,&frame,&self.result,id,&tree_digest)?;
+        Ok(SavedCapture{tree,frame,tree_digest})
+    }
+
+    pub fn capture_ids(&self)->Result<Vec<String>,Error> {
+        let mut ids=Vec::new();
+        for entry in &self.entries {
+            if entry.role=="capture-frame" {
+                let id=entry.path.strip_prefix("captures/").and_then(|path|path.strip_suffix(".frame.json"))
+                    .filter(|id|super::scenario::safe_id(id)).ok_or_else(||io("invalid capture frame path"))?;
+                ids.push(id.to_owned());
+                for (suffix,role) in [(".tree.json","capture-tree"),(".png","capture-pixels")] {
+                    if self.entry(&format!("captures/{id}{suffix}"))?.role!=role { return Err(io("capture is missing a matching tree or PNG")); }
+                }
+            }
+        }
+        ids.sort_unstable();
+        for entry in &self.entries {
+            let suffix=match entry.role.as_str() { "capture-tree"=>".tree.json","capture-pixels"=>".png",_=>continue };
+            let id=entry.path.strip_prefix("captures/").and_then(|path|path.strip_suffix(suffix))
+                .ok_or_else(||io("invalid capture artifact path"))?;
+            if ids.binary_search_by(|known|known.as_str().cmp(id)).is_err() { return Err(io("orphan capture image or tree")); }
+        }
+        if self.result["captureCount"].as_u64()!=Some(ids.len() as u64) { return Err(io("capture inventory disagrees with terminal capture count")); }
+        Ok(ids)
+    }
+
+    /// Hash every declared artifact without retaining unrelated payloads. Consumers
+    /// rehash the bytes they actually use so concurrent replacement cannot swap them.
+    pub fn verify_complete(&self)->Result<usize,Error> {
+        let mut total=0u64;
+        let mut buffer=[0u8;16*1024];
+        for entry in &self.entries {
+            let expected=entry.bytes.ok_or_else(||io("artifact has no byte length"))?;
+            if entry.status!="complete" || entry.role.is_empty() { return Err(io("run contains partial or untyped artifacts")); }
+            total=total.checked_add(expected).ok_or_else(||io("artifact byte count overflow"))?;
+            if expected>MAX_FILE_BYTES || total>MAX_RUN_BYTES {
+                return Err(Error::new("E_OUTPUT_LIMIT",8,"comparison input exceeds 64 MiB per artifact or 256 MiB per run"));
+            }
+            let mut file=open_file(&self.root,&entry.path,expected)?.take(expected+1);
+            let mut hash=Sha256::new();
+            let mut count=0;
+            loop {
+                let length=file.read(&mut buffer).map_err(io)?;
+                if length==0 { break; }
+                count+=length as u64;
+                hash.update(&buffer[..length]);
+            }
+            if count!=expected || entry.digest.as_deref()!=Some(format!("sha256:{:x}",hash.finalize()).as_str()) {
+                return Err(io(format!("saved artifact failed its inventory digest: {}",entry.path)));
+            }
+        }
+        let mut visited=0;
+        self.verify_directory(&self.root,0,&mut visited)?;
+        Ok(self.entries.len())
+    }
+
+    fn verify_directory(&self,path:&Path,depth:usize,visited:&mut usize)->Result<(),Error> {
+        if depth>32 { return Err(Error::new("E_OUTPUT_LIMIT",8,"saved artifact directory exceeds depth 32")); }
+        for child in std::fs::read_dir(path).map_err(io)? {
+            let child=child.map_err(io)?;
+            *visited+=1;
+            if *visited>MAX_ENTRIES*2 { return Err(Error::new("E_OUTPUT_LIMIT",8,"saved artifact directory entry limit exceeded")); }
+            let kind=child.file_type().map_err(io)?;
+            if kind.is_symlink() { return Err(io("saved artifacts cannot contain symlinks")); }
+            if kind.is_dir() { self.verify_directory(&child.path(),depth+1,visited)?; }
+            else if kind.is_file() {
+                let path=child.path();
+                let relative=path.strip_prefix(&self.root).map_err(io)?.to_str().ok_or_else(||io("artifact path is not UTF-8"))?;
+                if relative!="artifacts.json" { self.entry(relative)?; }
+            } else { return Err(io("saved artifacts must be regular files")); }
+        }
+        Ok(())
+    }
+}
+
+pub(super) fn read_path(path:&Path,limit:u64)->Result<Vec<u8>,Error> {
+    let parent=path.parent().filter(|parent|!parent.as_os_str().is_empty()).unwrap_or(Path::new(".")).canonicalize().map_err(io)?;
+    let name=path.file_name().and_then(|name|name.to_str()).ok_or_else(||io("expected a UTF-8 file name"))?;
+    read_file(&parent,name,limit)
+}
+
+fn open_file(root:&Path,relative:&str,limit:u64)->Result<std::fs::File,Error> {
+    let relative=super::output::relative_path(relative)?;
+    let mut path=root.to_owned();
+    let mut last_metadata=None;
+    for component in relative.components() {
+        path.push(component);
+        let metadata=std::fs::symlink_metadata(&path).map_err(io)?;
+        if metadata.file_type().is_symlink() { return Err(io("saved artifacts cannot be symlinks")); }
+        last_metadata=Some(metadata);
+    }
+    let metadata=last_metadata.expect("validated relative path has components");
     if !metadata.is_file() || metadata.len()>limit { return Err(Error::new("E_OUTPUT_LIMIT",8,"saved artifact is not a bounded regular file")); }
-    let mut bytes=Vec::with_capacity(metadata.len() as usize);
+    let mut options=std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)] {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW|libc::O_NONBLOCK);
+    }
+    let file=options.open(path).map_err(io)?;
+    let metadata=file.metadata().map_err(io)?;
+    if !metadata.is_file() || metadata.len()>limit { return Err(Error::new("E_OUTPUT_LIMIT",8,"saved artifact changed to an unbounded or non-regular file")); }
+    Ok(file)
+}
+
+fn read_file(root:&Path,relative:&str,limit:u64)->Result<Vec<u8>,Error> {
+    let file=open_file(root,relative,limit)?;
+    let mut bytes=Vec::with_capacity(file.metadata().map_err(io)?.len() as usize);
     file.take(limit+1).read_to_end(&mut bytes).map_err(io)?;
     if bytes.len() as u64>limit { return Err(Error::new("E_OUTPUT_LIMIT",8,"saved artifact grew beyond its read limit")); }
     Ok(bytes)

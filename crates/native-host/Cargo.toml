@@ -14,6 +14,7 @@ sha2.workspace = true
 rquickjs.workspace = true
 sourcemap.workspace = true
 host-services.workspace = true
+libc = "0.2"
 # zgui-text-parley does not forward this feature; CJK layout analysis needs its dictionaries.
 parley = { version = "=0.11.1", default-features = false, features = ["complex-scripts"] }
 png = "=0.18.1"
@@ -32,6 +33,5 @@ sha2.workspace = true
 
 [dev-dependencies]
 zgui-view = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a", features = ["stub-backend"] }
-libc = "0.2"
 zgui-a11y = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a" }
 zgui-testkit-scene = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a" }

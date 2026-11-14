@@ -1,0 +1,29 @@
+{
+  "error": null,
+  "id": "initial",
+  "op": "capture",
+  "readiness": {
+    "appReady": true,
+    "currentWorkSettled": true,
+    "frameCurrent": true,
+    "generation": 1,
+    "nativeAssetReadinessAvailable": true,
+    "nextFixtureDeadlineUs": null,
+    "nextNativeDeadlineUs": 2000000,
+    "pendingAssets": 0,
+    "requiredAssetsReady": true,
+    "requiredMetadataRevision": 3,
+    "requiredStateRevision": 35,
+    "resourceRevision": 0,
+    "timeUs": 0
+  },
+  "result": {
+    "captureId": "initial",
+    "frame": "captures/initial.frame.json",
+    "png": "captures/initial.png",
+    "tree": "captures/initial.tree.json"
+  },
+  "sequence": 1,
+  "status": "passed",
+  "wallDurationUs": 403890
+}
