@@ -1,7 +1,0 @@
-{
-  "extends": "../../../packages/ui/tsconfig.native.json",
-  "include": [
-    "src/**/*.ts",
-    "src/**/*.tsx"
-  ]
-}

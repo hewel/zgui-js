@@ -17,7 +17,7 @@ There is **no WebView and no browser DOM**. The repository also includes an offs
 | Native build tools | A C/C++ toolchain capable of building QuickJS and the native dependencies |
 | Graphics | A graphics adapter and driver supported by the native wgpu renderer |
 
-Interactive examples have been verified on Linux with Wayland. The niri panel additionally requires a niri session and a valid `NIRI_SOCKET`.
+Interactive examples have been verified on Linux with Wayland. Platform and window-manager support is determined by upstream zgui; this library does not require a particular compositor or provide compositor-specific services.
 
 Offscreen previews do not open a desktop window, but they still require a working graphics adapter. They are not software-only JavaScript screenshots.
 
@@ -71,28 +71,6 @@ Use the same build and launch commands with another application name:
 | `lists` | Dynamic lists and identity-based native node reuse |
 | `async` | Timers, frame callbacks, promises, and asynchronous host services |
 | `editing` | Native single-line and multiline editing, selection, IME, read-only, and disabled states |
-| `panel` | Live niri workspace/window subscriptions and explicit connection states |
-
-### niri panel
-
-List the available outputs and set `monitor` in [apps/examples/panel/layer.json](apps/examples/panel/layer.json) to an output on your system. The checked-in configuration targets `DP-1`:
-
-```sh
-niri msg --json outputs
-```
-
-Build and launch the panel:
-
-```sh
-pnpm ui:build --app panel
-env ZGUI_PLATFORM=wayland target/debug/native-host \
-  --bundle apps/examples/panel/dist \
-  --layer-config apps/examples/panel/layer.json
-```
-
-The profile creates a top-layer surface, reserves a 360-logical-pixel exclusive zone, and requests no keyboard focus. The panel reads real niri IPC state. Startup failures and disconnects are visible in the UI; they are never replaced with a simulated desktop.
-
-See the [panel guide](apps/examples/panel/README.md) for output lifecycle behavior and shell-specific limitations.
 
 ## Offscreen previews
 
@@ -143,7 +121,7 @@ See [Preview implementation and verification](docs/development/preview-verificat
 - Import native components and reactive primitives from `@zgui/ui`. Native nodes, events, and styles are not HTML or DOM APIs.
 - The application entry point is `src/main.tsx`. It exports `hostApiVersion = 1` and `mount(root)`; `mount` returns the disposer supplied by `renderApp`. See the [counter source](apps/examples/counter/src/main.tsx).
 - Optional `src/app.css` is packaged separately. Files under `assets/` are copied into the package and declared in its manifest; the host verifies and loads only declared resources.
-- `@zgui/services` currently exposes `readTextAsset` and `watchNiri`. Start work from mount, lifecycle, or event callbacks, and cancel subscriptions, requests, timers, and frame callbacks during cleanup.
+- `@zgui/services` exposes `readTextAsset`, `HostRequest`, and `HostServiceError`. Start work from mount, lifecycle, or event callbacks, and cancel requests, timers, and frame callbacks during cleanup.
 - The JavaScript environment does not provide `window`, `document`, `fetch`, `process`, or `setInterval`. Supported native styles are a deliberately bounded subset, not full browser CSS.
 
 For API contracts, see the [UI SDK guide](packages/ui/README.md) and [host services guide](packages/services/README.md).
@@ -162,16 +140,16 @@ pnpm test:preview
 
 `pnpm test:preview` builds the counter and native host before running the preview integration tests. Pixel-producing checks require a working graphics environment.
 
-Real-desktop integration tests are separate opt-in, ignored tests. They may open windows, use the clipboard, require coordinated keyboard/IME input, or—in output lifecycle tests—change display configuration. Read the [native test notes](docs/development/baseline.md) and [P6 desktop verification record](docs/development/preview-verification.md#p6--real-waylandniri-desktop-verification) before enabling them; do not run every ignored test indiscriminately.
+Real-desktop integration tests are separate opt-in, ignored tests. They may open windows, use the clipboard, or require coordinated keyboard/IME input. Read the [native test notes](docs/development/baseline.md) before enabling them; do not run every ignored test indiscriminately. The [P6 desktop verification record](docs/development/preview-verification.md#p6--real-waylandniri-desktop-verification) retains historical niri-specific evidence, whose compositor-specific gates and panel example are no longer shipped.
 
 ## Repository layout
 
 | Path | Purpose |
 | --- | --- |
-| `crates/native-host` | Package loading, native hosting, session reload, desktop shell integration, and preview CLI |
+| `crates/native-host` | Package loading, native hosting, session reload, upstream layer-shell configuration, and preview CLI |
 | `crates/js-runtime` | Embedded JavaScript execution and runtime boundaries |
 | `crates/ui-bridge` | Native node handles, properties, events, and structural operations |
-| `crates/host-services` | Rust-backed resource services and niri IPC |
+| `crates/host-services` | Rust-backed resource services |
 | `packages/ui` | Native TSX SDK, components, renderer adapter, and types |
 | `packages/services` | Typed application-facing host services |
 | `packages/build` | Type checking, TSX compilation, package publication, and build watching |
@@ -184,14 +162,14 @@ Real-desktop integration tests are separate opt-in, ignored tests. They may open
 
 ## Status and limitations
 
-Development phases 0–8 and preview phases P0–P6 have recorded completion evidence. These milestones do not imply complete browser or desktop feature parity.
+Development phases 0–8 and preview phases P0–P6 have recorded completion evidence. These milestones do not imply complete browser or desktop feature parity. Historical niri integration, its panel example, and compositor-specific tests have since been removed; earlier verification records are retained as history, not current support claims.
 
-Verified on a real Wayland/niri desktop: native text editing with Chinese IME input, panel placement, compositor transparency, fractional scaling, and monitor removal/restoration.
+Native UI, resource services, scheduling, previews, and the generic upstream layer-shell wrapper remain in scope. Runtime platform and compositor capabilities belong to upstream zgui.
 
 Current limitations:
 
-- No layer-parent xdg-popup support or native menus extending beyond panel bounds.
-- No live audio or notification service backends. Preview fixtures do not certify those integrations.
+- The pinned upstream backend does not support layer-parent xdg-popups or native menus extending beyond layer-surface bounds.
+- No window-manager, audio, or notification service backends are shipped.
 - Offscreen scenarios do not replace real-desktop testing of focus, clipboard, IME, compositor behavior, or output lifecycle.
 - Performance notes are scoped observations from specific environments, not general cross-hardware guarantees.
 

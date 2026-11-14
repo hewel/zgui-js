@@ -1,9 +1,0 @@
-{
-  "name": "@zgui/example-panel",
-  "private": true,
-  "type": "module",
-  "dependencies": {
-    "@zgui/ui": "workspace:*",
-    "@zgui/services": "workspace:*"
-  }
-}

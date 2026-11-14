@@ -4,6 +4,13 @@ The implementation follows [the supplied specification](tsx-native-ui.md). Phase
 
 Preview commands and phase acceptance are tracked in [preview verification](preview-verification.md).
 
+Current scope is a general-purpose UI library: native UI, resource services,
+scheduling, previews, and a thin wrapper over upstream zgui layer-shell support.
+Platform and window-manager support is determined by upstream zgui, not a
+compositor-specific baseline here. The niri service, panel example, and
+niri-dependent integration gates have been removed. Historical phase evidence
+below is retained and does not describe the currently shipped API or test suite.
+
 ## Dependency policy
 
 | Component | Selected identity |
@@ -37,7 +44,6 @@ pnpm ui:build --app counter
 pnpm ui:build --app lists
 pnpm ui:build --app async
 pnpm ui:build --app editing
-pnpm ui:build --app panel
 pnpm ui:dev --app counter
 pnpm test:build
 cargo test -p js-runtime
@@ -48,11 +54,8 @@ env ZGUI_PLATFORM=wayland cargo run -p native-host -- --bundle apps/examples/cou
 env ZGUI_PLATFORM=wayland cargo run -p native-host -- --bundle apps/examples/counter/dist --watch
 env ZGUI_PLATFORM=wayland cargo run -p native-host -- --bundle apps/examples/lists/dist --exercise --exit-after-ms 12000
 env ZGUI_PLATFORM=wayland cargo test -p native-host native_tests::native_button_actions -- --ignored --exact --nocapture
-env ZGUI_PLATFORM=wayland cargo test -p native-host --bin native-host async_tests::native_async_delivery -- --ignored --exact --nocapture
 env ZGUI_PLATFORM=wayland cargo test -p native-host --bin native-host reload_tests::native_full_reload -- --ignored --exact --nocapture
 env ZGUI_PLATFORM=wayland ZGUI_EDITING_WAYLAND_IME=1 cargo test -p native-host editing_tests::native_text_editing -- --ignored --exact --nocapture --test-threads=1
-env ZGUI_PLATFORM=wayland cargo run -p native-host -- --bundle apps/examples/panel/dist --layer-config apps/examples/panel/layer.json
-env ZGUI_PLATFORM=wayland cargo test -p native-host shell::proof::real_panel_layer -- --ignored --exact --nocapture --test-threads=1
 cargo test -p native-host --test native_timer
 ```
 
@@ -74,7 +77,7 @@ Timer callbacks and rAF callbacks use native registrations and release their reg
 
 The host permits 1,024 scheduled/ready callbacks and 64 outstanding asset requests per session. Asset reads are limited to 1 MiB of UTF-8 from manifest-declared resources. A shared two-worker executor has a bounded 64-request queue; each session has a bounded completion inbox. Only owned data, IDs, cancellation flags and a platform waker cross threads. Cancellation is definitive at delivery; duplicate/stale completions cannot settle a request twice.
 
-Each owner checkpoint interleaves completion, subscription, scheduled-callback, deferred-notification and Promise work one entry per class. A retained cursor resumes after deadline exhaustion, so a continuously ready source cannot starve another class's cancellation. Non-Promise classes allow 32 entries each and Promise pumping allows 256 attempts, sharing a 10 ms deadline; individual JS entries retain their interrupt limit. Remaining work explicitly wakes the owner. Preflight rejects timer/frame/service creation; teardown stops delivery, cancels registrations and releases persistent roots before destroying the engine.
+Each owner checkpoint interleaves completion, scheduled-callback, deferred-notification and Promise work one entry per class. A retained cursor resumes after deadline exhaustion, so a continuously ready source cannot starve another class's cancellation. Non-Promise classes allow 32 entries each and Promise pumping allows 256 attempts, sharing a 10 ms deadline; individual JS entries retain their interrupt limit. Remaining work explicitly wakes the owner. Preflight rejects timer/frame/service creation; teardown stops delivery, cancels registrations and releases persistent roots before destroying the engine.
 
 See [`@zgui/services`](../../packages/services/README.md) for the typed request API and cancellation contract. Console formatting is bounded and does not invoke application getters or `toString`.
 
@@ -115,35 +118,26 @@ in place. Do not run the gate concurrently with another clipboard or keyboard-in
 scenario. The real compositor/IME run is recorded in
 [preview P6 verification](preview-verification.md#p6--real-waylandniri-desktop-verification).
 
-## Native desktop shell
+## Upstream layer-shell configuration
 
-The [panel example](../../apps/examples/panel/README.md) uses an explicit
-layer-shell profile and the Rust `watchNiri` service. The service consumes direct
-Unix-socket IPC, not the installed niri CLI event parser, which rejects this
-compositor's additional `TouchpadToggled` event. Unrelated event types are ignored;
-malformed known events and disconnects terminate the subscription without retries.
+The host's generic `--layer-config PATH` wrapper selects a named output and
+passes anchors, margins, keyboard policy, transparency and an explicit exclusive
+zone to upstream zgui. Scaling and compositor protocol support remain upstream
+responsibilities; no window-manager abstraction or compositor-specific package
+is provided. The backend finishes initial output descriptions before invoking
+`surfaces_available`.
 
-Snapshots coalesce behind a native wake and contain lossless decimal-string IDs
-and explicit nulls. Four subscriptions are allowed per session. Payloads define
-own data properties rather than invoking inherited setters; delivery rechecks
-cancellation around reentrant engine error construction. Cancellation and terminal
-errors release callbacks and the transport before session destruction.
-
-The host selects a named output, applies anchors/margins/keyboard policy and an
-explicit exclusive zone, and leaves scaling to the native backend. The backend
-finishes initial output descriptions before invoking `surfaces_available`.
-Layer-parent out-of-surface popups are explicitly unsupported; a normal-window
-demo is not treated as proof of that capability.
-
-### Native shell acceptance
-
-`ZGUI_SHELL_LIFECYCLE=1` extends the ignored layer gate to wait up to 40 seconds
-for an externally driven output removal/return. It requires a fresh live JS
-generation and zero resources from both generations. Changing physical outputs
-requires explicit permission; restore their scale/enablement, prior focus and
-any clipboard changed by screenshot capture afterward.
+Layer-parent out-of-surface popups are unsupported by the pinned backend; a
+normal-window demo is not proof of that capability. The former niri panel and
+its `shell::proof::real_panel_layer` acceptance gate are no longer shipped.
+Any real-desktop verification must use a supported upstream backend and require
+explicit permission before changing physical outputs, focus, clipboard or input.
 
 ## Observed verification
+
+These are historical observations from the implementation phases, not a list of
+current gates. In particular, the niri occlusion/layer gates and subscription
+tests described below were retired with the niri service and panel example.
 
 - `pnpm install`: passed; requested Solid/compiler pair exists in the registry.
 - `pnpm typecheck`: passed for the Phase 0 smoke fixture.
@@ -185,6 +179,9 @@ Environment: Linux x86_64 Wayland session; niri compositor reports `26.04 (v26.0
 
 ## Phase 8: measured optimization decision
 
+This section preserves historical measurements, including the removed niri panel
+workload. They do not imply that the panel or its service is still available.
+
 No optimization was selected. These small workloads do not establish a sustained
 bridge, reconciliation or job-pump bottleneck. Native startup paint is a visible
 cost, but the measurements do not isolate its causes or justify replacing the
@@ -210,20 +207,16 @@ existing execution/ownership model.
   the engine with every reported resource count zero. Prior window focus was
   restored after the series.
 
-Reproduce the workload setup and native trace capture with:
+The remaining counter and lists workload setup and native trace capture use:
 
 ```sh
 cargo build --release -p native-host
 pnpm ui:build --app counter
 pnpm ui:build --app lists
-pnpm ui:build --app panel
 env ZGUI_PLATFORM=wayland ZGUI_LATENCY=target/counter-run.jsonl \
   target/release/native-host --bundle apps/examples/counter/dist --exit-after-ms 10000
 env ZGUI_PLATFORM=wayland ZGUI_LATENCY=target/lists-run.jsonl \
   target/release/native-host --bundle apps/examples/lists/dist --exercise --exit-after-ms 10000
-env ZGUI_PLATFORM=wayland ZGUI_LATENCY=target/panel-run.jsonl \
-  target/release/native-host --bundle apps/examples/panel/dist \
-  --layer-config apps/examples/panel/layer.json --exit-after-ms 10000
 ```
 
 Use a fresh trace path per run: the native sink appends. The recorded bundle IDs
@@ -286,6 +279,9 @@ These limits prevent claims that every measurement requested in specification
 No before/after speedup is claimed because no performance code was changed.
 
 ## Acceptance tracking
+
+This checklist records original phase completion. Phase 7's niri service and
+panel, and the niri-specific Phase 4 desktop gate, are no longer shipped.
 
 - [x] Phase 0: downstream window, script exception, real Solid execution, binding, wake and shutdown.
 - [x] Phase 1: opaque handles, topology, turn-scoped invalidation and failed-construction reclamation.

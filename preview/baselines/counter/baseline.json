@@ -1,13 +1,13 @@
 {
   "schemaVersion": 1,
   "run": "run",
-  "artifactsDigest": "sha256:a1067fdc33d760dc266760f491d8550524eb0641ba6991c3d30804dc0b47666b",
+  "artifactsDigest": "sha256:fbdb7ffca4046235616bed9ce57e8dfbd885fbc092b9a256a392f6a7d0380fbc",
   "policyDigest": "sha256:618dc201dcc2cc976d3b0ff41d440eca02b71b68c79b01d10814734b044bbeb9",
   "review": {
     "by": "coding-assistant",
-    "at": "2026-11-14T16:33:43Z",
-    "summary": "P5 native lifecycle capability and generation-qualified evidence refresh. Both initial and after-increment PNGs were checked byte-for-byte equal to the reviewed P4 baseline; the after-increment native image was visually inspected again. Count/Doubled remain 0/0 then 1/2 after native input and 20 ms advance. Assertion passed and all resources were released. Exact RGBA policy remains unchanged, with no masks or tolerance; only the successful run's environment/lifecycle evidence is refreshed.",
-    "buildId": "sha256:091dac12816ddd62f33bb7afee57de723238934d92ce1e1dd97654403ece6497",
+    "at": "2026-11-14T18:35:34Z",
+    "summary": "Generic UI runtime baseline refresh after removing niri services and the panel example, with Rust 1.100.0 and the current Cargo/pnpm locks. Both original native PNGs were visually inspected and are byte-for-byte identical to the previous reviewed baseline: Count/Doubled remain 0/0 then 1/2 after native input. The assertion passed and teardown released all resources. Renderer identity and exact RGBA policy are unchanged, with no masks or tolerance; the saved run records the current compiler, dependency and resource-lifecycle evidence.",
+    "buildId": "sha256:6ebbc4b750947132b6f40c3969a582d7119611250f655cc32e98b93cf20c055a",
     "captures": [
       { "captureId": "initial", "surface": "main" },
       { "captureId": "after-increment", "surface": "main" }

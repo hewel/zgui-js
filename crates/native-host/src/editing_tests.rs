@@ -429,7 +429,7 @@ impl AppHandler for EditingGate {
 }
 
 #[test]
-#[ignore = "requires real unlocked Wayland/niri, GPU, Node, wl-copy and wl-paste; temporarily uses the clipboard"]
+#[ignore = "requires a real unlocked Wayland desktop, GPU, Node, wl-copy and wl-paste; temporarily uses the clipboard"]
 fn native_text_editing() -> TestResult {
     if std::env::var("ZGUI_PLATFORM").as_deref() != Ok("wayland") { return Err("run with ZGUI_PLATFORM=wayland".into()); }
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().and_then(Path::parent).ok_or("workspace root absent")?;

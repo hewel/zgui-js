@@ -8,8 +8,6 @@ mod preview;
 #[cfg(test)]
 mod native_tests;
 #[cfg(test)]
-mod async_tests;
-#[cfg(test)]
 mod test_package;
 #[cfg(test)]
 mod reload_tests;

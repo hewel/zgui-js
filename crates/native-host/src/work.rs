@@ -1,13 +1,11 @@
 //! Owner-thread roots and registrations; workers receive only owned service requests.
-use std::{cell::{Cell, RefCell}, collections::{BTreeMap, HashMap, VecDeque}, fmt::Write, rc::{Rc, Weak}, sync::{Arc, atomic::{AtomicBool, Ordering}, mpsc::{self, Receiver, SyncSender}}, time::Duration};
+use std::{cell::{Cell, RefCell}, collections::{HashMap, VecDeque}, fmt::Write, rc::{Rc, Weak}, sync::{Arc, atomic::{AtomicBool, Ordering}, mpsc::{self, Receiver, SyncSender}}, time::Duration};
 use host_services::{Completion, Executor, Request};
 use rquickjs::{Ctx, Exception, Function, Object, Persistent, Value, function::{Func, Opt, Rest}, object::Property};
 use zgui::{platform::{SurfaceId, WakeReason, Waker}, view::{HostHandle, host::{FrameRequestId, Repeat, TimerId}}};
 use crate::package::Package;
 
-mod niri;
 pub(crate) mod fixture;
-use niri::NiriListener;
 
 const MAX_SAFE_ID: u64 = 9_007_199_254_740_991;
 const MAX_CALLBACKS: usize = 1024;
@@ -43,8 +41,6 @@ pub(crate) struct Work {
     registrations: RefCell<HashMap<u64, Registration>>,
     ready: RefCell<VecDeque<ScheduledCall>>,
     requests: RefCell<HashMap<u64, Pending>>,
-    subscriptions: RefCell<BTreeMap<u64, NiriListener>>,
-    subscription_cursor: Cell<u64>,
     pending_completion: RefCell<Option<Completion>>,
     next_id: Cell<u64>,
     mode: Cell<Mode>,
@@ -63,7 +59,6 @@ impl Work {
         let (sender, inbox) = mpsc::sync_channel(MAX_REQUESTS);
         Rc::new(Self {
             registrations: RefCell::new(HashMap::new()), ready: RefCell::new(VecDeque::new()), requests: RefCell::new(HashMap::new()),
-            subscriptions: RefCell::new(BTreeMap::new()), subscription_cursor: Cell::new(0),
             pending_completion: RefCell::new(None), next_id: Cell::new(1), mode: Cell::new(Mode::Loading), generation, host, package, executor,
             sender: RefCell::new(Some(sender)), inbox: RefCell::new(Some(inbox)),
             wake: Arc::new(move || waker.wake(WakeReason::ReactiveWork { surfaces: vec![surface].into_boxed_slice() })),
@@ -94,28 +89,23 @@ impl Work {
     pub(crate) fn next_call(&self) -> Option<ScheduledCall> { self.ready.borrow_mut().pop_front() }
     pub(crate) fn next_completion(&self) -> Option<Completion> {
         if self.mode.get() != Mode::Mounted { return None; }
-        if let Some(runtime) = self.fixtures() {
-            return match runtime.take(true)? {
-                fixture::Delivery::Asset { generation, id, result } => Some(Completion { generation, request_id: id, result }),
-                fixture::Delivery::Niri { .. } => unreachable!("asset queue head"),
-            };
-        }
+        if let Some(runtime) = self.fixtures() { return runtime.take(); }
         self.pending_completion.borrow_mut().take().or_else(|| self.inbox.borrow().as_ref()?.try_recv().ok())
     }
     pub(crate) fn has_completions(&self) -> bool {
-        if let Some(runtime) = self.fixtures() { return runtime.has_delivery(true); }
+        if let Some(runtime) = self.fixtures() { return runtime.has_delivery(); }
         if self.pending_completion.borrow().is_some() { return true; }
         let completion = self.inbox.borrow().as_ref().and_then(|inbox| inbox.try_recv().ok());
         let pending = completion.is_some();
         *self.pending_completion.borrow_mut() = completion;
         pending
     }
-    pub(crate) fn counts(&self) -> (usize, usize, usize, usize) {
+    pub(crate) fn counts(&self) -> (usize, usize, usize) {
         let registrations = self.registrations.borrow();
         let ready = self.ready.borrow();
         let timers = registrations.values().filter(|item| matches!(item.native, NativeRegistration::Timer(_))).count()
             + ready.iter().filter(|item| matches!(item.arguments, Arguments::Timer)).count();
-        (timers, registrations.len() + ready.len() - timers, self.requests.borrow().len(), self.subscriptions.borrow().len())
+        (timers, registrations.len() + ready.len() - timers, self.requests.borrow().len())
     }
 
     fn require_creation(&self, ctx: &Ctx<'_>) -> rquickjs::Result<()> {
@@ -184,17 +174,6 @@ impl Work {
             let value = args.0.into_iter().next().unwrap_or_else(|| Value::new_undefined(ctx.clone()));
             let path: String = rquickjs::FromJs::from_js(&ctx, value)?;
             owner.read_asset(&ctx, path)
-        }))?;
-        let weak = Rc::downgrade(self);
-        services.set("watchNiri", Func::from(move |ctx: Ctx<'js>, args: Rest<Value<'js>>| {
-            let owner = owner(&weak, &ctx)?;
-            if owner.fixtures().is_some() && (args.0.len() != 2 || args.0.iter().any(|value| !value.is_function())) {
-                return Err(owner.malformed_service(&ctx, "watchNiri requires exactly two callback functions"));
-            }
-            let mut args = args.0.into_iter();
-            let snapshot: Function = rquickjs::FromJs::from_js(&ctx, args.next().unwrap_or_else(|| Value::new_undefined(ctx.clone())))?;
-            let error: Function = rquickjs::FromJs::from_js(&ctx, args.next().unwrap_or_else(|| Value::new_undefined(ctx.clone())))?;
-            owner.watch_niri(&ctx, snapshot, error)
         }))?;
         ctx.globals().set("__zguiServices", services)?;
         Ok(())
@@ -311,7 +290,6 @@ impl Work {
         if matches!(self.mode.get(), Mode::Stopping | Mode::Disposed) { return; }
         self.mode.set(Mode::Stopping);
         if let Some(runtime) = self.fixtures() { runtime.cancel_generation(self.generation); }
-        self.subscriptions.borrow_mut().clear();
         for pending in self.requests.borrow_mut().drain().map(|(_, pending)| pending) { pending.cancelled.store(true, Ordering::Release); }
         // Retired workers must not block the shared executor on a full old inbox.
         self.inbox.borrow_mut().take();

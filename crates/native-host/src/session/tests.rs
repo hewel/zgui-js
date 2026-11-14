@@ -256,7 +256,7 @@ fn promise_cancellation_runs_between_ready_service_completions() {
 fn preview_caught_fixture_violation_fails_preflight_and_mount() {
     let native = Native::new();
     for preflight in [true, false] {
-        let attempt = "try { __zguiServices.watchNiri(() => {}, () => {}); } catch (error) { if (error.code !== 'E_FIXTURE_MISSING_SERVICE') throw error; }";
+        let attempt = "try { __zguiServices.readTextAsset('test.txt'); } catch (error) { if (error.code !== 'E_FIXTURE_MISSING_SERVICE') throw error; }";
         let source = if preflight {
             format!("{attempt}\n{SIMPLE}")
         } else {
@@ -269,7 +269,7 @@ fn preview_caught_fixture_violation_fails_preflight_and_mount() {
         } else {
             let session = prepared.unwrap();
             let error = session.mount().unwrap_err();
-            assert_eq!(session.counts().subscriptions, 0);
+            assert_eq!(session.counts().requests, 0);
             assert_eq!(session.contract_failure().unwrap().code, "E_FIXTURE_MISSING_SERVICE");
             assert!(session.checkpoint().is_err());
             session.shutdown();
@@ -278,7 +278,6 @@ fn preview_caught_fixture_violation_fails_preflight_and_mount() {
         };
         let failure = error.downcast_ref::<ContractFailure>().expect("fixture failure must retain its type");
         assert_eq!(failure.code, "E_FIXTURE_MISSING_SERVICE");
-        assert!(failure.message.contains("watchNiri"));
     }
 }
 
@@ -343,8 +342,8 @@ fn preview_cleanup_retains_deadline_failure_and_releases_every_resource() {
 #[test]
 fn preview_uncaught_fixture_violation_retains_its_category_across_entries() {
     for statement in [
-        "__zguiServices.watchNiri(() => {}, () => {});",
-        "Promise.resolve().then(() => __zguiServices.watchNiri(() => {}, () => {}));",
+        "__zguiServices.readTextAsset('test.txt');",
+        "Promise.resolve().then(() => __zguiServices.readTextAsset('test.txt'));",
     ] {
         let native = Native::new();
         let fixture = Fixture::new(&format!("export const hostApiVersion=1; export function mount() {{ {statement} return () => {{}}; }}"), "");
@@ -359,7 +358,7 @@ fn preview_uncaught_fixture_violation_retains_its_category_across_entries() {
 #[test]
 fn rejected_mount_keeps_its_returned_disposer_for_cleanup() {
     let native = Native::new();
-    let fixture = Fixture::new("export const hostApiVersion=1; export function mount() { try { __zguiServices.watchNiri(() => {}, () => {}); } catch {} return () => recordCleanup(); }", "");
+    let fixture = Fixture::new("export const hostApiVersion=1; export function mount() { try { __zguiServices.readTextAsset('test.txt'); } catch {} return () => recordCleanup(); }", "");
     let session = native.preview(fixture.package(), RuntimeLimits::default(), Rc::new(Cell::new(Instant::now()+Duration::from_secs(5)))).unwrap();
     let called = Rc::new(Cell::new(0));
     let count = called.clone();

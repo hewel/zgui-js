@@ -188,6 +188,3 @@ mod tests {
         assert!(invalid.validate().unwrap_err().to_string().contains("zero layer height"));
     }
 }
-
-#[cfg(test)]
-mod proof;

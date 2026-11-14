@@ -12,6 +12,12 @@ This is an implementation specification. The `native-host preview` commands, JSO
 
 The selected stack remains **zgui + rquickjs + ahead-of-time compiled TSX**. Solid Universal remains the initial frontend from the companion specification. Preview must depend on the native host contract, so a future Preact adapter can use the same runner without a second preview implementation.
 
+**Current scope:** Preview supports the general-purpose UI library and its
+resource services. Runtime platform and compositor support is determined by
+upstream zgui. The former niri service, panel example, fixture provider and
+compositor-specific gates are no longer shipped; historical verification records
+do not establish a current compositor baseline.
+
 ## Contents
 
 - [1. Goals and first usable milestone](#1-goals-and-first-usable-milestone)
@@ -28,7 +34,7 @@ The selected stack remains **zgui + rquickjs + ahead-of-time compiled TSX**. Sol
 - [12. Visual comparisons and baseline review](#12-visual-comparisons-and-baseline-review)
 - [13. Reload and watch mode](#13-reload-and-watch-mode)
 - [14. Performance and feedback cost](#14-performance-and-feedback-cost)
-- [15. Real Wayland and niri validation](#15-real-wayland-and-niri-validation)
+- [15. Real desktop validation](#15-real-desktop-validation)
 - [16. Implementation phases](#16-implementation-phases)
 - [17. Acceptance matrix](#17-acceptance-matrix)
 - [18. Agent execution rules and handoff prompt](#18-agent-execution-rules-and-handoff-prompt)
@@ -1157,31 +1163,34 @@ Use these workloads to assess improvements, without assuming a target result in 
 | Repeated image source/DPR changes | Native resource readiness and capture correctness |
 | Scripted animation sequence | Timing and frame evidence |
 | Repeated reloads | Cleanup stability and accumulated overhead |
-| Idle desktop panel | Unnecessary wakeups and redraws |
+| Idle native application | Unnecessary wakeups and redraws |
 
 Record results in a separate measured report. The default limits in this specification are execution safeguards and feedback controls, not benchmark claims.
 
-## 15. Real Wayland and niri validation
+## 15. Real desktop validation
 
 Headless preview validates application behavior and native rendering under a controlled host. It does not replace the desktop integration suite.
 
-Before claiming a desktop shell feature works on the user's niri setup, verify:
+Before claiming a native desktop capability works on a backend supported by upstream zgui, verify the applicable behavior on that backend:
 
 - Layer placement, anchors, margins, and exclusive zones.
 - Keyboard interactivity and focus transitions.
-- Popup strategy and interaction outside the panel bounds.
+- Popup strategy and interaction outside the layer-surface bounds, where supported upstream.
 - Transparency over an actual compositor background.
 - Fractional scale, including 1.75, and moving between outputs.
 - Output removal/recreation and stale-handle rejection.
 - Actual IME composition and clipboard integration.
 - Occlusion, idle behavior, and service-triggered wakeups.
-- Live niri/audio/notification service subscriptions and failures.
+- Asynchronous resource-service delivery and failures.
 
 The pinned Wayland implementation rejects a layer surface as the parent of its xdg-popup path. An in-surface overlay may be a valid initial UI strategy, but a headless popup fixture cannot establish support for a layer-parent popup. [Z24]
 
 A headless platform can declare monitor/capability fixtures without implementing the corresponding compositor operations. Record requested surface roles as useful diagnostics; do not treat those declarations as protocol validation. [Z23]
 
 For multiple surfaces, capture each surface separately with parent/role/placement metadata. A combined desktop image requires a separately defined compositor or composition fixture and must be labeled accordingly.
+
+No particular window manager is a baseline requirement, and this library does
+not provide compositor-specific IPC services or a window-manager abstraction.
 
 ## 16. Implementation phases
 
@@ -1193,7 +1202,7 @@ For multiple surfaces, capture each surface separately with parent/role/placemen
 | P3: Deterministic environment | Shared virtual time, typed fixture providers, budgets, native asset readiness | Timing/fixture/resource tests pass without hidden sleeps or live fallbacks |
 | P4: Visual regression and CI | Artifact identity, compare policy, strict/tolerant evidence, CI graphics gate | Compatible comparisons are reproducible; incompatible environments are explicit |
 | P5: Watch and lifecycle | Atomic-build watcher, fresh worker reruns, cancellation; persistent reload only if needed | Old builds and generations cannot contaminate new results |
-| P6: Desktop parity | Real Wayland/niri smoke suite and documented platform limits | Actual compositor/input/service behavior is verified |
+| P6: Desktop parity | Real supported-backend smoke checks and documented upstream platform limits | Actual compositor/input/resource-service behavior is verified; no specific window manager is required |
 
 P0-P2 should produce a useful static-fixture loop using the explicit transitional wall-clock profile. Fixture-only services and the real watchdog already apply in P1. Do not advertise full virtual time, images-ready, transparent capture, semantic selectors, or reload before their respective gates pass.
 
@@ -1241,10 +1250,10 @@ These cases test cross-layer behavior. They are implementation requirements, not
 | PV32 | Superseded run | Cancellation is bounded; only the newest complete build becomes latest-attempt. |
 | PV33 | Late completion after reload | Retired generation cannot mutate the new session; roots are released. |
 | PV34 | Persistent candidate/mount failure | Preflight and post-disposal failure behavior follow the declared transaction boundary. |
-| PV35 | Repeated reload/disposal | Node, callback, request, timer, and subscription counts return to the established baseline. |
+| PV35 | Repeated reload/disposal | Node, callback, request, and timer counts return to the established baseline. |
 | PV36 | Surface loss/resume | New native IDs are rebound once; obsolete surfaces/captures are never targeted. |
 | PV37 | Native text and IME scenario | Synthetic routing preserves selection/composition; real IME remains a separate desktop test. |
-| PV38 | Real niri shell placement/popups | Actual roles, focus, exclusive zones, and the supported popup strategy are verified. |
+| PV38 | Upstream layer-shell placement/popups | Actual supported roles, focus, exclusive zones, and popup limitations are verified on the selected upstream backend. |
 | PV39 | Real transparency and output scaling | Actual compositor blending and fractional/output transitions are verified. |
 | PV40 | Idle/occlusion/live service behavior | Native wakeups and real service integration work without continuous artificial redraw. |
 

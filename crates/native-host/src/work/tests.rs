@@ -162,7 +162,7 @@ fn preflight_rejects_timer_frame_and_request_without_retaining_roots() {
     "#), "TypeError,TypeError,TypeError");
     session.collect();
     assert_eq!(Rc::strong_count(&token), 1, "rejected callbacks retained a JS root");
-    assert_eq!(session.work.counts(), (0, 0, 0, 0));
+    assert_eq!(session.work.counts(), (0, 0, 0));
     assert_eq!(session.host.live_timers(), 0);
     assert_eq!(session.host.pending_frames(), 0);
     assert!(session.work.next_completion().is_none());
@@ -189,14 +189,14 @@ fn first_frame_callback_cancels_later_native_fired_callback_in_ready_batch() {
         let id = session.id(name);
         session.work.fire(id, Arguments::Frame(12.5));
     }
-    assert_eq!(session.work.counts(), (0, 3, 0, 0));
+    assert_eq!(session.work.counts(), (0, 3, 0));
     assert_eq!(session.script("events.length"), "0", "native firing must not enter JS");
     session.invoke_next().unwrap();
-    assert_eq!(session.work.counts(), (0, 1, 0, 0));
+    assert_eq!(session.work.counts(), (0, 1, 0));
     session.invoke_next().unwrap();
     assert_eq!(session.script("events.join(',')"), "first:12.5,third:12.5");
     assert!(!session.work.has_ready());
-    assert_eq!(session.work.counts(), (0, 0, 0, 0));
+    assert_eq!(session.work.counts(), (0, 0, 0));
 }
 
 #[test]
@@ -235,7 +235,7 @@ fn successful_and_throwing_one_shots_release_callback_roots() {
         session.collect();
         assert_eq!(Rc::strong_count(&token), 1, "finished callback retained its JS closure");
         assert_eq!(session.script("calls"), "1");
-        assert_eq!(session.work.counts(), (0, 0, 0, 0));
+        assert_eq!(session.work.counts(), (0, 0, 0));
         session.work.fire(id, arguments);
         assert!(session.work.next_call().is_none(), "a one-shot fired twice");
     }
@@ -252,15 +252,15 @@ fn cancellation_wins_after_worker_success_but_before_owner_delivery() {
         request.promise.then(text => outcome.push(text), error => outcome.push(error.code));
         'requested';
     "#);
-    assert_eq!(session.work.counts(), (0, 0, 1, 0));
+    assert_eq!(session.work.counts(), (0, 0, 1));
     let completion = session.completion();
     assert_eq!(completion.result.as_ref().unwrap(), "owned asset: héllo\n");
     session.script("request.cancel(); request.cancel(); 'cancelled'");
-    assert_eq!(session.work.counts(), (0, 0, 0, 0));
+    assert_eq!(session.work.counts(), (0, 0, 0));
     session.settle(completion);
     session.jobs();
     assert_eq!(session.script("outcome.join(',')"), "Cancelled");
-    assert_eq!(session.work.counts(), (0, 0, 0, 0));
+    assert_eq!(session.work.counts(), (0, 0, 0));
 }
 
 #[test]
@@ -285,12 +285,12 @@ fn stale_generation_and_duplicate_completions_cannot_settle_a_new_request() {
     session.settle(stale);
     session.jobs();
     assert_eq!(session.script("outcome.length"), "0");
-    assert_eq!(session.work.counts(), (0, 0, 1, 0));
+    assert_eq!(session.work.counts(), (0, 0, 1));
     let duplicate = Completion { generation: first.generation, request_id: first.request_id, result: Ok("duplicate".into()) };
     session.settle(first);
     session.jobs();
     assert_eq!(session.script("outcome.length"), "1");
-    assert_eq!(session.work.counts(), (0, 0, 0, 0));
+    assert_eq!(session.work.counts(), (0, 0, 0));
 
     session.script(r#"
         globalThis.second = __zguiServices.readTextAsset('text.txt');
@@ -302,11 +302,11 @@ fn stale_generation_and_duplicate_completions_cannot_settle_a_new_request() {
     session.settle(duplicate);
     session.jobs();
     assert_eq!(session.script("outcome.length"), "1");
-    assert_eq!(session.work.counts(), (0, 0, 1, 0));
+    assert_eq!(session.work.counts(), (0, 0, 1));
     session.settle(second);
     session.jobs();
     assert_eq!(session.script("JSON.stringify(outcome)"), "[\"first:owned asset: héllo\\n\",\"second:owned asset: héllo\\n\"]");
-    assert_eq!(session.work.counts(), (0, 0, 0, 0));
+    assert_eq!(session.work.counts(), (0, 0, 0));
 }
 
 #[test]
@@ -322,15 +322,15 @@ fn real_executor_success_and_error_settle_promises_and_release_resolver_roots() 
         failure.promise.then(() => outcome.push(['unexpected success']), error => outcome.push(['error', error.code, error instanceof Error]));
         'requested';
     "#);
-    assert_eq!(session.work.counts(), (0, 0, 2, 0));
+    assert_eq!(session.work.counts(), (0, 0, 2));
     let success = session.completion();
     assert!(success.result.is_ok());
     session.settle(success);
-    assert_eq!(session.work.counts(), (0, 0, 1, 0));
+    assert_eq!(session.work.counts(), (0, 0, 1));
     let failure = session.completion();
     assert_eq!(failure.result.as_ref().unwrap_err().code, "InvalidUtf8");
     session.settle(failure);
-    assert_eq!(session.work.counts(), (0, 0, 0, 0));
+    assert_eq!(session.work.counts(), (0, 0, 0));
     session.jobs();
     assert_eq!(session.script("JSON.stringify(outcome)"), "[[\"success\",\"owned asset: héllo\\n\"],[\"error\",\"InvalidUtf8\",true]]");
     session.script("success.cancel(); failure.cancel(); 'already settled'");
@@ -368,14 +368,14 @@ fn stopping_rejects_new_work_but_existing_cancellation_is_idempotent() {
         request.cancel(); request.cancel();
         rejected.join(',');
     "#), "TypeError,TypeError,TypeError");
-    assert_eq!(session.work.counts(), (0, 0, 0, 0));
+    assert_eq!(session.work.counts(), (0, 0, 0));
     assert_eq!(session.host.live_timers(), 0);
     assert_eq!(session.host.pending_frames(), 0);
     session.settle(completion);
     session.work.finish_stop();
     session.work.finish_stop();
     session.script("clearTimeout(timer); cancelAnimationFrame(frame); request.cancel(); 'disposed cancellations'");
-    assert_eq!(session.work.counts(), (0, 0, 0, 0));
+    assert_eq!(session.work.counts(), (0, 0, 0));
 }
 
 #[test]
@@ -410,5 +410,5 @@ fn console_formatting_never_calls_object_getters_or_coercion_hooks() {
         }
         hits;
     "#), "0");
-    assert_eq!(session.work.counts(), (0, 0, 0, 0));
+    assert_eq!(session.work.counts(), (0, 0, 0));
 }

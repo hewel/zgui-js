@@ -11,9 +11,6 @@
 //! checks atomic with opening a file: package directories must not be modified
 //! concurrently by an untrusted writer.
 
-#[cfg(unix)]
-pub mod niri;
-
 use std::{
     error::Error,
     fmt,

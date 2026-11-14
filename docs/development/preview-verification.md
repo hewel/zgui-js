@@ -1,8 +1,16 @@
 # Preview implementation and verification
 
-The [preview specification](preview-mode.md) is preserved unchanged. The main
-host's [baseline](baseline.md) remains the production path; preview does not
-replace its renderer or JavaScript bridge.
+The [preview specification](preview-mode.md) describes the current generic scope.
+The main host's [baseline](baseline.md) remains the production path; preview does
+not replace its renderer or JavaScript bridge.
+
+The phase results below are historical observations, not a current platform
+support matrix. The niri service, panel example, niri fixture provider and
+compositor-specific occlusion/layer gates have since been removed. Their earlier
+results and evidence remain recorded here, but the removed commands and fixture
+contracts are not shipped or runnable as current acceptance gates. Native UI,
+resource services, scheduling, previews and the upstream layer-shell wrapper
+remain in scope; platform and window-manager support is determined by zgui.
 
 ## P0 — environment and real calibration
 
@@ -294,8 +302,10 @@ retain Date semantics. Worker timezone is UTC. `performance.now()` reads native
 elapsed milliseconds; seeded `Math.random` uses `splitmix64-v1`. These policies
 and the verified shipped fonts are saved in `environment.json`.
 
-Fixture providers replace the existing `readTextAsset` and `watchNiri` boundaries,
-not application handlers. Missing providers cannot fall back to live services.
+At the original P3 verification, fixture providers replaced `readTextAsset` and
+the former `watchNiri` boundary, not application handlers. The niri provider and
+its specific verification cases below are now retired; the current fixture
+boundary is resource access. Missing providers cannot fall back to live services.
 Zero-latency requests return before delivery. Eligible fixture work is ordered
 by release time, declared events before request completions, then source order.
 `service.emit` changes typed fixture state only. An `assert` step with
@@ -339,8 +349,8 @@ not make the old logical configuration current.
 | PV19 | Resize/scale retain the held timestamp. A resize then scale returning to the original pixel extent cannot validate the old logical configuration or dispatch against it. |
 | PV20 | Native validation ordinals include genuine additional frames at 0, 40 and 80 ms; unchanged pixels retain their earlier presentation identity. |
 | PV21 | Loading captures succeed while 25/50 ms fixture responses remain pending; subsequent explicit advances render their results. |
-| PV22 | `service.emit` changes fixture state; missing assets/niri providers fail with exit 6. The absent-niri test's owned Unix sentinel observes zero live connections. |
-| PV23 | Same-deadline asset completions retain request order; two declared niri events retain source order. Zero-latency completion is deferred until after the caller returns. |
+| PV22 | Historical: `service.emit` changed fixture state; missing assets/niri providers failed with exit 6. The retired absent-niri test's owned Unix sentinel observed zero live connections. The niri provider and its tests are no longer shipped. |
+| PV23 | Historical: same-deadline asset completions retained request order; two declared niri events retained source order. Zero-latency completion was deferred until after the caller returned. The niri event case is no longer shipped. |
 | PV24 | Actual GPU captures cover placeholder→red→blue→clear, corrupt/remote failure, offscreen→visible, and real atlas exhaustion. Controlled delayed-worker tests reject stale replacement/clear completions. |
 | PV25 | Timeline reruns produce byte-identical PNGs and service traces, matching shipped font identities, UTC Date values, native performance time and seeded random values despite a Honolulu parent timezone. |
 | PV26 | Saved inspection enforces tree/frame/resource/configuration identities without GPU access. Complete artifact inventories verify 760 byte lengths and SHA-256 digests across the final v3/v4 matrices. |
@@ -558,12 +568,14 @@ IME, compositor blending and live service parity remain separate P6 evidence.
 
 ## P6 — real Wayland/niri desktop verification
 
-These are actual unlocked desktop observations, not headless surface-role
-declarations. The native/compiler baseline remains the one documented above and
-in [baseline.md](baseline.md). The compositor reports
-`26.04 (v26.04-298-gad20c318-modified)`; the installed niri CLI reports
-`26.04 (8ed0da4)`. DP-1 normally uses scale 1.75. The live service continues to use
-direct Unix-socket IPC rather than that CLI's incompatible event parser.
+These are historical unlocked desktop observations, not headless surface-role
+declarations or a current compositor support requirement. The niri panel, service
+and compositor-specific gates described here are no longer shipped; the original
+results are retained rather than erased. The native/compiler baseline for these
+runs is documented above and in [baseline.md](baseline.md). The compositor
+reported `26.04 (v26.04-298-gad20c318-modified)`; the installed niri CLI reported
+`26.04 (8ed0da4)`. DP-1 normally used scale 1.75. The then-live service used direct
+Unix-socket IPC rather than that CLI's incompatible event parser.
 
 Explicit authorization covered PID-verified owned-window keyboard/IME input,
 clipboard replacement without reading its old contents, temporary DP-1 scale
@@ -575,15 +587,14 @@ clipboard under the same authorization.
 
 ### Native editing and occlusion
 
-The rebuilt native test binary passed these opt-in gates:
+The rebuilt native test binary passed the editing gate below. The associated
+occlusion run used the now-retired `async_tests::native_async_delivery` gate;
+that niri-specific command is no longer available.
 
 ```sh
 ZGUI_PLATFORM=wayland ZGUI_EDITING_REPLACE_CLIPBOARD=1 \
   ZGUI_EDITING_WAYLAND_IME=1 cargo test -p native-host --bin native-host \
   editing_tests::native_text_editing -- --ignored --exact --nocapture
-
-ZGUI_PLATFORM=wayland cargo test -p native-host --bin native-host \
-  async_tests::native_async_delivery -- --ignored --exact --nocapture
 ```
 
 The editing run used the compiled test executable directly to retain its exact
@@ -602,7 +613,10 @@ visible updated row. Final teardown reported four frames and zero resources.
 
 ### Placement, scaling and output lifecycle
 
-```sh
+The following is the historical invocation of the removed niri layer gate, not
+a command available in the current test suite:
+
+```text
 ZGUI_PLATFORM=wayland ZGUI_SHELL_LIFECYCLE=1 \
   cargo test -p native-host --bin native-host \
   shell::proof::real_panel_layer -- --ignored --exact --nocapture
@@ -654,6 +668,9 @@ management guarantee.
 
 ### Live services, wakeups and idle limits
 
+The niri service and panel behavior in this subsection is historical; neither
+integration is shipped by the current general-purpose UI library.
+
 The ordinary panel process, without watch mode, displayed real niri rows.
 Opening an owned counter window caused a new presentation and visible
 `Windows (13)` without injected UI input; closing it caused another presentation.
@@ -677,9 +694,10 @@ output transitions passed. PV38's placement/focus/exclusive-zone portion passed.
 The public SDK does not implement layer-parent xdg-popups or interaction outside
 such popup bounds; the pinned backend rejects that parent path. No popup support
 is certified here, and a same-surface drawing is not presented as a popup proof.
-PV40 passed for the implemented niri and async asset-service paths and observed
-occlusion/wake behavior. Live audio and notification providers are not implemented
-and are **not passing cases**; preview fixtures do not certify those integrations.
+PV40 historically passed for the then-implemented niri and async asset-service
+paths and observed occlusion/wake behavior. The niri service and its gate have
+since been retired. Live audio and notification providers were not implemented
+and were **not passing cases**; preview fixtures do not certify those integrations.
 
 Local, untracked evidence is under `target/preview-p6-desktop`: `verification.json`
 records accepted PNG hashes, observed samples and limitations; `packages/`

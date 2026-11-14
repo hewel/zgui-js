@@ -18,7 +18,7 @@ function native(args) {
   return result;
 }
 const emptyResources = { nodes: 0, wrappers: 0, callbacks: 0, timers: 0, frameCallbacks: 0,
-  requests: 0, subscriptions: 0, engineAlive: false };
+  requests: 0, engineAlive: false };
 
 // Real GPU/native lifecycle gate: no platform fallback, graphics skip, or synthetic success.
 test("surface recreation retires ownership and rebinds input, captures and fixture work", async t => {
@@ -33,24 +33,21 @@ test("surface recreation retires ownership and rebinds input, captures and fixtu
   }));
   await writeFile(path.join(app, "src/main.tsx"), `
     import { Button, createSignal, renderApp, type NativeNode } from "@zgui/ui";
-    import { readTextAsset, watchNiri } from "@zgui/services";
+    import { readTextAsset } from "@zgui/services";
     export const hostApiVersion = 1;
     export function mount(root: NativeNode) {
       let retired = false;
       const [count, setCount] = createSignal(0);
       const [asset, setAsset] = createSignal("pending");
-      const [workspace, setWorkspace] = createSignal("pending");
       const random = String(Math.random());
       const mountedAt = String(Date.now());
       const live = () => { if (retired) throw new Error("retired-generation-entered"); };
       readTextAsset("assets/message.txt").promise.then(value => { live(); setAsset(value); });
-      watchNiri(value => { live(); setWorkspace(value.workspaces[0]?.name ?? "none"); }, error => { throw error; });
       const dispose = renderApp(() => <column>
         <Button testId="increment" onClick={() => setCount(count() + 1)}>Increment</Button>
         <Button testId="arm" onClick={() => { setTimeout(() => { throw new Error("retired-timer-fired"); }, 100); }}>Arm retired work</Button>
         <text testId="count">{String(count())}</text>
         <text testId="asset">{asset()}</text>
-        <text testId="workspace">{workspace()}</text>
         <text testId="random">{random}</text>
         <text testId="mounted-at">{mountedAt}</text>
       </column>, root);
@@ -62,11 +59,7 @@ test("surface recreation retires ownership and rebinds input, captures and fixtu
   await writeFile(fixture, JSON.stringify({ schemaVersion: 1, id: "lifecycle", services: {
     assets: { provider: "mock-text-assets-v1", latencyMs: 200,
       initialState: { assets: { "assets/message.txt": {} } } },
-    niri: { provider: "mock-niri-v1", latencyMs: 200, initialState: { windows: [], workspaces: [] } },
-  }, events: [{ atMs: 100, channel: "niri.state", value: { windows: [], workspaces: [{
-    id: "1", index: 1, name: "after-resume", output: null, urgent: false, active: true,
-    focused: true, activeWindowId: null,
-  }] } }] }));
+  }, events: [{ atMs: 100, channel: "assets.state", value: { assets: {} } }] }));
   const profile = await json(path.join(workspaceRoot, "preview/profiles/default.json"));
   const steps = [
     { op: "surface.resize", surface: "main", width: 400, height: 300 },
@@ -78,12 +71,10 @@ test("surface recreation retires ownership and rebinds input, captures and fixtu
     { op: "capture", captureId: "resumed", requiredFrameTimeUs: 20000 },
     { op: "pointer.click", target: { surface: "main", role: "button", name: "Increment" }, button: "primary" },
     { op: "clock.advance", byMs: 220 },
-    ...[["count", "1"], ["asset", "delivered"], ["workspace", "after-resume"], ["mounted-at", String(profile.clock.epochMs + 20)]].map(([testId, text]) => ({
+    ...[["count", "1"], ["asset", "delivered"], ["mounted-at", String(profile.clock.epochMs + 20)]].map(([testId, text]) => ({
       op: "assert", target: { surface: "main", testId }, check: { property: "text", equals: text },
     })),
-    ...[["assets", "readTextAsset"], ["niri", "watchNiri"]].map(([service, method]) => ({
-      op: "assert", serviceCall: { service, method, count: 2 },
-    })),
+    { op: "assert", serviceCall: { service: "assets", method: "readTextAsset", count: 2 } },
     { op: "capture", captureId: "after", requiredFrameTimeUs: 240000 },
   ];
   const scenario = path.join(directory, "scenario.json");
@@ -108,7 +99,6 @@ test("surface recreation retires ownership and rebinds input, captures and fixtu
   assert.ok(lifecycle.retired.before.callbacks > 0);
   assert.equal(lifecycle.retired.before.timers, 1);
   assert.equal(lifecycle.retired.before.requests, 1);
-  assert.equal(lifecycle.retired.before.subscriptions, 1);
   assert.deepEqual(lifecycle.retired.resources, emptyResources);
   const before = await json(path.join(out, "captures/before.frame.json"));
   const resumed = await json(path.join(out, "captures/resumed.frame.json"));
@@ -130,9 +120,9 @@ test("surface recreation retires ownership and rebinds input, captures and fixtu
   assert.equal(Number(node(resumedTree, "mounted-at").text) - Number(node(beforeTree, "mounted-at").text), 20);
   const trace = (await json(path.join(out, "services.json"))).records;
   const requests = trace.filter(row => row.kind === "request").map(row => row.detail.requestId);
-  assert.equal(requests.length, 4);
-  assert.equal(new Set(requests).size, 4, "fixture identities must not alias across generations");
-  for (const oldId of requests.slice(0, 2)) {
+  assert.equal(requests.length, 2);
+  assert.equal(new Set(requests).size, 2, "fixture identities must not alias across generations");
+  for (const oldId of requests.slice(0, 1)) {
     assert.ok(trace.some(row => row.kind === "cancellation" && row.detail.requestId === oldId));
     assert.ok(!trace.some(row => row.kind === "response" && row.detail.requestId === oldId));
   }

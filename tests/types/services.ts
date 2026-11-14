@@ -1,5 +1,5 @@
 import { readTextAsset } from "@zgui/services";
-import type { HostRequest } from "@zgui/services";
+import type { HostRequest, HostServiceError } from "@zgui/services";
 
 const request: HostRequest<string> = readTextAsset("assets/message.txt");
 const promise: Promise<string> = request.promise;
@@ -13,6 +13,12 @@ const generic: HostRequest<{ value: number }> = {
   promise: Promise.resolve({ value: 1 }),
   cancel() {},
 };
+
+const serviceError: HostServiceError = Object.assign(new Error("resource failure"), { code: "Io" });
+const errorCode: string = serviceError.code;
+const nativeError: Error = serviceError;
+// @ts-expect-error Native service failure codes cannot be replaced by callers.
+serviceError.code = "replacement";
 
 // @ts-expect-error The promise cannot be replaced by a caller.
 request.promise = Promise.resolve("replacement");
@@ -33,4 +39,4 @@ process.cwd();
 // @ts-expect-error The private host binding is not a public ambient global.
 globalThis.__zguiServices.readTextAsset("assets/message.txt");
 
-void [promise, cancelled, length, recovered, generic, implicitPromise, asyncCancellation, bytes, element];
+void [promise, cancelled, length, recovered, generic, implicitPromise, asyncCancellation, bytes, element, errorCode, nativeError];

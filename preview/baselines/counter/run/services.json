@@ -6,8 +6,7 @@
     {
       "detail": {
         "cancelledDeliveries": 0,
-        "cancelledScheduled": 0,
-        "cancelledSubscriptions": 0
+        "cancelledScheduled": 0
       },
       "kind": "disposal",
       "sequence": 1,

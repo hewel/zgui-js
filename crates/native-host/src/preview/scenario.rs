@@ -853,7 +853,7 @@ mod tests {
     #[test]
     fn service_call_rejects_positional_arrays_and_duplicate_fields() {
         schema_error(&declaration(json!([{"id":"x","op":"assert","serviceCall":["assets","readTextAsset",0]}])));
-        let bytes=br#"{"schemaVersion":1,"id":"test","requiredCapabilities":[],"steps":[{"id":"x","op":"assert","serviceCall":{"service":"assets","service":"niri","method":"readTextAsset","count":0}}]}"#;
+        let bytes=br#"{"schemaVersion":1,"id":"test","requiredCapabilities":[],"steps":[{"id":"x","op":"assert","serviceCall":{"service":"assets","service":"assets","method":"readTextAsset","count":0}}]}"#;
         assert_eq!(parse(bytes,&["services.fixtures"],false).unwrap_err().code,"E_SCHEMA");
     }
 
@@ -901,8 +901,8 @@ mod tests {
             json!({"id":"x","op":"clock.advance","byMs":-1}),
             json!({"id":"x","op":"clock.advance","byMs":1.0}),
             json!({"id":"x","op":"clock.advance","byMs":0,"sleep":1}),
-            json!({"id":"x","op":"service.emit","channel":"niri.state","value":null}),
-            json!({"id":"x","op":"service.emit","channel":"niri.state","value":[]}),
+            json!({"id":"x","op":"service.emit","channel":"assets.state","value":null}),
+            json!({"id":"x","op":"service.emit","channel":"assets.state","value":[]}),
             json!({"id":"x","op":"surface.resize","surface":"main","width":0,"height":1}),
             json!({"id":"x","op":"surface.resize","surface":"main","width":1.0,"height":1}),
             json!({"id":"x","op":"surface.scale","surface":"main","scale":0}),

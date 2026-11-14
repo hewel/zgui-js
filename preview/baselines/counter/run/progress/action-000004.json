@@ -1,11 +1,11 @@
 {
   "actionSequence": 4,
   "build": {
-    "buildId": "sha256:091dac12816ddd62f33bb7afee57de723238934d92ce1e1dd97654403ece6497",
-    "entryDigest": "sha256:7380aad903948ea92cd325d1aef527277c0691a40c62df9885d401ba86ae7884",
+    "buildId": "sha256:6ebbc4b750947132b6f40c3969a582d7119611250f655cc32e98b93cf20c055a",
+    "entryDigest": "sha256:2e07c5d5d4fea065d6332a2c6e486fbf7f933e70495cc3d9d488c335fe749d2d",
     "id": "dev.example.counter",
     "sourceMap": "app.mjs.map",
-    "sourceMapDigest": "sha256:b5032bd9fbd11c5cf427983f8d3deb27f08878b0dca8dd5794d0e743647b5041"
+    "sourceMapDigest": "sha256:2c7befae68f782f495d1fc1dbc82039f0be6bbd8904137287013b76246547295"
   },
   "readiness": {
     "appReady": true,

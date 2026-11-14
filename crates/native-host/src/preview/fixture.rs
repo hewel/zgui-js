@@ -80,7 +80,7 @@ mod tests {
         for (services, events) in [
             (json!({"audio":{"volume":0.4}}), json!([])),
             (json!({}), json!([{"atMs":0,"channel":"audio","value":{"muted":true}}])),
-            (json!({"niri":{"provider":"live-niri","latencyMs":0,"initialState":{"windows":[],"workspaces":[]}}}), json!([])),
+            (json!({"assets":{"provider":"live-assets","latencyMs":0,"initialState":{"assets":{}}}}), json!([])),
         ] {
             let bytes = serde_json::to_vec(&json!({"schemaVersion":1,"id":"invalid","services":services,"events":events})).unwrap();
             let error = parse(&bytes).unwrap_err();

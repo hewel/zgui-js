@@ -16,7 +16,12 @@ Upstream `Window::run_frame_callbacks` drained callbacks even in a frame run for
 
 The frame-callback patch returns before draining when the window is occluded. Native timers, owner checkpoints and task completions continue; unocclusion releases the preserved callbacks before layout.
 
-Regression gate: `ZGUI_PLATFORM=wayland cargo test -p native-host async_tests::native_async_delivery -- --ignored --exact --nocapture`. The gate moves only its PID/app-ID-verified window to an inactive niri workspace by stable IPC ID, waits for settled native occlusion, then restores it. Timers and Rust completion must finish while rAF remains pending; the first visible fired frame must include the Promise layout change.
+Historical verification used the now-retired `async_tests::native_async_delivery`
+gate to move only its PID/app-ID-verified window to an inactive niri workspace,
+wait for native occlusion, then restore it. Timers and Rust completion finished
+while rAF remained pending; the first visible frame included the Promise layout
+change. That compositor-specific gate is no longer shipped. The patch remains a
+generic upstream runtime correctness fix, not a niri support requirement.
 
 ## Cancelled timer retention
 
@@ -38,7 +43,7 @@ LICENSE and NOTICE and standalone manifest. Four focused protocol changes apply:
 
 - The layer namespace comes from `SurfaceAttributes.application_id`, retaining
   `zgui` only when no application ID was supplied. This permits compositor rules
-  to identify the native panel.
+  to identify a native layer surface.
 - Explicit zero width/height remains zero in `set_size`, as required to stretch
   between opposite anchors. Positive dimensions retain upstream rounding.
 - One initial roundtrip completes bound output descriptions before
@@ -52,17 +57,18 @@ LICENSE and NOTICE and standalone manifest. Four focused protocol changes apply:
 The host validates stretch anchors and an explicitly named available monitor.
 It always supplies a nonnegative exclusive zone: the pinned backend's `None`
 emits protocol `-1`, which ignores other exclusive zones rather than reserving
-the layer's extent. Out-of-surface layer-parent popups remain unsupported;
-see the [panel policy](../apps/examples/panel/README.md#popups-and-menus).
+the layer's extent. Out-of-surface layer-parent popups remain unsupported by
+the pinned upstream backend; same-surface overlays do not establish that support.
 
-Regression gate: build the panel, then run
-`ZGUI_PLATFORM=wayland cargo test -p native-host shell::proof::real_panel_layer -- --ignored --exact --nocapture --test-threads=1`.
-It opens the configured real layer, requires real niri data to reach native TSX
-rows without input, rejects keyboard focus, and checks zero resources at shutdown.
-This gate reproduced the initial-output race before the roundtrip fix. With
-`ZGUI_SHELL_LIFECYCLE=1`, it waits for an externally authorized output off/on
-sequence and requires a fresh live generation; this also reproduced the stale
-output-cache bug before its fix. Visual inspection remains a separate check.
+Historical verification used the former panel example and the now-retired
+`shell::proof::real_panel_layer` gate. It opened a real layer, observed niri
+service delivery without input, rejected keyboard focus and checked resource
+cleanup. It reproduced the initial-output race before the roundtrip fix; an
+explicitly authorized output off/on run reproduced the stale output-cache bug
+before its fix. The panel, niri service and compositor-specific gate are no
+longer shipped. These generic layer-shell patches remain upstream wrappers:
+platform and window-manager capabilities are determined by zgui, with no
+compositor-specific package or abstraction in this library.
 
 ## Package image authority and capture readiness
 

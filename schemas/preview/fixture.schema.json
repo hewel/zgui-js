@@ -21,66 +21,28 @@
             "latencyMs": { "$ref": "#/$defs/milliseconds" },
             "initialState": { "$ref": "#/$defs/assetState" }
           }
-        },
-        "niri": {
-          "type": "object", "additionalProperties": false,
-          "required": ["provider", "latencyMs", "initialState"],
-          "properties": {
-            "provider": { "const": "mock-niri-v1" },
-            "latencyMs": { "$ref": "#/$defs/milliseconds" },
-            "initialState": { "$ref": "#/$defs/snapshot" },
-            "error": { "$ref": "#/$defs/nullableError" }
-          }
         }
       }
     },
     "events": {
       "type": "array", "maxItems": 4096,
       "items": {
-        "oneOf": [
-          {
-            "type": "object", "additionalProperties": false,
-            "required": ["atMs", "channel", "value"],
-            "properties": {
-              "atMs": { "$ref": "#/$defs/milliseconds" },
-              "channel": { "const": "assets.state" },
-              "value": { "$ref": "#/$defs/assetState" }
-            }
-          },
-          {
-            "type": "object", "additionalProperties": false,
-            "required": ["atMs", "channel", "value"],
-            "properties": {
-              "atMs": { "$ref": "#/$defs/milliseconds" },
-              "channel": { "const": "niri.state" },
-              "value": { "$ref": "#/$defs/snapshot" }
-            }
-          },
-          {
-            "type": "object", "additionalProperties": false,
-            "required": ["atMs", "channel", "value"],
-            "properties": {
-              "atMs": { "$ref": "#/$defs/milliseconds" },
-              "channel": { "const": "niri.error" },
-              "value": { "$ref": "#/$defs/error" }
-            }
-          }
-        ]
+        "type": "object", "additionalProperties": false,
+        "required": ["atMs", "channel", "value"],
+        "properties": {
+          "atMs": { "$ref": "#/$defs/milliseconds" },
+          "channel": { "const": "assets.state" },
+          "value": { "$ref": "#/$defs/assetState" }
+        }
       }
     }
   },
   "$defs": {
     "milliseconds": { "type": "integer", "minimum": 0, "maximum": 4294967295 },
-    "id": {
-      "type": "string", "pattern": "^(0|[1-9][0-9]*)$", "maxLength": 20,
-      "description": "Canonical decimal u64; runtime also enforces the u64 upper bound and unique IDs per row kind."
-    },
-    "nullableId": { "anyOf": [{ "$ref": "#/$defs/id" }, { "type": "null" }] },
-    "nullableText": { "type": ["string", "null"] },
     "error": {
       "type": "object", "additionalProperties": false, "required": ["code", "message"],
       "properties": {
-        "code": { "enum": ["Io", "TooLarge", "InvalidUtf8", "NiriProtocol"] },
+        "code": { "enum": ["Io", "TooLarge", "InvalidUtf8"] },
         "message": { "type": "string", "maxLength": 4096, "description": "Also limited to 4096 UTF-8 bytes at runtime." }
       }
     },
@@ -90,43 +52,10 @@
       "properties": {
         "assets": {
           "type": "object", "maxProperties": 1024,
-          "description": "Keys must be canonical package-relative manifest asset paths. Empty behavior reads verified package text. NiriProtocol is rejected for asset errors. State replacement affects subsequent requests, not admitted requests.",
+          "description": "Keys must be canonical package-relative manifest asset paths. Empty behavior reads verified package text. State replacement affects subsequent requests, not admitted requests.",
           "additionalProperties": {
             "type": "object", "additionalProperties": false,
             "properties": { "error": { "$ref": "#/$defs/nullableError" } }
-          }
-        }
-      }
-    },
-    "snapshot": {
-      "type": "object", "additionalProperties": false, "required": ["windows", "workspaces"],
-      "properties": {
-        "windows": {
-          "type": "array", "maxItems": 4096,
-          "items": {
-            "type": "object", "additionalProperties": false,
-            "required": ["id", "title", "appId", "pid", "workspaceId", "focused", "floating", "urgent"],
-            "properties": {
-              "id": { "$ref": "#/$defs/id" },
-              "title": { "$ref": "#/$defs/nullableText" },
-              "appId": { "$ref": "#/$defs/nullableText" },
-              "pid": { "type": ["integer", "null"], "minimum": 0, "maximum": 4294967295 },
-              "workspaceId": { "$ref": "#/$defs/nullableId" },
-              "focused": { "type": "boolean" }, "floating": { "type": "boolean" }, "urgent": { "type": "boolean" }
-            }
-          }
-        },
-        "workspaces": {
-          "type": "array", "maxItems": 4096,
-          "items": {
-            "type": "object", "additionalProperties": false,
-            "required": ["id", "index", "name", "output", "urgent", "active", "focused", "activeWindowId"],
-            "properties": {
-              "id": { "$ref": "#/$defs/id" }, "index": { "type": "integer", "minimum": 0, "maximum": 255 },
-              "name": { "$ref": "#/$defs/nullableText" }, "output": { "$ref": "#/$defs/nullableText" },
-              "urgent": { "type": "boolean" }, "active": { "type": "boolean" }, "focused": { "type": "boolean" },
-              "activeWindowId": { "$ref": "#/$defs/nullableId" }
-            }
           }
         }
       }

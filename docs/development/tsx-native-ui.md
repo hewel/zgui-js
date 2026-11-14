@@ -10,6 +10,13 @@ Build a native UI host in Rust using zgui for the retained UI tree, styling, lay
 
 This specification defines the implementation to build. Package names such as `@zgui/ui`, Rust types such as `UiSession`, and host functions described as proposed are project APIs to implement, not existing zgui or rquickjs APIs. Source-backed upstream APIs are identified separately. The dependency revisions below are an audited source baseline; integration acceptance requires the builds and tests in this document.
 
+**Current scope:** This is a general-purpose UI library. Platform and
+window-manager support is determined by upstream zgui. The earlier niri service,
+panel example, and compositor-specific acceptance gates have been removed; no
+optional compositor package or window-manager abstraction replaces them.
+Historical verification is retained in [baseline.md](baseline.md), while the
+requirements below describe the remaining generic UI and upstream integrations.
+
 ## Contents
 
 - [1. Decisions and scope](#1-decisions-and-scope)
@@ -1155,7 +1162,7 @@ However, the high-level App/WindowOptions API does not expose every layer-role s
 
 Treat these as separate tasks after the TSX runtime works:
 
-- Create the intended layer surface on niri.
+- Create the intended layer surface on a compositor supported by upstream zgui.
 - Verify exclusive-zone behavior and monitor selection.
 - Handle fractional scale, monitor removal, and surface recreation.
 - Define keyboard focus policy.
@@ -1163,11 +1170,15 @@ Treat these as separate tasks after the TSX runtime works:
 
 The audited Wayland popup path requires an xdg_surface parent and rejects a layer parent. An in-surface overlay is a different mechanism and does not establish support for an out-of-surface panel popup. [Z15]
 
-### 15.3 System integration
+### 15.3 Resource services and platform boundary
 
-Add niri IPC, audio, notifications, tray behavior, and other desktop services as typed host modules. Their implementation belongs to Rust services and should not be mixed into the node renderer.
+Expose manifest-declared resource access as typed host services, separate from
+the node renderer. Keep request cancellation and owner-thread delivery within
+the application lifecycle.
 
-A TSX application consumes snapshots and subscriptions. Normalize incoming workspace/window identities before updating list state so native rows can be reused correctly.
+Do not add window-manager IPC, optional compositor packages, or a window-manager
+abstraction to this UI library. Applications may build their own integrations;
+platform and compositor capabilities remain the responsibility of upstream zgui.
 
 ## 16. Development phases and acceptance gates
 
@@ -1280,11 +1291,10 @@ Typing, selection, clipboard operations, deletion, undo where exposed, and Chine
 - Layer-shell creation through a chosen public/lower-level integration path.
 - Monitor, scale, focus, and exclusive-zone configuration.
 - A documented popup/menu strategy compatible with layer surfaces.
-- Typed niri or other required system-service modules.
 
 **Acceptance**
 
-The application works on the target niri configuration, including monitor/scale changes and idle service updates. Layer popup limitations are resolved explicitly rather than hidden by a normal-window demo.
+The generic wrapper passes layer configuration to a supported upstream zgui backend, including monitor, scale, focus and output lifecycle behavior. Layer popup limitations are explicit rather than hidden by a normal-window demo. A particular compositor or window-manager service is not a library acceptance requirement.
 
 ### Phase 8 — Optimize measured bottlenecks
 
