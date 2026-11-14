@@ -16,6 +16,7 @@ pub(crate) struct ResourceCounts {
     pub timers: usize,
     pub frame_callbacks: usize,
     pub requests: usize,
+    pub subscriptions: usize,
     pub engine_alive: bool,
 }
 
@@ -35,6 +36,7 @@ pub(crate) struct Session {
     package: Option<Rc<Package>>,
     deferred: RefCell<VecDeque<DeferredEvent>>,
     fault: RefCell<Option<String>>,
+    checkpoint_cursor: Cell<usize>,
     waker: Arc<dyn Waker>,
     surface: SurfaceId,
 }
@@ -72,7 +74,7 @@ impl Session {
             }
             if engine.is_job_pending() { return Err("preflight diagnostic accessors scheduled more jobs".into()); }
         }
-        let session = Rc::new(Self { disposer: RefCell::new(None), bridge, work, engine: RefCell::new(Some(engine)), shutdown_started: Cell::new(false), mount_started: Cell::new(false), stylesheet_installed: Cell::new(false), generation, region, timer: Cell::new(None), frames: Cell::new(0), package, deferred: RefCell::new(VecDeque::new()), fault: RefCell::new(None), waker, surface });
+        let session = Rc::new(Self { disposer: RefCell::new(None), bridge, work, engine: RefCell::new(Some(engine)), shutdown_started: Cell::new(false), mount_started: Cell::new(false), stylesheet_installed: Cell::new(false), generation, region, timer: Cell::new(None), frames: Cell::new(0), package, deferred: RefCell::new(VecDeque::new()), fault: RefCell::new(None), checkpoint_cursor: Cell::new(0), waker, surface });
         let weak = Rc::downgrade(&session);
         session.bridge.set_dispatcher(Rc::new(move |id, event| {
             if let Some(session) = weak.upgrade() { session.dispatch(id, event); }
@@ -135,33 +137,41 @@ impl Session {
         let end = Instant::now() + engine.limits().job_timeout;
         let max_jobs = engine.limits().max_jobs_per_pump;
         let mut worked = false;
-        for _ in 0..32 {
-            if Instant::now() >= end { break; }
-            let Some(completion) = self.work.next_completion() else { break; };
-            self.bridge.run_turn(|| engine.with_context(|ctx| self.work.settle(&ctx, completion))).map_err(|error| self.diagnostic(error))?;
-            worked = true;
-        }
-        for _ in 0..32 {
-            if Instant::now() >= end { break; }
-            let Some(call) = self.work.next_call() else { break; };
-            self.bridge.run_turn(|| engine.with_context(|ctx| {
-                let callback = call.callback.restore(&ctx)?;
-                match call.arguments { Arguments::Timer => callback.call::<_, ()>(()), Arguments::Frame(timestamp) => callback.call::<_, ()>((timestamp,)) }
-            })).map_err(|error| self.diagnostic(error))?;
-            worked = true;
-        }
-        for _ in 0..32 {
-            if Instant::now() >= end { break; }
-            let Some(event) = self.deferred.borrow_mut().pop_front() else { break; };
-            self.bridge.run_turn(|| engine.with_context(|ctx| self.bridge.invoke_deferred(&ctx, event))).map_err(|error| self.diagnostic(error))?;
-            worked = true;
-        }
-        for _ in 0..max_jobs {
-            if Instant::now() >= end { break; }
-            let attempted = self.bridge.run_turn(|| engine.execute_job(end.saturating_duration_since(Instant::now())))
-                .map_err(|error| self.diagnostic(error))?;
-            if !attempted { break; }
-            worked = true;
+        let mut remaining = [32, 32, 32, 32, max_jobs];
+        // Interleave work classes and preserve the next class across deadlines.
+        // A continuously replenished IPC queue must not starve its own cancellation job.
+        while Instant::now() < end && remaining.iter().any(|&count| count != 0) {
+            let phase = self.checkpoint_cursor.get();
+            self.checkpoint_cursor.set((phase + 1) % remaining.len());
+            if remaining[phase] == 0 { continue; }
+            remaining[phase] -= 1;
+            let attempted = match phase {
+                0 => if let Some(completion) = self.work.next_completion() {
+                    self.bridge.run_turn(|| engine.with_context(|ctx| self.work.settle(&ctx, completion))).map_err(|error| self.diagnostic(error))?;
+                    true
+                } else { false },
+                1 => if let Some(delivery) = self.work.next_subscription() {
+                    self.bridge.run_turn(|| engine.with_context(|ctx| self.work.deliver_subscription(&ctx, delivery))).map_err(|error| self.diagnostic(error))?;
+                    true
+                } else { false },
+                2 => if let Some(call) = self.work.next_call() {
+                    self.bridge.run_turn(|| engine.with_context(|ctx| {
+                        let callback = call.callback.restore(&ctx)?;
+                        match call.arguments { Arguments::Timer => callback.call::<_, ()>(()), Arguments::Frame(timestamp) => callback.call::<_, ()>((timestamp,)) }
+                    })).map_err(|error| self.diagnostic(error))?;
+                    true
+                } else { false },
+                3 => {
+                    let event = self.deferred.borrow_mut().pop_front();
+                    if let Some(event) = event {
+                        self.bridge.run_turn(|| engine.with_context(|ctx| self.bridge.invoke_deferred(&ctx, event))).map_err(|error| self.diagnostic(error))?;
+                        true
+                    } else { false }
+                },
+                _ => self.bridge.run_turn(|| engine.execute_job(end.saturating_duration_since(Instant::now())))
+                    .map_err(|error| self.diagnostic(error))?,
+            };
+            if attempted { worked = true; } else { remaining[phase] = 0; }
         }
         let rejections = self.bridge.run_turn(|| Ok::<_, std::convert::Infallible>(engine.drain_rejections())).unwrap();
         worked |= !rejections.updates.is_empty();
@@ -169,7 +179,7 @@ impl Session {
             eprintln!("promise-rejection: id={} handled={} {}", rejection.id, rejection.handled, self.diagnostic(rejection.diagnostic));
         }
         if rejections.dropped_rejections != 0 { eprintln!("promise-rejection: evicted={} (tracking limit)", rejections.dropped_rejections); }
-        if engine.is_job_pending() || !self.deferred.borrow().is_empty() || self.work.has_ready() || self.work.has_completions() { self.wake_owner(); }
+        if engine.is_job_pending() || !self.deferred.borrow().is_empty() || self.work.has_ready() || self.work.has_completions() || self.work.has_subscriptions() { self.wake_owner(); }
         Ok(worked)
     }
 
@@ -221,10 +231,10 @@ impl Session {
     }
 
     pub(crate) fn counts(&self) -> ResourceCounts {
-        let (timers, frame_callbacks, requests) = self.work.counts();
+        let (timers, frame_callbacks, requests, subscriptions) = self.work.counts();
         ResourceCounts {
             nodes: self.bridge.live_count(), wrappers: self.bridge.wrapper_count(),
-            callbacks: self.bridge.callback_count(), timers, frame_callbacks, requests,
+            callbacks: self.bridge.callback_count(), timers, frame_callbacks, requests, subscriptions,
             engine_alive: self.engine.borrow().is_some(),
         }
     }

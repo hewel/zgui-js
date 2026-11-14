@@ -1624,6 +1624,11 @@ checksum = "dfa686283ad6dd069f105e5ab091b04c62850d3e4cf5d67debad1933f55023df"
 [[package]]
 name = "host-services"
 version = "0.1.0"
+dependencies = [
+ "libc",
+ "serde",
+ "serde_json",
+]
 
 [[package]]
 name = "icu_collections"
@@ -2181,6 +2186,7 @@ version = "0.1.0"
 dependencies = [
  "host-services",
  "js-runtime",
+ "libc",
  "parley",
  "rquickjs",
  "serde",
@@ -5618,7 +5624,6 @@ dependencies = [
 [[package]]
 name = "zgui-platform-wayland"
 version = "0.1.0"
-source = "git+https://github.com/zortax/zgui?rev=80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a#80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a"
 dependencies = [
  "accesskit",
  "accesskit_unix",

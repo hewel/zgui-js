@@ -1,6 +1,6 @@
 # Implementation baseline
 
-The implementation follows [the supplied specification](tsx-native-ui.md). Phases 0–6 passed; Phase 7 is next. Later phase acceptance gates are not yet passed. Git was initialized during Phase 3; `0287d46` records the supplied specification. The first implementation commit covers verified Phases 0–3; each subsequent completed phase gets its own commit.
+The implementation follows [the supplied specification](tsx-native-ui.md). Phases 0–7 passed; Phase 8 records measurements before considering optimizations. Git was initialized during Phase 3; `0287d46` records the supplied specification. The first implementation commit covers verified Phases 0–3; each subsequent completed phase gets its own commit.
 
 ## Dependency policy
 
@@ -9,7 +9,7 @@ The implementation follows [the supplied specification](tsx-native-ui.md). Phase
 | Rust | 1.98.0, minimal profile plus rustfmt/clippy |
 | zgui | `80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a` |
 | Fontique | Root Cargo patch from the same zgui revision |
-| Native runtime | Same revision, with the documented [activation, occlusion and timer patches](../../vendor/README.md) |
+| Native runtime / Wayland | Same revision, with the documented [local patches](../../vendor/README.md) |
 | rquickjs | `73fcd6062ee615aeb2a4675cd32be67a56e93973`; Phase 0 `std`, Phase 1 adds `macro` for opaque native classes |
 | QuickJS-NG | Resolved submodule `6d46d07d04041b40f4f49eaa7fdebe44c314c699` |
 | Node | Tested build tooling on 26.13.0 |
@@ -33,6 +33,7 @@ pnpm ui:build --app counter
 pnpm ui:build --app lists
 pnpm ui:build --app async
 pnpm ui:build --app editing
+pnpm ui:build --app panel
 pnpm ui:dev --app counter
 pnpm test:build
 cargo test -p js-runtime
@@ -46,6 +47,8 @@ env ZGUI_PLATFORM=wayland cargo test -p native-host native_tests::native_button_
 env ZGUI_PLATFORM=wayland cargo test -p native-host --bin native-host async_tests::native_async_delivery -- --ignored --exact --nocapture
 env ZGUI_PLATFORM=wayland cargo test -p native-host --bin native-host reload_tests::native_full_reload -- --ignored --exact --nocapture
 env ZGUI_PLATFORM=wayland ZGUI_EDITING_WAYLAND_IME=1 cargo test -p native-host editing_tests::native_text_editing -- --ignored --exact --nocapture --test-threads=1
+env ZGUI_PLATFORM=wayland cargo run -p native-host -- --bundle apps/examples/panel/dist --layer-config apps/examples/panel/layer.json
+env ZGUI_PLATFORM=wayland cargo test -p native-host shell::proof::real_panel_layer -- --ignored --exact --nocapture --test-threads=1
 cargo test -p native-host --test native_timer
 ```
 
@@ -67,7 +70,7 @@ Timer callbacks and rAF callbacks use native registrations and release their reg
 
 The host permits 1,024 scheduled/ready callbacks and 64 outstanding asset requests per session. Asset reads are limited to 1 MiB of UTF-8 from manifest-declared resources. A shared two-worker executor has a bounded 64-request queue; each session has a bounded completion inbox. Only owned data, IDs, cancellation flags and a platform waker cross threads. Cancellation is definitive at delivery; duplicate/stale completions cannot settle a request twice.
 
-Each owner checkpoint bounds completion, scheduled-callback and deferred-notification batches to 32 each, sharing a 10 ms deadline; individual JS entries retain their interrupt limit. Promise pumping additionally limits attempts to 256. Remaining work explicitly wakes the owner. Preflight rejects timer/frame/service creation; teardown stops delivery, cancels registrations and releases persistent roots before destroying the engine.
+Each owner checkpoint interleaves completion, subscription, scheduled-callback, deferred-notification and Promise work one entry per class. A retained cursor resumes after deadline exhaustion, so a continuously ready source cannot starve another class's cancellation. Non-Promise classes allow 32 entries each and Promise pumping allows 256 attempts, sharing a 10 ms deadline; individual JS entries retain their interrupt limit. Remaining work explicitly wakes the owner. Preflight rejects timer/frame/service creation; teardown stops delivery, cancels registrations and releases persistent roots before destroying the engine.
 
 See [`@zgui/services`](../../packages/services/README.md) for the typed request API and cancellation contract. Console formatting is bounded and does not invoke application getters or `toString`.
 
@@ -103,6 +106,34 @@ commit through the desktop IME. Clipboard contents are restored after the gate;
 its helper does not retain test-log descriptors. Do not run it concurrently with
 another clipboard or keyboard-input scenario.
 
+## Native desktop shell
+
+The [panel example](../../apps/examples/panel/README.md) uses an explicit
+layer-shell profile and the Rust `watchNiri` service. The service consumes direct
+Unix-socket IPC, not the installed niri CLI event parser, which rejects this
+compositor's additional `TouchpadToggled` event. Unrelated event types are ignored;
+malformed known events and disconnects terminate the subscription without retries.
+
+Snapshots coalesce behind a native wake and contain lossless decimal-string IDs
+and explicit nulls. Four subscriptions are allowed per session. Payloads define
+own data properties rather than invoking inherited setters; delivery rechecks
+cancellation around reentrant engine error construction. Cancellation and terminal
+errors release callbacks and the transport before session destruction.
+
+The host selects a named output, applies anchors/margins/keyboard policy and an
+explicit exclusive zone, and leaves scaling to the native backend. The backend
+finishes initial output descriptions before invoking `surfaces_available`.
+Layer-parent out-of-surface popups are explicitly unsupported; a normal-window
+demo is not treated as proof of that capability.
+
+### Native shell acceptance
+
+`ZGUI_SHELL_LIFECYCLE=1` extends the ignored layer gate to wait up to 40 seconds
+for an externally driven output removal/return. It requires a fresh live JS
+generation and zero resources from both generations. Changing physical outputs
+requires explicit permission; restore their scale/enablement, prior focus and
+any clipboard changed by screenshot capture afterward.
+
 ## Observed verification
 
 - `pnpm install`: passed; requested Solid/compiler pair exists in the registry.
@@ -136,6 +167,10 @@ another clipboard or keyboard-input scenario.
 - `target/reload-fallback.png`: captured and visually inspected the real Rust diagnostic and native Retry button.
 - Production `--watch` smoke passed without input: an invalid atomic publication preserved the counter, the next valid publication mounted the async package, and both retired generations reached zero resources on clean shutdown. `target/watch-reload.png` visually confirmed timer, frame, Promise layout and Rust task completion after the watched reload.
 - Phase 6: 36 bridge tests, native SDK typechecks and the reactive editor-child rejection compiler regression passed. On the unlocked desktop, the native editing gate passed controlled-value/caret behavior, clipboard copy/cut/paste, undo, native CJK grapheme movement and vertical multiline navigation, default/read-only/disabled behavior, focus and stable accessibility identities. Real Rime preedit and Chinese commit reached the controlled field. Both generations retired to zero resources; clipboard and prior focus/IME activation were restored. `target/native-editing-verified.png` was captured and visually inspected, confirming separate lines and rendered Chinese glyphs.
+- Phase 7 preparation: 21 backend tests plus the focused rejected-update publication regression passed; SDK/panel typechecks and the panel bundle build passed. Final owner-thread subscription regressions passed all 8 tests; session lifecycle/fairness checks passed all 7. Earlier unchanged work-lifecycle checks also passed.
+- Independent subscription review identified prototype-setter reentry, unfair checkpoint ordering and deferred-queue borrow lifetime issues. Own-property conversion, cancellation rechecks, round-robin scheduling and explicit borrow release were verified by focused regressions; final read-only re-review reported no remaining findings in those fixes.
+- Real niri layer smoke passed without input: compositor IPC reported namespace `dev.zgui.js.panel`, output `DP-1`, top layer and keyboard mode `None`. Wayland requested size `0 × 360` and exclusive zone `360`; the compositor configured `2142 × 360` CSS pixels and fractional scale `210/120 = 1.75`. Real workspace/window data reached native TSX rows while idle. Shutdown reclaimed every resource, including the subscription, to zero. This run did not capture a screenshot.
+- Phase 7 full output-lifecycle gate passed after the desktop was unlocked and output changes were explicitly authorized. Three existing tiled windows each lost exactly 360 CSS pixels of height while the layer reserved its zone. DP-1 scale changed 1.75→2→1.75, with native redraws. Turning DP-1 off released generation 1 completely; turning it on recreated the layer and mounted generation 2 with a fresh live niri subscription. Both generations reached zero resources. All output geometries, prior focus and clipboard were restored. `target/native-panel-recreated.png` was visually inspected after recreation.
 
 Environment: Linux x86_64 Wayland session; niri compositor reports `26.04 (v26.04-298-gad20c318-modified)`, CLI `26.04 (8ed0da4)`; Wayland client 1.26.0, xkbcommon 1.13.2, Fontconfig 2.18.3, Vulkan 1.4.363. No performance claims are made from this baseline.
 
@@ -148,5 +183,5 @@ Environment: Linux x86_64 Wayland session; niri compositor reports `26.04 (v26.0
 - [x] Phase 4: bounded jobs, timer/rAF lifetimes, asynchronous requests and idle/occluded delivery.
 - [x] Phase 5: disposal, preflight, reload generations and fallback.
 - [x] Phase 6: controlled editing, clipboard, selection, Chinese IME and accessibility.
-- [ ] Phase 7: layer-shell, monitor/scale/focus policy and typed desktop services.
+- [x] Phase 7: layer-shell, monitor/scale/focus policy and typed desktop services.
 - [ ] Phase 8: only optimizations justified by measured bottlenecks.

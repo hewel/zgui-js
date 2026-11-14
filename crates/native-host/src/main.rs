@@ -3,6 +3,7 @@ mod session;
 mod work;
 mod watcher;
 mod fallback;
+mod shell;
 #[cfg(test)]
 mod native_tests;
 #[cfg(test)]
@@ -340,6 +341,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut bundle: Option<PathBuf> = None;
     let mut exercise = false;
     let mut watch = false;
+    let mut layer_config = None;
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--smoke-module" => {
@@ -354,14 +356,20 @@ fn main() -> Result<(), Box<dyn Error>> {
             "--bundle" => { bundle = Some(args.next().ok_or("--bundle requires a directory")?.into()); }
             "--exercise" => { exercise = true; }
             "--watch" => { watch = true; }
+            "--layer-config" => {
+                let path: PathBuf = args.next().ok_or("--layer-config requires a JSON file")?.into();
+                layer_config = Some(shell::LayerConfig::load(&path)?);
+            }
             _ => return Err(format!("unknown argument: {arg}").into()),
         }
     }
     if watch && bundle.is_none() { return Err("--watch requires --bundle".into()); }
+    if layer_config.is_some() && bundle.is_none() { return Err("--layer-config requires --bundle".into()); }
     let package = bundle.as_deref().map(Package::load).transpose()?.map(Rc::new);
     let pending = Rc::new(RefCell::new(Vec::new()));
     let roots = pending.clone();
-    let native = zgui::app().with_title(package.as_ref().map_or("zgui-js integration baseline", |package| package.manifest.id.as_str())).with_application_id("dev.zgui.js")
+    let namespace = layer_config.as_ref().map_or("dev.zgui.js", |config| config.namespace.as_str());
+    let native = zgui::app().with_title(package.as_ref().map_or("zgui-js integration baseline", |package| package.manifest.id.as_str())).with_application_id(namespace)
         .with_size(560.0, 180.0)
         .with_stylesheet(":root { background: #171b24; color: #edf2fa; font-family: sans-serif; font-size: 22px; padding: 24px; }")
         .into_handler(move || Root(roots.clone()))?.into_runtime();
@@ -372,7 +380,11 @@ fn main() -> Result<(), Box<dyn Error>> {
     application.watch_path = watch.then_some(bundle).flatten();
     let failure = application.failure.clone();
     eprintln!("zgui=80baa3c7 rquickjs=73fcd606 QuickJS-NG=6d46d07d fontique=patched platform-selection={}", std::env::var("ZGUI_PLATFORM").unwrap_or_else(|_| "desktop-auto".into()));
-    let result = zgui::app::desktop()(Box::new(application));
+    let handler: Box<dyn AppHandler> = match layer_config {
+        Some(config) => Box::new(shell::LayerHost::new(application, config)),
+        None => Box::new(application),
+    };
+    let result = zgui::app::desktop()(handler);
     zgui::reactive::shutdown();
     result?;
     if let Some(error) = native_failure.take() { return Err(error.into()); }

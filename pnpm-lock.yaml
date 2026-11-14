@@ -149,6 +149,15 @@ importers:
         specifier: workspace:*
         version: link:../../../packages/ui
 
+  apps/examples/panel:
+    dependencies:
+      '@zgui/services':
+        specifier: workspace:*
+        version: link:../../../packages/services
+      '@zgui/ui':
+        specifier: workspace:*
+        version: link:../../../packages/ui
+
   packages/build:
     dependencies:
       '@babel/core':

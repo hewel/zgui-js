@@ -214,3 +214,30 @@ fn completion_retained_across_reload_cannot_settle_successor_request() {
     second.shutdown();
     assert_eq!(second.counts(), ResourceCounts::default());
 }
+
+#[test]
+fn promise_cancellation_runs_between_ready_service_completions() {
+    let fixture = Fixture::new(SIMPLE, "");
+    let native = Native::new();
+    let session = native.prepare(fixture.package(), 1).unwrap();
+    session.mount().unwrap();
+    session.engine.borrow_mut().as_mut().unwrap().with_context(|ctx| ctx.eval::<(), _>(r#"
+        globalThis.resolved = 0;
+        const requests = Array.from({ length: 4 }, () => __zguiServices.readTextAsset('test.txt'));
+        for (const request of requests) request.promise.then(() => {
+            resolved++;
+            for (const other of requests) other.cancel();
+        }, () => {});
+    "#)).unwrap();
+    // All four completions are already ready before owner scheduling starts.
+    for _ in 0..4 { native.wakes.recv_timeout(Duration::from_secs(5)).unwrap(); }
+    for _ in 0..16 {
+        session.checkpoint().unwrap();
+        if session.counts().requests == 0 && !session.engine.borrow().as_ref().unwrap().is_job_pending() { break; }
+    }
+    let resolved = session.engine.borrow_mut().as_mut().unwrap()
+        .with_context(|ctx| ctx.eval::<u32, _>("resolved")).unwrap();
+    assert_eq!(resolved, 1, "a ready completion queue starved its Promise cancellation");
+    session.shutdown();
+    assert_eq!(session.counts(), ResourceCounts::default());
+}

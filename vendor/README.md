@@ -26,4 +26,42 @@ Cancellation now removes the entry in place with `BinaryHeap::retain`, immediate
 
 Regression checks in `timer::tests` cover 4,096 long-deadline cancellations without polling, immediate captured-resource release, repeated cancellation, and cancellation of a rearmed repeat.
 
+## Primary layer configuration
+
+`Runtime::primary_surface_attributes_mut` exposes the retained primary surface
+specification only while that surface is absent. The native host uses it before
+opening a layer and after output loss, without replacing the standard graphics,
+text, or document factories. It refuses mutation while open or permanently closed.
+
+`zgui-platform-wayland/` is also copied from the same pinned revision, with its
+LICENSE and NOTICE and standalone manifest. Four focused protocol changes apply:
+
+- The layer namespace comes from `SurfaceAttributes.application_id`, retaining
+  `zgui` only when no application ID was supplied. This permits compositor rules
+  to identify the native panel.
+- Explicit zero width/height remains zero in `set_size`, as required to stretch
+  between opposite anchors. Positive dimensions retain upstream rounding.
+- One initial roundtrip completes bound output descriptions before
+  `surfaces_available`. Without it, a connected named monitor was incorrectly
+  reported as unavailable because its name had not reached the client yet.
+- Output removal excludes the departing proxy when rebuilding monitor and scale
+  inventory. SCTK invokes `output_destroyed` before removing that proxy from its
+  own cache; reading the cache unchanged republished a disconnected monitor and
+  prevented the host from suspending/recreating its layer.
+
+The host validates stretch anchors and an explicitly named available monitor.
+It always supplies a nonnegative exclusive zone: the pinned backend's `None`
+emits protocol `-1`, which ignores other exclusive zones rather than reserving
+the layer's extent. Out-of-surface layer-parent popups remain unsupported;
+see the [panel policy](../apps/examples/panel/README.md#popups-and-menus).
+
+Regression gate: build the panel, then run
+`ZGUI_PLATFORM=wayland cargo test -p native-host shell::proof::real_panel_layer -- --ignored --exact --nocapture --test-threads=1`.
+It opens the configured real layer, requires real niri data to reach native TSX
+rows without input, rejects keyboard focus, and checks zero resources at shutdown.
+This gate reproduced the initial-output race before the roundtrip fix. With
+`ZGUI_SHELL_LIFECYCLE=1`, it waits for an externally authorized output off/on
+sequence and requires a fresh live generation; this also reproduced the stale
+output-cache bug before its fix. Visual inspection remains a separate check.
+
 Remove each local patch only when an upgraded pinned upstream revision implements its contract and passes the corresponding gate. Do not silently drop patches on dependency updates.

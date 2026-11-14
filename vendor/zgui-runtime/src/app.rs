@@ -692,6 +692,18 @@ impl Runtime {
         &mut self.windows
     }
 
+    /// The primary surface's creation attributes while it has no native surface.
+    ///
+    /// Available before the first `surfaces_available` and after `surfaces_lost`.
+    /// Returns `None` while the primary surface is open or after its window was
+    /// closed. This lets a downstream host configure roles the facade does not
+    /// expose, without replacing the renderer, text engine or window lifecycle.
+    pub fn primary_surface_attributes_mut(&mut self) -> Option<&mut SurfaceAttributes> {
+        let primary = self.live.iter_mut().find(|window| window.token == self.primary)?;
+        if primary.surface.is_some() { return None; }
+        Some(&mut primary.spec.attributes)
+    }
+
     /// The queue this runtime carries out window work from.
     ///
     /// What the public window API is built on, and what a test opens a second window through.

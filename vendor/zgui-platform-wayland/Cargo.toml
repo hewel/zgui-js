@@ -1,0 +1,105 @@
+[package]
+name = "zgui-platform-wayland"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+description = "Native Wayland platform backend for zgui"
+repository = "https://github.com/zortax/zgui"
+homepage = "https://zgui.zortax.de"
+rust-version = "1.90"
+
+# Standalone snapshot of upstream 80baa3c7; sibling crates retain the same revision.
+[workspace]
+
+[target.'cfg(any(target_os = "linux", target_os = "dragonfly", target_os = "freebsd", target_os = "netbsd", target_os = "openbsd"))'.dependencies]
+accesskit = "0.24.1"
+accesskit_unix = "0.22.1"
+calloop = "0.14.4"
+calloop-wayland-source = "0.4.1"
+raw-window-handle = "0.6.2"
+rustix = { version = "1.1", default-features = false, features = ["std", "fs", "mm", "event", "time"] }
+smithay-client-toolkit = "0.20.0"
+tracing = "0.1.44"
+wayland-backend = { version = "0.3.16", features = ["client_system"] }
+wayland-client = "0.31.15"
+wayland-protocols = { version = "0.32.13", features = ["client", "staging", "unstable"] }
+zbus = "5.18"
+zgui-geom = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a" }
+zgui-platform = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a" }
+zgui-profile = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a" }
+zgui-vocab = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a" }
+
+[target.'cfg(any(target_os = "linux", target_os = "dragonfly", target_os = "freebsd", target_os = "netbsd", target_os = "openbsd"))'.dev-dependencies]
+tracing = "0.1.44"
+tracing-subscriber = "0.3"
+wayland-protocols-wlr = { version = "0.3.12", features = ["client"] }
+zgui-elements = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a" }
+zgui-platform-headless = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a" }
+zgui-render = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a" }
+zgui-render-wgpu = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a" }
+zgui-runtime = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a" }
+zgui-testkit-scene = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a" }
+zgui-view = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a" }
+
+[[test]]
+name = "frame_chain"
+path = "tests/frame_chain.rs"
+harness = false
+
+[[test]]
+name = "pointer_stream"
+path = "tests/pointer_stream.rs"
+harness = false
+
+[[test]]
+name = "occlusion"
+path = "tests/occlusion.rs"
+harness = false
+
+[[test]]
+name = "clipboard"
+path = "tests/clipboard.rs"
+harness = false
+
+[[test]]
+name = "wake_idle"
+path = "tests/wake_idle.rs"
+harness = false
+
+[[test]]
+name = "wake_signal"
+path = "tests/wake_signal.rs"
+harness = false
+
+[[test]]
+name = "output_rate"
+path = "tests/output_rate.rs"
+harness = false
+
+[[test]]
+name = "wall_clock"
+path = "tests/wall_clock.rs"
+harness = false
+required-features = ["wall-clock"]
+
+[features]
+wall-clock = []
+
+[lints.rust]
+missing_docs = "deny"
+unsafe_code = "deny"
+unreachable_pub = "warn"
+
+[lints.rustdoc]
+broken_intra_doc_links = "deny"
+private_intra_doc_links = "warn"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+undocumented_unsafe_blocks = "warn"
+
+[patch.crates-io]
+fontique = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a" }
+
+[patch."https://github.com/zortax/zgui"]
+zgui-runtime = { path = "../zgui-runtime" }

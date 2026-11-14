@@ -1,9 +1,12 @@
 //! Owner-thread roots and registrations; workers receive only owned service requests.
-use std::{cell::{Cell, RefCell}, collections::{HashMap, VecDeque}, fmt::Write, rc::{Rc, Weak}, sync::{Arc, atomic::{AtomicBool, Ordering}, mpsc::{self, Receiver, SyncSender}}, time::Duration};
+use std::{cell::{Cell, RefCell}, collections::{BTreeMap, HashMap, VecDeque}, fmt::Write, rc::{Rc, Weak}, sync::{Arc, atomic::{AtomicBool, Ordering}, mpsc::{self, Receiver, SyncSender}}, time::Duration};
 use host_services::{Completion, Executor, Request};
-use rquickjs::{Ctx, Exception, Function, Object, Persistent, Value, function::{Func, Opt, Rest}};
+use rquickjs::{Ctx, Exception, Function, Object, Persistent, Value, function::{Func, Opt, Rest}, object::Property};
 use zgui::{platform::{SurfaceId, WakeReason, Waker}, view::{HostHandle, host::{FrameRequestId, Repeat, TimerId}}};
 use crate::package::Package;
+
+mod niri;
+use niri::NiriListener;
 
 const MAX_SAFE_ID: u64 = 9_007_199_254_740_991;
 const MAX_CALLBACKS: usize = 1024;
@@ -23,6 +26,8 @@ pub(crate) struct Work {
     registrations: RefCell<HashMap<u64, Registration>>,
     ready: RefCell<VecDeque<ScheduledCall>>,
     requests: RefCell<HashMap<u64, Pending>>,
+    subscriptions: RefCell<BTreeMap<u64, NiriListener>>,
+    subscription_cursor: Cell<u64>,
     pending_completion: RefCell<Option<Completion>>,
     next_id: Cell<u64>,
     mode: Cell<Mode>,
@@ -40,6 +45,7 @@ impl Work {
         let (sender, inbox) = mpsc::sync_channel(MAX_REQUESTS);
         Rc::new(Self {
             registrations: RefCell::new(HashMap::new()), ready: RefCell::new(VecDeque::new()), requests: RefCell::new(HashMap::new()),
+            subscriptions: RefCell::new(BTreeMap::new()), subscription_cursor: Cell::new(0),
             pending_completion: RefCell::new(None), next_id: Cell::new(1), mode: Cell::new(Mode::Loading), generation, host, package, executor,
             sender: RefCell::new(Some(sender)), inbox: RefCell::new(Some(inbox)),
             wake: Arc::new(move || waker.wake(WakeReason::ReactiveWork { surfaces: vec![surface].into_boxed_slice() })),
@@ -61,12 +67,12 @@ impl Work {
         *self.pending_completion.borrow_mut() = completion;
         pending
     }
-    pub(crate) fn counts(&self) -> (usize, usize, usize) {
+    pub(crate) fn counts(&self) -> (usize, usize, usize, usize) {
         let registrations = self.registrations.borrow();
         let ready = self.ready.borrow();
         let timers = registrations.values().filter(|item| matches!(item.native, NativeRegistration::Timer(_))).count()
             + ready.iter().filter(|item| matches!(item.arguments, Arguments::Timer)).count();
-        (timers, registrations.len() + ready.len() - timers, self.requests.borrow().len())
+        (timers, registrations.len() + ready.len() - timers, self.requests.borrow().len(), self.subscriptions.borrow().len())
     }
 
     fn require_creation(&self, ctx: &Ctx<'_>) -> rquickjs::Result<()> {
@@ -125,6 +131,10 @@ impl Work {
         let services = Object::new(ctx.clone())?;
         let weak = Rc::downgrade(self);
         services.set("readTextAsset", Func::from(move |ctx: Ctx<'js>, path: String| owner(&weak, &ctx)?.read_asset(&ctx, path)))?;
+        let weak = Rc::downgrade(self);
+        services.set("watchNiri", Func::from(move |ctx: Ctx<'js>, snapshot: Function<'js>, error: Function<'js>| {
+            owner(&weak, &ctx)?.watch_niri(&ctx, snapshot, error)
+        }))?;
         ctx.globals().set("__zguiServices", services)?;
         Ok(())
     }
@@ -217,6 +227,7 @@ impl Work {
     pub(crate) fn begin_stop(&self) {
         if self.mode.get() == Mode::Disposed { return; }
         self.mode.set(Mode::Stopping);
+        self.subscriptions.borrow_mut().clear();
         for pending in self.requests.borrow_mut().drain().map(|(_, pending)| pending) { pending.cancelled.store(true, Ordering::Release); }
         // Retired workers must not block the shared executor on a full old inbox.
         self.inbox.borrow_mut().take();
@@ -243,8 +254,13 @@ fn registration_id(ctx: &Ctx<'_>, value: f64) -> rquickjs::Result<u64> {
 }
 fn service_error<'js>(ctx: &Ctx<'js>, code: &str, message: &str) -> rquickjs::Result<Object<'js>> {
     let error = Exception::from_message(ctx.clone(), message)?.into_object();
-    error.set("code", code)?;
+    error.prop("code", data_property(code))?;
     Ok(error)
+}
+
+// Define own data properties without invoking application-installed prototype setters.
+fn data_property<T>(value: T) -> Property<T> {
+    Property::from(value).writable().enumerable().configurable()
 }
 
 #[cfg(test)]

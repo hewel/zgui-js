@@ -1,7 +1,7 @@
 [workspace]
 resolver = "3"
 members = ["crates/native-host", "crates/js-runtime", "crates/ui-bridge", "crates/host-services"]
-exclude = ["vendor/zgui-runtime"]
+exclude = ["vendor/zgui-runtime", "vendor/zgui-platform-wayland"]
 
 [workspace.package]
 version = "0.1.0"
@@ -25,3 +25,4 @@ fontique = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c058
 
 [patch."https://github.com/zortax/zgui"]
 zgui-runtime = { path = "vendor/zgui-runtime" }
+zgui-platform-wayland = { path = "vendor/zgui-platform-wayland" }
