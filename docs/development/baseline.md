@@ -1,6 +1,6 @@
 # Implementation baseline
 
-The implementation follows [the supplied specification](tsx-native-ui.md). Phases 0–5 passed; Phase 6 is next. Later phase acceptance gates are not yet passed. Git was initialized during Phase 3; `0287d46` records the supplied specification. The first implementation commit covers verified Phases 0–3; each subsequent completed phase gets its own commit.
+The implementation follows [the supplied specification](tsx-native-ui.md). Phases 0–6 passed; Phase 7 is next. Later phase acceptance gates are not yet passed. Git was initialized during Phase 3; `0287d46` records the supplied specification. The first implementation commit covers verified Phases 0–3; each subsequent completed phase gets its own commit.
 
 ## Dependency policy
 
@@ -18,6 +18,7 @@ The implementation follows [the supplied specification](tsx-native-ui.md). Phase
 | JSX compiler | babel-plugin-jsx-dom-expressions 0.40.14 |
 | Babel core / TypeScript preset | 7.29.13 / 7.29.7 |
 | esbuild / TypeScript | 0.28.2 / 5.9.3 |
+| Parley | 0.11.1 with `complex-scripts`; required for CJK layout segmentation |
 
 The Fontique patch is selected deliberately for parity with the audited upstream performance implementation; it is not presented as necessary for correctness. `pnpm-lock.yaml` and `Cargo.lock` record the resolved graphs. Phase 0 graph inspection confirmed patched Fontique 0.11.1 and rquickjs `std`; Phase 1 deliberately added `macro`.
 
@@ -31,6 +32,7 @@ pnpm smoke
 pnpm ui:build --app counter
 pnpm ui:build --app lists
 pnpm ui:build --app async
+pnpm ui:build --app editing
 pnpm ui:dev --app counter
 pnpm test:build
 cargo test -p js-runtime
@@ -43,6 +45,7 @@ env ZGUI_PLATFORM=wayland cargo run -p native-host -- --bundle apps/examples/lis
 env ZGUI_PLATFORM=wayland cargo test -p native-host native_tests::native_button_actions -- --ignored --exact --nocapture
 env ZGUI_PLATFORM=wayland cargo test -p native-host --bin native-host async_tests::native_async_delivery -- --ignored --exact --nocapture
 env ZGUI_PLATFORM=wayland cargo test -p native-host --bin native-host reload_tests::native_full_reload -- --ignored --exact --nocapture
+env ZGUI_PLATFORM=wayland ZGUI_EDITING_WAYLAND_IME=1 cargo test -p native-host editing_tests::native_text_editing -- --ignored --exact --nocapture --test-threads=1
 cargo test -p native-host --test native_timer
 ```
 
@@ -76,6 +79,30 @@ Candidate preflight evaluates the module, validates exports/version and drains b
 
 Shutdown is idempotent. Stopping first rejects new nodes, insertion, listeners and async work, but permits cleanup. The JS disposer runs under a deadline even after bridge failure; a thrown cleanup error cannot skip native cancellation, root release or engine destruction. A retired/preflight-only session cannot remove its successor's stylesheet. Native handler registrations are revoked even when another owner retained the callback.
 
+## Native editing
+
+`TextField`/`TextArea` wrap native `field`/`editor` nodes. The bridge receives its
+`HostHandle` from `BuildCx` and uses `set_value`, not generic properties or
+reconciled text children. Editor-owned descendants remain opaque; equal-value
+controlled echoes preserve the native caret and programmatic resets emit no
+input event. See the [SDK contract](../../packages/ui/README.md) for initial-only
+defaults, read-only state, snapshots and child rejection.
+
+Rust-root-owned whitespace defaults preserve single-line spaces and multiline
+layout across JS generations. The host explicitly enables Parley's
+`complex-scripts` feature because the pinned zgui dependency does not forward it;
+without it, Parley's CJK layout segmentation reports missing models. Editor
+Ctrl-arrow movement follows zgui-edit's separate character-class policy.
+
+The ignored editing gate waits at `native-editing-input-ready` for a real
+compositor key (for example, `wtype -k F24` sent to its verified owned window).
+This supplies Wayland's required input serial for clipboard ownership; injected
+runtime events alone cannot authorize it. With `ZGUI_EDITING_WAYLAND_IME=1`, it
+then waits at `native-wayland-ime-ready` for actual Chinese composition and
+commit through the desktop IME. Clipboard contents are restored after the gate;
+its helper does not retain test-log descriptors. Do not run it concurrently with
+another clipboard or keyboard-input scenario.
+
 ## Observed verification
 
 - `pnpm install`: passed; requested Solid/compiler pair exists in the registry.
@@ -108,6 +135,7 @@ Shutdown is idempotent. Stopping first rejects new nodes, insertion, listeners a
 - Phase 5 real Wayland reload gate passed: evaluation failure preserved the active app; 16 replacements stabilized fresh resource counts and retired every generation to zero; native frame reclamation removed old layout rows; mount failure displayed the Rust fallback; native pointer activation of Retry recovered; stale Update/Retry messages had no effect.
 - `target/reload-fallback.png`: captured and visually inspected the real Rust diagnostic and native Retry button.
 - Production `--watch` smoke passed without input: an invalid atomic publication preserved the counter, the next valid publication mounted the async package, and both retired generations reached zero resources on clean shutdown. `target/watch-reload.png` visually confirmed timer, frame, Promise layout and Rust task completion after the watched reload.
+- Phase 6: 36 bridge tests, native SDK typechecks and the reactive editor-child rejection compiler regression passed. On the unlocked desktop, the native editing gate passed controlled-value/caret behavior, clipboard copy/cut/paste, undo, native CJK grapheme movement and vertical multiline navigation, default/read-only/disabled behavior, focus and stable accessibility identities. Real Rime preedit and Chinese commit reached the controlled field. Both generations retired to zero resources; clipboard and prior focus/IME activation were restored. `target/native-editing-verified.png` was captured and visually inspected, confirming separate lines and rendered Chinese glyphs.
 
 Environment: Linux x86_64 Wayland session; niri compositor reports `26.04 (v26.04-298-gad20c318-modified)`, CLI `26.04 (8ed0da4)`; Wayland client 1.26.0, xkbcommon 1.13.2, Fontconfig 2.18.3, Vulkan 1.4.363. No performance claims are made from this baseline.
 
@@ -119,6 +147,6 @@ Environment: Linux x86_64 Wayland session; niri compositor reports `26.04 (v26.0
 - [x] Phase 3: properties, native cancellation, handler replacement and Button activation.
 - [x] Phase 4: bounded jobs, timer/rAF lifetimes, asynchronous requests and idle/occluded delivery.
 - [x] Phase 5: disposal, preflight, reload generations and fallback.
-- [ ] Phase 6: controlled editing, clipboard, selection, Chinese IME and accessibility.
+- [x] Phase 6: controlled editing, clipboard, selection, Chinese IME and accessibility.
 - [ ] Phase 7: layer-shell, monitor/scale/focus policy and typed desktop services.
 - [ ] Phase 8: only optimizations justified by measured bottlenecks.

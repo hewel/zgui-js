@@ -35,6 +35,8 @@ pub enum BridgeError {
     RootBoundary,
     NotText,
     TextParent,
+    EditableParent,
+    NotEditable,
     WrongParent,
     InvalidAnchor,
     Cycle,
@@ -54,6 +56,8 @@ impl fmt::Display for BridgeError {
             Self::RootBoundary => f.write_str("the host-owned root cannot be detached or reparented"),
             Self::NotText => f.write_str("node is not a text node"),
             Self::TextParent => f.write_str("text nodes cannot contain children"),
+            Self::EditableParent => f.write_str("editable controls cannot contain reconciled children"),
+            Self::NotEditable => f.write_str("value, defaultValue, and readOnly require a field or editor"),
             Self::WrongParent => f.write_str("node is not a child of the supplied parent"),
             Self::InvalidAnchor => f.write_str("insertion anchor is not a child of the supplied parent"),
             Self::Cycle => f.write_str("insertion would create a topology cycle"),
@@ -67,6 +71,8 @@ impl std::error::Error for BridgeError {}
 enum Kind {
     Root,
     Element,
+    Field,
+    Editor,
     Text,
 }
 
@@ -173,11 +179,14 @@ impl NodeRegistry {
 
     pub fn create_element(&mut self, tag: &str) -> Result<Handle, BridgeError> {
         self.check_allocation()?;
-        if !matches!(tag, "box" | "row" | "column" | "stack" | "text" | "label" | "scroll" | "control") {
-            return Err(BridgeError::UnsupportedTag(tag.to_owned()));
-        }
+        let kind = match tag {
+            "field" => Kind::Field,
+            "editor" => Kind::Editor,
+            "box" | "row" | "column" | "stack" | "text" | "label" | "scroll" | "control" => Kind::Element,
+            _ => return Err(BridgeError::UnsupportedTag(tag.to_owned())),
+        };
         let native = self.dom.create_element(ElementName::new(tag));
-        Ok(self.register(native, Kind::Element))
+        Ok(self.register(native, kind))
     }
 
     pub fn create_text(&mut self, text: &str) -> Result<Handle, BridgeError> {
@@ -202,6 +211,14 @@ impl NodeRegistry {
         Ok(self.validate(node)?.kind == Kind::Text)
     }
 
+    pub(crate) fn require_editable(&self, node: Handle) -> Result<(), BridgeError> {
+        if matches!(self.validate(node)?.kind, Kind::Field | Kind::Editor) {
+            Ok(())
+        } else {
+            Err(BridgeError::NotEditable)
+        }
+    }
+
     pub fn insert(
         &mut self,
         parent: Handle,
@@ -216,6 +233,9 @@ impl NodeRegistry {
         }
         if self.records[&parent.token].kind == Kind::Text {
             return Err(BridgeError::TextParent);
+        }
+        if matches!(self.records[&parent.token].kind, Kind::Field | Kind::Editor) {
+            return Err(BridgeError::EditableParent);
         }
         let anchor_native = if let Some(anchor) = anchor {
             let record = self.validate(anchor)?;

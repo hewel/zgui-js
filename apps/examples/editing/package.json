@@ -1,0 +1,8 @@
+{
+  "name": "@zgui/example-editing",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@zgui/ui": "workspace:*"
+  }
+}

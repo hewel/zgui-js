@@ -2,7 +2,7 @@ use std::{cell::RefCell, collections::BTreeSet, rc::Rc};
 
 use js_runtime::{JsRuntime, RuntimeLimits};
 use ui_bridge::{UiBridge, registry::NodeRegistry};
-use zgui::{view::{AttrName, DomHandle, ElementName, NodeId, UiState}, vocab::{Role, SemanticFlags}};
+use zgui::{view::{AttrName, DomHandle, ElementName, HostHandle, NodeId, UiState, stub::StubHost}, vocab::{Role, SemanticFlags}};
 use zgui_dom::Document;
 use zgui_view_dom::DocumentDom;
 
@@ -23,7 +23,7 @@ impl NativeProperties {
         let root = dom.create_element(ElementName::new("column"));
         dom.insert(backend.root_node(), root, None);
         let mut engine = JsRuntime::new(RuntimeLimits::default()).unwrap();
-        let bridge = UiBridge::new(NodeRegistry::new(dom.clone(), root, 37, 1, 100));
+        let bridge = UiBridge::new(NodeRegistry::new(dom.clone(), root, 37, 1, 100), HostHandle::new(StubHost::default()));
         engine.with_context(|ctx| {
             bridge.install(&ctx)?;
             ctx.globals().set("root", bridge.root(&ctx)?)
@@ -242,7 +242,7 @@ fn unsupported_properties_and_wrong_types_throw_without_partial_native_writes() 
         __zgui.setProperty(node, 'disabled', true);
         const invalid = [
             ['className', 'bad'], ['unknown', null], ['children', 'bad'], ['ref', () => {}],
-            ['value', 'editor is deferred'], ['scrollTop', 12], ['d', 'M0 0 L1 1'],
+            ['value', 'not editable'], ['scrollTop', 12], ['d', 'M0 0 L1 1'],
             ['class', 3], ['id', false], ['title', {}], ['ariaLabel', 1], ['ariaDescription', true],
             ['disabled', 'false'], ['disabled', 0], ['role', 'link'], ['role', 1],
             ['tabIndex', '0'], ['tabIndex', false], ['tabIndex', 0.5],

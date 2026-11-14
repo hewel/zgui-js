@@ -1,4 +1,4 @@
-import { renderApp } from "@zgui/ui";
+import { TextField, TextArea, renderApp } from "@zgui/ui";
 import type { NativeNode } from "@zgui/ui";
 
 // @ts-expect-error Browser document is not a host global.
@@ -21,8 +21,30 @@ new MessageChannel();
 setInterval(() => {}, 1);
 // @ts-expect-error Unknown tags must not be swallowed by an index signature.
 const html = <div />;
-// @ts-expect-error Native editing has not passed its own integration gate.
-const editing = <field />;
+// @ts-expect-error Native text fields own their descendants.
+const editing = <field>Authored child</field>;
+// @ts-expect-error Native editors also reject explicit children props.
+const editorChildren = <editor children={<text>Child</text>} />;
+// @ts-expect-error TextField cannot reconcile authored children.
+const fieldChildren = <TextField><text>Child</text></TextField>;
+// @ts-expect-error TextArea cannot reconcile authored children.
+const areaChildren = <TextArea>Child</TextArea>;
+// @ts-expect-error Child spreads cannot bypass the native editor boundary.
+const childSpread = <TextField {...{ children: "Child" }} />;
+// @ts-expect-error The component owns its native textInput role.
+const fieldRole = <TextField role="button" />;
+// @ts-expect-error The component owns its native multilineTextInput role.
+const areaRole = <TextArea role="textInput" />;
+// @ts-expect-error Native controls accept strings, not DOM value coercion.
+const numericValue = <TextField value={42} />;
+// @ts-expect-error Value is an editing-control prop, not a generic element property.
+const genericValue = <box value="text" />;
+// @ts-expect-error Native controls do not expose HTML input properties.
+const htmlField = <TextField type="password" />;
+// @ts-expect-error Native controls do not expose DOM selection setters.
+const selectionSetter = <TextArea selectionStart={0} />;
+// @ts-expect-error Event selection is an owned read-only snapshot.
+const mutableSelection = <TextField onInput={event => { event.selection.start = 1; }} />;
 // @ts-expect-error Image assets have not passed their integration gate.
 const image = <image />;
 // @ts-expect-error Arbitrary native properties are not accepted.

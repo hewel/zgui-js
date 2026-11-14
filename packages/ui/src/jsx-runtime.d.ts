@@ -1,4 +1,4 @@
-import type { NativeChild, NativeElementProps } from "./index.js";
+import type { NativeChild, NativeElementProps, NativeTextControlProps } from "./index.js";
 
 export namespace JSX {
   type Element = NativeChild;
@@ -12,5 +12,7 @@ export namespace JSX {
     label: NativeElementProps;
     scroll: NativeElementProps;
     control: NativeElementProps;
+    field: NativeTextControlProps;
+    editor: NativeTextControlProps;
   }
 }

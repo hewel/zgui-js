@@ -30,6 +30,7 @@ impl DeferredEvent {
 /// Installed callbacks hold only weak references, so the context cannot own its own roots.
 pub struct UiBridge {
     registry: RefCell<NodeRegistry>,
+    host: zgui::view::HostHandle,
     wrappers: RefCell<HashMap<u64, Persistent<Object<'static>>>>,
     properties: RefCell<properties::Properties>,
     events: RefCell<events::Events>,
@@ -40,9 +41,11 @@ pub struct UiBridge {
 }
 
 impl UiBridge {
-    pub fn new(registry: NodeRegistry) -> Rc<Self> {
+    /// Uses the host for this registry's native document. Editable values always
+    /// go through its editing API, never through reconciled text descendants.
+    pub fn new(registry: NodeRegistry, host: zgui::view::HostHandle) -> Rc<Self> {
         let events = RefCell::new(events::Events::new(registry.dom_handle()));
-        Rc::new(Self { registry: RefCell::new(registry), wrappers: RefCell::new(HashMap::new()), properties: RefCell::new(properties::Properties::default()), events, dispatcher: RefCell::new(None), active: Cell::new(false), stopping: Cell::new(false), disposed: Cell::new(false) })
+        Rc::new(Self { registry: RefCell::new(registry), host, wrappers: RefCell::new(HashMap::new()), properties: RefCell::new(properties::Properties::default()), events, dispatcher: RefCell::new(None), active: Cell::new(false), stopping: Cell::new(false), disposed: Cell::new(false) })
     }
 
     /// Finalizes detachments after successful entry; a failed update faults and
@@ -160,9 +163,15 @@ impl UiBridge {
             let mutation = properties::Mutation::parse(&ctx, &name, value)?;
             let (dom, native) = {
                 let registry = bridge.registry.borrow();
+                if mutation.requires_editable() {
+                    registry.require_editable(handle).map_err(|e| host_error(&ctx, e))?;
+                }
                 (registry.dom_handle(), registry.native(handle).map_err(|e| host_error(&ctx, e))?)
             };
-            bridge.properties.borrow_mut().apply(&dom, native, handle.token(), mutation);
+            let value = bridge.properties.borrow_mut().apply(&dom, native, handle.token(), mutation);
+            // Native editing can notify listeners; release all registry/property
+            // borrows before entering the host.
+            if let Some(value) = value { bridge.host.set_value(native, &value); }
             Ok::<(), rquickjs::Error>(())
         }))?;
         let weak = Rc::downgrade(self);

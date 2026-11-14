@@ -212,3 +212,47 @@ test("development watcher retains the good generation on errors and publishes re
     assert.equal(JSON.parse(await readFile(path.join(dist, "manifest.json"), "utf8")).buildId, result.manifest.buildId);
   } finally { await watcher.close(); }
 });
+
+test("text controls reject children introduced by a reactive spread before evaluating them", async t => {
+  const directory = await fixture(t);
+  await writeFile(path.join(directory, "src/main.tsx"), `
+    import { TextField, TextArea, createSignal } from "@zgui/ui";
+    import type { NativeNode } from "@zgui/ui";
+    import { mergeProps, render } from "@zgui/ui/renderer";
+    export const hostApiVersion = 1;
+    export function mount(root: NativeNode) { return render(() => undefined, root); }
+    export function probe(root: NativeNode, multiline: boolean) {
+      let reads = 0;
+      let replace = () => {};
+      const dispose = render(() => {
+        const [props, setProps] = createSignal({ value: "seed" });
+        const Control = multiline ? TextArea : TextField;
+        Control(mergeProps(props));
+        replace = () => setProps(Object.defineProperty({ value: "next" }, "children", {
+          enumerable: true, get() { reads++; return "forbidden"; }
+        }));
+        return undefined;
+      }, root);
+      let rejected = false;
+      try { replace(); } catch (error) { rejected = error instanceof TypeError; }
+      finally { dispose(); }
+      return { rejected, reads };
+    }
+  `);
+  const { dist } = await buildApplication("fixture", { appDirectory: directory });
+  const previous = Object.getOwnPropertyDescriptor(globalThis, "__zgui");
+  try {
+    // Only the SDK's shape guard is under test; no native editing is simulated.
+    Object.defineProperty(globalThis, "__zgui", { configurable: true, value: {
+      createElement: tag => ({ tag }),
+      setProperty: (node, name, value) => { node[name] = value; },
+    } });
+    const module = await import(pathToFileURL(path.join(await realpath(dist), "app.mjs")));
+    for (const multiline of [false, true]) {
+      assert.deepEqual(module.probe({}, multiline), { rejected: true, reads: 0 });
+    }
+  } finally {
+    if (previous) Object.defineProperty(globalThis, "__zgui", previous);
+    else delete globalThis.__zgui;
+  }
+});

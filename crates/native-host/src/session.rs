@@ -43,7 +43,7 @@ impl Session {
     /// Pure module preflight: bridge mutation is disabled until mount's turn.
     pub(crate) fn prepare(region: MountRegion, package: Option<Rc<Package>>, generation: u64, waker: Arc<dyn Waker>, surface: SurfaceId, executor: host_services::Executor) -> Result<Rc<Self>> {
         let mut engine = JsRuntime::new(RuntimeLimits::default())?;
-        let bridge = UiBridge::new(NodeRegistry::new(region.dom.clone(), region.root, 1, generation, 100_000));
+        let bridge = UiBridge::new(NodeRegistry::new(region.dom.clone(), region.root, 1, generation, 100_000), region.host.clone());
         let work = Work::new(region.host.clone(), package.clone(), generation, executor, waker.clone(), surface);
         engine.with_context(|ctx| {
             bridge.install(&ctx)?;

@@ -2181,6 +2181,7 @@ version = "0.1.0"
 dependencies = [
  "host-services",
  "js-runtime",
+ "parley",
  "rquickjs",
  "serde",
  "serde_json",
@@ -4146,6 +4147,7 @@ dependencies = [
  "rquickjs",
  "zgui",
  "zgui-dom",
+ "zgui-view",
  "zgui-view-dom",
 ]
 

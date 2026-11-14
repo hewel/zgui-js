@@ -12,8 +12,8 @@ try {
   } else {
     const watching = args[0] === "--watch";
     if (watching) args.shift();
-    if (args.length !== 2 || args[0] !== "--app" || !["counter", "lists", "async"].includes(args[1])) {
-      throw new Error("Usage: pnpm ui:build --app counter|lists|async | --smoke; pnpm ui:dev --app counter|lists|async");
+    if (args.length !== 2 || args[0] !== "--app" || !["counter", "lists", "async", "editing"].includes(args[1])) {
+      throw new Error("Usage: pnpm ui:build --app counter|lists|async|editing | --smoke; pnpm ui:dev --app counter|lists|async|editing");
     }
     if (watching) {
       const watcher = watchApplication(args[1]);

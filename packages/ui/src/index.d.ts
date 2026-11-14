@@ -40,14 +40,30 @@ export interface NativeElementProps extends NativeEventProps {
   title?: string | null;
   tabIndex?: number | null;
   disabled?: boolean | null;
-  role?: "button" | "group" | "label" | "textInput" | null;
+  role?: "button" | "group" | "label" | "textInput" | "multilineTextInput" | null;
   ariaLabel?: string | null;
   ariaDescription?: string | null;
 }
 export type ButtonProps = Omit<NativeElementProps, "role">;
 /** Uses native pointer/Enter/Space activation, disabled state and button semantics. */
 export declare function Button(props: ButtonProps): NativeNode;
-export type NativeTag = "box" | "row" | "column" | "stack" | "text" | "label" | "scroll" | "control";
+/** Native editor descendants are opaque and cannot be authored as JSX children. */
+export interface NativeTextControlProps extends Omit<NativeElementProps, "children"> {
+  children?: never;
+  /** Reactive native value; null clears, later undefined clears, initial undefined is absent. */
+  value?: string | null;
+  /** Initial-only; later changes and assignments after any explicit value are ignored. */
+  defaultValue?: string | null;
+  /** Native read-only editing state and accessibility semantics; focus remains available. */
+  readOnly?: boolean | null;
+}
+export type TextFieldProps = Omit<NativeTextControlProps, "role">;
+export type TextAreaProps = Omit<NativeTextControlProps, "role">;
+/** Single-line native field. Defaults to tabIndex 0 and owns the textInput role. */
+export declare function TextField(props: TextFieldProps): NativeNode;
+/** Multiline native editor. Defaults to tabIndex 0 and owns the multilineTextInput role. */
+export declare function TextArea(props: TextAreaProps): NativeNode;
+export type NativeTag = "box" | "row" | "column" | "stack" | "text" | "label" | "scroll" | "control" | "field" | "editor";
 export interface ReactiveOptions { name?: string; }
 export interface MemoOptions<T> extends ReactiveOptions {
   equals?: false | ((previous: T, next: T) => boolean);

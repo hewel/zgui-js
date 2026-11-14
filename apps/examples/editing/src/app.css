@@ -1,0 +1,29 @@
+:root { background: #171b24; color: #edf2fa; font-family: sans-serif; font-size: 16px; padding: 16px; }
+.editing { width: 100%; }
+.editing-heading { font-size: 24px; font-weight: 700; }
+.editing-group { gap: 4px; flex-grow: 1; }
+.editing-actions, .editing-states { gap: 12px; flex-wrap: wrap; }
+.editing field, .editing editor {
+  display: block;
+  width: 100%;
+  min-height: 40px;
+  padding: 8px;
+  border: 2px solid #56647d;
+  border-radius: 6px;
+  background: #202938;
+  color: #edf2fa;
+}
+.editing editor { height: 88px; }
+.editing control {
+  padding: 10px 12px;
+  border: 2px solid transparent;
+  border-radius: 6px;
+  background: #35425b;
+  color: #edf2fa;
+}
+.editing control:hover { background: #415575; }
+.editing field:focus, .editing editor:focus, .editing control:focus { border-color: #ffffff; }
+.editing .editing-readonly { background: #252c38; }
+.editing field:disabled, .editing control:disabled { background: #303744; color: #bec9dc; border-color: #454f61; }
+.editing-report { gap: 4px; }
+.editing-last-value { white-space: pre-wrap; }

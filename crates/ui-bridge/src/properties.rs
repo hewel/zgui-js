@@ -1,4 +1,7 @@
-//! Phase 3 property vocabulary. Null and undefined both remove a property's value.
+//! Native property vocabulary. Null and undefined both clear a property's value.
+//! Field/editor `value` loads through the native host, with empty values clearing
+//! to empty text. `defaultValue` initializes only once and is ignored after any
+//! explicit value assignment; only initialization metadata is retained here.
 //!
 //! Style objects accept only the kebab-case properties in `STYLE_PROPERTIES`, with
 //! string values (including explicit units), or null/undefined to remove a key.
@@ -6,7 +9,7 @@
 //! Custom `--name` declarations share the native inline block: replacing/clearing
 //! style text also clears custom declarations, including directly assigned ones.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use rquickjs::{Ctx, Exception, FromJs, Value};
 use zgui::{view::{AttrName, ClassName, CustomPropertyName, DomHandle, NodeId, Semantics, UiState}, vocab::{Role, SemanticFlags}};
 
@@ -18,6 +21,9 @@ pub(crate) enum Mutation {
     Style(Style),
     Attribute(&'static str, Option<String>),
     Disabled(bool),
+    ReadOnly(bool),
+    Value(String),
+    DefaultValue(String),
     Role(Role),
     Label(Option<String>),
     Description(Option<String>),
@@ -55,6 +61,9 @@ impl Mutation {
                 Ok(Self::Attribute("tabindex", Some((number as i32).to_string())))
             }
             "disabled" => Ok(Self::Disabled(if empty { false } else { bool::from_js(ctx, value)? })),
+            "readOnly" => Ok(Self::ReadOnly(if empty { false } else { bool::from_js(ctx, value)? })),
+            "value" => Ok(Self::Value(string(value)?.unwrap_or_default())),
+            "defaultValue" => Ok(Self::DefaultValue(string(value)?.unwrap_or_default())),
             "ariaLabel" => Ok(Self::Label(string(value)?)),
             "ariaDescription" => Ok(Self::Description(string(value)?)),
             "role" => {
@@ -64,6 +73,7 @@ impl Mutation {
                     Some("group") => Role::Group,
                     Some("label") => Role::Label,
                     Some("textInput") => Role::TextInput,
+                    Some("multilineTextInput") => Role::MultilineTextInput,
                     _ => return Err(Exception::throw_type(ctx, "unsupported accessibility role")),
                 };
                 Ok(Self::Role(role))
@@ -72,18 +82,33 @@ impl Mutation {
             _ => Err(Exception::throw_type(ctx, &format!("unsupported native property: {name}"))),
         }
     }
+
+    pub(crate) fn requires_editable(&self) -> bool {
+        matches!(self, Self::Value(_) | Self::DefaultValue(_) | Self::ReadOnly(_))
+    }
 }
 
 #[derive(Default)]
 pub(crate) struct Properties {
     styles: HashMap<u64, Style>,
     semantics: HashMap<u64, Semantics>,
+    initialized_values: HashSet<u64>,
 }
 impl Properties {
-    pub(crate) fn remove(&mut self, token: u64) { self.styles.remove(&token); self.semantics.remove(&token); }
-    pub(crate) fn clear(&mut self) { self.styles.clear(); self.semantics.clear(); }
-    pub(crate) fn apply(&mut self, dom: &DomHandle, node: NodeId, token: u64, mutation: Mutation) {
+    pub(crate) fn remove(&mut self, token: u64) { self.styles.remove(&token); self.semantics.remove(&token); self.initialized_values.remove(&token); }
+    pub(crate) fn clear(&mut self) { self.styles.clear(); self.semantics.clear(); self.initialized_values.clear(); }
+
+    /// Returns an owned native value command, to execute after releasing this borrow.
+    /// Only initialization metadata is retained; the native editor owns the text.
+    pub(crate) fn apply(&mut self, dom: &DomHandle, node: NodeId, token: u64, mutation: Mutation) -> Option<String> {
         match mutation {
+            Mutation::Value(value) => {
+                self.initialized_values.insert(token);
+                return Some(value);
+            }
+            Mutation::DefaultValue(value) => {
+                return self.initialized_values.insert(token).then_some(value);
+            }
             Mutation::Class(value) => {
                 let mut classes = Vec::new();
                 for class in value.as_deref().unwrap_or("").split_ascii_whitespace().map(ClassName::new) {
@@ -122,6 +147,11 @@ impl Properties {
                         if disabled { semantics.flags |= SemanticFlags::DISABLED; }
                         else { semantics.flags = semantics.flags & !SemanticFlags::DISABLED; }
                     }
+                    Mutation::ReadOnly(read_only) => {
+                        dom.set_ui_state(node, UiState::READ_ONLY, read_only);
+                        if read_only { semantics.flags |= SemanticFlags::READ_ONLY; }
+                        else { semantics.flags = semantics.flags & !SemanticFlags::READ_ONLY; }
+                    }
                     Mutation::Role(role) => semantics.role = role,
                     Mutation::Label(label) => semantics.label = label.map(Into::into),
                     Mutation::Description(description) => semantics.description = description.map(Into::into),
@@ -131,6 +161,7 @@ impl Properties {
                 else { dom.set_semantics(node, Some(semantics)); }
             }
         }
+        None
     }
 }
 fn set_style(dom: &DomHandle, node: NodeId, name: &str, value: Option<&str>) {

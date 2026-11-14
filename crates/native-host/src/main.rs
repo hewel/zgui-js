@@ -11,6 +11,8 @@ mod async_tests;
 mod test_package;
 #[cfg(test)]
 mod reload_tests;
+#[cfg(test)]
+mod editing_tests;
 
 use std::{cell::RefCell, collections::HashMap, error::Error, path::PathBuf, rc::{Rc, Weak}, sync::{mpsc, Arc}, time::Duration};
 use js_runtime::{JsRuntime, RuntimeLimits};
@@ -32,7 +34,11 @@ impl View for Root {
     type State = RootAnchor;
     fn build(self, cx: &mut BuildCx<'_>) -> RootAnchor {
         let root = cx.dom().create_element(ElementName::new("column"));
-        self.0.borrow_mut().push(MountRegion { document: cx.document(), root, dom: cx.dom_handle(), host: cx.host_handle() });
+        // These are editing semantics, not application chrome. Keep them owned
+        // by the Rust root across JS generations; application CSS may override.
+        let host = cx.host_handle();
+        host.install_stylesheet("zgui-js-controls", "field { white-space: pre; } editor { white-space: pre-wrap; }");
+        self.0.borrow_mut().push(MountRegion { document: cx.document(), root, dom: cx.dom_handle(), host });
         RootAnchor(root)
     }
     fn rebuild(self, _state: &mut RootAnchor, _cx: &mut BuildCx<'_>) {}
