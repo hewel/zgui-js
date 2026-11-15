@@ -1,7 +1,7 @@
-# @zgui/ui
+# @hewel/zgui
 
-Native TSX components and reactive primitives for the zgui host. Use the package's
-`tsconfig.native.json` and `@zgui/ui` JSX import source; these are native nodes,
+Native TSX components and reactive primitives for the zgui-js host. Use the package's
+`tsconfig.native.json` and `@hewel/zgui` JSX import source; these are native nodes,
 not browser elements. `renderApp` owns the mounted subtree and returns its
 idempotent disposer.
 
@@ -21,7 +21,7 @@ typechecking does not acquire browser or Node globals.
 `<Image src="assets/icon.png" />` and intrinsic `<image src="assets/icon.png" />`
 use the production native image loader, including intrinsic sizing, decode demand,
 device-scale variants and GPU attachment. Import `Image` and `ImageProps` from
-`@zgui/ui`. A reactive `src` change retires the previous request; null or undefined
+`@hewel/zgui`. A reactive `src` change retires the previous request; null or undefined
 clears it. Images do not accept children.
 
 Live and preview packages resolve image sources as exact manifest-declared asset
@@ -44,7 +44,7 @@ Offscreen source changes may remain decoded but unuploaded until brought into vi
 ## Native text controls
 
 ```tsx
-import { TextField, TextArea, createSignal } from "@zgui/ui";
+import { TextField, TextArea, createSignal } from "@hewel/zgui";
 
 function Form() {
   const [name, setName] = createSignal("A中B");

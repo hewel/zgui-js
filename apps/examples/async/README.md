@@ -1,7 +1,7 @@
 # Async status
 
 Build with `pnpm build --app async`, or develop with `pnpm dev --app async`.
-The app uses `@zgui/ui` lifecycle hooks and public scheduling globals. No input
+The app uses `@hewel/zgui` lifecycle hooks and public scheduling globals. No input
 or harness call is needed after mounting.
 
 Each status is a separate native text node. Initial text is:

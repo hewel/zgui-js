@@ -8,7 +8,7 @@ test("services defer host lookup and preserve the host request, receiver and syn
       configurable: true,
       get() { throw new Error("Host must not be accessed during module evaluation"); },
     });
-    const { readTextAsset } = await import("@zgui/services");
+    const { readTextAsset } = await import("@hewel/zgui-services");
     let cancellations = 0;
     const request = { promise: Promise.resolve("text"), cancel() { cancellations++; } };
     const failure = new Error("undeclared asset");

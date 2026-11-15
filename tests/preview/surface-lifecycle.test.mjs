@@ -32,8 +32,8 @@ test("surface recreation retires ownership and rebinds input, captures and fixtu
     extends: path.join(workspaceRoot, "packages/ui/tsconfig.native.json"), include: ["src/**/*.tsx"],
   }));
   await writeFile(path.join(app, "src/main.tsx"), `
-    import { Button, createSignal, renderApp, type NativeNode } from "@zgui/ui";
-    import { readTextAsset } from "@zgui/services";
+    import { Button, createSignal, renderApp, type NativeNode } from "@hewel/zgui";
+    import { readTextAsset } from "@hewel/zgui-services";
     export const hostApiVersion = 1;
     export function mount(root: NativeNode) {
       let retired = false;

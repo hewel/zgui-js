@@ -1,7 +1,7 @@
-import { Show, createSignal, onCleanup, onMount, renderApp } from "@zgui/ui";
-import type { NativeNode } from "@zgui/ui";
-import { readTextAsset } from "@zgui/services";
-import type { HostRequest } from "@zgui/services";
+import { Show, createSignal, onCleanup, onMount, renderApp } from "@hewel/zgui";
+import type { NativeNode } from "@hewel/zgui";
+import { readTextAsset } from "@hewel/zgui-services";
+import type { HostRequest } from "@hewel/zgui-services";
 
 function AsyncStatus() {
   const [timerStatus, setTimerStatus] = createSignal("Timer: pending");

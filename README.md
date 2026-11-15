@@ -2,7 +2,9 @@
 
 **Native TSX applications powered by zgui, QuickJS, and Solid.**
 
-zgui-js is an experimental native UI host. Applications are written in TypeScript and TSX, use Solid's reactive model through `@zgui/ui`, and run in an embedded QuickJS runtime via rquickjs. A Rust host owns the native UI tree, styling, layout, rendering, input, asynchronous services, and application lifecycle.
+zgui-js is an experimental native UI host. Applications are written in TypeScript and TSX, use Solid's reactive model through `@hewel/zgui`, and run in an embedded QuickJS runtime via rquickjs. A Rust host owns the native UI tree, styling, layout, rendering, input, asynchronous services, and application lifecycle.
+
+zgui-js is independently maintained and is not an official zgui project or affiliated with its maintainers.
 
 There is **no WebView and no browser DOM**. The repository also includes an offscreen preview system that uses the production application package, JavaScript runtime, UI bridge, and native renderer for scenario-based screenshots, assertions, and image comparisons.
 
@@ -77,10 +79,10 @@ pnpm preview
 `pnpm preview` builds the app and host, then captures an offscreen native frame;
 it is not a browser preview server.
 
-The `zgui` executable also accepts an application directory:
-`zgui dev /path/to/my-app`. Applications need `src/main.tsx`, `tsconfig.json`,
-their SDK dependencies, and `@zgui/build` for the CLI. No example-name allowlist
-is required. `zgui --help` lists options; root commands default to `counter`.
+The `zgui-js` executable also accepts an application directory:
+`zgui-js dev /path/to/my-app`. Applications need `src/main.tsx`, `tsconfig.json`,
+their SDK dependencies, and `@hewel/zgui-build` for the CLI. No example-name allowlist
+is required. `zgui-js --help` lists options; root commands default to `counter`.
 
 Development uses a persistent Rolldown watcher and a per-compiler Babel/Solid
 transform cache. [Rolldown 1.3.2 still rescans the module graph](https://github.com/rolldown/rolldown/blob/v1.3.2/crates/rolldown_watcher/src/watch_task.rs#L122-L123); unchanged source
@@ -166,10 +168,10 @@ See [Preview implementation and verification](docs/development/preview-verificat
 
 ## Application model
 
-- Import native components and reactive primitives from `@zgui/ui`. Native nodes, events, and styles are not HTML or DOM APIs.
+- Import native components and reactive primitives from `@hewel/zgui`. Native nodes, events, and styles are not HTML or DOM APIs.
 - The application entry point is `src/main.tsx`. It exports `hostApiVersion = 1` and `mount(root)`; `mount` returns the disposer supplied by `renderApp`. See the [counter source](apps/examples/counter/src/main.tsx).
 - Optional `src/app.css` is packaged separately. Files under `assets/` are copied into the package and declared in its manifest; the host verifies and loads only declared resources.
-- `@zgui/services` exposes `readTextAsset`, `HostRequest`, and `HostServiceError`. Start work from mount, lifecycle, or event callbacks, and cancel requests, timers, and frame callbacks during cleanup.
+- `@hewel/zgui-services` exposes `readTextAsset`, `HostRequest`, and `HostServiceError`. Start work from mount, lifecycle, or event callbacks, and cancel requests, timers, and frame callbacks during cleanup.
 - The JavaScript environment does not provide `window`, `document`, `fetch`, `process`, or `setInterval`. Supported native styles are a deliberately bounded subset, not full browser CSS.
 
 For API contracts, see the [UI SDK guide](packages/ui/README.md) and [host services guide](packages/services/README.md).

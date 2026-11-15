@@ -1,10 +1,10 @@
 {
-  "name": "@zgui/build",
+  "name": "@hewel/zgui-build",
   "version": "0.1.0",
   "private": true,
   "type": "module",
   "bin": {
-    "zgui": "./src/cli.mjs"
+    "zgui-js": "./src/cli.mjs"
   },
   "dependencies": {
     "@babel/core": "7.29.13",

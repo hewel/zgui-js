@@ -1,5 +1,5 @@
-import { Button, TextField, renderApp } from "@zgui/ui";
-import type { NativeNode } from "@zgui/ui";
+import { Button, TextField, renderApp } from "@hewel/zgui";
+import type { NativeNode } from "@hewel/zgui";
 export const hostApiVersion = 1;
 export function mount(root: NativeNode): () => void {
   return renderApp(() => <column>

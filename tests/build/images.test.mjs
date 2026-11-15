@@ -11,12 +11,12 @@ test("Image forwards reactive src replacements/clears and rejects lazy child spr
   await mkdir(path.join(directory, "src"));
   await writeFile(path.join(directory, "package.json"), '{"type":"module"}');
   await writeFile(path.join(directory, "tsconfig.json"), JSON.stringify({
-    compilerOptions: { target: "ES2022", module: "ESNext", moduleResolution: "Bundler", lib: ["ES2022"], types: [], strict: true, noEmit: true, jsx: "preserve", jsxImportSource: "@zgui/ui" }, include: ["src"],
+    compilerOptions: { target: "ES2022", module: "ESNext", moduleResolution: "Bundler", lib: ["ES2022"], types: [], strict: true, noEmit: true, jsx: "preserve", jsxImportSource: "@hewel/zgui" }, include: ["src"],
   }));
   await writeFile(path.join(directory, "src/main.tsx"), `
-    import { Image, createSignal } from "@zgui/ui";
-    import type { NativeNode } from "@zgui/ui";
-    import { mergeProps, render } from "@zgui/ui/renderer";
+    import { Image, createSignal } from "@hewel/zgui";
+    import type { NativeNode } from "@hewel/zgui";
+    import { mergeProps, render } from "@hewel/zgui/renderer";
     export const hostApiVersion = 1;
     export function mount(root: NativeNode) { return render(() => undefined, root); }
     export function probe(root: NativeNode) {

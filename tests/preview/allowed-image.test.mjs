@@ -31,8 +31,8 @@ test("a real explicitly allowed pending image remains a valid comparison capture
     extends: path.join(workspaceRoot, "packages/ui/tsconfig.native.json"), include: ["src/**/*.tsx"],
   }));
   await writeFile(path.join(app, "src/main.tsx"), `
-    import { Image, type NativeNode } from "@zgui/ui";
-    import { render } from "@zgui/ui/renderer";
+    import { Image, type NativeNode } from "@hewel/zgui";
+    import { render } from "@hewel/zgui/renderer";
     export const hostApiVersion = 1;
     export function mount(root: NativeNode) {
       return render(() => <Image src="assets/red.png" style={{ width: "64px", height: "16px" }} />, root);

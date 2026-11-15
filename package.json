@@ -20,8 +20,8 @@
     "smoke": "node packages/build/src/cli.mjs smoke && node packages/build/src/check-smoke.mjs"
   },
   "devDependencies": {
-    "@zgui/services": "workspace:*",
-    "@zgui/ui": "workspace:*",
+    "@hewel/zgui-services": "workspace:*",
+    "@hewel/zgui": "workspace:*",
     "solid-js": "1.9.19",
     "typescript": "7.0.2"
   }

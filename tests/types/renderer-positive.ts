@@ -1,10 +1,10 @@
 import {
   render, effect, memo, createComponent, createElement, createTextNode,
   insertNode, insert, spread, setProp, mergeProps, use,
-} from "@zgui/ui/renderer";
-import "@zgui/ui/runtime-globals";
-import type { NativeChild, NativeNode } from "@zgui/ui";
-import type { JSX } from "@zgui/ui/jsx-runtime";
+} from "@hewel/zgui/renderer";
+import "@hewel/zgui/runtime-globals";
+import type { NativeChild, NativeNode } from "@hewel/zgui";
+import type { JSX } from "@hewel/zgui/jsx-runtime";
 
 export function helpers(root: NativeNode): () => void {
   const node = createElement("column");

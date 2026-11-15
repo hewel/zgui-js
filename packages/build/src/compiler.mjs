@@ -38,7 +38,7 @@ export function compilerOptions(entry, { root, appDirectory = path.dirname(entry
         const transformed = await babelTransform(source, {
           filename, babelrc: false, configFile: false, sourceMaps: true,
           presets: [
-            [solidPreset, { generate: "universal", moduleName: "@zgui/ui/renderer", hydratable: false }],
+            [solidPreset, { generate: "universal", moduleName: "@hewel/zgui/renderer", hydratable: false }],
             [typescriptPreset, { onlyRemoveTypeImports: true, allExtensions: true, isTSX: /\.tsx$/.test(filename) }],
           ],
         });

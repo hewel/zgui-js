@@ -1,5 +1,5 @@
-import { For, Index, Show, batch, createSignal, onCleanup, renderApp } from "@zgui/ui";
-import type { NativeNode } from "@zgui/ui";
+import { For, Index, Show, batch, createSignal, onCleanup, renderApp } from "@hewel/zgui";
+import type { NativeNode } from "@hewel/zgui";
 
 type Item = { id: string; title: string };
 let next: (() => void) | undefined;

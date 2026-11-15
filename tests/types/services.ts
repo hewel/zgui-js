@@ -1,5 +1,5 @@
-import { readTextAsset } from "@zgui/services";
-import type { HostRequest, HostServiceError } from "@zgui/services";
+import { readTextAsset } from "@hewel/zgui-services";
+import type { HostRequest, HostServiceError } from "@hewel/zgui-services";
 
 const request: HostRequest<string> = readTextAsset("assets/message.txt");
 const promise: Promise<string> = request.promise;

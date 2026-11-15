@@ -1,16 +1,16 @@
 {
-  "name": "@zgui/example-lists",
+  "name": "@hewel/zgui-js-example-lists",
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "zgui dev",
-    "build": "zgui build",
-    "preview": "zgui preview"
+    "dev": "zgui-js dev",
+    "build": "zgui-js build",
+    "preview": "zgui-js preview"
   },
   "devDependencies": {
-    "@zgui/build": "workspace:*"
+    "@hewel/zgui-build": "workspace:*"
   },
   "dependencies": {
-    "@zgui/ui": "workspace:*"
+    "@hewel/zgui": "workspace:*"
   }
 }

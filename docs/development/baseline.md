@@ -31,7 +31,7 @@ below is retained and does not describe the currently shipped API or test suite.
 
 The Fontique patch is selected deliberately for parity with the audited upstream performance implementation; it is not presented as necessary for correctness. `pnpm-lock.yaml` and `Cargo.lock` record the resolved graphs. Phase 0 graph inspection confirmed patched Fontique 0.11.1 and rquickjs `std`; Phase 1 deliberately added `macro`.
 
-TypeScript is pinned to 7.0.2 in both the root and `@zgui/build` manifests. Its package root no longer exposes the legacy compiler API. Workspace checks and one-shot application builds invoke the installed package's `bin/tsc` synchronously through the current Node executable with `--project … --noEmit`; development uses a cancellable asynchronous child. Compiler diagnostics remain the thrown error text. The CLI is resolved from `@zgui/build`'s local dependency, never from the shell or a global `tsc`. Babel/Rolldown perform runtime compilation; typechecking does not emit JavaScript or change native consumers' ES2022-only, DOM/Node-free environment.
+TypeScript is pinned to 7.0.2 in both the root and `@hewel/zgui-build` manifests. Its package root no longer exposes the legacy compiler API. Workspace checks and one-shot application builds invoke the installed package's `bin/tsc` synchronously through the current Node executable with `--project … --noEmit`; development uses a cancellable asynchronous child. Compiler diagnostics remain the thrown error text. The CLI is resolved from `@hewel/zgui-build`'s local dependency, never from the shell or a global `tsc`. Babel/Rolldown perform runtime compilation; typechecking does not emit JavaScript or change native consumers' ES2022-only, DOM/Node-free environment.
 
 ## Commands currently implemented
 
@@ -63,7 +63,7 @@ cargo test -p native-host --test native_timer
 
 `--smoke-module` executes the bundled Solid fixture in the actual embedded engine without creating a window. `--exit-after-ms` requests orderly event-loop shutdown, for native integration checks. The native baseline creates a dedicated Rust-owned mount region, installs a HostBinding, creates/updates native text from JavaScript, and schedules a native one-shot timer and an owned background completion with an explicit platform wake. These are integration harness behaviors, not the public SDK.
 
-The build uses browser/production Solid export conditions and Babel's Universal preset before Rolldown. Graph validation rejects unresolved imports and browser/server renderers and verifies one production reactive Solid runtime. Packages include composed source maps and build metadata with explicit module/chunk graphs. Development uses a persistent Rolldown watcher with source-keyed Babel/Solid transform caching; Rolldown 1.3.2's public watcher still rescans the module graph. Type checking gates atomic publication. `dev` owns Cargo preparation, the builder, and a single native host; `preview --watch` owns the builder and offscreen supervisor instead. The separate smoke fixture imports upstream Solid declarations; actual native applications use `@zgui/ui`'s ES2022-only declaration boundary without DOM or Node globals.
+The build uses browser/production Solid export conditions and Babel's Universal preset before Rolldown. Graph validation rejects unresolved imports and browser/server renderers and verifies one production reactive Solid runtime. Packages include composed source maps and build metadata with explicit module/chunk graphs. Development uses a persistent Rolldown watcher with source-keyed Babel/Solid transform caching; Rolldown 1.3.2's public watcher still rescans the module graph. Type checking gates atomic publication. `dev` owns Cargo preparation, the builder, and a single native host; `preview --watch` owns the builder and offscreen supervisor instead. The separate smoke fixture imports upstream Solid declarations; actual native applications use `@hewel/zgui`'s ES2022-only declaration boundary without DOM or Node globals.
 
 ### Managed development verification
 
@@ -87,7 +87,7 @@ The build uses browser/production Solid export conditions and Babel's Universal 
 
 ## Native property and event contract
 
-`@zgui/ui` exposes canonical native `class`, `id`, `title`, `tabIndex`, `disabled`, `role`, `ariaLabel`, `ariaDescription`, `style`, and `--custom` properties. Null/undefined clear values. Object styles accept the curated kebab-case keys declared in `NativeStyleName`, with string values and explicit units; CSS strings use native parser recovery. HTML aliases and listener-option tuples are rejected.
+`@hewel/zgui` exposes canonical native `class`, `id`, `title`, `tabIndex`, `disabled`, `role`, `ariaLabel`, `ariaDescription`, `style`, and `--custom` properties. Null/undefined clear values. Object styles accept the curated kebab-case keys declared in `NativeStyleName`, with string values and explicit units; CSS strings use native parser recovery. HTML aliases and listener-option tuples are rejected.
 
 `Button` uses native control defaults, not JS keyboard synthesis. Native event props accept a function or null/undefined; a `Capture` suffix selects capture. `onFocus`/`onBlur` subscribe to bubbling `focusin`/`focusout`. Snapshots retain owned data and opaque node wrappers; cancellation methods expire when the synchronous handler returns. Pointerdown cancellation suppresses that event's focus default, not a later independent pointerup activation; cancelling pointerup suppresses its activation default. Event timestamps are monotonic milliseconds; pointer IDs are decimal strings and text-selection offsets are UTF-8 bytes.
 
@@ -101,7 +101,7 @@ The host permits 1,024 scheduled/ready callbacks and 64 outstanding asset reques
 
 Each owner checkpoint interleaves completion, scheduled-callback, deferred-notification and Promise work one entry per class. A retained cursor resumes after deadline exhaustion, so a continuously ready source cannot starve another class's cancellation. Non-Promise classes allow 32 entries each and Promise pumping allows 256 attempts, sharing a 10 ms deadline; individual JS entries retain their interrupt limit. Remaining work explicitly wakes the owner. Preflight rejects timer/frame/service creation; teardown stops delivery, cancels registrations and releases persistent roots before destroying the engine.
 
-See [`@zgui/services`](../../packages/services/README.md) for the typed request API and cancellation contract. Console formatting is bounded and does not invoke application getters or `toString`.
+See [`@hewel/zgui-services`](../../packages/services/README.md) for the typed request API and cancellation contract. Console formatting is bounded and does not invoke application getters or `toString`.
 
 ## Disposal and full reload
 

@@ -166,12 +166,12 @@ importers:
 
   .:
     devDependencies:
-      '@zgui/services':
-        specifier: workspace:*
-        version: link:packages/services
-      '@zgui/ui':
+      '@hewel/zgui':
         specifier: workspace:*
         version: link:packages/ui
+      '@hewel/zgui-services':
+        specifier: workspace:*
+        version: link:packages/services
       solid-js:
         specifier: 1.9.19
         version: 1.9.19
@@ -181,44 +181,44 @@ importers:
 
   apps/examples/async:
     dependencies:
-      '@zgui/services':
-        specifier: workspace:*
-        version: link:../../../packages/services
-      '@zgui/ui':
+      '@hewel/zgui':
         specifier: workspace:*
         version: link:../../../packages/ui
+      '@hewel/zgui-services':
+        specifier: workspace:*
+        version: link:../../../packages/services
     devDependencies:
-      '@zgui/build':
+      '@hewel/zgui-build':
         specifier: workspace:*
         version: link:../../../packages/build
 
   apps/examples/counter:
     dependencies:
-      '@zgui/ui':
+      '@hewel/zgui':
         specifier: workspace:*
         version: link:../../../packages/ui
     devDependencies:
-      '@zgui/build':
+      '@hewel/zgui-build':
         specifier: workspace:*
         version: link:../../../packages/build
 
   apps/examples/editing:
     dependencies:
-      '@zgui/ui':
+      '@hewel/zgui':
         specifier: workspace:*
         version: link:../../../packages/ui
     devDependencies:
-      '@zgui/build':
+      '@hewel/zgui-build':
         specifier: workspace:*
         version: link:../../../packages/build
 
   apps/examples/lists:
     dependencies:
-      '@zgui/ui':
+      '@hewel/zgui':
         specifier: workspace:*
         version: link:../../../packages/ui
     devDependencies:
-      '@zgui/build':
+      '@hewel/zgui-build':
         specifier: workspace:*
         version: link:../../../packages/build
 

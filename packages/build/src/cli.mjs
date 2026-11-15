@@ -9,7 +9,7 @@ import { buildSmoke } from "./smoke.mjs";
 import { typecheckProject } from "./typecheck.mjs";
 import { watchApplication } from "./watch.mjs";
 
-const usage = `Usage: zgui <dev|build|preview> [DIRECTORY | --app NAME_OR_DIRECTORY] [options]
+const usage = `Usage: zgui-js <dev|build|preview> [DIRECTORY | --app NAME_OR_DIRECTORY] [options]
 
   dev       Build the native host, open the app, and reload on changes
   build     Type-check and publish an immutable application package
@@ -24,7 +24,7 @@ Application defaults to the current directory (counter at the repository root).
 
 Preview defaults to the repository profile, empty fixture, and initial-frame scenario.
 Output defaults to a fresh directory under target/. Graphics support is required.
-  zgui smoke            Build the compiler/runtime smoke fixture`;
+  zgui-js smoke         Build the compiler/runtime smoke fixture`;
 
 function parse(args) {
   const command = args.shift();
@@ -51,7 +51,7 @@ function parse(args) {
     flags.set(arg, value);
   }
   if (directory !== undefined && flags.has("--app")) throw new Error("Use DIRECTORY or --app, not both");
-  if (command === "smoke" && (directory !== undefined || flags.size)) throw new Error("zgui smoke takes no options");
+  if (command === "smoke" && (directory !== undefined || flags.size)) throw new Error("zgui-js smoke takes no options");
   if (flags.has("--exit-after-ms") && !/^[1-9][0-9]*$/.test(flags.get("--exit-after-ms"))) {
     throw new Error("--exit-after-ms requires a positive integer");
   }

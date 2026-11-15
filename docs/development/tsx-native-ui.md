@@ -8,7 +8,7 @@
 
 Build a native UI host in Rust using zgui for the retained UI tree, styling, layout, input, accessibility, and rendering; rquickjs for JavaScript execution; and a build-time TSX compiler for application code. The initial frontend uses Solid Universal through a project-owned SDK. The native bridge remains independent of Solid.
 
-This specification defines the implementation to build. Package names such as `@zgui/ui`, Rust types such as `UiSession`, and host functions described as proposed are project APIs to implement, not existing zgui or rquickjs APIs. Source-backed upstream APIs are identified separately. The dependency revisions below are an audited source baseline; integration acceptance requires the builds and tests in this document.
+This specification defines the implementation to build. Package names such as `@hewel/zgui`, Rust types such as `UiSession`, and host functions described as proposed are project APIs to implement, not existing zgui or rquickjs APIs. Source-backed upstream APIs are identified separately. The dependency revisions below are an audited source baseline; integration acceptance requires the builds and tests in this document.
 
 **Current scope:** This is a general-purpose UI library. Platform and
 window-manager support is determined by upstream zgui. The earlier niri service,
@@ -147,8 +147,8 @@ flowchart TB
         Session["native-host::Session: preflight, mount, checkpoint, shutdown"]
         subgraph VM["js-runtime: QuickJS-NG via rquickjs"]
             App["Compiled application and Solid reactivity"]
-            UI["@zgui/ui: Solid Universal renderer"]
-            SDK["@zgui/services: readTextAsset"]
+            UI["@hewel/zgui: Solid Universal renderer"]
+            SDK["@hewel/zgui-services: readTextAsset"]
             App --> UI
             App --> SDK
         end
@@ -186,7 +186,7 @@ Implementation entry points: [Session](../../crates/native-host/src/session.rs),
 | `crates/js-runtime/` | rquickjs ownership, bootstrap, jobs, errors, interruption |
 | `crates/ui-bridge/` | Node handles, topology, properties, events, native scheduling |
 | `crates/host-services/` | Typed application/system services and completion messages |
-| `packages/ui/` | Proposed `@zgui/ui` SDK, native JSX types, components |
+| `packages/ui/` | Proposed `@hewel/zgui` SDK, native JSX types, components |
 | `packages/ui/src/renderer/` | Solid Universal adapter and compiler helper exports |
 | `packages/build/` | Babel/Rolldown integration, package validation, managed development and watch mode |
 | `apps/examples/counter/` | First real TSX application |
@@ -232,7 +232,7 @@ Use short-lived interior-mutability borrows. A `UiSession` must not be implement
 
 Solid Universal provides a custom renderer interface and compiler output directed to that renderer. It fits a retained native tree without implementing a browser DOM.
 
-The public project SDK should expose a curated native API. Application code imports reactive primitives and native components from `@zgui/ui`; it should not need to understand rquickjs or zgui internals.
+The public project SDK should expose a curated native API. Application code imports reactive primitives and native components from `@hewel/zgui`; it should not need to understand rquickjs or zgui internals.
 
 This remains a replaceable frontend decision. The host API must not expose Solid owners or computations to Rust services. [S2]
 
@@ -276,7 +276,7 @@ const babelOptions = {
       "babel-preset-solid",
       {
         generate: "universal",
-        moduleName: "@zgui/ui/renderer",
+        moduleName: "@hewel/zgui/renderer",
         hydratable: false
       }
     ],
@@ -338,16 +338,16 @@ An ES2022 target controls syntax lowering; the actual bundle still needs executi
     "strict": true,
     "noEmit": true,
     "jsx": "preserve",
-    "jsxImportSource": "@zgui/ui"
+    "jsxImportSource": "@hewel/zgui"
   }
 }
 ~~~
 
-Publish a `@zgui/ui/jsx-runtime` declaration entry containing the native JSX namespace. Expose only supported tags and properties; a catch-all intrinsic-element index signature would conceal unsupported APIs and spelling errors.
+Publish a `@hewel/zgui/jsx-runtime` declaration entry containing the native JSX namespace. Expose only supported tags and properties; a catch-all intrinsic-element index signature would conceal unsupported APIs and spelling errors.
 
 Use a separate TypeScript configuration for build scripts that legitimately use Node APIs.
 
-The SDK's public type entry must declare the exact supported host globals, either directly or through an explicitly included `@zgui/ui/runtime-globals` declaration entry. With ES2022 libraries and types: [], logging and timer APIs are not automatically declared. Declare the implemented console, timer, frame-callback, and microtask signatures without importing DOM or Node ambient libraries.
+The SDK's public type entry must declare the exact supported host globals, either directly or through an explicitly included `@hewel/zgui/runtime-globals` declaration entry. With ES2022 libraries and types: [], logging and timer APIs are not automatically declared. Declare the implemented console, timer, frame-callback, and microtask signatures without importing DOM or Node ambient libraries.
 
 Solid's existing component and control-flow types reference its own DOM-oriented JSX definitions. Merely changing jsxImportSource is insufficient for a native public type boundary. Publish curated native declarations, including component/child/ref/control-flow types, and avoid leaking upstream DOM declarations through public reexports. The SDK implementation may use a separate typing configuration.
 
@@ -391,8 +391,8 @@ The build tool fills the real digest. Resolve resources relative to the package 
 Proposed application entry:
 
 ~~~tsx
-import { createSignal, renderApp, Button } from "@zgui/ui";
-import type { NativeNode } from "@zgui/ui";
+import { createSignal, renderApp, Button } from "@hewel/zgui";
+import type { NativeNode } from "@hewel/zgui";
 
 function App() {
   const [count, setCount] = createSignal(0);
@@ -1242,7 +1242,7 @@ Mixed text/elements and empty anchors behave correctly. A move preserves native 
 
 **Deliverables**
 
-- The proposed @zgui/ui/renderer helper exports.
+- The proposed @hewel/zgui/renderer helper exports.
 - Babel Universal transformation and Rolldown bundling.
 - Native JSX types and a curated reactive API.
 - renderApp with coordinated reactive/native disposal.
@@ -1498,7 +1498,7 @@ Implement the attached zgui, rquickjs, and TSX Development Specification.
 
 Use zgui as the native retained UI engine and rquickjs as the JavaScript
 embedding layer. Use the proposed Solid Universal frontend and project-owned
-@zgui/ui SDK for the first implementation. Keep the native bridge independent
+@hewel/zgui SDK for the first implementation. Keep the native bridge independent
 of Solid.
 
 Start by reading the repository instructions and implementing Phase 0.

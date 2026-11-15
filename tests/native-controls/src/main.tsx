@@ -1,5 +1,5 @@
-import { Button, createSignal, renderApp } from "@zgui/ui";
-import type { NativeEvent, NativeNode } from "@zgui/ui";
+import { Button, createSignal, renderApp } from "@hewel/zgui";
+import type { NativeEvent, NativeNode } from "@hewel/zgui";
 
 let nextMode: (() => void) | undefined;
 

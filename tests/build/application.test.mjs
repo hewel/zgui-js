@@ -20,7 +20,7 @@ async function externalApplication(t) {
   await writeFile(path.join(directory, "tsconfig.json"), JSON.stringify({
     extends: path.join(workspaceRoot, "packages/ui/tsconfig.native.json"), include: ["src"],
   }));
-  await writeFile(path.join(directory, "src/main.tsx"), `import { renderApp, type NativeNode } from "@zgui/ui";
+  await writeFile(path.join(directory, "src/main.tsx"), `import { renderApp, type NativeNode } from "@hewel/zgui";
 export const hostApiVersion = 1;
 export function mount(root: NativeNode) { return renderApp(() => <text>External application</text>, root); }
 `);

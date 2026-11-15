@@ -1,8 +1,8 @@
 import {
   Image, Button, TextField, TextArea, For, Index, Show, batch, createEffect, createMemo, createSignal,
   onCleanup, onMount, renderApp, untrack,
-} from "@zgui/ui";
-import type { Component, NativeChild, NativeNode, NativeTextControlProps, ParentComponent, TextFieldProps, TextAreaProps } from "@zgui/ui";
+} from "@hewel/zgui";
+import type { Component, NativeChild, NativeNode, NativeTextControlProps, ParentComponent, TextFieldProps, TextAreaProps } from "@hewel/zgui";
 
 const Greeting: Component<{ name: string }> = props => <text>{props.name}</text>;
 const Container: ParentComponent = props => <box>{props.children}</box>;

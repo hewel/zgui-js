@@ -1,6 +1,6 @@
 # Native services
 
-`@zgui/services` is separate from `@zgui/ui`. Its implementation and public types
+`@hewel/zgui-services` is separate from `@hewel/zgui`. Its implementation and public types
 share strict TypeScript source using ES2022 only; no browser or Node globals are
 imported. This private workspace package exports that source directly, and the
 application builder erases types before QuickJS execution. Importing the module
@@ -10,7 +10,7 @@ events, not module evaluation/preflight or disposal. Cleanup may cancel existing
 work.
 
 ```ts
-import { readTextAsset } from "@zgui/services";
+import { readTextAsset } from "@hewel/zgui-services";
 
 const request = readTextAsset("assets/message.txt");
 request.promise.then(text => console.log(text), error => console.error(error));

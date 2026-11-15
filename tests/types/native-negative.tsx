@@ -1,5 +1,5 @@
-import { Image, TextField, TextArea, renderApp } from "@zgui/ui";
-import type { NativeNode } from "@zgui/ui";
+import { Image, TextField, TextArea, renderApp } from "@hewel/zgui";
+import type { NativeNode } from "@hewel/zgui";
 
 // @ts-expect-error Browser document is not a host global.
 document.createElement("div");
@@ -74,9 +74,9 @@ const fabricated: NativeNode = {};
 // @ts-expect-error Child object literals are not renderable.
 renderApp(() => ({ arbitrary: "object" }), fabricated);
 // @ts-expect-error Only the curated reactive API is public.
-import { createDeferred } from "@zgui/ui";
+import { createDeferred } from "@hewel/zgui";
 // @ts-expect-error Upstream DOM components are not exported.
-import type { HTMLAttributes } from "@zgui/ui";
+import type { HTMLAttributes } from "@hewel/zgui";
 // @ts-expect-error Reactive roots are owned by renderApp, not the application API.
-import { createRoot } from "@zgui/ui";
+import { createRoot } from "@hewel/zgui";
 void [browserElement, browserEvent, pointerEvent, html, editing, image, property, className, handler, ref, id, createDeferred];

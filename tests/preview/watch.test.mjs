@@ -10,8 +10,8 @@ import { watchApplication } from "../../packages/build/src/watch.mjs";
 
 const json = async file => JSON.parse(await readFile(file, "utf8"));
 const source = (label, blocked = false) => `
-import { Button, createSignal, renderApp } from "@zgui/ui";
-import type { NativeNode } from "@zgui/ui";
+import { Button, createSignal, renderApp } from "@hewel/zgui";
+import type { NativeNode } from "@hewel/zgui";
 export const hostApiVersion = 1;
 export function mount(root: NativeNode) {
   return renderApp(() => {

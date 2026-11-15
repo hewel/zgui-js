@@ -1,5 +1,5 @@
-import { Button, TextArea, TextField, createSignal, renderApp } from "@zgui/ui";
-import type { NativeNode, NativeValueEvent } from "@zgui/ui";
+import { Button, TextArea, TextField, createSignal, renderApp } from "@hewel/zgui";
+import type { NativeNode, NativeValueEvent } from "@hewel/zgui";
 
 function Editing() {
   const [fieldValue, setFieldValue] = createSignal("A中B");

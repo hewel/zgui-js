@@ -1,17 +1,17 @@
 {
-  "name": "@zgui/example-async",
+  "name": "@hewel/zgui-js-example-async",
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "zgui dev",
-    "build": "zgui build",
-    "preview": "zgui preview"
+    "dev": "zgui-js dev",
+    "build": "zgui-js build",
+    "preview": "zgui-js preview"
   },
   "devDependencies": {
-    "@zgui/build": "workspace:*"
+    "@hewel/zgui-build": "workspace:*"
   },
   "dependencies": {
-    "@zgui/ui": "workspace:*",
-    "@zgui/services": "workspace:*"
+    "@hewel/zgui": "workspace:*",
+    "@hewel/zgui-services": "workspace:*"
   }
 }

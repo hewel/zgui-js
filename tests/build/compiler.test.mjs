@@ -14,8 +14,8 @@ import { compilerOptions, outputOptions, compilationResult } from "../../package
 
 const require = createRequire(new URL("../../packages/build/package.json", import.meta.url));
 const { TraceMap, originalPositionFor } = require("@jridgewell/trace-mapping");
-const validEntry = `import { createSignal, renderApp } from "@zgui/ui";
-import type { NativeNode } from "@zgui/ui";
+const validEntry = `import { createSignal, renderApp } from "@hewel/zgui";
+import type { NativeNode } from "@hewel/zgui";
 export const hostApiVersion = 1;
 function App() {
   const [count] = createSignal(0);
@@ -33,7 +33,7 @@ async function fixture(t) {
   await mkdir(path.join(directory, "src"));
   await writeFile(path.join(directory, "package.json"), '{"type":"module"}\n');
   await writeFile(path.join(directory, "tsconfig.json"), JSON.stringify({
-    compilerOptions: { target: "ES2022", module: "ESNext", moduleResolution: "Bundler", lib: ["ES2022"], types: [], strict: true, noEmit: true, jsx: "preserve", jsxImportSource: "@zgui/ui" },
+    compilerOptions: { target: "ES2022", module: "ESNext", moduleResolution: "Bundler", lib: ["ES2022"], types: [], strict: true, noEmit: true, jsx: "preserve", jsxImportSource: "@hewel/zgui" },
     include: ["src"],
   }));
   await writeFile(path.join(directory, "src/main.tsx"), validEntry);
@@ -139,7 +139,7 @@ test("real TSX bundles have one reactive runtime, composed maps, resources, and 
 
 test("native services bundle lazily with one Solid runtime and declared text assets", async t => {
   const directory = await fixture(t);
-  const source = `import { readTextAsset } from "@zgui/services";\n` + validEntry.replace(
+  const source = `import { readTextAsset } from "@hewel/zgui-services";\n` + validEntry.replace(
     "return renderApp(() => <App />, root);",
     'const request = readTextAsset("assets/message.txt"); request.cancel(); return renderApp(() => <App />, root);',
   );
@@ -432,9 +432,9 @@ test("async development typechecking preserves diagnostics and reaps cancellatio
 test("text controls reject children introduced by a reactive spread before evaluating them", async t => {
   const directory = await fixture(t);
   await writeFile(path.join(directory, "src/main.tsx"), `
-    import { TextField, TextArea, createSignal } from "@zgui/ui";
-    import type { NativeNode } from "@zgui/ui";
-    import { mergeProps, render } from "@zgui/ui/renderer";
+    import { TextField, TextArea, createSignal } from "@hewel/zgui";
+    import type { NativeNode } from "@hewel/zgui";
+    import { mergeProps, render } from "@hewel/zgui/renderer";
     export const hostApiVersion = 1;
     export function mount(root: NativeNode) { return render(() => undefined, root); }
     export function probe(root: NativeNode, multiline: boolean) {

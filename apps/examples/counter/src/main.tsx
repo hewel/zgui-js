@@ -1,5 +1,5 @@
-import { Button, createMemo, createSignal, onCleanup, renderApp } from "@zgui/ui";
-import type { NativeNode } from "@zgui/ui";
+import { Button, createMemo, createSignal, onCleanup, renderApp } from "@hewel/zgui";
+import type { NativeNode } from "@hewel/zgui";
 
 let increment: (() => void) | undefined;
 
