@@ -81,13 +81,15 @@ impl Mark {
 /// fragment by the emit walk.
 #[derive(Debug, Default)]
 pub struct Plan {
-    /// The box whose lines carry the marks, and nothing when there are none. Two boxes that hold
+    /// The box whose lines carry the marks or logical caret. Two boxes that hold
     /// the same text share one paragraph, so the paragraph alone names both.
     owner: Option<zgui_dom::side::BoxKey>,
-    /// The paragraph the marks belong to, and nothing when there are none.
+    /// The paragraph the marks and logical caret belong to.
     paragraph: Option<ParagraphId>,
     /// The rectangles, in the order they were computed.
     marks: Vec<Mark>,
+    /// The insertion point, retained even while its painted mark is blinked off.
+    caret: Option<Mark>,
     /// A fingerprint of the whole plan, which is what stops a blink from being replayed.
     fingerprint: u64,
 }
@@ -143,6 +145,27 @@ impl Plan {
             hasher.finish() | 1
         };
         self
+    }
+
+    /// The logical caret on one line, independent of paint visibility or selection bands.
+    pub(crate) fn caret_rect_of(
+        &self,
+        owner: zgui_dom::side::BoxKey,
+        paragraph: ParagraphId,
+        line: u16,
+        origin: Point<DevicePx, Device>,
+    ) -> Option<Rect<DevicePx, Device>> {
+        if self.owner != Some(owner) || self.paragraph != Some(paragraph) {
+            return None;
+        }
+        let caret = self.caret.filter(|caret| caret.line == line)?;
+        Some(Rect::new(
+            Point::new(
+                DevicePx(origin.x.0 + caret.offset.x.0),
+                DevicePx(origin.y.0 + caret.offset.y.0),
+            ),
+            caret.size,
+        ))
     }
 
     /// Every absolute rectangle the plan would draw for one line, for a caller checking the plan
@@ -282,10 +305,9 @@ impl Carets {
 
 /// Builds the plan for one editable element's selection.
 ///
-/// `visible` is the blink phase: the caret is left out entirely while it is off, rather than drawn
-/// transparent, so that a frame in the dark phase pushes no primitive at all. The selection is not
-/// blinked — it marks what a keystroke would replace, and marking that intermittently would be a
-/// selection that looks like it comes and goes.
+/// `visible` is the blink phase: the caret's painted mark is left out while it is off,
+/// so a dark frame pushes no caret primitive. Its logical geometry remains available
+/// for IME placement. Selection bands do not blink.
 pub fn plan_for(
     located: &Located,
     selection: zgui_edit::Selection,
@@ -309,11 +331,9 @@ pub fn plan_for(
             layer: HighlightLayer::Behind,
         });
     }
-    if visible
-        && let Some(caret) = located.caret(selection.focus, selection.affinity)
-        && let Some(origin) = located.line_origin(caret.line)
-    {
-        marks.push(Mark {
+    let caret = located.caret(selection.focus, selection.affinity).and_then(|caret| {
+        let origin = located.line_origin(caret.line)?;
+        Some(Mark {
             line: caret.line as u16,
             offset: Point::new(
                 DevicePx(caret.origin.x.0 - origin.x.0),
@@ -322,12 +342,17 @@ pub fn plan_for(
             size: Size::new(DevicePx(caret_width(scale)), DevicePx(caret.height.0)),
             color,
             layer: HighlightLayer::InFront,
-        });
+        })
+    });
+    if visible && let Some(caret) = caret {
+        marks.push(caret);
     }
+    let has_geometry = !marks.is_empty() || caret.is_some();
     Plan {
-        owner: (!marks.is_empty()).then_some(located.owner),
-        paragraph: (!marks.is_empty()).then_some(located.paragraph),
+        owner: has_geometry.then_some(located.owner),
+        paragraph: has_geometry.then_some(located.paragraph),
         marks,
+        caret,
         fingerprint: 0,
     }
     .seal()

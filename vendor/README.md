@@ -31,6 +31,46 @@ Cancellation now removes the entry in place with `BinaryHeap::retain`, immediate
 
 Regression checks in `timer::tests` cover 4,096 long-deadline cancellations without polling, immediate captured-resource release, repeated cancellation, and cancellation of a rearmed repeat.
 
+## Repeated IME preedit
+
+Upstream `Editor::preedit` returns a splice even when the provisional text has
+not changed. The runtime treated every splice as a value update, so repeated
+preedit notifications (including cursor-only updates from an IME such as fcitx5)
+could repeatedly dispatch `input` and feed the same value back through a controlled
+binding.
+
+The runtime compares incoming preedit bytes with the active composition without
+allocating a text copy. Identical text updates only the selection; it does not
+rewrite document text or dispatch another `input`. Changed provisional text,
+cancellation that removes provisional text, and final commits still announce
+their values. This is not a commit-only input policy.
+
+Regression gate:
+`cargo test --manifest-path vendor/zgui-runtime/Cargo.toml --test controlled --test value --test editing`.
+The headless native-window tests cover repeated and cursor-only preedit, UTF-8
+and multiline text, controlled echoes, identical-text commit, undo, cancellation,
+and resumed typing. They do not automate a live fcitx5 session.
+
+## IME positioning across caret blink
+
+`Window::caret_rect` previously read the painted highlight rectangles. While the
+caret was blinked off, it returned no rectangle (or a selection band), so IME
+positioning fell back to the field box instead of the insertion point. Alternating
+blink phases therefore sent different cursor rectangles to Wayland even without
+typing, allowing candidate-window repositioning and preedit replies to feed back.
+
+The caret plan now retains logical insertion geometry independently of its painted
+marks. IME positioning uses only that geometry, transformed with the current line
+fragment; hidden phases still paint no caret. Actual cursor movement continues to
+update the candidate position.
+
+Regression gate:
+`cargo test --manifest-path vendor/zgui-runtime/Cargo.toml --test controlled --test caret --test editing --test secure`.
+The native headless regression advances four blink phases during composition,
+with and without a selected preedit range, and checks stable surface IME geometry,
+continued visual blinking, and subsequent cursor movement. Live fcitx5 popup
+rendering remains a manual verification boundary.
+
 ## Primary layer configuration
 
 `Runtime::primary_surface_attributes_mut` exposes the retained primary surface

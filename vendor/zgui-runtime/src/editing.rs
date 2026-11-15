@@ -432,7 +432,36 @@ impl Editors {
         if !Self::is_editable(document, node) {
             return Edited::default();
         }
-        self.deliver(document, node, |editor| editor.ime(event))
+        self.deliver(document, node, |editor| {
+            if let ImeEvent::Preedit { text, cursor } = event
+                && let Some(composition) = editor.composition()
+                && composition.range.len() == text.len()
+            {
+                let buffer = editor.buffer();
+                let start = buffer.position_of(composition.range.start);
+                let paragraphs = buffer.paragraphs();
+                let unchanged = paragraphs[start.paragraph][start.offset..]
+                    .bytes()
+                    .chain(paragraphs[start.paragraph + 1..].iter().flat_map(|paragraph| {
+                        core::iter::once(b'\n').chain(paragraph.bytes())
+                    }))
+                    .take(text.len())
+                    .eq(text.as_str().bytes());
+                if unchanged {
+                    // IMEs can resend the same preedit with a different cursor. Keep that
+                    // cursor without rewriting the document or feeding controlled owners
+                    // another input event for text they already hold.
+                    let selection = composition.caret_for(cursor.clone());
+                    editor.set_selection(selection);
+                    return Response {
+                        handled: true,
+                        selection: Some(editor.selection()),
+                        ..Response::default()
+                    };
+                }
+            }
+            editor.ime(event)
+        })
     }
 
     /// Finishes an element's composition on the text it is showing.

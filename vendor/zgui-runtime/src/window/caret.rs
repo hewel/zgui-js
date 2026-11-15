@@ -148,10 +148,10 @@ impl Window {
         self.carets.plan().caret_color()
     }
 
-    /// Where the caret is on the screen right now, for the surface's own sake.
+    /// Where the logical caret is on the screen, including while it is blinked off.
     ///
-    /// Used to tell an input method where to put its candidate window. Nothing when no caret is
-    /// planned, which is when there is nothing to place one beside.
+    /// Used to place an input method's candidate window. Nothing when no insertion
+    /// point can be laid out; selection bands never substitute for that point.
     ///
     /// On the device, through the coordinate system the line is in: a candidate window is placed by
     /// the compositor against the screen, so a rectangle in the paragraph's own space would open it
@@ -173,12 +173,11 @@ impl Window {
             let FragmentKind::Line { paragraph, line } = fragment.kind else {
                 continue;
             };
-            if let Some(rect) = plan
-                .rects_of(fragment.box_, paragraph, line, fragment.border_box.origin)
-                .last()
+            if let Some(rect) =
+                plan.caret_rect_of(fragment.box_, paragraph, line, fragment.border_box.origin)
             {
                 return Some(zgui_layout::fragment::transform::placed::onto_device(
-                    *rect,
+                    rect,
                     fragment.transform,
                     &placements,
                 ));

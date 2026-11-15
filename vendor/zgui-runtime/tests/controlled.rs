@@ -147,13 +147,8 @@ impl Script {
         let index = document.store().index_of(key).expect("still in the tree");
         let mut text = String::new();
         let mut child = document.store().core(index).first_child();
-        let mut first = true;
         while let Some(node) = child {
             if document.store().core(node).kind() == zgui_dom::NodeKind::Text {
-                if !first {
-                    text.push('\n');
-                }
-                first = false;
                 text.push_str(zgui_dom::text::text_of(document.store(), node).unwrap_or_default());
             }
             child = document.store().core(node).next_sibling();
@@ -459,6 +454,71 @@ fn the_echo_of_a_value_a_field_already_holds_leaves_the_caret_and_the_history_al
 }
 
 #[test]
+fn repeated_preedit_updates_the_caret_without_announcing_another_input() {
+    for text in ["ni", "你", "你\n好"] {
+        let mut script = controlled("ab", Owner::Verbatim);
+        script.press_named(NamedKey::End, KeyCode::End);
+        script.drain();
+        script.ime(ImeEvent::Enabled);
+        script.ime(ImeEvent::Preedit {
+            text: text.into(),
+            cursor: None,
+        });
+        let shown = format!("ab{text}");
+        let input = vec![Seen {
+            event: EventKind::Input,
+            kind: ValueChange::Input,
+            value: shown.clone(),
+        }];
+        assert_eq!(script.drain(), input);
+
+        for cursor in [None, Some(0..0), Some(text.len()..text.len())] {
+            let offset = 2 + cursor.as_ref().map_or(text.len(), |range| range.start);
+            script.ime(ImeEvent::Preedit {
+                text: text.into(),
+                cursor,
+            });
+            assert!(script.drain().is_empty(), "unchanged preedit emitted input");
+            assert_eq!(script.shown(), shown);
+            assert_eq!(script.caret(), Some(offset..offset));
+        }
+
+        // Committing identical text still ends composition and records one undo entry.
+        script.ime(ImeEvent::Commit(text.into()));
+        assert_eq!(script.drain(), input);
+        script.press(letter("z"), Modifiers::PRIMARY);
+        assert_eq!(script.shown(), "ab");
+        script.drain();
+
+        // The same text in a new composition is a real edit, not a cached duplicate.
+        script.ime(ImeEvent::Preedit {
+            text: text.into(),
+            cursor: None,
+        });
+        assert_eq!(script.drain(), input);
+        script.ime(ImeEvent::Preedit {
+            text: "".into(),
+            cursor: None,
+        });
+        assert_eq!(
+            script.drain(),
+            vec![Seen {
+                event: EventKind::Input,
+                kind: ValueChange::Input,
+                value: "ab".to_owned(),
+            }]
+        );
+        script.ime(ImeEvent::Preedit {
+            text: "".into(),
+            cursor: None,
+        });
+        assert!(script.drain().is_empty(), "empty preedit emitted input again");
+        script.type_letter("x");
+        assert_eq!(script.shown(), "abx");
+    }
+}
+
+#[test]
 fn the_window_losing_the_keyboard_settles_the_field_exactly_once() {
     // Leaving a field announces the value the user settled on, and it is the only moment a form has
     // to validate on. A window whose field is left by the whole window going away announced
@@ -654,4 +714,49 @@ fn the_surface_is_told_the_keyboard_is_gone_and_told_where_the_caret_is_when_it_
         back.caret_size,
         zgui_geom::Size::new(CssPx(1.0), CssPx(24.0))
     );
+}
+
+#[test]
+fn composition_candidate_position_does_not_follow_caret_blink() {
+    use zgui_runtime::caret::blink::HALF_PERIOD;
+
+    for cursor in [None, Some(0..1)] {
+        let mut script = controlled("abc", Owner::Verbatim);
+        script.press_named(NamedKey::End, KeyCode::End);
+        script.ime(ImeEvent::Enabled);
+        script.ime(ImeEvent::Preedit {
+            text: "ni".into(),
+            cursor,
+        });
+        let typing = script.told_text_input().flatten().expect("active IME");
+        let caret = script.harness.app().windows()[0]
+            .caret_rect()
+            .expect("laid-out insertion point");
+
+        for phase in 1..=4 {
+            script.harness.advance(HALF_PERIOD);
+            script.harness.settle(8);
+            assert_eq!(
+                script.told_text_input(),
+                Some(Some(typing)),
+                "blinking moved the candidate window away from the insertion point"
+            );
+            let window = &script.harness.app().windows()[0];
+            assert_eq!(window.caret_rect(), Some(caret));
+            assert_eq!(
+                window.caret_color().is_some(),
+                phase % 2 == 0,
+                "stable IME placement must not disable visual caret blinking"
+            );
+        }
+
+        // Stability must not freeze positioning when the IME really moves its cursor.
+        script.ime(ImeEvent::Preedit {
+            text: "ni".into(),
+            cursor: Some(0..0),
+        });
+        let moved = script.told_text_input().flatten().expect("still active");
+        assert_eq!(moved.caret_origin, Point::new(CssPx(24.0), CssPx(0.0)));
+        assert_ne!(moved.caret_origin, typing.caret_origin);
+    }
 }
