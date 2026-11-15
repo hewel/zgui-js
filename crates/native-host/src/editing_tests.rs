@@ -1,5 +1,6 @@
 //! Real native editing model, layout, clipboard and JS-controlled-value gate.
 use super::*;
+use session::Session;
 use std::{cell::Cell, io::Write, path::Path, process::{Command, Stdio}, time::Instant};
 use zgui::{
     geom::{Css, CssPx, Device, DevicePx, Point, Scale},
@@ -71,7 +72,7 @@ struct EditingGate {
 }
 impl EditingGate {
     fn current(&self) -> TestResult<Rc<Session>> {
-        self.inner.sessions.values().next().cloned().ok_or_else(|| "editing session absent".into())
+        self.inner.host.sessions().next().cloned().ok_or_else(|| "editing session absent".into())
     }
     fn node(&self, class: &str) -> TestResult<NodeId> {
         let window = self.inner.native.windows().first().ok_or("native editing window absent")?;
@@ -158,7 +159,7 @@ impl EditingGate {
                 self.hold_until = None;
                 let document = window.document_id();
                 let old = self.current()?;
-                if !matches!(self.inner.replace_session(cx, document, Some(self.package.clone())), ReloadOutcome::Mounted(_)) { return Err("editing reload failed".into()); }
+                if !matches!(self.inner.replace_session(cx, document, SessionModule::package(self.package.clone())), ReloadOutcome::Mounted(_)) { return Err("editing reload failed".into()); }
                 if old.counts() != session::ResourceCounts::default() { return Err("editing generation retained resources after reload".into()); }
                 self.retired.borrow_mut().push(old);
                 self.step = Step::Reload;

@@ -1,24 +1,82 @@
-use std::{cell::{Cell, RefCell}, collections::{HashSet, VecDeque}, error::Error, rc::Rc, sync::Arc, time::Instant};
+use std::{cell::{Cell, RefCell}, collections::{HashSet, VecDeque}, rc::Rc, sync::Arc, time::Instant};
 use js_runtime::{JsRuntime, RuntimeLimits};
 use rquickjs::{Exception, Function, Persistent};
 use ui_bridge::{DeferredEvent, UiBridge, registry::NodeRegistry};
-use zgui::view::host::TimerId;
 use zgui::platform::{SurfaceId, WakeReason, Waker};
-use crate::{MountRegion, package::Package, work::{Arguments, Work}};
-pub(crate) use crate::work::ContractFailure;
-use crate::work::ServicePolicy;
+use crate::{assets::{AssetSource, ContractFailure}, environment::Environment, session_host::MountRegion, package::Package, work::{Arguments, Work}};
 
-type Result<T, E = Box<dyn Error>> = std::result::Result<T, E>;
+/// Typed session failure: engine diagnostics, sticky provider contracts, and
+/// host invariants keep distinct categories through recovery classification.
+#[derive(Debug)]
+pub(crate) enum SessionError {
+    Diagnostic(js_runtime::Diagnostic),
+    Contract(ContractFailure),
+    InvalidState(String),
+}
+impl std::fmt::Display for SessionError {
+    fn fmt(&self, out: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Diagnostic(diagnostic) => diagnostic.fmt(out),
+            Self::Contract(failure) => failure.fmt(out),
+            Self::InvalidState(message) => out.write_str(message),
+        }
+    }
+}
+impl std::error::Error for SessionError {}
+impl From<js_runtime::Diagnostic> for SessionError {
+    fn from(error: js_runtime::Diagnostic) -> Self { Self::Diagnostic(error) }
+}
+impl From<ContractFailure> for SessionError {
+    fn from(error: ContractFailure) -> Self { Self::Contract(error) }
+}
+impl From<String> for SessionError {
+    fn from(error: String) -> Self { Self::InvalidState(error) }
+}
+impl From<&str> for SessionError {
+    fn from(error: &str) -> Self { Self::InvalidState(error.into()) }
+}
+pub(crate) type Result<T> = std::result::Result<T, SessionError>;
+
+/// Everything one session generation loads and mounts. Package metadata is
+/// optional; without it the module is the host-owned integration baseline.
+#[derive(Clone)]
+pub(crate) struct SessionModule {
+    pub name: String,
+    pub source: String,
+    pub css: String,
+    pub package: Option<Rc<Package>>,
+}
+impl SessionModule {
+    pub(crate) fn package(package: Rc<Package>) -> Self {
+        Self {
+            name: package.directory.join(&package.manifest.entry).to_string_lossy().into_owned(),
+            source: package.source.clone(),
+            css: package.css.clone(),
+            package: Some(package),
+        }
+    }
+}
 
 /// Execution and provider policy is fixed before the application module is evaluated.
-pub(crate) enum SessionPolicy {
-    Live,
-    Preview {
-        limits: RuntimeLimits,
-        deadline: Rc<Cell<Instant>>,
-        environment: Rc<crate::preview::clock::Environment>,
-        fixtures: Rc<crate::work::fixture::FixtureRuntime>,
-    },
+#[derive(Clone)]
+pub(crate) struct SessionPolicy {
+    limits: RuntimeLimits,
+    deadline: Option<Rc<Cell<Instant>>>,
+    environment: Option<Rc<Environment>>,
+    strict_rejections: bool,
+    assets: AssetSource,
+}
+impl SessionPolicy {
+    /// Ordinary live execution: wall clock, ambient limits, logged rejections,
+    /// package asset reads on the shared worker pool.
+    pub(crate) fn live(executor: host_services::Executor) -> Self {
+        Self { limits: RuntimeLimits::default(), deadline: None, environment: None, strict_rejections: false, assets: AssetSource::Live(executor) }
+    }
+    /// Deterministic preview execution: supplied limits, an enclosing deadline,
+    /// the virtual environment, strict rejection handling and fixture assets.
+    pub(crate) fn preview(limits: RuntimeLimits, deadline: Rc<Cell<Instant>>, environment: Rc<Environment>, fixtures: Rc<crate::assets::fixture::FixtureRuntime>) -> Self {
+        Self { limits, deadline: Some(deadline), environment: Some(environment), strict_rejections: true, assets: AssetSource::Fixture(fixtures) }
+    }
 }
 
 #[derive(Debug, Default, PartialEq, Eq, serde::Serialize)]
@@ -44,11 +102,10 @@ pub(crate) struct Session {
     stylesheet_installed: Cell<bool>,
     pub(crate) generation: u64,
     pub(crate) region: MountRegion,
-    pub(crate) timer: Cell<Option<TimerId>>,
     pub(crate) frames: Cell<usize>,
-    package: Option<Rc<Package>>,
+    module: SessionModule,
     deferred: RefCell<VecDeque<DeferredEvent>>,
-    fault: RefCell<Option<Box<dyn Error>>>,
+    fault: RefCell<Option<SessionError>>,
     cleanup_failure: RefCell<Option<js_runtime::Diagnostic>>,
     policy: SessionPolicy,
     checkpoint_cursor: Cell<usize>,
@@ -58,44 +115,48 @@ pub(crate) struct Session {
 
 impl Session {
     /// Pure module preflight: bridge mutation is disabled until mount's turn.
-    pub(crate) fn prepare(region: MountRegion, package: Option<Rc<Package>>, generation: u64, waker: Arc<dyn Waker>, surface: SurfaceId, executor: host_services::Executor, policy: SessionPolicy) -> Result<Rc<Self>> {
-        let (limits, service_policy) = match &policy {
-            SessionPolicy::Live => (RuntimeLimits::default(), ServicePolicy::Live),
-            SessionPolicy::Preview { limits, fixtures, .. } => (limits.clone(), ServicePolicy::Fixture(fixtures.clone())),
-        };
-        let mut engine = JsRuntime::new(limits)?;
-        if let SessionPolicy::Preview { deadline, .. } = &policy { engine.set_enclosing_deadline(deadline.clone()); }
+    pub(crate) fn prepare(region: MountRegion, module: SessionModule, generation: u64, waker: Arc<dyn Waker>, surface: SurfaceId, policy: SessionPolicy) -> Result<Rc<Self>> {
+        let mut engine = JsRuntime::new(policy.limits.clone())?;
+        if let Some(deadline) = &policy.deadline { engine.set_enclosing_deadline(deadline.clone()); }
         let bridge = UiBridge::new(NodeRegistry::new(region.dom.clone(), region.root, 1, generation, 100_000), region.host.clone());
-        let work = Work::new(region.host.clone(), package.clone(), generation, executor, waker.clone(), surface, service_policy);
+        let work = Work::new(region.host.clone(), module.package.clone(), generation, waker.clone(), surface, policy.assets.clone());
         engine.with_context(|ctx| {
-            if let SessionPolicy::Preview { environment, .. } = &policy { environment.install(&ctx)?; }
+            if let Some(environment) = &policy.environment { environment.install(&ctx)?; }
             bridge.install(&ctx)?;
             work.install(&ctx)?;
             ctx.globals().set("mountRoot", bridge.root(&ctx)?)
         })?;
-        if let Some(package) = &package {
-            let loaded = engine.load_module(&package.directory.join(&package.manifest.entry).to_string_lossy(), &package.source);
-            if let Some(failure) = work.contract_failure() { return Err(failure.into()); }
-            loaded.map_err(|error| package.remap_diagnostic(error))?;
-            engine.with_module(|ctx, module| {
-                let version: rquickjs::Value = module.get("hostApiVersion")?;
-                if version.as_int() != Some(1) { return Err(Exception::throw_type(&ctx, "module hostApiVersion must equal manifest version 1")); }
-                let _: Function = module.get("mount")?;
-                Ok(())
-            }).map_err(|error| package.remap_diagnostic(error))?;
-            // Drain bootstrap continuations while every host-creation guard is
-            // still closed. Otherwise a top-level Promise could defer side effects
-            // until the first mounted checkpoint and bypass preflight.
-            let jobs = engine.pump_jobs();
-            if let Some(failure) = work.contract_failure() { return Err(failure.into()); }
-            if let Some(error) = jobs.diagnostics.into_iter().next() { return Err(package.remap_diagnostic(error).into()); }
-            if jobs.has_pending_jobs { return Err("preflight jobs exceeded their bounded pump".into()); }
-            let rejections = drain_rejections(&mut engine, true, Some(package));
-            if let Some(failure) = work.contract_failure() { return Err(failure.into()); }
-            rejections?;
-            if engine.is_job_pending() { return Err("preflight diagnostic accessors scheduled more jobs".into()); }
+        let loaded = engine.load_module(&module.name, &module.source);
+        if let Some(failure) = work.contract_failure() { return Err(failure.into()); }
+        loaded.map_err(|error| remap(&module, error))?;
+        engine.with_module(|ctx, loaded| {
+            let version: rquickjs::Value = loaded.get("hostApiVersion")?;
+            if version.as_int() != Some(1) { return Err(Exception::throw_type(&ctx, "module hostApiVersion must equal manifest version 1")); }
+            let _: Function = loaded.get("mount")?;
+            Ok(())
+        }).map_err(|error| remap(&module, error))?;
+        // Drain bootstrap continuations while every host-creation guard is
+        // still closed. Otherwise a top-level Promise could defer side effects
+        // until the first mounted checkpoint and bypass preflight.
+        let jobs = engine.pump_jobs();
+        if let Some(failure) = work.contract_failure() { return Err(failure.into()); }
+        if let Some(error) = jobs.diagnostics.into_iter().next() { return Err(remap(&module, error)); }
+        if jobs.has_pending_jobs {
+            return Err(js_runtime::Diagnostic {
+                kind: js_runtime::DiagnosticKind::BudgetExceeded, phase: "preflight",
+                message: "preflight jobs exceeded their bounded pump".into(), stack: None, generated_stack: None,
+            }.into());
         }
-        let session = Rc::new(Self { disposer: RefCell::new(None), bridge, work, engine: RefCell::new(Some(engine)), shutdown_started: Cell::new(false), mount_started: Cell::new(false), stylesheet_installed: Cell::new(false), generation, region, timer: Cell::new(None), frames: Cell::new(0), package, deferred: RefCell::new(VecDeque::new()), fault: RefCell::new(None), cleanup_failure: RefCell::new(None), policy, checkpoint_cursor: Cell::new(0), waker, surface });
+        let rejections = drain_rejections(&mut engine, true, module.package.as_deref());
+        if let Some(failure) = work.contract_failure() { return Err(failure.into()); }
+        rejections?;
+        if engine.is_job_pending() {
+            return Err(js_runtime::Diagnostic {
+                kind: js_runtime::DiagnosticKind::BudgetExceeded, phase: "preflight",
+                message: "preflight diagnostic accessors scheduled more jobs".into(), stack: None, generated_stack: None,
+            }.into());
+        }
+        let session = Rc::new(Self { disposer: RefCell::new(None), bridge, work, engine: RefCell::new(Some(engine)), shutdown_started: Cell::new(false), mount_started: Cell::new(false), stylesheet_installed: Cell::new(false), generation, region, frames: Cell::new(0), module, deferred: RefCell::new(VecDeque::new()), fault: RefCell::new(None), cleanup_failure: RefCell::new(None), policy, checkpoint_cursor: Cell::new(0), waker, surface });
         let weak = Rc::downgrade(&session);
         session.bridge.set_dispatcher(Rc::new(move |id, event| {
             if let Some(session) = weak.upgrade() { session.dispatch(id, event); }
@@ -107,29 +168,29 @@ impl Session {
         if self.shutdown_started.get() { return Err("cannot mount a retired session".into()); }
         if self.mount_started.replace(true) { return Err("session mount was already attempted".into()); }
         self.work.mounting();
-        if let Some(package) = &self.package {
-            self.region.host.install_stylesheet("application", &package.css);
+        if !self.module.css.is_empty() {
+            self.region.host.install_stylesheet("application", &self.module.css);
             self.stylesheet_installed.set(true);
-            let mut engine = self.engine.borrow_mut();
-            let engine = engine.as_mut().ok_or("session disposed")?;
-            let mounted = self.bridge.run_turn(|| engine.with_module(|ctx, module| {
-                let mount: Function = module.get("mount")?;
-                let disposer: Function = mount.call((self.bridge.root(&ctx)?,))?;
-                Ok(Persistent::save(&ctx, disposer))
-            }));
-            match mounted {
-                Ok(disposer) => *self.disposer.borrow_mut() = Some(disposer),
-                Err(error) => {
-                    self.check_contract()?;
-                    return Err(self.diagnostic(error).into());
-                }
-            }
-            self.check_contract()?;
-            eprintln!("mounted: package={} build={} nodes={}", package.manifest.id, package.manifest.build_id, self.bridge.live_count());
-            self.snapshot();
-        } else {
-            self.update("globalThis.textNode = __zgui.createTextNode('JavaScript mounted'); __zgui.insertNode(mountRoot, textNode, null); 'JavaScript mounted'")?;
         }
+        let mut engine = self.engine.borrow_mut();
+        let engine = engine.as_mut().ok_or("session disposed")?;
+        let mounted = self.bridge.run_turn(|| engine.with_module(|ctx, module| {
+            let mount: Function = module.get("mount")?;
+            let disposer: Function = mount.call((self.bridge.root(&ctx)?,))?;
+            Ok(Persistent::save(&ctx, disposer))
+        }));
+        match mounted {
+            Ok(disposer) => *self.disposer.borrow_mut() = Some(disposer),
+            Err(error) => {
+                self.check_contract()?;
+                return Err(self.diagnostic(error).into());
+            }
+        }
+        self.check_contract()?;
+        if let Some(package) = &self.module.package {
+            eprintln!("mounted: package={} build={} nodes={}", package.manifest.id, package.manifest.build_id, self.bridge.live_count());
+        }
+        self.snapshot();
         self.work.mounted();
         self.check_contract()?;
         Ok(())
@@ -213,13 +274,14 @@ impl Session {
             };
             if attempted { worked = true; } else { remaining[phase] = 0; }
         }
-        worked |= self.bridge.run_turn(|| drain_rejections(engine, self.is_preview(), self.package.as_deref()))?;
+        worked |= self.bridge.run_turn(|| drain_rejections(engine, self.policy.strict_rejections, self.module.package.as_deref()))?;
         self.check_contract()?;
         if engine.is_job_pending() || !self.deferred.borrow().is_empty() || self.work.has_ready() || self.work.has_completions() { self.wake_owner(); }
         Ok(worked)
     }
 
     pub(crate) fn frame_checkpoint(&self) {
+        if self.shutdown_started.get() { return; }
         if let Err(error) = self.checkpoint() {
             *self.fault.borrow_mut() = Some(error);
             self.wake_owner();
@@ -227,13 +289,11 @@ impl Session {
     }
 
     fn diagnostic(&self, error: js_runtime::Diagnostic) -> js_runtime::Diagnostic {
-        match &self.package { Some(package) => package.remap_diagnostic(error), None => error }
+        match &self.module.package { Some(package) => package.remap_diagnostic(error), None => error }
     }
 
-    fn is_preview(&self) -> bool { matches!(&self.policy, SessionPolicy::Preview { .. }) }
-
     fn deadline(&self, end: Instant) -> Instant {
-        match &self.policy { SessionPolicy::Live => end, SessionPolicy::Preview { deadline, .. } => end.min(deadline.get()) }
+        match &self.policy.deadline { Some(deadline) => end.min(deadline.get()), None => end }
     }
 
     /// A provider violation is sticky: catching the JavaScript exception cannot
@@ -248,37 +308,37 @@ impl Session {
         self.cleanup_failure.borrow_mut().take()
     }
 
-    pub(crate) fn advance(&self, external: bool) -> Result<()> {
-        if self.package.is_some() {
-            let mut engine = self.engine.borrow_mut();
-            let engine = engine.as_mut().ok_or("session disposed")?;
-            self.bridge.run_turn(|| engine.with_module(|_, module| {
-                let advance: Function = module.get("advance")?;
-                advance.call::<_, ()>(())
-            })).map_err(|error| self.diagnostic(error))?;
-            self.snapshot();
-            Ok(())
-        } else if external {
-            self.update("__zgui.replaceText(textNode, 'External wake updated JavaScript'); 'External wake updated JavaScript'")
-        } else {
-            self.update("__zgui.replaceText(textNode, 'Native timer updated JavaScript'); 'Native timer updated JavaScript'")
-        }
-    }
-
-    fn update(&self, source: &str) -> Result<()> {
+    /// Integration harness entries ('advance', 'external') run as one bridge
+    /// turn against the mounted module, with the same contract and diagnostic
+    /// mapping as mount.
+    pub(crate) fn invoke(&self, export: &str) -> Result<()> {
+        if self.shutdown_started.get() { return Err("cannot invoke a retired session".into()); }
         let mut engine = self.engine.borrow_mut();
         let engine = engine.as_mut().ok_or("session disposed")?;
-        let value = self.bridge.run_turn(|| engine.evaluate_script(source)).map_err(|error| self.diagnostic(error))?;
-        if self.region.dom.text_content(self.region.root) != value { return Err("native text does not match JavaScript result".into()); }
+        let result = self.bridge.run_turn(|| engine.with_module(|_, module| {
+            let callback: Function = module.get(export)?;
+            callback.call::<_, ()>(())
+        }));
+        match result {
+            Ok(()) => {}
+            Err(error) => {
+                self.check_contract()?;
+                return Err(self.diagnostic(error).into());
+            }
+        }
+        self.check_contract()?;
         self.snapshot();
         Ok(())
     }
 
-    pub(crate) fn record_fault(&self, error: String) {
+    pub(crate) fn record_fault(&self, error: SessionError) {
         if self.shutdown_started.get() { return; }
-        *self.fault.borrow_mut() = Some(error.into());
+        *self.fault.borrow_mut() = Some(error);
         self.wake_owner();
     }
+
+    pub(crate) fn package(&self) -> Option<&Rc<Package>> { self.module.package.as_ref() }
+    pub(crate) fn surface(&self) -> SurfaceId { self.surface }
 
     fn snapshot(&self) {
         eprintln!("native-text: {}", self.region.dom.text_content(self.region.root));
@@ -299,7 +359,6 @@ impl Session {
         if self.shutdown_started.replace(true) { return; }
         self.bridge.begin_stop();
         self.work.begin_stop();
-        if let Some(timer) = self.timer.take() { self.region.host.cancel_timer(timer); }
         self.deferred.borrow_mut().clear();
         self.fault.borrow_mut().take();
         let disposer = self.disposer.borrow_mut().take();
@@ -314,8 +373,8 @@ impl Session {
                     eprintln!("disposer error: {error}");
                     *self.cleanup_failure.borrow_mut() = Some(error);
                 }
-                if self.is_preview() {
-                    if let Err(error) = drain_rejections(engine, true, self.package.as_deref()) {
+                if self.policy.strict_rejections {
+                    if let Err(error) = drain_rejections(engine, true, self.module.package.as_deref()) {
                         self.cleanup_failure.borrow_mut().get_or_insert(error);
                     }
                 }
@@ -330,6 +389,13 @@ impl Session {
     }
 }
 impl Drop for Session { fn drop(&mut self) { self.shutdown(); } }
+
+fn remap(module: &SessionModule, error: js_runtime::Diagnostic) -> SessionError {
+    SessionError::Diagnostic(match &module.package {
+        Some(package) => package.remap_diagnostic(error),
+        None => error,
+    })
+}
 
 /// Reduce both transitions of an identity before deciding whether it is unhandled.
 /// Formatting can produce further updates, so strict policy drains to quiescence

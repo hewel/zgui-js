@@ -3,7 +3,7 @@ use std::collections::BTreeSet;
 
 use serde::Deserialize;
 
-use crate::preview::{Error, schema::object_struct};
+use crate::{preview::Error, schema::object_struct};
 
 pub(super) const MAX_EDGE: u32 = 16_384;
 pub(super) const MAX_PIXELS: u64 = MAX_EDGE as u64 * MAX_EDGE as u64;

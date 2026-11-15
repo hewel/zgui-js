@@ -1,7 +1,7 @@
 use super::*;
 use js_runtime::{Diagnostic, JsRuntime, RuntimeLimits};
 use sha2::{Digest, Sha256};
-use std::{collections::BTreeMap, fs, path::PathBuf, sync::atomic::AtomicU64};
+use std::{collections::BTreeMap, fs, path::PathBuf, sync::{atomic::AtomicU64, mpsc::{self, Receiver}}};
 use zgui::view::stub::StubHost;
 
 const DEADLINE: Duration = Duration::from_secs(5);
@@ -75,7 +75,7 @@ impl Session {
         let (sender, wakes) = mpsc::channel();
         let work = Work::new(
             HostHandle::from_rc(host.clone()), Some(package), generation,
-            Executor::new(1, 8).unwrap(), Arc::new(ChannelWaker(sender)), SurfaceId::new(7), ServicePolicy::Live,
+            Arc::new(ChannelWaker(sender)), SurfaceId::new(7), crate::assets::AssetSource::Live(host_services::Executor::new(1, 8).unwrap()),
         );
         let mut engine = JsRuntime::new(RuntimeLimits::default()).unwrap();
         engine.with_context(|ctx| work.install(&ctx)).unwrap();

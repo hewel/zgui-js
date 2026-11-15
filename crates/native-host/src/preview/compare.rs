@@ -4,7 +4,8 @@ mod policy;
 
 use std::{collections::{BTreeSet,HashSet},path::{Path,PathBuf}};
 use serde_json::{Value,json};
-use super::{Error,output::{Output,digest},saved::{self,SavedRun},schema::object_struct};
+use super::{Error,evidence::FrameEvidence,output::{Output,digest},saved::{self,SavedRun}};
+use crate::schema::object_struct;
 use policy::{CaptureKey,CaptureSet,Policy};
 
 struct Options { baseline:PathBuf, actual:PathBuf, policy:PathBuf, out:PathBuf }
@@ -125,8 +126,8 @@ impl Source {
         let capture=self.run.capture(&key.capture_id)?;
         let png=capture_png(self,&capture.frame,key)?;
         let image=pixels::decode(&png,max_pixels)?;
-        if capture.frame["physicalWidth"].as_u64()!=Some(u64::from(image.width))
-            || capture.frame["physicalHeight"].as_u64()!=Some(u64::from(image.height)) {
+        if capture.frame.detail("physicalWidth").as_u64()!=Some(u64::from(image.width))
+            || capture.frame.detail("physicalHeight").as_u64()!=Some(u64::from(image.height)) {
             return Err(io("PNG dimensions disagree with the owning native frame"));
         }
         Ok((capture,png,image))
@@ -197,7 +198,7 @@ fn execute(options:&Options,policy:&Policy,policy_bytes:&[u8],output:&mut Output
         for key in source.keys.difference(&selected) {
             let (capture,_,_)=source.capture(key,policy.max_pixels)?;
             let mut details=Vec::new();
-            capture_readiness(&capture.frame,side,&mut details);
+            capture.frame.readiness_issues(side,&mut details);
             if !details.is_empty() {
                 issues.push(json!({"field":"excludedCapture","side":side,"capture":key,"details":details}));
             }
@@ -237,8 +238,8 @@ fn execute(options:&Options,policy:&Policy,policy_bytes:&[u8],output:&mut Output
         captures.push(json!({"capture":key,"status":match &comparison {None=>"incompatible",Some(comparison) if comparison.passed=>"passed",Some(_)=>"different"},
             "compatibilityIssues":capture_issues,"exactEqual":comparison.as_ref().map(|comparison|comparison.exact_equal),
             "metrics":comparison.as_ref().map(|comparison|&comparison.metrics),"artifacts":artifacts,
-            "baselineFrame":{"validation":left.frame["validationFrame"],"presentation":left.frame["pixelPresentation"],"captureTimeUs":left.frame["readiness"]["timeUs"]},
-            "actualFrame":{"validation":right.frame["validationFrame"],"presentation":right.frame["pixelPresentation"],"captureTimeUs":right.frame["readiness"]["timeUs"]}}));
+            "baselineFrame":{"validation":left.frame.validation_frame,"presentation":left.frame.pixel_presentation,"captureTimeUs":left.frame.detail("readiness")["timeUs"]},
+            "actualFrame":{"validation":right.frame.validation_frame,"presentation":right.frame.pixel_presentation,"captureTimeUs":right.frame.detail("readiness")["timeUs"]}}));
     }
     let error=if !global_compatible || incompatible>0 {
         Some(Error::new("E_BASELINE_INCOMPATIBLE",2,"baseline inputs, capture set or native frame environments are incompatible").with_details(json!({"report":"report.json"})))
@@ -262,9 +263,9 @@ fn execute(options:&Options,policy:&Policy,policy_bytes:&[u8],output:&mut Output
         "artifacts":{"manifest":"artifacts.json","report":"report.json"}}))
 }
 
-fn capture_png(source:&Source,frame:&Value,key:&CaptureKey)->Result<Vec<u8>,Error> {
-    let bytes=source.run.verified(&format!("captures/{}.png",key.capture_id),"capture-pixels")?;
-    if frame["pngDigest"]!=digest(&bytes) || frame["renderer"]!=source.graphics {
+fn capture_png(source:&Source,frame:&FrameEvidence,key:&CaptureKey)->Result<Vec<u8>,Error> {
+    let bytes=source.run.verified(&super::evidence::CapturePaths::new(&key.capture_id)?.png(),"capture-pixels")?;
+    if frame.png_digest.as_deref()!=Some(digest(&bytes).as_str()) || frame.extra.get("renderer")!=Some(&source.graphics) {
         return Err(io("PNG or renderer identity disagrees with its native capture frame"));
     }
     Ok(bytes)
@@ -300,41 +301,22 @@ fn compatibility(baseline:&Source,actual:&Source)->Vec<Value> {
     issues
 }
 
-fn capture_compatibility(left:&Value,right:&Value)->Vec<Value> {
+fn capture_compatibility(left:&FrameEvidence,right:&FrameEvidence)->Vec<Value> {
     let mut issues=Vec::new();
-    for path in ["/surface","/physicalWidth","/physicalHeight","/scale","/timingDeterministic","/renderer",
-        "/readiness/timeUs","/validationFrame/timeUs","/pixelPresentation/frame/timeUs","/allowedPendingAssets"] {
-        equal_required(&mut issues,path,left.pointer(path),right.pointer(path));
+    equal_required(&mut issues,"/surface",Some(&json!(left.surface)),Some(&json!(right.surface)));
+    for field in ["physicalWidth","physicalHeight","scale","timingDeterministic","renderer","allowedPendingAssets"] {
+        equal_required(&mut issues,&format!("/{field}"),left.extra.get(field),right.extra.get(field));
     }
-    capture_readiness(left,"baseline",&mut issues);
-    capture_readiness(right,"actual",&mut issues);
+    equal_required(&mut issues,"/readiness/timeUs",
+        left.extra.get("readiness").and_then(|value|value.get("timeUs")),
+        right.extra.get("readiness").and_then(|value|value.get("timeUs")));
+    equal_required(&mut issues,"/validationFrame/timeUs",
+        Some(&json!(left.validation_frame.time_us)),Some(&json!(right.validation_frame.time_us)));
+    equal_required(&mut issues,"/pixelPresentation/frame/timeUs",
+        Some(&json!(left.pixel_presentation.frame.time_us)),Some(&json!(right.pixel_presentation.frame.time_us)));
+    left.readiness_issues("baseline",&mut issues);
+    right.readiness_issues("actual",&mut issues);
     issues
-}
-
-fn capture_readiness(frame:&Value,side:&str,issues:&mut Vec<Value>) {
-    for field in ["appReady","currentWorkSettled","frameCurrent","nativeAssetReadinessAvailable"] {
-        if frame["readiness"][field]!=true { issues.push(json!({"side":side,"field":format!("readiness.{field}"),"reason":"capture is not certified current"})); }
-    }
-    let pending=frame["resources"]["pendingIds"].as_array();
-    let allowed=frame["allowedPendingAssets"].as_array();
-    let ready=match (pending,allowed) {
-        (Some(pending),Some(allowed))=>{
-            let pending_ids:HashSet<_>=pending.iter().filter_map(Value::as_str).collect();
-            let allowed_ids:HashSet<_>=allowed.iter().filter_map(Value::as_str).collect();
-            pending_ids.len()==pending.len() && allowed_ids.len()==allowed.len() && pending_ids==allowed_ids
-                && frame["resources"]["allowedPendingAssets"]==frame["allowedPendingAssets"]
-                && frame["resources"]["requiredAssetsReady"]==true
-        }
-        _=>false,
-    };
-    if !ready || frame["timingDeterministic"]!=true || frame["requiredStateRevision"].as_u64().is_none()
-        || frame["requiredStateRevision"]!=frame["validatedStateRevision"]
-        || frame["readiness"]["timeUs"].as_u64().is_none()
-        || frame["validationFrame"]["timeUs"].as_u64().is_none()
-        || frame["pixelPresentation"]["frame"]["timeUs"].as_u64().is_none()
-        || frame["scale"].as_f64().is_none_or(|scale|!scale.is_finite()||scale<=0.0) {
-        issues.push(json!({"side":side,"field":"readiness","reason":"capture timing, resource allowance or validated state is incomplete"}));
-    }
 }
 
 fn equal_required(issues:&mut Vec<Value>,field:&str,left:Option<&Value>,right:Option<&Value>) {

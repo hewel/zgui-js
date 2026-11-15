@@ -4,7 +4,8 @@ mod inventory;
 mod output;
 mod profile;
 mod supervisor;
-mod driver;
+pub(crate) mod driver;
+pub(crate) mod evidence;
 pub(crate) mod fixture;
 mod inspect;
 mod run;
@@ -14,16 +15,14 @@ mod selectors;
 mod saved;
 mod compare;
 mod watch;
-pub(crate) mod clock;
 mod resources;
-pub(crate) mod schema;
 
 use std::path::PathBuf;
 use serde_json::{Value, json};
 
 use serde::Serialize;
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct Error {
     pub code: &'static str,

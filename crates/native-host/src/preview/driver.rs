@@ -5,9 +5,10 @@ use zgui::{geom::{DevicePx, Size}, platform::{AppHandler, ColorScheme, IdlePolic
 use zgui_platform_headless::{Harness, Headless};
 use zgui::platform::Surface as _;
 
-use crate::{Binding, MountRegion, Root, package::Package, session::{ResourceCounts, Session, SessionPolicy}};
-use super::{Error, capture::{self, CaptureHandle}, clock::Environment, fixture::FixtureDefinition, inspect, output::Output, profile::{self, Limits, LoadedProfile, Surface}, resources};
-use crate::work::{ContractFailure,fixture::FixtureRuntime};
+use crate::{package::Package, session::{ResourceCounts, Session, SessionError, SessionModule, SessionPolicy}};
+use crate::session_host::{ImageChoice, RecoveryPolicy, Root, RuntimeSurface, SessionHost};
+use super::{Error, capture::{self, CaptureHandle}, evidence::{self, CaptureIdentity, CapturePaths, FrameEvidence, FrameStamp, HistoricalStatus, Presentation, TreeEvidence}, fixture::FixtureDefinition, inspect, output::Output, profile::{self, Limits, LoadedProfile, Surface}, resources};
+use crate::{assets::{ContractFailure, fixture::FixtureRuntime}, environment::Environment};
 use super::semantics::SemanticModel;
 
 mod actions;
@@ -15,6 +16,7 @@ mod timeline;
 
 pub type SharedOutput = Rc<RefCell<Output>>;
 
+#[derive(Clone)]
 pub struct Fault {
     pub error: Error,
     pub diagnostic: Option<Value>,
@@ -28,24 +30,24 @@ impl From<ContractFailure> for Fault {
     }
 }
 impl Fault {
-    fn application(error: Box<dyn std::error::Error>) -> Self {
-        if let Some(contract) = error.downcast_ref::<crate::session::ContractFailure>() {
-            return Error::new(contract.code, 6, &contract.message).into();
+    pub(crate) fn application(error: SessionError) -> Self {
+        match error {
+            SessionError::Contract(contract) => contract.into(),
+            SessionError::Diagnostic(diagnostic) => {
+                let (code, exit) = match diagnostic.kind {
+                    js_runtime::DiagnosticKind::Interrupted | js_runtime::DiagnosticKind::BudgetExceeded => ("E_JOB_BUDGET", 5),
+                    _ if diagnostic.phase == "promise rejection" => ("E_UNHANDLED_REJECTION", 3),
+                    _ => ("E_JS_EXCEPTION", 3),
+                };
+                Self {
+                    error: Error::new(code, exit, &diagnostic.message),
+                    diagnostic: Some(json!({"kind":format!("{:?}",diagnostic.kind),"phase":diagnostic.phase,
+                        "message":diagnostic.message,"generatedStack":diagnostic.generated_stack.as_ref().or(diagnostic.stack.as_ref()),
+                        "mappedStack":diagnostic.stack,"mappingApplied":diagnostic.generated_stack.is_some()})),
+                }
+            }
+            SessionError::InvalidState(message) => Error::new("E_HOST_INVARIANT", 9, message).into(),
         }
-        if let Some(diagnostic) = error.downcast_ref::<js_runtime::Diagnostic>() {
-            let (code, exit) = match diagnostic.kind {
-                js_runtime::DiagnosticKind::Interrupted | js_runtime::DiagnosticKind::BudgetExceeded => ("E_JOB_BUDGET", 5),
-                _ if diagnostic.phase == "promise rejection" => ("E_UNHANDLED_REJECTION", 3),
-                _ => ("E_JS_EXCEPTION", 3),
-            };
-            return Self {
-                error: Error::new(code, exit, &diagnostic.message),
-                diagnostic: Some(json!({"kind":format!("{:?}",diagnostic.kind),"phase":diagnostic.phase,
-                    "message":diagnostic.message,"generatedStack":diagnostic.generated_stack.as_ref().or(diagnostic.stack.as_ref()),
-                    "mappedStack":diagnostic.stack,"mappingApplied":diagnostic.generated_stack.is_some()})),
-            };
-        }
-        Error::new("E_BUNDLE", 3, error.to_string()).into()
     }
 }
 
@@ -58,8 +60,8 @@ struct OwnedFrame {
     surface_configuration: u64,
     native_nodes: Vec<ui_bridge::registry::SnapshotNode>,
     presentation: u64,
-    frame: Value,
-    tree: Value,
+    frame: FrameEvidence,
+    tree: TreeEvidence,
 }
 
 struct Probe {
@@ -71,7 +73,7 @@ struct Probe {
     frames: Cell<u64>,
     surface_configuration: Cell<u64>,
     last: RefCell<Option<OwnedFrame>>,
-    presentation: RefCell<Option<Value>>,
+    presentation: RefCell<Option<Presentation>>,
     fault: RefCell<Option<Error>>,
     surface: RefCell<Option<std::sync::Arc<zgui_platform_headless::OffscreenSurface>>>,
     semantics: RefCell<SemanticModel>,
@@ -95,39 +97,49 @@ impl FrameProbe for Probe {
             Err(error)=>{ *self.fault.borrow_mut()=Some(error); return; }
         };
         let state = self.capture.state();
-        let stamp = json!({"ordinal":observation.ordinal,"timeUs":observation.timestamp.since_origin().as_micros(),
-            "drawId":state.draw_id,"outcome":format!("{:?}",observation.outcome)});
+        let stamp = FrameStamp { ordinal:observation.ordinal,
+            time_us:u64::try_from(observation.timestamp.since_origin().as_micros()).unwrap_or(u64::MAX),
+            draw_id:state.draw_id, outcome:format!("{:?}",observation.outcome) };
         if matches!(observation.outcome, FrameOutcome::Presented(_)) {
-            *self.presentation.borrow_mut() = Some(json!({"frame":stamp,"sequence":state.presentation_id,
-                "configurationId":state.configuration_id,"drawId":state.presented_draw}));
+            *self.presentation.borrow_mut() = Some(Presentation { frame:stamp.clone(), sequence:state.presentation_id,
+                configuration_id:state.configuration_id, draw_id:state.presented_draw });
         }
         if !observation.layout_document_coherent || !matches!(observation.outcome,
             FrameOutcome::Presented(_) | FrameOutcome::Skipped(SkipReason::Undamaged)) { return; }
         let Some(presentation) = self.presentation.borrow().clone() else { return; };
-        if presentation["configurationId"].as_u64() != Some(state.configuration_id) { return; }
-        let snapshot = inspect::snapshot(window, &session, observation.ordinal, &self.semantics.borrow());
-        let mut tree = snapshot.tree;
-        tree["buildId"] = json!(self.build_id);
-        tree["presentationSequence"] = json!(state.presentation_id);
-        tree["resourceRevision"]=json!(window.image_resource_revision());
-        tree["surfaceConfiguration"]=json!(self.surface_configuration.get());
-        let frame = json!({"schemaVersion":1,"buildId":self.build_id,"generation":session.generation,"surface":"main",
-            "documentIdentity":format!("{:?}",window.document_id()),"actionSequence":self.action.get(),
-            "requiredStateRevision":observation.document_revision,"validatedStateRevision":observation.document_revision,
-            "layoutRevision":observation.layout_revision,"configurationId":state.configuration_id,
-            "metadataRevision":snapshot.metadata_revision,
-            "resourceRevision":window.image_resource_revision(),
-            "surfaceConfiguration":self.surface_configuration.get(),
-            "validationFrame":stamp,"pixelPresentation":presentation,"layoutDocumentCoherent":true,
-            "timingDeterministic":self.environment.is_virtual(),"resources":resources,
-            "scale":window.surface().scale_factor(),"renderer":self.capture.metadata()});
+        if presentation.configuration_id != state.configuration_id { return; }
+        let identity = CaptureIdentity { build_id:self.build_id.clone(), presentation_sequence:state.presentation_id,
+            resource_revision:Some(window.image_resource_revision()), surface_configuration:Some(self.surface_configuration.get()) };
+        let snapshot = inspect::snapshot(window, &session, observation.ordinal, &self.semantics.borrow(), &identity);
+        let tree = snapshot.tree;
+        let mut extra = serde_json::Map::new();
+        for (key, value) in [
+            ("documentIdentity", json!(format!("{:?}",window.document_id()))),
+            ("actionSequence", json!(self.action.get())),
+            ("requiredStateRevision", json!(observation.document_revision)),
+            ("validatedStateRevision", json!(observation.document_revision)),
+            ("layoutRevision", json!(observation.layout_revision)),
+            ("configurationId", json!(state.configuration_id)),
+            ("timingDeterministic", json!(self.environment.is_virtual())),
+            ("resources", resources),
+            ("scale", json!(window.surface().scale_factor())),
+            ("renderer", self.capture.metadata()),
+        ] { extra.insert(key.to_owned(), value); }
+        let frame = FrameEvidence { schema_version:1, build_id:self.build_id.clone(), generation:session.generation,
+            surface:"main".into(), metadata_revision:snapshot.metadata_revision,
+            resource_revision:Some(window.image_resource_revision()), surface_configuration:Some(self.surface_configuration.get()),
+            validation_frame:stamp, pixel_presentation:presentation, layout_document_coherent:true,
+            capture_id:None, tree_digest:None, png_digest:None, extra };
         // Persist complete owned evidence before another callback can fail or block.
         // No readback, redraw request, signal write, or application entry occurs in this probe.
-        let stem = format!("evidence/generation-{:010}-frame-{:010}", session.generation, observation.ordinal);
+        let (tree_path, frame_path) = evidence::checkpoint_paths(session.generation, observation.ordinal);
+        let tree_value = serde_json::to_value(&tree);
+        let frame_value = serde_json::to_value(&frame);
         let publication = (|| {
             let mut output = self.output.borrow_mut();
-            output.json(&format!("{stem}.tree.json"), "validation-tree", &tree)?;
-            output.json(&format!("{stem}.frame.json"), "validation-frame", &frame)
+            let tree_value = tree_value.map_err(|error| Error::new("E_OUTPUT_IO",8,error.to_string()))?;
+            output.json(&tree_path, "validation-tree", &tree_value)?;
+            output.json(&frame_path, "validation-frame", &frame_value.map_err(|error| Error::new("E_OUTPUT_IO",8,error.to_string()))?)
         })();
         if let Err(error) = publication { *self.fault.borrow_mut() = Some(error); return; }
         *self.last.borrow_mut() = Some(OwnedFrame { generation:session.generation, revision: observation.document_revision,
@@ -139,22 +151,16 @@ impl FrameProbe for Probe {
 
 struct PreviewHost {
     native: Runtime,
-    pending: Rc<RefCell<Vec<MountRegion>>>,
-    package: Rc<Package>,
-    session: Option<Rc<Session>>,
-    executor: host_services::Executor,
+    host: SessionHost,
     deadline: Rc<Cell<Instant>>,
-    limits: js_runtime::RuntimeLimits,
     probe: Rc<Probe>,
     font_css: String,
     fault: Option<Fault>,
     requested_metadata: u64,
-    environment: Rc<Environment>,
-    fixtures: Rc<FixtureRuntime>,
-    generation: u64,
     retired: Option<Value>,
 }
 impl PreviewHost {
+    fn session(&self) -> Option<&Rc<Session>> { self.host.sessions().next() }
     fn fail(&mut self, cx: &dyn PlatformCx, fault: Fault) {
         if self.fault.is_none() { self.fault = Some(fault); }
         // The handler guards stop queued entries. The driver publishes the cause
@@ -164,40 +170,37 @@ impl PreviewHost {
     fn after_native(&mut self, cx: &dyn PlatformCx) {
         if self.fault.is_some() { return; }
         if let Some(error) = self.native.failure().take() { self.fail(cx, graphics_error(error).into()); return; }
-        let regions = std::mem::take(&mut *self.pending.borrow_mut());
-        for region in regions {
-            if self.session.is_some() || self.native.windows().len() != 1 {
+        if self.host.pending_regions() != 0 {
+            if self.host.sessions().next().is_some() || self.native.windows().len() != 1 {
                 self.fail(cx, Error::new("E_HOST_INVARIANT", 9, "preview requires exactly one current native document").into()); return;
             }
-            let Some(window) = self.native.windows_mut().iter_mut().find(|window| window.document_id() == region.document) else {
-                self.fail(cx, Error::new("E_HOST_INVARIANT", 9, "mount region has no current surface").into()); return;
+            let retry: Rc<dyn Fn(zgui::view::DocumentId, u64)> = Rc::new(|_, _| {});
+            let attached = {
+                let mut surface = RuntimeSurface::new(&mut self.native, ImageChoice::PackageOnly);
+                self.host.attach(&mut surface, cx.waker(), retry)
             };
-            let Some(generation) = self.generation.checked_add(1) else {
-                self.fail(cx, Error::new("E_HOST_INVARIANT",9,"session generation exhausted").into()); return;
-            };
-            self.generation = generation;
-            let prepared = Session::prepare(region, Some(self.package.clone()), generation, cx.waker(), window.surface().id(),
-                self.executor.clone(), SessionPolicy::Preview { limits:self.limits.clone(), deadline:self.deadline.clone(),
-                    environment:self.environment.clone(),fixtures:self.fixtures.clone() });
-            let session = match prepared { Ok(session) => session, Err(error) => { self.fail(cx, Fault::application(error)); return; } };
-            window.install_binding(Box::new(Binding(Rc::downgrade(&session))));
-            *self.probe.session.borrow_mut() = Rc::downgrade(&session);
-            self.session = Some(session.clone());
-            if let Err(error) = session.mount() { self.fail(cx, Fault::application(error)); return; }
-            session.region.host.install_stylesheet("preview-profile-fonts", &self.font_css);
-            window.request_frame();
+            // A propagated failure keeps its session owned so finish() can
+            // inspect it; the probe binds to whichever generation is current.
+            *self.probe.session.borrow_mut() = self.host.sessions().next().map(Rc::downgrade).unwrap_or_default();
+            if let Err(error) = attached { self.fail(cx, Fault::application(error)); return; }
+            if let Some(session) = self.host.sessions().next() {
+                session.region.host.install_stylesheet("preview-profile-fonts", &self.font_css);
+            }
         }
-        if let Some(session) = &self.session && let Err(error) = session.checkpoint() {
+        let retry: Rc<dyn Fn(zgui::view::DocumentId, u64)> = Rc::new(|_, _| {});
+        let checked = {
+            let mut surface = RuntimeSurface::new(&mut self.native, ImageChoice::PackageOnly);
+            self.host.checkpoint(&mut surface, retry)
+        };
+        if let Err(error) = checked {
             self.fail(cx, Fault::application(error));
             return;
         }
-        if let Some(session) = &self.session {
-            let revision = session.bridge.metadata_revision();
-            if revision != self.requested_metadata {
-                self.requested_metadata = revision;
-                if let Some(window) = self.native.windows().iter().find(|window|window.document_id()==session.region.document) {
-                    window.request_frame();
-                }
+        let state = self.session().map(|session| (session.bridge.metadata_revision(), session.region.document));
+        if let Some((revision, document)) = state && revision != self.requested_metadata {
+            self.requested_metadata = revision;
+            if let Some(window) = self.native.windows().iter().find(|window|window.document_id()==document) {
+                window.request_frame();
             }
         }
     }
@@ -207,9 +210,10 @@ impl AppHandler for PreviewHost {
     fn surfaces_lost(&mut self, cx: &dyn PlatformCx) {
         let deadline = self.deadline.get();
         self.deadline.set(deadline.min(Instant::now()+Duration::from_millis(20)));
-        if let Some(session) = self.session.take() {
-            let before = session.counts();
-            session.shutdown();
+        let documents: Vec<zgui::view::DocumentId> = self.host.sessions().map(|session| session.region.document).collect();
+        for document in documents {
+            let before = self.host.session(document).map(|session| session.counts());
+            let Some(session) = self.host.retire(document) else { continue; };
             let counts = session.counts();
             self.retired = Some(json!({"generation":session.generation,"before":before,"resources":counts,
                 "clean":counts==ResourceCounts::default()}));
@@ -222,8 +226,8 @@ impl AppHandler for PreviewHost {
             }
             drop(session);
         }
+        self.host.stop();
         self.deadline.set(deadline);
-        self.pending.borrow_mut().clear();
         self.requested_metadata = 0;
         *self.probe.session.borrow_mut() = Weak::new();
         self.probe.surface.borrow_mut().take();
@@ -237,7 +241,7 @@ impl AppHandler for PreviewHost {
     fn wake(&mut self, cx: &dyn PlatformCx, reason: WakeReason) { if self.fault.is_none() { self.native.wake(cx, reason); self.after_native(cx); } }
     fn idle(&mut self, cx: &dyn PlatformCx) -> IdlePolicy { if self.fault.is_some() { IdlePolicy::Block } else { self.native.idle(cx) } }
     fn deadline_reached(&mut self, cx: &dyn PlatformCx) { if self.fault.is_none() { self.native.deadline_reached(cx); self.after_native(cx); } }
-    fn shutting_down(&mut self, cx: &dyn PlatformCx) { if let Some(session) = &self.session { session.shutdown(); } self.native.shutting_down(cx); }
+    fn shutting_down(&mut self, cx: &dyn PlatformCx) { for session in self.host.sessions() { session.shutdown(); } self.native.shutting_down(cx); }
 }
 
 pub struct Driver {
@@ -254,6 +258,9 @@ pub struct Driver {
     environment: Rc<Environment>,
     pub(super) fixtures: Rc<FixtureRuntime>,
     maximum_time_us: u64,
+    /// A mount fault observed while the harness already owned the session; the
+    /// first `check` reports it so the run can persist the cause before finish.
+    startup_fault: Option<Fault>,
 }
 pub(super) fn stylesheet(profile:&LoadedProfile)->String {
     format!("{} :root {{ display:block; box-sizing:border-box; width:100%; height:100%; background-color:{}; {} }}",
@@ -301,18 +308,20 @@ impl Driver {
             job_timeout:Duration::from_millis(profile.profile.limits.max_pump_wall_ms),
             ..Default::default()
         };
-        let host = PreviewHost { native,pending,package,session:None,
-            executor:host_services::Executor::new(2,64).map_err(|error|Error::new("E_HOST_INVARIANT",9,error.to_string()))?,
-            deadline:deadline.clone(),limits,probe:probe.clone(),
+        let session_host = SessionHost::new(pending.clone(), SessionModule::package(package.clone()),
+            SessionPolicy::preview(limits, deadline.clone(), environment.clone(), fixtures.clone()),
+            RecoveryPolicy::Propagate);
+        let host = PreviewHost { native,host:session_host,
+            deadline:deadline.clone(),probe:probe.clone(),
             font_css:format!(":root {{ font-family:{}; }}",profile.font_family_css),fault:None,requested_metadata:0,
-            environment:environment.clone(),fixtures:fixtures.clone(),generation:0,retired:None };
+            retired:None };
         platform.set_color_scheme(Some(if profile.profile.theme == "dark" { ColorScheme::Dark } else { ColorScheme::Light }));
         let mut harness = Harness::over(platform, host);
         harness.hold_clock(true);
         let mut driver = Self { harness,probe,capture,deadline,run_deadline,step_start_frame:Cell::new(0),limits:profile.profile.limits.clone(),
             opaque:surface.opaque,dimensions:(profile.physical_width,profile.physical_height),surface:surface.clone(),
-            environment,fixtures,maximum_time_us:start+profile.profile.limits.max_virtual_duration_ms*1000 };
-        driver.bind_surface()?;
+            environment,fixtures,maximum_time_us:start+profile.profile.limits.max_virtual_duration_ms*1000,startup_fault:None };
+        if let Err(fault) = driver.bind_surface() { driver.startup_fault = Some(fault); }
         Ok(driver)
     }
     fn bind_surface(&mut self) -> Result<(), Fault> {
@@ -328,7 +337,7 @@ impl Driver {
         self.window()?.request_frame();
         self.check()
     }
-    pub fn generation(&self) -> u64 { self.harness.app().generation }
+    pub fn generation(&self) -> u64 { self.harness.app().host.generation() }
     /// Recreate the real native document while retaining run time, RNG and fixture history.
     pub fn recreate(&mut self) -> Result<Value, Fault> {
         self.check()?;
@@ -363,6 +372,7 @@ impl Driver {
         self.deadline.set(self.run_deadline.min(Instant::now()+Duration::from_millis(timeout_ms.unwrap_or(self.limits.max_step_wall_ms).min(self.limits.max_step_wall_ms))));
     }
     pub fn check(&mut self) -> Result<(), Fault> {
+        if let Some(fault) = self.startup_fault.take() { return Err(fault); }
         if let Some(fault) = self.harness.app_mut().fault.take() { return Err(fault); }
         if let Some(error) = self.probe.fault.borrow_mut().take() { return Err(error.into()); }
         if self.probe.frames.get()-self.step_start_frame.get()>u64::from(self.limits.max_frames_per_step) {
@@ -372,12 +382,12 @@ impl Driver {
         Ok(())
     }
     fn window(&self) -> Result<&Window, Error> {
-        let session = self.harness.app().session.as_ref().ok_or_else(||Error::new("E_HOST_INVARIANT",9,"no mounted session"))?;
+        let session = self.harness.app().session().ok_or_else(||Error::new("E_HOST_INVARIANT",9,"no mounted session"))?;
         self.harness.app().native.windows().iter().find(|window|window.document_id()==session.region.document)
             .ok_or_else(||Error::new("E_HOST_INVARIANT",9,"logical main surface has no current native window"))
     }
     fn window_mut(&mut self)->Result<&mut Window,Error> {
-        let document=self.harness.app().session.as_ref().ok_or_else(||Error::new("E_HOST_INVARIANT",9,"no mounted session"))?.region.document;
+        let document=self.harness.app().session().ok_or_else(||Error::new("E_HOST_INVARIANT",9,"no mounted session"))?.region.document;
         self.harness.app_mut().native.windows_mut().iter_mut().find(|window|window.document_id()==document)
             .ok_or_else(||Error::new("E_HOST_INVARIANT",9,"logical main surface has no current native window"))
     }
@@ -388,11 +398,11 @@ impl Driver {
         last.as_ref().is_some_and(|last| last.revision==window.dom().revision() && last.configuration==state.configuration_id
             && last.presentation==state.presentation_id && state.presented_draw.is_some()
             && last.generation==self.generation()
-            && self.harness.app().session.as_ref().is_some_and(|session|session.bridge.metadata_revision()==last.metadata_revision)
+            && self.harness.app().session().is_some_and(|session|session.bridge.metadata_revision()==last.metadata_revision)
             && last.resource_revision==window.image_resource_revision()
             && last.surface_configuration==self.probe.surface_configuration.get()
             && window.completed_frame().is_some_and(|frame| frame.layout_document_coherent
-                && Some(frame.ordinal)==last.frame["validationFrame"]["ordinal"].as_u64()
+                && frame.ordinal==last.frame.validation_frame.ordinal
                 && matches!(frame.outcome,FrameOutcome::Presented(_)|FrameOutcome::Skipped(SkipReason::Undamaged))))
     }
     fn runnable(&self) -> bool {
@@ -404,13 +414,13 @@ impl Driver {
     pub fn readiness(&self) -> Value {
         let resources=self.window().ok().map(|window|resources::snapshot(window,&[]));
         let resource=resources.as_ref().and_then(|result|result.as_ref().ok());
-        json!({"appReady":self.harness.app().session.is_some(),"currentWorkSettled":!self.runnable(),
+        json!({"appReady":self.harness.app().session().is_some(),"currentWorkSettled":!self.runnable(),
             "requiredAssetsReady":resource.map(|value|&value["requiredAssetsReady"]),"nativeAssetReadinessAvailable":true,"frameCurrent":self.frame_current(),
             "resourceRevision":self.window().ok().map(Window::image_resource_revision),
             "pendingAssets":resource.and_then(|value|value["pendingIds"].as_array()).map(|items|items.len()),
             "timeUs":self.environment.now_us(),"nextFixtureDeadlineUs":self.fixtures.next_deadline_us(),
             "nextNativeDeadlineUs":self.harness.parked_deadline().map(|next|next.saturating_duration_since(self.harness.platform().clock().origin()).as_micros()),
-            "requiredMetadataRevision":self.harness.app().session.as_ref().map(|session|session.bridge.metadata_revision()),
+            "requiredMetadataRevision":self.harness.app().session().map(|session|session.bridge.metadata_revision()),
             "requiredStateRevision":self.window().ok().map(|window|window.dom().revision()),"generation":self.generation()})
     }
     fn notify_fixture(&self)->Result<(),Error> {
@@ -459,7 +469,7 @@ impl Driver {
                 return Err(Error::new("E_CAPTURE_NOT_READY",5,"requiredFrameTimeUs differs from the current virtual clock")
                     .with_details(self.readiness()).into());
             }
-            if self.probe.last.borrow().as_ref().and_then(|last|last.frame["validationFrame"]["timeUs"].as_u64())!=Some(time) {
+            if self.probe.last.borrow().as_ref().map(|last|last.frame.validation_frame.time_us)!=Some(time) {
                 self.window()?.request_frame();
             }
         }
@@ -476,7 +486,7 @@ impl Driver {
             return Err(Error::new("E_ASSET_TIMEOUT",5,"visible resources did not reach current native demand").into());
         }
         let readiness=self.readiness();
-        if required_time.is_some_and(|time|self.probe.last.borrow().as_ref().and_then(|last|last.frame["validationFrame"]["timeUs"].as_u64())!=Some(time)) {
+        if required_time.is_some_and(|time|self.probe.last.borrow().as_ref().map(|last|last.frame.validation_frame.time_us)!=Some(time)) {
             return Err(Error::new("E_CAPTURE_NOT_READY",5,"validation frame timestamp differs from requiredFrameTimeUs").with_details(readiness).into());
         }
         let pixels = self.capture.read_current(self.window()?.renderer())?;
@@ -491,50 +501,51 @@ impl Driver {
         if last.presentation!=pixels.presentation_id || last.configuration!=pixels.configuration_id {
             return Err(Error::new("E_CAPTURE_NOT_READY",5,"pixel presentation and owned tree have different identities").into());
         }
+        let paths = CapturePaths::new(id).map_err(Fault::from)?;
         let mut frame = last.frame.clone();
-        frame["captureId"] = json!(id);
-        frame["readiness"] = readiness;
-        frame["resources"]=resource;
-        frame["allowedPendingAssets"]=json!(allowed_pending);
-        frame["physicalWidth"] = json!(pixels.pixels.size().width);
-        frame["physicalHeight"] = json!(pixels.pixels.size().height);
-        frame["pngDigest"] = json!(super::output::digest(&png));
-        let tree_bytes=super::output::json_bytes(&last.tree)?;
-        frame["treeDigest"] = json!(super::output::digest(&tree_bytes));
+        frame.capture_id = Some(paths.id().to_owned());
+        frame.extra.insert("readiness".into(),readiness);
+        frame.extra.insert("resources".into(),resource);
+        frame.extra.insert("allowedPendingAssets".into(),json!(allowed_pending));
+        frame.extra.insert("physicalWidth".into(),json!(pixels.pixels.size().width));
+        frame.extra.insert("physicalHeight".into(),json!(pixels.pixels.size().height));
+        frame.png_digest = Some(super::output::digest(&png));
+        let tree_value = serde_json::to_value(&last.tree).map_err(|error| Error::new("E_OUTPUT_IO",8,error.to_string()))?;
+        let tree_bytes=super::output::json_bytes(&tree_value)?;
+        frame.tree_digest = Some(super::output::digest(&tree_bytes));
+        let frame_value = serde_json::to_value(&frame).map_err(|error| Error::new("E_OUTPUT_IO",8,error.to_string()))?;
         let mut output = self.probe.output.borrow_mut();
-        output.bytes(&format!("captures/{id}.png"),"capture-pixels",&png)?;
-        output.bytes(&format!("captures/{id}.tree.json"),"capture-tree",&tree_bytes)?;
-        output.json(&format!("captures/{id}.frame.json"),"capture-frame",&frame)?;
+        output.bytes(&paths.png(),"capture-pixels",&png)?;
+        output.bytes(&paths.tree(),"capture-tree",&tree_bytes)?;
+        output.json(&paths.frame(),"capture-frame",&frame_value)?;
         if Instant::now()>=self.deadline.get() { return Err(Error::new("E_READINESS_TIMEOUT",5,"capture publication exceeded its step deadline").into()); }
-        Ok(json!({"captureId":id,"png":format!("captures/{id}.png"),"frame":format!("captures/{id}.frame.json"),"tree":format!("captures/{id}.tree.json")}))
+        Ok(paths.summary())
     }
     pub fn graphics(&self) -> Value { self.capture.metadata() }
     pub fn frames(&self) -> u64 { self.probe.frames.get() }
     pub fn failure_evidence(&self) -> Result<Value, Error> {
         let last = self.probe.last.borrow();
         let Some(last) = last.as_ref() else { return Ok(json!({"available":false})); };
-        let mut frame = last.frame.clone();
-        frame["historical"] = json!(true);
-        frame["satisfiesFailureRevision"] = json!(self.frame_current());
-        frame["failureReadiness"] = self.readiness();
-        let mut output = self.probe.output.borrow_mut();
-        output.json("failure/tree.json","failure-tree",&last.tree)?;
+        // An empty post-fault document is not publishable evidence; recovery
+        // selects the last complete checkpoint instead.
+        if last.tree.nodes.is_empty() { return Ok(json!({"available":false})); }
+        last.tree.validate_topology()?;
+        let readiness = self.readiness();
+        let satisfies = self.frame_current();
         // Read only an already presented buffer; never pump or enter application code.
-        let pixel_path = self.window().ok().and_then(|window|self.capture.read_current(window.renderer()).ok())
+        let pixels = self.window().ok().and_then(|window|self.capture.read_current(window.renderer()).ok())
             .filter(|pixels|pixels.presentation_id==last.presentation && pixels.configuration_id==last.configuration)
             .map(|pixels|capture::png(&pixels.pixels,self.opaque)).transpose()?;
-        if let Some(png) = pixel_path.as_ref() { output.bytes("failure/last-valid.png","historical-pixels",png)?; }
-        frame["pixelsAvailable"] = json!(pixel_path.is_some());
-        output.json("failure/frame.json","historical-frame",&frame)?;
-        Ok(json!({"available":true,"historical":true,"tree":"failure/tree.json","frame":"failure/frame.json",
-            "pixels":pixel_path.map(|_|"failure/last-valid.png")}))
+        let mut output = self.probe.output.borrow_mut();
+        evidence::publish_historical(&mut output, &last.tree, &last.frame, pixels.as_deref(),
+            HistoricalStatus { satisfies_failure_revision:Some(satisfies), readiness:Some(readiness), tree_role:"failure-tree" })
     }
     pub fn finish(mut self) -> (Value, Option<Fault>) {
         self.deadline.set(self.run_deadline.min(Instant::now()+Duration::from_millis(20)));
-        let previous_contract = self.harness.app().session.as_ref().and_then(|session|session.contract_failure()).is_some();
+        let previous_contract = self.harness.app().session().and_then(|session|session.contract_failure()).is_some();
         self.harness.shut_down();
         self.fixtures.dispose();
-        let session = self.harness.app().session.as_ref();
+        let session = self.harness.app().session();
         let counts = session.map(|session|session.counts()).unwrap_or_default();
         let cleanup = session.and_then(|session|session.take_cleanup_failure()).map(|error| {
             let mut fault = Fault::application(error.into());

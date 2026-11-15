@@ -2,6 +2,7 @@
 //! ZGUI_PLATFORM=wayland cargo test -p native-host native_tests::native_button_actions -- --ignored --exact --nocapture
 
 use super::*;
+use session::Session;
 use std::{fs, path::Path, process::Command, time::{SystemTime, UNIX_EPOCH}};
 use serde_json::Value;
 use zgui::{
@@ -35,7 +36,7 @@ struct NativeControls {
 
 impl NativeControls {
     fn session(&self) -> TestResult<Rc<Session>> {
-        self.inner.sessions.values().next().cloned().ok_or_else(|| "fixture session is not attached".into())
+        self.inner.host.sessions().next().cloned().ok_or_else(|| "fixture session is not attached".into())
     }
 
     fn report(&self) -> TestResult<Value> {
@@ -117,7 +118,7 @@ impl NativeControls {
         })
     }
 
-    fn advance(&self) -> TestResult { self.session()?.advance(false) }
+    fn advance(&self) -> TestResult { crate::integration::advance(&*self.session()?).map_err(Into::into) }
 
     fn drive(&mut self, cx: &dyn PlatformCx, surface: SurfaceId) -> TestResult {
         match self.step {

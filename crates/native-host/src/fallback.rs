@@ -6,7 +6,7 @@ use zgui::{
     vocab::{EventKind, ListenerOptions, Role, SemanticFlags},
 };
 
-use crate::MountRegion;
+use crate::session_host::MountRegion;
 
 const SHEET_NAME: &str = "host-fallback";
 const RETRY_LABEL: &str = "Retry last successful build";

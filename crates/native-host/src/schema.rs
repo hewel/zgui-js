@@ -28,7 +28,7 @@ macro_rules! object_struct {
                 #[derive(serde::Deserialize)]
                 $(#[$attribute])*
                 struct Fields { $($(#[$field_attribute])* $field: $type),* }
-                let fields: Fields = $crate::preview::schema::deserialize_object(deserializer)?;
+                let fields: Fields = $crate::schema::deserialize_object(deserializer)?;
                 Ok(Self { $($field: fields.$field),* })
             }
         }

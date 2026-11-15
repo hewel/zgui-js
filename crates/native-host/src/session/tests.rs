@@ -28,12 +28,12 @@ impl Native {
         Self { backend, host, region, waker: Arc::new(ChannelWaker(sender)), wakes, executor: host_services::Executor::new(2, 64).unwrap() }
     }
     fn prepare(&self, package: Rc<Package>, generation: u64) -> Result<Rc<Session>> {
-        Session::prepare(self.region.clone(), Some(package), generation, self.waker.clone(), SurfaceId::new(7), self.executor.clone(), SessionPolicy::Live)
+        Session::prepare(self.region.clone(), SessionModule::package(package), generation, self.waker.clone(), SurfaceId::new(7), SessionPolicy::live(self.executor.clone()))
     }
     fn preview(&self, package: Rc<Package>, limits: RuntimeLimits, deadline: Rc<Cell<Instant>>) -> Result<Rc<Session>> {
-        let environment = crate::preview::clock::Environment::new(Arc::new(zgui::platform::VirtualClock::new()), Some(0), 1);
-        let fixtures = crate::work::fixture::FixtureRuntime::new(Default::default(), environment.clone());
-        Session::prepare(self.region.clone(), Some(package), 1, self.waker.clone(), SurfaceId::new(7), self.executor.clone(), SessionPolicy::Preview { limits, deadline, environment, fixtures })
+        let environment = crate::environment::Environment::new(Arc::new(zgui::platform::VirtualClock::new()), Some(0), 1);
+        let fixtures = crate::assets::fixture::FixtureRuntime::new(Default::default(), environment.clone());
+        Session::prepare(self.region.clone(), SessionModule::package(package), 1, self.waker.clone(), SurfaceId::new(7), SessionPolicy::preview(limits, deadline, environment, fixtures))
     }
     fn text(&self) -> String { self.region.dom.text_content(self.region.root) }
     fn completion(&self, session: &Session) -> host_services::Completion {
@@ -192,7 +192,7 @@ fn faulted_native_tree_still_runs_js_cleanup_once() {
         ctx.globals().set("cleanupHook", Func::from(move || called.set(called.get() + 1)))
     }).unwrap();
     session.mount().unwrap();
-    assert!(session.advance(false).is_err());
+    assert!(session.invoke("advance").is_err());
     assert!(session.bridge.is_disposed());
     session.shutdown();
     session.shutdown();
@@ -253,6 +253,18 @@ fn promise_cancellation_runs_between_ready_service_completions() {
 }
 
 #[test]
+fn self_scheduling_preflight_jobs_are_budget_diagnostics_not_invariants() {
+    let native = Native::new();
+    let fixture = Fixture::new(&format!("queueMicrotask(function again() {{ queueMicrotask(again); }});\n{SIMPLE}"), "");
+    let error = native.preview(fixture.package(),
+        RuntimeLimits { max_jobs_per_pump: 1, ..RuntimeLimits::default() },
+        Rc::new(Cell::new(Instant::now() + Duration::from_secs(5)))).err().expect("self-scheduling preflight must fail");
+    let SessionError::Diagnostic(diagnostic) = error else { panic!("expected budget diagnostic, got {error:?}") };
+    assert_eq!(diagnostic.kind, js_runtime::DiagnosticKind::BudgetExceeded);
+    assert_eq!(diagnostic.phase, "preflight");
+}
+
+#[test]
 fn preview_caught_fixture_violation_fails_preflight_and_mount() {
     let native = Native::new();
     for preflight in [true, false] {
@@ -274,9 +286,15 @@ fn preview_caught_fixture_violation_fails_preflight_and_mount() {
             assert!(session.checkpoint().is_err());
             session.shutdown();
             assert_eq!(session.contract_failure().unwrap().code, "E_FIXTURE_MISSING_SERVICE");
+            // A retired session ignores late native binding notifications: no
+            // fault or owner wake, even with a sticky contract failure.
+            while native.wakes.try_recv().is_ok() {}
+            session.frame_checkpoint();
+            assert!(native.wakes.try_recv().is_err());
+            assert_eq!(session.counts(), ResourceCounts::default());
             error
         };
-        let failure = error.downcast_ref::<ContractFailure>().expect("fixture failure must retain its type");
+        let SessionError::Contract(failure) = error else { panic!("fixture failure must retain its type") };
         assert_eq!(failure.code, "E_FIXTURE_MISSING_SERVICE");
     }
 }
@@ -295,7 +313,8 @@ fn preview_rejections_reduce_handled_updates_but_fail_unhandled_and_eviction() {
         match expected {
             Some(message) => {
                 let error = session.checkpoint().unwrap_err();
-                assert_eq!(error.downcast_ref::<js_runtime::Diagnostic>().unwrap().message, message);
+                let SessionError::Diagnostic(diagnostic) = error else { panic!("rejection must stay a diagnostic") };
+                assert_eq!(diagnostic.message, message);
             }
             None => { session.checkpoint().unwrap(); }
         }
@@ -315,7 +334,7 @@ fn frame_checkpoint_retains_original_job_diagnostic() {
     }).unwrap();
     session.frame_checkpoint();
     let error = session.checkpoint().unwrap_err();
-    let diagnostic = error.downcast_ref::<js_runtime::Diagnostic>().expect("frame checkpoint must not stringify a job exception");
+    let SessionError::Diagnostic(diagnostic) = error else { panic!("frame checkpoint must not stringify a job exception") };
     assert_eq!(diagnostic.message, "original job sentinel");
     assert_eq!(diagnostic.phase, "pending job");
     assert!(diagnostic.stack.as_deref().unwrap().contains("originalJob"));
@@ -349,7 +368,8 @@ fn preview_uncaught_fixture_violation_retains_its_category_across_entries() {
         let fixture = Fixture::new(&format!("export const hostApiVersion=1; export function mount() {{ {statement} return () => {{}}; }}"), "");
         let session = native.preview(fixture.package(), RuntimeLimits::default(), Rc::new(Cell::new(Instant::now()+Duration::from_secs(5)))).unwrap();
         let failure = session.mount().and_then(|()|session.checkpoint().map(|_|())).unwrap_err();
-        assert_eq!(failure.downcast_ref::<ContractFailure>().unwrap().code,"E_FIXTURE_MISSING_SERVICE");
+        let SessionError::Contract(contract) = failure else { panic!("fixture failure must retain its type") };
+        assert_eq!(contract.code,"E_FIXTURE_MISSING_SERVICE");
         session.shutdown();
         assert_eq!(session.counts(),ResourceCounts::default());
     }
@@ -388,18 +408,16 @@ fn preview_installs_clock_before_module_evaluation_and_settles_fixture_through_o
     let native = Native::new();
     let clock = Arc::new(zgui::platform::VirtualClock::new());
     clock.advance(Duration::from_millis(17));
-    let environment = crate::preview::clock::Environment::new(clock.clone(), Some(1234), 7);
-    let definition: crate::work::fixture::FixtureDefinition = serde_json::from_value(serde_json::json!({
+    let environment = crate::environment::Environment::new(clock.clone(), Some(1234), 7);
+    let definition: crate::assets::fixture::FixtureDefinition = serde_json::from_value(serde_json::json!({
         "schemaVersion":1, "id":"session-service", "services": {
             "assets":{"provider":"mock-text-assets-v1","latencyMs":5,"initialState":{"assets":{"test.txt":{}}}}
         }, "events":[]
     })).unwrap();
-    let fixtures = crate::work::fixture::FixtureRuntime::new(definition, environment.clone());
-    let session = Session::prepare(native.region.clone(), Some(fixture.package()), 1, native.waker.clone(),
-        SurfaceId::new(7), native.executor.clone(), SessionPolicy::Preview {
-            limits: RuntimeLimits::default(), deadline: Rc::new(Cell::new(Instant::now() + Duration::from_secs(5))),
-            environment, fixtures: fixtures.clone(),
-        }).unwrap();
+    let fixtures = crate::assets::fixture::FixtureRuntime::new(definition, environment.clone());
+    let session = Session::prepare(native.region.clone(), SessionModule::package(fixture.package()), 1, native.waker.clone(),
+        SurfaceId::new(7), SessionPolicy::preview(RuntimeLimits::default(), Rc::new(Cell::new(Instant::now() + Duration::from_secs(5))),
+            environment, fixtures.clone())).unwrap();
     session.mount().unwrap();
     assert_eq!(native.text(), "1251:17");
     assert_eq!(fixtures.next_deadline_us(), Some(22000));

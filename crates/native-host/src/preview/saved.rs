@@ -1,8 +1,8 @@
 //! Bounded immutable run artifacts and saved-tree queries; never constructs a runtime or renderer.
-use std::{collections::{HashMap,HashSet},io::Read,path::{Path,PathBuf}};
+use std::{collections::HashSet,io::Read,path::{Path,PathBuf}};
 use serde_json::{Value,json};
 use sha2::{Digest, Sha256};
-use super::{Error,output::digest,scenario::{Selector,Target},selectors};
+use super::{Error,evidence::{CapturePaths,FrameEvidence,TreeEvidence},output::digest,scenario::{Selector,Target},selectors};
 
 const FIELDS:&[&str]=&["token","parent","surface","generation","kind","ownership","testId","role","name","text","value","state","boundsLogical","boundsDevice","boundsKind","source","textTruncated","testIdTruncated","nameTruncated","valueTruncated","pointerReachabilityVerified"];
 
@@ -47,54 +47,17 @@ pub fn command(args:Vec<String>)->Result<Value,Error> {
     let options=options(args)?;
     let run=SavedRun::open(&options.root)?;
     let capture=run.capture(&options.capture)?;
-    query(&capture.tree,&capture.tree_digest,&run.root.join(format!("captures/{}.tree.json",options.capture)),
+    query(&capture.tree,&capture.tree_digest,&run.root.join(CapturePaths::new(&options.capture)?.tree()),
         run.result["status"].as_str().expect("validated terminal status"),&options)
 }
 
-fn validate_identity(tree:&Value,frame:&Value,result:&Value,capture:&str,tree_digest:&str)->Result<(),Error> {
-    if tree["schemaVersion"]!=1 || frame["schemaVersion"]!=1 || result["schemaVersion"]!=1 || result["command"]!="run"
-        || frame["captureId"]!=capture || frame["treeDigest"]!=tree_digest || frame["layoutDocumentCoherent"]!=true
-        || tree["buildId"].as_str().is_none_or(str::is_empty) || tree["buildId"]!=frame["buildId"] || tree["buildId"]!=result["build"]["buildId"]
-        || tree["generation"].as_u64().is_none_or(|generation|generation==0 || result["generation"].as_u64().is_none_or(|current|generation>current))
-        || tree["generation"]!=frame["generation"]
-        || tree["surface"]!="main" || tree["surface"]!=frame["surface"]
-        || tree["frameOrdinal"].as_u64().is_none() || tree["frameOrdinal"]!=frame["validationFrame"]["ordinal"]
-        || tree["presentationSequence"].as_u64().is_none() || tree["presentationSequence"]!=frame["pixelPresentation"]["sequence"]
-        || tree["metadataRevision"].as_u64().is_none() || tree["metadataRevision"]!=frame["metadataRevision"] {
-        return Err(Error::new("E_OUTPUT_IO",8,"capture, tree and terminal run identities disagree"));
-    }
-    let native_resources=frame["resources"].get("requiredAssetsReady").is_some();
-    for field in ["resourceRevision","surfaceConfiguration"] {
-        if native_resources || tree.get(field).is_some() || frame.get(field).is_some() {
-            if tree[field].as_u64().is_none() || tree[field]!=frame[field] {
-                return Err(Error::new("E_OUTPUT_IO",8,"capture resource/surface configuration identities disagree"));
-            }
-        }
-    }
-    if frame.get("resourceRevision").is_some() && frame["resourceRevision"]!=frame["resources"]["resourceRevision"] {
-        return Err(Error::new("E_OUTPUT_IO",8,"capture readiness belongs to another resource revision"));
-    }
-    Ok(())
-}
-
-fn query(tree:&Value,tree_digest:&str,path:&Path,source_status:&str,options:&Options)->Result<Value,Error> {
-    let nodes=tree["nodes"].as_array().ok_or_else(||Error::new("E_OUTPUT_IO",8,"saved tree has no node array"))?;
-    if nodes.is_empty() || nodes.len()>4096 { return Err(Error::new("E_OUTPUT_LIMIT",8,"saved tree exceeds the bounded native snapshot contract")); }
+fn query(tree:&TreeEvidence,tree_digest:&str,path:&Path,source_status:&str,options:&Options)->Result<Value,Error> {
+    let nodes=&tree.nodes;
     let selected=if let Some(target)=&options.target { selectors::unique(tree,target,false)?.expect("required target") } else { 0 };
-    let mut by_token=HashMap::with_capacity(nodes.len());
+    let parents=tree.validate_topology()?;
     let mut depths=Vec::with_capacity(nodes.len());
-    let mut parents=Vec::with_capacity(nodes.len());
-    for (index,node) in nodes.iter().enumerate() {
-        let token=node["token"].as_str().ok_or_else(||Error::new("E_OUTPUT_IO",8,"saved node has no token"))?;
-        if token.len()>64 || by_token.contains_key(token) { return Err(Error::new("E_OUTPUT_IO",8,"saved tree has invalid or duplicate tokens")); }
-        let parent=match node["parent"].as_str() {
-            Some(parent)=>Some(*by_token.get(parent).ok_or_else(||Error::new("E_OUTPUT_IO",8,"saved tree is not parent-first"))?),
-            None if node["parent"].is_null()=>None,
-            _=>return Err(Error::new("E_OUTPUT_IO",8,"saved node parent is invalid")),
-        };
+    for &parent in &parents {
         depths.push(parent.map_or(0_usize,|parent:usize|depths[parent]+1));
-        parents.push(parent);
-        by_token.insert(token,index);
     }
     let mut selected_nodes=vec![selected];
     if let Some(parent)=parents[selected] { selected_nodes.push(parent); }
@@ -111,15 +74,16 @@ fn query(tree:&Value,tree_digest:&str,path:&Path,source_status:&str,options:&Opt
             .ok_or_else(||schema("cursor does not belong to this immutable snapshot and query"))?,
     };
     let mut result=json!({"schemaVersion":1,"command":"inspect","status":"passed","exitCode":0,
-        "sourceRunStatus":source_status,"artifact":path,"treeDigest":tree_digest,"buildId":tree["buildId"],"generation":tree["generation"],
-        "frameOrdinal":tree["frameOrdinal"],"presentationSequence":tree["presentationSequence"],"selectedToken":nodes[selected]["token"],
+        "sourceRunStatus":source_status,"artifact":path,"treeDigest":tree_digest,"buildId":tree.build_id,"generation":tree.generation,
+        "frameOrdinal":tree.frame_ordinal,"presentationSequence":tree.presentation_sequence,"selectedToken":nodes[selected].token,
         "nodes":[],"nextCursor":null,"truncation":{"pageRemaining":0,"depthOmitted":depth_omitted,
-            "sourceNodes":tree["truncation"]["nodes"].as_bool(),"sourceText":tree["truncation"]["text"].as_bool(),"fieldBytes":128}});
+            "sourceNodes":tree.detail("truncation")["nodes"].as_bool(),"sourceText":tree.detail("truncation")["text"].as_bool(),"fieldBytes":128}});
     let base=serde_json::to_vec(&result).expect("inspection serializes").len();
     let mut used=base+prefix.len()+24; // Reserve the longest cursor, including its offset.
     let mut projected=Vec::new();
     for index in selected_nodes.iter().skip(offset).take(options.max_nodes) {
-        let node=project(&nodes[*index],&options.fields);
+        // The allowlisted projection serializes one node, never the whole tree.
+        let node=project(&serde_json::to_value(&nodes[*index]).expect("typed node serializes"),&options.fields);
         let bytes=serde_json::to_vec(&node).expect("node serializes").len()+1;
         if used+bytes+1>super::MAX_STDOUT_BYTES { break; }
         used+=bytes;
@@ -154,7 +118,7 @@ const MAX_FILE_BYTES:u64=64*1024*1024;
 const MAX_RUN_BYTES:u64=256*1024*1024;
 const MAX_ENTRIES:usize=65_536;
 
-super::schema::object_struct! {
+crate::schema::object_struct! {
     #[serde(rename_all="camelCase")]
     struct Inventory {
         schema_version:u32,
@@ -163,7 +127,7 @@ super::schema::object_struct! {
         self_path:Option<String>,
     }
 }
-super::schema::object_struct! {
+crate::schema::object_struct! {
     struct InventoryEntry {
         path:String,
         role:String,
@@ -183,8 +147,8 @@ pub(super) struct SavedRun {
 }
 
 pub(super) struct SavedCapture {
-    pub tree:Value,
-    pub frame:Value,
+    pub tree:TreeEvidence,
+    pub frame:FrameEvidence,
     pub tree_digest:String,
 }
 
@@ -235,12 +199,12 @@ impl SavedRun {
     }
 
     pub fn capture(&self,id:&str)->Result<SavedCapture,Error> {
-        if !super::scenario::safe_id(id) { return Err(schema("invalid capture ID")); }
-        let tree_bytes=self.verified(&format!("captures/{id}.tree.json"),"capture-tree")?;
-        let tree=serde_json::from_slice(&tree_bytes).map_err(io)?;
-        let frame=self.json(&format!("captures/{id}.frame.json"),"capture-frame")?;
+        let paths=CapturePaths::new(id)?;
+        let tree_bytes=self.verified(&paths.tree(),"capture-tree")?;
+        let tree:TreeEvidence=serde_json::from_slice(&tree_bytes).map_err(io)?;
+        let frame:FrameEvidence=serde_json::from_slice(&self.verified(&paths.frame(),"capture-frame")?).map_err(io)?;
         let tree_digest=digest(&tree_bytes);
-        validate_identity(&tree,&frame,&self.result,id,&tree_digest)?;
+        frame.validate_capture(&tree,&paths,&tree_digest,&self.result)?;
         Ok(SavedCapture{tree,frame,tree_digest})
     }
 
@@ -359,15 +323,25 @@ fn io(error:impl std::fmt::Display)->Error { Error::new("E_OUTPUT_IO",8,error.to
 #[cfg(test)]
 mod tests {
     use super::*;
+    use super::super::evidence::TreeEvidence;
 
-    fn fixture()->Value {
-        json!({"schemaVersion":1,"surface":"main","generation":1,"buildId":"example","frameOrdinal":3,
+    fn node(token:&str,parent:Option<&str>)->Value {
+        json!({"token":token,"parent":parent,"surface":"main","generation":1,"kind":"view","ownership":"app",
+            "text":"","textTruncated":false,"testIdTruncated":false,"nameTruncated":false,"valueTruncated":false,
+            "source":null,"value":null,"state":{"enabled":null,"visible":null,"focused":false},
+            "boundsLogical":null,"boundsDevice":null,"boundsKind":"none","pointerReachabilityVerified":false})
+    }
+    fn fixture()->TreeEvidence {
+        let root=node("node-0",None);
+        let mut selected=node("node-1",Some("node-0"));
+        selected["testId"]=json!("selected");
+        let mut child=node("node-2",Some("node-1"));
+        child["testId"]=json!("child");
+        let mut unrelated=node("node-3",Some("node-0"));
+        unrelated["testId"]=json!("unrelated");
+        serde_json::from_value(json!({"schemaVersion":1,"surface":"main","generation":1,"buildId":"example","frameOrdinal":3,
             "presentationSequence":2,"metadataRevision":1,"truncation":{"nodes":false,"text":false},
-            "nodes":[
-                {"token":"node-0","parent":null,"testId":null},
-                {"token":"node-1","parent":"node-0","testId":"selected"},
-                {"token":"node-2","parent":"node-1","testId":"child"},
-                {"token":"node-3","parent":"node-0","testId":"unrelated"}]})
+            "nodes":[root,selected,child,unrelated]})).expect("typed fixture")
     }
     fn selection()->Options {
         options(["--run","unused","--capture","initial","--test-id","selected","--max-nodes","1","--fields","token,parent"].map(str::to_owned).to_vec()).unwrap()
@@ -394,11 +368,14 @@ mod tests {
     }
     #[test]
     fn byte_pagination_preserves_all_nodes_and_marks_utf8_prefixes() {
-        let mut tree=fixture();
-        tree["nodes"]=json!((0..80).map(|index|json!({
-            "token":format!("node-{index}"),"parent":(index>0).then_some("node-0"),
-            "name":"界".repeat(512),"text":"🙂".repeat(512)
-        })).collect::<Vec<_>>());
+        let tree:TreeEvidence=serde_json::from_value(json!({"schemaVersion":1,"surface":"main","generation":1,"buildId":"example",
+            "frameOrdinal":3,"presentationSequence":2,"metadataRevision":1,"truncation":{"nodes":false,"text":false},
+            "nodes":(0..80).map(|index|{
+                let mut record=node(&format!("node-{index}"),(index>0).then_some("node-0"));
+                record["name"]=json!("界".repeat(512));
+                record["text"]=json!("🙂".repeat(512));
+                record
+            }).collect::<Vec<_>>()})).expect("typed fixture");
         let hash=digest(&serde_json::to_vec(&tree).unwrap());
         let mut options=options(["--run","unused","--capture","initial","--max-nodes","100","--fields","token,name,text"].map(str::to_owned).to_vec()).unwrap();
         let mut tokens=HashSet::new();
@@ -419,52 +396,5 @@ mod tests {
         }
         assert_eq!(tokens.len(),80);
         assert!(pages>1);
-    }
-    #[test]
-    fn internally_consistent_capture_cannot_belong_to_another_capture_or_run() {
-        let tree=fixture();
-        let frame=json!({"schemaVersion":1,"captureId":"initial","treeDigest":"hash","layoutDocumentCoherent":true,
-            "buildId":"example","generation":1,"surface":"main","metadataRevision":1,"validationFrame":{"ordinal":3},"pixelPresentation":{"sequence":2}});
-        let result=json!({"schemaVersion":1,"command":"run","build":{"buildId":"example"},"generation":1});
-        validate_identity(&tree,&frame,&result,"initial","hash").unwrap();
-        let mut later_result=result.clone();
-        later_result["generation"]=json!(2);
-        validate_identity(&tree,&frame,&later_result,"initial","hash").unwrap();
-        let mut mismatched_frame=frame.clone();
-        mismatched_frame["generation"]=json!(2);
-        assert!(validate_identity(&tree,&mismatched_frame,&later_result,"initial","hash").is_err());
-        assert!(validate_identity(&tree,&frame,&result,"after","hash").is_err());
-        for (field,value) in [("buildId",json!("other-build")),("generation",json!(2))] {
-            let mut tree=tree.clone();
-            let mut frame=frame.clone();
-            tree[field]=value.clone();
-            frame[field]=value;
-            assert!(validate_identity(&tree,&frame,&result,"initial","hash").is_err());
-        }
-        for revision in [None,Some(Value::Null),Some(json!("1")),Some(json!(-1))] {
-            let mut tree=tree.clone();
-            let mut frame=frame.clone();
-            tree.as_object_mut().unwrap().remove("metadataRevision");
-            frame.as_object_mut().unwrap().remove("metadataRevision");
-            if let Some(value)=revision { tree["metadataRevision"]=value.clone(); frame["metadataRevision"]=value; }
-            assert!(validate_identity(&tree,&frame,&result,"initial","hash").is_err());
-        }
-        for field in ["resourceRevision","surfaceConfiguration"] {
-            let mut tree=tree.clone();
-            let mut frame=frame.clone();
-            for identity in ["resourceRevision","surfaceConfiguration"] { tree[identity]=json!(1);frame[identity]=json!(1); }
-            frame["resources"]=json!({"requiredAssetsReady":true,"resourceRevision":1});
-            tree[field]=json!(1);frame[field]=json!(2);
-            assert!(validate_identity(&tree,&frame,&result,"initial","hash").is_err());
-            frame[field]=json!(1);
-            validate_identity(&tree,&frame,&result,"initial","hash").unwrap();
-            tree.as_object_mut().unwrap().remove(field);frame.as_object_mut().unwrap().remove(field);
-            assert!(validate_identity(&tree,&frame,&result,"initial","hash").is_err());
-            tree[field]=Value::Null;frame[field]=Value::Null;
-            assert!(validate_identity(&tree,&frame,&result,"initial","hash").is_err());
-        }
-        let mut frame=frame;
-        frame["layoutDocumentCoherent"]=json!(false);
-        assert!(validate_identity(&tree,&frame,&result,"initial","hash").is_err());
     }
 }

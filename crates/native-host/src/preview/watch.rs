@@ -61,7 +61,7 @@ fn stdout(mut bytes:&[u8])->Result<(),Error> {
     }
     Ok(())
 }
-super::schema::object_struct! {
+crate::schema::object_struct! {
     #[serde(rename_all="camelCase", deny_unknown_fields)]
     struct BuildStatus {
         schema_version: u32, attempt_id: String, app: String, status: String,
@@ -69,7 +69,7 @@ super::schema::object_struct! {
         build_id: Option<String>, error: Option<BuildError>
     }
 }
-super::schema::object_struct! {
+crate::schema::object_struct! {
     #[serde(deny_unknown_fields)]
     struct BuildError { code: String, message: String }
 }

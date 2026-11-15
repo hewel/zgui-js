@@ -1,6 +1,6 @@
 //! Real compositor gate: full TSX generations, failed candidates and native recovery.
 use super::*;
-use crate::{session::ResourceCounts, test_package::Fixture};
+use crate::{session::{ResourceCounts, Session}, test_package::Fixture};
 use std::{cell::Cell, path::Path, process::Command, time::Instant};
 use zgui::{geom::{Css, CssPx, Device, DevicePx, Point, Scale}, vocab::{Modifiers, PointerAction, PointerButton, PointerEvent}};
 
@@ -25,7 +25,7 @@ struct ReloadGate {
 }
 impl ReloadGate {
     fn current(&self) -> TestResult<Rc<Session>> {
-        self.inner.sessions.values().next().cloned().ok_or_else(|| "active session is absent".into())
+        self.inner.host.sessions().next().cloned().ok_or_else(|| "active session is absent".into())
     }
     fn stop(&mut self, cx: &dyn PlatformCx, error: impl std::fmt::Display) {
         self.failures.borrow_mut().push(format!("{:?}: {error}", self.stage));
@@ -65,7 +65,7 @@ impl ReloadGate {
                 let active = self.current()?;
                 let before = active.region.dom.text_content(active.region.root);
                 if !before.contains("Service: Rust task completed") { return Ok(()); }
-                let outcome = self.inner.replace_session(cx, document, Some(self.bad_eval.package()));
+                let outcome = self.inner.replace_session(cx, document, SessionModule::package(self.bad_eval.package()));
                 if !matches!(outcome, ReloadOutcome::Rejected(_)) { return Err(format!("evaluation failure did not reject: {outcome:?}").into()); }
                 if !Rc::ptr_eq(&active, &self.current()?) || active.region.dom.text_content(active.region.root) != before {
                     return Err("preflight failure changed the active app".into());
@@ -73,7 +73,7 @@ impl ReloadGate {
                 let mut expected = None;
                 for _ in 0..16 {
                     let previous = self.current()?;
-                    let outcome = self.inner.replace_session(cx, document, Some(self.good.clone()));
+                    let outcome = self.inner.replace_session(cx, document, SessionModule::package(self.good.clone()));
                     if !matches!(outcome, ReloadOutcome::Mounted(_)) { return Err(format!("reload failed: {outcome:?}").into()); }
                     self.retire(previous)?;
                     let counts = self.current()?.counts();
@@ -90,12 +90,12 @@ impl ReloadGate {
                 if self.inner.native.windows()[0].nodes_with_class("promise-layout-row").len() != 1 {
                     return Err("native frame reclamation retained prior-generation layout rows".into());
                 }
-                let outcome = self.inner.replace_session(cx, document, Some(self.bad_mount.package()));
+                let outcome = self.inner.replace_session(cx, document, SessionModule::package(self.bad_mount.package()));
                 if !matches!(outcome, ReloadOutcome::Fallback(_)) { return Err(format!("mount failure missed fallback: {outcome:?}").into()); }
                 self.retire(active)?;
-                if !self.inner.sessions.is_empty() { return Err("failed generation remained active".into()); }
-                self.failed_generation = self.inner.fallbacks.get(&document).ok_or("Rust fallback missing")?.generation;
-                let region = &self.inner.regions[&document];
+                if self.inner.host.sessions().next().is_some() { return Err("failed generation remained active".into()); }
+                self.failed_generation = self.inner.host.fallback_generation(document).ok_or("Rust fallback missing")?;
+                let region = self.inner.host.region(document).ok_or("mount region missing")?;
                 let text = region.dom.text_content(region.root);
                 if !text.contains("Application error") || !text.contains("mount exploded") { return Err(format!("fallback lost original failure: {text}").into()); }
                 self.stage = Stage::Fallback;
@@ -118,9 +118,9 @@ impl ReloadGate {
             Stage::Recovering if native_frame => {
                 // Native input is dispatched by a frame; its Retry message is
                 // consumed by a later owner wake, not by that same input frame.
-                let Some(active) = self.inner.sessions.get(&document).cloned() else { return Ok(()); };
+                let Some(active) = self.inner.host.session(document).cloned() else { return Ok(()); };
                 if !active.region.dom.text_content(active.region.root).contains("Service: Rust task completed") { return Ok(()); }
-                if self.inner.fallbacks.contains_key(&document) || active.generation <= self.failed_generation {
+                if self.inner.host.fallback_generation(document).is_some() || active.generation <= self.failed_generation {
                     return Err("native retry did not create a clean successful generation".into());
                 }
                 self.recovered_generation = active.generation;
@@ -132,7 +132,7 @@ impl ReloadGate {
             }
             Stage::StaleDelivery if trigger == Trigger::Wake => {
                 let active = self.current()?;
-                if active.generation != self.recovered_generation || self.inner.fallbacks.contains_key(&document) {
+                if active.generation != self.recovered_generation || self.inner.host.fallback_generation(document).is_some() {
                     return Err("stale delivery changed the recovered generation".into());
                 }
                 if !active.region.dom.text_content(active.region.root).contains("Service: Rust task completed") { return Err("stale delivery changed recovered text".into()); }

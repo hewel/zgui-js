@@ -26,6 +26,15 @@ Platform and window-manager capabilities come from the pinned upstream zgui back
 
 See the [runtime ownership diagram](docs/development/tsx-native-ui.md#31-system-boundaries) and [preview execution diagram](docs/development/preview-mode.md#31-shared-production-path) for the detailed boundaries.
 
+The Rust implementation concentrates lifecycle and evidence rules in shared modules; domain terms are defined in [GLOSSARY.md](GLOSSARY.md).
+
+- [session_host.rs](crates/native-host/src/session_host.rs) owns generation allocation, replacement, retirement, and retry. Live and preview adapters use the same interface, with fallback or propagated failures selected explicitly.
+- [session.rs](crates/native-host/src/session.rs) owns module evaluation and bounded work turns, returning typed diagnostics, contract failures, or host invariant errors. [integration.rs](crates/native-host/src/integration.rs) owns the baseline and exercise workflow.
+- [assets.rs](crates/native-host/src/assets.rs) provides the seam for live and fixture asset adapters; scheduling and JavaScript promise roots remain in `work.rs`.
+- [run/ledger.rs](crates/native-host/src/preview/run/ledger.rs) owns action progress and failure precedence. [evidence.rs](crates/native-host/src/preview/evidence.rs) owns capture identity, validation, paths, and historical publication.
+
+These modules give callers leverage through shared behavior and maintainers locality for lifecycle, request, and publication tests. Tests cross the same interfaces used by the live host and preview.
+
 ## Requirements
 
 | Component | Requirement |

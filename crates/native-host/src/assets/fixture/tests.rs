@@ -1,5 +1,5 @@
 use super::*;
-use crate::{test_package::Fixture, work::{ServicePolicy, Work}};
+use crate::{assets::AssetSource, test_package::Fixture, work::Work};
 use js_runtime::{JsRuntime, RuntimeLimits};
 use std::{sync::Arc, time::Duration};
 use zgui::{platform::{SurfaceId, VirtualClock, WakeReason, Waker}, view::{HostHandle, stub::StubHost}};
@@ -26,7 +26,7 @@ impl Harness {
         let environment = Environment::new(clock.clone(), Some(1000), 7);
         let runtime = FixtureRuntime::new(definition, environment.clone());
         let work = Work::new(HostHandle::from_rc(Rc::new(StubHost::default())), Some(package.package()), 7,
-            host_services::Executor::new(1, 8).unwrap(), Arc::new(NoWake), SurfaceId::new(7), ServicePolicy::Fixture(runtime.clone()));
+            Arc::new(NoWake), SurfaceId::new(7), AssetSource::Fixture(runtime.clone()));
         let mut engine = JsRuntime::new(RuntimeLimits::default()).unwrap();
         engine.with_context(|ctx| { environment.install(&ctx)?; work.install(&ctx)?; ctx.eval::<(), _>("globalThis.seen = []; globalThis.errors = [];") }).unwrap();
         work.mounting(); work.mounted();
@@ -56,7 +56,7 @@ impl Drop for Harness { fn drop(&mut self) { self.work.finish_stop(); } }
 fn zero_latency_never_enters_javascript_during_construction_and_uses_verified_bytes() {
     let mut h = Harness::new(definition(json!({"assets":assets(0)}), json!([])));
     // Mutating the source package after load must not change the fixture payload.
-    let directory = h.work.package.as_ref().unwrap().directory.clone();
+    let directory = h._package.package().directory.clone();
     std::fs::write(directory.join("test.txt"), "ambient replacement").unwrap();
     h.script("globalThis.request = __zguiServices.readTextAsset('test.txt'); request.promise.then(value => seen.push(value));");
     h.jobs();
@@ -269,7 +269,7 @@ fn retired_generation_preserves_fixture_ledger_events_and_new_registrations() {
     h.work.finish_stop();
     assert_eq!(h.work.counts(),(0,0,0));
     let work=Work::new(HostHandle::from_rc(Rc::new(StubHost::default())),Some(h._package.package()),8,
-        host_services::Executor::new(1,8).unwrap(),Arc::new(NoWake),SurfaceId::new(8),ServicePolicy::Fixture(h.runtime.clone()));
+        Arc::new(NoWake),SurfaceId::new(8),AssetSource::Fixture(h.runtime.clone()));
     h.engine.with_context(|ctx|work.install(&ctx)).unwrap();
     work.mounting(); work.mounted();
     h.work=work;

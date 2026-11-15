@@ -24,19 +24,19 @@ impl Driver {
                 let last=last.as_ref().ok_or_else(stale)?;
                 let index=selectors::unique(&last.tree,target,false)?.expect("required unique target");
                 let native=last.native_nodes.get(index).ok_or_else(stale)?.native;
-                let record=&last.tree["nodes"][index];
-                if record["state"]["visible"]!=true {
+                let record=&last.tree.nodes[index];
+                if record.state.visible!=Some(true) {
                     return Err(target_error("E_TARGET_HIDDEN","target has no positive visible native box",record).into());
                 }
-                if record["state"]["enabled"]!=true {
+                if record.state.enabled!=Some(true) {
                     return Err(target_error("E_TARGET_DISABLED","target or an ancestor is disabled",record).into());
                 }
                 let window=self.window()?;
                 let (device,samples)=target_point(window,native,last)?;
                 let scale=window.surface().scale_factor() as f32;
                 let logical=Point::new(CssPx(device.x.0/scale),CssPx(device.y.0/scale));
-                (logical,json!({"target":selectors::summary(record),"generation":last.tree["generation"],
-                    "validationFrame":last.frame["validationFrame"],"metadataRevision":last.metadata_revision,
+                (logical,json!({"target":selectors::summary(record),"generation":last.tree.generation,
+                    "validationFrame":serde_json::to_value(&last.frame.validation_frame).expect("frame stamp serializes"),"metadataRevision":last.metadata_revision,
                     "positionLogical":{"x":logical.x.0,"y":logical.y.0},"positionDevice":{"x":device.x.0,"y":device.y.0},
                     "nativeHitVerified":true,"pointSamples":samples}))
             }
@@ -101,8 +101,9 @@ impl Driver {
         let last=self.probe.last.borrow();
         let last=last.as_ref().ok_or_else(stale)?;
         let index=selectors::unique(&last.tree,target,matches!(check,Check::Exists(false)))?;
-        let node=index.map(|index|&last.tree["nodes"][index]);
-        let record=node.unwrap_or(&Value::Null);
+        let node=index.map(|index|&last.tree.nodes[index]);
+        // One node is serialized for the assertion record; its shape is unchanged.
+        let record=node.map(|node|serde_json::to_value(node).expect("typed node serializes")).unwrap_or(Value::Null);
         let exists=json!(index.is_some());
         let (property,actual,truncated)=match check {
             Check::Exists(_)=>("exists",&exists,false),
@@ -121,7 +122,7 @@ impl Driver {
                 (actual.as_bool()==Some(*value),json!(value)),
         };
         let details=json!({"requested":selectors::requested(target),"property":property,"expected":expected,
-            "actual":selectors::short(actual),"node":node.map(selectors::summary),"frameOrdinal":last.tree["frameOrdinal"],"generation":last.tree["generation"]});
+            "actual":selectors::short(actual),"node":node.map(selectors::summary),"frameOrdinal":last.tree.frame_ordinal,"generation":last.tree.generation});
         if truncated || actual.is_null() {
             return Err(Error::new("E_ASSERTION_UNAVAILABLE",5,"the exact native property is unavailable or truncated").with_details(details).into());
         }
@@ -131,8 +132,10 @@ impl Driver {
 }
 
 fn stale() -> Error { Error::new("E_TARGET_STALE",4,"target has no current coherent native snapshot") }
-fn target_error(code:&'static str,message:&str,node:&Value) -> Error {
-    Error::new(code,4,message).with_details(json!({"target":selectors::summary(node),"state":node["state"],"boundsDevice":node["boundsDevice"]}))
+fn target_error(code:&'static str,message:&str,node:&crate::preview::evidence::NodeEvidence) -> Error {
+    Error::new(code,4,message).with_details(json!({"target":selectors::summary(node),
+        "state":serde_json::to_value(&node.state).expect("node state serializes"),
+        "boundsDevice":serde_json::to_value(&node.bounds_device).expect("node bounds serialize")}))
 }
 
 /// Start with clipped native fragments, not a logical box with guessed scroll/transform offsets.
@@ -168,7 +171,7 @@ fn target_point(window:&zgui::runtime::Window,native:NodeId,snapshot:&OwnedFrame
                 if chain.contains(&target) { return Ok((point,samples)); }
                 if window.hit_contains(native,point) && let Some(blocker)=chain.last() {
                     let record=snapshot.native_nodes.iter().position(|node|zgui_view_dom::id::to_document(node.native)==Some(*blocker));
-                    let summary=record.map(|index|selectors::summary(&snapshot.tree["nodes"][index]))
+                    let summary=record.map(|index|selectors::summary(&snapshot.tree.nodes[index]))
                         .unwrap_or_else(||json!({"nativeIdentity":format!("{blocker:?}"),"ownership":"native"}));
                     if blockers.len()<3 && !blockers.contains(&summary) { blockers.push(summary); }
                 }

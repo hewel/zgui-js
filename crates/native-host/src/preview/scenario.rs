@@ -156,7 +156,7 @@ pub enum Check {
     Value(String),
 }
 
-super::schema::object_struct! {
+crate::schema::object_struct! {
     #[serde(rename_all = "camelCase", deny_unknown_fields)]
     pub struct ServiceCallCheck {
         pub service:String,

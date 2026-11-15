@@ -4,7 +4,7 @@ use std::{
     io::Read,
     path::Path,
 };
-pub(crate) use crate::work::fixture::FixtureDefinition;
+pub(crate) use crate::assets::fixture::FixtureDefinition;
 use super::{Error, output::digest};
 
 const MAX_INPUT_BYTES: u64 = 1024 * 1024;

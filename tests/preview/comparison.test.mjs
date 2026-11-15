@@ -169,6 +169,36 @@ test("policy edits cannot silently weaken a reviewed baseline", async t => {
   assert.equal(result.captures.compared, 0);
 });
 
+test("a frame without physical extent fails structured instead of panicking", async t => {
+  const { directory, actual } = await fixture(t);
+  const file = path.join(actual, "captures/initial.frame.json");
+  const frame = await json(file);
+  delete frame.physicalWidth;
+  await save(file, frame);
+  await rehash(actual);
+  const result = await compare(actual, path.join(directory, "out"));
+  assert.equal(result.exitCode, 8);
+  assert.equal(result.firstError.code, "E_OUTPUT_IO");
+});
+
+test("a frame without readiness reports structured incompatibility", async t => {
+  const { directory, actual } = await fixture(t);
+  for (const id of ["initial", "after-increment"]) {
+    const file = path.join(actual, `captures/${id}.frame.json`);
+    const frame = await json(file);
+    delete frame.readiness;
+    await save(file, frame);
+  }
+  await rehash(actual);
+  const out = path.join(directory, "out");
+  const result = await compare(actual, out);
+  assert.equal(result.exitCode, 2);
+  assert.equal(result.firstError.code, "E_BASELINE_INCOMPATIBLE");
+  assert.equal(result.captures.compared, 0);
+  const report = await json(path.join(out, "report.json"));
+  for (const capture of report.captures) assert.equal(capture.status, "incompatible");
+});
+
 test("non-regular artifacts fail promptly instead of blocking on a FIFO", async t => {
   const { directory, actual } = await fixture(t);
   const file = path.join(actual, "inputs/profile.json");

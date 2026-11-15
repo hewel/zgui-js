@@ -1,11 +1,11 @@
 //! Deterministic, owner-thread asset fixtures. This module never opens a file.
 use super::ContractFailure;
-use crate::{package::Package, preview::clock::Environment};
+use crate::{environment::Environment, package::Package};
 use host_services::{Completion, ServiceError};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{cell::RefCell, collections::{BTreeMap, VecDeque}, rc::Rc};
-use crate::preview::schema::{deserialize_object,object_struct};
+use crate::schema::{deserialize_object,object_struct};
 
 const MAX_TRACE_RECORDS: usize = 4096;
 const MAX_TRACE_BYTES: usize = 1024 * 1024;

@@ -1,16 +1,11 @@
 //! Owner-thread roots and registrations; workers receive only owned service requests.
-use std::{cell::{Cell, RefCell}, collections::{HashMap, VecDeque}, fmt::Write, rc::{Rc, Weak}, sync::{Arc, atomic::{AtomicBool, Ordering}, mpsc::{self, Receiver, SyncSender}}, time::Duration};
-use host_services::{Completion, Executor, Request};
+use std::{cell::{Cell, RefCell}, collections::{HashMap, VecDeque}, fmt::Write, rc::{Rc, Weak}, sync::{Arc, atomic::{AtomicBool, Ordering}}, time::Duration};
+use host_services::Completion;
 use rquickjs::{Ctx, Exception, Function, Object, Persistent, Value, function::{Func, Opt, Rest}, object::Property};
 use zgui::{platform::{SurfaceId, WakeReason, Waker}, view::{HostHandle, host::{FrameRequestId, Repeat, TimerId}}};
-use crate::package::Package;
+use crate::{assets::{AssetError, AssetProvider, AssetSource, Delivery, MAX_SAFE_ID}, package::Package};
 
-pub(crate) mod fixture;
-
-const MAX_SAFE_ID: u64 = 9_007_199_254_740_991;
 const MAX_CALLBACKS: usize = 1024;
-const MAX_REQUESTS: usize = 64;
-const MAX_ASSET_BYTES: usize = 1024 * 1024;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Mode { Loading, Mounting, Mounted, Stopping, Disposed }
@@ -21,67 +16,42 @@ enum NativeRegistration { Timer(TimerId), Frame(FrameRequestId) }
 struct Registration { native: NativeRegistration, callback: Persistent<Function<'static>> }
 struct Pending { resolve: Persistent<Function<'static>>, reject: Persistent<Function<'static>>, cancelled: Arc<AtomicBool> }
 
-#[derive(Clone)]
-pub(crate) enum ServicePolicy { Live, Fixture(Rc<fixture::FixtureRuntime>) }
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct ContractFailure {
-    pub code: &'static str,
-    pub message: String,
-}
-
-impl std::fmt::Display for ContractFailure {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}: {}", self.code, self.message)
-    }
-}
-impl std::error::Error for ContractFailure {}
-
 pub(crate) struct Work {
     registrations: RefCell<HashMap<u64, Registration>>,
     ready: RefCell<VecDeque<ScheduledCall>>,
     requests: RefCell<HashMap<u64, Pending>>,
-    pending_completion: RefCell<Option<Completion>>,
-    next_id: Cell<u64>,
     mode: Cell<Mode>,
     generation: u64,
     host: HostHandle,
-    package: Option<Rc<Package>>,
-    executor: Executor,
-    sender: RefCell<Option<SyncSender<Completion>>>,
-    inbox: RefCell<Option<Receiver<Completion>>>,
-    wake: Arc<dyn Fn() + Send + Sync>,
-    service_policy: ServicePolicy,
+    provider: Box<dyn AssetProvider>,
 }
 
 impl Work {
-    pub(crate) fn new(host: HostHandle, package: Option<Rc<Package>>, generation: u64, executor: Executor, waker: Arc<dyn Waker>, surface: SurfaceId, service_policy: ServicePolicy) -> Rc<Self> {
-        let (sender, inbox) = mpsc::sync_channel(MAX_REQUESTS);
+    pub(crate) fn new(host: HostHandle, package: Option<Rc<Package>>, generation: u64, waker: Arc<dyn Waker>, surface: SurfaceId, assets: AssetSource) -> Rc<Self> {
+        let wake: Arc<dyn Fn() + Send + Sync> = Arc::new(move || waker.wake(WakeReason::ReactiveWork { surfaces: vec![surface].into_boxed_slice() }));
         Rc::new(Self {
             registrations: RefCell::new(HashMap::new()), ready: RefCell::new(VecDeque::new()), requests: RefCell::new(HashMap::new()),
-            pending_completion: RefCell::new(None), next_id: Cell::new(1), mode: Cell::new(Mode::Loading), generation, host, package, executor,
-            sender: RefCell::new(Some(sender)), inbox: RefCell::new(Some(inbox)),
-            wake: Arc::new(move || waker.wake(WakeReason::ReactiveWork { surfaces: vec![surface].into_boxed_slice() })),
-            service_policy,
+            mode: Cell::new(Mode::Loading), generation, host,
+            provider: assets.bind(package, generation, wake),
         })
     }
 
-    pub(crate) fn contract_failure(&self) -> Option<ContractFailure> {
-        self.fixtures().and_then(|runtime| runtime.contract_failure())
+    pub(crate) fn contract_failure(&self) -> Option<crate::assets::ContractFailure> {
+        self.provider.contract_failure()
     }
 
-    fn fixtures(&self) -> Option<&Rc<fixture::FixtureRuntime>> {
-        match &self.service_policy { ServicePolicy::Live => None, ServicePolicy::Fixture(runtime) => Some(runtime) }
-    }
-    fn fixture_error(&self, ctx: &Ctx<'_>, error: ContractFailure) -> rquickjs::Error {
-        match service_error(ctx, error.code, &error.message) {
-            Ok(error) => ctx.throw(error.into_value()),
-            Err(error) => error,
+    /// Provider rejection to a JavaScript exception. Type/Range map to the
+    /// ordinary exception classes; Contract is the sticky fixture failure with
+    /// its machine-readable code.
+    fn asset_error(&self, ctx: &Ctx<'_>, error: AssetError) -> rquickjs::Error {
+        match error {
+            AssetError::Type(message) => Exception::throw_type(ctx, &message),
+            AssetError::Range(message) => Exception::throw_range(ctx, &message),
+            AssetError::Contract(failure) => match service_error(ctx, failure.code, &failure.message) {
+                Ok(error) => ctx.throw(error.into_value()),
+                Err(error) => error,
+            },
         }
-    }
-    fn malformed_service(&self, ctx: &Ctx<'_>, message: &str) -> rquickjs::Error {
-        if let Some(runtime) = self.fixtures() { self.fixture_error(ctx, runtime.malformed(message)) }
-        else { Exception::throw_type(ctx, message) }
     }
     pub(crate) fn mounting(&self) { self.mode.set(Mode::Mounting); }
     pub(crate) fn mounted(&self) { self.mode.set(Mode::Mounted); }
@@ -89,17 +59,9 @@ impl Work {
     pub(crate) fn next_call(&self) -> Option<ScheduledCall> { self.ready.borrow_mut().pop_front() }
     pub(crate) fn next_completion(&self) -> Option<Completion> {
         if self.mode.get() != Mode::Mounted { return None; }
-        if let Some(runtime) = self.fixtures() { return runtime.take(); }
-        self.pending_completion.borrow_mut().take().or_else(|| self.inbox.borrow().as_ref()?.try_recv().ok())
+        self.provider.next_completion()
     }
-    pub(crate) fn has_completions(&self) -> bool {
-        if let Some(runtime) = self.fixtures() { return runtime.has_delivery(); }
-        if self.pending_completion.borrow().is_some() { return true; }
-        let completion = self.inbox.borrow().as_ref().and_then(|inbox| inbox.try_recv().ok());
-        let pending = completion.is_some();
-        *self.pending_completion.borrow_mut() = completion;
-        pending
-    }
+    pub(crate) fn has_completions(&self) -> bool { self.provider.has_completions() }
     pub(crate) fn counts(&self) -> (usize, usize, usize) {
         let registrations = self.registrations.borrow();
         let ready = self.ready.borrow();
@@ -115,13 +77,7 @@ impl Work {
         Ok(())
     }
     fn id(&self, ctx: &Ctx<'_>) -> rquickjs::Result<u64> {
-        if let Some(runtime) = self.fixtures() {
-            return runtime.registration_id().ok_or_else(||Exception::throw_range(ctx, "host registration identifiers exhausted"));
-        }
-        let id = self.next_id.get();
-        if id > MAX_SAFE_ID { return Err(Exception::throw_range(ctx, "host registration identifiers exhausted")); }
-        self.next_id.set(id + 1);
-        Ok(id)
+        self.provider.registration_id().ok_or_else(||Exception::throw_range(ctx, "host registration identifiers exhausted"))
     }
 
     pub(crate) fn install<'js>(self: &Rc<Self>, ctx: &Ctx<'js>) -> rquickjs::Result<()> {
@@ -168,9 +124,8 @@ impl Work {
         let weak = Rc::downgrade(self);
         services.set("readTextAsset", Func::from(move |ctx: Ctx<'js>, args: Rest<Value<'js>>| {
             let owner = owner(&weak, &ctx)?;
-            if owner.fixtures().is_some() && (args.0.len() != 1 || !args.0[0].is_string()) {
-                return Err(owner.malformed_service(&ctx, "readTextAsset requires exactly one string path"));
-            }
+            owner.provider.validate_arguments(args.0.len(), args.0.first().is_some_and(|value| value.is_string()))
+                .map_err(|error| owner.asset_error(&ctx, error))?;
             let value = args.0.into_iter().next().unwrap_or_else(|| Value::new_undefined(ctx.clone()));
             let path: String = rquickjs::FromJs::from_js(&ctx, value)?;
             owner.read_asset(&ctx, path)
@@ -225,38 +180,20 @@ impl Work {
     }
 
     fn read_asset<'js>(self: &Rc<Self>, ctx: &Ctx<'js>, path: String) -> rquickjs::Result<Object<'js>> {
-        if let Some(runtime) = self.fixtures() { runtime.require_assets().map_err(|error| self.fixture_error(ctx, error))?; }
-        if let Err(error) = self.require_creation(ctx) {
-            if self.fixtures().is_some() { return Err(self.malformed_service(ctx, "readTextAsset is unavailable during preflight or disposal")); }
-            return Err(error);
-        }
-        if self.fixtures().is_none() {
-            let package = self.package.as_ref().ok_or_else(|| Exception::throw_type(ctx, "asset requests require a loaded package"))?;
-            if !package.manifest.assets.contains(&path) { return Err(Exception::throw_range(ctx, "asset is not declared in this package")); }
-        }
-        if self.requests.borrow().len() >= MAX_REQUESTS {
-            return Err(if self.fixtures().is_some() { self.malformed_service(ctx, "outstanding request limit reached") }
-                else { Exception::throw_range(ctx, "outstanding request limit reached") });
-        }
+        self.provider.validate_request(&path, matches!(self.mode.get(), Mode::Mounting | Mode::Mounted), self.requests.borrow().len())
+            .map_err(|error| self.asset_error(ctx, error))?;
         let id = self.id(ctx)?;
-        if let Some(runtime) = self.fixtures() {
-            runtime.read_asset(self.generation, id, &path, self.package.as_deref()).map_err(|error| self.fixture_error(ctx, error))?;
-        }
         let (promise, resolve, reject) = ctx.promise()?;
         let cancelled = Arc::new(AtomicBool::new(false));
         let object = Object::new(ctx.clone())?;
         object.set("promise", promise)?;
         let weak = Rc::downgrade(self);
         object.set("cancel", Func::from(move |ctx: Ctx<'js>| owner(&weak, &ctx)?.cancel_request(&ctx, id)))?;
-        self.requests.borrow_mut().insert(id, Pending { resolve: Persistent::save(ctx, resolve), reject: Persistent::save(ctx, reject), cancelled: cancelled.clone() });
-        if self.fixtures().is_some() { return Ok(object); }
-        let package = self.package.as_ref().expect("live package validated before request creation");
-        let reply = self.sender.borrow().as_ref().expect("creation mode retains completion sender").clone();
-        let request = Request { generation: self.generation, request_id: id, root: package.directory.clone(), path, max_bytes: MAX_ASSET_BYTES, cancelled, reply, wake: self.wake.clone() };
-        if let Err(error) = self.executor.submit(request) {
-            let pending = self.requests.borrow_mut().remove(&id).unwrap();
-            let code = match error { host_services::SubmitError::QueueFull => "Busy", host_services::SubmitError::Stopped => "Stopped" };
-            pending.reject.restore(ctx)?.call::<_, ()>((service_error(ctx, code, &error.to_string())?,))?;
+        // The owner cannot drain a completion until this JS turn returns, so
+        // submitting before the Pending entry exists cannot lose a result.
+        match self.provider.submit(id, path, cancelled.clone()).map_err(|error| self.asset_error(ctx, error))? {
+            Some(error) => { reject.call::<_, ()>((service_error(ctx, error.code, &error.message)?,))?; }
+            None => { self.requests.borrow_mut().insert(id, Pending { resolve: Persistent::save(ctx, resolve), reject: Persistent::save(ctx, reject), cancelled }); }
         }
         Ok(object)
     }
@@ -265,21 +202,21 @@ impl Work {
         let pending = self.requests.borrow_mut().remove(&id);
         let Some(pending) = pending else { return Ok(()); };
         pending.cancelled.store(true, Ordering::Release);
-        if let Some(runtime) = self.fixtures() { runtime.cancel(id); }
+        self.provider.cancel(id);
         pending.reject.restore(ctx)?.call::<_, ()>((service_error(ctx, "Cancelled", "asset request cancelled")?,))
     }
 
     pub(crate) fn settle<'js>(&self, ctx: &Ctx<'js>, completion: Completion) -> rquickjs::Result<()> {
         if completion.generation != self.generation || self.mode.get() != Mode::Mounted {
-            if let Some(runtime) = self.fixtures() { runtime.ignored(completion.request_id, "stale generation or inactive session"); }
+            self.provider.settled(completion.request_id, Delivery::Ignored("stale generation or inactive session"));
             return Ok(());
         }
         let pending = self.requests.borrow_mut().remove(&completion.request_id);
         let Some(pending) = pending else {
-            if let Some(runtime) = self.fixtures() { runtime.ignored(completion.request_id, "request already settled or cancelled"); }
+            self.provider.settled(completion.request_id, Delivery::Ignored("request already settled or cancelled"));
             return Ok(());
         };
-        if let Some(runtime) = self.fixtures() { runtime.delivered(completion.request_id, completion.result.is_err()); }
+        self.provider.settled(completion.request_id, Delivery::Delivered { failed: completion.result.is_err() });
         match completion.result {
             Ok(text) => pending.resolve.restore(ctx)?.call::<_, ()>((text,)),
             Err(error) => pending.reject.restore(ctx)?.call::<_, ()>((service_error(ctx, error.code, &error.message)?,)),
@@ -289,12 +226,8 @@ impl Work {
     pub(crate) fn begin_stop(&self) {
         if matches!(self.mode.get(), Mode::Stopping | Mode::Disposed) { return; }
         self.mode.set(Mode::Stopping);
-        if let Some(runtime) = self.fixtures() { runtime.cancel_generation(self.generation); }
         for pending in self.requests.borrow_mut().drain().map(|(_, pending)| pending) { pending.cancelled.store(true, Ordering::Release); }
-        // Retired workers must not block the shared executor on a full old inbox.
-        self.inbox.borrow_mut().take();
-        self.sender.borrow_mut().take();
-        self.pending_completion.borrow_mut().take();
+        self.provider.stop();
     }
     pub(crate) fn finish_stop(&self) {
         self.begin_stop();
