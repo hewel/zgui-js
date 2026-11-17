@@ -192,6 +192,36 @@ importers:
         specifier: workspace:*
         version: link:../../../packages/build
 
+  apps/examples/components:
+    dependencies:
+      '@hewel/zgui':
+        specifier: workspace:*
+        version: link:../../../packages/ui
+    devDependencies:
+      '@hewel/zgui-build':
+        specifier: workspace:*
+        version: link:../../../packages/build
+
+  apps/examples/composition:
+    dependencies:
+      '@hewel/zgui':
+        specifier: workspace:*
+        version: link:../../../packages/ui
+    devDependencies:
+      '@hewel/zgui-build':
+        specifier: workspace:*
+        version: link:../../../packages/build
+
+  apps/examples/controls:
+    dependencies:
+      '@hewel/zgui':
+        specifier: workspace:*
+        version: link:../../../packages/ui
+    devDependencies:
+      '@hewel/zgui-build':
+        specifier: workspace:*
+        version: link:../../../packages/build
+
   apps/examples/counter:
     dependencies:
       '@hewel/zgui':
@@ -212,7 +242,37 @@ importers:
         specifier: workspace:*
         version: link:../../../packages/build
 
+  apps/examples/gallery:
+    dependencies:
+      '@hewel/zgui':
+        specifier: workspace:*
+        version: link:../../../packages/ui
+    devDependencies:
+      '@hewel/zgui-build':
+        specifier: workspace:*
+        version: link:../../../packages/build
+
   apps/examples/lists:
+    dependencies:
+      '@hewel/zgui':
+        specifier: workspace:*
+        version: link:../../../packages/ui
+    devDependencies:
+      '@hewel/zgui-build':
+        specifier: workspace:*
+        version: link:../../../packages/build
+
+  apps/examples/selection:
+    dependencies:
+      '@hewel/zgui':
+        specifier: workspace:*
+        version: link:../../../packages/ui
+    devDependencies:
+      '@hewel/zgui-build':
+        specifier: workspace:*
+        version: link:../../../packages/build
+
+  apps/examples/tabs:
     dependencies:
       '@hewel/zgui':
         specifier: workspace:*

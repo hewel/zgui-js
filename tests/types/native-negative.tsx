@@ -1,5 +1,5 @@
 import { Image, TextField, TextArea, renderApp } from "@hewel/zgui";
-import type { NativeNode } from "@hewel/zgui";
+import type { NativeElementProps, NativeNode } from "@hewel/zgui";
 
 // @ts-expect-error Browser document is not a host global.
 document.createElement("div");
@@ -53,6 +53,26 @@ const boxSource = <box src="assets/icon.png" />;
 const imageChildren = <Image src="assets/icon.png">Child</Image>;
 // @ts-expect-error Browser responsive image selection is not a supported contract.
 const imageSet = <image srcSet="assets/icon.png 2x" />;
+// @ts-expect-error Native vectors are childless replaced drawings.
+const vectorChildren = <vector><text>Child</text></vector>;
+// @ts-expect-error Native vectors also reject explicit children props.
+const vectorPropChildren = <vector children={<text>Child</text>} />;
+// @ts-expect-error Path data belongs only to native vector elements.
+const boxPath = <box d="M0 0" />;
+// @ts-expect-error The drawing coordinate box belongs only to native vector elements.
+const boxViewBox = <control viewBox="0 0 16 16" />;
+// @ts-expect-error checked is a boolean, "mixed", or empty.
+const checkedString = <control checked="yes" />;
+// @ts-expect-error Only implemented accessibility roles are accepted.
+const roleString = <box role="paragraph" />;
+// @ts-expect-error Role spellings use the native vocabulary exactly.
+const roleCase = <box role="checkbox" />;
+// @ts-expect-error Orientation is horizontal or vertical.
+const orientationString = <control orientation="diagonal" />;
+// @ts-expect-error Data attributes carry strings, not booleans.
+const dataBoolean: NativeElementProps = { "data-count": true };
+// @ts-expect-error Data attributes carry strings, not numbers.
+const dataNumber: NativeElementProps = { "data-count": 3 };
 // @ts-expect-error Arbitrary native properties are not accepted.
 const property = <text arbitrary="unsupported" />;
 // @ts-expect-error HTML spellings are not aliases for native properties.
@@ -77,6 +97,12 @@ renderApp(() => ({ arbitrary: "object" }), fabricated);
 import { createDeferred } from "@hewel/zgui";
 // @ts-expect-error Upstream DOM components are not exported.
 import type { HTMLAttributes } from "@hewel/zgui";
+// @ts-expect-error Context menu requests are non-capturing pointer snapshots without releasePointer.
+const contextRelease = <box onContextMenu={event => event.releasePointer()} />;
+// @ts-expect-error Context menu requests are not pointerdown and cannot capturePointer.
+const contextCapture = <box onContextMenu={event => event.capturePointer()} />;
 // @ts-expect-error Reactive roots are owned by renderApp, not the application API.
 import { createRoot } from "@hewel/zgui";
-void [browserElement, browserEvent, pointerEvent, html, editing, image, property, className, handler, ref, id, createDeferred];
+void [browserElement, browserEvent, pointerEvent, html, editing, image, property, className, handler, ref, id, createDeferred,
+  vectorChildren, vectorPropChildren, boxPath, boxViewBox, checkedString, roleString, roleCase, orientationString, dataBoolean, dataNumber,
+  contextRelease, contextCapture];

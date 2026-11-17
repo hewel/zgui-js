@@ -1,0 +1,1346 @@
+{
+  "schemaVersion": 1,
+  "id": "selection-virtual",
+  "requiredCapabilities": [
+    "pixels",
+    "virtual-time",
+    "selectors.test-id",
+    "selectors.semantic",
+    "input.pointer",
+    "input.keyboard",
+    "tree.inspect"
+  ],
+  "steps": [
+    {
+      "id": "capture-initial",
+      "op": "capture",
+      "captureId": "initial",
+      "requiredFrameTimeUs": 0
+    },
+    {
+      "id": "volume-role",
+      "op": "assert",
+      "target": {
+        "surface": "main",
+        "testId": "volume"
+      },
+      "check": {
+        "property": "role",
+        "equals": "slider"
+      }
+    },
+    {
+      "id": "volume-name",
+      "op": "assert",
+      "target": {
+        "surface": "main",
+        "testId": "volume"
+      },
+      "check": {
+        "property": "name",
+        "equals": "Volume"
+      }
+    },
+    {
+      "id": "quality-low-disabled",
+      "op": "assert",
+      "target": {
+        "surface": "main",
+        "testId": "quality-low"
+      },
+      "check": {
+        "property": "enabled",
+        "equals": false
+      }
+    },
+    {
+      "id": "click-focus-group",
+      "op": "pointer.click",
+      "target": {
+        "surface": "main",
+        "testId": "before-radio"
+      },
+      "button": "primary"
+    },
+    {
+      "id": "tab-into-quality",
+      "op": "key.press",
+      "surface": "main",
+      "key": "Tab"
+    },
+    {
+      "id": "quality-balanced-focused",
+      "op": "assert",
+      "target": {
+        "surface": "main",
+        "testId": "quality-balanced"
+      },
+      "check": {
+        "property": "focused",
+        "equals": true
+      }
+    },
+    {
+      "id": "quality-arrow-down",
+      "op": "key.press",
+      "surface": "main",
+      "key": "ArrowDown"
+    },
+    {
+      "id": "quality-high-focused",
+      "op": "assert",
+      "target": {
+        "surface": "main",
+        "testId": "quality-high"
+      },
+      "check": {
+        "property": "focused",
+        "equals": true
+      }
+    },
+    {
+      "id": "quality-high-selected",
+      "op": "assert",
+      "target": {
+        "surface": "main",
+        "testId": "quality-value"
+      },
+      "check": {
+        "property": "text",
+        "equals": "Quality: high"
+      }
+    },
+    {
+      "id": "quality-arrow-down-wrap",
+      "op": "key.press",
+      "surface": "main",
+      "key": "ArrowDown"
+    },
+    {
+      "id": "quality-balanced-refocused",
+      "op": "assert",
+      "target": {
+        "surface": "main",
+        "testId": "quality-balanced"
+      },
+      "check": {
+        "property": "focused",
+        "equals": true
+      }
+    },
+    {
+      "id": "quality-balanced-selected",
+      "op": "assert",
+      "target": {
+        "surface": "main",
+        "testId": "quality-value"
+      },
+      "check": {
+        "property": "text",
+        "equals": "Quality: balanced"
+      }
+    },
+    {
+      "id": "quality-end",
+      "op": "key.press",
+      "surface": "main",
+      "key": "End"
+    },
+    {
+      "id": "quality-end-focus",
+      "op": "assert",
+      "target": {
+        "surface": "main",
+        "testId": "quality-high"
+      },
+      "check": {
+        "property": "focused",
+        "equals": true
+      }
+    },
+    {
+      "id": "tab-into-alignment",
+      "op": "key.press",
+      "surface": "main",
+      "key": "Tab"
+    },
+    {
+      "id": "align-left-focused",
+      "op": "assert",
+      "target": {
+        "surface": "main",
+        "testId": "align-left"
+      },
+      "check": {
+        "property": "focused",
+        "equals": true
+      }
+    },
+    {
+      "id": "alignment-arrow-right",
+      "op": "key.press",
+      "surface": "main",
+      "key": "ArrowRight"
+    },
+    {
+      "id": "align-center-focused",
+      "op": "assert",
+      "target": {
+        "surface": "main",
+        "testId": "align-center"
+      },
+      "check": {
+        "property": "focused",
+        "equals": true
+      }
+    },
+    {
+      "id": "alignment-still-left",
+      "op": "assert",
+      "target": {
+        "surface": "main",
+        "testId": "alignment-value"
+      },
+      "check": {
+        "property": "text",
+        "equals": "Alignment: left"
+      }
+    },
+    {
+      "id": "alignment-space",
+      "op": "key.press",
+      "surface": "main",
+      "key": "Space"
+    },
+    {
+      "id": "alignment-center",
+      "op": "assert",
+      "target": {
+        "surface": "main",
+        "testId": "alignment-value"
+      },
+      "check": {
+        "property": "text",
+        "equals": "Alignment: center"
+      }
+    },
+    {
+      "id": "alignment-enter",
+      "op": "key.press",
+      "surface": "main",
+      "key": "Enter"
+    },
+    {
+      "id": "alignment-none",
+      "op": "assert",
+      "target": {
+        "surface": "main",
+        "testId": "alignment-value"
+      },
+      "check": {
+        "property": "text",
+        "equals": "Alignment: none"
+      }
+    },
+    {
+      "id": "click-rotate",
+      "op": "pointer.click",
+      "target": {
+        "surface": "main",
+        "testId": "rotate-format"
+      },
+      "button": "primary"
+    },
+    {
+      "id": "capture-reordered",
+      "op": "capture",
+      "captureId": "reordered",
+      "requiredFrameTimeUs": 0
+    },
+    {
+      "id": "tab-into-formatting",
+      "op": "key.press",
+      "surface": "main",
+      "key": "Tab"
+    },
+    {
+      "id": "format-underline-focused",
+      "op": "assert",
+      "target": {
+        "surface": "main",
+        "testId": "format-underline"
+      },
+      "check": {
+        "property": "focused",
+        "equals": true
+      }
+    },
+    {
+      "id": "formatting-arrow-right",
+      "op": "key.press",
+      "surface": "main",
+      "key": "ArrowRight"
+    },
+    {
+      "id": "format-bold-focused",
+      "op": "assert",
+      "target": {
+        "surface": "main",
+        "testId": "format-bold"
+      },
+      "check": {
+        "property": "focused",
+        "equals": true
+      }
+    },
+    {
+      "id": "formatting-still-none",
+      "op": "assert",
+      "target": {
+        "surface": "main",
+        "testId": "formatting-value"
+      },
+      "check": {
+        "property": "text",
+        "equals": "Formatting: none"
+      }
+    },
+    {
+      "id": "formatting-space",
+      "op": "key.press",
+      "surface": "main",
+      "key": "Space"
+    },
+    {
+      "id": "formatting-bold",
+      "op": "assert",
+      "target": {
+        "surface": "main",
+        "testId": "formatting-value"
+      },
+      "check": {
+        "property": "text",
+        "equals": "Formatting: bold"
+      }
+    },
+    {
+      "id": "formatting-next",
+      "op": "key.press",
+      "surface": "main",
+      "key": "ArrowRight"
+    },
+    {
+      "id": "format-italic-focused",
+      "op": "assert",
+      "target": {
+        "surface": "main",
+        "testId": "format-italic"
+      },
+      "check": {
+        "property": "focused",
+        "equals": true
+      }
+    },
+    {
+      "id": "formatting-italic-space",
+      "op": "key.press",
+      "surface": "main",
+      "key": "Space"
+    },
+    {
+      "id": "formatting-bold-italic",
+      "op": "assert",
+      "target": {
+        "surface": "main",
+        "testId": "formatting-value"
+      },
+      "check": {
+        "property": "text",
+        "equals": "Formatting: bold, italic"
+      }
+    },
+    {
+      "id": "click-remove-italic",
+      "op": "pointer.click",
+      "target": {
+        "surface": "main",
+        "testId": "italic-toggle"
+      },
+      "button": "primary"
+    },
+    {
+      "id": "format-italic-removed",
+      "op": "assert",
+      "target": {
+        "surface": "main",
+        "testId": "format-italic"
+      },
+      "check": {
+        "property": "exists",
+        "equals": false
+      }
+    },
+    {
+      "id": "capture-item-removed",
+      "op": "capture",
+      "captureId": "item-removed",
+      "requiredFrameTimeUs": 0
+    },
+    {
+      "id": "shift-tab-formatting",
+      "op": "key.press",
+      "surface": "main",
+      "key": "Tab",
+      "modifiers": [
+        "Shift"
+      ]
+    },
+    {
+      "id": "format-underline-after-removal",
+      "op": "assert",
+      "target": {
+        "surface": "main",
+        "testId": "format-underline"
+      },
+      "check": {
+        "property": "focused",
+        "equals": true
+      }
+    },
+    {
+      "id": "click-restore-italic",
+      "op": "pointer.click",
+      "target": {
+        "surface": "main",
+        "testId": "italic-toggle"
+      },
+      "button": "primary"
+    },
+    {
+      "id": "format-italic-restored",
+      "op": "assert",
+      "target": {
+        "surface": "main",
+        "testId": "format-italic"
+      },
+      "check": {
+        "property": "exists",
+        "equals": true
+      }
+    },
+    {
+      "id": "capture-item-restored",
+      "op": "capture",
+      "captureId": "item-restored",
+      "requiredFrameTimeUs": 0
+    },
+    {
+      "id": "click-overflow-first",
+      "op": "pointer.click",
+      "target": {
+        "surface": "main",
+        "testId": "overflow-first-label"
+      },
+      "button": "primary"
+    },
+    {
+      "id": "overflow-first-focused",
+      "op": "assert",
+      "target": {
+        "surface": "main",
+        "testId": "overflow-first"
+      },
+      "check": {
+        "property": "focused",
+        "equals": true
+      }
+    },
+    {
+      "id": "overflow-end",
+      "op": "key.press",
+      "surface": "main",
+      "key": "End"
+    },
+    {
+      "id": "overflow-last-focused",
+      "op": "assert",
+      "target": {
+        "surface": "main",
+        "testId": "overflow-last"
+      },
+      "check": {
+        "property": "focused",
+        "equals": true
+      }
+    },
+    {
+      "id": "click-overflow-last",
+      "op": "pointer.click",
+      "target": {
+        "surface": "main",
+        "testId": "overflow-last-label"
+      },
+      "button": "primary"
+    },
+    {
+      "id": "overflow-home",
+      "op": "key.press",
+      "surface": "main",
+      "key": "Home"
+    },
+    {
+      "id": "overflow-first-refocused",
+      "op": "assert",
+      "target": {
+        "surface": "main",
+        "testId": "overflow-first"
+      },
+      "check": {
+        "property": "focused",
+        "equals": true
+      }
+    },
+    {
+      "id": "click-overflow-first-again",
+      "op": "pointer.click",
+      "target": {
+        "surface": "main",
+        "testId": "overflow-first-label"
+      },
+      "button": "primary"
+    },
+    {
+      "id": "click-volume",
+      "op": "pointer.click",
+      "target": {
+        "surface": "main",
+        "testId": "volume"
+      },
+      "button": "primary"
+    },
+    {
+      "id": "volume-focused",
+      "op": "assert",
+      "target": {
+        "surface": "main",
+        "testId": "volume"
+      },
+      "check": {
+        "property": "focused",
+        "equals": true
+      }
+    },
+    {
+      "id": "volume-after-click",
+      "op": "assert",
+      "target": {
+        "surface": "main",
+        "testId": "volume-value"
+      },
+      "check": {
+        "property": "text",
+        "equals": "Volume: 50"
+      }
+    },
+    {
+      "id": "volume-home",
+      "op": "key.press",
+      "surface": "main",
+      "key": "Home"
+    },
+    {
+      "id": "volume-home-zero",
+      "op": "assert",
+      "target": {
+        "surface": "main",
+        "testId": "volume-value"
+      },
+      "check": {
+        "property": "text",
+        "equals": "Volume: 0"
+      }
+    },
+    {
+      "id": "volume-arrow-right",
+      "op": "key.press",
+      "surface": "main",
+      "key": "ArrowRight"
+    },
+    {
+      "id": "volume-arrow-five",
+      "op": "assert",
+      "target": {
+        "surface": "main",
+        "testId": "volume-value"
+      },
+      "check": {
+        "property": "text",
+        "equals": "Volume: 5"
+      }
+    },
+    {
+      "id": "volume-page-up",
+      "op": "key.press",
+      "surface": "main",
+      "key": "PageUp"
+    },
+    {
+      "id": "volume-pageup",
+      "op": "assert",
+      "target": {
+        "surface": "main",
+        "testId": "volume-value"
+      },
+      "check": {
+        "property": "text",
+        "equals": "Volume: 55"
+      }
+    },
+    {
+      "id": "volume-page-down",
+      "op": "key.press",
+      "surface": "main",
+      "key": "PageDown"
+    },
+    {
+      "id": "volume-pagedown",
+      "op": "assert",
+      "target": {
+        "surface": "main",
+        "testId": "volume-value"
+      },
+      "check": {
+        "property": "text",
+        "equals": "Volume: 5"
+      }
+    },
+    {
+      "id": "volume-end",
+      "op": "key.press",
+      "surface": "main",
+      "key": "End"
+    },
+    {
+      "id": "volume-end-max",
+      "op": "assert",
+      "target": {
+        "surface": "main",
+        "testId": "volume-value"
+      },
+      "check": {
+        "property": "text",
+        "equals": "Volume: 100"
+      }
+    },
+    {
+      "id": "volume-arrow-left",
+      "op": "key.press",
+      "surface": "main",
+      "key": "ArrowLeft"
+    },
+    {
+      "id": "volume-arrow-back",
+      "op": "assert",
+      "target": {
+        "surface": "main",
+        "testId": "volume-value"
+      },
+      "check": {
+        "property": "text",
+        "equals": "Volume: 95"
+      }
+    },
+    {
+      "id": "pen-down",
+      "op": "pointer.down",
+      "target": {
+        "surface": "main",
+        "testId": "volume"
+      },
+      "button": "primary",
+      "pointer": {
+        "id": "7",
+        "kind": "pen",
+        "primary": true
+      }
+    },
+    {
+      "id": "volume-pen-down",
+      "op": "assert",
+      "target": {
+        "surface": "main",
+        "testId": "volume-value"
+      },
+      "check": {
+        "property": "text",
+        "equals": "Volume: 50"
+      }
+    },
+    {
+      "id": "pointer-pen-identity",
+      "op": "assert",
+      "target": {
+        "surface": "main",
+        "testId": "pointer-value"
+      },
+      "check": {
+        "property": "text",
+        "equals": "Pointer: pen:7:true"
+      }
+    },
+    {
+      "id": "touch-move-ignored",
+      "op": "pointer.move",
+      "surface": "main",
+      "position": {
+        "x": 10000,
+        "y": 10000
+      },
+      "pointer": {
+        "id": "9",
+        "kind": "touch",
+        "primary": false
+      }
+    },
+    {
+      "id": "volume-touch-ignored",
+      "op": "assert",
+      "target": {
+        "surface": "main",
+        "testId": "volume-value"
+      },
+      "check": {
+        "property": "text",
+        "equals": "Volume: 50"
+      }
+    },
+    {
+      "id": "pen-move-right",
+      "op": "pointer.move",
+      "surface": "main",
+      "position": {
+        "x": 10000,
+        "y": 10000
+      },
+      "pointer": {
+        "id": "7",
+        "kind": "pen",
+        "primary": true
+      }
+    },
+    {
+      "id": "volume-pen-max",
+      "op": "assert",
+      "target": {
+        "surface": "main",
+        "testId": "volume-value"
+      },
+      "check": {
+        "property": "text",
+        "equals": "Volume: 100"
+      }
+    },
+    {
+      "id": "touch-up-ignored",
+      "op": "pointer.up",
+      "surface": "main",
+      "position": {
+        "x": 10000,
+        "y": 10000
+      },
+      "button": "primary",
+      "pointer": {
+        "id": "9",
+        "kind": "touch",
+        "primary": false
+      }
+    },
+    {
+      "id": "touch-cancel-ignored",
+      "op": "pointer.cancel",
+      "surface": "main",
+      "position": {
+        "x": 10000,
+        "y": 10000
+      },
+      "pointer": {
+        "id": "9",
+        "kind": "touch",
+        "primary": false
+      }
+    },
+    {
+      "id": "pen-move-left",
+      "op": "pointer.move",
+      "surface": "main",
+      "position": {
+        "x": -100,
+        "y": -100
+      },
+      "pointer": {
+        "id": "7",
+        "kind": "pen",
+        "primary": true
+      }
+    },
+    {
+      "id": "volume-pen-zero",
+      "op": "assert",
+      "target": {
+        "surface": "main",
+        "testId": "volume-value"
+      },
+      "check": {
+        "property": "text",
+        "equals": "Volume: 0"
+      }
+    },
+    {
+      "id": "pen-up",
+      "op": "pointer.up",
+      "surface": "main",
+      "position": {
+        "x": 10000,
+        "y": 10000
+      },
+      "button": "primary",
+      "pointer": {
+        "id": "7",
+        "kind": "pen",
+        "primary": true
+      }
+    },
+    {
+      "id": "volume-pen-up-max",
+      "op": "assert",
+      "target": {
+        "surface": "main",
+        "testId": "volume-value"
+      },
+      "check": {
+        "property": "text",
+        "equals": "Volume: 100"
+      }
+    },
+    {
+      "id": "pen-move-after-up",
+      "op": "pointer.move",
+      "surface": "main",
+      "position": {
+        "x": -100,
+        "y": -100
+      },
+      "pointer": {
+        "id": "7",
+        "kind": "pen",
+        "primary": true
+      }
+    },
+    {
+      "id": "volume-after-up-held",
+      "op": "assert",
+      "target": {
+        "surface": "main",
+        "testId": "volume-value"
+      },
+      "check": {
+        "property": "text",
+        "equals": "Volume: 100"
+      }
+    },
+    {
+      "id": "touch-down",
+      "op": "pointer.down",
+      "target": {
+        "surface": "main",
+        "testId": "volume"
+      },
+      "button": "primary",
+      "pointer": {
+        "id": "9",
+        "kind": "touch",
+        "primary": true
+      }
+    },
+    {
+      "id": "pointer-touch-identity",
+      "op": "assert",
+      "target": {
+        "surface": "main",
+        "testId": "pointer-value"
+      },
+      "check": {
+        "property": "text",
+        "equals": "Pointer: touch:9:true"
+      }
+    },
+    {
+      "id": "volume-touch-down",
+      "op": "assert",
+      "target": {
+        "surface": "main",
+        "testId": "volume-value"
+      },
+      "check": {
+        "property": "text",
+        "equals": "Volume: 50"
+      }
+    },
+    {
+      "id": "touch-move-left",
+      "op": "pointer.move",
+      "surface": "main",
+      "position": {
+        "x": -100,
+        "y": -100
+      },
+      "pointer": {
+        "id": "9",
+        "kind": "touch",
+        "primary": true
+      }
+    },
+    {
+      "id": "volume-touch-zero",
+      "op": "assert",
+      "target": {
+        "surface": "main",
+        "testId": "volume-value"
+      },
+      "check": {
+        "property": "text",
+        "equals": "Volume: 0"
+      }
+    },
+    {
+      "id": "touch-cancel",
+      "op": "pointer.cancel",
+      "surface": "main",
+      "position": {
+        "x": -100,
+        "y": -100
+      },
+      "pointer": {
+        "id": "9",
+        "kind": "touch",
+        "primary": true
+      }
+    },
+    {
+      "id": "touch-move-after-cancel",
+      "op": "pointer.move",
+      "surface": "main",
+      "position": {
+        "x": 10000,
+        "y": 10000
+      },
+      "pointer": {
+        "id": "9",
+        "kind": "touch",
+        "primary": true
+      }
+    },
+    {
+      "id": "volume-after-cancel-held",
+      "op": "assert",
+      "target": {
+        "surface": "main",
+        "testId": "volume-value"
+      },
+      "check": {
+        "property": "text",
+        "equals": "Volume: 0"
+      }
+    },
+    {
+      "id": "touch-nonprimary-down",
+      "op": "pointer.down",
+      "target": {
+        "surface": "main",
+        "testId": "volume"
+      },
+      "button": "primary",
+      "pointer": {
+        "id": "11",
+        "kind": "touch",
+        "primary": false
+      }
+    },
+    {
+      "id": "pointer-nonprimary",
+      "op": "assert",
+      "target": {
+        "surface": "main",
+        "testId": "pointer-value"
+      },
+      "check": {
+        "property": "text",
+        "equals": "Pointer: touch:11:false"
+      }
+    },
+    {
+      "id": "touch-nonprimary-move",
+      "op": "pointer.move",
+      "surface": "main",
+      "position": {
+        "x": 10000,
+        "y": 10000
+      },
+      "pointer": {
+        "id": "11",
+        "kind": "touch",
+        "primary": false
+      }
+    },
+    {
+      "id": "volume-nonprimary-held",
+      "op": "assert",
+      "target": {
+        "surface": "main",
+        "testId": "volume-value"
+      },
+      "check": {
+        "property": "text",
+        "equals": "Volume: 0"
+      }
+    },
+    {
+      "id": "touch-nonprimary-up",
+      "op": "pointer.up",
+      "surface": "main",
+      "position": {
+        "x": 10000,
+        "y": 10000
+      },
+      "button": "primary",
+      "pointer": {
+        "id": "11",
+        "kind": "touch",
+        "primary": false
+      }
+    },
+    {
+      "id": "pen-down-again",
+      "op": "pointer.down",
+      "target": {
+        "surface": "main",
+        "testId": "volume"
+      },
+      "button": "primary",
+      "pointer": {
+        "id": "7",
+        "kind": "pen",
+        "primary": true
+      }
+    },
+    {
+      "id": "volume-pen-redown",
+      "op": "assert",
+      "target": {
+        "surface": "main",
+        "testId": "volume-value"
+      },
+      "check": {
+        "property": "text",
+        "equals": "Volume: 50"
+      }
+    },
+    {
+      "id": "click-disable",
+      "op": "pointer.click",
+      "target": {
+        "surface": "main",
+        "testId": "disable-slider"
+      },
+      "button": "primary"
+    },
+    {
+      "id": "volume-disabled",
+      "op": "assert",
+      "target": {
+        "surface": "main",
+        "testId": "volume"
+      },
+      "check": {
+        "property": "enabled",
+        "equals": false
+      }
+    },
+    {
+      "id": "pen-move-disabled",
+      "op": "pointer.move",
+      "surface": "main",
+      "position": {
+        "x": 10000,
+        "y": 10000
+      },
+      "pointer": {
+        "id": "7",
+        "kind": "pen",
+        "primary": true
+      }
+    },
+    {
+      "id": "volume-disabled-held",
+      "op": "assert",
+      "target": {
+        "surface": "main",
+        "testId": "volume-value"
+      },
+      "check": {
+        "property": "text",
+        "equals": "Volume: 50"
+      }
+    },
+    {
+      "id": "click-enable",
+      "op": "pointer.click",
+      "target": {
+        "surface": "main",
+        "testId": "disable-slider"
+      },
+      "button": "primary"
+    },
+    {
+      "id": "volume-enabled",
+      "op": "assert",
+      "target": {
+        "surface": "main",
+        "testId": "volume"
+      },
+      "check": {
+        "property": "enabled",
+        "equals": true
+      }
+    },
+    {
+      "id": "pen-move-reenabled",
+      "op": "pointer.move",
+      "surface": "main",
+      "position": {
+        "x": -100,
+        "y": -100
+      },
+      "pointer": {
+        "id": "7",
+        "kind": "pen",
+        "primary": true
+      }
+    },
+    {
+      "id": "volume-reenabled-held",
+      "op": "assert",
+      "target": {
+        "surface": "main",
+        "testId": "volume-value"
+      },
+      "check": {
+        "property": "text",
+        "equals": "Volume: 50"
+      }
+    },
+    {
+      "id": "pen-up-release",
+      "op": "pointer.up",
+      "surface": "main",
+      "position": {
+        "x": -100,
+        "y": -100
+      },
+      "button": "primary",
+      "pointer": {
+        "id": "7",
+        "kind": "pen",
+        "primary": true
+      }
+    },
+    {
+      "id": "pen-down-before-hide",
+      "op": "pointer.down",
+      "target": {
+        "surface": "main",
+        "testId": "volume"
+      },
+      "button": "primary",
+      "pointer": {
+        "id": "7",
+        "kind": "pen",
+        "primary": true
+      }
+    },
+    {
+      "id": "click-hide-slider",
+      "op": "pointer.click",
+      "target": {
+        "surface": "main",
+        "testId": "show-slider"
+      },
+      "button": "primary"
+    },
+    {
+      "id": "volume-hidden",
+      "op": "assert",
+      "target": {
+        "surface": "main",
+        "testId": "volume"
+      },
+      "check": {
+        "property": "exists",
+        "equals": false
+      }
+    },
+    {
+      "id": "capture-slider-hidden",
+      "op": "capture",
+      "captureId": "slider-hidden",
+      "requiredFrameTimeUs": 0
+    },
+    {
+      "id": "pen-move-hidden",
+      "op": "pointer.move",
+      "surface": "main",
+      "position": {
+        "x": 10000,
+        "y": 10000
+      },
+      "pointer": {
+        "id": "7",
+        "kind": "pen",
+        "primary": true
+      }
+    },
+    {
+      "id": "pen-up-hidden",
+      "op": "pointer.up",
+      "surface": "main",
+      "position": {
+        "x": 10000,
+        "y": 10000
+      },
+      "button": "primary",
+      "pointer": {
+        "id": "7",
+        "kind": "pen",
+        "primary": true
+      }
+    },
+    {
+      "id": "volume-hidden-held",
+      "op": "assert",
+      "target": {
+        "surface": "main",
+        "testId": "volume-value"
+      },
+      "check": {
+        "property": "text",
+        "equals": "Volume: 50"
+      }
+    },
+    {
+      "id": "capture-hidden-moved",
+      "op": "capture",
+      "captureId": "hidden-moved",
+      "requiredFrameTimeUs": 0
+    },
+    {
+      "id": "click-show-slider",
+      "op": "pointer.click",
+      "target": {
+        "surface": "main",
+        "testId": "show-slider"
+      },
+      "button": "primary"
+    },
+    {
+      "id": "volume-restored",
+      "op": "assert",
+      "target": {
+        "surface": "main",
+        "testId": "volume"
+      },
+      "check": {
+        "property": "exists",
+        "equals": true
+      }
+    },
+    {
+      "id": "capture-slider-restored",
+      "op": "capture",
+      "captureId": "slider-restored",
+      "requiredFrameTimeUs": 0
+    },
+    {
+      "id": "pen-move-stale-pointer",
+      "op": "pointer.move",
+      "surface": "main",
+      "position": {
+        "x": -100,
+        "y": -100
+      },
+      "pointer": {
+        "id": "7",
+        "kind": "pen",
+        "primary": true
+      }
+    },
+    {
+      "id": "volume-stale-pointer",
+      "op": "assert",
+      "target": {
+        "surface": "main",
+        "testId": "volume-value"
+      },
+      "check": {
+        "property": "text",
+        "equals": "Volume: 50"
+      }
+    },
+    {
+      "id": "click-volume-again",
+      "op": "pointer.click",
+      "target": {
+        "surface": "main",
+        "testId": "volume"
+      },
+      "button": "primary"
+    },
+    {
+      "id": "volume-arrow-right-again",
+      "op": "key.press",
+      "surface": "main",
+      "key": "ArrowRight"
+    },
+    {
+      "id": "volume-final-key",
+      "op": "assert",
+      "target": {
+        "surface": "main",
+        "testId": "volume-value"
+      },
+      "check": {
+        "property": "text",
+        "equals": "Volume: 55"
+      }
+    },
+    {
+      "id": "click-theme",
+      "op": "pointer.click",
+      "target": {
+        "surface": "main",
+        "testId": "selection-theme"
+      },
+      "button": "primary"
+    },
+    {
+      "id": "advance-final",
+      "op": "clock.advance",
+      "byMs": 300
+    },
+    {
+      "id": "capture-final",
+      "op": "capture",
+      "captureId": "final",
+      "requiredFrameTimeUs": 300000
+    }
+  ]
+}

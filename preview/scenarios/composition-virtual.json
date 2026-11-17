@@ -1,0 +1,281 @@
+{
+  "schemaVersion": 1,
+  "id": "composition-virtual",
+  "requiredCapabilities": [
+    "pixels",
+    "virtual-time",
+    "selectors.test-id",
+    "selectors.semantic",
+    "input.pointer",
+    "input.text",
+    "tree.inspect"
+  ],
+  "steps": [
+    {
+      "id": "initial",
+      "op": "capture",
+      "captureId": "initial",
+      "requiredFrameTimeUs": 0
+    },
+    {
+      "id": "focus-input",
+      "op": "pointer.click",
+      "target": {
+        "surface": "main",
+        "testId": "grouped-input"
+      },
+      "button": "primary"
+    },
+    {
+      "id": "type-query",
+      "op": "text.commit",
+      "surface": "main",
+      "text": "Grouped input"
+    },
+    {
+      "id": "query-echo",
+      "op": "assert",
+      "target": {
+        "surface": "main",
+        "testId": "query-value"
+      },
+      "check": {
+        "property": "text",
+        "equals": "Grouped input"
+      }
+    },
+    {
+      "id": "press-action",
+      "op": "pointer.click",
+      "target": {
+        "surface": "main",
+        "testId": "grouped-action"
+      },
+      "button": "primary"
+    },
+    {
+      "id": "action-count",
+      "op": "assert",
+      "target": {
+        "surface": "main",
+        "testId": "query-actions"
+      },
+      "check": {
+        "property": "text",
+        "equals": "1"
+      }
+    },
+    {
+      "id": "empty-reset",
+      "op": "pointer.click",
+      "target": {
+        "surface": "main",
+        "testId": "empty-reset"
+      },
+      "button": "primary"
+    },
+    {
+      "id": "query-cleared",
+      "op": "assert",
+      "target": {
+        "surface": "main",
+        "testId": "query-value"
+      },
+      "check": {
+        "property": "text",
+        "equals": ""
+      }
+    },
+    {
+      "id": "press-area",
+      "op": "pointer.click",
+      "target": {
+        "surface": "main",
+        "testId": "grouped-area"
+      },
+      "button": "primary"
+    },
+    {
+      "id": "type-area",
+      "op": "text.commit",
+      "surface": "main",
+      "text": "ignored"
+    },
+    {
+      "id": "area-held",
+      "op": "assert",
+      "target": {
+        "surface": "main",
+        "testId": "grouped-area"
+      },
+      "check": {
+        "property": "value",
+        "equals": "Notes"
+      }
+    },
+    {
+      "id": "descriptions-one",
+      "op": "pointer.click",
+      "target": {
+        "surface": "main",
+        "testId": "item-descriptions"
+      },
+      "button": "primary"
+    },
+    {
+      "id": "count-one",
+      "op": "assert",
+      "target": {
+        "surface": "main",
+        "testId": "item-description-count"
+      },
+      "check": {
+        "property": "text",
+        "equals": "1"
+      }
+    },
+    {
+      "id": "descriptions-zero",
+      "op": "pointer.click",
+      "target": {
+        "surface": "main",
+        "testId": "item-descriptions"
+      },
+      "button": "primary"
+    },
+    {
+      "id": "count-zero",
+      "op": "assert",
+      "target": {
+        "surface": "main",
+        "testId": "item-description-count"
+      },
+      "check": {
+        "property": "text",
+        "equals": "0"
+      }
+    },
+    {
+      "id": "desc-a-gone",
+      "op": "assert",
+      "target": {
+        "surface": "main",
+        "testId": "item-description-a"
+      },
+      "check": {
+        "property": "exists",
+        "equals": false
+      }
+    },
+    {
+      "id": "desc-b-gone",
+      "op": "assert",
+      "target": {
+        "surface": "main",
+        "testId": "item-description-b"
+      },
+      "check": {
+        "property": "exists",
+        "equals": false
+      }
+    },
+    {
+      "id": "descriptions-two",
+      "op": "pointer.click",
+      "target": {
+        "surface": "main",
+        "testId": "item-descriptions"
+      },
+      "button": "primary"
+    },
+    {
+      "id": "count-two",
+      "op": "assert",
+      "target": {
+        "surface": "main",
+        "testId": "item-description-count"
+      },
+      "check": {
+        "property": "text",
+        "equals": "2"
+      }
+    },
+    {
+      "id": "desc-a-back",
+      "op": "assert",
+      "target": {
+        "surface": "main",
+        "testId": "item-description-a"
+      },
+      "check": {
+        "property": "exists",
+        "equals": true
+      }
+    },
+    {
+      "id": "desc-b-back",
+      "op": "assert",
+      "target": {
+        "surface": "main",
+        "testId": "item-description-b"
+      },
+      "check": {
+        "property": "exists",
+        "equals": true
+      }
+    },
+    {
+      "id": "drop-source",
+      "op": "pointer.click",
+      "target": {
+        "surface": "main",
+        "testId": "avatar-source"
+      },
+      "button": "primary"
+    },
+    {
+      "id": "fallback",
+      "op": "capture",
+      "captureId": "fallback",
+      "requiredFrameTimeUs": 0
+    },
+    {
+      "id": "restore-source",
+      "op": "pointer.click",
+      "target": {
+        "surface": "main",
+        "testId": "avatar-source"
+      },
+      "button": "primary"
+    },
+    {
+      "id": "frame-toggle",
+      "op": "pointer.click",
+      "target": {
+        "surface": "main",
+        "testId": "frame-toggle"
+      },
+      "button": "primary"
+    },
+    {
+      "id": "dark-theme",
+      "op": "pointer.click",
+      "target": {
+        "surface": "main",
+        "testId": "composition-theme"
+      },
+      "button": "primary"
+    },
+    {
+      "id": "advance-final",
+      "op": "clock.advance",
+      "byMs": 300
+    },
+    {
+      "id": "final",
+      "op": "capture",
+      "captureId": "final",
+      "requiredFrameTimeUs": 300000
+    }
+  ]
+}

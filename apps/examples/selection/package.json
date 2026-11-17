@@ -1,0 +1,16 @@
+{
+  "name": "@hewel/zgui-js-example-selection",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "zgui-js dev",
+    "build": "zgui-js build",
+    "preview": "zgui-js preview"
+  },
+  "devDependencies": {
+    "@hewel/zgui-build": "workspace:*"
+  },
+  "dependencies": {
+    "@hewel/zgui": "workspace:*"
+  }
+}

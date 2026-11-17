@@ -1,0 +1,934 @@
+{
+  "schemaVersion": 1,
+  "id": "tabs-virtual",
+  "requiredCapabilities": [
+    "pixels",
+    "virtual-time",
+    "selectors.test-id",
+    "selectors.semantic",
+    "input.pointer",
+    "input.keyboard",
+    "input.text",
+    "tree.inspect"
+  ],
+  "steps": [
+    {
+      "id": "capture-initial",
+      "op": "capture",
+      "captureId": "initial",
+      "requiredFrameTimeUs": 0
+    },
+    {
+      "id": "auto-list-role",
+      "op": "assert",
+      "target": {
+        "surface": "main",
+        "testId": "auto-list"
+      },
+      "check": {
+        "property": "role",
+        "equals": "tabList"
+      }
+    },
+    {
+      "id": "auto-profile-role",
+      "op": "assert",
+      "target": {
+        "surface": "main",
+        "testId": "auto-profile"
+      },
+      "check": {
+        "property": "role",
+        "equals": "tab"
+      }
+    },
+    {
+      "id": "profile-panel-role",
+      "op": "assert",
+      "target": {
+        "surface": "main",
+        "testId": "auto-panel-profile"
+      },
+      "check": {
+        "property": "role",
+        "equals": "tabPanel"
+      }
+    },
+    {
+      "id": "profile-panel-name",
+      "op": "assert",
+      "target": {
+        "surface": "main",
+        "testId": "auto-panel-profile"
+      },
+      "check": {
+        "property": "name",
+        "equals": "Profile"
+      }
+    },
+    {
+      "id": "locked-disabled",
+      "op": "assert",
+      "target": {
+        "surface": "main",
+        "testId": "auto-locked"
+      },
+      "check": {
+        "property": "enabled",
+        "equals": false
+      }
+    },
+    {
+      "id": "draft-mounted",
+      "op": "assert",
+      "target": {
+        "surface": "main",
+        "testId": "draft-field"
+      },
+      "check": {
+        "property": "exists",
+        "equals": true
+      }
+    },
+    {
+      "id": "draft-hidden",
+      "op": "assert",
+      "target": {
+        "surface": "main",
+        "testId": "draft-field"
+      },
+      "check": {
+        "property": "visible",
+        "equals": false
+      }
+    },
+    {
+      "id": "click-focus-auto",
+      "op": "pointer.click",
+      "target": {
+        "surface": "main",
+        "testId": "before-auto"
+      },
+      "button": "primary"
+    },
+    {
+      "id": "tab-into-auto",
+      "op": "key.press",
+      "surface": "main",
+      "key": "Tab"
+    },
+    {
+      "id": "auto-profile-focused",
+      "op": "assert",
+      "target": {
+        "surface": "main",
+        "testId": "auto-profile"
+      },
+      "check": {
+        "property": "focused",
+        "equals": true
+      }
+    },
+    {
+      "id": "tab-to-panel",
+      "op": "key.press",
+      "surface": "main",
+      "key": "Tab"
+    },
+    {
+      "id": "profile-panel-focused",
+      "op": "assert",
+      "target": {
+        "surface": "main",
+        "testId": "auto-panel-profile"
+      },
+      "check": {
+        "property": "focused",
+        "equals": true
+      }
+    },
+    {
+      "id": "tab-to-field",
+      "op": "key.press",
+      "surface": "main",
+      "key": "Tab"
+    },
+    {
+      "id": "profile-field-focused",
+      "op": "assert",
+      "target": {
+        "surface": "main",
+        "testId": "profile-field"
+      },
+      "check": {
+        "property": "focused",
+        "equals": true
+      }
+    },
+    {
+      "id": "tab-to-count",
+      "op": "key.press",
+      "surface": "main",
+      "key": "Tab"
+    },
+    {
+      "id": "profile-count-focused",
+      "op": "assert",
+      "target": {
+        "surface": "main",
+        "testId": "profile-count"
+      },
+      "check": {
+        "property": "focused",
+        "equals": true
+      }
+    },
+    {
+      "id": "tab-out",
+      "op": "key.press",
+      "surface": "main",
+      "key": "Tab"
+    },
+    {
+      "id": "manual-focus-target",
+      "op": "assert",
+      "target": {
+        "surface": "main",
+        "testId": "before-manual"
+      },
+      "check": {
+        "property": "focused",
+        "equals": true
+      }
+    },
+    {
+      "id": "click-profile-field",
+      "op": "pointer.click",
+      "target": {
+        "surface": "main",
+        "testId": "profile-field"
+      },
+      "button": "primary"
+    },
+    {
+      "id": "profile-home",
+      "op": "key.press",
+      "surface": "main",
+      "key": "Home"
+    },
+    {
+      "id": "profile-select-line",
+      "op": "key.press",
+      "surface": "main",
+      "key": "End",
+      "modifiers": [
+        "Shift"
+      ]
+    },
+    {
+      "id": "type-changed",
+      "op": "text.commit",
+      "surface": "main",
+      "text": "Changed"
+    },
+    {
+      "id": "profile-field-changed",
+      "op": "assert",
+      "target": {
+        "surface": "main",
+        "testId": "profile-field"
+      },
+      "check": {
+        "property": "value",
+        "equals": "Changed"
+      }
+    },
+    {
+      "id": "click-profile-count",
+      "op": "pointer.click",
+      "target": {
+        "surface": "main",
+        "testId": "profile-count"
+      },
+      "button": "primary"
+    },
+    {
+      "id": "profile-count-one",
+      "op": "assert",
+      "target": {
+        "surface": "main",
+        "testId": "profile-count"
+      },
+      "check": {
+        "property": "text",
+        "equals": "Count: 1"
+      }
+    },
+    {
+      "id": "advance-edited",
+      "op": "clock.advance",
+      "byMs": 300
+    },
+    {
+      "id": "capture-edited",
+      "op": "capture",
+      "captureId": "edited",
+      "requiredFrameTimeUs": 300000
+    },
+    {
+      "id": "click-auto-profile",
+      "op": "pointer.click",
+      "target": {
+        "surface": "main",
+        "testId": "auto-profile"
+      },
+      "button": "primary"
+    },
+    {
+      "id": "auto-arrow-right",
+      "op": "key.press",
+      "surface": "main",
+      "key": "ArrowRight"
+    },
+    {
+      "id": "auto-notes-focused",
+      "op": "assert",
+      "target": {
+        "surface": "main",
+        "testId": "auto-notes"
+      },
+      "check": {
+        "property": "focused",
+        "equals": true
+      }
+    },
+    {
+      "id": "auto-selected-notes",
+      "op": "assert",
+      "target": {
+        "surface": "main",
+        "testId": "auto-value"
+      },
+      "check": {
+        "property": "text",
+        "equals": "Selected: notes"
+      }
+    },
+    {
+      "id": "profile-field-unmounted",
+      "op": "assert",
+      "target": {
+        "surface": "main",
+        "testId": "profile-field"
+      },
+      "check": {
+        "property": "exists",
+        "equals": false
+      }
+    },
+    {
+      "id": "profile-panel-hidden",
+      "op": "assert",
+      "target": {
+        "surface": "main",
+        "testId": "auto-panel-profile"
+      },
+      "check": {
+        "property": "visible",
+        "equals": false
+      }
+    },
+    {
+      "id": "click-draft-field",
+      "op": "pointer.click",
+      "target": {
+        "surface": "main",
+        "testId": "draft-field"
+      },
+      "button": "primary"
+    },
+    {
+      "id": "draft-home",
+      "op": "key.press",
+      "surface": "main",
+      "key": "Home"
+    },
+    {
+      "id": "draft-select-line",
+      "op": "key.press",
+      "surface": "main",
+      "key": "End",
+      "modifiers": [
+        "Shift"
+      ]
+    },
+    {
+      "id": "type-saved-draft",
+      "op": "text.commit",
+      "surface": "main",
+      "text": "Saved draft"
+    },
+    {
+      "id": "draft-saved",
+      "op": "assert",
+      "target": {
+        "surface": "main",
+        "testId": "draft-field"
+      },
+      "check": {
+        "property": "value",
+        "equals": "Saved draft"
+      }
+    },
+    {
+      "id": "advance-left",
+      "op": "clock.advance",
+      "byMs": 300
+    },
+    {
+      "id": "capture-left",
+      "op": "capture",
+      "captureId": "left",
+      "requiredFrameTimeUs": 600000
+    },
+    {
+      "id": "click-auto-notes",
+      "op": "pointer.click",
+      "target": {
+        "surface": "main",
+        "testId": "auto-notes"
+      },
+      "button": "primary"
+    },
+    {
+      "id": "auto-home",
+      "op": "key.press",
+      "surface": "main",
+      "key": "Home"
+    },
+    {
+      "id": "auto-home-profile",
+      "op": "assert",
+      "target": {
+        "surface": "main",
+        "testId": "auto-profile"
+      },
+      "check": {
+        "property": "focused",
+        "equals": true
+      }
+    },
+    {
+      "id": "profile-field-reset",
+      "op": "assert",
+      "target": {
+        "surface": "main",
+        "testId": "profile-field"
+      },
+      "check": {
+        "property": "value",
+        "equals": "Preview"
+      }
+    },
+    {
+      "id": "profile-count-reset",
+      "op": "assert",
+      "target": {
+        "surface": "main",
+        "testId": "profile-count"
+      },
+      "check": {
+        "property": "text",
+        "equals": "Count: 0"
+      }
+    },
+    {
+      "id": "advance-returned",
+      "op": "clock.advance",
+      "byMs": 300
+    },
+    {
+      "id": "capture-returned",
+      "op": "capture",
+      "captureId": "returned",
+      "requiredFrameTimeUs": 900000
+    },
+    {
+      "id": "click-swap",
+      "op": "pointer.click",
+      "target": {
+        "surface": "main",
+        "testId": "swap-tabs"
+      },
+      "button": "primary"
+    },
+    {
+      "id": "advance-reordered",
+      "op": "clock.advance",
+      "byMs": 300
+    },
+    {
+      "id": "capture-reordered",
+      "op": "capture",
+      "captureId": "reordered",
+      "requiredFrameTimeUs": 1200000
+    },
+    {
+      "id": "click-focus-auto-again",
+      "op": "pointer.click",
+      "target": {
+        "surface": "main",
+        "testId": "before-auto"
+      },
+      "button": "primary"
+    },
+    {
+      "id": "tab-into-auto-again",
+      "op": "key.press",
+      "surface": "main",
+      "key": "Tab"
+    },
+    {
+      "id": "auto-profile-focused-again",
+      "op": "assert",
+      "target": {
+        "surface": "main",
+        "testId": "auto-profile"
+      },
+      "check": {
+        "property": "focused",
+        "equals": true
+      }
+    },
+    {
+      "id": "auto-arrow-after-swap",
+      "op": "key.press",
+      "surface": "main",
+      "key": "ArrowRight"
+    },
+    {
+      "id": "auto-history-focused",
+      "op": "assert",
+      "target": {
+        "surface": "main",
+        "testId": "auto-history"
+      },
+      "check": {
+        "property": "focused",
+        "equals": true
+      }
+    },
+    {
+      "id": "auto-selected-history",
+      "op": "assert",
+      "target": {
+        "surface": "main",
+        "testId": "auto-value"
+      },
+      "check": {
+        "property": "text",
+        "equals": "Selected: history"
+      }
+    },
+    {
+      "id": "auto-home-key",
+      "op": "key.press",
+      "surface": "main",
+      "key": "Home"
+    },
+    {
+      "id": "auto-home-notes",
+      "op": "assert",
+      "target": {
+        "surface": "main",
+        "testId": "auto-notes"
+      },
+      "check": {
+        "property": "focused",
+        "equals": true
+      }
+    },
+    {
+      "id": "draft-retained",
+      "op": "assert",
+      "target": {
+        "surface": "main",
+        "testId": "draft-field"
+      },
+      "check": {
+        "property": "value",
+        "equals": "Saved draft"
+      }
+    },
+    {
+      "id": "auto-end-key",
+      "op": "key.press",
+      "surface": "main",
+      "key": "End"
+    },
+    {
+      "id": "auto-end-history",
+      "op": "assert",
+      "target": {
+        "surface": "main",
+        "testId": "auto-history"
+      },
+      "check": {
+        "property": "focused",
+        "equals": true
+      }
+    },
+    {
+      "id": "click-back-profile",
+      "op": "pointer.click",
+      "target": {
+        "surface": "main",
+        "testId": "auto-profile"
+      },
+      "button": "primary"
+    },
+    {
+      "id": "click-hide-notes",
+      "op": "pointer.click",
+      "target": {
+        "surface": "main",
+        "testId": "show-notes"
+      },
+      "button": "primary"
+    },
+    {
+      "id": "notes-removed",
+      "op": "assert",
+      "target": {
+        "surface": "main",
+        "testId": "auto-notes"
+      },
+      "check": {
+        "property": "exists",
+        "equals": false
+      }
+    },
+    {
+      "id": "advance-removed",
+      "op": "clock.advance",
+      "byMs": 300
+    },
+    {
+      "id": "capture-removed",
+      "op": "capture",
+      "captureId": "removed",
+      "requiredFrameTimeUs": 1500000
+    },
+    {
+      "id": "click-show-notes",
+      "op": "pointer.click",
+      "target": {
+        "surface": "main",
+        "testId": "show-notes"
+      },
+      "button": "primary"
+    },
+    {
+      "id": "notes-restored",
+      "op": "assert",
+      "target": {
+        "surface": "main",
+        "testId": "auto-notes"
+      },
+      "check": {
+        "property": "exists",
+        "equals": true
+      }
+    },
+    {
+      "id": "advance-restored",
+      "op": "clock.advance",
+      "byMs": 300
+    },
+    {
+      "id": "capture-restored",
+      "op": "capture",
+      "captureId": "restored",
+      "requiredFrameTimeUs": 1800000
+    },
+    {
+      "id": "click-disable",
+      "op": "pointer.click",
+      "target": {
+        "surface": "main",
+        "testId": "disable-tabs"
+      },
+      "button": "primary"
+    },
+    {
+      "id": "disabled-inherited",
+      "op": "assert",
+      "target": {
+        "surface": "main",
+        "testId": "auto-history"
+      },
+      "check": {
+        "property": "enabled",
+        "equals": false
+      }
+    },
+    {
+      "id": "capture-disabled",
+      "op": "capture",
+      "captureId": "disabled",
+      "requiredFrameTimeUs": 1800000
+    },
+    {
+      "id": "click-disabled-history",
+      "op": "pointer.click",
+      "button": "primary",
+      "position": {
+        "x": 262,
+        "y": 229
+      },
+      "surface": "main"
+    },
+    {
+      "id": "disabled-selection-blocked",
+      "op": "assert",
+      "target": {
+        "surface": "main",
+        "testId": "auto-value"
+      },
+      "check": {
+        "property": "text",
+        "equals": "Selected: profile"
+      }
+    },
+    {
+      "id": "click-enable",
+      "op": "pointer.click",
+      "target": {
+        "surface": "main",
+        "testId": "disable-tabs"
+      },
+      "button": "primary"
+    },
+    {
+      "id": "enabled-restored",
+      "op": "assert",
+      "target": {
+        "surface": "main",
+        "testId": "auto-history"
+      },
+      "check": {
+        "property": "enabled",
+        "equals": true
+      }
+    },
+    {
+      "id": "click-focus-manual",
+      "op": "pointer.click",
+      "target": {
+        "surface": "main",
+        "testId": "before-manual"
+      },
+      "button": "primary"
+    },
+    {
+      "id": "tab-into-manual",
+      "op": "key.press",
+      "surface": "main",
+      "key": "Tab"
+    },
+    {
+      "id": "manual-overview-focused",
+      "op": "assert",
+      "target": {
+        "surface": "main",
+        "testId": "manual-overview"
+      },
+      "check": {
+        "property": "focused",
+        "equals": true
+      }
+    },
+    {
+      "id": "manual-off-axis",
+      "op": "key.press",
+      "surface": "main",
+      "key": "ArrowRight"
+    },
+    {
+      "id": "manual-right-ignored",
+      "op": "assert",
+      "target": {
+        "surface": "main",
+        "testId": "manual-overview"
+      },
+      "check": {
+        "property": "focused",
+        "equals": true
+      }
+    },
+    {
+      "id": "manual-down",
+      "op": "key.press",
+      "surface": "main",
+      "key": "ArrowDown"
+    },
+    {
+      "id": "manual-details-focused",
+      "op": "assert",
+      "target": {
+        "surface": "main",
+        "testId": "manual-details"
+      },
+      "check": {
+        "property": "focused",
+        "equals": true
+      }
+    },
+    {
+      "id": "manual-still-overview",
+      "op": "assert",
+      "target": {
+        "surface": "main",
+        "testId": "manual-value"
+      },
+      "check": {
+        "property": "text",
+        "equals": "Selected: overview"
+      }
+    },
+    {
+      "id": "details-not-built",
+      "op": "assert",
+      "target": {
+        "surface": "main",
+        "testId": "details-body"
+      },
+      "check": {
+        "property": "exists",
+        "equals": false
+      }
+    },
+    {
+      "id": "manual-enter",
+      "op": "key.press",
+      "surface": "main",
+      "key": "Enter"
+    },
+    {
+      "id": "manual-selected-details",
+      "op": "assert",
+      "target": {
+        "surface": "main",
+        "testId": "manual-value"
+      },
+      "check": {
+        "property": "text",
+        "equals": "Selected: details"
+      }
+    },
+    {
+      "id": "details-built",
+      "op": "assert",
+      "target": {
+        "surface": "main",
+        "testId": "details-body"
+      },
+      "check": {
+        "property": "exists",
+        "equals": true
+      }
+    },
+    {
+      "id": "overview-unbuilt",
+      "op": "assert",
+      "target": {
+        "surface": "main",
+        "testId": "overview-body"
+      },
+      "check": {
+        "property": "exists",
+        "equals": false
+      }
+    },
+    {
+      "id": "manual-home-key",
+      "op": "key.press",
+      "surface": "main",
+      "key": "Home"
+    },
+    {
+      "id": "manual-home-overview",
+      "op": "assert",
+      "target": {
+        "surface": "main",
+        "testId": "manual-overview"
+      },
+      "check": {
+        "property": "focused",
+        "equals": true
+      }
+    },
+    {
+      "id": "manual-home-keeps-selection",
+      "op": "assert",
+      "target": {
+        "surface": "main",
+        "testId": "manual-value"
+      },
+      "check": {
+        "property": "text",
+        "equals": "Selected: details"
+      }
+    },
+    {
+      "id": "manual-space",
+      "op": "key.press",
+      "surface": "main",
+      "key": "Space"
+    },
+    {
+      "id": "manual-selected-overview",
+      "op": "assert",
+      "target": {
+        "surface": "main",
+        "testId": "manual-value"
+      },
+      "check": {
+        "property": "text",
+        "equals": "Selected: overview"
+      }
+    },
+    {
+      "id": "overview-rebuilt",
+      "op": "assert",
+      "target": {
+        "surface": "main",
+        "testId": "overview-body"
+      },
+      "check": {
+        "property": "exists",
+        "equals": true
+      }
+    },
+    {
+      "id": "click-theme",
+      "op": "pointer.click",
+      "target": {
+        "surface": "main",
+        "testId": "tabs-theme"
+      },
+      "button": "primary"
+    },
+    {
+      "id": "advance-final",
+      "op": "clock.advance",
+      "byMs": 300
+    },
+    {
+      "id": "capture-final",
+      "op": "capture",
+      "captureId": "final",
+      "requiredFrameTimeUs": 2100000
+    }
+  ]
+}
