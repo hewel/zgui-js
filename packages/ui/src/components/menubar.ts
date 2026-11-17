@@ -5,8 +5,7 @@ import type {
   Accessor, NativeChild, NativeElementProps, NativeEvent, NativeFocusEvent, NativeKeyEvent,
   NativeNode, NativePointerBoundaryEvent,
 } from "../types.js";
-import { anchoredSurface } from "./anchored.js";
-import { createOverlayState } from "./overlay.js";
+import { anchoredSurface, createOverlayState } from "./overlay.js";
 import {
   MenuContext, MenuGroup, MenuRadioContext, MenuRadioGroup, MenuSurfaceContext,
   createMenuCheckedState, createMenuRadioValue, createTypeaheadHandler, menuIndicator, menuRow,

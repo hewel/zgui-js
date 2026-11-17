@@ -100,7 +100,7 @@ const negativeCases = [
     file: "raf.ts",
     code: "export function tick() { return requestAnimationFrame(() => {}); }\n",
     expected: /eslint\(no-restricted-globals\)/,
-    guidance: /createPresence\(\)/,
+    guidance: /owner-scoped overlay primitives/,
   },
 ];
 

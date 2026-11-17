@@ -1,40 +1,49 @@
-import { splitProps, useContext } from "#solid";
+import { useContext } from "#solid";
 import { mergeProps } from "../renderer/index.js";
 import type { NativeChild, NativeElementProps, NativeNode } from "../types.js";
-import { OverlayContext, OverlayRoot } from "./overlay.js";
-import type { OverlayRootProps } from "./overlay.js";
-import { anchoredSurface } from "./anchored.js";
-import type { AnchoredContentProps } from "./anchored.js";
-import { classes, element, part, useStylesheet } from "./shared.js";
+import type { ButtonProps } from "./button.js";
+import {
+  anchoredSurface,
+  type AnchoredContentProps,
+  OverlayContext,
+  OverlayRoot,
+  type OverlayRootProps,
+  overlayClose,
+  overlayDescription,
+  overlayTitle,
+  overlayTrigger,
+} from "./overlay.js";
+import { part, useStylesheet } from "./shared.js";
 import { sheet } from "./generated/PopoverStyle.js";
 
-export { DialogTrigger as PopoverTrigger, DialogClose as PopoverClose } from "./dialog.js";
-export type { DialogTriggerProps as PopoverTriggerProps, DialogCloseProps as PopoverCloseProps } from "./dialog.js";
 export type PopoverProps = OverlayRootProps;
+export type PopoverTriggerProps = ButtonProps;
+export type PopoverCloseProps = ButtonProps;
 export type PopoverHeaderProps = NativeElementProps;
 export type PopoverTitleProps = NativeElementProps;
 export type PopoverDescriptionProps = NativeElementProps;
 export type PopoverContentProps = AnchoredContentProps;
+
 export function Popover(props: PopoverProps = {}): NativeChild { return OverlayRoot(props); }
+
+export function PopoverTrigger(props: PopoverTriggerProps = {}): NativeNode {
+  return overlayTrigger("dialog", props);
+}
+
+export function PopoverClose(props: PopoverCloseProps = {}): NativeNode {
+  return overlayClose(props);
+}
+
 export const PopoverHeader = part("column", sheet, "zui-popover__header");
+
 export function PopoverTitle(props: PopoverTitleProps = {}): NativeNode {
-  useStylesheet(sheet);
-  const context = useContext(OverlayContext);
-  const [own, rest] = splitProps(props, ["ref"]);
-  return element("box", mergeProps(rest, {
-    ref(node: NativeNode) { context?.title.ref(node); if (typeof own.ref === "function") own.ref(node); },
-    get class() { return classes("zui-popover__title", rest.class); },
-  }));
+  return overlayTitle("box", sheet, "zui-popover__title", props);
 }
+
 export function PopoverDescription(props: PopoverDescriptionProps = {}): NativeNode {
-  useStylesheet(sheet);
-  const context = useContext(OverlayContext);
-  const [own, rest] = splitProps(props, ["ref"]);
-  return element("box", mergeProps(rest, {
-    ref(node: NativeNode) { context?.description.ref(node); if (typeof own.ref === "function") own.ref(node); },
-    get class() { return classes("zui-popover__description", rest.class); },
-  }));
+  return overlayDescription(sheet, "zui-popover__description", props);
 }
+
 export function PopoverContent(props: PopoverContentProps = {}): NativeChild {
   useStylesheet(sheet);
   const context = useContext(OverlayContext);

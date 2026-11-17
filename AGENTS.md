@@ -23,7 +23,7 @@
 
 ## 5. Dual Verification Tiers
 
-- `tests/build/native-fixture.mjs` records renderer calls while retaining detached nodes and models `FocusIn`/`FocusOut` bubbling plus closure-captured event cancellation; verify remounts, Portal paint/hit escape, first-paint Popper anchor geometry (checking settled surface/arrow gaps after entrance animations), styled-frame `presence.ts` exit deferral, parked-pointer menu autofocus, settled theme/transition captures, and glyph rasterization (`tests/preview/vector-text.test.mjs`) through `tests/preview/harness.mjs`.
+- `tests/build/native-fixture.mjs` implements all 23 `__zgui` ops with Bridge-turn detached-node invalidation, lease inspection, `FocusIn`/`FocusOut` bubbling, and closure-captured event cancellation; verify remounts, Portal paint/hit escape, first-paint Popper anchor geometry (checking settled surface/arrow gaps after entrance animations), styled-frame `overlay.ts` exit deferral, parked-pointer menu autofocus, settled theme/transition captures, and glyph rasterization (`tests/preview/vector-text.test.mjs`) through `tests/preview/harness.mjs`.
 - Run vendored Rust checks with `cargo test -j 4 --manifest-path vendor/<crate>/Cargo.toml ... --offline` (`pnpm test:vendor`); these crates are excluded from the root workspace.
 
 ## 6. Component Map & Vocabulary

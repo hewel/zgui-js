@@ -1,6 +1,6 @@
 # Deepen Core Runtime, Preview, and UI Seams
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 ## Problem Statement
 

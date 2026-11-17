@@ -1,29 +1,31 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { fileURLToPath } from "node:url";
 import { createClock, createHost, moduleFor } from "./native-fixture.mjs";
 
-const internal = fileURLToPath(new URL("../../packages/ui/src/components/presence.ts", import.meta.url));
 const fixture = `
-import { Show, createSignal, onCleanup, renderApp } from "@hewel/zgui";
+import { createSignal, onCleanup, renderApp } from "@hewel/zgui";
 import type { NativeNode } from "@hewel/zgui";
-import { createPresence } from ${JSON.stringify(internal)};
+import { Popover, PopoverContent, PopoverTrigger, ThemeProvider } from "@hewel/zgui/components";
 const [open, setOpen] = createSignal(false);
 export { setOpen };
 export const log = { mounts: 0, cleanups: 0 };
-let presence: ReturnType<typeof createPresence>;
 function Body() {
   log.mounts += 1;
   onCleanup(() => { log.cleanups += 1; });
   const [count, setCount] = createSignal(0);
-  return <box testId="surface" ref={presence.ref} data-state={presence.state()}
-    onAnimationEnd={presence.onEnd} onAnimationCancel={presence.onEnd}
-    onTransitionEnd={presence.onEnd} onTransitionCancel={presence.onEnd}>
-    <control testId="counter" onClick={() => setCount(n => n + 1)}>{String(count())}</control>
-  </box>;
+  return <control testId="counter" onClick={() => setCount(n => n + 1)}>{String(count())}</control>;
 }
 export function mount(root: NativeNode) {
-  return renderApp(() => { presence = createPresence(open); return <Show when={presence.mounted()}><Body /></Show>; }, root);
+  return renderApp(() => (
+    <ThemeProvider>
+      <Popover open={open()} onOpenChange={setOpen}>
+        <PopoverTrigger testId="trigger">Toggle</PopoverTrigger>
+        <PopoverContent testId="surface">
+          <Body />
+        </PopoverContent>
+      </Popover>
+    </ThemeProvider>
+  ), root);
 }
 `;
 

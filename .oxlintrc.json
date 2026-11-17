@@ -21,7 +21,7 @@
       "error",
       {
         "name": "setTimeout",
-        "message": "Do not call raw setTimeout in components or apps; use createDelay() or createPresence() so timers cancel when owners dispose."
+        "message": "Do not call raw setTimeout in components or apps; use createDelay() or owner-scoped overlay primitives so timers cancel when owners dispose."
       },
       {
         "name": "setInterval",
@@ -29,11 +29,11 @@
       },
       {
         "name": "requestAnimationFrame",
-        "message": "Do not call raw requestAnimationFrame in components or apps; use createPresence() or owner-scoped primitives instead."
+        "message": "Do not call raw requestAnimationFrame in components or apps; use owner-scoped overlay primitives instead."
       },
       {
         "name": "cancelAnimationFrame",
-        "message": "Do not manage raw animation frame handles directly in components or apps; use createPresence() or owner-scoped helpers."
+        "message": "Do not manage raw animation frame handles directly in components or apps; use owner-scoped overlay primitives."
       }
     ],
     "zgui/no-direct-bridge": "error",
@@ -66,7 +66,7 @@
     {
       "files": [
         "packages/ui/src/components/delay.ts",
-        "packages/ui/src/components/presence.ts"
+        "packages/ui/src/components/overlay.ts"
       ],
       "rules": {
         "no-restricted-globals": "off"
@@ -114,14 +114,6 @@
         "no-restricted-globals": "off",
         "no-unused-vars": "off",
         "no-unassigned-vars": "off"
-      }
-    },
-    {
-      "files": [
-        "tests/preview/fixtures/presence.tsx"
-      ],
-      "rules": {
-        "zgui/no-internal-package-imports": "off"
       }
     }
   ]

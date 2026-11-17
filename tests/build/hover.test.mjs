@@ -331,7 +331,7 @@ test("hover card honours 700/300 defaults, re-entry keeps identity and dismissal
   finish();
 });
 
-test("controlled hover card emits the false then true focus request and honours parent veto", async t => {
+test("controlled hover card refocuses without false-then-true churn and honours parent veto", async t => {
   const { h, mod, clock, traps, send, flush, finish } = await mounted(t, "mountCardControlled");
   const trigger = h.byTestId("trigger");
   assert.equal(trigger.props.get("tabIndex"), 0);
@@ -349,8 +349,8 @@ test("controlled hover card emits the false then true focus request and honours 
   assert.equal(traps.length, 0, "hover card must not trap focus");
   mod.log.changes.length = 0;
   send("trigger", "onFocus", { cause: "keyboard" });
-  assert.deepEqual(mod.log.changes, [false, true], "refocusing an open card emits false then true");
-  assert.equal(h.byTestId("surface"), surface, "same surface survives the toggle request");
+  assert.deepEqual(mod.log.changes, [], "refocusing an already-open card calls openNow() without false-then-true churn");
+  assert.equal(h.byTestId("surface"), surface, "same surface survives refocus");
   mod.log.changes.length = 0;
   send("surface", "onPointerEnter", { position: { x: 0, y: 0 }, pointerKind: "mouse" });
   assert.equal(clock.timers.size, 1, "surface enter queues an opening job");

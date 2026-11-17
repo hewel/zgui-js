@@ -4,11 +4,11 @@
 
 **Blocked by:** 03 (Complete the in-memory NativeHost test adapter and migrate build suites)
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] One internal overlay-surface module absorbs exit deferral (`data-state`, `isAnimating`, double-tick frame settle, 1000ms fallback), same-turn `createEffect` portal construction (preserving QuickJS stack budgets on initially open dialogs and pre-flush owner cancellation), theme re-scoping, and modal scrim vs `Popper` anchored lease coordination (`trapFocus`, `lockScroll`, `registerDismissLayer` with `leaving`).
-- [ ] All public exports of `@hewel/zgui/components` and exported module-map / `testId` parity remain 100% intact.
-- [ ] Shared overlay subparts (triggers, close controls, titles, descriptions) are unified rather than imported sideways between modal and popover modules or copy-pasted.
-- [ ] Hover trigger, Escape dismissal, and intent handoff live inside the hover module so `Tooltip` and `HoverCard` share one state machine, and refocusing an already-open controlled hover surface calls `openNow()` without emitting a spurious `[false, true]` `onOpenChange` sequence.
-- [ ] Build and GPU preview exit-deferral verification tests exercise public overlay modules (covering animated exit, zero-duration, no-motion, endless 1000ms timeout, and owner cancellation) instead of importing internal modules directly, and the internal-package-import override in the lint configuration is deleted.
-- [ ] Any repo agent rule referencing retired internal overlay filenames is updated to reflect the consolidated internal module, and `pnpm check` plus preview overlay/presence suites pass after the final edit.
+- [x] One internal overlay-surface module absorbs exit deferral (`data-state`, `isAnimating`, double-tick frame settle, 1000ms fallback), same-turn `createEffect` portal construction (preserving QuickJS stack budgets on initially open dialogs and pre-flush owner cancellation), theme re-scoping, and modal scrim vs `Popper` anchored lease coordination (`trapFocus`, `lockScroll`, `registerDismissLayer` with `leaving`).
+- [x] All public exports of `@hewel/zgui/components` and exported module-map / `testId` parity remain 100% intact.
+- [x] Shared overlay subparts (triggers, close controls, titles, descriptions) are unified rather than imported sideways between modal and popover modules or copy-pasted.
+- [x] Hover trigger, Escape dismissal, and intent handoff live inside the hover module so `Tooltip` and `HoverCard` share one state machine, and refocusing an already-open controlled hover surface calls `openNow()` without emitting a spurious `[false, true]` `onOpenChange` sequence.
+- [x] Build and GPU preview exit-deferral verification tests exercise public overlay modules (covering animated exit, zero-duration, no-motion, endless 1000ms timeout, and owner cancellation) instead of importing internal modules directly, and the internal-package-import override in the lint configuration is deleted.
+- [x] Any repo agent rule referencing retired internal overlay filenames is updated to reflect the consolidated internal module, and `pnpm check` plus preview overlay/presence suites pass after the final edit.
