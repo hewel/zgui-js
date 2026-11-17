@@ -13,8 +13,8 @@
 mod support;
 
 use zgui_geom::{Css, CssPx, Point};
-use zgui_platform::SurfaceEvent;
-use zgui_view::{BuildCx, IntoView, View};
+use zgui_platform::{Clock, PlatformCx, SurfaceEvent};
+use zgui_view::{BuildCx, IntoView, View, ViewHost};
 use zgui_vocab::{
     Modifiers, PointerId, PointerKind, ScrollDelta, ScrollPhase, Timestamp, WheelEvent,
 };
@@ -163,4 +163,111 @@ fn the_surface_fixed_across_the_window_is_really_the_one_the_wheel_lands_on() {
         "the page moved, so the surface covering the window is not what the wheel landed on and \
          the test that the page scrolls under it proves nothing"
     );
+}
+
+#[test]
+fn a_latched_background_gesture_cannot_move_a_frozen_root_via_an_inner_scroller() {
+    let mut harness = support::app_with_text(
+        ":root { display: block; overflow: auto }
+         .tall { display: block; width: 400px; height: 3000px }
+         .port { position: fixed; left: 0; top: 0; width: 400px; height: 120px; overflow: auto }",
+        move |cx: &mut BuildCx<'_>| {
+            Box::new(zgui_elements::column()
+                .child(zgui_elements::column().class("tall"))
+                .child(zgui_elements::r#box().class("port")
+                    .child(zgui_elements::column().class("tall")))
+                .into_view().build(cx)) as Box<dyn zgui_view::Anchor>
+        },
+    );
+    harness.settle(8);
+    let pad = |harness: &mut zgui_platform_headless::Harness<zgui_runtime::Runtime>, y: f32, delta: f32, phase| {
+        harness.advance(std::time::Duration::from_millis(8));
+        let timestamp = harness.platform().clock().timestamp();
+        harness.deliver_to_first(SurfaceEvent::Wheel {
+            event: WheelEvent {
+                id: PointerId::MOUSE,
+                kind: PointerKind::Mouse,
+                position: Point::<CssPx, Css>::new(CssPx(100.0), CssPx(y)),
+                delta: ScrollDelta::Pixels(zgui_geom::Size::new(CssPx(0.0), CssPx(delta))),
+                phase,
+            },
+            modifiers: Modifiers::NONE,
+            timestamp,
+        });
+        harness.settle(4);
+    };
+    pad(&mut harness, 200.0, 0.0, ScrollPhase::Started);
+    pad(&mut harness, 200.0, 40.0, ScrollPhase::Moved);
+    let before = scrolled(&harness);
+    assert!(before > 0.0, "control: the gesture really scrolled the window root");
+    let host = harness.app().windows()[0].host().clone();
+    host.freeze_scrolling(true);
+    harness.settle(8);
+    assert!(harness.app().windows()[0].scrolling_frozen());
+    assert_eq!(scrolled(&harness), before, "acquiring freeze preserves the offset");
+    pad(&mut harness, 60.0, 80.0, ScrollPhase::Moved);
+    assert_eq!(scrolled(&harness), before, "the previously latched root must stay frozen over the inner scroller");
+    pad(&mut harness, 60.0, 80.0, ScrollPhase::Momentum);
+    assert_eq!(scrolled(&harness), before, "old momentum cannot move the frozen root");
+    assert_eq!(anything_scrolled(&harness), before, "old background momentum is not transferred to the inner scroller");
+    pad(&mut harness, 60.0, 0.0, ScrollPhase::Ended);
+    pad(&mut harness, 60.0, 0.0, ScrollPhase::Started);
+    pad(&mut harness, 60.0, 120.0, ScrollPhase::Moved);
+    assert_eq!(scrolled(&harness), before);
+    assert!(anything_scrolled(&harness) > before, "a fresh inner gesture still scrolls its own container");
+    pad(&mut harness, 60.0, 0.0, ScrollPhase::Ended);
+    let inner_before = anything_scrolled(&harness);
+    pad(&mut harness, 200.0, 0.0, ScrollPhase::Started);
+    pad(&mut harness, 60.0, 120.0, ScrollPhase::Moved);
+    assert_eq!(scrolled(&harness), before);
+    assert!(anything_scrolled(&harness) > inner_before, "a fresh touch over frozen background can enter an inner scroller");
+    pad(&mut harness, 60.0, 0.0, ScrollPhase::Ended);
+    host.freeze_scrolling(false);
+    harness.settle(8);
+    pad(&mut harness, 200.0, 0.0, ScrollPhase::Started);
+    pad(&mut harness, 200.0, 40.0, ScrollPhase::Moved);
+    assert!(scrolled(&harness) > before, "releasing the freeze restores root movement");
+    pad(&mut harness, 200.0, 0.0, ScrollPhase::Ended);
+}
+
+#[test]
+fn a_frozen_root_rejects_programmatic_and_accessibility_scrolls_until_released() {
+    let mut harness = support::app_with_text(PAGE_CSS, move |cx: &mut BuildCx<'_>| {
+        Box::new(zgui_elements::column().class("tall").into_view().build(cx)) as Box<dyn zgui_view::Anchor>
+    });
+    harness.settle(8);
+    let (host, root) = {
+        let window = &harness.app().windows()[0];
+        let layout = window.layout().borrow();
+        let key = layout.node(layout.root().unwrap()).source.unwrap();
+        (window.host().clone(), zgui_view_dom::id::to_view(key))
+    };
+    let move_to = |y| zgui_view::ScrollTarget::Offset(zgui_geom::Point::new(zgui_geom::DevicePx(0.0), zgui_geom::DevicePx(y)));
+    host.scroll_to(root, move_to(100.0), zgui_view::ScrollBehavior::Instant);
+    harness.settle(8);
+    assert_eq!(scrolled(&harness), 100.0);
+    host.freeze_scrolling(true);
+    harness.settle(8);
+    wheel(&mut harness);
+    assert_eq!(scrolled(&harness), 100.0, "discrete wheels leave the frozen root in place");
+    host.scroll_to(root, move_to(200.0), zgui_view::ScrollBehavior::Instant);
+    harness.settle(8);
+    assert_eq!(scrolled(&harness), 100.0, "programmatic scroll cannot move the frozen root");
+    let action = |y| zgui_platform::WakeReason::A11yAction(zgui_a11y::ActionRequest {
+        action: zgui_a11y::Action::SetScrollOffset,
+        target_tree: zgui_a11y::TreeId::ROOT,
+        target_node: zgui_a11y::NodeId(root.as_u64()),
+        data: Some(zgui_a11y::ActionData::SetScrollOffset(zgui_a11y::Point::new(0.0, y))),
+    });
+    harness.platform().waker().wake(action(300.0));
+    harness.settle(8);
+    assert_eq!(scrolled(&harness), 100.0, "accessibility scroll cannot move the frozen root");
+    host.freeze_scrolling(false);
+    harness.settle(8);
+    harness.platform().waker().wake(action(300.0));
+    harness.settle(8);
+    assert_eq!(scrolled(&harness), 300.0, "control: the same accessibility request really scrolls after release");
+    host.scroll_to(root, move_to(400.0), zgui_view::ScrollBehavior::Instant);
+    harness.settle(8);
+    assert_eq!(scrolled(&harness), 400.0);
 }

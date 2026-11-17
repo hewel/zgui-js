@@ -1,0 +1,81 @@
+[package]
+name = "zgui-dom"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+description = "The zgui document: an arena of nodes and their records"
+repository = "https://github.com/zortax/zgui"
+homepage = "https://zgui.zortax.de"
+rust-version = "1.90"
+keywords = ["gui", "ui", "css", "reactive", "wgpu"]
+categories = ["gui"]
+include = ["/src", "/build", "/build.rs", "/README.md", "/LICENSE", "/NOTICE"]
+
+# L3 — the document. Every dependency is inherited: `foo.workspace = true`.
+
+[workspace]
+
+[dependencies]
+zgui-arena = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a" }
+zgui-bits = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a" }
+zgui-geom = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a" }
+zgui-interned = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a" }
+zgui-profile = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a" }
+zgui-vocab = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a" }
+
+# The style engine's own types. They appear in the node record and in the columns because the
+# engine reads and writes them directly; nothing above this crate names any of them.
+selectors = "0.39.0"
+servo_arc = "0.4.3"
+stylo = "=0.19.0"
+stylo_atoms = "=0.19.0"
+stylo_dom = "=0.19.0"
+web_atoms = "0.2.5"
+
+# `TElement::query_container_size` returns a `euclid` size of `app_units` in return position, so
+# whichever crate implements the style engine's DOM traits has to name both.
+app_units = "0.7.8"
+euclid = "0.22.14"
+
+bitflags = "2.13"
+# One message, once, when a batch of changes panics and poisons the document. A poisoned document
+# refuses every later change, and a failure that silently freezes an interface has to say so.
+tracing = "0.1.44"
+rustc-hash = "2.1"
+smallvec = "1.15"
+
+# The acceptance tests drive the real style engine over this crate's own traits, which needs the
+# feature prefs, a stylesheet parser and a worker pool. None of it is reachable from the library.
+[dev-dependencies]
+# The frame counters are compiled out of an optimised build unless this feature asks for them, and
+# the invalidation budgets have to be readable from `cargo test --release` as well as from a debug
+# build — a budget that only holds in debug is a budget nobody checks.
+zgui-profile = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a", features = ["counters"] }
+
+# The feature flags have one home, and it is the style facade. These tests parse sheets, so they
+# run the same bootstrap the framework does rather than a second copy of the same list.
+zgui-css = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a" }
+
+cssparser = "0.37.0"
+rayon = "1.12"
+trybuild = "1.0"
+
+[lints.rust]
+missing_docs = "deny"
+unsafe_code = "deny"
+unreachable_pub = "warn"
+
+[lints.rustdoc]
+broken_intra_doc_links = "deny"
+private_intra_doc_links = "warn"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+undocumented_unsafe_blocks = "warn"
+
+[patch.crates-io]
+fontique = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a" }
+
+[patch."https://github.com/zortax/zgui"]
+zgui-dom = { path = "." }
+zgui-style = { path = "../zgui-style" }

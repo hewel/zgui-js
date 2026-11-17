@@ -300,6 +300,7 @@ pub struct Window {
     renderer: Box<dyn Renderer>,
     /// What is hovered, pressed, focused and captured.
     router: Router,
+    command_captures: Vec<zgui_vocab::PointerId>,
     /// Focus moves that have happened and have not yet been announced to the document.
     ///
     /// Announcing one is dispatching two events, and a dispatch may not begin inside another: focus
@@ -749,6 +750,7 @@ impl Window {
             text,
             renderer,
             router: Router::new(),
+            command_captures: Vec::new(),
             pending_focus: Vec::new(),
             pending_crossings: Vec::new(),
             gestures: zgui_input::Gestures::new(),

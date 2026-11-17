@@ -32,8 +32,12 @@ pub struct Scenario {
 pub enum Step {
     Settle { id: String, timeout_ms: Option<u64> },
     Capture { id: String, capture_id: String, required_frame_time_us: Option<u64>, allowed_pending_assets: Vec<String> },
-    PointerMove { id: String, location: PointerLocation },
-    PointerClick { id: String, location: PointerLocation, button: PointerButton },
+    PointerMove { id: String, location: PointerLocation, pointer: PointerDevice },
+    PointerClick { id: String, location: PointerLocation, button: PointerButton, pointer: PointerDevice },
+    PointerDown { id: String, location: PointerLocation, button: PointerButton, pointer: PointerDevice },
+    PointerUp { id: String, location: PointerLocation, button: PointerButton, pointer: PointerDevice },
+    PointerCancel { id: String, location: PointerLocation, pointer: PointerDevice },
+    Wheel { id: String, location: PointerLocation, delta: WheelDelta, phase: WheelPhase },
     KeyPress { id: String, surface: String, key: Key, modifiers: Vec<Modifier> },
     TextCommit { id: String, surface: String, text: String },
     Assert { id: String, target: Target, check: Check },
@@ -50,6 +54,8 @@ impl Step {
         match self {
             Self::Settle { id, .. } | Self::Capture { id, .. }
             | Self::PointerMove { id, .. } | Self::PointerClick { id, .. }
+            | Self::PointerDown { id, .. } | Self::PointerUp { id, .. } | Self::PointerCancel { id, .. }
+            | Self::Wheel { id, .. }
             | Self::KeyPress { id, .. } | Self::TextCommit { id, .. }
             | Self::Assert { id, .. } | Self::AssertService { id, .. }
             | Self::ClockAdvance { id, .. } | Self::ServiceEmit { id, .. }
@@ -63,6 +69,10 @@ impl Step {
             Self::Capture { .. } => "capture",
             Self::PointerMove { .. } => "pointer.move",
             Self::PointerClick { .. } => "pointer.click",
+            Self::PointerDown { .. } => "pointer.down",
+            Self::PointerUp { .. } => "pointer.up",
+            Self::PointerCancel { .. } => "pointer.cancel",
+            Self::Wheel { .. } => "wheel",
             Self::KeyPress { .. } => "key.press",
             Self::TextCommit { .. } => "text.commit",
             Self::Assert { .. } | Self::AssertService { .. } => "assert",
@@ -135,9 +145,47 @@ impl Serialize for Selector {
 pub enum PointerButton { Primary, Secondary, Middle }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PointerKind { Mouse, Touch, Pen, Unknown }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct PointerDevice {
+    #[serde(serialize_with = "serialize_pointer_id")]
+    pub id: u64,
+    pub kind: PointerKind,
+    pub primary: bool,
+}
+
+impl Default for PointerDevice {
+    fn default() -> Self { Self { id: 0, kind: PointerKind::Mouse, primary: true } }
+}
+
+fn serialize_pointer_id<S: Serializer>(id: &u64, serializer: S) -> Result<S::Ok, S::Error> {
+    serializer.serialize_str(&id.to_string())
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum PointerOperation { Move, Down(PointerButton), Up(PointerButton), Cancel, Click(PointerButton) }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum WheelUnit { Pixels, Lines }
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum WheelPhase { #[default] Discrete, Started, Moved, Ended, Momentum }
+
+crate::schema::object_struct! {
+    #[serde(deny_unknown_fields)]
+    pub struct WheelDelta { pub x: f64, pub y: f64, pub unit: WheelUnit }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub enum Key {
     Tab, Enter, Escape, Space, ArrowUp, ArrowDown, ArrowLeft, ArrowRight,
-    Home, End, Backspace, Delete,
+    Home, End, PageUp, PageDown, Backspace, Delete,
+    #[serde(rename = "character")]
+    Character(String),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
@@ -186,7 +234,13 @@ enum StepInput {
     #[serde(rename = "pointer.move")]
     PointerMove(PointerMoveInput),
     #[serde(rename = "pointer.click")]
-    PointerClick(PointerClickInput),
+    PointerClick(PointerButtonInput),
+    #[serde(rename = "pointer.down")]
+    PointerDown(PointerButtonInput),
+    #[serde(rename = "pointer.up")]
+    PointerUp(PointerButtonInput),
+    #[serde(rename = "pointer.cancel")]
+    PointerCancel(PointerMoveInput),
     #[serde(rename = "key.press")]
     KeyPress(KeyPressInput),
     #[serde(rename = "text.commit")]
@@ -203,11 +257,11 @@ enum StepInput {
     SurfaceScale(ScaleInput),
     #[serde(rename = "surface.recreate")]
     SurfaceRecreate(RecreateInput),
+    #[serde(rename = "wheel")]
+    Wheel(WheelInput),
     // Later operations remain explicit capability failures, never silently ignored.
     #[serde(rename = "pointer.drag")]
     PointerDrag,
-    #[serde(rename = "wheel")]
-    Wheel,
     #[serde(rename = "ime.preedit")]
     ImePreedit,
     #[serde(rename = "ime.commit")]
@@ -251,11 +305,13 @@ struct PointerMoveInput {
     surface: Option<String>,
     #[serde(default, deserialize_with = "present")]
     position: Option<PositionInput>,
+    #[serde(default, deserialize_with = "present")]
+    pointer: Option<PointerDeviceInput>,
 }
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct PointerClickInput {
+struct PointerButtonInput {
     id: String,
     #[serde(default, deserialize_with = "present")]
     target: Option<TargetInput>,
@@ -264,6 +320,26 @@ struct PointerClickInput {
     #[serde(default, deserialize_with = "present")]
     position: Option<PositionInput>,
     button: PointerButton,
+    #[serde(default, deserialize_with = "present")]
+    pointer: Option<PointerDeviceInput>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct PointerDeviceInput {
+    id: String,
+    kind: PointerKind,
+    #[serde(default = "primary_pointer")]
+    primary: bool,
+}
+
+fn primary_pointer() -> bool { true }
+
+fn pointer_device(input: Option<PointerDeviceInput>) -> Result<PointerDevice, Error> {
+    let Some(input) = input else { return Ok(PointerDevice::default()); };
+    let id = input.id.parse::<u64>().map_err(|_| invalid("pointer id must be a canonical decimal u64 string"))?;
+    if id.to_string() != input.id { return Err(invalid("pointer id must be a canonical decimal u64 string")); }
+    Ok(PointerDevice { id, kind: input.kind, primary: input.primary })
 }
 
 #[derive(Deserialize, Serialize)]
@@ -323,6 +399,25 @@ struct ScaleInput { id:String,surface:String,scale:f64 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RecreateInput { id:String,surface:String }
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WheelInput {
+    id: String,
+    #[serde(default, deserialize_with = "present_object")]
+    target: Option<TargetInput>,
+    #[serde(default, deserialize_with = "present")]
+    surface: Option<String>,
+    #[serde(default, deserialize_with = "present_object")]
+    position: Option<PositionInput>,
+    delta: WheelDelta,
+    #[serde(default)]
+    phase: WheelPhase,
+}
+
+fn present_object<'de, D: Deserializer<'de>, T: Deserialize<'de>>(input: D) -> Result<Option<T>, D::Error> {
+    crate::schema::deserialize_object(input).map(Some)
+}
 
 fn present<'de, D: Deserializer<'de>, T: Deserialize<'de>>(input: D) -> Result<Option<T>, D::Error> {
     T::deserialize(input).map(Some)
@@ -404,15 +499,33 @@ fn parse(bytes: &[u8], available: &[&str], virtual_profile: bool) -> Result<Scen
             StepInput::PointerMove(input) => {
                 let location = pointer_location(input.target, input.surface, input.position, &mut requirements)?;
                 require(&mut requirements, "input.pointer");
-                Step::PointerMove { id: input.id, location }
+                Step::PointerMove { id: input.id, location, pointer: pointer_device(input.pointer)? }
             }
             StepInput::PointerClick(input) => {
                 let location = pointer_location(input.target, input.surface, input.position, &mut requirements)?;
                 require(&mut requirements, "input.pointer");
-                Step::PointerClick { id: input.id, location, button: input.button }
+                Step::PointerClick { id: input.id, location, button: input.button, pointer: pointer_device(input.pointer)? }
+            }
+            StepInput::PointerDown(input) => {
+                let location = pointer_location(input.target, input.surface, input.position, &mut requirements)?;
+                require(&mut requirements, "input.pointer");
+                Step::PointerDown { id: input.id, location, button: input.button, pointer: pointer_device(input.pointer)? }
+            }
+            StepInput::PointerUp(input) => {
+                let location = pointer_location(input.target, input.surface, input.position, &mut requirements)?;
+                require(&mut requirements, "input.pointer");
+                Step::PointerUp { id: input.id, location, button: input.button, pointer: pointer_device(input.pointer)? }
+            }
+            StepInput::PointerCancel(input) => {
+                let location = pointer_location(input.target, input.surface, input.position, &mut requirements)?;
+                require(&mut requirements, "input.pointer");
+                Step::PointerCancel { id: input.id, location, pointer: pointer_device(input.pointer)? }
             }
             StepInput::KeyPress(input) => {
                 validate_surface(&input.surface)?;
+                if matches!(&input.key, Key::Character(text) if text.is_empty()) {
+                    return Err(invalid("character key must contain nonempty text"));
+                }
                 require(&mut requirements, "input.keyboard");
                 Step::KeyPress { id: input.id, surface: input.surface, key: input.key, modifiers: input.modifiers }
             }
@@ -466,10 +579,22 @@ fn parse(bytes: &[u8], available: &[&str], virtual_profile: bool) -> Result<Scen
                 require(&mut requirements,"surface.recreate");
                 Step::SurfaceRecreate{id:input.id,surface:input.surface}
             }
+            StepInput::Wheel(input) => {
+                let location = pointer_location(input.target, input.surface, input.position, &mut requirements)?;
+                if [input.delta.x, input.delta.y].into_iter().any(|v| !v.is_finite() || !(v as f32).is_finite()) {
+                    return Err(invalid("wheel delta exceeds native finite coordinate range"));
+                }
+                if let PointerLocation::Position { x, y, .. } = &location {
+                    if !(*x as f32).is_finite() || !(*y as f32).is_finite() {
+                        return Err(invalid("wheel position exceeds native finite coordinate range"));
+                    }
+                }
+                require(&mut requirements, "input.wheel");
+                Step::Wheel { id:input.id, location, delta:input.delta, phase:input.phase }
+            }
             unsupported => {
                 let operation = match unsupported {
                     StepInput::PointerDrag => "pointer.drag",
-                    StepInput::Wheel => "wheel",
                     StepInput::ImePreedit => "ime.preedit",
                     StepInput::ImeCommit => "ime.commit",
                     StepInput::ImeCancel => "ime.cancel",
@@ -478,6 +603,8 @@ fn parse(bytes: &[u8], available: &[&str], virtual_profile: bool) -> Result<Scen
                     StepInput::LifecycleReload => "lifecycle.reload",
                     StepInput::Settle(_) | StepInput::Capture(_)
                     | StepInput::PointerMove(_) | StepInput::PointerClick(_)
+                    | StepInput::PointerDown(_) | StepInput::PointerUp(_) | StepInput::PointerCancel(_)
+                    | StepInput::Wheel(_)
                     | StepInput::KeyPress(_) | StepInput::TextCommit(_)
                     | StepInput::Assert(_) | StepInput::ClockAdvance(_) | StepInput::ServiceEmit(_)
                     | StepInput::SurfaceResize(_) | StepInput::SurfaceScale(_) | StepInput::SurfaceRecreate(_) => unreachable!(),
@@ -672,7 +799,7 @@ mod tests {
 
     #[test]
     fn future_operations_fail_preflight_even_when_not_declared() {
-        for op in ["pointer.drag", "wheel", "ime.preedit", "ime.commit", "ime.cancel", "wait.until", "capture.sequence", "lifecycle.reload"] {
+        for op in ["pointer.drag", "ime.preedit", "ime.commit", "ime.cancel", "wait.until", "capture.sequence", "lifecycle.reload"] {
             let input = declaration(json!([{"id":"future","op":op,"target":{"surface":"main","testId":"counter"}}]));
             let error = check(&input, &["pixels", "virtual-time", "input.pointer"], true).unwrap_err();
             assert_eq!((error.code, error.exit_code), ("E_UNSUPPORTED_CAPABILITY", 2), "{op}: {error}");
@@ -736,8 +863,71 @@ mod tests {
     }
 
     #[test]
+    fn wheel_payloads_infer_capability_and_reject_ambiguous_values() {
+        let step = json!({"id":"spin","op":"wheel","target":{"surface":"main","testId":"list"},
+            "delta":{"x":-1.5,"y":3,"unit":"lines"}});
+        let input = declaration(json!([step.clone()]));
+        let scenario = check(&input, &["input.wheel", "selectors.test-id"], false).unwrap();
+        assert_eq!(scenario.required_capabilities, ["input.wheel", "selectors.test-id"]);
+        let Step::Wheel { location, delta, phase, .. } = &scenario.steps[0] else { panic!("expected wheel") };
+        assert!(matches!(location, PointerLocation::Target(_)));
+        assert_eq!((delta.x, delta.y, delta.unit), (-1.5, 3.0, WheelUnit::Lines));
+        assert_eq!(*phase, WheelPhase::Discrete, "a missing phase is discrete");
+        let error = check(&input, &["selectors.test-id"], false).unwrap_err();
+        assert_eq!((error.code, error.exit_code), ("E_UNSUPPORTED_CAPABILITY", 2));
+        assert!(error.message.contains("input.wheel"), "{error}");
+        for (phase_name, expected) in [
+            ("discrete", WheelPhase::Discrete), ("started", WheelPhase::Started),
+            ("moved", WheelPhase::Moved), ("ended", WheelPhase::Ended), ("momentum", WheelPhase::Momentum),
+        ] {
+            let positioned = json!({"id":"spin","op":"wheel","surface":"main","position":{"x":0,"y":60},
+                "delta":{"x":0,"y":60,"unit":"pixels"},"phase":phase_name});
+            let scenario = check(&declaration(json!([positioned])), &["input.wheel"], false).unwrap();
+            assert_eq!(scenario.required_capabilities, ["input.wheel"]);
+            let Step::Wheel { location, delta, phase, .. } = &scenario.steps[0] else { panic!("expected wheel") };
+            assert!(matches!(location, PointerLocation::Position { surface, x, y } if surface == "main" && *x == 0.0 && *y == 60.0));
+            assert_eq!((delta.unit, *phase), (WheelUnit::Pixels, expected));
+        }
+        let zero = json!({"id":"spin","op":"wheel","surface":"main","position":{"x":10,"y":10},
+            "delta":{"x":0,"y":0,"unit":"pixels"}});
+        assert!(check(&declaration(json!([zero])), &["input.wheel"], false).is_ok(), "zero deltas are valid gesture lifecycle events");
+        for invalid_step in [
+            json!({"id":"w","op":"wheel","delta":{"x":0,"y":1,"unit":"pixels"}}),
+            json!({"id":"w","op":"wheel","target":{"surface":"main","testId":"a"},"position":{"x":0,"y":0},"delta":{"x":0,"y":1,"unit":"pixels"}}),
+            json!({"id":"w","op":"wheel","target":null,"delta":{"x":0,"y":1,"unit":"pixels"}}),
+            json!({"id":"w","op":"wheel","surface":"main","position":null,"delta":{"x":0,"y":1,"unit":"pixels"}}),
+            json!({"id":"w","op":"wheel","surface":"main","position":{"x":0,"y":0},"delta":{"x":0,"y":1,"unit":"pixels"},"phase":null}),
+            json!({"id":"w","op":"wheel","target":{"surface":"main","testId":"a"},"delta":null}),
+            json!({"id":"w","op":"wheel","target":{"surface":"main","testId":"a"},"delta":[0,1,"pixels"]}),
+            json!({"id":"w","op":"wheel","target":["main","a"],"delta":{"x":0,"y":1,"unit":"pixels"}}),
+            json!({"id":"w","op":"wheel","surface":"main","position":[0,0],"delta":{"x":0,"y":1,"unit":"pixels"}}),
+            json!({"id":"w","op":"wheel","target":{"surface":"main","testId":"a"}}),
+            json!({"id":"w","op":"wheel","surface":"main","position":{"x":0,"y":0},"delta":{"x":0,"y":1}}),
+            json!({"id":"w","op":"wheel","surface":"main","position":{"x":0,"y":0},"delta":{"y":1,"unit":"pixels"}}),
+            json!({"id":"w","op":"wheel","surface":"main","position":{"x":0,"y":0},"delta":{"x":0,"unit":"pixels"}}),
+            json!({"id":"w","op":"wheel","surface":"main","position":{"x":0,"y":0},"delta":{"x":0,"y":1,"unit":"cells"}}),
+            json!({"id":"w","op":"wheel","surface":"main","position":{"x":0,"y":0},"delta":{"x":0,"y":1,"unit":"pixels"},"phase":"spin"}),
+            json!({"id":"w","op":"wheel","surface":"main","position":{"x":0,"y":0},"delta":{"x":0,"y":1,"unit":"pixels"},"extra":true}),
+            json!({"id":"w","op":"wheel","surface":"main","position":{"x":0,"y":0},"delta":{"x":0,"y":1,"unit":"pixels","z":0}}),
+            json!({"id":"w","op":"wheel","surface":"main","position":{"x":0,"y":0},"delta":{"x":"0","y":1,"unit":"pixels"}}),
+            json!({"id":"w","op":"wheel","surface":"main","position":{"x":0,"y":0},"delta":{"x":0,"y":"1","unit":"pixels"}}),
+            json!({"id":"w","op":"wheel","surface":"main","position":{"x":1e100,"y":0},"delta":{"x":0,"y":1,"unit":"pixels"}}),
+            json!({"id":"w","op":"wheel","surface":"main","position":{"x":0,"y":0},"delta":{"x":0,"y":1e100,"unit":"pixels"}}),
+        ] { schema_error(&declaration(json!([invalid_step]))); }
+        let duplicate = br#"{"schemaVersion":1,"id":"test","requiredCapabilities":[],"steps":[{"id":"w","op":"wheel","surface":"main","position":{"x":0,"y":0},"delta":{"x":0,"x":1,"y":0,"unit":"pixels"}}]}"#;
+        assert_eq!(parse(duplicate, &["input.wheel"], false).unwrap_err().code, "E_SCHEMA");
+        for popup in [
+            json!({"id":"w","op":"wheel","surface":"popup","position":{"x":0,"y":0},"delta":{"x":0,"y":1,"unit":"pixels"}}),
+            json!({"id":"w","op":"wheel","target":{"surface":"popup","testId":"a"},"delta":{"x":0,"y":1,"unit":"pixels"}}),
+        ] {
+            let error = check(&declaration(json!([popup])), &["input.wheel", "selectors.test-id"], false).unwrap_err();
+            assert_eq!((error.code, error.exit_code), ("E_UNSUPPORTED_CAPABILITY", 2));
+        }
+    }
+
+    #[test]
     fn pointer_and_selector_forms_are_closed_and_mutually_exclusive() {
-        for op in ["pointer.move", "pointer.click"] {
+        for op in ["pointer.move", "pointer.click", "pointer.down", "pointer.up", "pointer.cancel"] {
             for fields in [
                 json!({}),
                 json!({"target":null}),
@@ -756,7 +946,7 @@ mod tests {
                 let mut step = fields;
                 step["id"] = json!("action");
                 step["op"] = json!(op);
-                if op == "pointer.click" { step["button"] = json!("primary"); }
+                if op != "pointer.move" && op != "pointer.cancel" { step["button"] = json!("primary"); }
                 schema_error(&declaration(json!([step])));
             }
         }
@@ -948,5 +1138,151 @@ mod tests {
         let error = load(&too_large.0, &[], false).unwrap_err();
         assert_eq!((error.code, error.exit_code), ("E_SCHEMA", 2));
         assert_eq!(load(&std::env::temp_dir(), &[], false).unwrap_err().code, "E_SCHEMA");
+    }
+    #[test]
+    fn pointer_phases_preserve_identity_metadata_and_capabilities() {
+        let scenario = check(&declaration(json!([
+            {"id":"down","op":"pointer.down","target":{"surface":"main","testId":"slider"},"button":"primary",
+             "pointer":{"id":"7","kind":"pen"}},
+            {"id":"move","op":"pointer.move","surface":"main","position":{"x":-20,"y":40},
+             "pointer":{"id":"7","kind":"pen","primary":true}},
+            {"id":"up","op":"pointer.up","surface":"main","position":{"x":10,"y":10},"button":"secondary",
+             "pointer":{"id":"9","kind":"touch","primary":false}},
+            {"id":"cancel","op":"pointer.cancel","surface":"main","position":{"x":0,"y":0},
+             "pointer":{"id":"7","kind":"pen"}},
+            {"id":"click","op":"pointer.click","surface":"main","position":{"x":5,"y":5},"button":"primary"},
+            {"id":"edge","op":"pointer.down","surface":"main","position":{"x":1,"y":1},"button":"primary",
+             "pointer":{"id":"18446744073709551615","kind":"unknown","primary":false}},
+            {"id":"page-up","op":"key.press","surface":"main","key":"PageUp"},
+            {"id":"page-down","op":"key.press","surface":"main","key":"PageDown"}
+        ])), &["input.pointer", "input.keyboard", "selectors.test-id"], false).unwrap();
+        assert_eq!(scenario.steps.iter().map(Step::op).collect::<Vec<_>>(), [
+            "pointer.down", "pointer.move", "pointer.up", "pointer.cancel",
+            "pointer.click", "pointer.down", "key.press", "key.press"]);
+        let Step::PointerDown { pointer, button, location, .. } = &scenario.steps[0] else { panic!("expected down") };
+        assert_eq!((pointer.id, pointer.kind, pointer.primary, *button), (7, PointerKind::Pen, true, PointerButton::Primary));
+        assert!(matches!(location, PointerLocation::Target(_)));
+        assert_eq!(serde_json::to_value(pointer).unwrap(), json!({"id":"7","kind":"pen","primary":true}));
+        let Step::PointerMove { pointer, .. } = &scenario.steps[1] else { panic!("expected move") };
+        assert_eq!((pointer.id, pointer.kind, pointer.primary), (7, PointerKind::Pen, true));
+        let Step::PointerUp { pointer, button, .. } = &scenario.steps[2] else { panic!("expected up") };
+        assert_eq!((pointer.id, pointer.kind, pointer.primary, *button), (9, PointerKind::Touch, false, PointerButton::Secondary));
+        let Step::PointerCancel { pointer, .. } = &scenario.steps[3] else { panic!("expected cancel") };
+        assert_eq!(pointer.id, 7);
+        let Step::PointerClick { pointer, .. } = &scenario.steps[4] else { panic!("expected click") };
+        assert_eq!((pointer.id, pointer.kind, pointer.primary), (0, PointerKind::Mouse, true),
+            "a missing pointer object is the primary mouse");
+        let Step::PointerDown { pointer, .. } = &scenario.steps[5] else { panic!("expected max-id down") };
+        assert_eq!(pointer.id, u64::MAX);
+        assert_eq!(serde_json::to_value(pointer).unwrap(), json!({"id":"18446744073709551615","kind":"unknown","primary":false}),
+            "u64::MAX keeps full precision as a decimal string");
+        assert!(matches!(&scenario.steps[6], Step::KeyPress { key: Key::PageUp, .. }));
+        assert!(matches!(&scenario.steps[7], Step::KeyPress { key: Key::PageDown, .. }));
+        assert_eq!(scenario.required_capabilities, ["input.keyboard", "input.pointer", "selectors.test-id"]);
+    }
+
+    #[test]
+    fn pointer_device_objects_reject_malformed_ids_and_fields() {
+        for device in [
+            json!(7),
+            json!({"id":7,"kind":"mouse"}),
+            json!({"id":"","kind":"mouse"}),
+            json!({"id":"00","kind":"mouse"}),
+            json!({"id":"+1","kind":"mouse"}),
+            json!({"id":"-1","kind":"mouse"}),
+            json!({"id":"18446744073709551616","kind":"mouse"}),
+            json!({"id":"x","kind":"mouse"}),
+            json!({"id":null,"kind":"mouse"}),
+            json!({"id":"1"}),
+            json!({"kind":"mouse"}),
+            json!({"id":"1","kind":"trackball"}),
+            json!({"id":"1","kind":null}),
+            json!({"id":"1","kind":"mouse","primary":"yes"}),
+            json!({"id":"1","kind":"mouse","primary":null}),
+            json!({"id":"1","kind":"mouse","extra":true}),
+            json!(null),
+        ] {
+            schema_error(&declaration(json!([
+                {"id":"action","op":"pointer.down","surface":"main","position":{"x":0,"y":0},
+                 "button":"primary","pointer":device}
+            ])));
+        }
+        for step in [
+            json!({"id":"a","op":"pointer.down","surface":"main","position":{"x":0,"y":0}}),
+            json!({"id":"a","op":"pointer.up","surface":"main","position":{"x":0,"y":0}}),
+            json!({"id":"a","op":"pointer.move","surface":"main","position":{"x":0,"y":0},"button":"primary"}),
+            json!({"id":"a","op":"pointer.cancel","surface":"main","position":{"x":0,"y":0},"button":"primary"}),
+        ] { schema_error(&declaration(json!([step]))); }
+        for op in ["pointer.down", "pointer.up", "pointer.cancel"] {
+            for fields in [
+                json!({}),
+                json!({"target":{"surface":"main","testId":"x"},"surface":"main"}),
+                json!({"target":{"surface":"main","testId":"x"},"position":{"x":0,"y":0}}),
+                json!({"surface":"main","position":{"x":"0","y":0}}),
+                json!({"target":{"surface":"main","role":"button"}}),
+            ] {
+                let mut step = fields;
+                step["id"] = json!("action");
+                step["op"] = json!(op);
+                if op != "pointer.cancel" { step["button"] = json!("primary"); }
+                schema_error(&declaration(json!([step])));
+            }
+        }
+        let late = declaration(json!([
+            {"id":"fine","op":"pointer.move","surface":"main","position":{"x":0,"y":0}},
+            {"id":"bad","op":"pointer.down","surface":"main","position":{"x":0,"y":0},
+             "button":"primary","pointer":{"id":"nope","kind":"pen"}}
+        ]));
+        let error = check(&late, &["input.pointer"], false).unwrap_err();
+        assert_eq!((error.code, error.exit_code), ("E_SCHEMA", 2), "{error}");
+    }
+
+    #[test]
+    fn pointer_phases_infer_pointer_and_selector_requirements() {
+        for (step, required) in [
+            (json!({"id":"a","op":"pointer.down","surface":"main","position":{"x":0,"y":0},"button":"primary"}), vec!["input.pointer"]),
+            (json!({"id":"a","op":"pointer.up","target":{"surface":"main","testId":"t"},"button":"middle"}), vec!["input.pointer", "selectors.test-id"]),
+            (json!({"id":"a","op":"pointer.cancel","target":{"surface":"main","role":"button","name":"Go"}}), vec!["input.pointer", "selectors.semantic"]),
+            (json!({"id":"a","op":"pointer.move","surface":"main","position":{"x":0,"y":0},"pointer":{"id":"7","kind":"pen"}}), vec!["input.pointer"]),
+        ] {
+            let input = declaration(json!([step]));
+            let scenario = check(&input, &required, false).unwrap();
+            assert_eq!(scenario.required_capabilities, required, "{input}");
+            let error = check(&input, &required[..required.len() - 1], false).unwrap_err();
+            assert_eq!((error.code, error.exit_code), ("E_UNSUPPORTED_CAPABILITY", 2), "{input}: {error}");
+        }
+        let drag = declaration(json!([{"id":"future","op":"pointer.drag","target":{"surface":"main","testId":"x"}}]));
+        let error = check(&drag, &["pixels", "virtual-time", "input.pointer"], true).unwrap_err();
+        assert_eq!((error.code, error.exit_code), ("E_UNSUPPORTED_CAPABILITY", 2));
+    }
+
+    #[test]
+    fn character_keys_preserve_unicode_and_named_key_identity() {
+        for text in ["é", "e\u{301}", "𐐷", "Enter", " "] {
+            let input = declaration(json!([
+                {"id":"char","op":"key.press","surface":"main","key":{"character":text},"modifiers":["Shift","Control"]},
+                {"id":"named","op":"key.press","surface":"main","key":"Enter"}
+            ]));
+            let scenario = check(&input, &["input.keyboard"], false).unwrap();
+            assert_eq!(scenario.required_capabilities, ["input.keyboard"]);
+            let Step::KeyPress { key, modifiers, .. } = &scenario.steps[0] else { panic!("expected character press") };
+            assert!(matches!(key, Key::Character(value) if value == text));
+            assert_eq!(modifiers, &[Modifier::Shift, Modifier::Control]);
+            assert_eq!(serde_json::to_value(key).unwrap(), json!({"character":text}));
+            let Step::KeyPress { key, .. } = &scenario.steps[1] else { panic!("expected named press") };
+            assert_eq!(serde_json::to_value(key).unwrap(), json!("Enter"));
+            assert_eq!(check(&input, &[], false).unwrap_err().code, "E_UNSUPPORTED_CAPABILITY");
+        }
+    }
+
+    #[test]
+    fn character_key_payloads_are_closed_and_nonempty() {
+        for key in [json!({"character":""}),json!({"character":null}),json!({"character":42}),
+            json!({"character":[]}),json!({"Character":"a"}),json!({"text":"a"}),
+            json!({"character":"a","extra":true}),json!("character"),json!("A")] {
+            schema_error(&declaration(json!([{"id":"key","op":"key.press","surface":"main","key":key}])));
+        }
+        let bytes = br#"{"schemaVersion":1,"id":"test","requiredCapabilities":[],"steps":[{"id":"key","op":"key.press","surface":"main","key":{"character":"a","character":"b"}}]}"#;
+        assert_eq!(parse(bytes, &["input.keyboard"], false).unwrap_err().code, "E_SCHEMA");
     }
 }

@@ -1,7 +1,7 @@
 [workspace]
 resolver = "3"
 members = ["crates/native-host", "crates/js-runtime", "crates/ui-bridge", "crates/host-services"]
-exclude = ["vendor/zgui-runtime", "vendor/zgui-platform-wayland"]
+exclude = ["vendor/zgui-runtime", "vendor/zgui-platform-wayland", "vendor/zgui-view-dom", "vendor/zgui-paint", "vendor/zgui-layout", "vendor/zgui-dom", "vendor/zgui-style", "vendor/zgui-scroll"]
 
 [workspace.package]
 version = "0.1.0"
@@ -24,5 +24,11 @@ host-services = { path = "crates/host-services" }
 fontique = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a" }
 
 [patch."https://github.com/zortax/zgui"]
+zgui-dom = { path = "vendor/zgui-dom" }
 zgui-runtime = { path = "vendor/zgui-runtime" }
 zgui-platform-wayland = { path = "vendor/zgui-platform-wayland" }
+zgui-view-dom = { path = "vendor/zgui-view-dom" }
+zgui-paint = { path = "vendor/zgui-paint" }
+zgui-layout = { path = "vendor/zgui-layout" }
+zgui-style = { path = "vendor/zgui-style" }
+zgui-scroll = { path = "vendor/zgui-scroll" }

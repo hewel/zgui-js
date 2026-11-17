@@ -16,8 +16,9 @@ use std::rc::Rc;
 
 use zgui_platform::SurfaceEvent;
 use zgui_reactive::prelude::GetUntracked;
-use zgui_view::{FocusTrap, FocusTrapOptions, NodeId, NodeRef, ViewHost};
-use zgui_vocab::{Key, KeyCode, KeyEvent, KeyState, Modifiers, NamedKey, PhysicalKey, Timestamp};
+use zgui_view::{FocusTrap, FocusTrapOptions, NodeId, NodeRef, ViewHost, events};
+use zgui_vocab::{Key, KeyCode, KeyEvent, KeyState, ListenerOptions, Modifiers, NamedKey,
+    PhysicalKey, PointerAction, PointerButton, PointerEvent, Timestamp};
 
 /// A trigger outside the dialog and three controls inside it, all focusable.
 const CSS: &str = "
@@ -303,4 +304,86 @@ fn a_surface_that_goes_with_focus_asked_inside_it_still_restores() {
     script.guard.borrow_mut().take();
     script.harness.settle(8);
     assert_eq!(script.where_focus_is(), "trigger");
+}
+
+fn dismiss_in_pointer_capture(prevent_default: bool) -> Script {
+    let mut script = scripted();
+    script.harness.settle(8);
+    script.press(NamedKey::Tab, KeyCode::Tab, Modifiers::NONE);
+    *script.guard.borrow_mut() = script.dialog.trap_focus(FocusTrapOptions::MODAL);
+    script.harness.settle(8);
+    assert_eq!(script.where_focus_is(), "first");
+
+    let held = Rc::clone(&script.guard);
+    let _listener = script
+        .trigger
+        .window_root()
+        .expect("the trigger is bound")
+        .listen(events::POINTER_DOWN, ListenerOptions::CAPTURE, move |event| {
+            if prevent_default {
+                event.prevent_default();
+            }
+            let trap = held.borrow_mut().take();
+            drop(trap);
+        });
+    let window = script.harness.app().windows().first().expect("a window").clone();
+    let scale = window.host().scale();
+    let rect = window
+        .host()
+        .window_box(script.fourth.get().expect("fourth bound"))
+        .expect("fourth laid out");
+    let center = zgui_geom::Point::new(
+        zgui_geom::CssPx((rect.origin.x.0 + rect.size.width.0 / 2.0) / scale),
+        zgui_geom::CssPx((rect.origin.y.0 + rect.size.height.0 / 2.0) / scale),
+    );
+    let pointer = PointerEvent {
+        button: Some(PointerButton::Primary),
+        ..PointerEvent::mouse(center)
+    };
+    script.harness.deliver_to_first(SurfaceEvent::Pointer {
+        action: PointerAction::Pressed,
+        event: pointer,
+        modifiers: Modifiers::NONE,
+        timestamp: Timestamp::ORIGIN,
+    });
+    script.harness.settle(8);
+    assert!(script.guard.borrow().is_none());
+    script
+}
+
+#[test]
+fn pointer_focus_default_wins_over_synchronous_trap_restore() {
+    let script = dismiss_in_pointer_capture(false);
+    assert_eq!(script.where_focus_is(), "fourth");
+}
+
+#[test]
+fn cancelled_pointer_default_keeps_synchronous_trap_restore() {
+    let script = dismiss_in_pointer_capture(true);
+    assert_eq!(script.where_focus_is(), "trigger");
+}
+
+#[test]
+fn initial_traps_restore_the_previous_focus_even_when_it_was_empty() {
+    let mut script = scripted();
+    script.harness.settle(8);
+    assert_eq!(script.focused(), None);
+    let outer = script.dialog.trap_focus(FocusTrapOptions::MODAL).unwrap();
+    let inner = script.later.trap_focus(FocusTrapOptions::MODAL).unwrap();
+    script.harness.settle(8);
+    assert_eq!(script.where_focus_is(), "fourth");
+    drop(inner);
+    script.harness.settle(8);
+    assert_eq!(script.focused(), None);
+    script.press(NamedKey::Tab, KeyCode::Tab, Modifiers::NONE);
+    assert_eq!(script.where_focus_is(), "first");
+    let interactive = script.later.trap_focus(FocusTrapOptions::MODAL).unwrap();
+    script.harness.settle(8);
+    assert_eq!(script.where_focus_is(), "fourth");
+    drop(interactive);
+    script.harness.settle(8);
+    assert_eq!(script.where_focus_is(), "first");
+    drop(outer);
+    script.harness.settle(8);
+    assert_eq!(script.focused(), None);
 }

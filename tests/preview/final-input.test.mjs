@@ -24,6 +24,7 @@ const click = id => ({ op: "pointer.click", target: { surface: "main", testId: i
 for (const [name, steps, message] of [
   ["pointer", [click("pointer")], "final-pointer-dispatched"],
   ["keyboard", [click("keyboard"), { op: "key.press", surface: "main", key: "Enter" }], "final-key-dispatched"],
+  ["character", [click("keyboard"), { op: "key.press", surface: "main", key: { character: "é" } }], "final-key-dispatched"],
   ["text", [click("text"), { op: "text.commit", surface: "main", text: "界" }], "final-text-dispatched"],
 ]) {
   test(`final ${name} action executes and owns its handler failure`, async () => {

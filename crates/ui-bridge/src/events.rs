@@ -5,12 +5,12 @@
 //! Timestamps are monotonic milliseconds, positions are window-relative CSS pixels,
 //! pointer IDs are lossless decimal strings, and selection offsets are UTF-8 bytes.
 
-use std::{cell::Cell, collections::HashMap, rc::Rc};
+use std::{cell::Cell, collections::{HashMap, HashSet}, rc::Rc};
 
 use rquickjs::{function::Func, Array, Ctx, Exception, Function, IntoJs, Object, Persistent, Value};
 use zgui::{
     view::{DomHandle, EventCx, ListenerId, NodeId},
-    vocab::{EventKind, FocusCause, Key, KeyLocation, ListenerOptions, Modifiers, Payload,
+    vocab::{EventKind, FocusCause, Key, KeyLocation, ListenerOptions, Modifiers, NamedKey, Payload,
         Phase, PhysicalKey, PointerButton, PointerKind, PointerSample, Timestamp, ValueChange},
 };
 
@@ -30,12 +30,20 @@ pub(crate) struct Events {
     dom: DomHandle,
     listeners: HashMap<(u64, EventKind, bool), Listener>,
     callbacks: HashMap<u64, Persistent<Function<'static>>>,
+    dismiss_callbacks: HashSet<u64>,
     next_callback: u64,
 }
 
 impl Events {
     pub(crate) fn new(dom: DomHandle) -> Self {
-        Self { dom, listeners: HashMap::new(), callbacks: HashMap::new(), next_callback: 1 }
+        Self { dom, listeners: HashMap::new(), callbacks: HashMap::new(),
+            dismiss_callbacks: HashSet::new(), next_callback: 1 }
+    }
+
+    fn reserve(&mut self, ctx: &Ctx<'_>) -> rquickjs::Result<u64> {
+        let id = self.next_callback;
+        self.next_callback = id.checked_add(1).ok_or_else(|| Exception::throw_range(ctx, "native callback identifiers exhausted"))?;
+        Ok(id)
     }
 
     pub(crate) fn set<'js>(
@@ -56,11 +64,7 @@ impl Events {
             ))?)
         };
         // Validate everything before replacing a working listener.
-        let id = if callback.is_some() {
-            let id = self.next_callback;
-            self.next_callback = id.checked_add(1).ok_or_else(|| Exception::throw_range(ctx, "native callback identifiers exhausted"))?;
-            Some(id)
-        } else { None };
+        let id = if callback.is_some() { Some(self.reserve(ctx)?) } else { None };
         let key = (owner.token(), kind, capture);
         if let Some(old) = self.listeners.remove(&key) {
             self.dom.remove_listener(old.native, old.registration);
@@ -81,12 +85,27 @@ impl Events {
         self.callbacks.get(&id).cloned()
     }
 
+    pub(crate) fn register_dismiss<'js>(&mut self, ctx: &Ctx<'js>, callback: Function<'js>) -> rquickjs::Result<u64> {
+        let id = self.reserve(ctx)?;
+        self.callbacks.insert(id, Persistent::save(ctx, callback));
+        self.dismiss_callbacks.insert(id);
+        Ok(id)
+    }
+
+    pub(crate) fn is_dismiss(&self, id: u64) -> bool { self.dismiss_callbacks.contains(&id) }
+
+    pub(crate) fn remove_callback(&mut self, id: u64) {
+        self.callbacks.remove(&id);
+        self.dismiss_callbacks.remove(&id);
+    }
+
     /// Removes every listener belonging to one reclaimed bridge node token.
     pub(crate) fn remove(&mut self, token: u64) {
         self.listeners.retain(|(owner, _, _), listener| {
             if *owner != token { return true; }
             self.dom.remove_listener(listener.native, listener.registration);
             self.callbacks.remove(&listener.callback);
+            self.dismiss_callbacks.remove(&listener.callback);
             false
         });
     }
@@ -96,6 +115,7 @@ impl Events {
             self.dom.remove_listener(listener.native, listener.registration);
         }
         self.callbacks.clear();
+        self.dismiss_callbacks.clear();
     }
 
     pub(crate) fn len(&self) -> usize { self.callbacks.len() }
@@ -110,16 +130,46 @@ fn event_property(ctx: &Ctx<'_>, name: &str) -> rquickjs::Result<(EventKind, boo
     let kind = match name {
         "onClick" => EventKind::Click,
         "onPointerDown" => EventKind::PointerDown,
+        "onPointerMove" => EventKind::PointerMove,
+        "onPointerEnter" => EventKind::PointerEnter,
+        "onPointerLeave" => EventKind::PointerLeave,
         "onPointerUp" => EventKind::PointerUp,
+        "onPointerCancel" => EventKind::PointerCancel,
+        "onContextMenu" => EventKind::ContextMenu,
         "onKeyDown" => EventKind::KeyDown,
         "onKeyUp" => EventKind::KeyUp,
         "onInput" => EventKind::Input,
         "onChange" => EventKind::Change,
         "onFocus" => EventKind::FocusIn,
         "onBlur" => EventKind::FocusOut,
+        "onAnimationStart" => EventKind::AnimationStart,
+        "onAnimationIteration" => EventKind::AnimationIteration,
+        "onAnimationEnd" => EventKind::AnimationEnd,
+        "onAnimationCancel" => EventKind::AnimationCancel,
+        "onTransitionRun" => EventKind::TransitionRun,
+        "onTransitionStart" => EventKind::TransitionStart,
+        "onTransitionEnd" => EventKind::TransitionEnd,
+        "onTransitionCancel" => EventKind::TransitionCancel,
         _ => return Err(Exception::throw_type(ctx, "unsupported native event property or listener options")),
     };
     Ok((kind, capture))
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DismissReason { OutsidePress, Escape }
+
+impl DismissReason {
+    pub(crate) fn name(self) -> &'static str {
+        match self { Self::OutsidePress => "outside-press", Self::Escape => "escape" }
+    }
+}
+
+pub(crate) fn dismiss_reason(kind: EventKind, payload: &Payload) -> Option<DismissReason> {
+    match (kind, payload) {
+        (EventKind::PointerDown, Payload::Pointer(_)) => Some(DismissReason::OutsidePress),
+        (EventKind::KeyDown, Payload::Key(key)) if key.key == Key::Named(NamedKey::Escape) => Some(DismissReason::Escape),
+        _ => None,
+    }
 }
 
 pub(crate) struct EventSnapshot {
@@ -183,9 +233,36 @@ impl EventSnapshot {
                     samples.set(index, value)?;
                 }
                 object.set("coalesced", samples)?;
+                let state = control.0.clone();
+                let kind = self.kind;
+                object.set("activateNow", Func::from(move |ctx: Ctx<'js>| -> rquickjs::Result<()> {
+                    let mut value = state.get();
+                    if !value.active { return Err(Exception::throw_reference(&ctx, "expired-dispatch: native event cancellation is only valid during its synchronous handler")); }
+                    if kind != EventKind::PointerDown { return Err(Exception::throw_type(&ctx, "activateNow is only valid during a native pointerdown event")); }
+                    value.activate_now = true;
+                    state.set(value);
+                    Ok(())
+                }))?;
+                for (name, capture) in [("capturePointer", true), ("releasePointer", false)] {
+                    let state = control.0.clone();
+                    let kind = self.kind;
+                    object.set(name, Func::from(move |ctx: Ctx<'js>| -> rquickjs::Result<()> {
+                        let mut value = state.get();
+                        if !value.active { return Err(Exception::throw_reference(&ctx, "expired-dispatch: pointer capture is only valid during its synchronous handler")); }
+                        if (capture && kind != EventKind::PointerDown)
+                            || !matches!(kind, EventKind::PointerDown | EventKind::PointerMove | EventKind::PointerUp | EventKind::PointerCancel)
+                        {
+                            return Err(Exception::throw_type(&ctx, "capturePointer requires pointerdown; releasePointer requires a pointer event"));
+                        }
+                        value.pointer_capture = Some(capture);
+                        state.set(value);
+                        Ok(())
+                    }))?;
+                }
             }
             Payload::Key(key) => {
                 object.set("key", nullable(ctx, key.key.as_str())?)?;
+                object.set("character", nullable(ctx, match &key.key { Key::Character(text) => Some(text.as_str()), _ => None })?)?;
                 object.set("keyWithoutModifiers", nullable(ctx, key.key_without_modifiers.as_str())?)?;
                 object.set("deadKey", nullable(ctx, match &key.key { Key::Dead(accent) => accent.map(|accent| accent.to_string()), _ => None })?)?;
                 object.set("code", nullable(ctx, key.physical.code().map(|code| code.as_str()))?)?;
@@ -205,6 +282,16 @@ impl EventSnapshot {
                 object.set("cause", match focus.cause { FocusCause::Pointer => "pointer", FocusCause::Keyboard => "keyboard", FocusCause::Programmatic => "programmatic", FocusCause::Window => "window", _ => "unknown" })?;
                 // Related is an accessibility ID, not a view NodeId. Do not fabricate a wrapper.
             }
+            Payload::Animation(animation) => {
+                object.set("animationName", animation.name.as_str())?;
+                object.set("elapsedTime", animation.elapsed.as_secs_f64())?;
+                object.set("pseudoElement", animation.pseudo.map(|pseudo| format!("::{}", pseudo.label())).unwrap_or_default())?;
+            }
+            Payload::Transition(transition) => {
+                object.set("propertyName", transition.property.as_str())?;
+                object.set("elapsedTime", transition.elapsed.as_secs_f64())?;
+                object.set("pseudoElement", transition.pseudo.map(|pseudo| format!("::{}", pseudo.label())).unwrap_or_default())?;
+            }
             _ => return Err(Exception::throw_type(ctx, "unsupported native event payload")),
         }
         for (name, flag) in [("preventDefault", Flag::Default), ("stopPropagation", Flag::Propagation), ("stopImmediatePropagation", Flag::Immediate)] {
@@ -219,6 +306,8 @@ impl EventSnapshot {
         }
         Ok((object, control))
     }
+
+    pub(crate) fn dismiss_reason(&self) -> Option<DismissReason> { dismiss_reason(self.kind, &self.payload) }
 }
 
 fn milliseconds(timestamp: Timestamp) -> f64 { timestamp.since_origin().as_secs_f64() * 1000.0 }
@@ -235,7 +324,7 @@ fn position<'js>(ctx: &Ctx<'js>, x: f32, y: f32) -> rquickjs::Result<Object<'js>
 }
 
 #[derive(Clone, Copy, Default)]
-struct ControlState { active: bool, prevent_default: bool, stop: bool, immediate: bool }
+struct ControlState { active: bool, prevent_default: bool, stop: bool, immediate: bool, activate_now: bool, pointer_capture: Option<bool> }
 #[derive(Clone, Copy)]
 enum Flag { Default, Propagation, Immediate }
 
@@ -250,6 +339,12 @@ impl DispatchControl {
         if state.prevent_default { event.prevent_default(); }
         if state.immediate { event.stop_immediate_propagation(); }
         else if state.stop { event.stop_propagation(); }
+        match state.pointer_capture {
+            Some(true) => event.capture_pointer(),
+            Some(false) => event.release_pointer(),
+            None => {}
+        }
+        if state.activate_now { event.activate_now(); }
     }
 }
 

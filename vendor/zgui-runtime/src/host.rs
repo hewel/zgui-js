@@ -165,6 +165,12 @@ impl core::fmt::Debug for Redacted {
     }
 }
 
+pub(crate) struct QueuedCommand {
+    pub(crate) command: Command,
+    pub(crate) pointer: Option<zgui_vocab::PointerId>,
+    pub(crate) restore_from: Option<NodeKey>,
+}
+
 /// The production [`ViewHost`]: the running engines, seen from a view.
 ///
 /// One per window, shared with the window's frame loop. Everything it reads is behind a shared
@@ -189,7 +195,7 @@ pub struct RuntimeHost {
     /// window count as animating.
     frame_callbacks: RefCell<FrameCallbacks>,
     /// What the next frame has been asked to do.
-    commands: RefCell<Vec<Command>>,
+    commands: RefCell<Vec<QueuedCommand>>,
     /// Which node holds focus, as a reactive value.
     ///
     /// Created once, with the window, under the window's own scope. Minting it inside whichever
@@ -325,6 +331,14 @@ impl RuntimeHost {
 
     /// Appends a command for the next frame to carry out.
     pub fn issue(&self, command: Command) {
+        self.issue_scoped(command, None);
+    }
+
+    pub(crate) fn issue_scoped(&self, command: Command, pointer: Option<zgui_vocab::PointerId>) {
+        self.issue_queued(QueuedCommand { command, pointer, restore_from: None });
+    }
+
+    fn issue_queued(&self, command: QueuedCommand) {
         self.commands.borrow_mut().push(command);
         // A command means something changed, so the frame that carries it out has to be asked for.
         // Inside a frame that request is folded into the one the frame's last phase makes.
@@ -353,6 +367,10 @@ impl RuntimeHost {
 
     /// Takes everything asked for since the last call.
     pub fn take_commands(&self) -> Vec<Command> {
+        self.take_scoped_commands().into_iter().map(|queued| queued.command).collect()
+    }
+
+    pub(crate) fn take_scoped_commands(&self) -> Vec<QueuedCommand> {
         core::mem::take(&mut *self.commands.borrow_mut())
     }
 
@@ -467,7 +485,11 @@ impl RuntimeHost {
                 .borrow_mut()
                 .forget(FocusTrapId::new(id.get()));
             if restore && !self.focus_left(root) {
-                self.issue(Command::Focus(node.map(zgui_view_dom::id::to_view)));
+                self.issue_queued(QueuedCommand {
+                    command: Command::Focus(node.map(zgui_view_dom::id::to_view)),
+                    pointer: None,
+                    restore_from: Some(root),
+                });
             }
         }
     }
@@ -478,14 +500,14 @@ impl RuntimeHost {
     /// A focus request issued in the same turn and not yet carried out counts as where focus goes:
     /// an entry of a menu that opens a tab asks for the tab's focus before the menu finishes going,
     /// and the request lands after the menu's trap has come down.
-    fn focus_left(&self, root: NodeKey) -> bool {
+    pub(crate) fn focus_left(&self, root: NodeKey) -> bool {
         use zgui_reactive::prelude::GetUntracked;
         let asked = self
             .commands
             .borrow()
             .iter()
             .rev()
-            .find_map(|command| match command {
+            .find_map(|queued| match &queued.command {
                 Command::Focus(node) => Some(*node),
                 _ => None,
             });
@@ -754,9 +776,11 @@ impl ViewHost for RuntimeHost {
         // Focus goes back to whatever opened the dialog. Dropping it instead leaves the whole
         // window unfocused, and the next key press goes to the document rather than to the control
         // the person was on before they opened anything.
-        self.issue(Command::Focus(
-            trap.restore_to.map(zgui_view_dom::id::to_view),
-        ));
+        self.issue_queued(QueuedCommand {
+            command: Command::Focus(trap.restore_to.map(zgui_view_dom::id::to_view)),
+            pointer: None,
+            restore_from: Some(trap.root),
+        });
     }
 
     fn is_text_entry(&self, node: NodeId) -> bool {

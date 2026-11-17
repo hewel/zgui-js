@@ -27,6 +27,7 @@ zgui-view-dom = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe
 zgui-css = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a" }
 accesskit = "=0.24.1"
 accesskit_consumer = "=0.38.0"
+zgui-render-vector-vello = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a", version = "0.1.0" }
 
 [build-dependencies]
 sha2.workspace = true

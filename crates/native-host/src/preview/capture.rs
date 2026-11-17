@@ -108,8 +108,9 @@ pub fn renderer_factory(handle: CaptureHandle) -> zgui::runtime::RendererFactory
     Box::new(move |_surface, target| {
         // Runtime owns the extent, scale and opacity policy. Do not reconstruct this target
         // from surface dimensions: those may still describe the preceding configure.
-        let inner = Builder::new().offscreen(target, wgpu::TextureFormat::Bgra8Unorm, false)
+        let mut inner = Builder::new().offscreen(target, wgpu::TextureFormat::Bgra8Unorm, false)
             .map_err(zgui::runtime::AppError::GpuUnavailable)?;
+        zgui_render_vector_vello::attach(&mut inner, target.size);
         let mut renderer = CaptureRenderer { inner, handle: handle.clone() };
         renderer.update_metadata();
         {

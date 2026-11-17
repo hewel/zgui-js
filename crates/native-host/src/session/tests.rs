@@ -2,7 +2,8 @@ use super::*;
 use rquickjs::function::Func;
 use crate::test_package::Fixture;
 use std::{sync::mpsc, time::Duration};
-use zgui::view::{DomHandle, ElementName, HostHandle, stub::StubHost};
+use zgui::geom::{DevicePx, Size};
+use zgui::view::{DomHandle, ElementName, HostHandle, ObservedValue, stub::StubHost};
 use zgui_dom::Document;
 use zgui_view_dom::DocumentDom;
 
@@ -89,7 +90,9 @@ fn candidate_preflight_rejects_deferred_side_effects_without_touching_active_tre
         "setTimeout(() => {}, 0);",
         "requestAnimationFrame(() => {});",
         "__zguiServices.readTextAsset('test.txt');",
+        "__zgui.observeGeometry(mountRoot, 'borderSize', () => {});",
         "Promise.resolve().then(() => __zgui.createTextNode('forbidden'));",
+        "Promise.resolve().then(() => __zgui.observeGeometry(mountRoot, 'borderSize', () => {}));",
         "Promise.resolve().then(() => setTimeout(() => {}, 0));",
         "queueMicrotask(function again() { queueMicrotask(again); });",
     ].into_iter().enumerate() {
@@ -432,4 +435,137 @@ fn preview_installs_clock_before_module_evaluation_and_settles_fixture_through_o
     fixtures.finalize().unwrap();
     session.shutdown();
     assert_eq!(session.counts(), ResourceCounts::default());
+}
+
+const GEOMETRY: &str = r#"
+export const hostApiVersion = 1;
+export function mount(root) {
+    const label = __zgui.createTextNode('waiting');
+    const box = __zgui.createElement('box');
+    __zgui.insertNode(root, label, null);
+    __zgui.insertNode(root, box, null);
+    globalThis.geometryCalls = 0;
+    globalThis.cancelGeometry = __zgui.observeGeometry(box, 'borderSize', size => {
+        geometryCalls += 1;
+        __zgui.replaceText(label, String(size.width));
+    });
+    if (geometryCalls !== 0) throw Error('registration invoked a callback');
+    return () => { cancelGeometry(); __zgui.clearRoot(root); };
+}
+"#;
+
+#[test]
+fn geometry_delivers_immediately_while_the_engine_is_free() {
+    let fixture = Fixture::new(GEOMETRY, "");
+    let native = Native::new();
+    native.host.set_scale(1.75);
+    let session = native.prepare(fixture.package(), 1).unwrap();
+    session.mount().unwrap();
+    assert_eq!(native.text(), "waiting");
+    assert_eq!(session.counts().callbacks, 1);
+    while native.wakes.try_recv().is_ok() {}
+    session.bridge.run_turn(|| session.engine.borrow_mut().as_mut().unwrap()
+        .evaluate_script("globalThis.lateCancel = __zgui.observeGeometry(mountRoot, 'contentSize', () => {}); 'registered'")).unwrap();
+    assert!(native.wakes.try_recv().is_ok(), "registration did not wake the owner");
+    assert!(native.wakes.try_recv().is_err(), "registration produced more than one wake");
+    session.bridge.run_turn(|| session.engine.borrow_mut().as_mut().unwrap()
+        .evaluate_script("lateCancel(); 'cancelled'")).unwrap();
+    let box_node = native.backend.children(native.region.root)[1];
+    native.backend.deliver(box_node, ObservedValue::BorderSize(Size::new(DevicePx(175.0), DevicePx(70.0))));
+    assert_eq!(native.text(), "100");
+    let calls = session.engine.borrow_mut().as_mut().unwrap()
+        .with_context(|ctx| ctx.eval::<u32, _>("geometryCalls")).unwrap();
+    assert_eq!(calls, 1);
+    session.shutdown();
+    assert_eq!(session.counts(), ResourceCounts::default());
+    assert_eq!(native.backend.observation_count(), 0);
+}
+
+#[test]
+fn geometry_callbacks_cancel_themselves_and_prepared_siblings() {
+    let fixture = Fixture::new(r#"
+        export const hostApiVersion = 1;
+        export function mount(root) {
+            const box = __zgui.createElement('box');
+            __zgui.insertNode(root, box, null);
+            globalThis.hits = { a: 0, b: 0 };
+            globalThis.cancelA = __zgui.observeGeometry(box, 'borderSize', () => { hits.a += 1; cancelA(); cancelB(); });
+            globalThis.cancelB = __zgui.observeGeometry(box, 'borderSize', () => { hits.b += 1; });
+            return () => __zgui.clearRoot(root);
+        }
+    "#, "");
+    let native = Native::new();
+    let session = native.prepare(fixture.package(), 1).unwrap();
+    session.mount().unwrap();
+    let box_node = native.backend.children(native.region.root)[0];
+    native.backend.deliver(box_node, ObservedValue::BorderSize(Size::new(DevicePx(10.0), DevicePx(10.0))));
+    let hits = session.engine.borrow_mut().as_mut().unwrap()
+        .with_context(|ctx| ctx.eval::<String, _>("hits.a + ':' + hits.b")).unwrap();
+    assert_eq!(hits, "1:0");
+    native.backend.deliver(box_node, ObservedValue::BorderSize(Size::new(DevicePx(20.0), DevicePx(20.0))));
+    let hits = session.engine.borrow_mut().as_mut().unwrap()
+        .with_context(|ctx| ctx.eval::<String, _>("hits.a + ':' + hits.b")).unwrap();
+    assert_eq!(hits, "1:0");
+    assert_eq!(native.backend.observation_count(), 0);
+    assert_eq!(session.counts().callbacks, 0);
+    session.shutdown();
+    assert_eq!(session.counts(), ResourceCounts::default());
+}
+
+#[test]
+fn geometry_callback_failure_faults_and_retires_every_observer() {
+    let fixture = Fixture::new(r#"
+        export const hostApiVersion = 1;
+        export function mount(root) {
+            const box = __zgui.createElement('box');
+            __zgui.insertNode(root, box, null);
+            __zgui.observeGeometry(root, 'borderSize', () => {});
+            __zgui.observeGeometry(box, 'borderSize', () => { throw Error('geometry callback failed'); });
+            return () => __zgui.clearRoot(root);
+        }
+    "#, "");
+    let native = Native::new();
+    let session = native.prepare(fixture.package(), 1).unwrap();
+    session.mount().unwrap();
+    let box_node = native.backend.children(native.region.root)[0];
+    native.backend.deliver(box_node, ObservedValue::BorderSize(Size::new(DevicePx(35.0), DevicePx(35.0))));
+    assert!(session.bridge.is_disposed());
+    assert_eq!(native.backend.observation_count(), 0);
+    let error = session.checkpoint().unwrap_err();
+    let SessionError::Diagnostic(diagnostic) = error else { panic!("geometry throw must stay a diagnostic") };
+    assert!(diagnostic.message.contains("geometry callback failed"));
+    session.shutdown();
+    assert_eq!(session.counts(), ResourceCounts::default());
+}
+
+#[test]
+fn geometry_defers_with_the_scale_captured_at_enqueue_time() {
+    let fixture = Fixture::new(GEOMETRY, "");
+    let native = Native::new();
+    native.host.set_scale(1.75);
+    let session = native.prepare(fixture.package(), 1).unwrap();
+    session.mount().unwrap();
+    while native.wakes.try_recv().is_ok() {}
+    let box_node = native.backend.children(native.region.root)[1];
+    {
+        let _guard = session.engine.borrow_mut();
+        native.backend.deliver(box_node, ObservedValue::BorderSize(Size::new(DevicePx(175.0), DevicePx(70.0))));
+    }
+    assert_eq!(native.text(), "waiting");
+    native.host.set_scale(3.5);
+    session.checkpoint().unwrap();
+    assert_eq!(native.text(), "100");
+    {
+        let _guard = session.engine.borrow_mut();
+        native.backend.deliver(box_node, ObservedValue::BorderSize(Size::new(DevicePx(350.0), DevicePx(140.0))));
+    }
+    session.engine.borrow_mut().as_mut().unwrap().evaluate_script("cancelGeometry(); 'cancelled'").unwrap();
+    session.checkpoint().unwrap();
+    assert_eq!(native.text(), "100");
+    let calls = session.engine.borrow_mut().as_mut().unwrap()
+        .with_context(|ctx| ctx.eval::<u32, _>("geometryCalls")).unwrap();
+    assert_eq!(calls, 1);
+    session.shutdown();
+    assert_eq!(session.counts(), ResourceCounts::default());
+    assert_eq!(native.backend.observation_count(), 0);
 }

@@ -1,0 +1,86 @@
+[package]
+name = "zgui-paint"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+description = "Paint stage: computed style and fragments into scene primitives"
+repository = "https://github.com/zortax/zgui"
+homepage = "https://zgui.zortax.de"
+rust-version = "1.90"
+keywords = ["gui", "ui", "css", "reactive", "wgpu"]
+categories = ["gui"]
+include = ["/src", "/build", "/build.rs", "/README.md", "/LICENSE", "/NOTICE"]
+
+# L4 — engines. Every dependency is inherited: `foo.workspace = true`.
+
+[workspace]
+
+[dependencies]
+# Generation-checked handles, which a fragment key is one of.
+zgui-arena = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a" }
+# Glyph tiles and mask tiles are named by the primitives this crate emits.
+zgui-atlas = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a" }
+# The damage set this stage grows and then reads.
+zgui-bits = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a" }
+zgui-color = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a" }
+zgui-css = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a" }
+# The roots of the subtrees a frame removed, which is the one rectangle no live fragment can
+# report, and the node identity a fragment is attributed to.
+zgui-dom = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a" }
+zgui-geom = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a" }
+# Fragments, their ink, their clips and the read-extent registry this stage expands damage over.
+zgui-layout = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a" }
+zgui-profile = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a" }
+# What the device can do decides what is emitted, not only how it is drawn: without dual-source
+# blending there is no subpixel sprite to emit at all.
+zgui-render = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a" }
+zgui-scene = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a" }
+# Vector documents. The paint stage is where a document becomes primitives, so it is where the
+# document model is named; the reader itself is behind that crate's own parse boundary.
+zgui-svg = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a" }
+# The retained scenes `canvas` elements name by token; the paint stage is where the token is
+# resolved back into shapes, because the shapes are paint-side state the document never holds.
+zgui-canvas = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a" }
+# The glyph formats and the paragraph identifiers a text fragment names.
+zgui-text = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a" }
+# The shared text a drawing's source arrives in, which the vector cache holds to know it again.
+zgui-vocab = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a" }
+
+rustc-hash = "2.1"
+smallvec = "1.15"
+thiserror = "2.0.19"
+tracing = "0.1.44"
+zeno = "0.3.3"
+
+[dev-dependencies]
+# The paint key that decides *damage* is computed there; this crate's lowering key must stay a
+# subset of it, and the test that says so needs both.
+zgui-style = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a" }
+# The counters have to be compiled in, or every budget stays green while measuring nothing.
+zgui-profile = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a", features = ["counters"] }
+zgui-testkit-scene = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a" }
+# The acceptance suite drives a real cascade, a real box tree and a real layout pass, because a
+# paint stage tested against hand-written fragments is a paint stage tested against a guess.
+zgui-text-style = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a" }
+zgui-interned = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a" }
+
+[lints.rust]
+missing_docs = "deny"
+unsafe_code = "deny"
+unreachable_pub = "warn"
+
+[lints.rustdoc]
+broken_intra_doc_links = "deny"
+private_intra_doc_links = "warn"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+undocumented_unsafe_blocks = "warn"
+
+[patch.crates-io]
+fontique = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a" }
+
+[patch."https://github.com/zortax/zgui"]
+zgui-dom = { path = "../zgui-dom" }
+zgui-layout = { path = "../zgui-layout" }
+zgui-style = { path = "../zgui-style" }

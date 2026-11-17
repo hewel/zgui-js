@@ -75,9 +75,9 @@ impl Window {
         }
         // The last pass delivered and laid out again. Whether that moved anything watched is a
         // comparison and no delivery: a chain that settled in exactly the budget owes nothing.
-        if self.watched().iter().any(|&(key, held)| {
+        if self.watched().iter().any(|&(key, held, pending)| {
             self.measure(key, held)
-                .is_some_and(|measured| measured != held)
+                .is_some_and(|measured| measured != held || !pending.is_empty())
         }) {
             // The geometry the last relayout produced has not been delivered. The next frame
             // compares it against what was recorded and delivers it, so one is asked for.
@@ -93,7 +93,7 @@ impl Window {
     }
 
     /// Every watched node, and what its watchers were last told.
-    fn watched(&self) -> Vec<(zgui_dom::NodeKey, ObservationSlots)> {
+    fn watched(&self) -> Vec<(zgui_dom::NodeKey, ObservationSlots, ObservedMask)> {
         let document = self.document.borrow();
         let store = document.store();
         self.dom
@@ -102,7 +102,7 @@ impl Window {
             .filter_map(|node| {
                 let key = zgui_view_dom::id::to_document(node)?;
                 let slots = store.columns().observed.get(key)?;
-                slots.is_watched().then_some((key, *slots))
+                slots.is_watched().then_some((key, *slots, self.dom.pending_observations(node)))
             })
             .collect()
     }
@@ -112,11 +112,11 @@ impl Window {
         let watched = self.watched();
 
         let mut delivered = false;
-        for (key, held) in watched {
+        for (key, held, pending) in watched {
             let Some(measured) = self.measure(key, held) else {
                 continue;
             };
-            if measured == held {
+            if measured == held && pending.is_empty() {
                 continue;
             }
             delivered = true;
@@ -124,19 +124,22 @@ impl Window {
             // Each value on its own, so a view watching one quantity is not handed it again because
             // another one moved.
             if held.mask.contains(ObservedMask::BORDER_BOX)
-                && measured.border_box != held.border_box
+                && (pending.contains(ObservedMask::BORDER_BOX)
+                    || measured.border_box != held.border_box)
             {
                 self.dom
                     .deliver(node, ObservedValue::BorderBox(measured.border_box));
             }
             if held.mask.contains(ObservedMask::BORDER_SIZE)
-                && measured.border_size != held.border_size
+                && (pending.contains(ObservedMask::BORDER_SIZE)
+                    || measured.border_size != held.border_size)
             {
                 self.dom
                     .deliver(node, ObservedValue::BorderSize(measured.border_size));
             }
             if held.mask.contains(ObservedMask::CONTENT_SIZE)
-                && measured.content_size != held.content_size
+                && (pending.contains(ObservedMask::CONTENT_SIZE)
+                    || measured.content_size != held.content_size)
             {
                 self.dom
                     .deliver(node, ObservedValue::ContentSize(measured.content_size));
@@ -147,7 +150,8 @@ impl Window {
             if held
                 .mask
                 .intersects(ObservedMask::SCROLL_OFFSET | ObservedMask::SCROLLPORT)
-                && scrolled
+                && (pending.intersects(ObservedMask::SCROLL_OFFSET | ObservedMask::SCROLLPORT)
+                    || scrolled)
             {
                 self.dom.deliver(
                     node,

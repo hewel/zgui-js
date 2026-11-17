@@ -1,0 +1,44 @@
+use serde_json::{json, Map, Value};
+use zgui_ui_tokens::{Declarations, Preset, Theme};
+
+fn declarations(theme: Theme) -> String {
+    let mut out = Declarations::new();
+    theme.declare(&mut out);
+    out.to_string()
+}
+
+fn main() {
+    let mut styles = Map::new();
+    macro_rules! sheets { ($($name:ident),* $(,)?) => { $(
+        styles.insert(stringify!($name).into(), json!({"className": zgui_ui::$name::CLASS, "css": zgui_ui::$name::CSS}));
+    )* }; }
+    sheets!(
+        AccordionStyle, AlertDialogStyle, AlertStyle, AspectRatioStyle, AvatarStyle, BadgeStyle,
+        BreadcrumbStyle, ButtonGroupStyle, ButtonStyle, CalendarStyle, CardStyle, CarouselStyle,
+        ChartStyle, CheckboxStyle, CollapsibleStyle, ComboboxStyle, CommandStyle, ContextMenuStyle,
+        DataTableStyle, DatePickerStyle, DialogStyle, EmptyStyle, FieldGroupStyle, FieldStyle,
+        FieldTextStyle, FormStyle, HoverCardStyle, InputGroupPartStyle, InputGroupStyle,
+        InputOtpStyle, InputStyle, ItemGroupStyle, ItemPartStyle, ItemStyle, KbdStyle, LabelStyle,
+        MenuStyle, MenubarStyle, NativeSelectStyle, NavigationMenuStyle, OverlayStyle,
+        PaginationStyle, PopoverStyle, ProgressStyle, RadioGroupStyle, RadioItemStyle,
+        ResizableStyle, ScrollAreaStyle, SelectStyle, SeparatorStyle, SheetStyle, SidebarBandStyle,
+        SidebarMenuStyle, SidebarStyle, SkeletonStyle, SliderStyle, SpinnerStyle, SwitchStyle,
+        TableStyle, TabsStyle, TextareaStyle, ToastStyle, ToggleGroupStyle, ToggleStyle,
+        TooltipStyle, VirtualListStyle,
+    );
+    styles.insert("IconStyle".into(), json!({"className": zgui_ui_icons::IconStyle::CLASS, "css": zgui_ui_icons::IconStyle::CSS}));
+    let themes: Map<String, Value> = Preset::ALL.iter().map(|preset| (preset.name().into(), json!({
+        "light": declarations(preset.light()), "dark": declarations(preset.dark())
+    }))).collect();
+    let mut icons = Map::new();
+    macro_rules! icons { ($module:ident; $($name:ident),* $(,)?) => { $(
+        { let icon = zgui_ui_icons::set::$module::$name;
+          icons.insert(stringify!($name).into(), json!({"name":icon.name(),"viewBox":icon.view_box(),"d":icon.path_data()})); }
+    )* }; }
+    icons!(arrow; ARROW_UP, ARROW_DOWN, ARROW_LEFT, ARROW_RIGHT);
+    icons!(chevron; CHEVRON_UP, CHEVRON_DOWN, CHEVRON_LEFT, CHEVRON_RIGHT);
+    icons!(mark; CHECK, MINUS, PLUS, CROSS, DISC, DOT);
+    icons!(status; ALERT_CIRCLE, ALERT_TRIANGLE, INFO, CHECK_CIRCLE, CROSS_CIRCLE);
+    icons!(ui; SEARCH, SPINNER, ELLIPSIS, PANEL_LEFT);
+    println!("{}", json!({"revision":"80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a", "styles":styles, "themes":themes, "tokens":Theme::properties(), "icons":icons}));
+}

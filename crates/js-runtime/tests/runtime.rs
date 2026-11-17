@@ -489,3 +489,48 @@ fn rejection_accessors_cannot_extend_an_expired_owner_deadline() {
     deadline.set(Instant::now() + Duration::from_secs(1));
     assert_eq!(runtime.evaluate_script("String(readMessage)").unwrap(), "false");
 }
+
+#[inline(never)]
+fn at_deep_rust_stack<R>(depth: usize, f: impl FnOnce() -> R) -> R {
+    let mut frame = std::hint::black_box([0u8; 8192]);
+    std::hint::black_box(frame.as_mut_ptr());
+    if depth == 0 {
+        f()
+    } else {
+        let result = at_deep_rust_stack(depth - 1, f);
+        std::hint::black_box(frame[0]);
+        result
+    }
+}
+
+#[test]
+fn stack_limit_measures_from_entry_not_creation_depth_and_still_bounds_js_recursion() {
+    let mut runtime = JsRuntime::new(RuntimeLimits {
+        entry_timeout: Duration::from_secs(2),
+        cleanup_timeout: Duration::from_secs(2),
+        job_timeout: Duration::from_secs(2),
+        ..RuntimeLimits::default()
+    })
+    .unwrap();
+    // 40 * 8 KiB = 320 KiB > 256 KiB stack_limit_bytes relative to creation depth.
+    at_deep_rust_stack(40, || {
+        assert_eq!(runtime.evaluate_script("'ok'").unwrap(), "ok");
+        runtime
+            .with_context(|ctx| {
+                ctx.eval::<Function, _>("() => { Promise.reject(new Error('deep')); }")?.defer(())
+            })
+            .unwrap();
+        assert!(runtime.execute_job(Duration::from_secs(1)).unwrap());
+        assert_eq!(runtime.drain_rejections().updates.len(), 1);
+        runtime.with_cleanup_context(|ctx| ctx.eval::<(), _>("'cleaned'")).unwrap();
+
+        let err = runtime
+            .evaluate_script("(function f() { return 1 + f(); })()")
+            .unwrap_err();
+        assert_eq!(err.kind, DiagnosticKind::Exception);
+        assert!(
+            err.message.to_lowercase().contains("stack"),
+            "expected JS stack overflow diagnostic, got: {err}"
+        );
+    });
+}

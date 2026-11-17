@@ -6,10 +6,11 @@ use rquickjs::{Context, Function, Object, Runtime, Value};
 use ui_bridge::registry;
 use zgui::{
     geom::{CssPx, Point},
-    view::{DiscardCommands, DomHandle, ElementName, EventControl, EventCx, NodeId},
-    vocab::{DefaultAction, EventKind, FocusCause, FocusEvent, Key, KeyCode, KeyEvent,
-        KeyLocation, Modifiers, NamedKey, Payload, Phase, PhysicalKey, PointerButton,
-        PointerEvent, PointerId, PointerKind, Propagation, Timestamp, ValueChange, ValueEvent},
+    view::{DiscardCommands, DomHandle, ElementName, EventControl, EventCx, EventSink, Ident, NodeId},
+    vocab::{AnimationEvent, AnimationPhase, DefaultAction, EventKind, FocusCause, FocusEvent, Key,
+        KeyCode, KeyEvent, KeyLocation, Modifiers, NamedKey, Payload, Phase, PhysicalKey,
+        PointerButton, PointerEvent, PointerId, PointerKind, Propagation, Pseudo, Timestamp,
+        TransitionEvent, TransitionPhase, ValueChange, ValueEvent},
 };
 use zgui_dom::{Document, side::listeners::Listener};
 use zgui_view_dom::DocumentDom;
@@ -110,9 +111,15 @@ fn capture_mapping_node_cleanup_clear_and_drop_remove_backend_handlers() {
     let mut events = Events::new(dom);
     context.with(|ctx| {
         for (name, kind) in [("onClick", EventKind::Click), ("onPointerDown", EventKind::PointerDown),
-            ("onPointerUp", EventKind::PointerUp), ("onKeyDown", EventKind::KeyDown),
+            ("onPointerMove", EventKind::PointerMove), ("onPointerEnter", EventKind::PointerEnter),
+            ("onPointerLeave", EventKind::PointerLeave), ("onPointerUp", EventKind::PointerUp),
+            ("onPointerCancel", EventKind::PointerCancel), ("onContextMenu", EventKind::ContextMenu), ("onKeyDown", EventKind::KeyDown),
             ("onKeyUp", EventKind::KeyUp), ("onInput", EventKind::Input),
-            ("onChange", EventKind::Change), ("onFocus", EventKind::FocusIn), ("onBlur", EventKind::FocusOut)] {
+            ("onChange", EventKind::Change), ("onFocus", EventKind::FocusIn), ("onBlur", EventKind::FocusOut),
+            ("onAnimationStart", EventKind::AnimationStart), ("onAnimationIteration", EventKind::AnimationIteration),
+            ("onAnimationEnd", EventKind::AnimationEnd), ("onAnimationCancel", EventKind::AnimationCancel),
+            ("onTransitionRun", EventKind::TransitionRun), ("onTransitionStart", EventKind::TransitionStart),
+            ("onTransitionEnd", EventKind::TransitionEnd), ("onTransitionCancel", EventKind::TransitionCancel)] {
             let capture = format!("{name}Capture");
             events.set(&ctx, owner, node, &capture, ctx.eval("() => {}").unwrap(), dispatcher.clone()).unwrap();
             let listener = *registrations(&backend, node).last().unwrap();
@@ -123,7 +130,7 @@ fn capture_mapping_node_cleanup_clear_and_drop_remove_backend_handlers() {
         }
         events.set(&ctx, child, child_node, "onClick", ctx.eval("() => {}").unwrap(), dispatcher.clone()).unwrap();
     });
-    assert_eq!(backend.handler_count(), 10);
+    assert_eq!(backend.handler_count(), 23);
     events.remove(owner.token());
     assert_eq!(events.len(), 1);
     assert_eq!(backend.handler_count(), 1);
@@ -193,6 +200,53 @@ fn pointer_snapshot_is_owned_lossless_and_cancellation_expires_before_native_app
             if (event.position.y !== -4 || event.coalesced[0].pressure !== .75) throw Error('snapshot expired');
         "#).unwrap();
     });
+}
+
+#[test]
+fn pointer_boundaries_keep_snapshots_without_pointer_action_authority() {
+    let runtime = Runtime::new().unwrap();
+    let context = Context::full(&runtime).unwrap();
+    let (_, _, node, _) = native();
+    for (kind, name) in [
+        (EventKind::PointerEnter, "pointerenter"),
+        (EventKind::PointerLeave, "pointerleave"),
+        (EventKind::ContextMenu, "contextmenu"),
+    ] {
+        let payload = Payload::Pointer(PointerEvent::mouse(Point::new(CssPx(12.5), CssPx(4.0))));
+        let control = EventControl::new();
+        let mut sink = DiscardCommands;
+        let mut native = EventCx::<zgui::view::events::AnyEvent>::new(kind, node, node, Phase::Target,
+            Modifiers::NONE, Timestamp::ORIGIN, &payload, &control, &mut sink);
+        let dispatch = context.with(|ctx| {
+            let target = Object::new(ctx.clone()).unwrap();
+            let (value, dispatch) = EventSnapshot::capture(&native).to_js(&ctx, &target, &target).unwrap();
+            ctx.globals().set("boundary", value).unwrap();
+            assert_eq!(ctx.eval::<String, _>("boundary.type").unwrap(), name);
+            ctx.eval::<(), _>(r#"
+                if (boundary.position.x !== 12.5 || boundary.position.y !== 4 || boundary.pointerKind !== 'mouse') throw Error('boundary snapshot');
+                for (const method of ['capturePointer', 'releasePointer', 'activateNow']) {
+                    let rejected = false;
+                    try { boundary[method](); } catch (error) { rejected = error instanceof TypeError; }
+                    if (!rejected) throw Error('boundary granted ' + method);
+                }
+                if (boundary.type === 'contextmenu') boundary.preventDefault();
+            "#).unwrap();
+            dispatch
+        });
+        assert_eq!(control.default_action(), DefaultAction::Allowed);
+        dispatch.expire_and_apply(&mut native);
+        assert_eq!(
+            control.default_action(),
+            if kind == EventKind::ContextMenu { DefaultAction::Prevented } else { DefaultAction::Allowed },
+        );
+        context.with(|ctx| {
+            ctx.eval::<(), _>(r#"{
+                let expired = false;
+                try { boundary.stopPropagation(); } catch (error) { expired = error instanceof ReferenceError; }
+                if (!expired || boundary.position.x !== 12.5) throw Error('boundary lifetime');
+            }"#).unwrap();
+        });
+    }
 }
 
 #[test]
@@ -274,4 +328,364 @@ fn thrown_handler_can_apply_flags_and_unwinding_drop_revokes_cancellation() {
             if (event.value !== 'value') throw Error('error path destroyed data');
         }
     "#).unwrap());
+}
+
+#[test]
+fn animation_and_transition_snapshots_retain_payloads_and_expire_cancellation() {
+    let runtime = Runtime::new().unwrap();
+    let context = Context::full(&runtime).unwrap();
+    let (_, _, node, _) = native();
+    let animation = Payload::Animation(AnimationEvent {
+        name: Ident::new("fade"), elapsed: Duration::from_millis(125),
+        phase: AnimationPhase::Ended, pseudo: Some(Pseudo::Before),
+    });
+    let control = EventControl::new();
+    let mut sink = DiscardCommands;
+    let mut native = EventCx::<zgui::view::events::AnyEvent>::new(EventKind::AnimationEnd, node, node,
+        Phase::Target, Modifiers::NONE, Timestamp::from_origin(Duration::from_millis(7)),
+        &animation, &control, &mut sink);
+    let snapshot = EventSnapshot::capture(&native);
+    let dispatch = context.with(|ctx| {
+        let target = Object::new(ctx.clone()).unwrap();
+        let (object, dispatch) = snapshot.to_js(&ctx, &target, &target).unwrap();
+        ctx.globals().set("animation", object).unwrap();
+        ctx.eval::<(), _>(r#"
+            if (animation.type !== 'animationend' || animation.animationName !== 'fade' ||
+                animation.elapsedTime !== .125 || animation.pseudoElement !== '::before' ||
+                animation.timestamp !== 7) throw Error('animation payload');
+            animation.preventDefault();
+        "#).unwrap();
+        dispatch
+    });
+    assert_eq!(control.default_action(), DefaultAction::Allowed);
+    dispatch.expire_and_apply(&mut native);
+    assert_eq!(control.default_action(), DefaultAction::Prevented);
+    drop(dispatch);
+    drop(snapshot);
+    drop(native);
+    drop(animation);
+    let payloads = [
+        (EventKind::TransitionCancel, Payload::Transition(TransitionEvent {
+            property: Ident::new("opacity"), elapsed: Duration::from_millis(250),
+            phase: TransitionPhase::Cancelled, pseudo: None,
+        })),
+        (EventKind::AnimationStart, Payload::Animation(AnimationEvent {
+            name: Ident::new("pulse"), elapsed: Duration::ZERO,
+            phase: AnimationPhase::Started, pseudo: Some(Pseudo::After),
+        })),
+    ];
+    context.with(|ctx| {
+        let target = Object::new(ctx.clone()).unwrap();
+        let values = rquickjs::Array::new(ctx.clone()).unwrap();
+        for (index, (kind, payload)) in payloads.iter().enumerate() {
+            let control = EventControl::new();
+            let mut sink = DiscardCommands;
+            let native = EventCx::<zgui::view::events::AnyEvent>::new(*kind, node, node, Phase::Bubble,
+                Modifiers::NONE, Timestamp::ORIGIN, payload, &control, &mut sink);
+            let (value, dispatch) = EventSnapshot::capture(&native).to_js(&ctx, &target, &target).unwrap();
+            values.set(index, value).unwrap();
+            drop(dispatch);
+            drop(native);
+        }
+        ctx.globals().set("events", values).unwrap();
+        ctx.eval::<(), _>(r#"
+            if (events[0].type !== 'transitioncancel' || events[0].propertyName !== 'opacity' ||
+                events[0].elapsedTime !== .25 || events[0].pseudoElement !== '') throw Error('transition payload');
+            if (events[1].type !== 'animationstart' || events[1].animationName !== 'pulse' ||
+                events[1].elapsedTime !== 0 || events[1].pseudoElement !== '::after') throw Error('after marker');
+            if (animation.animationName !== 'fade' || animation.elapsedTime !== .125 ||
+                animation.pseudoElement !== '::before') throw Error('snapshot expired with native event');
+            let expired = [false];
+            try { animation.preventDefault(); } catch (error) {
+                expired[0] = error instanceof ReferenceError && error.message.includes('expired-dispatch');
+            }
+            if (!expired[0]) throw Error('cancellation retained authority');
+        "#).unwrap();
+    });
+}
+
+#[derive(Default)]
+struct Recorder {
+    events: Rc<RefCell<Vec<(NodeId, EventKind)>>>,
+}
+impl EventSink for Recorder {
+    fn capture_pointer(&mut self, _node: NodeId) {}
+    fn release_pointer(&mut self, _node: NodeId) {}
+    fn request_focus(&mut self, _node: NodeId) {}
+    fn synthesize(&mut self, node: NodeId, event: EventKind) { self.events.borrow_mut().push((node, event)); }
+}
+
+#[test]
+fn activate_now_requests_one_click_after_expiry_and_rejects_other_kinds() {
+    let runtime = Runtime::new().unwrap();
+    let context = Context::full(&runtime).unwrap();
+    let (_, _, node, _) = native();
+
+    let payload = Payload::Pointer(PointerEvent::mouse(Point::new(CssPx(1.0), CssPx(2.0))));
+    let control = EventControl::new();
+    let log = Rc::new(RefCell::new(Vec::new()));
+    let mut sink = Recorder { events: log.clone() };
+    let mut down = EventCx::new(EventKind::PointerDown, node, node, Phase::Target,
+        Modifiers::NONE, Timestamp::ORIGIN, &payload, &control, &mut sink);
+    let dispatch = context.with(|ctx| {
+        let target = Object::new(ctx.clone()).unwrap();
+        let (object, dispatch) = EventSnapshot::capture(&down).to_js(&ctx, &target, &target).unwrap();
+        ctx.globals().set("event", object).unwrap();
+        ctx.eval::<(), _>("event.activateNow(); event.activateNow(); 'armed'").unwrap();
+        dispatch
+    });
+    assert!(!control.activation_claimed());
+    assert!(log.borrow().is_empty());
+    dispatch.expire_and_apply(&mut down);
+    assert!(control.activation_claimed());
+    dispatch.expire_and_apply(&mut down);
+    drop(dispatch);
+    drop(down);
+    assert_eq!(*log.borrow(), vec![(node, EventKind::Click)]);
+
+    context.with(|ctx| {
+        ctx.eval::<(), _>(r#"
+            let expired = false;
+            try { event.activateNow(); } catch (error) { expired = error instanceof ReferenceError && error.message.includes('expired-dispatch'); }
+            if (!expired) throw Error('activateNow retained authority');
+            'expired'
+        "#).unwrap();
+    });
+
+    let up_payload = Payload::Pointer(PointerEvent::mouse(Point::new(CssPx(3.0), CssPx(4.0))));
+    let up_control = EventControl::new();
+    let up_log = Rc::new(RefCell::new(Vec::new()));
+    let mut up_sink = Recorder { events: up_log.clone() };
+    let up = EventCx::new(EventKind::PointerUp, node, node, Phase::Target,
+        Modifiers::NONE, Timestamp::ORIGIN, &up_payload, &up_control, &mut up_sink);
+    context.with(|ctx| {
+        let target = Object::new(ctx.clone()).unwrap();
+        let (object, dispatch) = EventSnapshot::capture(&up).to_js(&ctx, &target, &target).unwrap();
+        ctx.globals().set("up", object).unwrap();
+        ctx.eval::<(), _>(r#"
+            if (typeof up.activateNow !== 'function') throw Error('pointer snapshot lost activateNow');
+            let rejected = false;
+            try { up.activateNow(); } catch (error) { rejected = error instanceof TypeError; }
+            if (!rejected) throw Error('activateNow accepted a pointerup event');
+            'rejected'
+        "#).unwrap();
+        drop(dispatch);
+    });
+    drop(up);
+    assert!(up_log.borrow().is_empty());
+    assert!(!up_control.activation_claimed());
+
+    let drop_control = EventControl::new();
+    let drop_log = Rc::new(RefCell::new(Vec::new()));
+    let mut drop_sink = Recorder { events: drop_log.clone() };
+    let dropped = EventCx::new(EventKind::PointerDown, node, node, Phase::Target,
+        Modifiers::NONE, Timestamp::ORIGIN, &payload, &drop_control, &mut drop_sink);
+    context.with(|ctx| {
+        let target = Object::new(ctx.clone()).unwrap();
+        let (object, dispatch) = EventSnapshot::capture(&dropped).to_js(&ctx, &target, &target).unwrap();
+        ctx.globals().set("dropped", object).unwrap();
+        ctx.eval::<(), _>("dropped.activateNow(); 'armed'").unwrap();
+        drop(dispatch);
+    });
+    drop(dropped);
+    assert!(drop_log.borrow().is_empty());
+    assert!(!drop_control.activation_claimed());
+}
+
+#[derive(Default)]
+struct PointerRecorder {
+    log: Rc<RefCell<Vec<(NodeId, bool)>>>,
+}
+impl EventSink for PointerRecorder {
+    fn capture_pointer(&mut self, node: NodeId) { self.log.borrow_mut().push((node, true)); }
+    fn release_pointer(&mut self, node: NodeId) { self.log.borrow_mut().push((node, false)); }
+    fn request_focus(&mut self, _node: NodeId) {}
+    fn synthesize(&mut self, _node: NodeId, _event: EventKind) {}
+}
+
+#[test]
+fn pointer_capture_requests_apply_once_to_the_current_node_after_expiry() {
+    let runtime = Runtime::new().unwrap();
+    let context = Context::full(&runtime).unwrap();
+    let (backend, dom, node, _) = native();
+    let other = dom.create_element(ElementName::new("control"));
+    dom.insert(node, other, None);
+    let _ = backend;
+    let payload = Payload::Pointer(PointerEvent::mouse(Point::new(CssPx(1.0), CssPx(2.0))));
+    let control = EventControl::new();
+    let log = Rc::new(RefCell::new(Vec::new()));
+    let mut sink = PointerRecorder { log: log.clone() };
+    let mut down = EventCx::new(EventKind::PointerDown, other, node, Phase::Bubble,
+        Modifiers::NONE, Timestamp::ORIGIN, &payload, &control, &mut sink);
+    let dispatch = context.with(|ctx| {
+        let target = Object::new(ctx.clone()).unwrap();
+        let current = Object::new(ctx.clone()).unwrap();
+        let (object, dispatch) = EventSnapshot::capture(&down).to_js(&ctx, &target, &current).unwrap();
+        ctx.globals().set("event", object).unwrap();
+        ctx.eval::<(), _>("event.capturePointer(); event.capturePointer(); 'armed'").unwrap();
+        dispatch
+    });
+    assert!(log.borrow().is_empty(), "capture is issued only after the handler returns");
+    dispatch.expire_and_apply(&mut down);
+    assert_eq!(*log.borrow(), vec![(node, true)], "the request uses the current node, not the target");
+    dispatch.expire_and_apply(&mut down);
+    assert_eq!(*log.borrow(), vec![(node, true)], "a second apply adds nothing");
+    drop(dispatch);
+    drop(down);
+
+    for (script, wanted) in [
+        ("held.capturePointer(); held.releasePointer(); 'a'", false),
+        ("held.releasePointer(); held.capturePointer(); 'b'", true),
+    ] {
+        let control = EventControl::new();
+        let log = Rc::new(RefCell::new(Vec::new()));
+        let mut sink = PointerRecorder { log: log.clone() };
+        let mut event = EventCx::new(EventKind::PointerDown, other, node, Phase::Bubble,
+            Modifiers::NONE, Timestamp::ORIGIN, &payload, &control, &mut sink);
+        let dispatch = context.with(|ctx| {
+            let target = Object::new(ctx.clone()).unwrap();
+            let (object, dispatch) = EventSnapshot::capture(&event).to_js(&ctx, &target, &target).unwrap();
+            ctx.globals().set("held", object).unwrap();
+            ctx.eval::<(), _>(script).unwrap();
+            dispatch
+        });
+        dispatch.expire_and_apply(&mut event);
+        assert_eq!(*log.borrow(), vec![(node, wanted)], "the last request in a handler wins");
+        drop(dispatch);
+        drop(event);
+    }
+
+    for kind in [EventKind::PointerMove, EventKind::PointerUp, EventKind::PointerCancel] {
+        let control = EventControl::new();
+        let log = Rc::new(RefCell::new(Vec::new()));
+        let mut sink = PointerRecorder { log: log.clone() };
+        let mut event = EventCx::new(kind, other, node, Phase::Bubble,
+            Modifiers::NONE, Timestamp::ORIGIN, &payload, &control, &mut sink);
+        let dispatch = context.with(|ctx| {
+            let target = Object::new(ctx.clone()).unwrap();
+            let (object, dispatch) = EventSnapshot::capture(&event).to_js(&ctx, &target, &target).unwrap();
+            ctx.globals().set("held", object).unwrap();
+            ctx.eval::<(), _>(r#"
+                held.releasePointer();
+                { let rejected = false;
+                try { held.capturePointer(); } catch (error) { rejected = error instanceof TypeError; }
+                if (!rejected) throw Error('capturePointer accepted a non-press pointer event'); }
+                'checked'
+            "#).unwrap();
+            dispatch
+        });
+        dispatch.expire_and_apply(&mut event);
+        assert_eq!(*log.borrow(), vec![(node, false)]);
+        drop(dispatch);
+        drop(event);
+    }
+
+    let click_control = EventControl::new();
+    let click_log = Rc::new(RefCell::new(Vec::new()));
+    let mut click_sink = PointerRecorder { log: click_log.clone() };
+    let click = EventCx::new(EventKind::Click, other, node, Phase::Bubble,
+        Modifiers::NONE, Timestamp::ORIGIN, &payload, &click_control, &mut click_sink);
+    context.with(|ctx| {
+        let target = Object::new(ctx.clone()).unwrap();
+        let (object, dispatch) = EventSnapshot::capture(&click).to_js(&ctx, &target, &target).unwrap();
+        ctx.globals().set("clicked", object).unwrap();
+        ctx.eval::<(), _>(r#"
+            { let rejected = false;
+            try { clicked.releasePointer(); } catch (error) { rejected = error instanceof TypeError; }
+            if (!rejected) throw Error('releasePointer accepted a click'); }
+            { let rejected = false;
+            try { clicked.capturePointer(); } catch (error) { rejected = error instanceof TypeError; }
+            if (!rejected) throw Error('capturePointer accepted a click'); }
+            'rejected'
+        "#).unwrap();
+        drop(dispatch);
+    });
+    drop(click);
+    assert!(click_log.borrow().is_empty());
+
+    context.with(|ctx| {
+        ctx.eval::<(), _>(r#"
+            for (const name of ['capturePointer', 'releasePointer']) {
+                { let expired = false;
+                try { event[name](); } catch (error) { expired = error instanceof ReferenceError && error.message.includes('expired-dispatch'); }
+                if (!expired) throw Error(`${name} retained authority`); }
+            }
+            if (event.pointerId !== '0' || event.position.x !== 1 || event.position.y !== 2) throw Error('pointer snapshot expired');
+            'expired'
+        "#).unwrap();
+    });
+}
+
+#[test]
+fn dropped_dispatch_issues_no_pointer_capture_commands() {
+    let runtime = Runtime::new().unwrap();
+    let context = Context::full(&runtime).unwrap();
+    let (_, _, node, _) = native();
+    let payload = Payload::Pointer(PointerEvent::mouse(Point::new(CssPx(1.0), CssPx(2.0))));
+    let control = EventControl::new();
+    let log = Rc::new(RefCell::new(Vec::new()));
+    let mut sink = PointerRecorder { log: log.clone() };
+    let down = EventCx::new(EventKind::PointerDown, node, node, Phase::Target,
+        Modifiers::NONE, Timestamp::ORIGIN, &payload, &control, &mut sink);
+    context.with(|ctx| {
+        let target = Object::new(ctx.clone()).unwrap();
+        let (object, dispatch) = EventSnapshot::capture(&down).to_js(&ctx, &target, &target).unwrap();
+        ctx.globals().set("lost", object).unwrap();
+        ctx.eval::<(), _>("lost.capturePointer(); 'armed'").unwrap();
+        drop(dispatch);
+    });
+    drop(down);
+    assert!(log.borrow().is_empty());
+    context.with(|ctx| {
+        ctx.eval::<(), _>(r#"
+            { let expired = false;
+            try { lost.capturePointer(); } catch (error) { expired = error instanceof ReferenceError && error.message.includes('expired-dispatch'); }
+            if (!expired) throw Error('capturePointer retained authority after drop'); }
+            'expired'
+        "#).unwrap();
+    });
+}
+
+#[test]
+fn keyboard_character_text_is_explicit_and_survives_dispatch() {
+    let runtime = Runtime::new().unwrap();
+    let context = Context::full(&runtime).unwrap();
+    let (_, _, node, _) = native();
+    let keys = [
+        Key::character("é"), Key::character("e\u{301}"), Key::character("𐐷"),
+        Key::character("Enter"), Key::character(" "),
+        Key::Named(NamedKey::Enter), Key::Named(NamedKey::Space),
+        Key::Dead(Some('´')), Key::Other("x".into()), Key::Unidentified,
+    ];
+    context.with(|ctx| {
+        let target = Object::new(ctx.clone()).unwrap();
+        let values = rquickjs::Array::new(ctx.clone()).unwrap();
+        for (index, key) in keys.into_iter().enumerate() {
+            let mut key_event = KeyEvent::character("unused");
+            key_event.key_without_modifiers = key.clone();
+            key_event.key = key;
+            let payload = Payload::Key(key_event);
+            let control = EventControl::new();
+            let mut sink = DiscardCommands;
+            let mut event = EventCx::new(EventKind::KeyDown, node, node, Phase::Bubble,
+                Modifiers::NONE, Timestamp::ORIGIN, &payload, &control, &mut sink);
+            let (value, dispatch) = EventSnapshot::capture(&event).to_js(&ctx, &target, &target).unwrap();
+            dispatch.expire_and_apply(&mut event);
+            values.set(index, value).unwrap();
+        }
+        ctx.globals().set("characters", values).unwrap();
+        ctx.eval::<(), _>(r#"
+            const expected = ['é', 'é', '𐐷', 'Enter', ' ', null, null, null, null, null];
+            for (let i = 0; i < expected.length; i++) {
+                const event = characters[i];
+                if (event.character !== expected[i]) throw Error('character category ' + i);
+                if (i < 5 && event.key !== expected[i]) throw Error('character changed key');
+                let expired = false;
+                try { event.preventDefault(); } catch (error) { expired = error instanceof ReferenceError; }
+                if (!expired) throw Error('dispatch authority survived');
+            }
+            if (characters[3].key !== characters[5].key || characters[4].key !== characters[6].key)
+                throw Error('test must cover identical key strings with different categories');
+        "#).unwrap();
+    });
 }

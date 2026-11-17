@@ -257,3 +257,51 @@ fn content_kept_mounted_for_an_exit_animation_of_no_length_is_unmounted_when_it_
         "the exit of no length ended and the surface was never taken away"
     );
 }
+
+#[test]
+fn generated_animation_counts_include_each_motion_and_exclude_descendants() {
+    let parent = NodeRef::new();
+    let node = NodeRef::new();
+    let seen = Rc::new(std::cell::RefCell::new(Vec::new()));
+    let recorded = Rc::clone(&seen);
+    let css = r#"
+root { display: block; width: 400px; height: 300px }
+.multi { display: block; width: 200px; height: 80px;
+    animation: own-fast 80ms linear both, own-slow 160ms linear both; }
+.multi::before { content: "B"; animation: before-fade 180ms linear both; }
+.multi::after { content: "A"; animation: after-fade 240ms linear both; }
+@keyframes own-fast { from { background-color: red; } to { background-color: blue; } }
+@keyframes own-slow { from { opacity: 0.5; } to { opacity: 1; } }
+@keyframes before-fade { from { opacity: 0.2; } to { opacity: 1; } }
+@keyframes after-fade { from { opacity: 0.3; } to { opacity: 1; } }
+"#;
+    let mut harness = support::app_with_text(css, move |cx: &mut BuildCx<'_>| {
+        let recorded = Rc::clone(&recorded);
+        Box::new(zgui_elements::column().node_ref(parent).child(
+            zgui_elements::r#box().class("multi").node_ref(node).on(
+                zgui_view::events::ANIMATION_END,
+                move |event: &mut zgui_view::EventCx<'_, zgui_view::events::AnimationEnd>| {
+                    recorded.borrow_mut().push((event.name.as_str().to_owned(), event.pseudo, node.running_animations()));
+                },
+            ),
+        ).into_view().build(cx)) as Box<dyn zgui_view::Anchor>
+    });
+    harness.settle(8);
+    harness.advance(FRAME);
+    harness.settle(8);
+    assert_eq!(node.running_animations(), 4);
+    assert_eq!(parent.running_animations(), 0);
+    harness.advance(Duration::from_millis(100));
+    harness.settle(8);
+    assert_eq!(node.running_animations(), 3);
+    harness.advance(Duration::from_millis(80));
+    harness.settle(8);
+    assert_eq!(node.running_animations(), 1);
+    harness.advance(Duration::from_millis(80));
+    harness.settle(8);
+    assert_eq!(node.running_animations(), 0);
+    let seen = seen.borrow();
+    assert!(seen.iter().any(|(name, pseudo, _)| name == "before-fade" && *pseudo == Some(zgui_vocab::Pseudo::Before)));
+    assert!(seen.iter().any(|(name, pseudo, _)| name == "after-fade" && *pseudo == Some(zgui_vocab::Pseudo::After)));
+    assert_eq!(seen.last().map(|(_, _, running)| *running), Some(0));
+}

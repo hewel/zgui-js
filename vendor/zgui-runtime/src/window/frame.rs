@@ -573,6 +573,7 @@ impl Window {
 
         mark("f.recycle");
         self.dom.end_frame();
+        self.prune_pointer_captures();
         // Detached document records remain readable through paint. Retire image requests only
         // after that reclamation, including frames that did not need to paint: otherwise the
         // last attached variant can remain reported ready forever when no later frame is owed.

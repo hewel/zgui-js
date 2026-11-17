@@ -5,7 +5,7 @@
 use std::time::Instant;
 use serde_json::{Value,json};
 use crate::assets::fixture::FixtureRuntime;
-use super::super::{Error,MAX_STDOUT_BYTES,driver::{Driver,Fault,SharedOutput},evidence,scenario::Step};
+use super::super::{Error,MAX_STDOUT_BYTES,driver::{Driver,Fault,SharedOutput},evidence,scenario::{PointerOperation,Step}};
 
 /// Native side of a step: arm the deadline, report pre-action readiness, execute
 /// exactly one operation. Tests substitute a deterministic driver.
@@ -25,9 +25,13 @@ impl StepDriver for Driver {
             Step::Settle{..}=>self.settle(false),
             Step::Capture{capture_id,required_frame_time_us,allowed_pending_assets,..}=>
                 self.capture(capture_id,*required_frame_time_us,allowed_pending_assets),
-            Step::PointerMove{location,..}=>self.pointer(location,None),
-            Step::PointerClick{location,button,..}=>self.pointer(location,Some(*button)),
-            Step::KeyPress{surface,key,modifiers,..}=>self.key(*key,modifiers).map(|mut trace| { trace["surface"]=json!(surface); trace }),
+            Step::PointerMove{location,pointer,..}=>self.pointer(location,pointer,PointerOperation::Move),
+            Step::PointerClick{location,button,pointer,..}=>self.pointer(location,pointer,PointerOperation::Click(*button)),
+            Step::PointerDown{location,button,pointer,..}=>self.pointer(location,pointer,PointerOperation::Down(*button)),
+            Step::PointerUp{location,button,pointer,..}=>self.pointer(location,pointer,PointerOperation::Up(*button)),
+            Step::PointerCancel{location,pointer,..}=>self.pointer(location,pointer,PointerOperation::Cancel),
+            Step::Wheel{location,delta,phase,..}=>self.wheel(location,delta,*phase),
+            Step::KeyPress{surface,key,modifiers,..}=>self.key(key,modifiers).map(|mut trace| { trace["surface"]=json!(surface); trace }),
             Step::TextCommit{surface,text,..}=>self.text(text).map(|mut trace| { trace["surface"]=json!(surface); trace }),
             Step::Assert{target,check,..}=>self.assert_node(target,check),
             Step::ClockAdvance{by_ms,..}=>self.advance(*by_ms),

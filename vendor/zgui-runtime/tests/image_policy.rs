@@ -243,3 +243,106 @@ fn hidden_sources_do_not_block_visible_readiness_and_upload_when_shown() {
         app.shut_down();
     }
 }
+
+#[test]
+fn failed_image_state_drives_fallback_and_resets_with_its_source() {
+    const FALLBACK_CSS: &str = "root { display:block } image { display:block; width:64px; height:16px } .picture:state(zgui-image-broken) { display:none }";
+    let broken_name = zgui_interned::Ident::new("zgui-image-broken");
+    let mut app = window("assets/bad.png", FALLBACK_CSS, vec![
+        ("assets/bad.png".into(), Arc::from(&b"not a raster image"[..])),
+        ("assets/good.png".into(), Arc::from(RED)),
+    ]);
+    app.settle(8);
+    let (node, document) = {
+        let window = &app.app().windows()[0];
+        (window.nodes_with_class("picture")[0], window.document().clone())
+    };
+    let index = {
+        let document = document.borrow();
+        (0..document.store().slot_count())
+            .map(|slot| zgui_dom::NodeIndex::new(slot as u32))
+            .find(|&index| document.store().classes_of(index).iter().any(|class| &**class == "picture"))
+            .unwrap()
+    };
+    document.borrow().edit(&zgui_dom::EverythingMatters, |edit| {
+        edit.set_state(index, zgui_vocab::UiState::HOVER, true);
+    }).unwrap();
+    app.app_mut().windows_mut()[0].request_frame();
+
+    let ui_state = |app: &Harness<Runtime>| {
+        app.app().windows()[0].dom().ui_state(node)
+    };
+    let broken_state = |app: &Harness<Runtime>| {
+        app.app().windows()[0].dom().has_custom_state(node, broken_name)
+    };
+
+    let loading = app.app().windows()[0].image_resources();
+    assert_eq!(loading.resources.len(), 1);
+    assert!(loading.resources[0].visible);
+    assert_eq!(loading.resources[0].state, ImageState::Loading);
+    assert!(!ui_state(&app).contains(zgui_vocab::UiState::BROKEN));
+    assert!(!broken_state(&app));
+
+    publish(&mut app);
+    let failed = app.app().windows()[0].image_resources();
+    let bad = failed.resources.iter().rev().find(|image| image.source == "assets/bad.png").unwrap();
+    assert_eq!(bad.state, ImageState::Failed);
+    assert!(!bad.visible, "the :state rule hides the failed picture: {failed:?}");
+    assert!(ui_state(&app).contains(zgui_vocab::UiState::BROKEN));
+    assert!(broken_state(&app));
+    assert!(ui_state(&app).contains(zgui_vocab::UiState::HOVER));
+
+    set_src(&mut app, Some("assets/good.png"));
+    app.settle(8);
+    assert!(!ui_state(&app).contains(zgui_vocab::UiState::BROKEN));
+    assert!(!broken_state(&app));
+    assert!(ui_state(&app).contains(zgui_vocab::UiState::HOVER));
+    publish(&mut app);
+    let ready = app.app().windows()[0].image_resources();
+    let good = ready.resources.iter().rev().find(|image| image.source == "assets/good.png").unwrap();
+    assert_eq!(good.state, ImageState::Ready);
+    assert!(good.visible);
+
+    set_src(&mut app, Some("assets/bad.png"));
+    publish(&mut app);
+    let failed = app.app().windows()[0].image_resources();
+    let bad = failed.resources.iter().rev().find(|image| image.source == "assets/bad.png").unwrap();
+    assert_eq!(bad.state, ImageState::Failed);
+    assert!(!bad.visible);
+    assert!(ui_state(&app).contains(zgui_vocab::UiState::BROKEN));
+    assert!(broken_state(&app));
+
+    set_src(&mut app, None);
+    app.settle(8);
+    assert!(!ui_state(&app).contains(zgui_vocab::UiState::BROKEN));
+    assert!(!broken_state(&app));
+
+    set_src(&mut app, Some("assets/bad.png"));
+    app.settle(8);
+    let pending = app.app().windows()[0].image_resources();
+    let bad = pending.resources.iter().rev().find(|image| image.source == "assets/bad.png").unwrap();
+    assert_eq!(bad.state, ImageState::Loading);
+    set_src(&mut app, Some("assets/good.png"));
+    app.settle(8);
+    publish(&mut app);
+    let ready = app.app().windows()[0].image_resources();
+    let good = ready.resources.iter().rev().find(|image| image.source == "assets/good.png").unwrap();
+    assert_eq!(good.state, ImageState::Ready);
+    assert!(good.visible);
+    assert!(!ui_state(&app).contains(zgui_vocab::UiState::BROKEN));
+    assert!(!broken_state(&app));
+    assert_eq!(app.app().windows()[0].nodes_with_class("picture")[0], node);
+
+    set_src(&mut app, Some("assets/bad.png"));
+    app.settle(8);
+    publish(&mut app);
+    assert!(ui_state(&app).contains(zgui_vocab::UiState::BROKEN));
+    assert!(broken_state(&app));
+    app.app_mut().windows_mut()[0].replace_image_policy(ImagePolicy::package_only([]));
+    app.settle(8);
+    assert!(!ui_state(&app).contains(zgui_vocab::UiState::BROKEN));
+    assert!(!broken_state(&app));
+    assert!(ui_state(&app).contains(zgui_vocab::UiState::HOVER));
+    assert!(app.app().windows()[0].image_resources().resources.iter().all(|image| image.state == ImageState::Canceled));
+    app.shut_down();
+}

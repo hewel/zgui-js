@@ -399,6 +399,18 @@ impl ImageLoader {
 
         if !touched.is_empty() {
             self.revision += 1;
+            {
+                let document = document.borrow();
+                document.edit(&zgui_dom::EverythingMatters, |edit| {
+                    for &node in &touched {
+                        let Some(index) = document.store().index_of(node) else { continue; };
+                        let broken = self.by_node.get(&node).and_then(|key| self.entries.get(key))
+                            .is_some_and(|entry| matches!(entry.probe, Probe::Failed) || entry.failure.is_some());
+                        edit.set_state(index, zgui_vocab::UiState::BROKEN, broken);
+                        edit.set_custom_state(index, zgui_interned::Ident::new("zgui-image-broken"), broken);
+                    }
+                }).expect("image state updates require a live document");
+            }
             let mut document = document.borrow_mut();
             for node in touched {
                 if let Some(index) = document.store().index_of(node) {

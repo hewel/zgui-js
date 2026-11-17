@@ -16,8 +16,19 @@ impl ImageLoader {
     ) {
         self.completed.cancel();
         self.pending.borrow_mut().clear();
+        let previous = std::mem::take(&mut self.by_node);
+        {
+            let document = document.borrow();
+            document.edit(&zgui_dom::EverythingMatters, |edit| {
+                for &node in previous.keys() {
+                    let Some(index) = document.store().index_of(node) else { continue; };
+                    edit.set_state(index, zgui_vocab::UiState::BROKEN, false);
+                    edit.set_custom_state(index, zgui_interned::Ident::new("zgui-image-broken"), false);
+                }
+            }).expect("image state updates require a live document");
+        }
         let mut document = document.borrow_mut();
-        for node in std::mem::take(&mut self.by_node).into_keys() {
+        for node in previous.into_keys() {
             self.retire_request(node);
             let id = ReplacedId::new(node);
             content.remove_image(id);

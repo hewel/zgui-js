@@ -676,15 +676,27 @@ The 20 ms step is an explicit scenario choice. If the selected backend/profile r
 | `clock.advance` | `byMs` | Advance by a nonnegative integer number of milliseconds. |
 | `pointer.move` | `target` or `position` plus `surface` | Deliver native pointer movement. |
 | `pointer.click` | `target` or explicit position; `button` | Resolve, move, press, release using native dispatch. |
+| `pointer.down` | `target` or explicit position; `button` | Dispatch one native press and settle. |
+| `pointer.up` | `target` or explicit position; `button` | Dispatch one native release and settle. |
+| `pointer.cancel` | `target` or explicit position | Dispatch one native cancel and settle. |
+| `wheel` | `target` or `position` plus `surface`; `delta`; optional `phase` | Deliver one native wheel event through the real scroll pipeline. |
 | `key.press` | `surface`, `key`, optional `modifiers` | Deliver key down/up, preserving native defaults. |
 | `text.commit` | `surface`, `text` | Commit text through the supported native text-input path. |
 | `service.emit` | `channel`, `value` | Apply a typed fixture update and enqueue its notification. |
 | `assert` | Target/check or service-call check | Evaluate a defined predicate; never arbitrary JS. |
 | `capture` | `captureId`; optional `requiredFrameTimeUs` | Save coherent pixels, tree, and metadata. |
 
-For explicit position, use `{"x": 120, "y": 40}` in logical surface pixels. The target form and position form are mutually exclusive. Supported pointer buttons are `primary`, `secondary`, and `middle`; reject other values until explicitly implemented.
+For explicit position, use `{"x": 120, "y": 40}` in logical surface pixels. The target form and position form are mutually exclusive. Supported pointer buttons are `primary`, `secondary`, and `middle`; reject other values until explicitly implemented. `pointer.down` and `pointer.up` require a button; `pointer.move` and `pointer.cancel` reject one.
 
-Version 1 key names are an explicit tested enum: `Tab`, `Enter`, `Escape`, `Space`, arrow keys, `Home`, `End`, `Backspace`, and `Delete`. Modifiers are an array from `Shift`, `Control`, `Alt`, and `Meta`. Reject unsupported key mappings.
+Pointer operations accept an optional pointer object: `{"id":"7","kind":"pen","primary":true}`. The default is primary mouse id "0". IDs are canonical decimal u64 strings; kinds are mouse, touch, pen, or unknown. Use the same ID across a gesture. Each down/up/cancel step dispatches one native action and settles; move and click retain their existing behavior. Explicit positions allow captured gestures to continue outside the control. No operation advances virtual time implicitly.
+
+Wheel accepts the same mutually exclusive location forms as pointer operations, including the resolved-target visibility and enabled checks. `delta` is `{"x": 0, "y": 3, "unit": "lines"}`: `x` and `y` are signed CSS pixels when `unit` is `pixels` and line counts when `unit` is `lines`, with positive `y` scrolling down. `phase` is `discrete`, `started`, `moved`, `ended`, or `momentum` and defaults to `discrete`; the named phases carry native gesture semantics, so a wheel-gesture scenario sends a `started`/`moved`/`ended` sequence explicitly. Wheel uses the primary mouse identity and does not advance virtual time implicitly.
+
+~~~json
+{ "id": "scroll", "op": "wheel", "target": { "surface": "main", "testId": "list" }, "delta": { "x": 0, "y": 3, "unit": "lines" } }
+~~~
+
+Version 1 key names are an explicit tested enum: `Tab`, `Enter`, `Escape`, `Space`, arrow keys, `Home`, `End`, `PageUp`, `PageDown`, `Backspace`, and `Delete`. Modifiers are an array from `Shift`, `Control`, `Alt`, and `Meta`. Reject unsupported key mappings. `key.press` delivers the native key events exactly; delivering a navigation key such as `PageDown` does not invent window scrolling defaults the runtime lacks, so scroll scenarios use `wheel`. Use `"key": {"character": "é"}` for a character-producing key. The text must be nonempty and may contain multiple codepoints; it is delivered as native `Key::Character` without inventing a physical key or an IME commit. Named `"Space"` and character `{"character":" "}` retain their distinct native categories.
 
 Text commit and physical key input are different operations. Do not simulate Unicode typing by invoking a change handler or assigning a field value. The native editing adapter must use the actual editing model and its supported `ViewHost::set_value` integration for controlled updates, while input scenarios exercise the text-input path. [Z26]
 
@@ -693,7 +705,6 @@ Text commit and physical key input are different operations. Do not simulate Uni
 Add these only with capability tests:
 
 - `pointer.drag`: start/end target or position, duration, and sample count; use deterministic substep timestamps and native capture behavior.
-- `wheel`: explicit pixel or line units and direction.
 - `ime.preedit`, `ime.commit`, `ime.cancel`: composition routing and selection tests.
 - `surface.resize`, `surface.scale`: update both headless surface and runtime consistently.
 - `wait.until`: typed predicate plus explicit maximum virtual advance and real timeout.
@@ -1022,6 +1033,7 @@ selectors.semantic
 input.pointer
 input.keyboard
 input.text
+input.wheel
 input.ime
 assets.native-readiness
 capture.transparent

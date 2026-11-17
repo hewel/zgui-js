@@ -205,7 +205,7 @@ fn capabilities(pixels: bool) -> Value {
     json!({
         "pixels":pixels, "virtual-time":true, "services.fixtures":true,
         "selectors.test-id":true, "selectors.semantic":true, "tree.inspect":true,
-        "input.pointer":true, "input.keyboard":true, "input.text":true, "input.ime":false,
+        "input.pointer":true, "input.keyboard":true, "input.text":true, "input.wheel":true, "input.ime":false,
         "assets.native-readiness":true, "capture.transparent":false, "capture.sequence":false,
         "surface.resize":true, "surface.scale":true, "surface.recreate":true, "surface.multiple":false,
         "lifecycle.reload":false, "source.node-location":false
@@ -214,6 +214,6 @@ fn capabilities(pixels: bool) -> Value {
 
 const RUN_CAPABILITIES: &[&str] = &[
     "pixels", "selectors.test-id", "selectors.semantic", "tree.inspect",
-    "input.pointer", "input.keyboard", "input.text",
+    "input.pointer", "input.keyboard", "input.text", "input.wheel",
     "virtual-time", "services.fixtures", "assets.native-readiness", "surface.resize", "surface.scale", "surface.recreate",
 ];

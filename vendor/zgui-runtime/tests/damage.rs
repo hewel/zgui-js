@@ -76,6 +76,7 @@ struct Drawn {
     sprites: Vec<Sprite>,
     /// Every glyph sprite's box, in whole device pixels: the pixels the glyph can put ink on.
     glyph_ink: Vec<Rect<i32, Device>>,
+    glyph_greys: Vec<u8>,
 }
 
 /// One glyph in a frame's display list.
@@ -146,6 +147,8 @@ impl Renderer for Recorder {
                         .floor() as i32,
                 })
                 .collect(),
+            glyph_greys: scene.primitives.mono_sprites.iter()
+                .map(|sprite| (sprite.color[0] * 255.0).round() as u8).collect(),
             glyph_ink: scene
                 .primitives
                 .mono_sprites
@@ -1070,4 +1073,177 @@ fn a_subtree_that_left_the_document_damages_the_pixels_it_covered() {
         "the frames that took the panel out were drawn against {bounds:?}, which leaves part of \
          the {panel:?} it covered on the screen"
     );
+}
+
+fn raw_text_repaints_after_colour_change(css: &'static str) {
+    let grey = RwSignal::new(16_u8);
+    let log = Log::default();
+    let mut app = mount(css, &log, move |cx: &mut BuildCx<'_>| {
+        Box::new(zgui_elements::column()
+            .class("root")
+            .custom_property(zgui_interned::CustomPropertyName::new("ink"), move || {
+                let level = grey.get();
+                Some(format!("rgb({level}, {level}, {level})"))
+            })
+            .child(zgui_elements::column().class("raw").child("a").child("bc"))
+            .into_view().build(cx))
+    });
+    app.settle(8);
+    assert!(log.borrow().iter().any(|frame| frame.glyph_greys == [16; 3]),
+        "initial frames must paint three glyphs in the initial colour: {:?}", log.borrow());
+    log.borrow_mut().clear();
+    grey.set(240);
+    app.settle(8);
+    for _ in 0..18 {
+        app.advance(std::time::Duration::from_millis(17));
+        app.settle(8);
+    }
+    assert!(log.borrow().iter().any(|frame| frame.glyph_greys == [240; 3]),
+        "the completed colour transition must repaint every glyph without forced damage: {:?}", log.borrow());
+    assert!(log.borrow().iter().any(|frame| frame.glyph_greys.iter().any(|grey| (17..240).contains(grey))),
+        "intermediate transition colours must reach the glyphs");
+    app.shut_down();
+}
+
+#[test]
+fn raw_flex_text_repaints_when_its_inherited_colour_transitions() {
+    raw_text_repaints_after_colour_change(
+        ".root { display: block; width: 400px; height: 300px; background-color: white }
+         .raw { display: flex; flex-direction: row; width: 200px; height: 100px;
+                color: var(--ink); transition: color 150ms linear }",
+    );
+}
+
+#[test]
+fn raw_grid_text_repaints_when_its_inherited_colour_transitions() {
+    raw_text_repaints_after_colour_change(
+        ".root { display: block; width: 400px; height: 300px; background-color: white }
+         .raw { display: grid; grid-template-columns: 50px 100px; width: 200px; height: 100px;
+                color: var(--ink); transition: color 150ms linear }",
+    );
+}
+
+const PORTAL_DAMAGE_CSS: &str = "root { display: block; width: 400px; height: 300px; padding: 100px }
+    .portal-shell { display: contents }
+    .floating-swatch { display: block; position: absolute; left: 250px; top: 100px;
+        width: 30px; height: 20px; background-color: #101010 }
+    .floating-text { display: block; position: absolute; left: 250px; top: 100px;
+        width: 40px; height: 20px }";
+
+#[test]
+fn portal_removal_damages_the_pixels_it_covered() {
+    let shown = RwSignal::new(true);
+    let log = Log::default();
+    let mut app = mount(PORTAL_DAMAGE_CSS, &log, move |cx| {
+        Box::new(zgui_elements::column().child(zgui_view::Dynamic::new(move || {
+            if shown.get() {
+                zgui_view::AnyView::new(zgui_view::Portal::new(|| {
+                    zgui_view::AnyView::new(zgui_elements::column().class("portal-shell")
+                        .child(zgui_elements::column().class("floating-swatch")))
+                }).layer(zgui_view::OverlayLayer::Modal))
+            } else {
+                zgui_view::AnyView::new(zgui_elements::column())
+            }
+        })).into_view().build(cx))
+    });
+    app.settle(8);
+    assert_mounted_fully(&log);
+    let panel = box_of_width(&app.app().windows()[0], 30.0);
+    log.borrow_mut().clear();
+    shown.set(false);
+    app.settle(8);
+    let frames = log.borrow().clone();
+    assert!(!frames.is_empty(), "removing a portal drew no frame");
+    let (bounds, area) = covered(&frames);
+    let bounds = bounds.expect("removing a portal damaged nothing");
+    assert!(contains(bounds, panel), "portal removal damaged {bounds:?}, missing its old pixels at {panel:?}");
+    assert!(area <= SURFACE_AREA / 4, "portal removal damaged {area} pixels of {SURFACE_AREA}");
+}
+
+#[test]
+fn portal_text_updates_damage_the_changed_glyphs() {
+    let count = RwSignal::new(0);
+    let log = Log::default();
+    let mut app = mount(PORTAL_DAMAGE_CSS, &log, move |cx| {
+        Box::new(zgui_elements::column().child(zgui_view::Portal::new(move || {
+            zgui_view::AnyView::new(zgui_elements::column().class("portal-shell")
+                .child(zgui_elements::text().class("floating-text").child(move || count.get().to_string())))
+        }).layer(zgui_view::OverlayLayer::Modal)).into_view().build(cx))
+    });
+    app.settle(8);
+    assert_mounted_fully(&log);
+    let line = box_of_width(&app.app().windows()[0], 40.0);
+    let before = glyph_ink_in(&log.borrow(), line);
+    let before_tiles: Vec<_> = log.borrow().iter().flat_map(|frame| frame.sprites.iter().map(|sprite| sprite.tile)).collect();
+    assert!(!before_tiles.is_empty(), "initial portal text drew no glyph");
+    log.borrow_mut().clear();
+    count.set(7);
+    app.settle(8);
+    let frames = log.borrow().clone();
+    assert!(!frames.is_empty(), "updating portal text drew no frame");
+    let (bounds, area) = covered(&frames);
+    let after = glyph_ink_in(&frames, line);
+    let ink = before.into_iter().chain(after).reduce(|held, glyph| held.union(glyph)).expect("portal text has ink");
+    let bounds = bounds.expect("updating portal text damaged nothing");
+    assert!(contains(bounds, ink), "portal text damaged {bounds:?}, missing its glyphs at {ink:?}");
+    assert!(area <= SURFACE_AREA / 20, "portal text damaged {area} pixels of {SURFACE_AREA}");
+    let after_tiles: Vec<_> = frames.iter().flat_map(|frame| frame.sprites.iter().map(|sprite| sprite.tile)).collect();
+    assert!(!after_tiles.is_empty(), "updated portal text drew no glyph");
+    assert!(after_tiles.iter().any(|tile| !before_tiles.contains(tile)), "the changed digit replayed the old portal glyph");
+}
+
+fn raw_portal_detach_damage(park: bool) {
+    let shown = RwSignal::new(true);
+    let log = Log::default();
+    let mut app = mount(PORTAL_DAMAGE_CSS, &log, move |cx| {
+        let state = zgui_elements::column().into_view().build(cx);
+        let source = zgui_view::Anchor::first_node(&state).expect("source node");
+        let dom = cx.dom_handle();
+        dom.set_style_text(source, Some("width: 120px; height: 80px; overflow: hidden; transform: translate(10px, 10px); background-color: #f0f0f0"));
+        let marker = dom.create_marker();
+        let parking = dom.create_element(zgui_view::ElementName::new("box"));
+        let content = dom.create_element(zgui_view::ElementName::new("box"));
+        dom.set_style_text(content, Some("display: contents"));
+        let panel = dom.create_element(zgui_view::ElementName::new("box"));
+        dom.set_style_text(panel, Some("display: block; position: absolute; left: 250px; top: 100px; width: 30px; height: 20px; background-color: #101010"));
+        dom.insert(content, panel, None);
+        dom.insert(parking, content, None);
+        dom.insert(source, marker, None);
+        let band = dom.overlay_root(content, zgui_view::OverlayLayer::Modal);
+        let effect = zgui_reactive::RenderEffect::new(move |_| {
+            if shown.get() {
+                dom.insert(band, content, None);
+            } else {
+                dom.detach(marker);
+                if park { dom.insert(parking, content, None); }
+                dom.detach(content);
+                dom.insert(source, parking, None);
+                dom.detach(parking);
+            }
+        });
+        zgui_reactive::on_cleanup_local(move || drop(effect));
+        Box::new(state)
+    });
+    app.settle(8);
+    assert_mounted_fully(&log);
+    let panel = box_of_width(&app.app().windows()[0], 30.0);
+    log.borrow_mut().clear();
+    shown.set(false);
+    app.settle(8);
+    let frames = log.borrow().clone();
+    assert!(!frames.is_empty(), "raw portal detach drew no frame");
+    let (bounds, area) = covered(&frames);
+    let bounds = bounds.expect("raw portal detach damaged nothing");
+    assert!(contains(bounds, panel), "park={park}: damaged {bounds:?}, missing the removed portal at {panel:?}");
+    assert!(area <= SURFACE_AREA / 4, "park={park}: removal damaged {area} pixels of {SURFACE_AREA}");
+}
+
+#[test]
+fn raw_portal_direct_detach_damages_old_pixels() {
+    raw_portal_detach_damage(false);
+}
+
+#[test]
+fn raw_portal_park_then_detach_damages_old_pixels() {
+    raw_portal_detach_damage(true);
 }

@@ -36,22 +36,28 @@ pub struct Dispatched {
 pub struct HostSink<'a> {
     /// Where the commands go.
     host: &'a RuntimeHost,
+    pointer: Option<zgui_vocab::PointerId>,
 }
 
 impl<'a> HostSink<'a> {
     /// A sink that appends to `host`'s command queue.
     pub fn new(host: &'a RuntimeHost) -> Self {
-        Self { host }
+        Self { host, pointer: None }
+    }
+
+    pub(crate) fn with_pointer(mut self, pointer: Option<zgui_vocab::PointerId>) -> Self {
+        self.pointer = pointer;
+        self
     }
 }
 
 impl EventSink for HostSink<'_> {
     fn capture_pointer(&mut self, node: NodeId) {
-        self.host.issue(Command::CapturePointer(node));
+        self.host.issue_scoped(Command::CapturePointer(node), self.pointer);
     }
 
     fn release_pointer(&mut self, node: NodeId) {
-        self.host.issue(Command::ReleasePointer(node));
+        self.host.issue_scoped(Command::ReleasePointer(node), self.pointer);
     }
 
     fn request_focus(&mut self, node: NodeId) {

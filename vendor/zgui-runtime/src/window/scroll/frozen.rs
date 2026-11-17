@@ -30,8 +30,10 @@ impl Window {
         self.scroll_frozen = frozen;
         // A window frozen in the middle of a glide would keep arriving where the wheel had asked
         // for, one frame at a time, with a modal surface already over it.
-        if let Some(container) = self.frozen_container() {
-            self.scroll.borrow_mut().halt(container);
+        if let Some(container) = zgui_view_dom::id::to_document(self.dom.root_node()) {
+            let mut scroller = self.scroll.borrow_mut();
+            if frozen { scroller.halt(container); }
+            scroller.set_elastic_paused(container, frozen);
         }
     }
 

@@ -1,0 +1,295 @@
+//! Running the restyle: one traversal, what it produced, and what that costs the frame.
+//!
+//! | Module | Contents |
+//! |---|---|
+//! | [`snapshots`] | the pre-mutation records the traversal compares against |
+//! | [`context`] | everything the workers share |
+//! | [`traversal`] | what each worker does with each element, and the set it collects |
+//! | [`animations`] | the running animations, the tick that advances them, and what it sampled |
+
+pub mod animations;
+pub mod context;
+mod memo;
+mod recalc;
+pub(crate) mod share;
+pub mod snapshots;
+pub mod traversal;
+
+use std::time::{Duration, Instant};
+
+use rayon::ThreadPool;
+use style::animation::DocumentAnimationSet;
+use style::selector_parser::SnapshotMap;
+use style::shared_lock::SharedRwLock;
+use style::stylist::Stylist;
+use style::traversal::DomTraversal;
+use style::traversal_flags::TraversalFlags;
+use zgui_dom::{Document, Node};
+
+use crate::driver::animations::{AnimationTime, fill};
+use crate::driver::traversal::{RecalcStyle, Restyled};
+use crate::engine::guards;
+
+/// What one restyle did.
+///
+/// Both counts of elements are here because they mean different things and only one of them is
+/// ever what a budget is written against: an element being styled for the *first* time is not
+/// "restyled", so the initial pass over a fresh document restyles none of it however much work it
+/// did.
+#[derive(Clone, Default, Debug)]
+pub struct Restyle {
+    /// Whether the traversal ran at all.
+    pub traversed: bool,
+    /// Elements the traversal styled, first-time cascades included.
+    pub styled: usize,
+    /// Elements that already had a style and were styled again.
+    pub restyled: usize,
+    /// Elements that ran selector matching, as opposed to only re-running the cascade.
+    ///
+    /// This is the number an "it restyled one element and looked at almost nothing" budget is
+    /// about: a recascade is cheap and a match is not.
+    pub matched: usize,
+    /// Elements that came out with a non-empty obligation.
+    pub damaged: usize,
+    /// How many distinct workers ran at least one element.
+    pub workers: usize,
+    /// How many ordinary traversals ran, which is two when the root font metrics moved under it.
+    pub passes: u8,
+    /// Whether the animation-only traversal ran ahead of them.
+    ///
+    /// True exactly on the frames where some element's animation could not be composed as a
+    /// repaint and asked for its cascade to be run again. It is reported rather than inferred
+    /// because an animation-only traversal that silently stops running is invisible from
+    /// everywhere else: the values keep advancing, the counters keep counting, and the elements
+    /// are simply never restyled.
+    pub animation_pass: bool,
+    /// Elements the pre-mutation records described.
+    pub snapshots: usize,
+    /// What each styled element's data said, in the order the workers collected it.
+    pub records: Vec<Restyled>,
+    /// Time spent inside the style engine.
+    pub engine_time: Duration,
+    /// The elements whose running or filling animations took new keyframe values, because a
+    /// custom property their `@keyframes` read moved.
+    ///
+    /// The animation tick reads the new values. A loop with nothing else to run parks before it
+    /// does, so whoever drives the frames asks for one more.
+    pub refreshed: Vec<zgui_dom::NodeIndex>,
+}
+
+impl Restyle {
+    /// The elements this restyle styled, by slot number, in ascending order.
+    ///
+    /// Sorted, because the order the workers collected them in is whatever the pool decided, and a
+    /// test that asserts *which* elements were restyled is asserting a set.
+    pub fn styled_nodes(&self) -> Vec<zgui_dom::NodeIndex> {
+        let mut nodes: Vec<_> = self.records.iter().map(|record| record.index).collect();
+        nodes.sort_unstable();
+        nodes.dedup();
+        nodes
+    }
+
+    /// The elements that already had a style and were styled again, by slot number, ascending.
+    pub fn restyled_nodes(&self) -> Vec<zgui_dom::NodeIndex> {
+        let mut nodes: Vec<_> = self
+            .records
+            .iter()
+            .filter(|record| !record.initial)
+            .map(|record| record.index)
+            .collect();
+        nodes.sort_unstable();
+        nodes.dedup();
+        nodes
+    }
+}
+
+/// What one traversal is run over, other than the rule set it matches against.
+///
+/// A frame runs the traversal more than once — the animation-only pass, then the ordinary one,
+/// then the ordinary one again if the root font metrics moved — and every one of them is over the
+/// same document, the same pre-mutation records, the same workers and the same instant. Naming
+/// them once is what keeps the passes from differing in a way no reader would notice.
+pub(crate) struct Pass<'a> {
+    /// The document being styled.
+    pub(crate) document: &'a Document,
+    /// The pre-mutation records the traversal compares against.
+    pub(crate) snapshots: &'a SnapshotMap,
+    /// The workers it may run across, if any.
+    pub(crate) pool: Option<&'a ThreadPool>,
+    /// The animations the document is running.
+    pub(crate) animations: DocumentAnimationSet,
+    /// The instant animation-derived values are resolved at.
+    pub(crate) now: AnimationTime,
+    /// What each rule chain reads and declares, as far as earlier traversals found out.
+    pub(crate) refs: &'a traversal::RefsCache,
+    /// The computed styles earlier cascades produced, by rule chain.
+    pub(crate) shared: &'a share::SharedStyles,
+    /// The elements whose animations crossed a lifecycle edge since their last cascade, or `None`
+    /// when every animation tick cascades.
+    pub(crate) settling: Option<&'a rustc_hash::FxHashSet<zgui_dom::NodeIndex>>,
+}
+
+/// What one traversal did.
+pub(crate) struct PassOutcome {
+    /// What it styled.
+    pub(crate) records: Vec<Restyled>,
+    /// The elements whose keyframes it computed again.
+    pub(crate) refreshed: Vec<zgui_dom::NodeIndex>,
+    /// How many distinct workers ran.
+    pub(crate) workers: usize,
+    /// Whether it ran at all.
+    pub(crate) traversed: bool,
+    /// Time spent inside the style engine.
+    pub(crate) time: Duration,
+}
+
+impl PassOutcome {
+    /// A traversal that did nothing, which took `time` to decide.
+    fn nothing(time: Duration) -> Self {
+        Self {
+            records: Vec::new(),
+            refreshed: Vec::new(),
+            workers: 0,
+            traversed: false,
+            time,
+        }
+    }
+}
+
+/// Runs one traversal over the document and reports what it styled.
+///
+/// Returns nothing at all when the engine decides there is nothing to traverse, which is the
+/// common case for a frame in which no style input changed.
+///
+/// `flags` chooses the traversal. [`TraversalFlags::empty`] is the ordinary one;
+/// [`TraversalFlags::AnimationOnly`] is the pass that replaces animation and transition
+/// declarations, descends only where one of those is pending, and must run before the ordinary one
+/// in any frame that has any pending — the ordinary traversal refuses to process an animation hint
+/// and asserts when it finds one.
+pub(crate) fn run_pass(
+    stylist: &mut Stylist,
+    lock: &SharedRwLock,
+    pass: Pass<'_>,
+    flags: TraversalFlags,
+) -> PassOutcome {
+    let Pass {
+        document,
+        snapshots,
+        pool,
+        animations,
+        now,
+        refs,
+        shared,
+        settling,
+    } = pass;
+    let Some(root) = document.root() else {
+        return PassOutcome::nothing(Duration::ZERO);
+    };
+    let start = Instant::now();
+
+    // The rule set is flushed first, and what it reports is the set of elements the sheet changes
+    // themselves invalidate — which is how a sheet that was added, replaced or re-matched against
+    // a new device reaches a document in which nothing else changed.
+    guards::with_guards(lock, |guards| {
+        stylist.flush(guards).process_style(root, Some(snapshots));
+    });
+
+    let read = lock.read();
+    let table = animations.clone();
+    let context = context::build(
+        stylist,
+        guards::guards(&read),
+        snapshots,
+        animations,
+        now,
+        flags,
+    );
+    let from = if flags.for_animation_only() {
+        root
+    } else {
+        traversal_start(document, root)
+    };
+    let token = <RecalcStyle<'_> as DomTraversal<Node<'_>>>::pre_traverse(from, &context);
+    if !token.should_traverse() {
+        drop(context);
+        return PassOutcome::nothing(start.elapsed());
+    }
+
+    // The traversal styles each element against the table it drops a finished animation from,
+    // so the animations that fill forwards are held running for its length.
+    let held = fill::hold(&table);
+    let traverser = RecalcStyle::new(context, refs, shared, settling);
+    // A worker that panics leaves per-element bookkeeping in a state no later traversal can
+    // interpret, and the worker that panicked holds nothing anyone can inspect, so the document is
+    // poisoned on the way out and the panic keeps going.
+    document
+        .guarded(|| style::driver::traverse_dom(&traverser, token, pool))
+        .expect("the document is not poisoned");
+    let (records, refreshed, workers) = traverser.finish();
+    held.release(&table, now.seconds());
+    drop(read);
+    PassOutcome {
+        records,
+        refreshed,
+        workers,
+        traversed: true,
+        time: start.elapsed(),
+    }
+}
+
+/// The element the traversal starts at: the deepest one that every obligation lies at or below.
+///
+/// The engine's own traversal starts at the root and, at every element it enters, asks each
+/// child whether it needs a visit — which is a probe of every row of a list for a class toggled
+/// on one cell of one of them. The document's dirty-child records already say which child that
+/// is, so the start descends while an element owes nothing itself, carries no snapshot and no
+/// hint of the engine's, and has exactly one child with style work under it. An element with a
+/// snapshot stops the descent above it, because the invalidation the snapshot runs can reach the
+/// element's later siblings, and those are only visited from their parent.
+fn traversal_start<'doc>(document: &'doc Document, root: Node<'doc>) -> Node<'doc> {
+    use style::dom::TElement;
+
+    let store = document.store();
+    let mut current = root;
+    loop {
+        let index = current.index();
+        let record = store.core(index);
+        let (own, _) = record.dirty().get();
+        if own.intersects(zgui_dom::stylo::flags::STYLE_WORK)
+            || current.has_snapshot()
+            || current.has_custom_map_changed()
+            || current
+                .borrow_data()
+                .is_none_or(|data| !data.has_styles() || !data.hint.is_empty())
+        {
+            return current;
+        }
+        let mut only = None;
+        for child in record.dirty_children().iter(store, index) {
+            let child_record = store.core(child);
+            let (child_own, child_subtree) = child_record.dirty().get();
+            if !(child_own | child_subtree).intersects(zgui_dom::stylo::flags::STYLE_WORK) {
+                continue;
+            }
+            if child_record.kind() != zgui_dom::NodeKind::Element || only.is_some() {
+                return current;
+            }
+            only = Some(child);
+        }
+        let Some(child) = only else {
+            return current;
+        };
+        let next = document.node(child);
+        if next.has_snapshot() {
+            return current;
+        }
+        current = next;
+    }
+}
+
+/// Whether anything at or below the root owes the style engine work.
+pub(crate) fn document_owes_restyle(document: &Document) -> bool {
+    document
+        .root()
+        .is_some_and(|root| root.has_style_work_below())
+}

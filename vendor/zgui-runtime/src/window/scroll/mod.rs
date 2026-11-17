@@ -27,7 +27,7 @@ pub(crate) mod shift;
 use zgui_dom::NodeKey;
 use zgui_geom::{CssPx, Point, Rect, Scale};
 use zgui_scroll::{Align, Behavior, Stretch};
-use zgui_vocab::{EventKind, Payload, ScrollDelta, ScrollPhase, Timestamp, WheelEvent};
+use zgui_vocab::{EventKind, Payload, ScrollDelta, ScrollPhase, Timestamp};
 
 use crate::window::Window;
 
@@ -70,8 +70,16 @@ impl Window {
         phase: ScrollPhase,
         at: Timestamp,
     ) {
+        let frozen_gesture = self.scroll_frozen
+            && matches!(phase, ScrollPhase::Moved | ScrollPhase::Momentum | ScrollPhase::Ended)
+            && self.scroll.borrow().latched().is_some_and(|node| self.is_frozen(node));
+        if frozen_gesture {
+            self.scroll_without_default(delta, phase, at, true);
+            return;
+        }
         let chain = self.scroll_chain(container);
         let Some(&innermost) = chain.first() else {
+            self.scroll_without_default(delta, phase, at, true);
             return;
         };
         let moved_by = self.device_delta(innermost, delta);
@@ -131,12 +139,13 @@ impl Window {
     /// moving its container, because the pointer may leave a container while a gesture moves it.
     pub(crate) fn scroll_without_default(
         &mut self,
-        wheel: &WheelEvent,
+        delta: ScrollDelta,
+        phase: ScrollPhase,
         at: Timestamp,
         allowed: bool,
     ) {
         let latched = self.scroll.borrow().latched();
-        match wheel.phase {
+        match phase {
             ScrollPhase::Ended if !self.scroll.borrow_mut().lift().is_empty() => {
                 self.request_scroll_frame();
             }
@@ -145,13 +154,14 @@ impl Window {
                 let Some(container) = latched else {
                     return;
                 };
-                let moved_by = self.device_delta(container, wheel.delta);
-                let stretch = self.stretch_for(wheel.phase);
+                if self.is_frozen(container) { return; }
+                let moved_by = self.device_delta(container, delta);
+                let stretch = self.stretch_for(phase);
                 let at = at.since_origin();
                 let touched = {
                     let layout = self.layout.borrow();
                     let mut scroller = self.scroll.borrow_mut();
-                    if wheel.phase == ScrollPhase::Momentum {
+                    if phase == ScrollPhase::Momentum {
                         scroller.coast_by(&layout, &[container], moved_by, at, stretch)
                     } else {
                         scroller.drag_by(&layout, &[container], moved_by, at, stretch)
@@ -382,15 +392,26 @@ impl Window {
         // The two clocks are reconciled here because this is the one place that holds both.
         self.long_press_due = self.gestures.next_deadline(now).map(|left| wall + left);
         for gesture in read {
-            let zgui_input::Gesture::LongPress { at, .. } = gesture else {
+            let zgui_input::Gesture::LongPress { pointer, at } = gesture else {
                 continue;
             };
             let Some(node) = self.node_at(at) else {
                 continue;
             };
-            self.synthesize(
-                zgui_view_dom::id::to_view(node),
-                zgui_vocab::EventKind::ContextMenu,
+            // Consume the active touch press so releasing after long-press does not emit a click.
+            self.router.forget_press(pointer);
+            let event = zgui_vocab::PointerEvent {
+                id: pointer,
+                kind: zgui_vocab::PointerKind::Touch,
+                primary: true,
+                position: at,
+                button: None,
+                pressure: None,
+            };
+            self.dispatch_synthetic(
+                node,
+                EventKind::ContextMenu,
+                Payload::Pointer(event),
                 now,
             );
         }

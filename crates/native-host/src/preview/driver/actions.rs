@@ -2,14 +2,15 @@ use serde_json::{Value,json};
 use zgui::{geom::{Css,CssPx,Device,DevicePx,Point}, platform::{PlatformCx,SurfaceEvent}, view::NodeId,
     vocab::{ImeEvent,KeyEvent,KeyState,Modifiers,NamedKey,PhysicalKey,PointerAction,PointerEvent}};
 use super::{Driver,Fault,OwnedFrame};
-use super::super::{Error,scenario::{Check,Key,Modifier,PointerButton,PointerLocation,Target},selectors};
+use super::super::{Error,scenario::{Check,Key,Modifier,PointerButton,PointerDevice,PointerLocation,
+    PointerOperation,Target,WheelDelta,WheelPhase,WheelUnit,PointerKind as InputPointerKind},selectors};
 
 type DevicePoint = Point<DevicePx,Device>;
 
 impl Driver {
-    pub fn pointer(&mut self, location:&PointerLocation, button:Option<PointerButton>) -> Result<Value,Fault> {
+    fn input_location(&mut self, location:&PointerLocation) -> Result<(Point<CssPx,Css>,Value),Fault> {
         self.settle(true)?;
-        let (position,mut trace) = match location {
+        let (position,trace) = match location {
             PointerLocation::Position{x,y,..} => {
                 let position:Point<CssPx,Css>=Point::new(CssPx(*x as f32),CssPx(*y as f32));
                 if !position.x.0.is_finite() || !position.y.0.is_finite() {
@@ -42,41 +43,97 @@ impl Driver {
             }
         };
         if !self.frame_current() { return Err(stale().into()); }
+        Ok((position,trace))
+    }
+
+    pub fn pointer(&mut self, location:&PointerLocation, pointer:&PointerDevice, operation:PointerOperation) -> Result<Value,Fault> {
+        let (position,mut trace)=self.input_location(location)?;
         let surface=self.window()?.surface().id();
         let timestamp=self.harness.platform().clock().timestamp();
+        let (actions,button):(&[PointerAction],Option<PointerButton>)=match operation {
+            PointerOperation::Move=>( &[PointerAction::Moved], None ),
+            PointerOperation::Down(button)=>( &[PointerAction::Pressed], Some(button) ),
+            PointerOperation::Up(button)=>( &[PointerAction::Released], Some(button) ),
+            PointerOperation::Cancel=>( &[PointerAction::Cancelled], None ),
+            PointerOperation::Click(button)=>( &[PointerAction::Moved,PointerAction::Pressed,PointerAction::Released], Some(button) ),
+        };
         let native_button=button.map(|button|match button {
             PointerButton::Primary=>zgui::vocab::PointerButton::Primary,
             PointerButton::Secondary=>zgui::vocab::PointerButton::Secondary,
             PointerButton::Middle=>zgui::vocab::PointerButton::Middle,
         });
-        let event=PointerEvent::mouse(position);
-        let event=if let Some(button)=native_button { event.with_button(button) } else { event };
-        let actions:&[PointerAction]=if button.is_some() { &[PointerAction::Moved,PointerAction::Pressed,PointerAction::Released] } else { &[PointerAction::Moved] };
+        let mut event=PointerEvent::mouse(position);
+        if let Some(button)=native_button { event=event.with_button(button); }
+        event.id=zgui::vocab::PointerId::new(pointer.id);
+        event.kind=match pointer.kind {
+            InputPointerKind::Mouse=>zgui::vocab::PointerKind::Mouse,
+            InputPointerKind::Touch=>zgui::vocab::PointerKind::Touch,
+            InputPointerKind::Pen=>zgui::vocab::PointerKind::Pen,
+            InputPointerKind::Unknown=>zgui::vocab::PointerKind::Unknown,
+        };
+        event.primary=pointer.primary;
         self.harness.deliver_all(surface,actions.iter().map(|action|SurfaceEvent::Pointer {
             action:*action,event:event.clone(),modifiers:Modifiers::NONE,timestamp,
         }));
         self.harness.pump();
         self.check()?;
         self.settle(false)?;
-        trace["burst"]=if button.is_some() { json!(["pointer.move","pointer.press","pointer.release"]) } else { json!(["pointer.move"]) };
+        trace["burst"]=json!(actions.iter().map(|action|match action {
+            PointerAction::Moved=>"pointer.move",
+            PointerAction::Pressed=>"pointer.press",
+            PointerAction::Released=>"pointer.release",
+            PointerAction::Cancelled=>"pointer.cancel",
+            _=>unreachable!("scenario dispatch constructs only the four phase actions"),
+        }).collect::<Vec<_>>());
+        trace["pointer"]=json!(pointer);
         trace["button"]=json!(button);
         trace["timeUs"]=json!(timestamp.since_origin().as_micros());
         Ok(trace)
     }
 
-    pub fn key(&mut self,key:Key,modifiers:&[Modifier]) -> Result<Value,Fault> {
+    pub fn wheel(&mut self, location:&PointerLocation, delta:&WheelDelta, phase:WheelPhase) -> Result<Value,Fault> {
+        let (position,mut trace)=self.input_location(location)?;
+        let native_delta=match delta.unit {
+            WheelUnit::Pixels=>zgui::vocab::ScrollDelta::Pixels(zgui::geom::Size::new(CssPx(delta.x as f32),CssPx(delta.y as f32))),
+            WheelUnit::Lines=>zgui::vocab::ScrollDelta::Lines{x:delta.x as f32,y:delta.y as f32},
+        };
+        let native_phase=match phase {
+            WheelPhase::Discrete=>zgui::vocab::ScrollPhase::Discrete,
+            WheelPhase::Started=>zgui::vocab::ScrollPhase::Started,
+            WheelPhase::Moved=>zgui::vocab::ScrollPhase::Moved,
+            WheelPhase::Ended=>zgui::vocab::ScrollPhase::Ended,
+            WheelPhase::Momentum=>zgui::vocab::ScrollPhase::Momentum,
+        };
+        let surface=self.window()?.surface().id();
+        let timestamp=self.harness.platform().clock().timestamp();
+        self.harness.deliver_all(surface,[SurfaceEvent::Wheel {
+            event:zgui::vocab::WheelEvent{id:zgui::vocab::PointerId::MOUSE,kind:zgui::vocab::PointerKind::Mouse,position,delta:native_delta,phase:native_phase},
+            modifiers:Modifiers::NONE,timestamp,
+        }]);
+        self.harness.pump();
+        self.check()?;
+        self.settle(false)?;
+        trace["burst"]=json!(["native.wheel"]);
+        trace["delta"]=json!(delta);
+        trace["phase"]=json!(phase);
+        trace["timeUs"]=json!(timestamp.since_origin().as_micros());
+        Ok(trace)
+    }
+
+    pub fn key(&mut self,key:&Key,modifiers:&[Modifier]) -> Result<Value,Fault> {
         self.settle(true)?;
-        let named=match key {
-            Key::Tab=>NamedKey::Tab,Key::Enter=>NamedKey::Enter,Key::Escape=>NamedKey::Escape,Key::Space=>NamedKey::Space,
-            Key::ArrowUp=>NamedKey::ArrowUp,Key::ArrowDown=>NamedKey::ArrowDown,Key::ArrowLeft=>NamedKey::ArrowLeft,Key::ArrowRight=>NamedKey::ArrowRight,
-            Key::Home=>NamedKey::Home,Key::End=>NamedKey::End,Key::Backspace=>NamedKey::Backspace,Key::Delete=>NamedKey::Delete,
+        let named=|key|KeyEvent::named(key,PhysicalKey::Unidentified(0));
+        let event=match key {
+            Key::Tab=>named(NamedKey::Tab),Key::Enter=>named(NamedKey::Enter),Key::Escape=>named(NamedKey::Escape),Key::Space=>named(NamedKey::Space),
+            Key::ArrowUp=>named(NamedKey::ArrowUp),Key::ArrowDown=>named(NamedKey::ArrowDown),Key::ArrowLeft=>named(NamedKey::ArrowLeft),Key::ArrowRight=>named(NamedKey::ArrowRight),
+            Key::Home=>named(NamedKey::Home),Key::End=>named(NamedKey::End),Key::PageUp=>named(NamedKey::PageUp),Key::PageDown=>named(NamedKey::PageDown),
+            Key::Backspace=>named(NamedKey::Backspace),Key::Delete=>named(NamedKey::Delete),Key::Character(text)=>KeyEvent::character(text.as_str()),
         };
         let held=modifiers.iter().fold(Modifiers::NONE,|held,modifier|held|match modifier {
             Modifier::Shift=>Modifiers::SHIFT,Modifier::Control=>Modifiers::CONTROL,Modifier::Alt=>Modifiers::ALT,Modifier::Meta=>Modifiers::META,
         });
         let surface=self.window()?.surface().id();
         let timestamp=self.harness.platform().clock().timestamp();
-        let event=KeyEvent::named(named,PhysicalKey::Unidentified(0));
         self.harness.deliver_all(surface,[SurfaceEvent::ModifiersChanged(held),
             SurfaceEvent::Key{state:KeyState::Pressed,event:event.clone(),modifiers:held,timestamp},
             SurfaceEvent::Key{state:KeyState::Released,event,modifiers:held,timestamp},SurfaceEvent::ModifiersChanged(Modifiers::NONE)]);

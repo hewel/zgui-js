@@ -1,9 +1,9 @@
 //! Opaque node identity, synchronous topology, and turn-boundary reclamation.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 
-use zgui::view::{DocumentId, DomHandle, ElementName, NodeId};
+use zgui::view::{DocumentId, DomHandle, ElementName, NodeId, OverlayLayer};
 
 /// A borrowed reference to a node in one session generation and native document.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -55,8 +55,11 @@ pub enum BridgeError {
     TextParent,
     EditableParent,
     NotEditable,
+    NotField,
     NotImage,
     ImageParent,
+    NotVector,
+    VectorParent,
     WrongParent,
     InvalidAnchor,
     Cycle,
@@ -78,8 +81,11 @@ impl fmt::Display for BridgeError {
             Self::TextParent => f.write_str("text nodes cannot contain children"),
             Self::EditableParent => f.write_str("editable controls cannot contain reconciled children"),
             Self::NotEditable => f.write_str("value, defaultValue, and readOnly require a field or editor"),
+            Self::NotField => f.write_str("secure requires a field"),
             Self::NotImage => f.write_str("src requires an image element"),
             Self::ImageParent => f.write_str("image elements cannot contain reconciled children"),
+            Self::NotVector => f.write_str("d and viewBox require a vector element"),
+            Self::VectorParent => f.write_str("vector elements cannot contain reconciled children"),
             Self::WrongParent => f.write_str("node is not a child of the supplied parent"),
             Self::InvalidAnchor => f.write_str("insertion anchor is not a child of the supplied parent"),
             Self::Cycle => f.write_str("insertion would create a topology cycle"),
@@ -97,6 +103,13 @@ enum Kind {
     Editor,
     Text,
     Image,
+    Vector,
+    Portal,
+}
+
+struct PortalRecord {
+    marker: NodeId,
+    layer: OverlayLayer,
 }
 
 struct Record {
@@ -144,6 +157,8 @@ pub struct NodeRegistry {
     turn_active: bool,
     disposed: bool,
     metadata_revision: u64,
+    portals: BTreeMap<u64, PortalRecord>,
+    portal_parking: Option<NodeId>,
 }
 
 impl NodeRegistry {
@@ -175,12 +190,18 @@ impl NodeRegistry {
             turn_active: false,
             disposed: false,
             metadata_revision: 0,
+            portals: BTreeMap::new(),
+            portal_parking: None,
         }
     }
 
     /// Returns the boundary handle, which never exposes its native parent/siblings.
     pub fn root(&self) -> Handle {
         self.root
+    }
+
+    pub(crate) fn node_limit(&self) -> usize {
+        self.max_nodes
     }
 
     /// Copies at most `max_nodes` attached live records, including root token 0.
@@ -212,7 +233,9 @@ impl NodeRegistry {
                         Kind::Field => "field",
                         Kind::Editor => "editor",
                         Kind::Image => "image",
+                        Kind::Vector => "vector",
                         Kind::Text => "text",
+                        Kind::Portal => "portal",
                     },
                 });
                 if let Some(child) = record.first {
@@ -251,6 +274,10 @@ impl NodeRegistry {
 
     pub(crate) fn dom_handle(&self) -> DomHandle { self.dom.clone() }
 
+    pub(crate) fn stylesheet_prefix(&self) -> String {
+        format!("zgui-js-{}-{}-", self.root.session, self.root.generation)
+    }
+
     /// Editor-owned descendants retarget to the nearest public control wrapper.
     pub(crate) fn event_handle(&self, mut native: NodeId) -> Option<Handle> {
         if self.disposed || native.document() != self.root.document { return None; }
@@ -276,11 +303,31 @@ impl NodeRegistry {
             "field" => Kind::Field,
             "editor" => Kind::Editor,
             "image" => Kind::Image,
+            "vector" => Kind::Vector,
             "box" | "row" | "column" | "stack" | "text" | "label" | "scroll" | "control" => Kind::Element,
             _ => return Err(BridgeError::UnsupportedTag(tag.to_owned())),
         };
         let native = self.dom.create_element(ElementName::new(tag));
         Ok(self.register(native, kind))
+    }
+
+    pub fn create_portal(&mut self, layer: OverlayLayer) -> Result<Handle, BridgeError> {
+        self.check_allocation()?;
+        let parking = match self.portal_parking {
+            Some(node) => node,
+            None => {
+                let node = self.dom.create_element(ElementName::new("box"));
+                self.portal_parking = Some(node);
+                node
+            }
+        };
+        let native = self.dom.create_element(ElementName::new("box"));
+        self.dom.set_style_text(native, Some("display: contents"));
+        self.dom.insert(parking, native, None);
+        let marker = self.dom.create_marker();
+        let handle = self.register(native, Kind::Portal);
+        self.portals.insert(handle.token, PortalRecord { marker, layer });
+        Ok(handle)
     }
 
     pub fn create_text(&mut self, text: &str) -> Result<Handle, BridgeError> {
@@ -313,9 +360,19 @@ impl NodeRegistry {
         }
     }
 
+    pub(crate) fn require_field(&self, node: Handle) -> Result<(), BridgeError> {
+        if self.validate(node)?.kind == Kind::Field { Ok(()) }
+        else { Err(BridgeError::NotField) }
+    }
+
     pub(crate) fn require_image(&self, node: Handle) -> Result<(), BridgeError> {
         if self.validate(node)?.kind == Kind::Image { Ok(()) }
         else { Err(BridgeError::NotImage) }
+    }
+
+    pub(crate) fn require_vector(&self, node: Handle) -> Result<(), BridgeError> {
+        if self.validate(node)?.kind == Kind::Vector { Ok(()) }
+        else { Err(BridgeError::NotVector) }
     }
 
     pub fn insert(
@@ -326,7 +383,8 @@ impl NodeRegistry {
     ) -> Result<(), BridgeError> {
         self.check_turn()?;
         let parent_native = self.validate(parent)?.native;
-        let node_native = self.validate(node)?.native;
+        self.validate(node)?;
+        let node_native = self.placement_native(node.token);
         if node == self.root {
             return Err(BridgeError::RootBoundary);
         }
@@ -339,12 +397,15 @@ impl NodeRegistry {
         if self.records[&parent.token].kind == Kind::Image {
             return Err(BridgeError::ImageParent);
         }
+        if self.records[&parent.token].kind == Kind::Vector {
+            return Err(BridgeError::VectorParent);
+        }
         let anchor_native = if let Some(anchor) = anchor {
             let record = self.validate(anchor)?;
             if record.parent != Some(parent.token) {
                 return Err(BridgeError::InvalidAnchor);
             }
-            Some(record.native)
+            Some(self.placement_native(anchor.token))
         } else {
             None
         };
@@ -382,6 +443,7 @@ impl NodeRegistry {
         record.next = anchor.map(|handle| handle.token);
         record.pending_detach = false;
         debug_assert_eq!(self.dom.parent(node_native), Some(parent_native));
+        self.sync_portals(Some(node.token));
         Ok(())
     }
 
@@ -395,12 +457,14 @@ impl NodeRegistry {
         if record.parent != Some(parent.token) {
             return Err(BridgeError::WrongParent);
         }
-        self.dom.detach(record.native);
+        let native = self.placement_native(node.token);
+        self.dom.detach(native);
         self.unlink(node.token);
         let record = self.records.get_mut(&node.token).unwrap();
         record.pending_detach = true;
         self.pending.push(node.token);
-        debug_assert_eq!(self.dom.parent(record.native), None);
+        debug_assert_eq!(self.dom.parent(native), None);
+        self.sync_portals(None);
         Ok(())
     }
 
@@ -433,6 +497,7 @@ impl NodeRegistry {
             }
         }
         self.pending.clear();
+        self.retire_portal_parking();
         invalidated
     }
 
@@ -450,11 +515,12 @@ impl NodeRegistry {
         let root_native = self.records[&0].native;
         let mut cleanup = None;
         for (&token, record) in &self.records {
-            if token == 0 || !self.dom.is_live(record.native) {
+            let native = self.placement_native(token);
+            if token == 0 || !self.dom.is_live(native) {
                 continue;
             }
             if record.parent == Some(0) {
-                self.dom.detach(record.native);
+                self.dom.detach(native);
             } else if record.parent.is_none() && self.dom.is_live(root_native) {
                 // detach(never_linked) does not schedule collection. The box must
                 // itself be attached before removal, even for a fully orphaned tree.
@@ -463,7 +529,16 @@ impl NodeRegistry {
                     self.dom.insert(root_native, node, None);
                     node
                 });
-                self.dom.insert(cleanup, record.native, None);
+                self.dom.insert(cleanup, native, None);
+            }
+        }
+        for &token in self.portals.keys() {
+            self.dom.detach(self.records[&token].native);
+        }
+        if let Some(parking) = self.portal_parking.take() {
+            if self.dom.is_live(parking) && self.dom.is_live(root_native) {
+                self.dom.insert(root_native, parking, None);
+                self.dom.detach(parking);
             }
         }
         if let Some(cleanup) = cleanup {
@@ -472,6 +547,7 @@ impl NodeRegistry {
         let handles = self.records.keys().map(|&token| self.handle(token)).collect();
         self.records.clear();
         self.native_tokens.clear();
+        self.portals.clear();
         self.pending.clear();
         self.turn_active = false;
         self.disposed = true;
@@ -562,6 +638,45 @@ impl NodeRegistry {
         record.next = None;
     }
 
+    fn placement_native(&self, token: u64) -> NodeId {
+        self.portals.get(&token).map_or(self.records[&token].native, |portal| portal.marker)
+    }
+
+    fn attached(&self, token: u64) -> bool {
+        let mut current = Some(token);
+        while let Some(token) = current {
+            if token == 0 { return true; }
+            current = self.records[&token].parent;
+        }
+        false
+    }
+
+    fn sync_portals(&self, moved: Option<u64>) {
+        if self.portals.is_empty() { return; }
+        let parking = self.portal_parking.expect("portals have a parking root");
+        let root = self.records[&0].native;
+        for (&token, portal) in &self.portals {
+            let native = self.records[&token].native;
+            if !self.dom.is_live(native) { continue; }
+            let attached = self.attached(token);
+            let parent = if attached { self.dom.overlay_root(root, portal.layer) } else { parking };
+            if self.dom.parent(native) != Some(parent) || (attached && moved == Some(token)) {
+                self.dom.insert(parent, native, None);
+            }
+        }
+    }
+
+    fn retire_portal_parking(&mut self) {
+        if !self.portals.is_empty() { return; }
+        if let Some(parking) = self.portal_parking.take() {
+            let root = self.records[&0].native;
+            if self.dom.is_live(parking) && self.dom.is_live(root) {
+                self.dom.insert(root, parking, None);
+                self.dom.detach(parking);
+            }
+        }
+    }
+
     fn invalidate_tree(&mut self, token: u64, invalidated: &mut Vec<Handle>) {
         let start = invalidated.len();
         invalidated.push(self.handle(token));
@@ -569,6 +684,9 @@ impl NodeRegistry {
         // The output doubles as a work queue, avoiding recursion on deep trees.
         while index < invalidated.len() {
             let record = self.records.remove(&invalidated[index].token).unwrap();
+            if self.portals.remove(&invalidated[index].token).is_some() {
+                self.dom.detach(record.native);
+            }
             self.native_tokens.remove(&record.native);
             let mut child = record.first;
             while let Some(token) = child {

@@ -1,0 +1,957 @@
+//! What a record decides, and what it owns while it stands.
+
+use zgui_geom::{DevicePx, Point, Rect, Size};
+use zgui_layout::fragment::ParagraphId;
+use zgui_layout::{Fragment, FragmentKind};
+use zgui_scene::{ClipId, Scene, SpatialId};
+
+use crate::lower::cache::PaintStyleRef;
+use crate::walk::replay::hold::NoResources;
+use crate::walk::replay::{Encoding, LayerRecord, PaintCache, Reuse};
+
+/// A minted key, for a test that needs a name and not a stored value.
+fn key<T>(index: u32) -> zgui_arena::Key<T> {
+    zgui_arena::Key::new(
+        index,
+        zgui_arena::Generation::new(1).expect("one is a generation"),
+        zgui_arena::DomainId::FIRST,
+    )
+}
+
+/// A fragment at the given origin, sixty-four by twenty-four, painting exactly its own box.
+fn fragment(x: f32, y: f32) -> Fragment {
+    let mut fragment = Fragment::new(key(1), key(1), FragmentKind::Box);
+    fragment.border_box = Rect::new(
+        Point::new(DevicePx(x), DevicePx(y)),
+        Size::new(DevicePx(64.0), DevicePx(24.0)),
+    );
+    fragment.ink = fragment.border_box;
+    // The build always fills both readings; a fixture that left the local one at zero would slip
+    // past the cut-range check for any position at all.
+    fragment.local_ink = fragment.border_box;
+    fragment
+}
+
+/// The painting these fixtures record: the initial style, no clip, no transform, no decoration.
+fn painted(style: u32) -> crate::walk::replay::Painted {
+    crate::walk::replay::Painted {
+        style: PaintStyleRef::new(0, style),
+        clip: ClipId::ROOT,
+        transform: SpatialId::VIEWPORT,
+        // What the viewport's own coordinate system resolves to, which is what a fragment drawn
+        // straight into the window carries.
+        transform_hash: zgui_scene::Content::content_hash(&zgui_geom::Matrix4::IDENTITY),
+        custom: 0,
+        pointer: 0,
+        content: 0,
+        cut: 0,
+        scale: 1.0f32.to_bits(),
+        decorations: 0,
+        text_fill: 0,
+        anim: 0,
+        alpha: 1.0f32.to_bits(),
+        subpixel: true,
+        corners: 0,
+        highlights: 0,
+        inline: 0,
+    }
+}
+
+#[test]
+fn a_fragment_whose_outside_content_moved_is_encoded_however_still_it_stayed() {
+    // A replaced fragment names its node and a drawing names its curves' source, and both names
+    // stay put while what they resolve to changes. The revision is the only field that moves.
+    let mut cache = PaintCache::new();
+    let mut scene = scene();
+    let same = fragment(0.0, 0.0);
+    cache.encoded(
+        &mut scene,
+        &same,
+        painted(0),
+        Encoding {
+            chunk: zgui_scene::ChunkPrims::default(),
+            resources: &[],
+            complete: true,
+            layer: Default::default(),
+        },
+        &NoResources,
+    );
+    scene.begin_frame(Size::new(256, 256));
+    let swapped = crate::walk::replay::Painted {
+        content: 1,
+        ..painted(0)
+    };
+    assert_eq!(cache.reuse(&scene, &same, swapped, None), Reuse::Encode);
+    assert_ne!(cache.reuse(&scene, &same, painted(0), None), Reuse::Encode);
+}
+
+/// A scene with one frame's worth of retained operations.
+fn scene() -> Scene {
+    let mut scene = Scene::new();
+    scene.begin_frame(Size::new(256, 256));
+    scene
+}
+
+#[test]
+fn a_fragment_with_no_record_is_encoded() {
+    let cache = PaintCache::new();
+    let scene = scene();
+    assert_eq!(
+        cache.reuse(&scene, &fragment(0.0, 0.0), painted(0), None),
+        Reuse::Encode
+    );
+}
+
+#[test]
+fn a_moved_fragment_replays_with_the_distance_it_moved() {
+    let mut cache = PaintCache::new();
+    let mut scene = scene();
+    let first = fragment(0.0, 0.0);
+    cache.encoded(
+        &mut scene,
+        &first,
+        painted(0),
+        Encoding {
+            chunk: zgui_scene::ChunkPrims::default(),
+            resources: &[],
+            complete: true,
+            layer: Default::default(),
+        },
+        &NoResources,
+    );
+    // A second frame, so the range recorded is in the retained log rather than this frame's.
+    scene.begin_frame(Size::new(256, 256));
+    let moved = fragment(0.0, -120.0);
+    assert_eq!(
+        cache.reuse(&scene, &moved, painted(0), None),
+        Reuse::Replay(Size::new(DevicePx(0.0), DevicePx(-120.0)))
+    );
+}
+
+/// The chunk's bytes are at the position the fragment was encoded at, so a movement's offsets
+/// accumulate against that origin. Measuring each replay from the one before it — which is what
+/// updating the record's border box on replay would do — translates encode-time bytes by one step
+/// of a movement that has taken several, and the fragment is drawn where it was two frames ago.
+#[test]
+fn a_fragment_moved_twice_replays_with_the_whole_distance() {
+    let mut cache = PaintCache::new();
+    let mut scene = scene();
+    let first = fragment(0.0, 0.0);
+    cache.encoded(
+        &mut scene,
+        &first,
+        painted(0),
+        Encoding {
+            chunk: zgui_scene::ChunkPrims::default(),
+            resources: &[],
+            complete: true,
+            layer: Default::default(),
+        },
+        &NoResources,
+    );
+    scene.begin_frame(Size::new(256, 256));
+    let step_one = fragment(0.0, 10.0);
+    assert_eq!(
+        cache.reuse(&scene, &step_one, painted(0), None),
+        Reuse::Replay(Size::new(DevicePx(0.0), DevicePx(10.0)))
+    );
+    cache.replayed(&step_one);
+
+    scene.begin_frame(Size::new(256, 256));
+    let step_two = fragment(0.0, 20.0);
+    assert_eq!(
+        cache.reuse(&scene, &step_two, painted(0), None),
+        Reuse::Replay(Size::new(DevicePx(0.0), DevicePx(20.0))),
+        "the offset is measured from the encoding, so two steps of ten accumulate to twenty"
+    );
+}
+
+#[test]
+fn a_fragment_under_a_changed_folded_alpha_is_encoded_again() {
+    // An ancestor's opacity is folded into a descendant's colours rather than composited
+    // through a target whenever their ink is disjoint, and *nothing else in this record moves*
+    // when it does: the descendant's own style, clip, transform and animation are all exactly
+    // what they were. Without the alpha here a panel fading out is a panel whose contents never
+    // fade, replayed at the alpha they had when the fade began.
+    let mut cache = PaintCache::new();
+    let mut scene = scene();
+    let same = fragment(0.0, 0.0);
+    cache.encoded(
+        &mut scene,
+        &same,
+        painted(0),
+        Encoding {
+            chunk: zgui_scene::ChunkPrims::default(),
+            resources: &[],
+            complete: true,
+            layer: Default::default(),
+        },
+        &NoResources,
+    );
+    scene.begin_frame(Size::new(256, 256));
+    let dimmed = crate::walk::replay::Painted {
+        alpha: 0.5f32.to_bits(),
+        ..painted(0)
+    };
+    assert_eq!(cache.reuse(&scene, &same, dimmed, None), Reuse::Encode);
+    // And the same alpha still replays, or every fragment of every document is encoded twice.
+    assert_ne!(cache.reuse(&scene, &same, painted(0), None), Reuse::Encode);
+}
+
+#[test]
+fn a_fragment_whose_corners_moved_is_encoded_however_still_it_stayed() {
+    // The lowered style holds no radii, so the corner fingerprint is the only field that moves.
+    let mut cache = PaintCache::new();
+    let mut scene = scene();
+    let same = fragment(0.0, 0.0);
+    cache.encoded(
+        &mut scene,
+        &same,
+        painted(0),
+        Encoding {
+            chunk: zgui_scene::ChunkPrims::default(),
+            resources: &[],
+            complete: true,
+            layer: Default::default(),
+        },
+        &NoResources,
+    );
+    scene.begin_frame(Size::new(256, 256));
+    let squared = crate::walk::replay::Painted {
+        corners: 1,
+        ..painted(0)
+    };
+    assert_eq!(cache.reuse(&scene, &same, squared, None), Reuse::Encode);
+    assert_ne!(cache.reuse(&scene, &same, painted(0), None), Reuse::Encode);
+}
+
+#[test]
+fn a_fragment_whose_runs_lose_or_regain_subpixel_coverage_is_encoded_again() {
+    // A group target opened by a translucent ancestor, and a pan by a fraction of a pixel, each
+    // change whether a run keeps per-channel coverage and move no other field: the folded alpha
+    // stays one and the shape hash leaves the translation out. A line encoded for one answer
+    // and replayed under the other draws nothing on a transparent target, or coloured fringes
+    // off the grid.
+    let mut cache = PaintCache::new();
+    let mut scene = scene();
+    let same = fragment(0.0, 0.0);
+    cache.encoded(
+        &mut scene,
+        &same,
+        painted(0),
+        Encoding {
+            chunk: zgui_scene::ChunkPrims::default(),
+            resources: &[],
+            complete: true,
+            layer: Default::default(),
+        },
+        &NoResources,
+    );
+    scene.begin_frame(Size::new(256, 256));
+    let resampled = crate::walk::replay::Painted {
+        subpixel: false,
+        ..painted(0)
+    };
+    assert_eq!(cache.reuse(&scene, &same, resampled, None), Reuse::Encode);
+    assert_ne!(cache.reuse(&scene, &same, painted(0), None), Reuse::Encode);
+}
+
+#[test]
+fn a_restyled_fragment_is_encoded_however_still_it_stayed() {
+    let mut cache = PaintCache::new();
+    let mut scene = scene();
+    let same = fragment(0.0, 0.0);
+    cache.encoded(
+        &mut scene,
+        &same,
+        painted(0),
+        Encoding {
+            chunk: zgui_scene::ChunkPrims::default(),
+            resources: &[],
+            complete: true,
+            layer: Default::default(),
+        },
+        &NoResources,
+    );
+    scene.begin_frame(Size::new(256, 256));
+    assert_eq!(
+        cache.reuse(&scene, &same, painted(1), None),
+        Reuse::Encode,
+        "a hover that changes only a colour must not replay last frame's colour"
+    );
+}
+
+/// A line that is still the same line, holding different characters, is encoded again.
+///
+/// The name is kept across a change of paragraph on purpose — destroying it would unregister a
+/// hit entry and force the painting order to be derived again for the whole document — so the
+/// record is what has to notice. Nothing else can: a digit replaced by one of the same width
+/// leaves the style, the chain, the transform and the size exactly as they were.
+#[test]
+fn a_line_whose_paragraph_changed_is_encoded_however_still_it_stayed() {
+    let mut cache = PaintCache::new();
+    let mut scene = scene();
+    let mut line = fragment(0.0, 0.0);
+    line.kind = FragmentKind::Line {
+        paragraph: ParagraphId(0),
+        line: 0,
+    };
+    cache.encoded(
+        &mut scene,
+        &line,
+        painted(0),
+        Encoding {
+            chunk: zgui_scene::ChunkPrims::default(),
+            resources: &[],
+            complete: true,
+            layer: Default::default(),
+        },
+        &NoResources,
+    );
+    scene.begin_frame(Size::new(256, 256));
+    line.kind = FragmentKind::Line {
+        paragraph: ParagraphId(1),
+        line: 0,
+    };
+    assert_eq!(
+        cache.reuse(&scene, &line, painted(0), None),
+        Reuse::Encode,
+        "one character changed for one of the same width and the previous glyphs would have \
+         been replayed"
+    );
+}
+
+#[test]
+fn a_resized_fragment_is_encoded_rather_than_stretched() {
+    let mut cache = PaintCache::new();
+    let mut scene = scene();
+    let before = fragment(0.0, 0.0);
+    cache.encoded(
+        &mut scene,
+        &before,
+        painted(0),
+        Encoding {
+            chunk: zgui_scene::ChunkPrims::default(),
+            resources: &[],
+            complete: true,
+            layer: Default::default(),
+        },
+        &NoResources,
+    );
+    scene.begin_frame(Size::new(256, 256));
+    let mut wider = fragment(0.0, 0.0);
+    wider.border_box.size = Size::new(DevicePx(128.0), DevicePx(24.0));
+    assert_eq!(cache.reuse(&scene, &wider, painted(0), None), Reuse::Encode);
+}
+
+/// A drawing replays wherever its box went. The replay re-emits its vector item into the frame's
+/// pass planning, with the path it was encoded with and its placement moved by the offset.
+#[test]
+fn a_moved_drawing_replays_its_vector_item() {
+    use std::sync::Arc;
+
+    let mut cache = PaintCache::new();
+    let mut scene = scene();
+    let mut mark = fragment(0.0, 0.0);
+    mark.kind = FragmentKind::Vector;
+    let mut path = zgui_scene::kurbo::BezPath::new();
+    path.move_to((0.0, 0.0));
+    path.line_to((10.0, 10.0));
+    path.line_to((0.0, 10.0));
+    path.close_path();
+    let path = Arc::new(path);
+    let item = zgui_scene::VectorItem::filled(
+        zgui_scene::VectorId(1),
+        Arc::clone(&path),
+        zgui_scene::PaintRef::NONE,
+    );
+    scene.begin_chunk_capture(cache.take_capture_scratch());
+    scene.push_vector(item);
+    let chunk = scene.take_chunk_capture();
+    assert_eq!(chunk.vectors.len(), 1);
+    cache.encoded(
+        &mut scene,
+        &mark,
+        painted(0),
+        Encoding {
+            chunk,
+            resources: &[],
+            complete: true,
+            layer: Default::default(),
+        },
+        &NoResources,
+    );
+    scene.begin_frame(Size::new(256, 256));
+
+    let reuse = cache.reuse(&scene, &mark, painted(0), None);
+    assert_eq!(
+        reuse,
+        Reuse::Replay(Size::new(DevicePx(0.0), DevicePx(0.0))),
+        "a still drawing replays"
+    );
+    let (source, chunk) = cache.chunk(mark.key).expect("recorded");
+    let range = scene.replay_chunk(chunk, Size::default(), source);
+    assert_eq!(range.len(), 1, "and the replay re-emits the vector item");
+    assert_eq!(scene.primitives.vectors.len(), 1);
+
+    scene.begin_frame(Size::new(256, 256));
+    let mut moved = fragment(0.0, 40.0);
+    moved.kind = FragmentKind::Vector;
+    let by = Size::new(DevicePx(0.0), DevicePx(40.0));
+    assert_eq!(
+        cache.reuse(&scene, &moved, painted(0), None),
+        Reuse::Replay(by),
+        "a moved drawing replays at the offset"
+    );
+    let (source, chunk) = cache.chunk(moved.key).expect("recorded");
+    scene.replay_chunk(chunk, by, source);
+    let replayed = &scene.primitives.vectors[0];
+    assert!(
+        Arc::ptr_eq(&replayed.path, &path),
+        "the path is the encoded one"
+    );
+    assert_eq!(
+        replayed.placement,
+        zgui_scene::kurbo::Affine::translate((0.0, 40.0))
+    );
+}
+
+/// A chunk captured beyond the clip replays complete on arrival.
+///
+/// This is the whole of a panel that scrolls into view from below. While it is outside the
+/// scroll port every primitive it offers is refused by the frame — and captured anyway, because
+/// the capture happens before the cull. When the fragment arrives inside the port, the same
+/// chunk replays and the cull admits the part that has come into view.
+#[test]
+fn a_chunk_captured_beyond_the_clip_replays_complete_on_arrival() {
+    let mut cache = PaintCache::new();
+    let mut scene = scene();
+    let port = |scene: &mut Scene| crate::walk::replay::Painted {
+        clip: scene.clips.only(zgui_scene::ClipLink::rect(Rect::new(
+            Point::new(DevicePx(0.0), DevicePx(0.0)),
+            Size::new(DevicePx(256.0), DevicePx(128.0)),
+        ))),
+        ..painted(0)
+    };
+    let inside = port(&mut scene);
+    let hidden = fragment(0.0, 2000.0);
+    // The fragment paints one quad at its own position, refused by the port's clip down there.
+    scene.begin_chunk_capture(cache.take_capture_scratch());
+    let refused = scene.push_quad(
+        zgui_scene::Quad::filled(hidden.border_box, zgui_scene::PaintRef::NONE)
+            .clipped(inside.clip),
+    );
+    let chunk = scene.take_chunk_capture();
+    assert!(refused.is_none(), "the quad is outside the port");
+    assert_eq!(chunk.quads.len(), 1, "and captured regardless");
+    cache.encoded(
+        &mut scene,
+        &hidden,
+        inside,
+        Encoding {
+            chunk,
+            resources: &[],
+            complete: true,
+            layer: Default::default(),
+        },
+        &NoResources,
+    );
+    scene.begin_frame(Size::new(256, 256));
+    let inside = port(&mut scene);
+    let arrived = fragment(0.0, 100.0);
+    let reuse = cache.reuse(&scene, &arrived, inside, None);
+    assert_ne!(
+        reuse,
+        Reuse::Encode,
+        "the chunk is the fragment's complete painting, so arriving at the port replays it"
+    );
+    let Reuse::Replay(offset) = reuse else {
+        unreachable!()
+    };
+    let (source, chunk) = cache.chunk(arrived.key).expect("recorded");
+    let range = scene.replay_chunk(chunk, offset, source);
+    assert_eq!(range.len(), 1, "the cull admits the arrived quad");
+    assert_eq!(
+        scene.primitives.quads[0].bounds[1], 100.0,
+        "at the position the fragment arrived at"
+    );
+}
+
+/// An ellipsized line replayed beyond the line height still draws its glyphs.
+///
+/// The `text-overflow` window is minted by the encoding at the position the line is drawn, and
+/// noted on the capture. A scrolled line replays with an offset, and the note is what carries the
+/// window along: without it the glyphs are culled against the window of the encode frame — the
+/// visible slice shrinks as the scroll runs, and past one line height only the mark is left.
+#[test]
+fn an_ellipsized_line_replayed_beyond_the_line_height_still_draws_its_glyphs() {
+    let mut cache = PaintCache::new();
+    let mut scene = scene();
+    let line = fragment(0.0, 0.0);
+    scene.begin_chunk_capture(cache.take_capture_scratch());
+    // The window a cut line's own glyphs are drawn through, minted inside the capture the way
+    // the text emitter mints it.
+    let window = scene.clips.only(zgui_scene::ClipLink::rect(Rect::new(
+        Point::new(DevicePx(0.0), DevicePx(0.0)),
+        Size::new(DevicePx(40.0), DevicePx(24.0)),
+    )));
+    scene.note_minted_clip(window);
+    let drawn = scene.push_quad(
+        zgui_scene::Quad::filled(line.border_box, zgui_scene::PaintRef::NONE).clipped(window),
+    );
+    let chunk = scene.take_chunk_capture();
+    assert!(drawn.is_some(), "the fixture draws inside its own window");
+    cache.encoded(
+        &mut scene,
+        &line,
+        painted(0),
+        Encoding {
+            chunk,
+            resources: &[],
+            complete: true,
+            layer: Default::default(),
+        },
+        &NoResources,
+    );
+    scene.begin_frame(Size::new(256, 256));
+    // Scrolled past its own height, which is where an encode-position window empties out.
+    let scrolled = fragment(0.0, 100.0);
+    let Reuse::Replay(offset) = cache.reuse(&scene, &scrolled, painted(0), None) else {
+        panic!("a scrolled line replays");
+    };
+    let (source, chunk) = cache.chunk(scrolled.key).expect("recorded");
+    let range = scene.replay_chunk(chunk, offset, source);
+    assert_eq!(range.len(), 1, "the window moved with the line");
+    assert_eq!(
+        scene.primitives.quads[0].bounds[1], 100.0,
+        "and its content is drawn where the line is now"
+    );
+}
+
+/// The cut is part of the painting, so a cut that moved is an encoding however still the line
+/// stayed. A `text-align` flip on an overflowing nowrap line moves the cut to the other end while
+/// the line box, the style, the chain and the transform all hold still.
+#[test]
+fn a_line_whose_cut_changed_is_encoded_however_still_it_stayed() {
+    let mut cache = PaintCache::new();
+    let mut scene = scene();
+    let same = fragment(0.0, 0.0);
+    cache.encoded(
+        &mut scene,
+        &same,
+        painted(0),
+        Encoding {
+            chunk: zgui_scene::ChunkPrims::default(),
+            resources: &[],
+            complete: true,
+            layer: Default::default(),
+        },
+        &NoResources,
+    );
+    scene.begin_frame(Size::new(256, 256));
+    let recut = crate::walk::replay::Painted {
+        cut: 1,
+        ..painted(0)
+    };
+    assert_eq!(cache.reuse(&scene, &same, recut, None), Reuse::Encode);
+    assert_ne!(cache.reuse(&scene, &same, painted(0), None), Reuse::Encode);
+}
+
+#[test]
+fn a_fragment_nobody_visited_keeps_its_record_and_replays_on_return() {
+    let mut cache = PaintCache::new();
+    let mut scene = scene();
+    let away = fragment(0.0, 0.0);
+    cache.encoded(
+        &mut scene,
+        &away,
+        painted(0),
+        Encoding {
+            chunk: zgui_scene::ChunkPrims::default(),
+            resources: &[],
+            complete: true,
+            layer: Default::default(),
+        },
+        &NoResources,
+    );
+    // Many frames pass in which nothing visits the fragment — scrolled out, culled, or simply
+    // outside every damage rectangle. The record owns its primitives, so it stands.
+    for _ in 0..3 {
+        cache.begin_frame();
+        cache.end_frame();
+        scene.begin_frame(Size::new(256, 256));
+    }
+    assert_eq!(cache.len(), 1);
+    assert_ne!(
+        cache.reuse(&scene, &away, painted(0), None),
+        Reuse::Encode,
+        "a record kept across unvisited frames replays on return"
+    );
+}
+
+#[test]
+fn a_retired_fragment_loses_its_record() {
+    let mut cache = PaintCache::new();
+    let mut scene = scene();
+    let gone = fragment(0.0, 0.0);
+    cache.encoded(
+        &mut scene,
+        &gone,
+        painted(0),
+        Encoding {
+            chunk: zgui_scene::ChunkPrims::default(),
+            resources: &[],
+            complete: true,
+            layer: Default::default(),
+        },
+        &NoResources,
+    );
+    assert_eq!(cache.len(), 1);
+    cache.retire(&[gone.key], &mut scene, &NoResources);
+    assert_eq!(cache.len(), 0);
+    // Retiring a name with no record is the ordinary case and costs nothing.
+    cache.retire(&[gone.key], &mut scene, &NoResources);
+    assert_eq!(cache.reuse(&scene, &gone, painted(0), None), Reuse::Encode);
+}
+
+/// Pushes one quad through an interned paint and a real clip, and encodes it into a record.
+fn encode_one_quad(
+    cache: &mut PaintCache,
+    scene: &mut Scene,
+    fragment: &Fragment,
+) -> (ClipId, zgui_scene::PaintId) {
+    use zgui_geom::Point;
+    let rect = zgui_geom::Rect::new(
+        Point::new(DevicePx(0.0), DevicePx(0.0)),
+        Size::new(DevicePx(10.0), DevicePx(10.0)),
+    );
+    let clip = scene.clips.only(zgui_scene::ClipLink::rect(rect));
+    let paint = scene
+        .paints
+        .solid(zgui_color::Color::srgb(1.0, 0.0, 0.0, 1.0));
+    scene.begin_chunk_capture(cache.take_capture_scratch());
+    scene.push_quad(
+        zgui_scene::Quad::filled(rect, zgui_scene::PaintRef::solid(paint)).clipped(clip),
+    );
+    let chunk = scene.take_chunk_capture();
+    cache.encoded(
+        scene,
+        fragment,
+        painted(0),
+        Encoding {
+            chunk,
+            resources: &[],
+            complete: true,
+            layer: Default::default(),
+        },
+        &NoResources,
+    );
+    (clip, paint)
+}
+
+#[test]
+fn a_record_holds_its_table_entries_until_it_is_dropped() {
+    let mut cache = PaintCache::new();
+    let mut scene = scene();
+    let one = fragment(0.0, 0.0);
+    let (clip, paint) = encode_one_quad(&mut cache, &mut scene, &one);
+
+    assert_eq!(scene.clips.refs(clip), Some(1));
+    assert_eq!(scene.paints.refs(paint), Some(1));
+    assert!(cache.bytes() > 0);
+
+    // Re-encoding the same fragment retains before it releases, so the counts hold steady.
+    encode_one_quad(&mut cache, &mut scene, &one);
+    assert_eq!(scene.clips.refs(clip), Some(1));
+    assert_eq!(scene.paints.refs(paint), Some(1));
+
+    cache.retire(&[one.key], &mut scene, &NoResources);
+    assert_eq!(scene.clips.refs(clip), Some(0));
+    assert_eq!(scene.paints.refs(paint), Some(0));
+    assert_eq!(cache.bytes(), 0);
+}
+
+#[test]
+fn eviction_takes_only_cold_records_and_is_a_clean_miss() {
+    let mut cache = PaintCache::new();
+    let mut scene = scene();
+    let one = fragment(0.0, 0.0);
+    let (clip, paint) = encode_one_quad(&mut cache, &mut scene, &one);
+
+    // Selected this frame: the working set is never taken, however much was asked for.
+    assert_eq!(cache.evict_cold(u64::MAX, &mut scene, &NoResources), 0);
+    assert_eq!(cache.len(), 1);
+
+    // A frame later it is cold, and eviction takes it and releases what it held.
+    cache.begin_frame();
+    let freed = cache.evict_cold(u64::MAX, &mut scene, &NoResources);
+    assert!(freed > 0);
+    assert_eq!(cache.len(), 0);
+    assert_eq!(cache.bytes(), 0);
+    assert_eq!(scene.clips.refs(clip), Some(0));
+    assert_eq!(scene.paints.refs(paint), Some(0));
+    // The miss is clean: the next visit encodes again, and nothing else remembers the record.
+    assert_eq!(cache.reuse(&scene, &one, painted(0), None), Reuse::Encode);
+}
+
+/// A coordinate system whose slot has been handed to an unrelated box is not the one a record was
+/// taken under, and everything cached under it has to be encoded again.
+///
+/// This is the one failure a structural name introduces that an interned one could not have. An
+/// interned identifier was safe under an equality test because its identity *was* its value; a slot
+/// is a place, the places come back, and the box handed one next is not the box the record was
+/// written for. Every other field of the record is what it was — the fixture gives the stranger the
+/// *same matrix*, so even the fingerprint of what the name resolves to agrees — and the counter in
+/// the name is the whole of the difference.
+///
+/// What it costs to get this wrong is a fragment replayed through a matrix belonging to somebody
+/// else, with content that looks right and geometry that looks right.
+#[test]
+fn a_recycled_spatial_slot_reencodes_the_chunks_that_named_it() {
+    use zgui_geom::Matrix4;
+    use zgui_scene::{Content, OwnSpace, PropertyOwner, SpatialId};
+
+    let owner = |raw| PropertyOwner::new(raw).expect("a handle is never the empty word");
+    let moved = Matrix4::translation(10.0, 0.0, 0.0);
+    let own = OwnSpace::of(Some(moved), None, false);
+    let under = |space: SpatialId| crate::walk::replay::Painted {
+        transform: space,
+        transform_hash: moved.content_hash(),
+        ..painted(0)
+    };
+
+    let mut cache = PaintCache::new();
+    let mut scene = scene();
+    let viewport = scene.spatial.viewport();
+    let card = owner(2);
+    let space = scene.spatial.space_of(viewport, card, own);
+
+    // A fragment inside the card, drawn in the card's coordinate system rather than one of its own.
+    // It survives the card: what goes away is the box above it.
+    let label = fragment(0.0, 0.0);
+    cache.encoded(
+        &mut scene,
+        &label,
+        under(space),
+        Encoding {
+            chunk: zgui_scene::ChunkPrims::default(),
+            resources: &[],
+            complete: true,
+            layer: Default::default(),
+        },
+        &NoResources,
+    );
+
+    scene.begin_frame(Size::new(256, 256));
+    scene.spatial.release(card);
+    scene.spatial.recycle();
+    let stranger = scene.spatial.space_of(viewport, owner(3), own);
+    assert_eq!(
+        stranger.index(),
+        space.index(),
+        "the slot came back, which is the premise of the whole case",
+    );
+    assert_ne!(stranger, space);
+    assert_eq!(
+        under(stranger).transform_hash,
+        under(space).transform_hash,
+        "the stranger is at the same place, so nothing but the name itself has moved",
+    );
+
+    assert_eq!(
+        cache.reuse(&scene, &label, under(stranger), None),
+        Reuse::Encode,
+        "a range recorded under the card was replayed through a slot the card no longer owns",
+    );
+}
+
+#[test]
+fn an_encoding_that_could_not_place_everything_is_not_recorded() {
+    // The defect this exists for: a glyph the atlas had no room for is drawn as nothing, and a
+    // record of that painting is replayed until the fragment itself changes — so one crowded
+    // frame takes a letter off the screen for the rest of the session. The frame still shows what
+    // it managed to draw; what it must not do is remember it.
+    let mut cache = PaintCache::new();
+    let mut scene = scene();
+    let fragment = fragment(0.0, 0.0);
+
+    cache.encoded(
+        &mut scene,
+        &fragment,
+        painted(0),
+        Encoding {
+            chunk: zgui_scene::ChunkPrims::default(),
+            resources: &[],
+            complete: false,
+            layer: Default::default(),
+        },
+        &NoResources,
+    );
+
+    assert!(cache.is_empty(), "nothing was remembered");
+    assert_eq!(
+        cache.reuse(&scene, &fragment, painted(0), None),
+        Reuse::Encode,
+        "so the next frame that reaches it draws it again, with the room eviction has made"
+    );
+}
+
+#[test]
+fn a_record_is_given_up_when_a_later_encoding_falls_short() {
+    // The same, for a fragment that was complete once. The old record still draws the whole word
+    // and is tempting to keep — but it was encoded against tiles the refusal has just evicted, so
+    // what it replays is whatever took their rectangles.
+    let mut cache = PaintCache::new();
+    let mut scene = scene();
+    let fragment = fragment(0.0, 0.0);
+
+    for complete in [true, false] {
+        cache.encoded(
+            &mut scene,
+            &fragment,
+            painted(0),
+            Encoding {
+                chunk: zgui_scene::ChunkPrims::default(),
+                resources: &[],
+                complete,
+                layer: Default::default(),
+            },
+            &NoResources,
+        );
+    }
+
+    assert!(cache.is_empty(), "the record that stood was given up");
+}
+
+/// Records `fragment` as having drawn a layer with `layer`.
+fn layered(cache: &mut PaintCache, scene: &mut Scene, fragment: &Fragment, layer: LayerRecord) {
+    cache.encoded(
+        scene,
+        fragment,
+        painted(0),
+        Encoding {
+            chunk: zgui_scene::ChunkPrims::default(),
+            resources: &[],
+            complete: true,
+            layer,
+        },
+        &NoResources,
+    );
+    scene.begin_frame(Size::new(256, 256));
+}
+
+#[test]
+fn a_provisional_record_is_never_replayed() {
+    let mut cache = PaintCache::new();
+    let mut scene = scene();
+    let same = fragment(0.0, 0.0);
+    let phase = Some([0, 0]);
+    layered(
+        &mut cache,
+        &mut scene,
+        &same,
+        LayerRecord {
+            phase,
+            provisional: true,
+            promote: false,
+            tiled: None,
+            window: None,
+        },
+    );
+    assert_eq!(cache.reuse(&scene, &same, painted(0), phase), Reuse::Encode);
+
+    // An exact layer replays at its own phase, and only there.
+    layered(
+        &mut cache,
+        &mut scene,
+        &same,
+        LayerRecord {
+            phase,
+            provisional: false,
+            promote: false,
+            tiled: None,
+            window: None,
+        },
+    );
+    assert_ne!(cache.reuse(&scene, &same, painted(0), phase), Reuse::Encode);
+    assert_eq!(
+        cache.reuse(&scene, &same, painted(0), Some([8, 0])),
+        Reuse::Encode,
+        "half a pixel off the raster's grid"
+    );
+}
+
+#[test]
+fn a_promotable_record_encodes_again_after_three_drawn_replays() {
+    let mut cache = PaintCache::new();
+    let mut scene = scene();
+    let same = fragment(0.0, 0.0);
+    layered(
+        &mut cache,
+        &mut scene,
+        &same,
+        LayerRecord {
+            phase: None,
+            provisional: false,
+            promote: true,
+            tiled: None,
+            window: None,
+        },
+    );
+    for replay in 0..3 {
+        assert_ne!(
+            cache.reuse(&scene, &same, painted(0), None),
+            Reuse::Encode,
+            "replay {replay}"
+        );
+        cache.begin_frame();
+        cache.replayed(&same);
+    }
+    assert_eq!(cache.reuse(&scene, &same, painted(0), None), Reuse::Encode);
+}
+
+#[test]
+fn a_cut_record_replays_only_while_its_window_holds_what_is_shown() {
+    use zgui_scene::kurbo;
+
+    // The viewport shows 0..256 on each axis; the window holds a quarter of that more each way.
+    let window = kurbo::Rect::new(-64.0, -64.0, 320.0, 320.0);
+    let mut cache = PaintCache::new();
+    let mut scene = scene();
+    let first = fragment(0.0, 0.0);
+    layered(
+        &mut cache,
+        &mut scene,
+        &first,
+        LayerRecord {
+            window: Some(window),
+            ..LayerRecord::default()
+        },
+    );
+    assert_eq!(
+        cache.reuse(&scene, &first, painted(0), None),
+        Reuse::Replay(Size::new(DevicePx(0.0), DevicePx(0.0))),
+        "in place, the window holds the viewport"
+    );
+    let near = fragment(48.0, -32.0);
+    assert_eq!(
+        cache.reuse(&scene, &near, painted(0), None),
+        Reuse::Replay(Size::new(DevicePx(48.0), DevicePx(-32.0))),
+        "a move within the margin keeps every shown prim"
+    );
+    let far = fragment(80.0, 0.0);
+    assert_eq!(
+        cache.reuse(&scene, &far, painted(0), None),
+        Reuse::Encode,
+        "a move past the margin shows prims the cut left out"
+    );
+
+    // A wider viewport shows more of the fragment where it stands.
+    scene.begin_frame(Size::new(512, 256));
+    assert_eq!(cache.reuse(&scene, &first, painted(0), None), Reuse::Encode);
+
+    // A record with no window replays anywhere.
+    let mut scene = self::scene();
+    layered(&mut cache, &mut scene, &first, LayerRecord::default());
+    assert_ne!(cache.reuse(&scene, &far, painted(0), None), Reuse::Encode);
+}

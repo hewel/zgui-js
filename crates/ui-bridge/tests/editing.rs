@@ -5,7 +5,7 @@ use std::{cell::RefCell, rc::Rc};
 use js_runtime::{JsRuntime, RuntimeLimits};
 use ui_bridge::{UiBridge, registry::NodeRegistry};
 use zgui::{
-    view::{DiscardCommands, DomHandle, ElementName, EventControl, EventCx, HostHandle, NodeId, UiState, stub::StubHost},
+    view::{AttrName, DiscardCommands, DomHandle, ElementName, EventControl, EventCx, HostHandle, NodeId, UiState, stub::StubHost},
     vocab::{EventKind, Modifiers, Payload, Phase, Role, SemanticFlags, Timestamp, ValueChange, ValueEvent},
 };
 use zgui_dom::Document;
@@ -257,4 +257,116 @@ fn native_internal_input_and_change_targets_retarget_without_losing_listener_cur
             'retargeted'
         "#);
     }
+}
+
+#[test]
+fn placeholder_stays_inside_the_editing_boundary_and_preserves_semantics() {
+    for tag in ["field", "editor"] {
+        let mut native = Editing::new(tag);
+        native.script(r#"
+            __zgui.setProperty(node, 'placeholder', 'Search…');
+            __zgui.setProperty(node, 'placeholder', null);
+            __zgui.setProperty(node, 'placeholder', 'Updated');
+            const ordinary = __zgui.createElement('control');
+            const text = __zgui.createTextNode('x');
+            __zgui.insertNode(root, ordinary, null);
+            __zgui.insertNode(root, text, null);
+            for (const target of [ordinary, text]) {
+                let rejected = false;
+                try { __zgui.setProperty(target, 'placeholder', 'bad'); }
+                catch (error) { rejected = error instanceof TypeError && error.message.includes('require a field or editor'); }
+                if (!rejected) throw Error('placeholder accepted on a non-editable node');
+            }
+            'placeholder'
+        "#);
+        let semantics = native.backend.semantics(native.node).unwrap();
+        assert_eq!(semantics.placeholder.as_deref(), Some("Updated"));
+        native.script("__zgui.setProperty(node, 'placeholder', undefined); 'cleared'");
+        assert_eq!(native.backend.semantics(native.node).and_then(|semantics| semantics.placeholder), None);
+    }
+}
+
+#[test]
+fn secure_is_a_field_only_native_attribute_in_either_write_order() {
+    for order in ["secure_first", "value_first"] {
+        let mut native = Editing::new("field");
+        let script = if order == "secure_first" {
+            "__zgui.setProperty(node, 'secure', true); __zgui.setProperty(node, 'defaultValue', 'synthetic'); 'secure then value'"
+        } else {
+            "__zgui.setProperty(node, 'defaultValue', 'synthetic'); __zgui.setProperty(node, 'secure', true); 'value then secure'"
+        };
+        native.script(script);
+        assert_eq!(native.backend.attribute(native.node, AttrName::new("secure")).as_deref(), Some(""));
+        assert_eq!(native.value().as_deref(), Some("synthetic"));
+        native.script(r#"
+            __zgui.setProperty(node, 'secure', null);
+            __zgui.setProperty(node, 'secure', true);
+            __zgui.setProperty(node, 'secure', false);
+            'cleared'
+        "#);
+        assert_eq!(native.backend.attribute(native.node, AttrName::new("secure")), None);
+        assert_eq!(native.value().as_deref(), Some("synthetic"));
+        native.script(r#"
+            for (const bad of ['yes', 1, {}]) {
+                let rejected = false;
+                try { __zgui.setProperty(node, 'secure', bad); } catch (error) { rejected = error instanceof TypeError; }
+                if (!rejected) throw Error('secure accepted a non-boolean value');
+            }
+            'strict'
+        "#);
+        assert_eq!(native.backend.attribute(native.node, AttrName::new("secure")), None);
+    }
+    for (tag, message) in [("editor", "secure requires a field"), ("control", "secure requires a field")] {
+        let mut native = Editing::new(tag);
+        native.script(&format!(r#"
+            let rejected = false;
+            try {{ __zgui.setProperty(node, 'secure', true); }}
+            catch (error) {{ rejected = error instanceof TypeError && error.message.includes('{message}'); }}
+            if (!rejected) throw Error('secure accepted on a {tag}');
+            let cleared = false;
+            try {{ __zgui.setProperty(node, 'secure', null); }}
+            catch (error) {{ cleared = error instanceof TypeError && error.message.includes('{message}'); }}
+            if (!cleared) throw Error('secure clear accepted on a {tag}');
+            'rejected'
+        "#));
+        assert_eq!(native.backend.attribute(native.node, AttrName::new("secure")), None);
+    }
+}
+
+#[test]
+fn focus_moves_through_the_host_and_rejects_stale_or_foreign_wrappers() {
+    use zgui::{reactive::prelude::GetUntracked, view::ViewHost};
+    let mut native = Editing::new("field");
+    native.script("__zgui.focus(node); 'focused'");
+    assert_eq!(native.host.focused().get_untracked(), Some(native.node));
+
+    let foreign = UiBridge::new(
+        NodeRegistry::new(native.dom.clone(), native.root, 61, 2, 10),
+        HostHandle::from_rc(native.host.clone()),
+    );
+    native.engine.with_context(|ctx| {
+        ctx.globals().set("foreign", foreign.root(&ctx)?)
+    }).unwrap();
+    native.script(r#"
+        let rejected = false;
+        try { __zgui.focus(foreign); }
+        catch (error) { rejected = error instanceof TypeError && error.message.includes('generation'); }
+        if (!rejected) throw Error('focus accepted a foreign generation wrapper');
+        const forged = Object.assign(Object.create(Object.getPrototypeOf(node)), node);
+        let fabricated = false;
+        try { __zgui.focus(forged); } catch { fabricated = true; }
+        if (!fabricated) throw Error('focus accepted a fabricated wrapper');
+        __zgui.removeNode(root, node);
+        'rejected'
+    "#);
+    assert_eq!(native.host.focused().get_untracked(), Some(native.node));
+    native.backend.end_frame();
+    native.script(r#"
+        let stale = false;
+        try { __zgui.focus(node); }
+        catch (error) { stale = error instanceof TypeError && error.message.includes('stale'); }
+        if (!stale) throw Error('focus accepted a stale handle');
+        'stale'
+    "#);
+    foreign.dispose();
 }

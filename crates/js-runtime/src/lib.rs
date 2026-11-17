@@ -10,7 +10,7 @@
 //! Dropping the owner unregisters tracking and releases all tracker/module roots before
 //! the context and runtime; it does not invoke application disposal or pump more jobs.
 
-#![forbid(unsafe_code)]
+#![deny(unsafe_code)]
 
 use rquickjs::{Context, Ctx, Function, Module, Object, Persistent, Runtime, Value};
 use std::{
@@ -337,6 +337,7 @@ impl JsRuntime {
         }
         self.interrupt.deadline.set(Some(end));
         let _guard = EntryGuard(&self.interrupt);
+        self.update_stack_top();
         // The runtime guard is released before entering JobException's context.
         self.runtime.execute_pending_job().map_err(|exception| {
             exception.0.with(|ctx| {
@@ -367,6 +368,7 @@ impl JsRuntime {
             let end = self.clamp_deadline(Instant::now() + self.limits.diagnostic_timeout);
             self.interrupt.deadline.set(Some(end));
             let _guard = EntryGuard(&self.interrupt);
+            self.update_stack_top();
             self.context.with(|ctx| {
                 for (id, reason, cached) in snapshots {
                     let diagnostic = cached.unwrap_or_else(|| {
@@ -502,6 +504,20 @@ impl JsRuntime {
         self.pump_jobs_until(Instant::now() + self.limits.job_timeout)
     }
 
+    /// Refresh QuickJS's stack baseline at outer host-to-JS entry boundaries.
+    /// `rquickjs` gates its own `update_stack_top` on `feature = "parallel"`, which
+    /// otherwise charges host event-loop Rust frames between `JsRuntime::new` and a
+    /// later entry against `stack_limit_bytes`. Never call re-entrantly inside JS.
+    #[allow(unsafe_code)]
+    #[inline(always)]
+    fn update_stack_top(&self) {
+        // SAFETY: `self.context` is alive and owned by this single-threaded `JsRuntime`,
+        // and callers invoke this only at outer host entry boundaries before entering JS.
+        unsafe {
+            rquickjs::qjs::JS_UpdateStackTop(self.context.get_runtime_ptr());
+        }
+    }
+
     fn enter<T>(
         &self,
         phase: &'static str,
@@ -529,6 +545,7 @@ impl JsRuntime {
         self.interrupt.interrupted.set(false);
         self.interrupt.deadline.set(Some(end));
         let _guard = EntryGuard(&self.interrupt);
+        self.update_stack_top();
         self.context
             .with(|ctx| f(ctx.clone()).map_err(|error| self.capture_error(&ctx, phase, error)))
     }

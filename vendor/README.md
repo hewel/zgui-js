@@ -144,4 +144,100 @@ delayed decode publication, replacement/clear retirement and asynchronous
 same-path package replacement. The host's real GPU and Wayland pixel evidence is
 recorded in [preview verification](../docs/development/preview-verification.md#p3--shared-time-fixture-providers-and-native-resources).
 
+## Geometry observation deliveries
+
+`zgui-view-dom/` is copied from the same pinned revision `80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a`, with its Apache-2.0 LICENSE and NOTICE and standalone manifest; the same patch pattern selects it for the whole graph. Its delivery patch applies:
+
+- Observation callbacks are invoked outside the registry's `RefCell` borrow, so a callback may register, cancel itself or cancel a sibling.
+- Each registration receives its own fresh post-layout sample, including a first zero measurement and subscribers added inside another delivery; a prepared callback whose registration was cancelled is skipped.
+- Duplicate values are suppressed per watched quantity through a cached last sample, so equal geometry is not replayed.
+- A device-pixel-ratio change invalidates pending samples, so unchanged device geometry is redelivered under the new scale.
+- The two-pass delivery budget and next-frame settlement bound are unchanged.
+
+Regression gates:
+
+```sh
+cargo test --manifest-path vendor/zgui-view-dom/Cargo.toml --test observations
+cargo test --manifest-path vendor/zgui-runtime/Cargo.toml --test geometry_observation --test observe_owed --test observed_place --test scale
+```
+
 Remove each local patch only when an upgraded pinned upstream revision implements its contract and passes the corresponding gate. Do not silently drop patches on dependency updates.
+
+## Text replay content identity
+
+`zgui-paint/` is copied from the same pinned revision `80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a`, with its Apache-2.0 LICENSE and NOTICE and standalone manifest; the same patch pattern selects it for the whole graph. Its replay signature patch applies:
+
+- A `Line`/`TextRun` fragment's painted content signature carries the shaped paragraph key, because layout reclaims and reuses paragraph slots across the prepaint layout passes a single frame can run. Without it, a recycled slot replays the previous frame's glyph pixels for different shaped content.
+
+Regression gates:
+
+```sh
+cargo test --manifest-path vendor/zgui-runtime/Cargo.toml --test geometry_observation --test damage --test shared_text
+cargo test --manifest-path vendor/zgui-paint/Cargo.toml --lib walk::replay
+ZGUI_KEEP_PREVIEW_OUTPUT=1 node --test tests/preview/geometry.test.mjs
+```
+
+Remove each local patch only when an upgraded pinned upstream revision implements its contract and passes the corresponding gate. Do not silently drop patches on dependency updates.
+
+## Inherited colour on raw text items
+
+`zgui-layout/` is copied from revision `80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a` with its LICENSE and NOTICE. Standalone manifests and the root patch retain the pinned dependency graph.
+
+Raw text items in Flex and Grid own text-change marks while inheriting their parent's appearance. Fragment damage now includes the style generator's repaint/reshape marks for these items. Colour transitions repaint their glyphs without remounting or forcing full-surface damage.
+
+Regression gates:
+
+    cargo test -p zgui-runtime --test damage raw_
+    ZGUI_REPAINT_WALK=off cargo test -p zgui-runtime --test damage raw_
+    ZGUI_REPAINT_WALK=shadow cargo test -p zgui-runtime --test damage raw_
+    ZGUI_KEEP_PREVIEW_OUTPUT=1 node --test tests/preview/disclosure.test.mjs
+
+The recording renderer checks every incremental frame; the last frame alone can contain no glyphs when its damage is empty.
+
+## Cross-parent node moves
+
+`zgui-dom/` is copied from revision `80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a` with its LICENSE and NOTICE and a standalone manifest.
+
+Cross-parent insertion marks the old parent for child-list rebuilding, layout, repaint, and accessibility updates. This retires the moved subtree's old layout and paint records even when its new parent is detached. Same-parent reorders retain their existing path.
+
+Regression gates:
+
+    cargo test -p zgui-runtime --test damage raw_portal_
+    ZGUI_REPAINT_WALK=off cargo test -p zgui-runtime --test damage raw_portal_
+    ZGUI_REPAINT_WALK=shadow cargo test -p zgui-runtime --test damage raw_portal_
+    ZGUI_KEEP_PREVIEW_OUTPUT=1 node --test tests/preview/portal.test.mjs
+
+## Focus restoration after native defaults
+
+Automatic focus-trap restore commands retain their source scope and recheck focus when they
+are carried out. A trap removed synchronously from a capture listener — before the pointer
+framework default has applied — is restored against the focus that remains after the default:
+a press that landed on a control outside the surface keeps the focus it was given, and
+`preventDefault` on that press keeps the restore.
+
+## Animation counts on generated content
+
+`vendor/zgui-style` is pinned upstream zgui rev `80baa3c` with one change:
+`Animations::running_on` sums the running animation/transition count across the
+element's own set and its native `::before`/`::after` sets. Each motion counts
+individually, finished motions kept for a lifecycle edge are not running, and
+descendants never contribute. The lookup reads three fixed rows — no table
+scan.
+
+Regression gates:
+
+    cargo test -p zgui-runtime --test anim_lifecycle
+    cargo test -p zgui-style --lib driver::animations
+    ZGUI_KEEP_PREVIEW_OUTPUT=1 node --test tests/preview/animation.test.mjs
+
+## Frozen elastic scrolling
+
+`zgui-scroll/` is copied from revision `80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a` with its LICENSE and NOTICE. Its standalone manifest and the root patch retain the pinned graph.
+
+The runtime pauses elastic advancement on a frozen window root and excludes that paused edge from animation deadlines. It preserves displacement and resumes released edges on thaw. Other containers keep advancing. Existing root input filtering and motion cancellation remain in place.
+
+Regression gates:
+
+    cargo test --manifest-path vendor/zgui-scroll/Cargo.toml --lib
+    cargo test --manifest-path vendor/zgui-runtime/Cargo.toml --test scroll_root --test scroll_touchpad --test scroll_owed
+    ZGUI_KEEP_PREVIEW_OUTPUT=1 node --test tests/preview/scroll-lock.test.mjs

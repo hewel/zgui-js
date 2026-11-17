@@ -61,6 +61,7 @@ impl Window {
             .at_scale(scale)
             .in_scheme(self.color_scheme());
         if moved {
+            self.dom.invalidate_observations();
             let marked = zgui_layout::tree::dirty::mark_all_dirty(&mut self.layout.borrow_mut());
             // A scroll offset is a number of *device* pixels, so it is one of the things the new
             // ratio has made wrong — and it is the one thing in the table above that no cache miss

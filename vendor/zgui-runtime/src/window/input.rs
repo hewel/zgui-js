@@ -242,7 +242,11 @@ impl Window {
 
         let dispatched = {
             let host = std::rc::Rc::clone(&self.host);
-            let mut sink = HostSink::new(&host);
+            let pointer = match &payload {
+                Payload::Pointer(pointer) => Some(pointer.id),
+                _ => None,
+            };
+            let mut sink = HostSink::new(&host).with_pointer(pointer);
             dispatch::run(
                 self, &steps, kind, target, &payload, samples, modifiers, timestamp, &mut sink,
             )
@@ -281,7 +285,7 @@ impl Window {
                 ..
             } = event
         {
-            self.scroll_without_default(wheel, *sent, dispatched.default_allowed);
+            self.scroll_without_default(wheel.delta, wheel.phase, *sent, dispatched.default_allowed);
         }
         // A handler that clicked its own element on the press has taken the activation, and the
         // release that ends that press must not click it a second time. Forgetting the press is the
@@ -714,12 +718,15 @@ impl Window {
             // not. Announced from the same loop, because a handler for one of them issues commands
             // exactly as a handler for anything else does.
             self.announce_crossings(timestamp);
-            let commands = self.host.take_commands();
+            let commands = self.host.take_scoped_commands();
             if commands.is_empty() {
                 return;
             }
-            for command in commands {
-                self.carry_out(command, timestamp);
+            for queued in commands {
+                if queued.restore_from.is_some_and(|root| self.host.focus_left(root)) {
+                    continue;
+                }
+                self.carry_out(queued.command, queued.pointer, timestamp);
             }
         }
         self.announce_focus(timestamp);
@@ -727,7 +734,7 @@ impl Window {
             target: "zgui::input",
             "the commands a dispatch issued did not settle in eight rounds; the rest are dropped"
         );
-        let _ = self.host.take_commands();
+        let _ = self.host.take_scoped_commands();
     }
 
     /// Puts the keyboard inside every surface that trapped focus and asked to be entered.
@@ -744,22 +751,45 @@ impl Window {
         self.carry_out_commands(timestamp);
     }
 
+    pub(super) fn prune_pointer_captures(&mut self) {
+        let document = self.document.borrow();
+        self.command_captures.retain(|pointer| match self.router.capture().of(*pointer) {
+            Some(node) if document.store().get(node).is_none() => {
+                self.router.forget(node);
+                false
+            }
+            Some(_) => true,
+            None => false,
+        });
+    }
+
     /// Carries out one command.
-    fn carry_out(&mut self, command: Command, timestamp: Timestamp) {
+    fn carry_out(&mut self, command: Command, pointer: Option<zgui_vocab::PointerId>, timestamp: Timestamp) {
         match command {
             Command::Focus(node) => {
                 let key = node.and_then(zgui_view_dom::id::to_document);
                 self.move_focus(key, zgui_input::FocusSource::Script, timestamp);
             }
             Command::CapturePointer(node) => {
-                if let Some(key) = zgui_view_dom::id::to_document(node) {
-                    let pointer = zgui_vocab::PointerId::MOUSE;
+                if let Some(key) = zgui_view_dom::id::to_document(node)
+                    && self.document.borrow().store().get(key).is_some()
+                {
+                    let pointer = pointer.unwrap_or(zgui_vocab::PointerId::MOUSE);
                     self.router.capture_mut().set(pointer, key);
+                    if !self.command_captures.contains(&pointer) {
+                        self.command_captures.push(pointer);
+                    }
                 }
             }
             Command::ReleasePointer(node) => {
                 if let Some(key) = zgui_view_dom::id::to_document(node) {
-                    self.router.capture_mut().release_node(key);
+                    if let Some(pointer) = pointer {
+                        if self.router.capture().of(pointer) == Some(key) {
+                            self.router.capture_mut().release(pointer);
+                        }
+                    } else {
+                        self.router.capture_mut().release_node(key);
+                    }
                 }
             }
             Command::Select { node, range } => {

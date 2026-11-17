@@ -24,7 +24,7 @@ pub(crate) fn snapshot(window: &zgui::runtime::Window, allowed_pending: &[String
     let mut resources = Vec::with_capacity(snapshot.resources.len());
     for resource in snapshot.resources {
         use zgui::runtime::ImageState;
-        if resource.state == ImageState::Failed {
+        if resource.state == ImageState::Failed && resource.visible {
             return Err(Error::new("E_ASSET_FAILED", 6, format!("{} ({}): {}", resource.id, resource.source, resource.failure.as_deref().unwrap_or("native image failed"))));
         }
         let state = match resource.state {

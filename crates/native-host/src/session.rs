@@ -5,6 +5,11 @@ use ui_bridge::{DeferredEvent, UiBridge, registry::NodeRegistry};
 use zgui::platform::{SurfaceId, WakeReason, Waker};
 use crate::{assets::{AssetSource, ContractFailure}, environment::Environment, session_host::MountRegion, package::Package, work::{Arguments, Work}};
 
+enum DeferredNotification {
+    Event(DeferredEvent),
+    Geometry { id: u64, value: zgui::view::ObservedValue, scale: f32 },
+}
+
 /// Typed session failure: engine diagnostics, sticky provider contracts, and
 /// host invariants keep distinct categories through recovery classification.
 #[derive(Debug)]
@@ -85,6 +90,8 @@ pub(crate) struct ResourceCounts {
     pub nodes: usize,
     pub wrappers: usize,
     pub callbacks: usize,
+    pub focus_traps: usize,
+    pub scroll_locks: usize,
     pub timers: usize,
     pub frame_callbacks: usize,
     pub requests: usize,
@@ -104,7 +111,7 @@ pub(crate) struct Session {
     pub(crate) region: MountRegion,
     pub(crate) frames: Cell<usize>,
     module: SessionModule,
-    deferred: RefCell<VecDeque<DeferredEvent>>,
+    deferred: RefCell<VecDeque<DeferredNotification>>,
     fault: RefCell<Option<SessionError>>,
     cleanup_failure: RefCell<Option<js_runtime::Diagnostic>>,
     policy: SessionPolicy,
@@ -161,6 +168,15 @@ impl Session {
         session.bridge.set_dispatcher(Rc::new(move |id, event| {
             if let Some(session) = weak.upgrade() { session.dispatch(id, event); }
         }));
+        let weak = Rc::downgrade(&session);
+        session.bridge.set_geometry_dispatcher(
+            Rc::new(move |id, value, scale| {
+                if let Some(session) = weak.upgrade() { session.dispatch_geometry(id, value, scale); }
+            }),
+            Rc::new({ let weak = Rc::downgrade(&session); move || {
+                if let Some(session) = weak.upgrade() { session.wake_owner(); }
+            } }),
+        );
         Ok(session)
     }
 
@@ -200,22 +216,38 @@ impl Session {
         self.waker.wake(WakeReason::ReactiveWork { surfaces: vec![self.surface].into_boxed_slice() });
     }
 
+    fn defer(&self, notification: DeferredNotification) {
+        let mut queue = self.deferred.borrow_mut();
+        if queue.len() == 256 {
+            *self.fault.borrow_mut() = Some("nested native notification queue exhausted".into());
+        } else {
+            queue.push_back(notification);
+        }
+        self.wake_owner();
+    }
+
     fn dispatch(&self, id: u64, event: &mut zgui::view::EventCx<'_>) {
         if self.shutdown_started.get() || self.bridge.is_disposed() { return; }
         let Ok(mut engine) = self.engine.try_borrow_mut() else {
-            let mut queue = self.deferred.borrow_mut();
-            if queue.len() == 256 {
-                *self.fault.borrow_mut() = Some("nested native notification queue exhausted".into());
-            } else {
-                queue.push_back(DeferredEvent::capture(id, event));
-            }
-            self.wake_owner();
+            self.defer(DeferredNotification::Event(DeferredEvent::capture(id, event)));
             return;
         };
         let Some(engine) = engine.as_mut() else { return; };
         let result = self.bridge.run_turn(|| engine.with_context(|ctx| self.bridge.invoke_event(&ctx, id, event)));
         if let Err(error) = result { *self.fault.borrow_mut() = Some(self.diagnostic(error).into()); }
         // Cancellation is already applied and revoked before owner work is scheduled.
+        self.wake_owner();
+    }
+
+    fn dispatch_geometry(&self, id: u64, value: zgui::view::ObservedValue, scale: f32) {
+        if self.shutdown_started.get() || self.bridge.is_disposed() { return; }
+        let Ok(mut engine) = self.engine.try_borrow_mut() else {
+            self.defer(DeferredNotification::Geometry { id, value, scale });
+            return;
+        };
+        let Some(engine) = engine.as_mut() else { return; };
+        let result = self.bridge.run_turn(|| engine.with_context(|ctx| self.bridge.invoke_geometry(&ctx, id, value, scale)));
+        if let Err(error) = result { *self.fault.borrow_mut() = Some(self.diagnostic(error).into()); }
         self.wake_owner();
     }
 
@@ -263,9 +295,16 @@ impl Session {
                     true
                 } else { false },
                 2 => {
-                    let event = self.deferred.borrow_mut().pop_front();
-                    if let Some(event) = event {
-                        self.bridge.run_turn(|| engine.with_context(|ctx| self.bridge.invoke_deferred(&ctx, event))).map_err(|error| self.diagnostic(error))?;
+                    let notification = self.deferred.borrow_mut().pop_front();
+                    if let Some(notification) = notification {
+                        match notification {
+                            DeferredNotification::Event(event) => {
+                                self.bridge.run_turn(|| engine.with_context(|ctx| self.bridge.invoke_deferred(&ctx, event))).map_err(|error| self.diagnostic(error))?;
+                            }
+                            DeferredNotification::Geometry { id, value, scale } => {
+                                self.bridge.run_turn(|| engine.with_context(|ctx| self.bridge.invoke_geometry(&ctx, id, value, scale))).map_err(|error| self.diagnostic(error))?;
+                            }
+                        }
                         true
                     } else { false }
                 },
@@ -348,7 +387,9 @@ impl Session {
         let (timers, frame_callbacks, requests) = self.work.counts();
         ResourceCounts {
             nodes: self.bridge.live_count(), wrappers: self.bridge.wrapper_count(),
-            callbacks: self.bridge.callback_count(), timers, frame_callbacks, requests,
+            callbacks: self.bridge.callback_count(), focus_traps: self.bridge.focus_trap_count(),
+            scroll_locks: self.bridge.scroll_lock_count(),
+            timers, frame_callbacks, requests,
             engine_alive: self.engine.borrow().is_some(),
         }
     }

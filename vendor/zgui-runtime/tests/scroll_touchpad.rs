@@ -13,6 +13,7 @@ use zgui_platform::SurfaceEvent;
 use zgui_platform_headless::{Harness, Headless};
 use zgui_runtime::Runtime;
 use zgui_vocab::{Modifiers, ScrollDelta, ScrollPhase, Timestamp, WheelEvent};
+use zgui_view::ViewHost;
 
 /// One frame, rounded up past the deadline the park installs.
 const FRAME: Duration = Duration::from_millis(20);
@@ -371,4 +372,55 @@ fn momentum_after_a_lift_with_the_edge_stretched_is_dropped() {
     pad.send(0.0, 0.0, ScrollPhase::Ended);
     pad.run(40);
     assert!(pad.settled());
+}
+
+#[test]
+fn frozen_root_holds_its_drawn_edge_after_fingers_lift_and_releases_it_on_thaw() {
+    let mut pad = Pad::nested(10);
+    let [page, list] = pad.containers()[..] else { panic!("expected page and list"); };
+    pad.drag(&[(0.0, -60.0)]);
+    assert!(pad.stretch_of(page).height.0 < 0.0, "control: the page really stretched");
+    let held = pad.window().scroll().borrow().composed().of(page);
+    let host = pad.window().host().clone();
+    host.freeze_scrolling(true);
+    pad.harness.settle(2);
+    assert_eq!(pad.window().scroll().borrow().composed().of(page), held);
+    pad.lift();
+    pad.run(5);
+    assert_eq!(pad.offset_of(page).y.0, 0.0);
+    assert_eq!(pad.window().scroll().borrow().composed().of(page), held, "a frozen root must not visually spring back");
+    assert!(!pad.window().scroll().borrow().is_animating(), "a frozen edge must not request animation frames");
+    pad.drag(&[(0.0, 30.0)]);
+    assert!(pad.offset_of(list).y.0 > 0.0, "a fresh inner gesture still moves its own container");
+    assert_eq!(pad.window().scroll().borrow().composed().of(page), held);
+    pad.lift();
+    pad.run(5);
+    assert_eq!(pad.window().scroll().borrow().composed().of(page), held);
+    host.freeze_scrolling(false);
+    pad.harness.settle(2);
+    pad.run(40);
+    assert!(pad.settled(), "the released edge must return instead of staying gripped forever");
+    assert_eq!(pad.stretch_of(page).height.0, 0.0);
+    assert_eq!(pad.offset_of(page).y.0, 0.0);
+}
+
+#[test]
+fn freezing_a_root_mid_return_preserves_its_current_drawn_position() {
+    let mut pad = Pad::nested(10);
+    let page = pad.containers()[0];
+    pad.drag(&[(0.0, -60.0)]);
+    pad.lift();
+    pad.run(1);
+    assert!(pad.stretch_of(page).height.0 < 0.0, "control: a return is in flight");
+    let held = pad.window().scroll().borrow().composed().of(page);
+    let host = pad.window().host().clone();
+    host.freeze_scrolling(true);
+    pad.harness.settle(2);
+    pad.run(5);
+    assert_eq!(pad.window().scroll().borrow().composed().of(page), held, "freezing must pause a return already in flight");
+    host.freeze_scrolling(false);
+    pad.harness.settle(2);
+    pad.run(40);
+    assert!(pad.settled());
+    assert_eq!(pad.offset_of(page).y.0, 0.0);
 }

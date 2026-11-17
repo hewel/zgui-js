@@ -1,0 +1,90 @@
+[package]
+name = "zgui-layout"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+description = "Box layout for zgui documents: flexbox, grid, block and inline"
+repository = "https://github.com/zortax/zgui"
+homepage = "https://zgui.zortax.de"
+rust-version = "1.90"
+keywords = ["gui", "ui", "css", "reactive", "wgpu"]
+categories = ["gui"]
+include = ["/src", "/tests", "/README.md", "/LICENSE", "/NOTICE"]
+
+# L4 — engines. Every dependency is inherited: `foo.workspace = true`.
+
+[workspace]
+
+[dependencies]
+zgui-arena = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a" }
+# The damage set a frame accumulates and the invalidation lattice the fragment pass reads and
+# writes. Both are this workspace's own bit-twiddling primitives, and there is one of each.
+zgui-bits = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a" }
+zgui-css = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a" }
+zgui-dom = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a" }
+zgui-geom = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a" }
+zgui-interned = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a" }
+zgui-profile = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a" }
+# The clip chain and the transform a fragment carries are the scene's identifiers. A parallel id
+# space here would be the same aliasing hazard one level up.
+zgui-scene = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a" }
+zgui-text = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a" }
+# The run and paragraph properties an inline formatting context is built from, and the two keys a
+# shaped result is cached under. Named directly because they appear in this crate's own signatures:
+# a run handed to a shaper carries one of them.
+zgui-text-style = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a" }
+
+# The layout algorithms. The feature set is pinned in the workspace manifest and asserted by the
+# versions ledger.
+cephal = { version = "0.2.0", default-features = false, features = ["block", "flex", "grid"] }
+
+rustc-hash = "2.1"
+rayon = "1.12"
+smallvec = "1.15"
+tracing = "0.1.44"
+
+[dev-dependencies]
+# The box-tree and resolved-layout goldens are written against the shared tree-dump seam, and the
+# counter assertions need the counters compiled in — a build without them would keep every budget
+# green while measuring nothing.
+zgui-profile = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a", features = ["counters"] }
+zgui-testkit-scene = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a" }
+# The custom-element reference is a packed property; the relayout test writes one.
+zgui-vocab = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a" }
+# The box tree is built from computed styles, so the acceptance tests run a real cascade over a
+# real document rather than hand-writing the styles a cascade would have produced.
+zgui-style = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a" }
+
+[features]
+# Compiles the wall-clock budget target. Off by default so that an ordinary unoptimised test run
+# cannot execute a budget and report an unoptimised number as a regression; the gate switches it on
+# and runs that target in release.
+wall-clock = []
+
+# The wall-clock budgets, which are a different thing from the counter budgets the rest of the
+# suite asserts: a time is a measurement only in an optimised build, so this target is compiled
+# only when the gate asks for it, and the gate runs it in release.
+[[test]]
+name = "wall_clock"
+required-features = ["wall-clock"]
+
+[lints.rust]
+missing_docs = "deny"
+unsafe_code = "deny"
+unreachable_pub = "warn"
+
+[lints.rustdoc]
+broken_intra_doc_links = "deny"
+private_intra_doc_links = "warn"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+undocumented_unsafe_blocks = "warn"
+
+[patch.crates-io]
+fontique = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a" }
+
+[patch."https://github.com/zortax/zgui"]
+zgui-dom = { path = "../zgui-dom" }
+zgui-layout = { path = "." }
+zgui-style = { path = "../zgui-style" }

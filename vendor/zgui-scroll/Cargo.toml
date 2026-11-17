@@ -1,0 +1,59 @@
+[package]
+name = "zgui-scroll"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+description = "Scroll state: offsets, chaining, overscroll and momentum"
+repository = "https://github.com/zortax/zgui"
+homepage = "https://zgui.zortax.de"
+rust-version = "1.90"
+keywords = ["gui", "ui", "css", "reactive", "wgpu"]
+categories = ["gui"]
+include = ["/src", "/build", "/build.rs", "/README.md", "/LICENSE", "/NOTICE"]
+
+[workspace]
+
+# L5 — systems. Every dependency is inherited: `foo.workspace = true`.
+#
+# Layout owns scroll *regions* — which boxes scroll, how large their content is, where the
+# scrollport sits. This crate owns scroll *offsets*, which are state that changes many times a
+# second and must never re-enter style or layout. It therefore names the document (to mark the one
+# bit a scroll produces), the layout store (to read the region an offset is clamped against) and
+# the vocabulary a scroll is reported in — and nothing above any of them.
+[dependencies]
+zgui-bits = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a" }
+zgui-dom = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a" }
+zgui-geom = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a" }
+zgui-layout = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a" }
+zgui-vocab = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a" }
+
+rustc-hash = "2.1"
+smallvec = "1.15"
+
+[dev-dependencies]
+# Box keys are fabricated in the tests that are about the bookkeeping rather than about a document:
+# which container an offset belongs to is a map key, and a map key needs no layout engine behind it.
+zgui-arena = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a" }
+zgui-interned = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a" }
+
+[lints.rust]
+missing_docs = "deny"
+unsafe_code = "deny"
+unreachable_pub = "warn"
+
+[lints.rustdoc]
+broken_intra_doc_links = "deny"
+private_intra_doc_links = "warn"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+undocumented_unsafe_blocks = "warn"
+
+[patch.crates-io]
+fontique = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a" }
+
+[patch."https://github.com/zortax/zgui"]
+zgui-dom = { path = "../zgui-dom" }
+zgui-layout = { path = "../zgui-layout" }
+zgui-paint = { path = "../zgui-paint" }
+zgui-style = { path = "../zgui-style" }
