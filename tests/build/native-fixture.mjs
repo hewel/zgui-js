@@ -232,6 +232,7 @@ export function createHost() {
       return node;
     },
     registerDismissLayer: (node, callback, options) => {
+      assertActiveHost("registerDismissLayer");
       assertLive(node, "dismiss layer target");
       const { record, dispose } = makeLease(layers, {
         node,
@@ -242,6 +243,7 @@ export function createHost() {
       });
       return {
         update: next => {
+          assertActiveHost("dismissLayer.update");
           assertLive(node, "dismiss layer target");
           record.options = next;
           record.updates.push(next);
@@ -266,6 +268,7 @@ export function createHost() {
       return node.tag === "#text";
     },
     insertNode: (parent, node, anchor) => {
+      assertActiveHost("insertNode");
       assertLive(parent, "parent");
       assertLive(node, "node");
       if (anchor !== undefined && anchor !== null) assertLive(anchor, "anchor");
@@ -309,11 +312,11 @@ export function createHost() {
     },
     setProperty: (node, name, value) => {
       assertLive(node, "node");
+      if (stopping && ((name.startsWith("on") && value != null) || (name === "src" && value != null))) {
+        if (name.startsWith("on")) registrationsAfterStop.push(name);
+        throw new ReferenceError("native session is stopping");
+      }
       if (typeof value === "function") {
-        if (stopping && name.startsWith("on")) {
-          registrationsAfterStop.push(name);
-          throw new ReferenceError("native session is stopping");
-        }
         node.callbacks[name] = value;
         return;
       }
@@ -322,6 +325,7 @@ export function createHost() {
       else node.props.set(name, value);
     },
     installStylesheet: (name, css) => {
+      assertActiveHost("installStylesheet");
       if (stylesheets.get(name) === css) return;
       installs.push(name);
       stylesheets.set(name, css);
@@ -329,10 +333,12 @@ export function createHost() {
     removeStylesheet: name => { stylesheets.delete(name); },
     focus: (node, reveal = false) => moveFocus(node, reveal),
     trapFocus: (node, wrap, autoFocus, restore) => {
+      assertActiveHost("trapFocus");
       assertLive(node, "focus trap target");
       return makeLease(traps, { node, wrap, autoFocus, restore }).dispose;
     },
     lockScroll: node => {
+      assertActiveHost("lockScroll");
       assertLive(node, "scroll lock target");
       return makeLease(locks, { node }).dispose;
     },
@@ -352,6 +358,7 @@ export function createHost() {
       return animating.get(node) ?? false;
     },
     observeGeometry: (node, kind, callback) => {
+      assertActiveHost("observeGeometry");
       assertLive(node, "geometry target");
       const { record, dispose } = makeLease(geometry, {
         node,

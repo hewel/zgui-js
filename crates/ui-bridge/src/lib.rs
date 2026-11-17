@@ -10,7 +10,7 @@ mod focus;
 mod geometry;
 mod scroll;
 
-use std::{cell::{Cell, RefCell}, collections::{HashMap, HashSet, VecDeque}, marker::PhantomData, rc::{Rc, Weak}, sync::Arc};
+use std::{cell::{Cell, RefCell}, collections::{HashMap, HashSet, VecDeque}, fmt, marker::PhantomData, rc::{Rc, Weak}, sync::Arc};
 use rquickjs::{class::Trace, function::{Func, Opt}, Class, Ctx, Exception, JsLifetime, Object, Persistent, Value};
 use registry::{BridgeError, Handle, NodeRegistry, Snapshot};
 
@@ -28,8 +28,8 @@ pub const MAX_QUEUED_NOTIFICATIONS: usize = 256;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct QueueOverflow;
 
-impl std::fmt::Display for QueueOverflow {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Display for QueueOverflow {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str("nested native notification queue exhausted")
     }
 }
@@ -41,6 +41,7 @@ impl std::error::Error for QueueOverflow {}
 #[must_use]
 pub enum DispatchOutcome {
     Executed,
+    Faulted,
     Busy,
     Retired,
 }
@@ -96,11 +97,23 @@ impl<'a> BridgeCallback<'a> {
     }
 }
 
+impl fmt::Debug for BridgeCallback<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("BridgeCallback").finish_non_exhaustive()
+    }
+}
+
 /// Pending synchronous native notification awaiting a host JS engine turn.
 #[must_use]
 pub struct BridgeStep<'a> {
     bridge: &'a UiBridge,
     payload: DispatchPayload<'a>,
+}
+
+impl fmt::Debug for BridgeStep<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("BridgeStep").finish_non_exhaustive()
+    }
 }
 
 impl<'a> BridgeStep<'a> {
@@ -120,6 +133,12 @@ impl<'a> BridgeStep<'a> {
 pub struct BridgeTurn<'turn> {
     bridge: &'turn UiBridge,
     _marker: PhantomData<&'turn mut UiBridge>,
+}
+
+impl fmt::Debug for BridgeTurn<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("BridgeTurn").finish_non_exhaustive()
+    }
 }
 
 impl<'turn> BridgeTurn<'turn> {
@@ -165,6 +184,14 @@ type HostDispatcher = Rc<dyn Fn(BridgeStep<'_>) -> DispatchOutcome>;
 pub struct HostPort {
     wake: WakeTarget,
     dispatch: Option<HostDispatcher>,
+}
+
+impl fmt::Debug for HostPort {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("HostPort")
+            .field("synchronous", &self.dispatch.is_some())
+            .finish_non_exhaustive()
+    }
 }
 
 impl HostPort {
@@ -426,32 +453,39 @@ impl UiBridge {
         self.wake();
     }
 
+    fn try_dispatch_synchronously<'a>(&'a self, payload: DispatchPayload<'a>) -> bool {
+        let Some(dispatch) = self.port.dispatch.as_ref().filter(|_| self.can_dispatch_synchronously()) else {
+            return false;
+        };
+        match dispatch(BridgeStep { bridge: self, payload }) {
+            DispatchOutcome::Executed | DispatchOutcome::Retired => true,
+            DispatchOutcome::Faulted => {
+                self.dispose();
+                true
+            }
+            DispatchOutcome::Busy => false,
+        }
+    }
+
     fn dispatch_event(&self, id: u64, event: &mut zgui::view::EventCx<'_>) {
         if self.disposed.get() {
             return;
         }
         let mut snapshot_slot = Some(events::EventSnapshot::capture(event));
-        if let Some(dispatch) = self.port.dispatch.as_ref().filter(|_| self.can_dispatch_synchronously()) {
-            let mut native_slot = Some(event);
-            let mut apply = |control: events::DispatchControl| {
-                if let Some(native) = native_slot.take() {
-                    control.expire_and_apply(native);
-                }
-            };
-            let step = BridgeStep {
-                bridge: self,
-                payload: DispatchPayload::LiveEvent {
-                    id,
-                    snapshot: &mut snapshot_slot,
-                    apply: &mut apply,
-                },
-            };
-            match dispatch(step) {
-                DispatchOutcome::Executed | DispatchOutcome::Retired => return,
-                DispatchOutcome::Busy => {}
+        let mut native_slot = Some(event);
+        let mut apply = |control: events::DispatchControl| {
+            if let Some(native) = native_slot.take() {
+                control.expire_and_apply(native);
             }
-        }
-        if let Some(snapshot) = snapshot_slot.take() {
+        };
+        let payload = DispatchPayload::LiveEvent {
+            id,
+            snapshot: &mut snapshot_slot,
+            apply: &mut apply,
+        };
+        if !self.try_dispatch_synchronously(payload)
+            && let Some(snapshot) = snapshot_slot.take()
+        {
             self.enqueue(QueuedNotification::Event(DeferredEvent { id, snapshot }));
         }
     }
@@ -461,17 +495,10 @@ impl UiBridge {
             return;
         }
         let mut value_slot = Some(value);
-        if let Some(dispatch) = self.port.dispatch.as_ref().filter(|_| self.can_dispatch_synchronously()) {
-            let step = BridgeStep {
-                bridge: self,
-                payload: DispatchPayload::Geometry { id, slot: &mut value_slot, scale },
-            };
-            match dispatch(step) {
-                DispatchOutcome::Executed | DispatchOutcome::Retired => return,
-                DispatchOutcome::Busy => {}
-            }
-        }
-        if let Some(value) = value_slot.take() {
+        let payload = DispatchPayload::Geometry { id, slot: &mut value_slot, scale };
+        if !self.try_dispatch_synchronously(payload)
+            && let Some(value) = value_slot.take()
+        {
             self.enqueue(QueuedNotification::Geometry { id, value, scale });
         }
     }

@@ -165,3 +165,112 @@ impl FrameLedger {
         self.committed.as_ref().map(|meta| meta.time_us)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn frame_ledger_tracks_settled_skips_revisions_resizes_and_budgets() {
+        let mut ledger = FrameLedger::default();
+        let step_start = ledger.begin_step(1);
+
+        let initial = FrameInput {
+            ordinal: 1,
+            time_us: 1000,
+            layout_document_coherent: true,
+            status: FrameStatus::Presented,
+            outcome_debug: "Presented".into(),
+            draw_id: 1,
+            presentation_id: 1,
+            configuration_id: 1,
+            presented_draw: Some(1),
+        };
+        assert!(ledger.record_outcome(&initial).is_some());
+        ledger.commit(CommittedMeta {
+            generation: 1,
+            document_revision: 5,
+            metadata_revision: 2,
+            resource_revision: 0,
+            surface_configuration: ledger.surface_configuration(),
+            configuration_id: 1,
+            presentation_id: 1,
+            ordinal: 1,
+            time_us: 1000,
+        });
+
+        let mut query = SettledQuery {
+            generation: 1,
+            document_revision: 5,
+            metadata_revision: 2,
+            resource_revision: 0,
+            configuration_id: 1,
+            presentation_id: 1,
+            presented_draw: Some(1),
+            completed_coherent: true,
+            completed_ordinal: Some(1),
+            completed_status: Some(FrameStatus::Presented),
+        };
+        assert!(ledger.is_settled(&query));
+
+        let skipped = FrameInput {
+            ordinal: 2,
+            time_us: 2000,
+            layout_document_coherent: true,
+            status: FrameStatus::Undamaged,
+            outcome_debug: "Skipped(Undamaged)".into(),
+            draw_id: 2,
+            presentation_id: 1,
+            configuration_id: 1,
+            presented_draw: Some(1),
+        };
+        assert!(ledger.record_outcome(&skipped).is_some());
+        ledger.commit(CommittedMeta {
+            generation: 1,
+            document_revision: 5,
+            metadata_revision: 2,
+            resource_revision: 0,
+            surface_configuration: ledger.surface_configuration(),
+            configuration_id: 1,
+            presentation_id: 1,
+            ordinal: 2,
+            time_us: 2000,
+        });
+        query.completed_ordinal = Some(2);
+        query.completed_status = Some(FrameStatus::Undamaged);
+        assert!(ledger.is_settled(&query));
+
+        assert!(!ledger.is_settled(&SettledQuery { document_revision: 6, ..query }));
+
+        let failed_next = FrameInput {
+            ordinal: 3,
+            time_us: 3000,
+            layout_document_coherent: true,
+            status: FrameStatus::Presented,
+            outcome_debug: "Presented".into(),
+            draw_id: 3,
+            presentation_id: 2,
+            configuration_id: 1,
+            presented_draw: Some(3),
+        };
+        assert!(ledger.record_outcome(&failed_next).is_some());
+        assert_eq!(ledger.committed_time_us(), Some(2000));
+
+        ledger.bump_surface_configuration();
+        assert!(!ledger.is_settled(&query));
+        let lag = FrameInput {
+            ordinal: 4,
+            time_us: 4000,
+            layout_document_coherent: true,
+            status: FrameStatus::Undamaged,
+            outcome_debug: "Skipped(Undamaged)".into(),
+            draw_id: 4,
+            presentation_id: 2,
+            configuration_id: 2,
+            presented_draw: Some(3),
+        };
+        assert!(ledger.record_outcome(&lag).is_none());
+        assert!(ledger.exceeded_step_budget(step_start, 3));
+        assert!(!ledger.exceeded_step_budget(step_start, 4));
+    }
+}

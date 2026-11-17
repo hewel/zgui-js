@@ -214,7 +214,7 @@ function mountOverlay(state: OverlayState | undefined, props: DismissalContentPr
   return holder;
 }
 
-export function overlaySurface(state: OverlayState | undefined, props: DismissalContentProps, config: {
+export function modalSurface(state: OverlayState | undefined, props: DismissalContentProps, config: {
   class: string; role: NativeRole; children?: () => NativeChild;
 }): NativeChild {
   return mountOverlay(state, props, {

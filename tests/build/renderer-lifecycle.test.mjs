@@ -123,12 +123,26 @@ test("detached node allows same-turn cleanup but invalidates after the Bridge tu
   }
 });
 
-test("beginStop rejects new nodes and new event registrations with ReferenceError while allowing disposal", async t => {
+test("beginStop rejects new nodes, leases, stylesheets, and listeners with ReferenceError while allowing disposal", async t => {
   const { mod, harness, root } = await mounted(t);
+  const child = harness.host.createElement("box");
+  harness.host.insertNode(root, child, null);
+  const dismiss = harness.host.registerDismissLayer(root, () => {}, {});
   const dispose = mod.mount(root, "app", 0);
   harness.beginStop();
   assert.throws(() => harness.host.createElement("box"), ReferenceError);
+  assert.throws(() => harness.host.createPortal("popover"), ReferenceError);
+  assert.throws(() => harness.host.createTextNode("hi"), ReferenceError);
+  assert.throws(() => harness.host.insertNode(root, child, null), ReferenceError);
+  assert.throws(() => harness.host.installStylesheet("late", ".a {}"), ReferenceError);
+  assert.throws(() => harness.host.trapFocus(root, true, true, true), ReferenceError);
+  assert.throws(() => harness.host.lockScroll(root), ReferenceError);
+  assert.throws(() => harness.host.registerDismissLayer(root, () => {}, {}), ReferenceError);
+  assert.throws(() => dismiss.update({}), ReferenceError);
+  assert.throws(() => harness.host.observeGeometry(root, "borderBox", () => {}), ReferenceError);
   assert.throws(() => harness.host.setProperty(root, "onClick", () => {}), ReferenceError);
+  assert.throws(() => harness.host.setProperty(child, "src", "foo.png"), ReferenceError);
+  assert.doesNotThrow(() => dismiss.dispose());
   assert.doesNotThrow(() => dispose());
   assert.equal(mod.cleanups, 3);
 });

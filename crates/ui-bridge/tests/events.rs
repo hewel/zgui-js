@@ -28,6 +28,7 @@ struct BridgeRunner {
     last_error: RefCell<Option<String>>,
     wakes: Cell<usize>,
     force_busy: Cell<bool>,
+    force_fault: Cell<bool>,
 }
 
 impl BridgeRunner {
@@ -37,11 +38,15 @@ impl BridgeRunner {
             last_error: RefCell::new(None),
             wakes: Cell::new(0),
             force_busy: Cell::new(false),
+            force_fault: Cell::new(false),
         })
     }
 
     fn enter(&self, step: BridgeStep<'_>) -> DispatchOutcome {
         self.wakes.set(self.wakes.get() + 1);
+        if self.force_fault.get() {
+            return DispatchOutcome::Faulted;
+        }
         if self.force_busy.get() {
             return DispatchOutcome::Busy;
         }
@@ -882,4 +887,30 @@ fn keyboard_character_text_is_explicit_and_survives_dispatch() {
             throw Error('test must cover identical key strings with different categories');
         'verified'
     "#), "verified");
+}
+
+#[test]
+fn synchronous_faulted_outcome_disposes_bridge_without_queueing() {
+    let h = EventHarness::synchronous(11, 32);
+    h.script("(__zgui.setProperty(root, 'onKeyDown', () => {}), 'armed')");
+    let listener = h.backend.handler(registrations(&h.backend, h.mount)[0].id).unwrap();
+    h.runner.force_fault.set(true);
+    let payload = Payload::Key(KeyEvent::character("a"));
+    let control = EventControl::new();
+    let mut sink = DiscardCommands;
+    let mut event = EventCx::new(
+        EventKind::KeyDown,
+        h.mount,
+        h.mount,
+        Phase::Target,
+        Modifiers::NONE,
+        Timestamp::ORIGIN,
+        &payload,
+        &control,
+        &mut sink,
+    );
+    listener(&mut event);
+    assert!(h.bridge.is_disposed());
+    assert!(!h.bridge.has_queued_notifications().unwrap());
+    assert_eq!(h.bridge.live_count(), 0);
 }

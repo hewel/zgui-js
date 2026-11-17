@@ -43,10 +43,7 @@ mod ledger;
 mod semantics;
 
 use capture::{CaptureHandle, PresentedPixels};
-#[cfg(not(test))]
 use ledger::{CommittedMeta, FrameInput, FrameLedger, FrameStatus, SettledQuery};
-#[cfg(test)]
-pub(super) use ledger::{CommittedMeta, FrameInput, FrameLedger, FrameStatus, SettledQuery};
 use semantics::SemanticModel;
 
 pub(crate) struct CaptureRequest<'a> {
@@ -383,7 +380,7 @@ pub(crate) fn for_preview<H: AppHandler>(
     Ok(Pipeline::from_harness(Harness::over(platform, host)))
 }
 
-/// Frame returned by [`StaticSession::await_frame`] for static calibration inspection.
+/// Frame returned by [`StaticPreview::await_frame`] for static calibration inspection.
 pub(crate) struct StaticFrame(PresentedPixels);
 
 impl StaticFrame {
@@ -408,14 +405,14 @@ impl StaticFrame {
     }
 }
 
-/// Static headless rendering session shared with calibration, hiding `CaptureHandle` and `Pipeline` teardown.
-pub(crate) struct StaticSession {
+/// Static headless preview runner shared with calibration, hiding `CaptureHandle` and `Pipeline` teardown.
+pub(crate) struct StaticPreview {
     pipeline: Pipeline<Runtime>,
     capture: CaptureHandle,
     map_err: fn(AppError) -> Error,
 }
 
-impl StaticSession {
+impl StaticPreview {
     pub fn check_runtime(&self) -> Result<(), Error> {
         self.pipeline
             .app()
@@ -500,7 +497,7 @@ pub(crate) fn render_static<V, T>(
     stylesheet: String,
     map_err: fn(AppError) -> Error,
     mut build_view: impl FnMut() -> V + 'static,
-    run: impl FnOnce(&mut StaticSession) -> Result<T, Error>,
+    run: impl FnOnce(&mut StaticPreview) -> Result<T, Error>,
 ) -> Result<T, Error>
 where
     V: IntoView,
@@ -519,12 +516,12 @@ where
     let runtime = app
         .into_handler(move |cx| Box::new(build_view().into_view().build(cx)))
         .map_err(map_err)?;
-    let mut session = StaticSession {
+    let mut preview = StaticPreview {
         pipeline: Pipeline::from_harness(Harness::new(runtime)),
         capture,
         map_err,
     };
-    run(&mut session)
+    run(&mut preview)
 }
 
 struct OwnedFrame {

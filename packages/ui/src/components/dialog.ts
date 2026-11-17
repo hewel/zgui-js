@@ -3,7 +3,7 @@ import { memo, mergeProps } from "../renderer/index.js";
 import type { NativeChild, NativeElementProps, NativeEvent, NativeNode } from "../types.js";
 import type { ButtonProps } from "./button.js";
 import { Icon, CROSS } from "./icons.js";
-import { OverlayContext, OverlayRoot, overlayClose, overlayDescription, overlaySurface, overlayTitle, overlayTrigger } from "./overlay.js";
+import { OverlayContext, OverlayRoot, modalSurface, overlayClose, overlayDescription, overlayTitle, overlayTrigger } from "./overlay.js";
 import type { OverlayRootProps } from "./overlay.js";
 import { callHandler } from "./state.js";
 import { classes, element, forbidChildren, part, useStylesheet } from "./shared.js";
@@ -72,7 +72,7 @@ export function DialogContent(props: DialogContentProps = {}): NativeChild {
   useStylesheet(sheet);
   const context = useContext(OverlayContext);
   const [own, rest] = splitProps(props, ["children", "dismissControl"]);
-  return overlaySurface(context, mergeProps({
+  return modalSurface(context, mergeProps({
     get ariaLabelledBy() { return context?.title.node() ?? null; },
     get ariaDescribedBy() { return context?.description.node() ?? null; },
   }, rest), {
