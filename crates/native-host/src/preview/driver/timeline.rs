@@ -12,19 +12,19 @@ impl Driver {
         let target=by_ms.checked_mul(1000).and_then(|delta|from.checked_add(delta))
             .filter(|target|*target<=self.maximum_time_us)
             .ok_or_else(||Error::new("E_VIRTUAL_TIME_BUDGET",5,"clock.advance exceeds maxVirtualDurationMs"))?;
-        let origin=self.harness.platform().clock().origin();
+        let origin=self.pipeline.platform().clock().origin();
         let endpoint=origin+Duration::from_micros(target);
         let first_frame=self.frames();
         self.settle(false)?;
-        while self.harness.now()<endpoint {
-            let now=self.harness.now();
+        while self.pipeline.now()<endpoint {
+            let now=self.pipeline.now();
             let mut next=endpoint;
-            if let Some(deadline)=self.harness.parked_deadline().filter(|deadline|*deadline>now) { next=next.min(deadline); }
+            if let Some(deadline)=self.pipeline.parked_deadline().filter(|deadline|*deadline>now) { next=next.min(deadline); }
             if let Some(deadline)=self.fixtures.next_deadline_us() {
                 let deadline=origin+Duration::from_micros(deadline);
                 if deadline>now { next=next.min(deadline); }
             }
-            self.harness.advance(next.saturating_duration_since(now));
+            self.pipeline.advance(next.saturating_duration_since(now));
             self.settle(false)?;
         }
         Ok(json!({"fromTimeUs":from,"timeUs":self.environment.now_us(),"advancedUs":target-from,
@@ -63,11 +63,11 @@ impl Driver {
         let size=Size::new(DevicePx(dimensions.0 as f32),DevicePx(dimensions.1 as f32));
         self.dimensions=dimensions;
         let changed=previous!=(width,height,scale);
-        if changed { self.probe.surface_configuration.set(self.probe.surface_configuration.get()+1); }
-        self.harness.deliver(surface,if scale_changed { SurfaceEvent::ScaleFactorChanged{scale_factor:scale,size} } else { SurfaceEvent::Resized(size) });
+        if changed { self.observer.bump_surface_configuration(); }
+        self.pipeline.deliver(surface,if scale_changed { SurfaceEvent::ScaleFactorChanged{scale_factor:scale,size} } else { SurfaceEvent::Resized(size) });
         if changed { self.window()?.request_frame(); }
         // Deliver the real event without advancing the held native clock. Pacing may defer its frame.
-        self.harness.pump();
+        self.pipeline.pump();
         self.check()?;
         self.settle(false)?;
         Ok(json!({"width":width,"height":height,"scale":scale,

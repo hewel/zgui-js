@@ -2,7 +2,8 @@ use serde_json::json;
 use zgui::{reactive::prelude::GetUntracked, runtime::Window, view::ViewHost};
 
 use crate::session::Session;
-use super::{evidence::{Bounds,CaptureIdentity,NodeEvidence,NodeState,TreeEvidence},semantics::SemanticModel};
+use super::semantics::SemanticModel;
+use crate::preview::evidence::{Bounds, CaptureIdentity, NodeEvidence, NodeState, TreeEvidence};
 
 pub struct Snapshot {
     pub tree: TreeEvidence,

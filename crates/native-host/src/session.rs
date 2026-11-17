@@ -79,7 +79,7 @@ impl SessionPolicy {
     }
 }
 
-#[derive(Debug, Default, PartialEq, Eq, serde::Serialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ResourceCounts {
     pub nodes: usize,
@@ -91,6 +91,21 @@ pub(crate) struct ResourceCounts {
     pub frame_callbacks: usize,
     pub requests: usize,
     pub engine_alive: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum RetirementFailure {
+    Contract(ContractFailure),
+    Cleanup(js_runtime::Diagnostic),
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct SessionRetirement {
+    pub generation: u64,
+    pub before: ResourceCounts,
+    pub counts: ResourceCounts,
+    pub failure: Option<RetirementFailure>,
+    pub telemetry: Option<RuntimeTelemetry>,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -123,12 +138,13 @@ pub(crate) struct Session {
     shutdown_started: Cell<bool>,
     mount_started: Cell<bool>,
     stylesheet_installed: Cell<bool>,
+    contract_reported: Cell<bool>,
     pub(crate) generation: u64,
     pub(crate) region: MountRegion,
     pub(crate) frames: Cell<usize>,
     module: SessionModule,
     fault: RefCell<Option<SessionError>>,
-    cleanup_failure: RefCell<Option<js_runtime::Diagnostic>>,
+    retired: RefCell<Option<SessionRetirement>>,
     policy: SessionPolicy,
     checkpoint_cursor: Cell<usize>,
     waker: Arc<dyn Waker>,
@@ -148,8 +164,9 @@ impl Session {
                 disposer: RefCell::new(None), bridge, work, engine: RefCell::new(None),
                 telemetry: Cell::new(None), shutdown_started: Cell::new(false),
                 mount_started: Cell::new(false), stylesheet_installed: Cell::new(false),
+                contract_reported: Cell::new(false),
                 generation, region, frames: Cell::new(0), module,
-                fault: RefCell::new(None), cleanup_failure: RefCell::new(None),
+                fault: RefCell::new(None), retired: RefCell::new(None),
                 policy, checkpoint_cursor: Cell::new(0), waker, surface,
             }
         });
@@ -194,6 +211,11 @@ impl Session {
     }
 
     pub(crate) fn mount(&self) -> Result<()> {
+        let result = self.mount_inner();
+        self.mark_reported(result)
+    }
+
+    fn mount_inner(&self) -> Result<()> {
         if self.shutdown_started.get() { return Err("cannot mount a retired session".into()); }
         if self.mount_started.replace(true) { return Err("session mount was already attempted".into()); }
         self.work.mounting();
@@ -244,6 +266,11 @@ impl Session {
     }
 
     pub(crate) fn checkpoint(&self) -> Result<bool> {
+        let result = self.checkpoint_inner();
+        self.mark_reported(result)
+    }
+
+    fn checkpoint_inner(&self) -> Result<bool> {
         let result = self.checkpoint_work();
         // A native provider guard can throw during any job/event entry. Preserve
         // its typed contract failure even when that entry returned a JS exception.
@@ -315,10 +342,17 @@ impl Session {
 
     pub(crate) fn frame_checkpoint(&self) {
         if self.shutdown_started.get() { return; }
-        if let Err(error) = self.checkpoint() {
+        if let Err(error) = self.checkpoint_inner() {
             *self.fault.borrow_mut() = Some(error);
             self.wake_owner();
         }
+    }
+
+    fn mark_reported<T>(&self, result: Result<T>) -> Result<T> {
+        if matches!(result, Err(SessionError::Contract(_))) {
+            self.contract_reported.set(true);
+        }
+        result
     }
 
     fn diagnostic(&self, error: js_runtime::Diagnostic) -> js_runtime::Diagnostic {
@@ -337,14 +371,15 @@ impl Session {
         match self.contract_failure() { Some(failure) => Err(failure.into()), None => Ok(()) }
     }
 
-    pub(crate) fn take_cleanup_failure(&self) -> Option<js_runtime::Diagnostic> {
-        self.cleanup_failure.borrow_mut().take()
-    }
-
     /// Integration harness entries ('advance', 'external') run as one bridge
     /// turn against the mounted module, with the same contract and diagnostic
     /// mapping as mount.
     pub(crate) fn invoke(&self, export: &str) -> Result<()> {
+        let result = self.invoke_inner(export);
+        self.mark_reported(result)
+    }
+
+    fn invoke_inner(&self, export: &str) -> Result<()> {
         if self.shutdown_started.get() { return Err("cannot invoke a retired session".into()); }
         let mut engine = self.engine.borrow_mut();
         let engine = engine.as_mut().ok_or("session disposed")?;
@@ -388,13 +423,18 @@ impl Session {
         }
     }
 
-    pub(crate) fn shutdown(&self) {
-        // An old Rc may outlive replacement. A repeated shutdown must not remove
-        // the new generation's stylesheet or touch its native resources.
-        if self.shutdown_started.replace(true) { return; }
+    pub(crate) fn retire(&self) -> SessionRetirement {
+        if let Some(existing) = self.retired.borrow().clone() {
+            return existing;
+        }
+        // An old Rc may outlive replacement. Only the first retirement captures
+        // pre-disposal counts, runs JS cleanup, and removes owned resources.
+        let before = self.counts();
+        self.shutdown_started.set(true);
         self.bridge.begin_stop();
         self.work.begin_stop();
         self.fault.borrow_mut().take();
+        let mut cleanup_error = None;
         let disposer = self.disposer.borrow_mut().take();
         if let Some(disposer) = disposer
             && let Some(engine) = self.engine.borrow_mut().as_mut()
@@ -411,12 +451,12 @@ impl Session {
             if let Err(error) = result {
                 let error = self.diagnostic(error);
                 eprintln!("disposer error: {error}");
-                *self.cleanup_failure.borrow_mut() = Some(error);
+                cleanup_error = Some(error);
             }
             if self.policy.strict_rejections
                 && let Err(error) = engine.drain_rejections(RejectionPolicy::Strict)
             {
-                self.cleanup_failure.borrow_mut().get_or_insert_with(|| self.diagnostic(error));
+                cleanup_error.get_or_insert_with(|| self.diagnostic(error));
             }
         }
         self.work.finish_stop();
@@ -427,6 +467,23 @@ impl Session {
         if self.engine.borrow_mut().take().is_some() {
             eprintln!("session-disposed: generation={} frames={} resources={:?}", self.generation, self.frames.get(), self.counts());
         }
+        let counts = self.counts();
+        let failure = if !self.contract_reported.replace(true)
+            && let Some(contract) = self.contract_failure()
+        {
+            Some(RetirementFailure::Contract(contract))
+        } else {
+            cleanup_error.map(RetirementFailure::Cleanup)
+        };
+        let report = SessionRetirement {
+            generation: self.generation,
+            before,
+            counts,
+            failure,
+            telemetry: self.telemetry.get(),
+        };
+        *self.retired.borrow_mut() = Some(report.clone());
+        report
     }
 
     fn snapshot_telemetry(engine: &JsRuntime) -> RuntimeTelemetry {
@@ -436,18 +493,8 @@ impl Session {
             js_stack_limit_bytes: engine.stack_limit_bytes(),
         }
     }
-
-    pub(crate) fn runtime_telemetry(&self) -> Option<RuntimeTelemetry> {
-        if let Ok(engine) = self.engine.try_borrow()
-            && let Some(runtime) = engine.as_ref()
-        {
-            let snapshot = Self::snapshot_telemetry(runtime);
-            self.telemetry.set(RuntimeTelemetry::merge(self.telemetry.get(), Some(snapshot)));
-        }
-        self.telemetry.get()
-    }
 }
-impl Drop for Session { fn drop(&mut self) { self.shutdown(); } }
+impl Drop for Session { fn drop(&mut self) { let _ = self.retire(); } }
 
 fn remap(module: &SessionModule, error: js_runtime::Diagnostic) -> SessionError {
     SessionError::Diagnostic(match &module.package {

@@ -1,0 +1,167 @@
+//! Pure value-oriented frame coherence ledger and step frame budget tracker.
+
+use zgui::render::{FrameOutcome, SkipReason};
+
+use crate::preview::evidence::{FrameStamp, Presentation};
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum FrameStatus {
+    Presented,
+    Undamaged,
+    Other,
+}
+
+impl From<FrameOutcome> for FrameStatus {
+    fn from(outcome: FrameOutcome) -> Self {
+        match outcome {
+            FrameOutcome::Presented(_) => Self::Presented,
+            FrameOutcome::Skipped(SkipReason::Undamaged) => Self::Undamaged,
+            _ => Self::Other,
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct FrameInput {
+    pub ordinal: u64,
+    pub time_us: u64,
+    pub layout_document_coherent: bool,
+    pub status: FrameStatus,
+    pub outcome_debug: String,
+    pub draw_id: u64,
+    pub presentation_id: u64,
+    pub configuration_id: u64,
+    pub presented_draw: Option<u64>,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct SettledQuery {
+    pub generation: u64,
+    pub document_revision: u64,
+    pub metadata_revision: u64,
+    pub resource_revision: u64,
+    pub configuration_id: u64,
+    pub presentation_id: u64,
+    pub presented_draw: Option<u64>,
+    pub completed_coherent: bool,
+    pub completed_ordinal: Option<u64>,
+    pub completed_status: Option<FrameStatus>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct CommittedMeta {
+    pub generation: u64,
+    pub document_revision: u64,
+    pub metadata_revision: u64,
+    pub resource_revision: u64,
+    pub surface_configuration: u64,
+    pub configuration_id: u64,
+    pub presentation_id: u64,
+    pub ordinal: u64,
+    pub time_us: u64,
+}
+
+#[derive(Default)]
+pub(crate) struct FrameLedger {
+    frames: u64,
+    action: u64,
+    surface_configuration: u64,
+    presentation: Option<Presentation>,
+    committed: Option<CommittedMeta>,
+}
+
+impl FrameLedger {
+    /// Records one completed native frame outcome and returns `(stamp, presentation)`
+    /// only when the frame is layout-coherent, presented or undamaged-skipped, and
+    /// matches the renderer's active configuration.
+    pub fn record_outcome(&mut self, input: &FrameInput) -> Option<(FrameStamp, Presentation)> {
+        self.frames += 1;
+        let stamp = FrameStamp {
+            ordinal: input.ordinal,
+            time_us: input.time_us,
+            draw_id: input.draw_id,
+            outcome: input.outcome_debug.clone(),
+        };
+        if input.status == FrameStatus::Presented {
+            self.presentation = Some(Presentation {
+                frame: stamp.clone(),
+                sequence: input.presentation_id,
+                configuration_id: input.configuration_id,
+                draw_id: input.presented_draw,
+            });
+        }
+        if !input.layout_document_coherent
+            || !matches!(input.status, FrameStatus::Presented | FrameStatus::Undamaged)
+        {
+            return None;
+        }
+        let presentation = self.presentation.clone()?;
+        if presentation.configuration_id != input.configuration_id {
+            return None;
+        }
+        Some((stamp, presentation))
+    }
+
+    /// Commits a checkpointed frame's identity only after sink persistence succeeds.
+    pub fn commit(&mut self, meta: CommittedMeta) {
+        self.committed = Some(meta);
+    }
+
+    /// Enforces all 9 coherence criteria tying committed frame identity to the live surface.
+    pub fn is_settled(&self, query: &SettledQuery) -> bool {
+        let Some(last) = &self.committed else {
+            return false;
+        };
+        last.document_revision == query.document_revision
+            && last.configuration_id == query.configuration_id
+            && last.presentation_id == query.presentation_id
+            && query.presented_draw.is_some()
+            && last.generation == query.generation
+            && last.metadata_revision == query.metadata_revision
+            && last.resource_revision == query.resource_revision
+            && last.surface_configuration == self.surface_configuration
+            && query.completed_coherent
+            && query.completed_ordinal == Some(last.ordinal)
+            && matches!(query.completed_status, Some(FrameStatus::Presented | FrameStatus::Undamaged))
+    }
+
+    pub fn exceeded_step_budget(&self, step_start_frame: u64, max_frames_per_step: u32) -> bool {
+        self.frames.saturating_sub(step_start_frame) > u64::from(max_frames_per_step)
+    }
+
+    pub fn begin_step(&mut self, action: u64) -> u64 {
+        self.action = action;
+        self.frames
+    }
+
+    pub fn bump_surface_configuration(&mut self) {
+        self.surface_configuration += 1;
+    }
+
+    /// Counts a completed native frame whose observation was skipped early (e.g.
+    /// prior fault or inactive surface) without mutating presentation state.
+    pub fn note_ignored_frame(&mut self) {
+        self.frames += 1;
+    }
+
+    pub fn reset_surface(&mut self) {
+        self.presentation = None;
+        self.committed = None;
+    }
+
+    pub fn action(&self) -> u64 {
+        self.action
+    }
+
+    pub fn frames(&self) -> u64 {
+        self.frames
+    }
+
+    pub fn surface_configuration(&self) -> u64 {
+        self.surface_configuration
+    }
+
+    pub fn committed_time_us(&self) -> Option<u64> {
+        self.committed.as_ref().map(|meta| meta.time_us)
+    }
+}

@@ -8,7 +8,7 @@ use zgui::{
 };
 use zgui_render_wgpu::{Builder, Pixels, WgpuRenderer, wgpu};
 
-use super::Error;
+use crate::preview::Error;
 
 /// A readback belongs to a successful presentation, not merely the latest draw attempt.
 pub struct PresentedPixels {

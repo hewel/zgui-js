@@ -1,16 +1,14 @@
 mod calibrate;
-mod capture;
 mod inventory;
 mod output;
+mod pipeline;
 mod profile;
 mod supervisor;
 pub(crate) mod driver;
 pub(crate) mod evidence;
 pub(crate) mod fixture;
-mod inspect;
 mod run;
 mod scenario;
-mod semantics;
 mod selectors;
 mod saved;
 mod compare;

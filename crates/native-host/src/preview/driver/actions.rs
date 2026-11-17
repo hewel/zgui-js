@@ -1,7 +1,7 @@
 use serde_json::{Value,json};
 use zgui::{geom::{Css,CssPx,Device,DevicePx,Point}, platform::{PlatformCx,SurfaceEvent}, view::NodeId,
     vocab::{ImeEvent,KeyEvent,KeyState,Modifiers,NamedKey,PhysicalKey,PointerAction,PointerEvent}};
-use super::{Driver,Fault,OwnedFrame};
+use super::{Driver, Fault, pipeline::SettledFrame};
 use super::super::{Error,scenario::{Check,Key,Modifier,PointerButton,PointerDevice,PointerLocation,
     PointerOperation,Target,WheelDelta,WheelPhase,WheelUnit,PointerKind as InputPointerKind},selectors};
 
@@ -21,23 +21,22 @@ impl Driver {
                 (position,json!({"positionLogical":{"x":x,"y":y},"positionDevice":{"x":x*scale,"y":y*scale},"targeted":false}))
             }
             PointerLocation::Target(target) => {
-                let last=self.probe.last.borrow();
-                let last=last.as_ref().ok_or_else(stale)?;
-                let index=selectors::unique(&last.tree,target,false)?.expect("required unique target");
-                let native=last.native_nodes.get(index).ok_or_else(stale)?.native;
-                let record=&last.tree.nodes[index];
+                let window=self.window()?;
+                let settled=self.observer.settled(window,self.pipeline.app().session()).ok_or_else(stale)?;
+                let index=selectors::unique(settled.tree(),target,false)?.expect("required unique target");
+                let native=settled.native_node(index).ok_or_else(stale)?;
+                let record=&settled.tree().nodes[index];
                 if record.state.visible!=Some(true) {
                     return Err(target_error("E_TARGET_HIDDEN","target has no positive visible native box",record).into());
                 }
                 if record.state.enabled!=Some(true) {
                     return Err(target_error("E_TARGET_DISABLED","target or an ancestor is disabled",record).into());
                 }
-                let window=self.window()?;
-                let (device,samples)=target_point(window,native,last)?;
+                let (device,samples)=target_point(window,native,&settled)?;
                 let scale=window.surface().scale_factor() as f32;
                 let logical=Point::new(CssPx(device.x.0/scale),CssPx(device.y.0/scale));
-                (logical,json!({"target":selectors::summary(record),"generation":last.tree.generation,
-                    "validationFrame":serde_json::to_value(&last.frame.validation_frame).expect("frame stamp serializes"),"metadataRevision":last.metadata_revision,
+                (logical,json!({"target":selectors::summary(record),"generation":settled.tree().generation,
+                    "validationFrame":serde_json::to_value(settled.validation_frame()).expect("frame stamp serializes"),"metadataRevision":settled.metadata_revision(),
                     "positionLogical":{"x":logical.x.0,"y":logical.y.0},"positionDevice":{"x":device.x.0,"y":device.y.0},
                     "nativeHitVerified":true,"pointSamples":samples}))
             }
@@ -49,7 +48,7 @@ impl Driver {
     pub fn pointer(&mut self, location:&PointerLocation, pointer:&PointerDevice, operation:PointerOperation) -> Result<Value,Fault> {
         let (position,mut trace)=self.input_location(location)?;
         let surface=self.window()?.surface().id();
-        let timestamp=self.harness.platform().clock().timestamp();
+        let timestamp=self.pipeline.platform().clock().timestamp();
         let (actions,button):(&[PointerAction],Option<PointerButton>)=match operation {
             PointerOperation::Move=>( &[PointerAction::Moved], None ),
             PointerOperation::Down(button)=>( &[PointerAction::Pressed], Some(button) ),
@@ -72,10 +71,10 @@ impl Driver {
             InputPointerKind::Unknown=>zgui::vocab::PointerKind::Unknown,
         };
         event.primary=pointer.primary;
-        self.harness.deliver_all(surface,actions.iter().map(|action|SurfaceEvent::Pointer {
+        self.pipeline.deliver_all(surface,actions.iter().map(|action|SurfaceEvent::Pointer {
             action:*action,event,modifiers:Modifiers::NONE,timestamp,
         }));
-        self.harness.pump();
+        self.pipeline.pump();
         self.check()?;
         self.settle(false)?;
         trace["burst"]=json!(actions.iter().map(|action|match action {
@@ -105,12 +104,12 @@ impl Driver {
             WheelPhase::Momentum=>zgui::vocab::ScrollPhase::Momentum,
         };
         let surface=self.window()?.surface().id();
-        let timestamp=self.harness.platform().clock().timestamp();
-        self.harness.deliver_all(surface,[SurfaceEvent::Wheel {
+        let timestamp=self.pipeline.platform().clock().timestamp();
+        self.pipeline.deliver_all(surface,[SurfaceEvent::Wheel {
             event:zgui::vocab::WheelEvent{id:zgui::vocab::PointerId::MOUSE,kind:zgui::vocab::PointerKind::Mouse,position,delta:native_delta,phase:native_phase},
             modifiers:Modifiers::NONE,timestamp,
         }]);
-        self.harness.pump();
+        self.pipeline.pump();
         self.check()?;
         self.settle(false)?;
         trace["burst"]=json!(["native.wheel"]);
@@ -133,11 +132,11 @@ impl Driver {
             Modifier::Shift=>Modifiers::SHIFT,Modifier::Control=>Modifiers::CONTROL,Modifier::Alt=>Modifiers::ALT,Modifier::Meta=>Modifiers::META,
         });
         let surface=self.window()?.surface().id();
-        let timestamp=self.harness.platform().clock().timestamp();
-        self.harness.deliver_all(surface,[SurfaceEvent::ModifiersChanged(held),
+        let timestamp=self.pipeline.platform().clock().timestamp();
+        self.pipeline.deliver_all(surface,[SurfaceEvent::ModifiersChanged(held),
             SurfaceEvent::Key{state:KeyState::Pressed,event:event.clone(),modifiers:held,timestamp},
             SurfaceEvent::Key{state:KeyState::Released,event,modifiers:held,timestamp},SurfaceEvent::ModifiersChanged(Modifiers::NONE)]);
-        self.harness.pump();
+        self.pipeline.pump();
         self.check()?;
         self.settle(false)?;
         Ok(json!({"key":key,"modifiers":modifiers,"burst":["modifiers","key.down","key.up","modifiers.clear"],"timeUs":timestamp.since_origin().as_micros()}))
@@ -146,8 +145,8 @@ impl Driver {
     pub fn text(&mut self,text:&str) -> Result<Value,Fault> {
         self.settle(true)?;
         let surface=self.window()?.surface().id();
-        self.harness.deliver_all(surface,[SurfaceEvent::Ime(ImeEvent::Commit(text.into()))]);
-        self.harness.pump();
+        self.pipeline.deliver_all(surface,[SurfaceEvent::Ime(ImeEvent::Commit(text.into()))]);
+        self.pipeline.pump();
         self.check()?;
         self.settle(false)?;
         Ok(json!({"burst":["native.ime.commit"],"utf8Bytes":text.len()}))
@@ -155,10 +154,10 @@ impl Driver {
 
     pub fn assert_node(&mut self,target:&Target,check:&Check) -> Result<Value,Fault> {
         self.settle(true)?;
-        let last=self.probe.last.borrow();
-        let last=last.as_ref().ok_or_else(stale)?;
-        let index=selectors::unique(&last.tree,target,matches!(check,Check::Exists(false)))?;
-        let node=index.map(|index|&last.tree.nodes[index]);
+        let window=self.window()?;
+        let settled=self.observer.settled(window,self.pipeline.app().session()).ok_or_else(stale)?;
+        let index=selectors::unique(settled.tree(),target,matches!(check,Check::Exists(false)))?;
+        let node=index.map(|index|&settled.tree().nodes[index]);
         // One node is serialized for the assertion record; its shape is unchanged.
         let record=node.map(|node|serde_json::to_value(node).expect("typed node serializes")).unwrap_or(Value::Null);
         let exists=json!(index.is_some());
@@ -179,7 +178,7 @@ impl Driver {
                 (actual.as_bool()==Some(*value),json!(value)),
         };
         let details=json!({"requested":selectors::requested(target),"property":property,"expected":expected,
-            "actual":selectors::short(actual),"node":node.map(selectors::summary),"frameOrdinal":last.tree.frame_ordinal,"generation":last.tree.generation});
+            "actual":selectors::short(actual),"node":node.map(selectors::summary),"frameOrdinal":settled.tree().frame_ordinal,"generation":settled.tree().generation});
         if truncated || actual.is_null() {
             return Err(Error::new("E_ASSERTION_UNAVAILABLE",5,"the exact native property is unavailable or truncated").with_details(details).into());
         }
@@ -197,7 +196,7 @@ fn target_error(code:&'static str,message:&str,node:&crate::preview::evidence::N
 
 /// Start with clipped native fragments, not a logical box with guessed scroll/transform offsets.
 /// The 5x5 point search is conservative: a point is accepted only by actual native hit testing.
-fn target_point(window:&zgui::runtime::Window,native:NodeId,snapshot:&OwnedFrame) -> Result<(DevicePoint,u32),Error> {
+fn target_point(window:&zgui::runtime::Window,native:NodeId,snapshot:&SettledFrame<'_>) -> Result<(DevicePoint,u32),Error> {
     let target=zgui_view_dom::id::to_document(native).ok_or_else(stale)?;
     if window.document().borrow().store().index_of(target).is_none() { return Err(stale()); }
     let layout=window.layout().borrow();
@@ -227,8 +226,7 @@ fn target_point(window:&zgui::runtime::Window,native:NodeId,snapshot:&OwnedFrame
                 let chain=window.chain_at(point);
                 if chain.contains(&target) { return Ok((point,samples)); }
                 if window.hit_contains(native,point) && let Some(blocker)=chain.last() {
-                    let record=snapshot.native_nodes.iter().position(|node|zgui_view_dom::id::to_document(node.native)==Some(*blocker));
-                    let summary=record.map(|index|selectors::summary(&snapshot.tree.nodes[index]))
+                    let summary=snapshot.node_by_document_key(*blocker).map(selectors::summary)
                         .unwrap_or_else(||json!({"nativeIdentity":format!("{blocker:?}"),"ownership":"native"}));
                     if blockers.len()<3 && !blockers.contains(&summary) { blockers.push(summary); }
                 }

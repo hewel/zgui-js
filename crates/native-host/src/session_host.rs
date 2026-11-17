@@ -57,7 +57,7 @@ impl HostBinding for Binding {
             if session.frames.get() == 1 { eprintln!("first-native-frame: {}", session.region.dom.text_content(session.region.root)); }
         }
     }
-    fn shutting_down(&mut self) { if let Some(session) = self.0.upgrade() { session.shutdown(); } }
+    fn shutting_down(&mut self) { if let Some(session) = self.0.upgrade() { let _ = session.retire(); } }
 }
 
 /// What a mount or checkpoint failure does to the affected mount region.
@@ -190,7 +190,7 @@ impl SessionHost {
         }
         self.sessions.retain(|document, session| {
             let present = surface.surface(*document).is_some();
-            if !present { session.shutdown(); }
+            if !present { let _ = session.retire(); }
             present
         });
         self.fallbacks.retain(|document, recovery| {
@@ -246,13 +246,13 @@ impl SessionHost {
         if let Some(mut recovery) = self.fallbacks.remove(&document) { recovery.view.clear(); }
         self.regions.remove(&document);
         let session = self.sessions.remove(&document)?;
-        session.shutdown();
+        let _ = session.retire();
         Some(session)
     }
 
     /// Release every owned session, fallback view, region and pending intake.
     pub(crate) fn stop(&mut self) {
-        for session in self.sessions.values() { session.shutdown(); }
+        for session in self.sessions.values() { let _ = session.retire(); }
         for recovery in self.fallbacks.values_mut() { recovery.view.clear(); }
         self.sessions.clear();
         self.fallbacks.clear();
@@ -290,7 +290,7 @@ impl SessionHost {
                 return ReloadOutcome::Rejected(error);
             }
         };
-        if let Some(previous) = self.sessions.remove(&document) { previous.shutdown(); }
+        if let Some(previous) = self.sessions.remove(&document) { let _ = previous.retire(); }
         self.clear_fallback(document);
         surface.bind(document, &candidate);
         // Propagate keeps a failed candidate owned: its caller persists the
@@ -301,7 +301,7 @@ impl SessionHost {
         if let Err(error) = candidate.mount() {
             match self.recovery {
                 RecoveryPolicy::Fallback => {
-                    candidate.shutdown();
+                    let _ = candidate.retire();
                     self.show_fallback(surface, document, generation, &error.to_string(), retry);
                     return ReloadOutcome::Fallback(error);
                 }
@@ -320,7 +320,7 @@ impl SessionHost {
     }
 
     fn show_fallback(&mut self, surface: &mut impl SessionSurface, document: DocumentId, generation: u64, diagnostic: &str, retry: &Rc<dyn Fn(DocumentId, u64)>) {
-        if let Some(session) = self.sessions.remove(&document) { session.shutdown(); }
+        if let Some(session) = self.sessions.remove(&document) { let _ = session.retire(); }
         self.clear_fallback(document);
         let Some(region) = self.regions.get(&document).cloned() else { return; };
         let action = self.last_good.as_ref().map(|_| {

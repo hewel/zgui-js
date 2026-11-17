@@ -135,7 +135,7 @@ fn retired_shutdown_cannot_remove_the_successor_stylesheet() {
     let outcome = native.host.replace(&mut native.surface, native.waker.clone(), document, SessionModule::package(second.package()), no_retry());
     assert!(matches!(outcome, ReloadOutcome::Mounted(_)));
     let stylesheet = native.stub.stylesheet("application").expect("successor owns its stylesheet");
-    retired.shutdown();
+    retired.retire();
     drop(retired);
     assert_eq!(native.text(), "active");
     assert_eq!(native.stub.stylesheet("application").as_ref(), Some(&stylesheet));

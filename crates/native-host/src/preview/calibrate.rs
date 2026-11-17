@@ -1,10 +1,9 @@
 use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
-use zgui::{geom::{DevicePx, Size}, platform::SurfaceEvent, prelude::*};
-use zgui_platform_headless::Harness;
+use zgui::prelude::*;
 
-use super::{Error, capture::{self, CaptureHandle, PresentedPixels}, profile::LoadedProfile};
+use super::{Error, pipeline::{self, StaticFrame}, profile::LoadedProfile};
 
 pub struct Calibration {
     pub png: Vec<u8>,
@@ -20,83 +19,64 @@ pub fn calibrate(profile: &LoadedProfile) -> Result<Calibration, Error> {
     let step_budget = Duration::from_millis(profile.profile.limits.max_step_wall_ms);
     let deadline = started + run_budget;
     let surface = &profile.profile.surface;
-    let capture = CaptureHandle::default();
-    let shaping = profile.fonts.clone();
-    let metrics = profile.fonts.clone();
-    let raster = profile.fonts.clone();
-    let mut app = zgui::runtime::App::new()
-        .with_title("zgui preview calibration")
-        .with_size(surface.width as f32, surface.height as f32)
-        .with_stylesheet(stylesheet(profile))
-        .with_renderer(capture::renderer_factory(capture.clone()))
-        .with_metrics(Box::new(move || metrics.metrics()))
-        .with_text_engine(Box::new(move || Box::new(zgui_layout::Paragraphs::new(shaping.shaper()))))
-        .with_glyph_raster(Box::new(move || raster.raster()));
-    app.attributes_mut().transparent = !surface.opaque;
-    let runtime = app.into_handler(|cx: &mut BuildCx<'_>| {
-        Box::new(calibration_view().into_view().build(cx))
-    }).map_err(runtime_error)?;
-    let mut harness = Harness::new(runtime);
-    // Resize delivery otherwise advances the harness clock implicitly. Calibration owns every
-    // advance and must establish that ownership before delivering its first configure.
-    harness.hold_clock(true);
-    let result = (|| {
-        check_runtime(&harness)?;
-        if harness.app().windows().is_empty() {
-            return Err(calibration_error("the native runtime created no calibration window"));
-        }
-        configure(&mut harness, profile.physical_width, profile.physical_height, surface.scale);
-        capture.request();
-        let frame = await_pixels(&mut harness, &capture, deadline.min(Instant::now() + step_budget))?;
-        let checks = verify(&frame, profile.physical_width, profile.physical_height, surface.opaque)?;
-        let png = capture::png(&frame.pixels, surface.opaque)?;
-        let original_metadata = capture.metadata();
+    pipeline::render_static(
+        profile,
+        "zgui preview calibration",
+        stylesheet(profile),
+        runtime_error,
+        calibration_view,
+        |session| {
+            session.check_runtime()?;
+            if session.window_count() == 0 {
+                return Err(calibration_error("the native runtime created no calibration window"));
+            }
+            session.configure(profile.physical_width, profile.physical_height, surface.scale);
+            let frame = session.await_frame(deadline.min(Instant::now() + step_budget))?;
+            let checks = verify(&frame, profile.physical_width, profile.physical_height, surface.opaque)?;
+            let png = session.encode_png(&frame, surface.opaque)?;
+            let original_metadata = session.metadata();
 
-        // Widths not divisible by the GPU's copy alignment must be tested on the real readback,
-        // not merely by constructing tightly-packed CPU bytes. Keep the requested PNG unchanged.
-        let odd_width = if profile.physical_width % 2 == 1 {
-            profile.physical_width
-        } else {
-            profile.physical_width - 1
-        };
-        let odd_checks = if odd_width == profile.physical_width {
-            checks.clone()
-        } else {
-            configure(&mut harness, odd_width, profile.physical_height, surface.scale);
-            capture.request();
-            let odd = await_pixels(&mut harness, &capture, deadline.min(Instant::now() + step_budget))?;
-            verify(&odd, odd_width, profile.physical_height, surface.opaque)?
-        };
-        if Instant::now() >= deadline {
-            return Err(timeout_error());
-        }
-        Ok(Calibration {
-            png,
-            metadata: json!({
-                "renderer": original_metadata,
-                "physicalWidth": frame.pixels.size().width,
-                "physicalHeight": frame.pixels.size().height,
-                "logicalWidth": surface.width,
-                "logicalHeight": surface.height,
-                "scale": surface.scale,
-                "opaque": surface.opaque,
-                "background": surface.background,
-                "drawId": frame.draw_id,
-                "presentationId": frame.presentation_id,
-                "configurationId": frame.configuration_id,
-                "checks": checks,
-                "oddWidth": odd_width,
-                "oddWidthChecks": odd_checks,
-                "nativeClock": "explicit-harness-virtual",
-                "sharedJsVirtualTimeValidated": false,
-                "compositorTransparencyValidated": false,
-            }),
-        })
-    })();
-    harness.shut_down();
-    drop(harness);
-    zgui::reactive::shutdown();
-    result
+            // Widths not divisible by the GPU's copy alignment must be tested on the real readback,
+            // not merely by constructing tightly-packed CPU bytes. Keep the requested PNG unchanged.
+            let odd_width = if profile.physical_width % 2 == 1 {
+                profile.physical_width
+            } else {
+                profile.physical_width - 1
+            };
+            let odd_checks = if odd_width == profile.physical_width {
+                checks.clone()
+            } else {
+                session.configure(odd_width, profile.physical_height, surface.scale);
+                let odd = session.await_frame(deadline.min(Instant::now() + step_budget))?;
+                verify(&odd, odd_width, profile.physical_height, surface.opaque)?
+            };
+            if Instant::now() >= deadline {
+                return Err(timeout_error());
+            }
+            Ok(Calibration {
+                png,
+                metadata: json!({
+                    "renderer": original_metadata,
+                    "physicalWidth": frame.pixels().size().width,
+                    "physicalHeight": frame.pixels().size().height,
+                    "logicalWidth": surface.width,
+                    "logicalHeight": surface.height,
+                    "scale": surface.scale,
+                    "opaque": surface.opaque,
+                    "background": surface.background,
+                    "drawId": frame.draw_id(),
+                    "presentationId": frame.presentation_id(),
+                    "configurationId": frame.configuration_id(),
+                    "checks": checks,
+                    "oddWidth": odd_width,
+                    "oddWidthChecks": odd_checks,
+                    "nativeClock": "explicit-harness-virtual",
+                    "sharedJsVirtualTimeValidated": false,
+                    "compositorTransparencyValidated": false,
+                }),
+            })
+        },
+    )
 }
 
 fn calibration_view() -> impl IntoView {
@@ -136,40 +116,10 @@ fn stylesheet(profile: &LoadedProfile) -> String {
     "#, profile.profile.surface.background, profile.font_family_css, font_size)
 }
 
-fn configure(harness: &mut Harness<zgui::runtime::Runtime>, width: u32, height: u32, scale: f64) {
-    harness.deliver_to_first(SurfaceEvent::ScaleFactorChanged {
-        scale_factor: scale,
-        size: Size::new(DevicePx(width as f32), DevicePx(height as f32)),
-    });
-}
-
-fn await_pixels(harness: &mut Harness<zgui::runtime::Runtime>, capture: &CaptureHandle, deadline: Instant) -> Result<PresentedPixels, Error> {
-    for _ in 0..512 {
-        if Instant::now() >= deadline { return Err(timeout_error()); }
-        let ran = harness.pump();
-        check_runtime(harness)?;
-        if Instant::now() >= deadline { return Err(timeout_error()); }
-        if let Some(frame) = capture.take() { return Ok(frame); }
-        if matches!(capture.last_outcome(), Some(zgui::render::FrameOutcome::Skipped(zgui::render::SkipReason::DeviceUnavailable))) {
-            return Err(Error::new("E_GRAPHICS_UNAVAILABLE", 7, "the graphics device became unavailable"));
-        }
-        if ran == 0 {
-            if let Some(next) = harness.parked_deadline() {
-                // Only this explicit driver moves native time; application timers aren't used
-                // by the static fixture. A finite turn count bounds pathological native deadlines.
-                harness.advance(next.saturating_duration_since(harness.now()));
-            }
-            // Workers may complete real font/layout work without a virtual deadline.
-            std::thread::sleep(Duration::from_millis(1));
-        }
-    }
-    Err(Error::new("E_READINESS_TIMEOUT", 5, "calibration exhausted its native pump bound without a presented frame"))
-}
-
-fn verify(frame: &PresentedPixels, width: u32, height: u32, opaque: bool) -> Result<Value, Error> {
-    let pixels = &frame.pixels;
+fn verify(frame: &StaticFrame, width: u32, height: u32, opaque: bool) -> Result<Value, Error> {
+    let pixels = frame.pixels();
     let size = pixels.size();
-    if size.width != width as i32 || size.height != height as i32 || frame.target.size != size {
+    if size.width != width as i32 || size.height != height as i32 || frame.target_size() != size {
         return Err(calibration_error("presented extent does not match the configured native target"));
     }
     if pixels.bytes().len() != width as usize * height as usize * 4 {
@@ -216,10 +166,6 @@ fn verify(frame: &PresentedPixels, width: u32, height: u32, opaque: bool) -> Res
         "textInkPixels": ink,
         "opaqueAlpha255": if opaque { Some(true) } else { None },
     }))
-}
-
-fn check_runtime(harness: &Harness<zgui::runtime::Runtime>) -> Result<(), Error> {
-    harness.app().failure().take().map_or(Ok(()), |error| Err(runtime_error(error)))
 }
 
 fn runtime_error(error: zgui::runtime::AppError) -> Error {

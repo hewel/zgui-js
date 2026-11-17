@@ -11,7 +11,7 @@ use serde::Serialize;
 use zgui::{platform::{Surface, SurfaceId}, runtime::Window, view::NodeId};
 use zgui_platform_headless::OffscreenSurface;
 
-use super::Error;
+use crate::preview::Error;
 
 const MAX_NODES: usize = 4096;
 const MAX_FIELD_BYTES: usize = 4096;

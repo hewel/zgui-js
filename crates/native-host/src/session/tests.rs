@@ -102,7 +102,7 @@ fn candidate_preflight_rejects_deferred_side_effects_without_touching_active_tre
         assert_eq!(active.counts(), counts);
         assert_eq!(native.host.stylesheet("application").as_ref(), Some(&stylesheet));
     }
-    active.shutdown();
+    active.retire();
 }
 
 #[test]
@@ -121,7 +121,7 @@ fn preflight_drains_pure_initialization_and_accepts_handled_rejections() {
     let session = native.prepare(fixture.package(), 1).unwrap();
     session.mount().unwrap();
     assert_eq!(native.text(), "initialized");
-    session.shutdown();
+    session.retire();
 }
 
 #[test]
@@ -131,7 +131,7 @@ fn retired_or_unmounted_candidates_cannot_remove_successor_styles() {
     let native = Native::new();
     let retired = native.prepare(first.package(), 1).unwrap();
     retired.mount().unwrap();
-    retired.shutdown();
+    retired.retire();
     let active = native.prepare(second.package(), 2).unwrap();
     active.mount().unwrap();
     let counts = active.counts();
@@ -140,11 +140,11 @@ fn retired_or_unmounted_candidates_cannot_remove_successor_styles() {
     assert_eq!(active.counts(), counts);
     let unmounted = native.prepare(first.package(), 3).unwrap();
     drop(unmounted);
-    retired.shutdown();
+    retired.retire();
     drop(retired);
     assert_eq!(native.text(), "active");
     assert_eq!(native.host.stylesheet("application").as_ref(), Some(&stylesheet));
-    active.shutdown();
+    active.retire();
     assert_eq!(active.counts(), ResourceCounts::default());
 }
 
@@ -159,16 +159,24 @@ fn repeated_sessions_release_native_and_js_resources_even_when_cleanup_throws() 
         session.engine.borrow_mut().as_mut().unwrap().evaluate_script("globalThis.throwCleanup = true; 'armed'").unwrap();
         session.mount().unwrap();
         let counts = session.counts();
-        if let Some(expected) = &expected { assert_eq!(&counts, expected); } else { expected = Some(counts); }
+        if let Some(expected) = &expected { assert_eq!(&counts, expected); } else { expected = Some(counts.clone()); }
         let nodes = native.backend.children(native.region.root);
-        session.shutdown();
-        session.shutdown();
+        let first = session.retire();
+        let second = session.retire();
+        assert_eq!(first.generation, generation);
+        assert_eq!(first.before, counts);
+        assert_eq!(second.before, first.before);
+        assert_eq!(first.counts, ResourceCounts::default());
+        assert_eq!(second.counts, ResourceCounts::default());
+        assert!(first.telemetry.is_some());
         assert_eq!(session.counts(), ResourceCounts::default());
-        let cleanup = session.take_cleanup_failure().expect("throwing cleanup must remain observable after repeated shutdown");
+        let Some(RetirementFailure::Cleanup(cleanup)) = &first.failure else {
+            panic!("throwing cleanup must remain observable in retirement report");
+        };
+        assert_eq!(first.failure, second.failure);
         assert_eq!(cleanup.phase, "cleanup");
         assert_eq!(cleanup.message, "cleanup failed");
         assert!(cleanup.stack.as_deref().unwrap().contains("app.mjs"));
-        assert!(session.take_cleanup_failure().is_none());
         native.backend.end_frame();
         assert!(native.backend.children(native.region.root).is_empty());
         assert_eq!(native.backend.handler_count(), 0);
@@ -197,8 +205,8 @@ fn faulted_native_tree_still_runs_js_cleanup_once() {
     session.mount().unwrap();
     assert!(session.invoke("advance").is_err());
     assert!(session.bridge.is_disposed());
-    session.shutdown();
-    session.shutdown();
+    session.retire();
+    session.retire();
     assert_eq!(cleanups.get(), 1);
     assert_eq!(session.counts(), ResourceCounts::default());
 }
@@ -210,7 +218,7 @@ fn completion_retained_across_reload_cannot_settle_successor_request() {
     let first = native.prepare(fixture.package(), 1).unwrap();
     first.mount().unwrap();
     let late = native.completion(&first);
-    first.shutdown();
+    first.retire();
     let second = native.prepare(fixture.package(), 2).unwrap();
     second.mount().unwrap();
     let current = native.completion(&second);
@@ -224,7 +232,7 @@ fn completion_retained_across_reload_cannot_settle_successor_request() {
     second.checkpoint().unwrap();
     assert_eq!(native.text(), "completed");
     assert_eq!(second.counts().requests, 0);
-    second.shutdown();
+    second.retire();
     assert_eq!(second.counts(), ResourceCounts::default());
 }
 
@@ -251,7 +259,7 @@ fn promise_cancellation_runs_between_ready_service_completions() {
     let resolved = session.engine.borrow_mut().as_mut().unwrap()
         .with_context(|ctx| ctx.eval::<u32, _>("resolved")).unwrap();
     assert_eq!(resolved, 1, "a ready completion queue starved its Promise cancellation");
-    session.shutdown();
+    session.retire();
     assert_eq!(session.counts(), ResourceCounts::default());
 }
 
@@ -287,7 +295,7 @@ fn preview_caught_fixture_violation_fails_preflight_and_mount() {
             assert_eq!(session.counts().requests, 0);
             assert_eq!(session.contract_failure().unwrap().code, "E_FIXTURE_MISSING_SERVICE");
             assert!(session.checkpoint().is_err());
-            session.shutdown();
+            session.retire();
             assert_eq!(session.contract_failure().unwrap().code, "E_FIXTURE_MISSING_SERVICE");
             // A retired session ignores late native binding notifications: no
             // fault or owner wake, even with a sticky contract failure.
@@ -321,7 +329,7 @@ fn preview_rejections_reduce_handled_updates_but_fail_unhandled_and_eviction() {
             }
             None => { session.checkpoint().unwrap(); }
         }
-        session.shutdown();
+        session.retire();
         assert_eq!(session.counts(), ResourceCounts::default());
     }
 }
@@ -341,7 +349,7 @@ fn frame_checkpoint_retains_original_job_diagnostic() {
     assert_eq!(diagnostic.message, "original job sentinel");
     assert_eq!(diagnostic.phase, "pending job");
     assert!(diagnostic.stack.as_deref().unwrap().contains("originalJob"));
-    session.shutdown();
+    session.retire();
 }
 
 #[test]
@@ -352,13 +360,16 @@ fn preview_cleanup_retains_deadline_failure_and_releases_every_resource() {
     let session = native.preview(fixture.package(), RuntimeLimits::default(), deadline.clone()).unwrap();
     session.mount().unwrap();
     deadline.set(Instant::now() - Duration::from_millis(1));
-    session.shutdown();
-    session.shutdown();
-    let diagnostic = session.take_cleanup_failure().expect("expired cleanup may not pass silently");
+    let first = session.retire();
+    let second = session.retire();
+    let Some(RetirementFailure::Cleanup(diagnostic)) = &first.failure else {
+        panic!("expired cleanup may not pass silently");
+    };
+    assert_eq!(first.failure, second.failure);
     assert_eq!(diagnostic.kind, js_runtime::DiagnosticKind::BudgetExceeded);
     assert_eq!(diagnostic.phase, "cleanup");
+    assert_eq!(first.counts, ResourceCounts::default());
     assert_eq!(session.counts(), ResourceCounts::default());
-    assert!(session.take_cleanup_failure().is_none());
 }
 
 #[test]
@@ -373,7 +384,7 @@ fn preview_uncaught_fixture_violation_retains_its_category_across_entries() {
         let failure = session.mount().and_then(|()|session.checkpoint().map(|_|())).unwrap_err();
         let SessionError::Contract(contract) = failure else { panic!("fixture failure must retain its type") };
         assert_eq!(contract.code,"E_FIXTURE_MISSING_SERVICE");
-        session.shutdown();
+        session.retire();
         assert_eq!(session.counts(),ResourceCounts::default());
     }
 }
@@ -389,8 +400,8 @@ fn rejected_mount_keeps_its_returned_disposer_for_cleanup() {
         ctx.globals().set("recordCleanup",Function::new(ctx.clone(),move ||count.set(count.get()+1))?)
     }).unwrap();
     assert!(session.mount().is_err());
-    session.shutdown();
-    session.shutdown();
+    session.retire();
+    session.retire();
     assert_eq!(called.get(),1);
     assert_eq!(session.counts(),ResourceCounts::default());
 }
@@ -433,7 +444,7 @@ fn preview_installs_clock_before_module_evaluation_and_settles_fixture_through_o
     assert_eq!(native.text(), "completed:1256");
     fixtures.assert_calls("assets", "readTextAsset", 1, None).unwrap();
     fixtures.finalize().unwrap();
-    session.shutdown();
+    session.retire();
     assert_eq!(session.counts(), ResourceCounts::default());
 }
 
@@ -478,7 +489,7 @@ fn geometry_delivers_immediately_while_the_engine_is_free() {
     let calls = session.engine.borrow_mut().as_mut().unwrap()
         .with_context(|ctx| ctx.eval::<u32, _>("geometryCalls")).unwrap();
     assert_eq!(calls, 1);
-    session.shutdown();
+    session.retire();
     assert_eq!(session.counts(), ResourceCounts::default());
     assert_eq!(native.backend.observation_count(), 0);
 }
@@ -510,7 +521,7 @@ fn geometry_callbacks_cancel_themselves_and_prepared_siblings() {
     assert_eq!(hits, "1:0");
     assert_eq!(native.backend.observation_count(), 0);
     assert_eq!(session.counts().callbacks, 0);
-    session.shutdown();
+    session.retire();
     assert_eq!(session.counts(), ResourceCounts::default());
 }
 
@@ -536,7 +547,7 @@ fn geometry_callback_failure_faults_and_retires_every_observer() {
     let error = session.checkpoint().unwrap_err();
     let SessionError::Diagnostic(diagnostic) = error else { panic!("geometry throw must stay a diagnostic") };
     assert!(diagnostic.message.contains("geometry callback failed"));
-    session.shutdown();
+    session.retire();
     assert_eq!(session.counts(), ResourceCounts::default());
 }
 
@@ -567,7 +578,7 @@ fn geometry_defers_with_the_scale_captured_at_enqueue_time() {
     let calls = session.engine.borrow_mut().as_mut().unwrap()
         .with_context(|ctx| ctx.eval::<u32, _>("geometryCalls")).unwrap();
     assert_eq!(calls, 1);
-    session.shutdown();
+    session.retire();
     assert_eq!(session.counts(), ResourceCounts::default());
     assert_eq!(native.backend.observation_count(), 0);
 }
@@ -605,7 +616,7 @@ fn rejection_diagnostic_accessors_cannot_mutate_the_mount_region() {
     let state = live.engine.borrow_mut().as_mut().unwrap()
         .with_context(|ctx| ctx.eval::<String, _>("mutated + ':' + threw")).unwrap();
     assert_eq!(state, "false:native mutation outside a structural turn");
-    live.shutdown();
+    live.retire();
 
     let preview = native.preview(
         fixture.package(),
@@ -618,5 +629,48 @@ fn rejection_diagnostic_accessors_cannot_mutate_the_mount_region() {
     let state = preview.engine.borrow_mut().as_mut().unwrap()
         .with_context(|ctx| ctx.eval::<String, _>("mutated + ':' + threw")).unwrap();
     assert_eq!(state, "false:native mutation outside a structural turn");
-    preview.shutdown();
+    preview.retire();
+}
+
+#[test]
+fn retire_prioritizes_unreported_contract_over_cleanup_and_skips_reported_contract() {
+    let native = Native::new();
+    let deadline = Rc::new(Cell::new(Instant::now() + Duration::from_secs(5)));
+
+    // 1. Unreported contract violation triggered during cleanup beats cleanup exception.
+    let unreported = Fixture::new(r#"
+        export const hostApiVersion = 1;
+        export function mount() {
+            return () => {
+                try { __zguiServices.readTextAsset('test.txt'); } catch {}
+                throw Error('cleanup exploded');
+            };
+        }
+    "#, "");
+    let s1 = native.preview(unreported.package(), RuntimeLimits::default(), deadline.clone()).unwrap();
+    s1.mount().unwrap();
+    let r1 = s1.retire();
+    let r1_again = s1.retire();
+    assert_eq!(r1.failure, r1_again.failure);
+    let Some(RetirementFailure::Contract(contract)) = &r1.failure else {
+        panic!("unreported contract failure must beat cleanup failure: {:?}", r1.failure);
+    };
+    assert_eq!(contract.code, "E_FIXTURE_MISSING_SERVICE");
+
+    // 2. Previously reported contract failure is not duplicated; cleanup failure surfaces.
+    let reported = Fixture::new(r#"
+        export const hostApiVersion = 1;
+        export function mount() {
+            try { __zguiServices.readTextAsset('test.txt'); } catch {}
+            return () => { throw Error('cleanup after contract'); };
+        }
+    "#, "");
+    let s2 = native.preview(reported.package(), RuntimeLimits::default(), deadline).unwrap();
+    assert!(matches!(s2.mount(), Err(SessionError::Contract(_))));
+    let r2 = s2.retire();
+    let Some(RetirementFailure::Cleanup(cleanup)) = &r2.failure else {
+        panic!("cleanup failure must surface once contract failure was already reported: {:?}", r2.failure);
+    };
+    assert_eq!(cleanup.message, "cleanup after contract");
+    assert!(cleanup.stack.as_deref().unwrap().contains("app.mjs"));
 }
