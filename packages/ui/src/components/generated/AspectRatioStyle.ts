@@ -1,0 +1,1 @@
+export const sheet = { name: "AspectRatioStyle", className: "zs-5b6fd69d", css: ".zs-5b6fd69d {\n        position: relative;\n        display: block;\n        width: 100%;\n        aspect-ratio: var(--zui-aspect-ratio, 1);\n    }\n.zs-5b6fd69d > * { width: 100%; height: 100%; }" } as const;

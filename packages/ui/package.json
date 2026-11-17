@@ -12,6 +12,14 @@
       "types": "./src/renderer/index.ts",
       "default": "./src/renderer/index.ts"
     },
+    "./components": {
+      "types": "./src/components/index.ts",
+      "default": "./src/components/index.ts"
+    },
+    "./icons": {
+      "types": "./src/components/icons.ts",
+      "default": "./src/components/icons.ts"
+    },
     "./jsx-runtime": {
       "types": "./src/jsx-runtime.ts",
       "default": "./src/jsx-runtime.ts"

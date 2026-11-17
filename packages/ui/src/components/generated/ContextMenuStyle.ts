@@ -1,0 +1,1 @@
+export const sheet = { name: "ContextMenuStyle", className: "zs-7048261e", css: ".zs-7048261e { position: relative; display: flex; flex-direction: column; }\n.zui-context-menu__anchor { position: absolute; width: 0px; height: 0px; }" } as const;

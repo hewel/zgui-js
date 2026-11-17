@@ -3,7 +3,7 @@ import type { NativeNode, TextFieldProps, TextAreaProps } from "./types.js";
 
 function textControl(
   tag: "field" | "editor",
-  role: "textInput" | "multilineTextInput",
+  role: "textInput" | "multilineTextInput" | "passwordInput",
   name: string,
   props: TextFieldProps | TextAreaProps,
 ): NativeNode {
@@ -12,7 +12,11 @@ function textControl(
     if ("children" in props) throw new TypeError(`${name} does not accept children; use value or defaultValue`);
   });
   const control = createElement(tag);
-  spread(control, mergeProps({ tabIndex: 0 }, props, { role }), true);
+  spread(control, mergeProps({ tabIndex: 0 }, props, {
+    get role() {
+      return tag === "field" && "secure" in props && props.secure ? "passwordInput" : role;
+    },
+  }), true);
   return control;
 }
 

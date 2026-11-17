@@ -1,4 +1,4 @@
-import { createRoot } from "#solid";
+import { batch, createRoot } from "#solid";
 import { insert } from "./renderer/index.js";
 import type { NativeChild, NativeNode } from "./types.js";
 import type { NativeHost } from "./host.js";
@@ -19,7 +19,7 @@ export function renderApp(code: () => NativeChild, root: NativeNode): () => void
     disposed = true;
     const errors: unknown[] = [];
     try {
-      disposeRoot?.();
+      batch(() => disposeRoot?.());
     } catch (error) {
       errors.push(error);
     }
@@ -34,10 +34,10 @@ export function renderApp(code: () => NativeChild, root: NativeNode): () => void
 
   try {
     // Own the root directly: Universal.render cannot return its disposer if mount throws.
-    createRoot(dispose => {
+    batch(() => createRoot(dispose => {
       disposeRoot = dispose;
       insert(root, code());
-    });
+    }));
   } catch (error) {
     try {
       dispose();

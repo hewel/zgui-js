@@ -1,0 +1,1 @@
+export const sheet = { name: "ItemGroupStyle", className: "zs-891ab6fc", css: ".zs-891ab6fc { display: flex; flex-direction: column; }\n.zui-item__separator {\n        flex-shrink: 0;\n        height: 1px;\n        margin: 0;\n        background-color: var(--zui-color-border);\n    }" } as const;

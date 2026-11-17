@@ -1,0 +1,1 @@
+export const sheet = { name: "RadioGroupStyle", className: "zs-ff2b6ea1", css: ".zs-ff2b6ea1 { display: flex; flex-direction: column; gap: var(--zui-space-md); }\n.zs-ff2b6ea1[data-orientation=\"horizontal\"] { flex-direction: row; }" } as const;

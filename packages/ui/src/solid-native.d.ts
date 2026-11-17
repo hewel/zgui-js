@@ -13,6 +13,7 @@ export declare function createEffect<T>(effect: (previous: T) => T, initial: T, 
 export declare function createEffect<T, I = T>(effect: (previous: T | I) => T, initial: I, options?: ReactiveOptions): void;
 export declare function onMount(callback: () => void): void;
 export declare function onCleanup<T extends () => void>(callback: T): T;
+export declare function getOwner(): object | null;
 export declare function batch<T>(callback: () => T): T;
 export declare function untrack<T>(callback: () => T): T;
 /** Identity-keyed mapping: reordering the same item objects preserves their native nodes. */
@@ -43,3 +44,17 @@ export declare function Show<T>(props: {
   fallback?: NativeChild;
   children: NativeChild | ((item: NonNullable<T>) => NativeChild);
 }): NativeChild;
+export interface Context<T> {
+  id: symbol;
+  Provider: (props: { value: T; children?: NativeChild }) => NativeChild;
+  defaultValue: T;
+}
+export declare function createContext<T>(): Context<T | undefined>;
+export declare function createContext<T>(defaultValue: T, options?: { name?: string }): Context<T>;
+export declare function useContext<T>(context: Context<T>): T;
+export declare function createUniqueId(): string;
+type SplitProps<T, K extends readonly (readonly (keyof T)[])[]> = [
+  ...{ [P in keyof K]: Pick<T, K[P][number]> },
+  Omit<T, K[number][number]>,
+];
+export declare function splitProps<T extends object, K extends [readonly (keyof T)[], ...(readonly (keyof T)[])[]]>(props: T, ...keys: K): SplitProps<T, K>;

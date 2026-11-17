@@ -1,0 +1,1 @@
+export const sheet = { name: "HoverCardStyle", className: "zs-4c9973ed", css: ".zs-4c9973ed {\n        width: 256px;\n        padding: var(--zui-space-lg);\n        outline: none;\n    }\n.zui-hover-card__trigger { display: inline-flex; align-items: center; }" } as const;

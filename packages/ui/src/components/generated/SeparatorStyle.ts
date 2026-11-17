@@ -1,0 +1,1 @@
+export const sheet = { name: "SeparatorStyle", className: "zs-170da4ac", css: ".zs-170da4ac { background-color: var(--zui-color-border); flex: none; }\n.zs-170da4ac[data-orientation=\"horizontal\"] { height: 1px; width: 100%; }\n.zs-170da4ac[data-orientation=\"vertical\"] { width: 1px; align-self: stretch; }" } as const;

@@ -22,9 +22,17 @@ export interface NativePointerEvent extends NativeEvent {
   readonly buttonIndex?: number;
   readonly pressure: number | null;
   readonly coalesced: readonly { readonly position: { readonly x: number; readonly y: number }; readonly pressure: number | null; readonly timestamp: number }[];
+  releasePointer(): void;
+}
+export type NativePointerBoundaryEvent = Omit<NativePointerEvent, "releasePointer">;
+export type NativeContextMenuEvent = Omit<NativePointerEvent, "releasePointer">;
+export interface NativePointerDownEvent extends NativePointerEvent {
+  activateNow(): void;
+  capturePointer(): void;
 }
 export interface NativeKeyEvent extends NativeEvent {
   readonly key: string | null;
+  readonly character: string | null;
   readonly keyWithoutModifiers: string | null;
   readonly deadKey: string | null;
   readonly code: string | null;
@@ -40,16 +48,39 @@ export interface NativeValueEvent extends NativeEvent {
 }
 /** onFocus/onBlur subscribe to native bubbling focusin/focusout. */
 export interface NativeFocusEvent extends NativeEvent { readonly cause: string; }
+export interface NativeAnimationEvent extends NativeEvent {
+  readonly animationName: string;
+  readonly elapsedTime: number;
+  readonly pseudoElement: string;
+}
+export interface NativeTransitionEvent extends NativeEvent {
+  readonly propertyName: string;
+  readonly elapsedTime: number;
+  readonly pseudoElement: string;
+}
 interface EventMap {
   onClick: NativeEvent;
-  onPointerDown: NativePointerEvent;
+  onPointerDown: NativePointerDownEvent;
+  onPointerMove: NativePointerEvent;
+  onPointerEnter: NativePointerBoundaryEvent;
+  onPointerLeave: NativePointerBoundaryEvent;
   onPointerUp: NativePointerEvent;
+  onPointerCancel: NativePointerEvent;
+  onContextMenu: NativeContextMenuEvent;
   onKeyDown: NativeKeyEvent;
   onKeyUp: NativeKeyEvent;
   onInput: NativeValueEvent;
   onChange: NativeValueEvent;
   onFocus: NativeFocusEvent;
   onBlur: NativeFocusEvent;
+  onAnimationStart: NativeAnimationEvent;
+  onAnimationIteration: NativeAnimationEvent;
+  onAnimationEnd: NativeAnimationEvent;
+  onAnimationCancel: NativeAnimationEvent;
+  onTransitionRun: NativeTransitionEvent;
+  onTransitionStart: NativeTransitionEvent;
+  onTransitionEnd: NativeTransitionEvent;
+  onTransitionCancel: NativeTransitionEvent;
 }
 export type NativeEventProps = {
   [Name in keyof EventMap]?: ((event: EventMap[Name]) => void) | null;
