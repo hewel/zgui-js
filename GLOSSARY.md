@@ -8,6 +8,8 @@ Native applications and repeatable previews of their behavior.
 
 **Session**: One running application generation attached to a mount region. A retired session can no longer update that region.
 
+**Bridge turn**: One bounded application entry permitted to mutate a mount region's native tree. Detached nodes become invalid when the turn completes, and an uncaught turn fault retires the session's ownership of that region.
+
 **Session host**: The owner of session replacement, retirement, and recovery for its mount regions.
 
 **Generation**: A monotonically increasing identity for a session incarnation, including incarnations that fail to mount.

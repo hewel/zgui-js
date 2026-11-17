@@ -148,6 +148,27 @@
       "skillPath": "skills/engineering/retro/SKILL.md",
       "computedHash": "e260aefb7b75b3548a3ee9883afbf8808e521f2e86feec92399617894f83b7c2"
     },
+    "rust-best-practices": {
+      "source": "morganlinton/BeautifulRust",
+      "commit": "b9718436d77ee7bcf17cdcb6aa27628feb95d97a",
+      "sourceType": "github",
+      "skillPath": "skills/rust-best-practices/SKILL.md",
+      "computedHash": "313bea7637531b7f6fe60798bed2108e49594914d4db44e303b7d2312868b3d1"
+    },
+    "rust-port": {
+      "source": "morganlinton/BeautifulRust",
+      "commit": "b9718436d77ee7bcf17cdcb6aa27628feb95d97a",
+      "sourceType": "github",
+      "skillPath": "skills/rust-port/SKILL.md",
+      "computedHash": "b125be23ffeac1c4b67d018282f60acee159a228a83d6aebfc4848dd3d3c2efa"
+    },
+    "rust-review": {
+      "source": "morganlinton/BeautifulRust",
+      "commit": "b9718436d77ee7bcf17cdcb6aa27628feb95d97a",
+      "sourceType": "github",
+      "skillPath": "skills/rust-review/SKILL.md",
+      "computedHash": "a12087e797445bac38dc7c0b3e7441cb515fe7decb31ed983fcf24008c0523c1"
+    },
     "scaffold-exercises": {
       "source": "mattpocock/skills",
       "commit": "5863806dd4e15c63174bee4e7515a4256792ecfa",
