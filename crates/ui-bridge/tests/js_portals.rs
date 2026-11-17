@@ -1,6 +1,6 @@
 use std::{cell::RefCell, rc::Rc};
 use js_runtime::{JsRuntime, RuntimeLimits};
-use ui_bridge::{UiBridge, registry::NodeRegistry};
+use ui_bridge::{HostPort, UiBridge, registry::NodeRegistry};
 use zgui::view::{DomHandle, ElementName, HostHandle, NodeId, OverlayLayer, stub::StubHost};
 use zgui_dom::Document;
 use zgui_view_dom::DocumentDom;
@@ -24,7 +24,7 @@ impl Native {
         dom.insert(backend.root_node(), root, None);
         let host = Rc::new(StubHost::default());
         let mut engine = JsRuntime::new(RuntimeLimits::default()).unwrap();
-        let bridge = UiBridge::new(NodeRegistry::new(dom.clone(), root, session, 1, limit), HostHandle::from_rc(host.clone()));
+        let bridge = UiBridge::new(NodeRegistry::new(dom.clone(), root, session, 1, limit), HostHandle::from_rc(host.clone()), HostPort::queued());
         engine.with_context(|ctx| {
             bridge.install(&ctx)?;
             ctx.globals().set("root", bridge.root(&ctx)?)
@@ -33,7 +33,7 @@ impl Native {
     }
 
     fn script(&mut self, script: &str) {
-        self.bridge.run_turn(|| self.engine.evaluate_script(script)).unwrap();
+        self.bridge.run_turn(self.engine.turn(), |_, js| js.evaluate_script(script)).unwrap();
     }
 }
 
@@ -89,7 +89,7 @@ fn a_faulted_turn_leaves_shared_bands_empty() {
     let mut native = Native::new(81, 100);
     let baseline = native.document.borrow().len();
     let band = native.backend.overlay_layer(OverlayLayer::Toast);
-    let result = native.bridge.run_turn(|| native.engine.evaluate_script(r#"
+    let result = native.bridge.run_turn(native.engine.turn(), |_, js| js.evaluate_script(r#"
         const portal = __zgui.createPortal('toast');
         const text = __zgui.createTextNode('held');
         __zgui.insertNode(portal, text, null);

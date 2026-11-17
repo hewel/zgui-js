@@ -1,7 +1,7 @@
 use std::{cell::RefCell, rc::Rc};
 
 use js_runtime::{JsRuntime, RuntimeLimits};
-use ui_bridge::{UiBridge, registry::NodeRegistry};
+use ui_bridge::{HostPort, UiBridge, registry::NodeRegistry};
 use zgui::view::{DomHandle, ElementName, HostHandle, ViewHost, stub::StubHost};
 use zgui_dom::Document;
 use zgui_view_dom::DocumentDom;
@@ -31,6 +31,7 @@ impl Sheets {
         let bridge = UiBridge::new(
             NodeRegistry::new(self.dom.clone(), root, session, generation, 100),
             HostHandle::from_rc(self.host.clone()),
+            HostPort::queued(),
         );
         engine.with_context(|ctx| bridge.install(&ctx)).unwrap();
         Owner { bridge, engine }
@@ -39,11 +40,11 @@ impl Sheets {
 
 impl Owner {
     fn script(&mut self, script: &str) {
-        self.bridge.run_turn(|| self.engine.evaluate_script(script)).unwrap();
+        self.bridge.run_turn(self.engine.turn(), |_, js| js.evaluate_script(script)).unwrap();
     }
 
     fn failed(&mut self, script: &str) -> String {
-        self.bridge.run_turn(|| self.engine.evaluate_script(script)).unwrap_err().message
+        self.bridge.run_turn(self.engine.turn(), |_, js| js.evaluate_script(script)).unwrap_err().message
     }
 }
 
@@ -115,7 +116,8 @@ fn faulted_turns_and_disposal_retire_every_owned_sheet_once() {
         throw Error('construction failed');
     "#);
     assert!(error.contains("construction failed"), "{error}");
-    assert_eq!(sheets.host.stylesheet_count(), 1);
+    assert!(owner.bridge.is_disposed());
+    assert_eq!(sheets.host.stylesheet_count(), 0);
     owner.bridge.dispose();
     assert_eq!(sheets.host.stylesheet_count(), 0);
     owner.bridge.dispose();

@@ -10,7 +10,7 @@ mod focus;
 mod geometry;
 mod scroll;
 
-use std::{cell::{Cell, RefCell}, collections::{HashMap, HashSet}, rc::{Rc, Weak}};
+use std::{cell::{Cell, RefCell}, collections::{HashMap, HashSet, VecDeque}, marker::PhantomData, rc::{Rc, Weak}, sync::Arc};
 use rquickjs::{class::Trace, function::{Func, Opt}, Class, Ctx, Exception, JsLifetime, Object, Persistent, Value};
 use registry::{BridgeError, Handle, NodeRegistry, Snapshot};
 
@@ -21,16 +21,214 @@ pub struct NativeNode {
     handle: Handle,
 }
 
-/// An unexpected nested notification carries data, never native cancellation authority.
-pub struct DeferredEvent { id: u64, snapshot: events::EventSnapshot }
-impl DeferredEvent {
-    pub fn capture(id: u64, event: &zgui::view::EventCx<'_>) -> Self {
-        Self { id, snapshot: events::EventSnapshot::capture(event) }
+/// Bounded capacity for deferred native notifications awaiting a host flush.
+pub const MAX_QUEUED_NOTIFICATIONS: usize = 256;
+
+/// Returned by [`UiBridge::has_queued_notifications`] after queue overflow retires the bridge.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct QueueOverflow;
+
+impl std::fmt::Display for QueueOverflow {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("nested native notification queue exhausted")
     }
 }
 
-type GeometryDispatcherSlot = Option<(Rc<geometry::Dispatcher>, Rc<dyn Fn()>)>;
-pub type EventDispatcher = Rc<events::Dispatcher>;
+impl std::error::Error for QueueOverflow {}
+
+/// Outcome reported by a synchronous host dispatcher attempting immediate JS entry.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[must_use]
+pub enum DispatchOutcome {
+    Executed,
+    Busy,
+    Retired,
+}
+
+struct DeferredEvent {
+    id: u64,
+    snapshot: events::EventSnapshot,
+}
+
+enum QueuedNotification {
+    Event(DeferredEvent),
+    Geometry { id: u64, value: zgui::view::ObservedValue, scale: f32 },
+}
+
+enum DispatchPayload<'a> {
+    LiveEvent {
+        id: u64,
+        snapshot: &'a mut Option<events::EventSnapshot>,
+        apply: &'a mut dyn FnMut(events::DispatchControl),
+    },
+    QueuedEvent(DeferredEvent),
+    Geometry {
+        id: u64,
+        slot: &'a mut Option<zgui::view::ObservedValue>,
+        scale: f32,
+    },
+}
+
+/// Callback handle handed to the host closure inside [`BridgeStep::run_turn`] or
+/// [`UiBridge::flush_notification`].
+#[must_use]
+pub struct BridgeCallback<'a> {
+    bridge: &'a UiBridge,
+    payload: DispatchPayload<'a>,
+}
+
+impl<'a> BridgeCallback<'a> {
+    /// Dispatches the notification into JavaScript inside the active structural turn.
+    pub fn call<'js>(self, ctx: &Ctx<'js>) -> rquickjs::Result<()> {
+        match self.payload {
+            DispatchPayload::LiveEvent { id, snapshot, apply } => {
+                let snapshot = snapshot.take().expect("live event snapshot consumed twice");
+                self.bridge.invoke_snapshot(ctx, id, snapshot, Some(apply))
+            }
+            DispatchPayload::QueuedEvent(event) => {
+                self.bridge.invoke_snapshot(ctx, event.id, event.snapshot, None)
+            }
+            DispatchPayload::Geometry { id, slot, scale } => {
+                let value = slot.take().expect("geometry observation consumed twice");
+                self.bridge.invoke_geometry_inner(ctx, id, value, scale)
+            }
+        }
+    }
+}
+
+/// Pending synchronous native notification awaiting a host JS engine turn.
+#[must_use]
+pub struct BridgeStep<'a> {
+    bridge: &'a UiBridge,
+    payload: DispatchPayload<'a>,
+}
+
+impl<'a> BridgeStep<'a> {
+    /// Executes the notification inside an active bridge structural turn.
+    pub fn run_turn<J, E>(
+        self,
+        mut js: J,
+        enter: impl FnOnce(&mut J, BridgeCallback<'_>) -> Result<(), E>,
+    ) -> Result<(), E> {
+        let bridge = self.bridge;
+        let payload = self.payload;
+        bridge.execute_turn(|| enter(&mut js, BridgeCallback { bridge, payload }))
+    }
+}
+
+/// Borrowed proof of an active structural turn inside [`UiBridge::run_turn`].
+pub struct BridgeTurn<'turn> {
+    bridge: &'turn UiBridge,
+    _marker: PhantomData<&'turn mut UiBridge>,
+}
+
+impl<'turn> BridgeTurn<'turn> {
+    /// Exposes the native mount-region root wrapper within the active structural turn.
+    pub fn root<'js>(&self, ctx: &Ctx<'js>) -> rquickjs::Result<Object<'js>> {
+        self.bridge.root(ctx)
+    }
+
+    /// Drains one queued notification inside this active structural turn.
+    /// Returns `Ok(false)` if the internal queue is empty or disposed.
+    pub fn flush_notification<'js>(&self, ctx: &Ctx<'js>) -> rquickjs::Result<bool> {
+        let item = self.bridge.pending.borrow_mut().pop_front();
+        let Some(item) = item else {
+            return Ok(false);
+        };
+        match item {
+            QueuedNotification::Event(event) => {
+                self.bridge.invoke_snapshot(ctx, event.id, event.snapshot, None)?;
+            }
+            QueuedNotification::Geometry { id, value, scale } => {
+                self.bridge.invoke_geometry_inner(ctx, id, value, scale)?;
+            }
+        }
+        Ok(true)
+    }
+}
+
+#[derive(Clone, Default)]
+enum WakeTarget {
+    #[default]
+    None,
+    Live {
+        surface: zgui::platform::SurfaceId,
+        waker: Arc<dyn zgui::platform::Waker>,
+    },
+}
+
+type HostDispatcher = Rc<dyn Fn(BridgeStep<'_>) -> DispatchOutcome>;
+
+/// Host integration port supplied to [`UiBridge::new`] controlling whether idle
+/// notifications dispatch synchronously or queue for the host's next flush.
+#[derive(Clone, Default)]
+pub struct HostPort {
+    wake: WakeTarget,
+    dispatch: Option<HostDispatcher>,
+}
+
+impl HostPort {
+    /// Queues every notification internally until drained by [`UiBridge::flush_notification`]
+    /// or [`BridgeTurn::flush_notification`].
+    pub fn queued() -> Self {
+        Self::default()
+    }
+
+    /// Attempts synchronous JS dispatch when idle using `enter`, and signals `waker`
+    /// for `surface` whenever queued notifications or geometry watches need host work.
+    pub fn live<T: 'static>(
+        surface: zgui::platform::SurfaceId,
+        waker: Arc<dyn zgui::platform::Waker>,
+        owner: Weak<T>,
+        enter: fn(&T, BridgeStep<'_>) -> DispatchOutcome,
+    ) -> Self {
+        Self {
+            wake: WakeTarget::Live { surface, waker },
+            dispatch: Some(Self::make_dispatcher(owner, enter)),
+        }
+    }
+
+    /// Synchronous dispatch port without an OS waker, intended for unit harnesses.
+    pub fn synchronous<T: 'static>(
+        owner: Weak<T>,
+        enter: fn(&T, BridgeStep<'_>) -> DispatchOutcome,
+    ) -> Self {
+        Self {
+            wake: WakeTarget::None,
+            dispatch: Some(Self::make_dispatcher(owner, enter)),
+        }
+    }
+
+    fn make_dispatcher<T: 'static>(
+        owner: Weak<T>,
+        enter: fn(&T, BridgeStep<'_>) -> DispatchOutcome,
+    ) -> Rc<dyn Fn(BridgeStep<'_>) -> DispatchOutcome> {
+        Rc::new(move |step| {
+            let Some(owner) = owner.upgrade() else {
+                return DispatchOutcome::Retired;
+            };
+            enter(&owner, step)
+        })
+    }
+}
+
+struct TurnActiveGuard<'a>(&'a UiBridge);
+
+impl<'a> TurnActiveGuard<'a> {
+    fn enter(bridge: &'a UiBridge) -> Self {
+        assert!(!bridge.active.replace(true), "nested bridge entry");
+        Self(bridge)
+    }
+}
+
+impl Drop for TurnActiveGuard<'_> {
+    fn drop(&mut self) {
+        self.0.active.set(false);
+    }
+}
+
+type EventDispatcher = Rc<events::Dispatcher>;
+type GeometryDispatcher = Rc<geometry::Dispatcher>;
 
 /// Dispose and drop this before destroying its JS engine. For locals, declare
 /// the engine first; for struct fields, place this bridge before the engine.
@@ -38,57 +236,139 @@ pub type EventDispatcher = Rc<events::Dispatcher>;
 pub struct UiBridge {
     registry: RefCell<NodeRegistry>,
     host: zgui::view::HostHandle,
+    port: HostPort,
     wrappers: RefCell<HashMap<u64, Persistent<Object<'static>>>>,
     properties: RefCell<properties::Properties>,
     stylesheets: RefCell<HashSet<String>>,
     events: RefCell<events::Events>,
-    dispatcher: RefCell<Option<EventDispatcher>>,
+    event_dispatcher: EventDispatcher,
     geometry: RefCell<geometry::Geometry>,
-    geometry_dispatcher: RefCell<GeometryDispatcherSlot>,
+    geometry_dispatcher: GeometryDispatcher,
     focus_traps: RefCell<focus::FocusTraps>,
     dismissals: RefCell<dismiss::Dismissals>,
     scroll_locks: RefCell<scroll::ScrollLocks>,
+    pending: RefCell<VecDeque<QueuedNotification>>,
+    wakes: Cell<usize>,
+    overflowed: Cell<bool>,
     active: Cell<bool>,
     stopping: Cell<bool>,
     disposed: Cell<bool>,
 }
 
 impl UiBridge {
-    /// Uses the host for this registry's native document. Editable values always
-    /// go through its editing API, never through reconciled text descendants.
-    pub fn new(registry: NodeRegistry, host: zgui::view::HostHandle) -> Rc<Self> {
-        let events = RefCell::new(events::Events::new(registry.dom_handle()));
-        let geometry = RefCell::new(geometry::Geometry::new(registry.dom_handle(),
-            registry.native(registry.root()).expect("the session root is a live native node"), host.clone(), registry.node_limit().saturating_mul(4)));
-        let focus_traps = RefCell::new(focus::FocusTraps::new(registry.node_limit()));
-        let dismissals = RefCell::new(dismiss::Dismissals::new(registry.dom_handle(),
-            registry.native(registry.root()).expect("the session root is a live native node"), registry.node_limit()));
-        let scroll_locks = RefCell::new(scroll::ScrollLocks::new(registry.dom_handle(),
-            registry.native(registry.root()).expect("the session root is a live native node"), host.clone(), registry.node_limit()));
-        Rc::new(Self { registry: RefCell::new(registry), host, wrappers: RefCell::new(HashMap::new()), properties: RefCell::new(properties::Properties::default()), stylesheets: RefCell::new(HashSet::new()), events, dispatcher: RefCell::new(None), geometry, geometry_dispatcher: RefCell::new(None), focus_traps, dismissals, scroll_locks, active: Cell::new(false), stopping: Cell::new(false), disposed: Cell::new(false) })
+    /// Uses the host for this registry's native document and binds internal dispatchers
+    /// to `port`. Editable values always go through its editing API, never reconciled text.
+    pub fn new(registry: NodeRegistry, host: zgui::view::HostHandle, port: HostPort) -> Rc<Self> {
+        let dom = registry.dom_handle();
+        let root_native = registry.native(registry.root()).expect("the session root is a live native node");
+        let limit = registry.node_limit();
+        let events = RefCell::new(events::Events::new(dom.clone()));
+        let geometry = RefCell::new(geometry::Geometry::new(dom.clone(), root_native, host.clone(), limit.saturating_mul(4)));
+        let focus_traps = RefCell::new(focus::FocusTraps::new(limit));
+        let dismissals = RefCell::new(dismiss::Dismissals::new(dom.clone(), root_native, limit));
+        let scroll_locks = RefCell::new(scroll::ScrollLocks::new(dom, root_native, host.clone(), limit));
+        Rc::new_cyclic(|weak: &Weak<Self>| {
+            let event_weak = weak.clone();
+            let event_dispatcher: EventDispatcher = Rc::new(move |id, event| {
+                if let Some(bridge) = event_weak.upgrade() {
+                    bridge.dispatch_event(id, event);
+                }
+            });
+            let geometry_weak = weak.clone();
+            let geometry_dispatcher: GeometryDispatcher = Rc::new(move |id, value, scale| {
+                if let Some(bridge) = geometry_weak.upgrade() {
+                    bridge.dispatch_geometry(id, value, scale);
+                }
+            });
+            Self {
+                registry: RefCell::new(registry),
+                host,
+                port,
+                wrappers: RefCell::new(HashMap::new()),
+                properties: RefCell::new(properties::Properties::default()),
+                stylesheets: RefCell::new(HashSet::new()),
+                events,
+                event_dispatcher,
+                geometry,
+                geometry_dispatcher,
+                focus_traps,
+                dismissals,
+                scroll_locks,
+                pending: RefCell::new(VecDeque::new()),
+                wakes: Cell::new(0),
+                overflowed: Cell::new(false),
+                active: Cell::new(false),
+                stopping: Cell::new(false),
+                disposed: Cell::new(false),
+            }
+        })
     }
 
-    /// Finalizes detachments after successful entry; a failed update faults and
-    /// tears down the region because prior native writes cannot be rolled back.
-    pub fn run_turn<T, E>(&self, action: impl FnOnce() -> Result<T, E>) -> Result<T, E> {
-        assert!(!self.active.replace(true), "nested bridge entry");
+    /// Runs `action` inside an outermost structural turn and passes a [`BridgeTurn`] token.
+    /// Finalizes detachments on `Ok`; faults and fully disposes the bridge on `Err`.
+    pub fn run_turn<J, T, E>(
+        &self,
+        mut js: J,
+        action: impl for<'turn> FnOnce(&BridgeTurn<'turn>, &mut J) -> Result<T, E>,
+    ) -> Result<T, E> {
+        let turn = BridgeTurn { bridge: self, _marker: PhantomData };
+        self.execute_turn(|| action(&turn, &mut js))
+    }
+
+    /// Pops and runs one queued notification inside an active structural turn.
+    /// Returns `Ok(false)` when the queue is empty or disposed.
+    pub fn flush_notification<J, E>(
+        &self,
+        mut js: J,
+        enter: impl FnOnce(&mut J, BridgeCallback<'_>) -> Result<(), E>,
+    ) -> Result<bool, E> {
+        let item = self.pending.borrow_mut().pop_front();
+        let Some(item) = item else {
+            return Ok(false);
+        };
+        match item {
+            QueuedNotification::Event(event) => {
+                let payload = DispatchPayload::QueuedEvent(event);
+                self.execute_turn(|| enter(&mut js, BridgeCallback { bridge: self, payload }))?;
+            }
+            QueuedNotification::Geometry { id, value, scale } => {
+                let mut slot = Some(value);
+                let payload = DispatchPayload::Geometry { id, slot: &mut slot, scale };
+                self.execute_turn(|| enter(&mut js, BridgeCallback { bridge: self, payload }))?;
+            }
+        }
+        Ok(true)
+    }
+
+    /// Reports whether queued notifications remain, or `Err(QueueOverflow)` if overflow retired the bridge.
+    pub fn has_queued_notifications(&self) -> Result<bool, QueueOverflow> {
+        if self.overflowed.get() {
+            return Err(QueueOverflow);
+        }
+        Ok(!self.pending.borrow().is_empty())
+    }
+
+    /// Returns and clears the count of wake signals emitted since the last call.
+    pub fn take_wakes(&self) -> usize {
+        self.wakes.replace(0)
+    }
+
+    fn execute_turn<T, E>(&self, action: impl FnOnce() -> Result<T, E>) -> Result<T, E> {
+        let guard = TurnActiveGuard::enter(self);
         self.registry.borrow_mut().begin_turn();
         let result = action();
-        self.active.set(false);
-        let invalid = if result.is_ok() { self.registry.borrow_mut().finish_turn() }
-            else { self.disposed.set(true); self.registry.borrow_mut().abort_turn() };
-        let released = if result.is_err() { self.dismissals.borrow_mut().clear() }
-            else { self.dismissals.borrow_mut().remove_nodes(&invalid) };
-        for callback in released { self.events.borrow_mut().remove_callback(callback); }
-        if result.is_err() { self.geometry.borrow_mut().clear(); }
-        else { self.geometry.borrow_mut().remove_nodes(&invalid); }
-        if result.is_err() { self.scroll_locks.borrow_mut().clear(); }
-        else { self.scroll_locks.borrow_mut().remove_nodes(&invalid); }
-        let traps = if result.is_err() {
-            self.focus_traps.borrow_mut().take_all()
-        } else {
-            self.focus_traps.borrow_mut().remove_nodes(&invalid)
-        };
+        drop(guard);
+        if result.is_err() || self.disposed.get() {
+            self.dispose();
+            return result;
+        }
+        let invalid = self.registry.borrow_mut().finish_turn();
+        for callback in self.dismissals.borrow_mut().remove_nodes(&invalid) {
+            self.events.borrow_mut().remove_callback(callback);
+        }
+        self.geometry.borrow_mut().remove_nodes(&invalid);
+        self.scroll_locks.borrow_mut().remove_nodes(&invalid);
+        let traps = self.focus_traps.borrow_mut().remove_nodes(&invalid);
         for trap in traps { drop(trap); }
         let mut wrappers = self.wrappers.borrow_mut();
         for handle in invalid {
@@ -116,15 +396,87 @@ impl UiBridge {
     /// Diagnostic changes need a fresh validation frame even without native DOM changes.
     pub fn metadata_revision(&self) -> u64 { self.registry.borrow().metadata_revision() }
 
-    pub fn set_dispatcher(&self, dispatcher: EventDispatcher) {
-        *self.dispatcher.borrow_mut() = Some(dispatcher);
+    fn wake(&self) {
+        self.wakes.set(self.wakes.get().saturating_add(1));
+        if let WakeTarget::Live { surface, waker } = &self.port.wake {
+            waker.wake(zgui::platform::WakeReason::ReactiveWork {
+                surfaces: vec![*surface].into_boxed_slice(),
+            });
+        }
     }
 
-    pub fn set_geometry_dispatcher(&self, dispatcher: Rc<dyn Fn(u64, zgui::view::ObservedValue, f32)>, wake: Rc<dyn Fn()>) {
-        *self.geometry_dispatcher.borrow_mut() = Some((dispatcher, wake));
+    fn can_dispatch_synchronously(&self) -> bool {
+        self.port.dispatch.is_some()
+            && !self.active.get()
+            && !self.disposed.get()
+            && !self.overflowed.get()
+            && self.pending.borrow().is_empty()
     }
 
-    pub fn invoke_geometry<'js>(&self, ctx: &Ctx<'js>, id: u64, value: zgui::view::ObservedValue, scale: f32) -> rquickjs::Result<()> {
+    fn enqueue(&self, item: QueuedNotification) {
+        if self.disposed.get() {
+            return;
+        }
+        if self.pending.borrow().len() >= MAX_QUEUED_NOTIFICATIONS {
+            self.overflowed.set(true);
+            self.dispose();
+            return;
+        }
+        self.pending.borrow_mut().push_back(item);
+        self.wake();
+    }
+
+    fn dispatch_event(&self, id: u64, event: &mut zgui::view::EventCx<'_>) {
+        if self.disposed.get() {
+            return;
+        }
+        let mut snapshot_slot = Some(events::EventSnapshot::capture(event));
+        if let Some(dispatch) = self.port.dispatch.as_ref().filter(|_| self.can_dispatch_synchronously()) {
+            let mut native_slot = Some(event);
+            let mut apply = |control: events::DispatchControl| {
+                if let Some(native) = native_slot.take() {
+                    control.expire_and_apply(native);
+                }
+            };
+            let step = BridgeStep {
+                bridge: self,
+                payload: DispatchPayload::LiveEvent {
+                    id,
+                    snapshot: &mut snapshot_slot,
+                    apply: &mut apply,
+                },
+            };
+            match dispatch(step) {
+                DispatchOutcome::Executed | DispatchOutcome::Retired => return,
+                DispatchOutcome::Busy => {}
+            }
+        }
+        if let Some(snapshot) = snapshot_slot.take() {
+            self.enqueue(QueuedNotification::Event(DeferredEvent { id, snapshot }));
+        }
+    }
+
+    fn dispatch_geometry(&self, id: u64, value: zgui::view::ObservedValue, scale: f32) {
+        if self.disposed.get() {
+            return;
+        }
+        let mut value_slot = Some(value);
+        if let Some(dispatch) = self.port.dispatch.as_ref().filter(|_| self.can_dispatch_synchronously()) {
+            let step = BridgeStep {
+                bridge: self,
+                payload: DispatchPayload::Geometry { id, slot: &mut value_slot, scale },
+            };
+            match dispatch(step) {
+                DispatchOutcome::Executed | DispatchOutcome::Retired => return,
+                DispatchOutcome::Busy => {}
+            }
+        }
+        if let Some(value) = value_slot.take() {
+            self.enqueue(QueuedNotification::Geometry { id, value, scale });
+        }
+    }
+
+    fn invoke_geometry_inner<'js>(&self, ctx: &Ctx<'js>, id: u64, value: zgui::view::ObservedValue, scale: f32) -> rquickjs::Result<()> {
         self.require_turn(ctx)?;
         let prepared = self.geometry.borrow_mut().prepare(ctx, id, value, scale)?;
         let Some((callback, measurement)) = prepared else { return Ok(()); };
@@ -132,16 +484,13 @@ impl UiBridge {
         callback.restore(ctx)?.call::<_, Value>((object,)).map(|_| ())
     }
 
-    /// Called inside the owning engine entry, with no registry borrow held.
-    pub fn invoke_event<'js>(&self, ctx: &Ctx<'js>, id: u64, event: &mut zgui::view::EventCx<'_>) -> rquickjs::Result<()> {
-        self.invoke_snapshot(ctx, id, events::EventSnapshot::capture(event), Some(event))
-    }
-
-    pub fn invoke_deferred<'js>(&self, ctx: &Ctx<'js>, event: DeferredEvent) -> rquickjs::Result<()> {
-        self.invoke_snapshot(ctx, event.id, event.snapshot, None)
-    }
-
-    fn invoke_snapshot<'js>(&self, ctx: &Ctx<'js>, id: u64, snapshot: events::EventSnapshot, native: Option<&mut zgui::view::EventCx<'_>>) -> rquickjs::Result<()> {
+    fn invoke_snapshot<'js>(
+        &self,
+        ctx: &Ctx<'js>,
+        id: u64,
+        snapshot: events::EventSnapshot,
+        apply: Option<&mut dyn FnMut(events::DispatchControl)>,
+    ) -> rquickjs::Result<()> {
         self.require_turn(ctx)?;
         let (callback, dismiss) = {
             let events = self.events.borrow();
@@ -163,9 +512,9 @@ impl UiBridge {
         let current = self.wrap(ctx, current)?;
         let (object, control) = snapshot.to_js(ctx, &target, &current)?;
         let callback = callback.restore(ctx)?;
-        if let Some(native) = native {
+        if let Some(apply) = apply {
             let result = callback.call::<_, Value>((object,));
-            control.expire_and_apply(native);
+            apply(control);
             result.map(|_| ())
         } else {
             drop(control);
@@ -185,13 +534,12 @@ impl UiBridge {
         self.events.borrow_mut().clear();
         self.geometry.borrow_mut().clear();
         self.scroll_locks.borrow_mut().clear();
-        self.geometry_dispatcher.borrow_mut().take();
+        self.pending.borrow_mut().clear();
         let traps = self.focus_traps.borrow_mut().take_all();
         for trap in traps { drop(trap); }
         if !self.disposed.replace(true) { self.registry.borrow_mut().dispose(); }
         self.wrappers.borrow_mut().clear();
         self.properties.borrow_mut().clear();
-        self.dispatcher.borrow_mut().take();
     }
 
     fn require_turn(&self, ctx: &Ctx<'_>) -> rquickjs::Result<()> {
@@ -233,8 +581,7 @@ impl UiBridge {
             if name.starts_with("on") {
                 if !value.is_null() && !value.is_undefined() { bridge.require_creation(&ctx)?; }
                 let native = bridge.registry.borrow().native(handle).map_err(|e| host_error(&ctx, e))?;
-                let dispatcher = bridge.dispatcher.borrow().clone().ok_or_else(|| Exception::throw_type(&ctx, "native event dispatcher not installed"))?;
-                return bridge.events.borrow_mut().set(&ctx, handle, native, &name, value, dispatcher);
+                return bridge.events.borrow_mut().set(&ctx, handle, native, &name, value, bridge.event_dispatcher.clone());
             }
             if let Some(relation) = properties::Relation::parse(&name) {
                 if matches!(relation, properties::Relation::PopupFor) && value.is_array() {
@@ -419,10 +766,9 @@ impl UiBridge {
             let handle = node.borrow().handle;
             let options = dismiss_options(&ctx, &bridge, options)?;
             let native = bridge.registry.borrow().native(handle).map_err(|e| host_error(&ctx, e))?;
-            let dispatcher = bridge.dispatcher.borrow().clone().ok_or_else(|| Exception::throw_type(&ctx, "native event dispatcher not installed"))?;
             let id = bridge.dismissals.borrow_mut().reserve(&ctx)?;
             let callback_id = bridge.events.borrow_mut().register_dismiss(&ctx, callback)?;
-            bridge.dismissals.borrow_mut().add(id, handle, native, options, callback_id, dispatcher);
+            bridge.dismissals.borrow_mut().add(id, handle, native, options, callback_id, bridge.event_dispatcher.clone());
             let update = {
                 let weak = Rc::downgrade(&bridge);
                 Func::from(move |ctx: Ctx<'js>, options: Object<'js>| {
@@ -517,8 +863,6 @@ impl UiBridge {
             let handle = node.borrow().handle;
             let native = bridge.registry.borrow().native(handle).map_err(|e| host_error(&ctx, e))?;
             let what = geometry::Geometry::kind(&ctx, &name)?;
-            let (dispatcher, wake) = bridge.geometry_dispatcher.borrow().clone()
-                .ok_or_else(|| Exception::throw_type(&ctx, "native geometry dispatcher not installed"))?;
             let id = bridge.geometry.borrow_mut().reserve(&ctx)?;
             let cancel = {
                 let weak = Rc::downgrade(&bridge);
@@ -526,8 +870,8 @@ impl UiBridge {
                     if let Some(bridge) = weak.upgrade() { bridge.geometry.borrow_mut().cancel(id); }
                 })?
             };
-            bridge.geometry.borrow_mut().add(&ctx, id, handle, native, what, callback, dispatcher);
-            wake();
+            bridge.geometry.borrow_mut().add(&ctx, id, handle, native, what, callback, bridge.geometry_dispatcher.clone());
+            bridge.wake();
             Ok::<rquickjs::Function<'js>, rquickjs::Error>(cancel)
         }))?;
         for (name, query) in [

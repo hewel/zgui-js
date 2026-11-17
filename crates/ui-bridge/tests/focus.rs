@@ -1,6 +1,6 @@
 use std::{cell::RefCell, rc::Rc};
 use js_runtime::{JsRuntime, RuntimeLimits};
-use ui_bridge::{UiBridge, registry::NodeRegistry};
+use ui_bridge::{HostPort, UiBridge, registry::NodeRegistry};
 use zgui::view::{DomHandle, ElementName, FocusTrapOptions, HostHandle, NodeId, stub::StubHost};
 use zgui_dom::Document;
 use zgui_view_dom::DocumentDom;
@@ -22,7 +22,7 @@ impl Focus {
         dom.insert(backend.root_node(), root, None);
         let host = Rc::new(StubHost::default());
         let mut engine = JsRuntime::new(RuntimeLimits::default()).unwrap();
-        let bridge = UiBridge::new(NodeRegistry::new(dom.clone(), root, session, 1, limit), HostHandle::from_rc(host.clone()));
+        let bridge = UiBridge::new(NodeRegistry::new(dom.clone(), root, session, 1, limit), HostHandle::from_rc(host.clone()), HostPort::queued());
         engine.with_context(|ctx| {
             bridge.install(&ctx)?;
             ctx.globals().set("root", bridge.root(&ctx)?)
@@ -31,7 +31,7 @@ impl Focus {
     }
 
     fn script(&mut self, script: &str) {
-        self.bridge.run_turn(|| self.engine.evaluate_script(script)).unwrap();
+        self.bridge.run_turn(self.engine.turn(), |_, js| js.evaluate_script(script)).unwrap();
     }
 }
 
@@ -128,7 +128,7 @@ fn stopping_blocks_registration_but_releases_existing_leases() {
 #[test]
 fn a_faulted_turn_releases_the_traps_it_installed() {
     let mut native = Focus::new(78, 100);
-    let result = native.bridge.run_turn(|| native.engine.evaluate_script(r#"
+    let result = native.bridge.run_turn(native.engine.turn(), |_, js| js.evaluate_script(r#"
         __zgui.trapFocus(root, true, true, true);
         throw Error('abort');
     "#));
@@ -156,10 +156,12 @@ fn traps_reject_fabricated_foreign_stale_and_disposed_nodes() {
     let session_foreign = UiBridge::new(
         NodeRegistry::new(native.dom.clone(), native.root, 91, 1, 100),
         HostHandle::new(StubHost::default()),
+        HostPort::queued(),
     );
     let generation_foreign = UiBridge::new(
         NodeRegistry::new(native.dom.clone(), native.root, 79, 2, 100),
         HostHandle::new(StubHost::default()),
+        HostPort::queued(),
     );
     native.engine.with_context(|ctx| {
         ctx.globals().set("foreignSession", session_foreign.root(&ctx)?)?;

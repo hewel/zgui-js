@@ -216,11 +216,11 @@ fn completion_retained_across_reload_cannot_settle_successor_request() {
     let current = native.completion(&second);
     assert_eq!(late.request_id, current.request_id);
     assert_ne!(late.generation, current.generation);
-    second.bridge.run_turn(|| second.engine.borrow_mut().as_mut().unwrap().with_context(|ctx| second.work.settle(&ctx, late))).unwrap();
+    second.bridge.run_turn(second.engine.borrow_mut().as_mut().unwrap().turn(), |_, js| js.with_context(|ctx| second.work.settle(&ctx, late))).unwrap();
     second.checkpoint().unwrap();
     assert_eq!(native.text(), "pending");
     assert_eq!(second.counts().requests, 1);
-    second.bridge.run_turn(|| second.engine.borrow_mut().as_mut().unwrap().with_context(|ctx| second.work.settle(&ctx, current))).unwrap();
+    second.bridge.run_turn(second.engine.borrow_mut().as_mut().unwrap().turn(), |_, js| js.with_context(|ctx| second.work.settle(&ctx, current))).unwrap();
     second.checkpoint().unwrap();
     assert_eq!(native.text(), "completed");
     assert_eq!(second.counts().requests, 0);
@@ -464,12 +464,14 @@ fn geometry_delivers_immediately_while_the_engine_is_free() {
     assert_eq!(native.text(), "waiting");
     assert_eq!(session.counts().callbacks, 1);
     while native.wakes.try_recv().is_ok() {}
-    session.bridge.run_turn(|| session.engine.borrow_mut().as_mut().unwrap()
-        .evaluate_script("globalThis.lateCancel = __zgui.observeGeometry(mountRoot, 'contentSize', () => {}); 'registered'")).unwrap();
+    session.bridge.run_turn(session.engine.borrow_mut().as_mut().unwrap().turn(), |_, js| {
+        js.evaluate_script("globalThis.lateCancel = __zgui.observeGeometry(mountRoot, 'contentSize', () => {}); 'registered'")
+    }).unwrap();
     assert!(native.wakes.try_recv().is_ok(), "registration did not wake the owner");
     assert!(native.wakes.try_recv().is_err(), "registration produced more than one wake");
-    session.bridge.run_turn(|| session.engine.borrow_mut().as_mut().unwrap()
-        .evaluate_script("lateCancel(); 'cancelled'")).unwrap();
+    session.bridge.run_turn(session.engine.borrow_mut().as_mut().unwrap().turn(), |_, js| {
+        js.evaluate_script("lateCancel(); 'cancelled'")
+    }).unwrap();
     let box_node = native.backend.children(native.region.root)[1];
     native.backend.deliver(box_node, ObservedValue::BorderSize(Size::new(DevicePx(175.0), DevicePx(70.0))));
     assert_eq!(native.text(), "100");
@@ -568,4 +570,53 @@ fn geometry_defers_with_the_scale_captured_at_enqueue_time() {
     session.shutdown();
     assert_eq!(session.counts(), ResourceCounts::default());
     assert_eq!(native.backend.observation_count(), 0);
+}
+
+#[test]
+fn rejection_diagnostic_accessors_cannot_mutate_the_mount_region() {
+    let fixture = Fixture::new(r#"
+        export const hostApiVersion = 1;
+        export function mount(root) {
+            __zgui.insertNode(root, __zgui.createTextNode('active'), null);
+            globalThis.mutated = false;
+            globalThis.threw = '';
+            const reason = new Error('original');
+            Object.defineProperty(reason, 'message', {
+                get() {
+                    try {
+                        const extra = __zgui.createTextNode('forged-by-rejection');
+                        __zgui.insertNode(root, extra, null);
+                        globalThis.mutated = true;
+                    } catch (error) {
+                        globalThis.threw = String(error && error.message || error);
+                    }
+                    return 'accessor rejection';
+                }
+            });
+            Promise.reject(reason);
+            return () => __zgui.clearRoot(root);
+        }
+    "#, "");
+    let native = Native::new();
+    let live = native.prepare(fixture.package(), 1).unwrap();
+    live.mount().unwrap();
+    live.checkpoint().unwrap();
+    assert_eq!(native.text(), "active");
+    let state = live.engine.borrow_mut().as_mut().unwrap()
+        .with_context(|ctx| ctx.eval::<String, _>("mutated + ':' + threw")).unwrap();
+    assert_eq!(state, "false:native mutation outside a structural turn");
+    live.shutdown();
+
+    let preview = native.preview(
+        fixture.package(),
+        RuntimeLimits::default(),
+        Rc::new(Cell::new(Instant::now() + Duration::from_secs(5))),
+    ).unwrap();
+    preview.mount().unwrap();
+    assert!(preview.checkpoint().is_err());
+    assert_eq!(native.text(), "active");
+    let state = preview.engine.borrow_mut().as_mut().unwrap()
+        .with_context(|ctx| ctx.eval::<String, _>("mutated + ':' + threw")).unwrap();
+    assert_eq!(state, "false:native mutation outside a structural turn");
+    preview.shutdown();
 }

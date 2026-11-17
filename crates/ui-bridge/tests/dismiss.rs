@@ -1,7 +1,7 @@
 use std::{cell::RefCell, rc::Rc};
 
 use js_runtime::{JsRuntime, RuntimeLimits};
-use ui_bridge::{UiBridge, registry::NodeRegistry};
+use ui_bridge::{BridgeStep, DispatchOutcome, HostPort, UiBridge, registry::NodeRegistry};
 use zgui::{
     geom::{CssPx, Point},
     view::{DiscardCommands, DomHandle, ElementName, EventControl, EventCx, HostHandle, NodeId,
@@ -12,9 +12,22 @@ use zgui::{
 use zgui_dom::{Document, side::listeners::Listener};
 use zgui_view_dom::DocumentDom;
 
+struct SyncEngine(RefCell<JsRuntime>);
+
+impl SyncEngine {
+    fn enter(&self, step: BridgeStep<'_>) -> DispatchOutcome {
+        let Ok(mut engine) = self.0.try_borrow_mut() else {
+            return DispatchOutcome::Busy;
+        };
+        step.run_turn(engine.turn(), |js, cb| js.with_context(|ctx| cb.call(&ctx)))
+            .expect("dismissal callback succeeds");
+        DispatchOutcome::Executed
+    }
+}
+
 struct Native {
     bridge: Rc<UiBridge>,
-    engine: Rc<RefCell<JsRuntime>>,
+    engine: Rc<SyncEngine>,
     backend: Rc<DocumentDom>,
     dom: DomHandle,
     mount: NodeId,
@@ -24,20 +37,17 @@ struct Native {
 impl Native {
     fn on(backend: Rc<DocumentDom>, dom: DomHandle, mount: NodeId, session: u64, limit: usize) -> Self {
         let host = Rc::new(StubHost::default());
-        let bridge = UiBridge::new(NodeRegistry::new(dom.clone(), mount, session, 1, limit), HostHandle::from_rc(host));
-        let engine = Rc::new(RefCell::new(JsRuntime::new(RuntimeLimits::default()).unwrap()));
-        engine.borrow_mut().with_context(|ctx| {
+        let engine = Rc::new(SyncEngine(RefCell::new(JsRuntime::new(RuntimeLimits::default()).unwrap())));
+        let bridge = UiBridge::new(
+            NodeRegistry::new(dom.clone(), mount, session, 1, limit),
+            HostHandle::from_rc(host),
+            HostPort::synchronous(Rc::downgrade(&engine), SyncEngine::enter),
+        );
+        engine.0.borrow_mut().with_context(|ctx| {
             bridge.install(&ctx)?;
             ctx.globals().set("root", bridge.root(&ctx)?)?;
             ctx.eval::<(), _>("globalThis.calls = []; globalThis.options = (layer = 'modal', outside = true, escape = true, exclude = null, leaving = false) => ({ layer, dismissOnOutsidePress: outside, dismissOnEscape: escape, exclude, leaving });")
         }).unwrap();
-        let weak = Rc::downgrade(&bridge);
-        let engine_weak = Rc::downgrade(&engine);
-        bridge.set_dispatcher(Rc::new(move |id, event| {
-            let (Some(bridge), Some(engine)) = (weak.upgrade(), engine_weak.upgrade()) else { return; };
-            bridge.run_turn(|| engine.borrow_mut().with_context(|ctx| bridge.invoke_event(&ctx, id, event)))
-                .expect("dismissal callback succeeds");
-        }));
         let window = backend.root_node();
         Self { bridge, engine, backend, dom, mount, window }
     }
@@ -51,11 +61,12 @@ impl Native {
     }
 
     fn script(&self, script: &str) {
-        self.bridge.run_turn(|| self.engine.borrow_mut().evaluate_script(script)).unwrap();
+        let mut engine = self.engine.0.borrow_mut();
+        self.bridge.run_turn(engine.turn(), |_, js| js.evaluate_script(script)).unwrap();
     }
 
     fn calls(&self) -> String {
-        self.engine.borrow_mut().with_context(|ctx| ctx.eval("calls.join(',')")).unwrap()
+        self.engine.0.borrow_mut().with_context(|ctx| ctx.eval("calls.join(',')")).unwrap()
     }
 }
 
@@ -468,7 +479,7 @@ fn limits_validation_and_lifecycle_reject_without_partial_registration() {
     assert_eq!(native.calls(), "C:escape,B:escape,B:escape");
 
     native.bridge.dispose();
-    native.engine.borrow_mut().evaluate_script("lb.dispose(); 'gone'").unwrap();
+    native.engine.0.borrow_mut().evaluate_script("lb.dispose(); 'gone'").unwrap();
     assert_eq!(native.backend.handler_count(), 0);
     assert_eq!(native.bridge.callback_count(), 0);
 
@@ -480,7 +491,10 @@ fn limits_validation_and_lifecycle_reject_without_partial_registration() {
         'mounted'
     "#);
     assert_eq!(faulted.backend.handler_count(), 2);
-    let fault = faulted.bridge.run_turn(|| faulted.engine.borrow_mut().evaluate_script("throw Error('abort')"));
+    let fault = {
+        let mut engine = faulted.engine.0.borrow_mut();
+        faulted.bridge.run_turn(engine.turn(), |_, js| js.evaluate_script("throw Error('abort')"))
+    };
     assert!(fault.is_err());
     assert_eq!(faulted.backend.handler_count(), 0);
     assert_eq!(faulted.bridge.callback_count(), 0);
@@ -511,12 +525,14 @@ fn foreign_fabricated_and_stale_wrappers_reject_before_registration() {
     let session_foreign = UiBridge::new(
         NodeRegistry::new(native.dom.clone(), native.mount, 104, 1, 100),
         HostHandle::new(StubHost::default()),
+        HostPort::queued(),
     );
     let generation_foreign = UiBridge::new(
         NodeRegistry::new(native.dom.clone(), native.mount, 103, 2, 100),
         HostHandle::new(StubHost::default()),
+        HostPort::queued(),
     );
-    native.engine.borrow_mut().with_context(|ctx| {
+    native.engine.0.borrow_mut().with_context(|ctx| {
         ctx.globals().set("foreignSession", session_foreign.root(&ctx)?)?;
         ctx.globals().set("foreignGeneration", generation_foreign.root(&ctx)?)
     }).unwrap();

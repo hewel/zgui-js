@@ -1,6 +1,6 @@
 use std::{cell::RefCell, rc::Rc};
 use js_runtime::{JsRuntime, RuntimeLimits};
-use ui_bridge::{UiBridge, registry::NodeRegistry};
+use ui_bridge::{HostPort, UiBridge, registry::NodeRegistry};
 use zgui::view::{DomHandle, ElementName, HostHandle, stub::StubHost};
 use zgui_dom::Document;
 use zgui_view_dom::DocumentDom;
@@ -14,9 +14,9 @@ fn wrappers_preserve_identity_and_reject_fabrication_and_cross_frame_reuse() {
     dom.insert(backend.root_node(), root, None);
     // Runtime declared first: bridge roots are dropped before engine on unwind too.
     let mut engine = JsRuntime::new(RuntimeLimits::default()).unwrap();
-    let bridge = UiBridge::new(NodeRegistry::new(dom.clone(), root, 7, 1, 100), HostHandle::new(StubHost::default()));
+    let bridge = UiBridge::new(NodeRegistry::new(dom.clone(), root, 7, 1, 100), HostHandle::new(StubHost::default()), HostPort::queued());
     engine.with_context(|ctx| { bridge.install(&ctx)?; ctx.globals().set("root", bridge.root(&ctx)?) }).unwrap();
-    bridge.run_turn(|| engine.evaluate_script(r#"
+    bridge.run_turn(engine.turn(), |_, js| js.evaluate_script(r#"
         const a = __zgui.createTextNode('A');
         const b = __zgui.createTextNode('B');
         const anchor = __zgui.createTextNode('');
@@ -34,9 +34,9 @@ fn wrappers_preserve_identity_and_reject_fabrication_and_cross_frame_reuse() {
     "#)).unwrap();
     assert_eq!(dom.text_content(root), "BA");
     backend.end_frame();
-    bridge.run_turn(|| engine.evaluate_script("__zgui.removeNode(root, b); 'removed'")).unwrap();
+    bridge.run_turn(engine.turn(), |_, js| js.evaluate_script("__zgui.removeNode(root, b); 'removed'")).unwrap();
     backend.end_frame();
-    bridge.run_turn(|| engine.evaluate_script(r#"
+    bridge.run_turn(engine.turn(), |_, js| js.evaluate_script(r#"
         let staleRejected = false;
         try { __zgui.insertNode(root, b, null); } catch { staleRejected = true; }
         if (!staleRejected) throw Error('stale wrapper reused');
@@ -64,9 +64,9 @@ fn failed_construction_releases_attached_and_never_linked_native_nodes() {
     let root = dom.create_element(ElementName::new("column"));
     dom.insert(backend.root_node(), root, None);
     let mut engine = JsRuntime::new(RuntimeLimits::default()).unwrap();
-    let bridge = UiBridge::new(NodeRegistry::new(dom.clone(), root, 8, 1, 100), HostHandle::new(StubHost::default()));
+    let bridge = UiBridge::new(NodeRegistry::new(dom.clone(), root, 8, 1, 100), HostHandle::new(StubHost::default()), HostPort::queued());
     engine.with_context(|ctx| { bridge.install(&ctx)?; ctx.globals().set("root", bridge.root(&ctx)?) }).unwrap();
-    let error = bridge.run_turn(|| engine.evaluate_script(r#"
+    let error = bridge.run_turn(engine.turn(), |_, js| js.evaluate_script(r#"
         const attached = __zgui.createTextNode('partial');
         const orphan = __zgui.createElement('column');
         const child = __zgui.createTextNode('never linked');
@@ -91,10 +91,9 @@ fn stopping_rejects_new_work_but_allows_listener_and_tree_cleanup() {
     let root = dom.create_element(ElementName::new("column"));
     dom.insert(backend.root_node(), root, None);
     let mut engine = JsRuntime::new(RuntimeLimits::default()).unwrap();
-    let bridge = UiBridge::new(NodeRegistry::new(dom.clone(), root, 9, 1, 100), HostHandle::new(StubHost::default()));
-    bridge.set_dispatcher(Rc::new(|_, _| {}));
+    let bridge = UiBridge::new(NodeRegistry::new(dom.clone(), root, 9, 1, 100), HostHandle::new(StubHost::default()), HostPort::queued());
     engine.with_context(|ctx| { bridge.install(&ctx)?; ctx.globals().set("root", bridge.root(&ctx)?) }).unwrap();
-    bridge.run_turn(|| engine.evaluate_script(r#"
+    bridge.run_turn(engine.turn(), |_, js| js.evaluate_script(r#"
         const control = __zgui.createElement('control');
         __zgui.insertNode(root, control, null);
         __zgui.setProperty(control, 'onClick', () => {});
@@ -102,7 +101,7 @@ fn stopping_rejects_new_work_but_allows_listener_and_tree_cleanup() {
     "#)).unwrap();
     assert_eq!(bridge.callback_count(), 1);
     bridge.begin_stop();
-    bridge.run_turn(|| engine.evaluate_script(r#"
+    bridge.run_turn(engine.turn(), |_, js| js.evaluate_script(r#"
         for (const create of [
             () => __zgui.createElement('box'),
             () => __zgui.createTextNode('late'),

@@ -1,7 +1,7 @@
 use std::{cell::RefCell, collections::BTreeSet, rc::Rc};
 
 use js_runtime::{JsRuntime, RuntimeLimits};
-use ui_bridge::{UiBridge, registry::NodeRegistry};
+use ui_bridge::{HostPort, UiBridge, registry::NodeRegistry};
 use zgui::{view::{AttrName, DomHandle, ElementName, HostHandle, NodeId, PropKey, UiState, stub::StubHost}, vocab::{Invalid, Orientation, Role, SemanticFlags, Toggled}};
 use zgui_dom::Document;
 use zgui_view_dom::DocumentDom;
@@ -23,12 +23,12 @@ impl NativeProperties {
         let root = dom.create_element(ElementName::new("column"));
         dom.insert(backend.root_node(), root, None);
         let mut engine = JsRuntime::new(RuntimeLimits::default()).unwrap();
-        let bridge = UiBridge::new(NodeRegistry::new(dom.clone(), root, 37, 1, 100), HostHandle::new(StubHost::default()));
+        let bridge = UiBridge::new(NodeRegistry::new(dom.clone(), root, 37, 1, 100), HostHandle::new(StubHost::default()), HostPort::queued());
         engine.with_context(|ctx| {
             bridge.install(&ctx)?;
             ctx.globals().set("root", bridge.root(&ctx)?)
         }).unwrap();
-        bridge.run_turn(|| engine.evaluate_script(r#"
+        bridge.run_turn(engine.turn(), |_, js| js.evaluate_script(r#"
             const node = __zgui.createElement('control');
             __zgui.insertNode(root, node, null);
             'mounted'
@@ -38,7 +38,7 @@ impl NativeProperties {
     }
 
     fn script(&mut self, script: &str) {
-        self.bridge.run_turn(|| self.engine.evaluate_script(script)).unwrap();
+        self.bridge.run_turn(self.engine.turn(), |_, js| js.evaluate_script(script)).unwrap();
     }
 
     fn attribute(&self, name: &str) -> Option<String> {
@@ -634,6 +634,7 @@ fn relations_resolve_real_accessibility_ids_and_reject_foreign_or_fabricated_tar
     let foreign = UiBridge::new(
         NodeRegistry::new(native.dom.clone(), root_handle(&native), 38, 1, 100),
         HostHandle::new(StubHost::default()),
+        HostPort::queued(),
     );
     native.engine.with_context(|ctx| {
         ctx.globals().set("foreign", foreign.root(&ctx)?)
@@ -854,7 +855,7 @@ fn popup_semantics_reject_invalid_and_foreign_targets_before_mutating() {
         'rejected'
     "#);
     let trigger = native.backend.children(root_handle(&native))[1];
-    let foreign = UiBridge::new(NodeRegistry::new(native.dom.clone(), root_handle(&native), 38, 1, 100), HostHandle::new(StubHost::default()));
+    let foreign = UiBridge::new(NodeRegistry::new(native.dom.clone(), root_handle(&native), 38, 1, 100), HostHandle::new(StubHost::default()), HostPort::queued());
     native.engine.with_context(|ctx| ctx.globals().set("foreign", foreign.root(&ctx)?)).unwrap();
     native.script(r#"
         let foreignRejected = false;

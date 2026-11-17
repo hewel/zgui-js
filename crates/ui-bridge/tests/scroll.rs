@@ -1,6 +1,6 @@
 use std::{cell::RefCell, rc::Rc};
 use js_runtime::{JsRuntime, RuntimeLimits};
-use ui_bridge::{UiBridge, registry::NodeRegistry};
+use ui_bridge::{HostPort, UiBridge, registry::NodeRegistry};
 use zgui::view::{DomHandle, ElementName, HostHandle, NodeId, stub::StubHost};
 use zgui_dom::Document;
 use zgui_view_dom::DocumentDom;
@@ -26,7 +26,7 @@ impl Locks {
         let root = dom.create_element(ElementName::new("column"));
         dom.insert(backend.root_node(), root, None);
         let mut engine = JsRuntime::new(RuntimeLimits::default()).unwrap();
-        let bridge = UiBridge::new(NodeRegistry::new(dom.clone(), root, session, 1, limit), HostHandle::from_rc(host.clone()));
+        let bridge = UiBridge::new(NodeRegistry::new(dom.clone(), root, session, 1, limit), HostHandle::from_rc(host.clone()), HostPort::queued());
         engine.with_context(|ctx| {
             bridge.install(&ctx)?;
             ctx.globals().set("root", bridge.root(&ctx)?)
@@ -35,7 +35,7 @@ impl Locks {
     }
 
     fn script(&mut self, script: &str) {
-        self.bridge.run_turn(|| self.engine.evaluate_script(script)).unwrap();
+        self.bridge.run_turn(self.engine.turn(), |_, js| js.evaluate_script(script)).unwrap();
     }
 }
 
@@ -135,7 +135,7 @@ fn stopping_blocks_new_leases_but_releases_existing() {
 #[test]
 fn a_faulted_turn_releases_its_locks_and_fixture_drop_releases_without_dispose() {
     let mut native = Locks::new(88, 100);
-    let result = native.bridge.run_turn(|| native.engine.evaluate_script(r#"
+    let result = native.bridge.run_turn(native.engine.turn(), |_, js| js.evaluate_script(r#"
         __zgui.lockScroll(root);
         throw Error('abort');
     "#));
@@ -173,10 +173,12 @@ fn leases_reject_fabricated_foreign_stale_and_disposed_nodes() {
     let session_foreign = UiBridge::new(
         NodeRegistry::new(native.dom.clone(), native.root, 92, 1, 100),
         HostHandle::new(StubHost::default()),
+        HostPort::queued(),
     );
     let generation_foreign = UiBridge::new(
         NodeRegistry::new(native.dom.clone(), native.root, 90, 2, 100),
         HostHandle::new(StubHost::default()),
+        HostPort::queued(),
     );
     native.engine.with_context(|ctx| {
         ctx.globals().set("foreignSession", session_foreign.root(&ctx)?)?;
@@ -259,7 +261,7 @@ fn leases_share_a_window_across_sessions() {
     assert!(host.scrolling_frozen());
     let mut faulted = Locks::on(backend.clone(), host.clone(), 96, 100);
     faulted.script(LEASE);
-    let result = faulted.bridge.run_turn(|| faulted.engine.evaluate_script(r#"
+    let result = faulted.bridge.run_turn(faulted.engine.turn(), |_, js| js.evaluate_script(r#"
         __zgui.lockScroll(root);
         throw Error('abort');
     "#));

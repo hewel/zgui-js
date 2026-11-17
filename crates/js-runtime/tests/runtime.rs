@@ -1,4 +1,4 @@
-use js_runtime::{DiagnosticKind, JsRuntime, RuntimeLimits};
+use js_runtime::{DiagnosticKind, JsRuntime, RejectionPolicy, RuntimeLimits};
 use rquickjs::Function;
 use std::{cell::{Cell, RefCell}, rc::Rc, time::{Duration, Instant}};
 
@@ -289,7 +289,7 @@ fn rejection_later_handling_keeps_identity_and_original_source_diagnostic() {
         }
         rejectAtSource(); 'queued'
     ").unwrap();
-    let first = runtime.drain_rejections();
+    let first = runtime.drain_rejections(RejectionPolicy::Log).unwrap();
     assert_eq!(first.dropped_rejections, 0);
     assert_eq!(first.updates.len(), 1);
     let first = &first.updates[0];
@@ -297,12 +297,12 @@ fn rejection_later_handling_keeps_identity_and_original_source_diagnostic() {
     assert_eq!(first.diagnostic.phase, "promise rejection");
     assert_eq!(first.diagnostic.message, "rejection source");
     assert!(first.diagnostic.stack.as_deref().unwrap().contains("rejectAtSource"));
-    assert!(runtime.drain_rejections().updates.is_empty());
+    assert!(runtime.drain_rejections(RejectionPolicy::Log).unwrap().updates.is_empty());
     runtime.evaluate_script("
         Object.defineProperty(reason, 'message', { get() { throw new Error('must not reformat'); } });
         rejected.catch(() => {}); 'handled'
     ").unwrap();
-    let handled = runtime.drain_rejections();
+    let handled = runtime.drain_rejections(RejectionPolicy::Log).unwrap();
     assert_eq!(handled.updates.len(), 1);
     assert!(handled.updates[0].handled);
     assert_eq!(handled.updates[0].id, first.id);
@@ -312,19 +312,33 @@ fn rejection_later_handling_keeps_identity_and_original_source_diagnostic() {
 }
 
 #[test]
-fn rejection_handled_before_drain_retains_both_transitions() {
-    let mut runtime = runtime();
-    runtime.evaluate_script("const transient = Promise.reject('transient'); transient.catch(() => {}); 'ok'").unwrap();
-    let report = runtime.drain_rejections();
-    assert_eq!(report.updates.len(), 2);
-    assert!(!report.updates[0].handled);
-    assert!(report.updates[1].handled);
-    assert_eq!(report.updates[0].id, report.updates[1].id);
-    assert_eq!(report.updates[0].diagnostic, report.updates[1].diagnostic);
+fn same_batch_caught_rejection_cancels_before_formatting_or_eviction() {
+    for policy in [RejectionPolicy::Log, RejectionPolicy::Strict] {
+        let mut runtime = JsRuntime::new(RuntimeLimits {
+            max_tracked_rejections: 1,
+            ..RuntimeLimits::default()
+        }).unwrap();
+        runtime.evaluate_script("
+            globalThis.getterRuns = 0;
+            for (let i = 0; i < 6; i++) {
+                const reason = new Error('transient');
+                Object.defineProperty(reason, 'message', {
+                    get() { getterRuns++; return 'formatted'; }
+                });
+                const p = Promise.reject(reason);
+                p.catch(() => {});
+            }
+            'ok'
+        ").unwrap();
+        let report = runtime.drain_rejections(policy).unwrap();
+        assert!(report.updates.is_empty());
+        assert_eq!(report.dropped_rejections, 0);
+        assert_eq!(runtime.evaluate_script("String(getterRuns)").unwrap(), "0");
+    }
 }
 
 #[test]
-fn rejection_formatting_can_create_and_handle_rejections_without_reentrant_borrows() {
+fn rejection_formatting_quiesces_getter_created_rejections_within_one_drain() {
     let mut runtime = runtime();
     runtime.evaluate_script("
         const outerReason = new Error();
@@ -335,12 +349,11 @@ fn rejection_formatting_can_create_and_handle_rejections_without_reentrant_borro
         } });
         Promise.reject(outerReason); 'queued'
     ").unwrap();
-    let first = runtime.drain_rejections();
-    assert_eq!(first.updates.len(), 1);
-    assert_eq!(first.updates[0].diagnostic.message, "outer rejection");
-    let nested = runtime.drain_rejections();
-    assert!(nested.updates.iter().any(|update| !update.handled && update.diagnostic.message == "nested rejection"));
-    assert!(nested.updates.iter().any(|update| update.handled && update.diagnostic.message == "nested rejection"));
+    let drain = runtime.drain_rejections(RejectionPolicy::Log).unwrap();
+    assert_eq!(drain.updates.len(), 1);
+    assert!(!drain.updates[0].handled);
+    assert_eq!(drain.updates[0].diagnostic.message, "outer rejection");
+    assert!(runtime.drain_rejections(RejectionPolicy::Log).unwrap().updates.is_empty());
     assert_eq!(runtime.evaluate_script("'usable'").unwrap(), "usable");
 }
 
@@ -358,7 +371,7 @@ fn rejection_formatting_interrupts_getters_and_bounds_owned_text() {
         Promise.reject('é'.repeat(1000)); 'queued'
     ").unwrap();
     let start = Instant::now();
-    let report = runtime.drain_rejections();
+    let report = runtime.drain_rejections(RejectionPolicy::Log).unwrap();
     assert!(start.elapsed() < Duration::from_secs(1));
     assert_eq!(report.updates.len(), 2);
     for update in report.updates {
@@ -377,15 +390,74 @@ fn rejection_capacity_reports_eviction_and_drop_releases_undrained_roots() {
         }).unwrap();
         runtime.evaluate_script("for (let i = 0; i < 8; i++) Promise.reject(new Error('rejected ' + i)); 'queued'").unwrap();
         if drain {
-            let report = runtime.drain_rejections();
+            let report = runtime.drain_rejections(RejectionPolicy::Log).unwrap();
             assert_eq!(report.dropped_rejections, 6);
             assert_eq!(report.updates.len(), 2);
             assert_eq!(report.updates[0].diagnostic.message, "rejected 6");
             assert_eq!(report.updates[1].diagnostic.message, "rejected 7");
-            assert_eq!(runtime.drain_rejections().dropped_rejections, 0);
+            assert_eq!(runtime.drain_rejections(RejectionPolicy::Log).unwrap().dropped_rejections, 0);
         }
         drop(runtime);
     }
+}
+
+#[test]
+fn strict_rejections_fail_on_earliest_unhandled_eviction_or_non_quiescing_getters() {
+    let mut runtime = runtime();
+    runtime.evaluate_script("
+        Promise.reject(new Error('earliest'));
+        Promise.reject(new Error('second'));
+        'queued'
+    ").unwrap();
+    let err = runtime.drain_rejections(RejectionPolicy::Strict).unwrap_err();
+    assert_eq!(err.message, "earliest");
+
+    // Non-quiescing getter chain exceeds max_tracked_rejections + 1 passes before diagnostic_timeout.
+    let mut non_quiescing = JsRuntime::new(RuntimeLimits {
+        max_tracked_rejections: 2,
+        diagnostic_timeout: Duration::from_secs(1),
+        ..RuntimeLimits::default()
+    }).unwrap();
+    non_quiescing.evaluate_script("
+        globalThis.chain = function next() {
+            const err = new Error('step');
+            Object.defineProperty(err, 'message', { get() { Promise.reject(next()); return 'step'; } });
+            return err;
+        };
+        Promise.reject(chain()); 'armed'
+    ").unwrap();
+    let err = non_quiescing.drain_rejections(RejectionPolicy::Log).unwrap_err();
+    assert_eq!(err.kind, DiagnosticKind::BudgetExceeded);
+    assert_eq!(err.phase, "promise rejection");
+    assert_eq!(err.message, "rejection diagnostics did not quiesce");
+
+    // Strict eviction failure when capacity overflows before drain.
+    let mut evicted = JsRuntime::new(RuntimeLimits {
+        max_tracked_rejections: 1,
+        ..RuntimeLimits::default()
+    }).unwrap();
+    evicted.evaluate_script("Promise.reject(new Error('a')); Promise.reject(new Error('b')); 'overflow'").unwrap();
+    let err = evicted.drain_rejections(RejectionPolicy::Strict).unwrap_err();
+    assert_eq!(err.kind, DiagnosticKind::BudgetExceeded);
+    assert_eq!(err.message, "rejection tracking limit exceeded");
+}
+
+#[test]
+fn js_turn_forwards_turn_scoped_entries_without_exposing_between_turn_methods() {
+    let mut runtime = runtime();
+    runtime.load_module("turn.mjs", "export function ping() { return 'pong'; }").unwrap();
+    let mut turn = runtime.turn();
+    assert_eq!(turn.evaluate_script("'script'").unwrap(), "script");
+    assert_eq!(
+        turn.with_module(|_ctx, m| {
+            let f: Function = m.get("ping")?;
+            f.call::<_, String>(())
+        }).unwrap(),
+        "pong"
+    );
+    turn.with_context(|ctx| ctx.eval::<Function, _>("() => { globalThis.ran = true; }")?.defer(())).unwrap();
+    assert!(turn.execute_job(Duration::from_millis(50)).unwrap());
+    turn.with_cleanup_context(|ctx| ctx.eval::<(), _>("if (!ran) throw Error('missing')")).unwrap();
 }
 
 #[test]
@@ -484,7 +556,7 @@ fn rejection_accessors_cannot_extend_an_expired_owner_deadline() {
     runtime.evaluate_script("globalThis.readMessage = false; const reason = new Error(); Object.defineProperty(reason, 'message', { get() { readMessage = true; while (true) {} } }); Promise.reject(reason); 'queued'").unwrap();
     let deadline = Rc::new(Cell::new(Instant::now() - Duration::from_millis(1)));
     runtime.set_enclosing_deadline(deadline.clone());
-    let drain = runtime.drain_rejections();
+    let drain = runtime.drain_rejections(RejectionPolicy::Log).unwrap();
     assert_eq!(drain.updates.len(), 1);
     deadline.set(Instant::now() + Duration::from_secs(1));
     assert_eq!(runtime.evaluate_script("String(readMessage)").unwrap(), "false");
@@ -521,7 +593,7 @@ fn stack_limit_measures_from_entry_not_creation_depth_and_still_bounds_js_recurs
             })
             .unwrap();
         assert!(runtime.execute_job(Duration::from_secs(1)).unwrap());
-        assert_eq!(runtime.drain_rejections().updates.len(), 1);
+        assert_eq!(runtime.drain_rejections(RejectionPolicy::Log).unwrap().updates.len(), 1);
         runtime.with_cleanup_context(|ctx| ctx.eval::<(), _>("'cleaned'")).unwrap();
 
         let err = runtime

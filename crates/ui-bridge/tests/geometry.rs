@@ -1,6 +1,6 @@
-use std::{cell::{Cell, RefCell}, rc::Rc};
+use std::{cell::RefCell, rc::Rc};
 use js_runtime::{JsRuntime, RuntimeLimits};
-use ui_bridge::{UiBridge, registry::NodeRegistry};
+use ui_bridge::{HostPort, UiBridge, registry::NodeRegistry};
 use zgui::{
     geom::{Device, DevicePx, Point, Rect, Size},
     view::{DomHandle, ElementName, HostHandle, NodeId, ObservedValue, ScrollPosition, stub::StubHost},
@@ -15,8 +15,6 @@ struct Geometry {
     dom: DomHandle,
     host: Rc<StubHost>,
     root: NodeId,
-    deliveries: Rc<RefCell<Vec<(u64, ObservedValue, f32)>>>,
-    wakes: Rc<Cell<usize>>,
 }
 
 impl Geometry {
@@ -29,24 +27,20 @@ impl Geometry {
         let root = dom.create_element(ElementName::new("column"));
         dom.insert(backend.root_node(), root, None);
         let mut engine = JsRuntime::new(RuntimeLimits::default()).unwrap();
-        let bridge = UiBridge::new(NodeRegistry::new(dom.clone(), root, session, 1, limit), HostHandle::from_rc(host.clone()));
-        let deliveries = Rc::new(RefCell::new(Vec::new()));
-        let wakes = Rc::new(Cell::new(0));
-        let recorded = Rc::clone(&deliveries);
-        let counted = Rc::clone(&wakes);
-        bridge.set_geometry_dispatcher(
-            Rc::new(move |id, value, scale| recorded.borrow_mut().push((id, value, scale))),
-            Rc::new(move || counted.set(counted.get() + 1)),
+        let bridge = UiBridge::new(
+            NodeRegistry::new(dom.clone(), root, session, 1, limit),
+            HostHandle::from_rc(host.clone()),
+            HostPort::queued(),
         );
         engine.with_context(|ctx| {
             bridge.install(&ctx)?;
             ctx.globals().set("root", bridge.root(&ctx)?)
         }).unwrap();
-        Self { bridge, engine, backend, dom, host, root, deliveries, wakes }
+        Self { bridge, engine, backend, dom, host, root }
     }
 
     fn script(&mut self, script: &str) {
-        self.bridge.run_turn(|| self.engine.evaluate_script(script)).unwrap();
+        self.bridge.run_turn(self.engine.turn(), |_, js| js.evaluate_script(script)).unwrap();
     }
 
     fn child(&self, index: usize) -> NodeId {
@@ -59,27 +53,35 @@ impl Geometry {
     }
 
     fn flush(&mut self) {
-        let notifications: Vec<(u64, ObservedValue, f32)> = self.deliveries.borrow_mut().drain(..).collect();
-        for (id, value, scale) in notifications {
-            self.bridge.run_turn(|| self.engine.with_context(|ctx| self.bridge.invoke_geometry(&ctx, id, value, scale))).unwrap();
-        }
+        while self
+            .bridge
+            .flush_notification(self.engine.turn(), |js, cb| js.with_context(|ctx| cb.call(&ctx)))
+            .unwrap()
+        {}
     }
 
     fn deliver_rejects(&mut self, node: NodeId, value: ObservedValue, constructor: &'static str) {
         self.backend.invalidate_observations();
         self.backend.deliver(node, value);
-        let notifications: Vec<(u64, ObservedValue, f32)> = self.deliveries.borrow_mut().drain(..).collect();
-        assert!(!notifications.is_empty(), "rejection case produced no notification");
-        for (id, value, scale) in notifications {
-            let accepted = self.bridge.run_turn(|| self.engine.with_context(|ctx| {
-                assert!(self.bridge.invoke_geometry(&ctx, id, value, scale).is_err());
-                let thrown = ctx.catch();
-                ctx.globals().set("thrown", thrown)?;
-                ctx.eval::<bool, _>(format!("thrown instanceof {constructor}"))
-            })).unwrap();
-            assert!(accepted, "expected {constructor}");
+        let mut count = 0usize;
+        while self
+            .bridge
+            .flush_notification(self.engine.turn(), |js, cb| {
+                count += 1;
+                js.with_context(|ctx| {
+                    assert!(cb.call(&ctx).is_err());
+                    let thrown = ctx.catch();
+                    ctx.globals().set("thrown", thrown)?;
+                    let accepted = ctx.eval::<bool, _>(format!("thrown instanceof {constructor}"))?;
+                    assert!(accepted, "expected {constructor}");
+                    Ok(())
+                })
+            })
+            .unwrap()
+        {
             self.engine.evaluate_script("thrown = undefined; 'cleared'").unwrap();
         }
+        assert!(count > 0, "rejection case produced no notification");
     }
 }
 
@@ -101,7 +103,7 @@ fn geometry_reports_css_pixel_snapshots_for_every_quantity() {
         if (samples.borderBox.length !== 0) throw Error('registration invoked a callback');
         'mounted'
     "#);
-    assert_eq!(native.wakes.get(), 4);
+    assert_eq!(native.bridge.take_wakes(), 4);
     let a = native.child(0);
     native.deliver(a, ObservedValue::BorderBox(device_rect(87.5, -17.5, 350.0, 70.0)));
     native.deliver(a, ObservedValue::BorderSize(Size::new(DevicePx(350.0), DevicePx(70.0))));
@@ -223,10 +225,12 @@ fn geometry_rejects_forged_foreign_stale_and_invalid_arguments() {
     let session_foreign = UiBridge::new(
         NodeRegistry::new(native.dom.clone(), native.root, 91, 1, 100),
         HostHandle::new(StubHost::default()),
+        HostPort::queued(),
     );
     let generation_foreign = UiBridge::new(
         NodeRegistry::new(native.dom.clone(), native.root, 73, 2, 100),
         HostHandle::new(StubHost::default()),
+        HostPort::queued(),
     );
     native.engine.with_context(|ctx| {
         ctx.globals().set("foreignSession", session_foreign.root(&ctx)?)?;
@@ -406,7 +410,7 @@ fn shared_viewport_leases_retire_with_their_source_and_session() {
 #[test]
 fn geometry_root_and_child_observers_retire_on_abort() {
     let mut native = Geometry::new(77, 100);
-    let faulted = native.bridge.run_turn(|| native.engine.evaluate_script(r#"
+    let faulted = native.bridge.run_turn(native.engine.turn(), |_, js| js.evaluate_script(r#"
         const a = __zgui.createElement('box');
         __zgui.insertNode(root, a, null);
         __zgui.observeGeometry(root, 'borderSize', () => {});

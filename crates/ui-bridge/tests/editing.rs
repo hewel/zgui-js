@@ -3,7 +3,7 @@
 use std::{cell::RefCell, rc::Rc};
 
 use js_runtime::{JsRuntime, RuntimeLimits};
-use ui_bridge::{UiBridge, registry::NodeRegistry};
+use ui_bridge::{HostPort, UiBridge, registry::NodeRegistry};
 use zgui::{
     view::{AttrName, DiscardCommands, DomHandle, ElementName, EventControl, EventCx, HostHandle, NodeId, UiState, stub::StubHost},
     vocab::{EventKind, Modifiers, Payload, Phase, Role, SemanticFlags, Timestamp, ValueChange, ValueEvent},
@@ -30,12 +30,12 @@ impl Editing {
         dom.insert(backend.root_node(), root, None);
         let host = Rc::new(StubHost::default());
         let mut engine = JsRuntime::new(RuntimeLimits::default()).unwrap();
-        let bridge = UiBridge::new(NodeRegistry::new(dom.clone(), root, 61, 1, 100), HostHandle::from_rc(host.clone()));
+        let bridge = UiBridge::new(NodeRegistry::new(dom.clone(), root, 61, 1, 100), HostHandle::from_rc(host.clone()), HostPort::queued());
         engine.with_context(|ctx| {
             bridge.install(&ctx)?;
             ctx.globals().set("root", bridge.root(&ctx)?)
         }).unwrap();
-        bridge.run_turn(|| engine.evaluate_script(&format!(
+        bridge.run_turn(engine.turn(), |_, js| js.evaluate_script(&format!(
             "const node = __zgui.createElement('{tag}'); __zgui.insertNode(root, node, null); 'mounted'"
         ))).unwrap();
         let node = backend.children(root)[0];
@@ -43,7 +43,7 @@ impl Editing {
     }
 
     fn script(&mut self, script: &str) {
-        self.bridge.run_turn(|| self.engine.evaluate_script(script)).unwrap();
+        self.bridge.run_turn(self.engine.turn(), |_, js| js.evaluate_script(script)).unwrap();
     }
 
     fn value(&self) -> Option<String> { self.host.value(self.node) }
@@ -209,9 +209,6 @@ fn native_internal_input_and_change_targets_retarget_without_losing_listener_cur
     for tag in ["field", "editor"] {
         let mut native = Editing::new(tag);
         let internal = native.internal_text();
-        let dispatched = Rc::new(RefCell::new(Vec::new()));
-        let ids = dispatched.clone();
-        native.bridge.set_dispatcher(Rc::new(move |id, _| ids.borrow_mut().push(id)));
         native.script(r#"
             const received = [];
             __zgui.setProperty(node, 'onInput', event => {
@@ -240,9 +237,11 @@ fn native_internal_input_and_change_targets_retarget_without_losing_listener_cur
             let mut sink = DiscardCommands;
             let mut event = EventCx::new(kind, internal, current, phase, Modifiers::NONE, Timestamp::ORIGIN, &payload, &control, &mut sink);
             native.backend.handler(listener.id).unwrap()(&mut event);
-            let id = dispatched.borrow_mut().pop().unwrap();
-            let bridge = native.bridge.clone();
-            bridge.run_turn(|| native.engine.with_context(|ctx| bridge.invoke_event(&ctx, id, &mut event))).unwrap();
+            while native
+                .bridge
+                .flush_notification(native.engine.turn(), |js, cb| js.with_context(|ctx| cb.call(&ctx)))
+                .unwrap()
+            {}
         }
         assert_eq!(native.bridge.wrapper_count(), wrapper_count, "internal event target fabricated a wrapper");
         assert_eq!(native.bridge.live_count(), 1);
@@ -342,6 +341,7 @@ fn focus_moves_through_the_host_and_rejects_stale_or_foreign_wrappers() {
     let foreign = UiBridge::new(
         NodeRegistry::new(native.dom.clone(), native.root, 61, 2, 10),
         HostHandle::from_rc(native.host.clone()),
+        HostPort::queued(),
     );
     native.engine.with_context(|ctx| {
         ctx.globals().set("foreign", foreign.root(&ctx)?)

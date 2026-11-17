@@ -145,12 +145,68 @@ pub struct RejectionUpdate {
     pub diagnostic: Diagnostic,
 }
 
+/// Policy controlling how [`JsRuntime::drain_rejections`] handles net unhandled
+/// promise rejections and tracking capacity overflows.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RejectionPolicy {
+    /// Fail on the earliest net-unhandled rejection, tracking capacity eviction,
+    /// or non-quiescing diagnostic getters.
+    Strict,
+    /// Drain all net rejection transitions (`handled: false` and cross-batch
+    /// `handled: true`) to getter quiescence without failing on unhandled rejections.
+    Log,
+}
+
 /// Drain result. Evicted identities cannot report later handling; hosts should
 /// surface `dropped_rejections` rather than silently losing this observability.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Eq, PartialEq)]
 pub struct RejectionDrain {
     pub updates: Vec<RejectionUpdate>,
     pub dropped_rejections: usize,
+}
+
+/// Borrowed single-entry handle for executing one bounded JavaScript entry inside
+/// a Bridge turn. Intentionally omits between-turn operations such as
+/// [`JsRuntime::drain_rejections`], [`JsRuntime::load_module`], and
+/// [`JsRuntime::pump_jobs`].
+#[must_use]
+pub struct JsTurn<'a>(&'a mut JsRuntime);
+
+impl fmt::Debug for JsTurn<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("JsTurn").finish_non_exhaustive()
+    }
+}
+
+impl JsTurn<'_> {
+    pub fn with_context<T>(
+        &mut self,
+        f: impl for<'js> FnOnce(Ctx<'js>) -> rquickjs::Result<T>,
+    ) -> Result<T, Diagnostic> {
+        self.0.with_context(f)
+    }
+
+    pub fn with_module<T>(
+        &mut self,
+        action: impl for<'js> FnOnce(Ctx<'js>, Object<'js>) -> rquickjs::Result<T>,
+    ) -> Result<T, Diagnostic> {
+        self.0.with_module(action)
+    }
+
+    pub fn with_cleanup_context<T>(
+        &mut self,
+        f: impl for<'js> FnOnce(Ctx<'js>) -> rquickjs::Result<T>,
+    ) -> Result<T, Diagnostic> {
+        self.0.with_cleanup_context(f)
+    }
+
+    pub fn execute_job(&mut self, budget: Duration) -> Result<bool, Diagnostic> {
+        self.0.execute_job(budget)
+    }
+
+    pub fn evaluate_script(&mut self, source: &str) -> Result<String, Diagnostic> {
+        self.0.evaluate_script(source)
+    }
 }
 
 struct TrackedRejection {
@@ -173,10 +229,18 @@ struct RejectionTracker {
 impl RejectionTracker {
     fn track<'js>(&mut self, ctx: &Ctx<'js>, promise: Value<'js>, reason: Value<'js>, handled: bool, max: usize) {
         let promise = Persistent::save(ctx, promise);
-        if let Some(record) = self.records.iter_mut().find(|record| record.promise == promise) {
-            if handled && !record.handled {
-                record.handled = true;
-                self.pending.push_back((record.id, true));
+        if let Some(index) = self.records.iter().position(|record| record.promise == promise) {
+            if handled && !self.records[index].handled {
+                let id = self.records[index].id;
+                if self.records[index].diagnostic.is_none()
+                    && self.pending.iter().any(|&(pending_id, is_handled)| pending_id == id && !is_handled)
+                {
+                    self.records.remove(index);
+                    self.pending.retain(|&(pending_id, _)| pending_id != id);
+                } else {
+                    self.records[index].handled = true;
+                    self.pending.push_back((id, true));
+                }
             }
             return;
         }
@@ -279,6 +343,11 @@ impl JsRuntime {
         })
     }
 
+    /// Borrow this runtime exclusively for a single Bridge turn entry.
+    pub fn turn(&mut self) -> JsTurn<'_> {
+        JsTurn(self)
+    }
+
     /// Enter the current context under the normal entry deadline. Install host
     /// functions here with `Function::new`/`Func`; callbacks receive this same Ctx.
     /// Return owned Rust data only. In particular, callers must not let Persistent
@@ -370,59 +439,124 @@ impl JsRuntime {
         result
     }
 
-    /// Drain owned rejection transitions outside context entries. Reason formatting
-    /// shares one diagnostic deadline for the entire batch; getters may enqueue
-    /// updates for the next drain, but cannot reenter the tracker during capture.
-    /// Formatting is cached so a later handled update retains the original reason.
-    /// At most `max_tracked_rejections` promises and unformatted reasons are rooted;
-    /// oldest identities (and their undrained transitions) are evicted on overflow.
-    pub fn drain_rejections(&mut self) -> RejectionDrain {
-        let (pending, snapshots, dropped_rejections) = {
-            let mut tracker = self.rejections.borrow_mut();
-            let pending = std::mem::take(&mut tracker.pending);
-            let snapshots: Vec<_> = tracker.records.iter()
-                .filter(|record| pending.iter().any(|(id, _)| *id == record.id))
-                .map(|record| (record.id, record.reason.clone(), record.diagnostic.clone()))
-                .collect();
-            (pending, snapshots, std::mem::take(&mut tracker.dropped))
-        };
-        let mut diagnostics = Vec::with_capacity(snapshots.len());
-        if !snapshots.is_empty() {
-            self.interrupt.interrupted.set(false);
-            let end = self.clamp_deadline(Instant::now() + self.limits.diagnostic_timeout);
-            self.interrupt.deadline.set(Some(end));
-            let _guard = EntryGuard(&self.interrupt);
-            self.update_stack_top();
-            self.context.with(|ctx| {
-                for (id, reason, cached) in snapshots {
-                    let diagnostic = cached.unwrap_or_else(|| {
-                        let reason = reason.expect("unformatted rejection has a reason")
-                            .restore(&ctx).expect("tracker belongs to this runtime");
-                        if Instant::now() >= end {
-                            Diagnostic::new(DiagnosticKind::Exception, "promise rejection",
-                                truncate(format!("JavaScript threw {} (formatting budget exhausted)", reason.type_of().as_str()), self.limits.max_diagnostic_bytes))
-                        } else {
-                            diagnostic_value(&ctx, "promise rejection", reason, self.limits.max_diagnostic_bytes, end)
-                        }
-                    });
-                    diagnostics.push((id, diagnostic));
+    /// Drain net promise rejection transitions to getter quiescence outside context
+    /// entries and Bridge turns.
+    ///
+    /// Same-batch `(false -> true)` pairs cancel before returning. Cross-batch `handled: true`
+    /// transitions reuse cached diagnostics without re-invoking JS getters. All quiescence
+    /// passes share one clamped `diagnostic_timeout` budget and at most
+    /// `max_tracked_rejections + 1` passes.
+    ///
+    /// # Errors
+    /// Returns [`DiagnosticKind::BudgetExceeded`] if diagnostic getters fail to quiesce within
+    /// `max_tracked_rejections + 1` passes, or under [`RejectionPolicy::Strict`] when tracking
+    /// capacity overflowed; under [`RejectionPolicy::Strict`] also returns the earliest
+    /// net-unhandled rejection diagnostic.
+    pub fn drain_rejections(&mut self, policy: RejectionPolicy) -> Result<RejectionDrain, Diagnostic> {
+        let end = self.clamp_deadline(Instant::now() + self.limits.diagnostic_timeout);
+        let mut total_dropped = 0usize;
+        let mut net_updates: Vec<RejectionUpdate> = Vec::new();
+        for _ in 0..=self.limits.max_tracked_rejections {
+            let (pending, snapshots, dropped) = {
+                let mut tracker = self.rejections.borrow_mut();
+                let pending = std::mem::take(&mut tracker.pending);
+                let snapshots: Vec<_> = tracker
+                    .records
+                    .iter()
+                    .filter(|record| pending.iter().any(|(id, _)| *id == record.id))
+                    .map(|record| (record.id, record.reason.clone(), record.diagnostic.clone()))
+                    .collect();
+                (pending, snapshots, std::mem::take(&mut tracker.dropped))
+            };
+            total_dropped = total_dropped.saturating_add(dropped);
+            if pending.is_empty() {
+                break;
+            }
+            let needs_context = snapshots.iter().any(|(_, _, cached)| cached.is_none());
+            let mut diagnostics = Vec::with_capacity(snapshots.len());
+            if needs_context {
+                self.interrupt.interrupted.set(false);
+                self.interrupt.deadline.set(Some(end));
+                let _guard = EntryGuard(&self.interrupt);
+                self.update_stack_top();
+                self.context.with(|ctx| {
+                    for (id, reason, cached) in snapshots {
+                        let diagnostic = cached.unwrap_or_else(|| {
+                            let reason = reason
+                                .expect("unformatted rejection has a reason")
+                                .restore(&ctx)
+                                .expect("tracker belongs to this runtime");
+                            if Instant::now() >= end {
+                                Diagnostic::new(
+                                    DiagnosticKind::Exception,
+                                    "promise rejection",
+                                    truncate(
+                                        format!("JavaScript threw {} (formatting budget exhausted)", reason.type_of().as_str()),
+                                        self.limits.max_diagnostic_bytes,
+                                    ),
+                                )
+                            } else {
+                                diagnostic_value(&ctx, "promise rejection", reason, self.limits.max_diagnostic_bytes, end)
+                            }
+                        });
+                        diagnostics.push((id, diagnostic));
+                    }
+                });
+            } else {
+                for (id, _, cached) in snapshots {
+                    if let Some(diagnostic) = cached {
+                        diagnostics.push((id, diagnostic));
+                    }
                 }
-            });
-        }
-        let updates = pending.iter().filter_map(|(id, handled)| {
-            diagnostics.iter().find(|(key, _)| key == id).map(|(_, diagnostic)| RejectionUpdate {
-                id: *id, handled: *handled, diagnostic: diagnostic.clone(),
-            })
-        }).collect();
-        let mut tracker = self.rejections.borrow_mut();
-        for (id, diagnostic) in diagnostics {
-            if let Some(record) = tracker.records.iter_mut().find(|record| record.id == id) {
-                record.diagnostic = Some(diagnostic);
-                record.reason = None;
+            }
+            {
+                let mut tracker = self.rejections.borrow_mut();
+                for (id, diagnostic) in &diagnostics {
+                    if let Some(record) = tracker.records.iter_mut().find(|record| record.id == *id) {
+                        record.diagnostic = Some(diagnostic.clone());
+                        record.reason = None;
+                    }
+                }
+                tracker.records.retain(|record| !pending.iter().any(|(id, handled)| *id == record.id && *handled));
+            }
+            for (id, handled) in pending {
+                let Some(diagnostic) = diagnostics.iter().find(|(key, _)| *key == id).map(|(_, d)| d.clone()) else {
+                    continue;
+                };
+                if handled {
+                    if let Some(pos) = net_updates.iter().position(|update| update.id == id && !update.handled) {
+                        net_updates.remove(pos);
+                    } else {
+                        net_updates.push(RejectionUpdate { id, handled: true, diagnostic });
+                    }
+                } else {
+                    net_updates.push(RejectionUpdate { id, handled: false, diagnostic });
+                }
             }
         }
-        tracker.records.retain(|record| !pending.iter().any(|(id, handled)| *id == record.id && *handled));
-        RejectionDrain { updates, dropped_rejections }
+        if !self.rejections.borrow().pending.is_empty() {
+            return Err(Diagnostic::new(
+                DiagnosticKind::BudgetExceeded,
+                "promise rejection",
+                "rejection diagnostics did not quiesce",
+            ));
+        }
+        if policy == RejectionPolicy::Strict {
+            if total_dropped != 0 {
+                return Err(Diagnostic::new(
+                    DiagnosticKind::BudgetExceeded,
+                    "promise rejection",
+                    "rejection tracking limit exceeded",
+                ));
+            }
+            if let Some(unhandled) = net_updates.iter().find(|update| !update.handled) {
+                return Err(unhandled.diagnostic.clone());
+            }
+        }
+        Ok(RejectionDrain {
+            updates: net_updates,
+            dropped_rejections: total_dropped,
+        })
     }
 
     /// Evaluate a global script whose completion value must be a JS string.

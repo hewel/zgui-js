@@ -1,14 +1,9 @@
-use std::{cell::{Cell, RefCell}, collections::{HashSet, VecDeque}, rc::Rc, sync::Arc, time::{Duration, Instant}};
-use js_runtime::{JsRuntime, RuntimeLimits};
+use std::{cell::{Cell, RefCell}, rc::{Rc, Weak}, sync::Arc, time::{Duration, Instant}};
+use js_runtime::{JsRuntime, RejectionPolicy, RuntimeLimits};
 use rquickjs::{Exception, Function, Persistent};
-use ui_bridge::{DeferredEvent, UiBridge, registry::NodeRegistry};
+use ui_bridge::{BridgeStep, DispatchOutcome, HostPort, QueueOverflow, UiBridge, registry::NodeRegistry};
 use zgui::platform::{SurfaceId, WakeReason, Waker};
 use crate::{assets::{AssetSource, ContractFailure}, environment::Environment, session_host::MountRegion, package::Package, work::{Arguments, Work}};
-
-enum DeferredNotification {
-    Event(DeferredEvent),
-    Geometry { id: u64, value: zgui::view::ObservedValue, scale: f32 },
-}
 
 /// Typed session failure: engine diagnostics, sticky provider contracts, and
 /// host invariants keep distinct categories through recovery classification.
@@ -132,7 +127,6 @@ pub(crate) struct Session {
     pub(crate) region: MountRegion,
     pub(crate) frames: Cell<usize>,
     module: SessionModule,
-    deferred: RefCell<VecDeque<DeferredNotification>>,
     fault: RefCell<Option<SessionError>>,
     cleanup_failure: RefCell<Option<js_runtime::Diagnostic>>,
     policy: SessionPolicy,
@@ -146,37 +140,48 @@ impl Session {
     pub(crate) fn prepare(region: MountRegion, module: SessionModule, generation: u64, waker: Arc<dyn Waker>, surface: SurfaceId, policy: SessionPolicy) -> Result<Rc<Self>> {
         let mut engine = JsRuntime::new(policy.limits.clone())?;
         if let Some(deadline) = &policy.deadline { engine.set_enclosing_deadline(deadline.clone()); }
-        let bridge = UiBridge::new(NodeRegistry::new(region.dom.clone(), region.root, 1, generation, 100_000), region.host.clone());
-        let work = Work::new(region.host.clone(), module.package.clone(), generation, waker.clone(), surface, policy.assets.clone());
+        let session = Rc::new_cyclic(|weak: &Weak<Self>| {
+            let port = HostPort::live(surface, waker.clone(), weak.clone(), Self::dispatch_step);
+            let bridge = UiBridge::new(NodeRegistry::new(region.dom.clone(), region.root, 1, generation, 100_000), region.host.clone(), port);
+            let work = Work::new(region.host.clone(), module.package.clone(), generation, waker.clone(), surface, policy.assets.clone());
+            Self {
+                disposer: RefCell::new(None), bridge, work, engine: RefCell::new(None),
+                telemetry: Cell::new(None), shutdown_started: Cell::new(false),
+                mount_started: Cell::new(false), stylesheet_installed: Cell::new(false),
+                generation, region, frames: Cell::new(0), module,
+                fault: RefCell::new(None), cleanup_failure: RefCell::new(None),
+                policy, checkpoint_cursor: Cell::new(0), waker, surface,
+            }
+        });
         engine.with_context(|ctx| {
-            if let Some(environment) = &policy.environment { environment.install(&ctx)?; }
-            bridge.install(&ctx)?;
-            work.install(&ctx)?;
-            ctx.globals().set("mountRoot", bridge.root(&ctx)?)
+            if let Some(environment) = &session.policy.environment { environment.install(&ctx)?; }
+            session.bridge.install(&ctx)?;
+            session.work.install(&ctx)?;
+            ctx.globals().set("mountRoot", session.bridge.root(&ctx)?)
         })?;
-        let loaded = engine.load_module(&module.name, &module.source);
-        if let Some(failure) = work.contract_failure() { return Err(failure.into()); }
-        loaded.map_err(|error| remap(&module, error))?;
+        let loaded = engine.load_module(&session.module.name, &session.module.source);
+        if let Some(failure) = session.work.contract_failure() { return Err(failure.into()); }
+        loaded.map_err(|error| remap(&session.module, error))?;
         engine.with_module(|ctx, loaded| {
             let version: rquickjs::Value = loaded.get("hostApiVersion")?;
             if version.as_int() != Some(1) { return Err(Exception::throw_type(&ctx, "module hostApiVersion must equal manifest version 1")); }
             let _: Function = loaded.get("mount")?;
             Ok(())
-        }).map_err(|error| remap(&module, error))?;
+        }).map_err(|error| remap(&session.module, error))?;
         // Drain bootstrap continuations while every host-creation guard is
         // still closed. Otherwise a top-level Promise could defer side effects
         // until the first mounted checkpoint and bypass preflight.
         let jobs = engine.pump_jobs();
-        if let Some(failure) = work.contract_failure() { return Err(failure.into()); }
-        if let Some(error) = jobs.diagnostics.into_iter().next() { return Err(remap(&module, error)); }
+        if let Some(failure) = session.work.contract_failure() { return Err(failure.into()); }
+        if let Some(error) = jobs.diagnostics.into_iter().next() { return Err(remap(&session.module, error)); }
         if jobs.has_pending_jobs {
             return Err(js_runtime::Diagnostic {
                 kind: js_runtime::DiagnosticKind::BudgetExceeded, phase: "preflight",
                 message: "preflight jobs exceeded their bounded pump".into(), stack: None, generated_stack: None,
             }.into());
         }
-        let rejections = drain_rejections(&mut engine, true, module.package.as_deref());
-        if let Some(failure) = work.contract_failure() { return Err(failure.into()); }
+        let rejections = engine.drain_rejections(RejectionPolicy::Strict).map_err(|error| remap(&session.module, error));
+        if let Some(failure) = session.work.contract_failure() { return Err(failure.into()); }
         rejections?;
         if engine.is_job_pending() {
             return Err(js_runtime::Diagnostic {
@@ -184,20 +189,7 @@ impl Session {
                 message: "preflight diagnostic accessors scheduled more jobs".into(), stack: None, generated_stack: None,
             }.into());
         }
-        let session = Rc::new(Self { disposer: RefCell::new(None), bridge, work, engine: RefCell::new(Some(engine)), telemetry: Cell::new(None), shutdown_started: Cell::new(false), mount_started: Cell::new(false), stylesheet_installed: Cell::new(false), generation, region, frames: Cell::new(0), module, deferred: RefCell::new(VecDeque::new()), fault: RefCell::new(None), cleanup_failure: RefCell::new(None), policy, checkpoint_cursor: Cell::new(0), waker, surface });
-        let weak = Rc::downgrade(&session);
-        session.bridge.set_dispatcher(Rc::new(move |id, event| {
-            if let Some(session) = weak.upgrade() { session.dispatch(id, event); }
-        }));
-        let weak = Rc::downgrade(&session);
-        session.bridge.set_geometry_dispatcher(
-            Rc::new(move |id, value, scale| {
-                if let Some(session) = weak.upgrade() { session.dispatch_geometry(id, value, scale); }
-            }),
-            Rc::new({ let weak = Rc::downgrade(&session); move || {
-                if let Some(session) = weak.upgrade() { session.wake_owner(); }
-            } }),
-        );
+        *session.engine.borrow_mut() = Some(engine);
         Ok(session)
     }
 
@@ -211,9 +203,9 @@ impl Session {
         }
         let mut engine = self.engine.borrow_mut();
         let engine = engine.as_mut().ok_or("session disposed")?;
-        let mounted = self.bridge.run_turn(|| engine.with_module(|ctx, module| {
+        let mounted = self.bridge.run_turn(engine.turn(), |turn, js| js.with_module(|ctx, module| {
             let mount: Function = module.get("mount")?;
-            let disposer: Function = mount.call((self.bridge.root(&ctx)?,))?;
+            let disposer: Function = mount.call((turn.root(&ctx)?,))?;
             Ok(Persistent::save(&ctx, disposer))
         }));
         match mounted {
@@ -237,39 +229,18 @@ impl Session {
         self.waker.wake(WakeReason::ReactiveWork { surfaces: vec![self.surface].into_boxed_slice() });
     }
 
-    fn defer(&self, notification: DeferredNotification) {
-        let mut queue = self.deferred.borrow_mut();
-        if queue.len() == 256 {
-            *self.fault.borrow_mut() = Some("nested native notification queue exhausted".into());
-        } else {
-            queue.push_back(notification);
+    fn dispatch_step(&self, step: BridgeStep<'_>) -> DispatchOutcome {
+        if self.shutdown_started.get() || self.bridge.is_disposed() { return DispatchOutcome::Retired; }
+        let Ok(mut engine) = self.engine.try_borrow_mut() else { return DispatchOutcome::Busy; };
+        let Some(engine) = engine.as_mut() else { return DispatchOutcome::Retired; };
+        if let Err(error) = step.run_turn(engine.turn(), |js, cb| js.with_context(|ctx| cb.call(&ctx))) {
+            let failure = self.contract_failure().map(SessionError::from)
+                .unwrap_or_else(|| self.diagnostic(error).into());
+            *self.fault.borrow_mut() = Some(failure);
         }
-        self.wake_owner();
-    }
-
-    fn dispatch(&self, id: u64, event: &mut zgui::view::EventCx<'_>) {
-        if self.shutdown_started.get() || self.bridge.is_disposed() { return; }
-        let Ok(mut engine) = self.engine.try_borrow_mut() else {
-            self.defer(DeferredNotification::Event(DeferredEvent::capture(id, event)));
-            return;
-        };
-        let Some(engine) = engine.as_mut() else { return; };
-        let result = self.bridge.run_turn(|| engine.with_context(|ctx| self.bridge.invoke_event(&ctx, id, event)));
-        if let Err(error) = result { *self.fault.borrow_mut() = Some(self.diagnostic(error).into()); }
         // Cancellation is already applied and revoked before owner work is scheduled.
         self.wake_owner();
-    }
-
-    fn dispatch_geometry(&self, id: u64, value: zgui::view::ObservedValue, scale: f32) {
-        if self.shutdown_started.get() || self.bridge.is_disposed() { return; }
-        let Ok(mut engine) = self.engine.try_borrow_mut() else {
-            self.defer(DeferredNotification::Geometry { id, value, scale });
-            return;
-        };
-        let Some(engine) = engine.as_mut() else { return; };
-        let result = self.bridge.run_turn(|| engine.with_context(|ctx| self.bridge.invoke_geometry(&ctx, id, value, scale)));
-        if let Err(error) = result { *self.fault.borrow_mut() = Some(self.diagnostic(error).into()); }
-        self.wake_owner();
+        DispatchOutcome::Executed
     }
 
     pub(crate) fn checkpoint(&self) -> Result<bool> {
@@ -283,6 +254,7 @@ impl Session {
     fn checkpoint_work(&self) -> Result<bool> {
         if let Some(error) = self.fault.borrow_mut().take() { return Err(error); }
         self.check_contract()?;
+        if let Err(overflow) = self.bridge.has_queued_notifications() { return Err(overflow.to_string().into()); }
         if self.bridge.is_disposed() { return Ok(false); }
         let Ok(mut engine) = self.engine.try_borrow_mut() else { self.wake_owner(); return Ok(false); };
         let Some(engine) = engine.as_mut() else { return Ok(false); };
@@ -305,38 +277,39 @@ impl Session {
             remaining[phase] -= 1;
             let attempted = match phase {
                 0 => if let Some(completion) = self.work.next_completion() {
-                    self.bridge.run_turn(|| engine.with_context(|ctx| self.work.settle(&ctx, completion))).map_err(|error| self.diagnostic(error))?;
+                    self.bridge.run_turn(engine.turn(), |_, js| js.with_context(|ctx| self.work.settle(&ctx, completion)))
+                        .map_err(|error| self.diagnostic(error))?;
                     true
                 } else { false },
                 1 => if let Some(call) = self.work.next_call() {
-                    self.bridge.run_turn(|| engine.with_context(|ctx| {
+                    self.bridge.run_turn(engine.turn(), |_, js| js.with_context(|ctx| {
                         let callback = call.callback.restore(&ctx)?;
                         match call.arguments { Arguments::Timer => callback.call::<_, ()>(()), Arguments::Frame(timestamp) => callback.call::<_, ()>((timestamp,)) }
                     })).map_err(|error| self.diagnostic(error))?;
                     true
                 } else { false },
-                2 => {
-                    let notification = self.deferred.borrow_mut().pop_front();
-                    if let Some(notification) = notification {
-                        match notification {
-                            DeferredNotification::Event(event) => {
-                                self.bridge.run_turn(|| engine.with_context(|ctx| self.bridge.invoke_deferred(&ctx, event))).map_err(|error| self.diagnostic(error))?;
-                            }
-                            DeferredNotification::Geometry { id, value, scale } => {
-                                self.bridge.run_turn(|| engine.with_context(|ctx| self.bridge.invoke_geometry(&ctx, id, value, scale))).map_err(|error| self.diagnostic(error))?;
-                            }
-                        }
-                        true
-                    } else { false }
-                },
-                _ => self.bridge.run_turn(|| engine.execute_job(end.saturating_duration_since(Instant::now())))
+                2 => self.bridge.flush_notification(engine.turn(), |js, cb| js.with_context(|ctx| cb.call(&ctx)))
+                    .map_err(|error| self.diagnostic(error))?,
+                _ => self.bridge.run_turn(engine.turn(), |_, js| js.execute_job(end.saturating_duration_since(Instant::now())))
                     .map_err(|error| self.diagnostic(error))?,
             };
             if attempted { worked = true; } else { remaining[phase] = 0; }
         }
-        worked |= self.bridge.run_turn(|| drain_rejections(engine, self.policy.strict_rejections, self.module.package.as_deref()))?;
+        let policy = if self.policy.strict_rejections { RejectionPolicy::Strict } else { RejectionPolicy::Log };
+        let drain = engine.drain_rejections(policy).map_err(|error| self.diagnostic(error))?;
+        worked |= !drain.updates.is_empty();
+        if policy == RejectionPolicy::Log {
+            if drain.dropped_rejections != 0 {
+                eprintln!("promise-rejection: evicted={} (tracking limit)", drain.dropped_rejections);
+            }
+            for rejection in drain.updates {
+                let diagnostic = self.diagnostic(rejection.diagnostic);
+                eprintln!("promise-rejection: id={} handled={} {diagnostic}", rejection.id, rejection.handled);
+            }
+        }
         self.check_contract()?;
-        if engine.is_job_pending() || !self.deferred.borrow().is_empty() || self.work.has_ready() || self.work.has_completions() { self.wake_owner(); }
+        let queued = self.bridge.has_queued_notifications().map_err(|overflow: QueueOverflow| overflow.to_string())?;
+        if engine.is_job_pending() || queued || self.work.has_ready() || self.work.has_completions() { self.wake_owner(); }
         Ok(worked)
     }
 
@@ -375,7 +348,7 @@ impl Session {
         if self.shutdown_started.get() { return Err("cannot invoke a retired session".into()); }
         let mut engine = self.engine.borrow_mut();
         let engine = engine.as_mut().ok_or("session disposed")?;
-        let result = self.bridge.run_turn(|| engine.with_module(|_, module| {
+        let result = self.bridge.run_turn(engine.turn(), |_, js| js.with_module(|_, module| {
             let callback: Function = module.get(export)?;
             callback.call::<_, ()>(())
         }));
@@ -421,25 +394,29 @@ impl Session {
         if self.shutdown_started.replace(true) { return; }
         self.bridge.begin_stop();
         self.work.begin_stop();
-        self.deferred.borrow_mut().clear();
         self.fault.borrow_mut().take();
         let disposer = self.disposer.borrow_mut().take();
         if let Some(disposer) = disposer
             && let Some(engine) = self.engine.borrow_mut().as_mut()
         {
-            let cleanup = || engine.with_cleanup_context(|ctx| disposer.restore(&ctx)?.call::<_, ()>(()));
             // A failed structural turn has already retired native handles.
             // Still run pure JS cleanup, without reopening a disposed registry.
-            let result = if self.bridge.is_disposed() { cleanup() } else { self.bridge.run_turn(cleanup) };
+            let result = if self.bridge.is_disposed() {
+                engine.with_cleanup_context(|ctx| disposer.restore(&ctx)?.call::<_, ()>(()))
+            } else {
+                self.bridge.run_turn(engine.turn(), |_, js| {
+                    js.with_cleanup_context(|ctx| disposer.restore(&ctx)?.call::<_, ()>(()))
+                })
+            };
             if let Err(error) = result {
                 let error = self.diagnostic(error);
                 eprintln!("disposer error: {error}");
                 *self.cleanup_failure.borrow_mut() = Some(error);
             }
             if self.policy.strict_rejections
-                && let Err(error) = drain_rejections(engine, true, self.module.package.as_deref())
+                && let Err(error) = engine.drain_rejections(RejectionPolicy::Strict)
             {
-                self.cleanup_failure.borrow_mut().get_or_insert(error);
+                self.cleanup_failure.borrow_mut().get_or_insert_with(|| self.diagnostic(error));
             }
         }
         self.work.finish_stop();
@@ -476,45 +453,6 @@ fn remap(module: &SessionModule, error: js_runtime::Diagnostic) -> SessionError 
     SessionError::Diagnostic(match &module.package {
         Some(package) => package.remap_diagnostic(error),
         None => error,
-    })
-}
-
-/// Reduce both transitions of an identity before deciding whether it is unhandled.
-/// Formatting can produce further updates, so strict policy drains to quiescence
-/// within a bounded number of batches instead of losing accessor-created failures.
-fn drain_rejections(engine: &mut JsRuntime, strict: bool, package: Option<&Package>) -> std::result::Result<bool, js_runtime::Diagnostic> {
-    let mut worked = false;
-    for _ in 0..=engine.limits().max_tracked_rejections {
-        let rejections = engine.drain_rejections();
-        worked |= !rejections.updates.is_empty();
-        if rejections.dropped_rejections != 0 {
-            if strict {
-                return Err(js_runtime::Diagnostic {
-                    kind: js_runtime::DiagnosticKind::BudgetExceeded, phase: "promise rejection",
-                    message: "rejection tracking limit exceeded".into(), stack: None, generated_stack: None,
-                });
-            }
-            eprintln!("promise-rejection: evicted={} (tracking limit)", rejections.dropped_rejections);
-        }
-        let empty = rejections.updates.is_empty();
-        if !strict {
-            for rejection in rejections.updates {
-                let diagnostic = match package { Some(package) => package.remap_diagnostic(rejection.diagnostic), None => rejection.diagnostic };
-                eprintln!("promise-rejection: id={} handled={} {diagnostic}", rejection.id, rejection.handled);
-            }
-            return Ok(worked);
-        }
-        let mut seen = HashSet::new();
-        for rejection in rejections.updates.into_iter().rev() {
-            if !seen.insert(rejection.id) { continue; }
-            let diagnostic = match package { Some(package) => package.remap_diagnostic(rejection.diagnostic), None => rejection.diagnostic };
-            if !rejection.handled { return Err(diagnostic); }
-        }
-        if empty { return Ok(worked); }
-    }
-    Err(js_runtime::Diagnostic {
-        kind: js_runtime::DiagnosticKind::BudgetExceeded, phase: "promise rejection",
-        message: "rejection diagnostics did not quiesce".into(), stack: None, generated_stack: None,
     })
 }
 
