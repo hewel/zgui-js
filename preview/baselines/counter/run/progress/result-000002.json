@@ -14,7 +14,7 @@
     "requiredAssetsReady": true,
     "requiredMetadataRevision": 3,
     "requiredStateRevision": 37,
-    "resourceRevision": 0,
+    "resourceRevision": 1,
     "timeUs": 0
   },
   "result": {
@@ -28,6 +28,11 @@
     "metadataRevision": 3,
     "nativeHitVerified": true,
     "pointSamples": 1,
+    "pointer": {
+      "id": "0",
+      "kind": "mouse",
+      "primary": true
+    },
     "positionDevice": {
       "x": 700.0,
       "y": 242.5
@@ -52,5 +57,5 @@
   },
   "sequence": 2,
   "status": "passed",
-  "wallDurationUs": 11203
+  "wallDurationUs": 12481
 }

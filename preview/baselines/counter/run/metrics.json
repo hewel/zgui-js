@@ -1,12 +1,16 @@
 {
   "availability": {
-    "jsHeap": false,
+    "jsEntryDuration": true,
+    "jsHeap": true,
     "mutationCost": false,
     "nativeFrames": true,
     "rss": false,
     "wallDuration": true
   },
   "captures": 2,
+  "jsHeapBytes": 232320,
+  "jsStackLimitBytes": 262144,
+  "maxJsEntryDurationUs": 2699,
   "nativeFrames": 4,
-  "wallDurationUs": 1202687
+  "wallDurationUs": 1272958
 }

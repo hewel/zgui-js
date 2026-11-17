@@ -1,27 +1,23 @@
 import assert from "node:assert/strict";
 import { after, before, test } from "node:test";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
-import { spawnSync } from "node:child_process";
+import { readFile } from "node:fs/promises";
 import path from "node:path";
-import { buildApplication, workspaceRoot } from "../../packages/build/src/build.mjs";
+import {
+  buildExampleApp,
+  createTempWorkspace,
+  readTree,
+  runPreview,
+  workspaceRoot,
+} from "./harness.mjs";
 
-let out;
+let temp;
+let bundle;
 before(async () => {
-  await buildApplication("selection", {
-    appDirectory: path.join(workspaceRoot, "apps/examples/selection"),
-  });
-  out = await mkdtemp(path.join(workspaceRoot, "target/preview-selection-test-"));
+  bundle = await buildExampleApp("selection");
+  temp = await createTempWorkspace("preview-selection-test-");
 });
-after(async () => {
-  if (!out) return;
-  if (process.env.ZGUI_KEEP_PREVIEW_OUTPUT === "1") {
-    console.log(`retained preview output: ${out}`);
-  } else {
-    await rm(out, { recursive: true, force: true });
-  }
-});
+after(async () => { await temp?.cleanup(); });
 
-const json = async file => JSON.parse(await readFile(file, "utf8"));
 const byTestId = (tree, id) => tree.nodes.find(node => node.testId === id);
 const textOf = (tree, id) => byTestId(tree, id)?.text;
 
@@ -29,27 +25,18 @@ test("selection scenario passes and group/slider identity survives reorder and r
   const scenario = path.join(workspaceRoot, "preview/scenarios/selection-virtual.json");
   const expectedAssertions = JSON.parse(await readFile(scenario, "utf8"))
     .steps.filter(step => step.op === "assert").length;
-  const process = spawnSync(path.join(workspaceRoot, "target/debug/native-host"), ["preview", "run",
-    "--bundle", path.join(workspaceRoot, "apps/examples/selection/dist"),
-    "--profile", path.join(workspaceRoot, "preview/profiles/default.json"),
-    "--fixture", path.join(workspaceRoot, "preview/fixtures/empty.json"),
-    "--scenario", scenario,
-    "--out", out,
-  ], { cwd: workspaceRoot, encoding: "utf8", timeout: 60000 });
-  assert.ifError(process.error);
-  const result = JSON.parse(process.stdout);
-  assert.equal(process.signal, null, process.stderr);
-  assert.equal(process.status, result.exitCode);
-  assert.equal(result.exitCode, 0, process.stdout);
-  assert.equal(result.status, "passed", process.stdout);
-  assert.equal(result.assertions.failed, 0);
-  assert.equal(result.assertions.passed, expectedAssertions);
-  assert.equal(result.teardown.clean, true);
+  await runPreview({
+    bundle,
+    scenario,
+    out: temp.dir,
+    expectedAssertions,
+    assertEmptyResources: false,
+  });
 
   const captures = {};
   for (const name of ["initial", "reordered", "item-removed", "item-restored",
     "slider-hidden", "hidden-moved", "slider-restored", "final"]) {
-    captures[name] = await json(path.join(out, `captures/${name}.tree.json`));
+    captures[name] = await readTree(temp.dir, name);
   }
   const formattingOrder = tree => tree.nodes
     .filter(node => node.parent === byTestId(tree, "formatting")?.token)

@@ -1,58 +1,40 @@
 import assert from "node:assert/strict";
 import { after, before, test } from "node:test";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
-import { spawnSync } from "node:child_process";
+import { readFile } from "node:fs/promises";
 import path from "node:path";
-import { buildApplication, workspaceRoot } from "../../packages/build/src/build.mjs";
+import {
+  buildExampleApp,
+  createTempWorkspace,
+  getNode as get,
+  readTree,
+  runPreview,
+  workspaceRoot,
+} from "./harness.mjs";
 
-let out;
+let temp;
+let bundle;
 before(async () => {
-  await buildApplication("tabs", {
-    appDirectory: path.join(workspaceRoot, "apps/examples/tabs"),
-  });
-  out = await mkdtemp(path.join(workspaceRoot, "target/preview-tabs-test-"));
+  bundle = await buildExampleApp("tabs");
+  temp = await createTempWorkspace("preview-tabs-test-");
 });
-after(async () => {
-  if (!out) return;
-  if (process.env.ZGUI_KEEP_PREVIEW_OUTPUT === "1") {
-    console.log(`retained preview output: ${out}`);
-  } else {
-    await rm(out, { recursive: true, force: true });
-  }
-});
-
-const json = async file => JSON.parse(await readFile(file, "utf8"));
-const get = (tree, id) => {
-  const record = tree.nodes.find(node => node.testId === id);
-  assert.ok(record, `missing node ${id}`);
-  return record;
-};
+after(async () => { await temp?.cleanup(); });
 
 test("tabs scenario passes and panel/trigger identity survives selection and reorder", async () => {
   const scenario = path.join(workspaceRoot, "preview/scenarios/tabs-virtual.json");
   const scenarioInput = JSON.parse(await readFile(scenario, "utf8"));
   const expectedAssertions = scenarioInput.steps.filter(step => step.op === "assert").length;
-  const process = spawnSync(path.join(workspaceRoot, "target/debug/native-host"), ["preview", "run",
-    "--bundle", path.join(workspaceRoot, "apps/examples/tabs/dist"),
-    "--profile", path.join(workspaceRoot, "preview/profiles/default.json"),
-    "--fixture", path.join(workspaceRoot, "preview/fixtures/empty.json"),
-    "--scenario", scenario,
-    "--out", out,
-  ], { cwd: workspaceRoot, encoding: "utf8", timeout: 60000 });
-  assert.ifError(process.error);
-  const result = JSON.parse(process.stdout);
-  assert.equal(process.signal, null, process.stderr);
-  assert.equal(process.status, result.exitCode);
-  assert.equal(result.exitCode, 0, process.stdout);
-  assert.equal(result.status, "passed", process.stdout);
-  assert.equal(result.assertions.failed, 0);
-  assert.equal(result.assertions.passed, expectedAssertions);
-  assert.equal(result.teardown.clean, true);
+  await runPreview({
+    bundle,
+    scenario,
+    out: temp.dir,
+    expectedAssertions,
+    assertEmptyResources: false,
+  });
 
   const captures = {};
   for (const name of ["initial", "edited", "left", "returned",
     "reordered", "removed", "restored", "disabled", "final"]) {
-    captures[name] = await json(path.join(out, `captures/${name}.tree.json`));
+    captures[name] = await readTree(temp.dir, name);
   }
   const disabledHistory = get(captures.disabled, "auto-history");
   assert.equal(disabledHistory.state.enabled, false);

@@ -1,30 +1,20 @@
 import assert from "node:assert/strict";
 import { after, before, test } from "node:test";
-import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
-import { spawnSync } from "node:child_process";
-import { buildApplication, workspaceRoot } from "../../packages/build/src/build.mjs";
+import {
+  buildFixtureApp,
+  createTempWorkspace,
+  getNode,
+  readTree,
+  runScenario,
+} from "./harness.mjs";
 
-let project;
+let temp;
+let bundle;
 before(async () => {
-  await mkdir(path.join(workspaceRoot, "target"), { recursive: true });
-  project = await mkdtemp(path.join(workspaceRoot, "target/preview-geometry-"));
-  await mkdir(path.join(project, "src"));
-  await copyFile(fileURLToPath(new URL("./fixtures/geometry.tsx", import.meta.url)), path.join(project, "src/main.tsx"));
-  await writeFile(path.join(project, "tsconfig.json"), JSON.stringify({
-    extends: path.join(workspaceRoot, "packages/ui/tsconfig.native.json"), include: ["src/**/*.tsx"],
-  }));
-  await buildApplication("geometry", { appDirectory: project });
+  temp = await createTempWorkspace("preview-geometry-");
+  bundle = await buildFixtureApp(temp.dir, "geometry", new URL("./fixtures/geometry.tsx", import.meta.url));
 });
-after(async () => {
-  if (!project) return;
-  if (process.env.ZGUI_KEEP_PREVIEW_OUTPUT === "1") {
-    console.log(`retained preview project: ${project}`);
-  } else {
-    await rm(project, { recursive: true, force: true });
-  }
-});
+after(async () => { await temp?.cleanup(); });
 
 const report = (anchor, follower, late, calls) => "geometry:" + JSON.stringify({
   anchor: `${anchor}x40`,
@@ -57,44 +47,26 @@ test("geometry scenario delivers first-paint observations and lifecycle", async 
     { id: "hidden-window-frame", op: "clock.advance", byMs: 20 },
     click("toggle", "-viewport-show"), capture("viewport-remounted"), viewport("remounted", 800, 600, 1.25),
   ];
-  const scenario = path.join(project, "geometry.json");
-  const out = path.join(project, "run");
-  await writeFile(scenario, JSON.stringify({
-    schemaVersion: 1, id: "geometry",
+  const { out, stderr } = await runScenario({
+    projectDir: temp.dir,
+    bundle,
+    name: "geometry",
+    id: "geometry",
     requiredCapabilities: ["pixels", "virtual-time", "selectors.test-id", "input.pointer", "tree.inspect", "surface.resize", "surface.scale"],
     steps,
-  }));
-  const process = spawnSync(path.join(workspaceRoot, "target/debug/native-host"), ["preview", "run",
-    "--bundle", path.join(project, "dist"),
-    "--profile", path.join(workspaceRoot, "preview/profiles/default.json"),
-    "--fixture", path.join(workspaceRoot, "preview/fixtures/empty.json"),
-    "--scenario", scenario,
-    "--out", out,
-  ], { cwd: workspaceRoot, encoding: "utf8", timeout: 60000 });
-  if (process.stderr) await writeFile(path.join(project, "native.stderr"), process.stderr);
-  assert.ifError(process.error);
-  const result = JSON.parse(process.stdout);
-  assert.equal(process.signal, null, process.stderr);
-  assert.equal(process.status, result.exitCode);
-  assert.equal(result.exitCode, 0, process.stdout);
-  assert.equal(result.status, "passed", process.stdout);
-  assert.equal(result.assertions.failed, 0);
-  assert.equal(result.assertions.passed, steps.filter(s => s.op === "assert").length);
-  assert.equal(result.teardown.clean, true);
+    stderrPath: `${temp.dir}/native.stderr`,
+    assertEmptyResources: false,
+  });
 
-  const firstFrame = process.stderr.split("\n").find(line => line.startsWith("first-native-frame:"));
-  assert.ok(firstFrame, `first-native-frame log missing: ${process.stderr}`);
+  const firstFrame = stderr.split("\n").find(line => line.startsWith("first-native-frame:"));
+  assert.ok(firstFrame, `first-native-frame log missing: ${stderr}`);
   assert.ok(firstFrame.includes(report(100, 100, null, 1)),
     `first paint must already report anchor/follower/zero measurements: ${firstFrame}`);
   assert.ok(firstFrame.includes("viewport:800x600@1.75"),
     `first paint must already report the window viewport: ${firstFrame}`);
 
-  const tree = async name => JSON.parse(await readFile(path.join(out, `captures/${name}.tree.json`), "utf8"));
-  const node = (capture, id) => {
-    const record = capture.nodes.find(candidate => candidate.testId === id);
-    assert.ok(record, `missing node ${id}`);
-    return record;
-  };
+  const tree = name => readTree(out, name);
+  const node = (capture, id) => getNode(capture, id);
   const bounds = (capture, id) => node(capture, id).boundsLogical;
   const captures = {};
   for (const name of ["initial", "resized", "late", "cancelled", "removed", "remounted"]) captures[name] = await tree(name);

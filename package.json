@@ -9,19 +9,24 @@
     "pnpm": "12.18.0"
   },
   "scripts": {
+    "lint": "oxlint --deny-warnings",
     "typecheck": "node packages/build/src/typecheck.mjs",
     "typecheck:smoke": "tsc --project packages/build/tsconfig.smoke.json",
     "test:build": "node --test tests/build/*.test.mjs",
+    "test:rust": "cargo test -j 4 --workspace --offline && cargo clippy -j 4 --workspace --all-targets --offline -- -D warnings",
+    "test:vendor": "cargo test -j 4 --manifest-path vendor/zgui-runtime/Cargo.toml --test controlled --test value --test editing --test geometry_observation --test observe_owed --test observed_place --test scale --test damage --test shared_text --test anim_lifecycle --test scroll_root --test scroll_touchpad --test scroll_owed --offline && cargo test -j 4 --manifest-path vendor/zgui-paint/Cargo.toml --lib walk::replay --offline && cargo test -j 4 --manifest-path vendor/zgui-scroll/Cargo.toml --lib --offline && cargo test -j 4 --manifest-path vendor/zgui-style/Cargo.toml --lib driver::animations --offline && cargo test -j 4 --manifest-path vendor/zgui-view-dom/Cargo.toml --test observations --offline",
     "build": "node packages/build/src/cli.mjs build",
     "dev": "node packages/build/src/cli.mjs dev",
     "preview": "node packages/build/src/cli.mjs preview",
     "preview:check": "node packages/build/src/preview-check.mjs",
-    "test:preview": "pnpm build --app counter && cargo build -p native-host --locked && node --test tests/preview/*.test.mjs",
-    "smoke": "node packages/build/src/cli.mjs smoke && node packages/build/src/check-smoke.mjs"
+    "test:preview": "pnpm build --app counter && cargo build -j 4 -p native-host --locked --offline && node --test --test-concurrency=1 tests/preview/*.test.mjs",
+    "smoke": "node packages/build/src/cli.mjs smoke && node packages/build/src/check-smoke.mjs",
+    "check": "pnpm lint && pnpm typecheck && pnpm test:build && pnpm test:rust"
   },
   "devDependencies": {
-    "@hewel/zgui-services": "workspace:*",
     "@hewel/zgui": "workspace:*",
+    "@hewel/zgui-services": "workspace:*",
+    "oxlint": "1.94.0",
     "solid-js": "1.9.19",
     "typescript": "7.0.2"
   }

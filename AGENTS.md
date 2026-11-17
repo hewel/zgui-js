@@ -1,20 +1,31 @@
 # Native component development
 
-- Keep conditional native nodes inside the Solid owner that controls their presence. A previously attached node becomes invalid after removal finishes its bridge turn; showing it again requires a new node. Memoize independent content separately to preserve its state.
-- When inserting dynamic content beside independently managed siblings, pass an explicit marker to `insert(parent, content, marker)` (`null` for an end span). An omitted marker gives the insertion ownership of all parent children; conditional updates can remove sibling icons or body content.
-- For direct Solid Context provider calls, pass children through a getter (`get children() { return props.children; }`). This keeps construction under the provider owner and preserves keyed child identity. A function-valued `children` prop can recreate a direct `For` when its output changes.
-- Build nested overlay content in the presence-owned, same-turn effect in `packages/ui/src/components/overlay.ts`. Eager Portal/provider construction overflows the QuickJS stack for two initially open dialogs. Preserve the native initial-open and pre-flush owner-cancellation regressions.
-- The host double in `tests/build/native-fixture.mjs` records renderer calls but retains detached nodes. Verify remounts, pointer/keyboard defaults, native editing, and masking through native preview scenarios as well. Native onFocus/onBlur bubble as FocusIn/FocusOut, and cancellation methods close over dispatch state rather than this; test hosts must preserve both semantics.
-- Preview tree parents describe logical registry ownership. Check Portal escape through native DOM assertions, paint, and hit testing; its logical parent stays at the source.
-- A native `style` string replaces every inline declaration, including separately written custom properties. Emit dynamic positioning and its `--*` variables together; retain the real max-height and anchor-width bootstrap checks in `tests/preview/popover.test.mjs`.
-- For first-paint anchored-placement checks, measure the Popper positioner against that frame's anchor bounds, including any ancestor animation. Surface and arrow window bounds include entrance transforms; check their gaps after the animation settles.
-- To isolate keyboard autofocus in menu previews, park the pointer outside the popup before reopening. Native hit testing sends pointer-enter events when a new menu appears under a stationary pointer; those events can move focus to a row.
-- When changing preview renderer creation or replacement, retain vector rasterizer registration. Scaled glyphs use that path; atlas text and mask-cached icons can appear without it. `tests/preview/vector-text.test.mjs` checks glyph pixels across resize and recreate.
-- For inbound native arrays, bound a single `u32` length read before allocation and consume that snapshot. The pinned rquickjs `Array::len()` assumes a signed-integer representation, and `Array::iter()` calls it. Validate native kinds without consulting mutable JavaScript globals.
-- For stable visual captures after a theme or state change, advance virtual time beyond the effective CSS transition duration. An intermediate animation frame is not evidence of an incorrect final theme.
-- Component resources in `packages/ui/src/components/generated/` come from the pinned upstream revision. Refresh them by capturing `crates/ui-bridge/examples/ui_resources.rs` once, then passing that snapshot to `packages/build/src/sync-ui-resources.mjs`. Preserve the accompanying upstream license and provenance.
-- Batch native root mounting and disposal so tree-order reactions settle once and teardown does not re-register events on retiring sessions.
-- Solid Universal forwards numeric array children to createTextNode. Convert them to strings in the renderer; the native host and test double keep string-only text methods.
-- Scope part styles to their own context-derived attributes when ancestor selectors can cross nested component roots; retain layout-wrapper composition.
-- For exit-animation checks, use the styled-frame deferral in `packages/ui/src/components/presence.ts`: native input handlers, timers, and frame callbacks can run before the cascade. Keep the native Presence preview as the timing regression; a mocked animation count cannot verify this ordering.
-- Run vendored Rust tests with `cargo test --manifest-path vendor/<crate>/Cargo.toml ... --offline`; these crates are excluded from the root workspace.
+## 1. Owner-Scoped Native Node Lifetimes
+
+- Keep conditional native nodes inside the Solid owner that controls their presence. A removed node becomes invalid once its bridge turn completes; re-showing requires a fresh node, and memoizing independent content separately preserves state.
+- Build nested overlay content inside the same-turn `createEffect` in `packages/ui/src/components/overlay.ts` so eager Portal/provider construction never overflows QuickJS stacks on initially open dialogs; retain initial-open and pre-flush owner-cancellation coverage.
+- Batch native root mounting and disposal so tree-order reactions settle once and teardown does not re-register events on retiring sessions. Coerce numeric array children to strings in `packages/ui/src/renderer/index.ts`.
+
+## 2. Enforced SDK Boundaries
+
+- Architectural gates (`__zgui` encapsulation, `append`/`slot`/`provide` instead of raw `insert` or `<Context.Provider>`, themed `@hewel/zgui/components` primitives, no raw timers/`requestAnimationFrame`, and concise comments) are enforced by `.oxlintrc.json` + `tools/oxlint-zgui-plugin.mjs` (`pnpm lint`) and bundle constraints in `packages/build/src/validate.mjs`. Fix violations at the SDK/architecture layer rather than suppressing checks.
+
+## 3. Non-DOM Native Host & Budgets
+
+- Read inbound native array lengths in Rust with one bounded `u32` snapshot before allocation, without consulting mutable JavaScript globals.
+- A native `style` string replaces all inline declarations including custom properties; emit dynamic styles and `--*` variables together or use typed style objects (`NativeStyle`).
+- Keep interactive preview trees and handlers within QuickJS stack and entry-duration budgets (`--max-js-stack-bytes`, `metrics.json`).
+
+## 4. Scoped Styles & Upstream Provenance
+
+- Scope part styles to their own context-derived attributes when ancestor selectors can cross nested component roots while preserving layout-wrapper composition.
+- Refresh `packages/ui/src/components/generated/` by capturing `crates/ui-bridge/examples/ui_resources.rs` once and passing that snapshot to `packages/build/src/sync-ui-resources.mjs`, preserving upstream license and provenance.
+
+## 5. Dual Verification Tiers
+
+- `tests/build/native-fixture.mjs` records renderer calls while retaining detached nodes and models `FocusIn`/`FocusOut` bubbling plus closure-captured event cancellation; verify remounts, Portal paint/hit escape, first-paint Popper anchor geometry (checking settled surface/arrow gaps after entrance animations), styled-frame `presence.ts` exit deferral, parked-pointer menu autofocus, settled theme/transition captures, and glyph rasterization (`tests/preview/vector-text.test.mjs`) through `tests/preview/harness.mjs`.
+- Run vendored Rust checks with `cargo test -j 4 --manifest-path vendor/<crate>/Cargo.toml ... --offline` (`pnpm test:vendor`); these crates are excluded from the root workspace.
+
+## 6. Component Map & Vocabulary
+
+- Update [`docs/development/component-map.md`](docs/development/component-map.md) whenever adding or renaming exports in `@hewel/zgui/components`, interactive `testId`s in `apps/examples/gallery`, or wrapped `generated/*Style.ts` sheets (`tests/build/component-map.test.mjs` enforces parity).

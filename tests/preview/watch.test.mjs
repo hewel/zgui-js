@@ -105,7 +105,7 @@ async function observedFile(root, file) {
   let watcher, timer;
   return new Promise((resolve, reject) => {
     const check = async () => { try { await readFile(file); finish(); } catch (error) { if (error.code !== "ENOENT") finish(error); } };
-    function finish(error) { watcher?.close(); clearTimeout(timer); error ? reject(error) : resolve(); }
+    function finish(error) { watcher?.close(); clearTimeout(timer); if (error) reject(error); else resolve(); }
     watcher = watch(root, { recursive: true }, () => void check());
     watcher.on("error", finish); timer = setTimeout(() => finish(new Error(`file deadline: ${file}`)), 10000); void check();
   });

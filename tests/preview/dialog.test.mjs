@@ -1,34 +1,27 @@
 import assert from "node:assert/strict";
 import { after, before, test } from "node:test";
-import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
-import { spawnSync } from "node:child_process";
-import { buildApplication, workspaceRoot } from "../../packages/build/src/build.mjs";
+import {
+  buildFixtureApp,
+  createTempWorkspace,
+  getNode as get,
+  readTree as tree,
+  runScenario,
+} from "./harness.mjs";
 
-let project;
+let temp;
+const bundles = {};
 before(async () => {
-  await mkdir(path.join(workspaceRoot, "target"), { recursive: true });
-  project = await mkdtemp(path.join(workspaceRoot, "target/preview-dialog-"));
+  temp = await createTempWorkspace("preview-dialog-");
   for (const [variant, fixture] of [["main", "dialog.tsx"], ["initial", "dialog-initial.tsx"]]) {
-    const app = path.join(project, variant);
-    await mkdir(path.join(app, "src"), { recursive: true });
-    await copyFile(fileURLToPath(new URL(`./fixtures/${fixture}`, import.meta.url)), path.join(app, "src/main.tsx"));
-    await writeFile(path.join(app, "tsconfig.json"), JSON.stringify({
-      extends: path.join(workspaceRoot, "packages/ui/tsconfig.native.json"), include: ["src/**/*.tsx"],
-    }));
-  }
-  await buildApplication("dialog-main", { appDirectory: path.join(project, "main") });
-  await buildApplication("dialog-initial", { appDirectory: path.join(project, "initial") });
-});
-after(async () => {
-  if (!project) return;
-  if (process.env.ZGUI_KEEP_PREVIEW_OUTPUT === "1") {
-    console.log(`retained preview project: ${project}`);
-  } else {
-    await rm(project, { recursive: true, force: true });
+    bundles[variant] = await buildFixtureApp(
+      path.join(temp.dir, variant),
+      `dialog-${variant}`,
+      new URL(`./fixtures/${fixture}`, import.meta.url),
+    );
   }
 });
+after(async () => { await temp?.cleanup(); });
 
 let serial = 0;
 const id = () => `step-${++serial}`;
@@ -43,43 +36,21 @@ const capture = (captureId, requiredFrameTimeUs) => ({ id: id(), op: "capture", 
 const advance = byMs => ({ id: id(), op: "clock.advance", byMs });
 
 async function run(steps, name, variant = "main") {
-  const scenario = path.join(project, `${name}.json`);
-  const out = path.join(project, `run-${name}`);
-  await writeFile(scenario, JSON.stringify({
-    schemaVersion: 1, id: `dialog-${name}`,
+  const res = await runScenario({
+    projectDir: temp.dir,
+    bundle: bundles[variant],
+    name,
+    id: `dialog-${name}`,
     requiredCapabilities: ["pixels", "virtual-time", "selectors.test-id", "input.pointer", "input.keyboard", "input.text", "input.wheel", "tree.inspect", "surface.resize"],
     steps,
-  }));
-  const process = spawnSync(path.join(workspaceRoot, "target/debug/native-host"), ["preview", "run",
-    "--bundle", path.join(project, variant, "dist"),
-    "--profile", path.join(workspaceRoot, "preview/profiles/default.json"),
-    "--fixture", path.join(workspaceRoot, "preview/fixtures/empty.json"),
-    "--scenario", scenario,
-    "--out", out,
-  ], { cwd: workspaceRoot, encoding: "utf8", timeout: 60000 });
-  if (process.stderr) await writeFile(path.join(project, `${name}.stderr`), process.stderr);
-  assert.ifError(process.error);
-  const result = JSON.parse(process.stdout);
-  assert.equal(process.signal, null, process.stderr);
-  assert.equal(process.status, result.exitCode);
-  assert.equal(result.exitCode, 0, process.stdout);
-  assert.equal(result.status, "passed", process.stdout);
-  assert.equal(result.assertions.failed, 0);
-  assert.equal(result.assertions.passed, steps.filter(step => step.op === "assert").length);
-  assert.equal(result.teardown.clean, true);
-  assert.equal(result.teardown.resources.focusTraps, 0);
-  assert.equal(result.teardown.resources.scrollLocks, 0);
-  assert.equal(result.teardown.resources.frameCallbacks, 0);
-  assert.equal(result.teardown.resources.timers, 0);
-  return { result, out };
+    assertEmptyResources: false,
+  });
+  assert.equal(res.result.teardown.resources.focusTraps, 0);
+  assert.equal(res.result.teardown.resources.scrollLocks, 0);
+  assert.equal(res.result.teardown.resources.frameCallbacks, 0);
+  assert.equal(res.result.teardown.resources.timers, 0);
+  return res;
 }
-
-const tree = async (out, name) => JSON.parse(await readFile(path.join(out, `captures/${name}.tree.json`), "utf8"));
-const get = (tree, testId) => {
-  const node = tree.nodes.find(node => node.testId === testId);
-  assert.ok(node, `missing ${testId}`);
-  return node;
-};
 const contains = (bounds, x, y) => x >= bounds.x && x < bounds.x + bounds.width && y >= bounds.y && y < bounds.y + bounds.height;
 const focused = tree => tree.nodes.filter(node => node.state?.focused === true);
 

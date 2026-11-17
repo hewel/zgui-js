@@ -1,36 +1,28 @@
 import assert from "node:assert/strict";
 import { after, before, test } from "node:test";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
-import { spawnSync } from "node:child_process";
-import { buildApplication, workspaceRoot } from "../../packages/build/src/build.mjs";
-import { pngRgba } from "./png.mjs";
+import {
+  buildFixtureApp,
+  createTempWorkspace,
+  getNode as get,
+  readPng as pngRgba,
+  readTree as tree,
+  runScenario,
+} from "./harness.mjs";
 
-let project;
+let temp;
+const bundles = {};
 before(async () => {
-  await mkdir(path.join(workspaceRoot, "target"), { recursive: true });
-  project = await mkdtemp(path.join(workspaceRoot, "target/preview-popover-"));
-  const internal = JSON.stringify(path.join(workspaceRoot, "packages/ui/src/components/popper"));
+  temp = await createTempWorkspace("preview-popover-");
   for (const [variant, fixture] of [["geometry", "popover-geometry.tsx"], ["main", "popover.tsx"], ["initial", "popover-initial.tsx"], ["sides", "popover-sides.tsx"]]) {
-    const app = path.join(project, variant);
-    await mkdir(path.join(app, "src"), { recursive: true });
-    const source = await readFile(fileURLToPath(new URL(`./fixtures/${fixture}`, import.meta.url)), "utf8");
-    await writeFile(path.join(app, "src/main.tsx"), source.replace(`"__POPPER_MODULE__"`, internal));
-    await writeFile(path.join(app, "tsconfig.json"), JSON.stringify({
-      extends: path.join(workspaceRoot, "packages/ui/tsconfig.native.json"), include: ["src/**/*.tsx"],
-    }));
-    await buildApplication(`popover-${variant}`, { appDirectory: app });
+    bundles[variant] = await buildFixtureApp(
+      path.join(temp.dir, variant),
+      `popover-${variant}`,
+      new URL(`./fixtures/${fixture}`, import.meta.url),
+    );
   }
 });
-after(async () => {
-  if (!project) return;
-  if (process.env.ZGUI_KEEP_PREVIEW_OUTPUT === "1") {
-    console.log(`retained preview project: ${project}`);
-  } else {
-    await rm(project, { recursive: true, force: true });
-  }
-});
+after(async () => { await temp?.cleanup(); });
 
 let serial = 0;
 const id = () => `step-${++serial}`;
@@ -42,45 +34,18 @@ const wheelAt = (x, y, dy) => ({ id: id(), op: "wheel", surface: "main", positio
 const check = (testId, property, equals) => ({ id: id(), op: "assert", target: { surface: "main", testId }, check: { property, equals } });
 const capture = (captureId, requiredFrameTimeUs) => ({ id: id(), op: "capture", captureId, ...(requiredFrameTimeUs === undefined ? {} : { requiredFrameTimeUs }) });
 const advance = byMs => ({ id: id(), op: "clock.advance", byMs });
-const emptyResources = { nodes: 0, wrappers: 0, callbacks: 0, focusTraps: 0, scrollLocks: 0, timers: 0,
-  frameCallbacks: 0, requests: 0, engineAlive: false };
 
-async function run(steps, name, variant = "geometry") {
-  const scenario = path.join(project, `${name}.json`);
-  const out = path.join(project, `run-${name}`);
-  await writeFile(scenario, JSON.stringify({
-    schemaVersion: 1, id: `popover-${name}`,
+function run(steps, name, variant = "geometry") {
+  return runScenario({
+    projectDir: temp.dir,
+    bundle: bundles[variant],
+    name,
+    id: `popover-${name}`,
     requiredCapabilities: ["pixels", "virtual-time", "selectors.test-id", "input.pointer", "input.keyboard",
       "input.text", "input.wheel", "tree.inspect", "surface.resize", "surface.scale"],
     steps,
-  }));
-  const process = spawnSync(path.join(workspaceRoot, "target/debug/native-host"), ["preview", "run",
-    "--bundle", path.join(project, variant, "dist"),
-    "--profile", path.join(workspaceRoot, "preview/profiles/default.json"),
-    "--fixture", path.join(workspaceRoot, "preview/fixtures/empty.json"),
-    "--scenario", scenario,
-    "--out", out,
-  ], { cwd: workspaceRoot, encoding: "utf8", timeout: 60000 });
-  if (process.stderr) await writeFile(path.join(project, `${name}.stderr`), process.stderr);
-  assert.ifError(process.error);
-  const result = JSON.parse(process.stdout);
-  assert.equal(process.signal, null, process.stderr);
-  assert.equal(process.status, result.exitCode);
-  assert.equal(result.exitCode, 0, process.stdout);
-  assert.equal(result.status, "passed", process.stdout);
-  assert.equal(result.assertions.failed, 0);
-  assert.equal(result.assertions.passed, steps.filter(step => step.op === "assert").length);
-  assert.equal(result.teardown.clean, true);
-  assert.deepEqual(result.teardown.resources, emptyResources);
-  return { result, out };
+  });
 }
-
-const tree = async (out, name) => JSON.parse(await readFile(path.join(out, `captures/${name}.tree.json`), "utf8"));
-const get = (tree, testId) => {
-  const node = tree.nodes.find(node => node.testId === testId);
-  assert.ok(node, `missing ${testId}`);
-  return node;
-};
 const contains = (bounds, x, y) => x >= bounds.x && x < bounds.x + bounds.width && y >= bounds.y && y < bounds.y + bounds.height;
 const parentOf = (t, testId) => {
   const child = get(t, testId), parent = t.nodes.find(n => n.token === child.parent);

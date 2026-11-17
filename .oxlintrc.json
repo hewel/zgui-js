@@ -1,0 +1,128 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "plugins": ["eslint", "typescript", "oxc"],
+  "jsPlugins": ["./tools/oxlint-zgui-plugin.mjs"],
+  "ignorePatterns": [
+    "**/node_modules/**",
+    "**/dist/**",
+    "**/.zgui-generations/**",
+    "target/**",
+    "vendor/**",
+    "packages/ui/src/components/generated/**",
+    "tests/build/.fixture-*/**",
+    "tests/build/.image-*/**",
+    "tests/build/.dependency-*/**"
+  ],
+  "rules": {
+    "no-debugger": "error",
+    "no-unused-vars": ["error", { "argsIgnorePattern": "^_", "varsIgnorePattern": "^_" }],
+    "no-warning-comments": ["error", { "terms": ["todo", "fixme", "xxx"], "location": "anywhere" }],
+    "no-restricted-globals": [
+      "error",
+      {
+        "name": "setTimeout",
+        "message": "Do not call raw setTimeout in components or apps; use createDelay() or createPresence() so timers cancel when owners dispose."
+      },
+      {
+        "name": "setInterval",
+        "message": "Do not call raw setInterval in components or apps; use createDelay() instead of unguarded polling."
+      },
+      {
+        "name": "requestAnimationFrame",
+        "message": "Do not call raw requestAnimationFrame in components or apps; use createPresence() or owner-scoped primitives instead."
+      },
+      {
+        "name": "cancelAnimationFrame",
+        "message": "Do not manage raw animation frame handles directly in components or apps; use createPresence() or owner-scoped helpers."
+      }
+    ],
+    "zgui/no-direct-bridge": "error",
+    "zgui/no-raw-insert-or-provider": "error",
+    "zgui/no-unthemed-primitives-with-components": "error",
+    "zgui/no-internal-package-imports": "error",
+    "zgui/no-lint-suppression": "error",
+    "zgui/no-essay-comments": "error"
+  },
+  "overrides": [
+    {
+      "files": [
+        "packages/ui/src/host.ts",
+        "packages/ui/src/nodes.ts",
+        "packages/ui/src/portal.ts",
+        "packages/ui/src/render-app.ts",
+        "packages/ui/src/button.ts",
+        "packages/ui/src/renderer/**",
+        "packages/ui/src/components/shared.ts",
+        "packages/ui/src/runtime-globals.ts",
+        "packages/services/src/index.ts"
+      ],
+      "rules": {
+        "zgui/no-direct-bridge": "off",
+        "zgui/no-raw-insert-or-provider": "off",
+        "no-restricted-globals": "off",
+        "no-shadow-restricted-names": "off"
+      }
+    },
+    {
+      "files": [
+        "packages/ui/src/components/delay.ts",
+        "packages/ui/src/components/presence.ts"
+      ],
+      "rules": {
+        "no-restricted-globals": "off"
+      }
+    },
+    {
+      "files": [
+        "apps/examples/async/**"
+      ],
+      "rules": {
+        "no-restricted-globals": "off"
+      }
+    },
+    {
+      "files": [
+        "packages/build/**",
+        "tools/**"
+      ],
+      "rules": {
+        "zgui/no-direct-bridge": "off",
+        "no-restricted-globals": "off"
+      }
+    },
+    {
+      "files": [
+        "tests/build/**",
+        "tests/preview/*.mjs",
+        "tests/native-controls/**"
+      ],
+      "rules": {
+        "zgui/no-direct-bridge": "off",
+        "zgui/no-raw-insert-or-provider": "off",
+        "zgui/no-internal-package-imports": "off",
+        "no-restricted-globals": "off"
+      }
+    },
+    {
+      "files": [
+        "tests/types/**"
+      ],
+      "rules": {
+        "zgui/no-direct-bridge": "off",
+        "zgui/no-raw-insert-or-provider": "off",
+        "zgui/no-internal-package-imports": "off",
+        "no-restricted-globals": "off",
+        "no-unused-vars": "off",
+        "no-unassigned-vars": "off"
+      }
+    },
+    {
+      "files": [
+        "tests/preview/fixtures/presence.tsx"
+      ],
+      "rules": {
+        "zgui/no-internal-package-imports": "off"
+      }
+    }
+  ]
+}

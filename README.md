@@ -116,6 +116,12 @@ Use the same build and launch commands with another application name:
 | `lists` | Dynamic lists and identity-based native node reuse |
 | `async` | Timers, frame callbacks, promises, and asynchronous host services |
 | `editing` | Native single-line and multiline editing, selection, IME, read-only, and disabled states |
+| `components` | Styled primitives, layout tokens, themes, badges, and cards |
+| `controls` | Inputs, checkboxes, radios, switches, sliders, progress, and spinners |
+| `composition` | Accordions, collapsibles, and nested theme providers |
+| `selection` | Controlled and uncontrolled choice controls |
+| `tabs` | Keyboard-navigable tabs and panels |
+| `gallery` | Full interactive component showcase across themes, overlays, and menus |
 
 ## Offscreen previews
 
@@ -188,12 +194,16 @@ For API contracts, see the [UI SDK guide](packages/ui/README.md) and [host servi
 ## Checks and tests
 
 ```sh
+pnpm lint
 pnpm typecheck
 pnpm smoke
 pnpm test:build
-cargo test --workspace --locked
+pnpm test:rust
+pnpm check
 pnpm test:preview
 ```
+
+`pnpm lint` runs `oxlint --deny-warnings` (built-in rules plus `tools/oxlint-zgui-plugin.mjs` architectural gates). `pnpm check` runs lint, typechecking, build/property tests, and workspace Rust tests together.
 
 `pnpm typecheck` checks the native SDK packages, consumer type fixtures, and examples with the pinned local TypeScript 7.0.2 CLI. Application builds use `tsc --project … --noEmit` before publication and preserve compiler diagnostics on failure. Development checks run in a cancellable child process. The build tooling does not use the legacy TypeScript compiler API or fall back to a system `tsc`. Native consumer configs remain ES2022-only, without DOM or Node globals.
 

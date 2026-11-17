@@ -1,7 +1,7 @@
 {
   "actionSequence": 5,
   "allowedPendingAssets": [],
-  "buildId": "sha256:6ebbc4b750947132b6f40c3969a582d7119611250f655cc32e98b93cf20c055a",
+  "buildId": "sha256:923ddb9e4b8df968552ed0f323aea9af99f099e8880b30317eb2a8ff0d939340",
   "captureId": "after-increment",
   "configurationId": 2,
   "documentIdentity": "DocumentId(0)",
@@ -35,7 +35,7 @@
     "requiredAssetsReady": true,
     "requiredMetadataRevision": 3,
     "requiredStateRevision": 37,
-    "resourceRevision": 0,
+    "resourceRevision": 1,
     "timeUs": 20000
   },
   "renderer": {
@@ -58,7 +58,7 @@
     "vendor": 4098
   },
   "requiredStateRevision": 37,
-  "resourceRevision": 0,
+  "resourceRevision": 1,
   "resources": {
     "allowedPendingAssets": [],
     "declaredAssets": [],
@@ -67,7 +67,7 @@
     "pendingIds": [],
     "publicationPolicy": "complete-batch-launch-order-v1",
     "requiredAssetsReady": true,
-    "resourceRevision": 0,
+    "resourceRevision": 1,
     "resources": []
   },
   "scale": 1.75,
@@ -75,7 +75,7 @@
   "surface": "main",
   "surfaceConfiguration": 0,
   "timingDeterministic": true,
-  "treeDigest": "sha256:b64fddc1fa646252b06aeef46b6bb24498516ff3f73931fc78831e875dc4bee1",
+  "treeDigest": "sha256:4a7d7436e07b987856d9c3d4d6c9397040cf5f5ddfff816df4bafb58044d31cb",
   "validatedStateRevision": 37,
   "validationFrame": {
     "drawId": 4,

@@ -27,6 +27,7 @@ below is retained and does not describe the currently shipped API or test suite.
 | JSX compiler | babel-plugin-jsx-dom-expressions 0.40.14 |
 | Babel core / TypeScript preset | 7.29.13 / 7.29.7 |
 | Rolldown / TypeScript | 1.3.2 / 7.0.2 |
+| Oxlint | 1.94.0 (`--deny-warnings` + `tools/oxlint-zgui-plugin.mjs`) |
 | Parley | 0.11.1 with `complex-scripts`; required for CJK layout segmentation |
 
 The Fontique patch is selected deliberately for parity with the audited upstream performance implementation; it is not presented as necessary for correctness. `pnpm-lock.yaml` and `Cargo.lock` record the resolved graphs. Phase 0 graph inspection confirmed patched Fontique 0.11.1 and rquickjs `std`; Phase 1 deliberately added `macro`.

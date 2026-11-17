@@ -1,26 +1,25 @@
 import assert from "node:assert/strict";
 import { after, before, test } from "node:test";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import {
+  buildExampleApp,
+  createTempWorkspace,
+  readMetrics,
+  readTree,
+  runScenario as runPreviewScenario,
+} from "./harness.mjs";
+import { readFile } from "node:fs/promises";
 import path from "node:path";
-import { spawnSync } from "node:child_process";
-import { buildApplication, workspaceRoot } from "../../packages/build/src/build.mjs";
 
-let outDir;
-const galleryDir = path.join(workspaceRoot, "apps/examples/gallery");
+let temp;
+let bundle;
 
 before(async () => {
-  await mkdir(path.join(workspaceRoot, "target"), { recursive: true });
-  outDir = await mkdtemp(path.join(workspaceRoot, "target/preview-gallery-test-"));
-  await buildApplication("gallery", { appDirectory: galleryDir });
+  temp = await createTempWorkspace("preview-gallery-test-");
+  bundle = await buildExampleApp("gallery");
 });
 
 after(async () => {
-  if (!outDir) return;
-  if (process.env.ZGUI_KEEP_PREVIEW_OUTPUT === "1") {
-    console.log(`retained preview output: ${outDir}`);
-  } else {
-    await rm(outDir, { recursive: true, force: true });
-  }
+  await temp?.cleanup();
 });
 
 let serial = 0;
@@ -34,43 +33,35 @@ const capture = captureId => ({ id: id(), op: "capture", captureId });
 const advance = byMs => ({ id: id(), op: "clock.advance", byMs });
 const resize = (width, height) => ({ id: id(), op: "surface.resize", surface: "main", width, height });
 
+const STACK_LIMIT_BYTES = 240 * 1024;
+
 async function runScenario(name, steps, expectedCaptures) {
-  const scenarioPath = path.join(outDir, `${name}.json`);
-  const runOut = path.join(outDir, `run-${name}`);
-  await writeFile(scenarioPath, JSON.stringify({
-    schemaVersion: 1,
+  const { out } = await runPreviewScenario({
+    projectDir: temp.dir,
+    bundle,
+    name,
     id: `gallery-${name}`,
     requiredCapabilities: [
       "pixels", "virtual-time", "selectors.test-id", "input.pointer",
       "input.wheel", "input.keyboard", "tree.inspect", "surface.resize", "surface.scale",
     ],
     steps,
-  }));
+    maxJsStackBytes: STACK_LIMIT_BYTES,
+  });
 
-  const proc = spawnSync(path.join(workspaceRoot, "target/debug/native-host"), [
-    "preview", "run",
-    "--bundle", path.join(galleryDir, "dist"),
-    "--profile", path.join(workspaceRoot, "preview/profiles/default.json"),
-    "--fixture", path.join(workspaceRoot, "preview/fixtures/empty.json"),
-    "--scenario", scenarioPath,
-    "--out", runOut,
-  ], { cwd: workspaceRoot, encoding: "utf8", timeout: 90000 });
-
-  assert.ifError(proc.error);
-  assert.equal(proc.signal, null, proc.stderr);
-  const result = JSON.parse(proc.stdout);
-  assert.equal(proc.status, result.exitCode);
-  assert.equal(result.exitCode, 0, proc.stdout);
-  assert.equal(result.status, "passed", proc.stdout);
-  assert.equal(result.assertions.failed, 0, proc.stdout);
-  assert.equal(result.assertions.passed, steps.filter(s => s.op === "assert").length);
-  assert.equal(result.teardown.clean, true, proc.stdout);
+  const metrics = await readMetrics(out);
+  assert.equal(metrics.jsStackLimitBytes, STACK_LIMIT_BYTES);
+  assert.ok(metrics.jsHeapBytes > 0, `expected non-zero jsHeapBytes: ${JSON.stringify(metrics)}`);
+  assert.ok(
+    metrics.maxJsEntryDurationUs > 0 && metrics.maxJsEntryDurationUs < 25_000,
+    `unexpected maxJsEntryDurationUs: ${JSON.stringify(metrics)}`,
+  );
 
   for (const captureName of expectedCaptures) {
-    const png = await readFile(path.join(runOut, `captures/${captureName}.png`));
+    const png = await readFile(path.join(out, `captures/${captureName}.png`));
     assert.ok(png.length > 0, `empty png for ${captureName}`);
   }
-  return runOut;
+  return out;
 }
 
 test("gallery renders atoms, feedback, fields, choices, and composites tabs cleanly", async () => {
@@ -166,9 +157,9 @@ test("gallery scrolls vertically via wheel and touchpad in a compact desktop win
     capture("scroll-after"),
   ], ["scroll-before", "scroll-wheel", "scroll-after"]);
 
-  const beforeTree = JSON.parse(await readFile(path.join(runOut, "captures/scroll-before.tree.json"), "utf8"));
-  const wheelTree = JSON.parse(await readFile(path.join(runOut, "captures/scroll-wheel.tree.json"), "utf8"));
-  const afterTree = JSON.parse(await readFile(path.join(runOut, "captures/scroll-after.tree.json"), "utf8"));
+  const beforeTree = await readTree(runOut, "scroll-before");
+  const wheelTree = await readTree(runOut, "scroll-wheel");
+  const afterTree = await readTree(runOut, "scroll-after");
   const beforePage = beforeTree.nodes.find(node => node.testId === "gallery-page");
   const wheelPage = wheelTree.nodes.find(node => node.testId === "gallery-page");
   const afterPage = afterTree.nodes.find(node => node.testId === "gallery-page");
