@@ -8,3 +8,5 @@
 /apps/examples/*/.zgui-build-status.json
 /apps/examples/*/.zgui-build-status.json.*.tmp
 /artifacts/preview/
+
+.agents/skills

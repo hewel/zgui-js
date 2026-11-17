@@ -29,3 +29,17 @@
 ## 6. Component Map & Vocabulary
 
 - Update [`docs/development/component-map.md`](docs/development/component-map.md) whenever adding or renaming exports in `@hewel/zgui/components`, interactive `testId`s in `apps/examples/gallery`, or wrapped `generated/*Style.ts` sheets (`tests/build/component-map.test.mjs` enforces parity).
+
+## Agent skills
+
+### Issue tracker
+
+Issues, specs, and wayfinding maps are tracked as local markdown files under `.scratch/<feature-slug>/`. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Uses the default five-role vocabulary (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`). See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context layout: root `GLOSSARY.md` and `docs/adr/`. Read before exploring, designing, or naming domain concepts. See `docs/agents/domain.md`.
