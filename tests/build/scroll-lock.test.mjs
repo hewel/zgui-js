@@ -27,19 +27,8 @@ export function mount(root: NativeNode) {
 `;
 
 async function mounted(t) {
-  const leases = [];
   const harness = createHost();
-  harness.host.lockScroll = node => {
-    const record = { node, active: true, releases: 0 };
-    leases.push(record);
-    let released = false;
-    return () => {
-      if (released) return;
-      released = true;
-      record.releases += 1;
-      record.active = false;
-    };
-  };
+  const leases = harness.locks;
   assert.equal(globalThis.__zgui, undefined);
   const mod = await moduleFor(t, fixture);
   assert.equal(leases.length, 0, "module import must not acquire native scroll locks");
@@ -60,23 +49,23 @@ test("owner-bound scroll locks track mounts, effect reruns and disposal exactly 
   assert.equal(effect.node, first);
 
   mod.toggle();
-  assert.equal(conditional.releases, 1);
+  assert.equal(conditional.disposals, 1);
   assert.equal(conditional.active, false);
   mod.toggle();
   assert.equal(leases.length, 3);
   const remounted = leases[2];
   assert.notEqual(remounted.node, conditional.node);
-  assert.equal(remounted.releases, 0);
+  assert.equal(remounted.disposals, 0);
 
   mod.choose(1);
-  assert.equal(effect.releases, 1);
+  assert.equal(effect.disposals, 1);
   assert.equal(leases.length, 4);
   const switched = leases[3];
   assert.equal(switched.node, second);
 
   finish();
   for (const record of leases) {
-    assert.equal(record.releases, 1, "every owner-bound lease releases exactly once");
+    assert.equal(record.disposals, 1, "every owner-bound lease releases exactly once");
     assert.equal(record.active, false);
   }
 });
@@ -90,9 +79,9 @@ test("a manual scroll lock outside an owner survives disposal until released", a
 
   finish();
   assert.equal(manual.active, true, "a lease outside an owner is not released by disposal");
-  assert.equal(manual.releases, 0);
+  assert.equal(manual.disposals, 0);
   release();
   release();
-  assert.equal(manual.releases, 1);
+  assert.equal(manual.disposals, 1);
   assert.equal(manual.active, false);
 });

@@ -227,30 +227,19 @@ const node = (harness, testId) => harness.byTestId(testId);
 const textOf = current =>
   current.tag === "#text" ? current.props.get("text") ?? "" : current.children.map(textOf).join("");
 const click = target => ({
-  type: "click", target, prevented: 0, stopped: 0,
-  preventDefault() { this.prevented = (this.prevented ?? 0) + 1; },
-  stopPropagation() { this.stopped = (this.stopped ?? 0) + 1; },
-  stopImmediatePropagation() {},
+  type: "click", target,
 });
 const key = (target, name) => ({
-  type: "keydown", key: name, keyWithoutModifiers: name, target, prevented: 0, stopped: 0,
+  type: "keydown", key: name, keyWithoutModifiers: name, target,
   modifiers: { shift: false, control: false, alt: false, meta: false },
-  preventDefault() { this.prevented = (this.prevented ?? 0) + 1; },
-  stopPropagation() { this.stopped = (this.stopped ?? 0) + 1; },
-  stopImmediatePropagation() {},
-});
-const focusEvent = target => ({
-  type: "focusin", target, cause: "program",
-  preventDefault() { this.prevented = (this.prevented ?? 0) + 1; },
-  stopPropagation() {}, stopImmediatePropagation() {},
 });
 const focusIn = (harness, testId) => {
   const current = node(harness, testId);
-  current.callbacks.onFocus(focusEvent(current));
+  return harness.dispatch(current, "FocusIn", { cause: "program" });
 };
 const press = (harness, testId) => {
   const current = node(harness, testId);
-  current.callbacks.onClick(click(current));
+  return harness.dispatch(current, "Click", click(current));
 };
 
 test("lazy panels relate both ways regardless of creation order", async t => {
@@ -311,40 +300,38 @@ test("keepMounted builds once and preserves child state across selection", async
 
 test("automatic focus activation, roving navigation and axis switching", async t => {
   const { mod, harness } = await mounted(t, "mountInteractive");
-  const list = node(harness, "list");
-  focusIn(harness, "tab-b");
+  harness.host.focus(node(harness, "tab-b"));
   assert.equal(prop(harness, "tab-b", "selected"), true, "automatic focus selects");
-  focusIn(harness, "tab-a");
+  harness.host.focus(node(harness, "tab-a"));
   assert.equal(prop(harness, "tab-a", "selected"), true);
   mod.controls.setBDisabled(true);
-  const right = key(node(harness, "tab-a"), "ArrowRight");
-  list.callbacks.onKeyDown(right);
+  const right = harness.dispatch(node(harness, "tab-a"), "KeyDown", { key: "ArrowRight", keyWithoutModifiers: "ArrowRight" });
   assert.equal(harness.focused.current, node(harness, "tab-c"), "ArrowRight skips disabled middle and lands on c");
-  assert.equal(right.prevented, 1);
-  const wrap = key(node(harness, "tab-c"), "ArrowRight");
-  list.callbacks.onKeyDown(wrap);
+  assert.equal(prop(harness, "tab-c", "selected"), true, "FocusIn bubbling on focus move activates tab-c automatically");
+  assert.equal(right.defaultPrevented, true);
+  harness.dispatch(node(harness, "tab-c"), "KeyDown", { key: "ArrowRight", keyWithoutModifiers: "ArrowRight" });
   assert.equal(harness.focused.current, node(harness, "tab-a"), "wrap skips disabled item both directions");
-  const end = key(node(harness, "tab-a"), "End");
-  list.callbacks.onKeyDown(end);
+  assert.equal(prop(harness, "tab-a", "selected"), true);
+  harness.dispatch(node(harness, "tab-a"), "KeyDown", { key: "End", keyWithoutModifiers: "End" });
   assert.equal(harness.focused.current, node(harness, "tab-c"));
-  const home = key(node(harness, "tab-c"), "Home");
-  list.callbacks.onKeyDown(home);
+  assert.equal(prop(harness, "tab-c", "selected"), true);
+  harness.dispatch(node(harness, "tab-c"), "KeyDown", { key: "Home", keyWithoutModifiers: "Home" });
   assert.equal(harness.focused.current, node(harness, "tab-a"));
+  assert.equal(prop(harness, "tab-a", "selected"), true);
   mod.controls.setOrientation("vertical");
-  const offAxis = key(node(harness, "tab-a"), "ArrowRight");
-  list.callbacks.onKeyDown(offAxis);
-  assert.equal(offAxis.prevented, 0, "ArrowRight is not consumed on a vertical list");
+  const offAxis = harness.dispatch(node(harness, "tab-a"), "KeyDown", { key: "ArrowRight", keyWithoutModifiers: "ArrowRight" });
+  assert.equal(offAxis.defaultPrevented, false, "ArrowRight is not consumed on a vertical list");
   assert.equal(harness.focused.current, node(harness, "tab-a"));
-  const down = key(node(harness, "tab-a"), "ArrowDown");
-  list.callbacks.onKeyDown(down);
+  harness.dispatch(node(harness, "tab-a"), "KeyDown", { key: "ArrowDown", keyWithoutModifiers: "ArrowDown" });
   assert.equal(harness.focused.current, node(harness, "tab-c"), "ArrowDown works on vertical axis");
+  assert.equal(prop(harness, "tab-c", "selected"), true);
   mod.controls.setOrientation("horizontal");
   mod.controls.setActivation("manual");
-  focusIn(harness, "tab-c");
-  assert.equal(prop(harness, "tab-c", "selected"), false, "manual focus does not select");
-  assert.equal(prop(harness, "tab-a", "selected"), true);
-  press(harness, "tab-c");
-  assert.equal(prop(harness, "tab-c", "selected"), true, "manual click selects");
+  harness.host.focus(node(harness, "tab-a"));
+  assert.equal(prop(harness, "tab-a", "selected"), false, "manual focus does not select");
+  assert.equal(prop(harness, "tab-c", "selected"), true);
+  press(harness, "tab-a");
+  assert.equal(prop(harness, "tab-a", "selected"), true, "manual click selects");
 });
 
 test("controlled value waits for an echo and owned default survives prop changes", async t => {
@@ -374,10 +361,8 @@ test("controlled value waits for an echo and owned default survives prop changes
 
 test("caller prevention and disabled state gate activation", async t => {
   const { mod, harness } = await mounted(t, "mountInteractive");
-  const list = node(harness, "list");
   mod.controls.setCancelKeys(true);
-  const cancelled = key(node(harness, "tab-a"), "ArrowRight");
-  list.callbacks.onKeyDown(cancelled);
+  harness.dispatch(node(harness, "tab-a"), "KeyDown", { key: "ArrowRight", keyWithoutModifiers: "ArrowRight" });
   assert.equal(harness.focused.current, null, "cancelled list key runs no internal navigation");
   mod.controls.setCancelKeys(false);
   mod.controls.setActivation("manual");
@@ -409,16 +394,14 @@ test("caller prevention and disabled state gate activation", async t => {
   press(harness, "tab-b");
   assert.equal(prop(harness, "tab-b", "selected"), false, "root-disabled item cannot be selected");
   assert.deepEqual(mod.log.changes, beforeTabsDisabled, "root disable emits no callback");
-  const blocked = key(node(harness, "tab-a"), "ArrowRight");
-  list.callbacks.onKeyDown(blocked);
-  assert.equal(blocked.prevented, 0, "root-disabled list key is not consumed");
+  const blocked = harness.dispatch(node(harness, "tab-a"), "KeyDown", { key: "ArrowRight", keyWithoutModifiers: "ArrowRight" });
+  assert.equal(blocked.defaultPrevented, false, "root-disabled list key is not consumed");
   assert.equal(harness.focused.current, null);
   mod.controls.setTabsDisabled(false);
 });
 
 test("keyed reorder, part removal and value rename keep relations live", async t => {
   const { mod, harness } = await mounted(t, "mountReorderable");
-  const list = node(harness, "list");
   const countB = node(harness, "count-b");
   press(harness, "count-b");
   assert.equal(textOf(countB), "n1");
@@ -437,7 +420,7 @@ test("keyed reorder, part removal and value rename keep relations live", async t
   assert.equal(node(harness, "count-b"), countB, "reorder keeps panel child identity");
   assert.equal(textOf(countB), "n1", "reorder keeps panel child state");
   focusIn(harness, "tab-a");
-  list.callbacks.onKeyDown(key(node(harness, "tab-a"), "ArrowRight"));
+  harness.dispatch(node(harness, "tab-a"), "KeyDown", key(node(harness, "tab-a"), "ArrowRight"));
   assert.equal(harness.focused.current, node(harness, "tab-b"), "arrows follow new tree order");
   const firstB = node(harness, "tab-b");
   mod.reorderControls.setShowB(false);
@@ -457,13 +440,12 @@ test("keyed reorder, part removal and value rename keep relations live", async t
   assert.equal(prop(harness, "tab-a", "data-value"), "x", "renamed trigger reports the current value");
   assert.equal(prop(harness, "tab-a", "ariaControls"), node(harness, "panel-x"), "relation follows the current value");
   press(harness, "tab-a");
-  assert.deepEqual(mod.log.changes, ["a", "x"], "selection uses the current value");
+  assert.deepEqual(mod.log.changes, ["a", "b", "x"], "selection uses the current value");
   assert.equal(prop(harness, "panel-x", "data-state"), "active");
 });
 
 test("nested tabs and same-named values stay in their own context", async t => {
   const { harness } = await mounted(t, "mountNested");
-  const outerList = node(harness, "outer-list");
   assert.equal(prop(harness, "outer-a", "ariaControls"), node(harness, "outer-panel"));
   assert.equal(prop(harness, "inner-lonely", "ariaControls"), node(harness, "inner-panel"),
     "inner trigger relates to its own panel");
@@ -471,12 +453,12 @@ test("nested tabs and same-named values stay in their own context", async t => {
   assert.equal(prop(harness, "inner-lonely", "selected"), true, "inner selection independent of outer");
   assert.equal(prop(harness, "inner-panel", "ariaHidden"), false);
   focusIn(harness, "outer-a");
-  outerList.callbacks.onKeyDown(key(node(harness, "outer-a"), "ArrowRight"));
+  harness.dispatch(node(harness, "outer-a"), "KeyDown", key(node(harness, "outer-a"), "ArrowRight"));
   assert.equal(harness.focused.current, node(harness, "outer-b"), "outer arrows stay in the outer group");
   assert.equal(prop(harness, "inner-unlisted", "ariaControls"), node(harness, "inner-unlisted-panel"),
     "unlisted inner trigger relates to its own panel");
   assert.equal(prop(harness, "inner-unlisted", "selected"), true);
-  outerList.callbacks.onKeyDown(key(node(harness, "outer-b"), "ArrowRight"));
+  harness.dispatch(node(harness, "outer-b"), "KeyDown", key(node(harness, "outer-b"), "ArrowRight"));
   assert.equal(harness.focused.current, node(harness, "outer-a"), "outer wrap ignores the inner trigger");
   focusIn(harness, "outer-b");
   assert.equal(prop(harness, "outer-b", "selected"), true);
@@ -485,22 +467,12 @@ test("nested tabs and same-named values stay in their own context", async t => {
 
 test("disposal under a stopping host is quiet and invalid props fail clearly", async t => {
   const { mod, harness, dispose } = await mounted(t, "mountReorderable");
-  const registrationsAfterStop = [];
-  let stopping = false;
-  const original = harness.host.setProperty;
-  harness.host.setProperty = (n, name, value, previous) => {
-    if (stopping && name.startsWith("on") && value != null) {
-      registrationsAfterStop.push(name);
-      throw new ReferenceError("native session is stopping");
-    }
-    return original(n, name, value, previous);
-  };
   press(harness, "tab-a");
   press(harness, "tab-c");
   assert.deepEqual(mod.log.constructions.sort(), ["count-a", "count-b", "count-c"], "all panels built before teardown");
-  stopping = true;
+  harness.beginStop();
   assert.doesNotThrow(() => dispose());
-  assert.deepEqual(registrationsAfterStop, []);
+  assert.deepEqual(harness.registrationsAfterStop, []);
   assert.deepEqual(mod.log.cleans.sort(), ["count-a", "count-b", "count-c"], "every child cleanup ran");
   const invalidMod = await moduleFor(t, fixture);
   for (const kind of ["value", "part", "activation", "variant", "orientation"]) {

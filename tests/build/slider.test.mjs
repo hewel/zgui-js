@@ -76,35 +76,21 @@ export function mountShown(root: NativeNode): () => void {
 }
 `;
 
-const pointer = (type, target, options = {}) => ({
-  type, target, currentTarget: target,
-  phase: "target", timestamp: 0,
-  modifiers: { shift: false, control: false, alt: false, meta: false },
-  position: { x: 0, y: 0 },
-  pointerId: "0", pointerKind: "mouse", primary: true,
-  button: "primary", pressure: null, coalesced: [],
-  preventDefault() { this.prevented = (this.prevented ?? 0) + 1; },
-  stopPropagation() { this.stopped = (this.stopped ?? 0) + 1; },
-  stopImmediatePropagation() {},
-  activateNow() { this.activated = (this.activated ?? 0) + 1; },
-  capturePointer() { this.captured = (this.captured ?? 0) + 1; },
-  releasePointer() { this.released = (this.released ?? 0) + 1; },
-  ...options,
-});
+function sendPointer(harness, kind, target, x, options = {}) {
+  const state = { captured: 0, released: 0, activated: 0 };
+  const event = harness.dispatch(target, kind, {
+    position: { x, y: 0 },
+    activateNow: () => { state.activated += 1; },
+    capturePointer: () => { state.captured += 1; },
+    releasePointer: () => { state.released += 1; },
+    ...options,
+  });
+  return { event, ...state };
+}
 
-const down = (target, x, options) => pointer("pointerdown", target, { position: { x, y: 0 }, ...options });
-const move = (target, x, options) => pointer("pointermove", target, { position: { x, y: 0 }, ...options });
-const up = (target, x, options) => pointer("pointerup", target, { position: { x, y: 0 }, ...options });
-const cancel = (target, options) => pointer("pointercancel", target, options);
-
-const key = (target, name, currentTarget = target) => ({
-  type: "keydown", key: name, keyWithoutModifiers: name, target, currentTarget,
-  prevented: 0, stopped: 0,
-  modifiers: { shift: false, control: false, alt: false, meta: false },
-  preventDefault() { this.prevented = (this.prevented ?? 0) + 1; },
-  stopPropagation() { this.stopped = (this.stopped ?? 0) + 1; },
-  stopImmediatePropagation() {},
-});
+function sendKey(harness, target, name, extras = {}) {
+  return harness.dispatch(target, "KeyDown", { key: name, keyWithoutModifiers: name, ...extras });
+}
 
 function cleanup(t, harness, dispose) {
   t.after(() => {
@@ -145,9 +131,7 @@ const prop = (harness, name) => slider(harness)?.props.get(name);
 const ariaValueNow = harness => prop(harness, "ariaValueNow");
 
 function press(harness, name, target = slider(harness)) {
-  const event = key(target, name);
-  slider(harness).callbacks.onKeyDown(event);
-  return event;
+  return sendKey(harness, target, name);
 }
 
 test("stepped keyboard navigation snaps and clamps at endpoints", async t => {
@@ -174,7 +158,7 @@ test("stepped keyboard navigation snaps and clamps at endpoints", async t => {
 
   for (const name of ["Tab", "Escape", "a", " "]) {
     const event = press(harness, name);
-    assert.equal(event.prevented, 0, `${name} is untouched`);
+    assert.equal(event.defaultPrevented, false, `${name} is untouched`);
   }
   assert.equal(mod.log.values.length, 6);
 
@@ -188,32 +172,27 @@ test("character text never drives named slider keys", async t => {
   const { mod, harness } = await mounted(t, "mountRange", 0, 100, 1, 50);
   const root = slider(harness);
   for (const character of ["Home", "ArrowRight", "PageDown"]) {
-    const event = key(root, character);
-    event.character = character;
-    root.callbacks.onKeyDown(event);
+    const event = sendKey(harness, root, character, { character });
     assert.equal(ariaValueNow(harness), 50, `character "${character}" never moves the thumb`);
-    assert.equal(event.prevented, 0, `character "${character}" is not consumed`);
-    assert.equal(event.stopped, 0);
+    assert.equal(event.defaultPrevented, false, `character "${character}" is not consumed`);
+    assert.equal(event.propagationStopped, false);
   }
   assert.deepEqual(mod.log.values, []);
-  const named = key(root, "Home");
-  named.character = null;
-  root.callbacks.onKeyDown(named);
+  const named = sendKey(harness, root, "Home", { character: null });
   assert.equal(ariaValueNow(harness), 0);
   assert.deepEqual(mod.log.values, [0]);
-  assert.equal(named.prevented, 1, "named Home consumes the event");
-  assert.equal(named.stopped, 1);
+  assert.equal(named.defaultPrevented, true, "named Home consumes the event");
+  assert.equal(named.propagationStopped, true);
 });
 
 test("step zero is continuous for pointer but steps by one for keys", async t => {
   const { mod, harness } = await mounted(t, "mountRange", 0, 1, 0, 0);
   const root = slider(harness);
   harness.rects.set(track(harness), { x: 0, y: 0, width: 100, height: 10 });
-  const start = down(root, 37.1);
-  root.callbacks.onPointerDown(start);
+  const start = sendPointer(harness, "PointerDown", root, 37.1);
   assert.equal(start.captured, 1);
   assert.ok(Math.abs(ariaValueNow(harness) - 0.371) < 1e-9);
-  root.callbacks.onPointerUp(up(root, 37.1));
+  sendPointer(harness, "PointerUp", root, 37.1);
   press(harness, "ArrowRight");
   assert.equal(ariaValueNow(harness), 1, "keyboard still increments by one and clamps");
   assert.equal(mod.log.values.at(-1), 1);
@@ -225,11 +204,11 @@ test("endpoints stay exact when step does not divide the interval", async t => {
   harness.rects.set(track(harness), { x: 0, y: 0, width: 100, height: 10 });
   press(harness, "End");
   assert.equal(ariaValueNow(harness), 10);
-  root.callbacks.onPointerDown(down(root, 50));
+  sendPointer(harness, "PointerDown", root, 50);
   assert.equal(ariaValueNow(harness), 6, "interior point snaps to the nearest step");
-  root.callbacks.onPointerMove(move(root, 400));
+  sendPointer(harness, "PointerMove", root, 400);
   assert.equal(ariaValueNow(harness), 10, "far-right point reaches exact max");
-  root.callbacks.onPointerUp(up(root, 400));
+  sendPointer(harness, "PointerUp", root, 400);
   press(harness, "Home");
   assert.equal(ariaValueNow(harness), 0);
   assert.deepEqual(mod.log.values, [10, 6, 10, 0]);
@@ -243,7 +222,7 @@ test("degenerate and fractional ranges behave", async t => {
   assert.equal(prop(harness, "--zui-slider-fraction"), "0.0000%");
   press(harness, "ArrowRight");
   press(harness, "Home");
-  root.callbacks.onPointerDown(down(root, 50));
+  sendPointer(harness, "PointerDown", root, 50);
   assert.equal(mod.log.values.length, 0, "min===max emits nothing");
 
   const second = createHost();
@@ -286,25 +265,23 @@ test("pointer gestures map positions through the track rect, not the root", asyn
   harness.rects.set(root, { x: 10, y: 0, width: 1000, height: 40 });
   harness.rects.set(track(harness), { x: 300, y: 0, width: 200, height: 10 });
 
-  const start = down(thumb, 350, { currentTarget: root, phase: "bubble" });
-  root.callbacks.onPointerDown(start);
+  const start = sendPointer(harness, "PointerDown", thumb, 350);
   assert.equal(ariaValueNow(harness), 25, "geometry resolves against the track rect");
   assert.equal(start.captured, 1);
   assert.equal(harness.focused.current, root, "the root takes focus for the drag");
   assert.equal(harness.focused.reveal, false);
 
-  root.callbacks.onPointerMove(move(root, 800));
+  sendPointer(harness, "PointerMove", root, 800);
   assert.equal(ariaValueNow(harness), 100);
-  root.callbacks.onPointerMove(move(root, -50));
+  sendPointer(harness, "PointerMove", root, -50);
   assert.equal(ariaValueNow(harness), 0);
   assert.equal(start.captured, 1, "capture is issued once for the gesture");
 
-  const finish = up(root, 450);
-  root.callbacks.onPointerUp(finish);
+  const finish = sendPointer(harness, "PointerUp", root, 450);
   assert.equal(ariaValueNow(harness), 75, "release uses the final pointer position");
   assert.equal(finish.released, 1);
 
-  root.callbacks.onPointerMove(move(root, 400));
+  sendPointer(harness, "PointerMove", root, 400);
   assert.equal(ariaValueNow(harness), 75, "moves after release are ignored");
 });
 
@@ -313,24 +290,20 @@ test("missing or degenerate geometry aborts capture but never strands a drag", a
   const root = slider(harness);
   const trackNode = track(harness);
 
-  const zeroWidth = down(root, 10);
   harness.rects.set(trackNode, { x: 0, y: 0, width: 0, height: 10 });
-  root.callbacks.onPointerDown(zeroWidth);
-  assert.equal(zeroWidth.captured, undefined, "zero-width track cannot start a capture");
+  const zeroWidth = sendPointer(harness, "PointerDown", root, 10);
+  assert.equal(zeroWidth.captured, 0, "zero-width track cannot start a capture");
   harness.rects.delete(trackNode);
-  const noRect = down(root, 10);
-  root.callbacks.onPointerDown(noRect);
-  assert.equal(noRect.captured, undefined, "a missing rect cannot start a capture");
+  const noRect = sendPointer(harness, "PointerDown", root, 10);
+  assert.equal(noRect.captured, 0, "a missing rect cannot start a capture");
 
   harness.rects.set(trackNode, { x: 0, y: 0, width: 100, height: 10 });
-  const start = down(root, 25);
-  root.callbacks.onPointerDown(start);
+  sendPointer(harness, "PointerDown", root, 25);
   assert.equal(ariaValueNow(harness), 25);
   harness.rects.delete(trackNode);
-  root.callbacks.onPointerMove(move(root, 80));
+  sendPointer(harness, "PointerMove", root, 80);
   assert.equal(ariaValueNow(harness), 25, "a missing rect during drag skips the update");
-  const finish = up(root, 80);
-  root.callbacks.onPointerUp(finish);
+  const finish = sendPointer(harness, "PointerUp", root, 80);
   assert.equal(finish.released, 1, "release still ends the drag");
 });
 
@@ -340,49 +313,41 @@ test("pointer identity keeps concurrent pointers out of the active drag", async 
   harness.rects.set(track(harness), { x: 0, y: 0, width: 100, height: 10 });
   const pen = { pointerId: "7", pointerKind: "pen", button: null };
 
-  const start = down(root, 10, pen);
-  root.callbacks.onPointerDown(start);
+  const start = sendPointer(harness, "PointerDown", root, 10, pen);
   assert.equal(start.captured, 1);
   assert.equal(ariaValueNow(harness), 10);
 
   const foreign = { pointerId: "9", pointerKind: "pen", button: null };
-  root.callbacks.onPointerMove(move(root, 80, foreign));
+  sendPointer(harness, "PointerMove", root, 80, foreign);
   assert.equal(ariaValueNow(harness), 10, "another pointer's move does nothing");
-  const foreignUp = up(root, 80, foreign);
-  root.callbacks.onPointerUp(foreignUp);
-  assert.equal(foreignUp.released, undefined, "another pointer's up releases nothing");
-  root.callbacks.onPointerCancel(cancel(root, foreign));
+  const foreignUp = sendPointer(harness, "PointerUp", root, 80, foreign);
+  assert.equal(foreignUp.released, 0, "another pointer's up releases nothing");
+  sendPointer(harness, "PointerCancel", root, 0, foreign);
   assert.equal(ariaValueNow(harness), 10);
 
-  const takeover = down(root, 60, foreign);
-  root.callbacks.onPointerDown(takeover);
-  assert.equal(takeover.captured, undefined, "a second primary down cannot take over");
+  const takeover = sendPointer(harness, "PointerDown", root, 60, foreign);
+  assert.equal(takeover.captured, 0, "a second primary down cannot take over");
   assert.equal(ariaValueNow(harness), 10);
 
-  root.callbacks.onPointerMove(move(root, 40, pen));
+  sendPointer(harness, "PointerMove", root, 40, pen);
   assert.equal(ariaValueNow(harness), 40, "the matching pointer updates");
-  const stop = cancel(root, pen);
-  root.callbacks.onPointerCancel(stop);
+  const stop = sendPointer(harness, "PointerCancel", root, 0, pen);
   assert.equal(stop.released, 1);
-  root.callbacks.onPointerMove(move(root, 90, pen));
+  sendPointer(harness, "PointerMove", root, 90, pen);
   assert.equal(ariaValueNow(harness), 40, "cancel ends the gesture");
 
-  const touch = down(root, 30, { pointerId: "11", pointerKind: "touch", button: null, primary: true });
-  root.callbacks.onPointerDown(touch);
+  const touch = sendPointer(harness, "PointerDown", root, 30, { pointerId: "11", pointerKind: "touch", button: null, primary: true });
   assert.equal(touch.captured, 1, "touch with a null button works");
-  root.callbacks.onPointerUp(up(root, 30, { pointerId: "11", pointerKind: "touch", button: null }));
+  sendPointer(harness, "PointerUp", root, 30, { pointerId: "11", pointerKind: "touch", button: null });
 
-  const notPrimary = down(root, 30, { primary: false });
-  root.callbacks.onPointerDown(notPrimary);
-  assert.equal(notPrimary.captured, undefined);
-  const secondary = down(root, 30, { button: "secondary" });
-  root.callbacks.onPointerDown(secondary);
-  assert.equal(secondary.captured, undefined, "a secondary mouse button does not start");
+  const notPrimary = sendPointer(harness, "PointerDown", root, 30, { primary: false });
+  assert.equal(notPrimary.captured, 0);
+  const secondary = sendPointer(harness, "PointerDown", root, 30, { button: "secondary" });
+  assert.equal(secondary.captured, 0, "a secondary mouse button does not start");
 
-  root.callbacks.onPointerDown(down(root, 10));
-  const secondaryUp = up(root, 10, { button: "secondary" });
-  root.callbacks.onPointerUp(secondaryUp);
-  assert.equal(secondaryUp.released, undefined, "a secondary release cannot end the primary drag");
+  sendPointer(harness, "PointerDown", root, 10);
+  const secondaryUp = sendPointer(harness, "PointerUp", root, 10, { button: "secondary" });
+  assert.equal(secondaryUp.released, 0, "a secondary release cannot end the primary drag");
   assert.equal(mod.log.values.at(-1), 10);
 });
 
@@ -390,17 +355,15 @@ test("a fresh down from the same pointer restarts a lost capture", async t => {
   const { mod, harness } = await mounted(t, "mountRange", 0, 100, 1, 0);
   const root = slider(harness);
   harness.rects.set(track(harness), { x: 0, y: 0, width: 100, height: 10 });
-  root.callbacks.onPointerDown(down(root, 10));
+  sendPointer(harness, "PointerDown", root, 10);
   assert.equal(ariaValueNow(harness), 10);
 
-  const restart = down(root, 65);
-  root.callbacks.onPointerDown(restart);
+  const restart = sendPointer(harness, "PointerDown", root, 65);
   assert.equal(restart.captured, 1, "the same pointer re-arms a lost capture");
   assert.equal(ariaValueNow(harness), 65);
 
-  const other = down(root, 40, { pointerId: "9" });
-  root.callbacks.onPointerDown(other);
-  assert.equal(other.captured, undefined, "another pointer still cannot take over");
+  const other = sendPointer(harness, "PointerDown", root, 40, { pointerId: "9" });
+  assert.equal(other.captured, 0, "another pointer still cannot take over");
   assert.equal(ariaValueNow(harness), 65);
   assert.equal(mod.log.values.at(-1), 65);
 });
@@ -424,55 +387,47 @@ test("disabled and caller prevention gate gestures but never strand cleanup", as
   assert.ok(mod.nodes.slider() === root);
 
   mod.controls.setDisabled(true);
-  const blocked = down(root, 50);
-  root.callbacks.onPointerDown(blocked);
-  assert.equal(blocked.captured, undefined, "disabled cannot start a gesture");
+  const blocked = sendPointer(harness, "PointerDown", root, 50);
+  assert.equal(blocked.captured, 0, "disabled cannot start a gesture");
   press(harness, "ArrowRight");
   assert.equal(mod.log.values.length, 0);
   mod.controls.setDisabled(false);
 
   mod.controls.setCancelPointer(["down"]);
-  const prevented = down(root, 50);
-  root.callbacks.onPointerDown(prevented);
-  assert.equal(prevented.captured, undefined, "caller-prevented down issues no capture");
+  const prevented = sendPointer(harness, "PointerDown", root, 50);
+  assert.equal(prevented.captured, 0, "caller-prevented down issues no capture");
   assert.equal(ariaValueNow(harness), 10);
   mod.controls.setCancelPointer([]);
 
-  const start = down(root, 20);
-  root.callbacks.onPointerDown(start);
+  sendPointer(harness, "PointerDown", root, 20);
   assert.equal(ariaValueNow(harness), 20);
 
   mod.controls.setDisabled(true);
-  const stuck = move(root, 90);
-  root.callbacks.onPointerMove(stuck);
+  const stuck = sendPointer(harness, "PointerMove", root, 90);
   assert.equal(ariaValueNow(harness), 20, "disabling mid-drag stops updates");
   assert.equal(stuck.released, 1, "the next matching event releases the capture");
   mod.controls.setDisabled(false);
-  root.callbacks.onPointerMove(move(root, 90));
+  sendPointer(harness, "PointerMove", root, 90);
   assert.equal(ariaValueNow(harness), 20, "re-enabling does not resume a dead drag");
 
-  root.callbacks.onPointerDown(down(root, 20));
+  sendPointer(harness, "PointerDown", root, 20);
   mod.controls.setDisabled(true);
   mod.controls.setDisabled(false);
-  const released = move(root, 90);
-  root.callbacks.onPointerMove(released);
+  const released = sendPointer(harness, "PointerMove", root, 90);
   assert.equal(released.released, 1, "disable and re-enable still ends the dead drag");
   assert.equal(ariaValueNow(harness), 20);
 
-  const restart = down(root, 20);
-  root.callbacks.onPointerDown(restart);
+  sendPointer(harness, "PointerDown", root, 20);
   mod.controls.setCancelPointer(["move"]);
-  root.callbacks.onPointerMove(move(root, 60));
+  sendPointer(harness, "PointerMove", root, 60);
   assert.equal(ariaValueNow(harness), 20, "caller-prevented move skips only that move");
   mod.controls.setCancelPointer(["up"]);
-  const finish = up(root, 60);
-  root.callbacks.onPointerUp(finish);
+  const finish = sendPointer(harness, "PointerUp", root, 60);
   assert.equal(finish.released, 1, "caller-prevented up still cleans up");
   assert.equal(ariaValueNow(harness), 20);
   mod.controls.setCancelPointer(["cancel"]);
-  root.callbacks.onPointerDown(down(root, 20));
-  const aborted = cancel(root);
-  root.callbacks.onPointerCancel(aborted);
+  sendPointer(harness, "PointerDown", root, 20);
+  const aborted = sendPointer(harness, "PointerCancel", root, 0);
   assert.equal(aborted.released, 1, "caller-prevented cancel still cleans up");
   mod.controls.setCancelPointer([]);
 });
@@ -518,7 +473,7 @@ test("remount produces fresh nodes with no stale gesture state", async t => {
   const first = slider(harness);
   const firstTrack = track(harness);
   harness.rects.set(firstTrack, { x: 0, y: 0, width: 100, height: 10 });
-  first.callbacks.onPointerDown(down(first, 30));
+  sendPointer(harness, "PointerDown", first, 30);
   assert.equal(ariaValueNow(harness), 30);
   mod.controls.setShown(false);
   assert.equal(slider(harness), undefined);

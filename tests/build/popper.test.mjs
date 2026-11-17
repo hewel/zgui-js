@@ -51,19 +51,8 @@ const stylesOf = node => {
 };
 
 async function mounted(t) {
-  const registrations = [];
   const harness = createHost();
-  harness.host.observeGeometry = (node, kind, callback) => {
-    const record = { node, kind, callback, active: true, disposals: 0 };
-    registrations.push(record);
-    let disposed = false;
-    return () => {
-      if (disposed) return;
-      disposed = true;
-      record.disposals += 1;
-      record.active = false;
-    };
-  };
+  const registrations = harness.geometry;
   assert.equal(globalThis.__zgui, undefined);
   const mod = await moduleFor(t, integrationFixture);
   let dispose;
@@ -71,7 +60,7 @@ async function mounted(t) {
   globalThis.__zgui = harness.host;
   const root = harness.makeNode("root");
   dispose = mod.mount(root);
-  const emit = (record, value) => { if (record.active) record.callback(value); };
+  const emit = (record, value) => record.emit(value);
   return { mod, harness, registrations, emit,
     finish: () => { const end = dispose; dispose = undefined; end?.(); } };
 }
@@ -198,7 +187,7 @@ test("popper re-anchors and deactivates without losing content state", async t =
   const { mod, harness, registrations, emit, finish } = await mounted(t);
   const style = () => mod.log.positioner.props.get("style");
   const counter = harness.byTestId("counter");
-  counter.callbacks.onClick({ target: counter, currentTarget: counter });
+  harness.dispatch(counter, "Click");
   assert.equal(textOf(counter), "1");
   mod.setChoice(1);
   assert.equal(registrations.length, 4);

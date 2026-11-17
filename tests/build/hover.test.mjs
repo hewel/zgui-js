@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { createHost, moduleFor } from "./native-fixture.mjs";
+import { createClock, createHost, moduleFor } from "./native-fixture.mjs";
 
 const fixture = `
 import { For, Show, createSignal, onCleanup, onMount, renderApp } from "@hewel/zgui";
@@ -117,138 +117,28 @@ export function mountNested(root: NativeNode) {
 }
 `;
 
-function fakeClock(t) {
-  let now = 0;
-  let nextId = 0;
-  const timers = new Map();
-  const frames = new Map();
-  t.mock.method(globalThis, "setTimeout", (callback, delay = 0) => {
-    const id = ++nextId;
-    timers.set(id, { at: now + delay, callback });
-    return id;
-  });
-  t.mock.method(globalThis, "clearTimeout", id => { timers.delete(id); });
-  const previousFrame = Object.getOwnPropertyDescriptor(globalThis, "requestAnimationFrame");
-  const previousCancel = Object.getOwnPropertyDescriptor(globalThis, "cancelAnimationFrame");
-  globalThis.requestAnimationFrame = callback => {
-    const id = ++nextId;
-    frames.set(id, callback);
-    return id;
-  };
-  globalThis.cancelAnimationFrame = id => { frames.delete(id); };
-  t.after(() => {
-    if (previousFrame) Object.defineProperty(globalThis, "requestAnimationFrame", previousFrame);
-    else delete globalThis.requestAnimationFrame;
-    if (previousCancel) Object.defineProperty(globalThis, "cancelAnimationFrame", previousCancel);
-    else delete globalThis.cancelAnimationFrame;
-  });
-  const advance = ms => {
-    const target = now + ms;
-    for (;;) {
-      let earliest;
-      for (const [timerId, timer] of timers) {
-        if (timer.at <= target && (!earliest || timer.at < earliest.timer.at)) earliest = { timerId, timer };
-      }
-      if (!earliest) break;
-      timers.delete(earliest.timerId);
-      now = earliest.timer.at;
-      earliest.timer.callback();
-    }
-    now = target;
-  };
-  const frame = () => {
-    const due = [...frames.entries()];
-    for (const [timerId] of due) frames.delete(timerId);
-    for (const [, callback] of due) callback(now);
-  };
-  return { advance, frame, timers, frames };
-}
-
 async function mounted(t, mountName = "mount", allowScrollLock = false) {
-  const busy = new Map();
-  const traps = [];
-  const locks = [];
-  const layers = [];
-  const portals = [];
-  const geometry = [];
   const h = createHost();
-  h.host.createPortal = layer => {
-    const node = h.makeNode("portal");
-    portals.push({ layer, node });
-    return node;
-  };
-  h.host.isAnimating = node => busy.get(node) ?? false;
-  h.host.trapFocus = (node, wrap, autoFocus, restore) => {
-    const record = { node, wrap, autoFocus, restore, active: true, disposals: 0 };
-    traps.push(record);
-    let disposed = false;
-    return () => {
-      if (disposed) return;
-      disposed = true;
-      record.disposals += 1;
-      record.active = false;
-    };
-  };
-  h.host.lockScroll = node => {
-    if (!allowScrollLock) throw new Error("hover surfaces must not lock scroll");
-    const record = { node, active: true, disposals: 0 };
-    locks.push(record);
-    let disposed = false;
-    return () => {
-      if (disposed) return;
-      disposed = true;
-      record.disposals += 1;
-      record.active = false;
-    };
-  };
-  h.host.registerDismissLayer = (node, callback, options) => {
-    const record = { node, callback, options, active: true, disposals: 0 };
-    layers.push(record);
-    let disposed = false;
-    return {
-      update: options => { record.options = options; },
-      dispose: () => {
-        if (disposed) return;
-        disposed = true;
-        record.disposals += 1;
-        record.active = false;
-      },
-    };
-  };
-  h.host.observeGeometry = (node, kind, callback) => {
-    const record = { node, kind, callback, active: true, disposals: 0 };
-    geometry.push(record);
-    let disposed = false;
-    return () => {
-      if (disposed) return;
-      disposed = true;
-      record.disposals += 1;
-      record.active = false;
-    };
-  };
+  const { animating: busy, traps, locks, layers, portals, geometry } = h;
   assert.equal(globalThis.__zgui, undefined);
   const mod = await moduleFor(t, fixture);
   assert.equal(portals.length, 0, "module import must not allocate native nodes");
-  const clock = fakeClock(t);
+  const clock = createClock(t, h);
   let dispose;
-  t.after(() => { try { dispose?.(); } finally { delete globalThis.__zgui; } });
+  t.after(() => {
+    try { dispose?.(); } finally { delete globalThis.__zgui; }
+    if (!allowScrollLock) assert.equal(locks.length, 0, "hover surfaces must not lock scroll");
+  });
   globalThis.__zgui = h.host;
   const root = h.makeNode("root");
   dispose = mod[mountName](root);
   const send = (testId, name, extras = {}) => {
     const node = h.byTestId(testId);
     assert.ok(node, `missing node ${testId}`);
-    const consumed = { prevented: false, stopped: false };
-    node.callbacks[name]?.({
-      type: name.replace(/^on/, "").toLowerCase(), target: node, currentTarget: node,
-      preventDefault() { consumed.prevented = true; },
-      stopPropagation() { consumed.stopped = true; },
-      ...extras,
-    });
-    return consumed;
+    return h.dispatch(node, name, extras);
   };
-  const emit = (record, value) => { if (record.active) record.callback(value); };
-  const end = node => node.callbacks.onAnimationEnd?.({ type: "animationend", target: node, currentTarget: node });
+  const emit = (record, value) => (record.emit ?? record.trigger)(value);
+  const end = node => h.dispatch(node, "AnimationEnd");
   const flush = () => { clock.frame(); clock.advance(0); };
   const active = records => records.filter(record => record.active).length;
   return { h, mod, clock, busy, traps, locks, layers, portals, geometry, root, send, emit, end, flush, active,
@@ -393,22 +283,22 @@ test("tooltip focus causes, caller veto and escape policy", async t => {
   assert.equal(h.byTestId("surface"), undefined, "blur cancels a pending open");
   mod.setCancel(true);
   const entered = send("trigger", "onPointerEnter", { position: { x: 0, y: 0 }, pointerKind: "mouse" });
-  assert.equal(entered.prevented, true);
+  assert.equal(entered.defaultPrevented, true);
   assert.equal(h.byTestId("surface"), undefined, "caller preventDefault vetoes hover opening");
   assert.equal(clock.timers.size, 0);
   const focused = send("trigger", "onFocus", { cause: "keyboard" });
-  assert.equal(focused.prevented, true);
+  assert.equal(focused.defaultPrevented, true);
   assert.equal(h.byTestId("surface"), undefined, "caller preventDefault vetoes focus opening");
   assert.ok(mod.log.calls.includes("trigger:enter") && mod.log.calls.includes("trigger:focus"),
     "caller handlers still run before the veto");
   mod.setCancel(false);
   const closedEscape = send("trigger", "onKeyDown", { key: "Escape" });
-  assert.equal(closedEscape.stopped, false, "closed trigger must not stop Escape");
+  assert.equal(closedEscape.propagationStopped, false, "closed trigger must not stop Escape");
   send("trigger", "onPointerEnter", { position: { x: 0, y: 0 }, pointerKind: "mouse" });
   clock.advance(100);
   assert.ok(h.byTestId("surface"));
   const openEscape = send("trigger", "onKeyDown", { key: "Escape" });
-  assert.equal(openEscape.stopped, true, "open trigger stops Escape");
+  assert.equal(openEscape.propagationStopped, true, "open trigger stops Escape");
   assert.equal(h.byTestId("surface").props.get("data-state"), "closed");
   flush();
   assert.equal(h.byTestId("surface"), undefined);

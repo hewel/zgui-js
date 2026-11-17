@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { createHost, moduleFor } from "./native-fixture.mjs";
+import { createClock, createHost, moduleFor } from "./native-fixture.mjs";
 
 const fixture = `
 import { Show, createSignal, onCleanup, onMount, renderApp } from "@hewel/zgui";
@@ -77,106 +77,13 @@ export function mountCancelled(root: NativeNode) {
 const textOf = current =>
   current.tag === "#text" ? current.props.get("text") ?? "" : current.children.map(textOf).join("");
 
-function fakeClock(t) {
-  let now = 0;
-  let nextId = 0;
-  const timers = new Map();
-  const frames = new Map();
-  t.mock.method(globalThis, "setTimeout", (callback, delay = 0) => {
-    const id = ++nextId;
-    timers.set(id, { at: now + delay, callback });
-    return id;
-  });
-  t.mock.method(globalThis, "clearTimeout", id => { timers.delete(id); });
-  const previousFrame = Object.getOwnPropertyDescriptor(globalThis, "requestAnimationFrame");
-  const previousCancel = Object.getOwnPropertyDescriptor(globalThis, "cancelAnimationFrame");
-  globalThis.requestAnimationFrame = callback => {
-    const id = ++nextId;
-    frames.set(id, callback);
-    return id;
-  };
-  globalThis.cancelAnimationFrame = id => { frames.delete(id); };
-  t.after(() => {
-    if (previousFrame) Object.defineProperty(globalThis, "requestAnimationFrame", previousFrame);
-    else delete globalThis.requestAnimationFrame;
-    if (previousCancel) Object.defineProperty(globalThis, "cancelAnimationFrame", previousCancel);
-    else delete globalThis.cancelAnimationFrame;
-  });
-  const advance = ms => {
-    const target = now + ms;
-    for (;;) {
-      let earliest;
-      for (const [timerId, timer] of timers) {
-        if (timer.at <= target && (!earliest || timer.at < earliest.timer.at)) earliest = { timerId, timer };
-      }
-      if (!earliest) break;
-      timers.delete(earliest.timerId);
-      now = earliest.timer.at;
-      earliest.timer.callback();
-    }
-    now = target;
-  };
-  const frame = () => {
-    const due = [...frames.entries()];
-    for (const [timerId] of due) frames.delete(timerId);
-    for (const [, callback] of due) callback(now);
-  };
-  return { advance, frame, timers, frames };
-}
-
 async function mounted(t, mountName = "mount") {
-  const busy = new Map();
-  const traps = [];
-  const locks = [];
-  const layers = [];
-  const portals = [];
   const h = createHost();
-  h.host.createPortal = layer => {
-    const node = h.makeNode("portal");
-    portals.push({ layer, node });
-    return node;
-  };
-  h.host.isAnimating = node => busy.get(node) ?? false;
-  h.host.trapFocus = (node, wrap, autoFocus, restore) => {
-    const record = { node, wrap, autoFocus, restore, active: true, disposals: 0 };
-    traps.push(record);
-    let disposed = false;
-    return () => {
-      if (disposed) return;
-      disposed = true;
-      record.disposals += 1;
-      record.active = false;
-    };
-  };
-  h.host.lockScroll = node => {
-    const record = { node, active: true, disposals: 0 };
-    locks.push(record);
-    let disposed = false;
-    return () => {
-      if (disposed) return;
-      disposed = true;
-      record.disposals += 1;
-      record.active = false;
-    };
-  };
-  h.host.registerDismissLayer = (node, callback, options) => {
-    const record = { node, callback, options, active: true, disposals: 0 };
-    layers.push(record);
-    let disposed = false;
-    return {
-      update: options => { record.options = options; },
-      dispose: () => {
-        if (disposed) return;
-        disposed = true;
-        record.disposals += 1;
-        record.active = false;
-      },
-    };
-  };
+  const { animating: busy, traps, locks, layers, portals } = h;
   assert.equal(globalThis.__zgui, undefined);
   const mod = await moduleFor(t, fixture);
   assert.equal(portals.length, 0, "module import must not allocate native nodes");
-  const clock = fakeClock(t);
+  const clock = createClock(t, h);
   let dispose;
   t.after(() => { try { dispose?.(); } finally { delete globalThis.__zgui; } });
   globalThis.__zgui = h.host;
@@ -185,11 +92,9 @@ async function mounted(t, mountName = "mount") {
   const click = testId => {
     const node = h.byTestId(testId);
     assert.ok(node, `missing node ${testId}`);
-    let prevented = false;
-    node.callbacks.onClick?.({ target: node, currentTarget: node, preventDefault() { prevented = true; } });
-    return prevented;
+    return h.dispatch(node, "Click").defaultPrevented;
   };
-  const end = node => node.callbacks.onAnimationEnd?.({ type: "animationend", target: node, currentTarget: node });
+  const end = node => h.dispatch(node, "AnimationEnd");
   const flush = () => { clock.frame(); clock.advance(0); };
   const active = records => records.filter(record => record.active).length;
   const settled = () => {

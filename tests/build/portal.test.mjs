@@ -37,13 +37,8 @@ const textOf = current =>
   current.tag === "#text" ? current.props.get("text") ?? "" : current.children.map(textOf).join("");
 
 async function mounted(t, source) {
-  const layers = [];
   const harness = createHost();
-  harness.host.createPortal = layer => {
-    const node = harness.makeNode("portal");
-    layers.push({ layer, node });
-    return node;
-  };
+  const layers = harness.portals;
   assert.equal(globalThis.__zgui, undefined);
   const mod = await moduleFor(t, source);
   assert.equal(layers.length, 0, "module import must not allocate native nodes");
@@ -63,7 +58,7 @@ test("portal mounts children on the requested band and keeps context", async t =
   assert.ok(counter, "portal content should be attached");
   assert.equal(textOf(counter), "kept:0");
 
-  counter.callbacks.onClick();
+  harness.dispatch(counter, "Click");
   assert.equal(textOf(counter), "kept:1");
 
   mod.toggle();

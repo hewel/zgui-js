@@ -4,57 +4,54 @@ import { createHost, moduleFor } from "./native-fixture.mjs";
 
 const fixture = `
 import { renderApp, getWindowRect, getTextContent, precedes } from "@hewel/zgui";
-export function mount(root) {
+export let first, second;
+export function mount(root, configure) {
   return renderApp(() => {
-    const first = <box />;
-    const second = <box />;
+    first = <box><text>{"  é𐐷"}</text></box>;
+    second = <box />;
+    configure?.(first, second);
     globalThis.__seen.rect = getWindowRect(first);
     globalThis.__seen.missing = getWindowRect(second);
     globalThis.__seen.text = getTextContent(first);
-    globalThis.__seen.ordered = precedes(first, second);
-    globalThis.__seen.reverse = precedes(second, first);
-    globalThis.__seen.self = precedes(first, first);
     return <column>{first}{second}</column>;
   }, root);
+}
+export function checkOrder() {
+  return {
+    ordered: precedes(first, second),
+    reverse: precedes(second, first),
+    self: precedes(first, first),
+  };
 }
 `;
 
 test("node queries resolve the host lazily and forward native snapshots", async t => {
   const harness = createHost();
   const rect = { x: 10, y: 5, width: 20, height: 8 };
-  const calls = { rect: [], order: [], text: [] };
-  harness.host.getWindowRect = node => {
-    calls.rect.push(node);
-    return calls.rect.length === 1 ? rect : null;
-  };
-  harness.host.getTextContent = node => {
-    calls.text.push(node);
-    return "  é𐐷";
-  };
-  harness.host.precedes = (first, second) => {
-    calls.order.push([first, second]);
-    return calls.order.length === 1;
-  };
   assert.equal(globalThis.__zgui, undefined);
   const mod = await moduleFor(t, fixture);
+  assert.equal(harness.queries.rect.length, 0);
   let dispose;
   t.after(() => { try { dispose?.(); } finally { delete globalThis.__zgui; delete globalThis.__seen; } });
   globalThis.__zgui = harness.host;
   globalThis.__seen = {};
   const root = harness.makeNode("root");
-  dispose = mod.mount(root);
+  dispose = mod.mount(root, firstNode => {
+    harness.rects.set(firstNode, rect);
+  });
 
   const column = root.children[0];
   const [first, second] = column.children;
+  const order = mod.checkOrder();
   assert.equal(globalThis.__seen.rect, rect, "the host answer is passed through, not rebuilt");
   assert.equal(globalThis.__seen.missing, null);
   assert.equal(globalThis.__seen.text, "  é𐐷", "the text snapshot is passed through exactly");
-  assert.equal(globalThis.__seen.ordered, true);
-  assert.equal(globalThis.__seen.reverse, false);
-  assert.equal(globalThis.__seen.self, false);
-  assert.deepEqual(calls.rect, [first, second]);
-  assert.deepEqual(calls.text, [first]);
-  assert.deepEqual(calls.order, [[first, second], [second, first], [first, first]]);
+  assert.equal(order.ordered, true);
+  assert.equal(order.reverse, false);
+  assert.equal(order.self, false);
+  assert.deepEqual(harness.queries.rect, [first, second]);
+  assert.deepEqual(harness.queries.text, [first]);
+  assert.deepEqual(harness.queries.precedes, [[first, second], [second, first], [first, first]]);
 });
 
 const textFixture = `

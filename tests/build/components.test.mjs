@@ -141,7 +141,7 @@ test("reactive props keep native identity and shared sheets deduplicate", async 
   assert.match(badge.props.get("class"), /\bzui-badge--success\b/);
 
   assert.equal(typeof button.callbacks.onClick, "function");
-  button.callbacks.onClick();
+  harness.dispatch(button, "Click");
   assert.equal(mod.api.clicks(), 1);
 
   const roleButton = harness.byTestId("role-button");

@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { createHost, moduleFor } from "./native-fixture.mjs";
 
 const fixture = `
-import { For, onCleanup, renderApp } from "@hewel/zgui";
+import { For, Show, createSignal, onCleanup, renderApp } from "@hewel/zgui";
 import { render } from "@hewel/zgui/renderer";
 import type { NativeNode } from "@hewel/zgui";
 import { RadioGroup, RadioGroupItem } from "@hewel/zgui/components";
@@ -11,6 +11,7 @@ import { RadioGroup, RadioGroupItem } from "@hewel/zgui/components";
 export let cleanups = 0;
 
 export function mount(root: NativeNode, mode: "app" | "raw", tail: number) {
+  cleanups = 0;
   const renderRoot = mode === "app" ? renderApp : render;
   return renderRoot(() => <column>
     <RadioGroup defaultValue="b"><For each={["a", "b", "c"]}>{value => {
@@ -21,7 +22,17 @@ export function mount(root: NativeNode, mode: "app" | "raw", tail: number) {
   </column>, root);
 }
 
+const [shown, setShown] = createSignal(true);
+export function hide() { setShown(false); }
+export function mountConditional(root: NativeNode, onDetach?: (node: NativeNode) => void) {
+  setShown(true);
+  return renderApp(() => <column><Show when={shown()}>
+    <box testId="ephemeral" onClick={() => {}} ref={node => onCleanup(() => onDetach?.(node))} />
+  </Show></column>, root);
+}
+
 export function mountFailing(root: NativeNode, cleanupError?: string) {
+  cleanups = 0;
   return renderApp(() => {
     onCleanup(() => { if (cleanupError) throw new Error(cleanupError); cleanups++; });
     throw new Error("mount failed");
@@ -43,23 +54,13 @@ const tabIndex = (harness, testId) => harness.byTestId(testId)?.props.get("tabIn
 for (const mode of ["app", "raw"]) {
   test(`${mode} disposal does not re-register events on a stopping session`, async t => {
     const { mod, harness, root } = await mounted(t);
-    const registrationsAfterStop = [];
-    let stopping = false;
-    const original = harness.host.setProperty;
-    harness.host.setProperty = (node, name, value, previous) => {
-      if (stopping && name.startsWith("on") && value != null) {
-        registrationsAfterStop.push(name);
-        throw new ReferenceError("native session is stopping");
-      }
-      return original(node, name, value, previous);
-    };
     const dispose = mod.mount(root, mode, 0);
     assert.equal(tabIndex(harness, "b"), 0);
     assert.equal(tabIndex(harness, "a"), -1);
     assert.equal(tabIndex(harness, "c"), -1);
-    stopping = true;
+    harness.beginStop();
     assert.doesNotThrow(() => dispose());
-    assert.deepEqual(registrationsAfterStop, []);
+    assert.deepEqual(harness.registrationsAfterStop, []);
     assert.equal(mod.cleanups, 3);
     assert.doesNotThrow(() => dispose());
     assert.equal(mod.cleanups, 3);
@@ -71,15 +72,12 @@ for (const mode of ["app", "raw"]) {
     const runs = [];
     for (const tail of [0, 100]) {
       const { mod, harness, root } = await mounted(t);
-      let precedesCalls = 0;
-      const original = harness.host.precedes;
-      harness.host.precedes = (first, second) => { precedesCalls++; return original(first, second); };
       const dispose = mod.mount(root, mode, tail);
       t.after(() => {
         globalThis.__zgui = harness.host;
         try { dispose(); } finally { harness.host.clearRoot(root); delete globalThis.__zgui; }
       });
-      runs.push(precedesCalls);
+      runs.push(harness.queries.precedes.length);
       assert.equal(tabIndex(harness, "b"), 0);
       assert.equal(tabIndex(harness, "a"), -1);
       assert.equal(tabIndex(harness, "c"), -1);
@@ -90,23 +88,47 @@ for (const mode of ["app", "raw"]) {
 
 test("renderApp cleans up and preserves the original mount error", async t => {
   const { mod, harness, root } = await mounted(t);
-  let clearCalls = 0;
-  const original = harness.host.clearRoot;
-  harness.host.clearRoot = target => { clearCalls++; return original(target); };
   assert.throws(() => mod.mountFailing(root), (error) => error instanceof Error && error.message === "mount failed");
   assert.equal(mod.cleanups, 1, "cleanup ran exactly once");
-  assert.equal(clearCalls, 1, "clearRoot ran on mount failure");
+  assert.equal(harness.clearCalls.length, 1, "clearRoot ran on mount failure");
 });
 
 test("renderApp still clears the root when cleanup throws", async t => {
   const { mod, harness, root } = await mounted(t);
-  let clearCalls = 0;
-  const original = harness.host.clearRoot;
-  harness.host.clearRoot = target => { clearCalls++; return original(target); };
   assert.throws(() => mod.mountFailing(root, "cleanup failed"), (error) =>
     error instanceof AggregateError &&
     error.errors.length === 2 &&
     error.errors[0].message === "mount failed" &&
     error.errors[1].message === "cleanup failed");
-  assert.equal(clearCalls, 1, "clearRoot still attempted");
+  assert.equal(harness.clearCalls.length, 1, "clearRoot still attempted");
+});
+
+test("detached node allows same-turn cleanup but invalidates after the Bridge turn ends", async t => {
+  const { mod, harness, root } = await mounted(t);
+  let cleanedInTurn = false;
+  const dispose = mod.mountConditional(root, node => {
+    harness.host.setProperty(node, "data-cleaned", true);
+    cleanedInTurn = node.props.get("data-cleaned") === true;
+  });
+  try {
+    const captured = harness.byTestId("ephemeral");
+    assert.ok(captured);
+    harness.runTurn(() => mod.hide());
+    assert.equal(cleanedInTurn, true, "same-turn cleanup succeeds before the Bridge turn ends");
+    assert.equal(harness.byTestId("ephemeral"), undefined);
+    assert.throws(() => harness.host.setProperty(captured, "data-stale", true), TypeError);
+  } finally {
+    globalThis.__zgui = harness.host;
+    dispose();
+  }
+});
+
+test("beginStop rejects new nodes and new event registrations with ReferenceError while allowing disposal", async t => {
+  const { mod, harness, root } = await mounted(t);
+  const dispose = mod.mount(root, "app", 0);
+  harness.beginStop();
+  assert.throws(() => harness.host.createElement("box"), ReferenceError);
+  assert.throws(() => harness.host.setProperty(root, "onClick", () => {}), ReferenceError);
+  assert.doesNotThrow(() => dispose());
+  assert.equal(mod.cleanups, 3);
 });

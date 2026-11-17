@@ -27,19 +27,8 @@ export function mount(root: NativeNode) {
 `;
 
 async function mounted(t) {
-  const registrations = [];
   const harness = createHost();
-  harness.host.trapFocus = (node, wrap, autoFocus, restore) => {
-    const record = { node, wrap, autoFocus, restore, active: true, disposals: 0 };
-    registrations.push(record);
-    let disposed = false;
-    return () => {
-      if (disposed) return;
-      disposed = true;
-      record.disposals += 1;
-      record.active = false;
-    };
-  };
+  const registrations = harness.traps;
   assert.equal(globalThis.__zgui, undefined);
   const mod = await moduleFor(t, fixture);
   assert.equal(registrations.length, 0, "module import must not register native traps");

@@ -93,13 +93,6 @@ export function mountWithChildren(root: NativeNode, name: string, child: () => N
 }
 `;
 
-const click = () => ({
-  type: "click",
-  preventDefault() {},
-  stopPropagation() {},
-  stopImmediatePropagation() {},
-});
-
 async function mounted(t) {
   const mod = await moduleFor(t, fixture);
   const harness = createHost();
@@ -223,7 +216,7 @@ test("input group forwards editing and keeps frame state independent of the fiel
   assert.equal(area.props.get("readOnly"), true);
   assert.match(area.props.get("class"), /zui-input-group__area/);
 
-  input.callbacks.onInput({ type: "input", value: "gro" });
+  harness.dispatch(input, "Input", { value: "gro" });
   assert.deepEqual(mod.api.log.inputs, ["gro"]);
   assert.deepEqual(mod.api.log.values, ["gro"]);
   assert.equal(input.props.get("value"), "gro");
@@ -232,7 +225,7 @@ test("input group forwards editing and keeps frame state independent of the fiel
   assert.equal(harness.byTestId("grouped-input"), input);
   assert.equal(mod.api.log.values.length, 1);
 
-  button.callbacks.onClick(click());
+  harness.dispatch(button, "Click");
   assert.equal(mod.api.log.buttons, 1);
   assert.equal(button.props.get("role"), "button");
   assert.match(button.props.get("class"), /zui-input-group__button/);

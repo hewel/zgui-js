@@ -31,22 +31,8 @@ export function mount(root: NativeNode) {
 `;
 
 async function mounted(t) {
-  const registrations = [];
   const harness = createHost();
-  harness.host.registerDismissLayer = (node, callback, options) => {
-    const record = { node, callback, options, updates: [], disposals: 0, active: true };
-    registrations.push(record);
-    let disposed = false;
-    return {
-      update: options => { record.updates.push(options); },
-      dispose: () => {
-        if (disposed) return;
-        disposed = true;
-        record.disposals += 1;
-        record.active = false;
-      },
-    };
-  };
+  const registrations = harness.layers;
   assert.equal(globalThis.__zgui, undefined);
   const mod = await moduleFor(t, fixture);
   assert.equal(registrations.length, 0, "module import must not register native dismiss layers");

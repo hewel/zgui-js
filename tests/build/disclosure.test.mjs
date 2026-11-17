@@ -267,23 +267,12 @@ function cleanup(t, harness, dispose) {
 async function mounted(t, name, ...args) {
   const mod = await moduleFor(t, fixture);
   const harness = createHost();
-  const registrations = [];
-  harness.host.observeGeometry = (node, kind, callback) => {
-    const record = { node, kind, callback, active: true, disposals: 0 };
-    registrations.push(record);
-    let disposed = false;
-    return () => {
-      if (disposed) return;
-      disposed = true;
-      record.disposals += 1;
-      record.active = false;
-    };
-  };
+  const registrations = harness.geometry;
   globalThis.__zgui = harness.host;
   const root = harness.makeNode("root");
   const dispose = mod[name](root, ...args);
   cleanup(t, harness, dispose);
-  const emit = (record, value) => { if (record.active) record.callback(value); };
+  const emit = (record, value) => record.emit(value);
   const geometryOf = (node, kind) => registrations.find(r => r.node === node && r.kind === kind);
   return { mod, harness, registrations, emit, geometryOf };
 }
@@ -292,32 +281,10 @@ const prop = (harness, testId, name) => harness.byTestId(testId)?.props.get(name
 const node = (harness, testId) => harness.byTestId(testId);
 const textOf = current =>
   current.tag === "#text" ? current.props.get("text") ?? "" : current.children.map(textOf).join("");
-const click = target => ({
-  type: "click", target, prevented: 0, stopped: 0,
-  preventDefault() { this.prevented = (this.prevented ?? 0) + 1; },
-  stopPropagation() { this.stopped = (this.stopped ?? 0) + 1; },
-  stopImmediatePropagation() {},
-});
-const key = (target, name) => ({
-  type: "keydown", key: name, keyWithoutModifiers: name, target, prevented: 0, stopped: 0,
-  modifiers: { shift: false, control: false, alt: false, meta: false },
-  preventDefault() { this.prevented = (this.prevented ?? 0) + 1; },
-  stopPropagation() { this.stopped = (this.stopped ?? 0) + 1; },
-  stopImmediatePropagation() {},
-});
-const focusEvent = target => ({
-  type: "focusin", target, cause: "program",
-  preventDefault() { this.prevented = (this.prevented ?? 0) + 1; },
-  stopPropagation() {}, stopImmediatePropagation() {},
-});
-const focusIn = (harness, testId) => {
-  const current = node(harness, testId);
-  current.callbacks.onFocus(focusEvent(current));
-};
-const press = (harness, testId) => {
-  const current = node(harness, testId);
-  current.callbacks.onClick(click(current));
-};
+const focusIn = (harness, testId) => harness.dispatch(node(harness, testId), "FocusIn", { cause: "program" });
+const press = (harness, testId) => harness.dispatch(node(harness, testId), "Click");
+const sendKey = (harness, testId, keyName) =>
+  harness.dispatch(node(harness, testId), "KeyDown", { key: keyName, keyWithoutModifiers: keyName });
 
 test("collapsible keeps mounted children stable across close and open", async t => {
   const { mod, harness, registrations } = await mounted(t, "mountCollapsible");
@@ -466,13 +433,10 @@ test("closing without a trigger restores focus to the root", async t => {
 
 test("closing in onBlur does not steal focus from the destination", async t => {
   const { harness } = await mounted(t, "mountCloseOnBlur");
-  const content = node(harness, "blur-content");
   const child = node(harness, "blur-child");
   const outside = node(harness, "blur-outside");
-  harness.focused.current = child;
-  content.callbacks.onFocus(focusEvent(child));
-  harness.focused.current = outside;
-  content.callbacks.onBlur({ ...focusEvent(child), type: "focusout" });
+  harness.host.focus(child);
+  harness.host.focus(outside);
   assert.equal(prop(harness, "blur-trigger", "expanded"), false);
   assert.equal(harness.focused.current, outside);
 });
@@ -480,9 +444,8 @@ test("closing in onBlur does not steal focus from the destination", async t => {
 test("closing with a disabled trigger restores focus to the root", async t => {
   const { mod, harness } = await mounted(t, "mountControlledCollapsible");
   mod.controlled.setControlledOpen(true);
-  const content = node(harness, "col2-content");
   const child = node(harness, "col2-count");
-  content.callbacks.onFocus(focusEvent(child));
+  harness.host.focus(child);
   mod.collapsible.setTrigDisabled(true);
   mod.controlled.setControlledOpen(false);
   assert.equal(harness.focused.current, node(harness, "col2"));
@@ -492,9 +455,8 @@ test("closing with a disabled trigger restores focus to the root", async t => {
 test("closing with a disabled root restores focus to the root", async t => {
   const { mod, harness } = await mounted(t, "mountControlledCollapsible");
   mod.controlled.setControlledOpen(true);
-  const content = node(harness, "col2-content");
   const child = node(harness, "col2-count");
-  content.callbacks.onFocus(focusEvent(child));
+  harness.host.focus(child);
   mod.collapsible.setColDisabled(true);
   mod.controlled.setControlledOpen(false);
   assert.equal(harness.focused.current, node(harness, "col2"));
@@ -526,7 +488,6 @@ test("unmount cancels observations and remount registers fresh ones", async t =>
 
 test("accordion arrows and Home/End move focus without changing expansion", async t => {
   const { mod, harness } = await mounted(t, "mountAccordion");
-  const acc = node(harness, "acc");
   assert.equal(prop(harness, "acc", "role"), "group");
   assert.equal(prop(harness, "item-b", "data-state"), "open");
   assert.equal(prop(harness, "item-a", "data-state"), "closed");
@@ -536,22 +497,22 @@ test("accordion arrows and Home/End move focus without changing expansion", asyn
   focusIn(harness, "trig-b");
   assert.equal(prop(harness, "trig-b", "tabIndex"), 0, "focus activates the roving item");
   assert.equal(prop(harness, "trig-a", "tabIndex"), -1);
-  acc.callbacks.onKeyDown(key(node(harness, "trig-b"), "ArrowDown"));
+  sendKey(harness, "trig-b", "ArrowDown");
   assert.equal(harness.focused.current, node(harness, "trig-c"));
-  acc.callbacks.onKeyDown(key(node(harness, "trig-c"), "ArrowDown"));
+  sendKey(harness, "trig-c", "ArrowDown");
   assert.equal(harness.focused.current, node(harness, "trig-a"), "wraps to first");
-  acc.callbacks.onKeyDown(key(node(harness, "trig-a"), "End"));
+  sendKey(harness, "trig-a", "End");
   assert.equal(harness.focused.current, node(harness, "trig-c"));
-  acc.callbacks.onKeyDown(key(node(harness, "trig-c"), "Home"));
+  sendKey(harness, "trig-c", "Home");
   assert.equal(harness.focused.current, node(harness, "trig-a"));
-  acc.callbacks.onKeyDown(key(node(harness, "trig-a"), "ArrowUp"));
+  sendKey(harness, "trig-a", "ArrowUp");
   assert.equal(harness.focused.current, node(harness, "trig-c"), "up wraps to last");
   assert.equal(prop(harness, "item-b", "data-state"), "open", "navigation never expands");
   assert.equal(prop(harness, "item-a", "data-state"), "closed");
   assert.deepEqual(mod.log.changes, []);
 
   mod.accordion.setBDisabled(true);
-  acc.callbacks.onKeyDown(key(node(harness, "trig-a"), "ArrowDown"));
+  sendKey(harness, "trig-a", "ArrowDown");
   assert.equal(harness.focused.current, node(harness, "trig-c"), "skips disabled item");
 });
 
@@ -590,9 +551,8 @@ test("accordion single clicks, collapsible policy, and disabled gating", async t
 
 test("accordion cancelled keydown does not navigate", async t => {
   const { mod, harness } = await mounted(t, "mountAccordion");
-  const acc = node(harness, "acc");
   mod.accordion.setCancelKeys(true);
-  acc.callbacks.onKeyDown(key(node(harness, "trig-a"), "ArrowDown"));
+  sendKey(harness, "trig-a", "ArrowDown");
   assert.notEqual(harness.focused.current, node(harness, "trig-b"), "cancelled key ignored");
 });
 
@@ -627,19 +587,18 @@ test("nested accordion state and focus stay isolated", async t => {
   assert.deepEqual(mod.log.changes, [["inner", "i2"], ["outer", "o2"]],
     "outer toggles independently of inner");
   assert.equal(prop(harness, "o-trig-1", "expanded"), false, "single mode replaced outer");
-  const outerAcc = node(harness, "outer-acc");
   const bodyDescendant = node(harness, "i-cont-1");
-  outerAcc.callbacks.onKeyDown(key(bodyDescendant, "ArrowDown"));
+  harness.dispatch(bodyDescendant, "KeyDown", { key: "ArrowDown", keyWithoutModifiers: "ArrowDown" });
   assert.notEqual(harness.focused.current, node(harness, "o-trig-2"),
     "body keydown does not navigate headings");
-  const innerAcc = node(harness, "inner-acc");
-  innerAcc.callbacks.onKeyDown(key(node(harness, "i-trig-1"), "ArrowDown"));
+  press(harness, "o-trig-1");
+  assert.equal(prop(harness, "o-trig-1", "expanded"), true);
+  sendKey(harness, "i-trig-1", "ArrowDown");
   assert.equal(harness.focused.current, node(harness, "i-trig-2"), "inner roving works alone");
 });
 
 test("keyed reorder preserves nodes and drives Home/End order", async t => {
   const { mod, harness } = await mounted(t, "mountAccordionReorder");
-  const acc = node(harness, "r-acc");
   const trigA = node(harness, "r-trig-a");
   const trigB = node(harness, "r-trig-b");
   const countB = node(harness, "r-count-b");
@@ -653,7 +612,7 @@ test("keyed reorder preserves nodes and drives Home/End order", async t => {
   assert.equal(node(harness, "r-count-b"), countB, "counter survives reorder");
   assert.equal(textOf(countB), "n1", "counter state survives reorder");
   assert.deepEqual(mod.log.cleans, [], "nothing disposed on reorder");
-  acc.callbacks.onKeyDown(key(node(harness, "r-trig-b"), "Home"));
+  sendKey(harness, "r-trig-b", "Home");
   assert.equal(harness.focused.current, node(harness, "r-trig-c"), "Home follows native order");
 
   mod.reorder.setOrder(["a", "c"]);
@@ -721,7 +680,7 @@ test("styled trigger in a nested collapsible stays outside the outer roving grou
   assert.equal(prop(harness, "styled-body", "ariaHidden"), true);
   assert.equal(prop(harness, "scoped-a", "expanded"), true);
   assert.deepEqual(mod.log.changes, []);
-  node(harness, "scoped-acc").callbacks.onKeyDown(key(node(harness, "scoped-a"), "ArrowDown"));
+  sendKey(harness, "scoped-a", "ArrowDown");
   assert.equal(harness.focused.current, node(harness, "scoped-b"));
   assert.equal(prop(harness, "styled-inner", "tabIndex"), 0);
 });
@@ -729,7 +688,6 @@ test("styled trigger in a nested collapsible stays outside the outer roving grou
 test("invalid selection, item value, and heading level throw", async t => {
   const mod = await moduleFor(t, fixture);
   const harness = createHost();
-  harness.host.observeGeometry = () => () => {};
   globalThis.__zgui = harness.host;
   t.after(() => { delete globalThis.__zgui; });
   assert.throws(() => mod.mountInvalid(harness.makeNode("root"), "selection"), TypeError);

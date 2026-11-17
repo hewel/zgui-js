@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { createHost, moduleFor } from "./native-fixture.mjs";
+import { createClock, createHost, moduleFor } from "./native-fixture.mjs";
 
 const internal = fileURLToPath(new URL("../../packages/ui/src/components/presence.ts", import.meta.url));
 const fixture = `
@@ -30,65 +30,12 @@ export function mount(root: NativeNode) {
 const textOf = current =>
   current.tag === "#text" ? current.props.get("text") ?? "" : current.children.map(textOf).join("");
 
-function fakeClock(t) {
-  let now = 0;
-  let nextId = 0;
-  const timers = new Map();
-  const frames = new Map();
-  t.mock.method(globalThis, "setTimeout", (callback, delay = 0) => {
-    const id = ++nextId;
-    timers.set(id, { at: now + delay, callback });
-    return id;
-  });
-  t.mock.method(globalThis, "clearTimeout", id => { timers.delete(id); });
-  const previousFrame = Object.getOwnPropertyDescriptor(globalThis, "requestAnimationFrame");
-  const previousCancel = Object.getOwnPropertyDescriptor(globalThis, "cancelAnimationFrame");
-  globalThis.requestAnimationFrame = callback => {
-    const id = ++nextId;
-    frames.set(id, callback);
-    return id;
-  };
-  globalThis.cancelAnimationFrame = id => { frames.delete(id); };
-  t.after(() => {
-    if (previousFrame) Object.defineProperty(globalThis, "requestAnimationFrame", previousFrame);
-    else delete globalThis.requestAnimationFrame;
-    if (previousCancel) Object.defineProperty(globalThis, "cancelAnimationFrame", previousCancel);
-    else delete globalThis.cancelAnimationFrame;
-  });
-  const advance = ms => {
-    const target = now + ms;
-    for (;;) {
-      let earliest;
-      for (const [timerId, timer] of timers) {
-        if (timer.at <= target && (!earliest || timer.at < earliest.timer.at)) earliest = { timerId, timer };
-      }
-      if (!earliest) break;
-      timers.delete(earliest.timerId);
-      now = earliest.timer.at;
-      earliest.timer.callback();
-    }
-    now = target;
-  };
-  const frame = () => {
-    const due = [...frames.entries()];
-    for (const [timerId] of due) frames.delete(timerId);
-    for (const [, callback] of due) callback(now);
-  };
-  return { advance, frame, timers, frames };
-}
-
 async function mounted(t) {
-  const queries = [];
-  const busy = new Map();
   const harness = createHost();
-  harness.host.isAnimating = node => {
-    if (harness.byTestId("surface") !== node) throw Error("invalid node read");
-    queries.push(node);
-    return busy.get(node) ?? false;
-  };
+  const { animating: busy, animatingQueries: queries } = harness;
   assert.equal(globalThis.__zgui, undefined);
   const mod = await moduleFor(t, fixture);
-  const clock = fakeClock(t);
+  const clock = createClock(t, harness);
   let dispose;
   t.after(() => { try { dispose?.(); } finally { delete globalThis.__zgui; } });
   globalThis.__zgui = harness.host;
@@ -97,7 +44,7 @@ async function mounted(t) {
   const surface = () => harness.byTestId("surface");
   const state = () => surface()?.props.get("data-state");
   const counter = () => textOf(harness.byTestId("counter"));
-  const event = (target, type) => surface().callbacks[type]({ type, target, currentTarget: surface() });
+  const event = (target, type) => harness.dispatch(target, type);
   return { clock, queries, busy, harness, mod, root, surface, state, counter, event,
     finish: () => { const end = dispose; dispose = undefined; end?.(); } };
 }
@@ -140,7 +87,7 @@ test("presence mounts on open, defers its exit check past a styled frame and rem
 });
 
 test("a busy surface is retained until own lifecycle event reports all motion gone", async t => {
-  const { clock, queries, busy, mod, surface, event } = await mounted(t);
+  const { clock, queries, busy, mod, surface, event, harness } = await mounted(t);
   mod.setOpen(true);
   const current = surface();
   busy.set(current, true);
@@ -154,10 +101,10 @@ test("a busy surface is retained until own lifecycle event reports all motion go
   assert.equal(queries.length, 2);
   busy.set(current, false);
   const counter = surface().children[0];
-  surface().callbacks.onAnimationEnd({ type: "animationend", target: counter, currentTarget: current });
+  harness.dispatch(counter, "AnimationEnd");
   assert.equal(surface(), current, "a descendant's event does not own the exit");
   assert.equal(queries.length, 2, "descendant event must not query");
-  surface().callbacks.onTransitionCancel({ type: "transitioncancel", target: current, currentTarget: current });
+  harness.dispatch(current, "TransitionCancel");
   assert.equal(surface(), undefined);
   assert.equal(clock.frames.size, 0);
   assert.equal(clock.timers.size, 0);
@@ -165,9 +112,9 @@ test("a busy surface is retained until own lifecycle event reports all motion go
 });
 
 test("reopen cancels a queued exit and stale callbacks cannot close the new exit", async t => {
-  const { clock, queries, busy, mod, surface, state, counter } = await mounted(t);
+  const { clock, queries, busy, mod, surface, state, counter, harness } = await mounted(t);
   mod.setOpen(true);
-  surface().children[0].callbacks.onClick();
+  harness.dispatch(harness.byTestId("counter"), "Click");
   assert.equal(counter(), "1");
   mod.setOpen(false);
   const stale = [...clock.frames.values(), ...[...clock.timers.values()].map(timer => timer.callback)];

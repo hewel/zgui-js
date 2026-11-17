@@ -175,26 +175,6 @@ export function mountRadioChildren(root: NativeNode, child: () => NativeChild): 
 }
 `;
 
-const click = target => ({
-  type: "click", target, prevented: 0, stopped: 0,
-  preventDefault() { this.prevented = (this.prevented ?? 0) + 1; },
-  stopPropagation() { this.stopped = (this.stopped ?? 0) + 1; },
-  stopImmediatePropagation() {},
-});
-
-const key = (target, name) => ({
-  type: "keydown", key: name, keyWithoutModifiers: name, target, prevented: 0, stopped: 0,
-  modifiers: { shift: false, control: false, alt: false, meta: false },
-  preventDefault() { this.prevented = (this.prevented ?? 0) + 1; },
-  stopPropagation() { this.stopped = (this.stopped ?? 0) + 1; },
-  stopImmediatePropagation() {},
-});
-
-const focusEvent = target => ({
-  type: "focusin", target, cause: "program",
-  preventDefault() {}, stopPropagation() {}, stopImmediatePropagation() {},
-});
-
 function cleanup(t, harness, dispose) {
   t.after(() => {
     const previous = globalThis.__zgui;
@@ -220,6 +200,8 @@ async function mounted(t, mount, ...args) {
 const prop = (harness, testId, name) => harness.byTestId(testId)?.props.get(name);
 const tabIndex = (harness, testId) => prop(harness, testId, "tabIndex");
 const checked = (harness, testId) => prop(harness, testId, "checked");
+const sendKey = (harness, target, keyName) =>
+  harness.dispatch(target, "KeyDown", { key: keyName, keyWithoutModifiers: keyName });
 
 test("radio group selects on click and focus with roving tab stops and live order", async t => {
   const { mod, harness } = await mounted(t, "mountRadio");
@@ -238,55 +220,47 @@ test("radio group selects on click and focus with roving tab stops and live orde
 
   const b = harness.byTestId("rb");
   const c = harness.byTestId("rc");
-  const down = key(b, "ArrowDown");
-  group.callbacks.onKeyDown(down);
+  const down = sendKey(harness, b, "ArrowDown");
   assert.equal(harness.focused.current, c);
   assert.equal(harness.focused.reveal, true);
-  assert.equal(down.prevented, 1);
-  assert.equal(down.stopped, 1);
-  assert.equal(checked(harness, "rc"), false, "arrow navigation only focuses");
-
-  c.callbacks.onFocus(focusEvent(c));
-  assert.deepEqual(mod.api.log.radio, ["c"]);
+  assert.equal(down.defaultPrevented, true);
+  assert.equal(down.propagationStopped, true);
+  assert.deepEqual(mod.api.log.radio, ["c"], "arrow navigation focuses and activates via FocusIn");
   assert.equal(checked(harness, "rc"), true);
   assert.equal(tabIndex(harness, "rc"), 0);
 
-  c.callbacks.onClick(click(c));
-  c.callbacks.onClick(click(c));
+  harness.dispatch(c, "Click");
+  harness.dispatch(c, "Click");
   assert.deepEqual(mod.api.log.radio, ["c"], "repeating the selected item emits nothing");
 
-  const wrap = key(harness.byTestId("ra"), "ArrowUp");
-  group.callbacks.onKeyDown(wrap);
+  sendKey(harness, harness.byTestId("ra"), "ArrowUp");
   assert.equal(harness.focused.current, c, "arrow up from the first item wraps to the last");
 
-  harness.byTestId("ra").callbacks.onFocus(focusEvent(harness.byTestId("ra")));
-  const end = key(harness.byTestId("ra"), "End");
-  group.callbacks.onKeyDown(end);
+  harness.dispatch(harness.byTestId("ra"), "FocusIn");
+  sendKey(harness, harness.byTestId("ra"), "End");
   assert.equal(harness.focused.current, c);
-  const home = key(harness.byTestId("rc"), "Home");
-  group.callbacks.onKeyDown(home);
+  sendKey(harness, harness.byTestId("rc"), "Home");
   assert.equal(harness.focused.current, harness.byTestId("ra"));
 
   mod.controls.setCancelRadioKeys(true);
-  const blocked = key(harness.byTestId("ra"), "ArrowDown");
-  group.callbacks.onKeyDown(blocked);
+  sendKey(harness, harness.byTestId("ra"), "ArrowDown");
   assert.notEqual(harness.focused.current, harness.byTestId("rb"), "a caller-prevented key does not navigate");
   mod.controls.setCancelRadioKeys(false);
 
+  const countBeforeCancel = mod.api.log.radio.length;
   mod.controls.setCancelItemClick(true);
-  b.callbacks.onClick(click(b));
+  harness.dispatch(b, "Click");
   assert.notEqual(checked(harness, "rb"), true, "a caller-prevented click does not select");
-  assert.deepEqual(mod.api.log.radio, ["c", "a"], "prevented clicks emit nothing");
+  assert.equal(mod.api.log.radio.length, countBeforeCancel, "prevented clicks emit nothing");
 });
 
 test("radio orientation gates arrow axes", async t => {
   const { harness } = await mounted(t, "mountRadioOrientation", "horizontal");
-  const group = harness.byTestId("radio");
   const a = harness.byTestId("ra");
   harness.focused.current = null;
-  group.callbacks.onKeyDown(key(a, "ArrowDown"));
+  sendKey(harness, a, "ArrowDown");
   assert.equal(harness.focused.current, null, "vertical arrows are ignored horizontally");
-  group.callbacks.onKeyDown(key(a, "ArrowRight"));
+  sendKey(harness, a, "ArrowRight");
   assert.equal(harness.focused.current, harness.byTestId("rb"));
 
   const second = createHost();
@@ -295,14 +269,12 @@ test("radio orientation gates arrow axes", async t => {
   const root2 = second.makeNode("root");
   const dispose2 = mod2.mountRadioOrientation(root2, "both");
   cleanup(t, second, dispose2);
-  const group2 = second.byTestId("radio");
-  group2.callbacks.onKeyDown(key(second.byTestId("ra"), "ArrowDown"));
+  sendKey(second, second.byTestId("ra"), "ArrowDown");
   assert.equal(second.focused.current, second.byTestId("rb"), "both accepts every arrow");
 });
 
 test("disabled and removed radio items recover the tab stop and skip navigation", async t => {
   const { mod, harness } = await mounted(t, "mountRadio");
-  const group = harness.byTestId("radio");
   const a = harness.byTestId("ra");
   const b = harness.byTestId("rb");
   const c = harness.byTestId("rc");
@@ -312,29 +284,28 @@ test("disabled and removed radio items recover the tab stop and skip navigation"
   assert.equal(checked(harness, "rb"), true, "disabling does not clear its own checked flag");
   assert.equal(tabIndex(harness, "rb"), -1);
   assert.equal(tabIndex(harness, "ra"), 0, "the tab stop falls back to the first enabled item");
-  const skip = key(a, "ArrowDown");
-  group.callbacks.onKeyDown(skip);
-  assert.equal(harness.focused.current, c, "navigation skips disabled items");
-  b.callbacks.onClick(click(b));
+  harness.dispatch(b, "Click");
   assert.equal(checked(harness, "rb"), true);
   assert.deepEqual(mod.api.log.radio, [], "a disabled item cannot be chosen");
 
-  a.callbacks.onClick(click(a));
+  harness.dispatch(a, "Click");
   assert.deepEqual(mod.api.log.radio, ["a"]);
   assert.equal(checked(harness, "rb"), false, "the disabled item only stays checked until a new choice");
   mod.controls.setRadioDefault("c");
   assert.equal(checked(harness, "ra"), true, "defaultValue changes never reset owned state");
 
+  sendKey(harness, a, "ArrowDown");
+  assert.equal(harness.focused.current, c, "navigation skips disabled items");
+
   mod.controls.setDisableAll(true);
   assert.equal(tabIndex(harness, "ra"), -1);
   assert.equal(tabIndex(harness, "rc"), -1);
-  const stuck = key(a, "ArrowDown");
-  group.callbacks.onKeyDown(stuck);
-  assert.equal(stuck.prevented, 0, "a disabled group does not handle keys");
+  const stuck = sendKey(harness, a, "ArrowDown");
+  assert.equal(stuck.defaultPrevented, false, "a disabled group does not handle keys");
   mod.controls.setDisableAll(false);
   mod.controls.setDisableB(false);
 
-  c.callbacks.onClick(click(c));
+  harness.dispatch(c, "Click");
   mod.controls.setShowC(false);
   assert.equal(tabIndex(harness, "ra"), 0, "removing the active item recovers a surviving tab stop");
   const fresh = harness.byTestId("rc");
@@ -348,19 +319,18 @@ test("disabled and removed radio items recover the tab stop and skip navigation"
 test("controlled radio only changes when the caller echoes the value", async t => {
   const { mod, harness } = await mounted(t, "mountControlledRadio");
   const b = harness.byTestId("rb");
-  b.callbacks.onClick(click(b));
+  harness.dispatch(b, "Click");
   assert.deepEqual(mod.api.log.radio, ["b"]);
   assert.equal(checked(harness, "rb"), false, "controlled value stays until echoed");
   assert.equal(checked(harness, "ra"), true);
   mod.controls.setEchoRadio(true);
-  b.callbacks.onClick(click(b));
+  harness.dispatch(b, "Click");
   assert.deepEqual(mod.api.log.radio, ["b", "b"]);
   assert.equal(checked(harness, "rb"), true);
 });
 
 test("keyed reorder before first focus fixes the initial tab stop", async t => {
   const { mod, harness } = await mounted(t, "mountReorder");
-  const group = harness.byTestId("toggle");
   const ta = harness.byTestId("ta");
   assert.equal(prop(harness, "ta", "tabIndex"), 0);
   assert.equal(prop(harness, "tb", "tabIndex"), -1);
@@ -371,26 +341,26 @@ test("keyed reorder before first focus fixes the initial tab stop", async t => {
   assert.equal(harness.byTestId("ta"), ta, "keyed moves keep node identities");
 
   const tc = harness.byTestId("tc");
-  group.callbacks.onKeyDown(key(tc, "ArrowRight"));
+  sendKey(harness, tc, "ArrowRight");
   assert.equal(harness.focused.current, ta, "arrows after a reorder use the new order");
 
-  tc.callbacks.onFocus(focusEvent(tc));
+  harness.dispatch(tc, "FocusIn");
   mod.controls.setItemOrder(["tb", "tc", "ta"]);
-  group.callbacks.onKeyDown(key(tc, "ArrowRight"));
+  sendKey(harness, tc, "ArrowRight");
   assert.equal(harness.focused.current, ta);
 
   mod.controls.setItemOrder(["tb", "tc"]);
   assert.equal(harness.byTestId("ta"), undefined, "removed items unregister");
   assert.equal(prop(harness, "tb", "tabIndex"), 0, "the surviving item takes the tab stop");
-  group.callbacks.onKeyDown(key(harness.byTestId("tb"), "ArrowRight"));
+  sendKey(harness, harness.byTestId("tb"), "ArrowRight");
   assert.equal(harness.focused.current, harness.byTestId("tc"));
-  group.callbacks.onKeyDown(key(harness.byTestId("tc"), "ArrowRight"));
+  sendKey(harness, harness.byTestId("tc"), "ArrowRight");
   assert.equal(harness.focused.current, harness.byTestId("tb"), "wrapping skips the removed item");
 });
 
 test("toggle group single and multiple selection semantics", async t => {
   const { mod, harness } = await mounted(t, "mountToggle", "single");
-  const clickItem = id => harness.byTestId(id).callbacks.onClick(click(harness.byTestId(id)));
+  const clickItem = id => harness.dispatch(harness.byTestId(id), "Click");
   assert.equal(prop(harness, "toggle", "role"), "toolbar");
   assert.equal(prop(harness, "ta", "role"), "radioButton");
 
@@ -407,16 +377,16 @@ test("toggle group single and multiple selection semantics", async t => {
   const root2 = second.makeNode("root");
   const dispose2 = mod2.mountToggle(root2, "multiple");
   cleanup(t, second, dispose2);
-  const click2 = id => second.byTestId(id).callbacks.onClick(click(second.byTestId(id)));
+  const click2 = id => second.dispatch(second.byTestId(id), "Click");
   assert.equal(prop(second, "ta", "role"), "button");
   click2("tb");
   click2("ta");
   assert.deepEqual(mod2.api.log.toggle, [["b"], ["a", "b"]], "multiple keeps a sorted unique set");
   click2("tb");
   assert.deepEqual(mod2.api.log.toggle, [["b"], ["a", "b"], ["a"]]);
-  second.byTestId("ta").callbacks.onFocus(focusEvent(second.byTestId("ta")));
+  second.dispatch(second.byTestId("ta"), "FocusIn");
   const before = mod2.api.log.toggle.length;
-  second.byTestId("toggle").callbacks.onKeyDown(key(second.byTestId("ta"), "ArrowRight"));
+  sendKey(second, second.byTestId("ta"), "ArrowRight");
   assert.equal(mod2.api.log.toggle.length, before, "arrow focus never toggles");
   assert.equal(second.focused.current, second.byTestId("tb"));
 });
@@ -424,11 +394,11 @@ test("toggle group single and multiple selection semantics", async t => {
 test("controlled toggle reports attempts while visual state stays until echoed", async t => {
   const { mod, harness } = await mounted(t, "mountControlledToggle");
   const a = harness.byTestId("ta");
-  a.callbacks.onClick(click(a));
+  harness.dispatch(a, "Click");
   assert.deepEqual(mod.api.log.toggle, [["a"]]);
   assert.equal(prop(harness, "ta", "data-state"), "off");
   mod.controls.setEchoToggle(true);
-  a.callbacks.onClick(click(a));
+  harness.dispatch(a, "Click");
   assert.equal(prop(harness, "ta", "data-state"), "on");
 });
 
@@ -450,27 +420,24 @@ test("group disabled and inherited variant, size, spacing stay reactive", async 
   mod.controls.setGroupDisabled(true);
   assert.equal(prop(harness, "tb", "disabled"), true, "item disabled=false cannot override the group");
   const length = mod.api.log.toggle.length;
-  b.callbacks.onClick(click(b));
+  harness.dispatch(b, "Click");
   assert.equal(mod.api.log.toggle.length, length);
-  const keyEvent = key(harness.byTestId("ta"), "ArrowRight");
-  harness.byTestId("toggle").callbacks.onKeyDown(keyEvent);
-  assert.equal(keyEvent.prevented, 0, "a disabled group does not navigate");
+  const keyEvent = sendKey(harness, harness.byTestId("ta"), "ArrowRight");
+  assert.equal(keyEvent.defaultPrevented, false, "a disabled group does not navigate");
 });
 
 test("nested groups only own their items and standalone items are inert", async t => {
   const { mod, harness } = await mounted(t, "mountNestedPair");
   const outer = harness.byTestId("outer");
-  const inner = harness.byTestId("inner");
   const i1 = harness.byTestId("i1");
   assert.equal(tabIndex(harness, "o1"), 0, "each group keeps its own tab stop");
   assert.equal(tabIndex(harness, "i1"), 0);
-  inner.callbacks.onKeyDown(key(i1, "ArrowDown"));
+  sendKey(harness, i1, "ArrowDown");
   assert.equal(harness.focused.current, harness.byTestId("i2"));
-  const foreign = key(i1, "ArrowUp");
-  outer.callbacks.onKeyDown(foreign);
-  assert.equal(foreign.prevented, 0, "a group ignores keys targeting another group");
-  i1.callbacks.onClick(click(i1));
-  assert.deepEqual(mod.api.log.radio, ["i1"]);
+  const foreign = harness.dispatch(outer, "KeyDown", { target: i1, key: "ArrowUp", keyWithoutModifiers: "ArrowUp" });
+  assert.equal(foreign.defaultPrevented, false, "a group ignores keys targeting another group");
+  harness.dispatch(i1, "Click");
+  assert.deepEqual(mod.api.log.radio, ["i2", "i1"]);
   assert.equal(checked(harness, "o1"), false);
 
   const second = createHost();
@@ -480,7 +447,7 @@ test("nested groups only own their items and standalone items are inert", async 
   const dispose2 = mod2.mountStandalone(root2);
   cleanup(t, second, dispose2);
   assert.equal(prop(second, "sr", "tabIndex"), 0, "standalone items stay focusable");
-  second.byTestId("sr").callbacks.onClick(click(second.byTestId("sr")));
+  second.dispatch(second.byTestId("sr"), "Click");
   assert.equal(checked(second, "sr"), false, "a standalone item is unchecked and inert");
   assert.equal(prop(second, "sr", "ariaRadioGroup") ?? null, null);
 });

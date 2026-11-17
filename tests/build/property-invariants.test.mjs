@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { createHost, moduleFor } from "./native-fixture.mjs";
+import { createClock, createHost, moduleFor } from "./native-fixture.mjs";
 
 function mulberry32(seed) {
   let state = seed >>> 0;
@@ -14,146 +14,6 @@ function mulberry32(seed) {
 
 function intRange(rng, lo, hi) {
   return lo + Math.floor(rng() * (hi - lo + 1));
-}
-
-function fakeClock(t) {
-  const saved = {
-    setTimeout: globalThis.setTimeout,
-    clearTimeout: globalThis.clearTimeout,
-    requestAnimationFrame: globalThis.requestAnimationFrame,
-    cancelAnimationFrame: globalThis.cancelAnimationFrame,
-  };
-  let now = 0;
-  let nextTimer = 0;
-  let nextFrame = 0;
-  const timers = new Map();
-  const frames = new Map();
-  t.after(() => Object.assign(globalThis, saved));
-  globalThis.setTimeout = (fn, delay = 0) => {
-    const id = ++nextTimer;
-    timers.set(id, { at: now + Math.max(0, delay), fn });
-    return id;
-  };
-  globalThis.clearTimeout = id => { timers.delete(id); };
-  globalThis.requestAnimationFrame = fn => {
-    const id = ++nextFrame;
-    frames.set(id, fn);
-    return id;
-  };
-  globalThis.cancelAnimationFrame = id => { frames.delete(id); };
-  const frame = () => {
-    const queue = [...frames.entries()];
-    frames.clear();
-    for (const [, fn] of queue) fn(now);
-  };
-  const advance = ms => {
-    const target = now + ms;
-    while (true) {
-      let next;
-      for (const [id, entry] of timers) {
-        if (entry.at <= target && (!next || entry.at < next.at || (entry.at === next.at && id < next.id))) {
-          next = { id, ...entry };
-        }
-      }
-      if (!next) break;
-      timers.delete(next.id);
-      now = next.at;
-      next.fn();
-    }
-    now = target;
-  };
-  const settle = () => {
-    for (let i = 0; i < 4; i++) {
-      frame();
-      advance(1000);
-    }
-  };
-  return { timers, frames, frame, advance, settle };
-}
-
-function installOverlayDoubles(h) {
-  const portals = [];
-  const traps = [];
-  const locks = [];
-  const layers = [];
-  const geometry = [];
-  h.host.isAnimating = () => false;
-  h.host.createPortal = layer => {
-    const node = h.makeNode("portal");
-    portals.push({ layer, node });
-    return node;
-  };
-  h.host.trapFocus = (node, wrap, autoFocus, restore) => {
-    const record = { node, wrap, autoFocus, restore, active: true, disposals: 0 };
-    traps.push(record);
-    let disposed = false;
-    return () => {
-      if (disposed) return;
-      disposed = true;
-      record.active = false;
-      record.disposals += 1;
-    };
-  };
-  h.host.lockScroll = node => {
-    const record = { node, active: true, disposals: 0 };
-    locks.push(record);
-    let disposed = false;
-    return () => {
-      if (disposed) return;
-      disposed = true;
-      record.active = false;
-      record.disposals += 1;
-    };
-  };
-  h.host.registerDismissLayer = (node, callback, options) => {
-    const record = { node, callback, options, active: true, disposals: 0 };
-    layers.push(record);
-    let disposed = false;
-    return {
-      update: next => { record.options = next; },
-      dispose: () => {
-        if (disposed) return;
-        disposed = true;
-        record.active = false;
-        record.disposals += 1;
-      },
-    };
-  };
-  h.host.observeGeometry = (node, kind, callback) => {
-    const record = { node, kind, callback, active: true, disposals: 0 };
-    geometry.push(record);
-    let disposed = false;
-    return () => {
-      if (disposed) return;
-      disposed = true;
-      record.active = false;
-      record.disposals += 1;
-    };
-  };
-  const dispatchFocus = (name, node) => {
-    const event = {
-      type: name,
-      target: node,
-      currentTarget: node,
-      cause: "programmatic",
-      preventDefault() {},
-      stopPropagation() { event.stopped = true; },
-    };
-    for (let current = node; current; current = h.parents.get(current)) {
-      event.currentTarget = current;
-      current.callbacks[name === "blur" ? "onBlur" : "onFocus"]?.(event);
-      if (event.stopped) break;
-    }
-  };
-  const baseFocus = h.host.focus;
-  h.host.focus = (node, reveal = false) => {
-    const prev = h.focused.current;
-    baseFocus(node, reveal);
-    if (prev === node) return;
-    if (prev) dispatchFocus("blur", prev);
-    dispatchFocus("focus", node);
-  };
-  return { portals, traps, locks, layers, geometry };
 }
 
 test("property: solvePopper always produces finite non-negative bounds and fits when space permits", async t => {
@@ -267,13 +127,7 @@ export function mount(root: NativeNode) {
   for (let i = 0; i < 220; i++) {
     if (i % 25 === 0) {
       if (activePointer !== null) {
-        slider.callbacks.onPointerUp?.({
-          type: "pointerup", target: slider, currentTarget: slider, phase: "target",
-          pointerId: activePointer, pointerKind: "mouse", isPrimary: true, button: "primary",
-          position: { x: 150, y: 26 },
-          modifiers: { shift: false, control: false, alt: false, meta: false },
-          releasePointer() {}, preventDefault() {}, stopPropagation() {},
-        });
+        h.dispatch(slider, "PointerUp", { pointerId: String(activePointer), position: { x: 150, y: 26 } });
         activePointer = null;
       }
       const nextMin = intRange(rng, -50, 20);
@@ -287,51 +141,21 @@ export function mount(root: NativeNode) {
     if (op === 0 && activePointer === null) {
       activePointer = 1;
       const x = intRange(rng, 60, 340);
-      slider.callbacks.onPointerDown?.({
-        type: "pointerdown", target: slider, currentTarget: slider, phase: "target",
-        pointerId: 1, pointerKind: "mouse", isPrimary: true, button: "primary",
-        position: { x, y: 26 },
-        modifiers: { shift: false, control: false, alt: false, meta: false },
-        capturePointer() {}, preventDefault() {}, stopPropagation() {},
-      });
+      h.dispatch(slider, "PointerDown", { pointerId: "1", position: { x, y: 26 } });
     } else if (op === 1 && activePointer !== null) {
       const x = intRange(rng, 60, 340);
-      slider.callbacks.onPointerMove?.({
-        type: "pointermove", target: slider, currentTarget: slider, phase: "target",
-        pointerId: 1, pointerKind: "mouse", isPrimary: true,
-        position: { x, y: 26 },
-        modifiers: { shift: false, control: false, alt: false, meta: false },
-        preventDefault() {}, stopPropagation() {},
-      });
+      h.dispatch(slider, "PointerMove", { pointerId: "1", position: { x, y: 26 } });
     } else if (op === 2 && activePointer !== null) {
       const cancel = rng() < 0.35;
       const x = intRange(rng, 60, 340);
-      const evtName = cancel ? "onPointerCancel" : "onPointerUp";
-      slider.callbacks[evtName]?.({
-        type: cancel ? "pointercancel" : "pointerup", target: slider, currentTarget: slider, phase: "target",
-        pointerId: 1, pointerKind: "mouse", isPrimary: true, button: "primary",
-        position: { x, y: 26 },
-        modifiers: { shift: false, control: false, alt: false, meta: false },
-        releasePointer() {}, preventDefault() {}, stopPropagation() {},
-      });
+      h.dispatch(slider, cancel ? "PointerCancel" : "PointerUp", { pointerId: "1", position: { x, y: 26 } });
       activePointer = null;
       const before = slider.props.get("ariaValueNow");
-      slider.callbacks.onPointerMove?.({
-        type: "pointermove", target: slider, currentTarget: slider, phase: "target",
-        pointerId: 1, pointerKind: "mouse", isPrimary: true,
-        position: { x: x === 340 ? 60 : 340, y: 26 },
-        modifiers: { shift: false, control: false, alt: false, meta: false },
-        preventDefault() {}, stopPropagation() {},
-      });
+      h.dispatch(slider, "PointerMove", { pointerId: "1", position: { x: x === 340 ? 60 : 340, y: 26 } });
       assert.equal(slider.props.get("ariaValueNow"), before, "stray move after up/cancel must not change value");
     } else {
       const key = keys[intRange(rng, 0, keys.length - 1)];
-      slider.callbacks.onKeyDown?.({
-        type: "keydown", target: slider, currentTarget: slider, phase: "target",
-        key, character: null, repeat: false,
-        modifiers: { shift: false, control: false, alt: false, meta: false },
-        preventDefault() {}, stopPropagation() {},
-      });
+      h.dispatch(slider, "KeyDown", { key, keyWithoutModifiers: key });
     }
 
     const lo = slider.props.get("ariaValueMin");
@@ -384,9 +208,9 @@ export function mount(root: NativeNode) {
   ), root);
 }
 `;
-  const clock = fakeClock(t);
   const h = createHost();
-  const { traps, locks, layers } = installOverlayDoubles(h);
+  const clock = createClock(t, h);
+  const { traps, locks, layers } = h;
   let dispose;
   t.after(() => { try { dispose?.(); } finally { delete globalThis.__zgui; } });
   globalThis.__zgui = h.host;
@@ -484,9 +308,9 @@ export function mount(root: NativeNode) {
   ), root);
 }
 `;
-  const clock = fakeClock(t);
   const h = createHost();
-  const { traps, layers, geometry } = installOverlayDoubles(h);
+  const clock = createClock(t, h);
+  const { traps, layers, geometry } = h;
   let dispose;
   t.after(() => { try { dispose?.(); } finally { delete globalThis.__zgui; } });
   globalThis.__zgui = h.host;
@@ -494,27 +318,8 @@ export function mount(root: NativeNode) {
   const root = h.makeNode("root");
   dispose = mod.mount(root);
 
-  const clickNode = node => {
-    node?.callbacks.onClick?.({
-      target: node,
-      currentTarget: node,
-      preventDefault() {},
-      stopPropagation() {},
-    });
-  };
-  const keyNode = (node, key) => {
-    node?.callbacks.onKeyDown?.({
-      type: "keydown",
-      target: node,
-      currentTarget: node,
-      key,
-      character: null,
-      repeat: false,
-      modifiers: { shift: false, control: false, alt: false, meta: false },
-      preventDefault() {},
-      stopPropagation() {},
-    });
-  };
+  const clickNode = node => { if (node) h.dispatch(node, "Click"); };
+  const keyNode = (node, key) => { if (node) h.dispatch(node, "KeyDown", { key, keyWithoutModifiers: key }); };
 
   const rng = mulberry32(0x40040004);
   const triggers = ["t-one", "t-two", "t-three"];
@@ -526,7 +331,7 @@ export function mount(root: NativeNode) {
       const target = h.byTestId(triggers[intRange(rng, 0, 2)]);
       clickNode(target);
     } else if (op === 2) {
-      const focused = h.focused.current ?? h.byTestId("t-one");
+      const focused = (h.focused.current && !h.invalidated.has(h.focused.current)) ? h.focused.current : h.byTestId("t-one");
       keyNode(focused, navKeys[intRange(rng, 0, navKeys.length - 1)]);
     } else if (op === 3) {
       const subTrigger = h.byTestId("sub-trigger");

@@ -114,22 +114,6 @@ export function setIconlessIcon(value: boolean): void {
 }
 `;
 
-const click = () => ({
-  type: "click",
-  preventDefault() {},
-  stopPropagation() {},
-  stopImmediatePropagation() {},
-});
-
-const pointerDown = (button, activations) => ({
-  type: "pointerdown",
-  button,
-  activateNow: () => { activations.count += 1; },
-  preventDefault() {},
-  stopPropagation() {},
-  stopImmediatePropagation() {},
-});
-
 async function mounted(t) {
   const mod = await moduleFor(t, fixture);
   const harness = createHost();
@@ -152,19 +136,19 @@ test("checkbox toggles through mixed, true, false with one callback per click", 
   assert.match(check.children[0].props.get("class"), /zui-checkbox__tick/);
   assert.match(check.children[1].props.get("class"), /zui-checkbox__dash/);
 
-  check.callbacks.onClick(click());
+  harness.dispatch(check, "Click");
   assert.equal(check.props.get("checked"), true);
   assert.equal(check.props.get("data-state"), "checked");
   assert.deepEqual(mod.api.log.check, [true]);
 
-  check.callbacks.onClick(click());
+  harness.dispatch(check, "Click");
   assert.equal(check.props.get("checked"), false);
   assert.equal(check.props.get("data-state"), "unchecked");
   assert.deepEqual(mod.api.log.check, [true, false]);
 
   mod.api.setCheckDefault(false);
   assert.equal(check.props.get("checked"), false);
-  check.callbacks.onClick(click());
+  harness.dispatch(check, "Click");
   assert.equal(check.props.get("checked"), true);
   mod.api.setCheckDefault("mixed");
   assert.equal(check.props.get("checked"), true);
@@ -175,13 +159,13 @@ test("controlled checkbox proposes state and a disabled or cancelled click does 
   const controlled = harness.byTestId("check-controlled");
   assert.ok(controlled);
 
-  controlled.callbacks.onClick(click());
+  harness.dispatch(controlled, "Click");
   assert.deepEqual(mod.api.log.controlled, [true]);
   assert.equal(controlled.props.get("checked"), false);
   assert.equal(controlled.props.get("data-state"), "unchecked");
 
   mod.api.setAcceptCheck(true);
-  controlled.callbacks.onClick(click());
+  harness.dispatch(controlled, "Click");
   assert.deepEqual(mod.api.log.controlled, [true, true]);
   assert.equal(controlled.props.get("checked"), true);
 
@@ -190,22 +174,22 @@ test("controlled checkbox proposes state and a disabled or cancelled click does 
   assert.equal(mod.api.log.controlled.length, 2);
 
   mod.api.setControlledCheck(undefined);
-  controlled.callbacks.onClick(click());
+  harness.dispatch(controlled, "Click");
   assert.equal(controlled.props.get("checked"), true);
   assert.equal(mod.api.log.controlled.length, 3);
 
   mod.api.setCheckDisabled(true);
   const check = harness.byTestId("check");
   const before = mod.api.log.check.length;
-  check.callbacks.onClick(click());
+  harness.dispatch(check, "Click");
   assert.equal(mod.api.log.check.length, before);
 
   mod.api.setCheckDisabled(false);
   mod.api.setCheckCancel(true);
-  check.callbacks.onClick(click());
+  harness.dispatch(check, "Click");
   assert.equal(mod.api.log.check.length, before);
   mod.api.setCheckCancel(false);
-  check.callbacks.onClick(click());
+  harness.dispatch(check, "Click");
   assert.equal(mod.api.log.check.length, before + 1);
 });
 
@@ -220,24 +204,24 @@ test("switch and toggle share the controllable primitive and press requests acti
   assert.equal(toggle.props.get("data-state"), "off");
   assert.equal(toggle.props.get("ariaLabel"), "Toggle");
 
-  sw.callbacks.onClick(click());
+  harness.dispatch(sw, "Click");
   assert.deepEqual(mod.api.log.switch, [true]);
   assert.equal(sw.props.get("checked"), true);
   assert.equal(sw.props.get("data-state"), "checked");
 
-  toggle.callbacks.onClick(click());
+  harness.dispatch(toggle, "Click");
   assert.deepEqual(mod.api.log.toggle, [true]);
   assert.equal(toggle.props.get("checked"), true);
   assert.equal(toggle.props.get("data-state"), "on");
 
   const activations = { count: 0 };
   const check = harness.byTestId("check");
-  check.callbacks.onPointerDown(pointerDown("primary", activations));
+  harness.dispatch(check, "PointerDown", { button: "primary", activateNow: () => { activations.count += 1; } });
   assert.equal(activations.count, 1);
-  check.callbacks.onPointerDown(pointerDown("secondary", activations));
+  harness.dispatch(check, "PointerDown", { button: "secondary", activateNow: () => { activations.count += 1; } });
   assert.equal(activations.count, 1);
   mod.api.setSwitchDisabled(true);
-  sw.callbacks.onPointerDown(pointerDown("primary", activations));
+  harness.dispatch(sw, "PointerDown", { button: "primary", activateNow: () => { activations.count += 1; } });
   assert.equal(activations.count, 1);
   mod.api.setSwitchDisabled(false);
 
@@ -260,7 +244,7 @@ test("input and textarea use native editing, compose input handlers, and forward
   assert.match(input.props.get("class"), /\bzui-field\b/);
   assert.match(readonly.props.get("class"), /\bzui-field\b.*\bzui-textarea\b/);
 
-  input.callbacks.onInput({ type: "input", value: "é🙂" });
+  harness.dispatch(input, "Input", { value: "é🙂" });
   assert.deepEqual(mod.api.log.inputHandlers, ["é🙂"]);
   assert.deepEqual(mod.api.log.valueChanges, ["é🙂"]);
   assert.equal(input.props.get("value"), "é🙂");
@@ -292,14 +276,14 @@ test("label resolves its control accessor at click time and forwards relations",
   assert.equal(label.props.get("role"), "label");
   assert.equal(input.props.get("ariaLabelledBy"), mod.api.nodes().label);
 
-  label.callbacks.onClick(click());
+  harness.dispatch(label, "Click");
   assert.equal(harness.focused.current, input);
   assert.equal(mod.api.log.labelClicks, 1);
 
-  harness.focused.current = null;
+  harness.host.focus(label);
   mod.api.setLabelCancel(true);
-  label.callbacks.onClick(click());
-  assert.equal(harness.focused.current, null);
+  harness.dispatch(label, "Click");
+  assert.equal(harness.focused.current, label);
   assert.equal(mod.api.log.labelClicks, 2);
 });
 

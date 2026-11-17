@@ -35,11 +35,6 @@ const textOf = node => {
   return node.children.map(textOf).join("");
 };
 
-const click = () => ({
-  type: "click",
-  preventDefault() {}, stopPropagation() {}, stopImmediatePropagation() {},
-});
-
 for (const kind of ["theme", "card", "item"]) {
   test(`${kind} provider children keep node and state identity across keyed reorder`, async t => {
     const harness = createHost();
@@ -51,7 +46,7 @@ for (const kind of ["theme", "card", "item"]) {
 
     const a = harness.byTestId("a");
     const b = harness.byTestId("b");
-    a.callbacks.onClick(click());
+    harness.dispatch(a, "Click");
     assert.equal(textOf(a), "1");
 
     mod.reorder();
@@ -65,7 +60,7 @@ for (const kind of ["theme", "card", "item"]) {
     );
     assert.equal(textOf(a), "1", "signal state survives the move");
 
-    a.callbacks.onClick(click());
+    harness.dispatch(a, "Click");
     assert.equal(textOf(a), "2");
   });
 }

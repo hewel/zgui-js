@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { createHost, moduleFor } from "./native-fixture.mjs";
+import { createClock, createHost, moduleFor } from "./native-fixture.mjs";
 
 const fixture = `
 import { For, Show, createSignal, onCleanup, renderApp } from "@hewel/zgui";
@@ -198,175 +198,34 @@ export function mountBadCheck(root: NativeNode) {
 }
 `;
 
-function fakeClock(t) {
-  let now = 0;
-  let nextId = 0;
-  const timers = new Map();
-  const frames = new Map();
-  t.mock.method(globalThis, "setTimeout", (callback, delay = 0) => {
-    const id = ++nextId;
-    timers.set(id, { at: now + delay, callback });
-    return id;
-  });
-  t.mock.method(globalThis, "clearTimeout", id => { timers.delete(id); });
-  const previousFrame = Object.getOwnPropertyDescriptor(globalThis, "requestAnimationFrame");
-  const previousCancel = Object.getOwnPropertyDescriptor(globalThis, "cancelAnimationFrame");
-  globalThis.requestAnimationFrame = callback => {
-    const id = ++nextId;
-    frames.set(id, callback);
-    return id;
-  };
-  globalThis.cancelAnimationFrame = id => { frames.delete(id); };
-  t.after(() => {
-    if (previousFrame) Object.defineProperty(globalThis, "requestAnimationFrame", previousFrame);
-    else delete globalThis.requestAnimationFrame;
-    if (previousCancel) Object.defineProperty(globalThis, "cancelAnimationFrame", previousCancel);
-    else delete globalThis.cancelAnimationFrame;
-  });
-  const advance = ms => {
-    const target = now + ms;
-    for (;;) {
-      let earliest;
-      for (const [timerId, timer] of timers) {
-        if (timer.at <= target && (!earliest || timer.at < earliest.timer.at)) earliest = { timerId, timer };
-      }
-      if (!earliest) break;
-      timers.delete(earliest.timerId);
-      now = earliest.timer.at;
-      earliest.timer.callback();
-    }
-    now = target;
-  };
-  const frame = () => {
-    const due = [...frames.entries()];
-    for (const [timerId] of due) frames.delete(timerId);
-    for (const [, callback] of due) callback(now);
-  };
-  return { advance, frame, timers, frames };
-}
-
 async function mounted(t, mountName = "mount", allowScrollLock = false) {
-  const busy = new Map();
-  const traps = [];
-  const locks = [];
-  const layers = [];
-  const portals = [];
-  const geometry = [];
   const activations = [];
   const h = createHost();
-  h.host.createPortal = layer => {
-    const node = h.makeNode("portal");
-    portals.push({ layer, node });
-    return node;
-  };
-  h.host.isAnimating = node => busy.get(node) ?? false;
-  h.host.trapFocus = (node, wrap, autoFocus, restore) => {
-    const record = { node, wrap, autoFocus, restore, active: true, disposals: 0 };
-    traps.push(record);
-    let disposed = false;
-    return () => {
-      if (disposed) return;
-      disposed = true;
-      record.disposals += 1;
-      record.active = false;
-    };
-  };
-  h.host.lockScroll = node => {
-    if (!allowScrollLock) throw new Error("menu surfaces must not lock scroll");
-    const record = { node, active: true, disposals: 0 };
-    locks.push(record);
-    let disposed = false;
-    return () => {
-      if (disposed) return;
-      disposed = true;
-      record.disposals += 1;
-      record.active = false;
-    };
-  };
-  h.host.registerDismissLayer = (node, callback, options) => {
-    const record = { node, callback, options, active: true, disposals: 0 };
-    layers.push(record);
-    let disposed = false;
-    return {
-      update: options => { record.options = options; },
-      dispose: () => {
-        if (disposed) return;
-        disposed = true;
-        record.disposals += 1;
-        record.active = false;
-      },
-    };
-  };
-  h.host.observeGeometry = (node, kind, callback) => {
-    const record = { node, kind, callback, active: true, disposals: 0 };
-    geometry.push(record);
-    let disposed = false;
-    return () => {
-      if (disposed) return;
-      disposed = true;
-      record.disposals += 1;
-      record.active = false;
-    };
-  };
-  const hostFocus = h.host.focus;
-  const dispatchFocus = (name, node) => {
-    const consumed = event(name, node, { cause: "programmatic" });
-    for (let current = node; current; current = h.parents.get(current)) {
-      consumed.currentTarget = current;
-      current.callbacks[name === "blur" ? "onBlur" : "onFocus"]?.(consumed);
-      if (consumed.stopped) break;
-    }
-  };
-  h.host.focus = (node, reveal = false) => {
-    const previous = h.focused.current;
-    hostFocus(node, reveal);
-    if (previous === node) return;
-    if (previous) dispatchFocus("blur", previous);
-    dispatchFocus("focus", node);
-  };
+  const { animating: busy, traps, locks, layers, portals, geometry } = h;
   assert.equal(globalThis.__zgui, undefined);
   const mod = await moduleFor(t, fixture);
   assert.equal(portals.length, 0, "module import must not allocate native nodes");
-  const clock = fakeClock(t);
+  const clock = createClock(t, h);
   let dispose;
-  t.after(() => { try { dispose?.(); } finally { delete globalThis.__zgui; } });
+  t.after(() => {
+    try { dispose?.(); } finally { delete globalThis.__zgui; }
+    if (!allowScrollLock) assert.equal(locks.length, 0, "menu surfaces must not lock scroll");
+  });
   globalThis.__zgui = h.host;
   const root = h.makeNode("root");
   dispose = mountName === "none" ? undefined : mod[mountName](root);
-  function event(name, node, extras = {}) {
-    const consumed = {
-      type: name, target: node, currentTarget: node,
-      preventDefault() { consumed.prevented = true; },
-      stopPropagation() { consumed.stopped = true; },
-      activateNow: () => activations.push(node),
-      ...extras,
-    };
-    return consumed;
-  }
   const send = (target, name, extras = {}) => {
     const node = typeof target === "string" ? h.byTestId(target) : target;
     assert.ok(node, `missing node ${target}`);
-    const consumed = event(name.replace(/^on/, "").toLowerCase(), node, extras);
-    node.callbacks[name]?.(consumed);
-    return consumed;
+    return h.dispatch(node, name, { activateNow: () => activations.push(node), ...extras });
   };
   const key = (target, extras = {}) => {
     const node = typeof target === "string" ? h.byTestId(target) : target;
     assert.ok(node, `missing node ${target}`);
-    const consumed = event("keydown", node, {
-      key: null, character: null, keyWithoutModifiers: null,
-      modifiers: { shift: false, control: false, alt: false, meta: false },
-      ...extras,
-    });
-    for (let current = node; current; current = h.parents.get(current)) {
-      consumed.currentTarget = current;
-      current.callbacks.onKeyDown?.(consumed);
-      if (consumed.stopped) break;
-    }
-    return consumed;
+    return h.dispatch(node, "KeyDown", { activateNow: () => activations.push(node), ...extras });
   };
-  const emit = (record, value) => { if (record.active) record.callback(value); };
-  const end = node => node.callbacks.onAnimationEnd?.({ type: "animationend", target: node, currentTarget: node });
+  const emit = (record, value) => record.emit(value);
+  const end = node => h.dispatch(node, "AnimationEnd");
   const flush = () => { clock.frame(); clock.advance(0); };
   const active = records => records.filter(record => record.active).length;
   const textOf = node => node.tag === "#text" ? node.props.get("text") ?? "" : node.children.map(textOf).join("");
@@ -512,7 +371,7 @@ test("roving keeps native tree order, wraps, skips disabled and survives keyed e
   key(print, { key: "End" });
   assert.equal(h.focused.current, sendItem);
   const lateral = key(sendItem, { key: "ArrowRight" });
-  assert.equal(lateral.prevented, undefined, "horizontal keys are ignored by a vertical menu");
+  assert.equal(lateral.defaultPrevented, false, "horizontal keys are ignored by a vertical menu");
   assert.equal(h.focused.current, sendItem);
   key(sendItem, { key: "ArrowDown", character: "ArrowDown", keyWithoutModifiers: "ArrowDown" });
   assert.equal(h.focused.current, sendItem, "character keys never fall through to named-key roving");
@@ -560,13 +419,13 @@ test("typeahead queries live native text, cycles, resets and ignores non-charact
   assert.equal(h.focused.current, focusOf("dsy"), "supplementary characters cycle too");
   clock.advance(1000);
   const zulu = key(focusOf("dsy"), { key: "z", character: "z" });
-  assert.equal(zulu.prevented, undefined, "disabled matching rows are excluded");
+  assert.equal(zulu.defaultPrevented, false, "disabled matching rows are excluded");
   assert.equal(h.focused.current, focusOf("dsy"));
   clock.advance(1500);
   const blank = key(focusOf("dsy"), { key: " ", character: " " });
-  assert.equal(blank.prevented, undefined, "an empty prefix never consumes character space");
+  assert.equal(blank.defaultPrevented, false, "an empty prefix never consumes character space");
   const named = key(focusOf("dsy"), { key: " ", character: null });
-  assert.equal(named.prevented, undefined, "named Space is not typeahead text");
+  assert.equal(named.defaultPrevented, false, "named Space is not typeahead text");
   assert.equal(h.focused.current, focusOf("dsy"));
   key(focusOf("dsy"), { key: "s", character: "s", modifiers: { shift: true, control: true, alt: false, meta: false } });
   assert.equal(h.focused.current, focusOf("save"), "modifiers do not filter character matching");
@@ -833,12 +692,12 @@ test("roving steps from the active member under descendants and honors propagati
   assert.equal(h.focused.current, surface, "a row focused through a descendant still leaves to the surface");
   h.host.focus(blocked);
   const stopped = key(blocked, { key: "ArrowDown" });
-  assert.equal(stopped.stopped, true);
-  assert.equal(stopped.prevented, undefined);
+  assert.equal(stopped.propagationStopped, true);
+  assert.equal(stopped.defaultPrevented, false);
   assert.equal(h.focused.current, blocked, "caller stopPropagation blocks ancestor navigation");
   h.host.focus(child);
   const character = key(child, { key: "ArrowDown", character: "ArrowDown", keyWithoutModifiers: "ArrowDown" });
-  assert.equal(character.prevented, undefined);
+  assert.equal(character.defaultPrevented, false);
   assert.equal(h.focused.current, child, "character-producing arrows never navigate");
   clock.advance(1000);
   finish();
@@ -854,8 +713,8 @@ test("submenus open by click and named keys, keep identity and right placement",
   const opened = key(subTrigger, { key: "ArrowRight" });
   const subSurface = h.byTestId("sub-surface");
   assert.ok(subSurface, "named ArrowRight opens the submenu");
-  assert.equal(opened.prevented, true);
-  assert.equal(opened.stopped, true);
+  assert.equal(opened.defaultPrevented, true);
+  assert.equal(opened.propagationStopped, true);
   assert.equal(subTrigger.props.get("role"), "menuItem");
   assert.equal(subTrigger.props.get("ariaHasPopup"), "menu");
   assert.equal(subTrigger.props.get("expanded"), true);

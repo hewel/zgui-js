@@ -49,19 +49,8 @@ export function mountViewport(root: NativeNode) {
 `;
 
 async function mounted(t, entry = "mount") {
-  const registrations = [];
   const harness = createHost();
-  harness.host.observeGeometry = (node, kind, callback) => {
-    const record = { node, kind, callback, active: true, disposals: 0 };
-    registrations.push(record);
-    let disposed = false;
-    return () => {
-      if (disposed) return;
-      disposed = true;
-      record.disposals += 1;
-      record.active = false;
-    };
-  };
+  const registrations = harness.geometry;
   assert.equal(globalThis.__zgui, undefined);
   const mod = await moduleFor(t, fixture);
   let dispose;
@@ -69,7 +58,7 @@ async function mounted(t, entry = "mount") {
   globalThis.__zgui = harness.host;
   const root = harness.makeNode("root");
   dispose = mod[entry](root);
-  const emit = (record, value) => { if (record.active) record.callback(value); };
+  const emit = (record, value) => record.emit(value);
   return { mod, root, registrations, emit, finish: () => { const end = dispose; dispose = undefined; end?.(); } };
 }
 

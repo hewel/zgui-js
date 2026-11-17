@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { createHost, moduleFor } from "./native-fixture.mjs";
+import { createClock, createHost, moduleFor } from "./native-fixture.mjs";
 
 const fixture = `
 import { For, Show, createSignal, onCleanup, renderApp } from "@hewel/zgui";
@@ -88,138 +88,30 @@ export function mountOrphanPlace(root: NativeNode) {
 }
 `;
 
-function fakeClock(t) {
-  let now = 0;
-  let nextId = 0;
-  const timers = new Map();
-  const frames = new Map();
-  t.mock.method(globalThis, "setTimeout", (callback, delay = 0) => {
-    const id = ++nextId;
-    timers.set(id, { at: now + delay, callback });
-    return id;
-  });
-  t.mock.method(globalThis, "clearTimeout", id => { timers.delete(id); });
-  const previousFrame = Object.getOwnPropertyDescriptor(globalThis, "requestAnimationFrame");
-  const previousCancel = Object.getOwnPropertyDescriptor(globalThis, "cancelAnimationFrame");
-  globalThis.requestAnimationFrame = callback => {
-    const id = ++nextId;
-    frames.set(id, callback);
-    return id;
-  };
-  globalThis.cancelAnimationFrame = id => { frames.delete(id); };
-  t.after(() => {
-    if (previousFrame) Object.defineProperty(globalThis, "requestAnimationFrame", previousFrame);
-    else delete globalThis.requestAnimationFrame;
-    if (previousCancel) Object.defineProperty(globalThis, "cancelAnimationFrame", previousCancel);
-    else delete globalThis.cancelAnimationFrame;
-  });
-  const advance = ms => {
-    const target = now + ms;
-    for (;;) {
-      let earliest;
-      for (const [timerId, timer] of timers) {
-        if (timer.at <= target && (!earliest || timer.at < earliest.timer.at)) earliest = { timerId, timer };
-      }
-      if (!earliest) break;
-      timers.delete(earliest.timerId);
-      now = earliest.timer.at;
-      earliest.timer.callback();
-    }
-    now = target;
-  };
-  const frame = () => {
-    const due = [...frames.entries()];
-    for (const [timerId] of due) frames.delete(timerId);
-    for (const [, callback] of due) callback(now);
-  };
-  return { advance, frame };
-}
-
 async function mounted(t, mountName = "mount") {
-  const busy = new Map();
-  const traps = [];
-  const layers = [];
-  const portals = [];
-  const geometry = [];
   const h = createHost();
-  h.host.createPortal = layer => {
-    const node = h.makeNode("portal");
-    portals.push({ layer, node });
-    return node;
-  };
-  h.host.isAnimating = node => busy.get(node) ?? false;
-  h.host.trapFocus = (node, wrap, autoFocus, restore) => {
-    const record = { node, wrap, autoFocus, restore, active: true, disposals: 0 };
-    traps.push(record);
-    let disposed = false;
-    return () => {
-      if (disposed) return;
-      disposed = true;
-      record.disposals += 1;
-      record.active = false;
-    };
-  };
-  h.host.lockScroll = () => { throw new Error("context menu must not lock scroll"); };
-  h.host.registerDismissLayer = (node, callback, options) => {
-    const record = { node, callback, options, active: true, disposals: 0 };
-    layers.push(record);
-    let disposed = false;
-    return {
-      update: options => { record.options = options; },
-      dispose: () => {
-        if (disposed) return;
-        disposed = true;
-        record.disposals += 1;
-        record.active = false;
-      },
-    };
-  };
-  h.host.observeGeometry = (node, kind, callback) => {
-    const record = { node, kind, callback, active: true, disposals: 0 };
-    geometry.push(record);
-    let disposed = false;
-    return () => {
-      if (disposed) return;
-      disposed = true;
-      record.disposals += 1;
-      record.active = false;
-    };
-  };
-  const hostFocus = h.host.focus;
-  h.host.focus = (node, reveal = false) => {
-    const previous = h.focused.current;
-    hostFocus(node, reveal);
-    if (previous !== node && previous) previous.callbacks.onBlur?.({ type: "blur", target: previous, currentTarget: previous });
-    if (previous !== node) node.callbacks.onFocus?.({ type: "focus", target: node, currentTarget: node });
-  };
+  const { animating: busy, traps, layers, portals, geometry } = h;
   assert.equal(globalThis.__zgui, undefined);
   const mod = await moduleFor(t, fixture);
-  const clock = fakeClock(t);
+  const clock = createClock(t, h);
   let dispose;
-  t.after(() => { try { dispose?.(); } finally { delete globalThis.__zgui; } });
+  t.after(() => {
+    try { dispose?.(); } finally { delete globalThis.__zgui; }
+    assert.equal(h.locks.length, 0, "context menu must not lock scroll");
+  });
   globalThis.__zgui = h.host;
   const root = h.makeNode("root");
   dispose = mod[mountName](root);
   const send = (target, name, extras = {}) => {
     const node = typeof target === "string" ? h.byTestId(target) : target;
     assert.ok(node, `missing node ${target}`);
-    const consumed = {
-      type: name.replace(/^on/, "").toLowerCase(),
-      target: node,
-      currentTarget: node,
-      preventDefault() { consumed.prevented = true; },
-      stopPropagation() { consumed.stopped = true; },
-      activateNow() {},
-      ...extras,
-    };
-    node.callbacks[name]?.(consumed);
-    return consumed;
+    return h.dispatch(node, name, extras);
   };
-  const emit = (record, value) => { if (record.active) record.callback(value); };
+  const emit = (record, value) => record.emit(value);
   const flush = () => { clock.frame(); clock.advance(0); };
   const active = records => records.filter(record => record.active).length;
   return {
-    h, mod, clock, traps, layers, portals, geometry, send, emit, flush, active,
+    h, mod, clock, busy, traps, layers, portals, geometry, send, emit, flush, active,
     finish: () => { const stop = dispose; dispose = undefined; stop?.(); },
   };
 }
@@ -259,11 +151,11 @@ test("onContextMenu, secondary pointerdown, and useContextMenuPlace position anc
   h.rects.set(trigger, { x: 80, y: 60, width: 320, height: 240 });
 
   const primary = send("trigger", "onPointerDown", { button: "primary", position: { x: 140, y: 120 } });
-  assert.equal(primary.prevented, undefined);
+  assert.equal(primary.defaultPrevented, false);
   assert.equal(h.byTestId("surface"), undefined, "primary press does not open context menu");
 
   const contextEvent = send("trigger", "onContextMenu", { position: { x: 145, y: 112 } });
-  assert.equal(contextEvent.prevented, true);
+  assert.equal(contextEvent.defaultPrevented, true);
   const surface = h.byTestId("surface");
   assert.ok(surface);
   assert.equal(trigger.props.get("expanded"), true);
@@ -295,7 +187,7 @@ test("onContextMenu, secondary pointerdown, and useContextMenuPlace position anc
   assert.equal(active(layers), 0);
 
   const secondary = send("trigger", "onPointerDown", { button: "secondary", position: { x: 200, y: 180 } });
-  assert.equal(secondary.prevented, true);
+  assert.equal(secondary.defaultPrevented, true);
   assert.ok(h.byTestId("surface"));
   assert.deepEqual(anchor.props.get("style"), { left: "120px", top: "120px" });
 
@@ -331,10 +223,10 @@ test("caller preventDefault and disabled trigger block opening", async t => {
   mod.setVeto(false);
   mod.setDisabled(true);
   const ctx = send("trigger", "onContextMenu", { position: { x: 120, y: 90 } });
-  assert.equal(ctx.prevented, undefined);
+  assert.equal(ctx.defaultPrevented, false);
   assert.equal(h.byTestId("surface"), undefined);
   const right = send("trigger", "onPointerDown", { button: "secondary", position: { x: 120, y: 90 } });
-  assert.equal(right.prevented, undefined);
+  assert.equal(right.defaultPrevented, false);
   assert.equal(h.byTestId("surface"), undefined);
   finish();
 });

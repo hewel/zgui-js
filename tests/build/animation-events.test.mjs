@@ -26,13 +26,10 @@ export function mount(root: NativeNode) {
 `;
 
 test("lifecycle handlers forward name, seconds and pseudo; isAnimating reflects the host", async t => {
-  const queries = [];
-  let running = false;
   const harness = createHost();
-  harness.host.isAnimating = node => { queries.push(node); return running; };
   assert.equal(globalThis.__zgui, undefined);
   const mod = await moduleFor(t, fixture);
-  assert.equal(queries.length, 0, "module import must not query the host");
+  assert.equal(harness.animatingQueries.length, 0, "module import must not query the host");
   let dispose;
   t.after(() => { try { dispose?.(); } finally { delete globalThis.__zgui; } });
   globalThis.__zgui = harness.host;
@@ -43,10 +40,10 @@ test("lifecycle handlers forward name, seconds and pseudo; isAnimating reflects 
     "onAnimationStartCapture", "onTransitionCancelCapture"]) {
     assert.equal(typeof box.callbacks[name], "function", name);
   }
-  box.callbacks.onAnimationEnd({ type: "animationend", animationName: "fade", elapsedTime: 0.125, pseudoElement: "::before" });
-  box.callbacks.onTransitionEnd({ type: "transitionend", propertyName: "opacity", elapsedTime: 0.25, pseudoElement: "" });
-  box.callbacks.onAnimationStartCapture({ type: "animationstart", animationName: "pulse", elapsedTime: 0, pseudoElement: "::after" });
-  box.callbacks.onTransitionCancelCapture({ type: "transitioncancel", propertyName: "width", elapsedTime: 0.05, pseudoElement: "" });
+  harness.dispatch(box, "AnimationEnd", { animationName: "fade", elapsedTime: 0.125, pseudoElement: "::before" });
+  harness.dispatch(box, "TransitionEnd", { propertyName: "opacity", elapsedTime: 0.25, pseudoElement: "" });
+  harness.dispatch(box, "AnimationStart", { animationName: "pulse", elapsedTime: 0, pseudoElement: "::after" });
+  harness.dispatch(box, "TransitionCancel", { propertyName: "width", elapsedTime: 0.05, pseudoElement: "" });
   assert.deepEqual(mod.taken(), [
     "a:animationend|fade|0.125|::before",
     "t:transitionend|opacity|0.25|",
@@ -54,9 +51,9 @@ test("lifecycle handlers forward name, seconds and pseudo; isAnimating reflects 
     "t:transitioncancel|width|0.05|",
   ]);
   assert.equal(mod.busy(), false);
-  running = true;
+  harness.animating.set(box, true);
   assert.equal(mod.busy(), true);
-  assert.equal(queries.length, 2);
-  assert.equal(queries[0], box);
+  assert.equal(harness.animatingQueries.length, 2);
+  assert.equal(harness.animatingQueries[0], box);
   dispose();
 });
