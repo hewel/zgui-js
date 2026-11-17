@@ -68,7 +68,7 @@ test("local TypeScript CLI checks project paths literally, never emits, and pres
 
 test("AST validation distinguishes nested async work from top-level execution", () => {
   validateModule(`${entry}\nasync function work() { await Promise.resolve(); for await (const x of []) {} }`, { bundled: true, entry: true });
-  validateModule(`${entry}\nconst message = 'import(\"node:fs\") and await';`, { bundled: true, entry: true });
+  validateModule(`${entry}\nconst message = 'import("node:fs") and await';`, { bundled: true, entry: true });
   assert.throws(() => validateModule(`${entry}\nawait Promise.resolve();`), /Top-level await/);
   assert.throws(() => validateModule(`${entry}\nfor await (const x of []) {}`), /Top-level await/);
   assert.throws(() => validateModule(`${entry}\nclass C { [await Promise.resolve()]() {} }`), /Top-level await/);

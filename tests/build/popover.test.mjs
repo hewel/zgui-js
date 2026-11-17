@@ -251,15 +251,15 @@ test("popover mounts lazily, wires relations and acquires trap dismiss and geome
   assert.deepEqual(geometry.map(r => r.kind), ["borderBox", "contentSize", "viewport"]);
   assert.equal(geometry[0].node, trigger);
   const positioner = h.parents.get(surface);
-  assert.equal(positioner.props.get("style").includes("visibility: hidden"), true);
+  assert.equal(positioner.props.get("style").visibility, "hidden");
   emit(geometry[0], { x: 300, y: 200, width: 100, height: 30 });
   emit(geometry[2], { x: 0, y: 0, width: 800, height: 600, scale: 1 });
-  assert.equal(positioner.props.get("style").includes("visibility: hidden"), true, "hidden until every sample");
+  assert.equal(positioner.props.get("style").visibility, "hidden", "hidden until every sample");
   emit(geometry[1], { width: 200, height: 120 });
   const style = positioner.props.get("style");
-  assert.equal(style.includes("visibility"), false);
-  assert.equal(style.includes("left: 250px"), true);
-  assert.equal(style.includes("top: 234px"), true);
+  assert.equal("visibility" in style, false);
+  assert.equal(style.left, "250px");
+  assert.equal(style.top, "234px");
   assert.equal(positioner.props.get("data-side"), "bottom");
   finish();
   for (const record of [...traps, ...layers, ...geometry]) {
@@ -338,7 +338,7 @@ test("controlled popover lets the parent veto every transition", async t => {
 });
 
 test("default-open popovers nest inside a dialog with shared modal band and per-layer relations", async t => {
-  const { h, traps, locks, layers, portals, geometry, active, finish } = await mounted(t, "mountNested", true);
+  const { h, traps, locks, layers, portals, geometry, finish } = await mounted(t, "mountNested", true);
   const dialog = h.byTestId("dialog");
   const outer = h.byTestId("outer");
   const inner = h.byTestId("inner");

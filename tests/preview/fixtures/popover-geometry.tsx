@@ -1,8 +1,6 @@
-import { createSignal, onCleanup, renderApp } from "@hewel/zgui";
+import { createSignal, mountStylesheet, renderApp } from "@hewel/zgui";
 import type { NativeNode } from "@hewel/zgui";
-import { Input, Popover, PopoverClose, PopoverContent, PopoverTitle, PopoverTrigger, ThemeProvider } from "@hewel/zgui/components";
-import { Popper } from "__POPPER_MODULE__";
-declare const globalThis: { __zgui: { installStylesheet(name: string, css: string): void; removeStylesheet(name: string): void } };
+import { Input, Popover, PopoverClose, PopoverContent, PopoverTitle, PopoverTrigger, Popper, ThemeProvider } from "@hewel/zgui/components";
 export const hostApiVersion = 1;
 const css = `:root { background-color: #ffffff; color: #111827; font-size: 14px; }
 .popover-geometry-page { position: fixed; inset: 0; background-color: #ffffff; color: #111827; }
@@ -11,8 +9,7 @@ const css = `:root { background-color: #ffffff; color: #111827; font-size: 14px;
 .popover-sized { width: var(--zui-popper-anchor-width); height: var(--zui-popper-anchor-width); background: #0f766e; }`;
 export function mount(root: NativeNode) {
   return renderApp(() => {
-    globalThis.__zgui.installStylesheet("popover-geometry-fixture", css);
-    onCleanup(() => globalThis.__zgui.removeStylesheet("popover-geometry-fixture"));
+    mountStylesheet("popover-geometry-fixture", css);
     const [anchor, setAnchor] = createSignal<NativeNode | null>(null);
     return <ThemeProvider scheme="light">
       <box class="popover-geometry-page" />

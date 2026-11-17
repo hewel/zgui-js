@@ -1,7 +1,6 @@
-import { Show, createSignal, onCleanup, renderApp } from "@hewel/zgui";
+import { Show, createSignal, mountStylesheet, renderApp } from "@hewel/zgui";
 import type { NativeNode } from "@hewel/zgui";
 import { Button, Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger, Input, ThemeProvider } from "@hewel/zgui/components";
-declare const globalThis: { __zgui: { installStylesheet(name: string, css: string): void; removeStylesheet(name: string): void } };
 export const hostApiVersion = 1;
 const css = `:root { display: block; overflow-y: scroll; background-color: var(--zui-color-background); color: var(--zui-color-foreground); }
 .dialog-page { width: 100%; height: 2400px; padding: 240px 24px 24px; gap: 160px; background-color: var(--zui-color-background); color: var(--zui-color-foreground); font-size: 14px; }
@@ -34,8 +33,7 @@ function Body(props: { remove: () => void; theme: () => void; policy: boolean; t
 }
 export function mount(root: NativeNode) {
   return renderApp(() => {
-    globalThis.__zgui.installStylesheet("dialog-fixture", css);
-    onCleanup(() => globalThis.__zgui.removeStylesheet("dialog-fixture"));
+    mountStylesheet("dialog-fixture", css);
     const [source, setSource] = createSignal(true);
     const [open, setOpen] = createSignal(false);
     const [dark, setDark] = createSignal(false);

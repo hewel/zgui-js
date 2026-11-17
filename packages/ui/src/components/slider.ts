@@ -1,9 +1,9 @@
 import { onCleanup, splitProps } from "#solid";
-import { createElement, effect, insert, memo, mergeProps, spread } from "../renderer/index.js";
+import { createElement, effect, memo, mergeProps, spread } from "../renderer/index.js";
 import { focus, getWindowRect } from "../nodes.js";
 import type { NativeElementProps, NativeKeyEvent, NativeNode, NativePointerDownEvent, NativePointerEvent } from "../types.js";
 import { callHandler, createControllable } from "./state.js";
-import { classes, element, forbidChildren, useStylesheet } from "./shared.js";
+import { append, classes, element, forbidChildren, useStylesheet } from "./shared.js";
 import { sheet } from "./generated/SliderStyle.js";
 
 export interface SliderProps extends Omit<NativeElementProps, "children" | "orientation"> {
@@ -65,7 +65,7 @@ export function Slider(props: SliderProps = {}): NativeNode {
   const disabled = () => !!own.disabled;
   const root = createElement("control");
   const track = element("box", { class: "zui-slider__track", ariaHidden: true });
-  insert(track, element("box", { class: "zui-slider__range", ariaHidden: true }));
+  append(track, element("box", { class: "zui-slider__range", ariaHidden: true }));
   const thumb = element("box", { class: "zui-slider__thumb", ariaHidden: true });
 
   let captured: string | undefined;
@@ -169,7 +169,7 @@ export function Slider(props: SliderProps = {}): NativeNode {
       },
     },
   ));
-  insert(root, track);
-  insert(root, thumb);
+  append(root, track);
+  append(root, thumb);
   return root;
 }

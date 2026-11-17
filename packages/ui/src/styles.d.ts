@@ -1,6 +1,7 @@
 /** Object styles use canonical CSS kebab-case names and string values, never DOM numeric coercion. */
 export type NativeStyleName =
-  | "display" | "flex-direction" | "flex-wrap" | "flex-grow" | "flex-shrink" | "flex-basis"
+  | "display" | "position" | "inset" | "top" | "right" | "bottom" | "left" | "visibility"
+  | "flex-direction" | "flex-wrap" | "flex-grow" | "flex-shrink" | "flex-basis"
   | "align-items" | "justify-content" | "gap" | "row-gap" | "column-gap"
   | "padding" | "padding-top" | "padding-right" | "padding-bottom" | "padding-left"
   | "margin" | "margin-top" | "margin-right" | "margin-bottom" | "margin-left"

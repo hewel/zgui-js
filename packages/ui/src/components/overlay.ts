@@ -1,13 +1,11 @@
 import { createContext, createEffect, createMemo, createSignal, onCleanup, useContext, untrack } from "#solid";
 import { createElement, insertNode, setProp } from "../renderer/index.js";
-import type { NativeHost } from "../host.js";
+import { allocatePortal } from "../portal.js";
 import type { NativeChild, NativeNode, NativeOverlayLayer } from "../types.js";
 import { createControllable } from "./state.js";
-import { useStylesheet } from "./shared.js";
+import { provide, useStylesheet } from "./shared.js";
 import { portalThemeScope, useTheme } from "./theme.js";
 import { sheet } from "./generated/OverlayStyle.js";
-
-declare const globalThis: NativeHost;
 
 export interface OverlayRootProps {
   open?: boolean;
@@ -42,7 +40,7 @@ export function createOverlayState(props: OverlayRootProps) {
 export type OverlayState = ReturnType<typeof createOverlayState>;
 export const OverlayContext = createContext<OverlayState>();
 export function OverlayRoot(props: OverlayRootProps): NativeChild {
-  return OverlayContext.Provider({ value: createOverlayState(props), get children() { return props.children; } });
+  return provide(OverlayContext, createOverlayState(props), props);
 }
 
 interface Elevation { layer: NativeOverlayLayer; depth: number; }
@@ -71,15 +69,12 @@ export function overlayPortal(elevation: Elevation, build: () => NativeChild): N
     }
     return box;
   };
-  const root = globalThis.__zgui.createPortal(elevation.layer);
+  const root = allocatePortal(elevation.layer);
   createEffect(() => {
-    ElevationContext.Provider({
-      value: elevation,
-      get children() {
-        const content = body();
-        insertNode(root, theme ? portalThemeScope(theme, content) : content);
-        return null;
-      },
+    provide(ElevationContext, elevation, () => {
+      const content = body();
+      insertNode(root, theme ? portalThemeScope(theme, content) : content);
+      return null;
     });
   });
   return root;

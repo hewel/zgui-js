@@ -107,7 +107,10 @@ export type {
   PopoverProps, PopoverTriggerProps, PopoverContentProps, PopoverHeaderProps,
   PopoverTitleProps, PopoverDescriptionProps, PopoverCloseProps,
 } from "./popover.js";
-export type { PopperSide, PopperAlign, PopperPlacement } from "./popper.js";
+export { Popper, solvePopper } from "./popper.js";
+export type {
+  PopperAlign, PopperOptions, PopperPlacement, PopperProps, PopperSide, PopperSolution,
+} from "./popper.js";
 export {
   Tooltip, TooltipProvider, TooltipTrigger, TooltipContent, TooltipArrow,
 } from "./tooltip.js";

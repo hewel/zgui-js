@@ -54,3 +54,23 @@ export function registerDismissLayer(
   if (getOwner()) onCleanup(lease.dispose);
   return { dispose: lease.dispose, update: options => lease.update(dismissOptions(options)) };
 }
+
+export function installStylesheet(name: string, css: string): void {
+  globalThis.__zgui.installStylesheet(name, css);
+}
+
+export function removeStylesheet(name: string): void {
+  globalThis.__zgui.removeStylesheet(name);
+}
+
+export function mountStylesheet(name: string, css: string): () => void {
+  globalThis.__zgui.installStylesheet(name, css);
+  let removed = false;
+  const dispose = () => {
+    if (removed) return;
+    removed = true;
+    globalThis.__zgui.removeStylesheet(name);
+  };
+  if (getOwner()) onCleanup(dispose);
+  return dispose;
+}

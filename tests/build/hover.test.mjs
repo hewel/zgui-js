@@ -296,8 +296,8 @@ test("default tooltip opens synchronously, wires relations, geometry and arrow l
   emit(viewport, { x: 0, y: 0, width: 800, height: 600, scale: 1 });
   flush();
   assert.equal(place.props.get("data-side"), "top");
-  assert.match(place.props.get("style"), /top: 90px;/, "arrow clamps the supplied zero offset to the default reach");
-  assert.match(place.props.get("style"), /left: 250px;/);
+  assert.equal(place.props.get("style").top, "90px", "arrow clamps the supplied zero offset to the default reach");
+  assert.equal(place.props.get("style").left, "250px");
   const arrowOf = () => surface.children.find(child => child.props.get("class")?.includes("zui-tooltip__arrow"));
   const firstArrow = arrowOf();
   assert.ok(firstArrow, "default arrow is rendered");
@@ -307,7 +307,7 @@ test("default tooltip opens synchronously, wires relations, geometry and arrow l
   flush();
   assert.equal(arrowOf(), undefined);
   assert.equal(h.byTestId("counter"), counter, "arrow toggle must preserve child state");
-  assert.match(place.props.get("style"), /top: 100px;/, "without an arrow the supplied offset is preserved");
+  assert.equal(place.props.get("style").top, "100px", "without an arrow the supplied offset is preserved");
   mod.setArrow(true);
   flush();
   const secondArrow = arrowOf();
@@ -319,7 +319,7 @@ test("default tooltip opens synchronously, wires relations, geometry and arrow l
 });
 
 test("delayed tooltip cancels pending intent, retains busy exit and remounts fresh", async t => {
-  const { h, mod, clock, busy, layers, portals, geometry, send, end, flush, active, finish } = await mounted(t);
+  const { h, mod, clock, busy, layers, geometry, send, end, flush, active, finish } = await mounted(t);
   const trigger = h.byTestId("trigger");
   send("trigger", "onPointerEnter", { position: { x: 0, y: 0 }, pointerKind: "mouse" });
   assert.equal(clock.timers.size, 1, "delayed enter queues one opening timer");
@@ -416,7 +416,7 @@ test("tooltip focus causes, caller veto and escape policy", async t => {
 });
 
 test("hover card honours 700/300 defaults, re-entry keeps identity and dismissal cancels pending jobs", async t => {
-  const { h, mod, clock, layers, send, emit, flush, finish } = await mounted(t, "mountCardDefault");
+  const { h, clock, layers, send, emit, flush, finish } = await mounted(t, "mountCardDefault");
   send("trigger", "onPointerEnter", { position: { x: 0, y: 0 }, pointerKind: "mouse" });
   clock.advance(699);
   assert.equal(h.byTestId("surface"), undefined);
@@ -442,7 +442,7 @@ test("hover card honours 700/300 defaults, re-entry keeps identity and dismissal
 });
 
 test("controlled hover card emits the false then true focus request and honours parent veto", async t => {
-  const { h, mod, clock, layers, traps, send, flush, finish } = await mounted(t, "mountCardControlled");
+  const { h, mod, clock, traps, send, flush, finish } = await mounted(t, "mountCardControlled");
   const trigger = h.byTestId("trigger");
   assert.equal(trigger.props.get("tabIndex"), 0);
   assert.equal(trigger.props.get("ariaHasPopup"), "dialog");
@@ -565,7 +565,7 @@ test("removed owner cancels deferred tooltip construction entirely", async t => 
 });
 
 test("hover surfaces nest inside a dialog on the modal band without traps or foreign context", async t => {
-  const { h, mod, traps, locks, layers, portals, geometry, send, finish } = await mounted(t, "mountNested", true);
+  const { h, mod, traps, locks, portals, finish } = await mounted(t, "mountNested", true);
   const dialog = h.byTestId("dialog");
   const tip = h.byTestId("tip");
   const card = h.byTestId("card");

@@ -83,3 +83,27 @@ test("getTextContent reads current subtree text after reactive updates and reord
   mod.setItems(["b", "a"]);
   assert.equal(mod.read(), "bé𐐷aé𐐷");
 });
+
+const stylesheetFixture = `
+import { mountStylesheet, renderApp } from "@hewel/zgui";
+export function mount(root) {
+  return renderApp(() => {
+    mountStylesheet("sample-sheet", ".sample { color: red; }");
+    return <box />;
+  }, root);
+}
+`;
+
+test("mountStylesheet installs on mount and removes the stylesheet on disposal", async t => {
+  const harness = createHost();
+  const mod = await moduleFor(t, stylesheetFixture);
+  let dispose;
+  t.after(() => { try { dispose?.(); } finally { delete globalThis.__zgui; } });
+  globalThis.__zgui = harness.host;
+  const root = harness.makeNode("root");
+  dispose = mod.mount(root);
+  assert.equal(harness.stylesheets.get("sample-sheet"), ".sample { color: red; }");
+  dispose();
+  dispose = undefined;
+  assert.equal(harness.stylesheets.has("sample-sheet"), false);
+});

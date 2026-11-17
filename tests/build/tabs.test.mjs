@@ -462,7 +462,7 @@ test("keyed reorder, part removal and value rename keep relations live", async t
 });
 
 test("nested tabs and same-named values stay in their own context", async t => {
-  const { mod, harness } = await mounted(t, "mountNested");
+  const { harness } = await mounted(t, "mountNested");
   const outerList = node(harness, "outer-list");
   assert.equal(prop(harness, "outer-a", "ariaControls"), node(harness, "outer-panel"));
   assert.equal(prop(harness, "inner-lonely", "ariaControls"), node(harness, "inner-panel"),

@@ -1,8 +1,8 @@
 import { createContext, splitProps, useContext } from "#solid";
-import { createElement, insert, memo, mergeProps, spread } from "../renderer/index.js";
+import { createElement, memo, mergeProps, spread } from "../renderer/index.js";
 import type { Accessor, NativeElementProps, NativeEvent, NativeFocusEvent, NativeKeyEvent, NativeNode } from "../types.js";
 import { callHandler, createControllable } from "./state.js";
-import { classes, forbidChildren, useStylesheet } from "./shared.js";
+import { append, classes, forbidChildren, provide, slot, useStylesheet } from "./shared.js";
 import { createRovingFocus, groupOrientation } from "./roving.js";
 import type { GroupOrientation } from "./roving.js";
 import { Icon } from "./icons.js";
@@ -103,7 +103,7 @@ export function RadioGroup(props: RadioGroupProps = {}): NativeNode {
     },
   ));
   const context: RadioContextValue = { node, disabled, value, choose, roving };
-  insert(node, RadioContext.Provider({ value: context, get children() { return own.children; } }));
+  slot(node, provide(RadioContext, context, own));
   return node;
 }
 
@@ -148,7 +148,7 @@ export function RadioGroupItem(props: RadioGroupItemProps): NativeNode {
       },
     },
   ));
-  insert(node, Icon({ icon: DISC }));
+  append(node, Icon({ icon: DISC }));
   return node;
 }
 
@@ -212,7 +212,7 @@ export function ToggleGroup(props: ToggleGroupProps = {}): NativeNode {
     },
   ));
   const context: ToggleContextValue = { disabled, value: values, toggle, selection, variant, size, roving };
-  insert(node, ToggleContext.Provider({ value: context, get children() { return own.children; } }));
+  slot(node, provide(ToggleContext, context, own));
   return node;
 }
 

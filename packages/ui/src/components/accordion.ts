@@ -1,8 +1,8 @@
 import { createContext, createMemo, splitProps, useContext } from "#solid";
-import { createElement, insert, mergeProps, spread } from "../renderer/index.js";
+import { createElement, mergeProps, spread } from "../renderer/index.js";
 import type { Accessor, NativeElementProps, NativeEvent, NativeFocusEvent, NativeKeyEvent, NativeNode } from "../types.js";
 import { callHandler, createControllable } from "./state.js";
-import { classes, element, useStylesheet } from "./shared.js";
+import { append, classes, element, provide, slot, useStylesheet } from "./shared.js";
 import { createRovingFocus } from "./roving.js";
 import { createDisclosure, DisclosureContext, disclosureContent } from "./collapsible.js";
 import { Icon, CHEVRON_DOWN } from "./icons.js";
@@ -65,7 +65,7 @@ export function Accordion(props: AccordionProps = {}): NativeNode {
     get class() { return classes(sheet.className, "zui-accordion", rest.class); },
     onKeyDown(event: NativeKeyEvent) { if (callHandler(event, own.onKeyDown) && !disabled()) roving.onKeyDown(event); },
   }));
-  insert(node, AccordionContext.Provider({ value: context, get children() { return own.children; } }));
+  slot(node, provide(AccordionContext, context, own));
   return node;
 }
 
@@ -87,7 +87,7 @@ export function AccordionItem(props: AccordionItemProps): NativeNode {
     get "data-state"() { return disclosure.open() ? "open" : "closed"; },
     get "data-value"() { return value(); },
   }, rest, { get class() { return classes("zui-accordion__item", rest.class); } }));
-  insert(node, DisclosureContext.Provider({ value: disclosure, get children() { return own.children; } }));
+  slot(node, provide(DisclosureContext, disclosure, own));
   return node;
 }
 
@@ -119,7 +119,7 @@ export function AccordionTrigger(props: AccordionTriggerProps = {}): NativeNode 
     onClick(event: NativeEvent) { if (callHandler(event, own.onClick) && !disabled()) { item?.activate(); context?.setOpen(!context.open()); } },
     onFocus(event: NativeFocusEvent) { if (callHandler(event, own.onFocus) && event.target === node && !disabled()) item?.activate(); },
   }));
-  insert(heading, node);
+  append(heading, node);
   return heading;
 }
 

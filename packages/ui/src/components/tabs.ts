@@ -1,8 +1,8 @@
-import { Show, createContext, createMemo, createSignal, onCleanup, splitProps, useContext } from "#solid";
-import { createElement, insert, mergeProps, spread } from "../renderer/index.js";
+import { Show, batch, createContext, createMemo, createSignal, onCleanup, splitProps, useContext } from "#solid";
+import { createElement, mergeProps, spread } from "../renderer/index.js";
 import type { Accessor, NativeElementProps, NativeEvent, NativeFocusEvent, NativeKeyEvent, NativeNode } from "../types.js";
 import { callHandler, createControllable } from "./state.js";
-import { classes, useStylesheet } from "./shared.js";
+import { classes, provide, slot, useStylesheet } from "./shared.js";
 import { createRovingFocus, groupOrientation } from "./roving.js";
 import type { GroupOrientation } from "./roving.js";
 import { sheet as upstreamSheet } from "./generated/TabsStyle.js";
@@ -108,7 +108,7 @@ export function Tabs(props: TabsProps = {}): NativeNode {
   }, rest, {
     get class() { return classes(sheet.className, "zui-tabs", rest.class); },
   }));
-  insert(node, TabsContext.Provider({ value: context, get children() { return own.children; } }));
+  slot(node, provide(TabsContext, context, own));
   return node;
 }
 
@@ -138,7 +138,7 @@ export function TabsList(props: TabsListProps = {}): NativeNode {
       if (callHandler(event, own.onKeyDown) && !disabled()) roving.onKeyDown(event);
     },
   }));
-  insert(node, ListContext.Provider({ value: { tabs, disabled, roving, variant }, get children() { return own.children; } }));
+  slot(node, provide(ListContext, { tabs, disabled, roving, variant }, own));
   return node;
 }
 
@@ -155,7 +155,7 @@ export function TabsTrigger(props: TabsTriggerProps): NativeNode {
   tabs?.triggers.register(node, value);
   const panel = createMemo(() => tabs?.panels.get(value()) ?? null);
   const item = list?.roving.register(node, disabled, selected);
-  const select = () => { if (!disabled()) { item?.activate(); tabs?.select(value()); } };
+  const select = () => { if (!disabled()) batch(() => { item?.activate(); tabs?.select(value()); }); };
   spread(node, mergeProps({
     role: "tab" as const,
     get tabIndex() { return item?.tabIndex() ?? 0; },
@@ -197,6 +197,6 @@ export function TabsContent(props: TabsContentProps): NativeNode {
   }, rest, {
     get class() { return classes("zui-tabs__content", rest.class); },
   }));
-  insert(node, Show({ get when() { return !!own.keepMounted || selected(); }, get children() { return own.children; } }));
+  slot(node, Show({ get when() { return !!own.keepMounted || selected(); }, get children() { return own.children; } }));
   return node;
 }

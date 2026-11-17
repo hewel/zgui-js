@@ -1,7 +1,7 @@
 import {
   Image, Button, TextField, TextArea, For, Index, Show, batch, createContext, createEffect, createMemo,
   createSignal, onCleanup, onMount, renderApp, splitProps, untrack, useContext,
-  focus, getTextContent, getWindowRect, isAnimating, lockScroll, observeGeometry, precedes,
+  focus, getTextContent, getWindowRect, isAnimating, lockScroll, mountStylesheet, observeGeometry, precedes,
 } from "@hewel/zgui";
 import type { Component, Context, NativeAnimationEvent, NativeChild, NativeContextMenuEvent, NativeFocusOptions, NativeNode, NativePointerBoundaryEvent, NativeRole, NativeTextControlProps, NativeTransitionEvent, NativeViewport, NativeWindowRect, ParentComponent, TextFieldProps, TextAreaProps, VectorProps } from "@hewel/zgui";
 
@@ -102,6 +102,8 @@ const moving: boolean = isAnimating(assigned);
 void moving;
 const unlockScroll: () => void = lockScroll(assigned);
 unlockScroll();
+const unmountStylesheet: () => void = mountStylesheet("positive-test", ":root { color: #111827; }");
+unmountStylesheet();
 const reveal: NativeFocusOptions = { reveal: true };
 focus(assigned);
 focus(assigned, reveal);

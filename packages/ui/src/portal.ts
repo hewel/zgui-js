@@ -9,8 +9,12 @@ export interface PortalProps {
   children?: NativeChild;
 }
 
+export function allocatePortal(layer: NativeOverlayLayer = "popover"): NativeNode {
+  return globalThis.__zgui.createPortal(layer);
+}
+
 export function Portal(props: PortalProps): NativeNode {
-  const root = globalThis.__zgui.createPortal(props.layer ?? "popover");
+  const root = allocatePortal(props.layer);
   insert(root, () => props.children);
   return root;
 }

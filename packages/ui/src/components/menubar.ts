@@ -1,5 +1,5 @@
 import { Show, createContext, createEffect, createMemo, createSignal, onCleanup, splitProps, untrack, useContext } from "#solid";
-import { createElement, insert, insertNode, memo, mergeProps, spread } from "../renderer/index.js";
+import { createElement, memo, mergeProps, spread } from "../renderer/index.js";
 import { focus } from "../nodes.js";
 import type {
   Accessor, NativeChild, NativeElementProps, NativeEvent, NativeFocusEvent, NativeKeyEvent,
@@ -8,17 +8,16 @@ import type {
 import { anchoredSurface } from "./anchored.js";
 import { createOverlayState } from "./overlay.js";
 import {
-  MenuContext, MenuGroup, MenuRadioContext, MenuRadioGroup, MenuSurfaceContext, createTypeaheadHandler, menuRow,
+  MenuContext, MenuGroup, MenuRadioContext, MenuRadioGroup, MenuSurfaceContext,
+  createMenuCheckedState, createMenuRadioValue, createTypeaheadHandler, menuIndicator, menuRow,
 } from "./menu.js";
 import type {
   MenuCheckboxItemProps, MenuContentProps, MenuGroupProps, MenuItemProps, MenuRadioGroupProps,
   MenuRadioItemProps, MenuSeparatorProps, MenuShortcutProps,
 } from "./menu.js";
 import { createRovingFocus } from "./roving.js";
-import { callHandler, createControllable } from "./state.js";
-import { classes, element, forbidChildren, part, useStylesheet } from "./shared.js";
-import { Icon } from "./icons.js";
-import { CHECK, DOT } from "./generated/icons.js";
+import { callHandler } from "./state.js";
+import { append, classes, element, forbidChildren, part, provide, slot, useStylesheet } from "./shared.js";
 import { sheet } from "./generated/MenubarStyle.js";
 import { sheet as menuSheet } from "./generated/MenuStyle.js";
 
@@ -81,7 +80,7 @@ export function Menubar(props: MenubarProps = {}): NativeNode {
       if (callHandler(event, own.onKeyDown) && alive) roving.onKeyDown(event);
     },
   }), true);
-  insert(node, BarContext.Provider({ value: bar, get children() { return own.children; } }));
+  slot(node, provide(BarContext, bar, own));
   return node;
 }
 
@@ -120,7 +119,7 @@ export function MenubarMenu(props: MenubarMenuProps): NativeNode {
   }, rest, {
     get class() { return classes("zui-menubar__menu", rest.class); },
   }), true);
-  insert(node, MenuContext.Provider({ value: { state, dismiss }, get children() { return own.children; } }));
+  slot(node, provide(MenuContext, { state, dismiss }, own));
   return node;
 }
 
@@ -173,7 +172,7 @@ export function MenubarTrigger(props: MenubarTriggerProps = {}): NativeNode {
     },
   }), true);
   if (typeof own.ref === "function") own.ref(node);
-  insert(node, memo(() => own.children));
+  slot(node, memo(() => own.children));
   return node;
 }
 
@@ -194,7 +193,7 @@ export function MenubarArrows(props: MenubarArrowsProps = {}): NativeNode {
       event.stopPropagation();
     },
   }), true);
-  insert(node, () => own.children);
+  slot(node, () => own.children);
   return node;
 }
 
@@ -223,32 +222,29 @@ export function MenubarContent(props: MenubarContentProps = {}): NativeChild {
         if (focused) return;
         if (roving.focusFirst()) focused = true;
       });
-      return MenuSurfaceContext.Provider({
-        value: { node: menu!.state.content.node, roving },
-        get children() {
-          const keys = createElement("box");
-          const onTypeahead = createTypeaheadHandler(roving);
-          spread(keys, {
-            class: "zui-menu__keys",
-            onKeyDown(event: NativeKeyEvent) {
-              if (callHandler(event, roving.onKeyDown)) onTypeahead(event);
-            },
-          }, true);
-          const arrows = createElement("box");
-          spread(arrows, {
-            class: "zui-menubar__arrows",
-            onKeyDown(event: NativeKeyEvent) {
-              if (event.character != null) return;
-              const direction = event.key === "ArrowRight" ? 1 : event.key === "ArrowLeft" ? -1 : 0;
-              if (!direction || !bar || !bar.step(direction)) return;
-              event.preventDefault();
-              event.stopPropagation();
-            },
-          }, true);
-          insertNode(keys, arrows);
-          insert(arrows, () => own.children);
-          return keys;
-        },
+      return provide(MenuSurfaceContext, { node: menu!.state.content.node, roving }, () => {
+        const keys = createElement("box");
+        const onTypeahead = createTypeaheadHandler(roving);
+        spread(keys, {
+          class: "zui-menu__keys",
+          onKeyDown(event: NativeKeyEvent) {
+            if (callHandler(event, roving.onKeyDown)) onTypeahead(event);
+          },
+        }, true);
+        const arrows = createElement("box");
+        spread(arrows, {
+          class: "zui-menubar__arrows",
+          onKeyDown(event: NativeKeyEvent) {
+            if (event.character != null) return;
+            const direction = event.key === "ArrowRight" ? 1 : event.key === "ArrowLeft" ? -1 : 0;
+            if (!direction || !bar || !bar.step(direction)) return;
+            event.preventDefault();
+            event.stopPropagation();
+          },
+        }, true);
+        append(keys, arrows);
+        slot(arrows, () => own.children);
+        return keys;
       });
     },
   });
@@ -257,15 +253,7 @@ export function MenubarContent(props: MenubarContentProps = {}): NativeChild {
 function itemLabel(children: Accessor<NativeChild>): NativeNode {
   const box = createElement("box");
   spread(box, { class: "zui-menubar__item-label" }, true);
-  insert(box, memo(children));
-  return box;
-}
-
-function menubarIndicator(checked: Accessor<boolean>, dot: boolean): NativeNode {
-  const box = createElement("box");
-  spread(box, { class: classes("zui-menubar__indicator", dot && "zui-menubar__indicator--dot") }, true);
-  const show = createMemo(checked);
-  insert(box, () => show() ? Icon({ icon: dot ? DOT : CHECK }) : null);
+  slot(box, memo(children));
   return box;
 }
 
@@ -284,27 +272,18 @@ export function MenubarItem(props: MenubarItemProps = {}): NativeNode {
       if (own.closeOnSelect ?? true) menu?.dismiss();
     },
   });
-  insert(node, itemLabel(() => own.children), null);
-  insert(node, Show({
+  append(node, itemLabel(() => own.children));
+  slot(node, Show({
     get when() { return own.shortcut != null; },
     get children() { return MenubarShortcut({ get children() { return own.shortcut; } }); },
-  }), null);
+  }));
   return node;
 }
 
 export function MenubarCheckboxItem(props: MenubarCheckboxItemProps = {}): NativeNode {
   const menu = useContext(MenuContext);
   const [own, rest] = splitProps(props, ["children", "checked", "defaultChecked", "onCheckedChange", "closeOnSelect"]);
-  const [read, write] = createControllable<boolean>({
-    value: () => own.checked,
-    defaultValue: () => own.defaultChecked,
-    onChange: () => own.onCheckedChange,
-  }, false);
-  const checked = createMemo(() => {
-    const value = read();
-    if (typeof value !== "boolean") throw new TypeError("MenubarCheckboxItem checked must be a boolean");
-    return value;
-  });
+  const [checked, write] = createMenuCheckedState("MenubarCheckboxItem", own);
   const node = menuRow(mergeProps(rest, {
     get checked() { return checked(); },
     get "data-state"() { return checked() ? "checked" : "unchecked"; },
@@ -318,8 +297,8 @@ export function MenubarCheckboxItem(props: MenubarCheckboxItemProps = {}): Nativ
       if (own.closeOnSelect ?? false) menu?.dismiss();
     },
   });
-  insert(node, menubarIndicator(checked, false));
-  insert(node, itemLabel(() => own.children), null);
+  append(node, menuIndicator("zui-menubar__indicator", "zui-menubar__indicator--dot", checked, false));
+  append(node, itemLabel(() => own.children));
   return node;
 }
 
@@ -327,13 +306,7 @@ export function MenubarRadioItem(props: MenubarRadioItemProps): NativeNode {
   const menu = useContext(MenuContext);
   const radio = useContext(MenuRadioContext);
   const [own, rest] = splitProps(props, ["children", "value", "closeOnSelect"]);
-  const value = createMemo(() => {
-    const current = own.value;
-    if (typeof current !== "string" || !current) {
-      throw new TypeError("MenubarRadioItem value must be a non-empty string");
-    }
-    return current;
-  });
+  const value = createMenuRadioValue("MenubarRadioItem", () => own.value);
   const checked = () => radio?.value() === value();
   const node = menuRow(mergeProps(rest, {
     get checked() { return checked(); },
@@ -349,8 +322,8 @@ export function MenubarRadioItem(props: MenubarRadioItemProps): NativeNode {
       if (own.closeOnSelect ?? true) menu?.dismiss();
     },
   });
-  insert(node, menubarIndicator(checked, true));
-  insert(node, itemLabel(() => own.children), null);
+  append(node, menuIndicator("zui-menubar__indicator", "zui-menubar__indicator--dot", checked, true));
+  append(node, itemLabel(() => own.children));
   return node;
 }
 

@@ -6,7 +6,10 @@ export {
 export type { Context } from "#solid";
 
 export { renderApp } from "./render-app.js";
-export { focus, getTextContent, getWindowRect, isAnimating, lockScroll, observeGeometry, precedes, registerDismissLayer, trapFocus } from "./nodes.js";
+export {
+  focus, getTextContent, getWindowRect, isAnimating, lockScroll, mountStylesheet,
+  observeGeometry, precedes, registerDismissLayer, trapFocus,
+} from "./nodes.js";
 export { Portal } from "./portal.js";
 export type { PortalProps } from "./portal.js";
 export { Button } from "./button.js";

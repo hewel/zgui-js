@@ -29,8 +29,8 @@ export function mount(root: NativeNode) {
     const [focused, setFocused] = createSignal(false);
     const [last, setLast] = createSignal("none");
     const [bubbles, setBubbles] = createSignal(0);
-    return <ThemeProvider scheme="light">{Context.Provider({ value: "kept", get children() {
-      return <column style={{ width: "220px", padding: "12px", gap: "8px", "background-color": "var(--zui-color-background)", color: "var(--zui-color-foreground)" }}>
+    return <ThemeProvider scheme="light"><Context.Provider value="kept">
+      <column style={{ width: "220px", padding: "12px", gap: "8px", "background-color": "var(--zui-color-background)", color: "var(--zui-color-foreground)" }}>
         <Button testId="toggle-top" onClick={() => setTop(v => !v)}>Toggle toast</Button>
         <Button testId="focus-open" onClick={() => setFocused(true)}>Open focus scope</Button>
         <Button testId="toggle-source" onClick={() => setSource(v => !v)}>Toggle source</Button>
@@ -42,7 +42,7 @@ export function mount(root: NativeNode) {
           <Portal layer="modal"><Counter kind="modal" hit={setLast} /></Portal>
           <Show when={focused()}><Portal layer="modal"><FocusPanel close={() => setFocused(false)} /></Portal></Show>
         </box></Show>
-      </column>;
-    } })}</ThemeProvider>;
+      </column>
+    </Context.Provider></ThemeProvider>;
   }, root);
 }

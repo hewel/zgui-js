@@ -1,7 +1,7 @@
 import { createContext, createSignal, onCleanup, splitProps, useContext } from "#solid";
-import { createElement, insert, mergeProps, spread } from "../renderer/index.js";
+import { createElement, mergeProps, spread } from "../renderer/index.js";
 import type { NativeElementProps, NativeNode } from "../types.js";
-import { classes, element, forbidChildren, part, useStylesheet } from "./shared.js";
+import { classes, element, forbidChildren, part, provide, slot, useStylesheet } from "./shared.js";
 import { sheet } from "./generated/ItemStyle.js";
 import { sheet as partSheet } from "./generated/ItemPartStyle.js";
 import { sheet as groupSheet } from "./generated/ItemGroupStyle.js";
@@ -53,13 +53,10 @@ export function Item(props: ItemProps = {}): NativeNode {
       },
     },
   ), true);
-  insert(node, ItemContext.Provider({
-    value: () => {
-      setDescriptions(count => count + 1);
-      onCleanup(() => setDescriptions(count => count - 1));
-    },
-    get children() { return rest.children; },
-  }));
+  slot(node, provide(ItemContext, () => {
+    setDescriptions(count => count + 1);
+    onCleanup(() => setDescriptions(count => count - 1));
+  }, rest));
   return node;
 }
 

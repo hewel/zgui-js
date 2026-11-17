@@ -1,12 +1,12 @@
 import { onCleanup, splitProps, useContext } from "#solid";
-import { insert, memo, mergeProps } from "../renderer/index.js";
+import { memo, mergeProps } from "../renderer/index.js";
 import { focus, getWindowRect, observeGeometry } from "../nodes.js";
 import type { NativeChild, NativeElementProps, NativeKeyEvent, NativeNode, NativePointerBoundaryEvent, NativePointerEvent, NativePoint, NativeWindowRect } from "../types.js";
 import { OverlayContext, createOverlayState } from "./overlay.js";
 import type { OverlayRootProps, OverlayState } from "./overlay.js";
 import { createDelayed } from "./delay.js";
 import { callHandler } from "./state.js";
-import { classes } from "./shared.js";
+import { append, classes, provide, slot } from "./shared.js";
 import { Icon } from "./icons.js";
 import { CHEVRON_RIGHT } from "./generated/icons.js";
 import { menuRow, menuSurface } from "./menu.js";
@@ -27,7 +27,7 @@ export function MenuSub(props: MenuSubProps = {}): NativeChild {
   const closing = createDelayed();
   subClosings.set(state, closing);
   onCleanup(closing.cancel);
-  return OverlayContext.Provider({ value: state, get children() { return props.children; } });
+  return provide(OverlayContext, state, props);
 }
 
 export function headingToward(from: NativePoint, to: NativePoint, target: NativeWindowRect): boolean {
@@ -83,8 +83,8 @@ export function MenuSubTrigger(props: MenuSubTriggerProps = {}): NativeNode {
     },
   });
   observeGeometry(node, "viewport", viewport => { scale = viewport.scale; });
-  insert(node, memo(() => own.children), null);
-  insert(node, Icon({ icon: CHEVRON_RIGHT, class: "zui-menu__chevron" }), null);
+  slot(node, memo(() => own.children));
+  append(node, Icon({ icon: CHEVRON_RIGHT, class: "zui-menu__chevron" }));
   return node;
 }
 

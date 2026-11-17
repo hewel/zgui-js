@@ -1,19 +1,16 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { fileURLToPath } from "node:url";
 import { createHost, moduleFor } from "./native-fixture.mjs";
 
-const internal = fileURLToPath(new URL("../../packages/ui/src/components/popper.ts", import.meta.url));
-
 const solverFixture = `
-export { solvePopper } from ${JSON.stringify(internal)};
+export { solvePopper } from "@hewel/zgui/components";
 `;
 
 const integrationFixture = `
 import { createSignal, onCleanup, renderApp } from "@hewel/zgui";
 import type { NativeNode } from "@hewel/zgui";
-import { Popper } from ${JSON.stringify(internal)};
-import type { PopperPlacement } from ${JSON.stringify(internal)};
+import { Popper } from "@hewel/zgui/components";
+import type { PopperPlacement } from "@hewel/zgui/components";
 export const log = { mounts: 0, cleans: 0, positioner: undefined as NativeNode | undefined };
 const [active, setActive] = createSignal(true);
 const [choice, setChoice] = createSignal(0);
@@ -44,10 +41,14 @@ export function mount(root: NativeNode) {
 const textOf = current =>
   current.tag === "#text" ? current.props.get("text") ?? "" : current.children.map(textOf).join("");
 
-const stylesOf = node => new Map(node.props.get("style").split(";").map(part => part.trim()).filter(Boolean).map(part => {
-  const colon = part.indexOf(":");
-  return [part.slice(0, colon).trim(), part.slice(colon + 1).trim()];
-}));
+const stylesOf = node => {
+  const style = node.props.get("style");
+  if (style && typeof style === "object") return new Map(Object.entries(style));
+  return new Map(String(style ?? "").split(";").map(part => part.trim()).filter(Boolean).map(part => {
+    const colon = part.indexOf(":");
+    return [part.slice(0, colon).trim(), part.slice(colon + 1).trim()];
+  }));
+};
 
 async function mounted(t) {
   const registrations = [];
@@ -159,27 +160,27 @@ test("popper measures anchor content and viewport before placing", async t => {
   const style = () => positioner().props.get("style");
   assert.equal(registrations.length, 3);
   assert.deepEqual(registrations.map(r => r.kind), ["borderBox", "contentSize", "viewport"]);
-  assert.equal(style().includes("visibility: hidden"), true);
+  assert.equal(style().visibility, "hidden");
   const [borderBox, contentSize, viewport] = registrations;
   emit(borderBox, { x: 300.2, y: 200.2, width: 100.2, height: 30.2 });
   emit(viewport, { x: 0, y: 0, width: 800, height: 600, scale: 1.75 });
-  assert.equal(style().includes("visibility: hidden"), true);
+  assert.equal(style().visibility, "hidden");
   assert.equal(stylesOf(positioner()).get("--zui-popper-anchor-width"), "100px");
   emit(contentSize, { width: 0, height: 0 });
-  assert.equal(style().includes("visibility: hidden"), true);
+  assert.equal(style().visibility, "hidden");
   assert.equal(stylesOf(positioner()).get("--zui-popper-anchor-width"), "100px");
   emit(contentSize, { width: 200.1, height: 120.2 });
-  assert.equal(style().includes("visibility"), false);
-  assert.equal(style().includes(`left: ${438 / 1.75}px`), true);
-  assert.equal(style().includes(`top: ${410 / 1.75}px`), true);
+  assert.equal("visibility" in style(), false);
+  assert.equal(style().left, `${438 / 1.75}px`);
+  assert.equal(style().top, `${410 / 1.75}px`);
   assert.equal(positioner().props.get("data-side"), "bottom");
   assert.equal(stylesOf(positioner()).get("--zui-popper-anchor-width"), "100px");
   assert.equal(stylesOf(positioner()).get("--zui-popper-available-height"), "357px");
   assert.equal(stylesOf(positioner()).get("--zui-popper-anchor-x"), "100px");
   assert.equal(stylesOf(positioner()).get("--zui-popper-anchor-y"), "0px");
   emit(viewport, { x: 0, y: 0, width: 800, height: 600, scale: 2 });
-  assert.equal(style().includes("left: 250.5px"), true);
-  assert.equal(style().includes("top: 234.5px"), true);
+  assert.equal(style().left, "250.5px");
+  assert.equal(style().top, "234.5px");
   mod.setPlacement({ side: "top", align: "end" });
   assert.equal(stylesOf(positioner()).get("left"), "200.5px");
   assert.equal(stylesOf(positioner()).get("top"), "76px");
@@ -208,7 +209,7 @@ test("popper re-anchors and deactivates without losing content state", async t =
   const fresh = registrations[3];
   assert.equal(fresh.kind, "borderBox");
   assert.equal(registrations.filter(r => r.active).length, 3);
-  assert.equal(style().includes("visibility: hidden"), true);
+  assert.equal(style().visibility, "hidden");
   emit(retired, { x: 1, y: 1, width: 1, height: 1 });
   mod.setPlacement({ side: "right", align: "center" });
   emit(fresh, { x: 700, y: 200, width: 80, height: 30 });
@@ -219,18 +220,18 @@ test("popper re-anchors and deactivates without losing content state", async t =
   assert.equal(textOf(counter), "1");
   mod.setActive(false);
   assert.equal(registrations.filter(r => r.active).length, 0);
-  assert.equal(style().includes("visibility: hidden"), true);
+  assert.equal(style().visibility, "hidden");
   assert.equal(harness.byTestId("counter"), counter);
   assert.equal(textOf(counter), "1");
   mod.setActive(true);
   assert.equal(registrations.length, 7);
   assert.equal(registrations.filter(r => r.active).length, 3);
-  assert.equal(style().includes("visibility: hidden"), true);
+  assert.equal(style().visibility, "hidden");
   const latest = registrations.slice(4);
   emit(latest[0], { x: 700, y: 200, width: 80, height: 30 });
   emit(latest[1], { width: 200.1, height: 120.2 });
   emit(latest[2], { x: 0, y: 0, width: 800, height: 600, scale: 1.75 });
-  assert.equal(style().includes("visibility"), false);
+  assert.equal("visibility" in style(), false);
   assert.equal(textOf(counter), "1");
   assert.equal(mod.log.mounts, 1);
   finish();

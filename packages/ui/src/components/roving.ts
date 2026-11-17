@@ -13,11 +13,21 @@ export function createRovingFocus(orientation: Accessor<GroupOrientation>, navig
   const [active, setActive] = createSignal<NativeNode>();
   const ordered = () => {
     trackTreeOrder();
-    return members().slice().sort((a, b) => precedes(a.node, b.node) ? -1 : precedes(b.node, a.node) ? 1 : 0);
+    const list = members();
+    return list.length <= 1 ? list : list.slice().sort((a, b) => precedes(a.node, b.node) ? -1 : precedes(b.node, a.node) ? 1 : 0);
   };
   const tabStop = createMemo(() => {
-    const enabled = ordered().filter(item => !item.disabled());
-    return enabled.find(item => item.node === active()) ?? enabled.find(item => item.preferred()) ?? enabled[0];
+    const enabled = members().filter(item => !item.disabled());
+    if (enabled.length <= 1) return enabled[0];
+    const current = active();
+    if (current) {
+      const match = enabled.find(item => item.node === current);
+      if (match) return match;
+    }
+    const preferred = enabled.filter(item => item.preferred());
+    if (preferred.length === 1) return preferred[0];
+    const sorted = ordered().filter(item => !item.disabled());
+    return sorted.find(item => item.preferred()) ?? sorted[0];
   });
   const focusCandidate = (candidate: Entry | undefined): boolean => {
     if (!candidate) return false;

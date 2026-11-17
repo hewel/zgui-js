@@ -1,6 +1,5 @@
-import { Button, createSignal, isAnimating, onCleanup, renderApp } from "@hewel/zgui";
+import { Button, createSignal, isAnimating, mountStylesheet, renderApp } from "@hewel/zgui";
 import type { NativeAnimationEvent, NativeNode, NativeTransitionEvent } from "@hewel/zgui";
-declare const globalThis: { __zgui: { installStylesheet(name: string, css: string): void; removeStylesheet(name: string): void } };
 export const hostApiVersion = 1;
 const buttonStyle = { width: "150px", height: "32px", padding: "6px", background: "#374151", color: "#ffffff" };
 const css = `
@@ -18,8 +17,7 @@ const css = `
 `;
 export function mount(root: NativeNode) {
   return renderApp(() => {
-    globalThis.__zgui.installStylesheet("animation-fixture", css);
-    onCleanup(() => globalThis.__zgui.removeStylesheet("animation-fixture"));
+    mountStylesheet("animation-fixture", css);
     const [running, setRunning] = createSignal(false);
     const [wide, setWide] = createSignal(false);
     const [enabled, setEnabled] = createSignal(true);

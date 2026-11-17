@@ -1,10 +1,9 @@
 import { createContext, createUniqueId, onCleanup, splitProps, useContext } from "#solid";
-import { createElement, effect, insert, insertNode, setProp, spread } from "../renderer/index.js";
-import type { NativeHost } from "../host.js";
+import { createElement, effect, insertNode, setProp, spread } from "../renderer/index.js";
+import { installStylesheet, removeStylesheet } from "../nodes.js";
 import type { Accessor, NativeChild, NativeElementProps, NativeNode } from "../types.js";
+import { provide, slot } from "./shared.js";
 import { themes, themeTokens } from "./generated/themes.js";
-
-declare const globalThis: NativeHost;
 
 export type ColorScheme = "system" | "light" | "dark";
 export type ThemePreset = keyof typeof themes;
@@ -82,9 +81,9 @@ export function portalThemeScope(theme: ThemeContext, child: NativeNode): Native
   setProp(wrapper, "style", { display: "contents" });
   effect(() => {
     const css = `@layer zgui.tokens { ${themeSheet(`.${id}`, theme.light(), theme.dark(), theme.scheme())} }`;
-    globalThis.__zgui.installStylesheet(sheetName, css);
+    installStylesheet(sheetName, css);
   });
-  onCleanup(() => globalThis.__zgui.removeStylesheet(sheetName));
+  onCleanup(() => removeStylesheet(sheetName));
   insertNode(wrapper, child);
   return wrapper;
 }
@@ -105,9 +104,9 @@ export function ThemeProvider(props: ThemeProviderProps = {}): NativeChild {
   spread(wrapper, wrapperProps, true);
   effect(() => {
     const css = `@layer zgui.tokens { ${themeSheet(selector, context.light(), context.dark(), context.scheme())} }`;
-    globalThis.__zgui.installStylesheet(sheetName, css);
+    installStylesheet(sheetName, css);
   });
-  onCleanup(() => globalThis.__zgui.removeStylesheet(sheetName));
-  insert(wrapper, Internal.Provider({ value: context, get children() { return own.children; } }));
+  onCleanup(() => removeStylesheet(sheetName));
+  slot(wrapper, provide(Internal, context, own));
   return wrapper;
 }

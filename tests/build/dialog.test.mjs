@@ -341,7 +341,7 @@ test("exit retains surface while animating and reopening keeps its identity", as
 });
 
 test("optional controls update without rebuilding user children", async t => {
-  const { h, mod, portals, click, active, locks, settled, finish } = await mounted(t);
+  const { h, mod, portals, click, settled, finish } = await mounted(t);
   click("trigger");
   const surface = h.byTestId("surface");
   const counter = h.byTestId("counter");

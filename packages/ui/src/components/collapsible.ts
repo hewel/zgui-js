@@ -1,9 +1,9 @@
 import { createContext, createMemo, createSignal, onCleanup, splitProps, useContext } from "#solid";
-import { createElement, effect, insert, mergeProps, spread } from "../renderer/index.js";
+import { createElement, effect, mergeProps, spread } from "../renderer/index.js";
 import { focus, observeGeometry } from "../nodes.js";
 import type { Accessor, NativeElementProps, NativeEvent, NativeFocusEvent, NativeNode, NativeStyle } from "../types.js";
 import { callHandler, createControllable } from "./state.js";
-import { classes, element, useStylesheet } from "./shared.js";
+import { append, classes, element, provide, slot, useStylesheet } from "./shared.js";
 import { sheet as upstreamSheet } from "./generated/CollapsibleStyle.js";
 
 const sheet = { ...upstreamSheet, css: upstreamSheet.css + '\n.zui-collapsible__content[data-collapsed] { visibility: hidden; }' };
@@ -54,7 +54,7 @@ export function Collapsible(props: CollapsibleProps = {}): NativeNode {
   spread(node, mergeProps({ tabIndex: -1, get "data-state"() { return open() ? "open" : "closed"; } }, rest, {
     get class() { return classes(sheet.className, "zui-collapsible", rest.class); },
   }));
-  insert(node, DisclosureContext.Provider({ value: context, get children() { return own.children; } }));
+  slot(node, provide(DisclosureContext, context, own));
   return node;
 }
 
@@ -110,8 +110,8 @@ export function disclosureContent(props: NativeElementProps, measureClass = ""):
     onFocus(event: NativeFocusEvent) { own.onFocus?.(event); setFocused(true); },
     onBlur(event: NativeFocusEvent) { setFocused(false); own.onBlur?.(event); },
   }));
-  insert(inner, () => own.children);
-  insert(node, inner);
+  slot(inner, () => own.children);
+  append(node, inner);
   observeGeometry(inner, "borderSize", size => setHeight(Math.ceil(size.height)));
   observeGeometry(node, "scrollPosition", value => setCollapsed(value.scrollport.height === 0));
   effect(() => {

@@ -181,7 +181,7 @@ test("aspect ratio caller override wins and invalid ratios reject at mount", asy
 });
 
 function rootSheet(harness) {
-  return [...harness.stylesheets.entries()].find(([name, css]) => css.includes(":root"));
+  return [...harness.stylesheets.entries()].find(([_name, css]) => css.includes(":root"));
 }
 
 test("theme provider replaces one sheet per provider and scopes nested tokens", async t => {
@@ -277,7 +277,7 @@ test("nested theme override, invalid override, and sibling provider lifetimes", 
   assert.equal(harness.stylesheets.get(rootKey), rootCss);
 
   mod.api.setSibling(true);
-  const siblingEntries = [...harness.stylesheets.entries()].filter(([name, css]) => css.includes(":root"));
+  const siblingEntries = [...harness.stylesheets.entries()].filter(([_name, css]) => css.includes(":root"));
   assert.equal(siblingEntries.length, 2);
   const names = new Set(siblingEntries.map(([name]) => name));
   assert.equal(names.size, 2);

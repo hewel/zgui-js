@@ -326,7 +326,7 @@ test("collapsible keeps mounted children stable across close and open", async t 
   assert.equal(innerObs.kind, "borderSize");
   assert.equal(outerObs.kind, "scrollPosition");
   assert.deepEqual(mod.log.constructions, ["col-count"]);
-  const trigger = node(harness, "col-trigger");
+  node(harness, "col-trigger");
   const content = node(harness, "col-content");
   const counter = node(harness, "col-count");
   assert.equal(prop(harness, "col-trigger", "expanded"), true);

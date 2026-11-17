@@ -175,8 +175,6 @@ export function mountRadioChildren(root: NativeNode, child: () => NativeChild): 
 }
 `;
 
-const counters = () => ({ prevented: 0, stopped: 0 });
-
 const click = target => ({
   type: "click", target, prevented: 0, stopped: 0,
   preventDefault() { this.prevented = (this.prevented ?? 0) + 1; },

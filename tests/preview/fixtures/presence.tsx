@@ -1,7 +1,6 @@
-import { Button, Show, createSignal, onCleanup, renderApp } from "@hewel/zgui";
+import { Button, Show, createSignal, mountStylesheet, renderApp } from "@hewel/zgui";
 import type { NativeNode } from "@hewel/zgui";
 import { createPresence } from "../../../packages/ui/src/components/presence.js";
-declare const globalThis: { __zgui: { installStylesheet(name: string, css: string): void; removeStylesheet(name: string): void } };
 export const hostApiVersion = 1;
 const buttonStyle = { width: "150px", height: "32px", padding: "6px", background: "#374151", color: "#ffffff" };
 const css = `
@@ -28,8 +27,7 @@ function Panel(props: { open: boolean; mode: string }) {
 }
 export function mount(root: NativeNode) {
   return renderApp(() => {
-    globalThis.__zgui.installStylesheet("presence-fixture", css);
-    onCleanup(() => globalThis.__zgui.removeStylesheet("presence-fixture"));
+    mountStylesheet("presence-fixture", css);
     const [open, setOpen] = createSignal(false);
     const [source, setSource] = createSignal(true);
     const [mode, setMode] = createSignal("animated");

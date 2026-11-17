@@ -1,5 +1,5 @@
 import { Show, createEffect, splitProps, untrack, useContext } from "#solid";
-import { createElement, insert, memo, mergeProps, spread } from "../renderer/index.js";
+import { createElement, memo, mergeProps, spread } from "../renderer/index.js";
 import { lockScroll, registerDismissLayer, trapFocus } from "../nodes.js";
 import type { NativeAnimationEvent, NativeChild, NativeElementProps, NativeEvent, NativeNode, NativeTransitionEvent } from "../types.js";
 import { Button } from "./button.js";
@@ -9,7 +9,7 @@ import { OverlayContext, OverlayRoot, overlayPortal, raiseSurface } from "./over
 import type { OverlayRootProps } from "./overlay.js";
 import { createPresence } from "./presence.js";
 import { callHandler } from "./state.js";
-import { classes, element, forbidChildren, part, useStylesheet } from "./shared.js";
+import { classes, element, forbidChildren, part, slot, useStylesheet } from "./shared.js";
 import { sheet } from "./generated/DialogStyle.js";
 import { sheet as overlaySheet } from "./generated/OverlayStyle.js";
 
@@ -111,7 +111,7 @@ export function DialogContent(props: DialogContentProps = {}): NativeChild {
   const presence = createPresence(() => context?.open() ?? false);
   const elevation = raiseSurface("modal");
   const holder = element("box", { style: { display: "none" } });
-  insert(holder, Show({ get when() { return presence.mounted(); }, get children() {
+  slot(holder, Show({ get when() { return presence.mounted(); }, get children() {
     return overlayPortal(elevation, () => {
       const state = context!;
       const surface = createElement("box");
@@ -142,7 +142,7 @@ export function DialogContent(props: DialogContentProps = {}): NativeChild {
       }), true);
       const content = memo(() => own.children);
       const close = memo(() => (own.dismissControl ?? true) ? DialogDismiss() : null);
-      insert(surface, [content, close]);
+      slot(surface, [content, close]);
       const scrim = element("box", {
         class: classes(overlaySheet.className, "zui-overlay-scrim"), ariaHidden: true,
         get "data-state"() { return presence.state(); },

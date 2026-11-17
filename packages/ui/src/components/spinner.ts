@@ -1,7 +1,7 @@
 import { splitProps } from "#solid";
-import { insert, mergeProps } from "../renderer/index.js";
+import { mergeProps } from "../renderer/index.js";
 import type { NativeElementProps, NativeNode } from "../types.js";
-import { classes, element, forbidChildren, useStylesheet } from "./shared.js";
+import { append, classes, element, forbidChildren, useStylesheet } from "./shared.js";
 import { sheet } from "./generated/SpinnerStyle.js";
 
 export interface SpinnerProps extends Omit<NativeElementProps, "children"> {
@@ -22,6 +22,6 @@ export function Spinner(props: SpinnerProps = {}): NativeNode {
     rest,
     { get class() { return classes(sheet.className, "zui-spinner", rest.class); } },
   ));
-  insert(node, element("box", { class: "zui-spinner__mark" }));
+  append(node, element("box", { class: "zui-spinner__mark" }));
   return node;
 }

@@ -1,7 +1,8 @@
 import { createEffect, createMemo, createSignal } from "#solid";
-import { createElement, insert, spread } from "../renderer/index.js";
+import { createElement, spread } from "../renderer/index.js";
 import { observeGeometry } from "../nodes.js";
 import type { NativeChild, NativeNode, NativePoint, NativeSize, NativeStyle, NativeViewport, NativeWindowRect } from "../types.js";
+import { slot } from "./shared.js";
 
 export type PopperSide = "top" | "right" | "bottom" | "left";
 export type PopperAlign = "start" | "center" | "end";
@@ -19,7 +20,7 @@ export interface PopperSolution {
   available: NativeSize;
   overflow: number;
 }
-interface PopperProps extends PopperOptions {
+export interface PopperProps extends PopperOptions {
   anchor: NativeNode | null;
   active?: boolean;
   class?: string;
@@ -104,19 +105,30 @@ export function Popper(props: PopperProps): NativeNode {
     get "data-align"() { return placed()?.placement.align ?? null; },
     get style(): NativeStyle {
       const a = anchor(), v = viewport(), p = placed();
-      const width = active() && a && v ? `--zui-popper-anchor-width: ${px(snap(a.width, v.scale))};` : "";
-      if (!p) return `position: fixed; visibility: hidden; ${width}`;
+      const anchorWidth = active() && a && v ? px(snap(a.width, v.scale)) : undefined;
+      if (!p) {
+        return {
+          position: "fixed",
+          visibility: "hidden",
+          ...(anchorWidth ? { "--zui-popper-anchor-width": anchorWidth } : {}),
+        };
+      }
       const x = snap(p.origin.x, p.scale), y = snap(p.origin.y, p.scale);
       const anchorX = Math.max(0, Math.min(p.anchor.x + p.anchor.width / 2 - x, Math.max(0, p.floating.width)));
       const anchorY = Math.max(0, Math.min(p.anchor.y + p.anchor.height / 2 - y, Math.max(0, p.floating.height)));
-      return `position: fixed; left: ${px(x)}; top: ${px(y)}; ${width}`
-        + `--zui-popper-available-width: ${px(Math.floor(p.available.width))};`
-        + `--zui-popper-available-height: ${px(Math.floor(p.available.height))};`
-        + `--zui-popper-anchor-x: ${px(snap(anchorX, p.scale))};`
-        + `--zui-popper-anchor-y: ${px(snap(anchorY, p.scale))};`;
+      return {
+        position: "fixed",
+        left: px(x),
+        top: px(y),
+        ...(anchorWidth ? { "--zui-popper-anchor-width": anchorWidth } : {}),
+        "--zui-popper-available-width": px(Math.floor(p.available.width)),
+        "--zui-popper-available-height": px(Math.floor(p.available.height)),
+        "--zui-popper-anchor-x": px(snap(anchorX, p.scale)),
+        "--zui-popper-anchor-y": px(snap(anchorY, p.scale)),
+      };
     },
   }, true);
   props.ref?.(node);
-  insert(node, () => props.children);
+  slot(node, () => props.children);
   return node;
 }

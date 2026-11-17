@@ -1,5 +1,5 @@
 import { batch, createContext, createSignal, onCleanup, splitProps, untrack, useContext } from "#solid";
-import { createElement, insert, insertNode, memo, mergeProps, spread } from "../renderer/index.js";
+import { createElement, memo, mergeProps, spread } from "../renderer/index.js";
 import { getWindowRect } from "../nodes.js";
 import type {
   Accessor, NativeChild, NativeContextMenuEvent, NativeElementProps, NativeNode, NativePointerDownEvent,
@@ -8,7 +8,7 @@ import { MenuContent, MenuContext, menuRoot } from "./menu.js";
 import type { MenuContentProps } from "./menu.js";
 import type { OverlayRootProps, OverlayState } from "./overlay.js";
 import { callHandler } from "./state.js";
-import { classes, element, useStylesheet } from "./shared.js";
+import { append, classes, element, provide, slot, useStylesheet } from "./shared.js";
 import { sheet } from "./generated/ContextMenuStyle.js";
 
 export interface ContextMenuPoint {
@@ -57,10 +57,7 @@ export function ContextMenu(props: ContextMenuProps = {}): NativeChild {
           state.setOpen(true);
         });
       };
-      return PlaceContext.Provider({
-        value: { openAt },
-        get children() { return props.children; },
-      });
+      return provide(PlaceContext, { openAt }, props);
     },
   }));
 }
@@ -104,12 +101,12 @@ export function ContextMenuTrigger(props: ContextMenuTriggerProps = {}): NativeN
     ariaHidden: true,
     get style() {
       const current = record?.point() ?? { x: 0, y: 0 };
-      return `left: ${current.x}px; top: ${current.y}px;`;
+      return { left: `${current.x}px`, top: `${current.y}px` };
     },
   });
   state?.trigger.ref(anchor);
-  insertNode(area, anchor);
-  insert(area, memo(() => own.children), anchor);
+  append(area, anchor);
+  slot(area, memo(() => own.children), anchor);
   return area;
 }
 

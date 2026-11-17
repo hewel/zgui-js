@@ -1,5 +1,5 @@
 import { Show, createContext, onCleanup, splitProps, useContext } from "#solid";
-import { createElement, insert, insertNode, memo, mergeProps, spread } from "../renderer/index.js";
+import { createElement, memo, mergeProps, spread } from "../renderer/index.js";
 import { focus, getTextContent } from "../nodes.js";
 import type { Accessor, NativeChild, NativeElementProps, NativeEvent, NativeFocusEvent, NativeKeyEvent, NativeNode, NativePointerBoundaryEvent, NativePointerDownEvent, NativeRole } from "../types.js";
 import { anchoredSurface } from "./anchored.js";
@@ -9,7 +9,7 @@ import type { OverlayRootProps, OverlayState } from "./overlay.js";
 import { createRovingFocus } from "./roving.js";
 import { createDelayed } from "./delay.js";
 import { callHandler, createControllable } from "./state.js";
-import { classes, element, forbidChildren, part, type Stylesheet, useStylesheet } from "./shared.js";
+import { append, classes, element, forbidChildren, part, provide, slot, type Stylesheet, useStylesheet } from "./shared.js";
 import { Icon } from "./icons.js";
 import { CHECK, DOT } from "./generated/icons.js";
 import { sheet } from "./generated/MenuStyle.js";
@@ -41,7 +41,7 @@ export function menuRoot(props: OverlayRootProps): NativeChild {
     let alive = true;
     onCleanup(() => { alive = false; });
     const context = { state, dismiss() { if (alive) state.setOpen(false); } };
-    return MenuContext.Provider({ value: context, get children() { return props.children; } });
+    return provide(MenuContext, context, props);
   } }));
 }
 
@@ -72,18 +72,15 @@ export function menuSurface(state: OverlayState | undefined, props: MenuContentP
     trap: true,
     children() {
       const roving = createRovingFocus(() => "vertical", "active");
-      return MenuSurfaceContext.Provider({
-        value: { node: state!.content.node, roving },
-        get children() {
-          const list = createElement("box");
-          spread(list, { class: "zui-menu__list", "data-orientation": "vertical", onKeyDown: roving.onKeyDown }, true);
-          const keys = createElement("box");
-          const onTypeahead = createTypeaheadHandler(roving);
-          spread(keys, { class: "zui-menu__keys", onKeyDown: onTypeahead }, true);
-          insertNode(list, keys);
-          insert(keys, () => own.children);
-          return list;
-        },
+      return provide(MenuSurfaceContext, { node: state!.content.node, roving }, () => {
+        const list = createElement("box");
+        spread(list, { class: "zui-menu__list", "data-orientation": "vertical", onKeyDown: roving.onKeyDown }, true);
+        const keys = createElement("box");
+        const onTypeahead = createTypeaheadHandler(roving);
+        spread(keys, { class: "zui-menu__keys", onKeyDown: onTypeahead }, true);
+        append(list, keys);
+        slot(keys, () => own.children);
+        return list;
       });
     },
   });
@@ -105,7 +102,7 @@ export function MenuTypeahead(props: MenuTypeaheadProps = {}): NativeNode {
       if (callHandler(event, own.onKeyDown)) onTypeahead(event);
     },
   }), true);
-  insert(node, () => own.children);
+  slot(node, () => own.children);
   return node;
 }
 
@@ -168,33 +165,54 @@ export function MenuItem(props: MenuItemProps = {}): NativeNode {
     class: () => classes(own.destructive && "zui-menu__item--destructive", own.inset && "zui-menu__item--inset"),
     select() { own.onSelect?.(); if (own.closeOnSelect ?? true) menu?.dismiss(); },
   });
-  insert(node, memo(() => own.children), null);
-  insert(node, Show({ get when() { return own.shortcut != null; }, get children() {
+  slot(node, memo(() => own.children));
+  slot(node, Show({ get when() { return own.shortcut != null; }, get children() {
     return MenuShortcut({ get children() { return own.shortcut; } });
-  } }), null);
+  } }));
   return node;
 }
 
-function indicator(checked: Accessor<boolean>, dot: boolean): NativeNode {
+export function menuIndicator(baseClass: string, dotClass: string, checked: Accessor<boolean>, dot: boolean): NativeNode {
   const box = createElement("box");
-  spread(box, { class: classes("zui-menu__indicator", dot && "zui-menu__indicator--dot") }, true);
+  spread(box, { class: classes(baseClass, dot && dotClass) }, true);
   const show = memo(checked);
-  insert(box, () => show() ? Icon({ icon: dot ? DOT : CHECK }) : null);
+  slot(box, () => show() ? Icon({ icon: dot ? DOT : CHECK }) : null);
   return box;
+}
+
+export function createMenuCheckedState(name: string, props: {
+  checked?: boolean; defaultChecked?: boolean; onCheckedChange?: (checked: boolean) => void;
+}): [Accessor<boolean>, (next: boolean) => void] {
+  const [read, write] = createControllable<boolean>({
+    value: () => props.checked, defaultValue: () => props.defaultChecked, onChange: () => props.onCheckedChange,
+  }, false);
+  const checked = memo(() => {
+    const value = read();
+    if (typeof value !== "boolean") throw new TypeError(`${name} checked must be a boolean`);
+    return value;
+  });
+  return [checked, write];
+}
+
+export function createMenuRadioValue(name: string, readValue: Accessor<string>): Accessor<string> {
+  return memo(() => {
+    const value = readValue();
+    if (typeof value !== "string" || !value) throw new TypeError(`${name} value must be a non-empty string`);
+    return value;
+  });
 }
 
 export function MenuCheckboxItem(props: MenuCheckboxItemProps = {}): NativeNode {
   const menu = useContext(MenuContext);
   const [own, rest] = splitProps(props, ["children", "checked", "defaultChecked", "onCheckedChange", "closeOnSelect"]);
-  const [read, write] = createControllable<boolean>({ value: () => own.checked, defaultValue: () => own.defaultChecked, onChange: () => own.onCheckedChange }, false);
-  const checked = memo(() => { const value = read(); if (typeof value !== "boolean") throw new TypeError("MenuCheckboxItem checked must be a boolean"); return value; });
+  const [checked, write] = createMenuCheckedState("MenuCheckboxItem", own);
   const node = menuRow(mergeProps(rest, {
     get checked() { return checked(); }, get "data-state"() { return checked() ? "checked" : "unchecked"; },
   }), { role: "menuItemCheckBox", class: () => "zui-menu__item--check",
     select() { write(!checked()); if (own.closeOnSelect ?? true) menu?.dismiss(); },
   });
-  insert(node, indicator(checked, false));
-  insert(node, memo(() => own.children), null);
+  append(node, menuIndicator("zui-menu__indicator", "zui-menu__indicator--dot", checked, false));
+  slot(node, memo(() => own.children));
   return node;
 }
 
@@ -207,12 +225,9 @@ export function MenuRadioGroup(props: MenuRadioGroupProps = {}): NativeNode {
   spread(node, mergeProps({ role: "group" as const, get ariaLabel() { return own.label ?? null; } }, rest, {
     get class() { return classes("zui-menu__group", rest.class); },
   }), true);
-  MenuRadioContext.Provider({
-    value: { value, choose },
-    get children() {
-      insert(node, () => own.children);
-      return null;
-    },
+  provide(MenuRadioContext, { value, choose }, () => {
+    slot(node, () => own.children);
+    return null;
   });
   return node;
 }
@@ -220,15 +235,15 @@ export function MenuRadioGroup(props: MenuRadioGroupProps = {}): NativeNode {
 export function MenuRadioItem(props: MenuRadioItemProps): NativeNode {
   const menu = useContext(MenuContext), radio = useContext(MenuRadioContext);
   const [own, rest] = splitProps(props, ["children", "value", "closeOnSelect"]);
-  const value = memo(() => { const value = own.value; if (typeof value !== "string" || !value) throw new TypeError("MenuRadioItem value must be a non-empty string"); return value; });
+  const value = createMenuRadioValue("MenuRadioItem", () => own.value);
   const checked = () => radio?.value() === value();
   const node = menuRow(mergeProps(rest, {
     get checked() { return checked(); }, get "data-state"() { return checked() ? "checked" : "unchecked"; }, get "data-value"() { return value(); },
   }), { role: "menuItemRadio", class: () => "zui-menu__item--check",
     select() { radio?.choose(value()); if (own.closeOnSelect ?? true) menu?.dismiss(); },
   });
-  insert(node, indicator(checked, true));
-  insert(node, memo(() => own.children), null);
+  append(node, menuIndicator("zui-menu__indicator", "zui-menu__indicator--dot", checked, true));
+  slot(node, memo(() => own.children));
   return node;
 }
 
@@ -244,7 +259,7 @@ export function MenuGroup(props: MenuGroupProps = {}): NativeNode {
   spread(node, mergeProps({ role: "group" as const, get ariaLabel() { return own.label ?? null; } }, rest, {
     get class() { return classes("zui-menu__group", rest.class); },
   }), true);
-  insert(node, () => own.children);
+  slot(node, () => own.children);
   return node;
 }
 export function MenuSeparator(props: MenuSeparatorProps = {}): NativeNode {

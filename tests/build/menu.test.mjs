@@ -468,7 +468,7 @@ test("selection requests close and presence keeps busy exits", async t => {
 });
 
 test("controlled root only requests and onSelect unmounting emits no late request", async t => {
-  const { h, mod, send, flush, finish } = await mounted(t, "mountControlled");
+  const { h, mod, send, finish } = await mounted(t, "mountControlled");
   send("trigger", "onClick");
   assert.deepEqual(mod.log.opens, [true], "click requests open");
   assert.equal(h.byTestId("surface"), undefined, "controlled surface waits for acceptance");
@@ -759,7 +759,7 @@ test("nested roots isolate dismissal, dialogs own the scroll lock and orphans st
 });
 
 test("metadata parts keep caller attrs and runtime rejects invalid props", async t => {
-  const { h, mod, send, finish, textOf } = await mounted(t, "mountMeta");
+  const { h, mod, finish, textOf } = await mounted(t, "mountMeta");
   const label = h.byTestId("label"), group = h.byTestId("group"), sep = h.byTestId("sep"), item = h.byTestId("meta-item");
   assert.ok(label.props.get("class").includes("zui-menu__label"));
   assert.ok(label.props.get("class").includes("zui-menu__label--inset"));
@@ -881,8 +881,8 @@ test("submenus open by click and named keys, keep identity and right placement",
   emit(geometry.find(record => record.node === positioner && record.kind === "viewport"), { x: 0, y: 0, width: 800, height: 600, scale: 1 });
   emit(geometry.find(record => record.node === positioner && record.kind === "contentSize"), { width: 180, height: 100 });
   const style = positioner.props.get("style");
-  assert.ok(style.includes("left: 356px"), `right placement applies the -4 offset: ${style}`);
-  assert.ok(style.includes("top: 100px"), `start alignment follows the anchor: ${style}`);
+  assert.equal(style.left, "356px", `right placement applies the -4 offset: ${JSON.stringify(style)}`);
+  assert.equal(style.top, "100px", `start alignment follows the anchor: ${JSON.stringify(style)}`);
   assert.equal(positioner.props.get("data-side"), "right");
   assert.equal(traps.length, 2, "each mounted surface owns a focus trap");
   assert.equal(locks.length, 0, "menus never lock scroll");

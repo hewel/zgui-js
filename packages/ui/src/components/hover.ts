@@ -4,6 +4,7 @@ import type { Accessor, NativeChild } from "../types.js";
 import { OverlayContext, OverlayRoot } from "./overlay.js";
 import type { OverlayRootProps, OverlayState } from "./overlay.js";
 import { createDelayed } from "./delay.js";
+import { provide } from "./shared.js";
 export interface HoverProps extends OverlayRootProps { delay?: number; closeDelay?: number; }
 interface Showing { state: OverlayState; setInstant(value: boolean): void; closeNow(): void; }
 export function createHandoff() {
@@ -46,6 +47,6 @@ export function HoverRoot(props: HoverProps, defaults: {
   return OverlayRoot(mergeProps(props, { get children() {
     const state = useContext(OverlayContext)!;
     const intent = createHoverIntent(state, () => props.delay ?? defaults.delay(), () => props.closeDelay ?? defaults.closeDelay(), defaults.handoff);
-    return HoverContext.Provider({ value: intent, get children() { return props.children; } });
+    return provide(HoverContext, intent, props);
   } }));
 }

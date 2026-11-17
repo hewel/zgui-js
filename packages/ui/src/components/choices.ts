@@ -1,8 +1,8 @@
 import { splitProps } from "#solid";
-import { insert, mergeProps } from "../renderer/index.js";
+import { mergeProps } from "../renderer/index.js";
 import type { NativeElementProps, NativeEvent, NativeNode, NativePointerDownEvent } from "../types.js";
 import { callHandler, createControllable } from "./state.js";
-import { classes, element, forbidChildren, useStylesheet } from "./shared.js";
+import { append, classes, element, forbidChildren, useStylesheet } from "./shared.js";
 import { Icon } from "./icons.js";
 import { CHECK, MINUS } from "./generated/icons.js";
 import { sheet as checkboxSheet } from "./generated/CheckboxStyle.js";
@@ -76,8 +76,8 @@ export function Checkbox(props: CheckboxProps = {}): NativeNode {
       },
     },
   ));
-  insert(node, Icon({ icon: CHECK, class: "zui-checkbox__tick" }));
-  insert(node, Icon({ icon: MINUS, class: "zui-checkbox__dash" }));
+  append(node, Icon({ icon: CHECK, class: "zui-checkbox__tick" }));
+  append(node, Icon({ icon: MINUS, class: "zui-checkbox__dash" }));
   return node;
 }
 
@@ -123,7 +123,7 @@ export function Switch(props: SwitchProps = {}): NativeNode {
       },
     },
   ));
-  insert(node, element("box", { class: "zui-switch__thumb" }));
+  append(node, element("box", { class: "zui-switch__thumb" }));
   return node;
 }
 

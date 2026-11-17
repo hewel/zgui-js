@@ -6,7 +6,7 @@ import type { PopperPlacement } from "./popper.js";
 import { HoverContext, HoverRoot, createHandoff } from "./hover.js";
 import type { HoverProps } from "./hover.js";
 import { callHandler } from "./state.js";
-import { classes, element, forbidChildren, useStylesheet } from "./shared.js";
+import { classes, element, forbidChildren, provide, useStylesheet } from "./shared.js";
 import { sheet } from "./generated/TooltipStyle.js";
 export type TooltipProps = HoverProps;
 export interface TooltipProviderProps { delay?: number; closeDelay?: number; children?: NativeChild; }
@@ -17,7 +17,7 @@ const Group = createContext<{ delay: () => number; closeDelay: () => number; han
 const defaultOffset = 10 * Math.SQRT2 / 2 - 1 + 4;
 export function TooltipProvider(props: TooltipProviderProps = {}): NativeChild {
   const value = { delay: () => props.delay ?? 0, closeDelay: () => props.closeDelay ?? 150, handoff: createHandoff() };
-  return Group.Provider({ value, get children() { return props.children; } });
+  return provide(Group, value, props);
 }
 export function Tooltip(props: TooltipProps = {}): NativeChild {
   const group = useContext(Group);

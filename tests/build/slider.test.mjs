@@ -76,8 +76,6 @@ export function mountShown(root: NativeNode): () => void {
 }
 `;
 
-const counters = () => ({ captured: 0, released: 0, activated: 0, prevented: 0, stopped: 0 });
-
 const pointer = (type, target, options = {}) => ({
   type, target, currentTarget: target,
   phase: "target", timestamp: 0,
@@ -282,7 +280,7 @@ test("invalid bounds and values fail clearly", async t => {
 });
 
 test("pointer gestures map positions through the track rect, not the root", async t => {
-  const { mod, harness } = await mounted(t, "mountRange", 0, 100, 1, 0);
+  const { harness } = await mounted(t, "mountRange", 0, 100, 1, 0);
   const root = slider(harness);
   const thumb = part(harness, "zui-slider__thumb");
   harness.rects.set(root, { x: 10, y: 0, width: 1000, height: 40 });
@@ -311,7 +309,7 @@ test("pointer gestures map positions through the track rect, not the root", asyn
 });
 
 test("missing or degenerate geometry aborts capture but never strands a drag", async t => {
-  const { mod, harness } = await mounted(t, "mountRange", 0, 100, 1, 0);
+  const { harness } = await mounted(t, "mountRange", 0, 100, 1, 0);
   const root = slider(harness);
   const trackNode = track(harness);
 
@@ -481,7 +479,7 @@ test("disabled and caller prevention gate gestures but never strand cleanup", as
 
 test("controlled value waits for an echo and prop changes never reset owned state", async t => {
   const { mod, harness } = await mounted(t, "mountControlled");
-  const root = slider(harness);
+  slider(harness);
   harness.rects.set(track(harness), { x: 0, y: 0, width: 100, height: 10 });
   press(harness, "ArrowRight");
   assert.deepEqual(mod.log.values, [6]);

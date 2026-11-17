@@ -241,7 +241,7 @@ test("trigger renders zero-sized anchor after dynamic children and stays lazy", 
   const anchor = trigger.children[trigger.children.length - 1];
   assert.equal(anchor.props.get("class"), "zui-context-menu__anchor");
   assert.equal(anchor.props.get("ariaHidden"), true);
-  assert.equal(anchor.props.get("style"), "left: 0px; top: 0px;");
+  assert.deepEqual(anchor.props.get("style"), { left: "0px", top: "0px" });
 
   mod.setRows(["alpha", "beta", "gamma"]);
   assert.equal(trigger.children[trigger.children.length - 1], anchor, "dynamic child updates keep anchor intact at end");
@@ -269,7 +269,7 @@ test("onContextMenu, secondary pointerdown, and useContextMenuPlace position anc
   assert.equal(trigger.props.get("expanded"), true);
   assert.equal(trigger.props.get("ariaControls"), surface);
   assert.equal(trigger.props.get("data-state"), "open");
-  assert.equal(anchor.props.get("style"), "left: 65px; top: 52px;");
+  assert.deepEqual(anchor.props.get("style"), { left: "65px", top: "52px" });
   assert.equal(layers.length, 1);
   assert.equal(layers[0].options.exclude, anchor, "only the 0x0 anchor is excluded so clicking area dismisses");
   assert.equal(layers[0].options.dismissOnOutsidePress, true);
@@ -285,8 +285,8 @@ test("onContextMenu, secondary pointerdown, and useContextMenuPlace position anc
   emit(boxObs, { x: 145, y: 112, width: 0, height: 0 });
   emit(sizeObs, { width: 180, height: 120 });
   emit(viewObs, { x: 0, y: 0, width: 800, height: 600, scale: 1 });
-  assert.ok(String(positioner.props.get("style")).includes("left: 145px; top: 112px;"),
-    `offset defaults to 0 at point, got: ${positioner.props.get("style")}`);
+  assert.equal(positioner.props.get("style").left, "145px");
+  assert.equal(positioner.props.get("style").top, "112px");
 
   layers[0].callback("outside-press");
   flush();
@@ -297,10 +297,10 @@ test("onContextMenu, secondary pointerdown, and useContextMenuPlace position anc
   const secondary = send("trigger", "onPointerDown", { button: "secondary", position: { x: 200, y: 180 } });
   assert.equal(secondary.prevented, true);
   assert.ok(h.byTestId("surface"));
-  assert.equal(anchor.props.get("style"), "left: 120px; top: 120px;");
+  assert.deepEqual(anchor.props.get("style"), { left: "120px", top: "120px" });
 
   mod.getPlace()?.openAt({ x: 95, y: 75 });
-  assert.equal(anchor.props.get("style"), "left: 15px; top: 15px;");
+  assert.deepEqual(anchor.props.get("style"), { left: "15px", top: "15px" });
   assert.throws(() => mod.getPlace()?.openAt({ x: Number.NaN, y: 10 }), RangeError);
   assert.throws(() => mod.getPlace()?.openAt({ x: 10, y: Number.POSITIVE_INFINITY }), RangeError);
 
@@ -348,7 +348,7 @@ test("controlled context menu waits for caller open updates", async t => {
   c.mod.setControlledOpen(true);
   assert.ok(c.h.byTestId("surface"));
   const anchor = c.h.byTestId("trigger").children[c.h.byTestId("trigger").children.length - 1];
-  assert.equal(anchor.props.get("style"), "left: 50px; top: 40px;");
+  assert.deepEqual(anchor.props.get("style"), { left: "50px", top: "40px" });
   c.send("item-close", "onClick");
   assert.deepEqual(c.mod.log.opens, [true, false]);
   c.finish();

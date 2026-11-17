@@ -1,7 +1,7 @@
 import { splitProps } from "#solid";
-import { insert, memo, mergeProps } from "../renderer/index.js";
+import { memo, mergeProps } from "../renderer/index.js";
 import type { NativeElementProps, NativeNode } from "../types.js";
-import { classes, element, forbidChildren, useStylesheet } from "./shared.js";
+import { append, classes, element, forbidChildren, useStylesheet } from "./shared.js";
 import { sheet } from "./generated/ProgressStyle.js";
 
 export interface ProgressProps extends Omit<NativeElementProps, "children"> {
@@ -41,6 +41,6 @@ export function Progress(props: ProgressProps = {}): NativeNode {
     rest,
     { get class() { return classes(sheet.className, "zui-progress", rest.class); } },
   ));
-  insert(node, element("box", { class: "zui-progress__fill" }));
+  append(node, element("box", { class: "zui-progress__fill" }));
   return node;
 }

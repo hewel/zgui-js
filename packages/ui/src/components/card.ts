@@ -1,7 +1,7 @@
 import { createContext, createSignal, onCleanup, splitProps, useContext } from "#solid";
-import { insert, mergeProps } from "../renderer/index.js";
+import { mergeProps } from "../renderer/index.js";
 import type { NativeChild, NativeElementProps, NativeNode } from "../types.js";
-import { classes, element, part, useStylesheet } from "./shared.js";
+import { classes, element, part, provide, slot, useStylesheet } from "./shared.js";
 import { sheet } from "./generated/CardStyle.js";
 
 export type CardProps = NativeElementProps;
@@ -41,7 +41,7 @@ export function CardHeader(props: CardHeaderProps = {}): NativeChild {
       return classes("zui-card__header", count() > 0 && "zui-card__header--action", rest.class);
     },
   }));
-  insert(header, HeaderContext.Provider({ value: state, get children() { return own.children; } }));
+  slot(header, provide(HeaderContext, state, own));
   return header;
 }
 

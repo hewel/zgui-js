@@ -59,7 +59,6 @@ test("portal mounts children on the requested band and keeps context", async t =
   const { mod, root, layers, harness, finish } = await mounted(t, fixture);
   assert.equal(layers.length, 1);
   assert.equal(layers[0].layer, "modal");
-  const portal = layers[0].node;
   const counter = harness.byTestId("counter");
   assert.ok(counter, "portal content should be attached");
   assert.equal(textOf(counter), "kept:0");

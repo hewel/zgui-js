@@ -1,6 +1,5 @@
-import { Button, Portal, Show, createSignal, focus, getWindowRect, lockScroll, onCleanup, renderApp } from "@hewel/zgui";
+import { Button, Portal, Show, createSignal, focus, getWindowRect, lockScroll, mountStylesheet, renderApp } from "@hewel/zgui";
 import type { NativeNode, NativeWindowRect } from "@hewel/zgui";
-declare const globalThis: { __zgui: { installStylesheet(name: string, css: string): void; removeStylesheet(name: string): void } };
 export const hostApiVersion = 1;
 const buttonStyle = { width: "150px", height: "32px", padding: "6px", background: "#374151", color: "#ffffff" };
 const css = `:root { display: block; overflow-y: scroll; }
@@ -26,8 +25,7 @@ function Leases(props: { source: boolean; outer: boolean; inner: boolean }) {
 }
 export function mount(root: NativeNode) {
   return renderApp(() => {
-    globalThis.__zgui.installStylesheet("scroll-lock-fixture", css);
-    onCleanup(() => globalThis.__zgui.removeStylesheet("scroll-lock-fixture"));
+    mountStylesheet("scroll-lock-fixture", css);
     const [outer, setOuter] = createSignal(false);
     const [inner, setInner] = createSignal(false);
     const [source, setSource] = createSignal(true);
