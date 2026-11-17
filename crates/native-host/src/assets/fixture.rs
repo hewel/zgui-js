@@ -260,7 +260,7 @@ impl FixtureRuntime {
             match scheduled {
                 Scheduled::Event(event) => self.apply(&mut state, event),
                 Scheduled::Asset { generation, id, result, injected } => {
-                    if injected { if let Some(call) = state.calls.get_mut(&id) { call.error = result.as_ref().err().map(|e| e.code); } }
+                    if injected && let Some(call) = state.calls.get_mut(&id) { call.error = result.as_ref().err().map(|e| e.code); }
                     self.record(&mut state, "response", json!({"requestId":id,"errorCode":result.as_ref().err().map(|e| e.code)}));
                     state.deliveries.push_back(Completion { generation, request_id: id, result });
                 }
@@ -287,7 +287,7 @@ impl FixtureRuntime {
     pub(super) fn take(&self) -> Option<Completion> { self.state.borrow_mut().deliveries.pop_front() }
     pub(super) fn has_delivery(&self) -> bool { !self.state.borrow().deliveries.is_empty() }
     pub(super) fn delivered(&self, id: u64, error: bool) {
-        if error { if let Some(call) = self.state.borrow_mut().calls.get_mut(&id) { call.error_delivered = true; } }
+        if error && let Some(call) = self.state.borrow_mut().calls.get_mut(&id) { call.error_delivered = true; }
     }
     pub(super) fn ignored(&self, id: u64, reason: &str) {
         let mut state = self.state.borrow_mut();
@@ -295,9 +295,7 @@ impl FixtureRuntime {
     }
     pub(super) fn cancel(&self, id: u64) {
         let mut state = self.state.borrow_mut();
-        if let Some(call) = state.calls.get_mut(&id) {
-            if !call.error_delivered { call.error = None; }
-        }
+        if let Some(call) = state.calls.get_mut(&id) && !call.error_delivered { call.error = None; }
         state.scheduled.retain(|_, item| !matches!(item, Scheduled::Asset { id: other, .. } if *other == id));
         state.deliveries.retain(|item| item.request_id != id);
         self.record(&mut state, "cancellation", json!({"requestId":id}));

@@ -584,10 +584,10 @@ fn parse(bytes: &[u8], available: &[&str], virtual_profile: bool) -> Result<Scen
                 if [input.delta.x, input.delta.y].into_iter().any(|v| !v.is_finite() || !(v as f32).is_finite()) {
                     return Err(invalid("wheel delta exceeds native finite coordinate range"));
                 }
-                if let PointerLocation::Position { x, y, .. } = &location {
-                    if !(*x as f32).is_finite() || !(*y as f32).is_finite() {
-                        return Err(invalid("wheel position exceeds native finite coordinate range"));
-                    }
+                if let PointerLocation::Position { x, y, .. } = &location
+                    && (!(*x as f32).is_finite() || !(*y as f32).is_finite())
+                {
+                    return Err(invalid("wheel position exceeds native finite coordinate range"));
                 }
                 require(&mut requirements, "input.wheel");
                 Step::Wheel { id:input.id, location, delta:input.delta, phase:input.phase }

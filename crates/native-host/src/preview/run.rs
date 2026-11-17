@@ -169,8 +169,8 @@ pub fn worker(args: impl Iterator<Item=String>) -> supervisor::Report {
         }
         let generation=active.generation();
         let frames=active.frames();
-        let (teardown,cleanup_fault)=active.finish();
-        ledger.observations(generation,frames,found);
+        let (teardown,cleanup_fault,telemetry)=active.finish();
+        ledger.observations(generation,frames,telemetry,found);
         ledger.cleanup(teardown,cleanup_fault,output.as_ref());
     }
     if ledger.has_failed() && ledger.evidence_missing() && ledger.frames()>0 && let Some(output)=&output {
@@ -195,8 +195,8 @@ fn validate_steps(scenario:&scenario::Scenario,profile:&profile::Profile)->Resul
                 advanced_ms=advanced_ms.checked_add(*by_ms).filter(|total|*total<=profile.limits.max_virtual_duration_ms)
                     .ok_or_else(||Error::new("E_SCHEMA",2,"scenario advances beyond maxVirtualDurationMs"))?;
             }
-            Step::SurfaceResize{width,height,..}=> { surface.width=*width;surface.height=*height;profile::dimensions(&surface)?; }
-            Step::SurfaceScale{scale,..}=> { surface.scale=*scale;profile::dimensions(&surface)?; }
+            Step::SurfaceResize{width,height,..}=> { surface.width = *width; surface.height = *height; profile::dimensions(&surface)?; }
+            Step::SurfaceScale{scale,..}=> { surface.scale = *scale; profile::dimensions(&surface)?; }
             _=>{}
         }
     }

@@ -13,9 +13,9 @@ impl Drop for Directory { fn drop(&mut self) { let _=std::fs::remove_dir_all(&se
 #[test]
 fn successive_publication_failures_retain_the_application_cause() {
     let cause=json!({"code":"E_JS_EXCEPTION","message":"original mount failure","stage":"mount","exitCode":3});
-    let worker=ledger::publication_failure(Error::new("E_OUTPUT_LIMIT",8,"diagnostic budget"),&json!({"firstError":cause}));
-    let controller=ledger::publication_failure(Error::new("E_OUTPUT_IO",8,"missing worker inventory"),&worker);
-    let final_result=ledger::publication_failure(Error::new("E_OUTPUT_LIMIT",8,"final result budget"),&controller);
+    let worker=publication_failure(Error::new("E_OUTPUT_LIMIT",8,"diagnostic budget"),&json!({"firstError":cause}));
+    let controller=publication_failure(Error::new("E_OUTPUT_IO",8,"missing worker inventory"),&worker);
+    let final_result=publication_failure(Error::new("E_OUTPUT_LIMIT",8,"final result budget"),&controller);
     assert_eq!(final_result["originalError"],cause);
     assert_eq!(final_result["exitCode"],8);
 }
@@ -47,8 +47,8 @@ impl ledger::StepDriver for Scripted {
 fn settle_step(id:&str)->Step { Step::Settle{id:id.to_owned(),timeout_ms:None} }
 fn capture_step(id:&str)->Step { Step::Capture{id:id.to_owned(),capture_id:id.to_owned(),required_frame_time_us:None,allowed_pending_assets:Vec::new()} }
 fn assert_step(id:&str)->Step { Step::Assert{id:id.to_owned(),
-    target:super::super::scenario::Target{surface:"main".into(),selector:super::super::scenario::Selector::TestId("x".into())},
-    check:super::super::scenario::Check::Exists(true)} }
+    target:scenario::Target{surface:"main".into(),selector:scenario::Selector::TestId("x".into())},
+    check:scenario::Check::Exists(true)} }
 
 #[test]
 fn ledger_stops_after_the_first_failed_step_and_keeps_monotonic_actions() {

@@ -33,7 +33,7 @@ pub fn calibrate(profile: &LoadedProfile) -> Result<Calibration, Error> {
         .with_text_engine(Box::new(move || Box::new(zgui_layout::Paragraphs::new(shaping.shaper()))))
         .with_glyph_raster(Box::new(move || raster.raster()));
     app.attributes_mut().transparent = !surface.opaque;
-    let runtime = app.into_handler(|cx: &mut zgui::view::BuildCx<'_>| {
+    let runtime = app.into_handler(|cx: &mut BuildCx<'_>| {
         Box::new(calibration_view().into_view().build(cx))
     }).map_err(runtime_error)?;
     let mut harness = Harness::new(runtime);
@@ -175,7 +175,7 @@ fn verify(frame: &PresentedPixels, width: u32, height: u32, opaque: bool) -> Res
     if pixels.bytes().len() != width as usize * height as usize * 4 {
         return Err(calibration_error("readback contains padding or truncated rows"));
     }
-    if opaque && pixels.bytes().chunks_exact(4).any(|pixel| pixel[3] != 255) {
+    if opaque && pixels.bytes().as_chunks::<4>().0.iter().any(|pixel| pixel[3] != 255) {
         return Err(calibration_error("opaque calibration contains alpha other than 255"));
     }
     let samples = [
@@ -203,7 +203,7 @@ fn verify(frame: &PresentedPixels, width: u32, height: u32, opaque: bool) -> Res
     let ink = pixels.bytes().chunks_exact(row_bytes)
         .skip((height / 4 + 1) as usize)
         .take((height * 3 / 4).saturating_sub(height / 4 + 1) as usize)
-        .flat_map(|row| row.chunks_exact(4))
+        .flat_map(|row| row.as_chunks::<4>().0)
         .filter(|pixel| pixel[0] < 240 && pixel[1] < 240 && pixel[2] < 240)
         .count();
     if ink == 0 { return Err(calibration_error("no rasterized calibration text was present")); }

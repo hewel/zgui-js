@@ -1,4 +1,4 @@
-use std::{cell::{Cell, RefCell}, collections::{HashSet, VecDeque}, rc::Rc, sync::Arc, time::Instant};
+use std::{cell::{Cell, RefCell}, collections::{HashSet, VecDeque}, rc::Rc, sync::Arc, time::{Duration, Instant}};
 use js_runtime::{JsRuntime, RuntimeLimits};
 use rquickjs::{Exception, Function, Persistent};
 use ui_bridge::{DeferredEvent, UiBridge, registry::NodeRegistry};
@@ -98,12 +98,33 @@ pub(crate) struct ResourceCounts {
     pub engine_alive: bool,
 }
 
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct RuntimeTelemetry {
+    pub max_entry_duration: Duration,
+    pub js_heap_bytes: u64,
+    pub js_stack_limit_bytes: usize,
+}
+
+impl RuntimeTelemetry {
+    pub(crate) fn merge(current: Option<Self>, next: Option<Self>) -> Option<Self> {
+        match (current, next) {
+            (None, other) | (other, None) => other,
+            (Some(a), Some(b)) => Some(Self {
+                max_entry_duration: a.max_entry_duration.max(b.max_entry_duration),
+                js_heap_bytes: a.js_heap_bytes.max(b.js_heap_bytes),
+                js_stack_limit_bytes: b.js_stack_limit_bytes.max(a.js_stack_limit_bytes),
+            }),
+        }
+    }
+}
+
 pub(crate) struct Session {
     // Roots and bridge are declared before engine; this order is also safe on unwind.
     disposer: RefCell<Option<Persistent<Function<'static>>>>,
     pub(crate) bridge: Rc<UiBridge>,
     work: Rc<Work>,
     engine: RefCell<Option<JsRuntime>>,
+    telemetry: Cell<Option<RuntimeTelemetry>>,
     shutdown_started: Cell<bool>,
     mount_started: Cell<bool>,
     stylesheet_installed: Cell<bool>,
@@ -163,7 +184,7 @@ impl Session {
                 message: "preflight diagnostic accessors scheduled more jobs".into(), stack: None, generated_stack: None,
             }.into());
         }
-        let session = Rc::new(Self { disposer: RefCell::new(None), bridge, work, engine: RefCell::new(Some(engine)), shutdown_started: Cell::new(false), mount_started: Cell::new(false), stylesheet_installed: Cell::new(false), generation, region, frames: Cell::new(0), module, deferred: RefCell::new(VecDeque::new()), fault: RefCell::new(None), cleanup_failure: RefCell::new(None), policy, checkpoint_cursor: Cell::new(0), waker, surface });
+        let session = Rc::new(Self { disposer: RefCell::new(None), bridge, work, engine: RefCell::new(Some(engine)), telemetry: Cell::new(None), shutdown_started: Cell::new(false), mount_started: Cell::new(false), stylesheet_installed: Cell::new(false), generation, region, frames: Cell::new(0), module, deferred: RefCell::new(VecDeque::new()), fault: RefCell::new(None), cleanup_failure: RefCell::new(None), policy, checkpoint_cursor: Cell::new(0), waker, surface });
         let weak = Rc::downgrade(&session);
         session.bridge.set_dispatcher(Rc::new(move |id, event| {
             if let Some(session) = weak.upgrade() { session.dispatch(id, event); }
@@ -403,30 +424,50 @@ impl Session {
         self.deferred.borrow_mut().clear();
         self.fault.borrow_mut().take();
         let disposer = self.disposer.borrow_mut().take();
-        if let Some(disposer) = disposer {
-            if let Some(engine) = self.engine.borrow_mut().as_mut() {
-                let cleanup = || engine.with_cleanup_context(|ctx| disposer.restore(&ctx)?.call::<_, ()>(()));
-                // A failed structural turn has already retired native handles.
-                // Still run pure JS cleanup, without reopening a disposed registry.
-                let result = if self.bridge.is_disposed() { cleanup() } else { self.bridge.run_turn(cleanup) };
-                if let Err(error) = result {
-                    let error = self.diagnostic(error);
-                    eprintln!("disposer error: {error}");
-                    *self.cleanup_failure.borrow_mut() = Some(error);
-                }
-                if self.policy.strict_rejections {
-                    if let Err(error) = drain_rejections(engine, true, self.module.package.as_deref()) {
-                        self.cleanup_failure.borrow_mut().get_or_insert(error);
-                    }
-                }
+        if let Some(disposer) = disposer
+            && let Some(engine) = self.engine.borrow_mut().as_mut()
+        {
+            let cleanup = || engine.with_cleanup_context(|ctx| disposer.restore(&ctx)?.call::<_, ()>(()));
+            // A failed structural turn has already retired native handles.
+            // Still run pure JS cleanup, without reopening a disposed registry.
+            let result = if self.bridge.is_disposed() { cleanup() } else { self.bridge.run_turn(cleanup) };
+            if let Err(error) = result {
+                let error = self.diagnostic(error);
+                eprintln!("disposer error: {error}");
+                *self.cleanup_failure.borrow_mut() = Some(error);
+            }
+            if self.policy.strict_rejections
+                && let Err(error) = drain_rejections(engine, true, self.module.package.as_deref())
+            {
+                self.cleanup_failure.borrow_mut().get_or_insert(error);
             }
         }
         self.work.finish_stop();
         self.bridge.dispose();
         if self.stylesheet_installed.replace(false) { self.region.host.remove_stylesheet("application"); }
+        let snapshot = self.engine.borrow().as_ref().map(Self::snapshot_telemetry);
+        self.telemetry.set(RuntimeTelemetry::merge(self.telemetry.get(), snapshot));
         if self.engine.borrow_mut().take().is_some() {
             eprintln!("session-disposed: generation={} frames={} resources={:?}", self.generation, self.frames.get(), self.counts());
         }
+    }
+
+    fn snapshot_telemetry(engine: &JsRuntime) -> RuntimeTelemetry {
+        RuntimeTelemetry {
+            max_entry_duration: engine.max_entry_duration(),
+            js_heap_bytes: engine.memory_usage_bytes(),
+            js_stack_limit_bytes: engine.stack_limit_bytes(),
+        }
+    }
+
+    pub(crate) fn runtime_telemetry(&self) -> Option<RuntimeTelemetry> {
+        if let Ok(engine) = self.engine.try_borrow()
+            && let Some(runtime) = engine.as_ref()
+        {
+            let snapshot = Self::snapshot_telemetry(runtime);
+            self.telemetry.set(RuntimeTelemetry::merge(self.telemetry.get(), Some(snapshot)));
+        }
+        self.telemetry.get()
     }
 }
 impl Drop for Session { fn drop(&mut self) { self.shutdown(); } }

@@ -235,7 +235,7 @@ fn convert(bytes: &[u8], width: u32, height: u32, bgra: bool, opaque: bool) -> R
         return Err(capture_error("readback rows are not tightly packed at the reported extent"));
     }
     let mut output = Vec::with_capacity(length);
-    for pixel in bytes.chunks_exact(4) {
+    for pixel in bytes.as_chunks::<4>().0 {
         let [r, g, b, a] = if bgra { [pixel[2], pixel[1], pixel[0], pixel[3]] } else { [pixel[0], pixel[1], pixel[2], pixel[3]] };
         if opaque && a != 255 {
             return Err(capture_error("opaque capture contains a pixel whose alpha is not 255"));
@@ -286,12 +286,12 @@ mod tests {
     fn packed_odd_width_rows_keep_channels_and_orientation() {
         for width in [1_u32, 3, 65, 257] {
             let mut bytes = vec![0; width as usize * 2 * 4];
-            for (index, pixel) in bytes.chunks_exact_mut(4).enumerate() {
+            for (index, pixel) in bytes.as_chunks_mut::<4>().0.iter_mut().enumerate() {
                 pixel.copy_from_slice(&[(index % 251) as u8, (index / width as usize) as u8, 93, 255]);
             }
             let rgba = convert(&bytes, width, 2, true, true).unwrap();
-            for (index, pixel) in rgba.chunks_exact(4).enumerate() {
-                assert_eq!(pixel, [93, (index / width as usize) as u8, (index % 251) as u8, 255]);
+            for (index, pixel) in rgba.as_chunks::<4>().0.iter().enumerate() {
+                assert_eq!(*pixel, [93, (index / width as usize) as u8, (index % 251) as u8, 255]);
             }
         }
         assert!(convert(&[0; 32], 3, 2, true, false).is_err());

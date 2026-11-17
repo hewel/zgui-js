@@ -122,7 +122,7 @@ impl Source {
         Ok(Self{run,environment,graphics,profile,fixture,scenario,keys,verified_artifacts})
     }
 
-    fn capture(&self,key:&CaptureKey,max_pixels:u64)->Result<(super::saved::SavedCapture,Vec<u8>,pixels::Image),Error> {
+    fn capture(&self,key:&CaptureKey,max_pixels:u64)->Result<(saved::SavedCapture,Vec<u8>,pixels::Image),Error> {
         let capture=self.run.capture(&key.capture_id)?;
         let png=capture_png(self,&capture.frame,key)?;
         let image=pixels::decode(&png,max_pixels)?;

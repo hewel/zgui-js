@@ -233,8 +233,7 @@ fn native_internal_input_and_change_targets_retarget_without_losing_listener_cur
                 let document = native.backend.document();
                 let store = document.store();
                 let key = store.key_of(native.backend.index_of(current));
-                let listener = *store.columns().listeners.get(key).unwrap().iter().find(|listener| listener.kind == kind).unwrap();
-                listener
+                *store.columns().listeners.get(key).unwrap().iter().find(|listener| listener.kind == kind).unwrap()
             };
             let payload = Payload::Value(ValueEvent { value: "é🙂".into(), selection: 2..6, kind: change });
             let control = EventControl::new();

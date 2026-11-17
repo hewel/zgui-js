@@ -211,6 +211,7 @@ pub struct JsRuntime {
     interrupt: Rc<InterruptState>,
     limits: RuntimeLimits,
     enclosing_deadline: Option<Rc<Cell<Instant>>>,
+    max_entry_duration: Cell<Duration>,
 }
 
 impl JsRuntime {
@@ -274,6 +275,7 @@ impl JsRuntime {
             interrupt,
             limits,
             enclosing_deadline: None,
+            max_entry_duration: Cell::new(Duration::ZERO),
         })
     }
 
@@ -329,6 +331,25 @@ impl JsRuntime {
     /// Both successful and failed attempts consume the caller's count budget.
     /// The interrupt deadline is the earlier of the normal entry limit and the
     /// supplied remaining whole-turn budget, including diagnostic accessor work.
+    pub fn max_entry_duration(&self) -> Duration {
+        self.max_entry_duration.get()
+    }
+
+    pub fn stack_limit_bytes(&self) -> usize {
+        self.limits.stack_limit_bytes
+    }
+
+    pub fn memory_usage_bytes(&self) -> u64 {
+        self.runtime.memory_usage().memory_used_size.max(0) as u64
+    }
+
+    fn record_entry_duration(&self, started: Instant) {
+        let elapsed = started.elapsed();
+        if elapsed > self.max_entry_duration.get() {
+            self.max_entry_duration.set(elapsed);
+        }
+    }
+
     pub fn execute_job(&mut self, budget: Duration) -> Result<bool, Diagnostic> {
         self.interrupt.interrupted.set(false);
         let end = self.clamp_deadline(Instant::now() + budget.min(self.limits.entry_timeout));
@@ -338,12 +359,15 @@ impl JsRuntime {
         self.interrupt.deadline.set(Some(end));
         let _guard = EntryGuard(&self.interrupt);
         self.update_stack_top();
+        let started = Instant::now();
         // The runtime guard is released before entering JobException's context.
-        self.runtime.execute_pending_job().map_err(|exception| {
+        let result = self.runtime.execute_pending_job().map_err(|exception| {
             exception.0.with(|ctx| {
                 self.capture_error(&ctx, "pending job", rquickjs::Error::Exception)
             })
-        })
+        });
+        self.record_entry_duration(started);
+        result
     }
 
     /// Drain owned rejection transitions outside context entries. Reason formatting
@@ -441,14 +465,57 @@ impl JsRuntime {
     }
 
     fn evaluate_module_namespace(&mut self, name: &str, source: &str, bootstrap_end: Instant) -> Result<Persistent<Object<'static>>, Diagnostic> {
-        let (namespace, promise) = self.enter("module evaluation", bootstrap_end, |ctx| {
-            let module = Module::declare(ctx.clone(), name, source)?;
-            let (module, promise) = module.eval()?;
-            Ok((
-                Persistent::save(&ctx, module.namespace()?),
-                Persistent::save(&ctx, promise),
-            ))
-        })?;
+        let compile_end = self.clamp_deadline(bootstrap_end);
+        if Instant::now() >= compile_end {
+            return Err(Diagnostic::new(
+                DiagnosticKind::BudgetExceeded,
+                "module evaluation",
+                "entry deadline exceeded",
+            ));
+        }
+        self.interrupt.interrupted.set(false);
+        self.interrupt.deadline.set(Some(compile_end));
+        let (namespace, promise) = {
+            let _guard = EntryGuard(&self.interrupt);
+            self.update_stack_top();
+            self.context.with(|ctx| {
+                let module = Module::declare(ctx.clone(), name, source)
+                    .map_err(|error| self.capture_error(&ctx, "module evaluation", error))?;
+                let eval_end = self.clamp_deadline(bootstrap_end.min(Instant::now() + self.limits.entry_timeout));
+                if Instant::now() >= eval_end {
+                    return Err(Diagnostic::new(
+                        DiagnosticKind::BudgetExceeded,
+                        "module evaluation",
+                        "entry deadline exceeded",
+                    ));
+                }
+                self.interrupt.deadline.set(Some(eval_end));
+                let started = Instant::now();
+                let result = (|| -> rquickjs::Result<_> {
+                    let (module, promise) = module.eval()?;
+                    let namespace = module.namespace()?;
+                    if self.interrupt.interrupted.get()
+                        && let Some(Err(error)) = promise.result::<()>()
+                    {
+                        return Err(error);
+                    }
+                    Ok((
+                        Persistent::save(&ctx, namespace),
+                        Persistent::save(&ctx, promise),
+                    ))
+                })()
+                .map_err(|error| self.capture_error(&ctx, "module evaluation", error));
+                self.record_entry_duration(started);
+                if self.interrupt.interrupted.get() && result.is_ok() {
+                    return Err(Diagnostic::new(
+                        DiagnosticKind::Interrupted,
+                        "module evaluation",
+                        "module evaluation interrupted",
+                    ));
+                }
+                result
+            })?
+        };
         loop {
             let settled = self.enter("module settlement", bootstrap_end, |ctx| {
                 promise.clone().restore(&ctx)?.result::<()>().transpose()
@@ -546,8 +613,11 @@ impl JsRuntime {
         self.interrupt.deadline.set(Some(end));
         let _guard = EntryGuard(&self.interrupt);
         self.update_stack_top();
-        self.context
-            .with(|ctx| f(ctx.clone()).map_err(|error| self.capture_error(&ctx, phase, error)))
+        let started = Instant::now();
+        let result = self.context
+            .with(|ctx| f(ctx.clone()).map_err(|error| self.capture_error(&ctx, phase, error)));
+        self.record_entry_duration(started);
+        result
     }
 
     fn capture_error(

@@ -231,7 +231,7 @@ fn fault_classification_keeps_contract_diagnostic_and_state_categories() {
 fn harness_arms_baseline_timer_and_external_wake_then_retirement_cancels() {
     let mut native = Native::new(RecoveryPolicy::Fallback, integration::baseline_module());
     let (sender, wakes) = mpsc::channel();
-    let external: ExternalWake = std::sync::Arc::new(move |document, generation, surface| {
+    let external: ExternalWake = Arc::new(move |document, generation, surface| {
         let _ = sender.send((document, generation, surface));
     });
     let mut harness = IntegrationHarness::new();

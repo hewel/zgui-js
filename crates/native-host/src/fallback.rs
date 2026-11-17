@@ -100,9 +100,7 @@ impl Fallback {
             // native dispatch before clear, including reentrant dispatch.
             let retry = Rc::downgrade(retry);
             let registration = dom.add_listener(button, EventKind::Click, ListenerOptions::DEFAULT, Rc::new(move |_| {
-                if let Some(retry) = retry.upgrade() {
-                    if retry.active.get() { (retry.callback)(); }
-                }
+                if let Some(retry) = retry.upgrade() && retry.active.get() { (retry.callback)(); }
             }));
             (button, registration)
         });

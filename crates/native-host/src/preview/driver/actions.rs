@@ -73,7 +73,7 @@ impl Driver {
         };
         event.primary=pointer.primary;
         self.harness.deliver_all(surface,actions.iter().map(|action|SurfaceEvent::Pointer {
-            action:*action,event:event.clone(),modifiers:Modifiers::NONE,timestamp,
+            action:*action,event,modifiers:Modifiers::NONE,timestamp,
         }));
         self.harness.pump();
         self.check()?;

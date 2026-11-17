@@ -370,7 +370,7 @@ mod tests {
         assert_eq!(result.metrics["changedPixels"],3); assert_eq!(result.metrics["changedRatio"],1.0);
         assert_eq!(result.metrics["rawDifferentPixels"],8);
         let diff = decode(result.diff_png.as_ref().unwrap(),8).unwrap();
-        assert!(diff.rgba.chunks_exact(4).all(|pixel| pixel == [4,0,4,255]));
+        assert!(diff.rgba.as_chunks::<4>().0.iter().all(|pixel| *pixel == [4,0,4,255]));
     }
 
     #[test]

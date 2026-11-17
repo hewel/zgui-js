@@ -535,11 +535,11 @@ impl NodeRegistry {
         for &token in self.portals.keys() {
             self.dom.detach(self.records[&token].native);
         }
-        if let Some(parking) = self.portal_parking.take() {
-            if self.dom.is_live(parking) && self.dom.is_live(root_native) {
-                self.dom.insert(root_native, parking, None);
-                self.dom.detach(parking);
-            }
+        if let Some(parking) = self.portal_parking.take()
+            && self.dom.is_live(parking) && self.dom.is_live(root_native)
+        {
+            self.dom.insert(root_native, parking, None);
+            self.dom.detach(parking);
         }
         if let Some(cleanup) = cleanup {
             self.dom.detach(cleanup);

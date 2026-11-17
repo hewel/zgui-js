@@ -382,7 +382,7 @@ mod tests {
         let mut pages=0;
         loop {
             let page=query(&tree,&hash,Path::new("saved.tree.json"),"passed",&options).unwrap();
-            assert!(serde_json::to_vec(&page).unwrap().len()+1<=super::super::MAX_STDOUT_BYTES);
+            assert!(serde_json::to_vec(&page).unwrap().len() < super::super::MAX_STDOUT_BYTES);
             for node in page["nodes"].as_array().unwrap() {
                 assert!(tokens.insert(node["token"].as_str().unwrap().to_owned()));
                 assert_eq!(node["truncatedFields"],json!(["name","text"]));

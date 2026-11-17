@@ -534,3 +534,40 @@ fn stack_limit_measures_from_entry_not_creation_depth_and_still_bounds_js_recurs
         );
     });
 }
+
+#[test]
+fn runtime_reports_heap_usage_stack_limit_and_max_entry_duration() {
+    let mut runtime = JsRuntime::new(RuntimeLimits {
+        stack_limit_bytes: 192 * 1024,
+        ..RuntimeLimits::default()
+    })
+    .unwrap();
+    assert_eq!(runtime.stack_limit_bytes(), 192 * 1024);
+    assert_eq!(runtime.max_entry_duration(), Duration::ZERO);
+    assert_eq!(
+        runtime
+            .evaluate_script("String(Array.from({ length: 128 }, (_, i) => ({ i })).length)")
+            .unwrap(),
+        "128"
+    );
+    assert!(runtime.memory_usage_bytes() > 0);
+    assert!(runtime.max_entry_duration() > Duration::ZERO);
+    runtime
+        .with_context(|ctx| ctx.eval::<Function, _>("() => 42")?.defer(()))
+        .unwrap();
+    assert!(runtime.execute_job(Duration::from_millis(50)).unwrap());
+    assert!(runtime.max_entry_duration() > Duration::ZERO);
+}
+
+#[test]
+fn module_evaluation_interrupts_under_entry_timeout() {
+    let mut runtime = JsRuntime::new(RuntimeLimits {
+        entry_timeout: Duration::from_millis(5),
+        bootstrap_timeout: Duration::from_secs(1),
+        ..RuntimeLimits::default()
+    })
+    .unwrap();
+    let error = runtime.load_module("infinite.mjs", "while (true) {}").unwrap_err();
+    assert_eq!(error.kind, DiagnosticKind::Interrupted);
+    assert_eq!(error.phase, "module evaluation");
+}

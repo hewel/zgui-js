@@ -410,7 +410,8 @@ fn set_style(dom: &DomHandle, node: NodeId, name: &str, value: Option<&str>) {
 // Native Servo CSS names, deliberately narrower than the complete upstream CSS
 // parser. Numeric unit coercion and browser-style camelCase names are not supported.
 const STYLE_PROPERTIES: &[&str] = &[
-    "display", "flex-direction", "flex-wrap", "flex-grow", "flex-shrink", "flex-basis",
+    "display", "position", "inset", "top", "right", "bottom", "left", "visibility",
+    "flex-direction", "flex-wrap", "flex-grow", "flex-shrink", "flex-basis",
     "align-items", "justify-content", "gap", "row-gap", "column-gap",
     "padding", "padding-top", "padding-right", "padding-bottom", "padding-left",
     "margin", "margin-top", "margin-right", "margin-bottom", "margin-left",

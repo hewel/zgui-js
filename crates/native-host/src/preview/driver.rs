@@ -5,7 +5,7 @@ use zgui::{geom::{DevicePx, Size}, platform::{AppHandler, ColorScheme, IdlePolic
 use zgui_platform_headless::{Harness, Headless};
 use zgui::platform::Surface as _;
 
-use crate::{package::Package, session::{ResourceCounts, Session, SessionError, SessionModule, SessionPolicy}};
+use crate::{package::Package, session::{ResourceCounts, RuntimeTelemetry, Session, SessionError, SessionModule, SessionPolicy}};
 use crate::session_host::{ImageChoice, RecoveryPolicy, Root, RuntimeSurface, SessionHost};
 use super::{Error, capture::{self, CaptureHandle}, evidence::{self, CaptureIdentity, CapturePaths, FrameEvidence, FrameStamp, HistoricalStatus, Presentation, TreeEvidence}, fixture::FixtureDefinition, inspect, output::Output, profile::{self, Limits, LoadedProfile, Surface}, resources};
 use crate::{assets::{ContractFailure, fixture::FixtureRuntime}, environment::Environment};
@@ -158,6 +158,7 @@ struct PreviewHost {
     fault: Option<Fault>,
     requested_metadata: u64,
     retired: Option<Value>,
+    retired_telemetry: Option<RuntimeTelemetry>,
 }
 impl PreviewHost {
     fn session(&self) -> Option<&Rc<Session>> { self.host.sessions().next() }
@@ -224,6 +225,7 @@ impl AppHandler for PreviewHost {
             } else if counts!=ResourceCounts::default() {
                 self.fail(cx, Error::new("E_TEARDOWN",9,"retired surface session retained resources").into());
             }
+            self.retired_telemetry = RuntimeTelemetry::merge(self.retired_telemetry, session.runtime_telemetry());
             drop(session);
         }
         self.host.stop();
@@ -306,6 +308,7 @@ impl Driver {
             bootstrap_timeout:Duration::from_millis(profile.profile.limits.max_step_wall_ms),
             max_jobs_per_pump:profile.profile.limits.max_jobs_per_pump as usize,
             job_timeout:Duration::from_millis(profile.profile.limits.max_pump_wall_ms),
+            stack_limit_bytes:profile.profile.limits.max_js_stack_bytes.unwrap_or_else(|| js_runtime::RuntimeLimits::default().stack_limit_bytes),
             ..Default::default()
         };
         let session_host = SessionHost::new(pending.clone(), SessionModule::package(package.clone()),
@@ -314,7 +317,7 @@ impl Driver {
         let host = PreviewHost { native,host:session_host,
             deadline:deadline.clone(),probe:probe.clone(),
             font_css:format!(":root {{ font-family:{}; }}",profile.font_family_css),fault:None,requested_metadata:0,
-            retired:None };
+            retired:None,retired_telemetry:None };
         platform.set_color_scheme(Some(if profile.profile.theme == "dark" { ColorScheme::Dark } else { ColorScheme::Light }));
         let mut harness = Harness::over(platform, host);
         harness.hold_clock(true);
@@ -540,12 +543,17 @@ impl Driver {
         evidence::publish_historical(&mut output, &last.tree, &last.frame, pixels.as_deref(),
             HistoricalStatus { satisfies_failure_revision:Some(satisfies), readiness:Some(readiness), tree_role:"failure-tree" })
     }
-    pub fn finish(mut self) -> (Value, Option<Fault>) {
+    pub fn finish(mut self) -> (Value, Option<Fault>, Option<RuntimeTelemetry>) {
         self.deadline.set(self.run_deadline.min(Instant::now()+Duration::from_millis(20)));
         let previous_contract = self.harness.app().session().and_then(|session|session.contract_failure()).is_some();
+        let live_telemetry = self.harness.app().session().and_then(|session|session.runtime_telemetry());
         self.harness.shut_down();
         self.fixtures.dispose();
         let session = self.harness.app().session();
+        let telemetry = RuntimeTelemetry::merge(
+            RuntimeTelemetry::merge(self.harness.app().retired_telemetry, live_telemetry),
+            session.and_then(|session|session.runtime_telemetry()),
+        );
         let counts = session.map(|session|session.counts()).unwrap_or_default();
         let cleanup = session.and_then(|session|session.take_cleanup_failure()).map(|error| {
             let mut fault = Fault::application(error.into());
@@ -558,7 +566,7 @@ impl Driver {
         let teardown = json!({"verified":true,"clean":clean,"resources":counts,"sessionCreated":session.is_some()});
         drop(self);
         zgui::reactive::shutdown();
-        (teardown,fault)
+        (teardown,fault,telemetry)
     }
 }
 

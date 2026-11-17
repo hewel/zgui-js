@@ -75,7 +75,7 @@ impl Session {
         let (sender, wakes) = mpsc::channel();
         let work = Work::new(
             HostHandle::from_rc(host.clone()), Some(package), generation,
-            Arc::new(ChannelWaker(sender)), SurfaceId::new(7), crate::assets::AssetSource::Live(host_services::Executor::new(1, 8).unwrap()),
+            Arc::new(ChannelWaker(sender)), SurfaceId::new(7), AssetSource::Live(host_services::Executor::new(1, 8).unwrap()),
         );
         let mut engine = JsRuntime::new(RuntimeLimits::default()).unwrap();
         engine.with_context(|ctx| work.install(&ctx)).unwrap();

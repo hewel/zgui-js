@@ -8,6 +8,12 @@ version = "0.1.0"
 edition = "2024"
 rust-version = "1.100"
 
+[workspace.lints.rust]
+unused_qualifications = "warn"
+
+[workspace.lints.clippy]
+all = "warn"
+
 [workspace.dependencies]
 zgui = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a" }
 rquickjs = { git = "https://github.com/DelSkayn/rquickjs", rev = "73fcd6062ee615aeb2a4675cd32be67a56e93973", default-features = false, features = ["std", "macro"] }

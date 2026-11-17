@@ -30,7 +30,7 @@ impl std::error::Error for ContractFailure {}
 /// path never spawns a live executor or touches live disk.
 #[derive(Clone)]
 pub(crate) enum AssetSource {
-    Live(host_services::Executor),
+    Live(Executor),
     Fixture(Rc<fixture::FixtureRuntime>),
 }
 impl AssetSource {

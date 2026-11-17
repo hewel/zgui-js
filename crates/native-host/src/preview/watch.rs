@@ -278,7 +278,7 @@ fn execute(args:Vec<String>) -> Result<u8,Error> {
             }
             if active.is_none() && let Some(candidate)=pending.take() {
                 let mut arguments=common.clone();
-                for pair in arguments.chunks_exact_mut(2) {
+                for pair in arguments.as_chunks_mut::<2>().0 {
                     match pair[0].as_str() {
                         "--bundle"=>pair[1]=candidate.directory.to_string_lossy().into_owned(),
                         "--out"=>pair[1]=output.root.join(&candidate.relative).to_string_lossy().into_owned(),

@@ -3,7 +3,7 @@ use std::collections::HashSet;
 use std::rc::Rc;
 
 use ui_bridge::registry::{BridgeError, Handle, NodeRegistry};
-use zgui::view::{Dom, DomHandle, ElementName, NodeId};
+use zgui::view::{DomHandle, ElementName, NodeId};
 use zgui_dom::Document;
 use zgui_view_dom::DocumentDom;
 

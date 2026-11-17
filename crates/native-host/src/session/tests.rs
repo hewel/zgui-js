@@ -32,7 +32,7 @@ impl Native {
         Session::prepare(self.region.clone(), SessionModule::package(package), generation, self.waker.clone(), SurfaceId::new(7), SessionPolicy::live(self.executor.clone()))
     }
     fn preview(&self, package: Rc<Package>, limits: RuntimeLimits, deadline: Rc<Cell<Instant>>) -> Result<Rc<Session>> {
-        let environment = crate::environment::Environment::new(Arc::new(zgui::platform::VirtualClock::new()), Some(0), 1);
+        let environment = Environment::new(Arc::new(zgui::platform::VirtualClock::new()), Some(0), 1);
         let fixtures = crate::assets::fixture::FixtureRuntime::new(Default::default(), environment.clone());
         Session::prepare(self.region.clone(), SessionModule::package(package), 1, self.waker.clone(), SurfaceId::new(7), SessionPolicy::preview(limits, deadline, environment, fixtures))
     }
@@ -411,7 +411,7 @@ fn preview_installs_clock_before_module_evaluation_and_settles_fixture_through_o
     let native = Native::new();
     let clock = Arc::new(zgui::platform::VirtualClock::new());
     clock.advance(Duration::from_millis(17));
-    let environment = crate::environment::Environment::new(clock.clone(), Some(1234), 7);
+    let environment = Environment::new(clock.clone(), Some(1234), 7);
     let definition: crate::assets::fixture::FixtureDefinition = serde_json::from_value(serde_json::json!({
         "schemaVersion":1, "id":"session-service", "services": {
             "assets":{"provider":"mock-text-assets-v1","latencyMs":5,"initialState":{"assets":{"test.txt":{}}}}

@@ -118,7 +118,7 @@ impl NativeControls {
         })
     }
 
-    fn advance(&self) -> TestResult { crate::integration::advance(&*self.session()?).map_err(Into::into) }
+    fn advance(&self) -> TestResult { integration::advance(&*self.session()?).map_err(Into::into) }
 
     fn drive(&mut self, cx: &dyn PlatformCx, surface: SurfaceId) -> TestResult {
         match self.step {
@@ -201,8 +201,10 @@ impl AppHandler for NativeControls {
     fn surface_event(&mut self, cx: &dyn PlatformCx, surface: SurfaceId, event: SurfaceEvent) {
         let redraw = matches!(event, SurfaceEvent::RedrawRequested);
         self.inner.surface_event(cx, surface, event);
-        if redraw && !self.finished && !cx.is_exiting() {
-            if let Err(error) = self.drive(cx, surface) { self.stop(cx, error); }
+        if redraw && !self.finished && !cx.is_exiting()
+            && let Err(error) = self.drive(cx, surface)
+        {
+            self.stop(cx, error);
         }
     }
     fn wake(&mut self, cx: &dyn PlatformCx, reason: WakeReason) { self.inner.wake(cx, reason); }

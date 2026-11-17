@@ -16,6 +16,7 @@ use zgui_dom::{Document, side::listeners::Listener};
 use zgui_view_dom::DocumentDom;
 
 // Exercise the crate-private helper without expanding the production public API.
+#[allow(dead_code)]
 #[path = "../src/events.rs"]
 mod events;
 use events::{Dispatcher, EventSnapshot, Events};
@@ -188,7 +189,6 @@ fn pointer_snapshot_is_owned_lossless_and_cancellation_expires_before_native_app
     dispatch.expire_and_apply(&mut event);
     drop(dispatch);
     drop(snapshot);
-    drop(event);
     drop(payload);
     context.with(|ctx| {
         ctx.eval::<(), _>(r#"
@@ -362,7 +362,6 @@ fn animation_and_transition_snapshots_retain_payloads_and_expire_cancellation() 
     assert_eq!(control.default_action(), DefaultAction::Prevented);
     drop(dispatch);
     drop(snapshot);
-    drop(native);
     drop(animation);
     let payloads = [
         (EventKind::TransitionCancel, Payload::Transition(TransitionEvent {
@@ -385,7 +384,6 @@ fn animation_and_transition_snapshots_retain_payloads_and_expire_cancellation() 
             let (value, dispatch) = EventSnapshot::capture(&native).to_js(&ctx, &target, &target).unwrap();
             values.set(index, value).unwrap();
             drop(dispatch);
-            drop(native);
         }
         ctx.globals().set("events", values).unwrap();
         ctx.eval::<(), _>(r#"
@@ -440,7 +438,6 @@ fn activate_now_requests_one_click_after_expiry_and_rejects_other_kinds() {
     assert!(control.activation_claimed());
     dispatch.expire_and_apply(&mut down);
     drop(dispatch);
-    drop(down);
     assert_eq!(*log.borrow(), vec![(node, EventKind::Click)]);
 
     context.with(|ctx| {
@@ -471,7 +468,6 @@ fn activate_now_requests_one_click_after_expiry_and_rejects_other_kinds() {
         "#).unwrap();
         drop(dispatch);
     });
-    drop(up);
     assert!(up_log.borrow().is_empty());
     assert!(!up_control.activation_claimed());
 
@@ -487,7 +483,6 @@ fn activate_now_requests_one_click_after_expiry_and_rejects_other_kinds() {
         ctx.eval::<(), _>("dropped.activateNow(); 'armed'").unwrap();
         drop(dispatch);
     });
-    drop(dropped);
     assert!(drop_log.borrow().is_empty());
     assert!(!drop_control.activation_claimed());
 }
@@ -531,7 +526,6 @@ fn pointer_capture_requests_apply_once_to_the_current_node_after_expiry() {
     dispatch.expire_and_apply(&mut down);
     assert_eq!(*log.borrow(), vec![(node, true)], "a second apply adds nothing");
     drop(dispatch);
-    drop(down);
 
     for (script, wanted) in [
         ("held.capturePointer(); held.releasePointer(); 'a'", false),
@@ -552,7 +546,6 @@ fn pointer_capture_requests_apply_once_to_the_current_node_after_expiry() {
         dispatch.expire_and_apply(&mut event);
         assert_eq!(*log.borrow(), vec![(node, wanted)], "the last request in a handler wins");
         drop(dispatch);
-        drop(event);
     }
 
     for kind in [EventKind::PointerMove, EventKind::PointerUp, EventKind::PointerCancel] {
@@ -577,7 +570,6 @@ fn pointer_capture_requests_apply_once_to_the_current_node_after_expiry() {
         dispatch.expire_and_apply(&mut event);
         assert_eq!(*log.borrow(), vec![(node, false)]);
         drop(dispatch);
-        drop(event);
     }
 
     let click_control = EventControl::new();
@@ -600,7 +592,6 @@ fn pointer_capture_requests_apply_once_to_the_current_node_after_expiry() {
         "#).unwrap();
         drop(dispatch);
     });
-    drop(click);
     assert!(click_log.borrow().is_empty());
 
     context.with(|ctx| {
@@ -634,7 +625,6 @@ fn dropped_dispatch_issues_no_pointer_capture_commands() {
         ctx.eval::<(), _>("lost.capturePointer(); 'armed'").unwrap();
         drop(dispatch);
     });
-    drop(down);
     assert!(log.borrow().is_empty());
     context.with(|ctx| {
         ctx.eval::<(), _>(r#"

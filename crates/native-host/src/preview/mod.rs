@@ -101,6 +101,7 @@ fn doctor_options(mut args: impl Iterator<Item = String>) -> Result<DoctorOption
             "--scale" => overrides.scale = Some(value.parse().map_err(|_| invalid())?),
             "--theme" => overrides.theme = Some(value),
             "--timeout-ms" => overrides.timeout_ms = Some(value.parse().map_err(|_| invalid())?),
+            "--max-js-stack-bytes" => overrides.max_js_stack_bytes = Some(value.parse().map_err(|_| invalid())?),
             "--format" if value == "json" => {}
             _ => return Err(Error::new("E_SCHEMA", 2, format!("unsupported option: {arg}"))),
         }

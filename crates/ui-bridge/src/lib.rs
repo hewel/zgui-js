@@ -29,6 +29,9 @@ impl DeferredEvent {
     }
 }
 
+type GeometryDispatcherSlot = Option<(Rc<geometry::Dispatcher>, Rc<dyn Fn()>)>;
+pub type EventDispatcher = Rc<events::Dispatcher>;
+
 /// Dispose and drop this before destroying its JS engine. For locals, declare
 /// the engine first; for struct fields, place this bridge before the engine.
 /// Installed callbacks hold only weak references, so the context cannot own its own roots.
@@ -39,9 +42,9 @@ pub struct UiBridge {
     properties: RefCell<properties::Properties>,
     stylesheets: RefCell<HashSet<String>>,
     events: RefCell<events::Events>,
-    dispatcher: RefCell<Option<Rc<events::Dispatcher>>>,
+    dispatcher: RefCell<Option<EventDispatcher>>,
     geometry: RefCell<geometry::Geometry>,
-    geometry_dispatcher: RefCell<Option<(Rc<geometry::Dispatcher>, Rc<dyn Fn()>)>>,
+    geometry_dispatcher: RefCell<GeometryDispatcherSlot>,
     focus_traps: RefCell<focus::FocusTraps>,
     dismissals: RefCell<dismiss::Dismissals>,
     scroll_locks: RefCell<scroll::ScrollLocks>,
@@ -113,7 +116,7 @@ impl UiBridge {
     /// Diagnostic changes need a fresh validation frame even without native DOM changes.
     pub fn metadata_revision(&self) -> u64 { self.registry.borrow().metadata_revision() }
 
-    pub fn set_dispatcher(&self, dispatcher: Rc<dyn Fn(u64, &mut zgui::view::EventCx<'_>)>) {
+    pub fn set_dispatcher(&self, dispatcher: EventDispatcher) {
         *self.dispatcher.borrow_mut() = Some(dispatcher);
     }
 
@@ -125,7 +128,7 @@ impl UiBridge {
         self.require_turn(ctx)?;
         let prepared = self.geometry.borrow_mut().prepare(ctx, id, value, scale)?;
         let Some((callback, measurement)) = prepared else { return Ok(()); };
-        let object = measurement.to_js(ctx)?;
+        let object = measurement.into_js(ctx)?;
         callback.restore(ctx)?.call::<_, Value>((object,)).map(|_| ())
     }
 
@@ -432,10 +435,10 @@ impl UiBridge {
             let dispose = {
                 let weak = Rc::downgrade(&bridge);
                 Func::from(move || {
-                    if let Some(bridge) = weak.upgrade() {
-                        if let Some(callback) = bridge.dismissals.borrow_mut().take(id) {
-                            bridge.events.borrow_mut().remove_callback(callback);
-                        }
+                    if let Some(bridge) = weak.upgrade()
+                        && let Some(callback) = bridge.dismissals.borrow_mut().take(id)
+                    {
+                        bridge.events.borrow_mut().remove_callback(callback);
                     }
                     Ok::<(), rquickjs::Error>(())
                 })
@@ -555,6 +558,16 @@ fn stylesheet_name(ctx: &Ctx<'_>, prefix: &str, key: &str) -> rquickjs::Result<S
     Ok(format!("{prefix}{key}"))
 }
 
+// Read a bounded unsigned JS array length directly instead of rquickjs::Array::len/iter,
+// whose signed-integer assumption overflows or rejects valid arrays near u32 bounds.
+fn bounded_array_len<'js>(ctx: &Ctx<'js>, array: &rquickjs::Array<'js>, limit: usize, error_msg: &str) -> rquickjs::Result<usize> {
+    let length = array.as_object().get::<_, u32>("length")? as usize;
+    if length > limit {
+        return Err(Exception::throw_range(ctx, error_msg));
+    }
+    Ok(length)
+}
+
 fn relation_handles<'js>(ctx: &Ctx<'js>, value: Value<'js>, limit: usize) -> rquickjs::Result<Vec<Handle>> {
     let node = |ctx: &Ctx<'js>, value: Value<'js>| -> rquickjs::Result<Handle> {
         value.as_object()
@@ -565,10 +578,7 @@ fn relation_handles<'js>(ctx: &Ctx<'js>, value: Value<'js>, limit: usize) -> rqu
     if value.is_null() || value.is_undefined() { return Ok(Vec::new()); }
     if value.is_array() {
         let array = value.as_array().expect("checked array");
-        let length = array.as_object().get::<_, u32>("length")? as usize;
-        if length > limit {
-            return Err(Exception::throw_range(ctx, "accessibility relations exceed the session node limit"));
-        }
+        let length = bounded_array_len(ctx, array, limit, "accessibility relations exceed the session node limit")?;
         let mut handles = Vec::with_capacity(length);
         for index in 0..length { handles.push(node(ctx, array.get::<Value>(index)?)?); }
         return Ok(handles);

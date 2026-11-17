@@ -55,7 +55,7 @@ fn capture_validation_rejects_wrong_tree_or_terminal_identity() {
     let mut frame=frame(3,9);
     let paths=CapturePaths::new("cap-one").unwrap();
     let tree_bytes=serde_json::to_vec(&tree).unwrap();
-    let digest=crate::preview::output::digest(&tree_bytes);
+    let digest=output::digest(&tree_bytes);
     frame.tree_digest=Some(digest.clone());
     frame.png_digest=Some("sha256:aa".into());
     let terminal=json!({"schemaVersion":1,"command":"run","build":{"buildId":"build-one"},"generation":3});
@@ -279,13 +279,13 @@ fn historical_retains_pixels_larger_than_the_json_read_cap() {
 fn recovery_completes_a_half_published_failure_without_overwriting_its_tree() {
     let directory=Directory::new();
     let mut output=Output::create(&directory.0,1024*1024).unwrap();
-    output.json("evidence/generation-0000000001-frame-0000000001.tree.json","validation-tree",&serde_json::to_value(&tree(1,1)).unwrap()).unwrap();
-    output.json("evidence/generation-0000000001-frame-0000000001.frame.json","validation-frame",&serde_json::to_value(&frame(1,1)).unwrap()).unwrap();
-    output.json("failure/tree.json","failure-tree",&serde_json::to_value(&tree(1,1)).unwrap()).unwrap();
+    output.json("evidence/generation-0000000001-frame-0000000001.tree.json","validation-tree",&serde_json::to_value(tree(1,1)).unwrap()).unwrap();
+    output.json("evidence/generation-0000000001-frame-0000000001.frame.json","validation-frame",&serde_json::to_value(frame(1,1)).unwrap()).unwrap();
+    output.json("failure/tree.json","failure-tree",&serde_json::to_value(tree(1,1)).unwrap()).unwrap();
     let before=std::fs::read(directory.0.join("failure/tree.json")).unwrap();
     // A recreated surface may restart its ordinal; it cannot replace the failure's selected generation.
-    output.json("evidence/generation-0000000002-frame-0000000001.tree.json","validation-tree",&serde_json::to_value(&tree(2,1)).unwrap()).unwrap();
-    output.json("evidence/generation-0000000002-frame-0000000001.frame.json","validation-frame",&serde_json::to_value(&frame(2,1)).unwrap()).unwrap();
+    output.json("evidence/generation-0000000002-frame-0000000001.tree.json","validation-tree",&serde_json::to_value(tree(2,1)).unwrap()).unwrap();
+    output.json("evidence/generation-0000000002-frame-0000000001.frame.json","validation-frame",&serde_json::to_value(frame(2,1)).unwrap()).unwrap();
     let result=recover(&mut output).unwrap();
     assert_eq!(result["available"],true);
     assert_eq!(std::fs::read(directory.0.join("failure/tree.json")).unwrap(),before);
@@ -301,13 +301,13 @@ fn recovery_completes_a_half_published_failure_without_overwriting_its_tree() {
 fn recovery_rejects_a_corrupt_candidate_pixel_digest() {
     let directory=Directory::new();
     let mut output=Output::create(&directory.0,1024*1024).unwrap();
-    output.json("evidence/generation-0000000001-frame-0000000001.tree.json","validation-tree",&serde_json::to_value(&tree(1,1)).unwrap()).unwrap();
+    output.json("evidence/generation-0000000001-frame-0000000001.tree.json","validation-tree",&serde_json::to_value(tree(1,1)).unwrap()).unwrap();
     let mut capture=frame(1,1);
     capture.capture_id=Some("cap-one".into());
     capture.png_digest=Some("sha256:not-the-png".into());
     output.json("captures/cap-one.frame.json","capture-frame",&serde_json::to_value(&capture).unwrap()).unwrap();
     output.bytes("captures/cap-one.png","capture-pixels",b"png-bytes").unwrap();
-    output.json("evidence/generation-0000000001-frame-0000000001.frame.json","validation-frame",&serde_json::to_value(&frame(1,1)).unwrap()).unwrap();
+    output.json("evidence/generation-0000000001-frame-0000000001.frame.json","validation-frame",&serde_json::to_value(frame(1,1)).unwrap()).unwrap();
     assert!(recover(&mut output).is_err());
 }
 
@@ -315,13 +315,13 @@ fn recovery_rejects_a_corrupt_candidate_pixel_digest() {
 fn recovery_skips_only_empty_documents_to_the_last_complete_checkpoint() {
     let directory=Directory::new();
     let mut output=Output::create(&directory.0,1024*1024).unwrap();
-    output.json("evidence/generation-0000000001-frame-0000000002.tree.json","validation-tree",&serde_json::to_value(&tree(1,2)).unwrap()).unwrap();
-    output.json("evidence/generation-0000000001-frame-0000000002.frame.json","validation-frame",&serde_json::to_value(&frame(1,2)).unwrap()).unwrap();
+    output.json("evidence/generation-0000000001-frame-0000000002.tree.json","validation-tree",&serde_json::to_value(tree(1,2)).unwrap()).unwrap();
+    output.json("evidence/generation-0000000001-frame-0000000002.frame.json","validation-frame",&serde_json::to_value(frame(1,2)).unwrap()).unwrap();
     // The newest pair documents an empty post-fault document.
     let mut empty=tree(1,3);
     empty.nodes.clear();
     output.json("evidence/generation-0000000001-frame-0000000003.tree.json","validation-tree",&serde_json::to_value(&empty).unwrap()).unwrap();
-    output.json("evidence/generation-0000000001-frame-0000000003.frame.json","validation-frame",&serde_json::to_value(&frame(1,3)).unwrap()).unwrap();
+    output.json("evidence/generation-0000000001-frame-0000000003.frame.json","validation-frame",&serde_json::to_value(frame(1,3)).unwrap()).unwrap();
     let result=recover(&mut output).unwrap();
     assert_eq!(result["available"],true);
     let saved:Value=serde_json::from_slice(&std::fs::read(directory.0.join("failure/frame.json")).unwrap()).unwrap();
@@ -337,7 +337,7 @@ fn recovery_rejects_corrupt_nonempty_checkpoints() {
         if corrupt=="duplicate-token" { bad.nodes.push(bad.nodes[0].clone()); }
         else { bad.nodes[0].parent=Some("absent".into()); }
         output.json("evidence/generation-0000000001-frame-0000000002.tree.json","validation-tree",&serde_json::to_value(&bad).unwrap()).unwrap();
-        output.json("evidence/generation-0000000001-frame-0000000002.frame.json","validation-frame",&serde_json::to_value(&frame(1,2)).unwrap()).unwrap();
+        output.json("evidence/generation-0000000001-frame-0000000002.frame.json","validation-frame",&serde_json::to_value(frame(1,2)).unwrap()).unwrap();
         assert_eq!(recover(&mut output).unwrap_err().code,"E_OUTPUT_IO","{corrupt}");
         assert!(!directory.0.join("failure").exists(),"{corrupt}");
     }
@@ -347,7 +347,7 @@ fn recovery_rejects_corrupt_nonempty_checkpoints() {
     let mut empty=tree(1,2);
     empty.nodes.clear();
     output.json("evidence/generation-0000000001-frame-0000000002.tree.json","validation-tree",&serde_json::to_value(&empty).unwrap()).unwrap();
-    output.json("evidence/generation-0000000001-frame-0000000002.frame.json","validation-frame",&serde_json::to_value(&frame(1,3)).unwrap()).unwrap();
+    output.json("evidence/generation-0000000001-frame-0000000002.frame.json","validation-frame",&serde_json::to_value(frame(1,3)).unwrap()).unwrap();
     assert_eq!(recover(&mut output).unwrap_err().code,"E_OUTPUT_IO");
     assert!(!directory.0.join("failure").exists());
 }

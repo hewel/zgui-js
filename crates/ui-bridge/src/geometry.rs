@@ -64,6 +64,7 @@ impl Geometry {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn add<'js>(
         &mut self,
         ctx: &Ctx<'js>,
@@ -170,35 +171,35 @@ impl Measurement {
         }
     }
 
-    pub(crate) fn to_js<'js>(&self, ctx: &Ctx<'js>) -> rquickjs::Result<Object<'js>> {
+    pub(crate) fn into_js<'js>(self, ctx: &Ctx<'js>) -> rquickjs::Result<Object<'js>> {
         let object = Object::new(ctx.clone())?;
         match self {
             Self::Rect { x, y, width, height } | Self::Viewport { x, y, width, height, .. } => {
-                object.set("x", *x)?;
-                object.set("y", *y)?;
-                object.set("width", *width)?;
-                object.set("height", *height)?;
+                object.set("x", x)?;
+                object.set("y", y)?;
+                object.set("width", width)?;
+                object.set("height", height)?;
             }
             Self::Size { width, height } => {
-                object.set("width", *width)?;
-                object.set("height", *height)?;
+                object.set("width", width)?;
+                object.set("height", height)?;
             }
             Self::Scroll { x, y, content_width, content_height, port_width, port_height } => {
                 let offset = Object::new(ctx.clone())?;
-                offset.set("x", *x)?;
-                offset.set("y", *y)?;
+                offset.set("x", x)?;
+                offset.set("y", y)?;
                 object.set("offset", offset)?;
                 let content = Object::new(ctx.clone())?;
-                content.set("width", *content_width)?;
-                content.set("height", *content_height)?;
+                content.set("width", content_width)?;
+                content.set("height", content_height)?;
                 object.set("contentSize", content)?;
                 let port = Object::new(ctx.clone())?;
-                port.set("width", *port_width)?;
-                port.set("height", *port_height)?;
+                port.set("width", port_width)?;
+                port.set("height", port_height)?;
                 object.set("scrollport", port)?;
             }
         }
-        if let Self::Viewport { scale, .. } = self { object.set("scale", *scale)?; }
+        if let Self::Viewport { scale, .. } = self { object.set("scale", scale)?; }
         Ok(object)
     }
 }

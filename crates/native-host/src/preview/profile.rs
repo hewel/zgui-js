@@ -31,6 +31,7 @@ pub(crate) struct Overrides {
     pub scale: Option<f64>,
     pub theme: Option<String>,
     pub timeout_ms: Option<u64>,
+    pub max_js_stack_bytes: Option<usize>,
 }
 
 pub(crate) struct LoadedProfile {
@@ -124,6 +125,8 @@ pub(crate) struct Limits {
     pub max_frames_per_step: u32,
     pub max_virtual_duration_ms: u64,
     pub max_output_bytes: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_js_stack_bytes: Option<usize>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -154,6 +157,7 @@ pub(crate) fn read_profile(path: &Path, overrides: &Overrides) -> Result<(PathBu
     if let Some(scale) = overrides.scale { profile.surface.scale = scale; }
     if let Some(theme) = &overrides.theme { profile.theme.clone_from(theme); }
     if let Some(timeout) = overrides.timeout_ms { profile.limits.max_run_wall_ms = timeout; }
+    if let Some(stack_bytes) = overrides.max_js_stack_bytes { profile.limits.max_js_stack_bytes = Some(stack_bytes); }
     validate(&profile)?;
     Ok((profile_path, profile))
 }
@@ -266,6 +270,9 @@ fn validate(profile: &Profile) -> Result<(u32, u32)> {
     in_range(u64::from(limits.max_frames_per_step), 1, 10_000, "limits.maxFramesPerStep")?;
     in_range(limits.max_virtual_duration_ms, 0, 3_600_000, "limits.maxVirtualDurationMs")?;
     in_range(limits.max_output_bytes, 1, 1_073_741_824, "limits.maxOutputBytes")?;
+    if let Some(stack_bytes) = limits.max_js_stack_bytes {
+        in_range(stack_bytes as u64, 32_768, 16_777_216, "limits.maxJsStackBytes")?;
+    }
     if let Clock::Virtual { epoch_ms, start_us } = profile.clock {
         in_range(epoch_ms, 0, MAX_EPOCH_MS, "clock.epochMs")?;
         in_range(start_us, 0, MAX_SAFE_INTEGER, "clock.startUs")?;
@@ -479,7 +486,7 @@ mod tests {
     fn overrides_and_font_order_change_canonical_evidence_digest() {
         let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../preview/profiles/wall-static.json");
         let baseline = load(&path, &Overrides::default()).unwrap();
-        let changed = load(&path, &Overrides { width: Some(801), height: Some(601), scale: Some(1.0), theme: Some("light".into()), timeout_ms: Some(1234) }).unwrap();
+        let changed = load(&path, &Overrides { width: Some(801), height: Some(601), scale: Some(1.0), theme: Some("light".into()), timeout_ms: Some(1234), max_js_stack_bytes: None }).unwrap();
         assert_eq!((changed.physical_width, changed.physical_height), (801, 601));
         assert_eq!(changed.resolved_json["surface"]["width"], 801);
         assert_eq!(changed.resolved_json["theme"], "light");

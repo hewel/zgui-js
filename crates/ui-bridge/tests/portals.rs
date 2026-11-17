@@ -2,7 +2,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use ui_bridge::registry::{BridgeError, NodeRegistry};
-use zgui::view::{Dom, DomHandle, ElementName, NodeId, OverlayLayer};
+use zgui::view::{DomHandle, ElementName, NodeId, OverlayLayer};
 use zgui_dom::Document;
 use zgui_view_dom::DocumentDom;
 

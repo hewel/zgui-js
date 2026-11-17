@@ -4,7 +4,7 @@
 //! earliest originalError.
 use std::time::Instant;
 use serde_json::{Value,json};
-use crate::assets::fixture::FixtureRuntime;
+use crate::{assets::fixture::FixtureRuntime, session::RuntimeTelemetry};
 use super::super::{Error,MAX_STDOUT_BYTES,driver::{Driver,Fault,SharedOutput},evidence,scenario::{PointerOperation,Step}};
 
 /// Native side of a step: arm the deadline, report pre-action readiness, execute
@@ -84,6 +84,7 @@ pub(super) struct RunLedger {
     teardown:Value,
     frames:u64,
     generation:u64,
+    telemetry:Option<RuntimeTelemetry>,
 }
 
 impl RunLedger {
@@ -92,7 +93,7 @@ impl RunLedger {
             timing_deterministic:false,steps:Vec::new(),diagnostics:Vec::new(),captures:0,latest:None,
             assertions_passed:0,assertions_failed:0,cause_write_failed:false,
             failure:None,original_error:None,failure_evidence:json!({"available":false}),
-            teardown:json!({"verified":true,"clean":true,"sessionCreated":false}),frames:0,generation:1 }
+            teardown:json!({"verified":true,"clean":true,"sessionCreated":false}),frames:0,generation:1,telemetry:None }
     }
 
     /// Build identity is tracked as soon as it is loaded, even when a later
@@ -141,8 +142,8 @@ impl RunLedger {
                 Step::Assert{..}|Step::AssertService{..} => {
                     if result.is_ok() { self.assertions_passed+=1; } else { self.assertions_failed+=1; }
                 }
-                Step::Capture{capture_id,..} => {
-                    if result.is_ok() { self.captures+=1; self.latest=evidence::CapturePaths::new(capture_id).ok(); }
+                Step::Capture{capture_id,..} if result.is_ok() => {
+                    self.captures+=1; self.latest=evidence::CapturePaths::new(capture_id).ok();
                 }
                 _=>{}
             }
@@ -211,9 +212,10 @@ impl RunLedger {
 
     pub fn record_evidence(&mut self,failure_evidence:Value) { self.failure_evidence=failure_evidence; }
 
-    pub fn observations(&mut self,generation:u64,frames:u64,failure_evidence:Value) {
+    pub fn observations(&mut self,generation:u64,frames:u64,telemetry:Option<RuntimeTelemetry>,failure_evidence:Value) {
         self.generation=generation;
         self.frames=frames;
+        self.telemetry=telemetry;
         if !failure_evidence.is_null() { self.failure_evidence=failure_evidence; }
     }
 
@@ -244,13 +246,28 @@ impl RunLedger {
             let started=self.start;
             let frames=self.frames;
             let captures=self.captures;
+            let telemetry=self.telemetry;
             let publication=(|| -> Result<(),Error> {
                 let mut held=output.borrow_mut();
                 held.bytes("steps.jsonl","steps",&json_lines(&steps))?;
                 held.bytes("diagnostics.jsonl","diagnostics",&json_lines(&diagnostics))?;
                 if let Some(fixtures)=fixtures { held.json("services.json","fixture-services",&fixtures.trace())?; }
-                held.json("metrics.json","metrics",&json!({"wallDurationUs":started.elapsed().as_micros(),"nativeFrames":frames,
-                    "captures":captures,"availability":{"wallDuration":true,"nativeFrames":true,"jsHeap":false,"mutationCost":false,"rss":false}}))?;
+                held.json("metrics.json","metrics",&json!({
+                    "wallDurationUs":started.elapsed().as_micros(),
+                    "nativeFrames":frames,
+                    "captures":captures,
+                    "maxJsEntryDurationUs":telemetry.map(|item|item.max_entry_duration.as_micros()),
+                    "jsHeapBytes":telemetry.map(|item|item.js_heap_bytes),
+                    "jsStackLimitBytes":telemetry.map(|item|item.js_stack_limit_bytes),
+                    "availability":{
+                        "wallDuration":true,
+                        "nativeFrames":true,
+                        "jsHeap":telemetry.is_some(),
+                        "jsEntryDuration":telemetry.is_some(),
+                        "mutationCost":false,
+                        "rss":false
+                    }
+                }))?;
                 held.seal_worker()
             })();
             if let Err(error)=publication {

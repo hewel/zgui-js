@@ -77,7 +77,7 @@ impl Application {
     fn external_wake(&self, cx: &dyn PlatformCx) -> ExternalWake {
         let sender = self.sender.clone();
         let waker = cx.waker();
-        std::sync::Arc::new(move |document, generation, surface| {
+        Arc::new(move |document, generation, surface| {
             if sender.send(Completion::Update { document, generation }).is_ok() {
                 waker.wake(WakeReason::ReactiveWork { surfaces: vec![surface].into_boxed_slice() });
             }

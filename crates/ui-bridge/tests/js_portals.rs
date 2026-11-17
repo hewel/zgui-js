@@ -1,7 +1,7 @@
 use std::{cell::RefCell, rc::Rc};
 use js_runtime::{JsRuntime, RuntimeLimits};
 use ui_bridge::{UiBridge, registry::NodeRegistry};
-use zgui::view::{Dom, DomHandle, ElementName, HostHandle, NodeId, OverlayLayer, stub::StubHost};
+use zgui::view::{DomHandle, ElementName, HostHandle, NodeId, OverlayLayer, stub::StubHost};
 use zgui_dom::Document;
 use zgui_view_dom::DocumentDom;
 
@@ -11,8 +11,8 @@ struct Native {
     document: Rc<RefCell<Document>>,
     backend: Rc<DocumentDom>,
     dom: DomHandle,
-    host: Rc<StubHost>,
-    root: NodeId,
+    _host: Rc<StubHost>,
+    _root: NodeId,
 }
 
 impl Native {
@@ -29,7 +29,7 @@ impl Native {
             bridge.install(&ctx)?;
             ctx.globals().set("root", bridge.root(&ctx)?)
         }).unwrap();
-        Self { bridge, engine, document, backend, dom, host, root }
+        Self { bridge, engine, document, backend, dom, _host: host, _root: root }
     }
 
     fn script(&mut self, script: &str) {

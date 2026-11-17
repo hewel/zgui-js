@@ -309,7 +309,9 @@ fn unsupported_properties_and_wrong_types_throw_without_partial_native_writes() 
 fn documented_object_style_vocabulary_is_accepted_by_the_pinned_native_parser() {
     let mut native = NativeProperties::new();
     let declarations = [
-        ("display", "flex"), ("flex-direction", "column"), ("flex-wrap", "wrap"),
+        ("display", "flex"), ("position", "fixed"), ("inset", "0px"), ("top", "1px"),
+        ("right", "2px"), ("bottom", "3px"), ("left", "4px"), ("visibility", "hidden"),
+        ("flex-direction", "column"), ("flex-wrap", "wrap"),
         ("flex-grow", "1"), ("flex-shrink", "0"), ("flex-basis", "20px"),
         ("align-items", "center"), ("justify-content", "space-between"),
         ("gap", "2px"), ("row-gap", "3px"), ("column-gap", "4px"),
