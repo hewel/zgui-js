@@ -59,9 +59,7 @@ fn json_lines(rows:&[Value])->Vec<u8> {
 /// The only constructor of a publication-failure result; it preserves the
 /// earliest originalError already present on the previous result.
 pub(super) fn publication_failure(error:Error,previous:&Value)->Value {
-    let mut failed=super::super::failure("run",error);
-    failed["originalError"]=if previous["originalError"].is_null() { previous["firstError"].clone() } else { previous["originalError"].clone() };
-    failed
+    super::super::output::publication_failure("run",error,previous)
 }
 
 pub(super) struct RunLedger {

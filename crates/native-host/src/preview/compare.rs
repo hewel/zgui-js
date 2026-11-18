@@ -4,7 +4,8 @@ mod policy;
 
 use std::{collections::{BTreeSet,HashSet},path::{Path,PathBuf}};
 use serde_json::{Value,json};
-use super::{Error,evidence::FrameEvidence,output::{Output,digest},saved::{self,SavedRun}};
+use crate::bounded_fs::{self,BoundedReadError};
+use super::{Error,evidence::FrameEvidence,output::{Output,digest},saved::{SavedCapture,SavedRun}};
 use crate::schema::object_struct;
 use policy::{CaptureKey,CaptureSet,Policy};
 
@@ -56,7 +57,8 @@ object_struct! {
 
 impl Baseline {
     fn load(root:&Path)->Result<Self,Error> {
-        let descriptor:Self=serde_json::from_slice(&saved::read_path(&root.join("baseline.json"),64*1024)?)
+        let canonical_root=root.canonicalize().map_err(io)?;
+        let descriptor:Self=serde_json::from_slice(&bounded_fs::read_contained(&canonical_root,"baseline.json",64*1024).map_err(bounded_io_error)?)
             .map_err(|error|invalid(format!("invalid baseline review: {error}")))?;
         if descriptor.schema_version!=1 || descriptor.run!="run" || !sha256(&descriptor.artifacts_digest)
             || !sha256(&descriptor.policy_digest) || !sha256(&descriptor.review.build_id) {
@@ -70,10 +72,10 @@ impl Baseline {
             || keys.iter().any(|key|!super::scenario::safe_id(&key.capture_id)||key.surface!="main") {
             return Err(invalid("baseline review must name 1..4096 unique main-surface captures"));
         }
-        let run=root.join(&descriptor.run);
+        let run=canonical_root.join(&descriptor.run);
         let metadata=std::fs::symlink_metadata(&run).map_err(io)?;
         if !metadata.is_dir() || metadata.file_type().is_symlink() { return Err(io("baseline run must be a real directory")); }
-        if digest(&saved::read_path(&root.join("policy.json"),64*1024)?)!=descriptor.policy_digest {
+        if digest(&bounded_fs::read_contained(&canonical_root,"policy.json",64*1024).map_err(bounded_io_error)?)!=descriptor.policy_digest {
             return Err(io("reviewed policy no longer matches its baseline review"));
         }
         Ok(descriptor)
@@ -122,7 +124,7 @@ impl Source {
         Ok(Self{run,environment,graphics,profile,fixture,scenario,keys,verified_artifacts})
     }
 
-    fn capture(&self,key:&CaptureKey,max_pixels:u64)->Result<(saved::SavedCapture,Vec<u8>,pixels::Image),Error> {
+    fn capture(&self,key:&CaptureKey,max_pixels:u64)->Result<(SavedCapture,Vec<u8>,pixels::Image),Error> {
         let capture=self.run.capture(&key.capture_id)?;
         let png=capture_png(self,&capture.frame,key)?;
         let image=pixels::decode(&png,max_pixels)?;
@@ -144,7 +146,7 @@ impl Source {
 
 pub(super) fn command(args:Vec<String>)->Result<Value,Error> {
     let options=options(args)?;
-    let policy_bytes=saved::read_path(&options.policy,64*1024)?;
+    let policy_bytes=bounded_fs::read_input(&options.policy,64*1024).map_err(bounded_io_error)?;
     let policy=Policy::parse(&policy_bytes)?;
     let mut output=Output::create(&options.out,policy.max_output_bytes)?;
     let outcome=execute(&options,&policy,&policy_bytes,&mut output);
@@ -156,11 +158,7 @@ pub(super) fn command(args:Vec<String>)->Result<Value,Error> {
             result
         }
     };
-    if serde_json::to_vec(&result).map_err(io)?.len()+1>super::MAX_STDOUT_BYTES {
-        return Err(Error::new("E_INTERNAL",9,"comparison summary exceeded its stdout bound"));
-    }
-    output.finish(&result)?;
-    Ok(result)
+    Ok(output.finalize("compare",result))
 }
 
 fn execute(options:&Options,policy:&Policy,policy_bytes:&[u8],output:&mut Output)->Result<Value,Error> {
@@ -327,4 +325,56 @@ fn equal_required(issues:&mut Vec<Value>,field:&str,left:Option<&Value>,right:Op
 fn sha256(value:&str)->bool { value.strip_prefix("sha256:").is_some_and(|hash|hash.len()==64&&hash.bytes().all(|byte|byte.is_ascii_digit()||(b'a'..=b'f').contains(&byte))) }
 fn invalid(message:impl Into<String>)->Error { Error::new("E_SCHEMA",2,message) }
 fn io(error:impl std::fmt::Display)->Error { Error::new("E_OUTPUT_IO",8,error.to_string()) }
+fn bounded_io_error(error:BoundedReadError)->Error {
+    match error {
+        BoundedReadError::TooLarge{..}|BoundedReadError::NotRegularFile=>
+            Error::new("E_OUTPUT_LIMIT",8,"comparison input is not a bounded regular file"),
+        other=>io(other),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    struct TempDir(PathBuf);
+    impl TempDir {
+        fn new() -> Self {
+            static NEXT: AtomicU64 = AtomicU64::new(0);
+            let dir = std::env::temp_dir().join(format!(
+                "zgui-preview-compare-{}-{}",
+                std::process::id(),
+                NEXT.fetch_add(1, Ordering::Relaxed)
+            ));
+            std::fs::create_dir_all(&dir).unwrap();
+            Self(dir)
+        }
+    }
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn baseline_load_rejects_symlinked_review_file_while_policy_allows_symlink() {
+        let dir = TempDir::new();
+        let target = dir.0.join("real-policy.json");
+        std::fs::write(&target, br#"{"schemaVersion":1,"id":"p","captureSet":"all","maxOutputBytes":65536,"maxPixels":1000,"thresholds":{"maxDiffPixels":0,"maxChannelDelta":0,"meanDeltaLimit":0.0}}"#).unwrap();
+
+        #[cfg(unix)]
+        {
+            let policy_link = dir.0.join("policy-link.json");
+            std::os::unix::fs::symlink(&target, &policy_link).unwrap();
+            assert!(!bounded_fs::read_input(&policy_link, 64 * 1024).unwrap().is_empty());
+
+            let baseline_dir = dir.0.join("baseline");
+            std::fs::create_dir(&baseline_dir).unwrap();
+            std::os::unix::fs::symlink(&target, baseline_dir.join("baseline.json")).unwrap();
+            let err = Baseline::load(&baseline_dir).err().unwrap();
+            assert_eq!(err.code, "E_OUTPUT_IO");
+        }
+    }
+}
 

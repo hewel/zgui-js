@@ -90,13 +90,7 @@ pub(super) fn controlled(args: Vec<String>, canceled: Option<&std::sync::atomic:
         result["cancellation"]=json!({"requested":true,"workerStopped":true,"cleanTeardownVerified":false});
         if result["firstError"]["code"]=="E_RUN_CANCELED" { result["status"]=json!("canceled"); }
     }
-    if serde_json::to_vec(&result).expect("result serializes").len()+1>super::MAX_STDOUT_BYTES {
-        result=publication_failure(Error::new("E_OUTPUT_LIMIT",8,"run summary exceeds 8 KiB"), &result);
-    }
-    if let Err(error)=output.finish(&result) {
-        result=publication_failure(error, &result);
-    }
-    Ok(result)
+    Ok(output.finalize("run", result))
 }
 
 pub fn worker(args: impl Iterator<Item=String>) -> supervisor::Report {
@@ -185,7 +179,7 @@ pub fn worker(args: impl Iterator<Item=String>) -> supervisor::Report {
         }
     }
     let result=ledger.finish(output.as_ref(),fixture_runtime.as_deref());
-    supervisor::Report { result,output_state:None }
+    supervisor::Report { result }
 }
 
 fn validate_steps(scenario:&scenario::Scenario,profile:&profile::Profile)->Result<(),Error> {

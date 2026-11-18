@@ -1,4 +1,4 @@
-use super::{Error, output::OutputState};
+use super::Error;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{io::{Read, Write}, process::{Command, Stdio}, sync::atomic::{AtomicBool, Ordering}, thread, time::{Duration, Instant}};
@@ -7,7 +7,6 @@ use std::{io::{Read, Write}, process::{Command, Stdio}, sync::atomic::{AtomicBoo
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct Report {
     pub result: Value,
-    pub output_state: Option<OutputState>,
 }
 
 fn drain(mut reader: impl Read, maximum: usize) -> std::io::Result<(Vec<u8>, u64)> {

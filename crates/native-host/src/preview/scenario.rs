@@ -1,13 +1,9 @@
 //! Closed scenario preflight. No application code is evaluated by input loading.
-use std::{
-    collections::BTreeSet,
-    fs::{self, File},
-    io::Read,
-    path::Path,
-};
+use std::{collections::BTreeSet, path::Path};
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer, ser::SerializeMap};
 
+use crate::bounded_fs::{self, BoundedReadError};
 use super::{Error, output::digest};
 
 const MAX_INPUT_BYTES: u64 = 1024 * 1024;
@@ -443,19 +439,11 @@ pub fn load(path: &Path, available: &[&str], virtual_profile: bool) -> Result<Lo
 }
 
 fn read_input(path: &Path) -> Result<Vec<u8>, Error> {
-    let metadata = fs::metadata(path)
-        .map_err(|error| invalid(format!("scenario {}: {error}", path.display())))?;
-    if !metadata.is_file() || metadata.len() > MAX_INPUT_BYTES {
-        return Err(invalid("scenario must be a regular file of at most 1 MiB"));
-    }
-    let mut bytes = Vec::with_capacity(metadata.len() as usize);
-    File::open(path)
-        .and_then(|file| file.take(MAX_INPUT_BYTES + 1).read_to_end(&mut bytes))
-        .map_err(|error| invalid(format!("scenario {}: {error}", path.display())))?;
-    if bytes.len() as u64 > MAX_INPUT_BYTES {
-        return Err(invalid("scenario exceeds 1 MiB"));
-    }
-    Ok(bytes)
+    bounded_fs::read_input(path, MAX_INPUT_BYTES).map_err(|error| match error {
+        BoundedReadError::TooLarge { .. } => invalid("scenario exceeds 1 MiB"),
+        BoundedReadError::NotRegularFile => invalid("scenario must be a regular file of at most 1 MiB"),
+        other => invalid(format!("scenario {}: {other}", path.display())),
+    })
 }
 
 fn parse(bytes: &[u8], available: &[&str], virtual_profile: bool) -> Result<Scenario, Error> {
@@ -1124,17 +1112,17 @@ mod tests {
 
     impl InputFile {
         fn new(bytes: &[u8]) -> Self {
+            use std::io::Write;
             static NEXT: AtomicU64 = AtomicU64::new(0);
             let path = std::env::temp_dir().join(format!("zgui-preview-scenario-{}-{}.json", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
-            use std::io::Write;
-            let mut file = fs::OpenOptions::new().write(true).create_new(true).open(&path).unwrap();
+            let mut file = std::fs::OpenOptions::new().write(true).create_new(true).open(&path).unwrap();
             file.write_all(bytes).unwrap();
             Self(path)
         }
     }
 
     impl Drop for InputFile {
-        fn drop(&mut self) { fs::remove_file(&self.0).unwrap(); }
+        fn drop(&mut self) { std::fs::remove_file(&self.0).unwrap(); }
     }
 
     #[test]

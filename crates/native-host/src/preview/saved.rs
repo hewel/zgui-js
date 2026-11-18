@@ -280,42 +280,23 @@ impl SavedRun {
     }
 }
 
-pub(super) fn read_path(path:&Path,limit:u64)->Result<Vec<u8>,Error> {
-    let parent=path.parent().filter(|parent|!parent.as_os_str().is_empty()).unwrap_or(Path::new(".")).canonicalize().map_err(io)?;
-    let name=path.file_name().and_then(|name|name.to_str()).ok_or_else(||io("expected a UTF-8 file name"))?;
-    read_file(&parent,name,limit)
-}
-
 fn open_file(root:&Path,relative:&str,limit:u64)->Result<std::fs::File,Error> {
-    let relative=super::output::relative_path(relative)?;
-    let mut path=root.to_owned();
-    let mut last_metadata=None;
-    for component in relative.components() {
-        path.push(component);
-        let metadata=std::fs::symlink_metadata(&path).map_err(io)?;
-        if metadata.file_type().is_symlink() { return Err(io("saved artifacts cannot be symlinks")); }
-        last_metadata=Some(metadata);
-    }
-    let metadata=last_metadata.expect("validated relative path has components");
-    if !metadata.is_file() || metadata.len()>limit { return Err(Error::new("E_OUTPUT_LIMIT",8,"saved artifact is not a bounded regular file")); }
-    let mut options=std::fs::OpenOptions::new();
-    options.read(true);
-    #[cfg(unix)] {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.custom_flags(libc::O_NOFOLLOW|libc::O_NONBLOCK);
-    }
-    let file=options.open(path).map_err(io)?;
-    let metadata=file.metadata().map_err(io)?;
-    if !metadata.is_file() || metadata.len()>limit { return Err(Error::new("E_OUTPUT_LIMIT",8,"saved artifact changed to an unbounded or non-regular file")); }
-    Ok(file)
+    crate::bounded_fs::open_contained(root,relative,limit)
+        .map(|(file,_)|file)
+        .map_err(bounded_error)
 }
 
 fn read_file(root:&Path,relative:&str,limit:u64)->Result<Vec<u8>,Error> {
-    let file=open_file(root,relative,limit)?;
-    let mut bytes=Vec::with_capacity(file.metadata().map_err(io)?.len() as usize);
-    file.take(limit+1).read_to_end(&mut bytes).map_err(io)?;
-    if bytes.len() as u64>limit { return Err(Error::new("E_OUTPUT_LIMIT",8,"saved artifact grew beyond its read limit")); }
-    Ok(bytes)
+    crate::bounded_fs::read_contained(root,relative,limit).map_err(bounded_error)
+}
+
+fn bounded_error(error:crate::bounded_fs::BoundedReadError)->Error {
+    match error {
+        crate::bounded_fs::BoundedReadError::TooLarge{..}
+        |crate::bounded_fs::BoundedReadError::NotRegularFile=>
+            Error::new("E_OUTPUT_LIMIT",8,"saved artifact is not a bounded regular file"),
+        other=>io(other),
+    }
 }
 fn schema(message:&str)->Error { Error::new("E_SCHEMA",2,message) }
 fn io(error:impl std::fmt::Display)->Error { Error::new("E_OUTPUT_IO",8,error.to_string()) }

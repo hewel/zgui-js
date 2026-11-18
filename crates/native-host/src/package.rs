@@ -1,4 +1,5 @@
-use std::{collections::BTreeMap, error::Error, fs, path::{Component, Path, PathBuf}};
+use std::{collections::BTreeMap, error::Error, fs, path::{Path, PathBuf}};
+use crate::bounded_fs::{self, BoundedReadError};
 use sha2::{Digest, Sha256};
 use std::fmt::Write as _;
 
@@ -311,22 +312,14 @@ fn unique_digests<'de, D: serde::Deserializer<'de>>(deserializer: D) -> std::res
 }
 
 fn resource(root: &Path, name: &str) -> Result<Vec<u8>> {
-    let path = Path::new(name);
-    if name.is_empty() || name.contains('\\') || name.split('/').any(|part| part.is_empty() || part == "." || part == "..") || path.components().any(|part| !matches!(part, Component::Normal(_))) {
-        return Err(format!("resource must be a canonical package-relative path: {name}").into());
-    }
-    let mut resolved = root.to_path_buf();
-    for part in path.components() {
-        resolved.push(part);
-        if fs::symlink_metadata(&resolved)?.file_type().is_symlink() { return Err(format!("symlink resource rejected: {name}").into()); }
-    }
-    let metadata = fs::metadata(&resolved)?;
-    if !metadata.is_file() || metadata.len() > MAX_RESOURCE_BYTES { return Err(format!("invalid or oversized resource: {name}").into()); }
-    use std::io::Read as _;
-    let mut bytes = Vec::with_capacity(metadata.len() as usize);
-    fs::File::open(resolved)?.take(MAX_RESOURCE_BYTES + 1).read_to_end(&mut bytes)?;
-    if bytes.len() as u64 > MAX_RESOURCE_BYTES { return Err(format!("resource grew beyond limit: {name}").into()); }
-    Ok(bytes)
+    bounded_fs::read_contained(root, name, MAX_RESOURCE_BYTES).map_err(|error| match error {
+        BoundedReadError::InvalidPath => format!("resource must be a canonical package-relative path: {name}").into(),
+        BoundedReadError::Symlink => format!("symlink resource rejected: {name}").into(),
+        BoundedReadError::NotRegularFile | BoundedReadError::TooLarge { .. } => {
+            format!("invalid or oversized resource: {name}").into()
+        }
+        BoundedReadError::Io(io) => io.into(),
+    })
 }
 
 #[cfg(test)]

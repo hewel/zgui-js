@@ -1,8 +1,7 @@
 //! Hermetic preview configuration. Resource limits are mirrored in the JSON schemas.
 use std::{
     collections::BTreeSet,
-    fs::{self, File},
-    io::Read,
+    fs,
     path::{Component, Path, PathBuf},
     sync::Arc,
 };
@@ -12,6 +11,7 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use zgui::app::Fonts;
 
+use crate::bounded_fs::{self, BoundedReadError};
 use super::Error;
 
 type Result<T, E = Error> = std::result::Result<T, E>;
@@ -151,7 +151,9 @@ struct FontFace {
 pub(crate) fn read_profile(path: &Path, overrides: &Overrides) -> Result<(PathBuf, Profile)> {
     let profile_path = fs::canonicalize(path)
         .map_err(|error| invalid(format!("profile {}: {error}", path.display())))?;
-    let mut profile: Profile = parse_json(&read_bounded(&profile_path, MAX_JSON_BYTES)?, "profile")?;
+    let bytes = bounded_fs::read_input(&profile_path, MAX_JSON_BYTES)
+        .map_err(|error| invalid(format!("resource {}: {error}", profile_path.display())))?;
+    let mut profile: Profile = parse_json(&bytes, "profile")?;
     // Validate the declaration as well as the override: an override must not hide an invalid file.
     validate(&profile)?;
     if let Some(width) = overrides.width { profile.surface.width = width; }
@@ -176,15 +178,16 @@ pub(crate) fn load(path: &Path, overrides: &Overrides) -> Result<LoadedProfile> 
     }
     let manifest_path = fs::canonicalize(profile_path.parent().expect("canonical file has parent").join(manifest_name))
         .map_err(|error| font_error(format!("font manifest {}: {error}", profile.fonts.manifest)))?;
-    let manifest: FontManifest = parse_json(&read_bounded(&manifest_path, MAX_JSON_BYTES)?, "font manifest")?;
+    let manifest_bytes = bounded_fs::read_input(&manifest_path, MAX_JSON_BYTES)
+        .map_err(|error| invalid(format!("resource {}: {error}", manifest_path.display())))?;
+    let manifest: FontManifest = parse_json(&manifest_bytes, "font manifest")?;
     validate_manifest(&manifest)?;
     let root = manifest_path.parent().expect("canonical file has parent");
     let fonts = Fonts::shipped_only();
     let mut evidence = Vec::with_capacity(manifest.faces.len());
     let mut total_bytes = 0_u64;
     for face in &manifest.faces {
-        let font_path = contained(root, &face.path)?;
-        let data = read_bounded(&font_path, MAX_FONT_BYTES)?;
+        let data = read_font_resource(root, &face.path, MAX_FONT_BYTES)?;
         total_bytes += data.len() as u64;
         if total_bytes > MAX_TOTAL_FONT_BYTES {
             return Err(font_error("declared fonts exceed the 64 MiB total font budget"));
@@ -193,8 +196,7 @@ pub(crate) fn load(path: &Path, overrides: &Overrides) -> Result<LoadedProfile> 
         if actual_hash != face.sha256 {
             return Err(Error::new("E_FONT_HASH", 2, format!("font {}: SHA-256 mismatch (expected {}, got {actual_hash})", face.path, face.sha256)));
         }
-        let license_path = contained(root, &face.license_path)?;
-        let license = read_bounded(&license_path, MAX_LICENSE_BYTES)?;
+        let license = read_font_resource(root, &face.license_path, MAX_LICENSE_BYTES)?;
         if std::str::from_utf8(&license).map_or(true, |text| text.trim().is_empty()) {
             return Err(font_error(format!("license {} must be nonempty UTF-8 text", face.license_path)));
         }
@@ -346,31 +348,15 @@ fn validate_manifest(manifest: &FontManifest) -> Result<()> {
     Ok(())
 }
 
-fn contained(root: &Path, name: &str) -> Result<PathBuf> {
-    if !valid_resource_path(name) { return Err(font_error(format!("invalid font resource path {name:?}"))); }
-    let resolved = fs::canonicalize(root.join(name))
-        .map_err(|error| font_error(format!("font resource {name}: {error}")))?;
-    if !resolved.starts_with(root) { return Err(font_error(format!("font resource escapes its declared root: {name}"))); }
-    Ok(resolved)
-}
-
-fn read_bounded(path: &Path, maximum: u64) -> Result<Vec<u8>> {
-    // Reject special files before opening: opening a FIFO would otherwise block the watchdog.
-    let metadata = fs::metadata(path).map_err(|error| invalid(format!("resource {}: {error}", path.display())))?;
-    if !metadata.is_file() || metadata.len() > maximum {
-        return Err(invalid(format!("resource {} must be a regular file of at most {maximum} bytes", path.display())));
-    }
-    let mut file = File::open(path).map_err(|error| invalid(format!("resource {}: {error}", path.display())))?;
-    let metadata = file.metadata().map_err(|error| invalid(format!("resource {}: {error}", path.display())))?;
-    if !metadata.is_file() || metadata.len() > maximum {
-        return Err(invalid(format!("resource {} must be a regular file of at most {maximum} bytes", path.display())));
-    }
-    // `take` also bounds a file that grows after metadata inspection.
-    let mut bytes = Vec::with_capacity(metadata.len() as usize);
-    file.by_ref().take(maximum + 1).read_to_end(&mut bytes)
-        .map_err(|error| invalid(format!("resource {}: {error}", path.display())))?;
-    if bytes.len() as u64 > maximum { return Err(invalid(format!("resource {} grew beyond its byte limit", path.display()))); }
-    Ok(bytes)
+fn read_font_resource(root: &Path, name: &str, maximum: u64) -> Result<Vec<u8>> {
+    bounded_fs::read_contained(root, name, maximum).map_err(|error| match error {
+        BoundedReadError::InvalidPath => font_error(format!("invalid font resource path {name:?}")),
+        BoundedReadError::Symlink => font_error(format!("font resource escapes its declared root: {name}")),
+        BoundedReadError::NotRegularFile | BoundedReadError::TooLarge { .. } => {
+            invalid(format!("resource {name} must be a regular file of at most {maximum} bytes"))
+        }
+        BoundedReadError::Io(io) => font_error(format!("font resource {name}: {io}")),
+    })
 }
 
 fn sha256(bytes: &[u8]) -> String { format!("{:x}", Sha256::digest(bytes)) }
@@ -535,14 +521,14 @@ mod tests {
     fn bounded_resources_reject_oversized_files_and_path_traversal() {
         let temp = TempDir::new();
         fs::write(temp.0.join("oversized"), b"12345").unwrap();
-        assert!(read_bounded(&temp.0.join("oversized"), 4).is_err());
+        assert!(bounded_fs::read_input(&temp.0.join("oversized"), 4).is_err());
         for name in ["../secret", "/secret", "./font.ttf", "a//b", "a\\b"] {
-            assert!(contained(&temp.0, name).is_err(), "{name}");
+            assert!(read_font_resource(&temp.0, name, 1024).is_err(), "{name}");
         }
         #[cfg(unix)] {
             fs::create_dir(temp.0.join("root")).unwrap();
             std::os::unix::fs::symlink(temp.0.join("oversized"), temp.0.join("root/escape")).unwrap();
-            assert!(contained(&temp.0.join("root"), "escape").is_err());
+            assert!(read_font_resource(&temp.0.join("root"), "escape", 1024).is_err());
         }
     }
 

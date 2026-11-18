@@ -1,10 +1,7 @@
 //! Closed fixture preflight; providers share the production service boundary.
-use std::{
-    fs::{self, File},
-    io::Read,
-    path::Path,
-};
+use std::path::Path;
 pub(crate) use crate::assets::fixture::FixtureDefinition;
+use crate::bounded_fs::{self, BoundedReadError};
 use super::{Error, output::digest};
 
 const MAX_INPUT_BYTES: u64 = 1024 * 1024;
@@ -20,18 +17,11 @@ pub struct LoadedFixture {
 
 
 pub fn load(path: &Path) -> Result<LoadedFixture, Error> {
-    let metadata = fs::metadata(path)
-        .map_err(|error| invalid(format!("fixture {}: {error}", path.display())))?;
-    if !metadata.is_file() || metadata.len() > MAX_INPUT_BYTES {
-        return Err(invalid("fixture must be a regular file of at most 1 MiB"));
-    }
-    let mut original = Vec::with_capacity(metadata.len() as usize);
-    File::open(path)
-        .and_then(|file| file.take(MAX_INPUT_BYTES + 1).read_to_end(&mut original))
-        .map_err(|error| invalid(format!("fixture {}: {error}", path.display())))?;
-    if original.len() as u64 > MAX_INPUT_BYTES {
-        return Err(invalid("fixture exceeds 1 MiB"));
-    }
+    let original = bounded_fs::read_input(path, MAX_INPUT_BYTES).map_err(|error| match error {
+        BoundedReadError::TooLarge { .. } => invalid("fixture exceeds 1 MiB"),
+        BoundedReadError::NotRegularFile => invalid("fixture must be a regular file of at most 1 MiB"),
+        other => invalid(format!("fixture {}: {other}", path.display())),
+    })?;
     let definition = parse(&original)?;
     let id = definition.id.clone();
     let digest = digest(&original);
@@ -50,6 +40,7 @@ fn invalid(message: impl Into<String>) -> Error { Error::new("E_SCHEMA", 2, mess
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
     use serde_json::json;
     use std::sync::atomic::{AtomicU64, Ordering};
 

@@ -1,6 +1,6 @@
-use crate::Application;
+use crate::{Application, bounded_fs::{self, BoundedReadError}};
 use serde::Deserialize;
-use std::{error::Error, fs::File, io::Read, path::Path, time::{Duration, Instant}};
+use std::{error::Error, path::Path, time::{Duration, Instant}};
 use zgui::{geom::{CssPx, Edges, Size}, platform::{AppHandler, IdlePolicy, KeyboardInteractivity, Layer, LayerPlacement, PlatformCx, SurfaceAttributes, SurfaceEvent, SurfaceId, SurfaceRole, WakeReason}};
 
 type Result<T> = std::result::Result<T, Box<dyn Error>>;
@@ -36,9 +36,10 @@ pub(crate) struct LayerConfig {
 
 impl LayerConfig {
     pub(crate) fn load(path: &Path) -> Result<Self> {
-        let mut bytes = Vec::new();
-        File::open(path)?.take(65_537).read_to_end(&mut bytes)?;
-        if bytes.len() > 65_536 { return Err("layer configuration exceeds 64 KiB".into()); }
+        let bytes = bounded_fs::read_input(path, 65_536).map_err(|error| match error {
+            BoundedReadError::TooLarge { .. } => Box::<dyn Error>::from("layer configuration exceeds 64 KiB"),
+            other => Box::new(other),
+        })?;
         let config: Self = serde_json::from_slice(&bytes)?;
         config.validate()?;
         Ok(config)

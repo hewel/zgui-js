@@ -1,3 +1,4 @@
+mod bounded_fs;
 mod package;
 mod session;
 mod session_host;

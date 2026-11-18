@@ -123,30 +123,42 @@ fn doctor(args: Vec<String>) -> Result<Value, Error> {
     child.args(["preview", "_doctor-worker"]).args(args)
         .env("ZGUI_PREVIEW_PARENT_PID", std::process::id().to_string());
     let report = supervisor::run(&mut child, std::time::Duration::from_millis(profile.limits.max_run_wall_ms));
+    Ok(finalize_doctor_report(output.as_mut(), report))
+}
+
+fn finalize_doctor_report(
+    mut output: Option<&mut output::Output>,
+    report: Result<supervisor::Report, Error>,
+) -> Value {
     let result = match report {
         Ok(report) => {
-            if let (Some(output), Some(state)) = (output.as_mut(), report.output_state) {
-                output.adopt(state)?;
+            let mut result = report.result;
+            if let Some(output) = output.as_deref_mut() {
+                let reconciliation = if result["status"] == "passed" {
+                    output.restore_worker()
+                } else {
+                    output.recover()
+                };
+                if let Err(error) = reconciliation {
+                    result = output::publication_failure("doctor", error, &result);
+                }
             }
-            report.result
+            result
         }
-        Err(error) => failure("doctor", error),
-    };
-    if serde_json::to_vec(&result).expect("JSON value serializes").len() + 1 > MAX_STDOUT_BYTES {
-        return Err(Error::new("E_OUTPUT_LIMIT", 8, "doctor summary exceeds 8 KiB"));
-    }
-    if let Some(output) = output.as_mut() {
-        let publication = (|| {
-            if result["status"] != "passed" { output.recover()?; }
-            output.finish(&result)
-        })();
-        if let Err(error) = publication {
+        Err(error) => {
             let mut failed = failure("doctor", error);
-            failed["originalError"] = result["firstError"].clone();
-            return Ok(failed);
+            if let Some(output) = output.as_deref_mut()
+                && let Err(recovery_error) = output.recover()
+            {
+                failed = output::publication_failure("doctor", recovery_error, &failed);
+            }
+            failed
         }
+    };
+    match output {
+        Some(output) => output.finalize("doctor", result),
+        None => output::enforce_stdout_limit("doctor", result),
     }
-    Ok(result)
 }
 
 fn doctor_worker(args: impl Iterator<Item = String>) -> supervisor::Report {
@@ -160,43 +172,43 @@ fn doctor_worker(args: impl Iterator<Item = String>) -> supervisor::Report {
                 .ok_or_else(|| Error::new("E_HOST_INVARIANT", 9, "worker has no controller identity"))?;
             output::Output::attach_worker(path, profile.profile.limits.max_output_bytes, parent_pid)
         }).transpose()?;
-    let mut environment = inventory::snapshot()?;
-    let calibration = calibrate::calibrate(&profile)?;
-    let pixel_digest = output::digest(&calibration.png);
-    environment["profileDigest"] = json!(profile.digest);
-    environment["fonts"] = profile.font_evidence.clone();
-    environment["calibration"] = calibration.metadata.clone();
-    environment["capabilities"] = capabilities(true);
-    let selected_dependencies: Vec<_> = environment["dependencies"]["resolvedCargoPackages"]
-        .as_array().expect("inventory package array").iter()
-        .filter(|package| matches!(package["name"].as_str(), Some("zgui" | "rquickjs" | "rquickjs-sys" | "fontique")))
-        .cloned().collect();
-    let result = json!({
-        "schemaVersion":1, "command":"doctor", "status":"passed", "exitCode":0,
-        "firstError":null, "capabilityRevision":"native-preview-v1-p0",
-        "capabilities":capabilities(true),
-        "profile":{"id":profile.profile.id,"digest":profile.digest,"physicalWidth":profile.physical_width,"physicalHeight":profile.physical_height},
-        "host":environment["host"],
-        "dependencies":{"cargoLockDigest":environment["dependencies"]["cargoLockDigest"],"pnpmLockDigest":environment["dependencies"]["pnpmLockDigest"],"selected":selected_dependencies},
-        "graphics":calibration.metadata.get("renderer"),
-        "calibration":{"pngDigest":pixel_digest,"path":output.as_ref().map(|_| "calibration.png")},
-        "runDirectory":output.as_ref().map(|output| output.root()),
-        "artifacts":output.as_ref().map(|_| json!({"manifest":"artifacts.json","environment":"environment.json","calibration":"calibration.png","frame":"calibration.frame.json"}))
-    });
-    if serde_json::to_vec(&result).expect("JSON value serializes").len() + 1 > MAX_STDOUT_BYTES {
-        return Err(Error::new("E_OUTPUT_LIMIT", 8, "doctor summary exceeds 8 KiB"));
-    }
-    if let Some(output) = output.as_mut() {
-        output.json("inputs/profile.json", "resolved-profile", &profile.resolved_json)?;
-        output.json("environment.json", "environment", &environment)?;
-        output.bytes("calibration.png", "calibration-pixels", &calibration.png)?;
-        output.json("calibration.frame.json", "calibration-metadata", &calibration.metadata)?;
-    }
+        let mut environment = inventory::snapshot()?;
+        let calibration = calibrate::calibrate(&profile)?;
+        let pixel_digest = output::digest(&calibration.png);
+        environment["profileDigest"] = json!(profile.digest);
+        environment["fonts"] = profile.font_evidence.clone();
+        environment["calibration"] = calibration.metadata.clone();
+        environment["capabilities"] = capabilities(true);
+        let selected_dependencies: Vec<_> = environment["dependencies"]["resolvedCargoPackages"]
+            .as_array().expect("inventory package array").iter()
+            .filter(|package| matches!(package["name"].as_str(), Some("zgui" | "rquickjs" | "rquickjs-sys" | "fontique")))
+            .cloned().collect();
+        let result = json!({
+            "schemaVersion":1, "command":"doctor", "status":"passed", "exitCode":0,
+            "firstError":null, "capabilityRevision":"native-preview-v1-p0",
+            "capabilities":capabilities(true),
+            "profile":{"id":profile.profile.id,"digest":profile.digest,"physicalWidth":profile.physical_width,"physicalHeight":profile.physical_height},
+            "host":environment["host"],
+            "dependencies":{"cargoLockDigest":environment["dependencies"]["cargoLockDigest"],"pnpmLockDigest":environment["dependencies"]["pnpmLockDigest"],"selected":selected_dependencies},
+            "graphics":calibration.metadata.get("renderer"),
+            "calibration":{"pngDigest":pixel_digest,"path":output.as_ref().map(|_| "calibration.png")},
+            "runDirectory":output.as_ref().map(|output| output.root()),
+            "artifacts":output.as_ref().map(|_| json!({"manifest":"artifacts.json","environment":"environment.json","calibration":"calibration.png","frame":"calibration.frame.json"}))
+        });
+        if serde_json::to_vec(&result).expect("JSON value serializes").len() + 1 > MAX_STDOUT_BYTES {
+            return Err(Error::new("E_OUTPUT_LIMIT", 8, "doctor summary exceeds 8 KiB"));
+        }
+        if let Some(output) = output.as_mut() {
+            output.json("inputs/profile.json", "resolved-profile", &profile.resolved_json)?;
+            output.json("environment.json", "environment", &environment)?;
+            output.bytes("calibration.png", "calibration-pixels", &calibration.png)?;
+            output.json("calibration.frame.json", "calibration-metadata", &calibration.metadata)?;
+            output.seal_worker()?;
+        }
         Ok(result)
     })();
     supervisor::Report {
         result: outcome.unwrap_or_else(|error| failure("doctor", error)),
-        output_state: output.map(output::Output::into_state),
     }
 }
 
@@ -216,3 +228,80 @@ const RUN_CAPABILITIES: &[&str] = &[
     "input.pointer", "input.keyboard", "input.text", "input.wheel",
     "virtual-time", "services.fixtures", "assets.native-readiness", "surface.resize", "surface.scale", "surface.color-scheme", "surface.recreate",
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    struct TempDir(PathBuf);
+    impl TempDir {
+        fn new() -> Self {
+            static NEXT: AtomicU64 = AtomicU64::new(0);
+            let dir = std::env::temp_dir().join(format!(
+                "zgui-preview-mod-{}-{}",
+                std::process::id(),
+                NEXT.fetch_add(1, Ordering::Relaxed)
+            ));
+            Self(dir)
+        }
+    }
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn doctor_finalization_restores_worker_preserves_failure_and_seals_overflow() {
+        let dir = TempDir::new();
+        let mut controller = output::Output::create(&dir.0, 64 * 1024).unwrap();
+        let mut worker = output::Output::attach_worker(&dir.0, 64 * 1024, std::process::id()).unwrap();
+        worker.json("environment.json", "environment", &json!({"ok": true})).unwrap();
+        worker.seal_worker().unwrap();
+        drop(worker);
+
+        let passed = finalize_doctor_report(
+            Some(&mut controller),
+            Ok(supervisor::Report {
+                result: json!({
+                    "schemaVersion": 1, "command": "doctor", "status": "passed", "exitCode": 0, "firstError": null
+                }),
+            }),
+        );
+        assert_eq!(passed["exitCode"], 0);
+        assert!(dir.0.join("artifacts.json").is_file());
+        assert!(dir.0.join("result.json").is_file());
+
+        let fail_dir = TempDir::new();
+        let mut fail_controller = output::Output::create(&fail_dir.0, 64 * 1024).unwrap();
+        let oversized = finalize_doctor_report(
+            Some(&mut fail_controller),
+            Ok(supervisor::Report {
+                result: json!({
+                    "schemaVersion": 1, "command": "doctor", "status": "failed", "exitCode": 2,
+                    "firstError": {"code": "E_FONT", "exitCode": 2, "message": "x".repeat(MAX_STDOUT_BYTES)}
+                }),
+            }),
+        );
+        assert_eq!(oversized["exitCode"], 8);
+        assert_eq!(oversized["firstError"]["code"], "E_OUTPUT_LIMIT");
+        assert_eq!(oversized["originalError"]["code"], "E_FONT");
+        assert!(fail_dir.0.join("artifacts.json").is_file());
+        assert!(fail_dir.0.join("result.json").is_file());
+
+        let unsealed_dir = TempDir::new();
+        let mut unsealed_controller = output::Output::create(&unsealed_dir.0, 64 * 1024).unwrap();
+        let missing_seal = finalize_doctor_report(
+            Some(&mut unsealed_controller),
+            Ok(supervisor::Report {
+                result: json!({
+                    "schemaVersion": 1, "command": "doctor", "status": "passed", "exitCode": 0, "firstError": null
+                }),
+            }),
+        );
+        assert_eq!(missing_seal["exitCode"], 8);
+        assert_eq!(missing_seal["firstError"]["code"], "E_OUTPUT_IO");
+        assert!(unsealed_dir.0.join("artifacts.json").is_file());
+    }
+}
