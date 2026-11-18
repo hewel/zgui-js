@@ -62,15 +62,48 @@ export const {
 const internalChannels = ["__zguiClass", "__zguiStyle", "__zguiInvariantStyle"];
 const mergedSources = new WeakMap<object, readonly object[]>();
 export function mergeProps<T extends readonly object[]>(...sources: T): MergeSources<T> {
-  const inherited = sources.flatMap(source => mergedSources.get(source) ?? [source]);
-  const merged = renderer.mergeProps(...inherited);
-  const originals = inherited.filter(source => source !== merged);
-  if (!internalChannels.some(key => originals.filter(source => key in source).length > 1)) return merged as unknown as MergeSources<T>;
+  let inherited: object[] | null = null;
+  for (let i = 0; i < sources.length; i++) {
+    const prior = mergedSources.get(sources[i]);
+    if (prior) {
+      inherited ??= sources.slice(0, i);
+      inherited.push(...prior);
+    } else if (inherited) {
+      inherited.push(sources[i]);
+    }
+  }
+  const list = inherited ?? sources;
+  const merged = renderer.mergeProps(...list);
+  let multiChannel = false;
+  for (let c = 0; c < internalChannels.length && !multiChannel; c++) {
+    const key = internalChannels[c];
+    let count = 0;
+    for (let i = 0; i < list.length; i++) {
+      if (list[i] !== merged && key in list[i] && ++count > 1) {
+        multiChannel = true;
+        break;
+      }
+    }
+  }
+  if (!multiChannel) return merged as unknown as MergeSources<T>;
+  const originals = list.filter(source => source !== merged);
   const result = new Proxy(merged, {
     get(target, key, receiver) {
-      if (typeof key === "string" && internalChannels.includes(key)) {
-        const values = originals.map(source => Reflect.get(source, key)).filter(Boolean);
-        return key === "__zguiClass" ? values.join(" ") : Object.assign({}, ...values);
+      if (key === "__zguiClass") {
+        let joined = "";
+        for (let i = 0; i < originals.length; i++) {
+          const value = Reflect.get(originals[i], key);
+          if (value) joined = joined ? `${joined} ${value}` : String(value);
+        }
+        return joined;
+      }
+      if (key === "__zguiStyle" || key === "__zguiInvariantStyle") {
+        const combined: Record<string, unknown> = {};
+        for (let i = 0; i < originals.length; i++) {
+          const value = Reflect.get(originals[i], key);
+          if (value) Object.assign(combined, value);
+        }
+        return combined;
       }
       return Reflect.get(target, key, receiver);
     },

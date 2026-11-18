@@ -5,7 +5,7 @@ import type {
   Accessor, NativeChild, NativeDismissReason, NativeElementProps, NativeEvent, NativeFocusEvent,
   NativeKeyEvent, NativeNode, NativePointerBoundaryEvent, NativePointerDownEvent, NativeRole,
 } from "../types.js";
-import { anchoredSurface, createOverlayState, OverlayContext, OverlayRoot } from "./overlay.js";
+import { anchoredSurface, createOverlayState, OverlayContext } from "./overlay.js";
 import type { AnchoredContentProps, OverlayRootProps, OverlayState } from "./overlay.js";
 import { createRovingFocus } from "./roving.js";
 import { createDelayed } from "./delay.js";
@@ -115,10 +115,8 @@ export function provideMenuRoot(
 }
 
 export function menuRoot(props: OverlayRootProps): NativeChild {
-  return OverlayRoot(mergeProps(props, { get children() {
-    const state = useContext(OverlayContext)!;
-    return provideMenuRoot(state, () => state.setOpen(false), props);
-  } }));
+  const state = createOverlayState(props);
+  return provide(OverlayContext, state, () => provideMenuRoot(state, () => state.setOpen(false), props));
 }
 
 export function provideMenuSub(props: OverlayRootProps): NativeChild {
