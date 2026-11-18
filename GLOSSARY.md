@@ -28,6 +28,11 @@ Native applications and repeatable previews of their behavior.
 
 **Historical evidence**: The last complete capture evidence retained after a failure. It does not claim to satisfy the failing action's current state.
 
+**Artifact inventory**: The sealed manifest of files, roles, sizes, and content digests owned by one preview output directory, verified before a run or comparison result is accepted as complete.
+
+**Package publication**: An immutable candidate package and its build-attempt status exposed by the builder before a host evaluates it.
+_Avoid_: Generation (reserved for session incarnations), native acceptance
+
 **Native acceptance**: The outcome of preflighting and mounting one published package for a mount region. Publication alone does not make a candidate accepted or replace the last successful application.
 
 **Stylesheet revision**: The identity of the stylesheet-set state consumed by a native document. Class and inline-declaration changes retain this identity; applied stylesheet installation, replacement, and removal change it.
