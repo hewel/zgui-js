@@ -1,7 +1,7 @@
-import { createContext, createSignal, onCleanup, splitProps, useContext } from "#solid";
-import { mergeProps } from "../renderer/index.js";
+import { createContext, createSignal, onCleanup, omit, useContext } from "#solid";
+import { createElement, mergeProps, setProp, spread } from "../renderer/index.js";
 import type { NativeChild, NativeElementProps, NativeNode } from "../types.js";
-import { classes, element, part, provide, slot, useStylesheet } from "./shared.js";
+import { classes, element, isStaticProps, part, provide, slot, useStylesheet, withDefaults } from "./shared.js";
 import { sheet } from "./generated/CardStyle.js";
 
 export type CardProps = NativeElementProps;
@@ -15,13 +15,20 @@ export type CardFooterProps = NativeElementProps;
 interface CardHeaderState {
   claim(): void;
 }
-const HeaderContext = createContext<CardHeaderState>();
+const HeaderContext = createContext<CardHeaderState | null>(null);
 
 export function Card(props: CardProps = {}): NativeNode {
   useStylesheet(sheet);
+  if (isStaticProps(props) && !("__zguiClass" in props)) {
+    const node = createElement("box");
+    if (props.role === undefined) setProp(node, "role", "group");
+    setProp(node, "__zguiClass", `${sheet.className} zui-card`);
+    spread(node, props);
+    return node;
+  }
   return element("box", mergeProps(
-    { role: "group" as const },
     props,
+    withDefaults({ role: "group" as const }, props),
     { get __zguiClass() { return classes(sheet.className, "zui-card"); } },
   ));
 }
@@ -35,13 +42,13 @@ export function CardHeader(props: CardHeaderProps = {}): NativeChild {
       onCleanup(() => setCount(value => value - 1));
     },
   };
-  const [own, rest] = splitProps(props, ["children"]);
+  const rest = omit(props, "children");
   const header = element("box", mergeProps(rest, {
     get __zguiClass() {
       return classes("zui-card__header", count() > 0 && "zui-card__header--action");
     },
   }));
-  slot(header, provide(HeaderContext, state, own));
+  slot(header, provide(HeaderContext, state, props));
   return header;
 }
 

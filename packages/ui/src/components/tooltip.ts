@@ -1,10 +1,10 @@
-import { Show, createContext, splitProps, useContext } from "#solid";
+import { Show, createContext, omit, useContext } from "#solid";
 import { memo, mergeProps } from "../renderer/index.js";
 import type { NativeChild, NativeElementProps, NativeNode } from "../types.js";
 import type { PopperPlacement } from "./popper.js";
 import { HoverRoot, createHandoff, hoverSurface, hoverTrigger } from "./hover.js";
 import type { HoverProps } from "./hover.js";
-import { classes, element, forbidChildren, provide, useStylesheet } from "./shared.js";
+import { classes, element, forbidChildren, provide, useStylesheet, withDefaults } from "./shared.js";
 import { sheet } from "./generated/TooltipStyle.js";
 
 export type TooltipProps = HoverProps;
@@ -12,7 +12,7 @@ export interface TooltipProviderProps { delay?: number; closeDelay?: number; chi
 export type TooltipTriggerProps = NativeElementProps;
 export interface TooltipArrowProps extends Omit<NativeElementProps, "children"> { children?: never; }
 export interface TooltipContentProps extends NativeElementProps { placement?: PopperPlacement; offset?: number; arrow?: boolean; }
-const Group = createContext<{ delay: () => number; closeDelay: () => number; handoff: ReturnType<typeof createHandoff> }>();
+const Group = createContext<{ delay: () => number; closeDelay: () => number; handoff: ReturnType<typeof createHandoff> } | null>(null);
 const defaultOffset = 10 * Math.SQRT2 / 2 - 1 + 4;
 
 export function TooltipProvider(props: TooltipProviderProps = {}): NativeChild {
@@ -39,13 +39,13 @@ export function TooltipTrigger(props: TooltipTriggerProps = {}): NativeNode {
 export function TooltipArrow(props: TooltipArrowProps = {}): NativeNode {
   useStylesheet(sheet);
   forbidChildren("TooltipArrow", props);
-  return element("box", mergeProps({ ariaHidden: true }, props, {
+  return element("box", mergeProps(props, withDefaults({ ariaHidden: true }, props), {
     get __zguiClass() { return classes("zui-tooltip__arrow"); },
   }));
 }
 
 export function TooltipContent(props: TooltipContentProps = {}): NativeChild {
-  const [own, rest] = splitProps(props, ["children", "placement", "offset", "arrow"]);
+  const rest = omit(props, "children", "placement", "offset", "arrow");
   return hoverSurface({
     sheet,
     class: "zui-tooltip",
@@ -54,11 +54,11 @@ export function TooltipContent(props: TooltipContentProps = {}): NativeChild {
       get "data-instant"() { return intent?.instant() ? "" : null; },
     }),
   }, mergeProps(rest, {
-    get placement(): PopperPlacement { return own.placement ?? { side: "top", align: "center" }; },
-    get offset() { const offset = own.offset ?? defaultOffset; return (own.arrow ?? true) ? Math.max(offset, defaultOffset) : offset; },
+    get placement(): PopperPlacement { return props.placement ?? { side: "top", align: "center" }; },
+    get offset() { const offset = props.offset ?? defaultOffset; return (props.arrow ?? true) ? Math.max(offset, defaultOffset) : offset; },
     get children() {
-      const content = memo(() => own.children);
-      return [content, Show({ get when() { return own.arrow ?? true; }, get children() { return TooltipArrow(); } })];
+      const content = memo(() => props.children);
+      return [content, Show({ get when() { return props.arrow ?? true; }, get children() { return TooltipArrow(); } })];
     },
   }));
 }

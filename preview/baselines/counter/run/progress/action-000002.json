@@ -3,17 +3,17 @@
   "build": {
     "artifactDigests": {
       "app.css": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "app.mjs": "sha256:ad67799bbc93ecddcc51a130fce450541bdcc14689bb31950f27f15809dc3660",
-      "app.mjs.map": "sha256:2534278df5b05b43dd878500165af3a1abbe9615a2a82c091f8bd1933868ac50",
-      "build-info.json": "sha256:8b96ccfb796c14a0c351c0f7da6cc188f1ed51fdaf134c8603d6a532c348b59d",
+      "app.mjs": "sha256:c57d5fc624ffdb56d4ef01a23e04471ce93d1a3a91efb58668ac005c126724a6",
+      "app.mjs.map": "sha256:e4585bf48db6e71189f1249c241f90a01c01cd4ed0d2074f89225e4854dabe45",
+      "build-info.json": "sha256:2b9d7139724af7cf736a24028620eb8ae8bfd7626ba6de63626f9e179124c063",
       "style-origins.json": "sha256:44221bcfd7f9fe023a7fe53058d7929908206572a365944522b061737f80e3a2"
     },
-    "buildId": "sha256:4f78e261909cb6e1f43c6720d2c468725df61ad9db50f9ccd2c113bee92a5e85",
-    "entryDigest": "sha256:ad67799bbc93ecddcc51a130fce450541bdcc14689bb31950f27f15809dc3660",
+    "buildId": "sha256:fe987467c0ecd5875ceecc8c57324861bfdbbcb8d744fb3a4050201de67ad693",
+    "entryDigest": "sha256:c57d5fc624ffdb56d4ef01a23e04471ce93d1a3a91efb58668ac005c126724a6",
     "fonts": [],
     "id": "dev.example.counter",
     "sourceMap": "app.mjs.map",
-    "sourceMapDigest": "sha256:2534278df5b05b43dd878500165af3a1abbe9615a2a82c091f8bd1933868ac50",
+    "sourceMapDigest": "sha256:e4585bf48db6e71189f1249c241f90a01c01cd4ed0d2074f89225e4854dabe45",
     "styleSystem": {
       "configDigest": "sha256:33c7891b27d625d83284f9d24aef2ee1b62041f5b423dbd3b41411a61ccada45",
       "name": "stylex",
@@ -31,7 +31,7 @@
     "generation": 1,
     "nativeAcceptance": {
       "candidate": {
-        "buildId": "sha256:4f78e261909cb6e1f43c6720d2c468725df61ad9db50f9ccd2c113bee92a5e85",
+        "buildId": "sha256:fe987467c0ecd5875ceecc8c57324861bfdbbcb8d744fb3a4050201de67ad693",
         "id": "dev.example.counter",
         "styleSystem": {
           "configDigest": "sha256:33c7891b27d625d83284f9d24aef2ee1b62041f5b423dbd3b41411a61ccada45",
@@ -43,7 +43,7 @@
       "diagnostic": null,
       "document": "DocumentId(0)",
       "generation": 1,
-      "lastSuccessfulBuildId": "sha256:4f78e261909cb6e1f43c6720d2c468725df61ad9db50f9ccd2c113bee92a5e85",
+      "lastSuccessfulBuildId": "sha256:fe987467c0ecd5875ceecc8c57324861bfdbbcb8d744fb3a4050201de67ad693",
       "schemaVersion": 1,
       "status": "accepted"
     },
@@ -55,7 +55,7 @@
     "requiredAssetsReady": true,
     "requiredFontsReady": true,
     "requiredMetadataRevision": 3,
-    "requiredStateRevision": 31,
+    "requiredStateRevision": 37,
     "requiredStyleRevision": 3,
     "resourceRevision": 1,
     "timeUs": 0,

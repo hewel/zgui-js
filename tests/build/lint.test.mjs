@@ -54,9 +54,23 @@ const negativeCases = [
     guidance: /provide\(\)/,
   },
   {
+    name: "zgui/no-raw-insert-or-provider (callable Context call)",
+    file: "raw-callable-context.ts",
+    code: 'declare function MyContext(props: { value: number }): unknown;\nexport const x = MyContext({ value: 1 });\n',
+    expected: /zgui\(no-raw-insert-or-provider\)/,
+    guidance: /provide\(\)/,
+  },
+  {
     name: "zgui/no-raw-insert-or-provider (JSX Provider explicit children prop)",
     file: "jsx-provider.tsx",
     code: 'declare const Ctx: { Provider(props: { value: number; children: unknown }): unknown };\nexport const el = <Ctx.Provider value={1} children="x" />;\n',
+    expected: /zgui\(no-raw-insert-or-provider\)/,
+    guidance: /explicit children prop/,
+  },
+  {
+    name: "zgui/no-raw-insert-or-provider (JSX callable Context explicit children prop)",
+    file: "jsx-callable-context.tsx",
+    code: 'declare function MyContext(props: { value: number; children: unknown }): unknown;\nexport const el = <MyContext value={1} children="x" />;\n',
     expected: /zgui\(no-raw-insert-or-provider\)/,
     guidance: /explicit children prop/,
   },

@@ -1,9 +1,13 @@
 export type * from "./types.js";
 export {
-  createSignal, createMemo, createEffect, onMount, onCleanup,
-  batch, untrack, For, Index, Show, createContext, useContext, splitProps,
+  createSignal, createMemo, createEffect, onSettled, onCleanup, getOwner, runWithOwner,
+  untrack, For, Repeat, Show, Switch, Match, Loading, Errored,
+  createContext, useContext, omit, merge, createStore, createProjection,
+  reconcile, snapshot, isPending, latest, refresh, action,
 } from "#solid";
-export type { Context } from "#solid";
+export type { Context, Owner, Store, StoreReturn, StoreSetter } from "#solid";
+
+export { flush } from "./renderer/index.js";
 
 export { renderApp } from "./render-app.js";
 export {

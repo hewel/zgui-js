@@ -80,7 +80,7 @@ test("property: solvePopper always produces finite non-negative bounds and fits 
 
 test("property: Slider clamps values, aligns steps, and never strands pointer capture", async t => {
   const fixture = `
-import { batch, createSignal, renderApp } from "@hewel/zgui";
+import { createSignal, renderApp } from "@hewel/zgui";
 import type { NativeNode } from "@hewel/zgui";
 import { Slider } from "@hewel/zgui/components";
 const [min, setMin] = createSignal(0);
@@ -88,11 +88,9 @@ const [max, setMax] = createSignal(100);
 const [step, setStep] = createSignal(1);
 export const log = { values: [] as number[] };
 export function setBounds(nextMin: number, nextMax: number, nextStep: number) {
-  batch(() => {
-    setMin(nextMin);
-    setMax(nextMax);
-    setStep(nextStep);
-  });
+  setMin(nextMin);
+  setMax(nextMax);
+  setStep(nextStep);
 }
 export function mount(root: NativeNode) {
   return renderApp(() => (
@@ -134,6 +132,7 @@ export function mount(root: NativeNode) {
       const nextMax = nextMin + intRange(rng, 10, 120);
       activeStep = rng() < 0.2 ? 0 : [0.5, 1, 5, 7][intRange(rng, 0, 3)];
       mod.setBounds(nextMin, nextMax, activeStep);
+      h.flush();
     }
 
     const prevEmitted = mod.log.values.length;
@@ -230,19 +229,24 @@ export function mount(root: NativeNode) {
         if (!next) mod.setPopoverOpen(false);
         return next;
       });
+      h.flush();
     } else if (action === 1 && mod.dialogOpen()) {
       mod.setPopoverOpen(v => !v);
+      h.flush();
     } else if (action === 2) {
       const topLayer = layers.findLast(record => record.active);
       topLayer?.callback(rng() < 0.5 ? "escape" : "outsidePointer");
     } else if (action === 3) {
       mod.setDismissible(v => !v);
+      h.flush();
     } else if (action === 4) {
       mod.setMounted(false);
       mod.setDialogOpen(false);
       mod.setPopoverOpen(false);
+      h.flush();
     } else if (action === 5) {
       mod.setMounted(true);
+      h.flush();
     } else {
       clock.settle();
     }
@@ -252,6 +256,7 @@ export function mount(root: NativeNode) {
 
   mod.setDialogOpen(false);
   mod.setPopoverOpen(false);
+  h.flush();
   clock.settle();
   assert.equal(countActive(traps), 0, "all focus traps released after close");
   assert.equal(countActive(locks), 0, "all scroll locks released after close");

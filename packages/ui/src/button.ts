@@ -4,6 +4,6 @@ import type { ButtonProps, NativeNode } from "./types.js";
 /** Native control defaults own pointer and non-repeating Enter/Space activation. */
 export function Button(props: ButtonProps = {}): NativeNode {
   const control = createElement("control");
-  spread(control, mergeProps({ tabIndex: 0 }, props, { role: "button" as const }));
+  spread(control, mergeProps(props, { get tabIndex() { return props.tabIndex ?? 0; }, role: "button" as const }));
   return control;
 }

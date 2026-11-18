@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { createClock, createHost, moduleFor } from "./native-fixture.mjs";
 
 const fixture = `
-import { For, Show, createSignal, onCleanup, onMount, renderApp } from "@hewel/zgui";
+import { For, Show, createSignal, onCleanup, renderApp } from "@hewel/zgui";
 import type { NativeNode } from "@hewel/zgui";
 import { Button, Dialog, DialogContent, DialogTitle, DialogTrigger,
   HoverCard, HoverCardContent, HoverCardTrigger,
@@ -94,8 +94,10 @@ export function badArrow(root: NativeNode) {
 export function mountCancelled(root: NativeNode) {
   return renderApp(() => {
     const [shown, setShown] = createSignal(true);
-    onMount(() => setShown(false));
-    return <Show when={shown()}><Tooltip defaultOpen><TipBody /></Tooltip></Show>;
+    return <>
+      <Show when={shown()}><Tooltip defaultOpen><TipBody /></Tooltip></Show>
+      <box ref={() => { setShown(false); }} />
+    </>;
   }, root);
 }
 export function mountNested(root: NativeNode) {
@@ -139,7 +141,7 @@ async function mounted(t, mountName = "mount", allowScrollLock = false) {
   };
   const emit = (record, value) => (record.emit ?? record.trigger)(value);
   const end = node => h.dispatch(node, "AnimationEnd");
-  const flush = () => { clock.frame(); clock.advance(0); };
+  const flush = () => { h.flush(); clock.frame(); clock.advance(0); };
   const active = records => records.filter(record => record.active).length;
   return { h, mod, clock, busy, traps, locks, layers, portals, geometry, root, send, emit, end, flush, active,
     finish: () => { const stop = dispose; dispose = undefined; stop?.(); } };
@@ -233,6 +235,7 @@ test("delayed tooltip cancels pending intent, retains busy exit and remounts fre
   flush();
   assert.equal(h.byTestId("surface"), surface, "busy animation retains the exiting surface");
   mod.bump();
+  h.flush();
   assert.equal(h.byTestId("counter").children.map(node => node.props.get("text")).join(""), "1");
   send("trigger", "onPointerEnter", { position: { x: 0, y: 0 }, pointerKind: "mouse" });
   clock.advance(100);
@@ -282,6 +285,7 @@ test("tooltip focus causes, caller veto and escape policy", async t => {
   clock.advance(500);
   assert.equal(h.byTestId("surface"), undefined, "blur cancels a pending open");
   mod.setCancel(true);
+  h.flush();
   const entered = send("trigger", "onPointerEnter", { position: { x: 0, y: 0 }, pointerKind: "mouse" });
   assert.equal(entered.defaultPrevented, true);
   assert.equal(h.byTestId("surface"), undefined, "caller preventDefault vetoes hover opening");
@@ -292,6 +296,7 @@ test("tooltip focus causes, caller veto and escape policy", async t => {
   assert.ok(mod.log.calls.includes("trigger:enter") && mod.log.calls.includes("trigger:focus"),
     "caller handlers still run before the veto");
   mod.setCancel(false);
+  h.flush();
   const closedEscape = send("trigger", "onKeyDown", { key: "Escape" });
   assert.equal(closedEscape.propagationStopped, false, "closed trigger must not stop Escape");
   send("trigger", "onPointerEnter", { position: { x: 0, y: 0 }, pointerKind: "mouse" });
@@ -355,6 +360,7 @@ test("controlled hover card refocuses without false-then-true churn and honours 
   send("surface", "onPointerEnter", { position: { x: 0, y: 0 }, pointerKind: "mouse" });
   assert.equal(clock.timers.size, 1, "surface enter queues an opening job");
   mod.setOpen(false);
+  h.flush();
   clock.advance(1000);
   assert.equal(h.byTestId("surface"), undefined, "parent close cancels the pending job");
   assert.equal(mod.log.changes.length, 0, "parent close issues no new requests");
@@ -371,8 +377,10 @@ test("provider handoff preserves identity, isolates nested groups and clears dis
   const counterA = h.byTestId("counter-a");
   assert.ok(surfaceA);
   mod.bump();
+  h.flush();
   assert.equal(counterA.children.map(node => node.props.get("text")).join(""), "1");
   mod.setIds(["b", "a"]);
+  h.flush();
   assert.equal(h.byTestId("trigger-a"), triggerA, "keyed reorder keeps trigger identity");
   assert.equal(h.byTestId("surface-a"), surfaceA, "keyed reorder keeps content identity");
   assert.equal(h.byTestId("counter-a").children.map(node => node.props.get("text")).join(""), "1", "child state survives reorder");
@@ -398,6 +406,7 @@ test("provider handoff preserves identity, isolates nested groups and clears dis
   assert.ok(h.byTestId("surface-c"), "nested default provider opens with its own zero delay");
   assert.equal(h.byTestId("surface-a"), revivedA, "nested group does not disturb the outer member");
   mod.setIds(["b"]);
+  h.flush();
   assert.equal(h.byTestId("trigger-a"), undefined);
   send("trigger-b", "onPointerEnter", { position: { x: 0, y: 0 }, pointerKind: "mouse" });
   clock.advance(99);
@@ -416,6 +425,7 @@ test("controlled tooltip honours parent veto, retained dismiss and pending cance
   assert.deepEqual(mod.log.changes, [true]);
   assert.equal(h.byTestId("surface"), undefined, "parent veto keeps the surface unmounted");
   mod.setOpen(true);
+  h.flush();
   const surface = h.byTestId("surface");
   assert.ok(surface);
   emit(layers.find(record => record.node === surface), undefined);
@@ -424,6 +434,7 @@ test("controlled tooltip honours parent veto, retained dismiss and pending cance
   send("surface", "onPointerEnter", { position: { x: 0, y: 0 }, pointerKind: "mouse" });
   assert.equal(clock.timers.size, 1);
   mod.setOpen(false);
+  h.flush();
   clock.advance(1000);
   flush();
   assert.equal(h.byTestId("surface"), undefined, "parent close cancels the pending opening job");

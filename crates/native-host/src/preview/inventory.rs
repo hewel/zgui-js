@@ -38,7 +38,7 @@ pub(crate) fn snapshot() -> Result<Value, Error> {
             "resolvedJavascriptPackages": javascript,
             "javascriptIdentityKind": "exact pnpm v9 package resolution keys from every lockfile document",
             "quickJsEngineRevision": "6d46d07d04041b40f4f49eaa7fdebe44c314c699",
-            "solidAuditedSourceRevision": "99714d4e2875d2d7ef8023e82f4ef6aa63ff0752",
+            "solidAuditedSourceRevision": "82f71fddb1340cab46167db119da5702038e65ab",
             "solidSourceRevisionMeaning": "specification audit reference, not an assertion that registry bytes are that git checkout"
         }
     }))

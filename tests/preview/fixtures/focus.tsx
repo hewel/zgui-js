@@ -6,7 +6,7 @@ export const hostApiVersion = 1;
 
 function Scope(props: { testId: string; children?: NativeChild }) {
   let node!: NativeNode;
-  createEffect(() => { trapFocus(node); });
+  createEffect(() => true, () => trapFocus(node));
   return <column ref={value => { node = value; }} testId={props.testId} style={{ gap: "8px" }}>{props.children}</column>;
 }
 

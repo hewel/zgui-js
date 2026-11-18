@@ -1,9 +1,9 @@
-import { onCleanup, splitProps } from "#solid";
+import { onCleanup, omit } from "#solid";
 import { createElement, effect, memo, mergeProps, spread } from "../renderer/index.js";
 import { focus, getWindowRect } from "../nodes.js";
 import type { NativeElementProps, NativeKeyEvent, NativeNode, NativePointerDownEvent, NativePointerEvent } from "../types.js";
 import { callHandler, createControllable } from "./state.js";
-import { append, classes, element, forbidChildren, useStylesheet } from "./shared.js";
+import { append, classes, element, forbidChildren, useStylesheet, withDefaults } from "./shared.js";
 import { sheet } from "./generated/SliderStyle.js";
 
 export interface SliderProps extends Omit<NativeElementProps, "children" | "orientation"> {
@@ -42,27 +42,24 @@ function snapped(value: number, bound: Bounds): number {
 export function Slider(props: SliderProps = {}): NativeNode {
   useStylesheet(sheet);
   forbidChildren("Slider", props);
-  const [own, rest] = splitProps(props, [
-    "value", "defaultValue", "onValueChange", "min", "max", "step", "orientation",
-    "label", "disabled", "onKeyDown", "onPointerDown", "onPointerMove", "onPointerUp", "onPointerCancel",
-  ]);
-  const bound = memo(() => boundsFor(own.min ?? 0, own.max ?? 100, own.step ?? 1));
-  effect(() => {
-    if (own.orientation !== undefined && own.orientation !== "horizontal") {
+  const rest = omit(props, "value", "defaultValue", "onValueChange", "min", "max", "step", "orientation", "label", "disabled", "onKeyDown", "onPointerDown", "onPointerMove", "onPointerUp", "onPointerCancel");
+  const bound = memo(() => boundsFor(props.min ?? 0, props.max ?? 100, props.step ?? 1));
+  effect(() => props.orientation, orientation => {
+    if (orientation !== undefined && orientation !== "horizontal") {
       throw new TypeError("Slider orientation must be horizontal");
     }
   });
   const [read, write] = createControllable<number>({
-    value: () => own.value,
-    defaultValue: () => snapped(own.defaultValue ?? 0, bound()),
-    onChange: () => own.onValueChange,
+    value: () => props.value,
+    defaultValue: () => snapped(props.defaultValue ?? 0, bound()),
+    onChange: () => props.onValueChange,
   }, 0);
   const value = memo(() => snapped(read(), bound()));
   const fraction = memo(() => {
     const b = bound();
     return b.max === b.min ? 0 : (value() - b.min) / (b.max - b.min);
   });
-  const disabled = () => !!own.disabled;
+  const disabled = () => !!props.disabled;
   const root = createElement("control");
   const track = element("box", { class: "zui-slider__track", ariaHidden: true });
   append(track, element("box", { class: "zui-slider__range", ariaHidden: true }));
@@ -70,7 +67,9 @@ export function Slider(props: SliderProps = {}): NativeNode {
 
   let captured: string | undefined;
   let dragging = false;
-  effect(() => { if (own.disabled) dragging = false; });
+  effect(() => !!props.disabled, isDisabled => {
+    if (isDisabled) dragging = false;
+  });
   onCleanup(() => { captured = undefined; dragging = false; });
   const change = (next: number) => {
     const normalized = snapped(next, bound());
@@ -90,24 +89,24 @@ export function Slider(props: SliderProps = {}): NativeNode {
   };
 
   spread(root, mergeProps(
-    {
+    rest,
+    withDefaults({
       role: "slider" as const,
       tabIndex: 0,
       orientation: "horizontal" as const,
       get disabled() { return disabled(); },
-      get ariaLabel() { return own.label ?? null; },
+      get ariaLabel() { return props.label ?? null; },
       get ariaValueMin() { return bound().min; },
       get ariaValueMax() { return bound().max; },
       get ariaValueStep() { return bound().step; },
       get ariaValueNow() { return value(); },
       get __zguiStyle() { return { "--zui-slider-fraction": `${(fraction() * 100).toFixed(4)}%` }; },
-    },
-    rest,
+    }, rest),
     {
       get __zguiClass() { return classes(sheet.className, "zui-slider"); },
       get onKeyDown() {
         return (event: NativeKeyEvent) => {
-          if (!callHandler(event, own.onKeyDown) || disabled() || event.target !== root || event.character != null) return;
+          if (!callHandler(event, props.onKeyDown) || disabled() || event.target !== root || event.character != null) return;
           const b = bound();
           const step = b.step > 0 ? b.step : 1;
           let next: number;
@@ -127,7 +126,7 @@ export function Slider(props: SliderProps = {}): NativeNode {
       },
       get onPointerDown() {
         return (event: NativePointerDownEvent) => {
-          if (!callHandler(event, own.onPointerDown) || disabled() || !event.primary) return;
+          if (!callHandler(event, props.onPointerDown) || disabled() || !event.primary) return;
           if (!(event.button === "primary" || (event.button === null && event.pointerKind !== "mouse"))) return;
           if (dragging && captured !== event.pointerId) return;
           const next = atPoint(event);
@@ -141,7 +140,7 @@ export function Slider(props: SliderProps = {}): NativeNode {
       },
       get onPointerMove() {
         return (event: NativePointerEvent) => {
-          const allowed = callHandler(event, own.onPointerMove);
+          const allowed = callHandler(event, props.onPointerMove);
           if (event.pointerId !== captured) return;
           if (!dragging || disabled()) { end(event); return; }
           if (!allowed) return;
@@ -151,7 +150,7 @@ export function Slider(props: SliderProps = {}): NativeNode {
       },
       get onPointerUp() {
         return (event: NativePointerEvent) => {
-          const allowed = callHandler(event, own.onPointerUp);
+          const allowed = callHandler(event, props.onPointerUp);
           if (event.pointerId !== captured) return;
           if (!(event.button === "primary" || event.button === null)) return;
           if (allowed && dragging && !disabled()) {
@@ -163,7 +162,7 @@ export function Slider(props: SliderProps = {}): NativeNode {
       },
       get onPointerCancel() {
         return (event: NativePointerEvent) => {
-          callHandler(event, own.onPointerCancel);
+          callHandler(event, props.onPointerCancel);
           if (event.pointerId === captured) end(event);
         };
       },

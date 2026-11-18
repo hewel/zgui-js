@@ -118,6 +118,7 @@ const slider = harness => harness.byTestId("slider");
 const attached = (harness, node) => {
   let current = node;
   while (current) {
+    if (harness.invalidated.has(current)) return false;
     if (current.tag === "root") return true;
     current = harness.host.getParentNode(current);
   }
@@ -163,6 +164,7 @@ test("stepped keyboard navigation snaps and clamps at endpoints", async t => {
   assert.equal(mod.log.values.length, 6);
 
   mod.controls.setCancelKeys(true);
+  harness.flush();
   press(harness, "ArrowRight");
   assert.equal(ariaValueNow(harness), 3, "a caller-prevented key does not change");
   assert.equal(mod.log.values.length, 6);
@@ -387,6 +389,7 @@ test("disabled and caller prevention gate gestures but never strand cleanup", as
   assert.ok(mod.nodes.slider() === root);
 
   mod.controls.setDisabled(true);
+  harness.flush();
   const blocked = sendPointer(harness, "PointerDown", root, 50);
   assert.equal(blocked.captured, 0, "disabled cannot start a gesture");
   press(harness, "ArrowRight");
@@ -394,42 +397,52 @@ test("disabled and caller prevention gate gestures but never strand cleanup", as
   mod.controls.setDisabled(false);
 
   mod.controls.setCancelPointer(["down"]);
+  harness.flush();
   const prevented = sendPointer(harness, "PointerDown", root, 50);
   assert.equal(prevented.captured, 0, "caller-prevented down issues no capture");
   assert.equal(ariaValueNow(harness), 10);
   mod.controls.setCancelPointer([]);
+  harness.flush();
 
   sendPointer(harness, "PointerDown", root, 20);
   assert.equal(ariaValueNow(harness), 20);
 
   mod.controls.setDisabled(true);
+  harness.flush();
   const stuck = sendPointer(harness, "PointerMove", root, 90);
   assert.equal(ariaValueNow(harness), 20, "disabling mid-drag stops updates");
   assert.equal(stuck.released, 1, "the next matching event releases the capture");
   mod.controls.setDisabled(false);
+  harness.flush();
   sendPointer(harness, "PointerMove", root, 90);
   assert.equal(ariaValueNow(harness), 20, "re-enabling does not resume a dead drag");
 
   sendPointer(harness, "PointerDown", root, 20);
   mod.controls.setDisabled(true);
+  harness.flush();
   mod.controls.setDisabled(false);
+  harness.flush();
   const released = sendPointer(harness, "PointerMove", root, 90);
   assert.equal(released.released, 1, "disable and re-enable still ends the dead drag");
   assert.equal(ariaValueNow(harness), 20);
 
   sendPointer(harness, "PointerDown", root, 20);
   mod.controls.setCancelPointer(["move"]);
+  harness.flush();
   sendPointer(harness, "PointerMove", root, 60);
   assert.equal(ariaValueNow(harness), 20, "caller-prevented move skips only that move");
   mod.controls.setCancelPointer(["up"]);
+  harness.flush();
   const finish = sendPointer(harness, "PointerUp", root, 60);
   assert.equal(finish.released, 1, "caller-prevented up still cleans up");
   assert.equal(ariaValueNow(harness), 20);
   mod.controls.setCancelPointer(["cancel"]);
+  harness.flush();
   sendPointer(harness, "PointerDown", root, 20);
   const aborted = sendPointer(harness, "PointerCancel", root, 0);
   assert.equal(aborted.released, 1, "caller-prevented cancel still cleans up");
   mod.controls.setCancelPointer([]);
+  harness.flush();
 });
 
 test("controlled value waits for an echo and prop changes never reset owned state", async t => {
@@ -442,11 +455,13 @@ test("controlled value waits for an echo and prop changes never reset owned stat
   press(harness, "ArrowRight");
   assert.deepEqual(mod.log.values, [6, 6], "a repeated attempt is reported again");
   mod.controls.setEcho(true);
+  harness.flush();
   press(harness, "ArrowRight");
   assert.equal(ariaValueNow(harness), 6, "the echoed attempt becomes the display");
   press(harness, "ArrowRight");
   assert.equal(ariaValueNow(harness), 7);
   mod.controls.setControlled(4);
+  harness.flush();
   assert.equal(ariaValueNow(harness), 4);
 });
 
@@ -457,14 +472,17 @@ test("bound prop changes normalize display without emitting a change", async t =
   assert.equal(ariaValueNow(harness), 11);
   const calls = mod.log.values.length;
   mod.controls.setMaxProp(8);
+  harness.flush();
   assert.equal(ariaValueNow(harness), 8, "shrinking max clamps the display");
   assert.equal(mod.log.values.length, calls, "prop normalization emits no callback");
   mod.controls.setStepProp(4);
   mod.controls.setMinProp(0);
   mod.controls.setMaxProp(40);
+  harness.flush();
   assert.equal(ariaValueNow(harness), 12, "the stored value resnaps onto the new step");
   assert.equal(mod.log.values.length, calls);
   mod.controls.setDefaultProp(30);
+  harness.flush();
   assert.equal(ariaValueNow(harness), 12, "defaultValue updates never reset owned state");
 });
 
@@ -476,8 +494,10 @@ test("remount produces fresh nodes with no stale gesture state", async t => {
   sendPointer(harness, "PointerDown", first, 30);
   assert.equal(ariaValueNow(harness), 30);
   mod.controls.setShown(false);
+  harness.flush();
   assert.equal(slider(harness), undefined);
   mod.controls.setShown(true);
+  harness.flush();
   const second = slider(harness);
   assert.ok(second);
   assert.notEqual(second, first);

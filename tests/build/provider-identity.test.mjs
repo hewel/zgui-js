@@ -50,6 +50,7 @@ for (const kind of ["theme", "card", "item"]) {
     assert.equal(textOf(a), "1");
 
     mod.reorder();
+    harness.flush();
     assert.equal(harness.byTestId("a"), a, "keyed move keeps node identity");
     assert.equal(harness.byTestId("b"), b);
     const parent = harness.host.getParentNode(a);

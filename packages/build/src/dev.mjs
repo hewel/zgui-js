@@ -51,7 +51,7 @@ export async function devApplication(app, {
   try {
     if (mode !== "desktop" && mode !== "preview") throw new Error(`Unknown development mode: ${mode}`);
     watcher = watch(app, {
-      root, appDirectory, stylexDiagnostics, signal: controller.signal,
+      root, appDirectory, stylexDiagnostics, development: mode === "desktop", signal: controller.signal,
       onSuccess(result) {
         if (controller.signal.aborted) return;
         log(`Published ${result.dist} ${result.manifest.buildId}`);

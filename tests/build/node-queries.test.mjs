@@ -76,8 +76,10 @@ test("getTextContent reads current subtree text after reactive updates and reord
   dispose = mod.mount(root);
   assert.equal(mod.read(), "a漢字b漢字");
   mod.setLabel("é𐐷");
+  harness.flush();
   assert.equal(mod.read(), "aé𐐷bé𐐷");
   mod.setItems(["b", "a"]);
+  harness.flush();
   assert.equal(mod.read(), "bé𐐷aé𐐷");
 });
 

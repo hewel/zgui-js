@@ -2,17 +2,17 @@
   "application": {
     "artifactDigests": {
       "app.css": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "app.mjs": "sha256:ad67799bbc93ecddcc51a130fce450541bdcc14689bb31950f27f15809dc3660",
-      "app.mjs.map": "sha256:2534278df5b05b43dd878500165af3a1abbe9615a2a82c091f8bd1933868ac50",
-      "build-info.json": "sha256:8b96ccfb796c14a0c351c0f7da6cc188f1ed51fdaf134c8603d6a532c348b59d",
+      "app.mjs": "sha256:c57d5fc624ffdb56d4ef01a23e04471ce93d1a3a91efb58668ac005c126724a6",
+      "app.mjs.map": "sha256:e4585bf48db6e71189f1249c241f90a01c01cd4ed0d2074f89225e4854dabe45",
+      "build-info.json": "sha256:2b9d7139724af7cf736a24028620eb8ae8bfd7626ba6de63626f9e179124c063",
       "style-origins.json": "sha256:44221bcfd7f9fe023a7fe53058d7929908206572a365944522b061737f80e3a2"
     },
-    "buildId": "sha256:4f78e261909cb6e1f43c6720d2c468725df61ad9db50f9ccd2c113bee92a5e85",
-    "entryDigest": "sha256:ad67799bbc93ecddcc51a130fce450541bdcc14689bb31950f27f15809dc3660",
+    "buildId": "sha256:fe987467c0ecd5875ceecc8c57324861bfdbbcb8d744fb3a4050201de67ad693",
+    "entryDigest": "sha256:c57d5fc624ffdb56d4ef01a23e04471ce93d1a3a91efb58668ac005c126724a6",
     "fonts": [],
     "id": "dev.example.counter",
     "sourceMap": "app.mjs.map",
-    "sourceMapDigest": "sha256:2534278df5b05b43dd878500165af3a1abbe9615a2a82c091f8bd1933868ac50",
+    "sourceMapDigest": "sha256:e4585bf48db6e71189f1249c241f90a01c01cd4ed0d2074f89225e4854dabe45",
     "styleSystem": {
       "configDigest": "sha256:33c7891b27d625d83284f9d24aef2ee1b62041f5b423dbd3b41411a61ccada45",
       "name": "stylex",
@@ -38,6 +38,7 @@
     "selectors.test-id": true,
     "services.fixtures": true,
     "source.node-location": false,
+    "surface.color-scheme": true,
     "surface.multiple": false,
     "surface.recreate": true,
     "surface.resize": true,
@@ -61,7 +62,7 @@
   "dependencies": {
     "cargoLockDigest": "sha256:4b35eeda22678e7a5ff22574f17428331edc6d441c79fc049fcf852be8de5cc5",
     "javascriptIdentityKind": "exact pnpm v9 package resolution keys from every lockfile document",
-    "pnpmLockDigest": "sha256:7303f25fe621da3ab52e5e5d3621870b502ecab8c3c0ea7e760af5f68eadba2b",
+    "pnpmLockDigest": "sha256:9d197b49088985c26ab0d3a9dbf2a511acc779053a0a794b0481aee59ab4ef75",
     "quickJsEngineRevision": "6d46d07d04041b40f4f49eaa7fdebe44c314c699",
     "resolvedCargoPackages": [
       {
@@ -3532,6 +3533,9 @@
       "@rolldown/binding-win32-arm64-msvc@1.3.2",
       "@rolldown/binding-win32-x64-msvc@1.3.2",
       "@rolldown/pluginutils@1.1.1",
+      "@solidjs/babel-plugin@2.0.1",
+      "@solidjs/signals@2.0.1",
+      "@solidjs/universal@2.0.1",
       "@stylexjs/babel-plugin@0.19.2",
       "@stylexjs/shared@0.19.2",
       "@stylexjs/stylex@0.19.2",
@@ -3556,13 +3560,10 @@
       "@typescript/typescript-sunos-x64@7.0.2",
       "@typescript/typescript-win32-arm64@7.0.2",
       "@typescript/typescript-win32-x64@7.0.2",
-      "babel-plugin-jsx-dom-expressions@0.40.14",
-      "babel-preset-solid@1.9.19",
       "baseline-browser-mapping@2.11.36",
       "browserslist@4.29.5",
       "caniuse-lite@1.0.30001826",
       "convert-source-map@2.0.0",
-      "csstype@3.2.3",
       "debug@4.4.3",
       "electron-to-chromium@1.5.483",
       "entities@6.0.1",
@@ -3582,16 +3583,16 @@
       "postcss-value-parser@4.2.0",
       "rolldown@1.3.2",
       "semver@6.3.2",
-      "seroval-plugins@1.6.12",
-      "seroval@1.6.12",
-      "solid-js@1.9.19",
+      "seroval-plugins@1.8.0",
+      "seroval@1.8.1",
+      "solid-js@2.0.1",
       "styleq@0.2.1",
       "tslib@2.9.1",
       "typescript@7.0.2",
       "update-browserslist-db@1.3.4",
       "yallist@3.1.1"
     ],
-    "solidAuditedSourceRevision": "99714d4e2875d2d7ef8023e82f4ef6aa63ff0752",
+    "solidAuditedSourceRevision": "82f71fddb1340cab46167db119da5702038e65ab",
     "solidSourceRevisionMeaning": "specification audit reference, not an assertion that registry bytes are that git checkout"
   },
   "fixture": {
@@ -3755,7 +3756,7 @@
   "host": {
     "profile": "debug",
     "rustc": "rustc 1.100.0 (0ef1bc386 2026-11-09)",
-    "sourceTreeDigest": "sha256:67c94b2d6bc9f70da2025a67c8cb6e9ca447b42aee6ef489b3aa1c9226a2211b",
+    "sourceTreeDigest": "sha256:fd7981c6f77f38cc4b04d4339648a23f2334a786850e7a67417c19cdfbd4abd6",
     "sourceTreeScope": "workspace Rust sources, manifests, lockfiles and local native patches; includes test sources",
     "target": "x86_64-unknown-linux-gnu",
     "version": "0.1.0"

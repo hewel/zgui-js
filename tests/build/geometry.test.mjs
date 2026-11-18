@@ -20,11 +20,16 @@ export function mount(root: NativeNode) {
   return renderApp(() => {
     let first!: NativeNode;
     let second!: NativeNode;
-    createEffect(() => {
-      const node = choice() === 0 ? first : second;
-      if (!node) return;
-      switchDispose = observeGeometry(node, "contentSize", value => setSize("switch:" + value.width));
-    });
+    createEffect(
+      () => choice(),
+      current => {
+        const node = current === 0 ? first : second;
+        if (!node) return;
+        const stop = observeGeometry(node, "contentSize", value => { setSize("switch:" + value.width); });
+        switchDispose = stop;
+        return stop;
+      },
+    );
     return <column>
       <Show when={visible()}>
         <box ref={node => { observeGeometry(node, "borderSize", value => setSize("box:" + value.width)); }}>
@@ -59,11 +64,11 @@ async function mounted(t, entry = "mount") {
   const root = harness.makeNode("root");
   dispose = mod[entry](root);
   const emit = (record, value) => record.emit(value);
-  return { mod, root, registrations, emit, finish: () => { const end = dispose; dispose = undefined; end?.(); } };
+  return { mod, harness, root, registrations, emit, finish: () => { const end = dispose; dispose = undefined; end?.(); } };
 }
 
 test("geometry callbacks update signals, cancel on removal, and stay inert", async t => {
-  const { mod, registrations, emit, finish } = await mounted(t);
+  const { mod, harness, registrations, emit, finish } = await mounted(t);
   assert.equal(registrations.length, 2);
   const [boxObs, firstObs] = registrations;
   assert.equal(boxObs.kind, "borderSize");
@@ -72,11 +77,13 @@ test("geometry callbacks update signals, cancel on removal, and stay inert", asy
   assert.equal(mod.measuredSize(), "box:200");
 
   mod.toggle();
+  harness.flush();
   assert.equal(boxObs.disposals, 1);
   emit(boxObs, { width: 999, height: 1 });
   assert.equal(mod.measuredSize(), "box:200");
 
   mod.toggle();
+  harness.flush();
   assert.equal(registrations.length, 3);
   const fresh = registrations[2];
   assert.equal(fresh.kind, "borderSize");
@@ -92,7 +99,7 @@ test("geometry callbacks update signals, cancel on removal, and stay inert", asy
 });
 
 test("effect reruns retire the previous geometry registration", async t => {
-  const { mod, registrations, emit, finish } = await mounted(t);
+  const { mod, harness, registrations, emit, finish } = await mounted(t);
   const contentObs = () => registrations.filter(record => record.kind === "contentSize");
   assert.equal(contentObs().length, 1);
   const firstObs = contentObs()[0];
@@ -100,6 +107,7 @@ test("effect reruns retire the previous geometry registration", async t => {
   assert.equal(mod.measuredSize(), "switch:40");
 
   mod.choose(1);
+  harness.flush();
   assert.equal(contentObs().length, 2);
   const secondObs = contentObs()[1];
   assert.equal(firstObs.disposals, 1);
@@ -110,6 +118,7 @@ test("effect reruns retire the previous geometry registration", async t => {
   assert.equal(mod.measuredSize(), "switch:77");
 
   mod.choose(0);
+  harness.flush();
   assert.equal(contentObs().length, 3);
   const backToFirst = contentObs()[2];
   assert.equal(secondObs.disposals, 1);

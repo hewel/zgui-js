@@ -1,4 +1,4 @@
-import { createContext, createUniqueId, onCleanup, splitProps, useContext } from "#solid";
+import { createContext, createUniqueId, onCleanup, useContext } from "#solid";
 import { createElement, effect, insertNode, setProp, spread } from "../renderer/index.js";
 import { getReducedMotion, installStylesheet, removeStylesheet } from "../nodes.js";
 import type { Accessor, NativeChild, NativeNode } from "../types.js";
@@ -26,10 +26,10 @@ export interface ThemeContext {
 
 const ThemeSheet = "zgui-ui-theme";
 const tokenSet = new Set<string>(themeTokens);
-const Internal = createContext<ThemeContext>();
+const Internal = createContext<ThemeContext | null>(null);
 
 export function useTheme(): ThemeContext | undefined {
-  return useContext(Internal);
+  return useContext(Internal) ?? undefined;
 }
 
 function presetDeclarations(theme: Theme, scheme: "light" | "dark"): string {
@@ -82,10 +82,12 @@ export function portalThemeScope(theme: ThemeContext, child: NativeNode): Native
   const wrapper: NativeNode = createElement("box");
   setProp(wrapper, "__zguiClass", id);
   setProp(wrapper, "__zguiInvariantStyle", { display: "contents" });
-  effect(() => {
-    const css = `@layer zgui.tokens { ${themeSheet(`.${id}`, theme.light(), theme.dark(), theme.scheme())} }`;
-    installStylesheet(sheetName, css);
-  });
+  effect(
+    () => [theme.light(), theme.dark(), theme.scheme()] as const,
+    ([light, dark, scheme]) => {
+      installStylesheet(sheetName, `@layer zgui.tokens { ${themeSheet(`.${id}`, light, dark, scheme)} }`);
+    },
+  );
   onCleanup(() => removeStylesheet(sheetName));
   insertNode(wrapper, child);
   return wrapper;
@@ -94,21 +96,22 @@ export function portalThemeScope(theme: ThemeContext, child: NativeNode): Native
 export function ThemeProvider(props: ThemeProviderProps = {}): NativeChild {
   const parent = useContext(Internal);
   const id = `zui-theme-${createUniqueId().replace(/[^a-zA-Z0-9_-]/g, "-")}`;
-  const selector = parent === undefined ? ":root" : `.${id}`;
+  const selector = parent === null ? ":root" : `.${id}`;
   const sheetName = `${ThemeSheet}-${id}`;
-  const [own] = splitProps(props, ["scheme", "light", "dark", "children"]);
   const context: ThemeContext = {
-    scheme: () => own.scheme ?? "system",
-    light: () => own.light ?? {},
-    dark: () => own.dark ?? {},
+    scheme: () => props.scheme ?? "system",
+    light: () => props.light ?? {},
+    dark: () => props.dark ?? {},
   };
   const wrapper: NativeNode = createElement("box");
   spread(wrapper, { __zguiClass: id, __zguiInvariantStyle: { display: "contents" } }, true);
-  effect(() => {
-    const css = `@layer zgui.tokens { ${themeSheet(selector, context.light(), context.dark(), context.scheme())} }`;
-    installStylesheet(sheetName, css);
-  });
+  effect(
+    () => [context.light(), context.dark(), context.scheme()] as const,
+    ([light, dark, scheme]) => {
+      installStylesheet(sheetName, `@layer zgui.tokens { ${themeSheet(selector, light, dark, scheme)} }`);
+    },
+  );
   onCleanup(() => removeStylesheet(sheetName));
-  slot(wrapper, provide(Internal, context, own));
+  slot(wrapper, provide(Internal, context, props));
   return wrapper;
 }

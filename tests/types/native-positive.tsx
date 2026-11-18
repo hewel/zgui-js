@@ -1,6 +1,7 @@
 import {
-  Image, Button, TextField, TextArea, For, Index, Show, batch, createContext, createEffect, createMemo,
-  createSignal, onCleanup, onMount, renderApp, splitProps, untrack, useContext,
+  Image, Button, TextField, TextArea, For, Show, Loading, Errored,
+  createContext, createEffect, createMemo, createSignal, createStore, createProjection,
+  merge, omit, onCleanup, onSettled, reconcile, renderApp, untrack, useContext,
   focus, getTextContent, getWindowRect, isAnimating, lockScroll, mountStylesheet, observeGeometry, precedes,
 } from "@hewel/zgui";
 import type { Component, Context, NativeAnimationEvent, NativeChild, NativeContextMenuEvent, NativeFocusOptions, NativeNode, NativePointerBoundaryEvent, NativeRole, NativeTextControlProps, NativeTransitionEvent, NativeViewport, NativeWindowRect, ParentComponent, TextFieldProps, TextAreaProps, VectorProps } from "@hewel/zgui";
@@ -11,10 +12,16 @@ const [count, setCount] = createSignal(0);
 const [optional, setOptional] = createSignal<string>();
 setOptional();
 const doubled = createMemo(() => count() * 2);
-const previous = createMemo(value => value + count(), 0);
-createEffect(() => { console.log(doubled(), previous()); });
-createEffect(value => value + count(), 0);
-batch(() => { setCount(value => value + 1); setOptional("native"); });
+const previous = createMemo<number>(value => (value ?? 0) + count());
+const [state, setState] = createStore({ items: ["a"] });
+setState(draft => { draft.items.push("b"); });
+const projected = createProjection(draft => { draft.total = count(); }, { total: 0 });
+const reconciled = reconcile(["c"]);
+void [state, projected, reconciled];
+createEffect(() => [doubled(), previous()] as const, ([d, p]) => { console.log(d, p); });
+createEffect<number>(value => (value ?? 0) + count(), (next, prev) => { console.log(next, prev); });
+setCount(value => value + 1);
+setOptional("native");
 untrack(() => optional());
 
 let borrowed: NativeNode | undefined;
@@ -68,10 +75,12 @@ const tree = <Container>
     onTransitionRun={event => { console.log(event.propertyName, event.elapsedTime); }}
     onTransitionCancelCapture={(event: NativeTransitionEvent) => console.log(event.pseudoElement)} />
   <For each={[{ id: 1 }]}>{(item, index) => <text>{item.id}: {index()}</text>}</For>
-  <Index each={["a"]}>{(item, index) => <text>{index}: {item()}</text>}</Index>
+  <For each={["a"]} keyed={false}>{(item, index) => <text>{index}: {item()}</text>}</For>
   <Show when={count()}>{value => <text>{value()}</text>}</Show>
   <Show when={{ name: "value" }} keyed>{value => <text>{value.name}</text>}</Show>
   <Show when={count() > 0}><text>Created lazily by Universal compilation</text></Show>
+  <Loading fallback={<text>loading</text>}><text>ready</text></Loading>
+  <Errored fallback={err => <text>{String(err())}</text>}><text>ok</text></Errored>
 </Container>;
 
 const Theme: Context<{ accent: string }> = createContext({ accent: "blue" });
@@ -79,15 +88,16 @@ const MaybeTheme = createContext<string>();
 interface SplitControlProps { title: string; detail?: string; flag?: boolean; }
 const ThemedLabel: Component<SplitControlProps> = props => {
   const theme = useContext(Theme);
-  const [picked, rest] = splitProps(props, ["flag"]);
-  const flag: boolean | undefined = picked.flag;
+  const rest = omit(props, "flag");
+  const merged = merge({ flag: false }, props);
+  const flag: boolean | undefined = props.flag;
   const title: string = rest.title;
-  return <text>{title}{flag}{theme.accent}{rest.detail}</text>;
+  return <text>{title}{flag ?? merged.flag}{theme.accent}{rest.detail}</text>;
 };
-const provided = <Theme.Provider value={{ accent: "red" }}>
+const provided = <Theme value={{ accent: "red" }}>
   <ThemedLabel title="labeled" flag detail="extra" />
   <text>native children</text>
-</Theme.Provider>;
+</Theme>;
 const roles: NativeRole[] = ["alert", "checkBox", "menuItemRadio", "scrollView", "tabPanel", "tooltip"];
 const vectorProps: VectorProps = { d: "M0 0", viewBox: "0 0 8 8", role: "image" };
 const children: NativeChild = [tree, provided, "text", 42, false, null, undefined, () => [true, "accessor"]];
@@ -124,7 +134,7 @@ const fallbackTheme: string | undefined = MaybeTheme.defaultValue;
 void [nativeTextProps, fieldProps, areaProps, roles, vectorProps, fallbackTheme];
 export function mount(root: NativeNode): () => void {
   return renderApp(() => {
-    onMount(() => {
+    onSettled(() => {
       const timer = setTimeout(() => console.info("timer"), 1);
       const frame = requestAnimationFrame(timestamp => console.debug(timestamp));
       queueMicrotask(() => console.warn("microtask"));

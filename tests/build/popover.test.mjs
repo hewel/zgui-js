@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { createClock, createHost, moduleFor } from "./native-fixture.mjs";
 
 const fixture = `
-import { Show, createSignal, onCleanup, onMount, renderApp } from "@hewel/zgui";
+import { Show, createSignal, onCleanup, renderApp } from "@hewel/zgui";
 import type { NativeNode } from "@hewel/zgui";
 import { Dialog, DialogContent, DialogTitle, DialogTrigger,
   Popover, PopoverTrigger, PopoverContent, PopoverHeader, PopoverTitle, PopoverDescription, PopoverClose,
@@ -60,10 +60,12 @@ export function mountNested(root: NativeNode) {
 export function mountCancelled(root: NativeNode) {
   return renderApp(() => {
     const [shown, setShown] = createSignal(true);
-    onMount(() => setShown(false));
-    return <Show when={shown()}><Popover defaultOpen>
-      <PopoverContent testId="surface"><Counter id="counter" /></PopoverContent>
-    </Popover></Show>;
+    return <>
+      <Show when={shown()}><Popover defaultOpen>
+        <PopoverContent testId="surface"><Counter id="counter" /></PopoverContent>
+      </Popover></Show>
+      <box ref={() => { setShown(false); }} />
+    </>;
   }, root);
 }
 `;
@@ -93,7 +95,7 @@ async function mounted(t, mountName = "mount", allowScrollLock = false) {
   };
   const emit = (record, value) => record.emit(value);
   const end = node => h.dispatch(node, "AnimationEnd");
-  const flush = () => { clock.frame(); clock.advance(0); };
+  const flush = () => { h.flush(); clock.frame(); clock.advance(0); };
   const active = records => records.filter(record => record.active).length;
   return { h, mod, clock, busy, traps, locks, layers, portals, geometry, root, click, emit, end, flush, active,
     finish: () => { const stop = dispose; dispose = undefined; stop?.(); } };
@@ -105,9 +107,11 @@ test("popover mounts lazily, wires relations and acquires trap dismiss and geome
   assert.equal(h.byTestId("surface"), undefined);
   assert.equal(portals.length, 0);
   mod.setCancel(true);
+  h.flush();
   assert.equal(click("trigger"), true);
   assert.equal(h.byTestId("surface"), undefined, "cancelled trigger click keeps the popover closed");
   mod.setCancel(false);
+  h.flush();
   click("trigger");
   assert.equal(mod.log.mounts, 1);
   const surface = h.byTestId("surface");
@@ -212,10 +216,13 @@ test("controlled popover lets the parent veto every transition", async t => {
   assert.deepEqual(mod.log.changes, [true]);
   assert.equal(h.byTestId("surface"), undefined, "parent veto keeps the surface unmounted");
   mod.setOpen(true);
+  h.flush();
   const surface = h.byTestId("surface");
   assert.ok(surface);
   mod.setEscape(false);
+  h.flush();
   mod.setOutside(false);
+  h.flush();
   assert.equal(layers.length, 1, "option changes reuse the same dismiss record");
   assert.equal(layers[0].options.dismissOnEscape, false);
   assert.equal(layers[0].options.dismissOnOutsidePress, false);
@@ -223,9 +230,11 @@ test("controlled popover lets the parent veto every transition", async t => {
   assert.deepEqual(mod.log.changes, [true, false]);
   assert.equal(h.byTestId("surface"), surface, "controlled close stays until the parent commits");
   mod.setCancel(true);
+  h.flush();
   assert.equal(click("close"), true);
   assert.deepEqual(mod.log.changes, [true, false], "caller cancellation emits no request");
   mod.setCancel(false);
+  h.flush();
   mod.setOpen(false);
   flush();
   assert.equal(h.byTestId("surface"), undefined);

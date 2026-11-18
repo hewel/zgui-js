@@ -1,7 +1,7 @@
-import { splitProps } from "#solid";
+import { omit } from "#solid";
 import { createElement, mergeProps, spread } from "../renderer/index.js";
 import type { NativeChild, NativeKeyEvent, NativeNode } from "../types.js";
-import { classes, element, slot, useStylesheet } from "./shared.js";
+import { classes, element, slot, useStylesheet, withDefaults } from "./shared.js";
 import { callHandler } from "./state.js";
 import { sheet } from "./generated/MenuStyle.js";
 import {
@@ -24,15 +24,15 @@ export function MenuContent(props: MenuContentProps = {}): NativeChild {
 export function MenuTypeahead(props: MenuTypeaheadProps = {}): NativeNode {
   useStylesheet(sheet);
   const onTypeahead = useMenuTypeahead();
-  const [own, rest] = splitProps(props, ["children", "onKeyDown"]);
+  const rest = omit(props, "children", "onKeyDown");
   const node = createElement("box");
   spread(node, mergeProps(rest, {
     get __zguiClass() { return classes("zui-menu__keys"); },
     onKeyDown(event: NativeKeyEvent) {
-      if (callHandler(event, own.onKeyDown)) onTypeahead(event);
+      if (callHandler(event, props.onKeyDown)) onTypeahead(event);
     },
   }), true);
-  slot(node, () => own.children);
+  slot(node, () => props.children);
   return node;
 }
 
@@ -54,20 +54,20 @@ export function MenuRadioItem(props: MenuRadioItemProps): NativeNode {
 
 export function MenuLabel(props: MenuLabelProps = {}): NativeNode {
   useStylesheet(sheet);
-  const [own, rest] = splitProps(props, ["inset"]);
+  const rest = omit(props, "inset");
   return element("label", mergeProps(rest, {
-    get __zguiClass() { return classes("zui-menu__label", own.inset && "zui-menu__label--inset"); },
+    get __zguiClass() { return classes("zui-menu__label", props.inset && "zui-menu__label--inset"); },
   }));
 }
 
 export function MenuGroup(props: MenuGroupProps = {}): NativeNode {
   useStylesheet(sheet);
-  const [own, rest] = splitProps(props, ["children", "label"]);
+  const rest = omit(props, "children", "label");
   const node = createElement("box");
-  spread(node, mergeProps({ role: "group" as const, get ariaLabel() { return own.label ?? null; } }, rest, {
+  spread(node, mergeProps(rest, withDefaults({ role: "group" as const, get ariaLabel() { return props.label ?? null; } }, rest), {
     get __zguiClass() { return classes("zui-menu__group"); },
   }), true);
-  slot(node, () => own.children);
+  slot(node, () => props.children);
   return node;
 }
 

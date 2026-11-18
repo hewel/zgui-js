@@ -1,5 +1,5 @@
-import { batch, createRoot } from "#solid";
-import { insert } from "./renderer/index.js";
+import { createRoot, resetErrorHalt } from "#solid";
+import { flush, insert } from "./renderer/index.js";
 import type { NativeChild, NativeNode } from "./types.js";
 import type { NativeHost } from "./host.js";
 
@@ -19,9 +19,12 @@ export function renderApp(code: () => NativeChild, root: NativeNode): () => void
     disposed = true;
     const errors: unknown[] = [];
     try {
-      batch(() => disposeRoot?.());
+      disposeRoot?.();
+      flush();
     } catch (error) {
       errors.push(error);
+    } finally {
+      resetErrorHalt();
     }
     try {
       globalThis.__zgui.clearRoot(root);
@@ -34,10 +37,11 @@ export function renderApp(code: () => NativeChild, root: NativeNode): () => void
 
   try {
     // Own the root directly: Universal.render cannot return its disposer if mount throws.
-    batch(() => createRoot(dispose => {
+    createRoot(dispose => {
       disposeRoot = dispose;
       insert(root, code());
-    }));
+    });
+    flush();
   } catch (error) {
     try {
       dispose();

@@ -1,4 +1,4 @@
-import { For, Index, Show, batch, createSignal, onCleanup, renderApp } from "@hewel/zgui";
+import { For, Show, createSignal, onCleanup, renderApp } from "@hewel/zgui";
 import type { NativeNode } from "@hewel/zgui";
 
 type Item = { id: string; title: string };
@@ -28,25 +28,23 @@ function Lists() {
   let stage = 0;
   next = () => {
     stage = (stage + 1) % 4;
-    batch(() => {
-      if (stage === 1) setItems([original[2], original[0], original[1]]);
-      if (stage === 2) setVisible(false);
-      if (stage === 3) {
-        setVisible(true);
-        setItems([original[1], original[2]]);
-        setSlots(["updated", "second"]);
-      }
-      if (stage === 0) {
-        setItems(original);
-        setSlots(["first", "second"]);
-      }
-    });
+    if (stage === 1) setItems([original[2], original[0], original[1]]);
+    if (stage === 2) setVisible(false);
+    if (stage === 3) {
+      setVisible(true);
+      setItems([original[1], original[2]]);
+      setSlots(["updated", "second"]);
+    }
+    if (stage === 0) {
+      setItems(original);
+      setSlots(["first", "second"]);
+    }
   };
   onCleanup(() => { next = undefined; });
   return <column>
     <For each={items()}>{item => <ItemView item={item} />}</For>
     <Show when={visible()}><ConditionalContent /></Show>
-    <Index each={slots()}>{(value, index) => <text>{index}: {value()}</text>}</Index>
+    <For each={slots()} keyed={false}>{(value, index) => <text>{index}: {value()}</text>}</For>
   </column>;
 }
 

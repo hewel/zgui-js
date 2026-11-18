@@ -139,8 +139,9 @@ test("real TSX bundles have one reactive runtime, composed maps, resources, and 
   assert.equal(original.line, 6);
   assert.ok(mapJson.sourcesContent.includes(validEntry));
   const info = JSON.parse(await readFile(path.join(root, "build-info.json"), "utf8"));
-  assert.equal(info.packages["solid-js"], "1.9.19");
-  assert.equal(info.packages["babel-preset-solid"], "1.9.19");
+  assert.equal(info.packages["solid-js"], "2.0.1");
+  assert.equal(info.packages["@solidjs/universal"], "2.0.1");
+  assert.equal(info.packages["@solidjs/babel-plugin"], "2.0.1");
   assert.equal(info.engine.name, "QuickJS-NG");
   assert.equal(info.packages.rolldown, "1.3.2");
   assert.equal(info.graph.chunks.length, 1);
@@ -772,7 +773,7 @@ test("async development typechecking preserves diagnostics and reaps cancellatio
 test("text controls reject children introduced by a reactive spread before evaluating them", async t => {
   const directory = await fixture(t);
   await writeFile(path.join(directory, "src/main.tsx"), `
-    import { TextField, TextArea, createSignal } from "@hewel/zgui";
+    import { TextField, TextArea, createSignal, flush } from "@hewel/zgui";
     import type { NativeNode } from "@hewel/zgui";
     import { mergeProps, render } from "@hewel/zgui/renderer";
     export const hostApiVersion = 1;
@@ -790,7 +791,7 @@ test("text controls reject children introduced by a reactive spread before evalu
         return undefined;
       }, root);
       let rejected = false;
-      try { replace(); } catch (error) { rejected = error instanceof TypeError; }
+      try { replace(); flush(); } catch (error) { rejected = error instanceof TypeError; }
       finally { dispose(); }
       return { rejected, reads };
     }

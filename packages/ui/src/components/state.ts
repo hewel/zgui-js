@@ -8,13 +8,13 @@ export function createControllable<T>(options: {
   onChange: Accessor<((value: T) => void) | undefined>;
 }, fallback: T): readonly [Accessor<T>, (value: T) => void] {
   const initial = untrack(options.defaultValue);
-  const [inner, setInner] = createSignal(initial === undefined ? fallback : initial);
-  const read = () => { const value = options.value(); return value === undefined ? inner() : value; };
+  const [inner, setInner] = createSignal((initial === undefined ? fallback : initial) as Exclude<T, Function>);
+  const read = (): T => { const value = options.value(); return value === undefined ? (inner() as T) : value; };
   const write = (next: T) => {
     const controlled = untrack(options.value);
     const previous = controlled === undefined ? untrack(inner) : controlled;
     if (Object.is(previous, next)) return;
-    if (controlled === undefined) setInner(() => next);
+    if (controlled === undefined) setInner(() => next as Exclude<T, Function>);
     untrack(() => options.onChange()?.(next));
   };
   return [read, write];

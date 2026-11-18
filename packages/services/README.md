@@ -27,6 +27,12 @@ request. Worker I/O (`Io`), oversized assets (`TooLarge`), invalid UTF-8
 (`InvalidUtf8`) and worker path failures (`InvalidPath`) reject `request.promise`
 with an `Error` carrying a string `code`.
 
+`loadTextAsset(path)` wraps `readTextAsset(path)` for reactive computations
+(such as Solid 2.0 async memos under `<Loading>`/`<Errored>`): when called inside
+a reactive owner, it cancels the in-flight request on `onCleanup` and resolves to
+`""` if cancelled with code `Cancelled` so owner cancellation never triggers an
+unhandled rejection under strict session policies; host I/O errors still reject.
+
 `HostRequest<T>` has a readonly `promise: Promise<T>` and synchronous
 `cancel(): void`. Cancellation rejects a pending promise with an `Error` whose
 `code` is `Cancelled`; handle rejection even when cancelling during cleanup.

@@ -102,10 +102,25 @@ function textOf(node, texts) {
   return node.children.map(child => textOf(child, texts)).join("");
 }
 
+const nativeQueueMicrotask = globalThis.queueMicrotask.bind(globalThis);
+const hostMicrotasks = new WeakMap();
+globalThis.queueMicrotask = fn => {
+  const queue = globalThis.__zgui ? hostMicrotasks.get(globalThis.__zgui) : undefined;
+  if (queue) queue.push(fn);
+  else nativeQueueMicrotask(fn);
+};
+
 export function createHost({ strictStyles = false, reducedMotion = false } = {}) {
   let nextId = 0;
   let stopping = false;
   let turnDepth = 0;
+  const microtasks = [];
+  const drainMicrotasks = () => {
+    while (microtasks.length) {
+      const batch = microtasks.splice(0, microtasks.length);
+      for (const task of batch) task();
+    }
+  };
   const nodes = new Map();
   const parents = new Map();
   const stylesheets = new Map();
@@ -216,8 +231,12 @@ export function createHost({ strictStyles = false, reducedMotion = false } = {})
     turnDepth += 1;
     try { return fn(); }
     finally {
-      turnDepth -= 1;
-      if (turnDepth === 0) endTurn();
+      try {
+        if (turnDepth === 1 && !stopping) drainMicrotasks();
+      } finally {
+        turnDepth -= 1;
+        if (turnDepth === 0) endTurn();
+      }
     }
   };
 
@@ -482,11 +501,14 @@ export function createHost({ strictStyles = false, reducedMotion = false } = {})
   const byTestId = testId =>
     [...nodes.values()].find(node => node.props.get("testId") === testId && attached(node));
 
+  hostMicrotasks.set(host, microtasks);
+
   return {
     host, nodes, parents, stylesheets, installs, makeNode, byTestId, focused, rects, texts,
     animating, animatingQueries, queries, portals, traps, locks, layers, geometry,
     clearCalls, invalidated, registrationsAfterStop, styleDiagnostics,
     dispatch, createEvent, runTurn, endTurn,
+    flush: () => runTurn(() => {}),
     focus: (node, options) => moveFocus(node, options?.reveal ?? false, options?.cause ?? "programmatic"),
     beginStop: () => { stopping = true; },
     isStopping: () => stopping,
@@ -520,11 +542,13 @@ export function createClock(t, harness) {
   });
   const invoke = fn => (harness ? harness.runTurn(fn) : fn());
   const frame = () => {
+    harness?.flush();
     const due = [...frames.entries()];
     for (const [id] of due) frames.delete(id);
     for (const [, callback] of due) invoke(() => callback(now));
   };
   const advance = ms => {
+    harness?.flush();
     const target = now + ms;
     for (;;) {
       let earliest;

@@ -1,24 +1,24 @@
 {
   "actionSequence": 5,
   "allowedPendingAssets": [],
-  "buildId": "sha256:4f78e261909cb6e1f43c6720d2c468725df61ad9db50f9ccd2c113bee92a5e85",
+  "buildId": "sha256:fe987467c0ecd5875ceecc8c57324861bfdbbcb8d744fb3a4050201de67ad693",
   "captureId": "after-increment",
   "configurationId": 2,
   "documentIdentity": "DocumentId(0)",
   "generation": 1,
   "layoutDocumentCoherent": true,
-  "layoutRevision": 33,
+  "layoutRevision": 45,
   "metadataRevision": 3,
   "physicalHeight": 1050,
   "physicalWidth": 1400,
   "pixelPresentation": {
     "configurationId": 2,
-    "documentRevision": 33,
+    "documentRevision": 45,
     "drawId": 2,
     "frame": {
       "drawId": 2,
       "ordinal": 2,
-      "outcome": "Presented(FrameStats { draw_calls: 7, vector_passes: 0, damage_px: 24780, bytes_uploaded: 1316, memory: MemoryReport { fixed: 0, targets: 7864320, scratch: 0, atlases: 4194304, buffers: 534256 } })",
+      "outcome": "Presented(FrameStats { draw_calls: 7, vector_passes: 0, damage_px: 159840, bytes_uploaded: 1316, memory: MemoryReport { fixed: 0, targets: 7864320, scratch: 0, atlases: 4194304, buffers: 534256 } })",
       "timeUs": 0
     },
     "generation": 1,
@@ -35,7 +35,7 @@
     "generation": 1,
     "nativeAcceptance": {
       "candidate": {
-        "buildId": "sha256:4f78e261909cb6e1f43c6720d2c468725df61ad9db50f9ccd2c113bee92a5e85",
+        "buildId": "sha256:fe987467c0ecd5875ceecc8c57324861bfdbbcb8d744fb3a4050201de67ad693",
         "id": "dev.example.counter",
         "styleSystem": {
           "configDigest": "sha256:33c7891b27d625d83284f9d24aef2ee1b62041f5b423dbd3b41411a61ccada45",
@@ -47,7 +47,7 @@
       "diagnostic": null,
       "document": "DocumentId(0)",
       "generation": 1,
-      "lastSuccessfulBuildId": "sha256:4f78e261909cb6e1f43c6720d2c468725df61ad9db50f9ccd2c113bee92a5e85",
+      "lastSuccessfulBuildId": "sha256:fe987467c0ecd5875ceecc8c57324861bfdbbcb8d744fb3a4050201de67ad693",
       "schemaVersion": 1,
       "status": "accepted"
     },
@@ -59,7 +59,7 @@
     "requiredAssetsReady": true,
     "requiredFontsReady": true,
     "requiredMetadataRevision": 3,
-    "requiredStateRevision": 33,
+    "requiredStateRevision": 45,
     "requiredStyleRevision": 3,
     "resourceRevision": 1,
     "timeUs": 20000,
@@ -84,7 +84,7 @@
     "targetFormat": "Bgra8Unorm",
     "vendor": 4098
   },
-  "requiredStateRevision": 33,
+  "requiredStateRevision": 45,
   "resourceRevision": 1,
   "resources": {
     "allowedPendingAssets": [],
@@ -105,8 +105,8 @@
   "surface": "main",
   "surfaceConfiguration": 0,
   "timingDeterministic": true,
-  "treeDigest": "sha256:6827be7a2bd1e2f69a7ee4024e36c30050160c6b27a4ed6a8b3a265092edd00a",
-  "validatedStateRevision": 33,
+  "treeDigest": "sha256:2e2461d47ce04afa7ae3d744d7e39ec2cdfd5c38480694109a826897fcbb24a8",
+  "validatedStateRevision": 45,
   "validationFrame": {
     "drawId": 4,
     "ordinal": 4,

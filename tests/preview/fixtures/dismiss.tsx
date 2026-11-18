@@ -1,4 +1,4 @@
-import { Portal, Show, createEffect, createSignal, onMount, registerDismissLayer, renderApp, trapFocus } from "@hewel/zgui";
+import { Portal, Show, createEffect, createSignal, onSettled, registerDismissLayer, renderApp, trapFocus } from "@hewel/zgui";
 import type { NativeChild, NativeDismissReason, NativeNode } from "@hewel/zgui";
 import { Button, ThemeProvider } from "@hewel/zgui/components";
 
@@ -9,11 +9,11 @@ function Surface(props: {
   dismiss: (reason: NativeDismissReason) => void; unhandled: () => void; children?: NativeChild;
 }) {
   let node!: NativeNode;
-  onMount(() => {
+  onSettled(() => {
     const options = () => ({ layer: "modal" as const, exclude: props.exclude,
       dismissOnOutsidePress: !props.locked, dismissOnEscape: !props.locked, leaving: props.leaving ?? false });
     const lease = registerDismissLayer(node, props.dismiss, options());
-    createEffect(() => lease.update(options()));
+    createEffect(options, next => { lease.update(next); });
     trapFocus(node);
   });
   return <column ref={value => { node = value; }} testId={props.name}

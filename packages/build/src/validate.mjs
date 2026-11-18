@@ -4,7 +4,7 @@ import { isBuiltin } from "node:module";
 
 const traverse = traverseModule.default ?? traverseModule;
 const globals = new Set([
-  "undefined", "NaN", "Infinity", "globalThis", "__zgui", "console",
+  "undefined", "NaN", "Infinity", "globalThis", "__zgui", "console", "performance",
   "setTimeout", "clearTimeout", "requestAnimationFrame", "cancelAnimationFrame", "queueMicrotask",
   "Object", "Function", "Boolean", "Symbol", "Error", "AggregateError", "EvalError", "RangeError",
   "ReferenceError", "SyntaxError", "TypeError", "URIError", "Number", "BigInt", "Math", "Date", "String",
@@ -29,6 +29,46 @@ function hasArgumentsBinding(p) {
   for (let parent = p.parentPath; parent; child = parent, parent = parent.parentPath) {
     if (parent.isFunction() && !parent.isArrowFunctionExpression() &&
         (child.key === "body" || child.listKey === "params")) return true;
+  }
+  return false;
+}
+
+function hasTypeofCheck(expr, name, expectedUndefined) {
+  if (!expr) return false;
+  if (expr.type === "LogicalExpression" && expr.operator === "&&" && !expectedUndefined) {
+    return hasTypeofCheck(expr.left, name, false) || hasTypeofCheck(expr.right, name, false);
+  }
+  if (expr.type === "LogicalExpression" && expr.operator === "||" && expectedUndefined) {
+    return hasTypeofCheck(expr.left, name, true) || hasTypeofCheck(expr.right, name, true);
+  }
+  if (expr.type !== "BinaryExpression") return false;
+  const op = expr.operator;
+  const matches = expectedUndefined ? (op === "===" || op === "==") : (op === "!==" || op === "!=");
+  if (!matches) return false;
+  return (
+    (expr.left.type === "UnaryExpression" && expr.left.operator === "typeof" && expr.left.argument.type === "Identifier" &&
+      expr.left.argument.name === name && expr.right.type === "StringLiteral" && expr.right.value === "undefined") ||
+    (expr.right.type === "UnaryExpression" && expr.right.operator === "typeof" && expr.right.argument.type === "Identifier" &&
+      expr.right.argument.name === name && expr.left.type === "StringLiteral" && expr.left.value === "undefined")
+  );
+}
+
+function isTypeofGuarded(p) {
+  const name = p.node.name;
+  if (p.parentPath.isUnaryExpression({ operator: "typeof" }) && p.key === "argument") return true;
+  let child = p;
+  for (let cur = p.parentPath; cur; child = cur, cur = cur.parentPath) {
+    if (cur.isLogicalExpression()) {
+      if ((cur.node.operator === "||" && child.key === "right" && hasTypeofCheck(cur.node.left, name, true)) ||
+          (cur.node.operator === "&&" && child.key === "right" && hasTypeofCheck(cur.node.left, name, false))) {
+        return true;
+      }
+    }
+    if ((cur.isIfStatement() || cur.isConditionalExpression())) {
+      if (child.key === "consequent" && hasTypeofCheck(cur.node.test, name, false)) return true;
+      if (child.key === "alternate" && hasTypeofCheck(cur.node.test, name, true)) return true;
+    }
+    if (cur.isFunction() || cur.isProgram()) break;
   }
   return false;
 }
@@ -89,6 +129,7 @@ export function validateModule(code, { filename = "app.mjs", bundled = false, en
       }
     },
     ReferencedIdentifier(p) {
+      if (isTypeofGuarded(p)) return;
       if (bundled && !p.scope.hasBinding(p.node.name, true) && !globals.has(p.node.name) &&
           !(p.node.name === "arguments" && hasArgumentsBinding(p))) {
         throw new Error(`Unsupported runtime global: ${p.node.name}`);
@@ -111,8 +152,14 @@ export function validateModule(code, { filename = "app.mjs", bundled = false, en
 }
 
 export function validateGraph(graph) {
-  const runtimes = graph.modules.filter(input => /\/solid-js\/dist\/(?:solid|dev)\.js$/.test(input));
-  if (runtimes.length !== 1) throw new Error(`Expected one reactive Solid runtime, found ${runtimes.length}`);
+  const runtimes = graph.modules.filter(input => /\/solid-js\/dist\/(?:solid(?:\.dev|\.observe)?|dev)\.js$/.test(input));
+  const signals = graph.modules.filter(input => /\/@solidjs\/signals\/dist\/(?:(?:prod|observe)\/index|dev)\.js$/.test(input));
+  if (runtimes.length !== 1 && signals.length !== 1) {
+    throw new Error(`Expected one reactive Solid runtime, found solid=${runtimes.length}, signals=${signals.length}`);
+  }
+  if (runtimes.length > 1 || signals.length > 1) {
+    throw new Error(`Expected single Solid runtime instances, found solid=${runtimes.length}, signals=${signals.length}`);
+  }
   for (const input of graph.modules) {
     if (/\/@stylexjs\/(?:babel-plugin|shared)\//.test(input) ||
         /\/@stylexjs\/stylex\/lib\/(?:(?:es|cjs)\/(?:inject|stylesheet)|stylex-inject|stylesheet)(?:[./]|$)/.test(input)) {
@@ -123,5 +170,5 @@ export function validateGraph(graph) {
   if (graph.chunks.length !== 1 || graph.chunks[0].imports.length || graph.chunks[0].dynamicImports.length) {
     throw new Error("Expected one self-contained ESM artifact");
   }
-  return runtimes[0];
+  return runtimes[0] ?? signals[0];
 }

@@ -1,3 +1,5 @@
+import { getOwner, onCleanup } from "#solid";
+
 // The native host installs this before evaluation; functions resolve it lazily.
 declare const globalThis: {
   readonly __zguiServices: {
@@ -29,4 +31,25 @@ export interface HostRequest<T> {
  */
 export function readTextAsset(path: string): HostRequest<string> {
   return globalThis.__zguiServices.readTextAsset(path);
+}
+
+/**
+ * Read a declared UTF-8 asset inside a Solid owner scope, cancelling the host
+ * request automatically on owner cleanup without triggering strict rejection faults.
+ */
+export function loadTextAsset(path: string): Promise<string> {
+  const request = readTextAsset(path);
+  let cancelled = false;
+  if (getOwner()) {
+    onCleanup(() => {
+      cancelled = true;
+      request.cancel();
+    });
+  }
+  return request.promise.catch((reason: unknown) => {
+    if (cancelled && reason instanceof Error && "code" in reason && reason.code === "Cancelled") {
+      return "";
+    }
+    throw reason;
+  });
 }

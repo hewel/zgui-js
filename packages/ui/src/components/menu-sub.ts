@@ -1,11 +1,11 @@
-import { onCleanup, splitProps, untrack } from "#solid";
+import { onCleanup, omit, untrack } from "#solid";
 import { memo, mergeProps } from "../renderer/index.js";
 import { focus, getWindowRect, observeGeometry } from "../nodes.js";
 import type { NativeChild, NativeElementProps, NativeKeyEvent, NativeNode, NativePointerBoundaryEvent, NativePointerEvent, NativePoint, NativeWindowRect } from "../types.js";
 import type { OverlayRootProps } from "./overlay.js";
 import { createDelayed } from "./delay.js";
 import { callHandler } from "./state.js";
-import { append, classes, slot } from "./shared.js";
+import { append, classes, slot, withDefaults } from "./shared.js";
 import { Icon } from "./icons.js";
 import { CHEVRON_RIGHT } from "./generated/icons.js";
 import type { MenuContentProps } from "./menu.js";
@@ -31,30 +31,30 @@ export function headingToward(from: NativePoint, to: NativePoint, target: Native
 export function MenuSubTrigger(props: MenuSubTriggerProps = {}): NativeNode {
   const sub = useMenuSub(), state = sub?.state;
   const opening = createDelayed(), closing = sub?.closing ?? createDelayed();
-  const [own, rest] = splitProps(props, ["children", "inset", "ref", "onPointerMove", "onKeyDown"]);
+  const rest = omit(props, "children", "inset", "ref", "onPointerMove", "onKeyDown");
   let alive = true, scale = 1;
   let last: NativePoint = { x: 0, y: 0 };
   onCleanup(() => { alive = false; opening.cancel(); if (!sub) closing.cancel(); });
   const device = (point: NativePoint): NativePoint => ({ x: Math.fround(point.x * scale), y: Math.fround(point.y * scale) });
-  const node = menuRow(mergeProps({
-    ariaHasPopup: "menu",
+  const node = menuRow(mergeProps(rest, withDefaults({
+    ariaHasPopup: "menu" as const,
     get expanded() { return state?.open() ?? false; },
     get ariaControls() { return state?.content.node() ?? null; },
     get "data-state"() { return state?.open() ? "open" : "closed"; },
-    get "data-inset"() { return own.inset ? "true" : null; },
-  }, rest, {
-    ref(node: NativeNode) { state?.trigger.ref(node); if (typeof own.ref === "function") own.ref(node); },
+    get "data-inset"() { return props.inset ? "true" : null; },
+  }, rest), {
+    ref(node: NativeNode) { state?.trigger.ref(node); if (typeof props.ref === "function") props.ref(node); },
     onPointerMove(event: NativePointerEvent) {
-      if (callHandler(event, own.onPointerMove) && alive) last = device(event.position);
+      if (callHandler(event, props.onPointerMove) && alive) last = device(event.position);
     },
     onKeyDown(event: NativeKeyEvent) {
-      if (!callHandler(event, own.onKeyDown) || !alive || rest.disabled || !state || event.character != null) return;
+      if (!callHandler(event, props.onKeyDown) || !alive || rest.disabled || !state || event.character != null) return;
       if (event.key === "ArrowRight" || event.key === "Enter" || event.key === " ") {
         event.preventDefault(); event.stopPropagation(); state.setOpen(true);
       }
     },
   }), {
-    role: "menuItem", class: () => classes(own.inset && "zui-menu__item--inset"), activateOnPress: false,
+    role: "menuItem", class: () => classes(props.inset && "zui-menu__item--inset"), activateOnPress: false,
     select() { opening.cancel(); closing.cancel(); state?.setOpen(true); },
     enter(activate) {
       closing.cancel(); activate();
@@ -72,14 +72,14 @@ export function MenuSubTrigger(props: MenuSubTriggerProps = {}): NativeNode {
     },
   });
   observeGeometry(node, "viewport", viewport => { scale = viewport.scale; });
-  slot(node, memo(() => own.children));
+  slot(node, memo(() => props.children));
   append(node, Icon({ icon: CHEVRON_RIGHT, class: "zui-menu__chevron" }));
   return node;
 }
 
 export function MenuSubContent(props: MenuSubContentProps = {}): NativeChild {
   const sub = useMenuSub(), state = sub?.state;
-  const [own, rest] = splitProps(props, ["onPointerEnter", "onKeyDown"]);
+  const rest = omit(props, "onPointerEnter", "onKeyDown");
   let alive = true;
   onCleanup(() => { alive = false; });
   const closeToTrigger = () => {
@@ -88,13 +88,13 @@ export function MenuSubContent(props: MenuSubContentProps = {}): NativeChild {
     const trigger = state ? untrack(state.trigger.node) : null;
     if (alive && trigger) focus(trigger);
   };
-  return renderMenuSurface(state, mergeProps({ placement: { side: "right", align: "start" } as const, offset: -4 }, rest, {
+  return renderMenuSurface(state, mergeProps(rest, withDefaults({ placement: { side: "right", align: "start" } as const, offset: -4 }, rest), {
     get __zguiClass() { return classes("zui-menu--sub"); },
     onPointerEnter(event: NativePointerBoundaryEvent) {
-      if (callHandler(event, own.onPointerEnter) && alive) sub?.closing.cancel();
+      if (callHandler(event, props.onPointerEnter) && alive) sub?.closing.cancel();
     },
     onKeyDown(event: NativeKeyEvent) {
-      if (!callHandler(event, own.onKeyDown) || !alive || !state || event.character != null || event.key !== "ArrowLeft") return;
+      if (!callHandler(event, props.onKeyDown) || !alive || !state || event.character != null || event.key !== "ArrowLeft") return;
       event.preventDefault(); event.stopPropagation();
       closeToTrigger();
     },

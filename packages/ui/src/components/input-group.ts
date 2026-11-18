@@ -1,7 +1,7 @@
-import { splitProps } from "#solid";
+import { omit } from "#solid";
 import { mergeProps } from "../renderer/index.js";
 import type { NativeElementProps, NativeNode } from "../types.js";
-import { classes, element, part, useStylesheet } from "./shared.js";
+import { classes, element, part, useStylesheet, withDefaults } from "./shared.js";
 import { Button } from "./button.js";
 import type { ButtonProps } from "./button.js";
 import { Input, Textarea } from "./input.js";
@@ -20,28 +20,28 @@ export type InputGroupTextareaProps = TextareaProps;
 
 export function InputGroup(props: InputGroupProps = {}): NativeNode {
   useStylesheet(sheet);
-  const [own, rest] = splitProps(props, ["disabled", "invalid"]);
+  const rest = omit(props, "disabled", "invalid");
   return element("box", mergeProps(
-    {
-      role: "group" as const,
-      get "data-disabled"() { return String(own.disabled ?? false); },
-      get "data-invalid"() { return String(own.invalid ?? false); },
-    },
     rest,
+    withDefaults({
+      role: "group" as const,
+      get "data-disabled"() { return String(props.disabled ?? false); },
+      get "data-invalid"() { return String(props.invalid ?? false); },
+    }, rest),
     { get __zguiClass() { return classes(sheet.className, "zui-input-group"); } },
   ));
 }
 
 export function InputGroupAddon(props: InputGroupAddonProps = {}): NativeNode {
   useStylesheet(partSheet);
-  const [own, rest] = splitProps(props, ["align"]);
+  const rest = omit(props, "align");
   return element("box", mergeProps(
-    { get "data-align"() { return own.align ?? "inline-start"; } },
     rest,
+    withDefaults({ get "data-align"() { return props.align ?? "inline-start"; } }, rest),
     {
       get __zguiClass() {
         return classes("zui-input-group__addon",
-        own.align && own.align !== "inline-start" && `zui-input-group__addon--${own.align}`, );
+        props.align && props.align !== "inline-start" && `zui-input-group__addon--${props.align}`, );
       },
     },
   ));
@@ -52,8 +52,8 @@ export const InputGroupText = part("box", partSheet, "zui-input-group__text");
 export function InputGroupButton(props: InputGroupButtonProps = {}): NativeNode {
   useStylesheet(partSheet);
   return Button(mergeProps(
-    { variant: "ghost" as const, size: "xs" as const },
     props,
+    withDefaults({ variant: "ghost" as const, size: "xs" as const }, props),
     { get __zguiClass() { return classes("zui-input-group__button"); } },
   ));
 }

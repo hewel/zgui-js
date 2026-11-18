@@ -243,12 +243,14 @@ test("radio group selects on click and focus with roving tab stops and live orde
   assert.equal(harness.focused.current, harness.byTestId("ra"));
 
   mod.controls.setCancelRadioKeys(true);
+  harness.flush();
   sendKey(harness, harness.byTestId("ra"), "ArrowDown");
   assert.notEqual(harness.focused.current, harness.byTestId("rb"), "a caller-prevented key does not navigate");
   mod.controls.setCancelRadioKeys(false);
 
   const countBeforeCancel = mod.api.log.radio.length;
   mod.controls.setCancelItemClick(true);
+  harness.flush();
   harness.dispatch(b, "Click");
   assert.notEqual(checked(harness, "rb"), true, "a caller-prevented click does not select");
   assert.equal(mod.api.log.radio.length, countBeforeCancel, "prevented clicks emit nothing");
@@ -281,6 +283,7 @@ test("disabled and removed radio items recover the tab stop and skip navigation"
   assert.equal(checked(harness, "rb"), true);
 
   mod.controls.setDisableB(true);
+  harness.flush();
   assert.equal(checked(harness, "rb"), true, "disabling does not clear its own checked flag");
   assert.equal(tabIndex(harness, "rb"), -1);
   assert.equal(tabIndex(harness, "ra"), 0, "the tab stop falls back to the first enabled item");
@@ -292,25 +295,30 @@ test("disabled and removed radio items recover the tab stop and skip navigation"
   assert.deepEqual(mod.api.log.radio, ["a"]);
   assert.equal(checked(harness, "rb"), false, "the disabled item only stays checked until a new choice");
   mod.controls.setRadioDefault("c");
+  harness.flush();
   assert.equal(checked(harness, "ra"), true, "defaultValue changes never reset owned state");
 
   sendKey(harness, a, "ArrowDown");
   assert.equal(harness.focused.current, c, "navigation skips disabled items");
 
   mod.controls.setDisableAll(true);
+  harness.flush();
   assert.equal(tabIndex(harness, "ra"), -1);
   assert.equal(tabIndex(harness, "rc"), -1);
   const stuck = sendKey(harness, a, "ArrowDown");
   assert.equal(stuck.defaultPrevented, false, "a disabled group does not handle keys");
   mod.controls.setDisableAll(false);
   mod.controls.setDisableB(false);
+  harness.flush();
 
   harness.dispatch(c, "Click");
   mod.controls.setShowC(false);
+  harness.flush();
   assert.equal(tabIndex(harness, "ra"), 0, "removing the active item recovers a surviving tab stop");
   const fresh = harness.byTestId("rc");
   assert.equal(fresh, undefined);
   mod.controls.setShowC(true);
+  harness.flush();
   const remounted = harness.byTestId("rc");
   assert.ok(remounted);
   assert.notEqual(remounted, c, "hide and show produce fresh item nodes");
@@ -324,6 +332,7 @@ test("controlled radio only changes when the caller echoes the value", async t =
   assert.equal(checked(harness, "rb"), false, "controlled value stays until echoed");
   assert.equal(checked(harness, "ra"), true);
   mod.controls.setEchoRadio(true);
+  harness.flush();
   harness.dispatch(b, "Click");
   assert.deepEqual(mod.api.log.radio, ["b", "b"]);
   assert.equal(checked(harness, "rb"), true);
@@ -336,6 +345,7 @@ test("keyed reorder before first focus fixes the initial tab stop", async t => {
   assert.equal(prop(harness, "tb", "tabIndex"), -1);
 
   mod.controls.setItemOrder(["tc", "ta", "tb"]);
+  harness.flush();
   assert.equal(prop(harness, "tc", "tabIndex"), 0, "first tab stop follows live tree order");
   assert.equal(prop(harness, "ta", "tabIndex"), -1);
   assert.equal(harness.byTestId("ta"), ta, "keyed moves keep node identities");
@@ -346,10 +356,12 @@ test("keyed reorder before first focus fixes the initial tab stop", async t => {
 
   harness.dispatch(tc, "FocusIn");
   mod.controls.setItemOrder(["tb", "tc", "ta"]);
+  harness.flush();
   sendKey(harness, tc, "ArrowRight");
   assert.equal(harness.focused.current, ta);
 
   mod.controls.setItemOrder(["tb", "tc"]);
+  harness.flush();
   assert.equal(harness.byTestId("ta"), undefined, "removed items unregister");
   assert.equal(prop(harness, "tb", "tabIndex"), 0, "the surviving item takes the tab stop");
   sendKey(harness, harness.byTestId("tb"), "ArrowRight");
@@ -398,6 +410,7 @@ test("controlled toggle reports attempts while visual state stays until echoed",
   assert.deepEqual(mod.api.log.toggle, [["a"]]);
   assert.equal(prop(harness, "ta", "data-state"), "off");
   mod.controls.setEchoToggle(true);
+  harness.flush();
   harness.dispatch(a, "Click");
   assert.equal(prop(harness, "ta", "data-state"), "on");
 });
@@ -413,11 +426,13 @@ test("group disabled and inherited variant, size, spacing stay reactive", async 
 
   mod.controls.setGroupVariant("outline");
   mod.controls.setGroupSize("sm");
+  harness.flush();
   assert.equal(prop(harness, "ta", "data-variant"), "outline");
   assert.match(prop(harness, "ta", "class"), /zui-toggle--outline/);
   assert.equal(prop(harness, "ta", "data-size"), "sm", "group size inherits when the item does not override");
 
   mod.controls.setGroupDisabled(true);
+  harness.flush();
   assert.equal(prop(harness, "tb", "disabled"), true, "item disabled=false cannot override the group");
   const length = mod.api.log.toggle.length;
   harness.dispatch(b, "Click");
@@ -471,8 +486,10 @@ test("hide and show remount produces fresh item nodes", async t => {
   const first = harness.byTestId("ra");
   assert.ok(first);
   mod.controls.setShowGroup(false);
+  harness.flush();
   assert.equal(harness.byTestId("ra"), undefined);
   mod.controls.setShowGroup(true);
+  harness.flush();
   const second = harness.byTestId("ra");
   assert.ok(second);
   assert.notEqual(second, first, "remounting creates fresh item nodes");

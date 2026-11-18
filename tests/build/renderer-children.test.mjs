@@ -40,10 +40,13 @@ test("numeric children reach the host as text", async t => {
   assert.ok(panel);
   assert.equal(textOf(panel), "Count: 0 / [1,2.5,-4]");
   mod.setCount(5);
+  harness.flush();
   assert.equal(harness.byTestId("mixed-numbers"), panel);
   assert.equal(textOf(panel), "Count: 5 / [1,2.5,-4]");
   mod.setCount(-2.5);
+  harness.flush();
   assert.equal(textOf(panel), "Count: -2.5 / [1,2.5,-4]");
   mod.setCount(0);
+  harness.flush();
   assert.equal(textOf(panel), "Count: 0 / [1,2.5,-4]");
 });

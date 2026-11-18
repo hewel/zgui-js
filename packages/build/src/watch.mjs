@@ -45,6 +45,7 @@ export function watchApplication(app, {
   root = workspaceRoot,
   appDirectory = path.join(root, "apps/examples", app),
   stylexDiagnostics = false,
+  development = false,
   onSuccess = ({ dist, manifest }) => console.log(`Published ${dist} ${manifest.buildId}`),
   onError = error => console.error(error.message),
   signal,
@@ -105,6 +106,7 @@ export function watchApplication(app, {
       temporaryDirectory: path.join(temporary, "output"),
       buildDelay: 80,
       stylexDiagnostics,
+      development,
       watchFiles: [path.join(temporary, "invalidate")],
       async onAttempt() {
         published = undefined;
@@ -125,7 +127,7 @@ export function watchApplication(app, {
         await watchDependencyManifests(result.graph.modules);
         await typecheck(path.join(appDirectory, "tsconfig.json"), { signal: controller.signal });
         // Observers leave building/failed states via publication identity even on byte-identical recovery.
-        published = await publish(app, result, { root, appDirectory, signal: controller.signal });
+        published = await publish(app, result, { root, appDirectory, development, signal: controller.signal });
         await publishStatus(appDirectory, {
           ...status, status: "published",
           publicationDirectory: await realpath(published.dist), buildId: published.manifest.buildId,

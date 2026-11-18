@@ -52,15 +52,17 @@ async function mounted(t) {
 }
 
 test("presence mounts on open, defers its exit check past a styled frame and removes an idle surface", async t => {
-  const { clock, queries, mod, surface, state, counter, event } = await mounted(t);
+  const { clock, queries, mod, surface, state, counter, event, harness } = await mounted(t);
   assert.equal(surface(), undefined);
   assert.equal(clock.frames.size, 0);
   assert.equal(clock.timers.size, 0);
   assert.equal(queries.length, 0);
   mod.setOpen(true);
+  harness.flush();
   assert.ok(surface());
   assert.equal(state(), "open");
   mod.setOpen(false);
+  harness.flush();
   const first = surface();
   assert.equal(state(), "closed");
   assert.equal(clock.frames.size, 1);
@@ -82,6 +84,7 @@ test("presence mounts on open, defers its exit check past a styled frame and rem
   assert.equal(queries.length, 1);
   assert.equal(mod.log.cleanups, 1);
   mod.setOpen(true);
+  harness.flush();
   assert.ok(surface());
   assert.notEqual(surface(), first);
   assert.equal(counter(), "0");
@@ -91,9 +94,11 @@ test("presence mounts on open, defers its exit check past a styled frame and rem
 test("a busy surface is retained until own lifecycle event reports all motion gone", async t => {
   const { clock, queries, busy, mod, surface, event, harness } = await mounted(t);
   mod.setOpen(true);
+  harness.flush();
   const current = surface();
   busy.set(current, true);
   mod.setOpen(false);
+  harness.flush();
   clock.frame();
   clock.advance(0);
   assert.equal(surface(), current, "busy surface survives the styled-frame check");
@@ -116,11 +121,14 @@ test("a busy surface is retained until own lifecycle event reports all motion go
 test("reopen cancels a queued exit and stale callbacks cannot close the new exit", async t => {
   const { clock, queries, busy, mod, surface, state, counter, harness } = await mounted(t);
   mod.setOpen(true);
+  harness.flush();
   harness.dispatch(harness.byTestId("counter"), "Click");
   assert.equal(counter(), "1");
   mod.setOpen(false);
+  harness.flush();
   const stale = [...clock.frames.values(), ...[...clock.timers.values()].map(timer => timer.callback)];
   mod.setOpen(true);
+  harness.flush();
   const current = surface();
   assert.equal(state(), "open");
   assert.equal(counter(), "1");
@@ -130,6 +138,7 @@ test("reopen cancels a queued exit and stale callbacks cannot close the new exit
   assert.equal(surface(), current);
   assert.equal(queries.length, 0);
   mod.setOpen(false);
+  harness.flush();
   busy.set(current, true);
   for (const callback of stale) callback();
   assert.equal(surface(), current, "stale callbacks must not close the new exit");
@@ -148,9 +157,11 @@ test("reopen cancels a queued exit and stale callbacks cannot close the new exit
 });
 
 test("disposal before the styled frame clears timers and saved callbacks stay inert", async t => {
-  const { clock, queries, mod, surface, finish } = await mounted(t);
+  const { clock, queries, mod, surface, finish, harness } = await mounted(t);
   mod.setOpen(true);
+  harness.flush();
   mod.setOpen(false);
+  harness.flush();
   assert.equal(clock.frames.size, 1);
   assert.equal(clock.timers.size, 1);
   const stale = [...clock.frames.values(), ...[...clock.timers.values()].map(timer => timer.callback)];
@@ -164,9 +175,11 @@ test("disposal before the styled frame clears timers and saved callbacks stay in
 });
 
 test("disposal after the styled frame queued the deferred check clears timers and saved callbacks stay inert", async t => {
-  const { clock, queries, mod, surface, finish } = await mounted(t);
+  const { clock, queries, mod, surface, finish, harness } = await mounted(t);
   mod.setOpen(true);
+  harness.flush();
   mod.setOpen(false);
+  harness.flush();
   clock.frame();
   assert.equal(clock.frames.size, 0);
   assert.equal(clock.timers.size, 2);

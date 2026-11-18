@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { readFile, readdir, lstat } from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
@@ -13,27 +14,43 @@ export const workspaceRoot = fileURLToPath(new URL("../../../", import.meta.url)
 const require = createRequire(import.meta.url);
 const json = value => JSON.stringify(value, null, 2) + "\n";
 
+function packageVersion(req, id) {
+  let dir = path.dirname(req.resolve(id));
+  while (true) {
+    try {
+      const pkg = JSON.parse(readFileSync(path.join(dir, "package.json"), "utf8"));
+      if (pkg.name === id) return pkg.version;
+    } catch {}
+    const parent = path.dirname(dir);
+    if (parent === dir) throw new Error(`Cannot locate package.json for ${id}`);
+    dir = parent;
+  }
+}
+
 export async function optionalFile(filename) {
   try { return await readFile(filename); }
   catch (error) { if (error.code === "ENOENT") return undefined; throw error; }
 }
 
-export async function bundle(entry, { root = workspaceRoot, appDirectory = path.dirname(entry), hostEntry = true, filename = "app.mjs", stylexDiagnostics = false } = {}) {
-  return compileBundle(entry, { root, appDirectory, hostEntry, filename, stylexDiagnostics });
+export async function bundle(entry, { root = workspaceRoot, appDirectory = path.dirname(entry), hostEntry = true, filename = "app.mjs", stylexDiagnostics = false, development = false } = {}) {
+  return compileBundle(entry, { root, appDirectory, hostEntry, filename, stylexDiagnostics, development });
 }
 
 export function dependencyVersions() {
-  const presetRequire = createRequire(require.resolve("babel-preset-solid"));
-  const compilerRequire = createRequire(presetRequire.resolve("babel-plugin-jsx-dom-expressions"));
+  const solidRoot = path.dirname(require.resolve("solid-js/package.json"));
+  const signalsPkgPath = path.join(path.dirname(solidRoot), "@solidjs/signals/package.json");
+  const babelPluginRequire = createRequire(require.resolve("@solidjs/babel-plugin"));
+  const uiRequire = createRequire(path.join(workspaceRoot, "packages/ui/package.json"));
   return Object.fromEntries([
-    ...["solid-js", "babel-preset-solid", "@babel/core", "@babel/parser", "@babel/traverse", "@babel/preset-typescript", "rolldown", "typescript", "@stylexjs/stylex", "@stylexjs/babel-plugin", "styleq"]
+    ...["solid-js", "@solidjs/babel-plugin", "@babel/core", "@babel/parser", "@babel/traverse", "@babel/preset-typescript", "rolldown", "typescript", "@stylexjs/stylex", "@stylexjs/babel-plugin", "styleq"]
       .map(name => [name, require(`${name}/package.json`).version]),
-    ["babel-plugin-jsx-dom-expressions", presetRequire("babel-plugin-jsx-dom-expressions/package.json").version],
-    ["@babel/plugin-syntax-jsx", compilerRequire("@babel/plugin-syntax-jsx/package.json").version],
+    ["@solidjs/universal", packageVersion(uiRequire, "@solidjs/universal")],
+    ["@solidjs/signals", JSON.parse(readFileSync(signalsPkgPath, "utf8")).version],
+    ["@babel/plugin-syntax-jsx", babelPluginRequire("@babel/plugin-syntax-jsx/package.json").version],
   ]);
 }
 
-export async function buildInfo(root, result, { appDirectory = root } = {}) {
+export async function buildInfo(root, result, { appDirectory = root, development = false } = {}) {
   const cargoLock = await readFile(path.join(root, "Cargo.lock"), "utf8");
   const revision = cargoLock.match(/name = "rquickjs-sys"\nversion = "([^"]+)"\nsource = "[^"\n]+#([a-f0-9]+)"/);
   // This gitlink was verified against the pinned rquickjs checkout, not inferred from its crate version.
@@ -46,7 +63,7 @@ export async function buildInfo(root, result, { appDirectory = root } = {}) {
     packages: dependencyVersions(), lockfile: { path: "pnpm-lock.yaml", digest: sha256(await readFile(path.join(root, "pnpm-lock.yaml"))) },
     cargoLock: { path: "Cargo.lock", digest: sha256(cargoLock) },
     engine: { name: "QuickJS-NG", revision: engines[revision[2]], rquickjsVersion: revision[1], rquickjsRevision: revision[2] },
-    conditions: ["browser", "production"], target: "es2022", solidRuntime: identity(result.solidRuntime),
+    conditions: development ? ["development", "browser"] : ["browser", "production"], target: "es2022", solidRuntime: identity(result.solidRuntime),
     graph: {
       modules: result.graph.modules.map(identity).sort(),
       chunks: result.graph.chunks.map(chunk => ({ ...chunk, modules: chunk.modules.map(identity).sort() })),
@@ -89,14 +106,14 @@ export function contentDigest(files, manifest) {
   return sha256(canonicalJson(identity));
 }
 
-export async function buildApplication(app, { root = workspaceRoot, appDirectory = path.join(root, "apps/examples", app), stylexDiagnostics = false } = {}) {
+export async function buildApplication(app, { root = workspaceRoot, appDirectory = path.join(root, "apps/examples", app), stylexDiagnostics = false, development = false } = {}) {
   if (!/^[a-z][a-z0-9-]*$/.test(app)) throw new Error(`Invalid application name: ${app}`);
   typecheckProject(path.join(appDirectory, "tsconfig.json"));
-  const result = await bundle(path.join(appDirectory, "src/main.tsx"), { root, appDirectory, stylexDiagnostics });
-  return publishApplication(app, result, { root, appDirectory });
+  const result = await bundle(path.join(appDirectory, "src/main.tsx"), { root, appDirectory, stylexDiagnostics, development });
+  return publishApplication(app, result, { root, appDirectory, development });
 }
 
-export async function publishApplication(app, result, { root, appDirectory, signal }) {
+export async function publishApplication(app, result, { root, appDirectory, signal, development = false }) {
   signal?.throwIfAborted();
   const files = new Map(result.files);
   if (!files.has("app.css") || !files.has("style-origins.json") || !result.styleSystem) throw new Error("Missing StyleX compilation output");
@@ -123,7 +140,7 @@ export async function publishApplication(app, result, { root, appDirectory, sign
     if (families.has(family)) throw new Error(`Duplicate application font family: ${font.family}`);
     families.add(family);
   }
-  files.set("build-info.json", Buffer.from(json(await buildInfo(root, result, { appDirectory }))));
+  files.set("build-info.json", Buffer.from(json(await buildInfo(root, result, { appDirectory, development }))));
   const manifest = {
     schemaVersion: 2, id: `dev.example.${app}`, hostApiVersion: 1, entry: "app.mjs", sourceMap: "app.mjs.map",
     styles: css === undefined ? ["app.css"] : ["base.css", "app.css"], assets: [...assets.keys()].sort(),

@@ -28,6 +28,7 @@ test("aliases switch, ignore empty contributions, and retain application classes
   const native = h.byTestId("native");
   assert.equal(native.props.get("class"), "first");
   api.set({ className: "next", "data-marker": "two" });
+  h.flush();
   assert.equal(native.props.get("class"), "next");
   for (const id of ["button", "wrapped", "card", "ratio"]) {
     assert.match(h.byTestId(id).props.get("class"), /\bnext\b/);
@@ -36,10 +37,12 @@ test("aliases switch, ignore empty contributions, and retain application classes
   assert.match(h.byTestId("wrapped").props.get("class"), /zui-input-group__button/);
   assert.match(h.byTestId("wrapped").props.get("class"), /zui-button/);
   api.set({ class: "conflict-a", className: "conflict-b", "data-marker": "three" });
+  h.flush();
   assert.equal(native.props.get("class"), "next");
   assert.equal(native.props.get("data-marker"), "three");
   assert.ok(h.styleDiagnostics.some(d => d.code === "CLASS_ALIAS_CONFLICT"));
   api.set({ class: "\t ", className: " " });
+  h.flush();
   assert.equal(native.props.has("class"), false);
   assert.match(h.byTestId("button").props.get("class"), /zui-button/);
 });
@@ -66,22 +69,29 @@ test("StyleX props reactively toggle classes, dynamic zero values, and source me
   assert.match(initial, /\bx/);
   assert.ok(Object.values(node.props.get("style")).includes("0"));
   api.setValue(0.5);
+  h.flush();
   assert.ok(Object.values(node.props.get("style")).includes("0.5"));
   const accepted = node.props.get("style");
   api.setValue(NaN);
+  h.flush();
   assert.deepEqual(node.props.get("style"), accepted);
   assert.ok(h.styleDiagnostics.some(diagnostic => diagnostic.code === "STYLE_VALUE_INVALID"));
   api.setValue(null);
+  h.flush();
   assert.equal(node.props.has("style"), false);
   api.setValue(0.5);
   api.toggle(false);
+  h.flush();
   assert.notEqual(node.props.get("class"), initial);
   assert.equal(node.props.has("style"), false);
   api.setSource("second.tsx:4");
+  h.flush();
   assert.equal(node.props.get("data-style-src"), "second.tsx:4");
   api.setSource(undefined);
+  h.flush();
   assert.equal(node.props.has("data-style-src"), false);
   api.toggle(true);
+  h.flush();
   assert.equal(h.byTestId("stylex"), node);
   assert.equal(node.props.get("class"), initial);
 });
@@ -111,22 +121,27 @@ test("application inline maps replace atomically, normalize names, and restore S
   ]) {
     api.setStyle(style);
     api.setMarker("still applies");
+    h.flush();
     assert.deepEqual(node.props.get("style"), previous);
     assert.equal(node.props.get("data-marker"), "still applies");
   }
   api.setStyle("width: 40px; --Text: 7; position: relative");
+  h.flush();
   assert.equal(node.props.get("style").width, "40px");
   assert.equal(node.props.get("style").opacity, undefined);
   assert.equal(h.byTestId("popper").props.get("style").position, "fixed");
   assert.equal(h.byTestId("popper").props.get("style").visibility, "hidden");
   assert.equal(h.byTestId("popper").props.get("class"), "application");
   api.setStyle({ padding: "1px", paddingLeft: "8px" });
+  h.flush();
   api.setStyle({ paddingLeft: "8px" });
+  h.flush();
   assert.equal(node.props.get("style").padding, undefined);
   assert.equal(node.props.get("style")["padding-left"], "8px");
   assert.equal(node.props.get("--zui-aspect-ratio"), "2");
   assert.equal(node.props.get("style")["--Text"], undefined);
   api.setStyle(undefined);
+  h.flush();
   assert.deepEqual(node.props.get("style"), { "--zui-aspect-ratio": "2" });
   assert.ok(h.styleDiagnostics.length >= 6);
 });
@@ -138,7 +153,10 @@ test("Preview style failures throw instead of silently retaining a partial map",
     export const api = { setStyle };
     export function mount(root) { return render(() => <box testId="strict" style={style()} />, root); }
   `, { strictStyles: true });
-  assert.throws(() => api.setStyle({ height: "20px", width: "NaNpx" }), /STYLE_VALUE_INVALID/);
+  assert.throws(() => {
+    api.setStyle({ height: "20px", width: "NaNpx" });
+    h.flush();
+  }, /STYLE_VALUE_INVALID/);
   assert.deepEqual(h.byTestId("strict").props.get("style"), { width: "10px" });
 });
 

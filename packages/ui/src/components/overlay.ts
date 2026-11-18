@@ -1,5 +1,17 @@
-import { Show, createContext, createEffect, createMemo, createSignal, onCleanup, splitProps, untrack, useContext } from "#solid";
-import { createElement, insertNode, mergeProps, setProp, spread } from "../renderer/index.js";
+import {
+  createContext,
+  createEffect,
+  createMemo,
+  createRoot,
+  createSignal,
+  getOwner,
+  onCleanup,
+  omit,
+  runWithOwner,
+  untrack,
+  useContext,
+} from "#solid";
+import { createElement, mergeProps, setProp, spread } from "../renderer/index.js";
 import { isAnimating, lockScroll, registerDismissLayer, trapFocus } from "../nodes.js";
 import { allocatePortal } from "../portal.js";
 import type {
@@ -19,7 +31,7 @@ import type { ButtonProps } from "./button.js";
 import { Popper } from "./popper.js";
 import type { PopperPlacement } from "./popper.js";
 import { callHandler, createControllable } from "./state.js";
-import { classes, element, provide, slot, type Stylesheet, useStylesheet } from "./shared.js";
+import { append, classes, element, provide, slot, type Stylesheet, useStylesheet, withDefaults } from "./shared.js";
 import { portalThemeScope, useTheme } from "./theme.js";
 import { sheet } from "./generated/OverlayStyle.js";
 
@@ -72,8 +84,7 @@ function createPresence(present: Accessor<boolean>) {
   const finish = () => {
     if (!untrack(present) && untrack(mounted) && (!surface || !isAnimating(surface))) leave();
   };
-  createEffect(() => {
-    const open = present();
+  createEffect(() => present(), open => {
     cancel();
     if (open) { setMounted(true); return; }
     if (!untrack(mounted)) return;
@@ -129,13 +140,13 @@ export function createOverlayState(props: OverlayRootProps) {
 }
 
 export type OverlayState = ReturnType<typeof createOverlayState>;
-export const OverlayContext = createContext<OverlayState>();
+export const OverlayContext = createContext<OverlayState | null>(null);
 export function OverlayRoot(props: OverlayRootProps): NativeChild {
   return provide(OverlayContext, createOverlayState(props), props);
 }
 
 interface Elevation { layer: NativeOverlayLayer; depth: number; }
-const ElevationContext = createContext<Elevation>();
+const ElevationContext = createContext<Elevation | null>(null);
 const layers: readonly NativeOverlayLayer[] = ["content", "popover", "modal", "toast"];
 export function raiseSurface(wanted: NativeOverlayLayer): Elevation {
   const parent = useContext(ElevationContext);
@@ -154,67 +165,89 @@ export function overlayPortal(elevation: Elevation, build: () => NativeChild): N
     setProp(box, "__zguiInvariantStyle", { "--zui-overlay-depth": String(elevation.depth) });
     const built = untrack(build);
     if (Array.isArray(built)) {
-      for (const item of built) if (item != null) insertNode(box, item as NativeNode);
+      for (const item of built) if (item != null) append(box, item as NativeNode);
     } else if (built != null) {
-      insertNode(box, built as NativeNode);
+      append(box, built as NativeNode);
     }
     return box;
   };
   const root = allocatePortal(elevation.layer);
-  createEffect(() => {
-    provide(ElevationContext, elevation, () => {
-      const content = body();
-      insertNode(root, theme ? portalThemeScope(theme, content) : content);
-      return null;
-    });
-  });
+  const parentOwner = getOwner();
+  let cancelled = false;
+  onCleanup(() => { cancelled = true; });
+  createEffect(
+    () => true,
+    () => {
+      if (cancelled) return;
+      let disposeBranch: (() => void) | undefined;
+      runWithOwner(parentOwner, () => {
+        createRoot(dispose => {
+          disposeBranch = dispose;
+          slot(root, provide(ElevationContext, elevation, () => {
+            const content = body();
+            return theme ? portalThemeScope(theme, content) : content;
+          }));
+        });
+      });
+      return () => disposeBranch?.();
+    },
+  );
   return root;
 }
 
-function mountOverlay(state: OverlayState | undefined, props: DismissalContentProps, config: OverlaySurfaceConfig): NativeChild {
+function mountOverlay(state: OverlayState | null | undefined, props: DismissalContentProps, config: OverlaySurfaceConfig): NativeChild {
   useStylesheet(sheet);
-  const [own, rest] = splitProps(props, ["children", "dismissOnOutsidePress", "dismissOnEscape",
-    "onAnimationEnd", "onAnimationCancel", "onTransitionEnd", "onTransitionCancel"]);
   const presence = createPresence(() => state?.open() ?? false);
   const elevation = raiseSurface(config.layer);
-  const holder = element("box", { __zguiInvariantStyle: { display: "none" } });
-  slot(holder, Show({ get when() { return presence.mounted(); }, get children() {
-    return overlayPortal(elevation, () => {
-      const context = state!;
-      const surface = createElement("box");
-      context.content.ref(surface);
-      presence.ref(surface);
-      if (config.trap) trapFocus(surface);
-      const options = () => ({
-        layer: elevation.layer,
-        dismissOnOutsidePress: own.dismissOnOutsidePress ?? true,
-        dismissOnEscape: own.dismissOnEscape ?? true,
-        exclude: context.trigger.node(), leaving: !context.open(),
-      });
-      const dismiss = registerDismissLayer(surface, reason => {
-        if (config.onDismiss) config.onDismiss(reason); else context.setOpen(false);
-      }, untrack(options));
-      createEffect(() => dismiss.update(options()));
-      if (config.lock) createEffect(() => { if (context.open()) lockScroll(surface); });
-      spread(surface, mergeProps({
-        tabIndex: config.trap ? -1 : undefined, role: config.role, ariaModal: config.trap ?? false,
-        get ariaPopupFor() { return context.trigger.node(); },
-        get "data-state"() { return presence.state(); },
-      }, rest, {
-        get __zguiClass() { return classes(config.surfaceClass === false ? null : "zui-surface", config.class); },
-        onAnimationEnd(event: NativeAnimationEvent) { own.onAnimationEnd?.(event); presence.onEnd(event); },
-        onAnimationCancel(event: NativeAnimationEvent) { own.onAnimationCancel?.(event); presence.onEnd(event); },
-        onTransitionEnd(event: NativeTransitionEvent) { own.onTransitionEnd?.(event); presence.onEnd(event); },
-        onTransitionCancel(event: NativeTransitionEvent) { own.onTransitionCancel?.(event); presence.onEnd(event); },
-      }), true);
-      slot(surface, config.children ?? (() => own.children));
-      return config.wrap(surface, presence.state);
+  const holder = createElement("box");
+  setProp(holder, "__zguiInvariantStyle", { display: "none" });
+  slot(holder, () => presence.mounted() ? untrack(() => overlayPortal(elevation, () => {
+    const rest = omit(props as AnchoredContentProps, "children", "placement", "offset", "dismissOnOutsidePress", "dismissOnEscape", "onAnimationEnd", "onAnimationCancel", "onTransitionEnd", "onTransitionCancel");
+    const context = state!;
+    const surface = createElement("box");
+    context.content.ref(surface);
+    presence.ref(surface);
+    if (config.trap) trapFocus(surface);
+    const options = () => ({
+      layer: elevation.layer,
+      dismissOnOutsidePress: props.dismissOnOutsidePress ?? true,
+      dismissOnEscape: props.dismissOnEscape ?? true,
+      exclude: context.trigger.node(), leaving: !context.open(),
     });
-  } }));
+    const dismiss = registerDismissLayer(surface, reason => {
+      if (config.onDismiss) config.onDismiss(reason); else context.setOpen(false);
+    }, untrack(options));
+    createEffect(options, next => { dismiss.update(next); });
+    if (config.lock) createEffect(() => context.open(), open => (open ? lockScroll(surface) : undefined));
+    spread(surface, mergeProps(rest, withDefaults({
+      ...(config.trap ? { tabIndex: -1 } : {}),
+      role: config.role,
+      ariaModal: config.trap ?? false,
+      get ariaPopupFor() { return context.trigger.node(); },
+      get "data-state"() { return presence.state(); },
+    }, rest), {
+      get __zguiClass() { return classes(config.surfaceClass === false ? null : "zui-surface", config.class); },
+      onAnimationEnd(event: NativeAnimationEvent) { props.onAnimationEnd?.(event); presence.onEnd(event); },
+      onAnimationCancel(event: NativeAnimationEvent) { props.onAnimationCancel?.(event); presence.onEnd(event); },
+      onTransitionEnd(event: NativeTransitionEvent) { props.onTransitionEnd?.(event); presence.onEnd(event); },
+      onTransitionCancel(event: NativeTransitionEvent) { props.onTransitionCancel?.(event); presence.onEnd(event); },
+    }), true);
+    if (config.children) {
+      const built = config.children();
+      if (built != null && typeof built === "object" && !Array.isArray(built)) {
+        append(surface, built as NativeNode);
+      } else {
+        slot(surface, built);
+      }
+    } else {
+      slot(surface, () => props.children);
+    }
+    return config.wrap(surface, presence.state);
+  })) : null);
   return holder;
 }
 
-export function modalSurface(state: OverlayState | undefined, props: DismissalContentProps, config: {
+export function modalSurface(state: OverlayState | null | undefined, props: DismissalContentProps, config: {
   class: string; role: NativeRole; children?: () => NativeChild;
 }): NativeChild {
   return mountOverlay(state, props, {
@@ -234,18 +267,17 @@ export function modalSurface(state: OverlayState | undefined, props: DismissalCo
   });
 }
 
-export function anchoredSurface(state: OverlayState | undefined, props: AnchoredContentProps, defaults: {
+export function anchoredSurface(state: OverlayState | null | undefined, props: AnchoredContentProps, defaults: {
   class: string; role: NativeRole; trap?: boolean; surfaceClass?: boolean; onDismiss?: (reason: NativeDismissReason) => void;
   children?: () => NativeChild;
 }): NativeChild {
-  const [own, rest] = splitProps(props, ["placement", "offset"]);
-  return mountOverlay(state, rest, {
+  return mountOverlay(state, props, {
     layer: "popover",
     ...defaults,
     wrap: surface => Popper({
       get anchor() { return state!.trigger.node(); },
-      get placement() { return own.placement; },
-      get offset() { return own.offset; },
+      get placement() { return props.placement; },
+      get offset() { return props.offset; },
       class: "zui-overlay-positioner",
       children: surface,
     }),
@@ -254,26 +286,26 @@ export function anchoredSurface(state: OverlayState | undefined, props: Anchored
 
 export function overlayTrigger(popup: "dialog" | "menu", props: ButtonProps = {}): NativeNode {
   const context = useContext(OverlayContext);
-  const [own, rest] = splitProps(props, ["onClick", "ref"]);
-  return Button(mergeProps({
+  const rest = omit(props, "onClick", "ref");
+  return Button(mergeProps(rest, withDefaults({
     get expanded() { return context?.open(); },
     get ariaHasPopup() { return context ? popup : null; },
     get ariaControls() { return context?.content.node() ?? null; },
     get "data-state"() { return context ? context.open() ? "open" : "closed" : null; },
-  }, rest, {
-    ref(node: NativeNode) { context?.trigger.ref(node); if (typeof own.ref === "function") own.ref(node); },
+  }, rest), {
+    ref(node: NativeNode) { context?.trigger.ref(node); if (typeof props.ref === "function") props.ref(node); },
     onClick(event: NativeEvent) {
-      if (callHandler(event, own.onClick) && !props.disabled) context?.setOpen(!context.open());
+      if (callHandler(event, props.onClick) && !props.disabled) context?.setOpen(!context.open());
     },
   }));
 }
 
 export function overlayClose(props: ButtonProps = {}): NativeNode {
   const context = useContext(OverlayContext);
-  const [own, rest] = splitProps(props, ["onClick"]);
-  return Button(mergeProps({ variant: "ghost" as const }, rest, {
+  const rest = omit(props, "onClick");
+  return Button(mergeProps(rest, withDefaults({ variant: "ghost" as const }, rest), {
     onClick(event: NativeEvent) {
-      if (callHandler(event, own.onClick) && !props.disabled) context?.setOpen(false);
+      if (callHandler(event, props.onClick) && !props.disabled) context?.setOpen(false);
     },
   }));
 }
@@ -287,9 +319,9 @@ function overlayLabel(
 ): NativeNode {
   useStylesheet(cssSheet);
   const context = useContext(OverlayContext);
-  const [own, rest] = splitProps(props, ["ref"]);
+  const rest = omit(props, "ref");
   return element(tag, mergeProps(rest, {
-    ref(node: NativeNode) { context?.[kind].ref(node); if (typeof own.ref === "function") own.ref(node); },
+    ref(node: NativeNode) { context?.[kind].ref(node); if (typeof props.ref === "function") props.ref(node); },
     get __zguiClass() { return classes(className); },
   }));
 }

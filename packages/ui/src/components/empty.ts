@@ -1,7 +1,7 @@
-import { splitProps } from "#solid";
+import { omit } from "#solid";
 import { mergeProps } from "../renderer/index.js";
 import type { NativeElementProps, NativeNode } from "../types.js";
-import { classes, element, part, useStylesheet } from "./shared.js";
+import { classes, element, part, useStylesheet, withDefaults } from "./shared.js";
 import { sheet } from "./generated/EmptyStyle.js";
 
 export type EmptyProps = NativeElementProps;
@@ -20,18 +20,18 @@ export const EmptyContent = part("box", sheet, "zui-empty__content");
 
 export function EmptyMedia(props: EmptyMediaProps = {}): NativeNode {
   useStylesheet(sheet);
-  const [own, rest] = splitProps(props, ["variant"]);
+  const rest = omit(props, "variant");
   return element("box", mergeProps(
-    {
+    rest,
+    withDefaults({
       role: "genericContainer" as const,
       ariaHidden: true,
-      get "data-variant"() { return own.variant ?? "default"; },
-    },
-    rest,
+      get "data-variant"() { return props.variant ?? "default"; },
+    }, rest),
     {
       get __zguiClass() {
         return classes("zui-empty__media",
-        own.variant === "icon" && "zui-empty__media--icon", );
+        props.variant === "icon" && "zui-empty__media--icon", );
       },
     },
   ));

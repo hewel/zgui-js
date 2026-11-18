@@ -305,6 +305,7 @@ test("automatic focus activation, roving navigation and axis switching", async t
   harness.host.focus(node(harness, "tab-a"));
   assert.equal(prop(harness, "tab-a", "selected"), true);
   mod.controls.setBDisabled(true);
+  harness.flush();
   const right = harness.dispatch(node(harness, "tab-a"), "KeyDown", { key: "ArrowRight", keyWithoutModifiers: "ArrowRight" });
   assert.equal(harness.focused.current, node(harness, "tab-c"), "ArrowRight skips disabled middle and lands on c");
   assert.equal(prop(harness, "tab-c", "selected"), true, "FocusIn bubbling on focus move activates tab-c automatically");
@@ -319,6 +320,7 @@ test("automatic focus activation, roving navigation and axis switching", async t
   assert.equal(harness.focused.current, node(harness, "tab-a"));
   assert.equal(prop(harness, "tab-a", "selected"), true);
   mod.controls.setOrientation("vertical");
+  harness.flush();
   const offAxis = harness.dispatch(node(harness, "tab-a"), "KeyDown", { key: "ArrowRight", keyWithoutModifiers: "ArrowRight" });
   assert.equal(offAxis.defaultPrevented, false, "ArrowRight is not consumed on a vertical list");
   assert.equal(harness.focused.current, node(harness, "tab-a"));
@@ -327,6 +329,7 @@ test("automatic focus activation, roving navigation and axis switching", async t
   assert.equal(prop(harness, "tab-c", "selected"), true);
   mod.controls.setOrientation("horizontal");
   mod.controls.setActivation("manual");
+  harness.flush();
   harness.host.focus(node(harness, "tab-a"));
   assert.equal(prop(harness, "tab-a", "selected"), false, "manual focus does not select");
   assert.equal(prop(harness, "tab-c", "selected"), true);
@@ -343,10 +346,12 @@ test("controlled value waits for an echo and owned default survives prop changes
   press(harness, "tab-b");
   assert.deepEqual(mod.log.changes, ["b", "b"], "repeated attempt reported again");
   mod.echoControls.setEcho("b");
+  harness.flush();
   assert.equal(prop(harness, "tab-b", "selected"), true, "echo drives selection");
   assert.equal(prop(harness, "panel-b", "data-state"), "active");
   assert.deepEqual(mod.log.changes, ["b", "b"], "prop echo emits no callback");
   mod.echoControls.setEcho("c");
+  harness.flush();
   assert.equal(prop(harness, "tab-c", "selected"), true, "later parent update drives panels");
   assert.deepEqual(mod.log.changes, ["b", "b"]);
 
@@ -355,6 +360,7 @@ test("controlled value waits for an echo and owned default survives prop changes
   assert.equal(prop(owned.harness, "tab-b", "selected"), true);
   const beforeDefaultChange = owned.mod.log.changes.slice();
   owned.mod.echoControls.setOwnedDefault("unmatched");
+  owned.harness.flush();
   assert.equal(prop(owned.harness, "tab-b", "selected"), true, "defaultValue prop changes never reset owned state");
   assert.deepEqual(owned.mod.log.changes, beforeDefaultChange, "ignored default update emits no callback");
 });
@@ -362,26 +368,33 @@ test("controlled value waits for an echo and owned default survives prop changes
 test("caller prevention and disabled state gate activation", async t => {
   const { mod, harness } = await mounted(t, "mountInteractive");
   mod.controls.setCancelKeys(true);
+  harness.flush();
   harness.dispatch(node(harness, "tab-a"), "KeyDown", { key: "ArrowRight", keyWithoutModifiers: "ArrowRight" });
   assert.equal(harness.focused.current, null, "cancelled list key runs no internal navigation");
   mod.controls.setCancelKeys(false);
   mod.controls.setActivation("manual");
+  harness.flush();
   focusIn(harness, "tab-b");
   mod.controls.setCancelFocus(true);
+  harness.flush();
   focusIn(harness, "tab-c");
   assert.equal(prop(harness, "tab-c", "selected"), false);
   mod.controls.setActivation("automatic");
+  harness.flush();
   focusIn(harness, "tab-b");
   assert.equal(prop(harness, "tab-b", "selected"), false, "cancelled focus runs no automatic selection");
   mod.controls.setCancelFocus(false);
   mod.controls.setCancelClicks(true);
+  harness.flush();
   press(harness, "tab-b");
   assert.equal(prop(harness, "tab-b", "selected"), false, "cancelled click runs no selection");
   mod.controls.setCancelClicks(false);
   mod.controls.setBDisabled(true);
+  harness.flush();
   press(harness, "tab-b");
   assert.equal(prop(harness, "tab-b", "selected"), false, "disabled item cannot be selected");
   mod.controls.setListDisabled(true);
+  harness.flush();
   const beforeListDisabled = mod.log.changes.slice();
   press(harness, "tab-c");
   assert.equal(prop(harness, "tab-c", "selected"), false, "list-disabled item cannot be selected");
@@ -390,6 +403,7 @@ test("caller prevention and disabled state gate activation", async t => {
   mod.controls.setBDisabled(false);
   mod.controls.setTabsDisabled(true);
   mod.controls.setListDisabled(false);
+  harness.flush();
   const beforeTabsDisabled = mod.log.changes.slice();
   press(harness, "tab-b");
   assert.equal(prop(harness, "tab-b", "selected"), false, "root-disabled item cannot be selected");
@@ -398,6 +412,7 @@ test("caller prevention and disabled state gate activation", async t => {
   assert.equal(blocked.defaultPrevented, false, "root-disabled list key is not consumed");
   assert.equal(harness.focused.current, null);
   mod.controls.setTabsDisabled(false);
+  harness.flush();
 });
 
 test("keyed reorder, part removal and value rename keep relations live", async t => {
@@ -412,6 +427,7 @@ test("keyed reorder, part removal and value rename keep relations live", async t
   press(harness, "tab-b");
   assert.equal(textOf(node(harness, "trigger-count-b")), "1", "trigger-local counter increments");
   mod.reorderControls.setOrder(["c", "a", "b"]);
+  harness.flush();
   assert.deepEqual(orderIds(), ["tab-c", "tab-a", "tab-b"], "native order follows keyed reorder");
   for (const id of ["tab-a", "tab-b", "tab-c"]) {
     assert.equal(node(harness, id), tabs[id], `${id} keeps identity through reorder`);
@@ -424,19 +440,24 @@ test("keyed reorder, part removal and value rename keep relations live", async t
   assert.equal(harness.focused.current, node(harness, "tab-b"), "arrows follow new tree order");
   const firstB = node(harness, "tab-b");
   mod.reorderControls.setShowB(false);
+  harness.flush();
   assert.equal(prop(harness, "panel-b", "ariaLabelledBy") ?? null, null, "missing trigger clears the relation");
   mod.reorderControls.setShowB(true);
+  harness.flush();
   const rebornB = node(harness, "tab-b");
   assert.notEqual(rebornB, firstB, "reinserted trigger is a fresh node");
   assert.equal(prop(harness, "panel-b", "ariaLabelledBy"), rebornB, "relation follows the fresh handle");
   const firstPanelA = node(harness, "panel-a");
   mod.reorderControls.setShowPanelA(false);
+  harness.flush();
   assert.equal(prop(harness, "tab-a", "ariaControls") ?? null, null, "missing panel clears the relation");
   mod.reorderControls.setShowPanelA(true);
+  harness.flush();
   const rebornPanelA = node(harness, "panel-a");
   assert.notEqual(rebornPanelA, firstPanelA, "reinserted panel is a fresh node");
   assert.equal(prop(harness, "tab-a", "ariaControls"), rebornPanelA);
   mod.reorderControls.setRenameA("x");
+  harness.flush();
   assert.equal(prop(harness, "tab-a", "data-value"), "x", "renamed trigger reports the current value");
   assert.equal(prop(harness, "tab-a", "ariaControls"), node(harness, "panel-x"), "relation follows the current value");
   press(harness, "tab-a");
@@ -500,6 +521,7 @@ test("nested tabs keep their own orientation and variant attributes", async t =>
   assert.equal(prop(harness, "styled-unlisted", "data-variant") ?? null, null);
   mod.styleControls.setStyleAxis("horizontal");
   mod.styleControls.setStyleVariant("default");
+  harness.flush();
   assert.equal(prop(harness, "styled-outer-list", "data-orientation"), "horizontal");
   assert.equal(prop(harness, "styled-outer-list", "data-variant"), "default");
   assert.equal(prop(harness, "styled-outer", "data-orientation"), "horizontal");
@@ -512,6 +534,7 @@ test("nested tabs keep their own orientation and variant attributes", async t =>
   assert.equal(prop(harness, "styled-unlisted", "data-variant") ?? null, null);
   mod.styleControls.setStyleAxis("vertical");
   mod.styleControls.setStyleVariant("line");
+  harness.flush();
   assert.equal(prop(harness, "styled-outer", "data-orientation"), "vertical");
   assert.equal(prop(harness, "styled-outer", "data-variant"), "line");
   assert.equal(prop(harness, "styled-inner", "data-orientation"), "horizontal");

@@ -20,7 +20,10 @@ export function mount(root: NativeNode) {
   return renderApp(() => {
     let first!: NativeNode;
     let second!: NativeNode;
-    createEffect(() => { registerDismissLayer(choice() === 0 ? first : second, reason => reasons.push("effect:" + reason)); });
+    createEffect(
+      () => choice(),
+      current => registerDismissLayer(current === 0 ? first : second, reason => { reasons.push("effect:" + reason); }).dispose,
+    );
     return <column>
       <Show when={visible()}><box ref={node => { registerDismissLayer(node, reason => reasons.push("conditional:" + reason), { layer: "toast", exclude: root }); }} /></Show>
       <box ref={node => { first = node; }} />
@@ -41,11 +44,11 @@ async function mounted(t) {
   globalThis.__zgui = harness.host;
   const root = harness.makeNode("root");
   dispose = mod.mount(root);
-  return { mod, root, registrations, finish: () => { const end = dispose; dispose = undefined; end?.(); } };
+  return { mod, harness, root, registrations, finish: () => { const end = dispose; dispose = undefined; end?.(); } };
 }
 
 test("owner-bound leases track mounts, effects and disposal exactly once", async t => {
-  const { mod, root, registrations, finish } = await mounted(t);
+  const { mod, harness, root, registrations, finish } = await mounted(t);
   assert.equal(registrations.length, 2);
   const [conditional, effect] = registrations;
   assert.deepEqual(conditional.options, { layer: "toast", dismissOnOutsidePress: true, dismissOnEscape: true, exclude: root, leaving: false });
@@ -55,9 +58,11 @@ test("owner-bound leases track mounts, effects and disposal exactly once", async
   assert.equal(effect.node, first);
 
   mod.toggle();
+  harness.flush();
   assert.equal(conditional.disposals, 1);
   assert.equal(conditional.active, false);
   mod.toggle();
+  harness.flush();
   assert.equal(registrations.length, 3);
   const remounted = registrations[2];
   assert.notEqual(remounted.node, conditional.node);
@@ -65,6 +70,7 @@ test("owner-bound leases track mounts, effects and disposal exactly once", async
   assert.equal(remounted.options.layer, "toast");
 
   mod.choose(1);
+  harness.flush();
   assert.equal(effect.disposals, 1);
   assert.equal(registrations.length, 4);
   const switched = registrations[3];

@@ -1,7 +1,7 @@
-import { splitProps } from "#solid";
+import { omit } from "#solid";
 import { createElement, mergeProps, spread } from "../renderer/index.js";
 import type { NativeFieldProps, NativeNode, NativeRole, NativeTextControlProps, NativeValueEvent } from "../types.js";
-import { classes, forbidChildren, useStylesheet } from "./shared.js";
+import { classes, forbidChildren, useStylesheet, withDefaults } from "./shared.js";
 import type { Stylesheet } from "./shared.js";
 import { sheet as inputSheet } from "./generated/InputStyle.js";
 import { sheet as textareaSheet } from "./generated/TextareaStyle.js";
@@ -39,25 +39,25 @@ function editing(
 ): NativeNode {
   useStylesheet(sheet);
   forbidChildren(name, props);
-  const [own, rest] = splitProps(props, ["label", "onValueChange", "onInput"]);
+  const rest = omit(props, "label", "onValueChange", "onInput");
   const node = createElement(tag);
   spread(node, mergeProps(
-    {
+    rest,
+    withDefaults({
       tabIndex: 0,
       get role() {
         return tag === "field" && (rest as { secure?: boolean | null }).secure ? "passwordInput" : role;
       },
-      get ariaLabel() { return own.label ?? null; },
+      get ariaLabel() { return props.label ?? null; },
       get __zguiStyle() {
         return { "--zui-field-placeholder": rest.placeholder == null ? null : quoted(rest.placeholder) };
       },
-    },
-    rest,
+    }, rest),
     {
       get __zguiClass() { return className(); },
       get onInput() {
-        const input = own.onInput;
-        const change = own.onValueChange;
+        const input = props.onInput;
+        const change = props.onValueChange;
         if (!input && !change) return null;
         return (event: NativeValueEvent) => {
           input?.(event);

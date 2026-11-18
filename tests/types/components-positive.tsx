@@ -73,8 +73,8 @@ const badgeVariants: BadgeVariant[] = ["default", "secondary", "destructive", "s
 const iconSizes: IconSize[] = ["sm", "md", "lg", "xl"];
 const [signal] = createSignal<ColorScheme>("light");
 
-const ThemeSlot: Context<Theme | undefined> = createContext<Theme>();
-const themed: NativeChild = <ThemeSlot.Provider value={light}><box /></ThemeSlot.Provider>;
+const ThemeSlot: Context<Theme | undefined> = createContext<Theme | undefined>(undefined);
+const themed: NativeChild = <ThemeSlot value={light}><box /></ThemeSlot>;
 
 function Themed() {
   const provided = useContext(ThemeSlot);

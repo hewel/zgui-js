@@ -144,7 +144,7 @@ test("solvePopper validates options and accepts negative offsets", async t => {
 });
 
 test("popper measures anchor content and viewport before placing", async t => {
-  const { mod, registrations, emit, finish } = await mounted(t);
+  const { mod, harness, registrations, emit, finish } = await mounted(t);
   const positioner = () => mod.log.positioner;
   const style = () => positioner().props.get("style");
   assert.equal(registrations.length, 3);
@@ -171,6 +171,7 @@ test("popper measures anchor content and viewport before placing", async t => {
   assert.equal(style().left, "250.5px");
   assert.equal(style().top, "234.5px");
   mod.setPlacement({ side: "top", align: "end" });
+  harness.flush();
   assert.equal(stylesOf(positioner()).get("left"), "200.5px");
   assert.equal(stylesOf(positioner()).get("top"), "76px");
   assert.equal(stylesOf(positioner()).get("--zui-popper-anchor-width"), "100px");
@@ -190,6 +191,7 @@ test("popper re-anchors and deactivates without losing content state", async t =
   harness.dispatch(counter, "Click");
   assert.equal(textOf(counter), "1");
   mod.setChoice(1);
+  harness.flush();
   assert.equal(registrations.length, 4);
   const retired = registrations[0];
   assert.equal(retired.kind, "borderBox");
@@ -201,6 +203,7 @@ test("popper re-anchors and deactivates without losing content state", async t =
   assert.equal(style().visibility, "hidden");
   emit(retired, { x: 1, y: 1, width: 1, height: 1 });
   mod.setPlacement({ side: "right", align: "center" });
+  harness.flush();
   emit(fresh, { x: 700, y: 200, width: 80, height: 30 });
   emit(registrations[1], { width: 200.1, height: 120.2 });
   emit(registrations[2], { x: 0, y: 0, width: 800, height: 600, scale: 1.75 });
@@ -208,11 +211,13 @@ test("popper re-anchors and deactivates without losing content state", async t =
   assert.equal(harness.byTestId("counter"), counter);
   assert.equal(textOf(counter), "1");
   mod.setActive(false);
+  harness.flush();
   assert.equal(registrations.filter(r => r.active).length, 0);
   assert.equal(style().visibility, "hidden");
   assert.equal(harness.byTestId("counter"), counter);
   assert.equal(textOf(counter), "1");
   mod.setActive(true);
+  harness.flush();
   assert.equal(registrations.length, 7);
   assert.equal(registrations.filter(r => r.active).length, 3);
   assert.equal(style().visibility, "hidden");

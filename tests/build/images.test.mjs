@@ -14,7 +14,7 @@ test("Image forwards reactive src replacements/clears and rejects lazy child spr
     compilerOptions: { target: "ES2022", module: "ESNext", moduleResolution: "Bundler", lib: ["ES2022"], types: [], strict: true, noEmit: true, jsx: "preserve", jsxImportSource: "@hewel/zgui" }, include: ["src"],
   }));
   await writeFile(path.join(directory, "src/main.tsx"), `
-    import { Image, createSignal } from "@hewel/zgui";
+    import { Image, createSignal, flush } from "@hewel/zgui";
     import type { NativeNode } from "@hewel/zgui";
     import { mergeProps, render } from "@hewel/zgui/renderer";
     export const hostApiVersion = 1;
@@ -32,9 +32,9 @@ test("Image forwards reactive src replacements/clears and rejects lazy child spr
         }));
         return undefined;
       }, root);
-      update("assets/second.png"); update(null); update("assets/third.png"); update(undefined);
+      update("assets/second.png"); flush(); update(null); flush(); update("assets/third.png"); flush(); update(undefined); flush();
       let rejected = false;
-      try { children(); } catch (error) { rejected = error instanceof TypeError; }
+      try { children(); flush(); } catch (error) { rejected = error instanceof TypeError; }
       finally { dispose(); }
       return { rejected, reads };
     }

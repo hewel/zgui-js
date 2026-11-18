@@ -128,6 +128,7 @@ test("avatar keeps its image node across source changes and allocates fresh on r
   assert.equal(badge.props.get("ariaHidden"), true);
 
   mod.api.setAvatarSrc("assets/b.png");
+  harness.flush();
   const updated = avatar.children.find(node => node.tag === "image");
   assert.equal(updated, image);
   assert.equal(updated.props.get("src"), "assets/b.png");
@@ -135,11 +136,13 @@ test("avatar keeps its image node across source changes and allocates fresh on r
   assert.equal(harness.byTestId("avatar-badge"), badge);
 
   mod.api.setAvatarSrc(null);
+  harness.flush();
   assert.equal(avatar.children.some(node => node.tag === "image"), false);
   assert.equal(harness.byTestId("avatar-fallback"), fallback);
   assert.equal(harness.byTestId("avatar-badge"), badge);
 
   mod.api.setAvatarSrc("assets/a.png");
+  harness.flush();
   const restored = avatar.children.find(node => node.tag === "image");
   assert.ok(restored);
   assert.notEqual(restored, image);
@@ -166,17 +169,21 @@ test("item tracks mounted descriptions, isolates nested context, and preserves r
   assert.match(item.props.get("class"), /caller$/);
 
   mod.api.setDescB(false);
+  harness.flush();
   assert.equal(harness.byTestId("description-b"), undefined);
   assert.match(item.props.get("class"), /\bzui-item--described\b/);
   mod.api.setDescA(false);
+  harness.flush();
   assert.equal(harness.byTestId("description-a"), undefined);
   assert.doesNotMatch(item.props.get("class"), /\bzui-item--described\b/);
   assert.match(nested.props.get("class"), /\bzui-item--described\b/);
   mod.api.setDescA(true);
+  harness.flush();
   assert.match(item.props.get("class"), /\bzui-item--described\b/);
 
   mod.api.setItemVariant("muted");
   mod.api.setItemSize("sm");
+  harness.flush();
   assert.match(item.props.get("class"), /\bzui-item--muted\b/);
   assert.match(item.props.get("class"), /\bzui-item--sm\b/);
   assert.equal(harness.byTestId("item"), item);
@@ -184,8 +191,10 @@ test("item tracks mounted descriptions, isolates nested context, and preserves r
 
   const first = harness.byTestId("remounted");
   mod.api.setShowItem(false);
+  harness.flush();
   assert.equal(harness.byTestId("remounted"), undefined);
   mod.api.setShowItem(true);
+  harness.flush();
   const second = harness.byTestId("remounted");
   assert.ok(second);
   assert.notEqual(second, first);
@@ -221,6 +230,7 @@ test("input group forwards editing and keeps frame state independent of the fiel
   assert.deepEqual(mod.api.log.values, ["gro"]);
   assert.equal(input.props.get("value"), "gro");
   mod.api.setQuery("set");
+  harness.flush();
   assert.equal(input.props.get("value"), "set");
   assert.equal(harness.byTestId("grouped-input"), input);
   assert.equal(mod.api.log.values.length, 1);
@@ -233,9 +243,11 @@ test("input group forwards editing and keeps frame state independent of the fiel
   assert.match(buttonAlt.props.get("class"), /\bzui-button--outline\b/);
 
   mod.api.setGroupDisabled(true);
+  harness.flush();
   assert.equal(group.props.get("data-disabled"), "true");
   assert.equal(input.props.get("disabled"), false);
   mod.api.setFieldDisabled(true);
+  harness.flush();
   assert.equal(input.props.get("disabled"), true);
 });
 

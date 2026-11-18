@@ -1,7 +1,9 @@
-import { readTextAsset } from "@hewel/zgui-services";
+import { loadTextAsset, readTextAsset } from "@hewel/zgui-services";
 import type { HostRequest, HostServiceError } from "@hewel/zgui-services";
 
 const request: HostRequest<string> = readTextAsset("assets/message.txt");
+const loadedText: Promise<string> = loadTextAsset("assets/message.txt");
+void loadedText;
 const promise: Promise<string> = request.promise;
 const cancelled: void = request.cancel();
 const length: Promise<number> = request.promise.then(text => text.length);

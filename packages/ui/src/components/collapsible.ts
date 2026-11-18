@@ -1,9 +1,9 @@
-import { createContext, createMemo, createSignal, onCleanup, splitProps, useContext } from "#solid";
-import { createElement, effect, mergeProps, spread } from "../renderer/index.js";
+import { $PROXY, createContext, createMemo, createSignal, onCleanup, omit, useContext } from "#solid";
+import { createElement, effect, mergeProps, setProp, spread } from "../renderer/index.js";
 import { focus, observeGeometry } from "../nodes.js";
-import type { Accessor, NativeElementProps, NativeEvent, NativeFocusEvent, NativeNode, NativeStyle } from "../types.js";
+import type { Accessor, NativeElementProps, NativeEvent, NativeFocusEvent, NativeNode, NativeRole, NativeStyle } from "../types.js";
 import { callHandler, createControllable } from "./state.js";
-import { append, classes, element, provide, slot, useStylesheet } from "./shared.js";
+import { append, classes, provide, slot, useStylesheet, withDefaults } from "./shared.js";
 import { sheet as upstreamSheet } from "./generated/CollapsibleStyle.js";
 
 const sheet = { ...upstreamSheet, css: upstreamSheet.css + '\n.zui-collapsible__content[data-collapsed] { visibility: hidden; }' };
@@ -36,13 +36,13 @@ export function createDisclosure(root: NativeNode, open: Accessor<boolean>, disa
     },
   };
 }
-export const DisclosureContext = createContext<ReturnType<typeof createDisclosure>>();
+export const DisclosureContext = createContext<ReturnType<typeof createDisclosure> | null>(null);
 
 export function Collapsible(props: CollapsibleProps = {}): NativeNode {
   useStylesheet(sheet);
-  const [own, rest] = splitProps(props, ["open", "defaultOpen", "onOpenChange", "disabled", "children"]);
+  const rest = omit(props, "open", "defaultOpen", "onOpenChange", "disabled", "children");
   const [read, write] = createControllable<boolean>({
-    value: () => own.open, defaultValue: () => own.defaultOpen, onChange: () => own.onOpenChange,
+    value: () => props.open, defaultValue: () => props.defaultOpen, onChange: () => props.onOpenChange,
   }, false);
   const open = createMemo(() => {
     const value = read();
@@ -50,39 +50,50 @@ export function Collapsible(props: CollapsibleProps = {}): NativeNode {
     return value;
   });
   const node = createElement("column");
-  const context = createDisclosure(node, open, () => !!own.disabled, write);
-  spread(node, mergeProps({ tabIndex: -1, get "data-state"() { return open() ? "open" : "closed"; } }, rest, {
+  const context = createDisclosure(node, open, () => !!props.disabled, write);
+  spread(node, mergeProps(rest, withDefaults({
+    tabIndex: -1,
+    get "data-state"() { return open() ? "open" : "closed"; },
+  }, rest), {
     get __zguiClass() { return classes(sheet.className, "zui-collapsible"); },
   }));
-  slot(node, provide(DisclosureContext, context, own));
+  slot(node, provide(DisclosureContext, context, props));
   return node;
 }
 
 export function CollapsibleTrigger(props: CollapsibleTriggerProps = {}): NativeNode {
   useStylesheet(sheet);
-  const [own, rest] = splitProps(props, ["disabled", "onClick"]);
+  const rest = omit(props, "disabled", "onClick");
   const context = useContext(DisclosureContext);
-  const disabled = () => !!own.disabled || !!context?.disabled();
+  const disabled = () => !!props.disabled || !!context?.disabled();
   const node = createElement("control");
   context?.registerTrigger(node, disabled);
-  spread(node, mergeProps({
+  spread(node, mergeProps(rest, withDefaults({
     role: "button" as const, tabIndex: 0,
     get disabled() { return disabled(); },
     get expanded() { return context?.open() ?? false; },
     get ariaControls() { return context?.content() ?? null; },
     get "data-state"() { return context?.open() ? "open" : "closed"; },
-  }, rest, {
+  }, rest), {
     get __zguiClass() { return classes("zui-collapsible__trigger"); },
     onClick(event: NativeEvent) {
-      if (callHandler(event, own.onClick) && !disabled()) context?.setOpen(!context.open());
+      if (callHandler(event, props.onClick) && !disabled()) context?.setOpen(!context.open());
     },
   }));
   return node;
 }
 
-export function disclosureContent(props: NativeElementProps, measureClass = ""): NativeNode {
+export function disclosureContent(
+  props: NativeElementProps,
+  options: {
+    measureClass?: string;
+    contentClass?: string;
+    role?: NativeRole;
+    ariaLabelledBy?: () => NativeNode | null;
+  } = {},
+): NativeNode {
   useStylesheet(sheet);
-  const [own, rest] = splitProps(props, ["children", "--zui-collapsible-height", "onFocus", "onBlur"]);
+  const rest = omit(props, "children", "--zui-collapsible-height", "onFocus", "onBlur");
   const context = useContext(DisclosureContext);
   const open = () => context?.open() ?? false;
   const [height, setHeight] = createSignal<number>();
@@ -90,28 +101,35 @@ export function disclosureContent(props: NativeElementProps, measureClass = ""):
   const [focused, setFocused] = createSignal(false);
   const node = createElement("box");
   context?.registerContent(node);
-  const inner = element("box", { class: classes("zui-collapsible__measure", measureClass) });
-  spread(node, mergeProps({
+  const inner = createElement("box");
+  setProp(inner, "class", classes("zui-collapsible__measure", options.measureClass));
+  spread(node, mergeProps(rest, withDefaults({
+    ...(options.role !== undefined ? { role: options.role } : {}),
+    ...(options.ariaLabelledBy ? { get ariaLabelledBy() { return options.ariaLabelledBy!(); } } : {}),
     get ariaHidden() { return !open(); },
     get "data-state"() { return open() ? "open" : "closed"; },
-  }, rest, {
-    get __zguiClass() { return classes("zui-collapsible__content"); },
+  }, rest), {
+    get __zguiClass() { return classes("zui-collapsible__content", options.contentClass); },
     get "data-collapsed"() { return !open() && collapsed() ? "" : null; },
     get __zguiStyle(): Exclude<NativeStyle, string> {
       const measured = height();
-      return { "--zui-collapsible-height": own["--zui-collapsible-height"] === undefined
+      return { "--zui-collapsible-height": props["--zui-collapsible-height"] === undefined
         ? measured === undefined ? null : `${measured}px`
-        : own["--zui-collapsible-height"] };
+        : props["--zui-collapsible-height"] };
     },
-    onFocus(event: NativeFocusEvent) { own.onFocus?.(event); setFocused(true); },
-    onBlur(event: NativeFocusEvent) { setFocused(false); own.onBlur?.(event); },
+    onFocus(event: NativeFocusEvent) { props.onFocus?.(event); setFocused(true); },
+    onBlur(event: NativeFocusEvent) { setFocused(false); props.onBlur?.(event); },
   }));
-  slot(inner, () => own.children);
+  if (!($PROXY in props) && Object.getOwnPropertyDescriptor(props, "children")?.get === undefined) {
+    slot(inner, props.children);
+  } else {
+    slot(inner, () => props.children);
+  }
   append(node, inner);
   observeGeometry(inner, "borderSize", size => setHeight(Math.ceil(size.height)));
   observeGeometry(node, "scrollPosition", value => setCollapsed(value.scrollport.height === 0));
-  effect(() => {
-    if (!open() && focused()) context?.restoreFocus();
+  effect(() => !open() && focused(), shouldRestore => {
+    if (shouldRestore) context?.restoreFocus();
   });
   return node;
 }

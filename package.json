@@ -29,7 +29,7 @@
     "@hewel/zgui-services": "workspace:*",
     "@stylexjs/stylex": "0.19.2",
     "oxlint": "1.94.0",
-    "solid-js": "1.9.19",
+    "solid-js": "2.0.1",
     "styleq": "0.2.1",
     "typescript": "7.0.2"
   }

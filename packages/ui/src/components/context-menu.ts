@@ -1,4 +1,4 @@
-import { batch, createSignal, onCleanup, splitProps, untrack } from "#solid";
+import { createSignal, onCleanup, omit, untrack } from "#solid";
 import { createElement, memo, mergeProps, spread } from "../renderer/index.js";
 import { getWindowRect } from "../nodes.js";
 import type {
@@ -11,7 +11,7 @@ import {
 } from "./menu-core.js";
 import { OverlayContext, createOverlayState, type OverlayRootProps } from "./overlay.js";
 import { callHandler } from "./state.js";
-import { append, classes, element, provide, slot, useStylesheet } from "./shared.js";
+import { append, classes, element, provide, slot, useStylesheet, withDefaults } from "./shared.js";
 import { sheet } from "./generated/ContextMenuStyle.js";
 
 export type { ContextMenuPlace, ContextMenuPoint };
@@ -38,10 +38,8 @@ export function ContextMenu(props: ContextMenuProps = {}): NativeChild {
     const rect = host ? getWindowRect(host) : null;
     const x = rect ? position.x - rect.x : position.x;
     const y = rect ? position.y - rect.y : position.y;
-    batch(() => {
-      setPoint({ x, y });
-      state.setOpen(true);
-    });
+    setPoint({ x, y });
+    state.setOpen(true);
   };
   const record: ContextMenuRecord = { place: { openAt }, point, setArea };
   return provide(OverlayContext, state, () =>
@@ -56,7 +54,7 @@ export function ContextMenuTrigger(props: ContextMenuTriggerProps = {}): NativeN
   const state = useMenuState();
   const context = useContextMenuRecord();
   const place = context?.place;
-  const [own, rest] = splitProps(props, ["children", "ref", "onContextMenu", "onPointerDown"]);
+  const rest = omit(props, "children", "ref", "onContextMenu", "onPointerDown");
   const area = createElement("box");
   context?.setArea(area);
   let alive = true;
@@ -64,27 +62,27 @@ export function ContextMenuTrigger(props: ContextMenuTriggerProps = {}): NativeN
     alive = false;
     context?.setArea(null);
   });
-  spread(area, mergeProps({
-    ariaHasPopup: "menu",
+  spread(area, mergeProps(rest, withDefaults({
+    ariaHasPopup: "menu" as const,
     get expanded() { return state?.open() ?? false; },
     get ariaControls() { return state?.content.node() ?? null; },
     get "data-state"() { return state?.open() ? "open" : "closed"; },
-  }, rest, {
+  }, rest), {
     get __zguiClass() { return classes(sheet.className, "zui-context-menu__area"); },
     onContextMenu(event: NativeContextMenuEvent) {
-      if (!callHandler(event, own.onContextMenu) || !alive || rest.disabled) return;
+      if (!callHandler(event, props.onContextMenu) || !alive || rest.disabled) return;
       event.preventDefault();
       place?.openAt(event.position);
     },
     onPointerDown(event: NativePointerDownEvent) {
-      if (!callHandler(event, own.onPointerDown) || !alive || rest.disabled) return;
+      if (!callHandler(event, props.onPointerDown) || !alive || rest.disabled) return;
       if (event.button === "secondary") {
         event.preventDefault();
         place?.openAt(event.position);
       }
     },
   }), true);
-  if (typeof own.ref === "function") own.ref(area);
+  if (typeof props.ref === "function") props.ref(area);
   const anchor = element("box", {
     class: "zui-context-menu__anchor",
     ariaHidden: true,
@@ -95,10 +93,10 @@ export function ContextMenuTrigger(props: ContextMenuTriggerProps = {}): NativeN
   });
   state?.trigger.ref(anchor);
   append(area, anchor);
-  slot(area, memo(() => own.children), anchor);
+  slot(area, memo(() => props.children), anchor);
   return area;
 }
 
 export function ContextMenuContent(props: ContextMenuContentProps = {}): NativeChild {
-  return MenuContent(mergeProps({ placement: { side: "bottom", align: "start" } as const, offset: 0 }, props));
+  return MenuContent(mergeProps(props, withDefaults({ placement: { side: "bottom", align: "start" } as const, offset: 0 }, props)));
 }

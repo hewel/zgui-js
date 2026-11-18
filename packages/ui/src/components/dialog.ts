@@ -1,4 +1,4 @@
-import { splitProps, useContext } from "#solid";
+import { omit, useContext } from "#solid";
 import { memo, mergeProps } from "../renderer/index.js";
 import type { NativeChild, NativeElementProps, NativeEvent, NativeNode } from "../types.js";
 import type { ButtonProps } from "./button.js";
@@ -6,7 +6,7 @@ import { Icon, CROSS } from "./icons.js";
 import { OverlayContext, OverlayRoot, modalSurface, overlayClose, overlayDescription, overlayTitle, overlayTrigger } from "./overlay.js";
 import type { OverlayRootProps } from "./overlay.js";
 import { callHandler } from "./state.js";
-import { classes, element, forbidChildren, part, useStylesheet } from "./shared.js";
+import { classes, element, forbidChildren, part, useStylesheet, withDefaults } from "./shared.js";
 import { sheet } from "./generated/DialogStyle.js";
 
 export type DialogProps = OverlayRootProps;
@@ -37,11 +37,11 @@ export function DialogDismiss(props: DialogDismissProps = {}): NativeNode {
   useStylesheet(sheet);
   forbidChildren("DialogDismiss", props);
   const context = useContext(OverlayContext);
-  const [own, rest] = splitProps(props, ["onClick"]);
-  return element("control", mergeProps({ tabIndex: 0, role: "button" as const, ariaLabel: "Close" }, rest, {
+  const rest = omit(props, "onClick");
+  return element("control", mergeProps(rest, withDefaults({ tabIndex: 0, role: "button" as const, ariaLabel: "Close" }, rest), {
     get __zguiClass() { return classes("zui-dialog__dismiss"); },
     onClick(event: NativeEvent) {
-      if (callHandler(event, own.onClick) && !props.disabled) context?.setOpen(false);
+      if (callHandler(event, props.onClick) && !props.disabled) context?.setOpen(false);
     },
     get children() { return Icon({ icon: CROSS }); },
   }));
@@ -59,9 +59,9 @@ export function DialogDescription(props: DialogDescriptionProps = {}): NativeNod
 
 export function DialogFooter(props: DialogFooterProps = {}): NativeNode {
   useStylesheet(sheet);
-  const [own, rest] = splitProps(props, ["children", "closeControl"]);
-  const content = memo(() => own.children);
-  const close = memo(() => own.closeControl ? DialogClose({ variant: "outline", children: "Close" }) : null);
+  const rest = omit(props, "children", "closeControl");
+  const content = memo(() => props.children);
+  const close = memo(() => props.closeControl ? DialogClose({ variant: "outline", children: "Close" }) : null);
   return element("row", mergeProps(rest, {
     get __zguiClass() { return classes("zui-dialog__footer"); },
     get children() { return [content, close]; },
@@ -71,16 +71,16 @@ export function DialogFooter(props: DialogFooterProps = {}): NativeNode {
 export function DialogContent(props: DialogContentProps = {}): NativeChild {
   useStylesheet(sheet);
   const context = useContext(OverlayContext);
-  const [own, rest] = splitProps(props, ["children", "dismissControl"]);
-  return modalSurface(context, mergeProps({
+  const rest = omit(props, "children", "dismissControl");
+  return modalSurface(context, mergeProps(rest, withDefaults({
     get ariaLabelledBy() { return context?.title.node() ?? null; },
     get ariaDescribedBy() { return context?.description.node() ?? null; },
-  }, rest), {
+  }, rest)), {
     class: `${sheet.className} zui-dialog`,
     role: "dialog",
     children() {
-      const content = memo(() => own.children);
-      const close = memo(() => (own.dismissControl ?? true) ? DialogDismiss() : null);
+      const content = memo(() => props.children);
+      const close = memo(() => (props.dismissControl ?? true) ? DialogDismiss() : null);
       return [content, close];
     },
   });

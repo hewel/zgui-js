@@ -1,15 +1,15 @@
 {
   "actionSequence": 0,
-  "buildId": "sha256:4f78e261909cb6e1f43c6720d2c468725df61ad9db50f9ccd2c113bee92a5e85",
+  "buildId": "sha256:fe987467c0ecd5875ceecc8c57324861bfdbbcb8d744fb3a4050201de67ad693",
   "configurationId": 2,
   "documentIdentity": "DocumentId(0)",
   "generation": 1,
   "layoutDocumentCoherent": true,
-  "layoutRevision": 31,
+  "layoutRevision": 37,
   "metadataRevision": 3,
   "pixelPresentation": {
     "configurationId": 2,
-    "documentRevision": 31,
+    "documentRevision": 37,
     "drawId": 1,
     "frame": {
       "drawId": 1,
@@ -42,7 +42,7 @@
     "targetFormat": "Bgra8Unorm",
     "vendor": 4098
   },
-  "requiredStateRevision": 31,
+  "requiredStateRevision": 37,
   "resourceRevision": 1,
   "resources": {
     "allowedPendingAssets": [],
@@ -63,7 +63,7 @@
   "surface": "main",
   "surfaceConfiguration": 0,
   "timingDeterministic": true,
-  "validatedStateRevision": 31,
+  "validatedStateRevision": 37,
   "validationFrame": {
     "drawId": 1,
     "ordinal": 1,

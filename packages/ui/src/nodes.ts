@@ -1,4 +1,5 @@
 import { getOwner, onCleanup } from "#solid";
+import { flush } from "./renderer/index.js";
 import type { NativeHost } from "./host.js";
 import type { NativeDismissLayer, NativeDismissLayerOptions, NativeDismissReason, NativeFocusOptions, NativeFocusTrapOptions, NativeGeometry, NativeGeometryKind, NativeNode, NativeWindowRect } from "./types.js";
 
@@ -29,7 +30,10 @@ export function precedes(first: NativeNode, second: NativeNode): boolean {
 }
 
 export function observeGeometry<K extends NativeGeometryKind>(node: NativeNode, kind: K, callback: (value: NativeGeometry[K]) => void): () => void {
-  const dispose = globalThis.__zgui.observeGeometry(node, kind, callback);
+  const dispose = globalThis.__zgui.observeGeometry(node, kind, value => {
+    callback(value);
+    flush();
+  });
   if (getOwner()) onCleanup(dispose);
   return dispose;
 }

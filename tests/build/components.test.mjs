@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { createHost, moduleFor } from "./native-fixture.mjs";
 
 const fixture = `
-import { createSignal, renderApp } from "@hewel/zgui";
+import { createSignal, flush, renderApp } from "@hewel/zgui";
 import type { NativeChild, NativeNode, NativeRole } from "@hewel/zgui";
 import {
   AspectRatio, Badge, Button, ButtonGroupSeparator, Card, CardAction, CardContent, CardHeader,
@@ -35,6 +35,7 @@ let clicks = 0;
 export const api = {
   clicks: () => clicks,
   icons: { CHECK, INFO },
+  flush,
   setVariant, setSize, setCallerClass, setMarker, setBadgeVariant, setScheme,
   setNestedTheme, setNested, setSibling, setActionA, setActionB, setIcon, setLabel,
   setButtonRole, setRatio, setRatioOverride,
@@ -127,6 +128,7 @@ test("reactive props keep native identity and shared sheets deduplicate", async 
   mod.api.setSize("lg");
   mod.api.setCallerClass("later");
   mod.api.setMarker("two");
+  harness.flush();
   assert.equal(harness.byTestId("button"), button);
   assert.equal(button.props.get("data-variant"), "secondary");
   assert.equal(button.props.get("data-size"), "lg");
@@ -137,6 +139,7 @@ test("reactive props keep native identity and shared sheets deduplicate", async 
 
   const badge = harness.byTestId("badge");
   mod.api.setBadgeVariant("success");
+  harness.flush();
   assert.equal(badge.props.get("data-variant"), "success");
   assert.match(badge.props.get("class"), /\bzui-badge--success\b/);
 
@@ -148,9 +151,11 @@ test("reactive props keep native identity and shared sheets deduplicate", async 
   assert.ok(roleButton);
   assert.equal(roleButton.props.get("role"), "button");
   mod.api.setButtonRole("tab");
+  harness.flush();
   assert.equal(harness.byTestId("role-button"), roleButton);
   assert.equal(roleButton.props.get("role"), "tab");
   mod.api.setButtonRole(undefined);
+  harness.flush();
   assert.equal(roleButton.props.get("role"), "button");
 
   const buttonSheets = harness.installs.filter(name => name === "ButtonStyle");
@@ -170,9 +175,11 @@ test("aspect ratio caller override wins and invalid ratios reject at mount", asy
   assert.ok(ratioNode);
   assert.equal(ratioNode.props.get("--zui-aspect-ratio"), "3");
   mod.api.setRatioOverride("4");
+  harness.flush();
   assert.equal(harness.byTestId("ratio"), ratioNode);
   assert.equal(ratioNode.props.get("--zui-aspect-ratio"), "4");
   mod.api.setRatioOverride(undefined);
+  harness.flush();
   assert.equal(ratioNode.props.get("--zui-aspect-ratio"), "2");
 
   for (const bad of [0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
@@ -200,12 +207,14 @@ test("theme provider replaces one sheet per provider and scopes nested tokens", 
   assert.doesNotMatch(lightCss, /@media/);
 
   mod.api.setScheme("dark");
+  harness.flush();
   const dark = rootSheet(harness);
   assert.equal(dark[0], key);
   assert.match(dark[1], /color-scheme: dark/);
   assert.doesNotMatch(dark[1], /@media/);
 
   mod.api.setScheme("system");
+  harness.flush();
   const system = rootSheet(harness);
   assert.equal(system[0], key);
   assert.match(system[1], /@media \(prefers-color-scheme: dark\)/);
@@ -228,6 +237,7 @@ test("nested theme override, invalid override, and sibling provider lifetimes", 
   const [rootKey, rootCss] = rootSheet(harness);
 
   mod.api.setNested(true);
+  harness.flush();
   const nestedEntries = [...harness.stylesheets.entries()].filter(([name, css]) =>
     name !== rootKey && css.includes(".zui-theme-"));
   assert.equal(nestedEntries.length, 1);
@@ -239,49 +249,72 @@ test("nested theme override, invalid override, and sibling provider lifetimes", 
   assert.equal(harness.stylesheets.get(rootKey), rootCss);
 
   mod.api.setNestedTheme({ preset: "ocean", tokens: { "--zui-color-primary": "#102030" } });
+  harness.flush();
   const overridden = harness.stylesheets.get(nestedKey);
   assert.match(overridden, /--zui-color-primary: #102030/);
   assert.equal(harness.stylesheets.get(rootKey), rootCss);
 
   assert.throws(
-    () => mod.api.setNestedTheme({ preset: "ocean", tokens: { "--zui-color-primary": "#fff;behavior" } }),
+    () => {
+      mod.api.setNestedTheme({ preset: "ocean", tokens: { "--zui-color-primary": "#fff;behavior" } });
+      mod.api.flush();
+      harness.flush();
+    },
     TypeError,
   );
   assert.equal(harness.stylesheets.get(nestedKey), overridden);
   assert.throws(
-    () => mod.api.setNestedTheme({ tokens: { "--zui-bogus": "red" } }),
+    () => {
+      mod.api.setNestedTheme({ tokens: { "--zui-bogus": "red" } });
+      mod.api.flush();
+      harness.flush();
+    },
     TypeError,
   );
   assert.equal(harness.stylesheets.get(nestedKey), overridden);
-  assert.throws(() => mod.api.setNestedTheme({ preset: "neptune" }), TypeError);
+  assert.throws(() => {
+    mod.api.setNestedTheme({ preset: "neptune" });
+    mod.api.flush();
+    harness.flush();
+  }, TypeError);
   assert.equal(harness.stylesheets.get(nestedKey), overridden);
   for (const preset of ["toString", "constructor", "__proto__"]) {
-    assert.throws(() => mod.api.setNestedTheme({ preset }), TypeError);
+    assert.throws(() => {
+      mod.api.setNestedTheme({ preset });
+      mod.api.flush();
+      harness.flush();
+    }, TypeError);
     assert.equal(harness.stylesheets.get(nestedKey), overridden);
   }
   mod.api.setNestedTheme({ preset: "ember" });
+  harness.flush();
   assert.notEqual(harness.stylesheets.get(nestedKey), overridden);
   mod.api.setNestedTheme({ preset: "ocean", tokens: { "--zui-color-primary": "#102030" } });
+  harness.flush();
   assert.equal(harness.stylesheets.get(nestedKey), overridden);
 
   const firstNestedBadge = harness.byTestId("nested-badge");
   assert.ok(firstNestedBadge);
   mod.api.setNested(false);
+  harness.flush();
   assert.equal(harness.stylesheets.has(nestedKey), false);
   assert.equal(harness.stylesheets.get(rootKey), rootCss);
   assert.equal(harness.byTestId("nested-badge"), undefined);
   mod.api.setNested(true);
+  harness.flush();
   const recreatedNestedBadge = harness.byTestId("nested-badge");
   assert.ok(recreatedNestedBadge);
   assert.notEqual(recreatedNestedBadge, firstNestedBadge);
   assert.equal(harness.stylesheets.get(rootKey), rootCss);
 
   mod.api.setSibling(true);
+  harness.flush();
   const siblingEntries = [...harness.stylesheets.entries()].filter(([_name, css]) => css.includes(":root"));
   assert.equal(siblingEntries.length, 2);
   const names = new Set(siblingEntries.map(([name]) => name));
   assert.equal(names.size, 2);
   mod.api.setSibling(false);
+  harness.flush();
   assert.equal([...harness.stylesheets.values()].filter(css => css.includes(":root")).length, 1);
   assert.ok(harness.stylesheets.get(rootKey));
 });
@@ -299,13 +332,16 @@ test("card header keeps the action layout until the last action unmounts", async
   const firstActionA = harness.byTestId("action-a");
 
   mod.api.setActionB(false);
+  harness.flush();
   assert.equal(harness.byTestId("action-b"), undefined);
   assert.match(header.props.get("class"), /zui-card__header--action/);
 
   mod.api.setActionA(false);
+  harness.flush();
   assert.doesNotMatch(header.props.get("class"), /zui-card__header--action/);
 
   mod.api.setActionA(true);
+  harness.flush();
   const recreated = harness.byTestId("action-a");
   assert.ok(recreated);
   assert.notEqual(recreated, firstActionA);
@@ -330,14 +366,17 @@ test("icon stays one node across data and label changes and rejects children laz
   assert.equal(icon.props.get("ariaHidden"), true);
 
   mod.api.setIcon(mod.api.icons.INFO);
+  harness.flush();
   assert.equal(harness.byTestId("icon"), icon);
   assert.equal(icon.props.get("data-icon"), "info");
   assert.equal(icon.props.get("d"), mod.api.icons.INFO.d);
 
   mod.api.setLabel("More information");
+  harness.flush();
   assert.equal(icon.props.get("ariaHidden"), undefined);
   assert.equal(icon.props.get("ariaLabel"), "More information");
   mod.api.setLabel(null);
+  harness.flush();
   assert.equal(icon.props.get("ariaHidden"), true);
 
   let evaluated = 0;

@@ -147,10 +147,12 @@ test("checkbox toggles through mixed, true, false with one callback per click", 
   assert.deepEqual(mod.api.log.check, [true, false]);
 
   mod.api.setCheckDefault(false);
+  harness.flush();
   assert.equal(check.props.get("checked"), false);
   harness.dispatch(check, "Click");
   assert.equal(check.props.get("checked"), true);
   mod.api.setCheckDefault("mixed");
+  harness.flush();
   assert.equal(check.props.get("checked"), true);
 });
 
@@ -165,20 +167,24 @@ test("controlled checkbox proposes state and a disabled or cancelled click does 
   assert.equal(controlled.props.get("data-state"), "unchecked");
 
   mod.api.setAcceptCheck(true);
+  harness.flush();
   harness.dispatch(controlled, "Click");
   assert.deepEqual(mod.api.log.controlled, [true, true]);
   assert.equal(controlled.props.get("checked"), true);
 
   mod.api.setControlledCheck("mixed");
+  harness.flush();
   assert.equal(controlled.props.get("checked"), "mixed");
   assert.equal(mod.api.log.controlled.length, 2);
 
   mod.api.setControlledCheck(undefined);
+  harness.flush();
   harness.dispatch(controlled, "Click");
   assert.equal(controlled.props.get("checked"), true);
   assert.equal(mod.api.log.controlled.length, 3);
 
   mod.api.setCheckDisabled(true);
+  harness.flush();
   const check = harness.byTestId("check");
   const before = mod.api.log.check.length;
   harness.dispatch(check, "Click");
@@ -186,9 +192,11 @@ test("controlled checkbox proposes state and a disabled or cancelled click does 
 
   mod.api.setCheckDisabled(false);
   mod.api.setCheckCancel(true);
+  harness.flush();
   harness.dispatch(check, "Click");
   assert.equal(mod.api.log.check.length, before);
   mod.api.setCheckCancel(false);
+  harness.flush();
   harness.dispatch(check, "Click");
   assert.equal(mod.api.log.check.length, before + 1);
 });
@@ -221,9 +229,11 @@ test("switch and toggle share the controllable primitive and press requests acti
   harness.dispatch(check, "PointerDown", { button: "secondary", activateNow: () => { activations.count += 1; } });
   assert.equal(activations.count, 1);
   mod.api.setSwitchDisabled(true);
+  harness.flush();
   harness.dispatch(sw, "PointerDown", { button: "primary", activateNow: () => { activations.count += 1; } });
   assert.equal(activations.count, 1);
   mod.api.setSwitchDisabled(false);
+  harness.flush();
 
   assert.equal(toggle.props.get("data-state"), "on");
   assert.equal(typeof toggle.callbacks.onPointerDown, "undefined");
@@ -250,19 +260,23 @@ test("input and textarea use native editing, compose input handlers, and forward
   assert.equal(input.props.get("value"), "é🙂");
 
   mod.api.setInputValue("programmatic");
+  harness.flush();
   assert.equal(input.props.get("value"), "programmatic");
   assert.equal(mod.api.log.valueChanges.length, 1);
 
   assert.equal(secure.props.get("role"), "textInput");
   assert.equal(secure.props.get("secure"), false);
   mod.api.setSecure(true);
+  harness.flush();
   assert.equal(secure.props.get("role"), "passwordInput");
   assert.equal(secure.props.get("secure"), true);
 
   mod.api.setPlaceholder('say "hi"\nbye');
+  harness.flush();
   assert.equal(secure.props.get("placeholder"), 'say "hi"\nbye');
   assert.equal(secure.props.get("--zui-field-placeholder"), '"say \\"hi\\"\\A bye"');
   mod.api.setPlaceholder(null);
+  harness.flush();
   assert.equal(secure.props.has("--zui-field-placeholder"), false);
   assert.equal(secure.props.has("placeholder"), false);
 });
@@ -282,6 +296,7 @@ test("label resolves its control accessor at click time and forwards relations",
 
   harness.host.focus(label);
   mod.api.setLabelCancel(true);
+  harness.flush();
   harness.dispatch(label, "Click");
   assert.equal(harness.focused.current, label);
   assert.equal(mod.api.log.labelClicks, 2);
@@ -301,12 +316,15 @@ test("progress clamps and reports determinate and indeterminate states", async t
   assert.match(progress.children[0].props.get("class"), /zui-progress__fill/);
 
   mod.api.setProgressValue(-5);
+  harness.flush();
   assert.equal(progress.props.get("ariaValueNow"), 0);
   assert.equal(progress.props.get("--zui-progress-fraction"), "0.0000%");
   mod.api.setProgressValue(150);
+  harness.flush();
   assert.equal(progress.props.get("ariaValueNow"), 100);
   assert.equal(progress.props.get("--zui-progress-fraction"), "100.0000%");
   mod.api.setProgressValue(null);
+  harness.flush();
   assert.equal(progress.props.has("ariaValueNow"), false);
   assert.equal(progress.props.has("--zui-progress-fraction"), false);
   assert.equal(progress.props.get("data-state"), "indeterminate");
@@ -342,14 +360,17 @@ test("alert, spinner, and skeleton carry busy and live semantics", async t => {
   assert.equal(skeleton.props.get("ariaBusy"), true);
 
   mod.api.setAlertVariant("destructive");
+  harness.flush();
   assert.equal(alert.children[0].props.get("data-icon"), "alert-triangle");
   assert.match(alert.props.get("class"), /\bzui-alert--destructive\b/);
   mod.api.setAlertLive(false);
+  harness.flush();
   assert.equal(alert.props.get("role"), "group");
   assert.equal(alert.props.has("ariaLive"), false);
   mod.api.setAlertVariant("default");
 
   mod.api.setAlertIcon(false);
+  harness.flush();
   assert.equal(alert.children[0], title);
   assert.equal(alert.children[1], body);
   assert.equal(alert.children.includes(mark), false);
@@ -357,6 +378,7 @@ test("alert, spinner, and skeleton carry busy and live semantics", async t => {
 
   mod.api.setAlertVariant("destructive");
   mod.api.setAlertIcon(true);
+  harness.flush();
   const revealed = alert.children[0];
   assert.notEqual(revealed, mark);
   assert.equal(revealed.tag, "vector");
@@ -368,6 +390,7 @@ test("alert, spinner, and skeleton carry busy and live semantics", async t => {
   const iconless = harness.byTestId("iconless");
   assert.notEqual(iconless.children[0].tag, "vector");
   mod.setIconlessIcon(true);
+  harness.flush();
   assert.equal(iconless.children[0].tag, "vector");
   disposeIconless();
 });

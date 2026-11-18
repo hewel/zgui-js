@@ -1,7 +1,7 @@
 import path from "node:path";
 import { transformAsync } from "@babel/core";
 import typescriptPreset from "@babel/preset-typescript";
-import solidPreset from "babel-preset-solid";
+import solidBabelPlugin from "@solidjs/babel-plugin";
 import { rolldown, watch as watchCompiler } from "rolldown";
 import { validateImport, validateModule, validateGraph } from "./validate.mjs";
 import { realpath } from "node:fs/promises";
@@ -9,7 +9,7 @@ import { moduleIdentity } from "./identity.mjs";
 import { stylexPlugin, stylexOptions, styleSystem, readNativeProfileDigest, validateStylexModule, finalizeStylex } from "./stylex.mjs";
 
 // Babel owns JSX lowering; Rolldown composes this map with its ES2022 output map.
-function compilerOptions(entry, { root, appDirectory = path.dirname(entry), plugins = [], babelTransform = transformAsync, stylexDiagnostics = false }) {
+function compilerOptions(entry, { root, appDirectory = path.dirname(entry), plugins = [], babelTransform = transformAsync, stylexDiagnostics = false, development = false }) {
   // Rolldown 1.3.2 watch rescans the graph even with incrementalBuild enabled.
   // Keep expensive Babel/Solid work incremental without caching resolution or diagnostics.
   const transforms = new Map();
@@ -22,11 +22,11 @@ function compilerOptions(entry, { root, appDirectory = path.dirname(entry), plug
     cwd: appDirectory, input: path.resolve(entry), platform: "neutral",
     experimental: { attachDebugInfo: "none" },
     resolve: {
-      conditionNames: ["browser", "production", "import", "default"],
+      conditionNames: [development ? "development" : "production", "browser", "import", "default"],
       mainFields: ["module", "main"],
       modules: ["node_modules", path.join(appDirectory, "node_modules"), path.join(root, "node_modules")],
     },
-    transform: { target: "es2022", define: { "process.env.NODE_ENV": '"production"' } },
+    transform: { target: "es2022", define: { "process.env.NODE_ENV": development ? '"development"' : '"production"' } },
     onwarn(warning, warn) {
       if (warning.code === "UNRESOLVED_IMPORT") throw new Error(warning.message);
       warn(warning);
@@ -82,7 +82,7 @@ function compilerOptions(entry, { root, appDirectory = path.dirname(entry), plug
         const transformed = await babelTransform(first.code, {
           filename, babelrc: false, configFile: false, sourceMaps: true, inputSourceMap: first.map,
           presets: [
-            [solidPreset, { generate: "universal", moduleName: "@hewel/zgui/renderer", hydratable: false }],
+            { plugins: [[solidBabelPlugin, { generate: "universal", moduleName: "@hewel/zgui/renderer", dev: development }]] },
             [typescriptPreset, { onlyRemoveTypeImports: true, allExtensions: true, isTSX: /\.tsx$/.test(filename) }],
           ],
         });
@@ -136,12 +136,13 @@ export async function compileBundle(entry, {
   hostEntry = true,
   filename = "app.mjs",
   stylexDiagnostics = false,
+  development = false,
   babelTransform = transformAsync,
   plugins = [],
 } = {}) {
   let result;
   const compiler = await rolldown(compilerOptions(entry, {
-    root, appDirectory, stylexDiagnostics, babelTransform,
+    root, appDirectory, stylexDiagnostics, development, babelTransform,
     plugins: [{
       name: "capture-native-graph",
       generateBundle(_options, output) {
@@ -164,6 +165,7 @@ export function watchBundle(entry, {
   filename = "app.mjs",
   buildDelay = 80,
   stylexDiagnostics = false,
+  development = false,
   babelTransform = transformAsync,
   watchFiles = [],
   onAttempt,
@@ -177,7 +179,7 @@ export function watchBundle(entry, {
   };
   const watcher = watchCompiler({
     ...compilerOptions(entry, {
-      root, appDirectory, stylexDiagnostics, babelTransform,
+      root, appDirectory, stylexDiagnostics, development, babelTransform,
       plugins: [{
         name: "immutable-native-compilation",
         async buildStart() {

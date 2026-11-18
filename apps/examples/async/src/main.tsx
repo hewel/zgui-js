@@ -1,4 +1,4 @@
-import { Show, createSignal, onCleanup, onMount, renderApp } from "@hewel/zgui";
+import { Show, createSignal, onCleanup, onSettled, renderApp } from "@hewel/zgui";
 import type { NativeNode } from "@hewel/zgui";
 import { readTextAsset } from "@hewel/zgui-services";
 import type { HostRequest } from "@hewel/zgui-services";
@@ -27,7 +27,7 @@ function AsyncStatus() {
     request?.cancel();
   });
 
-  onMount(() => {
+  onSettled(() => {
     frame = requestAnimationFrame(() => {
       frame = undefined;
       setFrameStatus("Frame: fired");

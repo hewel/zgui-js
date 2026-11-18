@@ -160,7 +160,7 @@ async function mounted(t, mountName = "mount") {
     return h.dispatch(node, "KeyDown", extras);
   };
   const active = records => records.filter(r => r.active).length;
-  const flush = () => { clock.frame(); clock.advance(0); };
+  const flush = () => { h.flush(); clock.frame(); clock.advance(0); };
   return { h, mod, clock, traps, layers, portals, geometry, send, key, active, flush, finish: () => { const stop = dispose; dispose = undefined; stop?.(); } };
 }
 

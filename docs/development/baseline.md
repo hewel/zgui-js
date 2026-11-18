@@ -23,10 +23,10 @@ below is retained and does not describe the currently shipped API or test suite.
 | QuickJS-NG | Resolved submodule `6d46d07d04041b40f4f49eaa7fdebe44c314c699` |
 | Node | Tested build tooling on 26.13.0 |
 | pnpm | 12.18.0 |
-| Solid / babel-preset-solid | Exact registry versions 1.9.19 / 1.9.19 |
+| Solid / Universal / Signals | Exact registry versions `solid-js` 2.0.1 / `@solidjs/universal` 2.0.1 / `@solidjs/signals` 2.0.1 |
 | StyleX compiler / runtime | Exact registry versions `@stylexjs/babel-plugin` 0.19.2 / `@stylexjs/stylex` 0.19.2; release tag `d7e6174c5384c64b87bc5fde1f57eedd7c11c5aa` |
 | StyleX merge dependency | `styleq` 0.2.1 |
-| JSX compiler | babel-plugin-jsx-dom-expressions 0.40.14 |
+| JSX compiler | `@solidjs/babel-plugin` 2.0.1 |
 | Babel core / TypeScript preset | 7.29.13 / 7.29.7 |
 | Rolldown / TypeScript | 1.3.2 / 7.0.2 |
 | Oxlint | 1.94.0 (`--deny-warnings` + `tools/oxlint-zgui-plugin.mjs`) |

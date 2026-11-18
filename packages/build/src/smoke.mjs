@@ -9,8 +9,12 @@ export async function buildSmoke() {
   const outfile = "solid-smoke.mjs";
   const result = await bundle(path.join(root, fixture), { root, appDirectory: root, hostEntry: false, filename: outfile });
   const inputs = result.graph.modules.map(filename => path.relative(root, filename));
-  // The smoke fixture must contain only itself and the production reactive runtime.
-  if (inputs.length !== 2 || !inputs.includes(fixture) || !result.solidRuntime.endsWith("/solid-js/dist/solid.js")) {
+  // The smoke fixture must contain only itself and the production Solid/Signals runtime modules.
+  const isAllowedModule = input =>
+    input === fixture ||
+    input.includes("/solid-js/dist/") ||
+    input.includes("/@solidjs/signals/dist/prod/");
+  if (!inputs.includes(fixture) || !inputs.every(isAllowedModule) || !result.solidRuntime) {
     throw new Error(`Unexpected smoke module graph: ${JSON.stringify(inputs)}`);
   }
   const output = result.graph.chunks[0];

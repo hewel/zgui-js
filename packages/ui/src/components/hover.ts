@@ -1,11 +1,19 @@
-import { createContext, createEffect, createSignal, onCleanup, splitProps, untrack, useContext } from "#solid";
+import {
+  createContext,
+  createEffect,
+  createSignal,
+  onCleanup,
+  omit,
+  untrack,
+  useContext,
+} from "#solid";
 import { mergeProps } from "../renderer/index.js";
 import type { Accessor, NativeChild, NativeElementProps, NativeFocusEvent, NativeKeyEvent, NativeNode, NativePointerBoundaryEvent, NativeRole } from "../types.js";
 import { anchoredSurface, OverlayContext, OverlayRoot } from "./overlay.js";
 import type { AnchoredContentProps, OverlayRootProps, OverlayState } from "./overlay.js";
 import { createDelayed } from "./delay.js";
 import { callHandler } from "./state.js";
-import { classes, element, provide, type Stylesheet, useStylesheet } from "./shared.js";
+import { classes, element, provide, type Stylesheet, useStylesheet, withDefaults } from "./shared.js";
 
 export interface HoverProps extends OverlayRootProps { delay?: number; closeDelay?: number; }
 interface Showing { state: OverlayState; setInstant(value: boolean): void; closeNow(): void; }
@@ -36,7 +44,7 @@ function createHoverIntent(state: OverlayState, delay: Accessor<number>, closeDe
     handoff?.takeOver(me);
     if (alive) state.setOpen(true);
   };
-  createEffect(() => { if (!state.open()) cancel(); });
+  createEffect(() => state.open(), open => { if (!open) cancel(); });
   onCleanup(() => { alive = false; cancel(); handoff?.clear(me); });
   return { state, instant, closeNow,
     openNow() { cancel(); show(); },
@@ -46,7 +54,7 @@ function createHoverIntent(state: OverlayState, delay: Accessor<number>, closeDe
 }
 
 export type HoverIntent = ReturnType<typeof createHoverIntent>;
-export const HoverContext = createContext<HoverIntent>();
+export const HoverContext = createContext<HoverIntent | null>(null);
 
 export function HoverRoot(props: HoverProps, defaults: {
   delay: Accessor<number>; closeDelay: Accessor<number>; handoff?: ReturnType<typeof createHandoff>;
@@ -66,22 +74,22 @@ export function hoverTrigger(config: {
 }, props: NativeElementProps = {}): NativeNode {
   useStylesheet(config.sheet);
   const intent = useContext(HoverContext), state = intent?.state;
-  const [own, rest] = splitProps(props, ["ref", "onPointerEnter", "onPointerLeave", "onFocus", "onBlur", "onKeyDown"]);
+  const rest = omit(props, "ref", "onPointerEnter", "onPointerLeave", "onFocus", "onBlur", "onKeyDown");
   return element("box", mergeProps(
-    config.attrs(state),
-    { get "data-state"() { return state?.open() ? "open" : "closed"; } },
     rest,
+    withDefaults(config.attrs(state), rest),
+    withDefaults({ get "data-state"() { return state?.open() ? "open" : "closed"; } }, rest),
     {
       get __zguiClass() { return classes(config.class); },
-      ref(node: NativeNode) { state?.trigger.ref(node); if (typeof own.ref === "function") own.ref(node); },
-      onPointerEnter(event: NativePointerBoundaryEvent) { if (callHandler(event, own.onPointerEnter)) intent?.enter(); },
-      onPointerLeave(event: NativePointerBoundaryEvent) { if (callHandler(event, own.onPointerLeave)) intent?.leave(); },
+      ref(node: NativeNode) { state?.trigger.ref(node); if (typeof props.ref === "function") props.ref(node); },
+      onPointerEnter(event: NativePointerBoundaryEvent) { if (callHandler(event, props.onPointerEnter)) intent?.enter(); },
+      onPointerLeave(event: NativePointerBoundaryEvent) { if (callHandler(event, props.onPointerLeave)) intent?.leave(); },
       onFocus(event: NativeFocusEvent) {
-        if (callHandler(event, own.onFocus) && (config.focus === "always" || event.cause === "keyboard")) intent?.openNow();
+        if (callHandler(event, props.onFocus) && (config.focus === "always" || event.cause === "keyboard")) intent?.openNow();
       },
-      onBlur(event: NativeFocusEvent) { if (callHandler(event, own.onBlur)) intent?.closeNow(); },
+      onBlur(event: NativeFocusEvent) { if (callHandler(event, props.onBlur)) intent?.closeNow(); },
       onKeyDown(event: NativeKeyEvent) {
-        if (callHandler(event, own.onKeyDown) && event.character == null && event.key === "Escape" && state?.open()) {
+        if (callHandler(event, props.onKeyDown) && event.character == null && event.key === "Escape" && state?.open()) {
           event.stopPropagation();
           intent?.closeNow();
         }
@@ -94,18 +102,18 @@ export function hoverSurface(config: {
   sheet: Stylesheet;
   class: string;
   role: NativeRole;
-  attrs?: (intent: HoverIntent | undefined) => NativeElementProps;
+  attrs?: (intent: HoverIntent | null | undefined) => NativeElementProps;
 }, props: AnchoredContentProps = {}): NativeChild {
   useStylesheet(config.sheet);
   const intent = useContext(HoverContext);
-  const [own, rest] = splitProps(props, ["onPointerEnter", "onPointerLeave"]);
+  const rest = omit(props, "onPointerEnter", "onPointerLeave");
   return anchoredSurface(intent?.state, mergeProps(
-    { dismissOnOutsidePress: false },
-    config.attrs ? config.attrs(intent) : {},
     rest,
+    withDefaults({ dismissOnOutsidePress: false }, rest),
+    withDefaults(config.attrs?.(intent) ?? {}, rest),
     {
-      onPointerEnter(event: NativePointerBoundaryEvent) { if (callHandler(event, own.onPointerEnter)) intent?.enter(); },
-      onPointerLeave(event: NativePointerBoundaryEvent) { if (callHandler(event, own.onPointerLeave)) intent?.leave(); },
+      onPointerEnter(event: NativePointerBoundaryEvent) { if (callHandler(event, props.onPointerEnter)) intent?.enter(); },
+      onPointerLeave(event: NativePointerBoundaryEvent) { if (callHandler(event, props.onPointerLeave)) intent?.leave(); },
     },
   ), { class: `${config.sheet.className} ${config.class}`, role: config.role, onDismiss: () => intent?.closeNow() });
 }

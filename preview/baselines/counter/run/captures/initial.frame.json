@@ -1,19 +1,19 @@
 {
   "actionSequence": 0,
   "allowedPendingAssets": [],
-  "buildId": "sha256:4f78e261909cb6e1f43c6720d2c468725df61ad9db50f9ccd2c113bee92a5e85",
+  "buildId": "sha256:fe987467c0ecd5875ceecc8c57324861bfdbbcb8d744fb3a4050201de67ad693",
   "captureId": "initial",
   "configurationId": 2,
   "documentIdentity": "DocumentId(0)",
   "generation": 1,
   "layoutDocumentCoherent": true,
-  "layoutRevision": 31,
+  "layoutRevision": 37,
   "metadataRevision": 3,
   "physicalHeight": 1050,
   "physicalWidth": 1400,
   "pixelPresentation": {
     "configurationId": 2,
-    "documentRevision": 31,
+    "documentRevision": 37,
     "drawId": 1,
     "frame": {
       "drawId": 1,
@@ -35,7 +35,7 @@
     "generation": 1,
     "nativeAcceptance": {
       "candidate": {
-        "buildId": "sha256:4f78e261909cb6e1f43c6720d2c468725df61ad9db50f9ccd2c113bee92a5e85",
+        "buildId": "sha256:fe987467c0ecd5875ceecc8c57324861bfdbbcb8d744fb3a4050201de67ad693",
         "id": "dev.example.counter",
         "styleSystem": {
           "configDigest": "sha256:33c7891b27d625d83284f9d24aef2ee1b62041f5b423dbd3b41411a61ccada45",
@@ -47,7 +47,7 @@
       "diagnostic": null,
       "document": "DocumentId(0)",
       "generation": 1,
-      "lastSuccessfulBuildId": "sha256:4f78e261909cb6e1f43c6720d2c468725df61ad9db50f9ccd2c113bee92a5e85",
+      "lastSuccessfulBuildId": "sha256:fe987467c0ecd5875ceecc8c57324861bfdbbcb8d744fb3a4050201de67ad693",
       "schemaVersion": 1,
       "status": "accepted"
     },
@@ -59,7 +59,7 @@
     "requiredAssetsReady": true,
     "requiredFontsReady": true,
     "requiredMetadataRevision": 3,
-    "requiredStateRevision": 31,
+    "requiredStateRevision": 37,
     "requiredStyleRevision": 3,
     "resourceRevision": 1,
     "timeUs": 0,
@@ -84,7 +84,7 @@
     "targetFormat": "Bgra8Unorm",
     "vendor": 4098
   },
-  "requiredStateRevision": 31,
+  "requiredStateRevision": 37,
   "resourceRevision": 1,
   "resources": {
     "allowedPendingAssets": [],
@@ -105,8 +105,8 @@
   "surface": "main",
   "surfaceConfiguration": 0,
   "timingDeterministic": true,
-  "treeDigest": "sha256:aa91b09a53a6dd82e2c7635850b70f7d951ffc51c527a38901740fcde478f200",
-  "validatedStateRevision": 31,
+  "treeDigest": "sha256:3a09ee7980d9a273304fb1dfd07f83b833a54f338614aed475dab2cd015d1b08",
+  "validatedStateRevision": 37,
   "validationFrame": {
     "drawId": 1,
     "ordinal": 1,

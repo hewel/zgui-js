@@ -18,9 +18,9 @@ function Content() {
 }
 
 export function mount(root: NativeNode) {
-  return renderApp(() => Context.Provider({ value: "kept", get children() {
-    return <column><Show when={shown()}><Portal layer="modal"><Content /></Portal></Show></column>;
-  } }), root);
+  return renderApp(() => <Context value="kept">
+    <column><Show when={shown()}><Portal layer="modal"><Content /></Portal></Show></column>
+  </Context>, root);
 }
 `;
 
@@ -62,8 +62,10 @@ test("portal mounts children on the requested band and keeps context", async t =
   assert.equal(textOf(counter), "kept:1");
 
   mod.toggle();
+  harness.flush();
   assert.equal(harness.byTestId("counter"), undefined);
   mod.toggle();
+  harness.flush();
   assert.equal(layers.length, 2, "remount creates a fresh portal");
   const remounted = harness.byTestId("counter");
   assert.ok(remounted);

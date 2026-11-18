@@ -22,7 +22,7 @@ function Form() {
   const [alertIcon, setAlertIcon] = createSignal(true);
   const [alertVariant, setAlertVariant] = createSignal<AlertVariant>("default");
   const [alertBodyPressed, setAlertBodyPressed] = createSignal(false);
-  let nameLabel: NativeNode | undefined;
+  const [nameLabel, setNameLabel] = createSignal<NativeNode>();
   let nameInput: NativeNode | undefined;
 
   return (
@@ -30,10 +30,10 @@ function Form() {
       <scroll class="form-scroll">
         <row class="form">
           <column class="form-column">
-            <Label testId="name-label" ref={node => { nameLabel = node; }}
+            <Label testId="name-label" ref={setNameLabel}
               control={() => nameInput}>Name</Label>
             <Input testId="name-input" ref={node => { nameInput = node; }}
-              ariaLabelledBy={nameLabel}
+              ariaLabelledBy={nameLabel()}
               value={name()} onValueChange={setName} />
             <text testId="name-value">Name: {name()}</text>
             <row class="form-row">

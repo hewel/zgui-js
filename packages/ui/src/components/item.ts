@@ -1,7 +1,7 @@
-import { createContext, createSignal, onCleanup, splitProps, useContext } from "#solid";
+import { createContext, createSignal, onCleanup, omit, useContext } from "#solid";
 import { createElement, mergeProps, spread } from "../renderer/index.js";
 import type { NativeElementProps, NativeNode } from "../types.js";
-import { classes, element, forbidChildren, part, provide, slot, useStylesheet } from "./shared.js";
+import { classes, element, forbidChildren, part, provide, slot, useStylesheet, withDefaults } from "./shared.js";
 import { sheet } from "./generated/ItemStyle.js";
 import { sheet as partSheet } from "./generated/ItemPartStyle.js";
 import { sheet as groupSheet } from "./generated/ItemGroupStyle.js";
@@ -20,7 +20,7 @@ export type ItemActionsProps = NativeElementProps;
 export type ItemHeaderProps = NativeElementProps;
 export type ItemFooterProps = NativeElementProps;
 
-const ItemContext = createContext<() => void>();
+const ItemContext = createContext<(() => void) | null>(null);
 
 export const ItemContent = part("box", partSheet, "zui-item__content");
 export const ItemTitle = part("label", partSheet, "zui-item__title");
@@ -31,21 +31,21 @@ export const ItemFooter = part("box", partSheet, "zui-item__footer");
 export function Item(props: ItemProps = {}): NativeNode {
   useStylesheet(sheet);
   useStylesheet(partSheet);
-  const [own, rest] = splitProps(props, ["variant", "size"]);
+  const rest = omit(props, "variant", "size");
   const [descriptions, setDescriptions] = createSignal(0);
   const node = createElement("box");
   spread(node, mergeProps(
-    {
-      get "data-variant"() { return own.variant ?? "default"; },
-      get "data-size"() { return own.size ?? "md"; },
-    },
     rest,
+    withDefaults({
+      get "data-variant"() { return props.variant ?? "default"; },
+      get "data-size"() { return props.size ?? "md"; },
+    }, rest),
     {
       get __zguiClass() {
         return classes(sheet.className, "zui-item",
-        own.variant === "outline" && "zui-item--outline",
-        own.variant === "muted" && "zui-item--muted",
-        own.size === "sm" && "zui-item--sm",
+        props.variant === "outline" && "zui-item--outline",
+        props.variant === "muted" && "zui-item--muted",
+        props.size === "sm" && "zui-item--sm",
         descriptions() > 0 && "zui-item--described", );
       },
     },
@@ -59,15 +59,15 @@ export function Item(props: ItemProps = {}): NativeNode {
 
 export function ItemMedia(props: ItemMediaProps = {}): NativeNode {
   useStylesheet(partSheet);
-  const [own, rest] = splitProps(props, ["variant"]);
+  const rest = omit(props, "variant");
   return element("box", mergeProps(
-    { get "data-variant"() { return own.variant ?? "default"; } },
     rest,
+    withDefaults({ get "data-variant"() { return props.variant ?? "default"; } }, rest),
     {
       get __zguiClass() {
         return classes("zui-item__media",
-        own.variant === "icon" && "zui-item__media--icon",
-        own.variant === "image" && "zui-item__media--image", );
+        props.variant === "icon" && "zui-item__media--icon",
+        props.variant === "image" && "zui-item__media--image", );
       },
     },
   ));
@@ -85,8 +85,8 @@ export function ItemSeparator(props: ItemSeparatorProps = {}): NativeNode {
   useStylesheet(groupSheet);
   forbidChildren("ItemSeparator", props);
   return element("box", mergeProps(
-    { role: "genericContainer" as const, ariaHidden: true },
     props,
+    withDefaults({ role: "genericContainer" as const, ariaHidden: true }, props),
     { get __zguiClass() { return classes("zui-item__separator"); } },
   ));
 }

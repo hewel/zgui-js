@@ -8,9 +8,9 @@
     "wallDuration": true
   },
   "captures": 2,
-  "jsHeapBytes": 231425,
+  "jsHeapBytes": 466983,
   "jsStackLimitBytes": 262144,
-  "maxJsEntryDurationUs": 901,
+  "maxJsEntryDurationUs": 1346,
   "nativeFrames": 4,
-  "wallDurationUs": 1231428
+  "wallDurationUs": 1299974
 }

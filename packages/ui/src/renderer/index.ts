@@ -1,5 +1,5 @@
-import { createRenderer } from "solid-js/universal";
-import { batch } from "#solid";
+import { createRenderer } from "@solidjs/universal";
+import { $PROXY, flush as solidFlush, resetErrorHalt } from "#solid";
 import type { Accessor, Component, ImageProps, NativeChild, NativeElementProps, NativeFieldProps, NativeNode, NativeTag, NativeTextControlProps, VectorProps } from "../types.js";
 import type { NativeHost } from "../host.js";
 import type { InternalProps } from "../internal-props.js";
@@ -10,7 +10,7 @@ declare const globalThis: NativeHost;
 /** Native specialization of Solid Universal's DOM-independent runtime helpers. */
 interface NativeRenderer {
   render(code: () => NativeChild, root: NativeNode): () => void;
-  effect<T>(callback: (previous: T | undefined) => T, initial?: T): void;
+  effect<T>(compute: (previous: T | undefined) => T, apply: (value: T, previous: T | undefined) => void | (() => void)): void;
   memo<T>(callback: () => T, equal?: boolean): Accessor<T>;
   createComponent<P>(component: Component<P>, props: P): NativeChild;
   createElement(tag: NativeTag): NativeNode;
@@ -20,23 +20,33 @@ interface NativeRenderer {
   spread(node: NativeNode, props: (NativeElementProps | NativeTextControlProps | NativeFieldProps | ImageProps | VectorProps) & InternalProps | Accessor<(NativeElementProps | NativeTextControlProps | NativeFieldProps | ImageProps | VectorProps) & InternalProps>, skipChildren?: boolean): void;
   setProp<T>(node: NativeNode, name: string, value: T, previous?: T): T;
   mergeProps<T extends readonly object[]>(...sources: T): MergeSources<T>;
-  use<A, T>(callback: (node: NativeNode, argument: A) => T, node: NativeNode, argument: A): T;
+  applyRef(callback: ((node: NativeNode) => void) | ((node: NativeNode) => void)[], node: NativeNode): void;
+  ref(fn: () => ((node: NativeNode) => void) | ((node: NativeNode) => void)[], node: NativeNode): void;
 }
 type MergeSources<T extends readonly object[]> = T extends readonly [infer Head extends object, ...infer Tail extends object[]]
   ? Omit<Head, keyof MergeSources<Tail>> & MergeSources<Tail> : {};
 
-// Upstream declarations restrict children to one NodeType, erase mergeProps keys,
-// and omit null navigation results. Specialize that external boundary only;
-// forwarding host values unchanged preserves the pinned reconciler's behavior.
+// Upstream declarations restrict children to one NodeType and omit null navigation results.
 const createNativeRenderer = createRenderer as (
-  options: Omit<NativeHost["__zgui"], "clearRoot" | "createPortal" | "registerDismissLayer" | "installStylesheet" | "removeStylesheet" | "focus" | "trapFocus" | "lockScroll" | "getWindowRect" | "getTextContent" | "isAnimating" | "precedes" | "observeGeometry" | "getReducedMotion">,
+  options: Omit<NativeHost["__zgui"], "createElement" | "replaceText" | "clearRoot" | "createPortal" | "registerDismissLayer" | "installStylesheet" | "removeStylesheet" | "focus" | "trapFocus" | "lockScroll" | "getWindowRect" | "getTextContent" | "isAnimating" | "precedes" | "observeGeometry" | "getReducedMotion"> & {
+    createElement(tag: NativeTag, staticProps?: Record<string, unknown>): NativeNode;
+    replaceText(node: NativeNode, text: string | number): void;
+  },
 ) => NativeRenderer;
 
 // Resolve the bridge at invocation, so module preflight never allocates native nodes.
 const renderer = createNativeRenderer({
-  createElement: tag => globalThis.__zgui.createElement(tag),
+  createElement: (tag, staticProps) => {
+    const node = globalThis.__zgui.createElement(tag);
+    if (staticProps) {
+      for (const key of Object.keys(staticProps)) {
+        if (key !== "children") globalThis.__zgui.setProperty(node, key, staticProps[key]);
+      }
+    }
+    return node;
+  },
   createTextNode: (text: string | number) => globalThis.__zgui.createTextNode(typeof text === "number" ? `${text}` : text),
-  replaceText: (node, text) => globalThis.__zgui.replaceText(node, text),
+  replaceText: (node, text: string | number) => globalThis.__zgui.replaceText(node, typeof text === "number" ? `${text}` : text),
   isTextNode: node => globalThis.__zgui.isTextNode(node),
   insertNode: (parent, node, anchor) => {
     globalThis.__zgui.insertNode(parent, node, anchor);
@@ -55,11 +65,75 @@ const renderer = createNativeRenderer({
 
 export const {
   effect, memo, createComponent, createElement, createTextNode,
-  insertNode, insert, spread, setProp, use,
+  insertNode, insert, setProp, applyRef, ref,
 } = renderer;
 
-// Wrapper components contribute structural classes independently of application aliases.
-const internalChannels = ["__zguiClass", "__zguiStyle", "__zguiInvariantStyle"];
+export function spread(
+  node: NativeNode,
+  props: (NativeElementProps | NativeTextControlProps | NativeFieldProps | ImageProps | VectorProps) & InternalProps | Accessor<(NativeElementProps | NativeTextControlProps | NativeFieldProps | ImageProps | VectorProps) & InternalProps>,
+  skipChildren?: boolean,
+): void {
+  if (props != null && typeof props === "object" && !Array.isArray(props)) {
+    // QuickJS-NG drops getter descriptors from Proxy getOwnPropertyDescriptor traps.
+    if ($PROXY in props) {
+      if (!skipChildren) {
+        renderer.spread(node, props, true);
+        if ("children" in props) {
+          renderer.insert(node, () => (props as { children?: NativeChild }).children);
+        }
+        return;
+      }
+      renderer.spread(node, props, true);
+      return;
+    }
+    const record = props as Record<string, unknown>;
+    const keys = Object.keys(record);
+    let hasGetter = false;
+    for (let i = 0; i < keys.length; i++) {
+      const key = keys[i];
+      if (key !== "children" && Object.getOwnPropertyDescriptor(record, key)?.get !== undefined) {
+        hasGetter = true;
+        break;
+      }
+    }
+    if (!hasGetter) {
+      for (let i = 0; i < keys.length; i++) {
+        const key = keys[i];
+        if (key === "children") {
+          if (!skipChildren) {
+            const desc = Object.getOwnPropertyDescriptor(record, "children");
+            if (desc?.get !== undefined) renderer.insert(node, () => record.children as NativeChild);
+            else if (desc?.value !== undefined) renderer.insert(node, desc.value as NativeChild);
+          }
+          continue;
+        }
+        const value = record[key];
+        if (key === "ref") {
+          if (typeof value === "function" || Array.isArray(value)) {
+            renderer.ref(() => value as ((node: NativeNode) => void) | ((node: NativeNode) => void)[], node);
+          }
+        } else if (value !== undefined) {
+          globalThis.__zgui.setProperty(node, key, value);
+        }
+      }
+      return;
+    }
+  }
+  renderer.spread(node, props, skipChildren);
+}
+
+export function flush(): void;
+export function flush<T>(fn: () => T): T;
+export function flush<T>(fn?: () => T): T | void {
+  try {
+    return fn ? solidFlush(fn) : solidFlush();
+  } catch (error) {
+    resetErrorHalt();
+    throw error;
+  }
+}
+
+// Append a trailing channel source inside MergeView so viewOf() sees merged channels directly.
 const mergedSources = new WeakMap<object, readonly object[]>();
 export function mergeProps<T extends readonly object[]>(...sources: T): MergeSources<T> {
   let inherited: object[] | null = null;
@@ -73,46 +147,55 @@ export function mergeProps<T extends readonly object[]>(...sources: T): MergeSou
     }
   }
   const list = inherited ?? sources;
-  const merged = renderer.mergeProps(...list);
-  let multiChannel = false;
-  for (let c = 0; c < internalChannels.length && !multiChannel; c++) {
-    const key = internalChannels[c];
-    let count = 0;
-    for (let i = 0; i < list.length; i++) {
-      if (list[i] !== merged && key in list[i] && ++count > 1) {
-        multiChannel = true;
-        break;
-      }
-    }
+  let c0 = 0, c1 = 0, c2 = 0;
+  for (let i = 0; i < list.length; i++) {
+    const item = list[i];
+    if ("__zguiClass" in item) c0 += 1;
+    if ("__zguiStyle" in item) c1 += 1;
+    if ("__zguiInvariantStyle" in item) c2 += 1;
   }
-  if (!multiChannel) return merged as unknown as MergeSources<T>;
-  const originals = list.filter(source => source !== merged);
-  const result = new Proxy(merged, {
-    get(target, key, receiver) {
-      if (key === "__zguiClass") {
+  if (c0 <= 1 && c1 <= 1 && c2 <= 1) return renderer.mergeProps(...list) as unknown as MergeSources<T>;
+  const originals = [...list];
+  const channelOverrides: Record<string, unknown> = {};
+  if (c0 > 1) {
+    Object.defineProperty(channelOverrides, "__zguiClass", {
+      enumerable: true,
+      configurable: true,
+      get() {
         let joined = "";
         for (let i = 0; i < originals.length; i++) {
-          const value = Reflect.get(originals[i], key);
+          const value = Reflect.get(originals[i], "__zguiClass");
           if (value) joined = joined ? `${joined} ${value}` : String(value);
         }
         return joined;
-      }
-      if (key === "__zguiStyle" || key === "__zguiInvariantStyle") {
-        const combined: Record<string, unknown> = {};
-        for (let i = 0; i < originals.length; i++) {
-          const value = Reflect.get(originals[i], key);
-          if (value) Object.assign(combined, value);
-        }
-        return combined;
-      }
-      return Reflect.get(target, key, receiver);
-    },
-  });
+      },
+    });
+  }
+  for (const [count, key] of [[c1, "__zguiStyle"], [c2, "__zguiInvariantStyle"]] as const) {
+    if (count > 1) {
+      Object.defineProperty(channelOverrides, key, {
+        enumerable: true,
+        configurable: true,
+        get() {
+          const combined: Record<string, unknown> = {};
+          for (let i = 0; i < originals.length; i++) {
+            const value = Reflect.get(originals[i], key);
+            if (value) Object.assign(combined, value);
+          }
+          return combined;
+        },
+      });
+    }
+  }
+  const result = renderer.mergeProps(...list, channelOverrides);
   mergedSources.set(result, originals);
   return result as unknown as MergeSources<T>;
 }
 
 export function render(code: () => NativeChild, root: NativeNode): () => void {
-  const dispose = batch(() => renderer.render(code, root));
-  return () => batch(dispose);
+  const dispose = renderer.render(code, root);
+  return () => {
+    dispose();
+    flush();
+  };
 }

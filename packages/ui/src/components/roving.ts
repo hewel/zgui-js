@@ -1,4 +1,4 @@
-import { batch, createMemo, createSignal, onCleanup, untrack } from "#solid";
+import { createMemo, createSignal, onCleanup, untrack } from "#solid";
 import { focus, precedes } from "../nodes.js";
 import { trackTreeOrder } from "../tree-order.js";
 import type { Accessor, NativeKeyEvent, NativeNode } from "../types.js";
@@ -9,25 +9,45 @@ export function groupOrientation(value: GroupOrientation): GroupOrientation {
   return value;
 }
 export function createRovingFocus(orientation: Accessor<GroupOrientation>, navigation: "target" | "active" = "target") {
-  const [members, setMembers] = createSignal<readonly Entry[]>([]);
+  const items: Entry[] = [];
+  const [version, setVersion] = createSignal(0);
   const [active, setActive] = createSignal<NativeNode>();
   const ordered = () => {
     trackTreeOrder();
-    const list = members();
-    return list.length <= 1 ? list : list.slice().sort((a, b) => precedes(a.node, b.node) ? -1 : precedes(b.node, a.node) ? 1 : 0);
+    version();
+    return items.length <= 1 ? items : items.slice().sort((a, b) => precedes(a.node, b.node) ? -1 : precedes(b.node, a.node) ? 1 : 0);
   };
   const tabStop = createMemo(() => {
-    const enabled = members().filter(item => !item.disabled());
-    if (enabled.length <= 1) return enabled[0];
+    version();
+    let firstEnabled: Entry | undefined;
+    let enabledCount = 0;
     const current = active();
-    if (current) {
-      const match = enabled.find(item => item.node === current);
-      if (match) return match;
+    let activeMatch: Entry | undefined;
+    let singlePreferred: Entry | undefined;
+    let preferredCount = 0;
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
+      if (item.disabled()) continue;
+      if (enabledCount === 0) firstEnabled = item;
+      enabledCount += 1;
+      if (current && item.node === current) activeMatch = item;
+      if (item.preferred()) {
+        if (preferredCount === 0) singlePreferred = item;
+        preferredCount += 1;
+      }
     }
-    const preferred = enabled.filter(item => item.preferred());
-    if (preferred.length === 1) return preferred[0];
-    const sorted = ordered().filter(item => !item.disabled());
-    return sorted.find(item => item.preferred()) ?? sorted[0];
+    if (enabledCount <= 1) return firstEnabled;
+    if (activeMatch) return activeMatch;
+    if (preferredCount === 1) return singlePreferred;
+    const sorted = ordered();
+    let firstSorted: Entry | undefined;
+    for (let i = 0; i < sorted.length; i++) {
+      const item = sorted[i];
+      if (item.disabled()) continue;
+      if (!firstSorted) firstSorted = item;
+      if (item.preferred()) return item;
+    }
+    return firstSorted;
   });
   const focusCandidate = (candidate: Entry | undefined): boolean => {
     if (!candidate) return false;
@@ -35,10 +55,10 @@ export function createRovingFocus(orientation: Accessor<GroupOrientation>, navig
     focus(candidate.node, { reveal: true });
     return true;
   };
-  const stepFrom = (from: number, direction: 1 | -1, items = ordered()): boolean => {
-    const start = from < 0 ? (direction > 0 ? -1 : items.length) : from;
-    for (let step = 1; step <= items.length; step++) {
-      const candidate = items[(start + direction * step + items.length) % items.length];
+  const stepFrom = (from: number, direction: 1 | -1, orderedItems = ordered()): boolean => {
+    const start = from < 0 ? (direction > 0 ? -1 : orderedItems.length) : from;
+    for (let step = 1; step <= orderedItems.length; step++) {
+      const candidate = orderedItems[(start + direction * step + orderedItems.length) % orderedItems.length];
       if (!candidate.disabled()) return focusCandidate(candidate);
     }
     return false;
@@ -46,15 +66,23 @@ export function createRovingFocus(orientation: Accessor<GroupOrientation>, navig
   return {
     register(node: NativeNode, disabled: Accessor<boolean>, preferred: Accessor<boolean> = () => false) {
       const entry = { node, disabled, preferred };
-      setMembers(items => [...items, entry]);
-      onCleanup(() => batch(() => {
-        setMembers(items => items.filter(item => item !== entry));
+      items.push(entry);
+      setVersion(v => v + 1);
+      onCleanup(() => {
+        const index = items.indexOf(entry);
+        if (index >= 0) {
+          items.splice(index, 1);
+          setVersion(v => v + 1);
+        }
         if (untrack(active) === node) setActive(undefined);
-      }));
+      });
       return {
         tabIndex: () => tabStop()?.node === node ? 0 : -1,
         activate: () => { if (!disabled()) setActive(node); },
       };
+    },
+    firstEnabled(): NativeNode | undefined {
+      return ordered().find(item => !item.disabled())?.node;
     },
     focusFirst(): boolean {
       return focusCandidate(ordered().find(item => !item.disabled()));

@@ -16,7 +16,7 @@ export function mount(root: NativeNode) {
   return renderApp(() => {
     let first!: NativeNode;
     let second!: NativeNode;
-    createEffect(() => { lockScroll(choice() === 0 ? first : second); });
+    createEffect(() => choice(), current => lockScroll(current === 0 ? first : second));
     return <column>
       <Show when={visible()}><box ref={node => { lockScroll(node); }} /></Show>
       <box ref={node => { first = node; }} />
@@ -37,11 +37,11 @@ async function mounted(t) {
   globalThis.__zgui = harness.host;
   const root = harness.makeNode("root");
   dispose = mod.mount(root);
-  return { mod, root, leases, finish: () => { const end = dispose; dispose = undefined; end?.(); } };
+  return { mod, harness, root, leases, finish: () => { const end = dispose; dispose = undefined; end?.(); } };
 }
 
 test("owner-bound scroll locks track mounts, effect reruns and disposal exactly once", async t => {
-  const { mod, root, leases, finish } = await mounted(t);
+  const { mod, harness, root, leases, finish } = await mounted(t);
   assert.equal(leases.length, 2);
   const [conditional, effect] = leases;
   const first = root.children[0].children[1];
@@ -49,15 +49,18 @@ test("owner-bound scroll locks track mounts, effect reruns and disposal exactly 
   assert.equal(effect.node, first);
 
   mod.toggle();
+  harness.flush();
   assert.equal(conditional.disposals, 1);
   assert.equal(conditional.active, false);
   mod.toggle();
+  harness.flush();
   assert.equal(leases.length, 3);
   const remounted = leases[2];
   assert.notEqual(remounted.node, conditional.node);
   assert.equal(remounted.disposals, 0);
 
   mod.choose(1);
+  harness.flush();
   assert.equal(effect.disposals, 1);
   assert.equal(leases.length, 4);
   const switched = leases[3];

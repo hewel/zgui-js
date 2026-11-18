@@ -1,8 +1,8 @@
-import { splitProps } from "#solid";
+import { omit } from "#solid";
 import { mergeProps } from "../renderer/index.js";
 import type { NativeElementProps, NativeEvent, NativeNode, NativePointerDownEvent } from "../types.js";
 import { callHandler, createControllable } from "./state.js";
-import { append, classes, element, forbidChildren, useStylesheet } from "./shared.js";
+import { append, classes, element, forbidChildren, useStylesheet, withDefaults } from "./shared.js";
 import { Icon } from "./icons.js";
 import { CHECK, MINUS } from "./generated/icons.js";
 import { sheet as checkboxSheet } from "./generated/CheckboxStyle.js";
@@ -41,14 +41,15 @@ export interface ToggleProps extends Omit<NativeElementProps, "checked"> {
 export function Checkbox(props: CheckboxProps = {}): NativeNode {
   useStylesheet(checkboxSheet);
   forbidChildren("Checkbox", props);
-  const [own, rest] = splitProps(props, ["checked", "defaultChecked", "onCheckedChange", "onClick", "onPointerDown"]);
+  const rest = omit(props, "checked", "defaultChecked", "onCheckedChange", "onClick", "onPointerDown");
   const [checked, write] = createControllable<CheckedState>({
-    value: () => own.checked,
-    defaultValue: () => own.defaultChecked,
-    onChange: () => own.onCheckedChange,
+    value: () => props.checked,
+    defaultValue: () => props.defaultChecked,
+    onChange: () => props.onCheckedChange,
   }, false);
   const node = element("control", mergeProps(
-    {
+    rest,
+    withDefaults({
       tabIndex: 0,
       role: "checkBox" as const,
       get checked() { return checked(); },
@@ -56,20 +57,19 @@ export function Checkbox(props: CheckboxProps = {}): NativeNode {
         const value = checked();
         return value === "mixed" ? "indeterminate" : value ? "checked" : "unchecked";
       },
-    },
-    rest,
+    }, rest),
     {
       get __zguiClass() { return classes(checkboxSheet.className, "zui-checkbox"); },
       get onClick() {
         return (event: NativeEvent) => {
-          if (callHandler(event, own.onClick) && !rest.disabled) {
+          if (callHandler(event, props.onClick) && !rest.disabled) {
             write(checked() !== true);
           }
         };
       },
       get onPointerDown() {
         return (event: NativePointerDownEvent) => {
-          if (callHandler(event, own.onPointerDown) && !rest.disabled && event.button === "primary") {
+          if (callHandler(event, props.onPointerDown) && !rest.disabled && event.button === "primary") {
             event.activateNow();
           }
         };
@@ -84,36 +84,36 @@ export function Checkbox(props: CheckboxProps = {}): NativeNode {
 export function Switch(props: SwitchProps = {}): NativeNode {
   useStylesheet(switchSheet);
   forbidChildren("Switch", props);
-  const [own, rest] = splitProps(props, ["checked", "defaultChecked", "onCheckedChange", "onClick", "onPointerDown", "size"]);
+  const rest = omit(props, "checked", "defaultChecked", "onCheckedChange", "onClick", "onPointerDown", "size");
   const [checked, write] = createControllable<boolean>({
-    value: () => own.checked,
-    defaultValue: () => own.defaultChecked,
-    onChange: () => own.onCheckedChange,
+    value: () => props.checked,
+    defaultValue: () => props.defaultChecked,
+    onChange: () => props.onCheckedChange,
   }, false);
   const node = element("control", mergeProps(
-    {
+    rest,
+    withDefaults({
       tabIndex: 0,
       role: "switch" as const,
       get checked() { return checked(); },
       get "data-state"() { return checked() ? "checked" : "unchecked"; },
-      get "data-size"() { return own.size ?? "md"; },
-    },
-    rest,
+      get "data-size"() { return props.size ?? "md"; },
+    }, rest),
     {
       get __zguiClass() {
         return classes(switchSheet.className, "zui-switch",
-        (own.size ?? "md") === "sm" && "zui-switch--sm", );
+        (props.size ?? "md") === "sm" && "zui-switch--sm", );
       },
       get onClick() {
         return (event: NativeEvent) => {
-          if (callHandler(event, own.onClick) && !rest.disabled) {
+          if (callHandler(event, props.onClick) && !rest.disabled) {
             write(!checked());
           }
         };
       },
       get onPointerDown() {
         return (event: NativePointerDownEvent) => {
-          if (callHandler(event, own.onPointerDown) && !rest.disabled && event.button === "primary") {
+          if (callHandler(event, props.onPointerDown) && !rest.disabled && event.button === "primary") {
             event.activateNow();
           }
         };
@@ -128,32 +128,32 @@ export const TOGGLE_SIZE_CLASSES: Record<ToggleSize, string> = { sm: "zui-toggle
 
 export function Toggle(props: ToggleProps = {}): NativeNode {
   useStylesheet(toggleSheet);
-  const [own, rest] = splitProps(props, ["pressed", "defaultPressed", "onPressedChange", "variant", "size", "label", "onClick"]);
+  const rest = omit(props, "pressed", "defaultPressed", "onPressedChange", "variant", "size", "label", "onClick");
   const [pressed, write] = createControllable<boolean>({
-    value: () => own.pressed,
-    defaultValue: () => own.defaultPressed,
-    onChange: () => own.onPressedChange,
+    value: () => props.pressed,
+    defaultValue: () => props.defaultPressed,
+    onChange: () => props.onPressedChange,
   }, false);
   return element("control", mergeProps(
-    {
+    rest,
+    withDefaults({
       tabIndex: 0,
       role: "button" as const,
       get checked() { return pressed(); },
-      get ariaLabel() { return own.label ?? null; },
+      get ariaLabel() { return props.label ?? null; },
       get "data-state"() { return pressed() ? "on" : "off"; },
-      get "data-variant"() { return own.variant ?? "default"; },
-      get "data-size"() { return own.size ?? "md"; },
-    },
-    rest,
+      get "data-variant"() { return props.variant ?? "default"; },
+      get "data-size"() { return props.size ?? "md"; },
+    }, rest),
     {
       get __zguiClass() {
         return classes(toggleSheet.className, "zui-toggle",
-        (own.variant ?? "default") === "outline" && "zui-toggle--outline",
-        TOGGLE_SIZE_CLASSES[own.size ?? "md"], );
+        (props.variant ?? "default") === "outline" && "zui-toggle--outline",
+        TOGGLE_SIZE_CLASSES[props.size ?? "md"], );
       },
       get onClick() {
         return (event: NativeEvent) => {
-          if (callHandler(event, own.onClick) && !rest.disabled) {
+          if (callHandler(event, props.onClick) && !rest.disabled) {
             write(!pressed());
           }
         };

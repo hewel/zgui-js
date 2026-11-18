@@ -115,7 +115,7 @@ async function mounted(t, mountName = "mount") {
     return h.dispatch(node, name, extras);
   };
   const emit = (record, value) => record.emit(value);
-  const flush = () => { clock.frame(); clock.advance(0); };
+  const flush = () => { h.flush(); clock.frame(); clock.advance(0); };
   const active = records => records.filter(record => record.active).length;
   return {
     h, mod, clock, busy, traps, layers, portals, geometry, send, emit, flush, active,
@@ -143,10 +143,12 @@ test("trigger renders zero-sized anchor after dynamic children and stays lazy", 
   assert.deepEqual(anchor.props.get("style"), { left: "0px", top: "0px" });
 
   mod.setRows(["alpha", "beta", "gamma"]);
+  h.flush();
   assert.equal(trigger.children[trigger.children.length - 1], anchor, "dynamic child updates keep anchor intact at end");
   assert.ok(h.byTestId("child-gamma"));
 
   mod.setRows([]);
+  h.flush();
   assert.equal(trigger.children[trigger.children.length - 1], anchor, "emptying dynamic list does not clobber anchor");
   finish();
 });
@@ -199,6 +201,7 @@ test("onContextMenu, secondary pointerdown, and useContextMenuPlace position anc
   assert.deepEqual(anchor.props.get("style"), { left: "120px", top: "120px" });
 
   mod.getPlace()?.openAt({ x: 95, y: 75 });
+  h.flush();
   assert.deepEqual(anchor.props.get("style"), { left: "15px", top: "15px" });
   assert.throws(() => mod.getPlace()?.openAt({ x: Number.NaN, y: 10 }), RangeError);
   assert.throws(() => mod.getPlace()?.openAt({ x: 10, y: Number.POSITIVE_INFINITY }), RangeError);
@@ -222,13 +225,16 @@ test("onContextMenu, secondary pointerdown, and useContextMenuPlace position anc
 test("caller preventDefault and disabled trigger block opening", async t => {
   const { h, mod, send, finish } = await mounted(t);
   mod.setVeto(true);
+  h.flush();
   send("trigger", "onContextMenu", { position: { x: 120, y: 90 } });
   assert.equal(h.byTestId("surface"), undefined);
   send("trigger", "onPointerDown", { button: "secondary", position: { x: 120, y: 90 } });
   assert.equal(h.byTestId("surface"), undefined);
 
   mod.setVeto(false);
+  h.flush();
   mod.setDisabled(true);
+  h.flush();
   const ctx = send("trigger", "onContextMenu", { position: { x: 120, y: 90 } });
   assert.equal(ctx.defaultPrevented, false);
   assert.equal(h.byTestId("surface"), undefined);
@@ -245,6 +251,7 @@ test("controlled context menu waits for caller open updates", async t => {
   assert.deepEqual(c.mod.log.opens, [true]);
   assert.equal(c.h.byTestId("surface"), undefined, "controlled state waits for caller");
   c.mod.setControlledOpen(true);
+  c.h.flush();
   assert.ok(c.h.byTestId("surface"));
   const anchor = c.h.byTestId("trigger").children[c.h.byTestId("trigger").children.length - 1];
   assert.deepEqual(anchor.props.get("style"), { left: "50px", top: "40px" });
@@ -264,6 +271,7 @@ test("triggerless useContextMenuPlace opens using window coordinates directly", 
   const orphan = await mounted(t, "mountOrphanPlace");
   assert.equal(orphan.h.byTestId("surface"), undefined);
   orphan.mod.getPlace()?.openAt({ x: 32, y: 44 });
+  orphan.h.flush();
   assert.ok(orphan.h.byTestId("surface"));
   assert.ok(orphan.h.byTestId("item-orphan"));
   orphan.finish();

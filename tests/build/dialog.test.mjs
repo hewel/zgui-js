@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { createClock, createHost, moduleFor } from "./native-fixture.mjs";
 
 const fixture = `
-import { Show, createSignal, onCleanup, onMount, renderApp } from "@hewel/zgui";
+import { Show, createSignal, onCleanup, renderApp } from "@hewel/zgui";
 import type { NativeNode } from "@hewel/zgui";
 import { Dialog, DialogTrigger, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter, DialogClose, DialogDismiss, ThemeProvider } from "@hewel/zgui/components";
 export const log = { mounts: 0, cleans: 0, changes: [] as boolean[], ends: 0, ref: undefined as NativeNode | undefined };
@@ -66,10 +66,12 @@ export function mountStandalone(root: NativeNode) {
 export function mountCancelled(root: NativeNode) {
   return renderApp(() => {
     const [shown, setShown] = createSignal(true);
-    onMount(() => setShown(false));
-    return <Show when={shown()}><Dialog defaultOpen>
-      <DialogContent testId="surface"><Counter id="counter" /></DialogContent>
-    </Dialog></Show>;
+    return <>
+      <Show when={shown()}><Dialog defaultOpen>
+        <DialogContent testId="surface"><Counter id="counter" /></DialogContent>
+      </Dialog></Show>
+      <box ref={() => { setShown(false); }} />
+    </>;
   }, root);
 }
 `;
@@ -95,7 +97,7 @@ async function mounted(t, mountName = "mount") {
     return h.dispatch(node, "Click").defaultPrevented;
   };
   const end = node => h.dispatch(node, "AnimationEnd");
-  const flush = () => { clock.frame(); clock.advance(0); };
+  const flush = () => { h.flush(); clock.frame(); clock.advance(0); };
   const active = records => records.filter(record => record.active).length;
   const settled = () => {
     for (const record of [...traps, ...locks, ...layers]) {
@@ -113,6 +115,7 @@ test("dialog mounts lazily, wires relations and acquires trap lock and dismiss l
   assert.equal(h.byTestId("surface"), undefined);
   assert.equal(portals.length, 0);
   mod.setInitial(true);
+  h.flush();
   assert.equal(h.byTestId("surface"), undefined, "defaultOpen is read once at mount");
   click("trigger");
   assert.equal(mod.log.mounts, 1);
@@ -158,6 +161,7 @@ test("controlled open is parent authoritative", async t => {
   assert.deepEqual(mod.log.changes, [true]);
   assert.equal(h.byTestId("surface"), undefined, "parent veto keeps the surface unmounted");
   mod.setValue(true);
+  h.flush();
   const surface = h.byTestId("surface");
   assert.ok(surface);
   click("close");
@@ -174,27 +178,36 @@ test("controlled open is parent authoritative", async t => {
 test("cancellation disabled and live dismiss options", async t => {
   const { h, mod, traps, layers, click, flush, finish } = await mounted(t);
   mod.setCancel(true);
+  h.flush();
   assert.equal(click("trigger"), true);
   assert.equal(h.byTestId("surface"), undefined);
   mod.setCancel(false);
+  h.flush();
   click("trigger");
   const surface = h.byTestId("surface");
   assert.ok(surface);
   mod.setDisabled(true);
+  h.flush();
   assert.equal(click("close"), false);
   assert.equal(surface.props.get("data-state"), "open");
   mod.setDisabled(false);
+  h.flush();
   mod.setCancel(true);
+  h.flush();
   assert.equal(click("close"), true);
   assert.equal(surface.props.get("data-state"), "open");
   mod.setCancel(false);
+  h.flush();
   mod.setEscape(false);
+  h.flush();
   mod.setOutside(false);
+  h.flush();
   assert.equal(layers.length, 1, "option changes reuse the same dismiss record");
   assert.equal(traps.length, 1, "option changes do not rebuild the focus trap");
   assert.equal(layers[0].options.dismissOnEscape, false);
   assert.equal(layers[0].options.dismissOnOutsidePress, false);
   mod.setEscape(true);
+  h.flush();
   assert.equal(layers[0].options.dismissOnEscape, true);
   layers[0].callback("escape");
   flush();
@@ -253,7 +266,9 @@ test("optional controls update without rebuilding user children", async t => {
   click("counter");
   assert.equal(textOf(counter), "1");
   mod.setDismiss(false);
+  h.flush();
   mod.setFooter(true);
+  h.flush();
   assert.equal(h.byTestId("surface"), surface);
   assert.equal(h.byTestId("counter"), counter);
   assert.equal(textOf(counter), "1");
@@ -267,7 +282,9 @@ test("optional controls update without rebuilding user children", async t => {
   assert.ok(close, "closeControl adds the default footer close");
   assert.equal(close.props.get("data-variant"), "outline");
   mod.setDismiss(true);
+  h.flush();
   mod.setFooter(false);
+  h.flush();
   assert.equal(h.byTestId("counter"), counter);
   assert.equal(textOf(counter), "1");
   assert.equal(mod.log.mounts, 1);
@@ -331,6 +348,7 @@ test("scoped theme reacts across the portal without rebuilding content", async t
   const [sheetName] = entry;
   assert.match(entry[1], /color-scheme:\s*dark/);
   mod.setScheme("light");
+  h.flush();
   assert.ok(h.stylesheets.has(sheetName), "scheme switch keeps the same sheet name");
   assert.match(h.stylesheets.get(sheetName), /color-scheme:\s*light/);
   assert.equal(h.byTestId("surface"), surface);

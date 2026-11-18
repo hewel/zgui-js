@@ -1,4 +1,12 @@
-import { createContext, createMemo, createSignal, onCleanup, splitProps, untrack, useContext } from "#solid";
+import {
+  createContext,
+  createMemo,
+  createSignal,
+  onCleanup,
+  omit,
+  untrack,
+  useContext,
+} from "#solid";
 import { createElement, memo, mergeProps, spread } from "../renderer/index.js";
 import { focus } from "../nodes.js";
 import type {
@@ -16,7 +24,7 @@ import {
 } from "./menu-core.js";
 import { createRovingFocus } from "./roving.js";
 import { callHandler } from "./state.js";
-import { classes, part, provide, slot, useStylesheet } from "./shared.js";
+import { classes, part, provide, slot, useStylesheet, withDefaults } from "./shared.js";
 import { sheet } from "./generated/MenubarStyle.js";
 
 export { MenuGroup as MenubarGroup, MenuRadioGroup as MenubarRadioGroup };
@@ -51,7 +59,7 @@ interface BarContextValue {
   close(): void;
 }
 
-const BarContext = createContext<BarContextValue>();
+const BarContext = createContext<BarContextValue | null>(null);
 
 function handleBarArrows(target: MenubarBarControl | undefined, event: NativeKeyEvent): void {
   if (event.character != null) return;
@@ -63,7 +71,7 @@ function handleBarArrows(target: MenubarBarControl | undefined, event: NativeKey
 
 export function Menubar(props: MenubarProps = {}): NativeNode {
   useStylesheet(sheet);
-  const [own, rest] = splitProps(props, ["children", "label", "onKeyDown"]);
+  const rest = omit(props, "children", "label", "onKeyDown");
   const [openValue, setOpenValue] = createSignal<string | null>(null);
   const roving = createRovingFocus(() => "horizontal", "target");
   let alive = true;
@@ -76,34 +84,37 @@ export function Menubar(props: MenubarProps = {}): NativeNode {
     close() { if (alive && openValue() !== null) setOpenValue(null); },
   };
   const node = createElement("box");
-  spread(node, mergeProps({
-    role: "menuBar",
-    orientation: "horizontal",
-    get ariaLabel() { return own.label ?? null; },
-  }, rest, {
+  spread(node, mergeProps(rest, withDefaults({
+    role: "menuBar" as const,
+    orientation: "horizontal" as const,
+    get ariaLabel() { return props.label ?? null; },
+  }, rest), {
     get __zguiClass() { return classes("zui-menubar", sheet.className); },
     onKeyDown(event: NativeKeyEvent) {
-      if (callHandler(event, own.onKeyDown) && alive) roving.onKeyDown(event);
+      if (callHandler(event, props.onKeyDown) && alive) roving.onKeyDown(event);
     },
   }), true);
-  slot(node, provide(BarContext, bar, own));
+  slot(node, provide(BarContext, bar, props));
   return node;
+}
+
+function menubarValue(value: string): string {
+  if (typeof value !== "string" || !value) {
+    throw new TypeError("MenubarMenu value must be a non-empty string");
+  }
+  return value;
 }
 
 export function MenubarMenu(props: MenubarMenuProps): NativeNode {
   useStylesheet(sheet);
   const bar = useContext(BarContext);
-  const [own, rest] = splitProps(props, ["children", "value"]);
-  const value = createMemo(() => {
-    if (typeof own.value !== "string" || !own.value) {
-      throw new TypeError("MenubarMenu value must be a non-empty string");
-    }
-    return own.value;
-  });
+  const rest = omit(props, "children", "value");
+  menubarValue(props.value);
+  const value = createMemo(() => menubarValue(props.value));
   let alive = true;
   onCleanup(() => {
     alive = false;
-    if (typeof own.value === "string" && own.value && bar?.isOpen(own.value)) bar.close();
+    if (typeof props.value === "string" && props.value && bar?.isOpen(props.value)) bar.close();
   });
   const state = createOverlayState({
     get open() { return bar?.isOpen(value()) ?? false; },
@@ -119,12 +130,12 @@ export function MenubarMenu(props: MenubarMenuProps): NativeNode {
     if (trigger) focus(trigger);
   };
   const node = createElement("box");
-  spread(node, mergeProps({
+  spread(node, mergeProps(rest, withDefaults({
     get "data-state"() { return state.open() ? "open" : "closed"; },
-  }, rest, {
+  }, rest), {
     get __zguiClass() { return classes("zui-menubar__menu"); },
   }), true);
-  slot(node, provideMenuRoot(state, dismiss, own));
+  slot(node, provideMenuRoot(state, dismiss, props));
   return node;
 }
 
@@ -132,41 +143,41 @@ export function MenubarTrigger(props: MenubarTriggerProps = {}): NativeNode {
   useStylesheet(sheet);
   const bar = useContext(BarContext);
   const state = useMenuState();
-  const [own, rest] = splitProps(props, ["children", "ref", "onClick", "onPointerEnter", "onFocus", "onKeyDown"]);
+  const rest = omit(props, "children", "ref", "onClick", "onPointerEnter", "onFocus", "onKeyDown");
   const node = createElement("control");
   const disabled = () => !!props.disabled;
   const item = bar?.roving.register(node, disabled);
   state?.trigger.ref(node);
   let alive = true;
   onCleanup(() => { alive = false; });
-  spread(node, mergeProps({
-    role: "menuItem",
-    ariaHasPopup: "menu",
+  spread(node, mergeProps(rest, withDefaults({
+    role: "menuItem" as const,
+    ariaHasPopup: "menu" as const,
     get expanded() { return state?.open() ?? false; },
     get ariaControls() { return state?.content.node() ?? null; },
     get tabIndex() { return item?.tabIndex() ?? (disabled() ? -1 : 0); },
     get "data-state"() { return state?.open() ? "open" : "closed"; },
-  }, rest, {
+  }, rest), {
     get __zguiClass() { return classes("zui-menubar__trigger"); },
     onFocus(event: NativeFocusEvent) {
-      if (!callHandler(event, own.onFocus) || !alive || disabled()) return;
+      if (!callHandler(event, props.onFocus) || !alive || disabled()) return;
       item?.activate();
       if (bar?.anyOpen()) state?.setOpen(true);
     },
     onPointerEnter(event: NativePointerBoundaryEvent) {
-      if (!callHandler(event, own.onPointerEnter) || !alive || disabled()) return;
+      if (!callHandler(event, props.onPointerEnter) || !alive || disabled()) return;
       if (bar?.anyOpen() && !state?.open()) {
         item?.activate();
         state?.setOpen(true);
       }
     },
     onClick(event: NativeEvent) {
-      if (!callHandler(event, own.onClick) || !alive || disabled() || !state) return;
+      if (!callHandler(event, props.onClick) || !alive || disabled() || !state) return;
       item?.activate();
       state.setOpen(!state.open());
     },
     onKeyDown(event: NativeKeyEvent) {
-      if (!callHandler(event, own.onKeyDown) || !alive || disabled() || !state) return;
+      if (!callHandler(event, props.onKeyDown) || !alive || disabled() || !state) return;
       if (event.character == null && event.key === "ArrowDown") {
         item?.activate();
         state.setOpen(true);
@@ -175,34 +186,33 @@ export function MenubarTrigger(props: MenubarTriggerProps = {}): NativeNode {
       }
     },
   }), true);
-  if (typeof own.ref === "function") own.ref(node);
-  slot(node, memo(() => own.children));
+  if (typeof props.ref === "function") props.ref(node);
+  slot(node, memo(() => props.children));
   return node;
 }
 
 export function MenubarArrows(props: MenubarArrowsProps = {}): NativeNode {
   useStylesheet(sheet);
   const fallback = useContext(BarContext)?.roving;
-  const [own, rest] = splitProps(props, ["children", "bar", "onKeyDown"]);
+  const rest = omit(props, "children", "bar", "onKeyDown");
   const node = createElement("box");
   spread(node, mergeProps(rest, {
     get __zguiClass() { return classes("zui-menubar__arrows"); },
     onKeyDown(event: NativeKeyEvent) {
-      if (callHandler(event, own.onKeyDown)) handleBarArrows(own.bar ?? fallback, event);
+      if (callHandler(event, props.onKeyDown)) handleBarArrows(props.bar ?? fallback, event);
     },
   }), true);
-  slot(node, () => own.children);
+  slot(node, () => props.children);
   return node;
 }
 
 export function MenubarContent(props: MenubarContentProps = {}): NativeChild {
   const menu = useMenuHierarchy();
   const bar = useContext(BarContext)?.roving;
-  const [own, rest] = splitProps(props, ["placement", "offset"]);
-  return renderMenuSurface(menu?.state, mergeProps({
-    placement: own.placement ?? ({ side: "bottom", align: "start" } as const),
-    get offset() { return own.offset; },
-  }, rest), {
+  const rest = omit(props, "placement");
+  return renderMenuSurface(menu?.state, mergeProps(rest, withDefaults({
+    get placement() { return props.placement ?? ({ side: "bottom", align: "start" } as const); },
+  }, rest)), {
     extraSheet: sheet,
     class: "zui-menubar__content",
     trap: false,

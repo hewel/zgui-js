@@ -326,10 +326,12 @@ test("collapsible keeps mounted children stable across close and open", async t 
 test("defaultOpen signal changes after mount do not reset state", async t => {
   const { mod, harness } = await mounted(t, "mountCollapsible");
   mod.collapsible.setColDefault(false);
+  harness.flush();
   assert.equal(prop(harness, "col-trigger", "expanded"), true);
   press(harness, "col-trigger");
   assert.equal(prop(harness, "col-trigger", "expanded"), false);
   mod.collapsible.setColDefault(true);
+  harness.flush();
   assert.equal(prop(harness, "col-trigger", "expanded"), false, "initial default is captured once");
 });
 
@@ -340,30 +342,36 @@ test("controlled collapsible only changes after the value echoes", async t => {
   assert.deepEqual(mod.log.changes, [true]);
   assert.equal(prop(harness, "col2-trigger", "expanded"), false, "request alone does not open");
   mod.controlled.setControlledOpen(true);
+  harness.flush();
   assert.equal(prop(harness, "col2-trigger", "expanded"), true);
   press(harness, "col2-trigger");
   assert.deepEqual(mod.log.changes, [true, false]);
   assert.equal(prop(harness, "col2-trigger", "expanded"), true, "still open until echo");
   mod.controlled.setControlledOpen(false);
+  harness.flush();
   assert.equal(prop(harness, "col2-trigger", "expanded"), false);
 });
 
 test("collapsible disabled and click cancellation block toggling", async t => {
   const { mod, harness } = await mounted(t, "mountCollapsible");
   mod.collapsible.setColDisabled(true);
+  harness.flush();
   assert.equal(prop(harness, "col-trigger", "disabled"), true);
   press(harness, "col-trigger");
   assert.equal(prop(harness, "col-trigger", "expanded"), true, "root disabled blocks");
   mod.collapsible.setColDisabled(false);
   mod.collapsible.setTrigDisabled(true);
+  harness.flush();
   assert.equal(prop(harness, "col-trigger", "disabled"), true);
   press(harness, "col-trigger");
   assert.equal(prop(harness, "col-trigger", "expanded"), true, "trigger disabled blocks");
   mod.collapsible.setTrigDisabled(false);
   mod.collapsible.setCancelClick(true);
+  harness.flush();
   press(harness, "col-trigger");
   assert.equal(prop(harness, "col-trigger", "expanded"), true, "cancelled click blocks");
   mod.collapsible.setCancelClick(false);
+  harness.flush();
   press(harness, "col-trigger");
   assert.equal(prop(harness, "col-trigger", "expanded"), false, "clearing restores toggle");
 });
@@ -388,16 +396,19 @@ test("measured borderSize merges with caller style overrides", async t => {
   const innerObs = registrations.find(r => r.kind === "borderSize");
   const content = node(harness, "m-content");
   innerObs.callback({ width: 120, height: 40.25 });
+  harness.flush();
   let style = prop(harness, "m-content", "style");
   assert.equal(style["--zui-collapsible-height"], "41px", "ceil of measured height");
   assert.equal(style.color, "red", "caller object style survives");
 
   mod.measured.setCallerStyle({ border: "2px" });
+  harness.flush();
   style = prop(harness, "m-content", "style");
   assert.equal(style["--zui-collapsible-height"], "41px", "measurement retained across style change");
   assert.equal(style.border, "2px");
 
   mod.measured.setCallerStyle("color:blue;");
+  harness.flush();
   style = prop(harness, "m-content", "style");
   assert.equal(style["--zui-collapsible-height"], "41px", "string replacement keeps internal measurement");
   assert.equal(style.color, "blue", "serialized application declarations replace the previous object map");
@@ -410,8 +421,10 @@ test("collapsed marker tracks the clipping viewport height", async t => {
   assert.equal(prop(harness, "m-content", "ariaHidden"), true, "closed by default");
   const outerObs = registrations.find(r => r.kind === "scrollPosition");
   outerObs.callback({ scrollport: { width: 100, height: 12 } });
+  harness.flush();
   assert.equal(prop(harness, "m-content", "data-collapsed"), undefined, "visible while clipping");
   outerObs.callback({ scrollport: { width: 100, height: 0 } });
+  harness.flush();
   assert.equal(prop(harness, "m-content", "data-collapsed"), "", "hidden once viewport reaches zero");
   press(harness, "m-trig");
   assert.equal(prop(harness, "m-content", "data-collapsed"), undefined, "opening clears immediately");
@@ -429,6 +442,7 @@ test("closing without a trigger restores focus to the root", async t => {
   const { mod, harness } = await mounted(t, "mountTriggerless");
   focusIn(harness, "f-content");
   mod.focusless.setNoTrigOpen(false);
+  harness.flush();
   assert.equal(harness.focused.current, node(harness, "f-col"), "focus falls back to root");
   assert.equal(harness.focused.reveal, true);
 });
@@ -446,10 +460,12 @@ test("closing in onBlur does not steal focus from the destination", async t => {
 test("closing with a disabled trigger restores focus to the root", async t => {
   const { mod, harness } = await mounted(t, "mountControlledCollapsible");
   mod.controlled.setControlledOpen(true);
+  harness.flush();
   const child = node(harness, "col2-count");
   harness.host.focus(child);
   mod.collapsible.setTrigDisabled(true);
   mod.controlled.setControlledOpen(false);
+  harness.flush();
   assert.equal(harness.focused.current, node(harness, "col2"));
   assert.equal(prop(harness, "col2", "tabIndex"), -1);
 });
@@ -457,10 +473,12 @@ test("closing with a disabled trigger restores focus to the root", async t => {
 test("closing with a disabled root restores focus to the root", async t => {
   const { mod, harness } = await mounted(t, "mountControlledCollapsible");
   mod.controlled.setControlledOpen(true);
+  harness.flush();
   const child = node(harness, "col2-count");
   harness.host.focus(child);
   mod.collapsible.setColDisabled(true);
   mod.controlled.setControlledOpen(false);
+  harness.flush();
   assert.equal(harness.focused.current, node(harness, "col2"));
   assert.equal(prop(harness, "col2", "tabIndex"), -1);
 });
@@ -470,6 +488,7 @@ test("unmount cancels observations and remount registers fresh ones", async t =>
   assert.equal(registrations.length, 2);
   const oldContent = node(harness, "s-content");
   mod.shown.setColShown(false);
+  harness.flush();
   assert.equal(node(harness, "s-content"), undefined, "detached");
   assert.equal(registrations[0].disposals, 1);
   assert.equal(registrations[1].disposals, 1);
@@ -477,6 +496,7 @@ test("unmount cancels observations and remount registers fresh ones", async t =>
   assert.deepEqual(mod.log.cleans, ["s-count"]);
 
   mod.shown.setColShown(true);
+  harness.flush();
   assert.equal(registrations.length, 4, "remount subscribes again");
   assert.equal(registrations[2].active, true);
   assert.equal(registrations[3].active, true);
@@ -484,6 +504,7 @@ test("unmount cancels observations and remount registers fresh ones", async t =>
   assert.notEqual(newContent, oldContent, "fresh content node");
   assert.equal(prop(harness, "s-trig", "ariaControls"), newContent, "relation points at fresh content");
   registrations[0].callback({ width: 1, height: 999 });
+  harness.flush();
   assert.ok(oldContent.props.get("style")?.["--zui-collapsible-height"] == null,
     "stale emission stays inert");
 });
@@ -514,6 +535,7 @@ test("accordion arrows and Home/End move focus without changing expansion", asyn
   assert.deepEqual(mod.log.changes, []);
 
   mod.accordion.setBDisabled(true);
+  harness.flush();
   sendKey(harness, "trig-a", "ArrowDown");
   assert.equal(harness.focused.current, node(harness, "trig-c"), "skips disabled item");
 });
@@ -526,27 +548,33 @@ test("accordion single clicks, collapsible policy, and disabled gating", async t
   assert.equal(prop(harness, "item-b", "data-state"), "closed", "single selection replaces");
 
   mod.accordion.setCollapsibleMode(false);
+  harness.flush();
   press(harness, "trig-a");
   assert.deepEqual(mod.log.changes, [["a"]], "collapsible=false refuses emptying");
   assert.equal(prop(harness, "item-a", "data-state"), "open");
   mod.accordion.setCollapsibleMode(true);
+  harness.flush();
   press(harness, "trig-a");
   assert.deepEqual(mod.log.changes, [["a"], []]);
   assert.equal(prop(harness, "item-a", "data-state"), "closed");
 
   mod.accordion.setBDisabled(true);
+  harness.flush();
   press(harness, "trig-b");
   assert.deepEqual(mod.log.changes, [["a"], []], "member disabled blocks");
   mod.accordion.setBDisabled(false);
   mod.accordion.setGroupDisabled(true);
+  harness.flush();
   press(harness, "trig-c");
   assert.deepEqual(mod.log.changes, [["a"], []], "group disabled blocks");
   assert.equal(prop(harness, "trig-c", "disabled"), true, "group disabled reaches triggers");
   mod.accordion.setGroupDisabled(false);
   mod.accordion.setCancelClicks(true);
+  harness.flush();
   press(harness, "trig-a");
   assert.deepEqual(mod.log.changes, [["a"], []], "cancelled click blocks");
   mod.accordion.setCancelClicks(false);
+  harness.flush();
   press(harness, "trig-a");
   assert.deepEqual(mod.log.changes, [["a"], [], ["a"]]);
 });
@@ -554,6 +582,7 @@ test("accordion single clicks, collapsible policy, and disabled gating", async t
 test("accordion cancelled keydown does not navigate", async t => {
   const { mod, harness } = await mounted(t, "mountAccordion");
   mod.accordion.setCancelKeys(true);
+  harness.flush();
   sendKey(harness, "trig-a", "ArrowDown");
   assert.notEqual(harness.focused.current, node(harness, "trig-b"), "cancelled key ignored");
 });
@@ -566,6 +595,7 @@ test("controlled accordion waits for the echoed value", async t => {
   assert.equal(prop(harness, "c-trig-a", "expanded"), false, "request does not self-apply");
   assert.equal(prop(harness, "c-trig-b", "expanded"), true);
   mod.accControlled.setAccValue(["a"]);
+  harness.flush();
   assert.equal(prop(harness, "c-trig-a", "expanded"), true);
   assert.equal(prop(harness, "c-trig-b", "expanded"), false);
 });
@@ -609,6 +639,7 @@ test("keyed reorder preserves nodes and drives Home/End order", async t => {
   focusIn(harness, "r-trig-b");
 
   mod.reorder.setOrder(["c", "a", "b"]);
+  harness.flush();
   assert.equal(node(harness, "r-trig-a"), trigA, "trigger survives reorder");
   assert.equal(node(harness, "r-trig-b"), trigB);
   assert.equal(node(harness, "r-count-b"), countB, "counter survives reorder");
@@ -618,15 +649,19 @@ test("keyed reorder preserves nodes and drives Home/End order", async t => {
   assert.equal(harness.focused.current, node(harness, "r-trig-c"), "Home follows native order");
 
   mod.reorder.setOrder(["a", "c"]);
+  harness.flush();
   assert.equal(node(harness, "r-trig-b"), undefined, "removed item detaches");
   assert.equal(prop(harness, "r-trig-c", "tabIndex"), 0, "tab stop recovers to first enabled");
   assert.equal(prop(harness, "r-trig-a", "tabIndex"), -1);
 
   mod.reorder.setOrder(["a", "b", "c"]);
+  harness.flush();
   const recreatedTrigB = node(harness, "r-trig-b");
   mod.reorder.setShowItemB(false);
+  harness.flush();
   assert.equal(node(harness, "r-trig-b"), undefined);
   mod.reorder.setShowItemB(true);
+  harness.flush();
   const newTrigB = node(harness, "r-trig-b");
   assert.ok(newTrigB);
   assert.notEqual(newTrigB, recreatedTrigB, "re-created item gets fresh handles");
@@ -642,6 +677,7 @@ test("heading wrapper, region relation, chevron, and measure classes", async t =
   assert.equal(heading.props.get("ariaLevel"), 3, "default heading level");
   assert.equal(heading.props.get("class"), "zui-accordion__header");
   mod.accordion.setAccLevel(2);
+  harness.flush();
   assert.equal(heading.props.get("ariaLevel"), 2, "level prop is reactive");
 
   assert.equal(prop(harness, "trig-a", "role"), "button");
@@ -660,6 +696,7 @@ test("heading wrapper, region relation, chevron, and measure classes", async t =
   assert.equal(chevronB.props.get("data-state"), "closed", "b collapsed after a opens");
   assert.equal(chevron.props.get("data-state"), "open");
   mod.accordion.setCaption("A2");
+  harness.flush();
   const after = node(harness, "trig-a").children.find(child => child.tag === "vector");
   assert.equal(after, chevron, "caption update keeps the same chevron node");
   assert.equal(textOf(node(harness, "trig-a")), "A2");

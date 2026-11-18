@@ -48,10 +48,13 @@ const rules = {
   "no-raw-insert-or-provider": {
     meta: {
       type: "problem",
-      docs: { description: "Disallow raw Solid universal insert() and *.Provider usage" },
+      docs: { description: "Disallow raw Solid universal insert() and direct Context provider invocations" },
       schema: [],
     },
     create(context) {
+      const providerMessage =
+        "Do not invoke Context providers directly; use provide() from shared.ts so children stay wrapped in a getter under the provider owner.";
+      const isContextName = name => /^[A-Z]/.test(name) && (/Context$/.test(name) || name === "Group" || name === "Internal");
       return {
         CallExpression(node) {
           if (node.callee.type === "Identifier" && node.callee.name === "insert") {
@@ -63,23 +66,23 @@ const rules = {
             return;
           }
           if (
-            node.callee.type === "MemberExpression" &&
-            !node.callee.computed &&
-            node.callee.property.type === "Identifier" &&
-            node.callee.property.name === "Provider"
+            (node.callee.type === "Identifier" && isContextName(node.callee.name)) ||
+            (node.callee.type === "MemberExpression" &&
+              !node.callee.computed &&
+              node.callee.property.type === "Identifier" &&
+              node.callee.property.name === "Provider")
           ) {
-            context.report({
-              node,
-              message:
-                "Do not call Context.Provider(...) directly; use provide() from shared.ts so children stay wrapped in a getter under the provider owner.",
-            });
+            context.report({ node, message: providerMessage });
           }
         },
         JSXOpeningElement(node) {
+          const isProviderJsx =
+            (node.name.type === "JSXIdentifier" && isContextName(node.name.name)) ||
+            (node.name.type === "JSXMemberExpression" &&
+              node.name.property.type === "JSXIdentifier" &&
+              node.name.property.name === "Provider");
           if (
-            node.name.type === "JSXMemberExpression" &&
-            node.name.property.type === "JSXIdentifier" &&
-            node.name.property.name === "Provider" &&
+            isProviderJsx &&
             node.attributes.some(
               attr => attr.type === "JSXAttribute" && attr.name?.type === "JSXIdentifier" && attr.name.name === "children",
             )
@@ -87,7 +90,7 @@ const rules = {
             context.report({
               node,
               message:
-                "Do not pass an explicit children prop to <Context.Provider> in JSX; place JSX children inside <Context.Provider>...</Context.Provider> or use provide().",
+                "Do not pass an explicit children prop to a Context provider in JSX; place JSX children inside the element or use provide().",
             });
           }
         },

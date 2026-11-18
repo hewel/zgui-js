@@ -1,4 +1,4 @@
-import { createEffect, createMemo, createSignal, splitProps } from "#solid";
+import { createEffect, createMemo, createSignal, omit } from "#solid";
 import { createElement, mergeProps, spread } from "../renderer/index.js";
 import { observeGeometry } from "../nodes.js";
 import type { NativeElementProps, NativeNode, NativePoint, NativeSize, NativeStyle, NativeViewport, NativeWindowRect } from "../types.js";
@@ -75,23 +75,29 @@ export function solvePopper(anchor: NativeWindowRect, floating: NativeSize, view
 
 export function Popper(props: PopperProps): NativeNode {
   const node = createElement("box");
-  const [, rest] = splitProps(props, ["anchor", "active", "placement", "offset", "padding", "flip", "shift", "ref", "children"]);
+  const rest = omit(props, "anchor", "active", "placement", "offset", "padding", "flip", "shift", "ref", "children");
   const [anchor, setAnchor] = createSignal<NativeWindowRect | null>(null);
   const [floating, setFloating] = createSignal<NativeSize | null>(null);
   const [viewport, setViewport] = createSignal<NativeViewport | null>(null);
   const active = () => props.active ?? true;
-  createEffect(() => {
-    const target = props.anchor;
-    setAnchor(null);
-    if (active() && target) observeGeometry(target, "borderBox", setAnchor);
-  });
-  createEffect(() => {
-    setFloating(null); setViewport(null);
-    if (active()) {
-      observeGeometry(node, "contentSize", setFloating);
-      observeGeometry(node, "viewport", setViewport);
-    }
-  });
+  createEffect(
+    () => active() ? props.anchor : null,
+    target => {
+      setAnchor(null);
+      if (target) return observeGeometry(target, "borderBox", setAnchor);
+    },
+  );
+  createEffect(
+    active,
+    isActive => {
+      setFloating(null);
+      setViewport(null);
+      if (!isActive) return;
+      const stopSize = observeGeometry(node, "contentSize", setFloating);
+      const stopViewport = observeGeometry(node, "viewport", setViewport);
+      return () => { stopSize(); stopViewport(); };
+    },
+  );
   const placed = createMemo(() => {
     if (!active()) return null;
     const a = anchor(), f = floating(), v = viewport();
