@@ -957,3 +957,65 @@ test("submenu disposal cancels its own timers but never the root-owned close", a
   assert.equal(active(geometry), 0);
   assert.equal(clock.timers.size, 0, "disposal leaves no pending timers");
 });
+
+test("submenu Escape returns focus to trigger while outside-press does not", async t => {
+  const { h, layers, send, flush, finish } = await mounted(t, "mountSub");
+  send("trigger", "onClick");
+  const surface = h.byTestId("surface"), subTrigger = h.byTestId("sub-trigger");
+  send(subTrigger, "onClick");
+  const keep = h.byTestId("keep");
+  h.host.focus(keep);
+  const subEscLayer = layers.findLast(record => record.active);
+  subEscLayer.callback("escape");
+  assert.equal(subTrigger.props.get("expanded"), false, "Escape closes only the submenu branch");
+  assert.equal(h.focused.current, subTrigger, "Escape returns focus to MenuSubTrigger");
+  flush();
+  assert.equal(h.byTestId("sub-surface"), undefined);
+  assert.equal(h.byTestId("surface"), surface, "parent menu stays open after submenu Escape");
+
+  send(subTrigger, "onClick");
+  const keepAgain = h.byTestId("keep");
+  h.host.focus(keepAgain);
+  const subOutsideLayer = layers.findLast(record => record.active);
+  subOutsideLayer.callback("outside-press");
+  assert.equal(subTrigger.props.get("expanded"), false);
+  assert.notEqual(h.focused.current, subTrigger, "outside-press does not force focus onto MenuSubTrigger");
+  flush();
+  finish();
+});
+
+test("leaf selection cascades outward through nested and controlled submenus before root dismissal", async t => {
+  const { h, mod, busy, send, key, flush, finish } = await mounted(t, "mountSub");
+  send("trigger", "onClick");
+  const surface = h.byTestId("surface"), subTrigger = h.byTestId("sub-trigger");
+  busy.set(surface, true);
+  send(subTrigger, "onClick");
+  const deepTrigger = h.byTestId("deep-trigger");
+  key(deepTrigger, { key: "ArrowRight" });
+  assert.ok(h.byTestId("deep-surface"));
+  mod.log.subOpens.length = 0;
+  mod.log.opens.length = 0;
+
+  send("leaf", "onClick");
+  assert.equal(deepTrigger.props.get("expanded"), false, "innermost submenu closes synchronously on leaf selection");
+  assert.equal(subTrigger.props.get("expanded"), false, "enclosing submenu closes synchronously even when root exit is busy");
+  assert.deepEqual(mod.log.subOpens, [false], "enclosing MenuSub notifies onOpenChange(false) during cascade");
+  assert.deepEqual(mod.log.opens, [false], "root menu dismisses after branch cascade");
+
+  busy.set(surface, false);
+  flush();
+  assert.equal(h.byTestId("surface"), undefined);
+
+  mod.setSubOpen(true);
+  send("trigger", "onClick");
+  key(h.byTestId("deep-trigger"), { key: "ArrowRight" });
+  mod.log.subOpens.length = 0;
+  mod.log.opens.length = 0;
+  send("leaf", "onClick");
+  assert.equal(h.byTestId("deep-trigger").props.get("expanded"), false);
+  assert.deepEqual(mod.log.subOpens, [false], "controlled MenuSub receives onOpenChange(false) on leaf selection");
+  assert.deepEqual(mod.log.opens, [false]);
+  mod.setSubOpen(false);
+  flush();
+  finish();
+});

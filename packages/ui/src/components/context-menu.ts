@@ -4,9 +4,9 @@ import { getWindowRect } from "../nodes.js";
 import type {
   Accessor, NativeChild, NativeContextMenuEvent, NativeElementProps, NativeNode, NativePointerDownEvent,
 } from "../types.js";
-import { MenuContent, MenuContext, menuRoot } from "./menu.js";
-import type { MenuContentProps } from "./menu.js";
-import type { OverlayRootProps, OverlayState } from "./overlay.js";
+import { MenuContent, type MenuContentProps } from "./menu.js";
+import { menuRoot, useMenuState } from "./menu-core.js";
+import type { OverlayRootProps } from "./overlay.js";
 import { callHandler } from "./state.js";
 import { append, classes, element, provide, slot, useStylesheet } from "./shared.js";
 import { sheet } from "./generated/ContextMenuStyle.js";
@@ -28,7 +28,7 @@ interface AnchorRecord {
 }
 
 const PlaceContext = createContext<ContextMenuPlace>();
-const anchorState = new WeakMap<OverlayState, AnchorRecord>();
+const AnchorContext = createContext<AnchorRecord>();
 
 export function useContextMenuPlace(): ContextMenuPlace | undefined {
   return useContext(PlaceContext);
@@ -37,12 +37,11 @@ export function useContextMenuPlace(): ContextMenuPlace | undefined {
 export function ContextMenu(props: ContextMenuProps = {}): NativeChild {
   return menuRoot(mergeProps(props, {
     get children() {
-      const state = useContext(MenuContext)!.state;
+      const state = useMenuState()!;
       const [point, setPoint] = createSignal<ContextMenuPoint>({ x: 0, y: 0 });
       const [area, setArea] = createSignal<NativeNode | null>(null);
       let alive = true;
       onCleanup(() => { alive = false; });
-      anchorState.set(state, { point, setArea });
       const openAt = (position: ContextMenuPoint) => {
         if (!position || !Number.isFinite(position.x) || !Number.isFinite(position.y)) {
           throw new RangeError("ContextMenu position must have finite x and y coordinates");
@@ -57,23 +56,23 @@ export function ContextMenu(props: ContextMenuProps = {}): NativeChild {
           state.setOpen(true);
         });
       };
-      return provide(PlaceContext, { openAt }, props);
+      return provide(AnchorContext, { point, setArea }, () => provide(PlaceContext, { openAt }, props));
     },
   }));
 }
 
 export function ContextMenuTrigger(props: ContextMenuTriggerProps = {}): NativeNode {
   useStylesheet(sheet);
-  const state = useContext(MenuContext)?.state;
+  const state = useMenuState();
   const place = useContextMenuPlace();
-  const record = state ? anchorState.get(state) : undefined;
+  const anchorState = useContext(AnchorContext);
   const [own, rest] = splitProps(props, ["children", "ref", "onContextMenu", "onPointerDown"]);
   const area = createElement("box");
-  record?.setArea(area);
+  anchorState?.setArea(area);
   let alive = true;
   onCleanup(() => {
     alive = false;
-    record?.setArea(null);
+    anchorState?.setArea(null);
   });
   spread(area, mergeProps({
     ariaHasPopup: "menu",
@@ -100,7 +99,7 @@ export function ContextMenuTrigger(props: ContextMenuTriggerProps = {}): NativeN
     class: "zui-context-menu__anchor",
     ariaHidden: true,
     get style() {
-      const current = record?.point() ?? { x: 0, y: 0 };
+      const current = anchorState?.point() ?? { x: 0, y: 0 };
       return { left: `${current.x}px`, top: `${current.y}px` };
     },
   });

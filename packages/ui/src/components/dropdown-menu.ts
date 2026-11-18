@@ -1,18 +1,21 @@
-import { onCleanup, splitProps, useContext } from "#solid";
+import { onCleanup, splitProps } from "#solid";
 import { mergeProps } from "../renderer/index.js";
 import type { NativeChild, NativeEvent, NativeKeyEvent, NativeNode, NativePointerDownEvent } from "../types.js";
 import { Button } from "./button.js";
 import type { ButtonProps } from "./button.js";
 import type { OverlayRootProps } from "./overlay.js";
-import { MenuContent, MenuContext, menuRoot } from "./menu.js";
-import type { MenuContentProps } from "./menu.js";
+import { MenuContent, type MenuContentProps } from "./menu.js";
+import { menuRoot, useMenuState } from "./menu-core.js";
 import { callHandler } from "./state.js";
+
 export type DropdownMenuProps = OverlayRootProps;
 export type DropdownMenuTriggerProps = ButtonProps;
 export type DropdownMenuContentProps = MenuContentProps;
+
 export function DropdownMenu(props: DropdownMenuProps = {}): NativeChild { return menuRoot(props); }
+
 export function DropdownMenuTrigger(props: DropdownMenuTriggerProps = {}): NativeNode {
-  const state = useContext(MenuContext)?.state;
+  const state = useMenuState();
   const [own, rest] = splitProps(props, ["ref", "onClick", "onPointerDown", "onKeyDown"]);
   let alive = true;
   onCleanup(() => { alive = false; });
@@ -35,6 +38,7 @@ export function DropdownMenuTrigger(props: DropdownMenuTriggerProps = {}): Nativ
     },
   }));
 }
+
 export function DropdownMenuContent(props: DropdownMenuContentProps = {}): NativeChild {
   return MenuContent(mergeProps({ placement: { side: "bottom", align: "start" } as const, offset: 4 }, props));
 }

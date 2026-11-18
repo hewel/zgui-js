@@ -1,24 +1,23 @@
-import { Show, createContext, createEffect, createMemo, createSignal, onCleanup, splitProps, untrack, useContext } from "#solid";
+import { createContext, createMemo, createSignal, onCleanup, splitProps, untrack, useContext } from "#solid";
 import { createElement, memo, mergeProps, spread } from "../renderer/index.js";
 import { focus } from "../nodes.js";
 import type {
   Accessor, NativeChild, NativeElementProps, NativeEvent, NativeFocusEvent, NativeKeyEvent,
   NativeNode, NativePointerBoundaryEvent,
 } from "../types.js";
-import { anchoredSurface, createOverlayState } from "./overlay.js";
+import { createOverlayState } from "./overlay.js";
 import {
-  MenuContext, MenuGroup, MenuRadioContext, MenuRadioGroup, MenuSurfaceContext,
-  createMenuCheckedState, createMenuRadioValue, createTypeaheadHandler, menuIndicator, menuRow,
+  MenuGroup, MenuRadioGroup, type MenuCheckboxItemProps, type MenuContentProps, type MenuGroupProps,
+  type MenuItemProps, type MenuRadioGroupProps, type MenuRadioItemProps, type MenuSeparatorProps, type MenuShortcutProps,
 } from "./menu.js";
-import type {
-  MenuCheckboxItemProps, MenuContentProps, MenuGroupProps, MenuItemProps, MenuRadioGroupProps,
-  MenuRadioItemProps, MenuSeparatorProps, MenuShortcutProps,
-} from "./menu.js";
+import {
+  MENUBAR_VARIANT, MenubarShortcutPart, buildMenuCheckboxItem, buildMenuItem, buildMenuRadioItem,
+  buildMenuSeparator, provideMenuRoot, renderMenuSurface, useMenuHierarchy, useMenuState,
+} from "./menu-core.js";
 import { createRovingFocus } from "./roving.js";
 import { callHandler } from "./state.js";
-import { append, classes, element, forbidChildren, part, provide, slot, useStylesheet } from "./shared.js";
+import { classes, part, provide, slot, useStylesheet } from "./shared.js";
 import { sheet } from "./generated/MenubarStyle.js";
-import { sheet as menuSheet } from "./generated/MenuStyle.js";
 
 export { MenuGroup as MenubarGroup, MenuRadioGroup as MenubarRadioGroup };
 export type { MenuGroupProps as MenubarGroupProps, MenuRadioGroupProps as MenubarRadioGroupProps };
@@ -53,6 +52,14 @@ interface BarContextValue {
 }
 
 const BarContext = createContext<BarContextValue>();
+
+function handleBarArrows(target: MenubarBarControl | undefined, event: NativeKeyEvent): void {
+  if (event.character != null) return;
+  const direction = event.key === "ArrowRight" ? 1 : event.key === "ArrowLeft" ? -1 : 0;
+  if (!direction || !target || !target.step(direction)) return;
+  event.preventDefault();
+  event.stopPropagation();
+}
 
 export function Menubar(props: MenubarProps = {}): NativeNode {
   useStylesheet(sheet);
@@ -107,7 +114,6 @@ export function MenubarMenu(props: MenubarMenuProps): NativeNode {
     },
   });
   const dismiss = () => {
-    if (!alive) return;
     state.setOpen(false);
     const trigger = untrack(state.trigger.node);
     if (trigger) focus(trigger);
@@ -118,15 +124,14 @@ export function MenubarMenu(props: MenubarMenuProps): NativeNode {
   }, rest, {
     get __zguiClass() { return classes("zui-menubar__menu"); },
   }), true);
-  slot(node, provide(MenuContext, { state, dismiss }, own));
+  slot(node, provideMenuRoot(state, dismiss, own));
   return node;
 }
 
 export function MenubarTrigger(props: MenubarTriggerProps = {}): NativeNode {
   useStylesheet(sheet);
-  const menu = useContext(MenuContext);
   const bar = useContext(BarContext);
-  const state = menu?.state;
+  const state = useMenuState();
   const [own, rest] = splitProps(props, ["children", "ref", "onClick", "onPointerEnter", "onFocus", "onKeyDown"]);
   const node = createElement("control");
   const disabled = () => !!props.disabled;
@@ -183,13 +188,7 @@ export function MenubarArrows(props: MenubarArrowsProps = {}): NativeNode {
   spread(node, mergeProps(rest, {
     get __zguiClass() { return classes("zui-menubar__arrows"); },
     onKeyDown(event: NativeKeyEvent) {
-      if (!callHandler(event, own.onKeyDown) || event.character != null) return;
-      const direction = event.key === "ArrowRight" ? 1 : event.key === "ArrowLeft" ? -1 : 0;
-      if (!direction) return;
-      const target = own.bar ?? fallback;
-      if (!target || !target.step(direction)) return;
-      event.preventDefault();
-      event.stopPropagation();
+      if (callHandler(event, own.onKeyDown)) handleBarArrows(own.bar ?? fallback, event);
     },
   }), true);
   slot(node, () => own.children);
@@ -197,143 +196,41 @@ export function MenubarArrows(props: MenubarArrowsProps = {}): NativeNode {
 }
 
 export function MenubarContent(props: MenubarContentProps = {}): NativeChild {
-  useStylesheet(sheet);
-  useStylesheet(menuSheet);
-  const menu = useContext(MenuContext);
+  const menu = useMenuHierarchy();
   const bar = useContext(BarContext)?.roving;
-  const [own, rest] = splitProps(props, ["children", "placement", "offset"]);
-  return anchoredSurface(menu?.state, mergeProps({
+  const [own, rest] = splitProps(props, ["placement", "offset"]);
+  return renderMenuSurface(menu?.state, mergeProps({
     placement: own.placement ?? ({ side: "bottom", align: "start" } as const),
     get offset() { return own.offset; },
   }, rest), {
+    extraSheet: sheet,
     class: "zui-menubar__content",
-    role: "menu",
     trap: false,
     surfaceClass: false,
     onDismiss(reason) {
-      if (reason === "escape") menu?.dismiss();
+      if (reason === "escape") menu?.dismissCascade();
       else menu?.state.setOpen(false);
     },
-    children() {
-      const roving = createRovingFocus(() => "vertical", "active");
-      let focused = false;
-      createEffect(() => {
-        if (focused) return;
-        if (roving.focusFirst()) focused = true;
-      });
-      return provide(MenuSurfaceContext, { node: menu!.state.content.node, roving }, () => {
-        const keys = createElement("box");
-        const onTypeahead = createTypeaheadHandler(roving);
-        spread(keys, {
-          class: "zui-menu__keys",
-          onKeyDown(event: NativeKeyEvent) {
-            if (callHandler(event, roving.onKeyDown)) onTypeahead(event);
-          },
-        }, true);
-        const arrows = createElement("box");
-        spread(arrows, {
-          class: "zui-menubar__arrows",
-          onKeyDown(event: NativeKeyEvent) {
-            if (event.character != null) return;
-            const direction = event.key === "ArrowRight" ? 1 : event.key === "ArrowLeft" ? -1 : 0;
-            if (!direction || !bar || !bar.step(direction)) return;
-            event.preventDefault();
-            event.stopPropagation();
-          },
-        }, true);
-        append(keys, arrows);
-        slot(arrows, () => own.children);
-        return keys;
-      });
-    },
+    onBarKeyDown(event) { handleBarArrows(bar, event); },
   });
-}
-
-function itemLabel(children: Accessor<NativeChild>): NativeNode {
-  const box = createElement("box");
-  spread(box, { class: "zui-menubar__item-label" }, true);
-  slot(box, memo(children));
-  return box;
 }
 
 export function MenubarItem(props: MenubarItemProps = {}): NativeNode {
-  const menu = useContext(MenuContext);
-  const [own, rest] = splitProps(props, ["children", "closeOnSelect", "onSelect", "shortcut"]);
-  const node = menuRow(mergeProps({
-    get ariaKeyShortcuts() { return own.shortcut ?? null; },
-  }, rest), {
-    role: "menuItem",
-    sheet,
-    baseClass: "zui-menubar__item",
-    class: () => "",
-    select() {
-      own.onSelect?.();
-      if (own.closeOnSelect ?? true) menu?.dismiss();
-    },
-  });
-  append(node, itemLabel(() => own.children));
-  slot(node, Show({
-    get when() { return own.shortcut != null; },
-    get children() { return MenubarShortcut({ get children() { return own.shortcut; } }); },
-  }));
-  return node;
+  return buildMenuItem(MENUBAR_VARIANT, props);
 }
 
 export function MenubarCheckboxItem(props: MenubarCheckboxItemProps = {}): NativeNode {
-  const menu = useContext(MenuContext);
-  const [own, rest] = splitProps(props, ["children", "checked", "defaultChecked", "onCheckedChange", "closeOnSelect"]);
-  const [checked, write] = createMenuCheckedState("MenubarCheckboxItem", own);
-  const node = menuRow(mergeProps(rest, {
-    get checked() { return checked(); },
-    get "data-state"() { return checked() ? "checked" : "unchecked"; },
-  }), {
-    role: "menuItemCheckBox",
-    sheet,
-    baseClass: "zui-menubar__item",
-    class: () => "zui-menubar__item--check",
-    select() {
-      write(!checked());
-      if (own.closeOnSelect ?? false) menu?.dismiss();
-    },
-  });
-  append(node, menuIndicator("zui-menubar__indicator", "zui-menubar__indicator--dot", checked, false));
-  append(node, itemLabel(() => own.children));
-  return node;
+  return buildMenuCheckboxItem(MENUBAR_VARIANT, props);
 }
 
 export function MenubarRadioItem(props: MenubarRadioItemProps): NativeNode {
-  const menu = useContext(MenuContext);
-  const radio = useContext(MenuRadioContext);
-  const [own, rest] = splitProps(props, ["children", "value", "closeOnSelect"]);
-  const value = createMenuRadioValue("MenubarRadioItem", () => own.value);
-  const checked = () => radio?.value() === value();
-  const node = menuRow(mergeProps(rest, {
-    get checked() { return checked(); },
-    get "data-state"() { return checked() ? "checked" : "unchecked"; },
-    get "data-value"() { return value(); },
-  }), {
-    role: "menuItemRadio",
-    sheet,
-    baseClass: "zui-menubar__item",
-    class: () => "zui-menubar__item--check",
-    select() {
-      radio?.choose(value());
-      if (own.closeOnSelect ?? true) menu?.dismiss();
-    },
-  });
-  append(node, menuIndicator("zui-menubar__indicator", "zui-menubar__indicator--dot", checked, true));
-  append(node, itemLabel(() => own.children));
-  return node;
+  return buildMenuRadioItem(MENUBAR_VARIANT, props);
 }
 
 export const MenubarLabel = part("label", sheet, "zui-menubar__label");
 
 export function MenubarSeparator(props: MenubarSeparatorProps = {}): NativeNode {
-  useStylesheet(sheet);
-  forbidChildren("MenubarSeparator", props);
-  return element("box", mergeProps({ ariaHidden: true }, props, {
-    get __zguiClass() { return classes("zui-menubar__separator"); },
-  }));
+  return buildMenuSeparator("MenubarSeparator", sheet, "zui-menubar__separator", props);
 }
 
-export const MenubarShortcut = part("text", sheet, "zui-menubar__shortcut", { ariaHidden: true });
+export const MenubarShortcut = MenubarShortcutPart;

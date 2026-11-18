@@ -1,33 +1,22 @@
-import { onCleanup, splitProps, useContext } from "#solid";
+import { onCleanup, splitProps, untrack } from "#solid";
 import { memo, mergeProps } from "../renderer/index.js";
 import { focus, getWindowRect, observeGeometry } from "../nodes.js";
 import type { NativeChild, NativeElementProps, NativeKeyEvent, NativeNode, NativePointerBoundaryEvent, NativePointerEvent, NativePoint, NativeWindowRect } from "../types.js";
-import { OverlayContext, createOverlayState } from "./overlay.js";
-import type { OverlayRootProps, OverlayState } from "./overlay.js";
+import type { OverlayRootProps } from "./overlay.js";
 import { createDelayed } from "./delay.js";
 import { callHandler } from "./state.js";
-import { append, classes, provide, slot } from "./shared.js";
+import { append, classes, slot } from "./shared.js";
 import { Icon } from "./icons.js";
 import { CHEVRON_RIGHT } from "./generated/icons.js";
-import { menuRow, menuSurface } from "./menu.js";
 import type { MenuContentProps } from "./menu.js";
+import { menuRow, provideMenuSub, renderMenuSurface, useMenuSub } from "./menu-core.js";
 
 export type MenuSubProps = OverlayRootProps;
 export interface MenuSubTriggerProps extends NativeElementProps { inset?: boolean; }
 export type MenuSubContentProps = MenuContentProps;
-const subClosings = new WeakMap<OverlayState, ReturnType<typeof createDelayed>>();
-const useSub = () => {
-  const state = useContext(OverlayContext);
-  const closing = state && subClosings.get(state);
-  return closing ? { state, closing } : undefined;
-};
 
 export function MenuSub(props: MenuSubProps = {}): NativeChild {
-  const state = createOverlayState(props);
-  const closing = createDelayed();
-  subClosings.set(state, closing);
-  onCleanup(closing.cancel);
-  return provide(OverlayContext, state, props);
+  return provideMenuSub(props);
 }
 
 export function headingToward(from: NativePoint, to: NativePoint, target: NativeWindowRect): boolean {
@@ -40,7 +29,7 @@ export function headingToward(from: NativePoint, to: NativePoint, target: Native
 }
 
 export function MenuSubTrigger(props: MenuSubTriggerProps = {}): NativeNode {
-  const sub = useSub(), state = sub?.state;
+  const sub = useMenuSub(), state = sub?.state;
   const opening = createDelayed(), closing = sub?.closing ?? createDelayed();
   const [own, rest] = splitProps(props, ["children", "inset", "ref", "onPointerMove", "onKeyDown"]);
   let alive = true, scale = 1;
@@ -89,20 +78,30 @@ export function MenuSubTrigger(props: MenuSubTriggerProps = {}): NativeNode {
 }
 
 export function MenuSubContent(props: MenuSubContentProps = {}): NativeChild {
-  const sub = useSub(), state = sub?.state;
+  const sub = useMenuSub(), state = sub?.state;
   const [own, rest] = splitProps(props, ["onPointerEnter", "onKeyDown"]);
   let alive = true;
   onCleanup(() => { alive = false; });
-  return menuSurface(state, mergeProps({ placement: { side: "right", align: "start" } as const, offset: -4 }, rest, {
+  const closeToTrigger = () => {
+    sub?.closing.cancel();
+    state?.setOpen(false);
+    const trigger = state ? untrack(state.trigger.node) : null;
+    if (alive && trigger) focus(trigger);
+  };
+  return renderMenuSurface(state, mergeProps({ placement: { side: "right", align: "start" } as const, offset: -4 }, rest, {
     get __zguiClass() { return classes("zui-menu--sub"); },
     onPointerEnter(event: NativePointerBoundaryEvent) {
       if (callHandler(event, own.onPointerEnter) && alive) sub?.closing.cancel();
     },
     onKeyDown(event: NativeKeyEvent) {
       if (!callHandler(event, own.onKeyDown) || !alive || !state || event.character != null || event.key !== "ArrowLeft") return;
-      event.preventDefault(); event.stopPropagation(); state.setOpen(false);
-      const trigger = state.trigger.node();
-      if (alive && trigger) focus(trigger);
+      event.preventDefault(); event.stopPropagation();
+      closeToTrigger();
     },
-  }));
+  }), {
+    onDismiss(reason) {
+      if (reason === "escape") closeToTrigger();
+      else { sub?.closing.cancel(); state?.setOpen(false); }
+    },
+  });
 }
