@@ -6,9 +6,9 @@ Native applications and repeatable previews of their behavior.
 
 **Mount region**: The portion of a native document owned by one application session at a time.
 
-**Session**: One running application generation attached to a mount region. A retired session can no longer update that region.
+**Session**: One running application generation owning zero or more mount regions. A retired session can no longer update any of its regions.
 
-**Bridge turn**: One bounded application entry permitted to mutate a mount region's native tree. Detached nodes become invalid when the turn completes, and an uncaught turn fault retires the session's ownership of that region.
+**Bridge turn**: One bounded application entry permitted to mutate its session's mount regions. Detached nodes become invalid when the turn completes, and an uncaught turn fault retires the session's ownership of its regions.
 
 **Session host**: The owner of session replacement, retirement, and recovery for its mount regions.
 
@@ -38,3 +38,14 @@ _Avoid_: Generation (reserved for session incarnations), native acceptance
 **Stylesheet revision**: The identity of the stylesheet-set state consumed by a native document. Class and inline-declaration changes retain this identity; applied stylesheet installation, replacement, and removal change it.
 
 **StyleX profile**: The versioned agreement between generated StyleX output and the native CSS behaviors an application may use.
+
+**Shell surface**: A desktop-owned layer or session-lock surface bound to a specific or compositor-chosen output, backing its own mount region within the owning session.
+_Avoid_: Panel window, popup window
+
+**Input region**: The subset of a surface's area that receives pointer events while letting events elsewhere pass through to surfaces beneath.
+
+**Session lock**: An exclusive compositor lock under which only lock surfaces are presented across outputs until explicitly unlocked.
+
+**Capability**: A package-declared authority permitting a session to open shell surfaces, lock the desktop, connect to external endpoints, or read host media.
+
+**Image handle**: A session-scoped opaque reference to host-held image bytes outside the JavaScript heap.
