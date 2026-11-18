@@ -30,8 +30,10 @@ const [subTriggerShown, setSubTriggerShown] = createSignal(true);
 const [subOpen, setSubOpen] = createSignal(undefined as boolean | undefined);
 const [subOff, setSubOff] = createSignal(false);
 const [removeOnFocus, setRemoveOnFocus] = createSignal(false);
+const [itemDestructive, setItemDestructive] = createSignal(false);
+const [itemInset, setItemInset] = createSignal(false);
 export { setLoose, setKeyOrder, setOff, setOverrides, setVeto, setOpen, setCheckedA, setRadioValue, setShortcut, setTrigOff,
-  setSubShown, setSubTriggerShown, setSubOpen, setSubOff, setRemoveOnFocus };
+  setSubShown, setSubTriggerShown, setSubOpen, setSubOff, setRemoveOnFocus, setItemDestructive, setItemInset };
 const bumpers: Record<string, () => void> = {};
 export const bump = (id = "counter") => bumpers[id]?.();
 function Counter(props: { id?: string }) {
@@ -145,7 +147,8 @@ export function mountMeta(root: NativeNode) {
     <DropdownMenuContent testId="surface">
       <MenuLabel testId="label" inset class="caller-label">Heading</MenuLabel>
       <MenuGroup testId="group" label="Section" class="caller-group">
-        <MenuItem testId="meta-item" shortcut={shortcut()} onSelect={() => log.selects.push("meta")}>
+        <MenuItem testId="meta-item" shortcut={shortcut()} destructive={itemDestructive()} inset={itemInset()}
+          onSelect={() => log.selects.push("meta")}>
           <Counter id="meta-counter" />Rename</MenuItem>
       </MenuGroup>
       <MenuSeparator testId="sep" />
@@ -656,6 +659,18 @@ test("metadata parts keep caller attrs and runtime rejects invalid props", async
   assert.equal(shortcutOf(h.byTestId("meta-item")), undefined);
   assert.equal(h.byTestId("meta-item").props.get("ariaKeyShortcuts"), undefined, "removed shortcut clears the semantic");
   assert.equal(h.byTestId("meta-counter"), counter);
+  assert.equal(item.props.get("data-destructive"), undefined);
+  assert.equal(item.props.get("data-inset"), undefined);
+  mod.setItemDestructive(true);
+  mod.setItemInset(true);
+  assert.equal(item.props.get("data-destructive"), "true", "destructive data attribute updates reactively");
+  assert.equal(item.props.get("data-inset"), "true", "inset data attribute updates reactively");
+  assert.ok(String(item.props.get("class")).includes("zui-menu__item--destructive"));
+  assert.ok(String(item.props.get("class")).includes("zui-menu__item--inset"));
+  mod.setItemDestructive(false);
+  mod.setItemInset(false);
+  assert.equal(item.props.get("data-destructive"), undefined);
+  assert.equal(item.props.get("data-inset"), undefined);
   finish();
   delete globalThis.__zgui;
 

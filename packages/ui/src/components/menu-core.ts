@@ -308,11 +308,11 @@ export function buildMenuItem(variant: MenuVariantConfig, props: MenuItemProps =
   const menu = useMenuHierarchy();
   const [own, rest] = splitProps(props, ["children", "destructive", "inset", "closeOnSelect", "onSelect", "shortcut"]);
   const allowModifiers = !variant.wrapLabel;
-  const node = menuRow(mergeProps({
-    ...(allowModifiers ? {
-      get "data-destructive"() { return own.destructive ? "true" : null; },
-      get "data-inset"() { return own.inset ? "true" : null; },
-    } : {}),
+  const modifiers = allowModifiers ? {
+    get "data-destructive"() { return own.destructive ? "true" : null; },
+    get "data-inset"() { return own.inset ? "true" : null; },
+  } : {};
+  const node = menuRow(mergeProps(modifiers, {
     get ariaKeyShortcuts() { return own.shortcut ?? null; },
   }, rest), {
     role: "menuItem",
