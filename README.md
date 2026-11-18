@@ -1,56 +1,54 @@
 # zgui-js
 
-**Native TSX applications powered by zgui, QuickJS, and Solid.**
+**Native TSX applications powered by `zgui`, QuickJS, and Solid.**
 
-zgui-js is an experimental native UI host. Applications are written in TypeScript and TSX, use Solid's reactive model through `@hewel/zgui`, and run in an embedded QuickJS runtime via rquickjs. A Rust host owns the native UI tree, styling, layout, rendering, input, asynchronous services, and application lifecycle.
+`zgui-js` is an experimental native UI host and SDK. Applications are written in TypeScript and TSX using Solid's reactive model through `@hewel/zgui`, compiled with StyleX and Rolldown into immutable packages, and executed inside an embedded QuickJS runtime (`rquickjs`). A Rust host owns the native UI tree, styling, layout, GPU rendering, input dispatch, asynchronous host services, and application lifecycle.
 
-zgui-js is independently maintained and is not an official zgui project or affiliated with its maintainers.
+**There is no WebView and no browser DOM.** Offscreen previews execute the same production application package, JavaScript session, UI bridge, and native renderer on a headless `wgpu` backend for deterministic screenshots, structural queries, and visual regression comparisons.
 
-There is **no WebView and no browser DOM**. The repository also includes an offscreen preview system that uses the production application package, JavaScript runtime, UI bridge, and native renderer for scenario-based screenshots, assertions, and image comparisons.
+> **Independent project:** `zgui-js` builds on pinned revisions of [`zortax/zgui`](https://github.com/zortax/zgui) and is independently maintained; it is not an official `zgui` project or affiliated with its maintainers.
 
 ## How it works
 
 ```mermaid
 flowchart TB
-    Source["Application: TSX, TypeScript, CSS, assets"] --> Build["packages/build: tsc + StyleX/Babel Solid transform + Rolldown"]
-    Build --> Package["Immutable package: JavaScript, source map, styles, assets, manifest"]
-    Package --> Host["native-host: QuickJS session, Solid reactivity, UI bridge"]
-    Host <--> Native["Upstream zgui: native tree, input, layout, rendering"]
-    Native -->|Live application| Desktop["Native platform backend: window and compositor"]
-    Native -->|Offscreen preview| Preview["Headless platform: real GPU frames and native UI evidence"]
+    Source["Application: TSX, TypeScript, StyleX, CSS, assets"] --> Build["packages/build: tsc + StyleX/Babel Solid + Rolldown"]
+    Build --> Package["Immutable package: JS bundle, source map, styles, assets, manifest"]
+    Package --> Host["native-host: QuickJS session, Solid reactivity, ui-bridge"]
+    Host <--> Native["Upstream zgui: native tree, Stylo CSS, Parley text, wgpu"]
+    Native -->|Live application| Desktop["Native platform backend: desktop / Wayland"]
+    Native -->|Offscreen preview| Preview["Headless platform: real GPU frames and sealed evidence"]
 ```
 
-Node.js is used for build tooling, not application execution. The host validates the package and runs its JavaScript on the owner UI thread; Solid updates native nodes through the bridge rather than a browser DOM.
+Node.js runs **only at build time**; application code executes on the Rust host's owner UI thread inside QuickJS, driving native nodes across [`crates/ui-bridge`](crates/ui-bridge) rather than mutating a browser DOM. Platform and window-manager capabilities come from the pinned upstream `zgui` backend—`zgui-js` does not ship desktop environment adapters or compositor-specific daemons.
 
-Platform and window-manager capabilities come from the pinned upstream zgui backend. zgui-js does not implement a WM adapter layer or compositor-specific services. Offscreen preview reuses the production session, bridge, and renderer; it is not a separate UI implementation.
+The host and SDK are structured around four core architectural boundaries (domain terms are defined in [`GLOSSARY.md`](GLOSSARY.md)):
 
-See the [runtime ownership diagram](docs/development/tsx-native-ui.md#31-system-boundaries) and [preview execution diagram](docs/development/preview-mode.md#31-shared-production-path) for the detailed boundaries.
+1. **Zero-DOM Native UI & StyleX (`@hewel/zgui`)**
+   A custom Solid universal renderer drives native handles across `crates/ui-bridge`, paired with a themed component and overlay library (`@hewel/zgui/components`, `@hewel/zgui/icons`), owner-scoped geometry and animation queries, and `@stylexjs/babel-plugin` stylesheets validated against the `zgui-stylex-v1` native CSS profile.
+2. **Immutable Packages & Atomic Session Reload (`packages/build`, `crates/native-host`)**
+   Each build type-checks with the pinned TypeScript compiler (`tsc --noEmit`), compiles TSX/StyleX, and publishes an immutable, SHA-256-verified package generation. Source edits trigger **full-session reload** (not state-preserving HMR) via [`session_host.rs`](crates/native-host/src/session_host.rs) and [`session.rs`](crates/native-host/src/session.rs); if a later build or preflight check fails, the active generation stays running untouched.
+3. **Shared Production Preview Pipeline (`crates/native-host/src/preview`)**
+   Offscreen previews use the exact same package loader, QuickJS runtime, bridge, layout, and GPU renderer ([`driver.rs`](crates/native-host/src/preview/driver.rs), [`evidence.rs`](crates/native-host/src/preview/evidence.rs), [`output.rs`](crates/native-host/src/preview/output.rs)) rather than a mock DOM, emitting sealed `result.json` evidence, screenshots, and native tree snapshots.
+4. **Bounded Host Authority (`crates/js-runtime`, `@hewel/zgui-services`)**
+   JavaScript runs without `window`, `document`, `fetch`, `process`, or `setInterval`. Asset reads, timers, and frame callbacks pass through explicit host adapters ([`assets.rs`](crates/native-host/src/assets.rs), [`work.rs`](crates/native-host/src/work.rs)) and retire cleanly with each session generation.
 
-The Rust implementation concentrates lifecycle and evidence rules in shared modules; domain terms are defined in [GLOSSARY.md](GLOSSARY.md).
-
-- [session_host.rs](crates/native-host/src/session_host.rs) owns generation allocation, replacement, retirement, and retry. Live and preview adapters use the same interface, with fallback or propagated failures selected explicitly.
-- [session.rs](crates/native-host/src/session.rs) owns module evaluation and bounded work turns, returning typed diagnostics, contract failures, or host invariant errors. [integration.rs](crates/native-host/src/integration.rs) owns the baseline and exercise workflow.
-- [assets.rs](crates/native-host/src/assets.rs) provides the seam for live and fixture asset adapters; scheduling and JavaScript promise roots remain in `work.rs`.
-- [run/ledger.rs](crates/native-host/src/preview/run/ledger.rs) owns action progress and failure precedence. [evidence.rs](crates/native-host/src/preview/evidence.rs) owns capture identity, validation, paths, and historical publication.
-
-These modules give callers leverage through shared behavior and maintainers locality for lifecycle, request, and publication tests. Tests cross the same interfaces used by the live host and preview.
+See the [runtime ownership diagram](docs/development/tsx-native-ui.md#31-system-boundaries) and [preview execution diagram](docs/development/preview-mode.md#31-shared-production-path) for end-to-end diagrams.
 
 ## Requirements
 
 | Component | Requirement |
 | --- | --- |
-| Rust | `1.100.0`, pinned by `rust-toolchain.toml` |
+| Rust | `1.100.0`, pinned by [`rust-toolchain.toml`](rust-toolchain.toml) |
 | Node.js | `>=26.13.0` |
 | pnpm | `12.18.0` |
-| TypeScript | `7.0.2`, installed locally by pnpm; no global compiler required |
-| Native build tools | A C/C++ toolchain capable of building QuickJS and the native dependencies |
-| Graphics | A graphics adapter and driver supported by the native wgpu renderer |
+| TypeScript | `7.0.2`, installed locally via pnpm (no global compiler required) |
+| Native toolchain | C/C++ compiler toolchain capable of building QuickJS (`rquickjs`) and native dependencies |
+| Graphics | Vulkan / GPU adapter and driver supported by the native `wgpu` renderer |
 
-Interactive examples have been verified on Linux with Wayland. Platform and window-manager support is determined by upstream zgui; this library does not require a particular compositor or provide compositor-specific services.
-
-Offscreen previews do not open a desktop window, but they still require a working graphics adapter. They are not software-only JavaScript screenshots.
-
-Dependencies and upstream revisions are pinned. Keep `Cargo.lock` and `pnpm-lock.yaml` when installing or building. See the [implementation baseline](docs/development/baseline.md) for the audited dependency set and [vendor/README.md](vendor/README.md) for the local native patches.
+- **Platform support:** Interactive examples have been verified on Linux with Wayland. Platform and window-manager support comes from upstream `zgui`.
+- **Headless previews:** Offscreen previews do not open a desktop window, but still require a working `wgpu` graphics adapter—they render real GPU frames rather than software-only JS mocks.
+- **Pinned dependencies:** Keep `Cargo.lock` and `pnpm-lock.yaml` when installing or building. See the [implementation baseline](docs/development/baseline.md) and [`vendor/README.md`](vendor/README.md) for audited pins and local native patches.
 
 ## Quick start
 
@@ -61,54 +59,39 @@ pnpm install --frozen-lockfile
 pnpm dev --app counter
 ```
 
-One command builds the native host with Cargo, builds the application, opens its
-native window, and watches for changes. Cargo checks incremental freshness on
-each launch; ordinary application edits do not rebuild Rust. Platform selection
-uses upstream zgui's desktop detection; set `ZGUI_PLATFORM=wayland` to select
-Wayland explicitly.
+This single command compiles the native host with Cargo when stale, builds `apps/examples/counter`, opens a native window, and watches for changes. Ordinary TypeScript/TSX edits do not recompile Rust. Platform selection follows upstream `zgui` desktop detection; set `ZGUI_PLATFORM=wayland` to target Wayland explicitly.
 
-Click **Increment** to update the native **Count** and **Doubled** labels.
-`pnpm dev --app counter --exit-after-ms 5000` requests a bounded native launch.
-Closing the window ends the development session. Ctrl+C stops the builder and
-its owned native/Cargo processes; a native failure exits rather than restarting
-silently. Native executable discovery respects Cargo's configured target directory.
+Useful flags and lifecycle behavior:
 
-### Development and reload
+- `pnpm dev --app counter --exit-after-ms 5000` — run a bounded native launch for smoke checks.
+- Closing the window stops the dev session; `Ctrl+C` stops the builder and its owned Cargo/native processes; a native crash exits rather than restarting silently.
+- Native executable discovery respects Cargo's configured target directory.
 
-The same commands work inside each example:
+### Per-example and external app workflows
+
+Inside any example directory (or against any standalone app directory via `zgui-js dev /path/to/my-app`):
 
 ```sh
 cd apps/examples/counter
-pnpm dev
-pnpm build
-pnpm preview
+pnpm dev      # build, launch native window, watch and reload on changes
+pnpm build    # type-check and publish an immutable package (no window)
+pnpm preview  # build app + host and capture an offscreen GPU preview frame
 ```
 
-`pnpm build` type-checks and publishes a package without opening a window.
-`pnpm preview` builds the app and host, then captures an offscreen native frame;
-it is not a browser preview server.
+- Standalone applications need `src/main.tsx`, `tsconfig.json`, SDK dependencies, and `@hewel/zgui-build` for the CLI (`zgui-js --help`). Root shortcuts default to `counter`; `pnpm build --app counter --watch` exposes the builder-only mode for custom supervisors.
+- Watching uses a persistent Rolldown watcher and per-compiler Babel/Solid transform cache. [Rolldown 1.3.2 still rescans the module graph](https://github.com/rolldown/rolldown/blob/v1.3.2/crates/rolldown_watcher/src/watch_task.rs#L122-L123); unchanged modules skip Babel transforms while `tsc` still gates every publication.
 
-The `zgui-js` executable also accepts an application directory:
-`zgui-js dev /path/to/my-app`. Applications need `src/main.tsx`, `tsconfig.json`,
-their SDK dependencies, and `@hewel/zgui-build` for the CLI. No example-name allowlist
-is required. `zgui-js --help` lists options; root commands default to `counter`.
+## Application model & SDK
 
-Development uses a persistent Rolldown watcher and a per-compiler Babel/Solid
-transform cache. [Rolldown 1.3.2 still rescans the module graph](https://github.com/rolldown/rolldown/blob/v1.3.2/crates/rolldown_watcher/src/watch_task.rs#L122-L123); unchanged source
-avoids repeated Babel transformation, not all bundler work. Type checking still
-gates publication. An initial build failure keeps the watcher alive and delays
-host launch; a later failure leaves the active package unchanged. Correcting the
-source publishes a new immutable generation and reloads the existing host.
-
-This is **full-session reload, not state-preserving HMR**. JavaScript, CSS, and
-assets publish atomically; rebuild rather than modifying an already published
-generation. `pnpm build --app counter --watch` is the lower-level builder-only
-entry for integrations that manage their own host. The former `ui:build` and
-`ui:dev` script names have been replaced by `build` and `dev`.
+- **Entry point:** `src/main.tsx` exports `hostApiVersion = 1` and `mount(root)`, returning the disposer from `renderApp`. See [`apps/examples/counter/src/main.tsx`](apps/examples/counter/src/main.tsx).
+- **UI & Components:** Import reactive primitives and native elements from `@hewel/zgui`, themed components and overlays from `@hewel/zgui/components`, and vector icons from `@hewel/zgui/icons`. See the [UI SDK guide](packages/ui/README.md) and [component map](docs/development/component-map.md).
+- **Styling & Assets:** Optional `src/app.css` loads before compiled StyleX sheets, both validated by `zgui-stylex-v1` preflight. Package images, data files, and scoped fonts under `assets/` are declared in the manifest and verified at host load time. See [StyleX authoring and native packaging](docs/development/stylex.md).
+- **Host Services:** `@hewel/zgui-services` provides `readTextAsset`, `HostRequest`, and `HostServiceError`. Start work from mount, lifecycle, or event callbacks, and cancel requests, timers, and frame callbacks on disposal. See the [host services guide](packages/services/README.md).
+- **Execution Environment:** No `window`, `document`, `fetch`, `process`, or `setInterval`; supported styles are a strict native subset rather than full browser CSS.
 
 ## Examples
 
-Use the same build and launch commands with another application name:
+Run any example with `pnpm dev --app <name>` or `pnpm preview --app <name>`:
 
 | Application | Demonstrates |
 | --- | --- |
@@ -116,9 +99,9 @@ Use the same build and launch commands with another application name:
 | `stylex` | Compiled StyleX styles, imported tokens/themes, dynamic values, keyframes, and package assets |
 | `lists` | Dynamic lists and identity-based native node reuse |
 | `async` | Timers, frame callbacks, promises, and asynchronous host services |
-| `editing` | Native single-line and multiline editing, selection, IME, read-only, and disabled states |
+| `editing` | Native single-line and multiline editing, selection, IME composition, read-only, and disabled states |
 | `components` | Styled primitives, layout tokens, themes, badges, and cards |
-| `controls` | Inputs, checkboxes, radios, switches, sliders, progress, and spinners |
+| `controls` | Inputs, checkboxes, radios, switches, sliders, progress bars, and spinners |
 | `composition` | Accordions, collapsibles, and nested theme providers |
 | `selection` | Controlled and uncontrolled choice controls |
 | `tabs` | Keyboard-navigable tabs and panels |
@@ -126,9 +109,7 @@ Use the same build and launch commands with another application name:
 
 ## Offscreen previews
 
-One command prepares the application and native host and runs the counter
-scenario. It captures the initial frame, performs a native pointer click, asserts
-`Count: 1`, and captures the updated frame:
+Build and execute a deterministic offscreen scenario (initial frame capture, simulated pointer click, state assertion `Count: 1`, and updated capture):
 
 ```sh
 pnpm preview --app counter \
@@ -136,116 +117,93 @@ pnpm preview --app counter \
   --out target/preview-counter-001
 ```
 
-Omit `--out` for a fresh automatically named directory under `target/`.
-Omit `--scenario` for the initial-frame capture. `--profile` and `--fixture`
-default to the repository's default profile and empty fixture.
+- Omit `--out` for a fresh directory under `target/`; omit `--scenario` for an initial-frame capture; `--profile` and `--fixture` default to `preview/profiles/default.json` and the empty fixture.
+- Add `--watch` to supervise continuous scenario reruns on package changes (cancelling superseded runs and spawning fresh workers).
+- The default profile renders an 800×600 logical surface at 1.75× scale (1400×1050 PNG), producing `result.json`, screenshots, native tree snapshots, frame evidence, an artifact manifest, and a bounded JSON summary on stdout. **Always use a fresh `--out` directory for each run**; historical screenshots never substitute for a current run.
 
-For continuous offscreen verification, use the same managed entry:
-
-```sh
-pnpm preview --app counter --watch \
-  --scenario preview/scenarios/counter-virtual.json
-```
-
-This starts the builder and preview supervisor, not a desktop host. It owns and
-cleans up the scenario workers; no second terminal is needed.
-
-Low-level diagnostics remain available after preparing the host (the path below
-assumes Cargo's default target directory):
+Low-level host commands (once `native-host` is built):
 
 ```sh
 target/debug/native-host preview doctor \
   --profile preview/profiles/default.json \
   --out target/preview-doctor-001
-```
 
-The default profile uses an 800×600 logical surface at 1.75× scale, producing 1400×1050 PNG images. Each run records a structured `result.json`, screenshots, native tree snapshots, frame evidence, and an artifact manifest. Stdout contains a bounded JSON summary.
-
-Use a **new `--out` directory for every run**. Existing historical screenshots are not proof that a later run succeeded.
-
-Inspect the native node associated with the final capture:
-
-```sh
 target/debug/native-host preview inspect \
   --run target/preview-counter-001 \
   --capture after-increment --test-id count-label \
   --fields text,state,boundsLogical --max-nodes 1
+
+pnpm preview:check --out target/preview-ci-001
 ```
 
-Additional workflows:
+`preview compare` validates stored captures against reviewed baselines without opening a graphics device, rejecting dimension or environment mismatches instead of rescaling. The checked-in visual baseline is tied to its recorded AMD/RADV/Mesa environment and is not expected to be portable across every GPU or driver; missing graphics adapters fail explicitly rather than skipping silently.
 
-- `preview watch` follows atomic package publications, cancels superseded work, and reruns scenarios in fresh workers.
-- `preview compare` compares stored captures against reviewed baselines without opening a graphics device. Incompatible dimensions or environments are rejected rather than silently rescaled or compared with relaxed thresholds.
-- `pnpm preview:check --out target/preview-ci-001` runs the native scenario and compares it with the repository baseline. Build the counter and native host first.
-
-The checked-in visual baseline is tied to its recorded AMD/RADV/Mesa environment and is not expected to be portable across every GPU and driver. A required graphics check fails when no adapter is available; it is not skipped and reported as successful.
-
-See [Preview implementation and verification](docs/development/preview-verification.md) for all commands, failure categories, artifact contracts, and recorded evidence.
-
-## Application model
-
-- Import native components and reactive primitives from `@hewel/zgui`. Native nodes, events, and styles are not HTML or DOM APIs.
-- The application entry point is `src/main.tsx`. It exports `hostApiVersion = 1` and `mount(root)`; `mount` returns the disposer supplied by `renderApp`. See the [counter source](apps/examples/counter/src/main.tsx).
-- Optional `src/app.css` is packaged as the base sheet before generated StyleX `app.css`. Files under `assets/` are copied into the package and declared in its manifest; the host verifies and loads only declared resources. See [StyleX authoring and native packaging](docs/development/stylex.md) for styles, tokens, themes, keyframes, fonts, diagnostics, and schema-v2 artifacts.
-- `@hewel/zgui-services` exposes `readTextAsset`, `HostRequest`, and `HostServiceError`. Start work from mount, lifecycle, or event callbacks, and cancel requests, timers, and frame callbacks during cleanup.
-- The JavaScript environment does not provide `window`, `document`, `fetch`, `process`, or `setInterval`. Supported native styles are a deliberately bounded subset, not full browser CSS.
-
-For API contracts, see the [UI SDK guide](packages/ui/README.md) and [host services guide](packages/services/README.md).
+See [Preview implementation and verification](docs/development/preview-verification.md) for all commands, artifact contracts, and verification evidence.
 
 ## Checks and tests
 
 ```sh
-pnpm lint
-pnpm typecheck
-pnpm smoke
-pnpm test:build
-pnpm test:rust
-pnpm check
-pnpm test:preview
+pnpm lint          # oxlint --deny-warnings + tools/oxlint-zgui-plugin.mjs architectural gates
+pnpm typecheck     # native packages, type fixtures, and examples via local TypeScript 7.0.2 CLI
+pnpm smoke         # build and verify the smoke package contract
+pnpm test:build    # Node build, host-fixture, stylex, and component-map tests
+pnpm test:rust     # workspace Rust tests + cargo clippy (-D warnings) offline
+pnpm test:vendor   # required offline test suites for patched vendor/ crates
+pnpm check         # lint + typecheck + test:build + test:rust
+pnpm test:preview  # build counter + native-host and run headless GPU preview suites
 ```
 
-`pnpm lint` runs `oxlint --deny-warnings` (built-in rules plus `tools/oxlint-zgui-plugin.mjs` architectural gates). `pnpm check` runs lint, typechecking, build/property tests, and workspace Rust tests together.
-
-`pnpm typecheck` checks the native SDK packages, consumer type fixtures, and examples with the pinned local TypeScript 7.0.2 CLI. Application builds use `tsc --project … --noEmit` before publication and preserve compiler diagnostics on failure. Development checks run in a cancellable child process. The build tooling does not use the legacy TypeScript compiler API or fall back to a system `tsc`. Native consumer configs remain ES2022-only, without DOM or Node globals.
-
-`pnpm test:preview` builds the counter and native host before running the preview integration tests. Pixel-producing checks require a working graphics environment.
-
-Real-desktop integration tests are separate opt-in, ignored tests. They may open windows, use the clipboard, or require coordinated keyboard/IME input. Read the [native test notes](docs/development/baseline.md) before enabling them; do not run every ignored test indiscriminately. The [P6 desktop verification record](docs/development/preview-verification.md#p6--real-waylandniri-desktop-verification) retains historical niri-specific evidence, whose compositor-specific gates and panel example are no longer shipped.
+- Type checking inside `pnpm typecheck` and `pnpm build` runs `tsc --project … --noEmit` with pinned TypeScript 7.0.2 under ES2022-only consumer settings (no DOM or Node globals), without legacy compiler APIs or system `tsc` fallbacks.
+- Real-desktop integration tests are marked `#[ignore]` and opt-in because they open live windows or interact with clipboard/IME state. Review the [native test notes](docs/development/baseline.md) before running them. Historical niri-specific notes in [P6 desktop verification](docs/development/preview-verification.md#p6--real-waylandniri-desktop-verification) are retained solely as archival evidence.
 
 ## Repository layout
 
 | Path | Purpose |
 | --- | --- |
-| `crates/native-host` | Package loading, native hosting, session reload, upstream layer-shell configuration, and preview CLI |
-| `crates/js-runtime` | Embedded JavaScript execution and runtime boundaries |
-| `crates/ui-bridge` | Native node handles, properties, events, and structural operations |
-| `crates/host-services` | Rust-backed resource services |
-| `packages/ui` | Native TSX SDK, components, renderer adapter, and types |
-| `packages/services` | Typed application-facing host services |
-| `packages/build` | Type checking, TSX compilation, package publication, and build watching |
-| `apps/examples` | Runnable example applications |
-| `preview` | Profiles, fixtures, scenarios, pinned fonts, comparison policies, and visual baselines |
-| `schemas/preview` | JSON Schemas for preview protocols |
-| `tests` | Build, type, native-control, and preview tests |
-| `vendor` | Required local patches at pinned upstream revisions |
-| `docs/development` | Specifications, implementation baseline, and verification records |
+| [`crates/native-host`](crates/native-host) | Package verification, native desktop/layer hosting, atomic reload, and preview CLI |
+| [`crates/js-runtime`](crates/js-runtime) | Embedded QuickJS runtime, module evaluation, turn guards, and rejection tracking |
+| [`crates/ui-bridge`](crates/ui-bridge) | Native node handles, properties, event dispatch, geometry queries, and structural ops |
+| [`crates/host-services`](crates/host-services) | Rust-backed asynchronous host services |
+| [`packages/ui`](packages/ui) | `@hewel/zgui` TSX SDK, universal renderer, themed components, icons, and native types |
+| [`packages/services`](packages/services) | `@hewel/zgui-services` typed host-service client APIs |
+| [`packages/build`](packages/build) | `@hewel/zgui-build` CLI (`zgui-js`), typecheck runner, StyleX/Babel/Solid compiler, watcher |
+| [`apps/examples`](apps/examples) | Runnable example applications |
+| [`preview`](preview) | Preview profiles, fixtures, scenarios, pinned Noto fonts, comparison policies, baselines |
+| [`schemas/preview`](schemas/preview) | JSON Schemas for preview inputs and sealed output contracts |
+| [`tests`](tests) | Build, type, native-fixture, and GPU preview integration tests |
+| [`tools`](tools) | Custom `oxlint` architectural plugin ([`tools/oxlint-zgui-plugin.mjs`](tools/oxlint-zgui-plugin.mjs)) |
+| [`vendor`](vendor) | Pinned upstream `zgui` crates with documented local patches ([`vendor/README.md`](vendor/README.md)) |
+| [`docs/adr`](docs/adr) | Architecture Decision Records (Solid 2.0 posture, Wayland shell framework boundaries) |
+| [`docs/development`](docs/development) | Engineering specifications, baseline contracts, StyleX docs, and preview verification |
+| [`docs/agents`](docs/agents) | GitHub issue/Project conventions ([`issue-tracker.md`](docs/agents/issue-tracker.md)), triage labels, domain rules |
+| [`GLOSSARY.md`](GLOSSARY.md) | Canonical domain terminology shared across code and documentation |
 
-## Status and limitations
+## Status, limitations, and roadmap
 
-Development phases 0–8 and preview phases P0–P6 have recorded completion evidence. These milestones do not imply complete browser or desktop feature parity. Historical niri integration, its panel example, and compositor-specific tests have since been removed; earlier verification records are retained as history, not current support claims.
+Development phases 0–8 and preview phases P0–P6 are complete, and active specifications and issues are tracked in **GitHub Project #1 (`zgui-js`)** ([project board](https://github.com/users/hewel/projects/1), [issues](https://github.com/hewel/zgui-js/issues)). Historical niri compositor integration and its panel example have been retired; earlier verification records remain strictly archival.
 
-Native UI, resource services, scheduling, previews, and the generic upstream layer-shell wrapper remain in scope. Runtime platform and compositor capabilities belong to upstream zgui.
+Current architectural boundaries and open workstreams:
 
-Current limitations:
-
-- The pinned upstream backend does not support layer-parent xdg-popups or native menus extending beyond layer-surface bounds.
-- No window-manager, audio, or notification service backends are shipped.
-- Offscreen scenarios do not replace real-desktop testing of focus, clipboard, IME, compositor behavior, or output lifecycle.
-- Performance notes are scoped observations from specific environments, not general cross-hardware guarantees.
+- **Popup & desktop daemons:** Pinned upstream `zgui` does not support out-of-surface layer-parent `xdg-popup` windows. No compositor-specific WM, audio, MPRIS, or notification daemons are shipped inside the UI framework.
+- **Solid 2.0 migration posture ([`ADR-0001`](docs/adr/0001-solid-2-migration-posture.md)):** Production dependencies stay pinned on Solid `1.9.19` while SDK surface hygiene and reactive settlement seams are hardened ahead of a gated Solid 2.x cutover.
+- **Wayland shell capabilities ([`ADR-0002`](docs/adr/0002-wayland-shell-framework-boundaries.md)):** Planned generic framework additions—multi-output layer surfaces, live input regions, `ext-session-lock-v1`, spring physics, canvas/SVG documents, capability-gated dynamic images, sockets, subprocesses, and inbound control channels—are scoped so UI-independent system daemons stay outside `zgui-js`.
+- **Verification scope:** Offscreen GPU previews do not replace real-desktop validation of compositor focus, IME, clipboard, or monitor hotplug; hardware timings remain environment-specific observations.
 
 ## Documentation
 
-- [Development specification](docs/development/tsx-native-ui.md) — original native host and TSX requirements.
-- [Preview specification](docs/development/preview-mode.md) — original preview-mode requirements.
-- [Implementation baseline](docs/development/baseline.md) — pinned dependencies, runtime contracts, and native test guidance.
-- [Preview verification](docs/development/preview-verification.md) — preview workflows and recorded acceptance evidence.
+- [`GLOSSARY.md`](GLOSSARY.md) — shared domain vocabulary.
+- [`docs/adr/0001-solid-2-migration-posture.md`](docs/adr/0001-solid-2-migration-posture.md) & [`docs/adr/0002-wayland-shell-framework-boundaries.md`](docs/adr/0002-wayland-shell-framework-boundaries.md) — architectural decisions.
+- [`packages/ui/README.md`](packages/ui/README.md) & [`packages/services/README.md`](packages/services/README.md) — UI SDK and host-services contracts.
+- [`docs/development/component-map.md`](docs/development/component-map.md) & [`docs/development/stylex.md`](docs/development/stylex.md) — component parity and StyleX native authoring.
+- [`docs/development/tsx-native-ui.md`](docs/development/tsx-native-ui.md) & [`docs/development/preview-mode.md`](docs/development/preview-mode.md) — core runtime and preview specifications.
+- [`docs/development/baseline.md`](docs/development/baseline.md) & [`docs/development/preview-verification.md`](docs/development/preview-verification.md) — pinned baseline and recorded verification evidence.
+- [`vendor/README.md`](vendor/README.md) — vendored upstream patches and crate-level regression gates.
+
+## License
+
+`zgui-js` is licensed under the **Apache License, Version 2.0** (see [`LICENSE`](LICENSE)).
+
+Third-party and upstream attributions are collected in [`NOTICE`](NOTICE):
+
+- Vendored native crates under `vendor/` and adapted UI resources under `packages/ui/src/components/generated/` originate from [`zortax/zgui`](https://github.com/zortax/zgui) (`Apache-2.0`, rev `80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a`; see [`vendor/README.md`](vendor/README.md) and [`packages/ui/upstream/ORIGIN`](packages/ui/upstream/ORIGIN)), including file-scoped `MPL-2.0` code in [`vendor/zgui-style/src/driver/recalc.rs`](vendor/zgui-style/src/driver/recalc.rs).
+- Unmodified preview fixture fonts under `preview/fonts/` are redistributed under the **SIL Open Font License 1.1** (see [`preview/fonts/PROVENANCE.md`](preview/fonts/PROVENANCE.md)).

@@ -1,0 +1,36 @@
+zgui-js
+Copyright 2026 hewel
+
+Licensed under the Apache License, Version 2.0 (see `LICENSE`).
+`zgui-js` is independently maintained and is not an official `zgui` project
+or affiliated with its maintainers.
+
+## Upstream `zgui` Notice and Attributions
+
+This repository includes and adapts portions of `zgui`
+(https://github.com/zortax/zgui, pinned revision
+`80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a`), Copyright 2026 Leonard Seibold,
+licensed under the Apache License, Version 2.0:
+
+1. **Vendored and locally patched crates under `vendor/`**:
+   Copied from pinned upstream `zgui` crates with focused local patches
+   documented in `vendor/README.md`. Each vendored crate retains its upstream
+   `LICENSE` and `NOTICE` files (including transitive upstream attributions for
+   the GPUI project under Apache-2.0, Servo's `stylo` under MPL-2.0, the
+   Windows Terminal project under MIT, Linux kernel `uapi` headers under MIT
+   and GPL-2.0 with Linux-syscall-note, and `hyprland-focus-grab-v1.xml` under
+   BSD-3-Clause). In particular, `vendor/zgui-style/src/driver/recalc.rs`
+   remains subject to the Mozilla Public License, Version 2.0 (`MPL-2.0`).
+
+2. **UI stylesheets, themes, and icons under `packages/ui/`**:
+   Generated component stylesheets, theme presets, and icon definitions under
+   `packages/ui/src/components/generated/` are adapted from upstream `zgui`
+   under Apache-2.0. Provenance, upstream `LICENSE`, and upstream `NOTICE` are
+   preserved under `packages/ui/upstream/` (`ORIGIN`, `LICENSE`, `NOTICE`).
+
+## Preview Fixture Fonts
+
+Unmodified font binaries redistributed under `preview/fonts/`
+(`NotoSans-Regular.ttf` and `NotoSansCJKsc-Regular.otf`) are licensed under the
+SIL Open Font License 1.1 (`SIL-OFL-1.1`). See `preview/fonts/PROVENANCE.md`,
+`preview/fonts/NotoSans-LICENSE.txt`, and `preview/fonts/NotoSansCJK-LICENSE.txt`.
