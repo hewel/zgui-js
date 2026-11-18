@@ -35,11 +35,10 @@ test("services defer host lookup and preserve the host request, receiver and syn
     assert.throws(() => readTextAsset("assets/missing.txt"), error => error === failure);
 
     const { createRoot, flush } = await import("solid-js");
-    let loaded;
     let dispose;
-    createRoot(d => {
+    const loaded = createRoot(d => {
       dispose = d;
-      loaded = loadTextAsset("assets/cancelled.txt");
+      return loadTextAsset("assets/cancelled.txt");
     });
     flush();
     dispose();

@@ -9,7 +9,9 @@ import { workspaceRoot } from "../../packages/build/src/build.mjs";
 
 const execFileAsync = promisify(execFile);
 const oxlintBin = path.join(workspaceRoot, "node_modules/oxlint/bin/oxlint");
+const oxfmtBin = path.join(workspaceRoot, "node_modules/oxfmt/bin/oxfmt");
 const configPath = path.join(workspaceRoot, ".oxlintrc.json");
+const fmtConfigPath = path.join(workspaceRoot, ".oxfmtrc.json");
 
 async function runOxlint(args) {
   try {
@@ -116,6 +118,13 @@ const negativeCases = [
     expected: /eslint\(no-restricted-globals\)/,
     guidance: /owner-scoped overlay primitives/,
   },
+  {
+    name: "typescript/await-thenable (tsrs type-aware linting)",
+    file: "await-non-promise.ts",
+    code: "export async function check() { const value = 42; return await value; }\n",
+    expected: /typescript\(await-thenable\)/,
+    guidance: /not Promise-like/,
+  },
 ];
 
 test("oxlint rules reject architectural violations with actionable teaching messages", async t => {
@@ -129,4 +138,20 @@ test("oxlint rules reject architectural violations with actionable teaching mess
     assert.match(result.output, item.expected, item.name);
     assert.match(result.output, item.guidance, item.name);
   }
+});
+
+test("oxfmt checks and formats files with repository configuration", async t => {
+  await execFileAsync(process.execPath, [oxfmtBin, "--check", "-c", fmtConfigPath, ".oxfmtrc.json", ".oxlintrc.json", "package.json", "packages/build/package.json"], {
+    cwd: workspaceRoot,
+    encoding: "utf8",
+  });
+  const dir = await mkdtemp(path.join(os.tmpdir(), "zgui-fmt-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const file = path.join(dir, "sample.ts");
+  await writeFile(file, "export const add=(x:number)=>x+1\n", "utf8");
+  await assert.rejects(
+    execFileAsync(process.execPath, [oxfmtBin, "--check", "-c", fmtConfigPath, file], { cwd: workspaceRoot }),
+  );
+  await execFileAsync(process.execPath, [oxfmtBin, "-c", fmtConfigPath, file], { cwd: workspaceRoot });
+  await execFileAsync(process.execPath, [oxfmtBin, "--check", "-c", fmtConfigPath, file], { cwd: workspaceRoot });
 });

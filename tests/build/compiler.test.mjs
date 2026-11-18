@@ -142,6 +142,7 @@ test("real TSX bundles have one reactive runtime, composed maps, resources, and 
   assert.equal(info.packages["solid-js"], "2.0.1");
   assert.equal(info.packages["@solidjs/universal"], "2.0.1");
   assert.equal(info.packages["@solidjs/babel-plugin"], "2.0.1");
+  assert.equal(info.packages.tsrs, "7.1.0-beta.tsrs2");
   assert.equal(info.engine.name, "QuickJS-NG");
   assert.equal(info.packages.rolldown, "1.3.2");
   assert.equal(info.graph.chunks.length, 1);

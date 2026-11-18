@@ -42,7 +42,7 @@ export function dependencyVersions() {
   const babelPluginRequire = createRequire(require.resolve("@solidjs/babel-plugin"));
   const uiRequire = createRequire(path.join(workspaceRoot, "packages/ui/package.json"));
   return Object.fromEntries([
-    ...["solid-js", "@solidjs/babel-plugin", "@babel/core", "@babel/parser", "@babel/traverse", "@babel/preset-typescript", "rolldown", "typescript", "@stylexjs/stylex", "@stylexjs/babel-plugin", "styleq"]
+    ...["solid-js", "@solidjs/babel-plugin", "@babel/core", "@babel/parser", "@babel/traverse", "@babel/preset-typescript", "rolldown", "tsrs", "@stylexjs/stylex", "@stylexjs/babel-plugin", "styleq"]
       .map(name => [name, require(`${name}/package.json`).version]),
     ["@solidjs/universal", packageVersion(uiRequire, "@solidjs/universal")],
     ["@solidjs/signals", JSON.parse(readFileSync(signalsPkgPath, "utf8")).version],

@@ -1,0 +1,22 @@
+{
+  "$schema": "./node_modules/oxfmt/configuration_schema.json",
+  "arrowParens": "avoid",
+  "printWidth": 100,
+  "sortPackageJson": false,
+  "ignorePatterns": [
+    "**/node_modules/**",
+    "**/dist/**",
+    "**/.zgui-generations/**",
+    "target/**",
+    "vendor/**",
+    ".agents/**",
+    "packages/ui/src/components/generated/**",
+    "preview/baselines/**",
+    "tests/build/.fixture-*/**",
+    "tests/build/.image-*/**",
+    "tests/build/.dependency-*/**",
+    "tests/types/*-negative.ts*",
+    "pnpm-lock.yaml",
+    "Cargo.lock"
+  ]
+}

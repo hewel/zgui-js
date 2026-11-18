@@ -28,13 +28,13 @@ below is retained and does not describe the currently shipped API or test suite.
 | StyleX merge dependency | `styleq` 0.2.1 |
 | JSX compiler | `@solidjs/babel-plugin` 2.0.1 |
 | Babel core / TypeScript preset | 7.29.13 / 7.29.7 |
-| Rolldown / TypeScript | 1.3.2 / 7.0.2 |
-| Oxlint | 1.94.0 (`--deny-warnings` + `tools/oxlint-zgui-plugin.mjs`) |
+| Rolldown / tsrs | 1.3.2 / 7.1.0-beta.tsrs2 |
+| Oxlint / Oxfmt | 1.94.0 (`--deny-warnings` + `typeAware` via `tsrs` + `tools/oxlint-zgui-plugin.mjs`) / 0.79.0 |
 | Parley | 0.11.1 with `complex-scripts`; required for CJK layout segmentation |
 
 The Fontique patch is selected deliberately for parity with the audited upstream performance implementation; it is not presented as necessary for correctness. `pnpm-lock.yaml` and `Cargo.lock` record the resolved graphs. Phase 0 graph inspection confirmed patched Fontique 0.11.1 and rquickjs `std`; Phase 1 deliberately added `macro`.
 
-TypeScript is pinned to 7.0.2 in both the root and `@hewel/zgui-build` manifests. Its package root no longer exposes the legacy compiler API. Workspace checks and one-shot application builds invoke the installed package's `bin/tsc` synchronously through the current Node executable with `--project … --noEmit`; development uses a cancellable asynchronous child. Compiler diagnostics remain the thrown error text. The CLI is resolved from `@hewel/zgui-build`'s local dependency, never from the shell or a global `tsc`. Babel/Rolldown perform runtime compilation; typechecking does not emit JavaScript or change native consumers' ES2022-only, DOM/Node-free environment.
+`tsrs` (`oxc-project/tsrs`) is pinned to `7.1.0-beta.tsrs2` in both the root and `@hewel/zgui-build` manifests. Workspace checks and one-shot application builds invoke the installed package's `bin/tsrs` synchronously through the current Node executable with `--project … --noEmit`; development uses a cancellable asynchronous child, and `oxlint` uses `tsrs`'s `tsrs-lint` binary for type-aware rules (`options.typeAware: true`). Compiler diagnostics remain the thrown error text. The CLI is resolved from `@hewel/zgui-build`'s local dependency, never from the shell or a global `tsc`/`tsrs`. Babel/Rolldown perform runtime compilation; typechecking does not emit JavaScript or change native consumers' ES2022-only, DOM/Node-free environment.
 
 ## Commands currently implemented
 

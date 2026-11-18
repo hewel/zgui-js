@@ -165,7 +165,7 @@ export function mergeProps<T extends readonly object[]>(...sources: T): MergeSou
         let joined = "";
         for (let i = 0; i < originals.length; i++) {
           const value = Reflect.get(originals[i], "__zguiClass");
-          if (value) joined = joined ? `${joined} ${value}` : String(value);
+          if (value) joined = joined ? `${joined} ${String(value)}` : String(value);
         }
         return joined;
       },

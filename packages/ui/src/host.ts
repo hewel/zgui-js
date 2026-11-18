@@ -8,7 +8,7 @@ export interface NativeHost {
     registerDismissLayer(
       node: NativeNode, callback: (reason: NativeDismissReason) => void,
       options: Required<NativeDismissLayerOptions>,
-    ): { update(options: Required<NativeDismissLayerOptions>): void; dispose(): void; };
+    ): { update: (options: Required<NativeDismissLayerOptions>) => void; dispose: () => void; };
     createTextNode(text: string): NativeNode;
     replaceText(node: NativeNode, text: string): void;
     isTextNode(node: NativeNode): boolean;

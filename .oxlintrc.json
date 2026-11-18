@@ -1,5 +1,8 @@
 {
   "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "options": {
+    "typeAware": true
+  },
   "plugins": ["eslint", "typescript", "oxc"],
   "jsPlugins": ["./tools/oxlint-zgui-plugin.mjs"],
   "ignorePatterns": [
@@ -60,53 +63,45 @@
         "zgui/no-direct-bridge": "off",
         "zgui/no-raw-insert-or-provider": "off",
         "no-restricted-globals": "off",
-        "no-shadow-restricted-names": "off"
+        "no-shadow-restricted-names": "off",
+        "typescript/unbound-method": "off"
       }
     },
     {
-      "files": [
-        "packages/ui/src/components/delay.ts",
-        "packages/ui/src/components/overlay.ts"
-      ],
+      "files": ["packages/ui/src/components/delay.ts", "packages/ui/src/components/overlay.ts"],
       "rules": {
         "no-restricted-globals": "off"
       }
     },
     {
-      "files": [
-        "apps/examples/async/**"
-      ],
+      "files": ["apps/examples/async/**"],
       "rules": {
         "no-restricted-globals": "off"
       }
     },
     {
-      "files": [
-        "packages/build/**",
-        "tools/**"
-      ],
+      "files": ["packages/build/**", "tools/**"],
       "rules": {
         "zgui/no-direct-bridge": "off",
-        "no-restricted-globals": "off"
+        "no-restricted-globals": "off",
+        "typescript/require-array-sort-compare": "off"
       }
     },
     {
-      "files": [
-        "tests/build/**",
-        "tests/preview/*.mjs",
-        "tests/native-controls/**"
-      ],
+      "files": ["tests/build/**", "tests/preview/*.mjs", "tests/native-controls/**"],
       "rules": {
         "zgui/no-direct-bridge": "off",
         "zgui/no-raw-insert-or-provider": "off",
         "zgui/no-internal-package-imports": "off",
-        "no-restricted-globals": "off"
+        "no-restricted-globals": "off",
+        "typescript/no-base-to-string": "off",
+        "typescript/require-array-sort-compare": "off",
+        "typescript/restrict-template-expressions": "off",
+        "typescript/unbound-method": "off"
       }
     },
     {
-      "files": [
-        "tests/types/**"
-      ],
+      "files": ["tests/types/**"],
       "rules": {
         "zgui/no-direct-bridge": "off",
         "zgui/no-raw-insert-or-provider": "off",

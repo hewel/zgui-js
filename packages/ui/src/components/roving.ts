@@ -102,7 +102,7 @@ export function createRovingFocus(orientation: Accessor<GroupOrientation>, navig
       }
       return false;
     },
-    onKeyDown(event: NativeKeyEvent) {
+    onKeyDown: (event: NativeKeyEvent) => {
       if (event.character != null) return;
       const key = event.key;
       const axis = orientation();

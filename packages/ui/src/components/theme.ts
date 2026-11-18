@@ -64,7 +64,7 @@ function rule(selector: string, scheme: "light" | "dark", theme: Theme): string 
 
 function themeSheet(selector: string, light: Theme, dark: Theme, scheme: ColorScheme): string {
   if (scheme !== "system" && scheme !== "light" && scheme !== "dark") {
-    throw new TypeError(`Unknown color scheme: ${scheme}`);
+    throw new TypeError(`Unknown color scheme: ${String(scheme)}`);
   }
   let css = "";
   if (scheme === "light" || scheme === "system") css += rule(selector, "light", light);
