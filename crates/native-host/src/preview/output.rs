@@ -49,6 +49,20 @@ struct ArtifactInventory<'a> {
     self_path: &'static str,
 }
 
+fn compact_original_error(cause: Value) -> Value {
+    let Some(object) = cause.as_object() else { return cause; };
+    let mut compacted = serde_json::Map::new();
+    for key in ["code", "exitCode", "stage", "step", "actionSequence"] {
+        if let Some(value) = object.get(key) {
+            compacted.insert(key.to_owned(), value.clone());
+        }
+    }
+    if let Some(message) = object.get("message").and_then(Value::as_str) {
+        compacted.insert("message".to_owned(), Value::String(message.chars().take(512).collect()));
+    }
+    Value::Object(compacted)
+}
+
 pub(crate) fn publication_failure(command: &str, error: Error, previous: &Value) -> Value {
     let mut failed = super::failure(command, error);
     failed["originalError"] = if previous["originalError"].is_null() {
@@ -56,7 +70,25 @@ pub(crate) fn publication_failure(command: &str, error: Error, previous: &Value)
     } else {
         previous["originalError"].clone()
     };
+    if serde_json::to_vec(&failed).map_or(true, |bytes| bytes.len() + 1 > super::MAX_STDOUT_BYTES) {
+        failed["originalError"] = compact_original_error(failed["originalError"].take());
+        if serde_json::to_vec(&failed).map_or(true, |bytes| bytes.len() + 1 > super::MAX_STDOUT_BYTES) {
+            failed["originalError"] = serde_json::json!({
+                "code": failed["originalError"]["code"],
+                "exitCode": failed["originalError"]["exitCode"],
+            });
+        }
+    }
     failed
+}
+
+pub(super) fn bounded_read_error(error: BoundedReadError, limit_message: &str) -> Error {
+    match error {
+        BoundedReadError::TooLarge { .. } | BoundedReadError::NotRegularFile => {
+            Error::new("E_OUTPUT_LIMIT", 8, limit_message)
+        }
+        other => io_error(other),
+    }
 }
 
 pub(crate) fn enforce_stdout_limit(command: &str, result: Value) -> Value {
@@ -149,10 +181,8 @@ impl Output {
                 let path = entry.path();
                 let name = path.strip_prefix(&self.root).expect("owned directory traversal").to_str()
                     .ok_or_else(|| Error::new("E_OUTPUT_IO", 8, "artifact path is not UTF-8"))?;
-                let (mut file, _) = bounded_fs::open_contained(&self.root, name, self.limit).map_err(|error| match error {
-                    BoundedReadError::TooLarge { .. } => Error::new("E_OUTPUT_LIMIT", 8, "run artifact byte limit exceeded"),
-                    other => io_error(other),
-                })?;
+                let (mut file, _) = bounded_fs::open_contained(&self.root, name, self.limit)
+                    .map_err(|error| bounded_read_error(error, "run artifact byte limit exceeded"))?;
                 let mut hash = Sha256::new();
                 let mut length = 0_u64;
                 let mut chunk = [0_u8; 8192];
@@ -199,10 +229,8 @@ impl Output {
         self.recover()?;
         let mut seal = self.entries.iter().find(|entry| entry.path == "worker-artifacts.json")
             .ok_or_else(|| Error::new("E_OUTPUT_IO", 8, "worker inventory was not published"))?.clone();
-        let bytes = bounded_fs::read_contained(&self.root, "worker-artifacts.json", self.limit).map_err(|error| match error {
-            BoundedReadError::TooLarge { .. } => Error::new("E_OUTPUT_LIMIT", 8, "run artifact byte limit exceeded"),
-            other => io_error(other),
-        })?;
+        let bytes = bounded_fs::read_contained(&self.root, "worker-artifacts.json", self.limit)
+            .map_err(|error| bounded_read_error(error, "run artifact byte limit exceeded"))?;
         let mut entries: Vec<ArtifactEntry> = serde_json::from_slice(&bytes)
             .map_err(|error| Error::new("E_OUTPUT_IO", 8, format!("invalid worker inventory: {error}")))?;
         entries.sort_by(|left, right| left.path.cmp(&right.path));
@@ -421,10 +449,12 @@ mod tests {
         assert_eq!(result["exitCode"], 8);
         assert_eq!(result["firstError"]["code"], "E_OUTPUT_LIMIT");
         assert_eq!(result["originalError"]["code"], "E_VISUAL_DIFF");
+        assert!(serde_json::to_vec(&result).unwrap().len() < super::super::MAX_STDOUT_BYTES);
         assert!(root.join("artifacts.json").is_file());
         let saved: Value = serde_json::from_slice(&fs::read(root.join("result.json")).unwrap()).unwrap();
         assert_eq!(saved["firstError"]["code"], "E_OUTPUT_LIMIT");
         assert_eq!(saved["originalError"]["code"], "E_VISUAL_DIFF");
+        assert!(fs::read(root.join("result.json")).unwrap().len() <= super::super::MAX_STDOUT_BYTES);
         fs::remove_dir_all(root).unwrap();
 
         let tiny = directory();
@@ -435,6 +465,7 @@ mod tests {
         assert_eq!(tight_result["exitCode"], 8);
         assert_eq!(tight_result["firstError"]["code"], "E_OUTPUT_LIMIT");
         assert_eq!(tight_result["originalError"]["code"], "E_VISUAL_DIFF");
+        assert!(serde_json::to_vec(&tight_result).unwrap().len() < super::super::MAX_STDOUT_BYTES);
         fs::remove_dir_all(tiny).unwrap();
     }
 }

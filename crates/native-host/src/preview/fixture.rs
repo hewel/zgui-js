@@ -1,8 +1,8 @@
 //! Closed fixture preflight; providers share the production service boundary.
 use std::path::Path;
 pub(crate) use crate::assets::fixture::FixtureDefinition;
-use crate::bounded_fs::{self, BoundedReadError};
-use super::{Error, output::digest};
+use crate::bounded_fs;
+use super::{Error, output::digest, schema_read_error};
 
 const MAX_INPUT_BYTES: u64 = 1024 * 1024;
 
@@ -17,11 +17,8 @@ pub struct LoadedFixture {
 
 
 pub fn load(path: &Path) -> Result<LoadedFixture, Error> {
-    let original = bounded_fs::read_input(path, MAX_INPUT_BYTES).map_err(|error| match error {
-        BoundedReadError::TooLarge { .. } => invalid("fixture exceeds 1 MiB"),
-        BoundedReadError::NotRegularFile => invalid("fixture must be a regular file of at most 1 MiB"),
-        other => invalid(format!("fixture {}: {other}", path.display())),
-    })?;
+    let original = bounded_fs::read_input(path, MAX_INPUT_BYTES)
+        .map_err(|error| schema_read_error("fixture", path, error))?;
     let definition = parse(&original)?;
     let id = definition.id.clone();
     let digest = digest(&original);

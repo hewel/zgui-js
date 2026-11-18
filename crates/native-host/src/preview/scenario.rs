@@ -3,7 +3,7 @@ use std::{collections::BTreeSet, path::Path};
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer, ser::SerializeMap};
 
-use crate::bounded_fs::{self, BoundedReadError};
+use crate::bounded_fs;
 use super::{Error, output::digest};
 
 const MAX_INPUT_BYTES: u64 = 1024 * 1024;
@@ -439,11 +439,8 @@ pub fn load(path: &Path, available: &[&str], virtual_profile: bool) -> Result<Lo
 }
 
 fn read_input(path: &Path) -> Result<Vec<u8>, Error> {
-    bounded_fs::read_input(path, MAX_INPUT_BYTES).map_err(|error| match error {
-        BoundedReadError::TooLarge { .. } => invalid("scenario exceeds 1 MiB"),
-        BoundedReadError::NotRegularFile => invalid("scenario must be a regular file of at most 1 MiB"),
-        other => invalid(format!("scenario {}: {other}", path.display())),
-    })
+    bounded_fs::read_input(path, MAX_INPUT_BYTES)
+        .map_err(|error| super::schema_read_error("scenario", path, error))
 }
 
 fn parse(bytes: &[u8], available: &[&str], virtual_profile: bool) -> Result<Scenario, Error> {

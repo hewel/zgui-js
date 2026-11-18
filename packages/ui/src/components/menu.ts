@@ -1,11 +1,12 @@
 import { splitProps } from "#solid";
-import { mergeProps } from "../renderer/index.js";
-import type { NativeChild, NativeNode } from "../types.js";
-import { classes, element, useStylesheet } from "./shared.js";
+import { createElement, mergeProps, spread } from "../renderer/index.js";
+import type { NativeChild, NativeKeyEvent, NativeNode } from "../types.js";
+import { classes, element, slot, useStylesheet } from "./shared.js";
+import { callHandler } from "./state.js";
 import { sheet } from "./generated/MenuStyle.js";
 import {
-  MENU_VARIANT, MenuShortcutPart, buildMenuCheckboxItem, buildMenuGroup, buildMenuItem, buildMenuRadioGroup,
-  buildMenuRadioItem, buildMenuSeparator, buildMenuTypeahead, renderMenuSurface, useMenuState,
+  MENU_VARIANT, MenuShortcutPart, buildMenuCheckboxItem, buildMenuItem, buildMenuRadioGroup,
+  buildMenuRadioItem, buildMenuSeparator, renderMenuSurface, useMenuState, useMenuTypeahead,
   type MenuCheckboxItemProps, type MenuContentProps, type MenuGroupProps, type MenuItemProps,
   type MenuLabelProps, type MenuRadioGroupProps, type MenuRadioItemProps, type MenuSeparatorProps,
   type MenuShortcutProps, type MenuTypeaheadProps,
@@ -21,7 +22,18 @@ export function MenuContent(props: MenuContentProps = {}): NativeChild {
 }
 
 export function MenuTypeahead(props: MenuTypeaheadProps = {}): NativeNode {
-  return buildMenuTypeahead(props);
+  useStylesheet(sheet);
+  const onTypeahead = useMenuTypeahead();
+  const [own, rest] = splitProps(props, ["children", "onKeyDown"]);
+  const node = createElement("box");
+  spread(node, mergeProps(rest, {
+    get __zguiClass() { return classes("zui-menu__keys"); },
+    onKeyDown(event: NativeKeyEvent) {
+      if (callHandler(event, own.onKeyDown)) onTypeahead(event);
+    },
+  }), true);
+  slot(node, () => own.children);
+  return node;
 }
 
 export function MenuItem(props: MenuItemProps = {}): NativeNode {
@@ -49,7 +61,14 @@ export function MenuLabel(props: MenuLabelProps = {}): NativeNode {
 }
 
 export function MenuGroup(props: MenuGroupProps = {}): NativeNode {
-  return buildMenuGroup(props);
+  useStylesheet(sheet);
+  const [own, rest] = splitProps(props, ["children", "label"]);
+  const node = createElement("box");
+  spread(node, mergeProps({ role: "group" as const, get ariaLabel() { return own.label ?? null; } }, rest, {
+    get __zguiClass() { return classes("zui-menu__group"); },
+  }), true);
+  slot(node, () => own.children);
+  return node;
 }
 
 export function MenuSeparator(props: MenuSeparatorProps = {}): NativeNode {

@@ -268,7 +268,12 @@ test("missing Babel maps and missing StyleX output cannot publish a candidate", 
     compileBundle(source, { root: workspaceRoot, appDirectory: directory, babelTransform: async () => ({ code: entry, map: null }) }),
     /no JavaScript or composed source map/,
   );
-  const result = await bundle(source, { appDirectory: directory });
+  let pluginRan = false;
+  const result = await compileBundle(source, {
+    root: workspaceRoot, appDirectory: directory,
+    plugins: [{ name: "test-plugin-hook", buildStart() { pluginRan = true; } }],
+  });
+  assert.equal(pluginRan, true);
   const withoutStylex = new Map([...result.files].filter(([name]) => name !== "app.css" && name !== "style-origins.json"));
   await assert.rejects(
     publishApplication("fixture", { ...result, files: withoutStylex }, { root: workspaceRoot, appDirectory: directory }),
@@ -594,14 +599,14 @@ test("persistent compiler caches real Babel transforms, prunes modules, and reco
   const start = () => watchBundle(source, {
     root: workspaceRoot,
     appDirectory: directory,
-    outputDirectory: path.join(directory, "compiler-output"),
+    temporaryDirectory: path.join(directory, "compiler-output"),
     buildDelay: 20,
     babelTransform(source, options) {
       if (options.filename === dependency) transforms++;
       return transformAsync(source, options);
     },
     onCompile(result) { next.resolve({ result }); },
-    onSettled({ error }) { if (error) next.resolve({ error }); },
+    onError(error) { next.resolve({ error }); },
   });
   let compiler = start();
   try {
@@ -645,9 +650,8 @@ test("watchApplication orchestrates deterministic status transitions and errors 
     try {
       await handlers.onAttempt();
       await handlers.onCompile(result);
-      await handlers.onSettled({});
     } catch (error) {
-      await handlers.onSettled({ error });
+      await handlers.onError(error);
     }
   };
   const fakePublish = async (app, result, { appDirectory }) => {
@@ -688,7 +692,7 @@ test("watchApplication orchestrates deterministic status transitions and errors 
     rejectTypecheck = true;
     await runCycle(compiled);
     assert.equal(successes.length, 1);
-    assert.equal(publishCount, 1, "failed typecheck must not publish a generation");
+    assert.equal(publishCount, 1, "failed typecheck must not publish a package");
     assert.equal(errors.at(-1)?.message, "synthetic TS2322 type failure");
     assert.equal(await realpath(path.join(directory, "dist")), firstDist);
     assert.deepEqual(statuses.slice(2).map(entry => [entry.status, entry.previousDirectory]), [

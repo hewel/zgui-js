@@ -5,6 +5,7 @@ import { createClock, createHost, moduleFor } from "./native-fixture.mjs";
 const fixture = `
 import { Show, createSignal, onCleanup, renderApp } from "@hewel/zgui";
 import type { NativeNode } from "@hewel/zgui";
+import * as stylex from "@stylexjs/stylex";
 import {
   Menubar, MenubarArrows, MenubarCheckboxItem, MenubarContent, MenubarGroup, MenubarItem,
   MenubarLabel, MenubarMenu, MenubarRadioGroup, MenubarRadioItem, MenubarSeparator,
@@ -12,10 +13,16 @@ import {
   MenuItem, MenuSub, MenuSubContent, MenuSubTrigger,
 } from "@hewel/zgui/components";
 
+const styles = stylex.create({
+  item: { color: "red" },
+  content: { backgroundColor: "blue" },
+});
+
 export const log = {
   selects: [] as string[],
   checks: [] as boolean[],
   radios: [] as string[],
+  subOpens: [] as boolean[],
   triggers: [] as NativeNode[],
   cleans: 0,
 };
@@ -31,15 +38,21 @@ export function mount(root: NativeNode) {
     <Menubar testId="bar" label="Application">
       <MenubarMenu testId="file-menu" value="file">
         <MenubarTrigger testId="file-trigger" ref={node => { log.triggers.push(node); }}>File</MenubarTrigger>
-        <MenubarContent testId="file-surface">
+        <MenubarContent testId="file-surface" {...stylex.props(styles.content)}>
           <MenubarItem testId="file-disabled" disabled>Disabled first</MenubarItem>
-          <MenubarItem testId="file-new" shortcut="Ctrl+N" onSelect={() => log.selects.push("new")}>New Tab</MenubarItem>
+          <MenubarItem testId="file-new" shortcut="Ctrl+N" {...stylex.props(styles.item)} onSelect={() => log.selects.push("new")}>New Tab</MenubarItem>
           <MenubarItem testId="file-open" closeOnSelect={false} onSelect={() => log.selects.push("open")}>
             Open<MenubarShortcut testId="custom-shortcut">Ctrl+O</MenubarShortcut>
           </MenubarItem>
-          <MenuSub>
+          <MenuSub onOpenChange={next => log.subOpens.push(next)}>
             <MenuSubTrigger testId="file-share">Share</MenuSubTrigger>
             <MenuSubContent testId="file-share-sub">
+              <MenuSub>
+                <MenuSubTrigger testId="file-share-more">More</MenuSubTrigger>
+                <MenuSubContent testId="file-share-more-sub">
+                  <MenuItem testId="file-share-email" onSelect={() => log.selects.push("share-email")}>Email</MenuItem>
+                </MenuSubContent>
+              </MenuSub>
               <MenuItem testId="file-share-copy" onSelect={() => log.selects.push("share-copy")}>Copy link</MenuItem>
             </MenuSubContent>
           </MenuSub>
@@ -361,4 +374,38 @@ test("menubar validates required values, boolean checked states, and childless s
   await assert.rejects(() => mounted(t, "mountBadRadio"), TypeError);
   await assert.rejects(() => mounted(t, "mountBadCheck"), TypeError);
   await assert.rejects(() => mounted(t, "mountBadSeparator"), TypeError);
+});
+
+test("menubar forwards StyleX classes, returns Escape focus to MenuSubTrigger, and cascades nested leaf dismissal", async t => {
+  const { h, mod, layers, send, key, flush, finish } = await mounted(t);
+  send("file-trigger", "onClick");
+  const fileSurface = h.byTestId("file-surface");
+  const fileNew = h.byTestId("file-new");
+  assert.match(String(fileSurface.props.get("class")), /\bzui-menubar__content\b/);
+  assert.match(String(fileSurface.props.get("class")), /\bx/);
+  assert.match(String(fileNew.props.get("class")), /\bzui-menubar__item\b/);
+  assert.match(String(fileNew.props.get("class")), /\bx/);
+
+  const shareTrigger = h.byTestId("file-share");
+  send(shareTrigger, "onClick");
+  const shareSub = h.byTestId("file-share-sub");
+  assert.ok(shareSub);
+  h.host.focus(h.byTestId("file-share-copy"));
+  layers.findLast(record => record.active).callback("escape");
+  assert.equal(shareTrigger.props.get("expanded"), false);
+  assert.equal(h.focused.current, shareTrigger, "submenu Escape inside menubar focuses MenuSubTrigger");
+  flush();
+  assert.equal(h.byTestId("file-share-sub"), undefined);
+  assert.equal(h.byTestId("file-surface"), fileSurface);
+
+  send(shareTrigger, "onClick");
+  key(h.byTestId("file-share-more"), { key: "ArrowRight" });
+  assert.ok(h.byTestId("file-share-more-sub"));
+  mod.log.subOpens.length = 0;
+  send("file-share-email", "onClick");
+  assert.deepEqual(mod.log.subOpens, [false], "nested menubar leaf selection cascades onOpenChange(false)");
+  flush();
+  assert.equal(h.byTestId("file-surface"), undefined);
+  assert.equal(h.focused.current, h.byTestId("file-trigger"));
+  finish();
 });

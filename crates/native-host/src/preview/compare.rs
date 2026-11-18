@@ -4,8 +4,8 @@ mod policy;
 
 use std::{collections::{BTreeSet,HashSet},path::{Path,PathBuf}};
 use serde_json::{Value,json};
-use crate::bounded_fs::{self,BoundedReadError};
-use super::{Error,evidence::FrameEvidence,output::{Output,digest},saved::{SavedCapture,SavedRun}};
+use crate::bounded_fs;
+use super::{Error,evidence::FrameEvidence,output::{Output,bounded_read_error,digest},saved::{SavedCapture,SavedRun}};
 use crate::schema::object_struct;
 use policy::{CaptureKey,CaptureSet,Policy};
 
@@ -325,41 +325,17 @@ fn equal_required(issues:&mut Vec<Value>,field:&str,left:Option<&Value>,right:Op
 fn sha256(value:&str)->bool { value.strip_prefix("sha256:").is_some_and(|hash|hash.len()==64&&hash.bytes().all(|byte|byte.is_ascii_digit()||(b'a'..=b'f').contains(&byte))) }
 fn invalid(message:impl Into<String>)->Error { Error::new("E_SCHEMA",2,message) }
 fn io(error:impl std::fmt::Display)->Error { Error::new("E_OUTPUT_IO",8,error.to_string()) }
-fn bounded_io_error(error:BoundedReadError)->Error {
-    match error {
-        BoundedReadError::TooLarge{..}|BoundedReadError::NotRegularFile=>
-            Error::new("E_OUTPUT_LIMIT",8,"comparison input is not a bounded regular file"),
-        other=>io(other),
-    }
+fn bounded_io_error(error:bounded_fs::BoundedReadError)->Error {
+    bounded_read_error(error,"comparison input is not a bounded regular file")
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::{AtomicU64, Ordering};
-
-    struct TempDir(PathBuf);
-    impl TempDir {
-        fn new() -> Self {
-            static NEXT: AtomicU64 = AtomicU64::new(0);
-            let dir = std::env::temp_dir().join(format!(
-                "zgui-preview-compare-{}-{}",
-                std::process::id(),
-                NEXT.fetch_add(1, Ordering::Relaxed)
-            ));
-            std::fs::create_dir_all(&dir).unwrap();
-            Self(dir)
-        }
-    }
-    impl Drop for TempDir {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.0);
-        }
-    }
 
     #[test]
     fn baseline_load_rejects_symlinked_review_file_while_policy_allows_symlink() {
-        let dir = TempDir::new();
+        let dir = super::super::tests::TempDir::create("compare");
         let target = dir.0.join("real-policy.json");
         std::fs::write(&target, br#"{"schemaVersion":1,"id":"p","captureSet":"all","maxOutputBytes":65536,"maxPixels":1000,"thresholds":{"maxDiffPixels":0,"maxChannelDelta":0,"meanDeltaLimit":0.0}}"#).unwrap();
 

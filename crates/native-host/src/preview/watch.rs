@@ -90,12 +90,8 @@ impl StatusReader {
         let stamp=Stamp { inode:metadata.ino(),device:metadata.dev(),modified:metadata.modified().map_err(io)?,length:metadata.len() };
         if self.stamp.as_ref()==Some(&stamp) { return Ok(false); }
         let parent=self.path.parent().filter(|parent|!parent.as_os_str().is_empty()).unwrap_or(Path::new(".")).canonicalize().map_err(io)?;
-        let bytes=crate::bounded_fs::read_contained(&parent,STATUS_FILE,16*1024).map_err(|error|match error {
-            crate::bounded_fs::BoundedReadError::TooLarge{..}
-            |crate::bounded_fs::BoundedReadError::NotRegularFile=>
-                Error::new("E_OUTPUT_LIMIT",8,"build status is not a bounded regular file"),
-            other=>Error::new("E_OUTPUT_IO",8,other.to_string()),
-        })?;
+        let bytes=crate::bounded_fs::read_contained(&parent,STATUS_FILE,16*1024)
+            .map_err(|error|output::bounded_read_error(error,"build status is not a bounded regular file"))?;
         let status:BuildStatus=serde_json::from_slice(&bytes).map_err(|error|schema(format!("invalid build status: {error}")))?;
         if status.schema_version!=1 || status.attempt_id.len()!=36 || !status.attempt_id.bytes().all(|byte|byte.is_ascii_hexdigit() || byte==b'-')
             || status.app.is_empty() || status.app.len()>128 || !status.app.bytes().all(|byte|byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte==b'-')

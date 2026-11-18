@@ -5,7 +5,7 @@
 use std::time::Instant;
 use serde_json::{Value,json};
 use crate::{assets::fixture::FixtureRuntime, session::RuntimeTelemetry};
-use super::super::{Error,MAX_STDOUT_BYTES,driver::{Driver,Fault,SharedOutput},evidence,scenario::{PointerOperation,Step}};
+use super::super::{Error,driver::{Driver,Fault,SharedOutput},evidence,scenario::{PointerOperation,Step}};
 
 /// Native side of a step: arm the deadline, report pre-action readiness, execute
 /// exactly one operation. Tests substitute a deterministic driver.
@@ -54,12 +54,6 @@ fn json_lines(rows:&[Value])->Vec<u8> {
     let mut output=Vec::new();
     for row in rows { serde_json::to_writer(&mut output,row).expect("JSON value serializes"); output.push(b'\n'); }
     output
-}
-
-/// The only constructor of a publication-failure result; it preserves the
-/// earliest originalError already present on the previous result.
-pub(super) fn publication_failure(error:Error,previous:&Value)->Value {
-    super::super::output::publication_failure("run",error,previous)
 }
 
 pub(super) struct RunLedger {
@@ -270,12 +264,9 @@ impl RunLedger {
                 held.seal_worker()
             })();
             if let Err(error)=publication {
-                result=publication_failure(error,&result);
+                result=super::super::output::publication_failure("run",error,&result);
             }
         }
-        if serde_json::to_vec(&result).expect("result serializes").len()+1>MAX_STDOUT_BYTES {
-            result=publication_failure(Error::new("E_OUTPUT_LIMIT",8,"worker summary exceeds 8 KiB"),&result);
-        }
-        result
+        super::super::output::enforce_stdout_limit("run",result)
     }
 }

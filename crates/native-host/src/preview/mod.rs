@@ -229,21 +229,35 @@ const RUN_CAPABILITIES: &[&str] = &[
     "virtual-time", "services.fixtures", "assets.native-readiness", "surface.resize", "surface.scale", "surface.color-scheme", "surface.recreate",
 ];
 
+pub(super) fn schema_read_error(kind: &str, path: &std::path::Path, error: crate::bounded_fs::BoundedReadError) -> Error {
+    let message = match error {
+        crate::bounded_fs::BoundedReadError::TooLarge { .. } => format!("{kind} exceeds 1 MiB"),
+        crate::bounded_fs::BoundedReadError::NotRegularFile => format!("{kind} must be a regular file of at most 1 MiB"),
+        other => format!("{kind} {}: {other}", path.display()),
+    };
+    Error::new("E_SCHEMA", 2, message)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicU64, Ordering};
 
-    struct TempDir(PathBuf);
+    pub(super) struct TempDir(pub(super) PathBuf);
     impl TempDir {
-        fn new() -> Self {
+        pub(super) fn new(prefix: &str) -> Self {
             static NEXT: AtomicU64 = AtomicU64::new(0);
             let dir = std::env::temp_dir().join(format!(
-                "zgui-preview-mod-{}-{}",
+                "zgui-preview-{prefix}-{}-{}",
                 std::process::id(),
                 NEXT.fetch_add(1, Ordering::Relaxed)
             ));
             Self(dir)
+        }
+        pub(super) fn create(prefix: &str) -> Self {
+            let dir = Self::new(prefix);
+            std::fs::create_dir_all(&dir.0).unwrap();
+            dir
         }
     }
     impl Drop for TempDir {
@@ -254,7 +268,7 @@ mod tests {
 
     #[test]
     fn doctor_finalization_restores_worker_preserves_failure_and_seals_overflow() {
-        let dir = TempDir::new();
+        let dir = TempDir::new("mod");
         let mut controller = output::Output::create(&dir.0, 64 * 1024).unwrap();
         let mut worker = output::Output::attach_worker(&dir.0, 64 * 1024, std::process::id()).unwrap();
         worker.json("environment.json", "environment", &json!({"ok": true})).unwrap();
@@ -273,7 +287,7 @@ mod tests {
         assert!(dir.0.join("artifacts.json").is_file());
         assert!(dir.0.join("result.json").is_file());
 
-        let fail_dir = TempDir::new();
+        let fail_dir = TempDir::new("mod");
         let mut fail_controller = output::Output::create(&fail_dir.0, 64 * 1024).unwrap();
         let oversized = finalize_doctor_report(
             Some(&mut fail_controller),
@@ -287,10 +301,11 @@ mod tests {
         assert_eq!(oversized["exitCode"], 8);
         assert_eq!(oversized["firstError"]["code"], "E_OUTPUT_LIMIT");
         assert_eq!(oversized["originalError"]["code"], "E_FONT");
+        assert!(serde_json::to_vec(&oversized).unwrap().len() < MAX_STDOUT_BYTES);
         assert!(fail_dir.0.join("artifacts.json").is_file());
         assert!(fail_dir.0.join("result.json").is_file());
 
-        let unsealed_dir = TempDir::new();
+        let unsealed_dir = TempDir::new("mod");
         let mut unsealed_controller = output::Output::create(&unsealed_dir.0, 64 * 1024).unwrap();
         let missing_seal = finalize_doctor_report(
             Some(&mut unsealed_controller),

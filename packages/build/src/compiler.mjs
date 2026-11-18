@@ -137,6 +137,7 @@ export async function compileBundle(entry, {
   filename = "app.mjs",
   stylexDiagnostics = false,
   babelTransform = transformAsync,
+  plugins = [],
 } = {}) {
   let result;
   const compiler = await rolldown(compilerOptions(entry, {
@@ -146,7 +147,7 @@ export async function compileBundle(entry, {
       generateBundle(_options, output) {
         result = compilationResult(Object.values(output), this.getModuleIds(), { entry: hostEntry });
       },
-    }],
+    }, ...plugins],
   }));
   try {
     await compiler.generate(outputOptions(filename));
@@ -159,7 +160,7 @@ export async function compileBundle(entry, {
 export function watchBundle(entry, {
   root,
   appDirectory = path.dirname(entry),
-  outputDirectory,
+  temporaryDirectory,
   filename = "app.mjs",
   buildDelay = 80,
   stylexDiagnostics = false,
@@ -167,7 +168,7 @@ export function watchBundle(entry, {
   watchFiles = [],
   onAttempt,
   onCompile,
-  onSettled,
+  onError,
 } = {}) {
   let attemptError;
   const preserve = async operation => {
@@ -195,13 +196,13 @@ export function watchBundle(entry, {
         },
       }],
     }),
-    output: { ...outputOptions(filename), dir: outputDirectory },
+    output: { ...outputOptions(filename), dir: temporaryDirectory },
     watch: { buildDelay },
   });
   watcher.on("event", async event => {
     if (event.code !== "BUNDLE_END" && event.code !== "ERROR") return;
     try {
-      await onSettled?.(event.code === "ERROR" ? { error: attemptError ?? event.error } : {});
+      if (event.code === "ERROR") await onError?.(attemptError ?? event.error);
     } finally {
       await event.result?.close();
     }

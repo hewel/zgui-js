@@ -3,8 +3,8 @@ mod ledger;
 use std::{cell::RefCell, path::PathBuf, rc::Rc, time::{Duration, Instant}};
 use serde_json::{Value, json};
 use crate::package::Package;
-use ledger::{RunLedger, publication_failure};
-use super::{Error, driver::{Driver, Fault, SharedOutput}, evidence, fixture, inventory, output::Output, profile, scenario::{self, Step}, supervisor};
+use ledger::RunLedger;
+use super::{Error, driver::{Driver, Fault, SharedOutput}, evidence, fixture, inventory, output::{self, Output}, profile, scenario::{self, Step}, supervisor};
 
 pub(super) struct Options {
     pub(super) bundle: PathBuf,
@@ -61,7 +61,7 @@ pub(super) fn controlled(args: Vec<String>, canceled: Option<&std::sync::atomic:
     let mut result=match report {
         Ok(report) => {
             if let Err(error)=output.restore_worker() {
-                publication_failure(error, &report.result)
+                output::publication_failure("run", error, &report.result)
             } else { report.result }
         }
         Err(error) => {
@@ -81,7 +81,7 @@ pub(super) fn controlled(args: Vec<String>, canceled: Option<&std::sync::atomic:
             })();
             match recovery {
                 Ok(evidence) => failed["failureEvidence"]=evidence,
-                Err(error) => failed=publication_failure(error, &failed),
+                Err(error) => failed=output::publication_failure("run", error, &failed),
             }
             failed
         }
@@ -116,7 +116,7 @@ pub fn worker(args: impl Iterator<Item=String>) -> supervisor::Report {
         sink.borrow_mut().bytes("inputs/scenario.json","scenario",&scenario.original)?;
         let package=Rc::new(Package::load(&options.bundle).map_err(|error|Error::new("E_BUNDLE",3,error.to_string()))?);
         let build=json!({"id":package.manifest.id,"buildId":package.manifest.build_id,"sourceMap":package.manifest.source_map,
-            "sourceMapDigest":package.source_map_digest,"entryDigest":super::output::digest(package.source.as_bytes()),
+            "sourceMapDigest":package.source_map_digest,"entryDigest":output::digest(package.source.as_bytes()),
             "styleSystem":package.manifest.style_system,"styles":package.manifest.styles,
             "fonts":package.manifest.fonts,"artifactDigests":package.manifest.artifact_digests});
         ledger.identity(build.clone(),json!(scenario.scenario.id),profile.profile.clock.is_virtual());
@@ -132,7 +132,7 @@ pub fn worker(args: impl Iterator<Item=String>) -> supervisor::Report {
         environment["application"]=build.clone();
         environment["capabilities"]=super::capabilities(true);
         environment["capabilityRevision"]=json!("native-preview-v1-p5");
-        environment["hostRootStyleDigest"]=json!(super::output::digest(root_styles.as_bytes()));
+        environment["hostRootStyleDigest"]=json!(output::digest(root_styles.as_bytes()));
         environment["inputPolicy"]=json!({"surfaceFocus":"main","dispatch":"one native deliver_all burst per action; no frame between low-level events","modifiers":"key-local; restored to none after key-up"});
         environment["timingDeterministic"]=json!(profile.profile.clock.is_virtual());
         environment["clock"]=crate::environment::Environment::configuration(

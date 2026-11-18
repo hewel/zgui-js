@@ -283,20 +283,12 @@ impl SavedRun {
 fn open_file(root:&Path,relative:&str,limit:u64)->Result<std::fs::File,Error> {
     crate::bounded_fs::open_contained(root,relative,limit)
         .map(|(file,_)|file)
-        .map_err(bounded_error)
+        .map_err(|error|super::output::bounded_read_error(error,"saved artifact is not a bounded regular file"))
 }
 
 fn read_file(root:&Path,relative:&str,limit:u64)->Result<Vec<u8>,Error> {
-    crate::bounded_fs::read_contained(root,relative,limit).map_err(bounded_error)
-}
-
-fn bounded_error(error:crate::bounded_fs::BoundedReadError)->Error {
-    match error {
-        crate::bounded_fs::BoundedReadError::TooLarge{..}
-        |crate::bounded_fs::BoundedReadError::NotRegularFile=>
-            Error::new("E_OUTPUT_LIMIT",8,"saved artifact is not a bounded regular file"),
-        other=>io(other),
-    }
+    crate::bounded_fs::read_contained(root,relative,limit)
+        .map_err(|error|super::output::bounded_read_error(error,"saved artifact is not a bounded regular file"))
 }
 fn schema(message:&str)->Error { Error::new("E_SCHEMA",2,message) }
 fn io(error:impl std::fmt::Display)->Error { Error::new("E_OUTPUT_IO",8,error.to_string()) }

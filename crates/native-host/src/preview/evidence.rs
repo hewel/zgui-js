@@ -326,7 +326,14 @@ pub(super) fn publish_historical(output: &mut Output, tree: &TreeEvidence, frame
     let pixels_path = output.root().join(FAILURE_PIXELS);
     let existing_tree = tree_path.is_file().then(|| read_evidence(&tree_path)).transpose()?;
     let existing_frame = frame_path.is_file().then(|| read_evidence(&frame_path)).transpose()?;
-    let existing_pixels = pixels_path.is_file().then(|| std::fs::read(&pixels_path).map_err(io)).transpose()?;
+    let existing_pixels = match std::fs::symlink_metadata(&pixels_path) {
+        Ok(_) => Some(
+            crate::bounded_fs::read_input(&pixels_path, 64 * 1024 * 1024)
+                .map_err(|error| output::bounded_read_error(error, "historical pixels exceed 64 MiB"))?,
+        ),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => return Err(io(error)),
+    };
     if let Some(bytes) = &existing_tree {
         let existing: TreeEvidence = serde_json::from_slice(bytes).map_err(io)?;
         if &existing != tree {
@@ -432,7 +439,8 @@ pub(super) fn recover(output: &mut Output) -> Result<Value, Error> {
                 // The loose identity match named this candidate; its typed parse must now succeed.
                 let capture: FrameEvidence = serde_json::from_value(candidate).map_err(io)?;
                 let png = path.with_file_name(path.file_name().expect("capture file").to_string_lossy().replace(".frame.json", ".png"));
-                let bytes = crate::bounded_fs::read_input(&png, 64 * 1024 * 1024).map_err(bounded_error)?;
+                let bytes = crate::bounded_fs::read_input(&png, 64 * 1024 * 1024)
+                    .map_err(|error| output::bounded_read_error(error, "captured pixels exceed 64 MiB"))?;
                 if capture.png_digest.as_deref() != Some(output::digest(&bytes).as_str()) {
                     return Err(Error::new("E_OUTPUT_IO", 8, "historical pixel identity mismatch"));
                 }
@@ -449,16 +457,8 @@ pub(super) fn recover(output: &mut Output) -> Result<Value, Error> {
 
 /// Bounded evidence read shared by recovery and the controller's cause lookup.
 pub(super) fn read_evidence(path: &Path) -> Result<Vec<u8>, Error> {
-    crate::bounded_fs::read_input(path, 8 * 1024 * 1024).map_err(bounded_error)
-}
-fn bounded_error(error: crate::bounded_fs::BoundedReadError) -> Error {
-    match error {
-        crate::bounded_fs::BoundedReadError::TooLarge { .. }
-        | crate::bounded_fs::BoundedReadError::NotRegularFile => {
-            Error::new("E_OUTPUT_LIMIT", 8, "recovered evidence exceeds 8 MiB")
-        }
-        other => io(other),
-    }
+    crate::bounded_fs::read_input(path, 8 * 1024 * 1024)
+        .map_err(|error| output::bounded_read_error(error, "recovered evidence exceeds 8 MiB"))
 }
 fn read_typed<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T, Error> {
     serde_json::from_slice(&read_evidence(path)?).map_err(io)

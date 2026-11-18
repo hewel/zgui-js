@@ -6,7 +6,7 @@ import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { buildApplication, workspaceRoot } from "../../packages/build/src/build.mjs";
-import { activateGeneration, publishBuildStatus } from "../../packages/build/src/publication.mjs";
+import { activatePublication, publishBuildStatus } from "../../packages/build/src/publication.mjs";
 import { watchApplication } from "../../packages/build/src/watch.mjs";
 
 const json = async file => JSON.parse(await readFile(file, "utf8"));
@@ -91,9 +91,6 @@ function start(f, maximum = 64, consume = true) {
   });
   return { child, out, events, exit, closed };
 }
-async function publication(app, directory) {
-  return activateGeneration(app, directory);
-}
 async function status(app, previousDirectory, message = "controlled failed build attempt") {
   const value = { schemaVersion: 1, attemptId: randomUUID(), app: "watch-regression", status: "failed", previousDirectory,
     publicationDirectory: null, buildId: null, error: { code: "E_BUILD", message } };
@@ -158,7 +155,7 @@ async function workerChildren(pid) {
 test("superseded frozen native input is reaped before the newest complete package starts", async t => {
   const f = await fixture(t);
   const frozen = await f.build("frozen", true), middle = await f.build("middle"), newest = await f.build("newest");
-  await publication(f.app, frozen.directory);
+  await activatePublication(f.app, frozen.directory);
   const running = start(f, 2);
   const first = await running.events.wait(row => row.event === "run.started");
   await observedFile(running.out, path.join(running.out, first.output, "progress/action-000002.json"));
@@ -167,7 +164,7 @@ test("superseded frozen native input is reaped before the newest complete packag
   // Stop only the owned controller while publishing two already validated builds;
   // its real worker continues. No scheduling sleep decides which build wins.
   running.child.kill("SIGSTOP");
-  try { await publication(f.app, middle.directory); await publication(f.app, newest.directory); }
+  try { await activatePublication(f.app, middle.directory); await activatePublication(f.app, newest.directory); }
   finally { running.child.kill("SIGCONT"); }
   const canceled = await running.events.wait(row => row.event === "run.canceled");
   assert.equal(canceled.buildId, frozen.manifest.buildId);

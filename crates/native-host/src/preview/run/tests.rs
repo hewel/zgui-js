@@ -13,9 +13,9 @@ impl Drop for Directory { fn drop(&mut self) { let _=std::fs::remove_dir_all(&se
 #[test]
 fn successive_publication_failures_retain_the_application_cause() {
     let cause=json!({"code":"E_JS_EXCEPTION","message":"original mount failure","stage":"mount","exitCode":3});
-    let worker=publication_failure(Error::new("E_OUTPUT_LIMIT",8,"diagnostic budget"),&json!({"firstError":cause}));
-    let controller=publication_failure(Error::new("E_OUTPUT_IO",8,"missing worker inventory"),&worker);
-    let final_result=publication_failure(Error::new("E_OUTPUT_LIMIT",8,"final result budget"),&controller);
+    let worker=output::publication_failure("run",Error::new("E_OUTPUT_LIMIT",8,"diagnostic budget"),&json!({"firstError":cause}));
+    let controller=output::publication_failure("run",Error::new("E_OUTPUT_IO",8,"missing worker inventory"),&worker);
+    let final_result=output::publication_failure("run",Error::new("E_OUTPUT_LIMIT",8,"final result budget"),&controller);
     assert_eq!(final_result["originalError"],cause);
     assert_eq!(final_result["exitCode"],8);
 }

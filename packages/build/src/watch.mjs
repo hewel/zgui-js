@@ -102,7 +102,7 @@ export function watchApplication(app, {
     compiler = startWatchBundle(path.join(appDirectory, "src/main.tsx"), {
       root,
       appDirectory,
-      outputDirectory: path.join(temporary, "output"),
+      temporaryDirectory: path.join(temporary, "output"),
       buildDelay: 80,
       stylexDiagnostics,
       watchFiles: [path.join(temporary, "invalidate")],
@@ -130,16 +130,15 @@ export function watchApplication(app, {
           ...status, status: "published",
           publicationDirectory: await realpath(published.dist), buildId: published.manifest.buildId,
         });
+        if (!closed && published) onSuccess(published);
       },
-      async onSettled({ error }) {
+      async onError(error) {
         try {
-          if (error) {
-            if (status && !controller.signal.aborted) await publishStatus(appDirectory, {
-              ...status, status: "failed",
-              error: { code: "E_BUILD", message: String(error.message ?? error).slice(0, 2048).toWellFormed() },
-            });
-            report(error);
-          } else if (!closed && published) onSuccess(published);
+          if (status && !controller.signal.aborted) await publishStatus(appDirectory, {
+            ...status, status: "failed",
+            error: { code: "E_BUILD", message: String(error.message ?? error).slice(0, 2048).toWellFormed() },
+          });
+          report(error);
         } catch (failure) { report(failure); }
       },
     });

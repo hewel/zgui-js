@@ -12,17 +12,17 @@ export function resourcePath(name) {
   return name;
 }
 
-export async function activateGeneration(appDirectory, generationDirectory) {
+export async function activatePublication(appDirectory, packageDirectory) {
   const token = randomUUID();
   const link = path.join(appDirectory, `.dist-${token}`);
   const dist = path.join(appDirectory, "dist");
   try {
     try {
       const existing = await lstat(dist);
-      if (!existing.isSymbolicLink()) throw new Error("dist must be absent or a generation symlink; refusing to overwrite it");
+      if (!existing.isSymbolicLink()) throw new Error("dist must be absent or a package symlink; refusing to overwrite it");
     } catch (error) { if (error.code !== "ENOENT") throw error; }
-    await symlink(path.relative(appDirectory, generationDirectory), link, "dir");
-    // Linux rename replaces the symlink atomically. Prior generations remain pinned for active readers.
+    await symlink(path.relative(appDirectory, packageDirectory), link, "dir");
+    // Linux rename replaces the symlink atomically. Prior candidates remain pinned for active readers.
     await rename(link, dist);
     return dist;
   } finally {
@@ -46,7 +46,7 @@ export async function publishGeneration(appDirectory, files) {
       await writeFile(destination, bytes, { flag: "wx" });
     }
     await rename(staging, generation);
-    const dist = await activateGeneration(appDirectory, generation);
+    const dist = await activatePublication(appDirectory, generation);
     published = true;
     return dist;
   } finally {

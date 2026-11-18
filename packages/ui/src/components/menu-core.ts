@@ -33,9 +33,21 @@ export interface MenuRadioGroupProps extends MenuGroupProps {
 }
 export interface MenuRadioItemProps extends NativeElementProps { value: string; closeOnSelect?: boolean; }
 
+export interface ContextMenuPoint {
+  readonly x: number;
+  readonly y: number;
+}
+export interface ContextMenuPlace {
+  openAt(position: ContextMenuPoint): void;
+}
+export interface ContextMenuRecord {
+  readonly place: ContextMenuPlace;
+  readonly point: Accessor<ContextMenuPoint>;
+  setArea(node: NativeNode | null): void;
+}
+
 export interface MenuHierarchy {
   readonly state: OverlayState;
-  dismissRoot(): void;
   dismissCascade(): void;
   readonly sub?: { readonly state: OverlayState; readonly closing: ReturnType<typeof createDelayed> };
 }
@@ -52,6 +64,7 @@ interface MenuVariantConfig {
   readonly indicatorClass: string;
   readonly indicatorDotClass: string;
   readonly wrapLabel: boolean;
+  readonly allowModifiers: boolean;
   readonly checkboxDefaultClose: boolean;
   readonly checkboxName: string;
   readonly radioName: string;
@@ -61,6 +74,7 @@ interface MenuVariantConfig {
 const MenuHierarchyContext = createContext<MenuHierarchy>();
 const MenuSurfaceContext = createContext<MenuSurfaceContextValue>();
 const MenuRadioContext = createContext<{ value: Accessor<string>; choose(value: string): void }>();
+const ContextMenuContext = createContext<ContextMenuRecord>();
 
 export const MenuShortcutPart = part("text", menuSheet, "zui-menu__shortcut", { ariaHidden: true });
 export const MenubarShortcutPart = part("text", menubarSheet, "zui-menubar__shortcut", { ariaHidden: true });
@@ -72,6 +86,7 @@ export const MENU_VARIANT: MenuVariantConfig = {
   indicatorClass: "zui-menu__indicator",
   indicatorDotClass: "zui-menu__indicator--dot",
   wrapLabel: false,
+  allowModifiers: true,
   checkboxDefaultClose: true,
   checkboxName: "MenuCheckboxItem",
   radioName: "MenuRadioItem",
@@ -85,6 +100,7 @@ export const MENUBAR_VARIANT: MenuVariantConfig = {
   indicatorClass: "zui-menubar__indicator",
   indicatorDotClass: "zui-menubar__indicator--dot",
   wrapLabel: true,
+  allowModifiers: false,
   checkboxDefaultClose: false,
   checkboxName: "MenubarCheckboxItem",
   radioName: "MenubarRadioItem",
@@ -103,6 +119,17 @@ export function useMenuSub(): { readonly state: OverlayState; readonly closing: 
   return useContext(MenuHierarchyContext)?.sub;
 }
 
+export function provideContextMenu(
+  record: ContextMenuRecord,
+  source: { readonly children?: NativeChild } | (() => NativeChild),
+): NativeChild {
+  return provide(ContextMenuContext, record, source);
+}
+
+export function useContextMenuRecord(): ContextMenuRecord | undefined {
+  return useContext(ContextMenuContext);
+}
+
 export function provideMenuRoot(
   state: OverlayState,
   onDismiss: () => void,
@@ -111,7 +138,7 @@ export function provideMenuRoot(
   let alive = true;
   onCleanup(() => { alive = false; });
   const dismiss = () => { if (alive) onDismiss(); };
-  return provide(MenuHierarchyContext, { state, dismissRoot: dismiss, dismissCascade: dismiss }, source);
+  return provide(MenuHierarchyContext, { state, dismissCascade: dismiss }, source);
 }
 
 export function menuRoot(props: OverlayRootProps): NativeChild {
@@ -125,20 +152,12 @@ export function provideMenuSub(props: OverlayRootProps): NativeChild {
   const parent = useContext(MenuHierarchyContext);
   let alive = true;
   onCleanup(() => { alive = false; closing.cancel(); });
-  const closeSelf = () => {
-    if (!alive) return;
-    closing.cancel();
-    state.setOpen(false);
-  };
   const node: MenuHierarchy = {
     state: parent?.state ?? state,
-    dismissRoot() {
-      if (parent) parent.dismissRoot();
-      else closeSelf();
-    },
     dismissCascade() {
       if (!alive) return;
-      closeSelf();
+      closing.cancel();
+      state.setOpen(false);
       parent?.dismissCascade();
     },
     sub: { state, closing },
@@ -164,20 +183,8 @@ function createTypeaheadHandler(group: ReturnType<typeof createRovingFocus> | un
   };
 }
 
-export function buildMenuTypeahead(props: MenuTypeaheadProps = {}): NativeNode {
-  useStylesheet(menuSheet);
-  const group = useContext(MenuSurfaceContext)?.roving;
-  const onTypeahead = createTypeaheadHandler(group);
-  const [own, rest] = splitProps(props, ["children", "onKeyDown"]);
-  const node = createElement("box");
-  spread(node, mergeProps(rest, {
-    get __zguiClass() { return classes("zui-menu__keys"); },
-    onKeyDown(event: NativeKeyEvent) {
-      if (callHandler(event, own.onKeyDown)) onTypeahead(event);
-    },
-  }), true);
-  slot(node, () => own.children);
-  return node;
+export function useMenuTypeahead(): (event: NativeKeyEvent) => void {
+  return createTypeaheadHandler(useContext(MenuSurfaceContext)?.roving);
 }
 
 export function renderMenuSurface(state: OverlayState | undefined, props: MenuContentProps, options: {
@@ -305,8 +312,7 @@ function menuIndicator(baseClass: string, dotClass: string, checked: Accessor<bo
 export function buildMenuItem(variant: MenuVariantConfig, props: MenuItemProps = {}): NativeNode {
   const menu = useMenuHierarchy();
   const [own, rest] = splitProps(props, ["children", "destructive", "inset", "closeOnSelect", "onSelect", "shortcut"]);
-  const allowModifiers = !variant.wrapLabel;
-  const modifiers = allowModifiers ? {
+  const modifiers = variant.allowModifiers ? {
     get "data-destructive"() { return own.destructive ? "true" : null; },
     get "data-inset"() { return own.inset ? "true" : null; },
   } : {};
@@ -316,7 +322,7 @@ export function buildMenuItem(variant: MenuVariantConfig, props: MenuItemProps =
     role: "menuItem",
     sheet: variant.sheet,
     baseClass: variant.itemBaseClass,
-    class: () => allowModifiers
+    class: () => variant.allowModifiers
       ? classes(own.destructive && "zui-menu__item--destructive", own.inset && "zui-menu__item--inset")
       : "",
     select() { own.onSelect?.(); if (own.closeOnSelect ?? true) menu?.dismissCascade(); },
@@ -398,17 +404,6 @@ export function buildMenuRadioItem(variant: MenuVariantConfig, props: MenuRadioI
   });
   append(node, menuIndicator(variant.indicatorClass, variant.indicatorDotClass, checked, true));
   attachItemContent(node, variant, () => own.children);
-  return node;
-}
-
-export function buildMenuGroup(props: MenuGroupProps = {}): NativeNode {
-  useStylesheet(menuSheet);
-  const [own, rest] = splitProps(props, ["children", "label"]);
-  const node = createElement("box");
-  spread(node, mergeProps({ role: "group" as const, get ariaLabel() { return own.label ?? null; } }, rest, {
-    get __zguiClass() { return classes("zui-menu__group"); },
-  }), true);
-  slot(node, () => own.children);
   return node;
 }
 

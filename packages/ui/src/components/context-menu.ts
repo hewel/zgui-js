@@ -1,37 +1,26 @@
-import { batch, createContext, createSignal, onCleanup, splitProps, untrack, useContext } from "#solid";
+import { batch, createSignal, onCleanup, splitProps, untrack } from "#solid";
 import { createElement, memo, mergeProps, spread } from "../renderer/index.js";
 import { getWindowRect } from "../nodes.js";
 import type {
-  Accessor, NativeChild, NativeContextMenuEvent, NativeElementProps, NativeNode, NativePointerDownEvent,
+  NativeChild, NativeContextMenuEvent, NativeElementProps, NativeNode, NativePointerDownEvent,
 } from "../types.js";
 import { MenuContent, type MenuContentProps } from "./menu.js";
-import { provideMenuRoot, useMenuState } from "./menu-core.js";
+import {
+  type ContextMenuPlace, type ContextMenuPoint, type ContextMenuRecord,
+  provideContextMenu, provideMenuRoot, useContextMenuRecord, useMenuState,
+} from "./menu-core.js";
 import { OverlayContext, createOverlayState, type OverlayRootProps } from "./overlay.js";
 import { callHandler } from "./state.js";
 import { append, classes, element, provide, slot, useStylesheet } from "./shared.js";
 import { sheet } from "./generated/ContextMenuStyle.js";
 
-export interface ContextMenuPoint {
-  readonly x: number;
-  readonly y: number;
-}
-export interface ContextMenuPlace {
-  openAt(position: ContextMenuPoint): void;
-}
+export type { ContextMenuPlace, ContextMenuPoint };
 export type ContextMenuProps = OverlayRootProps;
 export type ContextMenuTriggerProps = NativeElementProps;
 export type ContextMenuContentProps = MenuContentProps;
 
-interface ContextMenuRecord {
-  readonly place: ContextMenuPlace;
-  readonly point: Accessor<ContextMenuPoint>;
-  setArea(node: NativeNode | null): void;
-}
-
-const ContextMenuInternalContext = createContext<ContextMenuRecord>();
-
 export function useContextMenuPlace(): ContextMenuPlace | undefined {
-  return useContext(ContextMenuInternalContext)?.place;
+  return useContextMenuRecord()?.place;
 }
 
 export function ContextMenu(props: ContextMenuProps = {}): NativeChild {
@@ -57,7 +46,7 @@ export function ContextMenu(props: ContextMenuProps = {}): NativeChild {
   const record: ContextMenuRecord = { place: { openAt }, point, setArea };
   return provide(OverlayContext, state, () =>
     provideMenuRoot(state, () => state.setOpen(false), () =>
-      provide(ContextMenuInternalContext, record, props),
+      provideContextMenu(record, props),
     ),
   );
 }
@@ -65,7 +54,7 @@ export function ContextMenu(props: ContextMenuProps = {}): NativeChild {
 export function ContextMenuTrigger(props: ContextMenuTriggerProps = {}): NativeNode {
   useStylesheet(sheet);
   const state = useMenuState();
-  const context = useContext(ContextMenuInternalContext);
+  const context = useContextMenuRecord();
   const place = context?.place;
   const [own, rest] = splitProps(props, ["children", "ref", "onContextMenu", "onPointerDown"]);
   const area = createElement("box");
