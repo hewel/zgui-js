@@ -55,6 +55,8 @@ pub(crate) struct Profile {
     pub id: String,
     pub surface: Surface,
     pub theme: String,
+    #[serde(default)]
+    pub reduced_motion: bool,
     pub locale: String,
     pub direction: String,
     pub time_zone: String,
@@ -410,6 +412,17 @@ fn font_css(families: &[String]) -> String {
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicU64, Ordering};
+
+    #[test]
+    fn reduced_motion_is_an_explicit_boolean_profile_preference() {
+        let mut value = serde_json::to_value(default_profile()).unwrap();
+        value["reducedMotion"] = json!(true);
+        let reduced: Profile = serde_json::from_value(value.clone()).unwrap();
+        assert!(reduced.reduced_motion);
+        assert!(validate(&reduced).is_ok());
+        value["reducedMotion"] = json!("reduce");
+        assert!(serde_json::from_value::<Profile>(value).is_err());
+    }
 
     fn default_profile() -> Profile {
         serde_json::from_str(include_str!("../../../../preview/profiles/default.json")).unwrap()

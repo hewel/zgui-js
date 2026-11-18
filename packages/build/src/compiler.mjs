@@ -3,18 +3,23 @@ import { transformAsync } from "@babel/core";
 import typescriptPreset from "@babel/preset-typescript";
 import solidPreset from "babel-preset-solid";
 import { validateImport, validateModule, validateGraph } from "./validate.mjs";
+import { realpath } from "node:fs/promises";
+import { moduleIdentity } from "./identity.mjs";
+import { stylexPlugin, stylexOptions, styleSystem, readNativeProfileDigest, validateStylexModule, finalizeStylex } from "./stylex.mjs";
 
 // Babel owns JSX lowering; Rolldown composes this map with its ES2022 output map.
-export function compilerOptions(entry, { root, appDirectory = path.dirname(entry), plugins = [], babelTransform = transformAsync }) {
+export function compilerOptions(entry, { root, appDirectory = path.dirname(entry), plugins = [], babelTransform = transformAsync, stylexDiagnostics = false }) {
   // Rolldown 1.3.2 watch rescans the graph even with incrementalBuild enabled.
   // Keep expensive Babel/Solid work incremental without caching resolution or diagnostics.
   const transforms = new Map();
+  let nativeProfileDigest, generationStyleSystem;
   function pruneTransforms() {
     const active = new Set(this.getModuleIds());
     for (const filename of transforms.keys()) if (!active.has(filename)) transforms.delete(filename);
   }
   return {
     cwd: appDirectory, input: path.resolve(entry), platform: "neutral",
+    experimental: { attachDebugInfo: "none" },
     resolve: {
       conditionNames: ["browser", "production", "import", "default"],
       mainFields: ["module", "main"],
@@ -26,26 +31,65 @@ export function compilerOptions(entry, { root, appDirectory = path.dirname(entry
       warn(warning);
     },
     plugins: [{
-      name: "solid-universal-typescript",
+      name: "stylex-solid-universal-typescript",
       resolveId(source) { validateImport(source); },
+      buildStart() {
+        this.addWatchFile(path.join(root, "schemas/stylex-profile.json"));
+        const digest = readNativeProfileDigest(root);
+        if (nativeProfileDigest !== digest) transforms.clear();
+        nativeProfileDigest = digest;
+        generationStyleSystem = styleSystem(stylexDiagnostics, digest);
+      },
       buildEnd: pruneTransforms,
+      outputOptions(options) {
+        return {
+          ...options,
+          sourcemapPathTransform(source, sourceMapPath) {
+            return moduleIdentity(path.resolve(path.dirname(sourceMapPath), source), { root, appDirectory });
+          },
+        };
+      },
+      generateBundle() {
+        const active = new Set(this.getModuleIds());
+        const modules = [...transforms].filter(([filename]) => active.has(filename)).map(([, record]) => record);
+        const { css, origins } = finalizeStylex(modules);
+        this.emitFile({ type: "asset", fileName: "app.css", source: css });
+        this.emitFile({ type: "asset", fileName: "style-origins.json", source: JSON.stringify({ ...origins, styleSystem: generationStyleSystem }, null, 2) + "\n" });
+      },
       closeWatcher() { transforms.clear(); },
       closeBundle() { if (!this.meta.watchMode) transforms.clear(); },
       async transform(source, filename) {
-        if (!/\.[cm]?[jt]sx?$/.test(filename)) return null;
+        if (filename.startsWith("\0") || !/\.[cm]?[jt]sx?$/.test(filename)) return null;
+        filename = await realpath(filename);
         const cached = transforms.get(filename);
         if (cached?.source === source) return cached.result;
-        const transformed = await babelTransform(source, {
+        validateStylexModule(source, { filename });
+        // Pass one preserves JSX and TypeScript; its metadata is owned by this generation.
+        const first = await transformAsync(source, {
           filename, babelrc: false, configFile: false, sourceMaps: true,
+          parserOpts: { plugins: /\.[cm]?ts$/.test(filename) ? ["typescript"] : ["typescript", "jsx"] },
+          plugins: [[stylexPlugin, stylexOptions(appDirectory, stylexDiagnostics, filename => moduleIdentity(filename, { root, appDirectory }), nativeProfileDigest)]],
+        });
+        if (!first?.code || !first.map || !Array.isArray(first.metadata?.stylex)) {
+          throw new Error(`StyleX emitted missing or incompatible output for ${filename}`);
+        }
+        const rules = first.metadata.stylex;
+        if (rules.some(rule => !Array.isArray(rule) || typeof rule[0] !== "string" ||
+          typeof rule[1]?.ltr !== "string" || !Number.isFinite(rule[2]))) {
+          throw new Error(`StyleX emitted incompatible rule metadata for ${filename}`);
+        }
+        const transformed = await babelTransform(first.code, {
+          filename, babelrc: false, configFile: false, sourceMaps: true, inputSourceMap: first.map,
           presets: [
             [solidPreset, { generate: "universal", moduleName: "@hewel/zgui/renderer", hydratable: false }],
             [typescriptPreset, { onlyRemoveTypeImports: true, allExtensions: true, isTSX: /\.tsx$/.test(filename) }],
           ],
         });
-        if (!transformed?.code) throw new Error(`Babel emitted no JavaScript for ${filename}`);
+        if (!transformed?.code || !transformed.map) throw new Error(`Babel emitted no JavaScript or composed source map for ${filename}`);
         validateModule(transformed.code, { filename });
+        validateStylexModule(transformed.code, { filename, compiled: true });
         const result = { code: transformed.code, map: transformed.map, moduleType: "js" };
-        transforms.set(filename, { source, result });
+        transforms.set(filename, { source, result, rules: structuredClone(rules), identity: moduleIdentity(filename, { root, appDirectory }) });
         return result;
       },
     }, ...plugins],
@@ -76,5 +120,11 @@ export function compilationResult(output, moduleIds, { entry = true } = {}) {
       files.set(`${item.fileName}.map`, Buffer.from(item.map.toString()));
     } else files.set(item.fileName, Buffer.from(item.source));
   }
-  return { files, graph, solidRuntime };
+  if (!files.has("app.css") || !files.has("style-origins.json")) throw new Error("Missing StyleX stylesheet or provenance output");
+  const { styleSystem } = JSON.parse(files.get("style-origins.json").toString());
+  if (styleSystem?.name !== "stylex" || styleSystem.profile !== "zgui-stylex-v1" ||
+      !/^sha256:[a-f0-9]{64}$/.test(styleSystem.configDigest) || !/^sha256:[a-f0-9]{64}$/.test(styleSystem.nativeProfileDigest)) {
+    throw new Error("Missing or incompatible StyleX profile metadata");
+  }
+  return { files, graph, solidRuntime, styleSystem };
 }

@@ -25,8 +25,8 @@ export function Separator(props: SeparatorProps = {}): NativeNode {
     },
     rest,
     {
-      get class() {
-        return classes(sheet.className, "zui-separator", `zui-separator--${own.orientation ?? "horizontal"}`, rest.class);
+      get __zguiClass() {
+        return classes(sheet.className, "zui-separator", `zui-separator--${own.orientation ?? "horizontal"}`);
       },
     },
   ), true);

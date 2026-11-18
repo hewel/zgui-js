@@ -29,12 +29,9 @@ export function EmptyMedia(props: EmptyMediaProps = {}): NativeNode {
     },
     rest,
     {
-      get class() {
-        return classes(
-          "zui-empty__media",
-          own.variant === "icon" && "zui-empty__media--icon",
-          rest.class,
-        );
+      get __zguiClass() {
+        return classes("zui-empty__media",
+        own.variant === "icon" && "zui-empty__media--icon", );
       },
     },
   ));

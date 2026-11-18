@@ -62,7 +62,7 @@ export function Accordion(props: AccordionProps = {}): NativeNode {
   };
   const node = createElement("column");
   spread(node, mergeProps({ role: "group" as const }, rest, {
-    get class() { return classes(sheet.className, "zui-accordion", rest.class); },
+    get __zguiClass() { return classes(sheet.className, "zui-accordion"); },
     onKeyDown(event: NativeKeyEvent) { if (callHandler(event, own.onKeyDown) && !disabled()) roving.onKeyDown(event); },
   }));
   slot(node, provide(AccordionContext, context, own));
@@ -86,7 +86,7 @@ export function AccordionItem(props: AccordionItemProps): NativeNode {
   spread(node, mergeProps({ tabIndex: -1,
     get "data-state"() { return disclosure.open() ? "open" : "closed"; },
     get "data-value"() { return value(); },
-  }, rest, { get class() { return classes("zui-accordion__item", rest.class); } }));
+  }, rest, { get __zguiClass() { return classes("zui-accordion__item"); } }));
   slot(node, provide(DisclosureContext, disclosure, own));
   return node;
 }
@@ -114,7 +114,7 @@ export function AccordionTrigger(props: AccordionTriggerProps = {}): NativeNode 
     get ariaControls() { return context?.content() ?? null; },
     get "data-state"() { return context?.open() ? "open" : "closed"; },
   }, rest, {
-    get class() { return classes("zui-accordion__trigger", rest.class); },
+    get __zguiClass() { return classes("zui-accordion__trigger"); },
     get children() { return [own.children, chevron]; },
     onClick(event: NativeEvent) { if (callHandler(event, own.onClick) && !disabled()) { item?.activate(); context?.setOpen(!context.open()); } },
     onFocus(event: NativeFocusEvent) { if (callHandler(event, own.onFocus) && event.target === node && !disabled()) item?.activate(); },
@@ -127,6 +127,6 @@ export function AccordionContent(props: AccordionContentProps = {}): NativeNode 
   useStylesheet(sheet);
   const context = useContext(DisclosureContext);
   return disclosureContent(mergeProps({ role: "region" as const, get ariaLabelledBy() { return context?.trigger() ?? null; } }, props, {
-    get class() { return classes("zui-accordion__content", props.class); },
+    get __zguiClass() { return classes("zui-accordion__content"); },
   }), "zui-accordion__measure");
 }

@@ -24,7 +24,20 @@ function executesAtTopLevel(p) {
   return true;
 }
 
+function hasArgumentsBinding(p) {
+  let child = p;
+  for (let parent = p.parentPath; parent; child = parent, parent = parent.parentPath) {
+    if (parent.isFunction() && !parent.isArrowFunctionExpression() &&
+        (child.key === "body" || child.listKey === "params")) return true;
+  }
+  return false;
+}
+
 export function validateImport(specifier) {
+  if (/^@stylexjs\/(?:babel-plugin|shared)(?:\/|$)/.test(specifier) ||
+      /^@stylexjs\/stylex\/(?:lib\/)?(?:stylex-inject|stylesheet)(?:[./]|$)/.test(specifier)) {
+    throw new Error(`Unavailable native StyleX host import: ${specifier}`);
+  }
   if (isBuiltin(specifier) || /^(?:solid-js\/(?:web|server)|react-dom)(?:\/|$)/.test(specifier) ||
       /(?:^|\/)server(?:\.[cm]?js|\/|$)/.test(specifier)) {
     throw new Error(`Incompatible runtime import: ${specifier}`);
@@ -76,7 +89,8 @@ export function validateModule(code, { filename = "app.mjs", bundled = false, en
       }
     },
     ReferencedIdentifier(p) {
-      if (bundled && !p.scope.hasBinding(p.node.name, true) && !globals.has(p.node.name)) {
+      if (bundled && !p.scope.hasBinding(p.node.name, true) && !globals.has(p.node.name) &&
+          !(p.node.name === "arguments" && hasArgumentsBinding(p))) {
         throw new Error(`Unsupported runtime global: ${p.node.name}`);
       }
     },
@@ -100,6 +114,10 @@ export function validateGraph(graph) {
   const runtimes = graph.modules.filter(input => /\/solid-js\/dist\/(?:solid|dev)\.js$/.test(input));
   if (runtimes.length !== 1) throw new Error(`Expected one reactive Solid runtime, found ${runtimes.length}`);
   for (const input of graph.modules) {
+    if (/\/@stylexjs\/(?:babel-plugin|shared)\//.test(input) ||
+        /\/@stylexjs\/stylex\/lib\/(?:(?:es|cjs)\/(?:inject|stylesheet)|stylex-inject|stylesheet)(?:[./]|$)/.test(input)) {
+      throw new Error(`Unavailable native StyleX host module: ${input}`);
+    }
     if (/\/solid-js\/(?:web|.*server)|\/react-dom\//.test(input)) throw new Error(`Incompatible module graph: ${input}`);
   }
   if (graph.chunks.length !== 1 || graph.chunks[0].imports.length || graph.chunks[0].dynamicImports.length) {

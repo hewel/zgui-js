@@ -100,11 +100,11 @@ export function Slider(props: SliderProps = {}): NativeNode {
       get ariaValueMax() { return bound().max; },
       get ariaValueStep() { return bound().step; },
       get ariaValueNow() { return value(); },
-      get "--zui-slider-fraction"() { return `${(fraction() * 100).toFixed(4)}%`; },
+      get __zguiStyle() { return { "--zui-slider-fraction": `${(fraction() * 100).toFixed(4)}%` }; },
     },
     rest,
     {
-      get class() { return classes(sheet.className, "zui-slider", rest.class); },
+      get __zguiClass() { return classes(sheet.className, "zui-slider"); },
       get onKeyDown() {
         return (event: NativeKeyEvent) => {
           if (!callHandler(event, own.onKeyDown) || disabled() || event.target !== root || event.character != null) return;

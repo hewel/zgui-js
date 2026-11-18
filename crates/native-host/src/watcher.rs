@@ -120,14 +120,20 @@ mod tests {
             let map = br#"{"version":3,"sources":[],"names":[],"mappings":""}"#;
             fs::write(directory.join("app.mjs"), source.as_bytes()).unwrap();
             fs::write(directory.join("app.mjs.map"), map).unwrap();
-            let mut digest = Sha256::new();
-            digest.update(b"app.mjs\0"); digest.update(source.as_bytes()); digest.update([0]);
-            digest.update(b"app.mjs.map\0"); digest.update(map); digest.update([0]);
-            let manifest = serde_json::json!({
-                "schemaVersion": 1, "id": "watcher-test", "hostApiVersion": 1,
-                "entry": "app.mjs", "sourceMap": "app.mjs.map", "styles": [], "assets": [],
-                "buildId": format!("sha256:{:x}", digest.finalize()),
+            let style_system = serde_json::json!({"name":"stylex","profile":"zgui-stylex-v1",
+                "configDigest":format!("sha256:{:x}", Sha256::digest(b"test")),"nativeProfileDigest":crate::package::native_profile_digest()});
+            let metadata = serde_json::to_vec(&serde_json::json!({"styleSystem":style_system})).unwrap();
+            fs::write(directory.join("style-origins.json"), &metadata).unwrap();
+            fs::write(directory.join("build-info.json"), &metadata).unwrap();
+            let digests: std::collections::BTreeMap<_, _> = ["app.mjs", "app.mjs.map", "style-origins.json", "build-info.json"].into_iter()
+                .map(|name| (name, format!("sha256:{:x}", Sha256::digest(fs::read(directory.join(name)).unwrap())))).collect();
+            let mut manifest = serde_json::json!({
+                "schemaVersion": 2, "id": "watcher-test", "hostApiVersion": 1,
+                "entry": "app.mjs", "sourceMap": "app.mjs.map", "styles": [], "assets": [], "fonts": [],
+                "styleSystem":style_system,
+                "artifactDigests":digests
             });
+            manifest["buildId"] = serde_json::json!(format!("sha256:{:x}", Sha256::digest(serde_json::to_vec(&manifest).unwrap())));
             fs::write(directory.join("manifest.json"), serde_json::to_vec(&manifest).unwrap()).unwrap();
             directory.canonicalize().unwrap()
         }

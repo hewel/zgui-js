@@ -45,6 +45,7 @@ impl Fault {
                 }
             }
             SessionError::InvalidState(message) => Error::new("E_HOST_INVARIANT", 9, message).into(),
+            SessionError::Style { code, message, details } => Error::new(code, 3, message).with_details(details).into(),
         }
     }
 }
@@ -54,7 +55,6 @@ struct PreviewHost {
     host: SessionHost,
     deadline: Rc<Cell<Instant>>,
     observer: FrameObserver,
-    font_css: String,
     fault: Option<Fault>,
     requested_metadata: u64,
     retired: Option<Value>,
@@ -84,9 +84,6 @@ impl PreviewHost {
             // inspect it; the observer binds to whichever generation is current.
             self.observer.bind_session(self.host.sessions().next().map(Rc::downgrade).unwrap_or_default());
             if let Err(error) = attached { self.fail(cx, Fault::application(error)); return; }
-            if let Some(session) = self.host.sessions().next() {
-                session.region.host.install_stylesheet("preview-profile-fonts", &self.font_css);
-            }
         }
         let retry: Rc<dyn Fn(zgui::view::DocumentId, u64)> = Rc::new(|_, _| {});
         let checked = {
@@ -159,8 +156,8 @@ pub struct Driver {
     startup_fault: Option<Fault>,
 }
 pub(super) fn stylesheet(profile:&LoadedProfile)->String {
-    format!("{} :root {{ display:block; box-sizing:border-box; width:100%; height:100%; background-color:{}; {} }}",
-        crate::APPLICATION_STYLESHEET,profile.profile.surface.background,
+    format!("{} :root {{ display:block; box-sizing:border-box; width:100%; height:100%; background-color:{}; font-family:{}; {} }}",
+        crate::APPLICATION_STYLESHEET,profile.profile.surface.background,profile.font_family_css,
         if profile.profile.theme=="light" { "color:#171b24;" } else { "" })
 }
 
@@ -191,10 +188,9 @@ impl Driver {
             ..Default::default()
         };
         let session_host = SessionHost::new(pending.clone(), SessionModule::package(package.clone()),
-            SessionPolicy::preview(limits, deadline.clone(), environment.clone(), fixtures.clone()),
+            SessionPolicy::preview(limits, deadline.clone(), environment.clone(), fixtures.clone()).with_reduced_motion(profile.profile.reduced_motion),
             RecoveryPolicy::Propagate);
         platform.set_color_scheme(Some(if profile.profile.theme == "dark" { ColorScheme::Dark } else { ColorScheme::Light }));
-        let font_css = format!(":root {{ font-family:{}; }}", profile.font_family_css);
         let observer_ref = observer.clone();
         let deadline_ref = deadline.clone();
         let pipeline = pipeline::for_preview(profile, &package, platform, stylesheet, &observer, pending, move |native| PreviewHost {
@@ -202,7 +198,6 @@ impl Driver {
             host: session_host,
             deadline: deadline_ref,
             observer: observer_ref,
-            font_css,
             fault: None,
             requested_metadata: 0,
             retired: None,
@@ -265,9 +260,9 @@ impl Driver {
         if let Some(fault) = self.pipeline.app_mut().fault.take() { return Err(fault); }
         if let Some(error) = self.observer.take_fault() { return Err(error.into()); }
         if self.observer.exceeded_step_budget(self.step_start_frame.get(), self.limits.max_frames_per_step) {
-            return Err(Error::new("E_JOB_BUDGET",5,"native frame budget exhausted").into());
+            return Err(Error::new("E_JOB_BUDGET",5,"native frame budget exhausted").with_details(self.readiness()).into());
         }
-        if Instant::now() >= self.deadline.get() { return Err(Error::new("E_READINESS_TIMEOUT",5,"step exhausted its real wall-clock deadline").into()); }
+        if Instant::now() >= self.deadline.get() { return Err(Error::new("E_READINESS_TIMEOUT",5,"step exhausted its real wall-clock deadline").with_details(self.readiness()).into()); }
         Ok(())
     }
     fn window(&self) -> Result<&Window, Error> {
@@ -294,11 +289,16 @@ impl Driver {
             || self.fixtures.next_deadline_us().is_some_and(|next|next<=self.environment.now_us())
     }
     pub fn readiness(&self) -> Value {
-        let resources=self.window().ok().map(|window|resources::snapshot(window,&[]));
+        let resources=self.window().ok().map(|window|resources::snapshot(window,&[],self.pipeline.app().session().map(AsRef::as_ref)));
         let resource=resources.as_ref().and_then(|result|result.as_ref().ok());
         json!({"appReady":self.pipeline.app().session().is_some(),"currentWorkSettled":!self.runnable(),
             "requiredAssetsReady":resource.map(|value|&value["requiredAssetsReady"]),"nativeAssetReadinessAvailable":true,"frameCurrent":self.frame_current(),
             "resourceRevision":self.window().ok().map(Window::image_resource_revision),
+            "requiredFontsReady":resource.map(|value|&value["requiredFontsReady"]),
+            "requiredStyleRevision":self.window().ok().map(Window::style_revision),
+            "validatedStyleRevision":self.window().ok().and_then(|window|window.completed_frame().map(|frame|frame.style_revision)),
+            "pendingStylesheets":self.window().ok().map(Window::has_pending_stylesheets),
+            "nativeAcceptance":self.pipeline.app().host.acceptance(),
             "pendingAssets":resource.and_then(|value|value["pendingIds"].as_array()).map(|items|items.len()),
             "timeUs":self.environment.now_us(),"nextFixtureDeadlineUs":self.fixtures.next_deadline_us(),
             "nextNativeDeadlineUs":self.pipeline.parked_deadline().map(|next|next.saturating_duration_since(self.pipeline.platform().clock().origin()).as_micros()),
@@ -359,11 +359,11 @@ impl Driver {
         // An explicit placeholder capture may reuse an already coherent frame before publishing
         // asynchronous arrivals. Whether a worker happened to finish cannot change this decision.
         if allowed_pending.is_empty() || !self.frame_current() || self.runnable() { self.settle(true)?; }
-        let mut resource=resources::snapshot(self.window()?,allowed_pending)?;
+        let mut resource=resources::snapshot(self.window()?,allowed_pending,self.pipeline.app().session().map(AsRef::as_ref))?;
         for _ in 0..self.limits.max_settle_turns {
             if resource["requiredAssetsReady"]==true { break; }
             self.settle(true)?;
-            resource=resources::snapshot(self.window()?,allowed_pending)?;
+            resource=resources::snapshot(self.window()?,allowed_pending,self.pipeline.app().session().map(AsRef::as_ref))?;
         }
         if resource["requiredAssetsReady"]!=true {
             return Err(Error::new("E_ASSET_TIMEOUT",5,"visible resources did not reach current native demand").into());
@@ -385,7 +385,7 @@ impl Driver {
         })?;
         drop(settled);
         self.check()?;
-        if Instant::now()>=self.deadline.get() { return Err(Error::new("E_READINESS_TIMEOUT",5,"capture publication exceeded its step deadline").into()); }
+        if Instant::now()>=self.deadline.get() { return Err(Error::new("E_READINESS_TIMEOUT",5,"capture publication exceeded its step deadline").with_details(self.readiness()).into()); }
         Ok(paths)
     }
     pub fn graphics(&self) -> Value { self.observer.graphics_metadata() }

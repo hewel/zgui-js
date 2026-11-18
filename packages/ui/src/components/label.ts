@@ -17,7 +17,7 @@ export function Label(props: LabelProps = {}): NativeNode {
     { role: "label" as const },
     rest,
     {
-      get class() { return classes(sheet.className, "zui-label", rest.class); },
+      get __zguiClass() { return classes(sheet.className, "zui-label"); },
       get onClick() {
         return (event: NativeEvent) => {
           if (!callHandler(event, own.onClick) || rest.disabled) return;

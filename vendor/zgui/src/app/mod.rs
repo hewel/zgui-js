@@ -1,0 +1,618 @@
+//! An application: a window, what is in it, and what draws it.
+
+pub mod fonts;
+mod graphics;
+
+use zgui_platform::{AppHandler, Decorations, PlatformError};
+use zgui_runtime::AppError;
+use zgui_view::{Anchor, BuildCx, IntoView, View};
+
+pub use crate::app::fonts::Fonts;
+
+/// Shaping text outside the paragraph pipeline: the shaper [`Fonts::shaper`] answers with, what one
+/// line is asked for in, the OpenType settings on top of that, and what the resolved face measures.
+///
+/// An element that positions its own glyphs — text in cells, one line at a time — shapes through
+/// these and draws the result with
+/// [`ScenePainter::glyphs`](zgui_custom::ScenePainter::glyphs). The shaped runs are owned
+/// ([`ShapedRunOwned`](zgui_text::ShapedRunOwned)), so they are held across frames rather than
+/// rebuilt for each one.
+pub use zgui_text_parley::{
+    FontFeature, FontVariation, LineRequest, LineSettings, ResolvedLineMetrics, Shaper, tag,
+};
+
+/// A platform backend's entry point: it takes the application and drives it until it stops.
+///
+/// A windowing backend blocks until the last window closes; one over buffers may return at once,
+/// which is what makes the same application runnable in a test.
+pub type Driver = fn(Box<dyn AppHandler>) -> Result<(), PlatformError>;
+
+/// The driver [`App::run`] uses: this machine's own desktop.
+///
+/// On a Wayland session that is the backend that speaks to the compositor directly; everywhere
+/// else — macOS, Windows, an X11 session — it is the portable one. `ZGUI_PLATFORM=winit` forces
+/// the portable backend on a Wayland session, and `ZGUI_PLATFORM=wayland` asks for the other.
+///
+/// [`App::run_on`] takes a driver so that an application can be run somewhere other than a screen,
+/// and the other reason to name one is to sit *between* the desktop and the application without
+/// giving up either: a handler that wraps this one sees every event the window produces, and can
+/// produce events of its own, while the window, the graphics device and the compositor are the
+/// real ones.
+///
+/// ```no_run
+/// use zgui::prelude::*;
+///
+/// # fn main() -> Result<(), zgui::Error> {
+/// app().run_on(
+///     |handler| zgui::app::desktop()(handler),
+///     || view! { column() },
+/// )
+/// # }
+/// ```
+pub fn desktop() -> Driver {
+    #[cfg(any(
+        target_os = "linux",
+        target_os = "dragonfly",
+        target_os = "freebsd",
+        target_os = "netbsd",
+        target_os = "openbsd"
+    ))]
+    if wayland_wanted() {
+        return zgui_platform_wayland::run;
+    }
+    zgui_platform_winit::run
+}
+
+/// Whether this program should speak to a compositor directly.
+///
+/// Two questions, in this order. `ZGUI_PLATFORM` settles it outright when it is set, which is what
+/// a bug report needs: the same binary, one variable, both backends. Otherwise the answer is
+/// whether there is a Wayland display at all — an X11 session, a remote session and a machine with
+/// no desktop each answer no and each takes the portable backend.
+///
+/// Asked before either backend is started, so nothing is opened twice and nothing has to be undone.
+/// If the connection then fails anyway, [`run`](zgui_platform_wayland::run) says so and the caller
+/// is free to fall back; the driver this returns does not, because a driver that silently ran
+/// somewhere other than where it said would be worse than one that reported the failure.
+#[cfg(any(
+    target_os = "linux",
+    target_os = "dragonfly",
+    target_os = "freebsd",
+    target_os = "netbsd",
+    target_os = "openbsd"
+))]
+fn wayland_wanted() -> bool {
+    match std::env::var("ZGUI_PLATFORM") {
+        Ok(named) => named.trim().eq_ignore_ascii_case("wayland"),
+        Err(_) => zgui_platform_wayland::conn::is_available(),
+    }
+}
+
+/// An application, before it runs. The same as [`App::new`], under a name a component cannot take.
+///
+/// This is what the prelude exports, and the prelude deliberately does **not** export the type.
+/// `App` is the obvious name for a root component and for that component's scoped style sheet, and
+/// a `style!` block declares a type of that name — so a prelude carrying a type called `App` would
+/// be shadowed by the first application that named its root the obvious thing, and the entry point
+/// would stop resolving in a program that never mentioned it. It cannot happen through this name:
+/// `#[component]` refuses a name that does not begin with a capital, so nothing a component or its
+/// style sheet declares can be spelled `app`.
+///
+/// The type is still there, at [`zgui::App`](App), for anything that has to name it.
+///
+/// ```no_run
+/// use zgui::prelude::*;
+///
+/// # fn main() -> Result<(), zgui::Error> {
+/// app().with_title("Counter").run(|| view! { column() })
+/// # }
+/// ```
+pub fn app() -> App {
+    App::new()
+}
+
+/// An application, before it runs.
+///
+/// Everything a program needs in order to be a program is already decided here — the window, the
+/// graphics device, the font engine, the glyph rasteriser and the event loop — so an application
+/// describes its interface and nothing else. Each of those decisions can still be taken back:
+/// [`App::with_fonts`] replaces the faces, and [`App::run_on`] replaces the whole platform.
+///
+/// ```no_run
+/// use zgui::prelude::*;
+///
+/// # fn main() -> Result<(), zgui::Error> {
+/// app()
+///     .with_title("Counter")
+///     .with_size(360.0, 220.0)
+///     .with_stylesheet("root { padding: 24px }")
+///     .run(|| view! { column {text {"0"}} })
+/// # }
+/// ```
+pub struct App {
+    /// The application the frame loop sees.
+    inner: zgui_runtime::App,
+    /// The faces it draws with, once it has been asked or has run out of chances to say.
+    ///
+    /// Empty until then, so that an application shipping its own faces never enumerates the
+    /// machine's: what is installed here is the largest thing a launch does before it has a
+    /// window, and a builder that had already done it by the time [`App::with_fonts`] was reached
+    /// would do it for nothing.
+    fonts: std::cell::OnceCell<Fonts>,
+    /// What draws its windows, when it is not this machine's own graphics device.
+    renderer: Option<zgui_runtime::RendererFactory>,
+    /// How precisely the default renderer holds a plain group, when the application set it.
+    group_precision: Option<crate::GroupPrecision>,
+    /// The application's own context setup, held until the faces are known.
+    ///
+    /// Held here rather than passed straight down because the faces are provided in the same scope
+    /// and are decided last. The two are composed in [`App::into_handler`], faces first.
+    context: Option<Box<dyn FnOnce()>>,
+}
+
+impl Default for App {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// A size in CSS pixels, which is the space every window measurement is written in.
+fn css_size(width: f32, height: f32) -> zgui_geom::Size<zgui_geom::CssPx, zgui_geom::Css> {
+    zgui_geom::Size::new(zgui_geom::CssPx(width), zgui_geom::CssPx(height))
+}
+
+impl App {
+    /// An application with the window it launches with, the machine's own faces, and nothing in it.
+    ///
+    /// Every other window it opens is asked for while it runs, through
+    /// [`use_windows`](zgui_runtime::use_windows).
+    pub fn new() -> Self {
+        Self {
+            inner: zgui_runtime::App::new(),
+            fonts: std::cell::OnceCell::new(),
+            renderer: None,
+            group_precision: None,
+            context: None,
+        }
+    }
+
+    /// Names the window.
+    pub fn with_title(mut self, title: impl Into<zgui_vocab::SharedString>) -> Self {
+        self.inner = self.inner.with_title(title);
+        self
+    }
+
+    /// Names the application to the desktop.
+    ///
+    /// This is what a compositor matches window rules, icons and task-bar grouping against — the
+    /// Wayland toplevel's `app_id` and the X11 window's `WM_CLASS`. It is not the title: the title
+    /// is what a user reads and follows the document, while this identifies the *program* and
+    /// should match the `.desktop` file shipped beside it, so the convention is a reverse-domain
+    /// name such as `dev.example.Counter`.
+    ///
+    /// An application that sets none is one the desktop cannot address: its windows carry an empty
+    /// class, no rule can select them, and they group under nothing.
+    pub fn with_application_id(mut self, id: impl Into<zgui_vocab::SharedString>) -> Self {
+        self.inner = self.inner.with_application_id(id);
+        self
+    }
+
+    /// Sets the size the window starts at, in CSS pixels.
+    pub fn with_size(mut self, width: f32, height: f32) -> Self {
+        self.inner = self.inner.with_size(width, height);
+        self
+    }
+
+    /// The smallest size the user may drag the window to, in CSS pixels.
+    pub fn with_min_size(mut self, width: f32, height: f32) -> Self {
+        self.inner.attributes_mut().min_size = Some(css_size(width, height));
+        self
+    }
+
+    /// The largest size the user may drag the window to, in CSS pixels.
+    pub fn with_max_size(mut self, width: f32, height: f32) -> Self {
+        self.inner.attributes_mut().max_size = Some(css_size(width, height));
+        self
+    }
+
+    /// Whether the user may resize the window at all.
+    pub fn with_resizable(mut self, resizable: bool) -> Self {
+        self.inner.attributes_mut().resizable = resizable;
+        self
+    }
+
+    /// What frame the desktop draws.
+    ///
+    /// An application that drops the title bar draws its own, and owes the user what the desktop's
+    /// would have given them: somewhere to drag the window by, edges to resize from, and a way to
+    /// close it. See
+    /// [`WindowHandle::move_drag_handler`](zgui_runtime::WindowHandle::move_drag_handler).
+    pub fn with_decorations(mut self, decorations: Decorations) -> Self {
+        self.inner.attributes_mut().decorations = decorations;
+        self
+    }
+
+    /// Where the desktop's window buttons sit over a window with [`Decorations::NoTitleBar`].
+    ///
+    /// Only macOS draws its buttons over the content. Elsewhere this does nothing.
+    pub fn with_title_buttons(mut self, buttons: zgui_platform::TitleButtons) -> Self {
+        self.inner.attributes_mut().title_buttons = Some(buttons);
+        self
+    }
+
+    /// Gives the application a menu outside its windows.
+    ///
+    /// `build` runs after [`App::with_context`], in the same scope, and runs again whenever a
+    /// signal it read changes. Only a desktop with an application menu shows it. What the user
+    /// picks reaches [`on_menu`](crate::desktop::on_menu).
+    pub fn with_menu(mut self, build: impl Fn() -> zgui_platform::AppMenu + 'static) -> Self {
+        self.inner = self.inner.with_menu(build);
+        self
+    }
+
+    /// Whether the window may be partly transparent.
+    ///
+    /// What a window that draws its own rounded corners needs, so the desktop shows through them.
+    /// A transparent window is composed into a
+    /// [`RenderTarget::translucent`](zgui_render::RenderTarget::translucent) target: each pixel is
+    /// a premultiplied colour, a pixel nothing paints has zero alpha, and text is drawn with
+    /// ordinary coverage in place of per-channel coverage.
+    pub fn with_transparent(mut self, transparent: bool) -> Self {
+        self.inner.attributes_mut().transparent = transparent;
+        self
+    }
+
+    /// Where the window should open, measured from the desktop's origin.
+    ///
+    /// Ignored where a desktop places windows itself, which is every Wayland compositor.
+    pub fn with_position(mut self, x: f32, y: f32) -> Self {
+        self.inner.attributes_mut().position = Some(zgui_geom::Point::new(
+            zgui_geom::CssPx(x),
+            zgui_geom::CssPx(y),
+        ));
+        self
+    }
+
+    /// Whether the window should open maximised.
+    pub fn with_maximized(mut self, maximized: bool) -> Self {
+        self.inner.attributes_mut().maximized = maximized;
+        self
+    }
+
+    /// Whether the window should open full screen, and how.
+    pub fn with_fullscreen(mut self, mode: Option<zgui_platform::FullscreenMode>) -> Self {
+        self.inner.attributes_mut().fullscreen = mode;
+        self
+    }
+
+    /// Where the window should sit in the desktop's stacking order.
+    ///
+    /// Ignored where a desktop does not let an application place itself in the stack.
+    pub fn with_level(mut self, level: zgui_platform::WindowLevel) -> Self {
+        self.inner.attributes_mut().level = level;
+        self
+    }
+
+    /// The picture the desktop should show for the window.
+    ///
+    /// Ignored where the desktop takes it from elsewhere — from the desktop entry on Wayland, from
+    /// the bundle on macOS. Those read
+    /// [`App::with_application_id`](App::with_application_id) instead.
+    pub fn with_icon(mut self, icon: zgui_platform::WindowIcon) -> Self {
+        self.inner.attributes_mut().icon = Some(icon);
+        self
+    }
+
+    /// A light or dark preference for this application's window, rather than the desktop's.
+    pub fn with_theme(mut self, theme: zgui_platform::ColorScheme) -> Self {
+        self.inner.attributes_mut().theme = Some(theme);
+        self
+    }
+
+    /// Whether the window composes its next frame before the platform is ready to show it.
+    ///
+    /// [`ComposeAhead::Auto`](zgui_platform::ComposeAhead::Auto) is the default: the window
+    /// composes ahead only while its frames do not fit the refresh interval.
+    /// [`Always`](zgui_platform::ComposeAhead::Always) suits an application that animates
+    /// continuously and gives throughput priority over input latency. Windows opened later take
+    /// their own setting through
+    /// [`WindowOptions::with_compose_ahead`](zgui_runtime::WindowOptions::with_compose_ahead).
+    pub fn with_compose_ahead(mut self, compose_ahead: zgui_platform::ComposeAhead) -> Self {
+        self.inner.attributes_mut().compose_ahead = compose_ahead;
+        self
+    }
+
+    /// Runs `setup` in the scope above every window, before the first one opens.
+    ///
+    /// Where state belonging to the *application* rather than to one window goes. A context
+    /// provided inside a window's view is that window's own and no other window resolves it; one
+    /// provided here is resolved by every window there will ever be.
+    ///
+    /// The application's faces are provided in this same scope, before `setup` runs, so `setup`
+    /// resolves [`Fonts`] with [`use_context`](zgui_reactive::use_context) like any component does.
+    ///
+    /// ```no_run
+    /// use zgui::prelude::*;
+    ///
+    /// #[derive(Clone, Copy)]
+    /// struct Count(RwSignal<i32>);
+    ///
+    /// # fn main() -> Result<(), zgui::Error> {
+    /// app()
+    ///     .with_context(|| provide_context(Count(RwSignal::new(0))))
+    ///     .run(|| view! { column() })
+    /// # }
+    /// ```
+    pub fn with_context(mut self, setup: impl FnOnce() + 'static) -> Self {
+        self.context = Some(Box::new(setup));
+        self
+    }
+
+    /// Decides when the application stops.
+    ///
+    /// The default stops it when the last window closes. See
+    /// [`ExitPolicy`](zgui_runtime::ExitPolicy) for what else it can be, which matters as soon as
+    /// an application opens more than one window.
+    pub fn with_exit_policy(mut self, exit: zgui_runtime::ExitPolicy) -> Self {
+        self.inner = self.inner.with_exit_policy(exit);
+        self
+    }
+
+    /// Sets how many workers the style cascade may use.
+    ///
+    /// The default is the machine's parallelism. `0` and `1` run the cascade on the frame thread,
+    /// with no pool. A host that shares the machine with other work, for example a game engine,
+    /// sets a small number here. The `ZGUI_STYLE_THREADS` environment variable overrides this
+    /// value. See [`zgui_runtime::App::with_style_threads`].
+    ///
+    /// ```
+    /// let app = zgui::app().with_style_threads(1).with_layout_threads(1);
+    /// assert_eq!(app.style_threads(), Some(1));
+    /// assert_eq!(app.layout_threads(), Some(1));
+    /// ```
+    pub fn with_style_threads(mut self, threads: usize) -> Self {
+        self.inner = self.inner.with_style_threads(threads);
+        self
+    }
+
+    /// Sets how many workers the layout engine may use.
+    ///
+    /// The default is the machine's parallelism. `0` and `1` run layout on the frame thread, with
+    /// no pool. The `ZGUI_LAYOUT_THREADS` environment variable overrides this value. See
+    /// [`zgui_runtime::App::with_layout_threads`].
+    pub fn with_layout_threads(mut self, threads: usize) -> Self {
+        self.inner = self.inner.with_layout_threads(threads);
+        self
+    }
+
+    /// Returns the style worker count set with [`App::with_style_threads`], if one was set.
+    pub fn style_threads(&self) -> Option<usize> {
+        self.inner.style_threads()
+    }
+
+    /// Returns the layout worker count set with [`App::with_layout_threads`], if one was set.
+    pub fn layout_threads(&self) -> Option<usize> {
+        self.inner.layout_threads()
+    }
+
+    /// Adds a style sheet of the application's own.
+    ///
+    /// Each call adds one sheet. The sheets cascade in call order. They are added at the author
+    /// origin, over this framework's own sheet, which is what gives every element name its layout
+    /// before a single application rule is written.
+    pub fn with_stylesheet(mut self, css: impl Into<String>) -> Self {
+        self.inner = self.inner.with_stylesheet(css);
+        self
+    }
+
+    /// Installs `probe`, which is told about every frame of every window this opens.
+    ///
+    /// The seam a diagnostic tool attaches to. It is what an inspector overlay is wired in through:
+    /// a view sees the document, and what a probe is handed is the *frame* — the scene that was
+    /// emitted, the damage that was answered, the geometry that was computed and what the renderer
+    /// holds — none of which outlives the frame that produced it.
+    ///
+    /// ```no_run
+    /// use std::cell::Cell;
+    /// use std::rc::Rc;
+    /// use zgui::prelude::*;
+    /// use zgui::runtime::{FrameProbe, Window};
+    ///
+    /// /// Counts the frames the window ran.
+    /// #[derive(Default)]
+    /// struct Frames(Cell<u64>);
+    ///
+    /// impl FrameProbe for Frames {
+    ///     fn frame_ended(&self, _window: &Window) {
+    ///         self.0.set(self.0.get() + 1);
+    ///     }
+    /// }
+    ///
+    /// # fn main() -> Result<(), zgui::Error> {
+    /// app()
+    ///     .with_probe(Rc::new(Frames::default()))
+    ///     .run(|| view! { column() })
+    /// # }
+    /// ```
+    pub fn with_probe(mut self, probe: std::rc::Rc<dyn zgui_runtime::FrameProbe>) -> Self {
+        self.inner = self.inner.with_probe(probe);
+        self
+    }
+
+    /// Draws with `fonts` rather than with whatever this machine has installed.
+    ///
+    /// Said before [`App::fonts`] is asked for, this is also how an application declines to
+    /// enumerate the machine's faces at all.
+    pub fn with_fonts(mut self, fonts: Fonts) -> Self {
+        self.fonts = std::cell::OnceCell::from(fonts);
+        self
+    }
+
+    /// Draws through `factory` rather than through this machine's graphics device.
+    ///
+    /// What a window is drawn through is a decision, not a fact, and the two callers who need to
+    /// take it are the one running on a device this framework has no backend for and the one
+    /// running with no device at all — a test, which drives the same application over buffers and
+    /// reads back what it drew.
+    pub fn with_renderer(mut self, factory: zgui_runtime::RendererFactory) -> Self {
+        self.renderer = Some(factory);
+        self
+    }
+
+    /// Sets how precisely the default renderer holds a plain group of content.
+    ///
+    /// The default is [`GroupPrecision::Compact`](crate::GroupPrecision::Compact), which holds a
+    /// plain group in the surface format when that format is `Bgra8Unorm` or `Rgba8Unorm`. That
+    /// target has half the bytes of a sixteen-bit one.
+    /// [`GroupPrecision::High`](crate::GroupPrecision::High) holds every group in sixteen-bit
+    /// float. The `ZGUI_GROUP_PRECISION` environment variable (`high` or `compact`) overrides this
+    /// value. A renderer set with [`App::with_renderer`] ignores it.
+    ///
+    /// ```no_run
+    /// use zgui::prelude::*;
+    ///
+    /// # fn main() -> Result<(), zgui::Error> {
+    /// app()
+    ///     .with_group_precision(zgui::GroupPrecision::High)
+    ///     .run(|| view! { column() })
+    /// # }
+    /// ```
+    pub fn with_group_precision(mut self, precision: crate::GroupPrecision) -> Self {
+        self.group_precision = Some(precision);
+        self
+    }
+
+    /// The faces this application draws with, for registering one of its own.
+    ///
+    /// Asking settles the question [`App::with_fonts`] would otherwise answer: an application that
+    /// has not named its own faces by the time it asks about them gets this machine's.
+    pub fn fonts(&self) -> &Fonts {
+        self.fonts.get_or_init(Fonts::system)
+    }
+
+    /// Opens the window, builds `view` into it, and runs until the last window closes.
+    ///
+    /// # Errors
+    ///
+    /// Returns whatever stopped it: a desktop that would not open a window, a machine with no
+    /// usable graphics device, or an executor slot another asynchronous runtime already holds.
+    pub fn run<F, V>(self, view: F) -> Result<(), AppError>
+    where
+        F: FnMut() -> V + 'static,
+        V: IntoView,
+    {
+        self.run_on(desktop(), view)
+    }
+
+    /// The same, over a platform backend of the caller's choosing.
+    ///
+    /// The one thing an application cannot decide for itself is where it is running: a test drives
+    /// the same application over buffers and a virtual clock, and nothing above this line changes.
+    ///
+    /// # Errors
+    ///
+    /// As [`App::run`].
+    pub fn run_on<F, V, D>(self, driver: D, view: F) -> Result<(), AppError>
+    where
+        F: FnMut() -> V + 'static,
+        V: IntoView,
+        D: FnOnce(Box<dyn AppHandler>) -> Result<(), PlatformError>,
+    {
+        self.into_handler(view)?.drive(driver)
+    }
+
+    /// Turns the application into the handler a platform backend drives, without driving it.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AppError::ForeignExecutor`] when another asynchronous runtime already holds this
+    /// process's executor slot, because the reactive layer's tasks run on the thread that owns the
+    /// window.
+    pub fn into_handler<F, V>(self, mut view: F) -> Result<Handler, AppError>
+    where
+        F: FnMut() -> V + 'static,
+        V: IntoView,
+    {
+        // Before the font thread below, which is the first thread this process starts: the guard
+        // inside changes the environment only while the process has one thread.
+        zgui_render_wgpu::gpu::loader::prefer_hardware_vulkan();
+        // The last point at which the application could have named its own faces has passed, so
+        // this is where enumerating the machine's starts — on a thread of its own, alongside
+        // opening the window and the graphics device rather than in front of them.
+        let fonts = self.fonts.into_inner().unwrap_or_else(Fonts::system);
+        let shaping = fonts.clone();
+        let group_precision = self.group_precision;
+        let renderer = self
+            .renderer
+            .unwrap_or_else(|| graphics::factory(group_precision));
+        // The faces are provided above every window, so a component that shapes its own text
+        // reaches the same collection the frame does. The application's own setup runs after, and
+        // therefore resolves them like any other context.
+        let context_fonts = fonts.clone();
+        let setup = self.context;
+        let runtime = self
+            .inner
+            .with_context(move || {
+                zgui_reactive::provide_context(context_fonts);
+                if let Some(setup) = setup {
+                    setup();
+                }
+            })
+            .with_renderer(renderer)
+            .with_metrics(Box::new({
+                let fonts = fonts.clone();
+                move || fonts.metrics()
+            }))
+            .with_text_engine(Box::new(move || {
+                Box::new(zgui_layout::Paragraphs::new(shaping.shaper()))
+            }))
+            .with_glyph_raster(Box::new(move || fonts.raster()))
+            // Installed by default beside the default renderer: an application with no surface
+            // elements pays one virtual call per frame, and one with them needs no wiring.
+            .with_embed(Box::new(|| Box::new(zgui_wgpu::WgpuSurfaces::new())))
+            // The custom-element registry, for the same reason: an application that mounts none
+            // pays two never-taken branches per frame.
+            .with_custom(Box::new(|_document| zgui_custom::sources()))
+            .into_handler(move |cx: &mut BuildCx<'_>| -> Box<dyn Anchor> {
+                Box::new(view().into_view().build(cx))
+            })?;
+        Ok(Handler { runtime })
+    }
+}
+
+/// A built application, waiting for a platform backend to drive it.
+pub struct Handler {
+    /// The frame loop.
+    runtime: zgui_runtime::Runtime,
+}
+
+impl Handler {
+    /// The frame loop, for a caller that drives it by hand.
+    ///
+    /// A headless test runs the real application this way: it builds the window with the same
+    /// builder the program uses, then steps the loop itself and reads what each frame produced.
+    #[must_use]
+    pub fn into_runtime(self) -> zgui_runtime::Runtime {
+        self.runtime
+    }
+
+    /// Hands the application to `driver` and returns when the loop finishes.
+    ///
+    /// # Errors
+    ///
+    /// Returns what the platform refused with, or what stopped the application while it ran — a
+    /// window that could not be opened, or a machine with no usable graphics device.
+    pub fn drive<D>(self, driver: D) -> Result<(), AppError>
+    where
+        D: FnOnce(Box<dyn AppHandler>) -> Result<(), PlatformError>,
+    {
+        // Taken before the runtime is handed over, because the driver consumes it.
+        let failure = self.runtime.failure();
+        let ran = driver(Box::new(self.runtime));
+        // The runtime is gone with the driver. Whatever is left in the task pool is dropped now,
+        // while the thread's other state is alive.
+        zgui_reactive::shutdown();
+        ran?;
+        failure.take().map_or(Ok(()), Err)
+    }
+}

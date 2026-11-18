@@ -24,7 +24,7 @@ impl Native {
         let root = dom.create_element(ElementName::new("column"));
         dom.insert(backend.root_node(), root, None);
         let host = Rc::new(StubHost::default());
-        let region = MountRegion { document: backend.document_id(), root, dom, host: HostHandle::from_rc(host.clone()) };
+        let region = MountRegion { document: backend.document_id(), root, dom, host: HostHandle::from_rc(host.clone()), fonts: zgui::app::Fonts::shipped_only(), root_anchor: Rc::new(Cell::new(root)) };
         let (sender, wakes) = mpsc::channel();
         Self { backend, host, region, waker: Arc::new(ChannelWaker(sender)), wakes, executor: host_services::Executor::new(2, 64).unwrap() }
     }
@@ -83,7 +83,7 @@ fn candidate_preflight_rejects_deferred_side_effects_without_touching_active_tre
     let active = native.prepare(good.package(), 1).unwrap();
     active.mount().unwrap();
     let counts = active.counts();
-    let stylesheet = native.host.stylesheet("application").expect("active app owns its stylesheet");
+    let stylesheet = native.host.stylesheet("application:0").expect("active app owns its stylesheet");
     for (index, prefix) in [
         "throw Error('evaluation failed');",
         "__zgui.createTextNode('forbidden');",
@@ -100,7 +100,7 @@ fn candidate_preflight_rejects_deferred_side_effects_without_touching_active_tre
         assert!(native.prepare(candidate.package(), index as u64 + 2).is_err());
         assert_eq!(native.text(), "active");
         assert_eq!(active.counts(), counts);
-        assert_eq!(native.host.stylesheet("application").as_ref(), Some(&stylesheet));
+        assert_eq!(native.host.stylesheet("application:0").as_ref(), Some(&stylesheet));
     }
     active.retire();
 }
@@ -135,7 +135,7 @@ fn retired_or_unmounted_candidates_cannot_remove_successor_styles() {
     let active = native.prepare(second.package(), 2).unwrap();
     active.mount().unwrap();
     let counts = active.counts();
-    let stylesheet = native.host.stylesheet("application").expect("successor owns its stylesheet");
+    let stylesheet = native.host.stylesheet("application:0").expect("successor owns its stylesheet");
     assert!(active.mount().is_err());
     assert_eq!(active.counts(), counts);
     let unmounted = native.prepare(first.package(), 3).unwrap();
@@ -143,7 +143,7 @@ fn retired_or_unmounted_candidates_cannot_remove_successor_styles() {
     retired.retire();
     drop(retired);
     assert_eq!(native.text(), "active");
-    assert_eq!(native.host.stylesheet("application").as_ref(), Some(&stylesheet));
+    assert_eq!(native.host.stylesheet("application:0").as_ref(), Some(&stylesheet));
     active.retire();
     assert_eq!(active.counts(), ResourceCounts::default());
 }

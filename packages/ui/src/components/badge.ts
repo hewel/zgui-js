@@ -17,8 +17,8 @@ export function Badge(props: BadgeProps = {}): NativeNode {
     { get "data-variant"() { return own.variant ?? "default"; } },
     rest,
     {
-      get class() {
-        return classes(sheet.className, "zui-badge", `zui-badge--${own.variant ?? "default"}`, rest.class);
+      get __zguiClass() {
+        return classes(sheet.className, "zui-badge", `zui-badge--${own.variant ?? "default"}`);
       },
     },
   ));

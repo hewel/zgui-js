@@ -1,14 +1,15 @@
 {
   "actionSequence": 0,
-  "buildId": "sha256:923ddb9e4b8df968552ed0f323aea9af99f099e8880b30317eb2a8ff0d939340",
+  "buildId": "sha256:4f78e261909cb6e1f43c6720d2c468725df61ad9db50f9ccd2c113bee92a5e85",
   "configurationId": 2,
   "documentIdentity": "DocumentId(0)",
   "generation": 1,
   "layoutDocumentCoherent": true,
-  "layoutRevision": 35,
+  "layoutRevision": 31,
   "metadataRevision": 3,
   "pixelPresentation": {
     "configurationId": 2,
+    "documentRevision": 31,
     "drawId": 1,
     "frame": {
       "drawId": 1,
@@ -16,7 +17,11 @@
       "outcome": "Presented(FrameStats { draw_calls: 4, vector_passes: 0, damage_px: 1470000, bytes_uploaded: 3140, memory: MemoryReport { fixed: 0, targets: 7864320, scratch: 0, atlases: 4194304, buffers: 534256 } })",
       "timeUs": 0
     },
-    "sequence": 1
+    "generation": 1,
+    "metadataRevision": 3,
+    "resourceRevision": 1,
+    "sequence": 1,
+    "styleRevision": 3
   },
   "renderer": {
     "adapter": "AMD Radeon RX 7900 XTX (RADV NAVI31)",
@@ -37,25 +42,28 @@
     "targetFormat": "Bgra8Unorm",
     "vendor": 4098
   },
-  "requiredStateRevision": 35,
+  "requiredStateRevision": 31,
   "resourceRevision": 1,
   "resources": {
     "allowedPendingAssets": [],
     "declaredAssets": [],
     "droppedDeclaredAssets": 0,
     "droppedRetiredResources": 0,
+    "fonts": [],
     "pendingIds": [],
     "publicationPolicy": "complete-batch-launch-order-v1",
     "requiredAssetsReady": true,
+    "requiredFontsReady": true,
     "resourceRevision": 1,
     "resources": []
   },
   "scale": 1.75,
   "schemaVersion": 1,
+  "styleRevision": 3,
   "surface": "main",
   "surfaceConfiguration": 0,
   "timingDeterministic": true,
-  "validatedStateRevision": 35,
+  "validatedStateRevision": 31,
   "validationFrame": {
     "drawId": 1,
     "ordinal": 1,

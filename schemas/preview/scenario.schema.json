@@ -30,6 +30,7 @@
           { "$ref": "#/$defs/serviceEmit" },
           { "$ref": "#/$defs/surfaceResize" },
           { "$ref": "#/$defs/surfaceScale" },
+          { "$ref": "#/$defs/surfaceColorScheme" },
           { "$ref": "#/$defs/surfaceRecreate" }
         ]
       }
@@ -295,6 +296,18 @@
         "scale": { "type": "number", "exclusiveMinimum": 0, "maximum": 8 }
       },
       "description": "Delivers one native scale/physical-size event without moving virtual time; current resource demand must become ready at the new scale."
+    },
+    "surfaceColorScheme": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "op", "surface", "colorScheme"],
+      "properties": {
+        "id": { "$ref": "#/$defs/safeId" },
+        "op": { "const": "surface.colorScheme" },
+        "surface": { "$ref": "#/$defs/surface" },
+        "colorScheme": { "type": "string", "enum": ["light", "dark"] }
+      },
+      "description": "Changes the native color-scheme preference and requests a coherent validation frame without advancing virtual time."
     },
     "surfaceRecreate": {
       "type": "object",

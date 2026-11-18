@@ -94,7 +94,7 @@ export function RadioGroup(props: RadioGroupProps = {}): NativeNode {
     },
     rest,
     {
-      get class() { return classes(radioGroupSheet.className, "zui-radio-group", rest.class); },
+      get __zguiClass() { return classes(radioGroupSheet.className, "zui-radio-group"); },
       get onKeyDown() {
         return (event: NativeKeyEvent) => {
           if (callHandler(event, own.onKeyDown) && !disabled()) roving.onKeyDown(event);
@@ -135,7 +135,7 @@ export function RadioGroupItem(props: RadioGroupItemProps): NativeNode {
     },
     rest,
     {
-      get class() { return classes(radioItemSheet.className, "zui-radio-group__item", rest.class); },
+      get __zguiClass() { return classes(radioItemSheet.className, "zui-radio-group__item"); },
       get onClick() {
         return (event: NativeEvent) => {
           if (callHandler(event, own.onClick)) choose();
@@ -199,11 +199,11 @@ export function ToggleGroup(props: ToggleGroupProps = {}): NativeNode {
       get "data-orientation"() { return axis(); },
       get "data-variant"() { return variant(); },
       get "data-spacing"() { return spacing(); },
-      get "--zui-toggle-group-gap"() { return spacing(); },
+      get __zguiStyle() { return { "--zui-toggle-group-gap": spacing() }; },
     },
     rest,
     {
-      get class() { return classes(toggleGroupSheet.className, "zui-toggle-group", rest.class); },
+      get __zguiClass() { return classes(toggleGroupSheet.className, "zui-toggle-group"); },
       get onKeyDown() {
         return (event: NativeKeyEvent) => {
           if (callHandler(event, own.onKeyDown) && !disabled()) roving.onKeyDown(event);
@@ -241,13 +241,10 @@ export function ToggleGroupItem(props: ToggleGroupItemProps): NativeNode {
     },
     rest,
     {
-      get class() {
-        return classes(
-          toggleSheet.className, "zui-toggle", "zui-toggle-group__item",
-          variant() === "outline" && "zui-toggle--outline",
-          TOGGLE_SIZE_CLASSES[size()],
-          rest.class,
-        );
+      get __zguiClass() {
+        return classes(toggleSheet.className, "zui-toggle", "zui-toggle-group__item",
+        variant() === "outline" && "zui-toggle--outline",
+        TOGGLE_SIZE_CLASSES[size()], );
       },
       get onClick() {
         return (event: NativeEvent) => {

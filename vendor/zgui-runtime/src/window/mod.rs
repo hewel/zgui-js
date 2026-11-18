@@ -408,7 +408,11 @@ pub struct Window {
     /// place in the cascade. Removing and adding instead would move it to the end of the author
     /// origin, where it would start beating every sheet it used to lose to — which is a theme
     /// switch that silently changes what wins.
-    view_sheets: rustc_hash::FxHashMap<String, SheetHandle>,
+    view_sheets: rustc_hash::FxHashMap<String, (SheetHandle, String)>,
+    /// Monotonic count of actually applied non-UA stylesheet operations.
+    style_revision: u64,
+    /// Last revision consumed by a restyle, not later queued or applied commands.
+    consumed_style_revision: u64,
     /// The surface this frame is being built for.
     viewport: Viewport,
     /// The surface extent the viewport above was derived from, in device pixels.
@@ -639,6 +643,7 @@ impl Window {
             StyleEngine::new(&borrowed, metrics, viewport)
         };
         let mut sheets = Vec::new();
+        let mut style_revision = 0u64;
         // The application's sheets first and this window's own after them, each in call order, so
         // a rule of equal weight in a later sheet wins.
         for css in options
@@ -654,6 +659,7 @@ impl Window {
                 tracing::warn!(target: "zgui::css", "{}", report.message);
             }
             sheets.push(handle);
+            style_revision = style_revision.checked_add(1).expect("stylesheet revision exhausted");
         }
         let gate = Arc::clone(waker.gate());
         let scope = zgui_reactive::Mounted::new();
@@ -776,6 +782,8 @@ impl Window {
             view: Some(built),
             _sheets: sheets,
             view_sheets: rustc_hash::FxHashMap::default(),
+            style_revision,
+            consumed_style_revision: 0,
             viewport,
             scale,
             scheme: viewport.scheme,
@@ -837,6 +845,18 @@ impl Window {
     /// Monotonic readiness revision, independent of document mutations.
     pub fn image_resource_revision(&self) -> u64 {
         self.images.revision()
+    }
+
+    /// Monotonic applied stylesheet revision, excluding queued commands and byte-identical no-ops.
+    pub fn style_revision(&self) -> u64 {
+        self.style_revision
+    }
+
+    /// Whether stylesheet commands are queued but not yet reflected in the applied revision.
+    ///
+    /// Frame freshness requires this to be false as well as the consumed revision matching.
+    pub fn has_pending_stylesheets(&self) -> bool {
+        self.host.has_pending_stylesheets()
     }
 
     /// Stages a complete strict worker batch in launch order without entering JS or drawing.

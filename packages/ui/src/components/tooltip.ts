@@ -40,7 +40,7 @@ export function TooltipArrow(props: TooltipArrowProps = {}): NativeNode {
   useStylesheet(sheet);
   forbidChildren("TooltipArrow", props);
   return element("box", mergeProps({ ariaHidden: true }, props, {
-    get class() { return classes("zui-tooltip__arrow", props.class); },
+    get __zguiClass() { return classes("zui-tooltip__arrow"); },
   }));
 }
 

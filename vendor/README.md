@@ -241,3 +241,35 @@ Regression gates:
     cargo test --manifest-path vendor/zgui-scroll/Cargo.toml --lib
     cargo test --manifest-path vendor/zgui-runtime/Cargo.toml --test scroll_root --test scroll_touchpad --test scroll_owed
     ZGUI_KEEP_PREVIEW_OUTPUT=1 node --test tests/preview/scroll-lock.test.mjs
+
+## StyleX stylesheet preflight and revisions
+
+`zgui-style/` and `zgui-runtime/` retain upstream revision `80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a` and their upstream licenses. The style crate exposes preflight through the actual sheet parser, returning structured diagnostics without installing a candidate. The `zgui-stylex-v1` profile rejects parser recovery and unsupported browser-root RTL wrappers, typed/general `@property`, container/reduced-motion queries, CSS resource URLs/imports/image-set, and `@font-face`; official priority selectors and keyframes remain unchanged. Official dynamic-function `@property --* { syntax:"*"; inherits:false }` rules use Stylo's registration machinery, including descendant noninheritance and replacement/removal cleanup.
+
+The runtime advances a per-document style revision only for applied stylesheet mutations. Identical replacements and absent removals are no-ops, same-name replacement retains cascade position, and frame observations include the consumed revision plus pending-sheet state. Removal also invalidates stale rule-chain caches before early frame filtering.
+
+Regression gates:
+
+    cargo test -j 4 --manifest-path vendor/zgui-style/Cargo.toml --test stylex_profile --offline
+    cargo test -j 4 --manifest-path vendor/zgui-runtime/Cargo.toml --test style_revisions --offline
+
+The runtime performs SDK stylesheet preflight in its native command phase rather than inside the JavaScript entry budget. Mount-generated candidates are additionally validated after the JS mount turn and before the previous session retires. `HostBinding::stylesheet_rejected` reports the slot and structured diagnostics before any cascade mutation; rejected replacements preserve the previous complete sheet and style revision. The regression test covers invalid replacement, recovery, and diagnostic delivery.
+
+## Atomic application inline styles
+
+`zgui-view/`, `zgui-view-dom/`, and `zgui-dom/` retain the pinned upstream revision with their upstream licenses. `Dom::replace_inline_style` validates the complete application contribution before replacing the native declaration block. Application, SDK-default, direct, and invariant declarations remain separately owned, with shorthand expansion and string/object transitions handled by the actual native parser. Rejection changes neither declarations nor style hints.
+
+Regression gates:
+
+    cargo test -j 4 --manifest-path vendor/zgui-dom/Cargo.toml --lib mutate::edit::style --offline
+    cargo test -j 4 -p ui-bridge --test properties --offline
+
+## Session-scoped application fonts
+
+`zgui/` and `zgui-text-parley/` retain the pinned upstream revision and licenses. `Fonts::register_scoped` returns a `FontLease` whose drop restores the predecessor or removes only that registration, so an old session cannot unregister its successor's alias. Permanent Preview/profile faces remain intact. `Fonts::contains_family` provides exact family existence checks without treating fallback as registration.
+
+Regression gates:
+
+    cargo test -j 4 -p native-host package:: --offline
+    cargo test -j 4 -p native-host session_host::tests --offline
+    node --test --test-concurrency=1 tests/preview/stylex.test.mjs

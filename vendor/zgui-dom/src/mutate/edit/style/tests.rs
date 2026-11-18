@@ -8,6 +8,7 @@ use crate::id::node_key::NodeIndex;
 use crate::mutate::filter::EverythingMatters;
 use crate::node::kind::NodeKind;
 
+use super::InlineStyle;
 /// A document with one element, styled once so a hint has somewhere to land.
 fn one() -> (Document, NodeIndex) {
     let mut document = Document::new();
@@ -130,4 +131,57 @@ fn writing_the_same_declaration_twice_asks_the_engine_for_nothing_the_second_tim
         hint(&document, root).is_empty(),
         "removing a declaration that was never there is not a change"
     );
+}
+
+#[test]
+fn inline_transaction_rejects_the_whole_map_before_committing() {
+    let (document, root) = one();
+    document.edit(&EverythingMatters, |edit| {
+        edit.replace_inline_style(root, [InlineStyle::Text("height: 11px; --Accent: 7")]).unwrap();
+    }).expect("not poisoned");
+    for invalid in [
+        "width: 30px; height: NaNpx",
+        "color: blue; unknown-property: red",
+        "color: blue; width: invalid",
+        "background: url('not-supported.png')",
+        "--dynamic: NaNpx",
+        "--dynamic: Infinitypx",
+        "--dynamic: 1e999px",
+        "--image: image-set('not-supported.png' 1x)",
+    ] {
+        document.edit(&EverythingMatters, |edit| {
+            assert!(edit.replace_inline_style(root, [InlineStyle::Text(invalid)]).is_err(), "{invalid}");
+        }).expect("not poisoned");
+        assert_eq!(declarations(&document, root), 2, "{invalid}");
+    }
+    document.edit(&EverythingMatters, |edit| {
+        edit.replace_inline_style(root, [InlineStyle::Text("padding: 1px; padding-left: 8px")]).unwrap();
+        edit.replace_inline_style(root, [InlineStyle::Text("padding-left: 8px")]).unwrap();
+    }).expect("not poisoned");
+    assert_eq!(declarations(&document, root), 1);
+    document.edit(&EverythingMatters, |edit| {
+        edit.replace_inline_style(root, []).unwrap();
+    }).expect("not poisoned");
+    assert_eq!(declarations(&document, root), 0);
+}
+
+#[test]
+fn inline_transaction_isolates_values_and_ownership_blocks() {
+    let (document, root) = one();
+    document.edit(&EverythingMatters, |edit| {
+        edit.replace_inline_style(root, [
+            InlineStyle::Text("position: relative !important; /*"),
+            InlineStyle::Declaration("width", "10px/*", false),
+            InlineStyle::Declaration("height", "20px", false),
+            InlineStyle::Declaration("position", "fixed", true),
+        ]).unwrap();
+    }).expect("not poisoned");
+    assert_eq!(declarations(&document, root), 3);
+    document.edit(&EverythingMatters, |edit| {
+        assert!(edit.replace_inline_style(root, [
+            InlineStyle::Declaration("width", "30px", false),
+            InlineStyle::Declaration("height", "20px; color:red", false),
+        ]).is_err());
+    }).expect("not poisoned");
+    assert_eq!(declarations(&document, root), 3);
 }

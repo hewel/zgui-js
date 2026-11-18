@@ -96,6 +96,15 @@ impl Dom for DocumentDom {
         self.edit(|edit| edit.set_inline_style(el, css));
     }
 
+    fn replace_inline_style(&self, el: NodeId, entries: &[zgui_view::dom::InlineStyle<'_>]) -> Result<(), String> {
+        use zgui_dom::mutate::edit::style::InlineStyle;
+        let index = self.live_index_of(el).ok_or_else(|| "inline style target is not live".to_owned())?;
+        self.edit(|edit| edit.replace_inline_style(index, entries.iter().map(|entry| match entry {
+            zgui_view::dom::InlineStyle::Text(css) => InlineStyle::Text(css),
+            zgui_view::dom::InlineStyle::Declaration(property, value, important) => InlineStyle::Declaration(property, value, *important),
+        })))
+    }
+
     fn set_style_property(&self, el: NodeId, property: &str, value: Option<&str>) {
         let Some(index) = self.live_index_of(el) else {
             return;

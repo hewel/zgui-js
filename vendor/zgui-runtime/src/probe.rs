@@ -54,6 +54,11 @@ pub struct CompletedFrame {
     pub outcome: zgui_render::FrameOutcome,
     /// The document's view-mutation revision after all frame cleanup.
     pub document_revision: u64,
+    /// Stylesheet revision consumed by this frame's last restyle.
+    ///
+    /// May trail [`Window::style_revision`] when a late callback applies a stylesheet after
+    /// restyling. This is consumed style evidence, not a claim about presentation.
+    pub style_revision: u64,
     /// The view-mutation revision entering the last completed layout/fragment pass.
     ///
     /// `None` when this frame completed no such pass. Sampled at layout, including relayouts

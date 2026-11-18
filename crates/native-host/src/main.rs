@@ -225,6 +225,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut bundle: Option<PathBuf> = None;
     let mut exercise = false;
     let mut watch = false;
+    let mut reduced_motion = false;
     let mut layer_config = None;
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -240,6 +241,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             "--bundle" => { bundle = Some(args.next().ok_or("--bundle requires a directory")?.into()); }
             "--exercise" => { exercise = true; }
             "--watch" => { watch = true; }
+            "--reduced-motion" => { reduced_motion = true; }
             "--layer-config" => {
                 let path: PathBuf = args.next().ok_or("--layer-config requires a JSON file")?.into();
                 layer_config = Some(shell::LayerConfig::load(&path)?);
@@ -259,6 +261,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         .into_handler(move || Root(roots.clone()))?.into_runtime();
     let native_failure = native.failure();
     let mut application = Application::new(native, pending, package)?;
+    application.host.set_reduced_motion(reduced_motion);
     application.exit_after = exit_after;
     application.harness.exercise = exercise;
     application.watch_path = watch.then_some(bundle).flatten();

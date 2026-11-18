@@ -91,3 +91,4 @@ pub use crate::sheets::errors::{CssDiagnostic, CssDiagnostics, DropKind};
 pub use crate::sheets::loader::{EmbeddedSheets, FilesystemSheets};
 pub use crate::sheets::origin::{OriginMask, SheetOrigin};
 pub use crate::sheets::set::{SheetHandle, SheetId};
+pub use crate::sheets::preflight::{StylesheetSummary, preflight_stylesheet};

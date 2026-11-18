@@ -3,6 +3,7 @@ import { createElement, effect, insert, insertNode, mergeProps, spread } from ".
 import type { NativeHost } from "../host.js";
 import { installStylesheet } from "../nodes.js";
 import type { NativeChild, NativeElementProps, NativeNode, NativeTag } from "../types.js";
+import type { InternalProps } from "../internal-props.js";
 
 declare const globalThis: NativeHost;
 
@@ -48,7 +49,7 @@ export function provide<T>(
   );
 }
 
-export function element(tag: NativeTag, props: NativeElementProps): NativeNode {
+export function element(tag: NativeTag, props: NativeElementProps & InternalProps): NativeNode {
   const node = createElement(tag);
   spread(node, props);
   return node;
@@ -58,7 +59,7 @@ export function part(tag: NativeTag, sheet: Stylesheet, className: string, defau
   return (props: NativeElementProps = {}): NativeNode => {
     useStylesheet(sheet);
     return element(tag, mergeProps(defaults, props, {
-      get class() { return classes(className, props.class); },
+      get __zguiClass() { return classes(className); },
     }));
   };
 }

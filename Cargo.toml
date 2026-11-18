@@ -1,7 +1,7 @@
 [workspace]
 resolver = "3"
 members = ["crates/native-host", "crates/js-runtime", "crates/ui-bridge", "crates/host-services"]
-exclude = ["vendor/zgui-runtime", "vendor/zgui-platform-wayland", "vendor/zgui-view-dom", "vendor/zgui-paint", "vendor/zgui-layout", "vendor/zgui-dom", "vendor/zgui-style", "vendor/zgui-scroll"]
+exclude = ["vendor/zgui-runtime", "vendor/zgui-platform-wayland", "vendor/zgui-view-dom", "vendor/zgui-view", "vendor/zgui", "vendor/zgui-text-parley", "vendor/zgui-paint", "vendor/zgui-layout", "vendor/zgui-dom", "vendor/zgui-style", "vendor/zgui-scroll"]
 
 [workspace.package]
 version = "0.1.0"
@@ -38,3 +38,6 @@ zgui-paint = { path = "vendor/zgui-paint" }
 zgui-layout = { path = "vendor/zgui-layout" }
 zgui-style = { path = "vendor/zgui-style" }
 zgui-scroll = { path = "vendor/zgui-scroll" }
+zgui-view = { path = "vendor/zgui-view" }
+zgui = { path = "vendor/zgui" }
+zgui-text-parley = { path = "vendor/zgui-text-parley" }

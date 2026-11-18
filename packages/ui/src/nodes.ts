@@ -4,6 +4,10 @@ import type { NativeDismissLayer, NativeDismissLayerOptions, NativeDismissReason
 
 declare const globalThis: NativeHost;
 
+export function getReducedMotion(): boolean {
+  return globalThis.__zgui.getReducedMotion();
+}
+
 export function focus(node: NativeNode, options?: NativeFocusOptions): void {
   globalThis.__zgui.focus(node, options?.reveal ?? false);
 }

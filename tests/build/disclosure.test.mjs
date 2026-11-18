@@ -399,7 +399,9 @@ test("measured borderSize merges with caller style overrides", async t => {
 
   mod.measured.setCallerStyle("color:blue;");
   style = prop(harness, "m-content", "style");
-  assert.equal(style, "--zui-collapsible-height:41px;color:blue;", "string style keeps measurement");
+  assert.equal(style["--zui-collapsible-height"], "41px", "string replacement keeps internal measurement");
+  assert.equal(style.color, "blue", "serialized application declarations replace the previous object map");
+  assert.equal(style.border, undefined, "the previous application object declaration is removed");
   assert.equal(node(harness, "m-content"), content);
 });
 
@@ -482,7 +484,7 @@ test("unmount cancels observations and remount registers fresh ones", async t =>
   assert.notEqual(newContent, oldContent, "fresh content node");
   assert.equal(prop(harness, "s-trig", "ariaControls"), newContent, "relation points at fresh content");
   registrations[0].callback({ width: 1, height: 999 });
-  assert.ok(oldContent.props.get("style")["--zui-collapsible-height"] == null,
+  assert.ok(oldContent.props.get("style")?.["--zui-collapsible-height"] == null,
     "stale emission stays inert");
 });
 

@@ -374,6 +374,12 @@ impl RuntimeHost {
         core::mem::take(&mut *self.commands.borrow_mut())
     }
 
+    pub(crate) fn has_pending_stylesheets(&self) -> bool {
+        self.commands.borrow().iter().any(|queued| {
+            matches!(queued.command, Command::InstallStylesheet { .. } | Command::RemoveStylesheet { .. })
+        })
+    }
+
     /// Publishes which node holds focus, so anything reading it updates.
     pub fn publish_focus(&self, node: Option<NodeKey>) {
         use zgui_reactive::prelude::Set;

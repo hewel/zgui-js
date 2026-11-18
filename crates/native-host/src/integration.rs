@@ -38,7 +38,7 @@ pub(crate) fn baseline_module() -> SessionModule {
     SessionModule {
         name: "zgui-js-baseline.mjs".into(),
         source: BASELINE_SOURCE.into(),
-        css: String::new(),
+        styles: Vec::new(),
         package: None,
     }
 }

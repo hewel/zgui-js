@@ -1,18 +1,19 @@
 {
   "actionSequence": 5,
   "allowedPendingAssets": [],
-  "buildId": "sha256:923ddb9e4b8df968552ed0f323aea9af99f099e8880b30317eb2a8ff0d939340",
+  "buildId": "sha256:4f78e261909cb6e1f43c6720d2c468725df61ad9db50f9ccd2c113bee92a5e85",
   "captureId": "after-increment",
   "configurationId": 2,
   "documentIdentity": "DocumentId(0)",
   "generation": 1,
   "layoutDocumentCoherent": true,
-  "layoutRevision": 37,
+  "layoutRevision": 33,
   "metadataRevision": 3,
   "physicalHeight": 1050,
   "physicalWidth": 1400,
   "pixelPresentation": {
     "configurationId": 2,
+    "documentRevision": 33,
     "drawId": 2,
     "frame": {
       "drawId": 2,
@@ -20,7 +21,11 @@
       "outcome": "Presented(FrameStats { draw_calls: 7, vector_passes: 0, damage_px: 24780, bytes_uploaded: 1316, memory: MemoryReport { fixed: 0, targets: 7864320, scratch: 0, atlases: 4194304, buffers: 534256 } })",
       "timeUs": 0
     },
-    "sequence": 2
+    "generation": 1,
+    "metadataRevision": 3,
+    "resourceRevision": 1,
+    "sequence": 2,
+    "styleRevision": 3
   },
   "pngDigest": "sha256:ba8ba349d198fa851eca53ca5e35435bfbf337b9077c93e49faca6167130704d",
   "readiness": {
@@ -28,15 +33,37 @@
     "currentWorkSettled": true,
     "frameCurrent": true,
     "generation": 1,
+    "nativeAcceptance": {
+      "candidate": {
+        "buildId": "sha256:4f78e261909cb6e1f43c6720d2c468725df61ad9db50f9ccd2c113bee92a5e85",
+        "id": "dev.example.counter",
+        "styleSystem": {
+          "configDigest": "sha256:33c7891b27d625d83284f9d24aef2ee1b62041f5b423dbd3b41411a61ccada45",
+          "name": "stylex",
+          "nativeProfileDigest": "sha256:984726d33988e8d259cc03cfa755440dfe1753277ee13a6e42b658ff8d662b9e",
+          "profile": "zgui-stylex-v1"
+        }
+      },
+      "diagnostic": null,
+      "document": "DocumentId(0)",
+      "generation": 1,
+      "lastSuccessfulBuildId": "sha256:4f78e261909cb6e1f43c6720d2c468725df61ad9db50f9ccd2c113bee92a5e85",
+      "schemaVersion": 1,
+      "status": "accepted"
+    },
     "nativeAssetReadinessAvailable": true,
     "nextFixtureDeadlineUs": null,
     "nextNativeDeadlineUs": 2020000,
     "pendingAssets": 0,
+    "pendingStylesheets": false,
     "requiredAssetsReady": true,
+    "requiredFontsReady": true,
     "requiredMetadataRevision": 3,
-    "requiredStateRevision": 37,
+    "requiredStateRevision": 33,
+    "requiredStyleRevision": 3,
     "resourceRevision": 1,
-    "timeUs": 20000
+    "timeUs": 20000,
+    "validatedStyleRevision": 3
   },
   "renderer": {
     "adapter": "AMD Radeon RX 7900 XTX (RADV NAVI31)",
@@ -57,26 +84,29 @@
     "targetFormat": "Bgra8Unorm",
     "vendor": 4098
   },
-  "requiredStateRevision": 37,
+  "requiredStateRevision": 33,
   "resourceRevision": 1,
   "resources": {
     "allowedPendingAssets": [],
     "declaredAssets": [],
     "droppedDeclaredAssets": 0,
     "droppedRetiredResources": 0,
+    "fonts": [],
     "pendingIds": [],
     "publicationPolicy": "complete-batch-launch-order-v1",
     "requiredAssetsReady": true,
+    "requiredFontsReady": true,
     "resourceRevision": 1,
     "resources": []
   },
   "scale": 1.75,
   "schemaVersion": 1,
+  "styleRevision": 3,
   "surface": "main",
   "surfaceConfiguration": 0,
   "timingDeterministic": true,
-  "treeDigest": "sha256:4a7d7436e07b987856d9c3d4d6c9397040cf5f5ddfff816df4bafb58044d31cb",
-  "validatedStateRevision": 37,
+  "treeDigest": "sha256:6827be7a2bd1e2f69a7ee4024e36c30050160c6b27a4ed6a8b3a265092edd00a",
+  "validatedStateRevision": 33,
   "validationFrame": {
     "drawId": 4,
     "ordinal": 4,

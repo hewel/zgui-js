@@ -15,7 +15,7 @@ impl Drop for Directory { fn drop(&mut self) { let _=std::fs::remove_dir_all(&se
 fn tree(generation:u64,ordinal:u64)->TreeEvidence {
     serde_json::from_value(json!({"schemaVersion":1,"buildId":"build-one","generation":generation,"surface":"main",
         "frameOrdinal":ordinal,"metadataRevision":2,"presentationSequence":3,
-        "resourceRevision":4,"surfaceConfiguration":5,
+        "resourceRevision":4,"surfaceConfiguration":5,"styleRevision":6,
         "nodes":[{"token":"n0","parent":null,"surface":"main","generation":generation,"kind":"view","ownership":"app",
             "text":"","textTruncated":false,"source":null,"value":null,
             "state":{"enabled":null,"visible":null,"focused":false},
@@ -24,7 +24,7 @@ fn tree(generation:u64,ordinal:u64)->TreeEvidence {
 }
 fn frame(generation:u64,ordinal:u64)->FrameEvidence {
     serde_json::from_value(json!({"schemaVersion":1,"buildId":"build-one","generation":generation,"surface":"main",
-        "metadataRevision":2,"resourceRevision":4,"surfaceConfiguration":5,
+        "metadataRevision":2,"resourceRevision":4,"surfaceConfiguration":5,"styleRevision":6,
         "validationFrame":{"ordinal":ordinal,"timeUs":10,"drawId":7,"outcome":"presented"},
         "pixelPresentation":{"frame":{"ordinal":ordinal,"timeUs":10,"drawId":7,"outcome":"presented"},
             "sequence":3,"configurationId":5,"drawId":7},
@@ -127,7 +127,7 @@ fn readiness_issues_move_verbatim() {
 
 #[test]
 fn optional_revision_fields_reject_present_null_and_roundtrip_absent() {
-    for field in ["resourceRevision","surfaceConfiguration"] {
+    for field in ["resourceRevision","surfaceConfiguration","styleRevision"] {
         // Legacy evidence without the revision parses and reserializes without a null.
         let mut legacy=serde_json::to_value(tree(3,9)).unwrap();
         legacy.as_object_mut().unwrap().remove(field);
@@ -156,15 +156,11 @@ fn optional_revision_fields_reject_present_null_and_roundtrip_absent() {
     let mut configuration=frame(3,9);
     configuration.surface_configuration=Some(99);
     assert!(tree(3,9).validate_frame(&configuration).is_err());
-    // Absent on both sides stays a legacy pair even without native resources.
+    // Style absence on both sides remains a valid legacy pair with native resources.
     let mut legacy_tree=tree(3,9);
-    legacy_tree.resource_revision=None;
-    legacy_tree.surface_configuration=None;
+    legacy_tree.style_revision=None;
     let mut legacy_frame=frame(3,9);
-    legacy_frame.resource_revision=None;
-    legacy_frame.surface_configuration=None;
-    legacy_frame.extra.remove("resources");
-    legacy_frame.extra.remove("resourceRevision");
+    legacy_frame.style_revision=None;
     assert!(legacy_tree.validate_frame(&legacy_frame).is_ok());
 }
 

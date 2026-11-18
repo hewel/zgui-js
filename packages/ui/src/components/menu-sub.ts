@@ -94,7 +94,7 @@ export function MenuSubContent(props: MenuSubContentProps = {}): NativeChild {
   let alive = true;
   onCleanup(() => { alive = false; });
   return menuSurface(state, mergeProps({ placement: { side: "right", align: "start" } as const, offset: -4 }, rest, {
-    get class() { return classes("zui-menu--sub", rest.class); },
+    get __zguiClass() { return classes("zui-menu--sub"); },
     onPointerEnter(event: NativePointerBoundaryEvent) {
       if (callHandler(event, own.onPointerEnter) && alive) sub?.closing.cancel();
     },

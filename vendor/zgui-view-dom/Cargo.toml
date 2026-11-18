@@ -72,3 +72,4 @@ fontique = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c058
 [patch."https://github.com/zortax/zgui"]
 zgui-dom = { path = "../zgui-dom" }
 zgui-style = { path = "../zgui-style" }
+zgui-view = { path = "../zgui-view" }

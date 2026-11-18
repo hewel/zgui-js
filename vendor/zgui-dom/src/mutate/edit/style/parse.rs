@@ -46,6 +46,68 @@ pub(crate) fn attribute(css: &str) -> PropertyDeclarationBlock {
     )
 }
 
+/// Strict parsing shares Servo's grammar, but never accepts its recovered subset.
+pub(crate) fn strict_attribute(css: &str) -> Result<PropertyDeclarationBlock, String> {
+    use std::sync::Mutex;
+    use style::error_reporting::{ContextualParseError, ParseErrorReporter};
+    struct Errors(Mutex<Vec<String>>);
+    impl ParseErrorReporter for Errors {
+        fn report_error(&self, _: &UrlExtraData, _: cssparser::SourceLocation, error: ContextualParseError<'_>) {
+            self.0.lock().expect("inline parser error lock").push(error.to_string());
+        }
+    }
+    fn supported(input: &mut cssparser::Parser<'_, '_>) -> Result<(), String> {
+        while let Ok(token) = input.next() {
+            match token {
+                cssparser::Token::Number { value, .. } | cssparser::Token::Dimension { value, .. } if !value.is_finite() => {
+                    return Err("inline numeric tokens must be finite".into());
+                }
+                cssparser::Token::Percentage { unit_value, .. } if !unit_value.is_finite() => {
+                    return Err("inline numeric tokens must be finite".into());
+                }
+                // Dynamic StyleX dimensions travel through untyped custom properties.
+                // CSS tokenizes nonfinite JS number spellings as identifiers, not dimensions.
+                cssparser::Token::Ident(name) if ["NaN", "-NaN", "Infinity", "-Infinity"].iter().any(|prefix| {
+                    name.get(..prefix.len()).is_some_and(|head| head.eq_ignore_ascii_case(prefix))
+                        && ["", "px", "em", "rem", "ms", "s", "vh", "vw", "deg", "rad", "turn"].iter()
+                            .any(|unit| name.get(prefix.len()..).is_some_and(|suffix| suffix.eq_ignore_ascii_case(unit)))
+                }) => return Err("inline numeric values must be finite, including dynamic custom properties".into()),
+                cssparser::Token::UnquotedUrl(_) | cssparser::Token::BadUrl(_) => return Err("CSS URLs are unsupported by zgui-stylex-v1".into()),
+                cssparser::Token::Function(name) if name.eq_ignore_ascii_case("url") || name.eq_ignore_ascii_case("image-set") || name.eq_ignore_ascii_case("-webkit-image-set") => {
+                    return Err("CSS URL/image-set painting is unsupported by zgui-stylex-v1".into());
+                }
+                cssparser::Token::Function(_) | cssparser::Token::ParenthesisBlock | cssparser::Token::SquareBracketBlock | cssparser::Token::CurlyBracketBlock => {
+                    input.parse_nested_block(|nested| supported(nested).map_err(|message| nested.new_custom_error::<String, String>(message)))
+                        .map_err(|error| format!("{error:?}"))?;
+                }
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+    supported(&mut cssparser::Parser::new(&mut cssparser::ParserInput::new(css)))?;
+    let errors = Errors(Mutex::new(Vec::new()));
+    let parsed = parse_style_attribute(css, &base_url(), Some(&errors), QuirksMode::NoQuirks, CssRuleType::Style);
+    let errors = errors.0.into_inner().expect("inline parser error lock");
+    if errors.is_empty() { Ok(parsed) } else { Err(errors.join("; ")) }
+}
+
+pub(crate) fn strict_declaration(name: &str, value: &str) -> Result<PropertyDeclarationBlock, String> {
+    let id = property_id(name).ok_or_else(|| format!("unsupported native property: {name}"))?;
+    let mut input = cssparser::ParserInput::new(value);
+    let mut parser = cssparser::Parser::new(&mut input);
+    while let Ok(token) = parser.next() {
+        if matches!(token, cssparser::Token::Semicolon | cssparser::Token::CurlyBracketBlock | cssparser::Token::BadString(_) | cssparser::Token::BadUrl(_)) {
+            return Err(format!("{name} must contain exactly one declaration value"));
+        }
+    }
+    let parsed = strict_attribute(&format!("{name}:{value}"))?;
+    if parsed.is_empty() || !parsed.declarations().iter().all(|declaration| declaration.id().is_or_is_longhand_of(&id)) {
+        return Err(format!("invalid native declaration: {name}"));
+    }
+    Ok(parsed)
+}
+
 /// The property `name` denotes, if this build has one.
 ///
 /// A name gated to another engine, and a name that is not a property at all, are the same answer

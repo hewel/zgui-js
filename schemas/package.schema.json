@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://zgui-js.local/schemas/package.schema.json",
+  "title": "Native package v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "id", "hostApiVersion", "entry", "sourceMap", "styles", "assets", "fonts", "styleSystem", "artifactDigests", "buildId"],
+  "properties": {
+    "schemaVersion": { "const": 2 },
+    "hostApiVersion": { "const": 1 },
+    "id": { "type": "string", "minLength": 1, "pattern": "\\S" },
+    "entry": { "$ref": "#/$defs/path" },
+    "sourceMap": { "$ref": "#/$defs/path" },
+    "styles": { "type": "array", "uniqueItems": true, "items": { "$ref": "#/$defs/path" } },
+    "assets": { "type": "array", "uniqueItems": true, "items": { "$ref": "#/$defs/path" } },
+    "fonts": {
+      "type": "array", "maxItems": 16,
+      "items": {
+        "type": "object", "additionalProperties": false, "required": ["family", "path"],
+        "properties": {
+          "family": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "\\S" },
+          "path": { "$ref": "#/$defs/path" }
+        }
+      }
+    },
+    "styleSystem": {
+      "type": "object", "additionalProperties": false, "required": ["name", "profile", "configDigest", "nativeProfileDigest"],
+      "properties": {
+        "name": { "const": "stylex" },
+        "profile": { "const": "zgui-stylex-v1" },
+        "configDigest": { "$ref": "#/$defs/digest" },
+        "nativeProfileDigest": { "$ref": "#/$defs/digest" }
+      }
+    },
+    "artifactDigests": {
+      "type": "object", "required": ["style-origins.json", "build-info.json"],
+      "propertyNames": { "$ref": "#/$defs/path" },
+      "additionalProperties": { "$ref": "#/$defs/digest" }
+    },
+    "buildId": { "$ref": "#/$defs/digest" }
+  },
+  "$defs": {
+    "path": { "type": "string", "minLength": 1, "pattern": "^(?!/)(?!.*[\\\\\\u0000])(?!(?:.*\/)?\\.{1,2}(?:\/|$))[^/]+(?:/[^/]+)*$" },
+    "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
+  }
+}

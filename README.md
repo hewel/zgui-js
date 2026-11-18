@@ -12,7 +12,7 @@ There is **no WebView and no browser DOM**. The repository also includes an offs
 
 ```mermaid
 flowchart TB
-    Source["Application: TSX, TypeScript, CSS, assets"] --> Build["packages/build: tsc + Babel Solid transform + Rolldown"]
+    Source["Application: TSX, TypeScript, CSS, assets"] --> Build["packages/build: tsc + StyleX/Babel Solid transform + Rolldown"]
     Build --> Package["Immutable package: JavaScript, source map, styles, assets, manifest"]
     Package --> Host["native-host: QuickJS session, Solid reactivity, UI bridge"]
     Host <--> Native["Upstream zgui: native tree, input, layout, rendering"]
@@ -113,6 +113,7 @@ Use the same build and launch commands with another application name:
 | Application | Demonstrates |
 | --- | --- |
 | `counter` | Signals, derived values, native buttons, and click events |
+| `stylex` | Compiled StyleX styles, imported tokens/themes, dynamic values, keyframes, and package assets |
 | `lists` | Dynamic lists and identity-based native node reuse |
 | `async` | Timers, frame callbacks, promises, and asynchronous host services |
 | `editing` | Native single-line and multiline editing, selection, IME, read-only, and disabled states |
@@ -185,7 +186,7 @@ See [Preview implementation and verification](docs/development/preview-verificat
 
 - Import native components and reactive primitives from `@hewel/zgui`. Native nodes, events, and styles are not HTML or DOM APIs.
 - The application entry point is `src/main.tsx`. It exports `hostApiVersion = 1` and `mount(root)`; `mount` returns the disposer supplied by `renderApp`. See the [counter source](apps/examples/counter/src/main.tsx).
-- Optional `src/app.css` is packaged separately. Files under `assets/` are copied into the package and declared in its manifest; the host verifies and loads only declared resources.
+- Optional `src/app.css` is packaged as the base sheet before generated StyleX `app.css`. Files under `assets/` are copied into the package and declared in its manifest; the host verifies and loads only declared resources. See [StyleX authoring and native packaging](docs/development/stylex.md) for styles, tokens, themes, keyframes, fonts, diagnostics, and schema-v2 artifacts.
 - `@hewel/zgui-services` exposes `readTextAsset`, `HostRequest`, and `HostServiceError`. Start work from mount, lifecycle, or event callbacks, and cancel requests, timers, and frame callbacks during cleanup.
 - The JavaScript environment does not provide `window`, `document`, `fetch`, `process`, or `setInterval`. Supported native styles are a deliberately bounded subset, not full browser CSS.
 

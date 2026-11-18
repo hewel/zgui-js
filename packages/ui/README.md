@@ -202,9 +202,9 @@ visual styling remains application-owned.
   descendants are opaque to the bridge and must not be reconciled or mutated by
   application code. Use `value`/`defaultValue`, not nested text.
 
-Browser-only props such as `type`, `rows`, `selectionStart` and `className` are not
-accepted. Use native `class`, native style strings/objects, and the supported
-native event handlers.
+Browser-only props such as `type`, `rows` and `selectionStart` are not accepted.
+Use native `class` (or its StyleX alias `className`), native style strings/objects,
+and the supported native event handlers.
 
 ## Pointer capture
 
@@ -247,7 +247,32 @@ function Form() {
 Controlled controls report edits through component callbacks such as
 `onValueChange(value)` — the string itself, not `event.target.value`; the native
 `onInput` event is still available with `event.value`. Caller props override
-component defaults, and `class` merges last.
+component defaults. SDK structural classes and inline invariants are privately owned.
+
+`class` is canonical and `className` is its StyleX alias. Empty/whitespace-only
+aliases contribute nothing. Supplying tokens through both produces
+`CLASS_ALIAS_CONFLICT`, retains the last application class contribution, and
+does not block unrelated props. This applies to native elements and components
+that explicitly forward to one native root; providers and multi-root composites
+do not invent a styling target. `data-style-src` updates and clears normally.
+
+Style objects accept native kebab-case names and explicit camelCase aliases.
+Custom-property names retain their case. Finite numbers are accepted only for
+custom properties and `opacity`, `flexGrow`, `flexShrink`, `fontWeight`,
+`lineHeight`, `zIndex`, `order`, and `animationIterationCount` (including their
+kebab-case forms); all other numeric values require explicit CSS strings.
+Native grammar validates strings, including rejecting `NaNpx`.
+
+Each application style map is a whole-map transaction: omitted/null keys clear
+application ownership and reveal SDK defaults again. Serialized style strings
+remain whole application-map replacements, including their custom properties.
+Both representations preserve SDK invariants and reject the entire candidate
+before any native declaration changes. Preview throws on invalid updates;
+live sessions retain the previous map and report structured diagnostics.
+
+`ThemeProvider` exclusively emits SDK theme tokens. The host's reduced-motion
+preference forces every shared `--zui-motion-duration-*` token to `0ms`, including
+when a theme explicitly overrides a duration.
 
 Component contracts worth knowing:
 

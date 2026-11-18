@@ -10,7 +10,7 @@ mod focus;
 mod geometry;
 mod scroll;
 
-use std::{cell::{Cell, RefCell}, collections::{HashMap, HashSet, VecDeque}, fmt, marker::PhantomData, rc::{Rc, Weak}, sync::Arc};
+use std::{cell::{Cell, RefCell}, collections::{HashMap, VecDeque}, fmt, marker::PhantomData, rc::{Rc, Weak}, sync::Arc};
 use rquickjs::{class::Trace, function::{Func, Opt}, Class, Ctx, Exception, JsLifetime, Object, Persistent, Value};
 use registry::{BridgeError, Handle, NodeRegistry, Snapshot};
 
@@ -23,6 +23,24 @@ pub struct NativeNode {
 
 /// Bounded capacity for deferred native notifications awaiting a host flush.
 pub const MAX_QUEUED_NOTIFICATIONS: usize = 256;
+
+/// Host-selected failure policy and motion preference, fixed for one session.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct BridgeOptions {
+    /// Preview rejects invalid style maps; live sessions retain their last valid map.
+    pub strict_styles: bool,
+    /// Suppresses shared SDK motion durations through ThemeProvider.
+    pub reduced_motion: bool,
+    /// Holds mount-generated sheets until the session admits them.
+    pub defer_stylesheet_install: bool,
+}
+
+/// A rejected application styling contribution; unrelated props remain applicable.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct StyleDiagnostic {
+    pub code: &'static str,
+    pub message: String,
+}
 
 /// Returned by [`UiBridge::has_queued_notifications`] after queue overflow retires the bridge.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -266,7 +284,10 @@ pub struct UiBridge {
     port: HostPort,
     wrappers: RefCell<HashMap<u64, Persistent<Object<'static>>>>,
     properties: RefCell<properties::Properties>,
-    stylesheets: RefCell<HashSet<String>>,
+    options: BridgeOptions,
+    style_diagnostics: RefCell<Vec<StyleDiagnostic>>,
+    stylesheets: RefCell<Vec<(String, String)>>,
+    stylesheet_install_deferred: Cell<bool>,
     events: RefCell<events::Events>,
     event_dispatcher: EventDispatcher,
     geometry: RefCell<geometry::Geometry>,
@@ -286,6 +307,10 @@ impl UiBridge {
     /// Uses the host for this registry's native document and binds internal dispatchers
     /// to `port`. Editable values always go through its editing API, never reconciled text.
     pub fn new(registry: NodeRegistry, host: zgui::view::HostHandle, port: HostPort) -> Rc<Self> {
+        Self::new_with_options(registry, host, port, BridgeOptions::default())
+    }
+
+    pub fn new_with_options(registry: NodeRegistry, host: zgui::view::HostHandle, port: HostPort, options: BridgeOptions) -> Rc<Self> {
         let dom = registry.dom_handle();
         let root_native = registry.native(registry.root()).expect("the session root is a live native node");
         let limit = registry.node_limit();
@@ -313,7 +338,10 @@ impl UiBridge {
                 port,
                 wrappers: RefCell::new(HashMap::new()),
                 properties: RefCell::new(properties::Properties::default()),
-                stylesheets: RefCell::new(HashSet::new()),
+                options,
+                style_diagnostics: RefCell::new(Vec::new()),
+                stylesheets: RefCell::new(Vec::new()),
+                stylesheet_install_deferred: Cell::new(options.defer_stylesheet_install),
                 events,
                 event_dispatcher,
                 geometry,
@@ -329,6 +357,37 @@ impl UiBridge {
                 disposed: Cell::new(false),
             }
         })
+    }
+
+    /// Drains styling diagnostics for the host's structured diagnostic stream.
+    pub fn take_style_diagnostics(&self) -> Vec<StyleDiagnostic> {
+        std::mem::take(&mut *self.style_diagnostics.borrow_mut())
+    }
+
+    /// Returns mount-generated stylesheet candidates for validation outside the JS entry.
+    pub fn stylesheet_candidates(&self) -> Vec<(String, String)> {
+        self.stylesheets.borrow().iter().map(|(name, css)| (name.clone(), css.clone())).collect()
+    }
+
+    /// Installs all admitted mount-generated sheets and enables ordinary queued updates.
+    pub fn arm_stylesheets(&self) {
+        if !self.stylesheet_install_deferred.get() { return; }
+        for (name, css) in self.stylesheet_candidates() {
+            self.host.install_stylesheet(&name, &css);
+        }
+        self.stylesheet_install_deferred.set(false);
+    }
+
+    fn style_result<T>(&self, ctx: &Ctx<'_>, result: Result<T, StyleDiagnostic>) -> rquickjs::Result<Option<T>> {
+        match result {
+            Ok(value) => Ok(Some(value)),
+            Err(diagnostic) => {
+                let fail = self.options.strict_styles;
+                let message = fail.then(|| format!("{}: {}", diagnostic.code, diagnostic.message));
+                self.style_diagnostics.borrow_mut().push(diagnostic);
+                if let Some(message) = message { Err(Exception::throw_type(ctx, &message)) } else { Ok(None) }
+            }
+        }
     }
 
     /// Runs `action` inside an outermost structural turn and passes a [`BridgeTurn`] token.
@@ -390,6 +449,14 @@ impl UiBridge {
             return result;
         }
         let invalid = self.registry.borrow_mut().finish_turn();
+        let (dom, targets) = {
+            let registry = self.registry.borrow();
+            let targets = self.properties.borrow().dirty_tokens().into_iter()
+                .filter_map(|token| registry.native_token(token).ok().map(|native| (token, native))).collect::<Vec<_>>();
+            (registry.dom_handle(), targets)
+        };
+        let diagnostics = self.properties.borrow_mut().finish_turn(&dom, targets);
+        self.style_diagnostics.borrow_mut().extend(diagnostics);
         for callback in self.dismissals.borrow_mut().remove_nodes(&invalid) {
             self.events.borrow_mut().remove_callback(callback);
         }
@@ -553,7 +620,7 @@ impl UiBridge {
     pub fn begin_stop(&self) { self.stopping.set(true); }
 
     pub fn dispose(&self) {
-        let stylesheets: Vec<String> = self.stylesheets.borrow_mut().drain().collect();
+        let stylesheets: Vec<String> = self.stylesheets.borrow_mut().drain(..).map(|(name, _)| name).collect();
         for name in stylesheets { self.host.remove_stylesheet(&name); }
         for callback in self.dismissals.borrow_mut().clear() {
             self.events.borrow_mut().remove_callback(callback);
@@ -626,10 +693,24 @@ impl UiBridge {
                     (registry.dom_handle(), registry.native(handle).map_err(|e| host_error(&ctx, e))?,
                         properties::Mutation::Relation(relation, targets))
                 };
-                bridge.properties.borrow_mut().apply(&dom, native, handle.token(), mutation);
+                let result = bridge.properties.borrow_mut().apply(&dom, native, handle.token(), mutation);
+                bridge.style_result(&ctx, result)?;
                 return Ok(());
             }
-            let mutation = properties::Mutation::parse(&ctx, &name, value)?;
+            let mutation = match properties::Mutation::parse(&ctx, &name, value) {
+                Ok(mutation) => mutation,
+                Err(error) if name == "style" || name == "__zguiStyle" || name == "__zguiInvariantStyle" || name.starts_with("--") => {
+                    if !error.is_exception() { return Err(error); }
+                    let exception = ctx.catch();
+                    let message = exception.as_object().and_then(|object| object.get::<_, String>("message").ok()).unwrap_or_else(|| "invalid style value".into());
+                    if !message.starts_with("STYLE_") {
+                        return Err(ctx.throw(exception));
+                    }
+                    bridge.style_result::<()>(&ctx, Err(StyleDiagnostic { code: "STYLE_VALUE_INVALID", message }))?;
+                    return Ok(());
+                }
+                Err(error) => return Err(error),
+            };
             if matches!(&mutation, properties::Mutation::Attribute("src", Some(_))) {
                 bridge.require_creation(&ctx)?;
             }
@@ -652,12 +733,15 @@ impl UiBridge {
                 }
                 (registry.dom_handle(), registry.native(handle).map_err(|e| host_error(&ctx, e))?)
             };
-            let value = bridge.properties.borrow_mut().apply(&dom, native, handle.token(), mutation);
+            let result = bridge.properties.borrow_mut().apply(&dom, native, handle.token(), mutation);
+            let value = bridge.style_result(&ctx, result)?.flatten();
             // Native editing can notify listeners; release all registry/property
             // borrows before entering the host.
             if let Some(value) = value { bridge.host.set_value(native, &value); }
             Ok::<(), rquickjs::Error>(())
         }))?;
+        let reduced_motion = self.options.reduced_motion;
+        api.set("getReducedMotion", Func::from(move || reduced_motion))?;
         let weak = Rc::downgrade(self);
         api.set("createElement", Func::from(move |ctx: Ctx<'js>, tag: String| {
             let bridge = owner(&weak, &ctx)?;
@@ -719,8 +803,17 @@ impl UiBridge {
             let bridge = owner(&weak, &ctx)?;
             bridge.require_creation(&ctx)?;
             let name = stylesheet_name(&ctx, &bridge.registry.borrow().stylesheet_prefix(), &name)?;
-            bridge.stylesheets.borrow_mut().insert(name.clone());
-            bridge.host.install_stylesheet(&name, &css);
+            {
+                let mut stylesheets = bridge.stylesheets.borrow_mut();
+                if let Some((_, installed)) = stylesheets.iter_mut().find(|(candidate, _)| candidate == &name) {
+                    *installed = css.clone();
+                } else {
+                    stylesheets.push((name.clone(), css.clone()));
+                }
+            }
+            if !bridge.stylesheet_install_deferred.get() {
+                bridge.host.install_stylesheet(&name, &css);
+            }
             Ok::<(), rquickjs::Error>(())
         }))?;
         let weak = Rc::downgrade(self);
@@ -728,7 +821,9 @@ impl UiBridge {
             let bridge = owner(&weak, &ctx)?;
             bridge.require_turn(&ctx)?;
             let name = stylesheet_name(&ctx, &bridge.registry.borrow().stylesheet_prefix(), &name)?;
-            if bridge.stylesheets.borrow_mut().remove(&name) {
+            let index = { bridge.stylesheets.borrow().iter().position(|(candidate, _)| candidate == &name) };
+            if let Some(index) = index {
+                bridge.stylesheets.borrow_mut().remove(index);
                 bridge.host.remove_stylesheet(&name);
             }
             Ok::<(), rquickjs::Error>(())

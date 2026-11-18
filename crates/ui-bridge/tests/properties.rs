@@ -1,7 +1,7 @@
 use std::{cell::RefCell, collections::BTreeSet, rc::Rc};
 
 use js_runtime::{JsRuntime, RuntimeLimits};
-use ui_bridge::{HostPort, UiBridge, registry::NodeRegistry};
+use ui_bridge::{BridgeOptions, HostPort, UiBridge, registry::NodeRegistry};
 use zgui::{view::{AttrName, DomHandle, ElementName, HostHandle, NodeId, PropKey, UiState, stub::StubHost}, vocab::{Invalid, Orientation, Role, SemanticFlags, Toggled}};
 use zgui_dom::Document;
 use zgui_view_dom::DocumentDom;
@@ -17,13 +17,17 @@ struct NativeProperties {
 
 impl NativeProperties {
     fn new() -> Self {
+        Self::with_options(BridgeOptions { strict_styles: true, ..BridgeOptions::default() })
+    }
+
+    fn with_options(options: BridgeOptions) -> Self {
         let document = Rc::new(RefCell::new(Document::new()));
         let backend = Rc::new(DocumentDom::new(document));
         let dom = DomHandle::from_rc(backend.clone());
         let root = dom.create_element(ElementName::new("column"));
         dom.insert(backend.root_node(), root, None);
         let mut engine = JsRuntime::new(RuntimeLimits::default()).unwrap();
-        let bridge = UiBridge::new(NodeRegistry::new(dom.clone(), root, 37, 1, 100), HostHandle::new(StubHost::default()), HostPort::queued());
+        let bridge = UiBridge::new_with_options(NodeRegistry::new(dom.clone(), root, 37, 1, 100), HostHandle::new(StubHost::default()), HostPort::queued(), options);
         engine.with_context(|ctx| {
             bridge.install(&ctx)?;
             ctx.globals().set("root", bridge.root(&ctx)?)
@@ -279,7 +283,7 @@ fn unsupported_properties_and_wrong_types_throw_without_partial_native_writes() 
         __zgui.setProperty(node, 'style', {height: '11px'});
         __zgui.setProperty(node, 'disabled', true);
         const invalid = [
-            ['className', 'bad'], ['unknown', null], ['children', 'bad'], ['ref', () => {}],
+            ['unknown', null], ['children', 'bad'], ['ref', () => {}],
             ['value', 'not editable'], ['scrollTop', 12], ['d', 'M0 0 L1 1'],
             ['class', 3], ['id', false], ['title', {}], ['ariaLabel', 1], ['ariaDescription', true],
             ['disabled', 'false'], ['disabled', 0], ['role', 'paragraph'], ['role', 1],
@@ -288,8 +292,8 @@ fn unsupported_properties_and_wrong_types_throw_without_partial_native_writes() 
             ['style', 12], ['style', false], ['style', []], ['style', () => {}],
             ['style', {width: 12}], ['style', {width: true}], ['style', {width: {}}],
             ['style', {width: '3px', height: 12}], ['style', {colour: 'red'}],
-            ['style', {'backgroundColor': 'red'}], ['style', {'--': 'red'}],
-            ['--', 'red'], ['--accent', 12], ['--accent', false]
+            ['style', {'--': 'red'}],
+            ['--', 'red'], ['--accent', false]
         ];
         for (const [name, value] of invalid) {
             let rejected = false;
@@ -335,10 +339,10 @@ fn documented_object_style_vocabulary_is_accepted_by_the_pinned_native_parser() 
 }
 
 #[test]
-fn css_strings_deliberately_keep_native_error_recovery() {
+fn css_strings_reject_the_entire_recovered_subset() {
     let mut native = NativeProperties::new();
-    native.script("__zgui.setProperty(node, 'style', 'unknown-property: nope; width: 10px; height: invalid; --ok: 3px'); 'parse'");
-    assert_eq!(native.style().0, BTreeSet::from(["width".into(), "--ok".into()]));
+    native.script("__zgui.setProperty(node, 'style', 'height: 11px'); try { __zgui.setProperty(node, 'style', 'unknown-property: nope; width: 10px; height: invalid; --ok: 3px'); } catch {} 'parse'");
+    assert_eq!(native.style().0, BTreeSet::from(["height".into()]));
 }
 
 #[test]
@@ -902,4 +906,74 @@ fn keyboard_shortcuts_preserve_other_semantics_and_reject_non_strings() {
     }
     native.script("__zgui.setProperty(node, 'ariaKeyShortcuts', ''); 'empty'");
     assert_eq!(native.backend.semantics(native.node).unwrap().keyboard_shortcut.as_deref(), Some(""));
+}
+
+#[test]
+fn stylex_aliases_keep_internal_classes_and_retain_previous_application_on_conflict() {
+    let mut native = NativeProperties::with_options(BridgeOptions::default());
+    native.script("__zgui.setProperty(node, '__zguiClass', 'sdk invariant'); __zgui.setProperty(node, 'className', 'app'); __zgui.setProperty(node, 'class', '  '); 'aliases'");
+    assert_eq!(native.backend.classes(native.node), ["sdk", "invariant", "app"].map(zgui::view::ClassName::new));
+    native.script("__zgui.setProperty(node, 'class', 'conflict'); __zgui.setProperty(node, 'title', 'unrelated'); __zgui.setProperty(node, '__zguiClass', 'sdk changed'); 'conflict'");
+    assert_eq!(native.backend.classes(native.node), ["sdk", "changed", "app"].map(zgui::view::ClassName::new));
+    assert_eq!(native.attribute("title").as_deref(), Some("unrelated"));
+    assert_eq!(native.bridge.take_style_diagnostics()[0].code, "CLASS_ALIAS_CONFLICT");
+    native.script("__zgui.setProperty(node, 'className', null); 'switch'");
+    assert_eq!(native.backend.classes(native.node), ["sdk", "changed", "conflict"].map(zgui::view::ClassName::new));
+}
+
+#[test]
+fn alias_updates_reconcile_once_at_turn_end() {
+    let mut native = NativeProperties::with_options(BridgeOptions::default());
+    native.script("__zgui.setProperty(node, 'className', null); __zgui.setProperty(node, 'class', 'old'); 'initial'");
+    native.script("__zgui.setProperty(node, 'class', 'new'); __zgui.setProperty(node, 'className', 'other'); __zgui.setProperty(node, 'title', 'unrelated'); 'conflict'");
+    assert_eq!(native.backend.classes(native.node), ["old"].map(zgui::view::ClassName::new));
+    assert_eq!(native.attribute("title").as_deref(), Some("unrelated"));
+    assert_eq!(native.bridge.take_style_diagnostics()[0].code, "CLASS_ALIAS_CONFLICT");
+    native.script("__zgui.setProperty(node, 'className', null); 'switch'");
+    assert_eq!(native.backend.classes(native.node), ["new"].map(zgui::view::ClassName::new));
+    native.script("__zgui.setProperty(node, 'className', 'temporary'); __zgui.setProperty(node, 'className', null); 'transient'");
+    assert_eq!(native.backend.classes(native.node), ["new"].map(zgui::view::ClassName::new));
+    assert!(native.bridge.take_style_diagnostics().is_empty(), "clearing the alias in the same turn must not conflict");
+}
+
+#[test]
+fn inline_transactions_validate_numbers_grammar_and_ownership_before_committing() {
+    let mut native = NativeProperties::with_options(BridgeOptions::default());
+    native.script(r#"
+        __zgui.setProperty(node, '__zguiStyle', {width: '10px', '--Accent': 'default'});
+        __zgui.setProperty(node, '__zguiInvariantStyle', {position: 'fixed'});
+        __zgui.setProperty(node, 'style', {width: '20px', paddingLeft: '8px', opacity: 0, flexGrow: 1, '--Accent': 0, '--accent': 2});
+        'initial'
+    "#);
+    let accepted = native.style();
+    assert!(accepted.1.contains("opacity: 0"));
+    assert!(accepted.1.contains("--Accent: 0"));
+    assert!(accepted.1.contains("--accent: 2"));
+    assert!(accepted.1.contains("padding-left: 8px"));
+    for invalid in ["{height: '30px', width: 0}", "{height: '30px', opacity: NaN}", "{height: '30px', '--x': Infinity}", "{height: '30px', width: 'NaNpx'}", "{height: '30px', width: false}", "{height: '30px', width: {}}", "{height: '30px', width: '10px; color: red'}", "'height:30px;width:invalid'"] {
+        native.script(&format!("__zgui.setProperty(node, 'style', {invalid}); __zgui.setProperty(node, 'title', 'still live'); 'invalid'"));
+        assert_eq!(native.style(), accepted, "{invalid}");
+        assert_eq!(native.attribute("title").as_deref(), Some("still live"));
+        assert!(!native.bridge.take_style_diagnostics().is_empty());
+    }
+    native.script("__zgui.setProperty(node, 'style', 'width: 40px; position: relative !important; --Text: 7'); 'string'");
+    assert!(native.style().1.contains("width: 40px"));
+    assert!(native.style().1.contains("position: fixed !important"));
+    assert!(!native.style().0.contains("opacity"));
+    native.script("__zgui.setProperty(node, 'style', {padding: '1px', paddingLeft: '8px'}); __zgui.setProperty(node, 'style', {paddingLeft: '8px'}); 'object'");
+    assert!(native.style().1.contains("padding-left: 8px"));
+    assert!(native.style().1.contains("width: 10px"));
+    assert!(native.style().1.contains("--Accent: default"));
+    assert!(!native.style().0.contains("--Text"));
+    native.script("__zgui.setProperty(node, 'style', null); 'clear'");
+    assert_eq!(native.style().0, BTreeSet::from(["width".into(), "--Accent".into(), "position".into()]));
+}
+
+#[test]
+fn finite_unitless_numbers_are_admitted_without_length_coercion() {
+    let mut native = NativeProperties::new();
+    for (name, value) in [("opacity", "0"), ("flexGrow", "1"), ("flexShrink", "0"), ("fontWeight", "700"), ("lineHeight", "1.5"), ("zIndex", "2"), ("order", "1"), ("animationIterationCount", "3")] {
+        native.script(&format!("__zgui.setProperty(node, 'style', {{{name}: {value}}}); 'unitless'"));
+        assert_eq!(native.style().0.len(), 1, "{name}: {value}");
+    }
 }

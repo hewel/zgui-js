@@ -39,6 +39,7 @@ impl StepDriver for Driver {
             Step::AssertService{check,..}=>self.assert_service(check),
             Step::SurfaceResize{surface,width,height,..}=>self.resize(*width,*height).map(|mut trace| { trace["surface"]=json!(surface); trace }),
             Step::SurfaceScale{surface,scale,..}=>self.scale(*scale).map(|mut trace| { trace["surface"]=json!(surface); trace }),
+            Step::SurfaceColorScheme{surface,color_scheme,..}=>self.color_scheme(color_scheme).map(|mut trace| { trace["surface"]=json!(surface); trace }),
             Step::SurfaceRecreate{surface,..}=>self.recreate().map(|mut trace| { trace["surface"]=json!(surface); trace }),
         }
     }

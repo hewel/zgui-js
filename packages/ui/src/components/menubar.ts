@@ -74,7 +74,7 @@ export function Menubar(props: MenubarProps = {}): NativeNode {
     orientation: "horizontal",
     get ariaLabel() { return own.label ?? null; },
   }, rest, {
-    get class() { return classes("zui-menubar", sheet.className, rest.class); },
+    get __zguiClass() { return classes("zui-menubar", sheet.className); },
     onKeyDown(event: NativeKeyEvent) {
       if (callHandler(event, own.onKeyDown) && alive) roving.onKeyDown(event);
     },
@@ -116,7 +116,7 @@ export function MenubarMenu(props: MenubarMenuProps): NativeNode {
   spread(node, mergeProps({
     get "data-state"() { return state.open() ? "open" : "closed"; },
   }, rest, {
-    get class() { return classes("zui-menubar__menu", rest.class); },
+    get __zguiClass() { return classes("zui-menubar__menu"); },
   }), true);
   slot(node, provide(MenuContext, { state, dismiss }, own));
   return node;
@@ -142,7 +142,7 @@ export function MenubarTrigger(props: MenubarTriggerProps = {}): NativeNode {
     get tabIndex() { return item?.tabIndex() ?? (disabled() ? -1 : 0); },
     get "data-state"() { return state?.open() ? "open" : "closed"; },
   }, rest, {
-    get class() { return classes("zui-menubar__trigger", rest.class); },
+    get __zguiClass() { return classes("zui-menubar__trigger"); },
     onFocus(event: NativeFocusEvent) {
       if (!callHandler(event, own.onFocus) || !alive || disabled()) return;
       item?.activate();
@@ -181,7 +181,7 @@ export function MenubarArrows(props: MenubarArrowsProps = {}): NativeNode {
   const [own, rest] = splitProps(props, ["children", "bar", "onKeyDown"]);
   const node = createElement("box");
   spread(node, mergeProps(rest, {
-    get class() { return classes("zui-menubar__arrows", rest.class); },
+    get __zguiClass() { return classes("zui-menubar__arrows"); },
     onKeyDown(event: NativeKeyEvent) {
       if (!callHandler(event, own.onKeyDown) || event.character != null) return;
       const direction = event.key === "ArrowRight" ? 1 : event.key === "ArrowLeft" ? -1 : 0;
@@ -332,7 +332,7 @@ export function MenubarSeparator(props: MenubarSeparatorProps = {}): NativeNode 
   useStylesheet(sheet);
   forbidChildren("MenubarSeparator", props);
   return element("box", mergeProps({ ariaHidden: true }, props, {
-    get class() { return classes("zui-menubar__separator", props.class); },
+    get __zguiClass() { return classes("zui-menubar__separator"); },
   }));
 }
 

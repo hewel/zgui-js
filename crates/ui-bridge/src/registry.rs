@@ -485,6 +485,11 @@ impl NodeRegistry {
         Ok(self.validate(node)?.native)
     }
 
+    /// Looks up one native ID by its bridge-local token.
+    pub fn native_token(&self, token: u64) -> Result<NodeId, BridgeError> {
+        self.native(self.handle(token))
+    }
+
     /// Invalidates still-detached trees, excluding descendants moved elsewhere.
     pub fn finish_turn(&mut self) -> Vec<Handle> {
         assert!(self.turn_active, "no structural turn is active");

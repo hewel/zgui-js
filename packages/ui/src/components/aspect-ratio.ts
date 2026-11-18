@@ -13,15 +13,15 @@ export function AspectRatio(props: AspectRatioProps = {}): NativeNode {
   const [own, rest] = splitProps(props, ["ratio"]);
   return element("box", mergeProps(
     {
-      get "--zui-aspect-ratio"() {
+      get __zguiStyle() {
         const ratio = own.ratio ?? 1;
         if (!Number.isFinite(ratio) || ratio <= 0) {
           throw new TypeError(`AspectRatio ratio must be a positive finite number`);
         }
-        return String(ratio);
+        return { "--zui-aspect-ratio": String(ratio) };
       },
     },
     rest,
-    { get class() { return classes(sheet.className, rest.class); } },
+    { get __zguiClass() { return classes(sheet.className); } },
   ));
 }

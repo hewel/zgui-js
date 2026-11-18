@@ -34,7 +34,7 @@ function editing(
   tag: "field" | "editor",
   sheet: Stylesheet,
   role: NativeRole,
-  className: (own: { class?: string | null }) => string,
+  className: () => string,
   props: InputProps | TextareaProps,
 ): NativeNode {
   useStylesheet(sheet);
@@ -48,13 +48,13 @@ function editing(
         return tag === "field" && (rest as { secure?: boolean | null }).secure ? "passwordInput" : role;
       },
       get ariaLabel() { return own.label ?? null; },
-      get "--zui-field-placeholder"() {
-        return rest.placeholder == null ? null : quoted(rest.placeholder);
+      get __zguiStyle() {
+        return { "--zui-field-placeholder": rest.placeholder == null ? null : quoted(rest.placeholder) };
       },
     },
     rest,
     {
-      get class() { return className(rest); },
+      get __zguiClass() { return className(); },
       get onInput() {
         const input = own.onInput;
         const change = own.onValueChange;
@@ -75,7 +75,7 @@ export function Input(props: InputProps = {}): NativeNode {
     "field",
     inputSheet,
     "textInput",
-    rest => classes(inputSheet.className, "zui-field", rest.class),
+    () => classes(inputSheet.className, "zui-field"),
     props,
   );
 }
@@ -86,7 +86,7 @@ export function Textarea(props: TextareaProps = {}): NativeNode {
     "editor",
     textareaSheet,
     "multilineTextInput",
-    rest => classes(textareaSheet.className, "zui-field", "zui-textarea", rest.class),
+    () => classes(textareaSheet.className, "zui-field", "zui-textarea"),
     props,
   );
 }

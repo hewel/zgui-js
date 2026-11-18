@@ -34,13 +34,10 @@ export function Button(props: ButtonProps = {}): NativeNode {
     },
     rest,
     {
-      get class() {
-        return classes(
-          sheet.className, "zui-button",
-          `zui-button--${own.variant ?? "default"}`,
-          SIZE_CLASSES[own.size ?? "md"],
-          rest.class,
-        );
+      get __zguiClass() {
+        return classes(sheet.className, "zui-button",
+        `zui-button--${own.variant ?? "default"}`,
+        SIZE_CLASSES[own.size ?? "md"], );
       },
     },
   ));

@@ -17,6 +17,7 @@ const usage = `Usage: zgui-js <dev|build|preview> [DIRECTORY | --app NAME_OR_DIR
 
 Application defaults to the current directory (counter at the repository root).
   build --watch          Watch packages without starting a host
+  build --stylex-diagnostics  Include StyleX source metadata (Preview always includes it)
   dev --exit-after-ms N  Close the native app after N milliseconds
   dev --layer-config F  Use an upstream layer-shell configuration
   preview --watch       Re-run offscreen scenarios on changes, without a desktop host
@@ -31,6 +32,7 @@ function parse(args) {
   if (!["dev", "build", "preview", "smoke"].includes(command)) throw new Error(usage);
   const flags = new Map();
   const allowed = new Set(["--app",
+    ...(command === "build" ? ["--stylex-diagnostics"] : []),
     ...(command === "build" || command === "preview" ? ["--watch"] : []),
     ...(command === "dev" ? ["--exit-after-ms", "--layer-config"] : []),
     ...(command === "preview" ? ["--profile", "--fixture", "--scenario", "--out"] : []),
@@ -45,7 +47,7 @@ function parse(args) {
       continue;
     }
     if (!allowed.has(arg) || flags.has(arg)) throw new Error(`Unknown or duplicate option: ${arg}`);
-    if (arg === "--watch") { flags.set(arg, true); continue; }
+    if (arg === "--watch" || arg === "--stylex-diagnostics") { flags.set(arg, true); continue; }
     const value = args.shift();
     if (!value || value.startsWith("--")) throw new Error(`${arg} requires a value`);
     flags.set(arg, value);
@@ -81,7 +83,7 @@ async function preview(application, flags) {
     "--out", output,
   ];
   console.error(`[preview] Artifacts: ${output}`);
-  if (flags.has("--watch")) return devApplication(application.app, { ...application, mode: "preview", hostArgs: args });
+  if (flags.has("--watch")) return devApplication(application.app, { ...application, mode: "preview", stylexDiagnostics: true, hostArgs: args });
   const controller = new AbortController();
   let interrupted;
   const interrupt = signal => {
@@ -94,7 +96,7 @@ async function preview(application, flags) {
   process.on("SIGINT", onInt);
   process.on("SIGTERM", onTerm);
   try {
-    const { dist } = await buildApplication(application.app, application);
+    const { dist } = await buildApplication(application.app, { ...application, stylexDiagnostics: true });
     controller.signal.throwIfAborted();
     const executable = await prepareNativeHost({ root: application.root, signal: controller.signal });
     return await runNativeHost(executable, ["preview", "run", "--bundle", dist, ...args], {
@@ -119,7 +121,7 @@ try {
       typecheckProject(path.join(workspaceRoot, "packages/build/tsconfig.smoke.json"));
       await buildSmoke();
     } else {
-      const application = await resolveApplication(selector);
+      const application = { ...await resolveApplication(selector), stylexDiagnostics: flags.has("--stylex-diagnostics") };
       if (command === "dev") {
         const hostArgs = [];
         for (const flag of ["--exit-after-ms", "--layer-config"]) {

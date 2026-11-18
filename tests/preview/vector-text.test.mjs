@@ -1,12 +1,15 @@
 import assert from "node:assert/strict";
 import { after, before, test } from "node:test";
 import path from "node:path";
+import { readFile } from "node:fs/promises";
 import {
   buildFixtureApp,
   createTempWorkspace,
   getNode as get,
   readPng as pngRgba,
   readTree as tree,
+  readFrame,
+  workspaceRoot,
   runScenario,
 } from "./harness.mjs";
 
@@ -14,7 +17,10 @@ let temp;
 let bundle;
 before(async () => {
   temp = await createTempWorkspace("preview-vector-text-");
-  bundle = await buildFixtureApp(temp.dir, "vector-text", new URL("./fixtures/vector-text.tsx", import.meta.url));
+  bundle = await buildFixtureApp(temp.dir, "vector-text", new URL("./fixtures/vector-text.tsx", import.meta.url), {
+    assets: { "package-font.ttf": await readFile(path.join(workspaceRoot, "preview/fonts/NotoSans-Regular.ttf")) },
+    fonts: [{ family: "PackageGlyphSans", path: "assets/package-font.ttf" }],
+  });
 });
 after(async () => { await temp?.cleanup(); });
 
@@ -44,6 +50,11 @@ test("scaled text rasterizes glyph pixels through capture resize and recreate", 
   ], "native");
   for (const name of ["initial", "resized", "recreated"]) {
     const snapshot = await tree(out, name);
+    const frame = await readFrame(out, name);
+    assert.equal(frame.resources.requiredFontsReady, true);
+    assert.ok(frame.resources.fonts.some(font => font.family === "PackageGlyphSans" && font.path === "assets/package-font.ttf" && font.state === "ready"));
+    assert.equal(snapshot.styleRevision, frame.styleRevision);
+    assert.equal(typeof frame.pixelPresentation.styleRevision, "number");
     const image = await pngRgba(path.join(out, `captures/${name}.png`));
     for (const testId of ["plain", "scaled", "faded"]) {
       const bounds = get(snapshot, testId).boundsDevice;

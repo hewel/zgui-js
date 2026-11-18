@@ -7,6 +7,8 @@
 /apps/examples/*/.zgui-generations/
 /apps/examples/*/.zgui-build-status.json
 /apps/examples/*/.zgui-build-status.json.*.tmp
+/apps/examples/*/.zgui-native-status.json
+/apps/examples/*/.zgui-native-status.json.*.tmp
 /artifacts/preview/
 
 .agents/skills

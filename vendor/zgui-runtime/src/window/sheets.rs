@@ -17,16 +17,25 @@ impl Window {
     /// the end of the author origin, where it would begin winning against every sheet that used to
     /// beat it — so a theme that changed a colour would also, invisibly, change what wins.
     pub(crate) fn install_view_sheet(&mut self, name: &str, css: &str) {
+        if self.view_sheets.get(name).is_some_and(|(_, installed)| installed == css) {
+            return;
+        }
         if !self.images.audit_css(css) { return; }
+        if let Err(diagnostics) = zgui_style::preflight_stylesheet(css) {
+            self.binding.stylesheet_rejected(name, diagnostics);
+            return;
+        }
         let document = self.document.borrow();
-        let diagnostics = match self.view_sheets.get(name) {
-            Some(handle) => {
+        let diagnostics = match self.view_sheets.get_mut(name) {
+            Some((handle, installed)) => {
                 let diagnostics =
                     self.engine
                         .replace_sheet(&document, handle, SheetSource::Text(css));
                 // Replaced rules may have styled any element in the tree, and rules that are gone
                 // leave no selector to invalidate by.
                 self.engine.force_author_rules_dirty();
+                installed.clear();
+                installed.push_str(css);
                 diagnostics
             }
             None => {
@@ -36,11 +45,12 @@ impl Window {
                 let (handle, diagnostics) =
                     self.engine
                         .add_sheet(&document, SheetOrigin::Author, SheetSource::Text(css));
-                self.view_sheets.insert(name.to_owned(), handle);
+                self.view_sheets.insert(name.to_owned(), (handle, css.to_owned()));
                 diagnostics
             }
         };
         drop(document);
+        self.style_revision = self.style_revision.checked_add(1).expect("stylesheet revision exhausted");
         for report in diagnostics.iter() {
             tracing::warn!(
                 target: "zgui::css",
@@ -56,6 +66,9 @@ impl Window {
     /// A sheet is removed by letting go of its handle: the rule set reclaims every sheet whose
     /// handle has been dropped, which is what makes "forgot to remove it" impossible to write.
     pub(crate) fn remove_view_sheet(&mut self, name: &str) {
-        drop(self.view_sheets.remove(name));
+        if self.view_sheets.remove(name).is_some() {
+            self.style_revision = self.style_revision.checked_add(1).expect("stylesheet revision exhausted");
+            self.engine.force_author_rules_dirty();
+        }
     }
 }

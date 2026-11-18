@@ -32,6 +32,11 @@ pub(crate) struct FrameInput {
     pub presentation_id: u64,
     pub configuration_id: u64,
     pub presented_draw: Option<u64>,
+    pub style_revision: u64,
+    pub document_revision: u64,
+    pub metadata_revision: u64,
+    pub resource_revision: u64,
+    pub generation: u64,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -40,6 +45,7 @@ pub(crate) struct SettledQuery {
     pub document_revision: u64,
     pub metadata_revision: u64,
     pub resource_revision: u64,
+    pub style_revision: u64,
     pub configuration_id: u64,
     pub presentation_id: u64,
     pub presented_draw: Option<u64>,
@@ -54,6 +60,7 @@ pub(crate) struct CommittedMeta {
     pub document_revision: u64,
     pub metadata_revision: u64,
     pub resource_revision: u64,
+    pub style_revision: u64,
     pub surface_configuration: u64,
     pub configuration_id: u64,
     pub presentation_id: u64,
@@ -88,6 +95,11 @@ impl FrameLedger {
                 sequence: input.presentation_id,
                 configuration_id: input.configuration_id,
                 draw_id: input.presented_draw,
+                style_revision: Some(input.style_revision),
+                document_revision: Some(input.document_revision),
+                metadata_revision: Some(input.metadata_revision),
+                resource_revision: Some(input.resource_revision),
+                generation: Some(input.generation),
             });
         }
         if !input.layout_document_coherent
@@ -119,6 +131,7 @@ impl FrameLedger {
             && last.generation == query.generation
             && last.metadata_revision == query.metadata_revision
             && last.resource_revision == query.resource_revision
+            && last.style_revision == query.style_revision
             && last.surface_configuration == self.surface_configuration
             && query.completed_coherent
             && query.completed_ordinal == Some(last.ordinal)
@@ -185,6 +198,7 @@ mod tests {
             presentation_id: 1,
             configuration_id: 1,
             presented_draw: Some(1),
+            style_revision: 3, document_revision: 5, metadata_revision: 2, resource_revision: 0, generation: 1,
         };
         assert!(ledger.record_outcome(&initial).is_some());
         ledger.commit(CommittedMeta {
@@ -192,6 +206,7 @@ mod tests {
             document_revision: 5,
             metadata_revision: 2,
             resource_revision: 0,
+            style_revision: 3,
             surface_configuration: ledger.surface_configuration(),
             configuration_id: 1,
             presentation_id: 1,
@@ -204,6 +219,7 @@ mod tests {
             document_revision: 5,
             metadata_revision: 2,
             resource_revision: 0,
+            style_revision: 3,
             configuration_id: 1,
             presentation_id: 1,
             presented_draw: Some(1),
@@ -223,13 +239,16 @@ mod tests {
             presentation_id: 1,
             configuration_id: 1,
             presented_draw: Some(1),
+            style_revision: 4, document_revision: 5, metadata_revision: 2, resource_revision: 0, generation: 1,
         };
-        assert!(ledger.record_outcome(&skipped).is_some());
+        let (_, reused) = ledger.record_outcome(&skipped).expect("coherent undamaged validation");
+        assert_eq!(reused.style_revision, Some(3), "reused pixels retain their original style provenance");
         ledger.commit(CommittedMeta {
             generation: 1,
             document_revision: 5,
             metadata_revision: 2,
             resource_revision: 0,
+            style_revision: 4,
             surface_configuration: ledger.surface_configuration(),
             configuration_id: 1,
             presentation_id: 1,
@@ -238,9 +257,11 @@ mod tests {
         });
         query.completed_ordinal = Some(2);
         query.completed_status = Some(FrameStatus::Undamaged);
+        query.style_revision = 4;
         assert!(ledger.is_settled(&query));
 
         assert!(!ledger.is_settled(&SettledQuery { document_revision: 6, ..query }));
+        assert!(!ledger.is_settled(&SettledQuery { style_revision: 5, ..query }));
 
         let failed_next = FrameInput {
             ordinal: 3,
@@ -252,6 +273,7 @@ mod tests {
             presentation_id: 2,
             configuration_id: 1,
             presented_draw: Some(3),
+            style_revision: 5, document_revision: 5, metadata_revision: 2, resource_revision: 0, generation: 1,
         };
         assert!(ledger.record_outcome(&failed_next).is_some());
         assert_eq!(ledger.committed_time_us(), Some(2000));
@@ -268,6 +290,7 @@ mod tests {
             presentation_id: 2,
             configuration_id: 2,
             presented_draw: Some(3),
+            style_revision: 5, document_revision: 5, metadata_revision: 2, resource_revision: 0, generation: 1,
         };
         assert!(ledger.record_outcome(&lag).is_none());
         assert!(ledger.exceeded_step_budget(step_start, 3));

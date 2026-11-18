@@ -1,0 +1,53 @@
+[package]
+name = "zgui-view"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+description = "View layer for zgui: views, components and children"
+repository = "https://github.com/zortax/zgui"
+homepage = "https://zgui.zortax.de"
+rust-version = "1.90"
+keywords = ["gui", "ui", "css", "reactive", "wgpu"]
+categories = ["gui"]
+include = ["/src", "/README.md", "/LICENSE", "/NOTICE"]
+
+# L6 — frontend. Every dependency is inherited: `foo.workspace = true`.
+#
+# The list is exactly four, and CI asserts it: `cargo xtask ledger pinned`. The view layer is
+# written entirely against the three traits it declares, so it can see no document, no style
+# engine, no layout engine, no renderer and no window system. A backend for any of those is
+# substitutable precisely because none of them is nameable here.
+[workspace]
+
+[dependencies]
+zgui-geom = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a" }
+zgui-interned = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a" }
+zgui-reactive = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a" }
+zgui-vocab = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a" }
+
+# The in-memory backend this crate's own examples and tests build against. Off by default, so an
+# application links none of it; turned on for the test and documentation-test builds by the
+# development dependency below.
+[features]
+stub-backend = []
+
+# Records which component each part of the document came from, for a development tool that wants to
+# show a component tree. Off by default and not free: with it on, every `#[component]` instance
+# brackets its content with a pair of marker nodes and registers what they mean. A program links it
+# by linking something that asks for it — `zgui-devtools` does — and pays nothing otherwise.
+instrument = []
+
+[dev-dependencies]
+proptest = "1"
+zgui-view = { path = ".", features = ["stub-backend"] }
+
+[lints.rust]
+missing_docs = "deny"
+unsafe_code = "deny"
+unreachable_pub = "warn"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+
+[patch."https://github.com/zortax/zgui"]
+zgui-view = { path = "." }

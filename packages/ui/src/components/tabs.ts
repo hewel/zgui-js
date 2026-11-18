@@ -106,7 +106,7 @@ export function Tabs(props: TabsProps = {}): NativeNode {
     get "data-orientation"() { return orientation(); },
     get "data-activation"() { return activation(); },
   }, rest, {
-    get class() { return classes(sheet.className, "zui-tabs", rest.class); },
+    get __zguiClass() { return classes(sheet.className, "zui-tabs"); },
   }));
   slot(node, provide(TabsContext, context, own));
   return node;
@@ -133,7 +133,7 @@ export function TabsList(props: TabsListProps = {}): NativeNode {
     get "data-orientation"() { return axis() === "vertical" ? "vertical" : "horizontal"; },
     get "data-variant"() { return variant(); },
   }, rest, {
-    get class() { return classes("zui-tabs__list", `zui-tabs__list--${variant()}`, rest.class); },
+    get __zguiClass() { return classes("zui-tabs__list", `zui-tabs__list--${variant()}`); },
     onKeyDown(event: NativeKeyEvent) {
       if (callHandler(event, own.onKeyDown) && !disabled()) roving.onKeyDown(event);
     },
@@ -167,7 +167,7 @@ export function TabsTrigger(props: TabsTriggerProps): NativeNode {
     get "data-orientation"() { return tabs?.orientation() === "vertical" ? "vertical" : "horizontal"; },
     get "data-variant"() { return list?.variant() ?? null; },
   }, rest, {
-    get class() { return classes("zui-tabs__trigger", rest.class); },
+    get __zguiClass() { return classes("zui-tabs__trigger"); },
     onClick(event: NativeEvent) { if (callHandler(event, own.onClick)) select(); },
     onFocus(event: NativeFocusEvent) {
       if (!callHandler(event, own.onFocus) || event.target !== node || disabled()) return;
@@ -195,7 +195,7 @@ export function TabsContent(props: TabsContentProps): NativeNode {
     get "data-state"() { return selected() ? "active" : "inactive"; },
     get "data-value"() { return value(); },
   }, rest, {
-    get class() { return classes("zui-tabs__content", rest.class); },
+    get __zguiClass() { return classes("zui-tabs__content"); },
   }));
   slot(node, Show({ get when() { return !!own.keepMounted || selected(); }, get children() { return own.children; } }));
   return node;

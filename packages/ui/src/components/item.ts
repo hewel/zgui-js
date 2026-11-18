@@ -41,15 +41,12 @@ export function Item(props: ItemProps = {}): NativeNode {
     },
     rest,
     {
-      get class() {
-        return classes(
-          sheet.className, "zui-item",
-          own.variant === "outline" && "zui-item--outline",
-          own.variant === "muted" && "zui-item--muted",
-          own.size === "sm" && "zui-item--sm",
-          descriptions() > 0 && "zui-item--described",
-          rest.class,
-        );
+      get __zguiClass() {
+        return classes(sheet.className, "zui-item",
+        own.variant === "outline" && "zui-item--outline",
+        own.variant === "muted" && "zui-item--muted",
+        own.size === "sm" && "zui-item--sm",
+        descriptions() > 0 && "zui-item--described", );
       },
     },
   ), true);
@@ -67,13 +64,10 @@ export function ItemMedia(props: ItemMediaProps = {}): NativeNode {
     { get "data-variant"() { return own.variant ?? "default"; } },
     rest,
     {
-      get class() {
-        return classes(
-          "zui-item__media",
-          own.variant === "icon" && "zui-item__media--icon",
-          own.variant === "image" && "zui-item__media--image",
-          rest.class,
-        );
+      get __zguiClass() {
+        return classes("zui-item__media",
+        own.variant === "icon" && "zui-item__media--icon",
+        own.variant === "image" && "zui-item__media--image", );
       },
     },
   ));
@@ -93,6 +87,6 @@ export function ItemSeparator(props: ItemSeparatorProps = {}): NativeNode {
   return element("box", mergeProps(
     { role: "genericContainer" as const, ariaHidden: true },
     props,
-    { get class() { return classes("zui-item__separator", props.class); } },
+    { get __zguiClass() { return classes("zui-item__separator"); } },
   ));
 }

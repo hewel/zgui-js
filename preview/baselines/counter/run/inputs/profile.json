@@ -29,6 +29,7 @@
   "random": {
     "seed": 12345
   },
+  "reducedMotion": false,
   "schemaVersion": 1,
   "surface": {
     "background": "#17191fff",

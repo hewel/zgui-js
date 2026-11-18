@@ -48,6 +48,25 @@ impl Driver {
     pub fn scale(&mut self,scale:f64)->Result<Value,Fault> {
         self.configure_surface(self.surface.width,self.surface.height,scale,true)
     }
+    pub fn color_scheme(&mut self,scheme:&str)->Result<Value,Fault> {
+        self.settle(false)?;
+        let label = scheme;
+        let scheme=match label {
+            "light"=>zgui_style::ColorScheme::Light,
+            "dark"=>zgui_style::ColorScheme::Dark,
+            _=>return Err(Error::new("E_SCHEMA",2,"colorScheme must be light or dark").into()),
+        };
+        let changed=self.window()?.color_scheme()!=scheme;
+        if changed {
+            self.observer.bump_surface_configuration();
+            self.window_mut()?.set_color_scheme(scheme);
+            self.window()?.request_frame();
+        }
+        self.pipeline.pump();
+        self.check()?;
+        self.settle(false)?;
+        Ok(json!({"colorScheme":label,"timeUs":self.environment.now_us(),"readiness":self.readiness()}))
+    }
     fn configure_surface(&mut self,width:u32,height:u32,scale:f64,scale_changed:bool)->Result<Value,Fault> {
         self.settle(false)?;
         let previous=(self.surface.width,self.surface.height,self.surface.scale);

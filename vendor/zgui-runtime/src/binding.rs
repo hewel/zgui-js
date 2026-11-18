@@ -46,6 +46,11 @@ pub trait HostBinding {
         let _ = timestamp;
     }
 
+    /// A queued stylesheet failed native preflight before any cascade mutation.
+    fn stylesheet_rejected(&mut self, name: &str, diagnostics: zgui_style::CssDiagnostics) {
+        let _ = (name, diagnostics);
+    }
+
     /// The window this binding was installed on is going away.
     fn shutting_down(&mut self) {}
 }

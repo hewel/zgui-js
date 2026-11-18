@@ -1,0 +1,22 @@
+{
+  "name": "@hewel/zgui-js-example-stylex",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "zgui-js dev",
+    "build": "zgui-js build",
+    "preview": "zgui-js preview"
+  },
+  "zgui": {
+    "fonts": [
+      { "family": "StyleX Fixture", "path": "assets/StyleXFixture.ttf" }
+    ]
+  },
+  "devDependencies": {
+    "@hewel/zgui-build": "workspace:*"
+  },
+  "dependencies": {
+    "@hewel/zgui": "workspace:*",
+    "@stylexjs/stylex": "0.19.2"
+  }
+}

@@ -3,23 +3,23 @@
 //! to empty text. `defaultValue` initializes only once and is ignored after any
 //! explicit value assignment; only initialization metadata is retained here.
 //!
-//! Style objects accept only the kebab-case properties in `STYLE_PROPERTIES`, with
-//! string values (including explicit units), or null/undefined to remove a key.
-//! CSS strings use zgui's error-recovering CSS parser, not a browser CSS contract.
-//! Custom `--name` declarations share the native inline block: replacing/clearing
-//! style text also clears custom declarations, including directly assigned ones.
+//! Application classes and inline declarations are separate from SDK ownership.
+//! All inline updates parse before committing through the native DOM transaction.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use rquickjs::{Ctx, Exception, FromJs, Value};
 use zgui::{view::{AttrName, ClassName, CustomPropertyName, DomHandle, NodeId, PropKey, PropValue, Semantics, UiState}, vocab::{HasPopup, Invalid, Live, Orientation, Role, SemanticFlags, Toggled}};
 
-#[derive(Clone, PartialEq)]
-pub(crate) enum Style { Empty, Text(String), Object(Vec<(String, Option<String>)>) }
+#[derive(Clone, Default, PartialEq)]
+pub(crate) enum Style { #[default] Empty, Text(String), Object(Vec<(String, Option<String>)>) }
+
+#[derive(Clone, Copy)]
+pub(crate) enum StyleOwner { Application, Defaults, Invariants }
 
 pub(crate) enum Mutation {
-    Class(Option<String>),
+    Class(&'static str, Option<String>),
     TestId(Option<String>),
-    Style(Style),
+    Style(StyleOwner, Style),
     Attribute(&'static str, Option<String>),
     Disabled(bool),
     ReadOnly(bool),
@@ -84,7 +84,9 @@ impl Mutation {
         let empty = value.is_null() || value.is_undefined();
         let string = |value| Option::<String>::from_js(ctx, value);
         match name {
-            "class" => Ok(Self::Class(string(value)?)),
+            "class" => Ok(Self::Class("class", string(value)?)),
+            "className" => Ok(Self::Class("className", string(value)?)),
+            "__zguiClass" => Ok(Self::Class("__zguiClass", string(value)?)),
             "testId" => {
                 let value = string(value)?;
                 if value.as_ref().is_some_and(|value| value.len() > 512) {
@@ -92,20 +94,30 @@ impl Mutation {
                 }
                 Ok(Self::TestId(value))
             }
-            "style" if empty => Ok(Self::Style(Style::Empty)),
-            "style" if value.is_string() => Ok(Self::Style(Style::Text(String::from_js(ctx, value)?))),
-            "style" => {
-                let object = value.as_object().filter(|_| !value.is_array() && !value.is_function())
-                    .ok_or_else(|| Exception::throw_type(ctx, "style must be a CSS string or string-valued object"))?;
-                let mut properties = Vec::new();
-                for property in object.props::<String, Value>() {
-                    let (key, value) = property?;
-                    if !STYLE_PROPERTIES.contains(&key.as_str()) && CustomPropertyName::parse(&key).is_none() {
-                        return Err(Exception::throw_type(ctx, &format!("unsupported native style property: {key}")));
-                    }
-                    properties.push((key, string(value)?));
+            "style" | "__zguiStyle" | "__zguiInvariantStyle" => {
+                let owner = match name {
+                    "__zguiStyle" => StyleOwner::Defaults,
+                    "__zguiInvariantStyle" => StyleOwner::Invariants,
+                    _ => StyleOwner::Application,
+                };
+                if !matches!(owner, StyleOwner::Application) && value.is_string() {
+                    return Err(Exception::throw_type(ctx, "STYLE_VALUE_INVALID: SDK ownership requires a declaration map"));
                 }
-                Ok(Self::Style(Style::Object(properties)))
+                let style = if empty { Style::Empty }
+                else if value.is_string() { Style::Text(String::from_js(ctx, value)?) }
+                else {
+                    let object = value.as_object().filter(|_| !value.is_array() && !value.is_function())
+                        .ok_or_else(|| Exception::throw_type(ctx, "STYLE_VALUE_INVALID: style must be a CSS string or object"))?;
+                    let mut properties = Vec::new();
+                    for property in object.props::<String, Value>() {
+                        let (key, value) = property?;
+                        let key = normalize_name(ctx, key)?;
+                        let value = style_value(ctx, &key, value)?;
+                        properties.push((key, value));
+                    }
+                    Style::Object(properties)
+                };
+                Ok(Self::Style(owner, style))
             }
             "id" => Ok(Self::Attribute("id", string(value)?)),
             "src" => {
@@ -256,7 +268,7 @@ impl Mutation {
                 };
                 Ok(Self::Role(role))
             }
-            custom if CustomPropertyName::parse(custom).is_some() => Ok(Self::Custom(custom.to_owned(), string(value)?)),
+            custom if CustomPropertyName::parse(custom).is_some() => Ok(Self::Custom(custom.to_owned(), style_value(ctx, custom, value)?)),
             data if data.starts_with("data-") => {
                 let suffix = &data[5..];
                 let valid = !suffix.is_empty() && suffix.bytes().all(|byte|
@@ -276,58 +288,87 @@ impl Mutation {
 }
 
 #[derive(Default)]
+struct ClassState {
+    canonical: Option<String>,
+    alias: Option<String>,
+    internal: Option<String>,
+    applied: Option<String>,
+    native: Option<String>,
+}
+
+#[derive(Default)]
+struct StyleState {
+    application: Style,
+    defaults: Style,
+    invariants: Style,
+    direct: Vec<(String, Option<String>)>,
+}
+
+#[derive(Default)]
 pub(crate) struct Properties {
-    styles: HashMap<u64, Style>,
+    styles: HashMap<u64, StyleState>,
+    classes: HashMap<u64, ClassState>,
+    class_dirty: BTreeSet<u64>,
     semantics: HashMap<u64, Semantics>,
     initialized_values: HashSet<u64>,
 }
 impl Properties {
-    pub(crate) fn remove(&mut self, token: u64) { self.styles.remove(&token); self.semantics.remove(&token); self.initialized_values.remove(&token); }
-    pub(crate) fn clear(&mut self) { self.styles.clear(); self.semantics.clear(); self.initialized_values.clear(); }
+    pub(crate) fn remove(&mut self, token: u64) { self.styles.remove(&token); self.classes.remove(&token); self.class_dirty.remove(&token); self.semantics.remove(&token); self.initialized_values.remove(&token); }
+    pub(crate) fn clear(&mut self) { self.styles.clear(); self.classes.clear(); self.class_dirty.clear(); self.semantics.clear(); self.initialized_values.clear(); }
 
     /// Returns an owned native value command, to execute after releasing this borrow.
     /// Only initialization metadata is retained; the native editor owns the text.
-    pub(crate) fn apply(&mut self, dom: &DomHandle, node: NodeId, token: u64, mutation: Mutation) -> Option<String> {
+    pub(crate) fn apply(&mut self, dom: &DomHandle, node: NodeId, token: u64, mutation: Mutation) -> Result<Option<String>, crate::StyleDiagnostic> {
         match mutation {
             Mutation::Value(value) => {
                 self.initialized_values.insert(token);
-                return Some(value);
+                return Ok(Some(value));
             }
             Mutation::DefaultValue(value) => {
-                return self.initialized_values.insert(token).then_some(value);
+                return Ok(self.initialized_values.insert(token).then_some(value));
             }
-            Mutation::Class(value) => {
-                let mut classes = Vec::new();
-                for class in value.as_deref().unwrap_or("").split_ascii_whitespace().map(ClassName::new) {
-                    if !classes.contains(&class) { classes.push(class); }
+            Mutation::Class(name, value) => {
+                let state = self.classes.entry(token).or_default();
+                let value = value.filter(|value| !value.trim().is_empty());
+                match name {
+                    "class" => state.canonical = value,
+                    "className" => state.alias = value,
+                    _ => state.internal = value,
                 }
-                dom.set_classes(node, &classes);
+                self.class_dirty.insert(token);
             }
             Mutation::Attribute(name, value) => dom.set_attribute(node, AttrName::new(name), value.as_deref()),
             Mutation::DataAttribute(name, value) => dom.set_attribute(node, AttrName::new(&name), value.as_deref()),
             Mutation::Drawing(name, value) => dom.set_property(node, PropKey::new(name), value.as_deref().map_or(PropValue::Unset, PropValue::from)),
             Mutation::Open(open) => dom.set_ui_state(node, UiState::OPEN, open),
-            Mutation::Custom(name, value) => dom.set_custom_property(node, CustomPropertyName::parse(&name).expect("parsed custom property"), value.as_deref()),
-            Mutation::Style(next) => {
-                let previous = self.styles.remove(&token).unwrap_or(Style::Empty);
-                match (&previous, &next) {
-                    (_, Style::Empty) => dom.set_style_text(node, None),
-                    (_, Style::Text(text)) => dom.set_style_text(node, Some(text)),
-                    (Style::Object(old), Style::Object(new)) => {
-                        for (key, _) in old.iter().filter(|(key, _)| !new.iter().any(|(next, _)| next == key)) {
-                            set_style(dom, node, key, None);
-                        }
-                        // Reapply in JS enumeration order. Removing a shorthand also
-                        // removes its longhands, and custom props may have been written
-                        // directly since the previous style-object assignment.
-                        for (key, value) in new { set_style(dom, node, key, value.as_deref()); }
-                    }
-                    (_, Style::Object(properties)) => {
-                        dom.set_style_text(node, None);
-                        for (key, value) in properties { set_style(dom, node, key, value.as_deref()); }
-                    }
+            Mutation::Custom(name, value) => {
+                let state = self.styles.entry(token).or_default();
+                let direct = state.direct.iter().filter(|(key, _)| key != &name)
+                    .map(|(key, value)| (key.as_str(), value.as_deref()))
+                    .chain(std::iter::once((name.as_str(), value.as_deref())));
+                commit_style(dom, node, &state.defaults, &state.application, direct, &state.invariants)?;
+                state.direct.retain(|(key, _)| key != &name);
+                if value.is_some() { state.direct.push((name, value)); }
+            }
+            Mutation::Style(owner, next) => {
+                let state = self.styles.entry(token).or_default();
+                let (defaults, application, direct, invariants) = match owner {
+                    StyleOwner::Application => (&state.defaults, &next, &[][..], &state.invariants),
+                    StyleOwner::Defaults => (&next, &state.application, state.direct.as_slice(), &state.invariants),
+                    StyleOwner::Invariants => (&state.defaults, &state.application, state.direct.as_slice(), &next),
+                };
+                // Equality skips native work, except direct application writes invalidate it.
+                let unchanged = match owner {
+                    StyleOwner::Application => state.application == next && state.direct.is_empty(),
+                    StyleOwner::Defaults => state.defaults == next,
+                    StyleOwner::Invariants => state.invariants == next,
+                };
+                if !unchanged { commit_style(dom, node, defaults, application, direct.iter().map(|(key, value)| (key.as_str(), value.as_deref())), invariants)?; }
+                match owner {
+                    StyleOwner::Application => { state.application = next; state.direct.clear(); }
+                    StyleOwner::Defaults => state.defaults = next,
+                    StyleOwner::Invariants => state.invariants = next,
                 }
-                if next != Style::Empty { self.styles.insert(token, next); }
             }
             semantic => {
                 let semantics = self.semantics.entry(token).or_default();
@@ -399,24 +440,95 @@ impl Properties {
                 else { dom.set_semantics(node, Some(semantics)); }
             }
         }
-        None
+        Ok(None)
+    }
+    pub(crate) fn dirty_tokens(&self) -> Vec<u64> { self.class_dirty.iter().copied().collect() }
+
+    pub(crate) fn finish_turn(&mut self, dom: &DomHandle, targets: Vec<(u64, NodeId)>) -> Vec<crate::StyleDiagnostic> {
+        let mut diagnostics = Vec::new();
+        for (token, native) in targets {
+            self.class_dirty.remove(&token);
+            let Some(state) = self.classes.get_mut(&token) else { continue; };
+            let conflict = state.canonical.is_some() && state.alias.is_some();
+            if !conflict { state.applied = state.canonical.clone().or_else(|| state.alias.clone()); }
+            let mut classes = Vec::new();
+            for value in [state.internal.as_deref(), state.applied.as_deref()].into_iter().flatten() {
+                for class in value.split_ascii_whitespace().map(ClassName::new) {
+                    if !classes.contains(&class) { classes.push(class); }
+                }
+            }
+            let fingerprint = classes.iter().map(|class| class.as_str()).collect::<Vec<_>>().join(" ");
+            if state.native.as_deref() != Some(fingerprint.as_str()) {
+                dom.set_classes(native, &classes);
+                state.native = Some(fingerprint);
+            }
+            if conflict {
+                diagnostics.push(crate::StyleDiagnostic { code: "CLASS_ALIAS_CONFLICT", message: "class and className both contribute application tokens".into() });
+            }
+        }
+        diagnostics
     }
 }
-fn set_style(dom: &DomHandle, node: NodeId, name: &str, value: Option<&str>) {
-    if let Some(property) = CustomPropertyName::parse(name) { dom.set_custom_property(node, property, value); }
-    else { dom.set_style_property(node, name, value); }
+fn commit_style<'a>(dom: &DomHandle, node: NodeId, defaults: &Style, application: &Style, direct: impl Iterator<Item = (&'a str, Option<&'a str>)>, invariants: &Style) -> Result<(), crate::StyleDiagnostic> {
+    use zgui::view::dom::InlineStyle;
+    fn append<'a>(entries: &mut Vec<InlineStyle<'a>>, style: &'a Style, important: bool) {
+        match style {
+            Style::Empty => {}
+            Style::Text(text) => entries.push(InlineStyle::Text(text)),
+            Style::Object(properties) => {
+                for (key, value) in properties {
+                    if let Some(value) = value { entries.push(InlineStyle::Declaration(key, value, important)); }
+                }
+            }
+        }
+    }
+    let count = |style: &Style| match style { Style::Empty => 0, Style::Text(_) => 1, Style::Object(properties) => properties.len() };
+    let mut entries = Vec::with_capacity(count(defaults) + count(application) + count(invariants) + direct.size_hint().1.unwrap_or(0));
+    append(&mut entries, defaults, false);
+    append(&mut entries, application, false);
+    for (key, value) in direct {
+        if let Some(value) = value { entries.push(InlineStyle::Declaration(key, value, false)); }
+    }
+    append(&mut entries, invariants, true);
+    dom.replace_inline_style(node, &entries)
+        .map_err(|message| crate::StyleDiagnostic { code: "STYLE_PARSE_INVALID", message })
 }
 
-// Native Servo CSS names, deliberately narrower than the complete upstream CSS
-// parser. Numeric unit coercion and browser-style camelCase names are not supported.
-const STYLE_PROPERTIES: &[&str] = &[
-    "display", "position", "inset", "top", "right", "bottom", "left", "visibility",
-    "flex-direction", "flex-wrap", "flex-grow", "flex-shrink", "flex-basis",
-    "align-items", "justify-content", "gap", "row-gap", "column-gap",
-    "padding", "padding-top", "padding-right", "padding-bottom", "padding-left",
-    "margin", "margin-top", "margin-right", "margin-bottom", "margin-left",
-    "width", "height", "min-width", "min-height", "max-width", "max-height",
-    "color", "background", "background-color", "border", "border-color",
-    "border-width", "border-radius", "font-family", "font-size", "font-weight",
-    "line-height", "opacity", "overflow",
+fn normalize_name<'js>(ctx: &Ctx<'js>, key: String) -> rquickjs::Result<String> {
+    if key.starts_with("--") {
+        return CustomPropertyName::parse(&key).map(|_| key.clone())
+            .ok_or_else(|| Exception::throw_type(ctx, "STYLE_NAME_INVALID: invalid custom property"));
+    }
+    if let Some((_, native)) = CAMEL_PROPERTIES.iter().find(|(alias, _)| *alias == key) {
+        return Ok((*native).into());
+    }
+    if !key.is_empty() && key.bytes().all(|byte| byte.is_ascii_lowercase() || byte == b'-') { return Ok(key); }
+    Err(Exception::throw_type(ctx, &format!("STYLE_NAME_INVALID: unsupported native style name {key}")))
+}
+
+fn style_value<'js>(ctx: &Ctx<'js>, key: &str, value: Value<'js>) -> rquickjs::Result<Option<String>> {
+    if value.is_null() || value.is_undefined() { return Ok(None); }
+    if let Some(number) = value.as_number() {
+        if number.is_finite() && (key.starts_with("--") || UNITLESS.contains(&key)) { return Ok(Some(number.to_string())); }
+        return Err(Exception::throw_type(ctx, &format!("STYLE_VALUE_INVALID: numeric {key} requires a finite custom or unitless value")));
+    }
+    if !value.is_string() { return Err(Exception::throw_type(ctx, "STYLE_VALUE_INVALID: style values must be strings, finite unitless numbers, or empty")); }
+    Ok(Some(String::from_js(ctx, value)?))
+}
+
+const UNITLESS: &[&str] = &["opacity", "flex-grow", "flex-shrink", "font-weight", "line-height", "z-index", "order", "animation-iteration-count"];
+
+const CAMEL_PROPERTIES: &[(&str, &str)] = &[
+    ("flexDirection", "flex-direction"), ("flexWrap", "flex-wrap"), ("flexGrow", "flex-grow"), ("flexShrink", "flex-shrink"), ("flexBasis", "flex-basis"),
+    ("alignItems", "align-items"), ("justifyContent", "justify-content"), ("rowGap", "row-gap"), ("columnGap", "column-gap"),
+    ("paddingTop", "padding-top"), ("paddingRight", "padding-right"), ("paddingBottom", "padding-bottom"), ("paddingLeft", "padding-left"),
+    ("marginTop", "margin-top"), ("marginRight", "margin-right"), ("marginBottom", "margin-bottom"), ("marginLeft", "margin-left"),
+    ("minWidth", "min-width"), ("minHeight", "min-height"), ("maxWidth", "max-width"), ("maxHeight", "max-height"),
+    ("backgroundColor", "background-color"), ("borderColor", "border-color"), ("borderWidth", "border-width"), ("borderRadius", "border-radius"),
+    ("fontFamily", "font-family"), ("fontSize", "font-size"), ("fontWeight", "font-weight"), ("lineHeight", "line-height"),
+    ("zIndex", "z-index"), ("transformOrigin", "transform-origin"),
+    ("animationName", "animation-name"), ("animationDuration", "animation-duration"), ("animationDelay", "animation-delay"),
+    ("animationTimingFunction", "animation-timing-function"), ("animationIterationCount", "animation-iteration-count"),
+    ("animationFillMode", "animation-fill-mode"), ("animationDirection", "animation-direction"), ("animationPlayState", "animation-play-state"),
+    ("transitionProperty", "transition-property"), ("transitionDuration", "transition-duration"), ("transitionDelay", "transition-delay"), ("transitionTimingFunction", "transition-timing-function"),
 ];

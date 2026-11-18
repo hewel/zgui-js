@@ -72,7 +72,7 @@ export function hoverTrigger(config: {
     { get "data-state"() { return state?.open() ? "open" : "closed"; } },
     rest,
     {
-      get class() { return classes(config.class, rest.class); },
+      get __zguiClass() { return classes(config.class); },
       ref(node: NativeNode) { state?.trigger.ref(node); if (typeof own.ref === "function") own.ref(node); },
       onPointerEnter(event: NativePointerBoundaryEvent) { if (callHandler(event, own.onPointerEnter)) intent?.enter(); },
       onPointerLeave(event: NativePointerBoundaryEvent) { if (callHandler(event, own.onPointerLeave)) intent?.leave(); },

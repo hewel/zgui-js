@@ -1,7 +1,7 @@
-import { createEffect, createMemo, createSignal } from "#solid";
-import { createElement, spread } from "../renderer/index.js";
+import { createEffect, createMemo, createSignal, splitProps } from "#solid";
+import { createElement, mergeProps, spread } from "../renderer/index.js";
 import { observeGeometry } from "../nodes.js";
-import type { NativeChild, NativeNode, NativePoint, NativeSize, NativeStyle, NativeViewport, NativeWindowRect } from "../types.js";
+import type { NativeElementProps, NativeNode, NativePoint, NativeSize, NativeStyle, NativeViewport, NativeWindowRect } from "../types.js";
 import { slot } from "./shared.js";
 
 export type PopperSide = "top" | "right" | "bottom" | "left";
@@ -20,12 +20,10 @@ export interface PopperSolution {
   available: NativeSize;
   overflow: number;
 }
-export interface PopperProps extends PopperOptions {
+export interface PopperProps extends PopperOptions, NativeElementProps {
   anchor: NativeNode | null;
   active?: boolean;
-  class?: string;
   ref?: (node: NativeNode) => void;
-  children?: NativeChild;
 }
 const opposite: Record<PopperSide, PopperSide> = { top: "bottom", right: "left", bottom: "top", left: "right" };
 const vertical = (side: PopperSide) => side === "top" || side === "bottom";
@@ -77,6 +75,7 @@ export function solvePopper(anchor: NativeWindowRect, floating: NativeSize, view
 
 export function Popper(props: PopperProps): NativeNode {
   const node = createElement("box");
+  const [, rest] = splitProps(props, ["anchor", "active", "placement", "offset", "padding", "flip", "shift", "ref", "children"]);
   const [anchor, setAnchor] = createSignal<NativeWindowRect | null>(null);
   const [floating, setFloating] = createSignal<NativeSize | null>(null);
   const [viewport, setViewport] = createSignal<NativeViewport | null>(null);
@@ -99,11 +98,10 @@ export function Popper(props: PopperProps): NativeNode {
     if (!a || !f || !v || (f.width <= 0 && f.height <= 0)) return null;
     return { ...solvePopper(a, f, v, props), anchor: a, floating: f, scale: v.scale };
   });
-  spread(node, {
-    get class() { return props.class; },
+  spread(node, mergeProps(rest, {
     get "data-side"() { return placed()?.placement.side ?? null; },
     get "data-align"() { return placed()?.placement.align ?? null; },
-    get style(): NativeStyle {
+    get __zguiInvariantStyle(): Exclude<NativeStyle, string> {
       const a = anchor(), v = viewport(), p = placed();
       const anchorWidth = active() && a && v ? px(snap(a.width, v.scale)) : undefined;
       if (!p) {
@@ -127,7 +125,7 @@ export function Popper(props: PopperProps): NativeNode {
         "--zui-popper-anchor-y": px(snap(anchorY, p.scale)),
       };
     },
-  }, true);
+  }), true);
   props.ref?.(node);
   slot(node, () => props.children);
   return node;

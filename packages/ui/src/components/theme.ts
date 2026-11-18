@@ -1,7 +1,7 @@
 import { createContext, createUniqueId, onCleanup, splitProps, useContext } from "#solid";
 import { createElement, effect, insertNode, setProp, spread } from "../renderer/index.js";
-import { installStylesheet, removeStylesheet } from "../nodes.js";
-import type { Accessor, NativeChild, NativeElementProps, NativeNode } from "../types.js";
+import { getReducedMotion, installStylesheet, removeStylesheet } from "../nodes.js";
+import type { Accessor, NativeChild, NativeNode } from "../types.js";
 import { provide, slot } from "./shared.js";
 import { themes, themeTokens } from "./generated/themes.js";
 
@@ -55,7 +55,10 @@ function overrideDeclarations(theme: Theme): string {
 }
 
 function rule(selector: string, scheme: "light" | "dark", theme: Theme): string {
-  const declarations = `color-scheme: ${scheme}; ${presetDeclarations(theme, scheme)} ${overrideDeclarations(theme)}`;
+  const motion = getReducedMotion()
+    ? themeTokens.filter(name => name.startsWith("--zui-motion-duration-")).map(name => `${name}: 0ms;`).join(" ")
+    : "";
+  const declarations = `color-scheme: ${scheme}; ${presetDeclarations(theme, scheme)} ${overrideDeclarations(theme)} ${motion}`;
   return `${selector} { ${declarations} }`;
 }
 
@@ -77,8 +80,8 @@ export function portalThemeScope(theme: ThemeContext, child: NativeNode): Native
   const id = `zui-theme-${createUniqueId().replace(/[^a-zA-Z0-9_-]/g, "-")}`;
   const sheetName = `${ThemeSheet}-${id}`;
   const wrapper: NativeNode = createElement("box");
-  setProp(wrapper, "class", id);
-  setProp(wrapper, "style", { display: "contents" });
+  setProp(wrapper, "__zguiClass", id);
+  setProp(wrapper, "__zguiInvariantStyle", { display: "contents" });
   effect(() => {
     const css = `@layer zgui.tokens { ${themeSheet(`.${id}`, theme.light(), theme.dark(), theme.scheme())} }`;
     installStylesheet(sheetName, css);
@@ -100,8 +103,7 @@ export function ThemeProvider(props: ThemeProviderProps = {}): NativeChild {
     dark: () => own.dark ?? {},
   };
   const wrapper: NativeNode = createElement("box");
-  const wrapperProps: NativeElementProps = { class: id, style: { display: "contents" } };
-  spread(wrapper, wrapperProps, true);
+  spread(wrapper, { __zguiClass: id, __zguiInvariantStyle: { display: "contents" } }, true);
   effect(() => {
     const css = `@layer zgui.tokens { ${themeSheet(selector, context.light(), context.dark(), context.scheme())} }`;
     installStylesheet(sheetName, css);

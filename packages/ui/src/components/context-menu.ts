@@ -81,7 +81,7 @@ export function ContextMenuTrigger(props: ContextMenuTriggerProps = {}): NativeN
     get ariaControls() { return state?.content.node() ?? null; },
     get "data-state"() { return state?.open() ? "open" : "closed"; },
   }, rest, {
-    get class() { return classes(sheet.className, "zui-context-menu__area", rest.class); },
+    get __zguiClass() { return classes(sheet.className, "zui-context-menu__area"); },
     onContextMenu(event: NativeContextMenuEvent) {
       if (!callHandler(event, own.onContextMenu) || !alive || rest.disabled) return;
       event.preventDefault();

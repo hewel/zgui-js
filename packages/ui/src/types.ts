@@ -77,6 +77,8 @@ export interface NativeElementProps extends NativeEventProps {
   children?: NativeChild;
   ref?: NativeRef;
   class?: string | null;
+  /** StyleX alias of class. Supplying tokens through both aliases is a diagnostic. */
+  className?: string | null;
   id?: string | null;
   /** Diagnostic identity, not a native/CSS attribute. At most 512 UTF-8 bytes; null clears. */
   testId?: string | null;

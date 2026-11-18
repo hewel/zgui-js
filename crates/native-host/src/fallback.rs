@@ -171,6 +171,8 @@ mod tests {
                 root: self.root,
                 dom: self.dom.clone(),
                 host: HostHandle::from_rc(self.host.clone()),
+                fonts: zgui::app::Fonts::shipped_only(),
+                root_anchor: Rc::new(Cell::new(self.root)),
             }
         }
 

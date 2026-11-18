@@ -23,12 +23,9 @@ export function ButtonGroup(props: ButtonGroupProps = {}): NativeNode {
     },
     rest,
     {
-      get class() {
-        return classes(
-          sheet.className, "zui-button-group",
-          (own.orientation ?? "horizontal") === "vertical" && "zui-button-group--vertical",
-          rest.class,
-        );
+      get __zguiClass() {
+        return classes(sheet.className, "zui-button-group",
+        (own.orientation ?? "horizontal") === "vertical" && "zui-button-group--vertical", );
       },
     },
   ));
@@ -43,7 +40,7 @@ export function ButtonGroupSeparator(props: ButtonGroupSeparatorProps = {}): Nat
   spread(node, mergeProps(
     { role: "genericContainer" as const, ariaHidden: true },
     props,
-    { get class() { return classes("zui-button-group__separator", props.class); } },
+    { get __zguiClass() { return classes("zui-button-group__separator"); } },
   ), true);
   return node;
 }

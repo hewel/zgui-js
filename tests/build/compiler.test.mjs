@@ -11,6 +11,7 @@ import { validateModule } from "../../packages/build/src/validate.mjs";
 import { rebuildQueue, watchApplication } from "../../packages/build/src/watch.mjs";
 import { typecheckProject, typecheckProjectAsync } from "../../packages/build/src/typecheck.mjs";
 import { compilerOptions, outputOptions, compilationResult } from "../../packages/build/src/compiler.mjs";
+import { validateStylesheet } from "../../packages/build/src/stylex.mjs";
 
 const require = createRequire(new URL("../../packages/build/package.json", import.meta.url));
 const { TraceMap, originalPositionFor } = require("@jridgewell/trace-mapping");
@@ -77,6 +78,10 @@ test("AST validation distinguishes nested async work from top-level execution", 
   assert.throws(() => validateModule(`${entry}\nexport * from 'external';`, { bundled: true }), /external re-export/);
   assert.throws(() => validateModule(`${entry}\nconsole.log(document);`, { bundled: true }), /Unsupported runtime global: document/);
   assert.throws(() => validateModule(`${entry}\nrequire('fs');`, { bundled: true }), /Runtime require/);
+  validateModule(`${entry}\nfunction merge() { return (() => arguments[0])(); }`, { bundled: true });
+  assert.throws(() => validateModule(`${entry}\nconst args = arguments;`, { bundled: true }), /Unsupported runtime global: arguments/);
+  assert.throws(() => validateModule(`${entry}\nconst args = () => arguments;`, { bundled: true }), /Unsupported runtime global: arguments/);
+  assert.throws(() => validateModule(`${entry}\nclass C { [arguments[0]]() {} }`, { bundled: true }), /Unsupported runtime global: arguments/);
 });
 
 test("host exports must be stable version 1 and a synchronous mount function", () => {
@@ -90,6 +95,12 @@ test("host exports must be stable version 1 and a synchronous mount function", (
   ]) assert.throws(() => validateModule(code, { bundled: true, entry: true }), /Entry must export/);
 });
 
+test("handwritten class selectors do not trigger browser-html direction rejection", () => {
+  validateStylesheet(".html:not([dir]) { color: red; } .other-html[dir] { color: blue; }", "base.css");
+  assert.throws(() => validateStylesheet("html:not([dir='rtl']) .x { color: red }", "app.css"), /directional html/);
+  assert.throws(() => validateStylesheet("@media (min-width: 1px) {html[dir='rtl'] .x { color: red }}", "app.css"), /directional html/);
+});
+
 test("real TSX bundles have one reactive runtime, composed maps, resources, and verifiable identity", async t => {
   const directory = await fixture(t);
   await writeFile(path.join(directory, "src/app.css"), "text { color: #123456; }\n");
@@ -97,15 +108,22 @@ test("real TSX bundles have one reactive runtime, composed maps, resources, and 
   await writeFile(path.join(directory, "assets/icons/mark.bin"), Buffer.from([0, 255, 1, 42]));
   const { dist, manifest } = await buildApplication("fixture", { appDirectory: directory });
   assert.equal(manifest.hostApiVersion, 1);
-  assert.deepEqual(manifest.styles, ["app.css"]);
+  assert.equal(manifest.schemaVersion, 2);
+  assert.deepEqual(manifest.styles, ["base.css", "app.css"]);
   assert.deepEqual(manifest.assets, ["assets/icons/mark.bin"]);
   const root = await realpath(dist);
-  const names = [manifest.entry, manifest.sourceMap, ...manifest.styles, ...manifest.assets].sort();
+  const names = Object.keys(manifest.artifactDigests).sort();
   const files = new Map(await Promise.all(names.map(async name => [name, await readFile(path.join(root, name))])));
-  // Recompute independently, as the Rust loader does, rather than trusting the compiler helper.
-  const digest = createHash("sha256");
-  for (const name of names) digest.update(name).update("\0").update(files.get(name)).update("\0");
-  assert.equal(manifest.buildId, `sha256:${digest.digest("hex")}`);
+  for (const name of names) {
+    assert.equal(manifest.artifactDigests[name], `sha256:${createHash("sha256").update(files.get(name)).digest("hex")}`);
+  }
+  // Serialize independently, with recursively sorted keys and stable array order.
+  const sort = value => Array.isArray(value) ? value.map(sort) : value && typeof value === "object"
+    ? Object.fromEntries(Object.keys(value).sort().map(key => [key, sort(value[key])])) : value;
+  const { buildId, ...identity } = manifest;
+  assert.equal(buildId, `sha256:${createHash("sha256").update(JSON.stringify(sort(identity))).digest("hex")}`);
+  assert.ok(names.includes("style-origins.json"));
+  assert.ok(names.includes("build-info.json"));
   const module = await import(pathToFileURL(path.join(root, manifest.entry)));
   assert.equal(module.hostApiVersion, 1);
   assert.equal(typeof module.mount, "function");
@@ -129,12 +147,241 @@ test("real TSX bundles have one reactive runtime, composed maps, resources, and 
   assert.deepEqual(info.graph.chunks[0].dynamicImports, []);
   assert.match(info.engine.revision, /^[a-f0-9]{40}$/);
   assert.match(info.lockfile.digest, /^sha256:[a-f0-9]{64}$/);
-  assert.equal(contentDigest(new Map([...files, ["build-info.json", Buffer.from("not a resource")]]), manifest), manifest.buildId);
+  assert.equal(contentDigest(files, manifest), manifest.buildId);
+  assert.throws(() => contentDigest(new Map([...files, ["build-info.json", Buffer.from("tampered")]]), manifest), /Artifact digest mismatch/);
   const firstTarget = await readlink(dist);
   const second = await buildApplication("fixture", { appDirectory: directory });
   assert.equal(second.manifest.buildId, manifest.buildId);
   assert.notEqual(await readlink(dist), firstTarget);
   assert.equal(await readFile(path.join(root, "app.mjs"), "utf8"), code, "old reader remains pinned to a complete generation");
+});
+
+test("StyleX compiles static TSX and imported token modules before tree shaking", async t => {
+  const directory = await fixture(t);
+  await writeFile(path.join(directory, "src/palette.stylex.ts"), `import * as stylex from "@stylexjs/stylex";
+export const palette = stylex.defineVars({ foreground: "#135790" });`);
+  await writeFile(path.join(directory, "src/extra.ts"), `import * as stylex from "@stylexjs/stylex";
+export const unused = stylex.create({ root: { opacity: 0.321 } });`);
+  await writeFile(path.join(directory, "src/main.tsx"), `import * as stylex from "@stylexjs/stylex";
+import { palette } from "./palette.stylex";
+import "./extra";
+const styles = stylex.create({ root: { color: palette.foreground, fontSize: 23 } });
+${validEntry.replace("<text>", "<text {...stylex.props(styles.root)}>")}`);
+  const { dist, manifest } = await buildApplication("fixture", { appDirectory: directory });
+  assert.equal(manifest.schemaVersion, 2);
+  assert.deepEqual(manifest.styles, ["app.css"]);
+  const css = await readFile(path.join(dist, "app.css"), "utf8");
+  assert.match(css, /:root/);
+  assert.match(css, /#135790/);
+  assert.match(css, /font-size:23px/);
+  assert.match(css, /opacity:0?\.321/);
+  assert.doesNotMatch(css, /@layer/);
+  const code = await readFile(path.join(dist, "app.mjs"), "utf8");
+  assert.doesNotMatch(code, /stylex\.create\(/);
+  const origins = JSON.parse(await readFile(path.join(dist, "style-origins.json"), "utf8"));
+  const modules = new Set(origins.rules.flatMap(rule => rule.origins.map(origin => origin.module)));
+  assert.ok(modules.has("app/src/main.tsx"));
+  assert.ok(modules.has("app/src/palette.stylex.ts"));
+  assert.ok(modules.has("app/src/extra.ts"));
+  for (const rule of origins.rules) {
+    assert.ok(rule.generated.end.offset > rule.generated.start.offset);
+    assert.ok(css.slice(rule.generated.start.offset, rule.generated.end.offset).includes("{"));
+    for (const origin of rule.origins) {
+      assert.equal(origin.original, undefined, "module metadata does not prove an exact original position");
+      assert.ok(!path.isAbsolute(origin.module));
+    }
+  }
+});
+
+test("reachable dependency sources contribute StyleX rules even when their JavaScript is tree shaken", async t => {
+  const directory = await fixture(t);
+  const dependency = path.join(directory, "node_modules/stylex-fixture");
+  await mkdir(dependency, { recursive: true });
+  await writeFile(path.join(dependency, "package.json"), JSON.stringify({
+    name: "stylex-fixture", type: "module", sideEffects: false, exports: "./index.ts",
+  }));
+  await writeFile(path.join(dependency, "index.ts"), `import * as stylex from "@stylexjs/stylex";
+export const styles = stylex.create({ root: { opacity: 0.246 } });`);
+  const source = path.join(directory, "src/main.tsx");
+  await writeFile(source, `import "stylex-fixture";\n${validEntry}`);
+  const result = await bundle(source, { appDirectory: directory });
+  assert.match(result.files.get("app.css").toString(), /opacity:0?\.246/);
+  const origins = JSON.parse(result.files.get("style-origins.json"));
+  assert.ok(origins.rules.some(rule => rule.origins.some(origin => origin.module === "packages/stylex-fixture/index.ts")));
+  assert.ok(!result.graph.chunks[0].modules.includes(path.join(dependency, "index.ts")));
+});
+
+test("StyleX dynamic values, themes and keyframes retain the official runtime merge contract", async t => {
+  const directory = await fixture(t);
+  await writeFile(path.join(directory, "src/colors.stylex.ts"), `import * as stylex from "@stylexjs/stylex";
+export const colors = stylex.defineVars({ foreground: "red" });`);
+  await writeFile(path.join(directory, "src/main.tsx"), `import * as stylex from "@stylexjs/stylex";
+import { colors } from "./colors.stylex";
+const animation = stylex.keyframes({ from: { opacity: 0 }, to: { opacity: 1 } });
+const theme = stylex.createTheme(colors, { foreground: "blue" });
+const styles = stylex.create({
+  base: { color: colors.foreground, animationName: animation, animationDuration: "var(--motion-duration)" },
+  dynamic: (width: number) => ({ width }),
+});
+export function inspect(width: number) { return stylex.props(styles.base, styles.dynamic(width), theme); }
+${validEntry}`);
+  const result = await bundle(path.join(directory, "src/main.tsx"), { appDirectory: directory });
+  await writeFile(path.join(directory, "app.mjs"), result.files.get("app.mjs"));
+  const module = await import(pathToFileURL(path.join(directory, "app.mjs")));
+  const props = module.inspect(37);
+  assert.equal(typeof props.className, "string");
+  assert.ok(Object.values(props.style).includes("37px"));
+  const css = result.files.get("app.css").toString();
+  assert.match(css, /@keyframes/);
+  assert.match(css, /animation-name:/);
+  assert.match(css, /animation-duration:var\(--motion-duration\)/);
+  assert.match(css, /\.([a-z0-9]+)\.\1[^{}]*:root/);
+  assert.match(css, /:not\(#\\#\)/);
+  assert.doesNotMatch(css, /@layer|html\[/);
+  assert.match(css, /@property --[^{}]+\{\s*syntax: "\*"; inherits: false;/);
+  assert.equal(result.styleSystem.name, "stylex");
+});
+
+test("native compilation rejects unsupported StyleX APIs and host imports without banning harmless text", async t => {
+  const directory = await fixture(t);
+  const source = path.join(directory, "src/main.tsx");
+  const cases = [
+    ['import "@stylexjs/stylex/lib/stylex-inject";', /Unavailable native StyleX host import/],
+    ['import { defineConsts } from "@stylexjs/stylex"; const x = defineConsts({ x: 1 });', /Unsupported native StyleX API/],
+    ['import * as sx from "@stylexjs/stylex"; const x = sx.types.color("red");', /Unsupported native StyleX API/],
+    ['import * as sx from "@stylexjs/stylex"; const call = sx.create; const x = call({root:{color:"red"}});', /Untransformed StyleX compile-time API/],
+    ['import * as sx from "@stylexjs/stylex"; export const x = sx.create({root:{backgroundImage:"url(image.png)"}});', /Unsupported native CSS/],
+  ];
+  for (const [prefix, pattern] of cases) {
+    await writeFile(source, `${prefix}\n${validEntry}`);
+    await assert.rejects(bundle(source, { appDirectory: directory }), pattern);
+  }
+  await writeFile(source, `export const message = "document stylex.create() stylex-inject";\n${validEntry}`);
+  assert.ok((await bundle(source, { appDirectory: directory })).files.has("app.css"));
+});
+
+test("missing Babel maps and missing StyleX output cannot publish a candidate", async t => {
+  const directory = await fixture(t);
+  const source = path.join(directory, "src/main.tsx");
+  const { rolldown } = await import(require.resolve("rolldown"));
+  const compiler = await rolldown(compilerOptions(source, {
+    root: workspaceRoot, appDirectory: directory, babelTransform: async () => ({ code: entry, map: null }),
+  }));
+  try { await assert.rejects(compiler.generate(outputOptions()), /no JavaScript or composed source map/); }
+  finally { await compiler.close(); }
+  const result = await bundle(source, { appDirectory: directory });
+  assert.throws(() => compilationResult([{
+    type: "chunk", fileName: "app.mjs", code: result.files.get("app.mjs").toString(),
+    map: { toString: () => result.files.get("app.mjs.map").toString() },
+    moduleIds: result.graph.modules, imports: [], dynamicImports: [], exports: ["hostApiVersion", "mount"],
+  }], result.graph.modules), /Missing StyleX stylesheet or provenance/);
+});
+
+test("manifest v2 fonts and build identity are reproducible across application directories", async t => {
+  const first = await fixture(t);
+  const second = await fixture(t);
+  const source = `import * as stylex from "@stylexjs/stylex";
+const styles = stylex.create({ root: { fontFamily: "Fixture Font", color: "#2468ac" } });
+${validEntry.replace("<text>", "<text {...stylex.props(styles.root)}>")}`;
+  for (const directory of [first, second]) {
+    await mkdir(path.join(directory, "assets"));
+    await writeFile(path.join(directory, "assets/font.ttf"), Buffer.from([0, 1, 2, 3]));
+    await writeFile(path.join(directory, "package.json"), JSON.stringify({
+      name: "reproducible-fixture", type: "module", zgui: { fonts: [{ family: "Fixture Font", path: "assets/font.ttf" }] },
+    }));
+    await writeFile(path.join(directory, "src/main.tsx"), source);
+  }
+  const a = await buildApplication("fixture", { appDirectory: first });
+  const b = await buildApplication("fixture", { appDirectory: second });
+  assert.deepEqual(a.manifest, b.manifest);
+  assert.deepEqual(a.manifest.fonts, [{ family: "Fixture Font", path: "assets/font.ttf" }]);
+  assert.match(a.manifest.styleSystem.configDigest, /^sha256:[a-f0-9]{64}$/);
+  const descriptor = JSON.parse(await readFile(path.join(workspaceRoot, "schemas/stylex-profile.json"), "utf8"));
+  const sort = value => Array.isArray(value) ? value.map(sort) : value && typeof value === "object"
+    ? Object.fromEntries(Object.keys(value).sort().map(key => [key, sort(value[key])])) : value;
+  const expectedProfileDigest = `sha256:${createHash("sha256").update(JSON.stringify(sort(descriptor))).digest("hex")}`;
+  assert.equal(a.manifest.styleSystem.nativeProfileDigest, expectedProfileDigest);
+  assert.notEqual(a.manifest.styleSystem.nativeProfileDigest, a.manifest.styleSystem.configDigest);
+  for (const name of ["build-info.json", "style-origins.json"]) {
+    const metadata = JSON.parse(await readFile(path.join(a.dist, name), "utf8"));
+    assert.deepEqual(metadata.styleSystem, a.manifest.styleSystem);
+  }
+  for (const name of ["build-info.json", "style-origins.json", "app.mjs.map"]) {
+    const bytes = await readFile(path.join(a.dist, name), "utf8");
+    assert.ok(!bytes.includes(first));
+    assert.ok(!bytes.includes(workspaceRoot));
+  }
+  const diagnostic = await buildApplication("fixture", { appDirectory: first, stylexDiagnostics: true });
+  assert.notEqual(diagnostic.manifest.styleSystem.configDigest, a.manifest.styleSystem.configDigest);
+  assert.equal(diagnostic.manifest.styleSystem.nativeProfileDigest, expectedProfileDigest);
+  assert.notEqual(diagnostic.manifest.buildId, a.manifest.buildId);
+  assert.match(await readFile(path.join(diagnostic.dist, "app.mjs"), "utf8"), /data-style-src/);
+  await writeFile(path.join(first, "package.json"), JSON.stringify({ zgui: { fonts: [{ family: "Missing", path: "assets/missing.ttf" }] } }));
+  const previous = await readlink(a.dist);
+  await assert.rejects(buildApplication("fixture", { appDirectory: first }), /Font path must be a declared asset/);
+  assert.equal(await readlink(a.dist), previous);
+});
+
+test("native profile identity follows canonical workspace descriptor contents independently of compiler diagnostics", async t => {
+  const directory = await fixture(t);
+  const root = path.join(directory, "workspace");
+  const descriptorPath = path.join(root, "schemas/stylex-profile.json");
+  await mkdir(path.dirname(descriptorPath), { recursive: true });
+  const descriptor = JSON.parse(await readFile(path.join(workspaceRoot, "schemas/stylex-profile.json"), "utf8"));
+  await writeFile(descriptorPath, JSON.stringify(descriptor));
+  const source = path.join(directory, "src/main.tsx");
+  const first = await bundle(source, { root, appDirectory: directory });
+  await writeFile(descriptorPath, JSON.stringify(Object.fromEntries(Object.entries(descriptor).reverse()), null, 4) + "\n");
+  const reordered = await bundle(source, { root, appDirectory: directory });
+  assert.deepEqual(reordered.styleSystem, first.styleSystem);
+  descriptor.selectors.hover = !descriptor.selectors.hover;
+  await writeFile(descriptorPath, JSON.stringify(descriptor));
+  const changed = await bundle(source, { root, appDirectory: directory });
+  assert.notEqual(changed.styleSystem.nativeProfileDigest, first.styleSystem.nativeProfileDigest);
+  assert.notEqual(changed.styleSystem.configDigest, first.styleSystem.configDigest);
+  assert.deepEqual(changed.files.get("app.css"), first.files.get("app.css"));
+  await rm(descriptorPath);
+  await assert.rejects(bundle(source, { root, appDirectory: directory }), /ENOENT/);
+});
+
+test("StyleX watch replaces changed rules and prunes detached and deleted modules", { timeout: 30000 }, async t => {
+  const directory = await fixture(t);
+  const dependency = path.join(directory, "src/extra.ts");
+  const main = path.join(directory, "src/main.tsx");
+  const extra = opacity => `import * as stylex from "@stylexjs/stylex"; export const styles = stylex.create({ root: { opacity: ${opacity} } });`;
+  const imported = `import "./extra";\n${validEntry}`;
+  await writeFile(dependency, extra(0.123));
+  await writeFile(main, imported);
+  let next = Promise.withResolvers();
+  const take = async () => {
+    const result = await next.promise;
+    next = Promise.withResolvers();
+    return result;
+  };
+  const watcher = watchApplication("fixture", {
+    appDirectory: directory, onSuccess(result) { next.resolve(result); }, onError(error) { next.reject(error); },
+  });
+  const css = async result => readFile(path.join(result.dist, "app.css"), "utf8");
+  try {
+    assert.match(await css(await take()), /opacity:0?\.123/);
+    await writeFile(dependency, extra(0.456));
+    const changed = await css(await take());
+    assert.match(changed, /opacity:0?\.456/);
+    assert.doesNotMatch(changed, /opacity:0?\.123/);
+    await writeFile(main, validEntry);
+    const detached = await take();
+    assert.equal(await css(detached), "");
+    const origins = JSON.parse(await readFile(path.join(detached.dist, "style-origins.json"), "utf8"));
+    assert.deepEqual(origins.rules, []);
+    await rm(dependency);
+    await writeFile(main, validEntry.replace("Count:", "removed"));
+    assert.equal(await css(await take()), "");
+    await writeFile(dependency, extra(0.789));
+    await writeFile(main, imported);
+    let added;
+    do { added = await css(await take()); } while (!/opacity:0?\.789/.test(added));
+    assert.doesNotMatch(added, /opacity:0?\.456/);
+  } finally { await watcher.close(); }
 });
 
 test("native services bundle lazily with one Solid runtime and declared text assets", async t => {
@@ -311,6 +558,24 @@ test("development watcher surfaces status publication failure instead of reporti
   } finally { await watcher.close(); }
 });
 
+test("native acceptance status files do not trigger another publication", { timeout: 30000 }, async t => {
+  const directory = await fixture(t);
+  const initial = deferred();
+  let successes = 0;
+  const watcher = watchApplication("fixture", {
+    appDirectory: directory,
+    onSuccess() { successes++; initial.resolve(); },
+    onError(error) { throw error; },
+  });
+  try {
+    await initial.promise;
+    await writeFile(path.join(directory, ".zgui-native-status.json"), "{}\n");
+    await writeFile(path.join(directory, ".zgui-native-status.json.123.tmp"), "{}\n");
+    await new Promise(resolve => setTimeout(resolve, 300));
+    assert.equal(successes, 1);
+  } finally { await watcher.close(); }
+});
+
 test("persistent compiler caches real Babel transforms, prunes modules, and recovers after syntax errors", { timeout: 30000 }, async t => {
   const directory = await fixture(t);
   const source = path.join(directory, "src/main.tsx");
@@ -411,8 +676,9 @@ test("development watcher publishes added resources and external dependency chan
     assert.equal(await readFile(path.join(resources.dist, "assets/new.txt"), "utf8"), "new resource");
     await writeFile(path.join(directory, "src/app.css"), "text { color: red; }");
     let styled;
-    do { styled = await take(); } while (!styled.manifest.styles.includes("app.css"));
-    assert.equal(await readFile(path.join(styled.dist, "app.css"), "utf8"), "text { color: red; }");
+    do { styled = await take(); } while (!styled.manifest.styles.includes("base.css"));
+    assert.deepEqual(styled.manifest.styles, ["base.css", "app.css"]);
+    assert.equal(await readFile(path.join(styled.dist, "base.css"), "utf8"), "text { color: red; }");
   } finally { await watcher.close(); }
   await watcher.close();
 });

@@ -3,6 +3,7 @@ import { after, before, test } from "node:test";
 import {
   buildFixtureApp,
   createTempWorkspace,
+  readMetrics,
   readTree as tree,
   runScenario,
 } from "./harness.mjs";
@@ -33,6 +34,7 @@ function run(steps, name) {
     requiredCapabilities: ["pixels", "virtual-time", "selectors.test-id", "input.pointer", "input.keyboard", "input.text", "tree.inspect"],
     steps,
     assertEmptyResources: false,
+    maxJsStackBytes: 300_000,
   });
 }
 
@@ -45,6 +47,9 @@ const get = (snapshot, testId) => {
 
 test("disclosure scenario exercises animation, editing, keyboard, and lifecycle", async () => {
   const baseline = await run([capture("initial", 0)], "baseline");
+  const metrics = await readMetrics(baseline.out);
+  assert.equal(metrics.jsStackLimitBytes, 300_000);
+  assert.ok(metrics.maxJsEntryDurationUs < 25_000, `nested mount exceeds entry budget: ${metrics.maxJsEntryDurationUs}us`);
   const baselineTree = await tree(baseline.out, "initial");
   const disabledBounds = get(baselineTree, "acc-b").boundsLogical;
   assert.ok(disabledBounds && disabledBounds.width > 0 && disabledBounds.height > 0);

@@ -373,8 +373,12 @@ pub(crate) fn for_preview<H: AppHandler>(
     )
     .with_probe(Rc::new(ProbeAdapter(observer.0.clone())));
     let app = resources::configure(app, package);
+    let fonts = profile.fonts.clone();
     let native = app
-        .into_handler(move |cx| Box::new(View::build(Root(pending.clone()), cx)))
+        .into_handler(move |cx| {
+            zgui::reactive::provide_context(fonts.clone());
+            Box::new(View::build(Root(pending.clone()), cx))
+        })
         .map_err(preview_app_error)?;
     let host = build_host(native);
     Ok(Pipeline::from_harness(Harness::over(platform, host)))
@@ -587,7 +591,7 @@ impl ObserverInner {
             data.fault = Some(error);
             return;
         }
-        let resources = match resources::snapshot(window, &[]) {
+        let resources = match resources::snapshot(window, &[], Some(&session)) {
             Ok(resources) => resources,
             Err(error) => {
                 data.ledger.note_ignored_frame();
@@ -608,6 +612,11 @@ impl ObserverInner {
             presentation_id: state.presentation_id,
             configuration_id: state.configuration_id,
             presented_draw: state.presented_draw,
+            style_revision: observation.style_revision,
+            document_revision: observation.document_revision,
+            metadata_revision: session.bridge.metadata_revision(),
+            resource_revision: window.image_resource_revision(),
+            generation: session.generation,
         };
         let Some((stamp, presentation)) = data.ledger.record_outcome(&input) else {
             return;
@@ -619,6 +628,7 @@ impl ObserverInner {
             presentation_sequence: state.presentation_id,
             resource_revision: Some(resource_revision),
             surface_configuration: Some(surface_configuration),
+            style_revision: Some(observation.style_revision),
         };
         let snapshot =
             inspect::snapshot(window, &session, observation.ordinal, &data.semantics, &identity);
@@ -646,6 +656,7 @@ impl ObserverInner {
             metadata_revision: snapshot.metadata_revision,
             resource_revision: Some(resource_revision),
             surface_configuration: Some(surface_configuration),
+            style_revision: Some(observation.style_revision),
             validation_frame: stamp,
             pixel_presentation: presentation,
             layout_document_coherent: true,
@@ -675,6 +686,7 @@ impl ObserverInner {
             document_revision: observation.document_revision,
             metadata_revision: snapshot.metadata_revision,
             resource_revision,
+            style_revision: observation.style_revision,
             surface_configuration,
             configuration_id: state.configuration_id,
             presentation_id: state.presentation_id,
@@ -828,11 +840,13 @@ impl FrameObserver {
         let data = self.0.data.borrow();
         let capture_state = self.0.capture.state();
         let completed = window.completed_frame();
+        if window.has_pending_stylesheets() { return None; }
         let query = SettledQuery {
             generation: session.generation,
             document_revision: window.dom().revision(),
             metadata_revision: session.bridge.metadata_revision(),
             resource_revision: window.image_resource_revision(),
+            style_revision: window.style_revision(),
             configuration_id: capture_state.configuration_id,
             presentation_id: capture_state.presentation_id,
             presented_draw: capture_state.presented_draw,

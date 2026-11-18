@@ -46,6 +46,7 @@ pub enum Step {
     AssertService { id: String, check: ServiceCallCheck },
     SurfaceResize { id: String, surface: String, width: u32, height: u32 },
     SurfaceScale { id: String, surface: String, scale: f64 },
+    SurfaceColorScheme { id: String, surface: String, color_scheme: String },
     SurfaceRecreate { id: String, surface: String },
 }
 
@@ -59,7 +60,7 @@ impl Step {
             | Self::KeyPress { id, .. } | Self::TextCommit { id, .. }
             | Self::Assert { id, .. } | Self::AssertService { id, .. }
             | Self::ClockAdvance { id, .. } | Self::ServiceEmit { id, .. }
-            | Self::SurfaceResize { id, .. } | Self::SurfaceScale { id, .. } | Self::SurfaceRecreate { id, .. } => id,
+            | Self::SurfaceResize { id, .. } | Self::SurfaceScale { id, .. } | Self::SurfaceColorScheme { id, .. } | Self::SurfaceRecreate { id, .. } => id,
         }
     }
 
@@ -80,6 +81,7 @@ impl Step {
             Self::ServiceEmit { .. } => "service.emit",
             Self::SurfaceResize { .. } => "surface.resize",
             Self::SurfaceScale { .. } => "surface.scale",
+            Self::SurfaceColorScheme { .. } => "surface.colorScheme",
             Self::SurfaceRecreate { .. } => "surface.recreate",
         }
     }
@@ -255,6 +257,8 @@ enum StepInput {
     SurfaceResize(ResizeInput),
     #[serde(rename = "surface.scale")]
     SurfaceScale(ScaleInput),
+    #[serde(rename = "surface.colorScheme")]
+    SurfaceColorScheme(ColorSchemeInput),
     #[serde(rename = "surface.recreate")]
     SurfaceRecreate(RecreateInput),
     #[serde(rename = "wheel")]
@@ -396,6 +400,9 @@ struct ResizeInput { id:String,surface:String,width:u32,height:u32 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ScaleInput { id:String,surface:String,scale:f64 }
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ColorSchemeInput { id:String,surface:String,color_scheme:String }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RecreateInput { id:String,surface:String }
@@ -574,6 +581,12 @@ fn parse(bytes: &[u8], available: &[&str], virtual_profile: bool) -> Result<Scen
                 require(&mut requirements,"surface.scale");
                 Step::SurfaceScale{id:input.id,surface:input.surface,scale:input.scale}
             }
+            StepInput::SurfaceColorScheme(input)=>{
+                validate_surface(&input.surface)?;
+                if !matches!(input.color_scheme.as_str(), "light" | "dark") { return Err(invalid("colorScheme must be light or dark")); }
+                require(&mut requirements,"surface.color-scheme");
+                Step::SurfaceColorScheme{id:input.id,surface:input.surface,color_scheme:input.color_scheme}
+            }
             StepInput::SurfaceRecreate(input)=>{
                 validate_surface(&input.surface)?;
                 require(&mut requirements,"surface.recreate");
@@ -607,7 +620,7 @@ fn parse(bytes: &[u8], available: &[&str], virtual_profile: bool) -> Result<Scen
                     | StepInput::Wheel(_)
                     | StepInput::KeyPress(_) | StepInput::TextCommit(_)
                     | StepInput::Assert(_) | StepInput::ClockAdvance(_) | StepInput::ServiceEmit(_)
-                    | StepInput::SurfaceResize(_) | StepInput::SurfaceScale(_) | StepInput::SurfaceRecreate(_) => unreachable!(),
+                    | StepInput::SurfaceResize(_) | StepInput::SurfaceScale(_) | StepInput::SurfaceRecreate(_) | StepInput::SurfaceColorScheme(_) => unreachable!(),
                 };
                 return Err(unsupported_capability(format!("operation {operation} is unavailable")));
             }

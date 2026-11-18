@@ -151,7 +151,7 @@ export function overlayPortal(elevation: Elevation, build: () => NativeChild): N
   const body = (): NativeNode => {
     const box = createElement("box");
     setProp(box, "class", "zui-overlay-depth");
-    setProp(box, "--zui-overlay-depth", String(elevation.depth));
+    setProp(box, "__zguiInvariantStyle", { "--zui-overlay-depth": String(elevation.depth) });
     const built = untrack(build);
     if (Array.isArray(built)) {
       for (const item of built) if (item != null) insertNode(box, item as NativeNode);
@@ -177,7 +177,7 @@ function mountOverlay(state: OverlayState | undefined, props: DismissalContentPr
     "onAnimationEnd", "onAnimationCancel", "onTransitionEnd", "onTransitionCancel"]);
   const presence = createPresence(() => state?.open() ?? false);
   const elevation = raiseSurface(config.layer);
-  const holder = element("box", { style: { display: "none" } });
+  const holder = element("box", { __zguiInvariantStyle: { display: "none" } });
   slot(holder, Show({ get when() { return presence.mounted(); }, get children() {
     return overlayPortal(elevation, () => {
       const context = state!;
@@ -201,7 +201,7 @@ function mountOverlay(state: OverlayState | undefined, props: DismissalContentPr
         get ariaPopupFor() { return context.trigger.node(); },
         get "data-state"() { return presence.state(); },
       }, rest, {
-        get class() { return classes(config.surfaceClass === false ? null : "zui-surface", config.class, rest.class); },
+        get __zguiClass() { return classes(config.surfaceClass === false ? null : "zui-surface", config.class); },
         onAnimationEnd(event: NativeAnimationEvent) { own.onAnimationEnd?.(event); presence.onEnd(event); },
         onAnimationCancel(event: NativeAnimationEvent) { own.onAnimationCancel?.(event); presence.onEnd(event); },
         onTransitionEnd(event: NativeTransitionEvent) { own.onTransitionEnd?.(event); presence.onEnd(event); },
@@ -290,7 +290,7 @@ function overlayLabel(
   const [own, rest] = splitProps(props, ["ref"]);
   return element(tag, mergeProps(rest, {
     ref(node: NativeNode) { context?.[kind].ref(node); if (typeof own.ref === "function") own.ref(node); },
-    get class() { return classes(className, rest.class); },
+    get __zguiClass() { return classes(className); },
   }));
 }
 

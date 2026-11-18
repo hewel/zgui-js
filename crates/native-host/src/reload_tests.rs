@@ -91,13 +91,17 @@ impl ReloadGate {
                     return Err("native frame reclamation retained prior-generation layout rows".into());
                 }
                 let outcome = self.inner.replace_session(cx, document, SessionModule::package(self.bad_mount.package()));
-                if !matches!(outcome, ReloadOutcome::Fallback(_)) { return Err(format!("mount failure missed fallback: {outcome:?}").into()); }
+                if !matches!(outcome, ReloadOutcome::Rejected(_)) { return Err(format!("mount failure was not rejected: {outcome:?}").into()); }
+                if !Rc::ptr_eq(&active, &self.current()?) { return Err("rejected mount displaced the successful generation".into()); }
+                // A later runtime fault still exercises the native fallback/retry input path.
+                active.record_fault("runtime fault after rejected mount".into());
+                self.inner.after_native(cx);
                 self.retire(active)?;
-                if self.inner.host.sessions().next().is_some() { return Err("failed generation remained active".into()); }
+                if self.inner.host.sessions().next().is_some() { return Err("faulted generation remained active".into()); }
                 self.failed_generation = self.inner.host.fallback_generation(document).ok_or("Rust fallback missing")?;
                 let region = self.inner.host.region(document).ok_or("mount region missing")?;
                 let text = region.dom.text_content(region.root);
-                if !text.contains("Application error") || !text.contains("mount exploded") { return Err(format!("fallback lost original failure: {text}").into()); }
+                if !text.contains("Application error") || !text.contains("runtime fault after rejected mount") { return Err(format!("fallback lost original failure: {text}").into()); }
                 self.stage = Stage::Fallback;
             }
             Stage::Fallback => {

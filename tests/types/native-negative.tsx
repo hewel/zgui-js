@@ -75,16 +75,16 @@ const dataBoolean: NativeElementProps = { "data-count": true };
 const dataNumber: NativeElementProps = { "data-count": 3 };
 // @ts-expect-error Arbitrary native properties are not accepted.
 const property = <text arbitrary="unsupported" />;
-// @ts-expect-error HTML spellings are not aliases for native properties.
-const className = <box className="browser" />;
+// @ts-expect-error The StyleX className alias carries strings, not numbers.
+const className = <box className={3} />;
 // @ts-expect-error Browser event names are not native aliases.
 const handler = <control onDoubleClick={() => {}} />;
 // @ts-expect-error Ref callbacks expose a NativeNode, not browser methods.
 const ref = <text ref={node => node.focus()} />;
-// @ts-expect-error Native styles do not coerce numbers or use camelCase.
+// @ts-expect-error Non-unitless native styles require strings with explicit units.
 const numericStyle = <box style={{ "font-size": 20 }} />;
-// @ts-expect-error Browser-style property names are unsupported.
-const camelStyle = <box style={{ backgroundColor: "red" }} />;
+// @ts-expect-error Unknown camelCase property names remain unsupported.
+const camelStyle = <box style={{ backgroundColour: "red" }} />;
 // @ts-expect-error Native cancellation has no listener-options tuple form.
 const listenerOptions = <control onClick={[() => {}, { passive: true }]} />;
 // @ts-expect-error Native node IDs are not numbers.

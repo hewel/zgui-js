@@ -17,26 +17,29 @@ impl Assets {
             NEXT_PACKAGE.fetch_add(1, Ordering::Relaxed),
         ));
         fs::create_dir(&directory).unwrap();
+        let style_system = serde_json::json!({"name":"stylex","profile":"zgui-stylex-v1",
+            "configDigest":format!("sha256:{:x}", Sha256::digest(b"work-tests")),"nativeProfileDigest":crate::package::native_profile_digest()});
+        let metadata = serde_json::to_vec(&serde_json::json!({"styleSystem":style_system})).unwrap();
         let files = BTreeMap::from([
             ("app.mjs", b"export const hostApiVersion = 1; export function mount() { return () => {}; }".as_slice()),
             ("app.mjs.map", br#"{"version":3,"sources":[],"names":[],"mappings":""}"#.as_slice()),
             ("invalid.txt", &[0xff][..]),
             ("text.txt", "owned asset: héllo\n".as_bytes()),
+            ("style-origins.json", metadata.as_slice()),
+            ("build-info.json", metadata.as_slice()),
         ]);
-        let mut digest = Sha256::new();
+        let mut digests = BTreeMap::new();
         for (name, bytes) in files {
             fs::write(directory.join(name), bytes).unwrap();
-            digest.update(name.as_bytes());
-            digest.update([0]);
-            digest.update(bytes);
-            digest.update([0]);
+            digests.insert(name, format!("sha256:{:x}", Sha256::digest(bytes)));
         }
-        let manifest = serde_json::json!({
-            "schemaVersion": 1, "id": "work-tests", "hostApiVersion": 1,
+        let mut manifest = serde_json::json!({
+            "schemaVersion": 2, "id": "work-tests", "hostApiVersion": 1,
             "entry": "app.mjs", "sourceMap": "app.mjs.map", "styles": [],
-            "assets": ["text.txt", "invalid.txt"],
-            "buildId": format!("sha256:{:x}", digest.finalize()),
+            "assets": ["text.txt", "invalid.txt"], "fonts": [],
+            "artifactDigests": digests, "styleSystem": style_system,
         });
+        manifest["buildId"] = serde_json::json!(format!("sha256:{:x}", Sha256::digest(serde_json::to_vec(&manifest).unwrap())));
         fs::write(directory.join("manifest.json"), serde_json::to_vec(&manifest).unwrap()).unwrap();
         Self(directory)
     }

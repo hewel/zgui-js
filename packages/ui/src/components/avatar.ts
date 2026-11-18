@@ -3,15 +3,7 @@ import { memo, mergeProps } from "../renderer/index.js";
 import { Image } from "../image.js";
 import type { ImageProps, NativeElementProps, NativeNode } from "../types.js";
 import { classes, element, part, useStylesheet } from "./shared.js";
-import { sheet as upstreamSheet } from "./generated/AvatarStyle.js";
-
-const sheet = {
-  ...upstreamSheet,
-  css: upstreamSheet.css.replace(
-    `.${upstreamSheet.className} > .zui-avatar__image:broken`,
-    `.${upstreamSheet.className} > .zui-avatar__image:state(zgui-image-broken)`,
-  ),
-};
+import { sheet } from "./generated/AvatarStyle.js";
 
 export type AvatarSize = "sm" | "md" | "lg";
 export interface AvatarProps extends NativeElementProps {
@@ -30,7 +22,7 @@ export function AvatarImage(props: AvatarImageProps = {}): NativeNode {
   return Image(mergeProps(
     { role: "image" as const, ariaHidden: true },
     props,
-    { get class() { return classes("zui-avatar__image", props.class); } },
+    { get __zguiClass() { return classes("zui-avatar__image"); } },
   ));
 }
 
@@ -47,7 +39,7 @@ export function AvatarBadge(props: AvatarBadgeProps = {}): NativeNode {
       get ariaLabel() { return own.label ?? null; },
     },
     rest,
-    { get class() { return classes("zui-avatar__badge", rest.class); } },
+    { get __zguiClass() { return classes("zui-avatar__badge"); } },
   ));
 }
 
@@ -60,7 +52,7 @@ export function AvatarGroup(props: AvatarGroupProps = {}): NativeNode {
       get "data-size"() { return own.size ?? "md"; },
     },
     rest,
-    { get class() { return classes("zui-avatar-group", rest.class); } },
+    { get __zguiClass() { return classes("zui-avatar-group"); } },
   ));
 }
 
@@ -79,13 +71,10 @@ export function Avatar(props: AvatarProps = {}): NativeNode {
     },
     rest,
     {
-      get class() {
-        return classes(
-          sheet.className, "zui-avatar",
-          own.size === "sm" && "zui-avatar--sm",
-          own.size === "lg" && "zui-avatar--lg",
-          rest.class,
-        );
+      get __zguiClass() {
+        return classes(sheet.className, "zui-avatar",
+        own.size === "sm" && "zui-avatar--sm",
+        own.size === "lg" && "zui-avatar--lg", );
       },
       get children() { return [content, image]; },
     },

@@ -6,27 +6,48 @@ static NEXT: AtomicU64 = AtomicU64::new(0);
 pub(crate) struct Fixture(PathBuf);
 impl Fixture {
     pub(crate) fn new(source: &str, css: &str) -> Self {
+        Self::with_styles(source, &[("style.css", css)])
+    }
+    pub(crate) fn with_styles(source: &str, styles: &[(&str, &str)]) -> Self {
         let directory = std::env::temp_dir().join(format!("zgui-lifecycle-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
         fs::create_dir(&directory).unwrap();
-        let files = BTreeMap::from([
+        let style_system = serde_json::json!({"name":"stylex","profile":"zgui-stylex-v1",
+            "configDigest":format!("sha256:{:x}", Sha256::digest(b"test")),"nativeProfileDigest":crate::package::native_profile_digest()});
+        let metadata = serde_json::to_vec(&serde_json::json!({"styleSystem":style_system})).unwrap();
+        let mut files = BTreeMap::from([
             ("app.mjs", source.as_bytes()),
             ("app.mjs.map", br#"{"version":3,"sources":[],"names":[],"mappings":""}"#.as_slice()),
-            ("style.css", css.as_bytes()),
             ("test.txt", b"completed".as_slice()),
+            ("style-origins.json", metadata.as_slice()),
+            ("build-info.json", metadata.as_slice()),
         ]);
-        let mut digest = Sha256::new();
+        files.extend(styles.iter().map(|(path, css)| (*path, css.as_bytes())));
+        let mut digests = BTreeMap::new();
         for (path, bytes) in files {
             fs::write(directory.join(path), bytes).unwrap();
-            digest.update(path.as_bytes()); digest.update([0]); digest.update(bytes); digest.update([0]);
+            digests.insert(path, format!("sha256:{:x}", Sha256::digest(bytes)));
         }
-        let manifest = serde_json::json!({
-            "schemaVersion": 1, "id": "lifecycle-tests", "hostApiVersion": 1,
-            "entry": "app.mjs", "sourceMap": "app.mjs.map", "styles": ["style.css"], "assets": ["test.txt"],
-            "buildId": format!("sha256:{:x}", digest.finalize()),
+        let mut manifest = serde_json::json!({
+            "schemaVersion": 2, "id": "lifecycle-tests", "hostApiVersion": 1,
+            "entry": "app.mjs", "sourceMap": "app.mjs.map", "styles": styles.iter().map(|(path, _)| path).collect::<Vec<_>>(), "assets": ["test.txt"],
+            "fonts": [], "artifactDigests": digests,
+            "styleSystem": style_system
         });
+        manifest["buildId"] = serde_json::json!(format!("sha256:{:x}", Sha256::digest(serde_json::to_vec(&manifest).unwrap())));
         fs::write(directory.join("manifest.json"), serde_json::to_vec(&manifest).unwrap()).unwrap();
         Self(directory)
     }
     pub(crate) fn package(&self) -> Rc<Package> { Rc::new(Package::load(&self.0).unwrap()) }
+    pub(crate) fn with_font(self, family: &str, bytes: &[u8]) -> Self {
+        fs::write(self.0.join("font.ttf"), bytes).unwrap();
+        let mut manifest: serde_json::Value = serde_json::from_slice(&fs::read(self.0.join("manifest.json")).unwrap()).unwrap();
+        manifest["assets"].as_array_mut().unwrap().push(serde_json::json!("font.ttf"));
+        manifest["fonts"] = serde_json::json!([{"family":family,"path":"font.ttf"}]);
+        manifest["artifactDigests"]["font.ttf"] = serde_json::json!(format!("sha256:{:x}", Sha256::digest(bytes)));
+        manifest.as_object_mut().unwrap().remove("buildId");
+        manifest["buildId"] = serde_json::json!(format!("sha256:{:x}", Sha256::digest(serde_json::to_vec(&manifest).unwrap())));
+        fs::write(self.0.join("manifest.json"), serde_json::to_vec(&manifest).unwrap()).unwrap();
+        self
+    }
 }
 impl Drop for Fixture { fn drop(&mut self) { fs::remove_dir_all(&self.0).unwrap(); } }

@@ -13,6 +13,6 @@ export function Skeleton(props: SkeletonProps = {}): NativeNode {
   return element("box", mergeProps(
     { role: "genericContainer" as const, ariaBusy: true },
     props,
-    { get class() { return classes(sheet.className, "zui-skeleton", props.class); } },
+    { get __zguiClass() { return classes(sheet.className, "zui-skeleton"); } },
   ));
 }

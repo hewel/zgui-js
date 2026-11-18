@@ -1,11 +1,28 @@
 {
   "actionSequence": 0,
   "build": {
-    "buildId": "sha256:923ddb9e4b8df968552ed0f323aea9af99f099e8880b30317eb2a8ff0d939340",
-    "entryDigest": "sha256:31543570808c46b941fb07bc518f6713c8789d6bf571cd385d8e97b69d67e794",
+    "artifactDigests": {
+      "app.css": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "app.mjs": "sha256:ad67799bbc93ecddcc51a130fce450541bdcc14689bb31950f27f15809dc3660",
+      "app.mjs.map": "sha256:2534278df5b05b43dd878500165af3a1abbe9615a2a82c091f8bd1933868ac50",
+      "build-info.json": "sha256:8b96ccfb796c14a0c351c0f7da6cc188f1ed51fdaf134c8603d6a532c348b59d",
+      "style-origins.json": "sha256:44221bcfd7f9fe023a7fe53058d7929908206572a365944522b061737f80e3a2"
+    },
+    "buildId": "sha256:4f78e261909cb6e1f43c6720d2c468725df61ad9db50f9ccd2c113bee92a5e85",
+    "entryDigest": "sha256:ad67799bbc93ecddcc51a130fce450541bdcc14689bb31950f27f15809dc3660",
+    "fonts": [],
     "id": "dev.example.counter",
     "sourceMap": "app.mjs.map",
-    "sourceMapDigest": "sha256:a39cece41c08a7abf4391ee389343c4a4490ab9858f39f2c894ed8e78cd3ab5e"
+    "sourceMapDigest": "sha256:2534278df5b05b43dd878500165af3a1abbe9615a2a82c091f8bd1933868ac50",
+    "styleSystem": {
+      "configDigest": "sha256:33c7891b27d625d83284f9d24aef2ee1b62041f5b423dbd3b41411a61ccada45",
+      "name": "stylex",
+      "nativeProfileDigest": "sha256:984726d33988e8d259cc03cfa755440dfe1753277ee13a6e42b658ff8d662b9e",
+      "profile": "zgui-stylex-v1"
+    },
+    "styles": [
+      "app.css"
+    ]
   },
   "stage": "mount"
 }

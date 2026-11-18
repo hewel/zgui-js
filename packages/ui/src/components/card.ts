@@ -22,7 +22,7 @@ export function Card(props: CardProps = {}): NativeNode {
   return element("box", mergeProps(
     { role: "group" as const },
     props,
-    { get class() { return classes(sheet.className, "zui-card", props.class); } },
+    { get __zguiClass() { return classes(sheet.className, "zui-card"); } },
   ));
 }
 
@@ -37,8 +37,8 @@ export function CardHeader(props: CardHeaderProps = {}): NativeChild {
   };
   const [own, rest] = splitProps(props, ["children"]);
   const header = element("box", mergeProps(rest, {
-    get class() {
-      return classes("zui-card__header", count() > 0 && "zui-card__header--action", rest.class);
+    get __zguiClass() {
+      return classes("zui-card__header", count() > 0 && "zui-card__header--action");
     },
   }));
   slot(header, provide(HeaderContext, state, own));
@@ -52,7 +52,7 @@ export function CardAction(props: CardActionProps = {}): NativeNode {
   useStylesheet(sheet);
   useContext(HeaderContext)?.claim();
   return element("box", mergeProps(props, {
-    get class() { return classes("zui-card__action", props.class); },
+    get __zguiClass() { return classes("zui-card__action"); },
   }));
 }
 

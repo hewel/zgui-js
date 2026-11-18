@@ -217,9 +217,9 @@ test("popper re-anchors and deactivates without losing content state", async t =
   assert.equal(registrations.filter(r => r.active).length, 3);
   assert.equal(style().visibility, "hidden");
   const latest = registrations.slice(4);
-  emit(latest[0], { x: 700, y: 200, width: 80, height: 30 });
-  emit(latest[1], { width: 200.1, height: 120.2 });
-  emit(latest[2], { x: 0, y: 0, width: 800, height: 600, scale: 1.75 });
+  emit(latest.find(record => record.kind === "borderBox"), { x: 700, y: 200, width: 80, height: 30 });
+  emit(latest.find(record => record.kind === "contentSize"), { width: 200.1, height: 120.2 });
+  emit(latest.find(record => record.kind === "viewport"), { x: 0, y: 0, width: 800, height: 600, scale: 1.75 });
   assert.equal("visibility" in style(), false);
   assert.equal(textOf(counter), "1");
   assert.equal(mod.log.mounts, 1);

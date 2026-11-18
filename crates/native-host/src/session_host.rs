@@ -3,7 +3,7 @@
 //! `Application` keeps the event loop and `PreviewHost` keeps renderer probes;
 //! neither owns this algorithm anymore.
 
-use std::{cell::RefCell, collections::HashMap, rc::{Rc, Weak}, sync::Arc};
+use std::{cell::{Cell, RefCell}, collections::HashMap, rc::{Rc, Weak}, sync::Arc};
 
 use zgui::{
     platform::{SurfaceId, Waker},
@@ -23,10 +23,12 @@ pub(crate) struct MountRegion {
     pub(crate) root: NodeId,
     pub(crate) dom: DomHandle,
     pub(crate) host: HostHandle,
+    pub(crate) fonts: zgui::app::Fonts,
+    pub(crate) root_anchor: Rc<Cell<NodeId>>,
 }
 
 pub(crate) struct Root(pub(crate) Rc<RefCell<Vec<MountRegion>>>);
-pub(crate) struct RootAnchor(NodeId);
+pub(crate) struct RootAnchor(Rc<Cell<NodeId>>);
 impl View for Root {
     type State = RootAnchor;
     fn build(self, cx: &mut BuildCx<'_>) -> RootAnchor {
@@ -35,15 +37,17 @@ impl View for Root {
         // by the Rust root across JS generations; application CSS may override.
         let host = cx.host_handle();
         host.install_stylesheet("zgui-js-controls", "field { white-space: pre; } editor { white-space: pre-wrap; }");
-        self.0.borrow_mut().push(MountRegion { document: cx.document(), root, dom: cx.dom_handle(), host });
-        RootAnchor(root)
+        let fonts = zgui::reactive::use_context::<zgui::app::Fonts>().expect("native mount roots require the renderer font collection");
+        let root_anchor = Rc::new(Cell::new(root));
+        self.0.borrow_mut().push(MountRegion { document: cx.document(), root, dom: cx.dom_handle(), host, fonts, root_anchor: root_anchor.clone() });
+        RootAnchor(root_anchor)
     }
     fn rebuild(self, _state: &mut RootAnchor, _cx: &mut BuildCx<'_>) {}
 }
 impl Anchor for RootAnchor {
-    fn mount(&mut self, dom: &DomHandle, parent: NodeId, before: Option<NodeId>) { dom.insert(parent, self.0, before); }
-    fn unmount(&mut self, dom: &DomHandle) { dom.detach(self.0); }
-    fn first_node(&self) -> Option<NodeId> { Some(self.0) }
+    fn mount(&mut self, dom: &DomHandle, parent: NodeId, before: Option<NodeId>) { dom.insert(parent, self.0.get(), before); }
+    fn unmount(&mut self, dom: &DomHandle) { dom.detach(self.0.get()); }
+    fn first_node(&self) -> Option<NodeId> { Some(self.0.get()) }
 }
 
 pub(crate) struct Binding(Weak<Session>);
@@ -58,6 +62,9 @@ impl HostBinding for Binding {
         }
     }
     fn shutting_down(&mut self) { if let Some(session) = self.0.upgrade() { let _ = session.retire(); } }
+    fn stylesheet_rejected(&mut self, name: &str, diagnostics: zgui_style::CssDiagnostics) {
+        if let Some(session) = self.0.upgrade() { session.stylesheet_rejected(name, diagnostics); }
+    }
 }
 
 /// What a mount or checkpoint failure does to the affected mount region.
@@ -95,6 +102,7 @@ pub(crate) trait SessionSurface {
     /// Install the generation's binding and image policy before `Session::mount`.
     fn bind(&mut self, document: DocumentId, session: &Rc<Session>);
     fn request_frame(&self, document: DocumentId);
+    fn validate_fonts(&self, _session: &Session) -> SessionResult<()> { Ok(()) }
 }
 
 /// Image authority installed by [`RuntimeSurface::bind`]. Preview publishes
@@ -133,6 +141,12 @@ impl SessionSurface for RuntimeSurface<'_> {
     fn request_frame(&self, document: DocumentId) {
         if let Some(window) = self.runtime.windows().iter().find(|window| window.document_id() == document) { window.request_frame(); }
     }
+    fn validate_fonts(&self, session: &Session) -> SessionResult<()> {
+        if let Some(window) = self.runtime.windows().iter().find(|window| window.document_id() == session.region.document) {
+            session.validate_font_families(window)?;
+        }
+        Ok(())
+    }
 }
 
 struct Recovery {
@@ -152,6 +166,7 @@ pub(crate) struct SessionHost {
     last_good: Option<SessionModule>,
     policy: SessionPolicy,
     recovery: RecoveryPolicy,
+    acceptance: Option<serde_json::Value>,
 }
 
 impl SessionHost {
@@ -159,10 +174,15 @@ impl SessionHost {
         Self {
             pending, regions: HashMap::new(), sessions: HashMap::new(), fallbacks: HashMap::new(),
             generation: 0, module, last_good: None, policy, recovery,
+            acceptance: None,
         }
     }
 
     pub(crate) fn generation(&self) -> u64 { self.generation }
+    pub(crate) fn acceptance(&self) -> Option<&serde_json::Value> { self.acceptance.as_ref() }
+    pub(crate) fn set_reduced_motion(&mut self, reduced_motion: bool) {
+        self.policy = self.policy.clone().with_reduced_motion(reduced_motion);
+    }
     /// The module a fresh mount region attaches, or the last mounted one.
     pub(crate) fn module(&self) -> &SessionModule { &self.module }
     /// Adopt a publication that arrived while no mount region existed.
@@ -180,7 +200,8 @@ impl SessionHost {
     /// then retire ownership for documents whose native surface is gone.
     pub(crate) fn attach(&mut self, surface: &mut impl SessionSurface, waker: Arc<dyn Waker>, retry: Rc<dyn Fn(DocumentId, u64)>) -> SessionResult<()> {
         let regions = std::mem::take(&mut *self.pending.borrow_mut());
-        for region in regions {
+        for mut region in regions {
+            region.root = region.root_anchor.get();
             let document = region.document;
             self.regions.insert(document, region);
             let outcome = self.mount_module(surface, waker.clone(), document, self.module.clone(), &retry);
@@ -213,6 +234,10 @@ impl SessionHost {
     pub(crate) fn checkpoint(&mut self, surface: &mut impl SessionSurface, retry: Rc<dyn Fn(DocumentId, u64)>) -> SessionResult<()> {
         let mut faults = Vec::new();
         for session in self.sessions.values() {
+            if let Err(error) = surface.validate_fonts(session) {
+                faults.push((session.region.document, session.generation, error));
+                continue;
+            }
             match session.checkpoint() {
                 Ok(true) => surface.request_frame(session.region.document),
                 Ok(false) => {}
@@ -261,7 +286,25 @@ impl SessionHost {
     }
 
     fn mount_module(&mut self, surface: &mut impl SessionSurface, waker: Arc<dyn Waker>, document: DocumentId, module: SessionModule, retry: &Rc<dyn Fn(DocumentId, u64)>) -> ReloadOutcome {
+        let package = module.package.clone();
+        let identity = module.package.as_ref().map(|package| serde_json::json!({
+            "id":package.manifest.id, "buildId":package.manifest.build_id, "styleSystem":package.manifest.style_system
+        }));
         let outcome = self.mount_module_inner(surface, waker, document, module, retry);
+        if let Some(identity) = identity {
+            let (status, diagnostic) = match &outcome {
+                ReloadOutcome::Mounted(_) => ("accepted", None),
+                ReloadOutcome::Rejected(error) | ReloadOutcome::Fallback(error) => ("rejected", Some(error.to_string())),
+            };
+            let record = serde_json::json!({"schemaVersion":1,"status":status,"candidate":identity,"generation":self.generation,
+                "document":format!("{document:?}"),"diagnostic":diagnostic,
+                "lastSuccessfulBuildId":self.last_good.as_ref().and_then(|module|module.package.as_ref()).map(|package|&package.manifest.build_id)});
+            eprintln!("native-candidate: {record}");
+            if let Some(package) = package && let Err(error) = package.record_acceptance(&record) {
+                eprintln!("native-candidate-status-error: {error}");
+            }
+            self.acceptance = Some(record);
+        }
         report_reload(&outcome);
         outcome
     }
@@ -279,35 +322,69 @@ impl SessionHost {
             return ReloadOutcome::Rejected("session generation exhausted".into());
         };
         self.generation = generation;
+        let previous = self.sessions.get(&document).cloned();
+        let mut candidate_region = region.clone();
+        let staging_parent = if previous.is_some() {
+            let Some(parent) = region.dom.parent(region.root) else {
+                return ReloadOutcome::Rejected("active mount root is detached".into());
+            };
+            candidate_region.root = region.dom.create_element(ElementName::new("column"));
+            Some(parent)
+        } else { None };
         // Candidate evaluation owns no native children or stylesheet and cannot
         // create work. Rejection must leave the active session untouched.
-        let candidate = match Session::prepare(region, module.clone(), generation, waker, target, self.policy.clone()) {
+        let candidate = match Session::prepare(candidate_region.clone(), module.clone(), generation, waker, target, self.policy.clone()) {
             Ok(candidate) => candidate,
             Err(error) => {
+                if let Some(parent) = staging_parent {
+                    region.dom.insert(parent, candidate_region.root, Some(region.root));
+                    region.dom.detach(candidate_region.root);
+                }
                 if matches!(self.recovery, RecoveryPolicy::Fallback) && !self.sessions.contains_key(&document) {
                     self.show_fallback(surface, document, generation, &error.to_string(), retry);
                 }
                 return ReloadOutcome::Rejected(error);
             }
         };
-        if let Some(previous) = self.sessions.remove(&document) { let _ = previous.retire(); }
-        self.clear_fallback(document);
         surface.bind(document, &candidate);
-        // Propagate keeps a failed candidate owned: its caller persists the
-        // cause before any disposal, including a blocked disposer, runs.
-        if matches!(self.recovery, RecoveryPolicy::Propagate) {
-            self.sessions.insert(document, candidate.clone());
-        }
         if let Err(error) = candidate.mount() {
+            if let Some(previous) = previous {
+                candidate.relinquish_stylesheets();
+                let _ = candidate.retire();
+                candidate.remove_surplus_stylesheets(&previous);
+                previous.restore_stylesheets();
+                if let Some(parent) = staging_parent {
+                    region.dom.insert(parent, candidate_region.root, Some(region.root));
+                    region.dom.detach(candidate_region.root);
+                }
+                surface.bind(document, &previous);
+                surface.request_frame(document);
+                return ReloadOutcome::Rejected(error);
+            }
             match self.recovery {
                 RecoveryPolicy::Fallback => {
                     let _ = candidate.retire();
                     self.show_fallback(surface, document, generation, &error.to_string(), retry);
                     return ReloadOutcome::Fallback(error);
                 }
-                RecoveryPolicy::Propagate => return ReloadOutcome::Rejected(error),
+                RecoveryPolicy::Propagate => {
+                    self.sessions.insert(document, candidate);
+                    return ReloadOutcome::Rejected(error);
+                }
             }
         }
+        if let Some(previous) = previous {
+            if let Some(parent) = staging_parent {
+                region.dom.insert(parent, candidate_region.root, Some(region.root));
+                region.root_anchor.set(candidate_region.root);
+                self.regions.insert(document, candidate_region);
+            }
+            previous.relinquish_stylesheets();
+            previous.remove_surplus_stylesheets(&candidate);
+            let _ = previous.retire();
+            region.dom.detach(region.root);
+        }
+        self.clear_fallback(document);
         self.module = module.clone();
         if module.package.is_some() { self.last_good = Some(module); }
         self.sessions.insert(document, candidate);

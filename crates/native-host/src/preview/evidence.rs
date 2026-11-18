@@ -30,6 +30,16 @@ pub(super) struct Presentation {
     pub(super) configuration_id: u64,
     /// The presented draw; serialized as null before the first presentation.
     pub(super) draw_id: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) style_revision: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) document_revision: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) metadata_revision: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) resource_revision: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) generation: Option<u64>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -70,7 +80,7 @@ pub(super) struct NodeEvidence {
     pub(super) role: Option<String>,
     #[serde(default)]
     pub(super) name: Option<String>,
-    /// Provenance is not yet produced; the v1 field remains serialized as null.
+    /// Explicit compiler metadata only; absent source positions are never synthesized.
     #[serde(default)]
     pub(super) source: Value,
     #[serde(default)]
@@ -103,6 +113,8 @@ pub(super) struct TreeEvidence {
     pub(super) metadata_revision: u64,
     pub(super) presentation_sequence: u64,
     #[serde(default, deserialize_with = "optional_revision", skip_serializing_if = "Option::is_none")]
+    pub(super) style_revision: Option<u64>,
+    #[serde(default, deserialize_with = "optional_revision", skip_serializing_if = "Option::is_none")]
     pub(super) resource_revision: Option<u64>,
     #[serde(default, deserialize_with = "optional_revision", skip_serializing_if = "Option::is_none")]
     pub(super) surface_configuration: Option<u64>,
@@ -119,6 +131,8 @@ pub(super) struct FrameEvidence {
     pub(super) generation: u64,
     pub(super) surface: String,
     pub(super) metadata_revision: u64,
+    #[serde(default, deserialize_with = "optional_revision", skip_serializing_if = "Option::is_none")]
+    pub(super) style_revision: Option<u64>,
     #[serde(default, deserialize_with = "optional_revision", skip_serializing_if = "Option::is_none")]
     pub(super) resource_revision: Option<u64>,
     #[serde(default, deserialize_with = "optional_revision", skip_serializing_if = "Option::is_none")]
@@ -148,6 +162,7 @@ pub(super) struct CaptureIdentity {
     pub(super) presentation_sequence: u64,
     pub(super) resource_revision: Option<u64>,
     pub(super) surface_configuration: Option<u64>,
+    pub(super) style_revision: Option<u64>,
 }
 
 /// Bounded, validated capture identifier owning its artifact paths.
@@ -194,6 +209,12 @@ impl TreeEvidence {
                 && (tree_revision.is_none() || tree_revision != frame_revision) {
                 return Err(Error::new("E_OUTPUT_IO", 8, "capture resource/surface configuration identities disagree"));
             }
+        }
+        let tree_style = self.style_revision;
+        let frame_style = frame.style_revision;
+        if (tree_style.is_some() || frame_style.is_some())
+            && (tree_style.is_none() || tree_style != frame_style) {
+            return Err(Error::new("E_OUTPUT_IO", 8, "capture style identities disagree"));
         }
         if let Some(revision) = frame.resource_revision
             && frame.extra.get("resources").and_then(|resources| resources.get("resourceRevision")).and_then(Value::as_u64) != Some(revision) {

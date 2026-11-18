@@ -1,13 +1,13 @@
 {
   "schemaVersion": 1,
   "run": "run",
-  "artifactsDigest": "sha256:ed7465dafc68f346179903a570c30eabd666540d3d5cbbf5758364e9ece4e14e",
+  "artifactsDigest": "sha256:a1681d92fc57fd230bba71588bcc79cbc9ede814614b6758f04ace855e9cb7ac",
   "policyDigest": "sha256:618dc201dcc2cc976d3b0ff41d440eca02b71b68c79b01d10814734b044bbeb9",
   "review": {
     "by": "coding-assistant",
-    "at": "2026-11-17T10:30:00Z",
-    "summary": "Counter baseline refresh for oxlint@1.94.0 and Cargo workspace lint/telemetry lockfile updates. Verified initial.png (25d53f3895...), after-increment.png (ba8ba349d1...), and profileDigest (c207cf4be4...) remain byte-for-byte identical to the prior reviewed baseline.",
-    "buildId": "sha256:923ddb9e4b8df968552ed0f323aea9af99f099e8880b30317eb2a8ff0d939340",
+    "at": "2026-11-18T04:39:30Z",
+    "summary": "Counter baseline refresh for StyleX schema v2, native stylesheet/style revisions, scoped fonts, and corrected CJK license provenance. Verified initial.png (25d53f3895...) and after-increment.png (ba8ba349d1...) remain byte-for-byte identical to the prior reviewed baseline; metadata and environment identities changed.",
+    "buildId": "sha256:4f78e261909cb6e1f43c6720d2c468725df61ad9db50f9ccd2c113bee92a5e85",
     "captures": [
       { "captureId": "initial", "surface": "main" },
       { "captureId": "after-increment", "surface": "main" }

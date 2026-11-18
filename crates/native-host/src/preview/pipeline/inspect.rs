@@ -73,12 +73,19 @@ pub fn snapshot(window: &Window, session: &Session, ordinal: u64, semantics: &Se
         let test_id_truncated = node.test_id.is_some() && test_id.is_none();
         metadata_truncated |= test_id_truncated;
         let state = native_state(window, node.native);
+        let style_source = window.dom().attribute(node.native, zgui::view::AttrName::new("data-style-src"))
+            .filter(|source| {
+                if source.len() > metadata_budget { metadata_truncated = true; return false; }
+                metadata_budget -= source.len();
+                true
+            });
         nodes.push(NodeEvidence {
             token:format!("node-{}",node.token), parent:node.parent.map(|token|format!("node-{token}")),
             surface:"main".into(), generation:session.generation, kind:node.kind.into(),
             ownership:"application".into(), text, text_truncated:truncated,
             test_id:test_id.map(str::to_owned), test_id_truncated, role:semantic.as_ref().map(|value|value.role.clone()),
-            name:semantic.as_ref().and_then(|value|value.name.clone()), source:serde_json::Value::Null,
+            name:semantic.as_ref().and_then(|value|value.name.clone()),
+            source:style_source.map(serde_json::Value::String).unwrap_or(serde_json::Value::Null),
             value:semantic.as_ref().and_then(|value|value.value.clone()),
             name_truncated:semantic.as_ref().is_some_and(|value|value.name_truncated),
             value_truncated:semantic.as_ref().is_some_and(|value|value.value_truncated),
@@ -98,6 +105,7 @@ pub fn snapshot(window: &Window, session: &Session, ordinal: u64, semantics: &Se
         schema_version:1, build_id:identity.build_id.clone(), surface:"main".into(), generation:session.generation,
         frame_ordinal:ordinal, metadata_revision:owned.metadata_revision, presentation_sequence:identity.presentation_sequence,
         resource_revision:identity.resource_revision, surface_configuration:identity.surface_configuration,
+        style_revision: identity.style_revision,
         nodes, extra,
     };
     Snapshot { tree, native_nodes:owned.nodes, metadata_revision:owned.metadata_revision }

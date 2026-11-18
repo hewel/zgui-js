@@ -20,7 +20,7 @@ export function Spinner(props: SpinnerProps = {}): NativeNode {
       get ariaLabel() { return own.label ?? "Loading"; },
     },
     rest,
-    { get class() { return classes(sheet.className, "zui-spinner", rest.class); } },
+    { get __zguiClass() { return classes(sheet.className, "zui-spinner"); } },
   ));
   append(node, element("box", { class: "zui-spinner__mark" }));
   return node;

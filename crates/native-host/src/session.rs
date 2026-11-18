@@ -12,6 +12,7 @@ pub(crate) enum SessionError {
     Diagnostic(js_runtime::Diagnostic),
     Contract(ContractFailure),
     InvalidState(String),
+    Style { code: &'static str, message: String, details: serde_json::Value },
 }
 impl std::fmt::Display for SessionError {
     fn fmt(&self, out: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -19,6 +20,11 @@ impl std::fmt::Display for SessionError {
             Self::Diagnostic(diagnostic) => diagnostic.fmt(out),
             Self::Contract(failure) => failure.fmt(out),
             Self::InvalidState(message) => out.write_str(message),
+            Self::Style { code, message, details } => {
+                write!(out, "{code}: {message}")?;
+                if !details.is_null() { write!(out, " {details}")?; }
+                Ok(())
+            }
         }
     }
 }
@@ -43,7 +49,7 @@ pub(crate) type Result<T> = std::result::Result<T, SessionError>;
 pub(crate) struct SessionModule {
     pub name: String,
     pub source: String,
-    pub css: String,
+    pub styles: Vec<crate::package::Stylesheet>,
     pub package: Option<Rc<Package>>,
 }
 impl SessionModule {
@@ -51,7 +57,7 @@ impl SessionModule {
         Self {
             name: package.directory.join(&package.manifest.entry).to_string_lossy().into_owned(),
             source: package.source.clone(),
-            css: package.css.clone(),
+            styles: package.styles.clone(),
             package: Some(package),
         }
     }
@@ -65,17 +71,22 @@ pub(crate) struct SessionPolicy {
     environment: Option<Rc<Environment>>,
     strict_rejections: bool,
     assets: AssetSource,
+    reduced_motion: bool,
 }
 impl SessionPolicy {
     /// Ordinary live execution: wall clock, ambient limits, logged rejections,
     /// package asset reads on the shared worker pool.
     pub(crate) fn live(executor: host_services::Executor) -> Self {
-        Self { limits: RuntimeLimits::default(), deadline: None, environment: None, strict_rejections: false, assets: AssetSource::Live(executor) }
+        Self { limits: RuntimeLimits::default(), deadline: None, environment: None, strict_rejections: false, assets: AssetSource::Live(executor), reduced_motion: false }
     }
     /// Deterministic preview execution: supplied limits, an enclosing deadline,
     /// the virtual environment, strict rejection handling and fixture assets.
     pub(crate) fn preview(limits: RuntimeLimits, deadline: Rc<Cell<Instant>>, environment: Rc<Environment>, fixtures: Rc<crate::assets::fixture::FixtureRuntime>) -> Self {
-        Self { limits, deadline: Some(deadline), environment: Some(environment), strict_rejections: true, assets: AssetSource::Fixture(fixtures) }
+        Self { limits, deadline: Some(deadline), environment: Some(environment), strict_rejections: true, assets: AssetSource::Fixture(fixtures), reduced_motion: false }
+    }
+    pub(crate) fn with_reduced_motion(mut self, reduced_motion: bool) -> Self {
+        self.reduced_motion = reduced_motion;
+        self
     }
 }
 
@@ -90,6 +101,7 @@ pub(crate) struct ResourceCounts {
     pub timers: usize,
     pub frame_callbacks: usize,
     pub requests: usize,
+    pub fonts: usize,
     pub engine_alive: bool,
 }
 
@@ -134,6 +146,8 @@ pub(crate) struct Session {
     pub(crate) bridge: Rc<UiBridge>,
     work: Rc<Work>,
     engine: RefCell<Option<JsRuntime>>,
+    font_leases: RefCell<Vec<zgui::app::fonts::FontLease>>,
+    font_validation_revision: Cell<Option<(u64, u64, u64, zgui_style::ColorScheme)>>,
     telemetry: Cell<Option<RuntimeTelemetry>>,
     shutdown_started: Cell<bool>,
     mount_started: Cell<bool>,
@@ -155,16 +169,40 @@ impl Session {
     /// Pure module preflight: bridge mutation is disabled until mount's turn.
     pub(crate) fn prepare(region: MountRegion, module: SessionModule, generation: u64, waker: Arc<dyn Waker>, surface: SurfaceId, policy: SessionPolicy) -> Result<Rc<Self>> {
         let mut engine = JsRuntime::new(policy.limits.clone())?;
+        let mut font_families = std::collections::BTreeSet::new();
+        for sheet in &module.styles {
+            let summary = zgui_style::preflight_stylesheet(&sheet.css)
+                .map_err(|error| SessionError::Style { code: "E_STYLE_PROFILE", message: format!("stylesheet {} rejected", sheet.path),
+                    details: serde_json::to_value(error).expect("native stylesheet diagnostics serialize") })?;
+            font_families.extend(summary.font_families);
+        }
+        let mut font_leases = Vec::new();
+        if let Some(package) = &module.package {
+            for font in &package.manifest.fonts {
+                let bytes = package.asset_data(&font.path).ok_or("verified package font is missing")?;
+                let lease = region.fonts.register_scoped(Arc::new(bytes), &font.family)
+                    .map_err(|error| SessionError::Style { code: "E_FONT", message: format!("font {} as {:?} rejected: {error:?}", font.path, font.family), details: serde_json::Value::Null })?;
+                font_leases.push(lease);
+            }
+        }
+        for family in font_families {
+            if !region.fonts.contains_family(&family) {
+                return Err(SessionError::Style { code: "E_FONT_FAMILY", message: format!("FONT_FAMILY_UNREGISTERED: {family:?} is not registered"), details: serde_json::Value::Null });
+            }
+        }
         if let Some(deadline) = &policy.deadline { engine.set_enclosing_deadline(deadline.clone()); }
         let session = Rc::new_cyclic(|weak: &Weak<Self>| {
             let port = HostPort::live(surface, waker.clone(), weak.clone(), Self::dispatch_step);
-            let bridge = UiBridge::new(NodeRegistry::new(region.dom.clone(), region.root, 1, generation, 100_000), region.host.clone(), port);
+            let bridge = UiBridge::new_with_options(NodeRegistry::new(region.dom.clone(), region.root, 1, generation, 100_000), region.host.clone(), port,
+                ui_bridge::BridgeOptions { strict_styles: policy.strict_rejections, reduced_motion: policy.reduced_motion, defer_stylesheet_install: true });
             let work = Work::new(region.host.clone(), module.package.clone(), generation, waker.clone(), surface, policy.assets.clone());
             Self {
                 disposer: RefCell::new(None), bridge, work, engine: RefCell::new(None),
                 telemetry: Cell::new(None), shutdown_started: Cell::new(false),
                 mount_started: Cell::new(false), stylesheet_installed: Cell::new(false),
                 contract_reported: Cell::new(false),
+                font_leases: RefCell::new(Vec::new()),
+                font_validation_revision: Cell::new(None),
                 generation, region, frames: Cell::new(0), module,
                 fault: RefCell::new(None), retired: RefCell::new(None),
                 policy, checkpoint_cursor: Cell::new(0), waker, surface,
@@ -207,6 +245,7 @@ impl Session {
             }.into());
         }
         *session.engine.borrow_mut() = Some(engine);
+        *session.font_leases.borrow_mut() = font_leases;
         Ok(session)
     }
 
@@ -219,10 +258,10 @@ impl Session {
         if self.shutdown_started.get() { return Err("cannot mount a retired session".into()); }
         if self.mount_started.replace(true) { return Err("session mount was already attempted".into()); }
         self.work.mounting();
-        if !self.module.css.is_empty() {
-            self.region.host.install_stylesheet("application", &self.module.css);
-            self.stylesheet_installed.set(true);
+        for (index, sheet) in self.module.styles.iter().enumerate() {
+            self.region.host.install_stylesheet(&format!("application:{index}"), &sheet.css);
         }
+        self.stylesheet_installed.set(true);
         let mut engine = self.engine.borrow_mut();
         let engine = engine.as_mut().ok_or("session disposed")?;
         let mounted = self.bridge.run_turn(engine.turn(), |turn, js| js.with_module(|ctx, module| {
@@ -237,6 +276,8 @@ impl Session {
                 return Err(self.diagnostic(error).into());
             }
         }
+        self.preflight_stylesheets()?;
+        self.bridge.arm_stylesheets();
         self.check_contract()?;
         if let Some(package) = &self.module.package {
             eprintln!("mounted: package={} build={} nodes={}", package.manifest.id, package.manifest.build_id, self.bridge.live_count());
@@ -244,6 +285,17 @@ impl Session {
         self.snapshot();
         self.work.mounted();
         self.check_contract()?;
+        Ok(())
+    }
+
+    fn preflight_stylesheets(&self) -> Result<()> {
+        for (name, css) in self.bridge.stylesheet_candidates() {
+            zgui_style::preflight_stylesheet(&css).map_err(|error| SessionError::Style {
+                code: "E_STYLE_PROFILE",
+                message: format!("stylesheet {name} rejected"),
+                details: serde_json::to_value(error).expect("native stylesheet diagnostics serialize"),
+            })?;
+        }
         Ok(())
     }
 
@@ -368,7 +420,16 @@ impl Session {
     pub(crate) fn contract_failure(&self) -> Option<ContractFailure> { self.work.contract_failure() }
 
     fn check_contract(&self) -> Result<()> {
-        match self.contract_failure() { Some(failure) => Err(failure.into()), None => Ok(()) }
+        if let Some(failure) = self.contract_failure() { return Err(failure.into()); }
+        let mut failure = None;
+        for diagnostic in self.bridge.take_style_diagnostics() {
+            eprintln!("style-diagnostic: {}: {}", diagnostic.code, diagnostic.message);
+            if self.policy.strict_rejections && failure.is_none() {
+                failure = Some(SessionError::Style { code: "E_STYLE", message: diagnostic.message,
+                    details: serde_json::json!({"code":diagnostic.code}) });
+            }
+        }
+        match failure { Some(failure) => Err(failure), None => Ok(()) }
     }
 
     /// Integration harness entries ('advance', 'external') run as one bridge
@@ -405,8 +466,59 @@ impl Session {
         self.wake_owner();
     }
 
+    pub(crate) fn stylesheet_rejected(&self, name: &str, diagnostics: zgui_style::CssDiagnostics) {
+        let message = diagnostics.iter().map(|diagnostic| format!("{}:{}: {}", diagnostic.location.line, diagnostic.location.column, diagnostic.message)).collect::<Vec<_>>().join("; ");
+        if self.policy.strict_rejections {
+            self.record_fault(SessionError::Style {
+                code: "E_STYLE",
+                message,
+                details: serde_json::json!({"code":"STYLESHEET_PARSE_INVALID","sheet":name}),
+            });
+        } else {
+            eprintln!("style-diagnostic: STYLESHEET_PARSE_INVALID: {name}: {message}");
+        }
+    }
+
     pub(crate) fn package(&self) -> Option<&Rc<Package>> { self.module.package.as_ref() }
+    pub(crate) fn relinquish_stylesheets(&self) { self.stylesheet_installed.set(false); }
+
+    pub(crate) fn restore_stylesheets(&self) {
+        for (index, sheet) in self.module.styles.iter().enumerate() {
+            self.region.host.install_stylesheet(&format!("application:{index}"), &sheet.css);
+        }
+    }
+
+    pub(crate) fn remove_surplus_stylesheets(&self, successor: &Self) {
+        for index in successor.module.styles.len()..self.module.styles.len() {
+            self.region.host.remove_stylesheet(&format!("application:{index}"));
+        }
+    }
     pub(crate) fn surface(&self) -> SurfaceId { self.surface }
+
+    pub(crate) fn validate_font_families(&self, window: &zgui::runtime::Window) -> Result<()> {
+        let revision = (window.dom().revision(), window.style_revision(), window.surface_configures(), window.color_scheme());
+        if self.font_validation_revision.get() == Some(revision) { return Ok(()); }
+        let layout = window.layout().borrow();
+        let mut families = std::collections::BTreeSet::new();
+        for node in self.bridge.snapshot(100_000).nodes {
+            let Some(key) = zgui_view_dom::id::to_document(node.native) else { continue; };
+            for box_id in layout.boxes_of(key) {
+                let Some(node) = layout.get(*box_id) else { continue; };
+                for family in zgui_text_style::lower::font::family(node.style.get_font()).entries() {
+                    if let zgui_text_style::FamilyName::Named(name) = family { families.insert(name.as_str().to_owned()); }
+                }
+            }
+        }
+        for family in families {
+            if !self.region.fonts.contains_family(&family) {
+                let message = format!("FONT_FAMILY_UNREGISTERED: {family:?} is not registered");
+                if self.policy.strict_rejections { return Err(SessionError::Style { code: "E_FONT_FAMILY", message, details: serde_json::Value::Null }); }
+                eprintln!("style-diagnostic: {message}");
+            }
+        }
+        self.font_validation_revision.set(Some(revision));
+        Ok(())
+    }
 
     fn snapshot(&self) {
         eprintln!("native-text: {}", self.region.dom.text_content(self.region.root));
@@ -419,6 +531,7 @@ impl Session {
             callbacks: self.bridge.callback_count(), focus_traps: self.bridge.focus_trap_count(),
             scroll_locks: self.bridge.scroll_lock_count(),
             timers, frame_callbacks, requests,
+            fonts: self.font_leases.borrow().len(),
             engine_alive: self.engine.borrow().is_some(),
         }
     }
@@ -461,7 +574,10 @@ impl Session {
         }
         self.work.finish_stop();
         self.bridge.dispose();
-        if self.stylesheet_installed.replace(false) { self.region.host.remove_stylesheet("application"); }
+        self.font_leases.borrow_mut().clear();
+        if self.stylesheet_installed.replace(false) {
+            for index in 0..self.module.styles.len() { self.region.host.remove_stylesheet(&format!("application:{index}")); }
+        }
         let snapshot = self.engine.borrow().as_ref().map(Self::snapshot_telemetry);
         self.telemetry.set(RuntimeTelemetry::merge(self.telemetry.get(), snapshot));
         if self.engine.borrow_mut().take().is_some() {

@@ -48,8 +48,8 @@ export function Icon(props: IconProps): NativeNode {
     },
     rest,
     {
-      get class() {
-        return classes("zui-icon", SIZE_CLASSES[own.size ?? "md"], sheet.className, rest.class);
+      get __zguiClass() {
+        return classes("zui-icon", SIZE_CLASSES[own.size ?? "md"], sheet.className);
       },
     },
   ), true);

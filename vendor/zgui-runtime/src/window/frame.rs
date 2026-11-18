@@ -671,8 +671,10 @@ impl Window {
                 timestamp,
                 outcome,
                 document_revision,
+                style_revision: self.consumed_style_revision,
                 layout_revision: self.probed_layout_revision,
                 layout_document_coherent: self.probed_layout_revision == Some(document_revision)
+                    && self.consumed_style_revision == self.style_revision
                     && !self.owes_further_work(),
             });
             probe.frame_ended(self);
@@ -1097,6 +1099,9 @@ impl Window {
     /// be rebuilt — the rebuild replaces the subtrees that owe one and no others, and an element
     /// restyled outside them would otherwise keep painting from the previous cascade.
     pub(crate) fn restyle(&mut self) -> usize {
+        // Commands can replace/remove sheets after the early-frame filter decision. Retire
+        // held rule-chain caches before consuming that late change, not one frame afterwards.
+        self.engine.disable_filters_if_sheets_changed();
         let mut document = self.document.borrow_mut();
         // The pool serves broad cascades and the frame thread serves incremental ones — see
         // `Window::broad_restyle` for the measurement behind the split. A document under
@@ -1106,6 +1111,7 @@ impl Window {
             .and(self.style_pool.as_deref())
             .map(crate::app::StylePoolCell::get);
         let pass = self.engine.restyle(&mut document, pool);
+        self.consumed_style_revision = self.style_revision;
         self.broad_restyle = false;
         let mut layout = self.layout.borrow_mut();
         if pass.styled > 0 && layout.root().is_some() {

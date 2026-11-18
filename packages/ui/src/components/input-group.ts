@@ -28,7 +28,7 @@ export function InputGroup(props: InputGroupProps = {}): NativeNode {
       get "data-invalid"() { return String(own.invalid ?? false); },
     },
     rest,
-    { get class() { return classes(sheet.className, "zui-input-group", rest.class); } },
+    { get __zguiClass() { return classes(sheet.className, "zui-input-group"); } },
   ));
 }
 
@@ -39,12 +39,9 @@ export function InputGroupAddon(props: InputGroupAddonProps = {}): NativeNode {
     { get "data-align"() { return own.align ?? "inline-start"; } },
     rest,
     {
-      get class() {
-        return classes(
-          "zui-input-group__addon",
-          own.align && own.align !== "inline-start" && `zui-input-group__addon--${own.align}`,
-          rest.class,
-        );
+      get __zguiClass() {
+        return classes("zui-input-group__addon",
+        own.align && own.align !== "inline-start" && `zui-input-group__addon--${own.align}`, );
       },
     },
   ));
@@ -57,20 +54,20 @@ export function InputGroupButton(props: InputGroupButtonProps = {}): NativeNode 
   return Button(mergeProps(
     { variant: "ghost" as const, size: "xs" as const },
     props,
-    { get class() { return classes("zui-input-group__button", props.class); } },
+    { get __zguiClass() { return classes("zui-input-group__button"); } },
   ));
 }
 
 export function InputGroupInput(props: InputGroupInputProps = {}): NativeNode {
   useStylesheet(partSheet);
   return Input(mergeProps(props, {
-    get class() { return classes("zui-input-group__field", props.class); },
+    get __zguiClass() { return classes("zui-input-group__field"); },
   }));
 }
 
 export function InputGroupTextarea(props: InputGroupTextareaProps = {}): NativeNode {
   useStylesheet(partSheet);
   return Textarea(mergeProps(props, {
-    get class() { return classes("zui-input-group__area", props.class); } },
+    get __zguiClass() { return classes("zui-input-group__area"); } },
   ));
 }

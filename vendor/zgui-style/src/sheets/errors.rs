@@ -18,7 +18,7 @@ use style::error_reporting::{ContextualParseError, ParseErrorReporter};
 use style::stylesheets::UrlExtraData;
 
 /// What kind of thing the parser dropped.
-#[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
+#[derive(Copy, Clone, PartialEq, Eq, Hash, Debug, serde::Serialize)]
 #[non_exhaustive]
 pub enum DropKind {
     /// One declaration, because the property or its value is not recognised. The rule around it
@@ -35,14 +35,26 @@ pub enum DropKind {
 }
 
 /// One thing the parser dropped, with the place in the source it was dropped at.
-#[derive(Clone, PartialEq, Eq, Debug)]
+#[derive(Clone, PartialEq, Eq, Debug, serde::Serialize)]
 pub struct CssDiagnostic {
     /// Where in the sheet it was, counting lines and columns from zero.
+    #[serde(serialize_with = "serialize_location")]
     pub location: SourceLocation,
     /// What kind of thing was dropped.
     pub kind: DropKind,
     /// The parser's own description of it.
     pub message: String,
+}
+
+fn serialize_location<S: serde::Serializer>(
+    location: &SourceLocation,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    use serde::ser::SerializeStruct;
+    let mut value = serializer.serialize_struct("CssLocation", 2)?;
+    value.serialize_field("line", &location.line)?;
+    value.serialize_field("column", &location.column)?;
+    value.end()
 }
 
 /// Everything one sheet's parse dropped.

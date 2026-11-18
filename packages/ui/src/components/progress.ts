@@ -33,13 +33,13 @@ export function Progress(props: ProgressProps = {}): NativeNode {
       get ariaValueNow() { return measured().value; },
       get ariaLabel() { return own.label ?? null; },
       get "data-state"() { return measured().value === null ? "indeterminate" : "determinate"; },
-      get "--zui-progress-fraction"() {
+      get __zguiStyle() {
         const { max, value } = measured();
-        return value === null ? null : `${(value / max * 100).toFixed(4)}%`;
+        return { "--zui-progress-fraction": value === null ? null : `${(value / max * 100).toFixed(4)}%` };
       },
     },
     rest,
-    { get class() { return classes(sheet.className, "zui-progress", rest.class); } },
+    { get __zguiClass() { return classes(sheet.className, "zui-progress"); } },
   ));
   append(node, element("box", { class: "zui-progress__fill" }));
   return node;

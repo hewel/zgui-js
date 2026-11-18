@@ -52,7 +52,7 @@ export function Collapsible(props: CollapsibleProps = {}): NativeNode {
   const node = createElement("column");
   const context = createDisclosure(node, open, () => !!own.disabled, write);
   spread(node, mergeProps({ tabIndex: -1, get "data-state"() { return open() ? "open" : "closed"; } }, rest, {
-    get class() { return classes(sheet.className, "zui-collapsible", rest.class); },
+    get __zguiClass() { return classes(sheet.className, "zui-collapsible"); },
   }));
   slot(node, provide(DisclosureContext, context, own));
   return node;
@@ -72,7 +72,7 @@ export function CollapsibleTrigger(props: CollapsibleTriggerProps = {}): NativeN
     get ariaControls() { return context?.content() ?? null; },
     get "data-state"() { return context?.open() ? "open" : "closed"; },
   }, rest, {
-    get class() { return classes("zui-collapsible__trigger", rest.class); },
+    get __zguiClass() { return classes("zui-collapsible__trigger"); },
     onClick(event: NativeEvent) {
       if (callHandler(event, own.onClick) && !disabled()) context?.setOpen(!context.open());
     },
@@ -82,7 +82,7 @@ export function CollapsibleTrigger(props: CollapsibleTriggerProps = {}): NativeN
 
 export function disclosureContent(props: NativeElementProps, measureClass = ""): NativeNode {
   useStylesheet(sheet);
-  const [own, rest] = splitProps(props, ["children", "style", "--zui-collapsible-height", "onFocus", "onBlur"]);
+  const [own, rest] = splitProps(props, ["children", "--zui-collapsible-height", "onFocus", "onBlur"]);
   const context = useContext(DisclosureContext);
   const open = () => context?.open() ?? false;
   const [height, setHeight] = createSignal<number>();
@@ -95,17 +95,13 @@ export function disclosureContent(props: NativeElementProps, measureClass = ""):
     get ariaHidden() { return !open(); },
     get "data-state"() { return open() ? "open" : "closed"; },
   }, rest, {
-    get class() { return classes("zui-collapsible__content", rest.class); },
+    get __zguiClass() { return classes("zui-collapsible__content"); },
     get "data-collapsed"() { return !open() && collapsed() ? "" : null; },
-    get style(): NativeStyle {
+    get __zguiStyle(): Exclude<NativeStyle, string> {
       const measured = height();
-      const value = own["--zui-collapsible-height"] === undefined
+      return { "--zui-collapsible-height": own["--zui-collapsible-height"] === undefined
         ? measured === undefined ? null : `${measured}px`
-        : own["--zui-collapsible-height"];
-      const style = own.style;
-      return typeof style === "string"
-        ? `${value == null ? "" : `--zui-collapsible-height:${value};`}${style}`
-        : { "--zui-collapsible-height": value ?? null, ...style };
+        : own["--zui-collapsible-height"] };
     },
     onFocus(event: NativeFocusEvent) { own.onFocus?.(event); setFocused(true); },
     onBlur(event: NativeFocusEvent) { setFocused(false); own.onBlur?.(event); },

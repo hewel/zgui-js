@@ -15,6 +15,7 @@ pub mod loader;
 pub mod origin;
 pub mod parse;
 pub mod replace;
+pub mod preflight;
 pub mod set;
 pub mod ua;
 

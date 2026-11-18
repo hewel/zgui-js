@@ -1,5 +1,5 @@
 {
-  "buildId": "sha256:923ddb9e4b8df968552ed0f323aea9af99f099e8880b30317eb2a8ff0d939340",
+  "buildId": "sha256:4f78e261909cb6e1f43c6720d2c468725df61ad9db50f9ccd2c113bee92a5e85",
   "frameOrdinal": 4,
   "generation": 1,
   "layoutVersion": 4,
@@ -542,6 +542,7 @@
     },
     "updatesConsumed": 2
   },
+  "styleRevision": 3,
   "surface": "main",
   "surfaceConfiguration": 0,
   "truncation": {

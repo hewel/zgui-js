@@ -28,6 +28,7 @@ zgui-vocab = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c0
 selectors = "0.39.0"
 servo_arc = "0.4.3"
 stylo = "=0.19.0"
+cssparser = "0.37.0"
 stylo_atoms = "=0.19.0"
 stylo_dom = "=0.19.0"
 web_atoms = "0.2.5"
@@ -56,7 +57,6 @@ zgui-profile = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1
 # run the same bootstrap the framework does rather than a second copy of the same list.
 zgui-css = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a" }
 
-cssparser = "0.37.0"
 rayon = "1.12"
 trybuild = "1.0"
 

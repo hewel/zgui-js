@@ -39,11 +39,8 @@ export function Alert(props: AlertProps = {}): NativeNode {
     },
     rest,
     {
-      get class() {
-        return classes(
-          sheet.className, "zui-alert", `zui-alert--${own.variant ?? "default"}`,
-          rest.class,
-        );
+      get __zguiClass() {
+        return classes(sheet.className, "zui-alert", `zui-alert--${own.variant ?? "default"}`, );
       },
       get children() {
         return [mark, content];

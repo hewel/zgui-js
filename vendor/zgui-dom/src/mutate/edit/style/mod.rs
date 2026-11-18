@@ -30,6 +30,14 @@ use crate::id::node_key::NodeIndex;
 use crate::mutate::edit::Edit;
 use crate::side::inline_style::StyleBlock;
 
+/// One independently parsed contribution to an atomic inline-map replacement.
+pub enum InlineStyle<'a> {
+    /// A serialized application-owned declaration block.
+    Text(&'a str),
+    /// One property, its value, and whether native invariants force importance.
+    Declaration(&'a str, &'a str, bool),
+}
+
 impl Edit<'_> {
     /// Replaces every declaration `node` carries of its own with the ones `css` spells out.
     ///
@@ -50,6 +58,34 @@ impl Edit<'_> {
         }
         *slot = parsed.map(|block| wrapped(&lock, block));
         self.recascade(node);
+    }
+
+    /// Parses every declaration before replacing the native inline block.
+    /// Invalid input leaves both declarations and restyle hints untouched.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `node` names no live node of the document.
+    pub fn replace_inline_style<'a>(&mut self, node: NodeIndex, entries: impl IntoIterator<Item = InlineStyle<'a>>) -> Result<(), String> {
+        let mut block = PropertyDeclarationBlock::new();
+        for entry in entries {
+            let (parsed, force) = match entry {
+                InlineStyle::Text(css) => (parse::strict_attribute(css)?, false),
+                InlineStyle::Declaration(property, value, important) => (parse::strict_declaration(property, value)?, important),
+            };
+            for (declaration, importance) in parsed.declaration_importance_iter() {
+                block.push(declaration.clone(), if force { style::properties::Importance::Important } else { importance });
+            }
+        }
+        let parsed = (!block.is_empty()).then_some(block);
+        let store = self.store();
+        let key = store.key_of(node);
+        let lock = store.lock().clone();
+        let slot = store.columns_mut().inline_style.get_mut(key);
+        if parsed.is_none() && slot.is_none() { return Ok(()); }
+        *slot = parsed.map(|block| wrapped(&lock, block));
+        self.recascade(node);
+        Ok(())
     }
 
     /// Sets or removes one of `node`'s own declarations, leaving the others alone.

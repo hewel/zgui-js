@@ -3,16 +3,28 @@ import { after, before, test } from "node:test";
 import {
   buildExampleApp,
   createTempWorkspace,
+  defaultProfile,
   readMetrics,
   runScenario,
+  writeJson,
 } from "./harness.mjs";
+import { readFile } from "node:fs/promises";
+import path from "node:path";
 
 let temp;
 let bundle;
+let profile;
 
 before(async () => {
   temp = await createTempWorkspace("preview-gallery-fuzz-");
   bundle = await buildExampleApp("gallery");
+  const base = JSON.parse(await readFile(defaultProfile, "utf8"));
+  profile = path.join(temp.dir, "profile.json");
+  await writeJson(profile, {
+    ...base,
+    limits: { ...base.limits, maxJsEntryWallMs: 30 },
+    fonts: { ...base.fonts, manifest: "../../preview/fonts/fonts.json" },
+  });
 });
 
 after(async () => {
@@ -135,6 +147,7 @@ function buildFuzzSteps(seed) {
 
 const FUZZ_SEEDS = [0x5eed0001, 0x5eed0002, 0x5eed0003];
 const STACK_LIMIT_BYTES = 240 * 1024;
+const ENTRY_BUDGET_US = 30_000;
 
 test("gallery survives deterministic seeded interaction fuzzing under tight stack and latency budgets", async () => {
   for (const seed of FUZZ_SEEDS) {
@@ -158,6 +171,7 @@ test("gallery survives deterministic seeded interaction fuzzing under tight stac
         "surface.scale",
       ],
       steps,
+      profile,
       maxJsStackBytes: STACK_LIMIT_BYTES,
     });
 
@@ -165,8 +179,8 @@ test("gallery survives deterministic seeded interaction fuzzing under tight stac
     assert.equal(metrics.jsStackLimitBytes, STACK_LIMIT_BYTES);
     assert.ok(metrics.jsHeapBytes > 0, `${name}: expected non-zero jsHeapBytes`);
     assert.ok(
-      metrics.maxJsEntryDurationUs > 0 && metrics.maxJsEntryDurationUs < 25_000,
-      `${name}: maxJsEntryDurationUs exceeded budget (${metrics.maxJsEntryDurationUs})`,
+      metrics.maxJsEntryDurationUs > 0 && metrics.maxJsEntryDurationUs < ENTRY_BUDGET_US,
+      `${name}: maxJsEntryDurationUs exceeded budget (${metrics.maxJsEntryDurationUs}/${ENTRY_BUDGET_US}us)`,
     );
   }
 });

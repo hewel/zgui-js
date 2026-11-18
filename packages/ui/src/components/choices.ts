@@ -59,7 +59,7 @@ export function Checkbox(props: CheckboxProps = {}): NativeNode {
     },
     rest,
     {
-      get class() { return classes(checkboxSheet.className, "zui-checkbox", rest.class); },
+      get __zguiClass() { return classes(checkboxSheet.className, "zui-checkbox"); },
       get onClick() {
         return (event: NativeEvent) => {
           if (callHandler(event, own.onClick) && !rest.disabled) {
@@ -100,12 +100,9 @@ export function Switch(props: SwitchProps = {}): NativeNode {
     },
     rest,
     {
-      get class() {
-        return classes(
-          switchSheet.className, "zui-switch",
-          (own.size ?? "md") === "sm" && "zui-switch--sm",
-          rest.class,
-        );
+      get __zguiClass() {
+        return classes(switchSheet.className, "zui-switch",
+        (own.size ?? "md") === "sm" && "zui-switch--sm", );
       },
       get onClick() {
         return (event: NativeEvent) => {
@@ -149,13 +146,10 @@ export function Toggle(props: ToggleProps = {}): NativeNode {
     },
     rest,
     {
-      get class() {
-        return classes(
-          toggleSheet.className, "zui-toggle",
-          (own.variant ?? "default") === "outline" && "zui-toggle--outline",
-          TOGGLE_SIZE_CLASSES[own.size ?? "md"],
-          rest.class,
-        );
+      get __zguiClass() {
+        return classes(toggleSheet.className, "zui-toggle",
+        (own.variant ?? "default") === "outline" && "zui-toggle--outline",
+        TOGGLE_SIZE_CLASSES[own.size ?? "md"], );
       },
       get onClick() {
         return (event: NativeEvent) => {

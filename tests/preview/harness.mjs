@@ -19,6 +19,7 @@ export const emptyResources = {
   timers: 0,
   frameCallbacks: 0,
   requests: 0,
+  fonts: 0,
   engineAlive: false,
 };
 
@@ -50,13 +51,16 @@ export async function writeScenario(filePath, id, steps, requiredCapabilities) {
   });
 }
 
-export async function buildFixtureApp(appDir, name, source, { rawSource = false, assets = {} } = {}) {
+export async function buildFixtureApp(appDir, name, source, { rawSource = false, assets = {}, fonts = [] } = {}) {
   await mkdir(path.join(appDir, "src"), { recursive: true });
   const content = rawSource
     ? source
     : await readFile(source instanceof URL ? fileURLToPath(source) : source, "utf8");
   await writeFile(path.join(appDir, "src/main.tsx"), content);
   const assetEntries = Object.entries(assets);
+  if (fonts.length > 0) {
+    await writeJson(path.join(appDir, "package.json"), { name, private: true, zgui: { fonts } });
+  }
   if (assetEntries.length > 0) {
     await mkdir(path.join(appDir, "assets"), { recursive: true });
     for (const [file, bytes] of assetEntries) {

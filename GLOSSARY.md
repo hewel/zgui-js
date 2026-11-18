@@ -27,3 +27,9 @@ Native applications and repeatable previews of their behavior.
 **Capture evidence**: The native tree and frame observations associated with a pixel presentation, including their build, session generation, and surface identity.
 
 **Historical evidence**: The last complete capture evidence retained after a failure. It does not claim to satisfy the failing action's current state.
+
+**Native acceptance**: The outcome of preflighting and mounting one published package for a mount region. Publication alone does not make a candidate accepted or replace the last successful application.
+
+**Stylesheet revision**: The identity of the stylesheet-set state consumed by a native document. Class and inline-declaration changes retain this identity; applied stylesheet installation, replacement, and removal change it.
+
+**StyleX profile**: The versioned agreement between generated StyleX output and the native CSS behaviors an application may use.

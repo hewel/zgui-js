@@ -39,7 +39,7 @@ export function DialogDismiss(props: DialogDismissProps = {}): NativeNode {
   const context = useContext(OverlayContext);
   const [own, rest] = splitProps(props, ["onClick"]);
   return element("control", mergeProps({ tabIndex: 0, role: "button" as const, ariaLabel: "Close" }, rest, {
-    get class() { return classes("zui-dialog__dismiss", rest.class); },
+    get __zguiClass() { return classes("zui-dialog__dismiss"); },
     onClick(event: NativeEvent) {
       if (callHandler(event, own.onClick) && !props.disabled) context?.setOpen(false);
     },
@@ -63,7 +63,7 @@ export function DialogFooter(props: DialogFooterProps = {}): NativeNode {
   const content = memo(() => own.children);
   const close = memo(() => own.closeControl ? DialogClose({ variant: "outline", children: "Close" }) : null);
   return element("row", mergeProps(rest, {
-    get class() { return classes("zui-dialog__footer", rest.class); },
+    get __zguiClass() { return classes("zui-dialog__footer"); },
     get children() { return [content, close]; },
   }));
 }

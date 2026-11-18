@@ -102,7 +102,7 @@ function textOf(node, texts) {
   return node.children.map(child => textOf(child, texts)).join("");
 }
 
-export function createHost() {
+export function createHost({ strictStyles = false, reducedMotion = false } = {}) {
   let nextId = 0;
   let stopping = false;
   let turnDepth = 0;
@@ -126,6 +126,49 @@ export function createHost() {
   const clearCalls = [];
   const registrationsAfterStop = [];
   const leaseGroups = [portals, traps, locks, layers, geometry];
+  const styleDiagnostics = [];
+  const styling = new WeakMap();
+  const stateFor = node => {
+    if (!styling.has(node)) styling.set(node, { aliases: {}, applied: null, internal: null, defaults: {}, application: {}, invariants: {}, direct: {} });
+    return styling.get(node);
+  };
+  const failStyle = (code, message) => {
+    styleDiagnostics.push({ code, message });
+    if (strictStyles) throw new TypeError(`${code}: ${message}`);
+  };
+  // This fixture records declarations; actual CSS grammar/atomic commit is tested on DocumentDom.
+  const normalizeStyle = value => {
+    if (value == null) return {};
+    if (typeof value === "string") {
+      const result = {};
+      for (const declaration of value.split(";").filter(part => part.trim())) {
+        const colon = declaration.indexOf(":");
+        if (colon < 0) throw new TypeError("invalid declaration");
+        result[declaration.slice(0, colon).trim()] = declaration.slice(colon + 1).trim().replace(/\s*!important$/, "");
+      }
+      value = result;
+    }
+    if (typeof value !== "object" || Array.isArray(value)) throw new TypeError("style must be a string or object");
+    const result = {};
+    const unitless = new Set(["opacity", "flex-grow", "flex-shrink", "font-weight", "line-height", "z-index", "order", "animation-iteration-count"]);
+    for (const [key, raw] of Object.entries(value)) {
+      const name = key.startsWith("--") ? key : key.replace(/[A-Z]/g, match => `-${match.toLowerCase()}`);
+      if (raw == null) continue;
+      if (typeof raw === "number" && (!Number.isFinite(raw) || !(name.startsWith("--") || unitless.has(name)))) throw new TypeError(`invalid numeric ${name}`);
+      if (typeof raw !== "string" && typeof raw !== "number") throw new TypeError(`invalid ${name}`);
+      const text = String(raw);
+      if (/\b(?:NaN|Infinity)(?:[a-z%]*)\b|\b(?:url|image-set)\s*\(/i.test(text) || /^(?:invalid|not-a-colour)$/.test(text) || name === "unknown-property" || name === "colour") throw new TypeError(`invalid native declaration ${name}`);
+      result[name] = text;
+    }
+    return result;
+  };
+  const commitStyle = (node, state) => {
+    const styles = { ...state.defaults, ...state.application, ...state.direct, ...state.invariants };
+    for (const key of node.props.keys()) if (key.startsWith("--")) node.props.delete(key);
+    for (const [key, value] of Object.entries(styles)) if (key.startsWith("--")) node.props.set(key, value);
+    if (Object.keys(styles).length) node.props.set("style", styles);
+    else node.props.delete("style");
+  };
 
   const assertLive = (node, role = "node") => {
     if (!node || typeof node !== "object" || !nodes.has(node.id)) {
@@ -316,6 +359,32 @@ export function createHost() {
         if (name.startsWith("on")) registrationsAfterStop.push(name);
         throw new ReferenceError("native session is stopping");
       }
+      if (name === "class" || name === "className" || name === "__zguiClass") {
+        if (value != null && typeof value !== "string") throw new TypeError("class must be a string");
+        const state = stateFor(node);
+        value = value?.trim() ? value : null;
+        if (name === "__zguiClass") state.internal = value;
+        else state.aliases[name] = value;
+        const conflict = state.aliases.class && state.aliases.className;
+        if (!conflict) state.applied = state.aliases.class || state.aliases.className;
+        const classes = [...new Set(`${state.internal ?? ""} ${state.applied ?? ""}`.split(/[\t\n\f\r ]+/).filter(Boolean))].join(" ");
+        if (classes) node.props.set("class", classes); else node.props.delete("class");
+        if (conflict && name !== "__zguiClass") failStyle("CLASS_ALIAS_CONFLICT", "class and className both contribute application tokens");
+        return;
+      }
+      if (name === "style" || name === "__zguiStyle" || name === "__zguiInvariantStyle" || name.startsWith("--")) {
+        const state = stateFor(node);
+        let next;
+        try { next = normalizeStyle(name.startsWith("--") ? { [name]: value } : value); }
+        catch (error) { failStyle("STYLE_VALUE_INVALID", error.message); return; }
+        if (name.startsWith("--")) {
+          if (value == null) delete state.direct[name]; else Object.assign(state.direct, next);
+        } else if (name === "__zguiStyle") state.defaults = next;
+        else if (name === "__zguiInvariantStyle") state.invariants = next;
+        else { state.application = next; state.direct = {}; }
+        commitStyle(node, state);
+        return;
+      }
       if (typeof value === "function") {
         node.callbacks[name] = value;
         return;
@@ -331,6 +400,7 @@ export function createHost() {
       stylesheets.set(name, css);
     },
     removeStylesheet: name => { stylesheets.delete(name); },
+    getReducedMotion: () => reducedMotion,
     focus: (node, reveal = false) => moveFocus(node, reveal),
     trapFocus: (node, wrap, autoFocus, restore) => {
       assertActiveHost("trapFocus");
@@ -415,7 +485,7 @@ export function createHost() {
   return {
     host, nodes, parents, stylesheets, installs, makeNode, byTestId, focused, rects, texts,
     animating, animatingQueries, queries, portals, traps, locks, layers, geometry,
-    clearCalls, invalidated, registrationsAfterStop,
+    clearCalls, invalidated, registrationsAfterStop, styleDiagnostics,
     dispatch, createEvent, runTurn, endTurn,
     focus: (node, options) => moveFocus(node, options?.reveal ?? false, options?.cause ?? "programmatic"),
     beginStop: () => { stopping = true; },

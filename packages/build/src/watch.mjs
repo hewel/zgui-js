@@ -42,6 +42,7 @@ export function rebuildQueue(build, { delay = 80, onSuccess = () => {}, onError 
 }
 
 const statusFilename = ".zgui-build-status.json";
+const nativeStatusFilename = ".zgui-native-status.json";
 
 async function publishBuildStatus(appDirectory, status) {
   const bytes = JSON.stringify(status) + "\n";
@@ -55,7 +56,7 @@ async function publishBuildStatus(appDirectory, status) {
   }
 }
 
-export function watchApplication(app, { root = workspaceRoot, appDirectory = path.join(root, "apps/examples", app), onSuccess = ({ dist, manifest }) => console.log(`Published ${dist} ${manifest.buildId}`), onError = error => console.error(error.message), signal } = {}) {
+export function watchApplication(app, { root = workspaceRoot, appDirectory = path.join(root, "apps/examples", app), stylexDiagnostics = false, onSuccess = ({ dist, manifest }) => console.log(`Published ${dist} ${manifest.buildId}`), onError = error => console.error(error.message), signal } = {}) {
   if (!/^[a-z][a-z0-9-]*$/.test(app)) throw new Error(`Invalid application name: ${app}`);
   const controller = new AbortController();
   const abort = () => controller.abort(signal.reason);
@@ -106,7 +107,7 @@ export function watchApplication(app, { root = workspaceRoot, appDirectory = pat
   async function startCompiler() {
     status = undefined;
     compiler = watchCompiler({
-      ...compilerOptions(path.join(appDirectory, "src/main.tsx"), { root, appDirectory, plugins: [{
+      ...compilerOptions(path.join(appDirectory, "src/main.tsx"), { root, appDirectory, stylexDiagnostics, plugins: [{
         name: "immutable-native-publication",
         async buildStart() {
           attemptError = undefined;
@@ -177,7 +178,8 @@ export function watchApplication(app, { root = workspaceRoot, appDirectory = pat
   }, { onError: report });
   const changed = (filename, directory = root) => {
     const parts = filename?.toString().split(/[\\/]/) ?? [];
-    if (parts.some(part => part === "dist" || part === ".zgui-generations" || part === "node_modules" || part.startsWith(".dist-") || part === statusFilename || part.startsWith(`${statusFilename}.`))) return;
+    if (parts.some(part => part === "dist" || part === ".zgui-generations" || part === "node_modules" || part.startsWith(".dist-") ||
+      part === statusFilename || part.startsWith(`${statusFilename}.`) || part === nativeStatusFilename || part.startsWith(`${nativeStatusFilename}.`))) return;
     if (parts.some(part => part === "package.json" || /^tsconfig.*\.json$/.test(part)) || parts.some(part => ["pnpm-lock.yaml", "pnpm-workspace.yaml"].includes(part))) restart = true;
     else if (filename && graphModules.has(path.resolve(directory, filename.toString()))) return;
     queue.request();

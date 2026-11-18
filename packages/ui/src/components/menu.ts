@@ -95,7 +95,7 @@ export function MenuTypeahead(props: MenuTypeaheadProps = {}): NativeNode {
   const [own, rest] = splitProps(props, ["children", "onKeyDown"]);
   const node = createElement("box");
   spread(node, mergeProps(rest, {
-    get class() { return classes("zui-menu__keys", rest.class); },
+    get __zguiClass() { return classes("zui-menu__keys"); },
     onKeyDown(event: NativeKeyEvent) {
       if (callHandler(event, own.onKeyDown)) onTypeahead(event);
     },
@@ -127,7 +127,7 @@ export function menuRow(props: NativeElementProps, options: {
     if (target) focus(target);
   };
   spread(node, mergeProps({ role: options.role, get tabIndex() { return item?.tabIndex() ?? (disabled() ? -1 : 0); } }, rest, {
-    get class() { return classes(options.baseClass ?? "zui-menu__item", options.class(), rest.class); },
+    get __zguiClass() { return classes(options.baseClass ?? "zui-menu__item", options.class()); },
     ref(value: NativeNode) { if (typeof own.ref === "function") own.ref(value); },
     onClick(event: NativeEvent) { if (callHandler(event, own.onClick) && alive && !disabled()) options.select(); },
     onPointerDown(event: NativePointerDownEvent) {
@@ -221,7 +221,7 @@ export function MenuRadioGroup(props: MenuRadioGroupProps = {}): NativeNode {
   const value = memo(() => { const current = read(); if (typeof current !== "string") throw new TypeError("MenuRadioGroup value must be a string"); return current; });
   const node = createElement("box");
   spread(node, mergeProps({ role: "group" as const, get ariaLabel() { return own.label ?? null; } }, rest, {
-    get class() { return classes("zui-menu__group", rest.class); },
+    get __zguiClass() { return classes("zui-menu__group"); },
   }), true);
   provide(MenuRadioContext, { value, choose }, () => {
     slot(node, () => own.children);
@@ -248,14 +248,14 @@ export function MenuRadioItem(props: MenuRadioItemProps): NativeNode {
 export function MenuLabel(props: MenuLabelProps = {}): NativeNode {
   useStylesheet(sheet);
   const [own, rest] = splitProps(props, ["inset"]);
-  return element("label", mergeProps(rest, { get class() { return classes("zui-menu__label", own.inset && "zui-menu__label--inset", rest.class); } }));
+  return element("label", mergeProps(rest, { get __zguiClass() { return classes("zui-menu__label", own.inset && "zui-menu__label--inset"); } }));
 }
 export function MenuGroup(props: MenuGroupProps = {}): NativeNode {
   useStylesheet(sheet);
   const [own, rest] = splitProps(props, ["children", "label"]);
   const node = createElement("box");
   spread(node, mergeProps({ role: "group" as const, get ariaLabel() { return own.label ?? null; } }, rest, {
-    get class() { return classes("zui-menu__group", rest.class); },
+    get __zguiClass() { return classes("zui-menu__group"); },
   }), true);
   slot(node, () => own.children);
   return node;
@@ -263,6 +263,6 @@ export function MenuGroup(props: MenuGroupProps = {}): NativeNode {
 export function MenuSeparator(props: MenuSeparatorProps = {}): NativeNode {
   useStylesheet(sheet);
   forbidChildren("MenuSeparator", props);
-  return element("box", mergeProps({ ariaHidden: true }, props, { get class() { return classes("zui-menu__separator", props.class); } }));
+  return element("box", mergeProps({ ariaHidden: true }, props, { get __zguiClass() { return classes("zui-menu__separator"); } }));
 }
 export const MenuShortcut = part("text", sheet, "zui-menu__shortcut", { ariaHidden: true });

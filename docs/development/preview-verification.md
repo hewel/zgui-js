@@ -703,3 +703,19 @@ retains the three immutable compiled blending inputs, source maps and build-info
 the named `.log` files retain real protocol/lifecycle observations. The desktop
 images and logs may contain window titles and are deliberately not committed.
 Temporary source packages and native input helper sources/binaries were removed.
+
+## StyleX native integration gate
+
+The StyleX gate builds the real example package and uses the production schema-v2 loader, QuickJS session, native bridge, stylesheets, fonts, images, layout, and GPU paint:
+
+```sh
+pnpm build --app stylex
+cargo build -j 4 -p native-host --locked --offline
+node --test --test-concurrency=1 tests/preview/stylex.test.mjs
+```
+
+The scenarios exercise extracted static CSS without an injector; imported tokens and nested/default/removed themes; conditional classes and dynamic custom properties; SDK root forwarding and base/StyleX sheet ordering; native focus, hover, and viewport-media conditions; invalid dynamic values and alias conflicts; keyframes with the explicit reduced-motion host preference; package image/font readiness; and consumed build/style revision evidence. Every target is a stable `testId`, never a generated StyleX hash. Nested Disclosure uses an explicit 300,000-byte stack bound with entry duration checked below 25 ms; Gallery fuzz uses a 240 KiB stack cap and a 30 ms entry bound. Both limits are asserted through `metrics.json`.
+
+Compiler/watch, native props, schema/digest, preflight, selector/cascade, reload, provenance, and diagnostic suites cover the remaining SX01–SX19 contracts. Browser-root RTL output is an SX11 rejection case rather than an SX10 success claim. SX17 intentionally uses native package images and manifest-registered fonts, not CSS URLs or `@font-face`. SX20 remains deferred with CSS-only activation outside v1.
+
+Observed 2026-11-18: the complete Preview suite passed **84/84 scenarios**, including all six StyleX scenarios. `pnpm check` passed 230 build tests plus Rust tests/Clippy, and `pnpm test:vendor` passed the required vendored suites. Both independent reviews ended with no remaining findings. See [StyleX authoring](stylex.md), the [decision record](../../.scratch/stylex-integration/decision-record.md), and the [complete verification report](../../.scratch/stylex-integration/verification.md). No historical screenshot is accepted as a current run.

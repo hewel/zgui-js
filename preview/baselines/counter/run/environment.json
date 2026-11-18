@@ -1,10 +1,27 @@
 {
   "application": {
-    "buildId": "sha256:923ddb9e4b8df968552ed0f323aea9af99f099e8880b30317eb2a8ff0d939340",
-    "entryDigest": "sha256:31543570808c46b941fb07bc518f6713c8789d6bf571cd385d8e97b69d67e794",
+    "artifactDigests": {
+      "app.css": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "app.mjs": "sha256:ad67799bbc93ecddcc51a130fce450541bdcc14689bb31950f27f15809dc3660",
+      "app.mjs.map": "sha256:2534278df5b05b43dd878500165af3a1abbe9615a2a82c091f8bd1933868ac50",
+      "build-info.json": "sha256:8b96ccfb796c14a0c351c0f7da6cc188f1ed51fdaf134c8603d6a532c348b59d",
+      "style-origins.json": "sha256:44221bcfd7f9fe023a7fe53058d7929908206572a365944522b061737f80e3a2"
+    },
+    "buildId": "sha256:4f78e261909cb6e1f43c6720d2c468725df61ad9db50f9ccd2c113bee92a5e85",
+    "entryDigest": "sha256:ad67799bbc93ecddcc51a130fce450541bdcc14689bb31950f27f15809dc3660",
+    "fonts": [],
     "id": "dev.example.counter",
     "sourceMap": "app.mjs.map",
-    "sourceMapDigest": "sha256:a39cece41c08a7abf4391ee389343c4a4490ab9858f39f2c894ed8e78cd3ab5e"
+    "sourceMapDigest": "sha256:2534278df5b05b43dd878500165af3a1abbe9615a2a82c091f8bd1933868ac50",
+    "styleSystem": {
+      "configDigest": "sha256:33c7891b27d625d83284f9d24aef2ee1b62041f5b423dbd3b41411a61ccada45",
+      "name": "stylex",
+      "nativeProfileDigest": "sha256:984726d33988e8d259cc03cfa755440dfe1753277ee13a6e42b658ff8d662b9e",
+      "profile": "zgui-stylex-v1"
+    },
+    "styles": [
+      "app.css"
+    ]
   },
   "capabilities": {
     "assets.native-readiness": true,
@@ -42,9 +59,9 @@
     "timeZone": "UTC"
   },
   "dependencies": {
-    "cargoLockDigest": "sha256:0cc22956e2f8ab3a6c30f701ac78d69367a8e0fa4c36a2d5927ee8ca84f3aa70",
+    "cargoLockDigest": "sha256:4b35eeda22678e7a5ff22574f17428331edc6d441c79fc049fcf852be8de5cc5",
     "javascriptIdentityKind": "exact pnpm v9 package resolution keys from every lockfile document",
-    "pnpmLockDigest": "sha256:15d04dc67df8472c2046c20266924c9baa99d7aa2927698ecd8f0d38cd79675b",
+    "pnpmLockDigest": "sha256:7303f25fe621da3ab52e5e5d3621870b502ecab8c3c0ea7e760af5f68eadba2b",
     "quickJsEngineRevision": "6d46d07d04041b40f4f49eaa7fdebe44c314c699",
     "resolvedCargoPackages": [
       {
@@ -3144,7 +3161,6 @@
       },
       {
         "name": "zgui",
-        "source": "git+https://github.com/zortax/zgui?rev=80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a#80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a",
         "version": "0.1.0"
       },
       {
@@ -3327,7 +3343,6 @@
       },
       {
         "name": "zgui-text-parley",
-        "source": "git+https://github.com/zortax/zgui?rev=80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a#80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a",
         "version": "0.1.0"
       },
       {
@@ -3357,7 +3372,6 @@
       },
       {
         "name": "zgui-view",
-        "source": "git+https://github.com/zortax/zgui?rev=80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a#80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a",
         "version": "0.1.0"
       },
       {
@@ -3457,6 +3471,7 @@
       "@babel/template@7.29.7",
       "@babel/traverse@7.29.14",
       "@babel/types@7.29.14",
+      "@dual-bundle/import-meta-resolve@4.2.1",
       "@emnapi/core@2.0.0-beta.2",
       "@emnapi/runtime@2.0.0-beta.2",
       "@emnapi/wasi-threads@2.2.0",
@@ -3517,6 +3532,9 @@
       "@rolldown/binding-win32-arm64-msvc@1.3.2",
       "@rolldown/binding-win32-x64-msvc@1.3.2",
       "@rolldown/pluginutils@1.1.1",
+      "@stylexjs/babel-plugin@0.19.2",
+      "@stylexjs/shared@0.19.2",
+      "@stylexjs/stylex@0.19.2",
       "@tybys/wasm-util@0.10.4",
       "@typescript/typescript-aix-ppc64@7.0.2",
       "@typescript/typescript-darwin-arm64@7.0.2",
@@ -3561,11 +3579,13 @@
       "parse5@7.3.0",
       "picocolors@1.1.1",
       "pnpm@12.18.0",
+      "postcss-value-parser@4.2.0",
       "rolldown@1.3.2",
       "semver@6.3.2",
       "seroval-plugins@1.6.12",
       "seroval@1.6.12",
       "solid-js@1.9.19",
+      "styleq@0.2.1",
       "tslib@2.9.1",
       "typescript@7.0.2",
       "update-browserslist-db@1.3.4",
@@ -3596,6 +3616,62 @@
         "licenseSha256": "6a73f9541c2de74158c0e7cf6b0a58ef774f5a780bf191f2d7ec9cc53efe2bf2",
         "path": "NotoSansCJKsc-Regular.otf",
         "sha256": "2c76254f6fc379fddfce0a7e84fb5385bb135d3e399294f6eeb6680d0365b74b"
+      },
+      {
+        "bytes": 569208,
+        "family": "Geist",
+        "licensePath": "NotoSans-LICENSE.txt",
+        "licenseSha256": "0dab92d0544f7b233403f14b84a663bdbfa746982eda629e7f4f9ffe1b036feb",
+        "path": "NotoSans-Regular.ttf",
+        "sha256": "b85c38ecea8a7cfb39c24e395a4007474fa5a4fc864f6ee33309eb4948d232d5"
+      },
+      {
+        "bytes": 569208,
+        "family": "Geist Mono",
+        "licensePath": "NotoSans-LICENSE.txt",
+        "licenseSha256": "0dab92d0544f7b233403f14b84a663bdbfa746982eda629e7f4f9ffe1b036feb",
+        "path": "NotoSans-Regular.ttf",
+        "sha256": "b85c38ecea8a7cfb39c24e395a4007474fa5a4fc864f6ee33309eb4948d232d5"
+      },
+      {
+        "bytes": 569208,
+        "family": "SFMono-Regular",
+        "licensePath": "NotoSans-LICENSE.txt",
+        "licenseSha256": "0dab92d0544f7b233403f14b84a663bdbfa746982eda629e7f4f9ffe1b036feb",
+        "path": "NotoSans-Regular.ttf",
+        "sha256": "b85c38ecea8a7cfb39c24e395a4007474fa5a4fc864f6ee33309eb4948d232d5"
+      },
+      {
+        "bytes": 569208,
+        "family": "Menlo",
+        "licensePath": "NotoSans-LICENSE.txt",
+        "licenseSha256": "0dab92d0544f7b233403f14b84a663bdbfa746982eda629e7f4f9ffe1b036feb",
+        "path": "NotoSans-Regular.ttf",
+        "sha256": "b85c38ecea8a7cfb39c24e395a4007474fa5a4fc864f6ee33309eb4948d232d5"
+      },
+      {
+        "bytes": 569208,
+        "family": "ui-sans-serif",
+        "licensePath": "NotoSans-LICENSE.txt",
+        "licenseSha256": "0dab92d0544f7b233403f14b84a663bdbfa746982eda629e7f4f9ffe1b036feb",
+        "path": "NotoSans-Regular.ttf",
+        "sha256": "b85c38ecea8a7cfb39c24e395a4007474fa5a4fc864f6ee33309eb4948d232d5"
+      },
+      {
+        "bytes": 569208,
+        "family": "system-ui",
+        "licensePath": "NotoSans-LICENSE.txt",
+        "licenseSha256": "0dab92d0544f7b233403f14b84a663bdbfa746982eda629e7f4f9ffe1b036feb",
+        "path": "NotoSans-Regular.ttf",
+        "sha256": "b85c38ecea8a7cfb39c24e395a4007474fa5a4fc864f6ee33309eb4948d232d5"
+      },
+      {
+        "bytes": 569208,
+        "family": "ui-monospace",
+        "licensePath": "NotoSans-LICENSE.txt",
+        "licenseSha256": "0dab92d0544f7b233403f14b84a663bdbfa746982eda629e7f4f9ffe1b036feb",
+        "path": "NotoSans-Regular.ttf",
+        "sha256": "b85c38ecea8a7cfb39c24e395a4007474fa5a4fc864f6ee33309eb4948d232d5"
       }
     ],
     "fallbackOrder": [
@@ -3616,6 +3692,48 @@
           "licensePath": "NotoSansCJK-LICENSE.txt",
           "path": "NotoSansCJKsc-Regular.otf",
           "sha256": "2c76254f6fc379fddfce0a7e84fb5385bb135d3e399294f6eeb6680d0365b74b"
+        },
+        {
+          "family": "Geist",
+          "licensePath": "NotoSans-LICENSE.txt",
+          "path": "NotoSans-Regular.ttf",
+          "sha256": "b85c38ecea8a7cfb39c24e395a4007474fa5a4fc864f6ee33309eb4948d232d5"
+        },
+        {
+          "family": "Geist Mono",
+          "licensePath": "NotoSans-LICENSE.txt",
+          "path": "NotoSans-Regular.ttf",
+          "sha256": "b85c38ecea8a7cfb39c24e395a4007474fa5a4fc864f6ee33309eb4948d232d5"
+        },
+        {
+          "family": "SFMono-Regular",
+          "licensePath": "NotoSans-LICENSE.txt",
+          "path": "NotoSans-Regular.ttf",
+          "sha256": "b85c38ecea8a7cfb39c24e395a4007474fa5a4fc864f6ee33309eb4948d232d5"
+        },
+        {
+          "family": "Menlo",
+          "licensePath": "NotoSans-LICENSE.txt",
+          "path": "NotoSans-Regular.ttf",
+          "sha256": "b85c38ecea8a7cfb39c24e395a4007474fa5a4fc864f6ee33309eb4948d232d5"
+        },
+        {
+          "family": "ui-sans-serif",
+          "licensePath": "NotoSans-LICENSE.txt",
+          "path": "NotoSans-Regular.ttf",
+          "sha256": "b85c38ecea8a7cfb39c24e395a4007474fa5a4fc864f6ee33309eb4948d232d5"
+        },
+        {
+          "family": "system-ui",
+          "licensePath": "NotoSans-LICENSE.txt",
+          "path": "NotoSans-Regular.ttf",
+          "sha256": "b85c38ecea8a7cfb39c24e395a4007474fa5a4fc864f6ee33309eb4948d232d5"
+        },
+        {
+          "family": "ui-monospace",
+          "licensePath": "NotoSans-LICENSE.txt",
+          "path": "NotoSans-Regular.ttf",
+          "sha256": "b85c38ecea8a7cfb39c24e395a4007474fa5a4fc864f6ee33309eb4948d232d5"
         }
       ],
       "fallbackOrder": [
@@ -3637,18 +3755,18 @@
   "host": {
     "profile": "debug",
     "rustc": "rustc 1.100.0 (0ef1bc386 2026-11-09)",
-    "sourceTreeDigest": "sha256:c37607d78f92b3910f3c3bf20915a0277ffeaf0eddb1e48ecd6e82c8b3126368",
+    "sourceTreeDigest": "sha256:67c94b2d6bc9f70da2025a67c8cb6e9ca447b42aee6ef489b3aa1c9226a2211b",
     "sourceTreeScope": "workspace Rust sources, manifests, lockfiles and local native patches; includes test sources",
     "target": "x86_64-unknown-linux-gnu",
     "version": "0.1.0"
   },
-  "hostRootStyleDigest": "sha256:3973cd973e3c26b5461b4513ca1c3455c8c48eb4e151dc52e97e3e856ffb906a",
+  "hostRootStyleDigest": "sha256:65b171e165c60ba4628b00c100d7dcd36503b3ae42b0ec1447436a51fd95149c",
   "inputPolicy": {
     "dispatch": "one native deliver_all burst per action; no frame between low-level events",
     "modifiers": "key-local; restored to none after key-up",
     "surfaceFocus": "main"
   },
-  "profileDigest": "c207cf4be40e7a932a6b76046617b82f053e67d63d5b1991ad31ce82bcf84a27",
+  "profileDigest": "646b427d222d120b2912c87a30036073ebfac84a77fcf25ae600d783ec7ef2a5",
   "random": {
     "algorithm": "splitmix64-v1",
     "seed": 12345

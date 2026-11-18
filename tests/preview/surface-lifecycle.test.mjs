@@ -18,7 +18,7 @@ function native(args) {
   return result;
 }
 const emptyResources = { nodes: 0, wrappers: 0, callbacks: 0, focusTraps: 0, scrollLocks: 0, timers: 0,
-  frameCallbacks: 0, requests: 0, engineAlive: false };
+  frameCallbacks: 0, requests: 0, fonts: 0, engineAlive: false };
 
 // Real GPU/native lifecycle gate: no platform fallback, graphics skip, or synthetic success.
 test("surface recreation retires ownership and rebinds input, captures and fixture work", async t => {

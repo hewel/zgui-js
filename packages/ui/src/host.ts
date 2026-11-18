@@ -20,6 +20,7 @@ export interface NativeHost {
     setProperty(node: NativeNode, name: string, value: unknown, previous?: unknown): void;
     installStylesheet(name: string, css: string): void;
     removeStylesheet(name: string): void;
+    getReducedMotion(): boolean;
     focus(node: NativeNode, reveal?: boolean): void;
     trapFocus(node: NativeNode, wrap: boolean, autoFocus: boolean, restore: boolean): () => void;
     lockScroll(node: NativeNode): () => void;

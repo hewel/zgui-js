@@ -122,9 +122,13 @@ pub fn worker(args: impl Iterator<Item=String>) -> supervisor::Report {
         sink.borrow_mut().bytes("inputs/scenario.json","scenario",&scenario.original)?;
         let package=Rc::new(Package::load(&options.bundle).map_err(|error|Error::new("E_BUNDLE",3,error.to_string()))?);
         let build=json!({"id":package.manifest.id,"buildId":package.manifest.build_id,"sourceMap":package.manifest.source_map,
-            "sourceMapDigest":package.source_map_digest,"entryDigest":super::output::digest(package.source.as_bytes())});
+            "sourceMapDigest":package.source_map_digest,"entryDigest":super::output::digest(package.source.as_bytes()),
+            "styleSystem":package.manifest.style_system,"styles":package.manifest.styles,
+            "fonts":package.manifest.fonts,"artifactDigests":package.manifest.artifact_digests});
         ledger.identity(build.clone(),json!(scenario.scenario.id),profile.profile.clock.is_virtual());
         sink.borrow_mut().json("inputs/bundle.json","bundle-identity",&build)?;
+        sink.borrow_mut().json("inputs/style-origins.json","verified-style-origins",&package.style_origins)?;
+        sink.borrow_mut().json("inputs/build-info.json","verified-build-info",&package.build_info)?;
         let root_styles=super::driver::stylesheet(&profile);
         let mut environment=inventory::snapshot()?;
         environment["profileDigest"]=json!(profile.digest);

@@ -1,0 +1,45 @@
+[package]
+name = "zgui-text-parley"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+description = "Text engine for zgui, built on Parley"
+repository = "https://github.com/zortax/zgui"
+homepage = "https://zgui.zortax.de"
+rust-version = "1.90"
+keywords = ["gui", "ui", "css", "reactive", "wgpu"]
+categories = ["gui"]
+include = ["/src", "/build", "/build.rs", "/README.md", "/LICENSE", "/NOTICE"]
+
+[workspace]
+
+[dependencies]
+zgui-atlas = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a" }
+zgui-geom = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a" }
+zgui-interned = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a" }
+zgui-profile = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a" }
+zgui-scene = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a" }
+zgui-text = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a" }
+zgui-text-style = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a" }
+parley = "0.11.0"
+fontique = "0.11.0"
+skrifa = "0.44.0"
+swash = "0.2.10"
+kurbo = "0.13.1"
+rustc-hash = "2.1"
+smallvec = "1.15"
+
+[dev-dependencies]
+zgui-profile = { features = ["counters"], git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a" }
+proptest = "1.11"
+
+[lints.rust]
+missing_docs = "deny"
+unsafe_code = "deny"
+
+[patch.crates-io]
+fontique = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a" }
+
+[patch."https://github.com/zortax/zgui"]
+zgui = { path = "../zgui" }
+zgui-text-parley = { path = "../zgui-text-parley" }

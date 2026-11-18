@@ -17,6 +17,7 @@ export async function devApplication(app, {
   appDirectory = path.join(root, "apps/examples", app),
   hostArgs = [],
   mode = "desktop",
+  stylexDiagnostics = mode === "preview",
 } = {}, {
   watch = watchApplication,
   prepare = prepareNativeHost,
@@ -50,7 +51,7 @@ export async function devApplication(app, {
   try {
     if (mode !== "desktop" && mode !== "preview") throw new Error(`Unknown development mode: ${mode}`);
     watcher = watch(app, {
-      root, appDirectory, signal: controller.signal,
+      root, appDirectory, stylexDiagnostics, signal: controller.signal,
       onSuccess(result) {
         if (controller.signal.aborted) return;
         log(`Published ${result.dist} ${result.manifest.buildId}`);
