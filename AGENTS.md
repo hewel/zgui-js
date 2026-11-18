@@ -34,7 +34,7 @@
 
 ### Issue tracker
 
-Issues, specs, and wayfinding maps are tracked as local markdown files under `.scratch/<feature-slug>/`. See `docs/agents/issue-tracker.md`.
+Issues, specs, and wayfinding maps are tracked as GitHub Issues in `hewel/zgui-js` on GitHub Project #1 (`zgui-js`). See `docs/agents/issue-tracker.md`.
 
 ### Triage labels
 
