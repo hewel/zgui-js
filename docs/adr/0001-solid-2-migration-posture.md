@@ -1,0 +1,19 @@
+# Hold on Solid 1.9.19 While Pre-Converging Toward Solid 2.0 Staged Reactivity
+
+**Status:** accepted
+
+Solid 2.0 (`solid-js@2.0.0`, published 2026-11-16) replaces synchronous signal commits with microtask-staged writes, splits `createEffect(compute, apply)` so the `apply` phase executes with `getOwner() === null`, throws `ContextNotFoundError` when reading a default-less `createContext<T>()` outside a provider, lets explicit `undefined` override defaults in `merge`, extracts `@solidjs/universal` and `@solidjs/babel-plugin`, and splits its runtime across `@solidjs/signals` plus hydration code referencing browser globals (`window`, `document`, `fetch`, `Node`). We will keep `zgui-js` pinned to `solid-js@1.9.19` until upstream `2.0.x` patch releases stabilize or an application requires Solid 2.0's async graph (`<Loading>` / `<Errored>`) or built-in draft stores (`createStore` / `createProjection`).
+
+Meanwhile, we will pre-converge the `1.9.19` codebase toward Solid 2.0 semantics without breaking existing contracts: `@hewel/zgui` remains the sole curated reactive entry point (pruning `batch`, `Index`, and `splitProps` from its root exports now and clean-cutting to Solid 2.0 primitives on cutover with zero 1.x compatibility aliases), optional contexts must use `createContext<T | null>(null)`, component prop defaults resolve via `??` at read sites instead of relying on `mergeProps` skipping `undefined`, and application/component code must not read signals immediately after writing them in the same synchronous turn. When we cut over to 2.0, we will adopt Solid 2.0's microtask-staged commits—draining **Mount region** mutations during `Session::checkpoint`—rather than calling `flush()` after every native event **Bridge turn**, reserving synchronous `flush()` strictly for initial `renderApp` mount, intra-frame `observeGeometry` callbacks in `packages/ui/src/nodes.ts` (because `vendor/zgui-runtime/src/window/frame.rs` runs `binding.checkpoint()` before `deliver_observations()`), and explicit test-fixture settlement.
+
+## Considered Options
+
+- **Immediate migration to `solid-js@2.0.0`:** Rejected because `2.0.0` is two days old, `zgui-js` currently has zero `createResource`, `Suspense`, `ErrorBoundary`, or `createStore` usage, and synchronous **Bridge turn** / QuickJS validation gates require careful staging before cutover.
+- **Per-event `flush()` wrapper on cutover:** Rejected because draining pending reactive queues synchronously inside every native event **Bridge turn** would negate Solid 2.0 multi-event coalescing and break held async frame transitions (`<Loading>`).
+- **Retaining a 1.x compatibility shim in `@hewel/zgui` or opening raw `import "solid-js"`:** Rejected because dual reactive idioms increase component/agent bug rates and raw `solid-js` exports expose unconstrained `RenderedElement` (`object`) and `createRoot`, defeating `NativeNode` brand checks and **Session** ownership boundaries.
+
+## Consequences
+
+- `packages/ui` and `tools/oxlint-zgui-plugin.mjs` can enforce 2.0-compatible habits immediately under `1.9.19` (`packages/ui/src/index.ts` shrinkage, null-defaulted optional contexts, `??` defaults, and no intra-turn write-then-read assumptions).
+- On cutover, `@hewel/zgui-services` will keep `readTextAsset(): HostRequest<T>` for imperative control while adding an owner-scoped Promise helper that cancels in-flight requests on cleanup and absorbs `"Cancelled"` rejections so cancelled reads never fault strict preview **Session** runs under `RejectionPolicy::Strict`.
+- `packages/build` will split compilation postures on cutover: `zgui-js dev` (and explicit diagnostics flags) will enable `development` resolution and `@solidjs/babel-plugin` `sourceNames` logging to host `console`, while `build` and sealed `preview` **Package publication** / **Artifact inventory** verification remain locked to `production`.
