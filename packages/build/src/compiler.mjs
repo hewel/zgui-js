@@ -2,13 +2,14 @@ import path from "node:path";
 import { transformAsync } from "@babel/core";
 import typescriptPreset from "@babel/preset-typescript";
 import solidPreset from "babel-preset-solid";
+import { rolldown, watch as watchCompiler } from "rolldown";
 import { validateImport, validateModule, validateGraph } from "./validate.mjs";
 import { realpath } from "node:fs/promises";
 import { moduleIdentity } from "./identity.mjs";
 import { stylexPlugin, stylexOptions, styleSystem, readNativeProfileDigest, validateStylexModule, finalizeStylex } from "./stylex.mjs";
 
 // Babel owns JSX lowering; Rolldown composes this map with its ES2022 output map.
-export function compilerOptions(entry, { root, appDirectory = path.dirname(entry), plugins = [], babelTransform = transformAsync, stylexDiagnostics = false }) {
+function compilerOptions(entry, { root, appDirectory = path.dirname(entry), plugins = [], babelTransform = transformAsync, stylexDiagnostics = false }) {
   // Rolldown 1.3.2 watch rescans the graph even with incrementalBuild enabled.
   // Keep expensive Babel/Solid work incremental without caching resolution or diagnostics.
   const transforms = new Map();
@@ -96,12 +97,12 @@ export function compilerOptions(entry, { root, appDirectory = path.dirname(entry
   };
 }
 
-export function outputOptions(filename = "app.mjs") {
+function outputOptions(filename = "app.mjs") {
   return { format: "esm", entryFileNames: filename, sourcemap: "hidden", codeSplitting: false, minify: false };
 }
 
 // A native graph, not an emulation of another bundler's metadata schema.
-export function compilationResult(output, moduleIds, { entry = true } = {}) {
+function compilationResult(output, moduleIds, { entry = true } = {}) {
   const graph = {
     modules: [...moduleIds].filter(id => !id.startsWith("\0")).sort(),
     chunks: output.filter(item => item.type === "chunk").map(chunk => ({
@@ -127,4 +128,83 @@ export function compilationResult(output, moduleIds, { entry = true } = {}) {
     throw new Error("Missing or incompatible StyleX profile metadata");
   }
   return { files, graph, solidRuntime, styleSystem };
+}
+
+export async function compileBundle(entry, {
+  root,
+  appDirectory = path.dirname(entry),
+  hostEntry = true,
+  filename = "app.mjs",
+  stylexDiagnostics = false,
+  babelTransform = transformAsync,
+} = {}) {
+  let result;
+  const compiler = await rolldown(compilerOptions(entry, {
+    root, appDirectory, stylexDiagnostics, babelTransform,
+    plugins: [{
+      name: "capture-native-graph",
+      generateBundle(_options, output) {
+        result = compilationResult(Object.values(output), this.getModuleIds(), { entry: hostEntry });
+      },
+    }],
+  }));
+  try {
+    await compiler.generate(outputOptions(filename));
+    return result;
+  } finally {
+    await compiler.close();
+  }
+}
+
+export function watchBundle(entry, {
+  root,
+  appDirectory = path.dirname(entry),
+  outputDirectory,
+  filename = "app.mjs",
+  buildDelay = 80,
+  stylexDiagnostics = false,
+  babelTransform = transformAsync,
+  watchFiles = [],
+  onAttempt,
+  onCompile,
+  onSettled,
+} = {}) {
+  let attemptError;
+  const preserve = async operation => {
+    try { return await operation(); }
+    catch (error) { attemptError = error; throw error; }
+  };
+  const watcher = watchCompiler({
+    ...compilerOptions(entry, {
+      root, appDirectory, stylexDiagnostics, babelTransform,
+      plugins: [{
+        name: "immutable-native-compilation",
+        async buildStart() {
+          attemptError = undefined;
+          for (const file of watchFiles) this.addWatchFile(file);
+          if (onAttempt) return preserve(() => onAttempt());
+        },
+        async generateBundle(_options, output) {
+          // Consume output in memory and suppress bundler writes so no partial package lands on disk.
+          try {
+            const result = await preserve(() => compilationResult(Object.values(output), this.getModuleIds()));
+            if (onCompile) await preserve(() => onCompile(result));
+          } finally {
+            for (const name of Object.keys(output)) delete output[name];
+          }
+        },
+      }],
+    }),
+    output: { ...outputOptions(filename), dir: outputDirectory },
+    watch: { buildDelay },
+  });
+  watcher.on("event", async event => {
+    if (event.code !== "BUNDLE_END" && event.code !== "ERROR") return;
+    try {
+      await onSettled?.(event.code === "ERROR" ? { error: attemptError ?? event.error } : {});
+    } finally {
+      await event.result?.close();
+    }
+  });
+  return { close: () => watcher.close() };
 }

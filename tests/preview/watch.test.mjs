@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { watch } from "node:fs";
-import { mkdir, mkdtemp, readFile, readdir, realpath, rename, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from "node:fs/promises";
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { buildApplication, workspaceRoot } from "../../packages/build/src/build.mjs";
+import { activateGeneration, publishBuildStatus } from "../../packages/build/src/publication.mjs";
 import { watchApplication } from "../../packages/build/src/watch.mjs";
 
 const json = async file => JSON.parse(await readFile(file, "utf8"));
@@ -91,14 +92,12 @@ function start(f, maximum = 64, consume = true) {
   return { child, out, events, exit, closed };
 }
 async function publication(app, directory) {
-  const temporary = path.join(app, `.dist-${randomUUID()}`);
-  await symlink(path.relative(app, directory), temporary); await rename(temporary, path.join(app, "dist"));
+  return activateGeneration(app, directory);
 }
 async function status(app, previousDirectory, message = "controlled failed build attempt") {
   const value = { schemaVersion: 1, attemptId: randomUUID(), app: "watch-regression", status: "failed", previousDirectory,
     publicationDirectory: null, buildId: null, error: { code: "E_BUILD", message } };
-  const temporary = path.join(app, `.zgui-build-status.json.${randomUUID()}.tmp`);
-  await writeFile(temporary, JSON.stringify(value)); await rename(temporary, path.join(app, ".zgui-build-status.json"));
+  await publishBuildStatus(app, value);
   return value;
 }
 async function observedFile(root, file) {

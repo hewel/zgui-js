@@ -6,11 +6,12 @@ import { createRequire } from "node:module";
 import { createHash } from "node:crypto";
 import { pathToFileURL } from "node:url";
 import path from "node:path";
-import { buildApplication, bundle, contentDigest, publishGeneration, workspaceRoot } from "../../packages/build/src/build.mjs";
+import { buildApplication, bundle, contentDigest, publishApplication, publishGeneration, workspaceRoot } from "../../packages/build/src/build.mjs";
 import { validateModule } from "../../packages/build/src/validate.mjs";
 import { rebuildQueue, watchApplication } from "../../packages/build/src/watch.mjs";
 import { typecheckProject, typecheckProjectAsync } from "../../packages/build/src/typecheck.mjs";
-import { compilerOptions, outputOptions, compilationResult } from "../../packages/build/src/compiler.mjs";
+import { compileBundle, watchBundle } from "../../packages/build/src/compiler.mjs";
+import { publishBuildStatus } from "../../packages/build/src/publication.mjs";
 import { validateStylesheet } from "../../packages/build/src/stylex.mjs";
 
 const require = createRequire(new URL("../../packages/build/package.json", import.meta.url));
@@ -263,18 +264,16 @@ test("native compilation rejects unsupported StyleX APIs and host imports withou
 test("missing Babel maps and missing StyleX output cannot publish a candidate", async t => {
   const directory = await fixture(t);
   const source = path.join(directory, "src/main.tsx");
-  const { rolldown } = await import(require.resolve("rolldown"));
-  const compiler = await rolldown(compilerOptions(source, {
-    root: workspaceRoot, appDirectory: directory, babelTransform: async () => ({ code: entry, map: null }),
-  }));
-  try { await assert.rejects(compiler.generate(outputOptions()), /no JavaScript or composed source map/); }
-  finally { await compiler.close(); }
+  await assert.rejects(
+    compileBundle(source, { root: workspaceRoot, appDirectory: directory, babelTransform: async () => ({ code: entry, map: null }) }),
+    /no JavaScript or composed source map/,
+  );
   const result = await bundle(source, { appDirectory: directory });
-  assert.throws(() => compilationResult([{
-    type: "chunk", fileName: "app.mjs", code: result.files.get("app.mjs").toString(),
-    map: { toString: () => result.files.get("app.mjs.map").toString() },
-    moduleIds: result.graph.modules, imports: [], dynamicImports: [], exports: ["hostApiVersion", "mount"],
-  }], result.graph.modules), /Missing StyleX stylesheet or provenance/);
+  const withoutStylex = new Map([...result.files].filter(([name]) => name !== "app.css" && name !== "style-origins.json"));
+  await assert.rejects(
+    publishApplication("fixture", { ...result, files: withoutStylex }, { root: workspaceRoot, appDirectory: directory }),
+    /Missing StyleX compilation output/,
+  );
 });
 
 test("manifest v2 fonts and build identity are reproducible across application directories", async t => {
@@ -584,7 +583,6 @@ test("persistent compiler caches real Babel transforms, prunes modules, and reco
   const mainSource = suffix => `import { message } from "./message";\n${validEntry.replace("Count:", `{message}${suffix}`)}`;
   await writeFile(dependency, dependencySource("incremental-one"));
   await writeFile(source, mainSource("first"));
-  const { watch } = await import(require.resolve("rolldown"));
   const { transformAsync } = require("@babel/core");
   let transforms = 0;
   let next = Promise.withResolvers();
@@ -593,28 +591,17 @@ test("persistent compiler caches real Babel transforms, prunes modules, and reco
     next = Promise.withResolvers();
     return result;
   };
-  const options = compilerOptions(source, {
-    root: workspaceRoot, appDirectory: directory,
+  const start = () => watchBundle(source, {
+    root: workspaceRoot,
+    appDirectory: directory,
+    outputDirectory: path.join(directory, "compiler-output"),
+    buildDelay: 20,
     babelTransform(source, options) {
       if (options.filename === dependency) transforms++;
       return transformAsync(source, options);
     },
-    plugins: [{
-      name: "observe-incremental-output",
-      generateBundle(_options, output) {
-        const result = compilationResult(Object.values(output), this.getModuleIds());
-        next.resolve({ result });
-        for (const filename of Object.keys(output)) delete output[filename];
-      },
-    }],
-  });
-  const start = () => watch({
-    ...options,
-    output: { ...outputOptions(), dir: path.join(directory, "compiler-output") },
-    watch: { buildDelay: 20 },
-  }).on("event", async event => {
-    if (event.code === "ERROR") next.resolve({ error: event.error });
-    if (event.code === "ERROR" || event.code === "BUNDLE_END") await event.result?.close();
+    onCompile(result) { next.resolve({ result }); },
+    onSettled({ error }) { if (error) next.resolve({ error }); },
   });
   let compiler = start();
   try {
@@ -642,6 +629,89 @@ test("persistent compiler caches real Babel transforms, prunes modules, and reco
     assert.ok((await take()).result);
     assert.equal(transforms, beforeRestart + 1, "closing a compiler clears its transform cache");
   } finally { await compiler.close(); }
+});
+
+test("watchApplication orchestrates deterministic status transitions and errors through its adapter seam", async t => {
+  const directory = await fixture(t);
+  const statuses = [], successes = [], errors = [];
+  let handlers, rejectTypecheck = false, publishCount = 0;
+  let driverReady = Promise.withResolvers();
+  const fakeWatchBundle = (_entry, options) => {
+    handlers = options;
+    driverReady.resolve();
+    return { close: async () => {} };
+  };
+  const runCycle = async result => {
+    try {
+      await handlers.onAttempt();
+      await handlers.onCompile(result);
+      await handlers.onSettled({});
+    } catch (error) {
+      await handlers.onSettled({ error });
+    }
+  };
+  const fakePublish = async (app, result, { appDirectory }) => {
+    publishCount += 1;
+    const dist = await publishGeneration(appDirectory, result.files);
+    return { dist, manifest: { buildId: `sha256:${String(publishCount).padStart(64, "0")}`, app } };
+  };
+  const fakeTypecheck = async () => {
+    if (rejectTypecheck) throw new Error("synthetic TS2322 type failure");
+  };
+  const watcher = watchApplication("fixture", {
+    appDirectory: directory,
+    onSuccess: value => successes.push(value),
+    onError: error => errors.push(error),
+  }, {
+    watchBundle: fakeWatchBundle,
+    typecheck: fakeTypecheck,
+    publish: fakePublish,
+    publishStatus: async (appDirectory, value) => {
+      statuses.push(value);
+      await publishBuildStatus(appDirectory, value);
+    },
+  });
+  try {
+    await driverReady.promise;
+    const compiled = {
+      files: new Map([["app.mjs", Buffer.from("export const hostApiVersion = 1;")]]),
+      graph: { modules: [path.join(directory, "src/main.tsx")], chunks: [] },
+    };
+    await runCycle(compiled);
+    const firstDist = await realpath(path.join(directory, "dist"));
+    assert.equal(successes.length, 1);
+    assert.deepEqual(statuses.map(entry => [entry.status, entry.previousDirectory]), [
+      ["building", null],
+      ["published", null],
+    ]);
+
+    rejectTypecheck = true;
+    await runCycle(compiled);
+    assert.equal(successes.length, 1);
+    assert.equal(publishCount, 1, "failed typecheck must not publish a generation");
+    assert.equal(errors.at(-1)?.message, "synthetic TS2322 type failure");
+    assert.equal(await realpath(path.join(directory, "dist")), firstDist);
+    assert.deepEqual(statuses.slice(2).map(entry => [entry.status, entry.previousDirectory]), [
+      ["building", firstDist],
+      ["failed", firstDist],
+    ]);
+
+    rejectTypecheck = false;
+    await runCycle({ ...compiled, files: new Map([["app.mjs", Buffer.from("export const hostApiVersion = 1; // v2")]]) });
+    const recoveredDist = await realpath(path.join(directory, "dist"));
+    assert.notEqual(recoveredDist, firstDist);
+    assert.equal(successes.length, 2);
+    assert.equal(statuses.at(-1).status, "published");
+    assert.equal(statuses.at(-1).previousDirectory, firstDist);
+
+    await rm(path.join(directory, ".zgui-build-status.json"), { force: true });
+    await mkdir(path.join(directory, ".zgui-build-status.json"));
+    await runCycle(compiled);
+    assert.equal(successes.length, 2, "status publication failure must not report success");
+    assert.equal(errors.at(-1)?.syscall, "rename");
+  } finally {
+    await watcher.close();
+  }
 });
 
 test("development watcher publishes added resources and external dependency changes", { timeout: 30000 }, async t => {

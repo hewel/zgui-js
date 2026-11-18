@@ -1,14 +1,14 @@
-import { readFile, readdir, lstat, mkdir, writeFile, rename, symlink, rm } from "node:fs/promises";
-import { randomUUID } from "node:crypto";
+import { readFile, readdir, lstat } from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { rolldown } from "rolldown";
-import { compilerOptions, outputOptions, compilationResult } from "./compiler.mjs";
+import { compileBundle } from "./compiler.mjs";
 import { typecheckProject } from "./typecheck.mjs";
 import { canonicalJson, sha256, moduleIdentity } from "./identity.mjs";
+import { publishGeneration, resourcePath } from "./publication.mjs";
 import { validateStylesheet } from "./stylex.mjs";
 
+export { publishGeneration };
 export const workspaceRoot = fileURLToPath(new URL("../../../", import.meta.url));
 const require = createRequire(import.meta.url);
 const json = value => JSON.stringify(value, null, 2) + "\n";
@@ -19,17 +19,7 @@ export async function optionalFile(filename) {
 }
 
 export async function bundle(entry, { root = workspaceRoot, appDirectory = path.dirname(entry), hostEntry = true, filename = "app.mjs", stylexDiagnostics = false } = {}) {
-  let result;
-  const compiler = await rolldown(compilerOptions(entry, { root, appDirectory, stylexDiagnostics, plugins: [{
-    name: "capture-native-graph",
-    generateBundle(_options, output) {
-      result = compilationResult(Object.values(output), this.getModuleIds(), { entry: hostEntry });
-    },
-  }] }));
-  try {
-    await compiler.generate(outputOptions(filename));
-    return result;
-  } finally { await compiler.close(); }
+  return compileBundle(entry, { root, appDirectory, hostEntry, filename, stylexDiagnostics });
 }
 
 export function dependencyVersions() {
@@ -65,13 +55,6 @@ export async function buildInfo(root, result, { appDirectory = root } = {}) {
   };
 }
 
-function resourcePath(name) {
-  if (!name || name.includes("\\") || name.includes("\0") || name.startsWith("/") || name.split("/").some(part => !part || part === "." || part === "..")) {
-    throw new Error(`Non-canonical resource path: ${name}`);
-  }
-  return name;
-}
-
 async function collectAssets(directory, prefix = "assets") {
   let entries;
   try {
@@ -104,40 +87,6 @@ export function contentDigest(files, manifest) {
     if (sha256(bytes) !== manifest.artifactDigests[name]) throw new Error(`Artifact digest mismatch: ${name}`);
   }
   return sha256(canonicalJson(identity));
-}
-
-export async function publishGeneration(appDirectory, files) {
-  const generations = path.join(appDirectory, ".zgui-generations");
-  await mkdir(generations, { recursive: true });
-  const token = randomUUID();
-  const staging = path.join(generations, `.building-${token}`);
-  const generation = path.join(generations, token);
-  const link = path.join(appDirectory, `.dist-${token}`);
-  const dist = path.join(appDirectory, "dist");
-  let published = false;
-  try {
-    try {
-      const existing = await lstat(dist);
-      if (!existing.isSymbolicLink()) throw new Error("dist must be absent or a generation symlink; refusing to overwrite it");
-    } catch (error) { if (error.code !== "ENOENT") throw error; }
-    await mkdir(staging);
-    for (const [name, bytes] of files) {
-      resourcePath(name);
-      const destination = path.join(staging, name);
-      await mkdir(path.dirname(destination), { recursive: true });
-      await writeFile(destination, bytes, { flag: "wx" });
-    }
-    await rename(staging, generation);
-    await symlink(path.relative(appDirectory, generation), link, "dir");
-    // Linux rename replaces the symlink atomically. Prior generations remain pinned for active readers.
-    await rename(link, dist);
-    published = true;
-    return dist;
-  } finally {
-    await rm(link, { force: true });
-    await rm(staging, { recursive: true, force: true });
-    if (!published) await rm(generation, { recursive: true, force: true });
-  }
 }
 
 export async function buildApplication(app, { root = workspaceRoot, appDirectory = path.join(root, "apps/examples", app), stylexDiagnostics = false } = {}) {
