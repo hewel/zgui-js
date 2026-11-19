@@ -10,6 +10,8 @@ export type { Context, Owner, Store, StoreReturn, StoreSetter } from "#solid";
 export { flush } from "./renderer/index.js";
 
 export { renderApp } from "./render-app.js";
+export { createSpring } from "./spring.js";
+export type { Spring, SpringOptions } from "./spring.js";
 export {
   focus, getTextContent, getWindowRect, isAnimating, lockScroll, mountStylesheet,
   observeGeometry, precedes, registerDismissLayer, trapFocus,

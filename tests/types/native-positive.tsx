@@ -1,14 +1,18 @@
 import {
   Image, Button, TextField, TextArea, For, Show, Loading, Errored,
-  createContext, createEffect, createMemo, createSignal, createStore, createProjection,
+  createContext, createEffect, createMemo, createSignal, createSpring, createStore, createProjection,
   merge, omit, onCleanup, onSettled, reconcile, renderApp, untrack, useContext,
   focus, getTextContent, getWindowRect, isAnimating, lockScroll, mountStylesheet, observeGeometry, precedes,
 } from "@hewel/zgui";
-import type { Component, Context, NativeAnimationEvent, NativeChild, NativeContextMenuEvent, NativeFocusOptions, NativeNode, NativePointerBoundaryEvent, NativeRole, NativeTextControlProps, NativeTransitionEvent, NativeViewport, NativeWindowRect, ParentComponent, TextFieldProps, TextAreaProps, VectorProps } from "@hewel/zgui";
+import type { Component, Context, NativeAnimationEvent, NativeChild, NativeContextMenuEvent, NativeFocusOptions, NativeNode, NativePointerBoundaryEvent, NativeRole, NativeTextControlProps, NativeTransitionEvent, NativeViewport, NativeWheelEvent, NativeWindowRect, ParentComponent, Spring, SpringOptions, TextFieldProps, TextAreaProps, VectorProps } from "@hewel/zgui";
 
 const Greeting: Component<{ name: string }> = props => <text>{props.name}</text>;
 const Container: ParentComponent = props => <box>{props.children}</box>;
 const [count, setCount] = createSignal(0);
+const springOptions: SpringOptions = { stiffness: 170, damping: 26, mass: 1, precision: 0.01, velocityPrecision: 0.02 };
+const sprungCount: Spring = createSpring(count, springOptions);
+const springValue: number = sprungCount();
+void springValue;
 const [optional, setOptional] = createSignal<string>();
 setOptional();
 const doubled = createMemo(() => count() * 2);
@@ -29,7 +33,14 @@ let assigned!: NativeNode;
 const tree = <Container>
   <row ref={node => { borrowed = node; }}><Greeting name="Native" /></row>
   <column><stack><label>{count()}</label></stack></column>
-  <scroll><control><text>{optional()}</text></control></scroll>
+  <scroll onWheelCapture={(event: NativeWheelEvent) => {
+    console.log(event.phase, event.scrollPhase, event.position.x, event.pointerId, event.pointerKind);
+    event.stopPropagation();
+  }} onWheel={event => {
+    const unit: "lines" | "pixels" = event.delta.unit;
+    console.log(event.delta.x, event.delta.y, unit, event.modifiers.shift);
+    event.preventDefault();
+  }}><control><text>{optional()}</text></control></scroll>
   <text ref={assigned}>Variable ref</text>
   <control ariaRadioGroup={assigned} />
   <Button class="primary" title="Increase" disabled={false} ariaLabel="Increase counter" ariaKeyShortcuts="Control+I"
@@ -100,7 +111,14 @@ const provided = <Theme value={{ accent: "red" }}>
 </Theme>;
 const roles: NativeRole[] = ["alert", "checkBox", "menuItemRadio", "scrollView", "tabPanel", "tooltip"];
 const vectorProps: VectorProps = { d: "M0 0", viewBox: "0 0 8 8", role: "image" };
-const children: NativeChild = [tree, provided, "text", 42, false, null, undefined, () => [true, "accessor"]];
+const visual = <box style={{
+  boxShadow: "0 2px 4px black", "text-shadow": "1px 1px black", filter: "brightness(.7)",
+  backdropFilter: "blur(4px)", mixBlendMode: "multiply", isolation: "isolate",
+  fontVariationSettings: '"wght" 650', fontStyle: "italic", fontStretch: "condensed",
+  whiteSpace: "pre-wrap", textOverflow: "ellipsis", pointerEvents: "none", userSelect: "none",
+  translate: "10px 20%", rotate: "15deg", scale: 1.25,
+}} />;
+const children: NativeChild = [tree, provided, visual, "text", 42, false, null, undefined, () => [true, "accessor"]];
 const nativeTextProps: NativeTextControlProps = { value: null, defaultValue: "seed", readOnly: false, role: "textInput" };
 const fieldProps: TextFieldProps = { value: optional(), disabled: false };
 const areaProps: TextAreaProps = { defaultValue: "one\n二", onInput: event => console.log(event.selection.start) };

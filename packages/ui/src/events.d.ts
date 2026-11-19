@@ -30,6 +30,16 @@ export interface NativePointerDownEvent extends NativePointerEvent {
   activateNow(): void;
   capturePointer(): void;
 }
+export interface NativeWheelEvent extends NativeEvent {
+  readonly type: "wheel";
+  readonly position: NativePointerEvent["position"];
+  readonly pointerId: NativePointerEvent["pointerId"];
+  readonly pointerKind: NativePointerEvent["pointerKind"];
+  /** Positive deltas move the scroll offset right and down. */
+  readonly delta: { readonly x: number; readonly y: number; readonly unit: "pixels" | "lines" };
+  /** Scroll gesture phase, separate from the event's propagation phase. */
+  readonly scrollPhase: "discrete" | "started" | "moved" | "ended" | "momentum" | "unknown";
+}
 export interface NativeKeyEvent extends NativeEvent {
   readonly key: string | null;
   readonly character: string | null;
@@ -66,6 +76,7 @@ interface EventMap {
   onPointerLeave: NativePointerBoundaryEvent;
   onPointerUp: NativePointerEvent;
   onPointerCancel: NativePointerEvent;
+  onWheel: NativeWheelEvent;
   onContextMenu: NativeContextMenuEvent;
   onKeyDown: NativeKeyEvent;
   onKeyUp: NativeKeyEvent;

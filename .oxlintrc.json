@@ -32,11 +32,11 @@
       },
       {
         "name": "requestAnimationFrame",
-        "message": "Do not call raw requestAnimationFrame in components or apps; use owner-scoped overlay primitives instead."
+        "message": "Do not call raw requestAnimationFrame in components or apps; use createSpring() for motion."
       },
       {
         "name": "cancelAnimationFrame",
-        "message": "Do not manage raw animation frame handles directly in components or apps; use owner-scoped overlay primitives."
+        "message": "Do not manage raw animation frame handles in components or apps; createSpring() owns its frames."
       }
     ],
     "zgui/no-direct-bridge": "error",
@@ -68,7 +68,11 @@
       }
     },
     {
-      "files": ["packages/ui/src/components/delay.ts", "packages/ui/src/components/overlay.ts"],
+      "files": [
+        "packages/ui/src/components/delay.ts",
+        "packages/ui/src/components/overlay.ts",
+        "packages/ui/src/spring.ts"
+      ],
       "rules": {
         "no-restricted-globals": "off"
       }

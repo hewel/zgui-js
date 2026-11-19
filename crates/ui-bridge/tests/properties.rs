@@ -312,6 +312,8 @@ fn unsupported_properties_and_wrong_types_throw_without_partial_native_writes() 
 #[test]
 fn documented_object_style_vocabulary_is_accepted_by_the_pinned_native_parser() {
     let mut native = NativeProperties::new();
+    // The preview style engine enables the full profile before applying inline styles.
+    zgui_style::preflight_stylesheet(".visual { backdrop-filter: blur(4px) }").unwrap();
     let declarations = [
         ("display", "flex"), ("position", "fixed"), ("inset", "0px"), ("top", "1px"),
         ("right", "2px"), ("bottom", "3px"), ("left", "4px"), ("visibility", "hidden"),
@@ -329,6 +331,13 @@ fn documented_object_style_vocabulary_is_accepted_by_the_pinned_native_parser() 
         ("border", "1px solid red"), ("border-color", "red"), ("border-width", "1px"),
         ("border-radius", "2px"), ("font-family", "sans-serif"), ("font-size", "16px"),
         ("font-weight", "700"), ("line-height", "1.5"), ("opacity", "0.5"), ("overflow", "hidden"),
+        ("boxShadow", "2px 3px 4px red"), ("textShadow", "1px 2px blue"),
+        ("filter", "brightness(0.5)"), ("backdropFilter", "blur(4px)"),
+        ("mixBlendMode", "multiply"), ("isolation", "isolate"),
+        ("fontVariationSettings", r#""wght" 650"#), ("fontStyle", "oblique 12deg"),
+        ("fontStretch", "condensed"), ("whiteSpace", "pre-wrap"), ("textOverflow", "ellipsis"),
+        ("pointerEvents", "none"), ("userSelect", "none"),
+        ("translate", "10px -20%"), ("rotate", "15deg"), ("scale", "1.25 0.75"),
     ];
     for (name, value) in declarations {
         native.script(&format!("__zgui.setProperty(node, 'style', {{'{name}': '{value}'}}); 'set'"));
@@ -970,10 +979,27 @@ fn inline_transactions_validate_numbers_grammar_and_ownership_before_committing(
 }
 
 #[test]
+fn invalid_visual_properties_preserve_inline_style() {
+    let mut native = NativeProperties::with_options(BridgeOptions::default());
+    native.script("__zgui.setProperty(node, 'style', {height: '11px'}); 'set'");
+    let previous = native.style();
+    for invalid in ["boxShadow: '1px'", "backdropFilter: 'blur(red)'",
+        r#"fontVariationSettings: '"weight" 650'"#, "translate: 0", "rotate: 0", "filter: 0", "scale: Infinity"] {
+        native.script(&format!("__zgui.setProperty(node, 'style', {{ width: '10px', {invalid} }}); 'invalid'"));
+        assert_eq!(native.style(), previous, "{invalid}");
+        assert!(!native.bridge.take_style_diagnostics().is_empty(), "{invalid}");
+    }
+}
+
+#[test]
 fn finite_unitless_numbers_are_admitted_without_length_coercion() {
     let mut native = NativeProperties::new();
-    for (name, value) in [("opacity", "0"), ("flexGrow", "1"), ("flexShrink", "0"), ("fontWeight", "700"), ("lineHeight", "1.5"), ("zIndex", "2"), ("order", "1"), ("animationIterationCount", "3")] {
+    for (name, value) in [("opacity", "0"), ("flexGrow", "1"), ("flexShrink", "0"), ("fontWeight", "700"), ("lineHeight", "1.5"), ("zIndex", "2"), ("order", "1"), ("animationIterationCount", "3"), ("scale", "1.25")] {
         native.script(&format!("__zgui.setProperty(node, 'style', {{{name}: {value}}}); 'unitless'"));
-        assert_eq!(native.style().0.len(), 1, "{name}: {value}");
+        let (keys, style) = native.style();
+        assert_eq!(keys.len(), 1, "{name}: {value}");
+        if name == "scale" {
+            assert!(style.contains("scale: 1.25"), "actual style: {style}");
+        }
     }
 }

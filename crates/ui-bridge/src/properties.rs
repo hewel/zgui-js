@@ -516,7 +516,7 @@ fn style_value<'js>(ctx: &Ctx<'js>, key: &str, value: Value<'js>) -> rquickjs::R
     Ok(Some(String::from_js(ctx, value)?))
 }
 
-const UNITLESS: &[&str] = &["opacity", "flex-grow", "flex-shrink", "font-weight", "line-height", "z-index", "order", "animation-iteration-count"];
+const UNITLESS: &[&str] = &["opacity", "flex-grow", "flex-shrink", "font-weight", "line-height", "z-index", "order", "animation-iteration-count", "scale"];
 
 const CAMEL_PROPERTIES: &[(&str, &str)] = &[
     ("flexDirection", "flex-direction"), ("flexWrap", "flex-wrap"), ("flexGrow", "flex-grow"), ("flexShrink", "flex-shrink"), ("flexBasis", "flex-basis"),
@@ -526,6 +526,9 @@ const CAMEL_PROPERTIES: &[(&str, &str)] = &[
     ("minWidth", "min-width"), ("minHeight", "min-height"), ("maxWidth", "max-width"), ("maxHeight", "max-height"),
     ("backgroundColor", "background-color"), ("borderColor", "border-color"), ("borderWidth", "border-width"), ("borderRadius", "border-radius"),
     ("fontFamily", "font-family"), ("fontSize", "font-size"), ("fontWeight", "font-weight"), ("lineHeight", "line-height"),
+    ("boxShadow", "box-shadow"), ("textShadow", "text-shadow"), ("backdropFilter", "backdrop-filter"), ("mixBlendMode", "mix-blend-mode"),
+    ("fontVariationSettings", "font-variation-settings"), ("fontStyle", "font-style"), ("fontStretch", "font-stretch"),
+    ("whiteSpace", "white-space"), ("textOverflow", "text-overflow"), ("pointerEvents", "pointer-events"), ("userSelect", "user-select"),
     ("zIndex", "z-index"), ("transformOrigin", "transform-origin"),
     ("animationName", "animation-name"), ("animationDuration", "animation-duration"), ("animationDelay", "animation-delay"),
     ("animationTimingFunction", "animation-timing-function"), ("animationIterationCount", "animation-iteration-count"),

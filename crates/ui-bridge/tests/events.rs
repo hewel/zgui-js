@@ -8,7 +8,7 @@ use ui_bridge::{
     registry::NodeRegistry,
 };
 use zgui::{
-    geom::{CssPx, Point},
+    geom::{CssPx, Point, Size},
     view::{
         DiscardCommands, DomHandle, ElementName, EventControl, EventCx, EventSink, HostHandle,
         Ident, NodeId, stub::StubHost,
@@ -17,7 +17,8 @@ use zgui::{
         AnimationEvent, AnimationPhase, DefaultAction, EventKind, FocusCause, FocusEvent, Key,
         KeyCode, KeyEvent, KeyLocation, Modifiers, NamedKey, Payload, Phase, PhysicalKey,
         PointerButton, PointerEvent, PointerId, PointerKind, Propagation, Pseudo, Timestamp,
-        TransitionEvent, TransitionPhase, ValueChange, ValueEvent,
+        ScrollDelta, ScrollPhase, TransitionEvent, TransitionPhase, ValueChange, ValueEvent,
+        WheelEvent,
     },
 };
 use zgui_dom::{Document, side::listeners::Listener};
@@ -309,6 +310,70 @@ fn pointer_snapshot_is_owned_lossless_and_cancellation_expires_before_native_app
         if (saved.position.y !== -4 || saved.coalesced[0].pressure !== 0.75) throw Error('snapshot expired');
         'verified'
     "#), "verified");
+}
+
+#[test]
+fn wheel_snapshots_preserve_units_and_apply_synchronous_cancellation() {
+    let h = EventHarness::synchronous(39, 100);
+    h.script(r#"
+        const box = __zgui.createElement('control');
+        __zgui.insertNode(root, box, null);
+        function check(event, current, phase, unit, scrollPhase, x, y) {
+            if (event.type !== 'wheel' || event.target !== box || event.currentTarget !== current ||
+                event.phase !== phase || event.scrollPhase !== scrollPhase) throw Error('metadata');
+            if (event.position.x !== 12.5 || event.position.y !== -4 ||
+                event.pointerId !== '18446744073709551615' || event.pointerKind !== 'touch') throw Error('pointer');
+            if (!event.modifiers.shift || !event.modifiers.alt || event.modifiers.meta ||
+                event.modifiers.control) throw Error('modifiers');
+            if (event.delta.unit !== unit || event.delta.x !== x || event.delta.y !== y) throw Error('delta');
+        }
+        __zgui.setProperty(root, 'onWheelCapture', event => {
+            check(event, root, 'capture', 'pixels', 'moved', -2.5, 30);
+            globalThis.savedWheel = event;
+            event.preventDefault();
+            event.stopPropagation();
+        });
+        __zgui.setProperty(box, 'onWheel', event => {
+            check(event, box, 'target', 'lines', 'discrete', 1.5, -3);
+            event.stopImmediatePropagation();
+        });
+        'armed'
+    "#);
+    let target = h.backend.children(h.mount)[0];
+    for (current, phase, scroll_phase, delta, default, propagation) in [
+        (h.mount, Phase::Capture, ScrollPhase::Moved, ScrollDelta::Pixels(Size::new(CssPx(-2.5), CssPx(30.0))),
+            DefaultAction::Prevented, Propagation::Stop),
+        (target, Phase::Target, ScrollPhase::Discrete, ScrollDelta::Lines { x: 1.5, y: -3.0 },
+            DefaultAction::Allowed, Propagation::StopImmediate),
+    ] {
+        let handler = h.backend.handler(registrations(&h.backend, current)[0].id).unwrap();
+        let payload = Payload::Wheel(WheelEvent {
+            id: PointerId::new(u64::MAX),
+            kind: PointerKind::Touch,
+            position: Point::new(CssPx(12.5), CssPx(-4.0)),
+            delta,
+            phase: scroll_phase,
+        });
+        let control = EventControl::new();
+        let mut sink = DiscardCommands;
+        let mut event = EventCx::<zgui::view::events::AnyEvent>::new(
+            EventKind::Wheel, target, current, phase, Modifiers::SHIFT | Modifiers::ALT,
+            Timestamp::ORIGIN, &payload, &control, &mut sink,
+        );
+        handler(&mut event);
+        assert_eq!(*h.runner.last_error.borrow(), None, "{phase:?}, {delta:?}");
+        assert_eq!(control.default_action(), default, "{phase:?}, {delta:?}");
+        assert_eq!(control.propagation(), propagation, "{phase:?}, {delta:?}");
+    }
+    assert_eq!(h.eval(r#"
+        for (const name of ['preventDefault', 'stopPropagation', 'stopImmediatePropagation']) {
+            let expired = false;
+            try { savedWheel[name](); }
+            catch (error) { expired = error instanceof ReferenceError && error.message.includes('expired-dispatch'); }
+            if (!expired) throw Error('retained wheel cancellation authority');
+        }
+        savedWheel.delta.unit
+    "#), "pixels");
 }
 
 #[test]

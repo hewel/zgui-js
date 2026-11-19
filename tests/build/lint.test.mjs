@@ -116,14 +116,14 @@ const negativeCases = [
     file: "raf.ts",
     code: "export function tick() { return requestAnimationFrame(() => {}); }\n",
     expected: /eslint\(no-restricted-globals\)/,
-    guidance: /owner-scoped overlay primitives/,
+    guidance: /createSpring\(\)/,
   },
   {
     name: "typescript/await-thenable (tsrs type-aware linting)",
     file: "await-non-promise.ts",
     code: "export async function check() { const value = 42; return await value; }\n",
     expected: /typescript\(await-thenable\)/,
-    guidance: /not Promise-like/,
+    guidance: /not Promise-like|non-Promise/,
   },
 ];
 

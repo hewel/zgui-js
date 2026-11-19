@@ -206,6 +206,11 @@ Browser-only props such as `type`, `rows` and `selectionStart` are not accepted.
 Use native `class` (or its StyleX alias `className`), native style strings/objects,
 and the supported native event handlers.
 
+Native style objects accept visual and typography properties such as `boxShadow`,
+`textShadow`, `backdropFilter`, and `fontVariationSettings` in camelCase or
+kebab-case. `scale` accepts a finite number; `translate` and `rotate` require
+CSS strings, even for zero.
+
 ## Pointer capture
 
 Pointer action handlers report `onPointerDown`, `onPointerMove`, `onPointerUp` and
@@ -222,6 +227,30 @@ node is reclaimed.
 without bubbling when the pointer crosses between its descendants. Their
 `Capture` variants observe descendant boundaries. `NativePointerBoundaryEvent`
 carries the pointer snapshot without pointer-capture or activation methods.
+
+## Wheel events
+
+`onWheel` and `onWheelCapture` receive `NativeWheelEvent`. `delta` preserves
+the device's `"pixels"` (CSS pixels) or `"lines"` unit. Positive deltas move
+the scroll offset right and down. `scrollPhase` describes the gesture;
+`phase` describes event propagation. Call `preventDefault()` inside the
+handler to suppress native scrolling, independently of propagation.
+
+## Spring motion
+
+`createSpring(target, options?)` returns a numeric accessor initialized to
+`target()`. Call it in the owner that uses the motion:
+
+```tsx
+const scale = createSpring(() => expanded() ? 1 : 0.9);
+return <box style={{ scale: scale() }} />;
+```
+
+Retargeting preserves velocity. The spring snaps exactly to the target and
+stops requesting frames once both displacement and speed are within
+`precision` and `velocityPrecision`, or if the integration overflows.
+Owner disposal cancels queued frames.
+With reduced motion, the accessor follows the target without requesting any frames.
 
 ## Styled components
 

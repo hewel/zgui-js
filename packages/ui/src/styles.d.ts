@@ -8,6 +8,9 @@ type OrdinaryStyleName =
   | "width" | "height" | "min-width" | "min-height" | "max-width" | "max-height"
   | "color" | "background" | "background-color" | "border" | "border-color" | "border-width" | "border-radius"
   | "font-family" | "font-size" | "font-weight" | "line-height" | "opacity" | "overflow"
+  | "box-shadow" | "text-shadow" | "filter" | "backdrop-filter" | "mix-blend-mode" | "isolation"
+  | "font-variation-settings" | "font-style" | "font-stretch" | "white-space" | "text-overflow"
+  | "pointer-events" | "user-select" | "translate" | "rotate" | "scale"
   | "z-index" | "order" | "transform" | "transform-origin" | "animation" | "animation-name"
   | "animation-duration" | "animation-delay" | "animation-timing-function" | "animation-iteration-count"
   | "animation-fill-mode" | "animation-direction" | "animation-play-state"
@@ -16,7 +19,7 @@ export type NativeStyleName = OrdinaryStyleName | `--${string}`;
 type CamelCase<Name extends string> = Name extends `${infer Head}-${infer Tail}`
   ? `${Head}${Capitalize<CamelCase<Tail>>}` : Name;
 type Unitless = "opacity" | "flex-grow" | "flex-shrink" | "font-weight" | "line-height"
-  | "z-index" | "order" | "animation-iteration-count";
+  | "z-index" | "order" | "animation-iteration-count" | "scale";
 export type NativeStyle = string
   | { [Name in Exclude<OrdinaryStyleName | CamelCase<OrdinaryStyleName>, Unitless | CamelCase<Unitless>>]?: string | null | undefined }
     & { [Name in Unitless | CamelCase<Unitless>]?: string | number | null | undefined }

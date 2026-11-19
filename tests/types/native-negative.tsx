@@ -1,4 +1,4 @@
-import { Image, TextField, TextArea, renderApp } from "@hewel/zgui";
+import { Image, TextField, TextArea, createSpring, renderApp } from "@hewel/zgui";
 import type { NativeElementProps, NativeNode } from "@hewel/zgui";
 
 // @ts-expect-error Browser document is not a host global.
@@ -83,6 +83,20 @@ const handler = <control onDoubleClick={() => {}} />;
 const ref = <text ref={node => node.focus()} />;
 // @ts-expect-error Non-unitless native styles require strings with explicit units.
 const numericStyle = <box style={{ "font-size": 20 }} />;
+// @ts-expect-error Numeric translate is not accepted, including unitless zero.
+const numericTranslate = <box style={{ translate: 0 }} />;
+// @ts-expect-error Numeric rotate is not accepted, including unitless zero.
+const numericRotate = <box style={{ rotate: 0 }} />;
+// @ts-expect-error Wheel exposes no pointer-capture authority.
+const wheelCapture = <box onWheel={event => event.capturePointer()} />;
+// @ts-expect-error Wheel delta is a read-only snapshot.
+const wheelDelta = <box onWheelCapture={event => { event.delta.x = 0; }} />;
+// @ts-expect-error Font variations require a CSS string.
+const numericVariation = <box style={{ fontVariationSettings: 650 }} />;
+// @ts-expect-error The spring targets a number, not a CSS length string.
+createSpring(() => "20px");
+// @ts-expect-error Spring options are numeric.
+createSpring(() => 0, { damping: "26" });
 // @ts-expect-error Unknown camelCase property names remain unsupported.
 const camelStyle = <box style={{ backgroundColour: "red" }} />;
 // @ts-expect-error Native cancellation has no listener-options tuple form.

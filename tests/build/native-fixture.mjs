@@ -33,6 +33,12 @@ function eventFamilyDefaults(type, extras) {
       pressure: null, coalesced: [], activateNow() {}, capturePointer() {}, releasePointer() {},
     };
   }
+  if (type === "wheel") {
+    return {
+      position: { x: 0, y: 0 }, pointerId: "1", pointerKind: "mouse",
+      delta: { x: 0, y: 0, unit: "lines" }, scrollPhase: "discrete",
+    };
+  }
   if (type === "focusin" || type === "focusout") {
     return { cause: "programmatic" };
   }
@@ -54,28 +60,35 @@ export function createEvent(nameOrType, target, extras = {}) {
   let phase = "target";
   let currentTarget = target;
   const modifiers = extras.modifiers ?? { shift: false, control: false, alt: false, meta: false };
-  const event = {
+  const snapshot = (current, dispatchPhase, isActive) => ({
     type,
     timestamp: extras.timestamp ?? 0,
     target,
     modifiers,
     ...eventFamilyDefaults(type, extras),
     ...extras,
-    get phase() { return phase; },
-    get currentTarget() { return currentTarget; },
+    phase: dispatchPhase,
+    currentTarget: current,
     get defaultPrevented() { return prevented; },
     get propagationStopped() { return stopped; },
     get immediatePropagationStopped() { return immediate; },
-    preventDefault() { prevented = true; },
-    stopPropagation() { stopped = true; },
-    stopImmediatePropagation() { immediate = true; stopped = true; },
+    preventDefault() { requireActive(isActive); prevented = true; },
+    stopPropagation() { requireActive(isActive); stopped = true; },
+    stopImmediatePropagation() { requireActive(isActive); immediate = true; stopped = true; },
+  });
+  const requireActive = isActive => {
+    if (!isActive()) throw new ReferenceError("expired-dispatch: native event cancellation is synchronous");
   };
   return {
     spec,
-    event,
-    setState(nextPhase, nextCurrent) {
+    get event() { return snapshot(currentTarget, phase, () => false); },
+    invoke(handler, nextPhase, nextCurrent) {
       phase = nextPhase;
       currentTarget = nextCurrent;
+      if (!handler) return;
+      let active = true;
+      try { handler(snapshot(currentTarget, phase, () => active)); }
+      finally { active = false; }
     },
     isStopped: () => stopped,
     isImmediate: () => immediate,
@@ -165,7 +178,7 @@ export function createHost({ strictStyles = false, reducedMotion = false } = {})
     }
     if (typeof value !== "object" || Array.isArray(value)) throw new TypeError("style must be a string or object");
     const result = {};
-    const unitless = new Set(["opacity", "flex-grow", "flex-shrink", "font-weight", "line-height", "z-index", "order", "animation-iteration-count"]);
+    const unitless = new Set(["opacity", "flex-grow", "flex-shrink", "font-weight", "line-height", "z-index", "order", "animation-iteration-count", "scale"]);
     for (const [key, raw] of Object.entries(value)) {
       const name = key.startsWith("--") ? key : key.replace(/[A-Z]/g, match => `-${match.toLowerCase()}`);
       if (raw == null) continue;
@@ -245,27 +258,25 @@ export function createHost({ strictStyles = false, reducedMotion = false } = {})
     const path = [];
     for (let current = target; current; current = parents.get(current)) path.push(current);
     const carrier = createEvent(nameOrType, target, extras);
-    const { spec, event } = carrier;
+    const { spec } = carrier;
     const bubbles = extras.bubbles ?? spec.bubbles;
     for (let i = path.length - 1; i >= 1 && !carrier.isStopped(); i -= 1) {
-      carrier.setState("capture", path[i]);
-      path[i].callbacks[spec.captureProp]?.(event);
+      carrier.invoke(path[i].callbacks[spec.captureProp], "capture", path[i]);
     }
     if (!carrier.isStopped()) {
-      carrier.setState("target", target);
-      target.callbacks[spec.captureProp]?.(event);
-    }
-    if (!carrier.isStopped() && !carrier.isImmediate()) {
-      carrier.setState("target", target);
-      target.callbacks[spec.prop]?.(event);
+      for (const name of Object.keys(target.callbacks)) {
+        if (name === spec.prop || name === spec.captureProp) {
+          carrier.invoke(target.callbacks[name], "target", target);
+          if (carrier.isImmediate()) break;
+        }
+      }
     }
     if (bubbles) {
       for (let i = 1; i < path.length && !carrier.isStopped(); i += 1) {
-        carrier.setState("bubble", path[i]);
-        path[i].callbacks[spec.prop]?.(event);
+        carrier.invoke(path[i].callbacks[spec.prop], "bubble", path[i]);
       }
     }
-    return event;
+    return carrier.event;
   });
 
   const moveFocus = (node, reveal = false, cause = "programmatic") => runTurn(() => {
@@ -404,11 +415,11 @@ export function createHost({ strictStyles = false, reducedMotion = false } = {})
         commitStyle(node, state);
         return;
       }
+      delete node.callbacks[name];
       if (typeof value === "function") {
         node.callbacks[name] = value;
         return;
       }
-      delete node.callbacks[name];
       if (value === undefined || value === null) node.props.delete(name);
       else node.props.set(name, value);
     },

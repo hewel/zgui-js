@@ -11,7 +11,8 @@ use rquickjs::{function::Func, Array, Ctx, Exception, Function, IntoJs, Object, 
 use zgui::{
     view::{DomHandle, EventCx, ListenerId, NodeId},
     vocab::{EventKind, FocusCause, Key, KeyLocation, ListenerOptions, Modifiers, NamedKey, Payload,
-        Phase, PhysicalKey, PointerButton, PointerKind, PointerSample, Timestamp, ValueChange},
+        Phase, PhysicalKey, PointerButton, PointerKind, PointerSample, ScrollDelta, ScrollPhase,
+        Timestamp, ValueChange},
 };
 
 use crate::registry::Handle;
@@ -135,6 +136,7 @@ fn event_property(ctx: &Ctx<'_>, name: &str) -> rquickjs::Result<(EventKind, boo
         "onPointerLeave" => EventKind::PointerLeave,
         "onPointerUp" => EventKind::PointerUp,
         "onPointerCancel" => EventKind::PointerCancel,
+        "onWheel" => EventKind::Wheel,
         "onContextMenu" => EventKind::ContextMenu,
         "onKeyDown" => EventKind::KeyDown,
         "onKeyUp" => EventKind::KeyUp,
@@ -211,9 +213,9 @@ impl EventSnapshot {
         object.set("modifiers", modifiers)?;
         match &self.payload {
             Payload::Pointer(pointer) => {
-                object.set("position", position(ctx, pointer.position.x.0, pointer.position.y.0)?)?;
+                object.set("position", xy_object(ctx, pointer.position.x.0, pointer.position.y.0)?)?;
                 object.set("pointerId", pointer.id.raw().to_string())?;
-                object.set("pointerKind", match pointer.kind { PointerKind::Mouse => "mouse", PointerKind::Touch => "touch", PointerKind::Pen => "pen", _ => "unknown" })?;
+                object.set("pointerKind", pointer_kind(pointer.kind))?;
                 object.set("primary", pointer.primary)?;
                 let button = match pointer.button {
                     Some(PointerButton::Primary) => Some("primary"), Some(PointerButton::Secondary) => Some("secondary"),
@@ -227,7 +229,7 @@ impl EventSnapshot {
                 let samples = Array::new(ctx.clone())?;
                 for (index, sample) in self.coalesced.iter().enumerate() {
                     let value = Object::new(ctx.clone())?;
-                    value.set("position", position(ctx, sample.position.x.0, sample.position.y.0)?)?;
+                    value.set("position", xy_object(ctx, sample.position.x.0, sample.position.y.0)?)?;
                     value.set("pressure", nullable(ctx, sample.pressure)?)?;
                     value.set("timestamp", milliseconds(sample.timestamp))?;
                     samples.set(index, value)?;
@@ -259,6 +261,24 @@ impl EventSnapshot {
                         Ok(())
                     }))?;
                 }
+            }
+            Payload::Wheel(wheel) => {
+                let (x, y, unit) = match wheel.delta {
+                    ScrollDelta::Pixels(size) => (size.width.0, size.height.0, "pixels"),
+                    ScrollDelta::Lines { x, y } => (x, y, "lines"),
+                    _ => return Err(Exception::throw_type(ctx, "unsupported native wheel delta")),
+                };
+                let delta = xy_object(ctx, x, y)?;
+                delta.set("unit", unit)?;
+                object.set("delta", delta)?;
+                object.set("scrollPhase", match wheel.phase {
+                    ScrollPhase::Discrete => "discrete", ScrollPhase::Started => "started",
+                    ScrollPhase::Moved => "moved", ScrollPhase::Ended => "ended",
+                    ScrollPhase::Momentum => "momentum", _ => "unknown",
+                })?;
+                object.set("position", xy_object(ctx, wheel.position.x.0, wheel.position.y.0)?)?;
+                object.set("pointerId", wheel.id.raw().to_string())?;
+                object.set("pointerKind", pointer_kind(wheel.kind))?;
             }
             Payload::Key(key) => {
                 object.set("key", nullable(ctx, key.key.as_str())?)?;
@@ -312,11 +332,18 @@ impl EventSnapshot {
 
 fn milliseconds(timestamp: Timestamp) -> f64 { timestamp.since_origin().as_secs_f64() * 1000.0 }
 
+fn pointer_kind(kind: PointerKind) -> &'static str {
+    match kind {
+        PointerKind::Mouse => "mouse", PointerKind::Touch => "touch",
+        PointerKind::Pen => "pen", _ => "unknown",
+    }
+}
+
 fn nullable<'js, T: IntoJs<'js>>(ctx: &Ctx<'js>, value: Option<T>) -> rquickjs::Result<Value<'js>> {
     match value { Some(value) => value.into_js(ctx), None => Ok(Value::new_null(ctx.clone())) }
 }
 
-fn position<'js>(ctx: &Ctx<'js>, x: f32, y: f32) -> rquickjs::Result<Object<'js>> {
+fn xy_object<'js>(ctx: &Ctx<'js>, x: f32, y: f32) -> rquickjs::Result<Object<'js>> {
     let object = Object::new(ctx.clone())?;
     object.set("x", x)?;
     object.set("y", y)?;

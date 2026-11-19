@@ -1,7 +1,7 @@
 import "./runtime-globals.js";
 export type { JSX } from "./jsx-runtime.js";
 import type { NativeEventProps } from "./events.js";
-export type { NativeAnimationEvent, NativeContextMenuEvent, NativeEvent, NativePointerEvent, NativePointerBoundaryEvent, NativePointerDownEvent, NativeKeyEvent, NativeValueEvent, NativeFocusEvent, NativeTransitionEvent } from "./events.js";
+export type { NativeAnimationEvent, NativeContextMenuEvent, NativeEvent, NativePointerEvent, NativePointerBoundaryEvent, NativePointerDownEvent, NativeWheelEvent, NativeKeyEvent, NativeValueEvent, NativeFocusEvent, NativeTransitionEvent } from "./events.js";
 import type { NativeStyle } from "./styles.js";
 export type { NativeStyle, NativeStyleName } from "./styles.js";
 

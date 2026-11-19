@@ -44,6 +44,27 @@ fn partial_invalid_sheets_fail_preflight_without_installing_the_valid_subset() {
 }
 
 #[test]
+fn visual_and_typography_grammar_is_checked_at_preflight() {
+    preflight_stylesheet(r#"
+        .x:not(#\#) {
+            box-shadow: 0 2px 4px #0008; text-shadow: 1px 1px black; filter: opacity(.5);
+            backdrop-filter: blur(4px); mix-blend-mode: multiply; isolation: isolate;
+            font-variation-settings: "wght" 650; font-style: oblique 12deg; font-stretch: 85%;
+            white-space: pre-wrap; text-overflow: ellipsis; pointer-events: none; user-select: none;
+            translate: 10px 20%; rotate: 15deg; scale: 1.25;
+        }
+    "#).expect("supported visual declarations pass preflight");
+    for declaration in [
+        "box-shadow: 1px", "text-shadow: 1px", "filter: unknown()", "backdrop-filter: blur(red)",
+        "mix-blend-mode: none", "isolation: none", r#"font-variation-settings: "weight" 650"#,
+        "font-style: 12deg", "font-stretch: 2px", "white-space: none", "text-overflow: auto",
+        "pointer-events: 1", "user-select: hidden", "translate: 12", "rotate: 15", "scale: 2px",
+    ] {
+        preflight_stylesheet(&format!(".x {{ color: red; {declaration} }}")).expect_err(declaration);
+    }
+}
+
+#[test]
 fn unsupported_native_features_report_generated_locations() {
     for feature in [
         "@property --x { syntax: '<color>'; inherits: true; initial-value: red }",

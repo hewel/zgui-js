@@ -171,7 +171,14 @@ export const unused = stylex.create({ root: { opacity: 0.321 } });`);
   await writeFile(path.join(directory, "src/main.tsx"), `import * as stylex from "@stylexjs/stylex";
 import { palette } from "./palette.stylex";
 import "./extra";
-const styles = stylex.create({ root: { color: palette.foreground, fontSize: 23 } });
+const styles = stylex.create({ root: {
+  color: palette.foreground, fontSize: 23,
+  boxShadow: "0 2px 4px black", textShadow: "1px 1px black", filter: "brightness(0.5)",
+  backdropFilter: "blur(4px)", mixBlendMode: "multiply", isolation: "isolate",
+  fontVariationSettings: '"wght" 650', fontStyle: "oblique 12deg", fontStretch: "85%",
+  whiteSpace: "pre-wrap", textOverflow: "ellipsis", pointerEvents: "none", userSelect: "none",
+  translate: "10px 20%", rotate: "15deg", scale: 1.25,
+} });
 ${validEntry.replace("<text>", "<text {...stylex.props(styles.root)}>")}`);
   const { dist, manifest } = await buildApplication("fixture", { appDirectory: directory });
   assert.equal(manifest.schemaVersion, 2);
@@ -180,6 +187,22 @@ ${validEntry.replace("<text>", "<text {...stylex.props(styles.root)}>")}`);
   assert.match(css, /:root/);
   assert.match(css, /#135790/);
   assert.match(css, /font-size:23px/);
+  assert.match(css, /[;{]box-shadow:0 2px 4px black[;}]/);
+  assert.match(css, /[;{]text-shadow:1px 1px black[;}]/);
+  assert.match(css, /[;{]filter:brightness\(0?\.5\)[;}]/);
+  assert.match(css, /[;{]backdrop-filter:blur\(4px\)[;}]/);
+  assert.match(css, /[;{]mix-blend-mode:multiply[;}]/);
+  assert.match(css, /[;{]isolation:isolate[;}]/);
+  assert.match(css, /[;{]font-variation-settings:["']wght["'] 650[;}]/);
+  assert.match(css, /[;{]font-style:oblique 12deg[;}]/);
+  assert.match(css, /[;{]font-stretch:85%[;}]/);
+  assert.match(css, /[;{]white-space:pre-wrap[;}]/);
+  assert.match(css, /[;{]text-overflow:ellipsis[;}]/);
+  assert.match(css, /[;{]pointer-events:none[;}]/);
+  assert.match(css, /[;{]user-select:none[;}]/);
+  assert.match(css, /[;{]translate:10px 20%[;}]/);
+  assert.match(css, /[;{]rotate:15deg[;}]/);
+  assert.match(css, /[;{]scale:1\.25[;}]/);
   assert.match(css, /opacity:0?\.321/);
   assert.doesNotMatch(css, /@layer/);
   const code = await readFile(path.join(dist, "app.mjs"), "utf8");
