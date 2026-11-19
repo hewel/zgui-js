@@ -1,0 +1,68 @@
+# Shell surfaces & Wayland lifecycle
+
+Use when authoring multi-output desktop shell UIs (status bars, docks, launchers, popups, OSD overlays, or lockscreens) with `@hewel/zgui`.
+
+## Pure-shell entry
+
+- Mount a headless root with `renderShell(() => <Shell />)` when the app owns compositor surfaces without a default `main` window.
+- Require `capabilities.shellSurfaces: true` (for `<LayerSurface>` / `<PopupSurface>`) and/or `capabilities.sessionLock: true` (for `requestSessionLock()` / `<SessionLockSurface>`) in `package.json` under `zgui.capabilities`.
+- Launch live with `native-host --pure-shell` (or set `"pureShell": true` in a preview profile).
+- Track hotplug outputs reactively with `useMonitors(): Accessor<readonly Monitor[]>` inside a Solid owner.
+- Read the monotonic session generation (safe even during module preflight) via `getSessionGeneration()`.
+
+## `<LayerSurface>`
+
+Owns a named `zwlr_layer_surface_v1` compositor surface without inserting a node in the parent tree:
+
+```tsx
+<LayerSurface
+  name={`bar-${monitor.id}`}
+  output={monitor.id}
+  layer="top"                  // "background" | "bottom" | "top" | "overlay"
+  anchor={["top", "left", "right"]}
+  height={36}                  // width defaults to 0 when both left & right are anchored
+  exclusiveZone={36}
+  margin={{ top: 6, left: 10, right: 10 }}
+  keyboard="none"              // "none" | "exclusive" | "on-demand"
+  inputRegion="full"           // "full" | "empty" | (NativeWindowRect | NativeNode)[]
+>
+  <BarContent />
+</LayerSurface>
+```
+
+- **Live reconfiguration**: changing `layer`, `anchor`, `width`, `height`, `margin`, `exclusiveZone`, or `keyboard` updates the existing surface in place without destroying its Solid subtree. Changing `name` or `output` closes the old surface and opens a new one.
+- **Click-through overlays**: pass `inputRegion="empty"` for non-interactive OSDs, or an array of interactive `NativeNode` refs / `NativeWindowRect`s so only active islands accept pointer hits. Passing `NativeNode` refs automatically tracks layout changes via `observeGeometry`.
+
+## `<PopupSurface>`
+
+Owns an `xdg_popup` attached to a named `<LayerSurface>` or parent `<PopupSurface>` in the same session:
+
+```tsx
+<PopupSurface
+  name="wifi-menu"
+  parent={`bar-${monitor.id}`}
+  anchorNode={buttonRef()}     // or anchorRect={{ x, y, width, height }}
+  width={280}
+  height={320}
+  placement={{ anchor: "bottom-left", gravity: "bottom-right", flip: true, slide: true }}
+  offset={{ x: 0, y: 6 }}
+  grab={true}
+  onDismiss={() => setOpen(false)}
+>
+  <WifiMenu />
+</PopupSurface>
+```
+
+- `anchorNode` must belong to the exact `parent` surface named in `props.parent`.
+- **Cascade teardown**: closing a parent `<LayerSurface>` or `<PopupSurface>` closes descendant popups topmost-first (child before parent) and invokes `onDismiss`.
+- Keep `<PopupSurface>` mounted inside `<Show when={open()}>` so dismissing and reopening always creates a clean owner-scoped surface.
+
+## Session locking (`ext-session-lock-v1`)
+
+Locking is fail-closed and security-critical:
+
+1. Call `const lock = requestSessionLock()` inside a Solid owner (requires `capabilities.sessionLock: true`).
+2. `lock.id` is a non-configurable monotonic number; `lock.state()` transitions `"unlocked" -> "locking" -> "locked" | "finished"`.
+3. Render one `<SessionLockSurface name={`lock-${m.id}`} output={m.id}>` per output in `useMonitors()` while locked.
+4. `SessionLockSurface` always paints an opaque black compositor backdrop beneath author content—author `:root { background-color: transparent }` never exposes desktop windows beneath the lock.
+5. Call `lock.unlock()` only from an explicit authorized user action (for example after PAM/auth verification succeeds). Session retirement or JS exceptions never release the platform lock; Rust maintains opaque black fallback coverage on every output until explicit unlock.

@@ -12,5 +12,7 @@
 /apps/examples/*/.zgui-native-status.json.*.tmp
 /artifacts/preview/
 
-.agents/skills
+.agents/skills/*
+!.agents/skills/zgui-dev/
+!.agents/skills/zgui-preview/
 /.scratch/
