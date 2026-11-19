@@ -69,7 +69,7 @@ impl WaylandState {
 
         let (resized, visibility, resizing, answered) = {
             let mut shared = surface.shared();
-            let extent = toplevel::extent(pending.size, surface.wanted(), shared.logical);
+            let extent = toplevel::extent(pending.size, shared.wanted, shared.logical);
             let state_flip =
                 shared.maximized != pending.maximized || shared.fullscreen != pending.fullscreen;
             shared.maximized = pending.maximized;

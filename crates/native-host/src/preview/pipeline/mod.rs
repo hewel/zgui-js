@@ -1,7 +1,8 @@
 //! Headless native rendering pipeline, witness-checked frame observation, and checkpoint persistence.
 
 use std::{
-    cell::{Ref, RefCell},
+    cell::{Cell, Ref, RefCell},
+    collections::BTreeMap,
     rc::{Rc, Weak},
     sync::Arc,
     time::{Duration, Instant},
@@ -11,7 +12,7 @@ use serde_json::{Value, json};
 use zgui::{
     app::Fonts,
     geom::{DevicePx, Size},
-    platform::{AppHandler, Surface as _, SurfaceEvent},
+    platform::{AppHandler, Surface as _, SurfaceEvent, SurfaceId},
     render::{FrameOutcome, SkipReason},
     runtime::{App, AppError, FrameProbe, Runtime, Window},
     view::{IntoView, NodeId, View},
@@ -274,16 +275,21 @@ impl<H: AppHandler> Pipeline<H> {
         self.inner_mut().advance(duration);
     }
 
-    pub fn deliver(&mut self, surface: zgui::platform::SurfaceId, event: SurfaceEvent) {
+    pub fn deliver(&mut self, surface: SurfaceId, event: SurfaceEvent) {
         self.inner_mut().deliver(surface, event);
     }
 
     pub fn deliver_all(
         &mut self,
-        surface: zgui::platform::SurfaceId,
+        surface: SurfaceId,
         events: impl IntoIterator<Item = SurfaceEvent>,
     ) {
         self.inner_mut().deliver_all(surface, events);
+    }
+
+    /// Drain queued application wakes before routing the resulting surface redraws.
+    pub fn dispatch_wakes(&mut self) {
+        self.inner_mut().dispatch_wakes();
     }
 
     pub fn pump(&mut self) -> u64 {
@@ -327,7 +333,7 @@ fn configure_app(
     opaque: bool,
     title: &str,
     stylesheet: String,
-    capture: &CaptureHandle,
+    renderer: zgui::runtime::RendererFactory,
 ) -> App {
     let shaping = fonts.clone();
     let metrics = fonts.clone();
@@ -336,7 +342,7 @@ fn configure_app(
         .with_title(title)
         .with_size(width as f32, height as f32)
         .with_stylesheet(stylesheet)
-        .with_renderer(capture::renderer_factory(capture.clone()))
+        .with_renderer(renderer)
         .with_metrics(Box::new(move || metrics.metrics()))
         .with_text_engine(Box::new(move || Box::new(zgui_layout::Paragraphs::new(shaping.shaper()))))
         .with_glyph_raster(Box::new(move || raster.raster()));
@@ -357,11 +363,12 @@ pub(crate) fn for_preview<H: AppHandler>(
     package: &Package,
     platform: Headless,
     stylesheet: String,
-    observer: &FrameObserver,
+    observers: &FrameObservers,
     pending: Rc<RefCell<Vec<MountRegion>>>,
     build_host: impl FnOnce(Runtime) -> H,
 ) -> Result<Pipeline<H>, Error> {
     let surface = &profile.profile.surface;
+    let registry = observers.clone();
     let app = configure_app(
         &profile.fonts,
         surface.width,
@@ -369,17 +376,18 @@ pub(crate) fn for_preview<H: AppHandler>(
         surface.opaque,
         "zgui TSX preview",
         stylesheet,
-        &observer.0.capture,
+        capture::renderer_factory(move |surface| registry.register_renderer(surface)),
     )
-    .with_probe(Rc::new(ProbeAdapter(observer.0.clone())));
+    .with_probe(Rc::new(observers.clone()));
     let app = resources::configure(app, package);
     let fonts = profile.fonts.clone();
-    let native = app
+    let mut native = app
         .into_handler(move |cx| {
             zgui::reactive::provide_context(fonts.clone());
             Box::new(View::build(Root(pending.clone()), cx))
         })
         .map_err(preview_app_error)?;
+    if profile.profile.pure_shell { native.without_primary_surface(); }
     let host = build_host(native);
     Ok(Pipeline::from_harness(Harness::over(platform, host)))
 }
@@ -507,6 +515,7 @@ where
     V: IntoView,
 {
     let capture = CaptureHandle::default();
+    let handle = capture.clone();
     let surface = &profile.profile.surface;
     let app = configure_app(
         &profile.fonts,
@@ -515,7 +524,7 @@ where
         surface.opaque,
         title,
         stylesheet,
-        &capture,
+        capture::renderer_factory(move |_| handle.clone()),
     );
     let runtime = app
         .into_handler(move |cx| Box::new(build_view().into_view().build(cx)))
@@ -538,67 +547,133 @@ struct OwnedFrame {
 }
 
 struct ObserverData {
+    requested_metadata: u64,
     semantics: SemanticModel,
     ledger: FrameLedger,
     session: Weak<Session>,
     surface: Option<Arc<OffscreenSurface>>,
     last: Option<OwnedFrame>,
-    fault: Option<Error>,
+}
+
+struct ObservationContext {
+    sink: RefCell<Box<dyn CheckpointSink>>,
+    build_id: String,
+    environment: Rc<Environment>,
+    multiple: bool,
+    action: Cell<u64>,
+    frames: Cell<u64>,
+    current_checkpoint: Cell<Option<SurfaceId>>,
+    graphics: RefCell<Value>,
+    fault: RefCell<Option<Error>>,
 }
 
 struct ObserverInner {
     capture: CaptureHandle,
-    sink: RefCell<Box<dyn CheckpointSink>>,
-    build_id: String,
-    environment: Rc<Environment>,
+    context: Rc<ObservationContext>,
     data: RefCell<ObserverData>,
 }
 
-struct ProbeAdapter(Rc<ObserverInner>);
+struct ObserverRegistry {
+    context: Rc<ObservationContext>,
+    main: Option<FrameObserver>,
+    next_is_main: Cell<bool>,
+    surfaces: RefCell<BTreeMap<SurfaceId, FrameObserver>>,
+}
 
-impl FrameProbe for ProbeAdapter {
+/// Which native surfaces contribute frame evidence for the preview.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum ObservationMode {
+    PrimaryOnly,
+    PrimaryAndShell,
+    ShellOnly,
+}
+
+/// Routes renderer and frame callbacks by native surface identity.
+#[derive(Clone)]
+pub(crate) struct FrameObservers(Rc<ObserverRegistry>);
+
+impl FrameObservers {
+    pub fn new(build_id: String, environment: Rc<Environment>, sink: Box<dyn CheckpointSink>, mode: ObservationMode) -> Self {
+        let has_primary = !matches!(mode, ObservationMode::ShellOnly);
+        let context = Rc::new(ObservationContext {
+            sink: RefCell::new(sink), build_id, environment, multiple: !matches!(mode, ObservationMode::PrimaryOnly),
+            action: Cell::new(0), frames: Cell::new(0), current_checkpoint: Cell::new(None),
+            graphics: RefCell::new(Value::Null), fault: RefCell::new(None),
+        });
+        let main = has_primary.then(|| FrameObserver::new(context.clone()));
+        Self(Rc::new(ObserverRegistry { context, main, next_is_main: Cell::new(has_primary), surfaces: RefCell::default() }))
+    }
+
+    fn register_renderer(&self, surface: SurfaceId) -> CaptureHandle {
+        let mut surfaces = self.0.surfaces.borrow_mut();
+        surfaces.entry(surface).or_insert_with(|| {
+            if self.0.next_is_main.replace(false) {
+                self.0.main.as_ref().expect("registered main observer").clone()
+            } else {
+                FrameObserver::new(self.0.context.clone())
+            }
+        }).0.capture.clone()
+    }
+
+    pub fn get(&self, surface: SurfaceId) -> Option<FrameObserver> {
+        self.0.surfaces.borrow().get(&surface).cloned()
+    }
+
+    pub fn retain(&self, windows: &[Window]) {
+        self.0.surfaces.borrow_mut().retain(|id, _| windows.iter().any(|window| window.surface().id() == *id));
+    }
+
+    pub fn reset(&self) {
+        self.0.surfaces.borrow_mut().clear();
+        if let Some(main) = &self.0.main {
+            main.reset_surface();
+            self.0.next_is_main.set(true);
+        }
+    }
+
+    pub fn begin_step(&self, action: u64) -> u64 {
+        self.0.context.action.set(action);
+        self.frames()
+    }
+
+    pub fn frames(&self) -> u64 { self.0.context.frames.get() }
+    pub fn take_fault(&self) -> Option<Error> { self.0.context.fault.borrow_mut().take() }
+    pub fn device_unavailable(&self) -> bool {
+        self.0.surfaces.borrow().values().any(FrameObserver::device_unavailable)
+    }
+    pub fn graphics_metadata(&self) -> Value {
+        if let Some(main) = &self.0.main { main.0.capture.metadata() }
+        else { self.0.context.graphics.borrow().clone() }
+    }
+    pub fn latest_checkpoint(&self) -> Option<SurfaceId> { self.0.context.current_checkpoint.get() }
+}
+
+impl FrameProbe for FrameObservers {
     fn frame_ended(&self, window: &Window) {
-        self.0.on_frame_ended(window);
+        let sequence = self.frames() + 1;
+        self.0.context.frames.set(sequence);
+        if let Some(observer) = self.get(window.surface().id()) {
+            observer.0.on_frame_ended(window, sequence);
+        }
     }
 }
 
 impl ObserverInner {
-    fn on_frame_ended(&self, window: &Window) {
+    fn on_frame_ended(&self, window: &Window, sequence: u64) {
         let Some(observation) = window.completed_frame() else {
             return;
         };
+        if self.context.fault.borrow().is_some() { return; }
         let data = &mut *self.data.borrow_mut();
-        if data.fault.is_some() {
-            data.ledger.note_ignored_frame();
-            return;
-        }
-        let Some(session) = data.session.upgrade() else {
-            data.ledger.note_ignored_frame();
-            return;
-        };
-        let matching_surface = data
-            .surface
-            .as_ref()
-            .is_some_and(|surface| surface.id() == window.surface().id());
-        if session.region.document != window.document_id() || !matching_surface {
-            data.ledger.note_ignored_frame();
-            return;
-        }
+        let Some(session) = data.session.upgrade() else { return; };
+        let Some(region) = session.mount_region(window.document_id()) else { return; };
+        if region.surface != window.surface().id() { return; }
         if let Some(surface) = data.surface.as_ref()
             && let Err(error) = data.semantics.consume(surface, window)
         {
-            data.ledger.note_ignored_frame();
-            data.fault = Some(error);
+            self.context.fault.replace(Some(error));
             return;
         }
-        let resources = match resources::snapshot(window, &[], Some(&session)) {
-            Ok(resources) => resources,
-            Err(error) => {
-                data.ledger.note_ignored_frame();
-                data.fault = Some(error);
-                return;
-            }
-        };
         let state = self.capture.state();
         let time_us =
             u64::try_from(observation.timestamp.since_origin().as_micros()).unwrap_or(u64::MAX);
@@ -614,45 +689,57 @@ impl ObserverInner {
             presented_draw: state.presented_draw,
             style_revision: observation.style_revision,
             document_revision: observation.document_revision,
-            metadata_revision: session.bridge.metadata_revision(),
+            metadata_revision: region.bridge.metadata_revision(),
             resource_revision: window.image_resource_revision(),
             generation: session.generation,
         };
         let Some((stamp, presentation)) = data.ledger.record_outcome(&input) else {
             return;
         };
+        if data.surface.is_none() { return; }
+        let resources = match resources::snapshot(window, &[], Some(&session)) {
+            Ok(resources) => resources,
+            Err(error) => {
+                self.context.fault.replace(Some(error));
+                return;
+            }
+        };
         let surface_configuration = data.ledger.surface_configuration();
         let resource_revision = window.image_resource_revision();
         let identity = CaptureIdentity {
-            build_id: self.build_id.clone(),
+            build_id: self.context.build_id.clone(),
             presentation_sequence: state.presentation_id,
             resource_revision: Some(resource_revision),
             surface_configuration: Some(surface_configuration),
             style_revision: Some(observation.style_revision),
         };
         let snapshot =
-            inspect::snapshot(window, &session, observation.ordinal, &data.semantics, &identity);
-        let tree = snapshot.tree;
+            inspect::snapshot(window, &region, session.generation, observation.ordinal, &data.semantics, &identity);
+        let mut tree = snapshot.tree;
         let mut extra = serde_json::Map::new();
         for (key, value) in [
             ("documentIdentity", json!(format!("{:?}", window.document_id()))),
-            ("actionSequence", json!(data.ledger.action())),
+            ("actionSequence", json!(self.context.action.get())),
             ("requiredStateRevision", json!(observation.document_revision)),
             ("validatedStateRevision", json!(observation.document_revision)),
             ("layoutRevision", json!(observation.layout_revision)),
             ("configurationId", json!(state.configuration_id)),
-            ("timingDeterministic", json!(self.environment.is_virtual())),
+            ("timingDeterministic", json!(self.context.environment.is_virtual())),
             ("resources", resources),
             ("scale", json!(window.surface().scale_factor())),
             ("renderer", self.capture.metadata()),
         ] {
             extra.insert(key.to_owned(), value);
         }
+        if self.context.multiple {
+            tree.extra.insert("checkpointSequence".into(), json!(sequence));
+            extra.insert("checkpointSequence".into(), json!(sequence));
+        }
         let frame = FrameEvidence {
             schema_version: 1,
-            build_id: self.build_id.clone(),
+            build_id: self.context.build_id.clone(),
             generation: session.generation,
-            surface: "main".into(),
+            surface: region.name.clone(),
             metadata_revision: snapshot.metadata_revision,
             resource_revision: Some(resource_revision),
             surface_configuration: Some(surface_configuration),
@@ -667,18 +754,19 @@ impl ObserverInner {
         };
         // Persist complete owned evidence before another callback can fail or block.
         // Do not advance committed metadata or `last` if persistence fails.
-        let (tree_path, frame_path) = evidence::checkpoint_paths(session.generation, observation.ordinal);
+        let (tree_path, frame_path) = evidence::checkpoint_paths(
+            session.generation, observation.ordinal, (region.name != "main").then_some(sequence));
         let publication = (|| {
             let tree_value =
                 serde_json::to_value(&tree).map_err(|e| Error::new("E_OUTPUT_IO", 8, e.to_string()))?;
             let frame_value =
                 serde_json::to_value(&frame).map_err(|e| Error::new("E_OUTPUT_IO", 8, e.to_string()))?;
-            self.sink
+            self.context.sink
                 .borrow_mut()
                 .write_checkpoint(&tree_path, &tree_value, &frame_path, &frame_value)
         })();
         if let Err(error) = publication {
-            data.fault = Some(error);
+            self.context.fault.replace(Some(error));
             return;
         }
         data.ledger.commit(CommittedMeta {
@@ -701,6 +789,10 @@ impl ObserverInner {
             tree,
             native_nodes: snapshot.native_nodes,
         });
+        self.context.current_checkpoint.set(Some(region.surface));
+        if self.context.graphics.borrow().is_null() {
+            self.context.graphics.replace(self.capture.metadata());
+        }
     }
 }
 
@@ -753,29 +845,31 @@ impl SettledFrame<'_> {
 pub(crate) struct FrameObserver(Rc<ObserverInner>);
 
 impl FrameObserver {
-    pub fn new(
-        build_id: String,
-        environment: Rc<Environment>,
-        sink: Box<dyn CheckpointSink>,
-    ) -> Self {
+    fn new(context: Rc<ObservationContext>) -> Self {
         Self(Rc::new(ObserverInner {
             capture: CaptureHandle::default(),
-            sink: RefCell::new(sink),
-            build_id,
-            environment,
+            context,
             data: RefCell::new(ObserverData {
+                requested_metadata: 0,
                 semantics: SemanticModel::default(),
                 ledger: FrameLedger::default(),
                 session: Weak::new(),
                 surface: None,
                 last: None,
-                fault: None,
             }),
         }))
     }
 
     pub fn bind_session(&self, session: Weak<Session>) {
         self.0.data.borrow_mut().session = session;
+    }
+
+    pub fn request_metadata_frame(&self, window: &Window, revision: u64) {
+        let mut data = self.0.data.borrow_mut();
+        if data.requested_metadata != revision {
+            data.requested_metadata = revision;
+            window.request_frame();
+        }
     }
 
     pub fn bind_surface(&self, surface: Arc<OffscreenSurface>) {
@@ -786,6 +880,7 @@ impl FrameObserver {
         let mut data = self.0.data.borrow_mut();
         data.session = Weak::new();
         data.surface = None;
+        data.requested_metadata = 0;
         data.semantics = SemanticModel::default();
         data.last = None;
         data.ledger.reset_surface();
@@ -794,26 +889,6 @@ impl FrameObserver {
 
     pub fn bump_surface_configuration(&self) {
         self.0.data.borrow_mut().ledger.bump_surface_configuration();
-    }
-
-    pub fn begin_step(&self, action: u64) -> u64 {
-        self.0.data.borrow_mut().ledger.begin_step(action)
-    }
-
-    pub fn take_fault(&self) -> Option<Error> {
-        self.0.data.borrow_mut().fault.take()
-    }
-
-    pub fn exceeded_step_budget(&self, step_start_frame: u64, max_frames_per_step: u32) -> bool {
-        self.0
-            .data
-            .borrow()
-            .ledger
-            .exceeded_step_budget(step_start_frame, max_frames_per_step)
-    }
-
-    pub fn frames(&self) -> u64 {
-        self.0.data.borrow().ledger.frames()
     }
 
     pub fn last_time_us(&self) -> Option<u64> {
@@ -827,24 +902,22 @@ impl FrameObserver {
         )
     }
 
-    pub fn graphics_metadata(&self) -> Value {
-        self.0.capture.metadata()
-    }
-
     pub fn settled<'a>(
         &'a self,
         window: &Window,
         session: Option<&Rc<Session>>,
     ) -> Option<SettledFrame<'a>> {
         let session = session?;
+        let region = session.mount_region(window.document_id())?;
         let data = self.0.data.borrow();
+        if data.surface.as_ref()?.id() != region.surface { return None; }
         let capture_state = self.0.capture.state();
         let completed = window.completed_frame();
         if window.has_pending_stylesheets() { return None; }
         let query = SettledQuery {
             generation: session.generation,
             document_revision: window.dom().revision(),
-            metadata_revision: session.bridge.metadata_revision(),
+            metadata_revision: region.bridge.metadata_revision(),
             resource_revision: window.image_resource_revision(),
             style_revision: window.style_revision(),
             configuration_id: capture_state.configuration_id,
@@ -874,7 +947,7 @@ impl FrameObserver {
         if pixels.pixels.size().width != request.dimensions.0 as i32
             || pixels.pixels.size().height != request.dimensions.1 as i32
         {
-            return Err(Error::new("E_READBACK", 7, "presented extent differs from resolved profile").into());
+            return Err(Error::new("E_READBACK", 7, "presented extent differs from current surface configuration").into());
         }
         let png = capture::png(&pixels.pixels, request.opaque)?;
         if owned.presentation != pixels.presentation_id || owned.configuration != pixels.configuration_id {
@@ -885,7 +958,7 @@ impl FrameObserver {
             )
             .into());
         }
-        let paths = CapturePaths::new(request.id).map_err(Fault::from)?;
+        let paths = CapturePaths::new(request.id, &owned.frame.surface).map_err(Fault::from)?;
         let mut frame = owned.frame.clone();
         frame.capture_id = Some(paths.id().to_owned());
         frame.extra.insert("readiness".into(), request.readiness);
@@ -901,7 +974,7 @@ impl FrameObserver {
         let frame_value =
             serde_json::to_value(&frame).map_err(|e| Error::new("E_OUTPUT_IO", 8, e.to_string()))?;
         self.0
-            .sink
+            .context.sink
             .borrow_mut()
             .write_capture(&paths, &png, &tree_bytes, &frame_value)?;
         Ok(paths.summary())
@@ -930,7 +1003,7 @@ impl FrameObserver {
             .filter(|pixels| pixels.presentation_id == last.presentation && pixels.configuration_id == last.configuration)
             .map(|pixels| capture::png(&pixels.pixels, opaque))
             .transpose()?;
-        self.0.sink.borrow_mut().publish_historical(
+        self.0.context.sink.borrow_mut().publish_historical(
             &last.tree,
             &last.frame,
             pixels.as_deref(),

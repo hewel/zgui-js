@@ -1,9 +1,8 @@
-import { createRoot, resetErrorHalt } from "#solid";
+import { createEffect, createRoot, resetErrorHalt } from "#solid";
 import { flush, insert } from "./renderer/index.js";
 import type { NativeChild, NativeNode } from "./types.js";
-import type { NativeHost } from "./host.js";
-
-declare const globalThis: NativeHost;
+import { bridgeFor, provideRegion, rememberBridge } from "./host.js";
+import type { UiBridge } from "./host.js";
 
 /**
  * Mount native children into a dedicated host root. Cleanup is idempotent and
@@ -11,6 +10,29 @@ declare const globalThis: NativeHost;
  * Host teardown separately cancels timers, requests, and callback registrations.
  */
 export function renderApp(code: () => NativeChild, root: NativeNode): () => void {
+  const bridge = bridgeFor(root);
+  return mountOwned(() => insert(root, code()), () => bridge.clearRoot(root));
+}
+
+/** Own a rootless shell's reactive graph; native content belongs inside LayerSurface. */
+export function renderShell(code: () => NativeChild): () => void {
+  return mountOwned(() => {
+    const children = code();
+    createEffect(() => visitShellChildren(children), () => {});
+  });
+}
+
+function visitShellChildren(child: NativeChild): void {
+  if (typeof child === "function") visitShellChildren(child());
+  else if (Array.isArray(child)) for (const item of child) visitShellChildren(item);
+}
+
+export function renderRegion(code: () => NativeChild, root: NativeNode, bridge: UiBridge): () => void {
+  rememberBridge(root, bridge);
+  return mountOwned(() => provideRegion(bridge, () => insert(root, code())), () => bridge.clearRoot(root));
+}
+
+function mountOwned(mount: () => void, clear?: () => void): () => void {
   let disposeRoot: (() => void) | undefined;
   let disposed = false;
 
@@ -27,7 +49,7 @@ export function renderApp(code: () => NativeChild, root: NativeNode): () => void
       resetErrorHalt();
     }
     try {
-      globalThis.__zgui.clearRoot(root);
+      clear?.();
     } catch (error) {
       errors.push(error);
     }
@@ -39,7 +61,7 @@ export function renderApp(code: () => NativeChild, root: NativeNode): () => void
     // Own the root directly: Universal.render cannot return its disposer if mount throws.
     createRoot(dispose => {
       disposeRoot = dispose;
-      insert(root, code());
+      mount();
     });
     flush();
   } catch (error) {

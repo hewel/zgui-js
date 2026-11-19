@@ -69,7 +69,7 @@ pub struct WaylandState {
     /// The desktop shell, which makes windows and pop-ups.
     pub(crate) xdg: Arc<crate::surface::role::xdg::XdgShell>,
     /// The shell layer, where the compositor offers one.
-    pub(crate) layers: Option<LayerShell>,
+    pub(crate) layers: Option<(LayerShell, u32)>,
     /// The seats, and everything attached to them.
     pub(crate) seats: SeatState,
     /// The one seat this backend tracks, and what it is pointed at.
@@ -113,6 +113,8 @@ pub struct WaylandState {
     pub(crate) live: Live,
     /// What happened during a dispatch and has not been delivered yet.
     pub(crate) out: Vec<(SurfaceId, SurfaceEvent)>,
+    /// A coalesced monitor update to deliver outside the protocol dispatch.
+    pub(crate) monitors_dirty: bool,
 }
 
 impl WaylandState {
@@ -141,7 +143,14 @@ impl WaylandState {
         let xdg = crate::surface::role::xdg::XdgShell::bind(globals, &qh)
             .map(Arc::new)
             .map_err(|error| PlatformError::Backend(format!("xdg_wm_base: {error}")))?;
-        let layers = LayerShell::bind(globals, &qh).ok();
+        let layers = LayerShell::bind(globals, &qh).ok().map(|shell| {
+            let version = globals.contents().with_list(|list| {
+                list.iter()
+                    .find(|global| global.interface == "zwlr_layer_shell_v1")
+                    .map_or(1, |global| global.version)
+            });
+            (shell, version)
+        });
         let extras = Extras::bind(globals, &qh);
         let presentation = Presentation::bind(globals, &qh);
         let text_input: Option<ZwpTextInputManagerV3> = globals.bind(&qh, 1..=1, GlobalData).ok();
@@ -187,6 +196,7 @@ impl WaylandState {
             monotonic: Monotonic::anchor(),
             live: Live::new(capabilities::of(offered), Arc::clone(&waker)),
             out: Vec::new(),
+            monitors_dirty: false,
             qh: qh.clone(),
         };
         state.clipboard.selections().attach(

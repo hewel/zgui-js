@@ -1,7 +1,7 @@
 import {
-  Image, Button, TextField, TextArea, For, Show, Loading, Errored,
+  Image, Button, TextField, TextArea, For, Show, Loading, Errored, LayerSurface,
   createCanvasScene, createContext, createEffect, createMemo, createSignal, createSpring, createStore, createProjection,
-  merge, omit, onCleanup, onSettled, reconcile, renderApp, untrack, useContext,
+  merge, omit, onCleanup, onSettled, reconcile, renderApp, renderShell, untrack, useContext, useMonitors,
   focus, getTextContent, getWindowRect, isAnimating, lockScroll, mountStylesheet, observeGeometry, precedes,
 } from "@hewel/zgui";
 import type { CanvasCommand, CanvasScene, CanvasTransform, Component, Context, NativeAnimationEvent, NativeChild, NativeContextMenuEvent, NativeFocusOptions, NativeNode, NativePointerBoundaryEvent, NativeRole, NativeTextControlProps, NativeTransitionEvent, NativeViewport, NativeWheelEvent, NativeWindowRect, ParentComponent, Spring, SpringOptions, TextFieldProps, TextAreaProps, VectorProps } from "@hewel/zgui";
@@ -183,6 +183,24 @@ export function mount(root: NativeNode): () => void {
     return [children, <vector {...vectorProps} svg='<svg viewBox="0 0 8 8"/>' canvas={scene} />];
   }, root);
 }
+
+export function mountShell(): () => void {
+  return renderShell(() => {
+    const monitors = useMonitors();
+    return <For each={monitors()}>{monitor => {
+      const scale: number = monitor.scale;
+      const refresh: number | null = monitor.refreshRateMilliHz;
+      return <LayerSurface name={monitor.name} output={monitor.id} layer="top"
+        anchor={["top", "right", "left"] as const} width={0} height={32} margin={{ top: 4 }}
+        keyboard="on-demand" exclusiveZone={32} inputRegion={[{ x: 0, y: 0, width: 100, height: 32 }] as const}>
+        <text>{monitor.x}:{monitor.y}:{monitor.width}:{monitor.height}:{scale}:{refresh}</text>
+      </LayerSurface>;
+    }}</For>;
+  });
+}
+
+const hitNodes: readonly NativeNode[] = [assigned];
+void <LayerSurface name="nodes" inputRegion={hitNodes} />;
 void borrowed;
 
 type AssertBoundary<T extends true> = T;

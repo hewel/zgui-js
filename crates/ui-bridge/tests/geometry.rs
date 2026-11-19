@@ -198,6 +198,41 @@ fn geometry_subscriptions_are_independent_idempotent_and_retire_with_nodes() {
 }
 
 #[test]
+fn opt_in_geometry_observer_reports_mount_attachment_changes_synchronously() {
+    let mut native = Geometry::new(75, 100);
+    native.script(r#"
+        const branch = __zgui.createElement('box');
+        const node = __zgui.createElement('box');
+        __zgui.insertNode(branch, node, null);
+        __zgui.insertNode(root, branch, null);
+        globalThis.samples = [];
+        globalThis.attachments = [];
+        __zgui.observeGeometry(node, 'borderBox', rect => samples.push(rect),
+            attached => attachments.push(attached));
+        'mounted'
+    "#);
+    let node = native.backend.children(native.child(0))[0];
+    native.deliver(node, ObservedValue::BorderBox(device_rect(2.0, 4.0, 10.0, 20.0)));
+    native.script(r#"
+        __zgui.removeNode(root, branch);
+        if (attachments.join() !== 'true,false') throw Error('ancestor detach was not reported');
+        __zgui.insertNode(root, branch, null);
+        if (attachments.join() !== 'true,false,true') throw Error('reattach was not reported');
+        'moved'
+    "#);
+    native.backend.deliver(node, ObservedValue::BorderBox(device_rect(8.0, 6.0, 10.0, 20.0)));
+    native.script(r#"
+        __zgui.clearRoot(root);
+        if (attachments.join() !== 'true,false,true,false') throw Error('root clear was not reported');
+        'removed'
+    "#);
+    native.flush();
+    native.script("if (samples.length !== 1) throw Error('removed node observed again'); 'checked'");
+    assert_eq!(native.bridge.callback_count(), 0);
+    assert_eq!(native.backend.observation_count(), 0);
+}
+
+#[test]
 fn geometry_rejects_forged_foreign_stale_and_invalid_arguments() {
     let mut native = Geometry::new(73, 100);
     native.script(r#"

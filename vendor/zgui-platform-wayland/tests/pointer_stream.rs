@@ -18,9 +18,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use zgui_platform::{
-    AppHandler, IdlePolicy, PlatformCx, PlatformError, SurfaceEvent, SurfaceId, WakeReason,
+    AppHandler, IdlePolicy, PlatformCx, SurfaceEvent, SurfaceId, WakeReason,
 };
-use zgui_platform_wayland::WaylandApp;
 use zgui_vocab::{PointerAction, PointerButton};
 
 /// What the pointer did, in the order it did it.
@@ -143,13 +142,8 @@ fn main() {
         waker: None,
     };
 
-    let mut app = match WaylandApp::new(handler) {
-        Ok(app) => app,
-        Err(PlatformError::Backend(reason)) => {
-            support::skipped(PROPERTY, &format!("no compositor to run on: {reason}"));
-            return;
-        }
-        Err(other) => panic!("the compositor refused the application: {other}"),
+    let Some(mut app) = support::loop_for(PROPERTY, handler) else {
+        return;
     };
     if let Err(error) = app.run() {
         panic!("the loop stopped: {error}");

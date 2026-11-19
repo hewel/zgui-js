@@ -50,15 +50,16 @@ pub(crate) fn snapshot(window: &zgui::runtime::Window, allowed_pending: &[String
         }
     }
     let ready = pending.iter().all(|id| allowed_pending.contains(id));
-    let fonts = if let Some(session) = session {
+    let owner = session.and_then(|session| session.mount_region(window.document_id()).map(|region| (session, region)));
+    let fonts = if let Some((session, region)) = &owner {
         session.validate_font_families(window).map_err(|error| Error::new("E_FONT_FAMILY", 6, error.to_string()))?;
         session.package().map(|package| package.manifest.fonts.iter().map(|font| {
-            let registered = session.region.fonts.contains_family(&font.family);
+            let registered = region.region.fonts.contains_family(&font.family);
             json!({"family":font.family,"path":font.path,"digest":package.manifest.artifact_digests[&font.path],
                 "state":if registered { "ready" } else { "unregistered" }})
         }).collect::<Vec<_>>()).unwrap_or_default()
     } else { Vec::new() };
-    let fonts_ready = session.is_some() && fonts.iter().all(|font| font["state"] == "ready");
+    let fonts_ready = owner.is_some() && fonts.iter().all(|font| font["state"] == "ready");
     Ok(json!({
         "requiredAssetsReady": ready && fonts_ready,
         "requiredFontsReady": fonts_ready,

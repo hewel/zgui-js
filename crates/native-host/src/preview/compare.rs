@@ -5,7 +5,7 @@ mod policy;
 use std::{collections::{BTreeSet,HashSet},path::{Path,PathBuf}};
 use serde_json::{Value,json};
 use crate::bounded_fs;
-use super::{Error,evidence::FrameEvidence,output::{Output,bounded_read_error,digest},saved::{SavedCapture,SavedRun}};
+use super::{Error,evidence::{CapturePaths,FrameEvidence},output::{Output,bounded_read_error,digest},saved::{SavedCapture,SavedRun}};
 use crate::schema::object_struct;
 use policy::{CaptureKey,CaptureSet,Policy};
 
@@ -69,8 +69,8 @@ impl Baseline {
         }
         let keys:BTreeSet<_>=descriptor.review.captures.iter().collect();
         if keys.is_empty() || keys.len()>4096 || keys.len()!=descriptor.review.captures.len()
-            || keys.iter().any(|key|!super::scenario::safe_id(&key.capture_id)||key.surface!="main") {
-            return Err(invalid("baseline review must name 1..4096 unique main-surface captures"));
+            || keys.iter().any(|key|!super::scenario::safe_id(&key.capture_id)||!super::scenario::safe_id(&key.surface)) {
+            return Err(invalid("baseline review must name 1..4096 unique capture and surface pairs"));
         }
         let run=canonical_root.join(&descriptor.run);
         let metadata=std::fs::symlink_metadata(&run).map_err(io)?;
@@ -120,13 +120,14 @@ impl Source {
         if environment["profileDigest"]!=profile_digest.trim_start_matches("sha256:") {
             return Err(io("profile digest does not bind the saved profile and font evidence"));
         }
-        let keys=run.capture_ids()?.into_iter().map(|capture_id|CaptureKey{capture_id,surface:"main".into()}).collect();
+        let keys=run.captures()?.into_iter().map(|paths|CaptureKey{capture_id:paths.id().into(),surface:paths.surface().into()}).collect();
         Ok(Self{run,environment,graphics,profile,fixture,scenario,keys,verified_artifacts})
     }
 
     fn capture(&self,key:&CaptureKey,max_pixels:u64)->Result<(SavedCapture,Vec<u8>,pixels::Image),Error> {
-        let capture=self.run.capture(&key.capture_id)?;
-        let png=capture_png(self,&capture.frame,key)?;
+        let paths=CapturePaths::new(&key.capture_id,&key.surface)?;
+        let capture=self.run.capture(&paths)?;
+        let png=capture_png(self,&capture.frame,&paths)?;
         let image=pixels::decode(&png,max_pixels)?;
         if capture.frame.detail("physicalWidth").as_u64()!=Some(u64::from(image.width))
             || capture.frame.detail("physicalHeight").as_u64()!=Some(u64::from(image.height)) {
@@ -220,7 +221,8 @@ fn execute(options:&Options,policy:&Policy,policy_bytes:&[u8],output:&mut Output
         if comparison.as_ref().is_some_and(|comparison|!comparison.passed) { mismatched+=1; }
         let mut artifacts=json!({});
         if comparison.as_ref().is_none_or(|comparison|!comparison.exact_equal) {
-            let prefix=format!("captures/{}-{}",key.surface,key.capture_id);
+            let prefix=if key.surface=="main" { format!("captures/main-{}",key.capture_id) }
+                else { format!("captures/surfaces/{}/{}",key.surface,key.capture_id) };
             let before=format!("{prefix}.baseline.png");
             let after=format!("{prefix}.actual.png");
             output.bytes(&before,"comparison-baseline-pixels",&left_png)?;
@@ -261,8 +263,8 @@ fn execute(options:&Options,policy:&Policy,policy_bytes:&[u8],output:&mut Output
         "artifacts":{"manifest":"artifacts.json","report":"report.json"}}))
 }
 
-fn capture_png(source:&Source,frame:&FrameEvidence,key:&CaptureKey)->Result<Vec<u8>,Error> {
-    let bytes=source.run.verified(&super::evidence::CapturePaths::new(&key.capture_id)?.png(),"capture-pixels")?;
+fn capture_png(source:&Source,frame:&FrameEvidence,paths:&CapturePaths)->Result<Vec<u8>,Error> {
+    let bytes=source.run.verified(&paths.png(),"capture-pixels")?;
     if frame.png_digest.as_deref()!=Some(digest(&bytes).as_str()) || frame.extra.get("renderer")!=Some(&source.graphics) {
         return Err(io("PNG or renderer identity disagrees with its native capture frame"));
     }

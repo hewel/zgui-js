@@ -1,4 +1,4 @@
-//! Pure value-oriented frame coherence ledger and step frame budget tracker.
+//! Pure value-oriented frame coherence ledger.
 
 use zgui::render::{FrameOutcome, SkipReason};
 
@@ -70,8 +70,6 @@ pub(crate) struct CommittedMeta {
 
 #[derive(Default)]
 pub(crate) struct FrameLedger {
-    frames: u64,
-    action: u64,
     surface_configuration: u64,
     presentation: Option<Presentation>,
     committed: Option<CommittedMeta>,
@@ -82,7 +80,6 @@ impl FrameLedger {
     /// only when the frame is layout-coherent, presented or undamaged-skipped, and
     /// matches the renderer's active configuration.
     pub fn record_outcome(&mut self, input: &FrameInput) -> Option<(FrameStamp, Presentation)> {
-        self.frames += 1;
         let stamp = FrameStamp {
             ordinal: input.ordinal,
             time_us: input.time_us,
@@ -138,36 +135,13 @@ impl FrameLedger {
             && matches!(query.completed_status, Some(FrameStatus::Presented | FrameStatus::Undamaged))
     }
 
-    pub fn exceeded_step_budget(&self, step_start_frame: u64, max_frames_per_step: u32) -> bool {
-        self.frames.saturating_sub(step_start_frame) > u64::from(max_frames_per_step)
-    }
-
-    pub fn begin_step(&mut self, action: u64) -> u64 {
-        self.action = action;
-        self.frames
-    }
-
     pub fn bump_surface_configuration(&mut self) {
         self.surface_configuration += 1;
-    }
-
-    /// Counts a completed native frame whose observation was skipped early (e.g.
-    /// prior fault or inactive surface) without mutating presentation state.
-    pub fn note_ignored_frame(&mut self) {
-        self.frames += 1;
     }
 
     pub fn reset_surface(&mut self) {
         self.presentation = None;
         self.committed = None;
-    }
-
-    pub fn action(&self) -> u64 {
-        self.action
-    }
-
-    pub fn frames(&self) -> u64 {
-        self.frames
     }
 
     pub fn surface_configuration(&self) -> u64 {
@@ -184,9 +158,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn frame_ledger_tracks_settled_skips_revisions_resizes_and_budgets() {
+    fn frame_ledger_tracks_settled_skips_revisions_and_resizes() {
         let mut ledger = FrameLedger::default();
-        let step_start = ledger.begin_step(1);
 
         let initial = FrameInput {
             ordinal: 1,
@@ -293,7 +266,5 @@ mod tests {
             style_revision: 5, document_revision: 5, metadata_revision: 2, resource_revision: 0, generation: 1,
         };
         assert!(ledger.record_outcome(&lag).is_none());
-        assert!(ledger.exceeded_step_budget(step_start, 3));
-        assert!(!ledger.exceeded_step_budget(step_start, 4));
     }
 }

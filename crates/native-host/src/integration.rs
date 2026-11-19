@@ -78,7 +78,8 @@ impl IntegrationHarness {
             live
         });
         for session in host.sessions() {
-            let key = (session.region.document, session.generation);
+            let Some(primary) = session.primary() else { continue; };
+            let key = (primary.region.document, session.generation);
             if self.armed.contains_key(&key) { continue; }
             self.arm(session, external);
         }
@@ -87,8 +88,10 @@ impl IntegrationHarness {
     fn arm(&mut self, session: &Rc<Session>, external: &ExternalWake) {
         let baseline = session.package().is_none();
         if !baseline && !self.exercise { return; }
-        let key = (session.region.document, session.generation);
-        let registration = Rc::new(Armed { host: session.region.host.clone(), timer: Cell::new(None) });
+        let Some(primary) = session.primary() else { return; };
+        let region = &primary.region;
+        let key = (region.document, session.generation);
+        let registration = Rc::new(Armed { host: region.host.clone(), timer: Cell::new(None) });
         let remaining = Cell::new(if self.exercise { 4 } else { 1 });
         let repeat = if self.exercise { Repeat::Every } else { Repeat::Once };
         let weak: Weak<Session> = Rc::downgrade(session);
@@ -106,9 +109,9 @@ impl IntegrationHarness {
         self.armed.insert(key, registration);
         if baseline {
             let external = external.clone();
-            let document = session.region.document;
+            let document = region.document;
             let generation = session.generation;
-            let surface = session.surface();
+            let surface = primary.surface;
             std::thread::spawn(move || {
                 std::thread::sleep(Duration::from_secs(2));
                 external(document, generation, surface);

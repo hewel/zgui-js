@@ -4,7 +4,7 @@ use std::rc::Rc;
 use rquickjs::{Ctx, Exception, Function, Object, Persistent};
 use zgui::view::{DomHandle, HostHandle, NodeId, Observed, ObservedValue};
 
-use crate::registry::Handle;
+use crate::registry::{Handle, NodeRegistry};
 
 pub(crate) type Dispatcher = dyn Fn(u64, ObservedValue, f32);
 
@@ -17,11 +17,18 @@ struct Observation {
     viewport: bool,
 }
 
+struct Attachment {
+    owner: u64,
+    callback: Persistent<Function<'static>>,
+    attached: bool,
+}
+
 pub(crate) struct Geometry {
     dom: DomHandle,
     root: NodeId,
     host: HostHandle,
     observations: HashMap<u64, Observation>,
+    attachments: HashMap<u64, Attachment>,
     next: u64,
     limit: usize,
 }
@@ -41,7 +48,7 @@ pub(crate) enum Measurement {
 
 impl Geometry {
     pub(crate) fn new(dom: DomHandle, root: NodeId, host: HostHandle, limit: usize) -> Self {
-        Self { dom, root, host, observations: HashMap::new(), next: 1, limit }
+        Self { dom, root, host, observations: HashMap::new(), attachments: HashMap::new(), next: 1, limit }
     }
 
     pub(crate) fn reserve(&mut self, ctx: &Ctx<'_>) -> rquickjs::Result<u64> {
@@ -90,6 +97,35 @@ impl Geometry {
         });
     }
 
+    pub(crate) fn track_attachment<'js>(
+        &mut self,
+        ctx: &Ctx<'js>,
+        id: u64,
+        owner: Handle,
+        attached: bool,
+        callback: Function<'js>,
+    ) {
+        self.attachments.insert(id, Attachment { owner: owner.token(), callback: Persistent::save(ctx, callback), attached });
+    }
+
+    pub(crate) fn attachment_changes(&self, registry: &NodeRegistry) -> Vec<u64> {
+        self.attachments.iter().filter_map(|(&id, record)| {
+            (record.attached != registry.attached(record.owner)).then_some(id)
+        }).collect()
+    }
+
+    pub(crate) fn prepare_attachment(
+        &mut self,
+        id: u64,
+        registry: &NodeRegistry,
+    ) -> Option<(Persistent<Function<'static>>, bool)> {
+        let record = self.attachments.get_mut(&id)?;
+        let attached = registry.attached(record.owner);
+        if attached == record.attached { return None; }
+        record.attached = attached;
+        Some((record.callback.clone(), attached))
+    }
+
     pub(crate) fn prepare<'js>(
         &mut self,
         ctx: &Ctx<'js>,
@@ -98,6 +134,7 @@ impl Geometry {
         scale: f32,
     ) -> rquickjs::Result<Option<(Persistent<Function<'static>>, Measurement)>> {
         let Some(record) = self.observations.get_mut(&id) else { return Ok(None); };
+        if self.attachments.get(&id).is_some_and(|record| !record.attached) { return Ok(None); }
         let measurement = Measurement::of(ctx, value, scale)?;
         let measurement = if record.viewport {
             match measurement {
@@ -114,16 +151,19 @@ impl Geometry {
 
     pub(crate) fn cancel(&mut self, id: u64) {
         self.observations.remove(&id);
+        self.attachments.remove(&id);
     }
 
     pub(crate) fn remove_nodes(&mut self, invalid: &[Handle]) {
         if invalid.is_empty() || self.observations.is_empty() { return; }
         let tokens: HashSet<u64> = invalid.iter().map(|handle| handle.token()).collect();
         self.observations.retain(|_, record| !tokens.contains(&record.owner));
+        self.attachments.retain(|_, record| !tokens.contains(&record.owner));
     }
 
     pub(crate) fn clear(&mut self) {
         self.observations.clear();
+        self.attachments.clear();
     }
 
     pub(crate) fn len(&self) -> usize {

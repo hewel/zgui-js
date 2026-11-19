@@ -6,8 +6,8 @@
 use std::{cell::{Cell, RefCell}, collections::HashMap, rc::{Rc, Weak}, sync::Arc};
 
 use zgui::{
-    platform::{SurfaceId, Waker},
-    runtime::{HostBinding, ImagePolicy},
+    platform::{PlatformCx, SurfaceId, Waker},
+    runtime::{HostBinding, ImagePolicy, WindowToken},
     runtime::window::{ImageSourceCheckpoint, ImageSourceMountWrites},
     view::{Anchor, BuildCx, DocumentId, DomHandle, ElementName, HostHandle, NodeId, View},
 };
@@ -16,6 +16,10 @@ use crate::{
     fallback,
     session::{Result as SessionResult, ResourceCounts, Session, SessionError, SessionModule, SessionPolicy},
 };
+
+mod surfaces;
+use surfaces::ShellWindows;
+use crate::shell::Monitor;
 
 /// The portion of a native document owned by one application session at a time.
 #[derive(Clone)]
@@ -51,20 +55,32 @@ impl Anchor for RootAnchor {
     fn first_node(&self) -> Option<NodeId> { Some(self.0.get()) }
 }
 
-pub(crate) struct Binding(Weak<Session>);
+pub(crate) struct Binding {
+    owner: Weak<Session>,
+    document: DocumentId,
+}
 impl HostBinding for Binding {
     fn checkpoint(&mut self) {
-        if let Some(session) = self.0.upgrade() { session.frame_checkpoint(); }
+        if let Some(session) = self.owner.upgrade() { session.frame_checkpoint(); }
     }
     fn before_paint(&mut self, _timestamp: zgui::vocab::Timestamp) {
-        if let Some(session) = self.0.upgrade() {
+        if let Some(session) = self.owner.upgrade() {
             session.frames.set(session.frames.get() + 1);
-            if session.frames.get() == 1 { eprintln!("first-native-frame: {}", session.region.dom.text_content(session.region.root)); }
+            if session.frames.get() == 1 && let Some(owned) = session.mount_region(self.document) {
+                let region = &owned.region;
+                eprintln!("first-native-frame: {}", region.dom.text_content(region.root));
+            }
         }
     }
-    fn shutting_down(&mut self) { if let Some(session) = self.0.upgrade() { let _ = session.retire(); } }
+    fn shutting_down(&mut self) {
+        if let Some(session) = self.owner.upgrade()
+            && session.primary().is_some_and(|primary| primary.region.document == self.document)
+        {
+            session.dispose();
+        }
+    }
     fn stylesheet_rejected(&mut self, name: &str, diagnostics: zgui_style::CssDiagnostics) {
-        if let Some(session) = self.0.upgrade() { session.stylesheet_rejected(name, diagnostics); }
+        if let Some(session) = self.owner.upgrade() { session.stylesheet_rejected(name, diagnostics); }
     }
 }
 
@@ -119,6 +135,9 @@ pub(crate) trait SessionSurface {
     fn commit_image_policy(&mut self, document: DocumentId, session: &Session, mount_writes: Self::MountWrites);
     fn request_frame(&self, document: DocumentId);
     fn validate_fonts(&self, _session: &Session) -> SessionResult<()> { Ok(()) }
+    /// Destroy an auxiliary window and verify that its native surface is gone.
+    fn close_shell_surface(&mut self, token: WindowToken, id: SurfaceId) -> bool;
+    fn stage_shell_surfaces(&mut self, staged: &mut ShellWindows, monitors: &[Monitor], session: &Rc<Session>) -> SessionResult<()>;
 }
 
 /// Image authority installed by [`RuntimeSurface::commit_image_policy`]. Preview publishes
@@ -129,11 +148,12 @@ pub(crate) enum ImageChoice { Live, PackageOnly }
 
 pub(crate) struct RuntimeSurface<'a> {
     runtime: &'a mut zgui::runtime::Runtime,
+    cx: &'a dyn PlatformCx,
     images: ImageChoice,
 }
 impl<'a> RuntimeSurface<'a> {
-    pub(crate) fn new(runtime: &'a mut zgui::runtime::Runtime, images: ImageChoice) -> Self {
-        Self { runtime, images }
+    pub(crate) fn new(runtime: &'a mut zgui::runtime::Runtime, cx: &'a dyn PlatformCx, images: ImageChoice) -> Self {
+        Self { runtime, cx, images }
     }
 }
 impl SessionSurface for RuntimeSurface<'_> {
@@ -148,7 +168,7 @@ impl SessionSurface for RuntimeSurface<'_> {
             .expect("pure preflight cannot destroy its native window");
         // Binding replacement itself neither shuts down the old owner nor
         // requests a frame. Both are explicit at this owner-thread boundary.
-        window.install_binding(Box::new(Binding(Rc::downgrade(session))));
+        window.install_binding(Box::new(Binding { owner: Rc::downgrade(session), document }));
         eprintln!("binding-installed: {document:?} generation={}", session.generation);
     }
     fn image_source_checkpoint(&mut self, document: DocumentId) -> ImageSourceCheckpoint {
@@ -183,10 +203,16 @@ impl SessionSurface for RuntimeSurface<'_> {
         if let Some(window) = self.runtime.windows().iter().find(|window| window.document_id() == document) { window.request_frame(); }
     }
     fn validate_fonts(&self, session: &Session) -> SessionResult<()> {
-        if let Some(window) = self.runtime.windows().iter().find(|window| window.document_id() == session.region.document) {
+        for window in self.runtime.windows() {
             session.validate_font_families(window)?;
         }
         Ok(())
+    }
+    fn close_shell_surface(&mut self, token: WindowToken, id: SurfaceId) -> bool {
+        surfaces::close_native_surface(self.runtime, self.cx, token, id)
+    }
+    fn stage_shell_surfaces(&mut self, staged: &mut ShellWindows, monitors: &[Monitor], session: &Rc<Session>) -> SessionResult<()> {
+        staged.mount(self.runtime, self.cx, self.images, monitors, session)
     }
 }
 
@@ -208,6 +234,11 @@ pub(crate) struct SessionHost {
     policy: SessionPolicy,
     recovery: RecoveryPolicy,
     acceptance: Option<serde_json::Value>,
+    monitors: Vec<Monitor>,
+    pure_fonts: Option<zgui::app::Fonts>,
+    pure_session: Option<Rc<Session>>,
+    pure_attempted: bool,
+    shell_windows: ShellWindows,
 }
 
 impl SessionHost {
@@ -216,6 +247,8 @@ impl SessionHost {
             pending, regions: HashMap::new(), sessions: HashMap::new(), fallbacks: HashMap::new(),
             generation: 0, module, last_good: None, policy, recovery,
             acceptance: None,
+            monitors: Vec::new(), pure_fonts: None, pure_session: None, pure_attempted: false,
+            shell_windows: ShellWindows::default(),
         }
     }
 
@@ -235,7 +268,7 @@ impl SessionHost {
     pub(crate) fn fallback_generation(&self, document: DocumentId) -> Option<u64> { self.fallbacks.get(&document).map(|recovery| recovery.generation) }
     pub(crate) fn pending_regions(&self) -> usize { self.pending.borrow().len() }
     pub(crate) fn session(&self, document: DocumentId) -> Option<&Rc<Session>> { self.sessions.get(&document) }
-    pub(crate) fn sessions(&self) -> impl Iterator<Item = &Rc<Session>> { self.sessions.values() }
+    pub(crate) fn sessions(&self) -> impl Iterator<Item = &Rc<Session>> { self.sessions.values().chain(self.pure_session.iter()) }
 
     /// Drain newly built mount regions and mount the current module on each,
     /// then retire ownership for documents whose native surface is gone.
@@ -250,11 +283,10 @@ impl SessionHost {
                 return Err(error);
             }
         }
-        self.sessions.retain(|document, session| {
-            let present = surface.surface(*document).is_some();
-            if !present { let _ = session.retire(); }
-            present
-        });
+        while let Some(document) = self.sessions.keys().copied().find(|&document| surface.surface(document).is_none()) {
+            let session = self.sessions.remove(&document).expect("retire the session whose surface disappeared");
+            self.shell_windows.retire(&session, |token, id| surface.close_shell_surface(token, id));
+        }
         self.fallbacks.retain(|document, recovery| {
             let present = surface.surface(*document).is_some();
             if !present { recovery.view.clear(); }
@@ -274,15 +306,15 @@ impl SessionHost {
     /// first fault is handed to the caller with the session still owned.
     pub(crate) fn checkpoint(&mut self, surface: &mut impl SessionSurface, retry: Rc<dyn Fn(DocumentId, u64)>) -> SessionResult<()> {
         let mut faults = Vec::new();
-        for session in self.sessions.values() {
+        for (&document, session) in &self.sessions {
             if let Err(error) = surface.validate_fonts(session) {
-                faults.push((session.region.document, session.generation, error));
+                faults.push((document, session.generation, error));
                 continue;
             }
             match session.checkpoint() {
-                Ok(true) => surface.request_frame(session.region.document),
+                Ok(true) => session.request_frames(|document| surface.request_frame(document)),
                 Ok(false) => {}
-                Err(error) => faults.push((session.region.document, session.generation, error)),
+                Err(error) => faults.push((document, session.generation, error)),
             }
         }
         for (document, generation, error) in faults {
@@ -308,6 +340,7 @@ impl SessionHost {
 
     /// Shut the document's session down once and return it so the caller can
     /// inspect post-cleanup counts, cleanup failure, or contract failure.
+    #[cfg(test)]
     pub(crate) fn retire(&mut self, document: DocumentId) -> Option<Rc<Session>> {
         if let Some(mut recovery) = self.fallbacks.remove(&document) { recovery.view.clear(); }
         self.regions.remove(&document);
@@ -318,27 +351,34 @@ impl SessionHost {
 
     /// Release every owned session, fallback view, region and pending intake.
     pub(crate) fn stop(&mut self) {
-        for session in self.sessions.values() { let _ = session.retire(); }
+        for session in self.sessions() { let _ = session.retire(); }
         for recovery in self.fallbacks.values_mut() { recovery.view.clear(); }
         self.sessions.clear();
+        self.pure_session = None;
+        self.pure_attempted = false;
         self.fallbacks.clear();
         self.regions.clear();
         self.pending.borrow_mut().clear();
     }
 
     fn mount_module(&mut self, surface: &mut impl SessionSurface, waker: Arc<dyn Waker>, document: DocumentId, module: SessionModule, retry: &Rc<dyn Fn(DocumentId, u64)>) -> ReloadOutcome {
-        let package = module.package.clone();
+        let outcome = self.mount_module_inner(surface, waker, document, module.clone(), retry);
+        self.record_outcome(&module, Some(document), &outcome);
+        outcome
+    }
+
+    pub(super) fn record_outcome(&mut self, module: &SessionModule, document: Option<DocumentId>, outcome: &ReloadOutcome) {
+        let package = module.package.as_ref();
         let identity = module.package.as_ref().map(|package| serde_json::json!({
             "id":package.manifest.id, "buildId":package.manifest.build_id, "styleSystem":package.manifest.style_system
         }));
-        let outcome = self.mount_module_inner(surface, waker, document, module, retry);
         if let Some(identity) = identity {
             let (status, diagnostic) = match &outcome {
                 ReloadOutcome::Mounted { .. } => ("accepted", None),
                 ReloadOutcome::Rejected(error) | ReloadOutcome::Fallback(error) => ("rejected", Some(error.to_string())),
             };
             let mut record = serde_json::json!({"schemaVersion":1,"status":status,"candidate":identity,"generation":self.generation,
-                "document":format!("{document:?}"),"diagnostic":diagnostic,
+                "document":document.map(|document| format!("{document:?}")),"diagnostic":diagnostic,
                 "lastSuccessfulBuildId":self.last_good.as_ref().and_then(|module|module.package.as_ref()).map(|package|&package.manifest.build_id)});
             if let ReloadOutcome::Mounted { predecessor_leak: Some(leak), .. } = &outcome {
                 record["predecessorLeak"] = serde_json::json!(leak);
@@ -349,8 +389,7 @@ impl SessionHost {
             }
             self.acceptance = Some(record);
         }
-        report_reload(&outcome);
-        outcome
+        report_reload(outcome);
     }
 
     fn mount_module_inner(&mut self, surface: &mut impl SessionSurface, waker: Arc<dyn Waker>, document: DocumentId, module: SessionModule, retry: &Rc<dyn Fn(DocumentId, u64)>) -> ReloadOutcome {
@@ -390,12 +429,16 @@ impl SessionHost {
                 return ReloadOutcome::Rejected(error);
             }
         };
+        if let Err(error) = candidate.update_monitors(&self.monitors) { return ReloadOutcome::Rejected(error); }
         surface.bind(document, &candidate);
         let image_checkpoint = surface.image_source_checkpoint(document);
-        if let Err(error) = candidate.mount() {
+        let mut staged = ShellWindows::default();
+        let mounted = candidate.mount()
+            .and_then(|()| surface.stage_shell_surfaces(&mut staged, &self.monitors, &candidate));
+        if let Err(error) = mounted {
             if let Some(previous) = previous {
                 candidate.relinquish_stylesheets();
-                let _ = candidate.retire();
+                staged.retire(&candidate, |token, id| surface.close_shell_surface(token, id));
                 candidate.remove_surplus_stylesheets(&previous);
                 previous.restore_stylesheets();
                 if let Some(parent) = staging_parent {
@@ -409,13 +452,16 @@ impl SessionHost {
             }
             match self.recovery {
                 RecoveryPolicy::Fallback => {
-                    let _ = candidate.retire();
+                    staged.retire(&candidate, |token, id| surface.close_shell_surface(token, id));
                     surface.discard_image_source_writes(document, image_checkpoint);
                     self.show_fallback(surface, document, generation, &error.to_string(), retry);
                     return ReloadOutcome::Fallback(error);
                 }
                 RecoveryPolicy::Propagate => {
                     surface.discard_image_source_writes(document, image_checkpoint);
+                    if staged.has_windows() {
+                        staged.retire(&candidate, |token, id| surface.close_shell_surface(token, id));
+                    }
                     self.sessions.insert(document, candidate);
                     return ReloadOutcome::Rejected(error);
                 }
@@ -430,12 +476,13 @@ impl SessionHost {
             }
             previous.relinquish_stylesheets();
             previous.remove_surplus_stylesheets(&candidate);
-            let report = previous.retire();
+            let report = self.shell_windows.retire(&previous, |token, id| surface.close_shell_surface(token, id));
             region.dom.detach(region.root);
             (report.counts != ResourceCounts::default()).then_some(PredecessorLeak {
                 code: "E_TEARDOWN", generation: report.generation, resources: report.counts,
             })
         } else { None };
+        self.shell_windows = staged;
         surface.commit_image_policy(document, &candidate, mount_writes);
         self.clear_fallback(document);
         self.module = module.clone();
@@ -450,7 +497,9 @@ impl SessionHost {
     }
 
     fn show_fallback(&mut self, surface: &mut impl SessionSurface, document: DocumentId, generation: u64, diagnostic: &str, retry: &Rc<dyn Fn(DocumentId, u64)>) {
-        if let Some(session) = self.sessions.remove(&document) { let _ = session.retire(); }
+        if let Some(session) = self.sessions.remove(&document) {
+            self.shell_windows.retire(&session, |token, id| surface.close_shell_surface(token, id));
+        }
         self.clear_fallback(document);
         let Some(region) = self.regions.get(&document).cloned() else { return; };
         let action = self.last_good.as_ref().map(|_| {

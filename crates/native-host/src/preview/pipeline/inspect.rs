@@ -1,7 +1,7 @@
 use serde_json::json;
 use zgui::{reactive::prelude::GetUntracked, runtime::Window, view::ViewHost};
 
-use crate::session::Session;
+use crate::session::SessionRegion;
 use super::semantics::SemanticModel;
 use crate::preview::evidence::{Bounds, CaptureIdentity, NodeEvidence, NodeState, TreeEvidence};
 
@@ -32,10 +32,10 @@ pub fn native_state(window: &Window, native: zgui::view::NodeId) -> Option<(bool
 }
 
 /// Only native data is read. Neither bridge getters nor application formatters run here.
-pub fn snapshot(window: &Window, session: &Session, ordinal: u64, semantics: &SemanticModel, identity: &CaptureIdentity) -> Snapshot {
-    let owned = session.bridge.snapshot(4096);
+pub fn snapshot(window: &Window, region: &SessionRegion, generation: u64, ordinal: u64, semantics: &SemanticModel, identity: &CaptureIdentity) -> Snapshot {
+    let owned = region.bridge.snapshot(4096);
     let document = window.document().borrow();
-    let focused = session.region.host.focused().get_untracked();
+    let focused = region.region.host.focused().get_untracked();
     let scale = window.surface().scale_factor();
     let mut text_budget = 128 * 1024;
     let mut visit_budget = 100_000;
@@ -81,7 +81,7 @@ pub fn snapshot(window: &Window, session: &Session, ordinal: u64, semantics: &Se
             });
         nodes.push(NodeEvidence {
             token:format!("node-{}",node.token), parent:node.parent.map(|token|format!("node-{token}")),
-            surface:"main".into(), generation:session.generation, kind:node.kind.into(),
+            surface:region.name.clone(), generation, kind:node.kind.into(),
             ownership:"application".into(), text, text_truncated:truncated,
             test_id:test_id.map(str::to_owned), test_id_truncated, role:semantic.as_ref().map(|value|value.role.clone()),
             name:semantic.as_ref().and_then(|value|value.name.clone()),
@@ -102,7 +102,7 @@ pub fn snapshot(window: &Window, session: &Session, ordinal: u64, semantics: &Se
         "maxNodes":4096,"maxTextBytes":131072,"maxMetadataBytes":131072,"maxSemanticTextBytes":131072}));
     extra.insert("semanticProjection".into(), serde_json::to_value(semantics.snapshot()).expect("semantic snapshot serializes"));
     let tree = TreeEvidence {
-        schema_version:1, build_id:identity.build_id.clone(), surface:"main".into(), generation:session.generation,
+        schema_version:1, build_id:identity.build_id.clone(), surface:region.name.clone(), generation,
         frame_ordinal:ordinal, metadata_revision:owned.metadata_revision, presentation_sequence:identity.presentation_sequence,
         resource_revision:identity.resource_revision, surface_configuration:identity.surface_configuration,
         style_revision: identity.style_revision,

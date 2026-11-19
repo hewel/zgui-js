@@ -273,6 +273,116 @@ impl Drop for TurnActiveGuard<'_> {
     }
 }
 
+/// The structural-turn boundary shared by every mount region in one JS engine.
+///
+/// The group owns its member bridges. Dispose and drop it before destroying the
+/// engine, just as for a standalone [`UiBridge`].
+#[derive(Default)]
+pub struct BridgeGroup {
+    bridges: RefCell<Vec<Rc<UiBridge>>>,
+    active: Cell<bool>,
+}
+
+impl fmt::Debug for BridgeGroup {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("BridgeGroup").finish_non_exhaustive()
+    }
+}
+
+impl BridgeGroup {
+    /// Creates an empty turn boundary, usable before the first mount region opens.
+    pub fn new() -> Self { Self::default() }
+
+    /// Joins a live standalone bridge to this group's turns.
+    ///
+    /// # Panics
+    ///
+    /// Membership may change only between turns. The bridge must not already
+    /// belong to a live group, be in a standalone turn, or have been disposed.
+    pub fn add(self: &Rc<Self>, bridge: &Rc<UiBridge>) {
+        let mut bridges = self.bridges.borrow_mut();
+        assert!(!bridge.active.get() && !bridge.disposed.get(), "bridge must be live and idle");
+        assert!(bridge.group.borrow().upgrade().is_none(), "bridge already belongs to a group");
+        bridges.push(bridge.clone());
+        *bridge.group.borrow_mut() = Rc::downgrade(self);
+    }
+
+    /// Removes a member without disposing it. Only call between turns.
+    ///
+    /// # Panics
+    ///
+    /// Panics if this group is running a turn.
+    pub fn remove(&self, bridge: &UiBridge) {
+        let mut bridges = self.bridges.borrow_mut();
+        if let Some(index) = bridges.iter().position(|member| std::ptr::eq(member.as_ref(), bridge)) {
+            *bridge.group.borrow_mut() = Weak::new();
+            bridges.remove(index);
+        }
+    }
+
+    /// Enters one JS turn with every member region active, even when the group is empty.
+    ///
+    /// # Errors
+    ///
+    /// Propagates `action`'s error after disposing every member bridge. Successful
+    /// turns finalize pending detachments in all member regions.
+    ///
+    /// # Panics
+    ///
+    /// Panics on nested turn entry.
+    pub fn run<J, T, E>(&self, mut js: J, action: impl FnOnce(&mut J) -> Result<T, E>) -> Result<T, E> {
+        self.execute_turn(|| action(&mut js))
+    }
+
+    /// Prevents new tree resources from being allocated in any current member.
+    pub fn begin_stop(&self) {
+        for bridge in &*self.bridges.borrow() { bridge.begin_stop(); }
+    }
+
+    /// Revokes all current regions and releases their persistent JavaScript roots.
+    pub fn dispose(&self) {
+        for bridge in &*self.bridges.borrow() { bridge.dispose(); }
+    }
+
+    fn execute_turn<T, E>(&self, action: impl FnOnce() -> Result<T, E>) -> Result<T, E> {
+        let bridges = self.bridges.borrow();
+        assert!(!self.active.replace(true), "nested bridge group entry");
+        let mut guard = GroupActiveGuard { active: &self.active, entered: &[] };
+        for (index, bridge) in bridges.iter().enumerate() {
+            assert!(!bridge.active.replace(true), "nested bridge entry");
+            guard.entered = &bridges[..=index];
+            if !bridge.disposed.get() {
+                bridge.registry.borrow_mut().begin_turn();
+            }
+        }
+        let result = action();
+        if result.is_err() || bridges.iter().any(|bridge| bridge.overflowed.get()) {
+            self.dispose();
+        } else {
+            for bridge in bridges.iter().filter(|bridge| !bridge.disposed.get()) {
+                bridge.finish_turn();
+            }
+        }
+        result
+    }
+}
+
+impl Drop for BridgeGroup {
+    fn drop(&mut self) { self.dispose(); }
+}
+
+struct GroupActiveGuard<'a> {
+    active: &'a Cell<bool>,
+    entered: &'a [Rc<UiBridge>],
+}
+
+impl Drop for GroupActiveGuard<'_> {
+    fn drop(&mut self) {
+        for bridge in self.entered { bridge.active.set(false); }
+        self.active.set(false);
+    }
+}
+
 type EventDispatcher = Rc<events::Dispatcher>;
 type GeometryDispatcher = Rc<geometry::Dispatcher>;
 
@@ -300,6 +410,7 @@ pub struct UiBridge {
     pending: RefCell<VecDeque<QueuedNotification>>,
     wakes: Cell<usize>,
     overflowed: Cell<bool>,
+    group: RefCell<Weak<BridgeGroup>>,
     active: Cell<bool>,
     stopping: Cell<bool>,
     disposed: Cell<bool>,
@@ -356,6 +467,7 @@ impl UiBridge {
                 pending: RefCell::new(VecDeque::new()),
                 wakes: Cell::new(0),
                 overflowed: Cell::new(false),
+                group: RefCell::new(Weak::new()),
                 active: Cell::new(false),
                 stopping: Cell::new(false),
                 disposed: Cell::new(false),
@@ -395,7 +507,8 @@ impl UiBridge {
     }
 
     /// Runs `action` inside an outermost structural turn and passes a [`BridgeTurn`] token.
-    /// Finalizes detachments on `Ok`; faults and fully disposes the bridge on `Err`.
+    /// Finalizes detachments on `Ok` and disposes on `Err`, across the entire group
+    /// if this bridge belongs to one.
     pub fn run_turn<J, T, E>(
         &self,
         mut js: J,
@@ -444,14 +557,23 @@ impl UiBridge {
     }
 
     fn execute_turn<T, E>(&self, action: impl FnOnce() -> Result<T, E>) -> Result<T, E> {
+        let group = self.group.borrow().upgrade();
+        if let Some(group) = group {
+            return group.execute_turn(action);
+        }
         let guard = TurnActiveGuard::enter(self);
         self.registry.borrow_mut().begin_turn();
         let result = action();
         drop(guard);
         if result.is_err() || self.disposed.get() {
             self.dispose();
-            return result;
+        } else {
+            self.finish_turn();
         }
+        result
+    }
+
+    fn finish_turn(&self) {
         let invalid = self.registry.borrow_mut().finish_turn();
         let (dom, targets) = {
             let registry = self.registry.borrow();
@@ -475,7 +597,6 @@ impl UiBridge {
             self.properties.borrow_mut().remove(handle.token());
             self.events.borrow_mut().remove(handle.token());
         }
-        result
     }
 
     pub fn live_count(&self) -> usize { self.registry.borrow().live_count() }
@@ -585,6 +706,18 @@ impl UiBridge {
         callback.restore(ctx)?.call::<_, Value>((object,)).map(|_| ())
     }
 
+    fn sync_geometry_attachment<'js>(&self, ctx: &Ctx<'js>) -> rquickjs::Result<()> {
+        let changes = self.geometry.borrow().attachment_changes(&self.registry.borrow());
+        for id in changes {
+            // Earlier callbacks may cancel a lease or mutate the tree before this one runs.
+            let change = self.geometry.borrow_mut().prepare_attachment(id, &self.registry.borrow());
+            if let Some((callback, attached)) = change {
+                callback.restore(ctx)?.call::<_, Value>((attached,))?;
+            }
+        }
+        Ok(())
+    }
+
     fn invoke_snapshot<'js>(
         &self,
         ctx: &Ctx<'js>,
@@ -670,10 +803,14 @@ impl UiBridge {
         self.wrap(ctx, handle)
     }
 
-    /// Install the private host contract before evaluating the bundled frontend.
-    /// No constructor is exported for NativeNode, and cloned/fabricated objects
-    /// fail Class conversion before any native operation is reached.
+    /// Installs the private host contract globally for a single-region frontend.
     pub fn install<'js>(self: &Rc<Self>, ctx: &Ctx<'js>) -> rquickjs::Result<()> {
+        ctx.globals().set("__zgui", self.api(ctx)?)
+    }
+
+    /// Builds the region's private host contract without changing any global binding.
+    /// Node objects are branded and can only be used with their owning document.
+    pub fn api<'js>(self: &Rc<Self>, ctx: &Ctx<'js>) -> rquickjs::Result<Object<'js>> {
         let api = Object::new(ctx.clone())?;
         canvas::install(self, &api)?;
         let weak = Rc::downgrade(self);
@@ -799,7 +936,8 @@ impl UiBridge {
             let node = node.borrow().handle;
             let anchor = anchor.map(|node| node.borrow().handle);
             let result = bridge.registry.borrow_mut().insert(parent, node, anchor);
-            result.map_err(|e| host_error(&ctx, e))
+            result.map_err(|e| host_error(&ctx, e))?;
+            bridge.sync_geometry_attachment(&ctx)
         }))?;
         let weak = Rc::downgrade(self);
         api.set("removeNode", Func::from(move |ctx: Ctx<'js>, parent: Class<'js, NativeNode>, node: Class<'js, NativeNode>| {
@@ -808,7 +946,8 @@ impl UiBridge {
             let parent = parent.borrow().handle;
             let node = node.borrow().handle;
             let result = bridge.registry.borrow_mut().remove(parent, node);
-            result.map_err(|e| host_error(&ctx, e))
+            result.map_err(|e| host_error(&ctx, e))?;
+            bridge.sync_geometry_attachment(&ctx)
         }))?;
         let weak = Rc::downgrade(self);
         api.set("installStylesheet", Func::from(move |ctx: Ctx<'js>, name: String, css: String| {
@@ -988,10 +1127,11 @@ impl UiBridge {
             while let Some(child) = registry.first_child(root).map_err(|e| host_error(&ctx, e))? {
                 registry.remove(root, child).map_err(|e| host_error(&ctx, e))?;
             }
-            Ok::<(), rquickjs::Error>(())
+            drop(registry);
+            bridge.sync_geometry_attachment(&ctx)
         }))?;
         let weak = Rc::downgrade(self);
-        api.set("observeGeometry", Func::from(move |ctx: Ctx<'js>, node: Class<'js, NativeNode>, name: String, callback: rquickjs::Function<'js>| {
+        api.set("observeGeometry", Func::from(move |ctx: Ctx<'js>, node: Class<'js, NativeNode>, name: String, callback: rquickjs::Function<'js>, on_attachment: Opt<rquickjs::Function<'js>>| {
             let bridge = owner(&weak, &ctx)?;
             bridge.require_creation(&ctx)?;
             let handle = node.borrow().handle;
@@ -1005,6 +1145,14 @@ impl UiBridge {
                 })?
             };
             bridge.geometry.borrow_mut().add(&ctx, id, handle, native, what, callback, bridge.geometry_dispatcher.clone());
+            if let Some(on_attachment) = on_attachment.0 {
+                let attached = bridge.registry.borrow().attached(handle.token());
+                bridge.geometry.borrow_mut().track_attachment(&ctx, id, handle, attached, on_attachment.clone());
+                if let Err(error) = on_attachment.call::<_, Value>((attached,)) {
+                    bridge.geometry.borrow_mut().cancel(id);
+                    return Err(error);
+                }
+            }
             bridge.wake();
             Ok::<rquickjs::Function<'js>, rquickjs::Error>(cancel)
         }))?;
@@ -1021,7 +1169,7 @@ impl UiBridge {
                 result.map(|handle| bridge.wrap(&ctx, handle)).transpose()
             }))?;
         }
-        ctx.globals().set("__zgui", api)
+        Ok(api)
     }
 }
 
@@ -1094,4 +1242,87 @@ fn overlay_layer(ctx: &Ctx<'_>, layer: &str) -> rquickjs::Result<zgui::view::Ove
 
 fn host_error(ctx: &Ctx<'_>, error: BridgeError) -> rquickjs::Error {
     Exception::throw_type(ctx, &error.to_string())
+}
+
+#[cfg(test)]
+mod group_tests {
+    use super::*;
+    use js_runtime::{JsRuntime, RuntimeLimits};
+    use zgui::{
+        geom::{DevicePx, Size},
+        view::{DomHandle, ElementName, HostHandle, ObservedValue, stub::StubHost},
+    };
+    use zgui_dom::Document;
+    use zgui_view_dom::DocumentDom;
+
+    #[test]
+    fn notification_turn_updates_two_regions_and_a_fault_revokes_both() {
+        let mut engine = JsRuntime::new(RuntimeLimits::default()).unwrap();
+        let group = Rc::new(BridgeGroup::new());
+        group.run(engine.turn(), |js| js.evaluate_script("globalThis.__zgui = 'legacy'")).unwrap();
+
+        let mut region = |id, api, root_key| {
+            let document = Document::with_id(zgui_dom::DocumentId::new(id).expect("distinct fixture document"));
+            let backend = Rc::new(DocumentDom::new(Rc::new(RefCell::new(document))));
+            let dom = DomHandle::from_rc(backend.clone());
+            let root = dom.create_element(ElementName::new("column"));
+            dom.insert(backend.root_node(), root, None);
+            let bridge = UiBridge::new(
+                NodeRegistry::new(dom, root, 1, 1, 100),
+                HostHandle::new(StubHost::default()),
+                HostPort::queued(),
+            );
+            group.add(&bridge);
+            engine.with_context(|ctx| {
+                ctx.globals().set(api, bridge.api(&ctx)?)?;
+                ctx.globals().set(root_key, bridge.root(&ctx)?)
+            }).unwrap();
+            (bridge, backend, root)
+        };
+        let (left, left_backend, left_root) = region(0, "left", "leftRoot");
+        let (right, _, _) = region(1, "right", "rightRoot");
+        group.run(engine.turn(), |js| js.evaluate_script(r#"
+            if (__zgui !== 'legacy') throw Error('region API changed the global');
+            const a = left.createTextNode('a');
+            const b = right.createTextNode('b');
+            let rejected = false;
+            try { right.insertNode(rightRoot, a, null); }
+            catch (error) { rejected = error.message.includes('another native document'); }
+            if (!rejected) throw Error('accepted a node from a different region');
+            left.insertNode(leftRoot, a, null);
+            right.insertNode(rightRoot, b, null);
+            left.observeGeometry(leftRoot, 'borderSize', () => {
+                left.removeNode(leftRoot, a);
+                right.removeNode(rightRoot, b);
+            });
+            'mounted';
+        "#)).unwrap();
+        let text = engine.evaluate_script("left.getTextContent(leftRoot) + ':' + right.getTextContent(rightRoot)").expect("read both mounted trees");
+        assert_eq!(text, "a:b", "each region mounted its own text");
+
+        left_backend.deliver(left_root, ObservedValue::BorderSize(Size::new(DevicePx(20.0), DevicePx(20.0))));
+        assert!(left.flush_notification(engine.turn(), |js, cb| {
+            js.with_context(|ctx| cb.call(&ctx))
+        }).expect("deliver the left region's observation"), "the left observation was queued");
+        engine.evaluate_script(r#"
+            for (const [bridge, root, removed] of [[left, leftRoot, a], [right, rightRoot, b]]) {
+                if (bridge.getTextContent(root) !== '') throw Error('region retained removed text');
+                let stale = false;
+                try { bridge.getTextContent(removed); } catch (error) { stale = error.message.includes('stale'); }
+                if (!stale) throw Error('removed handle survived the shared turn');
+            }
+            'detached';
+        "#).expect("both registries finalized their detachments");
+
+        let err = right.run_turn(engine.turn(), |_, js| js.evaluate_script(r#"
+            left.createTextNode('unattached');
+            right.insertNode(rightRoot, right.createTextNode('attached'), null);
+            throw Error('region turn failed');
+        "#)).unwrap_err();
+        assert!(err.message.contains("region turn failed"), "the original failure survived: {err}");
+        assert!(left.is_disposed() && right.is_disposed(), "a single failing turn retired both bridges");
+        assert_eq!((left.live_count(), right.live_count()), (0, 0), "fault retained native nodes");
+        assert_eq!((left.wrapper_count(), right.wrapper_count()), (0, 0), "fault retained JS wrappers");
+        assert_eq!(left.callback_count(), 0, "fault retained geometry callbacks");
+    }
 }

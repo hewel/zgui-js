@@ -47,6 +47,8 @@ struct Application {
     failure: Rc<RefCell<Option<String>>>,
     watch_path: Option<PathBuf>,
     watcher: Option<watcher::PackageWatcher>,
+    monitors: Vec<shell::Monitor>,
+    layer_primary: bool,
 }
 impl Application {
     fn new(native: zgui::runtime::Runtime, pending: Rc<RefCell<Vec<session_host::MountRegion>>>, package: Option<Rc<Package>>) -> std::io::Result<Self> {
@@ -66,6 +68,8 @@ impl Application {
             control: control_cli::Control::default(),
             sender, inbox, exit_after: None, exit_armed: false, failure,
             watch_path: None, watcher: None,
+            monitors: Vec::new(),
+            layer_primary: false,
         })
     }
 
@@ -111,7 +115,7 @@ impl Application {
         let retry = self.retry_sender(cx);
         let waker = cx.waker();
         let outcome = {
-            let mut surface = RuntimeSurface::new(&mut self.native, ImageChoice::Live);
+            let mut surface = RuntimeSurface::new(&mut self.native, cx, ImageChoice::Live);
             self.host.replace(&mut surface, waker, document, module, retry)
         };
         self.reconcile_harness(cx);
@@ -122,7 +126,7 @@ impl Application {
         {
             let retry = self.retry_sender(cx);
             let waker = cx.waker();
-            let mut surface = RuntimeSurface::new(&mut self.native, ImageChoice::Live);
+            let mut surface = RuntimeSurface::new(&mut self.native, cx, ImageChoice::Live);
             self.host.attach(&mut surface, waker, retry)?;
         }
         self.reconcile_harness(cx);
@@ -147,25 +151,47 @@ impl Application {
         if let Err(error) = self.attach(cx) { self.fail(cx, error); return; }
         let retry = self.retry_sender(cx);
         {
-            let mut surface = RuntimeSurface::new(&mut self.native, ImageChoice::Live);
-            if let Err(error) = self.host.checkpoint(&mut surface, retry) { self.fail(cx, error); }
+            let mut surface = RuntimeSurface::new(&mut self.native, cx, ImageChoice::Live);
+            if let Err(error) = self.host.checkpoint(&mut surface, retry) { self.fail(cx, error); return; }
         }
+        self.after_shell(cx);
         // Checkpoint faults can retire a generation; cancel its registrations
         // before the event loop continues.
         self.reconcile_harness(cx);
+    }
+
+    fn after_shell(&mut self, cx: &dyn PlatformCx) {
+        if cx.is_exiting() { return; }
+        if let Err(error) = self.host.shell_turn(&mut self.native, cx, ImageChoice::Live, &self.monitors) {
+            self.fail(cx, error);
+        }
     }
 
     fn poll_reload(&mut self, cx: &dyn PlatformCx) {
         let Some(publication) = self.watcher.as_ref().and_then(watcher::PackageWatcher::next) else { return; };
         match publication {
             Ok(package) => {
-                let package = Rc::new(package);
-                // The initial host has one native window. A publication arriving
-                // while surfaces are absent is prepared when its root returns.
+                let module = SessionModule::package(Rc::new(package));
+                if self.layer_primary && !module.package.as_ref().is_some_and(|package| package.manifest.capabilities.shell_surfaces) {
+                    let outcome = ReloadOutcome::Rejected(assets::ContractFailure {
+                        code: "E_CAPABILITY", message: "--layer-config requires capabilities.shellSurfaces".into(),
+                    }.into());
+                    let document = self.host.region_documents().next();
+                    self.host.record_outcome(&module, document, &outcome);
+                    return;
+                }
+                if self.host.is_pure_shell() {
+                    self.host.replace_shell(&mut self.native, cx, ImageChoice::Live, module);
+                    self.after_shell(cx);
+                    return;
+                }
                 let document = self.host.region_documents().next();
                 match document {
-                    Some(document) => { self.replace_session(cx, document, SessionModule::package(package)); }
-                    None => self.host.set_module(SessionModule::package(package)),
+                    Some(document) => {
+                        self.replace_session(cx, document, module);
+                        self.after_shell(cx);
+                    }
+                    None => self.host.set_module(module),
                 }
             }
             Err(error) => eprintln!("reload-package-rejected: {error}"),
@@ -226,20 +252,23 @@ impl Application {
         }
     }
 
-    fn stop_sessions(&mut self) {
+    fn stop_sessions(&mut self, cx: &dyn PlatformCx) {
         self.harness.stop();
+        self.host.stop_shell_surfaces(&mut self.native, cx);
         self.host.stop();
     }
 }
 impl AppHandler for Application {
     fn surfaces_available(&mut self, cx: &dyn PlatformCx) {
         self.native.surfaces_available(cx);
+        self.monitors = shell::Monitor::snapshot(self.native.monitors());
+        self.host.set_monitor_snapshot(&self.monitors);
         self.after_native(cx);
         self.reconcile_control(cx);
     }
     fn surfaces_lost(&mut self, cx: &dyn PlatformCx) {
         self.stop_control(cx);
-        self.stop_sessions();
+        self.stop_sessions(cx);
         self.native.surfaces_lost(cx);
         if self.failure.borrow().is_some() { cx.request_exit(); }
     }
@@ -265,12 +294,12 @@ impl AppHandler for Application {
                 Completion::Update { document, generation } => {
                     if let Some(session) = self.host.session(document).filter(|session| session.generation == generation).cloned() {
                         match session.invoke("external") {
-                            Ok(()) => RuntimeSurface::new(&mut self.native, ImageChoice::Live).request_frame(document),
+                            Ok(()) => RuntimeSurface::new(&mut self.native, cx, ImageChoice::Live).request_frame(document),
                             Err(error) => {
                                 session.record_fault(error);
                                 let retry = self.retry_sender(cx);
                                 {
-                                    let mut surface = RuntimeSurface::new(&mut self.native, ImageChoice::Live);
+                                    let mut surface = RuntimeSurface::new(&mut self.native, cx, ImageChoice::Live);
                                     if let Err(error) = self.host.checkpoint(&mut surface, retry) { self.fail(cx, error); }
                                 }
                                 self.reconcile_harness(cx);
@@ -282,7 +311,7 @@ impl AppHandler for Application {
                     let retry = self.retry_sender(cx);
                     let waker = cx.waker();
                     let outcome = {
-                        let mut surface = RuntimeSurface::new(&mut self.native, ImageChoice::Live);
+                        let mut surface = RuntimeSurface::new(&mut self.native, cx, ImageChoice::Live);
                         self.host.retry(&mut surface, waker, document, generation, retry)
                     };
                     if outcome.is_some() { self.reconcile_harness(cx); }
@@ -294,7 +323,15 @@ impl AppHandler for Application {
         self.reconcile_control(cx);
         self.drain_control(cx);
     }
-    fn idle(&mut self, cx: &dyn PlatformCx) -> IdlePolicy { self.native.idle(cx) }
+    fn idle(&mut self, cx: &dyn PlatformCx) -> IdlePolicy {
+        self.native.idle(cx)
+    }
+    fn monitors_changed(&mut self, cx: &dyn PlatformCx) {
+        self.native.monitors_changed(cx);
+        self.monitors = shell::Monitor::snapshot(self.native.monitors());
+        self.after_native(cx);
+        self.reconcile_control(cx);
+    }
     fn deadline_reached(&mut self, cx: &dyn PlatformCx) {
         self.native.deadline_reached(cx);
         self.after_native(cx);
@@ -305,7 +342,7 @@ impl AppHandler for Application {
         if let Err(error) = self.control.close() {
             self.record_failure(format_args!("control socket: {error}"));
         }
-        self.stop_sessions();
+        self.stop_sessions(cx);
         self.native.shutting_down(cx);
     }
 }
@@ -328,6 +365,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut watch = false;
     let mut reduced_motion = false;
     let mut layer_config = None;
+    let mut pure_shell = false;
     let mut control_socket = None;
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -343,6 +381,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             "--bundle" => { bundle = Some(args.next().ok_or("--bundle requires a directory")?.into()); }
             "--exercise" => { exercise = true; }
             "--watch" => { watch = true; }
+            "--pure-shell" => { pure_shell = true; }
             "--reduced-motion" => { reduced_motion = true; }
             "--control-socket" => {
                 if control_socket.is_some() { return Err("--control-socket can only be specified once".into()); }
@@ -358,15 +397,28 @@ fn main() -> Result<(), Box<dyn Error>> {
     if watch && bundle.is_none() { return Err("--watch requires --bundle".into()); }
     if layer_config.is_some() && bundle.is_none() { return Err("--layer-config requires --bundle".into()); }
     let package = bundle.as_deref().map(Package::load).transpose()?.map(Rc::new);
+    if pure_shell && (exercise || layer_config.is_some()) {
+        return Err("--pure-shell cannot be combined with --exercise or --layer-config".into());
+    }
+    if (pure_shell || layer_config.is_some())
+        && !package.as_ref().is_some_and(|package| package.manifest.capabilities.shell_surfaces)
+    {
+        return Err("E_CAPABILITY: shell startup requires capabilities.shellSurfaces".into());
+    }
     let pending = Rc::new(RefCell::new(Vec::new()));
     let roots = pending.clone();
     let namespace = layer_config.as_ref().map_or("dev.zgui.js", |config| config.namespace.as_str());
-    let native = zgui::app().with_title(package.as_ref().map_or("zgui-js integration baseline", |package| package.manifest.id.as_str())).with_application_id(namespace)
+    let app = zgui::app().with_title(package.as_ref().map_or("zgui-js integration baseline", |package| package.manifest.id.as_str())).with_application_id(namespace)
         .with_size(560.0, 180.0)
-        .with_stylesheet(APPLICATION_STYLESHEET)
-        .into_handler(move || Root(roots.clone()))?.into_runtime();
+        .with_stylesheet(APPLICATION_STYLESHEET);
+    let mut native = app.into_handler(move || Root(roots.clone()))?.into_runtime();
+    let fonts = pure_shell.then(|| native.scope().with(zgui::reactive::use_context::<zgui::app::Fonts>)
+        .expect("the native application provides a font collection"));
+    if pure_shell { native.without_primary_surface(); }
     let native_failure = native.failure();
     let mut application = Application::new(native, pending, package)?;
+    application.layer_primary = layer_config.is_some();
+    if let Some(fonts) = fonts { application.host.set_pure_shell(fonts); }
     application.host.set_reduced_motion(reduced_motion);
     application.exit_after = exit_after;
     application.harness.exercise = exercise;

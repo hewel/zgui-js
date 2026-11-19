@@ -1,12 +1,13 @@
-use std::{cell::{Cell, RefCell}, rc::Rc, time::{Duration, Instant}};
+use std::{cell::{Cell, RefCell}, collections::BTreeMap, rc::Rc, time::{Duration, Instant}};
 
 use serde_json::{Value, json};
-use zgui::{geom::{DevicePx, Size}, platform::{AppHandler, ColorScheme, IdlePolicy, PlatformCx, SurfaceEvent, SurfaceId, WakeReason}, runtime::{Runtime, Window}};
+use zgui::{geom::{DevicePx, Point, Size}, platform::{AppHandler, ColorScheme, IdlePolicy, MonitorInfo, PlatformCx, SurfaceEvent, SurfaceId, WakeReason}, runtime::{Runtime, Window}};
 use zgui_platform_headless::Headless;
 
 use crate::{package::Package, session::{ResourceCounts, RetirementFailure, RuntimeTelemetry, Session, SessionError, SessionModule, SessionPolicy, SessionRetirement}};
 use crate::session_host::{ImageChoice, RecoveryPolicy, RuntimeSurface, SessionHost};
-use super::{Error, fixture::FixtureDefinition, output::Output, pipeline::{self, CaptureRequest, CheckpointSink, FrameObserver, OutputSink, Pipeline, SettledFrame}, profile::{self, Limits, LoadedProfile, Surface}, resources};
+use crate::shell::Monitor;
+use super::{Error, fixture::FixtureDefinition, output::Output, pipeline::{self, CaptureRequest, CheckpointSink, FrameObserver, FrameObservers, ObservationMode, OutputSink, Pipeline}, profile::{self, Limits, LoadedProfile, Surface}, resources};
 use crate::{assets::{ContractFailure, fixture::FixtureRuntime}, environment::Environment};
 
 mod actions;
@@ -54,10 +55,12 @@ struct PreviewHost {
     native: Runtime,
     host: SessionHost,
     deadline: Rc<Cell<Instant>>,
-    observer: FrameObserver,
+    observers: FrameObservers,
+    monitors: Vec<Monitor>,
+    monitor_change: bool,
+    recreate_shell: Option<String>,
     fault: Option<Fault>,
-    requested_metadata: u64,
-    retired: Option<Value>,
+    retired: Option<SessionRetirement>,
     retired_telemetry: Option<RuntimeTelemetry>,
 }
 impl PreviewHost {
@@ -72,35 +75,46 @@ impl PreviewHost {
         if self.fault.is_some() { return; }
         if let Some(error) = self.native.failure().take() { self.fail(cx, pipeline::preview_app_error(error).into()); return; }
         if self.host.pending_regions() != 0 {
+            self.host.set_monitor_snapshot(&self.monitors);
             if self.host.sessions().next().is_some() || self.native.windows().len() != 1 {
                 self.fail(cx, Error::new("E_HOST_INVARIANT", 9, "preview requires exactly one current native document").into()); return;
             }
             let retry: Rc<dyn Fn(zgui::view::DocumentId, u64)> = Rc::new(|_, _| {});
             let attached = {
-                let mut surface = RuntimeSurface::new(&mut self.native, ImageChoice::PackageOnly);
+                let mut surface = RuntimeSurface::new(&mut self.native, cx, ImageChoice::PackageOnly);
                 self.host.attach(&mut surface, cx.waker(), retry)
             };
-            // A propagated failure keeps its session owned so finish() can
-            // inspect it; the observer binds to whichever generation is current.
-            self.observer.bind_session(self.host.sessions().next().map(Rc::downgrade).unwrap_or_default());
             if let Err(error) = attached { self.fail(cx, Fault::application(error)); return; }
         }
         let retry: Rc<dyn Fn(zgui::view::DocumentId, u64)> = Rc::new(|_, _| {});
         let checked = {
-            let mut surface = RuntimeSurface::new(&mut self.native, ImageChoice::PackageOnly);
+            let mut surface = RuntimeSurface::new(&mut self.native, cx, ImageChoice::PackageOnly);
             self.host.checkpoint(&mut surface, retry)
         };
         if let Err(error) = checked {
             self.fail(cx, Fault::application(error));
             return;
         }
-        let state = self.session().map(|session| (session.bridge.metadata_revision(), session.region.document));
-        if let Some((revision, document)) = state && revision != self.requested_metadata {
-            self.requested_metadata = revision;
-            if let Some(window) = self.native.windows().iter().find(|window|window.document_id()==document) {
-                window.request_frame();
+        if let Err(error) = self.host.shell_turn(&mut self.native, cx, ImageChoice::PackageOnly, &self.monitors) {
+            self.fail(cx, Fault::application(error));
+            return;
+        }
+        if let Some(name) = self.recreate_shell.take()
+            && let Err(error) = self.host.recreate_shell_surface(&mut self.native, cx, ImageChoice::PackageOnly, &self.monitors, &name)
+        {
+            self.fail(cx, Fault::application(error));
+            return;
+        }
+        let Some(session) = self.session() else { return; };
+        for window in self.native.windows() {
+            if let Some(region) = session.mount_region(window.document_id())
+                && let Some(observer) = self.observers.get(region.surface)
+            {
+                observer.bind_session(Rc::downgrade(session));
+                observer.request_metadata_frame(window, region.bridge.metadata_revision());
             }
         }
+        self.observers.retain(self.native.windows());
     }
 }
 impl AppHandler for PreviewHost {
@@ -108,39 +122,48 @@ impl AppHandler for PreviewHost {
     fn surfaces_lost(&mut self, cx: &dyn PlatformCx) {
         let deadline = self.deadline.get();
         self.deadline.set(deadline.min(Instant::now()+Duration::from_millis(20)));
-        let documents: Vec<zgui::view::DocumentId> = self.host.sessions().map(|session| session.region.document).collect();
-        for document in documents {
-            let Some(session) = self.host.retire(document) else { continue; };
+        self.host.stop_shell_surfaces(&mut self.native, cx);
+        if let Some(session) = self.session() {
             let report = session.retire();
-            let clean = report.counts == ResourceCounts::default() && report.failure.is_none();
-            self.retired = Some(json!({
-                "generation": report.generation,
-                "before": report.before,
-                "resources": report.counts,
-                "clean": clean,
-            }));
             if let Some(fault) = evaluate_retirement(Some(&report)) {
                 self.fail(cx, fault);
             }
             self.retired_telemetry = RuntimeTelemetry::merge(self.retired_telemetry, report.telemetry);
-            drop(session);
+            self.retired = Some(report);
         }
         self.host.stop();
         self.deadline.set(deadline);
-        self.requested_metadata = 0;
-        self.observer.reset_surface();
+        self.observers.reset();
         self.native.surfaces_lost(cx);
     }
     fn surface_event(&mut self, cx: &dyn PlatformCx, surface: SurfaceId, event: SurfaceEvent) { if self.fault.is_none() { self.native.surface_event(cx, surface, event); self.after_native(cx); } }
-    fn wake(&mut self, cx: &dyn PlatformCx, reason: WakeReason) { if self.fault.is_none() { self.native.wake(cx, reason); self.after_native(cx); } }
+    fn wake(&mut self, cx: &dyn PlatformCx, reason: WakeReason) {
+        if self.fault.is_some() { return; }
+        if std::mem::take(&mut self.monitor_change) { self.native.monitors_changed(cx); }
+        self.native.wake(cx, reason);
+        self.after_native(cx);
+    }
     fn idle(&mut self, cx: &dyn PlatformCx) -> IdlePolicy { if self.fault.is_some() { IdlePolicy::Block } else { self.native.idle(cx) } }
     fn deadline_reached(&mut self, cx: &dyn PlatformCx) { if self.fault.is_none() { self.native.deadline_reached(cx); self.after_native(cx); } }
-    fn shutting_down(&mut self, cx: &dyn PlatformCx) { for session in self.host.sessions() { let _ = session.retire(); } self.native.shutting_down(cx); }
+    fn shutting_down(&mut self, cx: &dyn PlatformCx) {
+        self.host.stop_shell_surfaces(&mut self.native, cx);
+        for session in self.host.sessions() { let _ = session.retire(); }
+        self.native.shutting_down(cx);
+    }
+}
+
+#[derive(Clone, Copy, PartialEq)]
+struct ShellGeometry {
+    width: f64,
+    height: f64,
+    scale: f64,
+    refresh: Option<u32>,
 }
 
 pub struct Driver {
     pipeline: Pipeline<PreviewHost>,
-    observer: FrameObserver,
+    observers: FrameObservers,
+    shell_geometry: BTreeMap<SurfaceId, ShellGeometry>,
     deadline: Rc<Cell<Instant>>,
     run_deadline: Instant,
     step_start_frame: Cell<u64>,
@@ -151,6 +174,8 @@ pub struct Driver {
     environment: Rc<Environment>,
     pub(super) fixtures: Rc<FixtureRuntime>,
     maximum_time_us: u64,
+    pure_shell: bool,
+    shell_capable: bool,
     /// A mount fault observed while the harness already owned the session; the
     /// first `check` reports it so the run can persist the cause before finish.
     startup_fault: Option<Fault>,
@@ -175,7 +200,15 @@ impl Driver {
         platform.virtual_clock().advance(Duration::from_micros(start));
         let environment=Environment::new(platform.clock(),epoch,profile.profile.random.seed);
         let fixtures=FixtureRuntime::new(fixture,environment.clone());
-        let observer = FrameObserver::new(package.manifest.build_id.clone(), environment.clone(), sink);
+        let shell_capable = package.manifest.capabilities.shell_surfaces;
+        let pure_shell = profile.profile.pure_shell;
+        if pure_shell && !shell_capable {
+            return Err(Error::new("E_CAPABILITY", 6, "pureShell requires capabilities.shellSurfaces").into());
+        }
+        let mode = if pure_shell { ObservationMode::ShellOnly }
+            else if shell_capable { ObservationMode::PrimaryAndShell }
+            else { ObservationMode::PrimaryOnly };
+        let observers = FrameObservers::new(package.manifest.build_id.clone(), environment.clone(), sink, mode);
         let pending = Rc::new(RefCell::new(Vec::new()));
         let surface = &profile.profile.surface;
         let deadline = Rc::new(Cell::new(run_deadline.min(Instant::now()+Duration::from_millis(profile.profile.limits.max_step_wall_ms))));
@@ -187,49 +220,129 @@ impl Driver {
             stack_limit_bytes:profile.profile.limits.max_js_stack_bytes.unwrap_or_else(|| js_runtime::RuntimeLimits::default().stack_limit_bytes),
             ..Default::default()
         };
-        let session_host = SessionHost::new(pending.clone(), SessionModule::package(package.clone()),
+        let mut session_host = SessionHost::new(pending.clone(), SessionModule::package(package.clone()),
             SessionPolicy::preview(limits, deadline.clone(), environment.clone(), fixtures.clone()).with_reduced_motion(profile.profile.reduced_motion),
             RecoveryPolicy::Propagate);
+        if pure_shell { session_host.set_pure_shell(profile.fonts.clone()); }
         platform.set_color_scheme(Some(if profile.profile.theme == "dark" { ColorScheme::Dark } else { ColorScheme::Light }));
-        let observer_ref = observer.clone();
+        let observer_ref = observers.clone();
         let deadline_ref = deadline.clone();
-        let pipeline = pipeline::for_preview(profile, &package, platform, stylesheet, &observer, pending, move |native| PreviewHost {
+        let pipeline = pipeline::for_preview(profile, &package, platform, stylesheet, &observers, pending, move |native| PreviewHost {
             native,
             host: session_host,
             deadline: deadline_ref,
-            observer: observer_ref,
+            observers: observer_ref,
+            monitors: Vec::new(),
+            monitor_change: false,
+            recreate_shell: None,
             fault: None,
-            requested_metadata: 0,
             retired: None,
             retired_telemetry: None,
         })?;
-        let mut driver = Self { pipeline,observer,deadline,run_deadline,step_start_frame:Cell::new(0),limits:profile.profile.limits.clone(),
+        let mut driver = Self { pipeline,observers,shell_geometry:BTreeMap::new(),deadline,run_deadline,step_start_frame:Cell::new(0),limits:profile.profile.limits.clone(),
             opaque:surface.opaque,dimensions:(profile.physical_width,profile.physical_height),surface:surface.clone(),
-            environment,fixtures,maximum_time_us:start+profile.profile.limits.max_virtual_duration_ms*1000,startup_fault:None };
-        if let Err(fault) = driver.bind_surface() { driver.startup_fault = Some(fault); }
+            environment,fixtures,maximum_time_us:start+profile.profile.limits.max_virtual_duration_ms*1000,startup_fault:None,pure_shell,shell_capable };
+        let setup = if pure_shell { driver.check() } else { driver.bind_main() };
+        if let Err(fault) = setup.and_then(|_| driver.sync_shell_surfaces()) { driver.startup_fault = Some(fault); }
         Ok(driver)
     }
-    fn bind_surface(&mut self) -> Result<(), Fault> {
+    fn bind_main(&mut self) -> Result<(), Fault> {
         self.check()?;
-        let surface = self.window()?.surface().id();
+        let surface = self.window("main")?.surface().id();
         let offscreen = self.pipeline.platform().offscreen(surface)
             .ok_or_else(||Error::new("E_HOST_INVARIANT",9,"current native main has no headless surface"))?;
         offscreen.set_refresh_rate_millihertz(Some(self.surface.refresh_rate_milli_hz));
-        self.observer.bind_surface(offscreen);
+        self.observer(surface)?.bind_surface(offscreen);
         self.pipeline.deliver(surface, SurfaceEvent::ScaleFactorChanged { scale_factor:self.surface.scale,
             size:Size::new(DevicePx(self.dimensions.0 as f32),DevicePx(self.dimensions.1 as f32)) });
         self.pipeline.deliver(surface, SurfaceEvent::Focused(true));
-        self.window()?.request_frame();
+        self.window("main")?.request_frame();
         self.check()
+    }
+
+    fn sync_shell_surfaces(&mut self) -> Result<(), Fault> {
+        let app = self.pipeline.app();
+        self.shell_geometry.retain(|id, _| app.native.windows().iter().any(|window| window.surface().id() == *id));
+        // The platform context can change independently of a shell declaration.
+        // Keep synthetic configuration separate from explicit scenario resizes.
+        let changed: Vec<_> = app.native.windows().iter().filter_map(|window| {
+            let id = window.surface().id();
+            let (width, height, output) = app.host.shell_geometry(id)?;
+            let monitor = match output {
+                Some(output) => app.monitors.iter().find(|monitor| monitor.id == output),
+                None => app.monitors.first(),
+            };
+            let next = ShellGeometry { width, height, scale: monitor.map_or(1.0, |monitor| monitor.scale),
+                refresh: monitor.and_then(|monitor| monitor.refresh_rate_milli_hz) };
+            (self.shell_geometry.get(&id) != Some(&next)).then_some((id, next))
+        }).collect();
+        for (surface, geometry) in changed {
+            if self.by_surface(surface).is_none() { continue; }
+            let dimensions = profile::physical_dimensions(geometry.width, geometry.height, geometry.scale)?;
+            let previous = self.shell_geometry.insert(surface, geometry);
+            let offscreen = self.pipeline.platform().offscreen(surface)
+                .ok_or_else(|| Error::new("E_HOST_INVARIANT",9,"named native window has no headless surface"))?;
+            let observer = self.observer(surface)?;
+            offscreen.set_refresh_rate_millihertz(geometry.refresh);
+            if previous.is_none() { observer.bind_surface(offscreen); }
+            else { observer.bump_surface_configuration(); }
+            self.pipeline.deliver(surface, SurfaceEvent::ScaleFactorChanged {
+                scale_factor: geometry.scale, size: Size::new(DevicePx(dimensions.0 as f32), DevicePx(dimensions.1 as f32)),
+            });
+            if previous.is_none() { self.pipeline.deliver(surface, SurfaceEvent::Focused(true)); }
+            if let Some(window) = self.by_surface(surface) { window.request_frame(); }
+            self.check()?;
+        }
+        Ok(())
+    }
+
+    /// Apply a preview output snapshot and settle the resulting shell surface changes.
+    pub fn set_monitors(&mut self, monitors: &[Monitor]) -> Result<Value, Fault> {
+        self.settle(false)?;
+        if self.pipeline.app().monitors != monitors {
+            let native = monitors.iter().map(|monitor| {
+                let mut info = MonitorInfo::new(
+                    Point::new(DevicePx(monitor.x as f32), DevicePx(monitor.y as f32)),
+                    Size::new(DevicePx(monitor.width as f32), DevicePx(monitor.height as f32)), monitor.scale,
+                ).with_name(monitor.id.clone());
+                info.refresh_rate_millihertz = monitor.refresh_rate_milli_hz;
+                info
+            }).collect();
+            self.pipeline.platform().set_monitors(native);
+            let app = self.pipeline.app_mut();
+            monitors.clone_into(&mut app.monitors);
+            app.monitor_change = true;
+            self.pipeline.platform().waker().wake(WakeReason::AppWork);
+        }
+        self.settle(false)?;
+        let surfaces = self.pipeline.app().session().map(|session| {
+            session.mount_regions().into_iter().map(|(name, _)| name).collect::<Vec<_>>()
+        }).unwrap_or_default();
+        Ok(json!({"monitors":monitors,"surfaces":surfaces,"timeUs":self.environment.now_us(),"readiness":self.readiness()}))
     }
     pub fn generation(&self) -> u64 { self.pipeline.app().host.generation() }
     /// Recreate the real native document while retaining run time, RNG and fixture history.
-    pub fn recreate(&mut self) -> Result<Value, Fault> {
+    pub fn recreate(&mut self, name: &str) -> Result<Value, Fault> {
         self.check()?;
-        let old_surface = self.window()?.surface().id();
-        let old_document = format!("{:?}",self.window()?.document_id());
+        let old_surface = self.window(name)?.surface().id();
+        let old_document = format!("{:?}",self.window(name)?.document_id());
         let old_generation = self.generation();
         let time = self.environment.now_us();
+        if name != "main" {
+            self.pipeline.app_mut().recreate_shell = Some(name.to_owned());
+            self.pipeline.platform().waker().wake(WakeReason::AppWork);
+            self.settle_surface(Some(name))?;
+            let window = self.window(name)?;
+            let new_surface = window.surface().id();
+            let new_document = format!("{:?}", window.document_id());
+            if new_surface == old_surface || new_document == old_document || self.generation() != old_generation {
+                return Err(Error::new("E_HOST_INVARIANT",9,"named recreate did not replace exactly one mount region").into());
+            }
+            return Ok(json!({"oldSurfaceId":format!("{old_surface:?}"),"newSurfaceId":format!("{new_surface:?}"),
+                "oldDocumentId":old_document,"newDocumentId":new_document,"oldGeneration":old_generation,
+                "generation":self.generation(),"fromTimeUs":time,"timeUs":self.environment.now_us(),
+                "readiness":self.readiness_for(Some(name))}));
+        }
         self.pipeline.suspend();
         self.check()?;
         if !self.pipeline.app().native.windows().is_empty() {
@@ -238,82 +351,104 @@ impl Driver {
         // The native harness may retain old offscreen entries. Only Runtime.windows owns main.
         self.pipeline.resume();
         self.check()?;
-        let new_surface = self.window()?.surface().id();
-        let new_document = format!("{:?}",self.window()?.document_id());
+        let new_surface = self.window("main")?.surface().id();
+        let new_document = format!("{:?}",self.window("main")?.document_id());
         if new_surface==old_surface || new_document==old_document || self.generation()!=old_generation+1 {
             return Err(Error::new("E_HOST_INVARIANT",9,"surface resume did not create a fresh native generation").into());
         }
-        self.observer.bump_surface_configuration();
-        self.bind_surface()?;
+        self.observer(new_surface)?.bump_surface_configuration();
+        self.bind_main()?;
         self.settle(true)?;
+        let retired = self.pipeline.app().retired.as_ref().map(|report| json!({
+            "generation": report.generation,
+            "before": report.before,
+            "resources": report.counts,
+            "clean": report.counts == ResourceCounts::default() && report.failure.is_none(),
+        }));
         Ok(json!({"oldSurfaceId":format!("{old_surface:?}"),"newSurfaceId":format!("{new_surface:?}"),
             "oldDocumentId":old_document,"newDocumentId":new_document,"oldGeneration":old_generation,
             "generation":self.generation(),"fromTimeUs":time,"timeUs":self.environment.now_us(),
-            "retired":self.pipeline.app().retired,"readiness":self.readiness()}))
+            "retired":retired,"readiness":self.readiness()}))
     }
     pub fn begin_step(&self, action: u64, timeout_ms: Option<u64>) {
-        self.step_start_frame.set(self.observer.begin_step(action));
+        self.step_start_frame.set(self.observers.begin_step(action));
         self.deadline.set(self.run_deadline.min(Instant::now()+Duration::from_millis(timeout_ms.unwrap_or(self.limits.max_step_wall_ms).min(self.limits.max_step_wall_ms))));
     }
     pub fn check(&mut self) -> Result<(), Fault> {
         if let Some(fault) = self.startup_fault.take() { return Err(fault); }
         if let Some(fault) = self.pipeline.app_mut().fault.take() { return Err(fault); }
-        if let Some(error) = self.observer.take_fault() { return Err(error.into()); }
-        if self.observer.exceeded_step_budget(self.step_start_frame.get(), self.limits.max_frames_per_step) {
+        if let Some(error) = self.observers.take_fault() { return Err(error.into()); }
+        if self.frames().saturating_sub(self.step_start_frame.get()) > u64::from(self.limits.max_frames_per_step) {
             return Err(Error::new("E_JOB_BUDGET",5,"native frame budget exhausted").with_details(self.readiness()).into());
         }
         if Instant::now() >= self.deadline.get() { return Err(Error::new("E_READINESS_TIMEOUT",5,"step exhausted its real wall-clock deadline").with_details(self.readiness()).into()); }
         Ok(())
     }
-    fn window(&self) -> Result<&Window, Error> {
-        let session = self.pipeline.app().session().ok_or_else(||Error::new("E_HOST_INVARIANT",9,"no mounted session"))?;
-        self.pipeline.app().native.windows().iter().find(|window|window.document_id()==session.region.document)
-            .ok_or_else(||Error::new("E_HOST_INVARIANT",9,"logical main surface has no current native window"))
+    fn window(&self, name: &str) -> Result<&Window, Error> {
+        let app = self.pipeline.app();
+        let session = app.session().ok_or_else(||Error::new("E_HOST_INVARIANT",9,"no mounted session"))?;
+        app.native.windows().iter().find(|window| session.mount_region(window.document_id()).is_some_and(|owned| owned.name == name))
+            .ok_or_else(||Error::new("E_SURFACE_NOT_FOUND",4,format!("surface {name:?} is not mounted")))
     }
-    fn window_mut(&mut self)->Result<&mut Window,Error> {
-        let document=self.pipeline.app().session().ok_or_else(||Error::new("E_HOST_INVARIANT",9,"no mounted session"))?.region.document;
-        self.pipeline.app_mut().native.windows_mut().iter_mut().find(|window|window.document_id()==document)
-            .ok_or_else(||Error::new("E_HOST_INVARIANT",9,"logical main surface has no current native window"))
+    fn window_mut(&mut self, name: &str)->Result<&mut Window,Error> {
+        let id = self.window(name)?.surface().id();
+        self.pipeline.app_mut().native.windows_mut().iter_mut().find(|window|window.surface().id()==id)
+            .ok_or_else(||Error::new("E_HOST_INVARIANT",9,"selected native window disappeared"))
     }
-    fn settled(&self) -> Option<SettledFrame<'_>> {
-        let window = self.window().ok()?;
-        self.observer.settled(window, self.pipeline.app().session())
+    fn by_surface(&self, id: SurfaceId) -> Option<&Window> {
+        self.pipeline.app().native.windows().iter().find(|window| window.surface().id() == id)
     }
-    fn frame_current(&self) -> bool {
-        self.settled().is_some()
+    fn observer(&self, surface: SurfaceId) -> Result<FrameObserver, Error> {
+        self.observers.get(surface).ok_or_else(||Error::new("E_HOST_INVARIANT",9,"selected native window has no renderer observer"))
+    }
+    fn window_current(&self, window: &Window) -> bool {
+        self.observers.get(window.surface().id()).is_some_and(|observer| observer.settled(window, self.pipeline.app().session()).is_some())
+    }
+    fn frame_current(&self, name: &str) -> bool {
+        self.window(name).is_ok_and(|window| self.window_current(window))
     }
     fn runnable(&self) -> bool {
         self.pipeline.platform().has_pending_wakes()
-            || self.window().ok().and_then(|window|self.pipeline.platform().offscreen(window.surface().id())).is_some_and(|surface|surface.has_pending_redraw())
+            || self.pipeline.app().native.windows().iter().any(|window| {
+                self.pipeline.platform().offscreen(window.surface().id()).is_some_and(|surface|surface.has_pending_redraw())
+            })
             || self.pipeline.parked_deadline().is_some_and(|next|next<=self.pipeline.now())
             || self.fixtures.next_deadline_us().is_some_and(|next|next<=self.environment.now_us())
     }
     pub fn readiness(&self) -> Value {
-        let resources=self.window().ok().map(|window|resources::snapshot(window,&[],self.pipeline.app().session().map(AsRef::as_ref)));
+        self.readiness_for(None)
+    }
+    fn readiness_for(&self, name: Option<&str>) -> Value {
+        let app = self.pipeline.app();
+        let window = if let Some(name) = name { self.window(name).ok() }
+            else if self.pure_shell { app.native.windows().first() }
+            else { self.window("main").ok() };
+        let owned = window.and_then(|window| app.session()?.mount_region(window.document_id()));
+        let resources=window.map(|window|resources::snapshot(window,&[],app.session().map(AsRef::as_ref)));
         let resource=resources.as_ref().and_then(|result|result.as_ref().ok());
         json!({"appReady":self.pipeline.app().session().is_some(),"currentWorkSettled":!self.runnable(),
-            "requiredAssetsReady":resource.map(|value|&value["requiredAssetsReady"]),"nativeAssetReadinessAvailable":true,"frameCurrent":self.frame_current(),
-            "resourceRevision":self.window().ok().map(Window::image_resource_revision),
+            "requiredAssetsReady":resource.map(|value|&value["requiredAssetsReady"]),"nativeAssetReadinessAvailable":true,"frameCurrent":window.is_some_and(|window|self.window_current(window)),
+            "resourceRevision":window.map(Window::image_resource_revision),
             "requiredFontsReady":resource.map(|value|&value["requiredFontsReady"]),
-            "requiredStyleRevision":self.window().ok().map(Window::style_revision),
-            "validatedStyleRevision":self.window().ok().and_then(|window|window.completed_frame().map(|frame|frame.style_revision)),
-            "pendingStylesheets":self.window().ok().map(Window::has_pending_stylesheets),
-            "nativeAcceptance":self.pipeline.app().host.acceptance(),
+            "requiredStyleRevision":window.map(Window::style_revision),
+            "validatedStyleRevision":window.and_then(|window|window.completed_frame().map(|frame|frame.style_revision)),
+            "pendingStylesheets":window.map(Window::has_pending_stylesheets),
+            "nativeAcceptance":app.host.acceptance(),
             "pendingAssets":resource.and_then(|value|value["pendingIds"].as_array()).map(|items|items.len()),
             "timeUs":self.environment.now_us(),"nextFixtureDeadlineUs":self.fixtures.next_deadline_us(),
             "nextNativeDeadlineUs":self.pipeline.parked_deadline().map(|next|next.saturating_duration_since(self.pipeline.platform().clock().origin()).as_micros()),
-            "requiredMetadataRevision":self.pipeline.app().session().map(|session|session.bridge.metadata_revision()),
-            "requiredStateRevision":self.window().ok().map(|window|window.dom().revision()),"generation":self.generation()})
+            "requiredMetadataRevision":owned.map(|owned|owned.bridge.metadata_revision()),
+            "requiredStateRevision":window.map(|window|window.dom().revision()),"generation":self.generation()})
     }
-    fn notify_fixture(&self)->Result<(),Error> {
-        let surface=self.window()?.surface().id();
-        self.pipeline.platform().waker().wake(WakeReason::ReactiveWork{surfaces:vec![surface].into_boxed_slice()});
-        Ok(())
+    fn notify_fixture(&self) {
+        let surfaces: Box<[_]> = self.pipeline.app().native.windows().iter().map(|window| window.surface().id()).collect();
+        let wake = if surfaces.is_empty() { WakeReason::AppWork } else { WakeReason::ReactiveWork{surfaces} };
+        self.pipeline.platform().waker().wake(wake);
     }
     fn wait_asset_barrier(&mut self)->Result<(),Fault> {
         self.check()?;
         loop {
-            if self.window_mut()?.poll_image_barrier() { return Ok(()); }
+            if self.pipeline.app_mut().native.windows_mut().iter_mut().all(Window::poll_image_barrier) { return Ok(()); }
             self.check().map_err(|mut fault| {
                 if fault.error.code=="E_READINESS_TIMEOUT" { fault.error=Error::new("E_ASSET_TIMEOUT",5,"native resource publication exceeded its real deadline"); }
                 fault
@@ -327,57 +462,78 @@ impl Driver {
             let now = self.pipeline.now();
             self.pipeline.advance(Instant::now().saturating_duration_since(now));
         }
-        if self.fixtures.release_due()? { self.notify_fixture()?; }
+        if self.fixtures.release_due()? { self.notify_fixture(); }
+        self.pump_application()
+    }
+
+    fn pump_application(&mut self) -> Result<(), Fault> {
+        if self.shell_capable {
+            // Wakes may open windows; bind their native configuration and evidence
+            // before the harness takes its first redraw at the current clock instant.
+            self.pipeline.dispatch_wakes();
+            self.check()?;
+            self.sync_shell_surfaces()?;
+        }
         self.pipeline.pump();
-        self.check()
+        self.check()?;
+        if self.shell_capable { self.sync_shell_surfaces()?; }
+        Ok(())
     }
     pub fn settle(&mut self, require_frame: bool) -> Result<Value, Fault> {
+        self.settle_surface(require_frame.then_some("main"))
+    }
+    fn settle_surface(&mut self, name: Option<&str>) -> Result<Value, Fault> {
         for _ in 0..self.limits.max_settle_turns {
             self.pump_current()?;
-            if self.observer.device_unavailable() {
+            if self.observers.device_unavailable() {
                 return Err(Error::new("E_DEVICE_LOST",7,"native graphics device became unavailable").into());
             }
-            if !self.runnable() && (!require_frame || self.frame_current()) { return Ok(self.readiness()); }
+            if let Some(name) = name { self.window(name)?; }
+            if !self.runnable() && name.is_none_or(|name| self.frame_current(name)) { return Ok(self.readiness_for(name)); }
             if !self.runnable() && self.environment.is_virtual() {
                 return Err(Error::new("E_CAPTURE_NOT_READY",5,"a future native deadline requires explicit clock.advance")
-                    .with_details(self.readiness()).into());
+                    .with_details(self.readiness_for(name)).into());
             }
             if !self.runnable() { std::thread::sleep(Duration::from_millis(1)); }
         }
-        Err(Error::new("E_JOB_BUDGET",5,format!("bounded native pump exhausted current-work turns: {}",self.readiness())).into())
+        Err(Error::new("E_JOB_BUDGET",5,format!("bounded native pump exhausted current-work turns: {}",self.readiness_for(name))).into())
     }
-    pub fn capture(&mut self, id: &str,required_time:Option<u64>,allowed_pending:&[String]) -> Result<Value, Fault> {
+    pub fn capture(&mut self, id: &str, name: &str, required_time:Option<u64>,allowed_pending:&[String]) -> Result<Value, Fault> {
+        self.check()?;
         if let Some(time)=required_time {
             if time!=self.environment.now_us() {
                 return Err(Error::new("E_CAPTURE_NOT_READY",5,"requiredFrameTimeUs differs from the current virtual clock")
-                    .with_details(self.readiness()).into());
+                    .with_details(self.readiness_for(Some(name))).into());
             }
-            if self.observer.last_time_us()!=Some(time) {
-                self.window()?.request_frame();
+            let window = self.window(name)?;
+            if self.observer(window.surface().id())?.last_time_us()!=Some(time) {
+                window.request_frame();
             }
         }
         // An explicit placeholder capture may reuse an already coherent frame before publishing
         // asynchronous arrivals. Whether a worker happened to finish cannot change this decision.
-        if allowed_pending.is_empty() || !self.frame_current() || self.runnable() { self.settle(true)?; }
-        let mut resource=resources::snapshot(self.window()?,allowed_pending,self.pipeline.app().session().map(AsRef::as_ref))?;
+        if allowed_pending.is_empty() || !self.frame_current(name) || self.runnable() { self.settle_surface(Some(name))?; }
+        let mut resource=resources::snapshot(self.window(name)?,allowed_pending,self.pipeline.app().session().map(AsRef::as_ref))?;
         for _ in 0..self.limits.max_settle_turns {
             if resource["requiredAssetsReady"]==true { break; }
-            self.settle(true)?;
-            resource=resources::snapshot(self.window()?,allowed_pending,self.pipeline.app().session().map(AsRef::as_ref))?;
+            self.settle_surface(Some(name))?;
+            resource=resources::snapshot(self.window(name)?,allowed_pending,self.pipeline.app().session().map(AsRef::as_ref))?;
         }
         if resource["requiredAssetsReady"]!=true {
             return Err(Error::new("E_ASSET_TIMEOUT",5,"visible resources did not reach current native demand").into());
         }
-        let readiness=self.readiness();
-        let window=self.window()?;
-        let settled=self.observer.settled(window,self.pipeline.app().session())
+        let readiness=self.readiness_for(Some(name));
+        let window=self.window(name)?;
+        let observer=self.observer(window.surface().id())?;
+        let settled=observer.settled(window,self.pipeline.app().session())
             .ok_or_else(||Error::new("E_CAPTURE_NOT_READY",5,"no owned validated tree").with_details(readiness.clone()))?;
         if required_time.is_some_and(|time|settled.time_us()!=time) {
             return Err(Error::new("E_CAPTURE_NOT_READY",5,"validation frame timestamp differs from requiredFrameTimeUs").with_details(readiness).into());
         }
-        let paths = self.observer.write_capture(&settled,window,CaptureRequest {
+        let size = window.surface().size();
+        let paths = observer.write_capture(&settled,window,CaptureRequest {
             id,
-            dimensions: self.dimensions,
+            dimensions: (size.width.0 as u32,size.height.0 as u32),
             opaque: self.opaque,
             readiness,
             resource,
@@ -385,15 +541,17 @@ impl Driver {
         })?;
         drop(settled);
         self.check()?;
-        if Instant::now()>=self.deadline.get() { return Err(Error::new("E_READINESS_TIMEOUT",5,"capture publication exceeded its step deadline").with_details(self.readiness()).into()); }
+        if Instant::now()>=self.deadline.get() { return Err(Error::new("E_READINESS_TIMEOUT",5,"capture publication exceeded its step deadline").with_details(self.readiness_for(Some(name))).into()); }
         Ok(paths)
     }
-    pub fn graphics(&self) -> Value { self.observer.graphics_metadata() }
-    pub fn frames(&self) -> u64 { self.observer.frames() }
+    pub fn graphics(&self) -> Value { self.observers.graphics_metadata() }
+    pub fn frames(&self) -> u64 { self.observers.frames() }
     pub fn failure_evidence(&self) -> Result<Value, Error> {
-        let readiness = self.readiness();
-        let satisfies = self.frame_current();
-        self.observer.publish_failure_evidence(self.window().ok(), self.opaque, readiness, satisfies)
+        let Some(id) = self.observers.latest_checkpoint() else { return Ok(json!({"available":false})); };
+        let Some(window) = self.by_surface(id) else { return Ok(json!({"available":false})); };
+        let name = self.pipeline.app().session().and_then(|session|session.mount_region(window.document_id()));
+        let readiness = self.readiness_for(name.as_ref().map(|region|region.name.as_str()));
+        self.observer(id)?.publish_failure_evidence(Some(window), self.opaque, readiness, self.window_current(window))
     }
     pub fn finish(mut self) -> (Value, Option<Fault>, Option<RuntimeTelemetry>) {
         self.deadline.set(self.run_deadline.min(Instant::now()+Duration::from_millis(20)));
@@ -404,8 +562,9 @@ impl Driver {
             self.pipeline.app().retired_telemetry,
             report.as_ref().and_then(|report| report.telemetry),
         );
-        let counts = report.as_ref().map(|report| report.counts.clone()).unwrap_or_default();
-        let fault = evaluate_retirement(report.as_ref());
+        let report = report.as_ref().or(self.pipeline.app().retired.as_ref());
+        let counts = report.map(|report| report.counts.clone()).unwrap_or_default();
+        let fault = evaluate_retirement(report);
         let clean = counts == ResourceCounts::default() && fault.is_none();
         let teardown = json!({"verified":true,"clean":clean,"resources":counts,"sessionCreated":report.is_some()});
         (teardown,fault,telemetry)
@@ -449,7 +608,7 @@ mod tests {
         let leaked = SessionRetirement {
             generation: 2,
             before: ResourceCounts { timers: 1, ..Default::default() },
-            counts: ResourceCounts { timers: 1, ..Default::default() },
+            counts: ResourceCounts { shell_surfaces: 1, ..Default::default() },
             failure: None,
             telemetry: None,
         };

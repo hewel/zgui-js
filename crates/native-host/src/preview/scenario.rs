@@ -3,6 +3,7 @@ use std::{collections::BTreeSet, path::Path};
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer, ser::SerializeMap};
 
+use crate::shell::Monitor;
 use crate::bounded_fs;
 use super::{Error, output::digest};
 
@@ -27,7 +28,7 @@ pub struct Scenario {
 #[derive(Debug, Clone)]
 pub enum Step {
     Settle { id: String, timeout_ms: Option<u64> },
-    Capture { id: String, capture_id: String, required_frame_time_us: Option<u64>, allowed_pending_assets: Vec<String> },
+    Capture { id: String, capture_id: String, surface: String, required_frame_time_us: Option<u64>, allowed_pending_assets: Vec<String> },
     PointerMove { id: String, location: PointerLocation, pointer: PointerDevice },
     PointerClick { id: String, location: PointerLocation, button: PointerButton, pointer: PointerDevice },
     PointerDown { id: String, location: PointerLocation, button: PointerButton, pointer: PointerDevice },
@@ -44,6 +45,7 @@ pub enum Step {
     SurfaceScale { id: String, surface: String, scale: f64 },
     SurfaceColorScheme { id: String, surface: String, color_scheme: String },
     SurfaceRecreate { id: String, surface: String },
+    MonitorsSet { id: String, monitors: Vec<Monitor> },
 }
 
 impl Step {
@@ -56,7 +58,8 @@ impl Step {
             | Self::KeyPress { id, .. } | Self::TextCommit { id, .. }
             | Self::Assert { id, .. } | Self::AssertService { id, .. }
             | Self::ClockAdvance { id, .. } | Self::ServiceEmit { id, .. }
-            | Self::SurfaceResize { id, .. } | Self::SurfaceScale { id, .. } | Self::SurfaceColorScheme { id, .. } | Self::SurfaceRecreate { id, .. } => id,
+            | Self::SurfaceResize { id, .. } | Self::SurfaceScale { id, .. } | Self::SurfaceColorScheme { id, .. }
+            | Self::SurfaceRecreate { id, .. } | Self::MonitorsSet { id, .. } => id,
         }
     }
 
@@ -79,6 +82,7 @@ impl Step {
             Self::SurfaceScale { .. } => "surface.scale",
             Self::SurfaceColorScheme { .. } => "surface.colorScheme",
             Self::SurfaceRecreate { .. } => "surface.recreate",
+            Self::MonitorsSet { .. } => "monitors.set",
         }
     }
 }
@@ -87,6 +91,12 @@ impl Step {
 pub enum PointerLocation {
     Target(Target),
     Position { surface: String, x: f64, y: f64 },
+}
+
+impl PointerLocation {
+    pub fn surface(&self) -> &str {
+        match self { Self::Target(target) => &target.surface, Self::Position { surface, .. } => surface }
+    }
 }
 
 impl Serialize for PointerLocation {
@@ -257,6 +267,8 @@ enum StepInput {
     SurfaceColorScheme(ColorSchemeInput),
     #[serde(rename = "surface.recreate")]
     SurfaceRecreate(RecreateInput),
+    #[serde(rename = "monitors.set")]
+    MonitorsSet(MonitorsInput),
     #[serde(rename = "wheel")]
     Wheel(WheelInput),
     // Later operations remain explicit capability failures, never silently ignored.
@@ -289,10 +301,19 @@ struct SettleInput {
 struct CaptureInput {
     id: String,
     capture_id: String,
+    #[serde(default, deserialize_with = "present")]
+    surface: Option<String>,
     #[serde(default, deserialize_with = "present_u64")]
     required_frame_time_us: Option<u64>,
     #[serde(default)]
     allowed_pending_assets:Vec<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct MonitorsInput {
+    id: String,
+    monitors: Vec<Monitor>,
 }
 
 #[derive(Deserialize)]
@@ -474,6 +495,8 @@ fn parse(bytes: &[u8], available: &[&str], virtual_profile: bool) -> Result<Scen
                 if !safe_id(&input.capture_id) {
                     return Err(invalid("captureId must match [a-z0-9][a-z0-9._-]*"));
                 }
+                let surface = input.surface.unwrap_or_else(|| "main".into());
+                validate_surface(&surface, &mut requirements)?;
                 needs_pixels = true;
                 if input.required_frame_time_us.is_some() {
                     needs_virtual_time = true;
@@ -484,7 +507,7 @@ fn parse(bytes: &[u8], available: &[&str], virtual_profile: bool) -> Result<Scen
                 }
                 if !input.allowed_pending_assets.is_empty() { require(&mut requirements,"assets.native-readiness"); }
                 Step::Capture {
-                    id: input.id, capture_id: input.capture_id,
+                    id: input.id, capture_id: input.capture_id, surface,
                     required_frame_time_us: input.required_frame_time_us, allowed_pending_assets:input.allowed_pending_assets,
                 }
             }
@@ -514,7 +537,7 @@ fn parse(bytes: &[u8], available: &[&str], virtual_profile: bool) -> Result<Scen
                 Step::PointerCancel { id: input.id, location, pointer: pointer_device(input.pointer)? }
             }
             StepInput::KeyPress(input) => {
-                validate_surface(&input.surface)?;
+                validate_surface(&input.surface, &mut requirements)?;
                 if matches!(&input.key, Key::Character(text) if text.is_empty()) {
                     return Err(invalid("character key must contain nonempty text"));
                 }
@@ -522,7 +545,7 @@ fn parse(bytes: &[u8], available: &[&str], virtual_profile: bool) -> Result<Scen
                 Step::KeyPress { id: input.id, surface: input.surface, key: input.key, modifiers: input.modifiers }
             }
             StepInput::TextCommit(input) => {
-                validate_surface(&input.surface)?;
+                validate_surface(&input.surface, &mut requirements)?;
                 require(&mut requirements, "input.text");
                 Step::TextCommit { id: input.id, surface: input.surface, text: input.text }
             }
@@ -555,27 +578,32 @@ fn parse(bytes: &[u8], available: &[&str], virtual_profile: bool) -> Result<Scen
                 Step::ServiceEmit{id:input.id,channel:input.channel,value:input.value}
             }
             StepInput::SurfaceResize(input)=>{
-                validate_surface(&input.surface)?;
+                validate_surface(&input.surface, &mut requirements)?;
                 if !(1..=16384).contains(&input.width) || !(1..=16384).contains(&input.height) { return Err(invalid("resize dimensions must be 1..16384 logical pixels")); }
                 require(&mut requirements,"surface.resize");
                 Step::SurfaceResize{id:input.id,surface:input.surface,width:input.width,height:input.height}
             }
             StepInput::SurfaceScale(input)=>{
-                validate_surface(&input.surface)?;
+                validate_surface(&input.surface, &mut requirements)?;
                 if !input.scale.is_finite() || input.scale<=0.0 || input.scale>8.0 { return Err(invalid("surface scale must be finite and in (0,8]")); }
                 require(&mut requirements,"surface.scale");
                 Step::SurfaceScale{id:input.id,surface:input.surface,scale:input.scale}
             }
             StepInput::SurfaceColorScheme(input)=>{
-                validate_surface(&input.surface)?;
+                validate_surface(&input.surface, &mut requirements)?;
                 if !matches!(input.color_scheme.as_str(), "light" | "dark") { return Err(invalid("colorScheme must be light or dark")); }
                 require(&mut requirements,"surface.color-scheme");
                 Step::SurfaceColorScheme{id:input.id,surface:input.surface,color_scheme:input.color_scheme}
             }
             StepInput::SurfaceRecreate(input)=>{
-                validate_surface(&input.surface)?;
+                validate_surface(&input.surface, &mut requirements)?;
                 require(&mut requirements,"surface.recreate");
                 Step::SurfaceRecreate{id:input.id,surface:input.surface}
+            }
+            StepInput::MonitorsSet(input) => {
+                validate_monitors(&input.monitors)?;
+                require(&mut requirements, "surface.multiple");
+                Step::MonitorsSet { id: input.id, monitors: input.monitors }
             }
             StepInput::Wheel(input) => {
                 let location = pointer_location(input.target, input.surface, input.position, &mut requirements)?;
@@ -602,7 +630,7 @@ fn parse(bytes: &[u8], available: &[&str], virtual_profile: bool) -> Result<Scen
                     StepInput::Settle(_) | StepInput::Capture(_)
                     | StepInput::PointerMove(_) | StepInput::PointerClick(_)
                     | StepInput::PointerDown(_) | StepInput::PointerUp(_) | StepInput::PointerCancel(_)
-                    | StepInput::Wheel(_)
+                    | StepInput::Wheel(_) | StepInput::MonitorsSet(_)
                     | StepInput::KeyPress(_) | StepInput::TextCommit(_)
                     | StepInput::Assert(_) | StepInput::ClockAdvance(_) | StepInput::ServiceEmit(_)
                     | StepInput::SurfaceResize(_) | StepInput::SurfaceScale(_) | StepInput::SurfaceRecreate(_) | StepInput::SurfaceColorScheme(_) => unreachable!(),
@@ -618,9 +646,9 @@ fn parse(bytes: &[u8], available: &[&str], virtual_profile: bool) -> Result<Scen
         if !safe_id(step.id()) || !step_ids.insert(step.id()) {
             return Err(invalid("step id must be unique and match [a-z0-9][a-z0-9._-]*"));
         }
-        if let Step::Capture { capture_id, .. } = step
-            && !capture_ids.insert(capture_id.as_str()) {
-            return Err(invalid("captureId must be unique"));
+        if let Step::Capture { capture_id, surface, .. } = step
+            && !capture_ids.insert((surface.as_str(), capture_id.as_str())) {
+            return Err(invalid("captureId must be unique on each surface"));
         }
     }
     if needs_pixels && !requirements.contains("pixels") {
@@ -646,9 +674,29 @@ fn require(requirements: &mut BTreeSet<String>, capability: &str) {
     }
 }
 
-fn validate_surface(surface: &str) -> Result<(), Error> {
-    if surface != "main" {
-        return Err(unsupported_capability("only the main logical surface is supported"));
+fn validate_surface(surface: &str, requirements: &mut BTreeSet<String>) -> Result<(), Error> {
+    if !safe_id(surface) {
+        return Err(invalid("surface must match [a-z0-9][a-z0-9._-]* and contain at most 128 bytes"));
+    }
+    if surface != "main" { require(requirements, "surface.multiple"); }
+    Ok(())
+}
+
+fn validate_monitors(monitors: &[Monitor]) -> Result<(), Error> {
+    if monitors.len() > 32 { return Err(invalid("monitors.set accepts at most 32 outputs")); }
+    let mut ids = BTreeSet::new();
+    for monitor in monitors {
+        let (width, height) = (monitor.width, monitor.height);
+        if monitor.id.is_empty() || monitor.id.len() > 128 || !ids.insert(&monitor.id)
+            || monitor.name.trim().is_empty() || monitor.name.len() > 128
+            || ![monitor.x, monitor.y].into_iter().all(|value| value.abs() <= f64::from(i32::MAX))
+            || !(1.0..=16384.0).contains(&width) || !(1.0..=16384.0).contains(&height)
+            || !(monitor.scale > 0.0 && monitor.scale <= 8.0)
+            || (width * height) > super::profile::MAX_PHYSICAL_PIXELS as f64
+            || monitor.refresh_rate_milli_hz.is_some_and(|rate| !(1..=1_000_000).contains(&rate))
+        {
+            return Err(invalid("monitors.set requires unique bounded output IDs and valid name, geometry, scale and refresh rate"));
+        }
     }
     Ok(())
 }
@@ -665,7 +713,7 @@ fn target(input: TargetInput, requirements: &mut BTreeSet<String>) -> Result<Tar
         }
         _ => return Err(invalid("target requires exactly testId or both role and name")),
     };
-    validate_surface(&input.surface)?;
+    validate_surface(&input.surface, requirements)?;
     Ok(Target { surface: input.surface, selector })
 }
 
@@ -681,7 +729,7 @@ fn pointer_location(
             if !position.x.is_finite() || !position.y.is_finite() {
                 return Err(invalid("pointer position coordinates must be finite numbers"));
             }
-            validate_surface(&surface)?;
+            validate_surface(&surface, requirements)?;
             Ok(PointerLocation::Position { surface, x: position.x, y: position.y })
         }
         _ => Err(invalid("pointer action requires exactly target or surface plus position")),
@@ -1024,7 +1072,8 @@ mod tests {
     }
 
     #[test]
-    fn unsupported_surfaces_fail_preflight_for_every_target_and_input_form() {
+    fn named_surfaces_require_multi_surface_support_for_each_input_form() {
+        let other = ["input.pointer", "input.keyboard", "input.text", "selectors.test-id", "selectors.semantic", "tree.inspect"];
         for step in [
             json!({"id":"action","op":"pointer.move","surface":"popup","position":{"x":0,"y":0}}),
             json!({"id":"action","op":"pointer.click","target":{"surface":"popup","testId":"button"},"button":"middle"}),
@@ -1032,9 +1081,13 @@ mod tests {
             json!({"id":"action","op":"text.commit","surface":"popup","text":""}),
             json!({"id":"action","op":"assert","target":{"surface":"popup","role":"button","name":"Go"},"check":{"property":"exists","equals":true}}),
         ] {
-            let error = check(&declaration(json!([step])), &[], false).unwrap_err();
-            assert_eq!((error.code, error.exit_code), ("E_UNSUPPORTED_CAPABILITY", 2));
-            assert!(error.message.contains("main"));
+            let input = declaration(json!([step]));
+            let error = check(&input, &other, false).expect_err("named input requires multiple surfaces");
+            assert_eq!((error.code, error.exit_code), ("E_UNSUPPORTED_CAPABILITY", 2), "step {step}");
+            assert!(error.message.contains("surface.multiple"), "step {step}: {error:?}");
+            let mut available = other.to_vec();
+            available.push("surface.multiple");
+            assert!(check(&input, &available, false).is_ok(), "named input is supported: {step}");
         }
     }
 

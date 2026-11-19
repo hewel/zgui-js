@@ -104,14 +104,14 @@ impl CaptureHandle {
     }
 }
 
-pub fn renderer_factory(handle: CaptureHandle) -> zgui::runtime::RendererFactory {
-    Box::new(move |_surface, target| {
+pub fn renderer_factory(mut handle: impl FnMut(zgui::platform::SurfaceId) -> CaptureHandle + 'static) -> zgui::runtime::RendererFactory {
+    Box::new(move |surface, target| {
         // Runtime owns the extent, scale and opacity policy. Do not reconstruct this target
         // from surface dimensions: those may still describe the preceding configure.
         let mut inner = Builder::new().offscreen(target, wgpu::TextureFormat::Bgra8Unorm, false)
             .map_err(zgui::runtime::AppError::GpuUnavailable)?;
         zgui_render_vector_vello::attach(&mut inner, target.size);
-        let mut renderer = CaptureRenderer { inner, handle: handle.clone() };
+        let mut renderer = CaptureRenderer { inner, handle: handle(surface.id()) };
         renderer.update_metadata();
         {
             let mut state = renderer.handle.0.borrow_mut();

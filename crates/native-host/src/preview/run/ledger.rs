@@ -23,24 +23,25 @@ impl StepDriver for Driver {
     fn execute(&mut self,step:&Step)->Result<Value,Fault> {
         match step {
             Step::Settle{..}=>self.settle(false),
-            Step::Capture{capture_id,required_frame_time_us,allowed_pending_assets,..}=>
-                self.capture(capture_id,*required_frame_time_us,allowed_pending_assets),
+            Step::Capture{capture_id,surface,required_frame_time_us,allowed_pending_assets,..}=>
+                self.capture(capture_id,surface,*required_frame_time_us,allowed_pending_assets),
             Step::PointerMove{location,pointer,..}=>self.pointer(location,pointer,PointerOperation::Move),
             Step::PointerClick{location,button,pointer,..}=>self.pointer(location,pointer,PointerOperation::Click(*button)),
             Step::PointerDown{location,button,pointer,..}=>self.pointer(location,pointer,PointerOperation::Down(*button)),
             Step::PointerUp{location,button,pointer,..}=>self.pointer(location,pointer,PointerOperation::Up(*button)),
             Step::PointerCancel{location,pointer,..}=>self.pointer(location,pointer,PointerOperation::Cancel),
             Step::Wheel{location,delta,phase,..}=>self.wheel(location,delta,*phase),
-            Step::KeyPress{surface,key,modifiers,..}=>self.key(key,modifiers).map(|mut trace| { trace["surface"]=json!(surface); trace }),
-            Step::TextCommit{surface,text,..}=>self.text(text).map(|mut trace| { trace["surface"]=json!(surface); trace }),
+            Step::KeyPress{surface,key,modifiers,..}=>self.key(surface,key,modifiers).map(|mut trace| { trace["surface"]=json!(surface); trace }),
+            Step::TextCommit{surface,text,..}=>self.text(surface,text).map(|mut trace| { trace["surface"]=json!(surface); trace }),
             Step::Assert{target,check,..}=>self.assert_node(target,check),
             Step::ClockAdvance{by_ms,..}=>self.advance(*by_ms),
             Step::ServiceEmit{channel,value,..}=>self.emit(channel,value),
             Step::AssertService{check,..}=>self.assert_service(check),
-            Step::SurfaceResize{surface,width,height,..}=>self.resize(*width,*height).map(|mut trace| { trace["surface"]=json!(surface); trace }),
-            Step::SurfaceScale{surface,scale,..}=>self.scale(*scale).map(|mut trace| { trace["surface"]=json!(surface); trace }),
-            Step::SurfaceColorScheme{surface,color_scheme,..}=>self.color_scheme(color_scheme).map(|mut trace| { trace["surface"]=json!(surface); trace }),
-            Step::SurfaceRecreate{surface,..}=>self.recreate().map(|mut trace| { trace["surface"]=json!(surface); trace }),
+            Step::SurfaceResize{surface,width,height,..}=>self.resize(surface,*width,*height).map(|mut trace| { trace["surface"]=json!(surface); trace }),
+            Step::SurfaceScale{surface,scale,..}=>self.scale(surface,*scale).map(|mut trace| { trace["surface"]=json!(surface); trace }),
+            Step::SurfaceColorScheme{surface,color_scheme,..}=>self.color_scheme(surface,color_scheme).map(|mut trace| { trace["surface"]=json!(surface); trace }),
+            Step::SurfaceRecreate{surface,..}=>self.recreate(surface).map(|mut trace| { trace["surface"]=json!(surface); trace }),
+            Step::MonitorsSet{monitors,..}=>self.set_monitors(monitors),
         }
     }
     fn readiness(&self)->Value { Driver::readiness(self) }
@@ -135,8 +136,8 @@ impl RunLedger {
                 Step::Assert{..}|Step::AssertService{..} => {
                     if result.is_ok() { self.assertions_passed+=1; } else { self.assertions_failed+=1; }
                 }
-                Step::Capture{capture_id,..} if result.is_ok() => {
-                    self.captures+=1; self.latest=evidence::CapturePaths::new(capture_id).ok();
+                Step::Capture{capture_id,surface,..} if result.is_ok() => {
+                    self.captures+=1; self.latest=evidence::CapturePaths::new(capture_id,surface).ok();
                 }
                 _=>{}
             }

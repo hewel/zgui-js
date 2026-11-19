@@ -1,4 +1,4 @@
-import { Image, TextField, TextArea, createCanvasScene, createSpring, renderApp } from "@hewel/zgui";
+import { Image, LayerSurface, TextField, TextArea, createCanvasScene, createSpring, renderApp, renderShell, useMonitors } from "@hewel/zgui";
 import type { NativeElementProps, NativeNode } from "@hewel/zgui";
 
 // @ts-expect-error Browser document is not a host global.
@@ -134,3 +134,26 @@ void [browserElement, browserEvent, pointerEvent, html, editing, image, property
   vectorChildren, vectorPropChildren, boxPath, boxViewBox, boxSvg, boxCanvas, rawCanvas, fabricatedCanvas,
   checkedString, roleString, roleCase, orientationString, dataBoolean, dataNumber,
   contextRelease, contextCapture];
+
+// @ts-expect-error Shell surfaces need stable names.
+void <LayerSurface output="DP-1" />;
+// @ts-expect-error Native overlays are not compositor layers.
+void <LayerSurface name="panel" layer="modal" />;
+// @ts-expect-error Layer anchors are physical edges.
+void <LayerSurface name="panel" anchor={["inline-start"]} />;
+// @ts-expect-error The output key is not an index.
+void <LayerSurface name="panel" output={0} />;
+// @ts-expect-error Layer dimensions are numbers, not CSS strings.
+void <LayerSurface name="panel" width="100%" />;
+// @ts-expect-error Margins are keyed by physical edges.
+void <LayerSurface name="panel" margin={{ inlineStart: 4 }} />;
+// @ts-expect-error Keyboard interactivity is a mode.
+void <LayerSurface name="panel" keyboard />;
+// @ts-expect-error Input rectangles must be complete.
+void <LayerSurface name="panel" inputRegion={[{ x: 0, y: 0, width: 5 }]} />;
+// @ts-expect-error Input arrays contain nodes or rectangles, never a mixture.
+void <LayerSurface name="panel" inputRegion={[fabricated, { x: 0, y: 0, width: 5, height: 5 }]} />;
+// @ts-expect-error The monitor list is a read-only snapshot.
+useMonitors()().push();
+// @ts-expect-error Shell mount takes no primary root.
+renderShell(() => null, fabricated);

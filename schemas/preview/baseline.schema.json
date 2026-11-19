@@ -21,10 +21,7 @@
         "buildId": { "$ref": "#/$defs/digest" },
         "captures": {
           "type": "array", "minItems": 1, "maxItems": 4096, "uniqueItems": true,
-          "items": { "allOf": [
-            { "$ref": "comparison.schema.json#/$defs/key" },
-            { "properties": { "surface": { "const": "main" } } }
-          ] }
+          "items": { "$ref": "comparison.schema.json#/$defs/key" }
         }
       }
     }

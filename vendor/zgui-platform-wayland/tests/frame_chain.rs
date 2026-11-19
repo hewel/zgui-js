@@ -20,8 +20,6 @@ mod support;
 
 use std::sync::atomic::Ordering;
 
-use zgui_platform::PlatformError;
-use zgui_platform_wayland::WaylandApp;
 
 /// How many frames the application is given before it asks the loop to finish.
 ///
@@ -47,13 +45,8 @@ fn main() {
         sustained: true,
     };
 
-    let mut app = match WaylandApp::new(handler) {
-        Ok(app) => app,
-        Err(PlatformError::Backend(reason)) => {
-            support::skipped(PROPERTY, &format!("no compositor to run on: {reason}"));
-            return;
-        }
-        Err(other) => panic!("the compositor refused the application: {other}"),
+    let Some(mut app) = support::loop_for(PROPERTY, handler) else {
+        return;
     };
 
     if let Err(error) = app.run() {

@@ -7,12 +7,13 @@ use super::{Error,evidence::{CapturePaths,FrameEvidence,TreeEvidence},output::di
 const FIELDS:&[&str]=&["token","parent","surface","generation","kind","ownership","testId","role","name","text","value","state","boundsLogical","boundsDevice","boundsKind","source","textTruncated","testIdTruncated","nameTruncated","valueTruncated","pointerReachabilityVerified"];
 
 struct Options {
-    root:PathBuf,capture:String,target:Option<Target>,fields:Vec<String>,max_nodes:usize,max_depth:usize,cursor:Option<String>,
+    root:PathBuf,capture:CapturePaths,target:Option<Target>,fields:Vec<String>,max_nodes:usize,max_depth:usize,cursor:Option<String>,
 }
 fn options(args:Vec<String>)->Result<Options,Error> {
     let mut args=args.into_iter();
     let mut seen=HashSet::new();
     let(mut root,mut capture,mut test_id,mut role,mut name,mut cursor)=(None,None,None,None,None,None);
+    let mut surface = "main".to_owned();
     let mut fields="token,parent,testId,role,name,text,state,boundsLogical".to_owned();
     let(mut max_nodes,mut max_depth)=(10,1);
     while let Some(key)=args.next() {
@@ -20,6 +21,7 @@ fn options(args:Vec<String>)->Result<Options,Error> {
         let value=args.next().ok_or_else(||schema("inspect option has no value"))?;
         match key.as_str() {
             "--run"=>root=Some(PathBuf::from(value)),"--capture"=>capture=Some(value),
+            "--surface"=>surface=value,
             "--test-id"=>test_id=Some(value),"--role"=>role=Some(value),"--name"=>name=Some(value),
             "--fields"=>fields=value,"--cursor"=>cursor=Some(value),
             "--max-nodes"=>max_nodes=value.parse::<usize>().map_err(|_|schema("max-nodes must be an integer"))?,
@@ -27,8 +29,7 @@ fn options(args:Vec<String>)->Result<Options,Error> {
             _=>return Err(schema("unsupported inspect option")),
         }
     }
-    let capture=capture.ok_or_else(||schema("--capture is required to select an immutable version"))?;
-    if !super::scenario::safe_id(&capture) { return Err(schema("invalid capture ID")); }
+    let capture = CapturePaths::new(&capture.ok_or_else(||schema("--capture is required to select an immutable version"))?, &surface)?;
     if max_nodes==0 || max_nodes>100 || max_depth>64 { return Err(schema("max-nodes must be 1..100 and max-depth 0..64")); }
     let fields:Vec<String>=fields.split(',').map(str::to_owned).collect();
     if fields.is_empty() || fields.iter().any(|field|!FIELDS.contains(&field.as_str())) || fields.iter().collect::<HashSet<_>>().len()!=fields.len() {
@@ -36,8 +37,8 @@ fn options(args:Vec<String>)->Result<Options,Error> {
     }
     let target=match(test_id,role,name) {
         (None,None,None)=>None,
-        (Some(id),None,None) if id.len()<=512=>Some(Target{surface:"main".into(),selector:Selector::TestId(id)}),
-        (None,Some(role),Some(name)) if role.len()<=128 && name.len()<=4096=>Some(Target{surface:"main".into(),selector:Selector::Semantic{role,name}}),
+        (Some(id),None,None) if id.len()<=512=>Some(Target{surface,selector:Selector::TestId(id)}),
+        (None,Some(role),Some(name)) if role.len()<=128 && name.len()<=4096=>Some(Target{surface,selector:Selector::Semantic{role,name}}),
         _=>return Err(schema("use test-id or role plus name, never both; selector strings must fit native metadata limits")),
     };
     Ok(Options{root:root.ok_or_else(||schema("--run is required"))?,capture,target,fields,max_nodes,max_depth,cursor})
@@ -47,7 +48,7 @@ pub fn command(args:Vec<String>)->Result<Value,Error> {
     let options=options(args)?;
     let run=SavedRun::open(&options.root)?;
     let capture=run.capture(&options.capture)?;
-    query(&capture.tree,&capture.tree_digest,&run.root.join(CapturePaths::new(&options.capture)?.tree()),
+    query(&capture.tree,&capture.tree_digest,&run.root.join(options.capture.tree()),
         run.result["status"].as_str().expect("validated terminal status"),&options)
 }
 
@@ -66,7 +67,7 @@ fn query(tree:&TreeEvidence,tree_digest:&str,path:&Path,source_status:&str,optio
         if depths[index]<=depths[selected] { break; }
         if depths[index]-depths[selected]<=options.max_depth { selected_nodes.push(index); } else { depth_omitted+=1; }
     }
-    let query_digest=digest(&serde_json::to_vec(&json!({"capture":options.capture,"target":options.target,"fields":options.fields,"maxDepth":options.max_depth})).expect("query serializes"));
+    let query_digest=digest(&serde_json::to_vec(&json!({"capture":options.capture.id(),"target":options.target,"fields":options.fields,"maxDepth":options.max_depth})).expect("query serializes"));
     let prefix=format!("{}.{}.",tree_digest.trim_start_matches("sha256:"),query_digest.trim_start_matches("sha256:"));
     let offset=match &options.cursor {
         None=>0,
@@ -198,37 +199,40 @@ impl SavedRun {
         serde_json::from_slice(&self.verified(path,role)?).map_err(io)
     }
 
-    pub fn capture(&self,id:&str)->Result<SavedCapture,Error> {
-        let paths=CapturePaths::new(id)?;
+    pub fn capture(&self,paths:&CapturePaths)->Result<SavedCapture,Error> {
         let tree_bytes=self.verified(&paths.tree(),"capture-tree")?;
         let tree:TreeEvidence=serde_json::from_slice(&tree_bytes).map_err(io)?;
         let frame:FrameEvidence=serde_json::from_slice(&self.verified(&paths.frame(),"capture-frame")?).map_err(io)?;
         let tree_digest=digest(&tree_bytes);
-        frame.validate_capture(&tree,&paths,&tree_digest,&self.result)?;
+        frame.validate_capture(&tree,paths,&tree_digest,&self.result)?;
         Ok(SavedCapture{tree,frame,tree_digest})
     }
 
-    pub fn capture_ids(&self)->Result<Vec<String>,Error> {
-        let mut ids=Vec::new();
+    pub fn captures(&self)->Result<Vec<CapturePaths>,Error> {
+        let mut captures=Vec::new();
         for entry in &self.entries {
-            if entry.role=="capture-frame" {
-                let id=entry.path.strip_prefix("captures/").and_then(|path|path.strip_suffix(".frame.json"))
-                    .filter(|id|super::scenario::safe_id(id)).ok_or_else(||io("invalid capture frame path"))?;
-                ids.push(id.to_owned());
-                for (suffix,role) in [(".tree.json","capture-tree"),(".png","capture-pixels")] {
-                    if self.entry(&format!("captures/{id}{suffix}"))?.role!=role { return Err(io("capture is missing a matching tree or PNG")); }
+            match entry.role.as_str() {
+                "capture-frame" => {
+                    let paths = CapturePaths::from_artifact(&entry.path, ".frame.json")?;
+                    if self.entry(&paths.tree())?.role != "capture-tree" || self.entry(&paths.png())?.role != "capture-pixels" {
+                        return Err(io("capture is missing a matching tree or PNG"));
+                    }
+                    captures.push(paths);
                 }
+                "capture-tree" | "capture-pixels" => {
+                    let suffix = if entry.role == "capture-tree" { ".tree.json" } else { ".png" };
+                    let paths = CapturePaths::from_artifact(&entry.path, suffix)?;
+                    if self.entry(&paths.frame())?.role != "capture-frame" {
+                        return Err(io("orphan capture image or tree"));
+                    }
+                }
+                _ => {}
             }
         }
-        ids.sort_unstable();
-        for entry in &self.entries {
-            let suffix=match entry.role.as_str() { "capture-tree"=>".tree.json","capture-pixels"=>".png",_=>continue };
-            let id=entry.path.strip_prefix("captures/").and_then(|path|path.strip_suffix(suffix))
-                .ok_or_else(||io("invalid capture artifact path"))?;
-            if ids.binary_search_by(|known|known.as_str().cmp(id)).is_err() { return Err(io("orphan capture image or tree")); }
+        if self.result["captureCount"].as_u64()!=Some(captures.len() as u64) {
+            return Err(io("capture inventory disagrees with terminal capture count"));
         }
-        if self.result["captureCount"].as_u64()!=Some(ids.len() as u64) { return Err(io("capture inventory disagrees with terminal capture count")); }
-        Ok(ids)
+        Ok(captures)
     }
 
     /// Hash every declared artifact without retaining unrelated payloads. Consumers

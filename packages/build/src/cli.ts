@@ -20,6 +20,7 @@ Application defaults to the current directory (counter at the repository root).
   build --stylex-diagnostics  Include StyleX source metadata (Preview always includes it)
   dev --exit-after-ms N  Close the native app after N milliseconds
   dev --layer-config F  Use an upstream layer-shell configuration
+  dev --pure-shell       Start without a primary window (requires shellSurfaces)
   preview --watch       Re-run offscreen scenarios on changes, without a desktop host
   preview --profile F --fixture F --scenario F --out NEW_DIRECTORY
 
@@ -38,7 +39,13 @@ type PreviewOptions = {
 type Command =
   | { command: "smoke" }
   | { command: "build"; selector?: string; watch: boolean; stylexDiagnostics: boolean }
-  | { command: "dev"; selector?: string; exitAfterMs?: string; layerConfig?: string }
+  | {
+      command: "dev";
+      selector?: string;
+      exitAfterMs?: string;
+      layerConfig?: string;
+      pureShell: boolean;
+    }
   | ({ command: "preview"; selector?: string } & PreviewOptions);
 
 function parse(args: string[]): Command {
@@ -50,7 +57,7 @@ function parse(args: string[]): Command {
     "--app",
     ...(command === "build" ? ["--stylex-diagnostics"] : []),
     ...(command === "build" || command === "preview" ? ["--watch"] : []),
-    ...(command === "dev" ? ["--exit-after-ms", "--layer-config"] : []),
+    ...(command === "dev" ? ["--exit-after-ms", "--layer-config", "--pure-shell"] : []),
     ...(command === "preview" ? ["--profile", "--fixture", "--scenario", "--out"] : []),
   ]);
   let directory: string | undefined;
@@ -63,7 +70,7 @@ function parse(args: string[]): Command {
       continue;
     }
     if (!allowed.has(arg) || flags.has(arg)) throw new Error(`Unknown or duplicate option: ${arg}`);
-    if (arg === "--watch" || arg === "--stylex-diagnostics") {
+    if (arg === "--watch" || arg === "--stylex-diagnostics" || arg === "--pure-shell") {
       flags.set(arg, true);
       continue;
     }
@@ -95,7 +102,13 @@ function parse(args: string[]): Command {
         stylexDiagnostics: flags.has("--stylex-diagnostics"),
       };
     case "dev":
-      return { command, selector, exitAfterMs, layerConfig: value("--layer-config") };
+      return {
+        command,
+        selector,
+        exitAfterMs,
+        layerConfig: value("--layer-config"),
+        pureShell: flags.has("--pure-shell"),
+      };
     case "preview":
       return {
         command,
@@ -207,6 +220,7 @@ try {
           hostArgs.push("--exit-after-ms", selected.exitAfterMs);
         if (selected.layerConfig !== undefined)
           hostArgs.push("--layer-config", path.resolve(selected.layerConfig));
+        if (selected.pureShell) hostArgs.push("--pure-shell");
         process.exitCode = await devApplication(application.app, { ...application, hostArgs });
       } else if (selected.command === "preview") {
         process.exitCode = await preview(application, selected);

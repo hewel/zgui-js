@@ -63,11 +63,11 @@ impl ReloadGate {
         match self.stage {
             Stage::Initial if native_frame => {
                 let active = self.current()?;
-                let before = active.region.dom.text_content(active.region.root);
+                let before = active.primary_region().dom.text_content(active.primary_region().root);
                 if !before.contains("Service: Rust task completed") { return Ok(()); }
                 let outcome = self.inner.replace_session(cx, document, SessionModule::package(self.bad_eval.package()));
                 if !matches!(outcome, ReloadOutcome::Rejected(_)) { return Err(format!("evaluation failure did not reject: {outcome:?}").into()); }
-                if !Rc::ptr_eq(&active, &self.current()?) || active.region.dom.text_content(active.region.root) != before {
+                if !Rc::ptr_eq(&active, &self.current()?) || active.primary_region().dom.text_content(active.primary_region().root) != before {
                     return Err("preflight failure changed the active app".into());
                 }
                 let mut expected = None;
@@ -86,7 +86,7 @@ impl ReloadGate {
             }
             Stage::Reloaded if native_frame => {
                 let active = self.current()?;
-                if !active.region.dom.text_content(active.region.root).contains("Service: Rust task completed") { return Ok(()); }
+                if !active.primary_region().dom.text_content(active.primary_region().root).contains("Service: Rust task completed") { return Ok(()); }
                 if self.inner.native.windows()[0].nodes_with_class("promise-layout-row").len() != 1 {
                     return Err("native frame reclamation retained prior-generation layout rows".into());
                 }
@@ -123,7 +123,7 @@ impl ReloadGate {
                 // Native input is dispatched by a frame; its Retry message is
                 // consumed by a later owner wake, not by that same input frame.
                 let Some(active) = self.inner.host.session(document).cloned() else { return Ok(()); };
-                if !active.region.dom.text_content(active.region.root).contains("Service: Rust task completed") { return Ok(()); }
+                if !active.primary_region().dom.text_content(active.primary_region().root).contains("Service: Rust task completed") { return Ok(()); }
                 if self.inner.host.fallback_generation(document).is_some() || active.generation <= self.failed_generation {
                     return Err("native retry did not create a clean successful generation".into());
                 }
@@ -139,7 +139,7 @@ impl ReloadGate {
                 if active.generation != self.recovered_generation || self.inner.host.fallback_generation(document).is_some() {
                     return Err("stale delivery changed the recovered generation".into());
                 }
-                if !active.region.dom.text_content(active.region.root).contains("Service: Rust task completed") { return Err("stale delivery changed recovered text".into()); }
+                if !active.primary_region().dom.text_content(active.primary_region().root).contains("Service: Rust task completed") { return Err("stale delivery changed recovered text".into()); }
                 self.retired.borrow_mut().push(active);
                 self.completed.set(true);
                 self.stage = Stage::Finished;

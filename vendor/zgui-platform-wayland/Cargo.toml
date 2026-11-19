@@ -103,5 +103,12 @@ fontique = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c058
 
 [patch."https://github.com/zortax/zgui"]
 zgui-dom = { path = "../zgui-dom" }
+zgui-platform = { path = "../zgui-platform" }
+zgui-platform-headless = { path = "../zgui-platform-headless" }
+zgui-view-dom = { path = "../zgui-view-dom" }
+zgui-view = { path = "../zgui-view" }
+zgui-paint = { path = "../zgui-paint" }
+zgui-layout = { path = "../zgui-layout" }
+zgui-scroll = { path = "../zgui-scroll" }
 zgui-runtime = { path = "../zgui-runtime" }
 zgui-style = { path = "../zgui-style" }

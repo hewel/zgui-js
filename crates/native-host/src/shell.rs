@@ -1,10 +1,12 @@
 use crate::{Application, bounded_fs::{self, BoundedReadError}};
 use serde::Deserialize;
-use std::{error::Error, path::Path, time::{Duration, Instant}};
+use std::{error::Error, path::Path};
 use zgui::{geom::{CssPx, Edges, Size}, platform::{AppHandler, IdlePolicy, KeyboardInteractivity, Layer, LayerPlacement, PlatformCx, SurfaceAttributes, SurfaceEvent, SurfaceId, SurfaceRole, WakeReason}};
 
 type Result<T> = std::result::Result<T, Box<dyn Error>>;
-const MONITOR_PROBE: Duration = Duration::from_millis(500);
+
+mod session;
+pub(crate) use session::{Authority, ContractPolicy, LayerSpec, MAX_LAYERS, Monitor, Shell};
 
 #[derive(Clone, Copy, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -92,12 +94,12 @@ impl LayerConfig {
 pub(crate) struct LayerHost {
     inner: Application,
     config: LayerConfig,
-    probe_at: Option<Instant>,
+    waiting_for_output: bool,
 }
 
 impl LayerHost {
     pub(crate) fn new(inner: Application, config: LayerConfig) -> Self {
-        Self { inner, config, probe_at: None }
+        Self { inner, config, waiting_for_output: false }
     }
 
     fn open(&mut self, cx: &dyn PlatformCx) -> Result<()> {
@@ -105,10 +107,18 @@ impl LayerHost {
         if !self.config.monitor_present(cx) { return Err(format!("requested layer monitor {:?} is unavailable", self.config.monitor).into()); }
         let attributes = self.inner.native.primary_surface_attributes_mut().ok_or("primary layer is already open or permanently closed")?;
         self.config.configure(attributes)?;
-        self.probe_at = None;
+        self.waiting_for_output = false;
         self.inner.surfaces_available(cx);
         eprintln!("layer-created: namespace={} monitor={} requested-css={}x{} exclusive-zone={}", self.config.namespace, self.config.monitor, self.config.width, self.config.height, self.config.exclusive_zone);
         Ok(())
+    }
+
+    fn suspend_output(&mut self, cx: &dyn PlatformCx) {
+        let primary = self.inner.native.windows().first().map(|window| window.surface().id());
+        self.inner.surfaces_lost(cx);
+        if let Some(primary) = primary { cx.destroy_surface(primary); }
+        self.waiting_for_output = true;
+        eprintln!("layer-monitor-removed: {}; waiting for that output to return", self.config.monitor);
     }
 }
 
@@ -118,7 +128,7 @@ impl AppHandler for LayerHost {
     }
 
     fn surfaces_lost(&mut self, cx: &dyn PlatformCx) {
-        self.probe_at = None;
+        self.waiting_for_output = false;
         self.inner.surfaces_lost(cx);
     }
 
@@ -127,10 +137,7 @@ impl AppHandler for LayerHost {
         if owned && !cx.is_exiting() && matches!(event, SurfaceEvent::CloseRequested | SurfaceEvent::Destroyed)
             && !self.config.monitor_present(cx)
         {
-            self.inner.surfaces_lost(cx);
-            cx.destroy_surface(surface);
-            self.probe_at = Some(cx.clock().now() + MONITOR_PROBE);
-            eprintln!("layer-monitor-removed: {}; waiting for that output to return", self.config.monitor);
+            self.suspend_output(cx);
             return;
         }
         if owned && let SurfaceEvent::ScaleFactorChanged { scale_factor, size } = &event {
@@ -141,24 +148,22 @@ impl AppHandler for LayerHost {
 
     fn wake(&mut self, cx: &dyn PlatformCx, reason: WakeReason) { self.inner.wake(cx, reason); }
 
-    fn idle(&mut self, cx: &dyn PlatformCx) -> IdlePolicy {
-        let policy = self.inner.idle(cx);
-        self.probe_at.map_or(policy, |at| policy.merge(IdlePolicy::BlockUntil(at)))
-    }
+    fn idle(&mut self, cx: &dyn PlatformCx) -> IdlePolicy { self.inner.idle(cx) }
 
-    fn deadline_reached(&mut self, cx: &dyn PlatformCx) {
-        self.inner.deadline_reached(cx);
-        if !cx.is_exiting() && self.probe_at.is_some_and(|at| cx.clock().now() >= at) {
-            if self.config.monitor_present(cx) {
-                if let Err(error) = self.open(cx) { self.inner.fail(cx, error); }
-            } else {
-                self.probe_at = Some(cx.clock().now() + MONITOR_PROBE);
-            }
+    fn deadline_reached(&mut self, cx: &dyn PlatformCx) { self.inner.deadline_reached(cx); }
+
+    fn monitors_changed(&mut self, cx: &dyn PlatformCx) {
+        if cx.is_exiting() { return; }
+        if !self.config.monitor_present(cx) {
+            if !self.waiting_for_output { self.suspend_output(cx); }
+        } else if self.waiting_for_output {
+            if let Err(error) = self.open(cx) { self.inner.fail(cx, error); }
+        } else {
+            self.inner.monitors_changed(cx);
         }
     }
 
     fn shutting_down(&mut self, cx: &dyn PlatformCx) {
-        self.probe_at = None;
         self.inner.shutting_down(cx);
     }
 }

@@ -1,6 +1,7 @@
 import { createContext, createUniqueId, onCleanup, useContext } from "#solid";
 import { createElement, effect, insertNode, setProp, spread } from "../renderer/index.js";
-import { getReducedMotion, installStylesheet, removeStylesheet } from "../nodes.js";
+import { getReducedMotion } from "../nodes.js";
+import { bridgeFor } from "../host.js";
 import type { Accessor, NativeChild, NativeNode } from "../types.js";
 import { provide, slot } from "./shared.js";
 import { themes, themeTokens } from "./generated/themes.js";
@@ -80,15 +81,16 @@ export function portalThemeScope(theme: ThemeContext, child: NativeNode): Native
   const id = `zui-theme-${createUniqueId().replace(/[^a-zA-Z0-9_-]/g, "-")}`;
   const sheetName = `${ThemeSheet}-${id}`;
   const wrapper: NativeNode = createElement("box");
+  const bridge = bridgeFor(wrapper);
   setProp(wrapper, "__zguiClass", id);
   setProp(wrapper, "__zguiInvariantStyle", { display: "contents" });
   effect(
     () => [theme.light(), theme.dark(), theme.scheme()] as const,
     ([light, dark, scheme]) => {
-      installStylesheet(sheetName, `@layer zgui.tokens { ${themeSheet(`.${id}`, light, dark, scheme)} }`);
+      bridge.installStylesheet(sheetName, `@layer zgui.tokens { ${themeSheet(`.${id}`, light, dark, scheme)} }`);
     },
   );
-  onCleanup(() => removeStylesheet(sheetName));
+  onCleanup(() => bridge.removeStylesheet(sheetName));
   insertNode(wrapper, child);
   return wrapper;
 }
@@ -104,14 +106,15 @@ export function ThemeProvider(props: ThemeProviderProps = {}): NativeChild {
     dark: () => props.dark ?? {},
   };
   const wrapper: NativeNode = createElement("box");
+  const bridge = bridgeFor(wrapper);
   spread(wrapper, { __zguiClass: id, __zguiInvariantStyle: { display: "contents" } }, true);
   effect(
     () => [context.light(), context.dark(), context.scheme()] as const,
     ([light, dark, scheme]) => {
-      installStylesheet(sheetName, `@layer zgui.tokens { ${themeSheet(selector, light, dark, scheme)} }`);
+      bridge.installStylesheet(sheetName, `@layer zgui.tokens { ${themeSheet(selector, light, dark, scheme)} }`);
     },
   );
-  onCleanup(() => removeStylesheet(sheetName));
+  onCleanup(() => bridge.removeStylesheet(sheetName));
   slot(wrapper, provide(Internal, context, props));
   return wrapper;
 }

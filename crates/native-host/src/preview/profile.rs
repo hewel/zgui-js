@@ -54,6 +54,8 @@ pub(crate) struct Profile {
     pub schema_version: u32,
     pub id: String,
     pub surface: Surface,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub pure_shell: bool,
     pub theme: String,
     #[serde(default)]
     pub reduced_motion: bool,
@@ -78,6 +80,8 @@ pub(crate) struct Surface {
     pub opaque: bool,
     pub background: String,
 }
+
+fn is_false(value: &bool) -> bool { !value }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(tag = "mode", rename_all = "lowercase", deny_unknown_fields)]
@@ -291,18 +295,22 @@ fn validate(profile: &Profile) -> Result<(u32, u32)> {
 pub(crate) fn dimensions(surface: &Surface) -> Result<(u32, u32)> {
     in_range(u64::from(surface.width), 1, 16_384, "surface.width")?;
     in_range(u64::from(surface.height), 1, 16_384, "surface.height")?;
-    if !surface.scale.is_finite() || surface.scale <= 0.0 || surface.scale > 8.0 {
+    physical_dimensions(f64::from(surface.width), f64::from(surface.height), surface.scale)
+}
+
+pub(super) fn physical_dimensions(width: f64, height: f64, scale: f64) -> Result<(u32, u32)> {
+    if !scale.is_finite() || scale <= 0.0 || scale > 8.0 {
         return Err(invalid("surface.scale must be finite and in (0, 8]"));
     }
-    let physical = |logical: u32| -> Result<u32> {
-        let rounded = (f64::from(logical) * surface.scale + 0.5).floor();
+    let physical = |logical: f64| -> Result<u32> {
+        let rounded = (logical * scale + 0.5).floor();
         if !(1.0..=f64::from(MAX_PHYSICAL_EDGE)).contains(&rounded) {
             return Err(invalid("rounded physical extent must be in 1..=16384 pixels"));
         }
         Ok(rounded as u32)
     };
-    let width = physical(surface.width)?;
-    let height = physical(surface.height)?;
+    let width = physical(width)?;
+    let height = physical(height)?;
     if u64::from(width) * u64::from(height) > MAX_PHYSICAL_PIXELS {
         return Err(invalid("physical surface exceeds 16777216 pixels (64 MiB RGBA8)"));
     }

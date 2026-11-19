@@ -5,34 +5,39 @@
 
 use wayland_protocols::xdg::shell::client::xdg_toplevel::ResizeEdge;
 use zgui_geom::{Css, CssPx, Device, DevicePx, Size};
-use zgui_platform::Unsupported;
+use zgui_platform::{InputRegion, LayerPlacement, PlatformError, Unsupported};
 
 use crate::surface::WaylandSurface;
+use crate::surface::role::layer;
 
 /// Asks for a different content extent, and reports what it will be drawn at.
 ///
 /// A Wayland client is not granted a size; it draws at one and the compositor accepts it. So this
 /// takes effect rather than being requested, and the frame that follows is the one that shows it.
 /// A compositor that disagrees says so with the next configure, which wins.
+///
+/// Returns `None` unless both dimensions are positive, finite, and fit the signed extent range.
 pub fn request_size(
     surface: &WaylandSurface,
     size: Size<CssPx, Css>,
 ) -> Option<Size<DevicePx, Device>> {
-    if size.width.0 <= 0.0 || size.height.0 <= 0.0 {
+    // Buffer and viewport sizes use signed extents, even for layers whose set_size takes u32.
+    if [size.width.0, size.height.0]
+        .into_iter()
+        .any(|axis| !axis.is_finite() || axis <= 0.0 || f64::from(axis) > f64::from(i32::MAX))
+    {
         return None;
     }
     let scale = {
         let mut shared = surface.shared();
+        if let Some(role) = surface.role().layer() {
+            role.set_size(size.width.0.round().max(1.0) as u32, size.height.0.round().max(1.0) as u32);
+            shared.wanted = size;
+        }
         let scale = shared.scale;
         shared.resized(size, scale);
         scale
     };
-    if let Some(layer) = surface.role().layer() {
-        layer.set_size(
-            size.width.0.round().max(1.0) as u32,
-            size.height.0.round().max(1.0) as u32,
-        );
-    }
     // A pop-up is placed rather than sized: growing one means asking the compositor to work out
     // where a rectangle of the new extent fits, which is the same question it answered when the
     // pop-up opened. Moving it is what keeps a menu that grew an item from flickering shut and
@@ -93,43 +98,74 @@ pub fn set_resizable(surface: &WaylandSurface, resizable: bool) {
 /// The pacer holds the redraw until that configure arrives.
 pub fn set_visible(surface: &WaylandSurface, visible: bool) {
     if visible {
-        let unmapped = std::mem::take(&mut surface.shared().unmapped);
-        if unmapped {
+        let mut shared = surface.shared();
+        if std::mem::take(&mut shared.unmapped) {
+            if let (Some(role), Some(placement)) = (surface.role().layer(), &shared.layer) {
+                let (width, height) = layer::extent(shared.wanted, placement)
+                    .expect("retained layer extent was validated");
+                if layer::version(role) >= 2 {
+                    role.set_layer(layer::layer(placement.layer));
+                }
+                layer::apply(role, placement);
+                role.set_size(width, height);
+            }
             surface.wl_surface().commit();
         }
         zgui_platform::Surface::request_redraw(surface);
         return;
     }
+    let mut shared = surface.shared();
     let wl = surface.wl_surface();
     wl.attach(None, 0, 0);
     wl.commit();
-    let mut shared = surface.shared();
     shared.visibility.configured = false;
     shared.unmapped = true;
     shared.cancel_callbacks();
 }
 
-/// Makes the surface transparent to the pointer, or takes it back.
-///
-/// An empty input region is the protocol's way of saying "nothing here is mine". It is committed
-/// at once rather than with the next frame: a region that waits for a frame would let through the
-/// very click it was set for.
-pub fn set_pointer_passthrough(
-    surface: &WaylandSurface,
-    passthrough: bool,
-) -> Result<(), Unsupported> {
+/// Commits pointer input now rather than waiting for a frame.
+pub(crate) fn set_input_region(surface: &WaylandSurface, input: &InputRegion) {
+    let _transaction = surface.shared();
     let wl = surface.wl_surface();
-    if passthrough {
-        // A region with nothing added to it is empty, and an empty input region is the whole
-        // request. `None` means the opposite — the region is infinite — so the two are not
-        // interchangeable and the object has to be made.
-        let region = surface.empty_region();
-        wl.set_input_region(Some(&region));
-        region.destroy();
-    } else {
-        wl.set_input_region(None);
+    match input {
+        InputRegion::Full => wl.set_input_region(None),
+        InputRegion::Empty | InputRegion::Rects(_) => {
+            let region = surface.create_region();
+            if let InputRegion::Rects(rects) = input {
+                for rect in rects {
+                    if rect.width > 0 && rect.height > 0 {
+                        region.add(rect.x, rect.y, rect.width, rect.height);
+                    }
+                }
+            }
+            wl.set_input_region(Some(&region));
+            // The compositor copies the region when the request is processed.
+            region.destroy();
+        }
     }
     wl.commit();
+    surface.ping.ping();
+}
+
+/// Applies a complete placement update to the existing layer role and commits it.
+pub(crate) fn reconfigure_layer(
+    surface: &WaylandSurface,
+    placement: &LayerPlacement,
+    size: Size<CssPx, Css>,
+) -> Result<(), PlatformError> {
+    let Some(role) = surface.role().layer() else { return Err(Unsupported.into()) };
+    let mut shared = surface.shared();
+    let Some(current) = &shared.layer else { return Err(Unsupported.into()) };
+    if current == placement && shared.wanted == size {
+        return Ok(());
+    }
+    let previous = layer::extent(shared.wanted, current)?;
+    let next = layer::extent(size, placement)?;
+    layer::reconfigure(role, current, previous, placement, next)?;
+    shared.wanted = size;
+    shared.layer = Some(placement.clone());
+    surface.wl_surface().commit();
+    surface.ping.ping();
     Ok(())
 }
 

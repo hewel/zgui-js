@@ -103,10 +103,21 @@ impl Timers {
         repeat: Repeat,
         callback: Rc<dyn Fn()>,
     ) -> TimerId {
+        self.schedule_at(document, now + after, after, repeat, callback)
+    }
+
+    pub(crate) fn schedule_at(
+        &mut self,
+        document: DocumentId,
+        deadline: Instant,
+        after: Duration,
+        repeat: Repeat,
+        callback: Rc<dyn Fn()>,
+    ) -> TimerId {
         self.next += 1;
         let id = TimerId::new(self.next);
         self.entries.push(Reverse(Entry {
-            deadline: now + after,
+            deadline,
             id,
             document,
             repeat,

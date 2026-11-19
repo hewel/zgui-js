@@ -91,7 +91,7 @@ This slice is useful before images, multiple surfaces, animation timelines, or p
 
 ### 1.4 Scope boundaries
 
-The first deterministic release targets one logical surface named `main`, with in-surface content and overlays. It uses locally built application bundles and packaged resources.
+Preview defaults to one logical surface named `main`. A shell-capable package can add named Shell surfaces or start a pure-shell Session without `main`. All surfaces still use one locally built application bundle, packaged resources, and one Session generation.
 
 It does not establish compositor protocol correctness, operating-system service integration, arbitrary browser compatibility, or hostile-code isolation. These boundaries follow the existing host architecture. The one-shot worker process is useful for reliable cancellation and failure reporting; it is not a claim of OS sandboxing.
 
@@ -690,7 +690,8 @@ The 20 ms step is an explicit scenario choice. If the selected backend/profile r
 | `text.commit` | `surface`, `text` | Commit text through the supported native text-input path. |
 | `service.emit` | `channel`, `value` | Apply a typed fixture update and enqueue its notification. |
 | `assert` | Target/check or service-call check | Evaluate a defined predicate; never arbitrary JS. |
-| `capture` | `captureId`; optional `requiredFrameTimeUs` | Save coherent pixels, tree, and metadata. |
+| `capture` | `captureId`; optional `surface` (defaults to `main`) and `requiredFrameTimeUs` | Save coherent pixels, tree, and metadata for the selected surface. |
+| `monitors.set` | `monitors` | Replace the synthetic output inventory without advancing virtual time. |
 
 For explicit position, use `{"x": 120, "y": 40}` in logical surface pixels. The target form and position form are mutually exclusive. Supported pointer buttons are `primary`, `secondary`, and `middle`; reject other values until explicitly implemented. `pointer.down` and `pointer.up` require a button; `pointer.move` and `pointer.cancel` reject one.
 
@@ -857,6 +858,10 @@ Each named capture writes:
 | `captures/<id>.tree.json` | Coherent structured native/semantic projection |
 | `captures/<id>.rgba` | Optional raw diagnostic bytes; format declared in frame metadata |
 
+These are the unchanged paths for `main`. Named Shell surfaces write the same
+files under `captures/surfaces/<surface>/`; a `captureId` may be reused on another
+surface. Baseline review and comparison keys identify the `(captureId, surface)` pair.
+
 Do not bake target rectangles, cursor hints, or diff highlights into the baseline PNG. Optional annotated images use a distinct suffix and refer to the unmodified source capture.
 
 A transparent checkerboard view is also a derived artifact. It cannot replace the raw transparent output or establish real compositor transparency.
@@ -928,7 +933,9 @@ Do not call application getters or arbitrary `toString` methods while inspecting
 ./target/debug/native-host preview inspect --run artifacts/preview/counter-001 --capture after-increment --test-id count-label --fields text,state,boundsLogical
 ~~~
 
-This command reads saved artifacts and does not start QuickJS or a GPU. Support a field allowlist, maximum node count, maximum depth, and a cursor for a stable saved snapshot.
+This command reads saved artifacts and does not start QuickJS or a GPU. Add
+`--surface <name>` to inspect a named capture; the default is `main`. Support a
+field allowlist, maximum node count, maximum depth, and a cursor for a stable saved snapshot.
 
 Default responses should contain the selected node and a small amount of parent/child context. Return truncation counts and the full artifact path. Do not print a large tree merely to locate one button.
 

@@ -142,6 +142,25 @@ in place. Do not run the gate concurrently with another clipboard or keyboard-in
 scenario. The real compositor/IME run is recorded in
 [preview P6 verification](preview-verification.md#p6--real-waylandniri-desktop-verification).
 
+## Pure-shell startup
+
+Run `bun run dev --app <app> --pure-shell` (or pass `--pure-shell --bundle <dist>`
+to `native-host`). The package must declare `zgui.capabilities.shellSurfaces`
+and export a synchronous `mount()` returning a disposer. The Session starts
+without a primary window and can remain alive with zero Shell surfaces.
+Without `--pure-shell`, `mount(root)` remains the default.
+
+`useMonitors()` follows event-driven output inventory; a `LayerSurface` tied
+to a disconnected output is unmounted until that output returns or its owner
+removes it. Multiple Shell surfaces share the same Session. A live change
+to `anchor`, dimensions, layer, margins, exclusive zone, keyboard policy,
+or Input region does not replace the Mount region.
+Detached nodes stop contributing their rectangles to the Input region. An
+exclusive zone of `-1` ignores other surfaces' reservations; `0` reserves no
+space. A reload is accepted only after the candidate's requested Shell
+surfaces have opened and mounted. Failed candidates close their surfaces
+without replacing the working Session or its last successful build.
+
 ## Upstream layer-shell configuration
 
 The host's generic `--layer-config PATH` wrapper selects a named output and
@@ -150,6 +169,7 @@ zone to upstream zgui. Scaling and compositor protocol support remain upstream
 responsibilities; no window-manager abstraction or compositor-specific package
 is provided. The backend finishes initial output descriptions before invoking
 `surfaces_available`.
+The package must declare `shellSurfaces` both at startup and on reload.
 
 Layer-parent out-of-surface popups are unsupported by the pinned backend; a
 normal-window demo is not proof of that capability. The former niri panel and

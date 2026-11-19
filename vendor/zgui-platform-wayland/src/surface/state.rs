@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 
 use smithay_client_toolkit::reexports::client::protocol::wl_output::WlOutput;
 use zgui_geom::{Css, CssPx, Device, DevicePx, Size};
-use zgui_platform::{PresentationTiming, SurfaceEvent};
+use zgui_platform::{LayerPlacement, PresentationTiming, SurfaceEvent};
 
 use crate::frame::{Ahead, Pacer, Timing, Visibility, Watchdog};
 
@@ -47,6 +47,10 @@ pub(crate) struct Shared {
     pub(crate) size: Size<DevicePx, Device>,
     /// The extent the compositor configured, in logical pixels.
     pub(crate) logical: Size<CssPx, Css>,
+    /// The extent the application asked for, which a configure may or may not honour.
+    pub(crate) wanted: Size<CssPx, Css>,
+    /// The last requested layer placement, retained across live updates and unmapping.
+    pub(crate) layer: Option<LayerPlacement>,
     /// How many physical pixels there are to a logical one.
     pub(crate) scale: f64,
     /// Whether a redraw is owed, and what the compositor owes back.
@@ -123,6 +127,8 @@ impl Shared {
         Self {
             size: Size::new(DevicePx(0.0), DevicePx(0.0)),
             logical: Size::new(CssPx(0.0), CssPx(0.0)),
+            wanted: Size::new(CssPx(0.0), CssPx(0.0)),
+            layer: None,
             scale: 1.0,
             pacer: Pacer::new(),
             ahead: Ahead::new(zgui_platform::ComposeAhead::Auto),

@@ -45,7 +45,7 @@ impl ledger::StepDriver for Scripted {
 }
 
 fn settle_step(id:&str)->Step { Step::Settle{id:id.to_owned(),timeout_ms:None} }
-fn capture_step(id:&str)->Step { Step::Capture{id:id.to_owned(),capture_id:id.to_owned(),required_frame_time_us:None,allowed_pending_assets:Vec::new()} }
+fn capture_step(id:&str)->Step { Step::Capture{id:id.to_owned(),capture_id:id.to_owned(),surface:"main".into(),required_frame_time_us:None,allowed_pending_assets:Vec::new()} }
 fn assert_step(id:&str)->Step { Step::Assert{id:id.to_owned(),
     target:scenario::Target{surface:"main".into(),selector:scenario::Selector::TestId("x".into())},
     check:scenario::Check::Exists(true)} }

@@ -24,7 +24,7 @@ impl Native {
         let root = dom.create_element(ElementName::new("column"));
         dom.insert(backend.root_node(), root, None);
         let host = Rc::new(StubHost::default());
-        let region = MountRegion { document: backend.document_id(), root, dom, host: HostHandle::from_rc(host.clone()), fonts: zgui::app::Fonts::shipped_only(), root_anchor: Rc::new(Cell::new(root)) };
+        let region = MountRegion { document: backend.document_id(), root, dom, host: HostHandle::from_rc(host.clone()), fonts: Fonts::shipped_only(), root_anchor: Rc::new(Cell::new(root)) };
         let (sender, wakes) = mpsc::channel();
         Self { backend, host, region, waker: Arc::new(ChannelWaker(sender)), wakes, executor: host_services::Executor::new(2, 64).unwrap() }
     }
@@ -510,7 +510,7 @@ fn faulted_native_tree_still_runs_js_cleanup_once() {
     }).unwrap();
     session.mount().unwrap();
     assert!(session.invoke("advance").is_err());
-    assert!(session.bridge.is_disposed());
+    assert!(session.bridge().is_disposed());
     session.retire();
     session.retire();
     assert_eq!(cleanups.get(), 1);
@@ -530,11 +530,11 @@ fn completion_retained_across_reload_cannot_settle_successor_request() {
     let current = native.completion(&second);
     assert_eq!(late.request_id, current.request_id);
     assert_ne!(late.generation, current.generation);
-    second.bridge.run_turn(second.engine.borrow_mut().as_mut().unwrap().turn(), |_, js| js.with_context(|ctx| second.work.settle(&ctx, late))).unwrap();
+    second.bridge().run_turn(second.engine.borrow_mut().as_mut().unwrap().turn(), |_, js| js.with_context(|ctx| second.work.settle(&ctx, late))).unwrap();
     second.checkpoint().unwrap();
     assert_eq!(native.text(), "pending");
     assert_eq!(second.counts().requests, 1);
-    second.bridge.run_turn(second.engine.borrow_mut().as_mut().unwrap().turn(), |_, js| js.with_context(|ctx| second.work.settle(&ctx, current))).unwrap();
+    second.bridge().run_turn(second.engine.borrow_mut().as_mut().unwrap().turn(), |_, js| js.with_context(|ctx| second.work.settle(&ctx, current))).unwrap();
     second.checkpoint().unwrap();
     assert_eq!(native.text(), "completed");
     assert_eq!(second.counts().requests, 0);
@@ -781,12 +781,12 @@ fn geometry_delivers_immediately_while_the_engine_is_free() {
     assert_eq!(native.text(), "waiting");
     assert_eq!(session.counts().callbacks, 1);
     while native.wakes.try_recv().is_ok() {}
-    session.bridge.run_turn(session.engine.borrow_mut().as_mut().unwrap().turn(), |_, js| {
+    session.bridge().run_turn(session.engine.borrow_mut().as_mut().unwrap().turn(), |_, js| {
         js.evaluate_script("globalThis.lateCancel = __zgui.observeGeometry(mountRoot, 'contentSize', () => {}); 'registered'")
     }).unwrap();
     assert!(native.wakes.try_recv().is_ok(), "registration did not wake the owner");
     assert!(native.wakes.try_recv().is_err(), "registration produced more than one wake");
-    session.bridge.run_turn(session.engine.borrow_mut().as_mut().unwrap().turn(), |_, js| {
+    session.bridge().run_turn(session.engine.borrow_mut().as_mut().unwrap().turn(), |_, js| {
         js.evaluate_script("lateCancel(); 'cancelled'")
     }).unwrap();
     let box_node = native.backend.children(native.region.root)[1];
@@ -798,6 +798,38 @@ fn geometry_delivers_immediately_while_the_engine_is_free() {
     session.retire();
     assert_eq!(session.counts(), ResourceCounts::default());
     assert_eq!(native.backend.observation_count(), 0);
+}
+
+#[test]
+fn every_shell_mutation_requires_capability_even_when_caught() {
+    let operations = [
+        "__zguiShell.openLayer('bar', {}, () => () => {})",
+        "__zguiShell.updateLayer(1, {})",
+        "__zguiShell.closeLayer(1)",
+        "__zguiShell.setInputRegion(1, 'empty')",
+    ];
+    for operation in operations {
+        let fixture = Fixture::new(&format!(r#"
+            export const hostApiVersion = 1;
+            export function mount() {{
+                try {{ {operation}; }} catch (error) {{
+                    if (error.code !== 'E_CAPABILITY') throw error;
+                    return () => {{}};
+                }}
+                throw Error('unauthorized mutation was admitted');
+            }}
+        "#), "");
+        let native = Native::new();
+        let live = native.prepare(fixture.package(), 1).expect("prepare zero-capability live package");
+        live.mount().expect("live denial is a typed, catchable exception");
+        assert_eq!(live.retire().counts, ResourceCounts::default(), "live denial leaked resources: {operation}");
+        let deadline = Rc::new(Cell::new(Instant::now() + Duration::from_secs(5)));
+        let preview = native.preview(fixture.package(), RuntimeLimits::default(), deadline)
+            .expect("prepare zero-capability preview package");
+        let error = preview.mount().expect_err("preview denial must survive being caught");
+        assert!(matches!(error, SessionError::Contract(ContractFailure { code: "E_CAPABILITY", .. })), "wrong denial for {operation}: {error}");
+        assert_eq!(preview.retire().counts, ResourceCounts::default(), "preview denial leaked resources: {operation}");
+    }
 }
 
 #[test]
@@ -848,7 +880,7 @@ fn geometry_callback_failure_faults_and_retires_every_observer() {
     session.mount().unwrap();
     let box_node = native.backend.children(native.region.root)[0];
     native.backend.deliver(box_node, ObservedValue::BorderSize(Size::new(DevicePx(35.0), DevicePx(35.0))));
-    assert!(session.bridge.is_disposed());
+    assert!(session.bridge().is_disposed());
     assert_eq!(native.backend.observation_count(), 0);
     let error = session.checkpoint().unwrap_err();
     let SessionError::Diagnostic(diagnostic) = error else { panic!("geometry throw must stay a diagnostic") };

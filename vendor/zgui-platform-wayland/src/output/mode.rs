@@ -3,6 +3,7 @@
 use std::time::Duration;
 
 use smithay_client_toolkit::output::OutputInfo;
+use wayland_client::protocol::wl_output::Transform;
 use zgui_geom::{DevicePx, Point, Size};
 use zgui_platform::MonitorInfo;
 
@@ -12,13 +13,19 @@ use zgui_platform::MonitorInfo;
 /// compositor placed it in the desktop's coordinates, which the protocol reports in logical units;
 /// it is scaled here so that every field of the answer is in the same space.
 pub fn describe(info: &OutputInfo) -> MonitorInfo {
-    let (width, height) = info
+    let (mut width, mut height) = info
         .modes
         .iter()
         .find(|mode| mode.current)
         .map_or((0, 0), |mode| mode.dimensions);
+    if matches!(
+        info.transform,
+        Transform::_90 | Transform::_270 | Transform::Flipped90 | Transform::Flipped270
+    ) {
+        std::mem::swap(&mut width, &mut height);
+    }
     let scale = f64::from(info.scale_factor.max(1));
-    let (x, y) = info.logical_position.unwrap_or((0, 0));
+    let (x, y) = info.logical_position.unwrap_or(info.location);
     let monitor = MonitorInfo::new(
         Point::new(
             DevicePx((f64::from(x) * scale) as f32),

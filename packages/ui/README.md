@@ -16,6 +16,59 @@ Solid runtime and resolves to `solid-js` when bundled. This intentionally avoids
 Solid's DOM JSX declarations. Native bridge types remain internal; application
 typechecking does not acquire browser or Node globals.
 
+## Wayland shell surfaces
+
+Declare the `shellSurfaces` capability in the application manifest. A pure shell
+exports `mount()` without a primary root and returns the disposer from `renderShell`.
+An application with a primary window can also use `LayerSurface` inside `renderApp`.
+Each named shell surface has its own mount region, but its children inherit the
+surrounding Solid context and can share signals with other surfaces.
+Names must be unique within the session, start with a lowercase ASCII letter or
+digit, use at most 128 lowercase ASCII letters, digits, dots, hyphens or
+underscores, and must not be `main`.
+
+```tsx
+import { For, LayerSurface, renderShell, useMonitors } from "@hewel/zgui";
+
+export const hostApiVersion = 1;
+export function mount() {
+  return renderShell(() => {
+    const monitors = useMonitors();
+    return (
+      <For each={monitors()} keyed={monitor => monitor.id}>
+        {monitor => (
+          <LayerSurface name={`bar-${monitor().id.toLowerCase()}`} output={monitor().id}
+            anchor={["top", "left", "right"]} height={32} exclusiveZone={32}>
+            <text>{monitor().name}</text>
+          </LayerSurface>
+        )}
+      </For>
+    );
+  });
+}
+```
+
+`useMonitors()` returns an accessor to a read-only output snapshot that updates
+on hotplug and geometry changes. Use `id` to target an output and key a list;
+`name` is for display. Output geometry is in physical pixels, scale is the ratio
+of physical to logical pixels, and refresh is in millihertz or `null`.
+
+Omit `output` to let the compositor choose. The surface attaches asynchronously;
+a change of name or output closes that generation and mounts a fresh one.
+Disconnecting a named output detaches its mount region; a still-owned request
+mounts fresh children if the output returns.
+Other placement changes reconfigure the existing surface. The defaults are
+the `top` layer, no anchors, zero margins and exclusive zone, and `none` keyboard
+interactivity. An omitted width or height stretches (zero) if both opposing
+edges are anchored; otherwise it defaults to one logical pixel.
+
+`inputRegion` defaults to `"full"`. Use `"empty"` for pointer passthrough,
+pass surface-local logical rectangles, or pass native nodes from the surface
+to track their laid-out border boxes. An empty array accepts no input.
+A node with no laid-out box contributes no input. Removing a bound node clears
+its input rectangle during the same bridge turn, even if your app still holds
+the ref. A detached handle cannot be used to register a new binding in a later turn.
+
 ## Node queries
 
 `getWindowRect(node)` reads the last completed native frame and returns a copied

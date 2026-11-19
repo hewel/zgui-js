@@ -19,6 +19,32 @@ export interface NativeWindowRect {
   readonly height: number;
 }
 export interface NativeViewport extends NativeWindowRect { readonly scale: number; }
+
+/** Physical output geometry. Use `id`, not the display `name`, to target the output. */
+export interface Monitor extends NativeViewport {
+  readonly id: string;
+  readonly name: string;
+  readonly refreshRateMilliHz: number | null;
+}
+export type LayerAnchor = "top" | "right" | "bottom" | "left";
+export interface LayerSurfacePlacement {
+  readonly output?: string;
+  readonly layer?: "background" | "bottom" | "top" | "overlay";
+  readonly anchor?: readonly LayerAnchor[];
+  readonly width?: number;
+  readonly height?: number;
+  readonly margin?: Readonly<Partial<Record<LayerAnchor, number>>>;
+  /** -1 ignores other exclusive zones; 0 reserves nothing; a positive value reserves that distance. */
+  readonly exclusiveZone?: number;
+  readonly keyboard?: "none" | "on-demand" | "exclusive";
+}
+/** Rectangles use surface-local logical coordinates. Nodes must belong to this surface. */
+export type LayerInputRegion = "full" | "empty" | readonly NativeWindowRect[] | readonly NativeNode[];
+export interface LayerSurfaceProps extends LayerSurfacePlacement {
+  readonly name: string;
+  readonly inputRegion?: LayerInputRegion;
+  readonly children?: NativeChild;
+}
 export interface NativePoint { readonly x: number; readonly y: number; }
 export interface NativeSize { readonly width: number; readonly height: number; }
 export interface NativeScrollPosition {

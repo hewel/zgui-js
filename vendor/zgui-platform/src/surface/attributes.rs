@@ -1,0 +1,217 @@
+//! What a surface is asked for before it exists.
+
+use zgui_geom::{Css, CssPx, Point, Size};
+use zgui_vocab::SharedString;
+
+use crate::surface::chrome::{Decorations, FullscreenMode, WindowLevel};
+use crate::surface::icon::WindowIcon;
+use crate::surface::role::{LayerPlacement, PopupPlacement, SurfaceRole};
+use crate::surface::timing::ComposeAhead;
+use crate::theme::ColorScheme;
+
+/// What a surface should be when it is created.
+///
+/// Sizes are in CSS pixels because that is the space a layout is written in; the backend applies
+/// the output's scale itself.
+///
+/// A surface is created **hidden**. That is not a default but a rule: an accessibility adapter has
+/// to be attached before the surface is first shown, and there is no second chance. The sequence a
+/// backend must follow is create hidden, attach, draw one frame, then show — which is why there is
+/// no "visible" attribute here at all and why [`Surface::set_visible`](crate::Surface::set_visible)
+/// is the only way a surface becomes visible.
+#[derive(Clone, Debug, PartialEq, Default)]
+#[non_exhaustive]
+pub struct SurfaceAttributes {
+    /// The window title.
+    pub title: SharedString,
+    /// What this surface is to the desktop.
+    ///
+    /// A role a backend cannot make is refused rather than downgraded, so a component asks
+    /// [`PlatformCapabilities`](crate::PlatformCapabilities) first. Everything below this field
+    /// describes a window and is ignored by the roles that are not one.
+    pub role: SurfaceRole,
+    /// The size the content should start at.
+    pub size: Option<Size<CssPx, Css>>,
+    /// The smallest the user may make it.
+    pub min_size: Option<Size<CssPx, Css>>,
+    /// The largest the user may make it.
+    pub max_size: Option<Size<CssPx, Css>>,
+    /// Whether the user may resize it at all.
+    pub resizable: bool,
+    /// What frame the platform should draw.
+    pub decorations: Decorations,
+    /// Whether the surface may be partly transparent.
+    pub transparent: bool,
+    /// The identifier the desktop groups this application's windows under.
+    ///
+    /// Getting this wrong is what makes an application show the wrong icon in a task bar, so it is
+    /// a first-class attribute rather than a platform afterthought.
+    pub application_id: Option<SharedString>,
+    /// Where the surface should open, measured from the desktop's origin.
+    ///
+    /// Ignored where a desktop places windows itself, which is every Wayland compositor.
+    pub position: Option<Point<CssPx, Css>>,
+    /// Whether it should open maximised.
+    pub maximized: bool,
+    /// Whether it should open full screen, and how.
+    pub fullscreen: Option<FullscreenMode>,
+    /// Where it should sit in the stacking order.
+    pub level: WindowLevel,
+    /// The picture the desktop should show for it, where the desktop takes one from the window.
+    pub icon: Option<WindowIcon>,
+    /// A light or dark preference for this surface alone; absent follows the desktop.
+    pub theme: Option<ColorScheme>,
+    /// Where the desktop's window buttons sit over the content.
+    ///
+    /// Read only with [`Decorations::NoTitleBar`] on a desktop that draws its buttons over the
+    /// content, which is macOS. Absent leaves them where the desktop puts them.
+    pub title_buttons: Option<TitleButtons>,
+    /// Whether the surface composes its next frame before the platform is ready to show it.
+    pub compose_ahead: ComposeAhead,
+}
+
+/// Where the window buttons sit over a window that has no title bar.
+///
+/// The buttons are centred vertically in a band along the top edge, and the first one starts a
+/// distance in from the left edge. An application draws its own top bar in the same band.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TitleButtons {
+    /// The distance from the left edge to the first button.
+    pub left: CssPx,
+    /// The height of the band along the top edge.
+    pub band: CssPx,
+}
+
+impl TitleButtons {
+    /// Buttons `left` in from the left edge, centred in a band `band` tall.
+    pub const fn new(left: f32, band: f32) -> Self {
+        Self {
+            left: CssPx(left),
+            band: CssPx(band),
+        }
+    }
+}
+
+impl SurfaceAttributes {
+    /// A resizable, decorated, opaque surface with the given title.
+    pub fn new(title: impl Into<SharedString>) -> Self {
+        Self {
+            title: title.into(),
+            role: SurfaceRole::Toplevel,
+            size: None,
+            min_size: None,
+            max_size: None,
+            resizable: true,
+            decorations: Decorations::Full,
+            transparent: false,
+            application_id: None,
+            position: None,
+            maximized: false,
+            fullscreen: None,
+            level: WindowLevel::Normal,
+            icon: None,
+            theme: None,
+            title_buttons: None,
+            compose_ahead: ComposeAhead::Auto,
+        }
+    }
+
+    /// The same attributes with a starting size.
+    pub fn with_size(mut self, size: Size<CssPx, Css>) -> Self {
+        self.size = Some(size);
+        self
+    }
+
+    /// The same attributes with an application identifier.
+    pub fn with_application_id(mut self, id: impl Into<SharedString>) -> Self {
+        self.application_id = Some(id.into());
+        self
+    }
+
+    /// The same attributes as something other than an ordinary window.
+    pub fn with_role(mut self, role: SurfaceRole) -> Self {
+        self.role = role;
+        self
+    }
+
+    /// A pop-up, placed as `placement` says.
+    ///
+    /// Undecorated and not resizable, because neither is a thing a desktop offers on a pop-up: a
+    /// menu with a title bar and a drag handle is not a menu. The extent is the application's,
+    /// because a pop-up is sized by what is in it.
+    pub fn popup(placement: PopupPlacement) -> Self {
+        Self {
+            role: SurfaceRole::Popup(placement),
+            resizable: false,
+            decorations: Decorations::None,
+            ..Self::new("")
+        }
+    }
+
+    /// A part of the desktop shell, placed as `placement` says.
+    ///
+    /// Undecorated for the same reason: a panel is furniture rather than a window, and the desktop
+    /// draws no frame around one.
+    pub fn layer(placement: LayerPlacement) -> Self {
+        Self {
+            role: SurfaceRole::Layer(placement),
+            resizable: false,
+            decorations: Decorations::None,
+            ..Self::new("")
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Decorations, SurfaceAttributes};
+    use zgui_geom::{CssPx, Size};
+
+    #[test]
+    fn a_new_surface_is_an_ordinary_window_that_is_resizable_and_decorated() {
+        let attributes = SurfaceAttributes::new("zgui");
+        assert_eq!(attributes.role, super::SurfaceRole::Toplevel);
+        assert!(attributes.resizable);
+        assert_eq!(attributes.decorations, Decorations::Full);
+        assert!(!attributes.transparent);
+        assert_eq!(attributes.title.as_str(), "zgui");
+    }
+
+    #[test]
+    fn the_builder_sets_only_what_it_names() {
+        let attributes =
+            SurfaceAttributes::new("zgui").with_size(Size::new(CssPx(800.0), CssPx(600.0)));
+        assert_eq!(attributes.size, Some(Size::new(CssPx(800.0), CssPx(600.0))));
+        assert_eq!(attributes.min_size, None);
+        assert_eq!(attributes.application_id, None);
+    }
+
+    #[test]
+    fn a_pop_up_and_a_layer_are_undecorated_and_not_resizable() {
+        // Both are furniture rather than windows: a menu with a title bar is not a menu, and a
+        // panel the user can drag the edge of is not a panel.
+        use super::{LayerPlacement, PopupPlacement, SurfaceRole};
+        use crate::surface::id::SurfaceId;
+        use zgui_geom::{Point, Rect};
+
+        let rect = Rect::new(
+            Point::new(CssPx(0.0), CssPx(0.0)),
+            Size::new(CssPx(10.0), CssPx(10.0)),
+        );
+        let popup = SurfaceAttributes::popup(PopupPlacement::below(SurfaceId::new(1), rect));
+        assert!(matches!(popup.role, SurfaceRole::Popup(_)));
+        assert!(!popup.resizable);
+        assert_eq!(popup.decorations, Decorations::None);
+
+        let layer = SurfaceAttributes::layer(LayerPlacement::default());
+        assert!(matches!(layer.role, SurfaceRole::Layer(_)));
+        assert_eq!(layer.decorations, Decorations::None);
+    }
+
+    #[test]
+    fn the_default_attributes_are_the_empty_ones() {
+        let default = SurfaceAttributes::default();
+        assert!(!default.resizable);
+        assert_eq!(default.size, None);
+    }
+}

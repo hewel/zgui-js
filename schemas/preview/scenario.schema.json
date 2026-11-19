@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://zgui-js.local/schemas/preview/scenario.schema.json",
   "title": "Preview scenario v1 (native interaction and deterministic time)",
-  "description": "Closed input, at most 1 MiB. Implements native main-surface input/assertions, bounded settle/capture, explicit virtual clock.advance, typed fixture service.emit/call assertions and resize/scale/recreate. Step IDs and capture IDs are unique in their namespaces. Capability declarations are unioned with inferred requirements. Virtual profiles, clock.advance and requiredFrameTimeUs require virtual-time; wall profiles reject virtual-time. Known future operations fail with E_UNSUPPORTED_CAPABILITY; malformed supported payloads fail with E_SCHEMA before application mount.",
+  "description": "Closed input, at most 1 MiB. Implements native named-surface input and assertions, bounded settle and capture, explicit clock.advance, fixture services, surface configuration and deterministic output discovery. Step IDs are unique and capture IDs are unique per surface. Capability declarations are unioned with inferred requirements. Virtual profiles, clock.advance and requiredFrameTimeUs require virtual-time; wall profiles reject virtual-time.",
   "type": "object",
   "additionalProperties": false,
   "required": ["schemaVersion", "id", "requiredCapabilities", "steps"],
@@ -31,7 +31,8 @@
           { "$ref": "#/$defs/surfaceResize" },
           { "$ref": "#/$defs/surfaceScale" },
           { "$ref": "#/$defs/surfaceColorScheme" },
-          { "$ref": "#/$defs/surfaceRecreate" }
+          { "$ref": "#/$defs/surfaceRecreate" },
+          { "$ref": "#/$defs/monitorsSet" }
         ]
       }
     }
@@ -66,6 +67,7 @@
         "id": { "$ref": "#/$defs/safeId" },
         "op": { "const": "capture" },
         "captureId": { "$ref": "#/$defs/safeId" },
+        "surface": { "$ref": "#/$defs/surface", "default": "main" },
         "allowedPendingAssets": {
           "description": "Exact current visible pending native image request IDs. Infers assets.native-readiness. Stale, canceled, failed, duplicate and unknown IDs fail; this never permits a resource failure.",
           "type": "array",
@@ -82,9 +84,8 @@
       }
     },
     "surface": {
-      "type": "string",
-      "const": "main",
-      "description": "Other logical surfaces fail preflight with E_UNSUPPORTED_CAPABILITY."
+      "$ref": "#/$defs/safeId",
+      "description": "main or a declared Shell surface name. Named surfaces infer surface.multiple."
     },
     "target": {
       "oneOf": [
@@ -318,7 +319,36 @@
         "op": { "const": "surface.recreate" },
         "surface": { "$ref": "#/$defs/surface" }
       },
-      "description": "Suspends and resumes the real native main document, disposing its session and creating a fresh generation. Clock, RNG and fixture scenario history continue; retired registrations and capture/accessibility mappings are canceled."
+      "description": "Reopens the selected native surface. Recreating main replaces the Session generation; recreating a named Shell surface replaces only its own mount region."
+    },
+    "monitorsSet": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "op", "monitors"],
+      "properties": {
+        "id": { "$ref": "#/$defs/safeId" },
+        "op": { "const": "monitors.set" },
+        "monitors": {
+          "type": "array",
+          "maxItems": 32,
+          "description": "Replaces the ordered output snapshot and infers surface.multiple. Starts empty; an empty list removes all outputs. IDs must be unique. Geometry uses physical pixels; runtime checks the pixel budget.",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "name", "x", "y", "width", "height", "scale"],
+            "properties": {
+              "id": { "type": "string", "minLength": 1, "maxLength": 128 },
+              "name": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "\\S" },
+              "x": { "type": "number", "minimum": -2147483647, "maximum": 2147483647 },
+              "y": { "type": "number", "minimum": -2147483647, "maximum": 2147483647 },
+              "width": { "type": "number", "minimum": 1, "maximum": 16384 },
+              "height": { "type": "number", "minimum": 1, "maximum": 16384 },
+              "scale": { "type": "number", "exclusiveMinimum": 0, "maximum": 8 },
+              "refreshRateMilliHz": { "type": ["integer", "null"], "minimum": 1, "maximum": 1000000 }
+            }
+          }
+        }
+      }
     }
   }
 }

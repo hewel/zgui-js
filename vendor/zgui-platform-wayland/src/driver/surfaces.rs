@@ -40,8 +40,14 @@ impl WaylandState {
         }
         let wanted = attributes.size.unwrap_or(DEFAULT_SIZE);
         let wl = self.compositor.create_surface(&self.qh);
+        let role = match self.make_role(id, attributes, wl.clone(), wanted) {
+            Ok(role) => role,
+            Err(error) => {
+                wl.destroy();
+                return Err(error);
+            }
+        };
         let fractional = Fractional::attach(&self.extras, &self.qh, &wl, id);
-        let role = self.make_role(id, attributes, wl)?;
 
         let (placement, parent_extent) = match &attributes.role {
             SurfaceRole::Popup(placement) => (
@@ -59,8 +65,14 @@ impl WaylandState {
             parent_extent,
             self.links(),
         );
-        surface.shared().ahead =
-            crate::frame::Ahead::new(crate::frame::ahead::mode(attributes.compose_ahead));
+        {
+            let mut shared = surface.shared();
+            shared.ahead =
+                crate::frame::Ahead::new(crate::frame::ahead::mode(attributes.compose_ahead));
+            if let SurfaceRole::Layer(placement) = &attributes.role {
+                shared.layer = Some(placement.clone());
+            }
+        }
         apply(&surface, attributes);
         // The commit that asks to be configured. Nothing is attached to it, which is what makes it
         // the initial commit rather than a frame.
@@ -75,10 +87,11 @@ impl WaylandState {
         id: SurfaceId,
         attributes: &SurfaceAttributes,
         wl: wayland_client::protocol::wl_surface::WlSurface,
+        wanted: Size<CssPx, Css>,
     ) -> Result<Role, PlatformError> {
         match &attributes.role {
             SurfaceRole::Layer(placement) => self.make_layer(
-                wl, placement, attributes.application_id.as_deref().unwrap_or("zgui"),
+                wl, placement, attributes.application_id.as_deref().unwrap_or("zgui"), wanted,
             ),
             SurfaceRole::Popup(placement) => self.make_popup(id, wl, placement, attributes),
             _ => Ok(Role::Toplevel(Box::new(Toplevel::new(
@@ -136,18 +149,24 @@ impl WaylandState {
         wl: wayland_client::protocol::wl_surface::WlSurface,
         placement: &LayerPlacement,
         namespace: &str,
+        wanted: Size<CssPx, Css>,
     ) -> Result<Role, PlatformError> {
-        let Some(shell) = &self.layers else {
+        let Some((shell, version)) = &self.layers else {
             return Err(PlatformError::Unsupported(Unsupported));
         };
-        let output = placement.monitor.as_ref().and_then(|name| {
-            self.outputs.outputs().find(|output| {
+        let output = if let Some(name) = &placement.monitor {
+            let output = self.outputs.outputs().find(|output| {
                 self.outputs
                     .info(output)
                     .and_then(|info| info.name)
                     .is_some_and(|found| &found == name)
-            })
-        });
+            }).ok_or_else(|| PlatformError::SurfaceCreation(format!("output {name:?} is not available")))?;
+            Some(output)
+        } else {
+            None
+        };
+        layer::check_keyboard(*version, placement)?;
+        let (width, height) = layer::extent(wanted, placement)?;
         let surface = shell.create_layer_surface(
             &self.qh,
             wl,
@@ -156,6 +175,7 @@ impl WaylandState {
             output.as_ref(),
         );
         layer::apply(&surface, placement);
+        surface.set_size(width, height);
         Ok(Role::Layer(Box::new(surface)))
     }
 
@@ -201,13 +221,5 @@ fn apply(surface: &Arc<WaylandSurface>, attributes: &SurfaceAttributes) {
             let fixed = attributes.size;
             window.set_bounds(fixed, fixed);
         }
-    }
-    if let Some(size) = attributes.size
-        && let Some(layer) = surface.role().layer()
-    {
-        // Zero is the layer-shell request to stretch between opposite anchors,
-        // not an empty framebuffer. Preserve it until the compositor configures.
-        let extent = |value: f32| if value == 0.0 { 0 } else { value.round().max(1.0) as u32 };
-        layer.set_size(extent(size.width.0), extent(size.height.0));
     }
 }

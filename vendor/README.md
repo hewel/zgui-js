@@ -110,6 +110,49 @@ longer shipped. These generic layer-shell patches remain upstream wrappers:
 platform and window-manager capabilities are determined by zgui, with no
 compositor-specific package or abstraction in this library.
 
+## Dynamic shell surfaces and input regions
+
+`zgui-platform/` and `zgui-platform-headless/` retain the same pinned revision,
+LICENSE and NOTICE. The platform contract adds `InputRegion::{Full, Empty, Rects}`
+in surface-local logical pixels, in-place layer reconfiguration, and a monitor
+inventory callback. Other backends can leave unsupported operations unimplemented.
+
+`zgui-platform-wayland/` copies a rectangle union into `wl_surface`, destroys the
+temporary `wl_region`, and commits immediately. Full input uses a null region;
+pass-through uses a non-null empty region. Live layer updates preserve the role
+and its output, send positive transitional dimensions before removing an old
+stretch axis, and commit the final anchors and dimensions together. Layer
+creation and reconfiguration reject sizes above the unsigned layer-shell limit;
+ordinary resize requests reject sizes above the signed buffer and viewport
+limit. Both checks widen the CSS dimensions before comparing to avoid rounding
+the protocol maxima up. An unknown named output fails creation; moving to
+another output requires closing and reopening. Backend notifications coalesce
+output additions, removals, and geometry updates, using core `wl_output`
+geometry when logical position is unavailable.
+
+`zgui-runtime/` can start without its primary window and exit explicitly instead
+of exiting when its last surface closes. Synchronous open and close reuse the
+existing window lifecycle, and a retained layer token keeps updated placement
+across a platform suspend. Application-scoped timers use the platform clock and
+park deadlines even when no window can draw. The offscreen backend accepts
+resolved positive layer sizes and holds input regions for scripted input; its
+driver supplies monitor mutations and notifies the handler.
+Preview can dispatch wakes without drawing or moving the clock, so it can
+configure newly opened surfaces before their first frame.
+
+Rectangle bindings must stop accepting input when their node loses its layout
+box. `window/observe.rs` sends a zero border box on that transition; other
+geometry quantities keep their existing absence behavior.
+
+The protocol regression uses a private Unix socket and asserts real Wayland
+requests and commits from the backend without a desktop, GPU, or external server
+crate. It checks hits in both committed rectangles and pass-through in their gap
+and beyond them, and rejects oversized resize requests. Existing live compositor
+regressions still run when a Wayland display is configured.
+
+    cargo test --offline --manifest-path vendor/zgui-platform-wayland/Cargo.toml --test layer_protocol
+    cargo test --offline --manifest-path vendor/zgui-runtime/Cargo.toml --test shell_lifecycle
+
 ## Package image authority and capture readiness
 
 Package images retain verified immutable bytes rather than reopening ambient

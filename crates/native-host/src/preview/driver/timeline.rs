@@ -33,7 +33,7 @@ impl Driver {
     pub fn emit(&mut self,channel:&str,value:&Value)->Result<Value,Fault> {
         self.settle(false)?;
         self.fixtures.emit(channel,value)?;
-        self.notify_fixture()?;
+        self.notify_fixture();
         self.settle(false)?;
         Ok(json!({"channel":channel,"timeUs":self.environment.now_us(),"readiness":self.readiness()}))
     }
@@ -42,13 +42,15 @@ impl Driver {
         self.fixtures.assert_calls(&check.service,&check.method,check.count,check.error_code.as_deref())?;
         Ok(json!({"serviceCall":check,"timeUs":self.environment.now_us()}))
     }
-    pub fn resize(&mut self,width:u32,height:u32)->Result<Value,Fault> {
-        self.configure_surface(width,height,self.surface.scale,false)
+    pub fn resize(&mut self,name:&str,width:u32,height:u32)->Result<Value,Fault> {
+        let (_, _, scale) = self.geometry(name)?;
+        self.configure_surface(name,f64::from(width),f64::from(height),scale,false)
     }
-    pub fn scale(&mut self,scale:f64)->Result<Value,Fault> {
-        self.configure_surface(self.surface.width,self.surface.height,scale,true)
+    pub fn scale(&mut self,name:&str,scale:f64)->Result<Value,Fault> {
+        let (width,height,_) = self.geometry(name)?;
+        self.configure_surface(name,width,height,scale,true)
     }
-    pub fn color_scheme(&mut self,scheme:&str)->Result<Value,Fault> {
+    pub fn color_scheme(&mut self,name:&str,scheme:&str)->Result<Value,Fault> {
         self.settle(false)?;
         let label = scheme;
         let scheme=match label {
@@ -56,40 +58,48 @@ impl Driver {
             "dark"=>zgui_style::ColorScheme::Dark,
             _=>return Err(Error::new("E_SCHEMA",2,"colorScheme must be light or dark").into()),
         };
-        let changed=self.window()?.color_scheme()!=scheme;
+        let window = self.window(name)?;
+        let changed=window.color_scheme()!=scheme;
         if changed {
-            self.observer.bump_surface_configuration();
-            self.window_mut()?.set_color_scheme(scheme);
-            self.window()?.request_frame();
+            self.observer(window.surface().id())?.bump_surface_configuration();
+            self.window_mut(name)?.set_color_scheme(scheme);
+            self.window(name)?.request_frame();
         }
-        self.pipeline.pump();
-        self.check()?;
+        self.pump_application()?;
         self.settle(false)?;
-        Ok(json!({"colorScheme":label,"timeUs":self.environment.now_us(),"readiness":self.readiness()}))
+        Ok(json!({"colorScheme":label,"timeUs":self.environment.now_us(),"readiness":self.readiness_for(Some(name))}))
     }
-    fn configure_surface(&mut self,width:u32,height:u32,scale:f64,scale_changed:bool)->Result<Value,Fault> {
+    fn geometry(&self,name:&str)->Result<(f64,f64,f64),Error> {
+        if name == "main" {
+            self.window(name)?;
+            return Ok((f64::from(self.surface.width),f64::from(self.surface.height),self.surface.scale));
+        }
+        let surface=self.window(name)?.surface();
+        let size=surface.size();
+        let scale=surface.scale_factor();
+        Ok((f64::from(size.width.0)/scale,f64::from(size.height.0)/scale,scale))
+    }
+    fn configure_surface(&mut self,name:&str,width:f64,height:f64,scale:f64,scale_changed:bool)->Result<Value,Fault> {
         self.settle(false)?;
-        let previous=(self.surface.width,self.surface.height,self.surface.scale);
-        self.surface.width=width; self.surface.height=height; self.surface.scale=scale;
-        let dimensions=match profile::dimensions(&self.surface) {
-            Ok(dimensions)=>dimensions,
-            Err(error)=> {
-                (self.surface.width,self.surface.height,self.surface.scale)=previous;
-                return Err(error.into());
-            }
-        };
-        let surface=self.window()?.surface().id();
+        let previous = self.geometry(name)?;
+        let dimensions=profile::physical_dimensions(width,height,scale)?;
+        let surface=self.window(name)?.surface().id();
+        if name=="main" {
+            self.surface.width=width as u32;
+            self.surface.height=height as u32;
+            self.surface.scale=scale;
+            self.dimensions=dimensions;
+        }
         let size=Size::new(DevicePx(dimensions.0 as f32),DevicePx(dimensions.1 as f32));
-        self.dimensions=dimensions;
         let changed=previous!=(width,height,scale);
-        if changed { self.observer.bump_surface_configuration(); }
+        if changed { self.observer(surface)?.bump_surface_configuration(); }
         self.pipeline.deliver(surface,if scale_changed { SurfaceEvent::ScaleFactorChanged{scale_factor:scale,size} } else { SurfaceEvent::Resized(size) });
-        if changed { self.window()?.request_frame(); }
+        if changed { self.window(name)?.request_frame(); }
         // Deliver the real event without advancing the held native clock. Pacing may defer its frame.
-        self.pipeline.pump();
-        self.check()?;
+        self.pump_application()?;
         self.settle(false)?;
+        let (width,height)=if name=="main" { (json!(self.surface.width),json!(self.surface.height)) } else { (json!(width),json!(height)) };
         Ok(json!({"width":width,"height":height,"scale":scale,
-            "physicalWidth":dimensions.0,"physicalHeight":dimensions.1,"timeUs":self.environment.now_us(),"readiness":self.readiness()}))
+            "physicalWidth":dimensions.0,"physicalHeight":dimensions.1,"timeUs":self.environment.now_us(),"readiness":self.readiness_for(Some(name))}))
     }
 }

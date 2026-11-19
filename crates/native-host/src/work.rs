@@ -1,8 +1,8 @@
 //! Owner-thread roots and registrations; workers receive only owned service requests.
-use std::{cell::{Cell, RefCell}, collections::{HashMap, VecDeque}, fmt::Write, rc::{Rc, Weak}, sync::{Arc, atomic::{AtomicBool, Ordering}}, time::Duration};
+use std::{cell::{Cell, RefCell}, collections::{HashMap, VecDeque, hash_map::Entry}, fmt::Write, rc::{Rc, Weak}, sync::{Arc, atomic::{AtomicBool, Ordering}}, time::Duration};
 use host_services::Completion;
 use rquickjs::{Ctx, Exception, Function, Object, Persistent, Value, function::{Func, Opt, Rest}, object::Property};
-use zgui::{platform::{SurfaceId, WakeReason, Waker}, runtime::ImageBlobs, view::{HostHandle, host::{FrameRequestId, Repeat, TimerId}}};
+use zgui::{platform::{SurfaceId, WakeReason, Waker}, runtime::{AppTimers, ImageBlobs}, view::{HostHandle, host::{FrameRequestId, Repeat, TimerId}}, vocab::Timestamp};
 use crate::{assets::{AssetError, AssetProvider, AssetSource, Delivery, MAX_SAFE_ID}, package::Package};
 
 mod external;
@@ -16,9 +16,18 @@ enum ImageLease { Package, Socket(usize) }
 #[derive(Clone, Copy)]
 pub(crate) enum Arguments { Timer, Frame(f64) }
 pub(crate) struct ScheduledCall { id: u64, pub callback: Persistent<Function<'static>>, pub arguments: Arguments }
-enum NativeRegistration { Timer(TimerId), Frame(FrameRequestId) }
+enum NativeRegistration {
+    Timer(TimerId),
+    WindowFrame(FrameRequestId),
+    ShellFrame { host: HostHandle, id: FrameRequestId },
+}
 struct Registration { native: NativeRegistration, callback: Persistent<Function<'static>> }
 struct Pending { resolve: Persistent<Function<'static>>, reject: Persistent<Function<'static>>, cancelled: Arc<AtomicBool> }
+
+enum Scheduler {
+    Window(HostHandle),
+    Shell { timers: AppTimers, frame_host: RefCell<Option<HostHandle>> },
+}
 
 pub(crate) struct Work {
     registrations: RefCell<HashMap<u64, Registration>>,
@@ -26,7 +35,7 @@ pub(crate) struct Work {
     requests: RefCell<HashMap<u64, Pending>>,
     mode: Cell<Mode>,
     generation: u64,
-    host: HostHandle,
+    scheduler: Scheduler,
     provider: Box<dyn AssetProvider>,
     image_blobs: ImageBlobs,
     external: external::External,
@@ -36,15 +45,50 @@ pub(crate) struct Work {
 impl Work {
     pub(crate) fn new(host: HostHandle, package: Option<Rc<Package>>, generation: u64, waker: Arc<dyn Waker>, surface: SurfaceId, assets: AssetSource) -> Rc<Self> {
         let wake: Arc<dyn Fn() + Send + Sync> = Arc::new(move || waker.wake(WakeReason::ReactiveWork { surfaces: vec![surface].into_boxed_slice() }));
+        Self::with_scheduler(package, generation, assets, wake, Scheduler::Window(host))
+    }
+
+    /// Uses application timing and wakes that remain valid without surfaces.
+    pub(crate) fn new_shell(package: Option<Rc<Package>>, generation: u64, waker: Arc<dyn Waker>, assets: AssetSource, timers: AppTimers) -> Rc<Self> {
+        let wake: Arc<dyn Fn() + Send + Sync> = Arc::new(move || waker.wake(WakeReason::AppWork));
+        Self::with_scheduler(package, generation, assets, wake, Scheduler::Shell { timers, frame_host: RefCell::new(None) })
+    }
+
+    fn with_scheduler(package: Option<Rc<Package>>, generation: u64, assets: AssetSource, wake: Arc<dyn Fn() + Send + Sync>, scheduler: Scheduler) -> Rc<Self> {
         let external = external::External::new(package.clone(), &assets);
         Rc::new(Self {
             registrations: RefCell::new(HashMap::new()), ready: RefCell::new(VecDeque::new()), requests: RefCell::new(HashMap::new()),
-            mode: Cell::new(Mode::Loading), generation, host,
+            mode: Cell::new(Mode::Loading), generation, scheduler,
             provider: assets.bind(package, generation, wake.clone()),
             image_blobs: ImageBlobs::new(generation),
             external,
             wake,
         })
+    }
+
+    /// Sets the shell's native frame source. Retiring a source also cancels its pending frames.
+    pub(crate) fn set_frame_host(&self, host: Option<HostHandle>) {
+        let Scheduler::Shell { frame_host, .. } = &self.scheduler else { return; };
+        let previous = {
+            let mut frame_host = frame_host.borrow_mut();
+            if let (Some(old), Some(new)) = (&*frame_host, &host)
+                && old.ptr_eq(new)
+            {
+                return;
+            }
+            std::mem::replace(&mut *frame_host, host)
+        };
+        let Some(previous) = previous else { return; };
+        self.registrations.borrow_mut().retain(|_, registration| {
+            if let NativeRegistration::ShellFrame { host, id } = &registration.native
+                && host.ptr_eq(&previous)
+            {
+                host.cancel_frame_callback(*id);
+                return false;
+            }
+            true
+        });
+        self.ready.borrow_mut().retain(|call| matches!(call.arguments, Arguments::Timer));
     }
 
     pub(crate) fn contract_failure(&self) -> Option<crate::assets::ContractFailure> {
@@ -179,13 +223,28 @@ impl Work {
         let id = self.id(ctx)?;
         let weak = Rc::downgrade(self);
         let native = if let Some(delay) = delay {
-            NativeRegistration::Timer(self.host.schedule(delay, Repeat::Once, Rc::new(move || {
+            let callback = Rc::new(move || {
                 if let Some(owner) = weak.upgrade() { owner.fire(id, Arguments::Timer); }
-            })))
+            });
+            let timer = match &self.scheduler {
+                Scheduler::Window(host) => host.schedule(delay, Repeat::Once, callback),
+                Scheduler::Shell { timers, .. } => timers.schedule(delay, callback)
+                    .ok_or_else(|| Exception::throw_reference(ctx, "application timer scheduler is unavailable"))?,
+            };
+            NativeRegistration::Timer(timer)
         } else {
-            NativeRegistration::Frame(self.host.request_frame_callback(Rc::new(move |timestamp| {
+            let callback = move |timestamp: Timestamp| {
                 if let Some(owner) = weak.upgrade() { owner.fire(id, Arguments::Frame(timestamp.since_origin().as_secs_f64() * 1000.0)); }
-            })))
+            };
+            match &self.scheduler {
+                Scheduler::Window(host) => NativeRegistration::WindowFrame(host.request_frame_callback(Rc::new(callback))),
+                Scheduler::Shell { frame_host, .. } => {
+                    let host = frame_host.borrow().clone()
+                        .ok_or_else(|| Exception::throw_reference(ctx, "requestAnimationFrame requires an open surface"))?;
+                    let id = host.request_frame_callback(Rc::new(callback));
+                    NativeRegistration::ShellFrame { host, id }
+                }
+            }
         };
         self.registrations.borrow_mut().insert(id, Registration { native, callback: Persistent::save(ctx, callback) });
         Ok(id as f64)
@@ -195,9 +254,12 @@ impl Work {
         let registration = self.registrations.borrow_mut().remove(&id);
         let Some(registration) = registration else { return; };
         if self.mode.get() != Mode::Mounted { return; }
-        // Native callbacks run before layout. One binding checkpoint drains this
-        // batch with a shared budget, rather than resetting a budget per timer.
+        // The owner checkpoint follows native delivery. Drain the batch with
+        // a shared budget, rather than resetting a budget per timer or frame.
         self.ready.borrow_mut().push_back(ScheduledCall { id, callback: registration.callback, arguments });
+        if matches!(self.scheduler, Scheduler::Shell { .. }) && matches!(arguments, Arguments::Timer) {
+            (self.wake)();
+        }
     }
     fn cancel_registration(&self, id: u64, frame: bool) {
         let mut ready = self.ready.borrow_mut();
@@ -207,13 +269,24 @@ impl Work {
         }
         drop(ready);
         let mut registrations = self.registrations.borrow_mut();
-        if registrations.get(&id).is_none_or(|registration| matches!(registration.native, NativeRegistration::Frame(_)) != frame) { return; }
-        let registration = registrations.remove(&id).unwrap();
+        let Entry::Occupied(entry) = registrations.entry(id) else { return; };
+        if matches!(entry.get().native, NativeRegistration::Timer(_)) == frame { return; }
+        let registration = entry.remove();
         drop(registrations);
         self.cancel_native(registration.native);
     }
     fn cancel_native(&self, native: NativeRegistration) {
-        match native { NativeRegistration::Timer(id) => self.host.cancel_timer(id), NativeRegistration::Frame(id) => self.host.cancel_frame_callback(id) }
+        match native {
+            NativeRegistration::Timer(id) => match &self.scheduler {
+                Scheduler::Window(host) => host.cancel_timer(id),
+                Scheduler::Shell { timers, .. } => timers.cancel(id),
+            },
+            NativeRegistration::WindowFrame(id) => {
+                let Scheduler::Window(host) = &self.scheduler else { unreachable!("window registration in a shell scheduler"); };
+                host.cancel_frame_callback(id);
+            }
+            NativeRegistration::ShellFrame { host, id } => host.cancel_frame_callback(id),
+        }
     }
 
     fn read_asset<'js>(self: &Rc<Self>, ctx: &Ctx<'js>, path: String) -> rquickjs::Result<Object<'js>> {
@@ -294,6 +367,9 @@ impl Work {
         self.begin_stop();
         for registration in self.registrations.borrow_mut().drain().map(|(_, registration)| registration) { self.cancel_native(registration.native); }
         self.ready.borrow_mut().clear();
+        if let Scheduler::Shell { frame_host, .. } = &self.scheduler {
+            frame_host.borrow_mut().take();
+        }
         self.external.clear(self.generation);
         self.mode.set(Mode::Disposed);
     }
@@ -309,7 +385,7 @@ fn registration_id(ctx: &Ctx<'_>, value: f64) -> rquickjs::Result<u64> {
     }
     Ok(value as u64)
 }
-fn service_error<'js>(ctx: &Ctx<'js>, code: &str, message: &str) -> rquickjs::Result<Object<'js>> {
+pub(crate) fn service_error<'js>(ctx: &Ctx<'js>, code: &str, message: &str) -> rquickjs::Result<Object<'js>> {
     let error = Exception::from_message(ctx.clone(), message)?.into_object();
     error.prop("code", data_property(code))?;
     Ok(error)

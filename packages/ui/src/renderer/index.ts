@@ -1,11 +1,10 @@
 import { createRenderer } from "@solidjs/universal";
 import { $PROXY, flush as solidFlush, resetErrorHalt } from "#solid";
 import type { Accessor, Component, ImageProps, NativeChild, NativeElementProps, NativeFieldProps, NativeNode, NativeTag, NativeTextControlProps, VectorProps } from "../types.js";
+import { bridgeFor, rememberBridge, withCallbackBridge } from "../host.js";
 import type { NativeHost } from "../host.js";
 import type { InternalProps } from "../internal-props.js";
 import { invalidateTreeOrder } from "../tree-order.js";
-
-declare const globalThis: NativeHost;
 
 /** Native specialization of Solid Universal's DOM-independent runtime helpers. */
 interface NativeRenderer {
@@ -34,33 +33,47 @@ const createNativeRenderer = createRenderer as (
   },
 ) => NativeRenderer;
 
+function setNativeProperty(node: NativeNode, name: string, value: unknown, previous?: unknown): void {
+  const bridge = bridgeFor(node);
+  if (name.startsWith("on") && typeof value === "function") {
+    const callback = value as (this: unknown, event: unknown) => unknown;
+    value = function(this: unknown, event: unknown) {
+      return withCallbackBridge(bridge, () => callback.call(this, event));
+    };
+  }
+  bridge.setProperty(node, name, value, previous);
+}
+
 // Resolve the bridge at invocation, so module preflight never allocates native nodes.
 const renderer = createNativeRenderer({
   createElement: (tag, staticProps) => {
-    const node = globalThis.__zgui.createElement(tag);
+    const bridge = bridgeFor();
+    const node = rememberBridge(bridge.createElement(tag), bridge);
     if (staticProps) {
       for (const key of Object.keys(staticProps)) {
-        if (key !== "children") globalThis.__zgui.setProperty(node, key, staticProps[key]);
+        if (key !== "children") setNativeProperty(node, key, staticProps[key]);
       }
     }
     return node;
   },
-  createTextNode: (text: string | number) => globalThis.__zgui.createTextNode(typeof text === "number" ? `${text}` : text),
-  replaceText: (node, text: string | number) => globalThis.__zgui.replaceText(node, typeof text === "number" ? `${text}` : text),
-  isTextNode: node => globalThis.__zgui.isTextNode(node),
+  createTextNode: (text: string | number) => {
+    const bridge = bridgeFor();
+    return rememberBridge(bridge.createTextNode(typeof text === "number" ? `${text}` : text), bridge);
+  },
+  replaceText: (node, text: string | number) => bridgeFor(node).replaceText(node, typeof text === "number" ? `${text}` : text),
+  isTextNode: node => bridgeFor(node).isTextNode(node),
   insertNode: (parent, node, anchor) => {
-    globalThis.__zgui.insertNode(parent, node, anchor);
+    bridgeFor(parent).insertNode(parent, node, anchor);
     invalidateTreeOrder();
   },
   removeNode: (parent, node) => {
-    globalThis.__zgui.removeNode(parent, node);
+    bridgeFor(parent).removeNode(parent, node);
     invalidateTreeOrder();
   },
-  getParentNode: node => globalThis.__zgui.getParentNode(node),
-  getFirstChild: node => globalThis.__zgui.getFirstChild(node),
-  getNextSibling: node => globalThis.__zgui.getNextSibling(node),
-  setProperty: (node, name, value, previous) =>
-    globalThis.__zgui.setProperty(node, name, value, previous),
+  getParentNode: node => bridgeFor(node).getParentNode(node),
+  getFirstChild: node => bridgeFor(node).getFirstChild(node),
+  getNextSibling: node => bridgeFor(node).getNextSibling(node),
+  setProperty: setNativeProperty,
 });
 
 export const {
@@ -113,7 +126,7 @@ export function spread(
             renderer.ref(() => value as ((node: NativeNode) => void) | ((node: NativeNode) => void)[], node);
           }
         } else if (value !== undefined) {
-          globalThis.__zgui.setProperty(node, key, value);
+          setNativeProperty(node, key, value);
         }
       }
       return;

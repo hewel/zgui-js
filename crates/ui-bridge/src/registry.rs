@@ -648,7 +648,7 @@ impl NodeRegistry {
         self.portals.get(&token).map_or(self.records[&token].native, |portal| portal.marker)
     }
 
-    fn attached(&self, token: u64) -> bool {
+    pub(crate) fn attached(&self, token: u64) -> bool {
         let mut current = Some(token);
         while let Some(token) = current {
             if token == 0 { return true; }

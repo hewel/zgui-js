@@ -24,12 +24,13 @@ use std::sync::Arc;
 
 use zgui_geom::{Css, CssPx, Size};
 use zgui_platform::{
-    AppHandler, Clock, IdlePolicy, PlatformCx, PlatformError, Surface, SurfaceAttributes,
-    SurfaceEvent, SurfaceId, WakeReason,
+    AppHandler, Clock, IdlePolicy, LayerPlacement, MonitorInfo, PlatformCx, PlatformError,
+    Surface, SurfaceAttributes, SurfaceEvent, SurfaceId, SurfaceRole, WakeReason,
 };
 use zgui_render::{RenderTarget, Renderer};
 use zgui_view::{Anchor, BuildCx};
 
+use crate::app_timers::AppTimers;
 use crate::commands::{CloseResponse, WindowCommand, WindowCommands, WindowSpec, WindowToken};
 use crate::error::AppError;
 use crate::text::{NoText, TextEngine};
@@ -442,10 +443,12 @@ struct LiveWindow {
 pub struct Runtime {
     /// The application's own options, layered under every window's own.
     app_options: WindowContent,
-    /// Every window the application wants, open or not. The first is the one it launched with.
+    /// Every window the application wants, open or not.
     live: Vec<LiveWindow>,
     /// The name of the window the application launched with.
-    primary: WindowToken,
+    primary: Option<WindowToken>,
+    /// The last inventory reported by the platform.
+    monitors: Vec<MonitorInfo>,
     /// What the application has asked its own runtime to do.
     commands: WindowCommands,
     /// The desktop's clipboards, as the application asks for them.
@@ -488,6 +491,8 @@ pub struct Runtime {
     gate: Arc<FrameGate>,
     /// The scheduled callbacks of every window.
     timers: Rc<RefCell<Timers>>,
+    /// Callbacks belonging to the application rather than one of its windows.
+    app_timers: AppTimers,
     /// Where a wake from another thread goes.
     waker: Option<Arc<RuntimeWaker>>,
     /// The clock every phase reads.
@@ -651,7 +656,8 @@ impl Runtime {
         Self {
             app_options: app.options,
             live,
-            primary,
+            primary: Some(primary),
+            monitors: Vec::new(),
             commands,
             clipboards,
             windows_api,
@@ -679,6 +685,7 @@ impl Runtime {
             windows: Vec::new(),
             gate: Arc::new(FrameGate::new()),
             timers: Rc::new(RefCell::new(Timers::new())),
+            app_timers: AppTimers::default(),
             waker: None,
             clock: None,
             style_pool,
@@ -698,6 +705,96 @@ impl Runtime {
         &mut self.windows
     }
 
+    /// Starts without a primary window and stays alive until explicitly told to quit.
+    ///
+    /// # Panics
+    ///
+    /// Must be called before the runtime is launched.
+    pub fn without_primary_surface(&mut self) {
+        assert!(self.clock.is_none(), "the runtime has already been launched");
+        if let Some(index) = self.primary.take().and_then(|token| self.live_index(token)) {
+            self.discard_window(index);
+        }
+        self.exit = ExitPolicy::Explicit;
+    }
+
+    /// The monitor inventory from startup or the most recent platform notification.
+    pub fn monitors(&self) -> &[MonitorInfo] {
+        &self.monitors
+    }
+
+    /// Schedules application work independently of frames and surface lifetime.
+    pub fn app_timers(&self) -> AppTimers {
+        self.app_timers.clone()
+    }
+
+    /// Opens a secondary surface immediately, within an active platform callback.
+    ///
+    /// The surface and its window document are available before this returns.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when surfaces are unavailable or creation fails.
+    pub fn open_surface(
+        &mut self,
+        cx: &dyn PlatformCx,
+        spec: WindowSpec,
+    ) -> Result<WindowToken, AppError> {
+        let token = self.commands.mint();
+        self.open_named_surface(cx, token, Box::new(spec))?;
+        Ok(token)
+    }
+
+    /// Closes this window and its surface, including while its surface is suspended.
+    pub fn close_surface(&mut self, cx: &dyn PlatformCx, token: WindowToken) {
+        if self.close_named_surface(cx, token) {
+            self.apply_exit_policy(cx);
+        }
+    }
+
+    /// The current native identity of the window named by `token`, if it is open.
+    pub fn surface_id(&self, token: WindowToken) -> Option<SurfaceId> {
+        self.live[self.live_index(token)?].surface
+    }
+
+    /// Updates a layer's live placement and retains it for the next resume.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an unknown window, a non-layer role, an output change, or a request
+    /// refused by the backend.
+    pub fn reconfigure_layer(
+        &mut self,
+        token: WindowToken,
+        placement: LayerPlacement,
+        size: Size<CssPx, Css>,
+    ) -> Result<(), PlatformError> {
+        let index = self.live_index(token).ok_or(PlatformError::NoSuchSurface)?;
+        let live = &self.live[index];
+        let SurfaceRole::Layer(current) = &live.spec.attributes.role else {
+            return Err(zgui_platform::Unsupported.into());
+        };
+        if current.monitor != placement.monitor {
+            return Err(PlatformError::Backend(
+                "moving a layer surface to another output requires reopening it".to_owned(),
+            ));
+        }
+        if let Some(surface) = live.surface {
+            let window = self.window_mut(surface).ok_or(PlatformError::NoSuchSurface)?;
+            let previous = window.surface().size();
+            window.surface().reconfigure_layer(&placement, size)?;
+            // Offscreen backends may apply the size synchronously without a configure event.
+            let configured = window.surface().size();
+            if configured != previous && window.queue(SurfaceEvent::Resized(configured)) {
+                window.request_frame();
+            }
+        }
+        let attrs = &mut self.live[index].spec.attributes;
+        attrs.role = SurfaceRole::Layer(placement);
+        attrs.size = Some(size);
+        Ok(())
+    }
+
     /// The primary surface's creation attributes while it has no native surface.
     ///
     /// Available before the first `surfaces_available` and after `surfaces_lost`.
@@ -705,8 +802,11 @@ impl Runtime {
     /// closed. This lets a downstream host configure roles the facade does not
     /// expose, without replacing the renderer, text engine or window lifecycle.
     pub fn primary_surface_attributes_mut(&mut self) -> Option<&mut SurfaceAttributes> {
-        let primary = self.live.iter_mut().find(|window| window.token == self.primary)?;
-        if primary.surface.is_some() { return None; }
+        let token = self.primary?;
+        let primary = self.live.iter_mut().find(|window| window.token == token)?;
+        if primary.surface.is_some() {
+            return None;
+        }
         Some(&mut primary.spec.attributes)
     }
 
@@ -793,7 +893,13 @@ impl Runtime {
         } else {
             target
         };
-        let renderer = (self.renderer)(&surface, target)?;
+        let renderer = match (self.renderer)(&surface, target) {
+            Ok(renderer) => renderer,
+            Err(error) => {
+                cx.destroy_surface(surface.id());
+                return Err(error);
+            }
+        };
         // Before the view is built, not after: a view that asks for anything while it is being
         // built asks through a waker that has to already know which surface it belongs to.
         let waker = Arc::clone(
@@ -878,6 +984,49 @@ impl Runtime {
         Ok(())
     }
 
+    fn open_named_surface(
+        &mut self,
+        cx: &dyn PlatformCx,
+        token: WindowToken,
+        mut spec: Box<WindowSpec>,
+    ) -> Result<(), AppError> {
+        let handle = spec.handle.take().unwrap_or_else(|| {
+            crate::windows::WindowHandle::pending(
+                token,
+                self.commands.clone(),
+                Rc::clone(self.windows_api.capabilities_slot()),
+            )
+        });
+        self.live.push(LiveWindow { token, spec, surface: None, handle });
+        let index = self.live.len() - 1;
+        let result = if self.waker.is_some() {
+            self.open_live_window(cx, index)
+        } else {
+            Err(PlatformError::SurfaceCreation("surfaces are not available".to_owned()).into())
+        };
+        if result.is_err() {
+            self.discard_window(index);
+        }
+        result
+    }
+
+    fn close_named_surface(&mut self, cx: &dyn PlatformCx, token: WindowToken) -> bool {
+        let Some(index) = self.live_index(token) else { return false };
+        if let Some(surface) = self.live[index].surface {
+            self.close_window(cx, surface);
+        } else {
+            self.discard_window(index);
+        }
+        true
+    }
+
+    fn discard_window(&mut self, index: usize) {
+        let live = self.live.remove(index);
+        self.commands.note_closed(live.token);
+        live.handle.note_closed();
+        self.windows_api.note_closed(live.token);
+    }
+
     /// Carries out everything the application has asked its runtime to do.
     ///
     /// Drained where a platform context is in hand and no window's frame is running: the end of a
@@ -888,43 +1037,12 @@ impl Runtime {
         let mut closed_any = false;
         while let Some(command) = self.commands.pop() {
             match command {
-                WindowCommand::Open { token, mut spec } => {
-                    // The handle the caller already holds, or one made now for a request that came
-                    // from somewhere that does not hold handles.
-                    let handle = spec.handle.take().unwrap_or_else(|| {
-                        crate::windows::WindowHandle::pending(
-                            token,
-                            self.commands.clone(),
-                            Rc::clone(self.windows_api.capabilities_slot()),
-                        )
-                    });
-                    self.live.push(LiveWindow {
-                        token,
-                        spec,
-                        surface: None,
-                        handle,
-                    });
-                    let index = self.live.len() - 1;
-                    if let Err(error) = self.open_live_window(cx, index) {
-                        // One window failing to open is not the application failing: the window
-                        // that asked for it is still running and still has something to say.
+                WindowCommand::Open { token, spec } => {
+                    if let Err(error) = self.open_named_surface(cx, token, spec) {
                         tracing::error!(target: "zgui::app", %error, "the window could not be opened");
-                        self.commands.note_closed(token);
-                        self.live.retain(|live| live.token != token);
                     }
                 }
-                WindowCommand::Close(token) => {
-                    if let Some(index) = self.live_index(token)
-                        && let Some(surface) = self.live[index].surface
-                    {
-                        self.close_window(cx, surface);
-                    } else {
-                        // Asked for before it ever opened: it is simply no longer wanted.
-                        self.commands.note_closed(token);
-                        self.live.retain(|live| live.token != token);
-                    }
-                    closed_any = true;
-                }
+                WindowCommand::Close(token) => closed_any |= self.close_named_surface(cx, token),
                 WindowCommand::Quit => cx.request_exit(),
             }
         }
@@ -987,7 +1105,7 @@ impl Runtime {
         let done = match self.exit {
             ExitPolicy::WhenAllWindowsClose => self.live.is_empty(),
             ExitPolicy::WhenPrimaryCloses => {
-                !self.live.iter().any(|live| live.token == self.primary)
+                self.primary.is_none_or(|token| self.live_index(token).is_none())
             }
             ExitPolicy::Explicit => false,
         };
@@ -1059,10 +1177,7 @@ impl Runtime {
         // the screen, and a window nothing draws into is one that no longer responds or closes.
         cx.destroy_surface(surface);
         if let Some(index) = index {
-            self.commands.note_closed(self.live[index].token);
-            self.live[index].handle.note_closed();
-            self.windows_api.note_closed(self.live[index].token);
-            self.live.remove(index);
+            self.discard_window(index);
         }
     }
 
@@ -1107,12 +1222,28 @@ impl Runtime {
             }
         }
     }
+
+    fn fire_app_timers(&mut self, cx: &dyn PlatformCx, now: std::time::Instant) {
+        let due = self.app_timers.due(now);
+        if due.is_empty() {
+            return;
+        }
+        self.scope.with(|| {
+            for callback in due {
+                callback();
+            }
+        });
+        self.drain_window_commands(cx);
+        self.clipboards.drain(cx);
+        self.apply_menu(cx);
+    }
 }
 
 impl Drop for Runtime {
     /// Closes every window that is still open, then lets the tasks the windows left run to their
     /// end while the application's scope is alive.
     fn drop(&mut self) {
+        self.app_timers.detach();
         for window in &mut self.windows {
             window.close();
         }
@@ -1127,6 +1258,8 @@ impl AppHandler for Runtime {
         // wake edge has to exist before the first effect is created or work that becomes ready
         // between frames is queued with nothing to ask for the frame that would poll it.
         self.clock = Some(cx.clock());
+        self.app_timers.attach(cx);
+        self.monitors_changed(cx);
         let waker = Arc::new(RuntimeWaker::new(cx.waker(), Arc::clone(&self.gate)));
         zgui_reactive::set_frame_waker(Arc::clone(&waker) as Arc<dyn zgui_reactive::FrameWaker>);
         self.waker = Some(waker);
@@ -1145,7 +1278,7 @@ impl AppHandler for Runtime {
                 tracing::error!(target: "zgui::app", %error, "the window could not be opened");
                 // The window the application launched with failing to open is the application
                 // failing: there is nothing left to run.
-                if self.live[index].token == self.primary {
+                if Some(self.live[index].token) == self.primary {
                     self.failure.record(error);
                     cx.request_exit();
                     return;
@@ -1168,6 +1301,11 @@ impl AppHandler for Runtime {
         for id in ids {
             self.forget_surface(id);
         }
+        self.waker = None;
+    }
+
+    fn monitors_changed(&mut self, cx: &dyn PlatformCx) {
+        self.monitors = cx.monitors();
     }
 
     fn surface_event(&mut self, cx: &dyn PlatformCx, surface: SurfaceId, event: SurfaceEvent) {
@@ -1343,7 +1481,10 @@ impl AppHandler for Runtime {
 
     fn idle(&mut self, cx: &dyn PlatformCx) -> IdlePolicy {
         let now = cx.clock().now();
-        let mut policy = IdlePolicy::Block;
+        self.fire_app_timers(cx, now);
+        let mut policy = self.app_timers.deadline().map_or(IdlePolicy::Block, |deadline| {
+            IdlePolicy::until(deadline, now)
+        });
         self.parked.clear();
         for window in &mut self.windows {
             let Some(deadline) = window.scheduled_deadline(now) else {
@@ -1380,6 +1521,7 @@ impl AppHandler for Runtime {
         // was waited for, and re-deriving it here would find the *next* one and conclude that no
         // surface had reached anything.
         let now = cx.clock().now();
+        self.fire_app_timers(cx, now);
         // Kept for the surfaces whose own deadline is later than the one the loop parked on: the
         // park is the global minimum, so a wake is not every surface's wake.
         let mut reached = Vec::new();
@@ -1409,6 +1551,7 @@ impl AppHandler for Runtime {
             let _zone = zgui_reactive::enter_non_reactive_zone();
             hooks.exit();
         });
+        self.app_timers.detach();
         for window in &mut self.windows {
             window.close();
         }

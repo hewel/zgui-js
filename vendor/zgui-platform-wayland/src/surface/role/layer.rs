@@ -3,8 +3,10 @@
 use smithay_client_toolkit::shell::wlr_layer::{
     Anchor, KeyboardInteractivity, Layer, LayerSurface,
 };
-use zgui_geom::CssPx;
-use zgui_platform::LayerPlacement;
+use smithay_client_toolkit::shell::wlr_layer::SurfaceKind;
+use wayland_client::Proxy;
+use zgui_geom::{Css, CssPx, Size};
+use zgui_platform::{LayerPlacement, PlatformError, Unsupported};
 
 /// Which layer of the desktop, in the shell's numbering.
 pub const fn layer(layer: zgui_platform::Layer) -> Layer {
@@ -39,28 +41,120 @@ pub const fn keyboard(
 
 /// How much room the compositor should reserve, in whole logical pixels.
 ///
-/// Absent means "as much as the surface's own extent along its anchored edge", which the shell
-/// spells as -1 and which is what a dock wants. Zero reserves nothing, which is what an overlay
-/// wants, and the two must not be confused.
+/// An absent value uses protocol `-1`: ignore the space reserved by other surfaces.
 pub fn exclusive_zone(zone: Option<CssPx>) -> i32 {
     zone.map_or(-1, |zone| zone.0.round().max(0.0) as i32)
 }
 
-/// Applies `placement` to `surface`, without committing it.
-pub fn apply(surface: &LayerSurface, placement: &LayerPlacement) {
-    surface.set_layer(layer(placement.layer));
+/// Applies the placement shared by initial creation and live reconfiguration.
+pub(crate) fn apply(surface: &LayerSurface, placement: &LayerPlacement) {
     surface.set_anchor(anchor(placement.anchors));
+    apply_fields(surface, placement);
+}
+
+fn apply_fields(surface: &LayerSurface, placement: &LayerPlacement) {
     surface.set_keyboard_interactivity(keyboard(placement.keyboard));
     surface.set_exclusive_zone(exclusive_zone(placement.exclusive_zone));
     let margin = placement.margin.map(|side| side.0.round() as i32);
     surface.set_margin(margin.top, margin.right, margin.bottom, margin.left);
 }
 
+/// Encodes a logical size without requesting a compositor extent on an unanchored axis.
+pub(crate) fn extent(
+    size: Size<CssPx, Css>,
+    placement: &LayerPlacement,
+) -> Result<(u32, u32), PlatformError> {
+    fn axis(value: CssPx, stretch: bool) -> Option<u32> {
+        if !(0.0..=f64::from(u32::MAX)).contains(&f64::from(value.0)) {
+            None
+        } else if value.0 == 0.0 {
+            stretch.then_some(0)
+        } else {
+            Some(value.0.round().max(1.0) as u32)
+        }
+    }
+    let anchors = placement.anchors;
+    match (
+        axis(size.width, anchors.left && anchors.right),
+        axis(size.height, anchors.top && anchors.bottom),
+    ) {
+        (Some(width), Some(height)) => Ok((width, height)),
+        _ => Err(PlatformError::Backend(
+            "layer size must fit the unsigned protocol range and be positive \
+             unless stretched between opposite anchors"
+                .to_owned(),
+        )),
+    }
+}
+
+pub(crate) fn check_keyboard(version: u32, placement: &LayerPlacement) -> Result<(), PlatformError> {
+    if version < 4 && placement.keyboard == zgui_platform::KeyboardInteractivity::OnDemand {
+        return Err(Unsupported.into());
+    }
+    Ok(())
+}
+
+pub(crate) fn version(surface: &LayerSurface) -> u32 {
+    match surface.kind() {
+        SurfaceKind::Wlr(role) => role.version(),
+        _ => 1,
+    }
+}
+
+/// Sends one placement transaction. Neither request order exposes a zero dimension without its
+/// matching anchors, including while switching the stretch from one axis to the other.
+pub(crate) fn reconfigure(
+    surface: &LayerSurface,
+    current: &LayerPlacement,
+    current_extent: (u32, u32),
+    next: &LayerPlacement,
+    next_extent: (u32, u32),
+) -> Result<(), PlatformError> {
+    if current.monitor != next.monitor {
+        return Err(PlatformError::Backend(
+            "moving a layer surface to another output requires reopening it".to_owned(),
+        ));
+    }
+    let version = version(surface);
+    check_keyboard(version, next)?;
+    if current.layer != next.layer && version < 2 {
+        return Err(Unsupported.into());
+    }
+    let anchors = next.anchors;
+    if current_extent.0 == 0 && !(anchors.left && anchors.right)
+        || current_extent.1 == 0 && !(anchors.top && anchors.bottom)
+    {
+        surface.set_size(next_extent.0.max(current_extent.0).max(1), next_extent.1.max(current_extent.1).max(1));
+    }
+    surface.set_anchor(anchor(anchors));
+    surface.set_size(next_extent.0, next_extent.1);
+    if current.layer != next.layer {
+        surface.set_layer(layer(next.layer));
+    }
+    apply_fields(surface, next);
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{anchor, exclusive_zone, keyboard, layer};
+    use super::{anchor, exclusive_zone, extent, keyboard, layer};
     use smithay_client_toolkit::shell::wlr_layer::{Anchor, KeyboardInteractivity, Layer};
-    use zgui_geom::{CssPx, Edges};
+    use zgui_geom::{CssPx, Edges, Size};
+    use zgui_platform::LayerPlacement;
+
+    #[test]
+    fn layer_extent_accepts_the_largest_representable_f32_below_the_protocol_limit() {
+        let placement = LayerPlacement::default();
+        // Converting the integer maximum to f32 rounds up to 2^32.
+        let first_out_of_range = u32::MAX as f32;
+        let last_in_range = first_out_of_range.next_down();
+        assert_eq!(
+            extent(Size::new(CssPx(last_in_range), CssPx(1.0)), &placement)
+                .expect("the largest in-range f32 extent fits the protocol"),
+            (4_294_967_040, 1),
+            "the largest representable in-range size must not be clamped"
+        );
+    }
 
     #[test]
     fn every_layer_of_the_desktop_has_one_in_the_shell() {
@@ -85,9 +179,7 @@ mod tests {
     }
 
     #[test]
-    fn reserving_nothing_and_reserving_the_surfaces_own_extent_are_different_answers() {
-        // -1 is the shell's word for "as much as I am tall"; 0 is "none at all". A dock that sent
-        // 0 would have windows opening underneath it.
+    fn ignoring_other_reservations_differs_from_reserving_nothing() {
         assert_eq!(exclusive_zone(None), -1);
         assert_eq!(exclusive_zone(Some(CssPx(0.0))), 0);
         assert_eq!(exclusive_zone(Some(CssPx(36.4))), 36);

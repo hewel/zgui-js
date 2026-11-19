@@ -138,6 +138,9 @@ pub fn worker(args: impl Iterator<Item=String>) -> supervisor::Report {
         environment["capabilityRevision"]=json!("native-preview-v1-p5");
         environment["hostRootStyleDigest"]=json!(output::digest(root_styles.as_bytes()));
         environment["inputPolicy"]=json!({"surfaceFocus":"main","dispatch":"one native deliver_all burst per action; no frame between low-level events","modifiers":"key-local; restored to none after key-up"});
+        if package.manifest.capabilities.shell_surfaces {
+            environment["inputPolicy"]["surfaceFocus"] = json!("selected-surface");
+        }
         environment["timingDeterministic"]=json!(profile.profile.clock.is_virtual());
         environment["clock"]=crate::environment::Environment::configuration(
             match profile.profile.clock { profile::Clock::Virtual{epoch_ms,..}=>Some(epoch_ms),profile::Clock::Wall{}=>None },
@@ -153,9 +156,18 @@ pub fn worker(args: impl Iterator<Item=String>) -> supervisor::Report {
         fixture_runtime=Some(active.fixtures.clone());
         // A startup mount fault wins over any later graphics publication failure.
         active.check()?;
-        sink.borrow_mut().json("graphics.json","graphics-environment",&active.graphics())?;
-        active.settle(false)?;
-        ledger.execute(&scenario.scenario.steps,active,&sink)?;
+        if !profile.profile.pure_shell {
+            sink.borrow_mut().json("graphics.json","graphics-environment",&active.graphics())?;
+        }
+        let execution = active.settle(false).and_then(|_| ledger.execute(&scenario.scenario.steps, active, &sink));
+        if profile.profile.pure_shell {
+            let graphics = sink.borrow_mut().json("graphics.json","graphics-environment",&active.graphics());
+            if let Err(error) = graphics {
+                if execution.is_ok() { return Err(error.into()); }
+                ledger.publication_failed("graphics", error, Some(&sink));
+            }
+        }
+        execution?;
         ledger.enter("fixture-finalize");
         active.fixtures.finalize()?;
         Ok(())
@@ -197,8 +209,8 @@ fn validate_steps(scenario:&scenario::Scenario,profile:&profile::Profile)->Resul
                 advanced_ms=advanced_ms.checked_add(*by_ms).filter(|total|*total<=profile.limits.max_virtual_duration_ms)
                     .ok_or_else(||Error::new("E_SCHEMA",2,"scenario advances beyond maxVirtualDurationMs"))?;
             }
-            Step::SurfaceResize{width,height,..}=> { surface.width = *width; surface.height = *height; profile::dimensions(&surface)?; }
-            Step::SurfaceScale{scale,..}=> { surface.scale = *scale; profile::dimensions(&surface)?; }
+            Step::SurfaceResize{surface:name,width,height,..} if name=="main"=> { surface.width = *width; surface.height = *height; profile::dimensions(&surface)?; }
+            Step::SurfaceScale{surface:name,scale,..} if name=="main"=> { surface.scale = *scale; profile::dimensions(&surface)?; }
             _=>{}
         }
     }

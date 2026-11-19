@@ -146,7 +146,7 @@ impl LayerShellHandler for WaylandState {
         let Some(id) = self.identify(layer.wl_surface()) else {
             return;
         };
-        self.report(id, SurfaceEvent::CloseRequested);
+        self.report(id, SurfaceEvent::Destroyed);
     }
 
     fn configure(
@@ -166,15 +166,17 @@ impl LayerShellHandler for WaylandState {
         let (width, height) = configure.new_size;
         let (resized, visibility) = {
             let mut shared = surface.shared();
-            let wanted = surface.wanted();
+            let choose = |requested: CssPx, current: CssPx| {
+                if requested.0 > 0.0 { requested } else { CssPx(current.0.max(1.0)) }
+            };
             let extent = Size::new(
                 if width == 0 {
-                    wanted.width
+                    choose(shared.wanted.width, shared.logical.width)
                 } else {
                     CssPx(width as f32)
                 },
                 if height == 0 {
-                    wanted.height
+                    choose(shared.wanted.height, shared.logical.height)
                 } else {
                     CssPx(height as f32)
                 },
@@ -263,7 +265,14 @@ impl WaylandState {
             .filter_map(|output| self.outputs.info(&output))
             .collect();
         let sharpest = output::mode::sharpest(infos.iter());
-        *self.live.monitors.borrow_mut() = infos.iter().map(output::describe).collect();
+        let monitors: Vec<_> = infos.iter().map(output::describe).collect();
+        {
+            let mut latest = self.live.monitors.borrow_mut();
+            if *latest != monitors {
+                *latest = monitors;
+                self.monitors_dirty = true;
+            }
+        }
         let ids: Vec<_> = self
             .live
             .surfaces

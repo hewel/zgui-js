@@ -76,8 +76,8 @@ impl Window {
         // The last pass delivered and laid out again. Whether that moved anything watched is a
         // comparison and no delivery: a chain that settled in exactly the budget owes nothing.
         if self.watched().iter().any(|&(key, held, pending)| {
-            self.measure(key, held)
-                .is_some_and(|measured| measured != held || !pending.is_empty())
+            self.measure(key, held, pending)
+                .is_some_and(|(measured, pending)| measured != held || !pending.is_empty())
         }) {
             // The geometry the last relayout produced has not been delivered. The next frame
             // compares it against what was recorded and delivers it, so one is asked for.
@@ -113,7 +113,7 @@ impl Window {
 
         let mut delivered = false;
         for (key, held, pending) in watched {
-            let Some(measured) = self.measure(key, held) else {
+            let Some((measured, pending)) = self.measure(key, held, pending) else {
                 continue;
             };
             if measured == held && pending.is_empty() {
@@ -180,11 +180,17 @@ impl Window {
     /// Only the quantities its mask watches are measured. The others keep the values `held` has,
     /// so comparing the result with `held` compares exactly what is watched: a view watching a size
     /// is not woken on every frame its box moves.
-    fn measure(&self, key: zgui_dom::NodeKey, held: ObservationSlots) -> Option<ObservationSlots> {
+    fn measure(&self, key: zgui_dom::NodeKey, held: ObservationSlots, pending: ObservedMask) -> Option<(ObservationSlots, ObservedMask)> {
         let layout = self.layout.borrow();
-        let first = *layout.boxes_of(key).first()?;
-        let resolved = layout.layout_of(first)?;
         let mask = held.mask;
+        let resolved = layout.boxes_of(key).first().and_then(|&first| layout.layout_of(first).map(|resolved| (first, resolved)));
+        let Some((first, resolved)) = resolved else {
+            // Clear a previously placed box (for example after display:none).
+            // Other quantities retain their previous behavior without a layout box.
+            let empty = ObservationSlots::NONE.border_box;
+            return (mask.contains(ObservedMask::BORDER_BOX) && held.border_box != empty)
+                .then_some((ObservationSlots { border_box: empty, ..held }, pending & ObservedMask::BORDER_BOX));
+        };
         let scrolls = mask.intersects(ObservedMask::SCROLL_OFFSET | ObservedMask::SCROLLPORT);
         let placed = mask
             .intersects(ObservedMask::BORDER_BOX | ObservedMask::BORDER_SIZE)
@@ -220,14 +226,14 @@ impl Window {
             } else {
                 (held.content_size, held.scroll_offset, held.scrollport)
             };
-        Some(ObservationSlots {
+        Some((ObservationSlots {
             mask,
             border_box,
             border_size,
             content_size,
             scroll_offset,
             scrollport,
-        })
+        }, pending))
     }
 
     /// Restyles and re-composes after a delivery wrote something, if it actually changed anything.

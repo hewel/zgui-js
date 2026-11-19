@@ -64,6 +64,7 @@
 #![forbid(unsafe_code)]
 
 pub mod app;
+mod app_timers;
 pub mod binding;
 pub mod budget;
 pub mod caret;
@@ -94,6 +95,7 @@ pub use crate::app::{
     App, ExitPolicy, Failure, MetricsFactory, RasterFactory, RendererFactory, Runtime, TextFactory,
     ViewFactory,
 };
+pub use crate::app_timers::AppTimers;
 pub use crate::binding::{HostBinding, NoBinding};
 pub use crate::budget::{BudgetReport, Budgeted, CacheId, CacheReport};
 pub use crate::clipboard::{Clipboards, try_use_clipboard, use_clipboard};

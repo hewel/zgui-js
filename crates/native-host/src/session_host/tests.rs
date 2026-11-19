@@ -34,6 +34,12 @@ impl SessionSurface for StubSurface {
         }
     }
     fn request_frame(&self, document: DocumentId) { self.frames.borrow_mut().push(document); }
+    fn close_shell_surface(&mut self, _token: WindowToken, _id: SurfaceId) -> bool {
+        panic!("the primary-only fixture cannot open shell surfaces");
+    }
+    fn stage_shell_surfaces(&mut self, _staged: &mut ShellWindows, _monitors: &[Monitor], _session: &Rc<Session>) -> SessionResult<()> {
+        Ok(())
+    }
 }
 
 struct Native {
@@ -519,6 +525,68 @@ fn failed_candidate_root_mutations_never_touch_the_successful_mount_root() {
     let document = native.region.document;
     assert!(matches!(native.host.replace(&mut native.surface, native.waker.clone(), document, SessionModule::package(bad.package()), no_retry()), ReloadOutcome::Rejected(_)));
     assert!(Rc::ptr_eq(&active, &native.session()));
-    assert_eq!(native.backend.attribute(active.region.root, zgui::view::AttrName::new("class")), None);
+    assert_eq!(native.backend.attribute(active.primary_region().root, zgui::view::AttrName::new("class")), None);
     assert_eq!(native.text(), "active");
+}
+
+#[test]
+fn failed_shell_child_mount_keeps_the_predecessor_and_last_successful_build() {
+    use zgui::platform::{AppHandler, PlatformCx};
+    use zgui_platform_headless::Headless;
+
+    let cap = crate::package::Capabilities { shell_surfaces: true, ..Default::default() };
+    let good = Fixture::new(r#"
+        export const hostApiVersion = 1;
+        export function mount() {
+            const id = __zguiShell.openLayer('panel', {}, (root, bridge) => {
+                bridge.insertNode(root, bridge.createTextNode('working'), null);
+                return () => bridge.clearRoot(root);
+            });
+            return () => __zguiShell.closeLayer(id);
+        }
+    "#, "").with_capabilities(cap.clone());
+    let bad = Fixture::new(r#"
+        export const hostApiVersion = 1;
+        export function mount() {
+            __zguiShell.openLayer('partial', {}, () => () => {});
+            __zguiShell.openLayer('broken', {}, () => { throw Error('shell child mount failed'); });
+            return () => {};
+        }
+    "#, "").with_capabilities(cap);
+    let mut runtime = zgui::runtime::App::new()
+        .with_renderer(Box::new(|_, target| {
+            let mut renderer = zgui_testkit_scene::CaptureRenderer::new();
+            zgui::render::Renderer::configure(&mut renderer, target);
+            Ok(Box::new(renderer))
+        }))
+        .into_handler(|_| panic!("pure shell must not build a primary window"))
+        .expect("create shell test runtime");
+    runtime.without_primary_surface();
+    let cx = Headless::new();
+    runtime.surfaces_available(&cx);
+    let good = good.package();
+    let mut host = SessionHost::new(Rc::default(), SessionModule::package(good.clone()),
+        SessionPolicy::live(host_services::Executor::new(2, 64).expect("create test service executor")),
+        RecoveryPolicy::Propagate);
+    host.set_pure_shell(zgui::app::Fonts::shipped_only());
+    host.shell_turn(&mut runtime, &cx, ImageChoice::PackageOnly, &[]).expect("mount the working shell");
+    let previous = host.sessions().next().expect("working session").clone();
+    let (_, panel) = previous.mount_regions().pop().expect("working shell region");
+    assert_eq!(previous.counts().shell_surfaces, 1, "the working panel owns a native surface");
+
+    let outcome = host.replace_shell(&mut runtime, &cx, ImageChoice::PackageOnly, SessionModule::package(bad.package()));
+    assert!(matches!(&outcome, ReloadOutcome::Rejected(error) if error.to_string().contains("shell child mount failed")),
+        "child mount error must reject the replacement, got {outcome:?}");
+    assert!(Rc::ptr_eq(&previous, host.sessions().next().expect("predecessor still active")),
+        "rejection must keep the same running session");
+    let acceptance = host.acceptance().expect("record rejected reload");
+    assert_eq!(acceptance["status"], "rejected", "native acceptance must include child mounting");
+    assert_eq!(acceptance["lastSuccessfulBuildId"], good.manifest.build_id, "the working build is still last-good");
+    assert_eq!(panel.region.dom.text_content(panel.region.root), "working", "the predecessor's tree was not disposed");
+    assert!(previous.counts().engine_alive, "the predecessor's JS engine remains live");
+    assert_eq!(cx.surfaces().iter().map(|surface| surface.id()).collect::<Vec<_>>(), [panel.surface],
+        "both candidate windows, including the one that mounted, must be closed");
+
+    host.stop_shell_surfaces(&mut runtime, &cx);
+    assert_eq!(previous.retire().counts, ResourceCounts::default(), "shutdown releases the working shell without leaks");
 }

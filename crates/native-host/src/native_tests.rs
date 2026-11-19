@@ -44,7 +44,7 @@ impl NativeControls {
         let window = self.inner.native.windows().first().ok_or("fixture window is absent")?;
         let nodes = window.nodes_with_class("report");
         if nodes.len() != 1 { return Err(format!("expected one native report node, found {}", nodes.len()).into()); }
-        let text = session.region.dom.text_content(nodes[0]);
+        let text = session.primary_region().dom.text_content(nodes[0]);
         serde_json::from_str(&text).map_err(|error| format!("invalid native tree report {text:?}: {error}").into())
     }
 
@@ -70,7 +70,7 @@ impl NativeControls {
         let window = self.inner.native.windows().first().ok_or("fixture window is absent")?;
         let nodes = window.nodes_with_class(class);
         if nodes.len() != 1 { return Err(format!("expected one {class} control, found {}", nodes.len()).into()); }
-        let actual = session.region.host.focused().get_untracked();
+        let actual = session.primary_region().host.focused().get_untracked();
         if actual != Some(nodes[0]) {
             self.failures.borrow_mut().push(format!("step {}: native focus expected {class} ({:?}), got {actual:?}", self.step, nodes[0]));
         }

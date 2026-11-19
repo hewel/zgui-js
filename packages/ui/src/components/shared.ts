@@ -1,12 +1,9 @@
 import { $PROXY } from "#solid";
 import type { Context } from "#solid";
 import { createElement, effect, insert, insertNode, mergeProps, setProp, spread } from "../renderer/index.js";
-import type { NativeHost } from "../host.js";
-import { installStylesheet } from "../nodes.js";
+import { bridgeFor } from "../host.js";
 import type { NativeChild, NativeElementProps, NativeNode, NativeTag } from "../types.js";
 import type { InternalProps } from "../internal-props.js";
-
-declare const globalThis: NativeHost;
 
 export interface Stylesheet {
   readonly name: string;
@@ -56,11 +53,10 @@ export function withDefaults<D extends object, P extends object>(
 }
 
 export function useStylesheet(sheet: Stylesheet): void {
-  const host: object | undefined = globalThis.__zgui;
-  const installed = host ? installedSheets.get(host) : undefined;
+  const host = bridgeFor();
+  const installed = installedSheets.get(host);
   if (installed?.has(sheet.name)) return;
-  installStylesheet(sheet.name, `@layer zgui.components { ${sheet.css} }`);
-  if (!host) return;
+  host.installStylesheet(sheet.name, `@layer zgui.components { ${sheet.css} }`);
   if (installed) installed.add(sheet.name);
   else installedSheets.set(host, new Set([sheet.name]));
 }

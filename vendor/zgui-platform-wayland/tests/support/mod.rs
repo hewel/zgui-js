@@ -167,14 +167,14 @@ pub(crate) fn loop_for<A: AppHandler>(
     property: &str,
     handler: A,
 ) -> Option<zgui_platform_wayland::WaylandApp<A>> {
-    match zgui_platform_wayland::WaylandApp::new(handler) {
-        Ok(app) => Some(app),
-        Err(PlatformError::Backend(reason)) => {
-            skipped(property, &format!("no compositor to run on: {reason}"));
-            None
-        }
-        Err(other) => panic!("the compositor refused the application: {other}"),
+    if !zgui_platform_wayland::conn::is_available() {
+        skipped(property, "no Wayland display configured");
+        return None;
     }
+    Some(
+        zgui_platform_wayland::WaylandApp::new(handler)
+            .unwrap_or_else(|error| panic!("the Wayland backend could not start: {error}")),
+    )
 }
 
 /// Announces that this machine has nothing to say about the property.

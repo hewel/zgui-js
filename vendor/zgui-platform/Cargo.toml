@@ -1,0 +1,32 @@
+[package]
+name = "zgui-platform"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+description = "Platform contract that windowing backends implement"
+repository = "https://github.com/zortax/zgui"
+homepage = "https://zgui.zortax.de"
+rust-version = "1.90"
+
+# Standalone snapshot of upstream 80baa3c7; sibling crates retain the same revision.
+[workspace]
+
+[dependencies]
+accesskit = "0.24.1"
+raw-window-handle = "0.6.2"
+thiserror = "2.0.19"
+zgui-geom = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a" }
+zgui-vocab = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a" }
+
+[lints.rust]
+missing_docs = "deny"
+unsafe_code = "deny"
+unreachable_pub = "warn"
+
+[lints.rustdoc]
+broken_intra_doc_links = "deny"
+private_intra_doc_links = "warn"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+undocumented_unsafe_blocks = "warn"

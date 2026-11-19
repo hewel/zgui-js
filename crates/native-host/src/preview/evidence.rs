@@ -12,6 +12,7 @@ const FAILURE_FRAME: &str = "failure/frame.json";
 const FAILURE_PIXELS: &str = "failure/last-valid.png";
 const EVIDENCE_DIR: &str = "evidence";
 const CAPTURES_DIR: &str = "captures";
+const NAMED_CAPTURES_DIR: &str = "captures/surfaces";
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -169,24 +170,48 @@ pub(super) struct CaptureIdentity {
 #[derive(Clone)]
 pub(super) struct CapturePaths {
     id: String,
+    surface: String,
 }
 impl CapturePaths {
-    pub(super) fn new(id: &str) -> Result<Self, Error> {
-        if !scenario::safe_id(id) { return Err(Error::new("E_SCHEMA", 2, "invalid capture ID")); }
-        Ok(Self { id: id.to_owned() })
+    pub(super) fn new(id: &str, surface: &str) -> Result<Self, Error> {
+        if !scenario::safe_id(id) || !scenario::safe_id(surface) {
+            return Err(Error::new("E_SCHEMA", 2, "invalid capture ID or surface name"));
+        }
+        Ok(Self { id: id.to_owned(), surface: surface.to_owned() })
     }
     pub(super) fn id(&self) -> &str { &self.id }
-    pub(super) fn png(&self) -> String { format!("{CAPTURES_DIR}/{}.png", self.id) }
-    pub(super) fn tree(&self) -> String { format!("{CAPTURES_DIR}/{}.tree.json", self.id) }
-    pub(super) fn frame(&self) -> String { format!("{CAPTURES_DIR}/{}.frame.json", self.id) }
+    pub(super) fn surface(&self) -> &str { &self.surface }
+    fn stem(&self) -> String {
+        if self.surface == "main" { format!("{CAPTURES_DIR}/{}", self.id) }
+        else { format!("{NAMED_CAPTURES_DIR}/{}/{}", self.surface, self.id) }
+    }
+    pub(super) fn png(&self) -> String { format!("{}.png", self.stem()) }
+    pub(super) fn tree(&self) -> String { format!("{}.tree.json", self.stem()) }
+    pub(super) fn frame(&self) -> String { format!("{}.frame.json", self.stem()) }
+    pub(super) fn from_artifact(path: &str, suffix: &str) -> Result<Self, Error> {
+        let stem = path.strip_suffix(suffix).ok_or_else(|| io("invalid capture artifact path"))?;
+        let identity = if let Some(stem) = stem.strip_prefix("captures/surfaces/") {
+            stem.split_once('/').filter(|(surface, _)| *surface != "main")
+        } else {
+            stem.strip_prefix("captures/").map(|id| ("main", id))
+        };
+        let (surface, id) = identity.ok_or_else(|| io("invalid capture artifact path"))?;
+        Self::new(id, surface).map_err(|_| io("invalid capture artifact identity"))
+    }
     pub(super) fn summary(&self) -> Value {
-        json!({"captureId":self.id,"png":self.png(),"frame":self.frame(),"tree":self.tree()})
+        let mut summary = json!({"captureId":self.id,"png":self.png(),"frame":self.frame(),"tree":self.tree()});
+        if self.surface != "main" { summary["surface"] = json!(self.surface); }
+        summary
     }
 }
 
 /// Evidence stems are monotonic identities, never caller-chosen names.
-pub(super) fn checkpoint_paths(generation: u64, ordinal: u64) -> (String, String) {
-    let stem = format!("{EVIDENCE_DIR}/generation-{generation:010}-frame-{ordinal:010}");
+pub(super) fn checkpoint_paths(generation: u64, ordinal: u64, named_sequence: Option<u64>) -> (String, String) {
+    let stem = if let Some(sequence) = named_sequence {
+        format!("{EVIDENCE_DIR}/generation-{generation:010}-checkpoint-{sequence:010}")
+    } else {
+        format!("{EVIDENCE_DIR}/generation-{generation:010}-frame-{ordinal:010}")
+    };
     (format!("{stem}.tree.json"), format!("{stem}.frame.json"))
 }
 
@@ -196,10 +221,12 @@ impl TreeEvidence {
     pub(super) fn validate_frame(&self, frame: &FrameEvidence) -> Result<(), Error> {
         if self.schema_version != 1 || frame.schema_version != 1 || self.build_id.is_empty()
             || self.build_id != frame.build_id || self.generation == 0 || self.generation != frame.generation
-            || self.surface != "main" || self.surface != frame.surface
+            || !scenario::safe_id(&self.surface) || self.surface != frame.surface
             || self.frame_ordinal != frame.validation_frame.ordinal
             || self.presentation_sequence != frame.pixel_presentation.sequence
-            || self.metadata_revision != frame.metadata_revision {
+            || self.metadata_revision != frame.metadata_revision
+            || self.detail("checkpointSequence") != frame.detail("checkpointSequence")
+            || (self.surface != "main" && self.detail("checkpointSequence").as_u64().is_none_or(|sequence| sequence == 0)) {
             return Err(Error::new("E_OUTPUT_IO", 8, "capture, tree and terminal run identities disagree"));
         }
         let native_resources = frame.extra.get("resources").and_then(|resources| resources.get("requiredAssetsReady")).is_some();
@@ -261,6 +288,7 @@ impl FrameEvidence {
     pub(super) fn validate_capture(&self, tree: &TreeEvidence, capture: &CapturePaths, tree_digest: &str, result: &Value) -> Result<(), Error> {
         if result["schemaVersion"] != 1 || result["command"] != "run"
             || self.capture_id.as_deref() != Some(capture.id()) || self.tree_digest.as_deref() != Some(tree_digest)
+            || self.surface != capture.surface()
             || !self.layout_document_coherent || result["build"]["buildId"].as_str() != Some(tree.build_id.as_str())
             || result["generation"].as_u64().is_none_or(|current| tree.generation > current) {
             return Err(Error::new("E_OUTPUT_IO", 8, "capture, tree and terminal run identities disagree"));
@@ -397,7 +425,10 @@ pub(super) fn recover(output: &mut Output) -> Result<Value, Error> {
         };
         (frame, tree)
     } else if let Some(tree) = existing_tree {
-        let (_tree, frame) = checkpoint_paths(tree.generation, tree.frame_ordinal);
+        let named = if tree.surface != "main" {
+            Some(tree.detail("checkpointSequence").as_u64().ok_or_else(|| io("named evidence has no checkpoint sequence"))?)
+        } else { None };
+        let (_, frame) = checkpoint_paths(tree.generation, tree.frame_ordinal, named);
         (read_typed(&output.root().join(frame))?, tree)
     } else {
         let mut frames = match std::fs::read_dir(&directory) {
@@ -412,33 +443,44 @@ pub(super) fn recover(output: &mut Output) -> Result<Value, Error> {
         // The newest checkpoint wins. An empty post-fault document is not a
         // complete checkpoint, so an earlier pair may still be the last
         // publishable evidence; any other invalid or corrupt pair errors.
-        let mut selected = None;
+        let (mut primary, mut named) = (None, None);
         while let Some(path) = frames.pop() {
+            let named_path = path.file_name().and_then(|name| name.to_str()).is_some_and(|name| name.contains("-checkpoint-"));
+            let destination = if named_path { &mut named } else { &mut primary };
+            if destination.is_some() { continue; }
             let frame: FrameEvidence = read_typed(&path)?;
+            let file = path.file_name().and_then(|name| name.to_str()).expect("frame file name checked");
             let tree: TreeEvidence = read_typed(&path.with_file_name(
-                path.file_name().expect("frame file").to_string_lossy().replace(".frame.json", ".tree.json")))?;
+                format!("{}.tree.json", file.strip_suffix(".frame.json").expect("frame suffix checked"))))?;
             tree.validate_frame(&frame)?;
             if tree.nodes.is_empty() { continue; }
             tree.validate_topology()?;
-            selected = Some((frame, tree));
-            break;
+            *destination = Some((frame, tree));
+            if primary.is_some() && named.is_some() { break; }
         }
+        let selected = primary.into_iter().chain(named).max_by_key(|(frame, _)| {
+            (frame.generation, frame.detail("checkpointSequence").as_u64().unwrap_or(frame.validation_frame.ordinal))
+        });
         let Some(selected) = selected else { return Ok(json!({"available":false})); };
         selected
     };
     tree.validate_frame(&frame).map_err(|_| Error::new("E_OUTPUT_IO", 8, "recovered frame and tree identities disagree"))?;
     let mut pixels = None::<Vec<u8>>;
     if !output.root().join(FAILURE_PIXELS).is_file() && !frame_path.is_file() {
-        match std::fs::read_dir(output.root().join(CAPTURES_DIR)) {
+        let directory = if frame.surface == "main" { output.root().join(CAPTURES_DIR) }
+            else { output.root().join(NAMED_CAPTURES_DIR).join(&frame.surface) };
+        match std::fs::read_dir(directory) {
             Ok(entries) => for entry in entries {
                 let path = entry.map_err(io)?.path();
                 if !path.file_name().and_then(|name| name.to_str()).is_some_and(|name| name.ends_with(".frame.json")) { continue; }
                 let candidate: Value = serde_json::from_slice(&read_evidence(&path)?).map_err(io)?;
                 if candidate["generation"] != frame.generation || candidate["buildId"] != frame.build_id
+                    || candidate["surface"] != frame.surface || candidate["documentIdentity"] != *frame.detail("documentIdentity")
                     || candidate["pixelPresentation"] != serde_json::to_value(&frame.pixel_presentation).map_err(io)? { continue; }
                 // The loose identity match named this candidate; its typed parse must now succeed.
                 let capture: FrameEvidence = serde_json::from_value(candidate).map_err(io)?;
-                let png = path.with_file_name(path.file_name().expect("capture file").to_string_lossy().replace(".frame.json", ".png"));
+                let file = path.file_name().and_then(|name| name.to_str()).expect("capture file name checked");
+                let png = path.with_file_name(format!("{}.png", file.strip_suffix(".frame.json").expect("capture suffix checked")));
                 let bytes = crate::bounded_fs::read_input(&png, 64 * 1024 * 1024)
                     .map_err(|error| output::bounded_read_error(error, "captured pixels exceed 64 MiB"))?;
                 if capture.png_digest.as_deref() != Some(output::digest(&bytes).as_str()) {

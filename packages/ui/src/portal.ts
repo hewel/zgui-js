@@ -1,8 +1,6 @@
 import { insert } from "./renderer/index.js";
-import type { NativeHost } from "./host.js";
+import { bridgeFor, rememberBridge } from "./host.js";
 import type { NativeChild, NativeNode, NativeOverlayLayer } from "./types.js";
-
-declare const globalThis: NativeHost;
 
 export interface PortalProps {
   layer?: NativeOverlayLayer;
@@ -10,7 +8,8 @@ export interface PortalProps {
 }
 
 export function allocatePortal(layer: NativeOverlayLayer = "popover"): NativeNode {
-  return globalThis.__zgui.createPortal(layer);
+  const bridge = bridgeFor();
+  return rememberBridge(bridge.createPortal(layer), bridge);
 }
 
 export function Portal(props: PortalProps): NativeNode {

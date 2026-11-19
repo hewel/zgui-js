@@ -117,6 +117,7 @@ impl<A: AppHandler> WaylandApp<A> {
     ///
     /// As [`run`].
     pub fn run(&mut self) -> Result<(), PlatformError> {
+        self.state.monitors_dirty = false;
         {
             let cx = WaylandCx::new(&self.state);
             self.handler.surfaces_available(&cx);
@@ -133,6 +134,10 @@ impl<A: AppHandler> WaylandApp<A> {
     fn turn(&mut self) -> Result<(), PlatformError> {
         self.turns += 1;
         self.state.carry_out_activations();
+        if std::mem::take(&mut self.state.monitors_dirty) {
+            let cx = WaylandCx::new(&self.state);
+            self.handler.monitors_changed(&cx);
+        }
         self.deliver_wakes();
         self.deliver_events();
         self.retire();

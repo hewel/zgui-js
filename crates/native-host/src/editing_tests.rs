@@ -81,7 +81,7 @@ impl EditingGate {
         Ok(nodes[0])
     }
     fn text(&self, class: &str) -> TestResult<String> {
-        Ok(self.current()?.region.dom.text_content(self.node(class)?))
+        Ok(self.current()?.primary_region().dom.text_content(self.node(class)?))
     }
     fn expect_text(&self, class: &str, expected: &str) -> TestResult {
         let actual = self.text(class)?;
@@ -89,12 +89,12 @@ impl EditingGate {
         Ok(())
     }
     fn selection(&self, class: &str, expected: std::ops::Range<usize>) -> TestResult {
-        let actual = self.current()?.region.host.selection(self.node(class)?);
+        let actual = self.current()?.primary_region().host.selection(self.node(class)?);
         if actual != Some(expected.clone()) { return Err(format!("{class}: expected UTF-8 selection {expected:?}, got {actual:?}").into()); }
         Ok(())
     }
     fn focused(&self, class: &str) -> TestResult {
-        if self.current()?.region.host.focused().get_untracked() != Some(self.node(class)?) {
+        if self.current()?.primary_region().host.focused().get_untracked() != Some(self.node(class)?) {
             return Err(format!("native focus is not on {class}").into());
         }
         Ok(())
@@ -372,7 +372,7 @@ impl EditingGate {
                 self.input_count(0)?;
                 self.expect_text("editing-change-count", "0")?;
                 let current = self.current()?;
-                if self.initial_ids.iter().any(|node| current.region.dom.is_live(*node)) { return Err("old editable controls survived native frame reclamation".into()); }
+                if self.initial_ids.iter().any(|node| current.primary_region().dom.is_live(*node)) { return Err("old editable controls survived native frame reclamation".into()); }
                 self.semantics()?;
                 self.retired.borrow_mut().push(current);
                 self.completed.set(true);

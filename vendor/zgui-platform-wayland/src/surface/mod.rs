@@ -26,8 +26,8 @@ use wayland_client::protocol::wl_region::WlRegion;
 use wayland_client::protocol::wl_surface::WlSurface;
 use zgui_geom::{Css, CssPx, Device, DevicePx, Size};
 use zgui_platform::{
-    CursorStyle, Decorations, FullscreenMode, GpuSurface, PresentPacing, PresentationTiming,
-    Surface, SurfaceId, TextInput, Unsupported,
+    CursorStyle, Decorations, FullscreenMode, GpuSurface, InputRegion, LayerPlacement,
+    PlatformError, PresentPacing, PresentationTiming, Surface, SurfaceId, TextInput, Unsupported,
 };
 
 use crate::driver::WaylandState;
@@ -99,8 +99,6 @@ pub struct WaylandSurface {
     compositor: WlCompositor,
     /// Where a request for presentation feedback goes.
     presentation: Presentation,
-    /// The size the application asked for, kept for the first configure.
-    wanted: Mutex<Size<CssPx, Css>>,
     /// Where a pop-up was placed, for the reposition that follows it growing.
     placement: Option<zgui_platform::PopupPlacement>,
     /// The extent the pop-up's parent was at when it was placed.
@@ -130,11 +128,13 @@ impl WaylandSurface {
         parent_extent: Size<CssPx, Css>,
         links: Links,
     ) -> Arc<Self> {
+        let mut shared = Shared::new();
+        shared.wanted = wanted;
         Arc::new(Self {
             id,
             role,
             fractional,
-            shared: Mutex::new(Shared::new()),
+            shared: Mutex::new(shared),
             asked: AtomicBool::new(false),
             mapped: AtomicBool::new(false),
             ping: links.ping,
@@ -142,7 +142,6 @@ impl WaylandSurface {
             qh: links.qh,
             compositor: links.compositor,
             presentation: links.presentation,
-            wanted: Mutex::new(wanted),
             placement,
             parent_extent,
             reposition_token: std::sync::atomic::AtomicU32::new(1),
@@ -174,14 +173,6 @@ impl WaylandSurface {
     /// panic into a window that has stopped.
     pub(crate) fn shared(&self) -> MutexGuard<'_, Shared> {
         self.shared
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-    }
-
-    /// The extent the application asked for, which the first configure may or may not honour.
-    pub(crate) fn wanted(&self) -> Size<CssPx, Css> {
-        *self
-            .wanted
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
@@ -263,11 +254,8 @@ impl WaylandSurface {
         }
     }
 
-    /// An empty region, for a surface that wants presses to reach whatever is behind it.
-    ///
-    /// The compositor copies a region when it is set rather than referencing it, so the object is
-    /// retired straight away and nothing holds it.
-    pub(crate) fn empty_region(&self) -> WlRegion {
+    /// Creates an empty region, which the compositor copies when applied to a surface.
+    pub(crate) fn create_region(&self) -> WlRegion {
         self.compositor.create_region(&self.qh, ())
     }
 
@@ -507,7 +495,22 @@ impl Surface for WaylandSurface {
     }
 
     fn set_pointer_passthrough(&self, passthrough: bool) -> Result<(), Unsupported> {
-        chrome::set_pointer_passthrough(self, passthrough)
+        let region = if passthrough { &InputRegion::Empty } else { &InputRegion::Full };
+        chrome::set_input_region(self, region);
+        Ok(())
+    }
+
+    fn set_input_region(&self, region: &InputRegion) -> Result<(), PlatformError> {
+        chrome::set_input_region(self, region);
+        Ok(())
+    }
+
+    fn reconfigure_layer(
+        &self,
+        placement: &LayerPlacement,
+        size: Size<CssPx, Css>,
+    ) -> Result<(), PlatformError> {
+        chrome::reconfigure_layer(self, placement, size)
     }
 
     fn begin_move_drag(&self) -> Result<(), Unsupported> {

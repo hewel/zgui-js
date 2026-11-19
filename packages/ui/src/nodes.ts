@@ -1,58 +1,57 @@
 import { getOwner, onCleanup } from "#solid";
 import { flush } from "./renderer/index.js";
-import type { NativeHost } from "./host.js";
+import { bridgeFor, withCallbackBridge } from "./host.js";
 import type { CanvasScene, NativeDismissLayer, NativeDismissLayerOptions, NativeDismissReason, NativeFocusOptions, NativeFocusTrapOptions, NativeGeometry, NativeGeometryKind, NativeNode, NativeWindowRect } from "./types.js";
 
-declare const globalThis: NativeHost;
-
 export function getReducedMotion(): boolean {
-  return globalThis.__zgui.getReducedMotion();
+  return bridgeFor().getReducedMotion();
 }
 
 export function focus(node: NativeNode, options?: NativeFocusOptions): void {
-  globalThis.__zgui.focus(node, options?.reveal ?? false);
+  bridgeFor(node).focus(node, options?.reveal ?? false);
 }
 
 export function getWindowRect(node: NativeNode): NativeWindowRect | null {
-  return globalThis.__zgui.getWindowRect(node);
+  return bridgeFor(node).getWindowRect(node);
 }
 
 export function getTextContent(node: NativeNode): string {
-  return globalThis.__zgui.getTextContent(node);
+  return bridgeFor(node).getTextContent(node);
 }
 
 export function isAnimating(node: NativeNode): boolean {
-  return globalThis.__zgui.isAnimating(node);
+  return bridgeFor(node).isAnimating(node);
 }
 
 export function precedes(first: NativeNode, second: NativeNode): boolean {
-  return globalThis.__zgui.precedes(first, second);
+  return bridgeFor(first).precedes(first, second);
 }
 
 /** Creates a retained drawing, disposed automatically under a Solid owner. */
 export function createCanvasScene(): CanvasScene {
-  const scene = globalThis.__zgui.createCanvasScene();
+  const scene = bridgeFor().createCanvasScene();
   if (getOwner()) onCleanup(() => scene.dispose());
   return scene;
 }
 
 export function observeGeometry<K extends NativeGeometryKind>(node: NativeNode, kind: K, callback: (value: NativeGeometry[K]) => void): () => void {
-  const dispose = globalThis.__zgui.observeGeometry(node, kind, value => {
+  const bridge = bridgeFor(node);
+  const dispose = bridge.observeGeometry(node, kind, value => withCallbackBridge(bridge, () => {
     callback(value);
     flush();
-  });
+  }));
   if (getOwner()) onCleanup(dispose);
   return dispose;
 }
 
 export function trapFocus(node: NativeNode, options?: NativeFocusTrapOptions): () => void {
-  const dispose = globalThis.__zgui.trapFocus(node, options?.wrap ?? true, options?.autoFocus ?? true, options?.restore ?? true);
+  const dispose = bridgeFor(node).trapFocus(node, options?.wrap ?? true, options?.autoFocus ?? true, options?.restore ?? true);
   if (getOwner()) onCleanup(dispose);
   return dispose;
 }
 
 export function lockScroll(node: NativeNode): () => void {
-  const dispose = globalThis.__zgui.lockScroll(node);
+  const dispose = bridgeFor(node).lockScroll(node);
   if (getOwner()) onCleanup(dispose);
   return dispose;
 }
@@ -65,26 +64,20 @@ function dismissOptions(options: NativeDismissLayerOptions = {}): Required<Nativ
 export function registerDismissLayer(
   node: NativeNode, callback: (reason: NativeDismissReason) => void, options?: NativeDismissLayerOptions,
 ): NativeDismissLayer {
-  const lease = globalThis.__zgui.registerDismissLayer(node, callback, dismissOptions(options));
+  const bridge = bridgeFor(node);
+  const lease = bridge.registerDismissLayer(node, reason => withCallbackBridge(bridge, () => callback(reason)), dismissOptions(options));
   if (getOwner()) onCleanup(lease.dispose);
   return { dispose: lease.dispose, update: options => lease.update(dismissOptions(options)) };
 }
 
-export function installStylesheet(name: string, css: string): void {
-  globalThis.__zgui.installStylesheet(name, css);
-}
-
-export function removeStylesheet(name: string): void {
-  globalThis.__zgui.removeStylesheet(name);
-}
-
 export function mountStylesheet(name: string, css: string): () => void {
-  globalThis.__zgui.installStylesheet(name, css);
+  const bridge = bridgeFor();
+  bridge.installStylesheet(name, css);
   let removed = false;
   const dispose = () => {
     if (removed) return;
     removed = true;
-    globalThis.__zgui.removeStylesheet(name);
+    bridge.removeStylesheet(name);
   };
   if (getOwner()) onCleanup(dispose);
   return dispose;

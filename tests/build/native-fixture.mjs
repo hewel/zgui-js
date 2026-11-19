@@ -118,14 +118,14 @@ function textOf(node, texts) {
 const nativeQueueMicrotask = globalThis.queueMicrotask.bind(globalThis);
 const hostMicrotasks = new WeakMap();
 globalThis.queueMicrotask = fn => {
-  const queue = globalThis.__zgui ? hostMicrotasks.get(globalThis.__zgui) : undefined;
+  const queue = hostMicrotasks.get(globalThis.__zguiShell) ?? hostMicrotasks.get(globalThis.__zgui);
   if (queue) queue.push(fn);
   else nativeQueueMicrotask(fn);
 };
 
 let nextCanvasToken = 0;
 
-export function createHost({ strictStyles = false, reducedMotion = false } = {}) {
+export function createHost({ strictStyles = false, reducedMotion = false, monitors = [] } = {}) {
   let nextId = 0;
   let stopping = false;
   let turnDepth = 0;
@@ -138,8 +138,10 @@ export function createHost({ strictStyles = false, reducedMotion = false } = {})
   };
   const nodes = new Map();
   const parents = new Map();
+  const nodeRegions = new WeakMap();
   const stylesheets = new Map();
   const installs = [];
+  const primary = { stylesheets, installs };
   const focused = { current: null, reveal: false };
   const rects = new Map();
   const texts = new Map();
@@ -202,12 +204,15 @@ export function createHost({ strictStyles = false, reducedMotion = false } = {})
     else node.props.delete("style");
   };
 
-  const assertLive = (node, role = "node") => {
-    if (!node || typeof node !== "object" || !nodes.has(node.id)) {
+  const assertLive = (node, role = "node", region) => {
+    if (!node || typeof node !== "object" || nodes.get(node.id) !== node) {
       throw new TypeError(`invalid native ${role}`);
     }
     if (invalidated.has(node)) {
       throw new TypeError(`stale detached native ${role}`);
+    }
+    if (region && nodeRegions.get(node) !== region) {
+      throw new TypeError(`foreign mount region for native ${role}`);
     }
   };
 
@@ -215,9 +220,10 @@ export function createHost({ strictStyles = false, reducedMotion = false } = {})
     if (stopping) throw new ReferenceError(`native session is stopping during ${op}`);
   };
 
-  const makeNode = tag => {
+  const makeNode = (tag, region = primary) => {
     const node = { tag, id: ++nextId, props: new Map(), callbacks: {}, children: [] };
     nodes.set(node.id, node);
+    nodeRegions.set(node, region);
     return node;
   };
 
@@ -225,6 +231,15 @@ export function createHost({ strictStyles = false, reducedMotion = false } = {})
     out.add(root);
     for (const child of root.children) collectSubtree(child, out);
     return out;
+  };
+
+  const invalidate = doomed => {
+    for (const group of leaseGroups) {
+      for (const record of group) {
+        if (doomed.has(record.node)) record._dispose();
+      }
+    }
+    for (const node of doomed) invalidated.add(node);
   };
 
   const endTurn = () => {
@@ -235,13 +250,7 @@ export function createHost({ strictStyles = false, reducedMotion = false } = {})
     for (const candidate of roots) {
       if (!parents.has(candidate) && candidate.tag !== "root") collectSubtree(candidate, doomed);
     }
-    if (doomed.size === 0) return;
-    for (const group of leaseGroups) {
-      for (const record of group) {
-        if (doomed.has(record.node)) record._dispose();
-      }
-    }
-    for (const node of doomed) invalidated.add(node);
+    invalidate(doomed);
   };
 
   const runTurn = fn => {
@@ -297,21 +306,31 @@ export function createHost({ strictStyles = false, reducedMotion = false } = {})
     }
   });
 
-  const host = {
+  const syncGeometryAttachment = region => {
+    for (const record of geometry) {
+      if (!record.active || !record.onAttachment || nodeRegions.get(record.node) !== region) continue;
+      const next = attached(record.node);
+      if (next === record.attached) continue;
+      record.attached = next;
+      record.onAttachment(next);
+    }
+  };
+
+  const makeBridge = region => ({
     createElement: tag => {
       assertActiveHost("createElement");
-      return makeNode(tag);
+      return makeNode(tag, region);
     },
     createPortal: layer => {
       assertActiveHost("createPortal");
-      const node = makeNode("portal");
+      const node = makeNode("portal", region);
       makeLease(portals, { layer, node });
       return node;
     },
     createCanvasScene: () => {
       assertActiveHost("createCanvasScene");
       const token = ++nextCanvasToken;
-      const record = { token, active: true, disposals: 0, commands: [], transform: [1, 0, 0, 1, 0, 0] };
+      const record = { token, region, active: true, disposals: 0, commands: [], transform: [1, 0, 0, 1, 0, 0] };
       const handle = {
         get token() { return token; },
         update(commands, transform) {
@@ -333,11 +352,13 @@ export function createHost({ strictStyles = false, reducedMotion = false } = {})
       };
       canvasScenes.push(record);
       scenesByHandle.set(handle, record);
+      region.scenes?.push(handle);
       return handle;
     },
     registerDismissLayer: (node, callback, options) => {
       assertActiveHost("registerDismissLayer");
-      assertLive(node, "dismiss layer target");
+      assertLive(node, "dismiss layer target", region);
+      if (options.exclude) assertLive(options.exclude, "dismiss exclusion", region);
       const { record, dispose } = makeLease(layers, {
         node,
         callback,
@@ -348,7 +369,8 @@ export function createHost({ strictStyles = false, reducedMotion = false } = {})
       return {
         update: next => {
           assertActiveHost("dismissLayer.update");
-          assertLive(node, "dismiss layer target");
+          assertLive(node, "dismiss layer target", region);
+          if (next.exclude) assertLive(next.exclude, "dismiss exclusion", region);
           record.options = next;
           record.updates.push(next);
         },
@@ -358,24 +380,24 @@ export function createHost({ strictStyles = false, reducedMotion = false } = {})
     createTextNode: text => {
       assertActiveHost("createTextNode");
       if (typeof text !== "string") throw new TypeError("createTextNode expects a string");
-      const node = makeNode("#text");
+      const node = makeNode("#text", region);
       node.props.set("text", text);
       return node;
     },
     replaceText: (node, text) => {
-      assertLive(node, "text node");
+      assertLive(node, "text node", region);
       if (typeof text !== "string") throw new TypeError("replaceText expects a string");
       node.props.set("text", text);
     },
     isTextNode: node => {
-      assertLive(node, "node");
+      assertLive(node, "node", region);
       return node.tag === "#text";
     },
     insertNode: (parent, node, anchor) => {
       assertActiveHost("insertNode");
-      assertLive(parent, "parent");
-      assertLive(node, "node");
-      if (anchor !== undefined && anchor !== null) assertLive(anchor, "anchor");
+      assertLive(parent, "parent", region);
+      assertLive(node, "node", region);
+      if (anchor !== undefined && anchor !== null) assertLive(anchor, "anchor", region);
       if (node === anchor) return;
       const previous = parents.get(node);
       if (previous) {
@@ -390,32 +412,34 @@ export function createHost({ strictStyles = false, reducedMotion = false } = {})
       } else {
         parent.children.push(node);
       }
+      syncGeometryAttachment(region);
     },
     removeNode: (parent, node) => {
-      assertLive(parent, "parent");
-      assertLive(node, "node");
+      assertLive(parent, "parent", region);
+      assertLive(node, "node", region);
       const index = parent.children.indexOf(node);
       if (index >= 0) parent.children.splice(index, 1);
       parents.delete(node);
       pendingRemoval.add(node);
+      syncGeometryAttachment(region);
     },
     getParentNode: node => {
-      assertLive(node, "node");
+      assertLive(node, "node", region);
       return parents.get(node) ?? null;
     },
     getFirstChild: node => {
-      assertLive(node, "node");
+      assertLive(node, "node", region);
       return node.children[0] ?? null;
     },
     getNextSibling: node => {
-      assertLive(node, "node");
+      assertLive(node, "node", region);
       const parent = parents.get(node);
       if (!parent) return null;
       const index = parent.children.indexOf(node);
       return index >= 0 ? parent.children[index + 1] ?? null : null;
     },
     setProperty: (node, name, value) => {
-      assertLive(node, "node");
+      assertLive(node, "node", region);
       if (stopping && ((name.startsWith("on") && value != null) || (name === "src" && value != null))) {
         if (name.startsWith("on")) registrationsAfterStop.push(name);
         throw new ReferenceError("native session is stopping");
@@ -429,7 +453,7 @@ export function createHost({ strictStyles = false, reducedMotion = false } = {})
           node.props.set(name, value);
         } else {
           const record = scenesByHandle.get(value);
-          if (!record) throw new TypeError("canvas must be a scene from this host");
+          if (!record || record.region !== region) throw new TypeError("canvas must be a scene from this region");
           if (!record.active) throw new ReferenceError("canvas scene has been disposed");
           node.props.set(name, record.token);
         }
@@ -471,52 +495,60 @@ export function createHost({ strictStyles = false, reducedMotion = false } = {})
     },
     installStylesheet: (name, css) => {
       assertActiveHost("installStylesheet");
-      if (stylesheets.get(name) === css) return;
-      installs.push(name);
-      stylesheets.set(name, css);
+      if (region.stylesheets.get(name) === css) return;
+      region.installs.push(name);
+      region.stylesheets.set(name, css);
     },
-    removeStylesheet: name => { stylesheets.delete(name); },
+    removeStylesheet: name => { region.stylesheets.delete(name); },
     getReducedMotion: () => reducedMotion,
-    focus: (node, reveal = false) => moveFocus(node, reveal),
+    focus: (node, reveal = false) => {
+      assertLive(node, "focus target", region);
+      moveFocus(node, reveal);
+    },
     trapFocus: (node, wrap, autoFocus, restore) => {
       assertActiveHost("trapFocus");
-      assertLive(node, "focus trap target");
+      assertLive(node, "focus trap target", region);
       return makeLease(traps, { node, wrap, autoFocus, restore }).dispose;
     },
     lockScroll: node => {
       assertActiveHost("lockScroll");
-      assertLive(node, "scroll lock target");
+      assertLive(node, "scroll lock target", region);
       return makeLease(locks, { node }).dispose;
     },
     getWindowRect: node => {
-      assertLive(node, "rect target");
+      assertLive(node, "rect target", region);
       queries.rect.push(node);
       return rects.get(node) ?? null;
     },
     getTextContent: node => {
-      assertLive(node, "text target");
+      assertLive(node, "text target", region);
       queries.text.push(node);
       return textOf(node, texts);
     },
     isAnimating: node => {
-      assertLive(node, "animation target");
+      assertLive(node, "animation target", region);
       animatingQueries.push(node);
       return animating.get(node) ?? false;
     },
-    observeGeometry: (node, kind, callback) => {
+    observeGeometry: (node, kind, callback, onAttachment) => {
       assertActiveHost("observeGeometry");
-      assertLive(node, "geometry target");
+      assertLive(node, "geometry target", region);
       const { record, dispose } = makeLease(geometry, {
         node,
         kind,
         callback,
-        emit: value => record.active ? runTurn(() => record.callback(value)) : undefined,
+        onAttachment,
+        attached: onAttachment ? attached(node) : undefined,
+        emit: value => record.active && (!onAttachment || record.attached)
+          ? runTurn(() => record.callback(value)) : undefined,
       });
+      try { onAttachment?.(record.attached); }
+      catch (error) { dispose(); throw error; }
       return dispose;
     },
     precedes: (first, second) => {
-      assertLive(first, "first node");
-      assertLive(second, "second node");
+      assertLive(first, "first node", region);
+      assertLive(second, "second node", region);
       queries.precedes.push([first, second]);
       if (first === second) return false;
       const rootOf = node => {
@@ -535,14 +567,116 @@ export function createHost({ strictStyles = false, reducedMotion = false } = {})
       return order.get(first) < order.get(second);
     },
     clearRoot: root => {
-      assertLive(root, "root");
+      assertLive(root, "root", region);
       clearCalls.push(root);
       for (const child of root.children) {
         parents.delete(child);
         pendingRemoval.add(child);
       }
       root.children.length = 0;
+      syncGeometryAttachment(region);
     },
+  });
+
+  const host = makeBridge(primary);
+  const surfaces = new Map();
+  const layerIds = new Map();
+  const shellTasks = [];
+  const shellLog = [];
+  const monitorSubscribers = new Set();
+  let monitorSnapshot = structuredClone(monitors);
+  let nextLayerId = 0;
+  const present = surface => surface.placement.output === undefined
+    || monitorSnapshot.some(monitor => monitor.id === surface.placement.output);
+  const attachSurface = surface => {
+    if (surface.closing || surface.root || !present(surface)) return;
+    const region = { stylesheets: new Map(), installs: [], scenes: [] };
+    surface.region = region;
+    surface.root = makeNode("root", region);
+    surface.bridge = makeBridge(region);
+    surfaces.set(surface.name, surface);
+    surface.dispose = surface.attach(surface.root, surface.bridge);
+  };
+  const detachSurface = surface => {
+    if (!surface.root) return;
+    const region = surface.region;
+    try { surface.dispose?.(); }
+    finally {
+      if (surfaces.get(surface.name) === surface) surfaces.delete(surface.name);
+      const doomed = new Set([...nodes.values()].filter(node => nodeRegions.get(node) === region));
+      invalidate(doomed);
+      for (const scene of region.scenes) scene.dispose();
+      region.stylesheets.clear();
+      if (doomed.has(focused.current)) focused.current = null;
+      surface.root = surface.bridge = surface.region = surface.dispose = undefined;
+    }
+  };
+
+  const shell = {
+    subscribeMonitors(callback) {
+      assertActiveHost("subscribeMonitors");
+      monitorSubscribers.add(callback);
+      callback(structuredClone(monitorSnapshot));
+      return () => { monitorSubscribers.delete(callback); };
+    },
+    openLayer(name, placement, attach) {
+      assertActiveHost("openLayer");
+      if (name === "main" || !/^[a-zA-Z0-9_-]{1,64}$/.test(name)) throw new TypeError("invalid or reserved shell surface name");
+      if ([...layerIds.values()].some(surface => !surface.closing && surface.name === name)) {
+        throw new TypeError(`duplicate shell surface: ${name}`);
+      }
+      const id = ++nextLayerId;
+      const surface = { id, name, placement: structuredClone(placement), attach, inputRegion: "full" };
+      layerIds.set(id, surface);
+      shellLog.push({ op: "open", id, name, placement: surface.placement });
+      shellTasks.push(() => attachSurface(surface));
+      return id;
+    },
+    updateLayer(id, placement) {
+      assertActiveHost("updateLayer");
+      const surface = layerIds.get(id);
+      if (!surface || surface.closing) throw new ReferenceError("closed shell surface");
+      if (surface.placement.output !== placement.output) throw new TypeError("changing an output requires a new shell surface");
+      surface.placement = structuredClone(placement);
+      shellLog.push({ op: "update", id, placement: surface.placement });
+    },
+    closeLayer(id) {
+      const surface = layerIds.get(id);
+      if (!surface || surface.closing) return;
+      surface.closing = true;
+      shellLog.push({ op: "close", id });
+      shellTasks.push(() => {
+        try { detachSurface(surface); }
+        finally { layerIds.delete(id); }
+      });
+    },
+    setInputRegion(id, region) {
+      assertActiveHost("setInputRegion");
+      const surface = layerIds.get(id);
+      if (!surface || surface.closing) throw new ReferenceError("closed shell surface");
+      surface.inputRegion = structuredClone(region);
+      shellLog.push({ op: "input", id, region: surface.inputRegion });
+    },
+  };
+
+  const emitMonitors = next => runTurn(() => {
+    monitorSnapshot = structuredClone(next);
+    for (const callback of [...monitorSubscribers]) {
+      if (monitorSubscribers.has(callback)) callback(structuredClone(monitorSnapshot));
+    }
+    shellTasks.push(() => {
+      for (const surface of layerIds.values()) {
+        if (surface.closing || !present(surface)) detachSurface(surface);
+      }
+      for (const surface of layerIds.values()) attachSurface(surface);
+    });
+  });
+
+  const flush = () => {
+    runTurn(() => {});
+    while (shellTasks.length) {
+      for (const task of shellTasks.splice(0, shellTasks.length)) runTurn(task);
+    }
   };
 
   const attached = node => {
@@ -559,14 +693,16 @@ export function createHost({ strictStyles = false, reducedMotion = false } = {})
     [...nodes.values()].find(node => node.props.get("testId") === testId && attached(node));
 
   hostMicrotasks.set(host, microtasks);
+  hostMicrotasks.set(shell, microtasks);
 
   return {
     host, nodes, parents, stylesheets, installs, makeNode, byTestId, focused, rects, texts,
+    shell, surfaces, shellLog, emitMonitors, monitorSubscribers,
     animating, animatingQueries, queries, portals, traps, locks, layers, geometry,
     canvasScenes,
     clearCalls, invalidated, registrationsAfterStop, styleDiagnostics,
     dispatch, createEvent, runTurn, endTurn,
-    flush: () => runTurn(() => {}),
+    flush,
     focus: (node, options) => moveFocus(node, options?.reveal ?? false, options?.cause ?? "programmatic"),
     beginStop: () => { stopping = true; },
     isStopping: () => stopping,

@@ -1,5 +1,5 @@
 use serde_json::{Value,json};
-use zgui::{geom::{Css,CssPx,Device,DevicePx,Point}, platform::{PlatformCx,SurfaceEvent}, view::NodeId,
+use zgui::{geom::{Css,CssPx,Device,DevicePx,Point}, platform::{InputRegion,PlatformCx,SurfaceEvent,SurfaceId}, view::NodeId,
     vocab::{ImeEvent,KeyEvent,KeyState,Modifiers,NamedKey,PhysicalKey,PointerAction,PointerEvent}};
 use super::{Driver, Fault, pipeline::SettledFrame};
 use super::super::{Error,scenario::{Check,Key,Modifier,PointerButton,PointerDevice,PointerLocation,
@@ -8,21 +8,27 @@ use super::super::{Error,scenario::{Check,Key,Modifier,PointerButton,PointerDevi
 type DevicePoint = Point<DevicePx,Device>;
 
 impl Driver {
-    fn input_location(&mut self, location:&PointerLocation) -> Result<(Point<CssPx,Css>,Value),Fault> {
-        self.settle(true)?;
+    fn input_location(&mut self, location:&PointerLocation) -> Result<(SurfaceId,Point<CssPx,Css>,bool,Value),Fault> {
+        let name = location.surface();
+        self.settle_surface(Some(name))?;
+        let window = self.window(name)?;
+        let surface = window.surface().id();
+        let region = if name == "main" { InputRegion::Full } else {
+            self.pipeline.platform().offscreen(surface).ok_or_else(stale)?.input_region()
+        };
+        let scale = window.surface().scale_factor();
         let (position,trace) = match location {
             PointerLocation::Position{x,y,..} => {
                 let position:Point<CssPx,Css>=Point::new(CssPx(*x as f32),CssPx(*y as f32));
                 if !position.x.0.is_finite() || !position.y.0.is_finite() {
                     return Err(Error::new("E_SCHEMA",2,"pointer position exceeds native coordinate range").into());
                 }
-                let scale=self.window()?.surface().scale_factor();
                 let (x,y)=(f64::from(position.x.0),f64::from(position.y.0));
                 (position,json!({"positionLogical":{"x":x,"y":y},"positionDevice":{"x":x*scale,"y":y*scale},"targeted":false}))
             }
             PointerLocation::Target(target) => {
-                let window=self.window()?;
-                let settled=self.observer.settled(window,self.pipeline.app().session()).ok_or_else(stale)?;
+                let observer = self.observer(surface)?;
+                let settled=observer.settled(window,self.pipeline.app().session()).ok_or_else(stale)?;
                 let index=selectors::unique(settled.tree(),target,false)?.expect("required unique target");
                 let native=settled.native_node(index).ok_or_else(stale)?;
                 let record=&settled.tree().nodes[index];
@@ -32,22 +38,31 @@ impl Driver {
                 if record.state.enabled!=Some(true) {
                     return Err(target_error("E_TARGET_DISABLED","target or an ancestor is disabled",record).into());
                 }
-                let (device,samples)=target_point(window,native,&settled)?;
-                let scale=window.surface().scale_factor() as f32;
-                let logical=Point::new(CssPx(device.x.0/scale),CssPx(device.y.0/scale));
+                let (device,samples)=target_point(window,native,&settled,&region)?;
+                let logical=Point::new(CssPx(device.x.0/scale as f32),CssPx(device.y.0/scale as f32));
                 (logical,json!({"target":selectors::summary(record),"generation":settled.tree().generation,
                     "validationFrame":serde_json::to_value(settled.validation_frame()).expect("frame stamp serializes"),"metadataRevision":settled.metadata_revision(),
                     "positionLogical":{"x":logical.x.0,"y":logical.y.0},"positionDevice":{"x":device.x.0,"y":device.y.0},
                     "nativeHitVerified":true,"pointSamples":samples}))
             }
         };
-        if !self.frame_current() { return Err(stale().into()); }
-        Ok((position,trace))
+        if !self.window_current(window) { return Err(stale().into()); }
+        let accepted = matches!(location, PointerLocation::Target(_))
+            || region_contains(&region,f64::from(position.x.0),f64::from(position.y.0));
+        let mut trace = trace;
+        if name != "main" {
+            trace["surface"] = json!(name);
+            trace["inputRegionAccepted"] = json!(accepted);
+        }
+        Ok((surface,position,accepted,trace))
     }
 
     pub fn pointer(&mut self, location:&PointerLocation, pointer:&PointerDevice, operation:PointerOperation) -> Result<Value,Fault> {
-        let (position,mut trace)=self.input_location(location)?;
-        let surface=self.window()?.surface().id();
+        let (surface,position,accepted,mut trace)=self.input_location(location)?;
+        if !accepted {
+            trace["burst"] = json!([]);
+            return Ok(trace);
+        }
         let timestamp=self.pipeline.platform().clock().timestamp();
         let (actions,button):(&[PointerAction],Option<PointerButton>)=match operation {
             PointerOperation::Move=>( &[PointerAction::Moved], None ),
@@ -74,8 +89,7 @@ impl Driver {
         self.pipeline.deliver_all(surface,actions.iter().map(|action|SurfaceEvent::Pointer {
             action:*action,event,modifiers:Modifiers::NONE,timestamp,
         }));
-        self.pipeline.pump();
-        self.check()?;
+        self.pump_application()?;
         self.settle(false)?;
         trace["burst"]=json!(actions.iter().map(|action|match action {
             PointerAction::Moved=>"pointer.move",
@@ -91,7 +105,11 @@ impl Driver {
     }
 
     pub fn wheel(&mut self, location:&PointerLocation, delta:&WheelDelta, phase:WheelPhase) -> Result<Value,Fault> {
-        let (position,mut trace)=self.input_location(location)?;
+        let (surface,position,accepted,mut trace)=self.input_location(location)?;
+        if !accepted {
+            trace["burst"] = json!([]);
+            return Ok(trace);
+        }
         let native_delta=match delta.unit {
             WheelUnit::Pixels=>zgui::vocab::ScrollDelta::Pixels(zgui::geom::Size::new(CssPx(delta.x as f32),CssPx(delta.y as f32))),
             WheelUnit::Lines=>zgui::vocab::ScrollDelta::Lines{x:delta.x as f32,y:delta.y as f32},
@@ -103,14 +121,12 @@ impl Driver {
             WheelPhase::Ended=>zgui::vocab::ScrollPhase::Ended,
             WheelPhase::Momentum=>zgui::vocab::ScrollPhase::Momentum,
         };
-        let surface=self.window()?.surface().id();
         let timestamp=self.pipeline.platform().clock().timestamp();
         self.pipeline.deliver_all(surface,[SurfaceEvent::Wheel {
             event:zgui::vocab::WheelEvent{id:zgui::vocab::PointerId::MOUSE,kind:zgui::vocab::PointerKind::Mouse,position,delta:native_delta,phase:native_phase},
             modifiers:Modifiers::NONE,timestamp,
         }]);
-        self.pipeline.pump();
-        self.check()?;
+        self.pump_application()?;
         self.settle(false)?;
         trace["burst"]=json!(["native.wheel"]);
         trace["delta"]=json!(delta);
@@ -119,8 +135,8 @@ impl Driver {
         Ok(trace)
     }
 
-    pub fn key(&mut self,key:&Key,modifiers:&[Modifier]) -> Result<Value,Fault> {
-        self.settle(true)?;
+    pub fn key(&mut self,name:&str,key:&Key,modifiers:&[Modifier]) -> Result<Value,Fault> {
+        self.settle_surface(Some(name))?;
         let named=|key|KeyEvent::named(key,PhysicalKey::Unidentified(0));
         let event=match key {
             Key::Tab=>named(NamedKey::Tab),Key::Enter=>named(NamedKey::Enter),Key::Escape=>named(NamedKey::Escape),Key::Space=>named(NamedKey::Space),
@@ -131,31 +147,30 @@ impl Driver {
         let held=modifiers.iter().fold(Modifiers::NONE,|held,modifier|held|match modifier {
             Modifier::Shift=>Modifiers::SHIFT,Modifier::Control=>Modifiers::CONTROL,Modifier::Alt=>Modifiers::ALT,Modifier::Meta=>Modifiers::META,
         });
-        let surface=self.window()?.surface().id();
+        let surface=self.window(name)?.surface().id();
         let timestamp=self.pipeline.platform().clock().timestamp();
         self.pipeline.deliver_all(surface,[SurfaceEvent::ModifiersChanged(held),
             SurfaceEvent::Key{state:KeyState::Pressed,event:event.clone(),modifiers:held,timestamp},
             SurfaceEvent::Key{state:KeyState::Released,event,modifiers:held,timestamp},SurfaceEvent::ModifiersChanged(Modifiers::NONE)]);
-        self.pipeline.pump();
-        self.check()?;
+        self.pump_application()?;
         self.settle(false)?;
         Ok(json!({"key":key,"modifiers":modifiers,"burst":["modifiers","key.down","key.up","modifiers.clear"],"timeUs":timestamp.since_origin().as_micros()}))
     }
 
-    pub fn text(&mut self,text:&str) -> Result<Value,Fault> {
-        self.settle(true)?;
-        let surface=self.window()?.surface().id();
+    pub fn text(&mut self,name:&str,text:&str) -> Result<Value,Fault> {
+        self.settle_surface(Some(name))?;
+        let surface=self.window(name)?.surface().id();
         self.pipeline.deliver_all(surface,[SurfaceEvent::Ime(ImeEvent::Commit(text.into()))]);
-        self.pipeline.pump();
-        self.check()?;
+        self.pump_application()?;
         self.settle(false)?;
         Ok(json!({"burst":["native.ime.commit"],"utf8Bytes":text.len()}))
     }
 
     pub fn assert_node(&mut self,target:&Target,check:&Check) -> Result<Value,Fault> {
-        self.settle(true)?;
-        let window=self.window()?;
-        let settled=self.observer.settled(window,self.pipeline.app().session()).ok_or_else(stale)?;
+        self.settle_surface(Some(&target.surface))?;
+        let window=self.window(&target.surface)?;
+        let observer=self.observer(window.surface().id())?;
+        let settled=observer.settled(window,self.pipeline.app().session()).ok_or_else(stale)?;
         let index=selectors::unique(settled.tree(),target,matches!(check,Check::Exists(false)))?;
         let node=index.map(|index|&settled.tree().nodes[index]);
         // One node is serialized for the assertion record; its shape is unchanged.
@@ -194,17 +209,30 @@ fn target_error(code:&'static str,message:&str,node:&crate::preview::evidence::N
         "boundsDevice":serde_json::to_value(&node.bounds_device).expect("node bounds serialize")}))
 }
 
+fn region_contains(region: &InputRegion, x: f64, y: f64) -> bool {
+    match region {
+        InputRegion::Full => true,
+        InputRegion::Empty => false,
+        InputRegion::Rects(rects) => rects.iter().any(|rect| {
+            let (left, top) = (f64::from(rect.x), f64::from(rect.y));
+            x >= left && x < left + f64::from(rect.width) && y >= top && y < top + f64::from(rect.height)
+        }),
+    }
+}
+
 /// Start with clipped native fragments, not a logical box with guessed scroll/transform offsets.
 /// The 5x5 point search is conservative: a point is accepted only by actual native hit testing.
-fn target_point(window:&zgui::runtime::Window,native:NodeId,snapshot:&SettledFrame<'_>) -> Result<(DevicePoint,u32),Error> {
+fn target_point(window:&zgui::runtime::Window,native:NodeId,snapshot:&SettledFrame<'_>,region:&InputRegion) -> Result<(DevicePoint,u32),Error> {
     let target=zgui_view_dom::id::to_document(native).ok_or_else(stale)?;
     if window.document().borrow().store().index_of(target).is_none() { return Err(stale()); }
     let layout=window.layout().borrow();
     let placements=window.placements();
     let extent=window.surface().size();
+    let scale = window.surface().scale_factor();
     let mut fragments=0;
     let mut samples=0;
     let mut nonempty=false;
+    let mut within_region = false;
     let mut blockers=Vec::new();
     for box_ in layout.boxes_of(target) {
         if layout.get(*box_).is_none_or(|node|node.style.get_inherited_box().visibility!=zgui_css::values::size::VisibilityValue::Visible) { continue; }
@@ -223,6 +251,8 @@ fn target_point(window:&zgui::runtime::Window,native:NodeId,snapshot:&SettledFra
             for y in [0.5,0.1,0.9,0.25,0.75] { for x in [0.5,0.1,0.9,0.25,0.75] {
                 let point=Point::new(DevicePx(left+(right-left)*x),DevicePx(top+(bottom-top)*y));
                 samples+=1;
+                if !region_contains(region,f64::from(point.x.0)/scale,f64::from(point.y.0)/scale) { continue; }
+                within_region = true;
                 let chain=window.chain_at(point);
                 if chain.contains(&target) { return Ok((point,samples)); }
                 if window.hit_contains(native,point) && let Some(blocker)=chain.last() {
@@ -234,6 +264,7 @@ fn target_point(window:&zgui::runtime::Window,native:NodeId,snapshot:&SettledFra
         }
     }
     let (code,message)=if !nonempty { ("E_TARGET_CLIPPED","target fragments lie outside native clip/viewport bounds") }
+        else if !within_region { ("E_TARGET_UNREACHABLE","target is outside the surface input region") }
         else if !blockers.is_empty() { ("E_TARGET_OBSCURED","native hit testing found blockers at the tested target points") }
         else { ("E_TARGET_UNREACHABLE","no tested clipped-fragment point reaches the target; inspect pointer-events and clip geometry") };
     Err(Error::new(code,4,message).with_details(json!({"pointSamples":samples,"fragmentCount":fragments,"blockers":blockers,"pointStrategy":"clipped-native-fragment-5x5"})))
