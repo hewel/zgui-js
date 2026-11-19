@@ -56,6 +56,8 @@ export interface SessionLockCapabilityError extends Error {
 
 /** An authorized, generation-bound request. Leaving its owner never unlocks the session. */
 export interface SessionLockRequest {
+  /** Process-local request identity, stable even after disposal. */
+  readonly id: number;
   readonly state: Accessor<SessionLockState>;
   unlock(): void;
   dispose(): void;

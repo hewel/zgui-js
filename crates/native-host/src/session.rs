@@ -3,7 +3,7 @@ use js_runtime::{JsRuntime, RejectionPolicy, RuntimeLimits};
 use rquickjs::{Exception, Function, Persistent};
 use ui_bridge::{BridgeGroup, BridgeStep, DispatchOutcome, HostPort, UiBridge, registry::NodeRegistry};
 use zgui::{app::Fonts, platform::{SessionLockState, Surface, SurfaceId, WakeReason, Waker}, runtime::{AppTimers, ImageBlobs}, view::DocumentId};
-use crate::{assets::{AssetSource, ContractFailure}, environment::Environment, session_host::MountRegion, package::Package, shell::{Authority, ContractPolicy, Monitor, Shell}, work::{Arguments, Work, WorkSession}};
+use crate::{assets::{AssetSource, ContractFailure, MAX_SAFE_ID}, environment::Environment, session_host::MountRegion, package::Package, shell::{Authority, ContractPolicy, Monitor, Shell, ShellConfig}, work::{Arguments, Work, WorkSession}};
 use crate::runtime_capabilities::ResolvedCapabilities;
 
 /// Typed session failure: engine diagnostics, sticky provider contracts, and
@@ -256,6 +256,7 @@ impl Session {
     }
 
     fn prepare_inner(startup: Startup, module: SessionModule, generation: u64, waker: Arc<dyn Waker>, policy: SessionPolicy) -> Result<Rc<Self>> {
+        if generation > MAX_SAFE_ID { return Err("session generation exhausted".into()); }
         let resolved = if let Some(package) = &module.package {
             let declarations = &package.manifest.capabilities;
             match &policy.assets {
@@ -297,7 +298,13 @@ impl Session {
             } else {
                 Authority::Denied
             };
-            let shell = Shell::new(module.shell_authority(), lock_authority, policy.session_lock.unwrap_or_default(), contract, waker.clone());
+            let shell = Shell::new(ShellConfig {
+                generation,
+                authority: module.shell_authority(),
+                lock_authority,
+                lock_state: policy.session_lock.unwrap_or_default(),
+                contract,
+            }, waker.clone());
             let work_session = WorkSession { package: module.package.clone(), generation, assets: policy.assets.clone(), resolved };
             let (primary, work) = match startup {
                 Startup::Primary { region, surface } => {
@@ -956,7 +963,7 @@ impl Session {
             control_listeners: external.listeners,
             ..self.counts()
         };
-        self.image_blobs().clear();
+        self.work.clear_images();
         let failure = if !self.contract_reported.replace(true)
             && let Some(contract) = self.contract_failure()
         {

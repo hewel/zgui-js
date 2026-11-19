@@ -1,4 +1,4 @@
-import { Image, LayerSurface, SessionLockSurface, TextField, TextArea, createCanvasScene, createSpring, renderApp, renderShell, requestSessionLock, useMonitors } from "@hewel/zgui";
+import { Image, LayerSurface, SessionLockSurface, TextField, TextArea, createCanvasScene, createSpring, getSessionGeneration, renderApp, renderShell, requestSessionLock, useMonitors } from "@hewel/zgui";
 import type { NativeElementProps, NativeNode } from "@hewel/zgui";
 
 // @ts-expect-error Browser document is not a host global.
@@ -163,3 +163,7 @@ void <SessionLockSurface name="lock" />;
 void <SessionLockSurface name="lock" output="DP-1" inputRegion="empty" />;
 // @ts-expect-error Unlock is an explicit operation, not a request option.
 requestSessionLock({ unlock: true });
+// @ts-expect-error The lock identity is read-only.
+requestSessionLock().id = 1;
+// @ts-expect-error The generation is read from the current host, not supplied by the app.
+getSessionGeneration(1);

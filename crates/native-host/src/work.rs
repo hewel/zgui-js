@@ -1,7 +1,7 @@
 //! Owner-thread roots and registrations; workers receive only owned service requests.
 use std::{cell::{Cell, OnceCell, RefCell}, collections::{HashMap, VecDeque, hash_map::Entry}, fmt::Write, rc::{Rc, Weak}, sync::{Arc, atomic::{AtomicBool, Ordering}}, time::Duration};
 use host_services::Completion;
-use rquickjs::{Array, Ctx, Exception, Function, IntoJs, Object, Persistent, Value, function::{Func, Opt, Rest}, object::Property};
+use rquickjs::{Array, Ctx, Exception, Function, IntoJs, Object, Persistent, TypedArray, Value, function::{Func, Opt, Rest}, object::Property};
 use zgui::{platform::{SurfaceId, WakeReason, Waker}, runtime::{AppTimers, ImageBlobs}, view::{HostHandle, host::{FrameRequestId, Repeat, TimerId}}, vocab::Timestamp};
 use crate::{assets::{AssetError, AssetProvider, AssetSource, Delivery, MAX_SAFE_ID}, package::Package, shell::Shell};
 use crate::runtime_capabilities::ResolvedCapabilities;
@@ -9,11 +9,52 @@ use crate::runtime_capabilities::ResolvedCapabilities;
 mod external;
 
 const MAX_CALLBACKS: usize = 1024;
+// Match the binary socket frame cap; direct images have a separate session budget.
+const MAX_DIRECT_IMAGE_BYTES: u32 = 8 * 1024 * 1024;
+const MAX_DIRECT_IMAGES: u32 = 64;
+const MAX_DIRECT_BYTES_PER_SESSION: u32 = 64 * 1024 * 1024;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Mode { Loading, Mounting, Mounted, Stopping, Disposed }
 #[derive(Clone, Copy)]
-enum ImageLease { Package, Socket(usize) }
+enum ImageLease { Package, Socket(usize), Direct(u32) }
+
+impl ImageLease {
+    fn charge(self, work: &Work) {
+        self.update(work, true);
+    }
+
+    fn release(self, work: &Work) {
+        self.update(work, false);
+    }
+
+    fn update(self, work: &Work, charge: bool) {
+        match self {
+            Self::Package => {}
+            Self::Socket(bytes) => {
+                if charge {
+                    work.external.charge_image(bytes);
+                } else {
+                    work.external.release_image(bytes);
+                }
+            }
+            Self::Direct(bytes) => {
+                let mut budget = work.direct_images.get();
+                if charge {
+                    budget.handles += 1;
+                    budget.bytes += bytes;
+                } else {
+                    budget.handles -= 1;
+                    budget.bytes -= bytes;
+                }
+                work.direct_images.set(budget);
+            }
+        }
+    }
+}
+
+#[derive(Clone, Copy, Default)]
+struct DirectImageBudget { handles: u32, bytes: u32 }
 #[derive(Clone, Copy)]
 pub(crate) enum Arguments { Timer, Frame(f64) }
 pub(crate) struct ScheduledCall { id: u64, pub callback: Persistent<Function<'static>>, pub arguments: Arguments }
@@ -48,6 +89,7 @@ pub(crate) struct Work {
     scheduler: Scheduler,
     provider: Box<dyn AssetProvider>,
     image_blobs: ImageBlobs,
+    direct_images: Cell<DirectImageBudget>,
     external: external::External,
     resolved: ResolvedCapabilities,
     wake: Arc<dyn Fn() + Send + Sync>,
@@ -74,6 +116,7 @@ impl Work {
             mode: Cell::new(Mode::Loading), cleanup_shell: OnceCell::new(), generation, scheduler,
             provider: assets.bind(package, generation, wake.clone()),
             image_blobs: ImageBlobs::new(generation),
+            direct_images: Cell::default(),
             external,
             resolved,
             wake,
@@ -115,6 +158,12 @@ impl Work {
     }
 
     pub(crate) fn image_blobs(&self) -> &ImageBlobs { &self.image_blobs }
+
+    /// Reclaim image storage after the retiring session has counted leaked handles.
+    pub(crate) fn clear_images(&self) {
+        self.image_blobs.clear();
+        self.direct_images.set(DirectImageBudget::default());
+    }
 
     /// Returns the path grants used by service admission and native images.
     #[must_use]
@@ -233,6 +282,15 @@ impl Work {
             let path: String = rquickjs::FromJs::from_js(&ctx, path)?;
             let bytes = owner.provider.image_asset(&path).map_err(|error| owner.asset_error(&ctx, error))?;
             owner.image_handle(&ctx, bytes, ImageLease::Package)
+        }))?;
+        let weak = Rc::downgrade(self);
+        services.set("registerImageBytes", Func::from(move |ctx: Ctx<'js>, bytes: Opt<Value<'js>>, extra: Opt<Value<'js>>| {
+            let owner = owner(&weak, &ctx)?;
+            owner.require_creation(&ctx)?;
+            let (Some(bytes), None) = (bytes.0, extra.0) else {
+                return Err(Exception::throw_type(&ctx, "registerImageBytes requires exactly one Uint8Array"));
+            };
+            owner.direct_image_handle(&ctx, bytes)
         }))?;
         let weak = Rc::downgrade(self);
         services.prop("getResolvedCapabilities", data_property(Func::from(move |ctx: Ctx<'js>| {
@@ -357,6 +415,25 @@ impl Work {
         Ok(object)
     }
 
+    fn direct_image_handle<'js>(self: &Rc<Self>, ctx: &Ctx<'js>, value: Value<'js>) -> rquickjs::Result<Object<'js>> {
+        let view = TypedArray::<u8>::from_value(value)
+            .map_err(|_| Exception::throw_type(ctx, "image bytes must be a Uint8Array"))?;
+        // Use the intrinsic view length: TypedArray::len reads a shadowable JS property.
+        let raw = view.as_raw().ok_or_else(|| Exception::throw_type(ctx, "image bytes view is detached or out of bounds"))?;
+        let len = match u32::try_from(raw.len()) {
+            Ok(len) if (1..=MAX_DIRECT_IMAGE_BYTES).contains(&len) => len,
+            _ => return Err(Exception::throw_range(ctx, "image bytes must contain between 1 byte and 8 MiB")),
+        };
+        let budget = self.direct_images.get();
+        if budget.handles >= MAX_DIRECT_IMAGES || len > MAX_DIRECT_BYTES_PER_SESSION - budget.bytes {
+            return Err(Exception::throw_range(ctx, "session direct image budget exceeded"));
+        }
+        // SAFETY: the view keeps the backing buffer alive. Arc::from copies the
+        // slice before any JS can run and mutate, resize, or detach the buffer.
+        let bytes = Arc::from(unsafe { raw.as_ref() });
+        self.image_handle(ctx, bytes, ImageLease::Direct(len))
+    }
+
     fn image_handle<'js>(self: &Rc<Self>, ctx: &Ctx<'js>, bytes: Arc<[u8]>, lease: ImageLease) -> rquickjs::Result<Object<'js>> {
         let object = Object::new(ctx.clone())?;
         let src = self.register_image_bytes(bytes)
@@ -367,7 +444,7 @@ impl Work {
             let weak = Rc::downgrade(self);
             object.prop("release", data_property(Func::from(move || {
                 if let Some(owner) = weak.upgrade() && owner.image_blobs.release(&id) {
-                    if let ImageLease::Socket(bytes) = lease { owner.external.release_image(bytes); }
+                    lease.release(&owner);
                     if owner.mode.get() == Mode::Mounted { (owner.wake)(); }
                 }
             })))
@@ -376,7 +453,7 @@ impl Work {
             self.image_blobs.release(&src);
             return Err(error);
         }
-        if let ImageLease::Socket(bytes) = lease { self.external.charge_image(bytes); }
+        lease.charge(self);
         Ok(object)
     }
 

@@ -105,6 +105,46 @@ test("image asset handles preserve the host receiver, with explicit or owner-sco
   }
 });
 
+test("byte image handles release with their owner unless explicitly registered", async () => {
+  const { loadImageBytes, registerImageBytes } = await import("@hewel/zgui-services");
+  const { createRoot, flush } = await import("solid-js");
+  const previous = Object.getOwnPropertyDescriptor(globalThis, "__zguiServices");
+  const bytes = new Uint8Array([1, 2, 3]).subarray(1);
+  const live = new Set();
+  const failure = new RangeError("image bytes are empty");
+  const host = {
+    registerImageBytes(input) {
+      assert.equal(this, host);
+      if (input.length === 0) throw failure;
+      assert.equal(input, bytes, "forward the view without copying it in JS");
+      const handle = { src: `zgui-blob://${live.size}`, release() { live.delete(this); } };
+      live.add(handle);
+      return handle;
+    },
+  };
+  Object.defineProperty(globalThis, "__zguiServices", { configurable: true, value: host });
+  try {
+    const unscoped = loadImageBytes(bytes);
+    let dispose;
+    const [explicit, scoped] = createRoot(d => {
+      dispose = d;
+      return [registerImageBytes(bytes), loadImageBytes(bytes)];
+    });
+    flush();
+    assert.deepEqual([...live], [unscoped, explicit, scoped]);
+    dispose();
+    flush();
+    assert.deepEqual([...live], [unscoped, explicit]);
+    explicit.release();
+    unscoped.release();
+    assert.equal(live.size, 0);
+    assert.throws(() => loadImageBytes(new Uint8Array()), error => error === failure);
+  } finally {
+    if (previous) Object.defineProperty(globalThis, "__zguiServices", previous);
+    else delete globalThis.__zguiServices;
+  }
+});
+
 test("endpoint queries defer host access and preserve unbound and undeclared outcomes", async () => {
   const previous = Object.getOwnPropertyDescriptor(globalThis, "__zguiServices");
   try {

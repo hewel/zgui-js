@@ -5,6 +5,7 @@ declare const globalThis: {
   readonly __zguiServices: {
     readTextAsset(path: string): HostRequest<string>;
     registerImageAsset(path: string): ImageHandle;
+    registerImageBytes(bytes: Uint8Array): ImageHandle;
     getResolvedCapabilities(): ResolvedCapabilities;
     getAuthorizedEndpoint(name: string): string | null;
     connectUnixSocket(path: string, options: UnixSocketOptions): UnixSocket;
@@ -97,13 +98,24 @@ export function registerImageAsset(path: string): ImageHandle {
   return globalThis.__zguiServices.registerImageAsset(path);
 }
 
+function releaseWithOwner(handle: ImageHandle): ImageHandle {
+  if (getOwner()) onCleanup(() => handle.release());
+  return handle;
+}
+
 /** Register an image asset, releasing it automatically if called inside a Solid owner. */
 export function loadImageAsset(path: string): ImageHandle {
-  const handle = registerImageAsset(path);
-  if (getOwner()) {
-    onCleanup(() => handle.release());
-  }
-  return handle;
+  return releaseWithOwner(registerImageAsset(path));
+}
+
+/** Copy encoded image bytes into the session. Release the returned handle explicitly. */
+export function registerImageBytes(bytes: Uint8Array): ImageHandle {
+  return globalThis.__zguiServices.registerImageBytes(bytes);
+}
+
+/** Register image bytes, releasing the handle automatically inside a Solid owner. */
+export function loadImageBytes(bytes: Uint8Array): ImageHandle {
+  return releaseWithOwner(registerImageBytes(bytes));
 }
 
 /** Callbacks and wire framing for an allowed Unix domain socket. */

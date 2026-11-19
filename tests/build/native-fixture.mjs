@@ -124,8 +124,12 @@ globalThis.queueMicrotask = fn => {
 };
 
 let nextCanvasToken = 0;
+let nextSessionGeneration = 1;
+let nextLockRequestId = 1;
 
 export function createHost({ strictStyles = false, reducedMotion = false, monitors = [], sessionLock } = {}) {
+  if (!Number.isSafeInteger(nextSessionGeneration)) throw new RangeError("session generation exhausted");
+  const generation = nextSessionGeneration++;
   let nextId = 0;
   let stopping = false;
   let turnDepth = 0;
@@ -582,7 +586,7 @@ export function createHost({ strictStyles = false, reducedMotion = false, monito
   const surfaces = new Map();
   const layerIds = new Map();
   const lockIds = new Map();
-  const lockSubscribers = new Set();
+  const lockSubscribers = new Map();
   const sessionLockLog = [];
   let lockState = "unlocked";
   const shellTasks = [];
@@ -595,8 +599,8 @@ export function createHost({ strictStyles = false, reducedMotion = false, monito
   };
   const setLockState = next => {
     lockState = next;
-    for (const callback of [...lockSubscribers]) {
-      if (lockSubscribers.has(callback)) callback(next);
+    for (const id of [...lockSubscribers.keys()]) {
+      lockSubscribers.get(id)?.(next);
     }
   };
   const present = surface => (!surface.lock || lockState === "locked")
@@ -626,11 +630,19 @@ export function createHost({ strictStyles = false, reducedMotion = false, monito
   };
 
   const shell = {
+    getSessionGeneration: () => generation,
     requestSessionLock(callback) {
       assertActiveHost("requestSessionLock");
       requireLock();
-      callback(lockState);
-      lockSubscribers.add(callback);
+      if (!Number.isSafeInteger(nextLockRequestId)) throw new RangeError("session lock request identifiers exhausted");
+      const id = nextLockRequestId++;
+      lockSubscribers.set(id, callback);
+      try {
+        callback(lockState);
+      } catch (error) {
+        lockSubscribers.delete(id);
+        throw error;
+      }
       shellTasks.push(() => {
         if (stopping || lockState === "locked") return;
         sessionLockLog.push("lock");
@@ -644,10 +656,10 @@ export function createHost({ strictStyles = false, reducedMotion = false, monito
           for (const surface of lockIds.values()) attachSurface(surface);
         }
       });
-      return {
+      const handle = {
         unlock() {
           if (stopping) throw new TypeError("session is stopping");
-          if (!lockSubscribers.has(callback)) throw new ReferenceError("session lock handle was unsubscribed");
+          if (!lockSubscribers.has(id)) throw new ReferenceError("session lock handle was unsubscribed");
           if (lockState !== "locked") throw new TypeError("session is not locked");
           shellTasks.push(() => {
             if (stopping || lockState !== "locked") return;
@@ -656,8 +668,14 @@ export function createHost({ strictStyles = false, reducedMotion = false, monito
             setLockState("unlocked");
           });
         },
-        unsubscribe: () => { lockSubscribers.delete(callback); },
+        unsubscribe: () => { lockSubscribers.delete(id); },
       };
+      return Object.defineProperty(handle, "id", {
+        value: id,
+        enumerable: true,
+        writable: false,
+        configurable: false,
+      });
     },
     openLock(name, output, attach) {
       assertActiveHost("openLock");

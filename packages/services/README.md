@@ -51,6 +51,20 @@ handle's synchronous, idempotent `release()` when it is no longer in use.
 called inside a Solid owner. Both helpers throw synchronously for undeclared
 assets and are available during mount, lifecycle callbacks and events.
 
+`registerImageBytes(bytes: Uint8Array)` copies the supplied view into the
+session and returns an `ImageHandle` with a `zgui-blob://` `src`. Use it for
+encoded PNG or SVG received as bytes, for example from an NDJSON message.
+No asset declaration or preview fixture mapping is needed. Registration throws
+synchronously for a wrong view type, a detached view, an empty view, or a view
+larger than 8 MiB. Each session's active direct-image registry is capped at
+64 registered handles and 64 MiB of registered bytes. Hitting either limit
+throws.
+
+`release()` frees registry capacity immediately; in-flight decode jobs can
+finish using their own clone of the buffer reference. Use `loadImageBytes(bytes)`
+to release on Solid owner cleanup. Outside an owner, both registration helpers
+require explicit release. Preview reports unreleased handles at teardown.
+
 ## External communication
 
 Declare only the authorities the application needs in the package's

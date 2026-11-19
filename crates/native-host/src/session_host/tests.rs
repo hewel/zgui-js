@@ -636,6 +636,48 @@ fn rejected_lock_candidate_keeps_the_accepted_auth_surface() {
 }
 
 #[test]
+fn locked_reload_advances_the_daemon_correlation_identity_without_unlocking() {
+    let package = lock_package(r#"
+        export const hostApiVersion = 1;
+        export function mount() {
+            const generation = __zguiShell.getSessionGeneration();
+            const lock = __zguiShell.requestSessionLock(() => {});
+            __zguiShell.openLock('locker', 'A', (root, bridge) => {
+                bridge.insertNode(root, bridge.createTextNode(`${generation}:${lock.id}`), null);
+                return () => bridge.clearRoot(root);
+            });
+            return () => {
+                if (__zguiShell.getSessionGeneration() !== generation) {
+                    throw Error('generation changed during cleanup');
+                }
+                lock.unsubscribe();
+            };
+        }
+    "#);
+    let mut fixture = LockedShell::new(&package);
+    let identity = |session: &Session| {
+        let (_, lock) = session.mount_regions().pop().expect("active lock mount region");
+        let label = lock.region.dom.text_content(lock.region.root);
+        let (generation, id) = label.split_once(':').expect("generation and request ID label");
+        let generation = generation.parse::<u64>().expect("safe integer generation");
+        assert_eq!(generation, session.generation, "bridge identity matches the accepted session");
+        (generation, id.parse::<u64>().expect("safe integer lock request ID"))
+    };
+    let previous = fixture.session();
+    let (old_generation, old_id) = identity(&previous);
+    let outcome = fixture.replace(&lock_package(BAD_EVAL));
+    assert!(matches!(outcome, ReloadOutcome::Rejected(_)), "bad preflight must be rejected: {outcome:?}");
+    let outcome = fixture.replace(&package);
+    assert!(matches!(outcome, ReloadOutcome::Mounted { .. }), "clean reload must succeed: {outcome:?}");
+    let retirement = previous.retire();
+    assert!(retirement.failure.is_none(), "predecessor cleanup must see its own generation: {:?}", retirement.failure);
+    let (generation, id) = identity(&fixture.session());
+    assert_eq!(generation, old_generation + 2, "rejected candidates consume their generation");
+    assert!(id > old_id, "reloading must not reset lock request IDs: {old_id}, {id}");
+    fixture.assert_locked();
+}
+
+#[test]
 fn lock_cleanup_faults_veto_staged_unlock() {
     let good = lock_package(LOCK_UI);
     for (source, fault) in [

@@ -3,7 +3,7 @@ import {
   createCanvasScene, createContext, createEffect, createMemo, createSignal, createSpring, createStore, createProjection,
   merge, omit, onCleanup, onSettled, reconcile, renderApp, renderShell, untrack, useContext, useMonitors,
   focus, getTextContent, getWindowRect, isAnimating, lockScroll, mountStylesheet, observeGeometry, precedes,
-  SessionLockSurface, requestSessionLock,
+  SessionLockSurface, getSessionGeneration, requestSessionLock,
 } from "@hewel/zgui";
 import type { CanvasCommand, CanvasScene, CanvasTransform, Component, Context, NativeAnimationEvent, NativeChild, NativeContextMenuEvent, NativeFocusOptions, NativeNode, NativePointerBoundaryEvent, NativeRole, NativeTextControlProps, NativeTransitionEvent, NativeViewport, NativeWheelEvent, NativeWindowRect, ParentComponent, Spring, SpringOptions, TextFieldProps, TextAreaProps, VectorProps } from "@hewel/zgui";
 import type { SessionLockRequest, SessionLockState } from "@hewel/zgui";
@@ -204,10 +204,12 @@ export function mountShell(): () => void {
 export function mountLock(): () => void {
   return renderShell(() => {
     const lock: SessionLockRequest = requestSessionLock();
+    const generation: number = getSessionGeneration();
+    const lockId: number = lock.id;
     const monitors = useMonitors();
     return <For each={monitors()} keyed={monitor => monitor.id}>{monitor =>
       <SessionLockSurface name={`lock-${monitor().id.toLowerCase()}`} output={monitor().id}>
-        <text>{((): SessionLockState => lock.state())()}</text>
+        <text>{generation}:{lockId}:{((): SessionLockState => lock.state())()}</text>
       </SessionLockSurface>
     }</For>;
   });

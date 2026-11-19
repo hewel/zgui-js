@@ -1,15 +1,22 @@
 //! Generation-owned shell requests and monitor subscriptions. No platform work runs inside JS.
-use std::{cell::{Cell, RefCell}, collections::BTreeMap, rc::{Rc, Weak}, sync::Arc};
+use std::{cell::{Cell, RefCell}, collections::BTreeMap, rc::{Rc, Weak}, sync::{Arc, atomic::{AtomicU64, Ordering}}};
 
-use rquickjs::{Array, Ctx, Exception, Function, Object, Persistent, Value, function::Func};
+use rquickjs::{Array, Ctx, Exception, Function, Object, Persistent, Value, function::Func, object::Property};
 use serde::{Deserialize, Serialize};
 use zgui::{geom::{Css, CssPx, Edges, Size}, platform::{InputRect, InputRegion, KeyboardInteractivity, Layer, LayerPlacement, MonitorInfo, SessionLockState, WakeReason, Waker}};
 
-use crate::{assets::ContractFailure, work::service_error};
+use crate::{assets::{ContractFailure, MAX_SAFE_ID}, work::service_error};
 
 pub(crate) const MAX_LAYERS: usize = 32;
 const MAX_SUBSCRIPTIONS: usize = 64;
 const MAX_INPUT_RECTS: u32 = 256;
+static NEXT_LOCK_ID: AtomicU64 = AtomicU64::new(1);
+
+fn allocate_lock_id(next: &AtomicU64) -> Option<u64> {
+    next.try_update(Ordering::Relaxed, Ordering::Relaxed, |id| {
+        (id <= MAX_SAFE_ID).then(|| id + 1)
+    }).ok()
+}
 
 /// One named output, with physical desktop geometry and the advertised scale.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -80,8 +87,19 @@ pub(crate) enum ContractPolicy { Throw, Sticky }
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Lifecycle { Loading, Active, Stopping }
 
+/// Fixed generation identity, authority, and initial compositor state.
+#[derive(Debug)]
+pub(crate) struct ShellConfig {
+    pub(crate) generation: u64,
+    pub(crate) authority: Authority,
+    pub(crate) lock_authority: Authority,
+    pub(crate) lock_state: SessionLockState,
+    pub(crate) contract: ContractPolicy,
+}
+
 /// Holds only generation-local requests, never a native surface or registry.
 pub(crate) struct Shell {
+    generation: u64,
     authority: Authority,
     contract: ContractPolicy,
     failure: RefCell<Option<ContractFailure>>,
@@ -94,7 +112,7 @@ pub(crate) struct Shell {
     lock_fenced: Cell<bool>,
     lock_state: Cell<SessionLockState>,
     lock_command: Cell<Option<LockCommand>>,
-    lock_subscriptions: RefCell<BTreeMap<u32, Persistent<Function<'static>>>>,
+    lock_subscriptions: RefCell<BTreeMap<u64, Persistent<Function<'static>>>>,
     lock_surfaces: RefCell<BTreeMap<u32, WantedLock>>,
     in_cleanup: Cell<bool>,
     cleanup_jobs: Cell<bool>,
@@ -105,8 +123,9 @@ pub(crate) struct Shell {
 
 impl Shell {
     /// Fixes generation authority before preflight; creation opens only for mount.
-    pub(crate) fn new(authority: Authority, lock_authority: Authority, lock_state: SessionLockState, contract: ContractPolicy, waker: Arc<dyn Waker>) -> Rc<Self> {
-        Rc::new(Self { authority, contract, failure: RefCell::new(None), life: Cell::new(Lifecycle::Loading),
+    pub(crate) fn new(config: ShellConfig, waker: Arc<dyn Waker>) -> Rc<Self> {
+        let ShellConfig { generation, authority, lock_authority, lock_state, contract } = config;
+        Rc::new(Self { generation, authority, contract, failure: RefCell::new(None), life: Cell::new(Lifecycle::Loading),
             monitors: RefCell::new(Vec::new()), subscriptions: RefCell::new(BTreeMap::new()), layers: RefCell::new(BTreeMap::new()),
             lock_authority, lock_fenced: Cell::new(false), lock_state: Cell::new(lock_state),
             lock_command: Cell::new(None), lock_subscriptions: RefCell::new(BTreeMap::new()),
@@ -278,6 +297,8 @@ impl Shell {
     /// Install the session-level bridge independently of all native documents.
     pub(crate) fn install<'js>(self: &Rc<Self>, ctx: &Ctx<'js>) -> rquickjs::Result<()> {
         let api = Object::new(ctx.clone())?;
+        let generation = self.generation as f64;
+        api.prop("getSessionGeneration", Property::from(Func::from(move || generation)))?;
         let weak = Rc::downgrade(self);
         api.set("subscribeMonitors", Func::from(move |ctx: Ctx<'js>, callback: Function<'js>| {
             let shell = owner(&weak, &ctx)?;
@@ -366,8 +387,10 @@ impl Shell {
             if shell.lock_subscriptions.borrow().len() >= MAX_SUBSCRIPTIONS {
                 return Err(Exception::throw_range(&ctx, "session lock subscription limit reached"));
             }
-            let id = shell.id(&ctx)?;
+            let id = allocate_lock_id(&NEXT_LOCK_ID)
+                .ok_or_else(|| Exception::throw_range(&ctx, "session lock request identifiers exhausted"))?;
             let handle = Object::new(ctx.clone())?;
+            handle.prop("id", Property::from(id as f64).enumerable())?;
             let unlock = weak.clone();
             handle.set("unlock", Function::new(ctx.clone(), move |ctx: Ctx<'js>| {
                 let session = owner(&unlock, &ctx)?;
@@ -578,11 +601,69 @@ mod tests {
     use super::*;
 
     #[test]
+    fn lock_request_id_exhaustion_does_not_wrap_or_repeat() {
+        let next = AtomicU64::new(9_007_199_254_740_991);
+        assert_eq!(allocate_lock_id(&next), Some(9_007_199_254_740_991), "the last safe ID remains usable");
+        assert_eq!(allocate_lock_id(&next), None, "allocation beyond the safe range fails closed");
+        assert_eq!(allocate_lock_id(&next), None, "exhaustion is permanent");
+    }
+
+    #[test]
+    fn lock_request_ids_remain_readonly_and_increase_between_shells() {
+        let runtime = rquickjs::Runtime::new().expect("create QuickJS runtime");
+        let waker = zgui::platform::PlatformCx::waker(&zgui_platform_headless::Headless::new());
+        let mut previous = 0.0;
+        for generation in 1..=2 {
+            let context = rquickjs::Context::full(&runtime).expect("create QuickJS context");
+            let shell = Shell::new(ShellConfig {
+                generation,
+                authority: Authority::Denied,
+                lock_authority: Authority::Allowed,
+                lock_state: SessionLockState::Locked,
+                contract: ContractPolicy::Throw,
+            }, waker.clone());
+            shell.activate();
+            let (first, second) = context.with(|ctx| {
+                shell.install(&ctx).expect("install shell bridge");
+                let ids = ctx.eval::<Array, _>(r#"
+                    const first = __zguiShell.requestSessionLock(() => {});
+                    const failure = Error('initial lock observer failed');
+                    try {
+                        __zguiShell.requestSessionLock(() => { throw failure; });
+                        throw Error('observer failure did not propagate');
+                    } catch (error) {
+                        if (error !== failure) throw error;
+                    }
+                    const second = __zguiShell.requestSessionLock(() => {});
+                    const id = first.id;
+                    first.unsubscribe();
+                    second.unsubscribe();
+                    if (!Number.isSafeInteger(id) || !Number.isSafeInteger(second.id)
+                        || Reflect.set(first, 'id', 0) || first.id !== id) {
+                        throw Error('lock identity must be stable and read-only');
+                    }
+                    [id, second.id]
+                "#).expect("read identities of two lock requests");
+                (ids.get::<f64>(0).expect("first lock ID"), ids.get::<f64>(1).expect("second lock ID"))
+            });
+            assert!(previous < first, "lock IDs must increase across sessions: {previous}, {first}");
+            assert!(second - first >= 2.0, "observer failure must consume an ID: {first}, {second}");
+            previous = second;
+        }
+    }
+
+    #[test]
     fn lock_requests_are_separate_from_layer_authority_and_blocked_during_cleanup() {
         let runtime = rquickjs::Runtime::new().expect("create QuickJS runtime");
         let context = rquickjs::Context::full(&runtime).expect("create QuickJS context");
         let waker = zgui::platform::PlatformCx::waker(&zgui_platform_headless::Headless::new());
-        let shell = Shell::new(Authority::Denied, Authority::Allowed, SessionLockState::Locked, ContractPolicy::Throw, waker);
+        let shell = Shell::new(ShellConfig {
+            generation: 1,
+            authority: Authority::Denied,
+            lock_authority: Authority::Allowed,
+            lock_state: SessionLockState::Locked,
+            contract: ContractPolicy::Throw,
+        }, waker);
         shell.activate();
         context.with(|ctx| {
             shell.install(&ctx).expect("install shell bridge");

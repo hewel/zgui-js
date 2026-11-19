@@ -143,3 +143,40 @@ test("surfaces lost retires JavaScript but does not release the platform lock", 
   verifyLock(await lockTrace(out), "locked", 0, ["left", "spare"]);
   assert.equal(result.generation, 2);
 });
+
+test("lock request IDs stay stable through compositor outcomes and advance after recreation", async () => {
+  const identityBundle = await buildFixtureApp(path.join(temp.dir, "lock-identity"), "lock-identity", `
+    import { getSessionGeneration, renderApp, requestSessionLock, type NativeNode } from "@hewel/zgui";
+    const generation = getSessionGeneration();
+    export const hostApiVersion = 1;
+    export function mount(root: NativeNode) {
+      return renderApp(() => {
+        const first = requestSessionLock();
+        const second = requestSessionLock();
+        const requested = first.id;
+        return <text testId="identity">{JSON.stringify([generation, getSessionGeneration(), requested, first.id, second.id, first.state()])}</text>;
+      }, root);
+    }
+  `, { rawSource: true, capabilities: { sessionLock: true } });
+  const { out, result } = await run("lock-identity", [
+    advance("first-lock"), capture("first"),
+    { id: "recreate", op: "surface.recreate", surface: "main" },
+    advance("recreated-lock"), capture("second"),
+  ], { bundle: identityBundle, fixture: refusal });
+  const identity = async (id, expectedState) => {
+    const tree = await readTree(out, id);
+    const [generation, mounted, requested, first, second, state] = JSON.parse(getNode(tree, "identity").text);
+    assert.equal(generation, mounted, "the preflight and mounted identities agree");
+    assert.equal(first, requested, "the compositor outcome does not change the request ID");
+    assert.equal(state, expectedState);
+    assert.ok([generation, first, second].every(value => Number.isSafeInteger(value) && value > 0));
+    assert.ok(first < second, "two requests in one turn have increasing IDs");
+    return { generation, first, second };
+  };
+  const before = await identity("first", "refused");
+  const after = await identity("second", "locked");
+  assert.ok(after.generation > before.generation);
+  assert.equal(after.generation, result.generation);
+  assert.ok(after.first > before.second, "a recreated session does not reuse predecessor lock IDs");
+  assert.equal((await lockTrace(out)).unlockCount, 0);
+});

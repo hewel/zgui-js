@@ -13,6 +13,7 @@ use zgui::{
 };
 
 use crate::{
+    assets::MAX_SAFE_ID,
     fallback,
     session::{Result as SessionResult, ResourceCounts, Session, SessionError, SessionModule, SessionPolicy},
 };
@@ -404,6 +405,13 @@ impl SessionHost {
         report_reload(outcome);
     }
 
+    /// Rejected candidates still consume their generation; no unrepresentable ID is issued.
+    fn allocate_generation(current: &mut u64) -> Option<u64> {
+        let generation = current.checked_add(1).filter(|&id| id <= MAX_SAFE_ID)?;
+        *current = generation;
+        Some(generation)
+    }
+
     fn mount_module_inner(&mut self, surface: &mut impl SessionSurface, waker: Arc<dyn Waker>, document: DocumentId, module: SessionModule, retry: &Rc<dyn Fn(DocumentId, u64)>) -> ReloadOutcome {
         let Some(region) = self.regions.get(&document).cloned() else {
             return ReloadOutcome::Rejected("mount region no longer exists".into());
@@ -411,12 +419,9 @@ impl SessionHost {
         let Some(target) = surface.surface(document) else {
             return ReloadOutcome::Rejected("mount region has no window".into());
         };
-        // A generation is allocated before preflight and never reused, so a
-        // rejected candidate still consumes its identity.
-        let Some(generation) = self.generation.checked_add(1) else {
+        let Some(generation) = Self::allocate_generation(&mut self.generation) else {
             return ReloadOutcome::Rejected("session generation exhausted".into());
         };
-        self.generation = generation;
         let previous = self.sessions.get(&document).cloned();
         let mut candidate_region = region.clone();
         let staging_parent = if previous.is_some() {

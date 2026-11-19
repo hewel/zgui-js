@@ -125,6 +125,30 @@ fn preflight_drains_pure_initialization_and_accepts_handled_rejections() {
 }
 
 #[test]
+fn preflight_exposes_the_exact_generation_and_rejects_imprecise_identity() {
+    let fixture = Fixture::new(r#"
+        export const hostApiVersion = 1;
+        const generation = __zguiShell.getSessionGeneration();
+        export function mount(root) {
+            if (generation !== __zguiShell.getSessionGeneration()) throw Error('generation changed after preflight');
+            __zgui.insertNode(root, __zgui.createTextNode(String(generation)), null);
+            return () => __zgui.clearRoot(root);
+        }
+    "#, "");
+    let native = Native::new();
+    for generation in [1, 9_007_199_254_740_991_u64] {
+        let session = native.prepare(fixture.package(), generation).expect("prepare a safe generation");
+        session.mount().expect("mount the prepared generation");
+        assert_eq!(native.text(), generation.to_string(), "JS preserves generation {generation}");
+        session.retire();
+    }
+    assert!(
+        matches!(native.prepare(fixture.package(), 9_007_199_254_740_992), Err(SessionError::InvalidState(message)) if message.contains("generation")),
+        "generation outside the safe integer range must fail before evaluating JS"
+    );
+}
+
+#[test]
 fn retired_or_unmounted_candidates_cannot_remove_successor_styles() {
     let first = Fixture::new(SIMPLE, "text { color: red }");
     let second = Fixture::new(SIMPLE, "text { color: green }");
@@ -207,6 +231,65 @@ fn host_bytes_register_without_a_package_and_retire_with_the_session() {
     assert_eq!(session.retire().counts.image_handles, 1);
     assert!(held.upgrade().is_none(), "retirement must free the transport buffer");
     assert!(session.work.register_image_bytes(Arc::from(&b"late bytes"[..])).is_err());
+}
+
+#[test]
+fn direct_image_bytes_bound_views_and_reclaim_session_capacity_on_release() {
+    let fixture = Fixture::new(r#"
+        export const hostApiVersion = 1;
+        export function mount() {
+            const register = __zguiServices.registerImageBytes;
+            const detached = new Uint8Array(1);
+            detached.buffer.transfer();
+            for (const [type, args] of [
+                [TypeError, []], [TypeError, [new Uint8Array(1), undefined]],
+                [TypeError, [[1]]], [TypeError, [new Uint8ClampedArray(1)]],
+                [TypeError, [detached]], [RangeError, [new Uint8Array()]],
+                [RangeError, [new Uint8Array(8 * 1024 * 1024 + 1)]],
+            ]) {
+                try {
+                    register(...args);
+                    throw Error('invalid image bytes admitted');
+                } catch (error) {
+                    if (!(error instanceof type)) throw error;
+                }
+            }
+            const full = new Uint8Array(8 * 1024 * 1024);
+            Object.defineProperty(full, "length", { get() { throw Error("read JS length"); } });
+            const busy = Array.from({ length: 8 }, () => register(full));
+            assertImageBudgetExceeded(new Uint8Array(1));
+            busy[0].release();
+            busy[0].release();
+            busy[0] = register(full);
+            assertImageBudgetExceeded(new Uint8Array(1));
+            for (const handle of busy) handle.release();
+            const small = new Uint8Array(1);
+            const handles = Array.from({ length: 64 }, () => register(small));
+            assertImageBudgetExceeded(small);
+            for (const handle of handles) handle.release();
+            register(small);
+
+            function assertImageBudgetExceeded(bytes) {
+                try {
+                    register(bytes);
+                    throw Error('session image budget exceeded');
+                } catch (error) {
+                    if (!(error instanceof RangeError)) throw error;
+                }
+            }
+            return () => {};
+        }
+    "#, "");
+    let native = Native::new();
+    let session = native.preview(
+        fixture.package(),
+        RuntimeLimits { entry_timeout: Duration::from_secs(2), ..RuntimeLimits::default() },
+        Rc::new(Cell::new(Instant::now() + Duration::from_secs(10))),
+    ).expect("prepare byte registration");
+    session.mount().expect("validate typed-array admission and release");
+    assert_eq!(session.counts().image_handles, 1, "only the last handle remains leased");
+    assert_eq!(session.retire().counts.image_handles, 1, "retirement reports the leak");
+    assert_eq!(session.counts().image_handles, 0, "retirement clears registered bytes");
 }
 
 #[test]

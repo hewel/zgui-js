@@ -85,6 +85,14 @@ with `useMonitors()` and a keyed `For`. Each declaration gets a distinct
 mount region; missing content and hotplugged outputs are covered by an
 opaque native fallback.
 
+`getSessionGeneration()` returns the current session's generation as a safe
+integer, including during module preflight and without shell capabilities.
+It stays fixed for that session and increases on reload or recreation.
+Each `SessionLockRequest` has a read-only `id`, a safe integer that stays fixed
+even after `dispose()` and increases with each new request in the host process.
+Send the generation and request ID to a daemon to correlate a lock handshake.
+They are process-lifetime metadata, not authorization or proof of acquisition.
+
 Call `lock.unlock()` only after application-controlled authentication or an
 equivalent authorized action. The SDK does not authenticate users. `dispose()`
 invalidates the handle and its subscription, not the lock. A Solid owner

@@ -2,9 +2,11 @@ import {
   connectUnixSocket,
   getAuthorizedEndpoint,
   getResolvedCapabilities,
+  loadImageBytes,
   loadTextAsset,
   onControlMessage,
   readTextAsset,
+  registerImageBytes,
   spawnCommand,
 } from "@hewel/zgui-services";
 import type { CommandResult, HostRequest, HostServiceError, ImageHandle, ResolvedCapabilities } from "@hewel/zgui-services";
@@ -48,6 +50,17 @@ let element: HTMLElement;
 process.cwd();
 // @ts-expect-error The private host binding is not a public ambient global.
 globalThis.__zguiServices.readTextAsset("assets/message.txt");
+
+const directImage: ImageHandle = registerImageBytes(new Uint8Array([1, 2]));
+const scopedImage: ImageHandle = loadImageBytes(new Uint8Array([3, 4]));
+const directSrc: string = directImage.src;
+void directSrc;
+directImage.release();
+scopedImage.release();
+// @ts-expect-error Use a Uint8Array view, not its backing buffer.
+registerImageBytes(new ArrayBuffer(2));
+// @ts-expect-error Byte arrays must be typed arrays.
+loadImageBytes([1, 2]);
 
 const resolved: ResolvedCapabilities = getResolvedCapabilities();
 const optionalEndpoint: string | null = getAuthorizedEndpoint("niri");

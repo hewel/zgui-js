@@ -53,8 +53,7 @@ impl SessionHost {
     fn mount_shell(&mut self, runtime: &mut Runtime, cx: &dyn PlatformCx, images: ImageChoice, module: &SessionModule) -> ReloadOutcome {
         self.pure_attempted = true;
         let Some(fonts) = &self.pure_fonts else { return ReloadOutcome::Rejected("pure-shell startup was not configured".into()); };
-        let Some(generation) = self.generation.checked_add(1) else { return ReloadOutcome::Rejected("session generation exhausted".into()); };
-        self.generation = generation;
+        let Some(generation) = Self::allocate_generation(&mut self.generation) else { return ReloadOutcome::Rejected("session generation exhausted".into()); };
         let policy = self.policy.clone().with_session_lock(platform_lock_state(cx));
         let candidate = match Session::prepare_shell(fonts.clone(), runtime.app_timers(), module.clone(), generation, cx.waker(), policy) {
             Ok(candidate) => candidate,

@@ -10,6 +10,10 @@ import {
 const svg = color => `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24"><rect width="24" height="24" fill="${color}"/></svg>`;
 const capture = { id: "image", op: "capture", captureId: "image" };
 const blobAsset = "assets/input.svg";
+const redPng = Array.from(Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAABgAAAAYCAIAAABvFaqvAAAAIElEQVR4nGP4z8BAFUQdU0YNGjVo1KBRg0YNGjWIIgQABMo93z5bbNQAAAAASUVORK5CYII=",
+  "base64",
+));
 
 function appSource({ file, blob = false, leak = false } = {}) {
   return `
@@ -99,4 +103,55 @@ test("preview reports leaked Image handles as teardown failures", async t => {
   assert.equal(result.exitCode, 9);
   assert.equal(result.firstError?.code, "E_TEARDOWN");
   assert.equal(result.teardown.resources.imageHandles, 1);
+});
+
+test("preview draws caller-supplied PNG and SVG without image fixtures and reports direct-byte leaks", async t => {
+  const { build, run } = await setup(t);
+  for (const leak of [false, true]) {
+    const name = leak ? "leaked-bytes" : "scoped-bytes";
+    const bundle = await build(name, `
+      import { Image, renderApp, type NativeNode } from "@hewel/zgui";
+      import { loadImageBytes, registerImageBytes } from "@hewel/zgui-services";
+      export const hostApiVersion = 1;
+      export function mount(root: NativeNode) {
+        return renderApp(() => {
+          for (const [bytes, expected] of [
+            [[1], TypeError],
+            [new Uint8Array(), RangeError],
+            [new Uint8Array(8 * 1024 * 1024 + 1), RangeError],
+          ] as const) {
+            try {
+              registerImageBytes(bytes as Uint8Array);
+              throw new Error("invalid image was registered");
+            } catch (error) {
+              if (!(error instanceof expected)) throw error;
+            }
+          }
+          const payload = new Uint8Array(${redPng.length + 2});
+          payload.set(${JSON.stringify(redPng)}, 1);
+          const png = ${leak ? "registerImageBytes" : "loadImageBytes"}(payload.subarray(1, -1));
+          payload.fill(0);
+          const svg = loadImageBytes(Uint8Array.from(
+            Array.from(${JSON.stringify(svg("#0000ff"))}, char => char.charCodeAt(0)),
+          ));
+          if (!png.src.startsWith("zgui-blob://") || !svg.src.startsWith("zgui-blob://") || png.src === svg.src) {
+            throw new Error("expected distinct opaque image handles");
+          }
+          const style = { width: "24px", height: "24px" };
+          return <column><Image testId="png" src={png.src} style={style} />
+            <Image testId="svg" src={svg.src} style={style} /></column>;
+        }, root);
+      }
+    `);
+    const { out, result } = await run(name, bundle, undefined, leak);
+    assert.equal(result.captureCount, 1);
+    const tree = await readTree(out, "image");
+    const image = await readPng(path.join(out, "captures/image.png"));
+    for (const [id, rgba] of [["png", [255, 0, 0, 255]], ["svg", [0, 0, 255, 255]]]) {
+      const { x, y, width, height } = getNode(tree, id).boundsDevice;
+      assert.deepEqual(pixelAt(image, Math.floor(x + width / 2), Math.floor(y + height / 2)), rgba, id);
+    }
+    assert.equal(result.firstError?.code, leak ? "E_TEARDOWN" : undefined);
+    assert.equal(result.teardown.resources.imageHandles ?? 0, Number(leak));
+  }
 });

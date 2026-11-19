@@ -7,6 +7,11 @@ import type {
   SessionLockRequest, SessionLockState, SessionLockSurfaceProps,
 } from "./types.js";
 
+/** Read the current session's generation, including during module preflight. */
+export function getSessionGeneration(): number {
+  return shellBridge().getSessionGeneration();
+}
+
 /** Subscribe to output snapshots for the lifetime of the current Solid owner. */
 export function useMonitors(): Accessor<readonly Monitor[]> {
   if (!getOwner()) throw new Error("useMonitors requires a Solid owner");
@@ -124,9 +129,15 @@ export function LayerSurface(props: LayerSurfaceProps): null {
 /** Request compositor locking. Unlock only from an explicit authorized application action. */
 export function requestSessionLock(): SessionLockRequest {
   const [state, setState] = createSignal<SessionLockState>("unlocked");
-  const { unlock, unsubscribe: dispose } = shellBridge().requestSessionLock(setState);
+  const raw = shellBridge().requestSessionLock(setState);
+  const { unlock, unsubscribe: dispose } = raw;
   if (getOwner()) onCleanup(dispose);
-  return { state, unlock, dispose };
+  return Object.defineProperty({ state, unlock, dispose }, "id", {
+    value: raw.id,
+    enumerable: true,
+    writable: false,
+    configurable: false,
+  }) as SessionLockRequest;
 }
 
 /** Mount content on an output while locked, without owning the underlying lock role. */

@@ -51,12 +51,13 @@ export interface NativeHost {
     clearRoot(root: NativeNode): void;
   };
   readonly __zguiShell: {
+    getSessionGeneration(): number;
     subscribeMonitors(callback: (monitors: readonly Monitor[]) => void): () => void;
     openLayer(name: string, placement: LayerPlacement, attach: (root: NativeNode, bridge: UiBridge) => () => void): number;
     updateLayer(id: number, placement: LayerPlacement): void;
     closeLayer(id: number): void;
     setInputRegion(id: number, region: NativeInputRegion): void;
-    requestSessionLock(callback: (state: SessionLockState) => void): { unlock(this: void): void; unsubscribe(this: void): void };
+    requestSessionLock(callback: (state: SessionLockState) => void): { readonly id: number; unlock(this: void): void; unsubscribe(this: void): void };
     openLock(name: string, output: string, attach: (root: NativeNode, bridge: UiBridge) => () => void): number;
     closeLock(id: number): void;
   };
