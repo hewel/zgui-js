@@ -1,8 +1,7 @@
+import type { ResolvedApplication } from "./index.ts";
 import { access, realpath } from "node:fs/promises";
 import path from "node:path";
-import { workspaceRoot } from "./build.ts";
-
-export type ResolvedApplication = { app: string; appDirectory: string; root: string };
+import { workspaceRoot } from "./sdk.ts";
 
 async function exists(filename: string): Promise<boolean> {
   try {
@@ -61,7 +60,7 @@ export async function resolveApplication(
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
   }
-  // The native manifest identity uses a portable, deterministic identifier.
+  // Derive a portable selector; package identity may override it through zgui.id.
   let app = name
     .toLowerCase()
     .replace(/[^a-z0-9-]+/g, "-")

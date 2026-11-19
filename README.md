@@ -69,7 +69,7 @@ Useful flags and lifecycle behavior:
 
 ### Per-example and external app workflows
 
-Inside any example directory (or against any standalone app directory via `zgui-js dev /path/to/my-app`):
+Inside any example directory (or from an SDK checkout targeting a standalone app via `zgui-js dev /path/to/my-app`):
 
 ```sh
 cd apps/examples/counter
@@ -78,7 +78,7 @@ bun run build    # type-check and publish an immutable package (no window)
 bun run preview  # build app + host and capture an offscreen GPU preview frame
 ```
 
-- Standalone applications need `src/main.tsx`, `tsconfig.json`, SDK dependencies, and `@hewel/zgui-build` for the CLI (`zgui-js --help`). Root shortcuts default to `counter`; `bun run build --app counter --watch` exposes the builder-only mode for custom supervisors.
+- Standalone applications need `src/main.tsx`, `tsconfig.json`, and SDK dependencies. See the [`@hewel/zgui-build` guide](packages/build/README.md) for the programmatic API, standalone host setup, and capability overlays. Root shortcuts default to `counter`; `bun run build --app counter --watch` watches without launching a host.
 - Watching uses a persistent Rolldown watcher and per-compiler Babel/Solid transform cache. [Rolldown 1.3.2 still rescans the module graph](https://github.com/rolldown/rolldown/blob/v1.3.2/crates/rolldown_watcher/src/watch_task.rs#L122-L123); unchanged modules skip Babel transforms while `tsrs` still gates every publication.
 
 ## Application model & SDK

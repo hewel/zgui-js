@@ -8,7 +8,11 @@
   "properties": {
     "schemaVersion": { "const": 2 },
     "hostApiVersion": { "const": 1 },
-    "id": { "type": "string", "minLength": 1, "pattern": "\\S" },
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^(?![\\s\\S]*[\\u0000-\\u001f\\u007f-\\u009f])\\S(?:[\\s\\S]*\\S)?(?![\\s\\S])"
+    },
     "entry": { "$ref": "#/$defs/path" },
     "sourceMap": { "$ref": "#/$defs/path" },
     "styles": { "type": "array", "uniqueItems": true, "items": { "$ref": "#/$defs/path" } },

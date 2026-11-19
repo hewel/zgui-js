@@ -3,6 +3,7 @@
 /vendor/*/Cargo.lock
 /node_modules/
 **/node_modules/
+/packages/build/sdk/
 /apps/examples/*/dist
 /apps/examples/*/.zgui-generations/
 /apps/examples/*/.zgui-build-status.json

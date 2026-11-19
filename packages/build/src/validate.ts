@@ -1,3 +1,4 @@
+import type { BuildInfo } from "./index.ts";
 import { parse, type ParseResult } from "@babel/parser";
 import traverseModule from "@babel/traverse";
 import type { NodePath } from "@babel/traverse";
@@ -77,18 +78,7 @@ const globals = new Set([
   "parseInt",
 ]);
 
-export interface CompilationChunk {
-  fileName: string;
-  modules: string[];
-  imports: string[];
-  dynamicImports: string[];
-  exports: string[];
-}
-
-export interface CompilationGraph {
-  modules: string[];
-  chunks: CompilationChunk[];
-}
+export type CompilationGraph = BuildInfo["graph"];
 
 function executesAtTopLevel(p: NodePath): boolean {
   let child: NodePath = p;

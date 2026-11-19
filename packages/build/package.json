@@ -2,10 +2,24 @@
   "name": "@hewel/zgui-build",
   "version": "0.1.0",
   "license": "Apache-2.0",
-  "private": true,
   "type": "module",
+  "types": "./sdk/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./sdk/index.d.ts",
+      "default": "./src/index.ts"
+    }
+  },
+  "files": [
+    "src",
+    "sdk"
+  ],
   "bin": {
     "zgui-js": "./src/cli.ts"
+  },
+  "scripts": {
+    "prepack": "bun pack-resources.ts",
+    "postpack": "bun pack-resources.ts --clean"
   },
   "dependencies": {
     "@babel/core": "7.29.13",

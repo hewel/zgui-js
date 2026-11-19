@@ -11,5 +11,5 @@
     "verbatimModuleSyntax": true,
     "skipLibCheck": true
   },
-  "include": ["src/**/*.ts", "../../tests/preload.ts"]
+  "include": ["src/**/*.ts", "tests/**/*.ts", "pack-resources.ts", "../../tests/preload.ts"]
 }

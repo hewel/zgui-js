@@ -148,7 +148,12 @@ impl Package {
         if manifest.schema_version != 2 || manifest.host_api_version != 1 {
             return Err("unsupported package schema or host API version".into());
         }
-        if manifest.id.trim().is_empty() { return Err("package ID must not be empty".into()); }
+        if manifest.id.is_empty()
+            || manifest.id.trim_matches(|c: char| c.is_whitespace() || c == '\u{feff}') != manifest.id
+            || manifest.id.chars().any(char::is_control)
+        {
+            return Err("package ID must be a non-empty, trimmed string without control characters".into());
+        }
         manifest.capabilities.validate()?;
         if manifest.style_system.name != "stylex" || manifest.style_system.profile != "zgui-stylex-v1"
             || !valid_digest(&manifest.style_system.config_digest) {
@@ -620,6 +625,13 @@ mod tests {
         let fixture = Fixture::new();
         fixture.publish(b"export {};", br#"{"version":3,"sources":[],"names":[],"mappings":""}"#);
         let original = manifest(&fixture);
+        for id in ["", " test", "test\u{feff}", "test\nname", "test\u{009f}name"] {
+            let mut value = original.clone();
+            value["id"] = serde_json::json!(id);
+            fixture.save(value);
+            let error = Package::load(&fixture.0).err().expect("invalid package ID rejected");
+            assert!(error.to_string().contains("package ID"), "{id:?}: {error}");
+        }
         for path in ["../outside", "/etc/passwd", "a/../app.mjs", "a//b", "a\\\\b"] {
             let mut value = original.clone();
             value["entry"] = serde_json::json!(path);

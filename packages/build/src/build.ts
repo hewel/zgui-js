@@ -1,89 +1,83 @@
-import { readFileSync, type Dirent } from "node:fs";
+import type {
+  BuildApplicationOptions,
+  BuildInfo,
+  Capabilities,
+  FontDeclaration,
+  Manifest,
+  PublishedApplication,
+} from "./index.ts";
+import { readFileSync, realpathSync, type Dirent } from "node:fs";
 import { readFile, readdir, lstat } from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { compileBundle, type CompilationResult } from "./compiler.ts";
 import { typecheckProject } from "./typecheck.ts";
 import { canonicalJson, sha256, moduleIdentity } from "./identity.ts";
 import { publishGeneration, resourcePath } from "./publication.ts";
 import { validateStylesheet } from "./stylex.ts";
+import { workspaceRoot } from "./sdk.ts";
 
 export { publishGeneration };
-export const workspaceRoot = fileURLToPath(new URL("../../../", import.meta.url));
+export { workspaceRoot };
 const require = createRequire(import.meta.url);
 
-export type FontDeclaration = { family: string; path: string };
+type ManifestIdentity = Omit<Manifest, "buildId">;
 
-type Capabilities = {
-  shellSurfaces?: boolean;
-  sessionLock?: boolean;
-  imagePrefixes?: string[];
-  unixSockets?: string[];
-  namedSockets?: string[];
-  commands?: string[];
-  controlChannel?: boolean;
-};
-
-type ManifestIdentity = {
-  schemaVersion: 2;
-  id: string;
-  hostApiVersion: 1;
-  entry: string;
-  sourceMap: string;
-  styles: string[];
-  assets: string[];
-  fonts: FontDeclaration[];
-  capabilities?: Capabilities;
-  styleSystem: CompilationResult["styleSystem"];
-  artifactDigests: Record<string, string>;
-};
-
-export type Manifest = ManifestIdentity & { buildId: string };
-export type PublishedApplication = { dist: string; manifest: Manifest };
-
-export type BuildInfo = {
-  schemaVersion: 2;
-  hostApiVersion: 1;
-  bun: string;
-  packageManager: string;
-  packages: Record<string, string>;
-  lockfile: { path: "bun.lock"; digest: string };
-  cargoLock: { path: "Cargo.lock"; digest: string };
-  engine: {
-    name: "QuickJS-NG";
-    revision: string;
-    rquickjsVersion: string;
-    rquickjsRevision: string;
-  };
-  conditions: string[];
-  target: "es2022";
-  solidRuntime: string;
-  graph: CompilationResult["graph"];
-  styleSystem: CompilationResult["styleSystem"];
-};
-
-type BuildOptions = {
-  root?: string;
-  appDirectory?: string;
-  stylexDiagnostics?: boolean;
-  development?: boolean;
-};
-
-function packageVersion(req: NodeJS.Require, id: string): string {
-  let dir = path.dirname(req.resolve(id));
-  while (true) {
-    try {
-      const pkg = JSON.parse(readFileSync(path.join(dir, "package.json"), "utf8")) as {
-        name?: unknown;
-        version?: unknown;
-      };
-      if (pkg.name === id && typeof pkg.version === "string") return pkg.version;
-    } catch {}
-    const parent = path.dirname(dir);
-    if (parent === dir) throw new Error(`Cannot locate package.json for ${id}`);
-    dir = parent;
+function readPackage(directory: string): { name?: unknown; version?: unknown } | undefined {
+  try {
+    return JSON.parse(readFileSync(path.join(directory, "package.json"), "utf8"));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    return undefined;
   }
+}
+
+function resolveModule(from: NodeJS.Require, id: string): string | undefined {
+  try {
+    return from.resolve(id);
+  } catch (error) {
+    const { code } = error as NodeJS.ErrnoException;
+    if (code !== "MODULE_NOT_FOUND" && code !== "ERR_PACKAGE_PATH_NOT_EXPORTED") throw error;
+    return undefined;
+  }
+}
+
+function packageVersion(from: NodeJS.Require, id: string): string | undefined {
+  const manifest = resolveModule(from, `${id}/package.json`);
+  if (manifest) return manifestVersion(JSON.parse(readFileSync(manifest, "utf8")), id);
+  const entry = resolveModule(from, id);
+  if (!entry) return undefined;
+  let directory = path.dirname(realpathSync(entry));
+  while (true) {
+    const pkg = readPackage(directory);
+    if (pkg?.name === id) return manifestVersion(pkg, id);
+    const parent = path.dirname(directory);
+    if (parent === directory) throw new Error(`Cannot locate package.json for ${id}`);
+    directory = parent;
+  }
+}
+
+const runtimePackages = new Set(["solid-js", "@solidjs/universal", "@solidjs/signals"]);
+
+function bundledRuntimeVersions(modules: Iterable<string> = []): Map<string, string> {
+  const versions = new Map<string, string>();
+  const visited = new Set<string>();
+  for (const filename of modules) {
+    for (
+      let directory = path.dirname(filename);
+      !visited.has(directory);
+      directory = path.dirname(directory)
+    ) {
+      visited.add(directory);
+      const pkg = readPackage(directory);
+      if (typeof pkg?.name !== "string" || !pkg.name) continue;
+      if (runtimePackages.has(pkg.name) && !versions.has(pkg.name))
+        versions.set(pkg.name, manifestVersion(pkg, pkg.name));
+      break;
+    }
+    if (versions.size === runtimePackages.size) break;
+  }
+  return versions;
 }
 
 export async function optionalFile(filename: string): Promise<Buffer | undefined> {
@@ -104,7 +98,7 @@ export async function bundle(
     filename = "app.mjs",
     stylexDiagnostics = false,
     development = false,
-  }: BuildOptions & { hostEntry?: boolean; filename?: string } = {},
+  }: BuildApplicationOptions & { hostEntry?: boolean; filename?: string } = {},
 ): Promise<CompilationResult> {
   return compileBundle(entry, {
     root,
@@ -128,15 +122,45 @@ function manifestVersion(manifest: unknown, id: string): string {
   throw new Error(`Missing package.json version for ${id}`);
 }
 
-export function dependencyVersions(): Record<string, string> {
-  const signalsPkgPath = createRequire(require.resolve("solid-js/package.json")).resolve(
-    "@solidjs/signals/package.json",
-  );
+export function dependencyVersions({
+  root = workspaceRoot,
+  appDirectory = root,
+  modules,
+}: Pick<BuildApplicationOptions, "root" | "appDirectory"> & {
+  modules?: Iterable<string>;
+} = {}): Record<string, string> {
+  const bundled = bundledRuntimeVersions(modules);
+  const appRequire = createRequire(path.resolve(appDirectory, "package.json"));
+  const rootRequire = createRequire(path.resolve(root, "package.json"));
+  const universalFromUi = (from: NodeJS.Require) => {
+    const ui = resolveModule(from, "@hewel/zgui");
+    return ui && packageVersion(createRequire(realpathSync(ui)), "@solidjs/universal");
+  };
+  const signalsFromSolid = (from: NodeJS.Require) => {
+    const solid = resolveModule(from, "solid-js/package.json");
+    return solid && packageVersion(createRequire(solid), "@solidjs/signals");
+  };
+  const solid =
+    bundled.get("solid-js") ??
+    packageVersion(appRequire, "solid-js") ??
+    manifestVersion(require("solid-js/package.json"), "solid-js");
+  const universal =
+    bundled.get("@solidjs/universal") ??
+    packageVersion(appRequire, "@solidjs/universal") ??
+    universalFromUi(appRequire) ??
+    packageVersion(rootRequire, "@solidjs/universal") ??
+    universalFromUi(rootRequire);
+  const signals =
+    bundled.get("@solidjs/signals") ??
+    packageVersion(appRequire, "@solidjs/signals") ??
+    signalsFromSolid(appRequire) ??
+    signalsFromSolid(require);
+  if (signals === undefined) throw new Error("Cannot locate @solidjs/signals");
   const babelPluginRequire = createRequire(require.resolve("@solidjs/babel-plugin"));
-  const uiRequire = createRequire(path.join(workspaceRoot, "packages/ui/package.json"));
   return Object.fromEntries([
+    ["solid-js", solid],
+    ["@solidjs/signals", signals],
     ...[
-      "solid-js",
       "@solidjs/babel-plugin",
       "@babel/core",
       "@babel/parser",
@@ -148,11 +172,7 @@ export function dependencyVersions(): Record<string, string> {
       "@stylexjs/babel-plugin",
       "styleq",
     ].map(name => [name, manifestVersion(require(`${name}/package.json`), name)] as const),
-    ["@solidjs/universal", packageVersion(uiRequire, "@solidjs/universal")],
-    [
-      "@solidjs/signals",
-      manifestVersion(JSON.parse(readFileSync(signalsPkgPath, "utf8")), "@solidjs/signals"),
-    ],
+    ...(universal === undefined ? [] : [["@solidjs/universal", universal] as const]),
     [
       "@babel/plugin-syntax-jsx",
       manifestVersion(
@@ -190,7 +210,7 @@ export async function buildInfo(
     hostApiVersion: 1,
     bun: Bun.version,
     packageManager: packageJson.packageManager,
-    packages: dependencyVersions(),
+    packages: dependencyVersions({ root, appDirectory, modules: result.graph.modules }),
     lockfile: {
       path: "bun.lock",
       digest: sha256(await Bun.file(path.join(root, "bun.lock")).bytes()),
@@ -265,9 +285,13 @@ export async function buildApplication(
     appDirectory = path.join(root, "apps/examples", app),
     stylexDiagnostics = false,
     development = false,
-  }: BuildOptions = {},
+    extraCapabilities,
+    capabilitiesFile,
+  }: BuildApplicationOptions = {},
 ): Promise<PublishedApplication> {
   if (!/^[a-z][a-z0-9-]*$/.test(app)) throw new Error(`Invalid application name: ${app}`);
+  root = path.resolve(root);
+  appDirectory = path.resolve(appDirectory);
   typecheckProject(path.join(appDirectory, "tsconfig.json"));
   const result = await bundle(path.join(appDirectory, "src/main.tsx"), {
     root,
@@ -275,7 +299,13 @@ export async function buildApplication(
     stylexDiagnostics,
     development,
   });
-  return publishApplication(app, result, { root, appDirectory, development });
+  return publishApplication(app, result, {
+    root,
+    appDirectory,
+    development,
+    extraCapabilities,
+    capabilitiesFile,
+  });
 }
 
 function isFontDeclaration(font: unknown): font is FontDeclaration {
@@ -328,14 +358,13 @@ function capabilityPath(value: string): boolean {
   );
 }
 
-function parseCapabilities(input: unknown): Capabilities | undefined {
-  if (input === undefined) return undefined;
-  if (input === null || typeof input !== "object" || Array.isArray(input))
-    throw new Error("package.json zgui.capabilities must be an object");
+function parseCapabilities(input: unknown, source: string): Capabilities {
+  if (input !== undefined && (input === null || typeof input !== "object" || Array.isArray(input)))
+    throw new Error(`${source} must be an object`);
 
-  const capabilities: Capabilities = {};
-  for (const [key, value] of Object.entries(input) as [string, unknown][]) {
-    const field = `package.json zgui.capabilities.${key}`;
+  const capabilities = Object.create(null) as Capabilities;
+  for (const [key, value] of Object.entries(input ?? {}) as [string, unknown][]) {
+    const field = `${source}.${key}`;
     switch (key) {
       case "shellSurfaces":
       case "sessionLock":
@@ -347,24 +376,69 @@ function parseCapabilities(input: unknown): Capabilities | undefined {
       case "unixSockets":
       case "commands":
       case "namedSockets": {
-        const valid =
-          key === "commands"
-            ? capabilityString
-            : key === "namedSockets"
-              ? (item: unknown) =>
-                  capabilityString(item) && /^[A-Za-z][A-Za-z0-9_-]{0,63}$/.test(item)
-              : (item: unknown) => capabilityString(item) && capabilityPath(item);
-        if (!Array.isArray(value) || !value.every(valid))
-          throw new Error(`${field} contains invalid entries`);
-        if (new Set(value).size !== value.length) throw new Error(`${field} contains duplicates`);
-        if (value.length) capabilities[key] = value;
+        if (!Array.isArray(value)) throw new Error(`${field} must be an array`);
+        const entries = new Set<string>();
+        for (const item of value as unknown[]) {
+          if (
+            !capabilityString(item) ||
+            (key === "namedSockets" && !/^[A-Za-z][A-Za-z0-9_-]{0,63}$/.test(item)) ||
+            ((key === "imagePrefixes" || key === "unixSockets") && !capabilityPath(item))
+          )
+            throw new Error(`${field} contains invalid entries`);
+          if (entries.has(item)) throw new Error(`${field} contains duplicates`);
+          entries.add(item);
+        }
+        if (entries.size) capabilities[key] = [...entries];
         break;
       }
       default:
         throw new Error(`Unknown capability: ${field}`);
     }
   }
-  return Object.keys(capabilities).length ? capabilities : undefined;
+  return capabilities;
+}
+
+function capabilityOverlay(input: unknown, source: string): Capabilities {
+  if (
+    input !== null &&
+    typeof input === "object" &&
+    "sessionLock" in input &&
+    input.sessionLock === true
+  )
+    throw new Error(`${source}.sessionLock: true may only be declared in base package.json`);
+  return parseCapabilities(input, source);
+}
+
+async function mergeCapabilities(
+  input: unknown,
+  {
+    extraCapabilities,
+    capabilitiesFile,
+  }: Pick<BuildApplicationOptions, "extraCapabilities" | "capabilitiesFile">,
+): Promise<Capabilities | undefined> {
+  const base = parseCapabilities(input, "package.json zgui.capabilities");
+  const sources = [base, capabilityOverlay(extraCapabilities, "extraCapabilities")];
+  if (capabilitiesFile !== undefined) {
+    const filename = path.resolve(capabilitiesFile);
+    const source = `capabilitiesFile (${filename})`;
+    let overlay: unknown;
+    try {
+      overlay = JSON.parse(await readFile(filename, "utf8"));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(`${source}: cannot read JSON: ${message}`, { cause: error });
+    }
+    sources.push(capabilityOverlay(overlay, source));
+  }
+  const merged: Capabilities = {};
+  for (const key of ["shellSurfaces", "controlChannel"] as const)
+    if (sources.some(source => source[key])) merged[key] = true;
+  if (base.sessionLock) merged.sessionLock = true;
+  for (const key of ["imagePrefixes", "unixSockets", "namedSockets", "commands"] as const) {
+    const union = new Set(sources.flatMap(source => source[key] ?? []));
+    if (union.size) merged[key] = [...union].sort();
+  }
+  return Object.keys(merged).length ? merged : undefined;
 }
 
 export async function publishApplication(
@@ -375,7 +449,9 @@ export async function publishApplication(
     appDirectory,
     signal,
     development = false,
-  }: { root: string; appDirectory: string; signal?: AbortSignal; development?: boolean },
+    extraCapabilities,
+    capabilitiesFile,
+  }: BuildApplicationOptions & { root: string; appDirectory: string; signal?: AbortSignal },
 ): Promise<PublishedApplication> {
   signal?.throwIfAborted();
   const files = new Map(result.files);
@@ -391,9 +467,18 @@ export async function publishApplication(
   const assets = await collectAssets(path.join(appDirectory, "assets"));
   for (const item of assets) files.set(...item);
   const pkg = await optionalFile(path.join(appDirectory, "package.json"));
-  const packageJson: { zgui?: { fonts?: unknown; capabilities?: unknown } } | undefined =
-    pkg && JSON.parse(pkg.toString("utf8"));
-  const capabilities = parseCapabilities(packageJson?.zgui?.capabilities);
+  const packageJson:
+    | { zgui?: { id?: unknown; fonts?: unknown; capabilities?: unknown } }
+    | undefined = pkg && JSON.parse(pkg.toString("utf8"));
+  const id = packageJson?.zgui?.id === undefined ? `dev.example.${app}` : packageJson.zgui.id;
+  if (!capabilityString(id) || id !== id.trim())
+    throw new Error(
+      "package.json zgui.id must be a non-empty, trimmed string without control characters",
+    );
+  const capabilities = await mergeCapabilities(packageJson?.zgui?.capabilities, {
+    extraCapabilities,
+    capabilitiesFile,
+  });
   const declarations = packageJson?.zgui?.fonts ?? [];
   if (!Array.isArray(declarations))
     throw new Error("package.json zgui.fonts must be an array of {family,path}");
@@ -417,7 +502,7 @@ export async function publishApplication(
   );
   const identity: ManifestIdentity = {
     schemaVersion: 2,
-    id: `dev.example.${app}`,
+    id,
     hostApiVersion: 1,
     entry: "app.mjs",
     sourceMap: "app.mjs.map",

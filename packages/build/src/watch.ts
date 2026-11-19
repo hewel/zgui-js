@@ -1,9 +1,11 @@
-import { watch, type FSWatcher } from "node:fs";
+import type { ApplicationWatcher, PublishedApplication, WatchApplicationOptions } from "./index.ts";
+import { readlinkSync, realpathSync, statSync, watch, type FSWatcher } from "node:fs";
 import { access, realpath, rm, writeFile, mkdtemp } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { tmpdir } from "node:os";
-import { publishApplication, workspaceRoot, type PublishedApplication } from "./build.ts";
+import { publishApplication } from "./build.ts";
+import { workspaceRoot } from "./sdk.ts";
 import { watchBundle } from "./compiler.ts";
 import {
   BUILD_STATUS_FILE,
@@ -13,25 +15,11 @@ import {
 } from "./publication.ts";
 import { typecheckProjectAsync } from "./typecheck.ts";
 
-interface WatchOptions {
-  root?: string;
-  appDirectory?: string;
-  stylexDiagnostics?: boolean;
-  development?: boolean;
-  onSuccess?: (result: PublishedApplication) => void;
-  onError?: (error: unknown) => void;
-  signal?: AbortSignal;
-}
-
 interface WatchDependencies {
   watchBundle?: typeof watchBundle;
   typecheck?: typeof typecheckProjectAsync;
   publish?: typeof publishApplication;
   publishStatus?: typeof publishBuildStatus;
-}
-
-export interface ApplicationWatcher {
-  close(): Promise<void>;
 }
 
 // Serial execution plus a dirty bit retains edits arriving during a build without overlapping publication.
@@ -86,6 +74,21 @@ export function rebuildQueue<T>(
   };
 }
 
+function capabilitiesTarget(filename: string): string | undefined {
+  try {
+    return realpathSync(filename);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+  // A dangling link still has a target directory to watch for recreation.
+  try {
+    return path.resolve(path.dirname(filename), readlinkSync(filename));
+  } catch (error) {
+    if (!["ENOENT", "EINVAL"].includes((error as NodeJS.ErrnoException).code ?? "")) throw error;
+    return undefined;
+  }
+}
+
 export function watchApplication(
   app: string,
   {
@@ -93,6 +96,8 @@ export function watchApplication(
     appDirectory = path.join(root, "apps/examples", app),
     stylexDiagnostics = false,
     development = false,
+    extraCapabilities,
+    capabilitiesFile,
     onSuccess = ({ dist, manifest }) => console.log(`Published ${dist} ${manifest.buildId}`),
     onError = error =>
       console.error(
@@ -101,7 +106,7 @@ export function watchApplication(
           : String(error),
       ),
     signal,
-  }: WatchOptions = {},
+  }: WatchApplicationOptions = {},
   {
     watchBundle: startWatchBundle = watchBundle,
     typecheck = typecheckProjectAsync,
@@ -110,6 +115,9 @@ export function watchApplication(
   }: WatchDependencies = {},
 ): ApplicationWatcher {
   if (!/^[a-z][a-z0-9-]*$/.test(app)) throw new Error(`Invalid application name: ${app}`);
+  root = path.resolve(root);
+  appDirectory = path.resolve(appDirectory);
+  if (capabilitiesFile !== undefined) capabilitiesFile = path.resolve(capabilitiesFile);
   const controller = new AbortController();
   const abort = () => controller.abort(signal?.reason);
   signal?.addEventListener("abort", abort, { once: true });
@@ -122,6 +130,7 @@ export function watchApplication(
   let closing: Promise<void> | undefined;
   let restart = false;
   const watchers: FSWatcher[] = [];
+  let targetWatcher: FSWatcher | undefined;
   const dependencyWatchers = new Map<string, FSWatcher>();
   let graphModules = new Set<string>();
   const report = (error: unknown) => {
@@ -224,6 +233,8 @@ export function watchApplication(
           root,
           appDirectory,
           development,
+          extraCapabilities,
+          capabilitiesFile,
           signal: controller.signal,
         });
         await publishStatus(appDirectory, {
@@ -274,6 +285,7 @@ export function watchApplication(
     { onError: report },
   );
   const changed = (filename: string | Buffer | null, directory = root) => {
+    if (filename && capabilitiesFile === path.resolve(directory, filename.toString())) return;
     const parts = filename?.toString().split(/[\\/]/) ?? [];
     if (
       parts.some(
@@ -303,9 +315,49 @@ export function watchApplication(
       path.join(root, "packages/ui"),
       path.join(root, "packages/services"),
     ])) {
+      if (
+        directory !== appDirectory &&
+        !statSync(directory, { throwIfNoEntry: false })?.isDirectory()
+      )
+        continue;
       watchers.push(
         watch(directory, { recursive: true }, (_event, filename) => changed(filename, directory)),
       );
+    }
+    if (capabilitiesFile !== undefined) {
+      const configured = capabilitiesFile;
+      let watchedTarget: string | undefined;
+      const watchFile = (file: string, onChange: () => void) => {
+        const basename = path.basename(file);
+        return watch(path.dirname(file), (_event, filename) => {
+          if (filename === null || filename.toString() === basename) onChange();
+        });
+      };
+      const refreshTarget = () => {
+        const target = capabilitiesTarget(configured);
+        if (target === watchedTarget) return;
+        targetWatcher?.close();
+        targetWatcher = undefined;
+        watchedTarget = undefined;
+        if (target === undefined || target === configured) return;
+        try {
+          targetWatcher = watchFile(target, onChange);
+          targetWatcher.on("error", report);
+          watchedTarget = target;
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+        }
+      };
+      const onChange = () => {
+        try {
+          refreshTarget();
+        } catch (error) {
+          report(error);
+        }
+        queue.request();
+      };
+      watchers.push(watchFile(configured, onChange));
+      refreshTarget();
     }
     watchers.push(
       watch(root, (_event, filename) => {
@@ -320,6 +372,7 @@ export function watchApplication(
     );
     for (const watcher of watchers) watcher.on("error", report);
   } catch (error) {
+    targetWatcher?.close();
     for (const watcher of watchers) watcher.close();
     signal?.removeEventListener("abort", abort);
     throw error;
@@ -337,6 +390,7 @@ export function watchApplication(
         controller.abort();
         signal?.removeEventListener("abort", abort);
         for (const watcher of dependencyWatchers.values()) watcher.close();
+        targetWatcher?.close();
         for (const watcher of watchers) watcher.close();
         await initialized.catch(() => {});
         await queue.close();

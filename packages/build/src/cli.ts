@@ -1,10 +1,10 @@
 #!/usr/bin/env bun
+import type { PreviewApplicationOptions, ResolvedApplication } from "./index.ts";
 import path from "node:path";
-import { randomUUID } from "node:crypto";
 import { buildApplication, workspaceRoot } from "./build.ts";
-import { resolveApplication, type ResolvedApplication } from "./application.ts";
+import { resolveApplication } from "./application.ts";
 import { devApplication } from "./dev.ts";
-import { prepareNativeHost, runNativeHost } from "./native-process.ts";
+import { previewApplication } from "./preview.ts";
 import { buildSmoke } from "./smoke.ts";
 import { typecheckProject } from "./typecheck.ts";
 import { watchApplication } from "./watch.ts";
@@ -18,6 +18,9 @@ const usage = `Usage: zgui-js <dev|build|preview> [DIRECTORY | --app NAME_OR_DIR
 Application defaults to the current directory (counter at the repository root).
   build --watch          Watch packages without starting a host
   build --stylex-diagnostics  Include StyleX source metadata (Preview always includes it)
+  --capabilities-file F   Merge capability declarations into build, dev, or preview
+  dev, preview --host-root DIR          Build the host from this checkout and run it there
+  dev, preview --host-executable PATH   Run this prebuilt host instead of invoking Cargo
   dev --exit-after-ms N  Close the native app after N milliseconds
   dev --layer-config F  Use an upstream layer-shell configuration
   dev --pure-shell       Start without a primary window (requires shellSurfaces or sessionLock)
@@ -28,25 +31,36 @@ Preview defaults to the repository profile, empty fixture, and initial-frame sce
 Output defaults to a fresh directory under target/. Graphics support is required.
   zgui-js smoke         Build the compiler/runtime smoke fixture`;
 
-type PreviewOptions = {
-  watch: boolean;
-  profile?: string;
-  fixture?: string;
-  scenario?: string;
-  out?: string;
-};
+type PreviewOptions = Pick<
+  PreviewApplicationOptions,
+  "watch" | "profile" | "fixture" | "scenario" | "out"
+>;
+
+type HostOptions = Pick<PreviewApplicationOptions, "hostRoot" | "hostExecutable">;
 
 type Command =
   | { command: "smoke" }
-  | { command: "build"; selector?: string; watch: boolean; stylexDiagnostics: boolean }
   | {
+      command: "build";
+      selector?: string;
+      watch: boolean;
+      stylexDiagnostics: boolean;
+      capabilitiesFile?: string;
+    }
+  | ({
       command: "dev";
       selector?: string;
+      capabilitiesFile?: string;
       exitAfterMs?: string;
       layerConfig?: string;
       pureShell: boolean;
-    }
-  | ({ command: "preview"; selector?: string } & PreviewOptions);
+    } & HostOptions)
+  | ({
+      command: "preview";
+      selector?: string;
+      capabilitiesFile?: string;
+    } & PreviewOptions &
+      HostOptions);
 
 function parse(args: string[]): Command {
   const command = args.shift();
@@ -55,8 +69,10 @@ function parse(args: string[]): Command {
   const flags = new Map<string, string | true>();
   const allowed = new Set([
     "--app",
+    "--capabilities-file",
     ...(command === "build" ? ["--stylex-diagnostics"] : []),
     ...(command === "build" || command === "preview" ? ["--watch"] : []),
+    ...(command === "dev" || command === "preview" ? ["--host-root", "--host-executable"] : []),
     ...(command === "dev" ? ["--exit-after-ms", "--layer-config", "--pure-shell"] : []),
     ...(command === "preview" ? ["--profile", "--fixture", "--scenario", "--out"] : []),
   ]);
@@ -91,6 +107,11 @@ function parse(args: string[]): Command {
     throw new Error("--exit-after-ms requires a positive integer");
   }
   const selector = directory ?? value("--app");
+  const capabilitiesFile = value("--capabilities-file");
+  const host = {
+    hostRoot: value("--host-root"),
+    hostExecutable: value("--host-executable"),
+  };
   switch (command) {
     case "smoke":
       return { command };
@@ -98,6 +119,7 @@ function parse(args: string[]): Command {
       return {
         command,
         selector,
+        capabilitiesFile,
         watch: flags.has("--watch"),
         stylexDiagnostics: flags.has("--stylex-diagnostics"),
       };
@@ -105,6 +127,8 @@ function parse(args: string[]): Command {
       return {
         command,
         selector,
+        capabilitiesFile,
+        ...host,
         exitAfterMs,
         layerConfig: value("--layer-config"),
         pureShell: flags.has("--pure-shell"),
@@ -113,6 +137,8 @@ function parse(args: string[]): Command {
       return {
         command,
         selector,
+        capabilitiesFile,
+        ...host,
         watch: flags.has("--watch"),
         profile: value("--profile"),
         fixture: value("--fixture"),
@@ -122,7 +148,9 @@ function parse(args: string[]): Command {
   }
 }
 
-async function watchBuild(application: ResolvedApplication & { stylexDiagnostics: boolean }) {
+async function watchBuild(
+  application: ResolvedApplication & { stylexDiagnostics: boolean; capabilitiesFile?: string },
+) {
   const watcher = watchApplication(application.app, application);
   let closing: Promise<void> | undefined;
   const stop = () => {
@@ -139,33 +167,7 @@ async function watchBuild(application: ResolvedApplication & { stylexDiagnostics
   process.on("SIGTERM", stop);
 }
 
-async function preview(
-  application: ResolvedApplication,
-  options: PreviewOptions,
-): Promise<number | undefined> {
-  const output = path.resolve(
-    options.out ?? path.join(workspaceRoot, "target", `preview-${application.app}-${randomUUID()}`),
-  );
-  const args = [
-    "--profile",
-    path.resolve(options.profile ?? path.join(workspaceRoot, "preview/profiles/default.json")),
-    "--fixture",
-    path.resolve(options.fixture ?? path.join(workspaceRoot, "preview/fixtures/empty.json")),
-    "--scenario",
-    path.resolve(
-      options.scenario ?? path.join(workspaceRoot, "preview/scenarios/counter-capture.json"),
-    ),
-    "--out",
-    output,
-  ];
-  console.error(`[preview] Artifacts: ${output}`);
-  if (options.watch)
-    return devApplication(application.app, {
-      ...application,
-      mode: "preview",
-      stylexDiagnostics: true,
-      hostArgs: args,
-    });
+async function withInterrupt(run: (signal: AbortSignal) => Promise<number>): Promise<number> {
   const controller = new AbortController();
   let interrupted: number | undefined;
   const interrupt = (signal: "SIGINT" | "SIGTERM") => {
@@ -178,22 +180,10 @@ async function preview(
   process.on("SIGINT", onInt);
   process.on("SIGTERM", onTerm);
   try {
-    const { dist } = await buildApplication(application.app, {
-      ...application,
-      stylexDiagnostics: true,
-    });
-    controller.signal.throwIfAborted();
-    const executable = await prepareNativeHost({
-      root: application.root,
-      signal: controller.signal,
-    });
-    return await runNativeHost(executable, ["preview", "run", "--bundle", dist, ...args], {
-      root: application.root,
-      signal: controller.signal,
-    });
+    return await run(controller.signal);
   } catch (error) {
     if (!controller.signal.aborted) throw error;
-    return interrupted;
+    return interrupted ?? 1;
   } finally {
     process.removeListener("SIGINT", onInt);
     process.removeListener("SIGTERM", onTerm);
@@ -212,7 +202,7 @@ try {
     } else {
       const application = {
         ...(await resolveApplication(selected.selector)),
-        stylexDiagnostics: selected.command === "build" && selected.stylexDiagnostics,
+        capabilitiesFile: selected.capabilitiesFile,
       };
       if (selected.command === "dev") {
         const hostArgs: string[] = [];
@@ -221,14 +211,32 @@ try {
         if (selected.layerConfig !== undefined)
           hostArgs.push("--layer-config", path.resolve(selected.layerConfig));
         if (selected.pureShell) hostArgs.push("--pure-shell");
-        process.exitCode = await devApplication(application.app, { ...application, hostArgs });
+        process.exitCode = await withInterrupt(signal =>
+          devApplication(application.app, {
+            ...application,
+            hostRoot: selected.hostRoot,
+            hostExecutable: selected.hostExecutable,
+            hostArgs,
+            signal,
+          }),
+        );
       } else if (selected.command === "preview") {
-        process.exitCode = await preview(application, selected);
-      } else if (selected.watch) {
-        await watchBuild(application);
+        process.exitCode = await withInterrupt(signal =>
+          previewApplication(application.app, {
+            ...application,
+            ...selected,
+            signal,
+            onOutput: output => console.error(`[preview] Artifacts: ${output}`),
+          }),
+        );
       } else {
-        const { dist, manifest } = await buildApplication(application.app, application);
-        console.log(`Published ${dist} ${manifest.buildId}`);
+        const options = { ...application, stylexDiagnostics: selected.stylexDiagnostics };
+        if (selected.watch) {
+          await watchBuild(options);
+        } else {
+          const { dist, manifest } = await buildApplication(application.app, options);
+          console.log(`Published ${dist} ${manifest.buildId}`);
+        }
       }
     }
   }

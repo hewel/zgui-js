@@ -1,13 +1,9 @@
+import type { PrepareNativeHostOptions, RunNativeHostOptions } from "./index.ts";
 import { spawn, type ChildProcess, type SpawnOptions } from "node:child_process";
 import { constants } from "node:os";
 import path from "node:path";
 import { createInterface, type Interface } from "node:readline";
-import { workspaceRoot } from "./build.ts";
-
-interface NativeHostOptions {
-  root?: string;
-  signal?: AbortSignal;
-}
+import { packagedSdkRoot, workspaceRoot } from "./sdk.ts";
 
 interface ProcessOptions {
   spawnProcess?: (
@@ -129,10 +125,14 @@ function ownedProcess(
 
 /** Build incrementally; reject with an exitCode on build/spawn/cancellation failure. */
 export async function prepareNativeHost(
-  { root = workspaceRoot, signal }: NativeHostOptions = {},
+  { root = workspaceRoot, signal }: PrepareNativeHostOptions = {},
   processOptions?: ProcessOptions,
 ) {
   root = path.resolve(root);
+  if (root === packagedSdkRoot)
+    throw failure(
+      "The installed SDK has no Cargo workspace; pass root pointing to a zgui-js checkout",
+    );
   let executable: string | undefined;
   const exitCode = await ownedProcess(
     "cargo",
@@ -171,7 +171,7 @@ export async function prepareNativeHost(
 export async function runNativeHost(
   executable: string,
   args: readonly string[],
-  { root = workspaceRoot, signal }: NativeHostOptions = {},
+  { root = workspaceRoot, signal }: RunNativeHostOptions = {},
   processOptions?: ProcessOptions,
 ) {
   return ownedProcess(executable, args, { root: path.resolve(root), signal }, processOptions);

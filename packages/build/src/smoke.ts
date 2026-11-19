@@ -36,7 +36,7 @@ export async function buildSmoke(): Promise<void> {
   const metadata = {
     bun: Bun.version,
     packageManager: packageJson.packageManager,
-    packages: dependencyVersions(),
+    packages: dependencyVersions({ modules: result.graph.modules }),
     conditions: ["browser", "production"],
     target: "es2022",
     lockfile: {

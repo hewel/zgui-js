@@ -1,24 +1,51 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { execFile, spawn } from "node:child_process";
-import { mkdtemp, mkdir, writeFile, readFile, rm, symlink } from "node:fs/promises";
+import { cp, mkdtemp, mkdir, writeFile, readFile, rename, rm, symlink } from "node:fs/promises";
+import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { test } from "node:test";
 import { resolveApplication } from "../../packages/build/src/application.ts";
 import { bundle, publishApplication, workspaceRoot } from "../../packages/build/src/build.ts";
+import { typecheckProject } from "../../packages/build/src/typecheck.ts";
 
 const execute = promisify(execFile);
 const cli = path.join(workspaceRoot, "packages/build/src/cli.ts");
 
-async function externalApplication(t) {
-  const directory = await mkdtemp(path.join(os.tmpdir(), "zgui app "));
+async function publicBuild(directory) {
+  const modules = path.join(directory, "node_modules/@hewel");
+  await mkdir(modules, { recursive: true });
+  await symlink(path.join(workspaceRoot, "packages/build"), path.join(modules, "zgui-build"), "dir");
+  const consumer = path.join(directory, "build-consumer.mjs");
+  await writeFile(consumer, `export * from "@hewel/zgui-build";\n`);
+  return import(consumer);
+}
+
+test("the build package exposes only its programmatic API, without CLI side effects", async t => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "zgui-build-api-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const listeners = process.listeners("SIGINT");
+  const api = await publicBuild(directory);
+  assert.deepEqual(Object.keys(api).sort(), [
+    "buildApplication", "devApplication", "prepareNativeHost", "previewApplication",
+    "resolveApplication", "runNativeHost", "watchApplication",
+  ]);
+  assert.deepEqual(process.listeners("SIGINT"), listeners);
+});
+
+async function externalApplication(t, prefix = path.join(os.tmpdir(), "zgui app ")) {
+  const directory = await mkdtemp(prefix);
   t.after(() => rm(directory, { recursive: true, force: true }));
   await mkdir(path.join(directory, "src"));
-  await symlink(path.join(workspaceRoot, "node_modules"), path.join(directory, "node_modules"), "dir");
+  const modules = path.join(directory, "node_modules/@hewel");
+  await mkdir(modules, { recursive: true });
+  await symlink(path.join(workspaceRoot, "packages/ui"), path.join(modules, "zgui"), "dir");
+  await symlink(path.join(workspaceRoot, "packages/services"), path.join(modules, "zgui-services"), "dir");
   await writeFile(path.join(directory, "package.json"), JSON.stringify({ name: "@consumer/custom-app", type: "module" }));
   await writeFile(path.join(directory, "tsconfig.json"), JSON.stringify({
-    extends: path.join(workspaceRoot, "packages/ui/tsconfig.native.json"), include: ["src"],
+    extends: "@hewel/zgui/tsconfig.native.json", include: ["src"],
   }));
   await writeFile(path.join(directory, "src/main.tsx"), `import { renderApp, type NativeNode } from "@hewel/zgui";
 export const hostApiVersion = 1;
@@ -41,6 +68,305 @@ test("application-local build supports directories outside the workspace with sp
   assert.match(stdout, new RegExp(manifest.buildId));
   assert.match(await readFile(path.join(directory, "dist/app.mjs"), "utf8"), /External application/);
   assert.equal(Object.hasOwn(manifest, "capabilities"), false);
+});
+
+test("build provenance reports the Solid packages bundled from the consumer", async t => {
+  const directory = await externalApplication(t);
+  const modules = path.join(directory, "node_modules");
+  const ui = path.join(modules, "@hewel/zgui");
+  const sdk = path.join(workspaceRoot, "packages/ui");
+  await rm(ui);
+  await mkdir(ui);
+  await cp(path.join(sdk, "src"), path.join(ui, "src"), { recursive: true });
+  for (const filename of ["package.json", "tsconfig.native.json"])
+    await cp(path.join(sdk, filename), path.join(ui, filename));
+
+  const sdkRequire = createRequire(path.join(sdk, "package.json"));
+  const solidRequire = createRequire(sdkRequire.resolve("solid-js/package.json"));
+  const versions = {
+    "solid-js": "2.0.81",
+    "@solidjs/universal": "2.0.82",
+    "@solidjs/signals": "2.0.83",
+  };
+  for (const [name, version] of Object.entries(versions)) {
+    const resolve = name === "@solidjs/signals" ? solidRequire : sdkRequire;
+    const installed = path.join(modules, name);
+    await mkdir(path.dirname(installed), { recursive: true });
+    await cp(path.dirname(resolve.resolve(`${name}/package.json`)), installed, { recursive: true });
+    const filename = path.join(installed, "package.json");
+    await writeFile(filename, JSON.stringify({ ...JSON.parse(await readFile(filename, "utf8")), version }));
+  }
+
+  const result = await bundle(path.join(directory, "src/main.tsx"), { appDirectory: directory });
+  const { dist } = await publishApplication("custom-app", result, { root: workspaceRoot, appDirectory: directory });
+  const { packages } = JSON.parse(await readFile(path.join(dist, "build-info.json"), "utf8"));
+  for (const [name, version] of Object.entries(versions)) assert.equal(packages[name], version, name);
+});
+
+test("an installed build package builds, watches, and launches hosts from a sibling repository", { timeout: 30000 }, async t => {
+  const directory = await externalApplication(t, path.resolve(workspaceRoot, "../.zgui-consumer-"));
+  const tarball = "zgui-build.tgz";
+  await execute(process.execPath, ["pm", "pack", "--filename", path.join(directory, tarball)], {
+    cwd: path.join(workspaceRoot, "packages/build"),
+  });
+  const installed = path.join(directory, "node_modules/@hewel/zgui-build");
+  await mkdir(installed);
+  await execute("tar", ["-xf", path.join(directory, tarball), "--strip-components=1", "-C", installed]);
+  const { dependencies } = JSON.parse(await readFile(path.join(installed, "package.json"), "utf8"));
+  for (const name of Object.keys(dependencies)) {
+    const target = path.join(installed, "node_modules", name);
+    await mkdir(path.dirname(target), { recursive: true });
+    await symlink(path.join(workspaceRoot, "packages/build/node_modules", name), target, "dir");
+  }
+  await writeFile(path.join(directory, "src/main.tsx"), `import { renderApp, type NativeNode } from "@hewel/zgui";
+import { getResolvedCapabilities } from "@hewel/zgui-services";
+export const hostApiVersion = 1;
+export function mount(root: NativeNode) {
+  const { imagePrefixes } = getResolvedCapabilities();
+  return renderApp(() => <text>{imagePrefixes.join(",")}</text>, root);
+}
+`);
+  const consumer = path.join(directory, "driver", "index.mjs");
+  await mkdir(path.dirname(consumer));
+  await writeFile(consumer, `export * from "@hewel/zgui-build";\n`);
+  await writeFile(path.join(directory, "driver", "public-api.ts"),
+    await readFile(path.join(workspaceRoot, "packages/build/tests/public-api.ts")));
+  const driverConfig = path.join(directory, "driver", "tsconfig.json");
+  await writeFile(driverConfig, JSON.stringify({
+    compilerOptions: { strict: true, target: "ESNext", module: "ESNext", moduleResolution: "Bundler", types: [] },
+    include: ["public-api.ts"],
+  }));
+  typecheckProject(driverConfig);
+  const { buildApplication, prepareNativeHost, watchApplication } = await import(consumer);
+  const appDirectory = directory;
+  const { dist, manifest } = await buildApplication("custom-app", { appDirectory });
+  const info = JSON.parse(await readFile(path.join(dist, "build-info.json"), "utf8"));
+  assert.equal(manifest.id, "dev.example.custom-app");
+  assert.equal(info.packages["@solidjs/universal"], "2.0.1");
+  assert.ok(info.graph.modules.some(module => module.startsWith("packages/@hewel/zgui-services/")));
+  for (const [lock, filename] of [[info.lockfile, "bun.lock"], [info.cargoLock, "Cargo.lock"]]) {
+    const digest = createHash("sha256").update(await readFile(path.join(workspaceRoot, filename))).digest("hex");
+    assert.equal(lock.digest, `sha256:${digest}`);
+  }
+
+  const hostRoot = path.join(directory, "host checkout");
+  const bin = path.join(directory, "bin");
+  await mkdir(path.join(hostRoot, "target"), { recursive: true });
+  await mkdir(bin);
+  await assert.rejects(prepareNativeHost(), /installed SDK has no Cargo workspace/);
+  await writeFile(path.join(bin, "cargo"), `#!${process.execPath}
+if (process.cwd() !== ${JSON.stringify(hostRoot)}) process.exit(72);
+console.log(JSON.stringify({
+  reason: "compiler-artifact", target: { name: "native-host", kind: ["bin"] },
+  executable: "target/native-host",
+}));
+`, { mode: 0o755 });
+  const hostScript = `#!${process.execPath}
+const args = process.argv.slice(2);
+const manifest = await Bun.file(args[args.indexOf("--bundle") + 1] + "/manifest.json").json();
+console.log(JSON.stringify({ script: import.meta.path, cwd: process.cwd(), args, styleSystem: manifest.styleSystem }));
+`;
+  const preparedHost = path.join(hostRoot, "target/native-host");
+  const prebuiltHost = path.join(bin, "prebuilt host");
+  await writeFile(preparedHost, hostScript, { mode: 0o755 });
+  await writeFile(prebuiltHost, hostScript, { mode: 0o755 });
+  const installedCli = path.join(installed, "src/cli.ts");
+  const invoke = async (...args) => JSON.parse((await execute(process.execPath, [installedCli, ...args], {
+    cwd: directory,
+    env: { ...process.env, PATH: `${bin}${path.delimiter}${process.env.PATH}` },
+    timeout: 10000,
+  })).stdout);
+  const dev = await invoke("dev", "--host-root", path.relative(directory, hostRoot));
+  assert.equal(dev.script, preparedHost);
+  assert.equal(dev.cwd, hostRoot);
+  assert.deepEqual(dev.args, ["--bundle", dist, "--watch"]);
+  const oneShot = await invoke("preview", "--host-root", path.relative(directory, hostRoot));
+  assert.equal(oneShot.script, preparedHost);
+  assert.equal(oneShot.cwd, hostRoot);
+  assert.deepEqual(oneShot.args.slice(0, 4), ["preview", "run", "--bundle", dist]);
+  const watched = await invoke("preview", "--watch", "--host-root", path.relative(directory, hostRoot),
+    "--host-executable", path.relative(directory, prebuiltHost));
+  assert.equal(watched.script, prebuiltHost);
+  assert.equal(watched.cwd, hostRoot);
+  assert.deepEqual(watched.args.slice(0, 4), ["preview", "watch", "--bundle", dist]);
+  assert.notEqual(oneShot.styleSystem.configDigest, dev.styleSystem.configDigest);
+  assert.deepEqual(watched.styleSystem, oneShot.styleSystem);
+
+  const overlayDirectory = await mkdtemp(path.join(os.tmpdir(), "zgui-overlays-"));
+  t.after(() => rm(overlayDirectory, { recursive: true, force: true }));
+  const capabilitiesFile = path.join(overlayDirectory, "composed.json");
+  const update = async capabilities => {
+    await writeFile(`${capabilitiesFile}.tmp`, JSON.stringify(capabilities));
+    await rename(`${capabilitiesFile}.tmp`, capabilitiesFile);
+  };
+  await update({ namedSockets: ["first"] });
+  let next = Promise.withResolvers();
+  const watcher = watchApplication("custom-app", {
+    appDirectory, capabilitiesFile, extraCapabilities: { shellSurfaces: true },
+    onSuccess: result => next.resolve(result),
+    onError: error => next.reject(error),
+  });
+  t.after(() => watcher.close());
+  try {
+    const first = await next.promise;
+    assert.deepEqual(first.manifest.capabilities, { namedSockets: ["first"], shellSurfaces: true });
+    next = Promise.withResolvers();
+    const denied = assert.rejects(next.promise, /capabilitiesFile.*sessionLock/);
+    await update({ sessionLock: true });
+    await denied;
+    assert.equal(JSON.parse(await readFile(path.join(dist, "manifest.json"), "utf8")).buildId, first.manifest.buildId);
+    next = Promise.withResolvers();
+    await update({ namedSockets: ["second"] });
+    const second = await next.promise;
+    assert.deepEqual(second.manifest.capabilities, { namedSockets: ["second"], shellSurfaces: true });
+    assert.notEqual(second.manifest.buildId, first.manifest.buildId);
+  } finally {
+    await watcher.close();
+  }
+});
+
+test("capability watches follow dangling links, atomic target replacements, and retargeting", async t => {
+  const appDirectory = await externalApplication(t);
+  const directory = await mkdtemp(path.join(os.tmpdir(), "zgui-capability-links-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const capabilitiesFile = path.join(directory, "composed.json");
+  const first = path.join(directory, "first", "capabilities.json");
+  const second = path.join(directory, "second", "other.json");
+  for (const target of [first, second]) await mkdir(path.dirname(target));
+  const link = target => symlink(path.relative(directory, target), capabilitiesFile);
+  const update = async (target, name) => {
+    await writeFile(`${target}.tmp`, JSON.stringify({ namedSockets: [name] }));
+    await rename(`${target}.tmp`, target);
+  };
+  await link(first);
+  const { watchApplication } = await publicBuild(appDirectory);
+  let next = Promise.withResolvers();
+  const missing = assert.rejects(next.promise, /capabilitiesFile.*ENOENT/);
+  const watcher = watchApplication("custom-app", {
+    appDirectory, capabilitiesFile,
+    onSuccess: result => next.resolve(result),
+    onError: error => next.reject(error),
+  });
+  t.after(() => watcher.close());
+  try {
+    await missing;
+    const expectSockets = async (name, change) => {
+      next = Promise.withResolvers();
+      await change();
+      assert.deepEqual((await next.promise).manifest.capabilities, { namedSockets: [name] });
+    };
+    await expectSockets("created", () => update(first, "created"));
+    await expectSockets("replaced", () => update(first, "replaced"));
+    await update(second, "retargeted");
+    await expectSockets("retargeted", async () => {
+      await symlink(path.relative(directory, second), `${capabilitiesFile}.tmp`);
+      await rename(`${capabilitiesFile}.tmp`, capabilitiesFile);
+    });
+    next = Promise.withResolvers();
+    const removed = assert.rejects(next.promise, /capabilitiesFile.*ENOENT/);
+    await rm(second);
+    await removed;
+    await expectSockets("restored", () => update(second, "restored"));
+  } finally {
+    await watcher.close();
+  }
+});
+
+test("zgui.id overrides the default identity and invalid IDs leave the previous publication intact", { timeout: 30000 }, async t => {
+  const directory = await externalApplication(t);
+  const { buildApplication } = await publicBuild(directory);
+  const build = () => buildApplication("custom-app", { appDirectory: directory });
+  const manifestPath = path.join(directory, "dist/manifest.json");
+  const packagePath = path.join(directory, "package.json");
+  const configure = id => writeFile(packagePath, JSON.stringify({ zgui: { id } }));
+
+  const baseline = await build();
+  assert.equal(baseline.manifest.id, "dev.example.custom-app");
+  await configure("org.example/My App");
+  const custom = await build();
+  assert.equal(custom.manifest.id, "org.example/My App");
+  assert.notEqual(custom.manifest.buildId, baseline.manifest.buildId);
+  const published = await readFile(manifestPath);
+  for (const id of ["", "  ", "\u00a0test", "test ", "test\n", "test\u009fapp", null]) {
+    await configure(id);
+    await assert.rejects(build(), /package\.json zgui\.id/);
+  }
+  assert.deepEqual(await readFile(manifestPath), published);
+});
+
+test("capability overlays from code and the CLI seal the same deterministic union", { timeout: 30000 }, async t => {
+  const directory = await externalApplication(t);
+  const { buildApplication } = await publicBuild(directory);
+  const capabilitiesFile = path.join(directory, "plugin-capabilities.json");
+  const packagePath = path.join(directory, "package.json");
+  const base = {
+    shellSurfaces: true, controlChannel: false,
+    imagePrefixes: ["$XDG_DATA_HOME/icons", "$HOME"],
+    unixSockets: ["$XDG_RUNTIME_DIR/host-${WAYLAND_DISPLAY}.sock", "$HOME/$WAYLAND_DISPLAY"],
+    namedSockets: ["niri"], commands: ["status"],
+  };
+  const overlay = {
+    shellSurfaces: false, controlChannel: true, sessionLock: false, imagePrefixes: ["$HOME"],
+    unixSockets: ["/run/literal-$NAME", "$HOME/$WAYLAND_DISPLAY"],
+    namedSockets: ["niri", "Status_2"], commands: ["status", "plugin"],
+  };
+  const expected = {
+    shellSurfaces: true, controlChannel: true,
+    imagePrefixes: ["$HOME", "$XDG_DATA_HOME/icons"],
+    unixSockets: ["$HOME/$WAYLAND_DISPLAY", "$XDG_RUNTIME_DIR/host-${WAYLAND_DISPLAY}.sock", "/run/literal-$NAME"],
+    namedSockets: ["Status_2", "niri"], commands: ["plugin", "status"],
+  };
+  await writeFile(packagePath, JSON.stringify({ name: "@consumer/custom-app", zgui: { capabilities: base } }));
+  const baseline = await buildApplication("custom-app", { appDirectory: directory });
+  const merged = await buildApplication("custom-app", { appDirectory: directory, extraCapabilities: overlay });
+  assert.deepEqual(merged.manifest.capabilities, expected);
+  assert.notEqual(merged.manifest.buildId, baseline.manifest.buildId);
+  const { namedSockets, commands, unixSockets, ...flags } = overlay;
+  await writeFile(capabilitiesFile, JSON.stringify({
+    ...flags, namedSockets: namedSockets.toReversed(), commands: commands.toReversed(), unixSockets: unixSockets.toReversed(),
+  }));
+  await execute(process.execPath, [cli, "build", "--capabilities-file", path.basename(capabilitiesFile)], { cwd: directory });
+  const manifest = JSON.parse(await readFile(path.join(directory, "dist/manifest.json"), "utf8"));
+  assert.deepEqual(manifest, merged.manifest);
+  const both = await buildApplication("custom-app", {
+    appDirectory: directory, capabilitiesFile, extraCapabilities: { commands: ["status"] },
+  });
+  assert.equal(both.manifest.buildId, merged.manifest.buildId);
+});
+
+test("overlays cannot declare sessionLock and report independent validation failures", { timeout: 30000 }, async t => {
+  const directory = await externalApplication(t);
+  const { buildApplication, previewApplication } = await publicBuild(directory);
+  const packagePath = path.join(directory, "package.json");
+  const manifestPath = path.join(directory, "dist/manifest.json");
+  const capabilitiesFile = path.join(directory, "plugin-capabilities.json");
+  const configure = capabilities => writeFile(packagePath, JSON.stringify({ zgui: { capabilities } }));
+  const options = { appDirectory: directory };
+  const build = (extraCapabilities, optionsOverride) =>
+    buildApplication("custom-app", { ...options, extraCapabilities, ...optionsOverride });
+
+  await assert.rejects(build({ sessionLock: true }), /extraCapabilities\.sessionLock.*only.*package\.json/);
+  await assert.rejects(readFile(manifestPath), { code: "ENOENT" });
+  await configure({ sessionLock: true });
+  const { manifest } = await build({ sessionLock: false });
+  assert.deepEqual(manifest.capabilities, { sessionLock: true });
+  assert.deepEqual((await build({})).manifest, manifest);
+  await assert.rejects(build({ sessionLock: true }), /extraCapabilities\.sessionLock/);
+  await assert.rejects(
+    previewApplication("custom-app", { ...options, extraCapabilities: { sessionLock: true } }),
+    /extraCapabilities\.sessionLock/,
+  );
+  await assert.rejects(build({ namedSockets: ["niri", "niri"] }), /extraCapabilities\.namedSockets.*duplicates/);
+  await writeFile(capabilitiesFile, JSON.stringify({ sessionLock: true }));
+  await assert.rejects(
+    execute(process.execPath, [cli, "build", "--capabilities-file", capabilitiesFile], { cwd: directory }),
+    /capabilitiesFile.*plugin-capabilities\.json.*sessionLock.*only.*package\.json/,
+  );
+  await writeFile(capabilitiesFile, "{");
+  await assert.rejects(build(undefined, { capabilitiesFile }), /capabilitiesFile.*plugin-capabilities\.json.*JSON/);
+  await configure({ commands: ["status", "status"] });
+  await assert.rejects(build({ commands: ["status"] }), /package\.json zgui\.capabilities\.commands.*duplicates/);
+  assert.deepEqual(JSON.parse(await readFile(manifestPath, "utf8")), manifest);
 });
 
 test("capabilities are closed declarations and change the sealed build identity", { timeout: 30000 }, async t => {
@@ -71,13 +397,13 @@ test("capabilities are closed declarations and change the sealed build identity"
   assert.deepEqual(await build({ namedSockets: [] }), omitted);
   assert.deepEqual(await readFile(path.join(directory, "dist/manifest.json")), omittedBytes);
   const portable = {
-    imagePrefixes: ["$XDG_RUNTIME_DIR/z-shell/media", "$HOME", "$XDG_DATA_HOME/icons"],
+    imagePrefixes: ["$HOME", "$XDG_DATA_HOME/icons", "$XDG_RUNTIME_DIR/z-shell/media"],
     unixSockets: [
-      "$XDG_RUNTIME_DIR/z-shell/host-${WAYLAND_DISPLAY}.sock",
       "$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY",
+      "$XDG_RUNTIME_DIR/z-shell/host-${WAYLAND_DISPLAY}.sock",
       "/run/literal-$UNKNOWN",
     ],
-    namedSockets: ["niri", "Status_2"],
+    namedSockets: ["Status_2", "niri"],
   };
   const sealed = await build(portable);
   assert.deepEqual(sealed.capabilities, portable);

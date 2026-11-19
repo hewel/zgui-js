@@ -1,18 +1,9 @@
+import type { ApplicationWatcher, DevApplicationOptions } from "./index.ts";
 import path from "node:path";
 import type { EventEmitter } from "node:events";
-import { workspaceRoot } from "./build.ts";
-import { watchApplication, type ApplicationWatcher } from "./watch.ts";
+import { workspaceRoot } from "./sdk.ts";
+import { watchApplication } from "./watch.ts";
 import { prepareNativeHost, runNativeHost } from "./native-process.ts";
-
-export type DevMode = "desktop" | "preview";
-
-interface DevOptions {
-  root?: string;
-  appDirectory?: string;
-  hostArgs?: string[];
-  mode?: DevMode;
-  stylexDiagnostics?: boolean;
-}
 
 interface DevDependencies {
   watch?: typeof watchApplication;
@@ -39,18 +30,23 @@ export async function devApplication(
     root = workspaceRoot,
     appDirectory = path.join(root, "apps/examples", app),
     hostArgs = [],
+    hostRoot = root,
+    hostExecutable,
     mode = "desktop",
     stylexDiagnostics = mode === "preview",
-  }: DevOptions = {},
+    extraCapabilities,
+    capabilitiesFile,
+    signal,
+  }: DevApplicationOptions = {},
   {
     watch = watchApplication,
     prepare = prepareNativeHost,
     run = runNativeHost,
-    signals = process,
+    signals,
     log = message => console.error(message),
   }: DevDependencies = {},
 ) {
-  root = path.resolve(root);
+  hostRoot = path.resolve(hostRoot);
   appDirectory = path.resolve(appDirectory);
   const controller = new AbortController();
   const published = Promise.withResolvers<string>();
@@ -66,6 +62,7 @@ export async function devApplication(
   };
   const interrupt = () => stop(130, "SIGINT");
   const terminate = () => stop(143, "SIGTERM");
+  const abort = () => stop(signal?.reason === "SIGINT" ? 130 : 143, signal?.reason);
   const fail = (error: unknown) => {
     if (controller.signal.aborted) return;
     log(errorMessage(error));
@@ -78,9 +75,12 @@ export async function devApplication(
         : 1,
     );
   };
-  signals.on("SIGINT", interrupt);
-  signals.on("SIGTERM", terminate);
+  signal?.addEventListener("abort", abort, { once: true });
+  signals?.on("SIGINT", interrupt);
+  signals?.on("SIGTERM", terminate);
+  if (signal?.aborted) abort();
   try {
+    if (controller.signal.aborted) return exitCode ?? 143;
     if (mode !== "desktop" && mode !== "preview")
       throw new Error(`Unknown development mode: ${String(mode)}`);
     watcher = watch(app, {
@@ -88,6 +88,8 @@ export async function devApplication(
       appDirectory,
       stylexDiagnostics,
       development: mode === "desktop",
+      extraCapabilities,
+      capabilitiesFile,
       signal: controller.signal,
       onSuccess(result) {
         if (controller.signal.aborted) return;
@@ -101,7 +103,10 @@ export async function devApplication(
     startup = (async () => {
       try {
         if (controller.signal.aborted) return;
-        const executable = await prepare({ root, signal: controller.signal });
+        const executable =
+          hostExecutable === undefined
+            ? await prepare({ root: hostRoot, signal: controller.signal })
+            : path.resolve(hostExecutable);
         if (controller.signal.aborted) return;
         const dist = await Promise.race([published.promise, stopped.promise]);
         if (controller.signal.aborted) return;
@@ -110,7 +115,7 @@ export async function devApplication(
           mode === "preview"
             ? ["preview", "watch", "--bundle", dist!, ...hostArgs]
             : ["--bundle", dist!, "--watch", ...hostArgs];
-        stop(await run(executable, args, { root, signal: controller.signal }));
+        stop(await run(executable, args, { root: hostRoot, signal: controller.signal }));
       } catch (error) {
         fail(error);
       }
@@ -130,8 +135,9 @@ export async function devApplication(
         if (exitCode === 0 || exitCode === undefined) exitCode = 1;
       }
     }
-    signals.removeListener("SIGINT", interrupt);
-    signals.removeListener("SIGTERM", terminate);
+    signal?.removeEventListener("abort", abort);
+    signals?.removeListener("SIGINT", interrupt);
+    signals?.removeListener("SIGTERM", terminate);
   }
   return exitCode ?? 1;
 }

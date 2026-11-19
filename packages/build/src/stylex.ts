@@ -1,3 +1,4 @@
+import type { Manifest } from "./index.ts";
 import stylexPlugin, { type Options, type Rule } from "@stylexjs/babel-plugin";
 import { parse } from "@babel/parser";
 import traverseModule from "@babel/traverse";
@@ -10,12 +11,7 @@ const traverse =
   traverseModule;
 const admitted = new Set(["create", "props", "defineVars", "createTheme", "keyframes"]);
 
-export type StyleSystem = {
-  name: "stylex";
-  profile: "zgui-stylex-v1";
-  nativeProfileDigest: string;
-  configDigest: string;
-};
+export type StyleSystem = Manifest["styleSystem"];
 
 export interface StylexModule {
   rules: Rule[];
