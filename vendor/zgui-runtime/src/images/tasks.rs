@@ -1,6 +1,11 @@
 //! Strict resource workers do not depend on frame/reactive polling.
 use super::*;
 use std::{collections::BTreeMap, sync::mpsc};
+use std::io;
+
+use crate::image_policy::files::{self, FileAccess};
+
+use super::input::Input;
 
 pub(super) struct Tasks {
     ready: Rc<RefCell<Vec<(SourceKey, u64, Arrival)>>>,
@@ -8,6 +13,7 @@ pub(super) struct Tasks {
     strict: RefCell<Option<Batch>>,
     live: RefCell<Vec<zgui_reactive::Task>>,
     active: Arc<std::sync::atomic::AtomicBool>,
+    seen_blob_revocations: std::cell::Cell<u64>,
     #[cfg(test)]
     gates: RefCell<std::collections::VecDeque<mpsc::Receiver<()>>>,
 }
@@ -45,6 +51,7 @@ impl Tasks {
             ready: Rc::new(RefCell::new(Vec::new())), policy, strict: RefCell::new(strict),
             live: RefCell::new(Vec::new()),
             active: Arc::new(std::sync::atomic::AtomicBool::new(true)),
+            seen_blob_revocations: std::cell::Cell::new(0),
             #[cfg(test)]
             gates: RefCell::new(std::collections::VecDeque::new()),
         })
@@ -53,6 +60,21 @@ impl Tasks {
     pub(super) fn strict(&self) -> bool { self.policy.strict }
 
     pub(super) fn restricted(&self) -> bool { self.policy.assets.is_some() }
+
+    pub(super) fn clear_blobs(&self) {
+        if let Some(blobs) = &self.policy.blobs { blobs.clear(); }
+    }
+
+    pub(super) fn blobs_were_revoked(&self) -> bool {
+        self.policy.blobs.as_ref().is_some_and(|blobs| {
+            let revocations = blobs.revocations();
+            self.seen_blob_revocations.replace(revocations) != revocations
+        })
+    }
+
+    pub(super) fn owns_blob(&self, uri: &str) -> bool {
+        self.policy.blobs.as_ref().is_some_and(|blobs| blobs.contains(uri))
+    }
 
     pub(super) fn cancel(&self) {
         self.active.store(false, std::sync::atomic::Ordering::Release);
@@ -66,10 +88,16 @@ impl Tasks {
         (assets.keys().take(limit).cloned().collect(), assets.len().saturating_sub(limit) as u64)
     }
 
-    pub(super) fn denied(&self, key: &SourceKey) -> bool {
-        self.policy.assets.as_ref().is_some_and(|assets| {
-            !canonical_source(key.name()) || !assets.contains_key(key.name())
-        })
+    pub(super) fn policy_error(&self, key: &SourceKey) -> Option<io::Error> {
+        match key {
+            SourceKey::File(uri) => (!self.policy.files.permits(uri)).then(|| files::denied(uri)),
+            SourceKey::Blob(uri) => (!self.owns_blob(uri)).then(|| missing_blob(uri)),
+            SourceKey::Path(name) if self.policy.assets.as_ref().is_some_and(|assets| {
+                !canonical_source(name) || !assets.contains_key(name)
+            }) => Some(undeclared(name)),
+            SourceKey::Bytes(name) if self.restricted() => Some(undeclared(name)),
+            _ => None,
+        }
     }
 
     #[cfg(test)]
@@ -78,22 +106,35 @@ impl Tasks {
         self.gates.borrow_mut().push_back(gate);
         release
     }
-    pub(super) fn bytes(&self, key: &SourceKey) -> Option<Result<Arc<[u8]>, zgui_image::DecodeError>> {
-        self.policy.assets.as_ref().map(|assets| {
-            let name = key.name();
-            assets.get(name).filter(|_| canonical_source(name)).cloned().ok_or_else(|| zgui_image::DecodeError::Io(std::io::Error::new(
-                std::io::ErrorKind::PermissionDenied, format!("image source is not a declared package asset: {name}"),
-            )))
-        })
+    pub(super) fn input(&self, key: &SourceKey) -> Input {
+        match key {
+            SourceKey::File(uri) => match &self.policy.files {
+                access @ FileAccess::Live(_) => Input::External(access.clone()),
+                access => access.fixture(uri).map_or_else(|| Input::Denied(files::denied(uri)), Input::Dynamic),
+            },
+            SourceKey::Blob(uri) => self.policy.blobs.as_ref().and_then(|blobs| blobs.lookup(uri))
+                .map_or_else(|| Input::Denied(missing_blob(uri)), Input::Dynamic),
+            SourceKey::Path(name) => match &self.policy.assets {
+                None => Input::UnrestrictedPath,
+                Some(assets) => assets.get(name).filter(|_| canonical_source(name)).cloned()
+                    .map_or_else(|| Input::Denied(undeclared(name)), Input::Package),
+            },
+            SourceKey::Bytes(name) if self.restricted() => Input::Denied(undeclared(name)),
+            SourceKey::Bytes(url) => zgui_image::bytes_for_url(url).map_or_else(
+                || Input::Denied(io::Error::new(io::ErrorKind::NotFound,
+                    "the ImageBytes handle was dropped before the work ran")),
+                Input::Registered,
+            ),
+        }
     }
 
-    pub(super) fn start(self: &Rc<Self>, key: SourceKey, generation: u64, work: impl FnOnce() -> Arrival + Send + 'static) {
+    pub(super) fn start(self: &Rc<Self>, key: SourceKey, generation: u64, work: impl FnOnce(&SourceKey) -> Arrival + Send + 'static) {
         #[cfg(test)]
         let work = {
             let gate = self.gates.borrow_mut().pop_front();
-            move || {
+            move |key: &SourceKey| {
                 if let Some(gate) = gate { gate.recv().expect("test must release the native image worker"); }
-                work()
+                work(key)
             }
         };
         if let Some(batch) = self.strict.borrow_mut().as_mut() {
@@ -105,7 +146,7 @@ impl Tasks {
             // Starting here, rather than through spawn_local, avoids a throwaway RAF frame.
             let job = Box::new(move || {
                 if !active.load(std::sync::atomic::Ordering::Acquire) { return; }
-                let arrival = std::panic::catch_unwind(std::panic::AssertUnwindSafe(work))
+                let arrival = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| work(&key)))
                     .unwrap_or_else(|_| Arrival::Probe(Err(zgui_image::DecodeError::Io(std::io::Error::other("native image worker panicked")))));
                 if active.load(std::sync::atomic::Ordering::Acquire) {
                     let _ = sender.send((ticket, key, generation, arrival));
@@ -114,10 +155,13 @@ impl Tasks {
             batch.work.send(job).expect("native image worker queue disconnected");
         } else {
             let completed = Rc::clone(&self.ready);
-            let work = zgui_reactive::blocking(work);
+            let work = zgui_reactive::blocking(move || {
+                let arrival = work(&key);
+                (key, generation, arrival)
+            });
             let task = zgui_reactive::spawn_local(async move {
-                let arrival = work.await;
-                completed.borrow_mut().push((key, generation, arrival));
+                let result = work.await;
+                completed.borrow_mut().push(result);
             });
             let mut live = self.live.borrow_mut();
             live.retain(|task| !task.is_finished());
@@ -149,6 +193,14 @@ impl Drop for Tasks {
     fn drop(&mut self) { self.cancel(); }
 }
 
+fn undeclared(name: &str) -> io::Error {
+    io::Error::new(io::ErrorKind::PermissionDenied, format!("image source is not a declared package asset: {name}"))
+}
+
+pub(super) fn missing_blob(uri: &str) -> io::Error {
+    io::Error::new(io::ErrorKind::NotFound, format!("image handle is released or not owned by this session: {uri}"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -159,12 +211,12 @@ mod tests {
         let (release, delayed) = mpsc::channel();
         let (finished, second_finished) = mpsc::channel();
         let raster = include_bytes!("../../tests/fixtures/red2x2.png");
-        tasks.start(SourceKey::of("first.png"), 1, move || {
+        tasks.start(SourceKey::of("first.png"), 1, move |_| {
             delayed.recv().unwrap();
             Arrival::Variant(64, 1, zgui_image::decode_scaled(raster, 64, zgui_image::Limits::default())
                 .map(|decoded| DecodedVariant { decoded, mips: Vec::new() }))
         });
-        tasks.start(SourceKey::of("second.png"), 2, move || {
+        tasks.start(SourceKey::of("second.png"), 2, move |_| {
             let decoded = zgui_image::decode_scaled(raster, 64, zgui_image::Limits::default());
             finished.send(()).unwrap();
             Arrival::Variant(64, 2, decoded.map(|decoded| DecodedVariant { decoded, mips: Vec::new() }))

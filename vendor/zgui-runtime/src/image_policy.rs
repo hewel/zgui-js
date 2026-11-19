@@ -2,24 +2,62 @@
 
 use std::{collections::BTreeMap, sync::Arc};
 
+mod blobs;
+pub(crate) mod files;
+
+pub use blobs::ImageBlobs;
+use files::FileAccess;
+
 /// Source authority and publication, selected before mounting or at a stopped-owner replacement.
 #[derive(Clone, Debug, Default)]
 pub struct ImagePolicy {
     pub(crate) assets: Option<Arc<BTreeMap<String, Arc<[u8]>>>>,
     pub(crate) strict: bool,
+    pub(crate) files: FileAccess,
+    pub(crate) blobs: Option<ImageBlobs>,
 }
 
 impl ImagePolicy {
     /// Restricts sources to exact declared package-relative names backed by verified owned bytes.
     /// Strict publications happen only at `Window::poll_image_barrier`, in launch order.
     pub fn package_only(assets: impl IntoIterator<Item = (String, Arc<[u8]>)>) -> Self {
-        Self { assets: Some(Arc::new(assets.into_iter().collect())), strict: true }
+        Self { strict: true, ..Self::package_assets(assets) }
     }
 
     /// Uses immutable declared package bytes with ordinary native asynchronous publication.
     /// No working-directory or registered-byte fallback is permitted.
     pub fn package_assets(assets: impl IntoIterator<Item = (String, Arc<[u8]>)>) -> Self {
-        Self { assets: Some(Arc::new(assets.into_iter().collect())), strict: false }
+        Self { assets: Some(Arc::new(assets.into_iter().collect())), ..Self::default() }
+    }
+
+    /// Grants Linux worker reads of regular files beneath canonical absolute directory prefixes.
+    ///
+    /// Invalid prefixes grant nothing. Symlinked prefixes are refused; relative symlinks inside a
+    /// granted directory remain usable only if they resolve beneath it.
+    #[must_use]
+    pub fn with_file_prefixes(mut self, prefixes: &[String]) -> Self {
+        self.files = FileAccess::live(prefixes);
+        self
+    }
+
+    /// Resolves files entirely from owned bytes, requiring both an exact URI and a granted prefix.
+    ///
+    /// Unlike [`Self::with_file_prefixes`], this never opens a filesystem path.
+    #[must_use]
+    pub fn with_fixture_files(
+        mut self,
+        prefixes: &[String],
+        files: impl IntoIterator<Item = (String, Arc<[u8]>)>,
+    ) -> Self {
+        self.files = FileAccess::fixtures(prefixes, files);
+        self
+    }
+
+    /// Makes this session's registered handles available without consulting the legacy byte registry.
+    #[must_use]
+    pub fn with_blobs(mut self, blobs: ImageBlobs) -> Self {
+        self.blobs = Some(blobs);
+        self
     }
 }
 

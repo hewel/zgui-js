@@ -1,10 +1,10 @@
 //! Deterministic, owner-thread asset fixtures. This module never opens a file.
 use super::ContractFailure;
-use crate::{environment::Environment, package::Package};
+use crate::{bounded_fs::relative_path, environment::Environment, package::Package};
 use host_services::{Completion, ServiceError};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use std::{cell::RefCell, collections::{BTreeMap, VecDeque}, rc::Rc};
+use std::{cell::RefCell, collections::{BTreeMap, VecDeque}, marker::PhantomData, rc::Rc, sync::Arc};
 use crate::schema::{deserialize_object,object_struct};
 
 const MAX_TRACE_RECORDS: usize = 4096;
@@ -35,6 +35,8 @@ object_struct! {
     pub(crate) struct Services {
         #[serde(default, deserialize_with = "present_provider", skip_serializing_if = "Option::is_none")]
         pub assets: Option<TextProvider>,
+        #[serde(default, deserialize_with = "present_provider", skip_serializing_if = "Option::is_none")]
+        pub images: Option<ImageProvider>,
     }
 }
 fn present_provider<'de, D: serde::Deserializer<'de>, T: Deserialize<'de>>(deserializer: D) -> Result<Option<T>, D::Error> { T::deserialize(deserializer).map(Some) }
@@ -46,6 +48,15 @@ object_struct! {
         pub initial_state: AssetState,
     }
 }
+object_struct! {
+    #[serde(deny_unknown_fields)]
+    pub(crate) struct ImageProvider {
+        #[serde(default, deserialize_with = "unique_assets", skip_serializing_if = "BTreeMap::is_empty")]
+        files: BTreeMap<String, String>,
+        #[serde(default, deserialize_with = "unique_assets", skip_serializing_if = "BTreeMap::is_empty")]
+        blobs: BTreeMap<String, String>,
+    }
+}
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub(crate) enum TextProviderVersion { #[serde(rename = "mock-text-assets-v1")] V1 }
 object_struct! {
@@ -55,20 +66,20 @@ object_struct! {
         pub assets: BTreeMap<String, AssetBehavior>,
     }
 }
-fn unique_assets<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<BTreeMap<String, AssetBehavior>, D::Error> {
-    struct Assets;
-    impl<'de> serde::de::Visitor<'de> for Assets {
-        type Value = BTreeMap<String, AssetBehavior>;
+fn unique_assets<'de, D: serde::Deserializer<'de>, T: Deserialize<'de>>(deserializer: D) -> Result<BTreeMap<String, T>, D::Error> {
+    struct Assets<T>(PhantomData<T>);
+    impl<'de, T: Deserialize<'de>> serde::de::Visitor<'de> for Assets<T> {
+        type Value = BTreeMap<String, T>;
         fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { f.write_str("unique fixture asset paths") }
         fn visit_map<M: serde::de::MapAccess<'de>>(self, mut map: M) -> Result<Self::Value, M::Error> {
             let mut assets = BTreeMap::new();
-            while let Some((path, behavior)) = map.next_entry::<String, AssetBehavior>()? {
+            while let Some((path, behavior)) = map.next_entry::<String, T>()? {
                 if assets.insert(path, behavior).is_some() { return Err(serde::de::Error::custom("duplicate fixture asset path")); }
             }
             Ok(assets)
         }
     }
-    deserializer.deserialize_map(Assets)
+    deserializer.deserialize_map(Assets(PhantomData))
 }
 object_struct! {
     #[serde(deny_unknown_fields)]
@@ -137,12 +148,24 @@ impl AssetState {
         Ok(())
     }
 }
+impl ImageProvider {
+    fn validate(&self) -> Result<(), String> {
+        if self.files.keys().any(|uri| !uri.starts_with("file:///")) {
+            return Err("fixture image file keys must be absolute file:// URIs".into());
+        }
+        if self.files.values().chain(self.blobs.keys()).chain(self.blobs.values()).any(|path| relative_path(path).is_err()) {
+            return Err("fixture image assets must use canonical package-relative paths".into());
+        }
+        Ok(())
+    }
+}
 impl FixtureDefinition {
     pub(crate) fn validate(&self) -> Result<(), String> {
         if self.schema_version != 1 { return Err("unsupported fixture schemaVersion; expected 1".into()); }
         if self.id.trim().is_empty() || self.id.chars().count() > 128 { return Err("fixture id must contain 1..=128 characters of nonblank text".into()); }
         if self.events.len() > 4096 { return Err("fixture exceeds 4096 events".into()); }
         if let Some(provider) = &self.services.assets { provider.initial_state.validate()?; }
+        if let Some(images) = &self.services.images { images.validate()?; }
         for event in &self.events { self.validate_event(&event.update)?; }
         Ok(())
     }
@@ -208,6 +231,22 @@ impl FixtureRuntime {
     pub(super) fn require_assets(&self) -> Result<(), ContractFailure> {
         if self.definition.services.assets.is_none() { return Err(self.fail(failure("E_FIXTURE_MISSING_SERVICE", "preview fixture does not provide readTextAsset"))); }
         Ok(())
+    }
+    pub(super) fn image_files<'a>(&'a self, package: &'a Package) -> impl Iterator<Item = (String, Arc<[u8]>)> + 'a {
+        // Unavailable targets are not entries in this generation's authority.
+        self.definition.services.images.iter().flat_map(|images| &images.files).filter_map(|(uri, path)| {
+            package.asset_data(path).map(|bytes| (uri.clone(), bytes))
+        })
+    }
+    pub(super) fn image_blob(&self, path: &str, package: Option<&Package>) -> Result<Arc<[u8]>, ContractFailure> {
+        if let Some(error) = self.contract_failure() { return Err(error); }
+        let Some(package) = package.filter(|package| package.asset_bytes(path).is_some()) else {
+            return Err(self.malformed(format!("image asset {path:?} is not declared in the loaded package")));
+        };
+        let target = self.definition.services.images.as_ref().and_then(|images| images.blobs.get(path))
+            .ok_or_else(|| self.malformed(format!("fixture does not map image blob {path:?}")))?;
+        package.asset_data(target)
+            .ok_or_else(|| self.malformed(format!("fixture image blob target {target:?} is not declared in the loaded package")))
     }
     pub(super) fn registration_id(&self) -> Option<u64> {
         let mut state = self.state.borrow_mut();

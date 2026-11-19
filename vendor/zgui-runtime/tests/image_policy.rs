@@ -3,17 +3,21 @@ mod support;
 
 use std::{sync::Arc, time::{Duration, Instant}};
 use zgui_platform_headless::Harness;
-use zgui_runtime::{App, ImagePolicy, ImageState, Runtime};
+use zgui_runtime::{App, ImageBlobs, ImagePolicy, ImageState, Runtime};
 use zgui_view::{AttrName, BuildCx, DomHandle, IntoView, View};
 
 const RED: &[u8] = include_bytes!("fixtures/red2x2.png");
 const CSS: &str = "root { display:block } image { display:block; width:64px; height:16px }";
 
 fn window(src: &str, css: &str, assets: Vec<(String, Arc<[u8]>)>) -> Harness<Runtime> {
+    window_with_policy(src, css, ImagePolicy::package_only(assets))
+}
+
+fn window_with_policy(src: &str, css: &str, policy: ImagePolicy) -> Harness<Runtime> {
     let src = src.to_owned();
     let handler = App::new().with_size(400.0, 300.0).with_stylesheet(css)
         .with_renderer(Box::new(support::capture))
-        .with_image_policy(ImagePolicy::package_only(assets))
+        .with_image_policy(policy)
         .into_handler(move |cx: &mut BuildCx<'_>| {
             Box::new(zgui_elements::image().class("picture").src(Some(src.clone())).into_view().build(cx))
         }).unwrap();
@@ -86,6 +90,252 @@ fn corrupt_and_undeclared_sources_fail_instead_of_certifying_empty_resources() {
         assert!(snapshot.resources[0].failure.is_some());
         app.shut_down();
     }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn live_files_are_read_only_beneath_the_granted_directory() {
+    use std::fs;
+    use std::os::unix::fs::symlink;
+
+    let temp = std::env::temp_dir().join(format!("zgui-image-policy-{}", std::process::id()));
+    fs::create_dir(&temp).unwrap();
+    struct RemoveTemp(std::path::PathBuf);
+    impl Drop for RemoveTemp {
+        fn drop(&mut self) { let _ = std::fs::remove_dir_all(&self.0); }
+    }
+    let _temp = RemoveTemp(temp.clone());
+    let granted = temp.join("grant here");
+    let sibling = temp.join("grant here-more");
+    fs::create_dir(&granted).unwrap();
+    fs::create_dir(&sibling).unwrap();
+    fs::write(granted.join("red.png"), RED).unwrap();
+    fs::write(sibling.join("red.png"), RED).unwrap();
+    fs::write(granted.join("vector.svg"), GREEN_SVG).unwrap();
+    symlink("red.png", granted.join("inside.png")).unwrap();
+    symlink("../grant here-more/red.png", granted.join("escape.png")).unwrap();
+    symlink(&sibling, granted.join("escape-dir")).unwrap();
+    symlink(&sibling, temp.join("untrusted-root")).unwrap();
+    let oversized = fs::File::create(granted.join("oversized.png")).unwrap();
+    oversized.set_len(128 * 1024 * 1024).unwrap();
+    let fifo = granted.join("fifo.png");
+    rustix::fs::mkfifoat(rustix::fs::CWD, &fifo, rustix::fs::Mode::RUSR).unwrap();
+
+    let uri = |path: &std::path::Path| format!("file://{}", path.to_str().unwrap().replace(' ', "%20"));
+    let prefix = granted.to_str().unwrap().to_owned();
+    let src = uri(&granted.join("red.png"));
+    let mut app = window_with_policy(&src, CSS, ImagePolicy::package_assets([]));
+    assert!(await_terminal(&mut app, &src).failures.iter().any(|failure| failure.contains(&src)));
+    app.app_mut().windows_mut()[0].replace_image_policy(
+        ImagePolicy::package_assets([]).with_file_prefixes(&[
+            prefix, temp.join("untrusted-root").to_str().unwrap().to_owned(),
+        ]),
+    );
+    let known = uri(&granted);
+    for (src, expected) in [
+        (uri(&granted.join("inside.png")), ImageState::Ready),
+        (uri(&granted.join("vector.svg")), ImageState::Ready),
+        (uri(&sibling.join("red.png")), ImageState::Failed),
+        (uri(&granted.join("escape.png")), ImageState::Failed),
+        (uri(&granted.join("escape-dir/red.png")), ImageState::Failed),
+        (uri(&temp.join("untrusted-root/red.png")), ImageState::Failed),
+        (format!("{known}/../grant%20here-more/red.png"), ImageState::Failed),
+        (format!("{known}/%2E%2E/grant%20here-more/red.png"), ImageState::Failed),
+        (format!("{known}%2Finside.png"), ImageState::Failed),
+        (format!("{known}//inside.png"), ImageState::Failed),
+        (format!("{known}/inside.png?raw=1"), ImageState::Failed),
+        (format!("{known}/inside.png#fragment"), ImageState::Failed),
+        (uri(&granted.join("oversized.png")), ImageState::Failed),
+        (uri(&granted.join("fifo.png")), ImageState::Failed),
+        (uri(&granted.join("escape-dir")), ImageState::Failed),
+    ] {
+        set_src(&mut app, Some(&src));
+        let terminal = await_terminal(&mut app, &src);
+        assert_eq!(terminal.resources.last().unwrap().state, expected, "{src}: {terminal:?}");
+    }
+    app.shut_down();
+}
+
+#[cfg(target_os = "linux")]
+fn await_terminal(app: &mut Harness<Runtime>, src: &str) -> zgui_runtime::ImageResources {
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        app.settle(8);
+        let resources = app.app().windows()[0].image_resources();
+        if resources.resources.last().is_some_and(|image| {
+            image.source == src && matches!(image.state, ImageState::Ready | ImageState::Failed)
+        }) {
+            return resources;
+        }
+        assert!(Instant::now() < deadline, "{src} never settled: {resources:?}");
+        std::thread::yield_now();
+    }
+}
+
+const GREEN_SVG: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" width="64" height="16">
+  <rect width="64" height="16" fill="green"/>
+</svg>"#;
+
+#[test]
+fn package_svg_keeps_the_raster_only_decoder() {
+    let mut app = window("assets/vector.svg", CSS, vec![("assets/vector.svg".into(), Arc::from(GREEN_SVG))]);
+    app.settle(8);
+    publish(&mut app);
+    let snapshot = app.app().windows()[0].image_resources();
+    assert_eq!(snapshot.resources[0].state, ImageState::Failed, "{snapshot:?}");
+    assert!(snapshot.resources[0].attached_variant.is_none());
+    app.shut_down();
+}
+
+#[test]
+fn fixture_files_require_both_exact_mapping_and_prefix_without_ambient_reads() {
+    let src = "file:///fixture/granted/does-not-exist.svg";
+    let sibling = "file:///fixture/granted-other/picture.svg";
+    let alternate = "file:///fixture/granted/does-not-exist.png";
+    let mut app = window_with_policy(src, CSS, ImagePolicy::package_only([]).with_fixture_files(
+        &["/fixture/granted".into()],
+        [(src.into(), Arc::from(GREEN_SVG)), (sibling.into(), Arc::from(GREEN_SVG))],
+    ));
+    app.settle(8);
+    publish(&mut app);
+    let ready = app.app().windows()[0].image_resources();
+    assert_eq!(ready.resources[0].state, ImageState::Ready, "{ready:?}");
+    for denied in [sibling, alternate] {
+        set_src(&mut app, Some(denied));
+        app.settle(8);
+        publish(&mut app);
+        let snapshot = app.app().windows()[0].image_resources();
+        assert_eq!(snapshot.resources.last().unwrap().state, ImageState::Failed, "{snapshot:?}");
+        assert!(snapshot.failures.iter().any(|failure| failure.contains(denied)));
+    }
+    app.shut_down();
+}
+
+#[test]
+fn svg_cannot_resolve_external_or_nested_images() {
+    let sources = [
+        "file:///fixture/granted/external.png",
+        "relative.png",
+        "https://example.test/external.png",
+        "data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20width='1'%20height='1'/%3E",
+    ];
+    let blobs = ImageBlobs::new(10);
+    let image_uris: Vec<_> = sources.map(|source| {
+        let svg = format!(r#"<svg xmlns="http://www.w3.org/2000/svg" width="64" height="16">
+            <rect width="64" height="16" fill="green"/>
+            <image width="64" height="16" href="{source}"/>
+        </svg>"#);
+        blobs.register(Arc::from(svg.into_bytes())).unwrap()
+    }).into_iter().collect();
+    let mut app = window_with_policy(&image_uris[0], CSS, ImagePolicy::package_only([]).with_blobs(blobs));
+    for (src, external) in image_uris.iter().zip(sources) {
+        set_src(&mut app, Some(src));
+        app.settle(8);
+        publish(&mut app);
+        let snapshot = app.app().windows()[0].image_resources();
+        let resource = snapshot.resources.last().unwrap();
+        assert_eq!(resource.state, ImageState::Failed, "{external}: {snapshot:?}");
+        assert!(resource.attached_variant.is_none(), "{external}: {snapshot:?}");
+        assert!(resource.failure.as_deref().unwrap().contains("SVG image references"));
+    }
+    app.shut_down();
+}
+
+#[test]
+fn a_queued_blob_completion_cannot_attach_after_release() {
+    let blobs = ImageBlobs::new(9);
+    let src = blobs.register(Arc::from(RED)).unwrap();
+    let mut app = window_with_policy(
+        &src,
+        CSS,
+        ImagePolicy::package_only([]).with_blobs(blobs.clone()),
+    );
+    app.settle(8);
+    assert_eq!(app.app().windows()[0].image_resources().resources[0].state, ImageState::Loading);
+    barrier(&mut app);
+    assert!(blobs.release(&src));
+    app.app().windows()[0].request_frame();
+    app.settle(8);
+    publish(&mut app);
+    let snapshot = app.app().windows()[0].image_resources();
+    let resource = &snapshot.resources[0];
+    assert_eq!(resource.state, ImageState::Failed, "{snapshot:?}");
+    assert_eq!(resource.attached_variant, None);
+    assert!(!resource.uploaded);
+    app.shut_down();
+}
+
+#[test]
+fn a_blob_released_after_a_same_turn_clear_or_overwrite_does_not_fail_policy() {
+    const RASTER: &str = "assets/red.png";
+    let blobs = ImageBlobs::new(9);
+    let mut app = window_with_policy(
+        RASTER,
+        CSS,
+        ImagePolicy::package_only([(RASTER.into(), Arc::from(RED))]).with_blobs(blobs.clone()),
+    );
+    app.settle(8);
+    publish(&mut app);
+    for next in [None, Some(RASTER)] {
+        let src = blobs.register(Arc::from(RED)).unwrap();
+        set_src(&mut app, Some(&src));
+        set_src(&mut app, next);
+        assert!(blobs.release(&src));
+        app.settle(8);
+        publish(&mut app);
+        let snapshot = app.app().windows()[0].image_resources();
+        assert!(snapshot.failures.is_empty(), "{snapshot:?}");
+        assert_eq!(
+            snapshot.resources.iter().find(|image| image.state == ImageState::Ready).map(|image| image.source.as_str()),
+            next,
+        );
+    }
+    app.shut_down();
+}
+
+#[test]
+fn releasing_a_blob_and_replacing_a_policy_cannot_reuse_old_authority() {
+    let old = ImageBlobs::new(4);
+    let old_src = old.register(Arc::from(RED)).unwrap();
+    let abandoned = old.register(Arc::from(RED)).unwrap();
+    let new = ImageBlobs::new(5);
+    let new_src = new.register(Arc::from(GREEN_SVG)).unwrap();
+    assert_ne!(old_src, new_src);
+    let mut app = window_with_policy(&old_src, CSS, ImagePolicy::package_only([]).with_blobs(old.clone()));
+    app.settle(8);
+    publish(&mut app);
+    assert_eq!(app.app().windows()[0].image_resources().resources[0].state, ImageState::Ready);
+
+    assert!(old.release(&old_src));
+    assert!(!old.release(&old_src));
+    assert_eq!(old.len(), 1);
+    app.app().windows()[0].request_frame();
+    app.settle(8);
+    let released = app.app().windows()[0].image_resources();
+    assert_eq!(released.resources[0].state, ImageState::Failed);
+    assert_eq!(released.resources[0].attached_variant, None);
+    assert!(!released.resources[0].uploaded);
+    set_src(&mut app, None);
+    app.settle(8);
+    set_src(&mut app, Some(&old_src));
+    app.settle(8);
+    publish(&mut app);
+    assert_eq!(app.app().windows()[0].image_resources().resources.last().unwrap().state, ImageState::Failed);
+
+    app.app_mut().windows_mut()[0].replace_image_policy(ImagePolicy::package_only([]).with_blobs(new.clone()));
+    assert!(old.is_empty());
+    old.release(&new_src);
+    new.release(&abandoned);
+    assert_eq!(new.len(), 1);
+    set_src(&mut app, Some(&abandoned));
+    app.settle(8);
+    publish(&mut app);
+    assert_eq!(app.app().windows()[0].image_resources().resources.last().unwrap().state, ImageState::Failed);
+    set_src(&mut app, Some(&new_src));
+    app.settle(8);
+    publish(&mut app);
+    assert_eq!(app.app().windows()[0].image_resources().resources.last().unwrap().state, ImageState::Ready);
+    app.shut_down();
 }
 
 #[test]

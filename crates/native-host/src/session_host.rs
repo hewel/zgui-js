@@ -8,12 +8,13 @@ use std::{cell::{Cell, RefCell}, collections::HashMap, rc::{Rc, Weak}, sync::Arc
 use zgui::{
     platform::{SurfaceId, Waker},
     runtime::{HostBinding, ImagePolicy},
+    runtime::window::{ImageSourceCheckpoint, ImageSourceMountWrites},
     view::{Anchor, BuildCx, DocumentId, DomHandle, ElementName, HostHandle, NodeId, View},
 };
 
 use crate::{
     fallback,
-    session::{Result as SessionResult, Session, SessionError, SessionModule, SessionPolicy},
+    session::{Result as SessionResult, ResourceCounts, Session, SessionError, SessionModule, SessionPolicy},
 };
 
 /// The portion of a native document owned by one application session at a time.
@@ -80,14 +81,21 @@ pub(crate) enum RecoveryPolicy {
 
 #[derive(Debug)]
 pub(crate) enum ReloadOutcome {
-    Mounted(u64),
+    Mounted { generation: u64, predecessor_leak: Option<PredecessorLeak> },
     Rejected(SessionError),
     Fallback(SessionError),
 }
 
+#[derive(Debug, serde::Serialize)]
+pub(crate) struct PredecessorLeak {
+    code: &'static str,
+    generation: u64,
+    resources: ResourceCounts,
+}
+
 pub(crate) fn report_reload(outcome: &ReloadOutcome) {
     match outcome {
-        ReloadOutcome::Mounted(generation) => eprintln!("reload-mounted: generation={generation}"),
+        ReloadOutcome::Mounted { generation, .. } => eprintln!("reload-mounted: generation={generation}"),
         ReloadOutcome::Rejected(error) => eprintln!("reload-preflight-rejected: {error}"),
         ReloadOutcome::Fallback(error) => eprintln!("reload-fallback: {error}"),
     }
@@ -98,14 +106,22 @@ pub(crate) fn report_reload(outcome: &ReloadOutcome) {
 /// frame requests. This is deliberately narrow: the host does not see the rest
 /// of the renderer.
 pub(crate) trait SessionSurface {
+    type Checkpoint;
+    type MountWrites;
+
     fn surface(&self, document: DocumentId) -> Option<SurfaceId>;
-    /// Install the generation's binding and image policy before `Session::mount`.
+    /// Install the callback binding before mounting, independently of image authority.
     fn bind(&mut self, document: DocumentId, session: &Rc<Session>);
+    fn image_source_checkpoint(&mut self, document: DocumentId) -> Self::Checkpoint;
+    fn seal_image_source_writes(&self, document: DocumentId, checkpoint: Self::Checkpoint) -> Self::MountWrites;
+    fn discard_image_source_writes(&mut self, document: DocumentId, checkpoint: Self::Checkpoint);
+    /// Publish image authority after predecessor cleanup without discarding the new mount's sources.
+    fn commit_image_policy(&mut self, document: DocumentId, session: &Session, mount_writes: Self::MountWrites);
     fn request_frame(&self, document: DocumentId);
     fn validate_fonts(&self, _session: &Session) -> SessionResult<()> { Ok(()) }
 }
 
-/// Image authority installed by [`RuntimeSurface::bind`]. Preview publishes
+/// Image authority installed by [`RuntimeSurface::commit_image_policy`]. Preview publishes
 /// package bytes in strict launch order; the live host uses ordinary
 /// asynchronous package-asset publication.
 #[derive(Clone, Copy)]
@@ -121,6 +137,9 @@ impl<'a> RuntimeSurface<'a> {
     }
 }
 impl SessionSurface for RuntimeSurface<'_> {
+    type Checkpoint = ImageSourceCheckpoint;
+    type MountWrites = ImageSourceMountWrites;
+
     fn surface(&self, document: DocumentId) -> Option<SurfaceId> {
         self.runtime.windows().iter().find(|window| window.document_id() == document).map(|window| window.surface().id())
     }
@@ -129,14 +148,36 @@ impl SessionSurface for RuntimeSurface<'_> {
             .expect("pure preflight cannot destroy its native window");
         // Binding replacement itself neither shuts down the old owner nor
         // requests a frame. Both are explicit at this owner-thread boundary.
-        window.replace_image_policy(match (self.images, session.package()) {
-            (ImageChoice::Live, Some(package)) => ImagePolicy::package_assets(package.image_assets()),
-            (ImageChoice::Live, None) => ImagePolicy::default(),
-            (ImageChoice::PackageOnly, Some(package)) => ImagePolicy::package_only(package.image_assets()),
-            (ImageChoice::PackageOnly, None) => ImagePolicy::package_only(std::iter::empty()),
-        });
         window.install_binding(Box::new(Binding(Rc::downgrade(session))));
         eprintln!("binding-installed: {document:?} generation={}", session.generation);
+    }
+    fn image_source_checkpoint(&mut self, document: DocumentId) -> ImageSourceCheckpoint {
+        self.runtime.windows_mut().iter_mut().find(|window| window.document_id() == document)
+            .expect("staged mount requires its native window")
+            .image_source_checkpoint()
+    }
+    fn seal_image_source_writes(&self, document: DocumentId, checkpoint: ImageSourceCheckpoint) -> ImageSourceMountWrites {
+        self.runtime.windows().iter().find(|window| window.document_id() == document)
+            .expect("mounting cannot destroy its native window")
+            .seal_image_source_writes(checkpoint)
+    }
+    fn discard_image_source_writes(&mut self, document: DocumentId, checkpoint: ImageSourceCheckpoint) {
+        self.runtime.windows_mut().iter_mut().find(|window| window.document_id() == document)
+            .expect("mounting cannot destroy its native window")
+            .discard_image_source_writes(checkpoint);
+    }
+    fn commit_image_policy(&mut self, document: DocumentId, session: &Session, mount_writes: ImageSourceMountWrites) {
+        let window = self.runtime.windows_mut().iter_mut().find(|window| window.document_id() == document)
+            .expect("mounting cannot destroy its native window");
+        let package = session.package();
+        let prefixes = package.map_or(&[][..], |package| package.manifest.capabilities.image_prefixes.as_slice());
+        let policy = match (self.images, package) {
+            (ImageChoice::Live, Some(package)) => ImagePolicy::package_assets(package.image_assets()).with_file_prefixes(prefixes),
+            (ImageChoice::Live, None) => ImagePolicy::default(),
+            (ImageChoice::PackageOnly, package) => ImagePolicy::package_only(package.into_iter().flat_map(|package| package.image_assets()))
+                .with_fixture_files(prefixes, session.fixture_image_files()),
+        };
+        window.replace_image_policy_with_mount_writes(policy.with_blobs(session.image_blobs().clone()), mount_writes);
     }
     fn request_frame(&self, document: DocumentId) {
         if let Some(window) = self.runtime.windows().iter().find(|window| window.document_id() == document) { window.request_frame(); }
@@ -293,12 +334,15 @@ impl SessionHost {
         let outcome = self.mount_module_inner(surface, waker, document, module, retry);
         if let Some(identity) = identity {
             let (status, diagnostic) = match &outcome {
-                ReloadOutcome::Mounted(_) => ("accepted", None),
+                ReloadOutcome::Mounted { .. } => ("accepted", None),
                 ReloadOutcome::Rejected(error) | ReloadOutcome::Fallback(error) => ("rejected", Some(error.to_string())),
             };
-            let record = serde_json::json!({"schemaVersion":1,"status":status,"candidate":identity,"generation":self.generation,
+            let mut record = serde_json::json!({"schemaVersion":1,"status":status,"candidate":identity,"generation":self.generation,
                 "document":format!("{document:?}"),"diagnostic":diagnostic,
                 "lastSuccessfulBuildId":self.last_good.as_ref().and_then(|module|module.package.as_ref()).map(|package|&package.manifest.build_id)});
+            if let ReloadOutcome::Mounted { predecessor_leak: Some(leak), .. } = &outcome {
+                record["predecessorLeak"] = serde_json::json!(leak);
+            }
             eprintln!("native-candidate: {record}");
             if let Some(package) = package && let Err(error) = package.record_acceptance(&record) {
                 eprintln!("native-candidate-status-error: {error}");
@@ -347,6 +391,7 @@ impl SessionHost {
             }
         };
         surface.bind(document, &candidate);
+        let image_checkpoint = surface.image_source_checkpoint(document);
         if let Err(error) = candidate.mount() {
             if let Some(previous) = previous {
                 candidate.relinquish_stylesheets();
@@ -357,6 +402,7 @@ impl SessionHost {
                     region.dom.insert(parent, candidate_region.root, Some(region.root));
                     region.dom.detach(candidate_region.root);
                 }
+                surface.discard_image_source_writes(document, image_checkpoint);
                 surface.bind(document, &previous);
                 surface.request_frame(document);
                 return ReloadOutcome::Rejected(error);
@@ -364,16 +410,19 @@ impl SessionHost {
             match self.recovery {
                 RecoveryPolicy::Fallback => {
                     let _ = candidate.retire();
+                    surface.discard_image_source_writes(document, image_checkpoint);
                     self.show_fallback(surface, document, generation, &error.to_string(), retry);
                     return ReloadOutcome::Fallback(error);
                 }
                 RecoveryPolicy::Propagate => {
+                    surface.discard_image_source_writes(document, image_checkpoint);
                     self.sessions.insert(document, candidate);
                     return ReloadOutcome::Rejected(error);
                 }
             }
         }
-        if let Some(previous) = previous {
+        let mount_writes = surface.seal_image_source_writes(document, image_checkpoint);
+        let predecessor_leak = if let Some(previous) = previous {
             if let Some(parent) = staging_parent {
                 region.dom.insert(parent, candidate_region.root, Some(region.root));
                 region.root_anchor.set(candidate_region.root);
@@ -381,15 +430,19 @@ impl SessionHost {
             }
             previous.relinquish_stylesheets();
             previous.remove_surplus_stylesheets(&candidate);
-            let _ = previous.retire();
+            let report = previous.retire();
             region.dom.detach(region.root);
-        }
+            (report.counts != ResourceCounts::default()).then_some(PredecessorLeak {
+                code: "E_TEARDOWN", generation: report.generation, resources: report.counts,
+            })
+        } else { None };
+        surface.commit_image_policy(document, &candidate, mount_writes);
         self.clear_fallback(document);
         self.module = module.clone();
         if module.package.is_some() { self.last_good = Some(module); }
         self.sessions.insert(document, candidate);
         surface.request_frame(document);
-        ReloadOutcome::Mounted(generation)
+        ReloadOutcome::Mounted { generation, predecessor_leak }
     }
 
     fn clear_fallback(&mut self, document: DocumentId) {

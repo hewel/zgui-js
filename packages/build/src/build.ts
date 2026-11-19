@@ -15,6 +15,15 @@ const require = createRequire(import.meta.url);
 
 export type FontDeclaration = { family: string; path: string };
 
+type Capabilities = {
+  shellSurfaces?: boolean;
+  sessionLock?: boolean;
+  imagePrefixes?: string[];
+  unixSockets?: string[];
+  commands?: string[];
+  controlChannel?: boolean;
+};
+
 type ManifestIdentity = {
   schemaVersion: 2;
   id: string;
@@ -24,6 +33,7 @@ type ManifestIdentity = {
   styles: string[];
   assets: string[];
   fonts: FontDeclaration[];
+  capabilities?: Capabilities;
   styleSystem: CompilationResult["styleSystem"];
   artifactDigests: Record<string, string>;
 };
@@ -281,6 +291,73 @@ function isFontDeclaration(font: unknown): font is FontDeclaration {
   );
 }
 
+function capabilityString(value: unknown): value is string {
+  if (typeof value !== "string") return false;
+  let nonspace = false;
+  for (const char of value) {
+    const code = char.charCodeAt(0);
+    if (
+      code < 32 ||
+      (code >= 127 && code <= 159) ||
+      (char.length === 1 && code >= 0xd800 && code <= 0xdfff)
+    )
+      return false;
+    nonspace ||= code !== 32;
+  }
+  return nonspace;
+}
+
+function absoluteCapabilityPath(value: string): boolean {
+  return (
+    value === "/" ||
+    (value.startsWith("/") &&
+      !value.includes("\\") &&
+      value
+        .slice(1)
+        .split("/")
+        .every(part => part && part !== "." && part !== ".."))
+  );
+}
+
+function parseCapabilities(input: unknown): Capabilities | undefined {
+  if (input === undefined) return undefined;
+  if (input === null || typeof input !== "object" || Array.isArray(input))
+    throw new Error("package.json zgui.capabilities must be an object");
+
+  const capabilities: Capabilities = {};
+  for (const [key, value] of Object.entries(input) as [string, unknown][]) {
+    const field = `package.json zgui.capabilities.${key}`;
+    switch (key) {
+      case "shellSurfaces":
+      case "sessionLock":
+      case "controlChannel":
+        if (typeof value !== "boolean") throw new Error(`${field} must be a boolean`);
+        if (value) capabilities[key] = true;
+        break;
+      case "imagePrefixes":
+      case "unixSockets":
+      case "commands": {
+        const paths = key !== "commands";
+        if (
+          !Array.isArray(value) ||
+          !value.every(
+            (item: unknown) => capabilityString(item) && (!paths || absoluteCapabilityPath(item)),
+          )
+        )
+          throw new Error(
+            `${field} must be an array of ${paths ? "canonical absolute paths" : "nonempty strings"}`,
+          );
+        if (new Set(value).size !== value.length) throw new Error(`${field} contains duplicates`);
+        if (value.length) capabilities[key] = value;
+        break;
+      }
+      default:
+        throw new Error(`Unknown capability: ${field}`);
+    }
+  }
+  return Object.keys(capabilities).length ? capabilities : undefined;
+}
+
 export async function publishApplication(
   app: string,
   result: CompilationResult,
@@ -305,8 +382,9 @@ export async function publishApplication(
   const assets = await collectAssets(path.join(appDirectory, "assets"));
   for (const item of assets) files.set(...item);
   const pkg = await optionalFile(path.join(appDirectory, "package.json"));
-  const packageJson: { zgui?: { fonts?: unknown } } | undefined =
+  const packageJson: { zgui?: { fonts?: unknown; capabilities?: unknown } } | undefined =
     pkg && JSON.parse(pkg.toString("utf8"));
+  const capabilities = parseCapabilities(packageJson?.zgui?.capabilities);
   const declarations = packageJson?.zgui?.fonts ?? [];
   if (!Array.isArray(declarations))
     throw new Error("package.json zgui.fonts must be an array of {family,path}");
@@ -337,6 +415,7 @@ export async function publishApplication(
     styles: css === undefined ? ["app.css"] : ["base.css", "app.css"],
     assets: [...assets.keys()].sort(),
     fonts,
+    ...(capabilities ? { capabilities } : {}),
     styleSystem: result.styleSystem,
     artifactDigests: Object.fromEntries(
       [...files]

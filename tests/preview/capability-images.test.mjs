@@ -1,0 +1,86 @@
+import assert from "node:assert/strict";
+import { test } from "node:test";
+import { mkdir, writeFile } from "node:fs/promises";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
+import {
+  buildFixtureApp, createTempWorkspace, getNode, pixelAt, readPng, readTree, runScenario, writeJson,
+} from "./harness.mjs";
+
+const svg = color => `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24"><rect width="24" height="24" fill="${color}"/></svg>`;
+const capture = { id: "image", op: "capture", captureId: "image" };
+const blobAsset = "assets/input.svg";
+
+function appSource({ file, blob = false, leak = false } = {}) {
+  return `
+    import { Image, renderApp, type NativeNode } from "@hewel/zgui";
+    import { ${leak ? "registerImageAsset" : "loadImageAsset"} } from "@hewel/zgui-services";
+    export const hostApiVersion = 1;
+    export function mount(root: NativeNode) {
+      return renderApp(() => {
+        const style = { width: "24px", height: "24px" };
+        ${blob ? `const src = ${leak ? "registerImageAsset" : "loadImageAsset"}(${JSON.stringify(blobAsset)}).src;` : ""}
+        return <column>
+          ${file ? `<Image testId="file" src={${JSON.stringify(file)}} style={style} />` : ""}
+          ${blob ? `<Image testId="blob" src={src} style={style} />` : ""}
+        </column>;
+      }, root);
+    }
+  `;
+}
+
+async function setup(t) {
+  const temp = await createTempWorkspace("preview-capability-images-");
+  t.after(() => temp.cleanup());
+  const prefix = path.join(temp.dir, "external");
+  const filename = path.join(prefix, "disk image.svg");
+  await mkdir(prefix);
+  await writeFile(filename, svg("#ff0000"));
+  const file = pathToFileURL(filename).href;
+  const assets = { "input.svg": svg("#ff0000"), "fixture-file.svg": svg("#00ff00"), "fixture-blob.svg": svg("#0000ff") };
+
+  return {
+    file,
+    async build(name, source, capabilities) {
+      return buildFixtureApp(path.join(temp.dir, name), name, source, { rawSource: true, assets, capabilities });
+    },
+    async run(name, bundle, images, allowFailure = false) {
+      const fixture = path.join(temp.dir, `${name}-fixture.json`);
+      await writeJson(fixture, { schemaVersion: 1, id: name, services: { images }, events: [] });
+      return runScenario({ projectDir: temp.dir, name, bundle, fixture, allowFailure,
+        requiredCapabilities: ["pixels", "assets.native-readiness"], steps: [capture] });
+    },
+    capabilities: { imagePrefixes: [prefix] },
+  };
+}
+
+test("preview draws deterministic file and blob bytes, never ambient files", { timeout: 30000 }, async t => {
+  const { build, run, file, capabilities } = await setup(t);
+  const bundle = await build("dynamic-images", appSource({ file, blob: true }), capabilities);
+  const images = { files: { [file]: "assets/fixture-file.svg" }, blobs: { [blobAsset]: "assets/fixture-blob.svg" } };
+  const { out } = await run("fixture-images", bundle, images);
+  const tree = await readTree(out, "image");
+  const png = await readPng(path.join(out, "captures/image.png"));
+  for (const [id, expected] of [["file", [0, 255, 0, 255]], ["blob", [0, 0, 255, 255]]]) {
+    const { x, y, width, height } = getNode(tree, id).boundsDevice;
+    assert.deepEqual(pixelAt(png, Math.floor(x + width / 2), Math.floor(y + height / 2)), expected, id);
+  }
+  const absentFile = await run("missing-file-fixture", bundle, { blobs: images.blobs }, true);
+  assert.equal(absentFile.result.firstError?.code, "E_ASSET_FAILED");
+  const absentBlob = await run("missing-blob-fixture", bundle, { files: images.files }, true);
+  assert.equal(absentBlob.result.firstError?.code, "E_FIXTURE_CONTRACT");
+
+  const noAuthority = await build("no-image-authority", appSource({ file }));
+  const denied = await run("denied-file", noAuthority, { files: images.files }, true);
+  assert.equal(denied.result.firstError?.code, "E_ASSET_FAILED");
+});
+
+test("preview reports leaked Image handles as teardown failures", async t => {
+  const { build, run } = await setup(t);
+  const bundle = await build("leaked-image", appSource({ blob: true, leak: true }));
+  const { result } = await run("leak", bundle, { blobs: { [blobAsset]: "assets/fixture-blob.svg" } }, true);
+  assert.equal(result.captureCount, 1);
+  assert.equal(result.exitCode, 9);
+  assert.equal(result.firstError?.code, "E_TEARDOWN");
+  assert.equal(result.teardown.resources.imageHandles, 1);
+});

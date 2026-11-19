@@ -8,6 +8,19 @@ impl ImageLoader {
         self.completed = Tasks::new(policy);
     }
 
+    pub(crate) fn retain_mount_writes(&mut self, mount: Option<ImageSourceMountWrites>) {
+        match mount {
+            Some(mount) => {
+                self.validate_checkpoint(&mount.checkpoint);
+                let mut pending = self.pending.borrow_mut();
+                pending.truncate(mount.end);
+                pending.drain(..mount.checkpoint.start);
+            }
+            None => self.pending.borrow_mut().clear(),
+        }
+        self.advance_source_epoch();
+    }
+
     pub(crate) fn replace_policy(
         &mut self,
         policy: crate::ImagePolicy,
@@ -15,7 +28,7 @@ impl ImageLoader {
         content: &mut ContentCache,
     ) {
         self.completed.cancel();
-        self.pending.borrow_mut().clear();
+        self.completed.clear_blobs();
         let previous = std::mem::take(&mut self.by_node);
         {
             let document = document.borrow();

@@ -2,7 +2,7 @@ use std::{cell::{Cell, RefCell}, rc::{Rc, Weak}, sync::Arc, time::{Duration, Ins
 use js_runtime::{JsRuntime, RejectionPolicy, RuntimeLimits};
 use rquickjs::{Exception, Function, Persistent};
 use ui_bridge::{BridgeStep, DispatchOutcome, HostPort, QueueOverflow, UiBridge, registry::NodeRegistry};
-use zgui::platform::{SurfaceId, WakeReason, Waker};
+use zgui::{platform::{SurfaceId, WakeReason, Waker}, runtime::ImageBlobs};
 use crate::{assets::{AssetSource, ContractFailure}, environment::Environment, session_host::MountRegion, package::Package, work::{Arguments, Work}};
 
 /// Typed session failure: engine diagnostics, sticky provider contracts, and
@@ -101,9 +101,13 @@ pub(crate) struct ResourceCounts {
     pub timers: usize,
     pub frame_callbacks: usize,
     pub requests: usize,
+    #[serde(skip_serializing_if = "is_zero")]
+    pub image_handles: usize,
     pub fonts: usize,
     pub engine_alive: bool,
 }
+
+fn is_zero(value: &usize) -> bool { *value == 0 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum RetirementFailure {
@@ -480,6 +484,10 @@ impl Session {
     }
 
     pub(crate) fn package(&self) -> Option<&Rc<Package>> { self.module.package.as_ref() }
+    pub(crate) fn image_blobs(&self) -> &ImageBlobs { self.work.image_blobs() }
+    pub(crate) fn fixture_image_files(&self) -> impl Iterator<Item = (String, Arc<[u8]>)> + '_ {
+        self.policy.assets.fixture_image_files(self.module.package.as_deref())
+    }
     pub(crate) fn relinquish_stylesheets(&self) { self.stylesheet_installed.set(false); }
 
     pub(crate) fn restore_stylesheets(&self) {
@@ -531,6 +539,7 @@ impl Session {
             callbacks: self.bridge.callback_count(), focus_traps: self.bridge.focus_trap_count(),
             scroll_locks: self.bridge.scroll_lock_count(),
             timers, frame_callbacks, requests,
+            image_handles: self.image_blobs().len(),
             fonts: self.font_leases.borrow().len(),
             engine_alive: self.engine.borrow().is_some(),
         }
@@ -580,10 +589,12 @@ impl Session {
         }
         let snapshot = self.engine.borrow().as_ref().map(Self::snapshot_telemetry);
         self.telemetry.set(RuntimeTelemetry::merge(self.telemetry.get(), snapshot));
-        if self.engine.borrow_mut().take().is_some() {
-            eprintln!("session-disposed: generation={} frames={} resources={:?}", self.generation, self.frames.get(), self.counts());
-        }
+        let engine_disposed = self.engine.borrow_mut().take().is_some();
         let counts = self.counts();
+        self.image_blobs().clear();
+        if engine_disposed {
+            eprintln!("session-disposed: generation={} frames={} resources={counts:?}", self.generation, self.frames.get());
+        }
         let failure = if !self.contract_reported.replace(true)
             && let Some(contract) = self.contract_failure()
         {

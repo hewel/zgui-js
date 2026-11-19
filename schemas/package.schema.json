@@ -23,6 +23,21 @@
         }
       }
     },
+    "capabilities": {
+      "type": "object", "additionalProperties": false,
+      "description": "Omitted flags and lists grant no authority. Only non-default declarations are included in the build identity.",
+      "properties": {
+        "shellSurfaces": { "type": "boolean", "default": false },
+        "sessionLock": { "type": "boolean", "default": false },
+        "imagePrefixes": { "$ref": "#/$defs/hostPaths", "default": [] },
+        "unixSockets": { "$ref": "#/$defs/hostPaths", "default": [] },
+        "commands": {
+          "type": "array", "uniqueItems": true, "default": [],
+          "items": { "type": "string", "pattern": "^(?=.*[^ ])[^\\u0000-\\u001f\\u007f-\\u009f]+$" }
+        },
+        "controlChannel": { "type": "boolean", "default": false }
+      }
+    },
     "styleSystem": {
       "type": "object", "additionalProperties": false, "required": ["name", "profile", "configDigest", "nativeProfileDigest"],
       "properties": {
@@ -41,6 +56,13 @@
   },
   "$defs": {
     "path": { "type": "string", "minLength": 1, "pattern": "^(?!/)(?!.*[\\\\\\u0000])(?!(?:.*\/)?\\.{1,2}(?:\/|$))[^/]+(?:/[^/]+)*$" },
+    "hostPaths": {
+      "type": "array", "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "pattern": "^/(?:$|(?:(?!\\.{1,2}(?:/|$))[^/\\\\\\u0000-\\u001f\\u007f-\\u009f]+/)*(?!\\.{1,2}$)[^/\\\\\\u0000-\\u001f\\u007f-\\u009f]+$)"
+      }
+    },
     "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
   }
 }

@@ -6,7 +6,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { test } from "node:test";
 import { resolveApplication } from "../../packages/build/src/application.ts";
-import { workspaceRoot } from "../../packages/build/src/build.ts";
+import { bundle, publishApplication, workspaceRoot } from "../../packages/build/src/build.ts";
 
 const execute = promisify(execFile);
 const cli = path.join(workspaceRoot, "packages/build/src/cli.ts");
@@ -40,6 +40,35 @@ test("application-local build supports directories outside the workspace with sp
   assert.ok(manifest.artifactDigests["style-origins.json"]);
   assert.match(stdout, new RegExp(manifest.buildId));
   assert.match(await readFile(path.join(directory, "dist/app.mjs"), "utf8"), /External application/);
+  assert.equal(Object.hasOwn(manifest, "capabilities"), false);
+});
+
+test("capabilities are closed declarations and change the sealed build identity", { timeout: 30000 }, async t => {
+  const directory = await externalApplication(t);
+  const compilation = await bundle(path.join(directory, "src/main.tsx"), { appDirectory: directory });
+  const build = async capabilities => {
+    await writeFile(path.join(directory, "package.json"), JSON.stringify({
+      name: "@consumer/custom-app", type: "module", zgui: { capabilities },
+    }));
+    const { manifest } = await publishApplication("custom-app", compilation, {
+      appDirectory: directory, root: workspaceRoot,
+    });
+    return manifest;
+  };
+  const omitted = await build(undefined);
+  assert.deepEqual(await build({ shellSurfaces: false, imagePrefixes: [] }), omitted);
+  const declared = await build({
+    shellSurfaces: true, sessionLock: true, imagePrefixes: ["/var/media"],
+    unixSockets: ["/run/user/1000/status.sock"], commands: ["status"], controlChannel: true,
+  });
+  assert.notEqual(declared.buildId, omitted.buildId);
+  assert.deepEqual(declared.artifactDigests, omitted.artifactDigests);
+  assert.deepEqual(declared.capabilities, {
+    shellSurfaces: true, sessionLock: true, imagePrefixes: ["/var/media"],
+    unixSockets: ["/run/user/1000/status.sock"], commands: ["status"], controlChannel: true,
+  });
+  await assert.rejects(build({ imagePrefixes: ["/var/../media"] }), /zgui\.capabilities\.imagePrefixes/);
+  await assert.rejects(build({ unknown: true }), /zgui\.capabilities\.unknown/);
 });
 
 test("explicit missing application paths never select a repository example", async t => {

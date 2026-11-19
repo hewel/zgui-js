@@ -186,6 +186,92 @@ fn repeated_sessions_release_native_and_js_resources_even_when_cleanup_throws() 
 }
 
 #[test]
+fn host_bytes_register_without_a_package_and_retire_with_the_session() {
+    let native = Native::new();
+    let bytes: Arc<[u8]> = Arc::from(&b"transport image bytes"[..]);
+    let held = Arc::downgrade(&bytes);
+    let session = Session::prepare(
+        native.region.clone(),
+        SessionModule { name: "transport-test".into(), source: SIMPLE.into(), styles: Vec::new(), package: None },
+        1,
+        native.waker.clone(),
+        SurfaceId::new(7),
+        SessionPolicy::live(native.executor.clone()),
+    ).unwrap();
+    assert!(session.work.register_image_bytes(Arc::clone(&bytes)).is_err());
+    session.mount().unwrap();
+    let uri = session.work.register_image_bytes(bytes).unwrap();
+    assert!(uri.starts_with("zgui-blob://"), "{uri}");
+    assert!(held.upgrade().is_some(), "registry must retain the supplied buffer");
+    assert_eq!(session.counts().image_handles, 1);
+    assert_eq!(session.retire().counts.image_handles, 1);
+    assert!(held.upgrade().is_none(), "retirement must free the transport buffer");
+    assert!(session.work.register_image_bytes(Arc::from(&b"late bytes"[..])).is_err());
+}
+
+#[test]
+fn image_handles_release_during_cleanup_and_remaining_handles_are_reported_then_cleared() {
+    let fixture = Fixture::new(r#"
+        export const hostApiVersion = 1;
+        export function mount() {
+            const register = __zguiServices.registerImageAsset;
+            for (const args of [[], ['test.txt', undefined], ['test.txt', ...Array(1024)]]) {
+                try {
+                    register(...args);
+                    throw Error('invalid arity was accepted');
+                } catch (error) {
+                    if (!(error instanceof TypeError)) throw error;
+                }
+            }
+            const release = __zguiServices.registerImageAsset('test.txt');
+            const leaked = __zguiServices.registerImageAsset('test.txt');
+            if (!leaked.src.startsWith('zgui-blob://') || leaked.src === release.src) {
+                throw Error('registration must return a distinct opaque reference');
+            }
+            return () => { release.release(); release.release(); };
+        }
+    "#, "");
+    let native = Native::new();
+    let session = native.prepare(fixture.package(), 1).unwrap();
+    session.mount().unwrap();
+    assert_eq!(session.counts().image_handles, 2);
+    let report = session.retire();
+    assert!(report.failure.is_none());
+    assert_eq!(report.before.image_handles, 2);
+    assert_eq!(report.counts, ResourceCounts { image_handles: 1, ..Default::default() });
+    assert_eq!(session.counts(), ResourceCounts::default());
+    assert_eq!(session.retire().counts, report.counts);
+}
+
+#[test]
+fn releasing_a_mounted_image_handle_wakes_its_surface_once() {
+    let fixture = Fixture::new(r#"
+        export const hostApiVersion = 1;
+        export function mount() {
+            const image = __zguiServices.registerImageAsset('test.txt');
+            globalThis.releaseImage = image.release;
+            return () => {};
+        }
+    "#, "");
+    let native = Native::new();
+    let session = native.prepare(fixture.package(), 1).unwrap();
+    session.mount().unwrap();
+    session
+        .engine
+        .borrow_mut()
+        .as_mut()
+        .unwrap()
+        .evaluate_script("releaseImage(); releaseImage(); 'released'")
+        .unwrap();
+    let WakeReason::ReactiveWork { surfaces } = native.wakes.try_recv().unwrap() else {
+        panic!("image release must wake the owner surface");
+    };
+    assert_eq!(surfaces.as_ref(), &[session.surface()]);
+    assert!(native.wakes.try_recv().is_err(), "repeated release requested another frame");
+    assert_eq!(session.counts().image_handles, 0);
+}
+
+#[test]
 fn faulted_native_tree_still_runs_js_cleanup_once() {
     let fixture = Fixture::new(r#"
         export const hostApiVersion = 1;

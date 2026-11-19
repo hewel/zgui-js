@@ -115,10 +115,14 @@ pub fn worker(args: impl Iterator<Item=String>) -> supervisor::Report {
         sink.borrow_mut().bytes("inputs/fixture.json","fixture",&fixture.original)?;
         sink.borrow_mut().bytes("inputs/scenario.json","scenario",&scenario.original)?;
         let package=Rc::new(Package::load(&options.bundle).map_err(|error|Error::new("E_BUNDLE",3,error.to_string()))?);
-        let build=json!({"id":package.manifest.id,"buildId":package.manifest.build_id,"sourceMap":package.manifest.source_map,
+        let mut build=json!({"id":package.manifest.id,"buildId":package.manifest.build_id,"sourceMap":package.manifest.source_map,
             "sourceMapDigest":package.source_map_digest,"entryDigest":output::digest(package.source.as_bytes()),
             "styleSystem":package.manifest.style_system,"styles":package.manifest.styles,
             "fonts":package.manifest.fonts,"artifactDigests":package.manifest.artifact_digests});
+        if !package.manifest.capabilities.is_empty() {
+            build["capabilities"] = serde_json::to_value(&package.manifest.capabilities)
+                .map_err(|error| Error::new("E_BUNDLE", 3, error.to_string()))?;
+        }
         ledger.identity(build.clone(),json!(scenario.scenario.id),profile.profile.clock.is_virtual());
         sink.borrow_mut().json("inputs/bundle.json","bundle-identity",&build)?;
         sink.borrow_mut().json("inputs/style-origins.json","verified-style-origins",&package.style_origins)?;

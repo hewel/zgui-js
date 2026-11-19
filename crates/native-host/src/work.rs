@@ -2,7 +2,7 @@
 use std::{cell::{Cell, RefCell}, collections::{HashMap, VecDeque}, fmt::Write, rc::{Rc, Weak}, sync::{Arc, atomic::{AtomicBool, Ordering}}, time::Duration};
 use host_services::Completion;
 use rquickjs::{Ctx, Exception, Function, Object, Persistent, Value, function::{Func, Opt, Rest}, object::Property};
-use zgui::{platform::{SurfaceId, WakeReason, Waker}, view::{HostHandle, host::{FrameRequestId, Repeat, TimerId}}};
+use zgui::{platform::{SurfaceId, WakeReason, Waker}, runtime::ImageBlobs, view::{HostHandle, host::{FrameRequestId, Repeat, TimerId}}};
 use crate::{assets::{AssetError, AssetProvider, AssetSource, Delivery, MAX_SAFE_ID}, package::Package};
 
 const MAX_CALLBACKS: usize = 1024;
@@ -24,6 +24,8 @@ pub(crate) struct Work {
     generation: u64,
     host: HostHandle,
     provider: Box<dyn AssetProvider>,
+    image_blobs: ImageBlobs,
+    wake: Arc<dyn Fn() + Send + Sync>,
 }
 
 impl Work {
@@ -32,12 +34,24 @@ impl Work {
         Rc::new(Self {
             registrations: RefCell::new(HashMap::new()), ready: RefCell::new(VecDeque::new()), requests: RefCell::new(HashMap::new()),
             mode: Cell::new(Mode::Loading), generation, host,
-            provider: assets.bind(package, generation, wake),
+            provider: assets.bind(package, generation, wake.clone()),
+            image_blobs: ImageBlobs::new(generation),
+            wake,
         })
     }
 
     pub(crate) fn contract_failure(&self) -> Option<crate::assets::ContractFailure> {
         self.provider.contract_failure()
+    }
+
+    pub(crate) fn image_blobs(&self) -> &ImageBlobs { &self.image_blobs }
+
+    /// Registers host-owned encoded bytes directly in the active session.
+    pub(crate) fn register_image_bytes(&self, bytes: Arc<[u8]>) -> std::io::Result<String> {
+        if !self.can_create_work() {
+            return Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "image registration requires an active session"));
+        }
+        self.image_blobs.register(bytes)
     }
 
     /// Provider rejection to a JavaScript exception. Type/Range map to the
@@ -70,8 +84,12 @@ impl Work {
         (timers, registrations.len() + ready.len() - timers, self.requests.borrow().len())
     }
 
+    fn can_create_work(&self) -> bool {
+        matches!(self.mode.get(), Mode::Mounting | Mode::Mounted)
+    }
+
     fn require_creation(&self, ctx: &Ctx<'_>) -> rquickjs::Result<()> {
-        if !matches!(self.mode.get(), Mode::Mounting | Mode::Mounted) {
+        if !self.can_create_work() {
             return Err(Exception::throw_type(ctx, "host work is unavailable during preflight or disposal"));
         }
         Ok(())
@@ -129,6 +147,17 @@ impl Work {
             let value = args.0.into_iter().next().unwrap_or_else(|| Value::new_undefined(ctx.clone()));
             let path: String = rquickjs::FromJs::from_js(&ctx, value)?;
             owner.read_asset(&ctx, path)
+        }))?;
+        let weak = Rc::downgrade(self);
+        services.set("registerImageAsset", Func::from(move |ctx: Ctx<'js>, path: Opt<Value<'js>>, extra: Opt<Value<'js>>| {
+            let owner = owner(&weak, &ctx)?;
+            owner.require_creation(&ctx)?;
+            let (Some(path), None) = (path.0, extra.0) else {
+                return Err(Exception::throw_type(&ctx, "registerImageAsset requires exactly one string path"));
+            };
+            let path: String = rquickjs::FromJs::from_js(&ctx, path)?;
+            let bytes = owner.provider.image_asset(&path).map_err(|error| owner.asset_error(&ctx, error))?;
+            owner.image_handle(&ctx, bytes)
         }))?;
         ctx.globals().set("__zguiServices", services)?;
         Ok(())
@@ -194,6 +223,30 @@ impl Work {
         match self.provider.submit(id, path, cancelled.clone()).map_err(|error| self.asset_error(ctx, error))? {
             Some(error) => { reject.call::<_, ()>((service_error(ctx, error.code, &error.message)?,))?; }
             None => { self.requests.borrow_mut().insert(id, Pending { resolve: Persistent::save(ctx, resolve), reject: Persistent::save(ctx, reject), cancelled }); }
+        }
+        Ok(object)
+    }
+
+    fn image_handle<'js>(self: &Rc<Self>, ctx: &Ctx<'js>, bytes: Arc<[u8]>) -> rquickjs::Result<Object<'js>> {
+        let object = Object::new(ctx.clone())?;
+        let src = self.register_image_bytes(bytes)
+            .map_err(|error| Exception::throw_range(ctx, &error.to_string()))?;
+        let initialized = (|| {
+            object.prop("src", data_property(src.as_str()))?;
+            let id = src.clone();
+            let weak = Rc::downgrade(self);
+            object.prop("release", data_property(Func::from(move || {
+                if let Some(owner) = weak.upgrade()
+                    && owner.image_blobs.release(&id)
+                    && owner.mode.get() == Mode::Mounted
+                {
+                    (owner.wake)();
+                }
+            })))
+        })();
+        if let Err(error) = initialized {
+            self.image_blobs.release(&src);
+            return Err(error);
         }
         Ok(object)
     }

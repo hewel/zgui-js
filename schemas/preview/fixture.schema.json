@@ -21,6 +21,23 @@
             "latencyMs": { "$ref": "#/$defs/milliseconds" },
             "initialState": { "$ref": "#/$defs/assetState" }
           }
+        },
+        "images": {
+          "type": "object", "additionalProperties": false,
+          "properties": {
+            "files": {
+              "type": "object", "default": {},
+              "description": "Exact file:// URIs map to manifest-declared assets; imagePrefixes authority is still required.",
+              "propertyNames": { "pattern": "^file:///" },
+              "additionalProperties": { "$ref": "../package.schema.json#/$defs/path" }
+            },
+            "blobs": {
+              "type": "object", "default": {},
+              "description": "Declared registration asset paths map to declared assets supplying fixture bytes.",
+              "propertyNames": { "$ref": "../package.schema.json#/$defs/path" },
+              "additionalProperties": { "$ref": "../package.schema.json#/$defs/path" }
+            }
+          }
         }
       }
     },

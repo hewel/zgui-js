@@ -78,7 +78,7 @@ pub mod frame_callbacks;
 pub mod host;
 mod images;
 pub mod image_policy;
-pub use image_policy::{ImagePolicy, ImageResource, ImageResources, ImageState};
+pub use image_policy::{ImageBlobs, ImagePolicy, ImageResource, ImageResources, ImageState};
 mod order;
 pub mod parity;
 pub mod probe;

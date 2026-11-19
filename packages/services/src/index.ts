@@ -4,6 +4,7 @@ import { getOwner, onCleanup } from "#solid";
 declare const globalThis: {
   readonly __zguiServices: {
     readTextAsset(path: string): HostRequest<string>;
+    registerImageAsset(path: string): ImageHandle;
   };
 };
 
@@ -21,6 +22,14 @@ export interface HostRequest<T> {
    * cancelled results are never delivered as success to this request.
    */
   cancel(): void;
+}
+
+/** A session-scoped reference to image bytes owned by the native host. */
+export interface ImageHandle {
+  /** Pass this opaque source to the native Image component. */
+  readonly src: string;
+  /** Release the handle when it is no longer in use. Safe to call more than once. */
+  release(): void;
 }
 
 /**
@@ -52,4 +61,21 @@ export function loadTextAsset(path: string): Promise<string> {
     }
     throw reason;
   });
+}
+
+/**
+ * Register the verified bytes of a manifest-declared asset as an image handle.
+ * Call during mount, a lifecycle callback or an event. Release the handle explicitly.
+ */
+export function registerImageAsset(path: string): ImageHandle {
+  return globalThis.__zguiServices.registerImageAsset(path);
+}
+
+/** Register an image asset, releasing it automatically if called inside a Solid owner. */
+export function loadImageAsset(path: string): ImageHandle {
+  const handle = registerImageAsset(path);
+  if (getOwner()) {
+    onCleanup(() => handle.release());
+  }
+  return handle;
 }

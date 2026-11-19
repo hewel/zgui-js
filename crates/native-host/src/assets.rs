@@ -1,6 +1,6 @@
-//! Cohesive live/fixture text-asset seam: one provider contract for request
-//! admission, delivery, cancellation and retirement. `AssetSource::bind` is the
-//! only place that selects live workers versus deterministic fixtures.
+//! Live and fixture asset authority. Text reads share an asynchronous request
+//! lifecycle; image handles register verified bytes synchronously.
+//! `AssetSource` selects the adapter before a session is evaluated.
 use std::{cell::{Cell, RefCell}, rc::Rc, sync::{Arc, atomic::AtomicBool, mpsc}};
 
 use host_services::{Completion, Executor, Request, ServiceError, SubmitError};
@@ -49,6 +49,11 @@ impl AssetSource {
             Self::Fixture(runtime) => Box::new(FixtureAssets { package, generation, runtime: runtime.clone() }),
         }
     }
+
+    pub(crate) fn fixture_image_files<'a>(&'a self, package: Option<&'a Package>) -> impl Iterator<Item = (String, Arc<[u8]>)> + 'a {
+        let fixture = match self { Self::Live(_) => None, Self::Fixture(fixture) => Some(fixture) };
+        fixture.zip(package).into_iter().flat_map(|(fixture, package)| fixture.image_files(package))
+    }
 }
 
 /// Provider rejection, classified for the JavaScript exception mapping.
@@ -58,13 +63,15 @@ pub(crate) enum AssetError { Type(String), Range(String), Contract(ContractFailu
 /// How the owner closed out a completion for provider bookkeeping.
 pub(crate) enum Delivery { Delivered { failed: bool }, Ignored(&'static str) }
 
-/// One session generation's text-asset authority. Adapters hold no JS roots;
-/// the owner keeps Promise resolve/reject pairs and cancellation flags.
+/// One session generation's asset authority. Adapters hold no JavaScript roots;
+/// the owner keeps text Promise callbacks and image handles.
 pub(crate) trait AssetProvider {
     /// Validate the JS call shape before string conversion.
     fn validate_arguments(&self, count: usize, string_path: bool) -> Result<(), AssetError>;
     /// Admission checks that run before an ID is allocated.
     fn validate_request(&self, path: &str, creation_allowed: bool, pending: usize) -> Result<(), AssetError>;
+    /// Resolve bytes before publishing an opaque image handle.
+    fn image_asset(&self, path: &str) -> Result<Arc<[u8]>, AssetError>;
     /// The next registration ID. Fixture IDs come from the run-wide counter
     /// shared with native timer and frame registrations; live IDs are per
     /// session and bounded by `MAX_SAFE_ID`.
@@ -107,6 +114,10 @@ impl AssetProvider for LiveAssets {
         if !package.manifest.assets.iter().any(|asset| asset == path) { return Err(AssetError::Range("asset is not declared in this package".into())); }
         if pending >= MAX_REQUESTS { return Err(AssetError::Range("outstanding request limit reached".into())); }
         Ok(())
+    }
+    fn image_asset(&self, path: &str) -> Result<Arc<[u8]>, AssetError> {
+        let package = self.package.as_ref().ok_or_else(|| AssetError::Type("image registration requires a loaded package".into()))?;
+        package.asset_data(path).ok_or_else(|| AssetError::Range("asset is not declared in this package".into()))
     }
     fn registration_id(&self) -> Option<u64> {
         let id = self.next_id.get();
@@ -177,6 +188,9 @@ impl AssetProvider for FixtureAssets {
         if !creation_allowed { return Err(self.malformed("readTextAsset is unavailable during preflight or disposal")); }
         if pending >= MAX_REQUESTS { return Err(self.malformed("outstanding request limit reached")); }
         Ok(())
+    }
+    fn image_asset(&self, path: &str) -> Result<Arc<[u8]>, AssetError> {
+        self.runtime.image_blob(path, self.package.as_deref()).map_err(AssetError::Contract)
     }
     fn registration_id(&self) -> Option<u64> { self.runtime.registration_id() }
     fn submit(&self, id: u64, path: String, _cancelled: Arc<AtomicBool>) -> Result<Option<ServiceError>, AssetError> {

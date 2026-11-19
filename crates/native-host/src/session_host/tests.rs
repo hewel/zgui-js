@@ -12,14 +12,26 @@ impl Waker for ChannelWaker { fn wake(&self, reason: WakeReason) { let _ = self.
 struct StubSurface {
     document: DocumentId,
     bindings: HashMap<DocumentId, Weak<Session>>,
+    images: Option<(u64, zgui::runtime::ImageBlobs)>,
     frames: RefCell<Vec<DocumentId>>,
 }
 impl SessionSurface for StubSurface {
+    type Checkpoint = ();
+    type MountWrites = ();
+
     fn surface(&self, document: DocumentId) -> Option<SurfaceId> {
         (document == self.document).then(|| SurfaceId::new(7))
     }
     fn bind(&mut self, document: DocumentId, session: &Rc<Session>) {
         self.bindings.insert(document, Rc::downgrade(session));
+    }
+    fn image_source_checkpoint(&mut self, _document: DocumentId) {}
+    fn seal_image_source_writes(&self, _document: DocumentId, _checkpoint: ()) {}
+    fn discard_image_source_writes(&mut self, _document: DocumentId, _checkpoint: ()) {}
+    fn commit_image_policy(&mut self, _document: DocumentId, session: &Session, _mount_writes: ()) {
+        if let Some((_, old)) = self.images.replace((session.generation, session.image_blobs().clone())) {
+            old.clear();
+        }
     }
     fn request_frame(&self, document: DocumentId) { self.frames.borrow_mut().push(document); }
 }
@@ -44,7 +56,7 @@ impl Native {
         let (sender, _wakes) = mpsc::channel();
         Self {
             host: SessionHost::new(pending, module, SessionPolicy::live(host_services::Executor::new(2, 64).unwrap()), recovery),
-            surface: StubSurface { document: region.document, bindings: HashMap::new(), frames: RefCell::new(Vec::new()) },
+            surface: StubSurface { document: region.document, bindings: HashMap::new(), images: None, frames: RefCell::new(Vec::new()) },
             stub, region, waker: Arc::new(ChannelWaker(sender)),
             backend,
         }
@@ -98,7 +110,7 @@ fn rejected_preflight_preserves_active_generation_tree_and_stylesheet() {
     assert_eq!(native.stub.stylesheet("application:0").as_ref(), Some(&stylesheet));
     // A rejected candidate still consumed its generation; the next mount is fresh.
     let outcome = native.host.replace(&mut native.surface, native.waker.clone(), native.region.document, SessionModule::package(good.package()), no_retry());
-    assert!(matches!(outcome, ReloadOutcome::Mounted(g) if g == generation + 2), "{outcome:?}");
+    assert!(matches!(outcome, ReloadOutcome::Mounted { generation: g, .. } if g == generation + 2), "{outcome:?}");
 }
 
 #[test]
@@ -119,8 +131,72 @@ fn failed_mount_preserves_successful_session_and_rejects_candidate() {
     assert_eq!(native.host.acceptance().unwrap()["lastSuccessfulBuildId"], good.package().manifest.build_id);
     assert!(native.host.retry(&mut native.surface, native.waker.clone(), document, 2, no_retry()).is_none());
     let outcome = native.host.replace(&mut native.surface, native.waker.clone(), document, SessionModule::package(good.package()), no_retry());
-    assert!(matches!(outcome, ReloadOutcome::Mounted(3)));
+    assert!(matches!(outcome, ReloadOutcome::Mounted { generation: 3, .. }));
     assert_eq!(old.counts(), ResourceCounts::default());
+}
+
+#[test]
+fn image_policy_commits_only_after_acceptance_and_previous_owner_cleanup() {
+    let good = Fixture::new(r#"
+        export const hostApiVersion = 1;
+        export function mount() {
+            const image = __zguiServices.registerImageAsset('test.txt');
+            return () => image.release();
+        }
+    "#, "");
+    let bad = Fixture::new(r#"
+        export const hostApiVersion = 1;
+        export function mount() {
+            __zguiServices.registerImageAsset('test.txt');
+            throw Error('mount exploded');
+        }
+    "#, "");
+    let mut native = Native::new(RecoveryPolicy::Fallback, SessionModule::package(good.package()));
+    native.attach();
+    let old = native.session();
+    let document = native.region.document;
+    let outcome = native.host.replace(&mut native.surface, native.waker.clone(), document, SessionModule::package(bad.package()), no_retry());
+    assert!(matches!(outcome, ReloadOutcome::Rejected(_)), "{outcome:?}");
+    assert!(Rc::ptr_eq(&native.surface.bindings[&document].upgrade().unwrap(), &old));
+    let (generation, blobs) = native.surface.images.as_ref().unwrap();
+    assert_eq!((*generation, blobs.len()), (old.generation, 1));
+    assert_eq!(old.counts().image_handles, 1);
+
+    let outcome = native.host.replace(&mut native.surface, native.waker.clone(), document, SessionModule::package(good.package()), no_retry());
+    assert!(matches!(outcome, ReloadOutcome::Mounted { generation: 3, .. }), "{outcome:?}");
+    let (generation, blobs) = native.surface.images.as_ref().unwrap();
+    assert_eq!((*generation, blobs.len()), (3, 1));
+    let report = old.retire();
+    assert_eq!(report.before.image_handles, 1);
+    assert_eq!(report.counts.image_handles, 0);
+    assert_eq!(native.session().counts().image_handles, 1);
+    assert!(native.host.acceptance().unwrap().get("predecessorLeak").is_none());
+}
+
+#[test]
+fn reload_records_predecessor_leaks_without_rejecting_the_successor() {
+    let first = Fixture::new(r#"
+        export const hostApiVersion = 1;
+        export function mount() {
+            setTimeout(() => {}, 60000);
+            requestAnimationFrame(() => {});
+            __zguiServices.registerImageAsset('test.txt');
+            return () => {};
+        }
+    "#, "");
+    let second = Fixture::new(SIMPLE, "");
+    let mut native = Native::new(RecoveryPolicy::Fallback, SessionModule::package(first.package()));
+    native.attach();
+    let old = native.session();
+    let outcome = native.host.replace(&mut native.surface, native.waker.clone(), native.region.document, SessionModule::package(second.package()), no_retry());
+    let acceptance = native.host.acceptance().unwrap();
+    assert_eq!(acceptance["status"], "accepted", "{outcome:?}");
+    let leak = &acceptance["predecessorLeak"];
+    assert_eq!(leak["code"], "E_TEARDOWN");
+    assert_eq!(leak["generation"], old.generation);
+    assert_eq!(leak["resources"], serde_json::to_value(ResourceCounts { image_handles: 1, ..Default::default() }).unwrap());
+    assert_eq!(old.counts(), ResourceCounts::default());
+    assert_eq!(native.text(), "active");
 }
 
 #[test]
@@ -132,7 +208,7 @@ fn retired_shutdown_cannot_remove_the_successor_stylesheet() {
     let retired = native.session();
     let document = native.region.document;
     let outcome = native.host.replace(&mut native.surface, native.waker.clone(), document, SessionModule::package(second.package()), no_retry());
-    assert!(matches!(outcome, ReloadOutcome::Mounted(_)));
+    assert!(matches!(outcome, ReloadOutcome::Mounted { .. }));
     let stylesheet = native.stub.stylesheet("application:0").expect("successor owns its stylesheet");
     retired.retire();
     drop(retired);
@@ -159,7 +235,7 @@ fn generation_never_reused_across_surface_loss_and_reattach() {
     let outcome = native.host.replace(&mut native.surface, native.waker.clone(), document, SessionModule::package(bad.package()), no_retry());
     assert!(matches!(outcome, ReloadOutcome::Rejected(_)));
     let outcome = native.host.replace(&mut native.surface, native.waker.clone(), document, module, no_retry());
-    assert!(matches!(outcome, ReloadOutcome::Mounted(4)), "{outcome:?}");
+    assert!(matches!(outcome, ReloadOutcome::Mounted { generation: 4, .. }), "{outcome:?}");
 }
 
 #[test]
@@ -257,7 +333,7 @@ fn harness_arms_baseline_timer_and_external_wake_then_retirement_cancels() {
         export function advance() { __zgui.replaceText(label, 'exercised'); }
     "#, "");
     let outcome = native.host.replace(&mut native.surface, native.waker.clone(), document, SessionModule::package(exercise.package()), no_retry());
-    assert!(matches!(outcome, ReloadOutcome::Mounted(_)));
+    assert!(matches!(outcome, ReloadOutcome::Mounted { .. }));
     harness.reconcile(&native.host, &external);
     assert_eq!(native.stub.live_timers(), 0);
     harness.exercise = true;
@@ -271,7 +347,7 @@ fn harness_arms_baseline_timer_and_external_wake_then_retirement_cancels() {
     // A checkpoint fault retires the armed generation; reconciliation cancels
     // its outstanding exercise timer instead of dropping it silently.
     let outcome = native.host.replace(&mut native.surface, native.waker.clone(), document, SessionModule::package(exercise.package()), no_retry());
-    assert!(matches!(outcome, ReloadOutcome::Mounted(_)));
+    assert!(matches!(outcome, ReloadOutcome::Mounted { .. }));
     harness.reconcile(&native.host, &external);
     assert_eq!(native.stub.live_timers(), 1, "new exercised generation armed");
     native.session().record_fault(SessionError::from("injected harness fault"));
@@ -282,7 +358,7 @@ fn harness_arms_baseline_timer_and_external_wake_then_retirement_cancels() {
     // Retire the recovered generation while its timer is still pending.
     let failed_generation = native.host.fallback_generation(document).expect("Rust fallback missing");
     let outcome = native.host.retry(&mut native.surface, native.waker.clone(), document, failed_generation, no_retry());
-    assert!(matches!(outcome, Some(ReloadOutcome::Mounted(_))));
+    assert!(matches!(outcome, Some(ReloadOutcome::Mounted { .. })));
     harness.reconcile(&native.host, &external);
     assert_eq!(native.stub.live_timers(), 1, "retried generation armed its exercise timer");
     let retired = native.host.retire(document).unwrap();
@@ -301,7 +377,7 @@ fn ordered_sheet_slots_survive_replacement_and_recreated_documents_install_their
     assert_eq!(native.stub.stylesheet("application:1").as_deref(), Some("text {color:blue}"));
     let old = native.session();
     let document = native.region.document;
-    assert!(matches!(native.host.replace(&mut native.surface, native.waker.clone(), document, SessionModule::package(second.package()), no_retry()), ReloadOutcome::Mounted(_)));
+    assert!(matches!(native.host.replace(&mut native.surface, native.waker.clone(), document, SessionModule::package(second.package()), no_retry()), ReloadOutcome::Mounted { .. }));
     old.retire();
     assert_eq!(native.stub.stylesheet("application:0").as_deref(), Some("text {color:green}"));
     assert_eq!(native.stub.stylesheet("application:1"), None);
@@ -391,7 +467,7 @@ fn verified_package_fonts_are_registered_before_mount_and_retired_without_withdr
     assert!(matches!(native.host.replace(&mut native.surface, native.waker.clone(), document, SessionModule::package(malformed.package()), no_retry()), ReloadOutcome::Rejected(_)));
     assert!(Rc::ptr_eq(&first_session, &native.session()));
     assert!(native.region.fonts.contains_family("ApplicationSans"));
-    assert!(matches!(native.host.replace(&mut native.surface, native.waker.clone(), document, SessionModule::package(second.package()), no_retry()), ReloadOutcome::Mounted(_)));
+    assert!(matches!(native.host.replace(&mut native.surface, native.waker.clone(), document, SessionModule::package(second.package()), no_retry()), ReloadOutcome::Mounted { .. }));
     first_session.retire();
     assert_eq!(first_session.counts().fonts, 0);
     assert!(native.region.fonts.contains_family("ApplicationSans"));

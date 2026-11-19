@@ -43,6 +43,14 @@ Cancellation after settlement is a no-op, and repeated cancellation is safe.
 `HostServiceError` describes a native failure as an `Error` with a readonly
 string `code`. Codes are host-defined rather than a closed enumeration.
 
+`registerImageAsset(path)` registers the integrity-verified bytes of a
+manifest-declared package asset and returns an `ImageHandle`. Assign its opaque
+`src` to an `Image`; the bytes stay outside the JavaScript heap. Call the
+handle's synchronous, idempotent `release()` when it is no longer in use.
+`loadImageAsset(path)` returns the same handle and releases it on cleanup when
+called inside a Solid owner. Both helpers throw synchronously for undeclared
+assets and are available during mount, lifecycle callbacks and events.
+
 This package provides resource services, not window-manager integrations.
 Platform and compositor support, including layer-shell capabilities, comes from
 upstream zgui; there is no compositor-specific service package or abstraction.

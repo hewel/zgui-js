@@ -39,8 +39,7 @@
 //! cache was trimmed.
 
 use std::cell::RefCell;
-use std::path::PathBuf;
-use std::rc::Rc;
+use std::rc::{Rc, Weak};
 use std::sync::Arc;
 
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -52,6 +51,7 @@ use zgui_paint::ContentCache;
 
 use crate::replaced::IntrinsicTable;
 
+mod input;
 mod tasks;
 mod policy;
 mod paint;
@@ -68,6 +68,10 @@ enum SourceKey {
     Path(String),
     /// Registered in-memory bytes, resolved through [`zgui_image::bytes_for_url`].
     Bytes(String),
+    /// An explicitly granted external file URI.
+    File(String),
+    /// An opaque handle backed by session-owned bytes.
+    Blob(String),
 }
 
 impl SourceKey {
@@ -75,13 +79,19 @@ impl SourceKey {
     fn of(src: &str) -> Self {
         if src.starts_with("zgui-bytes:") {
             Self::Bytes(src.to_owned())
+        } else if src.starts_with("file://") {
+            Self::File(src.to_owned())
+        } else if src.starts_with("zgui-blob://") {
+            Self::Blob(src.to_owned())
         } else {
             Self::Path(src.to_owned())
         }
     }
 
     fn name(&self) -> &str {
-        match self { Self::Path(name) | Self::Bytes(name) => name }
+        match self {
+            Self::Path(name) | Self::Bytes(name) | Self::File(name) | Self::Blob(name) => name,
+        }
     }
 }
 
@@ -283,7 +293,25 @@ enum Arrival {
 ///
 /// Shared rather than owned because the hook that fills it and the loader that drains it are
 /// installed at different moments and neither outlives the other.
-type SourceQueue = Rc<RefCell<Vec<(NodeKey, Option<String>)>>>;
+type SourceWrites = RefCell<Vec<(NodeKey, Option<String>)>>;
+type SourceQueue = Rc<SourceWrites>;
+
+/// A single-use marker for the beginning of a staged mount's source writes.
+#[derive(Debug)]
+#[must_use]
+pub struct ImageSourceCheckpoint {
+    queue: Weak<SourceWrites>,
+    epoch: u64,
+    start: usize,
+}
+
+/// The source writes made by a completed staged mount.
+#[derive(Debug)]
+#[must_use]
+pub struct ImageSourceMountWrites {
+    checkpoint: ImageSourceCheckpoint,
+    end: usize,
+}
 
 /// The probes and decodes that finished, waiting for the same settle.
 type DecodeQueue = Rc<Tasks>;
@@ -298,6 +326,7 @@ pub(crate) struct ImageLoader {
     intrinsics: Arc<IntrinsicTable>,
     /// What the attribute hook heard since the last settle.
     pending: SourceQueue,
+    source_epoch: u64,
     /// What the background tasks produced since the last settle.
     completed: DecodeQueue,
     /// The bound every decode is held to, from the atlas's own limit.
@@ -332,6 +361,7 @@ impl ImageLoader {
             by_node: FxHashMap::default(),
             intrinsics,
             pending: Rc::new(RefCell::new(Vec::new())),
+            source_epoch: 0,
             completed: Tasks::new(crate::ImagePolicy::default()),
             limits: zgui_image::Limits { max_dimension },
             next_handle: 0,
@@ -354,6 +384,37 @@ impl ImageLoader {
     /// The queue the attribute hook pushes `src` changes into.
     pub(crate) fn source_queue(&self) -> SourceQueue {
         Rc::clone(&self.pending)
+    }
+
+    pub(crate) fn image_source_checkpoint(&mut self) -> ImageSourceCheckpoint {
+        self.advance_source_epoch();
+        ImageSourceCheckpoint {
+            queue: Rc::downgrade(&self.pending),
+            epoch: self.source_epoch,
+            start: self.pending.borrow().len(),
+        }
+    }
+
+    pub(crate) fn seal_image_source_writes(&self, checkpoint: ImageSourceCheckpoint) -> ImageSourceMountWrites {
+        self.validate_checkpoint(&checkpoint);
+        ImageSourceMountWrites { checkpoint, end: self.pending.borrow().len() }
+    }
+
+    pub(crate) fn discard_image_source_writes(&mut self, checkpoint: ImageSourceCheckpoint) {
+        self.validate_checkpoint(&checkpoint);
+        self.pending.borrow_mut().truncate(checkpoint.start);
+        self.advance_source_epoch();
+    }
+
+    fn validate_checkpoint(&self, checkpoint: &ImageSourceCheckpoint) {
+        assert!(
+            checkpoint.queue.as_ptr() == Rc::as_ptr(&self.pending) && checkpoint.epoch == self.source_epoch,
+            "image-source checkpoint is stale or belongs to another window",
+        );
+    }
+
+    fn advance_source_epoch(&mut self) {
+        self.source_epoch = self.source_epoch.checked_add(1).expect("image-source checkpoint epoch exhausted");
     }
 
     /// Whether anything is waiting for a settle: `src` writes, or finished background work.
@@ -382,8 +443,19 @@ impl ImageLoader {
         let kicked_before = self.kicked;
         self.clock += 1;
         let mut touched: Vec<NodeKey> = Vec::new();
+        self.retire_released_blobs(content, &mut touched);
 
-        let pending = std::mem::take(&mut *self.pending.borrow_mut());
+        self.advance_source_epoch();
+        let mut pending = std::mem::take(&mut *self.pending.borrow_mut());
+        if let Some((_, earlier)) = pending.split_last()
+            && earlier.iter().any(|(_, src)| is_blob_source(src))
+        {
+            // Keep legacy source accounting and the order of surviving writes.
+            let mut seen = FxHashSet::default();
+            pending.reverse();
+            pending.retain(|(node, src)| seen.insert(*node) || !is_blob_source(src));
+            pending.reverse();
+        }
         if !pending.is_empty() || self.completed.has_ready() { self.revision += 1; }
         for (node, src) in pending {
             self.set_source(node, src.as_deref(), content, &mut touched);
@@ -506,8 +578,9 @@ impl ImageLoader {
         };
         self.by_node.insert(node, key.clone());
         let id = ReplacedId::new(node);
-        if self.completed.denied(&key) {
-            self.policy_failure(&format!("image source is not a declared package asset: {}", key.name()));
+        let policy_error = self.completed.policy_error(&key).map(|error| error.to_string());
+        if let Some(error) = &policy_error {
+            self.policy_failure(error);
         }
         self.next_request += 1;
         self.requests.insert(node, ImageResource {
@@ -518,9 +591,12 @@ impl ImageLoader {
         });
 
         let entry = self.entries.entry(key.clone()).or_insert_with(|| {
+            if let Some(error) = policy_error {
+                return Entry { probe: Probe::Failed, failure: Some(error), ..Entry::probing() };
+            }
             self.kicked += 1;
             self.next_generation += 1;
-            kick_probe(key.clone(), self.next_generation, Rc::clone(&self.completed));
+            kick_probe(key.clone(), self.next_generation, &self.completed);
             let mut entry = Entry::probing();
             entry.generation = self.next_generation;
             entry
@@ -535,6 +611,35 @@ impl ImageLoader {
         }
         entry.attach_owed = true;
         touched.push(node);
+    }
+
+    fn retire_released_blobs(&mut self, content: &mut ContentCache, touched: &mut Vec<NodeKey>) {
+        if !self.completed.blobs_were_revoked() {
+            return;
+        }
+        for (key, entry) in &mut self.entries {
+            let SourceKey::Blob(uri) = key else { continue; };
+            if self.completed.owns_blob(uri) {
+                continue;
+            }
+            for &node in &entry.nodes {
+                let id = ReplacedId::new(node);
+                content.remove_image(id);
+                self.intrinsics.set(id, Intrinsic::default());
+                touched.push(node);
+            }
+            for variant in entry.variants.drain().map(|(_, variant)| variant) {
+                content.remove_shared_tile(variant.handle);
+            }
+            // An in-flight worker may still own bytes; its result must never reattach them.
+            self.next_generation += 1;
+            entry.generation = self.next_generation;
+            entry.intrinsic = None;
+            entry.active = None;
+            entry.attach_owed = false;
+            entry.probe = Probe::Failed;
+            entry.failure = Some(tasks::missing_blob(uri).to_string());
+        }
     }
 
     /// Files what one background task produced.
@@ -895,6 +1000,10 @@ impl ImageLoader {
     }
 }
 
+fn is_blob_source(src: &Option<String>) -> bool {
+    src.as_deref().is_some_and(|src| src.starts_with("zgui-blob://"))
+}
+
 #[cfg(test)]
 impl ImageLoader {
     pub(crate) fn decoded_texels_for_tests(&self, src: &str) -> Option<Arc<Vec<u8>>> {
@@ -976,6 +1085,9 @@ impl ImageLoader {
 /// keeps both variants and decodes nothing. A target that already failed stays failed; without
 /// the memo a broken source would decode once per frame for ever.
 fn wanted_kick(entry: &Entry, max_dimension: u32) -> Option<Class> {
+    if matches!(entry.probe, Probe::Failed) {
+        return None;
+    }
     let target = entry.target_class(max_dimension)?;
     let satisfied = entry.variants.iter().any(|(class, variant)| {
         *class >= target
@@ -1086,23 +1198,9 @@ fn intrinsic_of(native: Size<u32, Device>) -> Intrinsic {
 /// The task is spawned on the UI thread and owns nothing but the queue; the read itself runs on
 /// the blocking pool. The wake edge when it finishes is what requests the frame whose settle will
 /// apply the result.
-fn kick_probe(key: SourceKey, generation: u64, completed: DecodeQueue) {
-    let package = completed.bytes(&key);
-    let input = key.clone();
-    let registered = if package.is_none() {
-        match &key { SourceKey::Bytes(url) => zgui_image::bytes_for_url(url), _ => None }
-    } else { None };
-    completed.start(key, generation, move || {
-        let result = match package {
-            Some(bytes) => bytes.and_then(|bytes| zgui_image::probe(&bytes)),
-            None => match input {
-                SourceKey::Path(path) => zgui_image::probe_file(&PathBuf::from(path)),
-                SourceKey::Bytes(_) => registered.ok_or_else(dropped_handle)
-                    .and_then(|bytes| zgui_image::probe(&bytes)),
-            },
-        };
-        Arrival::Probe(result)
-    });
+fn kick_probe(key: SourceKey, generation: u64, completed: &DecodeQueue) {
+    let input = completed.input(&key);
+    completed.start(key, generation, move |key| Arrival::Probe(input.probe(key.name())));
 }
 
 /// Starts one decode off the frame thread, landing its result in `completed`.
@@ -1110,20 +1208,9 @@ fn kick_probe(key: SourceKey, generation: u64, completed: DecodeQueue) {
 /// A variant whose long edge lands over [`STANDALONE_LONG_EDGE`] gets its levels of detail built
 /// on the same worker, so the frame thread never runs the filter.
 fn kick_decode(key: SourceKey, generation: u64, class: Class, handle: u64, completed: DecodeQueue, limits: zgui_image::Limits) {
-    let package = completed.bytes(&key);
-    let input = key.clone();
-    let registered = if package.is_none() {
-        match &key { SourceKey::Bytes(url) => zgui_image::bytes_for_url(url), _ => None }
-    } else { None };
-    completed.start(key, generation, move || {
-        let decoded = match package {
-            Some(bytes) => bytes.and_then(|bytes| zgui_image::decode_scaled(&bytes, class, limits)),
-            None => match input {
-                SourceKey::Path(path) => zgui_image::decode_file_scaled(&PathBuf::from(path), class, limits),
-                SourceKey::Bytes(_) => registered.ok_or_else(dropped_handle)
-                    .and_then(|bytes| zgui_image::decode_scaled(&bytes, class, limits)),
-            },
-        }.map(|decoded| {
+    let input = completed.input(&key);
+    completed.start(key, generation, move |key| {
+        let decoded = input.decode(key.name(), class, limits).map(|decoded| {
             let mips = if decoded.size.width.max(decoded.size.height) > STANDALONE_LONG_EDGE {
                 zgui_image::mip_chain(&decoded)
             } else { Vec::new() };
@@ -1131,14 +1218,6 @@ fn kick_decode(key: SourceKey, generation: u64, class: Class, handle: u64, compl
         });
         Arrival::Variant(class, handle, decoded)
     });
-}
-
-/// The error a `zgui-bytes:` URL resolves to once its handle is gone.
-fn dropped_handle() -> zgui_image::DecodeError {
-    zgui_image::DecodeError::Io(std::io::Error::new(
-        std::io::ErrorKind::NotFound,
-        "the ImageBytes handle was dropped before the work ran",
-    ))
 }
 
 #[cfg(test)]

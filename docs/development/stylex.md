@@ -79,6 +79,20 @@ Optional `src/app.css` is preserved as `base.css` and installed before generated
 
 Use package-declared `<image src="assets/…">` resources for raster images. CSS `url()`, `image-set`, `@import`, and `@font-face` are rejected: the native painter has no CSS URL consumer and native fonts use programmatic registration.
 
+For external images, declare read-only directory grants in `package.json`, e.g.
+`"zgui": { "capabilities": { "imagePrefixes": ["/srv/wallpapers"] } }`.
+Use local `file:///srv/wallpapers/example.svg` or a raster file URI as `Image.src`.
+Paths must be canonical and absolute. On Linux, the loader confines symlink
+resolution to the granted directory and SVGs cannot load external resources.
+Preview resolves only exact URIs mapped to verified package assets in
+[`services.images.files`](preview-mode.md#65-native-resource-readiness).
+
+`shellSurfaces`, `sessionLock`, and `controlChannel` are boolean declarations;
+`unixSockets` and `commands` are exact string allowlists (absolute paths for sockets).
+These declarations are reserved for the corresponding host primitives; they do not
+implement those primitives. Omitted flags and lists grant nothing. All-default
+capabilities are omitted from `manifest.json`; non-default declarations enter `buildId`.
+
 Declare application font family/resource mappings in `package.json`; each path must also be an asset:
 
 ```json
@@ -104,7 +118,11 @@ Package schema v2 publishes immutable matching artifacts:
 - declared image/font assets and font mappings;
 - `manifest.json` with per-artifact digests, the native-owned [`stylex-profile.json`](../../schemas/stylex-profile.json) digest, compiler configuration digest, and a canonical `buildId`.
 
-Machine-specific absolute or temporary paths do not enter reproducible identities. Publication and native acceptance are separate: a published candidate can still be rejected by native capability preflight, and the last successful application remains distinct. Watch builds retain `.zgui-build-status.json` for publication; the native host atomically writes `.zgui-native-status.json` beside the bundle symlink and emits a structured `native-candidate` JSON event with the accepted/rejected build and generation identities.
+Machine-specific source and temporary paths do not enter reproducible identities; explicitly declared host paths are part of the package identity. Publication and native acceptance are separate: a published candidate can still be rejected by native preflight, and the last successful application remains distinct. Watch builds retain `.zgui-build-status.json` for publication; the native host atomically writes `.zgui-native-status.json` beside the bundle symlink and emits a structured `native-candidate` JSON event with the accepted/rejected build and generation identities.
+
+An accepted reload records `predecessorLeak` with `E_TEARDOWN`, the retired
+generation, and its post-cleanup resource counts if that generation leaked.
+The successfully mounted successor remains accepted.
 
 The Preview CLI enables StyleX source metadata automatically. A release-like diagnostic package requires `bun run build --app NAME --stylex-diagnostics`; ordinary builds omit per-prop `data-style-src` but retain generated/module provenance. Both modes produce different configuration and artifact identities.
 

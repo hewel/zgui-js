@@ -139,14 +139,21 @@ fn replace_live_owner(app: &mut Harness<Runtime>, bytes: Arc<[u8]>) {
     let dom = DomHandle::from_rc(window.dom().clone());
     let old = window.nodes_with_class("picture")[0];
     let parent = dom.parent(old).unwrap();
-    dom.detach(old);
-    window.replace_image_policy(ImagePolicy::package_assets([(LIVE_SOURCE.into(), bytes)]));
-    assert!(window.image_resources().resources.iter().all(|image| image.state == ImageState::Canceled));
-    assert_eq!(window.images.held_bytes(), 0, "the retired package cannot remain in the loader cache");
+    dom.set_attribute(old, AttrName::new("src"), Some("old-before-mount.png"));
+    let start = window.image_source_checkpoint();
     let image = dom.create_element(ElementName::new("image"));
     dom.set_classes(image, &[ClassName::new("picture")]);
     dom.set_attribute(image, AttrName::new("src"), Some(LIVE_SOURCE));
     dom.insert(parent, image, None);
+    let mount_writes = window.seal_image_source_writes(start);
+    dom.set_attribute(old, AttrName::new("src"), Some("old-after-mount.png"));
+    dom.detach(old);
+    window.replace_image_policy_with_mount_writes(
+        ImagePolicy::package_assets([(LIVE_SOURCE.into(), bytes)]),
+        mount_writes,
+    );
+    assert!(window.image_resources().resources.iter().all(|image| image.state == ImageState::Canceled));
+    assert_eq!(window.images.held_bytes(), 0, "the retired package cannot remain in the loader cache");
 }
 
 fn blue_png() -> Arc<[u8]> {

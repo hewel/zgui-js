@@ -52,6 +52,7 @@ use zgui_view::{Anchor, BuildCxOwned, DomHandle, HostHandle};
 use zgui_view_dom::DocumentDom;
 
 use crate::binding::{HostBinding, NoBinding};
+pub use crate::images::{ImageSourceCheckpoint, ImageSourceMountWrites};
 use crate::host::RuntimeHost;
 use crate::text::TextEngine;
 
@@ -829,13 +830,54 @@ impl Window {
         self.images.resources(&self.content)
     }
 
-    /// Replaces package authority between a stopped owner and the next owner's mount.
+    /// Replaces image authority and discards all queued source writes from the old owner.
     ///
-    /// Retires old image requests, cancels old completion publication, and releases image
-    /// attachments, intrinsic claims, paint replay leases and source caches. Existing source
-    /// assignments are not rebound: the new owner must mount under the new policy.
+    /// Retires old image requests, cancels old completion publication, clears the old image
+    /// handle table, and releases attachments, intrinsic claims, paint replay leases and caches.
+    /// Existing source assignments are not rebound.
     /// Request generations and atlas handles remain monotonic across replacements.
     pub fn replace_image_policy(&mut self, policy: crate::ImagePolicy) {
+        self.images.retain_mount_writes(None);
+        self.apply_image_policy(policy);
+    }
+
+    /// Marks a position in the image-source queue for a synchronous staged mount.
+    ///
+    /// Starting another mount, settling, or replacing policy invalidates the marker.
+    pub fn image_source_checkpoint(&mut self) -> ImageSourceCheckpoint {
+        self.images.image_source_checkpoint()
+    }
+
+    /// Seals the end of the staged mount's writes before predecessor cleanup.
+    ///
+    /// # Panics
+    /// Panics if the checkpoint is stale or belongs to a different window.
+    pub fn seal_image_source_writes(&self, checkpoint: ImageSourceCheckpoint) -> ImageSourceMountWrites {
+        self.images.seal_image_source_writes(checkpoint)
+    }
+
+    /// Discards source writes made by a mount that did not complete.
+    ///
+    /// # Panics
+    /// Panics if the checkpoint is stale or belongs to a different window.
+    pub fn discard_image_source_writes(&mut self, checkpoint: ImageSourceCheckpoint) {
+        self.images.discard_image_source_writes(checkpoint);
+    }
+
+    /// Replaces image authority, keeping only the staged mount's queued writes.
+    ///
+    /// # Panics
+    /// Panics if the mount writes are stale or belong to a different window.
+    pub fn replace_image_policy_with_mount_writes(
+        &mut self,
+        policy: crate::ImagePolicy,
+        mount_writes: ImageSourceMountWrites,
+    ) {
+        self.images.retain_mount_writes(Some(mount_writes));
+        self.apply_image_policy(policy);
+    }
+
+    fn apply_image_policy(&mut self, policy: crate::ImagePolicy) {
         self.painter.clear_records(&mut self.scene, &self.content.tile_owner());
         self.images.replace_policy(policy, &self.document, &mut self.content);
         self.damage = zgui_bits::DamageSet::full();

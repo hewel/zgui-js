@@ -51,15 +51,15 @@ export async function writeScenario(filePath, id, steps, requiredCapabilities) {
   });
 }
 
-export async function buildFixtureApp(appDir, name, source, { rawSource = false, assets = {}, fonts = [] } = {}) {
+export async function buildFixtureApp(appDir, name, source, { rawSource = false, assets = {}, fonts = [], capabilities } = {}) {
   await mkdir(path.join(appDir, "src"), { recursive: true });
   const content = rawSource
     ? source
     : await readFile(source instanceof URL ? fileURLToPath(source) : source, "utf8");
   await writeFile(path.join(appDir, "src/main.tsx"), content);
   const assetEntries = Object.entries(assets);
-  if (fonts.length > 0) {
-    await writeJson(path.join(appDir, "package.json"), { name, private: true, zgui: { fonts } });
+  if (fonts.length > 0 || capabilities !== undefined) {
+    await writeJson(path.join(appDir, "package.json"), { name, private: true, zgui: { fonts, capabilities } });
   }
   if (assetEntries.length > 0) {
     await mkdir(path.join(appDir, "assets"), { recursive: true });

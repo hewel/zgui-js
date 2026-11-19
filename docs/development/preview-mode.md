@@ -498,6 +498,12 @@ An error-state scenario can pass while containing an expected service rejection.
 
 Resources must be declared, locally available, and hashed. Reject remote URLs in the deterministic package-only profile, including CSS-triggered loads and image paths that bypass a higher-level JS service.
 
+For dynamic images, `services.images.files` maps exact `file://` URIs to
+manifest-declared asset paths. The package must also grant the URI's directory via
+`imagePrefixes`; the fixture never opens the URI on disk. `services.images.blobs`
+maps declared `registerImageAsset` input paths to declared assets containing the
+fixture bytes. Both maps are optional and have no live fallback.
+
 A resource has at least these states: declared, requested, loading, ready-for-current-demand, failed, canceled. Native image demand can change after layout or DPR changes; a ready low-resolution variant is not automatically the required current variant.
 
 Add a native readiness probe that reports request generation, source identity, requested decode variant, attachment status, and failure. Reject stale completions after source replacement or reload. The source's asynchronous image pipeline makes this a concrete integration requirement. [Z8]

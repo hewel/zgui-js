@@ -118,11 +118,33 @@ native publication; `package_only` additionally stages complete worker batches
 in launch order for deterministic preview checkpoints. Neither path fabricates
 decoded pixels or substitutes a separate image renderer.
 
-`Window::replace_image_policy` is used after previous-owner shutdown and before
-new mount. It retires the old completion domain, pending source writes, bindings,
-intrinsics, shared image tiles and replay leases. Attribute-hook queue identity
-and monotonic request/atlas identities survive, so same-path reloads cannot reuse
-old package bytes or accept delayed old-generation completions.
+`with_file_prefixes` grants Linux worker reads for `file:///` URIs only. Paths
+use canonical slash components and percent-encoded URI characters such as
+`%20` for spaces. Linux resolves from the granted directory with `openat2`;
+relative symlinks confined beneath it are allowed, but prefix symlinks, magic
+links and escapes are denied. Only regular files up to 64 MiB are read. The
+live reader requires `openat2` and `/proc/self/fd` and fails closed otherwise.
+`with_fixture_files` instead requires an exact URI mapped to owned package
+bytes under a granted component prefix, with no ambient filesystem fallback.
+
+Only `file://` and `zgui-blob://` sources accept UTF-8 SVG as well as raster
+images. Plain package-relative sources retain the raster decoder. The pinned
+CPU renderer uses the same decode limit and native atlas as raster images.
+SVG DTDs, embedded/nested images and external resources are disabled; SVG
+parsing does not read system fonts or the network.
+
+Each session owns one `ImageBlobs` table. Clones share its encoded bytes;
+the URI is opaque and never hits the process-global `zgui-bytes:` registry.
+Release unregisters the bytes immediately. On the next native settle, bound
+pixels are retired and pending results for that handle are discarded.
+Superseded blob assignments are skipped before policy checks at settle.
+
+Policy replacement retires the old completion domain, blob table, pending
+source writes, bindings, intrinsics, shared tiles and replay leases. The host
+commits after the staged mount succeeds and the previous session retires,
+retaining only source writes from the staged mount. Attribute-hook queue
+identity and monotonic request/atlas identities survive, so same-path reloads
+cannot reuse old bytes or accept delayed old-generation completions.
 
 Resource snapshots distinguish decode/attachment from actual atlas allocation,
 successful texture upload and current residency. Native placed geometry, viewport,
@@ -140,8 +162,8 @@ cargo test --manifest-path vendor/zgui-runtime/Cargo.toml --lib live_package_ima
 ```
 
 These cover real atlas refusal, viewport/clip/opacity transitions, controlled
-delayed decode publication, replacement/clear retirement and asynchronous
-same-path package replacement. The host's real GPU and Wayland pixel evidence is
+delayed decode publication, replacement/clear retirement, file capability and
+symlink enforcement, fixture-only SVG and blob disposal. The host's real GPU and Wayland pixel evidence is
 recorded in [preview verification](../docs/development/preview-verification.md#p3--shared-time-fixture-providers-and-native-resources).
 
 ## Geometry observation deliveries

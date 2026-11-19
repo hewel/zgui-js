@@ -17,11 +17,81 @@ pub struct Manifest {
     pub styles: Vec<String>,
     pub assets: Vec<String>,
     pub fonts: Vec<Font>,
+    /// Host authority sealed into the package identity; omitted declarations grant nothing.
+    #[serde(default, skip_serializing_if = "Capabilities::is_empty")]
+    pub capabilities: Capabilities,
     pub style_system: StyleSystem,
     #[serde(deserialize_with = "unique_digests")]
     pub artifact_digests: BTreeMap<String, String>,
     pub build_id: String,
 }
+}
+
+crate::schema::object_struct! {
+/// Host privileges requested by the package, all denied by default.
+#[derive(Default)]
+#[serde(default, rename_all = "camelCase", deny_unknown_fields)]
+pub struct Capabilities {
+    /// Allows the session to create desktop shell surfaces.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub shell_surfaces: bool,
+    /// Allows the session to request a compositor session lock.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub session_lock: bool,
+    /// Absolute directory prefixes permitted for read-only `file://` images.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub image_prefixes: Vec<String>,
+    /// Exact absolute Unix socket paths the session may connect to.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub unix_sockets: Vec<String>,
+    /// Exact command names the session may invoke.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub commands: Vec<String>,
+    /// Allows the session to expose a host control channel.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub control_channel: bool,
+}
+}
+
+impl Capabilities {
+    pub(crate) fn is_empty(&self) -> bool {
+        !self.shell_surfaces
+            && !self.session_lock
+            && self.image_prefixes.is_empty()
+            && self.unix_sockets.is_empty()
+            && self.commands.is_empty()
+            && !self.control_channel
+    }
+
+    fn validate(&self) -> Result<()> {
+        for (name, entries) in [
+            ("imagePrefixes", &self.image_prefixes),
+            ("unixSockets", &self.unix_sockets),
+            ("commands", &self.commands),
+        ] {
+            let mut seen = std::collections::BTreeSet::new();
+            for entry in entries {
+                if entry.trim_matches(' ').is_empty()
+                    || entry.chars().any(char::is_control)
+                    || (name != "commands" && !canonical_host_path(entry))
+                    || !seen.insert(entry)
+                {
+                    return Err(
+                        format!("invalid or duplicate capabilities.{name} entry: {entry:?}").into(),
+                    );
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+fn canonical_host_path(path: &str) -> bool {
+    path == "/"
+        || path.strip_prefix('/').is_some_and(|rest| {
+            !rest.contains('\\')
+                && rest.split('/').all(|part| !matches!(part, "" | "." | ".."))
+        })
 }
 
 crate::schema::object_struct! {
@@ -78,6 +148,7 @@ impl Package {
             return Err("unsupported package schema or host API version".into());
         }
         if manifest.id.trim().is_empty() { return Err("package ID must not be empty".into()); }
+        manifest.capabilities.validate()?;
         if manifest.style_system.name != "stylex" || manifest.style_system.profile != "zgui-stylex-v1"
             || !valid_digest(&manifest.style_system.config_digest) {
             return Err("unsupported style system/profile or invalid config digest".into());
@@ -359,6 +430,41 @@ mod tests {
         }
     }
     impl Drop for Fixture { fn drop(&mut self) { fs::remove_dir_all(&self.0).unwrap(); } }
+
+    #[test]
+    fn capability_manifest_defaults_closed_and_binds_authority_to_build_id() {
+        let fixture = Fixture::new();
+        fixture.publish(b"export {};", br#"{"version":3,"sources":[],"names":[],"mappings":""}"#);
+        let old = Package::load(&fixture.0).unwrap();
+        assert!(old.manifest.capabilities.is_empty());
+        assert!(serde_json::to_value(&old.manifest).unwrap().get("capabilities").is_none());
+
+        let mut value = manifest(&fixture);
+        value["capabilities"] = serde_json::json!({"imagePrefixes":["/var/media"],"sessionLock":true});
+        fixture.save(value);
+        let loaded = Package::load(&fixture.0).unwrap();
+        assert_eq!(loaded.manifest.capabilities.image_prefixes, ["/var/media"]);
+        assert!(loaded.manifest.capabilities.session_lock);
+        assert_ne!(old.manifest.build_id, loaded.manifest.build_id);
+
+        let mut tampered = manifest(&fixture);
+        tampered["capabilities"]["imagePrefixes"] = serde_json::json!(["/"]);
+        fs::write(fixture.0.join("manifest.json"), serde_json::to_vec(&tampered).unwrap()).unwrap();
+        assert!(Package::load(&fixture.0).err().unwrap().to_string().contains("package integrity mismatch"));
+
+        for invalid in [
+            serde_json::json!({"imagePrefixes":["/var/../media"]}),
+            serde_json::json!({"imagePrefixes":["/media","/media"]}),
+            serde_json::json!({"sessionLock":"true"}),
+            serde_json::json!({"filesystem":true}),
+            serde_json::json!([]),
+        ] {
+            let mut bad = manifest(&fixture);
+            bad["capabilities"] = invalid;
+            fixture.save(bad);
+            assert!(Package::load(&fixture.0).is_err());
+        }
+    }
 
     #[test]
     fn rejects_mixed_metadata_identities_even_when_every_artifact_and_build_hash_is_valid() {

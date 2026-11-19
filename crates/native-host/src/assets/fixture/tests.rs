@@ -165,6 +165,22 @@ fn caught_missing_malformed_and_undeclared_calls_remain_sticky() {
 }
 
 #[test]
+fn caught_blob_fixture_violations_are_sticky_and_never_allocate_a_handle() {
+    for (blobs, path) in [
+        (json!({}), "test.txt"),
+        (json!({"undeclared.png":"test.txt"}), "undeclared.png"),
+        (json!({"test.txt":"undeclared.png"}), "test.txt"),
+    ] {
+        let mut fixture = Harness::new(definition(json!({"images":{"blobs":blobs}}), json!([])));
+        assert_eq!(fixture.script(&format!(
+            "try {{ __zguiServices.registerImageAsset({path:?}); }} catch (e) {{ e.code }}"
+        )), "E_FIXTURE_CONTRACT");
+        assert_eq!(fixture.runtime.finalize().unwrap_err().code, "E_FIXTURE_CONTRACT");
+        assert!(fixture.work.image_blobs().is_empty());
+    }
+}
+
+#[test]
 fn cancelled_injected_errors_are_not_observed_or_acknowledged() {
     let mut provider = assets(0);
     provider["initialState"]["assets"]["test.txt"]["error"] = json!({"code":"Io","message":"not delivered"});
@@ -241,6 +257,8 @@ fn duplicate_fixture_asset_keys_and_event_payload_fields_are_not_silently_overwr
     for input in [
         r#"{"schemaVersion":1,"id":"duplicate","services":{"assets":{"provider":"mock-text-assets-v1","latencyMs":0,"initialState":{"assets":{"test.txt":{},"test.txt":{"error":{"code":"Io","message":"hidden"}}}}}},"events":[]}"#,
         r#"{"schemaVersion":1,"id":"duplicate","services":{"assets":{"provider":"mock-text-assets-v1","latencyMs":0,"initialState":{"assets":{}}}},"events":[{"atMs":0,"channel":"assets.state","value":{"assets":{},"assets":{}}}]}"#,
+        r#"{"schemaVersion":1,"id":"duplicate","services":{"images":{"files":{"file:///images/example.png":"test.txt","file:///images/example.png":"other.txt"}}},"events":[]}"#,
+        r#"{"schemaVersion":1,"id":"duplicate","services":{"images":{"blobs":{"test.txt":"test.txt","test.txt":"other.txt"}}},"events":[]}"#,
     ] {
         assert!(serde_json::from_str::<FixtureDefinition>(input).is_err());
     }
@@ -306,6 +324,7 @@ fn rejects_arrays<T: serde::de::DeserializeOwned>(inputs: &[&str]) {
 fn every_fixture_object_boundary_rejects_positional_arrays() {
     rejects_arrays::<FixtureDefinition>(&[r#"[1,"empty",{},[]]"#]);
     rejects_arrays::<Services>(&["[]", "[null]"]);
+    rejects_arrays::<ImageProvider>(&["[]", "[{},{}]"]);
     rejects_arrays::<TextProvider>(&[r#"["mock-text-assets-v1",0,{"assets":{}}]"#]);
     rejects_arrays::<AssetState>(&["[{}]"]);
     rejects_arrays::<AssetBehavior>(&["[]", "[null]"]);
@@ -330,6 +349,7 @@ fn optional_error_nulls_match_schema_without_accepting_positional_error_objects(
         assert!(serde_json::from_str::<AssetBehavior>(input).unwrap().error.is_none());
     }
     assert!(serde_json::from_str::<Services>(r#"{"assets":null}"#).is_err());
+    assert!(serde_json::from_str::<Services>(r#"{"images":null}"#).is_err());
 }
 
 #[test]

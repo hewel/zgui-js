@@ -74,7 +74,7 @@ impl ReloadGate {
                 for _ in 0..16 {
                     let previous = self.current()?;
                     let outcome = self.inner.replace_session(cx, document, SessionModule::package(self.good.clone()));
-                    if !matches!(outcome, ReloadOutcome::Mounted(_)) { return Err(format!("reload failed: {outcome:?}").into()); }
+                    if !matches!(outcome, ReloadOutcome::Mounted { .. }) { return Err(format!("reload failed: {outcome:?}").into()); }
                     self.retire(previous)?;
                     let counts = self.current()?.counts();
                     if let Some(expected) = &expected {
