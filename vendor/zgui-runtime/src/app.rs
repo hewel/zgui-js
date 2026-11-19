@@ -1124,6 +1124,9 @@ impl Runtime {
         // above this line is a wheel that is wrong on every machine but the one it was written on.
         window.set_scroll_settings(cx.scroll_settings());
         window.set_translucent(translucent);
+        if matches!(self.live[index].spec.attributes.role, SurfaceRole::Lock(_)) {
+            window.enable_lock_backdrop();
+        }
         if let Some(pool) = &self.style_pool {
             window.set_style_pool(Rc::clone(pool));
         }

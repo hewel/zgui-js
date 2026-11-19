@@ -1603,6 +1603,17 @@ impl Window {
             // pays a bool and two clears of empty vectors.
             self.scene
                 .record_spatial_dependencies(self.check_spatial_dependencies);
+            if self.lock_backdrop {
+                let backdrop = zgui_geom::Rect::new(
+                    zgui_geom::Point::new(DevicePx(0.0), DevicePx(0.0)),
+                    Size::new(DevicePx(viewport.width as f32), DevicePx(viewport.height as f32)),
+                );
+                let black = self.scene.paints.solid(zgui_color::Color::BLACK);
+                self.scene.push_quad(zgui_scene::Quad::filled(
+                    backdrop,
+                    zgui_scene::PaintRef::solid(black),
+                ));
+            }
             // A cold cache rasterises its first frame's glyphs on the layout workers first. The
             // walk takes the answers where it asks for them, so the atlas is the same as without.
             if let Some(pool) = &self.layout_pool {

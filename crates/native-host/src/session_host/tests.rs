@@ -61,7 +61,7 @@ impl Native {
         let pending = Rc::new(RefCell::new(vec![region.clone()]));
         let (sender, _wakes) = mpsc::channel();
         Self {
-            host: SessionHost::new(pending, module, SessionPolicy::live(host_services::Executor::new(2, 64).unwrap()), recovery),
+            host: SessionHost::new(pending, module, SessionPolicy::live(host_services::Executor::new(2, 64).unwrap()), recovery, SurfaceOpacity::Transparent),
             surface: StubSurface { document: region.document, bindings: HashMap::new(), images: None, frames: RefCell::new(Vec::new()) },
             stub, region, waker: Arc::new(ChannelWaker(sender)),
             backend,
@@ -568,7 +568,7 @@ fn failed_shell_child_mount_keeps_the_predecessor_and_last_successful_build() {
     let good = good.package();
     let mut host = SessionHost::new(Rc::default(), SessionModule::package(good.clone()),
         SessionPolicy::live(host_services::Executor::new(2, 64).expect("create test service executor")),
-        RecoveryPolicy::Propagate);
+        RecoveryPolicy::Propagate, SurfaceOpacity::Opaque);
     host.set_pure_shell(zgui::app::Fonts::shipped_only());
     host.shell_turn(&mut runtime, &cx, ImageChoice::PackageOnly, &[]).expect("mount the working shell");
     let previous = host.sessions().next().expect("working session").clone();
@@ -657,7 +657,7 @@ impl PopupTree {
         runtime.surfaces_available(&cx);
         let mut host = SessionHost::new(pending, SessionModule::package(package.package()),
             SessionPolicy::live(host_services::Executor::new(2, 64).expect("create service executor")),
-            RecoveryPolicy::Propagate);
+            RecoveryPolicy::Propagate, SurfaceOpacity::Opaque);
         host.attach(&mut RuntimeSurface::new(&mut runtime, &cx, ImageChoice::PackageOnly), cx.waker(), no_retry())
             .expect("mount the primary and popup tree");
         let session = host.sessions().next().expect("active session").clone();
@@ -945,7 +945,8 @@ impl LockedShell {
         runtime.surfaces_available(&cx);
         let monitors = Monitor::snapshot(&cx.monitors());
         let mut host = SessionHost::new(Rc::default(), SessionModule::package(package.package()),
-            SessionPolicy::live(host_services::Executor::new(2, 64).expect("create service executor")), RecoveryPolicy::Propagate);
+            SessionPolicy::live(host_services::Executor::new(2, 64).expect("create service executor")),
+            RecoveryPolicy::Propagate, SurfaceOpacity::Transparent);
         host.set_pure_shell(zgui::app::Fonts::shipped_only());
         let mut fixture = Self { host, runtime, cx, monitors };
         for _ in 0..2 { fixture.turn().expect("lock and attach the UI"); }

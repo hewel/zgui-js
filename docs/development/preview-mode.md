@@ -369,7 +369,7 @@ Relative paths in a profile resolve against its own directory. Bundle assets res
 
 Version 1 accepts one `main` surface. Width and height are positive integer logical pixels; scale is a finite positive number. Impose a documented physical-pixel allocation limit before creating textures. Refresh rate is a positive integer in millihertz.
 
-Require a valid opaque eight-digit hexadecimal background when `opaque` is true. Paint that background through the native rendering path. Transparency is a later capability with its own capture tests.
+Set `surface.background` to an eight-digit `#RRGGBBAA` color; `surface.opaque: true` requires `ff` alpha. Use `opaque: false` and `#00000000` for a clear background. Preview layer and popup targets follow the profile opacity; session-lock surfaces stay opaque.
 
 The runner must validate locale/time-zone support. Do not silently claim a requested locale when the runtime lacks the required implementation. The initial deterministic profile supports UTC and explicit locale-aware SDK formatters; arbitrary system locale discovery is outside that profile.
 
@@ -824,7 +824,7 @@ Use `Pixels::size()` as the authoritative extent. Its bytes are tightly packed a
 
 The pinned renderer explicitly composites premultiplied, gamma-encoded values. A plain `Bgra8Unorm` texture does not imply that these stored values are linear RGB. Do not apply an additional linear-to-sRGB transform merely because the format lacks an `Srgb` suffix. [Z16]
 
-For the initial opaque profile, require alpha 255 across the capture after rendering the configured opaque background. For transparent capture, add tested conversion from stored premultiplied RGB to straight-alpha PNG, including zero-alpha handling and low-alpha quantization. Keep raw bytes and color metadata available in diagnostic mode.
+Opaque captures require alpha 255 throughout. Transparent capture converts stored premultiplied RGB to straight-alpha PNG, including zero-alpha handling and low-alpha quantization. `preview doctor` checks both native readback and decoded PNG samples for transparent profiles.
 
 Record target/scene formats, sRGB handling tier, alpha policy, and conversion revision. Validate color swatches and alpha independently from an application screenshot.
 
@@ -1061,6 +1061,8 @@ source.node-location
 
 Do not imply that a flag alone establishes correctness. Store the capability implementation revision and the selected dependency baseline.
 
+`capture.transparent` is available whenever `pixels` is available. A scenario can require it with either profile opacity; only a transparent target preserves translucent pixels.
+
 A GPU-less machine can still run pure runtime/bridge tests or saved inspection/comparison. It cannot pass a scenario requiring `pixels`. Required CI graphics jobs must fail when the adapter is unavailable. `preview run` uses exit 7; any optional local skip belongs to an external test wrapper and must not be recorded as a passing preview run.
 
 ### 11.6 Logging and artifact limits
@@ -1112,7 +1114,7 @@ Store baseline images in an appropriate repository artifact store or versioned l
 
 ### 12.4 Transparency and platform limits
 
-A transparent offscreen image can test alpha pixels and text/render-target policy. It cannot prove how a real Wayland compositor interprets or blends the surface. The pinned offscreen stand-in uses an opaque composite-alpha configuration; real transparency remains a separate platform gate. [Z21]
+A transparent offscreen image can test alpha pixels and text/render-target policy. Its `PreMultiplied` metadata describes stored pixels, not the Wayland compositor's blend mode; `compositorTransparencyValidated` remains `false`. [Z21]
 
 Do not claim cross-GPU byte identity. Use the recorded environment to distinguish a UI regression from an environment change, then choose the appropriate comparison policy deliberately.
 

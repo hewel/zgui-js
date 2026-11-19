@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://zgui-js.local/schemas/preview/profile.schema.json",
   "title": "Preview profile v1",
-  "description": "Closed declaration, at most 64 KiB. Runtime additionally rounds physical extents floor(logical * scale + 0.5), requires each extent in 1..16384 and a product at most 16777216 pixels (64 MiB RGBA8). Clock start plus maxVirtualDurationMs must remain a safe integer in microseconds, and epoch plus elapsed time must remain inside the ECMAScript Date range. These arithmetic cross-field constraints are enforced by the loader before allocation. Only en-US, UTC, ltr, opaque surfaces, dark/light themes, packaged assets and shipped fonts are supported.",
+  "description": "Closed declaration, at most 64 KiB. Runtime additionally rounds physical extents floor(logical * scale + 0.5), requires each extent in 1..16384 and a product at most 16777216 pixels (64 MiB RGBA8). Clock start plus maxVirtualDurationMs must remain a safe integer in microseconds, and epoch plus elapsed time must remain inside the ECMAScript Date range. These arithmetic cross-field constraints are enforced by the loader before allocation. Supports opaque and transparent surfaces, en-US, UTC, ltr, dark/light themes, packaged assets and shipped fonts.",
   "type": "object",
   "additionalProperties": false,
   "required": ["schemaVersion", "id", "surface", "theme", "locale", "direction", "timeZone", "clock", "random", "fonts", "assets", "limits"],
@@ -23,9 +23,11 @@
         "height": { "type": "integer", "minimum": 1, "maximum": 16384 },
         "scale": { "type": "number", "exclusiveMinimum": 0, "maximum": 8 },
         "refreshRateMilliHz": { "type": "integer", "minimum": 1, "maximum": 1000000 },
-        "opaque": { "const": true },
-        "background": { "type": "string", "pattern": "^#[0-9a-fA-F]{6}[fF]{2}$" }
-      }
+        "opaque": { "type": "boolean" },
+        "background": { "type": "string", "minLength": 9, "maxLength": 9, "pattern": "^#[0-9a-fA-F]{8}$" }
+      },
+      "if": { "properties": { "opaque": { "const": true } } },
+      "then": { "properties": { "background": { "pattern": "^#[0-9a-fA-F]{6}[fF]{2}$" } } }
     },
     "theme": { "enum": ["dark", "light"] },
     "reducedMotion": { "type": "boolean", "default": false },

@@ -81,13 +81,19 @@ above passed, and the bounded static recheck reported no remaining findings.
 
 ### Capability boundary
 
-P0 advertises `pixels` only. The calibration uses an explicitly driven native
+P0 originally advertised only `pixels`. The calibration uses an explicitly driven native
 harness clock but does not evaluate an application or validate shared JS virtual
 time. The virtual default profile is a declared target environment, not proof of
 that capability. `wall-static.json` is provided for P1/P2. TSX capture, selectors,
-semantic inspection, deterministic services, native asset readiness, transparent
-capture, watch and lifecycle capabilities remain unadvertised until their gates
-pass. Transparent byte conversion tests do not establish compositor transparency.
+semantic inspection, deterministic services, native asset readiness, watch and
+lifecycle capabilities remain unadvertised until their gates pass.
+
+With a transparent profile, `preview doctor` checks premultiplied readback and
+decoded straight-alpha PNG samples. The current `capture.transparent` flag
+follows `pixels`; both are false on `E_GRAPHICS_UNAVAILABLE` in the doctor
+result and the run's `environment.json`. Neither establishes compositor
+transparency. Lock surfaces paint an opaque black backdrop beneath author
+content, even when the profile and the document root are transparent.
 
 ## P1 — real TSX capture
 

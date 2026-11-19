@@ -256,10 +256,11 @@ fn validate(profile: &Profile) -> Result<(u32, u32)> {
     if profile.locale != "en-US" || profile.time_zone != "UTC" || profile.direction != "ltr" {
         return Err(Error::new("E_PROFILE_LOCALE", 2, "only locale en-US, timeZone UTC, and direction ltr are supported"));
     }
-    if !profile.surface.opaque { return Err(invalid("transparent preview surfaces are not supported")); }
     let background = profile.surface.background.as_bytes();
-    if background.len() != 9 || background[0] != b'#' || !background[1..].iter().all(u8::is_ascii_hexdigit)
-        || !profile.surface.background[7..].eq_ignore_ascii_case("ff") {
+    if background.len() != 9 || background[0] != b'#' || !background[1..].iter().all(u8::is_ascii_hexdigit) {
+        return Err(invalid("surface.background must be a #RRGGBBAA hexadecimal color"));
+    }
+    if profile.surface.opaque && !background[7..].eq_ignore_ascii_case(b"ff") {
         return Err(invalid("surface.background must be an opaque #RRGGBBff hexadecimal color"));
     }
     in_range(u64::from(profile.surface.refresh_rate_milli_hz), 1, 1_000_000, "surface.refreshRateMilliHz")?;
@@ -464,6 +465,25 @@ mod tests {
         profile.locale = "en-US".into();
         profile.time_zone = "Europe/Warsaw".into();
         assert_eq!(validate(&profile).unwrap_err().code, "E_PROFILE_LOCALE");
+    }
+
+    #[test]
+    fn surface_background_alpha_follows_the_opacity_policy() {
+        let mut profile = default_profile();
+        for background in ["#00000000", "#11223380"] {
+            profile.surface.background = background.into();
+            profile.surface.opaque = false;
+            validate(&profile).unwrap_or_else(|error| panic!("{background}: {error}"));
+            profile.surface.opaque = true;
+            assert_eq!(validate(&profile).unwrap_err().code, "E_PROFILE", "{background}");
+        }
+        profile.surface.background = "#112233fF".into();
+        validate(&profile).unwrap();
+        profile.surface.opaque = false;
+        for background in ["#112233", "#112233x0", "#112233é", "011223380"] {
+            profile.surface.background = background.into();
+            assert_eq!(validate(&profile).unwrap_err().code, "E_PROFILE", "{background}");
+        }
     }
 
     #[test]

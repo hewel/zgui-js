@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use zgui::{app::Fonts, geom::{Css, CssPx, Size}, platform::{InputRegion, PlatformCx, SessionLockState, SurfaceAttributes, SurfaceId, SurfaceRole}, runtime::{Runtime, WindowContent, WindowSpec, WindowToken}, view::View};
 
-use super::{ImageChoice, MountRegion, PredecessorLeak, ReloadOutcome, Root, RuntimeSurface, SessionHost, SessionSurface};
+use super::{ImageChoice, MountRegion, PredecessorLeak, ReloadOutcome, Root, RuntimeSurface, SessionHost, SessionSurface, SurfaceOpacity};
 use crate::{session::{ResourceCounts, Result, Session, SessionModule, SessionRetirement}, shell::{LayerSpec, LockCommand, LockSpec, Monitor}};
 use std::{cell::RefCell, rc::Rc};
 
@@ -30,6 +30,7 @@ enum LockReconcile<'a> { Current, Stage(&'a ShellWindows), Release }
 #[derive(Default)]
 pub(crate) struct ShellWindows {
     pub(super) generation: Option<u64>,
+    opacity: SurfaceOpacity,
     running: BTreeMap<u32, RunningLayer>,
     dismissed: BTreeSet<u32>,
     popups: Vec<RunningPopup>,
@@ -65,7 +66,7 @@ impl SessionHost {
             Ok(candidate) => candidate,
             Err(error) => return ReloadOutcome::Rejected(error),
         };
-        let mut staged = ShellWindows::default();
+        let mut staged = self.shell_windows.empty_successor();
         let result = candidate.update_monitors(&self.monitors)
             .and_then(|_| candidate.mount())
             .and_then(|()| staged.mount(runtime, cx, images, &self.shell_windows, &self.monitors, &candidate));
@@ -192,6 +193,18 @@ impl SessionHost {
 }
 
 impl ShellWindows {
+    /// Start with no shell surfaces and retain the same policy across replacements.
+    #[must_use]
+    pub(super) fn new(opacity: SurfaceOpacity) -> Self {
+        Self { opacity, ..Self::default() }
+    }
+
+    /// Give a candidate generation empty surface ownership under the same opacity policy.
+    #[must_use]
+    pub(super) fn empty_successor(&self) -> Self {
+        Self::new(self.opacity)
+    }
+
     pub(super) fn mount(&mut self, runtime: &mut Runtime, cx: &dyn PlatformCx, images: ImageChoice, previous: &Self, monitors: &[Monitor], session: &Rc<Session>) -> Result<()> {
         self.generation = Some(session.generation);
         // Stage replacement claims without dropping the currently presented content.
@@ -301,7 +314,8 @@ impl ShellWindows {
                 }).map(|lock| lock.surface);
             }
             attrs.size = Some(lock_size(monitor));
-            let (token, surface, region) = open_region(runtime, cx, session, attrs)?;
+            attrs.transparent = false;
+            let (token, surface, region) = open_region(runtime, cx, session, attrs, WindowContent::default())?;
             let document = region.document;
             let name = spec.name.clone();
             self.locks.insert(id, RunningLock { token, surface, spec });
@@ -370,9 +384,8 @@ impl ShellWindows {
         let mut attrs = SurfaceAttributes::new(spec.name.as_str());
         attrs.role = SurfaceRole::Layer(spec.placement.clone());
         attrs.size = Some(spec.size);
-        // The preview's opaque/profile styling remains in charge of background pixels.
-        attrs.transparent = matches!(images, ImageChoice::Live);
-        let (token, surface, region) = open_region(runtime, cx, session, attrs)?;
+        attrs.transparent = self.opacity == SurfaceOpacity::Transparent;
+        let (token, surface, region) = open_region(runtime, cx, session, attrs, WindowContent::default())?;
         let document = region.document;
         self.running.insert(id, RunningLayer { token, surface, spec });
         RuntimeSurface::new(runtime, cx, images).attach_shell(session, id, name, region, surface, ShellKind::Layer)?;
@@ -397,12 +410,14 @@ fn lock_size(monitor: &Monitor) -> Size<CssPx, Css> {
         CssPx((monitor.height / monitor.scale).max(1.0) as f32))
 }
 
-fn open_region(runtime: &mut Runtime, cx: &dyn PlatformCx, session: &Session, attrs: SurfaceAttributes) -> Result<(WindowToken, SurfaceId, MountRegion)> {
+fn open_region(
+    runtime: &mut Runtime, cx: &dyn PlatformCx, session: &Session, attrs: SurfaceAttributes, content: WindowContent,
+) -> Result<(WindowToken, SurfaceId, MountRegion)> {
     let is_lock = matches!(&attrs.role, SurfaceRole::Lock(_));
     let fonts = session.fonts.clone();
     let pending = Rc::new(RefCell::new(Vec::new()));
     let roots = pending.clone();
-    let token = runtime.open_surface(cx, WindowSpec::new(attrs, WindowContent::default(), Box::new(move |cx| {
+    let token = runtime.open_surface(cx, WindowSpec::new(attrs, content, Box::new(move |cx| {
         zgui::reactive::provide_context(fonts.clone());
         Box::new(Root(roots.clone()).build(cx))
     }))).map_err(|error| error.to_string())?;

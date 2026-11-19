@@ -436,6 +436,7 @@ pub struct Window {
     /// every frame it paints, because text with per-channel coverage has no meaning over a
     /// destination that is not opaque.
     translucent: bool,
+    lock_backdrop: bool,
     /// Whether the surface is entirely hidden.
     occluded: bool,
     /// Whether the surface is the one receiving the keyboard.
@@ -789,6 +790,7 @@ impl Window {
             scale,
             scheme: viewport.scheme,
             translucent: false,
+            lock_backdrop: false,
             occluded: false,
             surface_focused: true,
             menu_keys: crate::desktop::MenuKeys::default(),
@@ -1426,6 +1428,11 @@ impl Window {
             self.translucent = translucent;
             self.reconfigure = true;
         }
+    }
+
+    /// Paint the compositor lock's black backdrop beneath the document.
+    pub(crate) fn enable_lock_backdrop(&mut self) {
+        self.lock_backdrop = true;
     }
 
     /// Returns `true` where this window is drawn translucent.

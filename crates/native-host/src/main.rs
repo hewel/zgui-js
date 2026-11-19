@@ -28,7 +28,7 @@ use js_runtime::{JsRuntime, RuntimeLimits};
 use integration::{ExternalWake, IntegrationHarness};
 use package::Package;
 use session::{SessionModule, SessionPolicy};
-use session_host::{ImageChoice, RecoveryPolicy, ReloadOutcome, Root, RuntimeSurface, SessionHost, SessionSurface};
+use session_host::{ImageChoice, RecoveryPolicy, ReloadOutcome, Root, RuntimeSurface, SessionHost, SessionSurface, SurfaceOpacity};
 use zgui::{platform::{AppHandler, IdlePolicy, PlatformCx, SurfaceEvent, SurfaceId, WakeReason}, view::DocumentId};
 
 enum Completion {
@@ -65,7 +65,7 @@ impl Application {
                     format!("E_TEARDOWN: external service resources remained after cleanup: {counts:?}")
                 });
             }));
-        let host = SessionHost::new(pending, module, policy, RecoveryPolicy::Fallback);
+        let host = SessionHost::new(pending, module, policy, RecoveryPolicy::Fallback, SurfaceOpacity::Transparent);
         Ok(Self {
             native, host, harness: IntegrationHarness::new(),
             control: control_cli::Control::default(),

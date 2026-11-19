@@ -97,6 +97,7 @@ pub fn worker(args: impl Iterator<Item=String>) -> supervisor::Report {
     let started=Instant::now();
     let mut ledger=RunLedger::new(started);
     let mut output:Option<SharedOutput>=None;
+    let mut resolved_environment = None;
     let mut driver=None;
     let mut fixture_runtime=None;
     let outcome=(|| -> Result<(),Fault> {
@@ -134,7 +135,6 @@ pub fn worker(args: impl Iterator<Item=String>) -> supervisor::Report {
         environment["fixture"]=json!({"id":fixture.id,"digest":fixture.digest,"providerPolicy":"fixture-only"});
         environment["scenario"]=json!({"id":scenario.scenario.id,"digest":scenario.digest,"requiredCapabilities":scenario.scenario.required_capabilities});
         environment["application"]=build.clone();
-        environment["capabilities"]=super::capabilities(true);
         environment["capabilityRevision"]=json!("native-preview-v1-p5");
         environment["hostRootStyleDigest"]=json!(output::digest(root_styles.as_bytes()));
         environment["inputPolicy"]=json!({"surfaceFocus":"main","dispatch":"one native deliver_all burst per action; no frame between low-level events","modifiers":"key-local; restored to none after key-up"});
@@ -148,7 +148,7 @@ pub fn worker(args: impl Iterator<Item=String>) -> supervisor::Report {
         environment["random"]=environment["clock"]["random"].clone();
         environment["resourcePublication"]=json!("complete-batch-launch-order-v1");
         environment["graphicsEvidence"]=json!("graphics.json");
-        sink.borrow_mut().json("environment.json","environment",&environment)?;
+        resolved_environment = Some(environment);
         ledger.enter("mount");
         sink.borrow_mut().json("progress/action-000000.json","action-progress",&json!({"stage":"mount","actionSequence":0,"build":build}))?;
         driver=Some(Driver::new(&profile,package,fixture.definition,sink.clone(),started+Duration::from_millis(profile.profile.limits.max_run_wall_ms),root_styles)?);
@@ -172,7 +172,16 @@ pub fn worker(args: impl Iterator<Item=String>) -> supervisor::Report {
         active.fixtures.finalize()?;
         Ok(())
     })();
+    let graphics_unavailable = outcome.as_ref().is_err_and(|fault| fault.error.code == "E_GRAPHICS_UNAVAILABLE");
     if let Err(fault)=outcome { ledger.fail(fault,output.as_ref()); }
+    // Publish once, after renderer creation (including recreation) can no longer fail.
+    if let (Some(mut environment), Some(output)) = (resolved_environment, output.as_ref()) {
+        environment["capabilities"] = super::capabilities(!graphics_unavailable);
+        let published = output.borrow_mut().json("environment.json", "environment", &environment);
+        if let Err(error) = published {
+            ledger.publication_failed("environment", error, Some(output));
+        }
+    }
     if let Some(active)=driver {
         let mut found=json!({"available":false});
         if ledger.has_failed() {

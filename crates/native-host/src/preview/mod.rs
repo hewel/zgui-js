@@ -208,7 +208,14 @@ fn doctor_worker(args: impl Iterator<Item = String>) -> supervisor::Report {
         Ok(result)
     })();
     supervisor::Report {
-        result: outcome.unwrap_or_else(|error| failure("doctor", error)),
+        result: outcome.unwrap_or_else(|error| {
+            let graphics_unavailable = error.code == "E_GRAPHICS_UNAVAILABLE";
+            let mut result = failure("doctor", error);
+            if graphics_unavailable {
+                result["capabilities"] = capabilities(false);
+            }
+            result
+        }),
     }
 }
 
@@ -217,7 +224,7 @@ fn capabilities(pixels: bool) -> Value {
         "pixels":pixels, "virtual-time":true, "services.fixtures":true,
         "selectors.test-id":true, "selectors.semantic":true, "tree.inspect":true,
         "input.pointer":true, "input.keyboard":true, "input.text":true, "input.wheel":true, "input.ime":false,
-        "assets.native-readiness":true, "capture.transparent":false, "capture.sequence":false,
+        "assets.native-readiness":true, "capture.transparent":pixels, "capture.sequence":false,
         "session-lock":true,
         "surface.resize":true, "surface.scale":true, "surface.color-scheme":true, "surface.recreate":true, "surface.multiple":true,
         "lifecycle.reload":false, "source.node-location":false
@@ -225,7 +232,7 @@ fn capabilities(pixels: bool) -> Value {
 }
 
 const RUN_CAPABILITIES: &[&str] = &[
-    "pixels", "selectors.test-id", "selectors.semantic", "tree.inspect",
+    "pixels", "capture.transparent", "selectors.test-id", "selectors.semantic", "tree.inspect",
     "input.pointer", "input.keyboard", "input.text", "input.wheel",
     "virtual-time", "services.fixtures", "assets.native-readiness", "surface.resize", "surface.scale", "surface.color-scheme", "surface.recreate",
     "surface.multiple", "session-lock",

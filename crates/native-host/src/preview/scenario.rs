@@ -790,6 +790,15 @@ mod tests {
     }
 
     #[test]
+    fn scenarios_can_require_transparent_capture_with_run_capabilities() {
+        let mut input = declaration(json!([{"id":"shot","op":"capture","captureId":"shot"}]));
+        input["requiredCapabilities"] = json!(["pixels", "capture.transparent"]);
+        let scenario = check(&input, super::super::RUN_CAPABILITIES, false).unwrap();
+        assert_eq!(scenario.required_capabilities, ["capture.transparent", "pixels"]);
+        assert_eq!(check(&input, &["pixels"], false).unwrap_err().code, "E_UNSUPPORTED_CAPABILITY");
+    }
+
+    #[test]
     fn frame_timestamp_and_virtual_profile_cannot_omit_virtual_time() {
         let input = declaration(json!([{"id":"shot","op":"capture","captureId":"shot","requiredFrameTimeUs":0}]));
         for available in [&["pixels"][..], &["pixels", "virtual-time"][..]] {

@@ -44,13 +44,13 @@ mod ledger;
 mod semantics;
 
 use capture::{CaptureHandle, PresentedPixels};
+pub(super) use capture::{round_ratio_to_byte, straight_channel};
 use ledger::{CommittedMeta, FrameInput, FrameLedger, FrameStatus, SettledQuery};
 use semantics::SemanticModel;
 
 pub(crate) struct CaptureRequest<'a> {
     pub id: &'a str,
     pub dimensions: (u32, u32),
-    pub opaque: bool,
     pub readiness: Value,
     pub resource: Value,
     pub allowed_pending: &'a [String],
@@ -949,7 +949,7 @@ impl FrameObserver {
         {
             return Err(Error::new("E_READBACK", 7, "presented extent differs from current surface configuration").into());
         }
-        let png = capture::png(&pixels.pixels, request.opaque)?;
+        let png = capture::png(&pixels.pixels, pixels.target.opaque)?;
         if owned.presentation != pixels.presentation_id || owned.configuration != pixels.configuration_id {
             return Err(Error::new(
                 "E_CAPTURE_NOT_READY",
@@ -983,7 +983,6 @@ impl FrameObserver {
     pub fn publish_failure_evidence(
         &self,
         window: Option<&Window>,
-        opaque: bool,
         readiness: Value,
         satisfies: bool,
     ) -> Result<Value, Error> {
@@ -1001,7 +1000,7 @@ impl FrameObserver {
         let pixels = window
             .and_then(|window| self.0.capture.read_current(window.renderer()).ok())
             .filter(|pixels| pixels.presentation_id == last.presentation && pixels.configuration_id == last.configuration)
-            .map(|pixels| capture::png(&pixels.pixels, opaque))
+            .map(|pixels| capture::png(&pixels.pixels, pixels.target.opaque))
             .transpose()?;
         self.0.context.sink.borrow_mut().publish_historical(
             &last.tree,

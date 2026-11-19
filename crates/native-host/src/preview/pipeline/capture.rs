@@ -111,7 +111,7 @@ pub fn renderer_factory(mut handle: impl FnMut(zgui::platform::SurfaceId) -> Cap
         let mut inner = Builder::new().offscreen(target, wgpu::TextureFormat::Bgra8Unorm, false)
             .map_err(zgui::runtime::AppError::GpuUnavailable)?;
         zgui_render_vector_vello::attach(&mut inner, target.size);
-        let mut renderer = CaptureRenderer { inner, handle: handle(surface.id()) };
+        let renderer = CaptureRenderer { inner, handle: handle(surface.id()), target };
         renderer.update_metadata();
         {
             let mut state = renderer.handle.0.borrow_mut();
@@ -126,10 +126,11 @@ pub fn renderer_factory(mut handle: impl FnMut(zgui::platform::SurfaceId) -> Cap
 struct CaptureRenderer {
     inner: WgpuRenderer,
     handle: CaptureHandle,
+    target: RenderTarget,
 }
 
 impl CaptureRenderer {
-    fn update_metadata(&mut self) {
+    fn update_metadata(&self) {
         let info = self.inner.gpu().adapter().get_info();
         let formats = self.inner.formats();
         let mut state = self.handle.0.borrow_mut();
@@ -146,7 +147,7 @@ impl CaptureRenderer {
             "sceneFormat": format!("{:?}", formats.scene),
             "scratchFormat": format!("{:?}", formats.scratch),
             "srgbTier": format!("{:?}", formats.tier),
-            "alphaMode": format!("{:?}", formats.alpha_mode),
+            "alphaMode": format!("{:?}", capture_alpha_mode(self.target, formats.alpha_mode)),
             "storedColor": "premultiplied-gamma-encoded",
             "pngColor": "straight-alpha-gamma-encoded",
             "conversionRevision": 1,
@@ -176,11 +177,15 @@ impl CaptureRenderer {
                     draw_id: state.draw_id,
                     presentation_id: state.presentation_id,
                     configuration_id: state.configuration_id,
-                    target: state.target.expect("a presented renderer has a target"),
+                    target: self.target,
                 });
             }
         }
     }
+}
+
+fn capture_alpha_mode(target: RenderTarget, backend: wgpu::CompositeAlphaMode) -> wgpu::CompositeAlphaMode {
+    if target.opaque { backend } else { wgpu::CompositeAlphaMode::PreMultiplied }
 }
 
 impl Renderer for CaptureRenderer {
@@ -191,13 +196,19 @@ impl Renderer for CaptureRenderer {
         if state.target == Some(target) {
             return;
         }
+        let opacity_changed = self.target.opaque != target.opaque;
         self.inner.configure(target);
+        self.target = target;
         state.target = Some(target);
         state.configuration_id += 1;
         state.presented_draw = None;
         state.pixels = None;
+        drop(state);
+        if opacity_changed {
+            self.update_metadata();
+        }
     }
-    fn target(&self) -> Option<RenderTarget> { self.inner.target() }
+    fn target(&self) -> Option<RenderTarget> { Some(self.target) }
     fn draw(&mut self, scene: &Scene, damage: &DamageSet) -> FrameOutcome {
         let outcome = self.inner.draw(scene, damage);
         self.observe(outcome);
@@ -231,6 +242,18 @@ pub fn rgba(pixels: &Pixels, opaque: bool) -> Result<Vec<u8>, Error> {
     convert(pixels.bytes(), width, height, pixels.is_bgra(), opaque)
 }
 
+pub(in crate::preview) fn round_ratio_to_byte(numerator: u32, denominator: u32) -> u8 {
+    let Some(rounded) = numerator.saturating_add(denominator / 2).checked_div(denominator) else {
+        return 0;
+    };
+    u8::try_from(rounded.min(u32::from(u8::MAX))).unwrap_or(u8::MAX)
+}
+
+pub(in crate::preview) fn straight_channel(channel: u8, alpha: u8) -> u8 {
+    // At alpha zero RGB is canonical black.
+    round_ratio_to_byte(u32::from(channel) * 255, u32::from(alpha))
+}
+
 fn convert(bytes: &[u8], width: u32, height: u32, bgra: bool, opaque: bool) -> Result<Vec<u8>, Error> {
     let length = (width as usize).checked_mul(height as usize).and_then(|n| n.checked_mul(4))
         .filter(|_| width > 0 && height > 0)
@@ -244,12 +267,7 @@ fn convert(bytes: &[u8], width: u32, height: u32, bgra: bool, opaque: bool) -> R
         if opaque && a != 255 {
             return Err(capture_error("opaque capture contains a pixel whose alpha is not 255"));
         }
-        // Integer round-to-nearest preserves exact opaque values and handles low-alpha
-        // quantization. RGB at alpha zero is deliberately canonicalized to black.
-        let straight = |channel: u8| -> u8 {
-            if a == 0 { 0 } else { ((u32::from(channel) * 255 + u32::from(a) / 2) / u32::from(a)).min(255) as u8 }
-        };
-        output.extend_from_slice(&[straight(r), straight(g), straight(b), a]);
+        output.extend_from_slice(&[straight_channel(r, a), straight_channel(g, a), straight_channel(b, a), a]);
     }
     Ok(output)
 }
@@ -273,7 +291,7 @@ fn capture_error(message: impl Into<String>) -> Error { Error::new("E_CAPTURE", 
 
 #[cfg(test)]
 mod tests {
-    use super::convert;
+    use super::{capture_alpha_mode, convert, wgpu::CompositeAlphaMode};
 
     #[test]
     fn an_empty_backend_selection_really_has_no_adapter() {
@@ -307,5 +325,15 @@ mod tests {
         assert_eq!(convert(&bytes, 4, 1, false, false).unwrap(), [0, 0, 0, 0, 255, 0, 255, 1, 128, 64, 255, 128, 128, 128, 128, 255]);
         assert!(convert(&bytes, 4, 1, false, true).is_err());
         assert!(convert(&[], 0, 1, false, false).is_err());
+    }
+
+    #[test]
+    fn readback_alpha_mode_tracks_the_target_not_the_offscreen_swapchain() {
+        let opaque = zgui::render::RenderTarget::new(
+            zgui::geom::Size::new(257, 193),
+            zgui::geom::Scale::new(1.0),
+        );
+        assert_eq!(capture_alpha_mode(opaque, CompositeAlphaMode::Opaque), CompositeAlphaMode::Opaque);
+        assert_eq!(capture_alpha_mode(opaque.translucent(), CompositeAlphaMode::Opaque), CompositeAlphaMode::PreMultiplied);
     }
 }

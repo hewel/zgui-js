@@ -5,7 +5,7 @@ use zgui::{geom::{DevicePx, Point, Size}, platform::{AppHandler, ColorScheme, Id
 use zgui_platform_headless::{Headless, SessionLockDecision};
 
 use crate::{package::Package, session::{ResourceCounts, RetirementFailure, RuntimeTelemetry, Session, SessionError, SessionModule, SessionPolicy, SessionRetirement}};
-use crate::session_host::{ImageChoice, RecoveryPolicy, RuntimeSurface, SessionHost};
+use crate::session_host::{ImageChoice, RecoveryPolicy, RuntimeSurface, SessionHost, SurfaceOpacity};
 use crate::shell::Monitor;
 use super::{Error, fixture::FixtureDefinition, output::Output, pipeline::{self, CaptureRequest, CheckpointSink, FrameObserver, FrameObservers, ObservationMode, OutputSink, Pipeline}, profile::{self, Limits, LoadedProfile, Surface}, resources};
 use crate::{assets::{ContractFailure, fixture::{FixtureRuntime, LockOutcome}}, environment::Environment};
@@ -176,7 +176,6 @@ pub struct Driver {
     run_deadline: Instant,
     step_start_frame: Cell<u64>,
     limits: Limits,
-    opaque: bool,
     dimensions: (u32,u32),
     surface: Surface,
     environment: Rc<Environment>,
@@ -238,9 +237,10 @@ impl Driver {
             stack_limit_bytes:profile.profile.limits.max_js_stack_bytes.unwrap_or_else(|| js_runtime::RuntimeLimits::default().stack_limit_bytes),
             ..Default::default()
         };
+        let shell_opacity = if surface.opaque { SurfaceOpacity::Opaque } else { SurfaceOpacity::Transparent };
         let mut session_host = SessionHost::new(pending.clone(), SessionModule::package(package.clone()),
             SessionPolicy::preview(limits, deadline.clone(), environment.clone(), fixtures.clone()).with_reduced_motion(profile.profile.reduced_motion),
-            RecoveryPolicy::Propagate);
+            RecoveryPolicy::Propagate, shell_opacity);
         if pure_shell { session_host.set_pure_shell(profile.fonts.clone()); }
         platform.set_color_scheme(Some(if profile.profile.theme == "dark" { ColorScheme::Dark } else { ColorScheme::Light }));
         let observer_ref = observers.clone();
@@ -258,7 +258,7 @@ impl Driver {
             retired_telemetry: None,
         })?;
         let mut driver = Self { pipeline,observers,shell_geometry:BTreeMap::new(),deadline,run_deadline,step_start_frame:Cell::new(0),limits:profile.profile.limits.clone(),
-            opaque:surface.opaque,dimensions:(profile.physical_width,profile.physical_height),surface:surface.clone(),
+            dimensions:(profile.physical_width,profile.physical_height),surface:surface.clone(),
             environment,fixtures,maximum_time_us:start+profile.profile.limits.max_virtual_duration_ms*1000,startup_fault:None,pure_shell,shell_capable,lock_capable };
         let setup = if pure_shell { driver.check() } else { driver.bind_main() };
         if let Err(fault) = setup.and_then(|_| driver.sync_shell_surfaces()) { driver.startup_fault = Some(fault); }
@@ -560,7 +560,6 @@ impl Driver {
         let paths = observer.write_capture(&settled,window,CaptureRequest {
             id,
             dimensions: (size.width.0 as u32,size.height.0 as u32),
-            opaque: self.opaque,
             readiness,
             resource,
             allowed_pending,
@@ -577,7 +576,7 @@ impl Driver {
         let Some(window) = self.by_surface(id) else { return Ok(json!({"available":false})); };
         let name = self.pipeline.app().session().and_then(|session|session.mount_region(window.document_id()));
         let readiness = self.readiness_for(name.as_ref().map(|region|region.name.as_str()));
-        self.observer(id)?.publish_failure_evidence(Some(window), self.opaque, readiness, self.window_current(window))
+        self.observer(id)?.publish_failure_evidence(Some(window), readiness, self.window_current(window))
     }
     pub fn finish(mut self) -> (Value, Option<Fault>, Option<RuntimeTelemetry>) {
         self.deadline.set(self.run_deadline.min(Instant::now()+Duration::from_millis(20)));

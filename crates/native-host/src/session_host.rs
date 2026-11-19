@@ -148,6 +148,16 @@ pub(crate) trait SessionSurface {
 #[derive(Clone, Copy)]
 pub(crate) enum ImageChoice { Live, PackageOnly }
 
+/// Backing target opacity for layer and popup surfaces; lock surfaces are always opaque.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum SurfaceOpacity {
+    /// Every presented pixel must be opaque.
+    #[default]
+    Opaque,
+    /// Preserve the rendered alpha channel.
+    Transparent,
+}
+
 pub(crate) struct RuntimeSurface<'a> {
     runtime: &'a mut zgui::runtime::Runtime,
     cx: &'a dyn PlatformCx,
@@ -245,13 +255,19 @@ pub(crate) struct SessionHost {
 }
 
 impl SessionHost {
-    pub(crate) fn new(pending: Rc<RefCell<Vec<MountRegion>>>, module: SessionModule, policy: SessionPolicy, recovery: RecoveryPolicy) -> Self {
+    pub(crate) fn new(
+        pending: Rc<RefCell<Vec<MountRegion>>>,
+        module: SessionModule,
+        policy: SessionPolicy,
+        recovery: RecoveryPolicy,
+        shell_opacity: SurfaceOpacity,
+    ) -> Self {
         Self {
             pending, regions: HashMap::new(), sessions: HashMap::new(), fallbacks: HashMap::new(),
             generation: 0, module, last_good: None, policy, recovery,
             acceptance: None,
             monitors: Vec::new(), pure_fonts: None, pure_session: None, pure_attempted: false,
-            shell_windows: ShellWindows::default(),
+            shell_windows: ShellWindows::new(shell_opacity),
         }
     }
 
@@ -476,7 +492,7 @@ impl SessionHost {
         if let Err(error) = candidate.update_monitors(&self.monitors) { return ReloadOutcome::Rejected(error); }
         surface.bind(document, &candidate);
         let image_checkpoint = surface.image_source_checkpoint(document);
-        let mut staged = ShellWindows::default();
+        let mut staged = self.shell_windows.empty_successor();
         let mounted = candidate.mount()
             .and_then(|()| surface.stage_shell_surfaces(&mut staged, &self.shell_windows, &self.monitors, &candidate));
         if let Err(error) = mounted {
