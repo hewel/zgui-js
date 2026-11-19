@@ -1,4 +1,5 @@
 mod bounded_fs;
+mod control_cli;
 mod package;
 mod session;
 mod session_host;
@@ -37,6 +38,7 @@ enum Completion {
 struct Application {
     native: zgui::runtime::Runtime,
     host: SessionHost,
+    control: control_cli::Control,
     harness: IntegrationHarness,
     sender: mpsc::SyncSender<Completion>,
     inbox: mpsc::Receiver<Completion>,
@@ -50,18 +52,31 @@ impl Application {
     fn new(native: zgui::runtime::Runtime, pending: Rc<RefCell<Vec<session_host::MountRegion>>>, package: Option<Rc<Package>>) -> std::io::Result<Self> {
         let (sender, inbox) = mpsc::sync_channel(8);
         let module = package.map_or_else(integration::baseline_module, SessionModule::package);
-        let host = SessionHost::new(pending, module, SessionPolicy::live(host_services::Executor::new(2, 64)?), RecoveryPolicy::Fallback);
+        let failure = Rc::new(RefCell::new(None));
+        let teardown_failure = Rc::clone(&failure);
+        let policy = SessionPolicy::live(host_services::Executor::new(2, 64)?)
+            .with_teardown_reporter(Rc::new(move |counts| {
+                teardown_failure.borrow_mut().get_or_insert_with(|| {
+                    format!("E_TEARDOWN: external service resources remained after cleanup: {counts:?}")
+                });
+            }));
+        let host = SessionHost::new(pending, module, policy, RecoveryPolicy::Fallback);
         Ok(Self {
             native, host, harness: IntegrationHarness::new(),
-            sender, inbox, exit_after: None, exit_armed: false, failure: Rc::new(RefCell::new(None)),
+            control: control_cli::Control::default(),
+            sender, inbox, exit_after: None, exit_armed: false, failure,
             watch_path: None, watcher: None,
         })
     }
 
     fn fail(&self, cx: &dyn PlatformCx, error: impl std::fmt::Display) {
-        eprintln!("native-host error: {error}");
-        *self.failure.borrow_mut() = Some(error.to_string());
+        self.record_failure(error);
         cx.request_exit();
+    }
+
+    fn record_failure(&self, error: impl std::fmt::Display) {
+        eprintln!("native-host error: {error}");
+        self.failure.borrow_mut().get_or_insert_with(|| error.to_string());
     }
 
     fn retry_sender(&self, cx: &dyn PlatformCx) -> Rc<dyn Fn(DocumentId, u64)> {
@@ -157,21 +172,92 @@ impl Application {
         }
     }
 
+    fn reconcile_control(&mut self, cx: &dyn PlatformCx) {
+        if self.failure.borrow().is_some() {
+            self.stop_control(cx);
+            cx.request_exit();
+            return;
+        }
+        let app_id = self.host.module().package.as_ref()
+            .filter(|package| package.manifest.capabilities.control_channel)
+            .map(|package| package.manifest.id.as_str())
+            .filter(|app_id| self.host.sessions().any(|session| session.control_app_id() == Some(*app_id)));
+        if let Some(app_id) = app_id {
+            let host = &self.host;
+            let sessions = || host.sessions().filter(move |session| session.control_app_id() == Some(app_id));
+            let result = self.control.reconcile(app_id, || sessions().map(|session| session.generation), || {
+                let waker = cx.waker();
+                move || waker.wake(WakeReason::AppWork)
+            });
+            match result {
+                Ok(false) if sessions().any(|session| session.has_control_handler()) => {
+                    self.fail(cx, "control handler requires --control-socket or XDG_RUNTIME_DIR");
+                }
+                Err(error) => self.fail(cx, format_args!("control socket: {error}")),
+                Ok(_) => {}
+            }
+        } else {
+            self.stop_control(cx);
+        }
+    }
+
+    fn drain_control(&self, cx: &dyn PlatformCx) {
+        for _ in 0..8 {
+            let Some((app_id, generations, request)) = self.control.try_recv() else { return; };
+            let mut handlers = self.host.sessions().filter(|session| {
+                session.control_app_id() == Some(app_id)
+                    && generations.contains(&session.generation)
+                    && session.has_control_handler()
+            });
+            match handlers.next() {
+                None => request.reply(Err("no active control handler".into())),
+                Some(session) if handlers.any(|other| !Rc::ptr_eq(session, other)) => {
+                    request.reply(Err("multiple active control handlers".into()));
+                }
+                Some(session) => session.offer_control(request),
+            }
+        }
+        cx.waker().wake(WakeReason::AppWork);
+    }
+
+    fn stop_control(&mut self, cx: &dyn PlatformCx) {
+        if let Err(error) = self.control.stop() {
+            self.fail(cx, format_args!("control socket: {error}"));
+        }
+    }
+
     fn stop_sessions(&mut self) {
         self.harness.stop();
         self.host.stop();
     }
 }
 impl AppHandler for Application {
-    fn surfaces_available(&mut self, cx: &dyn PlatformCx) { self.native.surfaces_available(cx); self.after_native(cx); }
-    fn surfaces_lost(&mut self, cx: &dyn PlatformCx) { self.stop_sessions(); self.native.surfaces_lost(cx); }
+    fn surfaces_available(&mut self, cx: &dyn PlatformCx) {
+        self.native.surfaces_available(cx);
+        self.after_native(cx);
+        self.reconcile_control(cx);
+    }
+    fn surfaces_lost(&mut self, cx: &dyn PlatformCx) {
+        self.stop_control(cx);
+        self.stop_sessions();
+        self.native.surfaces_lost(cx);
+        if self.failure.borrow().is_some() { cx.request_exit(); }
+    }
     fn surface_event(&mut self, cx: &dyn PlatformCx, surface: SurfaceId, event: SurfaceEvent) {
-        self.native.surface_event(cx, surface, event); self.after_native(cx);
+        self.native.surface_event(cx, surface, event);
+        self.after_native(cx);
+        self.reconcile_control(cx);
     }
     fn wake(&mut self, cx: &dyn PlatformCx, reason: WakeReason) {
         self.native.wake(cx, reason);
         self.after_native(cx);
-        self.poll_reload(cx);
+        if self.failure.borrow().is_none() {
+            self.poll_reload(cx);
+        }
+        if self.failure.borrow().is_some() {
+            self.reconcile_control(cx);
+            return;
+        }
         for _ in 0..8 {
             let Ok(completion) = self.inbox.try_recv() else { break; };
             match completion {
@@ -203,11 +289,22 @@ impl AppHandler for Application {
                 }
             }
         }
+        // A publication or retry may replace the active generation or revoke
+        // its capability. Route only after committing the resulting ownership.
+        self.reconcile_control(cx);
+        self.drain_control(cx);
     }
     fn idle(&mut self, cx: &dyn PlatformCx) -> IdlePolicy { self.native.idle(cx) }
-    fn deadline_reached(&mut self, cx: &dyn PlatformCx) { self.native.deadline_reached(cx); self.after_native(cx); }
+    fn deadline_reached(&mut self, cx: &dyn PlatformCx) {
+        self.native.deadline_reached(cx);
+        self.after_native(cx);
+        self.reconcile_control(cx);
+    }
     fn shutting_down(&mut self, cx: &dyn PlatformCx) {
         self.watcher.take();
+        if let Err(error) = self.control.close() {
+            self.record_failure(format_args!("control socket: {error}"));
+        }
         self.stop_sessions();
         self.native.shutting_down(cx);
     }
@@ -217,6 +314,9 @@ pub(crate) const APPLICATION_STYLESHEET:&str =
     ":root { background: #171b24; color: #edf2fa; font-family: sans-serif; font-size: 22px; padding: 24px; }";
 
 fn main() -> Result<(), Box<dyn Error>> {
+    if std::env::args_os().nth(1).is_some_and(|arg| arg == "msg") {
+        return control_cli::command(std::env::args_os().skip(2));
+    }
     let mut args = std::env::args().skip(1).peekable();
     if args.peek().is_some_and(|arg| arg == "preview") {
         args.next();
@@ -228,6 +328,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut watch = false;
     let mut reduced_motion = false;
     let mut layer_config = None;
+    let mut control_socket = None;
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--smoke-module" => {
@@ -243,6 +344,10 @@ fn main() -> Result<(), Box<dyn Error>> {
             "--exercise" => { exercise = true; }
             "--watch" => { watch = true; }
             "--reduced-motion" => { reduced_motion = true; }
+            "--control-socket" => {
+                if control_socket.is_some() { return Err("--control-socket can only be specified once".into()); }
+                control_socket = Some(args.next().ok_or("--control-socket requires a path")?.into());
+            }
             "--layer-config" => {
                 let path: PathBuf = args.next().ok_or("--layer-config requires a JSON file")?.into();
                 layer_config = Some(shell::LayerConfig::load(&path)?);
@@ -266,6 +371,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     application.exit_after = exit_after;
     application.harness.exercise = exercise;
     application.watch_path = watch.then_some(bundle).flatten();
+    application.control.override_path = control_socket;
     let failure = application.failure.clone();
     eprintln!("zgui=80baa3c7 rquickjs=73fcd606 QuickJS-NG=6d46d07d fontique=patched platform-selection={}", std::env::var("ZGUI_PLATFORM").unwrap_or_else(|_| "desktop-auto".into()));
     let handler: Box<dyn AppHandler> = match layer_config {
@@ -274,9 +380,9 @@ fn main() -> Result<(), Box<dyn Error>> {
     };
     let result = zgui::app::desktop()(handler);
     zgui::reactive::shutdown();
+    if let Some(error) = failure.borrow_mut().take() { return Err(error.into()); }
     result?;
     if let Some(error) = native_failure.take() { return Err(error.into()); }
-    if let Some(error) = failure.borrow_mut().take() { return Err(error.into()); }
     eprintln!("native-host: clean shutdown");
     Ok(())
 }

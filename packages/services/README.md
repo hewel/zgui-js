@@ -51,9 +51,104 @@ handle's synchronous, idempotent `release()` when it is no longer in use.
 called inside a Solid owner. Both helpers throw synchronously for undeclared
 assets and are available during mount, lifecycle callbacks and events.
 
-This package provides resource services, not window-manager integrations.
-Platform and compositor support, including layer-shell capabilities, comes from
-upstream zgui; there is no compositor-specific service package or abstraction.
+## External communication
+
+Declare only the authorities the application needs in the package's
+`capabilities`. Omitting these declarations grants no socket, command, or
+control-channel access. These services run during the application lifecycle, not
+during package preflight. Callbacks run in the owning session's bridge turns.
+
+### Unix domain sockets
+
+`connectUnixSocket(path, options)` connects asynchronously to an exact, canonical
+absolute path in `capabilities.unixSockets`. It returns a socket with
+`send(text)` and `close()`. Set `options.framing` to match the peer:
+
+- `"line"`: one UTF-8 message per LF (`0x0a`). `send` adds the LF; the text
+  passed to it must not contain LF.
+- `"length"`: a four-byte unsigned big-endian count followed by one kind byte
+  and the data. The count includes the kind byte. Kind `0x00` is UTF-8 text
+  delivered to `onMessage(text)`; `send` always uses this kind. Kind `0x01` is
+  encoded image data, even if it is also valid UTF-8 (such as SVG). Image
+  frames are ignored unless `onBinaryImage(handle)` is configured. Use an
+  encoding supported by the native image loader and release each
+  `ImageHandle` when no longer needed. A zero count or unknown kind closes the
+  socket with `InvalidMessage`. Invalid UTF-8 text closes it with `InvalidUtf8`,
+  never an image callback.
+
+Each frame can carry up to 8 MiB of data, excluding the LF delimiter or the
+length header and kind byte. `send` queues text without waiting for socket I/O
+and throws `Busy` if its queue is full. Delivered socket images share a
+64-handle, 64 MiB budget per session; exceeding it closes the receiving socket.
+The optional `onClose(error)` receives `null` on peer EOF or a `HostServiceError`
+on asynchronous failure. Explicit `close()` stops delivery without calling
+`onClose` or waiting for the worker to close the connection. A Solid owner
+closes the socket on cleanup; otherwise close it explicitly.
+
+### Commands
+
+`spawnCommand(program, args)` starts an executable whose exact name or path
+appears in `capabilities.commands`. Each string in `args` is one argument;
+there is no shell interpolation or argument splitting.
+Bare names resolve through absolute directories in the host's `PATH`. The host
+accepts up to 64 arguments and 64 KiB of argument text. Allowlisting an executable
+authorizes it to run with those arguments and with the host's environment.
+
+- By default, or with `{ stream: false }`, it returns a `HostRequest` whose
+  promise resolves to `{ status, stdout, stderr }`. A nonzero exit code is
+  returned as `status`, not thrown. A process that does not exit normally has
+  `status: null`. Host failures reject the promise. The two UTF-8 output streams
+  have a combined limit of 1 MiB.
+- With `{ stream: true }`, it returns a handle with `cancel()` and its alias
+  `kill()`. Supply `onStdout(line)`, `onStderr(line)`, `onExit(status)` and
+  `onError(error)` as needed. Each UTF-8 line is at most 64 KiB, excluding LF.
+  `onExit` receives the same kind of status as buffered mode.
+
+A Solid owner cancels the command on cleanup. In buffered mode the SDK observes
+the cleanup rejection but returns the original request: awaiting its promise
+after cancellation still rejects with `Cancelled`. Handle ordinary failures,
+and cancellation you request explicitly, on that promise. Without an owner,
+cancel commands you no longer need. Cancellation and session retirement stop
+delivery without waiting for process teardown. The worker terminates a
+still-running command's process group and reaps its leader. Ordinary
+completion reaps the leader without killing surviving group members or waiting
+for them to close inherited output pipes. This does not sandbox commands that
+deliberately leave their process group.
+
+### Control channel
+
+With `capabilities.controlChannel: true`, `onControlMessage(handler)` registers
+one inbound handler per session. It takes a readonly array of argument strings and
+returns synchronously. A string is sent as-is, another JSON value is encoded as
+JSON, and `undefined` produces a successful empty reply. The return value of
+`onControlMessage()` is an unsubscribe function; a Solid owner calls it
+automatically on cleanup.
+
+The default control socket is `$XDG_RUNTIME_DIR/zgui-js/<package-id>.sock`.
+Start the application with `--control-socket /canonical/path` to override it.
+Send a message to a running application with one of:
+
+```sh
+native-host msg --app-id example -- status "argument with spaces"
+native-host msg --control-socket /canonical/path -- status "argument with spaces"
+```
+
+Use `--` to end the client options and preserve all subsequent argument
+strings as payload. Requests accept at most 64 strings and 64 KiB of wire JSON.
+Replies are limited to 64 KiB of UTF-8 text before framing and are written to
+standard output. Reloading replaces the listener for the old session. Requests
+queued on the old connection are rejected rather than delivered to the
+successor; a client may see a disconnected socket during cutover.
+
+In deterministic previews these services use scripts from the
+[fixture schema](../../schemas/preview/fixture.schema.json) instead of real
+sockets, processes, or a CLI listener. Fixtures do not grant capabilities.
+
+## Runtime boundaries
+
+This package provides generic resource and communication services, not
+window-manager integrations. Platform and compositor support, including
+layer-shell capabilities, comes from upstream zgui.
 
 The UI SDK declares `setTimeout`, `clearTimeout`, `requestAnimationFrame`,
 `cancelAnimationFrame` and `queueMicrotask` as existing host globals. These are

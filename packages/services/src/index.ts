@@ -5,6 +5,13 @@ declare const globalThis: {
   readonly __zguiServices: {
     readTextAsset(path: string): HostRequest<string>;
     registerImageAsset(path: string): ImageHandle;
+    connectUnixSocket(path: string, options: UnixSocketOptions): UnixSocket;
+    spawnCommand(
+      program: string,
+      args: readonly string[],
+      options?: BufferedCommandOptions | StreamingCommandOptions,
+    ): HostRequest<CommandResult> | CommandStream;
+    onControlMessage(handler: ControlMessageHandler): () => void;
   };
 };
 
@@ -78,4 +85,111 @@ export function loadImageAsset(path: string): ImageHandle {
     onCleanup(() => handle.release());
   }
   return handle;
+}
+
+/** Callbacks and wire framing for an allowed Unix domain socket. */
+export interface UnixSocketOptions {
+  /** LF-delimited UTF-8, or a big-endian u32 count including the kind byte and data. */
+  framing: "line" | "length";
+  onMessage(message: string): void;
+  /** In length mode, receives kind 0x01 image data, even if the data is valid UTF-8. */
+  onBinaryImage?(image: ImageHandle): void;
+  /** Called on peer EOF or failure, but not on explicit close. */
+  onClose?(error: HostServiceError | null): void;
+}
+
+/** An open or connecting Unix domain socket. */
+export interface UnixSocket {
+  /** Queues UTF-8 text; length mode sends it with kind 0x00. */
+  send(text: string): void;
+  /** Stops callback delivery without waiting for the connection to close. */
+  close(): void;
+}
+
+/** Connect to a manifest-allowed Unix socket; a Solid owner closes it on cleanup. */
+export function connectUnixSocket(path: string, options: UnixSocketOptions): UnixSocket {
+  const socket = globalThis.__zguiServices.connectUnixSocket(path, options);
+  if (getOwner()) {
+    onCleanup(() => socket.close());
+  }
+  return socket;
+}
+
+/** Captured output and exit code; status is null if the process did not exit normally. */
+export interface CommandResult {
+  status: number | null;
+  stdout: string;
+  stderr: string;
+}
+
+/** Capture stdout and stderr until the command completes (the default). */
+export interface BufferedCommandOptions {
+  stream?: false;
+}
+
+/** Receive stdout and stderr one line at a time instead of buffering them. */
+export interface StreamingCommandOptions {
+  stream: true;
+  onStdout?(line: string): void;
+  onStderr?(line: string): void;
+  /** Reports the process exit code, or null if it did not exit normally. */
+  onExit?(status: number | null): void;
+  onError?(error: HostServiceError): void;
+}
+
+/** A streaming command that can be cancelled or killed without awaiting completion. */
+export interface CommandStream {
+  /** Stops callback delivery and requests termination without waiting for the worker. */
+  cancel(): void;
+  /** Alias for cancel(). */
+  kill(): void;
+}
+
+/** Start a manifest-allowed executable directly, without a shell. */
+export function spawnCommand(
+  program: string,
+  args: readonly string[],
+  options: StreamingCommandOptions,
+): CommandStream;
+/** Start a manifest-allowed executable and capture its output. */
+export function spawnCommand(
+  program: string,
+  args: readonly string[],
+  options?: BufferedCommandOptions,
+): HostRequest<CommandResult>;
+export function spawnCommand(
+  program: string,
+  args: readonly string[],
+  options?: BufferedCommandOptions | StreamingCommandOptions,
+): HostRequest<CommandResult> | CommandStream {
+  const command = globalThis.__zguiServices.spawnCommand(program, args, options);
+  if (getOwner()) {
+    onCleanup(() => {
+      // Observe owner cancellation without replacing the caller's promise or handling it early.
+      if ("promise" in command) void command.promise.catch(() => {});
+      command.cancel();
+    });
+  }
+  return command;
+}
+
+/** Data that can be encoded as JSON in a control reply. */
+export type JsonValue =
+  | null
+  | boolean
+  | number
+  | string
+  | readonly JsonValue[]
+  | { readonly [key: string]: JsonValue };
+
+/** Return plain text, a JSON value, or undefined for a successful empty reply. */
+export type ControlMessageHandler = (args: readonly string[]) => JsonValue | undefined;
+
+/** Subscribe to control messages; returns an unsubscribe function and registers owner cleanup. */
+export function onControlMessage(handler: ControlMessageHandler): () => void {
+  const unsubscribe = globalThis.__zguiServices.onControlMessage(handler);
+  if (getOwner()) {
+    onCleanup(unsubscribe);
+  }
+  return unsubscribe;
 }

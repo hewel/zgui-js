@@ -63,6 +63,8 @@ impl SessionModule {
     }
 }
 
+type TeardownReporter = Rc<dyn Fn(&ResourceCounts)>;
+
 /// Execution and provider policy is fixed before the application module is evaluated.
 #[derive(Clone)]
 pub(crate) struct SessionPolicy {
@@ -72,20 +74,27 @@ pub(crate) struct SessionPolicy {
     strict_rejections: bool,
     assets: AssetSource,
     reduced_motion: bool,
+    teardown_reporter: Option<TeardownReporter>,
 }
 impl SessionPolicy {
     /// Ordinary live execution: wall clock, ambient limits, logged rejections,
     /// package asset reads on the shared worker pool.
     pub(crate) fn live(executor: host_services::Executor) -> Self {
-        Self { limits: RuntimeLimits::default(), deadline: None, environment: None, strict_rejections: false, assets: AssetSource::Live(executor), reduced_motion: false }
+        Self { limits: RuntimeLimits::default(), deadline: None, environment: None, strict_rejections: false, assets: AssetSource::Live(executor), reduced_motion: false, teardown_reporter: None }
     }
     /// Deterministic preview execution: supplied limits, an enclosing deadline,
     /// the virtual environment, strict rejection handling and fixture assets.
     pub(crate) fn preview(limits: RuntimeLimits, deadline: Rc<Cell<Instant>>, environment: Rc<Environment>, fixtures: Rc<crate::assets::fixture::FixtureRuntime>) -> Self {
-        Self { limits, deadline: Some(deadline), environment: Some(environment), strict_rejections: true, assets: AssetSource::Fixture(fixtures), reduced_motion: false }
+        Self { limits, deadline: Some(deadline), environment: Some(environment), strict_rejections: true, assets: AssetSource::Fixture(fixtures), reduced_motion: false, teardown_reporter: None }
     }
     pub(crate) fn with_reduced_motion(mut self, reduced_motion: bool) -> Self {
         self.reduced_motion = reduced_motion;
+        self
+    }
+
+    /// Report residual external leases to the live application on any retirement path.
+    pub(crate) fn with_teardown_reporter(mut self, reporter: TeardownReporter) -> Self {
+        self.teardown_reporter = Some(reporter);
         self
     }
 }
@@ -103,6 +112,15 @@ pub(crate) struct ResourceCounts {
     pub requests: usize,
     #[serde(skip_serializing_if = "is_zero")]
     pub image_handles: usize,
+    /// Unix socket clients still open after application cleanup.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub unix_sockets: usize,
+    /// Child process groups not yet closed and reaped.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub child_processes: usize,
+    /// Inbound control handlers still registered.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub control_listeners: usize,
     #[serde(skip_serializing_if = "is_zero")]
     pub canvas_scenes: usize,
     pub fonts: usize,
@@ -336,6 +354,21 @@ impl Session {
         result
     }
 
+    /// Only a mounted generation with a registered live handler accepts CLI requests.
+    pub(crate) fn has_control_handler(&self) -> bool { self.work.has_control_handler() }
+
+    /// The control listener namespace authorized by this active live package.
+    pub(crate) fn control_app_id(&self) -> Option<&str> {
+        if self.shutdown_started.get() { return None; }
+        self.module.package.as_ref().filter(|package| package.manifest.capabilities.control_channel)
+            .map(|package| package.manifest.id.as_str())
+    }
+
+    /// Admit a validated live CLI request without running application code inline.
+    pub(crate) fn offer_control(&self, inbound: host_services::control::Inbound) {
+        self.work.offer_control(inbound);
+    }
+
     fn checkpoint_work(&self) -> Result<bool> {
         if let Some(error) = self.fault.borrow_mut().take() { return Err(error); }
         self.check_contract()?;
@@ -352,7 +385,7 @@ impl Session {
         }
         let max_jobs = engine.limits().max_jobs_per_pump;
         let mut worked = false;
-        let mut remaining = [32, 32, 32, max_jobs];
+        let mut remaining = [32, 32, 32, max_jobs, 32];
         // Interleave work classes and preserve the next class across deadlines.
         // Ready native work must not starve promise jobs that can cancel it.
         while Instant::now() < end && remaining.iter().any(|&count| count != 0) {
@@ -375,6 +408,11 @@ impl Session {
                 } else { false },
                 2 => self.bridge.flush_notification(engine.turn(), |js, cb| js.with_context(|ctx| cb.call(&ctx)))
                     .map_err(|error| self.diagnostic(error))?,
+                4 => if let Some(event) = self.work.next_external() {
+                    self.bridge.run_turn(engine.turn(), |_, js| js.with_context(|ctx| self.work.settle_external(&ctx, event)))
+                        .map_err(|error| self.diagnostic(error))?;
+                    true
+                } else { false },
                 _ => self.bridge.run_turn(engine.turn(), |_, js| js.execute_job(end.saturating_duration_since(Instant::now())))
                     .map_err(|error| self.diagnostic(error))?,
             };
@@ -394,7 +432,7 @@ impl Session {
         }
         self.check_contract()?;
         let queued = self.bridge.has_queued_notifications().map_err(|overflow: QueueOverflow| overflow.to_string())?;
-        if engine.is_job_pending() || queued || self.work.has_ready() || self.work.has_completions() { self.wake_owner(); }
+        if engine.is_job_pending() || queued || self.work.has_ready() || self.work.has_completions() || self.work.has_external() { self.wake_owner(); }
         Ok(worked)
     }
 
@@ -536,12 +574,16 @@ impl Session {
 
     pub(crate) fn counts(&self) -> ResourceCounts {
         let (timers, frame_callbacks, requests) = self.work.counts();
+        let external = self.work.external_counts();
         ResourceCounts {
             nodes: self.bridge.live_count(), wrappers: self.bridge.wrapper_count(),
             callbacks: self.bridge.callback_count(), focus_traps: self.bridge.focus_trap_count(),
             scroll_locks: self.bridge.scroll_lock_count(),
             timers, frame_callbacks, requests,
             image_handles: self.image_blobs().len(),
+            unix_sockets: external.sockets,
+            child_processes: external.processes,
+            control_listeners: external.listeners,
             canvas_scenes: self.bridge.canvas_scene_count(),
             fonts: self.font_leases.borrow().len(),
             engine_alive: self.engine.borrow().is_some(),
@@ -584,6 +626,7 @@ impl Session {
                 cleanup_error.get_or_insert_with(|| self.diagnostic(error));
             }
         }
+        let external = self.work.external_counts();
         self.work.finish_stop();
         // Report remaining leases before forced disposal releases the native scenes.
         let canvas_scenes = self.bridge.canvas_scene_count();
@@ -595,7 +638,13 @@ impl Session {
         let snapshot = self.engine.borrow().as_ref().map(Self::snapshot_telemetry);
         self.telemetry.set(RuntimeTelemetry::merge(self.telemetry.get(), snapshot));
         let engine_disposed = self.engine.borrow_mut().take().is_some();
-        let counts = ResourceCounts { canvas_scenes, ..self.counts() };
+        let counts = ResourceCounts {
+            canvas_scenes,
+            unix_sockets: external.sockets,
+            child_processes: external.processes,
+            control_listeners: external.listeners,
+            ..self.counts()
+        };
         self.image_blobs().clear();
         if engine_disposed {
             eprintln!("session-disposed: generation={} frames={} resources={counts:?}", self.generation, self.frames.get());
@@ -615,6 +664,11 @@ impl Session {
             telemetry: self.telemetry.get(),
         };
         *self.retired.borrow_mut() = Some(report.clone());
+        if (report.counts.unix_sockets != 0 || report.counts.child_processes != 0 || report.counts.control_listeners != 0)
+            && let Some(reporter) = &self.policy.teardown_reporter
+        {
+            reporter(&report.counts);
+        }
         report
     }
 

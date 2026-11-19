@@ -1,4 +1,4 @@
-//! Deterministic, owner-thread asset fixtures. This module never opens a file.
+//! Deterministic, owner-thread service fixtures. This module never opens a file.
 use super::ContractFailure;
 use crate::{bounded_fs::relative_path, environment::Environment, package::Package};
 use host_services::{Completion, ServiceError};
@@ -6,6 +6,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{cell::RefCell, collections::{BTreeMap, VecDeque}, marker::PhantomData, rc::Rc, sync::Arc};
 use crate::schema::{deserialize_object,object_struct};
+
+mod external;
+pub(crate) use external::ExternalDelivery;
+use external::{CommandScript, ControlMessage, ControlProvider, ExternalJob, ExternalState, SocketScript};
 
 const MAX_TRACE_RECORDS: usize = 4096;
 const MAX_TRACE_BYTES: usize = 1024 * 1024;
@@ -37,6 +41,12 @@ object_struct! {
         pub assets: Option<TextProvider>,
         #[serde(default, deserialize_with = "present_provider", skip_serializing_if = "Option::is_none")]
         pub images: Option<ImageProvider>,
+        #[serde(default, deserialize_with = "present_provider", skip_serializing_if = "Option::is_none")]
+        sockets: Option<Vec<SocketScript>>,
+        #[serde(default, deserialize_with = "present_provider", skip_serializing_if = "Option::is_none")]
+        commands: Option<Vec<CommandScript>>,
+        #[serde(default, deserialize_with = "present_provider", skip_serializing_if = "Option::is_none")]
+        control: Option<ControlProvider>,
     }
 }
 fn present_provider<'de, D: serde::Deserializer<'de>, T: Deserialize<'de>>(deserializer: D) -> Result<Option<T>, D::Error> { T::deserialize(deserializer).map(Some) }
@@ -114,9 +124,12 @@ impl<'de> Deserialize<'de> for FixtureEvent {
         enum Input {
             #[serde(rename = "assets.state")]
             Assets { #[serde(rename = "atMs")] at_ms: u32, value: AssetState },
+            #[serde(rename = "control.message")]
+            Control { #[serde(rename = "atMs")] at_ms: u32, value: ControlMessage },
         }
         Ok(match deserialize_object::<D, Input>(deserializer)? {
             Input::Assets { at_ms, value } => Self { at_ms, update: StateEvent::Assets(value) },
+            Input::Control { at_ms, value } => Self { at_ms, update: StateEvent::Control(value) },
         })
     }
 }
@@ -124,6 +137,7 @@ impl<'de> Deserialize<'de> for FixtureEvent {
 #[serde(tag = "channel", content = "value", deny_unknown_fields)]
 pub(crate) enum StateEvent {
     #[serde(rename = "assets.state")] Assets(AssetState),
+    #[serde(rename = "control.message")] Control(ControlMessage),
 }
 impl<'de> Deserialize<'de> for StateEvent {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
@@ -131,9 +145,11 @@ impl<'de> Deserialize<'de> for StateEvent {
         #[serde(tag = "channel", content = "value", deny_unknown_fields)]
         enum Input {
             #[serde(rename = "assets.state")] Assets(AssetState),
+            #[serde(rename = "control.message")] Control(ControlMessage),
         }
         Ok(match deserialize_object::<D, Input>(deserializer)? {
             Input::Assets(value) => Self::Assets(value),
+            Input::Control(value) => Self::Control(value),
         })
     }
 }
@@ -166,12 +182,14 @@ impl FixtureDefinition {
         if self.events.len() > 4096 { return Err("fixture exceeds 4096 events".into()); }
         if let Some(provider) = &self.services.assets { provider.initial_state.validate()?; }
         if let Some(images) = &self.services.images { images.validate()?; }
+        self.services.validate_external()?;
         for event in &self.events { self.validate_event(&event.update)?; }
         Ok(())
     }
     fn validate_event(&self, event: &StateEvent) -> Result<(), String> {
         match event {
             StateEvent::Assets(state) if self.services.assets.is_some() => state.validate(),
+            StateEvent::Control(message) if self.services.control.is_some() => message.validate(),
             _ => Err("fixture event requires its declared provider".into()),
         }
     }
@@ -180,12 +198,29 @@ impl FixtureDefinition {
 enum Scheduled {
     Event(StateEvent),
     Asset { generation: u64, id: u64, result: Result<String, ServiceError>, injected: bool },
+    External { generation: u64, job: ExternalJob },
 }
+
+#[derive(PartialEq, Eq, PartialOrd, Ord)]
+struct ScheduleKey {
+    deadline_us: u64,
+    order: ScheduleOrder,
+}
+
+// At equal deadlines, absolute events precede call-relative outcomes.
+// Call ID and then script index preserve admission order and script order.
+#[derive(PartialEq, Eq, PartialOrd, Ord)]
+enum ScheduleOrder {
+    Event { index: usize },
+    Call { id: u64, index: usize },
+}
+
 struct Call { generation: u64, service: &'static str, method: &'static str, error: Option<&'static str>, error_delivered: bool, acknowledged: bool }
 struct State {
-    scheduled: BTreeMap<(u64, u8, u64), Scheduled>,
+    scheduled: BTreeMap<ScheduleKey, Scheduled>,
     deliveries: VecDeque<Completion>,
     assets: Option<AssetState>,
+    external: ExternalState,
     calls: BTreeMap<u64, Call>,
     next_registration_id: u64,
     sequence: u64,
@@ -202,9 +237,16 @@ fn failure(code: &'static str, message: impl Into<String>) -> ContractFailure { 
 impl FixtureRuntime {
     pub(crate) fn new(definition: FixtureDefinition, environment: Rc<Environment>) -> Rc<Self> {
         let invalid = definition.validate().err().map(|message| failure("E_FIXTURE_CONTRACT", message));
-        let scheduled = definition.events.iter().enumerate().map(|(i, event)| ((u64::from(event.at_ms) * 1000, 0, i as u64), Scheduled::Event(event.update.clone()))).collect();
+        let scheduled = definition.events.iter().enumerate().map(|(index, event)| {
+            let key = ScheduleKey {
+                deadline_us: u64::from(event.at_ms) * 1000,
+                order: ScheduleOrder::Event { index },
+            };
+            (key, Scheduled::Event(event.update.clone()))
+        }).collect();
         Rc::new(Self { state: RefCell::new(State {
             scheduled, deliveries: VecDeque::new(), assets: definition.services.assets.as_ref().map(|p| p.initial_state.clone()),
+            external: ExternalState::default(),
             calls: BTreeMap::new(), next_registration_id: 1, sequence: 0, trace: vec![], trace_bytes: 0, dropped: 0, failure: invalid, disposed: false,
         }), definition, environment })
     }
@@ -222,8 +264,11 @@ impl FixtureRuntime {
     }
     fn fail(&self, error: ContractFailure) -> ContractFailure {
         let mut state = self.state.borrow_mut();
+        self.record_failure(&mut state, error)
+    }
+    fn record_failure(&self, state: &mut State, error: ContractFailure) -> ContractFailure {
         state.failure.get_or_insert_with(|| error.clone());
-        self.record(&mut state, "contractFailure", json!({"code":error.code,"message":error.message}));
+        self.record(state, "contractFailure", json!({"code":error.code,"message":error.message}));
         error
     }
     pub(crate) fn contract_failure(&self) -> Option<ContractFailure> { self.state.borrow().failure.clone() }
@@ -250,20 +295,32 @@ impl FixtureRuntime {
     }
     pub(super) fn registration_id(&self) -> Option<u64> {
         let mut state = self.state.borrow_mut();
+        Self::allocate_id(&mut state)
+    }
+    fn allocate_id(state: &mut State) -> Option<u64> {
         let id = state.next_registration_id;
         if state.disposed || id>super::MAX_SAFE_ID { return None; }
         state.next_registration_id += 1;
         Some(id)
     }
     fn admission(&self, service: &'static str, method: &'static str, request_id: u64, generation: u64) -> Result<(), ContractFailure> {
-        if let Some(error) = self.contract_failure() { return Err(error); }
         let mut state = self.state.borrow_mut();
-        if state.disposed { drop(state); return Err(self.malformed("fixture runtime is disposed")); }
+        self.admit(&mut state, service, method, request_id, generation)
+    }
+    fn admit(&self, state: &mut State, service: &'static str, method: &'static str, request_id: u64, generation: u64) -> Result<(), ContractFailure> {
+        if let Some(error) = &state.failure { return Err(error.clone()); }
+        if state.disposed {
+            return Err(self.record_failure(state, failure("E_FIXTURE_CONTRACT", "fixture runtime is disposed")));
+        }
         // Calls remain bounded independently of the lossy trace: exact assertions cannot rely on trace retention.
-        if state.calls.len() >= 16384 { drop(state); return Err(self.malformed("fixture call limit reached")); }
-        if state.calls.contains_key(&request_id) { drop(state); return Err(self.malformed("duplicate fixture request ID")); }
+        if state.calls.len() >= 16384 {
+            return Err(self.record_failure(state, failure("E_FIXTURE_CONTRACT", "fixture call limit reached")));
+        }
+        if state.calls.contains_key(&request_id) {
+            return Err(self.record_failure(state, failure("E_FIXTURE_CONTRACT", "duplicate fixture request ID")));
+        }
         state.calls.insert(request_id, Call { generation, service, method, error: None, error_delivered: false, acknowledged: false });
-        self.record(&mut state, "request", json!({"requestId":request_id,"service":service,"method":method}));
+        self.record(state, "request", json!({"requestId":request_id,"service":service,"method":method}));
         Ok(())
     }
     pub(super) fn read_asset(&self, generation: u64, request_id: u64, path: &str, package: Option<&Package>) -> Result<(), ContractFailure> {
@@ -277,41 +334,53 @@ impl FixtureRuntime {
             else if bytes.len() > super::MAX_ASSET_BYTES { Err(ServiceError { code: "TooLarge", message: "text asset exceeds 1 MiB".into() }) }
             else { std::str::from_utf8(bytes).map(str::to_owned).map_err(|_| ServiceError { code: "InvalidUtf8", message: "text asset is not UTF-8".into() }) };
         let deadline = self.environment.now_us().checked_add(u64::from(provider.latency_ms) * 1000).ok_or_else(|| self.malformed("fixture deadline overflow"))?;
-        self.state.borrow_mut().scheduled.insert((deadline, 1, request_id), Scheduled::Asset { generation, id: request_id, result, injected });
+        let key = ScheduleKey {
+            deadline_us: deadline,
+            order: ScheduleOrder::Call { id: request_id, index: 0 },
+        };
+        self.state.borrow_mut().scheduled.insert(key, Scheduled::Asset { generation, id: request_id, result, injected });
         let mut state = self.state.borrow_mut();
         self.record(&mut state, "arguments", json!({"requestId":request_id,"path":path}));
         Ok(())
     }
-    pub(crate) fn next_deadline_us(&self) -> Option<u64> { self.state.borrow().scheduled.first_key_value().map(|(key, _)| key.0) }
+    pub(crate) fn next_deadline_us(&self) -> Option<u64> { self.state.borrow().scheduled.first_key_value().map(|(key, _)| key.deadline_us) }
     pub(crate) fn release_due(&self) -> Result<bool, ContractFailure> {
         if let Some(error) = self.contract_failure() { return Err(error); }
         let now = self.environment.now_us();
         let mut state = self.state.borrow_mut();
         let mut worked = false;
-        while state.scheduled.first_key_value().is_some_and(|(key, _)| key.0 <= now) {
-            let (_, scheduled) = state.scheduled.pop_first().expect("due work");
-            if state.deliveries.len() >= 1024 {
-                let error = failure("E_FIXTURE_CONTRACT", "fixture delivery queue exceeds 1024 entries");
-                state.failure.get_or_insert_with(|| error.clone());
-                return Err(error);
-            }
+        while state.scheduled.first_key_value().is_some_and(|(key, _)| key.deadline_us <= now) {
+            let Some((_, scheduled)) = state.scheduled.pop_first() else { break };
             worked = true;
             match scheduled {
-                Scheduled::Event(event) => self.apply(&mut state, event),
+                Scheduled::Event(event) => self.apply(&mut state, event)?,
                 Scheduled::Asset { generation, id, result, injected } => {
+                    self.check_delivery_limit(&mut state)?;
                     if injected && let Some(call) = state.calls.get_mut(&id) { call.error = result.as_ref().err().map(|e| e.code); }
                     self.record(&mut state, "response", json!({"requestId":id,"errorCode":result.as_ref().err().map(|e| e.code)}));
                     state.deliveries.push_back(Completion { generation, request_id: id, result });
                 }
+                Scheduled::External { generation, job } => self.enqueue_external(&mut state, generation, job)?,
             }
         }
         if let Some(error) = &state.failure { return Err(error.clone()); }
         Ok(worked)
     }
-    fn apply(&self, state: &mut State, event: StateEvent) {
-        self.record(state, "state", serde_json::to_value(&event).expect("typed state"));
-        let StateEvent::Assets(assets) = event;
-        state.assets = Some(assets);
+    fn check_delivery_limit(&self, state: &mut State) -> Result<(), ContractFailure> {
+        if state.deliveries.len() + state.external.delivery_count() >= 1024 {
+            return Err(self.record_failure(state, failure("E_FIXTURE_CONTRACT", "fixture delivery queue exceeds 1024 entries")));
+        }
+        Ok(())
+    }
+    fn apply(&self, state: &mut State, event: StateEvent) -> Result<(), ContractFailure> {
+        match event {
+            StateEvent::Assets(assets) => {
+                self.record(state, "state", json!({"channel":"assets.state","value":&assets}));
+                state.assets = Some(assets);
+                Ok(())
+            }
+            StateEvent::Control(message) => self.dispatch_control(state, message),
+        }
     }
     pub(crate) fn emit(&self, channel: &str, value: &Value) -> Result<(), ContractFailure> {
         if let Some(error) = self.contract_failure() { return Err(error); }
@@ -319,9 +388,7 @@ impl FixtureRuntime {
         self.definition.validate_event(&event).map_err(|e| self.malformed(e))?;
         let mut state = self.state.borrow_mut();
         if state.disposed { drop(state); return Err(self.malformed("fixture runtime is disposed")); }
-        self.apply(&mut state, event);
-        if let Some(error) = &state.failure { return Err(error.clone()); }
-        Ok(())
+        self.apply(&mut state, event)
     }
     pub(super) fn take(&self) -> Option<Completion> { self.state.borrow_mut().deliveries.pop_front() }
     pub(super) fn has_delivery(&self) -> bool { !self.state.borrow().deliveries.is_empty() }
@@ -342,18 +409,19 @@ impl FixtureRuntime {
     /// Retire only one session's registrations; scenario events and the exact call ledger survive.
     pub(super) fn cancel_generation(&self, generation: u64) {
         let ids: Vec<_> = self.state.borrow().calls.iter()
-            .filter_map(|(&id, call)|(call.generation==generation).then_some(id)).collect();
+            .filter_map(|(&id, call)|(call.generation==generation && call.service=="assets").then_some(id)).collect();
         for id in ids { self.cancel(id); }
     }
     pub(crate) fn dispose(&self) {
         let mut state = self.state.borrow_mut();
         if state.disposed { return; }
         let scheduled = state.scheduled.len();
-        let deliveries = state.deliveries.len();
+        let deliveries = state.deliveries.len() + state.external.delivery_count();
         for call in state.calls.values_mut() {
             if !call.error_delivered { call.error = None; }
         }
         state.disposed = true; state.scheduled.clear(); state.deliveries.clear();
+        state.external.dispose();
         self.record(&mut state, "disposal", json!({"cancelledScheduled":scheduled,"cancelledDeliveries":deliveries}));
     }
     pub(crate) fn trace(&self) -> Value {
@@ -362,24 +430,38 @@ impl FixtureRuntime {
     }
     pub(crate) fn assert_calls(&self, service: &str, method: &str, count: u64, error_code: Option<&str>) -> Result<(), ContractFailure> {
         if let Some(error) = self.contract_failure() { return Err(error); }
-        if (service, method) != ("assets", "readTextAsset") {
+        if !matches!((service, method),
+            ("assets", "readTextAsset") | ("sockets", "connectUnixSocket" | "send")
+            | ("commands", "spawnCommand") | ("control", "onControlMessage" | "reply"))
+        {
             return Err(failure("E_ASSERTION", format!("unknown fixture method {service}.{method}")));
         }
         let mut state = self.state.borrow_mut();
-        let matches: Vec<_> = state.calls.iter().filter(|(_, call)| call.service == service && call.method == method).map(|(&id, _)| id).collect();
-        if matches.len() as u64 != count || error_code.is_some_and(|code| !matches.iter().any(|id| state.calls[id].error == Some(code))) {
-            return Err(failure("E_ASSERTION", format!("expected {count} {service}.{method} calls with error {error_code:?}; observed {}", matches.len())));
+        let matches = || state.calls.values().filter(|call| call.service == service && call.method == method);
+        let observed = matches().count();
+        if u64::try_from(observed).ok() != Some(count)
+            || error_code.is_some_and(|code| !matches().any(|call| call.error == Some(code)))
+        {
+            return Err(failure("E_ASSERTION", format!("expected {count} {service}.{method} calls with error {error_code:?}; observed {observed}")));
         }
-        if let Some(code) = error_code { for id in matches { let call = state.calls.get_mut(&id).unwrap(); if call.error == Some(code) { call.acknowledged = true; } } }
+        if let Some(code) = error_code {
+            for call in state.calls.values_mut().filter(|call| call.service == service && call.method == method && call.error == Some(code)) {
+                call.acknowledged = true;
+            }
+        }
         Ok(())
     }
     pub(crate) fn finalize(&self) -> Result<(), ContractFailure> {
         let state = self.state.borrow();
         if let Some(error) = &state.failure { return Err(error.clone()); }
-        if let Some(call) = state.calls.values().find(|call| call.error.is_some() && !call.acknowledged) {
-            return Err(failure("E_FIXTURE_UNEXPECTED_ERROR", format!("unacknowledged injected {}.{} error {}", call.service, call.method, call.error.unwrap())));
+        if let Some((call, code)) = state.calls.values().find_map(|call| {
+            call.error.filter(|_| !call.acknowledged).map(|code| (call, code))
+        }) {
+            return Err(failure("E_FIXTURE_UNEXPECTED_ERROR", format!("unacknowledged injected {}.{} error {code}", call.service, call.method)));
         }
-        Ok(())
+        let external = self.finalize_external(&state);
+        drop(state);
+        external.map_err(|error| self.fail(error))
     }
 }
 

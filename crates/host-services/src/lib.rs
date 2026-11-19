@@ -1,4 +1,7 @@
-//! Bounded background text-asset reads using only owned, thread-safe data.
+//! Bounded background text assets, Unix sockets, allowlisted commands, and inbound control channels.
+//!
+//! Socket, command, and control workers exchange owned data with the caller.
+//! Dropping an endpoint signals cancellation without joining its worker.
 //!
 //! Submission never waits for a worker or completion consumer. Dropping the last
 //! executor handle closes admission; detached workers drain admitted requests and
@@ -10,6 +13,19 @@
 //! checked for symlinks, but portable `std` filesystem APIs cannot make those
 //! checks atomic with opening a file: package directories must not be modified
 //! concurrently by an untrusted writer.
+
+pub mod command;
+pub mod control;
+pub mod unix_socket;
+mod worker;
+
+const _: () = {
+    const fn assert_send<T: Send>() {}
+    assert_send::<command::Process>();
+    assert_send::<control::Inbound>();
+    assert_send::<control::Listener>();
+    assert_send::<unix_socket::Socket>();
+};
 
 use std::{
     error::Error,

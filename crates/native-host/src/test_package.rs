@@ -38,6 +38,17 @@ impl Fixture {
         Self(directory)
     }
     pub(crate) fn package(&self) -> Rc<Package> { Rc::new(Package::load(&self.0).unwrap()) }
+    /// Seal capability declarations into the test package identity.
+    pub(crate) fn with_capabilities(self, capabilities: crate::package::Capabilities) -> Self {
+        let path = self.0.join("manifest.json");
+        let mut manifest: serde_json::Value = serde_json::from_slice(&fs::read(&path).expect("read test manifest"))
+            .expect("decode test manifest");
+        manifest["capabilities"] = serde_json::to_value(capabilities).expect("encode test capabilities");
+        manifest.as_object_mut().expect("test manifest object").remove("buildId");
+        manifest["buildId"] = serde_json::json!(format!("sha256:{:x}", Sha256::digest(serde_json::to_vec(&manifest).expect("encode manifest identity"))));
+        fs::write(path, serde_json::to_vec(&manifest).expect("encode sealed manifest")).expect("write sealed test manifest");
+        self
+    }
     pub(crate) fn with_font(self, family: &str, bytes: &[u8]) -> Self {
         fs::write(self.0.join("font.ttf"), bytes).unwrap();
         let mut manifest: serde_json::Value = serde_json::from_slice(&fs::read(self.0.join("manifest.json")).unwrap()).unwrap();

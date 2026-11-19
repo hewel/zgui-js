@@ -272,6 +272,226 @@ fn releasing_a_mounted_image_handle_wakes_its_surface_once() {
 }
 
 #[test]
+fn external_services_deny_zero_capability_packages_before_opening_any_endpoint() {
+    let fixture = Fixture::new(r#"
+        export const hostApiVersion = 1;
+        export function mount() {
+            const services = __zguiServices;
+            for (const call of [
+                () => services.connectUnixSocket('/tmp/no-such-zgui-service.sock', {framing: 'line', onMessage() {}}),
+                () => services.spawnCommand('/bin/true', []),
+                () => services.onControlMessage(() => 'not authorized')
+            ]) {
+                try { call(); }
+                catch (error) {
+                    if (error.code === 'PermissionDenied') continue;
+                    throw error;
+                }
+                throw Error('external service accepted a package without its capability');
+            }
+            return () => {};
+        }
+    "#, "");
+    let native = Native::new();
+    let session = native.prepare(fixture.package(), 1).expect("load zero-capability package");
+    session.mount().expect("all three service calls must deny undeclared authority");
+    assert_eq!(session.retire().counts, ResourceCounts::default(), "denials must not acquire resources");
+}
+
+#[test]
+fn command_argv_is_bounded_snapshotted_and_passed_literally() {
+    let fixture = Fixture::new(r#"
+        export const hostApiVersion = 1;
+        export function mount(root) {
+            const spawn = __zguiServices.spawnCommand;
+            const expectError = (f, code) => {
+                try { f(); } catch (error) { if (error.code === code) return; throw error; }
+                throw Error(`expected ${code}`);
+            };
+            expectError(() => spawn('/usr/bin/printf', []), 'PermissionDenied');
+            const tooLong = Array(65);
+            Object.defineProperty(tooLong, 0, {get() { throw Error('read beyond admission'); }});
+            expectError(() => spawn('printf', tooLong), 'TooLarge');
+            expectError(() => spawn('printf', ['\ud800']), 'InvalidUtf8');
+            const args = ['%s'];
+            Object.defineProperty(args, 1, {get() {
+                args.length = 65;
+                return '$(printf wrong);*';
+            }});
+            const label = __zgui.createTextNode('pending');
+            __zgui.insertNode(root, label, null);
+            const request = spawn('printf', args);
+            request.promise.then(({status, stdout, stderr}) =>
+                __zgui.replaceText(label, `${status}:${stdout}:${stderr}`));
+            return () => { request.cancel(); __zgui.clearRoot(root); };
+        }
+    "#, "").with_capabilities(crate::package::Capabilities { commands: vec!["printf".into()], ..Default::default() });
+    let native = Native::new();
+    let session = native.prepare(fixture.package(), 1).expect("load command package");
+    session.mount().expect("mount command consumer");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while native.text() == "pending" {
+        native.wakes.recv_timeout(deadline.saturating_duration_since(Instant::now())).expect("command must complete and wake the owner");
+        session.checkpoint().expect("run command delivery turn");
+    }
+    assert_eq!(native.text(), "0:$(printf wrong);*:", "output must contain the literal argument, not shell output");
+    assert_eq!(session.retire().counts, ResourceCounts::default(), "settled command must release its resources");
+}
+
+fn accept_service_peer(listener: &std::os::unix::net::UnixListener) -> std::os::unix::net::UnixStream {
+    listener.set_nonblocking(true).expect("bound the accept wait");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        match listener.accept() {
+            Ok((peer, _)) => return peer,
+            Err(error)
+                if error.kind() == std::io::ErrorKind::WouldBlock && Instant::now() < deadline =>
+            {
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            Err(error) => panic!("socket worker did not connect: {error}"),
+        }
+    }
+}
+
+#[test]
+fn live_length_framing_routes_svg_as_an_image_and_rejects_invalid_text() {
+    use std::{io::Write, os::unix::net::UnixListener};
+    let fixture = Fixture::new(r#"
+        export const hostApiVersion = 1;
+        export function mount(root) {
+            const label = __zgui.createTextNode('pending');
+            __zgui.insertNode(root, label, null);
+            const seen = [];
+            let image;
+            const socket = __zguiServices.connectUnixSocket(socketPath, {
+                framing: 'length',
+                onMessage(text) { seen.push(`message:${text}`); },
+                onBinaryImage(handle) { image = handle; seen.push(handle.src); },
+                onClose(error) {
+                    __zgui.replaceText(label, [error?.code, ...seen].join('|'));
+                }
+            });
+            return () => { socket.close(); image?.release(); __zgui.clearRoot(root); };
+        }
+    "#, "");
+    let path = fixture.package().directory.join("service.sock");
+    let socket_path = path.to_str().expect("UTF-8 test socket path");
+    let fixture = fixture.with_capabilities(crate::package::Capabilities {
+        unix_sockets: vec![socket_path.into()],
+        ..Default::default()
+    });
+    let native = Native::new();
+    let session = native.prepare(fixture.package(), 1).expect("prepare socket app");
+    let listener = UnixListener::bind(&path).expect("bind private test socket");
+    session.engine.borrow_mut().as_mut().expect("prepared engine").with_context(|ctx| {
+        ctx.globals().set("socketPath", socket_path)
+    }).expect("supply private socket path");
+    session.mount().expect("mount socket app");
+    let mut peer = accept_service_peer(&listener);
+    peer.set_write_timeout(Some(Duration::from_secs(5))).expect("bound peer write");
+    peer.write_all(b"\x00\x00\x00\x07\x01<svg/>\x00\x00\x00\x02\x00\xff")
+        .expect("send one tagged SVG image and a malformed text frame");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while native.text() == "pending" {
+        native.wakes.recv_timeout(deadline.saturating_duration_since(Instant::now()))
+            .expect("worker must wake for socket deliveries");
+        session.checkpoint().expect("dispatch socket deliveries to JS");
+    }
+    let text = native.text();
+    let Some((error, src)) = text.split_once('|') else {
+        panic!("expected protocol error plus one image handle, got {text:?}");
+    };
+    assert_eq!(error, "InvalidUtf8", "malformed text closes the connection");
+    assert!(src.starts_with("zgui-blob://") && !src.contains('|'), "expected one image callback and no text callbacks, got {text:?}");
+    assert_eq!(session.counts().image_handles, 1, "invalid text must not allocate an image handle");
+    assert_eq!(session.retire().counts, ResourceCounts::default(), "disposal releases the image");
+}
+
+#[test]
+fn session_samples_external_leaks_then_closes_their_endpoints() {
+    use std::{io::Read, os::unix::net::UnixListener};
+    let fixture = Fixture::new(r#"
+        export const hostApiVersion = 1;
+        export function mount() {
+            __zguiServices.connectUnixSocket(socketPath, { framing: 'line', onMessage() {} }).send('ready');
+            __zguiServices.spawnCommand('sleep', ['60'], {stream: true});
+            const first = __zguiServices.onControlMessage(() => 'first');
+            first();
+            __zguiServices.onControlMessage(() => 'leaked');
+            return () => {};
+        }
+    "#, "");
+    let path = fixture.package().directory.join("service.sock");
+    let fixture = fixture.with_capabilities(crate::package::Capabilities {
+        unix_sockets: vec![path.to_str().expect("UTF-8 test socket path").into()],
+        commands: vec!["sleep".into()],
+        control_channel: true,
+        ..Default::default()
+    });
+    let native = Native::new();
+    let session = native.prepare(fixture.package(), 1).expect("load package with three external capabilities");
+    let listener = UnixListener::bind(&path).expect("bind private test socket");
+    session.engine.borrow_mut().as_mut().expect("prepared engine").with_context(|ctx| {
+        ctx.globals().set("socketPath", path.to_str().expect("UTF-8 socket path"))
+    }).expect("supply private socket path");
+    session.mount().expect("mount external services");
+    let mut peer = accept_service_peer(&listener);
+    peer.set_read_timeout(Some(Duration::from_secs(5))).expect("bound peer read");
+    let mut message = [0; 6];
+    peer.read_exact(&mut message).expect("drain socket send before retirement");
+    assert_eq!(&message, b"ready\n", "live socket must apply line framing");
+    let report = session.retire();
+    assert_eq!(report.counts, ResourceCounts {
+        unix_sockets: 1, child_processes: 1, control_listeners: 1, ..Default::default()
+    }, "the report must retain all three leaked registrations");
+    assert_eq!(peer.read(&mut message).expect("observe socket cleanup"), 0, "forced cleanup must close the peer");
+    assert_eq!(session.counts(), ResourceCounts::default(), "forced cleanup must release retained resources");
+}
+
+#[test]
+fn live_control_request_updates_the_tree_and_replies_from_a_bridge_turn() {
+    use std::os::unix::net::UnixListener;
+    let fixture = Fixture::new(r#"
+        export const hostApiVersion = 1;
+        export function mount(root) {
+            const label = __zgui.createTextNode('waiting');
+            __zgui.insertNode(root, label, null);
+            const unsubscribe = __zguiServices.onControlMessage(args => {
+                __zgui.replaceText(label, `${args[0]}:${args[1]}`);
+                return { received: args };
+            });
+            return () => { unsubscribe(); __zgui.clearRoot(root); };
+        }
+    "#, "").with_capabilities(crate::package::Capabilities { control_channel: true, ..Default::default() });
+    let package = fixture.package();
+    let path = package.directory.join("control.sock");
+    let native = Native::new();
+    let session = native.prepare(package, 1).expect("load control-capable package");
+    session.mount().expect("register control handler");
+    let (wake, queued) = mpsc::channel();
+    let listener = host_services::control::Listener::start(
+        UnixListener::bind(&path).expect("bind test control socket"),
+        |frame| serde_json::from_str(frame).map_err(|error| error.to_string()),
+        |response| Ok(response.unwrap_or_else(|error| error).as_bytes().to_vec()),
+        move || { let _ = wake.send(()); },
+    ).expect("start test control transport");
+    let peer = std::thread::spawn(move || {
+        let client = host_services::control::connect(&path).expect("connect to test control socket");
+        host_services::control::exchange(client, br#"["hello world","--flag"]"#)
+            .expect("exchange control request and structured reply")
+    });
+    queued.recv_timeout(Duration::from_secs(5)).expect("control transport must notify the owner");
+    session.offer_control(listener.try_recv().expect("published inbound request"));
+    assert_eq!(native.text(), "waiting", "inbound admission must not execute the handler");
+    session.checkpoint().expect("deliver control request in a bounded Bridge turn");
+    assert_eq!(native.text(), "hello world:--flag", "the handler must receive argv separately and update the tree");
+    let reply = peer.join().expect("join socket peer");
+    assert_eq!(reply, br#"{"received":["hello world","--flag"]}"#, "the transport must return the handler's serialized reply");
+    assert_eq!(session.retire().counts, ResourceCounts::default(), "unsubscribe must release the listener registration");
+}
+
+#[test]
 fn faulted_native_tree_still_runs_js_cleanup_once() {
     let fixture = Fixture::new(r#"
         export const hostApiVersion = 1;

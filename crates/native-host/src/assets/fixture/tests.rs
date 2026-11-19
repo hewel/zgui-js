@@ -224,9 +224,186 @@ fn fixture_validation_rejects_unknown_providers_fields_and_invalid_event_shapes(
         { let mut v = valid.clone(); v["services"]["audio"] = json!({}); v },
     ] { assert!(serde_json::from_value::<FixtureDefinition>(changed).is_err()); }
     let mut invalid_path = fixture;
-    let StateEvent::Assets(state) = &mut invalid_path.events[0].update;
+    let StateEvent::Assets(state) = &mut invalid_path.events[0].update else {
+        panic!("expected an assets.state event in the validated fixture");
+    };
     state.assets.insert("../test.txt".into(), AssetBehavior { error: None });
     assert!(invalid_path.validate().is_err());
+}
+
+#[test]
+fn retiring_one_generation_cancels_only_its_socket_and_control_deliveries() {
+    use host_services::unix_socket::{Event, Framing};
+
+    let harness = Harness::new(definition(json!({
+        "sockets": [
+            {"path":"/fixture/socket", "framing":"line", "send":[], "events":[
+                {"atMs":0,"kind":"message","text":"stale ready message"},
+                {"atMs":10,"kind":"message","text":"stale future message"}
+            ]},
+            {"path":"/fixture/socket", "framing":"line", "send":[], "events":[
+                {"atMs":10,"kind":"message","text":"candidate"}
+            ]}
+        ],
+        "control": {}
+    }), json!([])));
+    let runtime = &harness.runtime;
+    let first = runtime.registration_id().expect("allocate predecessor socket ID");
+    let second = runtime.registration_id().expect("allocate candidate socket ID");
+    let first_listener = runtime.registration_id().expect("allocate predecessor listener ID");
+    let second_listener = runtime.registration_id().expect("allocate candidate listener ID");
+    runtime.open_socket(1, first, "/fixture/socket", Framing::Line, None).expect("admit predecessor socket");
+    runtime.open_socket(2, second, "/fixture/socket", Framing::Line, None).expect("admit candidate socket");
+    runtime.register_control(1, first_listener).expect("register active listener");
+    runtime.register_control(2, second_listener).expect("stage candidate listener");
+    let inbound = json!({"args":["get state"],"reply":{"text":"state"}});
+    runtime.emit("control.message", &inbound).expect("emit to active listener");
+    let Some(ExternalDelivery::Control { listener, request, args }) = runtime.take_external(1) else {
+        panic!("predecessor should receive control while candidate is staged");
+    };
+    assert_eq!(listener, first_listener, "only the oldest registered generation receives control");
+    assert_eq!(args, ["get state"], "fixtures preserve exact argument boundaries");
+    runtime.external_reply(request, Ok("state".into())).expect("match predecessor reply");
+    runtime.release_due().expect("release current clock work");
+    runtime.emit("control.message", &inbound).expect("queue control to predecessor before retirement");
+    assert!(runtime.has_external(1), "predecessor has work selected for delivery");
+    assert!(!runtime.has_external(2), "candidate cannot receive predecessor work");
+    runtime.retire_external_generation(1);
+    runtime.emit("control.message", &inbound).expect("emit to newly active candidate");
+    let Some(ExternalDelivery::Control { listener, request, .. }) = runtime.take_external(2) else {
+        panic!("candidate should receive control after predecessor retires");
+    };
+    assert_eq!(listener, second_listener, "promote the candidate without re-registering it");
+    runtime.external_cancel(second_listener);
+    runtime.external_reply(request, Ok("state".into())).expect("active callback can unsubscribe before replying");
+    harness.clock.advance(Duration::from_millis(10));
+    runtime.release_due().expect("release later work");
+    assert!(runtime.take_external(1).is_none(), "neither ready nor future predecessor work survives retirement");
+    assert!(matches!(runtime.take_external(2), Some(ExternalDelivery::Socket(id, Event::Message(message))) if id == second && message == "candidate"),
+        "candidate receives only its scripted messages");
+    runtime.assert_calls("control", "reply", 2, None).expect("assert whole-run reply history");
+    runtime.finalize().expect("no unchecked replies or unmatched scripts");
+}
+
+#[test]
+fn unmatched_commands_control_replies_and_missing_handlers_fail_the_fixture() {
+    use host_services::command::Mode;
+
+    let harness = Harness::new(definition(json!({
+        "commands":[{"program":"fixture-command","args":["x","y"],"mode":"buffered","events":[]}]
+    }), json!([])));
+    let runtime = &harness.runtime;
+    let id = runtime.registration_id().expect("allocate command ID");
+    let error = runtime.spawn_command(1, id, "fixture-command", &["y".into(), "x".into()], Mode::Buffered)
+        .expect_err("argument order is part of an exact command script");
+    assert_eq!(runtime.contract_failure(), Some(error), "a rejected fixture call is sticky");
+
+    for handler in [false, true] {
+        let harness = Harness::new(definition(json!({"control": {}}), json!([])));
+        let runtime = &harness.runtime;
+        let inbound = json!({"args":[],"reply":{"error":"expected error"}});
+        let error = if handler {
+            let listener = runtime.registration_id().expect("allocate control ID");
+            runtime.register_control(1, listener).expect("register handler before emission");
+            runtime.emit("control.message", &inbound).expect("queue an inbound message");
+            let Some(ExternalDelivery::Control { request, .. }) = runtime.take_external(1) else {
+                panic!("emitted control fixture should reach its registered handler");
+            };
+            runtime.external_reply(request, Ok("expected error".into())).expect_err("text and error replies are not interchangeable")
+        } else {
+            runtime.emit("control.message", &inbound).expect_err("emission requires an active listener")
+        };
+        assert_eq!(runtime.contract_failure(), Some(error), "control failures remain sticky (handler={handler})");
+    }
+}
+
+#[test]
+fn streaming_command_fixture_events_must_be_single_lines_within_the_live_byte_limit() {
+    let max_line = "é".repeat(32 * 1024);
+    let oversized_line = format!("{max_line}x");
+    for kind in ["stdout", "stderr"] {
+        for (text, expected_error) in [
+            (max_line.as_str(), None),
+            ("one\ntwo", Some("LF")),
+            (oversized_line.as_str(), Some("byte limit")),
+        ] {
+            let fixture: FixtureDefinition = serde_json::from_value(json!({
+                "schemaVersion":1, "id":"stream-line", "events":[],
+                "services":{"commands":[{"program":"fixture-command", "args":[],
+                    "mode":"streaming", "events":[{"atMs":0, "kind":kind, "text":text}]
+                }]}
+            })).expect("decode streaming command fixture");
+            match expected_error {
+                None => fixture.validate().expect("a line of exactly 64 KiB is valid"),
+                Some(message) => assert!(
+                    fixture.validate().expect_err("invalid streaming line").contains(message),
+                    "incorrect validation error for {kind}"
+                ),
+            }
+        }
+    }
+}
+
+#[test]
+fn unsubscribing_rejects_queued_control_requests_but_preserves_the_active_reply() {
+    let harness = Harness::new(definition(json!({"control":{}}), json!([])));
+    let runtime = &harness.runtime;
+    let listener = runtime.registration_id().expect("allocate listener ID");
+    runtime.register_control(1, listener).expect("register control handler");
+    runtime.emit("control.message", &json!({"args":["active"], "reply":{"text":"done"}}))
+        .expect("enqueue active control request");
+    let Some(ExternalDelivery::Control { request, .. }) = runtime.take_external(1) else {
+        panic!("active control request was not delivered");
+    };
+    for arg in ["queued-one", "queued-two"] {
+        runtime.emit("control.message", &json!({
+            "args":[arg], "reply":{"error":"control handler unsubscribed"}
+        })).expect("enqueue control request for the same handler");
+    }
+
+    runtime.external_cancel(listener);
+    assert!(runtime.take_external(1).is_none(), "queued work must not run after unsubscribe");
+    runtime.external_reply(request, Ok("done".into())).expect("reply from the active handler");
+    runtime.assert_calls("control", "reply", 3, None).expect("count automatic and active replies");
+    runtime.finalize().expect("every request received its expected reply");
+}
+
+#[test]
+fn unsubscribe_rejection_must_match_the_queued_expected_reply() {
+    let harness = Harness::new(definition(json!({"control":{}}), json!([])));
+    let runtime = &harness.runtime;
+    let listener = runtime.registration_id().expect("allocate listener ID");
+    runtime.register_control(1, listener).expect("register control handler");
+    runtime.emit("control.message", &json!({
+        "args":[], "reply":{"text":"control handler unsubscribed"}
+    })).expect("enqueue a request expecting a successful reply");
+
+    runtime.external_cancel(listener);
+    let error = runtime.finalize().expect_err("unsubscribe returns an error, not text");
+    assert!(error.message.contains("received Err(\"control handler unsubscribed\")"), "{error:?}");
+}
+
+#[test]
+fn explicit_and_scripted_close_reject_missing_socket_sends() {
+    use host_services::unix_socket::Framing;
+
+    for explicit in [false, true] {
+        let harness = Harness::new(definition(json!({
+            "sockets":[{"path":"/fixture/socket","framing":"line","send":["required"],"events":[{"atMs":0,"kind":"close"}]}]
+        }), json!([])));
+        let runtime = &harness.runtime;
+        let id = runtime.registration_id().expect("allocate socket ID");
+        runtime.open_socket(1, id, "/fixture/socket", Framing::Line, None).expect("admit socket script");
+        if explicit {
+            runtime.external_cancel(id);
+        } else {
+            runtime.release_due().expect("release close at current clock");
+            assert!(runtime.take_external(1).is_none(), "an unmatched close must not be delivered");
+        }
+        let error = runtime.contract_failure().expect("missing expected send is sticky");
+        assert_eq!(error.code, "E_FIXTURE_CONTRACT", "close checks outgoing messages (explicit={explicit})");
+        assert!(error.message.contains("missing 1 expected sends"), "missing send count is diagnosable: {error}");
+    }
 }
 
 #[test]

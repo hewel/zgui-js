@@ -1,5 +1,11 @@
-import { loadTextAsset, readTextAsset } from "@hewel/zgui-services";
-import type { HostRequest, HostServiceError } from "@hewel/zgui-services";
+import {
+  connectUnixSocket,
+  loadTextAsset,
+  onControlMessage,
+  readTextAsset,
+  spawnCommand,
+} from "@hewel/zgui-services";
+import type { CommandResult, HostRequest, HostServiceError, ImageHandle } from "@hewel/zgui-services";
 
 const request: HostRequest<string> = readTextAsset("assets/message.txt");
 const loadedText: Promise<string> = loadTextAsset("assets/message.txt");
@@ -40,5 +46,72 @@ let element: HTMLElement;
 process.cwd();
 // @ts-expect-error The private host binding is not a public ambient global.
 globalThis.__zguiServices.readTextAsset("assets/message.txt");
+
+const socket = connectUnixSocket("/run/example.sock", {
+  framing: "length",
+  onMessage(message) {
+    const text: string = message;
+    void text;
+  },
+  onBinaryImage(handle) {
+    const image: ImageHandle = handle;
+    image.release();
+  },
+  onClose(error) {
+    const failure: HostServiceError | null = error;
+    void failure;
+  },
+});
+socket.send("refresh");
+socket.close();
+// @ts-expect-error The socket sends text, not binary payloads.
+socket.send(new Uint8Array());
+// @ts-expect-error The wire framing must be explicitly supported.
+connectUnixSocket("/run/example.sock", { framing: "json", onMessage() {} });
+
+const args = ["argument with spaces"] as const;
+const command: HostRequest<CommandResult> = spawnCommand("/usr/bin/echo", args);
+const buffered: Promise<CommandResult> = spawnCommand("/usr/bin/echo", args, { stream: false }).promise;
+const output: Promise<{ status: number | null; stdout: string; stderr: string }> = command.promise;
+const running = spawnCommand("/usr/bin/echo", args, {
+  stream: true,
+  onStdout(line) {
+    const text: string = line;
+    void text;
+  },
+  onStderr(line) {
+    const text: string = line;
+    void text;
+  },
+  onExit(status) {
+    const code: number | null = status;
+    void code;
+  },
+  onError(error) {
+    const failure: HostServiceError = error;
+    void failure;
+  },
+});
+running.cancel();
+running.kill();
+// @ts-expect-error Streaming commands do not expose a promise.
+void running.promise;
+// @ts-expect-error Streaming callbacks require stream: true.
+spawnCommand("/usr/bin/echo", args, { onStdout() {} });
+
+const unsubscribe = onControlMessage(args => {
+  // @ts-expect-error Control message arguments are readonly.
+  args.push("extra");
+  if (args.length === 0) return undefined;
+  if (args[0] === "text") return "unchanged";
+  return { args, status: ["ok", null, 0, true] };
+});
+unsubscribe();
+// @ts-expect-error Control replies are synchronous.
+onControlMessage(async () => "reply");
+// @ts-expect-error Objects containing functions are not JSON values.
+onControlMessage(() => ({ callback() {} }));
+
+void [command, buffered, output];
 
 void [promise, cancelled, length, recovered, generic, implicitPromise, asyncCancellation, bytes, element, errorCode, nativeError];

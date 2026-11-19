@@ -5,10 +5,14 @@ use rquickjs::{Ctx, Exception, Function, Object, Persistent, Value, function::{F
 use zgui::{platform::{SurfaceId, WakeReason, Waker}, runtime::ImageBlobs, view::{HostHandle, host::{FrameRequestId, Repeat, TimerId}}};
 use crate::{assets::{AssetError, AssetProvider, AssetSource, Delivery, MAX_SAFE_ID}, package::Package};
 
+mod external;
+
 const MAX_CALLBACKS: usize = 1024;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Mode { Loading, Mounting, Mounted, Stopping, Disposed }
+#[derive(Clone, Copy)]
+enum ImageLease { Package, Socket(usize) }
 #[derive(Clone, Copy)]
 pub(crate) enum Arguments { Timer, Frame(f64) }
 pub(crate) struct ScheduledCall { id: u64, pub callback: Persistent<Function<'static>>, pub arguments: Arguments }
@@ -25,17 +29,20 @@ pub(crate) struct Work {
     host: HostHandle,
     provider: Box<dyn AssetProvider>,
     image_blobs: ImageBlobs,
+    external: external::External,
     wake: Arc<dyn Fn() + Send + Sync>,
 }
 
 impl Work {
     pub(crate) fn new(host: HostHandle, package: Option<Rc<Package>>, generation: u64, waker: Arc<dyn Waker>, surface: SurfaceId, assets: AssetSource) -> Rc<Self> {
         let wake: Arc<dyn Fn() + Send + Sync> = Arc::new(move || waker.wake(WakeReason::ReactiveWork { surfaces: vec![surface].into_boxed_slice() }));
+        let external = external::External::new(package.clone(), &assets);
         Rc::new(Self {
             registrations: RefCell::new(HashMap::new()), ready: RefCell::new(VecDeque::new()), requests: RefCell::new(HashMap::new()),
             mode: Cell::new(Mode::Loading), generation, host,
             provider: assets.bind(package, generation, wake.clone()),
             image_blobs: ImageBlobs::new(generation),
+            external,
             wake,
         })
     }
@@ -157,8 +164,9 @@ impl Work {
             };
             let path: String = rquickjs::FromJs::from_js(&ctx, path)?;
             let bytes = owner.provider.image_asset(&path).map_err(|error| owner.asset_error(&ctx, error))?;
-            owner.image_handle(&ctx, bytes)
+            owner.image_handle(&ctx, bytes, ImageLease::Package)
         }))?;
+        self.install_external(&services)?;
         ctx.globals().set("__zguiServices", services)?;
         Ok(())
     }
@@ -227,7 +235,7 @@ impl Work {
         Ok(object)
     }
 
-    fn image_handle<'js>(self: &Rc<Self>, ctx: &Ctx<'js>, bytes: Arc<[u8]>) -> rquickjs::Result<Object<'js>> {
+    fn image_handle<'js>(self: &Rc<Self>, ctx: &Ctx<'js>, bytes: Arc<[u8]>, lease: ImageLease) -> rquickjs::Result<Object<'js>> {
         let object = Object::new(ctx.clone())?;
         let src = self.register_image_bytes(bytes)
             .map_err(|error| Exception::throw_range(ctx, &error.to_string()))?;
@@ -236,11 +244,9 @@ impl Work {
             let id = src.clone();
             let weak = Rc::downgrade(self);
             object.prop("release", data_property(Func::from(move || {
-                if let Some(owner) = weak.upgrade()
-                    && owner.image_blobs.release(&id)
-                    && owner.mode.get() == Mode::Mounted
-                {
-                    (owner.wake)();
+                if let Some(owner) = weak.upgrade() && owner.image_blobs.release(&id) {
+                    if let ImageLease::Socket(bytes) = lease { owner.external.release_image(bytes); }
+                    if owner.mode.get() == Mode::Mounted { (owner.wake)(); }
                 }
             })))
         })();
@@ -248,6 +254,7 @@ impl Work {
             self.image_blobs.release(&src);
             return Err(error);
         }
+        if let ImageLease::Socket(bytes) = lease { self.external.charge_image(bytes); }
         Ok(object)
     }
 
@@ -283,9 +290,11 @@ impl Work {
         self.provider.stop();
     }
     pub(crate) fn finish_stop(&self) {
+        if self.mode.get() == Mode::Disposed { return; }
         self.begin_stop();
         for registration in self.registrations.borrow_mut().drain().map(|(_, registration)| registration) { self.cancel_native(registration.native); }
         self.ready.borrow_mut().clear();
+        self.external.clear(self.generation);
         self.mode.set(Mode::Disposed);
     }
 }

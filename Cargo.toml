@@ -18,6 +18,7 @@ all = "warn"
 [workspace.dependencies]
 zgui = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a" }
 rquickjs = { git = "https://github.com/DelSkayn/rquickjs", rev = "73fcd6062ee615aeb2a4675cd32be67a56e93973", default-features = false, features = ["std", "macro"] }
+libc = "0.2"
 roxmltree = "0.21"
 js-runtime = { path = "crates/js-runtime" }
 ui-bridge = { path = "crates/ui-bridge" }
