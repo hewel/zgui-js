@@ -24,10 +24,10 @@ pub struct PlatformCapabilities {
     pub native_popup_surfaces: bool,
     /// Whether a surface can be a part of the desktop shell rather than a window.
     ///
-    /// A wallpaper, a dock, a panel and a lock screen are all the same kind of surface and no
-    /// desktop offers them by default. A program built around one checks this and says why it
-    /// cannot run, rather than opening an ordinary window where a panel was meant.
+    /// A wallpaper, a dock or a panel is not an ordinary window.
     pub layer_surfaces: bool,
+    /// Whether the platform can enforce a compositor session lock.
+    pub session_lock: bool,
     /// Whether a drag can be started from this application towards another one.
     ///
     /// A draggable control written against "dragging works" is written against something several
@@ -92,6 +92,7 @@ impl PlatformCapabilities {
         Self {
             native_popup_surfaces: false,
             layer_surfaces: false,
+            session_lock: false,
             drag_source: false,
             drop_mime_types: Vec::new(),
             clipboard_formats: vec![ClipboardFormat::Text],

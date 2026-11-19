@@ -125,7 +125,7 @@ globalThis.queueMicrotask = fn => {
 
 let nextCanvasToken = 0;
 
-export function createHost({ strictStyles = false, reducedMotion = false, monitors = [] } = {}) {
+export function createHost({ strictStyles = false, reducedMotion = false, monitors = [], sessionLock } = {}) {
   let nextId = 0;
   let stopping = false;
   let turnDepth = 0;
@@ -581,13 +581,26 @@ export function createHost({ strictStyles = false, reducedMotion = false, monito
   const host = makeBridge(primary);
   const surfaces = new Map();
   const layerIds = new Map();
+  const lockIds = new Map();
+  const lockSubscribers = new Set();
+  const sessionLockLog = [];
+  let lockState = "unlocked";
   const shellTasks = [];
   const shellLog = [];
   const monitorSubscribers = new Set();
   let monitorSnapshot = structuredClone(monitors);
   let nextLayerId = 0;
-  const present = surface => surface.placement.output === undefined
-    || monitorSnapshot.some(monitor => monitor.id === surface.placement.output);
+  const requireLock = () => {
+    if (!sessionLock) throw Object.assign(new Error("session lock requires capabilities.sessionLock"), { code: "E_CAPABILITY" });
+  };
+  const setLockState = next => {
+    lockState = next;
+    for (const callback of [...lockSubscribers]) {
+      if (lockSubscribers.has(callback)) callback(next);
+    }
+  };
+  const present = surface => (!surface.lock || lockState === "locked")
+    && (surface.placement.output === undefined || monitorSnapshot.some(monitor => monitor.id === surface.placement.output));
   const attachSurface = surface => {
     if (surface.closing || surface.root || !present(surface)) return;
     const region = { stylesheets: new Map(), installs: [], scenes: [] };
@@ -613,6 +626,64 @@ export function createHost({ strictStyles = false, reducedMotion = false, monito
   };
 
   const shell = {
+    requestSessionLock(callback) {
+      assertActiveHost("requestSessionLock");
+      requireLock();
+      callback(lockState);
+      lockSubscribers.add(callback);
+      shellTasks.push(() => {
+        if (stopping || lockState === "locked") return;
+        sessionLockLog.push("lock");
+        setLockState("pending");
+        if (sessionLock === "finished") {
+          sessionLockLog.push("destroy");
+          setLockState("refused");
+        } else {
+          sessionLockLog.push("locked");
+          setLockState("locked");
+          for (const surface of lockIds.values()) attachSurface(surface);
+        }
+      });
+      return {
+        unlock() {
+          if (stopping) throw new TypeError("session is stopping");
+          if (!lockSubscribers.has(callback)) throw new ReferenceError("session lock handle was unsubscribed");
+          if (lockState !== "locked") throw new TypeError("session is not locked");
+          shellTasks.push(() => {
+            if (stopping || lockState !== "locked") return;
+            sessionLockLog.push("unlock", "sync");
+            for (const surface of lockIds.values()) detachSurface(surface);
+            setLockState("unlocked");
+          });
+        },
+        unsubscribe: () => { lockSubscribers.delete(callback); },
+      };
+    },
+    openLock(name, output, attach) {
+      assertActiveHost("openLock");
+      requireLock();
+      if (name === "main" || !/^[a-z0-9][a-z0-9_.-]{0,127}$/.test(name)) {
+        throw new TypeError("invalid or reserved shell surface name");
+      }
+      if ([...layerIds.values(), ...lockIds.values()].some(surface =>
+        !surface.closing && (surface.name === name || (surface.lock && surface.placement.output === output)))) {
+        throw new TypeError("duplicate lock surface name or output");
+      }
+      const id = ++nextLayerId;
+      const surface = { id, lock: true, name, placement: { output }, attach };
+      lockIds.set(id, surface);
+      shellTasks.push(() => attachSurface(surface));
+      return id;
+    },
+    closeLock(id) {
+      const surface = lockIds.get(id);
+      if (!surface || surface.closing) return;
+      surface.closing = true;
+      shellTasks.push(() => {
+        try { detachSurface(surface); }
+        finally { lockIds.delete(id); }
+      });
+    },
     subscribeMonitors(callback) {
       assertActiveHost("subscribeMonitors");
       monitorSubscribers.add(callback);
@@ -622,7 +693,7 @@ export function createHost({ strictStyles = false, reducedMotion = false, monito
     openLayer(name, placement, attach) {
       assertActiveHost("openLayer");
       if (name === "main" || !/^[a-zA-Z0-9_-]{1,64}$/.test(name)) throw new TypeError("invalid or reserved shell surface name");
-      if ([...layerIds.values()].some(surface => !surface.closing && surface.name === name)) {
+      if ([...layerIds.values(), ...lockIds.values()].some(surface => !surface.closing && surface.name === name)) {
         throw new TypeError(`duplicate shell surface: ${name}`);
       }
       const id = ++nextLayerId;
@@ -665,10 +736,11 @@ export function createHost({ strictStyles = false, reducedMotion = false, monito
       if (monitorSubscribers.has(callback)) callback(structuredClone(monitorSnapshot));
     }
     shellTasks.push(() => {
-      for (const surface of layerIds.values()) {
+      for (const surface of [...layerIds.values(), ...lockIds.values()]) {
         if (surface.closing || !present(surface)) detachSurface(surface);
       }
       for (const surface of layerIds.values()) attachSurface(surface);
+      for (const surface of lockIds.values()) attachSurface(surface);
     });
   });
 
@@ -698,13 +770,22 @@ export function createHost({ strictStyles = false, reducedMotion = false, monito
   return {
     host, nodes, parents, stylesheets, installs, makeNode, byTestId, focused, rects, texts,
     shell, surfaces, shellLog, emitMonitors, monitorSubscribers,
+    sessionLockState: () => lockState, sessionLockLog,
     animating, animatingQueries, queries, portals, traps, locks, layers, geometry,
     canvasScenes,
     clearCalls, invalidated, registrationsAfterStop, styleDiagnostics,
     dispatch, createEvent, runTurn, endTurn,
     flush,
     focus: (node, options) => moveFocus(node, options?.reveal ?? false, options?.cause ?? "programmatic"),
-    beginStop: () => { stopping = true; },
+    beginStop: () => {
+      stopping = true;
+      lockSubscribers.clear();
+      for (const surface of lockIds.values()) {
+        surface.closing = true;
+        detachSurface(surface);
+      }
+      lockIds.clear();
+    },
     isStopping: () => stopping,
   };
 }

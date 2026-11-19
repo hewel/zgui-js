@@ -1,8 +1,8 @@
 import { createRenderer } from "@solidjs/universal";
-import { $PROXY, flush as solidFlush, resetErrorHalt } from "#solid";
+import { $PROXY, createRoot, flush as solidFlush, resetErrorHalt } from "#solid";
 import type { Accessor, Component, ImageProps, NativeChild, NativeElementProps, NativeFieldProps, NativeNode, NativeTag, NativeTextControlProps, VectorProps } from "../types.js";
-import { bridgeFor, rememberBridge, withCallbackBridge } from "../host.js";
-import type { NativeHost } from "../host.js";
+import { bridgeFor, provideRegion, rememberBridge, withCallbackBridge } from "../host.js";
+import type { NativeHost, UiBridge } from "../host.js";
 import type { InternalProps } from "../internal-props.js";
 import { invalidateTreeOrder } from "../tree-order.js";
 
@@ -211,4 +211,52 @@ export function render(code: () => NativeChild, root: NativeNode): () => void {
     dispose();
     flush();
   };
+}
+
+export function renderRegion(code: () => NativeChild, root: NativeNode, bridge: UiBridge): () => void {
+  rememberBridge(root, bridge);
+  return mountOwned(() => provideRegion(bridge, () => insert(root, code())), () => bridge.clearRoot(root));
+}
+
+export function mountOwned(mount: () => void, clear?: () => void): () => void {
+  let disposeRoot: (() => void) | undefined;
+  let disposed = false;
+
+  function dispose() {
+    if (disposed) return;
+    disposed = true;
+    const errors: unknown[] = [];
+    try {
+      disposeRoot?.();
+      flush();
+    } catch (error) {
+      errors.push(error);
+    } finally {
+      resetErrorHalt();
+    }
+    try {
+      clear?.();
+    } catch (error) {
+      errors.push(error);
+    }
+    if (errors.length === 1) throw errors[0];
+    if (errors.length > 1) throw new AggregateError(errors, "Application cleanup failed");
+  }
+
+  try {
+    // Own the root directly: Universal.render cannot return its disposer if mount throws.
+    createRoot(dispose => {
+      disposeRoot = dispose;
+      mount();
+    });
+    flush();
+  } catch (error) {
+    try {
+      dispose();
+    } catch (cleanupError) {
+      throw new AggregateError([error, cleanupError], "Application mount and cleanup failed");
+    }
+    throw error;
+  }
+  return dispose;
 }

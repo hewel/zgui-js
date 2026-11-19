@@ -21,6 +21,10 @@ pub fn request_size(
     surface: &WaylandSurface,
     size: Size<CssPx, Css>,
 ) -> Option<Size<DevicePx, Device>> {
+    // The lock parent is sized by the compositor and the child must not extend past it.
+    if matches!(surface.role(), super::Role::LockContent(_)) {
+        return None;
+    }
     // Buffer and viewport sizes use signed extents, even for layers whose set_size takes u32.
     if [size.width.0, size.height.0]
         .into_iter()
@@ -97,6 +101,22 @@ pub fn set_resizable(surface: &WaylandSurface, resizable: bool) {
 /// An unmapped surface is shown again by the same empty commit that asked for its first configure.
 /// The pacer holds the redraw until that configure arrives.
 pub fn set_visible(surface: &WaylandSurface, visible: bool) {
+    if let super::Role::LockContent(content) = surface.role() {
+        let mut shared = surface.shared();
+        shared.unmapped = !visible;
+        if visible {
+            shared.visibility.configured = shared.logical.width.0 > 0.0;
+            zgui_platform::Surface::request_redraw(surface);
+        } else {
+            content.hide();
+            shared.visibility.configured = false;
+            shared.pacer.callback();
+            shared.cancel_callbacks();
+            shared.pacer.cancel_held();
+            surface.ping.ping();
+        }
+        return;
+    }
     if visible {
         let mut shared = surface.shared();
         if std::mem::take(&mut shared.unmapped) {

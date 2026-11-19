@@ -1,10 +1,10 @@
 //! Realize one generation's shell requests outside JavaScript and native window frames.
 use std::collections::{BTreeMap, BTreeSet};
 
-use zgui::{app::Fonts, geom::{Css, CssPx, Size}, platform::{InputRegion, PlatformCx, SurfaceAttributes, SurfaceId, SurfaceRole}, runtime::{Runtime, WindowContent, WindowSpec, WindowToken}, view::View};
+use zgui::{app::Fonts, geom::{Css, CssPx, Size}, platform::{InputRegion, PlatformCx, SessionLockState, SurfaceAttributes, SurfaceId, SurfaceRole}, runtime::{Runtime, WindowContent, WindowSpec, WindowToken}, view::View};
 
-use super::{ImageChoice, PredecessorLeak, ReloadOutcome, Root, RuntimeSurface, SessionHost, SessionSurface};
-use crate::{session::{ResourceCounts, Result, Session, SessionModule}, shell::{LayerSpec, Monitor}};
+use super::{ImageChoice, MountRegion, PredecessorLeak, ReloadOutcome, Root, RuntimeSurface, SessionHost, SessionSurface};
+use crate::{session::{ResourceCounts, Result, Session, SessionModule, SessionRetirement}, shell::{LayerSpec, LockCommand, LockSpec, Monitor}};
 use std::{cell::RefCell, rc::Rc};
 
 struct RunningLayer {
@@ -13,11 +13,24 @@ struct RunningLayer {
     spec: LayerSpec,
 }
 
+struct RunningLock {
+    token: WindowToken,
+    surface: SurfaceId,
+    spec: LockSpec,
+}
+
+enum ShellKind { Layer, Lock }
+
+#[derive(Clone, Copy)]
+enum LockReconcile<'a> { Current, Stage(&'a ShellWindows), Release }
+
 #[derive(Default)]
 pub(crate) struct ShellWindows {
-    generation: Option<u64>,
+    pub(super) generation: Option<u64>,
     running: BTreeMap<u32, RunningLayer>,
     dismissed: BTreeSet<u32>,
+    locks: BTreeMap<u32, RunningLock>,
+    lock_ui_suspended: bool,
 }
 
 impl SessionHost {
@@ -42,14 +55,15 @@ impl SessionHost {
         let Some(fonts) = &self.pure_fonts else { return ReloadOutcome::Rejected("pure-shell startup was not configured".into()); };
         let Some(generation) = self.generation.checked_add(1) else { return ReloadOutcome::Rejected("session generation exhausted".into()); };
         self.generation = generation;
-        let candidate = match Session::prepare_shell(fonts.clone(), runtime.app_timers(), module.clone(), generation, cx.waker(), self.policy.clone()) {
+        let policy = self.policy.clone().with_session_lock(platform_lock_state(cx));
+        let candidate = match Session::prepare_shell(fonts.clone(), runtime.app_timers(), module.clone(), generation, cx.waker(), policy) {
             Ok(candidate) => candidate,
             Err(error) => return ReloadOutcome::Rejected(error),
         };
         let mut staged = ShellWindows::default();
         let result = candidate.update_monitors(&self.monitors)
             .and_then(|_| candidate.mount())
-            .and_then(|()| staged.mount(runtime, cx, images, &self.monitors, &candidate));
+            .and_then(|()| staged.mount(runtime, cx, images, &self.shell_windows, &self.monitors, &candidate));
         if let Err(error) = result {
             staged.retire(&candidate, |token, id| close_native_surface(runtime, cx, token, id));
             if self.pure_session.is_none() { self.pure_session = Some(candidate); }
@@ -57,9 +71,7 @@ impl SessionHost {
         }
         let predecessor_leak = self.pure_session.take().and_then(|previous| {
             let report = self.shell_windows.retire(&previous, |token, id| close_native_surface(runtime, cx, token, id));
-            (report.counts != ResourceCounts::default()).then_some(PredecessorLeak {
-                code: "E_TEARDOWN", generation: report.generation, resources: report.counts,
-            })
+            staged.fence_after_predecessor(report, &candidate, platform_lock_state(cx), |token, id| close_native_surface(runtime, cx, token, id))
         });
         self.shell_windows = staged;
         self.module = module.clone();
@@ -77,11 +89,8 @@ impl SessionHost {
                 ReloadOutcome::Rejected(error) | ReloadOutcome::Fallback(error) => return Err(error),
             }
         }
-        let session = self.sessions().next().cloned();
+        let session = self.sessions().find(|session| Some(session.generation) == self.shell_windows.generation).cloned();
         let Some(session) = session else { return Ok(()); };
-        if self.shell_windows.generation != Some(session.generation) {
-            self.shell_windows.generation = Some(session.generation);
-        }
         let result = self.step_shell(runtime, cx, images, &session);
         if result.is_err() {
             self.shell_windows.retire(&session, |token, id| close_native_surface(runtime, cx, token, id));
@@ -90,18 +99,47 @@ impl SessionHost {
     }
 
     fn step_shell(&mut self, runtime: &mut Runtime, cx: &dyn PlatformCx, images: ImageChoice, session: &Rc<Session>) -> Result<()> {
+        let state = cx.session_lock_state();
         let mut worked = session.update_monitors(&self.monitors)?;
+        worked |= session.update_lock_state(state)?;
+        self.shell_windows.settle(runtime, cx, images, &self.monitors, session, LockReconcile::Current)?;
         let surface = RuntimeSurface::new(runtime, cx, images);
-        if session.primary().is_none() {
+        if session.primary().is_none() || session.shell.has_lock_command() {
             surface.validate_fonts(session)?;
             worked |= session.checkpoint()?;
         }
         if worked { session.request_frames(|document| surface.request_frame(document)); }
-        self.shell_windows.reconcile(runtime, cx, images, &self.monitors, session)
+        // A checkpoint can close an existing lock UI or enqueue a child
+        // mount. Let that structural work succeed before performing commands.
+        if cx.is_exiting() || session.shell.is_dirty() || session.shell.locks_are_dirty() || !session.lock_commands_ready() {
+            return Ok(());
+        }
+        match session.shell.take_lock_command() {
+            Some(LockCommand::Request) => cx.request_session_lock().map_err(|error| error.to_string())?,
+            Some(LockCommand::Unlock) if cx.session_lock_state() == SessionLockState::Locked => {
+                // Return UI claims to the dark fallback before unlocking. A
+                // child disposer fault must prevent the protocol request.
+                self.shell_windows.settle(runtime, cx, images, &self.monitors, session, LockReconcile::Release)?;
+                session.check_unlock_teardown_rejections()?;
+                if session.shell.is_dirty() || session.shell.locks_are_dirty() || !session.lock_commands_ready() {
+                    return Err("lock UI disposal did not settle before unlock".into());
+                }
+                if !cx.is_exiting() && cx.session_lock_state() == SessionLockState::Locked {
+                    cx.unlock_session().map_err(|error| error.to_string())?;
+                }
+            }
+            _ => {}
+        }
+        Ok(())
     }
 
     /// Target the current extent/monitor of a named preview surface without querying Wayland.
     pub(crate) fn shell_geometry(&self, surface: SurfaceId) -> Option<(f64, f64, Option<&str>)> {
+        if let Some(lock) = self.shell_windows.locks.values().find(|lock| lock.surface == surface) {
+            let monitor = self.monitors.iter().find(|monitor| monitor.id == lock.spec.monitor)?;
+            let size = lock_size(monitor);
+            return Some((f64::from(size.width.0), f64::from(size.height.0), Some(&lock.spec.monitor)));
+        }
         let running = self.shell_windows.running.values().find(|running| running.surface == surface)?;
         Some((f64::from(running.spec.size.width.0), f64::from(running.spec.size.height.0), running.spec.placement.monitor.as_deref()))
     }
@@ -128,35 +166,130 @@ impl SessionHost {
             self.shell_windows.retire(&owner, |token, id| close_native_surface(runtime, cx, token, id));
         }
     }
+
+    /// Restore platform-owned fallback without running application cleanup or losing fault evidence.
+    pub(crate) fn hide_lock_ui(&mut self) {
+        let owner = self.sessions().find(|session| Some(session.generation) == self.shell_windows.generation).cloned();
+        if let Some(owner) = owner {
+            self.shell_windows.hide_lock_ui(&owner);
+        }
+    }
 }
 
 impl ShellWindows {
-    pub(super) fn mount(&mut self, runtime: &mut Runtime, cx: &dyn PlatformCx, images: ImageChoice, monitors: &[Monitor], session: &Rc<Session>) -> Result<()> {
+    pub(super) fn mount(&mut self, runtime: &mut Runtime, cx: &dyn PlatformCx, images: ImageChoice, previous: &Self, monitors: &[Monitor], session: &Rc<Session>) -> Result<()> {
         self.generation = Some(session.generation);
-        // Child mounts can enqueue more layer requests. Settle those before publishing acceptance.
-        for _ in 0..=crate::shell::MAX_LAYERS {
-            self.reconcile(runtime, cx, images, monitors, session)?;
-            if !session.shell.is_dirty() { return Ok(()); }
-        }
-        Err("shell surface requests did not settle during mount".into())
+        // Stage replacement claims without dropping the currently presented content.
+        self.settle(runtime, cx, images, monitors, session, LockReconcile::Stage(previous))
     }
 
-    pub(super) fn has_windows(&self) -> bool { !self.running.is_empty() }
+    fn settle(&mut self, runtime: &mut Runtime, cx: &dyn PlatformCx, images: ImageChoice, monitors: &[Monitor], session: &Rc<Session>, locks: LockReconcile<'_>) -> Result<()> {
+        for _ in 0..=2 * crate::shell::MAX_LAYERS {
+            self.reconcile(runtime, cx, images, monitors, session)?;
+            self.reconcile_locks(runtime, cx, images, monitors, session, locks)?;
+            if !session.shell.is_dirty() && !session.shell.locks_are_dirty() { return Ok(()); }
+        }
+        Err("shell surface requests did not settle".into())
+    }
+
+    pub(super) fn has_windows(&self) -> bool { !self.running.is_empty() || !self.locks.is_empty() }
 
     pub(super) fn retire(
         &mut self,
         session: &Session,
-        mut close: impl FnMut(WindowToken, SurfaceId) -> bool,
-    ) -> crate::session::SessionRetirement {
+        mut close: impl FnMut(WindowToken, Option<SurfaceId>) -> bool,
+    ) -> SessionRetirement {
         session.dispose();
         if self.generation == Some(session.generation) {
+            for lock in std::mem::take(&mut self.locks).into_values() {
+                if close(lock.token, None) { session.shell_surface_closed(); }
+            }
             for layer in std::mem::take(&mut self.running).into_values() {
-                if close(layer.token, layer.surface) { session.shell_surface_closed(); }
+                if close(layer.token, Some(layer.surface)) { session.shell_surface_closed(); }
             }
             self.dismissed.clear();
             self.generation = None;
         }
         session.retire()
+    }
+
+    pub(super) fn hide_lock_ui(&mut self, session: &Session) {
+        if self.generation != Some(session.generation) { return; }
+        session.shell.take_lock_command();
+        self.lock_ui_suspended = true;
+        session.hide_lock_ui();
+    }
+
+    pub(super) fn fence_after_predecessor(
+        &mut self,
+        report: SessionRetirement,
+        session: &Session,
+        state: Option<SessionLockState>,
+        close: impl FnMut(WindowToken, Option<SurfaceId>) -> bool,
+    ) -> Option<PredecessorLeak> {
+        let leaked = report.counts != ResourceCounts::default();
+        if (report.failure.is_some() || leaked) && state.is_some_and(SessionLockState::is_retained) {
+            session.shell.fence_lock_authority();
+            self.suspend_lock_ui(session, close);
+        }
+        leaked.then_some(PredecessorLeak {
+            code: "E_TEARDOWN", generation: report.generation, resources: report.counts,
+        })
+    }
+
+    fn suspend_lock_ui(&mut self, session: &Session, mut close: impl FnMut(WindowToken, Option<SurfaceId>) -> bool) {
+        self.hide_lock_ui(session);
+        for (id, lock) in std::mem::take(&mut self.locks) {
+            if let Err(error) = session.detach_layer(id) { session.record_fault(error); }
+            if close(lock.token, None) {
+                session.shell_surface_closed();
+            } else {
+                session.record_fault("E_TEARDOWN: lock UI claim remained open".into());
+            }
+        }
+    }
+
+    fn reconcile_locks(&mut self, runtime: &mut Runtime, cx: &dyn PlatformCx, images: ImageChoice, monitors: &[Monitor], session: &Rc<Session>, mode: LockReconcile<'_>) -> Result<()> {
+        let state = match mode {
+            LockReconcile::Release => SessionLockState::Unlocking,
+            _ => cx.session_lock_state(),
+        };
+        let mut needs_sync = session.shell.take_lock_dirty();
+        while let Some((&id, _)) = self.locks.iter().find(|(id, lock)| {
+            state != SessionLockState::Locked || runtime.surface_id(lock.token) != Some(lock.surface) || cx.surface(lock.surface).is_none()
+                || !session.shell.owns_lock(**id) || !monitors.iter().any(|output| output.id == lock.spec.monitor)
+        }) {
+            let lock = self.locks.remove(&id).expect("closing a tracked lock region");
+            needs_sync = true;
+            if let Some(claim) = cx.surface(lock.surface) { claim.set_visible(false); }
+            let cleanup = session.detach_layer(id);
+            if !close_native_surface(runtime, cx, lock.token, None) {
+                return Err("E_TEARDOWN: lock UI claim remained open".into());
+            }
+            session.shell_surface_closed();
+            cleanup?;
+        }
+        if state != SessionLockState::Locked || self.lock_ui_suspended || !needs_sync { return Ok(()); }
+        for (id, spec) in session.shell.lock_specs() {
+            let Some(monitor) = monitors.iter().find(|monitor| monitor.id == spec.monitor) else { continue; };
+            if self.locks.contains_key(&id) || !session.shell.owns_lock(id) { continue; }
+            let mut attrs = SurfaceAttributes::new(spec.name.as_str());
+            attrs.role = SurfaceRole::Lock(spec.monitor.clone());
+            if let LockReconcile::Stage(previous) = mode {
+                attrs.replacing_lock = previous.locks.values().find(|lock| {
+                    lock.spec.monitor == spec.monitor && cx.surface(lock.surface).is_some()
+                }).map(|lock| lock.surface);
+            }
+            attrs.size = Some(lock_size(monitor));
+            let (token, surface, region) = open_region(runtime, cx, session, attrs)?;
+            let document = region.document;
+            let name = spec.name.clone();
+            self.locks.insert(id, RunningLock { token, surface, spec });
+            let mut binding = RuntimeSurface::new(runtime, cx, images);
+            binding.attach_shell(session, id, name, region, surface, ShellKind::Lock)?;
+            binding.request_frame(document);
+        }
+        Ok(())
     }
 
     fn reconcile(&mut self, runtime: &mut Runtime, cx: &dyn PlatformCx, images: ImageChoice, monitors: &[Monitor], session: &Rc<Session>) -> Result<()> {
@@ -197,7 +330,7 @@ impl ShellWindows {
     fn close(&mut self, runtime: &mut Runtime, cx: &dyn PlatformCx, session: &Session, id: u32) -> Result<()> {
         let Some(running) = self.running.remove(&id) else { return Ok(()); };
         let result = session.detach_layer(id);
-        if !close_native_surface(runtime, cx, running.token, running.surface) {
+        if !close_native_surface(runtime, cx, running.token, Some(running.surface)) {
             return Err("E_TEARDOWN: native shell surface remained open".into());
         }
         session.shell_surface_closed();
@@ -208,39 +341,16 @@ impl ShellWindows {
         if matches!(images, ImageChoice::Live) && !cx.capabilities().layer_surfaces {
             return Err("selected native backend does not support layer surfaces".into());
         }
-        let fonts = session.fonts.clone();
-        let pending = Rc::new(RefCell::new(Vec::new()));
-        let roots = pending.clone();
+        let name = spec.name.clone();
         let mut attrs = SurfaceAttributes::new(spec.name.as_str());
         attrs.role = SurfaceRole::Layer(spec.placement.clone());
         attrs.size = Some(spec.size);
         // The preview's opaque/profile styling remains in charge of background pixels.
         attrs.transparent = matches!(images, ImageChoice::Live);
-        let token = runtime.open_surface(cx, WindowSpec::new(attrs, WindowContent::default(), Box::new(move |cx| {
-            zgui::reactive::provide_context(fonts.clone());
-            Box::new(Root(roots.clone()).build(cx))
-        }))).map_err(|error| error.to_string())?;
-        let Some(surface) = runtime.surface_id(token) else {
-            runtime.close_surface(cx, token);
-            return Err("opened shell window has no platform surface".into());
-        };
-        session.shell_surface_opened();
-        let Some(mut region) = pending.borrow_mut().pop() else {
-            if close_native_surface(runtime, cx, token, surface) { session.shell_surface_closed(); }
-            return Err("opened shell window has no mount region".into());
-        };
-        region.root = region.root_anchor.get();
+        let (token, surface, region) = open_region(runtime, cx, session, attrs)?;
         let document = region.document;
         self.running.insert(id, RunningLayer { token, surface, spec });
-        let mut runtime_surface = RuntimeSurface::new(runtime, cx, images);
-        runtime_surface.bind(document, session);
-        let checkpoint = runtime_surface.image_source_checkpoint(document);
-        if let Err(error) = session.attach_layer(id, self.running[&id].spec.name.clone(), region, surface) {
-            runtime_surface.discard_image_source_writes(document, checkpoint);
-            return Err(error);
-        }
-        let writes = runtime_surface.seal_image_source_writes(document, checkpoint);
-        runtime_surface.commit_image_policy(document, session, writes);
+        RuntimeSurface::new(runtime, cx, images).attach_shell(session, id, name, region, surface, ShellKind::Layer)?;
         let running = self.running.get_mut(&id).expect("new layer is tracked before its first frame");
         if let Some(input) = session.shell.updated_input(id, &running.spec.input) { running.spec.input = input; }
         let input = &running.spec.input;
@@ -248,14 +358,64 @@ impl ShellWindows {
             cx.surface(surface).ok_or("opened shell window has no platform surface")?
                 .set_input_region(input).map_err(|error| error.to_string())?;
         }
-        runtime_surface.request_frame(document);
+        RuntimeSurface::new(runtime, cx, images).request_frame(document);
         Ok(())
     }
 }
 
-pub(super) fn close_native_surface(runtime: &mut Runtime, cx: &dyn PlatformCx, token: WindowToken, id: SurfaceId) -> bool {
+pub(super) fn platform_lock_state(cx: &dyn PlatformCx) -> Option<SessionLockState> {
+    cx.capabilities().session_lock.then(|| cx.session_lock_state())
+}
+
+fn lock_size(monitor: &Monitor) -> Size<CssPx, Css> {
+    Size::new(CssPx((monitor.width / monitor.scale).max(1.0) as f32),
+        CssPx((monitor.height / monitor.scale).max(1.0) as f32))
+}
+
+fn open_region(runtime: &mut Runtime, cx: &dyn PlatformCx, session: &Session, attrs: SurfaceAttributes) -> Result<(WindowToken, SurfaceId, MountRegion)> {
+    let is_lock = matches!(&attrs.role, SurfaceRole::Lock(_));
+    let fonts = session.fonts.clone();
+    let pending = Rc::new(RefCell::new(Vec::new()));
+    let roots = pending.clone();
+    let token = runtime.open_surface(cx, WindowSpec::new(attrs, WindowContent::default(), Box::new(move |cx| {
+        zgui::reactive::provide_context(fonts.clone());
+        Box::new(Root(roots.clone()).build(cx))
+    }))).map_err(|error| error.to_string())?;
+    let Some(surface) = runtime.surface_id(token) else {
+        runtime.close_surface(cx, token);
+        return Err("opened shell window has no platform surface".into());
+    };
+    session.shell_surface_opened();
+    let Some(mut region) = pending.borrow_mut().pop() else {
+        if close_native_surface(runtime, cx, token, (!is_lock).then_some(surface)) { session.shell_surface_closed(); }
+        return Err("opened shell window has no mount region".into());
+    };
+    region.root = region.root_anchor.get();
+    Ok((token, surface, region))
+}
+
+impl RuntimeSurface<'_> {
+    fn attach_shell(&mut self, session: &Rc<Session>, id: u32, name: String, region: MountRegion, surface: SurfaceId, kind: ShellKind) -> Result<()> {
+        let document = region.document;
+        let claim = match kind {
+            ShellKind::Lock => Some(std::sync::Arc::downgrade(&self.cx.surface(surface).ok_or("lock UI has no platform claim")?)),
+            ShellKind::Layer => None,
+        };
+        self.bind(document, session);
+        let checkpoint = self.image_source_checkpoint(document);
+        if let Err(error) = session.attach_layer(id, name, region, surface, claim) {
+            self.discard_image_source_writes(document, checkpoint);
+            return Err(error);
+        }
+        let writes = self.seal_image_source_writes(document, checkpoint);
+        self.commit_image_policy(document, session, writes);
+        Ok(())
+    }
+}
+
+pub(super) fn close_native_surface(runtime: &mut Runtime, cx: &dyn PlatformCx, token: WindowToken, removed_surface: Option<SurfaceId>) -> bool {
     runtime.close_surface(cx, token);
-    runtime.surface_id(token).is_none() && cx.surface(id).is_none()
+    runtime.surface_id(token).is_none() && removed_surface.is_none_or(|id| cx.surface(id).is_none())
 }
 
 fn present(spec: &LayerSpec, monitors: &[Monitor]) -> bool {

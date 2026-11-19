@@ -46,14 +46,51 @@ impl A11yLog {
     }
 }
 
+/// The currently presented solid-color fallback, in physical pixels.
+///
+/// Every pixel has the same RGBA value, so this frame need not store an output-sized buffer.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LockFallbackFrame {
+    size: Size<DevicePx, Device>,
+}
+
+impl LockFallbackFrame {
+    /// The full extent covered by this presentation.
+    #[must_use]
+    pub fn size(self) -> Size<DevicePx, Device> {
+        self.size
+    }
+
+    /// The presented RGBA8 pixel at `(x, y)`, or `None` outside the frame.
+    #[must_use]
+    pub fn pixel(self, x: u32, y: u32) -> Option<[u8; 4]> {
+        if f64::from(x) < f64::from(self.size.width.0)
+            && f64::from(y) < f64::from(self.size.height.0)
+        {
+            Some([0, 0, 0, 255])
+        } else {
+            None
+        }
+    }
+}
+
+#[derive(Debug)]
+enum Presentation {
+    Window { visible: bool },
+    UnclaimedLock(LockFallbackFrame),
+    ClaimedLock(Option<LockFallbackFrame>),
+    RemovedLock,
+}
+
 /// A surface that is a buffer, with no window behind it.
 ///
 /// Everything a real surface would do to a window is recorded instead, because a headless backend
 /// exists to be asserted against. A test that cannot see whether a frame was asked for cannot
 /// check the loop's parking, and the parking is what the whole of this backend is for.
 ///
-/// A surface never draws itself: it counts the requests and hands the drawing to whoever answers
-/// [`SurfaceEvent::RedrawRequested`](zgui_platform::SurfaceEvent::RedrawRequested).
+/// Application frames come from whoever answers
+/// [`SurfaceEvent::RedrawRequested`](zgui_platform::SurfaceEvent::RedrawRequested). A session
+/// lock can also present its own opaque fallback before a renderer exists or after it goes away.
 #[derive(Debug)]
 pub struct OffscreenSurface {
     /// Which surface this is.
@@ -106,8 +143,8 @@ pub struct OffscreenSurface {
     /// cannot read what was said cannot tell a window that honours `cursor` from one that ignores
     /// it.
     cursor_log: Mutex<Vec<CursorStyle>>,
-    /// Whether the surface has been shown.
-    visible: AtomicBool,
+    /// What the offscreen compositor is showing on this surface.
+    presentation: Mutex<Presentation>,
     /// The last title it was given.
     title: Mutex<String>,
     /// What the surface was most recently asked to be.
@@ -135,10 +172,57 @@ impl OffscreenSurface {
             a11y_listener: AtomicBool::new(true),
             text_input_log: Mutex::new(Vec::new()),
             cursor_log: Mutex::new(Vec::new()),
-            visible: AtomicBool::new(false),
+            presentation: Mutex::new(Presentation::Window { visible: false }),
             title: Mutex::new(String::new()),
             requested_attributes: Mutex::new(SurfaceAttributes::default()),
             input_region: Mutex::new(InputRegion::Full),
+        }
+    }
+
+    pub(crate) fn new_lock(id: SurfaceId, size: Size<DevicePx, Device>) -> Self {
+        let mut surface = Self::new(id, size);
+        surface.presentation = Mutex::new(Presentation::UnclaimedLock(LockFallbackFrame { size }));
+        surface
+    }
+
+    pub(crate) fn claim_lock(&self) -> bool {
+        let mut presentation = self.presentation.lock().expect("the presentation is not poisoned");
+        let Presentation::UnclaimedLock(fallback) = *presentation else {
+            return false;
+        };
+        *presentation = Presentation::ClaimedLock(Some(fallback));
+        true
+    }
+
+    pub(crate) fn lock_is_claimed(&self) -> bool {
+        matches!(
+            *self.presentation.lock().expect("the presentation is not poisoned"),
+            Presentation::ClaimedLock(_)
+        )
+    }
+
+    pub(crate) fn release_lock(&self) {
+        let mut presentation = self.presentation.lock().expect("the presentation is not poisoned");
+        if matches!(*presentation, Presentation::ClaimedLock(_)) {
+            *presentation = Presentation::UnclaimedLock(LockFallbackFrame { size: self.size() });
+            self.pending.store(0, Ordering::Relaxed);
+            *self.input_region.lock().expect("the input region is not poisoned") = InputRegion::Full;
+        }
+    }
+
+    pub(crate) fn remove_lock(&self) {
+        *self.presentation.lock().expect("the presentation is not poisoned") =
+            Presentation::RemovedLock;
+        self.pending.store(0, Ordering::Relaxed);
+    }
+
+    /// The fallback pixels if they are what this output is presenting right now.
+    #[must_use]
+    pub fn lock_fallback_frame(&self) -> Option<LockFallbackFrame> {
+        match *self.presentation.lock().expect("the presentation is not poisoned") {
+            Presentation::UnclaimedLock(frame) => Some(frame),
+            Presentation::ClaimedLock(frame) => frame,
+            Presentation::Window { .. } | Presentation::RemovedLock => None,
         }
     }
 
@@ -269,7 +353,11 @@ impl OffscreenSurface {
 
     /// Whether the surface has been shown.
     pub fn is_visible(&self) -> bool {
-        self.visible.load(Ordering::Relaxed)
+        match *self.presentation.lock().expect("the presentation is not poisoned") {
+            Presentation::Window { visible } => visible,
+            Presentation::UnclaimedLock(_) | Presentation::ClaimedLock(_) => true,
+            Presentation::RemovedLock => false,
+        }
     }
 
     /// The title the surface was last given.
@@ -282,6 +370,12 @@ impl OffscreenSurface {
 
     /// Resizes the buffer, as a window manager would.
     pub fn resize(&self, size: Size<DevicePx, Device>) {
+        let mut presentation = self.presentation.lock().expect("the presentation is not poisoned");
+        if let Presentation::UnclaimedLock(frame) | Presentation::ClaimedLock(Some(frame)) =
+            &mut *presentation
+        {
+            frame.size = size;
+        }
         *self.size.lock().expect("the size is not poisoned") = size;
     }
 
@@ -321,6 +415,12 @@ impl Surface for OffscreenSurface {
     }
 
     fn request_size(&self, size: Size<CssPx, Css>) -> Option<Size<DevicePx, Device>> {
+        if !matches!(
+            *self.presentation.lock().expect("the presentation is not poisoned"),
+            Presentation::Window { .. }
+        ) {
+            return None;
+        }
         let scale = self.scale_factor();
         let taken = Size::new(
             DevicePx(size.width.0 * scale as f32),
@@ -346,7 +446,13 @@ impl Surface for OffscreenSurface {
     }
 
     fn set_visible(&self, visible: bool) {
-        self.visible.store(visible, Ordering::Relaxed);
+        match &mut *self.presentation.lock().expect("the presentation is not poisoned") {
+            Presentation::Window { visible: shown } => *shown = visible,
+            Presentation::ClaimedLock(fallback) => {
+                *fallback = (!visible).then(|| LockFallbackFrame { size: self.size() });
+            }
+            Presentation::UnclaimedLock(_) | Presentation::RemovedLock => {}
+        }
     }
 
     fn set_decorations(&self, _decorations: Decorations) {}

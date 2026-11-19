@@ -2,7 +2,7 @@ use std::{cell::{Cell, RefCell}, collections::BTreeMap, rc::{Rc, Weak}, sync::Ar
 use js_runtime::{JsRuntime, RejectionPolicy, RuntimeLimits};
 use rquickjs::{Exception, Function, Persistent};
 use ui_bridge::{BridgeGroup, BridgeStep, DispatchOutcome, HostPort, UiBridge, registry::NodeRegistry};
-use zgui::{app::Fonts, platform::{SurfaceId, WakeReason, Waker}, runtime::{AppTimers, ImageBlobs}, view::DocumentId};
+use zgui::{app::Fonts, platform::{SessionLockState, Surface, SurfaceId, WakeReason, Waker}, runtime::{AppTimers, ImageBlobs}, view::DocumentId};
 use crate::{assets::{AssetSource, ContractFailure}, environment::Environment, session_host::MountRegion, package::Package, shell::{Authority, ContractPolicy, Monitor, Shell}, work::{Arguments, Work}};
 
 /// Typed session failure: engine diagnostics, sticky provider contracts, and
@@ -72,6 +72,10 @@ impl SessionModule {
             Authority::Denied
         }
     }
+
+    fn declares_session_lock(&self) -> bool {
+        self.package.as_ref().is_some_and(|package| package.manifest.capabilities.session_lock)
+    }
 }
 
 type TeardownReporter = Rc<dyn Fn(&ResourceCounts)>;
@@ -86,20 +90,26 @@ pub(crate) struct SessionPolicy {
     assets: AssetSource,
     reduced_motion: bool,
     teardown_reporter: Option<TeardownReporter>,
+    session_lock: Option<SessionLockState>,
 }
 impl SessionPolicy {
-    /// Ordinary live execution: wall clock, ambient limits, logged rejections,
-    /// package asset reads on the shared worker pool.
+    /// Ordinary live execution: wall clock, ambient limits, and package assets
+    /// on the shared worker pool. Unhandled rejections fault under a retained lock.
     pub(crate) fn live(executor: host_services::Executor) -> Self {
-        Self { limits: RuntimeLimits::default(), deadline: None, environment: None, strict_rejections: false, assets: AssetSource::Live(executor), reduced_motion: false, teardown_reporter: None }
+        Self { limits: RuntimeLimits::default(), deadline: None, environment: None, strict_rejections: false, assets: AssetSource::Live(executor), reduced_motion: false, teardown_reporter: None, session_lock: None }
     }
     /// Deterministic preview execution: supplied limits, an enclosing deadline,
     /// the virtual environment, strict rejection handling and fixture assets.
     pub(crate) fn preview(limits: RuntimeLimits, deadline: Rc<Cell<Instant>>, environment: Rc<Environment>, fixtures: Rc<crate::assets::fixture::FixtureRuntime>) -> Self {
-        Self { limits, deadline: Some(deadline), environment: Some(environment), strict_rejections: true, assets: AssetSource::Fixture(fixtures), reduced_motion: false, teardown_reporter: None }
+        Self { limits, deadline: Some(deadline), environment: Some(environment), strict_rejections: true, assets: AssetSource::Fixture(fixtures), reduced_motion: false, teardown_reporter: None, session_lock: None }
     }
     pub(crate) fn with_reduced_motion(mut self, reduced_motion: bool) -> Self {
         self.reduced_motion = reduced_motion;
+        self
+    }
+
+    pub(crate) fn with_session_lock(mut self, state: Option<SessionLockState>) -> Self {
+        self.session_lock = state;
         self
     }
 
@@ -184,6 +194,7 @@ pub(crate) struct SessionRegion {
     pub(crate) surface: SurfaceId,
     pub(crate) name: String,
     disposer: RefCell<Option<Persistent<Function<'static>>>>,
+    lock_claim: Option<std::sync::Weak<dyn Surface>>,
     font_validation_revision: Cell<Option<(u64, u64, u64, zgui_style::ColorScheme)>>,
 }
 
@@ -229,8 +240,8 @@ impl Session {
 
     /// Pure preflight without a document, window or mount root.
     pub(crate) fn prepare_shell(fonts: Fonts, timers: AppTimers, module: SessionModule, generation: u64, waker: Arc<dyn Waker>, policy: SessionPolicy) -> Result<Rc<Self>> {
-        if module.shell_authority() != Authority::Allowed {
-            return Err(ContractFailure { code: "E_CAPABILITY", message: "pure-shell startup requires capabilities.shellSurfaces".into() }.into());
+        if module.shell_authority() != Authority::Allowed && !module.declares_session_lock() {
+            return Err(ContractFailure { code: "E_CAPABILITY", message: "pure-shell startup requires capabilities.shellSurfaces or capabilities.sessionLock".into() }.into());
         }
         Self::prepare_inner(Startup::Shell { fonts, timers }, module, generation, waker, policy)
     }
@@ -263,7 +274,12 @@ impl Session {
         let session = Rc::new_cyclic(|weak: &Weak<Self>| {
             let bridges = Rc::new(BridgeGroup::new());
             let contract = if policy.strict_rejections { ContractPolicy::Sticky } else { ContractPolicy::Throw };
-            let shell = Shell::new(module.shell_authority(), contract, waker.clone());
+            let lock_authority = if policy.session_lock.is_some() && module.declares_session_lock() {
+                Authority::Allowed
+            } else {
+                Authority::Denied
+            };
+            let shell = Shell::new(module.shell_authority(), lock_authority, policy.session_lock.unwrap_or_default(), contract, waker.clone());
             let (primary, work) = match startup {
                 Startup::Primary { region, surface } => {
                     let work = Work::new(region.host.clone(), module.package.clone(), generation, waker.clone(), surface, policy.assets.clone());
@@ -273,6 +289,7 @@ impl Session {
                 }
                 Startup::Shell { timers, .. } => (None, Work::new_shell(module.package.clone(), generation, waker.clone(), policy.assets.clone(), timers)),
             };
+            work.guard_cleanup_with(shell.clone());
             Self {
                 disposer: RefCell::new(None), primary, layers: RefCell::new(BTreeMap::new()), bridges, shell, work, engine: RefCell::new(None),
                 shell_surfaces: Cell::new(0), retirement_reported: Cell::new(false),
@@ -334,7 +351,7 @@ impl Session {
         let port = HostPort::live(surface, waker, session, Self::dispatch_step);
         let bridge = UiBridge::new_with_options(NodeRegistry::new(region.dom.clone(), region.root, 1, generation, 100_000),
             region.host.clone(), port, ui_bridge::BridgeOptions { strict_styles: policy.strict_rejections, reduced_motion: policy.reduced_motion, defer_stylesheet_install: true });
-        SessionRegion { region, bridge, surface, name, disposer: RefCell::new(None), font_validation_revision: Cell::new(None) }
+        SessionRegion { region, bridge, surface, name, disposer: RefCell::new(None), lock_claim: None, font_validation_revision: Cell::new(None) }
     }
 
     /// The primary region is absent for a pure-shell session.
@@ -371,10 +388,38 @@ impl Session {
         result.map(|()| true).map_err(|error| self.diagnostic(error).into())
     }
 
+    /// Publish compositor state to this generation in a bounded bridge turn.
+    pub(crate) fn update_lock_state(&self, state: SessionLockState) -> Result<bool> {
+        if self.shutdown_started.get() || !self.shell.update_lock_state(state) { return Ok(false); }
+        let mut engine = self.engine.borrow_mut();
+        let engine = engine.as_mut().ok_or("session disposed")?;
+        let result = self.bridges.run(engine.turn(), |js| js.with_context(|ctx| self.shell.dispatch_lock_state(&ctx)));
+        self.mark_reported(self.check_contract())?;
+        result.map(|()| true).map_err(|error| self.diagnostic(error).into())
+    }
+
+    /// Leave staged lock commands queued while the current checkpoint has more JS jobs to check.
+    pub(crate) fn lock_commands_ready(&self) -> bool {
+        !self.shutdown_started.get() && self.fault.borrow().is_none()
+            && self.engine.borrow().as_ref().is_some_and(|engine| !engine.is_job_pending())
+    }
+
+    /// Inspect rejections from synchronous unlock teardown without running any queued jobs.
+    pub(crate) fn check_unlock_teardown_rejections(&self) -> Result<()> {
+        let mut engine = self.engine.borrow_mut();
+        let engine = engine.as_mut().ok_or("session disposed")?;
+        let result = self.with_cleanup(engine, |engine| engine.drain_rejections(RejectionPolicy::Strict).map(|_| ()));
+        let result = self.check_contract().and(result.map_err(SessionError::from));
+        if result.is_err() { self.shell.take_lock_command(); }
+        self.mark_reported(result)
+    }
+
     /// Build and mount an auxiliary document in the already-running JS engine.
-    pub(crate) fn attach_layer(self: &Rc<Self>, id: u32, name: String, region: MountRegion, surface: SurfaceId) -> Result<()> {
+    pub(crate) fn attach_layer(self: &Rc<Self>, id: u32, name: String, region: MountRegion, surface: SurfaceId, lock_claim: Option<std::sync::Weak<dyn Surface>>) -> Result<()> {
         let attach = self.shell.attach(id).ok_or("shell surface was closed before attachment")?;
-        let owned = Rc::new(Self::build_region(region, name, surface, self.generation, &self.policy, self.waker.clone(), Rc::downgrade(self)));
+        let mut owned = Self::build_region(region, name, surface, self.generation, &self.policy, self.waker.clone(), Rc::downgrade(self));
+        owned.lock_claim = lock_claim;
+        let owned = Rc::new(owned);
         self.bridges.add(&owned.bridge);
         self.layers.borrow_mut().insert(id, owned.clone());
         self.refresh_frame_host();
@@ -383,7 +428,7 @@ impl Session {
         let engine = engine.as_mut().ok_or("session disposed")?;
         let result = self.bridges.run(engine.turn(), |js| js.with_context(|ctx| {
             let callback = attach.restore(&ctx)?;
-            let disposer: Function = callback.call((owned.bridge.root(&ctx)?, owned.bridge.api(&ctx)?))?;
+            let disposer = owned.bridge.mount_shell_region(&ctx, &callback)?;
             Ok(Persistent::save(&ctx, disposer))
         }));
         match result {
@@ -511,7 +556,8 @@ impl Session {
         let result = self.checkpoint_work();
         // A native provider guard can throw during any job/event entry. Preserve
         // its typed contract failure even when that entry returned a JS exception.
-        self.check_contract()?;
+        let result = self.check_contract().and(result);
+        if result.is_err() { self.shell.take_lock_command(); }
         result
     }
 
@@ -582,7 +628,7 @@ impl Session {
             };
             if attempted { worked = true; } else { remaining[phase] = 0; }
         }
-        let policy = if self.policy.strict_rejections { RejectionPolicy::Strict } else { RejectionPolicy::Log };
+        let policy = if self.strict_rejections() { RejectionPolicy::Strict } else { RejectionPolicy::Log };
         let drain = engine.drain_rejections(policy).map_err(|error| self.diagnostic(error))?;
         worked |= !drain.updates.is_empty();
         if policy == RejectionPolicy::Log {
@@ -596,7 +642,9 @@ impl Session {
         }
         self.check_contract()?;
         let queued = self.has_queued_notifications()?;
-        if engine.is_job_pending() || queued || self.work.has_ready() || self.work.has_completions() || self.work.has_external() { self.wake_owner(); }
+        let jobs_pending = engine.is_job_pending();
+        if !jobs_pending { self.shell.clear_cleanup_jobs_pending(); }
+        if jobs_pending || queued || self.work.has_ready() || self.work.has_completions() || self.work.has_external() { self.wake_owner(); }
         Ok(worked)
     }
 
@@ -640,6 +688,10 @@ impl Session {
 
     fn diagnostic(&self, error: js_runtime::Diagnostic) -> js_runtime::Diagnostic {
         match &self.module.package { Some(package) => package.remap_diagnostic(error), None => error }
+    }
+
+    fn strict_rejections(&self) -> bool {
+        self.policy.strict_rejections || self.shell.lock_is_retained()
     }
 
     fn deadline(&self, end: Instant) -> Instant {
@@ -807,13 +859,32 @@ impl Session {
         let Some(disposer) = disposer else { return Ok(()); };
         let mut engine = self.engine.borrow_mut();
         let Some(engine) = engine.as_mut() else { return Ok(()); };
-        let call = |ctx: rquickjs::Ctx<'_>| disposer.restore(&ctx)?.call::<_, ()>(());
-        // Cleanup may still release process/image leases after the native bridges faulted.
-        if self.primary.iter().chain(self.layers.borrow().values()).any(|owned| owned.bridge.is_disposed()) {
-            engine.with_cleanup_context(call)
-        } else {
-            self.bridges.run(engine.turn(), |js| js.with_cleanup_context(call))
-        }.map_err(|error| self.diagnostic(error))
+        self.with_cleanup(engine, |engine| {
+            let call = |ctx: rquickjs::Ctx<'_>| disposer.restore(&ctx)?.call::<_, ()>(());
+            // Cleanup may still release process/image leases after the native bridges faulted.
+            if self.primary.iter().chain(self.layers.borrow().values()).any(|owned| owned.bridge.is_disposed()) {
+                engine.with_cleanup_context(call)
+            } else {
+                self.bridges.run(engine.turn(), |js| js.with_cleanup_context(call))
+            }
+        })
+    }
+
+    fn with_cleanup(&self, engine: &mut JsRuntime, cleanup: impl FnOnce(&mut JsRuntime) -> std::result::Result<(), js_runtime::Diagnostic>) -> std::result::Result<(), js_runtime::Diagnostic> {
+        self.shell.with_cleanup(|| {
+            let result = cleanup(engine);
+            // Keep synchronous cleanup restrictions active in queued continuations.
+            if engine.is_job_pending() { self.shell.mark_cleanup_jobs_pending(); }
+            result.map_err(|error| self.diagnostic(error))
+        })
+    }
+
+    pub(crate) fn hide_lock_ui(&self) {
+        for owned in self.layers.borrow().values() {
+            if let Some(claim) = owned.lock_claim.as_ref().and_then(std::sync::Weak::upgrade) {
+                claim.set_visible(false);
+            }
+        }
     }
 
     /// Dispose JavaScript while the native mount regions are still available for cleanup.
@@ -821,6 +892,7 @@ impl Session {
         if self.retired.borrow().is_some() { return; }
         let before = self.counts();
         self.shutdown_started.set(true);
+        self.hide_lock_ui();
         self.bridges.begin_stop();
         self.shell.begin_stop();
         self.work.begin_stop();
@@ -831,7 +903,7 @@ impl Session {
                 cleanup_error.get_or_insert(error);
             }
         }
-        if self.policy.strict_rejections && let Some(engine) = self.engine.borrow_mut().as_mut()
+        if self.strict_rejections() && let Some(engine) = self.engine.borrow_mut().as_mut()
             && let Err(error) = engine.drain_rejections(RejectionPolicy::Strict)
         {
             cleanup_error.get_or_insert_with(|| self.diagnostic(error));

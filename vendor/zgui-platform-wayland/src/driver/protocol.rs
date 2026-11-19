@@ -122,15 +122,18 @@ impl OutputHandler for WaylandState {
         &mut self.outputs
     }
 
-    fn new_output(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, _output: WlOutput) {
+    fn new_output(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, output: WlOutput) {
+        self.lock_output_scale(&output);
         self.outputs_changed(None);
     }
 
-    fn update_output(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, _output: WlOutput) {
+    fn update_output(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, output: WlOutput) {
+        self.lock_output_scale(&output);
         self.outputs_changed(None);
     }
 
     fn output_destroyed(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, output: WlOutput) {
+        self.lock_output_removed(&output);
         // The compositor can remove an output without a leave first. Its rate must stop counting.
         for surface in self.live.surfaces.borrow().iter() {
             surface.shared().outputs.retain(|held| held != &output);
@@ -207,7 +210,7 @@ impl ProvidesRegistryState for WaylandState {
         &mut self.registry
     }
 
-    registry_handlers![OutputState, SeatState];
+    registry_handlers![OutputState, SeatState, super::session_lock::SessionLock];
 }
 
 impl Dispatch<WlRegion, ()> for WaylandState {
@@ -246,6 +249,10 @@ impl WaylandState {
         let Some(held) = self.live.surface(id) else {
             return;
         };
+        if matches!(held.role(), crate::surface::Role::LockContent(_)) {
+            // Resizing or hiding the child can produce a leave; it is still on the same output.
+            return;
+        }
         let event = {
             let mut shared = held.shared();
             change(&mut shared.visibility);
@@ -278,10 +285,12 @@ impl WaylandState {
             .surfaces
             .borrow()
             .iter()
-            .map(|surface| surface.id())
+            .map(|surface| (surface.id(), matches!(surface.role(), crate::surface::Role::LockContent(_))))
             .collect();
-        for id in ids {
-            self.scale_changed(id, |ladder| ladder.outputs(sharpest));
+        for (id, lock_content) in ids {
+            if !lock_content {
+                self.scale_changed(id, |ladder| ladder.outputs(sharpest));
+            }
             self.declare_rate(id);
         }
     }
@@ -292,6 +301,9 @@ impl WaylandState {
             return;
         };
         if let Some(held) = self.live.surface(id) {
+            if matches!(held.role(), crate::surface::Role::LockContent(_)) {
+                return;
+            }
             change(&mut held.shared().outputs);
         }
         self.declare_rate(id);
@@ -303,7 +315,7 @@ impl WaylandState {
     /// headless output and a variable-refresh output do. Without it, such a surface is paced at
     /// sixty hertz on any output. Of several outputs, the fastest one gives the interval, because
     /// the compositor sends a frame callback each time any of them repaints the surface.
-    fn declare_rate(&self, id: zgui_platform::SurfaceId) {
+    pub(super) fn declare_rate(&self, id: zgui_platform::SurfaceId) {
         let Some(held) = self.live.surface(id) else {
             return;
         };

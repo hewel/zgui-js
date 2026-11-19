@@ -808,6 +808,20 @@ impl UiBridge {
         ctx.globals().set("__zgui", self.api(ctx)?)
     }
 
+    /// Mount layer or lock content against this document without changing the primary bridge.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error outside a bridge turn, if mounting throws, or if no disposer is returned.
+    pub fn mount_shell_region<'js>(
+        self: &Rc<Self>,
+        ctx: &Ctx<'js>,
+        attach: &rquickjs::Function<'js>,
+    ) -> rquickjs::Result<rquickjs::Function<'js>> {
+        self.require_turn(ctx)?;
+        attach.call((self.root(ctx)?, self.api(ctx)?))
+    }
+
     /// Builds the region's private host contract without changing any global binding.
     /// Node objects are branded and can only be used with their owning document.
     pub fn api<'js>(self: &Rc<Self>, ctx: &Ctx<'js>) -> rquickjs::Result<Object<'js>> {

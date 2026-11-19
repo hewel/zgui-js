@@ -3,7 +3,7 @@ use std::{cell::{Cell, RefCell}, collections::BTreeMap, rc::{Rc, Weak}, sync::Ar
 
 use rquickjs::{Array, Ctx, Exception, Function, Object, Persistent, Value, function::Func};
 use serde::{Deserialize, Serialize};
-use zgui::{geom::{Css, CssPx, Edges, Size}, platform::{InputRect, InputRegion, KeyboardInteractivity, Layer, LayerPlacement, MonitorInfo, WakeReason, Waker}};
+use zgui::{geom::{Css, CssPx, Edges, Size}, platform::{InputRect, InputRegion, KeyboardInteractivity, Layer, LayerPlacement, MonitorInfo, SessionLockState, WakeReason, Waker}};
 
 use crate::{assets::ContractFailure, work::service_error};
 
@@ -56,6 +56,21 @@ struct WantedLayer {
     attach: Persistent<Function<'static>>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct LockSpec {
+    pub name: String,
+    pub monitor: String,
+}
+
+struct WantedLock {
+    spec: LockSpec,
+    attach: Persistent<Function<'static>>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum LockCommand { Request, Unlock }
+
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Authority { Denied, Allowed }
 
@@ -75,24 +90,102 @@ pub(crate) struct Shell {
     subscriptions: RefCell<BTreeMap<u32, Persistent<Function<'static>>>>,
     layers: RefCell<BTreeMap<u32, WantedLayer>>,
     next_id: Cell<u32>,
+    lock_authority: Authority,
+    lock_fenced: Cell<bool>,
+    lock_state: Cell<SessionLockState>,
+    lock_command: Cell<Option<LockCommand>>,
+    lock_subscriptions: RefCell<BTreeMap<u32, Persistent<Function<'static>>>>,
+    lock_surfaces: RefCell<BTreeMap<u32, WantedLock>>,
+    in_cleanup: Cell<bool>,
+    cleanup_jobs: Cell<bool>,
+    lock_dirty: Cell<bool>,
     dirty: Cell<bool>,
     waker: Arc<dyn Waker>,
 }
 
 impl Shell {
-    /// Shell operations are installed during preflight but creation is enabled only for mount.
-    pub(crate) fn new(authority: Authority, contract: ContractPolicy, waker: Arc<dyn Waker>) -> Rc<Self> {
+    /// Fixes generation authority before preflight; creation opens only for mount.
+    pub(crate) fn new(authority: Authority, lock_authority: Authority, lock_state: SessionLockState, contract: ContractPolicy, waker: Arc<dyn Waker>) -> Rc<Self> {
         Rc::new(Self { authority, contract, failure: RefCell::new(None), life: Cell::new(Lifecycle::Loading),
             monitors: RefCell::new(Vec::new()), subscriptions: RefCell::new(BTreeMap::new()), layers: RefCell::new(BTreeMap::new()),
+            lock_authority, lock_fenced: Cell::new(false), lock_state: Cell::new(lock_state),
+            lock_command: Cell::new(None), lock_subscriptions: RefCell::new(BTreeMap::new()),
+            lock_dirty: Cell::new(false),
+            lock_surfaces: RefCell::new(BTreeMap::new()), in_cleanup: Cell::new(false),
+            cleanup_jobs: Cell::new(false),
             next_id: Cell::new(1), dirty: Cell::new(false), waker })
     }
 
     pub(crate) fn activate(&self) { self.life.set(Lifecycle::Active); }
+    pub(crate) fn clear(&self) {
+        self.layers.borrow_mut().clear();
+        self.subscriptions.borrow_mut().clear();
+        self.lock_surfaces.borrow_mut().clear();
+        self.lock_subscriptions.borrow_mut().clear();
+        self.lock_command.take();
+    }
     pub(crate) fn begin_stop(&self) { self.life.set(Lifecycle::Stopping); }
-    pub(crate) fn clear(&self) { self.layers.borrow_mut().clear(); self.subscriptions.borrow_mut().clear(); }
     pub(crate) fn failure(&self) -> Option<ContractFailure> { self.failure.borrow().clone() }
-    pub(crate) fn callback_count(&self) -> usize { self.layers.borrow().len() + self.subscriptions.borrow().len() }
+    pub(crate) fn callback_count(&self) -> usize {
+        self.layers.borrow().len() + self.subscriptions.borrow().len()
+            + self.lock_surfaces.borrow().len() + self.lock_subscriptions.borrow().len()
+    }
     pub(crate) fn is_dirty(&self) -> bool { self.dirty.get() }
+    pub(crate) fn locks_are_dirty(&self) -> bool { self.lock_dirty.get() }
+    pub(crate) fn take_lock_dirty(&self) -> bool { self.lock_dirty.replace(false) }
+    pub(crate) fn has_lock_command(&self) -> bool { self.lock_command.get().is_some() }
+
+    /// Revoke this generation's lock commands and creation without blocking teardown.
+    pub(crate) fn fence_lock_authority(&self) {
+        self.lock_fenced.set(true);
+        self.lock_command.take();
+    }
+
+    /// Retention is determined by the compositor, independent of generation authority.
+    pub(crate) fn lock_is_retained(&self) -> bool { self.lock_state.get().is_retained() }
+
+    pub(crate) fn take_lock_command(&self) -> Option<LockCommand> { self.lock_command.take() }
+
+    pub(crate) fn with_cleanup<T>(&self, cleanup: impl FnOnce() -> T) -> T {
+        let previous = self.in_cleanup.replace(true);
+        let result = cleanup();
+        self.in_cleanup.set(previous);
+        result
+    }
+
+    /// Keep teardown restrictions in effect while disposer continuations can still run.
+    pub(crate) fn mark_cleanup_jobs_pending(&self) { self.cleanup_jobs.set(true); }
+
+    /// Release the teardown barrier once the engine's job queue is empty.
+    pub(crate) fn clear_cleanup_jobs_pending(&self) { self.cleanup_jobs.set(false); }
+
+    /// Block new registrations both inside the disposer and its pending jobs.
+    pub(crate) fn cleanup_in_progress(&self) -> bool { self.in_cleanup.get() || self.cleanup_jobs.get() }
+
+    pub(crate) fn update_lock_state(&self, state: SessionLockState) -> bool {
+        if self.lock_state.replace(state) == state { return false; }
+        self.lock_dirty.set(true);
+        if state != SessionLockState::Locked && self.lock_command.get() == Some(LockCommand::Unlock) {
+            self.lock_command.take();
+        }
+        !self.lock_fenced.get() && !self.lock_subscriptions.borrow().is_empty()
+    }
+
+    pub(crate) fn dispatch_lock_state(&self, ctx: &Ctx<'_>) -> rquickjs::Result<()> {
+        let ids: Vec<_> = self.lock_subscriptions.borrow().keys().copied().collect();
+        let state = self.lock_state.get().as_str();
+        for id in ids {
+            let callback = self.lock_subscriptions.borrow().get(&id).cloned();
+            if let Some(callback) = callback { callback.restore(ctx)?.call::<_, ()>((state,))?; }
+        }
+        Ok(())
+    }
+
+    pub(crate) fn lock_specs(&self) -> BTreeMap<u32, LockSpec> {
+        self.lock_surfaces.borrow().iter().map(|(&id, wanted)| (id, wanted.spec.clone())).collect()
+    }
+
+    pub(crate) fn owns_lock(&self, id: u32) -> bool { self.lock_surfaces.borrow().contains_key(&id) }
     pub(crate) fn take_dirty(&self) -> bool { self.dirty.replace(false) }
 
     /// Snapshot the bounded set only when requests or outputs change.
@@ -102,6 +195,7 @@ impl Shell {
 
     pub(crate) fn attach(&self, id: u32) -> Option<Persistent<Function<'static>>> {
         self.layers.borrow().get(&id).map(|layer| layer.attach.clone())
+            .or_else(|| self.lock_surfaces.borrow().get(&id).map(|wanted| wanted.attach.clone()))
     }
 
     pub(crate) fn owns(&self, id: u32) -> bool { self.layers.borrow().contains_key(&id) }
@@ -119,6 +213,7 @@ impl Shell {
         current.clear();
         current.extend_from_slice(monitors);
         self.dirty.set(true);
+        self.lock_dirty.set(true);
         !self.subscriptions.borrow().is_empty()
     }
 
@@ -138,7 +233,15 @@ impl Shell {
 
     fn require_authority(&self, ctx: &Ctx<'_>) -> rquickjs::Result<()> {
         if self.authority == Authority::Allowed { return Ok(()); }
-        let message = "layer surfaces require capabilities.shellSurfaces";
+        self.capability_error(ctx, "layer surfaces require capabilities.shellSurfaces")
+    }
+
+    fn require_lock_authority(&self, ctx: &Ctx<'_>) -> rquickjs::Result<()> {
+        if self.lock_authority == Authority::Allowed { return Ok(()); }
+        self.capability_error(ctx, "session lock requires capabilities.sessionLock and backend support")
+    }
+
+    fn capability_error(&self, ctx: &Ctx<'_>, message: &str) -> rquickjs::Result<()> {
         if self.contract == ContractPolicy::Sticky {
             self.failure.borrow_mut().get_or_insert_with(|| ContractFailure { code: "E_CAPABILITY", message: message.into() });
         }
@@ -148,6 +251,18 @@ impl Shell {
     fn require_active(&self, ctx: &Ctx<'_>) -> rquickjs::Result<()> {
         if self.life.get() == Lifecycle::Active { Ok(()) }
         else { Err(Exception::throw_type(ctx, "shell work is unavailable during preflight or disposal")) }
+    }
+
+    fn require_creation(&self, ctx: &Ctx<'_>) -> rquickjs::Result<()> {
+        self.require_active(ctx)?;
+        if self.cleanup_in_progress() { return Err(Exception::throw_type(ctx, "shell work is unavailable during disposal")); }
+        Ok(())
+    }
+
+    fn require_lock_command(&self, ctx: &Ctx<'_>) -> rquickjs::Result<()> {
+        self.require_lock_authority(ctx)?;
+        if self.lock_fenced.get() { return self.capability_error(ctx, "session lock authority has been revoked"); }
+        self.require_creation(ctx)
     }
 
     fn id(&self, ctx: &Ctx<'_>) -> rquickjs::Result<u32> {
@@ -166,7 +281,7 @@ impl Shell {
         let weak = Rc::downgrade(self);
         api.set("subscribeMonitors", Func::from(move |ctx: Ctx<'js>, callback: Function<'js>| {
             let shell = owner(&weak, &ctx)?;
-            shell.require_active(&ctx)?;
+            shell.require_creation(&ctx)?;
             if shell.subscriptions.borrow().len() >= MAX_SUBSCRIPTIONS {
                 return Err(Exception::throw_range(&ctx, "monitor subscription limit reached"));
             }
@@ -184,7 +299,7 @@ impl Shell {
         api.set("openLayer", Func::from(move |ctx: Ctx<'js>, name: Value<'js>, data: Value<'js>, attach: Value<'js>| {
             let shell = owner(&weak, &ctx)?;
             shell.require_authority(&ctx)?;
-            shell.require_active(&ctx)?;
+            shell.require_creation(&ctx)?;
             let name = string(&ctx, &name, "shell surface name")?;
             if name == "main" || !valid_name(&name) { return Err(Exception::throw_type(&ctx, "invalid or reserved shell surface name")); }
             let (placement, size) = placement(&ctx, data)?;
@@ -193,6 +308,9 @@ impl Shell {
             if layers.len() >= MAX_LAYERS { return Err(Exception::throw_range(&ctx, "shell surface limit reached")); }
             if layers.values().any(|layer| layer.spec.name == name) { return Err(Exception::throw_type(&ctx, "duplicate shell surface name")); }
             let id = shell.id(&ctx)?;
+            if shell.lock_surfaces.borrow().values().any(|wanted| wanted.spec.name == name) {
+                return Err(Exception::throw_type(&ctx, "duplicate shell surface name"));
+            }
             layers.insert(id, WantedLayer { spec: LayerSpec { name, placement, size, input: InputRegion::Full }, attach: Persistent::save(&ctx, attach) });
             shell.changed();
             Ok(id)
@@ -235,13 +353,92 @@ impl Shell {
             if layer.spec.input != input { layer.spec.input = input; shell.changed(); }
             Ok::<(), rquickjs::Error>(())
         }))?;
+        self.install_lock(&api)?;
         ctx.globals().set("__zguiShell", api)
+    }
+
+    fn install_lock<'js>(self: &Rc<Self>, api: &Object<'js>) -> rquickjs::Result<()> {
+        let weak = Rc::downgrade(self);
+        api.set("requestSessionLock", Func::from(move |ctx: Ctx<'js>, callback: Value<'js>| {
+            let shell = owner(&weak, &ctx)?;
+            shell.require_lock_command(&ctx)?;
+            let callback = callback.into_function().ok_or_else(|| Exception::throw_type(&ctx, "session lock observer must be a function"))?;
+            if shell.lock_subscriptions.borrow().len() >= MAX_SUBSCRIPTIONS {
+                return Err(Exception::throw_range(&ctx, "session lock subscription limit reached"));
+            }
+            let id = shell.id(&ctx)?;
+            let handle = Object::new(ctx.clone())?;
+            let unlock = weak.clone();
+            handle.set("unlock", Function::new(ctx.clone(), move |ctx: Ctx<'js>| {
+                let session = owner(&unlock, &ctx)?;
+                session.require_lock_command(&ctx)?;
+                if !session.lock_subscriptions.borrow().contains_key(&id) {
+                    return Err(Exception::throw_reference(&ctx, "session lock handle was unsubscribed"));
+                }
+                if session.lock_state.get() != SessionLockState::Locked {
+                    return Err(Exception::throw_type(&ctx, "session is not locked"));
+                }
+                session.lock_command.set(Some(LockCommand::Unlock));
+                session.waker.wake(WakeReason::AppWork);
+                Ok::<(), rquickjs::Error>(())
+            })?)?;
+            let unsubscribe = weak.clone();
+            handle.set("unsubscribe", Function::new(ctx.clone(), move || {
+                if let Some(shell) = unsubscribe.upgrade() { shell.lock_subscriptions.borrow_mut().remove(&id); }
+            })?)?;
+            shell.lock_subscriptions.borrow_mut().insert(id, Persistent::save(&ctx, callback.clone()));
+            if let Err(error) = callback.call::<_, ()>((shell.lock_state.get().as_str(),)) {
+                shell.lock_subscriptions.borrow_mut().remove(&id);
+                return Err(error);
+            }
+            if shell.lock_command.get().is_none() { shell.lock_command.set(Some(LockCommand::Request)); }
+            shell.waker.wake(WakeReason::AppWork);
+            Ok(handle)
+        }))?;
+        let weak = Rc::downgrade(self);
+        api.set("openLock", Func::from(move |ctx: Ctx<'js>, name: Value<'js>, monitor: Value<'js>, attach: Value<'js>| {
+            let shell = owner(&weak, &ctx)?;
+            shell.require_lock_command(&ctx)?;
+            let name = string(&ctx, &name, "lock surface name")?;
+            if name == "main" || !valid_name(&name) { return Err(Exception::throw_type(&ctx, "invalid or reserved shell surface name")); }
+            let monitor = string(&ctx, &monitor, "output name")?;
+            if monitor.is_empty() || monitor.len() > 256 { return Err(Exception::throw_type(&ctx, "invalid output name")); }
+            let attach = attach.into_function().ok_or_else(|| Exception::throw_type(&ctx, "lock surface content must be a function"))?;
+            let mut surfaces = shell.lock_surfaces.borrow_mut();
+            if surfaces.len() >= MAX_LAYERS { return Err(Exception::throw_range(&ctx, "lock surface limit reached")); }
+            if surfaces.values().any(|wanted| wanted.spec.monitor == monitor) {
+                return Err(Exception::throw_type(&ctx, "output already owns a lock surface"));
+            }
+            if surfaces.values().any(|wanted| wanted.spec.name == name)
+                || shell.layers.borrow().values().any(|wanted| wanted.spec.name == name)
+            {
+                return Err(Exception::throw_type(&ctx, "duplicate shell surface name"));
+            }
+            let id = shell.id(&ctx)?;
+            surfaces.insert(id, WantedLock { spec: LockSpec { name, monitor }, attach: Persistent::save(&ctx, attach) });
+            if !shell.lock_dirty.replace(true) { shell.waker.wake(WakeReason::AppWork); }
+            Ok(id)
+        }))?;
+        let weak = Rc::downgrade(self);
+        api.set("closeLock", Func::from(move |ctx: Ctx<'js>, id: Value<'js>| {
+            let shell = owner(&weak, &ctx)?;
+            shell.require_lock_authority(&ctx)?;
+            if shell.life.get() != Lifecycle::Stopping { shell.require_active(&ctx)?; }
+            if shell.lock_surfaces.borrow_mut().remove(&layer_id(&ctx, &id)?).is_some()
+                && !shell.lock_dirty.replace(true)
+            {
+                shell.waker.wake(WakeReason::AppWork);
+            }
+            Ok::<(), rquickjs::Error>(())
+        }))?;
+        Ok(())
     }
 }
 
 fn owner(weak: &Weak<Shell>, ctx: &Ctx<'_>) -> rquickjs::Result<Rc<Shell>> {
     weak.upgrade().ok_or_else(|| Exception::throw_reference(ctx, "shell session is disposed"))
 }
+
 
 /// A bounded identifier usable as a single capture path component.
 pub(crate) fn valid_name(name: &str) -> bool {
@@ -379,6 +576,57 @@ fn optional_string(ctx: &Ctx<'_>, value: &Object<'_>, key: &str, default: &str) 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn lock_requests_are_separate_from_layer_authority_and_blocked_during_cleanup() {
+        let runtime = rquickjs::Runtime::new().expect("create QuickJS runtime");
+        let context = rquickjs::Context::full(&runtime).expect("create QuickJS context");
+        let waker = zgui::platform::PlatformCx::waker(&zgui_platform_headless::Headless::new());
+        let shell = Shell::new(Authority::Denied, Authority::Allowed, SessionLockState::Locked, ContractPolicy::Throw, waker);
+        shell.activate();
+        context.with(|ctx| {
+            shell.install(&ctx).expect("install shell bridge");
+            let state = ctx.eval::<String, _>(r#"
+                let state;
+                let lock = __zguiShell.requestSessionLock(value => { state = value; });
+                state
+            "#).expect("subscribe under an existing lock");
+            assert_eq!(state, "locked", "observer receives retained compositor state");
+            assert_eq!(shell.take_lock_command(), Some(LockCommand::Request), "authorized generation stages a request");
+            shell.with_cleanup(|| {
+                for code in ["lock.unlock()", "__zguiShell.requestSessionLock(() => {})"] {
+                    assert!(ctx.eval::<(), _>(code).is_err(), "cleanup admitted {code}");
+                    ctx.catch();
+                }
+            });
+            shell.mark_cleanup_jobs_pending();
+            assert!(ctx.eval::<(), _>("lock.unlock()").is_err(), "disposer continuation staged unlock");
+            ctx.catch();
+            assert_eq!(shell.take_lock_command(), None, "cleanup must not leave a staged command");
+            shell.clear_cleanup_jobs_pending();
+            ctx.eval::<(), _>("lock.unlock()").expect("stage explicit unlock outside cleanup");
+            assert_eq!(shell.take_lock_command(), Some(LockCommand::Unlock), "normal turn stages unlock after the cleanup barrier");
+            ctx.eval::<(), _>("lock.unlock()").expect("stage a command before fencing");
+            let id = ctx.eval::<u32, _>("__zguiShell.openLock('locker', 'output', () => {})")
+                .expect("stage a surface before fencing");
+            shell.fence_lock_authority();
+            assert_eq!(shell.take_lock_command(), None, "fencing drops the staged unlock");
+            assert!(!shell.update_lock_state(SessionLockState::Finished), "fenced generation must not receive further observer callbacks");
+            assert!(!shell.update_lock_state(SessionLockState::Locked), "compositor state cannot restore generation authority");
+            for code in [
+                "lock.unlock()",
+                "__zguiShell.requestSessionLock(() => {})",
+                "__zguiShell.openLock('locker', 'output', () => {})",
+            ] {
+                assert!(ctx.eval::<(), _>(code).is_err(), "fenced generation admitted {code}");
+                ctx.catch();
+            }
+            ctx.eval::<(), _>(format!("__zguiShell.closeLock({id})")).expect("fenced generation can release its lock surface");
+            assert!(!shell.owns_lock(id), "teardown must remove the fenced generation's surface");
+            ctx.eval::<(), _>("lock.unsubscribe()").expect("fenced generation can release an observer");
+            shell.clear();
+        });
+    }
 
     #[test]
     fn exclusive_zone_preserves_the_wayland_sentinel_and_reservations() {

@@ -2,6 +2,7 @@
 
 use smithay_client_toolkit::reexports::client::protocol::wl_keyboard::WlKeyboard;
 use smithay_client_toolkit::reexports::client::protocol::wl_touch::WlTouch;
+use smithay_client_toolkit::reexports::client::protocol::wl_surface::WlSurface;
 use zgui_geom::{Css, CssPx, Point};
 use zgui_platform::SurfaceId;
 use zgui_vocab::Modifiers;
@@ -71,6 +72,8 @@ pub struct Seat {
     pub(crate) held: Modifiers,
     /// Which surface has the keyboard.
     pub(crate) keyboard_focus: Option<SurfaceId>,
+    /// The native lock parent receiving keyboard input, even before the UI claims it.
+    pub(crate) lock_keyboard_surface: Option<WlSurface>,
     /// Which surface the pointer is over.
     pub(crate) pointer_focus: Option<SurfaceId>,
     /// Where the pointer last was, in the space a layout is written in.

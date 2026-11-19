@@ -70,6 +70,7 @@ pub mod error;
 pub mod menu;
 pub mod monitor;
 pub mod scroll;
+pub mod session_lock;
 pub mod surface;
 pub mod theme;
 pub mod waker;
@@ -91,6 +92,7 @@ pub use crate::error::{PlatformError, Unsupported};
 pub use crate::menu::{AppMenu, MenuAction, MenuEntry, MenuId, MenuRole, Shortcut, Submenu};
 pub use crate::monitor::{MonitorInfo, refresh_interval};
 pub use crate::scroll::ScrollSettings;
+pub use crate::session_lock::SessionLockState;
 pub use crate::surface::{
     Anchor, BadIcon, ComposeAhead, Constrain, CursorStyle, DecorationSource, Decorations,
     DragEvent, FullscreenMode, GpuSurface, InputRect, InputRegion, KeyboardInteractivity, Layer,

@@ -3,6 +3,7 @@
 use zgui_geom::{Css, CssPx, Point, Size};
 use zgui_vocab::SharedString;
 
+use crate::SurfaceId;
 use crate::surface::chrome::{Decorations, FullscreenMode, WindowLevel};
 use crate::surface::icon::WindowIcon;
 use crate::surface::role::{LayerPlacement, PopupPlacement, SurfaceRole};
@@ -27,9 +28,13 @@ pub struct SurfaceAttributes {
     /// What this surface is to the desktop.
     ///
     /// A role a backend cannot make is refused rather than downgraded, so a component asks
-    /// [`PlatformCapabilities`](crate::PlatformCapabilities) first. Everything below this field
-    /// describes a window and is ignored by the roles that are not one.
+    /// [`PlatformCapabilities`](crate::PlatformCapabilities) first.
     pub role: SurfaceRole,
+    /// For a lock role, the current claim this hidden surface is staged to replace.
+    ///
+    /// The backend keeps the current claim active until it is destroyed. A caller must
+    /// not present replacement frames before that handoff. Other roles ignore this field.
+    pub replacing_lock: Option<SurfaceId>,
     /// The size the content should start at.
     pub size: Option<Size<CssPx, Css>>,
     /// The smallest the user may make it.
@@ -98,6 +103,7 @@ impl SurfaceAttributes {
         Self {
             title: title.into(),
             role: SurfaceRole::Toplevel,
+            replacing_lock: None,
             size: None,
             min_size: None,
             max_size: None,

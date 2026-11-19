@@ -148,6 +148,7 @@ impl Application {
     }
 
     fn after_native(&mut self, cx: &dyn PlatformCx) {
+        if let Some(error) = self.native.failure().take() { self.fail(cx, error); return; }
         if let Err(error) = self.attach(cx) { self.fail(cx, error); return; }
         let retry = self.retry_sender(cx);
         {
@@ -161,9 +162,13 @@ impl Application {
     }
 
     fn after_shell(&mut self, cx: &dyn PlatformCx) {
-        if cx.is_exiting() { return; }
+        if cx.is_exiting() || self.failure.borrow().is_some() { return; }
         if let Err(error) = self.host.shell_turn(&mut self.native, cx, ImageChoice::Live, &self.monitors) {
-            self.fail(cx, error);
+            if cx.session_lock_state().is_retained() {
+                eprintln!("session-lock UI fault (compositor lock retained): {error}");
+            } else {
+                self.fail(cx, error);
+            }
         }
     }
 
@@ -194,12 +199,15 @@ impl Application {
                     None => self.host.set_module(module),
                 }
             }
-            Err(error) => eprintln!("reload-package-rejected: {error}"),
+            Err(error) => {
+                eprintln!("reload-package-rejected: {error}");
+            }
         }
     }
 
     fn reconcile_control(&mut self, cx: &dyn PlatformCx) {
         if self.failure.borrow().is_some() {
+            self.host.hide_lock_ui();
             self.stop_control(cx);
             cx.request_exit();
             return;
@@ -254,8 +262,7 @@ impl Application {
 
     fn stop_sessions(&mut self, cx: &dyn PlatformCx) {
         self.harness.stop();
-        self.host.stop_shell_surfaces(&mut self.native, cx);
-        self.host.stop();
+        self.host.stop(&mut RuntimeSurface::new(&mut self.native, cx, ImageChoice::Live));
     }
 }
 impl AppHandler for Application {
@@ -400,10 +407,12 @@ fn main() -> Result<(), Box<dyn Error>> {
     if pure_shell && (exercise || layer_config.is_some()) {
         return Err("--pure-shell cannot be combined with --exercise or --layer-config".into());
     }
-    if (pure_shell || layer_config.is_some())
-        && !package.as_ref().is_some_and(|package| package.manifest.capabilities.shell_surfaces)
-    {
-        return Err("E_CAPABILITY: shell startup requires capabilities.shellSurfaces".into());
+    let capabilities = package.as_ref().map(|package| &package.manifest.capabilities);
+    if layer_config.is_some() && !capabilities.is_some_and(|capabilities| capabilities.shell_surfaces) {
+        return Err("E_CAPABILITY: --layer-config requires capabilities.shellSurfaces".into());
+    }
+    if pure_shell && !capabilities.is_some_and(|capabilities| capabilities.shell_surfaces || capabilities.session_lock) {
+        return Err("E_CAPABILITY: --pure-shell requires capabilities.shellSurfaces or capabilities.sessionLock".into());
     }
     let pending = Rc::new(RefCell::new(Vec::new()));
     let roots = pending.clone();

@@ -5,7 +5,8 @@ use std::time::{Duration, Instant};
 use calloop::EventLoop;
 use calloop_wayland_source::WaylandSource;
 use zgui_platform::{
-    AppHandler, Clock, IdlePolicy, Install, Park, Parked, PlatformError, Surface as _, SurfaceEvent,
+    AppHandler, Clock, IdlePolicy, Install, Park, Parked, PlatformError, SessionLockState,
+    Surface as _, SurfaceEvent,
 };
 
 use crate::cx::WaylandCx;
@@ -125,8 +126,18 @@ impl<A: AppHandler> WaylandApp<A> {
         while !self.state.live.exiting.get() {
             self.turn()?;
         }
+        self.finish_unlock()?;
         let cx = WaylandCx::new(&self.state);
         self.handler.shutting_down(&cx);
+        self.finish_unlock()
+    }
+
+    fn finish_unlock(&mut self) -> Result<(), PlatformError> {
+        // Shutdown may follow an explicit unlock in the same callback. Wait for its sync before
+        // dropping the connection and lock surfaces, without invoking more application callbacks.
+        while self.state.session_lock_state() == SessionLockState::Unlocking {
+            self.events.dispatch(None, &mut self.state).map_err(|error| self.state.explain(&error))?;
+        }
         Ok(())
     }
 
@@ -139,6 +150,10 @@ impl<A: AppHandler> WaylandApp<A> {
             self.handler.monitors_changed(&cx);
         }
         self.deliver_wakes();
+        if self.state.take_lock_focus_changed() {
+            self.state.refresh_lock_keyboard_focus();
+            self.state.refresh_lock_ime_focus();
+        }
         self.deliver_events();
         self.retire();
         self.deliver_frames();
@@ -166,7 +181,7 @@ impl<A: AppHandler> WaylandApp<A> {
             let cx = WaylandCx::new(&self.state);
             self.handler.surface_event(&cx, id, event);
             if closing {
-                self.state.live.close(id);
+                self.state.destroy_surface(id);
             }
         }
     }
@@ -192,6 +207,11 @@ impl<A: AppHandler> WaylandApp<A> {
     fn deliver_frames(&mut self) {
         let now = self.state.live.clock.now();
         for surface in self.state.live.all() {
+            if matches!(surface.role(), crate::surface::Role::LockContent(_))
+                && self.state.session_lock_state() == SessionLockState::Unlocking
+            {
+                continue;
+            }
             // The pacer is handed the visibility to *write* as well as to read: a frame callback
             // given up on is the evidence that the compositor has stopped drawing this surface,
             // and a run of them is the only occlusion signal that needs no protocol version and no

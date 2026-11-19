@@ -3,6 +3,7 @@ import type { Owner } from "#solid";
 import type {
   CanvasScene, LayerAnchor, LayerSurfacePlacement, Monitor, NativeDismissLayerOptions, NativeDismissReason,
   NativeGeometry, NativeGeometryKind, NativeNode, NativeOverlayLayer, NativeWindowRect,
+  SessionLockState,
 } from "./types.js";
 
 export type LayerPlacement = Required<Omit<LayerSurfacePlacement, "output" | "margin">> & {
@@ -55,6 +56,9 @@ export interface NativeHost {
     updateLayer(id: number, placement: LayerPlacement): void;
     closeLayer(id: number): void;
     setInputRegion(id: number, region: NativeInputRegion): void;
+    requestSessionLock(callback: (state: SessionLockState) => void): { unlock(this: void): void; unsubscribe(this: void): void };
+    openLock(name: string, output: string, attach: (root: NativeNode, bridge: UiBridge) => () => void): number;
+    closeLock(id: number): void;
   };
 }
 

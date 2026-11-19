@@ -186,8 +186,12 @@ impl CaptureRenderer {
 impl Renderer for CaptureRenderer {
     fn capabilities(&self) -> render::RenderCapabilities { self.inner.capabilities() }
     fn configure(&mut self, target: RenderTarget) {
-        self.inner.configure(target);
         let mut state = self.handle.0.borrow_mut();
+        // An unchanged offscreen target keeps its last presented texture.
+        if state.target == Some(target) {
+            return;
+        }
+        self.inner.configure(target);
         state.target = Some(target);
         state.configuration_id += 1;
         state.presented_draw = None;

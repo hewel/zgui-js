@@ -9,6 +9,7 @@ use crate::error::PlatformError;
 use crate::menu::AppMenu;
 use crate::monitor::MonitorInfo;
 use crate::scroll::ScrollSettings;
+use crate::session_lock::SessionLockState;
 use crate::surface::{Surface, SurfaceAttributes, SurfaceId};
 use crate::theme::ColorScheme;
 use crate::waker::Waker;
@@ -29,6 +30,7 @@ pub trait PlatformCx {
     /// Creates a surface.
     ///
     /// The surface is created hidden and is shown once its first frame has been drawn.
+    /// A lock role instead claims the platform-owned surface for that output.
     fn create_surface(
         &self,
         attributes: &SurfaceAttributes,
@@ -44,6 +46,7 @@ pub trait PlatformCx {
     ///
     /// Destroying a surface that has already gone does nothing. A backend whose surfaces are not
     /// windows has nothing to do here and says so with an empty body.
+    /// Releasing a lock role restores the platform's fallback without unlocking.
     fn destroy_surface(&self, id: SurfaceId);
 
     /// The surface with this identifier, while it still exists.
@@ -57,6 +60,33 @@ pub trait PlatformCx {
 
     /// The output the desktop considers primary, when it names one.
     fn primary_monitor(&self) -> Option<MonitorInfo>;
+
+    /// Requests a session lock independently of any application surface.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the backend cannot start or retain a lock.
+    fn request_session_lock(&self) -> Result<(), PlatformError> {
+        Err(crate::Unsupported.into())
+    }
+
+    /// The latest compositor decision, not merely the application's intent.
+    #[must_use]
+    fn session_lock_state(&self) -> SessionLockState {
+        SessionLockState::Unlocked
+    }
+
+    /// Explicitly requests unlock of an acquired session lock.
+    ///
+    /// The backend preserves the lock surfaces until the compositor acknowledges the request.
+    /// An asynchronous backend reports completion through [`Self::session_lock_state`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when no lock is acquired or the request cannot be sent.
+    fn unlock_session(&self) -> Result<(), PlatformError> {
+        Err(crate::Unsupported.into())
+    }
 
     /// The desktop's light or dark preference, when it can be discovered.
     ///

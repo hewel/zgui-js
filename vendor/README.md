@@ -338,3 +338,22 @@ Regression gates:
     cargo test -j 4 -p native-host package:: --offline
     cargo test -j 4 -p native-host session_host::tests --offline
     node --test --test-concurrency=1 tests/preview/stylex.test.mjs
+
+## Compositor session lock
+
+`zgui-platform` distinguishes the lock role from layer shell and offers
+explicit request, state query and unlock operations. `zgui-runtime` forwards
+those operations without making lock ownership a window lifetime.
+
+`zgui-platform-wayland` requires ext-session-lock-v1 and `wl_subcompositor`.
+It acknowledges configure before the first non-null commit and retains an opaque
+parent surface on each output. Application content is a disposable subsurface;
+releasing it exposes the native fallback without changing the lock role.
+Only explicit unlock of an acquired lock sends `unlock_and_destroy`, with a
+display sync before destroying its surfaces. Acquiring, refusing, hotplugging
+and disconnecting without unlocking are exercised on a private socket.
+
+`zgui-platform-headless` models the acquisition decision, per-output coverage,
+fallback and explicit unlock for the Preview fixture; no live desktop is locked.
+
+    cargo test -j 4 --manifest-path vendor/zgui-platform-wayland/Cargo.toml --test session_lock_protocol --offline

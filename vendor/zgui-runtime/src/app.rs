@@ -25,7 +25,7 @@ use std::sync::Arc;
 use zgui_geom::{Css, CssPx, Size};
 use zgui_platform::{
     AppHandler, Clock, IdlePolicy, LayerPlacement, MonitorInfo, PlatformCx, PlatformError,
-    Surface, SurfaceAttributes, SurfaceEvent, SurfaceId, SurfaceRole, WakeReason,
+    SessionLockState, Surface, SurfaceAttributes, SurfaceEvent, SurfaceId, SurfaceRole, WakeReason,
 };
 use zgui_render::{RenderTarget, Renderer};
 use zgui_view::{Anchor, BuildCx};
@@ -723,6 +723,30 @@ impl Runtime {
         &self.monitors
     }
 
+    /// Requests a compositor lock that does not depend on any window's lifetime.
+    ///
+    /// # Errors
+    ///
+    /// Returns the platform's error if it cannot start or retain a lock.
+    pub fn request_session_lock(&self, cx: &dyn PlatformCx) -> Result<(), PlatformError> {
+        cx.request_session_lock()
+    }
+
+    /// Reads the platform's latest compositor lock decision.
+    #[must_use]
+    pub fn session_lock_state(&self, cx: &dyn PlatformCx) -> SessionLockState {
+        cx.session_lock_state()
+    }
+
+    /// Requests explicit unlock of an acquired lock; state reports compositor acknowledgement.
+    ///
+    /// # Errors
+    ///
+    /// Returns the platform's error if the lock is not acquired or the request cannot be sent.
+    pub fn unlock_session(&self, cx: &dyn PlatformCx) -> Result<(), PlatformError> {
+        cx.unlock_session()
+    }
+
     /// Schedules application work independently of frames and surface lifetime.
     pub fn app_timers(&self) -> AppTimers {
         self.app_timers.clone()
@@ -881,6 +905,8 @@ impl Runtime {
                 .clone_from(&self.application_id);
         }
         let surface = cx.create_surface(&self.live[index].spec.attributes)?;
+        // A predecessor identifies only this creation, not any subsequent resume.
+        self.live[index].spec.attributes.replacing_lock = None;
         let scale = surface.scale_factor();
         let size = first_extent(surface.size(), self.live[index].spec.attributes.size, scale);
         let translucent = self.live[index].spec.attributes.transparent;
@@ -1289,17 +1315,26 @@ impl AppHandler for Runtime {
         self.apply_menu(cx);
     }
 
-    fn surfaces_lost(&mut self, _cx: &dyn PlatformCx) {
+    fn surfaces_lost(&mut self, cx: &dyn PlatformCx) {
         // The surfaces are gone, not the windows: what the application asked for is kept so that
         // the next `surfaces_available` opens all of it again. A suspend is not a close, and
         // applying the exit policy here would stop an application that is only in the background.
-        let ids: Vec<SurfaceId> = self
-            .windows
+        let surfaces: Vec<_> = self
+            .live
             .iter()
-            .map(|window| window.surface().id())
+            .filter_map(|live| {
+                Some((
+                    live.surface?,
+                    matches!(live.spec.attributes.role, SurfaceRole::Lock(_)),
+                ))
+            })
             .collect();
-        for id in ids {
+        for (id, lock) in surfaces {
             self.forget_surface(id);
+            if lock {
+                // A lock role can survive the window; tell the platform to restore its fallback.
+                cx.destroy_surface(id);
+            }
         }
         self.waker = None;
     }

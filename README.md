@@ -186,7 +186,7 @@ Current architectural boundaries and open workstreams:
 
 - **Popup & desktop daemons:** Pinned upstream `zgui` does not support out-of-surface layer-parent `xdg-popup` windows. No compositor-specific WM, audio, MPRIS, or notification daemons are shipped inside the UI framework.
 - **Solid 2.0 runtime ([`ADR-0001`](docs/adr/0001-solid-2-migration-posture.md)):** Upgraded to `solid-js@2.0.1` (`@solidjs/universal@2.0.1`, `@solidjs/babel-plugin@2.0.1`) with microtask-staged reactivity drained inside host checkpoints and a curated `@hewel/zgui` API surface.
-- **Wayland shell capabilities ([`ADR-0002`](docs/adr/0002-wayland-shell-framework-boundaries.md)):** Planned generic framework additions—multi-output layer surfaces, live input regions, `ext-session-lock-v1`, spring physics, canvas/SVG documents, capability-gated dynamic images, sockets, subprocesses, and inbound control channels—are scoped so UI-independent system daemons stay outside `zgui-js`.
+- **Wayland shell capabilities ([`ADR-0002`](docs/adr/0002-wayland-shell-framework-boundaries.md)):** Multi-output layers and [fail-closed session locks](packages/ui/README.md#wayland-session-lock) are manifest-gated. Desktop services and authentication stay outside `zgui-js`.
 - **Verification scope:** Offscreen GPU previews do not replace real-desktop validation of compositor focus, IME, clipboard, or monitor hotplug; hardware timings remain environment-specific observations.
 
 ## Documentation

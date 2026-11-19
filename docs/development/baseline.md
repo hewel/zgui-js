@@ -145,9 +145,10 @@ scenario. The real compositor/IME run is recorded in
 ## Pure-shell startup
 
 Run `bun run dev --app <app> --pure-shell` (or pass `--pure-shell --bundle <dist>`
-to `native-host`). The package must declare `zgui.capabilities.shellSurfaces`
-and export a synchronous `mount()` returning a disposer. The Session starts
-without a primary window and can remain alive with zero Shell surfaces.
+to `native-host`). Declare `zgui.capabilities.shellSurfaces` or
+`zgui.capabilities.sessionLock` and export a synchronous `mount()` returning
+a disposer. The Session starts without a primary window and can remain alive
+with zero Shell surfaces.
 Without `--pure-shell`, `mount(root)` remains the default.
 
 `useMonitors()` follows event-driven output inventory; a `LayerSurface` tied

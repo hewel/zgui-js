@@ -218,6 +218,7 @@ fn capabilities(pixels: bool) -> Value {
         "selectors.test-id":true, "selectors.semantic":true, "tree.inspect":true,
         "input.pointer":true, "input.keyboard":true, "input.text":true, "input.wheel":true, "input.ime":false,
         "assets.native-readiness":true, "capture.transparent":false, "capture.sequence":false,
+        "session-lock":true,
         "surface.resize":true, "surface.scale":true, "surface.color-scheme":true, "surface.recreate":true, "surface.multiple":true,
         "lifecycle.reload":false, "source.node-location":false
     })
@@ -227,7 +228,7 @@ const RUN_CAPABILITIES: &[&str] = &[
     "pixels", "selectors.test-id", "selectors.semantic", "tree.inspect",
     "input.pointer", "input.keyboard", "input.text", "input.wheel",
     "virtual-time", "services.fixtures", "assets.native-readiness", "surface.resize", "surface.scale", "surface.color-scheme", "surface.recreate",
-    "surface.multiple",
+    "surface.multiple", "session-lock",
 ];
 
 pub(super) fn schema_read_error(kind: &str, path: &std::path::Path, error: crate::bounded_fs::BoundedReadError) -> Error {

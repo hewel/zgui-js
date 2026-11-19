@@ -47,7 +47,29 @@ object_struct! {
         commands: Option<Vec<CommandScript>>,
         #[serde(default, deserialize_with = "present_provider", skip_serializing_if = "Option::is_none")]
         control: Option<ControlProvider>,
+        /// Optional one-shot response from the fixture compositor.
+        #[serde(rename = "sessionLock", default, deserialize_with = "present_provider", skip_serializing_if = "Option::is_none")]
+        pub(crate) session_lock: Option<SessionLockFixture>,
     }
+}
+
+object_struct! {
+    /// Scripted response to the next session-lock request.
+    #[serde(deny_unknown_fields)]
+    pub(crate) struct SessionLockFixture {
+        /// Acquisition outcome reported to the application.
+        pub(crate) outcome: LockOutcome,
+    }
+}
+
+/// The fixture compositor's acquisition decision.
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum LockOutcome {
+    /// Confirm the lock.
+    Locked,
+    /// Refuse before confirming the lock.
+    Finished,
 }
 fn present_provider<'de, D: serde::Deserializer<'de>, T: Deserialize<'de>>(deserializer: D) -> Result<Option<T>, D::Error> { T::deserialize(deserializer).map(Some) }
 object_struct! {
@@ -412,6 +434,11 @@ impl FixtureRuntime {
             .filter_map(|(&id, call)|(call.generation==generation && call.service=="assets").then_some(id)).collect();
         for id in ids { self.cancel(id); }
     }
+    /// Record the headless compositor's state after retiring all JS ownership.
+    pub(crate) fn record_session_lock(&self, snapshot: Value) {
+        self.record(&mut self.state.borrow_mut(), "sessionLock", snapshot);
+    }
+
     pub(crate) fn dispose(&self) {
         let mut state = self.state.borrow_mut();
         if state.disposed { return; }

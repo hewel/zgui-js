@@ -34,10 +34,10 @@ impl SessionSurface for StubSurface {
         }
     }
     fn request_frame(&self, document: DocumentId) { self.frames.borrow_mut().push(document); }
-    fn close_shell_surface(&mut self, _token: WindowToken, _id: SurfaceId) -> bool {
+    fn close_shell_surface(&mut self, _token: WindowToken, _id: Option<SurfaceId>) -> bool {
         panic!("the primary-only fixture cannot open shell surfaces");
     }
-    fn stage_shell_surfaces(&mut self, _staged: &mut ShellWindows, _monitors: &[Monitor], _session: &Rc<Session>) -> SessionResult<()> {
+    fn stage_shell_surfaces(&mut self, _staged: &mut ShellWindows, _previous: &ShellWindows, _monitors: &[Monitor], _session: &Rc<Session>) -> SessionResult<()> {
         Ok(())
     }
 }
@@ -198,11 +198,12 @@ fn reload_records_predecessor_leaks_without_rejecting_the_successor() {
     let acceptance = native.host.acceptance().unwrap();
     assert_eq!(acceptance["status"], "accepted", "{outcome:?}");
     let leak = &acceptance["predecessorLeak"];
-    assert_eq!(leak["code"], "E_TEARDOWN");
-    assert_eq!(leak["generation"], old.generation);
-    assert_eq!(leak["resources"], serde_json::to_value(ResourceCounts { image_handles: 1, ..Default::default() }).unwrap());
-    assert_eq!(old.counts(), ResourceCounts::default());
-    assert_eq!(native.text(), "active");
+    assert_eq!(leak["code"], "E_TEARDOWN", "acceptance records the predecessor's leaked lease");
+    assert_eq!(leak["generation"], old.generation, "the leaked lease belongs to the predecessor");
+    assert_eq!(leak["resources"], serde_json::to_value(ResourceCounts { image_handles: 1, ..Default::default() }).unwrap(),
+        "the predecessor report identifies the image lease, not the canceled callbacks");
+    assert_eq!(old.counts(), ResourceCounts::default(), "forced teardown releases the predecessor's leases");
+    assert_eq!(native.text(), "active", "a teardown leak does not replace an ordinary successor with fallback");
 }
 
 #[test]
@@ -231,7 +232,7 @@ fn generation_never_reused_across_surface_loss_and_reattach() {
     native.attach();
     assert_eq!(native.session().generation, 1);
     // Surface loss retires everything; the rebuilt region mounts a new generation.
-    native.host.stop();
+    native.host.stop(&mut native.surface);
     native.host.pending.borrow_mut().push(native.region.clone());
     native.attach();
     assert_eq!(native.session().generation, 2);
@@ -387,12 +388,12 @@ fn ordered_sheet_slots_survive_replacement_and_recreated_documents_install_their
     old.retire();
     assert_eq!(native.stub.stylesheet("application:0").as_deref(), Some("text {color:green}"));
     assert_eq!(native.stub.stylesheet("application:1"), None);
-    native.host.stop();
+    native.host.stop(&mut native.surface);
     assert_eq!(native.stub.stylesheet("application:0"), None);
     native.host.pending.borrow_mut().push(native.region.clone());
     native.attach();
     assert_eq!(native.stub.stylesheet("application:0").as_deref(), Some("text {color:green}"));
-    native.host.stop();
+    native.host.stop(&mut native.surface);
 }
 
 #[test]
@@ -477,7 +478,7 @@ fn verified_package_fonts_are_registered_before_mount_and_retired_without_withdr
     first_session.retire();
     assert_eq!(first_session.counts().fonts, 0);
     assert!(native.region.fonts.contains_family("ApplicationSans"));
-    native.host.stop();
+    native.host.stop(&mut native.surface);
     assert!(!native.region.fonts.contains_family("ApplicationSans"));
 }
 
@@ -504,7 +505,7 @@ fn initial_propagated_mount_failure_remains_owned_until_failure_evidence_is_pers
     let failed = native.session();
     assert_eq!(failed.generation, 1);
     assert_eq!(native.host.acceptance().unwrap()["status"], "rejected");
-    native.host.stop();
+    native.host.stop(&mut native.surface);
     assert_eq!(failed.counts(), ResourceCounts::default());
 }
 
@@ -589,4 +590,218 @@ fn failed_shell_child_mount_keeps_the_predecessor_and_last_successful_build() {
 
     host.stop_shell_surfaces(&mut runtime, &cx);
     assert_eq!(previous.retire().counts, ResourceCounts::default(), "shutdown releases the working shell without leaks");
+}
+
+#[test]
+fn rejected_lock_candidate_keeps_the_accepted_auth_surface() {
+    let good = lock_package(r#"
+        export const hostApiVersion = 1;
+        export function mount() {
+            const lock = __zguiShell.requestSessionLock(() => {});
+            __zguiShell.openLock('locker', 'A', (root, bridge) => {
+                bridge.insertNode(root, bridge.createTextNode('accepted auth UI'), null);
+                return () => bridge.clearRoot(root);
+            });
+            return () => lock.unsubscribe();
+        }
+    "#);
+    let failed_child = lock_package(r#"
+        export const hostApiVersion = 1;
+        export function mount() {
+            __zguiShell.requestSessionLock(() => {}).unlock();
+            __zguiShell.openLock('replacement', 'A', () => { throw Error('candidate lock child failed'); });
+            return () => {};
+        }
+    "#);
+    let mut fixture = LockedShell::new(&good);
+    let previous = fixture.session();
+    let (_, auth) = previous.mount_regions().pop().expect("accepted auth region");
+    let surface = fixture.cx.offscreen(auth.surface).expect("accepted platform claim");
+    zgui::platform::AppHandler::surface_event(&mut fixture.runtime, &fixture.cx, auth.surface, zgui::platform::SurfaceEvent::RedrawRequested);
+    assert!(fixture.cx.session_lock_snapshot().fallback_outputs.is_empty(), "the accepted auth frame must be visible before reload");
+    for (candidate, fault) in [(lock_package(BAD_EVAL), "evaluation exploded"), (failed_child, "candidate lock child failed")] {
+        let outcome = fixture.replace(&candidate);
+        assert!(matches!(&outcome, ReloadOutcome::Rejected(error) if error.to_string().contains(fault)),
+            "the candidate must be rejected for {fault}: {outcome:?}");
+        fixture.turn().expect("accepted generation remains active");
+        assert!(Rc::ptr_eq(&previous, &fixture.session()), "candidate rejection must not replace the active owner");
+        assert!(Rc::ptr_eq(&auth, &previous.mount_regions().pop().expect("accepted auth still mounted").1),
+            "rejection must retain the same mounted region and authentication state");
+        assert!(Arc::ptr_eq(&surface, &fixture.cx.offscreen(auth.surface).expect("accepted platform claim remains")),
+            "candidate rejection must keep the original platform surface");
+        assert_eq!(auth.region.dom.text_content(auth.region.root), "accepted auth UI", "candidate rejection must not clear auth UI");
+        assert!(fixture.cx.session_lock_snapshot().fallback_outputs.is_empty(), "candidate rejection must not hide the accepted UI");
+        fixture.assert_locked();
+    }
+}
+
+#[test]
+fn lock_cleanup_faults_veto_staged_unlock() {
+    let good = lock_package(LOCK_UI);
+    for (source, fault) in [
+        (r#"
+            export const hostApiVersion = 1;
+            export function mount() {
+                const lock = __zguiShell.requestSessionLock(() => {});
+                __zguiShell.openLock('locker', 'A', () => () => { throw Error('lock disposer fault'); });
+                lock.unlock();
+                return () => lock.unsubscribe();
+            }
+        "#, "lock disposer fault"),
+        (r#"
+            export const hostApiVersion = 1;
+            export function mount() {
+                const lock = __zguiShell.requestSessionLock(() => {});
+                __zguiShell.openLock('locker', 'A', () => () => { Promise.reject(Error('lock disposal rejected')); });
+                lock.unlock();
+                return () => lock.unsubscribe();
+            }
+        "#, "lock disposal rejected"),
+        (r#"
+            export const hostApiVersion = 1;
+            export function mount() {
+                const lock = __zguiShell.requestSessionLock(() => {});
+                const layer = __zguiShell.openLayer('panel', {}, () => () => { throw Error('layer disposer fault'); });
+                __zguiShell.openLock('locker', 'A', () => () => __zguiShell.closeLayer(layer));
+                lock.unlock();
+                return () => lock.unsubscribe();
+            }
+        "#, "layer disposer fault"),
+    ] {
+        let mut fixture = LockedShell::new(&good);
+        let outcome = fixture.replace(&lock_package(source));
+        assert!(matches!(outcome, ReloadOutcome::Mounted { .. }), "candidate has no fault until disposal: {outcome:?}");
+        let error = fixture.turn().expect_err("teardown failure must veto the staged unlock");
+        assert!(error.to_string().contains(fault), "expected teardown error {fault}, got {error}");
+        fixture.assert_locked();
+        assert_eq!(fixture.cx.session_lock_snapshot().fallback_outputs, ["A"], "a teardown fault leaves native lock coverage");
+    }
+}
+
+#[test]
+fn lock_disposer_cannot_defer_an_unlock_to_a_timer_or_frame() {
+    let package = lock_package(r#"
+        export const hostApiVersion = 1;
+        let auth;
+        export function closeAuth() { __zguiShell.closeLock(auth); }
+        export function mount() {
+            const lock = __zguiShell.requestSessionLock(() => {});
+            __zguiShell.openLayer('panel', {}, () => () => {});
+            auth = __zguiShell.openLock('locker', 'A', () => () => {
+                try { setTimeout(() => lock.unlock(), 1); } catch {}
+                try { requestAnimationFrame(() => lock.unlock()); } catch {}
+            });
+            return () => lock.unsubscribe();
+        }
+    "#);
+    let mut fixture = LockedShell::new(&package);
+    let session = fixture.session();
+    session.invoke("closeAuth").expect("close the lock UI but retain the compositor lock");
+    fixture.turn().expect("dispose the lock child");
+    let counts = session.counts();
+    fixture.cx.virtual_clock().advance(Duration::from_millis(20));
+    zgui::platform::AppHandler::deadline_reached(&mut fixture.runtime, &fixture.cx);
+    fixture.turn().expect("drain callbacks after the teardown turn");
+    fixture.assert_locked();
+    assert_eq!(counts.timers, 0, "lock disposal must not register a timer");
+    assert_eq!(counts.frame_callbacks, 0, "lock disposal must not register a frame callback on the surviving layer");
+}
+
+#[test]
+fn predecessor_teardown_fault_fences_successor_mount_jobs_until_clean_recovery() {
+    let faulty = lock_package(r#"
+        export const hostApiVersion = 1;
+        export function mount() {
+            __zguiShell.requestSessionLock(() => {});
+            __zguiShell.openLock('locker', 'A', () => () => {});
+            return () => { throw Error('predecessor teardown fault'); };
+        }
+    "#);
+    let successor = lock_package(r#"
+        export const hostApiVersion = 1;
+        export function mount() {
+            const lock = __zguiShell.requestSessionLock(() => {});
+            __zguiShell.openLock('next', 'A', () => () => {});
+            Promise.resolve().then(() => { try { lock.unlock(); } catch {} });
+            return () => lock.unsubscribe();
+        }
+    "#);
+    let mut fixture = LockedShell::new(&faulty);
+    let outcome = fixture.replace(&successor);
+    assert!(matches!(outcome, ReloadOutcome::Mounted { .. }), "the successor can mount without inheriting unlock authority: {outcome:?}");
+    fixture.turn().expect("process the fenced successor's queued mount job");
+    fixture.assert_locked();
+    assert_eq!(fixture.cx.session_lock_snapshot().fallback_outputs, ["A"], "failed predecessor teardown forces native fallback");
+
+    let outcome = fixture.replace(&successor);
+    assert!(matches!(outcome, ReloadOutcome::Mounted { .. }), "a clean authorized replacement can recover: {outcome:?}");
+    fixture.turn().expect("process the clean replacement's authorized unlock");
+    assert_eq!(fixture.cx.session_lock_snapshot().unlock_count, 1, "only the clean replacement can send unlock");
+}
+
+const LOCK_UI: &str = r#"
+    export const hostApiVersion = 1;
+    export function mount() {
+        const lock = __zguiShell.requestSessionLock(() => {});
+        __zguiShell.openLock('locker', 'A', () => () => {});
+        return () => lock.unsubscribe();
+    }
+"#;
+
+fn lock_package(source: &str) -> Fixture {
+    Fixture::new(source, "").with_capabilities(crate::package::Capabilities {
+        session_lock: true, shell_surfaces: true, ..Default::default()
+    })
+}
+
+struct LockedShell {
+    host: SessionHost,
+    runtime: zgui::runtime::Runtime,
+    cx: zgui_platform_headless::Headless,
+    monitors: Vec<Monitor>,
+}
+
+impl LockedShell {
+    fn new(package: &Fixture) -> Self {
+        use zgui::{geom::{DevicePx, Point, Size}, platform::{AppHandler, MonitorInfo, PlatformCapabilities, PlatformCx}};
+        let mut runtime = zgui::runtime::App::new()
+            .with_renderer(Box::new(|_, target| {
+                let mut renderer = zgui_testkit_scene::CaptureRenderer::new();
+                zgui::render::Renderer::configure(&mut renderer, target);
+                Ok(Box::new(renderer))
+            }))
+            .into_handler(|_| panic!("pure lock shell has no primary document"))
+            .expect("create runtime");
+        runtime.without_primary_surface();
+        let mut supported = PlatformCapabilities::none();
+        supported.session_lock = true;
+        let cx = zgui_platform_headless::Headless::new().with_capabilities(supported).with_monitors(vec![
+            MonitorInfo::new(Point::new(DevicePx(0.0), DevicePx(0.0)), Size::new(DevicePx(32.0), DevicePx(24.0)), 1.0).with_name("A"),
+        ]);
+        runtime.surfaces_available(&cx);
+        let monitors = Monitor::snapshot(&cx.monitors());
+        let mut host = SessionHost::new(Rc::default(), SessionModule::package(package.package()),
+            SessionPolicy::live(host_services::Executor::new(2, 64).expect("create service executor")), RecoveryPolicy::Propagate);
+        host.set_pure_shell(zgui::app::Fonts::shipped_only());
+        let mut fixture = Self { host, runtime, cx, monitors };
+        for _ in 0..2 { fixture.turn().expect("lock and attach the UI"); }
+        fixture.assert_locked();
+        fixture
+    }
+
+    fn turn(&mut self) -> SessionResult<()> {
+        self.host.shell_turn(&mut self.runtime, &self.cx, ImageChoice::PackageOnly, &self.monitors)
+    }
+
+    fn replace(&mut self, package: &Fixture) -> ReloadOutcome {
+        self.host.replace_shell(&mut self.runtime, &self.cx, ImageChoice::PackageOnly, SessionModule::package(package.package()))
+    }
+
+    fn session(&self) -> Rc<Session> { self.host.sessions().next().expect("active shell session").clone() }
+
+    fn assert_locked(&self) {
+        let lock = self.cx.session_lock_snapshot();
+        assert_eq!(lock.state, SessionLockState::Locked, "the compositor must remain locked");
+        assert_eq!(lock.unlock_count, 0, "no unlock request may reach the compositor");
+    }
 }

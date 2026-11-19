@@ -15,3 +15,9 @@ do not advance it. Install/remove commands apply in queue order, not hash-map or
 the live revision after late callbacks. It does not assert that pixels were presented.
 Freshness also requires `!Window::has_pending_stylesheets()` so queued-only theme changes cannot
 reuse evidence from the previous sheet set.
+
+## Session-lock surfaces
+
+`Runtime` forwards lock requests, state reads, and explicit unlock to the
+platform. Opening a lock surface claims an existing platform role for app
+content. Closing or suspending its window releases the claim, not the lock.

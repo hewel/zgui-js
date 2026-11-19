@@ -1,12 +1,14 @@
 //! The platform itself: a clock, a clipboard, a waker and its offscreen surfaces.
 
+use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use zgui_geom::{DevicePx, Size};
 use zgui_platform::{
     Clipboard, Clock, ColorScheme, MonitorInfo, PlatformCapabilities, PlatformCx, PlatformError,
-    ScrollSettings, Surface, SurfaceAttributes, SurfaceId, VirtualClock, WakeReason, Waker,
+    ScrollSettings, SessionLockState, Surface, SurfaceAttributes, SurfaceId, SurfaceRole,
+    Unsupported, VirtualClock, WakeReason, Waker,
 };
 
 use crate::clipboard::MemoryClipboard;
@@ -15,6 +17,117 @@ use crate::waker::RecordingWaker;
 
 /// The extent of a surface created without one, in physical pixels.
 const DEFAULT_SIZE: Size<DevicePx, zgui_geom::Device> = Size::new(DevicePx(640.0), DevicePx(480.0));
+
+/// The fixture compositor's decision on the next session-lock request.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SessionLockDecision {
+    /// Acquire the lock.
+    #[default]
+    Lock,
+    /// Refuse the lock before acquisition.
+    Refuse,
+}
+
+/// Observable session-lock evidence from the headless compositor.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct SessionLockSnapshot {
+    /// The latest compositor decision.
+    pub state: SessionLockState,
+    /// The count of explicitly acknowledged unlocks.
+    pub unlock_count: u64,
+    /// Named outputs with a platform-owned role, sorted by name.
+    pub covered_outputs: Vec<String>,
+    /// Covered outputs currently showing opaque fallback pixels, sorted by name.
+    pub fallback_outputs: Vec<String>,
+}
+
+#[derive(Default)]
+struct SessionLock {
+    state: SessionLockState,
+    next_decision: SessionLockDecision,
+    unlock_count: u64,
+    outputs: BTreeMap<String, LockOutput>,
+}
+
+struct LockOutput {
+    current: Arc<OffscreenSurface>,
+    replacement: Option<Arc<OffscreenSurface>>,
+}
+
+impl LockOutput {
+    fn surfaces(&self) -> impl Iterator<Item = &Arc<OffscreenSurface>> {
+        std::iter::once(&self.current).chain(self.replacement.as_ref())
+    }
+
+    fn remove(&self) {
+        for surface in self.surfaces() {
+            surface.remove_lock();
+        }
+    }
+
+    fn release(&mut self, id: SurfaceId) -> bool {
+        if self.current.id() == id {
+            if let Some(replacement) = self.replacement.take() {
+                self.current.remove_lock();
+                self.current = replacement;
+            } else {
+                self.current.release_lock();
+            }
+        } else if let Some(replacement) = self.replacement.take_if(|surface| surface.id() == id) {
+            replacement.remove_lock();
+        } else {
+            return false;
+        }
+        true
+    }
+}
+
+impl SessionLock {
+    fn sync_outputs(&mut self, monitors: &[MonitorInfo], next_id: impl Fn() -> SurfaceId) {
+        self.outputs.retain(|name, output| {
+            let present = monitors
+                .iter()
+                .any(|monitor| monitor.name.as_deref() == Some(name.as_str()));
+            if !present {
+                output.remove();
+            }
+            present
+        });
+        for monitor in monitors {
+            let Some(name) = monitor.name.as_deref() else {
+                continue;
+            };
+            if let Some(output) = self.outputs.get(name) {
+                for surface in output.surfaces() {
+                    if surface.size() != monitor.size {
+                        surface.resize(monitor.size);
+                    }
+                    surface.set_scale_factor(monitor.scale_factor);
+                    surface.set_refresh_rate_millihertz(monitor.refresh_rate_millihertz);
+                }
+            } else {
+                let surface = OffscreenSurface::new_lock(next_id(), monitor.size);
+                let mut attributes = SurfaceAttributes::new("Session lock fallback");
+                attributes.role = SurfaceRole::Lock(name.to_owned());
+                surface.set_requested_attributes(&attributes);
+                surface.set_scale_factor(monitor.scale_factor);
+                surface.set_refresh_rate_millihertz(monitor.refresh_rate_millihertz);
+                self.outputs.insert(name.to_owned(), LockOutput {
+                    current: Arc::new(surface),
+                    replacement: None,
+                });
+            }
+        }
+    }
+}
+
+#[derive(Default)]
+struct Desktop {
+    surfaces: Vec<Arc<OffscreenSurface>>,
+    monitors: Vec<MonitorInfo>,
+    session_lock: SessionLock,
+}
 
 /// A platform with no windowing system behind it.
 ///
@@ -29,12 +142,10 @@ pub struct Headless {
     capabilities: PlatformCapabilities,
     /// Where a wake from another thread is queued.
     waker: Arc<RecordingWaker>,
-    /// The surfaces that exist.
-    surfaces: Mutex<Vec<Arc<OffscreenSurface>>>,
+    /// The surfaces and monitor inventory, together so a locked output is never published bare.
+    desktop: Mutex<Desktop>,
     /// The next surface number, never reused.
     next_surface: AtomicU64,
-    /// The outputs this platform reports.
-    monitors: Mutex<Vec<MonitorInfo>>,
     /// The desktop's light or dark preference, when one has been declared.
     color_scheme: Mutex<Option<ColorScheme>>,
     /// What this platform says a scroll from its devices means.
@@ -62,9 +173,8 @@ impl Headless {
             clipboard,
             capabilities: PlatformCapabilities::none(),
             waker,
-            surfaces: Mutex::new(Vec::new()),
+            desktop: Mutex::new(Desktop::default()),
             next_surface: AtomicU64::new(1),
-            monitors: Mutex::new(Vec::new()),
             color_scheme: Mutex::new(None),
             scroll: Mutex::new(ScrollSettings::desktop()),
             exiting: AtomicBool::new(false),
@@ -73,9 +183,8 @@ impl Headless {
 
     /// The same platform declaring `capabilities`.
     ///
-    /// Nothing here can actually do any of them. It exists so that a component whose behaviour
-    /// depends on what the desktop offers can be exercised under each answer, which is the only
-    /// way to find out that it degrades rather than disappearing.
+    /// Enabling `session_lock` opts into the deterministic offscreen compositor lock, not a
+    /// lock on the machine running the fixture.
     pub fn with_capabilities(mut self, capabilities: PlatformCapabilities) -> Self {
         self.capabilities = capabilities;
         self
@@ -91,7 +200,34 @@ impl Headless {
     ///
     /// The fixture driving the handler delivers the corresponding `monitors_changed` callback.
     pub fn set_monitors(&self, monitors: Vec<MonitorInfo>) {
-        *self.monitors.lock().expect("the monitor inventory is not poisoned") = monitors;
+        let mut desktop = self.desktop();
+        if desktop.session_lock.state == SessionLockState::Locked {
+            desktop.session_lock.sync_outputs(&monitors, || self.next_surface_id());
+        }
+        desktop.monitors = monitors;
+    }
+
+    /// Selects the next fresh request's decision; subsequent requests default to acquisition.
+    pub fn set_session_lock_decision(&self, decision: SessionLockDecision) {
+        self.desktop().session_lock.next_decision = decision;
+    }
+
+    /// Observes lock ownership and presentation without changing them or advancing the fixture.
+    #[must_use]
+    pub fn session_lock_snapshot(&self) -> SessionLockSnapshot {
+        let desktop = self.desktop();
+        let lock = &desktop.session_lock;
+        SessionLockSnapshot {
+            state: lock.state,
+            unlock_count: lock.unlock_count,
+            covered_outputs: lock.outputs.keys().cloned().collect(),
+            fallback_outputs: lock
+                .outputs
+                .iter()
+                .filter(|(_, output)| output.current.lock_fallback_frame().is_some())
+                .map(|(name, _)| name.clone())
+                .collect(),
+        }
     }
 
     /// The same platform declaring what a scroll from its devices means.
@@ -129,20 +265,22 @@ impl Headless {
     /// A test asserts against what a surface recorded, and the contract deliberately offers no way
     /// to ask.
     pub fn offscreen(&self, id: SurfaceId) -> Option<Arc<OffscreenSurface>> {
-        self.surfaces
-            .lock()
-            .expect("the surface list is not poisoned")
+        let desktop = self.desktop();
+        desktop
+            .surfaces
             .iter()
+            .chain(desktop.session_lock.outputs.values().flat_map(LockOutput::surfaces))
             .find(|surface| surface.id() == id)
             .map(Arc::clone)
     }
 
     /// Every offscreen surface that exists, as itself.
     pub fn offscreens(&self) -> Vec<Arc<OffscreenSurface>> {
-        self.surfaces
-            .lock()
-            .expect("the surface list is not poisoned")
+        let desktop = self.desktop();
+        desktop
+            .surfaces
             .iter()
+            .chain(desktop.session_lock.outputs.values().flat_map(LockOutput::surfaces))
             .map(Arc::clone)
             .collect()
     }
@@ -156,6 +294,14 @@ impl Headless {
     pub fn has_pending_wakes(&self) -> bool {
         self.waker.pending() > 0
     }
+
+    fn desktop(&self) -> MutexGuard<'_, Desktop> {
+        self.desktop.lock().expect("the desktop is not poisoned")
+    }
+
+    fn next_surface_id(&self) -> SurfaceId {
+        SurfaceId::new(self.next_surface.fetch_add(1, Ordering::Relaxed))
+    }
 }
 
 impl PlatformCx for Headless {
@@ -163,25 +309,49 @@ impl PlatformCx for Headless {
         &self,
         attributes: &SurfaceAttributes,
     ) -> Result<Arc<dyn Surface>, PlatformError> {
+        if let SurfaceRole::Lock(name) = &attributes.role {
+            if !self.capabilities.session_lock {
+                return Err(Unsupported.into());
+            }
+            let mut desktop = self.desktop();
+            let output = desktop.session_lock.outputs.get_mut(name).ok_or_else(|| {
+                PlatformError::SurfaceCreation(format!("no session-lock surface on {name:?}"))
+            })?;
+            let surface = if let Some(previous) = attributes.replacing_lock {
+                if output.current.id() != previous || !output.current.lock_is_claimed() || output.replacement.is_some() {
+                    return Err(PlatformError::SurfaceCreation(format!("no replaceable lock claim on {name:?}")));
+                }
+                let surface = Arc::new(OffscreenSurface::new_lock(self.next_surface_id(), output.current.size()));
+                surface.set_scale_factor(output.current.scale_factor());
+                surface.set_refresh_rate_millihertz(output.current.refresh_rate_millihertz());
+                output.replacement.insert(surface)
+            } else {
+                &output.current
+            };
+            if !surface.claim_lock() {
+                return Err(PlatformError::SurfaceCreation(format!(
+                    "the session-lock surface on {name:?} is already claimed"
+                )));
+            }
+            surface.set_title(attributes.title.as_str());
+            surface.set_requested_attributes(attributes);
+            return Ok(Arc::clone(surface) as Arc<dyn Surface>);
+        }
         let size = attributes.size.map_or(DEFAULT_SIZE, |size| {
             Size::new(DevicePx(size.width.0), DevicePx(size.height.0))
         });
-        let id = SurfaceId::new(self.next_surface.fetch_add(1, Ordering::Relaxed));
-        let surface = Arc::new(OffscreenSurface::new(id, size));
+        let surface = Arc::new(OffscreenSurface::new(self.next_surface_id(), size));
         surface.set_title(attributes.title.as_str());
         surface.set_requested_attributes(attributes);
-        self.surfaces
-            .lock()
-            .expect("the surface list is not poisoned")
-            .push(Arc::clone(&surface));
+        self.desktop().surfaces.push(Arc::clone(&surface));
         Ok(surface as Arc<dyn Surface>)
     }
 
     fn destroy_surface(&self, id: SurfaceId) {
-        self.surfaces
-            .lock()
-            .expect("the surface list is not poisoned")
-            .retain(|surface| surface.id() != id);
+        let mut desktop = self.desktop();
+        if !desktop.session_lock.outputs.values_mut().any(|output| output.release(id)) {
+            desktop.surfaces.retain(|surface| surface.id() != id);
+        }
     }
 
     fn surface(&self, id: SurfaceId) -> Option<Arc<dyn Surface>> {
@@ -197,11 +367,67 @@ impl PlatformCx for Headless {
     }
 
     fn monitors(&self) -> Vec<MonitorInfo> {
-        self.monitors.lock().expect("the monitor inventory is not poisoned").clone()
+        self.desktop().monitors.clone()
     }
 
     fn primary_monitor(&self) -> Option<MonitorInfo> {
-        self.monitors.lock().expect("the monitor inventory is not poisoned").first().cloned()
+        self.desktop().monitors.first().cloned()
+    }
+
+    fn request_session_lock(&self) -> Result<(), PlatformError> {
+        if !self.capabilities.session_lock {
+            return Err(Unsupported.into());
+        }
+        let mut desktop = self.desktop();
+        let Desktop {
+            monitors,
+            session_lock,
+            ..
+        } = &mut *desktop;
+        match session_lock.state {
+            SessionLockState::Locked | SessionLockState::Pending => return Ok(()),
+            SessionLockState::Refused | SessionLockState::Unlocked => {}
+            _ => {
+                return Err(PlatformError::Backend(
+                    "cannot replace the active session lock".to_owned(),
+                ));
+            }
+        }
+        let next = match std::mem::take(&mut session_lock.next_decision) {
+            SessionLockDecision::Lock => {
+                session_lock.sync_outputs(monitors, || self.next_surface_id());
+                SessionLockState::Locked
+            }
+            SessionLockDecision::Refuse => SessionLockState::Refused,
+        };
+        if next != session_lock.state {
+            session_lock.state = next;
+            self.waker.wake(WakeReason::AppWork);
+        }
+        Ok(())
+    }
+
+    fn session_lock_state(&self) -> SessionLockState {
+        self.desktop().session_lock.state
+    }
+
+    fn unlock_session(&self) -> Result<(), PlatformError> {
+        if !self.capabilities.session_lock {
+            return Err(Unsupported.into());
+        }
+        let mut desktop = self.desktop();
+        let lock = &mut desktop.session_lock;
+        if lock.state != SessionLockState::Locked {
+            return Err(PlatformError::Backend("no acquired session lock to unlock".to_owned()));
+        }
+        // This compositor acknowledges synchronously; only now can the output roles go away.
+        lock.state = SessionLockState::Unlocked;
+        lock.unlock_count += 1;
+        for (_, output) in std::mem::take(&mut lock.outputs) {
+            output.remove();
+        }
+        self.waker.wake(WakeReason::AppWork);
+        Ok(())
     }
 
     fn color_scheme(&self) -> Option<ColorScheme> {

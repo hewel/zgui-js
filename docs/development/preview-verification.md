@@ -532,7 +532,7 @@ pixels for the replacement surface.
 ### Named Shell surfaces and scripted outputs
 
 Use `"pureShell": true` in a preview profile to exercise a package's `mount()`
-without opening `main`. The package must declare `capabilities.shellSurfaces`.
+without opening `main`. Declare `capabilities.shellSurfaces` or `capabilities.sessionLock`.
 Omit `pureShell` to keep the normal `mount(root)` startup and optionally open
 named Shell surfaces in the same Session.
 
@@ -556,14 +556,22 @@ optional. Use a new list to change geometry or remove specific outputs, and
 `"monitors": []` to remove them all. The SDK's `useMonitors()` observes the
 ordered snapshot; neither hotplug nor surface creation advances virtual time.
 
-Select a mounted Shell surface by its `LayerSurface` name on `capture`, input,
+Select a mounted Shell surface by its `LayerSurface` or `SessionLockSurface` name on `capture`, input,
 assertion, and surface configuration steps. A missing surface fails with
 `E_SURFACE_NOT_FOUND`. Input positions are in the selected surface's local logical
 pixels. Named pointer and wheel steps respect that surface's input region;
 an explicit coordinate outside it records no dispatch. Preview does not
 composite or route through to another desktop surface.
 
-Named `surface.recreate` replaces only that mount region, preserving the
+For session-lock scenarios, require `session-lock` and use `monitors.set` to
+exercise coverage on output arrival and removal. The offscreen compositor
+accepts by default; `"services": {"sessionLock": {"outcome": "finished"}}`
+refuses the next request. Readiness records lock state, covered outputs,
+fallback outputs, and the explicit unlock count. The `sessionLock` record in
+`services.json` is sampled after JS retirement, before the fixture platform
+is discarded. A retained compositor lock is not a leaked session resource.
+
+Named layer `surface.recreate` replaces only that mount region, preserving the
 Session generation and all other surfaces. Named captures store evidence in
 `captures/surfaces/<surface>/<captureId>.*`; `main` keeps
 `captures/<captureId>.*`. To inspect these artifacts use `preview inspect --surface

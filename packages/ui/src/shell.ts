@@ -1,8 +1,11 @@
 import { createEffect, createSignal, getOwner, onCleanup, runWithOwner } from "#solid";
 import { shellBridge } from "./host.js";
 import type { LayerPlacement, NativeInputRegion, UiBridge } from "./host.js";
-import { renderRegion } from "./render-app.js";
-import type { Accessor, LayerAnchor, LayerSurfaceProps, Monitor, NativeNode, NativeWindowRect } from "./types.js";
+import { renderRegion } from "./renderer/index.js";
+import type {
+  Accessor, LayerAnchor, LayerSurfaceProps, Monitor, NativeNode, NativeWindowRect,
+  SessionLockRequest, SessionLockState, SessionLockSurfaceProps,
+} from "./types.js";
 
 /** Subscribe to output snapshots for the lifetime of the current Solid owner. */
 export function useMonitors(): Accessor<readonly Monitor[]> {
@@ -114,6 +117,42 @@ export function LayerSurface(props: LayerSurfaceProps): null {
       closed: false,
     };
     current = request;
+  });
+  return null;
+}
+
+/** Request compositor locking. Unlock only from an explicit authorized application action. */
+export function requestSessionLock(): SessionLockRequest {
+  const [state, setState] = createSignal<SessionLockState>("unlocked");
+  const { unlock, unsubscribe: dispose } = shellBridge().requestSessionLock(setState);
+  if (getOwner()) onCleanup(dispose);
+  return { state, unlock, dispose };
+}
+
+/** Mount content on an output while locked, without owning the underlying lock role. */
+export function SessionLockSurface(props: SessionLockSurfaceProps): null {
+  const owner = getOwner();
+  if (!owner) throw new Error("SessionLockSurface requires a Solid owner");
+  const shell = shellBridge();
+  let current: { name: string; output: string; close: () => void } | undefined;
+  const close = () => {
+    const previous = current;
+    current = undefined;
+    previous?.close();
+  };
+  onCleanup(close);
+  createEffect(() => [props.name, props.output] as const, ([name, output]) => {
+    if (current?.name === name && current.output === output) return;
+    close();
+    let closed = false;
+    const id = shell.openLock(name, output, (root, bridge) => {
+      if (closed) return () => {};
+      return runWithOwner(owner, () => renderRegion(() => props.children, root, bridge));
+    });
+    current = { name, output, close() {
+      closed = true;
+      shell.closeLock(id);
+    } };
   });
   return null;
 }

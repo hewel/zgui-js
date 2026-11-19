@@ -1,14 +1,14 @@
 use std::{cell::{Cell, RefCell}, collections::BTreeMap, rc::Rc, time::{Duration, Instant}};
 
 use serde_json::{Value, json};
-use zgui::{geom::{DevicePx, Point, Size}, platform::{AppHandler, ColorScheme, IdlePolicy, MonitorInfo, PlatformCx, SurfaceEvent, SurfaceId, WakeReason}, runtime::{Runtime, Window}};
-use zgui_platform_headless::Headless;
+use zgui::{geom::{DevicePx, Point, Size}, platform::{AppHandler, ColorScheme, IdlePolicy, MonitorInfo, PlatformCapabilities, PlatformCx, SurfaceEvent, SurfaceId, WakeReason}, runtime::{Runtime, Window}};
+use zgui_platform_headless::{Headless, SessionLockDecision};
 
 use crate::{package::Package, session::{ResourceCounts, RetirementFailure, RuntimeTelemetry, Session, SessionError, SessionModule, SessionPolicy, SessionRetirement}};
 use crate::session_host::{ImageChoice, RecoveryPolicy, RuntimeSurface, SessionHost};
 use crate::shell::Monitor;
 use super::{Error, fixture::FixtureDefinition, output::Output, pipeline::{self, CaptureRequest, CheckpointSink, FrameObserver, FrameObservers, ObservationMode, OutputSink, Pipeline}, profile::{self, Limits, LoadedProfile, Surface}, resources};
-use crate::{assets::{ContractFailure, fixture::FixtureRuntime}, environment::Environment};
+use crate::{assets::{ContractFailure, fixture::{FixtureRuntime, LockOutcome}}, environment::Environment};
 
 mod actions;
 mod timeline;
@@ -67,6 +67,7 @@ impl PreviewHost {
     fn session(&self) -> Option<&Rc<Session>> { self.host.sessions().next() }
     fn fail(&mut self, cx: &dyn PlatformCx, fault: Fault) {
         if self.fault.is_none() { self.fault = Some(fault); }
+        self.host.hide_lock_ui();
         // The handler guards stop queued entries. The driver publishes the cause
         // before bounded disposal, so a blocked cleanup cannot erase that cause.
         cx.request_exit();
@@ -131,7 +132,7 @@ impl AppHandler for PreviewHost {
             self.retired_telemetry = RuntimeTelemetry::merge(self.retired_telemetry, report.telemetry);
             self.retired = Some(report);
         }
-        self.host.stop();
+        self.host.stop(&mut RuntimeSurface::new(&mut self.native, cx, ImageChoice::PackageOnly));
         self.deadline.set(deadline);
         self.observers.reset();
         self.native.surfaces_lost(cx);
@@ -176,6 +177,7 @@ pub struct Driver {
     maximum_time_us: u64,
     pure_shell: bool,
     shell_capable: bool,
+    lock_capable: bool,
     /// A mount fault observed while the harness already owned the session; the
     /// first `check` reports it so the run can persist the cause before finish.
     startup_fault: Option<Fault>,
@@ -192,7 +194,15 @@ impl Driver {
     }
 
     pub(super) fn with_sink(profile: &LoadedProfile, package: Rc<Package>, fixture:FixtureDefinition, sink: Box<dyn CheckpointSink>, run_deadline: Instant, stylesheet:String) -> Result<Self, Fault> {
-        let platform=Headless::new();
+        let mut capabilities = PlatformCapabilities::none();
+        capabilities.session_lock = true;
+        let platform = Headless::new().with_capabilities(capabilities);
+        if let Some(lock) = &fixture.services.session_lock {
+            platform.set_session_lock_decision(match lock.outcome {
+                LockOutcome::Locked => SessionLockDecision::Lock,
+                LockOutcome::Finished => SessionLockDecision::Refuse,
+            });
+        }
         let (epoch,start)=match profile.profile.clock {
             profile::Clock::Virtual{epoch_ms,start_us}=>(Some(epoch_ms),start_us),
             profile::Clock::Wall{}=>(None,0),
@@ -200,10 +210,11 @@ impl Driver {
         platform.virtual_clock().advance(Duration::from_micros(start));
         let environment=Environment::new(platform.clock(),epoch,profile.profile.random.seed);
         let fixtures=FixtureRuntime::new(fixture,environment.clone());
-        let shell_capable = package.manifest.capabilities.shell_surfaces;
+        let lock_capable = package.manifest.capabilities.session_lock;
+        let shell_capable = package.manifest.capabilities.shell_surfaces || lock_capable;
         let pure_shell = profile.profile.pure_shell;
         if pure_shell && !shell_capable {
-            return Err(Error::new("E_CAPABILITY", 6, "pureShell requires capabilities.shellSurfaces").into());
+            return Err(Error::new("E_CAPABILITY", 6, "pureShell requires capabilities.shellSurfaces or capabilities.sessionLock").into());
         }
         let mode = if pure_shell { ObservationMode::ShellOnly }
             else if shell_capable { ObservationMode::PrimaryAndShell }
@@ -241,7 +252,7 @@ impl Driver {
         })?;
         let mut driver = Self { pipeline,observers,shell_geometry:BTreeMap::new(),deadline,run_deadline,step_start_frame:Cell::new(0),limits:profile.profile.limits.clone(),
             opaque:surface.opaque,dimensions:(profile.physical_width,profile.physical_height),surface:surface.clone(),
-            environment,fixtures,maximum_time_us:start+profile.profile.limits.max_virtual_duration_ms*1000,startup_fault:None,pure_shell,shell_capable };
+            environment,fixtures,maximum_time_us:start+profile.profile.limits.max_virtual_duration_ms*1000,startup_fault:None,pure_shell,shell_capable,lock_capable };
         let setup = if pure_shell { driver.check() } else { driver.bind_main() };
         if let Err(fault) = setup.and_then(|_| driver.sync_shell_surfaces()) { driver.startup_fault = Some(fault); }
         Ok(driver)
@@ -426,7 +437,7 @@ impl Driver {
         let owned = window.and_then(|window| app.session()?.mount_region(window.document_id()));
         let resources=window.map(|window|resources::snapshot(window,&[],app.session().map(AsRef::as_ref)));
         let resource=resources.as_ref().and_then(|result|result.as_ref().ok());
-        json!({"appReady":self.pipeline.app().session().is_some(),"currentWorkSettled":!self.runnable(),
+        let mut readiness = json!({"appReady":self.pipeline.app().session().is_some(),"currentWorkSettled":!self.runnable(),
             "requiredAssetsReady":resource.map(|value|&value["requiredAssetsReady"]),"nativeAssetReadinessAvailable":true,"frameCurrent":window.is_some_and(|window|self.window_current(window)),
             "resourceRevision":window.map(Window::image_resource_revision),
             "requiredFontsReady":resource.map(|value|&value["requiredFontsReady"]),
@@ -438,7 +449,15 @@ impl Driver {
             "timeUs":self.environment.now_us(),"nextFixtureDeadlineUs":self.fixtures.next_deadline_us(),
             "nextNativeDeadlineUs":self.pipeline.parked_deadline().map(|next|next.saturating_duration_since(self.pipeline.platform().clock().origin()).as_micros()),
             "requiredMetadataRevision":owned.map(|owned|owned.bridge.metadata_revision()),
-            "requiredStateRevision":window.map(|window|window.dom().revision()),"generation":self.generation()})
+            "requiredStateRevision":window.map(|window|window.dom().revision()),"generation":self.generation()});
+        if self.lock_capable { readiness["sessionLock"] = self.session_lock_snapshot(); }
+        readiness
+    }
+
+    fn session_lock_snapshot(&self) -> Value {
+        let snapshot = self.pipeline.platform().session_lock_snapshot();
+        json!({"state":snapshot.state.as_str(), "unlockCount":snapshot.unlock_count,
+            "coveredOutputs":snapshot.covered_outputs, "fallbackOutputs":snapshot.fallback_outputs})
     }
     fn notify_fixture(&self) {
         let surfaces: Box<[_]> = self.pipeline.app().native.windows().iter().map(|window| window.surface().id()).collect();
@@ -556,6 +575,7 @@ impl Driver {
     pub fn finish(mut self) -> (Value, Option<Fault>, Option<RuntimeTelemetry>) {
         self.deadline.set(self.run_deadline.min(Instant::now()+Duration::from_millis(20)));
         self.pipeline.shut_down();
+        if self.lock_capable { self.fixtures.record_session_lock(self.session_lock_snapshot()); }
         self.fixtures.dispose();
         let report = self.pipeline.app().session().map(|session| session.retire());
         let telemetry = RuntimeTelemetry::merge(

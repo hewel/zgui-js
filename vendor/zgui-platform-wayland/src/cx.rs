@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use zgui_platform::{
     Clipboard, Clock, ColorScheme, MonitorInfo, PlatformCapabilities, PlatformCx, PlatformError,
-    Surface, SurfaceAttributes, SurfaceId, Waker,
+    SessionLockState, Surface, SurfaceAttributes, SurfaceId, Waker,
 };
 
 use crate::driver::WaylandState;
@@ -65,6 +65,18 @@ impl PlatformCx for WaylandCx<'_> {
 
     fn monitors(&self) -> Vec<MonitorInfo> {
         self.state.live.monitors.borrow().clone()
+    }
+
+    fn request_session_lock(&self) -> Result<(), PlatformError> {
+        self.state.request_session_lock()
+    }
+
+    fn session_lock_state(&self) -> SessionLockState {
+        self.state.session_lock_state()
+    }
+
+    fn unlock_session(&self) -> Result<(), PlatformError> {
+        self.state.unlock_session()
     }
 
     fn primary_monitor(&self) -> Option<MonitorInfo> {

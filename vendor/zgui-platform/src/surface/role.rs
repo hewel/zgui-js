@@ -20,8 +20,10 @@ pub enum SurfaceRole {
     Toplevel,
     /// A surface placed against a rectangle of another surface, and dismissed with it.
     Popup(PopupPlacement),
-    /// A part of the desktop shell: a wallpaper, a dock, a notification, a lock screen.
+    /// A part of the desktop shell: a wallpaper, a dock or a notification.
     Layer(LayerPlacement),
+    /// Application content on a platform-owned lock surface for the named output.
+    Lock(String),
 }
 
 /// Where a pop-up sits relative to the surface that owns it.

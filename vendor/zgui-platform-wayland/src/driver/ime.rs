@@ -27,6 +27,8 @@ use crate::input::text_input::Composing;
 pub(crate) struct Ime {
     /// The surface it attached itself to.
     pub(crate) surface: Option<SurfaceId>,
+    /// The native lock parent associated with IME, even while it has no UI claim.
+    lock_surface: Option<WlSurface>,
     /// The change being accumulated until the compositor says it is complete.
     pub(crate) pending: Composing,
 }
@@ -75,7 +77,10 @@ impl Dispatch<ZwpTextInputV3, ()> for WaylandState {
     ) {
         match event {
             zwp_text_input_v3::Event::Enter { surface } => state.ime_entered(&surface),
-            zwp_text_input_v3::Event::Leave { .. } => state.ime_left(),
+            zwp_text_input_v3::Event::Leave { .. } => {
+                state.ime.lock_surface = None;
+                state.ime_left();
+            }
             zwp_text_input_v3::Event::PreeditString {
                 text,
                 cursor_begin,
@@ -98,9 +103,23 @@ impl Dispatch<ZwpTextInputV3, ()> for WaylandState {
 impl WaylandState {
     /// The input method attached itself to a surface.
     fn ime_entered(&mut self, surface: &WlSurface) {
-        let Some(id) = self.identify(surface) else {
+        let target = self.lock_keyboard_target(surface);
+        self.ime.lock_surface = target.map(|_| surface.clone());
+        self.ime_target(target.unwrap_or_else(|| self.identify(surface)));
+    }
+
+    pub(super) fn refresh_lock_ime_focus(&mut self) {
+        if let Some(parent) = &self.ime.lock_surface {
+            self.ime_target(self.lock_keyboard_target(parent).flatten());
+        }
+    }
+
+    fn ime_target(&mut self, id: Option<SurfaceId>) {
+        if self.ime.surface == id {
             return;
-        };
+        }
+        self.ime_left();
+        let Some(id) = id else { return; };
         self.ime.surface = Some(id);
         self.link.composing_on(Some(id));
         self.report(id, SurfaceEvent::Ime(ImeEvent::Enabled));

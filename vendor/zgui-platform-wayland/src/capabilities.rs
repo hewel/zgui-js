@@ -13,6 +13,7 @@ pub fn of(offered: Offered) -> PlatformCapabilities {
     let mut capabilities = PlatformCapabilities::none();
     capabilities.native_popup_surfaces = true;
     capabilities.layer_surfaces = offered.layer_shell;
+    capabilities.session_lock = offered.session_lock;
     // Receiving a drop is the data device's, so it arrives with the clipboard. What arrives is
     // always paths: a drag of anything else carries something no file system can open, and this
     // backend drops it rather than turning it into a name nothing can read.
@@ -65,6 +66,8 @@ pub fn of(offered: Offered) -> PlatformCapabilities {
 pub struct Offered {
     /// `zwlr_layer_shell_v1`: surfaces that are part of the desktop rather than windows.
     pub layer_shell: bool,
+    /// `ext_session_lock_manager_v1`: exclusive compositor lock and per-output surfaces.
+    pub session_lock: bool,
     /// `zxdg_decoration_manager_v1`, and a compositor willing to draw the frame itself.
     pub server_decorations: bool,
     /// Whether the data device is wired up at all.
@@ -125,6 +128,7 @@ mod tests {
         // component that asks gets the same answer on the desktop that offers everything else.
         let everything = of(Offered {
             layer_shell: true,
+            session_lock: true,
             clipboard: true,
             server_decorations: true,
             primary_selection: true,

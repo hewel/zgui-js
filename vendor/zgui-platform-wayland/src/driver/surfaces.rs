@@ -31,6 +31,9 @@ impl WaylandState {
         &self,
         attributes: &SurfaceAttributes,
     ) -> Result<Arc<WaylandSurface>, PlatformError> {
+        if let SurfaceRole::Lock(output) = &attributes.role {
+            return self.claim_lock_output(output, attributes);
+        }
         let id = self.live.next_id();
         if let Some(named) = &attributes.application_id {
             self.live
@@ -180,7 +183,7 @@ impl WaylandState {
     }
 
     /// What every surface this loop makes is wired into.
-    fn links(&self) -> Links {
+    pub(super) fn links(&self) -> Links {
         Links {
             conn: self.conn.clone(),
             qh: self.qh.clone(),
@@ -196,7 +199,9 @@ impl WaylandState {
 
     /// Takes a surface down, innermost object first.
     pub(crate) fn destroy_surface(&self, id: SurfaceId) {
-        self.live.close(id);
+        if !self.release_lock_claim(id) {
+            self.live.close(id);
+        }
     }
 }
 

@@ -8,8 +8,8 @@ use std::time::Duration;
 
 use zgui_geom::{Css, CssPx, DevicePx, Edges, Point, Size};
 use zgui_platform::{
-    AppHandler, InputRect, InputRegion, LayerPlacement, MonitorInfo, PlatformCx, Surface,
-    SurfaceAttributes, SurfaceRole,
+    AppHandler, InputRect, InputRegion, LayerPlacement, MonitorInfo, PlatformCapabilities,
+    PlatformCx, SessionLockState, Surface, SurfaceAttributes, SurfaceEvent, SurfaceRole,
 };
 use zgui_platform_headless::Headless;
 use zgui_runtime::{App, WindowContent, WindowSpec};
@@ -164,4 +164,102 @@ fn timers_fire_and_cancel_while_no_surface_exists() {
         "neither timer leaves a pending deadline"
     );
     assert!(platform.surfaces().is_empty(), "timer delivery does not create a surface");
+}
+
+#[test]
+fn retiring_or_suspending_a_lock_window_leaves_platform_fallback() {
+    let mut capabilities = PlatformCapabilities::none();
+    capabilities.session_lock = true;
+    let platform = Headless::new()
+        .with_capabilities(capabilities)
+        .with_monitors(vec![monitor("A")]);
+    let mut runtime = App::new()
+        .with_renderer(Box::new(support::capture))
+        .into_handler(empty)
+        .expect("install the runtime");
+    runtime.without_primary_surface();
+    runtime.surfaces_available(&platform);
+    runtime.request_session_lock(&platform).expect("lock the platform");
+    assert_eq!(
+        runtime.session_lock_state(&platform),
+        SessionLockState::Locked,
+        "the runtime reports acquisition before mounting lock content"
+    );
+
+    let mut attrs = SurfaceAttributes::new("App lock");
+    attrs.role = SurfaceRole::Lock("A".to_owned());
+    let token = runtime
+        .open_surface(&platform, WindowSpec::new(attrs, WindowContent::default(), Box::new(empty)))
+        .expect("claim A for app content");
+    let id = runtime.surface_id(token).expect("lock window");
+    let offscreen = platform.offscreen(id).expect("platform-owned role");
+    runtime.surface_event(&platform, id, SurfaceEvent::RedrawRequested);
+    assert!(offscreen.lock_fallback_frame().is_none(), "a presented app frame replaces fallback");
+
+    let mut attrs = SurfaceAttributes::new("Replacement lock");
+    attrs.role = SurfaceRole::Lock("A".to_owned());
+    attrs.replacing_lock = Some(id);
+    let replacement = runtime
+        .open_surface(
+            &platform,
+            WindowSpec::new(attrs, WindowContent::default(), Box::new(empty)),
+        )
+        .expect("stage the replacement while the first window is live");
+    assert!(
+        offscreen.lock_fallback_frame().is_none(),
+        "staging the replacement does not hide the presented predecessor"
+    );
+    runtime.close_surface(&platform, token);
+    let token = replacement;
+    let id = runtime.surface_id(token).expect("the promoted lock window");
+    let offscreen = platform.offscreen(id).expect("the promoted platform role");
+
+    runtime.surfaces_lost(&platform);
+    assert_eq!(runtime.surface_id(token), None, "suspension releases the UI claim");
+    assert_eq!(
+        platform.session_lock_snapshot().fallback_outputs,
+        ["A"],
+        "suspension exposes fallback on the retained output"
+    );
+    runtime.surfaces_available(&platform);
+    assert_eq!(
+        runtime.surface_id(token),
+        Some(id),
+        "resume reclaims the platform role without reusing the stale predecessor ID"
+    );
+    runtime.surface_event(&platform, id, SurfaceEvent::RedrawRequested);
+    assert!(
+        offscreen.lock_fallback_frame().is_none(),
+        "the restored window replaces fallback after presenting again"
+    );
+
+    runtime.close_surface(&platform, token);
+    assert_eq!(runtime.surface_id(token), None, "closing the window retires its claim");
+    offscreen.set_visible(true);
+    assert_eq!(
+        offscreen.lock_fallback_frame().and_then(|frame| frame.pixel(1079, 1919)),
+        Some([0, 0, 0, 255]),
+        "the retained role displays fallback instead of the retired window",
+    );
+    assert_eq!(
+        runtime.session_lock_state(&platform),
+        SessionLockState::Locked,
+        "closing the last lock window does not release the compositor lock"
+    );
+    assert_eq!(
+        platform.session_lock_snapshot().unlock_count,
+        0,
+        "surface suspension and retirement must not send unlock requests"
+    );
+    runtime.unlock_session(&platform).expect("explicit unlock");
+    assert_eq!(
+        runtime.session_lock_state(&platform),
+        SessionLockState::Unlocked,
+        "explicit unlock releases the retained lock"
+    );
+    assert_eq!(
+        platform.session_lock_snapshot().unlock_count,
+        1,
+        "only the explicit unlock reaches the compositor"
+    );
 }

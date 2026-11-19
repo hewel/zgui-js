@@ -69,6 +69,40 @@ A node with no laid-out box contributes no input. Removing a bound node clears
 its input rectangle during the same bridge turn, even if your app still holds
 the ref. A detached handle cannot be used to register a new binding in a later turn.
 
+## Wayland session lock
+
+Declare `zgui.capabilities.sessionLock: true` in the application package.
+The grant is separate from `shellSurfaces`, denied by default, and also
+requires a backend that supports session locking. Unauthorized calls throw an
+error with `code: "E_CAPABILITY"`.
+
+Call `requestSessionLock()` from mounted code. Its `state()` accessor reports
+the compositor decision: only `"locked"` confirms that ordinary content is
+hidden across all outputs; `"refused"` means acquisition was denied. Use
+`<SessionLockSurface name="lock-dp-1" output="DP-1">…</SessionLockSurface>`
+to supply content for an output. Build one declaration per desired output
+with `useMonitors()` and a keyed `For`. Each declaration gets a distinct
+mount region; missing content and hotplugged outputs are covered by an
+opaque native fallback.
+
+Call `lock.unlock()` only after application-controlled authentication or an
+equivalent authorized action. The SDK does not authenticate users. `dispose()`
+invalidates the handle and its subscription, not the lock. A Solid owner
+also disposes the subscription on cleanup. Closing a surface, replacing or
+retiring a generation, or losing the JS runtime never unlocks the compositor.
+A rejected replacement leaves the accepted lock UI mounted. If the previous
+generation's teardown faults during a locked reload, the compositor keeps the
+native fallback and only a subsequent clean, authorized generation can unlock.
+An unhandled Promise rejection while the lock is retained, or a fault in any
+surface cleanup triggered by unlock, cancels the unlock. Surface disposers
+cannot register timers or animation-frame callbacks.
+If the process disconnects while locked, recovery is compositor policy.
+
+Preview advertises `session-lock`. `monitors.set` changes output inventory;
+set `services.sessionLock.outcome` to `"finished"` in the fixture to refuse
+the next request (default: `"locked"`). Preview records covered and fallback
+outputs and explicit unlock counts in readiness and `services.json`.
+
 ## Node queries
 
 `getWindowRect(node)` reads the last completed native frame and returns a copied

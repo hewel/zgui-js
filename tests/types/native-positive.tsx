@@ -3,8 +3,10 @@ import {
   createCanvasScene, createContext, createEffect, createMemo, createSignal, createSpring, createStore, createProjection,
   merge, omit, onCleanup, onSettled, reconcile, renderApp, renderShell, untrack, useContext, useMonitors,
   focus, getTextContent, getWindowRect, isAnimating, lockScroll, mountStylesheet, observeGeometry, precedes,
+  SessionLockSurface, requestSessionLock,
 } from "@hewel/zgui";
 import type { CanvasCommand, CanvasScene, CanvasTransform, Component, Context, NativeAnimationEvent, NativeChild, NativeContextMenuEvent, NativeFocusOptions, NativeNode, NativePointerBoundaryEvent, NativeRole, NativeTextControlProps, NativeTransitionEvent, NativeViewport, NativeWheelEvent, NativeWindowRect, ParentComponent, Spring, SpringOptions, TextFieldProps, TextAreaProps, VectorProps } from "@hewel/zgui";
+import type { SessionLockRequest, SessionLockState } from "@hewel/zgui";
 
 const Greeting: Component<{ name: string }> = props => <text>{props.name}</text>;
 const Container: ParentComponent = props => <box>{props.children}</box>;
@@ -196,6 +198,18 @@ export function mountShell(): () => void {
         <text>{monitor.x}:{monitor.y}:{monitor.width}:{monitor.height}:{scale}:{refresh}</text>
       </LayerSurface>;
     }}</For>;
+  });
+}
+
+export function mountLock(): () => void {
+  return renderShell(() => {
+    const lock: SessionLockRequest = requestSessionLock();
+    const monitors = useMonitors();
+    return <For each={monitors()} keyed={monitor => monitor.id}>{monitor =>
+      <SessionLockSurface name={`lock-${monitor().id.toLowerCase()}`} output={monitor().id}>
+        <text>{((): SessionLockState => lock.state())()}</text>
+      </SessionLockSurface>
+    }</For>;
   });
 }
 

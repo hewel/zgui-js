@@ -6,6 +6,7 @@ mod ime;
 mod input;
 pub mod live;
 mod protocol;
+mod session_lock;
 mod shell;
 mod surfaces;
 mod turn;
@@ -70,6 +71,8 @@ pub struct WaylandState {
     pub(crate) xdg: Arc<crate::surface::role::xdg::XdgShell>,
     /// The shell layer, where the compositor offers one.
     pub(crate) layers: Option<(LayerShell, u32)>,
+    /// The compositor lock and the backend-owned surfaces protecting its outputs.
+    session_lock: std::cell::RefCell<session_lock::SessionLock>,
     /// The seats, and everything attached to them.
     pub(crate) seats: SeatState,
     /// The one seat this backend tracks, and what it is pointed at.
@@ -157,9 +160,11 @@ impl WaylandState {
         let activation = ActivationState::bind(globals, &qh).ok();
         let data = DataDeviceManagerState::bind(globals, &qh).ok();
         let primary = PrimarySelectionManagerState::bind(globals, &qh).ok();
+        let session_lock = session_lock::SessionLock::bind(globals, &qh, &compositor);
 
         let offered = Offered {
             layer_shell: layers.is_some(),
+            session_lock: session_lock.borrow().offered(),
             clipboard: data.is_some(),
             primary_selection: primary.is_some(),
             text_input: text_input.is_some(),
@@ -176,6 +181,7 @@ impl WaylandState {
             compositor,
             xdg,
             layers,
+            session_lock,
             seats: SeatState::new(globals, &qh),
             seat: Seat::new(),
             link: Arc::default(),

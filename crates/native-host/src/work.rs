@@ -1,9 +1,9 @@
 //! Owner-thread roots and registrations; workers receive only owned service requests.
-use std::{cell::{Cell, RefCell}, collections::{HashMap, VecDeque, hash_map::Entry}, fmt::Write, rc::{Rc, Weak}, sync::{Arc, atomic::{AtomicBool, Ordering}}, time::Duration};
+use std::{cell::{Cell, OnceCell, RefCell}, collections::{HashMap, VecDeque, hash_map::Entry}, fmt::Write, rc::{Rc, Weak}, sync::{Arc, atomic::{AtomicBool, Ordering}}, time::Duration};
 use host_services::Completion;
 use rquickjs::{Ctx, Exception, Function, Object, Persistent, Value, function::{Func, Opt, Rest}, object::Property};
 use zgui::{platform::{SurfaceId, WakeReason, Waker}, runtime::{AppTimers, ImageBlobs}, view::{HostHandle, host::{FrameRequestId, Repeat, TimerId}}, vocab::Timestamp};
-use crate::{assets::{AssetError, AssetProvider, AssetSource, Delivery, MAX_SAFE_ID}, package::Package};
+use crate::{assets::{AssetError, AssetProvider, AssetSource, Delivery, MAX_SAFE_ID}, package::Package, shell::Shell};
 
 mod external;
 
@@ -34,6 +34,7 @@ pub(crate) struct Work {
     ready: RefCell<VecDeque<ScheduledCall>>,
     requests: RefCell<HashMap<u64, Pending>>,
     mode: Cell<Mode>,
+    cleanup_shell: OnceCell<Rc<Shell>>,
     generation: u64,
     scheduler: Scheduler,
     provider: Box<dyn AssetProvider>,
@@ -58,12 +59,17 @@ impl Work {
         let external = external::External::new(package.clone(), &assets);
         Rc::new(Self {
             registrations: RefCell::new(HashMap::new()), ready: RefCell::new(VecDeque::new()), requests: RefCell::new(HashMap::new()),
-            mode: Cell::new(Mode::Loading), generation, scheduler,
+            mode: Cell::new(Mode::Loading), cleanup_shell: OnceCell::new(), generation, scheduler,
             provider: assets.bind(package, generation, wake.clone()),
             image_blobs: ImageBlobs::new(generation),
             external,
             wake,
         })
+    }
+
+    /// Share the session's disposal barrier with every Work creation path.
+    pub(crate) fn guard_cleanup_with(&self, shell: Rc<Shell>) {
+        assert!(self.cleanup_shell.set(shell).is_ok(), "work cleanup barrier must be bound once for generation {}", self.generation);
     }
 
     /// Sets the shell's native frame source. Retiring a source also cancels its pending frames.
@@ -137,6 +143,7 @@ impl Work {
 
     fn can_create_work(&self) -> bool {
         matches!(self.mode.get(), Mode::Mounting | Mode::Mounted)
+            && self.cleanup_shell.get().is_none_or(|shell| !shell.cleanup_in_progress())
     }
 
     fn require_creation(&self, ctx: &Ctx<'_>) -> rquickjs::Result<()> {
@@ -290,7 +297,7 @@ impl Work {
     }
 
     fn read_asset<'js>(self: &Rc<Self>, ctx: &Ctx<'js>, path: String) -> rquickjs::Result<Object<'js>> {
-        self.provider.validate_request(&path, matches!(self.mode.get(), Mode::Mounting | Mode::Mounted), self.requests.borrow().len())
+        self.provider.validate_request(&path, self.can_create_work(), self.requests.borrow().len())
             .map_err(|error| self.asset_error(ctx, error))?;
         let id = self.id(ctx)?;
         let (promise, resolve, reject) = ctx.promise()?;

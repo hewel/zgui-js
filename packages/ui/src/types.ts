@@ -45,6 +45,28 @@ export interface LayerSurfaceProps extends LayerSurfacePlacement {
   readonly inputRegion?: LayerInputRegion;
   readonly children?: NativeChild;
 }
+
+/** The compositor's last confirmed session-lock state. */
+export type SessionLockState = "unlocked" | "pending" | "locked" | "refused" | "finished" | "unlocking";
+
+/** The package or selected backend does not grant session-lock authority. */
+export interface SessionLockCapabilityError extends Error {
+  readonly code: "E_CAPABILITY";
+}
+
+/** An authorized, generation-bound request. Leaving its owner never unlocks the session. */
+export interface SessionLockRequest {
+  readonly state: Accessor<SessionLockState>;
+  unlock(): void;
+  dispose(): void;
+}
+
+/** Content for a named output's compositor-owned lock surface. */
+export interface SessionLockSurfaceProps {
+  readonly name: string;
+  readonly output: string;
+  readonly children?: NativeChild;
+}
 export interface NativePoint { readonly x: number; readonly y: number; }
 export interface NativeSize { readonly width: number; readonly height: number; }
 export interface NativeScrollPosition {

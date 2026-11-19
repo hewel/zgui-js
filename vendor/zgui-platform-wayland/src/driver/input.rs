@@ -166,7 +166,9 @@ impl KeyboardHandler for WaylandState {
         self.observed(serial);
         // The keys already down when focus arrived are deliberately not replayed. Dispatching them
         // would type characters nobody pressed into whatever has just been focused.
-        let id = self.identify(surface);
+        let target = self.lock_keyboard_target(surface);
+        self.seat.lock_keyboard_surface = target.map(|_| surface.clone());
+        let id = target.unwrap_or_else(|| self.identify(surface));
         self.focus_moved(id);
     }
 
@@ -434,7 +436,14 @@ impl WaylandState {
 
     /// Gives up the keyboard focus.
     fn blur(&mut self) {
+        self.seat.lock_keyboard_surface = None;
         self.focus_moved(None);
+    }
+
+    pub(super) fn refresh_lock_keyboard_focus(&mut self) {
+        if let Some(parent) = &self.seat.lock_keyboard_surface {
+            self.focus_moved(self.lock_keyboard_target(parent).flatten());
+        }
     }
 
     /// Ends every live contact, for a gesture the compositor took away.

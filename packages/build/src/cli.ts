@@ -20,7 +20,7 @@ Application defaults to the current directory (counter at the repository root).
   build --stylex-diagnostics  Include StyleX source metadata (Preview always includes it)
   dev --exit-after-ms N  Close the native app after N milliseconds
   dev --layer-config F  Use an upstream layer-shell configuration
-  dev --pure-shell       Start without a primary window (requires shellSurfaces)
+  dev --pure-shell       Start without a primary window (requires shellSurfaces or sessionLock)
   preview --watch       Re-run offscreen scenarios on changes, without a desktop host
   preview --profile F --fixture F --scenario F --out NEW_DIRECTORY
 

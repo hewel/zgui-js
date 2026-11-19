@@ -1,6 +1,7 @@
 //! What a surface is to the compositor, and what each kind can be asked.
 
 pub mod layer;
+pub mod lock;
 pub mod popup;
 pub mod toplevel;
 pub mod xdg;
@@ -19,13 +20,16 @@ pub use crate::surface::role::xdg::toplevel::Toplevel;
 /// [`Unsupported`](zgui_platform::Unsupported) rather than being silently ignored, because a menu
 /// that quietly became a second application window is worse than a menu that did not open.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum Role {
     /// An ordinary window.
     Toplevel(Box<Toplevel>),
     /// A surface placed against a rectangle of another, dismissed with it.
     Popup(Box<Popup>),
-    /// A part of the desktop shell: a panel, a wallpaper, a lock screen.
+    /// A part of the desktop shell: a panel or a wallpaper.
     Layer(Box<LayerSurface>),
+    /// Application content above an output's compositor lock surface.
+    LockContent(lock::LockContent),
 }
 
 impl Role {
@@ -35,6 +39,7 @@ impl Role {
             Self::Toplevel(window) => window.wl_surface(),
             Self::Popup(popup) => popup.wl_surface(),
             Self::Layer(layer) => layer.wl_surface(),
+            Self::LockContent(content) => content.wl_surface(),
         }
     }
 
@@ -61,7 +66,7 @@ impl Role {
         match self {
             Self::Toplevel(window) => Some(window.xdg_surface()),
             Self::Popup(popup) => Some(popup.xdg_surface()),
-            Self::Layer(_) => None,
+            Self::Layer(_) | Self::LockContent(_) => None,
         }
     }
 
@@ -71,7 +76,7 @@ impl Role {
             Self::Toplevel(window) => window.ack(serial),
             Self::Popup(popup) => popup.ack(serial),
             // The toolkit's layer surface acknowledges its own.
-            Self::Layer(_) => {}
+            Self::Layer(_) | Self::LockContent(_) => {}
         }
     }
 

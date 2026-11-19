@@ -807,6 +807,9 @@ fn every_shell_mutation_requires_capability_even_when_caught() {
         "__zguiShell.updateLayer(1, {})",
         "__zguiShell.closeLayer(1)",
         "__zguiShell.setInputRegion(1, 'empty')",
+        "__zguiShell.requestSessionLock(() => {})",
+        "__zguiShell.openLock('locker', 'test-output', () => () => {})",
+        "__zguiShell.closeLock(1)",
     ];
     for operation in operations {
         let fixture = Fixture::new(&format!(r#"
@@ -919,6 +922,101 @@ fn geometry_defers_with_the_scale_captured_at_enqueue_time() {
     session.retire();
     assert_eq!(session.counts(), ResourceCounts::default());
     assert_eq!(native.backend.observation_count(), 0);
+}
+
+#[test]
+fn live_unhandled_rejection_discards_the_staged_lock_command_only_while_retained() {
+    let fixture = Fixture::new(r#"
+        export const hostApiVersion = 1;
+        export function mount() {
+            const lock = __zguiShell.requestSessionLock(state => {
+                if (state === 'locked') globalThis.retained = true;
+            });
+            if (globalThis.retained) lock.unlock();
+            return () => lock.unsubscribe();
+        }
+        export function reject() { Promise.reject(Error('live rejection')); }
+    "#, "").with_capabilities(crate::package::Capabilities { session_lock: true, ..Default::default() });
+
+    for (state, command) in [
+        (SessionLockState::Locked, crate::shell::LockCommand::Unlock),
+        (SessionLockState::Unlocked, crate::shell::LockCommand::Request),
+    ] {
+        let native = Native::new();
+        let policy = SessionPolicy::live(native.executor.clone()).with_session_lock(Some(state));
+        let session = Session::prepare(native.region.clone(), SessionModule::package(fixture.package()), 1, native.waker.clone(), SurfaceId::new(7), policy)
+            .expect("prepare live session with lock capability and compositor state");
+        session.mount().expect("mount and stage the lock command");
+        assert!(session.shell.has_lock_command(), "mount did not stage {command:?} under {state:?}");
+        session.invoke("reject").expect("queue a rejection without throwing synchronously");
+        if state == SessionLockState::Locked {
+            let error = session.checkpoint().expect_err("an unhandled rejection must fault under a retained lock");
+            let SessionError::Diagnostic(diagnostic) = error else {
+                panic!("expected a rejection diagnostic, got {error:?}");
+            };
+            assert_eq!(diagnostic.phase, "promise rejection", "checkpoint must identify the failing entry");
+            assert_eq!(diagnostic.message, "live rejection", "checkpoint must preserve the rejection reason");
+            assert_eq!(session.shell.take_lock_command(), None, "a fault must discard the staged unlock");
+        } else {
+            session.checkpoint().expect("live rejection outside a retained lock should only be logged");
+            assert_eq!(session.shell.take_lock_command(), Some(command), "logged rejection must not discard the lock request");
+        }
+    }
+}
+
+#[test]
+fn retiring_live_session_reports_disposer_rejection_under_a_retained_lock() {
+    let fixture = Fixture::new(r#"
+        export const hostApiVersion = 1;
+        export function mount() {
+            return () => { Promise.reject(Error('live disposer rejected')); };
+        }
+    "#, "");
+    let native = Native::new();
+    let policy = SessionPolicy::live(native.executor.clone()).with_session_lock(Some(SessionLockState::Locked));
+    let session = Session::prepare(native.region.clone(), SessionModule::package(fixture.package()), 1, native.waker.clone(), SurfaceId::new(7), policy)
+        .expect("prepare live predecessor on a locked compositor");
+    session.mount().expect("mount the live predecessor");
+    let report = session.retire();
+    let Some(RetirementFailure::Cleanup(diagnostic)) = report.failure else {
+        panic!("predecessor report must retain the disposal failure, got {:?}", report.failure);
+    };
+    assert_eq!(diagnostic.phase, "promise rejection", "report must identify the disposer rejection");
+    assert_eq!(diagnostic.message, "live disposer rejected", "retirement must preserve the rejection reason");
+}
+
+#[test]
+fn unlock_teardown_checks_rejections_without_running_pending_jobs() {
+    let fixture = Fixture::new(r#"
+        export const hostApiVersion = 1;
+        export function mount() { return () => {}; }
+        export function reject() {
+            globalThis.jobRan = false;
+            globalThis.timerDenied = false;
+            const reason = Error();
+            Object.defineProperty(reason, 'message', {
+                get() {
+                    try { setTimeout(() => {}, 0); } catch { globalThis.timerDenied = true; }
+                    return 'unlock teardown rejected';
+                }
+            });
+            Promise.resolve().then(() => { globalThis.jobRan = true; });
+            Promise.reject(reason);
+        }
+    "#, "");
+    let native = Native::new();
+    let session = native.prepare(fixture.package(), 1).expect("prepare live unlock teardown fixture");
+    session.mount().expect("mount the session");
+    session.invoke("reject").expect("enqueue both a rejection and an unrelated job");
+    let error = session.check_unlock_teardown_rejections().expect_err("a synchronous teardown rejection must veto unlock");
+    let SessionError::Diagnostic(diagnostic) = error else {
+        panic!("expected a rejection diagnostic, got {error:?}");
+    };
+    assert_eq!(diagnostic.message, "unlock teardown rejected", "unlock must preserve the original rejection");
+    assert!(!session.lock_commands_ready(), "the unrelated job must remain queued");
+    let state = session.engine.borrow_mut().as_mut().expect("session engine is active")
+        .with_context(|ctx| ctx.eval::<String, _>("jobRan + ':' + timerDenied")).expect("read teardown effects");
+    assert_eq!(state, "false:true", "teardown must not run pending jobs or let diagnostic accessors create new work");
 }
 
 #[test]

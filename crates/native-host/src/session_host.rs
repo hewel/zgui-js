@@ -6,7 +6,7 @@
 use std::{cell::{Cell, RefCell}, collections::HashMap, rc::{Rc, Weak}, sync::Arc};
 
 use zgui::{
-    platform::{PlatformCx, SurfaceId, Waker},
+    platform::{PlatformCx, SessionLockState, SurfaceId, Waker},
     runtime::{HostBinding, ImagePolicy, WindowToken},
     runtime::window::{ImageSourceCheckpoint, ImageSourceMountWrites},
     view::{Anchor, BuildCx, DocumentId, DomHandle, ElementName, HostHandle, NodeId, View},
@@ -135,9 +135,10 @@ pub(crate) trait SessionSurface {
     fn commit_image_policy(&mut self, document: DocumentId, session: &Session, mount_writes: Self::MountWrites);
     fn request_frame(&self, document: DocumentId);
     fn validate_fonts(&self, _session: &Session) -> SessionResult<()> { Ok(()) }
-    /// Destroy an auxiliary window and verify that its native surface is gone.
-    fn close_shell_surface(&mut self, token: WindowToken, id: SurfaceId) -> bool;
-    fn stage_shell_surfaces(&mut self, staged: &mut ShellWindows, monitors: &[Monitor], session: &Rc<Session>) -> SessionResult<()>;
+    fn session_lock_support(&self) -> Option<SessionLockState> { None }
+    /// Close an auxiliary window; layer surfaces must also disappear from the platform.
+    fn close_shell_surface(&mut self, token: WindowToken, removed_surface: Option<SurfaceId>) -> bool;
+    fn stage_shell_surfaces(&mut self, staged: &mut ShellWindows, previous: &ShellWindows, monitors: &[Monitor], session: &Rc<Session>) -> SessionResult<()>;
 }
 
 /// Image authority installed by [`RuntimeSurface::commit_image_policy`]. Preview publishes
@@ -208,11 +209,12 @@ impl SessionSurface for RuntimeSurface<'_> {
         }
         Ok(())
     }
-    fn close_shell_surface(&mut self, token: WindowToken, id: SurfaceId) -> bool {
+    fn session_lock_support(&self) -> Option<SessionLockState> { surfaces::platform_lock_state(self.cx) }
+    fn close_shell_surface(&mut self, token: WindowToken, id: Option<SurfaceId>) -> bool {
         surfaces::close_native_surface(self.runtime, self.cx, token, id)
     }
-    fn stage_shell_surfaces(&mut self, staged: &mut ShellWindows, monitors: &[Monitor], session: &Rc<Session>) -> SessionResult<()> {
-        staged.mount(self.runtime, self.cx, self.images, monitors, session)
+    fn stage_shell_surfaces(&mut self, staged: &mut ShellWindows, previous: &ShellWindows, monitors: &[Monitor], session: &Rc<Session>) -> SessionResult<()> {
+        staged.mount(self.runtime, self.cx, self.images, previous, monitors, session)
     }
 }
 
@@ -321,7 +323,12 @@ impl SessionHost {
             eprintln!("session-fault: generation={generation} {error}");
             match self.recovery {
                 RecoveryPolicy::Fallback => self.show_fallback(surface, document, generation, &error.to_string(), &retry),
-                RecoveryPolicy::Propagate => return Err(error),
+                RecoveryPolicy::Propagate => {
+                    if let Some(session) = self.sessions.get(&document) {
+                        self.shell_windows.hide_lock_ui(session);
+                    }
+                    return Err(error);
+                }
             }
         }
         Ok(())
@@ -350,7 +357,12 @@ impl SessionHost {
     }
 
     /// Release every owned session, fallback view, region and pending intake.
-    pub(crate) fn stop(&mut self) {
+    pub(crate) fn stop(&mut self, surface: &mut impl SessionSurface) {
+        let generation = self.shell_windows.generation;
+        let owner = self.sessions().find(|session| Some(session.generation) == generation).cloned();
+        if let Some(owner) = owner {
+            self.shell_windows.retire(&owner, |token, id| surface.close_shell_surface(token, id));
+        }
         for session in self.sessions() { let _ = session.retire(); }
         for recovery in self.fallbacks.values_mut() { recovery.view.clear(); }
         self.sessions.clear();
@@ -416,7 +428,8 @@ impl SessionHost {
         } else { None };
         // Candidate evaluation owns no native children or stylesheet and cannot
         // create work. Rejection must leave the active session untouched.
-        let candidate = match Session::prepare(candidate_region.clone(), module.clone(), generation, waker, target, self.policy.clone()) {
+        let policy = self.policy.clone().with_session_lock(surface.session_lock_support());
+        let candidate = match Session::prepare(candidate_region.clone(), module.clone(), generation, waker, target, policy) {
             Ok(candidate) => candidate,
             Err(error) => {
                 if let Some(parent) = staging_parent {
@@ -434,7 +447,7 @@ impl SessionHost {
         let image_checkpoint = surface.image_source_checkpoint(document);
         let mut staged = ShellWindows::default();
         let mounted = candidate.mount()
-            .and_then(|()| surface.stage_shell_surfaces(&mut staged, &self.monitors, &candidate));
+            .and_then(|()| surface.stage_shell_surfaces(&mut staged, &self.shell_windows, &self.monitors, &candidate));
         if let Err(error) = mounted {
             if let Some(previous) = previous {
                 candidate.relinquish_stylesheets();
@@ -478,9 +491,7 @@ impl SessionHost {
             previous.remove_surplus_stylesheets(&candidate);
             let report = self.shell_windows.retire(&previous, |token, id| surface.close_shell_surface(token, id));
             region.dom.detach(region.root);
-            (report.counts != ResourceCounts::default()).then_some(PredecessorLeak {
-                code: "E_TEARDOWN", generation: report.generation, resources: report.counts,
-            })
+            staged.fence_after_predecessor(report, &candidate, surface.session_lock_support(), |token, id| surface.close_shell_surface(token, id))
         } else { None };
         self.shell_windows = staged;
         surface.commit_image_policy(document, &candidate, mount_writes);

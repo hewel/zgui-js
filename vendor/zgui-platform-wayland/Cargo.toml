@@ -30,6 +30,7 @@ zgui-profile = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1
 zgui-vocab = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a" }
 
 [target.'cfg(any(target_os = "linux", target_os = "dragonfly", target_os = "freebsd", target_os = "netbsd", target_os = "openbsd"))'.dev-dependencies]
+rustix = { version = "1.1", default-features = false, features = ["std", "net"] }
 tracing = "0.1.44"
 tracing-subscriber = "0.3"
 wayland-protocols-wlr = { version = "0.3.12", features = ["client"] }
