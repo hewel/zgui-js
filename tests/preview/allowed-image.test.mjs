@@ -4,7 +4,7 @@ import { copyFile, cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/p
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import path from "node:path";
-import { buildApplication, workspaceRoot } from "../../packages/build/src/build.mjs";
+import { buildApplication, workspaceRoot } from "../../packages/build/src/build.ts";
 
 const hash = bytes => `sha256:${createHash("sha256").update(bytes).digest("hex")}`;
 const json = async file => JSON.parse(await readFile(file, "utf8"));

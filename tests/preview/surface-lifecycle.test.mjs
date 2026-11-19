@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
 import path from "node:path";
-import { buildApplication, workspaceRoot } from "../../packages/build/src/build.mjs";
+import { buildApplication, workspaceRoot } from "../../packages/build/src/build.ts";
 
 const json = async file => JSON.parse(await readFile(file, "utf8"));
 function native(args) {

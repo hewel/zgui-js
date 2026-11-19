@@ -1,6 +1,6 @@
 # Async status
 
-Build with `pnpm build --app async`, or develop with `pnpm dev --app async`.
+Build with `bun run build --app async`, or develop with `bun run dev --app async`.
 The app uses `@hewel/zgui` lifecycle hooks and public scheduling globals. No input
 or harness call is needed after mounting.
 

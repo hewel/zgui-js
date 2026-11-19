@@ -22,7 +22,7 @@ fn main() {
     let mut files = Vec::new();
     sources(&root.join("crates"), &mut files);
     sources(&root.join("vendor"), &mut files);
-    for name in ["Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "pnpm-lock.yaml"] {
+    for name in ["Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "bun.lock"] {
         let path = root.join(name);
         println!("cargo:rerun-if-changed={}", path.display());
         files.push(path);

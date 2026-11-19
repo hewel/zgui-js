@@ -16,7 +16,7 @@
     "tests/build/.image-*/**",
     "tests/build/.dependency-*/**",
     "tests/types/*-negative.ts*",
-    "pnpm-lock.yaml",
+    "bun.lock",
     "Cargo.lock"
   ]
 }

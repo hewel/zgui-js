@@ -5,7 +5,7 @@
   "private": true,
   "type": "module",
   "bin": {
-    "zgui-js": "./src/cli.mjs"
+    "zgui-js": "./src/cli.ts"
   },
   "dependencies": {
     "@babel/core": "7.29.13",
@@ -21,6 +21,9 @@
     "tsrs": "7.1.0-beta.tsrs2"
   },
   "devDependencies": {
-    "@jridgewell/trace-mapping": "0.3.31"
+    "@jridgewell/trace-mapping": "0.3.31",
+    "@types/babel__core": "7.20.5",
+    "@types/babel__traverse": "7.28.0",
+    "@types/bun": "1.4.4"
   }
 }

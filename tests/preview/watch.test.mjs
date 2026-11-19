@@ -5,9 +5,9 @@ import { mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from "node
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
-import { buildApplication, workspaceRoot } from "../../packages/build/src/build.mjs";
-import { activatePublication, publishBuildStatus } from "../../packages/build/src/publication.mjs";
-import { watchApplication } from "../../packages/build/src/watch.mjs";
+import { buildApplication, workspaceRoot } from "../../packages/build/src/build.ts";
+import { activatePublication, publishBuildStatus } from "../../packages/build/src/publication.ts";
+import { watchApplication } from "../../packages/build/src/watch.ts";
 
 const json = async file => JSON.parse(await readFile(file, "utf8"));
 const source = (label, blocked = false) => `

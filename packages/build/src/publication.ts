@@ -5,22 +5,53 @@ import path from "node:path";
 export const BUILD_STATUS_FILE = ".zgui-build-status.json";
 export const NATIVE_STATUS_FILE = ".zgui-native-status.json";
 
-export function resourcePath(name) {
-  if (!name || name.includes("\\") || name.includes("\0") || name.startsWith("/") || name.split("/").some(part => !part || part === "." || part === "..")) {
+type BuildAttempt = {
+  schemaVersion: 1;
+  attemptId: string;
+  app: string;
+  previousDirectory: string | null;
+};
+
+export type BuildStatus = BuildAttempt &
+  (
+    | { status: "building"; publicationDirectory: null; buildId: null; error: null }
+    | { status: "published"; publicationDirectory: string; buildId: string; error: null }
+    | {
+        status: "failed";
+        publicationDirectory: null;
+        buildId: null;
+        error: { code: "E_BUILD"; message: string };
+      }
+  );
+
+export function resourcePath(name: string): string {
+  if (
+    !name ||
+    name.includes("\\") ||
+    name.includes("\0") ||
+    name.startsWith("/") ||
+    name.split("/").some(part => !part || part === "." || part === "..")
+  ) {
     throw new Error(`Non-canonical resource path: ${name}`);
   }
   return name;
 }
 
-export async function activatePublication(appDirectory, packageDirectory) {
+export async function activatePublication(
+  appDirectory: string,
+  packageDirectory: string,
+): Promise<string> {
   const token = randomUUID();
   const link = path.join(appDirectory, `.dist-${token}`);
   const dist = path.join(appDirectory, "dist");
   try {
     try {
       const existing = await lstat(dist);
-      if (!existing.isSymbolicLink()) throw new Error("dist must be absent or a package symlink; refusing to overwrite it");
-    } catch (error) { if (error.code !== "ENOENT") throw error; }
+      if (!existing.isSymbolicLink())
+        throw new Error("dist must be absent or a package symlink; refusing to overwrite it");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
     await symlink(path.relative(appDirectory, packageDirectory), link, "dir");
     // Linux rename replaces the symlink atomically. Prior candidates remain pinned for active readers.
     await rename(link, dist);
@@ -30,7 +61,10 @@ export async function activatePublication(appDirectory, packageDirectory) {
   }
 }
 
-export async function publishGeneration(appDirectory, files) {
+export async function publishGeneration(
+  appDirectory: string,
+  files: ReadonlyMap<string, Uint8Array>,
+): Promise<string> {
   const generations = path.join(appDirectory, ".zgui-generations");
   await mkdir(generations, { recursive: true });
   const token = randomUUID();
@@ -55,7 +89,7 @@ export async function publishGeneration(appDirectory, files) {
   }
 }
 
-export async function publishBuildStatus(appDirectory, status) {
+export async function publishBuildStatus(appDirectory: string, status: BuildStatus): Promise<void> {
   const bytes = JSON.stringify(status) + "\n";
   if (Buffer.byteLength(bytes) > 16 * 1024) throw new Error("Build status exceeds 16 KiB");
   const temporary = path.join(appDirectory, `${BUILD_STATUS_FILE}.${randomUUID()}.tmp`);

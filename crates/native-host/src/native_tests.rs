@@ -225,7 +225,7 @@ fn build_fixture(root: &Path) -> TestResult<PathBuf> {
     let nonce = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
     let directory = root.join("target").join(format!("native-controls-{}-{nonce}", std::process::id()));
     fs::create_dir_all(root.join("target"))?;
-    let output = Command::new("node").arg(root.join("tests/native-controls/build.mjs")).arg(&directory).current_dir(root).output()?;
+    let output = Command::new("bun").arg(root.join("tests/native-controls/build.mjs")).arg(&directory).current_dir(root).output()?;
     if !output.status.success() {
         return Err(format!("native TSX fixture build failed ({}):\n{}\n{}", output.status, String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr)).into());
     }

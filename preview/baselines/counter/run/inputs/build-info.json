@@ -1,4 +1,5 @@
 {
+  "bun": "1.4.4",
   "cargoLock": {
     "digest": "sha256:4b35eeda22678e7a5ff22574f17428331edc6d441c79fc049fcf852be8de5cc5",
     "path": "Cargo.lock"
@@ -116,11 +117,10 @@
   },
   "hostApiVersion": 1,
   "lockfile": {
-    "digest": "sha256:9d197b49088985c26ab0d3a9dbf2a511acc779053a0a794b0481aee59ab4ef75",
-    "path": "pnpm-lock.yaml"
+    "digest": "sha256:d7b47c7d4f2d8dac91c38cdcd35f973e722dbb252626861980608176ea358017",
+    "path": "bun.lock"
   },
-  "node": "v26.13.0",
-  "packageManager": "pnpm@12.18.0",
+  "packageManager": "bun@1.4.4",
   "packages": {
     "@babel/core": "7.29.13",
     "@babel/parser": "7.29.14",
@@ -135,7 +135,7 @@
     "rolldown": "1.3.2",
     "solid-js": "2.0.1",
     "styleq": "0.2.1",
-    "typescript": "7.0.2"
+    "tsrs": "7.1.0-beta.tsrs2"
   },
   "schemaVersion": 2,
   "solidRuntime": "packages/solid-js/dist/solid.js",

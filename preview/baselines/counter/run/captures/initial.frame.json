@@ -1,7 +1,7 @@
 {
   "actionSequence": 0,
   "allowedPendingAssets": [],
-  "buildId": "sha256:fe987467c0ecd5875ceecc8c57324861bfdbbcb8d744fb3a4050201de67ad693",
+  "buildId": "sha256:1933d07df8f59e6756ad7dc7a1e23399ea5c2775e49013de87a44c915eca47f2",
   "captureId": "initial",
   "configurationId": 2,
   "documentIdentity": "DocumentId(0)",
@@ -35,7 +35,7 @@
     "generation": 1,
     "nativeAcceptance": {
       "candidate": {
-        "buildId": "sha256:fe987467c0ecd5875ceecc8c57324861bfdbbcb8d744fb3a4050201de67ad693",
+        "buildId": "sha256:1933d07df8f59e6756ad7dc7a1e23399ea5c2775e49013de87a44c915eca47f2",
         "id": "dev.example.counter",
         "styleSystem": {
           "configDigest": "sha256:33c7891b27d625d83284f9d24aef2ee1b62041f5b423dbd3b41411a61ccada45",
@@ -47,7 +47,7 @@
       "diagnostic": null,
       "document": "DocumentId(0)",
       "generation": 1,
-      "lastSuccessfulBuildId": "sha256:fe987467c0ecd5875ceecc8c57324861bfdbbcb8d744fb3a4050201de67ad693",
+      "lastSuccessfulBuildId": "sha256:1933d07df8f59e6756ad7dc7a1e23399ea5c2775e49013de87a44c915eca47f2",
       "schemaVersion": 1,
       "status": "accepted"
     },
@@ -105,7 +105,7 @@
   "surface": "main",
   "surfaceConfiguration": 0,
   "timingDeterministic": true,
-  "treeDigest": "sha256:3a09ee7980d9a273304fb1dfd07f83b833a54f338614aed475dab2cd015d1b08",
+  "treeDigest": "sha256:3e36816e5d6611d48d379f9a2d5bdf249d16cba8fc86d5cb90ebb2a7ed1fe211",
   "validatedStateRevision": 37,
   "validationFrame": {
     "drawId": 1,

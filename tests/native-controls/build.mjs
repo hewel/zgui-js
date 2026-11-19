@@ -1,7 +1,7 @@
 import { cp, mkdir } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { buildApplication, workspaceRoot } from "../../packages/build/src/build.mjs";
+import { buildApplication, workspaceRoot } from "../../packages/build/src/build.ts";
 
 const fixture = fileURLToPath(new URL("./", import.meta.url));
 const appDirectory = path.resolve(process.argv[2]);

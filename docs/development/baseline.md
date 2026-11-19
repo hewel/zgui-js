@@ -21,8 +21,7 @@ below is retained and does not describe the currently shipped API or test suite.
 | Native runtime / Wayland | Same revision, with the documented [local patches](../../vendor/README.md) |
 | rquickjs | `73fcd6062ee615aeb2a4675cd32be67a56e93973`; Phase 0 `std`, Phase 1 adds `macro` for opaque native classes |
 | QuickJS-NG | Resolved submodule `6d46d07d04041b40f4f49eaa7fdebe44c314c699` |
-| Node | Tested build tooling on 26.13.0 |
-| pnpm | 12.18.0 |
+| Bun | `>= 1.4.4` — runtime, package manager, and test runner (`bunfig.toml`, `bun.lock`) |
 | Solid / Universal / Signals | Exact registry versions `solid-js` 2.0.1 / `@solidjs/universal` 2.0.1 / `@solidjs/signals` 2.0.1 |
 | StyleX compiler / runtime | Exact registry versions `@stylexjs/babel-plugin` 0.19.2 / `@stylexjs/stylex` 0.19.2; release tag `d7e6174c5384c64b87bc5fde1f57eedd7c11c5aa` |
 | StyleX merge dependency | `styleq` 0.2.1 |
@@ -32,25 +31,25 @@ below is retained and does not describe the currently shipped API or test suite.
 | Oxlint / Oxfmt | 1.94.0 (`--deny-warnings` + `typeAware` via `tsrs` + `tools/oxlint-zgui-plugin.mjs`) / 0.79.0 |
 | Parley | 0.11.1 with `complex-scripts`; required for CJK layout segmentation |
 
-The Fontique patch is selected deliberately for parity with the audited upstream performance implementation; it is not presented as necessary for correctness. `pnpm-lock.yaml` and `Cargo.lock` record the resolved graphs. Phase 0 graph inspection confirmed patched Fontique 0.11.1 and rquickjs `std`; Phase 1 deliberately added `macro`.
+The Fontique patch is selected deliberately for parity with the audited upstream performance implementation; it is not presented as necessary for correctness. `bun.lock` and `Cargo.lock` record the resolved graphs. Phase 0 graph inspection confirmed patched Fontique 0.11.1 and rquickjs `std`; Phase 1 deliberately added `macro`.
 
-`tsrs` (`oxc-project/tsrs`) is pinned to `7.1.0-beta.tsrs2` in both the root and `@hewel/zgui-build` manifests. Workspace checks and one-shot application builds invoke the installed package's `bin/tsrs` synchronously through the current Node executable with `--project … --noEmit`; development uses a cancellable asynchronous child, and `oxlint` uses `tsrs`'s `tsrs-lint` binary for type-aware rules (`options.typeAware: true`). Compiler diagnostics remain the thrown error text. The CLI is resolved from `@hewel/zgui-build`'s local dependency, never from the shell or a global `tsc`/`tsrs`. Babel/Rolldown perform runtime compilation; typechecking does not emit JavaScript or change native consumers' ES2022-only, DOM/Node-free environment.
+`tsrs` (`oxc-project/tsrs`) is pinned to `7.1.0-beta.tsrs2` in both the root and `@hewel/zgui-build` manifests. Workspace checks and one-shot application builds invoke the installed package's `bin/tsrs` synchronously through the current Bun executable with `--project … --noEmit`; development uses a cancellable asynchronous child, and `oxlint` uses `tsrs`'s `tsrs-lint` binary for type-aware rules (`options.typeAware: true`). Compiler diagnostics remain the thrown error text. The CLI is resolved from `@hewel/zgui-build`'s local dependency, never from the shell or a global `tsc`/`tsrs`. Babel/Rolldown perform runtime compilation; typechecking does not emit JavaScript or change native consumers' ES2022-only, DOM/Node-free environment.
 
 ## Commands currently implemented
 
 ```sh
-pnpm install --frozen-lockfile
-pnpm typecheck
-node packages/build/src/cli.mjs smoke
-pnpm smoke
-pnpm build --app counter
-pnpm build --app lists
-pnpm build --app async
-pnpm build --app editing
-pnpm dev --app counter
-pnpm preview --app counter
-pnpm preview --app counter --watch
-pnpm test:build
+bun install --frozen-lockfile
+bun run typecheck
+bun packages/build/src/cli.ts smoke
+bun run smoke
+bun run build --app counter
+bun run build --app lists
+bun run build --app async
+bun run build --app editing
+bun run dev --app counter
+bun run preview --app counter
+bun run preview --app counter --watch
+bun run test:build
 cargo test -p js-runtime
 cargo run -p native-host -- --smoke-module target/solid-smoke.mjs
 env ZGUI_PLATFORM=wayland cargo run -p native-host

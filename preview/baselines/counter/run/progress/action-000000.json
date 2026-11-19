@@ -3,17 +3,17 @@
   "build": {
     "artifactDigests": {
       "app.css": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "app.mjs": "sha256:c57d5fc624ffdb56d4ef01a23e04471ce93d1a3a91efb58668ac005c126724a6",
-      "app.mjs.map": "sha256:e4585bf48db6e71189f1249c241f90a01c01cd4ed0d2074f89225e4854dabe45",
-      "build-info.json": "sha256:2b9d7139724af7cf736a24028620eb8ae8bfd7626ba6de63626f9e179124c063",
+      "app.mjs": "sha256:2992c13c9e7c9c12aa3f66f5f54bf543c7bb7e1e3f7b55600da96d5450f6522d",
+      "app.mjs.map": "sha256:bd27d464062b5037089d9263465ba48406f98dc9bb954b4a42b5654c61b7b444",
+      "build-info.json": "sha256:43bb4e33c951b3ee9ef7439bd3ada528b6aa567d3f285aca4f07e2db58e15b31",
       "style-origins.json": "sha256:44221bcfd7f9fe023a7fe53058d7929908206572a365944522b061737f80e3a2"
     },
-    "buildId": "sha256:fe987467c0ecd5875ceecc8c57324861bfdbbcb8d744fb3a4050201de67ad693",
-    "entryDigest": "sha256:c57d5fc624ffdb56d4ef01a23e04471ce93d1a3a91efb58668ac005c126724a6",
+    "buildId": "sha256:1933d07df8f59e6756ad7dc7a1e23399ea5c2775e49013de87a44c915eca47f2",
+    "entryDigest": "sha256:2992c13c9e7c9c12aa3f66f5f54bf543c7bb7e1e3f7b55600da96d5450f6522d",
     "fonts": [],
     "id": "dev.example.counter",
     "sourceMap": "app.mjs.map",
-    "sourceMapDigest": "sha256:e4585bf48db6e71189f1249c241f90a01c01cd4ed0d2074f89225e4854dabe45",
+    "sourceMapDigest": "sha256:bd27d464062b5037089d9263465ba48406f98dc9bb954b4a42b5654c61b7b444",
     "styleSystem": {
       "configDigest": "sha256:33c7891b27d625d83284f9d24aef2ee1b62041f5b423dbd3b41411a61ccada45",
       "name": "stylex",

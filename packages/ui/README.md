@@ -500,20 +500,20 @@ node handle — a foreign or stale node throws `TypeError`, an array is
 rejected even empty, and `null` or `undefined` clears either attribute.
 
 A composition example exercises the Avatar, Empty, Item and InputGroup
-families: build it with `pnpm build --app composition` and preview it with
-`pnpm preview --app composition --scenario preview/scenarios/composition-virtual.json`.
+families: build it with `bun run build --app composition` and preview it with
+`bun run preview --app composition --scenario preview/scenarios/composition-virtual.json`.
 A selection example exercises RadioGroup, ToggleGroup and Slider with
 reordering, pointer identity and remount: build it with
-`pnpm build --app selection` and preview it with
-`pnpm preview --app selection --scenario preview/scenarios/selection-virtual.json`.
+`bun run build --app selection` and preview it with
+`bun run preview --app selection --scenario preview/scenarios/selection-virtual.json`.
 A tabs example exercises automatic and manual activation, keepMounted and
-trigger reordering: build it with `pnpm build --app tabs` and preview it with
-`pnpm preview --app tabs --scenario preview/scenarios/tabs-virtual.json`.
+trigger reordering: build it with `bun run build --app tabs` and preview it with
+`bun run preview --app tabs --scenario preview/scenarios/tabs-virtual.json`.
 
 ## Editing example
 
-Build with `pnpm build --app editing`, or develop with
-`pnpm dev --app editing`. The example uses real native controls and ordinary
+Build with `bun run build --app editing`, or develop with
+`bun run dev --app editing`. The example uses real native controls and ordinary
 TSX event handlers, without test hooks or a simulated bridge.
 
 | Class | Initial state / action |

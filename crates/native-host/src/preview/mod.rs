@@ -189,7 +189,7 @@ fn doctor_worker(args: impl Iterator<Item = String>) -> supervisor::Report {
             "capabilities":capabilities(true),
             "profile":{"id":profile.profile.id,"digest":profile.digest,"physicalWidth":profile.physical_width,"physicalHeight":profile.physical_height},
             "host":environment["host"],
-            "dependencies":{"cargoLockDigest":environment["dependencies"]["cargoLockDigest"],"pnpmLockDigest":environment["dependencies"]["pnpmLockDigest"],"selected":selected_dependencies},
+            "dependencies":{"cargoLockDigest":environment["dependencies"]["cargoLockDigest"],"bunLockDigest":environment["dependencies"]["bunLockDigest"],"selected":selected_dependencies},
             "graphics":calibration.metadata.get("renderer"),
             "calibration":{"pngDigest":pixel_digest,"path":output.as_ref().map(|_| "calibration.png")},
             "runDirectory":output.as_ref().map(|output| output.root()),

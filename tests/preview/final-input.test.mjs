@@ -4,7 +4,7 @@ import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promi
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
-import { buildApplication, workspaceRoot } from "../../packages/build/src/build.mjs";
+import { buildApplication, workspaceRoot } from "../../packages/build/src/build.ts";
 
 // This is an explicit real-GPU gate, not part of the graphics-independent build suite.
 let project;

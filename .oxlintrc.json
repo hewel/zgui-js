@@ -83,7 +83,12 @@
       "files": ["packages/build/**", "tools/**"],
       "rules": {
         "zgui/no-direct-bridge": "off",
-        "no-restricted-globals": "off",
+        "no-restricted-globals": "off"
+      }
+    },
+    {
+      "files": ["tools/**"],
+      "rules": {
         "typescript/require-array-sort-compare": "off"
       }
     },

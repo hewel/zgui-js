@@ -5,11 +5,11 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { test } from "node:test";
-import { resolveApplication } from "../../packages/build/src/application.mjs";
-import { workspaceRoot } from "../../packages/build/src/build.mjs";
+import { resolveApplication } from "../../packages/build/src/application.ts";
+import { workspaceRoot } from "../../packages/build/src/build.ts";
 
 const execute = promisify(execFile);
-const cli = path.join(workspaceRoot, "packages/build/src/cli.mjs");
+const cli = path.join(workspaceRoot, "packages/build/src/cli.ts");
 
 async function externalApplication(t) {
   const directory = await mkdtemp(path.join(os.tmpdir(), "zgui app "));

@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import { promisify } from "node:util";
-import { workspaceRoot } from "../../packages/build/src/build.mjs";
+import { workspaceRoot } from "../../packages/build/src/build.ts";
 
 const execFileAsync = promisify(execFile);
 const oxlintBin = path.join(workspaceRoot, "node_modules/oxlint/bin/oxlint");
@@ -141,10 +141,10 @@ test("oxlint rules reject architectural violations with actionable teaching mess
 });
 
 test("oxfmt checks and formats files with repository configuration", async t => {
-  await execFileAsync(process.execPath, [oxfmtBin, "--check", "-c", fmtConfigPath, ".oxfmtrc.json", ".oxlintrc.json", "package.json", "packages/build/package.json"], {
-    cwd: workspaceRoot,
-    encoding: "utf8",
-  });
+  await execFileAsync(process.execPath, [
+    oxfmtBin, "--check", "-c", fmtConfigPath,
+    ".oxfmtrc.json", ".oxlintrc.json", "package.json", "packages/build/package.json", "packages/build/src",
+  ], { cwd: workspaceRoot, encoding: "utf8" });
   const dir = await mkdtemp(path.join(os.tmpdir(), "zgui-fmt-"));
   t.after(() => rm(dir, { recursive: true, force: true }));
   const file = path.join(dir, "sample.ts");

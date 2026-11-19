@@ -256,8 +256,8 @@ The full deterministic loop, available after P3, uses the companion specificatio
 
 ~~~sh
 cargo build -p native-host
-pnpm typecheck
-pnpm build --app counter
+bun run typecheck
+bun run build --app counter
 
 ./target/debug/native-host preview doctor --profile preview/profiles/default.json
 
@@ -1108,7 +1108,7 @@ Do not claim cross-GPU byte identity. Use the recorded environment to distinguis
 
 The first watch implementation watches atomically published application packages and starts a fresh one-shot worker for each accepted build. It reuses the same profile, fixture, scenario, and validation code as `preview run`.
 
-Use `pnpm preview --app counter --watch` to prepare and manage the builder and preview watcher in one terminal. The preview watcher observes complete manifest publication, not individual partially written JS/CSS files. Integrations managing their own host can use `pnpm build --app counter --watch` separately.
+Use `bun run preview --app counter --watch` to prepare and manage the builder and preview watcher in one terminal. The preview watcher observes complete manifest publication, not individual partially written JS/CSS files. Integrations managing their own host can use `bun run build --app counter --watch` separately.
 
 Do not run simultaneous mutating scenarios in one session. Coalesce rapid rebuild notifications to the newest complete build. Cancel a superseded run through its controller, with a real termination deadline.
 

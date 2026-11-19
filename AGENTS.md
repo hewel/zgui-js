@@ -8,7 +8,7 @@
 
 ## 2. Enforced SDK Boundaries
 
-- Architectural gates (`__zgui` encapsulation, `append`/`slot`/`provide` instead of raw `insert` or `<Context.Provider>`, themed `@hewel/zgui/components` primitives, no raw timers/`requestAnimationFrame`, and concise comments) are enforced by `.oxlintrc.json` + `tools/oxlint-zgui-plugin.mjs` (`pnpm lint`) and bundle constraints in `packages/build/src/validate.mjs`. Fix violations at the SDK/architecture layer rather than suppressing checks.
+- Architectural gates (`__zgui` encapsulation, `append`/`slot`/`provide` instead of raw `insert` or `<Context.Provider>`, themed `@hewel/zgui/components` primitives, no raw timers/`requestAnimationFrame`, and concise comments) are enforced by `.oxlintrc.json` + `tools/oxlint-zgui-plugin.mjs` (`bun run lint`) and bundle constraints in `packages/build/src/validate.ts`. Fix violations at the SDK/architecture layer rather than suppressing checks.
 
 ## 3. Non-DOM Native Host & Budgets
 
@@ -19,12 +19,12 @@
 ## 4. Scoped Styles & Upstream Provenance
 
 - Scope part styles to their own context-derived attributes when ancestor selectors can cross nested component roots while preserving layout-wrapper composition.
-- Refresh `packages/ui/src/components/generated/` by capturing `crates/ui-bridge/examples/ui_resources.rs` once and passing that snapshot to `packages/build/src/sync-ui-resources.mjs`, preserving upstream license and provenance.
+- Refresh `packages/ui/src/components/generated/` by capturing `crates/ui-bridge/examples/ui_resources.rs` once and passing that snapshot to `packages/build/src/sync-ui-resources.ts`, preserving upstream license and provenance.
 
 ## 5. Dual Verification Tiers
 
 - `tests/build/native-fixture.mjs` implements all 23 `__zgui` ops with Bridge-turn detached-node invalidation, lease inspection, `FocusIn`/`FocusOut` bubbling, and closure-captured event cancellation; verify remounts, Portal paint/hit escape, first-paint Popper anchor geometry (checking settled surface/arrow gaps after entrance animations), styled-frame `overlay.ts` exit deferral, parked-pointer menu autofocus, settled theme/transition captures, and glyph rasterization (`tests/preview/vector-text.test.mjs`) through `tests/preview/harness.mjs`.
-- Run vendored Rust checks with `cargo test -j 4 --manifest-path vendor/<crate>/Cargo.toml ... --offline` (`pnpm test:vendor`); these crates are excluded from the root workspace.
+- Run vendored Rust checks with `cargo test -j 4 --manifest-path vendor/<crate>/Cargo.toml ... --offline` (`bun run test:vendor`); these crates are excluded from the root workspace.
 
 ## 6. Component Map & Vocabulary
 

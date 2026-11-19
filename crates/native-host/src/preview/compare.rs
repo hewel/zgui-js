@@ -281,7 +281,7 @@ fn compatibility(baseline:&Source,actual:&Source)->Vec<Value> {
         }
     }
     for path in ["/application/id","/capabilityRevision","/hostRootStyleDigest","/clock","/random","/fonts","/profileDigest","/fixture","/scenario",
-        "/resourcePublication","/inputPolicy","/dependencies/cargoLockDigest","/dependencies/pnpmLockDigest","/dependencies/quickJsEngineRevision",
+        "/resourcePublication","/inputPolicy","/dependencies/cargoLockDigest","/dependencies/bunLockDigest","/dependencies/quickJsEngineRevision",
         "/host/profile","/host/rustc","/host/target"] {
         equal_required(&mut issues,path,baseline.environment.pointer(path),actual.environment.pointer(path));
     }

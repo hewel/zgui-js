@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { mkdtemp, mkdir, writeFile, realpath, rm } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { buildApplication, workspaceRoot } from "../../packages/build/src/build.mjs";
+import { buildApplication, workspaceRoot } from "../../packages/build/src/build.ts";
 
 test("Image forwards reactive src replacements/clears and rejects lazy child spreads", async t => {
   const directory = await mkdtemp(path.join(workspaceRoot, "tests/build/.image-"));

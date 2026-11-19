@@ -106,7 +106,7 @@ Package schema v2 publishes immutable matching artifacts:
 
 Machine-specific absolute or temporary paths do not enter reproducible identities. Publication and native acceptance are separate: a published candidate can still be rejected by native capability preflight, and the last successful application remains distinct. Watch builds retain `.zgui-build-status.json` for publication; the native host atomically writes `.zgui-native-status.json` beside the bundle symlink and emits a structured `native-candidate` JSON event with the accepted/rejected build and generation identities.
 
-The Preview CLI enables StyleX source metadata automatically. A release-like diagnostic package requires `pnpm build --app NAME --stylex-diagnostics`; ordinary builds omit per-prop `data-style-src` but retain generated/module provenance. Both modes produce different configuration and artifact identities.
+The Preview CLI enables StyleX source metadata automatically. A release-like diagnostic package requires `bun run build --app NAME --stylex-diagnostics`; ordinary builds omit per-prop `data-style-src` but retain generated/module provenance. Both modes produce different configuration and artifact identities.
 
 Strict native preflight rejects unsupported or partially parsed CSS before activation. This includes browser-root RTL wrappers (`html[dir]`/`html:not([dir])`), typed variables and non-dynamic `@property` forms, container queries, reduced-motion media queries, and CSS resource URL constructs. `defineConsts`, `stylex.types.*`, and unlisted browser CSS features are outside the v1 profile. Directional properties that cause StyleX to emit RTL variants require a later native profile.
 

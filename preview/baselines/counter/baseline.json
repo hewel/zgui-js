@@ -1,13 +1,13 @@
 {
   "schemaVersion": 1,
   "run": "run",
-  "artifactsDigest": "sha256:770cc29b524a74b41f82b0ee3c13e37cee8309e610e68bf963f601057ddfd690",
+  "artifactsDigest": "sha256:304158317240bad5537f8676d55ece7298a9e83cadc7ca87b62168021e97b931",
   "policyDigest": "sha256:618dc201dcc2cc976d3b0ff41d440eca02b71b68c79b01d10814734b044bbeb9",
   "review": {
     "by": "coding-assistant",
-    "at": "2026-11-18T15:21:00Z",
-    "summary": "Counter baseline refresh for Solid 2.0.1 cutover (@solidjs/universal 2.0.1, @solidjs/babel-plugin 2.0.1). Verified initial.png (25d53f3895...) and after-increment.png (ba8ba349d1...) remain byte-for-byte identical to the prior reviewed baseline; bundle and host lockfile identities changed.",
-    "buildId": "sha256:fe987467c0ecd5875ceecc8c57324861bfdbbcb8d744fb3a4050201de67ad693",
+    "at": "2026-11-19T08:03:00Z",
+    "summary": "Counter baseline refresh for Bun 1.4.4 toolchain and bun.lock provenance (tsrs 7.1.0-beta.tsrs2, oxlint 1.94.0, oxfmt 0.79.0). Verified initial.png (25d53f3895...) and after-increment.png (ba8ba349d1...) remain byte-for-byte identical to the prior reviewed baseline.",
+    "buildId": "sha256:1933d07df8f59e6756ad7dc7a1e23399ea5c2775e49013de87a44c915eca47f2",
     "captures": [
       {
         "captureId": "initial",

@@ -3,9 +3,9 @@ import { spawn } from "node:child_process";
 import { EventEmitter, getEventListeners } from "node:events";
 import path from "node:path";
 import { test } from "node:test";
-import { devApplication } from "../../packages/build/src/dev.mjs";
-import { prepareNativeHost, runNativeHost } from "../../packages/build/src/native-process.mjs";
-import { workspaceRoot } from "../../packages/build/src/build.mjs";
+import { devApplication } from "../../packages/build/src/dev.ts";
+import { prepareNativeHost, runNativeHost } from "../../packages/build/src/native-process.ts";
+import { workspaceRoot } from "../../packages/build/src/build.ts";
 
 function deferred() {
   let resolve;
@@ -178,7 +178,7 @@ test("Cargo nonzero exit preserves its status and rejects missing executable met
     spawnProcess: (_command, _args, options) => spawn(process.execPath, ["-e", "process.exit(101)"], options),
   }), error => error.exitCode === 101);
   await assert.rejects(prepareNativeHost({}, {
-    spawnProcess: (_command, _args, options) => spawn(process.execPath, ["-e", ""], options),
+    spawnProcess: (_command, _args, options) => spawn(process.execPath, ["-e", "void 0"], options),
   }), /did not report a native-host executable/);
 });
 

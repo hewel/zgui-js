@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 
 const workspaceRoot = fileURLToPath(new URL("../../", import.meta.url));
-const gate = path.join(workspaceRoot, "packages/build/src/preview-check.mjs");
+const gate = path.join(workspaceRoot, "packages/build/src/preview-check.ts");
 
 async function temporaryProject(t) {
   const directory = await mkdtemp(path.join(os.tmpdir(), "zgui-preview-ci-"));

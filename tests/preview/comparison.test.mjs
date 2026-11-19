@@ -5,7 +5,7 @@ import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
-import { workspaceRoot } from "../../packages/build/src/build.mjs";
+import { workspaceRoot } from "../../packages/build/src/build.ts";
 
 const baseline = path.join(workspaceRoot, "preview/baselines/counter");
 const strictPolicy = path.join(workspaceRoot, "preview/comparison/strict.json");

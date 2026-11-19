@@ -12,7 +12,7 @@
 
 ```mermaid
 flowchart TB
-    Source["Application: TSX, TypeScript, StyleX, CSS, assets"] --> Build["packages/build: tsc + StyleX/Babel Solid + Rolldown"]
+    Source["Application: TSX, TypeScript, StyleX, CSS, assets"] --> Build["packages/build: tsrs + StyleX/Babel Solid + Rolldown"]
     Build --> Package["Immutable package: JS bundle, source map, styles, assets, manifest"]
     Package --> Host["native-host: QuickJS session, Solid reactivity, ui-bridge"]
     Host <--> Native["Upstream zgui: native tree, Stylo CSS, Parley text, wgpu"]
@@ -20,14 +20,14 @@ flowchart TB
     Native -->|Offscreen preview| Preview["Headless platform: real GPU frames and sealed evidence"]
 ```
 
-Node.js runs **only at build time**; application code executes on the Rust host's owner UI thread inside QuickJS, driving native nodes across [`crates/ui-bridge`](crates/ui-bridge) rather than mutating a browser DOM. Platform and window-manager capabilities come from the pinned upstream `zgui` backend—`zgui-js` does not ship desktop environment adapters or compositor-specific daemons.
+Bun runs **only at build time**; application code executes on the Rust host's owner UI thread inside QuickJS, driving native nodes across [`crates/ui-bridge`](crates/ui-bridge) rather than mutating a browser DOM. Platform and window-manager capabilities come from the pinned upstream `zgui` backend—`zgui-js` does not ship desktop environment adapters or compositor-specific daemons.
 
 The host and SDK are structured around four core architectural boundaries (domain terms are defined in [`GLOSSARY.md`](GLOSSARY.md)):
 
 1. **Zero-DOM Native UI & StyleX (`@hewel/zgui`)**
    A custom Solid universal renderer drives native handles across `crates/ui-bridge`, paired with a themed component and overlay library (`@hewel/zgui/components`, `@hewel/zgui/icons`), owner-scoped geometry and animation queries, and `@stylexjs/babel-plugin` stylesheets validated against the `zgui-stylex-v1` native CSS profile.
 2. **Immutable Packages & Atomic Session Reload (`packages/build`, `crates/native-host`)**
-   Each build type-checks with the pinned TypeScript compiler (`tsc --noEmit`), compiles TSX/StyleX, and publishes an immutable, SHA-256-verified package generation. Source edits trigger **full-session reload** (not state-preserving HMR) via [`session_host.rs`](crates/native-host/src/session_host.rs) and [`session.rs`](crates/native-host/src/session.rs); if a later build or preflight check fails, the active generation stays running untouched.
+   Each build type-checks with the pinned `tsrs` compiler (`tsrs --noEmit`), compiles TSX/StyleX, and publishes an immutable, SHA-256-verified package publication. Source edits trigger **full-session reload** (not state-preserving HMR) via [`session_host.rs`](crates/native-host/src/session_host.rs) and [`session.rs`](crates/native-host/src/session.rs); if a later build or preflight check fails, the active generation stays running untouched.
 3. **Shared Production Preview Pipeline (`crates/native-host/src/preview`)**
    Offscreen previews use the exact same package loader, QuickJS runtime, bridge, layout, and GPU renderer ([`driver.rs`](crates/native-host/src/preview/driver.rs), [`evidence.rs`](crates/native-host/src/preview/evidence.rs), [`output.rs`](crates/native-host/src/preview/output.rs)) rather than a mock DOM, emitting sealed `result.json` evidence, screenshots, and native tree snapshots.
 4. **Bounded Host Authority (`crates/js-runtime`, `@hewel/zgui-services`)**
@@ -40,30 +40,30 @@ See the [runtime ownership diagram](docs/development/tsx-native-ui.md#31-system-
 | Component | Requirement |
 | --- | --- |
 | Rust | `1.100.0`, pinned by [`rust-toolchain.toml`](rust-toolchain.toml) |
-| Node.js | `>=26.13.0` |
-| pnpm | `12.18.0` |
-| TypeScript | `7.0.2`, installed locally via pnpm (no global compiler required) |
+| Bun | `>=1.4.4` — runtime, package manager, and test runner (`bunfig.toml`, `bun.lock`) |
+| tsrs | `7.1.0-beta.tsrs2`, installed locally via Bun (no global compiler required) |
+| oxlint / oxfmt | `1.94.0` / `0.79.0` (type-aware lint via `tsrs`) |
 | Native toolchain | C/C++ compiler toolchain capable of building QuickJS (`rquickjs`) and native dependencies |
 | Graphics | Vulkan / GPU adapter and driver supported by the native `wgpu` renderer |
 
 - **Platform support:** Interactive examples have been verified on Linux with Wayland. Platform and window-manager support comes from upstream `zgui`.
 - **Headless previews:** Offscreen previews do not open a desktop window, but still require a working `wgpu` graphics adapter—they render real GPU frames rather than software-only JS mocks.
-- **Pinned dependencies:** Keep `Cargo.lock` and `pnpm-lock.yaml` when installing or building. See the [implementation baseline](docs/development/baseline.md) and [`vendor/README.md`](vendor/README.md) for audited pins and local native patches.
+- **Pinned dependencies:** Keep `Cargo.lock` and `bun.lock` when installing or building. See the [implementation baseline](docs/development/baseline.md) and [`vendor/README.md`](vendor/README.md) for audited pins and local native patches.
 
 ## Quick start
 
 From the repository root:
 
 ```sh
-pnpm install --frozen-lockfile
-pnpm dev --app counter
+bun install --frozen-lockfile
+bun run dev --app counter
 ```
 
 This single command compiles the native host with Cargo when stale, builds `apps/examples/counter`, opens a native window, and watches for changes. Ordinary TypeScript/TSX edits do not recompile Rust. Platform selection follows upstream `zgui` desktop detection; set `ZGUI_PLATFORM=wayland` to target Wayland explicitly.
 
 Useful flags and lifecycle behavior:
 
-- `pnpm dev --app counter --exit-after-ms 5000` — run a bounded native launch for smoke checks.
+- `bun run dev --app counter --exit-after-ms 5000` — run a bounded native launch for smoke checks.
 - Closing the window stops the dev session; `Ctrl+C` stops the builder and its owned Cargo/native processes; a native crash exits rather than restarting silently.
 - Native executable discovery respects Cargo's configured target directory.
 
@@ -73,13 +73,13 @@ Inside any example directory (or against any standalone app directory via `zgui-
 
 ```sh
 cd apps/examples/counter
-pnpm dev      # build, launch native window, watch and reload on changes
-pnpm build    # type-check and publish an immutable package (no window)
-pnpm preview  # build app + host and capture an offscreen GPU preview frame
+bun run dev      # build, launch native window, watch and reload on changes
+bun run build    # type-check and publish an immutable package (no window)
+bun run preview  # build app + host and capture an offscreen GPU preview frame
 ```
 
-- Standalone applications need `src/main.tsx`, `tsconfig.json`, SDK dependencies, and `@hewel/zgui-build` for the CLI (`zgui-js --help`). Root shortcuts default to `counter`; `pnpm build --app counter --watch` exposes the builder-only mode for custom supervisors.
-- Watching uses a persistent Rolldown watcher and per-compiler Babel/Solid transform cache. [Rolldown 1.3.2 still rescans the module graph](https://github.com/rolldown/rolldown/blob/v1.3.2/crates/rolldown_watcher/src/watch_task.rs#L122-L123); unchanged modules skip Babel transforms while `tsc` still gates every publication.
+- Standalone applications need `src/main.tsx`, `tsconfig.json`, SDK dependencies, and `@hewel/zgui-build` for the CLI (`zgui-js --help`). Root shortcuts default to `counter`; `bun run build --app counter --watch` exposes the builder-only mode for custom supervisors.
+- Watching uses a persistent Rolldown watcher and per-compiler Babel/Solid transform cache. [Rolldown 1.3.2 still rescans the module graph](https://github.com/rolldown/rolldown/blob/v1.3.2/crates/rolldown_watcher/src/watch_task.rs#L122-L123); unchanged modules skip Babel transforms while `tsrs` still gates every publication.
 
 ## Application model & SDK
 
@@ -91,7 +91,7 @@ pnpm preview  # build app + host and capture an offscreen GPU preview frame
 
 ## Examples
 
-Run any example with `pnpm dev --app <name>` or `pnpm preview --app <name>`:
+Run any example with `bun run dev --app <name>` or `bun run preview --app <name>`:
 
 | Application | Demonstrates |
 | --- | --- |
@@ -112,7 +112,7 @@ Run any example with `pnpm dev --app <name>` or `pnpm preview --app <name>`:
 Build and execute a deterministic offscreen scenario (initial frame capture, simulated pointer click, state assertion `Count: 1`, and updated capture):
 
 ```sh
-pnpm preview --app counter \
+bun run preview --app counter \
   --scenario preview/scenarios/counter-virtual.json \
   --out target/preview-counter-001
 ```
@@ -133,7 +133,7 @@ target/debug/native-host preview inspect \
   --capture after-increment --test-id count-label \
   --fields text,state,boundsLogical --max-nodes 1
 
-pnpm preview:check --out target/preview-ci-001
+bun run preview:check --out target/preview-ci-001
 ```
 
 `preview compare` validates stored captures against reviewed baselines without opening a graphics device, rejecting dimension or environment mismatches instead of rescaling. The checked-in visual baseline is tied to its recorded AMD/RADV/Mesa environment and is not expected to be portable across every GPU or driver; missing graphics adapters fail explicitly rather than skipping silently.
@@ -143,17 +143,17 @@ See [Preview implementation and verification](docs/development/preview-verificat
 ## Checks and tests
 
 ```sh
-pnpm lint          # oxlint --deny-warnings + tools/oxlint-zgui-plugin.mjs architectural gates
-pnpm typecheck     # native packages, type fixtures, and examples via local TypeScript 7.0.2 CLI
-pnpm smoke         # build and verify the smoke package contract
-pnpm test:build    # Node build, host-fixture, stylex, and component-map tests
-pnpm test:rust     # workspace Rust tests + cargo clippy (-D warnings) offline
-pnpm test:vendor   # required offline test suites for patched vendor/ crates
-pnpm check         # lint + typecheck + test:build + test:rust
-pnpm test:preview  # build counter + native-host and run headless GPU preview suites
+bun run lint          # oxlint --deny-warnings + tools/oxlint-zgui-plugin.mjs architectural gates
+bun run typecheck     # native packages, type fixtures, and examples via local tsrs 7.1.0-beta.tsrs2 CLI
+bun run smoke         # build and verify the smoke package contract
+bun run test:build    # Bun build, host-fixture, stylex, and component-map tests
+bun run test:rust     # workspace Rust tests + cargo clippy (-D warnings) offline
+bun run test:vendor   # required offline test suites for patched vendor/ crates
+bun run check         # lint + typecheck + test:build + test:rust
+bun run test:preview  # build counter + native-host and run headless GPU preview suites
 ```
 
-- Type checking inside `pnpm typecheck` and `pnpm build` runs `tsc --project … --noEmit` with pinned TypeScript 7.0.2 under ES2022-only consumer settings (no DOM or Node globals), without legacy compiler APIs or system `tsc` fallbacks.
+- Type checking inside `bun run typecheck` and `bun run build` runs `tsrs --project … --noEmit` with pinned tsrs 7.1.0-beta.tsrs2 under ES2022-only consumer settings (no DOM or Node globals), without legacy compiler APIs or system `tsc` fallbacks.
 - Real-desktop integration tests are marked `#[ignore]` and opt-in because they open live windows or interact with clipboard/IME state. Review the [native test notes](docs/development/baseline.md) before running them. Historical niri-specific notes in [P6 desktop verification](docs/development/preview-verification.md#p6--real-waylandniri-desktop-verification) are retained solely as archival evidence.
 
 ## Repository layout

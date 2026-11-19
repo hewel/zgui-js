@@ -435,7 +435,7 @@ digests, build ID, capture set, reviewer, time and rationale in `baseline.json`.
 There is no automatic blessing or policy relaxation command.
 
 After building the counter and native host, run
-`pnpm preview:check --out NEW_ROOT`. It performs the native scenario and only then
+`bun run preview:check --out NEW_ROOT`. It performs the native scenario and only then
 compares against the reviewed baseline, retaining both child summaries. A graphics
 failure is required failure, not a skip or comparison against historical output.
 This baseline is intentionally bound to its recorded AMD/RADV/Mesa environment;
@@ -474,7 +474,7 @@ checks, not compositor transparency, IME or desktop-shell certification.
 Run the managed builder and preview observer together:
 
 ```sh
-pnpm preview --app counter --watch \
+bun run preview --app counter --watch \
   --profile preview/profiles/default.json \
   --fixture preview/fixtures/empty.json \
   --scenario preview/scenarios/counter-virtual.json \
@@ -709,9 +709,9 @@ Temporary source packages and native input helper sources/binaries were removed.
 The StyleX gate builds the real example package and uses the production schema-v2 loader, QuickJS session, native bridge, stylesheets, fonts, images, layout, and GPU paint:
 
 ```sh
-pnpm build --app stylex
+bun run build --app stylex
 cargo build -j 4 -p native-host --locked --offline
-node --test --test-concurrency=1 tests/preview/stylex.test.mjs
+bun test --isolate --timeout=30000 tests/preview/stylex.test.mjs
 ```
 
 The scenarios exercise extracted static CSS without an injector; imported tokens and nested/default/removed themes; conditional classes and dynamic custom properties; SDK root forwarding and base/StyleX sheet ordering; native focus, hover, and viewport-media conditions; invalid dynamic values and alias conflicts; keyframes with the explicit reduced-motion host preference; package image/font readiness; and consumed build/style revision evidence. Every target is a stable `testId`, never a generated StyleX hash. Nested Disclosure uses an explicit 300,000-byte stack bound with entry duration checked below 25 ms; Gallery fuzz uses a 240 KiB stack cap and a 30 ms entry bound. Both limits are asserted through `metrics.json`.

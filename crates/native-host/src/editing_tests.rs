@@ -434,7 +434,7 @@ impl AppHandler for EditingGate {
 fn native_text_editing() -> TestResult {
     if std::env::var("ZGUI_PLATFORM").as_deref() != Ok("wayland") { return Err("run with ZGUI_PLATFORM=wayland".into()); }
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().and_then(Path::parent).ok_or("workspace root absent")?;
-    let build = Command::new("node").arg(root.join("packages/build/src/cli.mjs")).args(["build", "--app", "editing"]).current_dir(root).output()?;
+    let build = Command::new("bun").arg(root.join("packages/build/src/cli.ts")).args(["build", "--app", "editing"]).current_dir(root).output()?;
     if !build.status.success() { return Err(format!("editing package build failed: {}", String::from_utf8_lossy(&build.stderr)).into()); }
     let package = Rc::new(Package::load(&root.join("apps/examples/editing/dist"))?);
     let mut clipboard = ClipboardGuard::capture()?;

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import { test } from "node:test";
-import { workspaceRoot } from "../../packages/build/src/build.mjs";
+import { workspaceRoot } from "../../packages/build/src/build.ts";
 
 const docPath = path.join(workspaceRoot, "docs/development/component-map.md");
 const componentsDir = path.join(workspaceRoot, "packages/ui/src/components");
