@@ -166,6 +166,18 @@ impl Driver {
         Ok(json!({"burst":["native.ime.commit"],"utf8Bytes":text.len()}))
     }
 
+    /// Deliver compositor dismissal through the same handler as a native surface event.
+    pub(in crate::preview) fn popup_done(&mut self, name: &str) -> Result<Value, Fault> {
+        self.settle(false)?;
+        let surface = self.window(name)?.surface().id();
+        if !self.pipeline.app().host.is_popup_surface(surface) {
+            return Err(Error::new("E_SURFACE_NOT_FOUND", 4, format!("surface {name:?} is not a mounted popup")).into());
+        }
+        self.pipeline.deliver(surface, SurfaceEvent::Destroyed);
+        let readiness = self.settle(false)?;
+        Ok(json!({"surface":name,"timeUs":self.environment.now_us(),"readiness":readiness}))
+    }
+
     pub fn assert_node(&mut self,target:&Target,check:&Check) -> Result<Value,Fault> {
         self.settle_surface(Some(&target.surface))?;
         let window=self.window(&target.surface)?;

@@ -326,7 +326,7 @@ impl WaylandState {
             .extent
             .map_or(Size::new(CssPx(0.0), CssPx(0.0)), logical_extent);
         let surface =
-            WaylandSurface::new(id, role, fractional, initial, None, initial, self.links());
+            WaylandSurface::new(id, role, fractional, initial, None, self.links());
         {
             let mut shared = surface.shared();
             shared.ahead =
@@ -406,7 +406,7 @@ impl WaylandState {
             claims
         };
         for id in claims.into_iter().flatten() {
-            self.report(id, SurfaceEvent::Destroyed);
+            self.out.push((id, SurfaceEvent::Destroyed, super::Delivery::Removed));
         }
     }
 
@@ -507,7 +507,7 @@ impl WaylandState {
                 .flatten()
             {
                 self.detach_lock_claim(id);
-                self.out.push((id, SurfaceEvent::Destroyed));
+                self.out.push((id, SurfaceEvent::Destroyed, super::Delivery::Removed));
             }
         }
         session.focus_changed = true;

@@ -10,7 +10,6 @@
 //! again. Reporting each of those runs the whole pipeline for a frame identical to the one already
 //! on the screen, which is the cost this framework exists to avoid.
 
-use zgui_geom::{Css, CssPx, Size};
 use zgui_platform::{DecorationSource, Surface as _, SurfaceEvent, SurfaceId};
 
 use crate::driver::WaylandState;
@@ -94,7 +93,7 @@ impl WaylandState {
         };
 
         surface.role().ack(serial);
-        surface.popup_mapped();
+        surface.popup_configured();
 
         if let Some(event) = visibility {
             self.report(id, event);
@@ -119,12 +118,5 @@ impl WaylandState {
             zgui_profile::latency::mark("w.resizing");
             self.report(id, SurfaceEvent::ResizingChanged(false));
         }
-    }
-
-    /// The extent a surface was last configured at.
-    pub(crate) fn configured_extent(&self, id: SurfaceId) -> Option<Size<CssPx, Css>> {
-        self.live
-            .surface(id)
-            .map(|surface| surface.shared().logical)
     }
 }

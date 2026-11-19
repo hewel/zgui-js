@@ -1,4 +1,4 @@
-import { Image, LayerSurface, SessionLockSurface, TextField, TextArea, createCanvasScene, createSpring, getSessionGeneration, renderApp, renderShell, requestSessionLock, useMonitors } from "@hewel/zgui";
+import { Image, LayerSurface, PopupSurface, SessionLockSurface, TextField, TextArea, createCanvasScene, createSpring, getSessionGeneration, renderApp, renderShell, requestSessionLock, useMonitors } from "@hewel/zgui";
 import type { NativeElementProps, NativeNode } from "@hewel/zgui";
 
 // @ts-expect-error Browser document is not a host global.
@@ -167,3 +167,14 @@ requestSessionLock({ unlock: true });
 requestSessionLock().id = 1;
 // @ts-expect-error The generation is read from the current host, not supplied by the app.
 getSessionGeneration(1);
+// @ts-expect-error A popup must identify its named parent.
+void <PopupSurface name="menu" anchorNode={fabricated} width={10} height={10} />;
+// @ts-expect-error A popup needs exactly one anchor source.
+void <PopupSurface name="menu" parent="panel" width={10} height={10} />;
+// @ts-expect-error A popup cannot combine rectangle and node anchors.
+void <PopupSurface name="menu" parent="panel" anchorNode={fabricated}
+  anchorRect={{ x: 0, y: 0, width: 5, height: 10 }} width={10} height={10} />;
+// @ts-expect-error Popup dimensions cannot be inferred from the anchor.
+void <PopupSurface name="menu" parent="panel" anchorNode={fabricated} />;
+// @ts-expect-error Wayland popup placement uses physical positions.
+void <PopupSurface name="menu" parent="panel" anchorNode={fabricated} width={10} height={10} placement={{ gravity: "inline-start" }} />;

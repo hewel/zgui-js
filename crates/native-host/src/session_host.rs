@@ -77,7 +77,7 @@ impl HostBinding for Binding {
         if let Some(session) = self.owner.upgrade()
             && session.primary().is_some_and(|primary| primary.region.document == self.document)
         {
-            session.dispose();
+            session.dispose([]);
         }
     }
     fn stylesheet_rejected(&mut self, name: &str, diagnostics: zgui_style::CssDiagnostics) {
@@ -272,6 +272,32 @@ impl SessionHost {
     pub(crate) fn pending_regions(&self) -> usize { self.pending.borrow().len() }
     pub(crate) fn session(&self, document: DocumentId) -> Option<&Rc<Session>> { self.sessions.get(&document) }
     pub(crate) fn sessions(&self) -> impl Iterator<Item = &Rc<Session>> { self.sessions.values().chain(self.pure_session.iter()) }
+
+    /// Deliver a platform event, retiring shell windows before their primary window closes.
+    pub(crate) fn surface_event(
+        &mut self,
+        runtime: &mut zgui::runtime::Runtime,
+        cx: &dyn PlatformCx,
+        surface: SurfaceId,
+        event: zgui::platform::SurfaceEvent,
+    ) -> SessionResult<()> {
+        use zgui::platform::{AppHandler, SurfaceEvent};
+        match event {
+            SurfaceEvent::Destroyed if self.shell_surface_destroyed(runtime, cx, surface)? => {}
+            SurfaceEvent::CloseRequested | SurfaceEvent::Destroyed => {
+                runtime.surface_event_with_close(cx, surface, event, |runtime| {
+                    let owner = self.sessions.values().find(|session| {
+                        session.primary().is_some_and(|primary| primary.surface == surface)
+                    });
+                    if let Some(owner) = owner {
+                        self.shell_windows.retire(owner, |token, id| surfaces::close_native_surface(runtime, cx, token, id));
+                    }
+                });
+            }
+            _ => runtime.surface_event(cx, surface, event),
+        }
+        Ok(())
+    }
 
     /// Drain newly built mount regions and mount the current module on each,
     /// then retire ownership for documents whose native surface is gone.

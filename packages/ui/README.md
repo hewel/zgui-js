@@ -69,6 +69,55 @@ A node with no laid-out box contributes no input. Removing a bound node clears
 its input rectangle during the same bridge turn, even if your app still holds
 the ref. A detached handle cannot be used to register a new binding in a later turn.
 
+### Wayland popups
+
+`PopupSurface` uses the same `shellSurfaces` capability as `LayerSurface`.
+Give it a unique `name` and the `parent` name of a `LayerSurface` or another
+`PopupSurface` in the same session. It can be declared before its parent; it
+mounts its own children asynchronously once both its parent and anchor are
+available. JSX nesting is not required and does not set the parent. A primary
+window or a lock surface cannot be the parent.
+
+```tsx
+<PopupSurface name="quick-menu" parent="bar-dp-1" width={240} height={180}
+  anchorRect={{ x: 12, y: 0, width: 32, height: 32 }}
+  offset={{ x: 0, y: 4 }} onDismiss={() => setOpen(false)}>
+  <text>Quick actions</text>
+</PopupSurface>
+```
+
+Specify exactly one anchor: `anchorRect` is a rectangle in the parent's
+logical coordinates; `anchorNode` is a native ref from the named `LayerSurface`
+or `PopupSurface` mount region. The SDK warns and ignores refs from other or
+unrecognized regions. For a dynamic ref, pass the current signal value
+(`anchorNode={node()}`).
+
+The popup waits for a nonempty node border box and tracks subsequent layout
+changes. Losing the ref, native attachment, or usable box cancels the request
+and unmounts the popup without calling `onDismiss`, even if the app still
+holds the ref. The declaration waits for valid geometry before reopening;
+replace a detached ref with the new node rather than rebinding the stale one.
+`width` and `height` are required and must be between 1 and 16,384 logical
+pixels. `offset` defaults to `{ x: 0, y: 0 }`.
+
+`placement.anchor` picks a point on the anchor rectangle; `placement.gravity`
+sets the direction in which the popup extends. Both accept `center`, the four
+physical edges, or a corner (`top-left`, `top-right`, `bottom-left`, `bottom-right`).
+The defaults are `bottom-left` and `bottom-right`, respectively, placing the
+popup below and aligned to the left. `placement.slide` and `placement.flip`
+default to `true`; `placement.resize` and `placement.reactive` default to
+`false`. Live repositioning and reactive placement depend on compositor
+support. `grab` defaults to `false`; it only applies on opening and requires
+an eligible input interaction.
+
+Changing `name` or `parent` replaces the request. Closing the parent unmounts
+all descendants without invoking `onDismiss`; still-owned requests remain
+dormant until their named parents return. A compositor dismissal calls only
+the directly dismissed popup's `onDismiss`. That popup and its live
+descendants do not reopen from prop or geometry changes: each needs a fresh
+declaration or identity. Unmounting a declaration releases its request,
+content, and any geometry observation without invoking `onDismiss`.
+
 ## Wayland session lock
 
 Declare `zgui.capabilities.sessionLock: true` in the application package.

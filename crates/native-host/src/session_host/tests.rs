@@ -592,6 +592,128 @@ fn failed_shell_child_mount_keeps_the_predecessor_and_last_successful_build() {
     assert_eq!(previous.retire().counts, ResourceCounts::default(), "shutdown releases the working shell without leaks");
 }
 
+const POPUP_TREE: &str = r#"
+    export const hostApiVersion = 1;
+    let menu;
+    let dismissals = 0;
+    let expectedCleanup = 'menu';
+    const cleaned = [];
+    function place(parent, width = 24) {
+        return {
+            parent, width, height: 20,
+            anchorRect: { x: 1, y: 1, width: 6, height: 6 },
+            offset: { x: 0, y: 0 }, anchor: 'bottom-left', gravity: 'bottom-right',
+            grab: false, slide: true, flip: true, resize: false, reactive: false,
+        };
+    }
+    function cleanup(name) { return () => () => cleaned.push(name); }
+    export function mount() {
+        __zguiShell.openLayer('panel', {}, cleanup('panel'));
+        menu = __zguiShell.openPopup('menu', place('panel'), cleanup('menu'), () => {
+            if (cleaned.join() !== 'menu') throw Error('dismissed before unmount');
+            dismissals++;
+        });
+        return () => {
+            if (cleaned.join() !== expectedCleanup) throw Error('primary cleaned before: ' + cleaned.join());
+        };
+    }
+    export function queuePlacement() { __zguiShell.updatePopup(menu, place('panel', 28)); }
+    export function queueChild() { __zguiShell.openPopup('child', place('menu'), cleanup('child'), () => {}); }
+    export function expectChildCleanup() { expectedCleanup = 'child,menu'; }
+    export function checkDismissal() {
+        if (dismissals !== 1) throw Error('expected one dismissal, got ' + dismissals);
+    }
+"#;
+
+struct PopupTree {
+    host: SessionHost,
+    runtime: zgui::runtime::Runtime,
+    cx: zgui_platform_headless::Headless,
+    session: Rc<Session>,
+}
+
+impl PopupTree {
+    fn new() -> Self {
+        use zgui::platform::AppHandler;
+
+        let package = Fixture::new(POPUP_TREE, "").with_capabilities(crate::package::Capabilities {
+            shell_surfaces: true, ..Default::default()
+        });
+        let pending = Rc::new(RefCell::new(Vec::new()));
+        let roots = pending.clone();
+        let fonts = zgui::app::Fonts::shipped_only();
+        let mut runtime = zgui::runtime::App::new()
+            .with_renderer(Box::new(|_, target| {
+                let mut renderer = zgui_testkit_scene::CaptureRenderer::new();
+                zgui::render::Renderer::configure(&mut renderer, target);
+                Ok(Box::new(renderer))
+            }))
+            .into_handler(move |cx| {
+                zgui::reactive::provide_context(fonts.clone());
+                Box::new(Root(roots.clone()).build(cx))
+            })
+            .expect("create popup test runtime");
+        let cx = zgui_platform_headless::Headless::new();
+        runtime.surfaces_available(&cx);
+        let mut host = SessionHost::new(pending, SessionModule::package(package.package()),
+            SessionPolicy::live(host_services::Executor::new(2, 64).expect("create service executor")),
+            RecoveryPolicy::Propagate);
+        host.attach(&mut RuntimeSurface::new(&mut runtime, &cx, ImageChoice::PackageOnly), cx.waker(), no_retry())
+            .expect("mount the primary and popup tree");
+        let session = host.sessions().next().expect("active session").clone();
+        Self { host, runtime, cx, session }
+    }
+
+    fn event(&mut self, surface: SurfaceId, event: zgui::platform::SurfaceEvent) -> SessionResult<()> {
+        self.host.surface_event(&mut self.runtime, &self.cx, surface, event)
+    }
+
+    fn turn(&mut self) -> SessionResult<()> {
+        self.host.shell_turn(&mut self.runtime, &self.cx, ImageChoice::PackageOnly, &[])
+    }
+
+    fn surface(&self, name: &str) -> SurfaceId {
+        self.session.mount_regions().into_iter().find(|(region, _)| region == name)
+            .unwrap_or_else(|| panic!("missing mount region {name:?}")).1.surface
+    }
+}
+
+#[test]
+fn popup_done_wins_over_pending_reposition_and_child_open() {
+    for pending in ["queuePlacement", "queueChild"] {
+        let mut fixture = PopupTree::new();
+        let menu = fixture.surface("menu");
+        fixture.cx.offscreen(menu).expect("mounted popup").mark_popup_done();
+        fixture.session.invoke(pending).expect("queue shell work before the close event");
+        fixture.turn().unwrap_or_else(|error| panic!("{pending} raced with compositor dismissal: {error}"));
+        assert!(fixture.cx.surface(menu).is_none(), "dismissed popup must be gone");
+        assert_eq!(fixture.cx.surfaces().len(), 2, "only the primary and panel should remain");
+        fixture.event(menu, zgui::platform::SurfaceEvent::Destroyed).expect("late close notification is harmless");
+        fixture.turn().expect("session continues running after dismissal");
+        fixture.session.invoke("checkDismissal").expect("owner was notified exactly once");
+        fixture.host.stop_shell_surfaces(&mut fixture.runtime, &fixture.cx);
+        let report = fixture.session.retire();
+        assert!(report.failure.is_none(), "teardown failed: {:?}", report.failure);
+    }
+}
+
+#[test]
+fn closing_primary_disposes_popup_tree_before_primary_cleanup() {
+    let mut fixture = PopupTree::new();
+    fixture.session.invoke("queueChild").expect("declare nested popup");
+    fixture.session.invoke("expectChildCleanup").expect("check the full tree on shutdown");
+    fixture.turn().expect("mount nested popup");
+    let child = fixture.surface("child");
+    assert!(fixture.cx.surface(child).is_some(), "nested popup is live before closing");
+    let primary = fixture.surface("main");
+    fixture.event(primary, zgui::platform::SurfaceEvent::CloseRequested).expect("close the primary");
+    assert!(fixture.cx.surfaces().is_empty(), "primary and all auxiliary surfaces were closed");
+    assert!(fixture.runtime.windows().is_empty(), "all native windows were released");
+    let report = fixture.session.retire();
+    assert!(report.failure.is_none(), "child-before-parent cleanup failed: {:?}", report.failure);
+    assert_eq!(report.counts, ResourceCounts::default(), "retirement leaks no shell surfaces");
+}
+
 #[test]
 fn rejected_lock_candidate_keeps_the_accepted_auth_surface() {
     let good = lock_package(r#"

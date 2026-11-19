@@ -25,6 +25,8 @@ const REPOSITION_SINCE: u32 = 3;
 pub struct Placed<'a> {
     /// Where it hangs from, and what the compositor may do to fit it.
     pub place: &'a PopupPlacement,
+    /// The validated, quantized translation from the anchor.
+    pub offset: placement::Offset,
     /// The extent of the surface it is placed against.
     pub parent: Size<CssPx, Css>,
     /// The extent of the pop-up itself.
@@ -43,23 +45,28 @@ pub struct Popup {
 }
 
 impl Popup {
-    /// Makes a pop-up out of `wl`, placed against `parent`.
-    ///
-    /// # Errors
-    ///
-    /// Returns nothing when the positioner cannot be made, which means the shell is gone.
+    /// Makes a pop-up out of `wl`, with an optional foreign layer parent.
     pub fn new(
         shell: &XdgShell,
         qh: &QueueHandle<WaylandState>,
         wl: WlSurface,
         id: SurfaceId,
-        parent: &XdgSurface,
+        parent: &crate::surface::Role,
         placed: &Placed<'_>,
     ) -> Self {
         let positioner = shell.base().create_positioner(qh, ());
-        placement::describe(&positioner, placed.place, placed.parent, placed.size);
+        placement::describe(
+            &positioner,
+            placed.place,
+            placed.offset,
+            placed.parent,
+            placed.size,
+        );
         let xdg = shell.base().get_xdg_surface(&wl, qh, id);
-        let popup = xdg.get_popup(Some(parent), &positioner, qh, id);
+        let popup = xdg.get_popup(parent.xdg_surface(), &positioner, qh, id);
+        if let Some(layer) = parent.layer() {
+            layer.get_popup(&popup);
+        }
         positioner.destroy();
         Self { wl, xdg, popup }
     }
@@ -88,34 +95,47 @@ impl Popup {
         self.popup.grab(seat, serial);
     }
 
-    /// Moves the pop-up without making it again, where the shell allows it.
-    ///
-    /// Answers with whether it could. A shell too old to reposition, or a pop-up the compositor has
-    /// not configured yet, is left alone — the caller closes it and opens another.
+    /// Whether this compositor supports live repositioning.
+    #[must_use]
+    pub(crate) fn can_reposition(&self) -> bool {
+        self.popup.version() >= REPOSITION_SINCE
+    }
+
+    /// Moves the pop-up without making it again.
     pub fn reposition(
         &self,
         shell: &XdgShell,
         qh: &QueueHandle<WaylandState>,
         placed: &Placed<'_>,
         token: u32,
-        mapped: bool,
-    ) -> bool {
-        if !mapped || self.popup.version() < REPOSITION_SINCE {
-            return false;
-        }
+    ) {
         let positioner = shell.base().create_positioner(qh, ());
-        placement::describe(&positioner, placed.place, placed.parent, placed.size);
+        placement::describe(
+            &positioner,
+            placed.place,
+            placed.offset,
+            placed.parent,
+            placed.size,
+        );
         self.popup.reposition(&positioner, token);
         positioner.destroy();
-        true
+    }
+
+    /// Releases the shell role even when the client still holds a surface handle.
+    pub(crate) fn retire(&self) {
+        if self.popup.is_alive() {
+            self.popup.destroy();
+        }
+        if self.xdg.is_alive() {
+            self.xdg.destroy();
+        }
     }
 }
 
 impl Drop for Popup {
     /// Takes the objects down innermost first, which the protocol requires.
     fn drop(&mut self) {
-        self.popup.destroy();
-        self.xdg.destroy();
+        self.retire();
         self.wl.destroy();
     }
 }
@@ -136,7 +156,11 @@ impl Dispatch<XdgPopup, SurfaceId> for WaylandState {
             }
             // The compositor dismissed it — a click outside a menu, the parent losing focus. There
             // is no way back for this surface; the application closes it and makes another.
-            xdg_popup::Event::PopupDone => state.report(*id, SurfaceEvent::Destroyed),
+            xdg_popup::Event::PopupDone => {
+                if state.live.surface(*id).is_some_and(|surface| surface.mark_popup_done()) {
+                    state.report(*id, SurfaceEvent::Destroyed);
+                }
+            }
             _ => {}
         }
     }

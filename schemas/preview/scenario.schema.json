@@ -32,6 +32,7 @@
           { "$ref": "#/$defs/surfaceScale" },
           { "$ref": "#/$defs/surfaceColorScheme" },
           { "$ref": "#/$defs/surfaceRecreate" },
+          { "$ref": "#/$defs/popupDone" },
           { "$ref": "#/$defs/monitorsSet" }
         ]
       }
@@ -319,7 +320,18 @@
         "op": { "const": "surface.recreate" },
         "surface": { "$ref": "#/$defs/surface" }
       },
-      "description": "Reopens the selected native surface. Recreating main replaces the Session generation; recreating a named Shell surface replaces only its own mount region."
+      "description": "Recreating main replaces the Session generation. Recreating a named layer remounts it and its descendant popups in the existing generation."
+    },
+    "popupDone": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "op", "surface"],
+      "properties": {
+        "id": { "$ref": "#/$defs/safeId" },
+        "op": { "const": "popupDone" },
+        "surface": { "$ref": "#/$defs/surface" }
+      },
+      "description": "Dismisses the named mounted PopupSurface via a native destruction event. Infers surface.multiple and does not advance virtual time."
     },
     "monitorsSet": {
       "type": "object",

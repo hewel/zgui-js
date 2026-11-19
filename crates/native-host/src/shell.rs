@@ -6,7 +6,7 @@ use zgui::{geom::{CssPx, Edges, Size}, platform::{AppHandler, IdlePolicy, Keyboa
 type Result<T> = std::result::Result<T, Box<dyn Error>>;
 
 mod session;
-pub(crate) use session::{Authority, ContractPolicy, LayerSpec, LockCommand, LockSpec, MAX_LAYERS, Monitor, Shell, ShellConfig};
+pub(crate) use session::{Authority, ContractPolicy, LayerSpec, LockCommand, LockSpec, MAX_LAYERS, Monitor, PopupSpec, Shell, ShellConfig};
 
 #[derive(Clone, Copy, Deserialize)]
 #[serde(rename_all = "lowercase")]

@@ -295,6 +295,28 @@ pub trait Surface: Send + Sync + 'static {
         Err(Unsupported.into())
     }
 
+    /// Updates a pop-up's placement and requested size without recreating it.
+    ///
+    /// The parent and grab cannot change after creation. The backend may apply the new size
+    /// immediately or report the compositor's choice through [`SurfaceEvent::Resized`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the role, backend or placement does not support the change.
+    fn reconfigure_popup(
+        &self,
+        _placement: &PopupPlacement,
+        _size: Size<CssPx, Css>,
+    ) -> Result<(), PlatformError> {
+        Err(Unsupported.into())
+    }
+
+    /// Whether the compositor dismissed this pop-up before the close event was delivered.
+    #[must_use]
+    fn popup_dismissed(&self) -> bool {
+        false
+    }
+
     /// Tells the platform where text is being typed and what kind, or that none is.
     ///
     /// One call rather than three, because the parts are only meaningful together: an input method

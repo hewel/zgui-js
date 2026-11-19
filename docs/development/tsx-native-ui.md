@@ -1192,7 +1192,9 @@ Treat these as separate tasks after the TSX runtime works:
 - Define keyboard focus policy.
 - Verify popups and menus using the actual parent surface type.
 
-The audited Wayland popup path requires an xdg_surface parent and rejects a layer parent. An in-surface overlay is a different mechanism and does not establish support for an out-of-surface panel popup. [Z15]
+The Wayland backend associates an xdg-popup with its layer parent before the
+initial commit. An in-surface overlay is a different mechanism; use the
+`popup_protocol` gate to verify the layer-parent wire path. [Z15]
 
 ### 15.3 Resource services and platform boundary
 

@@ -42,6 +42,7 @@ impl StepDriver for Driver {
             Step::SurfaceColorScheme{surface,color_scheme,..}=>self.color_scheme(surface,color_scheme).map(|mut trace| { trace["surface"]=json!(surface); trace }),
             Step::SurfaceRecreate{surface,..}=>self.recreate(surface).map(|mut trace| { trace["surface"]=json!(surface); trace }),
             Step::MonitorsSet{monitors,..}=>self.set_monitors(monitors),
+            Step::PopupDone{surface,..}=>self.popup_done(surface),
         }
     }
     fn readiness(&self)->Value { Driver::readiness(self) }

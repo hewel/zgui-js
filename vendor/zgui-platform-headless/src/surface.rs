@@ -7,8 +7,8 @@ use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use accesskit::TreeUpdate;
 use zgui_geom::{Css, CssPx, Device, DevicePx, Size};
 use zgui_platform::{
-    CursorStyle, Decorations, FullscreenMode, InputRegion, LayerPlacement, PlatformError, Surface,
-    SurfaceAttributes, SurfaceId, SurfaceRole, TextInput, Unsupported,
+    CursorStyle, Decorations, FullscreenMode, InputRegion, LayerPlacement, PlatformError,
+    PopupPlacement, Surface, SurfaceAttributes, SurfaceId, SurfaceRole, TextInput, Unsupported,
 };
 
 /// How many accessibility nodes the surface keeps across the updates it retains.
@@ -153,6 +153,7 @@ pub struct OffscreenSurface {
     /// can otherwise check about an application identifier, a window level or an icon is nothing at
     /// all, and an attribute nothing reads is an attribute that silently stops being sent.
     requested_attributes: Mutex<SurfaceAttributes>,
+    popup_dismissed: AtomicBool,
     /// The input region to use when routing scripted pointer input.
     input_region: Mutex<InputRegion>,
 }
@@ -175,6 +176,7 @@ impl OffscreenSurface {
             presentation: Mutex::new(Presentation::Window { visible: false }),
             title: Mutex::new(String::new()),
             requested_attributes: Mutex::new(SurfaceAttributes::default()),
+            popup_dismissed: AtomicBool::new(false),
             input_region: Mutex::new(InputRegion::Full),
         }
     }
@@ -240,6 +242,34 @@ impl OffscreenSurface {
             .lock()
             .expect("the attributes are not poisoned")
             .clone()
+    }
+
+    /// Simulates protocol dismissal before the corresponding close event is delivered.
+    pub fn mark_popup_done(&self) {
+        if self.popup_parent().is_some() {
+            self.popup_dismissed.store(true, Ordering::Release);
+        }
+    }
+
+    #[must_use]
+    pub(crate) fn can_parent_popup(&self) -> bool {
+        if self.popup_dismissed() {
+            return false;
+        }
+        let attributes = self.requested_attributes.lock().expect("the attributes are not poisoned");
+        matches!(
+            attributes.role,
+            SurfaceRole::Toplevel | SurfaceRole::Layer(_) | SurfaceRole::Popup(_)
+        )
+    }
+
+    #[must_use]
+    pub(crate) fn popup_parent(&self) -> Option<SurfaceId> {
+        let attributes = self.requested_attributes.lock().expect("the attributes are not poisoned");
+        match &attributes.role {
+            SurfaceRole::Popup(placement) => Some(placement.parent),
+            _ => None,
+        }
     }
 
     /// The pointer input region most recently applied to the surface.
@@ -515,6 +545,41 @@ impl Surface for OffscreenSurface {
             self.request_redraw();
         }
         Ok(())
+    }
+
+    fn reconfigure_popup(
+        &self,
+        placement: &PopupPlacement,
+        size: Size<CssPx, Css>,
+    ) -> Result<(), PlatformError> {
+        if self.popup_dismissed() {
+            return Err(Unsupported.into());
+        }
+        let mut attrs = self.requested_attributes.lock().expect("the attributes are not poisoned");
+        let SurfaceRole::Popup(old) = &attrs.role else {
+            return Err(Unsupported.into());
+        };
+        if old.parent != placement.parent || old.grab != placement.grab {
+            return Err(PlatformError::Backend(
+                "changing a pop-up's parent or grab requires reopening it".to_owned(),
+            ));
+        }
+        if [size.width.0, size.height.0].into_iter().any(|axis| !axis.is_finite() || axis <= 0.0) {
+            return Err(PlatformError::Backend(
+                "offscreen pop-ups require resolved positive dimensions".to_owned(),
+            ));
+        }
+        if old != placement || attrs.size != Some(size) {
+            attrs.role = SurfaceRole::Popup(placement.clone());
+            attrs.size = Some(size);
+            self.request_size(size);
+            self.request_redraw();
+        }
+        Ok(())
+    }
+
+    fn popup_dismissed(&self) -> bool {
+        self.popup_dismissed.load(Ordering::Acquire)
     }
 
     fn set_text_input(&self, state: Option<TextInput>) {

@@ -337,20 +337,47 @@ impl PlatformCx for Headless {
             surface.set_requested_attributes(attributes);
             return Ok(Arc::clone(surface) as Arc<dyn Surface>);
         }
+        let mut desktop = self.desktop();
+        if let SurfaceRole::Popup(placement) = &attributes.role
+            && !desktop
+                .surfaces
+                .iter()
+                .any(|parent| parent.id() == placement.parent && parent.can_parent_popup())
+        {
+            return Err(PlatformError::SurfaceCreation(
+                "a pop-up requires a live toplevel, layer or pop-up parent".to_owned(),
+            ));
+        }
         let size = attributes.size.map_or(DEFAULT_SIZE, |size| {
             Size::new(DevicePx(size.width.0), DevicePx(size.height.0))
         });
         let surface = Arc::new(OffscreenSurface::new(self.next_surface_id(), size));
         surface.set_title(attributes.title.as_str());
         surface.set_requested_attributes(attributes);
-        self.desktop().surfaces.push(Arc::clone(&surface));
+        desktop.surfaces.push(Arc::clone(&surface));
         Ok(surface as Arc<dyn Surface>)
     }
 
     fn destroy_surface(&self, id: SurfaceId) {
         let mut desktop = self.desktop();
-        if !desktop.session_lock.outputs.values_mut().any(|output| output.release(id)) {
-            desktop.surfaces.retain(|surface| surface.id() != id);
+        if desktop.session_lock.outputs.values_mut().any(|output| output.release(id)) {
+            return;
+        }
+        // A child can only have been created after its parent, so a single forward scan
+        // discovers every descendant. Remove the snapshot in the opposite order.
+        let mut descendants = Vec::new();
+        for surface in &desktop.surfaces {
+            if surface
+                .popup_parent()
+                .is_some_and(|parent| parent == id || descendants.contains(&parent))
+            {
+                descendants.push(surface.id());
+            }
+        }
+        for closing in descendants.into_iter().rev().chain(std::iter::once(id)) {
+            if let Some(index) = desktop.surfaces.iter().position(|surface| surface.id() == closing) {
+                desktop.surfaces.remove(index);
+            }
         }
     }
 

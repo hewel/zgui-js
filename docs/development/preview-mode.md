@@ -692,6 +692,7 @@ The 20 ms step is an explicit scenario choice. If the selected backend/profile r
 | `assert` | Target/check or service-call check | Evaluate a defined predicate; never arbitrary JS. |
 | `capture` | `captureId`; optional `surface` (defaults to `main`) and `requiredFrameTimeUs` | Save coherent pixels, tree, and metadata for the selected surface. |
 | `monitors.set` | `monitors` | Replace the synthetic output inventory without advancing virtual time. |
+| `popupDone` | `surface` | Deliver a native destruction event to a named popup, as for compositor dismissal. |
 
 For explicit position, use `{"x": 120, "y": 40}` in logical surface pixels. The target form and position form are mutually exclusive. Supported pointer buttons are `primary`, `secondary`, and `middle`; reject other values until explicitly implemented. `pointer.down` and `pointer.up` require a button; `pointer.move` and `pointer.cancel` reject one.
 
@@ -1233,7 +1234,9 @@ Before claiming a native desktop capability works on a backend supported by upst
 - Occlusion, idle behavior, and service-triggered wakeups.
 - Asynchronous resource-service delivery and failures.
 
-The pinned Wayland implementation rejects a layer surface as the parent of its xdg-popup path. An in-surface overlay may be a valid initial UI strategy, but a headless popup fixture cannot establish support for a layer-parent popup. [Z24]
+The offline `popup_protocol` gate verifies Wayland layer-parent popup requests.
+Headless popup captures verify the mount region and dismissal lifecycle, not
+compositor placement, edge flipping, or input grabs. [Z24]
 
 A headless platform can declare monitor/capability fixtures without implementing the corresponding compositor operations. Record requested surface roles as useful diagnostics; do not treat those declarations as protocol validation. [Z23]
 

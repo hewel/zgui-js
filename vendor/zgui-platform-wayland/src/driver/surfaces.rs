@@ -10,7 +10,8 @@ use zgui_platform::{
 
 use crate::driver::WaylandState;
 use crate::surface::role::{Popup, Role, Toplevel, layer};
-use crate::surface::{Fractional, Links, WaylandSurface};
+use crate::surface::role::popup::Offset as PopupOffset;
+use crate::surface::{Fractional, Links, PopupState, WaylandSurface};
 
 /// The extent a surface opens at when the application named none.
 const DEFAULT_SIZE: Size<CssPx, Css> = Size::new(CssPx(800.0), CssPx(600.0));
@@ -26,7 +27,8 @@ impl WaylandState {
     /// # Errors
     ///
     /// Returns [`PlatformError::Unsupported`] for a role this compositor has no protocol for, and
-    /// [`PlatformError::SurfaceCreation`] when a pop-up's parent has already gone.
+    /// [`PlatformError::SurfaceCreation`] when a pop-up's parent has already gone or its offset is
+    /// invalid.
     pub(crate) fn make_surface(
         &self,
         attributes: &SurfaceAttributes,
@@ -34,6 +36,10 @@ impl WaylandState {
         if let SurfaceRole::Lock(output) = &attributes.role {
             return self.claim_lock_output(output, attributes);
         }
+        let popup = match &attributes.role {
+            SurfaceRole::Popup(placement) => Some((placement, PopupOffset::new(placement.offset)?)),
+            _ => None,
+        };
         let id = self.live.next_id();
         if let Some(named) = &attributes.application_id {
             self.live
@@ -43,8 +49,16 @@ impl WaylandState {
         }
         let wanted = attributes.size.unwrap_or(DEFAULT_SIZE);
         let wl = self.compositor.create_surface(&self.qh);
-        let role = match self.make_role(id, attributes, wl.clone(), wanted) {
-            Ok(role) => role,
+        let made = match popup {
+            Some((placement, offset)) => {
+                self.make_popup(id, wl.clone(), placement, offset, attributes)
+            }
+            None => self
+                .make_role(id, attributes, wl.clone(), wanted)
+                .map(|role| (role, None, wanted)),
+        };
+        let (role, popup, wanted) = match made {
+            Ok(made) => made,
             Err(error) => {
                 wl.destroy();
                 return Err(error);
@@ -52,22 +66,7 @@ impl WaylandState {
         };
         let fractional = Fractional::attach(&self.extras, &self.qh, &wl, id);
 
-        let (placement, parent_extent) = match &attributes.role {
-            SurfaceRole::Popup(placement) => (
-                Some(placement.clone()),
-                self.configured_extent(placement.parent).unwrap_or(wanted),
-            ),
-            _ => (None, wanted),
-        };
-        let surface = WaylandSurface::new(
-            id,
-            role,
-            fractional,
-            wanted,
-            placement,
-            parent_extent,
-            self.links(),
-        );
+        let surface = WaylandSurface::new(id, role, fractional, wanted, popup, self.links());
         {
             let mut shared = surface.shared();
             shared.ahead =
@@ -96,7 +95,6 @@ impl WaylandState {
             SurfaceRole::Layer(placement) => self.make_layer(
                 wl, placement, attributes.application_id.as_deref().unwrap_or("zgui"), wanted,
             ),
-            SurfaceRole::Popup(placement) => self.make_popup(id, wl, placement, attributes),
             _ => Ok(Role::Toplevel(Box::new(Toplevel::new(
                 &self.xdg,
                 &self.qh,
@@ -118,32 +116,54 @@ impl WaylandState {
         id: SurfaceId,
         wl: wayland_client::protocol::wl_surface::WlSurface,
         placement: &PopupPlacement,
+        offset: PopupOffset,
         attributes: &SurfaceAttributes,
-    ) -> Result<Role, PlatformError> {
+    ) -> Result<(Role, Option<PopupState>, Size<CssPx, Css>), PlatformError> {
         let Some(parent) = self.live.surface(placement.parent) else {
             return Err(PlatformError::SurfaceCreation(
                 "the surface this pop-up belongs to has already gone".to_owned(),
             ));
         };
-        let Some(anchor) = parent.role().xdg_surface() else {
+        if !parent.accepts_popups() {
             return Err(PlatformError::SurfaceCreation(
-                "a pop-up can only be placed against a window or another pop-up".to_owned(),
+                "the parent pop-up has been dismissed".to_owned(),
             ));
-        };
-        let extent = parent.shared().logical;
+        }
+        if parent.role().xdg_surface().is_none() && parent.role().layer().is_none() {
+            return Err(PlatformError::SurfaceCreation(
+                "a pop-up needs a window, layer surface, or pop-up parent".to_owned(),
+            ));
+        }
+        // No retiring popup can be left underneath the new role in the shell's stack.
+        self.live.release_retiring_popups();
+        let extent = parent.geometry_extent();
         let size = attributes.size.unwrap_or(extent);
-        Ok(Role::Popup(Box::new(Popup::new(
+        let popup = Popup::new(
             &self.xdg,
             &self.qh,
             wl,
             id,
-            anchor,
+            parent.role(),
             &crate::surface::role::xdg::popup::Placed {
                 place: placement,
+                offset,
                 parent: extent,
                 size,
             },
-        ))))
+        );
+        let grab_seat = if placement.grab
+            && let Some(serial) = self.seat.serials.grab()
+            && let Some(seat) = self.seat.serials.seat.as_ref()
+            && wayland_client::Proxy::is_alive(seat)
+            && self.live.can_grab_popup(&parent, seat)
+        {
+            popup.grab(seat, serial);
+            Some(seat.clone())
+        } else {
+            None
+        };
+        let state = PopupState::new(&parent, placement.clone(), offset, size, grab_seat);
+        Ok((Role::Popup(Box::new(popup)), Some(state), size))
     }
 
     /// A surface that is part of the desktop shell rather than a window.

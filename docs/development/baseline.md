@@ -172,9 +172,9 @@ is provided. The backend finishes initial output descriptions before invoking
 `surfaces_available`.
 The package must declare `shellSurfaces` both at startup and on reload.
 
-Layer-parent out-of-surface popups are unsupported by the pinned backend; a
-normal-window demo is not proof of that capability. The former niri panel and
-its `shell::proof::real_panel_layer` acceptance gate are no longer shipped.
+Layer-parent popups use `zwlr_layer_surface_v1.get_popup`, verified by the
+offline `popup_protocol` gate. A normal-window or same-surface overlay demo does
+not exercise that path. The former niri panel and its acceptance gate are retired.
 Any real-desktop verification must use a supported upstream backend and require
 explicit permission before changing physical outputs, focus, clipboard or input.
 

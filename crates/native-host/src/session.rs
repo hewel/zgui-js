@@ -424,6 +424,16 @@ impl Session {
         result.map(|()| true).map_err(|error| self.diagnostic(error).into())
     }
 
+    /// Notify a popup owner after its native subtree has been retired.
+    pub(crate) fn dismiss_popup(&self, id: u32) -> Result<()> {
+        if self.shutdown_started.get() || !self.shell.owns_popup(id) { return Ok(()); }
+        let mut engine = self.engine.borrow_mut();
+        let engine = engine.as_mut().ok_or("session disposed")?;
+        let result = self.bridges.run(engine.turn(), |js| js.with_context(|ctx| self.shell.dispatch_popup_dismiss(&ctx, id)));
+        self.mark_reported(self.check_contract())?;
+        result.map_err(|error| self.diagnostic(error).into())
+    }
+
     /// Leave staged lock commands queued while the current checkpoint has more JS jobs to check.
     pub(crate) fn lock_commands_ready(&self) -> bool {
         !self.shutdown_started.get() && self.fault.borrow().is_none()
@@ -917,8 +927,8 @@ impl Session {
         }
     }
 
-    /// Dispose JavaScript while the native mount regions are still available for cleanup.
-    pub(crate) fn dispose(&self) {
+    /// Dispose JavaScript while native mount regions still exist, visiting popup children first.
+    pub(crate) fn dispose(&self, popups_in_close_order: impl IntoIterator<Item = u32>) {
         if self.retired.borrow().is_some() { return; }
         let before = self.counts();
         self.shutdown_started.set(true);
@@ -927,7 +937,18 @@ impl Session {
         self.shell.begin_stop();
         self.work.begin_stop();
         self.fault.borrow_mut().take();
-        let mut cleanup_error = self.cleanup(self.disposer.borrow_mut().take()).err();
+        let mut cleanup_error = None;
+        {
+            let layers = self.layers.borrow();
+            for owned in popups_in_close_order.into_iter().filter_map(|id| layers.get(&id)) {
+                if let Err(error) = self.cleanup(owned.disposer.borrow_mut().take()) {
+                    cleanup_error.get_or_insert(error);
+                }
+            }
+        }
+        if let Err(error) = self.cleanup(self.disposer.borrow_mut().take()) {
+            cleanup_error.get_or_insert(error);
+        }
         for owned in self.layers.borrow().values() {
             if let Err(error) = self.cleanup(owned.disposer.borrow_mut().take()) {
                 cleanup_error.get_or_insert(error);
@@ -983,7 +1004,7 @@ impl Session {
 
     /// Report residual resources after the host has attempted native surface closure.
     pub(crate) fn retire(&self) -> SessionRetirement {
-        self.dispose();
+        self.dispose([]);
         let mut report = self.retired.borrow().as_ref().expect("disposal records retirement").clone();
         report.counts.shell_surfaces = self.shell_surfaces.get();
         if !self.retirement_reported.replace(true) {

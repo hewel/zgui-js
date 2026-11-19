@@ -46,6 +46,33 @@ export interface LayerSurfaceProps extends LayerSurfacePlacement {
   readonly children?: NativeChild;
 }
 
+/** Physical point on an anchor rectangle, or direction in which the popup extends. */
+export type PopupPosition = "center" | LayerAnchor | "top-left" | "top-right" | "bottom-left" | "bottom-right";
+export interface PopupSurfacePlacement {
+  readonly anchor?: PopupPosition;
+  readonly gravity?: PopupPosition;
+  readonly slide?: boolean;
+  readonly flip?: boolean;
+  readonly resize?: boolean;
+  readonly reactive?: boolean;
+}
+
+/** An independently mounted compositor popup. Its anchor uses parent-local logical coordinates. */
+export type PopupSurfaceProps = {
+  readonly name: string;
+  readonly parent: string;
+  readonly width: number;
+  readonly height: number;
+  readonly placement?: PopupSurfacePlacement;
+  readonly offset?: NativePoint;
+  readonly grab?: boolean;
+  readonly onDismiss?: () => void;
+  readonly children?: NativeChild;
+} & (
+  | { readonly anchorRect: NativeWindowRect; readonly anchorNode?: never }
+  | { readonly anchorNode: NativeNode | null | undefined; readonly anchorRect?: never }
+);
+
 /** The compositor's last confirmed session-lock state. */
 export type SessionLockState = "unlocked" | "pending" | "locked" | "refused" | "finished" | "unlocking";
 

@@ -16,22 +16,25 @@ pub use crate::surface::scale::Scale;
 pub use crate::surface::seat::SeatLink;
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard, Weak};
 use std::time::Instant;
 
 use accesskit::TreeUpdate;
 use smithay_client_toolkit::reexports::client::{Connection, QueueHandle};
 use wayland_client::protocol::wl_compositor::WlCompositor;
+use wayland_client::protocol::wl_seat::WlSeat;
 use wayland_client::protocol::wl_region::WlRegion;
 use wayland_client::protocol::wl_surface::WlSurface;
 use zgui_geom::{Css, CssPx, Device, DevicePx, Size};
 use zgui_platform::{
     CursorStyle, Decorations, FullscreenMode, GpuSurface, InputRegion, LayerPlacement,
-    PlatformError, PresentPacing, PresentationTiming, Surface, SurfaceId, TextInput, Unsupported,
+    PlatformError, PopupPlacement, PresentPacing, PresentationTiming, Surface, SurfaceId,
+    TextInput, Unsupported,
 };
 
 use crate::driver::WaylandState;
 use crate::frame::Presentation;
+use crate::surface::role::popup::Offset as PopupOffset;
 use crate::surface::state::{Bounds, Shared};
 
 /// What a surface needs from the loop it belongs to.
@@ -66,6 +69,58 @@ impl core::fmt::Debug for Links {
     }
 }
 
+/// A popup's fixed parent and the placement requests made against it.
+pub(crate) struct PopupState {
+    parent: Weak<WaylandSurface>,
+    parent_id: SurfaceId,
+    root: SurfaceId,
+    grab_seat: Option<WlSeat>,
+    desired: Mutex<PopupDesired>,
+}
+
+struct PopupDesired {
+    placement: PopupPlacement,
+    offset: PopupOffset,
+    size: Size<CssPx, Css>,
+    phase: PopupPhase,
+    pending: bool,
+    token: u32,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PopupPhase {
+    AwaitingConfigure,
+    AwaitingBuffer,
+    Mapped,
+    Dismissed,
+    Retired,
+}
+
+impl PopupState {
+    pub(crate) fn new(
+        parent: &Arc<WaylandSurface>,
+        placement: PopupPlacement,
+        offset: PopupOffset,
+        size: Size<CssPx, Css>,
+        grab_seat: Option<WlSeat>,
+    ) -> Self {
+        Self {
+            parent: Arc::downgrade(parent),
+            parent_id: parent.id,
+            root: parent.popup_root().unwrap_or(parent.id),
+            grab_seat,
+            desired: Mutex::new(PopupDesired {
+                placement,
+                offset,
+                size,
+                phase: PopupPhase::AwaitingConfigure,
+                pending: false,
+                token: 0,
+            }),
+        }
+    }
+}
+
 /// A Wayland surface, seen as something to draw into and interact with.
 ///
 /// Shared and thread-safe, because [`Surface::request_redraw`] has to work from anywhere: work
@@ -87,8 +142,8 @@ pub struct WaylandSurface {
     shared: Mutex<Shared>,
     /// A redraw asked for from anywhere, waiting to be pulled into the pacer.
     asked: AtomicBool,
-    /// Whether the compositor has configured this surface at least once.
-    mapped: AtomicBool,
+    /// Whether this surface still belongs to the loop.
+    active: AtomicBool,
     /// How a request made away from the loop's thread reaches it.
     ping: calloop::ping::Ping,
     /// The connection, for the display handle a graphics API needs.
@@ -99,12 +154,7 @@ pub struct WaylandSurface {
     compositor: WlCompositor,
     /// Where a request for presentation feedback goes.
     presentation: Presentation,
-    /// Where a pop-up was placed, for the reposition that follows it growing.
-    placement: Option<zgui_platform::PopupPlacement>,
-    /// The extent the pop-up's parent was at when it was placed.
-    parent_extent: Size<CssPx, Css>,
-    /// How many times this pop-up has been moved, which is how an answer is matched to a request.
-    reposition_token: std::sync::atomic::AtomicU32,
+    popup: Option<PopupState>,
     /// The shell a reposition is made against.
     shell: Arc<crate::surface::role::xdg::XdgShell>,
     /// The channel an assistive technology talks to.
@@ -124,8 +174,7 @@ impl WaylandSurface {
         role: Role,
         fractional: Fractional,
         wanted: Size<CssPx, Css>,
-        placement: Option<zgui_platform::PopupPlacement>,
-        parent_extent: Size<CssPx, Css>,
+        popup: Option<PopupState>,
         links: Links,
     ) -> Arc<Self> {
         let mut shared = Shared::new();
@@ -136,15 +185,13 @@ impl WaylandSurface {
             fractional,
             shared: Mutex::new(shared),
             asked: AtomicBool::new(false),
-            mapped: AtomicBool::new(false),
+            active: AtomicBool::new(true),
             ping: links.ping,
             conn: links.conn,
             qh: links.qh,
             compositor: links.compositor,
             presentation: links.presentation,
-            placement,
-            parent_extent,
-            reposition_token: std::sync::atomic::AtomicU32::new(1),
+            popup,
             shell: links.shell,
             a11y: A11y::open(id, links.waker),
             seat: links.seat,
@@ -197,48 +244,175 @@ impl WaylandSurface {
         &self.a11y
     }
 
-    /// Where this pop-up was asked to be placed, when it is one.
-    pub(crate) const fn placement(&self) -> Option<&zgui_platform::PopupPlacement> {
-        self.placement.as_ref()
+    #[must_use]
+    pub(crate) fn popup_root(&self) -> Option<SurfaceId> {
+        self.popup.as_ref().map(|popup| popup.root)
     }
 
-    /// Records that a pop-up has been configured, which is what makes it movable.
-    ///
-    /// Moving one that has never been configured is a protocol error, and a menu asked to
-    /// reposition itself in the same breath as it opened would hit it.
-    pub(crate) fn popup_mapped(&self) {
-        self.mapped.store(true, Ordering::Release);
+    #[must_use]
+    pub(crate) fn popup_parent_live(&self) -> bool {
+        self.popup.as_ref().is_some_and(|popup| {
+            popup.parent.upgrade().is_some_and(|parent| parent.active())
+        })
     }
 
-    /// Whether a pop-up has been configured at least once.
-    pub(crate) fn is_mapped(&self) -> bool {
-        self.mapped.load(Ordering::Acquire)
+    #[must_use]
+    pub(crate) fn popup_grabs(&self, seat: &WlSeat) -> bool {
+        self.popup.as_ref().and_then(|popup| popup.grab_seat.as_ref()) == Some(seat)
     }
 
-    /// Asks the compositor to place this pop-up again, at `size`.
-    ///
-    /// Answers with whether it could. A shell too old to move a pop-up, or one the compositor has
-    /// not configured yet, is left where it is — moving an unmapped pop-up is a protocol error, and
-    /// the caller's fallback is to close it and open another.
-    pub(crate) fn reposition(&self, size: Size<CssPx, Css>) -> bool {
-        let Some(popup) = self.role.popup() else {
+    #[must_use]
+    pub(crate) fn active(&self) -> bool {
+        self.active.load(Ordering::Acquire)
+    }
+
+    pub(crate) fn close(&self) {
+        self.active.store(false, Ordering::Release);
+    }
+
+    pub(crate) fn retire(&self) {
+        if let Some(state) = &self.popup {
+            let mut desired = state.desired.lock().expect("popup placement lock poisoned");
+            if desired.phase == PopupPhase::Retired {
+                return;
+            }
+            desired.phase = PopupPhase::Retired;
+            self.a11y.close();
+            self.role.popup().expect("popup state has a popup role").retire();
+        }
+    }
+
+    #[must_use]
+    pub(crate) fn mark_popup_done(&self) -> bool {
+        let Some(state) = &self.popup else { return false };
+        let mut desired = state.desired.lock().expect("popup placement lock poisoned");
+        if matches!(desired.phase, PopupPhase::Dismissed | PopupPhase::Retired) {
             return false;
+        }
+        desired.phase = PopupPhase::Dismissed;
+        true
+    }
+
+    #[must_use]
+    pub(crate) fn accepts_popups(&self) -> bool {
+        self.popup.as_ref().is_none_or(|state| {
+            let desired = state.desired.lock().expect("popup placement lock poisoned");
+            !matches!(desired.phase, PopupPhase::Dismissed | PopupPhase::Retired)
+        })
+    }
+
+    /// Bufferless commits may configure a popup, but it cannot map before its parent.
+    #[must_use]
+    pub(crate) fn parent_mapped(&self) -> bool {
+        self.popup.as_ref().is_none_or(|popup| {
+            popup.parent.upgrade().is_some_and(|parent| {
+                if !parent.active() || !parent.parent_mapped() {
+                    return false;
+                }
+                let shared = parent.shared();
+                shared.mapped && !shared.unmapped
+            })
+        })
+    }
+
+    #[must_use]
+    pub(crate) fn geometry_extent(&self) -> Size<CssPx, Css> {
+        let shared = self.shared();
+        if shared.logical.width.0 > 0.0 && shared.logical.height.0 > 0.0 {
+            shared.logical
+        } else {
+            shared.wanted
+        }
+    }
+
+    /// Records the configure that makes the popup eligible for its first frame.
+    pub(crate) fn popup_configured(&self) {
+        let Some(state) = &self.popup else { return };
+        let mut desired = state.desired.lock().expect("popup placement lock poisoned");
+        if desired.phase == PopupPhase::AwaitingConfigure {
+            desired.phase = PopupPhase::AwaitingBuffer;
+        }
+    }
+
+    /// Called after the renderer returns, when the buffer notified by pre_present is committed.
+    pub(crate) fn popup_frame_committed(&self) {
+        let Some(state) = &self.popup else { return };
+        if !self.active() || !self.shared().mapped {
+            return;
+        }
+        let mut desired = state.desired.lock().expect("popup placement lock poisoned");
+        if desired.phase == PopupPhase::AwaitingBuffer {
+            desired.phase = PopupPhase::Mapped;
+        }
+        if desired.phase == PopupPhase::Mapped && desired.pending
+            && let Some(parent) = state.parent.upgrade().filter(|parent| parent.active())
+        {
+            self.send_popup_placement(&parent, &mut desired);
+        }
+    }
+
+    #[must_use]
+    pub(crate) fn resize_popup(&self, size: Size<CssPx, Css>) -> bool {
+        self.role.popup().is_some_and(|popup| popup.can_reposition())
+            && self.update_popup(None, size).is_ok()
+    }
+
+    fn update_popup(
+        &self,
+        placement: Option<&PopupPlacement>,
+        size: Size<CssPx, Css>,
+    ) -> Result<(), PlatformError> {
+        let (Some(state), Some(popup)) = (&self.popup, self.role.popup()) else {
+            return Err(PlatformError::Unsupported(Unsupported));
         };
-        let Some(placement) = self.placement() else {
-            return false;
-        };
-        let token = self.reposition_token.fetch_add(1, Ordering::Relaxed);
-        popup.reposition(
+        let mut desired = state.desired.lock().expect("popup placement lock poisoned");
+        if !self.active()
+            || matches!(desired.phase, PopupPhase::Dismissed | PopupPhase::Retired)
+        {
+            return Err(PlatformError::Unsupported(Unsupported));
+        }
+        let parent = state.parent.upgrade().filter(|parent| parent.active())
+            .ok_or(PlatformError::Unsupported(Unsupported))?;
+        // Parent and grab belong to role creation, not to a positioner.
+        if let Some(placement) = placement
+            && (placement.parent != state.parent_id || placement.grab != desired.placement.grab)
+        {
+            return Err(PlatformError::Unsupported(Unsupported));
+        }
+        let offset = placement
+            .map(|placement| PopupOffset::new(placement.offset))
+            .transpose()?;
+        // Older shells retain their initial geometry.
+        if !popup.can_reposition() {
+            return Ok(());
+        }
+        if let Some((placement, offset)) = placement.zip(offset) {
+            desired.placement = placement.clone();
+            desired.offset = offset;
+        }
+        desired.size = size;
+        desired.pending = true;
+        if desired.phase == PopupPhase::Mapped && self.shared().mapped {
+            self.send_popup_placement(&parent, &mut desired);
+        }
+        Ok(())
+    }
+
+    fn send_popup_placement(&self, parent: &WaylandSurface, desired: &mut PopupDesired) {
+        desired.pending = false;
+        desired.token = desired.token.wrapping_add(1);
+        self.role.popup().expect("popup state has a popup role").reposition(
             &self.shell,
             &self.qh,
             &crate::surface::role::xdg::popup::Placed {
-                place: placement,
-                parent: self.parent_extent,
-                size,
+                place: &desired.placement,
+                offset: desired.offset,
+                parent: parent.geometry_extent(),
+                size: desired.size,
             },
-            token,
-            self.is_mapped(),
-        )
+            desired.token,
+        );
+        self.ping.ping();
     }
 
     /// The smallest and largest extents the user may drag to.
@@ -389,6 +563,9 @@ impl Surface for WaylandSurface {
     }
 
     fn request_redraw(&self) {
+        if !self.active() {
+            return;
+        }
         // Coalescing, and cheap enough to be called from a worker thread on every value that
         // changed: the flag is what the loop reads, and the poke is only there to end a park.
         if !self.asked.swap(true, Ordering::AcqRel) {
@@ -414,6 +591,9 @@ impl Surface for WaylandSurface {
     }
 
     fn present_now(&self) -> bool {
+        if !self.active() || !self.parent_mapped() {
+            return false;
+        }
         self.shared().pacer.present_now(Instant::now())
     }
 
@@ -511,6 +691,23 @@ impl Surface for WaylandSurface {
         size: Size<CssPx, Css>,
     ) -> Result<(), PlatformError> {
         chrome::reconfigure_layer(self, placement, size)
+    }
+
+    fn reconfigure_popup(
+        &self,
+        placement: &PopupPlacement,
+        size: Size<CssPx, Css>,
+    ) -> Result<(), PlatformError> {
+        if !chrome::valid_size(size) {
+            return Err(PlatformError::SurfaceCreation("invalid pop-up extent".to_owned()));
+        }
+        self.update_popup(Some(placement), size)
+    }
+
+    fn popup_dismissed(&self) -> bool {
+        self.popup.as_ref().is_some_and(|state| {
+            state.desired.lock().expect("popup placement lock poisoned").phase == PopupPhase::Dismissed
+        })
     }
 
     fn begin_move_drag(&self) -> Result<(), Unsupported> {

@@ -25,12 +25,16 @@ pub fn request_size(
     if matches!(surface.role(), super::Role::LockContent(_)) {
         return None;
     }
-    // Buffer and viewport sizes use signed extents, even for layers whose set_size takes u32.
-    if [size.width.0, size.height.0]
-        .into_iter()
-        .any(|axis| !axis.is_finite() || axis <= 0.0 || f64::from(axis) > f64::from(i32::MAX))
-    {
+    if !valid_size(size) || !surface.active() {
         return None;
+    }
+    // For a popup, the compositor's configure is the authority on the new extent.
+    if surface.role().popup().is_some() {
+        if !surface.resize_popup(size) {
+            return None;
+        }
+        let scale = surface.shared().scale;
+        return Some(device_extent(size, scale));
     }
     let scale = {
         let mut shared = surface.shared();
@@ -42,18 +46,24 @@ pub fn request_size(
         shared.resized(size, scale);
         scale
     };
-    // A pop-up is placed rather than sized: growing one means asking the compositor to work out
-    // where a rectangle of the new extent fits, which is the same question it answered when the
-    // pop-up opened. Moving it is what keeps a menu that grew an item from flickering shut and
-    // open again; where the shell is too old to move one, the caller closes it and opens another.
-    if surface.role().popup().is_some() {
-        surface.reposition(size);
-    }
     zgui_platform::Surface::request_redraw(surface);
-    Some(Size::new(
+    Some(device_extent(size, scale))
+}
+
+/// Buffer and viewport sizes use signed extents, even for layers whose set_size takes u32.
+#[must_use]
+pub(super) fn valid_size(size: Size<CssPx, Css>) -> bool {
+    [size.width.0, size.height.0]
+        .into_iter()
+        .all(|axis| axis.is_finite() && axis > 0.0 && f64::from(axis) <= f64::from(i32::MAX))
+}
+
+#[must_use]
+fn device_extent(size: Size<CssPx, Css>, scale: f64) -> Size<DevicePx, Device> {
+    Size::new(
         DevicePx((size.width.0 as f64 * scale).round() as f32),
         DevicePx((size.height.0 as f64 * scale).round() as f32),
-    ))
+    )
 }
 
 /// Sets the smallest extent the user may drag to.
@@ -101,6 +111,9 @@ pub fn set_resizable(surface: &WaylandSurface, resizable: bool) {
 /// An unmapped surface is shown again by the same empty commit that asked for its first configure.
 /// The pacer holds the redraw until that configure arrives.
 pub fn set_visible(surface: &WaylandSurface, visible: bool) {
+    if !surface.active() {
+        return;
+    }
     if let super::Role::LockContent(content) = surface.role() {
         let mut shared = surface.shared();
         shared.unmapped = !visible;
@@ -138,6 +151,7 @@ pub fn set_visible(surface: &WaylandSurface, visible: bool) {
     let wl = surface.wl_surface();
     wl.attach(None, 0, 0);
     wl.commit();
+    shared.mapped = false;
     shared.visibility.configured = false;
     shared.unmapped = true;
     shared.cancel_callbacks();
@@ -202,6 +216,9 @@ pub(crate) fn reconfigure_layer(
 ///   arrived; and
 /// * the **presentation feedback**, because it is asked per content update and this is the update.
 pub fn pre_present(surface: &WaylandSurface, size: Size<i32, Device>, scale: f64) {
+    if !surface.active() || !surface.parent_mapped() {
+        return;
+    }
     let (metadata, fractional) = {
         let mut shared = surface.shared();
         shared.presented = true;

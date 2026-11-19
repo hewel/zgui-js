@@ -1,11 +1,15 @@
-import { createEffect, createSignal, getOwner, onCleanup, runWithOwner } from "#solid";
-import { shellBridge } from "./host.js";
-import type { LayerPlacement, NativeInputRegion, UiBridge } from "./host.js";
+import { createEffect, createMemo, createRoot, createSignal, getOwner, onCleanup, runWithOwner } from "#solid";
+import { bridgeFor, shellBridge } from "./host.js";
+import type { LayerPlacement, NativeHost, NativeInputRegion, PopupPlacement, UiBridge } from "./host.js";
 import { renderRegion } from "./renderer/index.js";
 import type {
   Accessor, LayerAnchor, LayerSurfaceProps, Monitor, NativeNode, NativeWindowRect,
-  SessionLockRequest, SessionLockState, SessionLockSurfaceProps,
+  PopupSurfaceProps, SessionLockRequest, SessionLockState, SessionLockSurfaceProps,
 } from "./types.js";
+
+declare const console: { warn(message: string): void };
+
+const popupParentRegions = new WeakMap<UiBridge, { shell: NativeHost["__zguiShell"]; name: string }>();
 
 /** Read the current session's generation, including during module preflight. */
 export function getSessionGeneration(): number {
@@ -105,6 +109,7 @@ export function LayerSurface(props: LayerSurfaceProps): null {
     const request: LayerRequest = {
       id: shell.openLayer(name, placement, (root, bridge) => {
         if (request.closed) return () => {};
+        popupParentRegions.set(bridge, { shell, name });
         let attached = true;
         const dispose = runWithOwner(owner, () => renderRegion(() => {
           bindInputRegion(props, bridge, region => {
@@ -123,6 +128,88 @@ export function LayerSurface(props: LayerSurfaceProps): null {
     };
     current = request;
   });
+  return null;
+}
+
+/** Own a compositor popup attached to a named layer or popup in this session. */
+export function PopupSurface(props: PopupSurfaceProps): null {
+  const owner = getOwner();
+  if (!owner) throw new Error("PopupSurface requires a Solid owner");
+  const shell = shellBridge();
+  const name = createMemo(() => props.name);
+  const parent = createMemo(() => props.parent);
+
+  createEffect(() => ({ name: name(), parent: parent() }), ({ name, parent }) => runWithOwner(owner, () => createRoot(dispose => {
+    const [dismissed, dismiss] = createSignal(false);
+    const [nodeAnchor, setNodeAnchor] = createSignal<{ node: NativeNode; rect: NativeWindowRect }>();
+    let id: number | undefined;
+    const close = () => {
+      if (id !== undefined) {
+        const request = id;
+        id = undefined;
+        shell.closePopup(request);
+      }
+    };
+    onCleanup(close);
+
+    createEffect(() => dismissed() ? undefined : props.anchorNode, node => {
+      setNodeAnchor(undefined);
+      if (!node) return;
+      const bridge = bridgeFor(node);
+      const region = popupParentRegions.get(bridge);
+      if (region?.shell !== shell || region.name !== parent) {
+        console.warn(`PopupSurface "${name}": anchorNode must belong to parent surface "${parent}"`);
+        return;
+      }
+      const publish = (rect: NativeWindowRect | null) => {
+        setNodeAnchor(rect && rect.width > 0 && rect.height > 0 ? { node, rect } : undefined);
+      };
+      return bridge.observeGeometry(node, "borderBox", publish, attached => {
+        publish(attached ? bridge.getWindowRect(node) : null);
+      });
+    });
+
+    createEffect((): PopupPlacement | undefined => {
+      if (dismissed()) return;
+      const anchor = nodeAnchor();
+      const rect = props.anchorRect ?? (anchor && anchor.node === props.anchorNode ? anchor.rect : undefined);
+      if (!rect) return;
+      const placement = props.placement;
+      const offset = props.offset;
+      return {
+        parent,
+        anchorRect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
+        anchor: placement?.anchor ?? "bottom-left",
+        gravity: placement?.gravity ?? "bottom-right",
+        offset: { x: offset?.x ?? 0, y: offset?.y ?? 0 },
+        slide: placement?.slide ?? true,
+        flip: placement?.flip ?? true,
+        resize: placement?.resize ?? false,
+        reactive: placement?.reactive ?? false,
+        grab: props.grab ?? false,
+        width: props.width,
+        height: props.height,
+      };
+    }, placement => {
+      if (!placement) { close(); return; }
+      if (id !== undefined) {
+        shell.updatePopup(id, placement);
+        return;
+      }
+      const request = shell.openPopup(name, placement, (root, bridge) => {
+        if (id !== request) return () => {};
+        popupParentRegions.set(bridge, { shell, name });
+        return runWithOwner(owner, () => renderRegion(() => () => props.children, root, bridge));
+      }, () => {
+        if (id !== request) return;
+        close();
+        dismiss(true);
+        runWithOwner(owner, () => props.onDismiss?.());
+      });
+      id = request;
+    });
+    return dispose;
+  })));
   return null;
 }
 

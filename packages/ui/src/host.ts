@@ -3,13 +3,17 @@ import type { Owner } from "#solid";
 import type {
   CanvasScene, LayerAnchor, LayerSurfacePlacement, Monitor, NativeDismissLayerOptions, NativeDismissReason,
   NativeGeometry, NativeGeometryKind, NativeNode, NativeOverlayLayer, NativeWindowRect,
-  SessionLockState,
+  PopupSurfacePlacement, PopupSurfaceProps, SessionLockState,
 } from "./types.js";
 
 export type LayerPlacement = Required<Omit<LayerSurfacePlacement, "output" | "margin">> & {
   readonly output?: string;
   readonly margin: Readonly<Record<LayerAnchor, number>>;
 };
+export type PopupPlacement = Required<PopupSurfacePlacement> &
+  Required<Pick<PopupSurfaceProps, "parent" | "offset" | "grab" | "width" | "height">> & {
+    readonly anchorRect: NativeWindowRect;
+  };
 export type NativeInputRegion = "full" | "empty" | readonly NativeWindowRect[];
 
 /** Installed by the host; resolving either bridge must remain lazy during preflight. */
@@ -57,6 +61,9 @@ export interface NativeHost {
     updateLayer(id: number, placement: LayerPlacement): void;
     closeLayer(id: number): void;
     setInputRegion(id: number, region: NativeInputRegion): void;
+    openPopup(name: string, placement: PopupPlacement, attach: (root: NativeNode, bridge: UiBridge) => () => void, dismiss: () => void): number;
+    updatePopup(id: number, placement: PopupPlacement): void;
+    closePopup(id: number): void;
     requestSessionLock(callback: (state: SessionLockState) => void): { readonly id: number; unlock(this: void): void; unsubscribe(this: void): void };
     openLock(name: string, output: string, attach: (root: NativeNode, bridge: UiBridge) => () => void): number;
     closeLock(id: number): void;

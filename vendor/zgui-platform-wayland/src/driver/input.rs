@@ -147,7 +147,7 @@ impl SeatHandler for WaylandState {
         for capability in [Capability::Keyboard, Capability::Pointer, Capability::Touch] {
             self.remove_capability(conn, qh, seat.clone(), capability);
         }
-        self.seat.serials.seat = None;
+        self.seat.serials = Default::default();
         self.link.attach(self.conn.clone(), None);
     }
 }

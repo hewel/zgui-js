@@ -97,8 +97,7 @@ LICENSE and NOTICE and standalone manifest. Four focused protocol changes apply:
 The host validates stretch anchors and an explicitly named available monitor.
 It always supplies a nonnegative exclusive zone: the pinned backend's `None`
 emits protocol `-1`, which ignores other exclusive zones rather than reserving
-the layer's extent. Out-of-surface layer-parent popups remain unsupported by
-the pinned upstream backend; same-surface overlays do not establish that support.
+the layer's extent.
 
 Historical verification used the former panel example and the now-retired
 `shell::proof::real_panel_layer` gate. It opened a real layer, observed niri
@@ -152,6 +151,31 @@ regressions still run when a Wayland display is configured.
 
     cargo test --offline --manifest-path vendor/zgui-platform-wayland/Cargo.toml --test layer_protocol
     cargo test --offline --manifest-path vendor/zgui-runtime/Cargo.toml --test shell_lifecycle
+
+## Layer-anchored and nested popups
+
+`zgui-platform` adds a zero-default logical offset and opt-in reactive
+positioning to popup placement, plus an in-place reconfiguration contract.
+`zgui-platform-wayland` assigns a layer parent before the first bufferless
+commit and retains the XDG path for toplevel and popup parents. It quotes an
+eligible seat press for grabs; nesting a grab requires the parent to own the
+topmost grab. Popup buffers wait for their parents to map. XDG version 3
+supports reactive positioners and live repositioning; updates staged before
+the first buffer apply once it is committed, using the parent's current
+extent. Older versions retain the initial placement. The host reconciles
+`popup_done` before issuing placement changes or opening children, even
+when the destroyed-surface event is still queued.
+
+Wayland retires popup roles newest-first, even if callers retain surface
+handles. Closing an older popup can also retire higher sibling branches in
+the same XDG stack. Headless closes descendants before their parents,
+validates parent roles, and retains the requested placement and size; it
+does not emulate edge flipping or input grabs. `zgui-runtime` closes child
+documents first, forwards live placement changes, and discards transient
+popups on suspend rather than resuming against stale parent IDs. On primary
+close, the host disposes the popup tree before the primary document.
+
+    cargo test -j 4 --manifest-path vendor/zgui-platform-wayland/Cargo.toml --test popup_protocol --offline
 
 ## Package image authority and capture readiness
 

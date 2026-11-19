@@ -556,12 +556,19 @@ optional. Use a new list to change geometry or remove specific outputs, and
 `"monitors": []` to remove them all. The SDK's `useMonitors()` observes the
 ordered snapshot; neither hotplug nor surface creation advances virtual time.
 
-Select a mounted Shell surface by its `LayerSurface` or `SessionLockSurface` name on `capture`, input,
-assertion, and surface configuration steps. A missing surface fails with
+Select a mounted Shell surface by its `LayerSurface`, `PopupSurface`, or
+`SessionLockSurface` name on `capture`, input, assertion, and surface
+configuration steps. A missing surface fails with
 `E_SURFACE_NOT_FOUND`. Input positions are in the selected surface's local logical
 pixels. Named pointer and wheel steps respect that surface's input region;
 an explicit coordinate outside it records no dispatch. Preview does not
 composite or route through to another desktop surface.
+
+Use `{"id":"dismiss-menu","op":"popupDone","surface":"menu"}` to simulate
+compositor dismissal of a mounted `PopupSurface`. This infers `surface.multiple`
+and does not advance virtual time. The named popup's `onDismiss` runs; any
+descendant popup regions close without receiving their own callbacks. A missing
+or non-popup target fails with `E_SURFACE_NOT_FOUND`.
 
 For session-lock scenarios, require `session-lock` and use `monitors.set` to
 exercise coverage on output arrival and removal. The offscreen compositor
@@ -571,8 +578,9 @@ fallback outputs, and the explicit unlock count. The `sessionLock` record in
 `services.json` is sampled after JS retirement, before the fixture platform
 is discarded. A retained compositor lock is not a leaked session resource.
 
-Named layer `surface.recreate` replaces only that mount region, preserving the
-Session generation and all other surfaces. Named captures store evidence in
+Named layer `surface.recreate` replaces its mount region and any descendant
+popup regions, preserving the Session generation and unrelated surfaces.
+Named captures store evidence in
 `captures/surfaces/<surface>/<captureId>.*`; `main` keeps
 `captures/<captureId>.*`. To inspect these artifacts use `preview inspect --surface
 <name> --capture <captureId>`. Comparison and baseline review carry both fields.
@@ -737,9 +745,10 @@ general CPU or power budget.
 
 PV37's real editing/IME path and PV39's compositor blending, fractional scale and
 output transitions passed. PV38's placement/focus/exclusive-zone portion passed.
-The public SDK does not implement layer-parent xdg-popups or interaction outside
-such popup bounds; the pinned backend rejects that parent path. No popup support
-is certified here, and a same-surface drawing is not presented as a popup proof.
+That historical run did not exercise layer-parent xdg-popups. The separate
+offline `popup_protocol` test covers layer and nested popup protocol requests;
+`tests/preview/popup-surface.test.mjs` covers named captures and dismissal in
+the headless runtime. Neither certifies desktop-specific input or placement.
 PV40 historically passed for the then-implemented niri and async asset-service
 paths and observed occlusion/wake behavior. The niri service and its gate have
 since been retired. Live audio and notification providers were not implemented

@@ -137,7 +137,14 @@ impl AppHandler for PreviewHost {
         self.observers.reset();
         self.native.surfaces_lost(cx);
     }
-    fn surface_event(&mut self, cx: &dyn PlatformCx, surface: SurfaceId, event: SurfaceEvent) { if self.fault.is_none() { self.native.surface_event(cx, surface, event); self.after_native(cx); } }
+    fn surface_event(&mut self, cx: &dyn PlatformCx, surface: SurfaceId, event: SurfaceEvent) {
+        if self.fault.is_some() { return; }
+        if let Err(error) = self.host.surface_event(&mut self.native, cx, surface, event) {
+            self.fail(cx, Fault::application(error));
+            return;
+        }
+        self.after_native(cx);
+    }
     fn wake(&mut self, cx: &dyn PlatformCx, reason: WakeReason) {
         if self.fault.is_some() { return; }
         if std::mem::take(&mut self.monitor_change) { self.native.monitors_changed(cx); }

@@ -1,5 +1,5 @@
 import {
-  Image, Button, TextField, TextArea, For, Show, Loading, Errored, LayerSurface,
+  Image, Button, TextField, TextArea, For, Show, Loading, Errored, LayerSurface, PopupSurface,
   createCanvasScene, createContext, createEffect, createMemo, createSignal, createSpring, createStore, createProjection,
   merge, omit, onCleanup, onSettled, reconcile, renderApp, renderShell, untrack, useContext, useMonitors,
   focus, getTextContent, getWindowRect, isAnimating, lockScroll, mountStylesheet, observeGeometry, precedes,
@@ -217,6 +217,10 @@ export function mountLock(): () => void {
 
 const hitNodes: readonly NativeNode[] = [assigned];
 void <LayerSurface name="nodes" inputRegion={hitNodes} />;
+void <PopupSurface name="menu" parent="nodes" anchorNode={borrowed} width={32} height={40} />;
+void <PopupSurface name="submenu" parent="menu" anchorRect={{ x: 1, y: 2, width: 10, height: 12 }}
+  width={32} height={40} grab offset={{ x: 5, y: -3 }} placement={{ anchor: "right", gravity: "right", reactive: true }}
+  onDismiss={() => {}}><text>Popup</text></PopupSurface>;
 void borrowed;
 
 type AssertBoundary<T extends true> = T;

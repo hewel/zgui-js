@@ -115,7 +115,7 @@ pub struct WaylandState {
     /// What a callback may change.
     pub(crate) live: Live,
     /// What happened during a dispatch and has not been delivered yet.
-    pub(crate) out: Vec<(SurfaceId, SurfaceEvent)>,
+    pub(crate) out: Vec<(SurfaceId, SurfaceEvent, Delivery)>,
     /// A coalesced monitor update to deliver outside the protocol dispatch.
     pub(crate) monitors_dirty: bool,
 }
@@ -300,7 +300,7 @@ impl WaylandState {
 
     /// Records something that happened to a surface, for delivery after this dispatch.
     pub(crate) fn report(&mut self, id: SurfaceId, event: SurfaceEvent) {
-        self.out.push((id, event));
+        self.out.push((id, event, Delivery::Protocol));
     }
 
     /// Records which clock the compositor times presentation against.
@@ -378,4 +378,10 @@ impl core::fmt::Debug for WaylandState {
             .field("pending", &self.out.len())
             .finish_non_exhaustive()
     }
+}
+
+pub(crate) enum Delivery {
+    Protocol,
+    /// Logical removal was already performed, but the handler still needs to know.
+    Removed,
 }

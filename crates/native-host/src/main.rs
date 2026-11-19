@@ -167,11 +167,15 @@ impl Application {
     fn after_shell(&mut self, cx: &dyn PlatformCx) {
         if cx.is_exiting() || self.failure.borrow().is_some() { return; }
         if let Err(error) = self.host.shell_turn(&mut self.native, cx, ImageChoice::Live, &self.monitors) {
-            if cx.session_lock_state().is_retained() {
-                eprintln!("session-lock UI fault (compositor lock retained): {error}");
-            } else {
-                self.fail(cx, error);
-            }
+            self.shell_fault(cx, error);
+        }
+    }
+
+    fn shell_fault(&mut self, cx: &dyn PlatformCx, error: session::SessionError) {
+        if cx.session_lock_state().is_retained() {
+            eprintln!("session-lock UI fault (compositor lock retained): {error}");
+        } else {
+            self.fail(cx, error);
         }
     }
 
@@ -283,7 +287,11 @@ impl AppHandler for Application {
         if self.failure.borrow().is_some() { cx.request_exit(); }
     }
     fn surface_event(&mut self, cx: &dyn PlatformCx, surface: SurfaceId, event: SurfaceEvent) {
-        self.native.surface_event(cx, surface, event);
+        if let Err(error) = self.host.surface_event(&mut self.native, cx, surface, event) {
+            self.shell_fault(cx, error);
+            self.reconcile_control(cx);
+            return;
+        }
         self.after_native(cx);
         self.reconcile_control(cx);
     }

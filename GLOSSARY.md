@@ -39,7 +39,7 @@ _Avoid_: Generation (reserved for session incarnations), native acceptance
 
 **StyleX profile**: The versioned agreement between generated StyleX output and the native CSS behaviors an application may use.
 
-**Shell surface**: A desktop-owned layer or session-lock surface bound to a specific or compositor-chosen output, backing its own mount region within the owning session.
+**Shell surface**: A desktop-managed layer, session-lock surface, or anchored popup backing its own mount region within the owning session.
 _Avoid_: Panel window, popup window
 
 **Input region**: The subset of a surface's area that receives pointer events while letting events elsewhere pass through to surfaces beneath.

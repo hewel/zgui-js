@@ -127,7 +127,7 @@ let nextCanvasToken = 0;
 let nextSessionGeneration = 1;
 let nextLockRequestId = 1;
 
-export function createHost({ strictStyles = false, reducedMotion = false, monitors = [], sessionLock } = {}) {
+export function createHost({ strictStyles = false, reducedMotion = false, monitors = [], sessionLock, shellSurfaces = true } = {}) {
   if (!Number.isSafeInteger(nextSessionGeneration)) throw new RangeError("session generation exhausted");
   const generation = nextSessionGeneration++;
   let nextId = 0;
@@ -585,6 +585,7 @@ export function createHost({ strictStyles = false, reducedMotion = false, monito
   const host = makeBridge(primary);
   const surfaces = new Map();
   const layerIds = new Map();
+  const popupIds = new Map();
   const lockIds = new Map();
   const lockSubscribers = new Map();
   const sessionLockLog = [];
@@ -594,6 +595,24 @@ export function createHost({ strictStyles = false, reducedMotion = false, monito
   const monitorSubscribers = new Set();
   let monitorSnapshot = structuredClone(monitors);
   let nextLayerId = 0;
+  const requireShell = () => {
+    if (!shellSurfaces) throw Object.assign(new Error("shell surfaces require capabilities.shellSurfaces"), { code: "E_CAPABILITY" });
+  };
+  const requireAcyclicPopupParent = (name, parent) => {
+    if (name === parent) throw new TypeError("a popup cannot parent itself");
+    let ancestor = parent;
+    while (ancestor !== undefined) {
+      if (ancestor === name) throw new TypeError("popup parent chain contains a cycle");
+      let next;
+      for (const popup of popupIds.values()) {
+        if (!popup.closing && popup.name === ancestor) {
+          next = popup.placement.parent;
+          break;
+        }
+      }
+      ancestor = next;
+    }
+  };
   const requireLock = () => {
     if (!sessionLock) throw Object.assign(new Error("session lock requires capabilities.sessionLock"), { code: "E_CAPABILITY" });
   };
@@ -603,8 +622,14 @@ export function createHost({ strictStyles = false, reducedMotion = false, monito
       lockSubscribers.get(id)?.(next);
     }
   };
-  const present = surface => (!surface.lock || lockState === "locked")
-    && (surface.placement.output === undefined || monitorSnapshot.some(monitor => monitor.id === surface.placement.output));
+  const present = surface => {
+    if (surface.popup) {
+      const parent = surfaces.get(surface.placement.parent);
+      return parent && !parent.lock && !parent.closing;
+    }
+    return (!surface.lock || lockState === "locked")
+      && (surface.placement.output === undefined || monitorSnapshot.some(monitor => monitor.id === surface.placement.output));
+  };
   const attachSurface = surface => {
     if (surface.closing || surface.root || !present(surface)) return;
     const region = { stylesheets: new Map(), installs: [], scenes: [] };
@@ -627,6 +652,28 @@ export function createHost({ strictStyles = false, reducedMotion = false, monito
       if (doomed.has(focused.current)) focused.current = null;
       surface.root = surface.bridge = surface.region = surface.dispose = undefined;
     }
+  };
+  const detachTree = (surface, mode) => {
+    if (!surface.root) return;
+    for (const child of popupIds.values()) {
+      if (child.root && child.placement.parent === surface.name) {
+        if (mode === "compositor-dismissed") child.suppressed = true;
+        detachTree(child, mode);
+      }
+    }
+    detachSurface(surface);
+  };
+  const attachPopups = () => {
+    let changed;
+    do {
+      changed = false;
+      for (const popup of popupIds.values()) {
+        if (!popup.closing && !popup.suppressed && !popup.root && present(popup)) {
+          attachSurface(popup);
+          changed = true;
+        }
+      }
+    } while (changed);
   };
 
   const shell = {
@@ -683,7 +730,7 @@ export function createHost({ strictStyles = false, reducedMotion = false, monito
       if (name === "main" || !/^[a-z0-9][a-z0-9_.-]{0,127}$/.test(name)) {
         throw new TypeError("invalid or reserved shell surface name");
       }
-      if ([...layerIds.values(), ...lockIds.values()].some(surface =>
+      if ([...layerIds.values(), ...lockIds.values(), ...popupIds.values()].some(surface =>
         !surface.closing && (surface.name === name || (surface.lock && surface.placement.output === output)))) {
         throw new TypeError("duplicate lock surface name or output");
       }
@@ -710,8 +757,9 @@ export function createHost({ strictStyles = false, reducedMotion = false, monito
     },
     openLayer(name, placement, attach) {
       assertActiveHost("openLayer");
+      requireShell();
       if (name === "main" || !/^[a-zA-Z0-9_-]{1,64}$/.test(name)) throw new TypeError("invalid or reserved shell surface name");
-      if ([...layerIds.values(), ...lockIds.values()].some(surface => !surface.closing && surface.name === name)) {
+      if ([...layerIds.values(), ...lockIds.values(), ...popupIds.values()].some(surface => !surface.closing && surface.name === name)) {
         throw new TypeError(`duplicate shell surface: ${name}`);
       }
       const id = ++nextLayerId;
@@ -735,7 +783,7 @@ export function createHost({ strictStyles = false, reducedMotion = false, monito
       surface.closing = true;
       shellLog.push({ op: "close", id });
       shellTasks.push(() => {
-        try { detachSurface(surface); }
+        try { detachTree(surface, "owner-closed"); }
         finally { layerIds.delete(id); }
       });
     },
@@ -746,7 +794,52 @@ export function createHost({ strictStyles = false, reducedMotion = false, monito
       surface.inputRegion = structuredClone(region);
       shellLog.push({ op: "input", id, region: surface.inputRegion });
     },
+    openPopup(name, placement, attach, dismiss) {
+      assertActiveHost("openPopup");
+      requireShell();
+      if (name === "main" || !/^[a-z0-9][a-z0-9_.-]{0,127}$/.test(name)) {
+        throw new TypeError("invalid popup name");
+      }
+      requireAcyclicPopupParent(name, placement.parent);
+      if ([...layerIds.values(), ...lockIds.values(), ...popupIds.values()].some(surface => !surface.closing && surface.name === name)) {
+        throw new TypeError(`duplicate shell surface: ${name}`);
+      }
+      const id = ++nextLayerId;
+      const surface = { id, popup: true, name, placement: structuredClone(placement), attach, dismiss };
+      popupIds.set(id, surface);
+      return id;
+    },
+    updatePopup(id, placement) {
+      assertActiveHost("updatePopup");
+      const surface = popupIds.get(id);
+      if (!surface || surface.closing) throw new ReferenceError("closed popup surface");
+      if (surface.placement.parent !== placement.parent) {
+        requireAcyclicPopupParent(surface.name, placement.parent);
+        throw new TypeError("changing a popup parent requires a new shell surface");
+      }
+      surface.placement = structuredClone(placement);
+    },
+    closePopup(id) {
+      const surface = popupIds.get(id);
+      if (!surface || surface.closing) return;
+      surface.closing = true;
+      shellTasks.push(() => {
+        try { detachTree(surface, "owner-closed"); }
+        finally { popupIds.delete(id); }
+      });
+    },
   };
+  const popupDone = name => runTurn(() => {
+    const surface = surfaces.get(name);
+    if (!surface?.popup || surface.closing) throw new ReferenceError(`no live popup named ${name}`);
+    surface.closing = true;
+    try {
+      detachTree(surface, "compositor-dismissed");
+      surface.dismiss();
+    } finally {
+      popupIds.delete(surface.id);
+    }
+  });
 
   const emitMonitors = next => runTurn(() => {
     monitorSnapshot = structuredClone(next);
@@ -755,7 +848,7 @@ export function createHost({ strictStyles = false, reducedMotion = false, monito
     }
     shellTasks.push(() => {
       for (const surface of [...layerIds.values(), ...lockIds.values()]) {
-        if (surface.closing || !present(surface)) detachSurface(surface);
+        if (surface.closing || !present(surface)) detachTree(surface, "owner-closed");
       }
       for (const surface of layerIds.values()) attachSurface(surface);
       for (const surface of lockIds.values()) attachSurface(surface);
@@ -764,9 +857,10 @@ export function createHost({ strictStyles = false, reducedMotion = false, monito
 
   const flush = () => {
     runTurn(() => {});
-    while (shellTasks.length) {
+    do {
       for (const task of shellTasks.splice(0, shellTasks.length)) runTurn(task);
-    }
+      runTurn(attachPopups);
+    } while (shellTasks.length);
   };
 
   const attached = node => {
@@ -787,7 +881,7 @@ export function createHost({ strictStyles = false, reducedMotion = false, monito
 
   return {
     host, nodes, parents, stylesheets, installs, makeNode, byTestId, focused, rects, texts,
-    shell, surfaces, shellLog, emitMonitors, monitorSubscribers,
+    shell, surfaces, shellLog, emitMonitors, monitorSubscribers, popupDone,
     sessionLockState: () => lockState, sessionLockLog,
     animating, animatingQueries, queries, portals, traps, locks, layers, geometry,
     canvasScenes,
@@ -798,6 +892,11 @@ export function createHost({ strictStyles = false, reducedMotion = false, monito
     beginStop: () => {
       stopping = true;
       lockSubscribers.clear();
+      for (const surface of popupIds.values()) {
+        surface.closing = true;
+        detachTree(surface, "owner-closed");
+      }
+      popupIds.clear();
       for (const surface of lockIds.values()) {
         surface.closing = true;
         detachSurface(surface);

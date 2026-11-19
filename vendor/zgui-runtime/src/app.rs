@@ -25,7 +25,8 @@ use std::sync::Arc;
 use zgui_geom::{Css, CssPx, Size};
 use zgui_platform::{
     AppHandler, Clock, IdlePolicy, LayerPlacement, MonitorInfo, PlatformCx, PlatformError,
-    SessionLockState, Surface, SurfaceAttributes, SurfaceEvent, SurfaceId, SurfaceRole, WakeReason,
+    PopupPlacement, SessionLockState, Surface, SurfaceAttributes, SurfaceEvent, SurfaceId,
+    SurfaceRole, WakeReason,
 };
 use zgui_render::{RenderTarget, Renderer};
 use zgui_view::{Anchor, BuildCx};
@@ -443,7 +444,7 @@ struct LiveWindow {
 pub struct Runtime {
     /// The application's own options, layered under every window's own.
     app_options: WindowContent,
-    /// Every window the application wants, open or not.
+    /// Every window the application wants, open or not, in creation order.
     live: Vec<LiveWindow>,
     /// The name of the window the application launched with.
     primary: Option<WindowToken>,
@@ -752,6 +753,112 @@ impl Runtime {
         self.app_timers.clone()
     }
 
+    /// Delivers a surface event, calling `before_close` before this window is closed.
+    ///
+    /// A vetoed close request does not call the hook. Owners may use it to retire
+    /// auxiliary windows while the closing window and its document are still available.
+    pub fn surface_event_with_close(
+        &mut self,
+        cx: &dyn PlatformCx,
+        surface: SurfaceId,
+        event: SurfaceEvent,
+        before_close: impl FnOnce(&mut Self),
+    ) {
+        let mut fired = Vec::new();
+        match event {
+            SurfaceEvent::RedrawRequested => {
+                let clock = cx.clock();
+                let now = clock.now();
+                if let Some(window) = self.window_mut(surface) {
+                    // Not every redraw is one this window asked for. A backend turns a configure
+                    // into one on its own account, and a window that owes a reconfiguration the
+                    // output could not yet show declines it — which is where the layout, the
+                    // repaint and the swapchain rebuild for a size that is already superseded are
+                    // saved. What is owed stays owed, and the deadline the park installs comes
+                    // back for it.
+                    if !window.wants_a_frame(now) {
+                        window.declined_a_frame();
+                    } else if window.holds_a_frame(now) {
+                        // Not a refusal. The frame is worth running and is about to be: it is
+                        // being started as late inside this interval as it can be and still
+                        // finish, so that the picture it composes is as current as it can be when
+                        // the display shows it. Everything that arrives in the meantime is queued
+                        // as usual and drawn by that same frame.
+                        window.held_a_frame();
+                    } else {
+                        window.frame(clock.as_ref());
+                        fired = window.take_menu_actions();
+                        // The copies first and the pastes second, so a copy and a paste from the
+                        // same batch paste what was just copied rather than what preceded it.
+                        Self::put_on_clipboard(cx, window);
+                        Self::answer_pastes(cx, window);
+                        self.sweep_other_windows(surface);
+                    }
+                }
+            }
+            SurfaceEvent::PresentReady => {
+                if let Some(window) = self.window_mut(surface) {
+                    window.present_held(cx.clock().as_ref());
+                }
+            }
+            SurfaceEvent::CloseRequested => {
+                // The user asking, which is the one close an application may refuse. Whatever
+                // refuses owes the user another way out.
+                let vetoed = self.live_for_surface(surface).is_some_and(|index| {
+                    let callbacks = Rc::clone(&self.live[index].spec.close);
+                    let asked = self.scope.with(|| {
+                        // As a listener's body is: a callback that reads a signal is reading it,
+                        // not subscribing whatever scope happens to be current.
+                        let _zone = zgui_reactive::enter_non_reactive_zone();
+                        callbacks.borrow_mut().ask()
+                    });
+                    asked == CloseResponse::Veto
+                });
+                if !vetoed {
+                    before_close(self);
+                    self.close_window(cx, surface);
+                    self.apply_exit_policy(cx);
+                }
+            }
+            // The platform took it. There is nothing to refuse: the window is already gone.
+            SurfaceEvent::Destroyed => {
+                before_close(self);
+                self.close_window(cx, surface);
+                self.apply_exit_policy(cx);
+            }
+            other => {
+                if let Some(window) = self.window_mut(surface) {
+                    // Every remaining event asks for a frame, for one of two reasons. Input is
+                    // dispatched by the frame it asks for rather than where it arrives, because a
+                    // handler's writes have to settle somewhere. Everything else — a resize, a
+                    // scale change, an occlusion — changes what the next frame is drawn against.
+                    // An event describing a state the window is already in — the same extent
+                    // again, an occlusion that has not changed — asks for nothing.
+                    if window.queue(other) {
+                        window.request_frame();
+                    }
+                }
+            }
+        }
+        // A chord nothing in the document claimed runs its menu action, after the frame.
+        for id in fired {
+            self.app_event(cx, zgui_platform::AppEvent::Menu(id));
+        }
+        // A frame just ran, and an effect inside it may have rebuilt the menu.
+        self.apply_menu(cx);
+        // A frame just ran, and a listener, an effect or a timer inside it may have asked for a
+        // window. This is the first point since then that holds a platform context.
+        if !self.commands.is_empty() {
+            self.drain_window_commands(cx);
+        }
+        // The editor's own copies were put on the clipboard while the frame ran, so what the
+        // application asked for lands after them: a component that copies and pastes in one batch
+        // pastes what it just copied.
+        if !self.clipboards.is_empty() {
+            self.clipboards.drain(cx);
+        }
+    }
+
     /// Opens a secondary surface immediately, within an active platform callback.
     ///
     /// The surface and its window document are available before this returns.
@@ -769,7 +876,7 @@ impl Runtime {
         Ok(token)
     }
 
-    /// Closes this window and its surface, including while its surface is suspended.
+    /// Closes this window and its pop-up descendants, even if its own surface is suspended.
     pub fn close_surface(&mut self, cx: &dyn PlatformCx, token: WindowToken) {
         if self.close_named_surface(cx, token) {
             self.apply_exit_policy(cx);
@@ -815,6 +922,43 @@ impl Runtime {
         }
         let attrs = &mut self.live[index].spec.attributes;
         attrs.role = SurfaceRole::Layer(placement);
+        attrs.size = Some(size);
+        Ok(())
+    }
+
+    /// Updates a live pop-up's placement and requested size without changing its parent or grab.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an absent or non-pop-up surface, a parent or grab change, or a
+    /// request refused by the backend.
+    pub fn reconfigure_popup(
+        &mut self,
+        token: WindowToken,
+        placement: PopupPlacement,
+        size: Size<CssPx, Css>,
+    ) -> Result<(), PlatformError> {
+        let index = self.live_index(token).ok_or(PlatformError::NoSuchSurface)?;
+        let live = &self.live[index];
+        let SurfaceRole::Popup(current) = &live.spec.attributes.role else {
+            return Err(zgui_platform::Unsupported.into());
+        };
+        if current.parent != placement.parent || current.grab != placement.grab {
+            return Err(PlatformError::Backend(
+                "changing a pop-up's parent or grab requires reopening it".to_owned(),
+            ));
+        }
+        let surface = live.surface.ok_or(PlatformError::NoSuchSurface)?;
+        let window = self.window_mut(surface).ok_or(PlatformError::NoSuchSurface)?;
+        let previous = window.surface().size();
+        window.surface().reconfigure_popup(&placement, size)?;
+        // Offscreen backends may apply the size synchronously without a configure event.
+        let configured = window.surface().size();
+        if configured != previous && window.queue(SurfaceEvent::Resized(configured)) {
+            window.request_frame();
+        }
+        let attrs = &mut self.live[index].spec.attributes;
+        attrs.role = SurfaceRole::Popup(placement);
         attrs.size = Some(size);
         Ok(())
     }
@@ -1190,11 +1334,28 @@ impl Runtime {
         window.request_frame();
     }
 
-    /// Closes the window drawing into `surface`, for good.
+    /// Closes the window drawing into `surface` and its pop-up descendants, for good.
     ///
     /// The window stops being one the application wants, which is what tells this apart from a
     /// platform taking every surface away: a window closed here does not come back on resume.
     fn close_window(&mut self, cx: &dyn PlatformCx, surface: SurfaceId) {
+        // A pop-up is opened after its parent. Take a snapshot so removals cannot invalidate
+        // indices, then go in reverse creation order to close each child before its parent.
+        let mut descendants = Vec::new();
+        for live in &self.live {
+            if let SurfaceRole::Popup(placement) = &live.spec.attributes.role
+                && let Some(id) = live.surface
+                && (placement.parent == surface || descendants.contains(&placement.parent))
+            {
+                descendants.push(id);
+            }
+        }
+        for id in descendants.into_iter().rev().chain(std::iter::once(surface)) {
+            self.close_one_window(cx, id);
+        }
+    }
+
+    fn close_one_window(&mut self, cx: &dyn PlatformCx, surface: SurfaceId) {
         // Looked up before the teardown, which is what clears the surface this names it by.
         let index = self.live_for_surface(surface);
         self.forget_surface(surface);
@@ -1204,6 +1365,21 @@ impl Runtime {
         cx.destroy_surface(surface);
         if let Some(index) = index {
             self.discard_window(index);
+        }
+    }
+
+    /// Retires transient windows in reverse creation order, without closing their owners.
+    fn retire_popups(&mut self, cx: &dyn PlatformCx) {
+        for index in (0..self.live.len()).rev() {
+            let live = &self.live[index];
+            if !matches!(live.spec.attributes.role, SurfaceRole::Popup(_)) {
+                continue;
+            }
+            if let Some(surface) = live.surface {
+                self.close_one_window(cx, surface);
+            } else {
+                self.discard_window(index);
+            }
         }
     }
 
@@ -1316,9 +1492,11 @@ impl AppHandler for Runtime {
     }
 
     fn surfaces_lost(&mut self, cx: &dyn PlatformCx) {
-        // The surfaces are gone, not the windows: what the application asked for is kept so that
-        // the next `surfaces_available` opens all of it again. A suspend is not a close, and
-        // applying the exit policy here would stop an application that is only in the background.
+        // Pop-ups belong to these native parent surfaces, not to their replacement IDs after
+        // resume. Retire them child-first; neither their anchors nor any grabs survive a suspend.
+        self.retire_popups(cx);
+        // Keep the other specifications so the next `surfaces_available` can reopen them.
+        // Do not apply the exit policy merely because the application went into the background.
         let surfaces: Vec<_> = self
             .live
             .iter()
@@ -1344,97 +1522,7 @@ impl AppHandler for Runtime {
     }
 
     fn surface_event(&mut self, cx: &dyn PlatformCx, surface: SurfaceId, event: SurfaceEvent) {
-        let mut fired = Vec::new();
-        match event {
-            SurfaceEvent::RedrawRequested => {
-                let clock = cx.clock();
-                let now = clock.now();
-                if let Some(window) = self.window_mut(surface) {
-                    // Not every redraw is one this window asked for. A backend turns a configure
-                    // into one on its own account, and a window that owes a reconfiguration the
-                    // output could not yet show declines it — which is where the layout, the
-                    // repaint and the swapchain rebuild for a size that is already superseded are
-                    // saved. What is owed stays owed, and the deadline the park installs comes
-                    // back for it.
-                    if !window.wants_a_frame(now) {
-                        window.declined_a_frame();
-                    } else if window.holds_a_frame(now) {
-                        // Not a refusal. The frame is worth running and is about to be: it is
-                        // being started as late inside this interval as it can be and still
-                        // finish, so that the picture it composes is as current as it can be when
-                        // the display shows it. Everything that arrives in the meantime is queued
-                        // as usual and drawn by that same frame.
-                        window.held_a_frame();
-                    } else {
-                        window.frame(clock.as_ref());
-                        fired = window.take_menu_actions();
-                        // The copies first and the pastes second, so a copy and a paste from the
-                        // same batch paste what was just copied rather than what preceded it.
-                        Self::put_on_clipboard(cx, window);
-                        Self::answer_pastes(cx, window);
-                        self.sweep_other_windows(surface);
-                    }
-                }
-            }
-            SurfaceEvent::PresentReady => {
-                if let Some(window) = self.window_mut(surface) {
-                    window.present_held(cx.clock().as_ref());
-                }
-            }
-            SurfaceEvent::CloseRequested => {
-                // The user asking, which is the one close an application may refuse. Whatever
-                // refuses owes the user another way out.
-                let vetoed = self.live_for_surface(surface).is_some_and(|index| {
-                    let callbacks = Rc::clone(&self.live[index].spec.close);
-                    let asked = self.scope.with(|| {
-                        // As a listener's body is: a callback that reads a signal is reading it,
-                        // not subscribing whatever scope happens to be current.
-                        let _zone = zgui_reactive::enter_non_reactive_zone();
-                        callbacks.borrow_mut().ask()
-                    });
-                    asked == CloseResponse::Veto
-                });
-                if !vetoed {
-                    self.close_window(cx, surface);
-                    self.apply_exit_policy(cx);
-                }
-            }
-            // The platform took it. There is nothing to refuse: the window is already gone.
-            SurfaceEvent::Destroyed => {
-                self.close_window(cx, surface);
-                self.apply_exit_policy(cx);
-            }
-            other => {
-                if let Some(window) = self.window_mut(surface) {
-                    // Every remaining event asks for a frame, for one of two reasons. Input is
-                    // dispatched by the frame it asks for rather than where it arrives, because a
-                    // handler's writes have to settle somewhere. Everything else — a resize, a
-                    // scale change, an occlusion — changes what the next frame is drawn against.
-                    // An event describing a state the window is already in — the same extent
-                    // again, an occlusion that has not changed — asks for nothing.
-                    if window.queue(other) {
-                        window.request_frame();
-                    }
-                }
-            }
-        }
-        // A chord nothing in the document claimed runs its menu action, after the frame.
-        for id in fired {
-            self.app_event(cx, zgui_platform::AppEvent::Menu(id));
-        }
-        // A frame just ran, and an effect inside it may have rebuilt the menu.
-        self.apply_menu(cx);
-        // A frame just ran, and a listener, an effect or a timer inside it may have asked for a
-        // window. This is the first point since then that holds a platform context.
-        if !self.commands.is_empty() {
-            self.drain_window_commands(cx);
-        }
-        // The editor's own copies were put on the clipboard while the frame ran, so what the
-        // application asked for lands after them: a component that copies and pastes in one batch
-        // pastes what it just copied.
-        if !self.clipboards.is_empty() {
-            self.clipboards.drain(cx);
-        }
+        self.surface_event_with_close(cx, surface, event, |_| {});
     }
 
     fn wake(&mut self, cx: &dyn PlatformCx, reason: WakeReason) {
@@ -1579,7 +1667,7 @@ impl AppHandler for Runtime {
         }
     }
 
-    fn shutting_down(&mut self, _cx: &dyn PlatformCx) {
+    fn shutting_down(&mut self, cx: &dyn PlatformCx) {
         // Before the windows close, so what the callbacks read is still there.
         let hooks = self.hooks.clone();
         self.scope.with(|| {
@@ -1587,6 +1675,7 @@ impl AppHandler for Runtime {
             hooks.exit();
         });
         self.app_timers.detach();
+        self.retire_popups(cx);
         for window in &mut self.windows {
             window.close();
         }

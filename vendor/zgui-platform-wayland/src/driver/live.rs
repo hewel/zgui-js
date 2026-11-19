@@ -3,7 +3,9 @@
 use std::cell::{Cell, RefCell};
 use std::sync::Arc;
 
-use zgui_platform::{ColorScheme, MonitorInfo, PlatformCapabilities, SurfaceId};
+use wayland_client::protocol::wl_seat::WlSeat;
+
+use zgui_platform::{ColorScheme, MonitorInfo, PlatformCapabilities, Surface as _, SurfaceId};
 
 use crate::clock::SystemClock;
 use crate::surface::WaylandSurface;
@@ -26,8 +28,11 @@ pub struct Live {
     ///
     /// A surface is not destroyed inside the callback that closed it: the objects underneath are
     /// the ones the loop is currently dispatching for, and taking them down there is a use after
-    /// free. They are retired between turns, with nothing borrowed.
+    /// free. The holders are retired between turns; only popup shell roles may be released
+    /// earlier, when otherwise a newly opened popup would stack above one pending destruction.
     pub(crate) retiring: RefCell<Vec<Arc<WaylandSurface>>>,
+    /// Sibling branches forced closed by the shell's topmost rule.
+    sibling_closes: RefCell<Vec<SurfaceId>>,
     /// Whether the loop has been asked to finish.
     pub(crate) exiting: Cell<bool>,
     /// The number the next surface gets.
@@ -59,6 +64,7 @@ impl Live {
         Self {
             surfaces: RefCell::new(Vec::new()),
             retiring: RefCell::new(Vec::new()),
+            sibling_closes: RefCell::new(Vec::new()),
             exiting: Cell::new(false),
             next: Cell::new(1),
             monitors: RefCell::new(Vec::new()),
@@ -85,7 +91,7 @@ impl Live {
         self.surfaces
             .borrow()
             .iter()
-            .find(|surface| zgui_platform::Surface::id(surface.as_ref()) == id)
+            .find(|surface| surface.id() == id)
             .map(Arc::clone)
     }
 
@@ -97,21 +103,73 @@ impl Live {
         self.surfaces.borrow().clone()
     }
 
-    /// Moves a surface to the retiring list, if it is still here.
-    pub(crate) fn close(&self, id: SurfaceId) {
-        let mut surfaces = self.surfaces.borrow_mut();
-        let Some(index) = surfaces
-            .iter()
-            .position(|surface| zgui_platform::Surface::id(surface.as_ref()) == id)
-        else {
-            return;
-        };
-        self.retiring.borrow_mut().push(surfaces.remove(index));
+    /// Whether a new grab can extend the active popup stack.
+    #[must_use]
+    pub(crate) fn can_grab_popup(&self, parent: &WaylandSurface, seat: &WlSeat) -> bool {
+        let surfaces = self.surfaces.borrow();
+        let root = parent.popup_root().unwrap_or(parent.id());
+        let top = surfaces.iter().rev().find(|surface| surface.popup_root() == Some(root));
+        let grabbing = surfaces.iter().rev().find(|surface| surface.popup_grabs(seat));
+        match (parent.popup_root(), top, grabbing) {
+            (None, None, None) => true,
+            (Some(_), Some(top), Some(grabbing)) => {
+                top.id() == parent.id() && grabbing.id() == parent.id()
+            }
+            _ => false,
+        }
     }
 
-    /// Takes everything waiting to be destroyed.
-    pub(crate) fn retire(&self) -> Vec<Arc<WaylandSurface>> {
-        std::mem::take(&mut self.retiring.borrow_mut())
+    /// Close this surface and anything above it in its popup stack, newest first.
+    ///
+    /// The shell stacks even sibling popups with a common root. Closing just descendants
+    /// could leave a sibling above the popup whose role we are about to destroy.
+    pub(crate) fn close(&self, id: SurfaceId) {
+        let mut surfaces = self.surfaces.borrow_mut();
+        let Some(index) = surfaces.iter().position(|surface| surface.id() == id) else {
+            return;
+        };
+        let root = surfaces[index].popup_root().unwrap_or(id);
+        let mut retiring = self.retiring.borrow_mut();
+        let start = retiring.len();
+        retiring.extend(surfaces.extract_if(index.., |surface| {
+            let close = surface.id() == id || surface.popup_root() == Some(root);
+            if close {
+                surface.close();
+            }
+            close
+        }));
+        retiring[start..].reverse();
+        // A removed popup whose parent is still live starts a sibling branch.
+        self.sibling_closes.borrow_mut().extend(
+            retiring[start..]
+                .iter()
+                .filter(|surface| surface.id() != id && surface.popup_parent_live())
+                .map(|surface| surface.id()),
+        );
+    }
+
+    pub(crate) fn take_sibling_closes(&self) -> Vec<SurfaceId> {
+        self.sibling_closes.take()
+    }
+
+    /// Release pending popup roles before a new popup can stack above them.
+    pub(crate) fn release_retiring_popups(&self) {
+        for surface in self.retiring.borrow().iter() {
+            surface.retire();
+        }
+    }
+
+    pub(crate) fn retire(&self) {
+        for surface in self.retiring.take() {
+            surface.retire();
+        }
+    }
+
+    pub(crate) fn close_all(&self) {
+        let mut surfaces = self.surfaces.borrow_mut();
+        self.retiring.borrow_mut().extend(surfaces.drain(..).rev().inspect(|surface| {
+            surface.close();
+        }));
     }
 }
 

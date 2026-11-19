@@ -7,6 +7,10 @@ use zgui::{geom::{Css, CssPx, Edges, Size}, platform::{InputRect, InputRegion, K
 
 use crate::{assets::{ContractFailure, MAX_SAFE_ID}, work::service_error};
 
+mod popup;
+pub(crate) use popup::PopupSpec;
+use popup::{WantedPopup, duplicate_name};
+
 pub(crate) const MAX_LAYERS: usize = 32;
 const MAX_SUBSCRIPTIONS: usize = 64;
 const MAX_INPUT_RECTS: u32 = 256;
@@ -107,6 +111,7 @@ pub(crate) struct Shell {
     monitors: RefCell<Vec<Monitor>>,
     subscriptions: RefCell<BTreeMap<u32, Persistent<Function<'static>>>>,
     layers: RefCell<BTreeMap<u32, WantedLayer>>,
+    popups: RefCell<BTreeMap<u32, WantedPopup>>,
     next_id: Cell<u32>,
     lock_authority: Authority,
     lock_fenced: Cell<bool>,
@@ -127,6 +132,7 @@ impl Shell {
         let ShellConfig { generation, authority, lock_authority, lock_state, contract } = config;
         Rc::new(Self { generation, authority, contract, failure: RefCell::new(None), life: Cell::new(Lifecycle::Loading),
             monitors: RefCell::new(Vec::new()), subscriptions: RefCell::new(BTreeMap::new()), layers: RefCell::new(BTreeMap::new()),
+            popups: RefCell::new(BTreeMap::new()),
             lock_authority, lock_fenced: Cell::new(false), lock_state: Cell::new(lock_state),
             lock_command: Cell::new(None), lock_subscriptions: RefCell::new(BTreeMap::new()),
             lock_dirty: Cell::new(false),
@@ -138,6 +144,7 @@ impl Shell {
     pub(crate) fn activate(&self) { self.life.set(Lifecycle::Active); }
     pub(crate) fn clear(&self) {
         self.layers.borrow_mut().clear();
+        self.popups.borrow_mut().clear();
         self.subscriptions.borrow_mut().clear();
         self.lock_surfaces.borrow_mut().clear();
         self.lock_subscriptions.borrow_mut().clear();
@@ -147,6 +154,7 @@ impl Shell {
     pub(crate) fn failure(&self) -> Option<ContractFailure> { self.failure.borrow().clone() }
     pub(crate) fn callback_count(&self) -> usize {
         self.layers.borrow().len() + self.subscriptions.borrow().len()
+            + 2 * self.popups.borrow().len()
             + self.lock_surfaces.borrow().len() + self.lock_subscriptions.borrow().len()
     }
     pub(crate) fn is_dirty(&self) -> bool { self.dirty.get() }
@@ -214,10 +222,18 @@ impl Shell {
 
     pub(crate) fn attach(&self, id: u32) -> Option<Persistent<Function<'static>>> {
         self.layers.borrow().get(&id).map(|layer| layer.attach.clone())
+            .or_else(|| self.popups.borrow().get(&id).map(|wanted| wanted.attach.clone()))
             .or_else(|| self.lock_surfaces.borrow().get(&id).map(|wanted| wanted.attach.clone()))
     }
 
     pub(crate) fn owns(&self, id: u32) -> bool { self.layers.borrow().contains_key(&id) }
+
+    #[must_use]
+    fn name_is_taken(&self, name: &str) -> bool {
+        self.layers.borrow().values().any(|wanted| wanted.spec.name == name)
+            || self.popups.borrow().values().any(|wanted| wanted.spec.name == name)
+            || self.lock_surfaces.borrow().values().any(|wanted| wanted.spec.name == name)
+    }
 
     pub(crate) fn updated_input(&self, id: u32, current: &InputRegion) -> Option<InputRegion> {
         let layers = self.layers.borrow();
@@ -252,7 +268,7 @@ impl Shell {
 
     fn require_authority(&self, ctx: &Ctx<'_>) -> rquickjs::Result<()> {
         if self.authority == Authority::Allowed { return Ok(()); }
-        self.capability_error(ctx, "layer surfaces require capabilities.shellSurfaces")
+        self.capability_error(ctx, "shell surfaces require capabilities.shellSurfaces")
     }
 
     fn require_lock_authority(&self, ctx: &Ctx<'_>) -> rquickjs::Result<()> {
@@ -325,14 +341,12 @@ impl Shell {
             if name == "main" || !valid_name(&name) { return Err(Exception::throw_type(&ctx, "invalid or reserved shell surface name")); }
             let (placement, size) = placement(&ctx, data)?;
             let attach = attach.into_function().ok_or_else(|| Exception::throw_type(&ctx, "shell surface content must be a function"))?;
-            let mut layers = shell.layers.borrow_mut();
-            if layers.len() >= MAX_LAYERS { return Err(Exception::throw_range(&ctx, "shell surface limit reached")); }
-            if layers.values().any(|layer| layer.spec.name == name) { return Err(Exception::throw_type(&ctx, "duplicate shell surface name")); }
-            let id = shell.id(&ctx)?;
-            if shell.lock_surfaces.borrow().values().any(|wanted| wanted.spec.name == name) {
-                return Err(Exception::throw_type(&ctx, "duplicate shell surface name"));
+            if shell.layers.borrow().len() + shell.popups.borrow().len() >= MAX_LAYERS {
+                return Err(Exception::throw_range(&ctx, "shell surface limit reached"));
             }
-            layers.insert(id, WantedLayer { spec: LayerSpec { name, placement, size, input: InputRegion::Full }, attach: Persistent::save(&ctx, attach) });
+            if shell.name_is_taken(&name) { return Err(duplicate_name(&ctx)); }
+            let id = shell.id(&ctx)?;
+            shell.layers.borrow_mut().insert(id, WantedLayer { spec: LayerSpec { name, placement, size, input: InputRegion::Full }, attach: Persistent::save(&ctx, attach) });
             shell.changed();
             Ok(id)
         }))?;
@@ -374,6 +388,7 @@ impl Shell {
             if layer.spec.input != input { layer.spec.input = input; shell.changed(); }
             Ok::<(), rquickjs::Error>(())
         }))?;
+        self.install_popup(&api)?;
         self.install_lock(&api)?;
         ctx.globals().set("__zguiShell", api)
     }
@@ -427,15 +442,11 @@ impl Shell {
             let monitor = string(&ctx, &monitor, "output name")?;
             if monitor.is_empty() || monitor.len() > 256 { return Err(Exception::throw_type(&ctx, "invalid output name")); }
             let attach = attach.into_function().ok_or_else(|| Exception::throw_type(&ctx, "lock surface content must be a function"))?;
+            if shell.name_is_taken(&name) { return Err(duplicate_name(&ctx)); }
             let mut surfaces = shell.lock_surfaces.borrow_mut();
             if surfaces.len() >= MAX_LAYERS { return Err(Exception::throw_range(&ctx, "lock surface limit reached")); }
             if surfaces.values().any(|wanted| wanted.spec.monitor == monitor) {
                 return Err(Exception::throw_type(&ctx, "output already owns a lock surface"));
-            }
-            if surfaces.values().any(|wanted| wanted.spec.name == name)
-                || shell.layers.borrow().values().any(|wanted| wanted.spec.name == name)
-            {
-                return Err(Exception::throw_type(&ctx, "duplicate shell surface name"));
             }
             let id = shell.id(&ctx)?;
             surfaces.insert(id, WantedLock { spec: LockSpec { name, monitor }, attach: Persistent::save(&ctx, attach) });
@@ -599,6 +610,82 @@ fn optional_string(ctx: &Ctx<'_>, value: &Object<'_>, key: &str, default: &str) 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn popup_requires_shell_authority_even_if_javascript_catches_the_error() {
+        let runtime = rquickjs::Runtime::new().expect("create QuickJS runtime");
+        let context = rquickjs::Context::full(&runtime).expect("create QuickJS context");
+        let waker = zgui::platform::PlatformCx::waker(&zgui_platform_headless::Headless::new());
+        let shell = Shell::new(ShellConfig {
+            generation: 1,
+            authority: Authority::Denied,
+            lock_authority: Authority::Allowed,
+            lock_state: SessionLockState::Locked,
+            contract: ContractPolicy::Sticky,
+        }, waker);
+        shell.activate();
+        context.with(|ctx| {
+            shell.install(&ctx).expect("install shell bridge");
+            for call in ["openPopup('menu', {}, () => {}, () => {})", "updatePopup(1, {})", "closePopup(1)"] {
+                let code = ctx.eval::<String, _>(format!(
+                    "try {{ __zguiShell.{call} }} catch (error) {{ error.code ?? 'missing code' }}"
+                )).expect("read typed shell capability error");
+                assert_eq!(code, "E_CAPABILITY", "{call} must require shell surface authority");
+            }
+        });
+        assert_eq!(shell.failure().map(|failure| failure.code), Some("E_CAPABILITY"), "caught capability denial must still fail preview");
+        assert_eq!(shell.callback_count(), 0, "denial must not retain popup callbacks");
+    }
+
+    #[test]
+    fn popup_requests_reject_parent_cycles_without_changing_the_graph() {
+        let runtime = rquickjs::Runtime::new().expect("create QuickJS runtime");
+        let context = rquickjs::Context::full(&runtime).expect("create QuickJS context");
+        let waker = zgui::platform::PlatformCx::waker(&zgui_platform_headless::Headless::new());
+        let shell = Shell::new(ShellConfig {
+            generation: 1,
+            authority: Authority::Allowed,
+            lock_authority: Authority::Denied,
+            lock_state: SessionLockState::Locked,
+            contract: ContractPolicy::Throw,
+        }, waker);
+        shell.activate();
+        context.with(|ctx| {
+            shell.install(&ctx).expect("install shell bridge");
+            ctx.eval::<(), _>(r#"
+                const shell = __zguiShell;
+                const placement = parent => ({
+                    parent, width: 10, height: 10,
+                    anchorRect: { x: 0, y: 0, width: 1, height: 1 },
+                    anchor: 'bottom-left', gravity: 'bottom-right', offset: { x: 0, y: 0 },
+                    slide: true, flip: true, resize: false, reactive: false, grab: false,
+                });
+                const open = (name, parent) => shell.openPopup(name, placement(parent), () => {}, () => {});
+                open('first', 'second');
+            "#).expect("accept a popup whose parent is not yet declared");
+            let reject_cycle = |call: &str| {
+                let result = ctx.eval::<String, _>(format!(
+                    "try {{ {call}; 'accepted' }} catch (error) {{ error instanceof TypeError ? error.message : String(error) }}"
+                )).expect("read popup request outcome");
+                assert_eq!(result, "popup parent chain contains a cycle", "{call}");
+            };
+            reject_cycle("open('second', 'first')");
+            ctx.eval::<(), _>("const second = open('second', 'third');")
+                .expect("accept an acyclic parent after rejecting a mutual cycle");
+            reject_cycle("shell.updatePopup(second, placement('first'))");
+            reject_cycle("open('third', 'first')");
+            ctx.eval::<(), _>("const third = open('third', 'layer');")
+                .expect("accept an acyclic parent after rejecting a multi-hop cycle");
+            reject_cycle("shell.updatePopup(third, placement('first'))");
+            ctx.eval::<(), _>("shell.updatePopup(third, { ...placement('layer'), width: 20 });")
+                .expect("allow geometry updates with the original parent");
+        });
+        let popups = shell.popup_specs();
+        let parents: Vec<_> = popups.iter().map(|(_, popup)| (popup.name.as_str(), popup.parent.as_str())).collect();
+        assert_eq!(parents, [("first", "second"), ("second", "third"), ("third", "layer")]);
+        assert_eq!(popups[2].1.size().width, CssPx(20.0), "apply valid geometry after rejected updates");
+        shell.clear();
+    }
 
     #[test]
     fn lock_request_id_exhaustion_does_not_wrap_or_repeat() {

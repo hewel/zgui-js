@@ -7,6 +7,9 @@ use super::{ImageChoice, MountRegion, PredecessorLeak, ReloadOutcome, Root, Runt
 use crate::{session::{ResourceCounts, Result, Session, SessionModule, SessionRetirement}, shell::{LayerSpec, LockCommand, LockSpec, Monitor}};
 use std::{cell::RefCell, rc::Rc};
 
+mod popup;
+use popup::RunningPopup;
+
 struct RunningLayer {
     token: WindowToken,
     surface: SurfaceId,
@@ -29,6 +32,9 @@ pub(crate) struct ShellWindows {
     pub(super) generation: Option<u64>,
     running: BTreeMap<u32, RunningLayer>,
     dismissed: BTreeSet<u32>,
+    popups: Vec<RunningPopup>,
+    dismissed_popups: BTreeSet<u32>,
+    popups_waiting_for_geometry: bool,
     locks: BTreeMap<u32, RunningLock>,
     lock_ui_suspended: bool,
 }
@@ -139,6 +145,16 @@ impl SessionHost {
             let size = lock_size(monitor);
             return Some((f64::from(size.width.0), f64::from(size.height.0), Some(&lock.spec.monitor)));
         }
+        if let Some(popup) = self.shell_windows.popups.iter().find(|popup| popup.surface == surface) {
+            let mut parent = popup.parent;
+            while let Some(ancestor) = self.shell_windows.popups.iter().find(|popup| popup.surface == parent) {
+                parent = ancestor.parent;
+            }
+            let output = self.shell_windows.running.values().find(|layer| layer.surface == parent)
+                .and_then(|layer| layer.spec.placement.monitor.as_deref());
+            let size = popup.spec.size();
+            return Some((f64::from(size.width.0), f64::from(size.height.0), output));
+        }
         let running = self.shell_windows.running.values().find(|running| running.surface == surface)?;
         Some((f64::from(running.spec.size.width.0), f64::from(running.spec.size.height.0), running.spec.placement.monitor.as_deref()))
     }
@@ -191,15 +207,20 @@ impl ShellWindows {
         Err("shell surface requests did not settle".into())
     }
 
-    pub(super) fn has_windows(&self) -> bool { !self.running.is_empty() || !self.locks.is_empty() }
+    pub(super) fn has_windows(&self) -> bool { !self.running.is_empty() || !self.popups.is_empty() || !self.locks.is_empty() }
 
     pub(super) fn retire(
         &mut self,
         session: &Session,
         mut close: impl FnMut(WindowToken, Option<SurfaceId>) -> bool,
     ) -> SessionRetirement {
-        session.dispose();
         if self.generation == Some(session.generation) {
+            session.dispose(self.popups.iter().rev().map(|popup| popup.id));
+            for popup in self.popups.drain(..).rev() {
+                if close(popup.token, Some(popup.surface)) { session.shell_surface_closed(); }
+            }
+            self.dismissed_popups.clear();
+            self.popups_waiting_for_geometry = false;
             for lock in std::mem::take(&mut self.locks).into_values() {
                 if close(lock.token, None) { session.shell_surface_closed(); }
             }
@@ -293,6 +314,7 @@ impl ShellWindows {
 
     fn reconcile(&mut self, runtime: &mut Runtime, cx: &dyn PlatformCx, images: ImageChoice, monitors: &[Monitor], session: &Rc<Session>) -> Result<()> {
         let mut needs_sync = session.shell.take_dirty();
+        needs_sync |= self.reconcile_popup_removals(runtime, cx, session)?;
         while let Some((&id, _)) = self.running.iter().find(|(_, layer)| runtime.surface_id(layer.token) != Some(layer.surface)) {
             // A compositor closes a role permanently. A disconnected output may
             // return with a new proxy; a dismissed role on a live output must not loop.
@@ -300,7 +322,9 @@ impl ShellWindows {
             self.close(runtime, cx, session, id)?;
             needs_sync = true;
         }
-        if !needs_sync { return Ok(()); }
+        if !needs_sync {
+            return if self.popups_waiting_for_geometry { self.reconcile_popups(runtime, cx, images, session) } else { Ok(()) };
+        }
         let specs = session.shell.specs();
         self.dismissed.retain(|id| specs.get(id).is_some_and(|spec| present(spec, monitors)));
         while let Some((&id, _)) = self.running.iter().find(|(id, _)| !specs.get(id).is_some_and(|spec| present(spec, monitors))) {
@@ -323,11 +347,13 @@ impl ShellWindows {
                 self.open(runtime, cx, images, session, id, spec)?;
             }
         }
-        Ok(())
+        self.reconcile_popups(runtime, cx, images, session)
     }
 
     fn close(&mut self, runtime: &mut Runtime, cx: &dyn PlatformCx, session: &Session, id: u32) -> Result<()> {
-        let Some(running) = self.running.remove(&id) else { return Ok(()); };
+        let Some(running) = self.running.get(&id) else { return Ok(()); };
+        self.close_child_popups(runtime, cx, session, running.surface)?;
+        let running = self.running.remove(&id).expect("layer remains tracked until its popups close");
         let result = session.detach_layer(id);
         if !close_native_surface(runtime, cx, running.token, Some(running.surface)) {
             return Err("E_TEARDOWN: native shell surface remained open".into());

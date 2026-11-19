@@ -1,16 +1,18 @@
 //! One turn of the loop: dispatch, deliver, park.
 
+use std::io::ErrorKind;
 use std::time::{Duration, Instant};
 
 use calloop::EventLoop;
 use calloop_wayland_source::WaylandSource;
+use wayland_client::backend::WaylandError;
 use zgui_platform::{
     AppHandler, Clock, IdlePolicy, Install, Park, Parked, PlatformError, SessionLockState,
     Surface as _, SurfaceEvent,
 };
 
 use crate::cx::WaylandCx;
-use crate::driver::WaylandState;
+use crate::driver::{Delivery, WaylandState};
 use crate::waker::PingWaker;
 
 /// Runs `handler` against this machine's compositor until the last surface closes, then writes
@@ -118,6 +120,15 @@ impl<A: AppHandler> WaylandApp<A> {
     ///
     /// As [`run`].
     pub fn run(&mut self) -> Result<(), PlatformError> {
+        let result = self.run_until_exit();
+        // An exit can bypass the turn's retirement point, including when requested from
+        // surfaces_available, a frame, or shutting_down.
+        self.state.live.close_all();
+        self.state.live.retire();
+        result.and(shutdown_flush(self.state.conn.flush()))
+    }
+
+    fn run_until_exit(&mut self) -> Result<(), PlatformError> {
         self.state.monitors_dirty = false;
         {
             let cx = WaylandCx::new(&self.state);
@@ -155,8 +166,16 @@ impl<A: AppHandler> WaylandApp<A> {
             self.state.refresh_lock_ime_focus();
         }
         self.deliver_events();
-        self.retire();
+        self.state.live.retire();
+        if self.state.live.exiting.get() {
+            return Ok(());
+        }
         self.deliver_frames();
+        self.deliver_sibling_closes();
+        self.state.live.retire();
+        if self.state.live.exiting.get() {
+            return Ok(());
+        }
         self.park_and_dispatch()
     }
 
@@ -171,29 +190,40 @@ impl<A: AppHandler> WaylandApp<A> {
         }
     }
 
+    fn deliver_sibling_closes(&mut self) {
+        loop {
+            let closed = self.state.live.take_sibling_closes();
+            if closed.is_empty() {
+                break;
+            }
+            for id in closed {
+                let cx = WaylandCx::new(&self.state);
+                self.handler.surface_event(&cx, id, SurfaceEvent::Destroyed);
+            }
+        }
+    }
+
     /// Hands over everything the compositor said during the last dispatch.
     fn deliver_events(&mut self) {
         // Taken as a whole rather than drained in place: delivering one may create or close a
         // surface, and both of those record events of their own.
         let events = std::mem::take(&mut self.state.out);
-        for (id, event) in events {
+        self.deliver_sibling_closes();
+        for (id, event, delivery) in events {
+            let surface = self.state.live.surface(id);
+            if !matches!(delivery, Delivery::Removed) && surface.is_none() {
+                continue;
+            }
             let closing = matches!(event, SurfaceEvent::Destroyed);
             let cx = WaylandCx::new(&self.state);
             self.handler.surface_event(&cx, id, event);
             if closing {
                 self.state.destroy_surface(id);
+            } else if let Some(surface) = surface {
+                surface.popup_frame_committed();
             }
+            self.deliver_sibling_closes();
         }
-    }
-
-    /// Lets go of the surfaces the application closed, between turns and never inside a callback.
-    ///
-    /// Never inside one, because the objects underneath are the ones the loop is dispatching for
-    /// and taking them down there is a use after free. What actually destroys them is the last
-    /// handle going, which is usually this one — the application drops its own on the way out of
-    /// the callback that closed the window.
-    fn retire(&mut self) {
-        drop(self.state.live.retire());
     }
 
     /// Gives a frame to every surface that asked for one and is allowed one.
@@ -207,6 +237,9 @@ impl<A: AppHandler> WaylandApp<A> {
     fn deliver_frames(&mut self) {
         let now = self.state.live.clock.now();
         for surface in self.state.live.all() {
+            if !surface.active() || !surface.parent_mapped() {
+                continue;
+            }
             if matches!(surface.role(), crate::surface::Role::LockContent(_))
                 && self.state.session_lock_state() == SessionLockState::Unlocking
             {
@@ -231,6 +264,9 @@ impl<A: AppHandler> WaylandApp<A> {
                 let cx = WaylandCx::new(&self.state);
                 self.handler.surface_event(&cx, id, event);
             }
+            if !surface.active() {
+                continue;
+            }
             // The held frame first, so that the frame after it is composed while the compositor
             // answers for it.
             if present {
@@ -240,7 +276,11 @@ impl<A: AppHandler> WaylandApp<A> {
                     self.handler
                         .surface_event(&cx, id, SurfaceEvent::PresentReady);
                 }
+                if !surface.active() {
+                    continue;
+                }
                 surface.finish_present(began, self.state.live.clock.now());
+                surface.popup_frame_committed();
             }
             let due = {
                 let mut shared = surface.shared();
@@ -260,7 +300,10 @@ impl<A: AppHandler> WaylandApp<A> {
                 self.handler
                     .surface_event(&cx, id, SurfaceEvent::RedrawRequested);
             }
-            surface.finish_redraw(began, self.state.live.clock.now());
+            if surface.active() {
+                surface.finish_redraw(began, self.state.live.clock.now());
+                surface.popup_frame_committed();
+            }
         }
     }
 
@@ -271,10 +314,16 @@ impl<A: AppHandler> WaylandApp<A> {
             let asked = self.handler.idle(&cx);
             self.watchdogs().fold(asked, IdlePolicy::merge)
         };
+        if self.state.live.exiting.get() {
+            return Ok(());
+        }
         let now = self.state.live.clock.now();
         let install = self.park.install(policy, now);
         let answered = install.overdue().is_some();
         let parked = self.deliver_overdue(install);
+        if self.state.live.exiting.get() {
+            return Ok(());
+        }
         // A turn that answered a moment which had already passed does not park on the answer the
         // application gave before it was told. It hands the turn back and asks again on a clock
         // that has moved; parking would settle on a decision already out of date.
@@ -296,6 +345,9 @@ impl<A: AppHandler> WaylandApp<A> {
             .all()
             .into_iter()
             .filter_map(move |surface| {
+                if !surface.parent_mapped() {
+                    return None;
+                }
                 let shared = surface.shared();
                 shared.pacer.deadline(shared.visibility, now)
             })
@@ -335,8 +387,61 @@ impl<A: AppHandler> WaylandApp<A> {
     }
 }
 
+fn shutdown_flush(flush: Result<(), WaylandError>) -> Result<(), PlatformError> {
+    match flush {
+        Ok(()) => Ok(()),
+        // The loop is already exiting; do not wait for socket writability or retry a signal.
+        Err(WaylandError::Io(error))
+            if matches!(error.kind(), ErrorKind::WouldBlock | ErrorKind::Interrupted) =>
+        {
+            Ok(())
+        }
+        Err(error) => Err(PlatformError::Backend(format!(
+            "flushing Wayland shutdown requests: {error}"
+        ))),
+    }
+}
+
 /// The moment this turn started, for the parts that need one reading rather than several.
 #[allow(dead_code)]
 fn now() -> Instant {
     Instant::now()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::{Error, ErrorKind};
+
+    use wayland_client::backend::{WaylandError, protocol::ProtocolError};
+    use zgui_platform::PlatformError;
+
+    use super::shutdown_flush;
+
+    #[test]
+    fn shutdown_flush_does_not_wait_for_transient_socket_errors() {
+        for kind in [ErrorKind::WouldBlock, ErrorKind::Interrupted] {
+            assert_eq!(
+                shutdown_flush(Err(WaylandError::Io(kind.into()))),
+                Ok(()),
+                "shutdown flush should tolerate {kind:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn shutdown_flush_reports_connection_and_protocol_failures() {
+        for error in [
+            WaylandError::Io(Error::new(ErrorKind::BrokenPipe, "connection closed")),
+            WaylandError::Protocol(ProtocolError {
+                code: 0,
+                object_id: 1,
+                object_interface: "wl_display".to_owned(),
+                message: "request rejected".to_owned(),
+            }),
+        ] {
+            let expected =
+                PlatformError::Backend(format!("flushing Wayland shutdown requests: {error}"));
+            assert_eq!(shutdown_flush(Err(error)), Err(expected));
+        }
+    }
 }

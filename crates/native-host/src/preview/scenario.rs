@@ -46,6 +46,7 @@ pub enum Step {
     SurfaceColorScheme { id: String, surface: String, color_scheme: String },
     SurfaceRecreate { id: String, surface: String },
     MonitorsSet { id: String, monitors: Vec<Monitor> },
+    PopupDone { id: String, surface: String },
 }
 
 impl Step {
@@ -59,7 +60,7 @@ impl Step {
             | Self::Assert { id, .. } | Self::AssertService { id, .. }
             | Self::ClockAdvance { id, .. } | Self::ServiceEmit { id, .. }
             | Self::SurfaceResize { id, .. } | Self::SurfaceScale { id, .. } | Self::SurfaceColorScheme { id, .. }
-            | Self::SurfaceRecreate { id, .. } | Self::MonitorsSet { id, .. } => id,
+            | Self::SurfaceRecreate { id, .. } | Self::MonitorsSet { id, .. } | Self::PopupDone { id, .. } => id,
         }
     }
 
@@ -83,6 +84,7 @@ impl Step {
             Self::SurfaceColorScheme { .. } => "surface.colorScheme",
             Self::SurfaceRecreate { .. } => "surface.recreate",
             Self::MonitorsSet { .. } => "monitors.set",
+            Self::PopupDone { .. } => "popupDone",
         }
     }
 }
@@ -266,9 +268,11 @@ enum StepInput {
     #[serde(rename = "surface.colorScheme")]
     SurfaceColorScheme(ColorSchemeInput),
     #[serde(rename = "surface.recreate")]
-    SurfaceRecreate(RecreateInput),
+    SurfaceRecreate(NamedSurfaceInput),
     #[serde(rename = "monitors.set")]
     MonitorsSet(MonitorsInput),
+    #[serde(rename = "popupDone")]
+    PopupDone(NamedSurfaceInput),
     #[serde(rename = "wheel")]
     Wheel(WheelInput),
     // Later operations remain explicit capability failures, never silently ignored.
@@ -422,7 +426,7 @@ struct ScaleInput { id:String,surface:String,scale:f64 }
 struct ColorSchemeInput { id:String,surface:String,color_scheme:String }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct RecreateInput { id:String,surface:String }
+struct NamedSurfaceInput { id:String,surface:String }
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -605,6 +609,11 @@ fn parse(bytes: &[u8], available: &[&str], virtual_profile: bool) -> Result<Scen
                 require(&mut requirements, "surface.multiple");
                 Step::MonitorsSet { id: input.id, monitors: input.monitors }
             }
+            StepInput::PopupDone(input) => {
+                validate_surface(&input.surface, &mut requirements)?;
+                require(&mut requirements, "surface.multiple");
+                Step::PopupDone { id: input.id, surface: input.surface }
+            }
             StepInput::Wheel(input) => {
                 let location = pointer_location(input.target, input.surface, input.position, &mut requirements)?;
                 if [input.delta.x, input.delta.y].into_iter().any(|v| !v.is_finite() || !(v as f32).is_finite()) {
@@ -630,7 +639,7 @@ fn parse(bytes: &[u8], available: &[&str], virtual_profile: bool) -> Result<Scen
                     StepInput::Settle(_) | StepInput::Capture(_)
                     | StepInput::PointerMove(_) | StepInput::PointerClick(_)
                     | StepInput::PointerDown(_) | StepInput::PointerUp(_) | StepInput::PointerCancel(_)
-                    | StepInput::Wheel(_) | StepInput::MonitorsSet(_)
+                    | StepInput::Wheel(_) | StepInput::MonitorsSet(_) | StepInput::PopupDone(_)
                     | StepInput::KeyPress(_) | StepInput::TextCommit(_)
                     | StepInput::Assert(_) | StepInput::ClockAdvance(_) | StepInput::ServiceEmit(_)
                     | StepInput::SurfaceResize(_) | StepInput::SurfaceScale(_) | StepInput::SurfaceRecreate(_) | StepInput::SurfaceColorScheme(_) => unreachable!(),
@@ -1072,7 +1081,7 @@ mod tests {
     }
 
     #[test]
-    fn named_surfaces_require_multi_surface_support_for_each_input_form() {
+    fn named_surface_actions_require_multi_surface_support() {
         let other = ["input.pointer", "input.keyboard", "input.text", "selectors.test-id", "selectors.semantic", "tree.inspect"];
         for step in [
             json!({"id":"action","op":"pointer.move","surface":"popup","position":{"x":0,"y":0}}),
@@ -1080,6 +1089,7 @@ mod tests {
             json!({"id":"action","op":"key.press","surface":"popup","key":"Tab"}),
             json!({"id":"action","op":"text.commit","surface":"popup","text":""}),
             json!({"id":"action","op":"assert","target":{"surface":"popup","role":"button","name":"Go"},"check":{"property":"exists","equals":true}}),
+            json!({"id":"action","op":"popupDone","surface":"popup"}),
         ] {
             let input = declaration(json!([step]));
             let error = check(&input, &other, false).expect_err("named input requires multiple surfaces");

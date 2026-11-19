@@ -1,6 +1,6 @@
 //! What a surface is to the desktop: an ordinary window, a pop-up, or a shell layer.
 
-use zgui_geom::{Css, CssPx, Edges, Rect};
+use zgui_geom::{Css, CssPx, Edges, Point, Rect};
 
 use crate::surface::id::SurfaceId;
 
@@ -44,15 +44,20 @@ pub struct PopupPlacement {
     pub gravity: Anchor,
     /// What to do when the pop-up would not fit.
     pub constrain: Constrain,
+    /// Translation from the chosen anchor and gravity, in the parent's CSS pixels.
+    pub offset: Point<CssPx, Css>,
+    /// Whether the compositor should adjust the placement when the parent changes.
+    pub reactive: bool,
     /// Whether the pop-up takes the pointer and keyboard until it is dismissed.
     ///
-    /// A menu does; a tooltip does not. A grab is only granted against a press the user made, so a
-    /// pop-up asking for one without a preceding press is dismissed by the desktop immediately.
+    /// A menu can request a grab; a tooltip does not. Without an eligible input press, the
+    /// backend may open the pop-up without a grab.
     pub grab: bool,
 }
 
 impl PopupPlacement {
     /// A grabbing pop-up under `anchor_rect`, aligned to its left, sliding to stay on screen.
+    #[must_use]
     pub fn below(parent: SurfaceId, anchor_rect: Rect<CssPx, Css>) -> Self {
         Self {
             parent,
@@ -60,6 +65,8 @@ impl PopupPlacement {
             anchor: Anchor::BottomLeft,
             gravity: Anchor::BottomRight,
             constrain: Constrain::SLIDE,
+            offset: Point::new(CssPx(0.0), CssPx(0.0)),
+            reactive: false,
             grab: true,
         }
     }

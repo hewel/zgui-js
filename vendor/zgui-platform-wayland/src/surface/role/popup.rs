@@ -1,10 +1,11 @@
 //! A pop-up: where the compositor is asked to put it, and what it may do to fit it on screen.
 
+use wayland_client::Proxy;
 use wayland_protocols::xdg::shell::client::xdg_positioner::{
     Anchor, ConstraintAdjustment, Gravity, XdgPositioner,
 };
-use zgui_geom::{Css, CssPx, Rect};
-use zgui_platform::{Constrain, PopupPlacement};
+use zgui_geom::{Css, CssPx, Point, Rect};
+use zgui_platform::{Constrain, PlatformError, PopupPlacement};
 
 /// Which point of the anchor rectangle the pop-up hangs from.
 pub const fn anchor(anchor: zgui_platform::Anchor) -> Anchor {
@@ -71,10 +72,46 @@ pub fn anchor_rect(
     (x, y, width, height)
 }
 
+/// A popup translation quantized to signed Wayland logical pixels.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Offset {
+    x: i32,
+    y: i32,
+}
+
+impl Offset {
+    /// Rounds each axis to the nearest logical pixel, with ties away from zero.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PlatformError::SurfaceCreation`] if either axis is nonfinite or outside the
+    /// signed 32-bit range.
+    pub fn new(offset: Point<CssPx, Css>) -> Result<Self, PlatformError> {
+        fn axis(value: CssPx) -> Option<i32> {
+            // Widen before comparing: i32::MAX rounds up to 2^31 as an f32.
+            let value = f64::from(value.0);
+            if (f64::from(i32::MIN)..=f64::from(i32::MAX)).contains(&value) {
+                // Rounding stays within the checked bounds, so the cast is exact.
+                Some(value.round() as i32)
+            } else {
+                None
+            }
+        }
+
+        match (axis(offset.x), axis(offset.y)) {
+            (Some(x), Some(y)) => Ok(Self { x, y }),
+            _ => Err(PlatformError::SurfaceCreation(
+                "pop-up offset must be finite and fit the signed 32-bit range".to_owned(),
+            )),
+        }
+    }
+}
+
 /// Fills `positioner` in from `placement`, measured against a parent of `parent` logical pixels.
 pub fn describe(
     positioner: &XdgPositioner,
     placement: &PopupPlacement,
+    offset: Offset,
     parent: zgui_geom::Size<CssPx, Css>,
     size: zgui_geom::Size<CssPx, Css>,
 ) {
@@ -83,6 +120,11 @@ pub fn describe(
     positioner.set_anchor(anchor(placement.anchor));
     positioner.set_gravity(gravity(placement.gravity));
     positioner.set_constraint_adjustment(constraint(placement.constrain));
+    // set_offset is part of the original positioner protocol; reactive placement needs v3.
+    positioner.set_offset(offset.x, offset.y);
+    if placement.reactive && positioner.version() >= 3 {
+        positioner.set_reactive();
+    }
     positioner.set_size(
         (size.width.0.round() as i32).max(1),
         (size.height.0.round() as i32).max(1),
@@ -91,7 +133,7 @@ pub fn describe(
 
 #[cfg(test)]
 mod tests {
-    use super::{anchor, anchor_rect, constraint, gravity};
+    use super::{Offset, anchor, anchor_rect, constraint, gravity};
     use wayland_protocols::xdg::shell::client::xdg_positioner::{
         Anchor, ConstraintAdjustment, Gravity,
     };
@@ -100,6 +142,26 @@ mod tests {
 
     fn parent() -> Size<CssPx, zgui_geom::Css> {
         Size::new(CssPx(400.0), CssPx(300.0))
+    }
+
+    #[test]
+    fn popup_offset_uses_the_signed_integer_range() {
+        let offset = |x, y| Offset::new(Point::new(CssPx(x), CssPx(y)));
+        assert_eq!(
+            offset(-2_147_483_648.0, 2_147_483_520.0),
+            Ok(Offset { x: i32::MIN, y: 2_147_483_520 }),
+            "the extreme representable in-range f32 values remain exact"
+        );
+        for invalid in [
+            2_147_483_648.0,
+            -2_147_483_904.0,
+            f32::NAN,
+            f32::INFINITY,
+            f32::NEG_INFINITY,
+        ] {
+            assert!(offset(invalid, 0.0).is_err(), "invalid x offset: {invalid}");
+            assert!(offset(0.0, invalid).is_err(), "invalid y offset: {invalid}");
+        }
     }
 
     #[test]
