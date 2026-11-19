@@ -9,6 +9,7 @@
 use std::collections::{BTreeSet, HashMap, HashSet};
 use rquickjs::{Ctx, Exception, FromJs, Value};
 use zgui::{view::{AttrName, ClassName, CustomPropertyName, DomHandle, NodeId, PropKey, PropValue, Semantics, UiState}, vocab::{HasPopup, Invalid, Live, Orientation, Role, SemanticFlags, Toggled}};
+use zgui::vocab::prop::drawing;
 
 #[derive(Clone, Default, PartialEq)]
 pub(crate) enum Style { #[default] Empty, Text(String), Object(Vec<(String, Option<String>)>) }
@@ -76,6 +77,27 @@ fn numeric<'js>(ctx: &Ctx<'js>, value: Value<'js>) -> rquickjs::Result<Option<f6
     let number = f64::from_js(ctx, value)?;
     if !number.is_finite() { return Err(Exception::throw_type(ctx, "aria value properties must be finite numbers")); }
     Ok(Some(number))
+}
+
+fn validate_svg(ctx: &Ctx<'_>, source: &str) -> rquickjs::Result<()> {
+    const SVG_NAMESPACE: &str = "http://www.w3.org/2000/svg";
+    if source.trim().is_empty() { return Ok(()); }
+    // roxmltree's default disables DTDs. The painter's parser has an ambient image resolver.
+    let document = roxmltree::Document::parse(source)
+        .map_err(|_| Exception::throw_type(ctx, "svg must be well-formed XML without a DTD"))?;
+    let root = document.root_element();
+    let root_tag = root.tag_name();
+    if root_tag.name() != "svg" || !matches!(root_tag.namespace(), None | Some(SVG_NAMESPACE)) {
+        return Err(Exception::throw_type(ctx, "svg must have an SVG root element"));
+    }
+    if root.descendants().filter(|node| node.is_element()).any(|node| {
+        let tag = node.tag_name();
+        matches!(tag.namespace(), None | Some(SVG_NAMESPACE))
+            && matches!(tag.name(), "image" | "feImage")
+    }) {
+        return Err(Exception::throw_type(ctx, "svg drawing does not support image elements"));
+    }
+    Ok(())
 }
 
 impl Mutation {
@@ -203,8 +225,13 @@ impl Mutation {
                 };
                 Ok(Self::Orientation(orientation))
             }
-            "d" => Ok(Self::Drawing("d", string(value)?)),
-            "viewBox" => Ok(Self::Drawing("viewBox", string(value)?)),
+            drawing::PATHS => Ok(Self::Drawing(drawing::PATHS, string(value)?)),
+            drawing::VIEW_BOX => Ok(Self::Drawing(drawing::VIEW_BOX, string(value)?)),
+            drawing::DOCUMENT => {
+                let source = string(value)?;
+                if let Some(source) = &source { validate_svg(ctx, source)?; }
+                Ok(Self::Drawing(drawing::DOCUMENT, source))
+            }
             "ariaLabel" => Ok(Self::Label(string(value)?)),
             "ariaDescription" => Ok(Self::Description(string(value)?)),
             "ariaKeyShortcuts" => Ok(Self::KeyShortcuts(string(value)?)),

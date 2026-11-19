@@ -1,10 +1,11 @@
-import type { NativeDismissLayerOptions, NativeDismissReason, NativeGeometry, NativeGeometryKind, NativeNode, NativeOverlayLayer, NativeWindowRect } from "./types.js";
+import type { CanvasScene, NativeDismissLayerOptions, NativeDismissReason, NativeGeometry, NativeGeometryKind, NativeNode, NativeOverlayLayer, NativeWindowRect } from "./types.js";
 
 /** Installed by UiBridge::install; resolving it must remain lazy during preflight. */
 export interface NativeHost {
   readonly __zgui: {
     createElement(tag: string): NativeNode;
     createPortal(layer: NativeOverlayLayer): NativeNode;
+    createCanvasScene(): CanvasScene;
     registerDismissLayer(
       node: NativeNode, callback: (reason: NativeDismissReason) => void,
       options: Required<NativeDismissLayerOptions>,

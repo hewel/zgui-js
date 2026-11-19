@@ -1,7 +1,7 @@
 import { getOwner, onCleanup } from "#solid";
 import { flush } from "./renderer/index.js";
 import type { NativeHost } from "./host.js";
-import type { NativeDismissLayer, NativeDismissLayerOptions, NativeDismissReason, NativeFocusOptions, NativeFocusTrapOptions, NativeGeometry, NativeGeometryKind, NativeNode, NativeWindowRect } from "./types.js";
+import type { CanvasScene, NativeDismissLayer, NativeDismissLayerOptions, NativeDismissReason, NativeFocusOptions, NativeFocusTrapOptions, NativeGeometry, NativeGeometryKind, NativeNode, NativeWindowRect } from "./types.js";
 
 declare const globalThis: NativeHost;
 
@@ -27,6 +27,13 @@ export function isAnimating(node: NativeNode): boolean {
 
 export function precedes(first: NativeNode, second: NativeNode): boolean {
   return globalThis.__zgui.precedes(first, second);
+}
+
+/** Creates a retained drawing, disposed automatically under a Solid owner. */
+export function createCanvasScene(): CanvasScene {
+  const scene = globalThis.__zgui.createCanvasScene();
+  if (getOwner()) onCleanup(() => scene.dispose());
+  return scene;
 }
 
 export function observeGeometry<K extends NativeGeometryKind>(node: NativeNode, kind: K, callback: (value: NativeGeometry[K]) => void): () => void {

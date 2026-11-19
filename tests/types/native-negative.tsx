@@ -1,4 +1,4 @@
-import { Image, TextField, TextArea, createSpring, renderApp } from "@hewel/zgui";
+import { Image, TextField, TextArea, createCanvasScene, createSpring, renderApp } from "@hewel/zgui";
 import type { NativeElementProps, NativeNode } from "@hewel/zgui";
 
 // @ts-expect-error Browser document is not a host global.
@@ -61,6 +61,19 @@ const vectorPropChildren = <vector children={<text>Child</text>} />;
 const boxPath = <box d="M0 0" />;
 // @ts-expect-error The drawing coordinate box belongs only to native vector elements.
 const boxViewBox = <control viewBox="0 0 16 16" />;
+// @ts-expect-error SVG documents belong only to native vector elements.
+const boxSvg = <box svg="<svg/>" />;
+const canvasScene = createCanvasScene();
+// @ts-expect-error Canvas scenes belong only to native vector elements.
+const boxCanvas = <box canvas={canvasScene} />;
+// @ts-expect-error A numeric token cannot bind a canvas scene.
+const rawCanvas = <vector canvas={canvasScene.token} />;
+// @ts-expect-error Canvas scenes are opaque native handles.
+const fabricatedCanvas = <vector canvas={{ token: 1, update() {}, dispose() {} }} />;
+// @ts-expect-error Canvas scene tokens cannot be reassigned.
+canvasScene.token = 1;
+// @ts-expect-error An affine transform has exactly six numbers.
+canvasScene.update(null, [1, 0, 0, 1, 0]);
 // @ts-expect-error checked is a boolean, "mixed", or empty.
 const checkedString = <control checked="yes" />;
 // @ts-expect-error Only implemented accessibility roles are accepted.
@@ -118,5 +131,6 @@ const contextCapture = <box onContextMenu={event => event.capturePointer()} />;
 // @ts-expect-error Reactive roots are owned by renderApp, not the application API.
 import { createRoot } from "@hewel/zgui";
 void [browserElement, browserEvent, pointerEvent, html, editing, image, property, className, handler, ref, id, createDeferred,
-  vectorChildren, vectorPropChildren, boxPath, boxViewBox, checkedString, roleString, roleCase, orientationString, dataBoolean, dataNumber,
+  vectorChildren, vectorPropChildren, boxPath, boxViewBox, boxSvg, boxCanvas, rawCanvas, fabricatedCanvas,
+  checkedString, roleString, roleCase, orientationString, dataBoolean, dataNumber,
   contextRelease, contextCapture];

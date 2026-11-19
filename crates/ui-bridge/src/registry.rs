@@ -58,6 +58,7 @@ pub enum BridgeError {
     NotField,
     NotImage,
     ImageParent,
+    /// A vector-only drawing property was assigned to another kind of node.
     NotVector,
     VectorParent,
     WrongParent,
@@ -84,7 +85,7 @@ impl fmt::Display for BridgeError {
             Self::NotField => f.write_str("secure requires a field"),
             Self::NotImage => f.write_str("src requires an image element"),
             Self::ImageParent => f.write_str("image elements cannot contain reconciled children"),
-            Self::NotVector => f.write_str("d and viewBox require a vector element"),
+            Self::NotVector => f.write_str("drawing properties require a vector element"),
             Self::VectorParent => f.write_str("vector elements cannot contain reconciled children"),
             Self::WrongParent => f.write_str("node is not a child of the supplied parent"),
             Self::InvalidAnchor => f.write_str("insertion anchor is not a child of the supplied parent"),

@@ -142,6 +142,67 @@ Only paint-visible resources block `required-visible` captures: native surface
 bounds, ancestor clips, transforms and current opacity determine that visibility.
 Offscreen source changes may remain decoded but unuploaded until brought into view.
 
+## Native vector drawing
+
+`<vector>` is a childless native drawing element. Use `d` for one or more
+newline-separated SVG paths painted with the element's `color`, or `svg` for a
+standalone SVG document with its own fills and strokes:
+
+```tsx
+<vector style="width: 24px; height: 24px" svg={`
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+    <circle cx="12" cy="12" r="8" fill="#f80" stroke="#246" stroke-width="2"/>
+  </svg>
+`} />
+```
+
+Use the vector's `viewBox` for path and canvas coordinates; a standalone SVG
+uses its own view box. Drawing precedence is `canvas` > `svg` > `d`. Set a
+drawing prop to `null` or `undefined` to remove that source.
+Documents must have an `<svg>` root and be well-formed XML without a DTD.
+SVG `<image>` and `<feImage>` elements are rejected; use the native image API
+for media resources.
+
+For frequent geometry changes, create a retained scene once and update it
+without replacing the vector prop or rebuilding SVG text:
+
+```tsx
+import { createCanvasScene, renderApp, type NativeNode } from "@hewel/zgui";
+
+export function mount(root: NativeNode) {
+  return renderApp(() => {
+    const scene = createCanvasScene();
+    scene.update([{ kind: "rect", x: 4, y: 4, width: 12, height: 12, fill: "#09f" }]);
+    return <vector canvas={scene} viewBox="0 0 24 24"
+      style="width: 24px; height: 24px" />;
+  }, root);
+}
+```
+
+- `scene.update(commands, transform?)` replaces the geometry in paint order.
+  Pass `null` to keep geometry (for example, when panning), or `[]` to clear
+  the scene without revealing a fallback. `CanvasTransform` is a readonly
+  affine tuple `[a, b, c, d, e, f]`; omit it to retain the current transform.
+- Each `CanvasCommand` needs `fill` and/or `stroke: { color, width }`. Colors
+  are hex strings (`#rgb`, `#rgba`, `#rrggbb`, `#rrggbbaa`). Numbers must be
+  finite with magnitude at most `10⁹`; dimensions, radii and stroke widths
+  must be positive. Use `rect` (`x`, `y`, `width`, `height`), `roundedRect`
+  (also `radius`), `circle` (`x`, `y`, `radius`, centered at `x`, `y`), or
+  `arc` (also `startAngle` and nonzero `sweepAngle` in radians, at most `2π`
+  in magnitude).
+  A `path` takes `segments`: `moveTo` and `lineTo` take `x`, `y`; `quadTo`
+  adds `cx`, `cy`; `cubicTo` adds `c1x`, `c1y`, `c2x`, `c2y`; `close`
+  takes no coordinates. Begin the path and resume after a `close` with `moveTo`.
+  One update accepts up to 4,096 shapes and 16,384 path segments in total.
+  A session can hold up to 256 scenes, 8,192 shapes, and 32,768 path
+  elements (including those generated for primitives) across all scenes.
+  Exceeding a limit throws `RangeError` without changing the scene.
+- Pass the opaque `CanvasScene` itself to `canvas`; multiple vectors may
+  share it. A scene created inside a Solid owner is disposed with that owner.
+  Outside an owner, dispose it explicitly. `dispose()` is idempotent, unsets
+  `canvas` on every bound vector, and makes further updates throw. A vector
+  with no `svg` or `d` fallback becomes blank.
+
 ## Native text controls
 
 ```tsx

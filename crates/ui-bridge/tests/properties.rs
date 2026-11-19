@@ -3,6 +3,7 @@ use std::{cell::RefCell, collections::BTreeSet, rc::Rc};
 use js_runtime::{JsRuntime, RuntimeLimits};
 use ui_bridge::{BridgeOptions, HostPort, UiBridge, registry::NodeRegistry};
 use zgui::{view::{AttrName, DomHandle, ElementName, HostHandle, NodeId, PropKey, UiState, stub::StubHost}, vocab::{Invalid, Orientation, Role, SemanticFlags, Toggled}};
+use zgui::{canvas::{self, CanvasToken}, vocab::prop::drawing};
 use zgui_dom::Document;
 use zgui_view_dom::DocumentDom;
 
@@ -553,14 +554,21 @@ fn vectors_write_drawing_properties_through_the_imperative_pathway() {
         __zgui.insertNode(root, vector, null);
         __zgui.setProperty(vector, 'd', 'M0 0 L8 8');
         __zgui.setProperty(vector, 'viewBox', '0 0 16 16');
+        __zgui.setProperty(vector, 'svg', '<svg viewBox="0 0 16 16"><rect width="8" height="8" fill="red"/></svg>');
         'drawn'
     "#);
     let parent = native.dom.parent(native.node).unwrap();
     let vector = native.backend.children(parent)[1];
     assert_eq!(native.backend.property(vector, PropKey::new("d")).as_str(), Some("M0 0 L8 8"));
     assert_eq!(native.backend.property(vector, PropKey::new("viewBox")).as_str(), Some("0 0 16 16"));
+    assert_eq!(
+        native.backend.property(vector, PropKey::new("svg")).as_str(),
+        Some(r#"<svg viewBox="0 0 16 16"><rect width="8" height="8" fill="red"/></svg>"#),
+        "SVG is stored as drawing text alongside the path source",
+    );
     assert_eq!(native.backend.attribute(vector, AttrName::new("d")), None);
     assert_eq!(native.backend.attribute(vector, AttrName::new("viewBox")), None);
+    assert_eq!(native.backend.attribute(vector, AttrName::new("svg")), None, "SVG must not become an attribute");
     assert_eq!(native.bridge.snapshot(10).nodes[2].kind, "vector");
     native.script(r#"
         for (const target of [root, node]) {
@@ -572,11 +580,18 @@ fn vectors_write_drawing_properties_through_the_imperative_pathway() {
             try { __zgui.setProperty(target, 'viewBox', '0 0 1 1'); }
             catch (error) { rejected = String(error).includes('require a vector'); }
             if (!rejected) throw Error('viewBox accepted on a non-vector');
+            rejected = false;
+            try { __zgui.setProperty(target, 'svg', '<svg/>'); }
+            catch (error) { rejected = String(error).includes('require a vector'); }
+            if (!rejected) throw Error('svg accepted on a non-vector');
         }
         for (const invalid of [3, false, {}]) {
             let rejected = false;
             try { __zgui.setProperty(vector, 'd', invalid); } catch { rejected = true; }
             if (!rejected) throw Error('invalid d accepted');
+            rejected = false;
+            try { __zgui.setProperty(vector, 'svg', invalid); } catch { rejected = true; }
+            if (!rejected) throw Error('invalid svg accepted');
         }
         let rejected = false;
         try { __zgui.insertNode(vector, __zgui.createTextNode('forbidden'), null); }
@@ -585,6 +600,9 @@ fn vectors_write_drawing_properties_through_the_imperative_pathway() {
         'rejected'
     "#);
     assert_eq!(native.backend.property(vector, PropKey::new("d")).as_str(), Some("M0 0 L8 8"));
+    native.script("__zgui.setProperty(vector, 'svg', null); 'cleared document'");
+    assert!(native.backend.property(vector, PropKey::new("svg")).is_unset(), "clearing SVG removes the document source");
+    assert_eq!(native.backend.property(vector, PropKey::new("d")).as_str(), Some("M0 0 L8 8"), "clearing SVG preserves the path fallback");
     native.script("__zgui.setProperty(vector, 'd', null); __zgui.setProperty(vector, 'viewBox', undefined); 'cleared'");
     assert!(native.backend.property(vector, PropKey::new("d")).is_unset());
     assert!(native.backend.property(vector, PropKey::new("viewBox")).is_unset());
@@ -592,6 +610,306 @@ fn vectors_write_drawing_properties_through_the_imperative_pathway() {
     assert_eq!(native.bridge.snapshot(10).nodes.len(), 2);
     native.backend.end_frame();
     assert!(!native.dom.is_live(vector));
+}
+
+#[test]
+fn svg_documents_cannot_resolve_images_through_the_host_filesystem() {
+    let mut native = NativeProperties::new();
+    native.script(r#"
+        const vector = __zgui.createElement('vector');
+        __zgui.insertNode(root, vector, null);
+        __zgui.setProperty(vector, 'svg', '<svg><rect width="8" height="8"/></svg>');
+        const sources = [
+            '<svg xmlns:s="http://www.w3.org/2000/svg"><s:image href="not-a-package-asset.svg"/></svg>',
+            '<svg><filter id="filter"><feImage href="not-a-package-asset.png"/></filter></svg>',
+            '<!DOCTYPE svg [<!ENTITY artwork "<image/>">]><svg>&artwork;</svg>',
+        ];
+        for (const source of sources) {
+            try { __zgui.setProperty(vector, 'svg', source); } catch (error) {
+                if (!(error instanceof TypeError)) throw error;
+                continue;
+            }
+            throw Error('accepted an unsupported SVG image resolver input');
+        }
+        'checked'
+    "#);
+    let parent = native.dom.parent(native.node).expect("control is mounted");
+    let vector = native.backend.children(parent)[1];
+    assert_eq!(
+        native.backend.property(vector, PropKey::new(drawing::DOCUMENT)).as_str(),
+        Some(r#"<svg><rect width="8" height="8"/></svg>"#),
+        "rejected documents must not replace a drawable source",
+    );
+}
+
+#[test]
+fn a_non_svg_root_cannot_mask_a_vector_path_fallback() {
+    let mut native = NativeProperties::new();
+    native.script(r#"
+        const vector = __zgui.createElement('vector');
+        __zgui.insertNode(root, vector, null);
+        __zgui.setProperty(vector, 'd', 'M0 0 L8 8');
+        for (const source of ['<html><body/></html>', '<svg xmlns="urn:not-svg"/>']) {
+            try { __zgui.setProperty(vector, 'svg', source); } catch (error) {
+                if (error instanceof TypeError) continue;
+                throw error;
+            }
+            throw Error(`accepted a non-SVG root: ${source}`);
+        }
+        'rejected'
+    "#);
+    let parent = native.dom.parent(native.node).expect("control is mounted");
+    let vector = native.backend.children(parent)[1];
+    assert!(native.backend.property(vector, PropKey::new(drawing::DOCUMENT)).is_unset());
+    assert_eq!(native.backend.property(vector, PropKey::new(drawing::PATHS)).as_str(), Some("M0 0 L8 8"));
+}
+
+#[test]
+fn svg_accepts_foreign_namespace_image_metadata() {
+    let mut native = NativeProperties::new();
+    let source = r#"<svg xmlns="http://www.w3.org/2000/svg" xmlns:meta="urn:metadata"><metadata><meta:image href="catalog.svg"/><meta:feImage href="catalog.png"/></metadata><rect width="8" height="8"/></svg>"#;
+    native.script(&format!(r#"
+        const vector = __zgui.createElement('vector');
+        __zgui.insertNode(root, vector, null);
+        __zgui.setProperty(vector, 'svg', {source:?});
+        'accepted'
+    "#));
+    let parent = native.dom.parent(native.node).expect("control is mounted");
+    let vector = native.backend.children(parent)[1];
+    assert_eq!(native.backend.property(vector, PropKey::new(drawing::DOCUMENT)).as_str(), Some(source));
+}
+
+#[test]
+fn retained_canvas_updates_current_bindings_and_releases_scenes() {
+    let mut native = NativeProperties::new();
+    native.script(r#"
+        const scene = __zgui.createCanvasScene();
+        const next = __zgui.createCanvasScene();
+        const vectors = Array.from({length: 3}, () => {
+            const vector = __zgui.createElement('vector');
+            __zgui.insertNode(root, vector, null);
+            __zgui.setProperty(vector, 'canvas', scene);
+            return vector;
+        });
+        const reject = (call, pattern) => {
+            try { call(); } catch (error) { if (pattern.test(String(error))) return; throw error; }
+            throw Error('invalid canvas operation was accepted');
+        };
+        reject(() => __zgui.setProperty(node, 'canvas', scene), /require a vector/);
+        reject(() => __zgui.setProperty(vectors[0], 'canvas', {token: scene.token}), /canvas scene/i);
+        scene.update([{kind: 'rect', x: 0, y: 0, width: 10, height: 20, fill: '#02a'}]);
+        'drawn'
+    "#);
+    let parent = native.dom.parent(native.node).expect("control is mounted");
+    let children = native.backend.children(parent);
+    let [a, b, c] = children[1..] else { panic!("expected three vectors: {children:?}") };
+    let packed = |native: &NativeProperties, node| native.backend.property(node, PropKey::new(drawing::CANVAS)).as_integer().map(drawing::canvas_ref);
+    let view = |native: &NativeProperties, node| native.backend.property(node, PropKey::new(drawing::CANVAS_VIEW)).as_integer();
+    let (token, revision) = packed(&native, a).expect("integer canvas reference");
+    let token = CanvasToken(token);
+    assert_eq!(revision, 1, "first edit advances content revision");
+    assert_eq!(packed(&native, b), Some((token.0, 1)), "edit reaches all bound vectors");
+    assert_eq!(packed(&native, c), Some((token.0, 1)), "edit reaches the third vector");
+
+    native.script(r#"
+        __zgui.setProperty(vectors[1], 'canvas', next);
+        __zgui.setProperty(vectors[2], 'canvas', next);
+        __zgui.removeNode(root, vectors[2]);
+        scene.update(null, [1, 0, 0, 1, 8, 5]);
+        'transformed'
+    "#);
+    let (next_token, next_revision) = packed(&native, b).expect("replacement canvas reference");
+    assert_ne!(token.0, next_token, "scenes have distinct tokens");
+    assert_eq!(next_revision, 0, "replacement scene has not been edited");
+    assert_eq!(view(&native, b), Some(0), "rebound vector ignores old scene view changes");
+    assert_eq!(view(&native, a), Some(1), "transform advances the bound view");
+    assert_eq!(packed(&native, a), Some((token.0, 1)), "transform preserves content revision");
+    native.backend.end_frame();
+
+    native.script(r#"
+        scene.update([{kind: 'circle', x: 10, y: 10, radius: 4, stroke: {color: '#0fa8', width: 2}}]);
+        __zgui.setProperty(vectors[1], 'canvas', null);
+        next.update([], [1, 0, 0, 1, 5, 0]);
+        'updated'
+    "#);
+    assert_eq!(packed(&native, a), Some((token.0, 2)), "live edits invalidate current bindings");
+    assert_eq!(view(&native, a), Some(1), "content edits preserve the view");
+    assert_eq!(packed(&native, b), None, "unbound vector ignores canvas edits");
+    assert_eq!(view(&native, b), None, "unbinding also clears view");
+    assert!(!native.dom.is_live(c), "removed bound vector was reclaimed");
+    native.script(r#"
+        const {dispose} = scene;
+        dispose();
+        dispose();
+        reject(() => scene.update([]), /disposed/);
+        reject(() => __zgui.setProperty(vectors[0], 'canvas', scene), /disposed/);
+        'disposed'
+    "#);
+    assert_eq!(packed(&native, a), None, "dispose clears the bound canvas");
+    assert_eq!(view(&native, a), None, "dispose clears its view");
+    assert!(canvas::resolve(token).is_none(), "dispose unregisters the scene");
+    assert!(canvas::resolve(CanvasToken(next_token)).is_some(), "unbinding does not dispose");
+    native.bridge.dispose();
+    assert!(canvas::resolve(CanvasToken(next_token)).is_none(), "bridge disposal drops remaining scenes");
+}
+
+#[test]
+fn canvas_commands_validate_the_whole_update_before_editing() {
+    let mut native = NativeProperties::new();
+    native.script(r#"
+        const scene = __zgui.createCanvasScene();
+        const vector = __zgui.createElement('vector');
+        __zgui.insertNode(root, vector, null);
+        __zgui.setProperty(vector, 'canvas', scene);
+        const rect = {kind: 'roundedRect', x: 0, y: 0, width: 10, height: 12, radius: 2, fill: '#69afde'};
+        const arc = {kind: 'arc', x: 10, y: 10, radius: 8, startAngle: 0, sweepAngle: Math.PI, stroke: {color: '#abcd0123', width: 2}};
+        const path = {kind: 'path', fill: '#123', segments: [
+            {kind: 'moveTo', x: 0, y: 0}, {kind: 'lineTo', x: 3, y: 0},
+            {kind: 'quadTo', cx: 8, cy: 1, x: 10, y: 4},
+            {kind: 'cubicTo', c1x: 7, c1y: 8, c2x: 1, c2y: 8, x: 0, y: 4}, {kind: 'close'},
+        ]};
+        scene.update([rect, arc, path]);
+        const huge = [];
+        huge.length = 4294967295;
+        for (const [commands, transform] of [
+            [huge], [[{...path, segments: huge}]], [[{...path, segments: [{kind:'lineTo', x: 1, y: 2}]}]],
+            [[rect, {...rect, kind: 'unknown'}]], [[{...rect, width: Infinity}]], [[{...rect, width: '12'}]],
+            [[{...rect, fill: 'red'}]], [[{...rect, fill: '#12345'}]], [[{...rect, fill: undefined}]],
+            [[{...rect, fill: '#+12'}]], [[{...rect, fill: '#\ud80012'}]],
+            [[{...arc, sweepAngle: 1000000}]], [[{...arc, stroke: {color: '#abc', width: 0}}]],
+            [null, [1, 0, 0, 1, NaN, 0]], [[rect], [1, 0, 0, 1, 0]], [[], huge],
+        ]) {
+            try { scene.update(commands, transform); } catch (error) {
+                if (!(error instanceof TypeError || error instanceof RangeError)) throw error;
+                continue;
+            }
+            throw Error('invalid update was accepted');
+        }
+        'checked'
+    "#);
+    let parent = native.dom.parent(native.node).expect("control is mounted");
+    let node = native.backend.children(parent)[1];
+    let packed = native.backend.property(node, PropKey::new(drawing::CANVAS)).as_integer().expect("canvas reference");
+    let (token, revision) = drawing::canvas_ref(packed);
+    assert_eq!(revision, 1, "rejected updates do not advance content revision");
+    assert_eq!(native.backend.property(node, PropKey::new(drawing::CANVAS_VIEW)).as_integer(), Some(0), "rejected updates do not advance view");
+    let scene = canvas::resolve(CanvasToken(token)).expect("scene survives invalid edits");
+    assert_eq!(scene.lock().expect("scene readable").shapes().len(), 3, "valid geometry survives invalid batches");
+}
+
+#[test]
+fn canvas_scene_limit_is_independent_of_nodes_and_disposal_frees_a_slot() {
+    let mut native = NativeProperties::new();
+    native.script(r#"
+        const scenes = Array.from({length: 256}, () => __zgui.createCanvasScene());
+        const rejectScene = () => {
+            try { __zgui.createCanvasScene(); } catch (error) {
+                if (error instanceof RangeError) return;
+                throw error;
+            }
+            throw Error('created a scene over the session limit');
+        };
+        rejectScene();
+        'full'
+    "#);
+    assert_eq!(native.bridge.canvas_scene_count(), 256, "failed creation leaves the live scenes intact");
+    native.script(r#"
+        scenes[0].dispose();
+        scenes[0].dispose();
+        const replacement = __zgui.createCanvasScene();
+        if (replacement.token === scenes[0].token) throw Error('reused a disposed token');
+        rejectScene();
+        'full again'
+    "#);
+    assert_eq!(native.bridge.canvas_scene_count(), 256, "disposal frees exactly one slot");
+}
+
+#[test]
+fn canvas_retained_shape_budget_is_shared_and_reclaimed_on_update_and_dispose() {
+    let mut native = NativeProperties::new();
+    native.script(r#"
+        const create = () => __zgui.createCanvasScene();
+        const [first, second, extra] = [create(), create(), create()];
+        const line = {kind: 'path', segments: [
+            {kind: 'moveTo', x: 0, y: 0}, {kind: 'lineTo', x: 8, y: 8},
+        ], stroke: {color: '#123', width: 1}};
+        const batch = Array(4096).fill(line);
+        const reject = () => {
+            try { extra.update([line]); } catch (error) {
+                if (error instanceof RangeError) return;
+                throw error;
+            }
+            throw Error('exceeded the session shape budget');
+        };
+        first.update(batch);
+        'half full'
+    "#);
+    native.script("second.update(batch); reject(); 'full'");
+    native.script("first.update(batch); reject(); 'replacement at the limit'");
+    native.script("first.update([]); extra.update(batch); 'clear freed capacity'");
+    native.script("second.dispose(); first.update(batch); 'disposal freed capacity'");
+}
+
+#[test]
+fn canvas_retained_segment_budget_rejects_geometry_and_transform_atomically() {
+    let mut native = NativeProperties::new();
+    native.script(r#"
+        const [first, second, target] = Array.from({length: 3}, () => __zgui.createCanvasScene());
+        const vector = __zgui.createElement('vector');
+        __zgui.insertNode(root, vector, null);
+        __zgui.setProperty(vector, 'canvas', target);
+        const segments = Array(16384).fill({kind: 'lineTo', x: 8, y: 8});
+        segments[0] = {kind: 'moveTo', x: 0, y: 0};
+        const batch = [{kind: 'path', fill: '#123', segments}];
+        const rect = {kind: 'rect', x: 0, y: 0, width: 8, height: 8, fill: '#123'};
+        first.update(batch);
+        'half full'
+    "#);
+    native.script(r#"
+        second.update(batch);
+        try { target.update([rect], [1, 0, 0, 1, 8, 5]); } catch (error) {
+            if (!(error instanceof RangeError)) throw error;
+        }
+        'full'
+    "#);
+    let parent = native.dom.parent(native.node).expect("control is mounted");
+    let vector = native.backend.children(parent)[1];
+    let property = |key| native.backend.property(vector, PropKey::new(key)).as_integer();
+    assert_eq!(property(drawing::CANVAS).map(drawing::canvas_ref).map(|(_, revision)| revision), Some(0),
+        "an over-budget rectangle must not advance the content revision");
+    assert_eq!(property(drawing::CANVAS_VIEW), Some(0), "the rejected update must not change the view");
+    native.script("first.update([]); target.update(batch); 'clear freed segments'");
+    native.script("second.dispose(); first.update(batch); 'disposal freed segments'");
+}
+
+#[test]
+fn a_canvas_handle_from_another_bridge_cannot_be_bound() {
+    let mut native = NativeProperties::new();
+    let backend = Rc::new(DocumentDom::new(Rc::new(RefCell::new(Document::new()))));
+    let dom = DomHandle::from_rc(backend.clone());
+    let second = UiBridge::new(NodeRegistry::new(dom, backend.root_node(), 38, 1, 100), HostHandle::new(StubHost::default()), HostPort::queued());
+    native.engine.with_context(|ctx| {
+        let globals = ctx.globals();
+        let original: rquickjs::Object<'_> = globals.get("__zgui")?;
+        second.install(&ctx)?;
+        globals.set("foreignApi", globals.get::<_, rquickjs::Object<'_>>("__zgui")?)?;
+        globals.set("__zgui", original)
+    }).expect("install a second bridge in the same context");
+    second.run_turn(native.engine.turn(), |_, js| js.evaluate_script(
+        "const foreignScene = foreignApi.createCanvasScene(); 'registered'",
+    )).expect("foreign bridge creates a real canvas handle");
+    native.script(r#"
+        const vector = __zgui.createElement('vector');
+        __zgui.insertNode(root, vector, null);
+        try { __zgui.setProperty(vector, 'canvas', foreignScene); }
+        catch (error) {
+            if (!String(error).includes('does not belong to this session')) throw error;
+        }
+        'checked'
+    "#);
+    let parent = native.dom.parent(native.node).expect("control is mounted");
+    let node = native.backend.children(parent)[1];
+    assert!(native.backend.property(node, PropKey::new(drawing::CANVAS)).is_unset(), "foreign handle cannot bind even in the same JS context");
 }
 
 #[test]

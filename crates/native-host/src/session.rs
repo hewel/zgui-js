@@ -103,6 +103,8 @@ pub(crate) struct ResourceCounts {
     pub requests: usize,
     #[serde(skip_serializing_if = "is_zero")]
     pub image_handles: usize,
+    #[serde(skip_serializing_if = "is_zero")]
+    pub canvas_scenes: usize,
     pub fonts: usize,
     pub engine_alive: bool,
 }
@@ -540,6 +542,7 @@ impl Session {
             scroll_locks: self.bridge.scroll_lock_count(),
             timers, frame_callbacks, requests,
             image_handles: self.image_blobs().len(),
+            canvas_scenes: self.bridge.canvas_scene_count(),
             fonts: self.font_leases.borrow().len(),
             engine_alive: self.engine.borrow().is_some(),
         }
@@ -582,6 +585,8 @@ impl Session {
             }
         }
         self.work.finish_stop();
+        // Report remaining leases before forced disposal releases the native scenes.
+        let canvas_scenes = self.bridge.canvas_scene_count();
         self.bridge.dispose();
         self.font_leases.borrow_mut().clear();
         if self.stylesheet_installed.replace(false) {
@@ -590,7 +595,7 @@ impl Session {
         let snapshot = self.engine.borrow().as_ref().map(Self::snapshot_telemetry);
         self.telemetry.set(RuntimeTelemetry::merge(self.telemetry.get(), snapshot));
         let engine_disposed = self.engine.borrow_mut().take().is_some();
-        let counts = self.counts();
+        let counts = ResourceCounts { canvas_scenes, ..self.counts() };
         self.image_blobs().clear();
         if engine_disposed {
             eprintln!("session-disposed: generation={} frames={} resources={counts:?}", self.generation, self.frames.get());

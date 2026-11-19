@@ -139,10 +139,49 @@ export interface ImageProps extends Omit<NativeElementProps, "children"> {
   /** Exact manifest asset path in package-only previews; null/undefined clears the source. */
   src?: string | null;
 }
+
+/** Affine matrix coefficients in the order [a, b, c, d, e, f]. */
+export type CanvasTransform = readonly [a: number, b: number, c: number, d: number, e: number, f: number];
+
+type CanvasPathSegment =
+  | { kind: "moveTo"; x: number; y: number }
+  | { kind: "lineTo"; x: number; y: number }
+  | { kind: "quadTo"; cx: number; cy: number; x: number; y: number }
+  | { kind: "cubicTo"; c1x: number; c1y: number; c2x: number; c2y: number; x: number; y: number }
+  | { kind: "close" };
+
+/** One painted shape; supply a hex fill, a hex stroke with positive width, or both. */
+export type CanvasCommand = {
+  fill?: string;
+  stroke?: { color: string; width: number };
+} & (
+  | { kind: "rect"; x: number; y: number; width: number; height: number }
+  | { kind: "roundedRect"; x: number; y: number; width: number; height: number; radius: number }
+  | { kind: "circle"; x: number; y: number; radius: number }
+  /** Angles are radians; the sweep magnitude cannot exceed one full turn. */
+  | { kind: "arc"; x: number; y: number; radius: number; startAngle: number; sweepAngle: number }
+  /** Each subpath starts with moveTo, including after close. */
+  | { kind: "path"; segments: readonly CanvasPathSegment[] }
+);
+
+declare const canvasScene: unique symbol;
+/** A session-owned drawing that can be shared by multiple vectors. */
+export interface CanvasScene {
+  readonly [canvasScene]: true;
+  readonly token: number;
+  /** Commands replace geometry in paint order; null retains it, and [] clears it. Omit transform to retain the matrix. */
+  update(commands: readonly CanvasCommand[] | null, transform?: CanvasTransform): void;
+  /** Unbinds all vectors and invalidates further updates. Safe to call more than once. */
+  dispose(): void;
+}
+
+/** Childless drawing. Sources are selected in the order canvas, svg, d. */
 export interface VectorProps extends Omit<NativeElementProps, "children"> {
   children?: never;
   d?: string | null;
   viewBox?: string | null;
+  svg?: string | null;
+  canvas?: CanvasScene | null;
 }
 export type NativeTag = "image" | "vector" | "box" | "row" | "column" | "stack" | "text" | "label" | "scroll" | "control" | "field" | "editor";
 export interface ReactiveOptions { name?: string; }

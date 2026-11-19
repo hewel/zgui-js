@@ -9,6 +9,7 @@ mod dismiss;
 mod focus;
 mod geometry;
 mod scroll;
+mod canvas;
 
 use std::{cell::{Cell, RefCell}, collections::{HashMap, VecDeque}, fmt, marker::PhantomData, rc::{Rc, Weak}, sync::Arc};
 use rquickjs::{class::Trace, function::{Func, Opt}, Class, Ctx, Exception, JsLifetime, Object, Persistent, Value};
@@ -295,6 +296,7 @@ pub struct UiBridge {
     focus_traps: RefCell<focus::FocusTraps>,
     dismissals: RefCell<dismiss::Dismissals>,
     scroll_locks: RefCell<scroll::ScrollLocks>,
+    canvas_scenes: RefCell<canvas::CanvasScenes>,
     pending: RefCell<VecDeque<QueuedNotification>>,
     wakes: Cell<usize>,
     overflowed: Cell<bool>,
@@ -318,6 +320,7 @@ impl UiBridge {
         let geometry = RefCell::new(geometry::Geometry::new(dom.clone(), root_native, host.clone(), limit.saturating_mul(4)));
         let focus_traps = RefCell::new(focus::FocusTraps::new(limit));
         let dismissals = RefCell::new(dismiss::Dismissals::new(dom.clone(), root_native, limit));
+        let canvas_scenes = RefCell::new(canvas::CanvasScenes::new(dom.clone()));
         let scroll_locks = RefCell::new(scroll::ScrollLocks::new(dom, root_native, host.clone(), limit));
         Rc::new_cyclic(|weak: &Weak<Self>| {
             let event_weak = weak.clone();
@@ -349,6 +352,7 @@ impl UiBridge {
                 focus_traps,
                 dismissals,
                 scroll_locks,
+                canvas_scenes,
                 pending: RefCell::new(VecDeque::new()),
                 wakes: Cell::new(0),
                 overflowed: Cell::new(false),
@@ -462,6 +466,7 @@ impl UiBridge {
         }
         self.geometry.borrow_mut().remove_nodes(&invalid);
         self.scroll_locks.borrow_mut().remove_nodes(&invalid);
+        self.canvas_scenes.borrow_mut().remove_nodes(&invalid);
         let traps = self.focus_traps.borrow_mut().remove_nodes(&invalid);
         for trap in traps { drop(trap); }
         let mut wrappers = self.wrappers.borrow_mut();
@@ -479,6 +484,8 @@ impl UiBridge {
     pub fn callback_count(&self) -> usize { self.events.borrow().len() + self.geometry.borrow().len() }
     pub fn focus_trap_count(&self) -> usize { self.focus_traps.borrow().len() }
     pub fn scroll_lock_count(&self) -> usize { self.scroll_locks.borrow().len() }
+    /// Returns the number of retained canvas scenes still owned by this session.
+    pub fn canvas_scene_count(&self) -> usize { self.canvas_scenes.borrow().len() }
 
     /// Copies the attached live tree without entering JavaScript. The returned
     /// snapshot owns its records and holds no registry borrow during subsequent
@@ -632,6 +639,7 @@ impl UiBridge {
         let traps = self.focus_traps.borrow_mut().take_all();
         for trap in traps { drop(trap); }
         if !self.disposed.replace(true) { self.registry.borrow_mut().dispose(); }
+        self.canvas_scenes.borrow_mut().clear();
         self.wrappers.borrow_mut().clear();
         self.properties.borrow_mut().clear();
     }
@@ -667,11 +675,15 @@ impl UiBridge {
     /// fail Class conversion before any native operation is reached.
     pub fn install<'js>(self: &Rc<Self>, ctx: &Ctx<'js>) -> rquickjs::Result<()> {
         let api = Object::new(ctx.clone())?;
+        canvas::install(self, &api)?;
         let weak = Rc::downgrade(self);
         api.set("setProperty", Func::from(move |ctx: Ctx<'js>, node: Class<'js, NativeNode>, name: String, value: Value<'js>, _previous: Opt<Value<'js>>| {
             let bridge = owner(&weak, &ctx)?;
             bridge.require_turn(&ctx)?;
             let handle = node.borrow().handle;
+            if name == zgui::vocab::prop::drawing::CANVAS {
+                return canvas::bind(&bridge, &ctx, handle, value);
+            }
             if name.starts_with("on") {
                 if !value.is_null() && !value.is_undefined() { bridge.require_creation(&ctx)?; }
                 let native = bridge.registry.borrow().native(handle).map_err(|e| host_error(&ctx, e))?;

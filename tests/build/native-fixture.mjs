@@ -123,6 +123,8 @@ globalThis.queueMicrotask = fn => {
   else nativeQueueMicrotask(fn);
 };
 
+let nextCanvasToken = 0;
+
 export function createHost({ strictStyles = false, reducedMotion = false } = {}) {
   let nextId = 0;
   let stopping = false;
@@ -150,6 +152,8 @@ export function createHost({ strictStyles = false, reducedMotion = false } = {})
   const layers = [];
   const geometry = [];
   const animatingQueries = [];
+  const canvasScenes = [];
+  const scenesByHandle = new WeakMap();
   const queries = { rect: [], text: [], precedes: [], animating: animatingQueries };
   const clearCalls = [];
   const registrationsAfterStop = [];
@@ -304,6 +308,33 @@ export function createHost({ strictStyles = false, reducedMotion = false } = {})
       makeLease(portals, { layer, node });
       return node;
     },
+    createCanvasScene: () => {
+      assertActiveHost("createCanvasScene");
+      const token = ++nextCanvasToken;
+      const record = { token, active: true, disposals: 0, commands: [], transform: [1, 0, 0, 1, 0, 0] };
+      const handle = {
+        get token() { return token; },
+        update(commands, transform) {
+          if (!record.active) throw new ReferenceError("canvas scene has been disposed");
+          assertActiveHost("canvasScene.update");
+          if (commands !== null) record.commands = structuredClone(commands);
+          if (transform !== undefined && transform.some((value, index) => value !== record.transform[index])) {
+            record.transform = [...transform];
+          }
+        },
+        dispose() {
+          if (!record.active) return;
+          record.active = false;
+          record.disposals += 1;
+          for (const node of nodes.values()) {
+            if (!invalidated.has(node) && node.props.get("canvas") === token) node.props.delete("canvas");
+          }
+        },
+      };
+      canvasScenes.push(record);
+      scenesByHandle.set(handle, record);
+      return handle;
+    },
     registerDismissLayer: (node, callback, options) => {
       assertActiveHost("registerDismissLayer");
       assertLive(node, "dismiss layer target");
@@ -388,6 +419,21 @@ export function createHost({ strictStyles = false, reducedMotion = false } = {})
       if (stopping && ((name.startsWith("on") && value != null) || (name === "src" && value != null))) {
         if (name.startsWith("on")) registrationsAfterStop.push(name);
         throw new ReferenceError("native session is stopping");
+      }
+      if (name === "svg" || name === "canvas") {
+        if (node.tag !== "vector") throw new TypeError(`${name} is only supported on vector nodes`);
+        if (value == null) {
+          node.props.delete(name);
+        } else if (name === "svg") {
+          if (typeof value !== "string") throw new TypeError("svg must be a string");
+          node.props.set(name, value);
+        } else {
+          const record = scenesByHandle.get(value);
+          if (!record) throw new TypeError("canvas must be a scene from this host");
+          if (!record.active) throw new ReferenceError("canvas scene has been disposed");
+          node.props.set(name, record.token);
+        }
+        return;
       }
       if (name === "class" || name === "className" || name === "__zguiClass") {
         if (value != null && typeof value !== "string") throw new TypeError("class must be a string");
@@ -517,6 +563,7 @@ export function createHost({ strictStyles = false, reducedMotion = false } = {})
   return {
     host, nodes, parents, stylesheets, installs, makeNode, byTestId, focused, rects, texts,
     animating, animatingQueries, queries, portals, traps, locks, layers, geometry,
+    canvasScenes,
     clearCalls, invalidated, registrationsAfterStop, styleDiagnostics,
     dispatch, createEvent, runTurn, endTurn,
     flush: () => runTurn(() => {}),

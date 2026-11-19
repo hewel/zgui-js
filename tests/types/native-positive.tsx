@@ -1,10 +1,10 @@
 import {
   Image, Button, TextField, TextArea, For, Show, Loading, Errored,
-  createContext, createEffect, createMemo, createSignal, createSpring, createStore, createProjection,
+  createCanvasScene, createContext, createEffect, createMemo, createSignal, createSpring, createStore, createProjection,
   merge, omit, onCleanup, onSettled, reconcile, renderApp, untrack, useContext,
   focus, getTextContent, getWindowRect, isAnimating, lockScroll, mountStylesheet, observeGeometry, precedes,
 } from "@hewel/zgui";
-import type { Component, Context, NativeAnimationEvent, NativeChild, NativeContextMenuEvent, NativeFocusOptions, NativeNode, NativePointerBoundaryEvent, NativeRole, NativeTextControlProps, NativeTransitionEvent, NativeViewport, NativeWheelEvent, NativeWindowRect, ParentComponent, Spring, SpringOptions, TextFieldProps, TextAreaProps, VectorProps } from "@hewel/zgui";
+import type { CanvasCommand, CanvasScene, CanvasTransform, Component, Context, NativeAnimationEvent, NativeChild, NativeContextMenuEvent, NativeFocusOptions, NativeNode, NativePointerBoundaryEvent, NativeRole, NativeTextControlProps, NativeTransitionEvent, NativeViewport, NativeWheelEvent, NativeWindowRect, ParentComponent, Spring, SpringOptions, TextFieldProps, TextAreaProps, VectorProps } from "@hewel/zgui";
 
 const Greeting: Component<{ name: string }> = props => <text>{props.name}</text>;
 const Container: ParentComponent = props => <box>{props.children}</box>;
@@ -110,7 +110,23 @@ const provided = <Theme value={{ accent: "red" }}>
   <text>native children</text>
 </Theme>;
 const roles: NativeRole[] = ["alert", "checkBox", "menuItemRadio", "scrollView", "tabPanel", "tooltip"];
-const vectorProps: VectorProps = { d: "M0 0", viewBox: "0 0 8 8", role: "image" };
+const vectorProps: VectorProps = { d: "M0 0", viewBox: "0 0 8 8", svg: null, canvas: null, role: "image" };
+const canvasCommands: readonly CanvasCommand[] = [
+  { kind: "rect", x: 0, y: 0, width: 8, height: 8, fill: "#abc" },
+  { kind: "roundedRect", x: 1, y: 1, width: 6, height: 6, radius: 1, fill: "#1234" },
+  { kind: "circle", x: 4, y: 4, radius: 3, stroke: { color: "#112233", width: 1 } },
+  { kind: "arc", x: 4, y: 4, radius: 2, startAngle: 0, sweepAngle: Math.PI, stroke: { color: "#11223344", width: 1 } },
+  {
+    kind: "path", fill: "#fff", stroke: { color: "#000", width: 1 }, segments: [
+      { kind: "moveTo", x: 0, y: 1 },
+      { kind: "lineTo", x: 3, y: 1 },
+      { kind: "quadTo", cx: 4, cy: 1, x: 4, y: 2 },
+      { kind: "cubicTo", c1x: 4, c1y: 3, c2x: 3, c2y: 4, x: 2, y: 4 },
+      { kind: "close" },
+    ],
+  },
+];
+const canvasTransform: CanvasTransform = [1, 0, 0, 1, 2, 3];
 const visual = <box style={{
   boxShadow: "0 2px 4px black", "text-shadow": "1px 1px black", filter: "brightness(.7)",
   backdropFilter: "blur(4px)", mixBlendMode: "multiply", isolation: "isolate",
@@ -152,13 +168,19 @@ const fallbackTheme: string | undefined = MaybeTheme.defaultValue;
 void [nativeTextProps, fieldProps, areaProps, roles, vectorProps, fallbackTheme];
 export function mount(root: NativeNode): () => void {
   return renderApp(() => {
+    const scene: CanvasScene = createCanvasScene();
+    const token: number = scene.token;
+    void token;
+    scene.update(canvasCommands);
+    scene.update(null, canvasTransform);
+    scene.update([]);
     onSettled(() => {
       const timer = setTimeout(() => console.info("timer"), 1);
       const frame = requestAnimationFrame(timestamp => console.debug(timestamp));
       queueMicrotask(() => console.warn("microtask"));
       onCleanup(() => { clearTimeout(timer); cancelAnimationFrame(frame); });
     });
-    return children;
+    return [children, <vector {...vectorProps} svg='<svg viewBox="0 0 8 8"/>' canvas={scene} />];
   }, root);
 }
 void borrowed;

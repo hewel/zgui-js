@@ -13,7 +13,7 @@ export { renderApp } from "./render-app.js";
 export { createSpring } from "./spring.js";
 export type { Spring, SpringOptions } from "./spring.js";
 export {
-  focus, getTextContent, getWindowRect, isAnimating, lockScroll, mountStylesheet,
+  createCanvasScene, focus, getTextContent, getWindowRect, isAnimating, lockScroll, mountStylesheet,
   observeGeometry, precedes, registerDismissLayer, trapFocus,
 } from "./nodes.js";
 export { Portal } from "./portal.js";
