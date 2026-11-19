@@ -3,7 +3,8 @@ use js_runtime::{JsRuntime, RejectionPolicy, RuntimeLimits};
 use rquickjs::{Exception, Function, Persistent};
 use ui_bridge::{BridgeGroup, BridgeStep, DispatchOutcome, HostPort, UiBridge, registry::NodeRegistry};
 use zgui::{app::Fonts, platform::{SessionLockState, Surface, SurfaceId, WakeReason, Waker}, runtime::{AppTimers, ImageBlobs}, view::DocumentId};
-use crate::{assets::{AssetSource, ContractFailure}, environment::Environment, session_host::MountRegion, package::Package, shell::{Authority, ContractPolicy, Monitor, Shell}, work::{Arguments, Work}};
+use crate::{assets::{AssetSource, ContractFailure}, environment::Environment, session_host::MountRegion, package::Package, shell::{Authority, ContractPolicy, Monitor, Shell}, work::{Arguments, Work, WorkSession}};
+use crate::runtime_capabilities::ResolvedCapabilities;
 
 /// Typed session failure: engine diagnostics, sticky provider contracts, and
 /// host invariants keep distinct categories through recovery classification.
@@ -88,6 +89,7 @@ pub(crate) struct SessionPolicy {
     environment: Option<Rc<Environment>>,
     strict_rejections: bool,
     assets: AssetSource,
+    socket_bindings: Option<Rc<BTreeMap<String, String>>>,
     reduced_motion: bool,
     teardown_reporter: Option<TeardownReporter>,
     session_lock: Option<SessionLockState>,
@@ -96,13 +98,20 @@ impl SessionPolicy {
     /// Ordinary live execution: wall clock, ambient limits, and package assets
     /// on the shared worker pool. Unhandled rejections fault under a retained lock.
     pub(crate) fn live(executor: host_services::Executor) -> Self {
-        Self { limits: RuntimeLimits::default(), deadline: None, environment: None, strict_rejections: false, assets: AssetSource::Live(executor), reduced_motion: false, teardown_reporter: None, session_lock: None }
+        Self { limits: RuntimeLimits::default(), deadline: None, environment: None, strict_rejections: false, assets: AssetSource::Live(executor), socket_bindings: None, reduced_motion: false, teardown_reporter: None, session_lock: None }
     }
     /// Deterministic preview execution: supplied limits, an enclosing deadline,
     /// the virtual environment, strict rejection handling and fixture assets.
     pub(crate) fn preview(limits: RuntimeLimits, deadline: Rc<Cell<Instant>>, environment: Rc<Environment>, fixtures: Rc<crate::assets::fixture::FixtureRuntime>) -> Self {
-        Self { limits, deadline: Some(deadline), environment: Some(environment), strict_rejections: true, assets: AssetSource::Fixture(fixtures), reduced_motion: false, teardown_reporter: None, session_lock: None }
+        Self { limits, deadline: Some(deadline), environment: Some(environment), strict_rejections: true, assets: AssetSource::Fixture(fixtures), socket_bindings: None, reduced_motion: false, teardown_reporter: None, session_lock: None }
     }
+    /// Install the explicit launch bindings shared by all live candidates.
+    #[must_use]
+    pub(crate) fn with_socket_bindings(mut self, bindings: BTreeMap<String, String>) -> Self {
+        self.socket_bindings = (!bindings.is_empty()).then(|| Rc::new(bindings));
+        self
+    }
+
     pub(crate) fn with_reduced_motion(mut self, reduced_motion: bool) -> Self {
         self.reduced_motion = reduced_motion;
         self
@@ -247,6 +256,15 @@ impl Session {
     }
 
     fn prepare_inner(startup: Startup, module: SessionModule, generation: u64, waker: Arc<dyn Waker>, policy: SessionPolicy) -> Result<Rc<Self>> {
+        let resolved = if let Some(package) = &module.package {
+            let declarations = &package.manifest.capabilities;
+            match &policy.assets {
+                AssetSource::Live(_) => ResolvedCapabilities::live(declarations, policy.socket_bindings.as_deref().unwrap_or(&BTreeMap::new()), |key| std::env::var_os(key)),
+                AssetSource::Fixture(fixture) => fixture.resolve_capabilities(declarations),
+            }?
+        } else {
+            ResolvedCapabilities::default()
+        };
         let fonts = match &startup { Startup::Primary { region, .. } => region.fonts.clone(), Startup::Shell { fonts, .. } => fonts.clone() };
         let mut engine = JsRuntime::new(policy.limits.clone())?;
         let mut font_families = std::collections::BTreeSet::new();
@@ -280,14 +298,15 @@ impl Session {
                 Authority::Denied
             };
             let shell = Shell::new(module.shell_authority(), lock_authority, policy.session_lock.unwrap_or_default(), contract, waker.clone());
+            let work_session = WorkSession { package: module.package.clone(), generation, assets: policy.assets.clone(), resolved };
             let (primary, work) = match startup {
                 Startup::Primary { region, surface } => {
-                    let work = Work::new(region.host.clone(), module.package.clone(), generation, waker.clone(), surface, policy.assets.clone());
+                    let work = Work::new(work_session, region.host.clone(), surface, waker.clone());
                     let region = Rc::new(Self::build_region(region, "main".into(), surface, generation, &policy, waker.clone(), weak.clone()));
                     bridges.add(&region.bridge);
                     (Some(region), work)
                 }
-                Startup::Shell { timers, .. } => (None, Work::new_shell(module.package.clone(), generation, waker.clone(), policy.assets.clone(), timers)),
+                Startup::Shell { timers, .. } => (None, Work::new_shell(work_session, timers, waker.clone())),
             };
             work.guard_cleanup_with(shell.clone());
             Self {
@@ -764,6 +783,10 @@ impl Session {
 
     pub(crate) fn package(&self) -> Option<&Rc<Package>> { self.module.package.as_ref() }
     pub(crate) fn image_blobs(&self) -> &ImageBlobs { self.work.image_blobs() }
+
+    /// The generation's resolved path authority.
+    #[must_use]
+    pub(crate) fn resolved_capabilities(&self) -> &ResolvedCapabilities { self.work.resolved_capabilities() }
     pub(crate) fn fixture_image_files(&self) -> impl Iterator<Item = (String, Arc<[u8]>)> + '_ {
         self.policy.assets.fixture_image_files(self.module.package.as_deref())
     }

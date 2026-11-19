@@ -51,9 +51,9 @@ async function setup(t) {
         assets: { "socket.png": image },
         capabilities: grants,
       }),
-    async run(name, bundle, services, steps, { events = [], allowFailure = false } = {}) {
+    async run(name, bundle, services, steps, { events = [], allowFailure = false, runtimeEnvironment } = {}) {
       const fixture = path.join(dir, `${name}-fixture.json`);
-      await writeJson(fixture, { schemaVersion: 1, id: name, services, events });
+      await writeJson(fixture, { schemaVersion: 1, id: name, services, events, runtimeEnvironment });
       return runScenario({
         projectDir: dir,
         name,
@@ -255,6 +255,65 @@ test(
     }
   },
 );
+
+test("preview connects only to resolved sockets and reports unbound and undeclared names separately", async t => {
+  const { build, run } = await setup(t);
+  const host = "/zgui-preview-only/runtime/z-shell/host-wayland-2.sock";
+  const niri = "/zgui-preview-only/compositor.sock";
+  const runtimeEnvironment = {
+    xdgRuntimeDir: "/zgui-preview-only/runtime", waylandDisplay: "wayland-2",
+    homeDir: "/zgui-preview-only/home", namedSockets: { niri, ambient: "/not-authorized.sock" },
+  };
+  const imports = `
+    import { getAuthorizedEndpoint, getResolvedCapabilities } from "@hewel/zgui-services";
+    const snapshot = getResolvedCapabilities();
+  `;
+  const grants = {
+    unixSockets: ["$XDG_RUNTIME_DIR/z-shell/host-${WAYLAND_DISPLAY}.sock"],
+    imagePrefixes: ["$XDG_DATA_HOME/icons"],
+    namedSockets: ["niri", "optional", "constructor"],
+  };
+  const bundle = await build("portable-sockets", imports + shell(`
+    const named = getAuthorizedEndpoint("niri");
+    const literal = snapshot.unixSockets[0];
+    if (!named || !literal || getAuthorizedEndpoint("optional") !== null
+      || getAuthorizedEndpoint("constructor") !== null
+      || Object.keys(snapshot.namedSockets).join(",") !== "constructor,niri,optional"
+      || snapshot.imagePrefixes[0] !== "/zgui-preview-only/home/.local/share/icons") {
+      throw new Error("unexpected resolved capabilities");
+    }
+    Object.assign(snapshot.namedSockets, { niri: "/tampered.sock" });
+    Object.assign(snapshot.unixSockets, { 0: "/tampered.sock" });
+    const fresh = getResolvedCapabilities();
+    if (fresh.namedSockets.niri !== named || fresh.unixSockets[0] !== literal) {
+      throw new Error("snapshot mutation changed capability authority");
+    }
+    const [status, setStatus] = createSignal("");
+    for (const path of [literal, named]) {
+      connectUnixSocket(path, { framing: "line", onMessage(message) { setStatus(s => s + message); } });
+    }
+    return <text testId="status">{status()}</text>;
+  `), grants);
+  const sockets = [[host, "host"], [niri, "niri"]].map(([path, text]) => ({
+    path, framing: "line", send: [], events: [{ atMs: 0, kind: "message", text }],
+  }));
+  await run("resolved-sockets", bundle, { sockets }, [
+    text("status", "hostniri"), calls("sockets", "connectUnixSocket", 2), capture,
+  ], { runtimeEnvironment });
+
+  const denied = await build("undeclared-endpoint", imports + shell(`
+    try {
+      getAuthorizedEndpoint("ambient");
+      throw new Error("undeclared environment binding was exposed");
+    } catch (error) {
+      if (!(error instanceof Error) || !("code" in error) || error.code !== "E_CAPABILITY") throw error;
+    }
+    return <text>caught</text>;
+  `), grants);
+  const { result } = await run("undeclared-endpoint", denied, {}, [capture], { runtimeEnvironment, allowFailure: true });
+  assert.equal(result.firstError?.code, "E_CAPABILITY");
+  assert.equal(result.captureCount, 0, "catching the capability error cannot clear the fixture failure");
+});
 
 test(
   "preview teardown reports residual external handles without waiting for fixture deadlines",

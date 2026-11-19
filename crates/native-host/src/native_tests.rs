@@ -250,7 +250,7 @@ fn native_button_actions() -> TestResult {
     let native_failure = native.failure();
     let failures = Rc::new(RefCell::new(Vec::new()));
     let completed = Rc::new(std::cell::Cell::new(false));
-    let application = Application::new(native, pending, Some(package))?;
+    let application = Application::new(native, pending, Some(package), Default::default())?;
     let failure = application.failure.clone();
     let driver = NativeControls {
         inner: application, step: 0, finished: false, deadline: None,

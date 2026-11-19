@@ -1,6 +1,8 @@
 mod bounded_fs;
 mod control_cli;
 mod package;
+mod runtime_capabilities;
+mod runtime_paths;
 mod session;
 mod session_host;
 mod integration;
@@ -21,7 +23,7 @@ mod reload_tests;
 #[cfg(test)]
 mod editing_tests;
 
-use std::{cell::RefCell, error::Error, path::PathBuf, rc::Rc, sync::{mpsc, Arc}, time::Duration};
+use std::{cell::RefCell, collections::BTreeMap, error::Error, path::PathBuf, rc::Rc, sync::{mpsc, Arc}, time::Duration};
 use js_runtime::{JsRuntime, RuntimeLimits};
 use integration::{ExternalWake, IntegrationHarness};
 use package::Package;
@@ -51,12 +53,13 @@ struct Application {
     layer_primary: bool,
 }
 impl Application {
-    fn new(native: zgui::runtime::Runtime, pending: Rc<RefCell<Vec<session_host::MountRegion>>>, package: Option<Rc<Package>>) -> std::io::Result<Self> {
+    fn new(native: zgui::runtime::Runtime, pending: Rc<RefCell<Vec<session_host::MountRegion>>>, package: Option<Rc<Package>>, socket_bindings: BTreeMap<String, String>) -> std::io::Result<Self> {
         let (sender, inbox) = mpsc::sync_channel(8);
         let module = package.map_or_else(integration::baseline_module, SessionModule::package);
         let failure = Rc::new(RefCell::new(None));
         let teardown_failure = Rc::clone(&failure);
         let policy = SessionPolicy::live(host_services::Executor::new(2, 64)?)
+            .with_socket_bindings(socket_bindings)
             .with_teardown_reporter(Rc::new(move |counts| {
                 teardown_failure.borrow_mut().get_or_insert_with(|| {
                     format!("E_TEARDOWN: external service resources remained after cleanup: {counts:?}")
@@ -374,6 +377,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut layer_config = None;
     let mut pure_shell = false;
     let mut control_socket = None;
+    let mut socket_bindings = BTreeMap::new();
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--smoke-module" => {
@@ -390,6 +394,10 @@ fn main() -> Result<(), Box<dyn Error>> {
             "--watch" => { watch = true; }
             "--pure-shell" => { pure_shell = true; }
             "--reduced-motion" => { reduced_motion = true; }
+            "--bind-socket" => {
+                let binding = args.next().ok_or("--bind-socket requires name=path")?;
+                runtime_capabilities::add_socket_binding(&mut socket_bindings, &binding)?;
+            }
             "--control-socket" => {
                 if control_socket.is_some() { return Err("--control-socket can only be specified once".into()); }
                 control_socket = Some(args.next().ok_or("--control-socket requires a path")?.into());
@@ -425,7 +433,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         .expect("the native application provides a font collection"));
     if pure_shell { native.without_primary_surface(); }
     let native_failure = native.failure();
-    let mut application = Application::new(native, pending, package)?;
+    let mut application = Application::new(native, pending, package, socket_bindings)?;
     application.layer_primary = layer_config.is_some();
     if let Some(fonts) = fonts { application.host.set_pure_shell(fonts); }
     application.host.set_reduced_motion(reduced_motion);

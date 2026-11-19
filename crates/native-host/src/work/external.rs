@@ -1,5 +1,5 @@
 //! Session-owned external endpoints and their bounded Bridge-turn deliveries.
-use super::{ImageLease, Mode, Work, data_property, owner, service_error};
+use super::{ImageLease, Mode, Work, data_property, endpoint_value, owner, service_error};
 use crate::{
     assets::{
         AssetError, AssetSource,
@@ -291,6 +291,13 @@ impl Work {
     ) -> rquickjs::Result<()> {
         let weak = Rc::downgrade(self);
         services.prop(
+            "getAuthorizedEndpoint",
+            data_property(Func::from(move |ctx: Ctx<'js>, name: Value<'js>| {
+                owner(&weak, &ctx)?.authorized_endpoint(&ctx, name)
+            })),
+        )?;
+        let weak = Rc::downgrade(self);
+        services.prop(
             "connectUnixSocket",
             data_property(Func::from(
                 move |ctx: Ctx<'js>, path: Value<'js>, options: Value<'js>| {
@@ -317,6 +324,46 @@ impl Work {
                 owner(&weak, &ctx)?.register_control(&ctx, handler)
             })),
         )
+    }
+
+    fn authorized_endpoint<'js>(
+        &self,
+        ctx: &Ctx<'js>,
+        name: Value<'js>,
+    ) -> rquickjs::Result<Value<'js>> {
+        let name = name
+            .into_string()
+            .ok_or_else(|| Exception::throw_type(ctx, "endpoint name must be a string"))?;
+        let mut length = 0;
+        // SAFETY: The primitive string belongs to this live context; its length is intrinsic.
+        let status =
+            unsafe { rquickjs::qjs::JS_GetLength(ctx.as_raw().as_ptr(), name.as_raw(), &mut length) };
+        if status < 0 {
+            return Err(rquickjs::Error::Exception);
+        }
+        if usize::try_from(length)
+            .is_ok_and(|length| length <= crate::runtime_paths::MAX_SOCKET_NAME_BYTES)
+        {
+            let name = name.to_cstring()?;
+            if let Some(endpoint) = checked_utf8(&name)
+                .ok()
+                .and_then(|name| self.resolved.named_sockets().get(name))
+            {
+                return endpoint_value(ctx, endpoint.as_deref());
+            }
+        }
+        let message = "endpoint name is not declared in capabilities.namedSockets";
+        if let Some(fixture) = &self.external.fixture {
+            let failure = fixture.deny_capability(message);
+            return Err(self.asset_error(ctx, AssetError::Contract(failure)));
+        }
+        Err(thrown(
+            ctx,
+            &ServiceError {
+                code: "E_CAPABILITY",
+                message: message.into(),
+            },
+        ))
     }
 
     fn invalid_external(
@@ -404,18 +451,11 @@ impl Work {
         self.require_external(ctx)?;
         let path = self.bounded_text(ctx, path, MAX_PROGRAM_BYTES, "socket path")?;
         let path = self.read_text(ctx, &path)?;
-        if !self.external.package.as_ref().is_some_and(|package| {
-            package
-                .manifest
-                .capabilities
-                .unix_sockets
-                .iter()
-                .any(|allowed| allowed == path)
-        }) {
+        if !self.resolved.allows_socket(path) {
             return Err(self.invalid_external(
                 ctx,
                 "PermissionDenied",
-                format!("socket {path:?} is not listed in capabilities.unixSockets"),
+                format!("socket {path:?} is not authorized by capabilities.unixSockets or capabilities.namedSockets"),
             ));
         }
         SocketAddr::from_pathname(path)

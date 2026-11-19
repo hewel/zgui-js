@@ -299,6 +299,167 @@ fn external_services_deny_zero_capability_packages_before_opening_any_endpoint()
 }
 
 #[test]
+fn template_resolution_rejects_missing_or_insecure_runtime_before_evaluation() {
+    use std::os::unix::fs::{PermissionsExt, symlink};
+
+    let fixture = Fixture::new("throw Error('must not evaluate');", "").with_capabilities(crate::package::Capabilities {
+        image_prefixes: vec!["$XDG_RUNTIME_DIR/z-shell/media".into()],
+        ..Default::default()
+    });
+    let native = Native::new();
+    let package = fixture.package();
+    let runtime = package.directory.join("private");
+    let insecure = package.directory.join("public");
+    let special_mode = package.directory.join("sticky");
+    let alias = package.directory.join("alias");
+    std::fs::create_dir(&runtime).expect("create test runtime directory");
+    std::fs::create_dir(&insecure).expect("create insecure test runtime directory");
+    std::fs::create_dir(&special_mode).expect("create runtime directory with special mode bits");
+    std::fs::set_permissions(&runtime, std::fs::Permissions::from_mode(0o700)).expect("set private runtime mode");
+    std::fs::set_permissions(&insecure, std::fs::Permissions::from_mode(0o755)).expect("set insecure runtime mode");
+    std::fs::set_permissions(&special_mode, std::fs::Permissions::from_mode(0o1700)).expect("set sticky bit");
+    symlink(&runtime, &alias).expect("create symlink to a private runtime directory");
+    for (provided, reason) in [
+        (None, "must be set"),
+        (Some(alias.as_path()), "must be canonical"),
+        (Some(insecure.as_path()), "mode 0700"),
+        (Some(special_mode.as_path()), "mode 0700"),
+    ] {
+        let error = ResolvedCapabilities::live(
+            &package.manifest.capabilities, &BTreeMap::new(),
+            |name| if name == "XDG_RUNTIME_DIR" { provided.map(|path| path.as_os_str().to_owned()) } else { None },
+        ).expect_err("missing or insecure runtime root must not grant authority");
+        assert_eq!(error.code, "E_CAPABILITY", "wrong failure for {provided:?}");
+        assert!(error.message.contains("XDG_RUNTIME_DIR") && error.message.contains(reason), "{provided:?}: {error}");
+    }
+    let error = native.preview(package, RuntimeLimits::default(), Rc::new(Cell::new(Instant::now() + Duration::from_secs(5))))
+        .err().expect("preview must not read an ambient runtime directory");
+    assert!(matches!(error, SessionError::Contract(failure) if failure.code == "E_CAPABILITY" && failure.message.contains("XDG_RUNTIME_DIR")), "must fail before evaluation");
+}
+
+#[test]
+fn live_resolution_expands_display_templates_and_only_allowlisted_bindings() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let fixture = Fixture::new(SIMPLE, "");
+    let package = fixture.package();
+    let root = &package.directory;
+    std::fs::set_permissions(root, std::fs::Permissions::from_mode(0o700)).expect("create private root");
+    let root = root.to_str().expect("UTF-8 fixture root");
+    let declarations = crate::package::Capabilities {
+        image_prefixes: vec!["$XDG_RUNTIME_DIR/z-shell/media".into(), "$XDG_DATA_HOME/icons".into()],
+        unix_sockets: vec![
+            "$XDG_RUNTIME_DIR/z-shell/host-${WAYLAND_DISPLAY}.sock".into(),
+            "$HOME/$WAYLAND_DISPLAY/shell.sock".into(),
+        ],
+        named_sockets: vec!["niri".into(), "status".into()],
+        ..Default::default()
+    };
+    let resolve = |bindings: &BTreeMap<String, String>, display: Option<&str>, data: Option<&str>| {
+        ResolvedCapabilities::live(&declarations, bindings, |key| match key {
+            "XDG_RUNTIME_DIR" | "HOME" => Some(root.into()),
+            "XDG_DATA_HOME" => data.map(Into::into),
+            "WAYLAND_DISPLAY" => display.map(Into::into),
+            "NIRI_SOCKET" => Some("/run/allowlisted.sock".into()),
+            key => panic!("unexpected ambient lookup {key}"),
+        })
+    };
+    let mut cli = BTreeMap::new();
+    let env = resolve(&cli, Some("wayland-2"), None).expect("resolve the allowlisted environment binding");
+    assert_eq!(env.image_prefixes(), [format!("{root}/z-shell/media"), format!("{root}/.local/share/icons")], "resolved image roots and XDG default");
+    assert_eq!(env.unix_sockets(), [format!("{root}/z-shell/host-wayland-2.sock"), format!("{root}/wayland-2/shell.sock")], "embedded and whole-segment display");
+    assert_eq!(env.named_sockets()["niri"].as_deref(), Some("/run/allowlisted.sock"), "allowlisted fallback");
+    assert_eq!(env.named_sockets()["status"], None, "undeclared environment mapping remains unbound");
+
+    crate::runtime_capabilities::add_socket_binding(&mut cli, "niri=/run/explicit.sock").expect("valid override");
+    crate::runtime_capabilities::add_socket_binding(&mut cli, "other=/run/other.sock").expect("valid but undeclared name");
+    let explicit = resolve(&cli, Some("wayland-2"), Some(root)).expect("resolve the explicit endpoint and data root");
+    assert_eq!(explicit.image_prefixes()[1], format!("{root}/icons"), "explicit data root overrides default");
+    assert!(explicit.allows_socket("/run/explicit.sock"), "explicit binding overrides environment");
+    assert!(!explicit.allows_socket("/run/allowlisted.sock") && !explicit.allows_socket("/run/other.sock"), "only declared, selected bindings grant access");
+    for display in [None, Some(""), Some("."), Some(".."), Some("a/b"), Some("a\\b"), Some("a\u{7f}")] {
+        let denied = resolve(&cli, display, None).expect_err("invalid display must not grant authority");
+        assert!(denied.message.contains("WAYLAND_DISPLAY"), "{display:?}: {denied}");
+    }
+    for data in ["relative", &format!("{root}/missing"), ""] {
+        let denied = resolve(&cli, Some("wayland-2"), Some(data)).expect_err("invalid explicit data root must not grant authority");
+        assert!(denied.message.contains("XDG_DATA_HOME"), "{data:?}: {denied}");
+    }
+}
+
+#[test]
+fn session_queries_named_socket_before_mount_and_connects_to_its_bound_path() {
+    use std::{io::Read, os::unix::net::UnixListener};
+
+    const CHILD: &str = "ZGUI_TEST_NAMED_SOCKET_CHILD";
+    if std::env::var_os(CHILD).is_none() {
+        // Set the launch environment in a child, not in the parallel test runner.
+        let fixture = Fixture::new(SIMPLE, "");
+        let test = "session::tests::session_queries_named_socket_before_mount_and_connects_to_its_bound_path";
+        let result = std::process::Command::new(std::env::current_exe().expect("locate the test binary"))
+            .args(["--exact", test])
+            .env(CHILD, "1")
+            .env("NIRI_SOCKET", fixture.package().directory.join("niri.sock"))
+            .output().expect("run the session with a controlled NIRI_SOCKET");
+        let stdout = String::from_utf8_lossy(&result.stdout);
+        assert!(result.status.success() && stdout.contains(&format!("test {test} ... ok")),
+            "{stdout}\n{}", String::from_utf8_lossy(&result.stderr));
+        return;
+    }
+
+    let fixture = Fixture::new(r#"
+        export const hostApiVersion = 1;
+        const services = __zguiServices;
+        const endpoint = services.getAuthorizedEndpoint('niri');
+        if (services.getAuthorizedEndpoint('optional') !== null)
+            throw Error('declared optional socket must be null');
+        const snapshot = services.getResolvedCapabilities().namedSockets;
+        if (snapshot.niri !== endpoint || snapshot.optional !== null || snapshot.hidden !== undefined)
+            throw Error('capability snapshot exposed a different endpoint namespace');
+        for (const name of ['hidden', 'x'.repeat(8192), '\uD800']) {
+            try {
+                services.getAuthorizedEndpoint(name);
+                throw Error('undeclared socket must not be queried');
+            } catch (error) {
+                if (!(error instanceof Error) || error.code !== 'E_CAPABILITY') throw error;
+            }
+        }
+        export function mount(root) {
+            __zgui.insertNode(root, __zgui.createTextNode(endpoint), null);
+            const socket = services.connectUnixSocket(endpoint, { framing: 'line', onMessage() {} });
+            socket.send('ready');
+            return () => { socket.close(); __zgui.clearRoot(root); };
+        }
+    "#, "").with_capabilities(crate::package::Capabilities {
+        named_sockets: vec!["niri".into(), "optional".into()],
+        ..Default::default()
+    });
+    let package = fixture.package();
+    let path = package.directory.join("explicit.sock");
+    let env_path = std::path::PathBuf::from(std::env::var_os("NIRI_SOCKET").expect("test launch environment"));
+    let mut bindings = BTreeMap::new();
+    for (name, path) in [("niri", &path), ("hidden", &env_path)] {
+        crate::runtime_capabilities::add_socket_binding(&mut bindings, &format!("{name}={}", path.display()))
+            .expect("parse a test CLI binding");
+    }
+    let native = Native::new();
+    for (generation, endpoint, bindings) in [(1, env_path, BTreeMap::new()), (2, path, bindings)] {
+        let listener = UnixListener::bind(&endpoint).expect("bind the expected endpoint");
+        let policy = SessionPolicy::live(native.executor.clone()).with_socket_bindings(bindings);
+        let session = Session::prepare(native.region.clone(), SessionModule::package(package.clone()), generation, native.waker.clone(), SurfaceId::new(7), policy)
+            .expect("query endpoints during preflight");
+        session.mount().expect("mount connects through the selected socket grant");
+        assert_eq!(native.text(), endpoint.to_str().expect("UTF-8 socket path"), "generation {generation} must use its selected endpoint");
+        let mut peer = accept_service_peer(&listener);
+        peer.set_read_timeout(Some(Duration::from_secs(5))).expect("bound peer read");
+        let mut message = [0; 6];
+        peer.read_exact(&mut message).expect("read from the selected endpoint");
+        assert_eq!(&message, b"ready\n", "message sent to the selected socket");
+        assert_eq!(session.retire().counts, ResourceCounts::default(), "named transport retires cleanly");
+    }
+}
+
+#[test]
 fn command_argv_is_bounded_snapshotted_and_passed_literally() {
     let fixture = Fixture::new(r#"
         export const hostApiVersion = 1;

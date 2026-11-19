@@ -9,6 +9,21 @@
   "properties": {
     "schemaVersion": { "type": "integer", "const": 1 },
     "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "\\S" },
+    "runtimeEnvironment": {
+      "type": "object", "additionalProperties": false,
+      "description": "Synthetic values for sealed paths. No ambient environment or filesystem lookup.",
+      "properties": {
+        "xdgRuntimeDir": { "$ref": "../package.schema.json#/$defs/literalHostPath" },
+        "homeDir": { "$ref": "../package.schema.json#/$defs/literalHostPath" },
+        "xdgDataHome": { "$ref": "../package.schema.json#/$defs/literalHostPath" },
+        "waylandDisplay": { "type": "string", "pattern": "^(?!\\.{1,2}(?![\\s\\S]))[^/\\\\\\u0000-\\u001f\\u007f-\\u009f]+(?![\\s\\S])" },
+        "namedSockets": {
+          "type": "object",
+          "propertyNames": { "$ref": "../package.schema.json#/$defs/socketName" },
+          "additionalProperties": { "$ref": "../package.schema.json#/$defs/literalHostPath" }
+        }
+      }
+    },
     "services": {
       "type": "object",
       "additionalProperties": false,

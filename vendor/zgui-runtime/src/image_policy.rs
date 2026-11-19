@@ -34,6 +34,7 @@ impl ImagePolicy {
     ///
     /// Invalid prefixes grant nothing. Symlinked prefixes are refused; relative symlinks inside a
     /// granted directory remain usable only if they resolve beneath it.
+    /// Callers resolve any package path templates before constructing this policy.
     #[must_use]
     pub fn with_file_prefixes(mut self, prefixes: &[String]) -> Self {
         self.files = FileAccess::live(prefixes);
@@ -43,6 +44,7 @@ impl ImagePolicy {
     /// Resolves files entirely from owned bytes, requiring both an exact URI and a granted prefix.
     ///
     /// Unlike [`Self::with_file_prefixes`], this never opens a filesystem path.
+    /// Both the prefixes and fixture paths are literal, not environment templates.
     #[must_use]
     pub fn with_fixture_files(
         mut self,

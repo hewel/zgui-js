@@ -1,6 +1,6 @@
 //! Deterministic, owner-thread service fixtures. This module never opens a file.
 use super::ContractFailure;
-use crate::{bounded_fs::relative_path, environment::Environment, package::Package};
+use crate::{bounded_fs::relative_path, environment::Environment, package::{Capabilities, Package}, runtime_capabilities::ResolvedCapabilities, runtime_paths::{self, Root}};
 use host_services::{Completion, ServiceError};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -28,11 +28,63 @@ object_struct! {
         pub id: String,
         pub services: Services,
         pub events: Vec<FixtureEvent>,
+        /// Synthetic path bindings; never read from the preview host.
+        #[serde(default, deserialize_with = "present_provider", skip_serializing_if = "Option::is_none")]
+        runtime_environment: Option<RuntimeEnvironment>,
     }
 }
 impl Default for FixtureDefinition {
-    fn default() -> Self { Self { schema_version: 1, id: "empty".into(), services: Services::default(), events: vec![] } }
+    fn default() -> Self { Self { schema_version: 1, id: "empty".into(), services: Services::default(), events: vec![], runtime_environment: None } }
 }
+
+object_struct! {
+    /// Lexical runtime values used instead of host environment and directories.
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    struct RuntimeEnvironment {
+        #[serde(default, deserialize_with = "present_provider", skip_serializing_if = "Option::is_none")]
+        xdg_runtime_dir: Option<String>,
+        #[serde(default, deserialize_with = "present_provider", skip_serializing_if = "Option::is_none")]
+        home_dir: Option<String>,
+        #[serde(default, deserialize_with = "present_provider", skip_serializing_if = "Option::is_none")]
+        xdg_data_home: Option<String>,
+        #[serde(default, deserialize_with = "present_provider", skip_serializing_if = "Option::is_none")]
+        wayland_display: Option<String>,
+        #[serde(default, deserialize_with = "unique_entries", skip_serializing_if = "BTreeMap::is_empty")]
+        named_sockets: BTreeMap<String, String>,
+    }
+}
+
+impl RuntimeEnvironment {
+    fn validate(&self) -> Result<(), String> {
+        for (field, path) in [
+            ("xdgRuntimeDir", &self.xdg_runtime_dir),
+            ("homeDir", &self.home_dir),
+            ("xdgDataHome", &self.xdg_data_home),
+        ] {
+            if path.as_deref().is_some_and(|path| !runtime_paths::canonical_absolute(path)) {
+                return Err(format!("fixture runtimeEnvironment.{field} must be canonical absolute text"));
+            }
+        }
+        if self.wayland_display.as_deref().is_some_and(|display| !runtime_paths::safe_segment(display)) {
+            return Err("fixture runtimeEnvironment.waylandDisplay must be a single safe filename component".into());
+        }
+        for (name, path) in &self.named_sockets {
+            if !runtime_paths::socket_name(name) || !runtime_paths::canonical_absolute(path) {
+                return Err(format!("fixture runtimeEnvironment.namedSockets has an invalid name or path for {name:?}"));
+            }
+        }
+        Ok(())
+    }
+
+    fn root(&self, root: Root) -> Option<String> {
+        match root {
+            Root::Runtime => self.xdg_runtime_dir.clone(),
+            Root::Home => self.home_dir.clone(),
+            Root::Data => self.xdg_data_home.clone().or_else(|| self.home_dir.as_deref().map(runtime_paths::default_data_home)),
+        }
+    }
+}
+
 object_struct! {
     #[derive(Default)]
     #[serde(deny_unknown_fields)]
@@ -83,9 +135,9 @@ object_struct! {
 object_struct! {
     #[serde(deny_unknown_fields)]
     pub(crate) struct ImageProvider {
-        #[serde(default, deserialize_with = "unique_assets", skip_serializing_if = "BTreeMap::is_empty")]
+        #[serde(default, deserialize_with = "unique_entries", skip_serializing_if = "BTreeMap::is_empty")]
         files: BTreeMap<String, String>,
-        #[serde(default, deserialize_with = "unique_assets", skip_serializing_if = "BTreeMap::is_empty")]
+        #[serde(default, deserialize_with = "unique_entries", skip_serializing_if = "BTreeMap::is_empty")]
         blobs: BTreeMap<String, String>,
     }
 }
@@ -94,24 +146,24 @@ pub(crate) enum TextProviderVersion { #[serde(rename = "mock-text-assets-v1")] V
 object_struct! {
     #[serde(deny_unknown_fields)]
     pub(crate) struct AssetState {
-        #[serde(deserialize_with = "unique_assets")]
+        #[serde(deserialize_with = "unique_entries")]
         pub assets: BTreeMap<String, AssetBehavior>,
     }
 }
-fn unique_assets<'de, D: serde::Deserializer<'de>, T: Deserialize<'de>>(deserializer: D) -> Result<BTreeMap<String, T>, D::Error> {
-    struct Assets<T>(PhantomData<T>);
-    impl<'de, T: Deserialize<'de>> serde::de::Visitor<'de> for Assets<T> {
+fn unique_entries<'de, D: serde::Deserializer<'de>, T: Deserialize<'de>>(deserializer: D) -> Result<BTreeMap<String, T>, D::Error> {
+    struct Entries<T>(PhantomData<T>);
+    impl<'de, T: Deserialize<'de>> serde::de::Visitor<'de> for Entries<T> {
         type Value = BTreeMap<String, T>;
-        fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { f.write_str("unique fixture asset paths") }
+        fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { f.write_str("a fixture object with unique keys") }
         fn visit_map<M: serde::de::MapAccess<'de>>(self, mut map: M) -> Result<Self::Value, M::Error> {
-            let mut assets = BTreeMap::new();
-            while let Some((path, behavior)) = map.next_entry::<String, T>()? {
-                if assets.insert(path, behavior).is_some() { return Err(serde::de::Error::custom("duplicate fixture asset path")); }
+            let mut entries = BTreeMap::new();
+            while let Some((key, value)) = map.next_entry::<String, T>()? {
+                if entries.insert(key, value).is_some() { return Err(serde::de::Error::custom("duplicate fixture object key")); }
             }
-            Ok(assets)
+            Ok(entries)
         }
     }
-    deserializer.deserialize_map(Assets(PhantomData))
+    deserializer.deserialize_map(Entries(PhantomData))
 }
 object_struct! {
     #[serde(deny_unknown_fields)]
@@ -202,6 +254,7 @@ impl FixtureDefinition {
         if self.schema_version != 1 { return Err("unsupported fixture schemaVersion; expected 1".into()); }
         if self.id.trim().is_empty() || self.id.chars().count() > 128 { return Err("fixture id must contain 1..=128 characters of nonblank text".into()); }
         if self.events.len() > 4096 { return Err("fixture exceeds 4096 events".into()); }
+        if let Some(runtime) = &self.runtime_environment { runtime.validate()?; }
         if let Some(provider) = &self.services.assets { provider.initial_state.validate()?; }
         if let Some(images) = &self.services.images { images.validate()?; }
         self.services.validate_external()?;
@@ -272,6 +325,22 @@ impl FixtureRuntime {
             calls: BTreeMap::new(), next_registration_id: 1, sequence: 0, trace: vec![], trace_bytes: 0, dropped: 0, failure: invalid, disposed: false,
         }), definition, environment })
     }
+
+    /// Resolves the package's path grants against the immutable synthetic environment.
+    ///
+    /// # Errors
+    /// Fails for an invalid fixture or a template with a missing binding.
+    pub(crate) fn resolve_capabilities(&self, declarations: &Capabilities) -> Result<ResolvedCapabilities, ContractFailure> {
+        if let Some(error) = self.contract_failure() { return Err(error); }
+        let inputs = self.definition.runtime_environment.as_ref();
+        ResolvedCapabilities::resolve(
+            declarations,
+            |root| inputs.and_then(|inputs| inputs.root(root)).ok_or_else(|| format!("fixture does not set {}", root.key())),
+            || Ok(inputs.and_then(|inputs| inputs.wayland_display.clone())),
+            |name| Ok(inputs.and_then(|inputs| inputs.named_sockets.get(name)).cloned()),
+        )
+    }
+
     fn record(&self, state: &mut State, kind: &str, detail: Value) {
         state.sequence += 1;
         if state.trace.len() >= MAX_TRACE_RECORDS || state.trace_bytes >= MAX_TRACE_BYTES {
@@ -294,6 +363,8 @@ impl FixtureRuntime {
         error
     }
     pub(crate) fn contract_failure(&self) -> Option<ContractFailure> { self.state.borrow().failure.clone() }
+    /// Retains a capability denial even when application code catches it.
+    pub(crate) fn deny_capability(&self, message: &str) -> ContractFailure { self.fail(failure("E_CAPABILITY", message)) }
     pub(super) fn malformed(&self, message: impl Into<String>) -> ContractFailure { self.fail(failure("E_FIXTURE_CONTRACT", message)) }
     pub(super) fn require_assets(&self) -> Result<(), ContractFailure> {
         if self.definition.services.assets.is_none() { return Err(self.fail(failure("E_FIXTURE_MISSING_SERVICE", "preview fixture does not provide readTextAsset"))); }

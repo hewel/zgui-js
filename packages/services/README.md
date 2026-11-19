@@ -58,11 +58,53 @@ Declare only the authorities the application needs in the package's
 control-channel access. These services run during the application lifecycle, not
 during package preflight. Callbacks run in the owning session's bridge turns.
 
+### Portable paths and endpoint queries
+
+Declare paths and endpoint names in `package.json` under `zgui.capabilities`:
+
+```json
+{
+  "imagePrefixes": ["$XDG_RUNTIME_DIR/z-shell/media"],
+  "unixSockets": ["$XDG_RUNTIME_DIR/z-shell/host-${WAYLAND_DISPLAY}.sock"],
+  "namedSockets": ["niri", "status"]
+}
+```
+
+Absolute literal paths still work. A template starts with `$XDG_RUNTIME_DIR`,
+`$HOME`, or `$XDG_DATA_HOME`, followed by optional canonical path segments.
+`${WAYLAND_DISPLAY}` can be embedded in a segment; `$WAYLAND_DISPLAY` must
+occupy a whole segment. The display value must be one nonempty filename
+component, not `.` or `..`. No other variables or shell syntax are expanded.
+The builder seals templates verbatim; each session resolves them before
+evaluating the module. A missing or invalid required value rejects the session.
+
+Live `$XDG_RUNTIME_DIR` must be an existing, non-symlink directory owned by
+the effective user with mode `0700`; there is no `/tmp` fallback. Explicit
+`$HOME` and `$XDG_DATA_HOME` roots must be existing canonical directories.
+When `XDG_DATA_HOME` is unset, it defaults to `$HOME/.local/share` under a
+valid home, even if the default directory does not exist yet.
+
+Use repeatable `native-host --bind-socket name=/canonical/path` options to
+bind named endpoints. Each name can be supplied once. An explicit binding
+overrides the allowlisted environment binding (`niri` → `NIRI_SOCKET`);
+no other environment names are inferred. Only manifest-declared names can
+grant access. Bindings are literal canonical absolute paths, not templates.
+Live socket paths may be absent at startup, but existing targets and ancestors
+must not contain symlinks.
+
+`getResolvedCapabilities()` returns fresh copies of the resolved
+`imagePrefixes`, `unixSockets`, and `namedSockets`. The named map has no
+prototype: undeclared keys read as `undefined`. `getAuthorizedEndpoint(name)`
+returns the path or `null` if the declared name is unbound; undeclared names
+throw a `HostServiceError` with code `E_CAPABILITY`. Both queries are safe at
+module evaluation and never expose other environment values. Mutating a
+returned copy cannot change authority.
+
 ### Unix domain sockets
 
-`connectUnixSocket(path, options)` connects asynchronously to an exact, canonical
-absolute path in `capabilities.unixSockets`. It returns a socket with
-`send(text)` and `close()`. Set `options.framing` to match the peer:
+`connectUnixSocket(path, options)` connects asynchronously to an exact path
+from resolved `unixSockets` or a bound `namedSockets` value. It returns a socket
+with `send(text)` and `close()`. Set `options.framing` to match the peer:
 
 - `"line"`: one UTF-8 message per LF (`0x0a`). `send` adds the LF; the text
   passed to it must not contain LF.
@@ -143,6 +185,12 @@ successor; a client may see a disconnected socket during cutover.
 In deterministic previews these services use scripts from the
 [fixture schema](../../schemas/preview/fixture.schema.json) instead of real
 sockets, processes, or a CLI listener. Fixtures do not grant capabilities.
+For portable capabilities, set the fixture's `runtimeEnvironment` with
+`xdgRuntimeDir`, `homeDir`, `xdgDataHome`, `waylandDisplay`, and/or
+`namedSockets` (a name-to-literal-path object). Paths can be synthetic: preview
+never uses live environment or host file access to resolve them. Socket scripts
+and image mappings use the resolved literal paths. An undeclared endpoint
+query records a sticky `E_CAPABILITY` failure even when the exception is caught.
 
 ## Runtime boundaries
 

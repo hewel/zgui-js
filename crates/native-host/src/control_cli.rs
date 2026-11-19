@@ -1,3 +1,4 @@
+use crate::runtime_paths::{effective_uid, open_canonical_dir, open_directory, require_private};
 use host_services::control;
 use serde::de::{IgnoredAny, SeqAccess, Visitor};
 use serde::{Deserialize, Serialize};
@@ -321,7 +322,7 @@ enum ParentMode {
 
 fn open_default_parent(runtime: &Path, mode: ParentMode) -> io::Result<()> {
     let runtime = open_parent(runtime)?;
-    require_private(&runtime)?;
+    require_private(&runtime, 0o777)?;
     let directory = fd_path(&runtime).join(RUNTIME_SUBDIR);
     if let ParentMode::Create = mode {
         match DirBuilder::new().mode(0o700).create(&directory) {
@@ -330,18 +331,7 @@ fn open_default_parent(runtime: &Path, mode: ParentMode) -> io::Result<()> {
             Err(error) => return Err(error),
         }
     }
-    require_private(&open_directory(&directory)?)
-}
-
-fn require_private(directory: &File) -> io::Result<()> {
-    let metadata = directory.metadata()?;
-    if metadata.uid() != effective_uid() || metadata.mode() & 0o777 != 0o700 {
-        return Err(io::Error::new(
-            io::ErrorKind::PermissionDenied,
-            "control runtime directory must be owned by the effective user with mode 0700",
-        ));
-    }
-    Ok(())
+    require_private(&open_directory(&directory)?, 0o777)
 }
 
 fn validate_absolute(path: &Path) -> io::Result<()> {
@@ -377,13 +367,7 @@ fn validate_socket_path(path: &Path) -> io::Result<(&Path, &std::ffi::OsStr)> {
 }
 
 fn open_parent(path: &Path) -> io::Result<File> {
-    if fs::canonicalize(path)?.as_os_str() != path.as_os_str() {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "control socket parent must not contain symlinks",
-        ));
-    }
-    let directory = open_directory(path)?;
+    let directory = open_canonical_dir(path)?;
     let metadata = directory.metadata()?;
     if metadata.uid() != effective_uid() || metadata.mode() & 0o022 != 0 {
         return Err(io::Error::new(
@@ -392,18 +376,6 @@ fn open_parent(path: &Path) -> io::Result<File> {
         ));
     }
     Ok(directory)
-}
-
-fn effective_uid() -> u32 {
-    // SAFETY: geteuid takes no arguments and has no preconditions.
-    unsafe { libc::geteuid() }
-}
-
-fn open_directory(path: &Path) -> io::Result<File> {
-    OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_PATH | libc::O_DIRECTORY | libc::O_NOFOLLOW)
-        .open(path)
 }
 
 fn open_inode(path: &Path) -> io::Result<File> {
@@ -793,6 +765,12 @@ mod tests {
             0o700,
             "server directory is private"
         );
+        fs::set_permissions(&dir.0, fs::Permissions::from_mode(0o1700))
+            .expect("set the sticky bit on the runtime directory");
+        fs::set_permissions(path.parent().unwrap(), fs::Permissions::from_mode(0o1700))
+            .expect("set the sticky bit on the control subdirectory");
+        open_default_parent(&dir.0, ParentMode::Existing)
+            .expect("the control CLI checks ordinary permission bits only");
         assert!(
             default_socket_path(&dir.0, "../dev.test").is_err(),
             "package ID cannot escape its directory"

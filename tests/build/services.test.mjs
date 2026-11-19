@@ -105,6 +105,38 @@ test("image asset handles preserve the host receiver, with explicit or owner-sco
   }
 });
 
+test("endpoint queries defer host access and preserve unbound and undeclared outcomes", async () => {
+  const previous = Object.getOwnPropertyDescriptor(globalThis, "__zguiServices");
+  try {
+    Object.defineProperty(globalThis, "__zguiServices", {
+      configurable: true,
+      get() { throw new Error("Host must not be accessed during module evaluation"); },
+    });
+    const { getResolvedCapabilities, getAuthorizedEndpoint } = await import("@hewel/zgui-services");
+    const denied = Object.assign(new Error("undeclared socket"), { code: "E_CAPABILITY" });
+    const host = {
+      getResolvedCapabilities() {
+        assert.equal(this, host);
+        return { imagePrefixes: [], unixSockets: [], namedSockets: { niri: null } };
+      },
+      getAuthorizedEndpoint(name) {
+        assert.equal(this, host);
+        if (name === "niri") return null;
+        throw denied;
+      },
+    };
+    Object.defineProperty(globalThis, "__zguiServices", { configurable: true, value: host });
+    assert.deepEqual(getResolvedCapabilities(), {
+      imagePrefixes: [], unixSockets: [], namedSockets: { niri: null },
+    });
+    assert.equal(getAuthorizedEndpoint("niri"), null);
+    assert.throws(() => getAuthorizedEndpoint("other"), error => error === denied);
+  } finally {
+    if (previous) Object.defineProperty(globalThis, "__zguiServices", previous);
+    else delete globalThis.__zguiServices;
+  }
+});
+
 test("Unix sockets and control subscriptions preserve native delivery and follow their Solid owner", async () => {
   const { connectUnixSocket, onControlMessage } = await import("@hewel/zgui-services");
   const { createRoot, flush } = await import("solid-js");

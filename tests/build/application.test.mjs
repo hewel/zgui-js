@@ -56,6 +56,7 @@ test("capabilities are closed declarations and change the sealed build identity"
     return manifest;
   };
   const omitted = await build(undefined);
+  const omittedBytes = await readFile(path.join(directory, "dist/manifest.json"));
   assert.deepEqual(await build({ shellSurfaces: false, imagePrefixes: [] }), omitted);
   const declared = await build({
     shellSurfaces: true, sessionLock: true, imagePrefixes: ["/var/media"],
@@ -67,6 +68,30 @@ test("capabilities are closed declarations and change the sealed build identity"
     shellSurfaces: true, sessionLock: true, imagePrefixes: ["/var/media"],
     unixSockets: ["/run/user/1000/status.sock"], commands: ["status"], controlChannel: true,
   });
+  assert.deepEqual(await build({ namedSockets: [] }), omitted);
+  assert.deepEqual(await readFile(path.join(directory, "dist/manifest.json")), omittedBytes);
+  const portable = {
+    imagePrefixes: ["$XDG_RUNTIME_DIR/z-shell/media", "$HOME", "$XDG_DATA_HOME/icons"],
+    unixSockets: [
+      "$XDG_RUNTIME_DIR/z-shell/host-${WAYLAND_DISPLAY}.sock",
+      "$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY",
+      "/run/literal-$UNKNOWN",
+    ],
+    namedSockets: ["niri", "Status_2"],
+  };
+  const sealed = await build(portable);
+  assert.deepEqual(sealed.capabilities, portable);
+  assert.notEqual(sealed.buildId, (await build({ ...portable, namedSockets: ["niri"] })).buildId);
+  for (const entry of [
+    "$XDG_RUNTIME_DIR/../socket", "$HOME//socket", "$HOME/./socket", "$HOME/x\\y",
+    "$HOME/$UNKNOWN", "$HOME/${UNKNOWN}", "$HOME/host-$WAYLAND_DISPLAY.sock",
+    "$HOME/${WAYLAND_DISPLAY}\n", "$HOME_OTHER/socket",
+  ]) {
+    await assert.rejects(build({ unixSockets: [entry] }), /zgui\.capabilities\.unixSockets/);
+  }
+  for (const names of [["niri", "niri"], ["2niri"], ["niri\n"], ["x".repeat(65)]]) {
+    await assert.rejects(build({ namedSockets: names }), /zgui\.capabilities\.namedSockets/);
+  }
   await assert.rejects(build({ imagePrefixes: ["/var/../media"] }), /zgui\.capabilities\.imagePrefixes/);
   await assert.rejects(build({ unknown: true }), /zgui\.capabilities\.unknown/);
 });

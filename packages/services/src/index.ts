@@ -5,6 +5,8 @@ declare const globalThis: {
   readonly __zguiServices: {
     readTextAsset(path: string): HostRequest<string>;
     registerImageAsset(path: string): ImageHandle;
+    getResolvedCapabilities(): ResolvedCapabilities;
+    getAuthorizedEndpoint(name: string): string | null;
     connectUnixSocket(path: string, options: UnixSocketOptions): UnixSocket;
     spawnCommand(
       program: string,
@@ -18,6 +20,23 @@ declare const globalThis: {
 /** A native service failure; codes are host-defined, not a closed enumeration. */
 export interface HostServiceError extends Error {
   readonly code: string;
+}
+
+/** Path authority resolved once for the active session from its sealed manifest. */
+export interface ResolvedCapabilities {
+  readonly imagePrefixes: readonly string[];
+  readonly unixSockets: readonly string[];
+  readonly namedSockets: Readonly<Record<string, string | null | undefined>>;
+}
+
+/** Return fresh copies of the session's resolved path declarations. */
+export function getResolvedCapabilities(): ResolvedCapabilities {
+  return globalThis.__zguiServices.getResolvedCapabilities();
+}
+
+/** Return a declared endpoint, or null if unbound. Undeclared names throw E_CAPABILITY. */
+export function getAuthorizedEndpoint(name: string): string | null {
+  return globalThis.__zguiServices.getAuthorizedEndpoint(name);
 }
 
 /** A host-owned asynchronous operation; cancellation does not return a Promise. */

@@ -184,6 +184,83 @@ impl AppHandler for ReloadGate {
 }
 
 #[test]
+fn reload_resolves_the_replacement_manifest_with_the_same_launch_bindings() -> TestResult {
+    use crate::package::Capabilities;
+    use serde_json::{Value, json};
+    use zgui_platform_headless::Headless;
+
+    const SOURCE: &str = r#"
+        export const hostApiVersion = 1;
+        const resolutions = __zguiServices.getResolvedCapabilities();
+        const [name] = Object.keys(resolutions.namedSockets);
+        const endpoint = __zguiServices.getAuthorizedEndpoint(name);
+        export function mount(root) {
+            const result = JSON.stringify({ resolutions, endpoint });
+            __zgui.insertNode(root, __zgui.createTextNode(result), null);
+            return () => __zgui.clearRoot(root);
+        }
+    "#;
+    let paths = Fixture::new("", "");
+    let directory = &paths.package().directory;
+    let [old_named, new_named, old_unix, new_unix, old_images, new_images] =
+        ["before.sock", "after.sock", "old.sock", "new.sock", "old-media", "new-media"]
+            .map(|name| directory.join(name).into_os_string().into_string().expect("UTF-8 fixture path"));
+    let first = Fixture::new(SOURCE, "").with_capabilities(Capabilities {
+        named_sockets: vec!["before".into()],
+        unix_sockets: vec![old_unix.clone()],
+        image_prefixes: vec![old_images.clone()],
+        ..Default::default()
+    });
+    let second = Fixture::new(SOURCE, "").with_capabilities(Capabilities {
+        named_sockets: vec!["after".into()],
+        unix_sockets: vec![new_unix.clone()],
+        image_prefixes: vec![new_images.clone()],
+        ..Default::default()
+    });
+    let bindings = BTreeMap::from([("before".into(), old_named.clone()), ("after".into(), new_named.clone())]);
+    let pending = Rc::new(RefCell::new(Vec::new()));
+    let roots = pending.clone();
+    let native = zgui::app().with_renderer(Box::new(|_, target| {
+        let mut renderer = zgui_testkit_scene::CaptureRenderer::new();
+        zgui::render::Renderer::configure(&mut renderer, target);
+        Ok(Box::new(renderer))
+    })).into_handler(move || Root(roots.clone()))?.into_runtime();
+    let mut application = Application::new(native, pending, Some(first.package()), bindings)?;
+    let cx = Headless::new();
+    application.surfaces_available(&cx);
+
+    let snapshot = |session: &Session| -> TestResult<Value> {
+        let region = session.primary_region();
+        Ok(serde_json::from_str(&region.dom.text_content(region.root))?)
+    };
+    let result = (|| -> TestResult {
+        let first_session = application.host.sessions().next().ok_or("initial session did not mount")?.clone();
+        assert_eq!(snapshot(&first_session)?, json!({
+            "resolutions": {"namedSockets": {"before": old_named}, "unixSockets": [old_unix], "imagePrefixes": [old_images]},
+            "endpoint": old_named
+        }), "initial generation sees only its manifest grants");
+
+        let document = first_session.primary_region().document;
+        let outcome = application.replace_session(&cx, document, SessionModule::package(second.package()));
+        assert!(matches!(outcome, ReloadOutcome::Mounted { generation, .. } if generation == first_session.generation + 1), "{outcome:?}");
+        let second_session = application.host.session(document).ok_or("replacement session did not mount")?;
+        assert_eq!(snapshot(second_session)?, json!({
+            "resolutions": {"namedSockets": {"after": new_named}, "unixSockets": [new_unix], "imagePrefixes": [new_images]},
+            "endpoint": new_named
+        }), "replacement sees its new grants and none of the old grants");
+        assert_eq!(first_session.counts(), ResourceCounts::default(), "the predecessor retires cleanly");
+        Ok(())
+    })();
+    application.shutting_down(&cx);
+    let failure = application.failure.clone();
+    drop(application);
+    zgui::reactive::shutdown();
+    result?;
+    if let Some(error) = failure.borrow_mut().take() { return Err(error.into()); }
+    Ok(())
+}
+
+#[test]
 #[ignore = "opens a real Wayland window; requires an unlocked desktop and Node dependencies"]
 fn native_full_reload() -> TestResult {
     if std::env::var("ZGUI_PLATFORM").as_deref() != Ok("wayland") { return Err("run with ZGUI_PLATFORM=wayland".into()); }
@@ -208,7 +285,7 @@ fn native_full_reload() -> TestResult {
         .with_size(760.0, 560.0).with_stylesheet(":root { background: #171b24; color: #edf2fa; font-size: 20px; padding: 16px; }")
         .into_handler(move || Root(roots.clone()))?.into_runtime();
     let native_failure = native.failure();
-    let inner = Application::new(native, pending, Some(good.clone()))?;
+    let inner = Application::new(native, pending, Some(good.clone()), Default::default())?;
     let failure = inner.failure.clone();
     let failures = Rc::new(RefCell::new(Vec::new()));
     let completed = Rc::new(Cell::new(false));

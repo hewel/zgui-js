@@ -31,6 +31,10 @@
         "sessionLock": { "type": "boolean", "default": false },
         "imagePrefixes": { "$ref": "#/$defs/hostPaths", "default": [] },
         "unixSockets": { "$ref": "#/$defs/hostPaths", "default": [] },
+        "namedSockets": {
+          "type": "array", "uniqueItems": true, "default": [],
+          "items": { "$ref": "#/$defs/socketName" }
+        },
         "commands": {
           "type": "array", "uniqueItems": true, "default": [],
           "items": { "type": "string", "pattern": "^(?=.*[^ ])[^\\u0000-\\u001f\\u007f-\\u009f]+$" }
@@ -56,11 +60,19 @@
   },
   "$defs": {
     "path": { "type": "string", "minLength": 1, "pattern": "^(?!/)(?!.*[\\\\\\u0000])(?!(?:.*\/)?\\.{1,2}(?:\/|$))[^/]+(?:/[^/]+)*$" },
+    "socketName": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,63}(?![\\s\\S])" },
+    "literalHostPath": {
+      "type": "string",
+      "pattern": "^/(?:$|(?:(?!\\.{1,2}(?:/|$))[^/\\\\\\u0000-\\u001f\\u007f-\\u009f]+/)*(?!\\.{1,2}$)[^/\\\\\\u0000-\\u001f\\u007f-\\u009f]+$)"
+    },
     "hostPaths": {
       "type": "array", "uniqueItems": true,
       "items": {
         "type": "string",
-        "pattern": "^/(?:$|(?:(?!\\.{1,2}(?:/|$))[^/\\\\\\u0000-\\u001f\\u007f-\\u009f]+/)*(?!\\.{1,2}$)[^/\\\\\\u0000-\\u001f\\u007f-\\u009f]+$)"
+        "anyOf": [
+          { "$ref": "#/$defs/literalHostPath" },
+          { "pattern": "^\\$(?:XDG_RUNTIME_DIR|HOME|XDG_DATA_HOME)(?:/(?!\\.{1,2}(?:/|$))(?:\\$WAYLAND_DISPLAY(?=/|$)|(?:[^$/\\\\\\u0000-\\u001f\\u007f-\\u009f]|\\$\\{WAYLAND_DISPLAY\\})+))*(?![\\s\\S])" }
+        ]
       }
     },
     "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }

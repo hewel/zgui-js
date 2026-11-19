@@ -44,9 +44,9 @@ async function setup(t) {
     async build(name, source, capabilities) {
       return buildFixtureApp(path.join(temp.dir, name), name, source, { rawSource: true, assets, capabilities });
     },
-    async run(name, bundle, images, allowFailure = false) {
+    async run(name, bundle, images, allowFailure = false, runtimeEnvironment) {
       const fixture = path.join(temp.dir, `${name}-fixture.json`);
-      await writeJson(fixture, { schemaVersion: 1, id: name, services: { images }, events: [] });
+      await writeJson(fixture, { schemaVersion: 1, id: name, services: { images }, events: [], runtimeEnvironment });
       return runScenario({ projectDir: temp.dir, name, bundle, fixture, allowFailure,
         requiredCapabilities: ["pixels", "assets.native-readiness"], steps: [capture] });
     },
@@ -73,6 +73,22 @@ test("preview draws deterministic file and blob bytes, never ambient files", { t
   const noAuthority = await build("no-image-authority", appSource({ file }));
   const denied = await run("denied-file", noAuthority, { files: images.files }, true);
   assert.equal(denied.result.firstError?.code, "E_ASSET_FAILED");
+});
+
+test("preview images use the resolved runtime template without a host directory", async t => {
+  const { build, run } = await setup(t);
+  const file = "file:///zgui-preview-only/runtime/z-shell/media/sample.svg";
+  const bundle = await build("portable-images", appSource({ file }), {
+    imagePrefixes: ["$XDG_RUNTIME_DIR/z-shell/media"],
+  });
+  const images = { files: { [file]: "assets/fixture-file.svg" } };
+  const { out } = await run("resolved-image", bundle, images, false, { xdgRuntimeDir: "/zgui-preview-only/runtime" });
+  const png = await readPng(path.join(out, "captures/image.png"));
+  const { x, y, width, height } = getNode(await readTree(out, "image"), "file").boundsDevice;
+  assert.deepEqual(pixelAt(png, Math.floor(x + width / 2), Math.floor(y + height / 2)), [0, 255, 0, 255]);
+  const { result } = await run("missing-runtime-root", bundle, images, true);
+  assert.equal(result.firstError?.code, "E_CAPABILITY");
+  assert.match(result.firstError?.message, /XDG_RUNTIME_DIR/);
 });
 
 test("preview reports leaked Image handles as teardown failures", async t => {

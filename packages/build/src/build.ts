@@ -20,6 +20,7 @@ type Capabilities = {
   sessionLock?: boolean;
   imagePrefixes?: string[];
   unixSockets?: string[];
+  namedSockets?: string[];
   commands?: string[];
   controlChannel?: boolean;
 };
@@ -307,15 +308,23 @@ function capabilityString(value: unknown): value is string {
   return nonspace;
 }
 
-function absoluteCapabilityPath(value: string): boolean {
+function capabilityPath(value: string): boolean {
+  if (value === "/") return true;
+  if (value.includes("\\")) return false;
+  const parts = value.split("/");
+  const root = parts.shift();
+  const template = root === "$XDG_RUNTIME_DIR" || root === "$HOME" || root === "$XDG_DATA_HOME";
   return (
-    value === "/" ||
-    (value.startsWith("/") &&
-      !value.includes("\\") &&
-      value
-        .slice(1)
-        .split("/")
-        .every(part => part && part !== "." && part !== ".."))
+    (root === "" || template) &&
+    parts.every(
+      part =>
+        part !== "" &&
+        part !== "." &&
+        part !== ".." &&
+        (!template ||
+          part === "$WAYLAND_DISPLAY" ||
+          !part.replaceAll("${WAYLAND_DISPLAY}", "").includes("$")),
+    )
   );
 }
 
@@ -336,17 +345,17 @@ function parseCapabilities(input: unknown): Capabilities | undefined {
         break;
       case "imagePrefixes":
       case "unixSockets":
-      case "commands": {
-        const paths = key !== "commands";
-        if (
-          !Array.isArray(value) ||
-          !value.every(
-            (item: unknown) => capabilityString(item) && (!paths || absoluteCapabilityPath(item)),
-          )
-        )
-          throw new Error(
-            `${field} must be an array of ${paths ? "canonical absolute paths" : "nonempty strings"}`,
-          );
+      case "commands":
+      case "namedSockets": {
+        const valid =
+          key === "commands"
+            ? capabilityString
+            : key === "namedSockets"
+              ? (item: unknown) =>
+                  capabilityString(item) && /^[A-Za-z][A-Za-z0-9_-]{0,63}$/.test(item)
+              : (item: unknown) => capabilityString(item) && capabilityPath(item);
+        if (!Array.isArray(value) || !value.every(valid))
+          throw new Error(`${field} contains invalid entries`);
         if (new Set(value).size !== value.length) throw new Error(`${field} contains duplicates`);
         if (value.length) capabilities[key] = value;
         break;

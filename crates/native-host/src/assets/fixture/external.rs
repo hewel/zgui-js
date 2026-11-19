@@ -244,10 +244,7 @@ impl Services {
 
 impl SocketScript {
     fn validate(&self) -> Result<(), String> {
-        let canonical = self.path.strip_prefix('/').is_some_and(|path| {
-            !path.contains('\\') && path.split('/').all(|part| !matches!(part, "" | "." | ".."))
-        });
-        if !canonical || self.path.chars().any(char::is_control) {
+        if self.path == "/" || !crate::runtime_paths::canonical_absolute(&self.path) {
             return Err("fixture socket path must be canonical absolute text".into());
         }
         if self.send.len() > MAX_SCRIPT_ITEMS || self.events.len() > MAX_SCRIPT_ITEMS {

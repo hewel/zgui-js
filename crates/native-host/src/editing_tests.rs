@@ -443,7 +443,7 @@ fn native_text_editing() -> TestResult {
     let native = zgui::app().with_title("zgui-js native editing acceptance").with_application_id("dev.zgui.js.native-editing")
         .with_size(800.0, 1000.0).into_handler(move || Root(roots.clone()))?.into_runtime();
     let native_failure = native.failure();
-    let application = Application::new(native, pending, Some(package.clone()))?;
+    let application = Application::new(native, pending, Some(package.clone()), Default::default())?;
     let failure = application.failure.clone();
     let failures = Rc::new(RefCell::new(Vec::new()));
     let completed = Rc::new(Cell::new(false));

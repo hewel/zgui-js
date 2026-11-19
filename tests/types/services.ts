@@ -1,11 +1,13 @@
 import {
   connectUnixSocket,
+  getAuthorizedEndpoint,
+  getResolvedCapabilities,
   loadTextAsset,
   onControlMessage,
   readTextAsset,
   spawnCommand,
 } from "@hewel/zgui-services";
-import type { CommandResult, HostRequest, HostServiceError, ImageHandle } from "@hewel/zgui-services";
+import type { CommandResult, HostRequest, HostServiceError, ImageHandle, ResolvedCapabilities } from "@hewel/zgui-services";
 
 const request: HostRequest<string> = readTextAsset("assets/message.txt");
 const loadedText: Promise<string> = loadTextAsset("assets/message.txt");
@@ -46,6 +48,23 @@ let element: HTMLElement;
 process.cwd();
 // @ts-expect-error The private host binding is not a public ambient global.
 globalThis.__zguiServices.readTextAsset("assets/message.txt");
+
+const resolved: ResolvedCapabilities = getResolvedCapabilities();
+const optionalEndpoint: string | null = getAuthorizedEndpoint("niri");
+if (optionalEndpoint !== null) connectUnixSocket(optionalEndpoint, { framing: "line", onMessage() {} });
+// @ts-expect-error The namespace is keyed by a string name.
+getAuthorizedEndpoint(12);
+// @ts-expect-error A named endpoint can be unbound.
+const requiredEndpoint: string = getAuthorizedEndpoint("niri");
+// @ts-expect-error Image prefixes are readonly.
+resolved.imagePrefixes.push("/tmp");
+// @ts-expect-error Socket paths are readonly.
+resolved.unixSockets[0] = "/tmp/socket";
+// @ts-expect-error Named sockets are readonly.
+resolved.namedSockets.niri = null;
+const missingEntries: typeof resolved.namedSockets = { missing: undefined };
+void missingEntries;
+void requiredEndpoint;
 
 const socket = connectUnixSocket("/run/example.sock", {
   framing: "length",

@@ -1,5 +1,6 @@
 use std::{collections::BTreeMap, error::Error, fs, path::{Path, PathBuf}};
 use crate::bounded_fs::{self, BoundedReadError};
+use crate::runtime_paths::{canonical_absolute, socket_name, template};
 use sha2::{Digest, Sha256};
 use std::fmt::Write as _;
 
@@ -38,12 +39,15 @@ pub struct Capabilities {
     /// Allows the session to request a compositor session lock.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub session_lock: bool,
-    /// Absolute directory prefixes permitted for read-only `file://` images.
+    /// Literal or templated directory prefixes for read-only `file://` images.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub image_prefixes: Vec<String>,
-    /// Exact absolute Unix socket paths the session may connect to.
+    /// Literal or templated exact Unix socket paths.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub unix_sockets: Vec<String>,
+    /// Names of sockets that may be bound by the host at launch.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub named_sockets: Vec<String>,
     /// Exact command names the session may invoke.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub commands: Vec<String>,
@@ -54,11 +58,14 @@ pub struct Capabilities {
 }
 
 impl Capabilities {
+    /// Whether the package requests no host authority.
+    #[must_use]
     pub(crate) fn is_empty(&self) -> bool {
         !self.shell_surfaces
             && !self.session_lock
             && self.image_prefixes.is_empty()
             && self.unix_sockets.is_empty()
+            && self.named_sockets.is_empty()
             && self.commands.is_empty()
             && !self.control_channel
     }
@@ -67,15 +74,17 @@ impl Capabilities {
         for (name, entries) in [
             ("imagePrefixes", &self.image_prefixes),
             ("unixSockets", &self.unix_sockets),
+            ("namedSockets", &self.named_sockets),
             ("commands", &self.commands),
         ] {
             let mut seen = std::collections::BTreeSet::new();
             for entry in entries {
-                if entry.trim_matches(' ').is_empty()
-                    || entry.chars().any(char::is_control)
-                    || (name != "commands" && !canonical_host_path(entry))
-                    || !seen.insert(entry)
-                {
+                let valid = match name {
+                    "commands" => !entry.trim_matches(' ').is_empty() && !entry.chars().any(char::is_control),
+                    "namedSockets" => socket_name(entry),
+                    _ => canonical_absolute(entry) || template(entry).is_some(),
+                };
+                if !valid || !seen.insert(entry) {
                     return Err(
                         format!("invalid or duplicate capabilities.{name} entry: {entry:?}").into(),
                     );
@@ -84,14 +93,6 @@ impl Capabilities {
         }
         Ok(())
     }
-}
-
-fn canonical_host_path(path: &str) -> bool {
-    path == "/"
-        || path.strip_prefix('/').is_some_and(|rest| {
-            !rest.contains('\\')
-                && rest.split('/').all(|part| !matches!(part, "" | "." | ".."))
-        })
 }
 
 crate::schema::object_struct! {
@@ -447,6 +448,22 @@ mod tests {
         assert!(loaded.manifest.capabilities.session_lock);
         assert_ne!(old.manifest.build_id, loaded.manifest.build_id);
 
+        let mut value = manifest(&fixture);
+        value["capabilities"] = serde_json::json!({
+            "imagePrefixes": ["$XDG_RUNTIME_DIR/z-shell/media"],
+            "unixSockets": ["$XDG_RUNTIME_DIR/z-shell/host-${WAYLAND_DISPLAY}.sock", "$HOME/$WAYLAND_DISPLAY", "/run/literal-$UNKNOWN"],
+            "namedSockets": ["niri"]
+        });
+        fixture.save(value.clone());
+        let portable = Package::load(&fixture.0).expect("portable manifest loads without host bindings");
+        assert_eq!(serde_json::to_value(&portable.manifest.capabilities).expect("serializable authority"), value["capabilities"], "templates remain sealed verbatim");
+        value["capabilities"]["namedSockets"] = serde_json::json!(["other"]);
+        let sealed = manifest(&fixture);
+        value["buildId"] = sealed["buildId"].clone();
+        fs::write(fixture.0.join("manifest.json"), serde_json::to_vec(&value).expect("serialize tampered package")).expect("write tampered package");
+        assert!(Package::load(&fixture.0).err().expect("tampered name rejected").to_string().contains("package integrity mismatch"), "named sockets are sealed");
+        fixture.save(sealed);
+
         let mut tampered = manifest(&fixture);
         tampered["capabilities"]["imagePrefixes"] = serde_json::json!(["/"]);
         fs::write(fixture.0.join("manifest.json"), serde_json::to_vec(&tampered).unwrap()).unwrap();
@@ -455,14 +472,19 @@ mod tests {
         for invalid in [
             serde_json::json!({"imagePrefixes":["/var/../media"]}),
             serde_json::json!({"imagePrefixes":["/media","/media"]}),
+            serde_json::json!({"unixSockets":["$HOME/../service"]}),
+            serde_json::json!({"unixSockets":["$HOME/host-${OTHER}.sock"]}),
+            serde_json::json!({"unixSockets":["$HOME/host-$WAYLAND_DISPLAY.sock"]}),
+            serde_json::json!({"namedSockets":["niri","niri"]}),
+            serde_json::json!({"namedSockets":["2socket"]}),
             serde_json::json!({"sessionLock":"true"}),
             serde_json::json!({"filesystem":true}),
             serde_json::json!([]),
         ] {
             let mut bad = manifest(&fixture);
-            bad["capabilities"] = invalid;
+            bad["capabilities"] = invalid.clone();
             fixture.save(bad);
-            assert!(Package::load(&fixture.0).is_err());
+            assert!(Package::load(&fixture.0).is_err(), "{invalid:?}");
         }
     }
 

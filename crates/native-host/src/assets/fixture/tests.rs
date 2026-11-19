@@ -1,5 +1,5 @@
 use super::*;
-use crate::{assets::AssetSource, test_package::Fixture, work::Work};
+use crate::{assets::AssetSource, test_package::Fixture, work::{Work, WorkSession}};
 use js_runtime::{JsRuntime, RuntimeLimits};
 use std::{sync::Arc, time::Duration};
 use zgui::{platform::{SurfaceId, VirtualClock, WakeReason, Waker}, view::{HostHandle, stub::StubHost}};
@@ -18,6 +18,28 @@ fn definition(services: Value, events: Value) -> FixtureDefinition {
     fixture.validate().unwrap();
     fixture
 }
+
+#[test]
+fn fixture_runtime_environment_rejects_invalid_and_duplicate_bindings() {
+    let fixture = |runtime| format!(r#"{{"schemaVersion":1,"id":"bindings","services":{{}},"events":[],"runtimeEnvironment":{runtime}}}"#);
+    for runtime in [
+        r#"{"xdgRuntimeDir":"relative"}"#,
+        r#"{"homeDir":"/synthetic/../home"}"#,
+        r#"{"xdgDataHome":"$HOME/.local/share"}"#,
+        r#"{"waylandDisplay":"foo/bar"}"#,
+        r#"{"waylandDisplay":".."}"#,
+        r#"{"waylandDisplay":"wayland\u0000"}"#,
+        r#"{"namedSockets":{"bad name":"/socket"}}"#,
+        r#"{"namedSockets":{"niri":"/run/./socket"}}"#,
+        r#"{"namedSockets":{"niri":"/one","niri":"/two"}}"#,
+    ] {
+        let result = serde_json::from_str::<FixtureDefinition>(&fixture(runtime));
+        assert!(result.is_err() || result.is_ok_and(|fixture| fixture.validate().is_err()), "accepted {runtime}");
+    }
+    let input = fixture(r#"{"xdgRuntimeDir":"/synthetic/run","homeDir":"/synthetic/home","waylandDisplay":"wayland-2","namedSockets":{"niri":"/synthetic/niri.sock"}}"#);
+    serde_json::from_str::<FixtureDefinition>(&input).expect("read valid runtime environment")
+        .validate().expect("synthetic directories need not exist");
+}
 fn assets(latency: u32) -> Value { json!({"provider":"mock-text-assets-v1","latencyMs":latency,"initialState":{"assets":{"test.txt":{}}}}) }
 impl Harness {
     fn new(definition: FixtureDefinition) -> Self {
@@ -25,8 +47,10 @@ impl Harness {
         let clock = Arc::new(VirtualClock::new());
         let environment = Environment::new(clock.clone(), Some(1000), 7);
         let runtime = FixtureRuntime::new(definition, environment.clone());
-        let work = Work::new(HostHandle::from_rc(Rc::new(StubHost::default())), Some(package.package()), 7,
-            Arc::new(NoWake), SurfaceId::new(7), AssetSource::Fixture(runtime.clone()));
+        let work = Work::new(
+            WorkSession { package: Some(package.package()), generation: 7, assets: AssetSource::Fixture(runtime.clone()), resolved: Default::default() },
+            HostHandle::from_rc(Rc::new(StubHost::default())), SurfaceId::new(7), Arc::new(NoWake),
+        );
         let mut engine = JsRuntime::new(RuntimeLimits::default()).unwrap();
         engine.with_context(|ctx| { environment.install(&ctx)?; work.install(&ctx)?; ctx.eval::<(), _>("globalThis.seen = []; globalThis.errors = [];") }).unwrap();
         work.mounting(); work.mounted();
@@ -463,8 +487,10 @@ fn retired_generation_preserves_fixture_ledger_events_and_new_registrations() {
     let old_ids: Vec<_> = h.runtime.state.borrow().calls.keys().copied().collect();
     h.work.finish_stop();
     assert_eq!(h.work.counts(),(0,0,0));
-    let work=Work::new(HostHandle::from_rc(Rc::new(StubHost::default())),Some(h._package.package()),8,
-        Arc::new(NoWake),SurfaceId::new(8),AssetSource::Fixture(h.runtime.clone()));
+    let work = Work::new(
+        WorkSession { package: Some(h._package.package()), generation: 8, assets: AssetSource::Fixture(h.runtime.clone()), resolved: Default::default() },
+        HostHandle::from_rc(Rc::new(StubHost::default())), SurfaceId::new(8), Arc::new(NoWake),
+    );
     h.engine.with_context(|ctx|work.install(&ctx)).unwrap();
     work.mounting(); work.mounted();
     h.work=work;

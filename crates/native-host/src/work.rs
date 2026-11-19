@@ -1,9 +1,10 @@
 //! Owner-thread roots and registrations; workers receive only owned service requests.
 use std::{cell::{Cell, OnceCell, RefCell}, collections::{HashMap, VecDeque, hash_map::Entry}, fmt::Write, rc::{Rc, Weak}, sync::{Arc, atomic::{AtomicBool, Ordering}}, time::Duration};
 use host_services::Completion;
-use rquickjs::{Ctx, Exception, Function, Object, Persistent, Value, function::{Func, Opt, Rest}, object::Property};
+use rquickjs::{Array, Ctx, Exception, Function, IntoJs, Object, Persistent, Value, function::{Func, Opt, Rest}, object::Property};
 use zgui::{platform::{SurfaceId, WakeReason, Waker}, runtime::{AppTimers, ImageBlobs}, view::{HostHandle, host::{FrameRequestId, Repeat, TimerId}}, vocab::Timestamp};
 use crate::{assets::{AssetError, AssetProvider, AssetSource, Delivery, MAX_SAFE_ID}, package::Package, shell::Shell};
+use crate::runtime_capabilities::ResolvedCapabilities;
 
 mod external;
 
@@ -29,6 +30,14 @@ enum Scheduler {
     Shell { timers: AppTimers, frame_host: RefCell<Option<HostHandle>> },
 }
 
+/// Package and service authority owned by one generation of Work.
+pub(crate) struct WorkSession {
+    pub(crate) package: Option<Rc<Package>>,
+    pub(crate) generation: u64,
+    pub(crate) assets: AssetSource,
+    pub(crate) resolved: ResolvedCapabilities,
+}
+
 pub(crate) struct Work {
     registrations: RefCell<HashMap<u64, Registration>>,
     ready: RefCell<VecDeque<ScheduledCall>>,
@@ -40,22 +49,25 @@ pub(crate) struct Work {
     provider: Box<dyn AssetProvider>,
     image_blobs: ImageBlobs,
     external: external::External,
+    resolved: ResolvedCapabilities,
     wake: Arc<dyn Fn() + Send + Sync>,
 }
 
 impl Work {
-    pub(crate) fn new(host: HostHandle, package: Option<Rc<Package>>, generation: u64, waker: Arc<dyn Waker>, surface: SurfaceId, assets: AssetSource) -> Rc<Self> {
+    /// Builds the owner-thread services for a primary surface.
+    pub(crate) fn new(session: WorkSession, host: HostHandle, surface: SurfaceId, waker: Arc<dyn Waker>) -> Rc<Self> {
         let wake: Arc<dyn Fn() + Send + Sync> = Arc::new(move || waker.wake(WakeReason::ReactiveWork { surfaces: vec![surface].into_boxed_slice() }));
-        Self::with_scheduler(package, generation, assets, wake, Scheduler::Window(host))
+        Self::with_scheduler(session, wake, Scheduler::Window(host))
     }
 
     /// Uses application timing and wakes that remain valid without surfaces.
-    pub(crate) fn new_shell(package: Option<Rc<Package>>, generation: u64, waker: Arc<dyn Waker>, assets: AssetSource, timers: AppTimers) -> Rc<Self> {
+    pub(crate) fn new_shell(session: WorkSession, timers: AppTimers, waker: Arc<dyn Waker>) -> Rc<Self> {
         let wake: Arc<dyn Fn() + Send + Sync> = Arc::new(move || waker.wake(WakeReason::AppWork));
-        Self::with_scheduler(package, generation, assets, wake, Scheduler::Shell { timers, frame_host: RefCell::new(None) })
+        Self::with_scheduler(session, wake, Scheduler::Shell { timers, frame_host: RefCell::new(None) })
     }
 
-    fn with_scheduler(package: Option<Rc<Package>>, generation: u64, assets: AssetSource, wake: Arc<dyn Fn() + Send + Sync>, scheduler: Scheduler) -> Rc<Self> {
+    fn with_scheduler(session: WorkSession, wake: Arc<dyn Fn() + Send + Sync>, scheduler: Scheduler) -> Rc<Self> {
+        let WorkSession { package, generation, assets, resolved } = session;
         let external = external::External::new(package.clone(), &assets);
         Rc::new(Self {
             registrations: RefCell::new(HashMap::new()), ready: RefCell::new(VecDeque::new()), requests: RefCell::new(HashMap::new()),
@@ -63,6 +75,7 @@ impl Work {
             provider: assets.bind(package, generation, wake.clone()),
             image_blobs: ImageBlobs::new(generation),
             external,
+            resolved,
             wake,
         })
     }
@@ -102,6 +115,10 @@ impl Work {
     }
 
     pub(crate) fn image_blobs(&self) -> &ImageBlobs { &self.image_blobs }
+
+    /// Returns the path grants used by service admission and native images.
+    #[must_use]
+    pub(crate) fn resolved_capabilities(&self) -> &ResolvedCapabilities { &self.resolved }
 
     /// Registers host-owned encoded bytes directly in the active session.
     pub(crate) fn register_image_bytes(&self, bytes: Arc<[u8]>) -> std::io::Result<String> {
@@ -217,9 +234,34 @@ impl Work {
             let bytes = owner.provider.image_asset(&path).map_err(|error| owner.asset_error(&ctx, error))?;
             owner.image_handle(&ctx, bytes, ImageLease::Package)
         }))?;
+        let weak = Rc::downgrade(self);
+        services.prop("getResolvedCapabilities", data_property(Func::from(move |ctx: Ctx<'js>| {
+            owner(&weak, &ctx)?.capability_snapshot(&ctx)
+        })))?;
         self.install_external(&services)?;
         ctx.globals().set("__zguiServices", services)?;
         Ok(())
+    }
+
+    fn capability_snapshot<'js>(&self, ctx: &Ctx<'js>) -> rquickjs::Result<Object<'js>> {
+        let paths = |paths: &[String]| -> rquickjs::Result<Array<'js>> {
+            let array = Array::new(ctx.clone())?;
+            for (index, path) in paths.iter().enumerate() {
+                let index = u32::try_from(index).map_err(|_| Exception::throw_range(ctx, "too many capability paths"))?;
+                array.as_object().prop(index, data_property(path.as_str()))?;
+            }
+            Ok(array)
+        };
+        let snapshot = Object::new(ctx.clone())?;
+        let named = Object::new(ctx.clone())?;
+        named.set_prototype(None)?;
+        for (name, endpoint) in self.resolved.named_sockets() {
+            named.prop(name.as_str(), data_property(endpoint_value(ctx, endpoint.as_deref())?))?;
+        }
+        snapshot.prop("imagePrefixes", data_property(paths(self.resolved.image_prefixes())?))?;
+        snapshot.prop("unixSockets", data_property(paths(self.resolved.unix_sockets())?))?;
+        snapshot.prop("namedSockets", data_property(named))?;
+        Ok(snapshot)
     }
 
     fn register<'js>(self: &Rc<Self>, ctx: &Ctx<'js>, callback: Function<'js>, delay: Option<Duration>) -> rquickjs::Result<f64> {
@@ -392,6 +434,13 @@ fn registration_id(ctx: &Ctx<'_>, value: f64) -> rquickjs::Result<u64> {
     }
     Ok(value as u64)
 }
+fn endpoint_value<'js>(ctx: &Ctx<'js>, endpoint: Option<&str>) -> rquickjs::Result<Value<'js>> {
+    match endpoint {
+        Some(path) => path.into_js(ctx),
+        None => Ok(Value::new_null(ctx.clone())),
+    }
+}
+
 pub(crate) fn service_error<'js>(ctx: &Ctx<'js>, code: &str, message: &str) -> rquickjs::Result<Object<'js>> {
     let error = Exception::from_message(ctx.clone(), message)?.into_object();
     error.prop("code", data_property(code))?;

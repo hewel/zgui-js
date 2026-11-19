@@ -191,7 +191,7 @@ impl SessionSurface for RuntimeSurface<'_> {
         let window = self.runtime.windows_mut().iter_mut().find(|window| window.document_id() == document)
             .expect("mounting cannot destroy its native window");
         let package = session.package();
-        let prefixes = package.map_or(&[][..], |package| package.manifest.capabilities.image_prefixes.as_slice());
+        let prefixes = session.resolved_capabilities().image_prefixes();
         let policy = match (self.images, package) {
             (ImageChoice::Live, Some(package)) => ImagePolicy::package_assets(package.image_assets()).with_file_prefixes(prefixes),
             (ImageChoice::Live, None) => ImagePolicy::default(),
