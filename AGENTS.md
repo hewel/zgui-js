@@ -25,6 +25,7 @@
 
 - `tests/build/native-fixture.mjs` implements all 23 `__zgui` ops with Bridge-turn detached-node invalidation, lease inspection, `FocusIn`/`FocusOut` bubbling, and closure-captured event cancellation; verify remounts, Portal paint/hit escape, first-paint Popper anchor geometry (checking settled surface/arrow gaps after entrance animations), styled-frame `overlay.ts` exit deferral, parked-pointer menu autofocus, settled theme/transition captures, and glyph rasterization (`tests/preview/vector-text.test.mjs`) through `tests/preview/harness.mjs`.
 - Run vendored Rust checks with `cargo test -j 4 --manifest-path vendor/<crate>/Cargo.toml ... --offline` (`bun run test:vendor`); these crates are excluded from the root workspace.
+- On Nix-based Linux hosts, run Rust builds and headless preview tests inside the root devShell (`nix-shell --run "<cmd>"` via [`shell.nix`](shell.nix)), which provides matching `pkg-config` metadata, native libraries (`libxkbcommon`, `fontconfig`, `freetype`, `vulkan-loader`, `wayland`), and Mesa Vulkan ICDs (`VK_DRIVER_FILES`).
 
 ## 6. Component Map & Vocabulary
 
