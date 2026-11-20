@@ -596,7 +596,7 @@ impl ImageLoader {
             }
             self.kicked += 1;
             self.next_generation += 1;
-            kick_probe(key.clone(), self.next_generation, &self.completed);
+            kick_probe(key.clone(), self.next_generation, &self.completed, self.limits);
             let mut entry = Entry::probing();
             entry.generation = self.next_generation;
             entry
@@ -1198,9 +1198,9 @@ fn intrinsic_of(native: Size<u32, Device>) -> Intrinsic {
 /// The task is spawned on the UI thread and owns nothing but the queue; the read itself runs on
 /// the blocking pool. The wake edge when it finishes is what requests the frame whose settle will
 /// apply the result.
-fn kick_probe(key: SourceKey, generation: u64, completed: &DecodeQueue) {
+fn kick_probe(key: SourceKey, generation: u64, completed: &DecodeQueue, limits: zgui_image::Limits) {
     let input = completed.input(&key);
-    completed.start(key, generation, move |key| Arrival::Probe(input.probe(key.name())));
+    completed.start(key, generation, move |key| Arrival::Probe(input.probe(key.name(), limits)));
 }
 
 /// Starts one decode off the frame thread, landing its result in `completed`.

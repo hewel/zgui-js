@@ -175,6 +175,34 @@ fn a_caret_takes_its_own_colour_and_falls_back_to_the_text() {
     );
 }
 
+#[test]
+fn an_empty_flex_field_still_plans_a_caret_when_focused() {
+    const FLEX_FIELD_CSS: &str = "root { display: block; width: 400px; height: 300px }
+        .flex-input { display: flex; align-items: center; width: 200px; height: 40px;
+                      color: rgb(10, 20, 30) }";
+    let mut harness = support::app_with_text(FLEX_FIELD_CSS, |cx: &mut zgui_view::BuildCx<'_>| {
+        use zgui_view::{IntoView, View};
+        let view = zgui_elements::field().class("flex-input").into_view();
+        Box::new(view.build(cx)) as Box<dyn zgui_view::Anchor>
+    });
+    harness.settle(8);
+
+    harness.deliver_to_first(SurfaceEvent::Pointer {
+        event: PointerEvent::mouse(Point::new(CssPx(20.0), CssPx(20.0))),
+        action: PointerAction::Pressed,
+        modifiers: Modifiers::NONE,
+        timestamp: Timestamp::ORIGIN,
+    });
+    harness.settle(8);
+    harness.advance(FRAME);
+    harness.settle(8);
+
+    assert!(
+        caret_color(&harness).is_some(),
+        "an empty <field> styled with display: flex must still place a blinking caret",
+    );
+}
+
 // ---- user-select ------------------------------------------------------------------------------
 
 /// A field, and a field that refuses selection.

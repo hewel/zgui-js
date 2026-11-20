@@ -172,6 +172,36 @@ pub fn build_subtree(
     Some(Subtree { root, reparented })
 }
 
+/// Whether `index` is an editable text-control element (`<field>` or `<editor>`) whose direct
+/// text children represent the editable buffer and must keep an inline formatting context even
+/// when empty or whitespace-only inside a `display: flex` or `display: grid` control.
+pub(crate) fn preserves_empty_text_children(document: &Document, index: NodeIndex) -> bool {
+    let record = document.store().core(index);
+    record.kind() == NodeKind::Element
+        && matches!(record.local_name().as_str(), "field" | "editor")
+}
+
+/// Whether `text_index` lives directly inside an editable text-control host (`<field>` or
+/// `<editor>`), traversing past any intermediate `display: contents` wrappers.
+pub(crate) fn in_editable_text_host(document: &Document, text_index: NodeIndex) -> bool {
+    let mut cursor = document.store().core(text_index).parent();
+    while let Some(parent) = cursor {
+        if preserves_empty_text_children(document, parent) {
+            return true;
+        }
+        let node = document.node(parent);
+        let is_contents = node.kind() == NodeKind::Element
+            && node
+                .primary_style()
+                .is_some_and(|style| classify(&style).participation == Participation::Contents);
+        if !is_contents {
+            break;
+        }
+        cursor = document.store().core(parent).parent();
+    }
+    false
+}
+
 /// Whether a direct text child of a flex or grid container produces no anonymous item.
 ///
 /// Per CSS Flexbox §4 and CSS Grid §4, an empty text node or a text node containing only
@@ -379,6 +409,7 @@ impl Builder<'_> {
     ) -> Option<Placed> {
         let text = zgui_dom::text::node::text_of(self.document.store(), index)?;
         if matches!(parent_fc, FormattingContext::Flex | FormattingContext::Grid)
+            && !in_editable_text_host(self.document, index)
             && is_ignored_item_text(text, parent_style)
         {
             return None;

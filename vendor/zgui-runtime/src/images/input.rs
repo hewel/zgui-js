@@ -1,10 +1,22 @@
-use std::{io, path::Path, sync::Arc};
+use std::{
+    io,
+    path::Path,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
+    },
+};
 
 use resvg::{tiny_skia, usvg};
 use zgui_geom::{Device, Size};
 use zgui_image::{DecodeError, Decoded, Limits};
 
 use crate::image_policy::files::FileAccess;
+
+/// Maximum decoded byte length of one embedded raster data URI inside an SVG.
+const MAX_SVG_EMBEDDED_BYTES: usize = 4 * 1024 * 1024;
+/// Maximum number of embedded raster images permitted in a single SVG document.
+const MAX_SVG_EMBEDDED_IMAGES: usize = 32;
 
 /// An owned worker job input; preparing it never touches the filesystem.
 pub(super) enum Input {
@@ -17,8 +29,8 @@ pub(super) enum Input {
 }
 
 impl Input {
-    pub(super) fn probe(self, name: &str) -> Result<Size<u32, Device>, DecodeError> {
-        let probe = |bytes: &[u8]| match svg_tree(bytes) {
+    pub(super) fn probe(self, name: &str, limits: Limits) -> Result<Size<u32, Device>, DecodeError> {
+        let probe = |bytes: &[u8]| match svg_tree(bytes, limits) {
             Some(tree) => {
                 let native = tree?.size().to_int_size();
                 Ok(Size::new(native.width(), native.height()))
@@ -39,7 +51,7 @@ impl Input {
         class: u32,
         limits: Limits,
     ) -> Result<Decoded, DecodeError> {
-        let decode = |bytes: &[u8]| match svg_tree(bytes) {
+        let decode = |bytes: &[u8]| match svg_tree(bytes, limits) {
             Some(tree) => rasterize(&tree?, class.min(limits.max_dimension).max(1)),
             None => zgui_image::decode_scaled(bytes, class, limits),
         };
@@ -69,18 +81,19 @@ impl Input {
     }
 }
 
-fn svg_tree(bytes: &[u8]) -> Option<Result<usvg::Tree, DecodeError>> {
+fn svg_tree(bytes: &[u8], limits: Limits) -> Option<Result<usvg::Tree, DecodeError>> {
     let bytes = bytes.strip_prefix(b"\xef\xbb\xbf").unwrap_or(bytes);
-    (bytes.iter().find(|byte| !byte.is_ascii_whitespace()) == Some(&b'<')).then(|| parse_svg(bytes))
+    (bytes.iter().find(|byte| !byte.is_ascii_whitespace()) == Some(&b'<'))
+        .then(|| parse_svg(bytes, limits))
 }
 
-fn parse_svg(bytes: &[u8]) -> Result<usvg::Tree, DecodeError> {
-    use std::sync::atomic::{AtomicBool, Ordering};
-
+fn parse_svg(bytes: &[u8], limits: Limits) -> Result<usvg::Tree, DecodeError> {
     let text = std::str::from_utf8(bytes).map_err(svg_error)?;
     // usvg's convenience parser enables DTDs and accepts compressed input. Use plain XML instead.
     let document = roxmltree::Document::parse(text).map_err(svg_error)?;
     let refused = AtomicBool::new(false);
+    let embedded_count = AtomicUsize::new(0);
+    let embedded_pixels = AtomicU64::new(0);
     let options = usvg::Options {
         resources_dir: None,
         image_href_resolver: usvg::ImageHrefResolver {
@@ -88,10 +101,20 @@ fn parse_svg(bytes: &[u8]) -> Result<usvg::Tree, DecodeError> {
                 refused.store(true, Ordering::Relaxed);
                 None
             }),
-            // The default data resolver recursively parses SVG or sniffs arbitrary image MIME.
-            resolve_data: Box::new(|_, _, _| {
-                refused.store(true, Ordering::Relaxed);
-                None
+            // Allow bounded embedded PNG/JPEG/WebP data URIs (used by Linux icon themes for
+            // raster shadow/glow layers) while refusing nested SVG and unverified formats.
+            resolve_data: Box::new(|mime, data, _| {
+                let resolved = resolve_embedded_raster(
+                    mime,
+                    data,
+                    limits,
+                    &embedded_count,
+                    &embedded_pixels,
+                );
+                if resolved.is_none() {
+                    refused.store(true, Ordering::Relaxed);
+                }
+                resolved
             }),
         },
         ..usvg::Options::default()
@@ -103,6 +126,55 @@ fn parse_svg(bytes: &[u8]) -> Result<usvg::Tree, DecodeError> {
         ));
     }
     Ok(tree)
+}
+
+fn resolve_embedded_raster(
+    mime: &str,
+    data: Arc<Vec<u8>>,
+    limits: Limits,
+    count: &AtomicUsize,
+    total_pixels: &AtomicU64,
+) -> Option<usvg::ImageKind> {
+    if data.is_empty() || data.len() > MAX_SVG_EMBEDDED_BYTES {
+        return None;
+    }
+    if count.fetch_add(1, Ordering::Relaxed) >= MAX_SVG_EMBEDDED_IMAGES {
+        return None;
+    }
+    let kind = match mime.to_ascii_lowercase().as_str() {
+        "image/png" if data.starts_with(b"\x89PNG\r\n\x1a\n") => usvg::ImageKind::PNG(data),
+        "image/jpeg" | "image/jpg" if data.starts_with(&[0xff, 0xd8, 0xff]) => {
+            usvg::ImageKind::JPEG(data)
+        }
+        "image/webp" if data.len() >= 12 && &data[..4] == b"RIFF" && &data[8..12] == b"WEBP" => {
+            usvg::ImageKind::WEBP(data)
+        }
+        _ => return None,
+    };
+    let raw = match &kind {
+        usvg::ImageKind::PNG(bytes)
+        | usvg::ImageKind::JPEG(bytes)
+        | usvg::ImageKind::WEBP(bytes) => bytes.as_slice(),
+        _ => return None,
+    };
+    let probed = zgui_image::probe(raw).ok()?;
+    if probed.width == 0
+        || probed.height == 0
+        || probed.width > limits.max_dimension
+        || probed.height > limits.max_dimension
+    {
+        return None;
+    }
+    let pixels = u64::from(probed.width).checked_mul(u64::from(probed.height))?;
+    let max_total_pixels =
+        u64::from(limits.max_dimension).saturating_mul(u64::from(limits.max_dimension));
+    let next = total_pixels
+        .fetch_add(pixels, Ordering::Relaxed)
+        .saturating_add(pixels);
+    if next > max_total_pixels {
+        return None;
+    }
+    Some(kind)
 }
 
 fn svg_error(error: impl std::fmt::Display) -> DecodeError {
@@ -126,4 +198,113 @@ fn rasterize(tree: &usvg::Tree, max_dimension: u32) -> Result<Decoded, DecodeErr
         size: Size::new(width, height),
         texels: Arc::new(pixmap.take()),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const RED_PNG: &[u8] = include_bytes!("../../tests/fixtures/red2x2.png");
+
+    fn encode_base64(bytes: &[u8]) -> String {
+        const TABLE: &[u8; 64] =
+            b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+        for chunk in bytes.chunks(3) {
+            let b0 = u32::from(chunk[0]);
+            let b1 = chunk.get(1).copied().map_or(0, u32::from);
+            let b2 = chunk.get(2).copied().map_or(0, u32::from);
+            let triple = (b0 << 16) | (b1 << 8) | b2;
+            out.push(TABLE[((triple >> 18) & 0x3f) as usize] as char);
+            out.push(TABLE[((triple >> 12) & 0x3f) as usize] as char);
+            out.push(if chunk.len() > 1 {
+                TABLE[((triple >> 6) & 0x3f) as usize] as char
+            } else {
+                '='
+            });
+            out.push(if chunk.len() > 2 {
+                TABLE[(triple & 0x3f) as usize] as char
+            } else {
+                '='
+            });
+        }
+        out
+    }
+
+    #[test]
+    fn embedded_png_data_uri_renders_non_blank_pixels() {
+        let encoded = encode_base64(RED_PNG);
+        let svg = format!(
+            r#"<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="8" height="8">
+                <image width="8" height="8" xlink:href="data:image/png;base64,{encoded}"/>
+            </svg>"#
+        );
+        let bytes: Arc<[u8]> = Arc::from(svg.into_bytes());
+        let probed = Input::Dynamic(Arc::clone(&bytes))
+            .probe("icon.svg", Limits::default())
+            .expect("probing SVG with embedded PNG succeeds");
+        assert_eq!(probed, Size::new(8, 8));
+
+        let decoded = Input::Dynamic(bytes)
+            .decode("icon.svg", 8, Limits::default())
+            .expect("decoding SVG with embedded PNG succeeds");
+        assert_eq!(decoded.size, Size::new(8, 8));
+        assert!(
+            decoded
+                .texels
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .any(|px| px[0] > 200 && px[1] < 20 && px[2] < 20 && px[3] > 200),
+            "embedded PNG must actually rasterize red pixels into the SVG pixmap"
+        );
+    }
+
+    #[test]
+    fn embedded_raster_enforces_limits_and_magic_bytes() {
+        let encoded = encode_base64(RED_PNG);
+        let svg = format!(
+            r#"<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8">
+                <image width="8" height="8" href="data:image/png;base64,{encoded}"/>
+            </svg>"#
+        );
+        let err = Input::Dynamic(Arc::from(svg.into_bytes()))
+            .decode("icon.svg", 8, Limits { max_dimension: 1 })
+            .expect_err("2x2 embedded PNG exceeds max_dimension=1");
+        assert!(err.to_string().contains("SVG image references"), "{err}");
+
+        let spoofed = encode_base64(b"not a png payload");
+        let spoofed_svg = format!(
+            r#"<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8">
+                <image width="8" height="8" href="data:image/png;base64,{spoofed}"/>
+            </svg>"#
+        );
+        let err = Input::Dynamic(Arc::from(spoofed_svg.into_bytes()))
+            .decode("icon.svg", 8, Limits::default())
+            .expect_err("spoofed PNG magic bytes must be rejected");
+        assert!(err.to_string().contains("SVG image references"), "{err}");
+
+        let gif_svg = format!(
+            r#"<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8">
+                <image width="8" height="8" href="data:image/gif;base64,{}"/>
+            </svg>"#,
+            encode_base64(b"GIF89a\x01\x00\x01\x00")
+        );
+        let err = Input::Dynamic(Arc::from(gif_svg.into_bytes()))
+            .decode("icon.svg", 8, Limits::default())
+            .expect_err("GIF data URIs remain rejected");
+        assert!(err.to_string().contains("SVG image references"), "{err}");
+
+        let mut many_images = String::from(r#"<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8">"#);
+        for _ in 0..=MAX_SVG_EMBEDDED_IMAGES {
+            many_images.push_str(&format!(
+                r#"<image width="2" height="2" href="data:image/png;base64,{encoded}"/>"#
+            ));
+        }
+        many_images.push_str("</svg>");
+        let err = Input::Dynamic(Arc::from(many_images.into_bytes()))
+            .decode("icon.svg", 8, Limits::default())
+            .expect_err("exceeding embedded image count cap must be rejected");
+        assert!(err.to_string().contains("SVG image references"), "{err}");
+    }
 }

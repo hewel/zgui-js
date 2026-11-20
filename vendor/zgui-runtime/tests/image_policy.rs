@@ -242,6 +242,39 @@ fn svg_cannot_resolve_external_or_nested_images() {
 }
 
 #[test]
+fn svg_resolves_embedded_raster_data_uri() {
+    const TABLE: &[u8; 64] =
+        b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut encoded = String::with_capacity(RED.len().div_ceil(3) * 4);
+    for chunk in RED.chunks(3) {
+        let b0 = u32::from(chunk[0]);
+        let b1 = chunk.get(1).copied().map_or(0, u32::from);
+        let b2 = chunk.get(2).copied().map_or(0, u32::from);
+        let triple = (b0 << 16) | (b1 << 8) | b2;
+        encoded.push(TABLE[((triple >> 18) & 0x3f) as usize] as char);
+        encoded.push(TABLE[((triple >> 12) & 0x3f) as usize] as char);
+        encoded.push(if chunk.len() > 1 { TABLE[((triple >> 6) & 0x3f) as usize] as char } else { '=' });
+        encoded.push(if chunk.len() > 2 { TABLE[(triple & 0x3f) as usize] as char } else { '=' });
+    }
+    let svg = format!(
+        r#"<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="64" height="16">
+            <image width="64" height="16" xlink:href="data:image/png;base64,{encoded}"/>
+        </svg>"#
+    );
+    let blobs = ImageBlobs::new(10);
+    let src = blobs.register(Arc::from(svg.into_bytes())).unwrap();
+    let mut app = window_with_policy(&src, CSS, ImagePolicy::package_only([]).with_blobs(blobs));
+    app.settle(8);
+    publish(&mut app);
+    let snapshot = app.app().windows()[0].image_resources();
+    let resource = snapshot.resources.last().unwrap();
+    assert_eq!(resource.state, ImageState::Ready, "{snapshot:?}");
+    assert!(resource.attached_variant.is_some(), "{snapshot:?}");
+    assert!(resource.failure.is_none(), "{snapshot:?}");
+    app.shut_down();
+}
+
+#[test]
 fn a_queued_blob_completion_cannot_attach_after_release() {
     let blobs = ImageBlobs::new(9);
     let src = blobs.register(Arc::from(RED)).unwrap();

@@ -14,7 +14,7 @@ rust-version = "1.90"
 [dependencies]
 rustc-hash = "2.1"
 cssparser = "=0.37.0"
-resvg = { version = "=0.46.0", default-features = false }
+resvg = { version = "=0.46.0", default-features = false, features = ["raster-images"] }
 roxmltree = "=0.21.2"
 thiserror = "2.0.19"
 tracing = "0.1.44"

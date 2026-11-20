@@ -173,6 +173,7 @@ pub(super) fn of(
             NodeKind::Text
                 if matches!(fc, FormattingContext::Flex | FormattingContext::Grid)
                     && !kept.contains_key(&child)
+                    && !crate::boxtree::build::preserves_empty_text_children(document, container)
                     && zgui_dom::text::node::text_of(document.store(), child).is_some_and(
                         |text| crate::boxtree::build::is_ignored_item_text(text, &container_style),
                     )

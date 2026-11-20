@@ -41,7 +41,7 @@ use zgui_bits::Dirty;
 use zgui_dom::side::BoxKey;
 use zgui_dom::{Document, NodeIndex, NodeKey, NodeKind};
 
-use crate::boxtree::build::{Owed, is_ignored_item_text};
+use crate::boxtree::build::{Owed, in_editable_text_host, is_ignored_item_text};
 use crate::boxtree::patch::subtree;
 use crate::node::kind::{BoxKind, FormattingContext};
 use crate::tree::dirty::mark_dirty;
@@ -179,7 +179,8 @@ fn rewrite(
         if matches!(
             node.parent_fc,
             FormattingContext::Flex | FormattingContext::Grid
-        ) && is_ignored_item_text(&text, &node.style)
+        ) && !in_editable_text_host(document, index)
+            && is_ignored_item_text(&text, &node.style)
         {
             return false;
         }

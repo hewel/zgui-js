@@ -388,3 +388,59 @@ fn empty_and_whitespace_text_nodes_generate_no_flex_or_grid_items() {
         1,
     );
 }
+
+#[test]
+fn empty_flex_field_and_editor_preserve_their_text_run_for_caret_placement() {
+    use support::{lay_out, measurer};
+    use zgui_layout::boxtree::patch::{Retext, retext};
+
+    for tag in ["field", "editor"] {
+        let mut fixture = Fixture::new(
+            Element::new("root").children(vec![Element::new(tag)]),
+            "root { display: block; width: 240px; height: 48px }
+             field, editor { display: flex; align-items: center; width: 200px; height: 36px }",
+        );
+        let control = {
+            let store_ref = fixture.document.store();
+            store_ref.core(fixture.root).first_child().expect("control element")
+        };
+        let text_node = {
+            let mut created = None;
+            fixture.edit_and_restyle(|edit| {
+                let text = edit.create_text("");
+                edit.insert_before(control, text, None);
+                created = Some(text);
+            });
+            created.expect("empty text child")
+        };
+
+        let mut store = fixture.box_tree();
+        assert_invariants(&store);
+        let root = store.root().expect("a root");
+        let control_box = store.node(root).children[0];
+        assert_eq!(
+            store.node(control_box).children.len(),
+            1,
+            "empty flex <{tag}> must keep its anonymous text item so caret placement finds an IFC",
+        );
+
+        let mut content = measurer();
+        lay_out(&mut store, &mut content, 240.0, 48.0);
+        let text_box = store.node(control_box).children[0];
+        assert!(
+            store.inline_resolution(text_box).is_some(),
+            "empty flex <{tag}> text box must resolve an inline formatting context",
+        );
+
+        // Typing and then clearing back to empty must stay in place without dropping the text box.
+        fixture.edit_and_restyle(|edit| edit.set_text(text_node, "hi"));
+        let root_index = fixture.document.root_index().expect("root");
+        assert!(matches!(retext(&mut store, &fixture.document, root_index), Retext::Patched(_)));
+        fixture.edit_and_restyle(|edit| edit.set_text(text_node, ""));
+        assert!(
+            matches!(retext(&mut store, &fixture.document, root_index), Retext::Patched(_)),
+            "clearing a flex <{tag}> back to empty must keep its TextRun box in place",
+        );
+        assert_eq!(store.node(control_box).children.len(), 1);
+    }
+}
