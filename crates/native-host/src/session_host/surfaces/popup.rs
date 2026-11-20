@@ -143,17 +143,22 @@ impl ShellWindows {
                 None
             }
         }).collect();
-        for index in indices.into_iter().rev() {
-            let popup = self.popups.remove(index);
-            if !matches!(removal, Removal::Owner) { self.dismissed_popups.insert(popup.id); }
-            let cleanup = session.detach_layer(popup.id);
-            if !close_native_surface(runtime, cx, popup.token, Some(popup.surface)) {
-                return Err("E_TEARDOWN: native popup surface remained open".into());
+        let close = || {
+            for index in indices.into_iter().rev() {
+                let popup = self.popups.remove(index);
+                if !matches!(removal, Removal::Owner) { self.dismissed_popups.insert(popup.id); }
+                let cleanup = session.detach_layer(popup.id);
+                if !close_native_surface(runtime, cx, popup.token, Some(popup.surface)) {
+                    return Err("E_TEARDOWN: native popup surface remained open".into());
+                }
+                session.shell_surface_closed();
+                cleanup?;
             }
-            session.shell_surface_closed();
-            cleanup?;
+            Ok(())
+        };
+        match removal {
+            Removal::Dismissed(id) => session.dismiss_popup(id, close),
+            _ => close(),
         }
-        if let Removal::Dismissed(id) = removal { session.dismiss_popup(id)?; }
-        Ok(())
     }
 }

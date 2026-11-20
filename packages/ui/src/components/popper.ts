@@ -8,8 +8,8 @@ export type PopperSide = "top" | "right" | "bottom" | "left";
 export type PopperAlign = "start" | "center" | "end";
 export interface PopperPlacement { readonly side: PopperSide; readonly align: PopperAlign; }
 export interface PopperOptions {
-  placement?: PopperPlacement;
-  offset?: number;
+  placement?: PopperPlacement | undefined;
+  offset?: number | undefined;
   padding?: number;
   flip?: boolean;
   shift?: boolean;

@@ -18,7 +18,13 @@ import { classes, element, provide, type Stylesheet, useStylesheet, withDefaults
 export interface HoverProps extends OverlayRootProps { delay?: number; closeDelay?: number; }
 interface Showing { state: OverlayState; setInstant(value: boolean): void; closeNow(): void; }
 
-export function createHandoff() {
+export interface HoverHandoff {
+  anotherShowing(me: Showing): boolean;
+  takeOver(next: Showing): void;
+  clear(me: Showing): void;
+}
+
+export function createHandoff(): HoverHandoff {
   let current: Showing | undefined;
   return {
     anotherShowing(me: Showing) { return !!current && current !== me && untrack(current.state.open); },
@@ -31,7 +37,7 @@ export function createHandoff() {
   };
 }
 
-function createHoverIntent(state: OverlayState, delay: Accessor<number>, closeDelay: Accessor<number>, handoff?: ReturnType<typeof createHandoff>) {
+function createHoverIntent(state: OverlayState, delay: Accessor<number>, closeDelay: Accessor<number>, handoff?: HoverHandoff) {
   const [instant, setInstant] = createSignal(false);
   const opening = createDelayed(), closing = createDelayed();
   let alive = true;
@@ -57,7 +63,7 @@ export type HoverIntent = ReturnType<typeof createHoverIntent>;
 export const HoverContext = createContext<HoverIntent | null>(null);
 
 export function HoverRoot(props: HoverProps, defaults: {
-  delay: Accessor<number>; closeDelay: Accessor<number>; handoff?: ReturnType<typeof createHandoff>;
+  delay: Accessor<number>; closeDelay: Accessor<number>; handoff?: HoverHandoff | undefined;
 }): NativeChild {
   return OverlayRoot(mergeProps(props, { get children() {
     const state = useContext(OverlayContext)!;

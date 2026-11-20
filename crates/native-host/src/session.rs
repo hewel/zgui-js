@@ -427,14 +427,46 @@ impl Session {
         result.map(|()| true).map_err(|error| self.diagnostic(error).into())
     }
 
-    /// Notify a popup owner after its native subtree has been retired.
-    pub(crate) fn dismiss_popup(&self, id: u32) -> Result<()> {
-        if self.shutdown_started.get() || !self.shell.owns_popup(id) { return Ok(()); }
+    /// Settle active jobs, retire the popup subtree, and notify its owner after cleanup.
+    pub(crate) fn dismiss_popup(&self, id: u32, close: impl FnOnce() -> Result<()>) -> Result<()> {
+        if self.shutdown_started.get() { return close(); }
+        // QuickJS shares one queue: settle active work before a disposer can enqueue into it.
+        self.settle_popup_jobs()?;
+        close()?;
+        self.settle_popup_jobs()?;
+        if !self.shell.owns_popup(id) { return Ok(()); }
         let mut engine = self.engine.borrow_mut();
         let engine = engine.as_mut().ok_or("session disposed")?;
         let result = self.bridges.run(engine.turn(), |js| js.with_context(|ctx| self.shell.dispatch_popup_dismiss(&ctx, id)));
         self.mark_reported(self.check_contract())?;
         result.map_err(|error| self.diagnostic(error).into())
+    }
+
+    fn settle_popup_jobs(&self) -> Result<()> {
+        let mut engine = self.engine.borrow_mut();
+        let engine = engine.as_mut().ok_or("session disposed")?;
+        if !engine.is_job_pending() {
+            self.shell.clear_cleanup_jobs_pending();
+            return Ok(());
+        }
+        let end = self.deadline(Instant::now() + engine.limits().job_timeout);
+        let mut remaining = engine.limits().max_jobs_per_pump;
+        while engine.is_job_pending() {
+            if remaining == 0 || Instant::now() >= end {
+                return Err(js_runtime::Diagnostic {
+                    kind: js_runtime::DiagnosticKind::BudgetExceeded, phase: "popup dismissal",
+                    message: "pending jobs did not settle before the next popup phase".into(),
+                    stack: None, generated_stack: None,
+                }.into());
+            }
+            if let Err(error) = self.bridges.run(engine.turn(), |js| js.execute_job(end.saturating_duration_since(Instant::now()))) {
+                self.mark_reported(self.check_contract())?;
+                return Err(self.diagnostic(error).into());
+            }
+            remaining -= 1;
+        }
+        self.shell.clear_cleanup_jobs_pending();
+        self.mark_reported(self.check_contract())
     }
 
     /// Leave staged lock commands queued while the current checkpoint has more JS jobs to check.

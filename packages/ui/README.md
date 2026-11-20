@@ -10,6 +10,8 @@ exports its checked source directly, so application types and component
 implementations share one contract without a separate declaration build.
 Babel/Rolldown erase types and bundle ES2022 JavaScript for QuickJS; the native host
 remains Rust.
+Source-linked SDK entry points support strict consumer projects with
+`noUncheckedIndexedAccess` and `exactOptionalPropertyTypes` enabled.
 
 The package-local `#solid` import uses a native-only type contract for the pinned
 Solid runtime and resolves to `solid-js` when bundled. This intentionally avoids
@@ -49,14 +51,17 @@ export function mount() {
 ```
 
 `useMonitors()` returns an accessor to a read-only output snapshot that updates
-on hotplug and geometry changes. Use `id` to target an output and key a list;
+on hotplug and geometry changes. All active subscribers receive the same
+snapshot before reactive effects run. Use `id` to target an output and key a list;
 `name` is for display. Output geometry is in physical pixels, scale is the ratio
 of physical to logical pixels, and refresh is in millihertz or `null`.
 
-Omit `output` to let the compositor choose. The surface attaches asynchronously;
-a change of name or output closes that generation and mounts a fresh one.
-Disconnecting a named output detaches its mount region; a still-owned request
-mounts fresh children if the output returns.
+Omit `output` or pass `undefined` to let the compositor choose. The surface
+attaches asynchronously; a change of name or output closes the old surface and
+mounts a fresh one. An `output={monitors()[0]?.id}` binding can retarget to
+the next output as part of the hotplug update. An unchanged request targeting
+a disconnected output detaches its region and mounts fresh children if the
+output returns.
 Other placement changes reconfigure the existing surface. The defaults are
 the `top` layer, no anchors, zero margins and exclusive zone, and `none` keyboard
 interactivity. An omitted width or height stretches (zero) if both opposing
@@ -113,9 +118,10 @@ an eligible input interaction.
 Changing `name` or `parent` replaces the request. Closing the parent unmounts
 all descendants without invoking `onDismiss`; still-owned requests remain
 dormant until their named parents return. A compositor dismissal calls only
-the directly dismissed popup's `onDismiss`. That popup and its live
-descendants do not reopen from prop or geometry changes: each needs a fresh
-declaration or identity. Unmounting a declaration releases its request,
+the directly dismissed popup's `onDismiss`, after its content is disposed and
+its cleanup jobs have settled. The callback can open replacement surfaces.
+The dismissed popup and its live descendants do not reopen from prop or geometry
+changes: each needs a fresh declaration or identity. Unmounting a declaration releases its request,
 content, and any geometry observation without invoking `onDismiss`.
 
 ## Wayland session lock

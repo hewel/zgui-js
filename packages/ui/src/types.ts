@@ -28,7 +28,7 @@ export interface Monitor extends NativeViewport {
 }
 export type LayerAnchor = "top" | "right" | "bottom" | "left";
 export interface LayerSurfacePlacement {
-  readonly output?: string;
+  readonly output?: string | undefined;
   readonly layer?: "background" | "bottom" | "top" | "overlay";
   readonly anchor?: readonly LayerAnchor[];
   readonly width?: number;
@@ -166,7 +166,7 @@ export interface NativeElementProps extends NativeEventProps {
   tabIndex?: number | null;
   disabled?: boolean | null;
   checked?: boolean | "mixed" | null;
-  expanded?: boolean | null;
+  expanded?: boolean | null | undefined;
   selected?: boolean | null;
   open?: boolean | null;
   invalid?: boolean | null;
@@ -214,7 +214,7 @@ export type TextAreaProps = Omit<NativeTextControlProps, "role">;
 export interface ImageProps extends Omit<NativeElementProps, "children"> {
   children?: never;
   /** Exact manifest asset path in package-only previews; null/undefined clears the source. */
-  src?: string | null;
+  src?: string | null | undefined;
 }
 
 /** Affine matrix coefficients in the order [a, b, c, d, e, f]. */

@@ -6,10 +6,8 @@ import type {
   PopupSurfacePlacement, PopupSurfaceProps, SessionLockState,
 } from "./types.js";
 
-export type LayerPlacement = Required<Omit<LayerSurfacePlacement, "output" | "margin">> & {
-  readonly output?: string;
-  readonly margin: Readonly<Record<LayerAnchor, number>>;
-};
+export type LayerPlacement = Required<Omit<LayerSurfacePlacement, "output" | "margin">> &
+  Pick<LayerSurfacePlacement, "output"> & { readonly margin: Readonly<Record<LayerAnchor, number>>; };
 export type PopupPlacement = Required<PopupSurfacePlacement> &
   Required<Pick<PopupSurfaceProps, "parent" | "offset" | "grab" | "width" | "height">> & {
     readonly anchorRect: NativeWindowRect;

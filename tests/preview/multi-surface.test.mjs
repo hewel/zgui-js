@@ -109,6 +109,37 @@ test("a pure-shell Session captures independent outputs and retains shared state
   assert.equal(compared.captures.compared, result.captureCount);
 });
 
+test("LayerSurface retargets to the remaining output when the first output is removed", async () => {
+  const overlay = await buildFixtureApp(path.join(temp.dir, "retarget"), "retarget", `
+    import { LayerSurface, renderShell, useMonitors } from "@hewel/zgui";
+    export const hostApiVersion = 1;
+    export function mount() {
+      return renderShell(() => {
+        const monitors = useMonitors();
+        return <LayerSurface name="overlay" output={monitors()[0]?.id} layer="overlay"
+          anchor={["top", "left", "right"]} height={24}>
+          <box style="position: fixed; left: 0; top: 0; width: 100%; height: 100%; background: #123456" />
+        </LayerSurface>;
+      });
+    }
+  `, { rawSource: true, capabilities: { shellSurfaces: true } });
+  const { out, result } = await run("shell-retarget", [
+    monitors("plug-both", left, right), capture("before", "overlay"),
+    monitors("remove-left", right), capture("after", "overlay"),
+  ], { bundle: overlay, assertEmptyResources: true });
+  assert.equal(result.firstError, null);
+  const before = await readFrame(out, "surfaces/overlay/before");
+  const after = await readFrame(out, "surfaces/overlay/after");
+  assert.equal(before.scale, 1);
+  assert.equal(after.scale, 2);
+  assert.notEqual(after.documentIdentity, before.documentIdentity);
+  for (const [id, width, height] of [["before", 240, 24], ["after", 300, 48]]) {
+    const image = await readPng(path.join(out, `captures/surfaces/overlay/${id}.png`));
+    assert.deepEqual([image.width, image.height], [width, height]);
+    assert.deepEqual(pixelAt(image, width - 2, height - 2), [18, 52, 86, 255]);
+  }
+});
+
 test("a caught unauthorized LayerSurface open still retires the Session", async () => {
   const deniedBundle = await buildFixtureApp(path.join(temp.dir, "denied"), "denied-shell", `
     import { LayerSurface, renderApp, renderShell } from "@hewel/zgui";

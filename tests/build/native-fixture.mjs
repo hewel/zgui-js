@@ -133,12 +133,18 @@ export function createHost({ strictStyles = false, reducedMotion = false, monito
   let nextId = 0;
   let stopping = false;
   let turnDepth = 0;
+  let inCleanup = false;
+  let cleanupJobsPending = false;
   const microtasks = [];
   const drainMicrotasks = () => {
     while (microtasks.length) {
       const batch = microtasks.splice(0, microtasks.length);
       for (const task of batch) task();
     }
+  };
+  const requireShellWorkAllowed = op => {
+    assertActiveHost(op);
+    if (inCleanup || cleanupJobsPending) throw new TypeError("shell work is unavailable during disposal");
   };
   const nodes = new Map();
   const parents = new Map();
@@ -257,12 +263,15 @@ export function createHost({ strictStyles = false, reducedMotion = false, monito
     invalidate(doomed);
   };
 
-  const runTurn = fn => {
+  const runTurn = (fn, checkpoint = true) => {
     turnDepth += 1;
     try { return fn(); }
     finally {
       try {
-        if (turnDepth === 1 && !stopping) drainMicrotasks();
+        if (turnDepth === 1 && !stopping && checkpoint) {
+          drainMicrotasks();
+          cleanupJobsPending = false;
+        }
       } finally {
         turnDepth -= 1;
         if (turnDepth === 0) endTurn();
@@ -665,8 +674,12 @@ export function createHost({ strictStyles = false, reducedMotion = false, monito
   const detachSurface = surface => {
     if (!surface.root) return;
     const region = surface.region;
+    const previous = inCleanup;
+    inCleanup = true;
     try { surface.dispose?.(); }
     finally {
+      inCleanup = previous;
+      cleanupJobsPending ||= microtasks.length > 0;
       region.retired = true;
       if (surfaces.get(surface.name) === surface) surfaces.delete(surface.name);
       const doomed = new Set([...nodes.values()].filter(node => nodeRegions.get(node) === region));
@@ -703,7 +716,7 @@ export function createHost({ strictStyles = false, reducedMotion = false, monito
   const shell = {
     getSessionGeneration: () => generation,
     installStylesheet(name, css) {
-      assertActiveHost("installStylesheet");
+      requireShellWorkAllowed("installStylesheet");
       validateStylesheetName(name);
       if (typeof css !== "string") throw new TypeError("stylesheet CSS must be a string");
       const existing = shellStylesheets.get(name);
@@ -721,7 +734,7 @@ export function createHost({ strictStyles = false, reducedMotion = false, monito
       forEachRegion(region => { region.stylesheets.delete(sheet.key); });
     },
     requestSessionLock(callback) {
-      assertActiveHost("requestSessionLock");
+      requireShellWorkAllowed("requestSessionLock");
       requireLock();
       if (!Number.isSafeInteger(nextLockRequestId)) throw new RangeError("session lock request identifiers exhausted");
       const id = nextLockRequestId++;
@@ -750,6 +763,7 @@ export function createHost({ strictStyles = false, reducedMotion = false, monito
           if (stopping) throw new TypeError("session is stopping");
           if (!lockSubscribers.has(id)) throw new ReferenceError("session lock handle was unsubscribed");
           if (lockState !== "locked") throw new TypeError("session is not locked");
+          requireShellWorkAllowed("unlock");
           shellTasks.push(() => {
             if (stopping || lockState !== "locked") return;
             sessionLockLog.push("unlock", "sync");
@@ -767,7 +781,7 @@ export function createHost({ strictStyles = false, reducedMotion = false, monito
       });
     },
     openLock(name, output, attach) {
-      assertActiveHost("openLock");
+      requireShellWorkAllowed("openLock");
       requireLock();
       if (name === "main" || !/^[a-z0-9][a-z0-9_.-]{0,127}$/.test(name)) {
         throw new TypeError("invalid or reserved shell surface name");
@@ -792,13 +806,13 @@ export function createHost({ strictStyles = false, reducedMotion = false, monito
       });
     },
     subscribeMonitors(callback) {
-      assertActiveHost("subscribeMonitors");
+      requireShellWorkAllowed("subscribeMonitors");
       monitorSubscribers.add(callback);
       callback(structuredClone(monitorSnapshot));
       return () => { monitorSubscribers.delete(callback); };
     },
     openLayer(name, placement, attach) {
-      assertActiveHost("openLayer");
+      requireShellWorkAllowed("openLayer");
       requireShell();
       if (name === "main" || !/^[a-zA-Z0-9_-]{1,64}$/.test(name)) throw new TypeError("invalid or reserved shell surface name");
       if ([...layerIds.values(), ...lockIds.values(), ...popupIds.values()].some(surface => !surface.closing && surface.name === name)) {
@@ -837,7 +851,7 @@ export function createHost({ strictStyles = false, reducedMotion = false, monito
       shellLog.push({ op: "input", id, region: surface.inputRegion });
     },
     openPopup(name, placement, attach, dismiss) {
-      assertActiveHost("openPopup");
+      requireShellWorkAllowed("openPopup");
       requireShell();
       if (name === "main" || !/^[a-z0-9][a-z0-9_.-]{0,127}$/.test(name)) {
         throw new TypeError("invalid popup name");
@@ -871,31 +885,38 @@ export function createHost({ strictStyles = false, reducedMotion = false, monito
       });
     },
   };
-  const popupDone = name => runTurn(() => {
+  const popupDone = name => {
     const surface = surfaces.get(name);
     if (!surface?.popup || surface.closing) throw new ReferenceError(`no live popup named ${name}`);
+    runTurn(() => {});
     surface.closing = true;
     try {
-      detachTree(surface, "compositor-dismissed");
-      surface.dismiss();
+      runTurn(() => detachTree(surface, "compositor-dismissed"), false);
+      runTurn(() => {});
+      runTurn(surface.dismiss, false);
     } finally {
       popupIds.delete(surface.id);
     }
-  });
+  };
 
-  const emitMonitors = next => runTurn(() => {
+  const emitMonitors = next => {
     monitorSnapshot = structuredClone(next);
-    for (const callback of [...monitorSubscribers]) {
-      if (monitorSubscribers.has(callback)) callback(structuredClone(monitorSnapshot));
-    }
-    shellTasks.push(() => {
+    // Reconcile output loss before the JS job checkpoint, as the native host does.
+    runTurn(() => {
+      for (const callback of [...monitorSubscribers]) {
+        if (monitorSubscribers.has(callback)) callback(structuredClone(monitorSnapshot));
+      }
+    }, false);
+    runTurn(() => {
       for (const surface of [...layerIds.values(), ...lockIds.values()]) {
         if (surface.closing || !present(surface)) detachTree(surface, "owner-closed");
       }
+    }, false);
+    shellTasks.push(() => {
       for (const surface of layerIds.values()) attachSurface(surface);
       for (const surface of lockIds.values()) attachSurface(surface);
     });
-  });
+  };
 
   const flush = () => {
     runTurn(() => {});

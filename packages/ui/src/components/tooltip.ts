@@ -3,7 +3,7 @@ import { memo, mergeProps } from "../renderer/index.js";
 import type { NativeChild, NativeElementProps, NativeNode } from "../types.js";
 import type { PopperPlacement } from "./popper.js";
 import { HoverRoot, createHandoff, hoverSurface, hoverTrigger } from "./hover.js";
-import type { HoverProps } from "./hover.js";
+import type { HoverHandoff, HoverProps } from "./hover.js";
 import { classes, element, forbidChildren, provide, useStylesheet, withDefaults } from "./shared.js";
 import { sheet } from "./generated/TooltipStyle.js";
 
@@ -12,7 +12,7 @@ export interface TooltipProviderProps { delay?: number; closeDelay?: number; chi
 export type TooltipTriggerProps = NativeElementProps;
 export interface TooltipArrowProps extends Omit<NativeElementProps, "children"> { children?: never; }
 export interface TooltipContentProps extends NativeElementProps { placement?: PopperPlacement; offset?: number; arrow?: boolean; }
-const Group = createContext<{ delay: () => number; closeDelay: () => number; handoff: ReturnType<typeof createHandoff> } | null>(null);
+const Group = createContext<{ delay: () => number; closeDelay: () => number; handoff: HoverHandoff } | null>(null);
 const defaultOffset = 10 * Math.SQRT2 / 2 - 1 + 4;
 
 export function TooltipProvider(props: TooltipProviderProps = {}): NativeChild {

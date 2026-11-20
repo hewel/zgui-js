@@ -60,9 +60,9 @@ interface OverlaySurfaceConfig {
   role: NativeRole;
   trap?: boolean;
   lock?: boolean;
-  surfaceClass?: boolean;
-  onDismiss?: (reason: NativeDismissReason) => void;
-  children?: () => NativeChild;
+  surfaceClass?: boolean | undefined;
+  onDismiss?: ((reason: NativeDismissReason) => void) | undefined;
+  children?: (() => NativeChild) | undefined;
   wrap: (surface: NativeNode, presenceState: () => "open" | "closed") => NativeChild;
 }
 
@@ -247,9 +247,9 @@ function mountOverlay(state: OverlayState | null | undefined, props: DismissalCo
   return holder;
 }
 
-export function modalSurface(state: OverlayState | null | undefined, props: DismissalContentProps, config: {
-  class: string; role: NativeRole; children?: () => NativeChild;
-}): NativeChild {
+export function modalSurface(state: OverlayState | null | undefined, props: DismissalContentProps,
+  config: Pick<OverlaySurfaceConfig, "class" | "role" | "children">,
+): NativeChild {
   return mountOverlay(state, props, {
     layer: "modal",
     class: config.class,
@@ -267,10 +267,9 @@ export function modalSurface(state: OverlayState | null | undefined, props: Dism
   });
 }
 
-export function anchoredSurface(state: OverlayState | null | undefined, props: AnchoredContentProps, defaults: {
-  class: string; role: NativeRole; trap?: boolean; surfaceClass?: boolean; onDismiss?: (reason: NativeDismissReason) => void;
-  children?: () => NativeChild;
-}): NativeChild {
+export function anchoredSurface(state: OverlayState | null | undefined, props: AnchoredContentProps,
+  defaults: Pick<OverlaySurfaceConfig, "class" | "role" | "trap" | "surfaceClass" | "onDismiss" | "children">,
+): NativeChild {
   return mountOverlay(state, props, {
     layer: "popover",
     ...defaults,

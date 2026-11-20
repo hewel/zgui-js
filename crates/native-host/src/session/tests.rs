@@ -119,6 +119,102 @@ fn rejected_shell_stylesheets_fault_strictly_without_replacing_the_previous_shee
 }
 
 #[test]
+fn detaching_one_region_rejects_direct_shell_and_host_work() {
+    let fixture = Fixture::new(r#"
+        export const hostApiVersion = 1;
+        const messages = [];
+        export function mount() {
+            const id = __zguiShell.openLayer('panel', {}, () => () => {
+                for (const create of [
+                    () => __zguiShell.openLayer('forbidden', {}, () => () => {}),
+                    () => __zguiShell.openPopup('forbidden', {
+                        parent: 'panel', anchorRect: { x: 0, y: 0, width: 1, height: 1 },
+                        width: 20, height: 20,
+                    }, () => () => {}, () => {}),
+                    () => setTimeout(() => {}, 0),
+                ]) {
+                    try { create(); } catch (error) { messages.push(error.message); }
+                }
+            });
+            return () => __zguiShell.closeLayer(id);
+        }
+        export function checkFence() {
+            const expected = [
+                'shell work is unavailable during disposal',
+                'shell work is unavailable during disposal',
+                'host work is unavailable during preflight or disposal',
+            ];
+            if (messages.join('\n') !== expected.join('\n')) throw Error(JSON.stringify(messages));
+            const next = __zguiShell.openLayer('next', {}, () => () => {});
+            __zguiShell.closeLayer(next);
+        }
+    "#, "").with_capabilities(crate::package::Capabilities { shell_surfaces: true, ..Default::default() });
+    let native = Native::new();
+    let policy = SessionPolicy::live(native.executor.clone());
+    let session = Session::prepare_shell(Fonts::shipped_only(), AppTimers::default(), SessionModule::package(fixture.package()),
+        1, native.waker.clone(), policy).expect("prepare rootless shell");
+    session.mount().expect("request panel");
+    let id = *session.shell.specs().first_key_value().expect("requested panel").0;
+    session.attach_layer(id, "panel".into(), native.region.clone(), SurfaceId::new(7), None).expect("attach panel");
+    session.detach_layer(id).expect("detach panel while the session stays active");
+    session.invoke("checkFence").expect("reject work only during disposal");
+}
+
+#[test]
+fn dismissing_a_popup_separates_active_jobs_from_disposer_continuations() {
+    let fixture = Fixture::new(r#"
+        export const hostApiVersion = 1;
+        const spec = {
+            parent: 'panel', anchorRect: { x: 0, y: 0, width: 1, height: 1 },
+            width: 20, height: 20, offset: { x: 0, y: 0 },
+            anchor: 'bottom-left', gravity: 'bottom-right',
+            slide: true, flip: true, resize: false, grab: false, reactive: false,
+        };
+        const attach = () => () => {};
+        const openLayer = name => __zguiShell.openLayer(name, {}, attach);
+        let refused = 0;
+        export function mount() {
+            const panel = openLayer('panel');
+            const popup = __zguiShell.openPopup('menu', spec, () => () => {
+                queueMicrotask(() => queueMicrotask(() => {
+                    for (const open of [
+                        () => openLayer('forbidden-layer'),
+                        () => __zguiShell.openPopup('forbidden-popup', spec, attach, () => {}),
+                    ]) {
+                        try { open(); } catch (error) {
+                            if (error.message !== 'shell work is unavailable during disposal') throw error;
+                            ++refused;
+                        }
+                    }
+                }));
+            }, () => {
+                openLayer('replacement');
+                if (refused !== 2) throw Error('deferred disposal escaped the fence');
+            });
+            return () => {
+                __zguiShell.closePopup(popup);
+                __zguiShell.closeLayer(panel);
+            };
+        }
+        export function queueUpdate() {
+            queueMicrotask(() => { openLayer('queued'); });
+        }
+    "#, "").with_capabilities(crate::package::Capabilities { shell_surfaces: true, ..Default::default() });
+    let native = Native::new();
+    let policy = SessionPolicy::live(native.executor.clone());
+    let session = Session::prepare_shell(Fonts::shipped_only(), AppTimers::default(), SessionModule::package(fixture.package()),
+        1, native.waker.clone(), policy).expect("prepare rootless shell");
+    session.mount().expect("request panel and popup");
+    let (id, _) = session.shell.popup_specs().pop_front().expect("popup request");
+    session.attach_layer(id, "menu".into(), native.region.clone(), SurfaceId::new(7), None).expect("attach popup");
+    session.invoke("queueUpdate").expect("queue active shell creation without a checkpoint");
+    session.dismiss_popup(id, || session.detach_layer(id)).expect("retire the popup and notify its owner outside disposal");
+    let specs = session.shell.specs();
+    let names: Vec<_> = specs.values().map(|spec| spec.name.as_str()).collect();
+    assert_eq!(names, ["panel", "queued", "replacement"]);
+}
+
+#[test]
 fn candidate_preflight_rejects_deferred_side_effects_without_touching_active_tree() {
     let good = Fixture::new(SIMPLE, "text { color: red }");
     let native = Native::new();

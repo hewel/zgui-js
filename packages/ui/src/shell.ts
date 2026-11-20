@@ -1,7 +1,7 @@
 import { createEffect, createMemo, createRoot, createSignal, getOwner, onCleanup, runWithOwner } from "#solid";
 import { bridgeFor, shellBridge } from "./host.js";
 import type { LayerPlacement, NativeHost, NativeInputRegion, PopupPlacement, UiBridge } from "./host.js";
-import { renderRegion } from "./renderer/index.js";
+import { flush, renderRegion } from "./renderer/index.js";
 import type {
   Accessor, LayerAnchor, LayerSurfaceProps, Monitor, NativeNode, NativeWindowRect,
   PopupSurfaceProps, SessionLockRequest, SessionLockState, SessionLockSurfaceProps,
@@ -12,6 +12,26 @@ declare const console: { warn(message: string): void };
 type ShellBridge = NativeHost["__zguiShell"];
 const popupParentRegions = new WeakMap<UiBridge, { shell: ShellBridge; name: string }>();
 const stylesheetRegistrations = new WeakMap<ShellBridge, Map<string, symbol>>();
+const monitorSubscriptions = new WeakMap<ShellBridge, MonitorSubscription>();
+
+interface MonitorSubscription {
+  subscribers: Set<(snapshot: readonly Monitor[]) => void>;
+  current: Accessor<readonly Monitor[]>;
+  unsubscribe: () => void;
+}
+
+function subscribeMonitors(shell: ShellBridge): MonitorSubscription {
+  let snapshot: readonly Monitor[] = [];
+  const subscribers = new Set<(snapshot: readonly Monitor[]) => void>();
+  const unsubscribe = shell.subscribeMonitors(next => {
+    snapshot = next;
+    if (subscribers.size === 0) return;
+    flush(() => {
+      for (const update of subscribers) update(next);
+    });
+  });
+  return { subscribers, current: () => snapshot, unsubscribe };
+}
 
 /** Read the current session's generation, including during module preflight. */
 export function getSessionGeneration(): number {
@@ -41,11 +61,21 @@ export function mountShellStylesheet(name: string, css: string): () => void {
 /** Subscribe to output snapshots for the lifetime of the current Solid owner. */
 export function useMonitors(): Accessor<readonly Monitor[]> {
   if (!getOwner()) throw new Error("useMonitors requires a Solid owner");
-  let initial: readonly Monitor[] = [];
-  let update = (snapshot: readonly Monitor[]) => { initial = snapshot; };
-  onCleanup(shellBridge().subscribeMonitors(snapshot => update(snapshot)));
-  const [monitors, setMonitors] = createSignal(initial);
-  update = setMonitors;
+  const shell = shellBridge();
+  let subscription = monitorSubscriptions.get(shell);
+  if (!subscription) {
+    subscription = subscribeMonitors(shell);
+    monitorSubscriptions.set(shell, subscription);
+  }
+  const [monitors, setMonitors] = createSignal(subscription.current());
+  subscription.subscribers.add(setMonitors);
+  onCleanup(() => {
+    subscription.subscribers.delete(setMonitors);
+    if (subscription.subscribers.size === 0) {
+      monitorSubscriptions.delete(shell);
+      subscription.unsubscribe();
+    }
+  });
   return monitors;
 }
 
@@ -224,9 +254,11 @@ export function PopupSurface(props: PopupSurfaceProps): null {
         return runWithOwner(owner, () => renderRegion(() => () => props.children, root, bridge));
       }, () => {
         if (id !== request) return;
-        close();
-        dismiss(true);
-        runWithOwner(owner, () => props.onDismiss?.());
+        flush(() => {
+          close();
+          dismiss(true);
+          runWithOwner(owner, () => props.onDismiss?.());
+        });
       });
       id = request;
     });
@@ -238,7 +270,10 @@ export function PopupSurface(props: PopupSurfaceProps): null {
 /** Request compositor locking. Unlock only from an explicit authorized application action. */
 export function requestSessionLock(): SessionLockRequest {
   const [state, setState] = createSignal<SessionLockState>("unlocked");
-  const raw = shellBridge().requestSessionLock(setState);
+  // Registration delivers the initial state synchronously, during the caller's setup.
+  let update: (next: SessionLockState) => void = setState;
+  const raw = shellBridge().requestSessionLock(next => update(next));
+  update = next => { flush(() => setState(next)); };
   const { unlock, unsubscribe: dispose } = raw;
   if (getOwner()) onCleanup(dispose);
   return Object.defineProperty({ state, unlock, dispose }, "id", {

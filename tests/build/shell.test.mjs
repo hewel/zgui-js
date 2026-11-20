@@ -68,8 +68,8 @@ export function mount() {
 
 const monitor = (id, name, x) => ({ id, name, x, y: 0, width: 1920, height: 1080, scale: 2, refreshRateMilliHz: 60000 });
 
-async function mounted(t, { attach = true, source = fixture, monitors = [monitor("DP-1", "Desk", 0)] } = {}) {
-  const harness = createHost({ monitors });
+async function mounted(t, { attach = true, source = fixture, monitors = [monitor("DP-1", "Desk", 0)], sessionLock } = {}) {
+  const harness = createHost({ monitors, sessionLock });
   const mod = await moduleFor(t, source);
   const previous = globalThis.__zguiShell;
   globalThis.__zguiShell = harness.shell;
@@ -136,6 +136,191 @@ test("pure-shell mount shares state and routes events across output hotplug", as
   assert.equal(harness.monitorSubscribers.size, 0);
   assert.equal(mod.disposals(), 5);
   assert.equal(harness.geometry.some(record => record.active), false);
+});
+
+test("the first-output layer retargets before host reconciliation disposes its old region", async t => {
+  const { harness, mod } = await mounted(t, { monitors: [desk, side], source: `
+    import { LayerSurface, onCleanup, renderShell, useMonitors } from "@hewel/zgui";
+    export const retired = [];
+    function Content(props) {
+      const output = props.output;
+      onCleanup(() => retired.push(output));
+      return <text testId="overlay-content">{output}</text>;
+    }
+    export function mount() {
+      return renderShell(() => {
+        const monitors = useMonitors();
+        return <LayerSurface name="overlay" output={monitors()[0]?.id}>
+          <Content output={monitors()[0]?.id} />
+        </LayerSurface>;
+      });
+    }
+  ` });
+  const old = harness.surfaces.get("overlay");
+  const oldContent = harness.byTestId("overlay-content");
+  assert.equal(old.placement.output, desk.id);
+  assert.equal(textOf(harness, "overlay-content"), desk.id);
+
+  harness.emitMonitors([side]);
+  assert.deepEqual(mod.retired, [desk.id]);
+  assert.equal(harness.invalidated.has(oldContent), true);
+  assert.equal(harness.shellLog.findLast(event => event.op === "open").placement.output, side.id);
+  harness.flush();
+  assert.notEqual(harness.surfaces.get("overlay").id, old.id);
+  assert.equal(textOf(harness, "overlay-content"), side.id);
+});
+
+test("monitor subscribers see one snapshot without replacing an unchanged layer", async t => {
+  const { harness, mod, stop } = await mounted(t, { monitors: [desk], source: `
+    import { LayerSurface, Show, createEffect, renderShell, useMonitors } from "@hewel/zgui";
+    export const observed = [];
+    export function mount() {
+      return renderShell(() => {
+        const first = useMonitors();
+        const second = useMonitors();
+        const names = () => [first()[0]?.name, second()[0]?.name];
+        createEffect(names, pair => { observed.push(pair); });
+        return <Show when={first()[0]?.name === second()[0]?.name}>
+          <LayerSurface name="stable" output="DP-1" />
+        </Show>;
+      });
+    }
+  ` });
+  const { id } = harness.surfaces.get("stable");
+  harness.emitMonitors([{ ...desk, name: "Renamed" }]);
+  assert.deepEqual(mod.observed, [["Desk", "Desk"], ["Renamed", "Renamed"]]);
+  harness.flush();
+  assert.equal(harness.surfaces.get("stable").id, id);
+  stop();
+  assert.equal(harness.monitorSubscribers.size, 0);
+});
+
+test("host popup dismissal updates the parent and opens its replacement in the same turn", async t => {
+  const { harness, mod } = await mounted(t, { source: `
+    import { LayerSurface, PopupSurface, Show, createSignal, onCleanup, renderShell } from "@hewel/zgui";
+    const [queued, setQueued] = createSignal(false);
+    export const queueUpdate = () => setQueued(true);
+    let retire;
+    export function onRetire(callback) { retire = callback; }
+    function Menu() {
+      onCleanup(() => queueMicrotask(() => retire()));
+      return <text>menu</text>;
+    }
+    export function mount() {
+      return renderShell(() => {
+        const [dismissed, setDismissed] = createSignal(false);
+        return <>
+          <LayerSurface name="parent"><text testId="status">{dismissed() ? "dismissed" : "open"}</text></LayerSurface>
+          <PopupSurface name="menu" parent="parent" width={20} height={20}
+            anchorRect={{ x: 0, y: 0, width: 10, height: 10 }} onDismiss={() => setDismissed(true)}>
+            <Menu />
+          </PopupSurface>
+          <Show when={queued()}><LayerSurface name="queued" /></Show>
+          <Show when={dismissed()}><LayerSurface name="replacement" /></Show>
+        </>;
+      });
+    }
+  ` });
+  assert.equal(textOf(harness, "status"), "open");
+  let rejected = 0;
+  mod.onRetire(() => {
+    for (const open of [
+      () => harness.shell.openLayer("forbidden-layer", {}, () => {}),
+      () => harness.shell.openPopup("forbidden-popup", { parent: "parent" }, () => {}, () => {}),
+    ]) {
+      assert.throws(open, /shell work is unavailable during disposal/);
+      rejected++;
+    }
+  });
+  harness.runTurn(mod.queueUpdate, false);
+  assert.equal(harness.shellLog.some(event => event.name === "queued"), false);
+  harness.popupDone("menu");
+  assert.equal(harness.surfaces.has("menu"), false);
+  assert.equal(textOf(harness, "status"), "dismissed");
+  assert.equal(rejected, 2);
+  harness.flush();
+  assert.equal(harness.surfaces.has("replacement"), true);
+  assert.equal(harness.surfaces.has("queued"), true);
+});
+
+test("host lock state transitions are observable before the job checkpoint", async t => {
+  const { harness, mod } = await mounted(t, { sessionLock: "locked", source: `
+    import { SessionLockSurface, createEffect, renderShell, requestSessionLock } from "@hewel/zgui";
+    let lock;
+    export const observed = [];
+    export const unlock = () => lock.unlock();
+    export function mount() {
+      return renderShell(() => {
+        lock = requestSessionLock();
+        createEffect(lock.state, state => { observed.push(state); });
+        return <SessionLockSurface name="locker" output="DP-1"><text testId="locked">{lock.state()}</text></SessionLockSurface>;
+      });
+    }
+  ` });
+  assert.deepEqual(mod.observed, ["unlocked", "pending", "locked"]);
+  assert.equal(textOf(harness, "locked"), "locked");
+  harness.runTurn(mod.unlock);
+  harness.flush();
+  assert.deepEqual(mod.observed, ["unlocked", "pending", "locked", "unlocked"]);
+  assert.equal(harness.byTestId("locked"), undefined);
+});
+
+test("region cleanup releases its own resources without flushing an outer effect or admitting direct shell work", async t => {
+  const { harness, mod } = await mounted(t, { monitors: [desk], source: `
+    import { LayerSurface, createEffect, createSignal, lockScroll, mountStylesheet, onCleanup, renderShell } from "@hewel/zgui";
+    export const observed = [];
+    let attemptCreation = () => {};
+    export function onRetire(callback) { attemptCreation = callback; }
+    let inspectLease;
+    export function onLeaseRelease(callback) { inspectLease = callback; }
+    function Content(props) {
+      const [node, setNode] = createSignal();
+      createEffect(node, target => {
+        if (!target) return;
+        const release = lockScroll(target);
+        return () => { release(); props.leaseReleased(); };
+      });
+      mountStylesheet("local", "text { opacity: .8; }");
+      onCleanup(() => {
+        attemptCreation();
+        props.retired();
+      });
+      return <text testId="retiring" ref={setNode}>retiring</text>;
+    }
+    export function mount() {
+      return renderShell(() => {
+        const [state, setState] = createSignal("mounted");
+        createEffect(state, value => { observed.push(value); });
+        return <LayerSurface name="retiring" output="DP-1">
+          <Content retired={() => setState("retired")} leaseReleased={() => inspectLease()} />
+        </LayerSurface>;
+      });
+    }
+  ` });
+  const { region: retiring, root } = harness.surfaces.get("retiring");
+  const lease = harness.locks.find(record => record.node === harness.byTestId("retiring"));
+  assert.equal(lease.active, true);
+  const released = [];
+  mod.onLeaseRelease(() => released.push(lease.active));
+  assert.equal(retiring.stylesheets.has("local"), true);
+  const failures = [];
+  mod.onRetire(() => {
+    for (const open of [
+      () => harness.shell.openLayer("forbidden", {}, () => {}),
+      () => harness.shell.openPopup("forbidden", { parent: "retiring" }, () => {}, () => {}),
+    ]) {
+      try { open(); } catch (error) { failures.push(error.message); }
+    }
+  });
+  harness.emitMonitors([]);
+  assert.deepEqual(failures, Array(2).fill("shell work is unavailable during disposal"));
+  assert.equal(harness.byTestId("retiring"), undefined);
+  assert.equal(retiring.stylesheets.size, 0);
+  assert.ok(harness.clearCalls.includes(root), "the disposer must clear the retiring root");
+  assert.deepEqual(released, [false], "the effect's returned cleanup must release the lease before forced teardown");
+  assert.deepEqual(mod.observed, ["mounted"]);
+  harness.flush();
+  assert.deepEqual(mod.observed, ["mounted", "retired"]);
 });
 
 test("live placement preserves the mount region and updates layout-driven input rectangles", async t => {

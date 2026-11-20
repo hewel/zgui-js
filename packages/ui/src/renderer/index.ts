@@ -214,10 +214,10 @@ export function render(code: () => NativeChild, root: NativeNode): () => void {
 
 export function renderRegion(code: () => NativeChild, root: NativeNode, bridge: UiBridge): () => void {
   rememberBridge(root, bridge);
-  return mountOwned(() => provideRegion(bridge, () => insert(root, code())), () => bridge.clearRoot(root));
+  return mountOwned(() => provideRegion(bridge, () => insert(root, code())), () => bridge.clearRoot(root), "region");
 }
 
-export function mountOwned(mount: () => void, clear?: () => void): () => void {
+export function mountOwned(mount: () => void, clear?: () => void, scope: "root" | "region" = "root"): () => void {
   let disposeRoot: (() => void) | undefined;
   let disposed = false;
 
@@ -227,7 +227,8 @@ export function mountOwned(mount: () => void, clear?: () => void): () => void {
     const errors: unknown[] = [];
     try {
       disposeRoot?.();
-      flush();
+      // Region cleanup runs under the host disposal fence; leave other owners' jobs to the host.
+      if (scope === "root") flush();
     } catch (error) {
       errors.push(error);
     } finally {
