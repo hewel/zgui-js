@@ -310,3 +310,108 @@ fn subpixel_fractional_scale_rounding_does_not_trigger_auto_scrollbar() {
         "a genuine multi-pixel overflow must still trigger overflow: auto",
     );
 }
+
+#[test]
+fn constrained_replaced_element_does_not_leak_natural_size_into_scrollable_overflow() {
+    use zgui_layout::NaturalSize;
+    use zgui_layout::node::kind::FormattingContext;
+    use zgui_layout::scroll_region::region_of;
+    use zgui_layout::style::DeviceStyle;
+    use zgui_layout::tree::LayoutTree;
+
+    // Live repro: a 1678x1500 avatar rendered inside a 36x36 <image> inside a 523px column
+    // inside a 360x620 scroll container at 1.75x scale must not leak its natural size into
+    // scrollable overflow or trigger a phantom scrollbar.
+    let fixture = Fixture::with_natural_size(
+        Element::new("root").children(vec![Element::new("col").children(vec![
+            Element::new("row").children(vec![Element::new("avatar").image(1678.0, 1500.0)]),
+            Element::new("body"),
+        ])]),
+        "root { display: block; width: 360px; height: 620px; overflow: auto }
+         col { display: flex; flex-direction: column }
+         row { display: flex; flex-direction: row; align-items: center }
+         avatar { display: inline-block; width: 36px; height: 36px; flex-shrink: 0 }
+         body { display: block; height: 480px }",
+        (1678.0, 1500.0),
+    );
+    let mut store = fixture.box_tree();
+    assert!(
+        store
+            .keys()
+            .into_iter()
+            .any(|key| store.node(key).fc == FormattingContext::Replaced),
+        "avatar must be laid out as a replaced box",
+    );
+    let mut content = NaturalSize;
+    let scale = 1.75;
+    let device = DeviceStyle {
+        scale,
+        ..DeviceStyle::default()
+    };
+    assert!(
+        LayoutTree::new(&mut store, &mut content, device)
+            .layout_viewport(360.0 * scale, 620.0 * scale)
+    );
+    let root = store.root().expect("a root");
+    let region = region_of(&store, root).expect("a scroll region");
+    assert_eq!(
+        store.auto_scroll(root),
+        (false, false),
+        "a 36x36 replaced element must not trigger a phantom scrollbar from its 1678x1500 natural size",
+    );
+    assert!(
+        region.content.height.0 <= 520.0 * scale,
+        "scroll content height ({}) must reflect laid-out content (~516px * {scale}), not natural image height",
+        region.content.height.0,
+    );
+    assert!(
+        region.content.width.0 <= 360.0 * scale,
+        "scroll content width ({}) must not leak natural image width",
+        region.content.width.0,
+    );
+
+    // Aspect-ratio constrained replaced element (max-width: 100%; height: auto) must also bound
+    // scrollable overflow to its constrained box.
+    let aspect = Fixture::with_natural_size(
+        Element::new("root").children(vec![Element::new("photo").image(1678.0, 1500.0)]),
+        "root { display: block; width: 320px; height: 400px; overflow: auto }
+         photo { display: block; max-width: 100%; height: auto }",
+        (1678.0, 1500.0),
+    );
+    let mut store = aspect.box_tree();
+    let mut content = NaturalSize;
+    assert!(
+        LayoutTree::new(&mut store, &mut content, DeviceStyle::default())
+            .layout_viewport(320.0, 400.0)
+    );
+    let root = store.root().expect("a root");
+    assert_eq!(
+        store.auto_scroll(root),
+        (false, false),
+        "max-width: 100% replaced image fitting in 320x400 must not trigger scrollbars",
+    );
+
+    // Unconstrained replaced element (width: auto; height: auto) must still size to its intrinsic
+    // natural dimensions and trigger overflow: auto when larger than the scrollport.
+    let natural = Fixture::with_natural_size(
+        Element::new("root").children(vec![Element::new("photo").image(1678.0, 1500.0)]),
+        "root { display: block; width: 360px; height: 620px; overflow: auto }
+         photo { display: block }",
+        (1678.0, 1500.0),
+    );
+    let mut store = natural.box_tree();
+    let mut content = NaturalSize;
+    assert!(
+        LayoutTree::new(&mut store, &mut content, DeviceStyle::default())
+            .layout_viewport(360.0, 620.0)
+    );
+    let root = store.root().expect("a root");
+    let region = region_of(&store, root).expect("a scroll region");
+    assert_eq!(
+        store.auto_scroll(root),
+        (true, true),
+        "an unconstrained 1678x1500 replaced image must still size to its intrinsic dimensions and scroll",
+    );
+    assert!((region.content.width.0 - 1678.0).abs() < 1.0);
+    assert!((region.content.height.0 - 1500.0).abs() < 1.0);
+}
