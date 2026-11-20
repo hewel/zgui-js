@@ -79,6 +79,8 @@ Optional `src/app.css` is preserved as `base.css` and installed before generated
 
 Use package-declared `<image src="assets/…">` resources for raster images. CSS `url()`, `image-set`, `@import`, and `@font-face` are rejected: the native painter has no CSS URL consumer and native fonts use programmatic registration.
 
+Use `mountStylesheet` for region-local dynamic rules. An explicit target must be a live, attached native node; cleanup after its region retires is safe. `mountShellStylesheet` validates against the same CSS profile and resource URL rules even before any surfaces exist. A rejected replacement leaves the previous shell sheet installed, and strict Preview reports the rejection even if JavaScript catches it.
+
 For external images, declare read-only directory grants in `package.json`, e.g.
 `"zgui": { "capabilities": { "imagePrefixes": ["/srv/wallpapers"] } }`.
 Use local `file:///srv/wallpapers/example.svg` or a raster file URI as `Image.src`.

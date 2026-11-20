@@ -39,6 +39,7 @@ impl<'doc> Node<'doc> {
     pub fn clear_style_data(self) {
         *self.record().data().borrow_mut() = ElementData::default();
         self.record().clear_atomic(atomics::STYLED);
+        self.clear_selector_work_below();
     }
 
     /// Clears the style data of everything below this element, leaving its own alone.

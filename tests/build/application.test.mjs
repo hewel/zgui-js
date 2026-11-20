@@ -54,6 +54,54 @@ export function mount(root: NativeNode) { return renderApp(() => <text>External 
   return directory;
 }
 
+const strictConsumerOptions = { strict: true, noUncheckedIndexedAccess: true };
+
+test("external consumers typecheck the source-linked build package without packing it", async t => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "zgui-build-types-consumer-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const modules = path.join(directory, "node_modules/@hewel");
+  await mkdir(modules, { recursive: true });
+  await symlink(path.join(workspaceRoot, "packages/build"), path.join(modules, "zgui-build"), "dir");
+  await writeFile(path.join(directory, "package.json"), JSON.stringify({ type: "module" }));
+  await writeFile(path.join(directory, "public-api.ts"),
+    await readFile(path.join(workspaceRoot, "packages/build/tests/public-api.ts")));
+  const config = path.join(directory, "tsconfig.json");
+  await writeFile(config, JSON.stringify({
+    compilerOptions: {
+      ...strictConsumerOptions, target: "ESNext", module: "ESNext", moduleResolution: "Bundler", types: [],
+    },
+    include: ["public-api.ts"],
+  }));
+  typecheckProject(config);
+});
+
+test("external consumers typecheck all linked SDK entry points with unchecked indexed access", async t => {
+  const directory = await externalApplication(t);
+  await symlink(path.join(workspaceRoot, "packages/build"), path.join(directory, "node_modules/@hewel/zgui-build"), "dir");
+  await writeFile(path.join(directory, "src/build-api.ts"), `export { buildApplication } from "@hewel/zgui-build";\n`);
+  await writeFile(path.join(directory, "src/main.tsx"), `import { renderApp, type NativeNode } from "@hewel/zgui";
+import { createElement } from "@hewel/zgui/renderer";
+import { Button } from "@hewel/zgui/components";
+import { CHECK, Icon } from "@hewel/zgui/icons";
+import { getResolvedCapabilities } from "@hewel/zgui-services";
+
+export function mount(root: NativeNode) {
+  const label = getResolvedCapabilities().imagePrefixes[0] ?? "Available";
+  return renderApp(() => [
+    createElement("text"),
+    Button({ children: Icon({ icon: CHECK, label }) }),
+  ], root);
+}
+`);
+  const config = path.join(directory, "tsconfig.json");
+  await writeFile(config, JSON.stringify({
+    extends: "@hewel/zgui/tsconfig.native.json",
+    compilerOptions: { ...strictConsumerOptions, skipLibCheck: true },
+    include: ["src"],
+  }));
+  typecheckProject(config);
+});
+
 test("application-local build supports directories outside the workspace with spaces", async t => {
   const directory = await externalApplication(t);
   const { stdout } = await execute(process.execPath, [cli, "build"], { cwd: directory, timeout: 30000 });

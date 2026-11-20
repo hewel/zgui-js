@@ -54,8 +54,7 @@ export function Icon(props: IconProps): NativeNode {
     const keys = Object.keys(props);
     if (keys.length > 0) {
       let extra: Record<string, unknown> | undefined;
-      for (let i = 0; i < keys.length; i++) {
-        const key = keys[i];
+      for (const key of keys) {
         if (key === "icon" || key === "size" || key === "label") continue;
         const desc = Object.getOwnPropertyDescriptor(props, key);
         if (desc) {

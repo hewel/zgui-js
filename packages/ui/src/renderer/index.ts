@@ -102,16 +102,14 @@ export function spread(
     const record = props as Record<string, unknown>;
     const keys = Object.keys(record);
     let hasGetter = false;
-    for (let i = 0; i < keys.length; i++) {
-      const key = keys[i];
+    for (const key of keys) {
       if (key !== "children" && Object.getOwnPropertyDescriptor(record, key)?.get !== undefined) {
         hasGetter = true;
         break;
       }
     }
     if (!hasGetter) {
-      for (let i = 0; i < keys.length; i++) {
-        const key = keys[i];
+      for (const key of keys) {
         if (key === "children") {
           if (!skipChildren) {
             const desc = Object.getOwnPropertyDescriptor(record, "children");
@@ -150,19 +148,20 @@ export function flush<T>(fn?: () => T): T | void {
 const mergedSources = new WeakMap<object, readonly object[]>();
 export function mergeProps<T extends readonly object[]>(...sources: T): MergeSources<T> {
   let inherited: object[] | null = null;
-  for (let i = 0; i < sources.length; i++) {
-    const prior = mergedSources.get(sources[i]);
+  let offset = 0;
+  for (const source of sources) {
+    const prior = mergedSources.get(source);
     if (prior) {
-      inherited ??= sources.slice(0, i);
+      inherited ??= sources.slice(0, offset);
       inherited.push(...prior);
     } else if (inherited) {
-      inherited.push(sources[i]);
+      inherited.push(source);
     }
+    offset += 1;
   }
   const list = inherited ?? sources;
   let c0 = 0, c1 = 0, c2 = 0;
-  for (let i = 0; i < list.length; i++) {
-    const item = list[i];
+  for (const item of list) {
     if ("__zguiClass" in item) c0 += 1;
     if ("__zguiStyle" in item) c1 += 1;
     if ("__zguiInvariantStyle" in item) c2 += 1;
@@ -176,8 +175,8 @@ export function mergeProps<T extends readonly object[]>(...sources: T): MergeSou
       configurable: true,
       get() {
         let joined = "";
-        for (let i = 0; i < originals.length; i++) {
-          const value = Reflect.get(originals[i], "__zguiClass");
+        for (const original of originals) {
+          const value = Reflect.get(original, "__zguiClass");
           if (value) joined = joined ? `${joined} ${String(value)}` : String(value);
         }
         return joined;
@@ -191,8 +190,8 @@ export function mergeProps<T extends readonly object[]>(...sources: T): MergeSou
         configurable: true,
         get() {
           const combined: Record<string, unknown> = {};
-          for (let i = 0; i < originals.length; i++) {
-            const value = Reflect.get(originals[i], key);
+          for (const original of originals) {
+            const value = Reflect.get(original, key);
             if (value) Object.assign(combined, value);
           }
           return combined;

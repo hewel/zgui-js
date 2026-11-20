@@ -158,7 +158,7 @@ fn sideways() -> Sideways {
 }
 
 #[test]
-fn a_mark_of_a_node_the_engine_left_a_descent_flag_on_still_reaches_the_root() {
+fn sibling_selector_descent_leaves_no_dirty_summary_and_later_marks_reach_the_root() {
     let mut shape = sideways();
     let mut engine = Engine::new(&shape.document);
     engine.add_author_sheet(
@@ -181,18 +181,17 @@ fn a_mark_of_a_node_the_engine_left_a_descent_flag_on_still_reaches_the_root() {
     );
     walk_retire(&shape.document);
     assert!(
-        shape
+        !shape
             .document
             .store()
             .core(shape.y)
             .dirty()
             .subtree()
             .contains(Dirty::RESTYLE),
-        "the engine's descent flag on `y` outlives the walk, because the walk never visits `y`"
+        "temporary selector descent on `y` must not leave a document dirty summary"
     );
 
-    // Now `y` itself changes. Its own bits are clean, so this mark has real work to do — and a mark
-    // that early-returned on the subtree union would do none of it.
+    // A real mutation on `y` must still make it reachable from the root.
     edit::set_classes(
         &shape.document,
         shape.y,

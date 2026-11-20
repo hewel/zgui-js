@@ -217,6 +217,7 @@ pub(crate) struct Session {
     disposer: RefCell<Option<Persistent<Function<'static>>>>,
     primary: Option<Rc<SessionRegion>>,
     layers: RefCell<BTreeMap<u32, Rc<SessionRegion>>>,
+    shell_stylesheets: RefCell<Vec<(String, String)>>,
     shell_surfaces: Cell<usize>,
     bridges: Rc<BridgeGroup>,
     pub(crate) shell: Rc<Shell>,
@@ -319,6 +320,7 @@ impl Session {
             Self {
                 disposer: RefCell::new(None), primary, layers: RefCell::new(BTreeMap::new()), bridges, shell, work, engine: RefCell::new(None),
                 shell_surfaces: Cell::new(0), retirement_reported: Cell::new(false),
+                shell_stylesheets: RefCell::new(Vec::new()),
                 telemetry: Cell::new(None), shutdown_started: Cell::new(false),
                 mount_started: Cell::new(false), stylesheet_installed: Cell::new(false),
                 contract_reported: Cell::new(false),
@@ -335,7 +337,8 @@ impl Session {
                 primary.bridge.install(&ctx)?;
                 ctx.globals().set("mountRoot", primary.bridge.root(&ctx)?)?;
             }
-            session.shell.install(&ctx)?;
+            let shell_api = session.shell.install(&ctx)?;
+            session.shell.install_stylesheet_api(&shell_api, &session)?;
             session.work.install(&ctx)
         })?;
         let loaded = engine.load_module(&session.module.name, &session.module.source);
@@ -460,6 +463,9 @@ impl Session {
         self.layers.borrow_mut().insert(id, owned.clone());
         self.refresh_frame_host();
         self.install_sheets(&owned);
+        for (name, css) in self.shell_stylesheets.borrow().iter() {
+            owned.region.host.install_stylesheet(name, css);
+        }
         let mut engine = self.engine.borrow_mut();
         let engine = engine.as_mut().ok_or("session disposed")?;
         let result = self.bridges.run(engine.turn(), |js| js.with_context(|ctx| {
@@ -487,6 +493,10 @@ impl Session {
     /// Dispose one auxiliary document while the native surface still exists.
     pub(crate) fn detach_layer(&self, id: u32) -> Result<()> {
         let Some(owned) = self.layers.borrow_mut().remove(&id) else { return Ok(()); };
+        // Disposers can remove sheets from the session set after this region leaves it.
+        for (name, _) in self.shell_stylesheets.borrow().iter() {
+            owned.region.host.remove_stylesheet(name);
+        }
         let disposer = owned.disposer.borrow_mut().take();
         let cleanup = self.cleanup(disposer);
         self.bridges.remove(&owned.bridge);
@@ -576,7 +586,7 @@ impl Session {
         if let Err(error) = step.run_turn(engine.turn(), |js, cb| js.with_context(|ctx| cb.call(&ctx))) {
             let failure = self.contract_failure().map(SessionError::from)
                 .unwrap_or_else(|| self.diagnostic(error).into());
-            *self.fault.borrow_mut() = Some(failure);
+            self.fault.borrow_mut().get_or_insert(failure);
         }
         // Cancellation is already applied and revoked before owner work is scheduled.
         self.wake_owner();
@@ -740,6 +750,10 @@ impl Session {
 
     fn check_contract(&self) -> Result<()> {
         if let Some(failure) = self.contract_failure() { return Err(failure.into()); }
+        // Shell sheets validate synchronously, so a JS exception must not mask their strict fault.
+        if let Some(failure) = self.fault.borrow_mut().take_if(|error| matches!(error, SessionError::Style { .. })) {
+            return Err(failure);
+        }
         let mut failure = None;
         for diagnostic in self.primary.iter().chain(self.layers.borrow().values()).flat_map(|owned| owned.bridge.take_style_diagnostics()) {
             eprintln!("style-diagnostic: {}: {}", diagnostic.code, diagnostic.message);
@@ -785,16 +799,21 @@ impl Session {
         self.wake_owner();
     }
 
-    pub(crate) fn stylesheet_rejected(&self, name: &str, diagnostics: zgui_style::CssDiagnostics) {
+    pub(crate) fn stylesheet_rejected(&self, name: &str, diagnostics: zgui_style::CssDiagnostics) -> String {
         let message = diagnostics.iter().map(|diagnostic| format!("{}:{}: {}", diagnostic.location.line, diagnostic.location.column, diagnostic.message)).collect::<Vec<_>>().join("; ");
+        self.report_stylesheet_rejection(name, "STYLESHEET_PARSE_INVALID", &message);
+        message
+    }
+
+    fn report_stylesheet_rejection(&self, name: &str, code: &'static str, message: &str) {
         if self.policy.strict_rejections {
             self.record_fault(SessionError::Style {
                 code: "E_STYLE",
-                message,
-                details: serde_json::json!({"code":"STYLESHEET_PARSE_INVALID","sheet":name}),
+                message: message.to_owned(),
+                details: serde_json::json!({"code":code,"sheet":name}),
             });
         } else {
-            eprintln!("style-diagnostic: STYLESHEET_PARSE_INVALID: {name}: {message}");
+            eprintln!("style-diagnostic: {code}: {name}: {message}");
         }
     }
 
@@ -822,6 +841,48 @@ impl Session {
     fn remove_sheets(&self, owned: &SessionRegion) {
         for index in 0..self.module.styles.len() {
             owned.region.host.remove_stylesheet(&format!("application:{index}"));
+        }
+    }
+
+    /// Validates before changing the shared sheet, even when no mount region exists.
+    pub(crate) fn install_shell_stylesheet(&self, name: String, css: String) -> std::result::Result<(), String> {
+        let mut sheets = self.shell_stylesheets.borrow_mut();
+        let current = sheets.iter_mut().find(|(key, _)| key == &name);
+        if current.as_ref().is_some_and(|(_, installed)| installed == &css) { return Ok(()); }
+        if self.module.package.is_some()
+            && let Err(message) = zgui::runtime::image_policy::audit_stylesheet_image_urls(&css)
+        {
+            self.report_stylesheet_rejection(&name, "STYLESHEET_IMAGE_URL_FORBIDDEN", message);
+            return Err(message.to_owned());
+        }
+        zgui_style::preflight_stylesheet(&css).map_err(|diagnostics| self.stylesheet_rejected(&name, diagnostics))?;
+        for owned in self.primary.iter().chain(self.layers.borrow().values()) {
+            owned.region.host.install_stylesheet(&name, &css);
+        }
+        match current {
+            Some((_, installed)) => *installed = css,
+            None => sheets.push((name, css)),
+        }
+        Ok(())
+    }
+
+    /// Removes the sheet from both current windows and the set inherited by future windows.
+    pub(crate) fn remove_shell_stylesheet(&self, name: &str) {
+        let mut sheets = self.shell_stylesheets.borrow_mut();
+        let Some(index) = sheets.iter().position(|(key, _)| key == name) else { return; };
+        sheets.remove(index);
+        for owned in self.primary.iter().chain(self.layers.borrow().values()) {
+            owned.region.host.remove_stylesheet(name);
+        }
+    }
+
+    fn clear_shell_stylesheets(&self) {
+        let sheets = std::mem::take(&mut *self.shell_stylesheets.borrow_mut());
+        if sheets.is_empty() { return; }
+        for owned in self.primary.iter().chain(self.layers.borrow().values()) {
+            for (name, _) in &sheets {
+                owned.region.host.remove_stylesheet(name);
+            }
         }
     }
 
@@ -938,12 +999,10 @@ impl Session {
         self.work.begin_stop();
         self.fault.borrow_mut().take();
         let mut cleanup_error = None;
-        {
-            let layers = self.layers.borrow();
-            for owned in popups_in_close_order.into_iter().filter_map(|id| layers.get(&id)) {
-                if let Err(error) = self.cleanup(owned.disposer.borrow_mut().take()) {
-                    cleanup_error.get_or_insert(error);
-                }
+        for id in popups_in_close_order {
+            let disposer = self.layers.borrow().get(&id).and_then(|owned| owned.disposer.borrow_mut().take());
+            if let Err(error) = self.cleanup(disposer) {
+                cleanup_error.get_or_insert(error);
             }
         }
         if let Err(error) = self.cleanup(self.disposer.borrow_mut().take()) {
@@ -966,6 +1025,7 @@ impl Session {
         let canvas_scenes = self.counts().canvas_scenes;
         self.bridges.dispose();
         self.shell.clear();
+        self.clear_shell_stylesheets();
         for owned in std::mem::take(&mut *self.layers.borrow_mut()).into_values() {
             self.bridges.remove(&owned.bridge);
             self.remove_sheets(&owned);

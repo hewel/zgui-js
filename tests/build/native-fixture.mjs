@@ -320,6 +320,12 @@ export function createHost({ strictStyles = false, reducedMotion = false, monito
     }
   };
 
+  const installRegionStylesheet = (region, key, css) => {
+    if (region.stylesheets.get(key) === css) return;
+    region.installs.push(key);
+    region.stylesheets.set(key, css);
+  };
+
   const makeBridge = region => ({
     createElement: tag => {
       assertActiveHost("createElement");
@@ -497,13 +503,18 @@ export function createHost({ strictStyles = false, reducedMotion = false, monito
       if (value === undefined || value === null) node.props.delete(name);
       else node.props.set(name, value);
     },
-    installStylesheet: (name, css) => {
+    installStylesheet: (name, css, target) => {
       assertActiveHost("installStylesheet");
-      if (region.stylesheets.get(name) === css) return;
-      region.installs.push(name);
-      region.stylesheets.set(name, css);
+      if (region.retired) throw new ReferenceError("native session is disposed");
+      if (target !== undefined) {
+        assertLive(target, "stylesheet target", region);
+        if (!attached(target)) throw new ReferenceError("native stylesheet target is detached");
+      }
+      installRegionStylesheet(region, name, css);
     },
-    removeStylesheet: name => { region.stylesheets.delete(name); },
+    removeStylesheet: name => {
+      if (!region.retired) region.stylesheets.delete(name);
+    },
     getReducedMotion: () => reducedMotion,
     focus: (node, reveal = false) => {
       assertLive(node, "focus target", region);
@@ -584,6 +595,16 @@ export function createHost({ strictStyles = false, reducedMotion = false, monito
 
   const host = makeBridge(primary);
   const surfaces = new Map();
+  const shellStylesheets = new Map();
+  const forEachRegion = apply => {
+    apply(primary);
+    for (const { region } of surfaces.values()) apply(region);
+  };
+  const validateStylesheetName = name => {
+    if (typeof name !== "string" || name.length === 0 || name.length > 128 || /[^a-zA-Z0-9_.:-]/.test(name)) {
+      throw new TypeError("stylesheet names use 1-128 ASCII bytes from [a-zA-Z0-9_.:-]");
+    }
+  };
   const layerIds = new Map();
   const popupIds = new Map();
   const lockIds = new Map();
@@ -623,6 +644,7 @@ export function createHost({ strictStyles = false, reducedMotion = false, monito
     }
   };
   const present = surface => {
+    if (stopping) return false;
     if (surface.popup) {
       const parent = surfaces.get(surface.placement.parent);
       return parent && !parent.lock && !parent.closing;
@@ -633,6 +655,7 @@ export function createHost({ strictStyles = false, reducedMotion = false, monito
   const attachSurface = surface => {
     if (surface.closing || surface.root || !present(surface)) return;
     const region = { stylesheets: new Map(), installs: [], scenes: [] };
+    for (const { key, css } of shellStylesheets.values()) installRegionStylesheet(region, key, css);
     surface.region = region;
     surface.root = makeNode("root", region);
     surface.bridge = makeBridge(region);
@@ -644,6 +667,7 @@ export function createHost({ strictStyles = false, reducedMotion = false, monito
     const region = surface.region;
     try { surface.dispose?.(); }
     finally {
+      region.retired = true;
       if (surfaces.get(surface.name) === surface) surfaces.delete(surface.name);
       const doomed = new Set([...nodes.values()].filter(node => nodeRegions.get(node) === region));
       invalidate(doomed);
@@ -678,6 +702,24 @@ export function createHost({ strictStyles = false, reducedMotion = false, monito
 
   const shell = {
     getSessionGeneration: () => generation,
+    installStylesheet(name, css) {
+      assertActiveHost("installStylesheet");
+      validateStylesheetName(name);
+      if (typeof css !== "string") throw new TypeError("stylesheet CSS must be a string");
+      const existing = shellStylesheets.get(name);
+      if (existing?.css === css) return;
+      // Keep region-local keys inspectable as strings without sharing their namespace.
+      const key = existing?.key ?? Symbol(`shell:${name}`);
+      shellStylesheets.set(name, { key, css });
+      forEachRegion(region => installRegionStylesheet(region, key, css));
+    },
+    removeStylesheet(name) {
+      validateStylesheetName(name);
+      const sheet = shellStylesheets.get(name);
+      if (!sheet) return;
+      shellStylesheets.delete(name);
+      forEachRegion(region => { region.stylesheets.delete(sheet.key); });
+    },
     requestSessionLock(callback) {
       assertActiveHost("requestSessionLock");
       requireLock();
@@ -891,6 +933,10 @@ export function createHost({ strictStyles = false, reducedMotion = false, monito
     focus: (node, options) => moveFocus(node, options?.reveal ?? false, options?.cause ?? "programmatic"),
     beginStop: () => {
       stopping = true;
+      forEachRegion(region => {
+        for (const { key } of shellStylesheets.values()) region.stylesheets.delete(key);
+      });
+      shellStylesheets.clear();
       lockSubscribers.clear();
       for (const surface of popupIds.values()) {
         surface.closing = true;

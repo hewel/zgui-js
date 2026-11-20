@@ -1,6 +1,6 @@
 import { getOwner, onCleanup } from "#solid";
 import { flush } from "./renderer/index.js";
-import { bridgeFor, withCallbackBridge } from "./host.js";
+import { bridgeFor, bridgeForTarget, withCallbackBridge } from "./host.js";
 import type { CanvasScene, NativeDismissLayer, NativeDismissLayerOptions, NativeDismissReason, NativeFocusOptions, NativeFocusTrapOptions, NativeGeometry, NativeGeometryKind, NativeNode, NativeWindowRect } from "./types.js";
 
 export function getReducedMotion(): boolean {
@@ -70,9 +70,10 @@ export function registerDismissLayer(
   return { dispose: lease.dispose, update: options => lease.update(dismissOptions(options)) };
 }
 
-export function mountStylesheet(name: string, css: string): () => void {
-  const bridge = bridgeFor();
-  bridge.installStylesheet(name, css);
+/** Mount a stylesheet in the current region, or in the region of a live, attached target. */
+export function mountStylesheet(name: string, css: string, target?: NativeNode): () => void {
+  const bridge = target === undefined ? bridgeFor() : bridgeForTarget(target);
+  bridge.installStylesheet(name, css, target);
   let removed = false;
   const dispose = () => {
     if (removed) return;

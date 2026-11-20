@@ -5,7 +5,7 @@ use rquickjs::{Array, Ctx, Exception, Function, Object, Persistent, Value, funct
 use serde::{Deserialize, Serialize};
 use zgui::{geom::{Css, CssPx, Edges, Size}, platform::{InputRect, InputRegion, KeyboardInteractivity, Layer, LayerPlacement, MonitorInfo, SessionLockState, WakeReason, Waker}};
 
-use crate::{assets::{ContractFailure, MAX_SAFE_ID}, work::service_error};
+use crate::{assets::{ContractFailure, MAX_SAFE_ID}, session::Session, work::service_error};
 
 mod popup;
 pub(crate) use popup::PopupSpec;
@@ -311,7 +311,7 @@ impl Shell {
     }
 
     /// Install the session-level bridge independently of all native documents.
-    pub(crate) fn install<'js>(self: &Rc<Self>, ctx: &Ctx<'js>) -> rquickjs::Result<()> {
+    pub(crate) fn install<'js>(self: &Rc<Self>, ctx: &Ctx<'js>) -> rquickjs::Result<Object<'js>> {
         let api = Object::new(ctx.clone())?;
         let generation = self.generation as f64;
         api.prop("getSessionGeneration", Property::from(Func::from(move || generation)))?;
@@ -390,7 +390,41 @@ impl Shell {
         }))?;
         self.install_popup(&api)?;
         self.install_lock(&api)?;
-        ctx.globals().set("__zguiShell", api)
+        ctx.globals().set("__zguiShell", api.clone())?;
+        Ok(api)
+    }
+
+    /// Exposes generation-wide stylesheet operations without looking up a mount region.
+    pub(crate) fn install_stylesheet_api<'js>(self: &Rc<Self>, api: &Object<'js>, session: &Rc<Session>) -> rquickjs::Result<()> {
+        let weak = Rc::downgrade(self);
+        let session = Rc::downgrade(session);
+        let install = session.clone();
+        api.set("installStylesheet", Func::from(move |ctx: Ctx<'js>, name: String, css: String| {
+            let shell = owner(&weak, &ctx)?;
+            shell.require_creation(&ctx)?;
+            let key = shell.stylesheet_key(&ctx, &name)?;
+            let session = install.upgrade().ok_or_else(|| Exception::throw_reference(&ctx, "shell session is disposed"))?;
+            if let Err(diagnostic) = session.install_shell_stylesheet(key, css) {
+                let message = format!("stylesheet {name} rejected: {diagnostic}");
+                return Err(ctx.throw(service_error(&ctx, "E_STYLE_PROFILE", &message)?.into_value()));
+            }
+            Ok(())
+        }))?;
+        let weak = Rc::downgrade(self);
+        api.set("removeStylesheet", Func::from(move |ctx: Ctx<'js>, name: String| {
+            let shell = owner(&weak, &ctx)?;
+            if shell.life.get() != Lifecycle::Stopping { shell.require_active(&ctx)?; }
+            let key = shell.stylesheet_key(&ctx, &name)?;
+            // During Session::drop, retirement itself still clears the tracked sheets.
+            if let Some(session) = session.upgrade() { session.remove_shell_stylesheet(&key); }
+            Ok::<(), rquickjs::Error>(())
+        }))
+    }
+
+    fn stylesheet_key(&self, ctx: &Ctx<'_>, name: &str) -> rquickjs::Result<String> {
+        ui_bridge::validate_stylesheet_name(ctx, name)?;
+        // A staged successor can share the primary window with its predecessor.
+        Ok(format!("shell:{}:{name}", self.generation))
     }
 
     fn install_lock<'js>(self: &Rc<Self>, api: &Object<'js>) -> rquickjs::Result<()> {

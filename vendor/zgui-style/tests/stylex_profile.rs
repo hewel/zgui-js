@@ -33,6 +33,25 @@ fn official_priority_selectors_match_and_preserve_specificity() {
 }
 
 #[test]
+fn replacing_a_root_custom_property_restyles_an_inline_reader_and_leaves_no_style_work() {
+    let mut h = Harness::new();
+    let wrapper = h.append(h.root, "column");
+    let child = h.append(wrapper, "box");
+    h.edit(|edit| edit.set_inline_style(child, Some("background-color: var(--color-primary)")));
+    assert!(h.add_author(":root { --color-primary: #ff0000 }").is_empty());
+    h.frame();
+    assert_eq!(support::background(&h, child), (255, 0, 0));
+    h.retire_all();
+
+    assert!(h.replace(0, ":root { --color-primary: #7dd3fc }").is_empty());
+    h.engine.force_author_rules_dirty();
+    h.frame();
+
+    assert_eq!(support::background(&h, child), (125, 211, 252));
+    assert_eq!(h.frame().passes, 0, "the completed restyle must not leave phantom work");
+}
+
+#[test]
 fn partial_invalid_sheets_fail_preflight_without_installing_the_valid_subset() {
     let mut h = Harness::new();
     h.add_author("root { color: rgb(1, 2, 3) }");

@@ -422,6 +422,9 @@ impl<'doc> DomTraversal<Node<'doc>> for RecalcStyle<'_> {
         // had nothing to do in it since.
         if context.shared.traversal_flags.for_animation_only() {
             crate::engine::animate::descent::clear(element);
+        } else {
+            // Retire SELECTOR_DIRTY_DESCENDANTS here; the document's dirty-child index persists until the dirty walk.
+            element.clear_selector_work_below();
         }
 
         // Visited is not styled. The traversal descends *through* every element on the path to the
@@ -446,11 +449,6 @@ impl<'doc> DomTraversal<Node<'doc>> for RecalcStyle<'_> {
             viewport_units: data.has_styles()
                 && data.styles.viewport_unit_usage() != ViewportUnitUsage::None,
         });
-
-        // The engine's descent flag is not cleared here, because this document does not store one:
-        // "is there work below me" is a view of the invalidation word, and that word is retired
-        // exactly once per frame by the walk that also retires the obligations it summarises.
-        // Clearing it on a second schedule is how a mark taken between the two is silently lost.
     }
 
     /// The engine's own answer, plus one of this document's: an element whose inherited custom

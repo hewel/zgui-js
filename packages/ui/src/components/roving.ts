@@ -25,8 +25,7 @@ export function createRovingFocus(orientation: Accessor<GroupOrientation>, navig
     let activeMatch: Entry | undefined;
     let singlePreferred: Entry | undefined;
     let preferredCount = 0;
-    for (let i = 0; i < items.length; i++) {
-      const item = items[i];
+    for (const item of items) {
       if (item.disabled()) continue;
       if (enabledCount === 0) firstEnabled = item;
       enabledCount += 1;
@@ -41,8 +40,7 @@ export function createRovingFocus(orientation: Accessor<GroupOrientation>, navig
     if (preferredCount === 1) return singlePreferred;
     const sorted = ordered();
     let firstSorted: Entry | undefined;
-    for (let i = 0; i < sorted.length; i++) {
-      const item = sorted[i];
+    for (const item of sorted) {
       if (item.disabled()) continue;
       if (!firstSorted) firstSorted = item;
       if (item.preferred()) return item;
@@ -59,7 +57,7 @@ export function createRovingFocus(orientation: Accessor<GroupOrientation>, navig
     const start = from < 0 ? (direction > 0 ? -1 : orderedItems.length) : from;
     for (let step = 1; step <= orderedItems.length; step++) {
       const candidate = orderedItems[(start + direction * step + orderedItems.length) % orderedItems.length];
-      if (!candidate.disabled()) return focusCandidate(candidate);
+      if (candidate && !candidate.disabled()) return focusCandidate(candidate);
     }
     return false;
   };
@@ -98,7 +96,7 @@ export function createRovingFocus(orientation: Accessor<GroupOrientation>, navig
       const from = items.findIndex(item => item.node === active());
       for (let step = 1; step <= items.length; step++) {
         const next = items[(from + step) % items.length];
-        if (matches(next.node)) return focusCandidate(next);
+        if (next && matches(next.node)) return focusCandidate(next);
       }
       return false;
     },

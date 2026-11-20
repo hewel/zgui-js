@@ -63,6 +63,36 @@ impl ImagePolicy {
     }
 }
 
+/// Audits a stylesheet for CSS resource constructs forbidden in packaged applications.
+///
+/// # Errors
+///
+/// Returns a diagnostic for URL tokens, `@import`, or `image-set`, including in nested values.
+pub fn audit_stylesheet_image_urls(css: &str) -> Result<(), &'static str> {
+    let mut input = cssparser::ParserInput::new(css);
+    if forbidden_css(&mut cssparser::Parser::new(&mut input)) {
+        return Err("CSS resource URLs, @import, and image-set are unsupported by the native painter; use an image element with a declared package src");
+    }
+    Ok(())
+}
+
+fn forbidden_css(parser: &mut cssparser::Parser<'_, '_>) -> bool {
+    use cssparser::Token;
+    while let Ok(token) = parser.next_including_whitespace_and_comments().cloned() {
+        match token {
+            Token::UnquotedUrl(_) | Token::BadUrl(_) => return true,
+            Token::AtKeyword(name) if name.eq_ignore_ascii_case("import") => return true,
+            Token::Function(name) if name.eq_ignore_ascii_case("url") || name.eq_ignore_ascii_case("image-set") || name.eq_ignore_ascii_case("-webkit-image-set") => return true,
+            Token::Function(_) | Token::ParenthesisBlock | Token::SquareBracketBlock | Token::CurlyBracketBlock => {
+                let nested: Result<bool, cssparser::ParseError<'_, ()>> = parser.parse_nested_block(|parser| Ok(forbidden_css(parser)));
+                if nested.unwrap_or(true) { return true; }
+            }
+            _ => {}
+        }
+    }
+    false
+}
+
 /// Current state of one native image request.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ImageState {

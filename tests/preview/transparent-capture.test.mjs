@@ -162,16 +162,20 @@ test("lock surfaces stay opaque when author CSS makes the root transparent", asy
   await mkdir(path.join(app, "src"), { recursive: true });
   await writeFile(path.join(app, "src/app.css"), ":root { background-color: transparent; }\n");
   const bundle = await buildFixtureApp(app, "transparent-lock", `
-    import { Button, SessionLockSurface, renderApp, requestSessionLock } from "@hewel/zgui";
+    import { Button, SessionLockSurface, mountShellStylesheet, renderApp, requestSessionLock } from "@hewel/zgui";
     import type { NativeNode } from "@hewel/zgui";
     export const hostApiVersion = 1;
     export function mount(root: NativeNode) {
-      return renderApp(() => <column>
-        <Button testId="lock" onClick={() => requestSessionLock()}>Lock</Button>
-        <SessionLockSurface name="lock-left" output="left">
-          <box style="display: block; position: fixed; left: 10px; top: 10px; width: 30px; height: 30px; background: #123456" />
-        </SessionLockSurface>
-      </column>, root);
+      return renderApp(() => {
+        mountShellStylesheet("theme", ":root { --swatch: #123456; }");
+        return <column>
+          <Button testId="lock" onClick={() => requestSessionLock()}>Lock</Button>
+          <box style="position: fixed; left: 10px; top: 50px; width: 30px; height: 30px; background: var(--swatch)" />
+          <SessionLockSurface name="lock-left" output="left">
+            <box style="position: fixed; left: 10px; top: 10px; width: 30px; height: 30px; background: var(--swatch)" />
+          </SessionLockSurface>
+        </column>;
+      }, root);
     }
   `, { rawSource: true, capabilities: { sessionLock: true } });
   const { out } = await runScenario({ projectDir: temp.dir, bundle, profile, name: "lock", requiredCapabilities: [
@@ -184,6 +188,8 @@ test("lock surfaces stay opaque when author CSS makes the root transparent", asy
     capture("lock-left"),
   ] });
   assertTransparentRenderer((await readFrame(out, "main")).renderer);
+  const main = await readPng(path.join(out, "captures/main.png"));
+  assertRgba(pixelAt(main, 20, 60), [18, 52, 86, 255]);
   const artifact = "surfaces/lock-left/lock-left";
   assert.equal((await readFrame(out, artifact)).renderer.alphaMode, "Opaque");
   const png = await readPng(path.join(out, `captures/${artifact}.png`));

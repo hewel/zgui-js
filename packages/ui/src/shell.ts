@@ -9,11 +9,33 @@ import type {
 
 declare const console: { warn(message: string): void };
 
-const popupParentRegions = new WeakMap<UiBridge, { shell: NativeHost["__zguiShell"]; name: string }>();
+type ShellBridge = NativeHost["__zguiShell"];
+const popupParentRegions = new WeakMap<UiBridge, { shell: ShellBridge; name: string }>();
+const stylesheetRegistrations = new WeakMap<ShellBridge, Map<string, symbol>>();
 
 /** Read the current session's generation, including during module preflight. */
 export function getSessionGeneration(): number {
   return shellBridge().getSessionGeneration();
+}
+
+/** Mount a session-wide stylesheet in current and future regions. */
+export function mountShellStylesheet(name: string, css: string): () => void {
+  const shell = shellBridge();
+  shell.installStylesheet(name, css);
+  let registrations = stylesheetRegistrations.get(shell);
+  if (!registrations) {
+    registrations = new Map();
+    stylesheetRegistrations.set(shell, registrations);
+  }
+  const token = Symbol();
+  registrations.set(name, token);
+  const dispose = () => {
+    if (registrations.get(name) !== token) return;
+    shell.removeStylesheet(name);
+    registrations.delete(name);
+  };
+  if (getOwner()) onCleanup(dispose);
+  return dispose;
 }
 
 /** Subscribe to output snapshots for the lifetime of the current Solid owner. */

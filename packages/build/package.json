@@ -3,10 +3,10 @@
   "version": "0.1.0",
   "license": "Apache-2.0",
   "type": "module",
-  "types": "./sdk/index.d.ts",
+  "types": "./src/public-api.d.ts",
   "exports": {
     ".": {
-      "types": "./sdk/index.d.ts",
+      "types": "./src/public-api.d.ts",
       "default": "./src/index.ts"
     }
   },

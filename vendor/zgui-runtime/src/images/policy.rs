@@ -127,9 +127,8 @@ impl ImageLoader {
 
     pub(crate) fn audit_css(&mut self, css: &str) -> bool {
         if !self.completed.restricted() { return true; }
-        let mut input = cssparser::ParserInput::new(css);
-        if forbidden_css(&mut cssparser::Parser::new(&mut input)) {
-            self.policy_failure("CSS resource URLs, @import, and image-set are unsupported by the native painter; use an image element with a declared package src");
+        if let Err(message) = crate::image_policy::audit_stylesheet_image_urls(css) {
+            self.policy_failure(message);
             return false;
         }
         true
@@ -163,21 +162,4 @@ impl ImageLoader {
             }
         }
     }
-}
-
-fn forbidden_css(parser: &mut cssparser::Parser<'_, '_>) -> bool {
-    use cssparser::Token;
-    while let Ok(token) = parser.next_including_whitespace_and_comments().cloned() {
-        match token {
-            Token::UnquotedUrl(_) | Token::BadUrl(_) => return true,
-            Token::AtKeyword(name) if name.eq_ignore_ascii_case("import") => return true,
-            Token::Function(name) if name.eq_ignore_ascii_case("url") || name.eq_ignore_ascii_case("image-set") || name.eq_ignore_ascii_case("-webkit-image-set") => return true,
-            Token::Function(_) | Token::ParenthesisBlock | Token::SquareBracketBlock | Token::CurlyBracketBlock => {
-                let nested: Result<bool, cssparser::ParseError<'_, ()>> = parser.parse_nested_block(|parser| Ok(forbidden_css(parser)));
-                if nested.unwrap_or(true) { return true; }
-            }
-            _ => {}
-        }
-    }
-    false
 }

@@ -106,3 +106,94 @@ test("mountStylesheet installs on mount and removes the stylesheet on disposal",
   dispose = undefined;
   assert.equal(harness.stylesheets.has("sample-sheet"), false);
 });
+
+const targetedStylesheetFixture = `
+import {
+  LayerSurface, createEffect, createSignal, getOwner, mountStylesheet, renderShell,
+} from "@hewel/zgui";
+import type { NativeNode, Owner } from "@hewel/zgui";
+
+const [target, setTarget] = createSignal<NativeNode>();
+const [css, setCss] = createSignal<string>();
+let applyOwner: Owner | null | undefined;
+export { mountStylesheet, setCss, target };
+export const getApplyOwner = () => applyOwner;
+
+export function mount() {
+  return renderShell(() => {
+    createEffect(() => ({ node: target(), css: css() }), ({ node, css }) => {
+      if (!node || css === undefined) return;
+      applyOwner = getOwner();
+      return mountStylesheet("targeted", css, node);
+    });
+    return <>
+      <LayerSurface name="target" output="DP-1"><box ref={node => { setTarget(node); }} /></LayerSurface>
+      <LayerSurface name="other"><box /></LayerSurface>
+    </>;
+  });
+}
+`;
+
+test("mountStylesheet uses an explicit target node from an ownerless callback", async t => {
+  const monitor = { id: "DP-1", name: "DP-1", x: 0, y: 0, width: 800, height: 600, scale: 1 };
+  const harness = createHost({ monitors: [monitor] });
+  const mod = await moduleFor(t, targetedStylesheetFixture);
+  assert.equal(globalThis.__zgui, undefined);
+  const previous = globalThis.__zguiShell;
+  globalThis.__zguiShell = harness.shell;
+  let dispose;
+  t.after(() => {
+    try { dispose?.(); harness.flush(); }
+    finally {
+      if (previous === undefined) delete globalThis.__zguiShell;
+      else globalThis.__zguiShell = previous;
+    }
+  });
+  dispose = harness.runTurn(mod.mount);
+  harness.flush();
+  const target = harness.surfaces.get("target");
+  const other = harness.surfaces.get("other");
+  assert.ok(target);
+  assert.ok(other);
+  assert.equal(target.region.stylesheets.size, 0);
+
+  const css = "box { color: blue; }";
+  harness.runTurn(() => mod.setCss(css));
+  assert.equal(mod.getApplyOwner(), null);
+  assert.equal(target.region.stylesheets.get("targeted"), css);
+  assert.equal(other.region.stylesheets.size, 0);
+
+  harness.runTurn(() => mod.setCss(undefined));
+  assert.equal(target.region.stylesheets.has("targeted"), false);
+  assert.equal(harness.surfaces.get("target"), target);
+
+  globalThis.__zgui = harness.host;
+  t.after(() => { delete globalThis.__zgui; });
+  assert.throws(
+    () => harness.runTurn(() => mod.mountStylesheet("unknown", css, harness.makeNode("box"))),
+    /unknown|invalid/i,
+  );
+  assert.equal(harness.stylesheets.has("unknown"), false, "an unknown target must not use the ambient bridge");
+
+  const node = mod.target();
+  harness.runTurn(() => {
+    target.bridge.removeNode(target.root, node);
+    assert.throws(() => mod.mountStylesheet("detached", css, node), /detached/i);
+    target.bridge.insertNode(target.root, node);
+  });
+  assert.equal(target.region.stylesheets.has("detached"), false);
+
+  harness.runTurn(() => mod.setCss(css));
+  assert.equal(target.region.stylesheets.get("targeted"), css);
+  harness.emitMonitors([]);
+  harness.flush();
+  assert.equal(harness.surfaces.has("target"), false);
+  harness.runTurn(() => mod.setCss(undefined));
+  assert.equal(other.region.stylesheets.size, 0);
+
+  assert.throws(
+    () => harness.runTurn(() => mod.mountStylesheet("stale", css, node)),
+    /stale|detached|disposed/i,
+  );
+  assert.equal(harness.stylesheets.has("stale"), false, "a retired target must not use the ambient bridge");
+});

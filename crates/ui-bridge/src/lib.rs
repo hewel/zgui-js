@@ -964,9 +964,19 @@ impl UiBridge {
             bridge.sync_geometry_attachment(&ctx)
         }))?;
         let weak = Rc::downgrade(self);
-        api.set("installStylesheet", Func::from(move |ctx: Ctx<'js>, name: String, css: String| {
+        api.set("installStylesheet", Func::from(move |ctx: Ctx<'js>, name: String, css: String, target: Opt<Value<'js>>| {
             let bridge = owner(&weak, &ctx)?;
             bridge.require_creation(&ctx)?;
+            if let Some(target) = target.0.filter(|value| !value.is_undefined()) {
+                let handle = target.as_object().and_then(|object| object.as_class::<NativeNode>())
+                    .ok_or_else(|| Exception::throw_type(&ctx, "invalid native stylesheet target"))?
+                    .borrow().handle;
+                let registry = bridge.registry.borrow();
+                registry.native(handle).map_err(|error| host_error(&ctx, error))?;
+                if !registry.attached(handle.token()) {
+                    return Err(Exception::throw_reference(&ctx, "native stylesheet target is detached"));
+                }
+            }
             let name = stylesheet_name(&ctx, &bridge.registry.borrow().stylesheet_prefix(), &name)?;
             {
                 let mut stylesheets = bridge.stylesheets.borrow_mut();
@@ -983,7 +993,8 @@ impl UiBridge {
         }))?;
         let weak = Rc::downgrade(self);
         api.set("removeStylesheet", Func::from(move |ctx: Ctx<'js>, name: String| {
-            let bridge = owner(&weak, &ctx)?;
+            let Some(bridge) = weak.upgrade() else { return Ok(()); };
+            if bridge.disposed.get() { return Ok(()); }
             bridge.require_turn(&ctx)?;
             let name = stylesheet_name(&ctx, &bridge.registry.borrow().stylesheet_prefix(), &name)?;
             let index = { bridge.stylesheets.borrow().iter().position(|(candidate, _)| candidate == &name) };
@@ -1192,10 +1203,20 @@ impl Drop for UiBridge {
 }
 
 fn stylesheet_name(ctx: &Ctx<'_>, prefix: &str, key: &str) -> rquickjs::Result<String> {
-    let valid = !key.is_empty() && key.len() <= 128 && key.bytes().all(|byte|
+    validate_stylesheet_name(ctx, key)?;
+    Ok(format!("{prefix}{key}"))
+}
+
+/// Validates the logical name shared by region and shell stylesheet operations.
+///
+/// # Errors
+///
+/// Throws a JavaScript type error for a name outside the allowed ASCII alphabet or length.
+pub fn validate_stylesheet_name(ctx: &Ctx<'_>, name: &str) -> rquickjs::Result<()> {
+    let valid = !name.is_empty() && name.len() <= 128 && name.bytes().all(|byte|
         byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'.' | b':' | b'-'));
     if !valid { return Err(Exception::throw_type(ctx, "stylesheet names use 1-128 ASCII bytes from [a-zA-Z0-9_.:-]")); }
-    Ok(format!("{prefix}{key}"))
+    Ok(())
 }
 
 // Read a bounded unsigned JS array length directly instead of rquickjs::Array::len/iter,

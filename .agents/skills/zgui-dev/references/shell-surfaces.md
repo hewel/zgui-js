@@ -10,6 +10,20 @@ Use when authoring multi-output desktop shell UIs (status bars, docks, launchers
 - Track hotplug outputs reactively with `useMonitors(): Accessor<readonly Monitor[]>` inside a Solid owner.
 - Read the monotonic session generation (safe even during module preflight) via `getSessionGeneration()`.
 
+## Shared shell stylesheets
+
+Use `mountShellStylesheet(name, css)` from `@hewel/zgui` for theme CSS shared by all mount regions in the session, including surfaces that attach later or reattach after hotplug. Install it during mount or a later update, not during module preflight. Reinstalling an active name replaces its CSS in cascade order; its old disposer cannot remove the replacement. Region-local sheets have a separate namespace.
+
+Solid 2.0.1 runs `createEffect(compute, apply)`'s `apply` callback without an owner. The shell API needs no mount region. Keep the latest disposer for owner cleanup; disposing before each replacement would move the sheet to the end of the cascade.
+
+```tsx
+let disposeTheme: (() => void) | undefined;
+createEffect(themeCss, css => { disposeTheme = mountShellStylesheet("shell-theme", css); });
+onCleanup(() => disposeTheme?.());
+```
+
+For CSS that belongs to one surface, use [a region-local stylesheet](styling-and-motion.md#region-local-stylesheets).
+
 ## `<LayerSurface>`
 
 Owns a named `zwlr_layer_surface_v1` compositor surface without inserting a node in the parent tree:

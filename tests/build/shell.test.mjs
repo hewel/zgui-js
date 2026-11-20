@@ -68,9 +68,9 @@ export function mount() {
 
 const monitor = (id, name, x) => ({ id, name, x, y: 0, width: 1920, height: 1080, scale: 2, refreshRateMilliHz: 60000 });
 
-async function mounted(t, attach = true) {
-  const harness = createHost({ monitors: [monitor("DP-1", "Desk", 0)] });
-  const mod = await moduleFor(t, fixture);
+async function mounted(t, { attach = true, source = fixture, monitors = [monitor("DP-1", "Desk", 0)] } = {}) {
+  const harness = createHost({ monitors });
+  const mod = await moduleFor(t, source);
   const previous = globalThis.__zguiShell;
   globalThis.__zguiShell = harness.shell;
   let dispose;
@@ -82,7 +82,7 @@ async function mounted(t, attach = true) {
     }
   });
   dispose = harness.runTurn(mod.mount);
-  assert.equal(harness.byTestId("counter"), undefined, "shell opens attach asynchronously");
+  assert.equal(harness.surfaces.size, 0, "shell opens attach asynchronously");
   if (attach) harness.flush();
   return { harness, mod, stop: () => { dispose(); dispose = undefined; harness.flush(); } };
 }
@@ -201,7 +201,7 @@ test("a retained input node stops intercepting when its branch detaches", async 
 });
 
 test("disposing before an asynchronous attach cancels the pending surface", async t => {
-  const { harness, mod, stop } = await mounted(t, false);
+  const { harness, mod, stop } = await mounted(t, { attach: false });
   stop();
   assert.equal(harness.surfaces.size, 0);
   assert.equal(harness.monitorSubscribers.size, 0);
@@ -210,4 +210,142 @@ test("disposing before an asynchronous attach cancels the pending surface", asyn
   const closed = harness.shellLog.filter(entry => entry.op === "close").map(entry => entry.id);
   assert.equal(opened.length, 2);
   assert.deepEqual(new Set(closed), new Set(opened));
+});
+
+const stylesFixture = `
+import {
+  For, LayerSurface, Show, createEffect, createSignal, getOwner,
+  mountShellStylesheet, mountStylesheet, renderShell, useMonitors,
+} from "@hewel/zgui";
+import type { Owner } from "@hewel/zgui";
+
+const [effectEnabled, setEffectEnabled] = createSignal(false);
+const [effectCss, setEffectCss] = createSignal(".panel { color: purple; }");
+let effectOwner: Owner | null | undefined;
+export { mountShellStylesheet, setEffectEnabled, setEffectCss };
+export const getEffectOwner = () => effectOwner;
+
+function ThemeEffect() {
+  createEffect(effectCss, css => {
+    effectOwner = getOwner();
+    return mountShellStylesheet("effect-theme", css);
+  });
+  return null;
+}
+
+export function mount() {
+  return renderShell(() => {
+    const monitors = useMonitors();
+    return <>
+      <Show when={effectEnabled()}><ThemeEffect /></Show>
+      <For each={monitors()} keyed={monitor => monitor.id}>{monitor =>
+        <LayerSurface name={'styled-' + monitor().id} output={monitor().id}>
+          <box class="panel" testId={'styled:' + monitor().id} onClick={() => {
+            mountStylesheet("theme", ".panel { color: orange; }");
+          }} />
+        </LayerSurface>
+      }</For>
+    </>;
+  });
+}
+`;
+
+const desk = monitor("DP-1", "Desk", 0);
+const side = monitor("HDMI-1", "Side", 1920);
+const late = monitor("USB-C-1", "Late", 3840);
+const sheetTexts = (harness, output) => {
+  const surface = harness.surfaces.get(`styled-${output}`);
+  assert.ok(surface, `missing surface for ${output}`);
+  return [...surface.region.stylesheets.values()];
+};
+
+test("mountShellStylesheet replaces in place and reaches late and reattached surfaces", async t => {
+  const { harness, mod } = await mounted(t, { source: stylesFixture, monitors: [desk, side] });
+  assert.equal(globalThis.__zgui, undefined);
+  const red = ".panel { color: red; }";
+  const blue = ".panel { color: blue; }";
+  const green = ".panel { color: green; }";
+  const override = ".panel { color: gray; }";
+  const deskNode = harness.byTestId("styled:DP-1");
+  const sideNode = harness.byTestId("styled:HDMI-1");
+  assert.ok(deskNode);
+  assert.ok(sideNode);
+
+  const disposeRed = harness.runTurn(() => mod.mountShellStylesheet("theme", red));
+  const disposeOverride = harness.runTurn(() => mod.mountShellStylesheet("override", override));
+  assert.deepEqual(sheetTexts(harness, desk.id), [red, override]);
+  assert.deepEqual(sheetTexts(harness, side.id), [red, override]);
+
+  const disposeBlue = harness.runTurn(() => mod.mountShellStylesheet("theme", blue));
+  assert.deepEqual(sheetTexts(harness, desk.id), [blue, override], "replacement preserves cascade order");
+  assert.deepEqual(sheetTexts(harness, side.id), [blue, override]);
+  assert.equal(harness.byTestId("styled:DP-1"), deskNode);
+  assert.equal(harness.byTestId("styled:HDMI-1"), sideNode);
+  harness.runTurn(disposeRed);
+  assert.deepEqual(sheetTexts(harness, side.id), [blue, override], "old disposer cannot remove the replacement");
+
+  harness.emitMonitors([desk, side, late]);
+  harness.flush();
+  assert.deepEqual(sheetTexts(harness, late.id), [blue, override]);
+
+  harness.emitMonitors([side, late]);
+  harness.flush();
+  assert.equal(harness.byTestId("styled:DP-1"), undefined);
+  const disposeGreen = harness.runTurn(() => mod.mountShellStylesheet("theme", green));
+  harness.runTurn(disposeBlue);
+  harness.emitMonitors([desk, side, late]);
+  harness.flush();
+  assert.ok(harness.byTestId("styled:DP-1"));
+  assert.notEqual(harness.byTestId("styled:DP-1"), deskNode);
+  assert.equal(harness.byTestId("styled:HDMI-1"), sideNode);
+  for (const output of [desk, side, late]) assert.deepEqual(sheetTexts(harness, output.id), [green, override]);
+
+  harness.runTurn(disposeGreen);
+  for (const output of [desk, side, late]) assert.deepEqual(sheetTexts(harness, output.id), [override]);
+  harness.runTurn(disposeOverride);
+  for (const output of [desk, side, late]) assert.deepEqual(sheetTexts(harness, output.id), []);
+
+  harness.emitMonitors([side, late]);
+  harness.flush();
+  harness.emitMonitors([desk, side, late]);
+  harness.flush();
+  assert.deepEqual(sheetTexts(harness, desk.id), [], "disposed sheets are not inherited on attach");
+});
+
+test("mountShellStylesheet isolates same-named region-local sheets in either install order", async t => {
+  const { harness, mod } = await mounted(t, { source: stylesFixture, monitors: [desk, side] });
+  const local = ".panel { color: orange; }";
+  const shell = ".panel { color: teal; }";
+  const replacement = ".panel { color: navy; }";
+
+  harness.dispatch(harness.byTestId("styled:DP-1"), "click");
+  assert.deepEqual(sheetTexts(harness, desk.id), [local]);
+  assert.deepEqual(sheetTexts(harness, side.id), []);
+  harness.runTurn(() => mod.mountShellStylesheet("theme", shell));
+  assert.deepEqual(sheetTexts(harness, side.id), [shell]);
+  harness.dispatch(harness.byTestId("styled:HDMI-1"), "click");
+  for (const output of [desk, side]) assert.deepEqual(sheetTexts(harness, output.id).sort(), [local, shell]);
+
+  const dispose = harness.runTurn(() => mod.mountShellStylesheet("theme", replacement));
+  for (const output of [desk, side]) assert.deepEqual(sheetTexts(harness, output.id).sort(), [replacement, local]);
+  harness.runTurn(dispose);
+  for (const output of [desk, side]) assert.deepEqual(sheetTexts(harness, output.id), [local]);
+});
+
+test("mountShellStylesheet works in an ownerless Solid createEffect apply callback", async t => {
+  const { harness, mod } = await mounted(t, { attach: false, source: stylesFixture });
+  assert.equal(globalThis.__zgui, undefined);
+  harness.runTurn(() => mod.setEffectEnabled(true));
+  assert.equal(mod.getEffectOwner(), null);
+  harness.flush();
+  const node = harness.byTestId("styled:DP-1");
+  assert.ok(node);
+  assert.deepEqual(sheetTexts(harness, desk.id), [".panel { color: purple; }"]);
+
+  const css = ".panel { color: gold; }";
+  harness.runTurn(() => mod.setEffectCss(css));
+  assert.deepEqual(sheetTexts(harness, desk.id), [css]);
+  harness.runTurn(() => mod.setEffectEnabled(false));
+  assert.deepEqual(sheetTexts(harness, desk.id), []);
+  assert.equal(harness.byTestId("styled:DP-1"), node);
 });

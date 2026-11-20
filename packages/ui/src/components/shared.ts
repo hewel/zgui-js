@@ -25,16 +25,15 @@ export function withDefaults<D extends object, P extends object>(
   const propRecord = props as Record<string, unknown>;
   const defaultKeys = Object.keys(defaultRecord);
   let hasOverlap = false;
-  for (let i = 0; i < defaultKeys.length; i++) {
-    if (defaultKeys[i] in propRecord) {
+  for (const key of defaultKeys) {
+    if (key in propRecord) {
       hasOverlap = true;
       break;
     }
   }
   if (!hasOverlap) return defaults;
   const resolved: Record<string, unknown> = {};
-  for (let i = 0; i < defaultKeys.length; i++) {
-    const key = defaultKeys[i];
+  for (const key of defaultKeys) {
     if (key in propRecord) {
       Object.defineProperty(resolved, key, {
         enumerable: true,
@@ -90,9 +89,7 @@ export function provide<T>(
 
 export function isStaticProps(props: object): boolean {
   if ($PROXY in props) return false;
-  const keys = Object.keys(props);
-  for (let i = 0; i < keys.length; i++) {
-    const key = keys[i];
+  for (const key of Object.keys(props)) {
     if (key !== "children" && Object.getOwnPropertyDescriptor(props, key)?.get !== undefined) {
       return false;
     }

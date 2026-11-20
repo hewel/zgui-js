@@ -1,7 +1,7 @@
 import { createEffect } from "#solid";
 import { insert, mountOwned } from "./renderer/index.js";
 import type { NativeChild, NativeNode } from "./types.js";
-import { bridgeFor } from "./host.js";
+import { bridgeFor, rememberBridge } from "./host.js";
 
 /**
  * Mount native children into a dedicated host root. Cleanup is idempotent and
@@ -10,6 +10,7 @@ import { bridgeFor } from "./host.js";
  */
 export function renderApp(code: () => NativeChild, root: NativeNode): () => void {
   const bridge = bridgeFor(root);
+  rememberBridge(root, bridge);
   return mountOwned(() => insert(root, code()), () => bridge.clearRoot(root));
 }
 

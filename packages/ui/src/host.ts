@@ -35,7 +35,7 @@ export interface NativeHost {
     getFirstChild(node: NativeNode): NativeNode | null | undefined;
     getNextSibling(node: NativeNode): NativeNode | null | undefined;
     setProperty(node: NativeNode, name: string, value: unknown, previous?: unknown): void;
-    installStylesheet(name: string, css: string): void;
+    installStylesheet(name: string, css: string, target?: NativeNode): void;
     removeStylesheet(name: string): void;
     getReducedMotion(): boolean;
     focus(node: NativeNode, reveal?: boolean): void;
@@ -56,6 +56,8 @@ export interface NativeHost {
   };
   readonly __zguiShell: {
     getSessionGeneration(): number;
+    installStylesheet(name: string, css: string): void;
+    removeStylesheet(name: string): void;
     subscribeMonitors(callback: (monitors: readonly Monitor[]) => void): () => void;
     openLayer(name: string, placement: LayerPlacement, attach: (root: NativeNode, bridge: UiBridge) => () => void): number;
     updateLayer(id: number, placement: LayerPlacement): void;
@@ -77,6 +79,13 @@ const Region = createContext<UiBridge | null>(null);
 const nodeBridges = new WeakMap<NativeNode, UiBridge>();
 let callbackBridge: UiBridge | undefined;
 let callbackOwner: Owner | null = null;
+
+/** Resolves an explicit target without consulting the current owner or ambient bridge. */
+export function bridgeForTarget(node: NativeNode): UiBridge {
+  const bridge = nodeBridges.get(node);
+  if (!bridge) throw new ReferenceError("Unknown native stylesheet target");
+  return bridge;
+}
 
 export function bridgeFor(node?: NativeNode): UiBridge {
   const known = node && nodeBridges.get(node);

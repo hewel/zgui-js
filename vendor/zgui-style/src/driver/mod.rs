@@ -256,6 +256,7 @@ fn traversal_start<'doc>(document: &'doc Document, root: Node<'doc>) -> Node<'do
         let record = store.core(index);
         let (own, _) = record.dirty().get();
         if own.intersects(zgui_dom::stylo::flags::STYLE_WORK)
+            || current.has_selector_work_below()
             || current.has_snapshot()
             || current.has_custom_map_changed()
             || current

@@ -12,15 +12,9 @@
 //! added, because everything above that ancestor already contains it too. That turns marking `n`
 //! nodes into `O(n + depth)` steps rather than `O(n · depth)`.
 //!
-//! **The marked node itself is tested on its *own* bits and not on its subtree union**, and the two
-//! are not the same test. A node's own bits are set by nothing but a mark, so finding them already
-//! set means an earlier mark of this node already walked the ancestors — which is what makes the
-//! early return safe. Its subtree union is also raised by the style engine's own descent flag, on
-//! elements the marked set never leads to: a sibling whose descendant an invalidation reached. Such
-//! a flag outlives the walk that retires the marked set, because that walk never visits the node
-//! carrying it — and a later mark of that node, tested against its subtree union, would return
-//! before telling a single ancestor. The result is an element that is never traversed again and
-//! keeps a stale style with nothing to notice it by.
+//! **The marked node is tested on its own bits**, not its subtree union. Work already owed by
+//! a descendant does not imply this node owes it. Temporary selector flags are separate and
+//! cannot affect propagation through the document's dirty-child index.
 //!
 //! The dirty-child record is widened **before** that early return, and the order is load-bearing: an
 //! ancestor that already owes these obligations *for a different child* must still learn about this
@@ -161,9 +155,7 @@ mod tests {
     fn a_node_carrying_only_the_engines_descent_flag_still_marks_its_ancestors() {
         let (mut document, nodes) = chain(3);
         let middle = nodes[1];
-        // Exactly what the style engine's own descent flag does: it raises the subtree union of an
-        // element it is about to descend into, and it does that on elements no mark ever led to.
-        document.node(middle).note_style_work_below();
+        document.node(middle).note_selector_work_below();
 
         mark(document.store_mut(), middle, Dirty::RESTYLE);
 

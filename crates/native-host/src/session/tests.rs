@@ -77,6 +77,48 @@ export function mount(root) {
 "#;
 
 #[test]
+fn rejected_shell_stylesheets_fault_strictly_without_replacing_the_previous_sheet() {
+    let fixture = Fixture::new(r#"
+        export const hostApiVersion = 1;
+        export function mount() {
+            __zguiShell.installStylesheet('theme', 'text { color: red }');
+            const id = __zguiShell.openLayer('panel', {}, () => () => {});
+            return () => __zguiShell.closeLayer(id);
+        }
+        export function invalidCss() {
+            __zguiShell.installStylesheet('theme', 'text { width: invalid }');
+        }
+        export function forbiddenUrl() {
+            try {
+                __zguiShell.installStylesheet('theme', ':root { --image: url("image.png") }');
+            } catch {
+                return;
+            }
+            throw Error('CSS image URL was accepted');
+        }
+    "#, "").with_capabilities(crate::package::Capabilities { shell_surfaces: true, ..Default::default() });
+    let native = Native::new();
+    let environment = Environment::new(Arc::new(zgui::platform::VirtualClock::new()), Some(0), 1);
+    let fixtures = crate::assets::fixture::FixtureRuntime::new(Default::default(), environment.clone());
+    let policy = SessionPolicy::preview(RuntimeLimits::default(), Rc::new(Cell::new(Instant::now() + Duration::from_secs(5))), environment, fixtures);
+    let session = Session::prepare_shell(Fonts::shipped_only(), AppTimers::default(), SessionModule::package(fixture.package()),
+        1, native.waker.clone(), policy).expect("prepare a rootless shell");
+    session.mount().expect("install the first sheet before a region exists");
+    assert!(session.mount_regions().is_empty());
+    for (export, expected_code) in [("invalidCss", "STYLESHEET_PARSE_INVALID"), ("forbiddenUrl", "STYLESHEET_IMAGE_URL_FORBIDDEN")] {
+        let result = session.invoke(export);
+        assert!(matches!(&result, Err(SessionError::Style { code: "E_STYLE", details, .. })
+            if details["code"] == expected_code && details["sheet"] == "shell:1:theme"), "{export}: {result:?}");
+    }
+    let id = *session.shell.specs().first_key_value().expect("requested panel").0;
+    session.attach_layer(id, "panel".into(), native.region.clone(), SurfaceId::new(7), None).expect("attach a region after the rejected replacements");
+    for export in ["invalidCss", "forbiddenUrl"] {
+        assert!(matches!(session.invoke(export), Err(SessionError::Style { code: "E_STYLE", .. })));
+        assert_eq!(native.host.stylesheet("shell:1:theme").as_deref(), Some("text { color: red }"));
+    }
+}
+
+#[test]
 fn candidate_preflight_rejects_deferred_side_effects_without_touching_active_tree() {
     let good = Fixture::new(SIMPLE, "text { color: red }");
     let native = Native::new();

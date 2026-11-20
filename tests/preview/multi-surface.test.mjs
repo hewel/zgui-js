@@ -142,3 +142,142 @@ test("a native fault with two live shell regions releases every bridge and surfa
   assert.equal(result.teardown.clean, true, "the faulted session must retire cleanly");
   assert.deepEqual(result.teardown.resources, emptyResources, "no bridge resources or native shell surfaces may survive");
 });
+
+const themeCapabilities = { shellSurfaces: true, controlChannel: true };
+const themeSource = `
+  import { onControlMessage } from "@hewel/zgui-services";
+  export const hostApiVersion = 1;
+  const fill = "position: fixed; left: 0; top: 0; width: 100%; height: 100%; background-color: var(--color-primary);";
+  const theme = (color: string) => ":root { --color-primary: " + color + "; }";
+`;
+const themeCommand = command => ({
+  id: command, op: "service.emit", channel: "control.message",
+  value: { args: [command], reply: { text: "" } },
+});
+
+async function runTheme(name, source, steps) {
+  const bundle = await buildFixtureApp(path.join(temp.dir, name), name, themeSource + source, {
+    rawSource: true, capabilities: themeCapabilities,
+  });
+  const fixture = path.join(temp.dir, `${name}-fixture.json`);
+  await writeJson(fixture, { schemaVersion: 1, id: name, services: { control: {} }, events: [] });
+  return run(name, steps, {
+    bundle, fixture, requiredCapabilities: ["pixels", "surface.multiple", "services.fixtures"],
+  });
+}
+
+async function checkTheme(out, surface, id, color) {
+  const artifact = `surfaces/${surface}/${id}`;
+  const image = await readPng(path.join(out, `captures/${artifact}.png`));
+  assert.deepEqual(pixelAt(image, 12, 12), color, artifact);
+  return readFrame(out, artifact);
+}
+
+test("a pure CSS custom property replacement presents new pixels on the first settle", async () => {
+  const { out } = await runTheme("region-theme", `
+    import { getOwner, LayerSurface, mountStylesheet, renderShell, runWithOwner } from "@hewel/zgui";
+    function SurfaceContent() {
+      mountStylesheet("theme", theme("#ff0000"));
+      const owner = getOwner();
+      onControlMessage(() => { runWithOwner(owner, () => mountStylesheet("theme", theme("#7dd3fc"))); });
+      return <box style={fill} />;
+    }
+    export function mount() {
+      return renderShell(() => <LayerSurface name="left" output="left" anchor={["top", "left", "right"]} height={32}>
+        <SurfaceContent />
+      </LayerSurface>);
+    }
+  `, [
+    monitors("plug-left", left),
+    { id: "settle-red", op: "settle" },
+    capture("red", "left"),
+    themeCommand("replace-theme"),
+    { id: "settle-blue", op: "settle" },
+    capture("blue", "left"),
+  ]);
+  const red = await checkTheme(out, "left", "red", [255, 0, 0, 255]);
+  const blue = await checkTheme(out, "left", "blue", [125, 211, 252, 255]);
+  const steps = (await readFile(path.join(out, "steps.jsonl"), "utf8")).trim().split("\n").map(JSON.parse);
+  const settled = steps.find(step => step.id === "settle-blue").result;
+  assert.equal(settled.frameCurrent, true);
+  assert.equal(blue.readiness.timeUs, red.readiness.timeUs);
+  assert.equal(blue.pixelPresentation.documentRevision, red.pixelPresentation.documentRevision);
+  assert.ok(blue.pixelPresentation.styleRevision > red.pixelPresentation.styleRevision);
+  assert.equal(blue.pixelPresentation.styleRevision, settled.requiredStyleRevision);
+});
+
+test("an ownerless shell theme effect updates live layers and a later popup inherits it", async () => {
+  const { out } = await runTheme("shell-theme", `
+    import { createEffect, createSignal, getOwner, LayerSurface, mountShellStylesheet,
+      onCleanup, PopupSurface, renderShell, Show } from "@hewel/zgui";
+    export function mount() {
+      return renderShell(() => {
+        const [color, setColor] = createSignal("#ff0000");
+        const [open, setOpen] = createSignal(false);
+        let dispose: (() => void) | undefined;
+        createEffect(color, value => {
+          if (getOwner() !== null) throw new Error("expected an ownerless apply callback");
+          dispose = mountShellStylesheet("theme", theme(value));
+        });
+        onCleanup(() => dispose?.());
+        onControlMessage(([command]) => {
+          if (command === "replace-theme") setColor("#7dd3fc");
+          if (command === "open-popup") setOpen(true);
+        });
+        return <>
+          <LayerSurface name="left" output="left" anchor={["top", "left", "right"]} height={32}><box style={fill} /></LayerSurface>
+          <LayerSurface name="right" output="right" anchor={["top", "left", "right"]} height={32}><box style={fill} /></LayerSurface>
+          <Show when={open()}>
+            <PopupSurface name="menu" parent="left" width={64} height={48}
+              anchorRect={{ x: 8, y: 0, width: 32, height: 32 }}><box style={fill} /></PopupSurface>
+          </Show>
+        </>;
+      });
+    }
+  `, [
+    monitors("plug-both", left, right),
+    capture("left-red", "left"), capture("right-red", "right"),
+    themeCommand("replace-theme"),
+    { id: "settle-theme", op: "settle" },
+    capture("left-blue", "left"), capture("right-blue", "right"),
+    themeCommand("open-popup"),
+    capture("menu-blue", "menu"),
+  ]);
+  for (const surface of ["left", "right"]) {
+    const red = await checkTheme(out, surface, `${surface}-red`, [255, 0, 0, 255]);
+    const blue = await checkTheme(out, surface, `${surface}-blue`, [125, 211, 252, 255]);
+    assert.ok(blue.pixelPresentation.styleRevision > red.pixelPresentation.styleRevision);
+  }
+  await checkTheme(out, "menu", "menu-blue", [125, 211, 252, 255]);
+});
+
+test("a shell effect releases its targeted sheet after the output retires", async () => {
+  const { out } = await runTheme("targeted-hotplug", `
+    import { createEffect, createSignal, LayerSurface, mountStylesheet, renderShell } from "@hewel/zgui";
+    import type { NativeNode } from "@hewel/zgui";
+    export function mount() {
+      return renderShell(() => {
+        const [target, setTarget] = createSignal<NativeNode>();
+        const [enabled, setEnabled] = createSignal(true);
+        createEffect(() => enabled() ? target() : undefined,
+          node => node ? mountStylesheet("theme", theme("#ff0000"), node) : undefined);
+        onControlMessage(([command]) => { setEnabled(command === "enable"); });
+        return <>
+          <LayerSurface name="left" output="left" anchor={["top", "left", "right"]} height={32}>
+            <box ref={node => { setTarget(node); }} style={fill + "background-color: var(--color-primary, #0000ff);"} />
+          </LayerSurface>
+          <LayerSurface name="right" output="right"><box /></LayerSurface>
+        </>;
+      });
+    }
+  `, [
+    monitors("plug", left, right),
+    capture("installed", "left"),
+    monitors("unplug-left", right),
+    themeCommand("disable"),
+    monitors("replug-left", left, right),
+    capture("retired", "left"),
+  ]);
+  await checkTheme(out, "left", "installed", [255, 0, 0, 255]);
+  await checkTheme(out, "left", "retired", [0, 0, 255, 255]);
+});

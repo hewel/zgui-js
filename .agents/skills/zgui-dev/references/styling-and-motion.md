@@ -8,7 +8,21 @@ Use when styling native nodes, composing UI primitives, rendering custom vectors
 - **Typed inline styles**: pass a `NativeStyle` object to `style={...}` for dynamic values.
 - **Inline `style` string atomicity**: passing a raw `style="..."` string replaces all inline declarations on that node, including `--*` CSS custom properties. Emit dynamic properties and `--*` variables together in one string, or use a `NativeStyle` object.
 - **Scoped part styles**: scope component part selectors to context-derived data attributes so ancestor selectors do not bleed across nested component roots.
-- **Runtime stylesheets**: use `mountStylesheet(css)` from `@hewel/zgui` inside an owner when mounting dynamic theme or token sheets (auto-removed on disposal).
+
+### Region-local stylesheets
+
+Use `mountStylesheet(name, css, target?)` from `@hewel/zgui` for dynamic CSS in one mount region. Omit `target` inside a mounted region's Solid owner, or pass a live `NativeNode` to select that node's region. The returned disposer is registered automatically when called under an owner.
+
+Solid 2.0.1 runs `createEffect(compute, apply)`'s `apply` callback without an owner. In a pure shell, pass a node ref and return the disposer from `apply` so Solid removes the previous sheet on rerun and cleans up when the effect is disposed:
+
+```tsx
+createEffect(
+  () => ({ node: panelRef(), css: panelCss() }),
+  ({ node, css }) => node ? mountStylesheet("panel-theme", css, node) : undefined,
+);
+```
+
+Without a ref, capture `const regionOwner = getOwner()` inside the mounted region before creating the effect, then return `runWithOwner(regionOwner, () => mountStylesheet("panel-theme", css))` from `apply`. The headless shell root is not a mount region. For a theme shared by multiple surfaces, use [a shell stylesheet](shell-surfaces.md#shared-shell-stylesheets) instead.
 
 ## Themed components (`@hewel/zgui/components`)
 

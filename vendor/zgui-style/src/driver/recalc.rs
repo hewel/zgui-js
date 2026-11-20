@@ -660,11 +660,7 @@ fn narrowed_children_hint(
     if reset_groups_differ(old, new) {
         hint |= RestyleHint::RECASCADE_SELF_IF_INHERIT_RESET_STYLE;
     }
-    // A custom property map that moved is handed down by name rather than as a recascade: each
-    // child decides at its own visit whether it reads what moved. The engine also tells the
-    // children in case a container style query reads the map; this document rejects `@container`
-    // (see `sheets::errors`), so there is no such query, and a hint left on the children would
-    // make the parent note style work below it that no dirty-child record can reach.
+    // Propagate changed names directly. The native profile rejects container style queries.
     hint.remove(
         RestyleHint::RESTYLE_IF_AFFECTED_BY_STYLE_QUERIES
             | RestyleHint::RESTYLE_IF_AFFECTED_BY_NAMED_STYLE_CONTAINER,
@@ -793,11 +789,7 @@ fn note_children<'doc, F>(
             );
         }
 
-        // The engine's reasons to visit the child are noted below the parent, where the document's
-        // retirement walk finds them through the dirty-child records the same marks widened. A
-        // child visited only because its inherited map moved is found through its own bit: noting
-        // it below the parent would raise a subtree word the walk never reaches, and every later
-        // mark climbing through it would stop there.
+        // Queued children are already reachable without writing new document obligations.
         let engine_needs =
             super::traversal::engine_needs_traversal(child, flags, child_data.as_deref());
         if !engine_needs && custom_changed.is_some() && !reached {
@@ -805,12 +797,8 @@ fn note_children<'doc, F>(
         }
         if engine_needs || reached {
             note_child(child_node);
-            if !is_initial_style && engine_needs {
-                if flags.for_animation_only() {
-                    element.note_animation_work_below();
-                } else {
-                    element.note_style_work_below();
-                }
+            if !is_initial_style && engine_needs && flags.for_animation_only() {
+                element.note_animation_work_below();
             }
         }
     }

@@ -131,7 +131,7 @@ fn faulted_turns_and_disposal_retire_every_owned_sheet_once() {
 }
 
 #[test]
-fn sheet_mutations_require_a_turn_and_a_live_owner() {
+fn live_sheet_mutations_require_a_turn_and_retired_cleanup_leaves_the_successor_untouched() {
     let sheets = Sheets::new();
     let mut owner = sheets.owner(9, 1);
     let error = owner.engine.evaluate_script("__zgui.installStylesheet('idle', 'box { width: 1px; }'); 'bad'").unwrap_err().message;
@@ -143,9 +143,39 @@ fn sheet_mutations_require_a_turn_and_a_live_owner() {
     owner.bridge.dispose();
     let error = owner.engine.evaluate_script("__zgui.installStylesheet('late', 'box { width: 2px; }'); 'bad'").unwrap_err().message;
     assert!(error.contains("disposed"), "{error}");
-    let error = owner.engine.evaluate_script("__zgui.removeStylesheet('theme'); 'bad'").unwrap_err().message;
-    assert!(error.contains("disposed"), "{error}");
-    drop(owner);
+
+    let mut successor = sheets.owner(9, 2);
+    successor.script("__zgui.installStylesheet('theme', 'box { width: 3px; }'); 'installed'");
+    let cleanup = "__zgui.removeStylesheet('theme'); 'removed'";
+    owner.engine.evaluate_script(cleanup).expect("cleanup after disposal");
+    let Owner { bridge, mut engine } = owner;
+    drop(bridge);
+    engine.evaluate_script(cleanup).expect("cleanup after the bridge has been dropped");
+    assert_eq!(sheets.host.stylesheet_names(), ["zgui-js-9-2-theme"]);
+}
+
+#[test]
+fn explicit_stylesheet_targets_must_remain_attached_and_live() {
+    let sheets = Sheets::new();
+    let mut owner = sheets.owner(9, 3);
+    owner.engine.with_context(|ctx| ctx.globals().set("root", owner.bridge.root(&ctx)?))
+        .expect("publish the mount root to the test");
+    owner.script(r#"
+        const target = __zgui.createElement('box');
+        const css = 'box { width: 1px; }';
+        __zgui.insertNode(root, target, null);
+        __zgui.installStylesheet('live', css, target);
+        __zgui.removeNode(root, target);
+        function reject(node, reason) {
+            try { __zgui.installStylesheet('invalid', css, node); }
+            catch (error) { if (error.message.includes(reason)) return; throw error; }
+            throw Error('accepted ' + reason + ' target');
+        }
+        reject(target, 'detached');
+        'checked'
+    "#);
+    owner.script("reject(target, 'stale'); reject({}, 'invalid'); 'checked'");
+    assert_eq!(sheets.host.stylesheet_names(), ["zgui-js-9-3-live"]);
 }
 
 #[test]
