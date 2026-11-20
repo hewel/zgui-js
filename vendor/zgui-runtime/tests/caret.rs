@@ -925,3 +925,64 @@ fn a_caret_stands_in_the_focused_field_alone_when_another_shows_the_same_text() 
         "the caret stands in the field without focus: {carets:?}"
     );
 }
+
+#[test]
+fn empty_flex_field_still_draws_caret_when_focused() {
+    // Styled inputs (including @hewel/zgui/components Input) set `display: flex; align-items: center`
+    // on `<field>`. Skipping empty text flex items must still preserve the field's anonymous inline
+    // box so an empty focused flex field paints a blinking caret.
+    use zgui_runtime::caret::blink::HALF_PERIOD;
+    const FLEX_FIELD_CSS: &str = "root { display: block; width: 400px; height: 300px; padding: 12px 20px }
+                                  field { display: flex; align-items: center; width: 200px; height: 40px; color: rgb(0, 102, 204) }";
+    let field_ref = NodeRef::new();
+    let harness = support::app_with_text(FLEX_FIELD_CSS, move |cx: &mut BuildCx<'_>| {
+        Box::new(
+            zgui_elements::column()
+                .class("root")
+                .child(zgui_elements::field().node_ref(field_ref))
+                .into_view()
+                .build(cx),
+        )
+    });
+    let mut script = Script {
+        harness,
+        editor: field_ref,
+    };
+    script.harness.settle(8);
+    script.press_named(NamedKey::Tab, KeyCode::Tab);
+    assert_eq!(
+        script.selection(),
+        Some(0..0),
+        "the empty flex field holds focus"
+    );
+    script.harness.advance(HALF_PERIOD);
+    script.harness.settle(8);
+    assert!(
+        script.carets().is_empty(),
+        "caret must blink dark at HALF_PERIOD: {:?}",
+        script.carets()
+    );
+    script.harness.advance(HALF_PERIOD);
+    script.harness.settle(8);
+    let carets = script.carets();
+    assert_eq!(
+        carets.len(),
+        1,
+        "empty display:flex <field> must still paint a caret when focused: {carets:?}"
+    );
+    let rect = carets[0].rect;
+    assert!(
+        rect.size.height.0 > 0.0,
+        "caret height must be positive: {carets:?}"
+    );
+    // Root has padding: 12px 20px and field is 200x40 with align-items: center, so the caret sits
+    // at x = 20 and vertically centered within y in [12, 52].
+    assert!(
+        (rect.origin.x.0 - 20.0).abs() < 1.0,
+        "caret x must sit at the field's padded start (20px): {rect:?}"
+    );
+    assert!(
+        rect.origin.y.0 > 12.0 && rect.origin.y.0 + rect.size.height.0 < 52.0,
+        "caret y must be vertically centered inside the 40px flex field [12, 52]: {rect:?}"
+    );
+}

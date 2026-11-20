@@ -1,5 +1,7 @@
 # Native dependency patch
 
+For a crate-by-crate ownership table (vendored vs unvendored upstream crates), see [`docs/development/crate-map.md`](../docs/development/crate-map.md).
+
 `zgui-runtime/` is copied from `zortax/zgui` revision `80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a`, with its Apache-2.0 LICENSE and NOTICE. The manifest is standalone; every sibling zgui dependency retains that revision. The root Cargo patch selects this copy for the entire dependency graph. Upstream source and tests are retained.
 
 ## Disabled activation
@@ -112,7 +114,7 @@ compositor-specific package or abstraction in this library.
 ## Dynamic shell surfaces and input regions
 
 `zgui-platform/` and `zgui-platform-headless/` retain the same pinned revision,
-LICENSE and NOTICE. The platform contract adds `InputRegion::{Full, Empty, Rects}`
+LICENSE and NOTICE. The platform contract adds `#[non_exhaustive]` `InputRegion::{Full, Empty, Rects}` (satisfying `zgui-platform::api::every_public_enumeration_is_extensible`)
 in surface-local logical pixels, in-place layer reconfiguration, and a monitor
 inventory callback. Other backends can leave unsupported operations unimplemented.
 
@@ -381,3 +383,14 @@ and disconnecting without unlocking are exercised on a private socket.
 fallback and explicit unlock for the Preview fixture; no live desktop is locked.
 
     cargo test -j 4 --manifest-path vendor/zgui-platform-wayland/Cargo.toml --test session_lock_protocol --offline
+
+## New text-node dirty propagation
+
+Inserting a brand-new `NodeKind::Text` node into an existing element via `insert_before` previously marked only `Dirty::CHILDREN` on the parent and `Dirty::RESTYLE | Dirty::A11Y` on the child. Unlike new elements, text nodes do not run the style engine's first-time cascade branch that marks `Dirty::RELAYOUT | Dirty::REPAINT`, so `fragment::diff` could skip an unchanged-size ancestor (such as `<column><field /></column>` when `Editors::adopt` inserts an empty text node into a focused `<field>`) and leave the rebuilt box with zero fragments.
+
+`vendor/zgui-dom/src/mutate/edit/build.rs` now marks `Dirty::RELAYOUT | Dirty::REPAINT` on the parent when inserting a `NodeKind::Text` child, preserving element-insertion first-cascade invariants while ensuring rebuilt text hosts receive fragments and painted carets.
+
+Regression gates:
+
+    cargo test -j 4 --manifest-path vendor/zgui-dom/Cargo.toml --test engine --offline
+    cargo test -j 4 --manifest-path vendor/zgui-runtime/Cargo.toml --test caret --offline

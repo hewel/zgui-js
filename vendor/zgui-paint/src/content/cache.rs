@@ -383,6 +383,10 @@ impl ContentCache {
     }
 
     /// Whether the tile a loader's shared `handle` names is resident right now.
+    ///
+    /// Preview asset readiness polls this to decide whether an `<Image>` has uploaded to the GPU
+    /// atlas. Any derived image-tile namespace (such as `CLIPPED` in `content::images`) MUST be
+    /// reflected here and cleared in [`Self::remove_shared_tile`] and [`Self::clear`].
     pub fn image_tile_resident(&self, handle: u64) -> bool {
         let key = crate::content::images::shared_key(handle);
         if self.atlas.contains(key) {

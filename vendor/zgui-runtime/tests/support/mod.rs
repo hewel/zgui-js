@@ -9,12 +9,18 @@
 
 pub mod churn;
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
+use zgui_atlas::TextureSink;
+use zgui_bits::DamageSet;
 use zgui_platform::Surface;
 use zgui_platform_headless::Harness;
-use zgui_render::{RenderTarget, Renderer};
+use zgui_render::{
+    ExternalTexture, FrameOutcome, MemoryReport, RenderCapabilities, RenderTarget, Renderer,
+    TextureHandle,
+};
 use zgui_runtime::{App, AppError, MAINTENANCE_DELAY, Runtime};
+use zgui_scene::Scene;
 use zgui_view::{Anchor, BuildCx};
 
 /// Builds an application whose window holds `view`, with the capture renderer under it.
@@ -175,6 +181,70 @@ pub fn capture(
     let mut renderer = zgui_testkit_scene::CaptureRenderer::new();
     renderer.configure(target);
     Ok(Box::new(renderer))
+}
+
+/// Summary of one frame submitted to [`FrameRecorder`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DrawnFrame {
+    /// Viewport height in device pixels.
+    pub viewport_height: i32,
+    /// Number of quad primitives emitted in the display list.
+    pub quad_count: usize,
+}
+
+/// Recording renderer that wraps [`zgui_testkit_scene::CaptureRenderer`] and logs a [`DrawnFrame`]
+/// for every drawn frame.
+pub struct FrameRecorder {
+    inner: zgui_testkit_scene::CaptureRenderer,
+    frames: Arc<Mutex<Vec<DrawnFrame>>>,
+}
+
+impl FrameRecorder {
+    /// Builds a recorder configured for `target` and writing frame summaries into `frames`.
+    pub fn new(target: RenderTarget, frames: Arc<Mutex<Vec<DrawnFrame>>>) -> Self {
+        let mut inner = zgui_testkit_scene::CaptureRenderer::new();
+        inner.configure(target);
+        Self { inner, frames }
+    }
+}
+
+impl Renderer for FrameRecorder {
+    fn capabilities(&self) -> RenderCapabilities {
+        self.inner.capabilities()
+    }
+
+    fn configure(&mut self, target: RenderTarget) {
+        self.inner.configure(target);
+    }
+
+    fn target(&self) -> Option<RenderTarget> {
+        self.inner.target()
+    }
+
+    fn texture_sink(&mut self) -> &mut dyn TextureSink {
+        self.inner.texture_sink()
+    }
+
+    fn draw(&mut self, scene: &Scene, damage: &DamageSet) -> FrameOutcome {
+        let outcome = self.inner.draw(scene, damage);
+        self.frames.lock().expect("frame log lock").push(DrawnFrame {
+            viewport_height: scene.viewport().height,
+            quad_count: scene.primitives.quads.len(),
+        });
+        outcome
+    }
+
+    fn register_external(&mut self, texture: ExternalTexture) -> TextureHandle {
+        self.inner.register_external(texture)
+    }
+
+    fn release_external(&mut self, handle: TextureHandle) {
+        self.inner.release_external(handle);
+    }
+
+    fn memory(&self) -> MemoryReport {
+        self.inner.memory()
+    }
 }
 
 /// Replays every accessibility update the window published into the consumer that really reads

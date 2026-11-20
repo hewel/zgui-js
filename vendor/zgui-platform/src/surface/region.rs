@@ -15,6 +15,7 @@ pub struct InputRect {
 
 /// The part of a surface that receives input; the rest passes through.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum InputRegion {
     /// Use the compositor default (the entire surface).
     #[default]

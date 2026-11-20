@@ -229,6 +229,7 @@ fn region_contains(region: &InputRegion, x: f64, y: f64) -> bool {
             let (left, top) = (f64::from(rect.x), f64::from(rect.y));
             x >= left && x < left + f64::from(rect.width) && y >= top && y < top + f64::from(rect.height)
         }),
+        _ => true,
     }
 }
 

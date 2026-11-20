@@ -64,9 +64,6 @@ private_intra_doc_links = "warn"
 all = { level = "warn", priority = -1 }
 undocumented_unsafe_blocks = "warn"
 
-[patch.crates-io]
-fontique = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a" }
-
 [patch."https://github.com/zortax/zgui"]
 zgui-dom = { path = "../zgui-dom" }
 zgui-style = { path = "." }

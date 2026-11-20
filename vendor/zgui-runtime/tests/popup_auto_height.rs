@@ -7,8 +7,6 @@ use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
 use zgui_a11y::TreeUpdate;
-use zgui_atlas::TextureSink;
-use zgui_bits::DamageSet;
 use zgui_geom::{Css, CssPx, Device, DevicePx, Point, Rect, Size};
 use zgui_platform::{
     Anchor, AppHandler, Clipboard, Clock, ColorScheme, Constrain, CursorStyle, Decorations,
@@ -19,12 +17,7 @@ use zgui_platform::{
 use zgui_platform_headless::Headless;
 use zgui_reactive::RwSignal;
 use zgui_reactive::prelude::{Get, Set};
-use zgui_render::{
-    ExternalTexture, FrameOutcome, MemoryReport, RenderCapabilities, RenderTarget, Renderer,
-    TextureHandle,
-};
 use zgui_runtime::{App, PopupAutoHeight, WindowContent, WindowSpec};
-use zgui_scene::Scene;
 use zgui_view::{Anchor as ViewAnchor, BuildCx, IntoView, View};
 
 fn popup_placement(parent: SurfaceId) -> PopupPlacement {
@@ -40,51 +33,6 @@ fn popup_placement(parent: SurfaceId) -> PopupPlacement {
         constrain: Constrain::default(),
         grab: false,
         reactive: false,
-    }
-}
-
-/// Recording renderer that logs `(viewport_height, quad_count)` for every drawn frame.
-struct FrameRecorder {
-    inner: zgui_testkit_scene::CaptureRenderer,
-    frames: Arc<Mutex<Vec<(i32, usize)>>>,
-}
-
-impl Renderer for FrameRecorder {
-    fn capabilities(&self) -> RenderCapabilities {
-        self.inner.capabilities()
-    }
-
-    fn configure(&mut self, target: RenderTarget) {
-        self.inner.configure(target);
-    }
-
-    fn target(&self) -> Option<RenderTarget> {
-        self.inner.target()
-    }
-
-    fn texture_sink(&mut self) -> &mut dyn TextureSink {
-        self.inner.texture_sink()
-    }
-
-    fn draw(&mut self, scene: &Scene, damage: &DamageSet) -> FrameOutcome {
-        let outcome = self.inner.draw(scene, damage);
-        self.frames
-            .lock()
-            .expect("frame log lock")
-            .push((scene.viewport().height, scene.primitives.quads.len()));
-        outcome
-    }
-
-    fn register_external(&mut self, texture: ExternalTexture) -> TextureHandle {
-        self.inner.register_external(texture)
-    }
-
-    fn release_external(&mut self, handle: TextureHandle) {
-        self.inner.release_external(handle);
-    }
-
-    fn memory(&self) -> MemoryReport {
-        self.inner.memory()
     }
 }
 
@@ -435,15 +383,13 @@ fn async_repositionable_translucent_popup_suppresses_first_paint_until_repositio
     };
     let mut runtime = App::new()
         .with_renderer(Box::new(move |surface, target| {
-            let mut inner = zgui_testkit_scene::CaptureRenderer::new();
-            inner.configure(target);
             if surface.supports_popup_reposition() {
-                Ok(Box::new(FrameRecorder {
-                    inner,
-                    frames: frames_ref.clone(),
-                }))
+                Ok(Box::new(support::FrameRecorder::new(
+                    target,
+                    frames_ref.clone(),
+                )))
             } else {
-                Ok(Box::new(inner))
+                support::capture(surface, target)
             }
         }))
         .into_handler(|cx| Box::new(zgui_elements::column().into_view().build(cx)))
@@ -493,7 +439,10 @@ fn async_repositionable_translucent_popup_suppresses_first_paint_until_repositio
     );
     assert_eq!(
         *frames.lock().expect("frames log"),
-        vec![(600, 0)],
+        vec![support::DrawnFrame {
+            viewport_height: 600,
+            quad_count: 0,
+        }],
         "Frame 1 must emit zero quads so the popup never flashes at maxHeight"
     );
 
@@ -512,6 +461,6 @@ fn async_repositionable_translucent_popup_suppresses_first_paint_until_repositio
 
     let logged = frames.lock().expect("frames log");
     assert_eq!(logged.len(), 2, "Frame 2 paints at the repositioned height");
-    assert_eq!(logged[1].0, 120, "Frame 2 viewport height is 120px");
-    assert!(logged[1].1 > 0, "Frame 2 paints the real popup content");
+    assert_eq!(logged[1].viewport_height, 120, "Frame 2 viewport height is 120px");
+    assert!(logged[1].quad_count > 0, "Frame 2 paints the real popup content");
 }

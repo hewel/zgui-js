@@ -176,6 +176,7 @@ pub(crate) fn set_input_region(surface: &WaylandSurface, input: &InputRegion) {
             // The compositor copies the region when the request is processed.
             region.destroy();
         }
+        _ => wl.set_input_region(None),
     }
     wl.commit();
     surface.ping.ping();

@@ -140,12 +140,13 @@ impl Edit<'_> {
         } else {
             ancestors::mark(store, child, Dirty::RESTYLE | Dirty::A11Y);
         }
-        if moved {
+        if moved || store.core(child).kind() == NodeKind::Text {
             // A node that moved changes where its siblings are laid out and drawn without any of
-            // them changing, exactly as a removal does — so the parent owes the same layout and
-            // paint a removal owes it. Nothing else records that: a reorder restyles nothing and
-            // rebuilds no box, and a fragment pass that read only the marks would find the parent
-            // where it was, holding the result it had, and leave every moved row where it stood.
+            // them changing, exactly as a removal does — and a newly inserted text node never runs
+            // the element style engine's first-time cascade branch that marks RELAYOUT | REPAINT.
+            // Without marking the parent here, fragment::diff can skip an ancestor whose own size
+            // stayed unchanged and leave a rebuilt child box (such as an adopted empty `<field>`)
+            // with zero fragments.
             ancestors::mark(store, parent, Dirty::RELAYOUT | Dirty::REPAINT);
         }
         // Only a move to another parent changes what the subtree inherits. A move among its own

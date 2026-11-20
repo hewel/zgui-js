@@ -50,6 +50,9 @@ pub struct MipLevel {
 const SHARED: u64 = 1 << 63;
 
 /// The handle namespace of `clip-path`-masked image tiles.
+///
+/// Any derived shared-image namespace must uphold the residency and cleanup contract documented on
+/// [`crate::content::cache::ContentCache::image_tile_resident`].
 const CLIPPED: u64 = 1 << 62;
 
 /// The atlas key a loader's shared handle resolves to.
