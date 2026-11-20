@@ -12,6 +12,9 @@
     "doubledClassRoot": true,
     "hover": true,
     "focus": true,
+    "focusVisible": true,
+    "active": true,
+    "disabled": true,
     "browserHtmlDirection": false
   },
   "atRules": {

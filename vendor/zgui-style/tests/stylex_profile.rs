@@ -69,6 +69,14 @@ fn visual_and_typography_grammar_is_checked_at_preflight() {
             box-shadow: 0 2px 4px #0008; text-shadow: 1px 1px black; filter: opacity(.5);
             backdrop-filter: blur(4px); mix-blend-mode: multiply; isolation: isolate;
             font-variation-settings: "wght" 650; font-style: oblique 12deg; font-stretch: 85%;
+            letter-spacing: 0.05em; font-variant-numeric: tabular-nums; font-feature-settings: "tnum" 1;
+            text-align: center; text-transform: uppercase; text-decoration: underline; text-decoration-line: line-through;
+            outline: 2px solid #00f; outline-color: red; outline-style: solid; outline-width: 2px; outline-offset: 2px;
+            grid-template-columns: 1fr 2fr; grid-template-rows: auto 1fr; grid-column: 1 / 3; grid-row: 1 / 2;
+            grid-area: 1 / 1 / 2 / 3; grid-auto-flow: dense;
+            border-top: 1px solid #111; border-right: 1px solid #222; border-bottom: 1px solid #333; border-left: 1px solid #444;
+            border-style: dashed; flex: 1 0 auto; align-self: stretch; justify-self: end; box-sizing: border-box;
+            overflow-x: hidden; overflow-y: auto;
             white-space: pre-wrap; text-overflow: ellipsis; pointer-events: none; user-select: none;
             translate: 10px 20%; rotate: 15deg; scale: 1.25;
         }
@@ -179,6 +187,44 @@ fn only_universal_noninherited_registration_without_initial_value_is_admitted() 
         "@media (min-width: 1px) { @property --dynamic { syntax: '*'; inherits: true } }",
     ] {
         assert!(preflight_stylesheet(css).is_err(), "non-profile registration accepted: {css}");
+    }
+}
+
+#[test]
+fn state_layer_pseudo_classes_pass_preflight_and_match_in_cascade() {
+    use zgui_vocab::UiState;
+
+    let css = r#"
+        .btn { background-color: rgb(10, 10, 10) }
+        .btn:not(#\#):hover { background-color: rgb(20, 20, 20) }
+        .btn:not(#\#):focus { background-color: rgb(30, 30, 30) }
+        .btn:not(#\#):focus-visible { background-color: rgb(40, 40, 40) }
+        .btn:not(#\#):active { background-color: rgb(50, 50, 50) }
+        .btn:not(#\#):disabled { background-color: rgb(60, 60, 60) }
+    "#;
+    preflight_stylesheet(css).expect("state-layer pseudo-classes pass zgui-stylex-v1 preflight");
+
+    let mut h = Harness::new();
+    let btn = h.append(h.root, "control");
+    h.set_classes(btn, &["btn"]);
+    assert!(h.add_author(css).is_empty());
+    h.frame();
+    assert_eq!(support::background(&h, btn), (10, 10, 10));
+
+    for (state, expected) in [
+        (UiState::HOVER, (20, 20, 20)),
+        (UiState::FOCUS, (30, 30, 30)),
+        (UiState::FOCUS_RING, (40, 40, 40)),
+        (UiState::ACTIVE, (50, 50, 50)),
+        (UiState::DISABLED, (60, 60, 60)),
+    ] {
+        h.retire_all();
+        h.set_state(btn, state, true);
+        h.frame();
+        assert_eq!(support::background(&h, btn), expected, "state {state:?} must match");
+        h.retire_all();
+        h.set_state(btn, state, false);
+        h.frame();
     }
 }
 

@@ -543,20 +543,31 @@ fn style_value<'js>(ctx: &Ctx<'js>, key: &str, value: Value<'js>) -> rquickjs::R
     Ok(Some(String::from_js(ctx, value)?))
 }
 
-const UNITLESS: &[&str] = &["opacity", "flex-grow", "flex-shrink", "font-weight", "line-height", "z-index", "order", "animation-iteration-count", "scale"];
+const UNITLESS: &[&str] = &["opacity", "flex", "flex-grow", "flex-shrink", "font-weight", "line-height", "z-index", "order", "animation-iteration-count", "scale"];
 
 const CAMEL_PROPERTIES: &[(&str, &str)] = &[
+    ("boxSizing", "box-sizing"),
     ("flexDirection", "flex-direction"), ("flexWrap", "flex-wrap"), ("flexGrow", "flex-grow"), ("flexShrink", "flex-shrink"), ("flexBasis", "flex-basis"),
-    ("alignItems", "align-items"), ("justifyContent", "justify-content"), ("rowGap", "row-gap"), ("columnGap", "column-gap"),
+    ("alignItems", "align-items"), ("alignSelf", "align-self"), ("justifyContent", "justify-content"), ("justifySelf", "justify-self"),
+    ("rowGap", "row-gap"), ("columnGap", "column-gap"),
+    ("gridTemplateColumns", "grid-template-columns"), ("gridTemplateRows", "grid-template-rows"),
+    ("gridColumn", "grid-column"), ("gridRow", "grid-row"), ("gridArea", "grid-area"), ("gridAutoFlow", "grid-auto-flow"),
     ("paddingTop", "padding-top"), ("paddingRight", "padding-right"), ("paddingBottom", "padding-bottom"), ("paddingLeft", "padding-left"),
     ("marginTop", "margin-top"), ("marginRight", "margin-right"), ("marginBottom", "margin-bottom"), ("marginLeft", "margin-left"),
     ("minWidth", "min-width"), ("minHeight", "min-height"), ("maxWidth", "max-width"), ("maxHeight", "max-height"),
     ("objectFit", "object-fit"), ("objectPosition", "object-position"),
-    ("backgroundColor", "background-color"), ("borderColor", "border-color"), ("borderWidth", "border-width"), ("borderRadius", "border-radius"),
+    ("backgroundColor", "background-color"),
+    ("borderTop", "border-top"), ("borderRight", "border-right"), ("borderBottom", "border-bottom"), ("borderLeft", "border-left"),
+    ("borderColor", "border-color"), ("borderStyle", "border-style"), ("borderWidth", "border-width"), ("borderRadius", "border-radius"),
+    ("outlineColor", "outline-color"), ("outlineStyle", "outline-style"), ("outlineWidth", "outline-width"), ("outlineOffset", "outline-offset"),
     ("fontFamily", "font-family"), ("fontSize", "font-size"), ("fontWeight", "font-weight"), ("lineHeight", "line-height"),
-    ("boxShadow", "box-shadow"), ("textShadow", "text-shadow"), ("backdropFilter", "backdrop-filter"), ("mixBlendMode", "mix-blend-mode"),
+    ("letterSpacing", "letter-spacing"), ("fontVariantNumeric", "font-variant-numeric"), ("fontFeatureSettings", "font-feature-settings"),
     ("fontVariationSettings", "font-variation-settings"), ("fontStyle", "font-style"), ("fontStretch", "font-stretch"),
-    ("whiteSpace", "white-space"), ("textOverflow", "text-overflow"), ("pointerEvents", "pointer-events"), ("userSelect", "user-select"),
+    ("textAlign", "text-align"), ("textTransform", "text-transform"), ("textDecoration", "text-decoration"), ("textDecorationLine", "text-decoration-line"),
+    ("whiteSpace", "white-space"), ("textOverflow", "text-overflow"),
+    ("overflowX", "overflow-x"), ("overflowY", "overflow-y"),
+    ("boxShadow", "box-shadow"), ("textShadow", "text-shadow"), ("backdropFilter", "backdrop-filter"), ("mixBlendMode", "mix-blend-mode"),
+    ("pointerEvents", "pointer-events"), ("userSelect", "user-select"),
     ("zIndex", "z-index"), ("transformOrigin", "transform-origin"),
     ("animationName", "animation-name"), ("animationDuration", "animation-duration"), ("animationDelay", "animation-delay"),
     ("animationTimingFunction", "animation-timing-function"), ("animationIterationCount", "animation-iteration-count"),

@@ -4,7 +4,7 @@ use serde_json::{Value,json};
 use sha2::{Digest, Sha256};
 use super::{Error,evidence::{CapturePaths,FrameEvidence,TreeEvidence},output::digest,scenario::{Selector,Target},selectors};
 
-const FIELDS:&[&str]=&["token","parent","surface","generation","kind","ownership","testId","role","name","text","value","state","boundsLogical","boundsDevice","boundsKind","source","textTruncated","testIdTruncated","nameTruncated","valueTruncated","pointerReachabilityVerified"];
+const FIELDS:&[&str]=&["token","parent","surface","generation","kind","ownership","testId","role","name","text","value","state","boundsLogical","boundsDevice","boundsKind","scrollMetrics","source","textTruncated","testIdTruncated","nameTruncated","valueTruncated","pointerReachabilityVerified"];
 
 struct Options {
     root:PathBuf,capture:CapturePaths,target:Option<Target>,fields:Vec<String>,max_nodes:usize,max_depth:usize,cursor:Option<String>,

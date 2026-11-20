@@ -339,6 +339,20 @@ fn documented_object_style_vocabulary_is_accepted_by_the_pinned_native_parser() 
         ("fontStretch", "condensed"), ("whiteSpace", "pre-wrap"), ("textOverflow", "ellipsis"),
         ("pointerEvents", "none"), ("userSelect", "none"),
         ("translate", "10px -20%"), ("rotate", "15deg"), ("scale", "1.25 0.75"),
+        ("outline", "2px solid blue"), ("outlineColor", "red"), ("outlineStyle", "solid"),
+        ("outlineWidth", "2px"), ("outlineOffset", "3px"),
+        ("letterSpacing", "0.05em"), ("fontVariantNumeric", "tabular-nums"),
+        ("fontFeatureSettings", r#""tnum" 1"#),
+        ("textAlign", "center"), ("textTransform", "uppercase"),
+        ("textDecoration", "underline"), ("textDecorationLine", "line-through"),
+        ("gridTemplateColumns", "1fr 2fr"), ("gridTemplateRows", "auto 1fr"),
+        ("gridColumn", "1 / 3"), ("gridRow", "1 / 2"), ("gridArea", "1 / 1 / 2 / 3"),
+        ("gridAutoFlow", "dense"),
+        ("borderTop", "1px solid red"), ("borderRight", "1px solid green"),
+        ("borderBottom", "1px solid blue"), ("borderLeft", "1px solid black"),
+        ("borderStyle", "dashed"),
+        ("flex", "1 0 auto"), ("alignSelf", "stretch"), ("justifySelf", "end"),
+        ("boxSizing", "border-box"), ("overflowX", "hidden"), ("overflowY", "auto"),
     ];
     for (name, value) in declarations {
         native.script(&format!("__zgui.setProperty(node, 'style', {{'{name}': '{value}'}}); 'set'"));
@@ -346,6 +360,9 @@ fn documented_object_style_vocabulary_is_accepted_by_the_pinned_native_parser() 
         native.script("__zgui.setProperty(node, 'style', null); 'clear'");
         assert!(native.style().0.is_empty(), "native declarations remained after clearing {name}");
     }
+    native.script("__zgui.setProperty(node, 'style', { flex: 1 }); 'set'");
+    assert!(!native.style().0.is_empty(), "unitless numeric flex must be accepted");
+    native.script("__zgui.setProperty(node, 'style', null); 'clear'");
 }
 
 #[test]

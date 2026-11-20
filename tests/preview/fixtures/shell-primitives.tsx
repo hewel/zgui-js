@@ -20,7 +20,7 @@ export function mount(root: NativeNode) {
       <box style={{ position: "fixed", left: "184px", top: "16px", width: "48px", height: "48px",
         background: "black", boxShadow: "12px 0 #00ff00" }} />
       <text {...stylex.props(styles.lettering)} style="position: fixed; left: 280px; top: 16px; font-size: 30px">Hi</text>
-      <scroll style="position: fixed; left: 16px; top: 100px; width: 120px; height: 100px; overflow: auto"
+      <scroll testId="wheel-scroll" style="position: fixed; left: 16px; top: 100px; width: 120px; height: 100px; overflow: auto"
         onWheelCapture={event => {
           const { x, y, unit } = event.delta;
           setLog(`${event.phase}:${event.pointerKind}:${unit}:${event.scrollPhase}:${x},${y}:${event.position.x},${event.position.y}`);

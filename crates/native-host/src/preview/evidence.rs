@@ -62,6 +62,21 @@ pub(super) struct Bounds {
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
+pub(super) struct ScrollMetrics {
+    pub(super) offset_x: f64,
+    pub(super) offset_y: f64,
+    pub(super) viewport_width: f64,
+    pub(super) viewport_height: f64,
+    pub(super) content_width: f64,
+    pub(super) content_height: f64,
+    pub(super) overflow_x: bool,
+    pub(super) overflow_y: bool,
+    pub(super) scrolls_x: bool,
+    pub(super) scrolls_y: bool,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub(super) struct NodeEvidence {
     pub(super) token: String,
     #[serde(default)]
@@ -97,6 +112,8 @@ pub(super) struct NodeEvidence {
     pub(super) bounds_device: Option<Bounds>,
     #[serde(default)]
     pub(super) bounds_kind: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) scroll_metrics: Option<ScrollMetrics>,
     #[serde(default)]
     pub(super) pointer_reachability_verified: bool,
     #[serde(flatten)]

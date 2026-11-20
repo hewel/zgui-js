@@ -77,6 +77,17 @@ test("wheel cancellation stops native scrolling and propagation without swallowi
   assert.ok(y(scrolled) < y(initial), "an uncancelled wheel scrolls the native content");
   assert.equal(getNode(cancelled, "wheel-log").text, "capture:mouse:lines:discrete:1,3:30,125");
   assert.equal(getNode(scrolled, "wheel-log").text, "capture:mouse:lines:discrete:0,3:30,125|target|bubble");
+  const initialScroll = getNode(initial, "wheel-scroll").scrollMetrics;
+  assert.ok(initialScroll, "scroll container exports scrollMetrics");
+  assert.equal(initialScroll.offsetY, 0);
+  assert.equal(initialScroll.viewportHeight, 100);
+  assert.equal(initialScroll.contentHeight, 400);
+  assert.equal(initialScroll.overflowY, true);
+  assert.equal(initialScroll.overflowX, false);
+  assert.equal(initialScroll.scrollsY, true);
+  assert.equal(getNode(initial, "wheel-marker").scrollMetrics, undefined, "non-scroll nodes omit scrollMetrics");
+  const scrolledMetrics = getNode(scrolled, "wheel-scroll").scrollMetrics;
+  assert.ok(scrolledMetrics.offsetY > 0, `expected positive scroll offsetY, got ${scrolledMetrics.offsetY}`);
 });
 
 test("native spring frames converge and the preview clock advances without scheduling more", async () => {

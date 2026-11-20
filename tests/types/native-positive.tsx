@@ -140,6 +140,14 @@ const visual = <box style={{
   fontVariationSettings: '"wght" 650', fontStyle: "italic", fontStretch: "condensed",
   whiteSpace: "pre-wrap", textOverflow: "ellipsis", pointerEvents: "none", userSelect: "none",
   translate: "10px 20%", rotate: "15deg", scale: 1.25,
+  outline: "2px solid blue", outlineColor: "red", outlineStyle: "solid", outlineWidth: "2px", outlineOffset: "2px",
+  letterSpacing: "0.05em", fontVariantNumeric: "tabular-nums", fontFeatureSettings: '"tnum" 1',
+  textAlign: "center", textTransform: "uppercase", textDecoration: "underline", textDecorationLine: "none",
+  gridTemplateColumns: "1fr 1fr", gridTemplateRows: "auto", gridColumn: "1 / 2", gridRow: "1",
+  gridArea: "1 / 1", gridAutoFlow: "row",
+  borderTop: "1px solid red", borderRight: "1px solid red", borderBottom: "1px solid red", borderLeft: "1px solid red",
+  borderStyle: "solid", flex: 1, alignSelf: "center", justifySelf: "end", boxSizing: "border-box",
+  overflowX: "hidden", overflowY: "auto",
 }} />;
 const children: NativeChild = [tree, provided, visual, "text", 42, false, null, undefined, () => [true, "accessor"]];
 const nativeTextProps: NativeTextControlProps = { value: null, defaultValue: "seed", readOnly: false, role: "textInput" };

@@ -3,7 +3,7 @@ use zgui::{reactive::prelude::GetUntracked, runtime::Window, view::ViewHost};
 
 use crate::session::SessionRegion;
 use super::semantics::SemanticModel;
-use crate::preview::evidence::{Bounds, CaptureIdentity, NodeEvidence, NodeState, TreeEvidence};
+use crate::preview::evidence::{Bounds, CaptureIdentity, NodeEvidence, NodeState, ScrollMetrics, TreeEvidence};
 
 pub struct Snapshot {
     pub tree: TreeEvidence,
@@ -91,7 +91,9 @@ pub fn snapshot(window: &Window, region: &SessionRegion, generation: u64, ordina
             value_truncated:semantic.as_ref().is_some_and(|value|value.value_truncated),
             state:NodeState { enabled:state.map(|value|value.0), visible:state.map(|value|value.1), focused:focused == Some(node.native) },
             bounds_logical:rectangle(scale), bounds_device:rectangle(1.0),
-            bounds_kind:"native-window-border-box".into(), pointer_reachability_verified:false,
+            bounds_kind:"native-window-border-box".into(),
+            scroll_metrics:scroll_metrics(window, node.native, scale),
+            pointer_reachability_verified:false,
             extra:serde_json::Map::new(),
         });
     }
@@ -109,6 +111,32 @@ pub fn snapshot(window: &Window, region: &SessionRegion, generation: u64, ordina
         nodes, extra,
     };
     Snapshot { tree, native_nodes:owned.nodes, metadata_revision:owned.metadata_revision }
+}
+
+fn scroll_metrics(window: &Window, native: zgui::view::NodeId, scale: f64) -> Option<ScrollMetrics> {
+    let key = zgui_view_dom::id::to_document(native)?;
+    let region = {
+        let layout = window.layout().borrow();
+        zgui_layout::scroll_region::region_of_element(&layout, key)?
+    };
+    let position = ViewHost::scroll_position(window.host().as_ref(), native);
+    let epsilon = f64::from(zgui_layout::scroll_region::bar::EPSILON);
+    let viewport_width = f64::from(region.scrollport.size.width.0);
+    let viewport_height = f64::from(region.scrollport.size.height.0);
+    let content_width = f64::from(region.content.width.0);
+    let content_height = f64::from(region.content.height.0);
+    Some(ScrollMetrics {
+        offset_x: f64::from(position.offset.x.0) / scale,
+        offset_y: f64::from(position.offset.y.0) / scale,
+        viewport_width: viewport_width / scale,
+        viewport_height: viewport_height / scale,
+        content_width: content_width / scale,
+        content_height: content_height / scale,
+        overflow_x: region.scrolls_x && content_width > viewport_width + epsilon,
+        overflow_y: region.scrolls_y && content_height > viewport_height + epsilon,
+        scrolls_x: region.scrolls_x,
+        scrolls_y: region.scrolls_y,
+    })
 }
 
 fn bounded_text(document: &zgui_dom::Document, root: zgui_dom::NodeIndex, bytes: usize, visits: &mut usize) -> (String, bool) {
