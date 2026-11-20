@@ -174,7 +174,7 @@ pub(super) struct CapturePaths {
 }
 impl CapturePaths {
     pub(super) fn new(id: &str, surface: &str) -> Result<Self, Error> {
-        if !scenario::safe_id(id) || !scenario::safe_id(surface) {
+        if !scenario::safe_id(id) || !scenario::safe_surface_name(surface) {
             return Err(Error::new("E_SCHEMA", 2, "invalid capture ID or surface name"));
         }
         Ok(Self { id: id.to_owned(), surface: surface.to_owned() })
@@ -221,7 +221,7 @@ impl TreeEvidence {
     pub(super) fn validate_frame(&self, frame: &FrameEvidence) -> Result<(), Error> {
         if self.schema_version != 1 || frame.schema_version != 1 || self.build_id.is_empty()
             || self.build_id != frame.build_id || self.generation == 0 || self.generation != frame.generation
-            || !scenario::safe_id(&self.surface) || self.surface != frame.surface
+            || !scenario::safe_surface_name(&self.surface) || self.surface != frame.surface
             || self.frame_ordinal != frame.validation_frame.ordinal
             || self.presentation_sequence != frame.pixel_presentation.sequence
             || self.metadata_revision != frame.metadata_revision

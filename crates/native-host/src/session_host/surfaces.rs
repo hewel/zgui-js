@@ -385,7 +385,8 @@ impl ShellWindows {
         attrs.role = SurfaceRole::Layer(spec.placement.clone());
         attrs.size = Some(spec.size);
         attrs.transparent = self.opacity == SurfaceOpacity::Transparent;
-        let (token, surface, region) = open_region(runtime, cx, session, attrs, WindowContent::default())?;
+        let content = shell_window_content(attrs.transparent, images);
+        let (token, surface, region) = open_region(runtime, cx, session, attrs, content)?;
         let document = region.document;
         self.running.insert(id, RunningLayer { token, surface, spec });
         RuntimeSurface::new(runtime, cx, images).attach_shell(session, id, name, region, surface, ShellKind::Layer)?;
@@ -406,8 +407,20 @@ pub(super) fn platform_lock_state(cx: &dyn PlatformCx) -> Option<SessionLockStat
 }
 
 fn lock_size(monitor: &Monitor) -> Size<CssPx, Css> {
-    Size::new(CssPx((monitor.width / monitor.scale).max(1.0) as f32),
-        CssPx((monitor.height / monitor.scale).max(1.0) as f32))
+    Size::new(CssPx(monitor.logical_width().max(1.0) as f32),
+        CssPx(monitor.logical_height().max(1.0) as f32))
+}
+
+pub(super) fn shell_window_content(transparent: bool, images: ImageChoice) -> WindowContent {
+    let mut content = WindowContent::default();
+    // Live transparent shell surfaces must not inherit the opaque demo APPLICATION_STYLESHEET
+    // from a hybrid primary window. Preview mode injects its own profile surface background.
+    if transparent && matches!(images, ImageChoice::Live) {
+        content
+            .window_stylesheets
+            .push(":root { background: transparent; padding: 0; }".into());
+    }
+    content
 }
 
 fn open_region(
@@ -467,10 +480,10 @@ fn used_size(spec: &LayerSpec, monitors: &[Monitor], images: ImageChoice) -> Res
     let monitor = spec.placement.monitor.as_ref().map_or_else(|| monitors.first(), |id| monitors.iter().find(|monitor| monitor.id == *id));
     let margin = &spec.placement.margin;
     let width = if spec.size.width.0 == 0.0 {
-        monitor.map_or(1.0, |output| (output.width / output.scale - f64::from(margin.left.0 + margin.right.0)).round().clamp(1.0, 16384.0))
+        monitor.map_or(1.0, |output| (output.logical_width() - f64::from(margin.left.0 + margin.right.0)).round().clamp(1.0, 16384.0))
     } else { f64::from(spec.size.width.0) };
     let height = if spec.size.height.0 == 0.0 {
-        monitor.map_or(1.0, |output| (output.height / output.scale - f64::from(margin.top.0 + margin.bottom.0)).round().clamp(1.0, 16384.0))
+        monitor.map_or(1.0, |output| (output.logical_height() - f64::from(margin.top.0 + margin.bottom.0)).round().clamp(1.0, 16384.0))
     } else { f64::from(spec.size.height.0) };
     let scale = monitor.map_or(1.0, |output| output.scale);
     let physical_width = (width * scale).ceil();
@@ -479,4 +492,23 @@ fn used_size(spec: &LayerSpec, monitors: &[Monitor], images: ImageChoice) -> Res
         return Err("preview shell surface exceeds its physical extent budget".into());
     }
     Ok(Size::new(CssPx(width as f32), CssPx(height as f32)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn live_transparent_shell_windows_override_root_background_and_padding() {
+        let live = shell_window_content(true, ImageChoice::Live);
+        assert_eq!(live.window_stylesheets.len(), 1);
+        assert!(live.window_stylesheets[0].contains("background: transparent"));
+        assert!(live.window_stylesheets[0].contains("padding: 0"));
+
+        let opaque = shell_window_content(false, ImageChoice::Live);
+        assert!(opaque.window_stylesheets.is_empty());
+
+        let preview = shell_window_content(true, ImageChoice::PackageOnly);
+        assert!(preview.window_stylesheets.is_empty());
+    }
 }

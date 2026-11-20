@@ -1,6 +1,6 @@
 //! What is known about an output.
 
-use zgui_geom::{Device, DevicePx, Point, Size};
+use zgui_geom::{Css, CssPx, Device, DevicePx, Point, Size};
 use zgui_vocab::SharedString;
 
 /// What is known about one output.
@@ -19,6 +19,9 @@ pub struct MonitorInfo {
     pub position: Point<DevicePx, Device>,
     /// How large the output is, in physical pixels.
     pub size: Size<DevicePx, Device>,
+    /// How large the output is in compositor logical coordinates, when reported separately from
+    /// `size / scale_factor` (for example via Wayland `xdg-output` under fractional scaling).
+    pub logical_size: Option<Size<CssPx, Css>>,
     /// The scale this output is presented at.
     pub scale_factor: f64,
     /// How many frames per second the output refreshes, in thousandths.
@@ -32,8 +35,8 @@ pub struct MonitorInfo {
 impl MonitorInfo {
     /// An output at `position`, `size` pixels large, presented at `scale_factor`.
     ///
-    /// The name and the refresh rate are absent until a backend fills them in, because a backend
-    /// that does not know them must not invent them.
+    /// The name, explicit logical size, and refresh rate are absent until a backend fills them in,
+    /// because a backend that does not know them must not invent them.
     pub const fn new(
         position: Point<DevicePx, Device>,
         size: Size<DevicePx, Device>,
@@ -43,6 +46,7 @@ impl MonitorInfo {
             name: None,
             position,
             size,
+            logical_size: None,
             scale_factor,
             refresh_rate_millihertz: None,
         }
@@ -52,6 +56,28 @@ impl MonitorInfo {
     pub fn with_name(mut self, name: impl Into<SharedString>) -> Self {
         self.name = Some(name.into());
         self
+    }
+
+    /// The same output with a compositor-reported logical extent.
+    pub const fn with_logical_size(mut self, size: Size<CssPx, Css>) -> Self {
+        self.logical_size = Some(size);
+        self
+    }
+
+    /// The logical extent of this output, falling back to `size / scale_factor` when no separate
+    /// logical size was reported.
+    pub fn logical_size(&self) -> Size<CssPx, Css> {
+        self.logical_size.unwrap_or_else(|| {
+            let scale = if self.scale_factor > 0.0 {
+                self.scale_factor
+            } else {
+                1.0
+            };
+            Size::new(
+                CssPx((f64::from(self.size.width.0) / scale) as f32),
+                CssPx((f64::from(self.size.height.0) / scale) as f32),
+            )
+        })
     }
 
     /// The same output with a known refresh rate, in thousandths of a hertz.
@@ -136,5 +162,23 @@ mod tests {
         let interval = refresh_interval(Some(60_000));
         assert!(interval > Duration::from_micros(16_600));
         assert!(interval < Duration::from_micros(16_700));
+    }
+
+    #[test]
+    fn logical_size_prefers_explicit_value_and_falls_back_to_scaled_physical_size() {
+        use zgui_geom::CssPx;
+        let monitor = MonitorInfo::new(
+            Point::new(DevicePx(0.0), DevicePx(0.0)),
+            Size::new(DevicePx(3840.0), DevicePx(2160.0)),
+            2.0,
+        );
+        assert_eq!(monitor.logical_size, None);
+        assert_eq!(monitor.logical_size(), Size::new(CssPx(1920.0), CssPx(1080.0)));
+
+        let fractional = monitor.with_logical_size(Size::new(CssPx(2194.0), CssPx(1234.0)));
+        assert_eq!(
+            fractional.logical_size(),
+            Size::new(CssPx(2194.0), CssPx(1234.0))
+        );
     }
 }

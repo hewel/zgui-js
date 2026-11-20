@@ -365,8 +365,10 @@ impl AppHandler for Application {
     }
 }
 
-pub(crate) const APPLICATION_STYLESHEET:&str =
+pub(crate) const APPLICATION_STYLESHEET: &str =
     ":root { background: #171b24; color: #edf2fa; font-family: sans-serif; font-size: 22px; padding: 24px; }";
+pub(crate) const PURE_SHELL_STYLESHEET: &str =
+    ":root { background: transparent; color: #edf2fa; font-family: sans-serif; padding: 0; }";
 
 fn main() -> Result<(), Box<dyn Error>> {
     if std::env::args_os().nth(1).is_some_and(|arg| arg == "msg") {
@@ -433,9 +435,14 @@ fn main() -> Result<(), Box<dyn Error>> {
     let pending = Rc::new(RefCell::new(Vec::new()));
     let roots = pending.clone();
     let namespace = layer_config.as_ref().map_or("dev.zgui.js", |config| config.namespace.as_str());
+    let stylesheet = if pure_shell || layer_config.as_ref().is_some_and(shell::LayerConfig::is_transparent) {
+        PURE_SHELL_STYLESHEET
+    } else {
+        APPLICATION_STYLESHEET
+    };
     let app = zgui::app().with_title(package.as_ref().map_or("zgui-js integration baseline", |package| package.manifest.id.as_str())).with_application_id(namespace)
         .with_size(560.0, 180.0)
-        .with_stylesheet(APPLICATION_STYLESHEET);
+        .with_stylesheet(stylesheet);
     let mut native = app.into_handler(move || Root(roots.clone()))?.into_runtime();
     let fonts = pure_shell.then(|| native.scope().with(zgui::reactive::use_context::<zgui::app::Fonts>)
         .expect("the native application provides a font collection"));

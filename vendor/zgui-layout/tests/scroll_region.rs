@@ -277,3 +277,36 @@ fn a_box_is_found_in_its_scrollers_content_space_from_layout_alone() {
         "the scroller is not below the row"
     );
 }
+
+#[test]
+fn subpixel_fractional_scale_rounding_does_not_trigger_auto_scrollbar() {
+    let fitted = Fixture::new(
+        Element::new("root").children(vec![Element::new("inner")]),
+        "root { display: block; width: 460px; height: 60px; overflow: auto }
+         inner { display: block; width: 460.25px; height: 60px }",
+    );
+    let mut store = fitted.box_tree();
+    let mut content = measurer();
+    lay_out(&mut store, &mut content, 460.0, 60.0);
+    let root = store.root().expect("a root");
+    assert_eq!(
+        store.auto_scroll(root),
+        (false, false),
+        "a 0.25px sub-pixel rounding discrepancy must not reserve a spurious scrollbar gutter",
+    );
+
+    let genuinely_wider = Fixture::new(
+        Element::new("root").children(vec![Element::new("inner")]),
+        "root { display: block; width: 460px; height: 60px; overflow: auto }
+         inner { display: block; width: 462px; height: 60px }",
+    );
+    let mut store = genuinely_wider.box_tree();
+    let mut content = measurer();
+    lay_out(&mut store, &mut content, 460.0, 60.0);
+    let root = store.root().expect("a root");
+    assert_eq!(
+        store.auto_scroll(root),
+        (true, false),
+        "a genuine multi-pixel overflow must still trigger overflow: auto",
+    );
+}

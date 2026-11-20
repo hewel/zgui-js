@@ -113,11 +113,10 @@ impl Scrollport {
 
 /// How much a content size may exceed its scrollport before the axis counts as scrollable.
 ///
-/// The same tolerance the gutter decision uses, and for the same reason: both numbers come out of
-/// one accumulation of floating-point additions, so a box whose content exactly fills it can report
-/// a content size a fraction of a pixel larger. A thumb drawn for that is full length, cannot be
-/// moved, and is drawn in every container in the document.
-pub const EPSILON: f32 = 1.0 / 64.0;
+/// The same sub-pixel tolerance the gutter decision uses, absorbing floating-point and
+/// fractional-scale buffer quantization below a whole device pixel so a fitted container never
+/// draws a spurious full-length thumb.
+pub const EPSILON: f32 = 0.75;
 
 /// Which pieces of scrollbar one box draws, in the order they are drawn.
 ///

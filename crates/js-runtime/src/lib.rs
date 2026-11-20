@@ -25,7 +25,7 @@ use std::{
 /// Initial desktop host policy, not application performance targets.
 #[derive(Clone, Debug)]
 pub struct RuntimeLimits {
-    /// Maximum synchronous script/callback/job execution: 50 ms by default.
+    /// Maximum synchronous script/callback/job execution: 100 ms in release (250 ms in debug).
     pub entry_timeout: Duration,
     /// Whole smoke bootstrap, including module jobs and runSmoke: 2 s by default.
     pub bootstrap_timeout: Duration,
@@ -33,7 +33,7 @@ pub struct RuntimeLimits {
     pub cleanup_timeout: Duration,
     /// Maximum attempted jobs per pump, including throwing jobs: 256 by default.
     pub max_jobs_per_pump: usize,
-    /// Whole pump deadline, also applied inside each job: 10 ms by default.
+    /// Whole pump deadline, also applied inside each job: 100 ms in release (250 ms in debug).
     pub job_timeout: Duration,
     /// Engine allocator limit: 64 MiB. Does not cover native/GPU/Rust allocations.
     /// Requires the default allocator; do not enable rquickjs rust-alloc/allocator.
@@ -51,12 +51,13 @@ pub struct RuntimeLimits {
 
 impl Default for RuntimeLimits {
     fn default() -> Self {
+        let default_turn_timeout = Duration::from_millis(if cfg!(debug_assertions) { 250 } else { 100 });
         Self {
-            entry_timeout: Duration::from_millis(50),
+            entry_timeout: default_turn_timeout,
             bootstrap_timeout: Duration::from_secs(2),
             cleanup_timeout: Duration::from_millis(20),
             max_jobs_per_pump: 256,
-            job_timeout: Duration::from_millis(10),
+            job_timeout: default_turn_timeout,
             memory_limit_bytes: 64 * 1024 * 1024,
             stack_limit_bytes: 256 * 1024,
             diagnostic_timeout: Duration::from_millis(5),
@@ -765,14 +766,27 @@ impl JsRuntime {
             return Diagnostic::new(DiagnosticKind::Engine, phase, error.to_string());
         }
         let thrown = ctx.catch();
-        // Diagnostics may invoke accessors, but must never extend the entry/job
-        // deadline. Expired budgets retain a primitive/type-only diagnostic.
+        // Diagnostics may invoke accessors, so normal exceptions never extend the active
+        // entry/job deadline. When the entry itself was interrupted by a timeout, QuickJS
+        // throws an uncatchable InternalError whose message/stack are plain data properties;
+        // grant bounded `diagnostic_timeout` (still clamped to any enclosing owner deadline)
+        // so the timeout reason and JS stack trace are surfaced rather than dropped.
         let formatting_end = self.clamp_deadline(Instant::now() + self.limits.diagnostic_timeout);
-        let end = self.interrupt.deadline.get().map_or(formatting_end, |active| active.min(formatting_end));
+        let end = if interrupted {
+            formatting_end
+        } else {
+            self.interrupt.deadline.get().map_or(formatting_end, |active| active.min(formatting_end))
+        };
         self.interrupt.deadline.set(Some(end));
         let mut diagnostic = diagnostic_value(ctx, phase, thrown, self.limits.max_diagnostic_bytes, end);
         if interrupted {
             diagnostic.kind = DiagnosticKind::Interrupted;
+            if diagnostic.message.is_empty()
+                || diagnostic.message == "interrupted"
+                || diagnostic.message.starts_with("JavaScript threw ")
+            {
+                diagnostic.message = "JavaScript execution interrupted (timeout)".into();
+            }
         }
         diagnostic
     }

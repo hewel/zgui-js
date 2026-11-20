@@ -91,11 +91,20 @@ impl Window {
 
         let port = {
             let layout = self.layout.borrow();
-            shiftable::port_may_be_shifted(&layout, scrolled.container, &self.host.placements())
-                .map_err(Refused::Document)?
+            shiftable::port_may_be_shifted(
+                &layout,
+                scrolled.container,
+                &self.host.placements(),
+                &self.scene.clips,
+                self.scale,
+            )
+            .map_err(Refused::Document)?
+        };
+        let Some(port) = whole_pixel_rect(port) else {
+            return Err(Refused::NotWholePixels);
         };
         let surface = Rect::new(zgui_geom::Point::new(0, 0), viewport);
-        let Some(port) = zgui_layout::fragment::diff::pixels(port).intersection(surface) else {
+        let Some(port) = port.intersection(surface).filter(|rect| !rect.is_empty()) else {
             return Err(Refused::NotOneContainer);
         };
         Ok(ScrollShift {
@@ -103,4 +112,31 @@ impl Window {
             by: (dx as i32, dy as i32),
         })
     }
+}
+
+/// Converts a device-pixel rectangle only when every edge lands on an exact integer pixel.
+///
+/// Outward rounding (`floor`/`ceil`) would widen the copied port onto partially-covered neighbour
+/// pixels such as a parent border, dragging a hairline of that border into the interior on every
+/// shift frame.
+fn whole_pixel_rect(rect: Rect<zgui_geom::DevicePx, Device>) -> Option<Rect<i32, Device>> {
+    if rect.is_empty() {
+        return None;
+    }
+    let edges = [rect.left().0, rect.top().0, rect.right().0, rect.bottom().0];
+    if !edges
+        .iter()
+        .all(|edge| edge.is_finite() && edge.fract() == 0.0 && *edge >= i32::MIN as f32 && *edge <= i32::MAX as f32)
+    {
+        return None;
+    }
+    let [left, top, right, bottom] = edges.map(|edge| edge as i32);
+    let width = right.checked_sub(left)?;
+    let height = bottom.checked_sub(top)?;
+    (width > 0 && height > 0).then(|| {
+        Rect::new(
+            zgui_geom::Point::new(left, top),
+            zgui_geom::Size::new(width, height),
+        )
+    })
 }

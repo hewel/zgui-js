@@ -196,11 +196,13 @@ export function mountShell(): () => void {
     const monitors = useMonitors();
     return <For each={monitors()}>{monitor => {
       const scale: number = monitor.scale;
+      const logicalWidth: number = monitor.logicalWidth;
+      const logicalHeight: number = monitor.logicalHeight;
       const refresh: number | null = monitor.refreshRateMilliHz;
       return <LayerSurface name={monitor.name} output={monitor.id} layer="top"
         anchor={["top", "right", "left"] as const} width={0} height={32} margin={{ top: 4 }}
         keyboard="on-demand" exclusiveZone={32} inputRegion={[{ x: 0, y: 0, width: 100, height: 32 }] as const}>
-        <text>{monitor.x}:{monitor.y}:{monitor.width}:{monitor.height}:{scale}:{refresh}</text>
+        <text>{monitor.x}:{monitor.y}:{monitor.width}:{monitor.height}:{logicalWidth}:{logicalHeight}:{scale}:{refresh}</text>
       </LayerSurface>;
     }}</For>;
   });

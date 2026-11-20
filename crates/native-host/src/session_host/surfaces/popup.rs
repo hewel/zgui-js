@@ -1,8 +1,8 @@
 //! Reconcile compositor-owned popup trees in parent-before-child open order.
 use std::{collections::BTreeSet, rc::Rc};
-use zgui::{platform::{PlatformCx, SurfaceId}, runtime::{Runtime, WindowContent, WindowToken}};
+use zgui::{platform::{PlatformCx, SurfaceId}, runtime::{Runtime, WindowToken}};
 
-use super::{ImageChoice, Monitor, RuntimeSurface, Session, SessionHost, SessionSurface, ShellKind, ShellWindows, SurfaceOpacity, close_native_surface, open_region, present};
+use super::{ImageChoice, Monitor, RuntimeSurface, Session, SessionHost, SessionSurface, ShellKind, ShellWindows, SurfaceOpacity, close_native_surface, open_region, present, shell_window_content};
 use crate::{session::Result, shell::PopupSpec};
 
 pub(super) struct RunningPopup {
@@ -112,7 +112,8 @@ impl ShellWindows {
             attrs.title = name.as_str().into();
             attrs.size = Some(spec.size());
             attrs.transparent = self.opacity == SurfaceOpacity::Transparent;
-            let (token, surface, region) = open_region(runtime, cx, session, attrs, WindowContent::default())?;
+            let content = shell_window_content(attrs.transparent, images);
+            let (token, surface, region) = open_region(runtime, cx, session, attrs, content)?;
             let document = region.document;
             self.popups.push(RunningPopup { id, token, surface, parent, spec, grab });
             let mut binding = RuntimeSurface::new(runtime, cx, images);

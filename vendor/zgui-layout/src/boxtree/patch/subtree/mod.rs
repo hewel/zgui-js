@@ -109,12 +109,14 @@ fn one(store: &mut LayoutStore, document: &Document, target: NodeIndex) -> Optio
         .parent()
         .and_then(|parent| document.node(parent).primary_style());
 
+    let parent_fc = store.node(held.parent).fc;
     let Some(built) = build_subtree(
         store,
         document,
         target,
         containing_block,
         parent_style.as_ref(),
+        parent_fc,
     ) else {
         // The element generates no box at all any more, so the splice is a removal — and a removal
         // is only local in a container whose remaining children cannot be re-wrapped by it.

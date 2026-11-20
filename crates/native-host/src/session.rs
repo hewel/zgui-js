@@ -701,8 +701,11 @@ impl Session {
                         .map_err(|error| self.diagnostic(error))?;
                     true
                 } else { false },
-                _ => self.bridges.run(engine.turn(), |js| js.execute_job(end.saturating_duration_since(Instant::now())))
-                    .map_err(|error| self.diagnostic(error))?,
+                _ => {
+                    let job_budget = engine.limits().job_timeout;
+                    self.bridges.run(engine.turn(), |js| js.execute_job(job_budget))
+                        .map_err(|error| self.diagnostic(error))?
+                }
             };
             if attempted { worked = true; } else { remaining[phase] = 0; }
         }

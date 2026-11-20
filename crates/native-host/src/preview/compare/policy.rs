@@ -162,7 +162,7 @@ impl Policy {
         if input.masks.len() > MAX_MASKS { return Err(invalid("at most 256 masks are allowed")); }
         let mut masks = BTreeSet::new();
         for mask in &input.masks {
-            if !safe_id(&mask.capture_id) || !safe_id(&mask.surface) {
+            if !safe_id(&mask.capture_id) || !safe_surface_name(&mask.surface) {
                 return Err(invalid("mask captureId and surface must be valid IDs"));
             }
             validate_reason(&mask.reason)?;
@@ -203,10 +203,11 @@ impl Policy {
 }
 
 fn safe_id(value: &str) -> bool { crate::preview::scenario::safe_id(value) }
+fn safe_surface_name(value: &str) -> bool { crate::preview::scenario::safe_surface_name(value) }
 
 fn validate_key(key: &CaptureKey) -> Result<(), Error> {
-    if !safe_id(&key.capture_id) || !safe_id(&key.surface) {
-        return Err(invalid("captureId and surface must match [a-z0-9][a-z0-9._-]* and contain at most 128 bytes"));
+    if !safe_id(&key.capture_id) || !safe_surface_name(&key.surface) {
+        return Err(invalid("captureId and surface must be safe single-component identifiers of at most 128 bytes"));
     }
     Ok(())
 }

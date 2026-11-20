@@ -122,7 +122,7 @@ pub fn build(store: &mut LayoutStore, document: &Document) -> Option<BoxKey> {
         document,
         reparented: Vec::new(),
     };
-    let placed = builder.element(root, None, None)?;
+    let placed = builder.element(root, None, None, FormattingContext::Block)?;
     let reparented = core::mem::take(&mut builder.reparented);
     attach_all(store, &reparented);
     store.set_root(placed.key);
@@ -160,15 +160,37 @@ pub fn build_subtree(
     index: NodeIndex,
     containing_block: BoxKey,
     parent_style: Option<&ComputedStyle>,
+    parent_fc: FormattingContext,
 ) -> Option<Subtree> {
     let mut builder = Builder {
         store,
         document,
         reparented: Vec::new(),
     };
-    let root = builder.element(index, Some(containing_block), parent_style)?;
+    let root = builder.element(index, Some(containing_block), parent_style, parent_fc)?;
     let reparented = core::mem::take(&mut builder.reparented);
     Some(Subtree { root, reparented })
+}
+
+/// Whether a direct text child of a flex or grid container produces no anonymous item.
+///
+/// Per CSS Flexbox §4 and CSS Grid §4, an empty text node or a text node containing only
+/// white space collapsible under the container's `white-space-collapse` rule is not rendered as
+/// a flex/grid item and does not participate in `gap` or main-axis sizing.
+pub(crate) fn is_ignored_item_text(text: &str, style: &ComputedStyle) -> bool {
+    if text.is_empty() {
+        return true;
+    }
+    use zgui_css::values::text::WhiteSpaceCollapse;
+    match style.get_inherited_text().white_space_collapse {
+        WhiteSpaceCollapse::Collapse => text
+            .chars()
+            .all(|ch| matches!(ch, ' ' | '\t' | '\n' | '\r' | '\u{000c}')),
+        WhiteSpaceCollapse::PreserveBreaks => text
+            .chars()
+            .all(|ch| matches!(ch, ' ' | '\t' | '\r' | '\u{000c}')),
+        WhiteSpaceCollapse::Preserve | WhiteSpaceCollapse::BreakSpaces => false,
+    }
 }
 
 /// The state one build carries across the whole tree.
@@ -191,10 +213,11 @@ impl Builder<'_> {
         index: NodeIndex,
         containing_block: Option<BoxKey>,
         parent_style: Option<&ComputedStyle>,
+        parent_fc: FormattingContext,
     ) -> Option<Placed> {
         let node = self.document.node(index);
         if node.kind() == NodeKind::Text {
-            return self.text_run(index, parent_style?);
+            return self.text_run(index, parent_style?, parent_fc);
         }
         let style = node.primary_style()?;
         let classification = classify(&style);
@@ -268,7 +291,7 @@ impl Builder<'_> {
             containing_block
         };
 
-        let mut children = self.children_of(index, style, inner_cb);
+        let mut children = self.children_of(index, style, inner_cb, fc);
 
         let document_node = self.document.node(index);
         if let Some(before) = document_node.before_style() {
@@ -309,15 +332,16 @@ impl Builder<'_> {
         index: NodeIndex,
         style: &ComputedStyle,
         containing_block: Option<BoxKey>,
+        parent_fc: FormattingContext,
     ) -> Vec<Placed> {
         let mut out = Vec::new();
         for child in self.child_indices(index) {
             if self.is_flattened(child) {
-                let flattened = self.children_of(child, style, containing_block);
+                let flattened = self.children_of(child, style, containing_block, parent_fc);
                 crate::boxtree::contents::splice(&mut out, flattened);
                 continue;
             }
-            if let Some(placed) = self.element(child, containing_block, Some(style)) {
+            if let Some(placed) = self.element(child, containing_block, Some(style), parent_fc) {
                 out.push(placed);
             }
         }
@@ -347,8 +371,18 @@ impl Builder<'_> {
     }
 
     /// A run of text, which is a box of its own with no element-level styling.
-    fn text_run(&mut self, index: NodeIndex, parent_style: &ComputedStyle) -> Option<Placed> {
+    fn text_run(
+        &mut self,
+        index: NodeIndex,
+        parent_style: &ComputedStyle,
+        parent_fc: FormattingContext,
+    ) -> Option<Placed> {
         let text = zgui_dom::text::node::text_of(self.document.store(), index)?;
+        if matches!(parent_fc, FormattingContext::Flex | FormattingContext::Grid)
+            && is_ignored_item_text(text, parent_style)
+        {
+            return None;
+        }
         let mut node = BoxNode::new(
             crate::boxtree::anonymous::synthesised_style(parent_style),
             BoxKind::TextRun,

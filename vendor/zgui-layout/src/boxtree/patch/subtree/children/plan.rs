@@ -158,6 +158,7 @@ pub(super) fn of(
         departing.push(key);
     }
 
+    let container_style = document.node(container).primary_style()?;
     let mut steps = Vec::new();
     let mut next = document.store().core(container).first_child();
     while let Some(child) = next {
@@ -166,6 +167,22 @@ pub(super) fn of(
             NodeKind::Element => {}
             // A node that holds no position among element siblings generates no box either.
             NodeKind::Marker => continue,
+            // An empty or whitespace-only text node directly inside a flex or grid container
+            // generates no anonymous item (CSS Flexbox §4 / CSS Grid §4), so Solid's empty
+            // `<Show>`/`<For>` anchor text nodes behave like markers during child-list splicing.
+            NodeKind::Text
+                if matches!(fc, FormattingContext::Flex | FormattingContext::Grid)
+                    && !kept.contains_key(&child)
+                    && zgui_dom::text::node::text_of(document.store(), child).is_some_and(
+                        |text| crate::boxtree::build::is_ignored_item_text(text, &container_style),
+                    )
+                    && store
+                        .boxes_of(document.store().key_of(child))
+                        .iter()
+                        .all(|key| doomed.contains(key)) =>
+            {
+                continue;
+            }
             // A run of text is inline-level, and how a container wraps one is the container's own
             // decision rather than the run's.
             _ => return None,
@@ -198,7 +215,7 @@ pub(super) fn of(
         container: own,
         fc,
         containing_block: place::containing_block(store, own)?,
-        style: document.node(container).primary_style()?,
+        style: container_style,
         steps,
         tail,
         departing,

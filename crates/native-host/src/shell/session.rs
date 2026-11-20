@@ -22,7 +22,7 @@ fn allocate_lock_id(next: &AtomicU64) -> Option<u64> {
     }).ok()
 }
 
-/// One named output, with physical desktop geometry and the advertised scale.
+/// One named output, with physical desktop geometry, compositor logical extent, and advertised scale.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct Monitor {
@@ -32,19 +32,46 @@ pub(crate) struct Monitor {
     pub y: f64,
     pub width: f64,
     pub height: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub logical_width: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub logical_height: Option<f64>,
     pub scale: f64,
     pub refresh_rate_milli_hz: Option<u32>,
 }
 
 impl Monitor {
+    /// Compositor-reported logical width, falling back to `width / scale`.
+    pub(crate) fn logical_width(&self) -> f64 {
+        self.logical_width.unwrap_or_else(|| self.width / self.scale)
+    }
+
+    /// Compositor-reported logical height, falling back to `height / scale`.
+    pub(crate) fn logical_height(&self) -> f64 {
+        self.logical_height.unwrap_or_else(|| self.height / self.scale)
+    }
+
+    /// Populate explicit logical dimensions from `width / scale` and `height / scale` when absent.
+    pub(crate) fn normalize_logical_size(&mut self) {
+        if self.logical_width.is_none() {
+            self.logical_width = Some(self.width / self.scale);
+        }
+        if self.logical_height.is_none() {
+            self.logical_height = Some(self.height / self.scale);
+        }
+    }
+
     /// Only named outputs can be targeted by layer-shell.
     pub(crate) fn snapshot(monitors: &[MonitorInfo]) -> Vec<Self> {
         let mut result: Vec<_> = monitors.iter().filter_map(|monitor| {
             let name = monitor.name.as_ref()?.to_string();
+            let logical = monitor.logical_size();
             Some(Self {
                 id: name.clone(), name,
                 x: f64::from(monitor.position.x.0), y: f64::from(monitor.position.y.0),
                 width: f64::from(monitor.size.width.0), height: f64::from(monitor.size.height.0),
+                logical_width: Some(f64::from(logical.width.0)),
+                logical_height: Some(f64::from(logical.height.0)),
                 scale: monitor.scale_factor, refresh_rate_milli_hz: monitor.refresh_rate_millihertz,
             })
         }).collect();
@@ -509,9 +536,12 @@ fn owner(weak: &Weak<Shell>, ctx: &Ctx<'_>) -> rquickjs::Result<Rc<Shell>> {
 
 
 /// A bounded identifier usable as a single capture path component.
+///
+/// Permits ASCII uppercase letters so shell apps can compose surface names directly from real
+/// Wayland output names such as `"DP-1"` or `"HDMI-A-2"`.
 pub(crate) fn valid_name(name: &str) -> bool {
-    name.len() <= 128 && name.as_bytes().first().is_some_and(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit())
-        && name.bytes().all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'-' | b'_' | b'.'))
+    name.len() <= 128 && name.as_bytes().first().is_some_and(u8::is_ascii_alphanumeric)
+        && name.bytes().all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
 }
 
 fn layer_id(ctx: &Ctx<'_>, value: &Value<'_>) -> rquickjs::Result<u32> {
@@ -851,5 +881,43 @@ mod tests {
                 ctx.catch();
             }
         });
+    }
+
+    #[test]
+    fn valid_name_accepts_wayland_connector_casing_and_rejects_path_traversal() {
+        for valid in ["bar-DP-1", "panel-HDMI-A-2", "DP-1", "eDP-1", "lock_1.0"] {
+            assert!(valid_name(valid), "expected {valid:?} to be valid");
+        }
+        for invalid in ["", "-leading", ".hidden", "../escape", "bar/DP-1", "has space"] {
+            assert!(!valid_name(invalid), "expected {invalid:?} to be rejected");
+        }
+    }
+
+    #[test]
+    fn monitor_snapshot_preserves_fractional_logical_size() {
+        use zgui::geom::{DevicePx, Point};
+        let native = vec![
+            MonitorInfo::new(
+                Point::new(DevicePx(0.0), DevicePx(0.0)),
+                Size::new(DevicePx(3840.0), DevicePx(2160.0)),
+                2.0,
+            )
+            .with_logical_size(Size::new(CssPx(2194.0), CssPx(1234.0)))
+            .with_name("DP-1"),
+            MonitorInfo::new(
+                Point::new(DevicePx(3840.0), DevicePx(0.0)),
+                Size::new(DevicePx(1920.0), DevicePx(1080.0)),
+                2.0,
+            )
+            .with_name("HDMI-A-2"),
+        ];
+        let snapshot = Monitor::snapshot(&native);
+        assert_eq!(snapshot.len(), 2);
+        assert_eq!(snapshot[0].id, "DP-1");
+        assert_eq!(snapshot[0].logical_width, Some(2194.0));
+        assert_eq!(snapshot[0].logical_height, Some(1234.0));
+        assert_eq!(snapshot[1].id, "HDMI-A-2");
+        assert_eq!(snapshot[1].logical_width, Some(960.0));
+        assert_eq!(snapshot[1].logical_height, Some(540.0));
     }
 }

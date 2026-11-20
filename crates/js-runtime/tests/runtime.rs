@@ -643,3 +643,73 @@ fn module_evaluation_interrupts_under_entry_timeout() {
     assert_eq!(error.kind, DiagnosticKind::Interrupted);
     assert_eq!(error.phase, "module evaluation");
 }
+
+#[test]
+fn interrupted_entries_and_jobs_surface_timeout_message_and_stack() {
+    let mut runtime = JsRuntime::new(RuntimeLimits {
+        entry_timeout: Duration::from_millis(5),
+        job_timeout: Duration::from_millis(5),
+        ..RuntimeLimits::default()
+    })
+    .unwrap();
+    let script_err = runtime
+        .evaluate_script("function spinScript() { while (true) {} } spinScript();")
+        .unwrap_err();
+    assert_eq!(script_err.kind, DiagnosticKind::Interrupted);
+    assert!(
+        script_err.message.contains("interrupted") && script_err.message.contains("timeout"),
+        "expected timeout diagnostic message, got: {script_err}",
+    );
+    assert!(
+        script_err
+            .stack
+            .as_deref()
+            .is_some_and(|stack| stack.contains("spinScript")),
+        "expected stack trace naming spinScript, got: {script_err:?}",
+    );
+
+    let mut job_runtime = JsRuntime::new(RuntimeLimits {
+        entry_timeout: Duration::from_secs(1),
+        job_timeout: Duration::from_millis(5),
+        ..RuntimeLimits::default()
+    })
+    .unwrap();
+    job_runtime
+        .with_context(|ctx| {
+            let spin: Function = ctx.eval("function spinJob() { while (true) {} } spinJob")?;
+            spin.defer(())
+        })
+        .unwrap();
+    let pump = job_runtime.pump_jobs();
+    assert_eq!(pump.diagnostics.len(), 1);
+    let job_err = &pump.diagnostics[0];
+    assert_eq!(job_err.kind, DiagnosticKind::Interrupted);
+    assert!(
+        job_err.message.contains("interrupted") && job_err.message.contains("timeout"),
+        "expected timeout diagnostic message, got: {job_err}",
+    );
+    assert!(
+        job_err
+            .stack
+            .as_deref()
+            .is_some_and(|stack| stack.contains("spinJob")),
+        "expected stack trace naming spinJob, got: {job_err:?}",
+    );
+}
+
+#[test]
+fn interrupted_script_under_expired_enclosing_deadline_still_reports_timeout() {
+    let mut runtime = JsRuntime::new(RuntimeLimits {
+        entry_timeout: Duration::from_secs(2),
+        ..RuntimeLimits::default()
+    })
+    .unwrap();
+    let deadline = Rc::new(Cell::new(Instant::now() + Duration::from_millis(5)));
+    runtime.set_enclosing_deadline(deadline);
+    let error = runtime.evaluate_script("while (true) {}").unwrap_err();
+    assert_eq!(error.kind, DiagnosticKind::Interrupted);
+    assert!(
+        error.message.contains("interrupted") && error.message.contains("timeout"),
+        "expected timeout diagnostic message even when enclosing deadline expired, got: {error}",
+    );
+}

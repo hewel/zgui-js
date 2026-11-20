@@ -307,3 +307,84 @@ fn order_permutes_the_layout_list_and_leaves_the_paint_list_alone() {
     );
     assert_eq!(node.children[0], node.paint_children[1]);
 }
+
+#[test]
+fn empty_and_whitespace_text_nodes_generate_no_flex_or_grid_items() {
+    use support::{lay_out, measurer};
+    use zgui_layout::boxtree::patch::{Retext, retext};
+
+    let mut fixture = Fixture::new(
+        Element::new("root").children(vec![
+            Element::new("icon"),
+            Element::new("icon"),
+            Element::new("icon"),
+            Element::new("icon"),
+            Element::new("icon"),
+        ]),
+        "root { display: flex; flex-direction: row; gap: 8px; width: 232px; height: 40px }
+         icon { display: block; width: 40px; height: 40px; flex-shrink: 0 }",
+    );
+    let root_dom = fixture.root;
+    // Insert two empty anchor text nodes (as Solid <For each={[]}> / <Show when={false}> do)
+    // and one collapsible whitespace-only text node directly inside the flex row.
+    fixture.edit_and_restyle(|edit| {
+        let a = edit.create_text("");
+        let b = edit.create_text("");
+        let ws = edit.create_text("  \n\t ");
+        edit.insert_before(root_dom, a, None);
+        edit.insert_before(root_dom, b, None);
+        edit.insert_before(root_dom, ws, None);
+    });
+
+    let mut store = fixture.box_tree();
+    assert_invariants(&store);
+    let root = store.root().expect("a root");
+    assert_eq!(
+        store.node(root).children.len(),
+        5,
+        "empty and whitespace-only text nodes must not become flex items or eat gap",
+    );
+    let mut content = measurer();
+    lay_out(&mut store, &mut content, 232.0, 40.0);
+    let last = *store.node(root).children.last().expect("fifth icon");
+    let last_layout = store.layout_of(last).expect("laid out");
+    assert_eq!(
+        last_layout.origin.x.0, 192.0,
+        "5 * 40px + 4 * 8px = 232px with zero extra gaps from empty text anchors",
+    );
+
+    // Emptying a non-empty direct flex text item via retext forces a rebuild so its box disappears.
+    let mut dynamic = Fixture::new(
+        Element::new("root").children(vec![Element::new("icon")]).text("live"),
+        "root { display: flex; gap: 8px; width: 200px }
+         icon { display: block; width: 40px; height: 40px }",
+    );
+    let mut dynamic_store = dynamic.box_tree();
+    let dyn_root = dynamic_store.root().expect("a root");
+    assert_eq!(dynamic_store.node(dyn_root).children.len(), 2);
+    let text_node = {
+        let store_ref = dynamic.document.store();
+        let mut cursor = store_ref.core(dynamic.root).first_child();
+        let mut found = None;
+        while let Some(child) = cursor {
+            if store_ref.core(child).kind() == zgui_dom::NodeKind::Text {
+                found = Some(child);
+                break;
+            }
+            cursor = store_ref.core(child).next_sibling();
+        }
+        found.expect("text node")
+    };
+    dynamic.edit_and_restyle(|edit| edit.set_text(text_node, ""));
+    let root_index = dynamic.document.root_index().expect("root");
+    assert_eq!(
+        retext(&mut dynamic_store, &dynamic.document, root_index),
+        Retext::Rebuild,
+        "emptying a direct flex text item must rebuild to drop the anonymous item",
+    );
+    let rebuilt = dynamic.box_tree();
+    assert_eq!(
+        rebuilt.node(rebuilt.root().expect("root")).children.len(),
+        1,
+    );
+}

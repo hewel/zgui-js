@@ -24,6 +24,10 @@ export interface NativeViewport extends NativeWindowRect { readonly scale: numbe
 export interface Monitor extends NativeViewport {
   readonly id: string;
   readonly name: string;
+  /** Compositor-reported logical width in CSS/logical pixels (falls back to `width / scale`). */
+  readonly logicalWidth: number;
+  /** Compositor-reported logical height in CSS/logical pixels (falls back to `height / scale`). */
+  readonly logicalHeight: number;
   readonly refreshRateMilliHz: number | null;
 }
 export type LayerAnchor = "top" | "right" | "bottom" | "left";

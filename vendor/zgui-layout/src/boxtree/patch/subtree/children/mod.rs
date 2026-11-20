@@ -189,6 +189,7 @@ fn build(store: &mut LayoutStore, document: &Document, plan: &Plan) -> Option<Ma
             index,
             plan.containing_block,
             Some(&plan.style),
+            plan.fc,
         ) else {
             // The child generates no box at all, which `display: none` does. There is nothing to put
             // in the list, and taking a box out of a container whose children are all block-level

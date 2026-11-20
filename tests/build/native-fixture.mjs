@@ -623,7 +623,12 @@ export function createHost({ strictStyles = false, reducedMotion = false, monito
   const shellTasks = [];
   const shellLog = [];
   const monitorSubscribers = new Set();
-  let monitorSnapshot = structuredClone(monitors);
+  const normalizeMonitors = list => structuredClone(list).map(monitor => ({
+    ...monitor,
+    logicalWidth: monitor.logicalWidth ?? monitor.width / monitor.scale,
+    logicalHeight: monitor.logicalHeight ?? monitor.height / monitor.scale,
+  }));
+  let monitorSnapshot = normalizeMonitors(monitors);
   let nextLayerId = 0;
   const requireShell = () => {
     if (!shellSurfaces) throw Object.assign(new Error("shell surfaces require capabilities.shellSurfaces"), { code: "E_CAPABILITY" });
@@ -783,7 +788,7 @@ export function createHost({ strictStyles = false, reducedMotion = false, monito
     openLock(name, output, attach) {
       requireShellWorkAllowed("openLock");
       requireLock();
-      if (name === "main" || !/^[a-z0-9][a-z0-9_.-]{0,127}$/.test(name)) {
+      if (name === "main" || !/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$/.test(name)) {
         throw new TypeError("invalid or reserved shell surface name");
       }
       if ([...layerIds.values(), ...lockIds.values(), ...popupIds.values()].some(surface =>
@@ -814,7 +819,7 @@ export function createHost({ strictStyles = false, reducedMotion = false, monito
     openLayer(name, placement, attach) {
       requireShellWorkAllowed("openLayer");
       requireShell();
-      if (name === "main" || !/^[a-zA-Z0-9_-]{1,64}$/.test(name)) throw new TypeError("invalid or reserved shell surface name");
+      if (name === "main" || !/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$/.test(name)) throw new TypeError("invalid or reserved shell surface name");
       if ([...layerIds.values(), ...lockIds.values(), ...popupIds.values()].some(surface => !surface.closing && surface.name === name)) {
         throw new TypeError(`duplicate shell surface: ${name}`);
       }
@@ -853,7 +858,7 @@ export function createHost({ strictStyles = false, reducedMotion = false, monito
     openPopup(name, placement, attach, dismiss) {
       requireShellWorkAllowed("openPopup");
       requireShell();
-      if (name === "main" || !/^[a-z0-9][a-z0-9_.-]{0,127}$/.test(name)) {
+      if (name === "main" || !/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$/.test(name)) {
         throw new TypeError("invalid popup name");
       }
       requireAcyclicPopupParent(name, placement.parent);
@@ -900,7 +905,7 @@ export function createHost({ strictStyles = false, reducedMotion = false, monito
   };
 
   const emitMonitors = next => {
-    monitorSnapshot = structuredClone(next);
+    monitorSnapshot = normalizeMonitors(next);
     // Reconcile output loss before the JS job checkpoint, as the native host does.
     runTurn(() => {
       for (const callback of [...monitorSubscribers]) {

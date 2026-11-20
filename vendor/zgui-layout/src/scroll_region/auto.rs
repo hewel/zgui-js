@@ -76,11 +76,11 @@ pub fn revise<C: MeasureContent>(tree: &mut LayoutTree<'_, C>, root: BoxKey) -> 
 
 /// How much a content size may exceed a box before it counts as overflowing.
 ///
-/// Both numbers come out of the same accumulation of floating-point additions, so a box whose
-/// content exactly fills it can report a content size a fraction of a pixel larger. Reserving a
-/// scrollbar for that is a visible bug — and one that oscillates, because reserving the gutter then
-/// makes the content genuinely overflow.
-const EPSILON: f32 = 1.0 / 64.0;
+/// Both numbers come out of floating-point layout arithmetic and fractional-scale surface buffer
+/// quantization (for example `263px * 1.75 = 460.25 -> 460px`). Tolerating sub-pixel rounding
+/// discrepancies below a whole device pixel prevents spurious scrollbars while still scrolling
+/// whenever content overflows by at least one device pixel.
+const EPSILON: f32 = 0.75;
 
 #[cfg(test)]
 mod tests {

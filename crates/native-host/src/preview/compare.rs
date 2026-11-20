@@ -69,7 +69,7 @@ impl Baseline {
         }
         let keys:BTreeSet<_>=descriptor.review.captures.iter().collect();
         if keys.is_empty() || keys.len()>4096 || keys.len()!=descriptor.review.captures.len()
-            || keys.iter().any(|key|!super::scenario::safe_id(&key.capture_id)||!super::scenario::safe_id(&key.surface)) {
+            || keys.iter().any(|key|!super::scenario::safe_id(&key.capture_id)||!super::scenario::safe_surface_name(&key.surface)) {
             return Err(invalid("baseline review must name 1..4096 unique capture and surface pairs"));
         }
         let run=canonical_root.join(&descriptor.run);

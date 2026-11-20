@@ -317,18 +317,27 @@ impl Driver {
     /// Apply a preview output snapshot and settle the resulting shell surface changes.
     pub fn set_monitors(&mut self, monitors: &[Monitor]) -> Result<Value, Fault> {
         self.settle(false)?;
-        if self.pipeline.app().monitors != monitors {
-            let native = monitors.iter().map(|monitor| {
+        let normalized: Vec<Monitor> = monitors.iter().cloned().map(|mut monitor| {
+            monitor.normalize_logical_size();
+            monitor
+        }).collect();
+        if self.pipeline.app().monitors != normalized {
+            let native = normalized.iter().map(|monitor| {
                 let mut info = MonitorInfo::new(
                     Point::new(DevicePx(monitor.x as f32), DevicePx(monitor.y as f32)),
                     Size::new(DevicePx(monitor.width as f32), DevicePx(monitor.height as f32)), monitor.scale,
-                ).with_name(monitor.id.clone());
+                )
+                .with_logical_size(Size::new(
+                    zgui::geom::CssPx(monitor.logical_width() as f32),
+                    zgui::geom::CssPx(monitor.logical_height() as f32),
+                ))
+                .with_name(monitor.id.clone());
                 info.refresh_rate_millihertz = monitor.refresh_rate_milli_hz;
                 info
             }).collect();
             self.pipeline.platform().set_monitors(native);
             let app = self.pipeline.app_mut();
-            monitors.clone_into(&mut app.monitors);
+            app.monitors = normalized.clone();
             app.monitor_change = true;
             self.pipeline.platform().waker().wake(WakeReason::AppWork);
         }
@@ -336,7 +345,7 @@ impl Driver {
         let surfaces = self.pipeline.app().session().map(|session| {
             session.mount_regions().into_iter().map(|(name, _)| name).collect::<Vec<_>>()
         }).unwrap_or_default();
-        Ok(json!({"monitors":monitors,"surfaces":surfaces,"timeUs":self.environment.now_us(),"readiness":self.readiness()}))
+        Ok(json!({"monitors":normalized,"surfaces":surfaces,"timeUs":self.environment.now_us(),"readiness":self.readiness()}))
     }
     pub fn generation(&self) -> u64 { self.pipeline.app().host.generation() }
     /// Recreate the real native document while retaining run time, RNG and fixture history.

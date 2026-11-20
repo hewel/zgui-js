@@ -41,9 +41,9 @@ use zgui_bits::Dirty;
 use zgui_dom::side::BoxKey;
 use zgui_dom::{Document, NodeIndex, NodeKey, NodeKind};
 
-use crate::boxtree::build::Owed;
+use crate::boxtree::build::{Owed, is_ignored_item_text};
 use crate::boxtree::patch::subtree;
-use crate::node::kind::BoxKind;
+use crate::node::kind::{BoxKind, FormattingContext};
 use crate::tree::dirty::mark_dirty;
 use crate::tree::store::LayoutStore;
 
@@ -169,10 +169,21 @@ fn rewrite(
     }
     let text: Box<str> = text.into();
     for key in boxes {
-        if store.node(key).kind != BoxKind::TextRun {
+        let node = store.node(key);
+        if node.kind != BoxKind::TextRun {
             return false;
         }
-        if store.node(key).text.as_deref() == Some(&*text) {
+        // In a flex or grid container, emptying a direct text item (or reducing it to collapsible
+        // white space) removes the anonymous item per CSS Flexbox §4 / CSS Grid §4; rebuilding
+        // drops the box so it stops occupying layout space and `gap`.
+        if matches!(
+            node.parent_fc,
+            FormattingContext::Flex | FormattingContext::Grid
+        ) && is_ignored_item_text(&text, &node.style)
+        {
+            return false;
+        }
+        if node.text.as_deref() == Some(&*text) {
             continue;
         }
         store.get_mut(key).expect("a live box").text = Some(text.clone());

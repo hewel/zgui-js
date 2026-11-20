@@ -37,6 +37,14 @@ root { display: block; width: 400px; height: 300px; background-color: #ffffff }
         background-color: #101010 }
 .bare { background-color: rgba(0, 0, 0, 0.5) }
 .away { margin-top: 12px; margin-left: 24px; width: 300px; height: 200px }
+.rounded-port { border-radius: 16px }
+.panel { display: block; width: 360px; height: 240px; overflow: hidden;
+         border-radius: 24px; border: 1px solid #ffffff; background-color: #101010 }
+.panel-fill { width: 100%; height: 100% }
+.panel-inset { padding-top: 28px; padding-bottom: 28px }
+.panel-body { width: 100%; height: 180px }
+.square-clip { display: block; width: 300px; height: 140px; overflow: hidden }
+.faded { display: block; width: 400px; height: 280px; opacity: 0.5 }
 .patterned { background-image: linear-gradient(#000000, #ffffff) }
 .row { display: block; width: 400px; height: 20px; background-color: #202020 }
 .over { display: block; width: 400px; height: 40px; background-color: #900000;
@@ -304,5 +312,123 @@ fn the_port_moved_is_where_the_list_stands() {
     assert!(
         shift.port.size.height <= 200 && shift.port.size.width <= 300,
         "the port cannot reach past the list: {shift:?}",
+    );
+}
+
+fn wrapped_listing(
+    rows: usize,
+    wrapper_class: &'static str,
+    port_class: &'static str,
+) -> Harness<Runtime> {
+    let handler = App::new()
+        .with_title("scroll-shift-wrapped")
+        .with_size(400.0, 300.0)
+        .with_stylesheet(CSS)
+        .with_renderer(Box::new(shifting))
+        .with_text_engine(Box::new(|| {
+            Box::new(zgui_layout::Paragraphs::new(
+                zgui_testkit_scene::MonoShaper::new(),
+            ))
+        }))
+        .with_glyph_raster(Box::new(|| Arc::new(zgui_testkit_scene::MonoRaster::new())))
+        .into_handler(move |cx: &mut BuildCx<'_>| -> Box<dyn Anchor> {
+            use zgui_view::{IntoView, View};
+            let mut port = zgui_elements::column().class("port").class(port_class);
+            for _ in 0..rows {
+                port = port.child(zgui_elements::column().class("row"));
+            }
+            let wrapper = zgui_elements::column().class(wrapper_class).child(port);
+            let root = zgui_elements::column().class("root").child(wrapper);
+            Box::new(root.into_view().build(cx))
+        })
+        .expect("the reactive runtime installs");
+    Harness::new(handler)
+}
+
+fn captured_shift(harness: &Harness<Runtime>) -> Option<zgui_render::ScrollShift> {
+    let window = harness.app().windows().first().expect("a window");
+    window
+        .renderer()
+        .as_any()
+        .and_then(|any| any.downcast_ref::<zgui_testkit_scene::CaptureRenderer>())
+        .expect("the window draws through the capture renderer")
+        .last_shift()
+}
+
+#[test]
+fn a_rounded_clipping_ancestor_refuses_the_shift() {
+    let _recording = Recording::begin();
+
+    let mut harness = wrapped_listing(200, "panel", "panel-fill");
+    harness.settle(16);
+    let before = topmost_row(&harness);
+    wheel(&mut harness, 3.0);
+    assert!(before - topmost_row(&harness) > ROW, "the list must scroll");
+    assert!(
+        captured_shift(&harness).is_none(),
+        "a rounded clipping ancestor's corner arcs and border overlap the rectangular port and \
+         must not be copied into the interior",
+    );
+}
+
+#[test]
+fn a_rounded_scroll_container_refuses_the_shift() {
+    let _recording = Recording::begin();
+
+    let mut harness = listing(200, "rounded-port", false, true, "");
+    harness.settle(16);
+    let before = topmost_row(&harness);
+    wheel(&mut harness, 3.0);
+    assert!(before - topmost_row(&harness) > ROW, "the list must scroll");
+    assert!(
+        captured_shift(&harness).is_none(),
+        "a scrollport with rounded corners must not shift its corner pixels into the interior",
+    );
+}
+
+#[test]
+fn a_scrollport_clear_of_ancestor_rounded_corners_still_shifts() {
+    let _recording = Recording::begin();
+
+    let mut harness = wrapped_listing(200, "panel panel-inset", "panel-body");
+    harness.settle(16);
+    let before = topmost_row(&harness);
+    wheel(&mut harness, 3.0);
+    assert!(before - topmost_row(&harness) > ROW, "the list must scroll");
+    assert!(
+        captured_shift(&harness).is_some(),
+        "a scrollport kept strictly clear of its ancestor's rounded corners may still shift",
+    );
+}
+
+#[test]
+fn a_square_clipping_ancestor_trims_the_shifted_port() {
+    let _recording = Recording::begin();
+
+    let mut harness = wrapped_listing(200, "square-clip", "");
+    harness.settle(16);
+    let before = topmost_row(&harness);
+    wheel(&mut harness, 3.0);
+    assert!(before - topmost_row(&harness) > ROW, "the list must scroll");
+    let shift = captured_shift(&harness)
+        .expect("a square clipping ancestor still allows shifting the visible intersection");
+    assert!(
+        shift.port.size.width <= 300 && shift.port.size.height <= 140,
+        "the shifted port must be trimmed to the ancestor clip: {shift:?}",
+    );
+}
+
+#[test]
+fn a_translucent_ancestor_refuses_the_shift_even_for_an_opaque_port() {
+    let _recording = Recording::begin();
+
+    let mut harness = wrapped_listing(200, "faded", "");
+    harness.settle(16);
+    let before = topmost_row(&harness);
+    wheel(&mut harness, 3.0);
+    assert!(before - topmost_row(&harness) > ROW, "the list must scroll");
+    assert!(
+        captured_shift(&harness).is_none(),
+        "an ancestor with opacity < 1 composites the scrollport over what lies behind it",
     );
 }

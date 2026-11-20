@@ -6,7 +6,7 @@ use zgui::{geom::{CssPx, Edges, Size}, platform::{AppHandler, IdlePolicy, Keyboa
 type Result<T> = std::result::Result<T, Box<dyn Error>>;
 
 mod session;
-pub(crate) use session::{Authority, ContractPolicy, LayerSpec, LockCommand, LockSpec, MAX_LAYERS, Monitor, PopupSpec, Shell, ShellConfig};
+pub(crate) use session::{Authority, ContractPolicy, LayerSpec, LockCommand, LockSpec, MAX_LAYERS, Monitor, PopupSpec, Shell, ShellConfig, valid_name};
 
 #[derive(Clone, Copy, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -37,6 +37,10 @@ pub(crate) struct LayerConfig {
 }
 
 impl LayerConfig {
+    pub(crate) fn is_transparent(&self) -> bool {
+        self.transparent
+    }
+
     pub(crate) fn load(path: &Path) -> Result<Self> {
         let bytes = bounded_fs::read_input(path, 65_536).map_err(|error| match error {
             BoundedReadError::TooLarge { .. } => Box::<dyn Error>::from("layer configuration exceeds 64 KiB"),

@@ -684,8 +684,8 @@ fn require(requirements: &mut BTreeSet<String>, capability: &str) {
 }
 
 fn validate_surface(surface: &str, requirements: &mut BTreeSet<String>) -> Result<(), Error> {
-    if !safe_id(surface) {
-        return Err(invalid("surface must match [a-z0-9][a-z0-9._-]* and contain at most 128 bytes"));
+    if !safe_surface_name(surface) {
+        return Err(invalid("surface must match [a-zA-Z0-9][a-zA-Z0-9._-]* and contain at most 128 bytes"));
     }
     if surface != "main" { require(requirements, "surface.multiple"); }
     Ok(())
@@ -700,6 +700,8 @@ fn validate_monitors(monitors: &[Monitor]) -> Result<(), Error> {
             || monitor.name.trim().is_empty() || monitor.name.len() > 128
             || ![monitor.x, monitor.y].into_iter().all(|value| value.abs() <= f64::from(i32::MAX))
             || !(1.0..=16384.0).contains(&width) || !(1.0..=16384.0).contains(&height)
+            || monitor.logical_width.is_some_and(|value| !(1.0..=16384.0).contains(&value))
+            || monitor.logical_height.is_some_and(|value| !(1.0..=16384.0).contains(&value))
             || !(monitor.scale > 0.0 && monitor.scale <= 8.0)
             || (width * height) > super::profile::MAX_PHYSICAL_PIXELS as f64
             || monitor.refresh_rate_milli_hz.is_some_and(|rate| !(1..=1_000_000).contains(&rate))
@@ -750,6 +752,10 @@ pub(super) fn safe_id(value: &str) -> bool {
     let mut bytes = value.bytes();
     bytes.next().is_some_and(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit())
         && bytes.all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'.' | b'_' | b'-'))
+}
+
+pub(super) fn safe_surface_name(value: &str) -> bool {
+    crate::shell::valid_name(value)
 }
 
 fn invalid(message: impl Into<String>) -> Error { Error::new("E_SCHEMA", 2, message) }
