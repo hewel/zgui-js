@@ -65,6 +65,20 @@ pub struct ShapePaint {
     pub stroke: Option<Color>,
     /// The stroke's width in device pixels.
     pub stroke_width: f32,
+    /// The end cap of an inherited stroke (`--zgui-stroke-linecap`).
+    pub stroke_cap: zgui_scene::kurbo::Cap,
+    /// The corner join of an inherited stroke (`--zgui-stroke-linejoin`).
+    pub stroke_join: zgui_scene::kurbo::Join,
+}
+
+impl ShapePaint {
+    /// Builds a `kurbo::Stroke` of `width` carrying this paint's cap and join.
+    #[must_use]
+    pub fn stroke_style(self, width: f64) -> zgui_scene::kurbo::Stroke {
+        zgui_scene::kurbo::Stroke::new(width)
+            .with_caps(self.stroke_cap)
+            .with_join(self.stroke_join)
+    }
 }
 
 /// The custom property that overrides what a shape is filled with.
@@ -75,6 +89,12 @@ pub const STROKE: &str = "zgui-stroke";
 
 /// The custom property that says how wide that stroke is, as an absolute length.
 pub const STROKE_WIDTH: &str = "zgui-stroke-width";
+
+/// The custom property that selects the stroke end cap (`butt` | `round` | `square`).
+pub const STROKE_LINECAP: &str = "zgui-stroke-linecap";
+
+/// The custom property that selects the stroke corner join (`miter` | `round` | `bevel`).
+pub const STROKE_LINEJOIN: &str = "zgui-stroke-linejoin";
 
 /// The custom property that reduces a drawing's long line series per device column.
 ///
@@ -276,10 +296,22 @@ pub(crate) struct LayerOutcome {
 /// colour is data, and routing it through the cascade would mean a declaration written per mark per
 /// frame.
 pub fn shape_paint(style: &ComputedStyle, scale: f32) -> ShapePaint {
+    let stroke_cap = match custom::text(style, STROKE_LINECAP).map(str::trim) {
+        Some("round") => zgui_scene::kurbo::Cap::Round,
+        Some("square") => zgui_scene::kurbo::Cap::Square,
+        _ => zgui_scene::kurbo::Cap::Butt,
+    };
+    let stroke_join = match custom::text(style, STROKE_LINEJOIN).map(str::trim) {
+        Some("round") => zgui_scene::kurbo::Join::Round,
+        Some("bevel") => zgui_scene::kurbo::Join::Bevel,
+        _ => zgui_scene::kurbo::Join::Miter,
+    };
     ShapePaint {
         fill: custom::color(style, FILL).unwrap_or_else(|| to_color(current(style))),
         stroke: custom::color(style, STROKE),
         stroke_width: custom::length(style, STROKE_WIDTH).unwrap_or(1.0) * scale,
+        stroke_cap,
+        stroke_join,
     }
 }
 
@@ -322,8 +354,15 @@ pub fn emit(
     pushed += usize::from(scene.push_vector(item).is_some());
     if let Some(color) = paint.stroke {
         let stroke = scene.paints.add(Paint::Solid(color));
-        let mut item =
-            VectorItem::stroked(id, path, stroke, paint.stroke_width).clipped(placement.clip);
+        let mut item = VectorItem::styled(
+            id,
+            path,
+            zgui_scene::VectorStroke {
+                paint: stroke,
+                style: paint.stroke_style(f64::from(paint.stroke_width)),
+            },
+        )
+        .clipped(placement.clip);
         item.ink = ink;
         item.local_ink = local;
         item.transform = Some(placement.transform);

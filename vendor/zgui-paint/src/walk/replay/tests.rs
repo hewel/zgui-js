@@ -48,6 +48,7 @@ fn painted(style: u32) -> crate::walk::replay::Painted {
         scale: 1.0f32.to_bits(),
         decorations: 0,
         text_fill: 0,
+        clip_path: 0,
         anim: 0,
         alpha: 1.0f32.to_bits(),
         subpixel: true,

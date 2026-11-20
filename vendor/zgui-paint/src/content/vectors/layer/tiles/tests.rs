@@ -56,6 +56,8 @@ impl Fixture {
                     fill: Color::BLACK,
                     stroke: None,
                     stroke_width: 1.0,
+                    stroke_cap: zgui_scene::kurbo::Cap::Butt,
+                    stroke_join: zgui_scene::kurbo::Join::Miter,
                 },
                 spatial: Some(Affine2::new(scale, 0.0, 0.0, scale, shift[0], shift[1])),
             },

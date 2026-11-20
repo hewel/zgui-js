@@ -280,7 +280,7 @@ fn emit_mask(
         )
     });
     let inherited_stroke = (shape.stroke.is_none() && paint.stroke.is_some())
-        .then(|| kurbo::Stroke::new(f64::from(paint.stroke_width)));
+        .then(|| paint.stroke_style(f64::from(paint.stroke_width)));
     let stroke = match &shape.stroke {
         Some(stroke) => match &stroke.paint {
             zgui_svg::Paint::Solid(ink) => {
@@ -439,7 +439,7 @@ pub(super) fn stroke_of(
             }
             Some(VectorStroke {
                 paint: PaintRef::solid(scene.paints.solid(color)),
-                style: kurbo::Stroke::new(width),
+                style: paint.stroke_style(width),
             })
         }
     }

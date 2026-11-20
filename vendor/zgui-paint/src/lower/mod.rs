@@ -35,7 +35,7 @@ use zgui_css::{ComputedStyle, register_properties};
 
 pub use crate::lower::background::BackgroundStyle;
 pub use crate::lower::border::BorderPaint;
-pub use crate::lower::clip::ClipShape;
+pub use crate::lower::clip::{ClipPathShape, ClipShape};
 pub use crate::lower::filter::GroupPaint;
 pub use crate::lower::outline::OutlinePaint;
 pub use crate::lower::scrollbar::ScrollbarStyle;

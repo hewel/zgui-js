@@ -49,6 +49,8 @@ fn paint() -> ShapePaint {
         fill: Color::BLACK,
         stroke: None,
         stroke_width: 1.0,
+        stroke_cap: kurbo::Cap::Butt,
+        stroke_join: kurbo::Join::Miter,
     }
 }
 

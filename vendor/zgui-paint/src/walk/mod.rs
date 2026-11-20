@@ -268,6 +268,7 @@ struct WalkScratch {
     alpha: Vec<f32>,
     opaque: Vec<bool>,
     outlines: Vec<Option<(FragKey, PaintStyleRef, Option<OwnedPaints>)>>,
+    clip_paths: Vec<Option<(std::sync::Arc<crate::lower::ClipPathShape>, Rect<DevicePx, Device>)>>,
     decorations: Decorations,
     text_fills: TextFills,
     named: Vec<AtlasKey>,
@@ -283,6 +284,7 @@ impl WalkScratch {
         self.alpha.clear();
         self.opaque.clear();
         self.outlines.clear();
+        self.clip_paths.clear();
         self.decorations.clear();
         self.text_fills.clear();
         self.named.clear();
@@ -349,6 +351,7 @@ impl Painter {
             alpha: scratch.alpha,
             opaque: scratch.opaque,
             outlines: scratch.outlines,
+            clip_paths: scratch.clip_paths,
             decorations: scratch.decorations,
             text_fills: scratch.text_fills,
             named: scratch.named,
@@ -363,6 +366,7 @@ impl Painter {
             alpha,
             opaque,
             outlines,
+            clip_paths,
             decorations,
             text_fills,
             named,
@@ -376,6 +380,7 @@ impl Painter {
             alpha,
             opaque,
             outlines,
+            clip_paths,
             decorations,
             text_fills,
             named,
@@ -490,6 +495,8 @@ struct Pass<'a, 'b> {
     /// One entry for each entered box, innermost last: its first fragment, its lowered style and
     /// its owned paints when the box has an outline, or `None`.
     outlines: Vec<Option<(FragKey, PaintStyleRef, Option<OwnedPaints>)>>,
+    /// One entry for each entered box, innermost last: its CSS `clip-path` shape and border box.
+    clip_paths: Vec<Option<(std::sync::Arc<crate::lower::ClipPathShape>, Rect<DevicePx, Device>)>>,
     /// The text decorations contributed by the boxes still on the walk.
     decorations: Decorations,
     /// The ramps contributed by the boxes still on the walk, for the text inside them.
@@ -676,6 +683,33 @@ impl Pass<'_, '_> {
         }
     }
 
+    /// The active CSS `clip-path` shape and its reference border box (own or nearest ancestor).
+    fn active_clip_path(
+        &self,
+    ) -> Option<(std::sync::Arc<crate::lower::ClipPathShape>, Rect<DevicePx, Device>)> {
+        self.clip_paths
+            .iter()
+            .rev()
+            .find_map(|entry| entry.as_ref().map(|(shape, rect)| (std::sync::Arc::clone(shape), *rect)))
+    }
+
+    /// A fingerprint of the active `clip-path` relative to `fragment`'s border box.
+    fn clip_path_signature(&self, fragment: &Fragment) -> u64 {
+        let Some((shape, ref_box)) = self.active_clip_path() else {
+            return 0;
+        };
+        zgui_scene::ContentHash::new()
+            .u64(shape.hash())
+            .f32s(&[
+                ref_box.origin.x.0 - fragment.border_box.origin.x.0,
+                ref_box.origin.y.0 - fragment.border_box.origin.y.0,
+                ref_box.size.width.0,
+                ref_box.size.height.0,
+            ])
+            .finish()
+            .max(1)
+    }
+
     /// Everything one fragment needs in order to be emitted.
     fn emission<'e>(
         &self,
@@ -684,6 +718,7 @@ impl Pass<'_, '_> {
         decorations: &'e [crate::emit::text::DecorationStyle],
         text_fill: Option<&'e crate::lower::background::GradientSpec>,
         inline: &'e [crate::emit::inline::InlinePaint],
+        clip_path: Option<(&'e crate::lower::ClipPathShape, Rect<DevicePx, Device>)>,
     ) -> Emission<'e>
     where
         Self: 'e,
@@ -728,6 +763,7 @@ impl Pass<'_, '_> {
             custom_reference: self.input.store.custom_reference(fragment.box_),
             scale: self.input.scale,
             scrollbars: self.input.scrollbars,
+            clip_path,
         }
     }
 
@@ -973,6 +1009,7 @@ impl Pass<'_, '_> {
             scale: self.input.scale.to_bits(),
             decorations: decorate::signature(&decorations),
             text_fill: fill::signature(text_fill.as_ref()),
+            clip_path: self.clip_path_signature(fragment),
             anim,
             alpha: self.alpha().to_bits(),
             subpixel: crate::emit::text::keeps_subpixel(
@@ -1027,8 +1064,15 @@ impl Pass<'_, '_> {
                     crate::lower::anim::compose(&mut style, over);
                 }
                 let inline = self.inline_paints(fragment, slices);
-                let mut emission =
-                    self.emission(fragment, &style, &decorations, text_fill.as_ref(), &inline);
+                let clip_path = self.active_clip_path();
+                let mut emission = self.emission(
+                    fragment,
+                    &style,
+                    &decorations,
+                    text_fill.as_ref(),
+                    &inline,
+                    clip_path.as_ref().map(|(shape, rect)| (shape.as_ref(), *rect)),
+                );
                 emission.box_placement.owned =
                     owned.map(|owned| (PropertyOwner::of(fragment.box_), owned));
                 // Emptied immediately before the encoding rather than after it, so that whatever a
@@ -1247,6 +1291,12 @@ impl stacking::Visitor for Pass<'_, '_> {
                 .filter(|_| style.outline.is_some())
                 .map(|frag| (frag, style_ref, owned)),
         );
+        self.clip_paths.push(own.and_then(|frag| {
+            style
+                .clip_path
+                .shape()
+                .map(|shape| (std::sync::Arc::clone(shape), frag.border_box))
+        }));
         // Contributed on the way in and withdrawn on the way out, for the same reason the alpha is:
         // a decoration is drawn across the box's in-flow descendants, and the line boxes that draw
         // it belong to anonymous boxes generated below the element that declared it.
@@ -1277,12 +1327,13 @@ impl stacking::Visitor for Pass<'_, '_> {
                 }
                 None => Cow::Borrowed(entry),
             };
-            let mut emission = self.emission(fragment, &style, &[], None, &[]);
+            let mut emission = self.emission(fragment, &style, &[], None, &[], None);
             emission.box_placement.owned = owned.map(|owned| (PropertyOwner::of(key), owned));
             self.report.primitives += order::outline(self.scene, &emission);
         }
         self.alpha.pop();
         self.opaque.pop();
+        self.clip_paths.pop();
         self.decorations.leave();
         self.text_fills.leave();
         if self.open.last().is_some_and(|(opener, _)| *opener == key) {

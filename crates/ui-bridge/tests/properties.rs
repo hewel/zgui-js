@@ -807,11 +807,28 @@ fn retained_canvas_updates_current_bindings_and_releases_scenes() {
     native.backend.end_frame();
 
     native.script(r#"
-        scene.update([{kind: 'circle', x: 10, y: 10, radius: 4, stroke: {color: '#0fa8', width: 2}}]);
+        scene.update([
+            {kind: 'circle', x: 10, y: 10, radius: 4, stroke: {color: '#0fa8', width: 2, lineCap: 'round', lineJoin: 'bevel'}},
+            {kind: 'arc', x: 20, y: 20, radius: 8, startAngle: 0, sweepAngle: 3.14, stroke: {color: '#fff', width: 3, lineCap: 'square', lineJoin: 'round'}},
+        ]);
+        reject(() => scene.update([{kind: 'circle', x: 10, y: 10, radius: 4, stroke: {color: '#fff', width: 2, lineCap: 'invalid'}}]), /lineCap/);
+        reject(() => scene.update([{kind: 'circle', x: 10, y: 10, radius: 4, stroke: {color: '#fff', width: 2, lineJoin: 'invalid'}}]), /lineJoin/);
         __zgui.setProperty(vectors[1], 'canvas', null);
         next.update([], [1, 0, 0, 1, 5, 0]);
         'updated'
     "#);
+    let resolved = canvas::resolve(token).expect("live canvas scene");
+    {
+        let guard = resolved.lock().expect("lock canvas scene");
+        let resolved_stroke = guard.shapes()[0].stroke.as_ref().expect("circle stroke");
+        assert_eq!(resolved_stroke.style.start_cap, zgui::scene::kurbo::Cap::Round);
+        assert_eq!(resolved_stroke.style.end_cap, zgui::scene::kurbo::Cap::Round);
+        assert_eq!(resolved_stroke.style.join, zgui::scene::kurbo::Join::Bevel);
+        let arc_stroke = guard.shapes()[1].stroke.as_ref().expect("arc stroke");
+        assert_eq!(arc_stroke.style.start_cap, zgui::scene::kurbo::Cap::Square);
+        assert_eq!(arc_stroke.style.join, zgui::scene::kurbo::Join::Round);
+    }
+    drop(resolved);
     assert_eq!(packed(&native, a), Some((token.0, 2)), "live edits invalidate current bindings");
     assert_eq!(view(&native, a), Some(1), "content edits preserve the view");
     assert_eq!(packed(&native, b), None, "unbound vector ignores canvas edits");

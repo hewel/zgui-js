@@ -94,7 +94,13 @@ pub(super) fn emit_marks(
             .stroke
             .map(of_color)
             .filter(|look| look.visible)
-            .map(|_| PartOf::Inherited(f64::from(paint.stroke_width))),
+            .map(|_| {
+                PartOf::Inherited(
+                    f64::from(paint.stroke_width),
+                    paint.stroke_cap,
+                    paint.stroke_join,
+                )
+            }),
     };
     if fill.is_none() && outline.is_none() {
         return None;

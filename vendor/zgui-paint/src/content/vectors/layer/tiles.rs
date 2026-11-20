@@ -374,7 +374,7 @@ impl TileCache {
             let reach = match &shape.stroke {
                 Some(stroke) => reach(&stroke.style) * mapping.stroke_scale,
                 None if paint.stroke.is_some() => {
-                    reach(&kurbo::Stroke::new(mapping.inherited_stroke))
+                    reach(&paint.stroke_style(mapping.inherited_stroke))
                 }
                 None => 0.0,
             };

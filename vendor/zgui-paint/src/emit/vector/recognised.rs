@@ -30,8 +30,8 @@ pub(crate) enum PartOf {
     Fill(peniko::Fill),
     /// The outline the shape's own stroke style draws.
     OwnStroke,
-    /// The outline an inherited stroke of this width, in fragment units, draws.
-    Inherited(f64),
+    /// The outline an inherited stroke of this width, cap, and join draws.
+    Inherited(f64, kurbo::Cap, kurbo::Join),
 }
 
 /// The scale and the offset of a fit that scales both axes alike, or `None` for any other fit.
@@ -111,8 +111,10 @@ pub(crate) fn recognised_in_source(
     let part = match part {
         PartOf::Fill(rule) => Part::Fill(rule),
         PartOf::OwnStroke => Part::Stroke(&shape.stroke.as_ref()?.style),
-        PartOf::Inherited(width) => {
-            inherited = kurbo::Stroke::new(width / scale);
+        PartOf::Inherited(width, cap, join) => {
+            inherited = kurbo::Stroke::new(width / scale)
+                .with_caps(cap)
+                .with_join(join);
             Part::Stroke(&inherited)
         }
     };

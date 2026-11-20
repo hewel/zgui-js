@@ -153,6 +153,55 @@ pub fn background_and_border(
     pushed
 }
 
+/// Emits a box's background layers clipped to a CSS `clip-path` basic shape.
+pub(crate) fn clipped_background(
+    scene: &mut Scene,
+    id: zgui_scene::VectorId,
+    style: &PaintStyle,
+    placement: BoxPlacement,
+    clip_shape: &crate::lower::ClipPathShape,
+    reference_box: Rect<DevicePx, Device>,
+) -> usize {
+    if placement.border_box.is_empty() {
+        return 0;
+    }
+    let Some((mut path, fill_rule)) = clip_shape.to_device_path(reference_box, placement.scale)
+    else {
+        return 0;
+    };
+    let (fills, _) = fills_of(scene, style, placement);
+    if fills.is_empty() {
+        return 0;
+    }
+    let dx = f64::from(reference_box.origin.x.0 - placement.border_box.origin.x.0);
+    let dy = f64::from(reference_box.origin.y.0 - placement.border_box.origin.y.0);
+    if dx != 0.0 || dy != 0.0 {
+        path = zgui_scene::kurbo::Affine::translate((dx, dy)) * path;
+    }
+    let path = std::sync::Arc::new(path);
+    let place = zgui_scene::kurbo::Affine::translate((
+        f64::from(placement.border_box.origin.x.0),
+        f64::from(placement.border_box.origin.y.0),
+    ));
+    let local = placement.border_box;
+    let ink = crate::emit::vector::under(scene, placement.transform, local);
+    let mut pushed = 0;
+    for fill in fills {
+        if fill == PaintRef::NONE {
+            continue;
+        }
+        let mut item = zgui_scene::VectorItem::filled(id, std::sync::Arc::clone(&path), fill)
+            .placed(place)
+            .clipped(placement.clip);
+        item.fill_rule = fill_rule;
+        item.ink = ink;
+        item.local_ink = local;
+        item.transform = Some(placement.transform);
+        pushed += usize::from(scene.push_vector(item).is_some());
+    }
+    pushed
+}
+
 /// Every paint a box's background resolves to, last written first, and whether it draws a border.
 ///
 /// CSS paints the first layer on top, so the list is reversed here and the border goes on whatever

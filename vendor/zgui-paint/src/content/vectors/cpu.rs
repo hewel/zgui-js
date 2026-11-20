@@ -158,7 +158,7 @@ impl Zeno {
             }),
             None => job.paint.stroke.map(|color| Part {
                 path: &shape.path,
-                style: PartStyle::Stroke(kurbo::Stroke::new(job.inherited_stroke)),
+                style: PartStyle::Stroke(job.paint.stroke_style(job.inherited_stroke)),
                 paint: Shading::Solid(color),
             }),
         };

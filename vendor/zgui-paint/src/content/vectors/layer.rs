@@ -1057,7 +1057,7 @@ fn mapping(request: &LayerRequest<'_>, cost: &SourceCost) -> Option<Mapping> {
     for shape in shapes.iter() {
         let reach = match &shape.stroke {
             Some(stroke) => reach(&stroke.style) * stroke_scale,
-            None if paint.stroke.is_some() => reach(&kurbo::Stroke::new(inherited_stroke)),
+            None if paint.stroke.is_some() => reach(&paint.stroke_style(inherited_stroke)),
             None => 0.0,
         };
         if shape.fill.is_none() && reach == 0.0 {
@@ -1090,7 +1090,9 @@ fn mapping(request: &LayerRequest<'_>, cost: &SourceCost) -> Option<Mapping> {
 fn paint_hash(paint: ShapePaint) -> u64 {
     let mut hash = zgui_scene::ContentHash::new()
         .f32s(&paint.fill.to_premultiplied_srgb())
-        .f32(paint.stroke_width);
+        .f32(paint.stroke_width)
+        .u32(paint.stroke_cap as u32)
+        .u32(paint.stroke_join as u32);
     if let Some(stroke) = paint.stroke {
         hash = hash.u32(1).f32s(&stroke.to_premultiplied_srgb());
     }

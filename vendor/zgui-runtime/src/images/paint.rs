@@ -18,6 +18,22 @@ impl ReplacedSource for PaintImages<'_> {
         }
         source
     }
+
+    fn clipped_source(
+        &self,
+        id: ReplacedId,
+        placement: &zgui_paint::emit::replaced::ReplacedPlacement,
+        clip_path: &zgui_paint::lower::ClipPathShape,
+        reference_box: zgui_geom::Rect<zgui_geom::DevicePx, zgui_geom::Device>,
+    ) -> Option<Source> {
+        let source = self
+            .source
+            .clipped_source(id, placement, clip_path, reference_box);
+        if source.is_none() && self.images.decoded_attachment(id.node()) {
+            self.refusals.borrow_mut().push(id.node());
+        }
+        source
+    }
 }
 
 impl ImageLoader {

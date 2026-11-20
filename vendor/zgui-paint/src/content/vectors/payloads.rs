@@ -1438,6 +1438,8 @@ mod tests {
             fill: Color::WHITE,
             stroke: None,
             stroke_width: 1.0,
+            stroke_cap: zgui_scene::kurbo::Cap::Butt,
+            stroke_join: zgui_scene::kurbo::Join::Miter,
         };
         let placement = VectorPlacement {
             clip: ClipId::ROOT,

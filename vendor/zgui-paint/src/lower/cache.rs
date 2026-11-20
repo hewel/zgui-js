@@ -248,7 +248,7 @@ fn hash_of(style: &PaintStyle, scale: f32) -> u64 {
     let mut hash = ContentHash::new()
         .u32(u32::from(style.visible))
         .u32(u32::from(style.transform_forces_group))
-        .u32(style.clip_path as u32)
+        .u64(style.clip_path.key_hash())
         .f32(scale);
     hash = color(hash, style.color);
     hash = color(hash, style.background.color);
@@ -303,6 +303,13 @@ fn hash_of(style: &PaintStyle, scale: f32) -> u64 {
         for value in [colors.thumb, colors.track].into_iter().flatten() {
             hash = color(hash, value);
         }
+    }
+    hash = color(hash, style.shape.fill)
+        .f32(style.shape.stroke_width)
+        .u32(style.shape.stroke_cap as u32)
+        .u32(style.shape.stroke_join as u32);
+    if let Some(stroke) = style.shape.stroke {
+        hash = color(hash.u32(1), stroke);
     }
     style.decoration.fold_into(hash).finish()
 }

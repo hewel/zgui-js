@@ -257,10 +257,16 @@ type CanvasPathSegment =
   | { kind: "cubicTo"; c1x: number; c1y: number; c2x: number; c2y: number; x: number; y: number }
   | { kind: "close" };
 
+/** End cap shape for stroked canvas paths. */
+export type CanvasLineCap = "butt" | "round" | "square";
+
+/** Corner join shape for stroked canvas paths. */
+export type CanvasLineJoin = "miter" | "round" | "bevel";
+
 /** One painted shape; supply a hex fill, a hex stroke with positive width, or both. */
 export type CanvasCommand = {
   fill?: string;
-  stroke?: { color: string; width: number };
+  stroke?: { color: string; width: number; lineCap?: CanvasLineCap; lineJoin?: CanvasLineJoin };
 } & (
   | { kind: "rect"; x: number; y: number; width: number; height: number }
   | { kind: "roundedRect"; x: number; y: number; width: number; height: number; radius: number }

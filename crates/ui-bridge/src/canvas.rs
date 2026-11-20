@@ -10,7 +10,7 @@ use rquickjs::{
 };
 use zgui::{
     canvas::{Brush, CanvasToken, SceneHandle, Shape, ShapeBuilder, zgui_color::Color},
-    scene::kurbo::{Affine, Arc, BezPath, Circle, PathEl, Point, Rect, RoundedRect, Shape as _},
+    scene::kurbo::{Affine, Arc, BezPath, Cap, Circle, Join, PathEl, Point, Rect, RoundedRect, Shape as _, Stroke},
     view::{DomHandle, NodeId, PropKey, PropValue},
     vocab::prop::drawing,
 };
@@ -396,12 +396,47 @@ fn parse_shape(command: &Object<'_>, segments_left: &mut usize) -> rquickjs::Res
     }
     if !stroke.is_undefined() {
         let stroke = record(ctx, stroke, "canvas stroke must be an object")?;
-        builder = builder.stroke(
-            brush(ctx, stroke.get("color")?)?,
-            positive(&stroke, "width")?,
-        );
+        let width = positive(&stroke, "width")?;
+        let cap = line_cap(ctx, stroke.get("lineCap")?)?;
+        let join = line_join(ctx, stroke.get("lineJoin")?)?;
+        let style = Stroke::new(width).with_caps(cap).with_join(join);
+        builder = builder.stroke_styled(brush(ctx, stroke.get("color")?)?, style);
     }
     Ok(builder.build())
+}
+
+fn line_cap<'js>(ctx: &Ctx<'js>, value: Value<'js>) -> rquickjs::Result<Cap> {
+    if value.is_undefined() || value.is_null() {
+        return Ok(Cap::Butt);
+    }
+    let text = String::from_js(ctx, value)
+        .map_err(|_| Exception::throw_type(ctx, "canvas stroke lineCap must be \"butt\", \"round\", or \"square\""))?;
+    match text.as_str() {
+        "butt" => Ok(Cap::Butt),
+        "round" => Ok(Cap::Round),
+        "square" => Ok(Cap::Square),
+        _ => Err(Exception::throw_type(
+            ctx,
+            "canvas stroke lineCap must be \"butt\", \"round\", or \"square\"",
+        )),
+    }
+}
+
+fn line_join<'js>(ctx: &Ctx<'js>, value: Value<'js>) -> rquickjs::Result<Join> {
+    if value.is_undefined() || value.is_null() {
+        return Ok(Join::Miter);
+    }
+    let text = String::from_js(ctx, value)
+        .map_err(|_| Exception::throw_type(ctx, "canvas stroke lineJoin must be \"miter\", \"round\", or \"bevel\""))?;
+    match text.as_str() {
+        "miter" => Ok(Join::Miter),
+        "round" => Ok(Join::Round),
+        "bevel" => Ok(Join::Bevel),
+        _ => Err(Exception::throw_type(
+            ctx,
+            "canvas stroke lineJoin must be \"miter\", \"round\", or \"bevel\"",
+        )),
+    }
 }
 
 fn parse_path<'js>(

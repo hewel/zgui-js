@@ -75,9 +75,9 @@ const tree = <Container>
     onChange={event => console.log(event.value, event.selection)} />
   <field role="textInput" value={undefined} defaultValue="native" tabIndex={0} />
   <editor role="multilineTextInput" defaultValue={"one\n二"} readOnly />
-  <Image src={optional()} ariaLabel="Package icon" style={{ width: "32px", height: "32px" }} />
+  <Image src={optional()} ariaLabel="Package icon" style={{ width: "32px", height: "32px", clipPath: 'path("M 16 0 L 32 16 L 16 32 L 0 16 Z")' }} />
   <Image style={{ "object-fit": "cover", "object-position": "center top" }} />
-  <Image style={{ objectFit: "contain", objectPosition: "50% 50%" }} />
+  <Image style={{ objectFit: "contain", objectPosition: "50% 50%", borderTopStyle: "dashed", borderRightStyle: "solid", borderBottomStyle: "dotted", borderLeftStyle: "solid", fontVariantNumeric: "tabular-nums" }} />
   <image src={null} />
   <vector d="M0 0 L8 8 L8 0 Z" viewBox="0 0 16 16" data-icon="save" role="image" ariaLabel="Save" />
   <vector d={null} viewBox={undefined} />
@@ -187,6 +187,9 @@ export function mount(root: NativeNode): () => void {
     const token: number = scene.token;
     void token;
     scene.update(canvasCommands);
+    scene.update([
+      { kind: "arc", x: 12, y: 12, radius: 10, startAngle: 0, sweepAngle: 3.14, stroke: { color: "#ffffff", width: 2.2, lineCap: "round", lineJoin: "round" } },
+    ], canvasTransform);
     scene.update(null, canvasTransform);
     scene.update([]);
     onSettled(() => {

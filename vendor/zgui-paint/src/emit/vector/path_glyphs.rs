@@ -75,7 +75,7 @@ pub(super) fn emit_path_glyphs(
             .then_some((&stroke.style, true)),
         None => match paint.stroke {
             Some(color) if color.alpha() != 0.0 => {
-                inherited_stroke = kurbo::Stroke::new(f64::from(paint.stroke_width));
+                inherited_stroke = paint.stroke_style(f64::from(paint.stroke_width));
                 Some((&inherited_stroke, false))
             }
             _ => None,

@@ -226,7 +226,11 @@ pub(super) fn emit_analytic(
             .filter(|look| look.visible)
             .map(|look| {
                 (
-                    PartOf::Inherited(f64::from(paint.stroke_width)),
+                    PartOf::Inherited(
+                        f64::from(paint.stroke_width),
+                        paint.stroke_cap,
+                        paint.stroke_join,
+                    ),
                     look.opaque,
                 )
             }),

@@ -83,11 +83,37 @@ pub fn emit(scene: &mut Scene, source: Source, placement: ReplacedPlacement) -> 
     usize::from(landed)
 }
 
+/// Emits a pre-fitted, `clip-path`-masked replaced image directly at `placement.content_box`.
+pub fn emit_clipped(scene: &mut Scene, source: Source, placement: ReplacedPlacement) -> usize {
+    if placement.content_box.is_empty() {
+        return 0;
+    }
+    let landed = match source {
+        Source::Decoded { resource, .. } => {
+            let mut sprite = ColorSprite::new(placement.content_box, resource)
+                .framed(placement.content_box)
+                .clipped(placement.clip)
+                .with_radii(placement.radii);
+            sprite.transform = placement.transform.index();
+            sprite.opacity = placement.opacity;
+            scene.push_color_sprite(sprite).is_some()
+        }
+        Source::External(texture) => {
+            let mut quad =
+                ExternalQuad::new(placement.content_box, texture).clipped(placement.clip);
+            quad.transform = placement.transform;
+            quad.opacity = placement.opacity;
+            scene.push_external(quad).is_some()
+        }
+    };
+    usize::from(landed)
+}
+
 /// The rectangle `object-fit` and `object-position` place the content at, in device pixels.
 ///
 /// The sprite's quad is this rectangle and its frame is the content box: a `cover` overflow is
 /// cut by the frame, and a `contain` letterbox simply draws nothing where the content is not.
-fn destination(
+pub(crate) fn destination(
     placement: &ReplacedPlacement,
     natural: Size<u32, Device>,
 ) -> Rect<DevicePx, Device> {

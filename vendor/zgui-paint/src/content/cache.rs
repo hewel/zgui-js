@@ -69,6 +69,8 @@ pub struct ContentCache {
     /// [`ContentCache::take_missing_images`], whose caller owns the sources and decodes them
     /// again.
     missing_images: RefCell<Vec<ReplacedId>>,
+    /// Maps each base image key handle to its `clip-path`-masked atlas keys for residency checks.
+    clipped_tiles: RefCell<FxHashMap<u64, Vec<AtlasKey>>>,
     /// Where each named raster is, for the sprites that were pushed naming one.
     ///
     /// Empty whenever every raster a frame drew was already placed as it was reached, which is what
@@ -90,6 +92,7 @@ impl ContentCache {
             image_hits: Cell::new(0),
             image_failures: RefCell::new(rustc_hash::FxHashSet::default()),
             missing_images: RefCell::new(Vec::new()),
+            clipped_tiles: RefCell::new(FxHashMap::default()),
             registry: ResourceRegistry::new(),
         }
     }
@@ -381,8 +384,14 @@ impl ContentCache {
 
     /// Whether the tile a loader's shared `handle` names is resident right now.
     pub fn image_tile_resident(&self, handle: u64) -> bool {
-        self.atlas
-            .contains(crate::content::images::shared_key(handle))
+        let key = crate::content::images::shared_key(handle);
+        if self.atlas.contains(key) {
+            return true;
+        }
+        self.clipped_tiles
+            .borrow()
+            .get(&key.handle())
+            .is_some_and(|keys| keys.iter().any(|masked| self.atlas.contains(*masked)))
     }
 
     /// Frees the tile a loader's shared `handle` names, unless a replayed range still holds it.
@@ -392,8 +401,14 @@ impl ContentCache {
     /// no one. A held tile stays — a replay still draws from it — and eviction collects it when
     /// the holds go.
     pub fn remove_shared_tile(&mut self, handle: u64) -> bool {
-        self.atlas
-            .remove_if_unreferenced(crate::content::images::shared_key(handle))
+        let key = crate::content::images::shared_key(handle);
+        let mut removed = self.atlas.remove_if_unreferenced(key);
+        if let Some(masked_keys) = self.clipped_tiles.borrow_mut().remove(&key.handle()) {
+            for masked in masked_keys {
+                removed |= self.atlas.remove_if_unreferenced(masked);
+            }
+        }
+        removed
     }
 
     /// Gives back the host texels of every shared attachment whose tile is resident.
@@ -523,6 +538,7 @@ impl ContentCache {
             image_hits: &self.image_hits,
             image_failures: &self.image_failures,
             missing_images: &self.missing_images,
+            clipped_tiles: &self.clipped_tiles,
             writing: RefCell::new(Rasterising {
                 glyphs: &mut self.glyphs,
                 atlas: &mut self.atlas,
@@ -594,6 +610,7 @@ impl ContentCache {
         self.glyphs.clear();
         self.vector_masks.clear();
         self.vector_layers.clear();
+        self.clipped_tiles.borrow_mut().clear();
         // Every name handed out before now pointed into a texture that is about to stop existing,
         // so they stop being names. A sprite still carrying one resolves to nothing rather than to
         // whatever has since taken that content's place.
@@ -625,6 +642,8 @@ pub struct FrameContent<'a> {
     image_failures: &'a RefCell<rustc_hash::FxHashSet<AtlasKey>>,
     /// Uploaded attachments this frame found without a tile.
     missing_images: &'a RefCell<Vec<ReplacedId>>,
+    /// Maps each base image key handle to its `clip-path`-masked atlas keys.
+    clipped_tiles: &'a RefCell<FxHashMap<u64, Vec<AtlasKey>>>,
     /// The atlas, the glyph cache and their sink, behind a cell because emitting is an immutable
     /// walk.
     writing: RefCell<Rasterising<'a>>,
@@ -815,6 +834,85 @@ impl ReplacedSource for FrameContent<'_> {
             // A picture is one tile where a line is fifty, and it is held for the same reason: a
             // replayed range draws it without asking for it, so nothing else says it is still
             // there.
+            named.push(key);
+        }
+        Some(source)
+    }
+
+    fn clipped_source(
+        &self,
+        id: ReplacedId,
+        placement: &crate::emit::replaced::ReplacedPlacement,
+        clip_path: &crate::lower::ClipPathShape,
+        reference_box: zgui_geom::Rect<zgui_geom::DevicePx, Device>,
+    ) -> Option<Source> {
+        let content = self.images.get(&id)?;
+        let revision = self.revision(id);
+        self.image_hits.set(self.image_hits.get() + 1);
+        let mut writing = self.writing.borrow_mut();
+        let Rasterising {
+            glyphs,
+            atlas,
+            vector_masks,
+            vector_layers,
+            named,
+        } = &mut *writing;
+        let mut resolved = crate::content::images::clipped_source_of(
+            atlas,
+            content,
+            revision,
+            placement,
+            clip_path,
+            reference_box,
+        );
+        if matches!(resolved, Err(zgui_atlas::AtlasError::OutOfSpace { .. })) {
+            let mut removed = Vec::new();
+            let freed = atlas.evict_least_recently_used_into(&mut removed);
+            glyphs.forget_tiles(&removed);
+            vector_masks.forget_tiles(&removed);
+            vector_layers.forget_tiles(&removed);
+            counter::add(Counter::AtlasTilesEvicted, freed.tiles as u64);
+            resolved = crate::content::images::clipped_source_of(
+                atlas,
+                content,
+                revision,
+                placement,
+                clip_path,
+                reference_box,
+            );
+        }
+        let (source, key) = match resolved {
+            Ok(Some(resolved)) => resolved,
+            Ok(None) => {
+                self.missing_images.borrow_mut().push(id);
+                return None;
+            }
+            Err(error) => {
+                let key = match content {
+                    Content::Decoded { key, .. } | Content::Uploaded { key, .. } => Some(*key),
+                    Content::External(_) => None,
+                };
+                if key.is_none_or(|key| self.image_failures.borrow_mut().insert(key)) {
+                    tracing::warn!(
+                        target: "zgui::paint",
+                        "clipped content for {id:?} could not enter the atlas: {error}"
+                    );
+                }
+                counter::add(Counter::ImageInsertFailed, 1);
+                return None;
+            }
+        };
+        if let Some(key) = key {
+            if !self.image_failures.borrow().is_empty() {
+                self.image_failures.borrow_mut().remove(&key);
+            }
+            if let Content::Decoded { key: base, .. } | Content::Uploaded { key: base, .. } = content {
+                let mut map = self.clipped_tiles.borrow_mut();
+                let list = map.entry(base.handle()).or_default();
+                if !list.contains(&key) {
+                    list.push(key);
+                }
+            }
             named.push(key);
         }
         Some(source)

@@ -447,6 +447,8 @@ mod tests {
                 fill: Color::BLACK,
                 stroke: None,
                 stroke_width: 0.0,
+                stroke_cap: zgui_scene::kurbo::Cap::Butt,
+                stroke_join: zgui_scene::kurbo::Join::Miter,
             },
             vector_masks: &crate::content::vectors::NoVectorMasks,
             glyph_placements: placements,

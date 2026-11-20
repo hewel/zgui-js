@@ -118,6 +118,8 @@ pub struct Painted {
     /// moves when it changes. Without it, editing the gradient on a heading replays every line
     /// inside it exactly as it was.
     pub text_fill: u64,
+    /// A fingerprint of the active CSS `clip-path` shape and reference box in force over it.
+    pub clip_path: u64,
     /// A fingerprint of what the box's running animations are overriding.
     ///
     /// The lowered style is *shared* and does not move while an animation runs, so without this the

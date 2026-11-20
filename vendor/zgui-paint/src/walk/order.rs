@@ -42,6 +42,17 @@ pub trait ReplacedSource {
     fn revision(&self, _id: zgui_dom::host::ReplacedId) -> u64 {
         0
     }
+
+    /// Produces a pre-fitted, `clip-path`-masked tile covering `placement.content_box`.
+    fn clipped_source(
+        &self,
+        id: zgui_dom::host::ReplacedId,
+        _placement: &ReplacedPlacement,
+        _clip_path: &crate::lower::ClipPathShape,
+        _reference_box: zgui_geom::Rect<zgui_geom::DevicePx, zgui_geom::Device>,
+    ) -> Option<Source> {
+        self.source(id)
+    }
 }
 
 /// A replaced-content source with nothing in it.
@@ -111,6 +122,11 @@ pub struct Emission<'a> {
     pub scale: f32,
     /// How a scrollbar is painted.
     pub scrollbars: ScrollbarPaint,
+    /// Active CSS `clip-path` shape and its reference border box (own or nearest ancestor).
+    pub clip_path: Option<(
+        &'a crate::lower::ClipPathShape,
+        zgui_geom::Rect<zgui_geom::DevicePx, zgui_geom::Device>,
+    )>,
 }
 
 /// What one fragment emitted, including the path selected for vector content.
@@ -150,13 +166,24 @@ pub(crate) fn fragment_tracked(
     };
     if draws && !emission.nested_inline {
         pushed += box_::outer_shadows(scene, &style, emission.box_placement);
-        pushed += box_::background_and_border(
-            scene,
-            &style,
-            emission.box_placement,
-            emission.shaders,
-            emission.pointer,
-        );
+        if let Some((clip_shape, ref_box)) = emission.clip_path {
+            pushed += box_::clipped_background(
+                scene,
+                VectorId(fragment.key.index()),
+                &style,
+                emission.box_placement,
+                clip_shape,
+                ref_box,
+            );
+        } else {
+            pushed += box_::background_and_border(
+                scene,
+                &style,
+                emission.box_placement,
+                emission.shaders,
+                emission.pointer,
+            );
+        }
         pushed += box_::inset_shadows(scene, &style, emission.box_placement);
     }
     let content = content_tracked(scene, fragment, &style, emission);
@@ -268,26 +295,35 @@ fn content_tracked(
             },
             emission.text_placement,
         ),
-        FragmentKind::Replaced { content } => match emission.replaced.source(content) {
-            Some(source) => crate::emit::replaced::emit(
-                scene,
-                source,
-                ReplacedPlacement {
-                    content_box: fragment.content_box(),
-                    radii: box_::padding_radii(
-                        emission.box_placement.radii,
-                        emission.box_placement.border,
-                    ),
-                    clip: emission.box_placement.clip,
-                    transform: emission.box_placement.transform,
-                    opacity: emission.alpha,
-                    fit: style.object_fit,
-                    position: style.object_position.clone(),
-                    scale: emission.scale,
-                },
-            ),
-            None => 0,
-        },
+        FragmentKind::Replaced { content } => {
+            let placement = ReplacedPlacement {
+                content_box: fragment.content_box(),
+                radii: box_::padding_radii(
+                    emission.box_placement.radii,
+                    emission.box_placement.border,
+                ),
+                clip: emission.box_placement.clip,
+                transform: emission.box_placement.transform,
+                opacity: emission.alpha,
+                fit: style.object_fit,
+                position: style.object_position.clone(),
+                scale: emission.scale,
+            };
+            if let Some((clip_shape, ref_box)) = emission.clip_path {
+                match emission
+                    .replaced
+                    .clipped_source(content, &placement, clip_shape, ref_box)
+                {
+                    Some(source) => crate::emit::replaced::emit_clipped(scene, source, placement),
+                    None => 0,
+                }
+            } else {
+                match emission.replaced.source(content) {
+                    Some(source) => crate::emit::replaced::emit(scene, source, placement),
+                    None => 0,
+                }
+            }
+        }
         // The outlines are drawn inside the box's own decorations and under the same clip and
         // transform, so a drawing sorts, clips and moves exactly like a background does — and an
         // element that draws is otherwise an ordinary element with an ordinary box.

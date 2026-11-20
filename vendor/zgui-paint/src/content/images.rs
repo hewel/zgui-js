@@ -49,6 +49,9 @@ pub struct MipLevel {
 /// meet in the atlas and serve one node's pixels for another's.
 const SHARED: u64 = 1 << 63;
 
+/// The handle namespace of `clip-path`-masked image tiles.
+const CLIPPED: u64 = 1 << 62;
+
 /// The atlas key a loader's shared handle resolves to.
 pub(crate) fn shared_key(handle: u64) -> AtlasKey {
     AtlasKey::new(SHARED | handle, TextureKind::Image)
@@ -253,6 +256,174 @@ pub(crate) fn source_of(
             )))
         }
     }
+}
+
+/// Maximum device-pixel dimension per axis for a CPU-masked `clip-path` image tile.
+const MAX_CLIPPED_SIDE: u32 = 2048;
+
+/// Produces a cached, `clip-path`-masked tile for `content` fitted to `placement.content_box`.
+///
+/// Returns `Ok(None)` when `content` is [`Content::Uploaded`] and the masked variant is not in
+/// the atlas, signalling the caller to request a re-decode.
+pub(crate) fn clipped_source_of(
+    atlas: &mut Atlas,
+    content: &Content,
+    revision: u64,
+    placement: &crate::emit::replaced::ReplacedPlacement,
+    clip_path: &crate::lower::ClipPathShape,
+    reference_box: zgui_geom::Rect<zgui_geom::DevicePx, Device>,
+) -> Result<Option<(Source, Option<AtlasKey>)>, AtlasError> {
+    let (base_key, natural, decoded) = match content {
+        Content::External(_) => return source_of(atlas, content),
+        Content::Uploaded { key, natural } => (*key, *natural, None),
+        Content::Decoded {
+            key,
+            size,
+            natural,
+            texels,
+            ..
+        } => (*key, *natural, Some((*size, texels))),
+    };
+    let out_w = (placement.content_box.size.width.0.round() as u32).clamp(1, MAX_CLIPPED_SIDE);
+    let out_h = (placement.content_box.size.height.0.round() as u32).clamp(1, MAX_CLIPPED_SIDE);
+    let dest = crate::emit::replaced::destination(placement, natural);
+    let dest_x = dest.origin.x.0 - placement.content_box.origin.x.0;
+    let dest_y = dest.origin.y.0 - placement.content_box.origin.y.0;
+    let dest_w = dest.size.width.0;
+    let dest_h = dest.size.height.0;
+    let ref_x = reference_box.origin.x.0 - placement.content_box.origin.x.0;
+    let ref_y = reference_box.origin.y.0 - placement.content_box.origin.y.0;
+    let hash = zgui_scene::ContentHash::new()
+        .u64(base_key.handle())
+        .u64(revision)
+        .u64(clip_path.hash())
+        .u32(out_w)
+        .u32(out_h)
+        .f32s(&[
+            dest_x,
+            dest_y,
+            dest_w,
+            dest_h,
+            ref_x,
+            ref_y,
+            reference_box.size.width.0,
+            reference_box.size.height.0,
+            placement.scale,
+        ])
+        .finish();
+    let masked_key = AtlasKey::new((hash & !(SHARED | CLIPPED)) | CLIPPED, TextureKind::Image);
+    let out_natural = Size::new(out_w, out_h);
+    if let Some(tile) = atlas.get(masked_key) {
+        return Ok(Some((
+            Source::Decoded {
+                resource: tile.into(),
+                natural: out_natural,
+            },
+            Some(masked_key),
+        )));
+    }
+    let Some((src_size, texels)) = decoded else {
+        return Ok(None);
+    };
+    let Some(mask) = clip_path.rasterize_mask(
+        reference_box,
+        placement.content_box,
+        placement.scale,
+        out_w,
+        out_h,
+    ) else {
+        return source_of(atlas, content);
+    };
+    let masked_bytes = sample_and_mask(
+        texels,
+        src_size.width,
+        src_size.height,
+        out_w,
+        out_h,
+        (dest_x, dest_y, dest_w, dest_h),
+        &mask,
+    );
+    let extent = Size::new(out_w as i32, out_h as i32);
+    let tile = atlas.get_or_insert(masked_key, extent, || std::sync::Arc::new(masked_bytes))?;
+    Ok(Some((
+        Source::Decoded {
+            resource: tile.into(),
+            natural: out_natural,
+        },
+        Some(masked_key),
+    )))
+}
+
+/// Bilinearly resamples premultiplied RGBA8 `src` into `out_w x out_h` fitted to `dest`,
+/// multiplying each output channel by the 8-bit `mask` coverage.
+fn sample_and_mask(
+    src: &[u8],
+    src_w: u32,
+    src_h: u32,
+    out_w: u32,
+    out_h: u32,
+    dest: (f32, f32, f32, f32),
+    mask: &[u8],
+) -> Vec<u8> {
+    let mut out = vec![0u8; (out_w as usize) * (out_h as usize) * 4];
+    let (dest_x, dest_y, dest_w, dest_h) = dest;
+    if src_w == 0 || src_h == 0 || dest_w <= 0.0 || dest_h <= 0.0 {
+        return out;
+    }
+    let src_wf = src_w as f32;
+    let src_hf = src_h as f32;
+    let max_sx = (src_w - 1) as i32;
+    let max_sy = (src_h - 1) as i32;
+    let row_bytes = (src_w as usize) * 4;
+    for y in 0..out_h {
+        let py = y as f32 + 0.5;
+        let v_norm = (py - dest_y) / dest_h;
+        if !(0.0..=1.0).contains(&v_norm) {
+            continue;
+        }
+        let sy = v_norm * src_hf - 0.5;
+        let y0 = (sy.floor() as i32).clamp(0, max_sy);
+        let y1 = (y0 + 1).min(max_sy);
+        let fy = (sy - y0 as f32).clamp(0.0, 1.0);
+        let row0 = (y0 as usize) * row_bytes;
+        let row1 = (y1 as usize) * row_bytes;
+        let mask_row = (y as usize) * (out_w as usize);
+        let out_row = mask_row * 4;
+        for x in 0..out_w {
+            let cov = mask[mask_row + x as usize];
+            if cov == 0 {
+                continue;
+            }
+            let px = x as f32 + 0.5;
+            let u_norm = (px - dest_x) / dest_w;
+            if !(0.0..=1.0).contains(&u_norm) {
+                continue;
+            }
+            let sx = u_norm * src_wf - 0.5;
+            let x0 = (sx.floor() as i32).clamp(0, max_sx);
+            let x1 = (x0 + 1).min(max_sx);
+            let fx = (sx - x0 as f32).clamp(0.0, 1.0);
+            let i00 = row0 + (x0 as usize) * 4;
+            let i10 = row0 + (x1 as usize) * 4;
+            let i01 = row1 + (x0 as usize) * 4;
+            let i11 = row1 + (x1 as usize) * 4;
+            let w00 = (1.0 - fx) * (1.0 - fy);
+            let w10 = fx * (1.0 - fy);
+            let w01 = (1.0 - fx) * fy;
+            let w11 = fx * fy;
+            let dst = out_row + (x as usize) * 4;
+            for c in 0..4 {
+                let sample = f32::from(src[i00 + c]) * w00
+                    + f32::from(src[i10 + c]) * w10
+                    + f32::from(src[i01 + c]) * w01
+                    + f32::from(src[i11 + c]) * w11;
+                let rounded = sample.round().clamp(0.0, 255.0) as u32;
+                let prod = rounded * u32::from(cov) + 128;
+                out[dst + c] = ((prod + (prod >> 8)) >> 8) as u8;
+            }
+        }
+    }
+    out
 }
 
 /// The atlas handle one replaced node's content is cached under.

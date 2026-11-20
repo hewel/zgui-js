@@ -78,6 +78,8 @@ fn paint(fill: Color) -> ShapePaint {
         fill,
         stroke: None,
         stroke_width: 1.0,
+        stroke_cap: zgui_scene::kurbo::Cap::Butt,
+        stroke_join: zgui_scene::kurbo::Join::Miter,
     }
 }
 
