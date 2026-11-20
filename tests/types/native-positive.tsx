@@ -3,9 +3,9 @@ import {
   createCanvasScene, createContext, createEffect, createMemo, createSignal, createSpring, createStore, createProjection,
   merge, omit, onCleanup, onSettled, reconcile, renderApp, renderShell, untrack, useContext, useMonitors,
   focus, getTextContent, getWindowRect, isAnimating, lockScroll, mountStylesheet, observeGeometry, precedes,
-  SessionLockSurface, getSessionGeneration, requestSessionLock,
+  SessionLockSurface, WindowSurface, getSessionGeneration, requestSessionLock,
 } from "@hewel/zgui";
-import type { CanvasCommand, CanvasScene, CanvasTransform, Component, Context, NativeAnimationEvent, NativeChild, NativeContextMenuEvent, NativeFocusOptions, NativeNode, NativePointerBoundaryEvent, NativeRole, NativeTextControlProps, NativeTransitionEvent, NativeViewport, NativeWheelEvent, NativeWindowRect, ParentComponent, Spring, SpringOptions, TextFieldProps, TextAreaProps, VectorProps } from "@hewel/zgui";
+import type { CanvasCommand, CanvasScene, CanvasTransform, Component, Context, NativeAnimationEvent, NativeChild, NativeContextMenuEvent, NativeFocusOptions, NativeNode, NativePointerBoundaryEvent, NativeRole, NativeTextControlProps, NativeTransitionEvent, NativeViewport, NativeWheelEvent, NativeWindowRect, ParentComponent, Spring, SpringOptions, TextFieldProps, TextAreaProps, VectorProps, WindowDecorations } from "@hewel/zgui";
 import type { Accessor } from "@hewel/zgui";
 import type { SessionLockRequest, SessionLockState } from "@hewel/zgui";
 
@@ -236,6 +236,15 @@ void <PopupSurface name="menu" parent="nodes" anchorNode={borrowed} width={32} h
 void <PopupSurface name="submenu" parent="menu" anchorRect={{ x: 1, y: 2, width: 10, height: 12 }}
   width={32} height={40} grab offset={{ x: 5, y: -3 }} placement={{ anchor: "right", gravity: "right", reactive: true }}
   onDismiss={() => {}}><text>Popup</text></PopupSurface>;
+void <PopupSurface name="auto-menu" parent="nodes" anchorNode={borrowed} width={280} height="auto" minHeight={48} maxHeight={600}><text>Auto</text></PopupSurface>;
+void <PopupSurface name="default-auto-menu" parent="nodes" anchorRect={{ x: 0, y: 0, width: 20, height: 20 }} width={240}><text>Default auto</text></PopupSurface>;
+const windowDecorations: WindowDecorations = "no-title-bar";
+void <WindowSurface name="settings" title="Settings" appId="z-shell-settings"
+  width={820} height={600} minWidth={640} minHeight={480} maxWidth={1440} maxHeight={1080}
+  resizable decorations={windowDecorations} transparent={false} onClose={() => {}}>
+  <text>Settings</text>
+</WindowSurface>;
+void <PopupSurface name="settings-menu" parent="settings" anchorRect={{ x: 8, y: 8, width: 40, height: 24 }} width={200} height="auto" maxHeight={400}><text>Child</text></PopupSurface>;
 void borrowed;
 
 type AssertBoundary<T extends true> = T;

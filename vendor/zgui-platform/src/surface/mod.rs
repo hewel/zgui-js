@@ -317,6 +317,12 @@ pub trait Surface: Send + Sync + 'static {
         false
     }
 
+    /// Whether this pop-up surface supports live repositioning (`xdg_popup.reposition`).
+    #[must_use]
+    fn supports_popup_reposition(&self) -> bool {
+        false
+    }
+
     /// Tells the platform where text is being typed and what kind, or that none is.
     ///
     /// One call rather than three, because the parts are only meaningful together: an input method

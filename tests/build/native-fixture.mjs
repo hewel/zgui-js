@@ -616,6 +616,7 @@ export function createHost({ strictStyles = false, reducedMotion = false, monito
   };
   const layerIds = new Map();
   const popupIds = new Map();
+  const windowIds = new Map();
   const lockIds = new Map();
   const lockSubscribers = new Map();
   const sessionLockLog = [];
@@ -659,6 +660,7 @@ export function createHost({ strictStyles = false, reducedMotion = false, monito
   };
   const present = surface => {
     if (stopping) return false;
+    if (surface.window) return true;
     if (surface.popup) {
       const parent = surfaces.get(surface.placement.parent);
       return parent && !parent.lock && !parent.closing;
@@ -791,7 +793,7 @@ export function createHost({ strictStyles = false, reducedMotion = false, monito
       if (name === "main" || !/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$/.test(name)) {
         throw new TypeError("invalid or reserved shell surface name");
       }
-      if ([...layerIds.values(), ...lockIds.values(), ...popupIds.values()].some(surface =>
+      if ([...layerIds.values(), ...lockIds.values(), ...popupIds.values(), ...windowIds.values()].some(surface =>
         !surface.closing && (surface.name === name || (surface.lock && surface.placement.output === output)))) {
         throw new TypeError("duplicate lock surface name or output");
       }
@@ -820,7 +822,7 @@ export function createHost({ strictStyles = false, reducedMotion = false, monito
       requireShellWorkAllowed("openLayer");
       requireShell();
       if (name === "main" || !/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$/.test(name)) throw new TypeError("invalid or reserved shell surface name");
-      if ([...layerIds.values(), ...lockIds.values(), ...popupIds.values()].some(surface => !surface.closing && surface.name === name)) {
+      if ([...layerIds.values(), ...lockIds.values(), ...popupIds.values(), ...windowIds.values()].some(surface => !surface.closing && surface.name === name)) {
         throw new TypeError(`duplicate shell surface: ${name}`);
       }
       const id = ++nextLayerId;
@@ -862,7 +864,7 @@ export function createHost({ strictStyles = false, reducedMotion = false, monito
         throw new TypeError("invalid popup name");
       }
       requireAcyclicPopupParent(name, placement.parent);
-      if ([...layerIds.values(), ...lockIds.values(), ...popupIds.values()].some(surface => !surface.closing && surface.name === name)) {
+      if ([...layerIds.values(), ...lockIds.values(), ...popupIds.values(), ...windowIds.values()].some(surface => !surface.closing && surface.name === name)) {
         throw new TypeError(`duplicate shell surface: ${name}`);
       }
       const id = ++nextLayerId;
@@ -889,6 +891,55 @@ export function createHost({ strictStyles = false, reducedMotion = false, monito
         finally { popupIds.delete(id); }
       });
     },
+    openWindow(name, options, attach, onClose) {
+      requireShellWorkAllowed("openWindow");
+      requireShell();
+      if (name === "main" || !/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$/.test(name)) {
+        throw new TypeError("invalid or reserved window surface name");
+      }
+      if ([...layerIds.values(), ...lockIds.values(), ...popupIds.values(), ...windowIds.values()].some(surface => !surface.closing && surface.name === name)) {
+        throw new TypeError(`duplicate shell surface: ${name}`);
+      }
+      const id = ++nextLayerId;
+      const surface = { id, window: true, name, options: structuredClone(options), attach, onClose };
+      windowIds.set(id, surface);
+      shellLog.push({ op: "openWindow", id, name, options: surface.options });
+      shellTasks.push(() => attachSurface(surface));
+      return id;
+    },
+    updateWindow(id, options) {
+      assertActiveHost("updateWindow");
+      const surface = windowIds.get(id);
+      if (!surface || surface.closing) throw new ReferenceError("closed window surface");
+      if (surface.options.appId !== options.appId || surface.options.transparent !== options.transparent) {
+        throw new TypeError("changing window appId or transparency requires a new shell surface");
+      }
+      surface.options = structuredClone(options);
+      shellLog.push({ op: "updateWindow", id, options: surface.options });
+    },
+    closeWindow(id) {
+      const surface = windowIds.get(id);
+      if (!surface || surface.closing) return;
+      surface.closing = true;
+      shellLog.push({ op: "closeWindow", id });
+      shellTasks.push(() => {
+        try { detachTree(surface, "owner-closed"); }
+        finally { windowIds.delete(id); }
+      });
+    },
+  };
+  const windowClose = name => {
+    const surface = surfaces.get(name);
+    if (!surface?.window || surface.closing) throw new ReferenceError(`no live window named ${name}`);
+    runTurn(() => {});
+    surface.closing = true;
+    try {
+      runTurn(() => detachTree(surface, "compositor-dismissed"), false);
+      runTurn(() => {});
+      runTurn(surface.onClose, false);
+    } finally {
+      windowIds.delete(surface.id);
+    }
   };
   const popupDone = name => {
     const surface = surfaces.get(name);
@@ -949,7 +1000,7 @@ export function createHost({ strictStyles = false, reducedMotion = false, monito
 
   return {
     host, nodes, parents, stylesheets, installs, makeNode, byTestId, focused, rects, texts,
-    shell, surfaces, shellLog, emitMonitors, monitorSubscribers, popupDone,
+    shell, surfaces, shellLog, emitMonitors, monitorSubscribers, popupDone, windowClose,
     sessionLockState: () => lockState, sessionLockLog,
     animating, animatingQueries, queries, portals, traps, locks, layers, geometry,
     canvasScenes,
@@ -969,6 +1020,11 @@ export function createHost({ strictStyles = false, reducedMotion = false, monito
         detachTree(surface, "owner-closed");
       }
       popupIds.clear();
+      for (const surface of windowIds.values()) {
+        surface.closing = true;
+        detachTree(surface, "owner-closed");
+      }
+      windowIds.clear();
       for (const surface of lockIds.values()) {
         surface.closing = true;
         detachSurface(surface);

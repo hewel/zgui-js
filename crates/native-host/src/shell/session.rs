@@ -8,8 +8,11 @@ use zgui::{geom::{Css, CssPx, Edges, Size}, platform::{InputRect, InputRegion, K
 use crate::{assets::{ContractFailure, MAX_SAFE_ID}, session::Session, work::service_error};
 
 mod popup;
+mod window;
 pub(crate) use popup::PopupSpec;
 use popup::{WantedPopup, duplicate_name};
+pub(crate) use window::ShellWindowSpec;
+use window::WantedWindow;
 
 pub(crate) const MAX_LAYERS: usize = 32;
 const MAX_SUBSCRIPTIONS: usize = 64;
@@ -139,6 +142,7 @@ pub(crate) struct Shell {
     subscriptions: RefCell<BTreeMap<u32, Persistent<Function<'static>>>>,
     layers: RefCell<BTreeMap<u32, WantedLayer>>,
     popups: RefCell<BTreeMap<u32, WantedPopup>>,
+    windows: RefCell<BTreeMap<u32, WantedWindow>>,
     next_id: Cell<u32>,
     lock_authority: Authority,
     lock_fenced: Cell<bool>,
@@ -159,7 +163,7 @@ impl Shell {
         let ShellConfig { generation, authority, lock_authority, lock_state, contract } = config;
         Rc::new(Self { generation, authority, contract, failure: RefCell::new(None), life: Cell::new(Lifecycle::Loading),
             monitors: RefCell::new(Vec::new()), subscriptions: RefCell::new(BTreeMap::new()), layers: RefCell::new(BTreeMap::new()),
-            popups: RefCell::new(BTreeMap::new()),
+            popups: RefCell::new(BTreeMap::new()), windows: RefCell::new(BTreeMap::new()),
             lock_authority, lock_fenced: Cell::new(false), lock_state: Cell::new(lock_state),
             lock_command: Cell::new(None), lock_subscriptions: RefCell::new(BTreeMap::new()),
             lock_dirty: Cell::new(false),
@@ -172,6 +176,7 @@ impl Shell {
     pub(crate) fn clear(&self) {
         self.layers.borrow_mut().clear();
         self.popups.borrow_mut().clear();
+        self.windows.borrow_mut().clear();
         self.subscriptions.borrow_mut().clear();
         self.lock_surfaces.borrow_mut().clear();
         self.lock_subscriptions.borrow_mut().clear();
@@ -181,7 +186,7 @@ impl Shell {
     pub(crate) fn failure(&self) -> Option<ContractFailure> { self.failure.borrow().clone() }
     pub(crate) fn callback_count(&self) -> usize {
         self.layers.borrow().len() + self.subscriptions.borrow().len()
-            + 2 * self.popups.borrow().len()
+            + 2 * self.popups.borrow().len() + 2 * self.windows.borrow().len()
             + self.lock_surfaces.borrow().len() + self.lock_subscriptions.borrow().len()
     }
     pub(crate) fn is_dirty(&self) -> bool { self.dirty.get() }
@@ -250,6 +255,7 @@ impl Shell {
     pub(crate) fn attach(&self, id: u32) -> Option<Persistent<Function<'static>>> {
         self.layers.borrow().get(&id).map(|layer| layer.attach.clone())
             .or_else(|| self.popups.borrow().get(&id).map(|wanted| wanted.attach.clone()))
+            .or_else(|| self.windows.borrow().get(&id).map(|wanted| wanted.attach.clone()))
             .or_else(|| self.lock_surfaces.borrow().get(&id).map(|wanted| wanted.attach.clone()))
     }
 
@@ -259,6 +265,7 @@ impl Shell {
     fn name_is_taken(&self, name: &str) -> bool {
         self.layers.borrow().values().any(|wanted| wanted.spec.name == name)
             || self.popups.borrow().values().any(|wanted| wanted.spec.name == name)
+            || self.windows.borrow().values().any(|wanted| wanted.spec.name == name)
             || self.lock_surfaces.borrow().values().any(|wanted| wanted.spec.name == name)
     }
 
@@ -368,7 +375,7 @@ impl Shell {
             if name == "main" || !valid_name(&name) { return Err(Exception::throw_type(&ctx, "invalid or reserved shell surface name")); }
             let (placement, size) = placement(&ctx, data)?;
             let attach = attach.into_function().ok_or_else(|| Exception::throw_type(&ctx, "shell surface content must be a function"))?;
-            if shell.layers.borrow().len() + shell.popups.borrow().len() >= MAX_LAYERS {
+            if shell.layers.borrow().len() + shell.popups.borrow().len() + shell.windows.borrow().len() >= MAX_LAYERS {
                 return Err(Exception::throw_range(&ctx, "shell surface limit reached"));
             }
             if shell.name_is_taken(&name) { return Err(duplicate_name(&ctx)); }
@@ -416,6 +423,7 @@ impl Shell {
             Ok::<(), rquickjs::Error>(())
         }))?;
         self.install_popup(&api)?;
+        self.install_window(&api)?;
         self.install_lock(&api)?;
         ctx.globals().set("__zguiShell", api.clone())?;
         Ok(api)
@@ -919,5 +927,132 @@ mod tests {
         assert_eq!(snapshot[1].id, "HDMI-A-2");
         assert_eq!(snapshot[1].logical_width, Some(960.0));
         assert_eq!(snapshot[1].logical_height, Some(540.0));
+    }
+
+    #[test]
+    fn window_requests_validate_and_require_shell_authority() {
+        let runtime = rquickjs::Runtime::new().expect("create QuickJS runtime");
+        let context = rquickjs::Context::full(&runtime).expect("create QuickJS context");
+        let waker = zgui::platform::PlatformCx::waker(&zgui_platform_headless::Headless::new());
+        let denied = Shell::new(ShellConfig {
+            generation: 1,
+            authority: Authority::Denied,
+            lock_authority: Authority::Denied,
+            lock_state: SessionLockState::Unlocked,
+            contract: ContractPolicy::Sticky,
+        }, waker.clone());
+        denied.activate();
+        context.with(|ctx| {
+            denied.install(&ctx).expect("install shell bridge");
+            for call in ["openWindow('settings', {}, () => {}, () => {})", "updateWindow(1, {})", "closeWindow(1)"] {
+                let code = ctx.eval::<String, _>(format!(
+                    "try {{ __zguiShell.{call} }} catch (error) {{ error.code ?? 'missing code' }}"
+                )).expect("read capability error");
+                assert_eq!(code, "E_CAPABILITY", "{call} must require shell surface authority");
+            }
+        });
+        assert_eq!(denied.callback_count(), 0);
+
+        let allowed = Shell::new(ShellConfig {
+            generation: 2,
+            authority: Authority::Allowed,
+            lock_authority: Authority::Denied,
+            lock_state: SessionLockState::Unlocked,
+            contract: ContractPolicy::Throw,
+        }, waker);
+        allowed.activate();
+        context.with(|ctx| {
+            allowed.install(&ctx).expect("install shell bridge");
+            ctx.eval::<(), _>(r#"
+                const shell = __zguiShell;
+                const opts = (overrides = {}) => ({
+                    title: 'Settings', appId: 'z-shell-settings',
+                    width: 820, height: 600, minWidth: 640, minHeight: 480,
+                    maxWidth: 1440, maxHeight: 1080, resizable: true,
+                    decorations: 'no-title-bar', transparent: false,
+                    ...overrides,
+                });
+                const id = shell.openWindow('settings', opts(), () => () => {}, () => {});
+                shell.updateWindow(id, opts({ title: 'Updated', width: 900, decorations: 'none' }));
+                for (const bad of [
+                    () => shell.openWindow('main', opts(), () => {}, () => {}),
+                    () => shell.openWindow('settings', opts(), () => {}, () => {}),
+                    () => shell.openWindow('bad-range', opts({ minWidth: 900, maxWidth: 800 }), () => {}, () => {}),
+                    () => shell.openWindow('bad-dec', opts({ decorations: 'invalid' }), () => {}, () => {}),
+                    () => shell.updateWindow(id, opts({ appId: 'changed' })),
+                    () => shell.updateWindow(id, opts({ transparent: true })),
+                ]) {
+                    let threw = false;
+                    try { bad(); } catch { threw = true; }
+                    if (!threw) throw new Error('expected validation failure');
+                }
+            "#).expect("validate window bridge calls");
+        });
+        let windows = allowed.window_specs();
+        assert_eq!(windows.len(), 1);
+        let spec = windows.values().next().expect("stored window spec");
+        assert_eq!(spec.name, "settings");
+        assert_eq!(spec.title, "Updated");
+        assert_eq!(spec.app_id.as_deref(), Some("z-shell-settings"));
+        assert_eq!(spec.size, Size::new(CssPx(900.0), CssPx(600.0)));
+        assert_eq!(spec.min_size, Some(Size::new(CssPx(640.0), CssPx(480.0))));
+        assert_eq!(spec.max_size, Some(Size::new(CssPx(1440.0), CssPx(1080.0))));
+        assert_eq!(spec.decorations, zgui::platform::Decorations::None);
+        allowed.clear();
+    }
+
+    #[test]
+    fn popup_auto_height_parses_bounds_and_rejects_invalid_ranges() {
+        let runtime = rquickjs::Runtime::new().expect("create QuickJS runtime");
+        let context = rquickjs::Context::full(&runtime).expect("create QuickJS context");
+        let waker = zgui::platform::PlatformCx::waker(&zgui_platform_headless::Headless::new());
+        let shell = Shell::new(ShellConfig {
+            generation: 1,
+            authority: Authority::Allowed,
+            lock_authority: Authority::Denied,
+            lock_state: SessionLockState::Unlocked,
+            contract: ContractPolicy::Throw,
+        }, waker);
+        shell.activate();
+        context.with(|ctx| {
+            shell.install(&ctx).expect("install shell bridge");
+            ctx.eval::<(), _>(r#"
+                const shell = __zguiShell;
+                const base = {
+                    parent: 'bar', width: 320,
+                    anchorRect: { x: 0, y: 0, width: 20, height: 20 },
+                    anchor: 'bottom-left', gravity: 'bottom-right', offset: { x: 0, y: 0 },
+                    slide: true, flip: true, resize: false, reactive: false, grab: false,
+                };
+                shell.openPopup('auto-default', { ...base }, () => {}, () => {});
+                shell.openPopup('auto-bounded', { ...base, height: 'auto', minHeight: 48, maxHeight: 420 }, () => {}, () => {});
+                shell.openPopup('fixed', { ...base, height: 180 }, () => {}, () => {});
+                for (const bad of [
+                    { ...base, height: 'bogus' },
+                    { ...base, height: 'auto', minHeight: 500, maxHeight: 400 },
+                    { ...base, height: 'auto', minHeight: 0 },
+                ]) {
+                    let threw = false;
+                    try { shell.openPopup('bad', bad, () => {}, () => {}); } catch { threw = true; }
+                    if (!threw) throw new Error('expected popup height validation error');
+                }
+            "#).expect("validate popup auto-height bridge parsing");
+        });
+        let popups = shell.popup_specs();
+        let by_name = |name: &str| popups.iter().find(|(_, p)| p.name == name).expect("popup spec").1.clone();
+        let default_auto = by_name("auto-default");
+        assert!(default_auto.is_auto_height());
+        assert_eq!(default_auto.size(), Size::new(CssPx(320.0), CssPx(600.0)));
+        let bounded_auto = by_name("auto-bounded");
+        assert!(bounded_auto.is_auto_height());
+        assert_eq!(bounded_auto.size(), Size::new(CssPx(320.0), CssPx(420.0)));
+        let policy = bounded_auto.auto_height(zgui::platform::SurfaceId::new(1)).expect("auto policy");
+        assert_eq!(policy.min_height, CssPx(48.0));
+        assert_eq!(policy.max_height, CssPx(420.0));
+        let fixed = by_name("fixed");
+        assert!(!fixed.is_auto_height());
+        assert_eq!(fixed.size(), Size::new(CssPx(320.0), CssPx(180.0)));
+        assert!(fixed.auto_height(zgui::platform::SurfaceId::new(1)).is_none());
+        shell.clear();
     }
 }

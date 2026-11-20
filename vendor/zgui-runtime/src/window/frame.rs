@@ -486,6 +486,8 @@ impl Window {
         if self.observe_image_demand() {
             self.request_frame();
         }
+        mark("f.popup_auto_height");
+        let suppress_first_paint = self.settle_popup_auto_height();
         // Only when something under the pointer could have changed: every fragment that moved,
         // appeared or went wrote the hit index, and a frame that wrote nothing there leaves the
         // pointer over exactly what it was over.
@@ -512,7 +514,7 @@ impl Window {
 
         self.binding.before_paint(timestamp);
         mark("f.paint");
-        let outcome = self.paint_and_draw();
+        let outcome = self.paint_and_draw(suppress_first_paint);
         mark("f.painted");
         // Immediately after the frame that produced them, and against the output this window is
         // actually on: what the acquisition made this frame wait for is how much earlier than
@@ -536,7 +538,15 @@ impl Window {
         // A frame that never reached the renderer keeps its damage; every other outcome retires it,
         // because what retires damage is the work having been submitted rather than a frame having
         // been presented.
-        if outcome.retires_damage() {
+        if suppress_first_paint {
+            // The initial frame committed an empty transparent buffer while waiting for the
+            // compositor to apply our content-measured `xdg_popup.reposition`; keep full damage,
+            // drop resize pacing so the repositioned configure paints without a 1-frame delay,
+            // and ask for the next frame so the real content paints immediately once configured.
+            self.damage = DamageSet::full();
+            self.pace.settle();
+            self.request_frame();
+        } else if outcome.retires_damage() {
             self.damage = DamageSet::new();
             // The chunk notes were consumed by the same submission. A skipped frame keeps them
             // for the next drawn one, and anything noted after this point — a budget eviction —
@@ -1521,11 +1531,87 @@ impl Window {
     /// what puts the texels on the device, because tiles are allocated as the walk reaches them
     /// and uploaded in one batch. Drawing before the flush samples texels that were never written,
     /// which is not a blank glyph but whichever glyph occupied the rectangle before.
-    fn paint_and_draw(&mut self) -> FrameOutcome {
+    /// Measures laid-out content height for auto-height pop-ups and repositions when it changes.
+    ///
+    /// Returns `true` when the initial paint of a translucent repositionable pop-up should commit
+    /// an empty transparent frame so the compositor applies the measured height before the first
+    /// visible pixels are shown.
+    fn settle_popup_auto_height(&mut self) -> bool {
+        let Some((placement, width, min_height, max_height, last_requested)) =
+            self.popup_auto_height.as_ref().map(|state| {
+                (
+                    state.policy.placement.clone(),
+                    state.policy.width,
+                    state.policy.min_height.0,
+                    state.policy.max_height.0,
+                    state.last_requested,
+                )
+            })
+        else {
+            return false;
+        };
+        let measured = {
+            let layout = self.layout.borrow();
+            measure_auto_height(&layout, &self.engine, self.scale)
+        };
+        let Some(measured) = measured else {
+            return false;
+        };
+        let min_h = min_height.max(1.0);
+        let max_h = max_height.max(min_h);
+        let target_css = measured.clamp(min_h, max_h);
+        let previous = self.surface.size();
+        let current_css = (previous.height.0 / self.scale.max(f32::EPSILON)).round();
+        if (target_css - current_css).abs() < 1.0 {
+            if let Some(state) = self.popup_auto_height.as_mut() {
+                state.last_requested = Some(target_css);
+            }
+            return false;
+        }
+        if last_requested.is_some_and(|prev| (prev - target_css).abs() < 1.0) {
+            return false;
+        }
+        if let Some(state) = self.popup_auto_height.as_mut() {
+            state.last_requested = Some(target_css);
+        }
+        if self
+            .surface
+            .reconfigure_popup(&placement, Size::new(width, zgui_geom::CssPx(target_css)))
+            .is_err()
+        {
+            return false;
+        }
+        let configured = self.surface.size();
+        if configured != previous {
+            // Synchronous backends (headless preview) resize immediately; re-lay out inside this
+            // frame so Frame 1 paints and reports observations at the exact settled height.
+            if self.resize(configured, self.scale) {
+                self.reconfigure_surface();
+                self.pace.settle();
+                self.device_epoch();
+                self.restyle();
+                self.build_boxes();
+                self.lay_out();
+                let _ = self.deliver_observations();
+            }
+            return false;
+        }
+        self.first_frame && self.translucent && self.surface.supports_popup_reposition()
+    }
+
+    fn paint_and_draw(&mut self, suppress_first_paint: bool) -> FrameOutcome {
         use zgui_profile::latency::mark;
         let vector_before = self.renderer.vector_status();
         let size = self.surface.size();
         let viewport = Size::new(size.width.0 as i32, size.height.0 as i32);
+        if suppress_first_paint {
+            if self.occluded || self.starved {
+                return FrameOutcome::Skipped(SkipReason::Occluded);
+            }
+            self.scene.begin_frame(viewport);
+            self.scene.finish(&DamageSet::full());
+            return self.renderer.draw(&self.scene, &DamageSet::full());
+        }
         // A built rasteriser takes a shape the mask route declines at no setup cost, so the mask
         // route may decline a shape that changes every frame. A cold one would be built by it.
         self.content
@@ -1920,4 +2006,84 @@ fn glyph_counts() -> (u64, u64) {
         counter::get(Counter::GlyphsPlaced),
         counter::get(Counter::GlyphsRasterised),
     )
+}
+
+/// Measures the document's natural content height in CSS pixels for pop-up auto-height sizing.
+fn measure_auto_height(
+    layout: &zgui_layout::LayoutStore,
+    engine: &zgui_style::StyleEngine,
+    scale: f32,
+) -> Option<f32> {
+    use zgui_css::values::size::PositionValue;
+
+    let root = layout.root()?;
+    let root_node = layout.get(root)?;
+    let root_layout = layout.layout_of(root)?;
+    let mut in_flow_children = Vec::new();
+    let mut max_bottom = root_layout.border.top.0 + root_layout.padding.top.0;
+    for &child in &root_node.children {
+        let Some(child_node) = layout.get(child) else {
+            continue;
+        };
+        if matches!(
+            child_node.style.get_box().position,
+            PositionValue::Absolute | PositionValue::Fixed
+        ) {
+            // Skip out-of-flow viewport overlays (such as the runtime's built-in overlay root).
+            continue;
+        }
+        in_flow_children.push(child);
+        if let Some(child_layout) = layout.layout_of(child) {
+            let bottom =
+                child_layout.origin.y.0 + child_layout.size.height.0 + child_layout.margin.bottom.0;
+            if bottom.is_finite() {
+                max_bottom = max_bottom.max(bottom);
+            }
+        }
+    }
+    let base_height = max_bottom + root_layout.padding.bottom.0 + root_layout.border.bottom.0;
+    let mut max_scroll_excess: f32 = 0.0;
+    if base_height >= root_layout.size.height.0 - scale.max(1.0) {
+        let epsilon = zgui_layout::scroll_region::bar::EPSILON;
+        let mut stack: Vec<(zgui_dom::side::BoxKey, bool)> =
+            in_flow_children.into_iter().map(|child| (child, false)).collect();
+        while let Some((key, ancestor_capped)) = stack.pop() {
+            let Some(node) = layout.get(key) else {
+                continue;
+            };
+            let viewport_sized = node
+                .source
+                .is_some_and(|source| engine.uses_viewport_units(source));
+            let capped = ancestor_capped || (!viewport_sized && has_fixed_height_cap(&node.style));
+            if !capped
+                && let Some(region) = zgui_layout::scroll_region::region_of(layout, key)
+                && region.scrolls_y
+            {
+                let excess = region.content.height.0 - region.scrollport.size.height.0;
+                if excess > epsilon && excess.is_finite() {
+                    max_scroll_excess = max_scroll_excess.max(excess);
+                }
+            }
+            for &child in &node.children {
+                stack.push((child, capped));
+            }
+        }
+    }
+    let total_css = ((base_height + max_scroll_excess) / scale.max(f32::EPSILON)).ceil();
+    total_css.is_finite().then_some(total_css)
+}
+
+/// Whether `style` sets a non-percentage definite pixel `height` or `max-height` cap.
+fn has_fixed_height_cap(style: &zgui_css::ComputedStyle) -> bool {
+    use zgui_css::values::size::{MaxSizeValue, SizeValue};
+    let position = style.get_position();
+    let fixed_height = matches!(
+        &position.height,
+        SizeValue::LengthPercentage(inner) if !inner.0.has_percentage()
+    );
+    let fixed_max_height = matches!(
+        &position.max_height,
+        MaxSizeValue::LengthPercentage(inner) if !inner.0.has_percentage()
+    );
+    fixed_height || fixed_max_height
 }

@@ -174,6 +174,11 @@ impl StyleEngine {
         epoch
     }
 
+    /// Whether `node`'s last cascaded style resolved a viewport unit (`vw`/`vh`/`vmin`/`vmax`).
+    pub fn uses_viewport_units(&self, node: zgui_dom::NodeKey) -> bool {
+        self.unit_readers.contains(node)
+    }
+
     /// Marks the author rules as changed, so the next restyle matches the whole document again.
     ///
     /// A sheet that arrives while the document is being built reaches the rule set after the

@@ -1,7 +1,7 @@
 use std::{cell::{Cell, RefCell}, collections::BTreeMap, rc::Rc, time::{Duration, Instant}};
 
 use serde_json::{Value, json};
-use zgui::{geom::{DevicePx, Point, Size}, platform::{AppHandler, ColorScheme, IdlePolicy, MonitorInfo, PlatformCapabilities, PlatformCx, SurfaceEvent, SurfaceId, WakeReason}, runtime::{Runtime, Window}};
+use zgui::{geom::{DevicePx, Point, Size}, platform::{AppHandler, ColorScheme, IdlePolicy, MonitorInfo, PlatformCapabilities, PlatformCx, Surface as PlatformSurface, SurfaceEvent, SurfaceId, WakeReason}, runtime::{Runtime, Window}};
 use zgui_platform_headless::{Headless, SessionLockDecision};
 
 use crate::{package::Package, session::{ResourceCounts, RetirementFailure, RuntimeTelemetry, Session, SessionError, SessionModule, SessionPolicy, SessionRetirement}};
@@ -286,6 +286,7 @@ impl Driver {
         let changed: Vec<_> = app.native.windows().iter().filter_map(|window| {
             let id = window.surface().id();
             let (width, height, output) = app.host.shell_geometry(id)?;
+            let height = window.popup_auto_height_resolved().map_or(height, f64::from);
             let monitor = match output {
                 Some(output) => app.monitors.iter().find(|monitor| monitor.id == output),
                 None => app.monitors.first(),
@@ -302,10 +303,17 @@ impl Driver {
                 .ok_or_else(|| Error::new("E_HOST_INVARIANT",9,"named native window has no headless surface"))?;
             let observer = self.observer(surface)?;
             offscreen.set_refresh_rate_millihertz(geometry.refresh);
+            let target_size = Size::new(DevicePx(dimensions.0 as f32), DevicePx(dimensions.1 as f32));
+            if previous.is_some()
+                && offscreen.size() == target_size
+                && (offscreen.scale_factor() - geometry.scale).abs() < f64::EPSILON
+            {
+                continue;
+            }
             if previous.is_none() { observer.bind_surface(offscreen); }
             else { observer.bump_surface_configuration(); }
             self.pipeline.deliver(surface, SurfaceEvent::ScaleFactorChanged {
-                scale_factor: geometry.scale, size: Size::new(DevicePx(dimensions.0 as f32), DevicePx(dimensions.1 as f32)),
+                scale_factor: geometry.scale, size: target_size,
             });
             if previous.is_none() { self.pipeline.deliver(surface, SurfaceEvent::Focused(true)); }
             if let Some(window) = self.by_surface(surface) { window.request_frame(); }

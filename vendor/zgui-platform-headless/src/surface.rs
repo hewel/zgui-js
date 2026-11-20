@@ -582,6 +582,16 @@ impl Surface for OffscreenSurface {
         self.popup_dismissed.load(Ordering::Acquire)
     }
 
+    fn supports_popup_reposition(&self) -> bool {
+        matches!(
+            self.requested_attributes
+                .lock()
+                .expect("the attributes are not poisoned")
+                .role,
+            SurfaceRole::Popup(_)
+        )
+    }
+
     fn set_text_input(&self, state: Option<TextInput>) {
         self.text_input_log
             .lock()

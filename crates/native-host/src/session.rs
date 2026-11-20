@@ -442,6 +442,20 @@ impl Session {
         result.map_err(|error| self.diagnostic(error).into())
     }
 
+    /// Settle active jobs, retire the shell window and its child popups, and notify its owner.
+    pub(crate) fn close_window(&self, id: u32, close: impl FnOnce() -> Result<()>) -> Result<()> {
+        if self.shutdown_started.get() { return close(); }
+        self.settle_popup_jobs()?;
+        close()?;
+        self.settle_popup_jobs()?;
+        if !self.shell.owns_window(id) { return Ok(()); }
+        let mut engine = self.engine.borrow_mut();
+        let engine = engine.as_mut().ok_or("session disposed")?;
+        let result = self.bridges.run(engine.turn(), |js| js.with_context(|ctx| self.shell.dispatch_window_close(&ctx, id)));
+        self.mark_reported(self.check_contract())?;
+        result.map_err(|error| self.diagnostic(error).into())
+    }
+
     fn settle_popup_jobs(&self) -> Result<()> {
         let mut engine = self.engine.borrow_mut();
         let engine = engine.as_mut().ok_or("session disposed")?;

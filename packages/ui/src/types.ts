@@ -66,7 +66,12 @@ export type PopupSurfaceProps = {
   readonly name: string;
   readonly parent: string;
   readonly width: number;
-  readonly height: number;
+  /** Logical height in CSS pixels, or `"auto"` (default) to size from laid-out content. */
+  readonly height?: number | "auto";
+  /** Minimum logical height in CSS pixels when `height` is `"auto"` (default `1`). */
+  readonly minHeight?: number;
+  /** Maximum logical height in CSS pixels when `height` is `"auto"` (default `600`). */
+  readonly maxHeight?: number;
   readonly placement?: PopupSurfacePlacement;
   readonly offset?: NativePoint;
   readonly grab?: boolean;
@@ -76,6 +81,27 @@ export type PopupSurfaceProps = {
   | { readonly anchorRect: NativeWindowRect; readonly anchorNode?: never }
   | { readonly anchorNode: NativeNode | null | undefined; readonly anchorRect?: never }
 );
+
+/** Window chrome requested from the compositor for a managed toplevel window. */
+export type WindowDecorations = "full" | "none" | "no-title-bar";
+
+/** An independently mounted compositor-managed toplevel window (xdg_toplevel). */
+export interface WindowSurfaceProps {
+  readonly name: string;
+  readonly title: string;
+  readonly appId?: string;
+  readonly width: number;
+  readonly height: number;
+  readonly minWidth?: number;
+  readonly minHeight?: number;
+  readonly maxWidth?: number;
+  readonly maxHeight?: number;
+  readonly resizable?: boolean;
+  readonly decorations?: WindowDecorations;
+  readonly transparent?: boolean;
+  readonly onClose?: () => void;
+  readonly children?: NativeChild;
+}
 
 /** The compositor's last confirmed session-lock state. */
 export type SessionLockState = "unlocked" | "pending" | "locked" | "refused" | "finished" | "unlocking";

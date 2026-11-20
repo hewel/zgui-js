@@ -124,6 +124,11 @@ impl UnitReaders {
     pub(crate) fn is_empty(&self) -> bool {
         self.keys.is_empty()
     }
+
+    /// Whether `node`'s last cascaded style resolved a viewport unit.
+    pub(crate) fn contains(&self, node: NodeKey) -> bool {
+        self.keys.contains(&node)
+    }
 }
 
 /// What the viewport-unit probe did.

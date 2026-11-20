@@ -710,6 +710,10 @@ impl Surface for WaylandSurface {
         })
     }
 
+    fn supports_popup_reposition(&self) -> bool {
+        self.role.popup().is_some_and(|popup| popup.can_reposition())
+    }
+
     fn begin_move_drag(&self) -> Result<(), Unsupported> {
         chrome::begin_move_drag(self)
     }

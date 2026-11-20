@@ -1,10 +1,10 @@
 import { createEffect, createMemo, createRoot, createSignal, getOwner, onCleanup, runWithOwner } from "#solid";
 import { bridgeFor, shellBridge } from "./host.js";
-import type { LayerPlacement, NativeHost, NativeInputRegion, PopupPlacement, UiBridge } from "./host.js";
+import type { LayerPlacement, NativeHost, NativeInputRegion, PopupPlacement, UiBridge, WindowOptions } from "./host.js";
 import { flush, renderRegion } from "./renderer/index.js";
 import type {
   Accessor, LayerAnchor, LayerSurfaceProps, Monitor, NativeNode, NativeWindowRect,
-  PopupSurfaceProps, SessionLockRequest, SessionLockState, SessionLockSurfaceProps,
+  PopupSurfaceProps, SessionLockRequest, SessionLockState, SessionLockSurfaceProps, WindowSurfaceProps,
 } from "./types.js";
 
 declare const console: { warn(message: string): void };
@@ -240,7 +240,9 @@ export function PopupSurface(props: PopupSurfaceProps): null {
         reactive: placement?.reactive ?? false,
         grab: props.grab ?? false,
         width: props.width,
-        height: props.height,
+        height: props.height ?? "auto",
+        ...(props.minHeight !== undefined ? { minHeight: props.minHeight } : {}),
+        ...(props.maxHeight !== undefined ? { maxHeight: props.maxHeight } : {}),
       };
     }, placement => {
       if (!placement) { close(); return; }
@@ -264,6 +266,70 @@ export function PopupSurface(props: PopupSurfaceProps): null {
     });
     return dispose;
   })));
+  return null;
+}
+
+/** Own a compositor-managed toplevel window (xdg_toplevel) without inserting a node in the parent region. */
+export function WindowSurface(props: WindowSurfaceProps): null {
+  const owner = getOwner();
+  if (!owner) throw new Error("WindowSurface requires a Solid owner");
+  const shell = shellBridge();
+  const name = createMemo(() => props.name);
+  const appId = createMemo(() => props.appId);
+  const transparent = createMemo(() => props.transparent ?? false);
+
+  createEffect(
+    () => ({ name: name(), appId: appId(), transparent: transparent() }),
+    ({ name, appId, transparent }) => runWithOwner(owner, () => createRoot(dispose => {
+      const [closed, setClosed] = createSignal(false);
+      let id: number | undefined;
+      const close = () => {
+        if (id !== undefined) {
+          const request = id;
+          id = undefined;
+          shell.closeWindow(request);
+        }
+      };
+      onCleanup(close);
+
+      createEffect((): WindowOptions | undefined => {
+        if (closed()) return;
+        return {
+          title: props.title,
+          ...(appId !== undefined ? { appId } : {}),
+          width: props.width,
+          height: props.height,
+          ...(props.minWidth !== undefined ? { minWidth: props.minWidth } : {}),
+          ...(props.minHeight !== undefined ? { minHeight: props.minHeight } : {}),
+          ...(props.maxWidth !== undefined ? { maxWidth: props.maxWidth } : {}),
+          ...(props.maxHeight !== undefined ? { maxHeight: props.maxHeight } : {}),
+          resizable: props.resizable ?? true,
+          decorations: props.decorations ?? "full",
+          transparent,
+        };
+      }, options => {
+        if (!options) { close(); return; }
+        if (id !== undefined) {
+          shell.updateWindow(id, options);
+          return;
+        }
+        const request = shell.openWindow(name, options, (root, bridge) => {
+          if (id !== request) return () => {};
+          popupParentRegions.set(bridge, { shell, name });
+          return runWithOwner(owner, () => renderRegion(() => () => props.children, root, bridge));
+        }, () => {
+          if (id !== request) return;
+          flush(() => {
+            close();
+            setClosed(true);
+            runWithOwner(owner, () => props.onClose?.());
+          });
+        });
+        id = request;
+      });
+      return dispose;
+    })),
+  );
   return null;
 }
 

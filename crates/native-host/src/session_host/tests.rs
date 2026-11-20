@@ -970,3 +970,93 @@ impl LockedShell {
         assert_eq!(lock.unlock_count, 0, "no unlock request may reach the compositor");
     }
 }
+
+#[test]
+fn window_surface_hosts_child_popup_and_closes_on_compositor_close_request() {
+    use zgui::platform::AppHandler;
+
+    const WINDOW_APP: &str = r#"
+        export const hostApiVersion = 1;
+        let winId;
+        const cleaned = [];
+        let closed = 0;
+        export function mount() {
+            winId = __zguiShell.openWindow('settings', {
+                title: 'Settings', appId: 'z-shell-settings',
+                width: 820, height: 600, minWidth: 640, minHeight: 480,
+                resizable: true, decorations: 'full', transparent: false,
+            }, () => () => cleaned.push('settings'), () => {
+                if (cleaned.join() !== 'menu,settings') throw Error('unexpected close order: ' + cleaned.join());
+                closed++;
+            });
+            __zguiShell.openPopup('menu', {
+                parent: 'settings', width: 220, height: 'auto', minHeight: 40, maxHeight: 300,
+                anchorRect: { x: 16, y: 16, width: 80, height: 28 },
+                offset: { x: 0, y: 4 }, anchor: 'bottom-left', gravity: 'bottom-right',
+                grab: false, slide: true, flip: true, resize: false, reactive: false,
+            }, () => () => cleaned.push('menu'), () => {});
+            return () => {};
+        }
+        export function resizeWindow() {
+            __zguiShell.updateWindow(winId, {
+                title: 'Settings — Display', appId: 'z-shell-settings',
+                width: 900, height: 640, minWidth: 640, minHeight: 480,
+                resizable: true, decorations: 'no-title-bar', transparent: false,
+            });
+        }
+        export function checkClosed() {
+            if (closed !== 1) throw Error('expected one window close callback, got ' + closed);
+        }
+    "#;
+
+    let package = Fixture::new(WINDOW_APP, "").with_capabilities(crate::package::Capabilities {
+        shell_surfaces: true, ..Default::default()
+    });
+    let pending = Rc::new(RefCell::new(Vec::new()));
+    let roots = pending.clone();
+    let fonts = zgui::app::Fonts::shipped_only();
+    let mut runtime = zgui::runtime::App::new()
+        .with_renderer(Box::new(|_, target| {
+            let mut renderer = zgui_testkit_scene::CaptureRenderer::new();
+            zgui::render::Renderer::configure(&mut renderer, target);
+            Ok(Box::new(renderer))
+        }))
+        .into_handler(move |cx| {
+            zgui::reactive::provide_context(fonts.clone());
+            Box::new(Root(roots.clone()).build(cx))
+        })
+        .expect("create window surface test runtime");
+    let cx = zgui_platform_headless::Headless::new();
+    runtime.surfaces_available(&cx);
+    let mut host = SessionHost::new(pending, SessionModule::package(package.package()),
+        SessionPolicy::live(host_services::Executor::new(2, 64).expect("create service executor")),
+        RecoveryPolicy::Propagate, SurfaceOpacity::Opaque);
+    host.attach(&mut RuntimeSurface::new(&mut runtime, &cx, ImageChoice::PackageOnly), cx.waker(), no_retry())
+        .expect("mount window surface and popup");
+    let session = host.sessions().next().expect("active session").clone();
+    let surface_of = |name: &str| {
+        session.mount_regions().into_iter().find(|(region, _)| region == name)
+            .unwrap_or_else(|| panic!("missing mount region {name:?}")).1.surface
+    };
+    let settings = surface_of("settings");
+    let menu = surface_of("menu");
+    assert_eq!(cx.surfaces().len(), 3, "primary, settings window, and child popup should be live");
+    assert_eq!(host.shell_geometry(settings), Some((820.0, 600.0, None)));
+
+    session.invoke("resizeWindow").expect("update window title and size");
+    host.shell_turn(&mut runtime, &cx, ImageChoice::PackageOnly, &[]).expect("reconcile window update");
+    assert_eq!(host.shell_geometry(settings), Some((900.0, 640.0, None)));
+
+    host.surface_event(&mut runtime, &cx, settings, zgui::platform::SurfaceEvent::CloseRequested)
+        .expect("close shell window on compositor request");
+    assert!(cx.surface(settings).is_none(), "closed window surface must be gone");
+    assert!(cx.surface(menu).is_none(), "child popup anchored to window must close with it");
+    assert_eq!(cx.surfaces().len(), 1, "primary surface stays alive after auxiliary window closes");
+    host.shell_turn(&mut runtime, &cx, ImageChoice::PackageOnly, &[]).expect("dismissed window must not reopen");
+    assert_eq!(cx.surfaces().len(), 1, "dismissed window stays closed");
+    session.invoke("checkClosed").expect("onClose fired once after child popup + window cleanup");
+
+    host.stop_shell_surfaces(&mut runtime, &cx);
+    let report = session.retire();
+    assert!(report.failure.is_none(), "teardown failed: {:?}", report.failure);
+}

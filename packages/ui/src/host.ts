@@ -3,15 +3,31 @@ import type { Owner } from "#solid";
 import type {
   CanvasScene, LayerAnchor, LayerSurfacePlacement, Monitor, NativeDismissLayerOptions, NativeDismissReason,
   NativeGeometry, NativeGeometryKind, NativeNode, NativeOverlayLayer, NativeWindowRect,
-  PopupSurfacePlacement, PopupSurfaceProps, SessionLockState,
+  PopupSurfacePlacement, PopupSurfaceProps, SessionLockState, WindowDecorations,
 } from "./types.js";
 
 export type LayerPlacement = Required<Omit<LayerSurfacePlacement, "output" | "margin">> &
   Pick<LayerSurfacePlacement, "output"> & { readonly margin: Readonly<Record<LayerAnchor, number>>; };
 export type PopupPlacement = Required<PopupSurfacePlacement> &
-  Required<Pick<PopupSurfaceProps, "parent" | "offset" | "grab" | "width" | "height">> & {
+  Required<Pick<PopupSurfaceProps, "parent" | "offset" | "grab" | "width">> & {
+    readonly height: number | "auto";
+    readonly minHeight?: number;
+    readonly maxHeight?: number;
     readonly anchorRect: NativeWindowRect;
   };
+export interface WindowOptions {
+  readonly title: string;
+  readonly appId?: string;
+  readonly width: number;
+  readonly height: number;
+  readonly minWidth?: number;
+  readonly minHeight?: number;
+  readonly maxWidth?: number;
+  readonly maxHeight?: number;
+  readonly resizable: boolean;
+  readonly decorations: WindowDecorations;
+  readonly transparent: boolean;
+}
 export type NativeInputRegion = "full" | "empty" | readonly NativeWindowRect[];
 
 /** Installed by the host; resolving either bridge must remain lazy during preflight. */
@@ -64,6 +80,9 @@ export interface NativeHost {
     openPopup(name: string, placement: PopupPlacement, attach: (root: NativeNode, bridge: UiBridge) => () => void, dismiss: () => void): number;
     updatePopup(id: number, placement: PopupPlacement): void;
     closePopup(id: number): void;
+    openWindow(name: string, options: WindowOptions, attach: (root: NativeNode, bridge: UiBridge) => () => void, onClose: () => void): number;
+    updateWindow(id: number, options: WindowOptions): void;
+    closeWindow(id: number): void;
     requestSessionLock(callback: (state: SessionLockState) => void): { readonly id: number; unlock(this: void): void; unsubscribe(this: void): void };
     openLock(name: string, output: string, attach: (root: NativeNode, bridge: UiBridge) => () => void): number;
     closeLock(id: number): void;

@@ -299,6 +299,7 @@ impl SessionHost {
     ) -> SessionResult<()> {
         use zgui::platform::{AppHandler, SurfaceEvent};
         match event {
+            SurfaceEvent::CloseRequested if self.shell_window_close_requested(runtime, cx, surface)? => {}
             SurfaceEvent::Destroyed if self.shell_surface_destroyed(runtime, cx, surface)? => {}
             SurfaceEvent::CloseRequested | SurfaceEvent::Destroyed => {
                 runtime.surface_event_with_close(cx, surface, event, |runtime| {

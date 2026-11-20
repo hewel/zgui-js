@@ -43,6 +43,11 @@ impl ShellWindows {
             self.close_popup_tree(runtime, cx, session, surface, removal)?;
             return Ok(true);
         }
+        if let Some((&id, _)) = self.windows.iter().find(|(_, window)| window.surface == surface) {
+            self.dismissed_windows.insert(id);
+            session.close_window(id, || self.close_window(runtime, cx, session, id))?;
+            return Ok(true);
+        }
         if let Some((&id, layer)) = self.running.iter().find(|(_, layer)| layer.surface == surface) {
             if present(&layer.spec, monitors) { self.dismissed.insert(id); }
             self.close(runtime, cx, session, id)?;
@@ -101,19 +106,38 @@ impl ShellWindows {
                 let popup = &mut self.popups[index];
                 if popup.spec != spec {
                     placement.grab = popup.grab;
-                    runtime.reconfigure_popup(popup.token, placement, spec.size()).map_err(|error| error.to_string())?;
+                    let auto = spec.auto_height(parent).map(|mut policy| {
+                        policy.placement.grab = popup.grab;
+                        policy
+                    });
+                    let next_size = match (&auto, popup.spec.is_auto_height()) {
+                        (Some(policy), true) => {
+                            let current_h = cx.surface(popup.surface).map_or(policy.max_height.0, |surface| {
+                                let scale = (surface.scale_factor() as f32).max(f32::EPSILON);
+                                (surface.size().height.0 / scale)
+                                    .round()
+                                    .clamp(policy.min_height.0, policy.max_height.0)
+                            });
+                            zgui::geom::Size::new(policy.width, zgui::geom::CssPx(current_h))
+                        }
+                        _ => spec.size(),
+                    };
+                    runtime.reconfigure_popup(popup.token, placement, next_size).map_err(|error| error.to_string())?;
+                    runtime.set_popup_auto_height(popup.token, auto).map_err(|error| error.to_string())?;
                     popup.spec = spec;
                 }
                 continue;
             }
             let name = spec.name.clone();
             let grab = placement.grab;
+            let auto = spec.auto_height(parent);
             let mut attrs = zgui::platform::SurfaceAttributes::popup(placement);
             attrs.title = name.as_str().into();
             attrs.size = Some(spec.size());
             attrs.transparent = self.opacity == SurfaceOpacity::Transparent;
             let content = shell_window_content(attrs.transparent, images);
             let (token, surface, region) = open_region(runtime, cx, session, attrs, content)?;
+            runtime.set_popup_auto_height(token, auto).map_err(|error| error.to_string())?;
             let document = region.document;
             self.popups.push(RunningPopup { id, token, surface, parent, spec, grab });
             let mut binding = RuntimeSurface::new(runtime, cx, images);
@@ -126,6 +150,7 @@ impl ShellWindows {
     #[must_use]
     fn popup_parent(&self, session: &Session, name: &str) -> Option<SurfaceId> {
         self.running.iter().find(|(id, layer)| layer.spec.name == name && session.shell.owns(**id)).map(|(_, layer)| layer.surface)
+            .or_else(|| self.windows.iter().find(|(id, window)| window.spec.name == name && session.shell.owns_window(**id)).map(|(_, window)| window.surface))
             .or_else(|| self.popups.iter().find(|popup| popup.spec.name == name && session.shell.owns_popup(popup.id)).map(|popup| popup.surface))
     }
 

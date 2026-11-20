@@ -963,6 +963,75 @@ impl Runtime {
         Ok(())
     }
 
+    /// Configures or clears native content-driven auto-height settling on a live pop-up.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an absent or non-pop-up surface.
+    pub fn set_popup_auto_height(
+        &mut self,
+        token: WindowToken,
+        policy: Option<crate::window::PopupAutoHeight>,
+    ) -> Result<(), PlatformError> {
+        let index = self.live_index(token).ok_or(PlatformError::NoSuchSurface)?;
+        let live = &self.live[index];
+        if !matches!(live.spec.attributes.role, SurfaceRole::Popup(_)) {
+            return Err(zgui_platform::Unsupported.into());
+        }
+        let surface = live.surface.ok_or(PlatformError::NoSuchSurface)?;
+        let window = self.window_mut(surface).ok_or(PlatformError::NoSuchSurface)?;
+        window.set_popup_auto_height(policy);
+        Ok(())
+    }
+
+    /// Updates a live toplevel window's chrome attributes and optional requested extent.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an absent or non-toplevel surface.
+    #[allow(clippy::too_many_arguments)]
+    pub fn reconfigure_window(
+        &mut self,
+        token: WindowToken,
+        title: &str,
+        size: Option<Size<CssPx, Css>>,
+        min_size: Option<Size<CssPx, Css>>,
+        max_size: Option<Size<CssPx, Css>>,
+        resizable: bool,
+        decorations: zgui_platform::Decorations,
+    ) -> Result<(), PlatformError> {
+        let index = self.live_index(token).ok_or(PlatformError::NoSuchSurface)?;
+        let live = &self.live[index];
+        if !matches!(live.spec.attributes.role, SurfaceRole::Toplevel) {
+            return Err(zgui_platform::Unsupported.into());
+        }
+        let surface = live.surface.ok_or(PlatformError::NoSuchSurface)?;
+        let window = self.window_mut(surface).ok_or(PlatformError::NoSuchSurface)?;
+        window.surface().set_title(title);
+        window.surface().set_min_size(min_size);
+        window.surface().set_max_size(max_size);
+        window.surface().set_resizable(resizable);
+        window.surface().set_decorations(decorations);
+        if let Some(requested) = size {
+            let previous = window.surface().size();
+            let _ = window.surface().request_size(requested);
+            let configured = window.surface().size();
+            if configured != previous && window.queue(SurfaceEvent::Resized(configured)) {
+                window.request_frame();
+            }
+        }
+        let attrs = &mut self.live[index].spec.attributes;
+        attrs.title = title.into();
+        if let Some(requested) = size {
+            attrs.size = Some(requested);
+        }
+        attrs.min_size = min_size;
+        attrs.max_size = max_size;
+        attrs.resizable = resizable;
+        attrs.decorations = decorations;
+        Ok(())
+    }
+
     /// The primary surface's creation attributes while it has no native surface.
     ///
     /// Available before the first `surfaces_available` and after `surfaces_lost`.

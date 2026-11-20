@@ -8,7 +8,9 @@ use crate::{session::{ResourceCounts, Result, Session, SessionModule, SessionRet
 use std::{cell::RefCell, rc::Rc};
 
 mod popup;
+mod window;
 use popup::RunningPopup;
+use window::RunningWindow;
 
 struct RunningLayer {
     token: WindowToken,
@@ -33,6 +35,8 @@ pub(crate) struct ShellWindows {
     opacity: SurfaceOpacity,
     running: BTreeMap<u32, RunningLayer>,
     dismissed: BTreeSet<u32>,
+    windows: BTreeMap<u32, RunningWindow>,
+    dismissed_windows: BTreeSet<u32>,
     popups: Vec<RunningPopup>,
     dismissed_popups: BTreeSet<u32>,
     popups_waiting_for_geometry: bool,
@@ -156,6 +160,9 @@ impl SessionHost {
             let size = popup.spec.size();
             return Some((f64::from(size.width.0), f64::from(size.height.0), output));
         }
+        if let Some(window) = self.shell_windows.windows.values().find(|window| window.surface == surface) {
+            return Some((f64::from(window.spec.size.width.0), f64::from(window.spec.size.height.0), None));
+        }
         let running = self.shell_windows.running.values().find(|running| running.surface == surface)?;
         Some((f64::from(running.spec.size.width.0), f64::from(running.spec.size.height.0), running.spec.placement.monitor.as_deref()))
     }
@@ -220,7 +227,9 @@ impl ShellWindows {
         Err("shell surface requests did not settle".into())
     }
 
-    pub(super) fn has_windows(&self) -> bool { !self.running.is_empty() || !self.popups.is_empty() || !self.locks.is_empty() }
+    pub(super) fn has_windows(&self) -> bool {
+        !self.running.is_empty() || !self.windows.is_empty() || !self.popups.is_empty() || !self.locks.is_empty()
+    }
 
     pub(super) fn retire(
         &mut self,
@@ -237,6 +246,10 @@ impl ShellWindows {
             for lock in std::mem::take(&mut self.locks).into_values() {
                 if close(lock.token, None) { session.shell_surface_closed(); }
             }
+            for window in std::mem::take(&mut self.windows).into_values() {
+                if close(window.token, Some(window.surface)) { session.shell_surface_closed(); }
+            }
+            self.dismissed_windows.clear();
             for layer in std::mem::take(&mut self.running).into_values() {
                 if close(layer.token, Some(layer.surface)) { session.shell_surface_closed(); }
             }
@@ -329,6 +342,7 @@ impl ShellWindows {
     fn reconcile(&mut self, runtime: &mut Runtime, cx: &dyn PlatformCx, images: ImageChoice, monitors: &[Monitor], session: &Rc<Session>) -> Result<()> {
         let mut needs_sync = session.shell.take_dirty();
         needs_sync |= self.reconcile_popup_removals(runtime, cx, session)?;
+        needs_sync |= self.reconcile_window_removals(runtime, cx, session)?;
         while let Some((&id, _)) = self.running.iter().find(|(_, layer)| runtime.surface_id(layer.token) != Some(layer.surface)) {
             // A compositor closes a role permanently. A disconnected output may
             // return with a new proxy; a dismissed role on a live output must not loop.
@@ -361,6 +375,7 @@ impl ShellWindows {
                 self.open(runtime, cx, images, session, id, spec)?;
             }
         }
+        self.reconcile_windows(runtime, cx, images, session)?;
         self.reconcile_popups(runtime, cx, images, session)
     }
 

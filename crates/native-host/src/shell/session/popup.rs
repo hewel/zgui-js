@@ -14,8 +14,15 @@ pub(crate) struct PopupSpec {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
+enum PopupHeight {
+    Fixed(CssPx),
+    Auto { min: CssPx, max: CssPx },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
 struct PopupGeometry {
-    size: Size<CssPx, Css>,
+    width: CssPx,
+    height: PopupHeight,
     anchor_rect: Rect<CssPx, Css>,
     anchor: Anchor,
     gravity: Anchor,
@@ -26,9 +33,35 @@ struct PopupGeometry {
 }
 
 impl PopupSpec {
-    /// Requested extent in logical pixels.
+    /// Requested extent in logical pixels (uses `max_height` as initial budget for auto-height).
     #[must_use]
-    pub(crate) fn size(&self) -> Size<CssPx, Css> { self.geometry.size }
+    pub(crate) fn size(&self) -> Size<CssPx, Css> {
+        let height = match self.geometry.height {
+            PopupHeight::Fixed(height) => height,
+            PopupHeight::Auto { max, .. } => max,
+        };
+        Size::new(self.geometry.width, height)
+    }
+
+    /// Whether this popup sizes its height from its laid-out content.
+    #[must_use]
+    pub(crate) fn is_auto_height(&self) -> bool {
+        matches!(self.geometry.height, PopupHeight::Auto { .. })
+    }
+
+    /// Native auto-height policy for the runtime, if `height: "auto"` is active.
+    #[must_use]
+    pub(crate) fn auto_height(&self, parent: SurfaceId) -> Option<zgui::runtime::PopupAutoHeight> {
+        let PopupHeight::Auto { min, max } = self.geometry.height else {
+            return None;
+        };
+        Some(zgui::runtime::PopupAutoHeight {
+            placement: self.placement(parent),
+            width: self.geometry.width,
+            min_height: min,
+            max_height: max,
+        })
+    }
 
     /// Resolve the placement against a live parent in the same generation.
     #[must_use]
@@ -74,7 +107,7 @@ impl Shell {
             let spec = PopupSpec { name, parent, geometry };
             let attach = attach.into_function().ok_or_else(|| Exception::throw_type(&ctx, "popup content must be a function"))?;
             let dismiss = dismiss.into_function().ok_or_else(|| Exception::throw_type(&ctx, "popup dismissal handler must be a function"))?;
-            if shell.layers.borrow().len() + shell.popups.borrow().len() >= MAX_LAYERS {
+            if shell.layers.borrow().len() + shell.popups.borrow().len() + shell.windows.borrow().len() >= MAX_LAYERS {
                 return Err(Exception::throw_range(&ctx, "shell surface limit reached"));
             }
             if shell.name_is_taken(&spec.name) { return Err(duplicate_name(&ctx)); }
@@ -142,14 +175,75 @@ fn parse(ctx: &Ctx<'_>, data: Value<'_>) -> rquickjs::Result<(String, PopupGeome
     let extent = |value: &Object<'_>, range: RangeInclusive<f64>| -> rquickjs::Result<_> {
         Ok(Size::new(css(ctx, value, "width", range.clone())?, css(ctx, value, "height", range)?))
     };
+    let width = css(ctx, &data, "width", 1.0..=16_384.0)?;
+    let height = parse_height(ctx, &data)?;
     Ok((parent, PopupGeometry {
-        size: extent(&data, 1.0..=16_384.0)?,
+        width,
+        height,
         anchor_rect: Rect::new(position(&rect)?, extent(&rect, f64::from(f32::MIN_POSITIVE)..=MAX_EXACT_CSS)?),
         anchor: anchor(ctx, &data, "anchor")?, gravity: anchor(ctx, &data, "gravity")?,
         offset: position(&offset)?,
         constrain: Constrain { slide: flag(ctx, &data, "slide")?, flip: flag(ctx, &data, "flip")?, resize: flag(ctx, &data, "resize")? },
         grab: flag(ctx, &data, "grab")?, reactive: flag(ctx, &data, "reactive")?,
     }))
+}
+
+const DEFAULT_MIN_AUTO_HEIGHT: f64 = 1.0;
+const DEFAULT_MAX_AUTO_HEIGHT: f64 = 600.0;
+
+fn parse_height(ctx: &Ctx<'_>, data: &Object<'_>) -> rquickjs::Result<PopupHeight> {
+    let raw: Value = data.get("height")?;
+    let min = optional_css(ctx, data, "minHeight", 1.0..=16_384.0)?;
+    let max = optional_css(ctx, data, "maxHeight", 1.0..=16_384.0)?;
+    if raw.is_undefined() || raw.is_null() {
+        return auto_height_bounds(ctx, min, max);
+    }
+    if let Some(text) = raw.as_string() {
+        if text.to_string()? == "auto" {
+            return auto_height_bounds(ctx, min, max);
+        }
+        return Err(Exception::throw_type(ctx, "popup height must be a number or \"auto\""));
+    }
+    let value = number(ctx, &raw, "height")?;
+    if !(1.0..=16_384.0).contains(&value) {
+        return Err(Exception::throw_range(ctx, "popup height out of range"));
+    }
+    if let (Some(min), Some(max)) = (min, max)
+        && min.0 > max.0
+    {
+        return Err(Exception::throw_range(ctx, "popup minHeight cannot exceed maxHeight"));
+    }
+    Ok(PopupHeight::Fixed(CssPx(value as f32)))
+}
+
+fn auto_height_bounds(
+    ctx: &Ctx<'_>,
+    min: Option<CssPx>,
+    max: Option<CssPx>,
+) -> rquickjs::Result<PopupHeight> {
+    let min = min.unwrap_or(CssPx(DEFAULT_MIN_AUTO_HEIGHT as f32));
+    let max = max.unwrap_or(CssPx(DEFAULT_MAX_AUTO_HEIGHT as f32));
+    if min.0 > max.0 {
+        return Err(Exception::throw_range(ctx, "popup minHeight cannot exceed maxHeight"));
+    }
+    Ok(PopupHeight::Auto { min, max })
+}
+
+fn optional_css(
+    ctx: &Ctx<'_>,
+    data: &Object<'_>,
+    key: &str,
+    range: RangeInclusive<f64>,
+) -> rquickjs::Result<Option<CssPx>> {
+    let raw: Value = data.get(key)?;
+    if raw.is_undefined() || raw.is_null() {
+        return Ok(None);
+    }
+    let value = number(ctx, &raw, key)?;
+    if !range.contains(&value) {
+        return Err(Exception::throw_range(ctx, &format!("popup {key} out of range")));
+    }
+    Ok(Some(CssPx(value as f32)))
 }
 
 const MAX_EXACT_CSS: f64 = 16_777_216.0;

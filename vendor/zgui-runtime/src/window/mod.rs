@@ -127,6 +127,35 @@ impl WindowContent {
     }
 }
 
+/// Native content-driven height sizing for a pop-up surface.
+///
+/// After layout settles each frame, the runtime measures the document's content height,
+/// clamps it to `[min_height, max_height]`, and repositions the pop-up when the resolved
+/// height changes. On translucent surfaces whose backend supports `xdg_popup.reposition`,
+/// an initial frame whose measured height differs from the initial surface height commits
+/// an empty transparent buffer so the pop-up's first visible frame is drawn at the exact
+/// repositioned geometry without flashing at `max_height`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PopupAutoHeight {
+    /// Placement passed to `reconfigure_popup` when the height changes.
+    pub placement: zgui_platform::PopupPlacement,
+    /// Fixed logical width of the pop-up.
+    pub width: CssPx,
+    /// Minimum logical height in CSS pixels.
+    pub min_height: CssPx,
+    /// Maximum logical height in CSS pixels.
+    pub max_height: CssPx,
+}
+
+/// Per-window runtime state for pop-up auto-height settling.
+#[derive(Clone, Debug)]
+struct AutoHeightState {
+    policy: PopupAutoHeight,
+    /// Last height requested via `reconfigure_popup`, guarding against infinite
+    /// reposition loops when the compositor clamps the requested extent.
+    last_requested: Option<f32>,
+}
+
 /// One window, and everything that draws into it.
 pub struct Window {
     /// What is being drawn into.
@@ -511,6 +540,8 @@ pub struct Window {
     clock: Arc<dyn zgui_platform::Clock>,
     /// Whether the next frame is the first one.
     first_frame: bool,
+    /// Native content-driven height policy for auto-height pop-up surfaces.
+    popup_auto_height: Option<AutoHeightState>,
     /// Whether a frame has been asked for and has not run yet.
     ///
     /// The platform coalesces repeated requests into one frame, so a second request costs nothing
@@ -810,6 +841,7 @@ impl Window {
             held: 0,
             clock,
             first_frame: true,
+            popup_auto_height: None,
             awaiting_frame: std::cell::Cell::new(false),
             gate,
             timers,
@@ -1005,6 +1037,33 @@ impl Window {
     /// The handle a view holds for this window's engines.
     pub fn host_handle(&self) -> &HostHandle {
         &self.host_handle
+    }
+
+    /// Configures or clears native content-driven auto-height settling for a pop-up window.
+    pub(crate) fn set_popup_auto_height(&mut self, policy: Option<PopupAutoHeight>) {
+        match policy {
+            Some(next) => {
+                let reset = self.popup_auto_height.as_ref().is_none_or(|state| {
+                    state.policy != next
+                });
+                if reset {
+                    self.popup_auto_height = Some(AutoHeightState {
+                        policy: next,
+                        last_requested: None,
+                    });
+                }
+            }
+            None => {
+                self.popup_auto_height = None;
+            }
+        }
+    }
+
+    /// Last logical height resolved by native pop-up auto-height settling, if any.
+    pub fn popup_auto_height_resolved(&self) -> Option<f32> {
+        self.popup_auto_height
+            .as_ref()
+            .and_then(|state| state.last_requested)
     }
 
     /// Asks for a frame, unless one has already been asked for and has not run yet.

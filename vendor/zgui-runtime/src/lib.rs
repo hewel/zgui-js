@@ -103,6 +103,7 @@ pub use crate::commands::{
     CloseCallbacks, CloseResponse, WindowCommands, WindowSpec, WindowStatus, WindowToken,
 };
 pub use crate::editing::Editors;
+pub use crate::window::PopupAutoHeight;
 pub use crate::embed::{
     EmbedHost, EmbedMaintenanceCx, EmbedMemoryReport, EmbedSyncCx, EmbedSyncReport, NoEmbeds,
 };

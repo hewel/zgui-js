@@ -10,7 +10,7 @@ export type { Context, Owner, Store, StoreReturn, StoreSetter } from "#solid";
 export { flush } from "./renderer/index.js";
 
 export { renderApp, renderShell } from "./render-app.js";
-export { LayerSurface, PopupSurface, SessionLockSurface, getSessionGeneration, mountShellStylesheet, requestSessionLock, useMonitors } from "./shell.js";
+export { LayerSurface, PopupSurface, SessionLockSurface, WindowSurface, getSessionGeneration, mountShellStylesheet, requestSessionLock, useMonitors } from "./shell.js";
 export { createSpring } from "./spring.js";
 export type { Spring, SpringOptions } from "./spring.js";
 export {
