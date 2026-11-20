@@ -6,6 +6,7 @@ import {
   SessionLockSurface, getSessionGeneration, requestSessionLock,
 } from "@hewel/zgui";
 import type { CanvasCommand, CanvasScene, CanvasTransform, Component, Context, NativeAnimationEvent, NativeChild, NativeContextMenuEvent, NativeFocusOptions, NativeNode, NativePointerBoundaryEvent, NativeRole, NativeTextControlProps, NativeTransitionEvent, NativeViewport, NativeWheelEvent, NativeWindowRect, ParentComponent, Spring, SpringOptions, TextFieldProps, TextAreaProps, VectorProps } from "@hewel/zgui";
+import type { Accessor } from "@hewel/zgui";
 import type { SessionLockRequest, SessionLockState } from "@hewel/zgui";
 
 const Greeting: Component<{ name: string }> = props => <text>{props.name}</text>;
@@ -13,8 +14,10 @@ const Container: ParentComponent = props => <box>{props.children}</box>;
 const [count, setCount] = createSignal(0);
 const springOptions: SpringOptions = { stiffness: 170, damping: 26, mass: 1, precision: 0.01, velocityPrecision: 0.02 };
 const sprungCount: Spring = createSpring(count, springOptions);
-const springValue: number = sprungCount();
-void springValue;
+const sprungAccessor: Accessor<number> = sprungCount;
+const springValue: number = sprungAccessor();
+const jumpResult: void = sprungCount.jump(0);
+void [springValue, jumpResult];
 const [optional, setOptional] = createSignal<string>();
 setOptional();
 const doubled = createMemo(() => count() * 2);
@@ -73,6 +76,8 @@ const tree = <Container>
   <field role="textInput" value={undefined} defaultValue="native" tabIndex={0} />
   <editor role="multilineTextInput" defaultValue={"one\n二"} readOnly />
   <Image src={optional()} ariaLabel="Package icon" style={{ width: "32px", height: "32px" }} />
+  <Image style={{ "object-fit": "cover", "object-position": "center top" }} />
+  <Image style={{ objectFit: "contain", objectPosition: "50% 50%" }} />
   <image src={null} />
   <vector d="M0 0 L8 8 L8 0 Z" viewBox="0 0 16 16" data-icon="save" role="image" ariaLabel="Save" />
   <vector d={null} viewBox={undefined} />

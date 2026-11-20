@@ -39,6 +39,7 @@ Without a ref, capture `const regionOwner = getOwner()` inside the mounted regio
 
 ## Spring motion & wheel input
 
-- **Physics motion**: use `createSpring(targetAccessor, options)` from `@hewel/zgui` (`stiffness`, `damping`, `mass`, `precision`, `initial`) instead of raw `requestAnimationFrame` loops. It integrates with the native frame clock and honors `reducedMotion`.
+- **Physics motion**: use `createSpring(targetAccessor, options)` from `@hewel/zgui` (`stiffness`, `damping`, `mass`, `precision`, `velocityPrecision`) instead of raw `requestAnimationFrame` loops. It integrates with the native frame clock and honors `reducedMotion`.
+- **Reset motion**: `spring.jump(value)` snaps immediately, clears velocity, and animates toward the current target (settling with no frame when already within rest precision of the target). Reduced-motion and disposed springs treat valid jumps as no-ops; non-finite values throw `RangeError` in every mode.
 - **Wheel / scroll events**: attach `onWheel` or `onWheelCapture` on `<box>` elements to handle smooth touchpad or discrete mouse wheel deltas (for example volume/brightness sliders or workspace switching on a Wayland bar).
 - **Budgets**: keep reactive trees and event handlers within QuickJS stack and per-entry wall budgets (`--max-js-stack-bytes`, `maxJsEntryWallMs`), and avoid allocating deeply nested eager portals during initial synchronous mount.

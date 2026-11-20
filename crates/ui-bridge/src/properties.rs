@@ -551,6 +551,7 @@ const CAMEL_PROPERTIES: &[(&str, &str)] = &[
     ("paddingTop", "padding-top"), ("paddingRight", "padding-right"), ("paddingBottom", "padding-bottom"), ("paddingLeft", "padding-left"),
     ("marginTop", "margin-top"), ("marginRight", "margin-right"), ("marginBottom", "margin-bottom"), ("marginLeft", "margin-left"),
     ("minWidth", "min-width"), ("minHeight", "min-height"), ("maxWidth", "max-width"), ("maxHeight", "max-height"),
+    ("objectFit", "object-fit"), ("objectPosition", "object-position"),
     ("backgroundColor", "background-color"), ("borderColor", "border-color"), ("borderWidth", "border-width"), ("borderRadius", "border-radius"),
     ("fontFamily", "font-family"), ("fontSize", "font-size"), ("fontWeight", "font-weight"), ("lineHeight", "line-height"),
     ("boxShadow", "box-shadow"), ("textShadow", "text-shadow"), ("backdropFilter", "backdrop-filter"), ("mixBlendMode", "mix-blend-mode"),

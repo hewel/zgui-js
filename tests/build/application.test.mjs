@@ -79,7 +79,7 @@ test("external consumers typecheck all linked SDK entry points with unchecked in
   const directory = await externalApplication(t);
   await symlink(path.join(workspaceRoot, "packages/build"), path.join(directory, "node_modules/@hewel/zgui-build"), "dir");
   await writeFile(path.join(directory, "src/build-api.ts"), `export { buildApplication } from "@hewel/zgui-build";\n`);
-  await writeFile(path.join(directory, "src/main.tsx"), `import { renderApp, type NativeNode } from "@hewel/zgui";
+  await writeFile(path.join(directory, "src/main.tsx"), `import { createSpring, Image, renderApp, type Accessor, type NativeNode, type Spring } from "@hewel/zgui";
 import { createElement } from "@hewel/zgui/renderer";
 import { Button } from "@hewel/zgui/components";
 import { CHECK, Icon } from "@hewel/zgui/icons";
@@ -87,9 +87,16 @@ import { getResolvedCapabilities } from "@hewel/zgui-services";
 
 export function mount(root: NativeNode) {
   const label = getResolvedCapabilities().imagePrefixes[0] ?? "Available";
+  const spring: Spring = createSpring(() => 1);
+  const opacity: Accessor<number> = spring;
+  const reset: (value: number) => void = spring.jump;
+  reset(0);
   return renderApp(() => [
     createElement("text"),
+    <box style={{ opacity: opacity() }} />,
     Button({ children: Icon({ icon: CHECK, label }) }),
+    <Image style={{ "object-fit": "cover", "object-position": "center top" }} />,
+    <Image style={{ objectFit: "contain", objectPosition: "50% 50%" }} />,
   ], root);
 }
 `);

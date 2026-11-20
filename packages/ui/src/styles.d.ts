@@ -6,6 +6,7 @@ type OrdinaryStyleName =
   | "padding" | "padding-top" | "padding-right" | "padding-bottom" | "padding-left"
   | "margin" | "margin-top" | "margin-right" | "margin-bottom" | "margin-left"
   | "width" | "height" | "min-width" | "min-height" | "max-width" | "max-height"
+  | "object-fit" | "object-position"
   | "color" | "background" | "background-color" | "border" | "border-color" | "border-width" | "border-radius"
   | "font-family" | "font-size" | "font-weight" | "line-height" | "opacity" | "overflow"
   | "box-shadow" | "text-shadow" | "filter" | "backdrop-filter" | "mix-blend-mode" | "isolation"

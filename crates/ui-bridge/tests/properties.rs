@@ -349,6 +349,69 @@ fn documented_object_style_vocabulary_is_accepted_by_the_pinned_native_parser() 
 }
 
 #[test]
+fn image_object_styles_apply_with_kebab_case_and_camel_case_names() {
+    let mut native = NativeProperties::new();
+    let names = BTreeSet::from(["object-fit".into(), "object-position".into()]);
+    for (fit_name, position_name) in [("object-fit", "object-position"), ("objectFit", "objectPosition")] {
+        for fit in ["fill", "contain", "cover", "none", "scale-down"] {
+            let mut seen_positions = BTreeSet::new();
+            for position in ["center top", "50% 50%"] {
+                native.script(&format!(
+                    "__zgui.setProperty(node, 'style', {{'{fit_name}': '{fit}', '{position_name}': '{position}'}}); 'set'"
+                ));
+                let (actual, css) = native.style();
+                assert_eq!(actual, names, "{fit_name}: {fit}; {position_name}: {position}");
+                assert!(
+                    css.contains(&format!("object-fit: {fit};")),
+                    "missing object-fit: {fit}; for {fit_name}/{position_name}; CSS: {css}"
+                );
+                let position_decl = css
+                    .split(';')
+                    .map(str::trim)
+                    .find(|decl| decl.starts_with("object-position:"))
+                    .unwrap_or_else(|| panic!("missing object-position for {fit_name}/{position_name}: {css}"));
+                seen_positions.insert(position_decl.to_owned());
+            }
+            assert_eq!(
+                seen_positions.len(),
+                2,
+                "distinct object-position inputs collapsed for {fit_name}/{position_name} ({fit}): {seen_positions:?}"
+            );
+        }
+        native.script(&format!(
+            "__zgui.setProperty(node, 'style', {{'{fit_name}': null, '{position_name}': undefined}}); 'clear'"
+        ));
+        let remaining = native.style().0;
+        assert!(
+            remaining.is_empty(),
+            "declarations remained after clearing {fit_name}/{position_name}: {remaining:?}"
+        );
+    }
+}
+
+#[test]
+fn image_object_styles_reject_non_strings_without_replacing_inline_style() {
+    let mut native = NativeProperties::new();
+    native.script("__zgui.setProperty(node, 'style', {height: '11px'}); 'set'");
+    let before = native.style();
+    native.script(r#"
+        for (const name of ['object-fit', 'object-position', 'objectFit', 'objectPosition']) {
+            for (const invalid of [1, true]) {
+                try {
+                    __zgui.setProperty(node, 'style', {width: '3px', [name]: invalid});
+                } catch (error) {
+                    if (error.message.startsWith('STYLE_VALUE_INVALID:') && !error.message.includes('STYLE_NAME_INVALID:')) continue;
+                    throw error;
+                }
+                throw Error(`accepted non-string ${typeof invalid} for ${name}`);
+            }
+        }
+        'rejected'
+    "#);
+    assert_eq!(native.style(), before);
+}
+
+#[test]
 fn css_strings_reject_the_entire_recovered_subset() {
     let mut native = NativeProperties::new();
     native.script("__zgui.setProperty(node, 'style', 'height: 11px'); try { __zgui.setProperty(node, 'style', 'unknown-property: nope; width: 10px; height: invalid; --ok: 3px'); } catch {} 'parse'");

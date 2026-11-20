@@ -1,5 +1,6 @@
 import { createEffect, createSignal, getOwner, onCleanup, untrack } from "#solid";
 import { getReducedMotion } from "./nodes.js";
+import { flush } from "./renderer/index.js";
 import type { Accessor } from "./types.js";
 
 /** All options must be positive finite numbers. */
@@ -13,7 +14,16 @@ export interface SpringOptions {
   readonly velocityPrecision?: number;
 }
 
-export type Spring = Accessor<number>;
+export type Spring = Accessor<number> & { readonly jump: (value: number) => void };
+
+function withJump(read: Accessor<number>, reset?: (value: number) => void): Spring {
+  return Object.defineProperty(read, "jump", {
+    value(value: number) {
+      if (!Number.isFinite(value)) throw new RangeError("Spring jump value must be finite");
+      reset?.(value);
+    },
+  }) as Spring;
+}
 
 /** Follow a finite numeric target; retargeting preserves velocity and owner disposal cancels motion. */
 export function createSpring(target: Accessor<number>, {
@@ -29,7 +39,7 @@ export function createSpring(target: Accessor<number>, {
     if (!Number.isFinite(next)) throw new RangeError("Spring target must be finite");
     return next;
   };
-  if (getReducedMotion()) return readTarget;
+  if (getReducedMotion()) return withJump(readTarget);
 
   let destination = untrack(readTarget);
   let position = destination;
@@ -37,6 +47,7 @@ export function createSpring(target: Accessor<number>, {
   let frame: number | undefined;
   let previousTime: number | undefined;
   let disposed = false;
+  let refreshingTarget = false;
   const [value, setValue] = createSignal(position);
 
   const cancelFrame = () => {
@@ -72,9 +83,32 @@ export function createSpring(target: Accessor<number>, {
     cancelFrame();
   });
   createEffect(readTarget, next => {
+    if (refreshingTarget) return;
     destination = next;
     if (atRest()) settle();
     else frame ??= requestAnimationFrame(step);
   });
-  return value;
+  return withJump(() => {
+    value();
+    return position;
+  }, next => {
+    if (disposed) return;
+    // Solid stages same-turn target writes until a flush.
+    if (!refreshingTarget) {
+      refreshingTarget = true;
+      try { flush(); } finally { refreshingTarget = false; }
+    }
+    if (disposed) return;
+    const nextDestination = untrack(readTarget);
+    if (disposed) return;
+    cancelFrame();
+    position = next;
+    velocity = 0;
+    destination = nextDestination;
+    if (atRest()) settle();
+    else {
+      setValue(position);
+      frame = requestAnimationFrame(step);
+    }
+  });
 }
