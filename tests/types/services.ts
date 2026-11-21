@@ -1,15 +1,28 @@
 import {
+  clipboardReadImage,
+  clipboardReadText,
   connectUnixSocket,
   getAuthorizedEndpoint,
   getResolvedCapabilities,
   loadImageBytes,
   loadTextAsset,
   onControlMessage,
+  readClipboardImage,
+  readClipboardText,
   readTextAsset,
   registerImageBytes,
   spawnCommand,
+  writeClipboardImage,
+  writeClipboardText,
 } from "@hewel/zgui-services";
-import type { CommandResult, HostRequest, HostServiceError, ImageHandle, ResolvedCapabilities } from "@hewel/zgui-services";
+import type {
+  ClipboardWriteOptions,
+  CommandResult,
+  HostRequest,
+  HostServiceError,
+  ImageHandle,
+  ResolvedCapabilities,
+} from "@hewel/zgui-services";
 
 const request: HostRequest<string> = readTextAsset("assets/message.txt");
 const loadedText: Promise<string> = loadTextAsset("assets/message.txt");
@@ -148,4 +161,20 @@ onControlMessage(() => ({ callback() {} }));
 
 void [command, buffered, output];
 
+const clipTextReq: HostRequest<string | null> = readClipboardText();
+const clipTextScoped: Promise<string | null> = clipboardReadText();
+const clipImgReq: HostRequest<ImageHandle | null> = readClipboardImage();
+const clipImgScoped: Promise<ImageHandle | null> = clipboardReadImage();
+const clipWriteOpts: ClipboardWriteOptions = { secret: true };
+const clipWriteTextReq: HostRequest<void> = writeClipboardText("hello", clipWriteOpts);
+const clipWriteImgBytes: HostRequest<void> = writeClipboardImage(new Uint8Array([1, 2]), { secret: false });
+const clipWriteImgHandle: HostRequest<void> = writeClipboardImage(directImage, clipWriteOpts);
+// @ts-expect-error Clipboard write text requires a string.
+writeClipboardText(123);
+// @ts-expect-error Clipboard write image accepts Uint8Array or ImageHandle, not raw paths.
+writeClipboardImage("/etc/passwd");
+// @ts-expect-error secret option must be a boolean.
+writeClipboardText("x", { secret: "yes" });
+
+void [clipTextReq, clipTextScoped, clipImgReq, clipImgScoped, clipWriteTextReq, clipWriteImgBytes, clipWriteImgHandle];
 void [promise, cancelled, length, recovered, generic, implicitPromise, asyncCancellation, bytes, element, errorCode, nativeError];

@@ -157,7 +157,13 @@ impl Application {
         {
             let mut surface = RuntimeSurface::new(&mut self.native, cx, ImageChoice::Live);
             if let Err(error) = self.host.sync_reduced_motion(cx.reduced_motion(), &mut surface) { self.fail(cx, error); return; }
-            if let Err(error) = self.host.checkpoint(&mut surface, retry) { self.fail(cx, error); return; }
+            if let Err(error) = self.host.checkpoint(&mut surface, retry.clone()) { self.fail(cx, error); return; }
+            if self.host.drain_clipboard(cx)
+                && let Err(error) = self.host.checkpoint(&mut surface, retry)
+            {
+                self.fail(cx, error);
+                return;
+            }
         }
         self.after_shell(cx);
         // Checkpoint faults can retire a generation; cancel its registrations
@@ -297,7 +303,14 @@ impl AppHandler for Application {
         self.reconcile_control(cx);
     }
     fn wake(&mut self, cx: &dyn PlatformCx, reason: WakeReason) {
-        self.native.wake(cx, reason);
+        match reason {
+            WakeReason::ClipboardRead { serial, result } => {
+                if let Err(result) = self.host.resolve_clipboard_read(serial, result) {
+                    self.native.wake(cx, WakeReason::ClipboardRead { serial, result });
+                }
+            }
+            other => self.native.wake(cx, other),
+        }
         self.after_native(cx);
         if self.failure.borrow().is_none() {
             self.poll_reload(cx);

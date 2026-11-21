@@ -382,3 +382,115 @@ test("commands keep the native handles and cancel owner-scoped work without mask
     else delete globalThis.__zguiServices;
   }
 });
+
+test("clipboard services preserve receiver, options, owner cancellation, and image handle cleanup", async () => {
+  const {
+    clipboardReadImage,
+    clipboardReadText,
+    readClipboardImage,
+    readClipboardText,
+    writeClipboardImage,
+    writeClipboardText,
+  } = await import("@hewel/zgui-services");
+  const { createRoot, flush } = await import("solid-js");
+  const previous = Object.getOwnPropertyDescriptor(globalThis, "__zguiServices");
+  const cancelledError = Object.assign(new Error("clipboard request cancelled"), {
+    code: "Cancelled",
+  });
+  let textCancels = 0;
+  let imageReleases = 0;
+  let lastWriteText = null;
+  let lastWriteImage = null;
+  let resolveLateImage;
+  const host = {
+    readClipboardText() {
+      assert.equal(this, host);
+      let rejectFn;
+      const promise = new Promise((_, reject) => {
+        rejectFn = reject;
+      });
+      return {
+        promise,
+        cancel() {
+          textCancels++;
+          rejectFn(cancelledError);
+        },
+      };
+    },
+    writeClipboardText(text, options) {
+      assert.equal(this, host);
+      lastWriteText = { text, options };
+      return { promise: Promise.resolve(), cancel() {} };
+    },
+    readClipboardImage() {
+      assert.equal(this, host);
+      const promise = new Promise(resolve => {
+        resolveLateImage = resolve;
+      });
+      return { promise, cancel() {} };
+    },
+    writeClipboardImage(source, options) {
+      assert.equal(this, host);
+      lastWriteImage = { source, options };
+      return { promise: Promise.resolve(), cancel() {} };
+    },
+  };
+  try {
+    Object.defineProperty(globalThis, "__zguiServices", { configurable: true, value: host });
+    await writeClipboardText("secret-value", { secret: true }).promise;
+    assert.deepEqual(lastWriteText, { text: "secret-value", options: { secret: true } });
+
+    const bytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47]);
+    await writeClipboardImage(bytes, { secret: false }).promise;
+    assert.deepEqual(lastWriteImage, { source: bytes, options: { secret: false } });
+
+    const raw = readClipboardText();
+    raw.cancel();
+    assert.equal(textCancels, 1);
+    await assert.rejects(raw.promise, err => err === cancelledError);
+
+    let disposeText;
+    const scopedText = createRoot(d => {
+      disposeText = d;
+      return clipboardReadText();
+    });
+    flush();
+    disposeText();
+    flush();
+    assert.equal(textCancels, 2);
+    assert.equal(await scopedText, null);
+
+    let disposeImg;
+    const scopedImg = createRoot(d => {
+      disposeImg = d;
+      return clipboardReadImage();
+    });
+    flush();
+    disposeImg();
+    flush();
+    // Late resolution after owner cleanup must release the ImageHandle immediately.
+    resolveLateImage({
+      src: "zgui-blob://1-1",
+      release() {
+        imageReleases++;
+      },
+    });
+    assert.equal(await scopedImg, null);
+    assert.equal(imageReleases, 1);
+
+    const rawImg = readClipboardImage();
+    resolveLateImage({
+      src: "zgui-blob://1-2",
+      release() {
+        imageReleases++;
+      },
+    });
+    const imgHandle = await rawImg.promise;
+    assert.equal(imgHandle?.src, "zgui-blob://1-2");
+    imgHandle?.release();
+    assert.equal(imageReleases, 2);
+  } finally {
+    if (previous) Object.defineProperty(globalThis, "__zguiServices", previous);
+    else delete globalThis.__zguiServices;
+  }
+});

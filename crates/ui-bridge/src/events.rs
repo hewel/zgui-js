@@ -194,6 +194,18 @@ impl EventSnapshot {
         }
     }
 
+    pub(crate) fn is_user_gesture(&self) -> bool {
+        matches!(
+            self.kind,
+            EventKind::Click
+                | EventKind::PointerDown
+                | EventKind::PointerUp
+                | EventKind::KeyDown
+                | EventKind::KeyUp
+                | EventKind::ContextMenu
+        )
+    }
+
     /// Wrappers are resolved/retargeted by the owner; no raw native IDs enter JS.
     pub(crate) fn to_js<'js>(
         &self, ctx: &Ctx<'js>, target: &Object<'js>, current: &Object<'js>,

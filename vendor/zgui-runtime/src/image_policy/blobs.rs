@@ -83,7 +83,8 @@ impl ImageBlobs {
             .is_some_and(|id| self.assets().contains_key(&id))
     }
 
-    pub(crate) fn lookup(&self, src: &str) -> Option<Arc<[u8]>> {
+    /// Returns the encoded bytes registered for `src`, if still owned by this session.
+    pub fn lookup(&self, src: &str) -> Option<Arc<[u8]>> {
         self.assets().get(&self.id(src)?).cloned()
     }
 

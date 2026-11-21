@@ -419,6 +419,7 @@ impl Session {
                 Startup::Shell { timers, .. } => (None, Work::new_shell(work_session, timers, waker.clone())),
             };
             work.guard_cleanup_with(shell.clone());
+            work.set_gesture_source(bridges.clone());
             Self {
                 disposer: RefCell::new(None), primary, layers: RefCell::new(BTreeMap::new()), bridges, shell, window_controls, work, engine: RefCell::new(None),
                 shell_surfaces: Cell::new(0), retirement_reported: Cell::new(false),
@@ -734,6 +735,27 @@ impl Session {
         self.window_controls.take_commands()
     }
 
+    pub(crate) fn drain_clipboard(&self, clipboard: &dyn zgui::platform::Clipboard) -> bool {
+        if self.shutdown_started.get() {
+            return false;
+        }
+        self.work.drain_clipboard(clipboard)
+    }
+
+    pub(crate) fn owns_clipboard_read(&self, serial: zgui::platform::ClipboardSerial) -> bool {
+        !self.shutdown_started.get() && self.work.owns_clipboard_read(serial)
+    }
+
+    pub(crate) fn finish_clipboard_read(
+        &self,
+        serial: zgui::platform::ClipboardSerial,
+        result: std::result::Result<zgui::platform::ClipboardData, zgui::platform::ClipboardError>,
+    ) {
+        if !self.shutdown_started.get() {
+            self.work.finish_clipboard_read(serial, result);
+        }
+    }
+
     /// Dispose one auxiliary document while the native surface still exists.
     pub(crate) fn detach_layer(&self, id: u32) -> Result<()> {
         let Some(owned) = self.layers.borrow_mut().remove(&id) else { return Ok(()); };
@@ -897,6 +919,10 @@ impl Session {
                     self.bridges.run(engine.turn(), |js| js.with_context(|ctx| self.work.settle(&ctx, completion)))
                         .map_err(|error| self.diagnostic(error))?;
                     true
+                } else if let Some(completion) = self.work.next_clipboard_completion() {
+                    self.bridges.run(engine.turn(), |js| js.with_context(|ctx| self.work.settle_clipboard(&ctx, completion)))
+                        .map_err(|error| self.diagnostic(error))?;
+                    true
                 } else { false },
                 1 => if let Some(call) = self.work.next_call() {
                     self.bridges.run(engine.turn(), |js| js.with_context(|ctx| {
@@ -939,7 +965,7 @@ impl Session {
         let queued = self.has_queued_notifications()?;
         let jobs_pending = engine.is_job_pending();
         if !jobs_pending { self.shell.clear_cleanup_jobs_pending(); }
-        if jobs_pending || queued || self.work.has_ready() || self.work.has_completions() || self.work.has_external() { self.wake_owner(); }
+        if jobs_pending || queued || self.work.has_ready() || self.work.has_completions() || self.work.has_clipboard_completions() || self.work.has_clipboard_ops() || self.work.has_external() { self.wake_owner(); }
         Ok(worked)
     }
 

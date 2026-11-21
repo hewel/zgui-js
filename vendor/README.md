@@ -440,3 +440,13 @@ Regression gate:
 Regression gate:
 
     bun run test:vendor zgui-platform-headless && bun run test:vendor zgui-runtime
+
+## Clipboard PNG image MIME & write-options tracking
+
+`zgui-platform-wayland` extends clipboard MIME negotiation to advertise and serve `image/png` (`ClipboardFormat::Image`) alongside plain text, and advertises/serves `x-kde-passwordManagerHint` (`"secret"`) when `ClipboardWriteOptions::exclude_from_history` is set.
+
+`zgui-platform-headless` records `ClipboardWriteOptions` per clipboard slot on `MemoryClipboard` (`snapshot` and `last_write_options`) for deterministic preview verification, and `zgui-runtime` exposes `ImageBlobs::lookup` as `pub` so host services can read encoded bytes for a session-owned `ImageHandle` without routing pixels through the QuickJS heap.
+
+Regression gate:
+
+    bun run test:vendor zgui-platform-wayland && bun run test:vendor zgui-platform-headless && bun run test:vendor zgui-runtime

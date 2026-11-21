@@ -32,6 +32,24 @@ pub struct Manifest {
 }
 
 crate::schema::object_struct! {
+/// Clipboard capability flags; writes are allowed by default, reads require declaration or user gesture.
+#[derive(Default)]
+#[serde(default, rename_all = "camelCase", deny_unknown_fields)]
+pub struct ClipboardCapabilities {
+    /// Allows reading the clipboard outside an active user-gesture turn.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub read: bool,
+}
+}
+
+impl ClipboardCapabilities {
+    #[must_use]
+    pub(crate) fn is_empty(&self) -> bool {
+        !self.read
+    }
+}
+
+crate::schema::object_struct! {
 /// Host privileges requested by the package, all denied by default.
 #[derive(Default)]
 #[serde(default, rename_all = "camelCase", deny_unknown_fields)]
@@ -57,6 +75,9 @@ pub struct Capabilities {
     /// Allows the session to expose a host control channel.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub control_channel: bool,
+    /// Clipboard read authorization outside user gestures.
+    #[serde(skip_serializing_if = "ClipboardCapabilities::is_empty")]
+    pub clipboard: ClipboardCapabilities,
 }
 }
 
@@ -71,6 +92,7 @@ impl Capabilities {
             && self.named_sockets.is_empty()
             && self.commands.is_empty()
             && !self.control_channel
+            && self.clipboard.is_empty()
     }
 
     fn validate(&self) -> Result<()> {

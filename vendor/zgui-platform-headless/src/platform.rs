@@ -260,6 +260,11 @@ impl Headless {
         &self.clock
     }
 
+    /// The in-memory clipboard, as itself rather than as the contract's view of it.
+    pub fn memory_clipboard(&self) -> &MemoryClipboard {
+        &self.clipboard
+    }
+
     /// The offscreen surface with this identifier, as itself.
     ///
     /// A test asserts against what a surface recorded, and the contract deliberately offers no way

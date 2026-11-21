@@ -73,12 +73,11 @@ impl Clipboard for WaylandClipboard {
         }
         // Owned by this application: the value is here, and asking a process for what it already
         // has would be a round trip to itself — which on a single connection is a deadlock.
-        if let Some(held) = self.selections.owned(kind) {
-            self.selections
-                .answer(serial, Ok(ClipboardData::Text(held)));
+        if let Some(answer) = self.selections.owned(kind, format) {
+            self.selections.answer(serial, answer);
             return serial;
         }
-        match self.selections.start_read(kind) {
+        match self.selections.start_read(kind, format) {
             Ok(pending) => pending.answer_on_a_thread(Arc::clone(&self.selections), serial),
             Err(error) => self.selections.answer(serial, Err(error)),
         }
@@ -93,13 +92,13 @@ impl Clipboard for WaylandClipboard {
         if !mime::is_supported(format) {
             return Err(ClipboardError::UnsupportedFormat(format));
         }
-        if let Some(held) = self.selections.owned(kind) {
-            return Ok(ClipboardData::Text(held));
+        if let Some(answer) = self.selections.owned(kind, format) {
+            return answer;
         }
         // Bounded by what a person would notice, because the thread waiting here is the one that
         // also reads input. Past the bound the caller is told to ask again through the loop.
         self.selections
-            .start_read(kind)?
+            .start_read(kind, format)?
             .answer_now(pipe::IMPATIENCE)
     }
 
@@ -109,22 +108,17 @@ impl Clipboard for WaylandClipboard {
         data: ClipboardData,
         options: ClipboardWriteOptions,
     ) -> Result<(), ClipboardError> {
-        let ClipboardData::Text(text) = data else {
-            return Err(ClipboardError::UnsupportedFormat(data.format()));
-        };
-        // Nothing here can honour a request to keep a value out of a clipboard manager's history:
-        // the protocol has no way to say it, and the managers that exist read every selection.
-        // Recorded rather than silently ignored, so that a password field's copy can be found.
-        if options.exclude_from_history {
-            tracing::debug!(
-                "this desktop has no way to keep a selection out of a clipboard manager's history"
-            );
+        match &data {
+            ClipboardData::Text(_) => {}
+            ClipboardData::Image { media_type, .. } if media_type.eq_ignore_ascii_case(mime::PNG) => {}
+            _ => return Err(ClipboardError::UnsupportedFormat(data.format())),
         }
-        self.selections.take_selection(kind, Some(text))
+        self.selections.take_selection(kind, Some(data), options)
     }
 
     fn clear(&self, kind: ClipboardKind) -> Result<(), ClipboardError> {
-        self.selections.take_selection(kind, None)
+        self.selections
+            .take_selection(kind, None, ClipboardWriteOptions::default())
     }
 }
 

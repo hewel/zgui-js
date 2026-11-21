@@ -6,6 +6,7 @@ use zgui::{platform::{SurfaceId, WakeReason, Waker}, runtime::{AppTimers, ImageB
 use crate::{assets::{AssetError, AssetProvider, AssetSource, Delivery, MAX_SAFE_ID}, package::Package, shell::Shell};
 use crate::runtime_capabilities::ResolvedCapabilities;
 
+mod clipboard;
 mod external;
 
 const MAX_CALLBACKS: usize = 1024;
@@ -90,12 +91,14 @@ pub(crate) struct Work {
     requests: RefCell<HashMap<u64, Pending>>,
     mode: Cell<Mode>,
     cleanup_shell: OnceCell<Rc<Shell>>,
+    gesture_source: OnceCell<Rc<ui_bridge::BridgeGroup>>,
     generation: u64,
     scheduler: Scheduler,
     frame_hosts: RefCell<Vec<FrameHostEntry>>,
     provider: Box<dyn AssetProvider>,
     image_blobs: ImageBlobs,
     direct_images: Cell<DirectImageBudget>,
+    clipboard: clipboard::ClipboardState,
     external: external::External,
     resolved: ResolvedCapabilities,
     wake: Arc<dyn Fn() + Send + Sync>,
@@ -122,14 +125,18 @@ impl Work {
         frame_hosts: Vec<FrameHostEntry>,
     ) -> Rc<Self> {
         let WorkSession { package, generation, assets, resolved } = session;
+        let allow_clipboard_read = package
+            .as_ref()
+            .is_some_and(|pkg| pkg.manifest.capabilities.clipboard.read);
         let external = external::External::new(package.clone(), &assets);
         Rc::new(Self {
             registrations: RefCell::new(HashMap::new()), ready: RefCell::new(VecDeque::new()), requests: RefCell::new(HashMap::new()),
-            mode: Cell::new(Mode::Loading), cleanup_shell: OnceCell::new(), generation, scheduler,
+            mode: Cell::new(Mode::Loading), cleanup_shell: OnceCell::new(), gesture_source: OnceCell::new(), generation, scheduler,
             frame_hosts: RefCell::new(frame_hosts),
             provider: assets.bind(package, generation, wake.clone()),
             image_blobs: ImageBlobs::new(generation),
             direct_images: Cell::default(),
+            clipboard: clipboard::ClipboardState::new(allow_clipboard_read),
             external,
             resolved,
             wake,
@@ -139,6 +146,15 @@ impl Work {
     /// Share the session's disposal barrier with every Work creation path.
     pub(crate) fn guard_cleanup_with(&self, shell: Rc<Shell>) {
         assert!(self.cleanup_shell.set(shell).is_ok(), "work cleanup barrier must be bound once for generation {}", self.generation);
+    }
+
+    /// Share the session's bridge group so gesture-gated services can verify active user input.
+    pub(crate) fn set_gesture_source(&self, bridges: Rc<ui_bridge::BridgeGroup>) {
+        assert!(self.gesture_source.set(bridges).is_ok(), "work gesture source must be bound once for generation {}", self.generation);
+    }
+
+    pub(crate) fn in_user_gesture(&self) -> bool {
+        self.gesture_source.get().is_some_and(|bridges| bridges.in_user_gesture())
     }
 
     /// Registers a live surface as an available frame source.
@@ -330,7 +346,7 @@ impl Work {
         let ready = self.ready.borrow();
         let timers = registrations.values().filter(|item| matches!(item.native, NativeRegistration::Timer(_))).count()
             + ready.iter().filter(|item| matches!(item.arguments, Arguments::Timer)).count();
-        (timers, registrations.len() + ready.len() - timers, self.requests.borrow().len())
+        (timers, registrations.len() + ready.len() - timers, self.requests.borrow().len() + self.clipboard.pending_count())
     }
 
     fn can_create_work(&self) -> bool {
@@ -422,6 +438,7 @@ impl Work {
         services.prop("getResolvedCapabilities", data_property(Func::from(move |ctx: Ctx<'js>| {
             owner(&weak, &ctx)?.capability_snapshot(&ctx)
         })))?;
+        self.install_clipboard(&services)?;
         self.install_external(&services)?;
         ctx.globals().set("__zguiServices", services)?;
         Ok(())
@@ -622,6 +639,7 @@ impl Work {
         if matches!(self.mode.get(), Mode::Stopping | Mode::Disposed) { return; }
         self.mode.set(Mode::Stopping);
         for pending in self.requests.borrow_mut().drain().map(|(_, pending)| pending) { pending.cancelled.store(true, Ordering::Release); }
+        self.clipboard.clear();
         self.provider.stop();
     }
     pub(crate) fn finish_stop(&self) {
@@ -630,6 +648,7 @@ impl Work {
         for registration in self.registrations.borrow_mut().drain().map(|(_, registration)| registration) { self.cancel_native(registration.native); }
         self.ready.borrow_mut().clear();
         self.frame_hosts.borrow_mut().clear();
+        self.clipboard.clear();
         self.external.clear(self.generation);
         self.mode.set(Mode::Disposed);
     }

@@ -90,7 +90,12 @@ impl PreviewHost {
         let retry: Rc<dyn Fn(zgui::view::DocumentId, u64)> = Rc::new(|_, _| {});
         let checked = {
             let mut surface = RuntimeSurface::new(&mut self.native, cx, ImageChoice::PackageOnly);
-            self.host.checkpoint(&mut surface, retry)
+            let first = self.host.checkpoint(&mut surface, retry.clone());
+            if first.is_ok() && self.host.drain_clipboard(cx) {
+                self.host.checkpoint(&mut surface, retry)
+            } else {
+                first
+            }
         };
         if let Err(error) = checked {
             self.fail(cx, Fault::application(error));
@@ -148,7 +153,14 @@ impl AppHandler for PreviewHost {
     fn wake(&mut self, cx: &dyn PlatformCx, reason: WakeReason) {
         if self.fault.is_some() { return; }
         if std::mem::take(&mut self.monitor_change) { self.native.monitors_changed(cx); }
-        self.native.wake(cx, reason);
+        match reason {
+            WakeReason::ClipboardRead { serial, result } => {
+                if let Err(result) = self.host.resolve_clipboard_read(serial, result) {
+                    self.native.wake(cx, WakeReason::ClipboardRead { serial, result });
+                }
+            }
+            other => self.native.wake(cx, other),
+        }
         self.after_native(cx);
     }
     fn idle(&mut self, cx: &dyn PlatformCx) -> IdlePolicy { if self.fault.is_some() { IdlePolicy::Block } else { self.native.idle(cx) } }
@@ -202,7 +214,24 @@ impl Driver {
     pub(super) fn with_sink(profile: &LoadedProfile, package: Rc<Package>, fixture:FixtureDefinition, sink: Box<dyn CheckpointSink>, run_deadline: Instant, stylesheet:String) -> Result<Self, Fault> {
         let mut capabilities = PlatformCapabilities::none();
         capabilities.session_lock = true;
+        capabilities.clipboard_formats = vec![
+            zgui::platform::ClipboardFormat::Text,
+            zgui::platform::ClipboardFormat::Image,
+        ];
         let platform = Headless::new().with_capabilities(capabilities);
+        if let Some(clip) = &fixture.services.clipboard {
+            use zgui::platform::{Clipboard, ClipboardData, ClipboardKind, ClipboardWriteOptions};
+            let opts = if clip.secret { ClipboardWriteOptions::SECRET } else { ClipboardWriteOptions::default() };
+            if let Some(text) = &clip.text {
+                let _ = platform.memory_clipboard().write(ClipboardKind::Standard, ClipboardData::Text(text.clone().into()), opts);
+            } else if let Ok(Some(bytes)) = clip.image_bytes() {
+                let _ = platform.memory_clipboard().write(
+                    ClipboardKind::Standard,
+                    ClipboardData::Image { media_type: "image/png".into(), bytes },
+                    opts,
+                );
+            }
+        }
         if let Some(lock) = &fixture.services.session_lock {
             platform.set_session_lock_decision(match lock.outcome {
                 LockOutcome::Locked => SessionLockDecision::Lock,
@@ -602,6 +631,37 @@ impl Driver {
         self.deadline.set(self.run_deadline.min(Instant::now()+Duration::from_millis(20)));
         self.pipeline.shut_down();
         if self.lock_capable { self.fixtures.record_session_lock(self.session_lock_snapshot()); }
+        {
+            use sha2::{Digest, Sha256};
+            use zgui::platform::{ClipboardData, ClipboardKind};
+            let clip = self.pipeline.platform().memory_clipboard();
+            let snapshot = clip.snapshot(ClipboardKind::Standard);
+            let options = clip.last_write_options(ClipboardKind::Standard);
+            if snapshot.is_some() || options.is_some() {
+                let record = match snapshot {
+                    Some(ClipboardData::Text(text)) => json!({
+                        "format": "text",
+                        "text": text.as_str(),
+                        "excludeFromHistory": options.is_some_and(|o| o.exclude_from_history),
+                    }),
+                    Some(ClipboardData::Image { media_type, bytes }) => {
+                        let digest: String = Sha256::digest(&bytes).iter().map(|b| format!("{b:02x}")).collect();
+                        json!({
+                            "format": "image",
+                            "mediaType": media_type.as_str(),
+                            "byteLength": bytes.len(),
+                            "sha256": digest,
+                            "excludeFromHistory": options.is_some_and(|o| o.exclude_from_history),
+                        })
+                    }
+                    _ => json!({
+                        "format": "empty",
+                        "excludeFromHistory": options.is_some_and(|o| o.exclude_from_history),
+                    }),
+                };
+                self.fixtures.record_clipboard(record);
+            }
+        }
         self.fixtures.dispose();
         let report = self.pipeline.app().session().map(|session| session.retire());
         let telemetry = RuntimeTelemetry::merge(

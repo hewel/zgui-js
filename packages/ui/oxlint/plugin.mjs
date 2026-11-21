@@ -28,6 +28,8 @@ const OWNER_CLEANUP_HELPERS = new Set([
   "bindControlNavigation",
   "onCloseRequest",
   "useWindowState",
+  "clipboardReadText",
+  "clipboardReadImage",
 ]);
 
 const RUNTIME_SERVICE_APIS = new Set([
@@ -39,6 +41,12 @@ const RUNTIME_SERVICE_APIS = new Set([
   "registerImageBytes",
   "readTextAsset",
   "getResolvedCapabilities",
+  "readClipboardText",
+  "clipboardReadText",
+  "writeClipboardText",
+  "readClipboardImage",
+  "clipboardReadImage",
+  "writeClipboardImage",
 ]);
 
 function commentLines(comment) {

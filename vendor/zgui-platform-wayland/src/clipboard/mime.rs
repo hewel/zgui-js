@@ -16,6 +16,15 @@ pub const OFFERED: [&str; 5] = [
     "TEXT",
 ];
 
+/// The media type for a PNG image on the clipboard.
+pub const PNG: &str = "image/png";
+
+/// The media types offered when writing an image selection.
+pub const OFFERED_IMAGE: [&str; 1] = [PNG];
+
+/// Convention used by Linux clipboard managers (KDE Klipper, CopyQ, cliphist, etc.) to skip history.
+pub const PASSWORD_HINT: &str = "x-kde-passwordManagerHint";
+
 /// The media type for a list of files being dragged.
 pub const URI_LIST: &str = "text/uri-list";
 
@@ -48,6 +57,14 @@ pub fn best_text(offered: &[String]) -> Option<String> {
         })
 }
 
+/// The image media type to ask an offer for, given what it says it has.
+pub fn best_image(offered: &[String]) -> Option<String> {
+    offered
+        .iter()
+        .find(|has| has.eq_ignore_ascii_case(PNG))
+        .cloned()
+}
+
 /// Whether an offer carries a list of files.
 pub fn has_files(offered: &[String]) -> bool {
     offered.iter().any(|has| has.eq_ignore_ascii_case(URI_LIST))
@@ -55,12 +72,10 @@ pub fn has_files(offered: &[String]) -> bool {
 
 /// Whether this backend can answer a request for `format` at all.
 ///
-/// Only plain text crosses this boundary, which is what the contract promises and no more. Markup,
-/// images and file lists on the *clipboard* are refused with a reason a caller can fall back from,
-/// rather than answered with an empty value it cannot tell from an empty clipboard. Files being
-/// dragged are a different path and do arrive.
+/// Plain text and PNG images cross this boundary; markup and file lists on the clipboard are
+/// refused with `UnsupportedFormat` so callers never mistake them for an empty clipboard.
 pub const fn is_supported(format: ClipboardFormat) -> bool {
-    matches!(format, ClipboardFormat::Text)
+    matches!(format, ClipboardFormat::Text | ClipboardFormat::Image)
 }
 
 #[cfg(test)]
@@ -114,10 +129,13 @@ mod tests {
     }
 
     #[test]
-    fn only_plain_text_crosses_the_clipboard_boundary() {
+    fn text_and_png_images_cross_the_clipboard_boundary() {
         assert!(is_supported(ClipboardFormat::Text));
+        assert!(is_supported(ClipboardFormat::Image));
         assert!(!is_supported(ClipboardFormat::Html));
-        assert!(!is_supported(ClipboardFormat::Image));
         assert!(!is_supported(ClipboardFormat::FileList));
+        assert_eq!(super::best_image(&offered(&["text/plain", "image/png"])).as_deref(), Some("image/png"));
+        assert_eq!(super::best_image(&offered(&["IMAGE/PNG"])).as_deref(), Some("IMAGE/PNG"));
+        assert_eq!(super::best_image(&offered(&["image/jpeg"])), None);
     }
 }

@@ -1,3 +1,7 @@
+export type ClipboardCapabilities = {
+  read?: boolean;
+};
+
 export type Capabilities = {
   shellSurfaces?: boolean;
   sessionLock?: boolean;
@@ -6,6 +10,7 @@ export type Capabilities = {
   namedSockets?: string[];
   commands?: string[];
   controlChannel?: boolean;
+  clipboard?: ClipboardCapabilities;
 };
 
 export type FontDeclaration = { family: string; path: string };

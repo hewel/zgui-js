@@ -15,6 +15,13 @@ declare const globalThis: {
       options?: BufferedCommandOptions | StreamingCommandOptions,
     ): HostRequest<CommandResult> | CommandStream;
     onControlMessage(handler: ControlMessageHandler): () => void;
+    readClipboardText(): HostRequest<string | null>;
+    writeClipboardText(text: string, options?: ClipboardWriteOptions): HostRequest<void>;
+    readClipboardImage(): HostRequest<ImageHandle | null>;
+    writeClipboardImage(
+      source: Uint8Array | ImageHandle,
+      options?: ClipboardWriteOptions,
+    ): HostRequest<void>;
   };
 };
 
@@ -223,4 +230,102 @@ export function onControlMessage(handler: ControlMessageHandler): () => void {
     onCleanup(unsubscribe);
   }
   return unsubscribe;
+}
+
+/** Options controlling how a clipboard write is advertised to desktop clipboard managers. */
+export interface ClipboardWriteOptions {
+  /** Hint clipboard managers to exclude this entry from persistent history. */
+  readonly secret?: boolean;
+}
+
+/**
+ * Read plain UTF-8 text from the system clipboard.
+ * Requires either `capabilities.clipboard.read` in the sealed manifest or an active
+ * user interaction gesture turn; otherwise throws `HostServiceError` (`E_CAPABILITY`).
+ * Resolves to `null` when the clipboard is empty or holds no text representation.
+ */
+export function readClipboardText(): HostRequest<string | null> {
+  return globalThis.__zguiServices.readClipboardText();
+}
+
+/**
+ * Read clipboard text inside a Solid owner scope, cancelling the pending host request
+ * automatically on owner cleanup without triggering strict unhandled-rejection faults.
+ */
+export function clipboardReadText(): Promise<string | null> {
+  const request = readClipboardText();
+  let cancelled = false;
+  if (getOwner()) {
+    onCleanup(() => {
+      cancelled = true;
+      request.cancel();
+    });
+  }
+  return request.promise.catch((reason: unknown) => {
+    if (cancelled && reason instanceof Error && "code" in reason && reason.code === "Cancelled") {
+      return null;
+    }
+    throw reason;
+  });
+}
+
+/** Write plain UTF-8 text to the system clipboard. Allowed without extra read capability. */
+export function writeClipboardText(
+  text: string,
+  options?: ClipboardWriteOptions,
+): HostRequest<void> {
+  return globalThis.__zguiServices.writeClipboardText(text, options);
+}
+
+/**
+ * Read a PNG image from the system clipboard as a host-owned `ImageHandle`.
+ * Requires either `capabilities.clipboard.read` or an active user interaction gesture.
+ * Release the returned handle explicitly when finished.
+ */
+export function readClipboardImage(): HostRequest<ImageHandle | null> {
+  return globalThis.__zguiServices.readClipboardImage();
+}
+
+/**
+ * Read a clipboard PNG image inside a Solid owner scope, automatically cancelling pending
+ * reads and releasing any resolved `ImageHandle` on owner cleanup.
+ */
+export function clipboardReadImage(): Promise<ImageHandle | null> {
+  const request = readClipboardImage();
+  let disposed = false;
+  let resolvedHandle: ImageHandle | null = null;
+  if (getOwner()) {
+    onCleanup(() => {
+      disposed = true;
+      request.cancel();
+      if (resolvedHandle) {
+        resolvedHandle.release();
+        resolvedHandle = null;
+      }
+    });
+  }
+  return request.promise.then(
+    handle => {
+      if (disposed) {
+        handle?.release();
+        return null;
+      }
+      resolvedHandle = handle;
+      return handle;
+    },
+    (reason: unknown) => {
+      if (disposed && reason instanceof Error && "code" in reason && reason.code === "Cancelled") {
+        return null;
+      }
+      throw reason;
+    },
+  );
+}
+
+/** Write PNG image bytes or a live `ImageHandle` to the system clipboard. */
+export function writeClipboardImage(
+  source: Uint8Array | ImageHandle,
+  options?: ClipboardWriteOptions,
+): HostRequest<void> {
+  return globalThis.__zguiServices.writeClipboardImage(source, options);
 }

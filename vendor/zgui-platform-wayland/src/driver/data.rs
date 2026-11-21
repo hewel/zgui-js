@@ -139,12 +139,10 @@ impl DataSourceHandler for WaylandState {
         _conn: &Connection,
         _qh: &QueueHandle<Self>,
         source: &WlDataSource,
-        _mime: String,
+        mime: String,
         destination: WritePipe,
     ) {
-        // Every media type this application offers carries the same bytes, so which one was asked
-        // for changes nothing: they are five names for one encoding.
-        self.clipboard.selections().serve(source, destination);
+        self.clipboard.selections().serve(source, &mime, destination);
     }
 
     fn cancelled(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, source: &WlDataSource) {
@@ -200,12 +198,12 @@ impl PrimarySelectionSourceHandler for WaylandState {
         _conn: &Connection,
         _qh: &QueueHandle<Self>,
         source: &ZwpPrimarySelectionSourceV1,
-        _mime: String,
+        mime: String,
         destination: WritePipe,
     ) {
         self.clipboard
             .selections()
-            .serve_primary(source, destination);
+            .serve_primary(source, &mime, destination);
     }
 
     fn cancelled(

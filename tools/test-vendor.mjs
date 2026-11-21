@@ -42,10 +42,20 @@ const SUITES = [
   {
     crate: "zgui-platform-wayland",
     args: [
+      "--lib", "clipboard",
+    ],
+  },
+  {
+    crate: "zgui-platform-wayland",
+    args: [
       "--test", "layer_protocol",
       "--test", "session_lock_protocol",
       "--test", "popup_protocol",
     ],
+  },
+  {
+    crate: "zgui-platform-headless",
+    args: ["--lib", "clipboard"],
   },
   {
     crate: "zgui-platform-headless",

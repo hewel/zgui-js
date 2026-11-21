@@ -102,7 +102,89 @@ object_struct! {
         /// Optional one-shot response from the fixture compositor.
         #[serde(rename = "sessionLock", default, deserialize_with = "present_provider", skip_serializing_if = "Option::is_none")]
         pub(crate) session_lock: Option<SessionLockFixture>,
+        /// Optional initial clipboard content seeded into the preview MemoryClipboard.
+        #[serde(default, deserialize_with = "present_provider", skip_serializing_if = "Option::is_none")]
+        pub(crate) clipboard: Option<ClipboardFixture>,
     }
+}
+
+object_struct! {
+    /// Initial clipboard payload seeded into preview MemoryClipboard.
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    pub(crate) struct ClipboardFixture {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub(crate) text: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub(crate) image_base64: Option<String>,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        pub(crate) secret: bool,
+    }
+}
+
+impl ClipboardFixture {
+    pub(crate) fn validate(&self) -> Result<(), String> {
+        if self.text.is_some() && self.image_base64.is_some() {
+            return Err("fixture services.clipboard cannot set both text and imageBase64".into());
+        }
+        if let Some(encoded) = &self.image_base64 {
+            let bytes = decode_base64(encoded)?;
+            if bytes.is_empty() {
+                return Err("fixture services.clipboard.imageBase64 must not be empty".into());
+            }
+        }
+        Ok(())
+    }
+
+    pub(crate) fn image_bytes(&self) -> Result<Option<Vec<u8>>, String> {
+        self.image_base64.as_deref().map(decode_base64).transpose()
+    }
+}
+
+fn decode_base64(input: &str) -> Result<Vec<u8>, String> {
+    let cleaned: Vec<u8> = input
+        .bytes()
+        .filter(|b| !b.is_ascii_whitespace())
+        .collect();
+    if !cleaned.len().is_multiple_of(4) {
+        return Err("invalid base64 length in fixture".into());
+    }
+    let mut out = Vec::with_capacity((cleaned.len() / 4) * 3);
+    let val = |b: u8| -> Result<u8, String> {
+        match b {
+            b'A'..=b'Z' => Ok(b - b'A'),
+            b'a'..=b'z' => Ok(b - b'a' + 26),
+            b'0'..=b'9' => Ok(b - b'0' + 52),
+            b'+' => Ok(62),
+            b'/' => Ok(63),
+            _ => Err(format!("invalid base64 byte: 0x{b:02x}")),
+        }
+    };
+    let (chunks, _) = cleaned.as_chunks::<4>();
+    for (idx, chunk) in chunks.iter().enumerate() {
+        let is_last = (idx + 1) * 4 == cleaned.len();
+        let a = val(chunk[0])?;
+        let b = val(chunk[1])?;
+        if chunk[2] == b'=' {
+            if !is_last || chunk[3] != b'=' {
+                return Err("invalid base64 padding in fixture".into());
+            }
+            out.push((a << 2) | (b >> 4));
+        } else if chunk[3] == b'=' {
+            if !is_last {
+                return Err("invalid base64 padding in fixture".into());
+            }
+            let c = val(chunk[2])?;
+            out.push((a << 2) | (b >> 4));
+            out.push((b << 4) | (c >> 2));
+        } else {
+            let c = val(chunk[2])?;
+            let d = val(chunk[3])?;
+            out.push((a << 2) | (b >> 4));
+            out.push((b << 4) | (c >> 2));
+            out.push((c << 6) | d);
+        }
+    }
+    Ok(out)
 }
 
 object_struct! {
@@ -257,6 +339,7 @@ impl FixtureDefinition {
         if let Some(runtime) = &self.runtime_environment { runtime.validate()?; }
         if let Some(provider) = &self.services.assets { provider.initial_state.validate()?; }
         if let Some(images) = &self.services.images { images.validate()?; }
+        if let Some(clipboard) = &self.services.clipboard { clipboard.validate()?; }
         self.services.validate_external()?;
         for event in &self.events { self.validate_event(&event.update)?; }
         Ok(())
@@ -508,6 +591,11 @@ impl FixtureRuntime {
     /// Record the headless compositor's state after retiring all JS ownership.
     pub(crate) fn record_session_lock(&self, snapshot: Value) {
         self.record(&mut self.state.borrow_mut(), "sessionLock", snapshot);
+    }
+
+    /// Record the headless MemoryClipboard state at teardown for deterministic assertions.
+    pub(crate) fn record_clipboard(&self, snapshot: Value) {
+        self.record(&mut self.state.borrow_mut(), "clipboard", snapshot);
     }
 
     pub(crate) fn dispose(&self) {

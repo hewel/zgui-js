@@ -300,6 +300,30 @@ impl SessionHost {
     pub(crate) fn session(&self, document: DocumentId) -> Option<&Rc<Session>> { self.sessions.get(&document) }
     pub(crate) fn sessions(&self) -> impl Iterator<Item = &Rc<Session>> { self.sessions.values().chain(self.pure_session.iter()) }
 
+    /// Execute queued session clipboard writes and reads against the platform clipboard.
+    pub(crate) fn drain_clipboard(&self, cx: &dyn PlatformCx) -> bool {
+        let mut produced = false;
+        for session in self.sessions() {
+            produced |= session.drain_clipboard(cx.clipboard());
+        }
+        produced
+    }
+
+    /// Route a completed platform clipboard read to the owning session if initiated via JS services.
+    /// Returns `Ok(())` when consumed, or `Err(result)` when the read belongs to the native runtime.
+    pub(crate) fn resolve_clipboard_read(
+        &self,
+        serial: zgui::platform::ClipboardSerial,
+        result: Result<zgui::platform::ClipboardData, zgui::platform::ClipboardError>,
+    ) -> Result<(), Result<zgui::platform::ClipboardData, zgui::platform::ClipboardError>> {
+        if let Some(session) = self.sessions().find(|session| session.owns_clipboard_read(serial)) {
+            session.finish_clipboard_read(serial, result);
+            Ok(())
+        } else {
+            Err(result)
+        }
+    }
+
     /// Deliver a platform event, retiring shell windows before their primary window closes.
     pub(crate) fn surface_event(
         &mut self,

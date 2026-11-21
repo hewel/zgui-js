@@ -33,11 +33,17 @@ pub struct MemoryClipboard {
     /// Identifiers handed to reads that are answered through the loop.
     serials: ClipboardSerials,
     /// What was last copied.
-    standard: Mutex<Option<ClipboardData>>,
+    standard: Mutex<Option<Slot>>,
     /// What was last selected.
-    primary: Mutex<Option<ClipboardData>>,
+    primary: Mutex<Option<Slot>>,
     /// How a started read delivers its answer.
     waker: Mutex<Option<Arc<dyn Waker>>>,
+}
+
+#[derive(Clone, Debug)]
+struct Slot {
+    data: ClipboardData,
+    options: ClipboardWriteOptions,
 }
 
 // By hand: a waker is not `Debug`, and the two slots are what a test wants to see anyway.
@@ -60,8 +66,26 @@ impl MemoryClipboard {
         *self.waker.lock().expect("the clipboard is not poisoned") = Some(waker);
     }
 
+    /// Returns the last data written to `kind`, if any.
+    pub fn snapshot(&self, kind: ClipboardKind) -> Option<ClipboardData> {
+        self.slot(kind)
+            .lock()
+            .expect("the clipboard is not poisoned")
+            .as_ref()
+            .map(|slot| slot.data.clone())
+    }
+
+    /// Returns the write options recorded on the last write to `kind`, if any.
+    pub fn last_write_options(&self, kind: ClipboardKind) -> Option<ClipboardWriteOptions> {
+        self.slot(kind)
+            .lock()
+            .expect("the clipboard is not poisoned")
+            .as_ref()
+            .map(|slot| slot.options)
+    }
+
     /// Which slot a clipboard kind is held in.
-    fn slot(&self, kind: ClipboardKind) -> &Mutex<Option<ClipboardData>> {
+    fn slot(&self, kind: ClipboardKind) -> &Mutex<Option<Slot>> {
         match kind {
             ClipboardKind::Primary => &self.primary,
             _ => &self.standard,
@@ -95,7 +119,8 @@ impl Clipboard for MemoryClipboard {
             .slot(kind)
             .lock()
             .expect("the clipboard is not poisoned")
-            .clone()
+            .as_ref()
+            .map(|slot| slot.data.clone())
             .ok_or(ClipboardError::Empty(kind))?;
         if held.format() == format {
             Ok(held)
@@ -108,12 +133,12 @@ impl Clipboard for MemoryClipboard {
         &self,
         kind: ClipboardKind,
         data: ClipboardData,
-        _options: ClipboardWriteOptions,
+        options: ClipboardWriteOptions,
     ) -> Result<(), ClipboardError> {
         *self
             .slot(kind)
             .lock()
-            .expect("the clipboard is not poisoned") = Some(data);
+            .expect("the clipboard is not poisoned") = Some(Slot { data, options });
         Ok(())
     }
 
@@ -227,5 +252,42 @@ mod tests {
         let first = clipboard.read(ClipboardKind::Standard, ClipboardFormat::Text);
         let second = clipboard.read(ClipboardKind::Standard, ClipboardFormat::Text);
         assert_ne!(first, second);
+    }
+
+    #[test]
+    fn records_write_options_and_supports_image_roundtrip() {
+        let clipboard = MemoryClipboard::default();
+        let png = vec![0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a];
+        clipboard
+            .write(
+                ClipboardKind::Standard,
+                ClipboardData::Image {
+                    media_type: "image/png".into(),
+                    bytes: png.clone().into(),
+                },
+                ClipboardWriteOptions::SECRET,
+            )
+            .expect("accepted");
+
+        assert_eq!(
+            clipboard.last_write_options(ClipboardKind::Standard),
+            Some(ClipboardWriteOptions::SECRET)
+        );
+        let read = clipboard
+            .read_blocking(ClipboardKind::Standard, ClipboardFormat::Image)
+            .expect("image present");
+        assert_eq!(
+            read,
+            ClipboardData::Image {
+                media_type: "image/png".into(),
+                bytes: png.into(),
+            }
+        );
+        assert_eq!(
+            clipboard.read_blocking(ClipboardKind::Standard, ClipboardFormat::Text),
+            Err(zgui_platform::ClipboardError::UnavailableFormat(
+                ClipboardFormat::Text
+            ))
+        );
     }
 }

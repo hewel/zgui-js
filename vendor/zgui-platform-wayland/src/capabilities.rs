@@ -27,7 +27,7 @@ pub fn of(offered: Offered) -> PlatformCapabilities {
     // offers itself and then never starts anything is worse than one that does not offer itself.
     capabilities.drag_source = false;
     capabilities.clipboard_formats = if offered.clipboard {
-        vec![ClipboardFormat::Text]
+        vec![ClipboardFormat::Text, ClipboardFormat::Image]
     } else {
         Vec::new()
     };
@@ -120,6 +120,7 @@ mod tests {
             ..Offered::default()
         });
         assert!(wired.supports_clipboard_format(ClipboardFormat::Text));
+        assert!(wired.supports_clipboard_format(ClipboardFormat::Image));
     }
 
     #[test]

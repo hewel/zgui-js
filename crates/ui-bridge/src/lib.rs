@@ -273,6 +273,20 @@ impl Drop for TurnActiveGuard<'_> {
     }
 }
 
+struct GestureGuard<'a> {
+    bridge: &'a UiBridge,
+    group: Option<Rc<BridgeGroup>>,
+}
+
+impl Drop for GestureGuard<'_> {
+    fn drop(&mut self) {
+        self.bridge.user_gesture_depth.set(self.bridge.user_gesture_depth.get().saturating_sub(1));
+        if let Some(group) = &self.group {
+            group.user_gesture_depth.set(group.user_gesture_depth.get().saturating_sub(1));
+        }
+    }
+}
+
 /// The structural-turn boundary shared by every mount region in one JS engine.
 ///
 /// The group owns its member bridges. Dispose and drop it before destroying the
@@ -281,6 +295,7 @@ impl Drop for TurnActiveGuard<'_> {
 pub struct BridgeGroup {
     bridges: RefCell<Vec<Rc<UiBridge>>>,
     active: Cell<bool>,
+    user_gesture_depth: Cell<u32>,
 }
 
 impl fmt::Debug for BridgeGroup {
@@ -292,6 +307,9 @@ impl fmt::Debug for BridgeGroup {
 impl BridgeGroup {
     /// Creates an empty turn boundary, usable before the first mount region opens.
     pub fn new() -> Self { Self::default() }
+
+    /// Whether a user-initiated input event handler is currently executing in this group.
+    pub fn in_user_gesture(&self) -> bool { self.user_gesture_depth.get() > 0 }
 
     /// Joins a live standalone bridge to this group's turns.
     ///
@@ -415,6 +433,7 @@ pub struct UiBridge {
     overflowed: Cell<bool>,
     group: RefCell<Weak<BridgeGroup>>,
     active: Cell<bool>,
+    user_gesture_depth: Cell<u32>,
     stopping: Cell<bool>,
     disposed: Cell<bool>,
 }
@@ -475,6 +494,7 @@ impl UiBridge {
                 overflowed: Cell::new(false),
                 group: RefCell::new(Weak::new()),
                 active: Cell::new(false),
+                user_gesture_depth: Cell::new(0),
                 stopping: Cell::new(false),
                 disposed: Cell::new(false),
             }
@@ -752,6 +772,7 @@ impl UiBridge {
         let current = self.wrap(ctx, current)?;
         let (object, control) = snapshot.to_js(ctx, &target, &current)?;
         let callback = callback.restore(ctx)?;
+        let _gesture = snapshot.is_user_gesture().then(|| self.enter_user_gesture());
         if let Some(apply) = apply {
             let result = callback.call::<_, Value>((object,));
             apply(control);
@@ -760,6 +781,21 @@ impl UiBridge {
             drop(control);
             callback.call::<_, Value>((object,)).map(|_| ())
         }
+    }
+
+    /// Whether a user-initiated input event handler is currently executing on this bridge.
+    pub fn in_user_gesture(&self) -> bool {
+        self.user_gesture_depth.get() > 0
+            || self.group.borrow().upgrade().is_some_and(|group| group.in_user_gesture())
+    }
+
+    fn enter_user_gesture(&self) -> GestureGuard<'_> {
+        let group = self.group.borrow().upgrade();
+        self.user_gesture_depth.set(self.user_gesture_depth.get().saturating_add(1));
+        if let Some(group) = &group {
+            group.user_gesture_depth.set(group.user_gesture_depth.get().saturating_add(1));
+        }
+        GestureGuard { bridge: self, group }
     }
 
     /// Retiring owners may remove resources, but cannot allocate or register new work.

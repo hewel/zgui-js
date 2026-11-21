@@ -373,6 +373,16 @@ function parseCapabilities(input: unknown, source: string): Capabilities {
         if (typeof value !== "boolean") throw new Error(`${field} must be a boolean`);
         if (value) capabilities[key] = true;
         break;
+      case "clipboard": {
+        if (!value || typeof value !== "object" || Array.isArray(value))
+          throw new Error(`${field} must be an object`);
+        for (const [subKey, subVal] of Object.entries(value as Record<string, unknown>)) {
+          if (subKey !== "read") throw new Error(`Unknown capability: ${field}.${subKey}`);
+          if (typeof subVal !== "boolean") throw new Error(`${field}.read must be a boolean`);
+          if (subVal) capabilities.clipboard = { read: true };
+        }
+        break;
+      }
       case "imagePrefixes":
       case "unixSockets":
       case "commands":
@@ -439,6 +449,7 @@ async function mergeCapabilities(
     const union = new Set(sources.flatMap(source => source[key] ?? []));
     if (union.size) merged[key] = [...union].sort();
   }
+  if (sources.some(source => source.clipboard?.read)) merged.clipboard = { read: true };
   return Object.keys(merged).length ? merged : undefined;
 }
 
