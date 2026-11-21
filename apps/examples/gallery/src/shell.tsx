@@ -23,6 +23,7 @@ export const SECTIONS = [
   "composites",
   "overlays",
   "menus",
+  "workbench",
 ] as const;
 export type SectionId = typeof SECTIONS[number];
 export const SECTION_LABELS: Record<SectionId, string> = {
@@ -33,6 +34,7 @@ export const SECTION_LABELS: Record<SectionId, string> = {
   composites: "Composites",
   overlays: "Overlays",
   menus: "Menus",
+  workbench: "Workbench",
 };
 
 export function Panel(props: {

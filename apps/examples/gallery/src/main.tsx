@@ -13,6 +13,7 @@ import { ChoicesSection } from "./sections/choices.js";
 import { CompositesSection } from "./sections/composites.js";
 import { OverlaysSection } from "./sections/overlays.js";
 import { MenusSection } from "./sections/menus.js";
+import { WorkbenchSection } from "./sections/workbench.js";
 
 export const hostApiVersion = 1;
 
@@ -59,6 +60,7 @@ function GalleryApp() {
             <TabsTrigger testId="tab-composites" value="composites">Composites</TabsTrigger>
             <TabsTrigger testId="tab-overlays" value="overlays">Overlays</TabsTrigger>
             <TabsTrigger testId="tab-menus" value="menus">Menus</TabsTrigger>
+            <TabsTrigger testId="tab-workbench" value="workbench">Workbench</TabsTrigger>
           </TabsList>
           <TabsContent value="atoms">
             <AtomsSection onAction={setLastAction} />
@@ -80,6 +82,9 @@ function GalleryApp() {
           </TabsContent>
           <TabsContent value="menus">
             <MenusSection onAction={setLastAction} />
+          </TabsContent>
+          <TabsContent value="workbench">
+            <WorkbenchSection onAction={setLastAction} />
           </TabsContent>
         </Tabs>
       </column>

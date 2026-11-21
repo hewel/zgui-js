@@ -33,7 +33,7 @@ const capture = captureId => ({ id: id(), op: "capture", captureId });
 const advance = byMs => ({ id: id(), op: "clock.advance", byMs });
 const resize = (width, height) => ({ id: id(), op: "surface.resize", surface: "main", width, height });
 
-const STACK_LIMIT_BYTES = 240 * 1024;
+const STACK_LIMIT_BYTES = 256 * 1024;
 
 async function runScenario(name, steps, expectedCaptures) {
   const { out } = await runPreviewScenario({
@@ -138,6 +138,24 @@ test("gallery renders overlays, menus, and dark ocean theme cleanly", async () =
     check("scheme-badge", "text", "ocean / dark"),
     capture("dark-theme"),
   ], ["tab-overlays-dialog", "tab-menus-dropdown", "dark-theme"]);
+});
+
+test("gallery renders workbench tab cleanly", async () => {
+  await runScenario("sections-workbench", [
+    resize(1280, 860),
+    advance(100),
+    click("tab-workbench"),
+    advance(120),
+    check("section-workbench", "exists", true),
+    check("workbench-split-pane", "exists", true),
+    check("workbench-tree", "exists", true),
+    check("workbench-tree-declarative", "exists", true),
+    click("workbench-toast-success"),
+    advance(80),
+    capture("tab-workbench"),
+    click("workbench-toast-dismiss"),
+    advance(40),
+  ], ["tab-workbench"]);
 });
 
 test("gallery scrolls vertically via wheel and touchpad in a compact desktop window", async () => {

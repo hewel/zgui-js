@@ -28,6 +28,10 @@ import {
   MenubarSeparator, MenubarShortcut, MenubarGroup, MenubarRadioGroup,
   Separator, Skeleton, Slider, Spinner, Switch, Tabs, TabsContent, TabsList, TabsTrigger,
   Textarea, ThemeProvider, Toggle, ToggleGroup, ToggleGroupItem, themeTokens, useTheme,
+  SplitPane, SplitPanePanel, SplitPaneHandle,
+  Select, Combobox,
+  ToastProvider, useToast, toast,
+  TreeView, TreeItem,
 } from "@hewel/zgui/components";
 import type {
   AccordionContentProps, AccordionItemProps, AccordionProps, AccordionSelection,
@@ -57,6 +61,11 @@ import type {
   SwitchProps, Theme, ThemeContext, ThemePreset, ThemeToken, ToggleGroupItemProps,
   TabsActivation, TabsContentProps, TabsListProps, TabsListVariant, TabsProps, TabsTriggerProps,
   ToggleGroupProps, ToggleProps, ToggleSelection,
+  SplitPaneDirection, SplitPaneProps, SplitPanePanelProps, SplitPaneHandleProps,
+  SelectSize, SelectOption, SelectProps, ComboboxProps,
+  ToastCorner, ToastKind, ToastAction, ToastOptions, ToastPromiseMessages,
+  ToastRecord, ToastController, ToastProviderProps,
+  TreeNodeData, TreeItemRenderState, TreeVirtualizeOptions, TreeViewProps, TreeItemProps,
 } from "@hewel/zgui/components";
 import { CHECK, CHEVRON_DOWN, Icon as IconComponent, SEARCH } from "@hewel/zgui/icons";
 import type { IconData, IconProps, IconSize } from "@hewel/zgui/icons";
@@ -487,6 +496,59 @@ const menubar = <Menubar {...menubarProps}>
   </MenubarMenu>
 </Menubar>;
 
+const splitDir: SplitPaneDirection = "horizontal";
+const splitPaneProps: SplitPaneProps = { direction: splitDir, defaultSizes: [30, 70], keyboardStep: 5 };
+const splitPanelProps: SplitPanePanelProps = { minSize: 15, maxSize: 80, collapsible: true, collapsedSize: 0 };
+const splitHandleProps: SplitPaneHandleProps = { withHandle: true, step: 4 };
+const selectSize: SelectSize = "sm";
+const selectOptions: readonly SelectOption<"a" | "b">[] = [
+  { value: "a", label: "Alpha", description: "First" },
+  { value: "b", label: "Beta" },
+];
+const selectProps: SelectProps<"a" | "b"> = { options: selectOptions, size: selectSize, defaultValue: "a" };
+const comboboxProps: ComboboxProps<"a" | "b"> = { options: selectOptions, placeholder: "Find..." };
+const toastCorner: ToastCorner = "top-right";
+const toastKind: ToastKind = "success";
+const toastAction: ToastAction = { label: "Undo", tone: "destructive", onClick: () => {} };
+const toastOpts: ToastOptions = { title: "Saved", kind: toastKind, action: toastAction };
+const toastPromiseMsgs: ToastPromiseMessages<number> = {
+  loading: "Working",
+  success: n => `Done ${n}`,
+  error: err => String(err),
+};
+const toastProviderProps: ToastProviderProps = { corner: toastCorner, maxVisible: 4 };
+const treeNodes: readonly TreeNodeData<{ kind: string }>[] = [
+  { id: "root", label: "Root", meta: { kind: "dir" }, children: [{ id: "leaf", label: "Leaf", meta: { kind: "file" } }] },
+];
+const treeVirt: TreeVirtualizeOptions = { itemHeight: 28, overscan: 4 };
+const treeProps: TreeViewProps<{ kind: string }> = {
+  items: treeNodes,
+  virtualize: treeVirt,
+  renderItem: (node, state: TreeItemRenderState) => <text>{node.label} {state.depth}</text>,
+};
+const treeItemProps: TreeItemProps = { itemId: "child", label: "Child" };
+function ToastConsumer() {
+  const ctrl: ToastController = useToast();
+  const list: readonly ToastRecord[] = ctrl.items();
+  void toast.show(toastOpts);
+  void toast.promise(Promise.resolve(42), toastPromiseMsgs);
+  return <text>{list.length}</text>;
+}
+const workbench = <ToastProvider {...toastProviderProps}>
+  <ToastConsumer />
+  <SplitPane {...splitPaneProps}>
+    <SplitPanePanel {...splitPanelProps}><text>Left</text></SplitPanePanel>
+    <SplitPaneHandle {...splitHandleProps} />
+    <SplitPanePanel><text>Right</text></SplitPanePanel>
+  </SplitPane>
+  <Select {...selectProps} />
+  <Combobox {...comboboxProps} />
+  <TreeView {...treeProps} />
+  <TreeView defaultExpandedIds={["root"]}>
+    <TreeItem {...treeItemProps} />
+  </TreeView>
+</ToastProvider>;
+
 void gallery;
 void composed;
 void controls;
@@ -500,3 +562,4 @@ void hoverCards;
 void menus;
 void contextMenus;
 void menubar;
+void workbench;

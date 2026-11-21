@@ -143,3 +143,20 @@ export type {
   MenubarItemProps, MenubarCheckboxItemProps, MenubarRadioItemProps, MenubarLabelProps,
   MenubarSeparatorProps, MenubarShortcutProps, MenubarGroupProps, MenubarRadioGroupProps,
 } from "./menubar.js";
+export { SplitPane, SplitPanePanel, SplitPaneHandle } from "./split-pane.js";
+export type {
+  SplitPaneDirection, SplitPaneProps, SplitPanePanelProps, SplitPaneHandleProps,
+} from "./split-pane.js";
+export { Select, Combobox } from "./select.js";
+export type {
+  SelectSize, SelectOption, SelectProps, ComboboxProps,
+} from "./select.js";
+export { ToastProvider, useToast, toast } from "./toast.js";
+export type {
+  ToastCorner, ToastKind, ToastAction, ToastOptions, ToastPromiseMessages,
+  ToastRecord, ToastController, ToastProviderProps,
+} from "./toast.js";
+export { TreeView, TreeItem } from "./tree-view.js";
+export type {
+  TreeNodeData, TreeItemRenderState, TreeVirtualizeOptions, TreeViewProps, TreeItemProps,
+} from "./tree-view.js";

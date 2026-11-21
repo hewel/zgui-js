@@ -152,6 +152,16 @@ applied before generation and documented in `packages/ui/upstream/ORIGIN`.
 | `MenubarShortcut` | `packages/ui/src/components/menubar.ts` | Menus | `tests/preview/menubar.test.mjs` |
 | `MenubarGroup` | `packages/ui/src/components/menubar.ts` | Menus | `tests/preview/menubar.test.mjs` |
 | `MenubarRadioGroup` | `packages/ui/src/components/menubar.ts` | Menus | `tests/preview/menubar.test.mjs` |
+| `SplitPane` | `packages/ui/src/components/split-pane.ts` | Workbench | `tests/preview/workbench-components.test.mjs` |
+| `SplitPanePanel` | `packages/ui/src/components/split-pane.ts` | Workbench | `tests/preview/workbench-components.test.mjs` |
+| `SplitPaneHandle` | `packages/ui/src/components/split-pane.ts` | Workbench | `tests/preview/workbench-components.test.mjs` |
+| `Select` | `packages/ui/src/components/select.ts` | Workbench | `tests/preview/workbench-components.test.mjs` |
+| `Combobox` | `packages/ui/src/components/select.ts` | Workbench | `tests/preview/workbench-components.test.mjs` |
+| `ToastProvider` | `packages/ui/src/components/toast.ts` | Workbench & Shell | `tests/preview/workbench-components.test.mjs` |
+| `useToast` | `packages/ui/src/components/toast.ts` | Workbench | `tests/preview/workbench-components.test.mjs` |
+| `toast` | `packages/ui/src/components/toast.ts` | Workbench | `tests/preview/workbench-components.test.mjs` |
+| `TreeView` | `packages/ui/src/components/tree-view.ts` | Workbench | `tests/preview/workbench-components.test.mjs` |
+| `TreeItem` | `packages/ui/src/components/tree-view.ts` | Workbench | `tests/preview/workbench-components.test.mjs` |
 
 ## Gallery `testId` Vocabulary
 
@@ -168,6 +178,7 @@ Dynamic preset items also expose `preset-${name}` (`preset-base`, `preset-ocean`
 | `tab-composites` | `apps/examples/gallery/src/main.tsx` | Composites section tab trigger |
 | `tab-overlays` | `apps/examples/gallery/src/main.tsx` | Overlays section tab trigger |
 | `tab-menus` | `apps/examples/gallery/src/main.tsx` | Menus section tab trigger |
+| `tab-workbench` | `apps/examples/gallery/src/main.tsx` | Workbench section tab trigger |
 | `last-action` | `apps/examples/gallery/src/shell.tsx` | Action log pill in masthead |
 | `preset-trigger` | `apps/examples/gallery/src/shell.tsx` | Theme preset dropdown trigger |
 | `preset-menu` | `apps/examples/gallery/src/shell.tsx` | Theme preset dropdown content |
@@ -209,6 +220,21 @@ Dynamic preset items also expose `preset-${name}` (`preset-base`, `preset-ocean`
 | `menus-editor-view` | `apps/examples/gallery/src/sections/menus.tsx` | View menubar trigger |
 | `menus-editor-view-content` | `apps/examples/gallery/src/sections/menus.tsx` | View menubar popup |
 | `menus-editor-spacious` | `apps/examples/gallery/src/sections/menus.tsx` | Spacious density radio item |
+| `section-workbench` | `apps/examples/gallery/src/sections/workbench.tsx` | Workbench tab section grid |
+| `workbench-split-pane` | `apps/examples/gallery/src/sections/workbench.tsx` | Draggable horizontal split pane |
+| `workbench-split-left` | `apps/examples/gallery/src/sections/workbench.tsx` | Left split pane width readout badge |
+| `workbench-split-handle` | `apps/examples/gallery/src/sections/workbench.tsx` | Split pane resize handle |
+| `workbench-split-right` | `apps/examples/gallery/src/sections/workbench.tsx` | Right split pane width readout badge |
+| `workbench-select` | `apps/examples/gallery/src/sections/workbench.tsx` | Engine Select dropdown trigger |
+| `workbench-select-value` | `apps/examples/gallery/src/sections/workbench.tsx` | Selected engine readout badge |
+| `workbench-combobox` | `apps/examples/gallery/src/sections/workbench.tsx` | Searchable engine Combobox root |
+| `workbench-combobox-value` | `apps/examples/gallery/src/sections/workbench.tsx` | Combobox selected value readout badge |
+| `workbench-toast-success` | `apps/examples/gallery/src/sections/workbench.tsx` | Trigger success toast with Undo action |
+| `workbench-toast-error` | `apps/examples/gallery/src/sections/workbench.tsx` | Trigger error alert toast |
+| `workbench-toast-dismiss` | `apps/examples/gallery/src/sections/workbench.tsx` | Dismiss all active toasts |
+| `workbench-tree-selected` | `apps/examples/gallery/src/sections/workbench.tsx` | Active TreeView selection badge |
+| `workbench-tree` | `apps/examples/gallery/src/sections/workbench.tsx` | Data-driven workspace TreeView |
+| `workbench-tree-declarative` | `apps/examples/gallery/src/sections/workbench.tsx` | Declarative TreeItem outline TreeView |
 
 ## Unported Upstream Stylesheets
 
@@ -219,7 +245,6 @@ Upstream stylesheets synced into `packages/ui/src/components/generated/` that ar
 - `CalendarStyle`
 - `CarouselStyle`
 - `ChartStyle`
-- `ComboboxStyle`
 - `CommandStyle`
 - `DataTableStyle`
 - `DatePickerStyle`
@@ -231,15 +256,12 @@ Upstream stylesheets synced into `packages/ui/src/components/generated/` that ar
 - `NativeSelectStyle`
 - `NavigationMenuStyle`
 - `PaginationStyle`
-- `ResizableStyle`
 - `ScrollAreaStyle`
-- `SelectStyle`
 - `SheetStyle`
 - `SidebarBandStyle`
 - `SidebarMenuStyle`
 - `SidebarStyle`
 - `TableStyle`
-- `ToastStyle`
 - `VirtualListStyle`
 
 ## Interactive Statecharts
