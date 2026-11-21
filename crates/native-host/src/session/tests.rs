@@ -1492,3 +1492,37 @@ fn retire_prioritizes_unreported_contract_over_cleanup_and_skips_reported_contra
     assert_eq!(cleanup.message, "cleanup after contract");
     assert!(cleanup.stack.as_deref().unwrap().contains("app.mjs"));
 }
+
+#[test]
+fn telemetry_samples_live_js_heap_before_disposal_and_post_dispose_separately() {
+    let fixture = Fixture::new(r#"
+        export const hostApiVersion = 1;
+        export function mount(root) {
+            let retained = Array.from({ length: 4000 }, (_, i) => ({ index: i, label: 'item-' + i }));
+            const text = __zgui.createTextNode(String(retained.length));
+            __zgui.insertNode(root, text, null);
+            return () => {
+                retained = null;
+                __zgui.clearRoot(root);
+            };
+        }
+    "#, "");
+    let native = Native::new();
+    let session = native.prepare(fixture.package(), 1).unwrap();
+    session.mount().unwrap();
+    let report = session.retire();
+    let telemetry = report.telemetry.expect("retirement records telemetry");
+    assert!(
+        telemetry.js_heap_live_bytes > telemetry.js_heap_post_dispose_bytes,
+        "live pre-disposal heap ({}) must exceed post-disposal heap ({})",
+        telemetry.js_heap_live_bytes,
+        telemetry.js_heap_post_dispose_bytes,
+    );
+    assert!(telemetry.js_heap_bytes >= telemetry.js_heap_live_bytes);
+    #[cfg(target_os = "linux")]
+    {
+        let proc_mem = telemetry.process_memory.expect("Linux samples /proc/self/smaps_rollup");
+        assert!(proc_mem.rss_bytes > 0);
+        assert!(proc_mem.pss_bytes > 0);
+    }
+}

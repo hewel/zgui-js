@@ -220,11 +220,42 @@ pub(crate) struct SessionRetirement {
     pub telemetry: Option<RuntimeTelemetry>,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct ProcessMemory {
+    pub rss_bytes: u64,
+    pub pss_bytes: u64,
+    pub pss_anon_bytes: u64,
+    pub pss_file_bytes: u64,
+    pub private_dirty_bytes: u64,
+}
+
+impl ProcessMemory {
+    fn merge(current: Option<Self>, next: Option<Self>) -> Option<Self> {
+        match (current, next) {
+            (None, other) | (other, None) => other,
+            (Some(a), Some(b)) => Some(Self {
+                rss_bytes: a.rss_bytes.max(b.rss_bytes),
+                pss_bytes: a.pss_bytes.max(b.pss_bytes),
+                pss_anon_bytes: a.pss_anon_bytes.max(b.pss_anon_bytes),
+                pss_file_bytes: a.pss_file_bytes.max(b.pss_file_bytes),
+                private_dirty_bytes: a.private_dirty_bytes.max(b.private_dirty_bytes),
+            }),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct RuntimeTelemetry {
     pub max_entry_duration: Duration,
+    /// Peak QuickJS heap observed while the session was live (mount / pre-disposal).
     pub js_heap_bytes: u64,
+    /// Live QuickJS heap sampled immediately before teardown disposers ran.
+    pub js_heap_live_bytes: u64,
+    /// Residual QuickJS heap sampled after teardown disposers and bridge cleanup.
+    pub js_heap_post_dispose_bytes: u64,
     pub js_stack_limit_bytes: usize,
+    /// Linux `/proc/self/smaps_rollup` process memory snapshot sampled before disposal.
+    pub process_memory: Option<ProcessMemory>,
 }
 
 impl RuntimeTelemetry {
@@ -234,7 +265,10 @@ impl RuntimeTelemetry {
             (Some(a), Some(b)) => Some(Self {
                 max_entry_duration: a.max_entry_duration.max(b.max_entry_duration),
                 js_heap_bytes: a.js_heap_bytes.max(b.js_heap_bytes),
+                js_heap_live_bytes: a.js_heap_live_bytes.max(b.js_heap_live_bytes),
+                js_heap_post_dispose_bytes: a.js_heap_post_dispose_bytes.max(b.js_heap_post_dispose_bytes),
                 js_stack_limit_bytes: b.js_stack_limit_bytes.max(a.js_stack_limit_bytes),
+                process_memory: ProcessMemory::merge(a.process_memory, b.process_memory),
             }),
         }
     }
@@ -685,6 +719,7 @@ impl Session {
             let nodes = self.primary().map_or(0, |primary| primary.bridge.live_count());
             eprintln!("mounted: package={} build={} nodes={nodes}", package.manifest.id, package.manifest.build_id);
         }
+        self.record_live_telemetry(engine);
         self.snapshot();
         self.work.mounted();
         self.check_contract()?;
@@ -1157,6 +1192,18 @@ impl Session {
     pub(crate) fn dispose(&self, popups_in_close_order: impl IntoIterator<Item = u32>) {
         if self.retired.borrow().is_some() { return; }
         let before = self.counts();
+        let pre_dispose_snapshot = self.engine.borrow().as_ref().map(|engine| {
+            let live_heap = engine.memory_usage_bytes();
+            RuntimeTelemetry {
+                max_entry_duration: engine.max_entry_duration(),
+                js_heap_bytes: live_heap,
+                js_heap_live_bytes: live_heap,
+                js_heap_post_dispose_bytes: 0,
+                js_stack_limit_bytes: engine.stack_limit_bytes(),
+                process_memory: sample_process_memory(),
+            }
+        });
+        self.telemetry.set(RuntimeTelemetry::merge(self.telemetry.get(), pre_dispose_snapshot));
         self.shutdown_started.set(true);
         self.hide_lock_ui();
         self.bridges.begin_stop();
@@ -1245,15 +1292,60 @@ impl Session {
         report
     }
 
+    fn record_live_telemetry(&self, engine: &JsRuntime) {
+        let live_heap = engine.memory_usage_bytes();
+        let sample = RuntimeTelemetry {
+            max_entry_duration: engine.max_entry_duration(),
+            js_heap_bytes: live_heap,
+            js_heap_live_bytes: live_heap,
+            js_heap_post_dispose_bytes: 0,
+            js_stack_limit_bytes: engine.stack_limit_bytes(),
+            process_memory: None,
+        };
+        self.telemetry.set(RuntimeTelemetry::merge(self.telemetry.get(), Some(sample)));
+    }
+
     fn snapshot_telemetry(engine: &JsRuntime) -> RuntimeTelemetry {
+        let post_dispose = engine.memory_usage_bytes();
         RuntimeTelemetry {
             max_entry_duration: engine.max_entry_duration(),
-            js_heap_bytes: engine.memory_usage_bytes(),
+            js_heap_bytes: post_dispose,
+            js_heap_live_bytes: 0,
+            js_heap_post_dispose_bytes: post_dispose,
             js_stack_limit_bytes: engine.stack_limit_bytes(),
+            process_memory: None,
         }
     }
 }
 impl Drop for Session { fn drop(&mut self) { let _ = self.retire(); } }
+
+fn sample_process_memory() -> Option<ProcessMemory> {
+    #[cfg(target_os = "linux")]
+    {
+        let text = std::fs::read_to_string("/proc/self/smaps_rollup").ok()?;
+        let mut memory = ProcessMemory::default();
+        let mut saw_rss = false;
+        for line in text.lines() {
+            let Some((key, rest)) = line.split_once(':') else { continue; };
+            let Some(kb_str) = rest.split_whitespace().next() else { continue; };
+            let Ok(kb) = kb_str.parse::<u64>() else { continue; };
+            let bytes = kb.saturating_mul(1024);
+            match key {
+                "Rss" => { memory.rss_bytes = bytes; saw_rss = true; }
+                "Pss" => memory.pss_bytes = bytes,
+                "Pss_Anon" => memory.pss_anon_bytes = bytes,
+                "Pss_File" => memory.pss_file_bytes = bytes,
+                "Private_Dirty" => memory.private_dirty_bytes = bytes,
+                _ => {}
+            }
+        }
+        saw_rss.then_some(memory)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        None
+    }
+}
 
 fn is_css_generic_font_family(name: &str) -> bool {
     matches!(

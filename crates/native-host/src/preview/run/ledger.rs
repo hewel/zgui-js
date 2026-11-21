@@ -247,20 +247,28 @@ impl RunLedger {
                 held.bytes("steps.jsonl","steps",&json_lines(&steps))?;
                 held.bytes("diagnostics.jsonl","diagnostics",&json_lines(&diagnostics))?;
                 if let Some(fixtures)=fixtures { held.json("services.json","fixture-services",&fixtures.trace())?; }
+                let process_memory = telemetry.and_then(|item| item.process_memory);
                 held.json("metrics.json","metrics",&json!({
                     "wallDurationUs":started.elapsed().as_micros(),
                     "nativeFrames":frames,
                     "captures":captures,
                     "maxJsEntryDurationUs":telemetry.map(|item|item.max_entry_duration.as_micros()),
                     "jsHeapBytes":telemetry.map(|item|item.js_heap_bytes),
+                    "jsHeapLiveBytes":telemetry.map(|item|item.js_heap_live_bytes),
+                    "jsHeapPostDisposeBytes":telemetry.map(|item|item.js_heap_post_dispose_bytes),
                     "jsStackLimitBytes":telemetry.map(|item|item.js_stack_limit_bytes),
+                    "rssBytes":process_memory.map(|item|item.rss_bytes),
+                    "pssBytes":process_memory.map(|item|item.pss_bytes),
+                    "pssAnonBytes":process_memory.map(|item|item.pss_anon_bytes),
+                    "pssFileBytes":process_memory.map(|item|item.pss_file_bytes),
+                    "privateDirtyBytes":process_memory.map(|item|item.private_dirty_bytes),
                     "availability":{
                         "wallDuration":true,
                         "nativeFrames":true,
                         "jsHeap":telemetry.is_some(),
                         "jsEntryDuration":telemetry.is_some(),
                         "mutationCost":false,
-                        "rss":false
+                        "rss":process_memory.is_some()
                     }
                 }))?;
                 held.seal_worker()
