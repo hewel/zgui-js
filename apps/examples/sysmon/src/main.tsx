@@ -1,14 +1,18 @@
 import {
   For,
   Show,
+  VirtualList,
   createCanvasScene,
   createEffect,
+  createInterval,
   createMemo,
   createSignal,
   createSpring,
+  getReducedMotion,
   observeGeometry,
   onCleanup,
   renderApp,
+  setReducedMotion,
 } from "@hewel/zgui";
 import type { NativeNode, NativeScrollPosition } from "@hewel/zgui";
 import {
@@ -39,7 +43,7 @@ import {
 import type { ColorScheme, ThemePreset } from "@hewel/zgui/components";
 import { SEARCH } from "@hewel/zgui/icons";
 import { getResolvedCapabilities, onControlMessage, spawnCommand } from "@hewel/zgui-services";
-import type { CommandStream, HostRequest, JsonValue } from "@hewel/zgui-services";
+import type { CommandStream, HostRequest } from "@hewel/zgui-services";
 import { buildGaugeCommands, buildTimelineCommands } from "./charts.js";
 import {
   formatGiB,
@@ -54,6 +58,7 @@ import type { CpuSample, DiskRow, MemoryStats, ProcessRow, ProcessSortKey } from
 type SysmonTab = "overview" | "processes" | "storage";
 
 const PRESETS: readonly ThemePreset[] = ["base", "ocean", "midnight", "ember"];
+const REFRESH_RATES = [1000, 2000, 5000] as const;
 
 export const hostApiVersion = 1;
 
@@ -94,6 +99,7 @@ function SysmonApp() {
   const [preset, setPreset] = createSignal<ThemePreset>("ocean");
   const [tab, setTab] = createSignal<SysmonTab>("overview");
   const [live, setLive] = createSignal(true);
+  const [refreshMs, setRefreshMs] = createSignal<number>(2000);
   const [kernel, setKernel] = createSignal("Probing host...");
   const [samples, setSamples] = createSignal<readonly CpuSample[]>([]);
   const [memory, setMemory] = createSignal<MemoryStats | null>(null);
@@ -105,7 +111,6 @@ function SysmonApp() {
   const [query, setQuery] = createSignal("");
   const [sortBy, setSortBy] = createSignal<ProcessSortKey>("cpu");
   const [sortDesc, setSortDesc] = createSignal(true);
-  const [rowCap, setRowCap] = createSignal<25 | 100 | 250>(100);
   const [selectedProc, setSelectedProc] = createSignal<ProcessRow | null>(null);
   const [scrollInfo, setScrollInfo] = createSignal<NativeScrollPosition | null>(null);
 
@@ -178,6 +183,9 @@ function SysmonApp() {
   runBuffered("/usr/bin/uname", ["-srm"], out => setKernel(out.trim()));
   refreshSnapshot();
 
+  // Owner-scoped polling via createInterval (#43): pauses cleanly when stream is paused.
+  createInterval(refreshSnapshot, () => (live() ? refreshMs() : false));
+
   let streamHandle: CommandStream | null = null;
   let vmstatLines = 0;
 
@@ -200,7 +208,6 @@ function SysmonApp() {
           if (vmstatLines === 1 && samples().length > 0) return;
           setSamples(prev => [...prev.slice(-59), parsed]);
           setTickCount(n => n + 1);
-          if (vmstatLines % 2 === 0) refreshSnapshot();
         },
         onStderr(line) {
           if (line.trim()) setErrorMsg(`vmstat: ${line.trim()}`);
@@ -223,7 +230,8 @@ function SysmonApp() {
     pending.clear();
   });
 
-  onControlMessage((args): JsonValue => {
+  // Multi-branch object returns & ResolvedCapabilities work directly with JsonValue (#46).
+  onControlMessage(args => {
     const [cmd, arg] = args;
     if (cmd === "refresh") {
       refreshSnapshot();
@@ -241,15 +249,13 @@ function SysmonApp() {
       setTab(arg);
       return { tab: arg };
     }
-    const caps = getResolvedCapabilities();
     return {
       kernel: kernel(),
       live: live(),
       ticks: tickCount(),
       cpu: latest()?.total ?? null,
       processCount: processes().length,
-      imagePrefixes: caps.imagePrefixes,
-      unixSockets: caps.unixSockets,
+      capabilities: getResolvedCapabilities(),
     };
   });
 
@@ -258,7 +264,7 @@ function SysmonApp() {
     const base = q
       ? processes().filter(p => p.command.toLowerCase().includes(q) || String(p.pid).includes(q))
       : processes();
-    return sortProcesses(base, sortBy(), sortDesc()).slice(0, rowCap());
+    return sortProcesses(base, sortBy(), sortDesc());
   });
 
   const toggleSort = (key: ProcessSortKey) => {
@@ -312,6 +318,13 @@ function SysmonApp() {
             </Button>
             <Button size="sm" variant="outline" onClick={resetSprings}>
               Spring.jump(0)
+            </Button>
+            <Button
+              size="sm"
+              variant={getReducedMotion() ? "default" : "outline"}
+              onClick={() => setReducedMotion(!getReducedMotion())}
+            >
+              {getReducedMotion() ? "Motion: Reduced" : "Motion: Full"}
             </Button>
             <Button size="sm" variant="outline" onClick={cyclePreset}>
               {`Preset: ${preset()}`}
@@ -384,9 +397,15 @@ function SysmonApp() {
           label="System monitor views"
         >
           <TabsList label="System monitor views">
-            <TabsTrigger value="overview">CPU Timeline</TabsTrigger>
-            <TabsTrigger value="processes">{`Processes (${processes().length})`}</TabsTrigger>
-            <TabsTrigger value="storage">{`Storage (${disks().length})`}</TabsTrigger>
+            <TabsTrigger testId="sysmon-tab-overview" value="overview">
+              CPU Timeline
+            </TabsTrigger>
+            <TabsTrigger testId="sysmon-tab-processes" value="processes">
+              {`Processes (${processes().length})`}
+            </TabsTrigger>
+            <TabsTrigger testId="sysmon-tab-storage" value="storage">
+              {`Storage (${disks().length})`}
+            </TabsTrigger>
           </TabsList>
 
           <TabsContent value="overview">
@@ -397,8 +416,7 @@ function SysmonApp() {
                     Live 60-Second CPU Telemetry (CanvasScene)
                   </text>
                   <text class="muted">
-                    Driven by streaming spawnCommand("/usr/bin/vmstat", ["1"]) with rounded stroke
-                    caps &amp; joins.
+                    Streaming vmstat 1 + createInterval() snapshot polling ({refreshMs() / 1000}s).
                   </text>
                 </column>
                 <row class="legend-row">
@@ -490,28 +508,18 @@ function SysmonApp() {
                     PID
                   </Button>
                   <Separator orientation="vertical" />
-                  <text class="muted">Rows:</text>
-                  <Button
-                    size="xs"
-                    variant={rowCap() === 25 ? "default" : "outline"}
-                    onClick={() => setRowCap(25)}
-                  >
-                    25
-                  </Button>
-                  <Button
-                    size="xs"
-                    variant={rowCap() === 100 ? "default" : "outline"}
-                    onClick={() => setRowCap(100)}
-                  >
-                    100
-                  </Button>
-                  <Button
-                    size="xs"
-                    variant={rowCap() === 250 ? "default" : "outline"}
-                    onClick={() => setRowCap(250)}
-                  >
-                    250
-                  </Button>
+                  <text class="muted">Poll:</text>
+                  <For each={REFRESH_RATES}>
+                    {ms => (
+                      <Button
+                        size="xs"
+                        variant={refreshMs() === ms ? "default" : "outline"}
+                        onClick={() => setRefreshMs(ms)}
+                      >
+                        {`${ms / 1000}s`}
+                      </Button>
+                    )}
+                  </For>
                 </row>
               </row>
 
@@ -524,29 +532,41 @@ function SysmonApp() {
                 <text>STAT</text>
               </box>
 
-              <scroll class="proc-scroll" ref={bindScroll} testId="sysmon-proc-scroll">
-                <For each={filteredProcesses()}>
-                  {proc => (
-                    <box
-                      class="proc-row"
-                      role="button"
-                      tabIndex={0}
-                      onClick={() => setSelectedProc(proc)}
-                    >
-                      <text>{String(proc.pid)}</text>
-                      <text class="proc-cmd">{proc.command}</text>
-                      <text>{proc.cpu.toFixed(1)}</text>
-                      <text>{proc.mem.toFixed(1)}</text>
-                      <text>{`${proc.rssMb.toFixed(1)}M`}</text>
-                      <text>{proc.stat}</text>
-                    </box>
-                  )}
-                </For>
-              </scroll>
+              <VirtualList
+                class="proc-scroll"
+                ref={bindScroll}
+                testId="sysmon-proc-scroll"
+                each={filteredProcesses()}
+                keyed={p => p.pid}
+                itemHeight={32}
+                overscan={6}
+                initialHeight={360}
+                fallback={
+                  <box style={{ padding: "16px" }}>
+                    <text class="muted">No matching processes.</text>
+                  </box>
+                }
+              >
+                {proc => (
+                  <box
+                    class="proc-row"
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => setSelectedProc(proc())}
+                  >
+                    <text>{String(proc().pid)}</text>
+                    <text class="proc-cmd">{proc().command}</text>
+                    <text>{proc().cpu.toFixed(1)}</text>
+                    <text>{proc().mem.toFixed(1)}</text>
+                    <text>{`${proc().rssMb.toFixed(1)}M`}</text>
+                    <text>{proc().stat}</text>
+                  </box>
+                )}
+              </VirtualList>
 
               <row style={{ "justify-content": "space-between", "align-items": "center" }}>
                 <text class="muted">
-                  {`Showing ${filteredProcesses().length} of ${processes().length} processes (click any row to inspect)`}
+                  {`VirtualList: ${filteredProcesses().length} of ${processes().length} live processes (all mounted lazily)`}
                 </text>
                 <text class="muted mono">
                   {scrollInfo()

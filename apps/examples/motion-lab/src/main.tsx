@@ -1,14 +1,16 @@
 import {
   For,
-  Show,
+  VirtualGrid,
   createCanvasScene,
   createEffect,
   createMemo,
   createSignal,
   createSpring,
+  getReducedMotion,
   getWindowRect,
   observeGeometry,
   renderApp,
+  setReducedMotion,
 } from "@hewel/zgui";
 import type {
   CanvasTransform,
@@ -22,6 +24,7 @@ import {
   Badge,
   Button,
   Separator,
+  Slider,
   Tabs,
   TabsContent,
   TabsList,
@@ -60,18 +63,24 @@ export function mount(root: NativeNode): () => void {
   return renderApp(() => <MotionLabApp />, root);
 }
 
-function SpringArena(props: { preset: SpringPreset; dark: () => boolean }) {
+function SpringArena(props: { dark: () => boolean }) {
+  const [presetId, setPresetId] = createSignal<string>("bouncy");
+  const [stiffness, setStiffness] = createSignal(180);
+  const [damping, setDamping] = createSignal(9);
+  const [mass, setMass] = createSignal(1);
+
   const [targetX, setTargetX] = createSignal(280);
   const [targetY, setTargetY] = createSignal(150);
   const [pulseTarget, setPulseTarget] = createSignal(0);
   const [zoom, setZoom] = createSignal(1);
   const [dragging, setDragging] = createSignal(false);
   const [pointerNote, setPointerNote] = createSignal(
-    "Click or drag inside the stage; scroll wheel zooms CanvasTransform.",
+    "Click/drag stage; wheel zooms CanvasTransform; adjust sliders live mid-flight.",
   );
 
-  const puckX = createSpring(targetX, props.preset);
-  const puckY = createSpring(targetY, props.preset);
+  // Reactive SpringOptions (#46): updates physics in-flight without remounting or losing velocity.
+  const puckX = createSpring(targetX, { stiffness, damping, mass });
+  const puckY = createSpring(targetY, { stiffness, damping, mass });
   const trailX = createSpring(puckX, { stiffness: 70, damping: 14, mass: 1.4 });
   const trailY = createSpring(puckY, { stiffness: 70, damping: 14, mass: 1.4 });
   const pulse = createSpring(pulseTarget, { stiffness: 90, damping: 12 });
@@ -99,6 +108,14 @@ function SpringArena(props: { preset: SpringPreset; dark: () => boolean }) {
       scene.update(buildArenaCommands(state), matrix);
     },
   );
+
+  const applyPreset = (p: SpringPreset) => {
+    setPresetId(p.id);
+    setStiffness(p.stiffness);
+    setDamping(p.damping);
+    setMass(p.mass);
+    setPointerNote(`Live reconfigured -> ${p.label} (no remount, velocity preserved)`);
+  };
 
   const toStageCoords = (event: NativePointerEvent) => {
     const rect = stageNode ? getWindowRect(stageNode) : null;
@@ -154,56 +171,125 @@ function SpringArena(props: { preset: SpringPreset; dark: () => boolean }) {
   };
 
   return (
-    <row class="arena-row">
-      <box
-        class="arena-stage"
-        ref={el => {
-          stageNode = el;
-        }}
-        onPointerDown={onDown}
-        onPointerMove={onMove}
-        onPointerUp={onUp}
-        onPointerCancel={onUp}
-        onWheel={onWheel}
-        testId="motion-arena-stage"
-      >
-        <vector canvas={scene} style={{ width: "560px", height: "300px" }} />
-      </box>
+    <column style={{ gap: "12px" }}>
+      <row style={{ gap: "8px", "align-items": "center", "flex-wrap": "wrap" }}>
+        <text class="muted">
+          Reactive physics preset (updates in-flight via reactive createSpring):
+        </text>
+        <For each={SPRING_PRESETS}>
+          {p => (
+            <Button
+              size="xs"
+              variant={presetId() === p.id ? "default" : "outline"}
+              onClick={() => applyPreset(p)}
+            >
+              {p.label}
+            </Button>
+          )}
+        </For>
+      </row>
 
-      <column class="arena-controls">
-        <text style={{ "font-weight": "600" }}>{`Active Physics: ${props.preset.label}`}</text>
-        <text class="muted mono">
-          {`stiffness=${props.preset.stiffness} damping=${props.preset.damping} mass=${props.preset.mass}`}
-        </text>
-        <text class="muted mono">
-          {`puck=(${Math.round(puckX())}, ${Math.round(puckY())}) zoom=${zoom().toFixed(2)}x`}
-        </text>
-        <row style={{ gap: "8px", "flex-wrap": "wrap" }}>
-          <Button size="sm" onClick={snapLaunch}>
-            Spring.jump() Launch
-          </Button>
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={() => {
-              setTargetX(280);
-              setTargetY(150);
-              setZoom(1);
-            }}
-          >
-            Recenter
-          </Button>
-        </row>
-        <text class="muted">{pointerNote()}</text>
-      </column>
-    </row>
+      <row class="arena-row">
+        <box
+          class="arena-stage"
+          ref={el => {
+            stageNode = el;
+          }}
+          onPointerDown={onDown}
+          onPointerMove={onMove}
+          onPointerUp={onUp}
+          onPointerCancel={onUp}
+          onWheel={onWheel}
+          testId="motion-arena-stage"
+        >
+          <vector canvas={scene} style={{ width: "560px", height: "300px" }} />
+        </box>
+
+        <column class="arena-controls">
+          <text class="muted mono">
+            {`puck=(${Math.round(puckX())}, ${Math.round(puckY())}) zoom=${zoom().toFixed(2)}x`}
+          </text>
+
+          <column style={{ gap: "4px" }}>
+            <row style={{ "justify-content": "space-between" }}>
+              <text class="muted">Stiffness</text>
+              <text class="muted mono">{String(stiffness())}</text>
+            </row>
+            <Slider
+              value={stiffness()}
+              onValueChange={v => {
+                setPresetId("custom");
+                setStiffness(v);
+              }}
+              min={40}
+              max={400}
+              step={10}
+              label="Spring stiffness"
+            />
+          </column>
+
+          <column style={{ gap: "4px" }}>
+            <row style={{ "justify-content": "space-between" }}>
+              <text class="muted">Damping</text>
+              <text class="muted mono">{String(damping())}</text>
+            </row>
+            <Slider
+              value={damping()}
+              onValueChange={v => {
+                setPresetId("custom");
+                setDamping(v);
+              }}
+              min={4}
+              max={40}
+              step={1}
+              label="Spring damping"
+            />
+          </column>
+
+          <column style={{ gap: "4px" }}>
+            <row style={{ "justify-content": "space-between" }}>
+              <text class="muted">Mass</text>
+              <text class="muted mono">{mass().toFixed(1)}</text>
+            </row>
+            <Slider
+              value={mass()}
+              onValueChange={v => {
+                setPresetId("custom");
+                setMass(v);
+              }}
+              min={0.5}
+              max={4}
+              step={0.5}
+              label="Spring mass"
+            />
+          </column>
+
+          <row style={{ gap: "8px", "flex-wrap": "wrap" }}>
+            <Button size="sm" onClick={snapLaunch}>
+              Spring.jump() Launch
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => {
+                setTargetX(280);
+                setTargetY(150);
+                setZoom(1);
+              }}
+            >
+              Recenter
+            </Button>
+          </row>
+          <text class="muted">{pointerNote()}</text>
+        </column>
+      </row>
+    </column>
   );
 }
 
 function MotionLabApp() {
   const [scheme, setScheme] = createSignal<ColorScheme>("dark");
   const [tab, setTab] = createSignal<LabTab>("arena");
-  const [presetId, setPresetId] = createSignal<string>("bouncy");
 
   const [shifted, setShifted] = createSignal(false);
   const [clipHits, setClipHits] = createSignal("Click any clipped shape to test hit-testing.");
@@ -211,16 +297,13 @@ function MotionLabApp() {
     "Click Toggle Transition to observe linear(...) easing.",
   );
 
-  const [tileCount, setTileCount] = createSignal<number>(150);
+  const [tileCount, setTileCount] = createSignal<number>(800);
   const [paletteIdx, setPaletteIdx] = createSignal(0);
   const [compactTiles, setCompactTiles] = createSignal(false);
   const [lastTurnMs, setLastTurnMs] = createSignal<number | null>(null);
   const [scrollPos, setScrollPos] = createSignal<NativeScrollPosition | null>(null);
 
   const isDark = createMemo(() => scheme() === "dark");
-  const activePreset = createMemo(
-    () => SPRING_PRESETS.find(p => p.id === presetId()) ?? SPRING_PRESETS[0]!,
-  );
 
   const strokeScene = createCanvasScene();
   createEffect(
@@ -252,11 +335,18 @@ function MotionLabApp() {
               zgui Motion, Vector &amp; Stress Lab
             </text>
             <text class="muted">
-              Probing createSpring, CanvasScene transforms, clip-path masks, linear() easing, and
-              node-count scaling.
+              Reactive createSpring, dynamic reducedMotion, clip-path masks, per-side borders, and
+              10k-tile VirtualGrid.
             </text>
           </column>
           <row style={{ gap: "8px", "align-items": "center" }}>
+            <Button
+              size="sm"
+              variant={getReducedMotion() ? "default" : "outline"}
+              onClick={() => setReducedMotion(!getReducedMotion())}
+            >
+              {getReducedMotion() ? "Motion: Reduced" : "Motion: Full"}
+            </Button>
             <Button
               size="sm"
               variant="outline"
@@ -275,33 +365,14 @@ function MotionLabApp() {
             <TabsTrigger testId="lab-tab-paint" value="paint">
               Vectors, Clip &amp; Easing
             </TabsTrigger>
-            <TabsTrigger
-              testId="lab-tab-stress"
-              value="stress"
-            >{`Stress Grid (${tileCount()})`}</TabsTrigger>
+            <TabsTrigger testId="lab-tab-stress" value="stress">
+              {`VirtualGrid (${tileCount()})`}
+            </TabsTrigger>
           </TabsList>
 
           <TabsContent value="arena">
             <column class="lab-panel">
-              <row style={{ gap: "8px", "align-items": "center", "flex-wrap": "wrap" }}>
-                <text class="muted">
-                  Physics preset (re-mounts springs because options are creation-time):
-                </text>
-                <For each={SPRING_PRESETS}>
-                  {p => (
-                    <Button
-                      size="xs"
-                      variant={presetId() === p.id ? "default" : "outline"}
-                      onClick={() => setPresetId(p.id)}
-                    >
-                      {p.label}
-                    </Button>
-                  )}
-                </For>
-              </row>
-              <Show when={activePreset()} keyed>
-                {p => <SpringArena preset={p} dark={isDark} />}
-              </Show>
+              <SpringArena dark={isDark} />
             </column>
           </TabsContent>
 
@@ -332,7 +403,10 @@ function MotionLabApp() {
                   class="clip-card"
                   role="button"
                   tabIndex={0}
-                  style={{ "background-color": "#059669", "clip-path": "inset(10% 8% round 22px)" }}
+                  style={{
+                    "background-color": "#059669",
+                    "clip-path": "inset(10% 8% round 22px)",
+                  }}
                   onClick={() => setClipHits("Hit: inset() round")}
                 >
                   <text>inset()</text>
@@ -405,8 +479,8 @@ function MotionLabApp() {
                 }}
               >
                 <row style={{ gap: "6px", "align-items": "center" }}>
-                  <text class="muted">Tile count:</text>
-                  <For each={[40, 150, 400, 800]}>
+                  <text class="muted">VirtualGrid tiles:</text>
+                  <For each={[150, 800, 2500, 10000]}>
                     {count => (
                       <Button
                         testId={`stress-count-${count}`}
@@ -442,34 +516,37 @@ function MotionLabApp() {
                 </row>
               </row>
 
-              <scroll
+              <VirtualGrid
                 class="stress-scroll"
                 ref={node => {
                   observeGeometry(node, "scrollPosition", setScrollPos);
                 }}
                 testId="stress-scroll"
+                each={tiles()}
+                itemHeight={compactTiles() ? 40 : 54}
+                minColumnWidth={compactTiles() ? 66 : 92}
+                gap={6}
+                overscan={3}
+                initialWidth={960}
+                initialHeight={360}
               >
-                <box class="stress-grid">
-                  <For each={tiles()}>
-                    {idx => {
-                      const color = createMemo(() => {
-                        const pal = TILE_PALETTES[paletteIdx()]!;
-                        return pal[idx % pal.length]!;
-                      });
-                      return (
-                        <box
-                          class="stress-tile"
-                          data-compact={compactTiles() ? "true" : "false"}
-                          style={{ "background-color": color() }}
-                        >
-                          <text>{`#${idx + 1}`}</text>
-                          <text>{color()}</text>
-                        </box>
-                      );
-                    }}
-                  </For>
-                </box>
-              </scroll>
+                {idx => {
+                  const color = createMemo(() => {
+                    const pal = TILE_PALETTES[paletteIdx()]!;
+                    return pal[idx % pal.length]!;
+                  });
+                  return (
+                    <box
+                      class="stress-tile"
+                      data-compact={compactTiles() ? "true" : "false"}
+                      style={{ "background-color": color() }}
+                    >
+                      <text>{`#${idx + 1}`}</text>
+                      <text>{color()}</text>
+                    </box>
+                  );
+                }}
+              </VirtualGrid>
 
               <text class="muted mono">
                 {scrollPos()

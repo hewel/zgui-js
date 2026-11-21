@@ -7,6 +7,15 @@
     "build": "zgui-js build",
     "preview": "zgui-js preview"
   },
+  "zgui": {
+    "window": {
+      "title": "zgui Studio Workspace",
+      "width": 1240,
+      "height": 780,
+      "minWidth": 900,
+      "minHeight": 580
+    }
+  },
   "devDependencies": {
     "@hewel/zgui-build": "workspace:*"
   },

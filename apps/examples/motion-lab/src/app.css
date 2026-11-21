@@ -139,7 +139,7 @@
 }
 
 .stress-scroll {
-  height: 320px;
+  height: 360px;
   overflow-y: auto;
   padding: var(--zui-space-sm);
   border: 1px solid var(--zui-color-border);
@@ -147,19 +147,12 @@
   background-color: var(--zui-color-muted);
 }
 
-.stress-grid {
-  display: flex;
-  flex-direction: row;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-
 .stress-tile {
   display: flex;
   flex-direction: column;
   justify-content: space-between;
-  width: 84px;
-  height: 52px;
+  width: 100%;
+  height: 100%;
   padding: 6px;
   border-radius: 8px;
   color: #ffffff;
@@ -170,8 +163,6 @@
 }
 
 .stress-tile[data-compact="true"] {
-  width: 58px;
-  height: 36px;
   padding: 4px;
 }
 

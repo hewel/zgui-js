@@ -185,13 +185,14 @@
 }
 
 .proc-scroll {
-  height: 340px;
+  height: 360px;
   overflow-y: auto;
   border: 1px solid var(--zui-color-border);
   border-radius: var(--zui-radius-md);
 }
 
 .proc-row {
+  height: 32px;
   border-bottom: 1px solid var(--zui-color-border);
   font-family: var(--zui-type-family-mono);
   font-size: var(--zui-type-size-xs);

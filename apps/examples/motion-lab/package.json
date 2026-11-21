@@ -7,6 +7,15 @@
     "build": "zgui-js build",
     "preview": "zgui-js preview"
   },
+  "zgui": {
+    "window": {
+      "title": "zgui Motion, Vector & Stress Lab",
+      "width": 1180,
+      "height": 760,
+      "minWidth": 840,
+      "minHeight": 560
+    }
+  },
   "devDependencies": {
     "@hewel/zgui-build": "workspace:*"
   },

@@ -8,6 +8,13 @@
     "preview": "zgui-js preview"
   },
   "zgui": {
+    "window": {
+      "title": "zgui System Monitor",
+      "width": 1160,
+      "height": 760,
+      "minWidth": 820,
+      "minHeight": 560
+    },
     "capabilities": {
       "commands": [
         "/usr/bin/vmstat",
