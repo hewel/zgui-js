@@ -37,6 +37,7 @@ export type Capabilities = {
 
 export type FontDeclaration = { family: string; path: string };
 export type ChunkDeclaration = { path: string; sourceMap: string };
+export type WorkerDeclaration = { name: string; path: string; sourceMap: string };
 export type WindowDeclaration = {
   title?: string;
   width?: number;
@@ -55,6 +56,7 @@ export type Manifest = {
   entry: string;
   sourceMap: string;
   chunks?: ChunkDeclaration[];
+  workers?: WorkerDeclaration[];
   styles: string[];
   assets: string[];
   fonts: FontDeclaration[];

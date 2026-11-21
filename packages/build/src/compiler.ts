@@ -22,6 +22,7 @@ import {
 import type { Rule } from "@stylexjs/babel-plugin";
 import {
   validateImport,
+  validateWorkerImport,
   validateModule,
   validateGraph,
   type CompilationGraph,
@@ -492,6 +493,109 @@ export async function compileBundle(
   try {
     await compiler.generate(outputOptions(filename, { codeSplitting: hostEntry }));
     return result;
+  } finally {
+    await compiler.close();
+  }
+}
+
+export interface CompiledWorkerBundle {
+  name: string;
+  path: string;
+  sourceMap: string;
+  files: Map<string, Buffer>;
+}
+
+export async function compileWorkerBundle(
+  entry: string,
+  {
+    root,
+    appDirectory = path.dirname(entry),
+    name,
+    development = false,
+  }: {
+    root: string;
+    appDirectory?: string;
+    name: string;
+    development?: boolean;
+  },
+): Promise<CompiledWorkerBundle> {
+  const filename = `workers/${name}.mjs`;
+  const files = new Map<string, Buffer>();
+  const compiler = await rolldown({
+    cwd: appDirectory,
+    input: path.resolve(entry),
+    platform: "neutral",
+    experimental: { attachDebugInfo: "none" },
+    resolve: {
+      conditionNames: [development ? "development" : "production", "import", "default"],
+      mainFields: ["module", "main"],
+      modules: [
+        "node_modules",
+        path.join(appDirectory, "node_modules"),
+        path.join(root, "node_modules"),
+      ],
+    },
+    transform: {
+      target: "es2022",
+      define: { "process.env.NODE_ENV": development ? '"development"' : '"production"' },
+    },
+    onwarn(warning, warn) {
+      if (warning.code === "UNRESOLVED_IMPORT") throw new Error(warning.message);
+      warn(warning);
+    },
+    plugins: [
+      {
+        name: "zgui-compute-worker",
+        resolveId(source) {
+          validateWorkerImport(source);
+        },
+        outputOptions(options) {
+          return {
+            ...options,
+            sourcemapPathTransform(source, sourceMapPath) {
+              return moduleIdentity(path.resolve(path.dirname(sourceMapPath), source), {
+                root,
+                appDirectory,
+              });
+            },
+          };
+        },
+        generateBundle(_options, output) {
+          const chunks = Object.values(output).filter(
+            (item): item is OutputChunk => item.type === "chunk",
+          );
+          if (chunks.length !== 1) {
+            throw new Error(`Compute worker ${name} must emit a single self-contained ESM chunk`);
+          }
+          const chunk = chunks[0];
+          if (chunk.imports.length > 0 || chunk.dynamicImports.length > 0) {
+            throw new Error(
+              `Compute worker ${name} must have a closed module graph with no external imports`,
+            );
+          }
+          if (!chunk.map) {
+            throw new Error(`Missing source map for compute worker ${name}`);
+          }
+          validateModule(chunk.code, {
+            filename: chunk.fileName,
+            bundled: true,
+            entry: false,
+            worker: true,
+          });
+          files.set(chunk.fileName, Buffer.from(chunk.code));
+          files.set(`${chunk.fileName}.map`, Buffer.from(chunk.map.toString()));
+        },
+      } satisfies Plugin,
+    ],
+  });
+  try {
+    await compiler.generate({
+      format: "es",
+      codeSplitting: false,
+      sourcemap: true,
+      entryFileNames: filename,
+    });
+    return { name, path: filename, sourceMap: `${filename}.map`, files };
   } finally {
     await compiler.close();
   }

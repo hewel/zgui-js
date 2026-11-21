@@ -23,6 +23,10 @@ use std::{
     fmt,
     path::Path,
     rc::Rc,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
     time::{Duration, Instant},
 };
 
@@ -117,10 +121,20 @@ impl fmt::Display for Diagnostic {
 
 impl std::error::Error for Diagnostic {}
 
-#[derive(Default)]
 struct InterruptState {
     deadline: Cell<Option<Instant>>,
     interrupted: Cell<bool>,
+    external_cancel: Arc<AtomicBool>,
+}
+
+impl InterruptState {
+    fn new(external_cancel: Arc<AtomicBool>) -> Self {
+        Self {
+            deadline: Cell::new(None),
+            interrupted: Cell::new(false),
+            external_cancel,
+        }
+    }
 }
 
 struct EntryGuard<'a>(&'a InterruptState);
@@ -331,6 +345,15 @@ pub struct JsRuntime {
 
 impl JsRuntime {
     pub fn new(limits: RuntimeLimits) -> Result<Self, Diagnostic> {
+        Self::with_cancel_handle(limits, Arc::new(AtomicBool::new(false)))
+    }
+
+    /// Creates a runtime wired to a caller-owned atomic cancellation flag so an
+    /// owner thread can interrupt a background worker without blocking or joining.
+    pub fn with_cancel_handle(
+        limits: RuntimeLimits,
+        external_cancel: Arc<AtomicBool>,
+    ) -> Result<Self, Diagnostic> {
         let now = Instant::now();
         let durations = [
             limits.entry_timeout,
@@ -359,17 +382,18 @@ impl JsRuntime {
         })?;
         runtime.set_memory_limit(limits.memory_limit_bytes);
         runtime.set_max_stack_size(limits.stack_limit_bytes);
-        let interrupt = Rc::new(InterruptState::default());
+        let interrupt = Rc::new(InterruptState::new(external_cancel));
         let state = interrupt.clone();
         runtime.set_interrupt_handler(Some(Box::new(move || {
+            let cancelled = state.external_cancel.load(Ordering::Acquire);
             let expired = state
                 .deadline
                 .get()
                 .is_some_and(|end| Instant::now() >= end);
-            if expired {
+            if cancelled || expired {
                 state.interrupted.set(true);
             }
-            expired
+            cancelled || expired
         })));
         let context = Context::full(&runtime).map_err(|e| {
             Diagnostic::new(DiagnosticKind::Engine, "context creation", e.to_string())
@@ -401,6 +425,16 @@ impl JsRuntime {
         };
         let loader = ProviderLoader { provider };
         self.runtime.set_loader(resolver, loader);
+    }
+
+    /// Returns a clone of the atomic cancellation flag wired to QuickJS's interrupt handler.
+    pub fn cancel_handle(&self) -> Arc<AtomicBool> {
+        Arc::clone(&self.interrupt.external_cancel)
+    }
+
+    /// Returns whether external cancellation has been requested.
+    pub fn is_cancelled(&self) -> bool {
+        self.interrupt.external_cancel.load(Ordering::Acquire)
     }
 
     /// Borrow this runtime exclusively for a single Bridge turn entry.
@@ -999,5 +1033,26 @@ mod loader_tests {
             .expect("read outputs");
         assert_eq!(result, "loaded-from-verified-chunk");
         assert!(rejected.contains("escape.mjs") || rejected.contains("undeclared"), "unexpected rejection: {rejected}");
+    }
+
+    #[test]
+    fn external_cancel_flag_interrupts_running_script_before_entry_timeout() {
+        let cancel = Arc::new(AtomicBool::new(false));
+        let cancel_trigger = Arc::clone(&cancel);
+        let limits = RuntimeLimits {
+            entry_timeout: Duration::from_secs(5),
+            ..RuntimeLimits::default()
+        };
+        let mut runtime = JsRuntime::with_cancel_handle(limits, cancel).expect("runtime");
+        let start = Instant::now();
+        let handle = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(25));
+            cancel_trigger.store(true, Ordering::Release);
+        });
+        let err = runtime.evaluate_script("for (;;) {}").expect_err("must interrupt");
+        handle.join().expect("join trigger");
+        assert_eq!(err.kind, DiagnosticKind::Interrupted);
+        assert!(start.elapsed() < Duration::from_secs(1), "cancel took too long: {:?}", start.elapsed());
+        assert!(runtime.is_cancelled());
     }
 }

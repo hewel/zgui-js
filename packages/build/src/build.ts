@@ -6,12 +6,13 @@ import type {
   Manifest,
   PublishedApplication,
   WindowDeclaration,
+  WorkerDeclaration,
 } from "./index.ts";
 import { readFileSync, realpathSync, type Dirent } from "node:fs";
 import { readFile, readdir, lstat } from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
-import { compileBundle, type CompilationResult } from "./compiler.ts";
+import { compileBundle, compileWorkerBundle, type CompilationResult } from "./compiler.ts";
 import { typecheckProject } from "./typecheck.ts";
 import { canonicalJson, sha256, moduleIdentity } from "./identity.ts";
 import { publishGeneration, resourcePath } from "./publication.ts";
@@ -721,6 +722,44 @@ function parseWindowDeclaration(input: unknown): WindowDeclaration | undefined {
   return Object.keys(result).length ? result : undefined;
 }
 
+const WORKER_NAME_RE = /^[a-zA-Z][a-zA-Z0-9_-]{0,63}$/;
+const MAX_WORKERS = 32;
+
+function parseWorkerDeclarations(
+  input: unknown,
+  appDirectory: string,
+): { name: string; entry: string }[] {
+  if (input === undefined) return [];
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new Error(
+      "package.json zgui.workers must be an object mapping worker names to relative entry paths",
+    );
+  }
+  const entries = Object.entries(input as Record<string, unknown>);
+  if (entries.length > MAX_WORKERS) {
+    throw new Error(`package.json zgui.workers exceeds maximum of ${MAX_WORKERS} workers`);
+  }
+  const resolvedAppDir = path.resolve(appDirectory);
+  const parsed: { name: string; entry: string }[] = [];
+  for (const [name, relPath] of entries.sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) {
+    if (!WORKER_NAME_RE.test(name)) {
+      throw new Error(`Invalid compute worker name: ${name}`);
+    }
+    if (typeof relPath !== "string" || !relPath.trim()) {
+      throw new Error(`package.json zgui.workers.${name} must be a non-empty relative path`);
+    }
+    resourcePath(relPath);
+    const fullPath = path.resolve(resolvedAppDir, relPath);
+    if (!fullPath.startsWith(`${resolvedAppDir}${path.sep}`)) {
+      throw new Error(
+        `package.json zgui.workers.${name} escapes application directory: ${relPath}`,
+      );
+    }
+    parsed.push({ name, entry: fullPath });
+  }
+  return parsed;
+}
+
 export async function publishApplication(
   app: string,
   result: CompilationResult,
@@ -752,7 +791,15 @@ export async function publishApplication(
   for (const item of assets) files.set(...item);
   const pkg = await optionalFile(path.join(appDirectory, "package.json"));
   const packageJson:
-    | { zgui?: { id?: unknown; fonts?: unknown; capabilities?: unknown; window?: unknown } }
+    | {
+        zgui?: {
+          id?: unknown;
+          fonts?: unknown;
+          capabilities?: unknown;
+          window?: unknown;
+          workers?: unknown;
+        };
+      }
     | undefined = pkg && JSON.parse(pkg.toString("utf8"));
   const id = packageJson?.zgui?.id === undefined ? `dev.example.${app}` : packageJson.zgui.id;
   if (!capabilityString(id) || id !== id.trim())
@@ -764,6 +811,21 @@ export async function publishApplication(
     extraCapabilities,
     capabilitiesFile,
   });
+  const workerEntries = parseWorkerDeclarations(packageJson?.zgui?.workers, appDirectory);
+  const workers: WorkerDeclaration[] = [];
+  for (const worker of workerEntries) {
+    signal?.throwIfAborted();
+    const compiled = await compileWorkerBundle(worker.entry, {
+      root,
+      appDirectory,
+      name: worker.name,
+      development,
+    });
+    for (const [fileName, bytes] of compiled.files) {
+      files.set(fileName, bytes);
+    }
+    workers.push({ name: compiled.name, path: compiled.path, sourceMap: compiled.sourceMap });
+  }
   const declarations = packageJson?.zgui?.fonts ?? [];
   if (!Array.isArray(declarations))
     throw new Error("package.json zgui.fonts must be an array of {family,path}");
@@ -797,6 +859,7 @@ export async function publishApplication(
     entry: "app.mjs",
     sourceMap: "app.mjs.map",
     ...(chunks.length > 0 ? { chunks } : {}),
+    ...(workers.length > 0 ? { workers } : {}),
     styles: [
       ...(componentsCss !== undefined ? ["components.css"] : []),
       ...(css !== undefined ? ["base.css"] : []),

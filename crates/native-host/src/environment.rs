@@ -15,6 +15,12 @@ impl Environment {
     }
     pub(crate) fn now_us(&self)->u64 { self.clock.timestamp().since_origin().as_micros() as u64 }
     pub(crate) fn is_virtual(&self)->bool { self.epoch_ms.is_some() }
+    pub(crate) fn virtual_now_ms(&self)->u64 { self.epoch_ms.unwrap_or(0) + self.now_us() / 1000 }
+    pub(crate) fn next_seed(&self)->u64 {
+        let state = self.random.get().wrapping_add(0x9e3779b97f4a7c15);
+        self.random.set(state);
+        state
+    }
     pub(crate) fn configuration(epoch_ms:Option<u64>,seed:u32)->Value {
         json!({"revision":"native-clock-date-v1","mode":if epoch_ms.is_some(){"virtual"}else{"wall"},
             "epochMs":epoch_ms,"timeZone":"UTC","date":if epoch_ms.is_some(){"virtual-utc"}else{"ambient-real"},

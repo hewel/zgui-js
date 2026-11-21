@@ -79,6 +79,21 @@ const globals = new Set([
   "parseInt",
 ]);
 
+const workerDisallowedGlobals = new Set([
+  "__zgui",
+  "performance",
+  "setTimeout",
+  "clearTimeout",
+  "requestAnimationFrame",
+  "cancelAnimationFrame",
+]);
+
+const workerGlobals = new Set([
+  ...[...globals].filter(name => !workerDisallowedGlobals.has(name)),
+  "postMessage",
+  "self",
+]);
+
 export type CompilationGraph = BuildInfo["graph"];
 
 function executesAtTopLevel(p: NodePath): boolean {
@@ -180,10 +195,26 @@ export function validateImport(specifier: string): void {
   }
 }
 
+export function validateWorkerImport(specifier: string): void {
+  validateImport(specifier);
+  if (
+    /^@hewel\/zgui(?:$|\/|-services(?:$|\/))/.test(specifier) ||
+    /^solid-js(?:$|\/)/.test(specifier) ||
+    /^@solidjs\//.test(specifier) ||
+    /^@stylexjs\//.test(specifier)
+  ) {
+    throw new Error(
+      `Compute worker cannot import UI, Solid, StyleX, or host service module: ${specifier}`,
+    );
+  }
+}
+
 function resolveChunkSpecifier(fromFilename: string, specifier: string): string | null {
   if (!specifier.startsWith("./") && !specifier.startsWith("../")) return null;
   const fromDir = path.posix.dirname(fromFilename);
-  const resolved = path.posix.normalize(fromDir === "." ? specifier : path.posix.join(fromDir, specifier));
+  const resolved = path.posix.normalize(
+    fromDir === "." ? specifier : path.posix.join(fromDir, specifier),
+  );
   if (resolved.startsWith("..") || resolved.startsWith("/")) return null;
   return resolved;
 }
@@ -194,14 +225,17 @@ export function validateModule(
     filename = "app.mjs",
     bundled = false,
     entry = false,
+    worker = false,
     allowedChunks,
   }: {
     filename?: string;
     bundled?: boolean;
     entry?: boolean;
+    worker?: boolean;
     allowedChunks?: ReadonlySet<string>;
   } = {},
 ): ParseResult<t.File> {
+  const allowedGlobals = worker ? workerGlobals : globals;
   const ast = parse(code, {
     sourceType: "module",
     sourceFilename: filename,
@@ -255,6 +289,9 @@ export function validateModule(
       }
     },
     ImportExpression(p) {
+      if (worker) {
+        throw new Error("Dynamic imports are unsupported in compute workers");
+      }
       if (p.node.source.type !== "StringLiteral") {
         throw new Error("Dynamic imports must use a static string literal specifier");
       }
@@ -283,7 +320,7 @@ export function validateModule(
       if (
         bundled &&
         !p.scope.hasBinding(p.node.name, true) &&
-        !globals.has(p.node.name) &&
+        !allowedGlobals.has(p.node.name) &&
         !(p.node.name === "arguments" && hasArgumentsBinding(p))
       ) {
         throw new Error(`Unsupported runtime global: ${p.node.name}`);

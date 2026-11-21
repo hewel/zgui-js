@@ -11,6 +11,9 @@ mod external;
 mod files;
 mod network;
 mod sqlite;
+mod workers;
+
+pub(crate) use workers::WorkerStep;
 
 const MAX_CALLBACKS: usize = 1024;
 // Match the binary socket frame cap; direct images have a separate session budget.
@@ -105,6 +108,7 @@ pub(crate) struct Work {
     files: files::FilesState,
     network: network::NetworkState,
     sqlite: sqlite::SqliteState,
+    workers: workers::WorkersState,
     external: external::External,
     resolved: ResolvedCapabilities,
     wake: Arc<dyn Fn() + Send + Sync>,
@@ -137,6 +141,7 @@ impl Work {
         let files = files::FilesState::new(package.clone(), &assets, wake.clone());
         let network = network::NetworkState::new(package.clone(), &assets);
         let sqlite = sqlite::SqliteState::new(package.clone(), &assets);
+        let workers = workers::WorkersState::new(package.clone(), &assets);
         let external = external::External::new(package.clone(), &assets);
         Rc::new(Self {
             registrations: RefCell::new(HashMap::new()), ready: RefCell::new(VecDeque::new()), requests: RefCell::new(HashMap::new()),
@@ -149,6 +154,7 @@ impl Work {
             files,
             network,
             sqlite,
+            workers,
             external,
             resolved,
             wake,
@@ -461,6 +467,7 @@ impl Work {
         self.install_files(&services)?;
         self.install_network(&services)?;
         self.install_sqlite(&services)?;
+        self.install_workers(&services)?;
         self.install_external(&services)?;
         ctx.globals().set("__zguiServices", services)?;
         Ok(())
@@ -662,6 +669,7 @@ impl Work {
         self.mode.set(Mode::Stopping);
         for pending in self.requests.borrow_mut().drain().map(|(_, pending)| pending) { pending.cancelled.store(true, Ordering::Release); }
         self.clipboard.clear();
+        self.workers.stop_all();
         self.provider.stop();
     }
     pub(crate) fn finish_stop(&self) {
@@ -674,6 +682,7 @@ impl Work {
         self.files.clear();
         self.network.clear(self.generation);
         self.sqlite.clear();
+        self.workers.clear();
         self.external.clear(self.generation);
         self.mode.set(Mode::Disposed);
     }

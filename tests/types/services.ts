@@ -22,12 +22,16 @@ import {
   revokeBookmark,
   saveFileDialog,
   spawnCommand,
+  spawnWorker,
   watchDirectory,
   writeClipboardImage,
   writeClipboardText,
 } from "@hewel/zgui-services";
 import type {
   BookmarkInfo,
+  WorkerErrorEvent,
+  WorkerHandle,
+  WorkerOptions,
   BookmarkToken,
   ClipboardWriteOptions,
   CommandResult,
@@ -248,5 +252,31 @@ authDir.close();
 // @ts-expect-error writeText requires a string payload.
 authDir.writeText("note.md", 123);
 
-void [openFileReq, saveFileReq, openDirReq, persisted, restored, allBookmarks, revoked];
+const workerOpts: WorkerOptions = {
+  maxHeapBytes: 4 * 1024 * 1024,
+  onMessage(payload: unknown) {
+    void payload;
+  },
+  onError(err: WorkerErrorEvent) {
+    const _c: string = err.code;
+    const _m: string = err.message;
+    void [_c, _m];
+  },
+};
+const worker: WorkerHandle = spawnWorker("compute", workerOpts);
+worker.postMessage({ values: [1, 2, 3] });
+const unsubWorkerMsg: () => void = worker.onMessage(payload => {
+  void payload;
+});
+const unsubWorkerErr: () => void = worker.onError(err => {
+  void err.code;
+});
+const workerClosed: boolean = worker.terminated;
+unsubWorkerMsg();
+unsubWorkerErr();
+worker.terminate();
+// @ts-expect-error spawnWorker name must be a string.
+spawnWorker(123);
+
+void [openFileReq, saveFileReq, openDirReq, persisted, restored, allBookmarks, revoked, workerClosed];
 void [promise, cancelled, length, recovered, generic, implicitPromise, asyncCancellation, bytes, element, errorCode, nativeError];

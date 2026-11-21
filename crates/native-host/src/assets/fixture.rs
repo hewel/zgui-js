@@ -559,6 +559,8 @@ impl FixtureRuntime {
         error
     }
     pub(crate) fn contract_failure(&self) -> Option<ContractFailure> { self.state.borrow().failure.clone() }
+    pub(crate) fn worker_now_ms(&self) -> u64 { self.environment.virtual_now_ms() }
+    pub(crate) fn next_worker_seed(&self) -> u64 { self.environment.next_seed() }
     /// Retains a capability denial even when application code catches it.
     pub(crate) fn deny_capability(&self, message: &str) -> ContractFailure { self.fail(failure("E_CAPABILITY", message)) }
     pub(super) fn malformed(&self, message: impl Into<String>) -> ContractFailure { self.fail(failure("E_FIXTURE_CONTRACT", message)) }

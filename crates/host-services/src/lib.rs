@@ -15,6 +15,7 @@
 //! concurrently by an untrusted writer.
 
 pub mod command;
+pub mod compute_worker;
 pub mod control;
 pub mod files;
 pub mod network;
@@ -25,6 +26,8 @@ mod worker;
 const _: () = {
     const fn assert_send<T: Send>() {}
     assert_send::<command::Process>();
+    assert_send::<compute_worker::LiveWorkerHandle>();
+    assert_send::<compute_worker::WorkerSessionMemoryBudget>();
     assert_send::<control::Inbound>();
     assert_send::<control::Listener>();
     assert_send::<files::watcher::DirectoryWatcher>();

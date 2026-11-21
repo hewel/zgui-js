@@ -397,3 +397,6 @@ export type {
   WebSocketOpenInfo,
   WebSocketOptions,
 } from "./network";
+
+export { spawnWorker } from "./worker";
+export type { WorkerErrorEvent, WorkerHandle, WorkerOptions } from "./worker";

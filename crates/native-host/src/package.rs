@@ -7,11 +7,22 @@ use std::fmt::Write as _;
 type Result<T, E = Box<dyn Error>> = std::result::Result<T, E>;
 const MAX_RESOURCE_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_CHUNKS: usize = 256;
+const MAX_WORKERS: usize = 32;
 
 crate::schema::object_struct! {
 /// One sealed lazy/shared JS chunk and its paired source map.
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ChunkEntry {
+    pub path: String,
+    pub source_map: String,
+}
+}
+
+crate::schema::object_struct! {
+/// One sealed isolated compute worker entrypoint and its paired source map.
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkerEntry {
+    pub name: String,
     pub path: String,
     pub source_map: String,
 }
@@ -28,6 +39,9 @@ pub struct Manifest {
     /// Optional closed graph of additional JS chunks sealed into `artifactDigests`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub chunks: Vec<ChunkEntry>,
+    /// Optional sealed isolated compute workers declared by the package.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub workers: Vec<WorkerEntry>,
     pub styles: Vec<String>,
     pub assets: Vec<String>,
     pub fonts: Vec<Font>,
@@ -358,6 +372,7 @@ pub struct Package {
     source_map: OnceCell<Option<sourcemap::DecodedMap>>,
     generated_entry: String,
     chunks: BTreeMap<String, VerifiedChunk>,
+    workers: BTreeMap<String, VerifiedChunk>,
     status_path: Option<PathBuf>,
     assets: BTreeMap<String, Arc<[u8]>>,
 }
@@ -398,11 +413,16 @@ impl Package {
         if manifest.chunks.len() > MAX_CHUNKS {
             return Err(format!("package exceeds maximum chunk count ({MAX_CHUNKS})").into());
         }
+        if manifest.workers.len() > MAX_WORKERS {
+            return Err(format!("package exceeds maximum worker count ({MAX_WORKERS})").into());
+        }
         let mut files = BTreeMap::new();
         let chunk_resources = manifest.chunks.iter().flat_map(|chunk| [chunk.path.as_str(), chunk.source_map.as_str()]);
+        let worker_resources = manifest.workers.iter().flat_map(|worker| [worker.path.as_str(), worker.source_map.as_str()]);
         for name in std::iter::once(manifest.entry.as_str())
             .chain(std::iter::once(manifest.source_map.as_str()))
             .chain(chunk_resources)
+            .chain(worker_resources)
             .chain(manifest.styles.iter().map(String::as_str))
             .chain(manifest.assets.iter().map(String::as_str))
             .chain(["style-origins.json", "build-info.json"])
@@ -496,6 +516,43 @@ impl Package {
                 },
             );
         }
+        let mut workers = BTreeMap::new();
+        for worker in &manifest.workers {
+            if !valid_worker_name(&worker.name)
+                || !worker.path.ends_with(".mjs")
+                || !worker.source_map.ends_with(".map")
+            {
+                return Err(format!("invalid worker declaration: {} ({})", worker.name, worker.path).into());
+            }
+            if workers.contains_key(&worker.name) {
+                return Err(format!("duplicate worker declaration: {}", worker.name).into());
+            }
+            let worker_bytes = files.remove(&worker.path).ok_or_else(|| format!("missing worker: {}", worker.path))?;
+            let worker_digest = digest(&worker_bytes);
+            let _ = std::str::from_utf8(&worker_bytes)?;
+            drop(worker_bytes);
+            let worker_map_bytes = files.remove(&worker.source_map).ok_or_else(|| format!("missing worker source map: {}", worker.source_map))?;
+            let worker_map_digest = digest(&worker_map_bytes);
+            if !sourcemap::is_sourcemap_slice(&worker_map_bytes) {
+                return Err(format!("invalid source map {}: unrecognized source map document", worker.source_map).into());
+            }
+            let validated = sourcemap::DecodedMap::from_reader(worker_map_bytes.as_slice())
+                .map_err(|error| format!("invalid source map {}: {error}", worker.source_map))?;
+            drop(validated);
+            drop(worker_map_bytes);
+            let canonical_name = directory.join(&worker.path).to_string_lossy().into_owned();
+            workers.insert(
+                worker.name.clone(),
+                VerifiedChunk {
+                    relative_path: worker.path.clone(),
+                    canonical_name,
+                    digest: worker_digest,
+                    source_map_path: worker.source_map.clone(),
+                    source_map_digest: worker_map_digest,
+                    source_map: OnceCell::new(),
+                },
+            );
+        }
         let styles: Arc<[Stylesheet]> = manifest.styles.iter().map(|name| {
             Ok(Stylesheet {
                 path: Arc::from(name.as_str()),
@@ -516,6 +573,7 @@ impl Package {
             source_map: OnceCell::new(),
             generated_entry,
             chunks,
+            workers,
             status_path,
             assets,
         })
@@ -648,6 +706,25 @@ impl Package {
         String::from_utf8(bytes).map_err(|err| err.to_string())
     }
 
+    /// Reads and SHA-256-verifies a declared compute worker module from the immutable
+    /// package generation on demand.
+    pub(crate) fn load_worker_source(&self, name: &str) -> std::result::Result<(String, String), String> {
+        let worker = self
+            .workers
+            .get(name)
+            .ok_or_else(|| format!("undeclared compute worker: {name:?}"))?;
+        let bytes = resource(&self.directory, &worker.relative_path).map_err(|err| err.to_string())?;
+        let actual = digest(&bytes);
+        if actual != worker.digest {
+            return Err(format!(
+                "artifact integrity mismatch for {}: expected {}, got {actual}",
+                worker.relative_path, worker.digest
+            ));
+        }
+        let source = String::from_utf8(bytes).map_err(|err| err.to_string())?;
+        Ok((worker.canonical_name.clone(), source))
+    }
+
     /// Immutable manifest-declared bytes from the integrity-verified package generation.
     pub fn asset_bytes(&self, name: &str) -> Option<&[u8]> {
         self.assets.get(name).map(AsRef::as_ref)
@@ -692,7 +769,7 @@ impl Package {
                 }) {
                     (entry, self.decoded_source_map()?)
                 } else {
-                    let (chunk, matched) = self.chunks.values().find_map(|chunk| {
+                    let (chunk, matched) = self.chunks.values().chain(self.workers.values()).find_map(|chunk| {
                         [chunk.canonical_name.as_str(), chunk.relative_path.as_str()]
                             .into_iter()
                             .find(|&candidate| file.strip_suffix(candidate).is_some_and(|prefix| prefix.ends_with(" (")))
@@ -767,6 +844,13 @@ fn normalize_posix_relative(base_dir: &str, specifier: &str) -> Option<String> {
         return None;
     }
     Some(parts.join("/"))
+}
+
+fn valid_worker_name(name: &str) -> bool {
+    let bytes = name.as_bytes();
+    (1..=64).contains(&bytes.len())
+        && bytes[0].is_ascii_alphabetic()
+        && bytes[1..].iter().all(|b| b.is_ascii_alphanumeric() || *b == b'_' || *b == b'-')
 }
 
 fn valid_digest(value: &str) -> bool {
@@ -888,9 +972,12 @@ mod tests {
         fn save(&self, mut manifest: serde_json::Value) {
             let chunk_names = manifest.get("chunks").and_then(|v| v.as_array()).into_iter().flatten()
                 .flat_map(|c| [c["path"].as_str().unwrap().to_owned(), c["sourceMap"].as_str().unwrap().to_owned()]);
+            let worker_names = manifest.get("workers").and_then(|v| v.as_array()).into_iter().flatten()
+                .flat_map(|w| [w["path"].as_str().unwrap().to_owned(), w["sourceMap"].as_str().unwrap().to_owned()]);
             let names: Vec<_> = ["entry", "sourceMap"].into_iter().map(|key| manifest[key].as_str().unwrap().to_owned())
                 .chain(["styles", "assets"].into_iter().flat_map(|key| manifest[key].as_array().unwrap().iter().map(|value| value.as_str().unwrap().to_owned())))
                 .chain(chunk_names)
+                .chain(worker_names)
                 .chain(["style-origins.json".into(), "build-info.json".into()]).collect();
             manifest["artifactDigests"] = names.into_iter().map(|name| {
                 let hash = digest(&fs::read(self.0.join(&name)).unwrap()); (name, serde_json::json!(hash))
@@ -1244,6 +1331,47 @@ mod tests {
 
         fs::write(fixture.0.join("chunks/lazy-1.mjs"), b"export const hacked = 1;").unwrap();
         assert!(provider.load(&resolved).unwrap_err().contains("integrity mismatch"));
+        assert!(Package::load(&fixture.0).err().unwrap().to_string().contains("integrity mismatch"));
+    }
+
+    #[test]
+    fn sealed_workers_verify_digests_and_remap_stacks() {
+        let fixture = Fixture::new();
+        let entry_source = b"export const hostApiVersion = 1; export function mount() { return () => {}; }";
+        let empty_map = br#"{"version":3,"sources":[],"names":[],"mappings":""}"#;
+        fixture.publish(entry_source, empty_map);
+
+        fs::create_dir_all(fixture.0.join("workers")).unwrap();
+        let worker_source = b"export function onMessage(x) { postMessage(x); }\n";
+        let worker_map = br#"{"version":3,"sources":["src/workers/compute.ts"],"names":[],"mappings":"AAAA"}"#;
+        fs::write(fixture.0.join("workers/compute.mjs"), worker_source).unwrap();
+        fs::write(fixture.0.join("workers/compute.mjs.map"), worker_map).unwrap();
+
+        let mut manifest: serde_json::Value = serde_json::from_slice(&fs::read(fixture.0.join("manifest.json")).unwrap()).unwrap();
+        manifest["workers"] = serde_json::json!([{
+            "name": "compute",
+            "path": "workers/compute.mjs",
+            "sourceMap": "workers/compute.mjs.map",
+        }]);
+        fixture.save(manifest);
+
+        let package = Package::load(&fixture.0).expect("worker package loads");
+        let (canonical, loaded) = package.load_worker_source("compute").expect("load worker");
+        assert!(canonical.ends_with("workers/compute.mjs"));
+        assert_eq!(loaded.as_bytes(), worker_source);
+        assert!(package.load_worker_source("undeclared").unwrap_err().contains("undeclared"));
+
+        let remapped = package.remap_diagnostic(js_runtime::Diagnostic {
+            kind: js_runtime::DiagnosticKind::Exception,
+            phase: "worker",
+            message: "worker boom".into(),
+            stack: Some(format!("    at onMessage ({canonical}:1:1)\n")),
+            generated_stack: None,
+        });
+        assert!(remapped.stack.as_deref().unwrap_or("").contains("src/workers/compute.ts:1:1"), "{:?}", remapped.stack);
+
+        fs::write(fixture.0.join("workers/compute.mjs"), b"export const tampered = true;").unwrap();
+        assert!(package.load_worker_source("compute").unwrap_err().contains("integrity mismatch"));
         assert!(Package::load(&fixture.0).err().unwrap().to_string().contains("integrity mismatch"));
     }
 

@@ -243,6 +243,9 @@ pub(crate) struct ResourceCounts {
     pub active_drags: usize,
     #[serde(skip_serializing_if = "is_zero")]
     pub canvas_scenes: usize,
+    /// Isolated background JS compute workers still open after cleanup.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub workers: usize,
     /// Native auxiliary shell surfaces still registered with the platform.
     pub shell_surfaces: usize,
     pub fonts: usize,
@@ -831,15 +834,21 @@ impl Session {
         !self.shutdown_started.get() && self.work.has_network_events()
     }
 
-    /// Marks the session as a staged mount candidate so irreversible outbound network
-    /// requests are deferred until native acceptance.
-    pub(crate) fn begin_staged_mount(&self) {
-        self.work.begin_staged_network();
+    pub(crate) fn has_worker_events(&self) -> bool {
+        !self.shutdown_started.get() && self.work.has_worker_events()
     }
 
-    /// Releases deferred outbound network operations once the session is accepted.
+    /// Marks the session as a staged mount candidate so irreversible outbound network
+    /// requests and background workers are deferred until native acceptance.
+    pub(crate) fn begin_staged_mount(&self) {
+        self.work.begin_staged_network();
+        self.work.begin_staged_workers();
+    }
+
+    /// Releases deferred outbound network operations and workers once the session is accepted.
     pub(crate) fn commit_staged_mount(&self) {
         self.work.commit_staged_network();
+        self.work.commit_staged_workers();
     }
 
     pub(crate) fn register_platform_surface(&self, id: SurfaceId, surface: &Arc<dyn Surface>) {
@@ -1049,9 +1058,9 @@ impl Session {
         }
         let max_jobs = engine.limits().max_jobs_per_pump;
         let mut worked = false;
-        let mut remaining = [32, 32, 32, max_jobs, 32, 16];
+        let mut remaining = [32, 32, 32, max_jobs, 32, 16, 16];
         // Interleave work classes and preserve the next class across deadlines.
-        // Ready native work and network floods must not starve timers or promise jobs.
+        // Ready native work, network floods, and workers must not starve timers or promise jobs.
         while Instant::now() < end && remaining.iter().any(|&count| count != 0) {
             let phase = self.checkpoint_cursor.get();
             self.checkpoint_cursor.set((phase + 1) % remaining.len());
@@ -1097,6 +1106,15 @@ impl Session {
                         .map_err(|error| self.diagnostic(error))?;
                     true
                 } else { false },
+                6 => match self.work.next_worker_step() {
+                    Some(crate::work::WorkerStep::Delivery(delivery)) => {
+                        self.bridges.run(engine.turn(), |js| js.with_context(|ctx| self.work.settle_worker_event(&ctx, delivery)))
+                            .map_err(|error| self.diagnostic(error))?;
+                        true
+                    }
+                    Some(crate::work::WorkerStep::QuantumStepped) => true,
+                    None => false,
+                },
                 _ => {
                     let job_budget = engine.limits().job_timeout;
                     self.bridges.run(engine.turn(), |js| js.execute_job(job_budget))
@@ -1121,7 +1139,7 @@ impl Session {
         let queued = self.has_queued_notifications()?;
         let jobs_pending = engine.is_job_pending();
         if !jobs_pending { self.shell.clear_cleanup_jobs_pending(); }
-        if jobs_pending || queued || self.work.has_ready() || self.work.has_completions() || self.work.has_clipboard_completions() || self.work.has_clipboard_ops() || self.work.has_external() || self.work.has_sqlite_events() || self.work.has_file_events() || self.work.has_network_events() { self.wake_owner(); }
+        if jobs_pending || queued || self.work.has_ready() || self.work.has_completions() || self.work.has_clipboard_completions() || self.work.has_clipboard_ops() || self.work.has_external() || self.work.has_sqlite_events() || self.work.has_file_events() || self.work.has_network_events() || self.work.has_worker_events() { self.wake_owner(); }
         Ok(worked)
     }
 
@@ -1413,6 +1431,7 @@ impl Session {
             http_requests: network.http_requests,
             event_streams: network.event_streams,
             web_sockets: network.web_sockets,
+            workers: self.work.worker_count(),
             active_drags: self.dnd.active_count(),
             shell_surfaces: self.shell_surfaces.get(),
             fonts: self.font_leases.borrow().len(),
@@ -1510,6 +1529,7 @@ impl Session {
         let sqlite = self.work.sqlite_counts();
         let files = self.work.file_counts();
         let network = self.work.network_counts();
+        let workers = self.work.worker_count();
         let active_drags = self.dnd.active_count();
         self.cancel_outbound_drag_on_platform();
         self.dnd.clear();
@@ -1549,6 +1569,7 @@ impl Session {
         counts.http_requests = network.http_requests;
         counts.event_streams = network.event_streams;
         counts.web_sockets = network.web_sockets;
+        counts.workers = workers;
         counts.active_drags = active_drags;
         self.work.clear_images();
         let failure = if !self.contract_reported.replace(true)
