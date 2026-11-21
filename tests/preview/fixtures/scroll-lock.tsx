@@ -17,10 +17,15 @@ function compare(current: NativeWindowRect, saved: NativeWindowRect | undefined)
   if (current.y === saved.y) return "unchanged";
   return current.y < saved.y ? "down" : "up";
 }
+function LeaseBox(props: { testId: string }) {
+  const [node, setNode] = createSignal<NativeNode | null>(null);
+  lockScroll(node);
+  return <box testId={props.testId} ref={setNode} />;
+}
 function Leases(props: { source: boolean; outer: boolean; inner: boolean }) {
   return <Show when={props.source}><box style="position: absolute; width: 0px; height: 0px">
-    <Show when={props.outer}><box testId="outer-lease" ref={node => { lockScroll(node); }} /></Show>
-    <Show when={props.inner}><box testId="inner-lease" ref={node => { lockScroll(node); }} /></Show>
+    <Show when={props.outer}><LeaseBox testId="outer-lease" /></Show>
+    <Show when={props.inner}><LeaseBox testId="inner-lease" /></Show>
   </box></Show>;
 }
 export function mount(root: NativeNode) {

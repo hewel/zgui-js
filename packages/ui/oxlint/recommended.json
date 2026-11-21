@@ -1,0 +1,35 @@
+{
+  "plugins": ["eslint", "typescript", "oxc"],
+  "jsPlugins": ["./plugin.mjs"],
+  "rules": {
+    "no-debugger": "error",
+    "no-unused-vars": ["error", { "argsIgnorePattern": "^_", "varsIgnorePattern": "^_" }],
+    "no-restricted-globals": [
+      "error",
+      {
+        "name": "setTimeout",
+        "message": "Do not call raw setTimeout in components or apps; use createDelay() or createTimeout() from @hewel/zgui so timers cancel when owners dispose."
+      },
+      {
+        "name": "setInterval",
+        "message": "Do not call raw setInterval in components or apps; use createInterval() or createDelay() from @hewel/zgui instead of unguarded polling."
+      },
+      {
+        "name": "requestAnimationFrame",
+        "message": "Do not call raw requestAnimationFrame in components or apps; use createSpring() for motion."
+      },
+      {
+        "name": "cancelAnimationFrame",
+        "message": "Do not manage raw animation frame handles in components or apps; createSpring() owns its frames."
+      }
+    ],
+    "zgui/no-direct-bridge": "error",
+    "zgui/no-raw-insert-or-provider": "error",
+    "zgui/no-unthemed-primitives-with-components": "error",
+    "zgui/no-internal-package-imports": "error",
+    "zgui/no-cleanup-in-ref": "error",
+    "zgui/no-top-level-service-call": "error",
+    "zgui/no-solid-web-imports": "error",
+    "zgui/no-lint-suppression": "error"
+  }
+}

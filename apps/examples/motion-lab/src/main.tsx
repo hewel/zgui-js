@@ -302,6 +302,8 @@ function MotionLabApp() {
   const [compactTiles, setCompactTiles] = createSignal(false);
   const [lastTurnMs, setLastTurnMs] = createSignal<number | null>(null);
   const [scrollPos, setScrollPos] = createSignal<NativeScrollPosition | null>(null);
+  const [stressScrollEl, setStressScrollEl] = createSignal<NativeNode | null>(null);
+  observeGeometry(stressScrollEl, "scrollPosition", setScrollPos);
 
   const isDark = createMemo(() => scheme() === "dark");
 
@@ -518,9 +520,7 @@ function MotionLabApp() {
 
               <VirtualGrid
                 class="stress-scroll"
-                ref={node => {
-                  observeGeometry(node, "scrollPosition", setScrollPos);
-                }}
+                ref={setStressScrollEl}
                 testId="stress-scroll"
                 each={tiles()}
                 itemHeight={compactTiles() ? 40 : 54}

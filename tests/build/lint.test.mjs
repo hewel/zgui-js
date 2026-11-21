@@ -105,6 +105,48 @@ const negativeCases = [
     guidance: /concise \(<= 6 lines\)/,
   },
   {
+    name: "zgui/no-cleanup-in-ref (observeGeometry in ref arrow)",
+    file: "cleanup-in-ref.tsx",
+    code: 'import { observeGeometry } from "@hewel/zgui";\nexport const V = () => <scroll ref={el => observeGeometry(el, "scrollPosition", () => {})} />;\n',
+    expected: /zgui\(no-cleanup-in-ref\)/,
+    guidance: /CLEANUP_IN_FORBIDDEN_SCOPE/,
+  },
+  {
+    name: "zgui/no-cleanup-in-ref (spawnCommand in ref block)",
+    file: "service-in-ref.tsx",
+    code: 'import { spawnCommand } from "@hewel/zgui-services";\nexport const V = () => <box ref={() => { spawnCommand("/usr/bin/uname", ["-a"]); }} />;\n',
+    expected: /zgui\(no-cleanup-in-ref\)/,
+    guidance: /ref=\{setNode\}/,
+  },
+  {
+    name: "zgui/no-top-level-service-call (named import)",
+    file: "top-level-service.ts",
+    code: 'import { spawnCommand } from "@hewel/zgui-services";\nexport const req = spawnCommand("/usr/bin/uname", ["-s"]);\n',
+    expected: /zgui\(no-top-level-service-call\)/,
+    guidance: /module top level before mount\(\)/,
+  },
+  {
+    name: "zgui/no-top-level-service-call (namespace import)",
+    file: "top-level-service-ns.ts",
+    code: 'import * as svc from "@hewel/zgui-services";\nexport const caps = svc.getResolvedCapabilities();\n',
+    expected: /zgui\(no-top-level-service-call\)/,
+    guidance: /inside mount\(\)/,
+  },
+  {
+    name: "zgui/no-solid-web-imports (solid-js/web)",
+    file: "solid-web.ts",
+    code: 'import { render } from "solid-js/web";\nexport const r = render;\n',
+    expected: /zgui\(no-solid-web-imports\)/,
+    guidance: /@hewel\/zgui/,
+  },
+  {
+    name: "zgui/no-solid-web-imports (solid-js)",
+    file: "solid-direct.ts",
+    code: 'import { createSignal } from "solid-js";\nexport const s = createSignal;\n',
+    expected: /zgui\(no-solid-web-imports\)/,
+    guidance: /@hewel\/zgui/,
+  },
+  {
     name: "no-restricted-globals (setTimeout)",
     file: "timer.ts",
     code: "export function delay() { return setTimeout(() => {}, 10); }\n",
@@ -138,6 +180,77 @@ test("oxlint rules reject architectural violations with actionable teaching mess
     assert.match(result.output, item.expected, item.name);
     assert.match(result.output, item.guidance, item.name);
   }
+});
+
+test("exported @hewel/zgui/oxlint/recommended preset works standalone for downstream consumer apps", async t => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "zgui-consumer-lint-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const consumerConfig = path.join(dir, ".oxlintrc.json");
+  await writeFile(
+    consumerConfig,
+    JSON.stringify({
+      extends: [path.join(workspaceRoot, "packages/ui/oxlint/recommended.json")],
+    }),
+    "utf8",
+  );
+
+  // Positive fixture: accessor ref pattern + service call inside mount() + @hewel/zgui imports.
+  const goodFile = path.join(dir, "good.tsx");
+  await writeFile(
+    goodFile,
+    `import { createDelay, createSignal, observeGeometry, renderApp } from "@hewel/zgui";
+import type { NativeNode } from "@hewel/zgui";
+import { spawnCommand } from "@hewel/zgui-services";
+
+export function mount(root: NativeNode) {
+  return renderApp(() => {
+    const [scroller, setScroller] = createSignal<NativeNode | null>(null);
+    observeGeometry(scroller, "scrollPosition", () => {});
+    const delay = createDelay();
+    delay.schedule(50, () => { spawnCommand("/usr/bin/uname", ["-s"]); });
+    return <scroll ref={setScroller}><text>ok</text></scroll>;
+  }, root);
+}
+`,
+    "utf8",
+  );
+  const goodResult = await execFileAsync(
+    process.execPath,
+    [oxlintBin, "--deny-warnings", "-c", consumerConfig, goodFile],
+    { cwd: dir, encoding: "utf8" },
+  );
+  assert.ok(goodResult.stdout.includes("Found 0 warnings and 0 errors"), goodResult.stdout);
+
+  // Negative fixture: ref cleanup + top-level service + solid-js/web import all caught by preset.
+  const badFile = path.join(dir, "bad.tsx");
+  await writeFile(
+    badFile,
+    `import { createSignal } from "solid-js";
+import { observeGeometry } from "@hewel/zgui";
+import { spawnCommand } from "@hewel/zgui-services";
+export const early = spawnCommand("/usr/bin/uname", ["-a"]);
+export const View = () => {
+  const [x] = createSignal(0);
+  return <scroll ref={el => observeGeometry(el, "scrollPosition", () => {})}><text>{x()}</text></scroll>;
+};
+`,
+    "utf8",
+  );
+  let badOutput = "";
+  let badStatus = 0;
+  try {
+    await execFileAsync(process.execPath, [oxlintBin, "--deny-warnings", "-c", consumerConfig, badFile], {
+      cwd: dir,
+      encoding: "utf8",
+    });
+  } catch (error) {
+    badStatus = error.code ?? 1;
+    badOutput = `${error.stdout ?? ""}\n${error.stderr ?? ""}`;
+  }
+  assert.notEqual(badStatus, 0, "consumer preset must reject bad fixture");
+  assert.match(badOutput, /zgui\(no-solid-web-imports\)/);
+  assert.match(badOutput, /zgui\(no-top-level-service-call\)/);
+  assert.match(badOutput, /zgui\(no-cleanup-in-ref\)/);
 });
 
 test("oxfmt checks and formats files with repository configuration", async t => {

@@ -12,24 +12,27 @@ function Measured(props: { width: number }) {
   const viewportReport = () => { const v = viewport(); return v ? `viewport:${v.width}x${v.height}@${v.scale}` : "viewport:pending"; };
   const [followerWidth, setFollowerWidth] = createSignal(0);
   const [anchorCalls, setAnchorCalls] = createSignal(0);
-  let anchorNode!: NativeNode;
-  let stopAnchor = () => {};
+  const [pairEl, setPairEl] = createSignal<NativeNode | null>(null);
+  const [anchorEl, setAnchorEl] = createSignal<NativeNode | null>(null);
+  const [followerEl, setFollowerEl] = createSignal<NativeNode | null>(null);
+  const [zeroEl, setZeroEl] = createSignal<NativeNode | null>(null);
+  observeGeometry(pairEl, "viewport", setViewport);
+  const stopAnchor = observeGeometry(anchorEl, "borderSize", size => { setAnchor(size); setAnchorCalls(n => n + 1); setFollowerWidth(size.width); });
+  observeGeometry(followerEl, "borderSize", setFollower);
+  observeGeometry(zeroEl, "borderSize", setZero);
   let stopLate = () => {};
   onCleanup(() => stopLate());
   const report = () => "geometry:" + JSON.stringify({ anchor: describe(anchor()), follower: describe(follower()), zero: describe(zero()), late: describe(late()), anchorCalls: anchorCalls() });
-  return <column testId="geometry-pair" style={{ gap: "8px" }} ref={node => { observeGeometry(node, "viewport", setViewport); }}>
+  return <column testId="geometry-pair" style={{ gap: "8px" }} ref={setPairEl}>
     <row style={{ gap: "12px", height: "40px" }}>
-      <box testId="anchor" style={{ width: `${props.width}px`, height: "40px", background: "#0f766e" }} ref={node => {
-        anchorNode = node;
-        stopAnchor = observeGeometry(node, "borderSize", size => { setAnchor(size); setAnchorCalls(n => n + 1); setFollowerWidth(size.width); });
-      }} />
-      <box testId="follower" style={{ width: `${followerWidth()}px`, height: "40px", background: "#2563eb" }} ref={node => { observeGeometry(node, "borderSize", setFollower); }} />
-      <box testId="zero" style={{ width: "0px", height: "0px" }} ref={node => { observeGeometry(node, "borderSize", setZero); }} />
+      <box testId="anchor" style={{ width: `${props.width}px`, height: "40px", background: "#0f766e" }} ref={setAnchorEl} />
+      <box testId="follower" style={{ width: `${followerWidth()}px`, height: "40px", background: "#2563eb" }} ref={setFollowerEl} />
+      <box testId="zero" style={{ width: "0px", height: "0px" }} ref={setZeroEl} />
     </row>
     <text testId="geometry-report">{report()}</text>
     <text testId="viewport-report">{viewportReport()}</text>
     <row style={{ gap: "8px" }}>
-      <Button testId="late" style={buttonStyle} onClick={() => { stopLate(); stopLate = observeGeometry(anchorNode, "borderSize", setLate); }}>Subscribe</Button>
+      <Button testId="late" style={buttonStyle} onClick={() => { const node = anchorEl(); if (!node) return; stopLate(); stopLate = observeGeometry(node, "borderSize", setLate); }}>Subscribe</Button>
       <Button testId="cancel" style={buttonStyle} onClick={() => { stopAnchor(); stopAnchor(); }}>Stop anchor</Button>
     </row>
   </column>;

@@ -1,10 +1,10 @@
 {
   "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "extends": ["./packages/ui/oxlint/recommended.json"],
+  "plugins": ["eslint", "typescript", "oxc"],
   "options": {
     "typeAware": true
   },
-  "plugins": ["eslint", "typescript", "oxc"],
-  "jsPlugins": ["./tools/oxlint-zgui-plugin.mjs"],
   "ignorePatterns": [
     "**/node_modules/**",
     "**/dist/**",
@@ -17,33 +17,7 @@
     "tests/build/.dependency-*/**"
   ],
   "rules": {
-    "no-debugger": "error",
-    "no-unused-vars": ["error", { "argsIgnorePattern": "^_", "varsIgnorePattern": "^_" }],
     "no-warning-comments": ["error", { "terms": ["todo", "fixme", "xxx"], "location": "anywhere" }],
-    "no-restricted-globals": [
-      "error",
-      {
-        "name": "setTimeout",
-        "message": "Do not call raw setTimeout in components or apps; use createDelay() or createTimeout() from @hewel/zgui so timers cancel when owners dispose."
-      },
-      {
-        "name": "setInterval",
-        "message": "Do not call raw setInterval in components or apps; use createInterval() or createDelay() from @hewel/zgui instead of unguarded polling."
-      },
-      {
-        "name": "requestAnimationFrame",
-        "message": "Do not call raw requestAnimationFrame in components or apps; use createSpring() for motion."
-      },
-      {
-        "name": "cancelAnimationFrame",
-        "message": "Do not manage raw animation frame handles in components or apps; createSpring() owns its frames."
-      }
-    ],
-    "zgui/no-direct-bridge": "error",
-    "zgui/no-raw-insert-or-provider": "error",
-    "zgui/no-unthemed-primitives-with-components": "error",
-    "zgui/no-internal-package-imports": "error",
-    "zgui/no-lint-suppression": "error",
     "zgui/no-essay-comments": "error"
   },
   "overrides": [
@@ -85,16 +59,22 @@
       }
     },
     {
-      "files": ["packages/build/**", "tools/**"],
+      "files": ["packages/build/**", "tools/**", "packages/ui/oxlint/**"],
       "rules": {
         "zgui/no-direct-bridge": "off",
         "no-restricted-globals": "off"
       }
     },
     {
-      "files": ["tools/**"],
+      "files": ["tools/**", "packages/ui/oxlint/**"],
       "rules": {
         "typescript/require-array-sort-compare": "off"
+      }
+    },
+    {
+      "files": ["tests/fixtures/**"],
+      "rules": {
+        "zgui/no-solid-web-imports": "off"
       }
     },
     {
@@ -116,6 +96,7 @@
         "zgui/no-direct-bridge": "off",
         "zgui/no-raw-insert-or-provider": "off",
         "zgui/no-internal-package-imports": "off",
+        "zgui/no-top-level-service-call": "off",
         "no-restricted-globals": "off",
         "no-unused-vars": "off",
         "no-unassigned-vars": "off"

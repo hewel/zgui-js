@@ -29,6 +29,8 @@
       "types": "./src/runtime-globals.ts",
       "default": "./src/runtime-globals.ts"
     },
+    "./oxlint": "./oxlint/plugin.mjs",
+    "./oxlint/recommended": "./oxlint/recommended.json",
     "./tsconfig.native.json": "./tsconfig.native.json"
   },
   "imports": {
