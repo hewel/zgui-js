@@ -199,7 +199,8 @@
 
 .mde-textarea {
   flex: 1;
-  min-height: 400px;
+  min-height: 0;
+  overflow-y: auto;
   font-family: var(--zui-type-family-mono);
   line-height: 1.6;
 }

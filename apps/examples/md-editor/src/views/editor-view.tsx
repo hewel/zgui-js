@@ -1,11 +1,4 @@
-import {
-  For,
-  Show,
-  createDelay,
-  createMemo,
-  createSignal,
-  observeGeometry,
-} from "@hewel/zgui";
+import { For, Show, createDelay, createMemo, createSignal, observeGeometry } from "@hewel/zgui";
 import type { NativeNode, NativeScrollPosition, NativeValueEvent } from "@hewel/zgui";
 import {
   Badge,
@@ -68,6 +61,31 @@ export function EditorView() {
 
   const outlineExpanded = createMemo(() => studio.outlineTree().map(n => n.id));
 
+  const effectiveSplitSizes = createMemo<readonly number[]>(() => {
+    const saved = studio.splitSizes();
+    const sidebar = Math.max(0, Math.min(38, saved[0] ?? 22));
+    const rest = Math.max(0, 100 - sidebar);
+    const mode = studio.viewMode();
+    if (mode === "preview") return [sidebar, 0, rest];
+    if (mode === "editor") return [sidebar, rest, 0];
+    return saved;
+  });
+
+  const handleSplitSizesChange = (next: readonly number[]) => {
+    if (studio.viewMode() === "split") {
+      studio.setSplitSizes(next);
+      return;
+    }
+    const prev = studio.splitSizes();
+    const nextSidebar = Math.max(0, Math.min(38, next[0] ?? prev[0] ?? 22));
+    const prevMain = (prev[1] ?? 39) + (prev[2] ?? 39);
+    const editorShare = prevMain > 0 ? (prev[1] ?? 39) / prevMain : 0.5;
+    const nextMain = Math.max(0, 100 - nextSidebar);
+    const nextEditor = Math.round(nextMain * editorShare * 10) / 10;
+    const nextPreview = Math.max(0, Math.round((nextMain - nextEditor) * 10) / 10);
+    studio.setSplitSizes([nextSidebar, nextEditor, nextPreview]);
+  };
+
   const handleEditorInput = (event: NativeValueEvent) => {
     studio.setSelectionRange(event.selection);
     studio.updateActiveContent(event.value);
@@ -78,19 +96,44 @@ export function EditorView() {
       <row class="mde-toolbar">
         <row style={{ gap: "6px", "align-items": "center", "flex-wrap": "wrap" }}>
           <text class="muted">Format:</text>
-          <Button testId="fmt-bold" size="xs" variant="outline" onClick={() => studio.wrapSelection("**", "**", "bold")}>
+          <Button
+            testId="fmt-bold"
+            size="xs"
+            variant="outline"
+            onClick={() => studio.wrapSelection("**", "**", "bold")}
+          >
             B
           </Button>
-          <Button testId="fmt-italic" size="xs" variant="outline" onClick={() => studio.wrapSelection("*", "*", "italic")}>
+          <Button
+            testId="fmt-italic"
+            size="xs"
+            variant="outline"
+            onClick={() => studio.wrapSelection("*", "*", "italic")}
+          >
             I
           </Button>
-          <Button testId="fmt-strike" size="xs" variant="outline" onClick={() => studio.wrapSelection("~~", "~~", "strike")}>
+          <Button
+            testId="fmt-strike"
+            size="xs"
+            variant="outline"
+            onClick={() => studio.wrapSelection("~~", "~~", "strike")}
+          >
             S
           </Button>
-          <Button testId="fmt-code" size="xs" variant="outline" onClick={() => studio.wrapSelection("`", "`", "code")}>
+          <Button
+            testId="fmt-code"
+            size="xs"
+            variant="outline"
+            onClick={() => studio.wrapSelection("`", "`", "code")}
+          >
             Code
           </Button>
-          <Button testId="fmt-link" size="xs" variant="outline" onClick={() => studio.wrapSelection("[", "](https://zgui.dev)", "link")}>
+          <Button
+            testId="fmt-link"
+            size="xs"
+            variant="outline"
+            onClick={() => studio.wrapSelection("[", "](https://zgui.dev)", "link")}
+          >
             Link
           </Button>
           <Separator orientation="vertical" />
@@ -121,7 +164,12 @@ export function EditorView() {
             Code Block
           </Button>
           <Separator orientation="vertical" />
-          <Button testId="btn-paste-image" size="xs" variant="secondary" onClick={() => void studio.pasteClipboardImage()}>
+          <Button
+            testId="btn-paste-image"
+            size="xs"
+            variant="secondary"
+            onClick={() => void studio.pasteClipboardImage()}
+          >
             Paste Image
           </Button>
           <Button testId="btn-stress-doc" size="xs" variant="ghost" onClick={studio.loadStressDoc}>
@@ -218,20 +266,33 @@ export function EditorView() {
       <box class="mde-body">
         <SplitPane
           testId="studio-split-pane"
-          sizes={studio.splitSizes()}
-          onSizesChange={studio.setSplitSizes}
+          sizes={effectiveSplitSizes()}
+          onSizesChange={handleSplitSizesChange}
           label="Markdown Studio workspace split"
         >
-          <SplitPanePanel testId="studio-sidebar-panel" minSize={15} maxSize={38} collapsible collapsedSize={0}>
+          <SplitPanePanel
+            testId="studio-sidebar-panel"
+            minSize={15}
+            maxSize={38}
+            collapsible
+            collapsedSize={0}
+          >
             <scroll class="mde-sidebar" testId="studio-sidebar">
               <Show when={previewReady()}>
                 <column style={{ gap: "12px" }}>
                   <column style={{ gap: "6px" }}>
                     <row style={{ "justify-content": "space-between", "align-items": "center" }}>
                       <text class="muted" style={{ "font-weight": "600" }}>
-                        {studio.workspaceName() ? `Workspace: ${studio.workspaceName()}` : "Workspace"}
+                        {studio.workspaceName()
+                          ? `Workspace: ${studio.workspaceName()}`
+                          : "Workspace"}
                       </text>
-                      <Button testId="btn-open-folder-side" size="xs" variant="outline" onClick={() => void studio.openWorkspaceFolder()}>
+                      <Button
+                        testId="btn-open-folder-side"
+                        size="xs"
+                        variant="outline"
+                        onClick={() => void studio.openWorkspaceFolder()}
+                      >
                         Folder
                       </Button>
                     </row>
@@ -285,7 +346,9 @@ export function EditorView() {
                   <Show when={studio.parsedResult().parsed.taskTotal > 0}>
                     <column style={{ gap: "6px" }}>
                       <row style={{ "justify-content": "space-between" }}>
-                        <text class="muted" style={{ "font-weight": "600" }}>Task Progress</text>
+                        <text class="muted" style={{ "font-weight": "600" }}>
+                          Task Progress
+                        </text>
                         <text class="muted mono">
                           {`${studio.parsedResult().parsed.taskDone}/${studio.parsedResult().parsed.taskTotal}`}
                         </text>
@@ -325,15 +388,14 @@ export function EditorView() {
 
           <SplitPaneHandle testId="split-handle-sidebar" withHandle label="Resize sidebar" />
 
-          <SplitPanePanel testId="studio-editor-panel" minSize={20}>
-            <Show
-              when={studio.viewMode() !== "preview"}
-              fallback={
-                <column class="mde-empty-pane">
-                  <text class="muted">Preview-only mode active</text>
-                </column>
-              }
-            >
+          <SplitPanePanel
+            testId="studio-editor-panel"
+            minSize={studio.viewMode() === "preview" ? 0 : 20}
+            collapsible
+            collapsedSize={0}
+            collapsed={studio.viewMode() === "preview"}
+          >
+            <Show when={studio.viewMode() !== "preview"}>
               <column class="mde-editor-pane">
                 <row class="mde-pane-head">
                   <text style={{ "font-weight": "600" }}>MARKDOWN SOURCE</text>
@@ -356,17 +418,22 @@ export function EditorView() {
             </Show>
           </SplitPanePanel>
 
-          <SplitPaneHandle testId="split-handle-preview" withHandle label="Resize editor and preview" />
+          <SplitPaneHandle
+            testId="split-handle-preview"
+            withHandle
+            disabled={studio.viewMode() !== "split"}
+            style={studio.viewMode() !== "split" ? { display: "none" } : undefined}
+            label="Resize editor and preview"
+          />
 
-          <SplitPanePanel testId="studio-preview-panel" minSize={20}>
-            <Show
-              when={studio.viewMode() !== "editor"}
-              fallback={
-                <column class="mde-empty-pane">
-                  <text class="muted">Editor-only mode active</text>
-                </column>
-              }
-            >
+          <SplitPanePanel
+            testId="studio-preview-panel"
+            minSize={studio.viewMode() === "editor" ? 0 : 20}
+            collapsible
+            collapsedSize={0}
+            collapsed={studio.viewMode() === "editor"}
+          >
+            <Show when={studio.viewMode() !== "editor"}>
               <column class="mde-preview-pane">
                 <row class="mde-pane-head">
                   <text style={{ "font-weight": "600" }}>LIVE NATIVE PREVIEW</text>
@@ -389,7 +456,9 @@ export function EditorView() {
                       pastedImg={studio.pastedImg}
                       highlightedLine={studio.highlightedLine}
                       onToggleTask={studio.toggleTask}
-                      onLinkClick={(href, label) => studio.setStatusMsg(`Link: "${label}" -> ${href}`)}
+                      onLinkClick={(href, label) =>
+                        studio.setStatusMsg(`Link: "${label}" -> ${href}`)
+                      }
                       onCopyCode={(code, lang) => void studio.copyCodeBlock(code, lang)}
                       onClearPastedImg={studio.clearPastedImage}
                       onHeadingNode={studio.registerHeadingNode}

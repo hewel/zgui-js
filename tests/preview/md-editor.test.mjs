@@ -22,7 +22,10 @@ const WORKSPACE_WELCOME_MD = [
   'export const studio = "ready";',
   "```",
   "",
-  ...Array.from({ length: 20 }, (_, i) => [`Spacer paragraph ${i + 1} for scroll testing.`, ""]).flat(),
+  ...Array.from({ length: 20 }, (_, i) => [
+    `Spacer paragraph ${i + 1} for scroll testing.`,
+    "",
+  ]).flat(),
   "## Deep Target Section",
   "",
   "Reached via programmatic scrollIntoView.",
@@ -114,6 +117,7 @@ const CAPS = [
   "virtual-time",
   "selectors.test-id",
   "input.pointer",
+  "input.wheel",
   "input.keyboard",
   "input.text",
   "tree.inspect",
@@ -211,7 +215,10 @@ test(
 
     const sideBefore = getNode(tLoaded, "studio-sidebar-panel").boundsLogical.width;
     const sideAfter = getNode(tResized, "studio-sidebar-panel").boundsLogical.width;
-    assert.ok(sideAfter > sideBefore + 20, `expected sidebar SplitPane to widen: before=${sideBefore}, after=${sideAfter}`);
+    assert.ok(
+      sideAfter > sideBefore + 20,
+      `expected sidebar SplitPane to widen: before=${sideBefore}, after=${sideAfter}`,
+    );
 
     assert.equal(result.teardown?.clean, true);
   },
@@ -299,6 +306,89 @@ test(
     assert.ok(
       tFts.nodes.some(n => typeof n.text === "string" && n.text.includes("architecture.md")),
       "expected FTS5 search results to include architecture.md",
+    );
+
+    assert.equal(result.teardown?.clean, true);
+  },
+);
+
+test(
+  "Textarea scrolls vertically on wheel and Preview/Editor modes collapse hidden SplitPane panels (#77)",
+  { timeout: 60000 },
+  async () => {
+    const { out, result } = await run("textarea-scroll-and-panes", [
+      advance(32),
+      check("md-source-editor", "exists", true),
+      // Open workspace welcome.md (50+ lines) so Textarea overflows vertically in the 600px window.
+      click("btn-open-folder"),
+      advance(32),
+      click("tree-item-ws:welcome.md"),
+      advance(48),
+      capture("before-wheel"),
+      {
+        id: id(),
+        op: "wheel",
+        target: { surface: "main", testId: "md-source-editor" },
+        delta: { x: 0, y: 240, unit: "pixels" },
+      },
+      advance(200),
+      capture("after-wheel"),
+
+      // Switch to Preview-only mode -> editor panel collapses to 0 width, preview expands.
+      click("mode-preview"),
+      advance(32),
+      capture("mode-preview"),
+
+      // Switch to Editor-only mode -> preview panel collapses to 0 width, editor expands.
+      click("mode-editor"),
+      advance(32),
+      capture("mode-editor"),
+
+      // Switch back to Split mode -> both panels visible again.
+      click("mode-split"),
+      advance(32),
+      capture("mode-split"),
+    ]);
+
+    const tBefore = await readTree(out, "before-wheel");
+    const tAfter = await readTree(out, "after-wheel");
+    const beforeMetrics = getNode(tBefore, "md-source-editor").scrollMetrics;
+    const afterMetrics = getNode(tAfter, "md-source-editor").scrollMetrics;
+    assert.ok(beforeMetrics, "Textarea must be a vertical scroll container with scrollMetrics");
+    assert.ok(afterMetrics, "Textarea must report scrollMetrics after wheel");
+    assert.ok(
+      afterMetrics.offsetY > beforeMetrics.offsetY,
+      `expected Textarea wheel to increase offsetY: before=${beforeMetrics.offsetY}, after=${afterMetrics.offsetY}`,
+    );
+
+    const tSplit = await readTree(out, "mode-split");
+    const tPreview = await readTree(out, "mode-preview");
+    const tEditor = await readTree(out, "mode-editor");
+
+    const splitEditorW = getNode(tSplit, "studio-editor-panel").boundsLogical.width;
+    const splitPreviewW = getNode(tSplit, "studio-preview-panel").boundsLogical.width;
+    assert.ok(splitEditorW > 200 && splitPreviewW > 200, "split mode shows both panes");
+
+    const previewModeEditorW = getNode(tPreview, "studio-editor-panel").boundsLogical.width;
+    const previewModePreviewW = getNode(tPreview, "studio-preview-panel").boundsLogical.width;
+    assert.ok(
+      previewModeEditorW <= 1,
+      `preview mode must collapse editor panel to 0px, got ${previewModeEditorW}`,
+    );
+    assert.ok(
+      previewModePreviewW > splitPreviewW + 150,
+      `preview mode must expand preview panel (${previewModePreviewW} vs split ${splitPreviewW})`,
+    );
+
+    const editorModeEditorW = getNode(tEditor, "studio-editor-panel").boundsLogical.width;
+    const editorModePreviewW = getNode(tEditor, "studio-preview-panel").boundsLogical.width;
+    assert.ok(
+      editorModePreviewW <= 1,
+      `editor mode must collapse preview panel to 0px, got ${editorModePreviewW}`,
+    );
+    assert.ok(
+      editorModeEditorW > splitEditorW + 150,
+      `editor mode must expand editor panel (${editorModeEditorW} vs split ${splitEditorW})`,
     );
 
     assert.equal(result.teardown?.clean, true);

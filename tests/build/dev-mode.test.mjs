@@ -10,18 +10,28 @@ const root = path.resolve(import.meta.dirname, "../..");
 
 test("development: true bundle mounts ThemeProvider, Tabs, Card, Item, Collapsible, and overlays without Solid dev-mode scope errors", async t => {
   const dir = await fs.mkdtemp(path.join(import.meta.dirname, ".dev-mode-"));
-  t.after(async () => { await fs.rm(dir, { recursive: true, force: true }); });
+  t.after(async () => {
+    await fs.rm(dir, { recursive: true, force: true });
+  });
   await fs.mkdir(path.join(dir, "src"), { recursive: true });
-  await fs.writeFile(path.join(dir, "package.json"), JSON.stringify({
-    name: "dev-mode-smoke",
-    private: true,
-    zgui: { id: "dev.zgui.dev-mode-smoke", entry: "src/main.tsx" },
-  }));
-  await fs.writeFile(path.join(dir, "tsconfig.json"), JSON.stringify({
-    extends: "../../../packages/ui/tsconfig.native.json",
-    include: ["src"],
-  }));
-  await fs.writeFile(path.join(dir, "src/main.tsx"), `
+  await fs.writeFile(
+    path.join(dir, "package.json"),
+    JSON.stringify({
+      name: "dev-mode-smoke",
+      private: true,
+      zgui: { id: "dev.zgui.dev-mode-smoke", entry: "src/main.tsx" },
+    }),
+  );
+  await fs.writeFile(
+    path.join(dir, "tsconfig.json"),
+    JSON.stringify({
+      extends: "../../../packages/ui/tsconfig.native.json",
+      include: ["src"],
+    }),
+  );
+  await fs.writeFile(
+    path.join(dir, "src/main.tsx"),
+    `
     import { renderApp } from "@hewel/zgui";
     import type { NativeNode } from "@hewel/zgui";
     import {
@@ -82,7 +92,8 @@ test("development: true bundle mounts ThemeProvider, Tabs, Card, Item, Collapsib
         </ThemeProvider>
       ), root);
     }
-  `);
+  `,
+  );
 
   const built = await buildApplication("dev-mode-smoke", {
     root,
@@ -90,33 +101,51 @@ test("development: true bundle mounts ThemeProvider, Tabs, Card, Item, Collapsib
     outDir: path.join(dir, "dist"),
     development: true,
   });
-  const mod = await import(`${pathToFileURL(path.join(built.dist, built.manifest.entry)).href}?t=${Date.now()}`);
+  const mod = await import(
+    `${pathToFileURL(path.join(built.dist, built.manifest.entry)).href}?t=${Date.now()}`
+  );
   const h = createHost({ strictStyles: true });
   globalThis.__zgui = h.host;
   let dispose;
   t.after(() => {
-    try { dispose?.(); }
-    finally { delete globalThis.__zgui; }
+    try {
+      dispose?.();
+    } finally {
+      delete globalThis.__zgui;
+    }
   });
   dispose = h.runTurn(() => mod.mount(h.makeNode("root")));
   h.flush();
-  assert.ok(h.nodes.size > 10, "expected full themed component tree to mount under development: true");
+  assert.ok(
+    h.nodes.size > 10,
+    "expected full themed component tree to mount under development: true",
+  );
 });
 
 test("observeGeometry, trapFocus, lockScroll, and registerDismissLayer accept ref signal accessors cleanly in development: true (#51)", async t => {
   const dir = await fs.mkdtemp(path.join(import.meta.dirname, ".dev-mode-ref-"));
-  t.after(async () => { await fs.rm(dir, { recursive: true, force: true }); });
+  t.after(async () => {
+    await fs.rm(dir, { recursive: true, force: true });
+  });
   await fs.mkdir(path.join(dir, "src"), { recursive: true });
-  await fs.writeFile(path.join(dir, "package.json"), JSON.stringify({
-    name: "dev-mode-ref-accessor",
-    private: true,
-    zgui: { id: "dev.zgui.dev-mode-ref-accessor", entry: "src/main.tsx" },
-  }));
-  await fs.writeFile(path.join(dir, "tsconfig.json"), JSON.stringify({
-    extends: "../../../packages/ui/tsconfig.native.json",
-    include: ["src"],
-  }));
-  await fs.writeFile(path.join(dir, "src/main.tsx"), `
+  await fs.writeFile(
+    path.join(dir, "package.json"),
+    JSON.stringify({
+      name: "dev-mode-ref-accessor",
+      private: true,
+      zgui: { id: "dev.zgui.dev-mode-ref-accessor", entry: "src/main.tsx" },
+    }),
+  );
+  await fs.writeFile(
+    path.join(dir, "tsconfig.json"),
+    JSON.stringify({
+      extends: "../../../packages/ui/tsconfig.native.json",
+      include: ["src"],
+    }),
+  );
+  await fs.writeFile(
+    path.join(dir, "src/main.tsx"),
+    `
     import { createSignal, lockScroll, observeGeometry, registerDismissLayer, renderApp, trapFocus } from "@hewel/zgui";
     import type { NativeNode } from "@hewel/zgui";
 
@@ -136,7 +165,8 @@ test("observeGeometry, trapFocus, lockScroll, and registerDismissLayer accept re
         return <scroll testId="ref-scroll" ref={setScroller}><text>Body</text></scroll>;
       }, root);
     }
-  `);
+  `,
+  );
 
   const built = await buildApplication("dev-mode-ref-accessor", {
     root,
@@ -144,25 +174,34 @@ test("observeGeometry, trapFocus, lockScroll, and registerDismissLayer accept re
     outDir: path.join(dir, "dist"),
     development: true,
   });
-  const mod = await import(`${pathToFileURL(path.join(built.dist, built.manifest.entry)).href}?t=${Date.now()}`);
+  const mod = await import(
+    `${pathToFileURL(path.join(built.dist, built.manifest.entry)).href}?t=${Date.now()}`
+  );
   const h = createHost({ strictStyles: true });
   globalThis.__zgui = h.host;
   let dispose;
   t.after(() => {
-    try { dispose?.(); }
-    finally { delete globalThis.__zgui; }
+    try {
+      dispose?.();
+    } finally {
+      delete globalThis.__zgui;
+    }
   });
   dispose = h.runTurn(() => mod.mount(h.makeNode("root")));
   const scroller = h.byTestId("ref-scroll");
   assert.ok(scroller, "scroll node mounted");
 
-  const geo = h.geometry.find(record => record.active && record.node === scroller && record.kind === "scrollPosition");
+  const geo = h.geometry.find(
+    record => record.active && record.node === scroller && record.kind === "scrollPosition",
+  );
   assert.ok(geo, "observeGeometry attached via ref accessor in dev mode");
-  h.runTurn(() => geo.callback({
-    offset: { x: 0, y: 128 },
-    contentSize: { width: 300, height: 1000 },
-    scrollport: { width: 300, height: 200 },
-  }));
+  h.runTurn(() =>
+    geo.callback({
+      offset: { x: 0, y: 128 },
+      contentSize: { width: 300, height: 1000 },
+      scrollport: { width: 300, height: 200 },
+    }),
+  );
   assert.equal(mod.log.scrollY, 128);
 
   assert.equal(h.traps.filter(r => r.active && r.node === scroller).length, 1, "trapFocus active");
@@ -180,3 +219,95 @@ test("observeGeometry, trapFocus, lockScroll, and registerDismissLayer accept re
   assert.equal(h.layers.filter(r => r.active).length, 0, "dismiss layer disposed on unmount");
 });
 
+test("useWindowState avoids reentrant flush() warnings when setWindowTitle runs inside createEffect in development: true (#77)", async t => {
+  const dir = await fs.mkdtemp(path.join(import.meta.dirname, ".dev-mode-window-"));
+  t.after(async () => {
+    await fs.rm(dir, { recursive: true, force: true });
+  });
+  await fs.mkdir(path.join(dir, "src"), { recursive: true });
+  await fs.writeFile(
+    path.join(dir, "package.json"),
+    JSON.stringify({
+      name: "dev-mode-window-effect",
+      private: true,
+      zgui: { id: "dev.zgui.dev-mode-window-effect", entry: "src/main.tsx" },
+    }),
+  );
+  await fs.writeFile(
+    path.join(dir, "tsconfig.json"),
+    JSON.stringify({
+      extends: "../../../packages/ui/tsconfig.native.json",
+      include: ["src"],
+    }),
+  );
+  await fs.writeFile(
+    path.join(dir, "src/main.tsx"),
+    `
+    import { createEffect, createSignal, renderApp, setWindowTitle, useWindowState } from "@hewel/zgui";
+    import type { NativeNode } from "@hewel/zgui";
+
+    export const hostApiVersion = 1;
+    const [docName, setDocName] = createSignal("welcome.md");
+    export { setDocName };
+
+    export function mount(root: NativeNode) {
+      return renderApp(() => {
+        const winState = useWindowState();
+        createEffect(docName, title => {
+          setWindowTitle(title + " — Studio");
+        });
+        return <text testId="win-title">{winState().title}</text>;
+      }, root);
+    }
+  `,
+  );
+
+  const built = await buildApplication("dev-mode-window-effect", {
+    root,
+    appDirectory: dir,
+    outDir: path.join(dir, "dist"),
+    development: true,
+  });
+  const mod = await import(
+    `${pathToFileURL(path.join(built.dist, built.manifest.entry)).href}?t=${Date.now()}`
+  );
+  const h = createHost({ strictStyles: true });
+  globalThis.__zgui = h.host;
+  const warnings = [];
+  const origWarn = console.warn;
+  const origError = console.error;
+  console.warn = (...args) => {
+    warnings.push(args.map(String).join(" "));
+  };
+  console.error = (...args) => {
+    warnings.push(args.map(String).join(" "));
+  };
+  let dispose;
+  t.after(() => {
+    console.warn = origWarn;
+    console.error = origError;
+    try {
+      dispose?.();
+    } finally {
+      delete globalThis.__zgui;
+    }
+  });
+
+  dispose = h.runTurn(() => mod.mount(h.makeNode("root")));
+  await Promise.resolve();
+  h.flush();
+  assert.equal(h.host.getTextContent(h.byTestId("win-title")), "welcome.md — Studio");
+
+  h.runTurn(() => mod.setDocName("architecture.md"));
+  await Promise.resolve();
+  h.flush();
+  assert.equal(h.host.getTextContent(h.byTestId("win-title")), "architecture.md — Studio");
+  assert.deepEqual(
+    warnings.filter(w => w.includes("FLUSH_IN_EFFECT_CALLBACK") || w.includes("REACTIVE_WRITE")),
+    [],
+    `unexpected Solid dev warnings: ${warnings.join("\n")}`,
+  );
+
+  h.runTurn(() => dispose());
+  dispose = undefined;
+});
