@@ -445,8 +445,8 @@ impl SessionHost {
     }
 
     pub(super) fn record_outcome(&mut self, module: &SessionModule, document: Option<DocumentId>, outcome: &ReloadOutcome) {
-        let package = module.package.as_ref();
-        let identity = module.package.as_ref().map(|package| serde_json::json!({
+        let package = module.as_package();
+        let identity = module.as_package().map(|package| serde_json::json!({
             "id":package.manifest.id, "buildId":package.manifest.build_id, "styleSystem":package.manifest.style_system
         }));
         if let Some(identity) = identity {
@@ -456,7 +456,7 @@ impl SessionHost {
             };
             let mut record = serde_json::json!({"schemaVersion":1,"status":status,"candidate":identity,"generation":self.generation,
                 "document":document.map(|document| format!("{document:?}")),"diagnostic":diagnostic,
-                "lastSuccessfulBuildId":self.last_good.as_ref().and_then(|module|module.package.as_ref()).map(|package|&package.manifest.build_id)});
+                "lastSuccessfulBuildId":self.last_good.as_ref().and_then(SessionModule::as_package).map(|package|&package.manifest.build_id)});
             if let ReloadOutcome::Mounted { predecessor_leak: Some(leak), .. } = &outcome {
                 record["predecessorLeak"] = serde_json::json!(leak);
             }
@@ -567,7 +567,7 @@ impl SessionHost {
         surface.commit_image_policy(document, &candidate, mount_writes);
         self.clear_fallback(document);
         self.module = module.clone();
-        if module.package.is_some() { self.last_good = Some(module); }
+        if module.as_package().is_some() { self.last_good = Some(module); }
         self.sessions.insert(document, candidate);
         surface.request_frame(document);
         ReloadOutcome::Mounted { generation, predecessor_leak }

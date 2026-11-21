@@ -35,12 +35,7 @@ export function external() { __zgui.replaceText(textNode, 'External wake updated
 
 /// The package-less module mounted when the live host runs without `--bundle`.
 pub(crate) fn baseline_module() -> SessionModule {
-    SessionModule {
-        name: "zgui-js-baseline.mjs".into(),
-        source: BASELINE_SOURCE.into(),
-        styles: Vec::new(),
-        package: None,
-    }
+    SessionModule::inline("zgui-js-baseline.mjs", BASELINE_SOURCE, Vec::new())
 }
 
 /// Existing callers that used `Session::advance` now invoke the module export.

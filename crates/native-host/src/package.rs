@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, error::Error, fs, path::{Path, PathBuf}};
+use std::{cell::{OnceCell, RefCell}, collections::BTreeMap, error::Error, fs, path::{Path, PathBuf}, sync::Arc};
 use crate::bounded_fs::{self, BoundedReadError};
 use crate::runtime_paths::{canonical_absolute, socket_name, template};
 use sha2::{Digest, Sha256};
@@ -163,22 +163,21 @@ pub struct StyleSystem {
 
 #[derive(Clone)]
 pub struct Stylesheet {
-    pub path: String,
-    pub css: String,
+    pub path: Arc<str>,
+    pub css: Arc<str>,
 }
 
 pub struct Package {
     pub directory: PathBuf,
     pub manifest: Manifest,
-    pub source: String,
-    pub styles: Vec<Stylesheet>,
-    pub style_origins: serde_json::Value,
-    pub build_info: serde_json::Value,
+    pub entry_digest: String,
+    source: RefCell<Option<Arc<str>>>,
+    pub styles: Arc<[Stylesheet]>,
     pub source_map_digest: String,
-    source_map: sourcemap::DecodedMap,
+    source_map: OnceCell<Option<sourcemap::DecodedMap>>,
     generated_entry: String,
     status_path: Option<PathBuf>,
-    assets: BTreeMap<String, std::sync::Arc<[u8]>>,
+    assets: BTreeMap<String, Arc<[u8]>>,
 }
 
 impl Package {
@@ -250,37 +249,110 @@ impl Package {
                 return Err("package font byte budget exceeded".into());
             }
         }
-        let json_resource = |name: &str| -> Result<serde_json::Value> {
-            let value: serde_json::Value = serde_json::from_slice(&files[name])?;
-            if !value.is_object() { return Err(format!("{name} must be a JSON object").into()); }
-            Ok(value)
-        };
-        let style_origins = json_resource("style-origins.json")?;
-        let build_info = json_resource("build-info.json")?;
         let style_identity = serde_json::to_value(&manifest.style_system)?;
-        for (name, resource) in [("style-origins.json", &style_origins), ("build-info.json", &build_info)] {
-            if resource.get("styleSystem") != Some(&style_identity) {
+        for name in ["style-origins.json", "build-info.json"] {
+            let bytes = files.remove(name).ok_or_else(|| format!("missing metadata: {name}"))?;
+            let value: serde_json::Value = serde_json::from_slice(&bytes)?;
+            drop(bytes);
+            if !value.is_object() { return Err(format!("{name} must be a JSON object").into()); }
+            if value.get("styleSystem") != Some(&style_identity) {
                 return Err(format!("SX14: {name} styleSystem identity is missing or differs from manifest").into());
             }
         }
-        let source = String::from_utf8(files.remove(&manifest.entry).ok_or("missing entry")?)?;
-        let map_bytes = files.get(&manifest.source_map).ok_or("missing source map")?;
-        let source_map_digest = format!("sha256:{:x}", Sha256::digest(map_bytes));
+        let source_bytes = files.remove(&manifest.entry).ok_or("missing entry")?;
+        let entry_digest = digest(&source_bytes);
+        let source: Arc<str> = Arc::from(String::from_utf8(source_bytes)?);
+        let map_bytes = files.remove(&manifest.source_map).ok_or("missing source map")?;
+        let source_map_digest = digest(&map_bytes);
         // The decoder defaults missing fields, accepting even `{}`; require a
-        // recognized map document before decoding and validating its mappings.
-        if !sourcemap::is_sourcemap_slice(map_bytes) {
+        // recognized map document and validate its mappings eagerly, then drop
+        // the decoded table until a diagnostic stack trace actually needs it.
+        if !sourcemap::is_sourcemap_slice(&map_bytes) {
             return Err(format!("invalid source map {}: unrecognized source map document", manifest.source_map).into());
         }
-        let source_map = sourcemap::DecodedMap::from_reader(map_bytes.as_slice())
+        let validated_map = sourcemap::DecodedMap::from_reader(map_bytes.as_slice())
             .map_err(|error| format!("invalid source map {}: {error}", manifest.source_map))?;
-        let styles = manifest.styles.iter().map(|name| {
-            Ok(Stylesheet { path: name.clone(), css: String::from_utf8(files.remove(name).ok_or("missing stylesheet")?)? })
-        }).collect::<Result<Vec<_>>>()?;
+        drop(validated_map);
+        drop(map_bytes);
+        let styles: Arc<[Stylesheet]> = manifest.styles.iter().map(|name| {
+            Ok(Stylesheet {
+                path: Arc::from(name.as_str()),
+                css: Arc::from(String::from_utf8(files.remove(name).ok_or("missing stylesheet")?)?),
+            })
+        }).collect::<Result<Vec<_>>>()?.into();
         let generated_entry = directory.join(&manifest.entry).to_string_lossy().into_owned();
         let assets = manifest.assets.iter().map(|name| {
-            (name.clone(), std::sync::Arc::from(files.remove(name).expect("verified declared asset")))
+            (name.clone(), Arc::from(files.remove(name).expect("verified declared asset")))
         }).collect();
-        Ok(Self { directory, manifest, source, styles, style_origins, build_info, source_map, generated_entry, source_map_digest, assets, status_path })
+        Ok(Self {
+            directory,
+            manifest,
+            entry_digest,
+            source: RefCell::new(Some(source)),
+            styles,
+            source_map_digest,
+            source_map: OnceCell::new(),
+            generated_entry,
+            status_path,
+            assets,
+        })
+    }
+
+    /// Canonical entry module identifier used when evaluating the bundle in QuickJS.
+    #[must_use]
+    pub fn generated_entry(&self) -> &str {
+        &self.generated_entry
+    }
+
+    /// Consume the initial entry source buffer so steady-state sessions do not retain
+    /// full JS text in Rust heap after QuickJS evaluation; retries reload from the
+    /// verified immutable package directory on demand.
+    pub(crate) fn take_or_load_source(&self) -> Result<Arc<str>> {
+        if let Some(cached) = self.source.borrow_mut().take() {
+            return Ok(cached);
+        }
+        self.read_verified_entry()
+    }
+
+    fn read_verified_entry(&self) -> Result<Arc<str>> {
+        let bytes = resource(&self.directory, &self.manifest.entry)?;
+        let actual = digest(&bytes);
+        if actual != self.entry_digest {
+            return Err(format!(
+                "artifact integrity mismatch for {}: expected {}, got {actual}",
+                self.manifest.entry, self.entry_digest
+            ).into());
+        }
+        Ok(Arc::from(String::from_utf8(bytes)?))
+    }
+
+    /// Read and digest-verify a declared JSON metadata artifact (e.g., `style-origins.json`
+    /// or `build-info.json`) on demand so live desktop sessions never retain parsed trees.
+    pub fn read_verified_json(&self, name: &str) -> Result<serde_json::Value> {
+        let expected = self.manifest.artifact_digests.get(name)
+            .ok_or_else(|| format!("undeclared package metadata resource: {name}"))?;
+        let bytes = resource(&self.directory, name)?;
+        let actual = digest(&bytes);
+        if &actual != expected {
+            return Err(format!(
+                "artifact integrity mismatch for {name}: expected {expected}, got {actual}"
+            ).into());
+        }
+        let value: serde_json::Value = serde_json::from_slice(&bytes)?;
+        if !value.is_object() {
+            return Err(format!("{name} must be a JSON object").into());
+        }
+        Ok(value)
+    }
+
+    fn decoded_source_map(&self) -> Option<&sourcemap::DecodedMap> {
+        self.source_map.get_or_init(|| {
+            let bytes = resource(&self.directory, &self.manifest.source_map).ok()?;
+            if digest(&bytes) != self.source_map_digest || !sourcemap::is_sourcemap_slice(&bytes) {
+                return None;
+            }
+            sourcemap::DecodedMap::from_reader(bytes.as_slice()).ok()
+        }).as_ref()
     }
 
     /// Immutable manifest-declared bytes from the integrity-verified package generation.
@@ -288,8 +360,8 @@ impl Package {
         self.assets.get(name).map(AsRef::as_ref)
     }
 
-    pub(crate) fn asset_data(&self, name: &str) -> Option<std::sync::Arc<[u8]>> {
-        self.assets.get(name).map(std::sync::Arc::clone)
+    pub(crate) fn asset_data(&self, name: &str) -> Option<Arc<[u8]>> {
+        self.assets.get(name).map(Arc::clone)
     }
 
     pub(crate) fn record_acceptance(&self, record: &serde_json::Value) -> Result<()> {
@@ -303,8 +375,8 @@ impl Package {
         Ok(())
     }
 
-    pub(crate) fn image_assets(&self) -> impl Iterator<Item = (String, std::sync::Arc<[u8]>)> + '_ {
-        self.assets.iter().map(|(name, bytes)| (name.clone(), std::sync::Arc::clone(bytes)))
+    pub(crate) fn image_assets(&self) -> impl Iterator<Item = (String, Arc<[u8]>)> + '_ {
+        self.assets.iter().map(|(name, bytes)| (name.clone(), Arc::clone(bytes)))
     }
 
     /// Remap this package's generated entry frames to one-based original locations.
@@ -329,7 +401,7 @@ impl Package {
                 let length = entry.len() + line.len() + column.len() + 2;
                 let line = line.parse::<u32>().ok()?.checked_sub(1)?;
                 let column = column.parse::<u32>().ok()?.checked_sub(1)?;
-                let token = self.source_map.lookup_token(line, column)?;
+                let token = self.decoded_source_map()?.lookup_token(line, column)?;
                 if token.get_dst_line() != line { return None; }
                 let source = token.get_source()?;
                 let original_line = token.get_src_line().checked_add(1)?;
@@ -659,13 +731,13 @@ mod tests {
         value["fonts"] = serde_json::json!([{"family":"App Sans","path":"font.ttf"}]);
         fixture.save(value.clone());
         let package = Package::load(&fixture.0).unwrap();
-        assert_eq!(package.styles.iter().map(|sheet|sheet.path.as_str()).collect::<Vec<_>>(), ["base.css","app.css"]);
-        assert_eq!(package.styles[0].css, ".base {color:red}");
+        assert_eq!(package.styles.iter().map(|sheet| &*sheet.path).collect::<Vec<_>>(), ["base.css","app.css"]);
+        assert_eq!(&*package.styles[0].css, ".base {color:red}");
         value["styles"] = serde_json::json!(["app.css", "base.css"]);
         fixture.save(value.clone());
         let reversed = Package::load(&fixture.0).unwrap();
         assert_ne!(package.manifest.build_id, reversed.manifest.build_id);
-        assert_eq!(reversed.styles[0].path, "app.css");
+        assert_eq!(&*reversed.styles[0].path, "app.css");
         value["fonts"][0]["path"] = serde_json::json!("app.css");
         fixture.save(value);
         assert!(Package::load(&fixture.0).err().unwrap().to_string().contains("undeclared font"));
@@ -711,13 +783,13 @@ mod tests {
     #[test]
     fn scoped_font_leases_preserve_successors_restore_profile_fonts_and_reject_malformed_bytes() {
         let fonts = zgui::app::Fonts::shipped_only();
-        let data: zgui::text::FontData = std::sync::Arc::new(include_bytes!("../../../preview/fonts/NotoSans-Regular.ttf").as_slice());
+        let data: zgui::text::FontData = Arc::new(include_bytes!("../../../preview/fonts/NotoSans-Regular.ttf").as_slice());
         let first = fonts.register_scoped(data.clone(), "Application Sans").unwrap();
         let successor = fonts.register_scoped(data.clone(), "Application Sans").unwrap();
         drop(first);
         assert!(fonts.contains_family("Application Sans"), "retirement withdrew the successor");
         assert!(!fonts.contains_family("Application Snas"), "misspelled alias must not use fallback");
-        assert!(fonts.register_scoped(std::sync::Arc::new(b"not a font"), "Application Sans").is_err());
+        assert!(fonts.register_scoped(Arc::new(b"not a font"), "Application Sans").is_err());
         assert!(fonts.contains_family("Application Sans"), "rejected registration damaged active font");
         drop(successor);
         assert!(!fonts.contains_family("Application Sans"), "last lease must unregister the alias");
@@ -740,7 +812,17 @@ mod tests {
         let source = b"export const hostApiVersion = 1; export function mount() { return () => {}; }";
         let map = br#"{"version":3,"sources":[],"names":[],"mappings":""}"#;
         fixture.publish(source, map);
-        assert_eq!(Package::load(&fixture.0).unwrap().source.as_bytes(), source);
+        let package = Package::load(&fixture.0).unwrap();
+        // Consuming the initial buffer releases retained JS source and reloads verified bytes on demand.
+        assert_eq!(package.take_or_load_source().unwrap().as_bytes(), source);
+        assert!(package.source.borrow().is_none(), "initial source buffer should be released after take");
+        assert_eq!(package.take_or_load_source().unwrap().as_bytes(), source);
+        assert!(package.source.borrow().is_none(), "reloaded retry source should not be retained permanently");
+        assert!(package.read_verified_json("style-origins.json").is_ok());
+        assert!(package.read_verified_json("build-info.json").is_ok());
+        fs::write(fixture.0.join("app.mjs"), b"tampered").unwrap();
+        assert!(package.take_or_load_source().err().unwrap().to_string().contains("integrity mismatch"));
+        fs::write(fixture.0.join("app.mjs"), source).unwrap();
         fs::write(fixture.0.join("app.mjs.map"), b"modified").unwrap();
         assert!(Package::load(&fixture.0).err().unwrap().to_string().contains("integrity mismatch"));
     }
@@ -792,11 +874,23 @@ mod tests {
         builder.into_sourcemap().to_writer(&mut map).unwrap();
         fixture.publish(source.as_bytes(), &map);
         let package = Package::load(&fixture.0).unwrap();
+        assert!(package.source_map.get().is_none(), "source map must stay unloaded until an entry frame remaps");
         let mut engine = js_runtime::JsRuntime::new(Default::default()).unwrap();
         let foreign = engine.evaluate_script(
             "function foreign() { return new Error('foreign').stack; }\nforeign();",
         ).unwrap();
         assert!(foreign.contains("    at foreign (eval_script:1:"), "{foreign}");
+        let plain = js_runtime::Diagnostic {
+            kind: js_runtime::DiagnosticKind::Engine,
+            phase: "test",
+            message: "leave app.mjs:2:13 in the message".into(),
+            stack: Some(foreign.clone()),
+            generated_stack: None,
+        };
+        assert_eq!(package.remap_diagnostic(plain.clone()), plain);
+        assert!(package.source_map.get().is_none(), "unrelated stack must not decode source map");
+        let no_stack = js_runtime::Diagnostic { stack: None, ..plain.clone() };
+        assert_eq!(package.remap_diagnostic(no_stack.clone()), no_stack);
         let entry = package.directory.join(&package.manifest.entry).to_string_lossy().into_owned();
         for name in [&*entry, "app.mjs"] {
             let mut diagnostic = engine.run_smoke_module(name, source).unwrap_err();
@@ -815,6 +909,7 @@ mod tests {
             diagnostic.stack.as_mut().unwrap().push_str(unrelated);
             let original = diagnostic.clone();
             let mapped = package.remap_diagnostic(diagnostic);
+            assert!(package.source_map.get().is_some(), "matching frame should lazily decode source map");
             assert_eq!(mapped.message, original.message);
             assert_eq!(mapped.kind, original.kind);
             assert_eq!(mapped.phase, original.phase);
@@ -824,15 +919,10 @@ mod tests {
                 "    at fail (src/Counter.tsx:42:8)\n    at runSmoke (src/Counter.tsx:52:4)\n{foreign}{unrelated}",
             ));
         }
-        let plain = js_runtime::Diagnostic {
-            kind: js_runtime::DiagnosticKind::Engine,
-            phase: "test",
-            message: "leave app.mjs:2:13 in the message".into(),
-            stack: Some(foreign),
-            generated_stack: None,
-        };
-        assert_eq!(package.remap_diagnostic(plain.clone()), plain);
-        let no_stack = js_runtime::Diagnostic { stack: None, ..plain };
-        assert_eq!(package.remap_diagnostic(no_stack.clone()), no_stack);
+        // A fresh package refuses to lazily load a source map tampered on disk after load.
+        let tampered_package = Package::load(&fixture.0).unwrap();
+        fs::write(fixture.0.join("app.mjs.map"), b"{}").unwrap();
+        let raw = engine.run_smoke_module("app.mjs", source).unwrap_err();
+        assert_eq!(tampered_package.remap_diagnostic(raw.clone()), raw);
     }
 }

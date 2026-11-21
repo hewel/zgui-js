@@ -134,7 +134,7 @@ impl Application {
         }
         self.reconcile_harness(cx);
         if self.watcher.is_none() && let Some(path) = &self.watch_path {
-            let initial = self.host.module().package.as_ref().ok_or("--watch requires a package")?.directory.clone();
+            let initial = self.host.module().as_package().ok_or("--watch requires a package")?.directory.clone();
             let waker = cx.waker();
             self.watcher = Some(watcher::PackageWatcher::start(path.clone(), initial, Arc::new(move || waker.wake(WakeReason::AppWork)))?);
         }
@@ -185,7 +185,7 @@ impl Application {
         match publication {
             Ok(package) => {
                 let module = SessionModule::package(Rc::new(package));
-                if self.layer_primary && !module.package.as_ref().is_some_and(|package| package.manifest.capabilities.shell_surfaces) {
+                if self.layer_primary && !module.as_package().is_some_and(|package| package.manifest.capabilities.shell_surfaces) {
                     let outcome = ReloadOutcome::Rejected(assets::ContractFailure {
                         code: "E_CAPABILITY", message: "--layer-config requires capabilities.shellSurfaces".into(),
                     }.into());
@@ -220,7 +220,7 @@ impl Application {
             cx.request_exit();
             return;
         }
-        let app_id = self.host.module().package.as_ref()
+        let app_id = self.host.module().as_package()
             .filter(|package| package.manifest.capabilities.control_channel)
             .map(|package| package.manifest.id.as_str())
             .filter(|app_id| self.host.sessions().any(|session| session.control_app_id() == Some(*app_id)));

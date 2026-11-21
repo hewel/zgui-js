@@ -354,7 +354,7 @@ fn host_bytes_register_without_a_package_and_retire_with_the_session() {
     let held = Arc::downgrade(&bytes);
     let session = Session::prepare(
         native.region.clone(),
-        SessionModule { name: "transport-test".into(), source: SIMPLE.into(), styles: Vec::new(), package: None },
+        SessionModule::inline("transport-test", SIMPLE, Vec::new()),
         1,
         native.waker.clone(),
         SurfaceId::new(7),

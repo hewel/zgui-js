@@ -46,28 +46,67 @@ pub(crate) type Result<T> = std::result::Result<T, SessionError>;
 
 /// Everything one session generation loads and mounts. Package metadata is
 /// optional; without it the module is the host-owned integration baseline.
+/// Packaged modules share a single `Rc<Package>` with zero source/style clones.
 #[derive(Clone)]
-pub(crate) struct SessionModule {
-    pub name: String,
-    pub source: String,
-    pub styles: Vec<crate::package::Stylesheet>,
-    pub package: Option<Rc<Package>>,
-}
-impl SessionModule {
-    pub(crate) fn package(package: Rc<Package>) -> Self {
-        Self {
-            name: package.directory.join(&package.manifest.entry).to_string_lossy().into_owned(),
-            source: package.source.clone(),
-            styles: package.styles.clone(),
-            package: Some(package),
-        }
-    }
+pub(crate) enum SessionModule {
+    Package(Rc<Package>),
+    Inline {
+        name: Arc<str>,
+        source: Arc<str>,
+        styles: Arc<[crate::package::Stylesheet]>,
+    },
 }
 
 impl SessionModule {
+    pub(crate) fn package(package: Rc<Package>) -> Self {
+        Self::Package(package)
+    }
+
+    pub(crate) fn inline(
+        name: impl Into<Arc<str>>,
+        source: impl Into<Arc<str>>,
+        styles: Vec<crate::package::Stylesheet>,
+    ) -> Self {
+        Self::Inline {
+            name: name.into(),
+            source: source.into(),
+            styles: styles.into(),
+        }
+    }
+
+    pub(crate) fn name(&self) -> &str {
+        match self {
+            Self::Package(package) => package.generated_entry(),
+            Self::Inline { name, .. } => name,
+        }
+    }
+
+    pub(crate) fn styles(&self) -> &[crate::package::Stylesheet] {
+        match self {
+            Self::Package(package) => &package.styles,
+            Self::Inline { styles, .. } => styles,
+        }
+    }
+
+    pub(crate) fn as_package(&self) -> Option<&Rc<Package>> {
+        match self {
+            Self::Package(package) => Some(package),
+            Self::Inline { .. } => None,
+        }
+    }
+
+    fn take_or_load_source(&self) -> Result<Arc<str>> {
+        match self {
+            Self::Package(package) => package
+                .take_or_load_source()
+                .map_err(|error| SessionError::InvalidState(error.to_string())),
+            Self::Inline { source, .. } => Ok(Arc::clone(source)),
+        }
+    }
+
     /// The package declaration is the sole authority for dynamic shell surfaces.
     pub(crate) fn shell_authority(&self) -> Authority {
-        if self.package.as_ref().is_some_and(|package| package.manifest.capabilities.shell_surfaces) {
+        if self.as_package().is_some_and(|package| package.manifest.capabilities.shell_surfaces) {
             Authority::Allowed
         } else {
             Authority::Denied
@@ -75,7 +114,7 @@ impl SessionModule {
     }
 
     fn declares_session_lock(&self) -> bool {
-        self.package.as_ref().is_some_and(|package| package.manifest.capabilities.session_lock)
+        self.as_package().is_some_and(|package| package.manifest.capabilities.session_lock)
     }
 }
 
@@ -265,7 +304,7 @@ impl Session {
 
     fn prepare_inner(startup: Startup, module: SessionModule, generation: u64, waker: Arc<dyn Waker>, policy: SessionPolicy) -> Result<Rc<Self>> {
         if generation > MAX_SAFE_ID { return Err("session generation exhausted".into()); }
-        let resolved = if let Some(package) = &module.package {
+        let resolved = if let Some(package) = module.as_package() {
             let declarations = &package.manifest.capabilities;
             match &policy.assets {
                 AssetSource::Live(_) => ResolvedCapabilities::live(declarations, policy.socket_bindings.as_deref().unwrap_or(&BTreeMap::new()), |key| std::env::var_os(key)),
@@ -277,14 +316,14 @@ impl Session {
         let fonts = match &startup { Startup::Primary { region, .. } => region.fonts.clone(), Startup::Shell { fonts, .. } => fonts.clone() };
         let mut engine = JsRuntime::new(policy.limits.clone())?;
         let mut font_families = std::collections::BTreeSet::new();
-        for sheet in &module.styles {
+        for sheet in module.styles() {
             let summary = zgui_style::preflight_stylesheet(&sheet.css)
                 .map_err(|error| SessionError::Style { code: "E_STYLE_PROFILE", message: format!("stylesheet {} rejected", sheet.path),
                     details: serde_json::to_value(error).expect("native stylesheet diagnostics serialize") })?;
             font_families.extend(summary.font_families);
         }
         let mut font_leases = Vec::new();
-        if let Some(package) = &module.package {
+        if let Some(package) = module.as_package() {
             for font in &package.manifest.fonts {
                 let bytes = package.asset_data(&font.path).ok_or("verified package font is missing")?;
                 let lease = fonts.register_scoped(Arc::new(bytes), &font.family)
@@ -313,7 +352,7 @@ impl Session {
                 lock_state: policy.session_lock.unwrap_or_default(),
                 contract,
             }, waker.clone());
-            let work_session = WorkSession { package: module.package.clone(), generation, assets: policy.assets.clone(), resolved };
+            let work_session = WorkSession { package: module.as_package().cloned(), generation, assets: policy.assets.clone(), resolved };
             let initial_reduced_motion = policy.reduced_motion.unwrap_or(false);
             let (primary, work) = match startup {
                 Startup::Primary { region, surface } => {
@@ -354,7 +393,9 @@ impl Session {
             session.shell.install_stylesheet_api(&shell_api, &session)?;
             session.work.install(&ctx)
         })?;
-        let loaded = engine.load_module(&session.module.name, &session.module.source);
+        let source = session.module.take_or_load_source()?;
+        let loaded = engine.load_module(session.module.name(), &source);
+        drop(source);
         session.check_contract()?;
         loaded.map_err(|error| remap(&session.module, error))?;
         engine.with_module(|ctx, loaded| {
@@ -640,7 +681,7 @@ impl Session {
             primary.bridge.arm_stylesheets();
         }
         self.check_contract()?;
-        if let Some(package) = &self.module.package {
+        if let Some(package) = self.module.as_package() {
             let nodes = self.primary().map_or(0, |primary| primary.bridge.live_count());
             eprintln!("mounted: package={} build={} nodes={nodes}", package.manifest.id, package.manifest.build_id);
         }
@@ -701,7 +742,7 @@ impl Session {
     /// The control listener namespace authorized by this active live package.
     pub(crate) fn control_app_id(&self) -> Option<&str> {
         if self.shutdown_started.get() { return None; }
-        self.module.package.as_ref().filter(|package| package.manifest.capabilities.control_channel)
+        self.module.as_package().filter(|package| package.manifest.capabilities.control_channel)
             .map(|package| package.manifest.id.as_str())
     }
 
@@ -824,7 +865,7 @@ impl Session {
     }
 
     fn diagnostic(&self, error: js_runtime::Diagnostic) -> js_runtime::Diagnostic {
-        match &self.module.package { Some(package) => package.remap_diagnostic(error), None => error }
+        match self.module.as_package() { Some(package) => package.remap_diagnostic(error), None => error }
     }
 
     fn strict_rejections(&self) -> bool {
@@ -908,14 +949,14 @@ impl Session {
         }
     }
 
-    pub(crate) fn package(&self) -> Option<&Rc<Package>> { self.module.package.as_ref() }
+    pub(crate) fn package(&self) -> Option<&Rc<Package>> { self.module.as_package() }
     pub(crate) fn image_blobs(&self) -> &ImageBlobs { self.work.image_blobs() }
 
     /// The generation's resolved path authority.
     #[must_use]
     pub(crate) fn resolved_capabilities(&self) -> &ResolvedCapabilities { self.work.resolved_capabilities() }
     pub(crate) fn fixture_image_files(&self) -> impl Iterator<Item = (String, Arc<[u8]>)> + '_ {
-        self.policy.assets.fixture_image_files(self.module.package.as_deref())
+        self.policy.assets.fixture_image_files(self.module.as_package().map(Rc::as_ref))
     }
     pub(crate) fn relinquish_stylesheets(&self) { self.stylesheet_installed.set(false); }
 
@@ -924,13 +965,13 @@ impl Session {
     }
 
     fn install_sheets(&self, owned: &SessionRegion) {
-        for (index, sheet) in self.module.styles.iter().enumerate() {
+        for (index, sheet) in self.module.styles().iter().enumerate() {
             owned.region.host.install_stylesheet(&format!("application:{index}"), &sheet.css);
         }
     }
 
     fn remove_sheets(&self, owned: &SessionRegion) {
-        for index in 0..self.module.styles.len() {
+        for index in 0..self.module.styles().len() {
             owned.region.host.remove_stylesheet(&format!("application:{index}"));
         }
     }
@@ -940,7 +981,7 @@ impl Session {
         let mut sheets = self.shell_stylesheets.borrow_mut();
         let current = sheets.iter_mut().find(|(key, _)| key == &name);
         if current.as_ref().is_some_and(|(_, installed)| installed == &css) { return Ok(()); }
-        if self.module.package.is_some()
+        if self.module.as_package().is_some()
             && let Err(message) = zgui::runtime::image_policy::audit_stylesheet_image_urls(&css)
         {
             self.report_stylesheet_rejection(&name, "STYLESHEET_IMAGE_URL_FORBIDDEN", message);
@@ -979,7 +1020,7 @@ impl Session {
 
     pub(crate) fn remove_surplus_stylesheets(&self, successor: &Self) {
         if let Some(primary) = self.primary() {
-            for index in successor.module.styles.len()..self.module.styles.len() {
+            for index in successor.module.styles().len()..self.module.styles().len() {
                 primary.region.host.remove_stylesheet(&format!("application:{index}"));
             }
         }
@@ -1234,7 +1275,7 @@ fn is_css_generic_font_family(name: &str) -> bool {
 }
 
 fn remap(module: &SessionModule, error: js_runtime::Diagnostic) -> SessionError {
-    SessionError::Diagnostic(match &module.package {
+    SessionError::Diagnostic(match module.as_package() {
         Some(package) => package.remap_diagnostic(error),
         None => error,
     })
