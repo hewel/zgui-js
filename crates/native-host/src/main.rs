@@ -98,14 +98,24 @@ impl Application {
         let Some(server) = &self.dev_inspect_server else { return; };
         while let Some(req) = server.try_recv() {
             let session = self.host.sessions().next().map(AsRef::as_ref);
-            let snapshot = inspector.capture_snapshot(
-                &self.native,
-                session,
-                req.include_tree,
-                req.include_profile,
-                req.surface.as_deref(),
-            );
-            req.reply(&snapshot);
+            let response = match &req.action {
+                inspector::InspectAction::Snapshot { include_tree, include_profile } => inspector
+                    .capture_snapshot(
+                        &self.native,
+                        session,
+                        *include_tree,
+                        *include_profile,
+                        req.surface.as_deref(),
+                    ),
+                inspector::InspectAction::Pick { action, token } => inspector.handle_pick_command(
+                    &self.native,
+                    session,
+                    action,
+                    req.surface.as_deref(),
+                    token.as_deref(),
+                ),
+            };
+            req.reply(&response);
         }
     }
 
@@ -336,6 +346,9 @@ impl Application {
     }
 
     fn stop_sessions(&mut self, cx: &dyn PlatformCx) {
+        if let Some(inspector) = &self.dev_inspector {
+            inspector.clear_overlay();
+        }
         self.harness.stop();
         self.host.stop(&mut RuntimeSurface::new(&mut self.native, cx, ImageChoice::Live));
     }
@@ -364,6 +377,24 @@ impl AppHandler for Application {
         if self.failure.borrow().is_some() { cx.request_exit(); }
     }
     fn surface_event(&mut self, cx: &dyn PlatformCx, surface: SurfaceId, event: SurfaceEvent) {
+        if let Some(inspector) = &self.dev_inspector {
+            let session = self.host.sessions().next().map(AsRef::as_ref);
+            let consumed = match &event {
+                SurfaceEvent::Key {
+                    state,
+                    event: key_ev,
+                    modifiers,
+                    ..
+                } => inspector.handle_key_event(&self.native, session, *state, key_ev, *modifiers),
+                SurfaceEvent::Pointer { action, event: ptr_ev, .. } => {
+                    inspector.handle_pointer_event(&self.native, session, surface, *action, ptr_ev)
+                }
+                _ => false,
+            };
+            if consumed {
+                return;
+            }
+        }
         if let Err(error) = self.host.surface_event(&mut self.native, cx, surface, event) {
             self.shell_fault(cx, error);
             self.reconcile_control(cx);

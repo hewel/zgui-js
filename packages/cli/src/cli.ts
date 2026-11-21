@@ -25,7 +25,7 @@ Commands:
   preview   Build the app and host, then capture an offscreen native frame
   package   Assemble a self-contained runnable Linux app directory
   doctor    Verify Bun, native-host ABI, Wayland, Vulkan, portal, tsrs, and oxlint
-  inspect   Forward commands to the resolved native-host inspect subcommand
+  inspect   Query --dev-inspect socket, toggle visual picker, or open --ui Inspector window
   smoke     Build the compiler/runtime smoke fixture
 
 Application defaults to the current directory (counter at the repository root).
@@ -46,7 +46,7 @@ Application defaults to the current directory (counter at the repository root).
   preview --profile F --fixture F --scenario F --out NEW_DIRECTORY
   package --out DIR [--desktop-entry] [--pure-shell]
   doctor [--json] [--host-root DIR] [--host-executable PATH]
-  inspect [--host-root DIR] [--host-executable PATH] [--] <native-host inspect args...>
+  inspect [--ui] [--host-root DIR] [--host-executable PATH] [--] <native-host inspect args...>
   init [DIR] [--template desktop-app|wayland-shell] [--name NAME] [--force]`;
 
 type PreviewOptions = Pick<
@@ -60,7 +60,7 @@ type Command =
   | { command: "smoke" }
   | { command: "init"; args: string[] }
   | ({ command: "doctor"; json: boolean } & HostOptions)
-  | ({ command: "inspect"; args: string[] } & HostOptions)
+  | ({ command: "inspect"; args: string[]; ui: boolean } & HostOptions)
   | {
       command: "build";
       selector?: string;
@@ -99,6 +99,7 @@ type Command =
 function parseInspect(args: string[]): Extract<Command, { command: "inspect" }> {
   let hostRoot: string | undefined;
   let hostExecutable: string | undefined;
+  let ui = false;
   const forwarded: string[] = [];
   let passthroughAll = false;
   while (args.length > 0) {
@@ -109,6 +110,10 @@ function parseInspect(args: string[]): Extract<Command, { command: "inspect" }> 
     }
     if (arg === "--") {
       passthroughAll = true;
+      continue;
+    }
+    if (arg === "--ui") {
+      ui = true;
       continue;
     }
     if (arg === "--host-root") {
@@ -125,7 +130,7 @@ function parseInspect(args: string[]): Extract<Command, { command: "inspect" }> 
     }
     forwarded.push(arg);
   }
-  return { command: "inspect", args: forwarded, hostRoot, hostExecutable };
+  return { command: "inspect", args: forwarded, ui, hostRoot, hostExecutable };
 }
 
 function parse(args: string[]): Command {
@@ -359,6 +364,7 @@ export async function runCli(rawArgs: readonly string[]): Promise<number> {
     return withInterrupt(signal =>
       runInspect({
         args: selected.args,
+        ui: selected.ui,
         hostRoot: selected.hostRoot,
         hostExecutable: selected.hostExecutable,
         signal,

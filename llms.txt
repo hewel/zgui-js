@@ -1,0 +1,68 @@
+# zgui-js
+
+> Native Linux/Wayland desktop apps and Wayland shells written in TypeScript + SolidJS 2.0 + Lightning CSS Modules, rendered natively by Rust (`zgui`, Stylo, Taffy, Vello/Vulkan) and QuickJS-NG — no browser, no Chromium, no Electron, no DOM.
+
+## Architecture & Constraints
+
+- **Runtime**: QuickJS-NG (`rquickjs`) executes compiled ES2022 modules inside the Rust `native-host` process. There is no `window`, `document`, `fetch`, or WebView.
+- **Reactivity & Compiler**: SolidJS 2.0 (`solid-js@2.0.1`) compiled with `@solidjs/compiler@2.0.1` (`generate: "universal"`, `moduleName: "@hewel/zgui/renderer"`) + Rolldown native TypeScript stripping.
+- **Styling**: Plain CSS + Lightning CSS Modules (`*.module.css`). StyleX and Babel are removed. Never use `composes` or `dashedIdents` in CSS Modules. Always import `./*.module.css` as a default object and join classes with `cx()`.
+- **Capabilities & Security**: All host I/O (files, Unix sockets, commands, HTTP/SSE/WS origins, clipboard, SQLite, workers, shell surfaces) is capability-gated in `package.json` under `zgui.capabilities` and sealed into `manifest.json` with SHA-256 `artifactDigests`.
+- **Host-Owned Overlays & Preview**: Dev reload banners and visual inspector overlays are Rust-owned (`host-dev-*` stylesheets), never active outside dev mode, and strictly forbidden on `SessionLockSurface`.
+- **Linux/Wayland DevShell**: Run Rust builds, `bun run test:vendor`, and headless preview tests inside `nix-shell --run "<cmd>"`.
+
+## CLI (`@hewel/zgui-cli` -> `zgui-js`)
+
+Install `@hewel/zgui-cli` (or scaffold with `bun create zgui-js`). The binary name is `zgui-js` (never `zgui`).
+
+- `zgui-js init [DIR] [--template desktop-app|wayland-shell] [--name NAME] [--force]` — Scaffold a new app.
+- `zgui-js dev [DIR] [--dev-inspect PATH] [--strict-typecheck] [--pure-shell] [--width N] [--height N] [--title TEXT] [--exit-after-ms N]` — Build, watch (non-blocking `tsrs`, CSS-only hot-swap, dev state preservation), and run `native-host`.
+- `zgui-js build [DIR] [--watch] [--capabilities-file FILE]` — Type-check and emit an immutable, SHA-256 sealed `dist/` bundle.
+- `zgui-js preview [DIR] [--watch] [--profile F] [--fixture F] [--scenario F] [--out DIR]` — Headless Vulkan/Stylo offscreen capture & scenario assertions.
+- `zgui-js package [DIR] --out DIR [--desktop-entry] [--pure-shell]` — Assemble a self-contained runnable Linux app directory.
+- `zgui-js doctor [--json] [--host-root DIR] [--host-executable PATH]` — Verify Bun, `native-host` ABI, Wayland, Vulkan, portal, `tsrs`, and `oxlint`.
+- `zgui-js inspect [--ui] [--socket PATH] [tree|profile|pick ...]` — Query the `0600` `--dev-inspect` socket, toggle the native visual picker (`Ctrl+Shift+I`), or open the self-hosted Inspector window (`--ui`).
+- `zgui-js smoke` — Build the compiler/runtime smoke fixture.
+
+## Core SDK (`@hewel/zgui`)
+
+- **Mounting & Reactivity**: `renderApp`, `renderShell`, `flush`, `createSignal`, `createMemo`, `createEffect`, `onSettled`, `onCleanup`, `getOwner`, `runWithOwner`, `untrack`, `For`, `Repeat`, `Show`, `Switch`, `Match`, `Loading`, `Errored`, `createContext`, `useContext`, `omit`, `merge`, `createStore`, `createProjection`, `reconcile`, `snapshot`, `isPending`, `latest`, `refresh`, `action`
+- **Intrinsic Native Elements**: `<box>`, `<text>`, `<button>`, `<input>`, `<scroll>`, `<img>`, `<canvas>`, `<svg>` (use `testId="..."` for preview selectors, `class={cx(...)}` for CSS Modules).
+- **Shell Surfaces**: `LayerSurface`, `PopupSurface`, `SessionLockSurface`, `WindowSurface`, `getSessionGeneration`, `mountShellStylesheet`, `requestSessionLock`, `useMonitors`
+- **Window Management**: `beginWindowMoveDrag`, `closeWindow`, `getWindowState`, `onCloseRequest`, `setWindowDecorations`, `setWindowFullscreen`, `setWindowMaximized`, `setWindowMinimized`, `setWindowTitle`, `useWindowState`
+- **Core Components & Collections**: `Button`, `TextField`, `TextArea`, `Image`, `Portal`, `VirtualList`, `VirtualGrid`
+- **Layout, Focus, Selection, Scroll & Canvas**: `focus`, `trapFocus`, `registerDismissLayer`, `lockScroll`, `scrollBy`, `scrollTo`, `scrollIntoView`, `getWindowRect`, `observeGeometry`, `precedes`, `getTextContent`, `getSelection`, `setSelection`, `selectAll`, `getDocumentSelection`, `setDocumentSelection`, `selectDocumentAll`, `clearDocumentSelection`, `createCanvasScene`, `mountStylesheet`, `isAnimating`, `getReducedMotion`, `setReducedMotion`
+- **Motion, Timers, Styling & Dev State**: `createSpring`, `createDelay`, `createInterval`, `createTimeout`, `cx`, `createDevState`
+- **Drag & Drop**: `startInternalDrag`, `startOutboundDrag`
+
+## UI Components (`@hewel/zgui/components`)
+
+- **Theming & Icons**: `ThemeProvider`, `useTheme`, `themeTokens`, `Icon`
+- **Actions & Layout**: `Button`, `ButtonGroup`, `ButtonGroupText`, `ButtonGroupSeparator`, `Badge`, `Card`, `CardHeader`, `CardTitle`, `CardDescription`, `CardAction`, `CardContent`, `CardFooter`, `Separator`, `Kbd`, `KbdGroup`, `AspectRatio`, `SplitPane`, `SplitPanePanel`, `SplitPaneHandle`, `Item`, `ItemGroup`, `ItemSeparator`, `ItemMedia`, `ItemContent`, `ItemTitle`, `ItemDescription`, `ItemActions`, `ItemHeader`, `ItemFooter`
+- **Forms & Inputs**: `Input`, `Textarea`, `Label`, `Checkbox`, `Switch`, `Toggle`, `RadioGroup`, `RadioGroupItem`, `ToggleGroup`, `ToggleGroupItem`, `Slider`, `InputGroup`, `InputGroupAddon`, `InputGroupText`, `InputGroupButton`, `InputGroupInput`, `InputGroupTextarea`, `Select`, `Combobox`
+- **Feedback & Status**: `Alert`, `AlertTitle`, `AlertDescription`, `Avatar`, `AvatarImage`, `AvatarFallback`, `AvatarBadge`, `AvatarGroup`, `AvatarGroupCount`, `Empty`, `EmptyHeader`, `EmptyMedia`, `EmptyTitle`, `EmptyDescription`, `EmptyContent`, `Progress`, `Skeleton`, `Spinner`, `ToastProvider`, `useToast`, `toast`
+- **Disclosure, Navigation & Overlays**: `Tabs`, `TabsList`, `TabsTrigger`, `TabsContent`, `Collapsible`, `CollapsibleTrigger`, `CollapsibleContent`, `Accordion`, `AccordionItem`, `AccordionTrigger`, `AccordionContent`, `Dialog`, `DialogTrigger`, `DialogContent`, `DialogHeader`, `DialogTitle`, `DialogDescription`, `DialogFooter`, `DialogClose`, `DialogDismiss`, `Popover`, `PopoverTrigger`, `PopoverContent`, `PopoverHeader`, `PopoverTitle`, `PopoverDescription`, `PopoverClose`, `Popper`, `solvePopper`, `Tooltip`, `TooltipProvider`, `TooltipTrigger`, `TooltipContent`, `TooltipArrow`, `HoverCard`, `HoverCardTrigger`, `HoverCardContent`, `TreeView`, `TreeItem`, `CommandPalette`, `CommandPaletteProvider`, `useCommandPalette`, `scoreCommandMatch`
+- **Menus**: `DropdownMenu`, `DropdownMenuTrigger`, `DropdownMenuContent`, `MenuContent`, `MenuTypeahead`, `MenuItem`, `MenuCheckboxItem`, `MenuRadioGroup`, `MenuRadioItem`, `MenuLabel`, `MenuGroup`, `MenuSeparator`, `MenuShortcut`, `MenuSub`, `MenuSubTrigger`, `MenuSubContent`, `headingToward`, `ContextMenu`, `ContextMenuTrigger`, `ContextMenuContent`, `useContextMenuPlace`, `Menubar`, `MenubarMenu`, `MenubarTrigger`, `MenubarContent`, `MenubarArrows`, `MenubarItem`, `MenubarCheckboxItem`, `MenubarRadioItem`, `MenubarLabel`, `MenubarSeparator`, `MenubarShortcut`, `MenubarGroup`, `MenubarRadioGroup`
+
+## Router (`@hewel/zgui/router`)
+
+- `createRouter`, `bindControlNavigation`, `RouterProvider`, `Outlet`, `Link`, `useRouter`, `useLocation`, `useNavigate`, `useParams`, `useSearchParams`, `useMatch`, `useBeforeLeave`, `buildPath`, `joinPaths`, `matchPattern`, `normalizePath`, `parseSearch`, `serializeSearch`
+
+## Host Services (`@hewel/zgui-services`)
+
+Never invoke host services at module top level; call them inside component mount, effects, or event handlers, and release handles on cleanup.
+
+- **Capabilities & Assets**: `getResolvedCapabilities`, `getAuthorizedEndpoint`, `readTextAsset`, `loadTextAsset`, `registerImageAsset`, `loadImageAsset`, `registerImageBytes`, `loadImageBytes`
+- **IPC & Processes**: `connectUnixSocket`, `spawnCommand`, `onControlMessage`
+- **Clipboard**: `readClipboardText`, `clipboardReadText`, `writeClipboardText`, `readClipboardImage`, `clipboardReadImage`, `writeClipboardImage`
+- **Files & Bookmarks**: `openFileDialog`, `saveFileDialog`, `openDirectoryDialog`, `openAuthorizedDirectory`, `persistHandle`, `restoreBookmark`, `listBookmarks`, `revokeBookmark`, `watchDirectory`
+- **SQLite & KV**: `openDatabase`, `openKvStore`
+- **Network (Origin-Allowlisted)**: `httpRequest`, `openEventStream`, `connectWebSocket`, `createScopedFetch`
+- **Workers**: `spawnWorker`
+
+## Preview & Verification
+
+- `bun run check` — Runs `oxlint --deny-warnings`, `tsrs` across all workspace packages/apps, `test:build`, and `cargo test + clippy -D warnings`.
+- `bun run test:vendor` — Runs Rust tests for excluded `vendor/*` crates.
+- `bun run test:preview` — Runs headless Vulkan/Stylo visual & behavioral tests (`tests/preview/*.test.mjs`).
+- Key docs: `AGENTS.md`, `CODING_STANDARDS.md`, `GLOSSARY.md`, `docs/development/crate-map.md`, `docs/development/component-map.md`, `docs/development/preview-verification.md`, `docs/adr/`.

@@ -12,6 +12,12 @@
 /apps/examples/*/.zgui-build-status.json.*.tmp
 /apps/examples/*/.zgui-native-status.json
 /apps/examples/*/.zgui-native-status.json.*.tmp
+/apps/devtools/*/dist
+/apps/devtools/*/.zgui-generations/
+/apps/devtools/*/.zgui-build-status.json
+/apps/devtools/*/.zgui-build-status.json.*.tmp
+/apps/devtools/*/.zgui-native-status.json
+/apps/devtools/*/.zgui-native-status.json.*.tmp
 /artifacts/preview/
 *.module.css.d.ts
 

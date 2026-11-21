@@ -49,7 +49,7 @@ export function LiveCounter() {
 | 组件模块 | 实现方式 | 特点 |
 | :--- | :---: | ---: |
 | 布局引擎 | Taffy + Parley | 原生 Flex/Grid + CJK 断行 |
-| 样式系统 | Stylo + StyleX | 原子样式 + CSS 变量主题 |
+| 样式系统 | Stylo + Lightning CSS | CSS Modules + CSS 变量主题 |
 | 响应式层 | Solid 2.0.1 | 细粒度更新 + QuickJS-NG |
 | 渲染后端 | wgpu + Vello | GPU 加速 + 抗锯齿矢量 |
 `,
@@ -169,7 +169,7 @@ export function buildPipelineSvg(dark: boolean): string {
     `<rect x="360" y="24" width="132" height="102" rx="10" fill="${box}" stroke="#a855f7" stroke-width="2"/>`,
     `<text x="426" y="56" text-anchor="middle" font-family="sans-serif" font-size="13" font-weight="700" fill="${fg}">Stylo + Taffy</text>`,
     `<text x="426" y="76" text-anchor="middle" font-family="sans-serif" font-size="11" fill="${sub}">Parley Text</text>`,
-    `<text x="426" y="106" text-anchor="middle" font-family="monospace" font-size="10" fill="#c084fc">StyleX CSS</text>`,
+    `<text x="426" y="106" text-anchor="middle" font-family="monospace" font-size="10" fill="#c084fc">CSS Modules</text>`,
     // Arrow 3
     `<path d="M494 75 L520 75" stroke="#a855f7" stroke-width="2.5" stroke-linecap="round"/>`,
     `<polygon points="520,70 530,75 520,80" fill="#a855f7"/>`,

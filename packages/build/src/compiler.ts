@@ -82,6 +82,92 @@ const GENERATED_STYLE_FILE =
 
 const JSX_SOURCE_FILE = /\.[cm]?[jt]sx$/i;
 
+function computeLineStarts(source: string): number[] {
+  const starts = [0];
+  for (let i = 0; i < source.length; i++) {
+    if (source.charCodeAt(i) === 10) starts.push(i + 1);
+  }
+  return starts;
+}
+
+function offsetToLineCol(starts: readonly number[], offset: number): { line: number; col: number } {
+  let lo = 0;
+  let hi = starts.length - 1;
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >> 1;
+    if (starts[mid]! <= offset) lo = mid;
+    else hi = mid - 1;
+  }
+  return { line: lo + 1, col: offset - starts[lo]! + 1 };
+}
+
+function injectDevJsxSourceLocations(source: string, filename: string, identity: string): string {
+  const parsed = parseSync(filename, source, {
+    sourceType: "module",
+    lang: /\.[cm]?tsx$/i.test(filename) ? "tsx" : "jsx",
+  });
+  if (parsed.errors.length > 0) return source;
+
+  const edits: { offset: number; text: string }[] = [];
+  const lineStarts = computeLineStarts(source);
+  const stack: unknown[] = [parsed.program];
+
+  while (stack.length > 0) {
+    const current = stack.pop();
+    if (!current || typeof current !== "object") continue;
+    if (Array.isArray(current)) {
+      for (const item of current) stack.push(item);
+      continue;
+    }
+    const node = current as Record<string, unknown>;
+    if (
+      node.type === "JSXOpeningElement" &&
+      node.name &&
+      typeof node.name === "object" &&
+      (node.name as Record<string, unknown>).type === "JSXIdentifier" &&
+      typeof (node.name as Record<string, unknown>).name === "string" &&
+      /^[a-z]/.test((node.name as Record<string, unknown>).name as string) &&
+      typeof node.start === "number" &&
+      typeof node.end === "number"
+    ) {
+      const attrs = Array.isArray(node.attributes) ? node.attributes : [];
+      const hasSource = attrs.some(
+        attr =>
+          attr &&
+          typeof attr === "object" &&
+          (attr as Record<string, unknown>).type === "JSXAttribute" &&
+          typeof (attr as Record<string, unknown>).name === "object" &&
+          ((attr as Record<string, unknown>).name as Record<string, unknown>)?.name ===
+            "data-zgui-source",
+      );
+      if (!hasSource) {
+        const selfClosing = node.selfClosing === true;
+        const insertAt = selfClosing ? node.end - 2 : node.end - 1;
+        const tail = source.slice(insertAt, node.end);
+        if ((selfClosing && tail === "/>") || (!selfClosing && tail === ">")) {
+          const { line, col } = offsetToLineCol(lineStarts, node.start);
+          edits.push({
+            offset: insertAt,
+            text: ` data-zgui-source=${JSON.stringify(`${identity}:${line}:${col}`)}`,
+          });
+        }
+      }
+    }
+    for (const [key, value] of Object.entries(node)) {
+      if (key === "start" || key === "end" || key === "type") continue;
+      if (value && typeof value === "object") stack.push(value);
+    }
+  }
+
+  if (edits.length === 0) return source;
+  edits.sort((a, b) => b.offset - a.offset);
+  let output = source;
+  for (const edit of edits) {
+    output = `${output.slice(0, edit.offset)}${edit.text}${output.slice(edit.offset)}`;
+  }
+  return output;
+}
+
 function extractStaticComponentSheet(
   source: string,
   filename: string,
@@ -314,7 +400,10 @@ function compilerOptions(
             });
             return null;
           }
-          const transformed = await jsxTransform(source, {
+          const jsxInput = development
+            ? injectDevJsxSourceLocations(source, real, identity)
+            : source;
+          const transformed = await jsxTransform(jsxInput, {
             filename: real,
             root: appDirectory,
             generate: "universal",

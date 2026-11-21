@@ -14,6 +14,16 @@
         "tsrs": "7.1.0-beta.tsrs2",
       },
     },
+    "apps/devtools/inspector": {
+      "name": "@hewel/zgui-js-devtools-inspector",
+      "dependencies": {
+        "@hewel/zgui": "workspace:*",
+        "@hewel/zgui-services": "workspace:*",
+      },
+      "devDependencies": {
+        "@hewel/zgui-build": "workspace:*",
+      },
+    },
     "apps/examples/async": {
       "name": "@hewel/zgui-js-example-async",
       "dependencies": {
@@ -232,6 +242,8 @@
     "@hewel/zgui-host-linux-arm64": ["@hewel/zgui-host-linux-arm64@workspace:packages/host-linux-arm64"],
 
     "@hewel/zgui-host-linux-x64": ["@hewel/zgui-host-linux-x64@workspace:packages/host-linux-x64"],
+
+    "@hewel/zgui-js-devtools-inspector": ["@hewel/zgui-js-devtools-inspector@workspace:apps/devtools/inspector"],
 
     "@hewel/zgui-js-example-async": ["@hewel/zgui-js-example-async@workspace:apps/examples/async"],
 

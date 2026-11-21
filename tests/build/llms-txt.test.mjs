@@ -1,0 +1,63 @@
+import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
+import path from "node:path";
+import { test } from "node:test";
+import { workspaceRoot } from "../../packages/build/src/build.ts";
+
+const llmsPath = path.join(workspaceRoot, "llms.txt");
+
+function extractValueExports(source) {
+  const names = new Set();
+  for (const match of source.matchAll(/^export\s+\{([^}]+)\}\s+from\s+["'][^"']+["'];/gm)) {
+    for (const part of match[1].split(",")) {
+      const trimmed = part.trim();
+      if (!trimmed || trimmed.startsWith("type ")) continue;
+      const alias = trimmed.match(/\bas\s+(\w+)$/);
+      names.add(alias ? alias[1] : trimmed);
+    }
+  }
+  for (const match of source.matchAll(/^export\s+(?:async\s+)?function\s+(\w+)\s*\(/gm)) {
+    names.add(match[1]);
+  }
+  return names;
+}
+
+function extractBacktickTokens(markdown) {
+  const tokens = new Set();
+  for (const match of markdown.matchAll(/`([^`]+)`/g)) {
+    tokens.add(match[1].trim());
+  }
+  return tokens;
+}
+
+test("llms.txt covers every @hewel/zgui/components, @hewel/zgui, @hewel/zgui/router, and @hewel/zgui-services export", async () => {
+  const [llms, uiIndex, componentsIndex, routerIndex, servicesFiles] = await Promise.all([
+    readFile(llmsPath, "utf8"),
+    readFile(path.join(workspaceRoot, "packages/ui/src/index.ts"), "utf8"),
+    readFile(path.join(workspaceRoot, "packages/ui/src/components/index.ts"), "utf8"),
+    readFile(path.join(workspaceRoot, "packages/ui/src/router/index.ts"), "utf8"),
+    Promise.all([
+      readFile(path.join(workspaceRoot, "packages/services/src/index.ts"), "utf8"),
+      readFile(path.join(workspaceRoot, "packages/services/src/network.ts"), "utf8"),
+      readFile(path.join(workspaceRoot, "packages/services/src/files.ts"), "utf8"),
+      readFile(path.join(workspaceRoot, "packages/services/src/sqlite.ts"), "utf8"),
+      readFile(path.join(workspaceRoot, "packages/services/src/worker.ts"), "utf8"),
+    ]),
+  ]);
+
+  const documented = extractBacktickTokens(llms);
+
+  for (const [label, source] of [
+    ["@hewel/zgui", uiIndex],
+    ["@hewel/zgui/components", componentsIndex],
+    ["@hewel/zgui/router", routerIndex],
+    ["@hewel/zgui-services", servicesFiles.join("\n")],
+  ]) {
+    const missing = [...extractValueExports(source)].filter(name => !documented.has(name)).sort();
+    assert.deepEqual(missing, [], `llms.txt is missing ${label} exports: ${missing.join(", ")}`);
+  }
+
+  for (const cmd of ["init", "dev", "build", "preview", "package", "doctor", "inspect", "smoke"]) {
+    assert.match(llms, new RegExp(`\`zgui-js ${cmd}\\b`), `llms.txt must document zgui-js ${cmd}`);
+  }
+});

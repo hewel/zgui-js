@@ -1,12 +1,29 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { readFileSync } from "node:fs";
-import { mkdtemp, mkdir, writeFile, readFile, readlink, realpath, rm, readdir, symlink } from "node:fs/promises";
+import {
+  mkdtemp,
+  mkdir,
+  writeFile,
+  readFile,
+  readlink,
+  realpath,
+  rm,
+  readdir,
+  symlink,
+} from "node:fs/promises";
 import { createRequire } from "node:module";
 import { createHash } from "node:crypto";
 import { pathToFileURL } from "node:url";
 import path from "node:path";
-import { buildApplication, bundle, contentDigest, publishApplication, publishGeneration, workspaceRoot } from "../../packages/build/src/build.ts";
+import {
+  buildApplication,
+  bundle,
+  contentDigest,
+  publishApplication,
+  publishGeneration,
+  workspaceRoot,
+} from "../../packages/build/src/build.ts";
 import { validateModule } from "../../packages/build/src/validate.ts";
 import { rebuildQueue, watchApplication } from "../../packages/build/src/watch.ts";
 import { typecheckProject, typecheckProjectAsync } from "../../packages/build/src/typecheck.ts";
@@ -34,10 +51,23 @@ async function fixture(t) {
   t.after(() => rm(directory, { recursive: true, force: true }));
   await mkdir(path.join(directory, "src"));
   await writeFile(path.join(directory, "package.json"), '{"type":"module"}\n');
-  await writeFile(path.join(directory, "tsconfig.json"), JSON.stringify({
-    compilerOptions: { target: "ES2022", module: "ESNext", moduleResolution: "Bundler", lib: ["ES2022"], types: [], strict: true, noEmit: true, jsx: "preserve", jsxImportSource: "@hewel/zgui" },
-    include: ["src"],
-  }));
+  await writeFile(
+    path.join(directory, "tsconfig.json"),
+    JSON.stringify({
+      compilerOptions: {
+        target: "ES2022",
+        module: "ESNext",
+        moduleResolution: "Bundler",
+        lib: ["ES2022"],
+        types: [],
+        strict: true,
+        noEmit: true,
+        jsx: "preserve",
+        jsxImportSource: "@hewel/zgui",
+      },
+      include: ["src"],
+    }),
+  );
   await writeFile(path.join(directory, "src/main.tsx"), validEntry);
   return directory;
 }
@@ -50,59 +80,136 @@ test("local TypeScript CLI checks project paths literally, never emits, and pres
   await mkdir(path.join(directory, "src"));
   const config = path.join(directory, "tsconfig.json");
   const source = path.join(directory, "src/main.ts");
-  await writeFile(config, JSON.stringify({
-    compilerOptions: { target: "ES2022", module: "ESNext", lib: ["ES2022"], types: [], strict: true, noEmit: false, outDir: "dist" },
-    include: ["src"],
-  }));
+  await writeFile(
+    config,
+    JSON.stringify({
+      compilerOptions: {
+        target: "ES2022",
+        module: "ESNext",
+        lib: ["ES2022"],
+        types: [],
+        strict: true,
+        noEmit: false,
+        outDir: "dist",
+      },
+      include: ["src"],
+    }),
+  );
   await writeFile(source, "export const value: number = 1;\n");
   assert.equal(typecheckProject(config), undefined);
   assert.ok(!(await readdir(directory)).includes("dist"));
 
   await writeFile(source, 'export const value: number = "wrong";\n');
-  assert.throws(() => typecheckProject(config), error => {
-    assert.match(error.message, /main\.ts\(1,\d+\): error TS2322:/);
-    assert.match(error.message, /not assignable to type 'number'/);
-    return true;
-  });
+  assert.throws(
+    () => typecheckProject(config),
+    error => {
+      assert.match(error.message, /main\.ts\(1,\d+\): error TS2322:/);
+      assert.match(error.message, /not assignable to type 'number'/);
+      return true;
+    },
+  );
   assert.ok(!(await readdir(directory)).includes("dist"));
-  assert.throws(() => typecheckProject(path.join(directory, "missing.json")), /error TS5058:.*missing\.json/);
+  assert.throws(
+    () => typecheckProject(path.join(directory, "missing.json")),
+    /error TS5058:.*missing\.json/,
+  );
 });
 
 test("AST validation distinguishes nested async work from top-level execution", () => {
-  validateModule(`${entry}\nasync function work() { await Promise.resolve(); for await (const x of []) {} }`, { bundled: true, entry: true });
-  validateModule(`${entry}\nconst message = 'import("node:fs") and await';`, { bundled: true, entry: true });
+  validateModule(
+    `${entry}\nasync function work() { await Promise.resolve(); for await (const x of []) {} }`,
+    { bundled: true, entry: true },
+  );
+  validateModule(`${entry}\nconst message = 'import("node:fs") and await';`, {
+    bundled: true,
+    entry: true,
+  });
   assert.throws(() => validateModule(`${entry}\nawait Promise.resolve();`), /Top-level await/);
   assert.throws(() => validateModule(`${entry}\nfor await (const x of []) {}`), /Top-level await/);
-  assert.throws(() => validateModule(`${entry}\nclass C { [await Promise.resolve()]() {} }`), /Top-level await/);
+  assert.throws(
+    () => validateModule(`${entry}\nclass C { [await Promise.resolve()]() {} }`),
+    /Top-level await/,
+  );
   validateModule(`${entry}\nfunction lazy() { return import('./lazy.js'); }`);
-  assert.throws(() => validateModule(`${entry}\nfunction lazy(p) { return import(p); }`), /static string literal/);
-  assert.throws(() => validateModule(`${entry}\nfunction lazy() { return import('./missing.mjs'); }`, { bundled: true, allowedChunks: new Set(["app.mjs"]) }), /unresolved dynamic import/);
-  validateModule(`${entry}\nfunction lazy() { return import('./chunks/lazy.mjs'); }`, { bundled: true, entry: true, allowedChunks: new Set(["app.mjs", "chunks/lazy.mjs"]) });
-  assert.throws(() => validateModule(`${entry}\nimport 'unresolved';`, { bundled: true }), /unresolved runtime import/);
-  assert.throws(() => validateModule(`${entry}\nexport * from 'external';`, { bundled: true }), /external re-export/);
-  assert.throws(() => validateModule(`${entry}\nconsole.log(document);`, { bundled: true }), /Unsupported runtime global: document/);
-  assert.throws(() => validateModule(`${entry}\nrequire('fs');`, { bundled: true }), /Runtime require/);
-  validateModule(`${entry}\nfunction merge() { return (() => arguments[0])(); }`, { bundled: true });
-  assert.throws(() => validateModule(`${entry}\nconst args = arguments;`, { bundled: true }), /Unsupported runtime global: arguments/);
-  assert.throws(() => validateModule(`${entry}\nconst args = () => arguments;`, { bundled: true }), /Unsupported runtime global: arguments/);
-  assert.throws(() => validateModule(`${entry}\nclass C { [arguments[0]]() {} }`, { bundled: true }), /Unsupported runtime global: arguments/);
+  assert.throws(
+    () => validateModule(`${entry}\nfunction lazy(p) { return import(p); }`),
+    /static string literal/,
+  );
+  assert.throws(
+    () =>
+      validateModule(`${entry}\nfunction lazy() { return import('./missing.mjs'); }`, {
+        bundled: true,
+        allowedChunks: new Set(["app.mjs"]),
+      }),
+    /unresolved dynamic import/,
+  );
+  validateModule(`${entry}\nfunction lazy() { return import('./chunks/lazy.mjs'); }`, {
+    bundled: true,
+    entry: true,
+    allowedChunks: new Set(["app.mjs", "chunks/lazy.mjs"]),
+  });
+  assert.throws(
+    () => validateModule(`${entry}\nimport 'unresolved';`, { bundled: true }),
+    /unresolved runtime import/,
+  );
+  assert.throws(
+    () => validateModule(`${entry}\nexport * from 'external';`, { bundled: true }),
+    /external re-export/,
+  );
+  assert.throws(
+    () => validateModule(`${entry}\nconsole.log(document);`, { bundled: true }),
+    /Unsupported runtime global: document/,
+  );
+  assert.throws(
+    () => validateModule(`${entry}\nrequire('fs');`, { bundled: true }),
+    /Runtime require/,
+  );
+  validateModule(`${entry}\nfunction merge() { return (() => arguments[0])(); }`, {
+    bundled: true,
+  });
+  assert.throws(
+    () => validateModule(`${entry}\nconst args = arguments;`, { bundled: true }),
+    /Unsupported runtime global: arguments/,
+  );
+  assert.throws(
+    () => validateModule(`${entry}\nconst args = () => arguments;`, { bundled: true }),
+    /Unsupported runtime global: arguments/,
+  );
+  assert.throws(
+    () => validateModule(`${entry}\nclass C { [arguments[0]]() {} }`, { bundled: true }),
+    /Unsupported runtime global: arguments/,
+  );
 });
 
 test("host exports must be stable version 1 and a synchronous mount function", () => {
-  validateModule("const version=1; const start=() => () => {}; export {version as hostApiVersion, start as mount};", { bundled: true, entry: true });
+  validateModule(
+    "const version=1; const start=() => () => {}; export {version as hostApiVersion, start as mount};",
+    { bundled: true, entry: true },
+  );
   for (const code of [
     "export const hostApiVersion=2; export function mount() {}",
     "export let hostApiVersion=1; hostApiVersion=2; export function mount() {}",
     "export const hostApiVersion=1;",
     "export const hostApiVersion=1; export async function mount() {}",
     "export const hostApiVersion=1; export const mount=42;",
-  ]) assert.throws(() => validateModule(code, { bundled: true, entry: true }), /Entry must export/);
+  ])
+    assert.throws(() => validateModule(code, { bundled: true, entry: true }), /Entry must export/);
 });
 
 test("handwritten class selectors do not trigger browser-html direction rejection", () => {
-  validateStylesheet(".html:not([dir]) { color: red; } .other-html[dir] { color: blue; }", "app.css");
-  assert.throws(() => validateStylesheet("html:not([dir='rtl']) .x { color: red }", "app.css"), /html\[dir\]/);
-  assert.throws(() => validateStylesheet("@media (min-width: 1px) {html[dir='rtl'] .x { color: red }}", "app.css"), /html\[dir\]/);
+  validateStylesheet(
+    ".html:not([dir]) { color: red; } .other-html[dir] { color: blue; }",
+    "app.css",
+  );
+  assert.throws(
+    () => validateStylesheet("html:not([dir='rtl']) .x { color: red }", "app.css"),
+    /html\[dir\]/,
+  );
+  assert.throws(
+    () =>
+      validateStylesheet("@media (min-width: 1px) {html[dir='rtl'] .x { color: red }}", "app.css"),
+    /html\[dir\]/,
+  );
 });
 
 test("real TSX bundles have one reactive runtime, composed maps, resources, and verifiable identity", async t => {
@@ -117,15 +224,33 @@ test("real TSX bundles have one reactive runtime, composed maps, resources, and 
   assert.deepEqual(manifest.assets, ["assets/icons/mark.bin"]);
   const root = await realpath(dist);
   const names = Object.keys(manifest.artifactDigests).sort();
-  const files = new Map(await Promise.all(names.map(async name => [name, await readFile(path.join(root, name))])));
+  const files = new Map(
+    await Promise.all(names.map(async name => [name, await readFile(path.join(root, name))])),
+  );
   for (const name of names) {
-    assert.equal(manifest.artifactDigests[name], `sha256:${createHash("sha256").update(files.get(name)).digest("hex")}`);
+    assert.equal(
+      manifest.artifactDigests[name],
+      `sha256:${createHash("sha256").update(files.get(name)).digest("hex")}`,
+    );
   }
   // Serialize independently, with recursively sorted keys and stable array order.
-  const sort = value => Array.isArray(value) ? value.map(sort) : value && typeof value === "object"
-    ? Object.fromEntries(Object.keys(value).sort().map(key => [key, sort(value[key])])) : value;
+  const sort = value =>
+    Array.isArray(value)
+      ? value.map(sort)
+      : value && typeof value === "object"
+        ? Object.fromEntries(
+            Object.keys(value)
+              .sort()
+              .map(key => [key, sort(value[key])]),
+          )
+        : value;
   const { buildId, ...identity } = manifest;
-  assert.equal(buildId, `sha256:${createHash("sha256").update(JSON.stringify(sort(identity))).digest("hex")}`);
+  assert.equal(
+    buildId,
+    `sha256:${createHash("sha256")
+      .update(JSON.stringify(sort(identity)))
+      .digest("hex")}`,
+  );
   assert.equal(names.includes("style-origins.json"), false);
   assert.ok(names.includes("build-info.json"));
   const module = await import(pathToFileURL(path.join(root, manifest.entry)));
@@ -135,7 +260,10 @@ test("real TSX bundles have one reactive runtime, composed maps, resources, and 
   const marker = code.indexOf('throw new Error("mapped failure")');
   assert.ok(marker >= 0);
   const prefix = code.slice(0, marker);
-  const generated = { line: prefix.split("\n").length, column: prefix.length - prefix.lastIndexOf("\n") - 1 };
+  const generated = {
+    line: prefix.split("\n").length,
+    column: prefix.length - prefix.lastIndexOf("\n") - 1,
+  };
   const mapJson = JSON.parse(files.get("app.mjs.map"));
   const original = originalPositionFor(new TraceMap(mapJson), generated);
   assert.ok(original.source.endsWith("src/main.tsx"), JSON.stringify(original));
@@ -147,7 +275,10 @@ test("real TSX bundles have one reactive runtime, composed maps, resources, and 
   assert.equal(info.packages["solid-js"], "2.0.1");
   assert.equal(info.packages["@solidjs/universal"], "2.0.1");
   assert.equal(info.packages["@solidjs/compiler"], "2.0.1");
-  assert.equal(Object.keys(info.packages).some(name => name.includes("babel")), false);
+  assert.equal(
+    Object.keys(info.packages).some(name => name.includes("babel")),
+    false,
+  );
   assert.equal(info.packages.tsrs, "7.1.0-beta.tsrs2");
   assert.equal(info.engine.name, "QuickJS-NG");
   assert.equal(info.packages.rolldown, "1.3.2");
@@ -156,19 +287,34 @@ test("real TSX bundles have one reactive runtime, composed maps, resources, and 
   assert.deepEqual(info.graph.chunks[0].dynamicImports, []);
   assert.match(info.engine.revision, /^[a-f0-9]{40}$/);
   assert.equal(info.lockfile.path, "bun.lock");
-  assert.equal(info.lockfile.digest, `sha256:${createHash("sha256").update(await readFile(path.join(workspaceRoot, "bun.lock"))).digest("hex")}`);
+  assert.equal(
+    info.lockfile.digest,
+    `sha256:${createHash("sha256")
+      .update(await readFile(path.join(workspaceRoot, "bun.lock")))
+      .digest("hex")}`,
+  );
   assert.equal(contentDigest(files, manifest), manifest.buildId);
-  assert.throws(() => contentDigest(new Map([...files, ["build-info.json", Buffer.from("tampered")]]), manifest), /Artifact digest mismatch/);
+  assert.throws(
+    () =>
+      contentDigest(new Map([...files, ["build-info.json", Buffer.from("tampered")]]), manifest),
+    /Artifact digest mismatch/,
+  );
   const firstTarget = await readlink(dist);
   const second = await buildApplication("fixture", { appDirectory: directory });
   assert.equal(second.manifest.buildId, manifest.buildId);
   assert.notEqual(await readlink(dist), firstTarget);
-  assert.equal(await readFile(path.join(root, "app.mjs"), "utf8"), code, "old reader remains pinned to a complete generation");
+  assert.equal(
+    await readFile(path.join(root, "app.mjs"), "utf8"),
+    code,
+    "old reader remains pinned to a complete generation",
+  );
 });
 
 test("Lightning CSS Modules compile scoped rules, flatten nesting, preserve --zui-* tokens, and merge deterministically", async t => {
   const directory = await fixture(t);
-  await writeFile(path.join(directory, "src/card.module.css"), `
+  await writeFile(
+    path.join(directory, "src/card.module.css"),
+    `
 .root {
   color: var(--zui-color-foreground);
   background: oklch(0.62 0.12 240);
@@ -191,18 +337,34 @@ test("Lightning CSS Modules compile scoped rules, flatten nesting, preserve --zu
     opacity: 0.9;
   }
 }
-`);
-  await writeFile(path.join(directory, "src/main.tsx"), `import styles from "./card.module.css";
-${validEntry.replace("<text>", "<text class={styles.root}>")}`);
+`,
+  );
+  await writeFile(
+    path.join(directory, "src/main.tsx"),
+    `import styles from "./card.module.css";
+${validEntry.replace("<text>", "<text class={styles.root}>")}`,
+  );
   const { dist, manifest } = await buildApplication("fixture", { appDirectory: directory });
   assert.equal(manifest.schemaVersion, 2);
   assert.equal(manifest.styleSystem.name, "lightningcss");
   assert.equal(manifest.styleSystem.profile, "lightningcss-v1");
   assert.deepEqual(manifest.styles, ["app.css"]);
   const css = await readFile(path.join(dist, "app.css"), "utf8");
-  assert.match(css, /var\(--zui-color-foreground\)/, "dashedIdents: false must preserve literal --zui-* tokens");
-  assert.match(css, /oklch\(/, "no Browserslist targets must preserve oklch() without static RGB fallbacks");
-  assert.match(css, /:hover\s*\{[^}]*opacity:\s*\.?9/, "CSS nesting (&:hover) must flatten cleanly");
+  assert.match(
+    css,
+    /var\(--zui-color-foreground\)/,
+    "dashedIdents: false must preserve literal --zui-* tokens",
+  );
+  assert.match(
+    css,
+    /oklch\(/,
+    "no Browserslist targets must preserve oklch() without static RGB fallbacks",
+  );
+  assert.match(
+    css,
+    /:hover\s*\{[^}]*opacity:\s*\.?9/,
+    "CSS nesting (&:hover) must flatten cleanly",
+  );
   assert.doesNotMatch(css, /-webkit-|-moz-/, "no browser vendor prefixes");
   assert.match(css, /font-variation-settings:\s*["']wght["'] 650/);
   assert.doesNotMatch(css, /@layer/);
@@ -212,18 +374,34 @@ test("missing Solid compiler maps and missing CSS output cannot publish a candid
   const directory = await fixture(t);
   const source = path.join(directory, "src/main.tsx");
   await assert.rejects(
-    compileBundle(source, { root: workspaceRoot, appDirectory: directory, jsxTransform: async () => ({ code: entry, map: null }) }),
+    compileBundle(source, {
+      root: workspaceRoot,
+      appDirectory: directory,
+      jsxTransform: async () => ({ code: entry, map: null }),
+    }),
     /no code or source map/,
   );
   let pluginRan = false;
   const result = await compileBundle(source, {
-    root: workspaceRoot, appDirectory: directory,
-    plugins: [{ name: "test-plugin-hook", buildStart() { pluginRan = true; } }],
+    root: workspaceRoot,
+    appDirectory: directory,
+    plugins: [
+      {
+        name: "test-plugin-hook",
+        buildStart() {
+          pluginRan = true;
+        },
+      },
+    ],
   });
   assert.equal(pluginRan, true);
   const withoutCss = new Map([...result.files].filter(([name]) => name !== "app.css"));
   await assert.rejects(
-    publishApplication("fixture", { ...result, files: withoutCss }, { root: workspaceRoot, appDirectory: directory }),
+    publishApplication(
+      "fixture",
+      { ...result, files: withoutCss },
+      { root: workspaceRoot, appDirectory: directory },
+    ),
     /Missing Lightning CSS compilation output/,
   );
 });
@@ -236,17 +414,28 @@ test("manifest v2 fonts and CSS Modules build identity are byte-identical across
   for (const directory of [first, second]) {
     await mkdir(path.join(directory, "assets"));
     await writeFile(path.join(directory, "assets/font.ttf"), Buffer.from([0, 1, 2, 3]));
-    await writeFile(path.join(directory, "package.json"), JSON.stringify({
-      name: "reproducible-fixture", type: "module", zgui: { fonts: [{ family: "Fixture Font", path: "assets/font.ttf" }] },
-    }));
+    await writeFile(
+      path.join(directory, "package.json"),
+      JSON.stringify({
+        name: "reproducible-fixture",
+        type: "module",
+        zgui: { fonts: [{ family: "Fixture Font", path: "assets/font.ttf" }] },
+      }),
+    );
     await writeFile(path.join(directory, "src/root.module.css"), cssMod);
     await writeFile(path.join(directory, "src/main.tsx"), source);
   }
   const a = await buildApplication("fixture", { appDirectory: first });
   const b = await buildApplication("fixture", { appDirectory: second });
   assert.deepEqual(a.manifest, b.manifest);
-  assert.equal(await readFile(path.join(a.dist, "app.css"), "utf8"), await readFile(path.join(b.dist, "app.css"), "utf8"));
-  assert.equal(await readFile(path.join(a.dist, "app.mjs"), "utf8"), await readFile(path.join(b.dist, "app.mjs"), "utf8"));
+  assert.equal(
+    await readFile(path.join(a.dist, "app.css"), "utf8"),
+    await readFile(path.join(b.dist, "app.css"), "utf8"),
+  );
+  assert.equal(
+    await readFile(path.join(a.dist, "app.mjs"), "utf8"),
+    await readFile(path.join(b.dist, "app.mjs"), "utf8"),
+  );
   assert.deepEqual(a.manifest.fonts, [{ family: "Fixture Font", path: "assets/font.ttf" }]);
   assert.match(a.manifest.styleSystem.configDigest, /^sha256:[a-f0-9]{64}$/);
   const metadata = JSON.parse(await readFile(path.join(a.dist, "build-info.json"), "utf8"));
@@ -256,57 +445,82 @@ test("manifest v2 fonts and CSS Modules build identity are byte-identical across
     assert.ok(!bytes.includes(first));
     assert.ok(!bytes.includes(workspaceRoot));
   }
-  await writeFile(path.join(first, "package.json"), JSON.stringify({ zgui: { fonts: [{ family: "Missing", path: "assets/missing.ttf" }] } }));
+  await writeFile(
+    path.join(first, "package.json"),
+    JSON.stringify({ zgui: { fonts: [{ family: "Missing", path: "assets/missing.ttf" }] } }),
+  );
   const previous = await readlink(a.dist);
-  await assert.rejects(buildApplication("fixture", { appDirectory: first }), /Font path must be a declared asset/);
+  await assert.rejects(
+    buildApplication("fixture", { appDirectory: first }),
+    /Font path must be a declared asset/,
+  );
   assert.equal(await readlink(a.dist), previous);
 });
 
-test("CSS Modules watch updates changed rules, syncs .d.ts on class rename, and prunes deleted modules", { timeout: 30000 }, async t => {
-  const directory = await fixture(t);
-  const cssFile = path.join(directory, "src/extra.module.css");
-  const main = path.join(directory, "src/main.tsx");
-  const makeCss = (cls, opacity) => `.${cls} { opacity: ${opacity}; }\n`;
-  const makeMain = cls => `import styles from "./extra.module.css";\n${validEntry.replace("<text>", `<text class={styles.${cls}}>`)}`;
-  await writeFile(cssFile, makeCss("alpha", 0.123));
-  await writeFile(main, makeMain("alpha"));
-  let next = Promise.withResolvers();
-  const take = async () => {
-    const result = await next.promise;
-    next = Promise.withResolvers();
-    return result;
-  };
-  const watcher = watchApplication("fixture", {
-    appDirectory: directory, onSuccess(result) { next.resolve(result); }, onError(error) { next.reject(error); },
-  });
-  const css = async result => readFile(path.join(result.dist, "app.css"), "utf8");
-  try {
-    assert.match(await css(await take()), /opacity:\s*0?\.123/);
-    // Rename CSS class in both .module.css and .tsx; watch must regenerate .d.ts and pass tsrs.
-    await writeFile(cssFile, makeCss("beta", 0.456));
-    await writeFile(main, makeMain("beta"));
-    let renamed;
-    do { renamed = await css(await take()); } while (!/opacity:\s*0?\.456/.test(renamed));
-    assert.doesNotMatch(renamed, /opacity:\s*0?\.123/);
-    const dts = await readFile(`${cssFile}.d.ts`, "utf8");
-    assert.match(dts, /readonly beta: string;/);
-    assert.doesNotMatch(dts, /readonly alpha: string;/);
-    // Delete CSS module and detach import; stale .d.ts must be pruned.
-    await rm(cssFile);
-    await writeFile(main, validEntry);
-    let detached;
-    do { detached = await css(await take()); } while (detached !== "");
-    assert.equal(detached, "");
-    await assert.rejects(() => readFile(`${cssFile}.d.ts`, "utf8"), { code: "ENOENT" });
-  } finally { await watcher.close(); }
-});
+test(
+  "CSS Modules watch updates changed rules, syncs .d.ts on class rename, and prunes deleted modules",
+  { timeout: 30000 },
+  async t => {
+    const directory = await fixture(t);
+    const cssFile = path.join(directory, "src/extra.module.css");
+    const main = path.join(directory, "src/main.tsx");
+    const makeCss = (cls, opacity) => `.${cls} { opacity: ${opacity}; }\n`;
+    const makeMain = cls =>
+      `import styles from "./extra.module.css";\n${validEntry.replace("<text>", `<text class={styles.${cls}}>`)}`;
+    await writeFile(cssFile, makeCss("alpha", 0.123));
+    await writeFile(main, makeMain("alpha"));
+    let next = Promise.withResolvers();
+    const take = async () => {
+      const result = await next.promise;
+      next = Promise.withResolvers();
+      return result;
+    };
+    const watcher = watchApplication("fixture", {
+      appDirectory: directory,
+      onSuccess(result) {
+        next.resolve(result);
+      },
+      onError(error) {
+        next.reject(error);
+      },
+    });
+    const css = async result => readFile(path.join(result.dist, "app.css"), "utf8");
+    try {
+      assert.match(await css(await take()), /opacity:\s*0?\.123/);
+      // Rename CSS class in both .module.css and .tsx; watch must regenerate .d.ts and pass tsrs.
+      await writeFile(cssFile, makeCss("beta", 0.456));
+      await writeFile(main, makeMain("beta"));
+      let renamed;
+      do {
+        renamed = await css(await take());
+      } while (!/opacity:\s*0?\.456/.test(renamed));
+      assert.doesNotMatch(renamed, /opacity:\s*0?\.123/);
+      const dts = await readFile(`${cssFile}.d.ts`, "utf8");
+      assert.match(dts, /readonly beta: string;/);
+      assert.doesNotMatch(dts, /readonly alpha: string;/);
+      // Delete CSS module and detach import; stale .d.ts must be pruned.
+      await rm(cssFile);
+      await writeFile(main, validEntry);
+      let detached;
+      do {
+        detached = await css(await take());
+      } while (detached !== "");
+      assert.equal(detached, "");
+      await assert.rejects(() => readFile(`${cssFile}.d.ts`, "utf8"), { code: "ENOENT" });
+    } finally {
+      await watcher.close();
+    }
+  },
+);
 
 test("native services bundle lazily with one Solid runtime and declared text assets", async t => {
   const directory = await fixture(t);
-  const source = `import { readTextAsset } from "@hewel/zgui-services";\n` + validEntry.replace(
-    "return renderApp(() => <App />, root);",
-    'const request = readTextAsset("assets/message.txt"); request.cancel(); return renderApp(() => <App />, root);',
-  );
+  const source =
+    `import { readTextAsset } from "@hewel/zgui-services";\n` +
+    validEntry.replace(
+      "return renderApp(() => <App />, root);",
+      'const request = readTextAsset("assets/message.txt"); request.cancel(); return renderApp(() => <App />, root);',
+    );
   await writeFile(path.join(directory, "src/main.tsx"), source);
   await mkdir(path.join(directory, "assets"));
   await writeFile(path.join(directory, "assets/message.txt"), "Native text asset\n");
@@ -314,7 +528,10 @@ test("native services bundle lazily with one Solid runtime and declared text ass
   assert.deepEqual(manifest.assets, ["assets/message.txt"]);
   assert.equal(await readFile(path.join(dist, manifest.assets[0]), "utf8"), "Native text asset\n");
   const info = JSON.parse(await readFile(path.join(dist, "build-info.json"), "utf8"));
-  assert.equal(info.graph.modules.filter(input => /\/solid-js\/dist\/(?:solid|dev)\.js$/.test(input)).length, 1);
+  assert.equal(
+    info.graph.modules.filter(input => /\/solid-js\/dist\/(?:solid|dev)\.js$/.test(input)).length,
+    1,
+  );
   const code = await readFile(path.join(dist, manifest.entry), "utf8");
   assert.match(code, /globalThis\.__zguiServices\.readTextAsset/);
   validateModule(code, { bundled: true, entry: true });
@@ -327,17 +544,49 @@ test("type errors, bad imports, and failed publication preserve the last complet
   const directory = await fixture(t);
   const { dist, manifest } = await buildApplication("fixture", { appDirectory: directory });
   const target = await readlink(dist);
-  await writeFile(path.join(directory, "src/main.tsx"), validEntry + '\nconst wrong: number = "not a number";\n');
+  await writeFile(
+    path.join(directory, "src/main.tsx"),
+    validEntry + '\nconst wrong: number = "not a number";\n',
+  );
   await assert.rejects(buildApplication("fixture", { appDirectory: directory }), /not assignable/);
   assert.equal(await readlink(dist), target);
-  for (const specifier of ["solid-js/web", "solid-js/web/dist/server.js", "solid-js/dist/server.js", "node:fs", "fs", "./app.css"]) {
-    await writeFile(path.join(directory, "src/main.tsx"), `import ${JSON.stringify(specifier)};\n${validEntry}`);
-    await assert.rejects(bundle(path.join(directory, "src/main.tsx")), /Incompatible runtime import|Runtime resource imports/);
+  for (const specifier of [
+    "solid-js/web",
+    "solid-js/web/dist/server.js",
+    "solid-js/dist/server.js",
+    "node:fs",
+    "fs",
+    "./app.css",
+  ]) {
+    await writeFile(
+      path.join(directory, "src/main.tsx"),
+      `import ${JSON.stringify(specifier)};\n${validEntry}`,
+    );
+    await assert.rejects(
+      bundle(path.join(directory, "src/main.tsx")),
+      /Incompatible runtime import|Runtime resource imports/,
+    );
   }
-  await assert.rejects(publishGeneration(directory, new Map([["app.mjs", Buffer.from("partial")], ["../escaped", Buffer.from("bad")]])), /Non-canonical resource/);
+  await assert.rejects(
+    publishGeneration(
+      directory,
+      new Map([
+        ["app.mjs", Buffer.from("partial")],
+        ["../escaped", Buffer.from("bad")],
+      ]),
+    ),
+    /Non-canonical resource/,
+  );
   assert.equal(await readlink(dist), target);
-  assert.equal(JSON.parse(await readFile(path.join(dist, "manifest.json"), "utf8")).buildId, manifest.buildId);
-  assert.ok((await readdir(path.join(directory, ".zgui-generations"))).every(name => !name.startsWith(".building-")));
+  assert.equal(
+    JSON.parse(await readFile(path.join(dist, "manifest.json"), "utf8")).buildId,
+    manifest.buildId,
+  );
+  assert.ok(
+    (await readdir(path.join(directory, ".zgui-generations"))).every(
+      name => !name.startsWith(".building-"),
+    ),
+  );
 });
 
 test("asset symlinks are rejected before publication", async t => {
@@ -352,14 +601,27 @@ test("app-local dependencies resolve browser/production exports without external
   const directory = await fixture(t);
   const dependency = path.join(directory, "node_modules/native-fixture");
   await mkdir(dependency, { recursive: true });
-  await writeFile(path.join(dependency, "package.json"), JSON.stringify({
-    name: "native-fixture", type: "module",
-    exports: { browser: { production: "./native.js", default: "./wrong.js" }, default: "./wrong.js" },
-  }));
-  await writeFile(path.join(dependency, "native.js"), 'export const message = "browser-production-branch";');
+  await writeFile(
+    path.join(dependency, "package.json"),
+    JSON.stringify({
+      name: "native-fixture",
+      type: "module",
+      exports: {
+        browser: { production: "./native.js", default: "./wrong.js" },
+        default: "./wrong.js",
+      },
+    }),
+  );
+  await writeFile(
+    path.join(dependency, "native.js"),
+    'export const message = "browser-production-branch";',
+  );
   await writeFile(path.join(dependency, "wrong.js"), 'throw new Error("wrong-resolution-branch");');
   const source = path.join(directory, "src/main.tsx");
-  await writeFile(source, `import { message } from "native-fixture";\n${validEntry.replace("Count:", "{message}")}`);
+  await writeFile(
+    source,
+    `import { message } from "native-fixture";\n${validEntry.replace("Count:", "{message}")}`,
+  );
   const result = await bundle(source, { appDirectory: directory });
   assert.match(result.files.get("app.mjs").toString(), /browser-production-branch/);
   assert.ok(result.graph.modules.includes(path.join(dependency, "native.js")));
@@ -369,7 +631,9 @@ test("app-local dependencies resolve browser/production exports without external
 
 function deferred() {
   let resolve;
-  const promise = new Promise(done => { resolve = done; });
+  const promise = new Promise(done => {
+    resolve = done;
+  });
   return { promise, resolve };
 }
 
@@ -379,190 +643,309 @@ test("watch rebuild queue coalesces bursts and serializes edits arriving during 
   const secondFinished = deferred();
   let calls = 0;
   let active = 0;
-  const queue = rebuildQueue(async () => {
-    assert.equal(++active, 1);
-    calls++;
-    if (calls === 1) { firstStarted.resolve(); await releaseFirst.promise; }
-    active--;
-    return calls;
-  }, { delay: 0, onSuccess: result => { if (result === 2) secondFinished.resolve(); } });
+  const queue = rebuildQueue(
+    async () => {
+      assert.equal(++active, 1);
+      calls++;
+      if (calls === 1) {
+        firstStarted.resolve();
+        await releaseFirst.promise;
+      }
+      active--;
+      return calls;
+    },
+    {
+      delay: 0,
+      onSuccess: result => {
+        if (result === 2) secondFinished.resolve();
+      },
+    },
+  );
   try {
-    queue.request(); queue.request(); queue.request();
+    queue.request();
+    queue.request();
+    queue.request();
     await firstStarted.promise;
-    queue.request(); queue.request();
+    queue.request();
+    queue.request();
     releaseFirst.resolve();
     await secondFinished.promise;
     assert.equal(calls, 2);
-  } finally { await queue.close(); }
+  } finally {
+    await queue.close();
+  }
 });
 
-test("development watcher retains the good generation on errors and publishes recovery", { timeout: 30000 }, async t => {
-  const directory = await fixture(t);
-  const statusPath = path.join(directory, ".zgui-build-status.json");
-  const readStatus = () => {
-    const bytes = readFileSync(statusPath);
-    assert.ok(bytes.length <= 16 * 1024);
-    return JSON.parse(bytes);
-  };
-  const initial = deferred();
-  const failed = deferred();
-  const recovered = deferred();
-  let firstBuildId;
-  const watcher = watchApplication("fixture", {
-    appDirectory: directory,
-    onSuccess(result) {
-      if (!firstBuildId) {
-        firstBuildId = result.manifest.buildId;
-        initial.resolve({ result, status: readStatus() });
-      } else if (result.manifest.buildId !== firstBuildId) recovered.resolve({ result, status: readStatus() });
-    },
-    onError(error) { failed.resolve({ error, status: readStatus() }); },
-  });
-  try {
-    const { result: { dist }, status: published } = await initial.promise;
-    const target = await readlink(dist);
-    const previousDirectory = await realpath(dist);
-    assert.match(published.attemptId, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
-    assert.deepEqual(published, {
-      schemaVersion: 1, attemptId: published.attemptId, app: "fixture", status: "published",
-      previousDirectory: null, publicationDirectory: previousDirectory, buildId: firstBuildId, error: null,
+test(
+  "development watcher retains the good generation on errors and publishes recovery",
+  { timeout: 30000 },
+  async t => {
+    const directory = await fixture(t);
+    const statusPath = path.join(directory, ".zgui-build-status.json");
+    const readStatus = () => {
+      const bytes = readFileSync(statusPath);
+      assert.ok(bytes.length <= 16 * 1024);
+      return JSON.parse(bytes);
+    };
+    const initial = deferred();
+    const failed = deferred();
+    const recovered = deferred();
+    let firstBuildId;
+    const watcher = watchApplication("fixture", {
+      appDirectory: directory,
+      onSuccess(result) {
+        if (!firstBuildId) {
+          firstBuildId = result.manifest.buildId;
+          initial.resolve({ result, status: readStatus() });
+        } else if (result.manifest.buildId !== firstBuildId)
+          recovered.resolve({ result, status: readStatus() });
+      },
+      onError(error) {
+        failed.resolve({ error, status: readStatus() });
+      },
     });
-    const invalidDeclarations = Array.from({ length: 64 }, (_, index) => `const invalid${index}: number = "bad";`).join("\n");
-    await writeFile(path.join(directory, "src/main.tsx"), `${validEntry}\n${invalidDeclarations}\n`);
-    const { error, status: failure } = await failed.promise;
-    assert.match(error.message, /not assignable/);
-    assert.ok(error.message.length > 2048);
-    assert.notEqual(failure.attemptId, published.attemptId);
-    assert.match(failure.attemptId, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
-    assert.deepEqual(failure, {
-      schemaVersion: 1, attemptId: failure.attemptId, app: "fixture", status: "failed",
-      previousDirectory, publicationDirectory: null, buildId: null,
-      error: { code: "E_BUILD", message: error.message.slice(0, 2048) },
+    try {
+      const {
+        result: { dist },
+        status: published,
+      } = await initial.promise;
+      const target = await readlink(dist);
+      const previousDirectory = await realpath(dist);
+      assert.match(
+        published.attemptId,
+        /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      );
+      assert.deepEqual(published, {
+        schemaVersion: 1,
+        attemptId: published.attemptId,
+        app: "fixture",
+        status: "published",
+        previousDirectory: null,
+        publicationDirectory: previousDirectory,
+        buildId: firstBuildId,
+        error: null,
+      });
+      const invalidDeclarations = Array.from(
+        { length: 64 },
+        (_, index) => `const invalid${index}: number = "bad";`,
+      ).join("\n");
+      await writeFile(
+        path.join(directory, "src/main.tsx"),
+        `${validEntry}\n${invalidDeclarations}\n`,
+      );
+      const { error, status: failure } = await failed.promise;
+      assert.match(error.message, /not assignable/);
+      assert.ok(error.message.length > 2048);
+      assert.notEqual(failure.attemptId, published.attemptId);
+      assert.match(
+        failure.attemptId,
+        /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      );
+      assert.deepEqual(failure, {
+        schemaVersion: 1,
+        attemptId: failure.attemptId,
+        app: "fixture",
+        status: "failed",
+        previousDirectory,
+        publicationDirectory: null,
+        buildId: null,
+        error: { code: "E_BUILD", message: error.message.slice(0, 2048) },
+      });
+      assert.equal(await readlink(dist), target);
+      assert.equal(
+        JSON.parse(await readFile(path.join(dist, "manifest.json"), "utf8")).buildId,
+        firstBuildId,
+      );
+      await writeFile(path.join(directory, "src/main.tsx"), validEntry.replace("Count:", "Total:"));
+      const { result, status: recovery } = await recovered.promise;
+      assert.notEqual(result.manifest.buildId, firstBuildId);
+      assert.notEqual(await readlink(dist), target);
+      assert.equal(
+        JSON.parse(await readFile(path.join(dist, "manifest.json"), "utf8")).buildId,
+        result.manifest.buildId,
+      );
+      assert.notEqual(recovery.attemptId, failure.attemptId);
+      assert.deepEqual(recovery, {
+        schemaVersion: 1,
+        attemptId: recovery.attemptId,
+        app: "fixture",
+        status: "published",
+        previousDirectory,
+        publicationDirectory: await realpath(dist),
+        buildId: result.manifest.buildId,
+        error: null,
+      });
+      assert.deepEqual(
+        (await readdir(directory)).filter(name => name.startsWith(".zgui-build-status.json.")),
+        [],
+      );
+    } finally {
+      await watcher.close();
+    }
+  },
+);
+
+test(
+  "development watcher surfaces status publication failure instead of reporting success",
+  { timeout: 30000 },
+  async t => {
+    const directory = await fixture(t);
+    await mkdir(path.join(directory, ".zgui-build-status.json"));
+    const failed = deferred();
+    let successes = 0;
+    const watcher = watchApplication("fixture", {
+      appDirectory: directory,
+      onSuccess() {
+        successes++;
+      },
+      onError(error) {
+        failed.resolve(error);
+      },
     });
-    assert.equal(await readlink(dist), target);
-    assert.equal(JSON.parse(await readFile(path.join(dist, "manifest.json"), "utf8")).buildId, firstBuildId);
-    await writeFile(path.join(directory, "src/main.tsx"), validEntry.replace("Count:", "Total:"));
-    const { result, status: recovery } = await recovered.promise;
-    assert.notEqual(result.manifest.buildId, firstBuildId);
-    assert.notEqual(await readlink(dist), target);
-    assert.equal(JSON.parse(await readFile(path.join(dist, "manifest.json"), "utf8")).buildId, result.manifest.buildId);
-    assert.notEqual(recovery.attemptId, failure.attemptId);
-    assert.deepEqual(recovery, {
-      schemaVersion: 1, attemptId: recovery.attemptId, app: "fixture", status: "published",
-      previousDirectory, publicationDirectory: await realpath(dist), buildId: result.manifest.buildId, error: null,
+    try {
+      const error = await failed.promise;
+      assert.equal(error.syscall, "rename");
+      assert.match(error.message, /\.zgui-build-status\.json/);
+      assert.equal(successes, 0);
+      await assert.rejects(realpath(path.join(directory, "dist")), { code: "ENOENT" });
+      assert.deepEqual(
+        (await readdir(directory)).filter(name => name.startsWith(".zgui-build-status.json.")),
+        [],
+      );
+    } finally {
+      await watcher.close();
+    }
+  },
+);
+
+test(
+  "native acceptance status files do not trigger another publication",
+  { timeout: 30000 },
+  async t => {
+    const directory = await fixture(t);
+    const initial = deferred();
+    let successes = 0;
+    const watcher = watchApplication("fixture", {
+      appDirectory: directory,
+      onSuccess() {
+        successes++;
+        initial.resolve();
+      },
+      onError(error) {
+        throw error;
+      },
     });
-    assert.deepEqual((await readdir(directory)).filter(name => name.startsWith(".zgui-build-status.json.")), []);
-  } finally { await watcher.close(); }
-});
+    try {
+      await initial.promise;
+      await writeFile(path.join(directory, ".zgui-native-status.json"), "{}\n");
+      await writeFile(path.join(directory, ".zgui-native-status.json.123.tmp"), "{}\n");
+      await new Promise(resolve => setTimeout(resolve, 300));
+      assert.equal(successes, 1);
+    } finally {
+      await watcher.close();
+    }
+  },
+);
 
-test("development watcher surfaces status publication failure instead of reporting success", { timeout: 30000 }, async t => {
-  const directory = await fixture(t);
-  await mkdir(path.join(directory, ".zgui-build-status.json"));
-  const failed = deferred();
-  let successes = 0;
-  const watcher = watchApplication("fixture", {
-    appDirectory: directory,
-    onSuccess() { successes++; },
-    onError(error) { failed.resolve(error); },
-  });
-  try {
-    const error = await failed.promise;
-    assert.equal(error.syscall, "rename");
-    assert.match(error.message, /\.zgui-build-status\.json/);
-    assert.equal(successes, 0);
-    await assert.rejects(realpath(path.join(directory, "dist")), { code: "ENOENT" });
-    assert.deepEqual((await readdir(directory)).filter(name => name.startsWith(".zgui-build-status.json.")), []);
-  } finally { await watcher.close(); }
-});
-
-test("native acceptance status files do not trigger another publication", { timeout: 30000 }, async t => {
-  const directory = await fixture(t);
-  const initial = deferred();
-  let successes = 0;
-  const watcher = watchApplication("fixture", {
-    appDirectory: directory,
-    onSuccess() { successes++; initial.resolve(); },
-    onError(error) { throw error; },
-  });
-  try {
-    await initial.promise;
-    await writeFile(path.join(directory, ".zgui-native-status.json"), "{}\n");
-    await writeFile(path.join(directory, ".zgui-native-status.json.123.tmp"), "{}\n");
-    await new Promise(resolve => setTimeout(resolve, 300));
-    assert.equal(successes, 1);
-  } finally { await watcher.close(); }
-});
-
-test("persistent compiler caches real Solid JSX transforms, bypasses plain TS, prunes modules, and recovers after syntax errors", { timeout: 30000 }, async t => {
-  const directory = await fixture(t);
-  const source = path.join(directory, "src/main.tsx");
-  const jsxDependency = path.join(directory, "src/badge.tsx");
-  const tsDependency = path.join(directory, "src/message.ts");
-  const jsxDependencySource = value => `export function Badge() { return <text>${value}</text>; }\n`;
-  const tsDependencySource = value => `export const message: string = ${JSON.stringify(value)};\n`;
-  const mainSource = suffix =>
-    `import { Badge } from "./badge";\nimport { message } from "./message";\n${validEntry.replace("<text>Count: {count()}</text>", `<box><Badge /><text>{message}${suffix}</text></box>`)}`;
-  await writeFile(jsxDependency, jsxDependencySource("badge-one"));
-  await writeFile(tsDependency, tsDependencySource("incremental-one"));
-  await writeFile(source, mainSource("first"));
-  const { transform: solidTransform } = require("@solidjs/compiler");
-  let jsxTransforms = 0;
-  let tsTransforms = 0;
-  let next = Promise.withResolvers();
-  const take = async () => {
-    const result = await next.promise;
-    next = Promise.withResolvers();
-    return result;
-  };
-  const start = () => watchBundle(source, {
-    root: workspaceRoot,
-    appDirectory: directory,
-    temporaryDirectory: path.join(directory, "compiler-output"),
-    buildDelay: 20,
-    jsxTransform(code, options) {
-      if (options.filename === jsxDependency) jsxTransforms++;
-      if (options.filename === tsDependency) tsTransforms++;
-      return solidTransform(code, options);
-    },
-    onCompile(result) { next.resolve({ result }); },
-    onError(error) { next.resolve({ error }); },
-  });
-  let compiler = start();
-  try {
-    assert.ok((await take()).result);
-    assert.equal(jsxTransforms, 1);
-    assert.equal(tsTransforms, 0, "plain .ts modules must bypass @solidjs/compiler");
-    await writeFile(source, mainSource("second"));
-    assert.match((await take()).result.files.get("app.mjs").toString(), /second/);
-    assert.equal(jsxTransforms, 1, "the persistent compiler must retain unchanged JSX transforms");
-    await writeFile(tsDependency, tsDependencySource("incremental-two"));
-    assert.match((await take()).result.files.get("app.mjs").toString(), /incremental-two/);
-    assert.equal(tsTransforms, 0, "editing plain .ts modules still bypasses @solidjs/compiler");
-    await writeFile(jsxDependency, jsxDependencySource("badge-two"));
-    assert.match((await take()).result.files.get("app.mjs").toString(), /badge-two/);
-    assert.equal(jsxTransforms, 2);
-    await writeFile(source, "export const broken = ;");
-    assert.ok((await take()).error);
-    await writeFile(source, mainSource("recovered"));
-    assert.match((await take()).result.files.get("app.mjs").toString(), /recovered/);
-    const beforePruning = jsxTransforms;
-    await writeFile(source, validEntry.replace("Count:", "detached"));
-    assert.ok(!(await take()).result.graph.modules.includes(jsxDependency));
-    await writeFile(source, mainSource("reattached"));
-    assert.match((await take()).result.files.get("app.mjs").toString(), /reattached/);
-    assert.equal(jsxTransforms, beforePruning + 1, "removed modules must not retain cached transforms");
-    await compiler.close();
-    const beforeRestart = jsxTransforms;
-    compiler = start();
-    assert.ok((await take()).result);
-    assert.equal(jsxTransforms, beforeRestart + 1, "closing a compiler clears its transform cache");
-  } finally { await compiler.close(); }
-});
+test(
+  "persistent compiler caches real Solid JSX transforms, bypasses plain TS, prunes modules, and recovers after syntax errors",
+  { timeout: 30000 },
+  async t => {
+    const directory = await fixture(t);
+    const source = path.join(directory, "src/main.tsx");
+    const jsxDependency = path.join(directory, "src/badge.tsx");
+    const tsDependency = path.join(directory, "src/message.ts");
+    const jsxDependencySource = value =>
+      `export function Badge() { return <text>${value}</text>; }\n`;
+    const tsDependencySource = value =>
+      `export const message: string = ${JSON.stringify(value)};\n`;
+    const mainSource = suffix =>
+      `import { Badge } from "./badge";\nimport { message } from "./message";\n${validEntry.replace("<text>Count: {count()}</text>", `<box><Badge /><text>{message}${suffix}</text></box>`)}`;
+    await writeFile(jsxDependency, jsxDependencySource("badge-one"));
+    await writeFile(tsDependency, tsDependencySource("incremental-one"));
+    await writeFile(source, mainSource("first"));
+    const { transform: solidTransform } = require("@solidjs/compiler");
+    let jsxTransforms = 0;
+    let tsTransforms = 0;
+    let next = Promise.withResolvers();
+    const take = async () => {
+      const result = await next.promise;
+      next = Promise.withResolvers();
+      return result;
+    };
+    const start = () =>
+      watchBundle(source, {
+        root: workspaceRoot,
+        appDirectory: directory,
+        temporaryDirectory: path.join(directory, "compiler-output"),
+        buildDelay: 20,
+        jsxTransform(code, options) {
+          if (options.filename === jsxDependency) jsxTransforms++;
+          if (options.filename === tsDependency) tsTransforms++;
+          return solidTransform(code, options);
+        },
+        onCompile(result) {
+          next.resolve({ result });
+        },
+        onError(error) {
+          next.resolve({ error });
+        },
+      });
+    let compiler = start();
+    try {
+      assert.ok((await take()).result);
+      assert.equal(jsxTransforms, 1);
+      assert.equal(tsTransforms, 0, "plain .ts modules must bypass @solidjs/compiler");
+      await writeFile(source, mainSource("second"));
+      assert.match((await take()).result.files.get("app.mjs").toString(), /second/);
+      assert.equal(
+        jsxTransforms,
+        1,
+        "the persistent compiler must retain unchanged JSX transforms",
+      );
+      await writeFile(tsDependency, tsDependencySource("incremental-two"));
+      assert.match((await take()).result.files.get("app.mjs").toString(), /incremental-two/);
+      assert.equal(tsTransforms, 0, "editing plain .ts modules still bypasses @solidjs/compiler");
+      await writeFile(jsxDependency, jsxDependencySource("badge-two"));
+      assert.match((await take()).result.files.get("app.mjs").toString(), /badge-two/);
+      assert.equal(jsxTransforms, 2);
+      await writeFile(source, "export const broken = ;");
+      assert.ok((await take()).error);
+      await writeFile(source, mainSource("recovered"));
+      assert.match((await take()).result.files.get("app.mjs").toString(), /recovered/);
+      const beforePruning = jsxTransforms;
+      await writeFile(source, validEntry.replace("Count:", "detached"));
+      assert.ok(!(await take()).result.graph.modules.includes(jsxDependency));
+      await writeFile(source, mainSource("reattached"));
+      assert.match((await take()).result.files.get("app.mjs").toString(), /reattached/);
+      assert.equal(
+        jsxTransforms,
+        beforePruning + 1,
+        "removed modules must not retain cached transforms",
+      );
+      await compiler.close();
+      const beforeRestart = jsxTransforms;
+      compiler = start();
+      assert.ok((await take()).result);
+      assert.equal(
+        jsxTransforms,
+        beforeRestart + 1,
+        "closing a compiler clears its transform cache",
+      );
+    } finally {
+      await compiler.close();
+    }
+  },
+);
 
 test("watchApplication orchestrates deterministic status transitions and errors through its adapter seam", async t => {
   const directory = await fixture(t);
-  const statuses = [], successes = [], errors = [];
-  let handlers, rejectTypecheck = false, publishCount = 0;
+  const statuses = [],
+    successes = [],
+    errors = [];
+  let handlers,
+    rejectTypecheck = false,
+    publishCount = 0;
   let driverReady = Promise.withResolvers();
   const fakeWatchBundle = (_entry, options) => {
     handlers = options;
@@ -585,19 +968,23 @@ test("watchApplication orchestrates deterministic status transitions and errors 
   const fakeTypecheck = async () => {
     if (rejectTypecheck) throw new Error("synthetic TS2322 type failure");
   };
-  const watcher = watchApplication("fixture", {
-    appDirectory: directory,
-    onSuccess: value => successes.push(value),
-    onError: error => errors.push(error),
-  }, {
-    watchBundle: fakeWatchBundle,
-    typecheck: fakeTypecheck,
-    publish: fakePublish,
-    publishStatus: async (appDirectory, value) => {
-      statuses.push(value);
-      await publishBuildStatus(appDirectory, value);
+  const watcher = watchApplication(
+    "fixture",
+    {
+      appDirectory: directory,
+      onSuccess: value => successes.push(value),
+      onError: error => errors.push(error),
     },
-  });
+    {
+      watchBundle: fakeWatchBundle,
+      typecheck: fakeTypecheck,
+      publish: fakePublish,
+      publishStatus: async (appDirectory, value) => {
+        statuses.push(value);
+        await publishBuildStatus(appDirectory, value);
+      },
+    },
+  );
   try {
     await driverReady.promise;
     const compiled = {
@@ -607,10 +994,13 @@ test("watchApplication orchestrates deterministic status transitions and errors 
     await runCycle(compiled);
     const firstDist = await realpath(path.join(directory, "dist"));
     assert.equal(successes.length, 1);
-    assert.deepEqual(statuses.map(entry => [entry.status, entry.previousDirectory]), [
-      ["building", null],
-      ["published", null],
-    ]);
+    assert.deepEqual(
+      statuses.map(entry => [entry.status, entry.previousDirectory]),
+      [
+        ["building", null],
+        ["published", null],
+      ],
+    );
 
     rejectTypecheck = true;
     await runCycle(compiled);
@@ -618,13 +1008,19 @@ test("watchApplication orchestrates deterministic status transitions and errors 
     assert.equal(publishCount, 1, "failed typecheck must not publish a package");
     assert.equal(errors.at(-1)?.message, "synthetic TS2322 type failure");
     assert.equal(await realpath(path.join(directory, "dist")), firstDist);
-    assert.deepEqual(statuses.slice(2).map(entry => [entry.status, entry.previousDirectory]), [
-      ["building", firstDist],
-      ["failed", firstDist],
-    ]);
+    assert.deepEqual(
+      statuses.slice(2).map(entry => [entry.status, entry.previousDirectory]),
+      [
+        ["building", firstDist],
+        ["failed", firstDist],
+      ],
+    );
 
     rejectTypecheck = false;
-    await runCycle({ ...compiled, files: new Map([["app.mjs", Buffer.from("export const hostApiVersion = 1; // v2")]]) });
+    await runCycle({
+      ...compiled,
+      files: new Map([["app.mjs", Buffer.from("export const hostApiVersion = 1; // v2")]]),
+    });
     const recoveredDist = await realpath(path.join(directory, "dist"));
     assert.notEqual(recoveredDist, firstDist);
     assert.equal(successes.length, 2);
@@ -641,50 +1037,76 @@ test("watchApplication orchestrates deterministic status transitions and errors 
   }
 });
 
-test("development watcher publishes added resources and external dependency changes", { timeout: 30000 }, async t => {
-  const directory = await fixture(t);
-  const external = await mkdtemp(path.join(workspaceRoot, "tests/build/.dependency-"));
-  t.after(() => rm(external, { recursive: true, force: true }));
-  const dependency = path.join(external, "message.ts");
-  await writeFile(dependency, 'export const message = "external-one";');
-  const specifier = path.relative(path.join(directory, "src"), dependency).replace(/\.ts$/, "");
-  await writeFile(path.join(directory, "src/main.tsx"), `import { message } from ${JSON.stringify(specifier)};\n${validEntry.replace("Count:", "{message}")}`);
-  let next = Promise.withResolvers();
-  const take = async () => {
-    const result = await next.promise;
-    next = Promise.withResolvers();
-    return result;
-  };
-  const watcher = watchApplication("fixture", {
-    appDirectory: directory,
-    onSuccess(result) { next.resolve(result); },
-    onError(error) { next.reject(error); },
-  });
-  try {
-    const initial = await take();
-    assert.match(await readFile(path.join(initial.dist, "app.mjs"), "utf8"), /external-one/);
-    await writeFile(dependency, 'export const message = "external-two";');
-    const changed = await take();
-    assert.match(await readFile(path.join(changed.dist, "app.mjs"), "utf8"), /external-two/);
-    await mkdir(path.join(directory, "assets"));
-    await writeFile(path.join(directory, "assets/new.txt"), "new resource");
-    let resources;
-    do { resources = await take(); } while (!resources.manifest.assets.includes("assets/new.txt"));
-    assert.equal(await readFile(path.join(resources.dist, "assets/new.txt"), "utf8"), "new resource");
-    await writeFile(path.join(directory, "src/app.css"), "text { color: red; }");
-    let styled;
-    do { styled = await take(); } while (!(await readFile(path.join(styled.dist, "app.css"), "utf8")).includes("red"));
-    assert.deepEqual(styled.manifest.styles, ["app.css"]);
-    assert.match(await readFile(path.join(styled.dist, "app.css"), "utf8"), /text\s*\{\s*color:\s*red;?\s*\}/);
-  } finally { await watcher.close(); }
-  await watcher.close();
-});
+test(
+  "development watcher publishes added resources and external dependency changes",
+  { timeout: 30000 },
+  async t => {
+    const directory = await fixture(t);
+    const external = await mkdtemp(path.join(workspaceRoot, "tests/build/.dependency-"));
+    t.after(() => rm(external, { recursive: true, force: true }));
+    const dependency = path.join(external, "message.ts");
+    await writeFile(dependency, 'export const message = "external-one";');
+    const specifier = path.relative(path.join(directory, "src"), dependency).replace(/\.ts$/, "");
+    await writeFile(
+      path.join(directory, "src/main.tsx"),
+      `import { message } from ${JSON.stringify(specifier)};\n${validEntry.replace("Count:", "{message}")}`,
+    );
+    let next = Promise.withResolvers();
+    const take = async () => {
+      const result = await next.promise;
+      next = Promise.withResolvers();
+      return result;
+    };
+    const watcher = watchApplication("fixture", {
+      appDirectory: directory,
+      onSuccess(result) {
+        next.resolve(result);
+      },
+      onError(error) {
+        next.reject(error);
+      },
+    });
+    try {
+      const initial = await take();
+      assert.match(await readFile(path.join(initial.dist, "app.mjs"), "utf8"), /external-one/);
+      await writeFile(dependency, 'export const message = "external-two";');
+      const changed = await take();
+      assert.match(await readFile(path.join(changed.dist, "app.mjs"), "utf8"), /external-two/);
+      await mkdir(path.join(directory, "assets"));
+      await writeFile(path.join(directory, "assets/new.txt"), "new resource");
+      let resources;
+      do {
+        resources = await take();
+      } while (!resources.manifest.assets.includes("assets/new.txt"));
+      assert.equal(
+        await readFile(path.join(resources.dist, "assets/new.txt"), "utf8"),
+        "new resource",
+      );
+      await writeFile(path.join(directory, "src/app.css"), "text { color: red; }");
+      let styled;
+      do {
+        styled = await take();
+      } while (!(await readFile(path.join(styled.dist, "app.css"), "utf8")).includes("red"));
+      assert.deepEqual(styled.manifest.styles, ["app.css"]);
+      assert.match(
+        await readFile(path.join(styled.dist, "app.css"), "utf8"),
+        /text\s*\{\s*color:\s*red;?\s*\}/,
+      );
+    } finally {
+      await watcher.close();
+    }
+    await watcher.close();
+  },
+);
 
 test("async development typechecking preserves diagnostics and reaps cancellation", async t => {
   const directory = await fixture(t);
   const config = path.join(directory, "tsconfig.json");
   await typecheckProjectAsync(config);
-  await writeFile(path.join(directory, "src/main.tsx"), `${validEntry}\nconst wrong: number = "bad";`);
+  await writeFile(
+    path.join(directory, "src/main.tsx"),
+    `${validEntry}\nconst wrong: number = "bad";`,
+  );
   await assert.rejects(typecheckProjectAsync(config), /not assignable/);
   const controller = new AbortController();
   const checking = typecheckProjectAsync(config, { signal: controller.signal });
@@ -694,7 +1116,9 @@ test("async development typechecking preserves diagnostics and reaps cancellatio
 
 test("text controls reject children introduced by a reactive spread before evaluating them", async t => {
   const directory = await fixture(t);
-  await writeFile(path.join(directory, "src/main.tsx"), `
+  await writeFile(
+    path.join(directory, "src/main.tsx"),
+    `
     import { TextField, TextArea, createSignal, flush } from "@hewel/zgui";
     import type { NativeNode } from "@hewel/zgui";
     import { mergeProps, render } from "@hewel/zgui/renderer";
@@ -717,15 +1141,21 @@ test("text controls reject children introduced by a reactive spread before evalu
       finally { dispose(); }
       return { rejected, reads };
     }
-  `);
+  `,
+  );
   const { dist } = await buildApplication("fixture", { appDirectory: directory });
   const previous = Object.getOwnPropertyDescriptor(globalThis, "__zgui");
   try {
     // Only the SDK's shape guard is under test; no native editing is simulated.
-    Object.defineProperty(globalThis, "__zgui", { configurable: true, value: {
-      createElement: tag => ({ tag }),
-      setProperty: (node, name, value) => { node[name] = value; },
-    } });
+    Object.defineProperty(globalThis, "__zgui", {
+      configurable: true,
+      value: {
+        createElement: tag => ({ tag }),
+        setProperty: (node, name, value) => {
+          node[name] = value;
+        },
+      },
+    });
     const module = await import(pathToFileURL(path.join(await realpath(dist), "app.mjs")));
     for (const multiline of [false, true]) {
       assert.deepEqual(module.probe({}, multiline), { rejected: true, reads: 0 });
@@ -739,7 +1169,9 @@ test("text controls reject children introduced by a reactive spread before evalu
 test("static component stylesheets hoist into packaged components.css in layer order without breaking non-host bundles", async t => {
   const directory = await fixture(t);
   await writeFile(path.join(directory, "src/app.css"), "text { color: #222; }\n");
-  await writeFile(path.join(directory, "src/main.tsx"), `
+  await writeFile(
+    path.join(directory, "src/main.tsx"),
+    `
     import { renderApp } from "@hewel/zgui";
     import type { NativeNode } from "@hewel/zgui";
     import { Button, ThemeProvider } from "@hewel/zgui/components";
@@ -747,33 +1179,53 @@ test("static component stylesheets hoist into packaged components.css in layer o
     export function mount(root: NativeNode) {
       return renderApp(() => <ThemeProvider><Button>Save</Button></ThemeProvider>, root);
     }
-  `);
+  `,
+  );
 
   const published = await buildApplication("hoisted-components", { appDirectory: directory });
   assert.deepEqual(published.manifest.styles, ["components.css", "app.css"]);
   const componentsCss = await readFile(path.join(published.dist, "components.css"), "utf8");
   assert.match(componentsCss, /^@layer zgui\.components\s*\{/);
   assert.match(componentsCss, /--zui-button-ring/);
-  assert.doesNotMatch(componentsCss, /\.zui-calendar/, "unreachable component styles must stay excluded");
+  assert.doesNotMatch(
+    componentsCss,
+    /\.zui-calendar/,
+    "unreachable component styles must stay excluded",
+  );
   const appJs = await readFile(path.join(published.dist, "app.mjs"), "utf8");
-  assert.doesNotMatch(appJs, /--zui-button-ring:/, "ButtonStyle CSS text must be hoisted out of app.mjs");
+  assert.doesNotMatch(
+    appJs,
+    /--zui-button-ring:/,
+    "ButtonStyle CSS text must be hoisted out of app.mjs",
+  );
 
   const nonHost = await bundle(path.join(directory, "src/main.tsx"), {
     appDirectory: directory,
     hostEntry: false,
   });
-  assert.equal(nonHost.files.has("components.css"), false, "hostEntry: false keeps component styles inline for unit harnesses");
+  assert.equal(
+    nonHost.files.has("components.css"),
+    false,
+    "hostEntry: false keeps component styles inline for unit harnesses",
+  );
   assert.match(nonHost.files.get("app.mjs").toString(), /--zui-button-ring:/);
 });
 
 test("Stage 1 TS-aware validation and Stage 2 scope analysis handle type imports, typeof guards, shadowing, and destructuring", () => {
   // Stage 1: pure type imports/exports from forbidden modules are erased by Rolldown TS stripping.
-  validateModule(`import type { Stats } from "node:fs";\nexport type { Stats } from "node:fs";\nexport type * from "node:path";\nexport const x: Stats | null = null;\n`, {
-    filename: "src/types.ts",
-  });
+  validateModule(
+    `import type { Stats } from "node:fs";\nexport type { Stats } from "node:fs";\nexport type * from "node:path";\nexport const x: Stats | null = null;\n`,
+    {
+      filename: "src/types.ts",
+    },
+  );
   // Under onlyRemoveTypeImports: true, `import { type X } from "node:fs"` stays as a side-effect import and must be rejected.
   assert.throws(
-    () => validateModule(`import { type Stats } from "node:fs";\nexport const x: Stats | null = null;\n`, { filename: "src/bad.ts" }),
+    () =>
+      validateModule(
+        `import { type Stats } from "node:fs";\nexport const x: Stats | null = null;\n`,
+        { filename: "src/bad.ts" },
+      ),
     /Incompatible runtime import: node:fs/,
   );
   // Stage 2: typeof guards, shadowed bindings, hoisted functions, and catch bindings.
@@ -794,7 +1246,11 @@ test("Stage 1 TS-aware validation and Stage 2 scope analysis handle type imports
   );
   // Unshadowed free global inside destructuring default must still be rejected.
   assert.throws(
-    () => validateModule(`${entry}\nconst { x = forbiddenGlobal } = {}; void x;`, { bundled: true, entry: true }),
+    () =>
+      validateModule(`${entry}\nconst { x = forbiddenGlobal } = {}; void x;`, {
+        bundled: true,
+        entry: true,
+      }),
     /Unsupported runtime global: forbiddenGlobal/,
   );
   // Undeclared assignment target must be rejected.
@@ -803,9 +1259,15 @@ test("Stage 1 TS-aware validation and Stage 2 scope analysis handle type imports
     /Unsupported runtime global: leakedGlobal/,
   );
   // Shadowed require parameter is allowed; free require is rejected.
-  validateModule(`${entry}\nexport function load(require) { return require("ok"); }`, { bundled: true, entry: true });
+  validateModule(`${entry}\nexport function load(require) { return require("ok"); }`, {
+    bundled: true,
+    entry: true,
+  });
   assert.throws(
-    () => validateModule(`${entry}\nexport function load() { return require("fs"); }`, { filename: "src/req.ts" }),
+    () =>
+      validateModule(`${entry}\nexport function load() { return require("fs"); }`, {
+        filename: "src/req.ts",
+      }),
     /Runtime require is unsupported/,
   );
 });
@@ -837,7 +1299,11 @@ export function mount(root: NativeNode): () => void {
   const { dist } = await buildApplication("fixture", { appDirectory: directory });
   const code = await readFile(path.join(dist, "app.mjs"), "utf8");
   assert.doesNotMatch(code, /__zguiErasedRan/, "explicit `import type` must be erased");
-  assert.match(code, /__zguiRetainedRan/, "non-type import referenced only in a type position must keep its side effect");
+  assert.match(
+    code,
+    /__zguiRetainedRan/,
+    "non-type import referenced only in a type position must keep its side effect",
+  );
   const prevErased = globalThis.__zguiErasedRan;
   const prevRetained = globalThis.__zguiRetainedRan;
   delete globalThis.__zguiErasedRan;
@@ -885,7 +1351,10 @@ export function mount(root: NativeNode): () => void {
   const marker = code.indexOf('throw new Error("jsx-getter-boom")');
   assert.ok(marker >= 0);
   const prefix = code.slice(0, marker);
-  const generated = { line: prefix.split("\n").length, column: prefix.length - prefix.lastIndexOf("\n") - 1 };
+  const generated = {
+    line: prefix.split("\n").length,
+    column: prefix.length - prefix.lastIndexOf("\n") - 1,
+  };
   const original = originalPositionFor(new TraceMap(mapJson), generated);
   assert.ok(original.source.endsWith("src/main.tsx"), JSON.stringify(original));
   assert.equal(original.line, 10, `expected throw on line 10, got ${JSON.stringify(original)}`);
@@ -927,7 +1396,9 @@ test("dev watchApplication publishes before slow async tsrs completes, cancels s
       appDirectory: directory,
       development: true,
       onSuccess: value => successes.push(value),
-      onError: error => { throw error; },
+      onError: error => {
+        throw error;
+      },
       onTypecheck: event => typechecks.push(event),
     },
     {
@@ -991,8 +1462,12 @@ test("dev watchApplication publishes before slow async tsrs completes, cancels s
       appDirectory: directory,
       development: true,
       strictTypecheck: true,
-      onSuccess: () => { strictPublished += 1; },
-      onError: () => { strictErrors += 1; },
+      onSuccess: () => {
+        strictPublished += 1;
+      },
+      onError: () => {
+        strictErrors += 1;
+      },
     },
     {
       watchBundle: (_entry, options) => {
@@ -1000,7 +1475,9 @@ test("dev watchApplication publishes before slow async tsrs completes, cancels s
         strictReady.resolve();
         return { close: async () => {} };
       },
-      typecheck: async () => { throw new Error("strict TS2322"); },
+      typecheck: async () => {
+        throw new Error("strict TS2322");
+      },
       publish: fakePublish,
       publishStatus: async () => {},
     },
@@ -1008,10 +1485,13 @@ test("dev watchApplication publishes before slow async tsrs completes, cancels s
   try {
     await strictReady.promise;
     await strictHandlers.onAttempt();
-    await assert.rejects(strictHandlers.onCompile({
-      files: new Map([["app.mjs", Buffer.from("export const hostApiVersion = 1;")]]),
-      graph: { modules: [path.join(directory, "src/main.tsx")], chunks: [] },
-    }), /strict TS2322/);
+    await assert.rejects(
+      strictHandlers.onCompile({
+        files: new Map([["app.mjs", Buffer.from("export const hostApiVersion = 1;")]]),
+        graph: { modules: [path.join(directory, "src/main.tsx")], chunks: [] },
+      }),
+      /strict TS2322/,
+    );
     assert.equal(strictPublished, 0, "strictTypecheck must block publication on type errors");
     assert.equal(strictErrors, 0);
   } finally {
@@ -1019,3 +1499,22 @@ test("dev watchApplication publishes before slow async tsrs completes, cancels s
   }
 });
 
+test("dev builds inject checkout-root-independent data-zgui-source while release builds strip it completely", async t => {
+  const dirA = await fixture(t);
+  const dirB = await fixture(t);
+  const devA = await buildApplication("fixture", { appDirectory: dirA, development: true });
+  const devCodeA = await readFile(path.join(devA.dist, devA.manifest.entry), "utf8");
+  const devB = await buildApplication("fixture", { appDirectory: dirB, development: true });
+  const devCodeB = await readFile(path.join(devB.dist, devB.manifest.entry), "utf8");
+  const relA = await buildApplication("fixture", { appDirectory: dirA, development: false });
+  const relCodeA = await readFile(path.join(relA.dist, relA.manifest.entry), "utf8");
+
+  assert.match(devCodeA, /data-zgui-source/);
+  assert.match(devCodeA, /app\/src\/main\.tsx:\d+:\d+/);
+  assert.equal(devCodeA, devCodeB, "dev source tags must be independent of checkout directory");
+  assert.equal(
+    relCodeA.includes("data-zgui-source"),
+    false,
+    "release builds must not contain data-zgui-source",
+  );
+});

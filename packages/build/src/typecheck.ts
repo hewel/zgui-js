@@ -76,23 +76,25 @@ export async function typecheckWorkspace(
     path.join(root, "tests/types/tsconfig.json"),
     path.join(root, "tests/types/tsconfig.services.json"),
   ];
-  const examples = path.join(root, "apps/examples");
-  let entries: Dirent[] = [];
-  try {
-    entries = await readdir(examples, { withFileTypes: true });
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-  }
-  for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
-    if (!entry.isDirectory()) continue;
-    const exampleDir = path.join(examples, entry.name);
-    const config = path.join(exampleDir, "tsconfig.json");
+  for (const group of ["apps/devtools", "apps/examples"]) {
+    const groupDir = path.join(root, group);
+    let entries: Dirent[] = [];
     try {
-      await access(config);
-      await syncCssModuleTypes(exampleDir, { root });
-      configs.push(config);
+      entries = await readdir(groupDir, { withFileTypes: true });
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+    for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
+      if (!entry.isDirectory()) continue;
+      const appDir = path.join(groupDir, entry.name);
+      const config = path.join(appDir, "tsconfig.json");
+      try {
+        await access(config);
+        await syncCssModuleTypes(appDir, { root });
+        configs.push(config);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      }
     }
   }
   for (const config of configs) {

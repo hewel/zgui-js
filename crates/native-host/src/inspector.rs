@@ -31,16 +31,17 @@ use std::{
 use serde::Serialize;
 use serde_json::{Value, json};
 use zgui::{
-    platform::{WakeReason, Waker},
+    platform::{SurfaceId, WakeReason, Waker},
     reactive::prelude::GetUntracked,
     runtime::{FrameProbe, Runtime, Window},
-    view::{NodeId, ViewHost},
-    vocab::Role,
+    view::{AttrName, ClassName, ElementName, NodeId, ViewHost},
+    vocab::{Key, KeyEvent, KeyState, Modifiers, NamedKey, PointerAction, PointerButton, PointerEvent, Role},
 };
 
 use crate::{
     preview::evidence::{Bounds, ScrollMetrics},
     session::{ResourceCounts, RuntimeTelemetry, Session, SessionRegion},
+    session_host::MountRegion,
 };
 
 const MAX_RING_SAMPLES: usize = 256;
@@ -50,6 +51,49 @@ const MAX_DEV_NODE_TEXT_BYTES: usize = 4096;
 const MAX_DEV_VISITS: usize = 100_000;
 const MAX_REQUEST_LINE_BYTES: usize = 4 * 1024;
 const MAX_RESPONSE_BYTES: usize = 512 * 1024;
+pub(crate) const PICKER_SHEET_NAME: &str = "host-dev-picker";
+const PICKER_ATTR_MARKER: &str = "data-zgui-picker-overlay";
+
+const PICKER_SHEET: &str = r#"
+.zgui-picker-overlay {
+    position: fixed;
+    left: 0;
+    top: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+    z-index: 2147483646;
+}
+.zgui-picker-margin {
+    position: fixed;
+    pointer-events: none;
+    background: rgba(249, 115, 22, 0.22);
+    border: 1px solid rgba(249, 115, 22, 0.7);
+}
+.zgui-picker-padding {
+    position: fixed;
+    pointer-events: none;
+    background: rgba(34, 197, 94, 0.24);
+    border: 1px solid rgba(34, 197, 94, 0.75);
+}
+.zgui-picker-content {
+    position: fixed;
+    pointer-events: none;
+    background: rgba(59, 130, 246, 0.26);
+    border: 2px solid #3b82f6;
+}
+.zgui-picker-hud {
+    position: fixed;
+    pointer-events: none;
+    padding: 4px 8px;
+    border-radius: 6px;
+    background: rgba(15, 23, 42, 0.94);
+    border: 1px solid #3b82f6;
+    color: #f8fafc;
+    font-family: monospace;
+    font-size: 11px;
+}
+"#;
 
 /// Visibility means a positive native box with computed `visibility: visible`,
 /// not pointer reachability. Shared between preview inspection and dev inspector.
@@ -272,17 +316,417 @@ impl ProfilerRing {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct BoxEdges {
+    pub top: f64,
+    pub right: f64,
+    pub bottom: f64,
+    pub left: f64,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct BoxModel {
+    pub border_box: Bounds,
+    pub content_box: Bounds,
+    pub padding: BoxEdges,
+    pub border: BoxEdges,
+    pub margin: BoxEdges,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ComputedStyleSummary {
+    pub display: String,
+    pub position: String,
+    pub visibility: String,
+    pub opacity: f32,
+    pub font_size: f32,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct PickerTarget {
+    pub surface: String,
+    pub token: String,
+    pub kind: String,
+    pub test_id: Option<String>,
+    pub classes: Vec<String>,
+    pub source: Option<String>,
+    pub box_model: BoxModel,
+}
+
+struct PickerOverlay {
+    region: MountRegion,
+    tree: Option<NodeId>,
+}
+
+impl PickerOverlay {
+    fn show(region: MountRegion, target: &PickerTarget) -> Self {
+        let dom = &region.dom;
+        let tree = dom.create_element(ElementName::new("box"));
+        dom.set_classes(tree, &[ClassName::new("zgui-picker-overlay")]);
+        dom.set_attribute(tree, AttrName::new(PICKER_ATTR_MARKER), Some("1"));
+        dom.set_attribute(tree, AttrName::new("data-testid"), Some("zgui-picker-overlay"));
+
+        let bb = &target.box_model.border_box;
+        let m = &target.box_model.margin;
+        let cb = &target.box_model.content_box;
+
+        // Margin box
+        if m.top > 0.0 || m.right > 0.0 || m.bottom > 0.0 || m.left > 0.0 {
+            let margin_el = dom.create_element(ElementName::new("box"));
+            dom.set_classes(margin_el, &[ClassName::new("zgui-picker-margin")]);
+            dom.set_attribute(
+                margin_el,
+                AttrName::new("style"),
+                Some(&format!(
+                    "left:{:.1}px;top:{:.1}px;width:{:.1}px;height:{:.1}px;",
+                    (bb.x - m.left).max(0.0),
+                    (bb.y - m.top).max(0.0),
+                    (bb.width + m.left + m.right).max(1.0),
+                    (bb.height + m.top + m.bottom).max(1.0),
+                )),
+            );
+            dom.insert(tree, margin_el, None);
+        }
+
+        // Padding / border box
+        let pad_el = dom.create_element(ElementName::new("box"));
+        dom.set_classes(pad_el, &[ClassName::new("zgui-picker-padding")]);
+        dom.set_attribute(
+            pad_el,
+            AttrName::new("style"),
+            Some(&format!(
+                "left:{:.1}px;top:{:.1}px;width:{:.1}px;height:{:.1}px;",
+                bb.x.max(0.0),
+                bb.y.max(0.0),
+                bb.width.max(1.0),
+                bb.height.max(1.0),
+            )),
+        );
+        dom.insert(tree, pad_el, None);
+
+        // Content box
+        let content_el = dom.create_element(ElementName::new("box"));
+        dom.set_classes(content_el, &[ClassName::new("zgui-picker-content")]);
+        dom.set_attribute(
+            content_el,
+            AttrName::new("style"),
+            Some(&format!(
+                "left:{:.1}px;top:{:.1}px;width:{:.1}px;height:{:.1}px;",
+                cb.x.max(0.0),
+                cb.y.max(0.0),
+                cb.width.max(1.0),
+                cb.height.max(1.0),
+            )),
+        );
+        dom.insert(tree, content_el, None);
+
+        // Concise HUD label (never reads raw text content, preventing secret leaks).
+        let class_tag = if target.classes.is_empty() {
+            String::new()
+        } else {
+            format!(".{}", target.classes.iter().take(2).cloned().collect::<Vec<_>>().join("."))
+        };
+        let source_tag = target
+            .source
+            .as_deref()
+            .map(|src| format!(" | {src}"))
+            .unwrap_or_default();
+        let hud_text = format!(
+            "<{}{}> {:.0}x{:.0}{}",
+            target.kind, class_tag, bb.width, bb.height, source_tag
+        );
+        let hud_el = dom.create_element(ElementName::new("text"));
+        dom.set_classes(hud_el, &[ClassName::new("zgui-picker-hud")]);
+        dom.set_attribute(hud_el, AttrName::new("data-testid"), Some("zgui-picker-hud"));
+        let hud_y = if bb.y >= 28.0 { bb.y - 26.0 } else { bb.y + bb.height + 4.0 };
+        dom.set_attribute(
+            hud_el,
+            AttrName::new("style"),
+            Some(&format!("left:{:.1}px;top:{:.1}px;", bb.x.max(4.0), hud_y.max(4.0))),
+        );
+        dom.insert(hud_el, dom.create_text(&hud_text), None);
+        dom.insert(tree, hud_el, None);
+
+        region.host.install_stylesheet(PICKER_SHEET_NAME, PICKER_SHEET);
+        let container = dom.parent(region.root).unwrap_or(region.root);
+        dom.insert(container, tree, None);
+        Self { region, tree: Some(tree) }
+    }
+
+    fn clear(&mut self) {
+        let Some(tree) = self.tree.take() else {
+            return;
+        };
+        self.region.dom.detach(tree);
+        self.region.host.remove_stylesheet(PICKER_SHEET_NAME);
+    }
+}
+
+impl Drop for PickerOverlay {
+    fn drop(&mut self) {
+        self.clear();
+    }
+}
+
+#[derive(Default)]
+struct PickerState {
+    active: bool,
+    hovered: Option<PickerTarget>,
+    selected: Option<PickerTarget>,
+    overlay: Option<PickerOverlay>,
+}
+
 /// Dev-only inspector state & bounded profiler ring buffer. Installed only when
 /// explicitly enabled via `--dev-inspect`; absent (`None`) in non-dev/release runs.
 pub(crate) struct DevInspector {
     ring: RefCell<ProfilerRing>,
+    picker: RefCell<PickerState>,
 }
 
 impl DevInspector {
     pub(crate) fn new() -> Rc<Self> {
         Rc::new(Self {
             ring: RefCell::new(ProfilerRing::default()),
+            picker: RefCell::new(PickerState::default()),
         })
+    }
+
+    pub(crate) fn clear_overlay(&self) {
+        let mut picker = self.picker.borrow_mut();
+        if let Some(mut overlay) = picker.overlay.take() {
+            overlay.clear();
+        }
+        picker.hovered = None;
+    }
+
+    pub(crate) fn picker_snapshot(&self, session_locked: bool) -> Value {
+        if session_locked {
+            self.clear_overlay();
+            return json!({
+                "active": false,
+                "forbidden": true,
+                "reason": "session-lock-surface-forbidden",
+                "hovered": null,
+                "selected": null,
+            });
+        }
+        let picker = self.picker.borrow();
+        json!({
+            "active": picker.active,
+            "hovered": picker.hovered,
+            "selected": picker.selected,
+        })
+    }
+
+    pub(crate) fn set_picker_active(
+        &self,
+        runtime: &Runtime,
+        session: Option<&Session>,
+        active: bool,
+    ) -> Result<Value, &'static str> {
+        let session_locked = session.is_some_and(|s| s.shell.lock_is_retained());
+        if session_locked {
+            let mut picker = self.picker.borrow_mut();
+            picker.active = false;
+            picker.hovered = None;
+            picker.selected = None;
+            if let Some(mut overlay) = picker.overlay.take() {
+                overlay.clear();
+            }
+            return Err("session-lock-surface-forbidden");
+        }
+        {
+            let mut picker = self.picker.borrow_mut();
+            picker.active = active;
+            if !active {
+                picker.hovered = None;
+                if let Some(mut overlay) = picker.overlay.take() {
+                    overlay.clear();
+                }
+            }
+        }
+        for window in runtime.windows() {
+            window.request_frame();
+        }
+        Ok(self.picker_snapshot(false))
+    }
+
+    pub(crate) fn handle_pick_command(
+        &self,
+        runtime: &Runtime,
+        session: Option<&Session>,
+        action: &str,
+        surface_filter: Option<&str>,
+        token: Option<&str>,
+    ) -> Value {
+        let session_locked = session.is_some_and(|s| s.shell.lock_is_retained());
+        if session_locked {
+            self.clear_overlay();
+            return json!({
+                "error": "session-lock-surface-forbidden",
+                "picker": self.picker_snapshot(true),
+            });
+        }
+        match action {
+            "enable" => match self.set_picker_active(runtime, session, true) {
+                Ok(picker) => json!({ "ok": true, "picker": picker }),
+                Err(reason) => json!({ "error": reason }),
+            },
+            "disable" => match self.set_picker_active(runtime, session, false) {
+                Ok(picker) => json!({ "ok": true, "picker": picker }),
+                Err(reason) => json!({ "error": reason }),
+            },
+            "toggle" => {
+                let next = !self.picker.borrow().active;
+                match self.set_picker_active(runtime, session, next) {
+                    Ok(picker) => json!({ "ok": true, "picker": picker }),
+                    Err(reason) => json!({ "error": reason }),
+                }
+            }
+            "status" => json!({ "ok": true, "picker": self.picker_snapshot(false) }),
+            "select" => {
+                let Some(token) = token else {
+                    return json!({ "error": "pick select requires token" });
+                };
+                if let Some((region, target)) =
+                    find_target_by_token(runtime, session, surface_filter, token)
+                {
+                    let mut picker = self.picker.borrow_mut();
+                    if let Some(mut old) = picker.overlay.take() {
+                        old.clear();
+                    }
+                    picker.overlay = Some(PickerOverlay::show(region.region.clone(), &target));
+                    picker.selected = Some(target);
+                    picker.active = false;
+                    drop(picker);
+                    if let Some(win) = runtime
+                        .windows()
+                        .iter()
+                        .find(|w| w.document_id() == region.region.document)
+                    {
+                        win.request_frame();
+                    }
+                    json!({ "ok": true, "picker": self.picker_snapshot(false) })
+                } else {
+                    json!({ "error": "node token not found or layout incoherent", "picker": self.picker_snapshot(false) })
+                }
+            }
+            _ => json!({ "error": "unsupported pick action" }),
+        }
+    }
+
+    /// Handle Ctrl+Shift+I (toggle picker) and Escape (cancel picker).
+    pub(crate) fn handle_key_event(
+        &self,
+        runtime: &Runtime,
+        session: Option<&Session>,
+        state: KeyState,
+        key_ev: &KeyEvent,
+        modifiers: Modifiers,
+    ) -> bool {
+        if state != KeyState::Pressed {
+            return false;
+        }
+        let ctrl_shift = modifiers.contains(Modifiers::CONTROL) && modifiers.contains(Modifiers::SHIFT);
+        if ctrl_shift && matches!(&key_ev.key, Key::Character(ch) if ch.eq_ignore_ascii_case("i")) {
+            let next = !self.picker.borrow().active;
+            let _ = self.set_picker_active(runtime, session, next);
+            return true;
+        }
+        if self.picker.borrow().active && matches!(&key_ev.key, Key::Named(NamedKey::Escape)) {
+            let _ = self.set_picker_active(runtime, session, false);
+            return true;
+        }
+        false
+    }
+
+    /// Pure native hover hit-testing + click selection while visual picker is active.
+    pub(crate) fn handle_pointer_event(
+        &self,
+        runtime: &Runtime,
+        session: Option<&Session>,
+        surface: SurfaceId,
+        action: PointerAction,
+        ptr: &PointerEvent,
+    ) -> bool {
+        if !self.picker.borrow().active {
+            return false;
+        }
+        let Some(session) = session else {
+            return false;
+        };
+        if session.shell.lock_is_retained() {
+            let _ = self.set_picker_active(runtime, Some(session), false);
+            return false;
+        }
+        let Some((surface_name, region)) = session
+            .mount_regions()
+            .into_iter()
+            .find(|(_, r)| r.surface == surface)
+        else {
+            return false;
+        };
+        if region.is_lock_surface() {
+            let _ = self.set_picker_active(runtime, Some(session), false);
+            return false;
+        }
+        let Some(window) = runtime
+            .windows()
+            .iter()
+            .find(|w| w.document_id() == region.region.document)
+        else {
+            return false;
+        };
+        let x = f64::from(ptr.position.x.0);
+        let y = f64::from(ptr.position.y.0);
+        let hit = hit_test_region(&surface_name, &region, window, x, y);
+        match action {
+            PointerAction::Moved => {
+                let mut picker = self.picker.borrow_mut();
+                let same_target = match (&picker.hovered, &hit) {
+                    (Some(prev), Some(next)) => {
+                        prev.surface == next.surface
+                            && prev.token == next.token
+                            && prev.box_model.border_box == next.box_model.border_box
+                    }
+                    (None, None) => true,
+                    _ => false,
+                };
+                if !same_target {
+                    if let Some(mut old) = picker.overlay.take() {
+                        old.clear();
+                    }
+                    if let Some(target) = hit {
+                        picker.overlay = Some(PickerOverlay::show(region.region.clone(), &target));
+                        picker.hovered = Some(target);
+                    } else {
+                        picker.hovered = None;
+                    }
+                    window.request_frame();
+                }
+                true
+            }
+            PointerAction::Pressed if ptr.button == Some(PointerButton::Primary) => {
+                let mut picker = self.picker.borrow_mut();
+                let chosen = hit.or_else(|| picker.hovered.clone());
+                if let Some(mut old) = picker.overlay.take() {
+                    old.clear();
+                }
+                if let Some(target) = chosen {
+                    picker.overlay = Some(PickerOverlay::show(region.region.clone(), &target));
+                    picker.selected = Some(target);
+                }
+                picker.hovered = None;
+                picker.active = false;
+                window.request_frame();
+                true
+            }
+            _ => true,
+        }
     }
 
     pub(crate) fn probe(self: &Rc<Self>) -> Rc<dyn FrameProbe> {
@@ -395,6 +839,7 @@ impl DevInspector {
                 "jsHeapLiveBytes": t.js_heap_live_bytes,
                 "jsStackLimitBytes": t.js_stack_limit_bytes,
             })),
+            "picker": self.picker_snapshot(session_locked),
             "surfaces": surfaces,
         });
         if include_profile {
@@ -416,6 +861,228 @@ impl FrameProbe for DevFrameProbe {
     fn describe(&self) -> &str {
         "zgui-js dev inspector frame probe"
     }
+}
+
+fn node_box_and_style(
+    window: &Window,
+    native: NodeId,
+    scale: f64,
+    bounds_logical: Option<&Bounds>,
+) -> (Option<BoxModel>, Option<ComputedStyleSummary>) {
+    let Some(key) = zgui_view_dom::id::to_document(native) else {
+        return (None, None);
+    };
+    let layout = window.layout().borrow();
+    let Some(&box_key) = layout.boxes_of(key).first() else {
+        return (None, None);
+    };
+    let Some(layout_node) = layout.get(box_key) else {
+        return (None, None);
+    };
+    let style = &layout_node.style;
+    let computed = ComputedStyleSummary {
+        display: format!("{:?}", style.get_box().display),
+        position: format!("{:?}", style.get_box().position),
+        visibility: format!("{:?}", style.get_inherited_box().visibility),
+        opacity: style.get_effects().opacity,
+        font_size: style.get_font().font_size.computed_size().px(),
+    };
+    let box_model = bounds_logical.map(|bb| {
+        let (padding, border) = layout
+            .fragments_of_box(box_key)
+            .first()
+            .and_then(|frag_key| layout.fragment(*frag_key))
+            .map_or((BoxEdges::default(), BoxEdges::default()), |frag| {
+                (
+                    BoxEdges {
+                        top: f64::from(frag.padding.top.0) / scale,
+                        right: f64::from(frag.padding.right.0) / scale,
+                        bottom: f64::from(frag.padding.bottom.0) / scale,
+                        left: f64::from(frag.padding.left.0) / scale,
+                    },
+                    BoxEdges {
+                        top: f64::from(frag.border.top.0) / scale,
+                        right: f64::from(frag.border.right.0) / scale,
+                        bottom: f64::from(frag.border.bottom.0) / scale,
+                        left: f64::from(frag.border.left.0) / scale,
+                    },
+                )
+            });
+        let margin_px = |value: &zgui_css::values::size::MarginValue| -> f64 {
+            match value {
+                zgui_css::values::size::MarginValue::LengthPercentage(inner)
+                | zgui_css::values::size::MarginValue::AnchorContainingCalcFunction(inner) => {
+                    inner.to_length().map_or(0.0, |l| f64::from(l.px()))
+                }
+                _ => 0.0,
+            }
+        };
+        let m = style.get_margin();
+        let margin = BoxEdges {
+            top: margin_px(&m.margin_top),
+            right: margin_px(&m.margin_right),
+            bottom: margin_px(&m.margin_bottom),
+            left: margin_px(&m.margin_left),
+        };
+        let content_box = Bounds {
+            x: bb.x + border.left + padding.left,
+            y: bb.y + border.top + padding.top,
+            width: (bb.width - border.left - border.right - padding.left - padding.right).max(0.0),
+            height: (bb.height - border.top - border.bottom - padding.top - padding.bottom).max(0.0),
+        };
+        BoxModel {
+            border_box: bb.clone(),
+            content_box,
+            padding,
+            border,
+            margin,
+        }
+    });
+    (box_model, Some(computed))
+}
+
+fn node_classes_and_source(
+    document: &zgui_dom::Document,
+    index: zgui_dom::NodeIndex,
+) -> (Vec<String>, Option<String>) {
+    let classes = document
+        .store()
+        .classes_of(index)
+        .iter()
+        .map(|atom| atom.0.to_string())
+        .collect();
+    let source = zgui_dom::Node::new(document.store().core(index))
+        .attr("data-zgui-source")
+        .map(|s| s.as_str().to_owned());
+    (classes, source)
+}
+
+fn hit_test_region(
+    surface_name: &str,
+    region: &SessionRegion,
+    window: &Window,
+    x: f64,
+    y: f64,
+) -> Option<PickerTarget> {
+    if !window
+        .completed_frame()
+        .is_some_and(|frame| frame.layout_document_coherent)
+    {
+        return None;
+    }
+    let owned = region.bridge.snapshot(MAX_DEV_NODES);
+    let document = window.document().borrow();
+    let scale = window.surface().scale_factor();
+    let mut best: Option<(f64, usize, PickerTarget)> = None;
+    for (order, node) in owned.nodes.iter().enumerate() {
+        let Some(bounds) = ViewHost::window_box(window.host().as_ref(), node.native).map(|b| Bounds {
+            x: f64::from(b.origin.x.0) / scale,
+            y: f64::from(b.origin.y.0) / scale,
+            width: f64::from(b.size.width.0) / scale,
+            height: f64::from(b.size.height.0) / scale,
+        }) else {
+            continue;
+        };
+        if bounds.width <= 0.0
+            || bounds.height <= 0.0
+            || x < bounds.x
+            || y < bounds.y
+            || x > bounds.x + bounds.width
+            || y > bounds.y + bounds.height
+        {
+            continue;
+        }
+        let index = zgui_view_dom::id::resolve(&document, node.native);
+        let (classes, source) = node_classes_and_source(&document, index);
+        let (Some(box_model), _) = node_box_and_style(window, node.native, scale, Some(&bounds)) else {
+            continue;
+        };
+        let area = bounds.width * bounds.height;
+        let better = best
+            .as_ref()
+            .is_none_or(|(best_area, best_order, _)| area < *best_area || (area == *best_area && order > *best_order));
+        if better {
+            best = Some((
+                area,
+                order,
+                PickerTarget {
+                    surface: surface_name.to_owned(),
+                    token: format!("node-{}", node.token),
+                    kind: node.kind.to_string(),
+                    test_id: node.test_id.clone(),
+                    classes,
+                    source,
+                    box_model,
+                },
+            ));
+        }
+    }
+    best.map(|(_, _, target)| target)
+}
+
+fn find_target_by_token(
+    runtime: &Runtime,
+    session: Option<&Session>,
+    surface_filter: Option<&str>,
+    token: &str,
+) -> Option<(Rc<SessionRegion>, PickerTarget)> {
+    let session = session?;
+    for (name, region) in session.mount_regions() {
+        if region.is_lock_surface() {
+            continue;
+        }
+        if let Some(filter) = surface_filter
+            && filter != name
+        {
+            continue;
+        }
+        let Some(window) = runtime
+            .windows()
+            .iter()
+            .find(|w| w.document_id() == region.region.document)
+        else {
+            continue;
+        };
+        if !window
+            .completed_frame()
+            .is_some_and(|frame| frame.layout_document_coherent)
+        {
+            continue;
+        }
+        let owned = region.bridge.snapshot(MAX_DEV_NODES);
+        let document = window.document().borrow();
+        let scale = window.surface().scale_factor();
+        for node in &owned.nodes {
+            if format!("node-{}", node.token) != token {
+                continue;
+            }
+            let bounds = ViewHost::window_box(window.host().as_ref(), node.native).map(|b| Bounds {
+                x: f64::from(b.origin.x.0) / scale,
+                y: f64::from(b.origin.y.0) / scale,
+                width: f64::from(b.size.width.0) / scale,
+                height: f64::from(b.size.height.0) / scale,
+            })?;
+            let index = zgui_view_dom::id::resolve(&document, node.native);
+            let (classes, source) = node_classes_and_source(&document, index);
+            let (Some(box_model), _) = node_box_and_style(window, node.native, scale, Some(&bounds))
+            else {
+                continue;
+            };
+            return Some((
+                region,
+                PickerTarget {
+                    surface: name,
+                    token: token.to_owned(),
+                    kind: node.kind.to_string(),
+                    test_id: node.test_id.clone(),
+                    classes,
+                    source,
+                    box_model,
+                },
+            ));
+        }
+    }
+    None
 }
 
 fn snapshot_surface(
@@ -543,6 +1210,9 @@ fn snapshot_surface(
             None
         };
         let state = native_state(window, node.native);
+        let (classes, source) = node_classes_and_source(&document, index);
+        let (box_model, computed_style) =
+            node_box_and_style(window, node.native, scale, bounds_logical.as_ref());
         let role = window
             .dom()
             .semantics(node.native)
@@ -553,6 +1223,8 @@ fn snapshot_surface(
             "parent": node.parent.map(|t| format!("node-{t}")),
             "kind": node.kind,
             "testId": node.test_id,
+            "classes": classes,
+            "source": source,
             "role": role,
             "text": text,
             "textTruncated": truncated,
@@ -563,6 +1235,8 @@ fn snapshot_surface(
                 "focused": focused == Some(node.native),
             },
             "boundsLogical": bounds_logical,
+            "boxModel": box_model,
+            "computedStyle": computed_style,
             "scrollMetrics": if coherent { scroll_metrics(window, node.native, scale) } else { None },
         }));
     }
@@ -578,10 +1252,14 @@ fn snapshot_surface(
     payload
 }
 
+pub(crate) enum InspectAction {
+    Snapshot { include_tree: bool, include_profile: bool },
+    Pick { action: String, token: Option<String> },
+}
+
 /// Request queued from a dev inspector socket client to the UI thread.
 pub(crate) struct InspectRequest {
-    pub include_tree: bool,
-    pub include_profile: bool,
+    pub action: InspectAction,
     pub surface: Option<String>,
     reply: mpsc::SyncSender<String>,
 }
@@ -682,10 +1360,26 @@ fn handle_client(mut stream: UnixStream, tx: &mpsc::SyncSender<InspectRequest>, 
         return;
     };
     let op = req.get("op").and_then(Value::as_str).unwrap_or("snapshot");
-    let (include_tree, include_profile) = match op {
-        "snapshot" => (true, true),
-        "tree" => (true, false),
-        "profile" => (false, true),
+    let action = match op {
+        "snapshot" => InspectAction::Snapshot { include_tree: true, include_profile: true },
+        "tree" => InspectAction::Snapshot { include_tree: true, include_profile: false },
+        "profile" => InspectAction::Snapshot { include_tree: false, include_profile: true },
+        "pick" => {
+            let pick_action = req
+                .get("action")
+                .and_then(Value::as_str)
+                .unwrap_or("toggle")
+                .to_owned();
+            if !matches!(
+                pick_action.as_str(),
+                "enable" | "disable" | "toggle" | "status" | "select"
+            ) {
+                let _ = writeln!(stream, "{{\"error\":\"unsupported pick action\"}}");
+                return;
+            }
+            let token = req.get("token").and_then(Value::as_str).map(str::to_owned);
+            InspectAction::Pick { action: pick_action, token }
+        }
         _ => {
             let _ = writeln!(
                 stream,
@@ -701,8 +1395,7 @@ fn handle_client(mut stream: UnixStream, tx: &mpsc::SyncSender<InspectRequest>, 
     let (reply_tx, reply_rx) = mpsc::sync_channel(1);
     if tx
         .try_send(InspectRequest {
-            include_tree,
-            include_profile,
+            action,
             surface,
             reply: reply_tx,
         })
@@ -722,12 +1415,20 @@ fn handle_client(mut stream: UnixStream, tx: &mpsc::SyncSender<InspectRequest>, 
     }
 }
 
-/// CLI client helper for `native-host inspect --socket <path> [--op snapshot|tree|profile] [--surface <name>]`.
+/// CLI client helper for `native-host inspect --socket <path> [--op snapshot|tree|profile|pick] [--surface <name>]`
+/// and `native-host inspect pick --socket <path> [--off|--status|--select <node-N>]`.
 pub(crate) fn run_cli_inspect(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     let mut socket: Option<PathBuf> = None;
     let mut op = "snapshot".to_owned();
+    let mut pick_action: Option<String> = None;
+    let mut pick_token: Option<String> = None;
     let mut surface: Option<String> = None;
     let mut i = 0;
+    if args.first().is_some_and(|arg| arg == "pick") {
+        op = "pick".to_owned();
+        pick_action = Some("toggle".to_owned());
+        i = 1;
+    }
     while i < args.len() {
         match args[i].as_str() {
             "--socket" => {
@@ -738,7 +1439,25 @@ pub(crate) fn run_cli_inspect(args: &[String]) -> Result<(), Box<dyn std::error:
             }
             "--op" => {
                 i += 1;
-                op = args.get(i).ok_or("--op requires snapshot, tree, or profile")?.clone();
+                op = args.get(i).ok_or("--op requires snapshot, tree, profile, or pick")?.clone();
+            }
+            "--action" => {
+                i += 1;
+                pick_action = Some(args.get(i).ok_or("--action requires enable, disable, toggle, status, or select")?.clone());
+            }
+            "--token" | "--select" => {
+                i += 1;
+                pick_token = Some(args.get(i).ok_or("--token requires a node token (e.g. node-1)")?.clone());
+                pick_action.get_or_insert_with(|| "select".to_owned());
+            }
+            "--on" => {
+                pick_action = Some("enable".to_owned());
+            }
+            "--off" => {
+                pick_action = Some("disable".to_owned());
+            }
+            "--status" => {
+                pick_action = Some("status".to_owned());
             }
             "--surface" => {
                 i += 1;
@@ -749,29 +1468,44 @@ pub(crate) fn run_cli_inspect(args: &[String]) -> Result<(), Box<dyn std::error:
         i += 1;
     }
     let path = socket.ok_or("inspect requires --socket <path>")?;
-    let response = query_socket(&path, &op, surface.as_deref())?;
+    let mut payload = json!({ "op": op });
+    if let Some(surface) = surface {
+        payload["surface"] = json!(surface);
+    }
+    if let Some(action) = pick_action {
+        payload["action"] = json!(action);
+    }
+    if let Some(token) = pick_token {
+        payload["token"] = json!(token);
+    }
+    let response = send_socket_request(&path, &payload)?;
     println!("{response}");
     Ok(())
 }
 
-pub(crate) fn query_socket(
-    path: &Path,
-    op: &str,
-    surface: Option<&str>,
-) -> std::io::Result<String> {
+pub(crate) fn send_socket_request(path: &Path, req: &Value) -> std::io::Result<String> {
     let mut stream = UnixStream::connect(path)?;
     stream.set_read_timeout(Some(Duration::from_secs(3)))?;
     stream.set_write_timeout(Some(Duration::from_secs(3)))?;
-    let mut req = json!({ "op": op });
-    if let Some(surface) = surface {
-        req["surface"] = json!(surface);
-    }
     writeln!(stream, "{req}")?;
     stream.flush()?;
     let mut response = String::new();
     let mut reader = BufReader::new(stream);
     reader.read_line(&mut response)?;
     Ok(response.trim_end().to_owned())
+}
+
+#[cfg(test)]
+pub(crate) fn query_socket(
+    path: &Path,
+    op: &str,
+    surface: Option<&str>,
+) -> std::io::Result<String> {
+    let mut req = json!({ "op": op });
+    if let Some(surface) = surface {
+        req["surface"] = json!(surface);
+    }
+    send_socket_request(path, &req)
 }
 
 #[cfg(test)]
@@ -939,8 +1673,10 @@ mod tests {
         let mut answered = false;
         while std::time::Instant::now() < deadline {
             if let Some(req) = server.try_recv() {
-                assert!(!req.include_tree);
-                assert!(req.include_profile);
+                assert!(matches!(
+                    req.action,
+                    InspectAction::Snapshot { include_tree: false, include_profile: true }
+                ));
                 req.reply(&json!({ "readOnly": true, "profiler": { "frameCount": 0 } }));
                 answered = true;
                 break;
@@ -953,5 +1689,105 @@ mod tests {
         assert!(ok.contains("\"readOnly\":true"), "valid read-only op must return JSON: {ok}");
         server.stop();
         assert!(!sock.exists(), "socket file cleaned up on stop");
+    }
+
+    #[test]
+    fn visual_picker_highlights_node_surfaces_source_and_refuses_lock_surface() {
+        let source = r#"
+            export const hostApiVersion = 1;
+            export function mount(root) {
+                const card = __zgui.createElement("box");
+                __zgui.setProperty(card, "testId", "inspect-card");
+                __zgui.setProperty(card, "class", "demo-card");
+                __zgui.setProperty(card, "data-zgui-source", "app/src/main.tsx:12:5");
+                __zgui.setProperty(card, "style", { width: "180px", height: "60px", padding: "8px", margin: "4px" });
+                __zgui.insertNode(card, __zgui.createTextNode("Card Content"), null);
+                __zgui.insertNode(root, card, null);
+                return () => {};
+            }
+        "#;
+        let inspector = DevInspector::new();
+        let pending = Rc::new(RefCell::new(Vec::new()));
+        let roots = pending.clone();
+        let app = zgui::app()
+            .with_title("picker-test")
+            .with_size(320.0, 200.0)
+            .with_renderer(Box::new(|_, target| {
+                let mut renderer = zgui_testkit_scene::CaptureRenderer::new();
+                zgui::render::Renderer::configure(&mut renderer, target);
+                Ok(Box::new(renderer))
+            }))
+            .with_probe(inspector.probe());
+        let mut runtime = app
+            .into_handler(move || Root(roots.clone()))
+            .expect("handler")
+            .into_runtime();
+        let platform = Headless::new().with_capabilities(PlatformCapabilities::none());
+        runtime.surfaces_available(&platform);
+
+        let policy = SessionPolicy::live(host_services::Executor::new(1, 16).expect("exec"));
+        let mut host = SessionHost::new(
+            pending,
+            SessionModule::inline("picker-test", source, vec![]),
+            policy,
+            RecoveryPolicy::Propagate,
+            SurfaceOpacity::Opaque,
+        );
+        let retry: Rc<dyn Fn(zgui::view::DocumentId, u64)> = Rc::new(|_, _| {});
+        {
+            let mut surface = RuntimeSurface::new(&mut runtime, &platform, ImageChoice::Live);
+            host.attach(&mut surface, platform.waker(), retry).expect("attach");
+        }
+        let win_surface = runtime.windows()[0].surface().id();
+        runtime.surface_event(&platform, win_surface, SurfaceEvent::RedrawRequested);
+        platform.virtual_clock().advance(Duration::from_millis(20));
+        runtime.surface_event(&platform, win_surface, SurfaceEvent::RedrawRequested);
+
+        let session = host.sessions().next().expect("active session").clone();
+        let snap = inspector.capture_snapshot(&runtime, Some(&session), true, false, None);
+        let nodes = snap["surfaces"][0]["nodes"].as_array().expect("nodes");
+        let card = nodes.iter().find(|n| n["testId"] == "inspect-card").expect("inspect-card");
+        assert_eq!(card["source"], "app/src/main.tsx:12:5");
+        assert_eq!(card["classes"], json!(["demo-card"]));
+        assert!(card["boxModel"]["contentBox"]["width"].as_f64().unwrap_or(0.0) > 100.0);
+        assert!(card["computedStyle"]["display"].is_string());
+
+        // Enable picker via command and hover + click the card center.
+        let enabled = inspector.handle_pick_command(&runtime, Some(&session), "enable", None, None);
+        assert_eq!(enabled["ok"], true);
+        assert_eq!(enabled["picker"]["active"], true);
+
+        let bb = &card["boundsLogical"];
+        let cx = (bb["x"].as_f64().unwrap() + bb["width"].as_f64().unwrap() / 2.0) as f32;
+        let cy = (bb["y"].as_f64().unwrap() + bb["height"].as_f64().unwrap() / 2.0) as f32;
+        let ptr = PointerEvent::mouse(zgui::geom::Point::new(zgui::geom::CssPx(cx), zgui::geom::CssPx(cy)))
+            .with_button(PointerButton::Primary);
+        assert!(inspector.handle_pointer_event(&runtime, Some(&session), win_surface, PointerAction::Moved, &ptr));
+        let hover_status = inspector.handle_pick_command(&runtime, Some(&session), "status", None, None);
+        assert_eq!(hover_status["picker"]["hovered"]["testId"], "inspect-card");
+        assert_eq!(hover_status["picker"]["hovered"]["source"], "app/src/main.tsx:12:5");
+
+        // Primary click locks selection and disables active hover capture.
+        assert!(inspector.handle_pointer_event(
+            &runtime,
+            Some(&session),
+            win_surface,
+            PointerAction::Pressed,
+            &ptr,
+        ));
+        let selected_status = inspector.handle_pick_command(&runtime, Some(&session), "status", None, None);
+        assert_eq!(selected_status["picker"]["active"], false);
+        assert_eq!(selected_status["picker"]["selected"]["testId"], "inspect-card");
+        assert_eq!(selected_status["picker"]["selected"]["source"], "app/src/main.tsx:12:5");
+
+        // Locking session strictly forbids picker activation and clears overlay.
+        let _ = session.update_lock_state(zgui::platform::SessionLockState::Locked);
+        let locked_reply = inspector.handle_pick_command(&runtime, Some(&session), "enable", None, None);
+        assert_eq!(locked_reply["error"], "session-lock-surface-forbidden");
+        assert_eq!(locked_reply["picker"]["forbidden"], true);
+
+        inspector.clear_overlay();
+        let mut surface = RuntimeSurface::new(&mut runtime, &platform, ImageChoice::Live);
+        host.stop(&mut surface);
     }
 }
