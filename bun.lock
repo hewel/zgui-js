@@ -6,6 +6,7 @@
       "name": "zgui-js",
       "devDependencies": {
         "@hewel/zgui": "workspace:*",
+        "@hewel/zgui-build": "workspace:*",
         "@hewel/zgui-services": "workspace:*",
         "oxfmt": "0.79.0",
         "oxlint": "1.94.0",
@@ -149,9 +150,6 @@
     "packages/build": {
       "name": "@hewel/zgui-build",
       "version": "0.1.0",
-      "bin": {
-        "zgui-js": "./src/cli.ts",
-      },
       "dependencies": {
         "@solidjs/compiler": "2.0.1",
         "lightningcss": "1.33.0",
@@ -163,6 +161,44 @@
         "@jridgewell/trace-mapping": "0.3.31",
         "@types/bun": "1.4.4",
       },
+    },
+    "packages/cli": {
+      "name": "@hewel/zgui-cli",
+      "version": "0.1.0",
+      "bin": {
+        "zgui-js": "./src/cli.ts",
+      },
+      "dependencies": {
+        "@hewel/zgui-build": "workspace:*",
+      },
+      "devDependencies": {
+        "@types/bun": "1.4.4",
+      },
+      "optionalDependencies": {
+        "@hewel/zgui-host-linux-arm64": "workspace:*",
+        "@hewel/zgui-host-linux-x64": "workspace:*",
+      },
+    },
+    "packages/create-zgui-js": {
+      "name": "create-zgui-js",
+      "version": "0.1.0",
+      "bin": {
+        "create-zgui-js": "./src/cli.ts",
+      },
+      "dependencies": {
+        "@hewel/zgui-cli": "workspace:*",
+      },
+      "devDependencies": {
+        "@types/bun": "1.4.4",
+      },
+    },
+    "packages/host-linux-arm64": {
+      "name": "@hewel/zgui-host-linux-arm64",
+      "version": "0.1.0",
+    },
+    "packages/host-linux-x64": {
+      "name": "@hewel/zgui-host-linux-x64",
+      "version": "0.1.0",
     },
     "packages/services": {
       "name": "@hewel/zgui-services",
@@ -190,6 +226,12 @@
     "@hewel/zgui": ["@hewel/zgui@workspace:packages/ui"],
 
     "@hewel/zgui-build": ["@hewel/zgui-build@workspace:packages/build"],
+
+    "@hewel/zgui-cli": ["@hewel/zgui-cli@workspace:packages/cli"],
+
+    "@hewel/zgui-host-linux-arm64": ["@hewel/zgui-host-linux-arm64@workspace:packages/host-linux-arm64"],
+
+    "@hewel/zgui-host-linux-x64": ["@hewel/zgui-host-linux-x64@workspace:packages/host-linux-x64"],
 
     "@hewel/zgui-js-example-async": ["@hewel/zgui-js-example-async@workspace:apps/examples/async"],
 
@@ -382,6 +424,8 @@
     "@types/node": ["@types/node@26.6.6", "", { "dependencies": { "undici-types": "~8.9.0" } }, "sha512-MzQj+8Kx3XI40OmUAE6Qoh58ZMNstNNMwn2nfd3qWsfe7nDNSqJNzes4njhz6AHwrSHOffSLwXU6yb474Q4aog=="],
 
     "bun-types": ["bun-types@1.4.4", "", { "dependencies": { "@types/node": "*", "undici-types": "*" } }, "sha512-yjrJh5oGX7mMPKGd19YXyIjmEuj4G4zNC30bs7PM9Az7NQ3ndF3j6hbeRdvJTRQEhJ/FYQwW0a2moweEi2hMxQ=="],
+
+    "create-zgui-js": ["create-zgui-js@workspace:packages/create-zgui-js"],
 
     "detect-libc": ["detect-libc@2.1.2", "", {}, "sha512-Btj2BOOO83o3WyH59e8MgXsxEQVcarkUOpEYrubB0urwnN10yQ364rsiByU11nZlqWYZm05i/of7io4mzihBtQ=="],
 

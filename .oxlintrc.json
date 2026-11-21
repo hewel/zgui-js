@@ -60,7 +60,14 @@
       }
     },
     {
-      "files": ["packages/build/**", "tools/**", "packages/ui/oxlint/**"],
+      "files": [
+        "packages/build/**",
+        "packages/cli/**",
+        "packages/create-zgui-js/**",
+        "packages/host-*/**",
+        "tools/**",
+        "packages/ui/oxlint/**"
+      ],
       "rules": {
         "zgui/no-direct-bridge": "off",
         "no-restricted-globals": "off"

@@ -12,7 +12,7 @@ import { bundle, publishApplication, workspaceRoot } from "../../packages/build/
 import { typecheckProject } from "../../packages/build/src/typecheck.ts";
 
 const execute = promisify(execFile);
-const cli = path.join(workspaceRoot, "packages/build/src/cli.ts");
+const cli = path.join(workspaceRoot, "packages/cli/src/cli.ts");
 
 async function publicBuild(directory) {
   const modules = path.join(directory, "node_modules/@hewel");
@@ -23,14 +23,19 @@ async function publicBuild(directory) {
   return import(consumer);
 }
 
-test("the build package exposes only its programmatic API, without CLI side effects", async t => {
+test("the build package exposes only its programmatic API, without CLI side effects or bin field", async t => {
+  const buildPkg = JSON.parse(await readFile(path.join(workspaceRoot, "packages/build/package.json"), "utf8"));
+  assert.equal(Object.hasOwn(buildPkg, "bin"), false, "@hewel/zgui-build must not declare a bin field");
+  const cliPkg = JSON.parse(await readFile(path.join(workspaceRoot, "packages/cli/package.json"), "utf8"));
+  assert.deepEqual(cliPkg.bin, { "zgui-js": "./src/cli.ts" });
   const directory = await mkdtemp(path.join(os.tmpdir(), "zgui-build-api-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const listeners = process.listeners("SIGINT");
   const api = await publicBuild(directory);
   assert.deepEqual(Object.keys(api).sort(), [
-    "buildApplication", "devApplication", "prepareNativeHost", "previewApplication",
-    "resolveApplication", "runNativeHost", "watchApplication",
+    "buildApplication", "devApplication", "packageApplication", "prepareNativeHost",
+    "previewApplication", "probeNativeHost", "resolveApplication", "resolveNativeHost",
+    "runNativeHost", "watchApplication",
   ]);
   assert.deepEqual(process.listeners("SIGINT"), listeners);
 });
@@ -226,6 +231,10 @@ console.log(JSON.stringify({
 `, { mode: 0o755 });
   const hostScript = `#!${process.execPath}
 const args = process.argv.slice(2);
+if (args.includes("--version")) {
+  console.log(JSON.stringify({ name: "native-host", version: "0.1.0", hostApiVersion: 1, schemaVersion: 2, platform: "linux-x64" }));
+  process.exit(0);
+}
 const manifest = await Bun.file(args[args.indexOf("--bundle") + 1] + "/manifest.json").json();
 console.log(JSON.stringify({ script: import.meta.path, cwd: process.cwd(), args, styleSystem: manifest.styleSystem }));
 `;
@@ -233,7 +242,16 @@ console.log(JSON.stringify({ script: import.meta.path, cwd: process.cwd(), args,
   const prebuiltHost = path.join(bin, "prebuilt host");
   await writeFile(preparedHost, hostScript, { mode: 0o755 });
   await writeFile(prebuiltHost, hostScript, { mode: 0o755 });
-  const installedCli = path.join(installed, "src/cli.ts");
+  const cliTarball = "zgui-cli.tgz";
+  await execute(process.execPath, ["pm", "pack", "--filename", path.join(directory, cliTarball)], {
+    cwd: path.join(workspaceRoot, "packages/cli"),
+  });
+  const installedCliDir = path.join(directory, "node_modules/@hewel/zgui-cli");
+  await mkdir(installedCliDir, { recursive: true });
+  await execute("tar", ["-xf", path.join(directory, cliTarball), "--strip-components=1", "-C", installedCliDir]);
+  await mkdir(path.join(installedCliDir, "node_modules/@hewel"), { recursive: true });
+  await symlink(installed, path.join(installedCliDir, "node_modules/@hewel/zgui-build"), "dir");
+  const installedCli = path.join(installedCliDir, "src/cli.ts");
   const invoke = async (...args) => JSON.parse((await execute(process.execPath, [installedCli, ...args], {
     cwd: directory,
     env: { ...process.env, PATH: `${bin}${path.delimiter}${process.env.PATH}` },

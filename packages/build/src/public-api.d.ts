@@ -142,12 +142,66 @@ export interface PreviewApplicationOptions extends Omit<
 }
 
 export interface NativeHostOptions {
-  root?: string;
-  signal?: AbortSignal;
+  root?: string | undefined;
+  signal?: AbortSignal | undefined;
 }
 
 export type PrepareNativeHostOptions = NativeHostOptions;
 export type RunNativeHostOptions = NativeHostOptions;
+
+export type NativeHostSource = "explicit" | "env" | "platform-package" | "cargo";
+
+export interface NativeHostAbi {
+  name: "native-host";
+  version: string;
+  hostApiVersion: number;
+  schemaVersion: number;
+  platform: string;
+  engine?: string | undefined;
+  engineRevision?: string | undefined;
+  styleProfile?: string | undefined;
+}
+
+export interface ResolveNativeHostOptions {
+  hostExecutable?: string | undefined;
+  hostRoot?: string | undefined;
+  root?: string | undefined;
+  cwd?: string | undefined;
+  env?: Record<string, string | undefined> | undefined;
+  platform?: string | undefined;
+  arch?: string | undefined;
+  searchFrom?: readonly string[] | undefined;
+  verifyAbi?: boolean | undefined;
+  allowCargoBuild?: boolean | undefined;
+  signal?: AbortSignal | undefined;
+}
+
+export interface ResolvedNativeHost {
+  executable: string;
+  source: NativeHostSource;
+  packageName?: string | undefined;
+  cargoRoot?: string | undefined;
+  abi?: NativeHostAbi | undefined;
+}
+
+export interface PackageApplicationOptions extends Omit<BuildApplicationOptions, "development"> {
+  out?: string | undefined;
+  hostRoot?: string | undefined;
+  hostExecutable?: string | undefined;
+  desktopEntry?: boolean | undefined;
+  pureShell?: boolean | undefined;
+  signal?: AbortSignal | undefined;
+}
+
+export interface PackagedApplication {
+  out: string;
+  launcher: string;
+  executable: string;
+  bundle: string;
+  desktopEntry?: string | undefined;
+  host: ResolvedNativeHost;
+  manifest: Manifest;
+}
 
 export declare const buildApplication: (
   app: string,
@@ -165,11 +219,22 @@ export declare const previewApplication: (
   app: string,
   options?: PreviewApplicationOptions,
 ) => Promise<number>;
+export declare const packageApplication: (
+  app: string,
+  options?: PackageApplicationOptions,
+) => Promise<PackagedApplication>;
 export declare const resolveApplication: (
   selector?: string,
   options?: { cwd?: string; root?: string },
 ) => Promise<ResolvedApplication>;
 export declare const prepareNativeHost: (options?: PrepareNativeHostOptions) => Promise<string>;
+export declare const probeNativeHost: (
+  executable: string,
+  options?: { expectedHostApiVersion?: number; expectedSchemaVersion?: number },
+) => NativeHostAbi;
+export declare const resolveNativeHost: (
+  options?: ResolveNativeHostOptions,
+) => Promise<ResolvedNativeHost>;
 export declare const runNativeHost: (
   executable: string,
   args: readonly string[],

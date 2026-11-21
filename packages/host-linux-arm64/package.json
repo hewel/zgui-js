@@ -1,0 +1,29 @@
+{
+  "name": "@hewel/zgui-host-linux-arm64",
+  "version": "0.1.0",
+  "description": "Prebuilt zgui-js native-host binary for Linux arm64",
+  "license": "Apache-2.0",
+  "type": "module",
+  "os": [
+    "linux"
+  ],
+  "cpu": [
+    "arm64"
+  ],
+  "main": "./index.js",
+  "types": "./index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "default": "./index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "bin",
+    "host-manifest.json",
+    "index.js",
+    "index.d.ts",
+    "README.md"
+  ]
+}

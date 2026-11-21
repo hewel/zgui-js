@@ -265,7 +265,7 @@ fn reload_resolves_the_replacement_manifest_with_the_same_launch_bindings() -> T
 fn native_full_reload() -> TestResult {
     if std::env::var("ZGUI_PLATFORM").as_deref() != Ok("wayland") { return Err("run with ZGUI_PLATFORM=wayland".into()); }
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().and_then(Path::parent).ok_or("workspace missing")?;
-    let output = Command::new("bun").arg(root.join("packages/build/src/cli.ts")).args(["build", "--app", "async"]).current_dir(root).output()?;
+    let output = Command::new("bun").arg(root.join("packages/cli/src/cli.ts")).args(["build", "--app", "async"]).current_dir(root).output()?;
     if !output.status.success() { return Err(format!("async build failed: {}", String::from_utf8_lossy(&output.stderr)).into()); }
     let good = Rc::new(Package::load(&root.join("apps/examples/async/dist"))?);
     let bad_eval = Fixture::new("throw Error('evaluation exploded'); export const hostApiVersion = 1; export function mount() { return () => {}; }", "");

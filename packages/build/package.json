@@ -8,15 +8,15 @@
     ".": {
       "types": "./src/public-api.d.ts",
       "default": "./src/index.ts"
+    },
+    "./internal": {
+      "default": "./src/internal.ts"
     }
   },
   "files": [
     "src",
     "sdk"
   ],
-  "bin": {
-    "zgui-js": "./src/cli.ts"
-  },
   "scripts": {
     "prepack": "bun pack-resources.ts",
     "postpack": "bun pack-resources.ts --clean"

@@ -28,6 +28,9 @@ pub struct WorkerEntry {
 }
 }
 
+pub const HOST_API_VERSION: u32 = 1;
+pub const SCHEMA_VERSION: u32 = 2;
+
 crate::schema::object_struct! {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Manifest {
@@ -388,7 +391,7 @@ impl Package {
         } else { None };
         if !directory.is_dir() { return Err("bundle root is not a directory".into()); }
         let manifest: Manifest = serde_json::from_slice(&resource(&directory, "manifest.json")?)?;
-        if manifest.schema_version != 2 || manifest.host_api_version != 1 {
+        if manifest.schema_version != SCHEMA_VERSION || manifest.host_api_version != HOST_API_VERSION {
             return Err("unsupported package schema or host API version".into());
         }
         if manifest.id.is_empty()

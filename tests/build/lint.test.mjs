@@ -256,7 +256,10 @@ export const View = () => {
 test("oxfmt checks and formats files with repository configuration", async t => {
   await execFileAsync(process.execPath, [
     oxfmtBin, "--check", "-c", fmtConfigPath,
-    ".oxfmtrc.json", ".oxlintrc.json", "package.json", "packages/build/package.json", "packages/build/src",
+    ".oxfmtrc.json", ".oxlintrc.json", "package.json",
+    "packages/build/package.json", "packages/build/src",
+    "packages/cli/package.json", "packages/cli/src",
+    "packages/create-zgui-js/package.json", "packages/create-zgui-js/src",
   ], { cwd: workspaceRoot, encoding: "utf8" });
   const dir = await mkdtemp(path.join(os.tmpdir(), "zgui-fmt-"));
   t.after(() => rm(dir, { recursive: true, force: true }));

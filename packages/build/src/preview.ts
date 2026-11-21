@@ -4,14 +4,15 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { buildApplication } from "./build.ts";
 import { devApplication } from "./dev.ts";
-import { prepareNativeHost, runNativeHost } from "./native-process.ts";
+import { resolveNativeHost } from "./host.ts";
+import { runNativeHost } from "./native-process.ts";
 import { packagedSdkRoot, workspaceRoot } from "./sdk.ts";
 
 export async function previewApplication(
   app: string,
   {
     root = workspaceRoot,
-    hostRoot = root,
+    hostRoot,
     hostExecutable,
     watch = false,
     profile = path.join(root, "preview/profiles/default.json"),
@@ -27,6 +28,7 @@ export async function previewApplication(
   }: PreviewApplicationOptions = {},
 ): Promise<number> {
   signal?.throwIfAborted();
+  const explicitHostRoot = hostRoot === undefined ? undefined : path.resolve(hostRoot);
   const output = path.resolve(out);
   const args = [
     "--profile",
@@ -43,7 +45,7 @@ export async function previewApplication(
     return devApplication(app, {
       ...buildOptions,
       root,
-      hostRoot,
+      ...(explicitHostRoot === undefined ? {} : { hostRoot: explicitHostRoot }),
       hostExecutable,
       mode: "preview",
       hostArgs: args,
@@ -51,12 +53,16 @@ export async function previewApplication(
     });
   const { dist } = await buildApplication(app, { ...buildOptions, root });
   signal?.throwIfAborted();
-  const executable =
-    hostExecutable === undefined
-      ? await prepareNativeHost({ root: hostRoot, signal })
-      : path.resolve(hostExecutable);
-  return runNativeHost(executable, ["preview", "run", "--bundle", dist, ...args], {
-    root: hostRoot,
+  const resolvedHost = await resolveNativeHost({
+    hostExecutable,
+    hostRoot: explicitHostRoot,
+    root,
+    cwd: buildOptions.appDirectory ?? process.cwd(),
+    signal,
+  });
+  const runRoot = explicitHostRoot ?? resolvedHost.cargoRoot ?? buildOptions.appDirectory ?? root;
+  return runNativeHost(resolvedHost.executable, ["preview", "run", "--bundle", dist, ...args], {
+    root: runRoot,
     signal,
   });
 }

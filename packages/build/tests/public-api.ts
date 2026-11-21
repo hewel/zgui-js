@@ -1,9 +1,12 @@
 import {
   buildApplication,
   devApplication,
+  packageApplication,
   prepareNativeHost,
   previewApplication,
+  probeNativeHost,
   resolveApplication,
+  resolveNativeHost,
   runNativeHost,
   watchApplication,
   type ApplicationWatcher,
@@ -14,11 +17,16 @@ import {
   type DevMode,
   type FontDeclaration,
   type Manifest,
+  type NativeHostAbi,
   type NativeHostOptions,
+  type PackageApplicationOptions,
+  type PackagedApplication,
   type PrepareNativeHostOptions,
   type PreviewApplicationOptions,
   type PublishedApplication,
   type ResolvedApplication,
+  type ResolvedNativeHost,
+  type ResolveNativeHostOptions,
   type RunNativeHostOptions,
   type WatchApplicationOptions,
 } from "@hewel/zgui-build";
@@ -41,6 +49,11 @@ export async function buildAndPreview(directory: string, signal: AbortSignal) {
   const host: NativeHostOptions = { root: selection.root, signal };
   const prepare: PrepareNativeHostOptions = host;
   const executable: string = await prepareNativeHost(prepare);
+  const abi: NativeHostAbi = probeNativeHost(executable);
+  const resolveOpts: ResolveNativeHostOptions = { hostExecutable: executable, signal };
+  const resolvedHost: ResolvedNativeHost = await resolveNativeHost(resolveOpts);
+  const packOpts: PackageApplicationOptions = { ...build, hostExecutable: resolvedHost.executable };
+  const packaged: PackagedApplication = await packageApplication(selection.app, packOpts);
   const run: RunNativeHostOptions = { signal };
   const mode: DevMode = "desktop";
   const dev: DevApplicationOptions = { ...build, hostExecutable: executable, mode, signal };
@@ -50,7 +63,7 @@ export async function buildAndPreview(directory: string, signal: AbortSignal) {
     await devApplication(selection.app, dev),
     await previewApplication(selection.app, preview),
   ];
-  return { fonts, statuses };
+  return { abi, fonts, packaged, statuses };
 }
 
 export type BuildProvenance = Pick<BuildInfo, "lockfile" | "cargoLock">;

@@ -3,7 +3,9 @@ import type * as Public from "./public-api.d.ts";
 import { resolveApplication as resolve } from "./application.ts";
 import { buildApplication as build } from "./build.ts";
 import { devApplication as dev } from "./dev.ts";
+import { probeNativeHost as probe, resolveNativeHost as resolveHost } from "./host.ts";
 import { prepareNativeHost as prepare, runNativeHost as run } from "./native-process.ts";
+import { packageApplication as packApp } from "./package-app.ts";
 import { previewApplication as preview } from "./preview.ts";
 import { watchApplication as watch } from "./watch.ts";
 
@@ -13,8 +15,11 @@ export const buildApplication: typeof Public.buildApplication = build;
 export const watchApplication: typeof Public.watchApplication = watch;
 export const devApplication: typeof Public.devApplication = dev;
 export const previewApplication: typeof Public.previewApplication = preview;
+export const packageApplication: typeof Public.packageApplication = packApp;
 export const resolveApplication: typeof Public.resolveApplication = resolve;
 export const prepareNativeHost: typeof Public.prepareNativeHost = prepare;
+export const probeNativeHost: typeof Public.probeNativeHost = probe;
+export const resolveNativeHost: typeof Public.resolveNativeHost = resolveHost;
 export const runNativeHost: typeof Public.runNativeHost = run;
 
 type Assert<T extends true> = T;

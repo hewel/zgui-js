@@ -1,6 +1,7 @@
 import type { ApplicationWatcher, DevApplicationOptions } from "./index.ts";
 import path from "node:path";
 import type { EventEmitter } from "node:events";
+import { resolveNativeHost } from "./host.ts";
 import { workspaceRoot } from "./sdk.ts";
 import { watchApplication } from "./watch.ts";
 import { prepareNativeHost, runNativeHost } from "./native-process.ts";
@@ -30,7 +31,7 @@ export async function devApplication(
     root = workspaceRoot,
     appDirectory = path.join(root, "apps/examples", app),
     hostArgs = [],
-    hostRoot = root,
+    hostRoot,
     hostExecutable,
     mode = "desktop",
     extraCapabilities,
@@ -45,7 +46,8 @@ export async function devApplication(
     log = message => console.error(message),
   }: DevDependencies = {},
 ) {
-  hostRoot = path.resolve(hostRoot);
+  const explicitHostRoot = hostRoot === undefined ? undefined : path.resolve(hostRoot);
+  const defaultRunRoot = explicitHostRoot ?? path.resolve(root);
   appDirectory = path.resolve(appDirectory);
   const controller = new AbortController();
   const published = Promise.withResolvers<string>();
@@ -101,10 +103,21 @@ export async function devApplication(
     startup = (async () => {
       try {
         if (controller.signal.aborted) return;
-        const executable =
-          hostExecutable === undefined
-            ? await prepare({ root: hostRoot, signal: controller.signal })
-            : path.resolve(hostExecutable);
+        let executable: string;
+        let runRoot = defaultRunRoot;
+        if (hostExecutable === undefined && prepare !== prepareNativeHost) {
+          executable = await prepare({ root: defaultRunRoot, signal: controller.signal });
+        } else {
+          const resolvedHost = await resolveNativeHost({
+            hostExecutable,
+            hostRoot: explicitHostRoot,
+            root,
+            cwd: appDirectory,
+            signal: controller.signal,
+          });
+          executable = resolvedHost.executable;
+          runRoot = explicitHostRoot ?? resolvedHost.cargoRoot ?? appDirectory;
+        }
         if (controller.signal.aborted) return;
         const dist = await Promise.race([published.promise, stopped.promise]);
         if (controller.signal.aborted) return;
@@ -113,7 +126,7 @@ export async function devApplication(
           mode === "preview"
             ? ["preview", "watch", "--bundle", dist!, ...hostArgs]
             : ["--bundle", dist!, "--watch", ...hostArgs];
-        stop(await run(executable, args, { root: hostRoot, signal: controller.signal }));
+        stop(await run(executable, args, { root: runRoot, signal: controller.signal }));
       } catch (error) {
         fail(error);
       }

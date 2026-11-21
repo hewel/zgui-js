@@ -1,0 +1,19 @@
+{
+  "name": "create-zgui-js",
+  "version": "0.1.0",
+  "description": "Scaffold a new zgui-js desktop app or Wayland shell (bun create zgui-js)",
+  "license": "Apache-2.0",
+  "type": "module",
+  "files": [
+    "src"
+  ],
+  "bin": {
+    "create-zgui-js": "./src/cli.ts"
+  },
+  "dependencies": {
+    "@hewel/zgui-cli": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/bun": "1.4.4"
+  }
+}

@@ -69,6 +69,8 @@ export async function typecheckWorkspace(
 ): Promise<void> {
   const configs = [
     path.join(root, "packages/build/tsconfig.json"),
+    path.join(root, "packages/cli/tsconfig.json"),
+    path.join(root, "packages/create-zgui-js/tsconfig.json"),
     path.join(root, "packages/ui/tsconfig.native.json"),
     path.join(root, "packages/services/tsconfig.json"),
     path.join(root, "tests/types/tsconfig.json"),

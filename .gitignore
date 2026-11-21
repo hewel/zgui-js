@@ -4,6 +4,8 @@
 /node_modules/
 **/node_modules/
 /packages/build/sdk/
+/packages/host-*/bin/
+/packages/host-*/host-manifest.json
 /apps/examples/*/dist
 /apps/examples/*/.zgui-generations/
 /apps/examples/*/.zgui-build-status.json

@@ -437,6 +437,7 @@ Usage: native-host [OPTIONS]
 
 Options:
   -h, --help                   Show this help message and exit
+  -V, --version [--json]       Print native-host version and ABI handshake metadata
   --bundle <DIR>               Load a built zgui-js application package directory
   --watch                      Watch --bundle for new generations and hot-reload
   --dev-inspect <PATH>         Enable dev-only read-only inspector/profiler on Unix socket PATH
@@ -452,6 +453,39 @@ Options:
   --exit-after-ms <MS>         Exit cleanly after MS milliseconds
   --exercise                   Run built-in host self-exercise harness
   --smoke-module <PATH>        Run a standalone JS smoke module and exit";
+
+fn host_platform_id() -> String {
+    let arch = match std::env::consts::ARCH {
+        "x86_64" => "x64",
+        "aarch64" => "arm64",
+        other => other,
+    };
+    format!("{}-{arch}", std::env::consts::OS)
+}
+
+fn format_version(json_mode: bool) -> String {
+    let version = env!("CARGO_PKG_VERSION");
+    let platform = host_platform_id();
+    if json_mode {
+        serde_json::json!({
+            "name": "native-host",
+            "version": version,
+            "hostApiVersion": package::HOST_API_VERSION,
+            "schemaVersion": package::SCHEMA_VERSION,
+            "platform": platform,
+            "engine": "QuickJS-NG",
+            "engineRevision": "6d46d07d",
+            "styleProfile": "lightningcss-v1",
+        })
+        .to_string()
+    } else {
+        format!(
+            "native-host {version} (hostApiVersion={} schemaVersion={} platform={platform})",
+            package::HOST_API_VERSION,
+            package::SCHEMA_VERSION,
+        )
+    }
+}
 
 fn parse_window_dim(flag: &str, raw: &str) -> Result<f32, Box<dyn Error>> {
     let value: f32 = raw.parse()?;
@@ -493,6 +527,17 @@ fn main() -> Result<(), Box<dyn Error>> {
         match arg.as_str() {
             "-h" | "--help" => {
                 println!("{USAGE}");
+                return Ok(());
+            }
+            "-V" | "--version" => {
+                let mut json_mode = false;
+                for extra in args {
+                    match extra.as_str() {
+                        "--json" => json_mode = true,
+                        other => return Err(format!("unknown argument for --version: {other}").into()),
+                    }
+                }
+                println!("{}", format_version(json_mode));
                 return Ok(());
             }
             "--smoke-module" => {
@@ -628,4 +673,24 @@ fn main() -> Result<(), Box<dyn Error>> {
     if let Some(error) = native_failure.take() { return Err(error.into()); }
     eprintln!("native-host: clean shutdown");
     Ok(())
+}
+
+#[cfg(test)]
+mod version_tests {
+    use super::*;
+
+    #[test]
+    fn version_output_exposes_abi_handshake_fields() {
+        let text = format_version(false);
+        assert!(text.starts_with("native-host "));
+        assert!(text.contains("hostApiVersion=1"));
+        assert!(text.contains("schemaVersion=2"));
+
+        let parsed: serde_json::Value = serde_json::from_str(&format_version(true)).expect("valid JSON");
+        assert_eq!(parsed["name"], "native-host");
+        assert_eq!(parsed["hostApiVersion"], 1);
+        assert_eq!(parsed["schemaVersion"], 2);
+        assert_eq!(parsed["styleProfile"], "lightningcss-v1");
+        assert!(parsed["platform"].as_str().is_some_and(|p| p.contains('-')));
+    }
 }
