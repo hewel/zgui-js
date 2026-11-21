@@ -287,9 +287,8 @@ function SysmonApp() {
     setPreset(PRESETS[(idx + 1) % PRESETS.length]!);
   };
 
-  const bindScroll = (node: NativeNode) => {
-    observeGeometry(node, "scrollPosition", pos => setScrollInfo(pos));
-  };
+  const [scrollEl, setScrollEl] = createSignal<NativeNode | null>(null);
+  observeGeometry(scrollEl, "scrollPosition", setScrollInfo);
 
   return (
     <ThemeProvider scheme={scheme()} light={{ preset: preset() }} dark={{ preset: preset() }}>
@@ -534,7 +533,7 @@ function SysmonApp() {
 
               <VirtualList
                 class="proc-scroll"
-                ref={bindScroll}
+                ref={setScrollEl}
                 testId="sysmon-proc-scroll"
                 each={filteredProcesses()}
                 keyed={p => p.pid}
