@@ -44,7 +44,7 @@ export interface MenubarBarControl {
 export interface MenubarArrowsProps extends NativeElementProps {
   bar?: MenubarBarControl;
 }
-export interface MenubarItemProps extends Omit<MenuItemProps, "destructive" | "inset"> {}
+export interface MenubarItemProps extends Omit<MenuItemProps, "inset"> {}
 export type MenubarCheckboxItemProps = MenuCheckboxItemProps;
 export type MenubarRadioItemProps = MenuRadioItemProps;
 export type MenubarLabelProps = NativeElementProps;

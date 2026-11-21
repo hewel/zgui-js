@@ -459,7 +459,7 @@ const menubarMenuProps: MenubarMenuProps = { value: "file" };
 const menubarTriggerProps: MenubarTriggerProps = { class: "trigger" };
 const menubarContentProps: MenubarContentProps = { placement: { side: "bottom", align: "start" }, dismissOnEscape: true };
 const menubarArrowsProps: MenubarArrowsProps = { bar: barControl };
-const menubarItemProps: MenubarItemProps = { closeOnSelect: false, shortcut: "Ctrl+N", onSelect: () => { void checkState; } };
+const menubarItemProps: MenubarItemProps = { destructive: true, closeOnSelect: false, shortcut: "Ctrl+N", onSelect: () => { void checkState; } };
 const menubarCheckboxItemProps: MenubarCheckboxItemProps = { checked: checkState(), closeOnSelect: false, onCheckedChange: next => setCheckState(next) };
 const menubarRadioGroupProps: MenubarRadioGroupProps = { label: "Pane", value: radioPick(), onValueChange: next => setRadioPick(next) };
 const menubarRadioItemProps: MenubarRadioItemProps = { value: "split", closeOnSelect: false };

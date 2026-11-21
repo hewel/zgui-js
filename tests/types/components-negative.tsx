@@ -132,8 +132,8 @@ const bad = <box>
   <MenubarMenu />
   {/* @ts-expect-error MenubarRadioItem requires a value. */}
   <MenubarRadioItem />
-  {/* @ts-expect-error MenubarItem does not accept destructive styling. */}
-  <MenubarItem destructive>No</MenubarItem>
+  {/* @ts-expect-error MenubarItem does not accept inset styling. */}
+  <MenubarItem inset>No</MenubarItem>
   {/* @ts-expect-error MenubarLabel does not accept inset styling. */}
   <MenubarLabel inset>No</MenubarLabel>
   {/* @ts-expect-error Menubar separators are childless. */}

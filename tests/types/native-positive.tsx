@@ -1,6 +1,6 @@
 import {
   Image, Button, TextField, TextArea, For, Show, Loading, Errored, LayerSurface, PopupSurface,
-  createCanvasScene, createContext, createEffect, createMemo, createSignal, createSpring, createStore, createProjection,
+  createCanvasScene, createContext, createDelay, createEffect, createInterval, createMemo, createSignal, createSpring, createStore, createTimeout, createProjection,
   merge, omit, onCleanup, onSettled, reconcile, renderApp, renderShell, untrack, useContext, useMonitors,
   focus, getReducedMotion, getTextContent, getWindowRect, isAnimating, lockScroll, mountStylesheet, observeGeometry, precedes, setReducedMotion,
   SessionLockSurface, WindowSurface, getSessionGeneration, requestSessionLock,
@@ -251,6 +251,18 @@ void <PopupSurface name="settings-menu" parent="settings" anchorRect={{ x: 8, y:
 const reducedMotionFlag: boolean = getReducedMotion();
 setReducedMotion(reducedMotionFlag);
 setReducedMotion(null);
+const delayHandle = createDelay();
+delayHandle.schedule(100, () => {});
+delayHandle.after(50, () => {});
+const isDelayPending: boolean = delayHandle.pending();
+delayHandle.cancel();
+const cancelOneShot: () => void = createTimeout(() => {}, 25);
+cancelOneShot();
+const cancelRepeating: () => void = createInterval(() => {}, () => count() > 0 ? 500 : false);
+cancelRepeating();
+const reactiveSpring = createSpring(count, { stiffness: () => 220, damping: () => 18, mass: 1 });
+reactiveSpring.configure({ stiffness: 300, damping: 24 });
+void [isDelayPending, reactiveSpring];
 void borrowed;
 
 type AssertBoundary<T extends true> = T;

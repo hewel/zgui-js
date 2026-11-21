@@ -24,11 +24,11 @@ export interface HostServiceError extends Error {
 }
 
 /** Path authority resolved once for the active session from its sealed manifest. */
-export interface ResolvedCapabilities {
+export type ResolvedCapabilities = {
   readonly imagePrefixes: readonly string[];
   readonly unixSockets: readonly string[];
   readonly namedSockets: Readonly<Record<string, string | null | undefined>>;
-}
+};
 
 /** Return fresh copies of the session's resolved path declarations. */
 export function getResolvedCapabilities(): ResolvedCapabilities {
@@ -211,7 +211,7 @@ export type JsonValue =
   | number
   | string
   | readonly JsonValue[]
-  | { readonly [key: string]: JsonValue };
+  | { readonly [key: string]: JsonValue | undefined };
 
 /** Return plain text, a JSON value, or undefined for a successful empty reply. */
 export type ControlMessageHandler = (args: readonly string[]) => JsonValue | undefined;

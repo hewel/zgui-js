@@ -413,3 +413,57 @@ test("pure-shell unscoped getReducedMotion syncs eagerly from attached surfaces 
   h.emitReducedMotion(false);
   assert.equal(mod.observed.at(-1), false, "root effect receives live reducedMotion updates without any surface reading getReducedMotion");
 });
+
+test("createSpring accepts reactive physics accessors and configure() without losing position or velocity", async t => {
+  const h = createHost({ strictStyles: true });
+  const mod = await moduleFor(t, `
+    import { createSignal, createSpring, renderApp } from "@hewel/zgui";
+    import type { NativeNode, Spring } from "@hewel/zgui";
+
+    const [target, setTarget] = createSignal(0);
+    const [stiffness, setStiffness] = createSignal(120);
+    const [damping, setDamping] = createSignal(14);
+    export { setTarget, setStiffness, setDamping };
+    export let spring!: Spring;
+
+    export function mount(root: NativeNode) {
+      return renderApp(() => {
+        spring = createSpring(target, { stiffness, damping, mass: 1 });
+        return <box style={{ opacity: spring() }} />;
+      }, root);
+    }
+  `);
+  globalThis.__zgui = h.host;
+  let dispose;
+  t.after(() => {
+    try { dispose?.(); }
+    finally { delete globalThis.__zgui; }
+  });
+  const clock = createClock(t, h);
+  dispose = mod.mount(h.makeNode("root"));
+
+  h.runTurn(() => mod.setTarget(100));
+  clock.advance(16);
+  clock.frame();
+  const midBefore = mod.spring();
+  assert.ok(midBefore > 0 && midBefore < 100);
+
+  // Updating reactive physics mid-flight keeps position continuous and keeps animating.
+  h.runTurn(() => {
+    mod.setStiffness(420);
+    mod.setDamping(28);
+  });
+  assert.equal(mod.spring(), midBefore, "reactive physics update preserves current position");
+  clock.advance(16);
+  clock.frame();
+  const midAfterReactive = mod.spring();
+  assert.ok(midAfterReactive > midBefore, "spring keeps advancing smoothly after reactive option update");
+
+  // configure() validates eagerly and updates physics live without resetting position.
+  assert.throws(() => mod.spring.configure({ stiffness: 0 }), RangeError);
+  mod.spring.configure({ stiffness: 600, damping: 32 });
+  assert.equal(mod.spring(), midAfterReactive, "configure() preserves position");
+  clock.advance(16);
+  clock.frame();
+  assert.ok(mod.spring() > midAfterReactive);
+});

@@ -327,6 +327,7 @@ function menuIndicator(baseClass: string, dotClass: string, checked: Accessor<bo
 
 export function buildMenuItem(variant: MenuVariantConfig, props: MenuItemProps = {}): NativeNode {
   const menu = useMenuHierarchy();
+  if (!variant.allowModifiers) useStylesheet(menuSheet);
   const rest = omit(props, "children", "destructive", "inset", "closeOnSelect", "onSelect", "shortcut");
   const extra: NativeElementProps = variant.allowModifiers
     ? {
@@ -334,7 +335,10 @@ export function buildMenuItem(variant: MenuVariantConfig, props: MenuItemProps =
         get "data-inset"() { return props.inset ? "true" : null; },
         get ariaKeyShortcuts() { return props.shortcut ?? null; },
       }
-    : { get ariaKeyShortcuts() { return props.shortcut ?? null; } };
+    : {
+        get "data-destructive"() { return props.destructive ? "true" : null; },
+        get ariaKeyShortcuts() { return props.shortcut ?? null; },
+      };
   const node = menuRow(rest, {
     role: "menuItem",
     disabled: () => !!props.disabled,
@@ -343,7 +347,7 @@ export function buildMenuItem(variant: MenuVariantConfig, props: MenuItemProps =
     baseClass: variant.itemBaseClass,
     class: () => variant.allowModifiers
       ? classes(props.destructive && "zui-menu__item--destructive", props.inset && "zui-menu__item--inset")
-      : "",
+      : classes(props.destructive && "zui-menu__item--destructive"),
     select() { props.onSelect?.(); if (props.closeOnSelect ?? true) { flush(); menu?.dismissCascade(); } },
   });
   attachItemContent(node, variant, props);

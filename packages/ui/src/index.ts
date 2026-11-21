@@ -12,7 +12,9 @@ export { flush } from "./renderer/index.js";
 export { renderApp, renderShell } from "./render-app.js";
 export { LayerSurface, PopupSurface, SessionLockSurface, WindowSurface, getSessionGeneration, mountShellStylesheet, requestSessionLock, useMonitors } from "./shell.js";
 export { createSpring } from "./spring.js";
-export type { Spring, SpringOptions } from "./spring.js";
+export type { Spring, SpringNumberOption, SpringOptions } from "./spring.js";
+export { createDelay, createInterval, createTimeout } from "./timers.js";
+export type { DelayHandle } from "./timers.js";
 export {
   createCanvasScene, focus, getReducedMotion, getTextContent, getWindowRect, isAnimating, lockScroll, mountStylesheet,
   observeGeometry, precedes, registerDismissLayer, setReducedMotion, trapFocus,

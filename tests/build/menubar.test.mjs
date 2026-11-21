@@ -74,7 +74,7 @@ export function mount(root: NativeNode) {
           <MenubarContent testId="edit-surface">
             <MenubarLabel testId="edit-label">Editing</MenubarLabel>
             <MenubarGroup testId="edit-group" label="History">
-              <MenubarItem testId="edit-undo" onSelect={() => log.selects.push("undo")}>Undo</MenubarItem>
+              <MenubarItem testId="edit-undo" destructive onSelect={() => log.selects.push("undo")}>Undo</MenubarItem>
             </MenubarGroup>
             <MenubarCheckboxItem testId="edit-wrap" checked={wordWrap()} onCheckedChange={v => {
               setWordWrap(v);

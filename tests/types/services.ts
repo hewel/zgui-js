@@ -136,6 +136,8 @@ const unsubscribe = onControlMessage(args => {
   args.push("extra");
   if (args.length === 0) return undefined;
   if (args[0] === "text") return "unchanged";
+  if (args[0] === "caps") return { ok: true, caps: getResolvedCapabilities() };
+  if (args[0] === "branch") return { ok: true, count: 1 };
   return { args, status: ["ok", null, 0, true] };
 });
 unsubscribe();

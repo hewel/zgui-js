@@ -24,11 +24,11 @@
       "error",
       {
         "name": "setTimeout",
-        "message": "Do not call raw setTimeout in components or apps; use createDelay() or owner-scoped overlay primitives so timers cancel when owners dispose."
+        "message": "Do not call raw setTimeout in components or apps; use createDelay() or createTimeout() from @hewel/zgui so timers cancel when owners dispose."
       },
       {
         "name": "setInterval",
-        "message": "Do not call raw setInterval in components or apps; use createDelay() instead of unguarded polling."
+        "message": "Do not call raw setInterval in components or apps; use createInterval() or createDelay() from @hewel/zgui instead of unguarded polling."
       },
       {
         "name": "requestAnimationFrame",
@@ -71,7 +71,8 @@
       "files": [
         "packages/ui/src/components/delay.ts",
         "packages/ui/src/components/overlay.ts",
-        "packages/ui/src/spring.ts"
+        "packages/ui/src/spring.ts",
+        "packages/ui/src/timers.ts"
       ],
       "rules": {
         "no-restricted-globals": "off"
