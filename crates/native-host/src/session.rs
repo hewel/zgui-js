@@ -229,6 +229,7 @@ pub(crate) struct Session {
     work: Rc<Work>,
     engine: RefCell<Option<JsRuntime>>,
     font_leases: RefCell<Vec<zgui::app::fonts::FontLease>>,
+    reported_unregistered_fonts: RefCell<std::collections::BTreeSet<String>>,
     pub(crate) fonts: Fonts,
     telemetry: Cell<Option<RuntimeTelemetry>>,
     shutdown_started: Cell<bool>,
@@ -292,7 +293,7 @@ impl Session {
             }
         }
         for family in font_families {
-            if !fonts.contains_family(&family) {
+            if !is_css_generic_font_family(&family) && !fonts.contains_family(&family) {
                 return Err(SessionError::Style { code: "E_FONT_FAMILY", message: format!("FONT_FAMILY_UNREGISTERED: {family:?} is not registered"), details: serde_json::Value::Null });
             }
         }
@@ -333,6 +334,7 @@ impl Session {
                 mount_started: Cell::new(false), stylesheet_installed: Cell::new(false),
                 contract_reported: Cell::new(false),
                 font_leases: RefCell::new(Vec::new()),
+                reported_unregistered_fonts: RefCell::new(std::collections::BTreeSet::new()),
                 fonts,
                 generation, frames: Cell::new(0), module,
                 fault: RefCell::new(None), retired: RefCell::new(None),
@@ -991,25 +993,58 @@ impl Session {
         let revision = (window.dom().revision(), window.style_revision(), window.surface_configures(), window.color_scheme());
         if owned.font_validation_revision.get() == Some(revision) { return Ok(()); }
         let layout = window.layout().borrow();
-        let mut families = std::collections::BTreeSet::new();
+        let mut missing = std::collections::BTreeSet::new();
         for node in owned.bridge.snapshot(100_000).nodes {
             let Some(key) = zgui_view_dom::id::to_document(node.native) else { continue; };
             for box_id in layout.boxes_of(key) {
                 let Some(node) = layout.get(*box_id) else { continue; };
-                for family in zgui_text_style::lower::font::family(node.style.get_font()).entries() {
-                    if let zgui_text_style::FamilyName::Named(name) = family { families.insert(name.as_str().to_owned()); }
+                let entries = zgui_text_style::lower::font::family(node.style.get_font());
+                if self.policy.strict_rejections {
+                    for family in entries.entries() {
+                        if let zgui_text_style::FamilyName::Named(name) = family {
+                            let name = name.as_str();
+                            if !is_css_generic_font_family(name) && !owned.region.fonts.contains_family(name) {
+                                missing.insert(name.to_owned());
+                            }
+                        }
+                    }
+                } else {
+                    let resolves_cleanly = entries.entries().iter().any(|family| match family {
+                        zgui_text_style::FamilyName::Generic(_) => true,
+                        zgui_text_style::FamilyName::Named(name) => {
+                            let name = name.as_str();
+                            is_css_generic_font_family(name) || owned.region.fonts.contains_family(name)
+                        }
+                    });
+                    if !resolves_cleanly {
+                        for family in entries.entries() {
+                            if let zgui_text_style::FamilyName::Named(name) = family {
+                                let name = name.as_str();
+                                if !is_css_generic_font_family(name) && !owned.region.fonts.contains_family(name) {
+                                    missing.insert(name.to_owned());
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
-        for family in families {
-            if !owned.region.fonts.contains_family(&family) {
-                let message = format!("FONT_FAMILY_UNREGISTERED: {family:?} is not registered");
-                if self.policy.strict_rejections { return Err(SessionError::Style { code: "E_FONT_FAMILY", message, details: serde_json::Value::Null }); }
+        for family in missing {
+            let message = format!("FONT_FAMILY_UNREGISTERED: {family:?} is not registered");
+            if self.policy.strict_rejections {
+                return Err(SessionError::Style { code: "E_FONT_FAMILY", message, details: serde_json::Value::Null });
+            }
+            if self.reported_unregistered_fonts.borrow_mut().insert(family) {
                 eprintln!("style-diagnostic: {message}");
             }
         }
         owned.font_validation_revision.set(Some(revision));
         Ok(())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn reported_unregistered_fonts(&self) -> Vec<String> {
+        self.reported_unregistered_fonts.borrow().iter().cloned().collect()
     }
 
     fn snapshot(&self) {
@@ -1178,6 +1213,25 @@ impl Session {
     }
 }
 impl Drop for Session { fn drop(&mut self) { let _ = self.retire(); } }
+
+fn is_css_generic_font_family(name: &str) -> bool {
+    matches!(
+        name.to_ascii_lowercase().as_str(),
+        "serif"
+            | "sans-serif"
+            | "monospace"
+            | "cursive"
+            | "fantasy"
+            | "system-ui"
+            | "ui-serif"
+            | "ui-sans-serif"
+            | "ui-monospace"
+            | "ui-rounded"
+            | "emoji"
+            | "math"
+            | "fangsong"
+    )
+}
 
 fn remap(module: &SessionModule, error: js_runtime::Diagnostic) -> SessionError {
     SessionError::Diagnostic(match &module.package {

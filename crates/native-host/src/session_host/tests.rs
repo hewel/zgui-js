@@ -1236,3 +1236,83 @@ fn live_portal_reduced_motion_updates_bridges_unless_overridden_by_policy() {
     run_case(Some(false), "expectFalse");
     run_case(Some(true), "expectTrue");
 }
+
+#[test]
+fn live_font_validation_skips_generic_fallback_stacks_and_deduplicates_missing_families() {
+    use zgui::platform::{AppHandler, SurfaceEvent};
+
+    const FONT_APP: &str = r#"
+        export const hostApiVersion = 1;
+        let label;
+        export function mount(root) {
+            const box = __zgui.createElement('column');
+            const themed = __zgui.createElement('text');
+            __zgui.setProperty(themed, 'style', {
+                'font-family': 'Geist, ui-sans-serif, system-ui, sans-serif',
+            });
+            __zgui.insertNode(themed, __zgui.createTextNode('themed'), null);
+            const mono = __zgui.createElement('text');
+            __zgui.setProperty(mono, 'style', {
+                'font-family': '"Geist Mono", ui-monospace, SFMono-Regular, Menlo, monospace',
+            });
+            __zgui.insertNode(mono, __zgui.createTextNode('mono'), null);
+            label = __zgui.createElement('text');
+            __zgui.setProperty(label, 'style', { 'font-family': 'TrulyMissingFont' });
+            __zgui.insertNode(label, __zgui.createTextNode('v1'), null);
+            __zgui.insertNode(box, themed, null);
+            __zgui.insertNode(box, mono, null);
+            __zgui.insertNode(box, label, null);
+            __zgui.insertNode(root, box, null);
+            return () => __zgui.clearRoot(root);
+        }
+        export function bumpDom() {
+            __zgui.replaceText(__zgui.getFirstChild(label), 'v2');
+        }
+    "#;
+
+    let package = Fixture::new(FONT_APP, "");
+    let pending = Rc::new(RefCell::new(Vec::new()));
+    let roots = pending.clone();
+    let fonts = zgui::app::Fonts::shipped_only();
+    let mut runtime = zgui::runtime::App::new()
+        .with_renderer(Box::new(|_, target| {
+            let mut renderer = zgui_testkit_scene::CaptureRenderer::new();
+            zgui::render::Renderer::configure(&mut renderer, target);
+            Ok(Box::new(renderer))
+        }))
+        .into_handler(move |cx| {
+            zgui::reactive::provide_context(fonts.clone());
+            Box::new(Root(roots.clone()).build(cx))
+        })
+        .expect("create font validation test runtime");
+    let cx = zgui_platform_headless::Headless::new();
+    runtime.surfaces_available(&cx);
+    let policy = SessionPolicy::live(host_services::Executor::new(2, 64).expect("executor"));
+    let mut host = SessionHost::new(
+        pending,
+        SessionModule::package(package.package()),
+        policy,
+        RecoveryPolicy::Propagate,
+        SurfaceOpacity::Opaque,
+    );
+    host.attach(&mut RuntimeSurface::new(&mut runtime, &cx, ImageChoice::PackageOnly), cx.waker(), no_retry())
+        .expect("mount font test app");
+    let surface_id = runtime.windows()[0].surface().id();
+    runtime.surface_event(&cx, surface_id, SurfaceEvent::RedrawRequested);
+    let session = host.sessions().next().expect("active session").clone();
+    session.validate_font_families(&runtime.windows()[0]).expect("live font validation succeeds");
+    assert_eq!(
+        session.reported_unregistered_fonts(),
+        vec!["TrulyMissingFont".to_owned()],
+        "fallback stacks ending in CSS generics must not emit diagnostics"
+    );
+
+    // Mutate DOM to bump revision and re-validate; missing family stays deduplicated.
+    session.invoke("bumpDom").expect("bump DOM revision");
+    runtime.surface_event(&cx, surface_id, SurfaceEvent::RedrawRequested);
+    session.validate_font_families(&runtime.windows()[0]).expect("second live validation succeeds");
+    assert_eq!(session.reported_unregistered_fonts(), vec!["TrulyMissingFont".to_owned()]);
+
+    let report = session.retire();
+    assert!(report.failure.is_none(), "teardown failed: {:?}", report.failure);
+}

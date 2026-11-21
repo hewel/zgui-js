@@ -224,7 +224,9 @@ impl Renderer for CaptureRenderer {
     fn target_pool(&self) -> render::TargetPoolReport { self.inner.target_pool() }
     fn release_cached_targets(&mut self) -> u64 { self.inner.release_cached_targets() }
     fn release_idle_resources(&mut self) -> u64 { self.inner.release_idle_resources() }
-    fn acquire_block(&self) -> Duration { self.inner.acquire_block() }
+    // Headless preview renders offscreen under virtual time with no swapchain handover;
+    // leaking real-wall lavapipe/GPU acquisition jitter into PresentPace breaks determinism.
+    fn acquire_block(&self) -> Duration { Duration::ZERO }
     fn present_held(&mut self) -> FrameOutcome {
         let outcome = self.inner.present_held();
         self.observe(outcome);
