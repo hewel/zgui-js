@@ -5,18 +5,12 @@ import { createClock, createHost, moduleFor } from "./native-fixture.mjs";
 const fixture = `
 import { Show, createSignal, onCleanup, renderApp } from "@hewel/zgui";
 import type { NativeNode } from "@hewel/zgui";
-import * as stylex from "@stylexjs/stylex";
 import {
   Menubar, MenubarArrows, MenubarCheckboxItem, MenubarContent, MenubarGroup, MenubarItem,
   MenubarLabel, MenubarMenu, MenubarRadioGroup, MenubarRadioItem, MenubarSeparator,
   MenubarShortcut, MenubarTrigger,
   MenuItem, MenuSub, MenuSubContent, MenuSubTrigger,
 } from "@hewel/zgui/components";
-
-const styles = stylex.create({
-  item: { color: "red" },
-  content: { backgroundColor: "blue" },
-});
 
 export const log = {
   selects: [] as string[],
@@ -38,9 +32,9 @@ export function mount(root: NativeNode) {
     <Menubar testId="bar" label="Application">
       <MenubarMenu testId="file-menu" value="file">
         <MenubarTrigger testId="file-trigger" ref={node => { log.triggers.push(node); }}>File</MenubarTrigger>
-        <MenubarContent testId="file-surface" {...stylex.props(styles.content)}>
+        <MenubarContent testId="file-surface" class="app-content-class">
           <MenubarItem testId="file-disabled" disabled>Disabled first</MenubarItem>
-          <MenubarItem testId="file-new" shortcut="Ctrl+N" {...stylex.props(styles.item)} onSelect={() => log.selects.push("new")}>New Tab</MenubarItem>
+          <MenubarItem testId="file-new" shortcut="Ctrl+N" class="app-item-class" onSelect={() => log.selects.push("new")}>New Tab</MenubarItem>
           <MenubarItem testId="file-open" closeOnSelect={false} onSelect={() => log.selects.push("open")}>
             Open<MenubarShortcut testId="custom-shortcut">Ctrl+O</MenubarShortcut>
           </MenubarItem>
@@ -376,15 +370,15 @@ test("menubar validates required values, boolean checked states, and childless s
   await assert.rejects(() => mounted(t, "mountBadSeparator"), TypeError);
 });
 
-test("menubar forwards StyleX classes, returns Escape focus to MenuSubTrigger, and cascades nested leaf dismissal", async t => {
+test("menubar forwards application classes, returns Escape focus to MenuSubTrigger, and cascades nested leaf dismissal", async t => {
   const { h, mod, layers, send, key, flush, finish } = await mounted(t);
   send("file-trigger", "onClick");
   const fileSurface = h.byTestId("file-surface");
   const fileNew = h.byTestId("file-new");
   assert.match(String(fileSurface.props.get("class")), /\bzui-menubar__content\b/);
-  assert.match(String(fileSurface.props.get("class")), /\bx/);
+  assert.match(String(fileSurface.props.get("class")), /\bapp-content-class\b/);
   assert.match(String(fileNew.props.get("class")), /\bzui-menubar__item\b/);
-  assert.match(String(fileNew.props.get("class")), /\bx/);
+  assert.match(String(fileNew.props.get("class")), /\bapp-item-class\b/);
 
   const shareTrigger = h.byTestId("file-share");
   send(shareTrigger, "onClick");

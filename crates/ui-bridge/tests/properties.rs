@@ -1420,31 +1420,20 @@ fn keyboard_shortcuts_preserve_other_semantics_and_reject_non_strings() {
 }
 
 #[test]
-fn stylex_aliases_keep_internal_classes_and_retain_previous_application_on_conflict() {
+fn internal_and_application_class_channels_reconcile_independently_and_reject_classname() {
     let mut native = NativeProperties::with_options(BridgeOptions::default());
-    native.script("__zgui.setProperty(node, '__zguiClass', 'sdk invariant'); __zgui.setProperty(node, 'className', 'app'); __zgui.setProperty(node, 'class', '  '); 'aliases'");
-    assert_eq!(native.backend.classes(native.node), ["sdk", "invariant", "app"].map(zgui::view::ClassName::new));
-    native.script("__zgui.setProperty(node, 'class', 'conflict'); __zgui.setProperty(node, 'title', 'unrelated'); __zgui.setProperty(node, '__zguiClass', 'sdk changed'); 'conflict'");
-    assert_eq!(native.backend.classes(native.node), ["sdk", "changed", "app"].map(zgui::view::ClassName::new));
-    assert_eq!(native.attribute("title").as_deref(), Some("unrelated"));
-    assert_eq!(native.bridge.take_style_diagnostics()[0].code, "CLASS_ALIAS_CONFLICT");
-    native.script("__zgui.setProperty(node, 'className', null); 'switch'");
-    assert_eq!(native.backend.classes(native.node), ["sdk", "changed", "conflict"].map(zgui::view::ClassName::new));
-}
-
-#[test]
-fn alias_updates_reconcile_once_at_turn_end() {
-    let mut native = NativeProperties::with_options(BridgeOptions::default());
-    native.script("__zgui.setProperty(node, 'className', null); __zgui.setProperty(node, 'class', 'old'); 'initial'");
-    native.script("__zgui.setProperty(node, 'class', 'new'); __zgui.setProperty(node, 'className', 'other'); __zgui.setProperty(node, 'title', 'unrelated'); 'conflict'");
-    assert_eq!(native.backend.classes(native.node), ["old"].map(zgui::view::ClassName::new));
-    assert_eq!(native.attribute("title").as_deref(), Some("unrelated"));
-    assert_eq!(native.bridge.take_style_diagnostics()[0].code, "CLASS_ALIAS_CONFLICT");
-    native.script("__zgui.setProperty(node, 'className', null); 'switch'");
-    assert_eq!(native.backend.classes(native.node), ["new"].map(zgui::view::ClassName::new));
-    native.script("__zgui.setProperty(node, 'className', 'temporary'); __zgui.setProperty(node, 'className', null); 'transient'");
-    assert_eq!(native.backend.classes(native.node), ["new"].map(zgui::view::ClassName::new));
-    assert!(native.bridge.take_style_diagnostics().is_empty(), "clearing the alias in the same turn must not conflict");
+    native.script("__zgui.setProperty(node, '__zguiClass', 'sdk invariant'); __zgui.setProperty(node, 'class', 'app scoped'); 'channels'");
+    assert_eq!(native.backend.classes(native.node), ["sdk", "invariant", "app", "scoped"].map(zgui::view::ClassName::new));
+    native.script("__zgui.setProperty(node, 'class', '  '); __zgui.setProperty(node, '__zguiClass', 'sdk changed'); 'clear-app'");
+    assert_eq!(native.backend.classes(native.node), ["sdk", "changed"].map(zgui::view::ClassName::new));
+    native.script("__zgui.setProperty(node, 'class', 'restored'); 'restore-app'");
+    assert_eq!(native.backend.classes(native.node), ["sdk", "changed", "restored"].map(zgui::view::ClassName::new));
+    let err = native
+        .bridge
+        .run_turn(native.engine.turn(), |_, js| js.evaluate_script("__zgui.setProperty(node, 'className', 'legacy');"))
+        .unwrap_err();
+    assert!(err.message.contains("unsupported native property: className"), "{}", err.message);
+    assert!(native.bridge.take_style_diagnostics().is_empty());
 }
 
 #[test]

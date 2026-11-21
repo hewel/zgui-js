@@ -47,16 +47,15 @@
       }
     },
     "styleSystem": {
-      "type": "object", "additionalProperties": false, "required": ["name", "profile", "configDigest", "nativeProfileDigest"],
+      "type": "object", "additionalProperties": false, "required": ["name", "profile", "configDigest"],
       "properties": {
-        "name": { "const": "stylex" },
-        "profile": { "const": "zgui-stylex-v1" },
-        "configDigest": { "$ref": "#/$defs/digest" },
-        "nativeProfileDigest": { "$ref": "#/$defs/digest" }
+        "name": { "const": "lightningcss" },
+        "profile": { "const": "lightningcss-v1" },
+        "configDigest": { "$ref": "#/$defs/digest" }
       }
     },
     "artifactDigests": {
-      "type": "object", "required": ["style-origins.json", "build-info.json"],
+      "type": "object", "required": ["build-info.json"],
       "propertyNames": { "$ref": "#/$defs/path" },
       "additionalProperties": { "$ref": "#/$defs/digest" }
     },

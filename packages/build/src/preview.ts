@@ -46,11 +46,10 @@ export async function previewApplication(
       hostRoot,
       hostExecutable,
       mode: "preview",
-      stylexDiagnostics: true,
       hostArgs: args,
       signal,
     });
-  const { dist } = await buildApplication(app, { ...buildOptions, root, stylexDiagnostics: true });
+  const { dist } = await buildApplication(app, { ...buildOptions, root });
   signal?.throwIfAborted();
   const executable =
     hostExecutable === undefined

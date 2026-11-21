@@ -120,12 +120,11 @@ mod tests {
             let map = br#"{"version":3,"sources":[],"names":[],"mappings":""}"#;
             fs::write(directory.join("app.mjs"), source.as_bytes()).unwrap();
             fs::write(directory.join("app.mjs.map"), map).unwrap();
-            let style_system = serde_json::json!({"name":"stylex","profile":"zgui-stylex-v1",
-                "configDigest":format!("sha256:{:x}", Sha256::digest(b"test")),"nativeProfileDigest":crate::package::native_profile_digest()});
+            let style_system = serde_json::json!({"name":"lightningcss","profile":"lightningcss-v1",
+                "configDigest":format!("sha256:{:x}", Sha256::digest(b"test"))});
             let metadata = serde_json::to_vec(&serde_json::json!({"styleSystem":style_system})).unwrap();
-            fs::write(directory.join("style-origins.json"), &metadata).unwrap();
             fs::write(directory.join("build-info.json"), &metadata).unwrap();
-            let digests: std::collections::BTreeMap<_, _> = ["app.mjs", "app.mjs.map", "style-origins.json", "build-info.json"].into_iter()
+            let digests: std::collections::BTreeMap<_, _> = ["app.mjs", "app.mjs.map", "build-info.json"].into_iter()
                 .map(|name| (name, format!("sha256:{:x}", Sha256::digest(fs::read(directory.join(name)).unwrap())))).collect();
             let mut manifest = serde_json::json!({
                 "schemaVersion": 2, "id": "watcher-test", "hostApiVersion": 1,

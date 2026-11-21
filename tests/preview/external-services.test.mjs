@@ -42,7 +42,7 @@ async function setup(t) {
   const { dir, cleanup } = await createTempWorkspace("preview-external-services-");
   t.after(cleanup);
   const image = await readFile(
-    new URL("../../apps/examples/stylex/assets/red.png", import.meta.url),
+    new URL("./fixtures/red.png", import.meta.url),
   );
   return {
     build: (name, source, grants = capabilities) =>

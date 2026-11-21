@@ -17,7 +17,8 @@ Judgement-call engineering standards for code review and authoring. Mechanical r
 
 ## Scoped Styles & Upstream Provenance
 
-- **Attribute-scoped part styles**: Scope component part styles to their own context-derived attributes whenever ancestor selectors could cross nested component roots, while preserving layout-wrapper composition.
+- **Unified Lightning CSS Modules + `--zui-*` + `[data-*]`**: Author application styles in global `src/app.css` and locally scoped `*.module.css` files compiled by Lightning CSS (`lightningcss-v1`), composing static classes with `cx(...)` onto the canonical `class` prop and reserving inline `style={{ ... }}` for continuous dynamic values. Never use `composes`, ICSS `:import`/`:export`, `@value`, or `@property`.
+- **Attribute-scoped part styles**: Scope component part styles to their own context-derived attributes whenever ancestor selectors could cross nested component roots, while preserving layout-wrapper composition. Keep selector adaptations in `packages/build/src/sync-ui-resources.ts` / `generated/*Style.ts` so `#49` static `components.css` hoisting emits identical rules.
 - **Generated stylesheet refresh**: Refresh `packages/ui/src/components/generated/` by capturing `crates/ui-bridge/examples/ui_resources.rs` once and passing that snapshot to `packages/build/src/sync-ui-resources.ts`, preserving upstream license headers and provenance.
 
 ## Vendored Crates & Cross-Crate Invariants

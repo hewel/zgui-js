@@ -17,15 +17,14 @@ impl Assets {
             NEXT_PACKAGE.fetch_add(1, Ordering::Relaxed),
         ));
         fs::create_dir(&directory).unwrap();
-        let style_system = serde_json::json!({"name":"stylex","profile":"zgui-stylex-v1",
-            "configDigest":format!("sha256:{:x}", Sha256::digest(b"work-tests")),"nativeProfileDigest":crate::package::native_profile_digest()});
+        let style_system = serde_json::json!({"name":"lightningcss","profile":"lightningcss-v1",
+            "configDigest":format!("sha256:{:x}", Sha256::digest(b"work-tests"))});
         let metadata = serde_json::to_vec(&serde_json::json!({"styleSystem":style_system})).unwrap();
         let files = BTreeMap::from([
             ("app.mjs", b"export const hostApiVersion = 1; export function mount() { return () => {}; }".as_slice()),
             ("app.mjs.map", br#"{"version":3,"sources":[],"names":[],"mappings":""}"#.as_slice()),
             ("invalid.txt", &[0xff][..]),
             ("text.txt", "owned asset: héllo\n".as_bytes()),
-            ("style-origins.json", metadata.as_slice()),
             ("build-info.json", metadata.as_slice()),
         ]);
         let mut digests = BTreeMap::new();

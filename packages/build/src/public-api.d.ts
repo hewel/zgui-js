@@ -63,9 +63,8 @@ export type Manifest = {
   window?: WindowDeclaration;
   capabilities?: Capabilities;
   styleSystem: {
-    name: "stylex";
-    profile: "zgui-stylex-v1";
-    nativeProfileDigest: string;
+    name: "lightningcss";
+    profile: "lightningcss-v1";
     configDigest: string;
   };
   artifactDigests: Record<string, string>;
@@ -105,7 +104,6 @@ export type BuildInfo = {
 export interface BuildApplicationOptions {
   root?: string;
   appDirectory?: string;
-  stylexDiagnostics?: boolean;
   development?: boolean;
   extraCapabilities?: Capabilities;
   capabilitiesFile?: string;

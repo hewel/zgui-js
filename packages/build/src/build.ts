@@ -16,7 +16,7 @@ import { compileBundle, compileWorkerBundle, type CompilationResult } from "./co
 import { typecheckProject } from "./typecheck.ts";
 import { canonicalJson, sha256, moduleIdentity } from "./identity.ts";
 import { publishGeneration, resourcePath } from "./publication.ts";
-import { validateStylesheet } from "./stylex.ts";
+import { syncCssModuleTypes, validateStylesheet } from "./css.ts";
 import { workspaceRoot } from "./sdk.ts";
 
 export { publishGeneration };
@@ -98,7 +98,6 @@ export async function bundle(
     appDirectory = path.dirname(entry),
     hostEntry = true,
     filename = "app.mjs",
-    stylexDiagnostics = false,
     development = false,
   }: BuildApplicationOptions & { hostEntry?: boolean; filename?: string } = {},
 ): Promise<CompilationResult> {
@@ -107,7 +106,6 @@ export async function bundle(
     appDirectory,
     hostEntry,
     filename,
-    stylexDiagnostics,
     development,
   });
 }
@@ -168,11 +166,9 @@ export function dependencyVersions({
       "@babel/parser",
       "@babel/traverse",
       "@babel/preset-typescript",
+      "lightningcss",
       "rolldown",
       "tsrs",
-      "@stylexjs/stylex",
-      "@stylexjs/babel-plugin",
-      "styleq",
     ].map(name => [name, manifestVersion(require(`${name}/package.json`), name)] as const),
     ...(universal === undefined ? [] : [["@solidjs/universal", universal] as const]),
     [
@@ -285,7 +281,6 @@ export async function buildApplication(
   {
     root = workspaceRoot,
     appDirectory = path.join(root, "apps/examples", app),
-    stylexDiagnostics = false,
     development = false,
     extraCapabilities,
     capabilitiesFile,
@@ -294,11 +289,11 @@ export async function buildApplication(
   if (!/^[a-z][a-z0-9-]*$/.test(app)) throw new Error(`Invalid application name: ${app}`);
   root = path.resolve(root);
   appDirectory = path.resolve(appDirectory);
+  await syncCssModuleTypes(appDirectory, { root });
   typecheckProject(path.join(appDirectory, "tsconfig.json"));
   const result = await bundle(path.join(appDirectory, "src/main.tsx"), {
     root,
     appDirectory,
-    stylexDiagnostics,
     development,
   });
   return publishApplication(app, result, {
@@ -774,19 +769,22 @@ export async function publishApplication(
 ): Promise<PublishedApplication> {
   signal?.throwIfAborted();
   const files = new Map(result.files);
-  const stylesheet = files.get("app.css");
-  if (!stylesheet || !files.has("style-origins.json") || !result.styleSystem)
-    throw new Error("Missing StyleX compilation output");
-  validateStylesheet(stylesheet.toString(), "app.css", { allowDynamicProperties: true });
+  const moduleStyles = files.get("app.css");
+  if (!moduleStyles || !result.styleSystem)
+    throw new Error("Missing Lightning CSS compilation output");
   const componentsCss = files.get("components.css");
   if (componentsCss !== undefined) {
-    validateStylesheet(componentsCss.toString(), "components.css");
+    validateStylesheet(componentsCss.toString("utf8"), "components.css");
   }
-  const css = await optionalFile(path.join(appDirectory, "src/app.css"));
-  if (css !== undefined) {
-    validateStylesheet(css.toString(), "base.css");
-    files.set("base.css", css);
-  }
+  const globalCssFile = await optionalFile(path.join(appDirectory, "src/app.css"));
+  const globalCss =
+    globalCssFile !== undefined
+      ? validateStylesheet(globalCssFile.toString("utf8"), "app.css")
+      : "";
+  const modulesCss = moduleStyles.toString("utf8").trim();
+  const mergedAppCssParts = [globalCss, modulesCss].filter(part => part.length > 0);
+  const mergedAppCss = mergedAppCssParts.length > 0 ? `${mergedAppCssParts.join("\n\n")}\n` : "";
+  files.set("app.css", Buffer.from(mergedAppCss, "utf8"));
   const assets = await collectAssets(path.join(appDirectory, "assets"));
   for (const item of assets) files.set(...item);
   const pkg = await optionalFile(path.join(appDirectory, "package.json"));
@@ -860,11 +858,7 @@ export async function publishApplication(
     sourceMap: "app.mjs.map",
     ...(chunks.length > 0 ? { chunks } : {}),
     ...(workers.length > 0 ? { workers } : {}),
-    styles: [
-      ...(componentsCss !== undefined ? ["components.css"] : []),
-      ...(css !== undefined ? ["base.css"] : []),
-      "app.css",
-    ],
+    styles: [...(componentsCss !== undefined ? ["components.css"] : []), "app.css"],
     assets: [...assets.keys()].sort(),
     fonts,
     ...(windowConfig ? { window: windowConfig } : {}),

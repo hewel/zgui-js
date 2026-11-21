@@ -4,9 +4,7 @@ import { focus, observeGeometry } from "../nodes.js";
 import type { Accessor, NativeElementProps, NativeEvent, NativeFocusEvent, NativeNode, NativeRole, NativeStyle } from "../types.js";
 import { callHandler, createControllable } from "./state.js";
 import { append, classes, provide, slot, useStylesheet, withDefaults } from "./shared.js";
-import { sheet as upstreamSheet } from "./generated/CollapsibleStyle.js";
-
-const sheet = { ...upstreamSheet, css: upstreamSheet.css + '\n.zui-collapsible__content[data-collapsed] { visibility: hidden; }' };
+import { sheet } from "./generated/CollapsibleStyle.js";
 export interface CollapsibleProps extends Omit<NativeElementProps, "open"> {
   open?: boolean;
   defaultOpen?: boolean;

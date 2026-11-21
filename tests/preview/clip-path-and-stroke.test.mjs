@@ -102,7 +102,7 @@ test("clip-path: path(...) clips decoded images and boxes, and rounded stroke ca
   const temp = await createTempWorkspace("preview-clip-path-stroke-");
   t.after(() => temp.cleanup());
   const redPng = await readFile(
-    new URL("../../apps/examples/stylex/assets/red.png", import.meta.url),
+    new URL("./fixtures/red.png", import.meta.url),
   );
   const bundle = await buildFixtureApp(path.join(temp.dir, "app"), "clip-path-and-stroke", source, {
     rawSource: true,

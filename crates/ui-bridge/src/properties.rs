@@ -107,7 +107,6 @@ impl Mutation {
         let string = |value| Option::<String>::from_js(ctx, value);
         match name {
             "class" => Ok(Self::Class("class", string(value)?)),
-            "className" => Ok(Self::Class("className", string(value)?)),
             "__zguiClass" => Ok(Self::Class("__zguiClass", string(value)?)),
             "testId" => {
                 let value = string(value)?;
@@ -321,9 +320,7 @@ impl Mutation {
 #[derive(Default)]
 struct ClassState {
     canonical: Option<String>,
-    alias: Option<String>,
     internal: Option<String>,
-    applied: Option<String>,
     native: Option<String>,
 }
 
@@ -363,7 +360,6 @@ impl Properties {
                 let value = value.filter(|value| !value.trim().is_empty());
                 match name {
                     "class" => state.canonical = value,
-                    "className" => state.alias = value,
                     _ => state.internal = value,
                 }
                 self.class_dirty.insert(token);
@@ -476,14 +472,12 @@ impl Properties {
     pub(crate) fn dirty_tokens(&self) -> Vec<u64> { self.class_dirty.iter().copied().collect() }
 
     pub(crate) fn finish_turn(&mut self, dom: &DomHandle, targets: Vec<(u64, NodeId)>) -> Vec<crate::StyleDiagnostic> {
-        let mut diagnostics = Vec::new();
+        let diagnostics = Vec::new();
         for (token, native) in targets {
             self.class_dirty.remove(&token);
             let Some(state) = self.classes.get_mut(&token) else { continue; };
-            let conflict = state.canonical.is_some() && state.alias.is_some();
-            if !conflict { state.applied = state.canonical.clone().or_else(|| state.alias.clone()); }
             let mut classes = Vec::new();
-            for value in [state.internal.as_deref(), state.applied.as_deref()].into_iter().flatten() {
+            for value in [state.internal.as_deref(), state.canonical.as_deref()].into_iter().flatten() {
                 for class in value.split_ascii_whitespace().map(ClassName::new) {
                     if !classes.contains(&class) { classes.push(class); }
                 }
@@ -492,9 +486,6 @@ impl Properties {
             if state.native.as_deref() != Some(fingerprint.as_str()) {
                 dom.set_classes(native, &classes);
                 state.native = Some(fingerprint);
-            }
-            if conflict {
-                diagnostics.push(crate::StyleDiagnostic { code: "CLASS_ALIAS_CONFLICT", message: "class and className both contribute application tokens".into() });
             }
         }
         diagnostics

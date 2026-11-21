@@ -5,17 +5,11 @@ import { createClock, createHost, moduleFor } from "./native-fixture.mjs";
 const fixture = `
 import { For, Show, createSignal, onCleanup, renderApp } from "@hewel/zgui";
 import type { NativeNode } from "@hewel/zgui";
-import * as stylex from "@stylexjs/stylex";
 import {
   ContextMenu, ContextMenuContent, ContextMenuTrigger, useContextMenuPlace,
   MenuCheckboxItem, MenuItem, MenuRadioGroup, MenuRadioItem,
   MenuSub, MenuSubContent, MenuSubTrigger,
 } from "@hewel/zgui/components";
-
-const styles = stylex.create({
-  trigger: { color: "red" },
-  item: { backgroundColor: "blue" },
-});
 
 export const log = {
   selects: [] as string[],
@@ -43,7 +37,7 @@ function PlaceCapture() {
 
 export function mount(root: NativeNode) {
   return renderApp(() => <ContextMenu>
-    <ContextMenuTrigger testId="trigger" {...stylex.props(styles.trigger)} disabled={disabled()}
+    <ContextMenuTrigger testId="trigger" class="app-trigger-class" disabled={disabled()}
       onContextMenu={event => { if (veto()) event.preventDefault(); }}
       onPointerDown={event => { if (veto()) event.preventDefault(); }}>
       <PlaceCapture />
@@ -51,7 +45,7 @@ export function mount(root: NativeNode) {
       <control testId="inner-btn">Action</control>
     </ContextMenuTrigger>
     <ContextMenuContent testId="surface">
-      <MenuItem testId="item-copy" {...stylex.props(styles.item)} onSelect={() => log.selects.push("copy")}>Copy</MenuItem>
+      <MenuItem testId="item-copy" class="app-item-class" onSelect={() => log.selects.push("copy")}>Copy</MenuItem>
       <MenuCheckboxItem testId="item-pin" closeOnSelect={false} onCheckedChange={v => log.checks.push(v)}>Pin</MenuCheckboxItem>
       <MenuRadioGroup defaultValue="a" onValueChange={v => log.radios.push(v)}>
         <MenuRadioItem testId="radio-a" value="a" closeOnSelect={false}>A</MenuRadioItem>
@@ -277,17 +271,17 @@ test("triggerless useContextMenuPlace opens using window coordinates directly", 
   orphan.finish();
 });
 
-test("context menu forwards StyleX classes, focuses MenuSubTrigger on Escape, and cascades leaf dismissal", async t => {
+test("context menu forwards application classes, focuses MenuSubTrigger on Escape, and cascades leaf dismissal", async t => {
   const { h, mod, layers, send, flush, finish } = await mounted(t);
   const trigger = h.byTestId("trigger");
   assert.match(String(trigger.props.get("class")), /\bzui-context-menu__area\b/);
-  assert.match(String(trigger.props.get("class")), /\bx/);
+  assert.match(String(trigger.props.get("class")), /\bapp-trigger-class\b/);
 
   send("trigger", "onContextMenu", { position: { x: 100, y: 100 } });
   const surface = h.byTestId("surface");
   const itemCopy = h.byTestId("item-copy");
   assert.match(String(itemCopy.props.get("class")), /\bzui-menu__item\b/);
-  assert.match(String(itemCopy.props.get("class")), /\bx/);
+  assert.match(String(itemCopy.props.get("class")), /\bapp-item-class\b/);
 
   const subTrigger = h.byTestId("sub-trigger");
   send(subTrigger, "onClick");

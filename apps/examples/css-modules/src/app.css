@@ -1,0 +1,10 @@
+.app-shell {
+  width: 100vw;
+  height: 100vh;
+  padding: 20px;
+  gap: 14px;
+  box-sizing: border-box;
+  background-color: var(--zui-color-background);
+  color: var(--zui-color-foreground);
+  font-family: var(--zui-type-family-sans);
+}

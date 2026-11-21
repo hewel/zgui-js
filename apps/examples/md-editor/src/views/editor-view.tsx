@@ -16,6 +16,7 @@ import {
 import { useBeforeLeave, useNavigate } from "@hewel/zgui/router";
 import { MarkdownPreview } from "../preview.js";
 import { useStudio } from "../studio-context.js";
+import styles from "./editor-view.module.css";
 
 export function EditorView() {
   const studio = useStudio();
@@ -277,7 +278,7 @@ export function EditorView() {
             collapsible
             collapsedSize={0}
           >
-            <scroll class="mde-sidebar" testId="studio-sidebar">
+            <scroll class={styles.sidebar} testId="studio-sidebar">
               <Show when={previewReady()}>
                 <column style={{ gap: "12px" }}>
                   <column style={{ gap: "6px" }}>
@@ -366,7 +367,7 @@ export function EditorView() {
                       {doc => (
                         <box
                           testId={`doc-${doc.id}`}
-                          class="mde-doc-btn"
+                          class={styles.docBtn}
                           role="button"
                           tabIndex={0}
                           data-active={studio.activeDoc().id === doc.id ? "true" : "false"}
@@ -396,8 +397,8 @@ export function EditorView() {
             collapsed={studio.viewMode() === "preview"}
           >
             <Show when={studio.viewMode() !== "preview"}>
-              <column class="mde-editor-pane">
-                <row class="mde-pane-head">
+              <column class={styles.editorPane}>
+                <row class={styles.paneHead}>
                   <text style={{ "font-weight": "600" }}>MARKDOWN SOURCE</text>
                   <text class="mono" testId="selection-readout">
                     {`sel ${studio.selectionRange().start}:${studio.selectionRange().end}`}
@@ -435,7 +436,7 @@ export function EditorView() {
           >
             <Show when={studio.viewMode() !== "editor"}>
               <column class="mde-preview-pane">
-                <row class="mde-pane-head">
+                <row class={styles.paneHead}>
                   <text style={{ "font-weight": "600" }}>LIVE NATIVE PREVIEW</text>
                   <text class="mono" testId="preview-scroll-readout">
                     {scrollInfo()

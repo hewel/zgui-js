@@ -88,8 +88,8 @@ const dataBoolean: NativeElementProps = { "data-count": true };
 const dataNumber: NativeElementProps = { "data-count": 3 };
 // @ts-expect-error Arbitrary native properties are not accepted.
 const property = <text arbitrary="unsupported" />;
-// @ts-expect-error The StyleX className alias carries strings, not numbers.
-const className = <box className={3} />;
+// @ts-expect-error Legacy React/StyleX className prop is removed; use class.
+const className = <box className="legacy" />;
 // @ts-expect-error Browser event names are not native aliases.
 const handler = <control onDoubleClick={() => {}} />;
 // @ts-expect-error Ref callbacks expose a NativeNode, not browser methods.

@@ -11,6 +11,7 @@
 /apps/examples/*/.zgui-native-status.json
 /apps/examples/*/.zgui-native-status.json.*.tmp
 /artifacts/preview/
+*.module.css.d.ts
 
 .agents/skills/*
 !.agents/skills/zgui-dev/

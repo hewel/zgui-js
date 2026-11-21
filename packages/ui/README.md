@@ -414,7 +414,7 @@ visual styling remains application-owned.
   application code. Use `value`/`defaultValue`, not nested text.
 
 Browser-only props such as `type`, `rows` and `selectionStart` are not accepted.
-Use native `class` (or its StyleX alias `className`), native style strings/objects,
+Use native `class` (with `*.module.css` and `cx(...)`), native style strings/objects,
 and the supported native event handlers.
 
 Native style objects accept visual and typography properties such as `boxShadow`,
@@ -489,12 +489,11 @@ Controlled controls report edits through component callbacks such as
 `onInput` event is still available with `event.value`. Caller props override
 component defaults. SDK structural classes and inline invariants are privately owned.
 
-`class` is canonical and `className` is its StyleX alias. Empty/whitespace-only
-aliases contribute nothing. Supplying tokens through both produces
-`CLASS_ALIAS_CONFLICT`, retains the last application class contribution, and
-does not block unrelated props. This applies to native elements and components
-that explicitly forward to one native root; providers and multi-root composites
-do not invent a styling target. `data-style-src` updates and clears normally.
+`class` is the sole canonical application class attribute (`className` is not supported).
+Empty/whitespace-only class values contribute nothing, and SDK-private structural classes
+(`__zguiClass`) stay isolated from application class updates. This applies to native elements
+and components that explicitly forward to one native root; providers and multi-root composites
+do not invent a styling target.
 
 Style objects accept native kebab-case names and explicit camelCase aliases.
 Custom-property names retain their case. Finite numbers are accepted only for

@@ -1,5 +1,6 @@
 import path from "node:path";
 import { realpathSync } from "node:fs";
+import { realpath } from "node:fs/promises";
 import {
   transformAsync,
   type BabelFileResult,
@@ -19,7 +20,8 @@ import {
   type PluginContext,
   type SourceDescription,
 } from "rolldown";
-import type { Rule } from "@stylexjs/babel-plugin";
+import { styleSystem, transformStylesheet, validateStylesheet, type StyleSystem } from "./css.ts";
+import { moduleIdentity } from "./identity.ts";
 import {
   validateImport,
   validateWorkerImport,
@@ -27,19 +29,6 @@ import {
   validateGraph,
   type CompilationGraph,
 } from "./validate.ts";
-import { realpath } from "node:fs/promises";
-import { moduleIdentity } from "./identity.ts";
-import {
-  stylexPlugin,
-  stylexOptions,
-  styleSystem,
-  readNativeProfileDigest,
-  validateStylexModule,
-  validateStylesheet,
-  finalizeStylex,
-  type StyleSystem,
-  type StylexModule,
-} from "./stylex.ts";
 
 const typescriptPreset =
   (
@@ -65,7 +54,6 @@ interface CompilerOptions {
   appDirectory?: string;
   plugins?: Plugin[];
   babelTransform?: BabelTransform;
-  stylexDiagnostics?: boolean;
   development?: boolean;
   hoistComponentStyles?: boolean;
 }
@@ -139,39 +127,15 @@ function extractStaticComponentSheet(
   return { name, className, css };
 }
 
-interface CachedTransform extends StylexModule {
+interface CachedTransform {
   source: string;
+  identity: string;
   result: SourceDescription;
   componentSheet?: StaticComponentSheet;
+  cssModuleCss?: string;
 }
 
-function isStylexRule(rule: unknown): rule is Rule {
-  return (
-    Array.isArray(rule) &&
-    typeof rule[0] === "string" &&
-    typeof rule[1]?.ltr === "string" &&
-    Number.isFinite(rule[2])
-  );
-}
-
-function isStyleSystem(value: unknown): value is StyleSystem {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    "name" in value &&
-    value.name === "stylex" &&
-    "profile" in value &&
-    value.profile === "zgui-stylex-v1" &&
-    "configDigest" in value &&
-    typeof value.configDigest === "string" &&
-    /^sha256:[a-f0-9]{64}$/.test(value.configDigest) &&
-    "nativeProfileDigest" in value &&
-    typeof value.nativeProfileDigest === "string" &&
-    /^sha256:[a-f0-9]{64}$/.test(value.nativeProfileDigest)
-  );
-}
-
-// Babel owns JSX lowering; Rolldown composes this map with its ES2022 output map.
+// Single-pass Solid Universal + TypeScript lowering paired with Lightning CSS Modules.
 function compilerOptions(
   entry: string,
   {
@@ -179,20 +143,26 @@ function compilerOptions(
     appDirectory = path.dirname(entry),
     plugins = [],
     babelTransform = transformAsync,
-    stylexDiagnostics = false,
     development = false,
     hoistComponentStyles = true,
   }: CompilerOptions,
 ): InputOptions {
-  // Rolldown 1.3.2 watch rescans the graph even with incrementalBuild enabled.
-  // Keep expensive Babel/Solid work incremental without caching resolution or diagnostics.
   const transforms = new Map<string, CachedTransform>();
-  let nativeProfileDigest: string;
-  let publicationStyleSystem: StyleSystem;
   function pruneTransforms(this: PluginContext): void {
-    const active = new Set(this.getModuleIds());
-    for (const filename of transforms.keys())
+    const active = new Set<string>();
+    for (const id of this.getModuleIds()) {
+      active.add(id);
+      if (!id.startsWith("\0")) {
+        try {
+          active.add(realpathSync(id));
+        } catch {
+          // Ignore virtual or deleted module paths.
+        }
+      }
+    }
+    for (const filename of transforms.keys()) {
       if (!active.has(filename)) transforms.delete(filename);
+    }
   }
   return {
     cwd: appDirectory,
@@ -218,16 +188,9 @@ function compilerOptions(
     },
     plugins: [
       {
-        name: "stylex-solid-universal-typescript",
+        name: "lightningcss-solid-universal-typescript",
         resolveId(source) {
           validateImport(source);
-        },
-        buildStart() {
-          this.addWatchFile(path.join(root, "schemas/stylex-profile.json"));
-          const digest = readNativeProfileDigest(root);
-          if (nativeProfileDigest !== digest) transforms.clear();
-          nativeProfileDigest = digest;
-          publicationStyleSystem = styleSystem(stylexDiagnostics, digest);
         },
         buildEnd: pruneTransforms,
         outputOptions(options) {
@@ -242,32 +205,32 @@ function compilerOptions(
           };
         },
         generateBundle(_options, output) {
-          const active = new Set(this.getModuleIds());
-          const modules = [...transforms]
-            .filter(([filename]) => active.has(filename))
-            .map(([, record]) => record);
-          const { css, origins } = finalizeStylex(modules);
-          this.emitFile({ type: "asset", fileName: "app.css", source: css });
-          this.emitFile({
-            type: "asset",
-            fileName: "style-origins.json",
-            source:
-              JSON.stringify({ ...origins, styleSystem: publicationStyleSystem }, null, 2) + "\n",
-          });
-          if (hoistComponentStyles) {
-            const reachable = new Set<string>();
-            for (const item of Object.values(output)) {
-              if (item.type !== "chunk") continue;
-              for (const id of item.moduleIds) {
-                if (id.startsWith("\0")) continue;
-                reachable.add(id);
-                try {
-                  reachable.add(realpathSync(id));
-                } catch {
-                  // Ignore virtual or non-filesystem module IDs.
-                }
+          const reachable = new Set<string>();
+          for (const item of Object.values(output)) {
+            if (item.type !== "chunk") continue;
+            for (const id of item.moduleIds) {
+              if (id.startsWith("\0")) continue;
+              reachable.add(id);
+              try {
+                reachable.add(realpathSync(id));
+              } catch {
+                // Ignore virtual or non-filesystem module IDs.
               }
             }
+          }
+          const cssModuleParts = [...transforms.entries()]
+            .filter(
+              ([filename, record]) => record.cssModuleCss !== undefined && reachable.has(filename),
+            )
+            .map(([, record]) => record)
+            .sort((a, b) => (a.identity < b.identity ? -1 : a.identity > b.identity ? 1 : 0))
+            .map(record => record.cssModuleCss!)
+            .filter(part => part.length > 0);
+          const mergedModulesCss =
+            cssModuleParts.length > 0 ? `${cssModuleParts.join("\n\n")}\n` : "";
+          this.emitFile({ type: "asset", fileName: "app.css", source: mergedModulesCss });
+
+          if (hoistComponentStyles) {
             const hoisted = new Map<string, string>();
             for (const [filename, record] of transforms) {
               if (!record.componentSheet || !reachable.has(filename)) continue;
@@ -279,8 +242,7 @@ function compilerOptions(
                 .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
                 .map(([name, sheetCss]) => `/* ${name} */\n${sheetCss}`)
                 .join("\n");
-              const componentsCss = `@layer zgui.components {\n${body}\n}\n`;
-              validateStylesheet(componentsCss, "components.css");
+              const componentsCss = `${validateStylesheet(`@layer zgui.components {\n${body}\n}`, "components.css")}\n`;
               this.emitFile({ type: "asset", fileName: "components.css", source: componentsCss });
             }
           }
@@ -292,72 +254,58 @@ function compilerOptions(
           if (!this.meta.watchMode) transforms.clear();
         },
         async transform(source, filename) {
-          if (filename.startsWith("\0") || !/\.[cm]?[jt]sx?$/.test(filename)) return null;
-          filename = await realpath(filename);
-          const cached = transforms.get(filename);
+          if (filename.startsWith("\0")) return null;
+          if (/\.module\.css$/i.test(filename)) {
+            const real = await realpath(filename);
+            const cached = transforms.get(real);
+            if (cached?.source === source) return cached.result;
+            const identity = moduleIdentity(real, { root, appDirectory });
+            const { css, exports: exportsMap } = transformStylesheet(source, {
+              filename: identity,
+              cssModules: true,
+            });
+            const code = `export default Object.freeze(${JSON.stringify(exportsMap, null, 2)});\n`;
+            const result: SourceDescription = {
+              code,
+              map: { version: 3, sources: [real], names: [], mappings: "AAAA" },
+              moduleType: "js",
+            };
+            transforms.set(real, {
+              source,
+              identity,
+              result,
+              cssModuleCss: css,
+            });
+            return result;
+          }
+          if (!/\.[cm]?[jt]sx?$/.test(filename)) return null;
+          const real = await realpath(filename);
+          const cached = transforms.get(real);
           if (cached?.source === source) return cached.result;
+          const identity = moduleIdentity(real, { root, appDirectory });
           if (hoistComponentStyles) {
-            const componentSheet = extractStaticComponentSheet(source, filename);
+            const componentSheet = extractStaticComponentSheet(source, real);
             if (componentSheet) {
               const code = `export const sheet = { name: ${JSON.stringify(componentSheet.name)}, className: ${JSON.stringify(componentSheet.className)}, css: "" };\n`;
               const result: SourceDescription = {
                 code,
-                map: { version: 3, sources: [filename], names: [], mappings: "AAAA" },
+                map: { version: 3, sources: [real], names: [], mappings: "AAAA" },
                 moduleType: "js",
               };
-              transforms.set(filename, {
+              transforms.set(real, {
                 source,
+                identity,
                 result,
-                rules: [],
-                identity: moduleIdentity(filename, { root, appDirectory }),
                 componentSheet,
               });
               return result;
             }
           }
-          validateStylexModule(source, { filename });
-          // Pass one preserves JSX and TypeScript; its metadata is owned by this build pass.
-          const first = await transformAsync(source, {
-            filename,
+          const transformed = await babelTransform(source, {
+            filename: real,
             babelrc: false,
             configFile: false,
             sourceMaps: true,
-            parserOpts: {
-              plugins: /\.[cm]?ts$/.test(filename) ? ["typescript"] : ["typescript", "jsx"],
-            },
-            plugins: [
-              [
-                stylexPlugin,
-                stylexOptions(
-                  appDirectory,
-                  stylexDiagnostics,
-                  filename => moduleIdentity(filename, { root, appDirectory }),
-                  nativeProfileDigest,
-                ),
-              ],
-            ],
-          });
-          const metadata: unknown = first?.metadata;
-          if (
-            !first?.code ||
-            !first.map ||
-            typeof metadata !== "object" ||
-            metadata === null ||
-            !("stylex" in metadata) ||
-            !Array.isArray(metadata.stylex)
-          ) {
-            throw new Error(`StyleX emitted missing or incompatible output for ${filename}`);
-          }
-          const rules: unknown[] = metadata.stylex;
-          if (!rules.every(isStylexRule)) {
-            throw new Error(`StyleX emitted incompatible rule metadata for ${filename}`);
-          }
-          const transformed = await babelTransform(first.code, {
-            filename,
-            babelrc: false,
-            configFile: false,
-            sourceMaps: true,
-            inputSourceMap: first.map,
             presets: [
               {
                 plugins: [
@@ -372,25 +320,23 @@ function compilerOptions(
                 {
                   onlyRemoveTypeImports: true,
                   allExtensions: true,
-                  isTSX: /\.tsx$/.test(filename),
+                  isTSX: /\.tsx$/.test(real),
                 },
               ],
             ],
           });
           if (!transformed?.code || !transformed.map)
-            throw new Error(`Babel emitted no JavaScript or composed source map for ${filename}`);
-          validateModule(transformed.code, { filename });
-          validateStylexModule(transformed.code, { filename, compiled: true });
+            throw new Error(`Babel emitted no JavaScript or source map for ${real}`);
+          validateModule(transformed.code, { filename: real });
           const result: SourceDescription = {
             code: transformed.code,
             map: transformed.map,
             moduleType: "js",
           };
-          transforms.set(filename, {
+          transforms.set(real, {
             source,
+            identity,
             result,
-            rules: structuredClone(rules),
-            identity: moduleIdentity(filename, { root, appDirectory }),
           });
           return result;
         },
@@ -411,7 +357,6 @@ function outputOptions(filename = "app.mjs", { codeSplitting = true } = {}): Out
   };
 }
 
-// A native graph, not an emulation of another bundler's metadata schema.
 function compilationResult(
   output: (OutputAsset | OutputChunk)[],
   moduleIds: Iterable<string>,
@@ -445,14 +390,10 @@ function compilationResult(
       files.set(`${item.fileName}.map`, Buffer.from(item.map.toString()));
     } else files.set(item.fileName, Buffer.from(item.source));
   }
-  const origins = files.get("style-origins.json");
-  if (!files.has("app.css") || !origins)
-    throw new Error("Missing StyleX stylesheet or provenance output");
-  const { styleSystem }: { styleSystem?: unknown } = JSON.parse(origins.toString());
-  if (!isStyleSystem(styleSystem)) {
-    throw new Error("Missing or incompatible StyleX profile metadata");
+  if (!files.has("app.css")) {
+    throw new Error("Missing Lightning CSS stylesheet output");
   }
-  return { files, graph, solidRuntime, styleSystem };
+  return { files, graph, solidRuntime, styleSystem: styleSystem() };
 }
 
 export async function compileBundle(
@@ -462,7 +403,6 @@ export async function compileBundle(
     appDirectory = path.dirname(entry),
     hostEntry = true,
     filename = "app.mjs",
-    stylexDiagnostics = false,
     development = false,
     babelTransform = transformAsync,
     plugins = [],
@@ -473,7 +413,6 @@ export async function compileBundle(
     compilerOptions(entry, {
       root,
       appDirectory,
-      stylexDiagnostics,
       development,
       hoistComponentStyles: hostEntry,
       babelTransform,
@@ -609,7 +548,6 @@ export function watchBundle(
     temporaryDirectory,
     filename = "app.mjs",
     buildDelay = 80,
-    stylexDiagnostics = false,
     development = false,
     babelTransform = transformAsync,
     watchFiles = [],
@@ -631,7 +569,6 @@ export function watchBundle(
     ...compilerOptions(entry, {
       root,
       appDirectory,
-      stylexDiagnostics,
       development,
       hoistComponentStyles: true,
       babelTransform,

@@ -55,19 +55,13 @@ pub fn snapshot(window: &Window, region: &SessionRegion, generation: u64, ordina
         let test_id_truncated = node.test_id.is_some() && test_id.is_none();
         metadata_truncated |= test_id_truncated;
         let state = native_state(window, node.native);
-        let style_source = window.dom().attribute(node.native, zgui::view::AttrName::new("data-style-src"))
-            .filter(|source| {
-                if source.len() > metadata_budget { metadata_truncated = true; return false; }
-                metadata_budget -= source.len();
-                true
-            });
         nodes.push(NodeEvidence {
             token:format!("node-{}",node.token), parent:node.parent.map(|token|format!("node-{token}")),
             surface:region.name.clone(), generation, kind:node.kind.into(),
             ownership:"application".into(), text, text_truncated:truncated,
             test_id:test_id.map(str::to_owned), test_id_truncated, role:semantic.as_ref().map(|value|value.role.clone()),
             name:semantic.as_ref().and_then(|value|value.name.clone()),
-            source:style_source.map(serde_json::Value::String).unwrap_or(serde_json::Value::Null),
+            source:serde_json::Value::Null,
             value:semantic.as_ref().and_then(|value|value.value.clone()),
             name_truncated:semantic.as_ref().is_some_and(|value|value.name_truncated),
             value_truncated:semantic.as_ref().is_some_and(|value|value.value_truncated),

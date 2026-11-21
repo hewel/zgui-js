@@ -1,13 +1,8 @@
-import * as stylex from "@stylexjs/stylex";
 import { createSignal, createSpring, renderApp } from "@hewel/zgui";
 import type { NativeNode } from "@hewel/zgui";
+import styles from "./shell-primitives.module.css";
 
 export const hostApiVersion = 1;
-
-const styles = stylex.create({
-  glass: { backdropFilter: "grayscale(1)" },
-  lettering: { fontVariationSettings: '"wght" 650', textShadow: "24px 0 #0000ff" },
-});
 
 export function mount(root: NativeNode) {
   return renderApp(() => {
@@ -16,10 +11,10 @@ export function mount(root: NativeNode) {
     const [log, setLog] = createSignal("");
     return <column style="position: fixed; inset: 0; background: white; color: black">
       <box style="position: fixed; left: 16px; top: 16px; width: 144px; height: 48px; background: red" />
-      <box {...stylex.props(styles.glass)} style="position: fixed; left: 88px; top: 16px; width: 72px; height: 48px" />
+      <box class={styles.glass} style="position: fixed; left: 88px; top: 16px; width: 72px; height: 48px" />
       <box style={{ position: "fixed", left: "184px", top: "16px", width: "48px", height: "48px",
         background: "black", boxShadow: "12px 0 #00ff00" }} />
-      <text {...stylex.props(styles.lettering)} style="position: fixed; left: 280px; top: 16px; font-size: 30px">Hi</text>
+      <text class={styles.lettering} style="position: fixed; left: 280px; top: 16px; font-size: 30px">Hi</text>
       <scroll testId="wheel-scroll" style="position: fixed; left: 16px; top: 100px; width: 120px; height: 100px; overflow: auto"
         onWheelCapture={event => {
           const { x, y, unit } = event.delta;

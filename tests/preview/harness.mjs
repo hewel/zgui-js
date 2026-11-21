@@ -52,12 +52,17 @@ export async function writeScenario(filePath, id, steps, requiredCapabilities) {
   });
 }
 
-export async function buildFixtureApp(appDir, name, source, { rawSource = false, assets = {}, fonts = [], capabilities, development = false } = {}) {
+export async function buildFixtureApp(appDir, name, source, { rawSource = false, assets = {}, files = {}, fonts = [], capabilities, development = false } = {}) {
   await mkdir(path.join(appDir, "src"), { recursive: true });
   const content = rawSource
     ? source
     : await readFile(source instanceof URL ? fileURLToPath(source) : source, "utf8");
   await writeFile(path.join(appDir, "src/main.tsx"), content);
+  for (const [relPath, fileContent] of Object.entries(files)) {
+    const dest = path.join(appDir, relPath);
+    await mkdir(path.dirname(dest), { recursive: true });
+    await writeFile(dest, fileContent);
+  }
   const assetEntries = Object.entries(assets);
   if (fonts.length > 0 || capabilities !== undefined) {
     await writeJson(path.join(appDir, "package.json"), { name, private: true, zgui: { fonts, capabilities } });
@@ -70,7 +75,7 @@ export async function buildFixtureApp(appDir, name, source, { rawSource = false,
   }
   await writeJson(path.join(appDir, "tsconfig.json"), {
     extends: path.join(workspaceRoot, "packages/ui/tsconfig.native.json"),
-    include: ["src/**/*.tsx"],
+    include: ["src/**/*.ts", "src/**/*.tsx"],
   });
   await buildApplication(name, { appDirectory: appDir, development });
   return path.join(appDir, "dist");

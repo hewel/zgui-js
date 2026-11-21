@@ -3,6 +3,7 @@ import { readdir, access } from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { syncCssModuleTypes } from "./css.ts";
 
 const compilerCli = path.join(
   path.dirname(createRequire(import.meta.url).resolve("tsrs/package.json")),
@@ -82,9 +83,11 @@ export async function typecheckWorkspace(
   }
   for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
     if (!entry.isDirectory()) continue;
-    const config = path.join(examples, entry.name, "tsconfig.json");
+    const exampleDir = path.join(examples, entry.name);
+    const config = path.join(exampleDir, "tsconfig.json");
     try {
       await access(config);
+      await syncCssModuleTypes(exampleDir, { root });
       configs.push(config);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;

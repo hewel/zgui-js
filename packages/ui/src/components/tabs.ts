@@ -13,17 +13,7 @@ import { callHandler, createControllable } from "./state.js";
 import { classes, isStaticProps, provide, slot, useStylesheet, withDefaults } from "./shared.js";
 import { createRovingFocus, groupOrientation } from "./roving.js";
 import type { GroupOrientation } from "./roving.js";
-import { sheet as upstreamSheet } from "./generated/TabsStyle.js";
-
-const sheet = {
-  ...upstreamSheet,
-  css: upstreamSheet.css
-    .replaceAll('.zui-tabs__list[data-variant="default"] .zui-tabs__trigger', '.zui-tabs__trigger[data-variant="default"]')
-    .replaceAll('.zui-tabs__list[data-variant="line"] .zui-tabs__trigger', '.zui-tabs__trigger[data-variant="line"]')
-    .replaceAll(`.${upstreamSheet.className}[data-orientation="vertical"] .zui-tabs__list`, '.zui-tabs__list[data-orientation="vertical"]')
-    .replaceAll(`.${upstreamSheet.className}[data-orientation="vertical"] .zui-tabs__trigger`, '.zui-tabs__trigger[data-orientation="vertical"]')
-    .replaceAll(`.${upstreamSheet.className}[data-orientation="horizontal"] .zui-tabs__trigger`, '.zui-tabs__trigger[data-orientation="horizontal"]'),
-};
+import { sheet } from "./generated/TabsStyle.js";
 
 export type TabsActivation = "automatic" | "manual";
 export type TabsListVariant = "default" | "line";

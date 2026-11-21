@@ -17,7 +17,6 @@ const usage = `Usage: zgui-js <dev|build|preview> [DIRECTORY | --app NAME_OR_DIR
 
 Application defaults to the current directory (counter at the repository root).
   build --watch          Watch packages without starting a host
-  build --stylex-diagnostics  Include StyleX source metadata (Preview always includes it)
   --capabilities-file F   Merge capability declarations into build, dev, or preview
   dev, preview --host-root DIR          Build the host from this checkout and run it there
   dev, preview --host-executable PATH   Run this prebuilt host instead of invoking Cargo
@@ -48,7 +47,6 @@ type Command =
       command: "build";
       selector?: string;
       watch: boolean;
-      stylexDiagnostics: boolean;
       capabilitiesFile?: string;
     }
   | ({
@@ -78,7 +76,6 @@ function parse(args: string[]): Command {
   const allowed = new Set([
     "--app",
     "--capabilities-file",
-    ...(command === "build" ? ["--stylex-diagnostics"] : []),
     ...(command === "build" || command === "preview" ? ["--watch"] : []),
     ...(command === "dev" || command === "preview" ? ["--host-root", "--host-executable"] : []),
     ...(command === "dev"
@@ -104,7 +101,7 @@ function parse(args: string[]): Command {
       continue;
     }
     if (!allowed.has(arg) || flags.has(arg)) throw new Error(`Unknown or duplicate option: ${arg}`);
-    if (arg === "--watch" || arg === "--stylex-diagnostics" || arg === "--pure-shell") {
+    if (arg === "--watch" || arg === "--pure-shell") {
       flags.set(arg, true);
       continue;
     }
@@ -152,7 +149,6 @@ function parse(args: string[]): Command {
         selector,
         capabilitiesFile,
         watch: flags.has("--watch"),
-        stylexDiagnostics: flags.has("--stylex-diagnostics"),
       };
     case "dev":
       return {
@@ -183,9 +179,7 @@ function parse(args: string[]): Command {
   }
 }
 
-async function watchBuild(
-  application: ResolvedApplication & { stylexDiagnostics: boolean; capabilitiesFile?: string },
-) {
+async function watchBuild(application: ResolvedApplication & { capabilitiesFile?: string }) {
   const watcher = watchApplication(application.app, application);
   let closing: Promise<void> | undefined;
   const stop = () => {
@@ -270,11 +264,10 @@ try {
           }),
         );
       } else {
-        const options = { ...application, stylexDiagnostics: selected.stylexDiagnostics };
         if (selected.watch) {
-          await watchBuild(options);
+          await watchBuild(application);
         } else {
-          const { dist, manifest } = await buildApplication(application.app, options);
+          const { dist, manifest } = await buildApplication(application.app, application);
           console.log(`Published ${dist} ${manifest.buildId}`);
         }
       }

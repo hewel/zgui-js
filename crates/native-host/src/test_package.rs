@@ -11,14 +11,13 @@ impl Fixture {
     pub(crate) fn with_styles(source: &str, styles: &[(&str, &str)]) -> Self {
         let directory = std::env::temp_dir().join(format!("zgui-lifecycle-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
         fs::create_dir(&directory).unwrap();
-        let style_system = serde_json::json!({"name":"stylex","profile":"zgui-stylex-v1",
-            "configDigest":format!("sha256:{:x}", Sha256::digest(b"test")),"nativeProfileDigest":crate::package::native_profile_digest()});
+        let style_system = serde_json::json!({"name":"lightningcss","profile":"lightningcss-v1",
+            "configDigest":format!("sha256:{:x}", Sha256::digest(b"test"))});
         let metadata = serde_json::to_vec(&serde_json::json!({"styleSystem":style_system})).unwrap();
         let mut files = BTreeMap::from([
             ("app.mjs", source.as_bytes()),
             ("app.mjs.map", br#"{"version":3,"sources":[],"names":[],"mappings":""}"#.as_slice()),
             ("test.txt", b"completed".as_slice()),
-            ("style-origins.json", metadata.as_slice()),
             ("build-info.json", metadata.as_slice()),
         ]);
         files.extend(styles.iter().map(|(path, css)| (*path, css.as_bytes())));

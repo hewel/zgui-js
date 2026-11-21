@@ -543,9 +543,6 @@ fn snapshot_surface(
             None
         };
         let state = native_state(window, node.native);
-        let style_source = window
-            .dom()
-            .attribute(node.native, zgui::view::AttrName::new("data-style-src"));
         let role = window
             .dom()
             .semantics(node.native)
@@ -560,7 +557,6 @@ fn snapshot_surface(
             "text": text,
             "textTruncated": truncated,
             "redacted": redacted,
-            "source": style_source,
             "state": {
                 "enabled": state.map(|v| v.0),
                 "visible": state.map(|v| v.1),

@@ -5,23 +5,23 @@ import { test } from "node:test";
 import { buildApplication, workspaceRoot } from "../../packages/build/src/build.ts";
 import { createTempWorkspace, runScenario, writeJson } from "./harness.mjs";
 
-const LAZY_ROUTE_SOURCE = `
-import * as stylex from "@stylexjs/stylex";
+const LAZY_ROUTE_CSS = `
+.card {
+  padding: 12px;
+  background-color: #1e3a5f;
+  color: #ffffff;
+}
+`;
 
-const styles = stylex.create({
-  card: {
-    padding: "12px",
-    backgroundColor: "#1e3a5f",
-    color: "#ffffff",
-  },
-});
+const LAZY_ROUTE_SOURCE = `
+import styles from "./heavy-route.module.css";
 
 // Substantial static payload to prove initial JS heap stays smaller before lazy import.
 const TABLE = Array.from({ length: 4000 }, (_, i) => \`lazy-row-\${i}-\${"x".repeat(48)}\`);
 
 export function HeavyPanel() {
   return (
-    <box testId="lazy-panel" {...stylex.props(styles.card)}>
+    <box testId="lazy-panel" class={styles.card}>
       <label testId="lazy-panel-text">{\`Loaded \${TABLE.length} rows (\${TABLE[0]})\`}</label>
     </box>
   );
@@ -102,11 +102,12 @@ export function mount(root: NativeNode): () => void {
 
 async function buildSplitFixture(appDir, name, mainSource) {
   await mkdir(path.join(appDir, "src"), { recursive: true });
+  await writeFile(path.join(appDir, "src/heavy-route.module.css"), LAZY_ROUTE_CSS);
   await writeFile(path.join(appDir, "src/heavy-route.tsx"), LAZY_ROUTE_SOURCE);
   await writeFile(path.join(appDir, "src/main.tsx"), mainSource);
   await writeJson(path.join(appDir, "tsconfig.json"), {
     extends: path.join(workspaceRoot, "packages/ui/tsconfig.native.json"),
-    include: ["src/**/*.tsx"],
+    include: ["src/**/*.ts", "src/**/*.tsx"],
   });
   return buildApplication(name, { appDirectory: appDir });
 }
@@ -130,7 +131,7 @@ test("sealed JS code-splitting merges all CSS statically, lazy-loads verified ch
     assert.ok(splitBuild.manifest.artifactDigests[chunk.sourceMap], `missing digest for ${chunk.sourceMap}`);
   }
   const mergedCss = await readFile(path.join(splitBuild.dist, "app.css"), "utf8");
-  assert.ok(mergedCss.includes("#1e3a5f"), "lazy chunk StyleX CSS must be statically merged into app.css at build time");
+  assert.ok(mergedCss.includes("#1e3a5f"), "lazy chunk CSS Module styles must be statically merged into app.css at build time");
   assert.equal(eagerBuild.manifest.chunks, undefined, "single-chunk package keeps chunks omitted for compatibility");
 
   // 2. Compare initial JS heap before loading lazy route vs eager baseline.

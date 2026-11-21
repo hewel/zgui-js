@@ -1,6 +1,6 @@
 ---
 name: zgui-dev
-description: Develop native UI apps and Wayland desktop shells with @hewel/zgui, @hewel/zgui-services, and @hewel/zgui-build. Use when building TSX screens, StyleX styles, shell surfaces (LayerSurface, PopupSurface, SessionLockSurface, WindowSurface), host services (Unix sockets, commands, control messages, image handles), vector/spring animations, or configuring zgui.capabilities manifests.
+description: Develop native UI apps and Wayland desktop shells with @hewel/zgui, @hewel/zgui-services, and @hewel/zgui-build. Use when building TSX screens, CSS Modules (*.module.css) styles, shell surfaces (LayerSurface, PopupSurface, SessionLockSurface, WindowSurface), host services (Unix sockets, commands, control messages, image handles), vector/spring animations, or configuring zgui.capabilities manifests.
 ---
 
 Guide for authoring native QuickJS-NG + Solid 2.0.1 applications and Wayland desktop shells targeting `zgui-js`.
@@ -24,8 +24,8 @@ Guide for authoring native QuickJS-NG + Solid 2.0.1 applications and Wayland des
    - For multi-output bars (`LayerSurface`), anchored popovers (`PopupSurface`), secondary windows (`WindowSurface`), input regions, and lockscreens (`SessionLockSurface`), read [`references/shell-surfaces.md`](references/shell-surfaces.md).
 3. **Author UI, styles, and motion**:
    - Use semantic native tags (`<box>`, `<row>`, `<column>`, `<scroll>`, `<text>`, `<vector>`), windowed `<VirtualList>`/`<VirtualGrid>` for large collections, and themed components from `@hewel/zgui/components`.
-   - Prefer StyleX (`@stylexjs/stylex`) or typed `NativeStyle` objects. Whenever emitting a dynamic `style` string, include all inline declarations and `--*` custom properties together in that string.
-   - For StyleX rules, `createSpring`, `<vector>` (`svg` / `createCanvasScene`), and wheel/scroll handling, read [`references/styling-and-motion.md`](references/styling-and-motion.md).
+   - Author application styles in `src/app.css` and locally scoped `*.module.css` (compiled by Lightning CSS with `--zui-*` tokens and `[data-*]` state selectors), compose classes with `cx(...)` on `class`, and reserve typed `NativeStyle` objects for continuous dynamic values. Whenever emitting a dynamic `style` string, include all inline declarations and `--*` custom properties together in that string.
+   - For CSS Modules rules, `createSpring`, `<vector>` (`svg` / `createCanvasScene`), and wheel/scroll handling, read [`references/styling-and-motion.md`](references/styling-and-motion.md).
 4. **Build, lint, and typecheck**:
    - Target `@hewel/zgui/tsconfig.native.json` (or `"jsxImportSource": "@hewel/zgui"`).
    - Build via `@hewel/zgui-build` (`buildApplication`, `watchApplication`, `devApplication`, `previewApplication`) or the workspace CLI (`bun run build --app <name>`).

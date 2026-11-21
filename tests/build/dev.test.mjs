@@ -54,7 +54,7 @@ for (const mode of ["desktop", "preview"]) {
     const fixture = lifecycle({ prepare: () => prepared.promise });
     t.after(() => fixture.signals.emit("SIGTERM"));
     const result = devApplication("counter", { mode, hostArgs: ["--exit-after-ms", "50"] }, fixture.dependencies);
-    assert.equal(fixture.callbacks.stylexDiagnostics, mode === "preview");
+    assert.equal(fixture.callbacks.development, mode === "desktop");
     fixture.callbacks.onError(new Error("initial TSX failure"));
     assert.equal(fixture.launches, 0);
     fixture.publish();

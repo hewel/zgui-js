@@ -6,11 +6,7 @@ import { append, classes, element, isStaticProps, provide, slot, useStylesheet, 
 import { createRovingFocus } from "./roving.js";
 import { createDisclosure, DisclosureContext, disclosureContent } from "./collapsible.js";
 import { Icon, CHEVRON_DOWN } from "./icons.js";
-import { sheet as upstreamSheet } from "./generated/AccordionStyle.js";
-
-const sheet = { ...upstreamSheet, css: upstreamSheet.css
-  .replaceAll('.zui-accordion__content .zui-collapsible__measure', '.zui-accordion__measure')
-  .replaceAll('.zui-accordion__trigger[data-state="open"] .zui-accordion__chevron', '.zui-accordion__chevron[data-state="open"]') };
+import { sheet } from "./generated/AccordionStyle.js";
 export type AccordionSelection = "single" | "multiple";
 export interface AccordionProps extends NativeElementProps {
   value?: readonly string[];

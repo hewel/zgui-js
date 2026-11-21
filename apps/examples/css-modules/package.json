@@ -1,0 +1,13 @@
+{
+  "name": "example-css-modules",
+  "private": true,
+  "type": "module",
+  "zgui": {
+    "id": "dev.example.css-modules",
+    "window": {
+      "title": "CSS Modules Showcase",
+      "width": 640,
+      "height": 420
+    }
+  }
+}

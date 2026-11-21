@@ -349,7 +349,7 @@ test("compute worker teardown detects leaked workers, build blocks UI imports, a
   });
   await assert.rejects(
     () => buildApplication("bad-worker-app", { appDirectory: badDir }),
-    /Compute worker cannot import UI, Solid, StyleX, or host service module/,
+    /Compute worker cannot import UI, Solid, or host service module/,
   );
 
   // 2. Leaked worker outside Solid owner cleanup fails teardown with resources.workers === 1.

@@ -343,7 +343,6 @@ pub struct StyleSystem {
     pub name: String,
     pub profile: String,
     pub config_digest: String,
-    pub native_profile_digest: String,
 }
 }
 
@@ -402,12 +401,9 @@ impl Package {
             window.validate()?;
         }
         manifest.capabilities.validate()?;
-        if manifest.style_system.name != "stylex" || manifest.style_system.profile != "zgui-stylex-v1"
+        if manifest.style_system.name != "lightningcss" || manifest.style_system.profile != "lightningcss-v1"
             || !valid_digest(&manifest.style_system.config_digest) {
             return Err("unsupported style system/profile or invalid config digest".into());
-        }
-        if manifest.style_system.native_profile_digest != native_profile_digest() {
-            return Err(format!("native style profile digest mismatch: expected {}, got {}", native_profile_digest(), manifest.style_system.native_profile_digest).into());
         }
         if !valid_digest(&manifest.build_id) { return Err("invalid package buildId".into()); }
         if manifest.chunks.len() > MAX_CHUNKS {
@@ -425,7 +421,7 @@ impl Package {
             .chain(worker_resources)
             .chain(manifest.styles.iter().map(String::as_str))
             .chain(manifest.assets.iter().map(String::as_str))
-            .chain(["style-origins.json", "build-info.json"])
+            .chain(std::iter::once("build-info.json"))
         {
             if name == "manifest.json" || files.contains_key(name) {
                 return Err(format!("duplicate or reserved resource: {name}").into());
@@ -460,13 +456,14 @@ impl Package {
             }
         }
         let style_identity = serde_json::to_value(&manifest.style_system)?;
-        for name in ["style-origins.json", "build-info.json"] {
+        {
+            let name = "build-info.json";
             let bytes = files.remove(name).ok_or_else(|| format!("missing metadata: {name}"))?;
             let value: serde_json::Value = serde_json::from_slice(&bytes)?;
             drop(bytes);
             if !value.is_object() { return Err(format!("{name} must be a JSON object").into()); }
             if value.get("styleSystem") != Some(&style_identity) {
-                return Err(format!("SX14: {name} styleSystem identity is missing or differs from manifest").into());
+                return Err(format!("{name} styleSystem identity is missing or differs from manifest").into());
             }
         }
         let source_bytes = files.remove(&manifest.entry).ok_or("missing entry")?;
@@ -607,8 +604,8 @@ impl Package {
         Ok(Arc::from(String::from_utf8(bytes)?))
     }
 
-    /// Read and digest-verify a declared JSON metadata artifact (e.g., `style-origins.json`
-    /// or `build-info.json`) on demand so live desktop sessions never retain parsed trees.
+    /// Read and digest-verify a declared JSON metadata artifact (e.g., `build-info.json`)
+    /// on demand so live desktop sessions never retain parsed trees.
     pub fn read_verified_json(&self, name: &str) -> Result<serde_json::Value> {
         let expected = self.manifest.artifact_digests.get(name)
             .ok_or_else(|| format!("undeclared package metadata resource: {name}"))?;
@@ -860,15 +857,6 @@ fn valid_digest(value: &str) -> bool {
 
 fn digest(bytes: &[u8]) -> String { format!("sha256:{:x}", Sha256::digest(bytes)) }
 
-pub(crate) fn native_profile_digest() -> &'static str {
-    static DIGEST: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
-        let profile: serde_json::Value = serde_json::from_str(include_str!("../../../schemas/stylex-profile.json"))
-            .expect("native StyleX profile descriptor is valid JSON");
-        digest(&canonical_bytes(&profile).expect("native StyleX profile descriptor serializes"))
-    });
-    &DIGEST
-}
-
 fn canonical_bytes(value: &serde_json::Value) -> Result<Vec<u8>> {
     fn append(value: &serde_json::Value, bytes: &mut Vec<u8>) -> Result<()> {
         match value {
@@ -960,10 +948,9 @@ mod tests {
         fn publish(&self, source: &[u8], map: &[u8]) {
             fs::write(self.0.join("app.mjs"), source).unwrap();
             fs::write(self.0.join("app.mjs.map"), map).unwrap();
-            let style_system = serde_json::json!({"name":"stylex","profile":"zgui-stylex-v1",
-                "configDigest":digest(b"test"),"nativeProfileDigest":native_profile_digest()});
+            let style_system = serde_json::json!({"name":"lightningcss","profile":"lightningcss-v1",
+                "configDigest":digest(b"test")});
             let metadata = serde_json::to_vec(&serde_json::json!({"styleSystem":style_system})).unwrap();
-            fs::write(self.0.join("style-origins.json"), &metadata).unwrap();
             fs::write(self.0.join("build-info.json"), &metadata).unwrap();
             let manifest = serde_json::json!({"schemaVersion":2,"id":"test","hostApiVersion":1,"entry":"app.mjs","sourceMap":"app.mjs.map","styles":[],"assets":[],"fonts":[],
                 "styleSystem":style_system,"artifactDigests":{}});
@@ -978,7 +965,7 @@ mod tests {
                 .chain(["styles", "assets"].into_iter().flat_map(|key| manifest[key].as_array().unwrap().iter().map(|value| value.as_str().unwrap().to_owned())))
                 .chain(chunk_names)
                 .chain(worker_names)
-                .chain(["style-origins.json".into(), "build-info.json".into()]).collect();
+                .chain(std::iter::once("build-info.json".into())).collect();
             manifest["artifactDigests"] = names.into_iter().map(|name| {
                 let hash = digest(&fs::read(self.0.join(&name)).unwrap()); (name, serde_json::json!(hash))
             }).collect::<serde_json::Map<_, _>>().into();
@@ -1049,17 +1036,16 @@ mod tests {
     fn rejects_mixed_metadata_identities_even_when_every_artifact_and_build_hash_is_valid() {
         let fixture = Fixture::new();
         fixture.publish(b"export {};", br#"{"version":3,"sources":[],"names":[],"mappings":""}"#);
-        for resource in ["style-origins.json", "build-info.json"] {
-            let original = fs::read(fixture.0.join(resource)).unwrap();
-            for identity in [None, Some(serde_json::json!({"name":"stylex","profile":"other","configDigest":digest(b"other")}))] {
-                let metadata = identity.map(|identity|serde_json::json!({"styleSystem":identity})).unwrap_or_else(||serde_json::json!({}));
-                fs::write(fixture.0.join(resource), serde_json::to_vec(&metadata).unwrap()).unwrap();
-                fixture.save(manifest(&fixture));
-                assert!(Package::load(&fixture.0).err().unwrap().to_string().contains("SX14"), "accepted mixed {resource}");
-            }
-            fs::write(fixture.0.join(resource), &original).unwrap();
+        let resource = "build-info.json";
+        let original = fs::read(fixture.0.join(resource)).unwrap();
+        for identity in [None, Some(serde_json::json!({"name":"lightningcss","profile":"other","configDigest":digest(b"other")}))] {
+            let metadata = identity.map(|identity|serde_json::json!({"styleSystem":identity})).unwrap_or_else(||serde_json::json!({}));
+            fs::write(fixture.0.join(resource), serde_json::to_vec(&metadata).unwrap()).unwrap();
             fixture.save(manifest(&fixture));
+            assert!(Package::load(&fixture.0).err().unwrap().to_string().contains("styleSystem identity"), "accepted mixed {resource}");
         }
+        fs::write(fixture.0.join(resource), &original).unwrap();
+        fixture.save(manifest(&fixture));
         assert!(Package::load(&fixture.0).is_ok());
     }
 
@@ -1069,7 +1055,7 @@ mod tests {
         fixture.publish(b"export {};", br#"{"version":3,"sources":[],"names":[],"mappings":""}"#);
         let generation = fixture.0.join(".zgui-generations/candidate");
         fs::create_dir_all(&generation).unwrap();
-        for name in ["app.mjs", "app.mjs.map", "style-origins.json", "build-info.json", "manifest.json"] {
+        for name in ["app.mjs", "app.mjs.map", "build-info.json", "manifest.json"] {
             fs::rename(fixture.0.join(name), generation.join(name)).unwrap();
         }
         let dist = fixture.0.join("dist");
@@ -1128,7 +1114,6 @@ mod tests {
         for (resource, mutation) in [
             ("app.mjs", serde_json::Value::Null),
             ("app.mjs.map", serde_json::json!(digest(b"wrong"))),
-            ("style-origins.json", serde_json::Value::Null),
             ("build-info.json", serde_json::json!(digest(b"wrong"))),
             ("undeclared", serde_json::json!(digest(b"extra"))),
         ] {
@@ -1195,7 +1180,6 @@ mod tests {
             { let mut value = original.clone(); value["unknown"] = serde_json::json!(true); value },
             { let mut value = original.clone(); value["styleSystem"]["profile"] = serde_json::json!("browser"); value },
             { let mut value = original.clone(); value["styleSystem"]["configDigest"] = serde_json::json!("sha256:no"); value },
-            { let mut value = original.clone(); value["styleSystem"]["nativeProfileDigest"] = serde_json::json!(digest(b"wrong-native-profile")); value },
         ] {
             write_manifest(&fixture, &value);
             assert!(Package::load(&fixture.0).is_err());
@@ -1247,7 +1231,6 @@ mod tests {
         assert!(package.source.borrow().is_none(), "initial source buffer should be released after take");
         assert_eq!(package.take_or_load_source().unwrap().as_bytes(), source);
         assert!(package.source.borrow().is_none(), "reloaded retry source should not be retained permanently");
-        assert!(package.read_verified_json("style-origins.json").is_ok());
         assert!(package.read_verified_json("build-info.json").is_ok());
         fs::write(fixture.0.join("app.mjs"), b"tampered").unwrap();
         assert!(package.take_or_load_source().err().unwrap().to_string().contains("integrity mismatch"));

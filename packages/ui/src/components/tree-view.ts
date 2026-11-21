@@ -11,8 +11,9 @@ import type {
   NativeNode,
 } from "../types.js";
 import { CHEVRON_DOWN, CHEVRON_RIGHT, Icon, type IconData } from "./icons.js";
+import { sheet as treeSheet } from "./generated/TreeViewStyle.js";
 import { callHandler, createControllable } from "./state.js";
-import { append, classes, element, provide, slot, type Stylesheet, useStylesheet, withDefaults } from "./shared.js";
+import { append, classes, element, provide, slot, useStylesheet, withDefaults } from "./shared.js";
 
 export interface TreeNodeData<T = unknown> {
   readonly id: string;
@@ -95,115 +96,6 @@ interface TreeContextValue {
   readonly registerDeclarative: (entry: DeclarativeItemEntry) => () => void;
   readonly handleKeyDown: (event: NativeKeyEvent) => void;
 }
-
-const treeSheet: Stylesheet = {
-  name: "TreeViewStyle",
-  className: "zui-tree",
-  css: `
-.zui-tree {
-  display: flex;
-  flex-direction: column;
-  width: 100%;
-  outline: none;
-  font-family: var(--zui-type-family-sans);
-  font-size: var(--zui-type-size-sm);
-  line-height: var(--zui-type-leading-sm);
-  color: var(--zui-color-foreground);
-}
-.zui-tree[data-virtualized="true"] {
-  height: 100%;
-  min-height: 0;
-  overflow: hidden;
-}
-.zui-tree__row {
-  display: flex;
-  flex-direction: row;
-  align-items: center;
-  gap: var(--zui-space-xs);
-  width: 100%;
-  min-height: 28px;
-  padding: 4px 8px;
-  padding-left: calc(8px + var(--zui-tree-depth, 0) * 16px);
-  border-radius: var(--zui-radius-sm);
-  background-color: transparent;
-  color: var(--zui-color-foreground);
-  outline: none;
-  user-select: none;
-  box-sizing: border-box;
-}
-.zui-tree__row:hover {
-  background-color: var(--zui-color-accent);
-  color: var(--zui-color-accent-foreground);
-}
-.zui-tree__row[data-selected="true"] {
-  background-color: color-mix(in oklab, var(--zui-color-primary) 16%, transparent);
-  color: var(--zui-color-foreground);
-  font-weight: var(--zui-type-weight-medium);
-}
-.zui-tree__row[data-focused="true"] {
-  box-shadow: inset 0 0 0 1px var(--zui-color-ring);
-}
-.zui-tree__row[data-disabled="true"] {
-  opacity: 0.5;
-  pointer-events: none;
-}
-.zui-tree__chevron {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 16px;
-  height: 16px;
-  flex: none;
-  border-radius: var(--zui-radius-sm);
-  color: var(--zui-color-muted-foreground);
-}
-.zui-tree__chevron:hover {
-  background-color: color-mix(in oklab, var(--zui-color-foreground) 10%, transparent);
-  color: var(--zui-color-foreground);
-}
-.zui-tree__spacer {
-  display: inline-flex;
-  width: 16px;
-  height: 16px;
-  flex: none;
-}
-.zui-tree__icon {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  flex: none;
-  color: var(--zui-color-muted-foreground);
-}
-.zui-tree__label {
-  flex: 1 1 auto;
-  min-width: 0;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.zui-tree__badge {
-  flex: none;
-  padding: 0 6px;
-  border-radius: var(--zui-radius-sm);
-  background-color: var(--zui-color-muted);
-  color: var(--zui-color-muted-foreground);
-  font-size: var(--zui-type-size-xs);
-}
-.zui-tree__children {
-  display: flex;
-  flex-direction: column;
-  width: 100%;
-}
-.zui-tree__empty {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: var(--zui-space-md);
-  color: var(--zui-color-muted-foreground);
-  font-size: var(--zui-type-size-sm);
-}
-`,
-};
 
 const TreeContext = createContext<TreeContextValue | null>(null);
 const TreeBranchContext = createContext<{ readonly depth: number; readonly parentId: string | null }>({

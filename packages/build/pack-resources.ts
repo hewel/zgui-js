@@ -11,7 +11,6 @@ if (process.argv[2] === "--clean") {
     "Cargo.lock",
     "bun.lock",
     "package.json",
-    "schemas/stylex-profile.json",
     "preview/profiles/default.json",
     "preview/fixtures/empty.json",
     "preview/scenarios/counter-capture.json",

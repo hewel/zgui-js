@@ -5,6 +5,7 @@ import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { tmpdir } from "node:os";
 import { publishApplication } from "./build.ts";
+import { syncCssModuleTypes } from "./css.ts";
 import { workspaceRoot } from "./sdk.ts";
 import { watchBundle } from "./compiler.ts";
 import {
@@ -94,7 +95,6 @@ export function watchApplication(
   {
     root = workspaceRoot,
     appDirectory = path.join(root, "apps/examples", app),
-    stylexDiagnostics = false,
     development = false,
     extraCapabilities,
     capabilitiesFile,
@@ -189,13 +189,13 @@ export function watchApplication(
       appDirectory,
       temporaryDirectory: path.join(temporary, "output"),
       buildDelay: 80,
-      stylexDiagnostics,
       development,
       watchFiles: [path.join(temporary, "invalidate")],
       async onAttempt() {
         published = undefined;
         status = undefined;
         controller.signal.throwIfAborted();
+        await syncCssModuleTypes(appDirectory, { root });
         let previousDirectory: string | null;
         try {
           previousDirectory = await realpath(path.join(appDirectory, "dist"));
@@ -227,6 +227,7 @@ export function watchApplication(
       async onCompile(result) {
         graphModules = new Set(result.graph.modules);
         await watchDependencyManifests(result.graph.modules);
+        await syncCssModuleTypes(appDirectory, { root });
         await typecheck(path.join(appDirectory, "tsconfig.json"), { signal: controller.signal });
         // Observers leave building/failed states via publication identity even on byte-identical recovery.
         published = await publish(app, result, {
@@ -297,7 +298,8 @@ export function watchApplication(
           part === BUILD_STATUS_FILE ||
           part.startsWith(`${BUILD_STATUS_FILE}.`) ||
           part === NATIVE_STATUS_FILE ||
-          part.startsWith(`${NATIVE_STATUS_FILE}.`),
+          part.startsWith(`${NATIVE_STATUS_FILE}.`) ||
+          part.endsWith(".module.css.d.ts"),
       )
     )
       return;

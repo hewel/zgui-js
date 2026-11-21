@@ -178,17 +178,14 @@ function isTypeofGuarded(p: NodePath<t.Identifier | t.JSXIdentifier>): boolean {
 
 export function validateImport(specifier: string): void {
   if (
-    /^@stylexjs\/(?:babel-plugin|shared)(?:\/|$)/.test(specifier) ||
-    /^@stylexjs\/stylex\/(?:lib\/)?(?:stylex-inject|stylesheet)(?:[./]|$)/.test(specifier)
-  ) {
-    throw new Error(`Unavailable native StyleX host import: ${specifier}`);
-  }
-  if (
     isBuiltin(specifier) ||
     /^(?:solid-js\/(?:web|server)|react-dom)(?:\/|$)/.test(specifier) ||
     /(?:^|\/)server(?:\.[cm]?js|\/|$)/.test(specifier)
   ) {
     throw new Error(`Incompatible runtime import: ${specifier}`);
+  }
+  if (/\.module\.css$/i.test(specifier)) {
+    return;
   }
   if (/\.(?:css|png|jpe?g|svg|woff2?|ttf|gif|webp)(?:[?#]|$)/i.test(specifier)) {
     throw new Error(`Runtime resource imports are unsupported; use app.css/assets: ${specifier}`);
@@ -196,16 +193,16 @@ export function validateImport(specifier: string): void {
 }
 
 export function validateWorkerImport(specifier: string): void {
+  if (/\.module\.css$/i.test(specifier)) {
+    throw new Error(`Compute worker cannot import CSS module: ${specifier}`);
+  }
   validateImport(specifier);
   if (
     /^@hewel\/zgui(?:$|\/|-services(?:$|\/))/.test(specifier) ||
     /^solid-js(?:$|\/)/.test(specifier) ||
-    /^@solidjs\//.test(specifier) ||
-    /^@stylexjs\//.test(specifier)
+    /^@solidjs\//.test(specifier)
   ) {
-    throw new Error(
-      `Compute worker cannot import UI, Solid, StyleX, or host service module: ${specifier}`,
-    );
+    throw new Error(`Compute worker cannot import UI, Solid, or host service module: ${specifier}`);
   }
 }
 
@@ -376,14 +373,6 @@ export function validateGraph(
     );
   }
   for (const input of graph.modules) {
-    if (
-      /\/@stylexjs\/(?:babel-plugin|shared)\//.test(input) ||
-      /\/@stylexjs\/stylex\/lib\/(?:(?:es|cjs)\/(?:inject|stylesheet)|stylex-inject|stylesheet)(?:[./]|$)/.test(
-        input,
-      )
-    ) {
-      throw new Error(`Unavailable native StyleX host module: ${input}`);
-    }
     if (/\/solid-js\/(?:web|.*server)|\/react-dom\//.test(input))
       throw new Error(`Incompatible module graph: ${input}`);
   }

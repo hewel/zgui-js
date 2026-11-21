@@ -2,10 +2,11 @@
 
 Use when styling native nodes, composing UI primitives, rendering custom vectors/canvas scenes, or adding physics/wheel interactions in `@hewel/zgui`.
 
-## Styling (`StyleX` & `NativeStyle`)
+## Styling (Lightning CSS Modules & `NativeStyle`)
 
-- **StyleX** (`@stylexjs/stylex`): compiled at build time against the `zgui-stylex-v1` native profile. Apply via `{...stylex.props(styles.card, active() && styles.active)}`.
-- **Typed inline styles**: pass a `NativeStyle` object to `style={...}` for dynamic values.
+- **CSS Modules (`*.module.css`) & `app.css`**: compiled at build time by Lightning CSS (`lightningcss-v1`) with CSS nesting (`&`) flattened, literal `--zui-*` theme variables preserved (`dashedIdents: false`), and deterministic cascade order (`@layer zgui.components` `components.css` → global `app.css` → `*.module.css`). Apply static classes on `class` with `cx(styles.card, active() && styles.active)` and drive states via `[data-*]` attributes.
+- **Disallowed v1 CSS features**: `@import`, `url()`, `image-set()`, `@font-face`, `@container`, `prefers-reduced-motion`, `@property`, `html[dir]`, `composes`, ICSS `:import`/`:export`, and `@value`.
+- **Typed inline styles**: pass a `NativeStyle` object to `style={...}` for continuous dynamic values (split sizes, spring transforms, progress widths).
 - **Inline `style` string atomicity**: passing a raw `style="..."` string replaces all inline declarations on that node, including `--*` CSS custom properties. Emit dynamic properties and `--*` variables together in one string, or use a `NativeStyle` object.
 - **Scoped part styles**: scope component part selectors to context-derived data attributes so ancestor selectors do not bleed across nested component roots.
 

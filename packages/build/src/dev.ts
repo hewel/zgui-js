@@ -33,7 +33,6 @@ export async function devApplication(
     hostRoot = root,
     hostExecutable,
     mode = "desktop",
-    stylexDiagnostics = mode === "preview",
     extraCapabilities,
     capabilitiesFile,
     signal,
@@ -86,7 +85,6 @@ export async function devApplication(
     watcher = watch(app, {
       root,
       appDirectory,
-      stylexDiagnostics,
       development: mode === "desktop",
       extraCapabilities,
       capabilitiesFile,

@@ -123,9 +123,11 @@ test("application-local build supports directories outside the workspace with sp
   assert.equal(manifest.schemaVersion, 2);
   assert.deepEqual(manifest.styles, ["app.css"]);
   assert.deepEqual(manifest.fonts, []);
-  assert.equal(manifest.styleSystem.profile, "zgui-stylex-v1");
-  assert.match(manifest.styleSystem.nativeProfileDigest, /^sha256:[a-f0-9]{64}$/);
-  assert.ok(manifest.artifactDigests["style-origins.json"]);
+  assert.equal(manifest.styleSystem.name, "lightningcss");
+  assert.equal(manifest.styleSystem.profile, "lightningcss-v1");
+  assert.match(manifest.styleSystem.configDigest, /^sha256:[a-f0-9]{64}$/);
+  assert.equal(manifest.artifactDigests["style-origins.json"], undefined);
+  assert.ok(manifest.artifactDigests["build-info.json"]);
   assert.match(stdout, new RegExp(manifest.buildId));
   assert.match(await readFile(path.join(directory, "dist/app.mjs"), "utf8"), /External application/);
   assert.equal(Object.hasOwn(manifest, "capabilities"), false);
@@ -250,7 +252,7 @@ console.log(JSON.stringify({ script: import.meta.path, cwd: process.cwd(), args,
   assert.equal(watched.script, prebuiltHost);
   assert.equal(watched.cwd, hostRoot);
   assert.deepEqual(watched.args.slice(0, 4), ["preview", "watch", "--bundle", dist]);
-  assert.notEqual(oneShot.styleSystem.configDigest, dev.styleSystem.configDigest);
+  assert.deepEqual(oneShot.styleSystem, dev.styleSystem);
   assert.deepEqual(watched.styleSystem, oneShot.styleSystem);
 
   const overlayDirectory = await mkdtemp(path.join(os.tmpdir(), "zgui-overlays-"));

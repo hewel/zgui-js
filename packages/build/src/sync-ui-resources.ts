@@ -70,13 +70,52 @@ function validateSnapshot(value: unknown): asserts value is ResourceSnapshot {
 const generated = path.join(workspaceRoot, "packages/ui/src/components/generated");
 await mkdir(generated, { recursive: true });
 
+function adaptUpstreamCss(name: string, className: string, css: string): string {
+  switch (name) {
+    case "TabsStyle":
+      return css
+        .replaceAll(
+          '.zui-tabs__list[data-variant="default"] .zui-tabs__trigger',
+          '.zui-tabs__trigger[data-variant="default"]',
+        )
+        .replaceAll(
+          '.zui-tabs__list[data-variant="line"] .zui-tabs__trigger',
+          '.zui-tabs__trigger[data-variant="line"]',
+        )
+        .replaceAll(
+          `.${className}[data-orientation="vertical"] .zui-tabs__list`,
+          '.zui-tabs__list[data-orientation="vertical"]',
+        )
+        .replaceAll(
+          `.${className}[data-orientation="vertical"] .zui-tabs__trigger`,
+          '.zui-tabs__trigger[data-orientation="vertical"]',
+        )
+        .replaceAll(
+          `.${className}[data-orientation="horizontal"] .zui-tabs__trigger`,
+          '.zui-tabs__trigger[data-orientation="horizontal"]',
+        );
+    case "AccordionStyle":
+      return css
+        .replaceAll(".zui-accordion__content .zui-collapsible__measure", ".zui-accordion__measure")
+        .replaceAll(
+          '.zui-accordion__trigger[data-state="open"] .zui-accordion__chevron',
+          '.zui-accordion__chevron[data-state="open"]',
+        );
+    case "CollapsibleStyle":
+      return `${css}\n.zui-collapsible__content[data-collapsed] { visibility: hidden; }`;
+    default:
+      return css;
+  }
+}
+
 const literal = (value: string) => JSON.stringify(value);
 const outputs = new Map<string, string>();
 for (const name of Object.keys(snapshot.styles).sort()) {
   const sheet = snapshot.styles[name];
+  const adaptedCss = adaptUpstreamCss(name, sheet.className, sheet.css);
   outputs.set(
     `${name}.ts`,
-    `export const sheet = { name: ${literal(name)}, className: ${literal(sheet.className)}, css: ${literal(sheet.css)} } as const;\n`,
+    `export const sheet = { name: ${literal(name)}, className: ${literal(sheet.className)}, css: ${literal(adaptedCss)} } as const;\n`,
   );
 }
 const themeEntries = Object.keys(snapshot.themes)

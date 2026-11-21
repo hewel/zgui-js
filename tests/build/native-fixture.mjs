@@ -541,17 +541,14 @@ export function createHost({ strictStyles = false, reducedMotion = false, monito
         }
         return;
       }
-      if (name === "class" || name === "className" || name === "__zguiClass") {
+      if (name === "class" || name === "__zguiClass") {
         if (value != null && typeof value !== "string") throw new TypeError("class must be a string");
         const state = stateFor(node);
         value = value?.trim() ? value : null;
         if (name === "__zguiClass") state.internal = value;
-        else state.aliases[name] = value;
-        const conflict = state.aliases.class && state.aliases.className;
-        if (!conflict) state.applied = state.aliases.class || state.aliases.className;
+        else state.applied = value;
         const classes = [...new Set(`${state.internal ?? ""} ${state.applied ?? ""}`.split(/[\t\n\f\r ]+/).filter(Boolean))].join(" ");
         if (classes) node.props.set("class", classes); else node.props.delete("class");
-        if (conflict && name !== "__zguiClass") failStyle("CLASS_ALIAS_CONFLICT", "class and className both contribute application tokens");
         return;
       }
       if (name === "style" || name === "__zguiStyle" || name === "__zguiInvariantStyle" || name.startsWith("--")) {

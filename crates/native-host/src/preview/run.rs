@@ -126,11 +126,8 @@ pub fn worker(args: impl Iterator<Item=String>) -> supervisor::Report {
         }
         ledger.identity(build.clone(),json!(scenario.scenario.id),profile.profile.clock.is_virtual());
         sink.borrow_mut().json("inputs/bundle.json","bundle-identity",&build)?;
-        let style_origins = package.read_verified_json("style-origins.json")
-            .map_err(|error| Error::new("E_BUNDLE", 3, error.to_string()))?;
         let build_info = package.read_verified_json("build-info.json")
             .map_err(|error| Error::new("E_BUNDLE", 3, error.to_string()))?;
-        sink.borrow_mut().json("inputs/style-origins.json","verified-style-origins",&style_origins)?;
         sink.borrow_mut().json("inputs/build-info.json","verified-build-info",&build_info)?;
         let root_styles=super::driver::stylesheet(&profile);
         let mut environment=inventory::snapshot()?;

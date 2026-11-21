@@ -8,7 +8,11 @@ let temp;
 let bundle;
 before(async () => {
   temp = await createTempWorkspace("preview-shell-primitives-");
-  bundle = await buildFixtureApp(temp.dir, "shell-primitives", new URL("./fixtures/shell-primitives.tsx", import.meta.url));
+  bundle = await buildFixtureApp(temp.dir, "shell-primitives", new URL("./fixtures/shell-primitives.tsx", import.meta.url), {
+    files: {
+      "src/shell-primitives.module.css": `.glass { backdrop-filter: grayscale(1); }\n.lettering { font-variation-settings: "wght" 650; text-shadow: 24px 0 #0000ff; }\n`,
+    },
+  });
 });
 after(async () => { await temp?.cleanup(); });
 
@@ -25,9 +29,9 @@ function run(name, steps, options = {}) {
   });
 }
 
-test("StyleX and inline visual properties reach native preflight and paint", async () => {
+test("CSS Modules and inline visual properties reach native preflight and paint", async () => {
   const css = await readFile(path.join(bundle, "app.css"), "utf8");
-  assert.match(css, /font-variation-settings:["']wght["'] 650/);
+  assert.match(css, /font-variation-settings:\s*["']wght["'] 650/);
   const { out } = await run("visual", [capture("visual")]);
   const image = await readPng(path.join(out, "captures/visual.png"));
   assert.deepEqual(pixelAt(image, 40, 36), [255, 0, 0, 255], "unfiltered background");
@@ -45,21 +49,23 @@ test("StyleX and inline visual properties reach native preflight and paint", asy
 });
 
 for (const [name, declaration] of [
-  ["backdrop-filter", 'backdropFilter: "blur(red)"'],
-  ["box-shadow", 'boxShadow: "1px"'],
+  ["backdrop-filter", "backdrop-filter: blur(red);"],
+  ["box-shadow", "box-shadow: 1px;"],
 ]) {
-  test(`native preflight rejects invalid StyleX ${name} before mounting`, async () => {
+  test(`native preflight rejects invalid CSS ${name} before mounting`, async () => {
     const id = `invalid-${name}`;
     const rejectedBundle = await buildFixtureApp(path.join(temp.dir, id), id, `
-      import * as stylex from "@stylexjs/stylex";
       import { renderApp } from "@hewel/zgui";
       import type { NativeNode } from "@hewel/zgui";
-      const invalid = stylex.create({ box: { ${declaration} } });
+      import styles from "./bad.module.css";
       export const hostApiVersion = 1;
       export function mount(root: NativeNode) {
-        return renderApp(() => <box {...stylex.props(invalid.box)} />, root);
+        return renderApp(() => <box class={styles.box} />, root);
       }
-    `, { rawSource: true });
+    `, {
+      rawSource: true,
+      files: { "src/bad.module.css": `.box { ${declaration} }\n` },
+    });
     const { result } = await run(id, [capture("rejected")], { bundle: rejectedBundle, allowFailure: true });
     assert.equal(result.firstError?.code, "E_STYLE_PROFILE");
     assert.equal(result.captureCount, 0);

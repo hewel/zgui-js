@@ -1,0 +1,37 @@
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 16px;
+  border-radius: var(--zui-radius-lg);
+  border: 2px solid var(--zui-color-border);
+  background-color: var(--zui-color-card);
+  color: var(--zui-color-card-foreground);
+
+  &[data-active="true"] {
+    border-color: var(--zui-color-primary);
+    background-color: var(--zui-color-secondary);
+  }
+
+  & > .title {
+    font-size: var(--zui-type-size-lg);
+    font-weight: var(--zui-type-weight-semibold);
+    color: var(--zui-color-foreground);
+  }
+}
+
+.title {
+  color: var(--zui-color-muted-foreground);
+}
+
+.toolbar {
+  display: flex;
+  flex-direction: row;
+  gap: 8px;
+}
+
+.overrideButton {
+  background-color: #0f766e;
+  color: #ffffff;
+  border-color: #0f766e;
+}
