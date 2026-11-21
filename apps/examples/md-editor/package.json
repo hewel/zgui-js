@@ -1,0 +1,26 @@
+{
+  "name": "@hewel/zgui-js-example-md-editor",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "zgui-js dev",
+    "build": "zgui-js build",
+    "preview": "zgui-js preview"
+  },
+  "zgui": {
+    "window": {
+      "title": "zgui Markdown Studio",
+      "width": 1320,
+      "height": 820,
+      "minWidth": 900,
+      "minHeight": 580
+    }
+  },
+  "devDependencies": {
+    "@hewel/zgui-build": "workspace:*"
+  },
+  "dependencies": {
+    "@hewel/zgui": "workspace:*",
+    "@hewel/zgui-services": "workspace:*"
+  }
+}
