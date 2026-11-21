@@ -103,6 +103,22 @@ const SUITES = [
     args: ["--test", "engine"],
   },
   {
+    crate: "zgui-text-parley",
+    args: ["--lib", "raster::glyphs"],
+  },
+  {
+    crate: "zgui-text-parley",
+    args: ["--lib", "shape::glyphs"],
+  },
+  {
+    crate: "zgui-text-parley",
+    args: ["--lib", "shape::style"],
+  },
+  {
+    crate: "zgui-text-parley",
+    args: ["--lib", "system::instances"],
+  },
+  {
     crate: "zgui-view-dom",
     args: ["--test", "observations"],
   },

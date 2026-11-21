@@ -470,3 +470,13 @@ Regression gate:
 Regression gate:
 
     bun run test:vendor zgui-platform && bun run test:vendor zgui-platform-wayland && bun run test:vendor zgui-platform-headless && bun test --isolate tests/preview/dnd.test.mjs
+
+## Per-contour synthetic bold winding & CSS weight threshold
+
+`swash 0.2.10`'s `LayerMut::embolden` calls `compute_winding(self.points)` over the entire flattened point buffer without splitting contours, so cross-contour jumps between contour `k` and contour `k + 1` can invert the winding sign on multi-contour CJK glyphs and erode strokes instead of thickening them. `vendor/zgui-text-parley/src/raster/glyphs.rs` bypasses `Render::embolden` when `synthetic_bold != 0.0`: it extracts the scaled outline, computes layer winding strictly by summing each closed contour's individual signed area, emboldens each contour with that winding sign, applies synthetic slant, and rasterises via `zeno::Mask` while preserving color-layer and bitmap-only fallbacks.
+
+`vendor/zgui-text-parley` shaping (`src/shape/glyphs.rs`, `src/shape/frozen.rs`, `src/shape/line.rs`) also aligns synthetic bolding with CSS Fonts 4 browser conventions by enabling `SYNTHETIC_BOLD_RATIO` only when `requested_weight >= 600` and the matched face weight is `< 600` (so `font-weight: 500` on a `400` face no longer applies heavy faux-bold).
+
+Regression gate:
+
+    bun run test:vendor zgui-text-parley

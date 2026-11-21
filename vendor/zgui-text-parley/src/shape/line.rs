@@ -12,9 +12,7 @@
 
 use zgui_geom::CssPx;
 use zgui_interned::Ident;
-use zgui_text::{
-    FaceId, FaceMetrics, FontSource, SYNTHETIC_BOLD_RATIO, ShapedGlyph, ShapedRunOwned,
-};
+use zgui_text::{FaceId, FaceMetrics, FontSource, ShapedGlyph, ShapedRunOwned};
 use zgui_text_style::variant::FontVariantLigatures;
 use zgui_text_style::{
     FamilyName, FontFamilyList, FontFeature, FontSlant, FontVariant, FontVariation, LengthPercent,
@@ -182,18 +180,20 @@ pub(crate) fn shape(
         let clusters = cluster_bytes(&run, glyphs.len());
         let text_run = run.run();
         let face = fonts.face_for(text_run.font());
+        let record = fonts.face(face);
+        let face_weight = record.as_ref().map_or(400.0, |record| record.weight);
         let synthesis = text_run.synthesis();
         runs.push(ShapedRunOwned {
             face,
             size: text_run.font_size(),
             instance: fonts.variation_instance(text_run.normalized_coords()),
-            synthetic_bold: if synthesis.embolden() {
-                SYNTHETIC_BOLD_RATIO
-            } else {
-                0.0
-            },
+            synthetic_bold: crate::shape::glyphs::synthetic_bold(
+                synthesis.embolden(),
+                text_run.font_attrs().weight.value(),
+                face_weight,
+            ),
             synthetic_slant: synthesis.skew().unwrap_or(0.0),
-            has_color: fonts.face(face).is_some_and(|record| record.has_color),
+            has_color: record.is_some_and(|record| record.has_color),
             glyphs,
             clusters,
         });

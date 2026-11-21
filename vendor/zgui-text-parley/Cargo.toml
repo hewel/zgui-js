@@ -31,7 +31,6 @@ smallvec = "1.15"
 
 [dev-dependencies]
 zgui-profile = { features = ["counters"], git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a" }
-proptest = "1.11"
 
 [lints.rust]
 missing_docs = "deny"
