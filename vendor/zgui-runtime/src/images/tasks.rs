@@ -61,6 +61,10 @@ impl Tasks {
 
     pub(super) fn restricted(&self) -> bool { self.policy.assets.is_some() }
 
+    pub(super) fn svg_fonts(&self) -> Option<Arc<crate::image_policy::SvgFonts>> {
+        self.policy.svg_fonts.clone()
+    }
+
     pub(super) fn clear_blobs(&self) {
         if let Some(blobs) = &self.policy.blobs { blobs.clear(); }
     }

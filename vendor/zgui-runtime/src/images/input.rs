@@ -11,7 +11,7 @@ use resvg::{tiny_skia, usvg};
 use zgui_geom::{Device, Size};
 use zgui_image::{DecodeError, Decoded, Limits};
 
-use crate::image_policy::files::FileAccess;
+use crate::image_policy::{SvgFonts, files::FileAccess};
 
 /// Maximum decoded byte length of one embedded raster data URI inside an SVG.
 const MAX_SVG_EMBEDDED_BYTES: usize = 4 * 1024 * 1024;
@@ -29,8 +29,13 @@ pub(super) enum Input {
 }
 
 impl Input {
-    pub(super) fn probe(self, name: &str, limits: Limits) -> Result<Size<u32, Device>, DecodeError> {
-        let probe = |bytes: &[u8]| match svg_tree(bytes, limits) {
+    pub(super) fn probe(
+        self,
+        name: &str,
+        limits: Limits,
+        svg_fonts: Option<&SvgFonts>,
+    ) -> Result<Size<u32, Device>, DecodeError> {
+        let probe = |bytes: &[u8]| match svg_tree(bytes, limits, svg_fonts) {
             Some(tree) => {
                 let native = tree?.size().to_int_size();
                 Ok(Size::new(native.width(), native.height()))
@@ -50,8 +55,9 @@ impl Input {
         name: &str,
         class: u32,
         limits: Limits,
+        svg_fonts: Option<&SvgFonts>,
     ) -> Result<Decoded, DecodeError> {
-        let decode = |bytes: &[u8]| match svg_tree(bytes, limits) {
+        let decode = |bytes: &[u8]| match svg_tree(bytes, limits, svg_fonts) {
             Some(tree) => rasterize(&tree?, class.min(limits.max_dimension).max(1)),
             None => zgui_image::decode_scaled(bytes, class, limits),
         };
@@ -81,20 +87,28 @@ impl Input {
     }
 }
 
-fn svg_tree(bytes: &[u8], limits: Limits) -> Option<Result<usvg::Tree, DecodeError>> {
+fn svg_tree(
+    bytes: &[u8],
+    limits: Limits,
+    svg_fonts: Option<&SvgFonts>,
+) -> Option<Result<usvg::Tree, DecodeError>> {
     let bytes = bytes.strip_prefix(b"\xef\xbb\xbf").unwrap_or(bytes);
     (bytes.iter().find(|byte| !byte.is_ascii_whitespace()) == Some(&b'<'))
-        .then(|| parse_svg(bytes, limits))
+        .then(|| parse_svg(bytes, limits, svg_fonts))
 }
 
-fn parse_svg(bytes: &[u8], limits: Limits) -> Result<usvg::Tree, DecodeError> {
+fn parse_svg(
+    bytes: &[u8],
+    limits: Limits,
+    svg_fonts: Option<&SvgFonts>,
+) -> Result<usvg::Tree, DecodeError> {
     let text = std::str::from_utf8(bytes).map_err(svg_error)?;
     // usvg's convenience parser enables DTDs and accepts compressed input. Use plain XML instead.
     let document = roxmltree::Document::parse(text).map_err(svg_error)?;
     let refused = AtomicBool::new(false);
     let embedded_count = AtomicUsize::new(0);
     let embedded_pixels = AtomicU64::new(0);
-    let options = usvg::Options {
+    let mut options = usvg::Options {
         resources_dir: None,
         image_href_resolver: usvg::ImageHrefResolver {
             resolve_string: Box::new(|_, _| {
@@ -119,6 +133,10 @@ fn parse_svg(bytes: &[u8], limits: Limits) -> Result<usvg::Tree, DecodeError> {
         },
         ..usvg::Options::default()
     };
+    if let Some(fonts) = svg_fonts {
+        options.fontdb = Arc::clone(&fonts.db);
+        options.font_family = fonts.default_family.clone();
+    }
     let tree = usvg::Tree::from_xmltree(&document, &options).map_err(svg_error)?;
     if refused.load(Ordering::Relaxed) {
         return Err(svg_error(
@@ -241,12 +259,12 @@ mod tests {
         );
         let bytes: Arc<[u8]> = Arc::from(svg.into_bytes());
         let probed = Input::Dynamic(Arc::clone(&bytes))
-            .probe("icon.svg", Limits::default())
+            .probe("icon.svg", Limits::default(), None)
             .expect("probing SVG with embedded PNG succeeds");
         assert_eq!(probed, Size::new(8, 8));
 
         let decoded = Input::Dynamic(bytes)
-            .decode("icon.svg", 8, Limits::default())
+            .decode("icon.svg", 8, Limits::default(), None)
             .expect("decoding SVG with embedded PNG succeeds");
         assert_eq!(decoded.size, Size::new(8, 8));
         assert!(
@@ -269,7 +287,7 @@ mod tests {
             </svg>"#
         );
         let err = Input::Dynamic(Arc::from(svg.into_bytes()))
-            .decode("icon.svg", 8, Limits { max_dimension: 1 })
+            .decode("icon.svg", 8, Limits { max_dimension: 1 }, None)
             .expect_err("2x2 embedded PNG exceeds max_dimension=1");
         assert!(err.to_string().contains("SVG image references"), "{err}");
 
@@ -280,7 +298,7 @@ mod tests {
             </svg>"#
         );
         let err = Input::Dynamic(Arc::from(spoofed_svg.into_bytes()))
-            .decode("icon.svg", 8, Limits::default())
+            .decode("icon.svg", 8, Limits::default(), None)
             .expect_err("spoofed PNG magic bytes must be rejected");
         assert!(err.to_string().contains("SVG image references"), "{err}");
 
@@ -291,7 +309,7 @@ mod tests {
             encode_base64(b"GIF89a\x01\x00\x01\x00")
         );
         let err = Input::Dynamic(Arc::from(gif_svg.into_bytes()))
-            .decode("icon.svg", 8, Limits::default())
+            .decode("icon.svg", 8, Limits::default(), None)
             .expect_err("GIF data URIs remain rejected");
         assert!(err.to_string().contains("SVG image references"), "{err}");
 
@@ -303,8 +321,34 @@ mod tests {
         }
         many_images.push_str("</svg>");
         let err = Input::Dynamic(Arc::from(many_images.into_bytes()))
-            .decode("icon.svg", 8, Limits::default())
+            .decode("icon.svg", 8, Limits::default(), None)
             .expect_err("exceeding embedded image count cap must be rejected");
         assert!(err.to_string().contains("SVG image references"), "{err}");
+    }
+
+    #[test]
+    fn svg_text_renders_glyphs_using_bound_font_database() {
+        let noto: zgui_text::FontData =
+            Arc::new(include_bytes!("../../../../preview/fonts/NotoSans-Regular.ttf").as_slice());
+        let fonts = SvgFonts::new(false, [noto]);
+        let svg = br##"<svg xmlns="http://www.w3.org/2000/svg" width="120" height="40">
+            <rect width="120" height="40" fill="#000000"/>
+            <text x="10" y="28" font-family="sans-serif" font-size="22" fill="#00ff88">Hello</text>
+        </svg>"##;
+        let decoded = Input::Dynamic(Arc::from(svg.as_slice()))
+            .decode("diagram.svg", 120, Limits::default(), Some(&fonts))
+            .expect("SVG with <text> decodes cleanly");
+        assert_eq!(decoded.size, Size::new(120, 40));
+        let green_pixels = decoded
+            .texels
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .filter(|px| px[1] > 180 && px[0] < 40 && px[3] > 200)
+            .count();
+        assert!(
+            green_pixels > 40,
+            "SVG <text> must render visible glyph pixels using the session fontdb, got {green_pixels}",
+        );
     }
 }

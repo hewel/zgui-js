@@ -198,9 +198,15 @@ bytes under a granted component prefix, with no ambient filesystem fallback.
 
 Only `file://` and `zgui-blob://` sources accept UTF-8 SVG as well as raster
 images. Plain package-relative sources retain the raster decoder. The pinned
-CPU renderer uses the same decode limit and native atlas as raster images.
-SVG DTDs, embedded/nested images and external resources are disabled; SVG
-parsing does not read system fonts or the network.
+CPU renderer (`resvg` with `raster-images`, `text`, and `system-fonts`) uses
+the same decode limit and native atlas as raster images. SVG DTDs, nested SVGs
+and external resources are disabled; bounded embedded PNG/JPEG/WebP data URIs
+are verified before decode. SVG `<text>` resolves against an `ImagePolicy`-bound
+`fontdb::Database` (`ImagePolicy::with_svg_fonts`, fed from `Fonts::svg_font_snapshot`):
+live desktop sessions bind cached system fonts plus active session/package font
+leases, while deterministic preview sessions (`Fonts::shipped_only`) bind only
+the profile and package font faces mapped onto CSS generic families with no
+ambient host font lookup or network access.
 
 Each session owns one `ImageBlobs` table. Clones share its encoded bytes;
 the URI is opaque and never hits the process-global `zgui-bytes:` registry.

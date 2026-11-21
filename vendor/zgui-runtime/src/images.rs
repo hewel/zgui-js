@@ -1200,7 +1200,8 @@ fn intrinsic_of(native: Size<u32, Device>) -> Intrinsic {
 /// apply the result.
 fn kick_probe(key: SourceKey, generation: u64, completed: &DecodeQueue, limits: zgui_image::Limits) {
     let input = completed.input(&key);
-    completed.start(key, generation, move |key| Arrival::Probe(input.probe(key.name(), limits)));
+    let svg_fonts = completed.svg_fonts();
+    completed.start(key, generation, move |key| Arrival::Probe(input.probe(key.name(), limits, svg_fonts.as_deref())));
 }
 
 /// Starts one decode off the frame thread, landing its result in `completed`.
@@ -1209,8 +1210,9 @@ fn kick_probe(key: SourceKey, generation: u64, completed: &DecodeQueue, limits: 
 /// on the same worker, so the frame thread never runs the filter.
 fn kick_decode(key: SourceKey, generation: u64, class: Class, handle: u64, completed: DecodeQueue, limits: zgui_image::Limits) {
     let input = completed.input(&key);
+    let svg_fonts = completed.svg_fonts();
     completed.start(key, generation, move |key| {
-        let decoded = input.decode(key.name(), class, limits).map(|decoded| {
+        let decoded = input.decode(key.name(), class, limits, svg_fonts.as_deref()).map(|decoded| {
             let mips = if decoded.size.width.max(decoded.size.height) > STANDALONE_LONG_EDGE {
                 zgui_image::mip_chain(&decoded)
             } else { Vec::new() };

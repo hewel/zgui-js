@@ -66,6 +66,7 @@ pub use scoped::FontLease;
 pub struct Fonts {
     /// The collection, shared with everything built from it, once it exists.
     system: Arc<Pending>,
+    uses_system_fonts: bool,
     registrations: scoped::SharedRegistrations,
 }
 
@@ -84,6 +85,7 @@ impl Fonts {
     pub fn system() -> Self {
         Self {
             system: Arc::new(Pending::system()),
+            uses_system_fonts: true,
             registrations: Default::default(),
         }
     }
@@ -98,6 +100,7 @@ impl Fonts {
             system: Arc::new(Pending::ready(FontSystem::new(
                 FontSystemOptions::registered_only(),
             ))),
+            uses_system_fonts: false,
             registrations: Default::default(),
         }
     }
@@ -114,8 +117,10 @@ impl Fonts {
         if let Some(family) = family { return self.register_permanent(data, family); }
         self.system
             .get()
-            .register(data, family.map(zgui_view::Ident::new))
-            .map(|_| ())
+            .register(data.clone(), None)
+            .map(|_| {
+                self.record_unnamed(data);
+            })
     }
 
     /// What answers the cascade's font-metric questions.

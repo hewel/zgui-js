@@ -26,6 +26,10 @@ const SUITES = [
     ],
   },
   {
+    crate: "zgui-runtime",
+    args: ["--lib", "images::input::tests"],
+  },
+  {
     crate: "zgui-platform",
     args: ["--lib"],
   },

@@ -210,7 +210,13 @@ impl SessionSurface for RuntimeSurface<'_> {
             (ImageChoice::PackageOnly, package) => ImagePolicy::package_only(package.into_iter().flat_map(|package| package.image_assets()))
                 .with_fixture_files(prefixes, session.fixture_image_files()),
         };
-        window.replace_image_policy_with_mount_writes(policy.with_blobs(session.image_blobs().clone()), mount_writes);
+        let (include_system_fonts, svg_font_faces) = session.fonts.svg_font_snapshot();
+        window.replace_image_policy_with_mount_writes(
+            policy
+                .with_blobs(session.image_blobs().clone())
+                .with_svg_fonts(include_system_fonts, svg_font_faces),
+            mount_writes,
+        );
     }
     fn request_frame(&self, document: DocumentId) {
         if let Some(window) = self.runtime.windows().iter().find(|window| window.document_id() == document) { window.request_frame(); }

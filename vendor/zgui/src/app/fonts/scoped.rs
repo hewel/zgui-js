@@ -6,6 +6,7 @@ use super::Fonts;
 pub(super) struct Registrations {
     next: u64,
     aliases: BTreeMap<String, Vec<Registration>>,
+    unnamed: Vec<FontData>,
 }
 struct Registration {
     token: u64,
@@ -58,6 +59,24 @@ impl Fonts {
     /// Whether the collection contains faces reachable by this exact family alias.
     pub fn contains_family(&self, family: &str) -> bool {
         self.system.get().contains_family(family)
+    }
+
+    /// Snapshot of whether system fonts are enabled plus all currently active registered font data
+    /// (unnamed, permanent aliases, and active scoped leases) for SVG `<text>` rendering.
+    pub fn svg_font_snapshot(&self) -> (bool, Vec<FontData>) {
+        let state = self.registrations.lock().expect("font registrations lock poisoned");
+        let mut faces = state.unnamed.clone();
+        for entries in state.aliases.values() {
+            if let Some(active) = entries.last() {
+                faces.extend(active.data.iter().cloned());
+            }
+        }
+        (self.uses_system_fonts, faces)
+    }
+
+    pub(super) fn record_unnamed(&self, data: FontData) {
+        let mut state = self.registrations.lock().expect("font registrations lock poisoned");
+        state.unnamed.push(data);
     }
 
     pub(super) fn register_permanent(&self, data: FontData, family: &str) -> Result<(), FontError> {
