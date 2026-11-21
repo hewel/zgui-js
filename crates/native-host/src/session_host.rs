@@ -601,6 +601,7 @@ impl SessionHost {
         surface.bind(document, &candidate);
         let image_checkpoint = surface.image_source_checkpoint(document);
         let mut staged = self.shell_windows.empty_successor();
+        candidate.begin_staged_mount();
         let mounted = candidate.mount()
             .and_then(|()| surface.stage_shell_surfaces(&mut staged, &self.shell_windows, &self.monitors, &candidate));
         if let Err(error) = mounted {
@@ -650,6 +651,7 @@ impl SessionHost {
         } else { None };
         self.shell_windows = staged;
         surface.commit_image_policy(document, &candidate, mount_writes);
+        candidate.commit_staged_mount();
         self.clear_fallback(document);
         self.module = module.clone();
         if module.as_package().is_some() { self.last_good = Some(module); }

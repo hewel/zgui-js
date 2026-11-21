@@ -9,6 +9,7 @@ use crate::runtime_capabilities::ResolvedCapabilities;
 mod clipboard;
 mod external;
 mod files;
+mod network;
 mod sqlite;
 
 const MAX_CALLBACKS: usize = 1024;
@@ -102,6 +103,7 @@ pub(crate) struct Work {
     direct_images: Cell<DirectImageBudget>,
     clipboard: clipboard::ClipboardState,
     files: files::FilesState,
+    network: network::NetworkState,
     sqlite: sqlite::SqliteState,
     external: external::External,
     resolved: ResolvedCapabilities,
@@ -133,6 +135,7 @@ impl Work {
             .as_ref()
             .is_some_and(|pkg| pkg.manifest.capabilities.clipboard.read);
         let files = files::FilesState::new(package.clone(), &assets, wake.clone());
+        let network = network::NetworkState::new(package.clone(), &assets);
         let sqlite = sqlite::SqliteState::new(package.clone(), &assets);
         let external = external::External::new(package.clone(), &assets);
         Rc::new(Self {
@@ -144,6 +147,7 @@ impl Work {
             direct_images: Cell::default(),
             clipboard: clipboard::ClipboardState::new(allow_clipboard_read),
             files,
+            network,
             sqlite,
             external,
             resolved,
@@ -448,6 +452,7 @@ impl Work {
         })))?;
         self.install_clipboard(&services)?;
         self.install_files(&services)?;
+        self.install_network(&services)?;
         self.install_sqlite(&services)?;
         self.install_external(&services)?;
         ctx.globals().set("__zguiServices", services)?;
@@ -660,6 +665,7 @@ impl Work {
         self.frame_hosts.borrow_mut().clear();
         self.clipboard.clear();
         self.files.clear();
+        self.network.clear(self.generation);
         self.sqlite.clear();
         self.external.clear(self.generation);
         self.mode.set(Mode::Disposed);

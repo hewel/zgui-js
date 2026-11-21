@@ -375,3 +375,25 @@ export type {
   WatchEvent,
   WatchEventKind,
 } from "./files";
+
+export { connectWebSocket, createScopedFetch, httpRequest, openEventStream } from "./network";
+export type {
+  EventStream,
+  EventStreamCallbacks,
+  EventStreamOpenInfo,
+  EventStreamOptions,
+  HttpHeadersInit,
+  HttpRequestOptions,
+  HttpResponse,
+  ScopedAbortSignal,
+  ScopedFetch,
+  ScopedFetchDefaults,
+  ScopedFetchInit,
+  ServerSentEvent,
+  WebSocketCallbacks,
+  WebSocketCloseInfo,
+  WebSocketConnection,
+  WebSocketMessage,
+  WebSocketOpenInfo,
+  WebSocketOptions,
+} from "./network";

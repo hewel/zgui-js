@@ -93,6 +93,55 @@ impl FilesCapabilities {
     }
 }
 
+crate::schema::object_struct! {
+/// Origin-allowlisted outbound network capability declarations.
+#[derive(Default)]
+#[serde(default, rename_all = "camelCase", deny_unknown_fields)]
+pub struct NetworkCapabilities {
+    /// Exact normalized origins (`scheme://host[:port]`) the session may contact.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub origins: Vec<String>,
+    /// Explicitly permits `http://` and `ws://` origins when listed.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub allow_insecure_http: bool,
+    /// Explicitly permits loopback, link-local, and RFC1918/ULA private destinations.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub allow_private_networks: bool,
+}
+}
+
+impl NetworkCapabilities {
+    #[must_use]
+    pub(crate) fn is_empty(&self) -> bool {
+        self.origins.is_empty() && !self.allow_insecure_http && !self.allow_private_networks
+    }
+
+    pub(crate) fn to_origin_policy(&self) -> std::result::Result<host_services::network::OriginPolicy, String> {
+        let mut parsed = Vec::with_capacity(self.origins.len());
+        let mut seen = std::collections::BTreeSet::new();
+        for entry in &self.origins {
+            let origin = host_services::network::Origin::parse_manifest_entry(entry)
+                .map_err(|e| format!("invalid capabilities.network.origins entry {entry:?}: {e}"))?;
+            if origin.to_string() != *entry {
+                return Err(format!(
+                    "capabilities.network.origins entry {entry:?} must be in canonical form {:?}",
+                    origin.to_string()
+                ));
+            }
+            if !seen.insert(origin.clone()) {
+                return Err(format!("duplicate capabilities.network.origins entry: {entry:?}"));
+            }
+            parsed.push(origin);
+        }
+        host_services::network::OriginPolicy::new(
+            parsed,
+            self.allow_insecure_http,
+            self.allow_private_networks,
+        )
+        .map_err(|e| format!("invalid capabilities.network policy: {e}"))
+    }
+}
+
 pub(crate) fn valid_file_directory_path(path: &str) -> bool {
     if canonical_absolute(path) {
         return true;
@@ -145,6 +194,9 @@ pub struct Capabilities {
     /// Pre-declared local directory allowlist grants.
     #[serde(skip_serializing_if = "FilesCapabilities::is_empty")]
     pub files: FilesCapabilities,
+    /// Origin-allowlisted outbound network declarations.
+    #[serde(skip_serializing_if = "NetworkCapabilities::is_empty")]
+    pub network: NetworkCapabilities,
 }
 }
 
@@ -162,9 +214,13 @@ impl Capabilities {
             && self.clipboard.is_empty()
             && self.sqlite.is_empty()
             && self.files.is_empty()
+            && self.network.is_empty()
     }
 
     fn validate(&self) -> Result<()> {
+        if !self.network.is_empty() {
+            self.network.to_origin_policy().map_err(Box::<dyn Error>::from)?;
+        }
         let mut seen_dbs = std::collections::BTreeSet::new();
         for name in &self.sqlite.databases {
             if !host_services::sqlite::is_valid_database_name(name) || !seen_dbs.insert(name) {

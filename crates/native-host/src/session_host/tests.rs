@@ -1316,3 +1316,211 @@ fn live_font_validation_skips_generic_fallback_stacks_and_deduplicates_missing_f
     let report = session.retire();
     assert!(report.failure.is_none(), "teardown failed: {:?}", report.failure);
 }
+
+#[test]
+fn staged_network_deferral_and_reload_under_sse_flood() {
+    use crate::{
+        assets::fixture::{FixtureDefinition, FixtureRuntime},
+        environment::Environment,
+        package::{Capabilities, NetworkCapabilities},
+    };
+    use std::time::Duration;
+
+    let caps = || Capabilities {
+        network: NetworkCapabilities {
+            origins: vec!["https://api.example.com".into()],
+            allow_insecure_http: false,
+            allow_private_networks: false,
+        },
+        ..Capabilities::default()
+    };
+
+    let gen1_pkg = Fixture::new(
+        r#"
+        export const hostApiVersion = 1;
+        let received = 0;
+        let closed = false;
+        let label;
+        export function mount(root) {
+            label = __zgui.createElement('text');
+            __zgui.insertNode(label, __zgui.createTextNode('g1:0'), null);
+            __zgui.insertNode(root, label, null);
+            const stream = __zguiServices.openEventStream(
+                { url: 'https://api.example.com/flood' },
+                {
+                    onMessage() {
+                        if (closed) throw Error('stale callback delivered to retired generation 1');
+                        received += 1;
+                        __zgui.replaceText(__zgui.getFirstChild(label), `g1:${received}`);
+                    },
+                },
+            );
+            return () => {
+                closed = true;
+                stream.close();
+                __zgui.clearRoot(root);
+            };
+        }
+        "#,
+        "",
+    )
+    .with_capabilities(caps());
+
+    // Gen 2 starts an irreversible HTTP request during mount(), then fails before acceptance!
+    let rejected_pkg = Fixture::new(
+        r#"
+        export const hostApiVersion = 1;
+        export function mount(root) {
+            __zguiServices.httpRequest({ url: 'https://api.example.com/must-not-send' });
+            throw Error('candidate mount aborted');
+        }
+        "#,
+        "",
+    )
+    .with_capabilities(caps());
+
+    // Gen 3 accepts cleanly under the same flood and verifies timers still fire fairly.
+    let gen3_pkg = Fixture::new(
+        r#"
+        export const hostApiVersion = 1;
+        let received = 0;
+        let timerFired = 0;
+        let label;
+        export function mount(root) {
+            label = __zgui.createElement('text');
+            __zgui.insertNode(label, __zgui.createTextNode('g3:0:t0'), null);
+            __zgui.insertNode(root, label, null);
+            const stream = __zguiServices.openEventStream(
+                { url: 'https://api.example.com/flood' },
+                {
+                    onMessage() {
+                        received += 1;
+                        __zgui.replaceText(__zgui.getFirstChild(label), `g3:${received}:t${timerFired}`);
+                    },
+                },
+            );
+            const t1 = setTimeout(() => {
+                timerFired += 1;
+                __zgui.replaceText(__zgui.getFirstChild(label), `g3:${received}:t${timerFired}`);
+            }, 5);
+            return () => {
+                clearTimeout(t1);
+                stream.close();
+                __zgui.clearRoot(root);
+            };
+        }
+        "#,
+        "",
+    )
+    .with_capabilities(caps());
+
+    let flood_events: Vec<serde_json::Value> = (1..=60)
+        .map(|i| serde_json::json!({ "kind": "message", "atMs": i / 4, "data": format!("m{i}") }))
+        .collect();
+    let fixture_def: FixtureDefinition = serde_json::from_value(serde_json::json!({
+        "schemaVersion": 1,
+        "id": "network-reload-flood",
+        "services": {
+            "network": {
+                "http": [],
+                "sse": [{
+                    "url": "https://api.example.com/flood",
+                    "repeat": true,
+                    "atMs": 0,
+                    "events": flood_events
+                }]
+            }
+        },
+        "events": []
+    }))
+    .expect("decode fixture");
+
+    let cx = zgui_platform_headless::Headless::new();
+    let clock = cx.clock();
+    let env = Environment::new(clock.clone(), Some(1_700_000_000_000), 7);
+    let fixture_rt = FixtureRuntime::new(fixture_def, env.clone());
+    let deadline = Rc::new(Cell::new(std::time::Instant::now() + Duration::from_secs(30)));
+    let policy = SessionPolicy::preview(
+        js_runtime::RuntimeLimits::default(),
+        deadline,
+        env.clone(),
+        fixture_rt.clone(),
+    );
+
+    let backend = Rc::new(DocumentDom::new(Rc::new(RefCell::new(Document::new()))));
+    let dom = DomHandle::from_rc(backend.clone());
+    let root = dom.create_element(ElementName::new("column"));
+    dom.insert(backend.root_node(), root, None);
+    let stub = Rc::new(StubHost::default());
+    let region = MountRegion {
+        document: backend.document_id(),
+        root,
+        dom,
+        host: HostHandle::from_rc(stub.clone()),
+        fonts: zgui::app::Fonts::shipped_only(),
+        root_anchor: Rc::new(Cell::new(root)),
+    };
+    let pending = Rc::new(RefCell::new(vec![region.clone()]));
+    let mut surface = StubSurface {
+        document: region.document,
+        bindings: HashMap::new(),
+        images: None,
+        frames: RefCell::new(Vec::new()),
+    };
+    let mut host = SessionHost::new(
+        pending,
+        SessionModule::package(gen1_pkg.package()),
+        policy,
+        RecoveryPolicy::Propagate,
+        SurfaceOpacity::Opaque,
+    );
+    host.attach(&mut surface, cx.waker(), no_retry()).expect("mount gen 1");
+    let gen1 = host.session(region.document).expect("gen1 session").clone();
+
+    // Advance 5ms so gen1 starts receiving flood events.
+    cx.virtual_clock().advance(Duration::from_millis(5));
+    fixture_rt.release_due().expect("release gen1 flood events");
+    while gen1.checkpoint().expect("pump gen1") {}
+
+    // Attempt staged reload with Gen 2: it calls httpRequest then throws.
+    // Because staged outbound ops are deferred until acceptance, ZERO HTTP requests hit the fixture!
+    let outcome = host.replace(
+        &mut surface,
+        cx.waker(),
+        region.document,
+        SessionModule::package(rejected_pkg.package()),
+        no_retry(),
+    );
+    assert!(matches!(outcome, ReloadOutcome::Rejected(_)), "gen2 must be rejected");
+    fixture_rt
+        .assert_calls("network", "httpRequest", 0, None)
+        .expect("rejected candidate must leak zero outbound HTTP calls to fixture");
+    assert!(fixture_rt.contract_failure().is_none(), "rejected candidate must not trigger unmatched fixture failure");
+
+    // Reload to Gen 3: Gen 1 retires cleanly and Gen 3 commits its staged SSE stream.
+    let outcome = host.replace(
+        &mut surface,
+        cx.waker(),
+        region.document,
+        SessionModule::package(gen3_pkg.package()),
+        no_retry(),
+    );
+    assert!(matches!(outcome, ReloadOutcome::Mounted { .. }), "gen3 must mount cleanly");
+    assert_eq!(gen1.counts(), ResourceCounts::default(), "gen1 must retire cleanly");
+
+    let gen3 = host.session(region.document).expect("gen3 session").clone();
+    // Advance virtual clock across the full 60-event flood and fire StubHost timers.
+    for _ in 0..25 {
+        cx.virtual_clock().advance(Duration::from_millis(1));
+        stub.advance(Duration::from_millis(1));
+        fixture_rt.release_due().expect("release gen3 flood events");
+        while gen3.checkpoint().expect("pump gen3") {}
+    }
+    let text = region.dom.text_content(region.root_anchor.get());
+    assert_eq!(text, "g3:60:t1", "gen3 must receive all 60 SSE events and fire timer fairly under flood");
+    assert!(fixture_rt.contract_failure().is_none());
+
+    let report = gen3.retire();
+    assert!(report.failure.is_none(), "gen3 teardown failed: {:?}", report.failure);
+    assert_eq!(report.counts, ResourceCounts::default());
+}

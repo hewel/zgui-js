@@ -478,6 +478,7 @@ impl Driver {
                     || session.has_sqlite_events()
                     || session.has_pending_file_ops()
                     || session.has_file_events()
+                    || session.has_network_events()
             })
             || self.pipeline.app().native.windows().iter().any(|window| {
                 self.pipeline.platform().offscreen(window.surface().id()).is_some_and(|surface|surface.has_pending_redraw())

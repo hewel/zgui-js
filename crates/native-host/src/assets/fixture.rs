@@ -8,8 +8,11 @@ use std::{cell::RefCell, collections::{BTreeMap, VecDeque}, marker::PhantomData,
 use crate::schema::{deserialize_object,object_struct};
 
 mod external;
+mod network;
 pub(crate) use external::ExternalDelivery;
+pub(crate) use network::NetworkDelivery;
 use external::{CommandScript, ControlMessage, ControlProvider, ExternalJob, ExternalState, SocketScript};
+use network::{NetworkFixture, NetworkJob, NetworkState};
 
 const MAX_TRACE_RECORDS: usize = 4096;
 const MAX_TRACE_BYTES: usize = 1024 * 1024;
@@ -114,6 +117,9 @@ object_struct! {
         /// Optional in-memory virtual filesystem, scripted dialogs, and seeded bookmarks.
         #[serde(default, deserialize_with = "present_provider", skip_serializing_if = "Option::is_none")]
         pub(crate) files: Option<FilesFixture>,
+        /// Optional deterministic network scripts (`http`, `sse`, `websockets`).
+        #[serde(default, deserialize_with = "present_provider", skip_serializing_if = "Option::is_none")]
+        pub(crate) network: Option<NetworkFixture>,
     }
 }
 
@@ -443,6 +449,7 @@ impl FixtureDefinition {
             }
         }
         if let Some(files) = &self.services.files { files.validate()?; }
+        if let Some(network) = &self.services.network { network.validate()?; }
         self.services.validate_external()?;
         for event in &self.events { self.validate_event(&event.update)?; }
         Ok(())
@@ -460,6 +467,7 @@ enum Scheduled {
     Event(StateEvent),
     Asset { generation: u64, id: u64, result: Result<String, ServiceError>, injected: bool },
     External { generation: u64, job: ExternalJob },
+    Network { generation: u64, job: NetworkJob },
 }
 
 #[derive(PartialEq, Eq, PartialOrd, Ord)]
@@ -482,6 +490,7 @@ struct State {
     deliveries: VecDeque<Completion>,
     assets: Option<AssetState>,
     external: ExternalState,
+    network: NetworkState,
     calls: BTreeMap<u64, Call>,
     next_registration_id: u64,
     sequence: u64,
@@ -508,6 +517,7 @@ impl FixtureRuntime {
         Rc::new(Self { state: RefCell::new(State {
             scheduled, deliveries: VecDeque::new(), assets: definition.services.assets.as_ref().map(|p| p.initial_state.clone()),
             external: ExternalState::default(),
+            network: NetworkState::default(),
             calls: BTreeMap::new(), next_registration_id: 1, sequence: 0, trace: vec![], trace_bytes: 0, dropped: 0, failure: invalid, disposed: false,
         }), definition, environment })
     }
@@ -640,6 +650,7 @@ impl FixtureRuntime {
                     state.deliveries.push_back(Completion { generation, request_id: id, result });
                 }
                 Scheduled::External { generation, job } => self.enqueue_external(&mut state, generation, job)?,
+                Scheduled::Network { generation, job } => self.enqueue_network(&mut state, generation, job)?,
             }
         }
         if let Some(error) = &state.failure { return Err(error.clone()); }
@@ -791,12 +802,13 @@ impl FixtureRuntime {
         let mut state = self.state.borrow_mut();
         if state.disposed { return; }
         let scheduled = state.scheduled.len();
-        let deliveries = state.deliveries.len() + state.external.delivery_count();
+        let deliveries = state.deliveries.len() + state.external.delivery_count() + state.network.delivery_count();
         for call in state.calls.values_mut() {
             if !call.error_delivered { call.error = None; }
         }
         state.disposed = true; state.scheduled.clear(); state.deliveries.clear();
         state.external.dispose();
+        state.network.dispose();
         self.record(&mut state, "disposal", json!({"cancelledScheduled":scheduled,"cancelledDeliveries":deliveries}));
     }
     pub(crate) fn trace(&self) -> Value {
@@ -807,7 +819,8 @@ impl FixtureRuntime {
         if let Some(error) = self.contract_failure() { return Err(error); }
         if !matches!((service, method),
             ("assets", "readTextAsset") | ("sockets", "connectUnixSocket" | "send")
-            | ("commands", "spawnCommand") | ("control", "onControlMessage" | "reply"))
+            | ("commands", "spawnCommand") | ("control", "onControlMessage" | "reply")
+            | ("network", "httpRequest" | "openEventStream" | "connectWebSocket"))
         {
             return Err(failure("E_ASSERTION", format!("unknown fixture method {service}.{method}")));
         }

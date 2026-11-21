@@ -71,6 +71,7 @@ impl SessionHost {
             Err(error) => return ReloadOutcome::Rejected(error),
         };
         let mut staged = self.shell_windows.empty_successor();
+        candidate.begin_staged_mount();
         let result = candidate.update_monitors(&self.monitors)
             .and_then(|_| candidate.update_reduced_motion(cx.reduced_motion()))
             .and_then(|_| candidate.mount())
@@ -85,6 +86,7 @@ impl SessionHost {
             staged.fence_after_predecessor(report, &candidate, platform_lock_state(cx), |token, id| close_native_surface(runtime, cx, token, id))
         });
         self.shell_windows = staged;
+        candidate.commit_staged_mount();
         self.module = module.clone();
         self.last_good = Some(module.clone());
         self.pure_session = Some(candidate);

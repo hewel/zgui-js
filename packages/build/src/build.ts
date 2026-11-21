@@ -371,6 +371,104 @@ function fileDirectoryPath(value: string): boolean {
   );
 }
 
+function isPrivateIpv4(host: string): boolean {
+  const parts = host.split(".");
+  if (parts.length !== 4 || !parts.every(p => /^\d{1,3}$/.test(p))) return false;
+  const nums = parts.map(Number);
+  if (nums.some(n => n > 255)) return false;
+  const [a, b] = nums as [number, number, number, number];
+  return (
+    a === 0 ||
+    a === 10 ||
+    a === 127 ||
+    (a === 100 && b >= 64 && b <= 127) ||
+    (a === 169 && b === 254) ||
+    (a === 172 && b >= 16 && b <= 31) ||
+    (a === 192 && b === 168) ||
+    a >= 224
+  );
+}
+
+function isPrivateHost(hostname: string): boolean {
+  const bare =
+    hostname.startsWith("[") && hostname.endsWith("]")
+      ? hostname.slice(1, -1).toLowerCase()
+      : hostname.toLowerCase();
+  if (bare === "localhost" || bare.endsWith(".localhost")) return true;
+  if (isPrivateIpv4(bare)) return true;
+  if (bare.includes(":")) {
+    // Reject loopback, unspecified, ULA (fc00::/7), link-local (fe80::/10), multicast (ff00::/8),
+    // and IPv4-mapped IPv6 addresses unless allowPrivateNetworks is explicitly opted in.
+    if (bare === "::1" || bare === "::") return true;
+    const first = bare.split(":")[0] ?? "";
+    const head = Number.parseInt(first || "0", 16);
+    if (!Number.isNaN(head)) {
+      if ((head & 0xfe00) === 0xfc00) return true;
+      if ((head & 0xffc0) === 0xfe80) return true;
+      if ((head & 0xff00) === 0xff00) return true;
+    }
+    if (bare.startsWith("::ffff:")) {
+      const mapped = bare.slice("::ffff:".length);
+      if (isPrivateIpv4(mapped)) return true;
+      // Also handle hex form e.g. ::ffff:7f00:1 produced by WHATWG URL parser
+      const hexParts = mapped.split(":");
+      if (hexParts.length === 2) {
+        const hi = Number.parseInt(hexParts[0]!, 16);
+        const lo = Number.parseInt(hexParts[1]!, 16);
+        if (!Number.isNaN(hi) && !Number.isNaN(lo)) {
+          const ipv4 = `${(hi >> 8) & 255}.${hi & 255}.${(lo >> 8) & 255}.${lo & 255}`;
+          if (isPrivateIpv4(ipv4)) return true;
+        }
+      }
+    }
+  }
+  return false;
+}
+
+function parseNetworkOrigin(
+  entry: unknown,
+  field: string,
+): {
+  canonical: string;
+  insecure: boolean;
+  host: string;
+} {
+  if (!capabilityString(entry) || entry !== entry.trim() || entry.includes("*")) {
+    throw new Error(`${field} contains invalid origin ${JSON.stringify(entry)}`);
+  }
+  let parsed: URL;
+  try {
+    parsed = new URL(entry);
+  } catch {
+    throw new Error(`${field} contains invalid origin ${JSON.stringify(entry)}`);
+  }
+  const scheme = parsed.protocol.slice(0, -1).toLowerCase();
+  if (scheme !== "https" && scheme !== "http" && scheme !== "wss" && scheme !== "ws") {
+    throw new Error(`${field} origin scheme must be https, http, wss, or ws: ${entry}`);
+  }
+  if (parsed.username || parsed.password) {
+    throw new Error(`${field} origin must not include userinfo: ${entry}`);
+  }
+  if (parsed.search || parsed.hash) {
+    throw new Error(`${field} origin must not include query or fragment: ${entry}`);
+  }
+  const afterScheme = entry.slice(entry.indexOf("://") + 3);
+  if (afterScheme.includes("/") || afterScheme.includes("?") || afterScheme.includes("#")) {
+    throw new Error(`${field} origin must not include a path, query, or fragment: ${entry}`);
+  }
+  const host = parsed.hostname.toLowerCase();
+  if (!host) {
+    throw new Error(`${field} origin must include a host: ${entry}`);
+  }
+  const defaultPort = scheme === "https" || scheme === "wss" ? 443 : 80;
+  const port = parsed.port ? Number(parsed.port) : defaultPort;
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    throw new Error(`${field} origin has invalid port: ${entry}`);
+  }
+  const canonical = port === defaultPort ? `${scheme}://${host}` : `${scheme}://${host}:${port}`;
+  return { canonical, insecure: scheme === "http" || scheme === "ws", host };
+}
+
 function parseCapabilities(input: unknown, source: string): Capabilities {
   if (input !== undefined && (input === null || typeof input !== "object" || Array.isArray(input)))
     throw new Error(`${source} must be an object`);
@@ -440,6 +538,42 @@ function parseCapabilities(input: unknown, source: string): Capabilities {
           }
           if (dirs.length) capabilities.files = { directories: dirs };
         }
+        break;
+      }
+      case "network": {
+        if (!value || typeof value !== "object" || Array.isArray(value))
+          throw new Error(`${field} must be an object`);
+        const network: {
+          origins?: string[];
+          allowInsecureHttp?: boolean;
+          allowPrivateNetworks?: boolean;
+        } = {};
+        for (const [subKey, subVal] of Object.entries(value as Record<string, unknown>)) {
+          switch (subKey) {
+            case "origins": {
+              if (!Array.isArray(subVal)) throw new Error(`${field}.origins must be an array`);
+              const origins = new Set<string>();
+              for (const item of subVal as unknown[]) {
+                const parsed = parseNetworkOrigin(item, `${field}.origins`);
+                if (origins.has(parsed.canonical))
+                  throw new Error(`${field}.origins contains duplicate origin ${parsed.canonical}`);
+                origins.add(parsed.canonical);
+              }
+              if (origins.size) network.origins = [...origins];
+              break;
+            }
+            case "allowInsecureHttp":
+            case "allowPrivateNetworks": {
+              if (typeof subVal !== "boolean")
+                throw new Error(`${field}.${subKey} must be a boolean`);
+              if (subVal) network[subKey] = true;
+              break;
+            }
+            default:
+              throw new Error(`Unknown capability: ${field}.${subKey}`);
+          }
+        }
+        if (Object.keys(network).length) capabilities.network = network;
         break;
       }
       case "imagePrefixes":
@@ -521,6 +655,29 @@ async function mergeCapabilities(
       directories: [...fileDirs.entries()]
         .sort(([a], [b]) => a.localeCompare(b))
         .map(([dirPath, mode]) => ({ path: dirPath, mode })),
+    };
+  }
+  const allowInsecureHttp = sources.some(source => source.network?.allowInsecureHttp);
+  const allowPrivateNetworks = sources.some(source => source.network?.allowPrivateNetworks);
+  const networkOrigins = new Set(sources.flatMap(source => source.network?.origins ?? []));
+  for (const origin of networkOrigins) {
+    const parsed = parseNetworkOrigin(origin, "capabilities.network.origins");
+    if (parsed.insecure && !allowInsecureHttp) {
+      throw new Error(
+        `capabilities.network.origins contains insecure origin ${origin} without allowInsecureHttp: true`,
+      );
+    }
+    if (isPrivateHost(parsed.host) && !allowPrivateNetworks) {
+      throw new Error(
+        `capabilities.network.origins contains private/loopback origin ${origin} without allowPrivateNetworks: true`,
+      );
+    }
+  }
+  if (networkOrigins.size || allowInsecureHttp || allowPrivateNetworks) {
+    merged.network = {
+      ...(networkOrigins.size ? { origins: [...networkOrigins].sort() } : {}),
+      ...(allowInsecureHttp ? { allowInsecureHttp: true } : {}),
+      ...(allowPrivateNetworks ? { allowPrivateNetworks: true } : {}),
     };
   }
   return Object.keys(merged).length ? merged : undefined;

@@ -15,6 +15,12 @@ export type FilesCapabilities = {
   directories?: FileDirectoryGrant[];
 };
 
+export type NetworkCapabilities = {
+  origins?: string[];
+  allowInsecureHttp?: boolean;
+  allowPrivateNetworks?: boolean;
+};
+
 export type Capabilities = {
   shellSurfaces?: boolean;
   sessionLock?: boolean;
@@ -26,6 +32,7 @@ export type Capabilities = {
   clipboard?: ClipboardCapabilities;
   sqlite?: SqliteCapabilities;
   files?: FilesCapabilities;
+  network?: NetworkCapabilities;
 };
 
 export type FontDeclaration = { family: string; path: string };

@@ -210,6 +210,15 @@ pub(crate) struct ResourceCounts {
     /// Active directory watchers still running after cleanup.
     #[serde(skip_serializing_if = "is_zero")]
     pub fs_watchers: usize,
+    /// In-flight HTTP requests or open HTTP response body streams still active after cleanup.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub http_requests: usize,
+    /// Open Server-Sent Events streams still active after cleanup.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub event_streams: usize,
+    /// Open WebSocket connections still active after cleanup.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub web_sockets: usize,
     #[serde(skip_serializing_if = "is_zero")]
     pub canvas_scenes: usize,
     /// Native auxiliary shell surfaces still registered with the platform.
@@ -774,6 +783,21 @@ impl Session {
         !self.shutdown_started.get() && self.work.has_file_events()
     }
 
+    pub(crate) fn has_network_events(&self) -> bool {
+        !self.shutdown_started.get() && self.work.has_network_events()
+    }
+
+    /// Marks the session as a staged mount candidate so irreversible outbound network
+    /// requests are deferred until native acceptance.
+    pub(crate) fn begin_staged_mount(&self) {
+        self.work.begin_staged_network();
+    }
+
+    /// Releases deferred outbound network operations once the session is accepted.
+    pub(crate) fn commit_staged_mount(&self) {
+        self.work.commit_staged_network();
+    }
+
     pub(crate) fn finish_clipboard_read(
         &self,
         serial: zgui::platform::ClipboardSerial,
@@ -934,9 +958,9 @@ impl Session {
         }
         let max_jobs = engine.limits().max_jobs_per_pump;
         let mut worked = false;
-        let mut remaining = [32, 32, 32, max_jobs, 32];
+        let mut remaining = [32, 32, 32, max_jobs, 32, 16];
         // Interleave work classes and preserve the next class across deadlines.
-        // Ready native work must not starve promise jobs that can cancel it.
+        // Ready native work and network floods must not starve timers or promise jobs.
         while Instant::now() < end && remaining.iter().any(|&count| count != 0) {
             let phase = self.checkpoint_cursor.get();
             self.checkpoint_cursor.set((phase + 1) % remaining.len());
@@ -977,6 +1001,11 @@ impl Session {
                         .map_err(|error| self.diagnostic(error))?;
                     true
                 } else { false },
+                5 => if let Some(event) = self.work.next_network_event() {
+                    self.bridges.run(engine.turn(), |js| js.with_context(|ctx| self.work.settle_network_event(&ctx, event)))
+                        .map_err(|error| self.diagnostic(error))?;
+                    true
+                } else { false },
                 _ => {
                     let job_budget = engine.limits().job_timeout;
                     self.bridges.run(engine.turn(), |js| js.execute_job(job_budget))
@@ -1001,7 +1030,7 @@ impl Session {
         let queued = self.has_queued_notifications()?;
         let jobs_pending = engine.is_job_pending();
         if !jobs_pending { self.shell.clear_cleanup_jobs_pending(); }
-        if jobs_pending || queued || self.work.has_ready() || self.work.has_completions() || self.work.has_clipboard_completions() || self.work.has_clipboard_ops() || self.work.has_external() || self.work.has_sqlite_events() || self.work.has_file_events() { self.wake_owner(); }
+        if jobs_pending || queued || self.work.has_ready() || self.work.has_completions() || self.work.has_clipboard_completions() || self.work.has_clipboard_ops() || self.work.has_external() || self.work.has_sqlite_events() || self.work.has_file_events() || self.work.has_network_events() { self.wake_owner(); }
         Ok(worked)
     }
 
@@ -1279,6 +1308,7 @@ impl Session {
         let external = self.work.external_counts();
         let sqlite = self.work.sqlite_counts();
         let files = self.work.file_counts();
+        let network = self.work.network_counts();
         let mut counts = ResourceCounts {
             callbacks: self.shell.callback_count() + self.window_controls.callback_count(), timers, frame_callbacks, requests,
             image_handles: self.image_blobs().len(),
@@ -1289,6 +1319,9 @@ impl Session {
             sqlite_transactions: sqlite.transactions,
             file_handles: files.handles,
             fs_watchers: files.watchers,
+            http_requests: network.http_requests,
+            event_streams: network.event_streams,
+            web_sockets: network.web_sockets,
             shell_surfaces: self.shell_surfaces.get(),
             fonts: self.font_leases.borrow().len(),
             engine_alive: self.engine.borrow().is_some(),
@@ -1384,6 +1417,7 @@ impl Session {
         let external = self.work.external_counts();
         let sqlite = self.work.sqlite_counts();
         let files = self.work.file_counts();
+        let network = self.work.network_counts();
         self.work.finish_stop();
         // Report remaining leases before forced disposal releases the native scenes.
         let canvas_scenes = self.counts().canvas_scenes;
@@ -1413,6 +1447,9 @@ impl Session {
         counts.sqlite_transactions = sqlite.transactions;
         counts.file_handles = files.handles;
         counts.fs_watchers = files.watchers;
+        counts.http_requests = network.http_requests;
+        counts.event_streams = network.event_streams;
+        counts.web_sockets = network.web_sockets;
         self.work.clear_images();
         let failure = if !self.contract_reported.replace(true)
             && let Some(contract) = self.contract_failure()

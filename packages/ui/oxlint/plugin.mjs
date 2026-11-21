@@ -34,6 +34,9 @@ const OWNER_CLEANUP_HELPERS = new Set([
   "openKvStore",
   "openAuthorizedDirectory",
   "watchDirectory",
+  "httpRequest",
+  "openEventStream",
+  "connectWebSocket",
 ]);
 
 const RUNTIME_SERVICE_APIS = new Set([
@@ -62,6 +65,9 @@ const RUNTIME_SERVICE_APIS = new Set([
   "listBookmarks",
   "revokeBookmark",
   "watchDirectory",
+  "httpRequest",
+  "openEventStream",
+  "connectWebSocket",
 ]);
 
 function commentLines(comment) {
@@ -128,7 +134,11 @@ function isModuleTopLevel(node) {
       if (isIife(cur)) continue;
       return false;
     }
-    if (cur.type === "MethodDefinition" || cur.type === "PropertyDefinition" || cur.type === "StaticBlock") {
+    if (
+      cur.type === "MethodDefinition" ||
+      cur.type === "PropertyDefinition" ||
+      cur.type === "StaticBlock"
+    ) {
       return false;
     }
   }
@@ -151,7 +161,10 @@ const rules = {
   "no-direct-bridge": {
     meta: {
       type: "problem",
-      docs: { description: "Disallow direct globalThis.__zgui bridge access outside host/runtime internals" },
+      docs: {
+        description:
+          "Disallow direct globalThis.__zgui bridge access outside host/runtime internals",
+      },
       schema: [],
     },
     create(context) {
@@ -168,7 +181,8 @@ const rules = {
         Identifier(node) {
           if (node.name !== "__zgui") return;
           const parent = node.parent;
-          if (parent?.type === "MemberExpression" && !parent.computed && parent.property === node) return;
+          if (parent?.type === "MemberExpression" && !parent.computed && parent.property === node)
+            return;
           context.report({ node, message });
         },
       };
@@ -178,13 +192,17 @@ const rules = {
   "no-raw-insert-or-provider": {
     meta: {
       type: "problem",
-      docs: { description: "Disallow raw Solid universal insert() and direct Context provider invocations" },
+      docs: {
+        description:
+          "Disallow raw Solid universal insert() and direct Context provider invocations",
+      },
       schema: [],
     },
     create(context) {
       const providerMessage =
         "Do not invoke Context providers directly; use provide() from shared.ts so children stay wrapped in a getter under the provider owner.";
-      const isContextName = name => /^[A-Z]/.test(name) && (/Context$/.test(name) || name === "Group" || name === "Internal");
+      const isContextName = name =>
+        /^[A-Z]/.test(name) && (/Context$/.test(name) || name === "Group" || name === "Internal");
       return {
         CallExpression(node) {
           if (node.callee.type === "Identifier" && node.callee.name === "insert") {
@@ -214,7 +232,10 @@ const rules = {
           if (
             isProviderJsx &&
             node.attributes.some(
-              attr => attr.type === "JSXAttribute" && attr.name?.type === "JSXIdentifier" && attr.name.name === "children",
+              attr =>
+                attr.type === "JSXAttribute" &&
+                attr.name?.type === "JSXIdentifier" &&
+                attr.name.name === "children",
             )
           ) {
             context.report({
@@ -231,7 +252,10 @@ const rules = {
   "no-unthemed-primitives-with-components": {
     meta: {
       type: "problem",
-      docs: { description: "Disallow importing unthemed Button/TextField/TextArea alongside @hewel/zgui/components" },
+      docs: {
+        description:
+          "Disallow importing unthemed Button/TextField/TextArea alongside @hewel/zgui/components",
+      },
       schema: [],
     },
     create(context) {
@@ -239,16 +263,20 @@ const rules = {
         Program(program) {
           const filename = (context.filename ?? "").replace(/\\/g, "/");
           const inComponentsDir =
-            filename.includes("/packages/ui/src/components/") || filename.startsWith("packages/ui/src/components/");
+            filename.includes("/packages/ui/src/components/") ||
+            filename.startsWith("packages/ui/src/components/");
           const imports = program.body.filter(stmt => stmt.type === "ImportDeclaration");
-          const usesComponents = imports.some(decl => decl.source.value === "@hewel/zgui/components");
+          const usesComponents = imports.some(
+            decl => decl.source.value === "@hewel/zgui/components",
+          );
           if (!usesComponents && !inComponentsDir) return;
           for (const decl of imports) {
             if (decl.importKind === "type") continue;
             const source = decl.source.value;
             const fromRawRoot =
               source === "@hewel/zgui" ||
-              (inComponentsDir && /^(\.\.\/index|\.\.\/button|\.\.\/input)(\.js|\.ts)?$/.test(source));
+              (inComponentsDir &&
+                /^(\.\.\/index|\.\.\/button|\.\.\/input)(\.js|\.ts)?$/.test(source));
             if (!fromRawRoot) continue;
             for (const spec of decl.specifiers) {
               if (spec.importKind === "type") continue;
@@ -295,7 +323,9 @@ const rules = {
   "no-cleanup-in-ref": {
     meta: {
       type: "problem",
-      docs: { description: "Disallow calling owner-scoped cleanup helpers inside JSX ref callbacks" },
+      docs: {
+        description: "Disallow calling owner-scoped cleanup helpers inside JSX ref callbacks",
+      },
       schema: [],
     },
     create(context) {
@@ -316,7 +346,10 @@ const rules = {
   "no-top-level-service-call": {
     meta: {
       type: "problem",
-      docs: { description: "Disallow calling @hewel/zgui-services runtime APIs at module top level before mount()" },
+      docs: {
+        description:
+          "Disallow calling @hewel/zgui-services runtime APIs at module top level before mount()",
+      },
       schema: [],
     },
     create(context) {
@@ -365,7 +398,9 @@ const rules = {
   "no-solid-web-imports": {
     meta: {
       type: "problem",
-      docs: { description: "Disallow importing solid-js or solid-js/web directly instead of @hewel/zgui" },
+      docs: {
+        description: "Disallow importing solid-js or solid-js/web directly instead of @hewel/zgui",
+      },
       schema: [],
     },
     create(context) {
