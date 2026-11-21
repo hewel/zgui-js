@@ -371,6 +371,8 @@ pub(crate) struct Session {
     pub(crate) generation: u64,
     pub(crate) frames: Cell<usize>,
     module: SessionModule,
+    active_styles: RefCell<Arc<[crate::package::Stylesheet]>>,
+    active_package: RefCell<Option<Rc<Package>>>,
     fault: RefCell<Option<SessionError>>,
     retired: RefCell<Option<SessionRetirement>>,
     retirement_reported: Cell<bool>,
@@ -491,7 +493,10 @@ impl Session {
                 font_leases: RefCell::new(Vec::new()),
                 reported_unregistered_fonts: RefCell::new(std::collections::BTreeSet::new()),
                 fonts,
-                generation, frames: Cell::new(0), module,
+                generation, frames: Cell::new(0),
+                active_styles: RefCell::new(Arc::from(module.styles())),
+                active_package: RefCell::new(module.as_package().cloned()),
+                module,
                 fault: RefCell::new(None), retired: RefCell::new(None),
                 policy, reduced_motion: Cell::new(initial_reduced_motion),
                 checkpoint_cursor: Cell::new(0), waker, notifications_after: Cell::new(0),
@@ -1281,14 +1286,68 @@ impl Session {
         if let Some(primary) = self.primary() { self.install_sheets(primary); }
     }
 
+    pub(crate) fn active_package(&self) -> Option<Rc<Package>> {
+        self.active_package.borrow().clone()
+    }
+
+    /// Hot-swap packaged Stylo stylesheets across all mounted surfaces of this
+    /// live session without restarting QuickJS. Preflights every stylesheet
+    /// fail-closed before mutating any installed sheet.
+    pub(crate) fn hot_swap_stylesheets(&self, candidate: &Rc<Package>) -> Result<()> {
+        let mut font_families = std::collections::BTreeSet::new();
+        for (index, sheet) in candidate.styles.iter().enumerate() {
+            let name = format!("application:{index}");
+            if let Err(message) = zgui::runtime::image_policy::audit_stylesheet_image_urls(&sheet.css) {
+                self.report_stylesheet_rejection(&name, "STYLESHEET_IMAGE_URL_FORBIDDEN", message);
+                return Err(SessionError::Style {
+                    code: "E_STYLE_PROFILE",
+                    message: format!("stylesheet {name} rejected: {message}"),
+                    details: serde_json::json!({ "name": name, "reason": message }),
+                });
+            }
+            match zgui_style::preflight_stylesheet(&sheet.css) {
+                Ok(summary) => font_families.extend(summary.font_families),
+                Err(diagnostics) => {
+                    return Err(SessionError::Style {
+                        code: "E_STYLE_PROFILE",
+                        message: format!("stylesheet {name} rejected"),
+                        details: serde_json::to_value(diagnostics).expect("native stylesheet diagnostics serialize"),
+                    });
+                }
+            }
+        }
+        for family in font_families {
+            if !is_css_generic_font_family(&family) && !self.fonts.contains_family(&family) {
+                return Err(SessionError::Style {
+                    code: "E_FONT",
+                    message: format!("font family {family:?} is not registered in this package"),
+                    details: serde_json::Value::Null,
+                });
+            }
+        }
+        let previous_len = self.active_styles.borrow().len();
+        let next_styles = Arc::clone(&candidate.styles);
+        for owned in self.primary.iter().chain(self.layers.borrow().values()) {
+            for (index, sheet) in next_styles.iter().enumerate() {
+                owned.region.host.install_stylesheet(&format!("application:{index}"), &sheet.css);
+            }
+            for index in next_styles.len()..previous_len {
+                owned.region.host.remove_stylesheet(&format!("application:{index}"));
+            }
+        }
+        *self.active_styles.borrow_mut() = next_styles;
+        *self.active_package.borrow_mut() = Some(Rc::clone(candidate));
+        Ok(())
+    }
+
     fn install_sheets(&self, owned: &SessionRegion) {
-        for (index, sheet) in self.module.styles().iter().enumerate() {
+        for (index, sheet) in self.active_styles.borrow().iter().enumerate() {
             owned.region.host.install_stylesheet(&format!("application:{index}"), &sheet.css);
         }
     }
 
     fn remove_sheets(&self, owned: &SessionRegion) {
-        for index in 0..self.module.styles().len() {
+        for index in 0..self.active_styles.borrow().len() {
             owned.region.host.remove_stylesheet(&format!("application:{index}"));
         }
     }
@@ -1337,7 +1396,7 @@ impl Session {
 
     pub(crate) fn remove_surplus_stylesheets(&self, successor: &Self) {
         if let Some(primary) = self.primary() {
-            for index in successor.module.styles().len()..self.module.styles().len() {
+            for index in successor.active_styles.borrow().len()..self.active_styles.borrow().len() {
                 primary.region.host.remove_stylesheet(&format!("application:{index}"));
             }
         }

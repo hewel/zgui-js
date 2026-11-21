@@ -113,15 +113,22 @@ export interface ApplicationWatcher {
   close(): Promise<void>;
 }
 
+export type TypecheckEvent =
+  | { status: "passed"; attemptId: string }
+  | { status: "failed"; attemptId: string; diagnostics: string };
+
 export interface WatchApplicationOptions extends BuildApplicationOptions {
-  onSuccess?: (result: PublishedApplication) => void;
-  onError?: (error: unknown) => void;
-  signal?: AbortSignal;
+  strictTypecheck?: boolean | undefined;
+  onSuccess?: ((result: PublishedApplication) => void) | undefined;
+  onError?: ((error: unknown) => void) | undefined;
+  onTypecheck?: ((event: TypecheckEvent) => void) | undefined;
+  signal?: AbortSignal | undefined;
 }
 
 export type DevMode = "desktop" | "preview";
 
 export interface DevApplicationOptions extends Omit<BuildApplicationOptions, "development"> {
+  strictTypecheck?: boolean | undefined;
   hostArgs?: string[];
   hostRoot?: string;
   hostExecutable?: string;

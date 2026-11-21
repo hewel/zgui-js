@@ -1,9 +1,15 @@
 import assert from "node:assert/strict";
+import { mkdir, readFile, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { test } from "node:test";
+import { buildApplication, workspaceRoot } from "../../packages/build/src/build.ts";
 import {
   buildFixtureApp,
   createTempWorkspace,
+  getNode,
+  pixelAt,
+  readPng,
+  readTree,
   runScenario,
 } from "./harness.mjs";
 
@@ -201,4 +207,104 @@ test("production build degrades createDevState and router dev preservation to pl
   });
 
   assert.equal(result.teardown?.clean, true);
+});
+
+test("CSS-only live reload hot-swaps Stylo stylesheets and updates pixels without restarting QuickJS or losing local signals (#82)", { timeout: 60000 }, async t => {
+  const temp = await createTempWorkspace("preview-css-live-reload-");
+  t.after(() => temp.cleanup());
+
+  const makeTsx = label => `
+    import { createSignal, renderApp, type NativeNode } from "@hewel/zgui";
+    import styles from "./Swatch.module.css";
+    export const hostApiVersion = 1;
+    function App() {
+      const [localCount, setLocalCount] = createSignal(0);
+      return (
+        <box style={{ display: "flex", "flex-direction": "column", gap: "12px", padding: "20px" }}>
+          <text testId="build-label">${label}</text>
+          <text testId="local-count">local:{localCount()}</text>
+          <box testId="btn-inc" onClick={() => setLocalCount(n => n + 1)}><text>Inc</text></box>
+          <box testId="swatch" class={styles.swatch} />
+        </box>
+      );
+    }
+    export function mount(root: NativeNode) { return renderApp(() => <App />, root); }
+  `;
+  const buildVariant = async (dirName, { label, rgb }) => {
+    const dir = path.join(temp.dir, dirName);
+    await mkdir(path.join(dir, "src"), { recursive: true });
+    await mkdir(path.join(dir, "node_modules/@hewel"), { recursive: true });
+    await symlink(path.join(workspaceRoot, "packages/ui"), path.join(dir, "node_modules/@hewel/zgui"), "dir");
+    await symlink(path.join(workspaceRoot, "node_modules/solid-js"), path.join(dir, "node_modules/solid-js"), "dir");
+    await writeFile(path.join(dir, "package.json"), JSON.stringify({ name: "css-hot-app", type: "module" }));
+    await writeFile(path.join(dir, "tsconfig.json"), JSON.stringify({
+      extends: "@hewel/zgui/tsconfig.native.json",
+      include: ["src"],
+    }));
+    await writeFile(path.join(dir, "src/Swatch.module.css"), `.swatch { width: 120px; height: 60px; background: ${rgb}; }\n`);
+    await writeFile(path.join(dir, "src/main.tsx"), makeTsx(label));
+    const { dist } = await buildApplication("css-hot-app", { root: workspaceRoot, appDirectory: dir, development: true });
+    return dist;
+  };
+
+  // Identical TSX + identical CSS class names, different CSS color -> pure CSS-only successor!
+  const v1Red = await buildVariant("v1-red", { label: "v1", rgb: "rgb(220, 40, 40)" });
+  const v2Green = await buildVariant("v2-green", { label: "v1", rgb: "rgb(30, 185, 85)" });
+  // Modified TSX -> full staged JS reload!
+  const v3Js = await buildVariant("v3-js", { label: "v3", rgb: "rgb(40, 100, 220)" });
+
+  const { result, out } = await runScenario({
+    projectDir: temp.dir,
+    bundle: v1Red,
+    name: "css-only-live-reload",
+    id: "css-only-live-reload",
+    width: 480,
+    height: 320,
+    scale: 1,
+    devState: true,
+    requiredCapabilities: ["pixels", "virtual-time", "selectors.test-id", "input.pointer", "tree.inspect"],
+    steps: [
+      advance(40),
+      click("btn-inc"),
+      click("btn-inc"),
+      advance(20),
+      check("local-count", "text", "local:2"),
+      { id: "c-red", op: "capture", captureId: "before-css", surface: "main" },
+      reload(v2Green, "accepted"),
+      advance(20),
+      // Local Solid signal (NOT createDevState) MUST stay at 2 because QuickJS never restarted!
+      check("local-count", "text", "local:2"),
+      check("build-label", "text", "v1"),
+      { id: "c-green", op: "capture", captureId: "after-css", surface: "main" },
+      reload(v3Js, "accepted"),
+      advance(40),
+      // JS change restarts QuickJS so local signal resets to 0 and label becomes v3.
+      check("build-label", "text", "v3"),
+      check("local-count", "text", "local:0"),
+    ],
+  });
+
+  assert.equal(result.teardown?.clean, true, JSON.stringify(result.teardown));
+
+  // Verify steps.jsonl recorded cssOnly: true on generation 1 for the CSS reload, and generation 2 for JS reload.
+  const steps = (await readFile(path.join(out, "steps.jsonl"), "utf8"))
+    .trim()
+    .split("\n")
+    .map(line => JSON.parse(line));
+  const reloadSteps = steps.filter(s => s.op === "lifecycle.reload");
+  assert.equal(reloadSteps.length, 2);
+  assert.equal(reloadSteps[0].result?.generation, 1, JSON.stringify(reloadSteps[0]));
+  assert.equal(reloadSteps[0].result?.cssOnly, true, JSON.stringify(reloadSteps[0]));
+  assert.equal(reloadSteps[1].result?.generation, 2, JSON.stringify(reloadSteps[1]));
+  assert.equal(reloadSteps[1].result?.cssOnly, undefined, JSON.stringify(reloadSteps[1]));
+
+  // Verify rendered swatch pixels genuinely changed from red to green!
+  const tree = await readTree(out, "after-css");
+  const swatch = getNode(tree, "swatch");
+  const cx = Math.round(swatch.boundsLogical.x + swatch.boundsLogical.width / 2);
+  const cy = Math.round(swatch.boundsLogical.y + swatch.boundsLogical.height / 2);
+  const beforePx = pixelAt(await readPng(path.join(out, "captures/before-css.png")), cx, cy);
+  const afterPx = pixelAt(await readPng(path.join(out, "captures/after-css.png")), cx, cy);
+  assert.ok(beforePx[0] > 180 && beforePx[1] < 80, `expected red before CSS reload, got rgba(${beforePx.join(", ")})`);
+  assert.ok(afterPx[1] > 150 && afterPx[0] < 80, `expected green after CSS reload, got rgba(${afterPx.join(", ")})`);
 });

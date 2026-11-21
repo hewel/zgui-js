@@ -11,6 +11,7 @@ const MAX_WORKERS: usize = 32;
 
 crate::schema::object_struct! {
 /// One sealed lazy/shared JS chunk and its paired source map.
+#[derive(PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ChunkEntry {
     pub path: String,
@@ -20,6 +21,7 @@ pub struct ChunkEntry {
 
 crate::schema::object_struct! {
 /// One sealed isolated compute worker entrypoint and its paired source map.
+#[derive(PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct WorkerEntry {
     pub name: String,
@@ -63,7 +65,7 @@ pub struct Manifest {
 
 crate::schema::object_struct! {
 /// Clipboard capability flags; writes are allowed by default, reads require declaration or user gesture.
-#[derive(Default)]
+#[derive(Default, PartialEq, Eq)]
 #[serde(default, rename_all = "camelCase", deny_unknown_fields)]
 pub struct ClipboardCapabilities {
     /// Allows reading the clipboard outside an active user-gesture turn.
@@ -81,7 +83,7 @@ impl ClipboardCapabilities {
 
 crate::schema::object_struct! {
 /// App-scoped SQLite database declarations.
-#[derive(Default)]
+#[derive(Default, PartialEq, Eq)]
 #[serde(default, rename_all = "camelCase", deny_unknown_fields)]
 pub struct SqliteCapabilities {
     /// Named SQLite databases this application may open.
@@ -99,6 +101,7 @@ impl SqliteCapabilities {
 
 crate::schema::object_struct! {
 /// One pre-declared directory allowlist grant.
+#[derive(PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct FileDirectoryGrant {
     pub path: String,
@@ -108,7 +111,7 @@ pub struct FileDirectoryGrant {
 
 crate::schema::object_struct! {
 /// Local directory allowlist capability declarations.
-#[derive(Default)]
+#[derive(Default, PartialEq, Eq)]
 #[serde(default, rename_all = "camelCase", deny_unknown_fields)]
 pub struct FilesCapabilities {
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -125,7 +128,7 @@ impl FilesCapabilities {
 
 crate::schema::object_struct! {
 /// Origin-allowlisted outbound network capability declarations.
-#[derive(Default)]
+#[derive(Default, PartialEq, Eq)]
 #[serde(default, rename_all = "camelCase", deny_unknown_fields)]
 pub struct NetworkCapabilities {
     /// Exact normalized origins (`scheme://host[:port]`) the session may contact.
@@ -191,7 +194,7 @@ pub(crate) fn valid_file_directory_path(path: &str) -> bool {
 
 crate::schema::object_struct! {
 /// Host privileges requested by the package, all denied by default.
-#[derive(Default)]
+#[derive(Default, PartialEq, Eq)]
 #[serde(default, rename_all = "camelCase", deny_unknown_fields)]
 pub struct Capabilities {
     /// Allows the session to create desktop shell surfaces.
@@ -289,7 +292,7 @@ impl Capabilities {
 
 crate::schema::object_struct! {
 /// Optional primary window dimensions and metadata declared in `package.json` (`zgui.window`).
-#[derive(Default)]
+#[derive(Default, PartialEq, Eq)]
 #[serde(default, rename_all = "camelCase", deny_unknown_fields)]
 pub struct WindowConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -333,6 +336,7 @@ impl WindowConfig {
 }
 
 crate::schema::object_struct! {
+#[derive(PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct Font {
     pub family: String,
@@ -341,6 +345,7 @@ pub struct Font {
 }
 
 crate::schema::object_struct! {
+#[derive(PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct StyleSystem {
     pub name: String,
@@ -380,6 +385,52 @@ pub struct Package {
 }
 
 impl Package {
+    /// Returns true strictly when `next` preserves identical JS entry, chunks,
+    /// workers, assets, fonts, window declaration, capabilities, and style system,
+    /// differing only in packaged stylesheet assets.
+    pub(crate) fn is_css_only_successor(&self, next: &Self) -> bool {
+        let a = &self.manifest;
+        let b = &next.manifest;
+        if a.schema_version != b.schema_version
+            || a.host_api_version != b.host_api_version
+            || a.id != b.id
+            || a.entry != b.entry
+            || a.source_map != b.source_map
+            || a.chunks != b.chunks
+            || a.workers != b.workers
+            || a.assets != b.assets
+            || a.fonts != b.fonts
+            || a.window != b.window
+            || a.capabilities != b.capabilities
+            || a.style_system != b.style_system
+        {
+            return false;
+        }
+        let same_digest = |key: &str| a.artifact_digests.get(key) == b.artifact_digests.get(key);
+        if !same_digest(&a.entry) {
+            return false;
+        }
+        for chunk in &a.chunks {
+            if !same_digest(&chunk.path) {
+                return false;
+            }
+        }
+        for worker in &a.workers {
+            if !same_digest(&worker.path) {
+                return false;
+            }
+        }
+        for asset in &a.assets {
+            if !same_digest(asset) {
+                return false;
+            }
+        }
+        if a.styles != b.styles {
+            return true;
+        }
+        a.styles.iter().any(|style| !same_digest(style))
+    }
+
     /// Resolve the publication symlink once. Every read then belongs to that
     /// immutable generation, even if the builder replaces dist concurrently.
     pub fn load(path: &Path) -> Result<Self> {

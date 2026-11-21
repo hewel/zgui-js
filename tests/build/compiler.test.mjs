@@ -892,3 +892,130 @@ export function mount(root: NativeNode): () => void {
   assert.equal(original.column, 4, `expected throw at column 4, got ${JSON.stringify(original)}`);
 });
 
+test("dev watchApplication publishes before slow async tsrs completes, cancels superseded runs, and honors strictTypecheck", async t => {
+  const directory = await fixture(t);
+  const statuses = [];
+  const successes = [];
+  const typechecks = [];
+  let handlers;
+  let driverReady = Promise.withResolvers();
+  const fakeWatchBundle = (_entry, options) => {
+    handlers = options;
+    driverReady.resolve();
+    return { close: async () => {} };
+  };
+  let publishCount = 0;
+  const fakePublish = async (app, result, { appDirectory }) => {
+    publishCount += 1;
+    const dist = await publishGeneration(appDirectory, result.files);
+    return { dist, manifest: { buildId: `sha256:${String(publishCount).padStart(64, "0")}`, app } };
+  };
+  const tcCalls = [];
+  const fakeTypecheck = (_config, { signal }) => {
+    const gate = Promise.withResolvers();
+    const record = { gate, signal, aborted: false };
+    signal?.addEventListener("abort", () => {
+      record.aborted = true;
+      gate.reject(Object.assign(new Error("aborted"), { name: "AbortError" }));
+    });
+    tcCalls.push(record);
+    return gate.promise;
+  };
+  const watcher = watchApplication(
+    "fixture",
+    {
+      appDirectory: directory,
+      development: true,
+      onSuccess: value => successes.push(value),
+      onError: error => { throw error; },
+      onTypecheck: event => typechecks.push(event),
+    },
+    {
+      watchBundle: fakeWatchBundle,
+      typecheck: fakeTypecheck,
+      publish: fakePublish,
+      publishStatus: async (appDirectory, value) => {
+        statuses.push(value);
+        await publishBuildStatus(appDirectory, value);
+      },
+    },
+  );
+  try {
+    await driverReady.promise;
+    const compiled = {
+      files: new Map([["app.mjs", Buffer.from("export const hostApiVersion = 1;")]]),
+      graph: { modules: [path.join(directory, "src/main.tsx")], chunks: [] },
+    };
+    // First attempt: publish MUST complete while tsrs is still pending!
+    await handlers.onAttempt();
+    await handlers.onCompile(compiled);
+    assert.equal(successes.length, 1, "dev publish must not block on slow async tsrs");
+    assert.equal(tcCalls.length, 1);
+    assert.deepEqual(statuses.at(-1).typecheck, { status: "running", diagnostics: null });
+
+    // Second edit arrives before first tsrs resolves -> first tsrs must be aborted!
+    await handlers.onAttempt();
+    assert.equal(tcCalls[0].aborted, true, "superseded tsrs must be aborted via AbortController");
+    await handlers.onCompile(compiled);
+    assert.equal(successes.length, 2);
+    assert.equal(tcCalls.length, 2);
+
+    // Second tsrs fails -> structured typecheck diagnostics written without blocking publication.
+    tcCalls[1].gate.reject(new Error("src/main.tsx(5,3): error TS2322: bad type"));
+    await new Promise(resolve => setTimeout(resolve, 20));
+    assert.equal(typechecks.length, 1);
+    assert.equal(typechecks[0].status, "failed");
+    assert.match(typechecks[0].diagnostics, /TS2322/);
+    assert.equal(statuses.at(-1).status, "published");
+    assert.equal(statuses.at(-1).typecheck.status, "failed");
+
+    // Third edit passes tsrs cleanly -> status clears to passed.
+    await handlers.onAttempt();
+    await handlers.onCompile(compiled);
+    tcCalls[2].gate.resolve();
+    await new Promise(resolve => setTimeout(resolve, 20));
+    assert.equal(typechecks.at(-1).status, "passed");
+    assert.deepEqual(statuses.at(-1).typecheck, { status: "passed", diagnostics: null });
+  } finally {
+    await watcher.close();
+  }
+
+  // strictTypecheck: true must remain strictly gated before publication.
+  let strictPublished = 0;
+  let strictErrors = 0;
+  let strictHandlers;
+  const strictReady = Promise.withResolvers();
+  const strictWatcher = watchApplication(
+    "fixture",
+    {
+      appDirectory: directory,
+      development: true,
+      strictTypecheck: true,
+      onSuccess: () => { strictPublished += 1; },
+      onError: () => { strictErrors += 1; },
+    },
+    {
+      watchBundle: (_entry, options) => {
+        strictHandlers = options;
+        strictReady.resolve();
+        return { close: async () => {} };
+      },
+      typecheck: async () => { throw new Error("strict TS2322"); },
+      publish: fakePublish,
+      publishStatus: async () => {},
+    },
+  );
+  try {
+    await strictReady.promise;
+    await strictHandlers.onAttempt();
+    await assert.rejects(strictHandlers.onCompile({
+      files: new Map([["app.mjs", Buffer.from("export const hostApiVersion = 1;")]]),
+      graph: { modules: [path.join(directory, "src/main.tsx")], chunks: [] },
+    }), /strict TS2322/);
+    assert.equal(strictPublished, 0, "strictTypecheck must block publication on type errors");
+    assert.equal(strictErrors, 0);
+  } finally {
+    await strictWatcher.close();
+  }
+});
+

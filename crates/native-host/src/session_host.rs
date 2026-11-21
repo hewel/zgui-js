@@ -14,6 +14,7 @@ use zgui::{
 
 use crate::{
     assets::MAX_SAFE_ID,
+    dev_banner,
     fallback,
     session::{Result as SessionResult, ResourceCounts, Session, SessionError, SessionModule, SessionPolicy},
 };
@@ -98,7 +99,7 @@ pub(crate) enum RecoveryPolicy {
 
 #[derive(Debug)]
 pub(crate) enum ReloadOutcome {
-    Mounted { generation: u64, predecessor_leak: Option<PredecessorLeak> },
+    Mounted { generation: u64, predecessor_leak: Option<PredecessorLeak>, css_only: bool },
     Rejected(SessionError),
     Fallback(SessionError),
 }
@@ -112,7 +113,12 @@ pub(crate) struct PredecessorLeak {
 
 pub(crate) fn report_reload(outcome: &ReloadOutcome) {
     match outcome {
-        ReloadOutcome::Mounted { generation, .. } => eprintln!("reload-mounted: generation={generation}"),
+        ReloadOutcome::Mounted { generation, css_only: true, .. } => {
+            eprintln!("reload-css-swapped: generation={generation}");
+        }
+        ReloadOutcome::Mounted { generation, css_only: false, .. } => {
+            eprintln!("reload-mounted: generation={generation}");
+        }
         ReloadOutcome::Rejected(error) => eprintln!("reload-preflight-rejected: {error}"),
         ReloadOutcome::Fallback(error) => eprintln!("reload-fallback: {error}"),
     }
@@ -253,6 +259,8 @@ pub(crate) struct SessionHost {
     regions: HashMap<DocumentId, MountRegion>,
     sessions: HashMap<DocumentId, Rc<Session>>,
     fallbacks: HashMap<DocumentId, Recovery>,
+    dev_banner_enabled: bool,
+    dev_banners: HashMap<DocumentId, dev_banner::DevBanner>,
     generation: u64,
     module: SessionModule,
     last_good: Option<SessionModule>,
@@ -276,6 +284,7 @@ impl SessionHost {
     ) -> Self {
         Self {
             pending, regions: HashMap::new(), sessions: HashMap::new(), fallbacks: HashMap::new(),
+            dev_banner_enabled: false, dev_banners: HashMap::new(),
             generation: 0, module, last_good: None, policy, recovery,
             acceptance: None,
             monitors: Vec::new(), pure_fonts: None, pure_session: None, pure_attempted: false,
@@ -293,6 +302,57 @@ impl SessionHost {
     }
     pub(crate) fn set_dev_state(&mut self, enabled: bool) {
         self.policy = self.policy.clone().with_dev_state(enabled);
+    }
+    pub(crate) fn set_dev_banner_enabled(&mut self, enabled: bool) {
+        self.dev_banner_enabled = enabled;
+        if !enabled {
+            for banner in self.dev_banners.values_mut() {
+                banner.clear();
+            }
+            self.dev_banners.clear();
+        }
+    }
+    pub(crate) fn show_dev_banner(
+        &mut self,
+        surface: &mut impl SessionSurface,
+        document: DocumentId,
+        title: &str,
+        detail: &str,
+    ) {
+        if !self.dev_banner_enabled
+            || self.shell_windows.has_active_lock()
+            || surface.session_lock_support().is_some_and(SessionLockState::is_retained)
+        {
+            self.clear_dev_banner(surface, document);
+            return;
+        }
+        let Some(region) = self.regions.get(&document).cloned() else {
+            return;
+        };
+        let signature = dev_banner::banner_signature(title, detail);
+        if self
+            .dev_banners
+            .get(&document)
+            .is_some_and(|existing| existing.is_visible() && existing.signature() == signature)
+        {
+            return;
+        }
+        if let Some(mut old) = self.dev_banners.remove(&document) {
+            old.clear();
+        }
+        let next = dev_banner::DevBanner::new(region, title, detail);
+        self.dev_banners.insert(document, next);
+        surface.request_frame(document);
+    }
+    pub(crate) fn clear_dev_banner(&mut self, surface: &mut impl SessionSurface, document: DocumentId) {
+        if let Some(mut banner) = self.dev_banners.remove(&document) {
+            banner.clear();
+            surface.request_frame(document);
+        }
+    }
+    #[cfg(test)]
+    pub(crate) fn has_dev_banner(&self, document: DocumentId) -> bool {
+        self.dev_banners.get(&document).is_some_and(dev_banner::DevBanner::is_visible)
     }
     /// The module a fresh mount region attaches, or the last mounted one.
     pub(crate) fn module(&self) -> &SessionModule { &self.module }
@@ -483,6 +543,11 @@ impl SessionHost {
             if !present { recovery.view.clear(); }
             present
         });
+        self.dev_banners.retain(|document, banner| {
+            let present = surface.surface(*document).is_some();
+            if !present { banner.clear(); }
+            present
+        });
         self.regions.retain(|document, _| surface.surface(*document).is_some());
         Ok(())
     }
@@ -549,6 +614,7 @@ impl SessionHost {
     #[cfg(test)]
     pub(crate) fn retire(&mut self, document: DocumentId) -> Option<Rc<Session>> {
         if let Some(mut recovery) = self.fallbacks.remove(&document) { recovery.view.clear(); }
+        if let Some(mut banner) = self.dev_banners.remove(&document) { banner.clear(); }
         self.regions.remove(&document);
         let session = self.sessions.remove(&document)?;
         let _ = session.retire();
@@ -564,10 +630,12 @@ impl SessionHost {
         }
         for session in self.sessions() { let _ = session.retire(); }
         for recovery in self.fallbacks.values_mut() { recovery.view.clear(); }
+        for banner in self.dev_banners.values_mut() { banner.clear(); }
         self.sessions.clear();
         self.pure_session = None;
         self.pure_attempted = false;
         self.fallbacks.clear();
+        self.dev_banners.clear();
         self.regions.clear();
         self.pending.borrow_mut().clear();
     }
@@ -594,6 +662,9 @@ impl SessionHost {
             if let ReloadOutcome::Mounted { predecessor_leak: Some(leak), .. } = &outcome {
                 record["predecessorLeak"] = serde_json::json!(leak);
             }
+            if let ReloadOutcome::Mounted { css_only: true, .. } = &outcome {
+                record["cssOnly"] = serde_json::json!(true);
+            }
             eprintln!("native-candidate: {record}");
             if let Some(package) = package && let Err(error) = package.record_acceptance(&record) {
                 eprintln!("native-candidate-status-error: {error}");
@@ -617,10 +688,40 @@ impl SessionHost {
         let Some(target) = surface.surface(document) else {
             return ReloadOutcome::Rejected("mount region has no window".into());
         };
+        let lock_state = surface.session_lock_support();
+        let previous = self.sessions.get(&document).cloned();
+
+        // Fast path (dev mode): CSS-only live reload swaps Stylo stylesheets in
+        // place without restarting QuickJS or losing local component state.
+        if self.policy.dev_state_enabled()
+            && let Some(prev_session) = &previous
+            && !self.fallbacks.contains_key(&document)
+            && !lock_state.is_some_and(SessionLockState::is_retained)
+            && !self.shell_windows.has_active_lock()
+            && let Some(prev_pkg) = prev_session.active_package()
+            && let Some(next_pkg) = module.as_package()
+            && prev_pkg.is_css_only_successor(next_pkg)
+        {
+            match prev_session.hot_swap_stylesheets(next_pkg) {
+                Ok(()) => {
+                    self.module = module.clone();
+                    self.last_good = Some(module);
+                    prev_session.request_frames(|doc| surface.request_frame(doc));
+                    return ReloadOutcome::Mounted {
+                        generation: prev_session.generation,
+                        predecessor_leak: None,
+                        css_only: true,
+                    };
+                }
+                Err(error) => {
+                    eprintln!("css-live-swap-fallback: {error}");
+                }
+            }
+        }
+
         let Some(generation) = Self::allocate_generation(&mut self.generation) else {
             return ReloadOutcome::Rejected("session generation exhausted".into());
         };
-        let previous = self.sessions.get(&document).cloned();
         let mut candidate_region = region.clone();
         let staging_parent = if previous.is_some() {
             let Some(parent) = region.dom.parent(region.root) else {
@@ -631,7 +732,6 @@ impl SessionHost {
         } else { None };
         // Candidate evaluation owns no native children or stylesheet and cannot
         // create work. Rejection must leave the active session untouched.
-        let lock_state = surface.session_lock_support();
         let hydrated = if self.policy.dev_state_enabled()
             && !lock_state.is_some_and(SessionLockState::is_retained)
             && !self.shell_windows.has_active_lock()
@@ -719,7 +819,7 @@ impl SessionHost {
         if module.as_package().is_some() { self.last_good = Some(module); }
         self.sessions.insert(document, candidate);
         surface.request_frame(document);
-        ReloadOutcome::Mounted { generation, predecessor_leak }
+        ReloadOutcome::Mounted { generation, predecessor_leak, css_only: false }
     }
 
     fn clear_fallback(&mut self, document: DocumentId) {

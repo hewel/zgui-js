@@ -5,11 +5,17 @@ import path from "node:path";
 export const BUILD_STATUS_FILE = ".zgui-build-status.json";
 export const NATIVE_STATUS_FILE = ".zgui-native-status.json";
 
+export type TypecheckStatus =
+  | { status: "running"; diagnostics: null }
+  | { status: "passed"; diagnostics: null }
+  | { status: "failed"; diagnostics: string };
+
 type BuildAttempt = {
   schemaVersion: 1;
   attemptId: string;
   app: string;
   previousDirectory: string | null;
+  typecheck?: TypecheckStatus;
 };
 
 export type BuildStatus = BuildAttempt &

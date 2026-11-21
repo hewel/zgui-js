@@ -109,7 +109,7 @@ impl SessionHost {
         self.module = module.clone();
         self.last_good = Some(module.clone());
         self.pure_session = Some(candidate);
-        ReloadOutcome::Mounted { generation, predecessor_leak }
+        ReloadOutcome::Mounted { generation, predecessor_leak, css_only: false }
     }
 
     /// Deliver output changes, retire superseded surfaces and realize pending shell requests.

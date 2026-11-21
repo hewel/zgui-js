@@ -13,12 +13,57 @@ use std::{
 use crate::package::Package;
 
 type Publication = Result<Package, String>;
-const POLL_INTERVAL: Duration = Duration::from_millis(500);
+const POLL_INTERVAL: Duration = Duration::from_millis(250);
+const BUILD_STATUS_FILE: &str = ".zgui-build-status.json";
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum DevBuildStatus {
+    Clear,
+    Failed { title: String, detail: String },
+}
+
+pub(crate) fn parse_build_status(bytes: &[u8]) -> Option<DevBuildStatus> {
+    let value: serde_json::Value = serde_json::from_slice(bytes).ok()?;
+    let status = value.get("status")?.as_str()?;
+    match status {
+        "failed" => {
+            let detail = value
+                .get("error")
+                .and_then(|err| err.get("message"))
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("Build failed")
+                .to_owned();
+            Some(DevBuildStatus::Failed { title: "Build failed".into(), detail })
+        }
+        "published" => {
+            if let Some(tc) = value.get("typecheck") {
+                match tc.get("status").and_then(serde_json::Value::as_str) {
+                    Some("failed") => {
+                        let detail = tc
+                            .get("diagnostics")
+                            .and_then(serde_json::Value::as_str)
+                            .unwrap_or("Typecheck failed")
+                            .to_owned();
+                        return Some(DevBuildStatus::Failed {
+                            title: "Typecheck error".into(),
+                            detail,
+                        });
+                    }
+                    Some("running") => return None,
+                    _ => {}
+                }
+            }
+            Some(DevBuildStatus::Clear)
+        }
+        _ => None,
+    }
+}
 
 /// Validates immutable publications off the owner thread. Only `next`'s caller
 /// handles the resulting package; the wake callback carries no package state.
 pub(crate) struct PackageWatcher {
     results: Option<Receiver<Publication>>,
+    statuses: Option<Receiver<DevBuildStatus>>,
     stop: Arc<AtomicBool>,
     thread: Thread,
 }
@@ -30,31 +75,58 @@ impl PackageWatcher {
         wake: Arc<dyn Fn() + Send + Sync>,
     ) -> std::io::Result<Self> {
         let (sender, results) = mpsc::sync_channel(1);
+        let (status_sender, statuses) = mpsc::sync_channel(4);
         let stop = Arc::new(AtomicBool::new(false));
         let worker_stop = stop.clone();
+        let status_path = path.parent().map(|parent| parent.join(BUILD_STATUS_FILE));
         let worker = thread::Builder::new().name("package-watcher".into()).spawn(move || {
             let mut published = PublishedTarget { directory: initial, error: None };
+            let mut last_status_bytes: Option<Vec<u8>> = None;
             loop {
                 thread::park_timeout(POLL_INTERVAL);
                 if worker_stop.load(Ordering::Acquire) { break; }
-                let Some(result) = published.scan(&path) else { continue; };
-                if worker_stop.load(Ordering::Acquire) { break; }
-                // A single producer preserves FIFO while this bounded send
-                // applies backpressure. The next scan resolves dist afresh,
-                // rather than retaining a possibly superseded publication.
-                if sender.send(result).is_err() { break; }
-                if worker_stop.load(Ordering::Acquire) { break; }
-                wake();
+                let mut woke = false;
+                if let Some(status_file) = &status_path
+                    && let Ok(bytes) = fs::read(status_file)
+                    && last_status_bytes.as_deref() != Some(bytes.as_slice())
+                {
+                    last_status_bytes = Some(bytes.clone());
+                    if let Some(parsed) = parse_build_status(&bytes) {
+                        let _ = status_sender.try_send(parsed);
+                        woke = true;
+                    }
+                }
+                if let Some(result) = published.scan(&path) {
+                    if worker_stop.load(Ordering::Acquire) { break; }
+                    // A single producer preserves FIFO while this bounded send
+                    // applies backpressure. The next scan resolves dist afresh,
+                    // rather than retaining a possibly superseded publication.
+                    if sender.send(result).is_err() { break; }
+                    if worker_stop.load(Ordering::Acquire) { break; }
+                    woke = true;
+                }
+                if woke {
+                    wake();
+                }
             }
         })?;
         let thread = worker.thread().clone();
         // Detach: teardown must never wait for filesystem I/O to finish.
         drop(worker);
-        Ok(Self { results: Some(results), stop, thread })
+        Ok(Self { results: Some(results), statuses: Some(statuses), stop, thread })
     }
 
     pub(crate) fn next(&self) -> Option<Publication> {
         self.results.as_ref()?.try_recv().ok()
+    }
+
+    pub(crate) fn next_status(&self) -> Option<DevBuildStatus> {
+        let rx = self.statuses.as_ref()?;
+        let mut latest = None;
+        while let Ok(item) = rx.try_recv() {
+            latest = Some(item);
+        }
+        latest
     }
 }
 
@@ -65,6 +137,7 @@ impl Drop for PackageWatcher {
         // Disconnect before returning, including when send is blocked on a
         // full channel. Joining here could hang the owner on filesystem I/O.
         drop(self.results.take());
+        drop(self.statuses.take());
     }
 }
 
@@ -308,5 +381,30 @@ mod tests {
         gate.ended.recv_timeout(WAIT).unwrap();
         assert!(watcher.next().is_none());
         assert!(gate.wakes.try_recv().is_err());
+    }
+
+    #[test]
+    fn parse_build_status_maps_failed_typecheck_and_clean_publications() {
+        assert_eq!(
+            parse_build_status(br#"{"status":"failed","error":{"code":"E_BUILD","message":"src/main.tsx:2:1 bad"}}"#),
+            Some(DevBuildStatus::Failed { title: "Build failed".into(), detail: "src/main.tsx:2:1 bad".into() }),
+        );
+        assert_eq!(
+            parse_build_status(br#"{"status":"published","typecheck":{"status":"failed","diagnostics":"TS2322"}}"#),
+            Some(DevBuildStatus::Failed { title: "Typecheck error".into(), detail: "TS2322".into() }),
+        );
+        assert_eq!(
+            parse_build_status(br#"{"status":"published","typecheck":{"status":"running","diagnostics":null}}"#),
+            None,
+        );
+        assert_eq!(
+            parse_build_status(br#"{"status":"published","typecheck":{"status":"passed","diagnostics":null}}"#),
+            Some(DevBuildStatus::Clear),
+        );
+        assert_eq!(
+            parse_build_status(br#"{"status":"published"}"#),
+            Some(DevBuildStatus::Clear),
+        );
+        assert_eq!(parse_build_status(br#"{"status":"building"}"#), None);
     }
 }

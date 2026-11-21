@@ -1590,3 +1590,120 @@ fn dev_state_never_snapshots_locked_generations_and_hydrates_unlocked_reloads() 
 
     host.stop(&mut surface);
 }
+
+#[test]
+fn css_only_live_reload_preserves_session_generation_and_swaps_stylesheets() {
+    let first = Fixture::new(SIMPLE, "text { color: rgb(255, 0, 0); }");
+    let css_updated = Fixture::new(SIMPLE, "text { color: rgb(0, 180, 0); }");
+    let bad_css = Fixture::new(SIMPLE, "text { background: url(https://evil.invalid/x.png); }");
+    let bad_font_css = Fixture::new(SIMPLE, "text { font-family: UnregisteredDevFont; }");
+    let js_updated_src = SIMPLE.replace("active", "updated-js");
+    let js_updated = Fixture::new(&js_updated_src, "text { color: rgb(0, 0, 255); }");
+
+    let mut native = Native::new(RecoveryPolicy::Fallback, SessionModule::package(first.package()));
+    native.host.set_dev_state(true);
+    native.attach();
+    let initial = native.session();
+    let document = native.region.document;
+    assert_eq!(initial.generation, 1);
+    assert_eq!(native.stub.stylesheet("application:0").as_deref(), Some("text { color: rgb(255, 0, 0); }"));
+
+    // CSS-only successor swaps stylesheets in place without bumping generation or restarting QuickJS.
+    let outcome = native.host.replace(
+        &mut native.surface,
+        native.waker.clone(),
+        document,
+        SessionModule::package(css_updated.package()),
+        no_retry(),
+    );
+    assert!(
+        matches!(outcome, ReloadOutcome::Mounted { generation: 1, predecessor_leak: None, css_only: true }),
+        "expected CSS-only in-place swap, got {outcome:?}"
+    );
+    assert!(Rc::ptr_eq(&initial, &native.session()), "CSS-only reload must keep the exact live JS Session");
+    assert_eq!(native.stub.stylesheet("application:0").as_deref(), Some("text { color: rgb(0, 180, 0); }"));
+    assert_eq!(native.host.acceptance().unwrap()["cssOnly"], true);
+
+    // Invalid CSS and unregistered fonts fail closed and keep the active green stylesheet + live session.
+    for invalid in [bad_css.package(), bad_font_css.package()] {
+        let rejected = native.host.replace(
+            &mut native.surface,
+            native.waker.clone(),
+            document,
+            SessionModule::package(invalid),
+            no_retry(),
+        );
+        assert!(matches!(rejected, ReloadOutcome::Rejected(_)), "bad CSS must reject fail-closed: {rejected:?}");
+        assert!(Rc::ptr_eq(&initial, &native.session()));
+        assert_eq!(native.stub.stylesheet("application:0").as_deref(), Some("text { color: rgb(0, 180, 0); }"));
+    }
+
+    // JS change triggers normal staged generation reload.
+    let js_outcome = native.host.replace(
+        &mut native.surface,
+        native.waker.clone(),
+        document,
+        SessionModule::package(js_updated.package()),
+        no_retry(),
+    );
+    assert!(
+        matches!(js_outcome, ReloadOutcome::Mounted { css_only: false, .. }),
+        "JS change must trigger full staged reload: {js_outcome:?}"
+    );
+    assert!(!Rc::ptr_eq(&initial, &native.session()));
+    assert_eq!(native.text(), "updated-js");
+    assert_eq!(native.stub.stylesheet("application:0").as_deref(), Some("text { color: rgb(0, 0, 255); }"));
+}
+
+#[test]
+fn dev_banner_respects_dev_flag_and_session_lock_and_preserves_healthy_tree() {
+    let good = Fixture::new(SIMPLE, "text { color: red }");
+    let mut native = Native::new(RecoveryPolicy::Fallback, SessionModule::package(good.package()));
+    native.attach();
+    let document = native.region.document;
+
+    // Outside dev --watch mode, banner is strictly suppressed.
+    native.host.show_dev_banner(&mut native.surface, document, "Build failed", "src/main.tsx:1:1");
+    assert!(!native.host.has_dev_banner(document));
+    assert!(native.stub.stylesheet(dev_banner::SHEET_NAME).is_none());
+
+    // In dev --watch mode, banner renders alongside healthy content and clears cleanly.
+    native.host.set_dev_banner_enabled(true);
+    native.host.show_dev_banner(&mut native.surface, document, "Build failed", "src/main.tsx:1:1");
+    assert!(native.host.has_dev_banner(document));
+    assert!(native.stub.stylesheet(dev_banner::SHEET_NAME).is_some());
+    assert_eq!(native.text(), "active", "healthy app tree must stay intact");
+
+    // Repeated identical error keeps the banner mounted without losing its stylesheet.
+    native.host.show_dev_banner(&mut native.surface, document, "Build failed", "src/main.tsx:1:1");
+    assert!(native.host.has_dev_banner(document));
+    assert!(native.stub.stylesheet(dev_banner::SHEET_NAME).is_some());
+
+    // Clean recovery clears the banner and removes its stylesheet.
+    native.host.clear_dev_banner(&mut native.surface, document);
+    assert!(!native.host.has_dev_banner(document));
+    assert!(native.stub.stylesheet(dev_banner::SHEET_NAME).is_none());
+
+    // Session lock surface strictly suppresses the banner even in dev mode.
+    struct LockedSurface<'a>(&'a mut StubSurface);
+    impl SessionSurface for LockedSurface<'_> {
+        type Checkpoint = ();
+        type MountWrites = ();
+        fn surface(&self, d: DocumentId) -> Option<SurfaceId> { self.0.surface(d) }
+        fn bind(&mut self, d: DocumentId, s: &Rc<Session>) { self.0.bind(d, s); }
+        fn image_source_checkpoint(&mut self, d: DocumentId) { self.0.image_source_checkpoint(d); }
+        fn seal_image_source_writes(&self, d: DocumentId, c: ()) { self.0.seal_image_source_writes(d, c); }
+        fn discard_image_source_writes(&mut self, d: DocumentId, c: ()) { self.0.discard_image_source_writes(d, c); }
+        fn commit_image_policy(&mut self, d: DocumentId, s: &Session, w: ()) { self.0.commit_image_policy(d, s, w); }
+        fn request_frame(&self, d: DocumentId) { self.0.request_frame(d); }
+        fn session_lock_support(&self) -> Option<SessionLockState> { Some(SessionLockState::Locked) }
+        fn close_shell_surface(&mut self, t: WindowToken, id: Option<SurfaceId>) -> bool { self.0.close_shell_surface(t, id) }
+        fn stage_shell_surfaces(&mut self, st: &mut ShellWindows, p: &ShellWindows, m: &[Monitor], s: &Rc<Session>) -> SessionResult<()> {
+            self.0.stage_shell_surfaces(st, p, m, s)
+        }
+    }
+    let mut locked = LockedSurface(&mut native.surface);
+    native.host.show_dev_banner(&mut locked, document, "Build failed", "must never appear on lock screen");
+    assert!(!native.host.has_dev_banner(document));
+    assert!(native.stub.stylesheet(dev_banner::SHEET_NAME).is_none());
+}

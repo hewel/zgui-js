@@ -96,6 +96,7 @@ export function watchApplication(
     root = workspaceRoot,
     appDirectory = path.join(root, "apps/examples", app),
     development = false,
+    strictTypecheck = false,
     extraCapabilities,
     capabilitiesFile,
     onSuccess = ({ dist, manifest }) => console.log(`Published ${dist} ${manifest.buildId}`),
@@ -105,6 +106,7 @@ export function watchApplication(
           ? error.message
           : String(error),
       ),
+    onTypecheck,
     signal,
   }: WatchApplicationOptions = {},
   {
@@ -118,6 +120,7 @@ export function watchApplication(
   root = path.resolve(root);
   appDirectory = path.resolve(appDirectory);
   if (capabilitiesFile !== undefined) capabilitiesFile = path.resolve(capabilitiesFile);
+  const asyncTypecheck = development && !strictTypecheck;
   const controller = new AbortController();
   const abort = () => controller.abort(signal?.reason);
   signal?.addEventListener("abort", abort, { once: true });
@@ -126,6 +129,9 @@ export function watchApplication(
   let temporary: string;
   let status: Extract<BuildStatus, { status: "building" }> | undefined;
   let published: PublishedApplication | undefined;
+  let activeAttemptId: string | undefined;
+  let activeTypecheckAbort: AbortController | undefined;
+  let activeTypecheckRun: Promise<void> | undefined;
   let closed = false;
   let closing: Promise<void> | undefined;
   let restart = false;
@@ -135,6 +141,10 @@ export function watchApplication(
   let graphModules = new Set<string>();
   const report = (error: unknown) => {
     if (!closed && !controller.signal.aborted) onError(error);
+  };
+  const cancelActiveTypecheck = () => {
+    activeTypecheckAbort?.abort();
+    activeTypecheckAbort = undefined;
   };
 
   async function watchDependencyManifests(modules: Iterable<string>) {
@@ -194,6 +204,7 @@ export function watchApplication(
       async onAttempt() {
         published = undefined;
         status = undefined;
+        cancelActiveTypecheck();
         controller.signal.throwIfAborted();
         await syncCssModuleTypes(appDirectory, { root });
         let previousDirectory: string | null;
@@ -211,15 +222,18 @@ export function watchApplication(
             throw error;
           previousDirectory = null;
         }
+        const attemptId = randomUUID();
+        activeAttemptId = attemptId;
         const nextStatus: Extract<BuildStatus, { status: "building" }> = {
           schemaVersion: 1,
-          attemptId: randomUUID(),
+          attemptId,
           app,
           status: "building",
           previousDirectory,
           publicationDirectory: null,
           buildId: null,
           error: null,
+          ...(asyncTypecheck ? { typecheck: { status: "running", diagnostics: null } } : {}),
         };
         await publishStatus(appDirectory, nextStatus);
         status = nextStatus;
@@ -228,7 +242,9 @@ export function watchApplication(
         graphModules = new Set(result.graph.modules);
         await watchDependencyManifests(result.graph.modules);
         await syncCssModuleTypes(appDirectory, { root });
-        await typecheck(path.join(appDirectory, "tsconfig.json"), { signal: controller.signal });
+        if (!asyncTypecheck) {
+          await typecheck(path.join(appDirectory, "tsconfig.json"), { signal: controller.signal });
+        }
         // Observers leave building/failed states via publication identity even on byte-identical recovery.
         published = await publish(app, result, {
           root,
@@ -238,13 +254,74 @@ export function watchApplication(
           capabilitiesFile,
           signal: controller.signal,
         });
-        await publishStatus(appDirectory, {
+        const publicationDirectory = await realpath(published.dist);
+        const publishedStatus: Extract<BuildStatus, { status: "published" }> = {
           ...status!,
           status: "published",
-          publicationDirectory: await realpath(published.dist),
+          publicationDirectory,
           buildId: published.manifest.buildId,
-        });
+          ...(asyncTypecheck ? { typecheck: { status: "running", diagnostics: null } } : {}),
+        };
+        await publishStatus(appDirectory, publishedStatus);
         if (!closed && published) onSuccess(published);
+
+        if (asyncTypecheck && !closed && !controller.signal.aborted) {
+          const attemptId = publishedStatus.attemptId;
+          cancelActiveTypecheck();
+          const tcController = new AbortController();
+          const onParentAbort = () => tcController.abort(controller.signal.reason);
+          controller.signal.addEventListener("abort", onParentAbort, { once: true });
+          activeTypecheckAbort = tcController;
+          const run = (async () => {
+            try {
+              await typecheck(path.join(appDirectory, "tsconfig.json"), {
+                signal: tcController.signal,
+              });
+              if (
+                closed ||
+                tcController.signal.aborted ||
+                controller.signal.aborted ||
+                activeAttemptId !== attemptId
+              ) {
+                return;
+              }
+              await publishStatus(appDirectory, {
+                ...publishedStatus,
+                typecheck: { status: "passed", diagnostics: null },
+              });
+              onTypecheck?.({ status: "passed", attemptId });
+            } catch (error) {
+              if (
+                closed ||
+                tcController.signal.aborted ||
+                controller.signal.aborted ||
+                activeAttemptId !== attemptId
+              ) {
+                return;
+              }
+              const diagnostics = String(
+                (error !== null && typeof error === "object" && "message" in error
+                  ? error.message
+                  : undefined) ?? error,
+              )
+                .slice(0, 2048)
+                .toWellFormed();
+              try {
+                await publishStatus(appDirectory, {
+                  ...publishedStatus,
+                  typecheck: { status: "failed", diagnostics },
+                });
+              } catch (statusError) {
+                report(statusError);
+              }
+              onTypecheck?.({ status: "failed", attemptId, diagnostics });
+            } finally {
+              controller.signal.removeEventListener("abort", onParentAbort);
+              if (activeTypecheckAbort === tcController) activeTypecheckAbort = undefined;
+            }
+          })();
+          activeTypecheckRun = run;
+        }
       },
       async onError(error) {
         try {
@@ -389,6 +466,7 @@ export function watchApplication(
     close() {
       return (closing ??= (async () => {
         closed = true;
+        cancelActiveTypecheck();
         controller.abort();
         signal?.removeEventListener("abort", abort);
         for (const watcher of dependencyWatchers.values()) watcher.close();
@@ -397,6 +475,7 @@ export function watchApplication(
         await initialized.catch(() => {});
         await queue.close();
         await compiler?.close();
+        await activeTypecheckRun?.catch(() => {});
         if (temporary) await rm(temporary, { recursive: true, force: true });
       })());
     },

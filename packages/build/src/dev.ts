@@ -33,6 +33,7 @@ export async function devApplication(
     hostArgs = [],
     hostRoot,
     hostExecutable,
+    strictTypecheck = false,
     mode = "desktop",
     extraCapabilities,
     capabilitiesFile,
@@ -88,6 +89,7 @@ export async function devApplication(
       root,
       appDirectory,
       development: mode === "desktop",
+      strictTypecheck,
       extraCapabilities,
       capabilitiesFile,
       signal: controller.signal,
@@ -98,6 +100,12 @@ export async function devApplication(
       },
       onError(error) {
         if (!controller.signal.aborted) log(errorMessage(error));
+      },
+      onTypecheck(event) {
+        if (controller.signal.aborted) return;
+        if (event.status === "failed") {
+          log(`[typecheck] ${event.diagnostics}`);
+        }
       },
     });
     startup = (async () => {

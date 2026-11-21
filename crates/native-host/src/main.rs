@@ -1,5 +1,6 @@
 mod bounded_fs;
 mod control_cli;
+mod dev_banner;
 mod dev_state;
 mod dnd;
 mod inspector;
@@ -219,6 +220,20 @@ impl Application {
     }
 
     fn poll_reload(&mut self, cx: &dyn PlatformCx) {
+        if let Some(status) = self.watcher.as_ref().and_then(watcher::PackageWatcher::next_status) {
+            let document = self.host.region_documents().next();
+            if let Some(document) = document {
+                let mut surface = RuntimeSurface::new(&mut self.native, cx, ImageChoice::Live);
+                match status {
+                    watcher::DevBuildStatus::Failed { title, detail } => {
+                        self.host.show_dev_banner(&mut surface, document, &title, &detail);
+                    }
+                    watcher::DevBuildStatus::Clear => {
+                        self.host.clear_dev_banner(&mut surface, document);
+                    }
+                }
+            }
+        }
         let Some(publication) = self.watcher.as_ref().and_then(watcher::PackageWatcher::next) else { return; };
         match publication {
             Ok(package) => {
@@ -239,7 +254,16 @@ impl Application {
                 let document = self.host.region_documents().next();
                 match document {
                     Some(document) => {
-                        self.replace_session(cx, document, module);
+                        let outcome = self.replace_session(cx, document, module);
+                        let mut surface = RuntimeSurface::new(&mut self.native, cx, ImageChoice::Live);
+                        match &outcome {
+                            ReloadOutcome::Mounted { .. } => {
+                                self.host.clear_dev_banner(&mut surface, document);
+                            }
+                            ReloadOutcome::Rejected(error) | ReloadOutcome::Fallback(error) => {
+                                self.host.show_dev_banner(&mut surface, document, "Reload rejected", &error.to_string());
+                            }
+                        }
                         self.after_shell(cx);
                     }
                     None => self.host.set_module(module),
@@ -247,6 +271,11 @@ impl Application {
             }
             Err(error) => {
                 eprintln!("reload-package-rejected: {error}");
+                let document = self.host.region_documents().next();
+                if let Some(document) = document {
+                    let mut surface = RuntimeSurface::new(&mut self.native, cx, ImageChoice::Live);
+                    self.host.show_dev_banner(&mut surface, document, "Package rejected", &error);
+                }
             }
         }
     }
@@ -655,7 +684,12 @@ fn main() -> Result<(), Box<dyn Error>> {
     if let Some(fonts) = fonts { application.host.set_pure_shell(fonts); }
     if reduced_motion { application.host.set_reduced_motion(true); }
     if let Some(bytes) = max_js_stack_bytes { application.host.set_stack_limit_bytes(bytes); }
-    if watch { application.host.set_dev_state(true); }
+    if watch {
+        application.host.set_dev_state(true);
+        if !pure_shell {
+            application.host.set_dev_banner_enabled(true);
+        }
+    }
     application.exit_after = exit_after;
     application.harness.exercise = exercise;
     application.watch_path = watch.then_some(bundle).flatten();

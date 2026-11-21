@@ -482,7 +482,7 @@ impl Driver {
         self.pump_application()?;
         let outcome = self.pipeline.app_mut().last_reload.take();
         match outcome {
-            Some(crate::session_host::ReloadOutcome::Mounted { generation, predecessor_leak }) => {
+            Some(crate::session_host::ReloadOutcome::Mounted { generation, predecessor_leak, css_only }) => {
                 if expect == ReloadExpect::Rejected {
                     return Err(Error::new(
                         "E_ASSERTION",
@@ -497,6 +497,9 @@ impl Driver {
                     "generation": generation,
                     "buildId": build_id,
                 });
+                if css_only {
+                    trace["cssOnly"] = json!(true);
+                }
                 if let Some(leak) = predecessor_leak {
                     trace["predecessorLeak"] = json!(leak);
                 }

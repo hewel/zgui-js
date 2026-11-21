@@ -41,6 +41,7 @@ Application defaults to the current directory (counter at the repository root).
   dev --layer-config F   Use an upstream layer-shell configuration
   dev --pure-shell       Start without a primary window (requires shellSurfaces or sessionLock)
   dev --dev-inspect PATH Enable dev-only read-only inspector Unix socket
+  dev --strict-typecheck Gate dev publication on tsrs before reloading
   preview --watch        Re-run offscreen scenarios on changes, without a desktop host
   preview --profile F --fixture F --scenario F --out NEW_DIRECTORY
   package --out DIR [--desktop-entry] [--pure-shell]
@@ -78,6 +79,7 @@ type Command =
       layerConfig?: string;
       devInspect?: string;
       pureShell: boolean;
+      strictTypecheck: boolean;
     } & HostOptions)
   | ({
       command: "preview";
@@ -162,12 +164,19 @@ function parse(args: string[]): Command {
           "--layer-config",
           "--dev-inspect",
           "--pure-shell",
+          "--strict-typecheck",
         ]
       : []),
     ...(command === "preview" ? ["--profile", "--fixture", "--scenario", "--out"] : []),
     ...(command === "package" ? ["--out", "--desktop-entry", "--pure-shell"] : []),
   ]);
-  const booleanFlags = new Set(["--watch", "--pure-shell", "--desktop-entry", "--json"]);
+  const booleanFlags = new Set([
+    "--watch",
+    "--pure-shell",
+    "--desktop-entry",
+    "--json",
+    "--strict-typecheck",
+  ]);
   let directory: string | undefined;
   while (args.length) {
     const arg = args.shift()!;
@@ -246,6 +255,7 @@ function parse(args: string[]): Command {
         layerConfig: value("--layer-config"),
         devInspect: value("--dev-inspect"),
         pureShell: flags.has("--pure-shell"),
+        strictTypecheck: flags.has("--strict-typecheck"),
       };
     case "preview":
       return {
@@ -381,6 +391,7 @@ export async function runCli(rawArgs: readonly string[]): Promise<number> {
     return withInterrupt(signal =>
       devApplication(application.app, {
         ...application,
+        strictTypecheck: selected.strictTypecheck,
         hostRoot: selected.hostRoot,
         hostExecutable: selected.hostExecutable,
         hostArgs,
