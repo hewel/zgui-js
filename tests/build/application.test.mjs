@@ -83,9 +83,13 @@ test("external consumers typecheck all linked SDK entry points with exact option
 import { createElement } from "@hewel/zgui/renderer";
 import { Button } from "@hewel/zgui/components";
 import { CHECK, Icon } from "@hewel/zgui/icons";
+import { createRouter, RouterProvider, Outlet, Link } from "@hewel/zgui/router";
 import { getResolvedCapabilities } from "@hewel/zgui-services";
 
 export function mount(root: NativeNode, maybeOutput: string | undefined) {
+  const router = createRouter([{ path: "/", component: () => <Outlet /> }, { path: "/docs/:id" }] as const);
+  void router.navigate("/docs/:id", { params: { id: "1" }, replace: undefined });
+  void <RouterProvider router={router}><Link to="/docs/:id" params={{ id: "1" }} /></RouterProvider>;
   const label = getResolvedCapabilities().imagePrefixes[0] ?? "Available";
   const spring: Spring = createSpring(() => 1);
   const opacity: Accessor<number> = spring;

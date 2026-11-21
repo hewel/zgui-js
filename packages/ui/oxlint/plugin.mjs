@@ -24,6 +24,8 @@ const OWNER_CLEANUP_HELPERS = new Set([
   "loadImageBytes",
   "registerImageBytes",
   "readTextAsset",
+  "useBeforeLeave",
+  "bindControlNavigation",
 ]);
 
 const RUNTIME_SERVICE_APIS = new Set([
