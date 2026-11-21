@@ -396,6 +396,9 @@ pub struct UiBridge {
     wrappers: RefCell<HashMap<u64, Persistent<Object<'static>>>>,
     properties: RefCell<properties::Properties>,
     options: BridgeOptions,
+    reduced_motion: Cell<bool>,
+    reduced_motion_subscribers: RefCell<HashMap<u64, Persistent<rquickjs::Function<'static>>>>,
+    next_reduced_motion_id: Cell<u64>,
     style_diagnostics: RefCell<Vec<StyleDiagnostic>>,
     stylesheets: RefCell<Vec<(String, String)>>,
     stylesheet_install_deferred: Cell<bool>,
@@ -453,6 +456,9 @@ impl UiBridge {
                 wrappers: RefCell::new(HashMap::new()),
                 properties: RefCell::new(properties::Properties::default()),
                 options,
+                reduced_motion: Cell::new(options.reduced_motion),
+                reduced_motion_subscribers: RefCell::new(HashMap::new()),
+                next_reduced_motion_id: Cell::new(1),
                 style_diagnostics: RefCell::new(Vec::new()),
                 stylesheets: RefCell::new(Vec::new()),
                 stylesheet_install_deferred: Cell::new(options.defer_stylesheet_install),
@@ -773,8 +779,34 @@ impl UiBridge {
         for trap in traps { drop(trap); }
         if !self.disposed.replace(true) { self.registry.borrow_mut().dispose(); }
         self.canvas_scenes.borrow_mut().clear();
+        self.reduced_motion_subscribers.borrow_mut().clear();
         self.wrappers.borrow_mut().clear();
         self.properties.borrow_mut().clear();
+    }
+
+    /// Sets the initial reduced-motion preference before JS mounts (no subscriber dispatch).
+    pub fn seed_reduced_motion(&self, value: bool) {
+        self.reduced_motion.set(value);
+    }
+
+    /// Updates the bridge's live reduced-motion preference and notifies JS subscribers.
+    ///
+    /// # Errors
+    ///
+    /// Propagates any JavaScript exception thrown by a subscriber callback.
+    pub fn set_reduced_motion(&self, ctx: &Ctx<'_>, value: bool) -> rquickjs::Result<bool> {
+        if self.reduced_motion.get() == value {
+            return Ok(false);
+        }
+        self.reduced_motion.set(value);
+        let ids: Vec<u64> = self.reduced_motion_subscribers.borrow().keys().copied().collect();
+        for id in ids {
+            let callback = self.reduced_motion_subscribers.borrow().get(&id).cloned();
+            if let Some(callback) = callback {
+                callback.restore(ctx)?.call::<_, ()>((value,))?;
+            }
+        }
+        Ok(true)
     }
 
     fn require_turn(&self, ctx: &Ctx<'_>) -> rquickjs::Result<()> {
@@ -818,8 +850,23 @@ impl UiBridge {
         ctx: &Ctx<'js>,
         attach: &rquickjs::Function<'js>,
     ) -> rquickjs::Result<rquickjs::Function<'js>> {
+        let api = self.api(ctx)?;
+        self.mount_shell_region_with_api(ctx, attach, api)
+    }
+
+    /// Mount layer, popup, window, or lock content using a host-augmented region API object.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error outside a bridge turn, if mounting throws, or if no disposer is returned.
+    pub fn mount_shell_region_with_api<'js>(
+        self: &Rc<Self>,
+        ctx: &Ctx<'js>,
+        attach: &rquickjs::Function<'js>,
+        api: Object<'js>,
+    ) -> rquickjs::Result<rquickjs::Function<'js>> {
         self.require_turn(ctx)?;
-        attach.call((self.root(ctx)?, self.api(ctx)?))
+        attach.call((self.root(ctx)?, api))
     }
 
     /// Builds the region's private host contract without changing any global binding.
@@ -903,8 +950,29 @@ impl UiBridge {
             if let Some(value) = value { bridge.host.set_value(native, &value); }
             Ok::<(), rquickjs::Error>(())
         }))?;
-        let reduced_motion = self.options.reduced_motion;
-        api.set("getReducedMotion", Func::from(move || reduced_motion))?;
+        let weak = Rc::downgrade(self);
+        api.set("getReducedMotion", Func::from(move |ctx: Ctx<'js>| -> rquickjs::Result<bool> {
+            Ok(owner(&weak, &ctx)?.reduced_motion.get())
+        }))?;
+        let weak = Rc::downgrade(self);
+        api.set("subscribeReducedMotion", Func::from(move |ctx: Ctx<'js>, callback: rquickjs::Function<'js>| {
+            let bridge = owner(&weak, &ctx)?;
+            bridge.require_creation(&ctx)?;
+            let mut subs = bridge.reduced_motion_subscribers.borrow_mut();
+            if subs.len() >= 128 {
+                return Err(Exception::throw_range(&ctx, "reduced-motion subscription limit reached"));
+            }
+            let id = bridge.next_reduced_motion_id.get();
+            bridge.next_reduced_motion_id.set(id.checked_add(1).ok_or_else(|| Exception::throw_range(&ctx, "reduced-motion subscriber IDs exhausted"))?);
+            subs.insert(id, Persistent::save(&ctx, callback));
+            drop(subs);
+            let unsub_weak = weak.clone();
+            rquickjs::Function::new(ctx, move || {
+                if let Some(bridge) = unsub_weak.upgrade() {
+                    bridge.reduced_motion_subscribers.borrow_mut().remove(&id);
+                }
+            })
+        }))?;
         let weak = Rc::downgrade(self);
         api.set("createElement", Func::from(move |ctx: Ctx<'js>, tag: String| {
             let bridge = owner(&weak, &ctx)?;

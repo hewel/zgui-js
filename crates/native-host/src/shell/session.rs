@@ -271,7 +271,12 @@ impl Shell {
 
     pub(crate) fn updated_input(&self, id: u32, current: &InputRegion) -> Option<InputRegion> {
         let layers = self.layers.borrow();
-        let input = &layers.get(&id)?.spec.input;
+        if let Some(layer) = layers.get(&id) {
+            return (layer.spec.input != *current).then(|| layer.spec.input.clone());
+        }
+        drop(layers);
+        let popups = self.popups.borrow();
+        let input = &popups.get(&id)?.spec.input;
         (input != current).then(|| input.clone())
     }
 
@@ -418,8 +423,14 @@ impl Shell {
             let id = layer_id(&ctx, &id)?;
             let input = input_region(&ctx, data)?;
             let mut layers = shell.layers.borrow_mut();
-            let Some(layer) = layers.get_mut(&id) else { return Ok(()); };
-            if layer.spec.input != input { layer.spec.input = input; shell.changed(); }
+            if let Some(layer) = layers.get_mut(&id) {
+                if layer.spec.input != input { layer.spec.input = input; shell.changed(); }
+                return Ok(());
+            }
+            drop(layers);
+            let mut popups = shell.popups.borrow_mut();
+            let Some(popup) = popups.get_mut(&id) else { return Ok(()); };
+            if popup.spec.input != input { popup.spec.input = input; shell.changed(); }
             Ok::<(), rquickjs::Error>(())
         }))?;
         self.install_popup(&api)?;

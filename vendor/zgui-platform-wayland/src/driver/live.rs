@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use wayland_client::protocol::wl_seat::WlSeat;
 
-use zgui_platform::{ColorScheme, MonitorInfo, PlatformCapabilities, Surface as _, SurfaceId};
+use zgui_platform::{MonitorInfo, PlatformCapabilities, Surface as _, SurfaceId};
 
 use crate::clock::SystemClock;
 use crate::surface::WaylandSurface;
@@ -45,11 +45,11 @@ pub struct Live {
     /// application rather than the window: several compositors flash the task-bar entry it
     /// identifies even when they refuse the activation itself.
     pub(crate) app_id: RefCell<Option<String>>,
-    /// The desktop's light or dark preference, where it could be discovered.
+    /// The desktop's appearance preferences (color scheme and reduced motion), where discoverable.
     ///
     /// Behind a lock rather than a cell, because the portal answers on a thread of its own: the
     /// bus is a socket like any other, and the loop's thread waits on nothing.
-    pub(crate) scheme: Arc<std::sync::Mutex<Option<ColorScheme>>>,
+    pub(crate) appearance: Arc<std::sync::Mutex<crate::theme::Appearance>>,
     /// What this compositor turned out to be able to do.
     pub(crate) capabilities: PlatformCapabilities,
     /// Where the time comes from.
@@ -69,7 +69,7 @@ impl Live {
             next: Cell::new(1),
             monitors: RefCell::new(Vec::new()),
             app_id: RefCell::new(None),
-            scheme: Arc::default(),
+            appearance: Arc::default(),
             capabilities,
             clock: Arc::new(SystemClock::new()),
             waker,

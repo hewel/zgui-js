@@ -776,4 +776,18 @@ mod tests {
             _ => {}
         });
     }
+
+    #[test]
+    fn linear_piecewise_easing_matches_full_cascade() {
+        let sheet = format!(
+            "{TOKENS}
+            .row {{ transition: padding-left 200ms linear(0, 0.8 25%, 1) }}
+            .on > .row {{ padding-left: 100px }}"
+        );
+        compare(&sheet, 20, |frame, side| {
+            if frame == 0 {
+                side.list(&["list", "on"]);
+            }
+        });
+    }
 }

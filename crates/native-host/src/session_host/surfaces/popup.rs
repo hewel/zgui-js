@@ -1,6 +1,6 @@
 //! Reconcile compositor-owned popup trees in parent-before-child open order.
 use std::{collections::BTreeSet, rc::Rc};
-use zgui::{platform::{PlatformCx, SurfaceId}, runtime::{Runtime, WindowToken}};
+use zgui::{platform::{InputRegion, PlatformCx, SurfaceId}, runtime::{Runtime, WindowToken}};
 
 use super::{ImageChoice, Monitor, RuntimeSurface, Session, SessionHost, SessionSurface, ShellKind, ShellWindows, SurfaceOpacity, close_native_surface, open_region, present, shell_window_content};
 use crate::{session::Result, shell::PopupSpec};
@@ -104,7 +104,7 @@ impl ShellWindows {
             let mut placement = spec.placement(parent);
             if let Some(index) = running {
                 let popup = &mut self.popups[index];
-                if popup.spec != spec {
+                if !popup.spec.geometry_eq(&spec) {
                     placement.grab = popup.grab;
                     let auto = spec.auto_height(parent).map(|mut policy| {
                         policy.placement.grab = popup.grab;
@@ -124,8 +124,12 @@ impl ShellWindows {
                     };
                     runtime.reconfigure_popup(popup.token, placement, next_size).map_err(|error| error.to_string())?;
                     runtime.set_popup_auto_height(popup.token, auto).map_err(|error| error.to_string())?;
-                    popup.spec = spec;
                 }
+                if popup.spec.input != spec.input {
+                    cx.surface(popup.surface).ok_or("running popup has no platform surface")?
+                        .set_input_region(&spec.input).map_err(|error| error.to_string())?;
+                }
+                popup.spec = spec;
                 continue;
             }
             let name = spec.name.clone();
@@ -142,6 +146,12 @@ impl ShellWindows {
             self.popups.push(RunningPopup { id, token, surface, parent, spec, grab });
             let mut binding = RuntimeSurface::new(runtime, cx, images);
             binding.attach_shell(session, id, name, region, surface, ShellKind::Layer)?;
+            let popup = self.popups.last_mut().expect("new popup is tracked before its first frame");
+            if let Some(input) = session.shell.updated_input(id, &popup.spec.input) { popup.spec.input = input; }
+            if popup.spec.input != InputRegion::Full {
+                cx.surface(surface).ok_or("opened popup has no platform surface")?
+                    .set_input_region(&popup.spec.input).map_err(|error| error.to_string())?;
+            }
             binding.request_frame(document);
         }
         Ok(())

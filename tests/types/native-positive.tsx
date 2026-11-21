@@ -2,7 +2,7 @@ import {
   Image, Button, TextField, TextArea, For, Show, Loading, Errored, LayerSurface, PopupSurface,
   createCanvasScene, createContext, createEffect, createMemo, createSignal, createSpring, createStore, createProjection,
   merge, omit, onCleanup, onSettled, reconcile, renderApp, renderShell, untrack, useContext, useMonitors,
-  focus, getTextContent, getWindowRect, isAnimating, lockScroll, mountStylesheet, observeGeometry, precedes,
+  focus, getReducedMotion, getTextContent, getWindowRect, isAnimating, lockScroll, mountStylesheet, observeGeometry, precedes, setReducedMotion,
   SessionLockSurface, WindowSurface, getSessionGeneration, requestSessionLock,
 } from "@hewel/zgui";
 import type { CanvasCommand, CanvasScene, CanvasTransform, Component, Context, NativeAnimationEvent, NativeChild, NativeContextMenuEvent, NativeFocusOptions, NativeNode, NativePointerBoundaryEvent, NativeRole, NativeTextControlProps, NativeTransitionEvent, NativeViewport, NativeWheelEvent, NativeWindowRect, ParentComponent, Spring, SpringOptions, TextFieldProps, TextAreaProps, VectorProps, WindowDecorations } from "@hewel/zgui";
@@ -247,7 +247,10 @@ void <WindowSurface name="settings" title="Settings" appId="z-shell-settings"
   resizable decorations={windowDecorations} transparent={false} onClose={() => {}}>
   <text>Settings</text>
 </WindowSurface>;
-void <PopupSurface name="settings-menu" parent="settings" anchorRect={{ x: 8, y: 8, width: 40, height: 24 }} width={200} height="auto" maxHeight={400}><text>Child</text></PopupSurface>;
+void <PopupSurface name="settings-menu" parent="settings" anchorRect={{ x: 8, y: 8, width: 40, height: 24 }} width={200} height="auto" maxHeight={400} inputRegion={[{ x: 4, y: 4, width: 192, height: 120 }] as const}><text>Child</text></PopupSurface>;
+const reducedMotionFlag: boolean = getReducedMotion();
+setReducedMotion(reducedMotionFlag);
+setReducedMotion(null);
 void borrowed;
 
 type AssertBoundary<T extends true> = T;

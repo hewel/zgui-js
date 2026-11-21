@@ -3,7 +3,7 @@ import { bridgeFor, shellBridge } from "./host.js";
 import type { LayerPlacement, NativeHost, NativeInputRegion, PopupPlacement, UiBridge, WindowOptions } from "./host.js";
 import { flush, renderRegion } from "./renderer/index.js";
 import type {
-  Accessor, LayerAnchor, LayerSurfaceProps, Monitor, NativeNode, NativeWindowRect,
+  Accessor, LayerAnchor, LayerInputRegion, LayerSurfaceProps, Monitor, NativeChild, NativeNode, NativeWindowRect,
   PopupSurfaceProps, SessionLockRequest, SessionLockState, SessionLockSurfaceProps, WindowSurfaceProps,
 } from "./types.js";
 
@@ -96,7 +96,7 @@ function placementOf(props: LayerSurfaceProps): LayerPlacement {
   };
 }
 
-function bindInputRegion(props: LayerSurfaceProps, bridge: UiBridge, publish: (region: NativeInputRegion) => void): void {
+function bindInputRegion(props: { readonly inputRegion?: LayerInputRegion }, bridge: UiBridge, publish: (region: NativeInputRegion) => void): void {
   createEffect(() => {
     const region = props.inputRegion ?? "full";
     if (typeof region === "string") return region;
@@ -128,6 +128,26 @@ function bindInputRegion(props: LayerSurfaceProps, bridge: UiBridge, publish: (r
     publishBoxes();
     return () => { for (const dispose of observers) dispose(); };
   });
+}
+
+function mountInputSurface(
+  owner: ReturnType<typeof getOwner>,
+  props: { readonly inputRegion?: LayerInputRegion; readonly children?: NativeChild },
+  root: NativeNode,
+  bridge: UiBridge,
+  publishInput: (region: NativeInputRegion) => void,
+): () => void {
+  let attached = true;
+  const dispose = runWithOwner(owner, () => renderRegion(() => {
+    bindInputRegion(props, bridge, region => {
+      if (attached) publishInput(region);
+    });
+    return () => props.children;
+  }, root, bridge));
+  return () => {
+    attached = false;
+    dispose();
+  };
 }
 
 interface LayerRequest {
@@ -162,17 +182,9 @@ export function LayerSurface(props: LayerSurfaceProps): null {
       id: shell.openLayer(name, placement, (root, bridge) => {
         if (request.closed) return () => {};
         popupParentRegions.set(bridge, { shell, name });
-        let attached = true;
-        const dispose = runWithOwner(owner, () => renderRegion(() => {
-          bindInputRegion(props, bridge, region => {
-            if (attached && !request.closed) shell.setInputRegion(request.id, region);
-          });
-          return () => props.children;
-        }, root, bridge));
-        return () => {
-          attached = false;
-          dispose();
-        };
+        return mountInputSurface(owner, props, root, bridge, region => {
+          if (!request.closed) shell.setInputRegion(request.id, region);
+        });
       }),
       name,
       output: placement.output,
@@ -253,7 +265,9 @@ export function PopupSurface(props: PopupSurfaceProps): null {
       const request = shell.openPopup(name, placement, (root, bridge) => {
         if (id !== request) return () => {};
         popupParentRegions.set(bridge, { shell, name });
-        return runWithOwner(owner, () => renderRegion(() => () => props.children, root, bridge));
+        return mountInputSurface(owner, props, root, bridge, region => {
+          if (id === request) shell.setInputRegion(request, region);
+        });
       }, () => {
         if (id !== request) return;
         flush(() => {

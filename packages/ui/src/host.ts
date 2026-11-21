@@ -1,4 +1,4 @@
-import { createContext, createMemo, getOwner, runWithOwner, useContext } from "#solid";
+import { createContext, createMemo, createSignal, flush as solidFlush, getOwner, onCleanup, resetErrorHalt, runWithOwner, untrack, useContext } from "#solid";
 import type { Owner } from "#solid";
 import type {
   CanvasScene, LayerAnchor, LayerSurfacePlacement, Monitor, NativeDismissLayerOptions, NativeDismissReason,
@@ -52,6 +52,8 @@ export interface NativeHost {
     installStylesheet(name: string, css: string, target?: NativeNode): void;
     removeStylesheet(name: string): void;
     getReducedMotion(): boolean;
+    subscribeReducedMotion?(callback: (value: boolean) => void): () => void;
+    requestAnimationFrame?(callback: (time: number) => void): number;
     focus(node: NativeNode, reveal?: boolean): void;
     trapFocus(node: NativeNode, wrap: boolean, autoFocus: boolean, restore: boolean): () => void;
     lockScroll(node: NativeNode): () => void;
@@ -105,13 +107,108 @@ export function bridgeForTarget(node: NativeNode): UiBridge {
 }
 
 export function bridgeFor(node?: NativeNode): UiBridge {
+  const bridge = tryBridgeFor(node);
+  if (!bridge) throw new ReferenceError("Native UI requires a mount region");
+  return bridge;
+}
+
+/** Returns the active region bridge when available without throwing in unscoped contexts. */
+export function tryBridgeFor(node?: NativeNode): UiBridge | undefined {
   const known = node && nodeBridges.get(node);
   if (known) return known;
   const owner = getOwner();
   const currentCallback = owner === callbackOwner ? callbackBridge : undefined;
-  const bridge = currentCallback ?? (owner && useContext(Region)) ?? callbackBridge ?? globalThis.__zgui;
-  if (!bridge) throw new ReferenceError("Native UI requires a mount region");
-  return bridge;
+  return currentCallback ?? (owner && useContext(Region)) ?? callbackBridge ?? globalThis.__zgui;
+}
+
+/** Stable per-session scope key shared across all surfaces in a shell or one window. */
+export function sessionScopeKey(bridge?: UiBridge): object | undefined {
+  return globalThis.__zguiShell ?? bridge ?? tryBridgeFor();
+}
+
+interface MotionState {
+  hostValue: () => boolean;
+  setHostValue: (next: boolean) => void;
+  override: () => boolean | null;
+  setOverride: (next: boolean | null) => void;
+  subscribedBridges: WeakSet<UiBridge>;
+}
+
+const motionStates = new WeakMap<object, MotionState>();
+
+function flushMotion(): void {
+  try {
+    solidFlush();
+  } catch (error) {
+    resetErrorHalt();
+    throw error;
+  }
+}
+
+function ensureMotionState(bridge?: UiBridge): MotionState {
+  const key = sessionScopeKey(bridge);
+  if (!key) throw new ReferenceError("Native UI requires a mount region or shell session");
+  let state = motionStates.get(key);
+  if (!state) {
+    const initial = bridge ? bridge.getReducedMotion() : false;
+    const [hostValue, setHostValue] = createSignal(initial);
+    const [override, setOverride] = createSignal<boolean | null>(null);
+    state = { hostValue, setHostValue, override, setOverride, subscribedBridges: new WeakSet() };
+    motionStates.set(key, state);
+  }
+  return state;
+}
+
+function subscribeMotionBridge(state: MotionState, bridge: UiBridge, allowReadOnlySkip: boolean): (() => void) | undefined {
+  if (state.subscribedBridges.has(bridge)) return undefined;
+  const current = bridge.getReducedMotion();
+  if (current !== untrack(state.hostValue)) state.setHostValue(current);
+  let unsubscribe: (() => void) | undefined;
+  if (bridge.subscribeReducedMotion) {
+    try {
+      unsubscribe = bridge.subscribeReducedMotion(next => {
+        state.setHostValue(next);
+        flushMotion();
+      });
+    } catch (error) {
+      if (allowReadOnlySkip) return undefined;
+      throw error;
+    }
+  }
+  state.subscribedBridges.add(bridge);
+  return unsubscribe
+    ? () => {
+        state.subscribedBridges.delete(bridge);
+        unsubscribe();
+      }
+    : undefined;
+}
+
+/** Eagerly subscribe a mounted region bridge so unscoped shell-root readers stay synchronized. */
+export function attachReducedMotionBridge(bridge: UiBridge): void {
+  if (typeof bridge.getReducedMotion !== "function") return;
+  const state = ensureMotionState(bridge);
+  const dispose = subscribeMotionBridge(state, bridge, false);
+  if (dispose && getOwner()) onCleanup(dispose);
+}
+
+/** Reactive reduced-motion preference (runtime override when set, otherwise host/desktop preference). */
+export function getReducedMotion(): boolean {
+  const bridge = tryBridgeFor();
+  const state = ensureMotionState(bridge);
+  if (bridge) subscribeMotionBridge(state, bridge, true);
+  return state.override() ?? state.hostValue();
+}
+
+/** Override reduced motion dynamically for this session, or pass `null` to follow the host/desktop setting. */
+export function setReducedMotion(value: boolean | null): void {
+  if (value !== null && typeof value !== "boolean") {
+    throw new TypeError("setReducedMotion requires a boolean or null");
+  }
+  const bridge = tryBridgeFor();
+  const state = ensureMotionState(bridge);
+  if (bridge) subscribeMotionBridge(state, bridge, true);
+  state.setOverride(value);
 }
 
 export function rememberBridge(node: NativeNode, bridge: UiBridge): NativeNode {

@@ -86,12 +86,21 @@ impl PlatformCx for WaylandCx<'_> {
     }
 
     fn color_scheme(&self) -> Option<ColorScheme> {
-        *self
-            .state
+        self.state
             .live
-            .scheme
+            .appearance
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .scheme
+    }
+
+    fn reduced_motion(&self) -> Option<bool> {
+        self.state
+            .live
+            .appearance
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .reduced_motion
     }
 
     fn clipboard(&self) -> &dyn Clipboard {

@@ -228,3 +228,46 @@ fn state_layer_pseudo_classes_pass_preflight_and_match_in_cascade() {
     }
 }
 
+#[test]
+fn linear_piecewise_timing_function_passes_preflight_and_samples_piecewise_curve() {
+    let css = r#"
+        @keyframes fade-in {
+            from { opacity: 0 }
+            to { opacity: 1 }
+        }
+        .card {
+            opacity: 0;
+            transition: opacity 400ms linear(0, 0.8 25%, 1);
+        }
+        .card.open { opacity: 1 }
+        .badge {
+            animation: fade-in 400ms linear(0, 0.05 16.6%, 0.4 40%, 1) forwards;
+        }
+    "#;
+    preflight_stylesheet(css).expect("CSS linear(...) easing passes zgui-stylex-v1 preflight");
+
+    let mut h = Harness::new();
+    let card = h.append(h.root, "box");
+    h.set_classes(card, &["card"]);
+    assert!(h.add_author(css).is_empty());
+    h.frame();
+
+    h.retire_all();
+    h.set_classes(card, &["card", "open"]);
+    h.frame();
+
+    // Advance 100ms (25% of 400ms): the piecewise curve hits 0.8, far above straight linear (0.25).
+    let report = h.engine.animation_tick(&h.document, zgui_style::AnimationTime(0.1));
+    let card_key = h.document.store().key_of(card);
+    let sampled = report
+        .elements
+        .iter()
+        .find(|el| el.node == card_key)
+        .and_then(|el| el.values.opacity)
+        .expect("card opacity transition samples on fast path");
+    assert!(
+        (sampled - 0.8).abs() < 0.02,
+        "expected piecewise linear(0, 0.8 25%, 1) at 25% to sample ~0.8, got {sampled}"
+    );
+}
+

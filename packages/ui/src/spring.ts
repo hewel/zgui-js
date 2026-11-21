@@ -1,4 +1,5 @@
 import { createEffect, createSignal, getOwner, onCleanup, untrack } from "#solid";
+import { tryBridgeFor } from "./host.js";
 import { getReducedMotion } from "./nodes.js";
 import { flush } from "./renderer/index.js";
 import type { Accessor } from "./types.js";
@@ -39,7 +40,11 @@ export function createSpring(target: Accessor<number>, {
     if (!Number.isFinite(next)) throw new RangeError("Spring target must be finite");
     return next;
   };
-  if (getReducedMotion()) return withJump(readTarget);
+  const ownerBridge = tryBridgeFor();
+  const scheduleFrame = (cb: (time: number) => void): number => {
+    const bridge = ownerBridge ?? tryBridgeFor();
+    return bridge?.requestAnimationFrame ? bridge.requestAnimationFrame(cb) : requestAnimationFrame(cb);
+  };
 
   let destination = untrack(readTarget);
   let position = destination;
@@ -64,6 +69,10 @@ export function createSpring(target: Accessor<number>, {
   const step = (time: number) => {
     frame = undefined;
     if (disposed) return;
+    if (untrack(getReducedMotion)) {
+      settle();
+      return;
+    }
     const dt = previousTime === undefined ? 1 / 60 : Math.min((time - previousTime) / 1000, 0.032);
     previousTime = time;
     // Implicit midpoint keeps the damped oscillator stable at irregular intervals.
@@ -74,7 +83,7 @@ export function createSpring(target: Accessor<number>, {
     velocity = 2 * midpointVelocity - velocity;
     if (!Number.isFinite(divisor) || !Number.isFinite(position) || !Number.isFinite(velocity) || atRest()) settle();
     else {
-      frame = requestAnimationFrame(step);
+      frame = scheduleFrame(step);
       setValue(position);
     }
   };
@@ -82,13 +91,14 @@ export function createSpring(target: Accessor<number>, {
     disposed = true;
     cancelFrame();
   });
-  createEffect(readTarget, next => {
+  createEffect(() => [readTarget(), getReducedMotion()] as const, ([next, reduced]) => {
     if (refreshingTarget) return;
     destination = next;
-    if (atRest()) settle();
-    else frame ??= requestAnimationFrame(step);
+    if (reduced || atRest()) settle();
+    else frame ??= scheduleFrame(step);
   });
   return withJump(() => {
+    if (getReducedMotion()) return readTarget();
     value();
     return position;
   }, next => {
@@ -105,10 +115,10 @@ export function createSpring(target: Accessor<number>, {
     position = next;
     velocity = 0;
     destination = nextDestination;
-    if (atRest()) settle();
+    if (untrack(getReducedMotion) || atRest()) settle();
     else {
       setValue(position);
-      frame = requestAnimationFrame(step);
+      frame = scheduleFrame(step);
     }
   });
 }

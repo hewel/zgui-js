@@ -1,7 +1,7 @@
 import { createRenderer } from "@solidjs/universal";
 import { $PROXY, createRoot, flush as solidFlush, resetErrorHalt } from "#solid";
 import type { Accessor, Component, ImageProps, NativeChild, NativeElementProps, NativeFieldProps, NativeNode, NativeTag, NativeTextControlProps, VectorProps } from "../types.js";
-import { bridgeFor, provideRegion, rememberBridge, withCallbackBridge } from "../host.js";
+import { attachReducedMotionBridge, bridgeFor, provideRegion, rememberBridge, tryBridgeFor, withCallbackBridge } from "../host.js";
 import type { NativeHost, UiBridge } from "../host.js";
 import type { InternalProps } from "../internal-props.js";
 import { invalidateTreeOrder } from "../tree-order.js";
@@ -205,7 +205,11 @@ export function mergeProps<T extends readonly object[]>(...sources: T): MergeSou
 }
 
 export function render(code: () => NativeChild, root: NativeNode): () => void {
-  const dispose = renderer.render(code, root);
+  const dispose = renderer.render(() => {
+    const bridge = tryBridgeFor(root);
+    if (bridge) attachReducedMotionBridge(bridge);
+    return code();
+  }, root);
   return () => {
     dispose();
     flush();
@@ -214,7 +218,10 @@ export function render(code: () => NativeChild, root: NativeNode): () => void {
 
 export function renderRegion(code: () => NativeChild, root: NativeNode, bridge: UiBridge): () => void {
   rememberBridge(root, bridge);
-  return mountOwned(() => provideRegion(bridge, () => insert(root, code())), () => bridge.clearRoot(root), "region");
+  return mountOwned(() => provideRegion(bridge, () => {
+    attachReducedMotionBridge(bridge);
+    insert(root, code());
+  }), () => bridge.clearRoot(root), "region");
 }
 
 export function mountOwned(mount: () => void, clear?: () => void, scope: "root" | "region" = "root"): () => void {

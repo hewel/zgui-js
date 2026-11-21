@@ -1060,3 +1060,179 @@ fn window_surface_hosts_child_popup_and_closes_on_compositor_close_request() {
     let report = session.retire();
     assert!(report.failure.is_none(), "teardown failed: {:?}", report.failure);
 }
+
+#[test]
+fn pure_shell_frame_callbacks_isolate_occlusion_migrate_on_close_and_tick_per_surface() {
+    use zgui::platform::{AppHandler, SurfaceEvent};
+    use zgui::view::IntoView;
+
+    const SHELL_RAF_APP: &str = r#"
+        export const hostApiVersion = 1;
+        let wallpaperId;
+        let dockBridge;
+        const events = [];
+        export function mount() {
+            const placement = {
+                layer: 'top', anchor: ['top', 'left'], width: 120, height: 40,
+                margin: { top: 0, right: 0, bottom: 0, left: 0 }, exclusiveZone: 0, keyboard: 'none',
+            };
+            wallpaperId = __zguiShell.openLayer('wallpaper', placement, () => () => {});
+            __zguiShell.openLayer('dock', placement, (_root, bridge) => {
+                dockBridge = bridge;
+                return () => {};
+            });
+            return () => {};
+        }
+        export function scheduleDockOnly() {
+            dockBridge.requestAnimationFrame(() => events.push('dock-pinned'));
+        }
+        export function scheduleUnscoped() {
+            requestAnimationFrame(() => events.push('unscoped'));
+        }
+        export function closeWallpaper() {
+            __zguiShell.closeLayer(wallpaperId);
+        }
+        export function expectStep0() { if (events.join(',') !== '') throw Error('step0: ' + events.join(',')); }
+        export function expectStep1() { if (events.join(',') !== 'dock-pinned') throw Error('step1: ' + events.join(',')); }
+        export function expectStep2() { if (events.join(',') !== 'dock-pinned,dock-pinned,unscoped') throw Error('step2: ' + events.join(',')); }
+        export function expectStep3() { if (events.join(',') !== 'dock-pinned,dock-pinned,unscoped,unscoped') throw Error('step3: ' + events.join(',')); }
+    "#;
+
+    let package = Fixture::new(SHELL_RAF_APP, "").with_capabilities(crate::package::Capabilities {
+        shell_surfaces: true, ..Default::default()
+    });
+    let pending = Rc::new(RefCell::new(Vec::new()));
+    let fonts = zgui::app::Fonts::shipped_only();
+    let mut runtime = zgui::runtime::App::new()
+        .with_renderer(Box::new(|_, target| {
+            let mut renderer = zgui_testkit_scene::CaptureRenderer::new();
+            zgui::render::Renderer::configure(&mut renderer, target);
+            Ok(Box::new(renderer))
+        }))
+        .into_handler(|cx| Box::new(zgui::elements::column().into_view().build(cx)))
+        .expect("create pure-shell test runtime");
+    runtime.without_primary_surface();
+    let cx = zgui_platform_headless::Headless::new();
+    runtime.surfaces_available(&cx);
+
+    let mut host = SessionHost::new(
+        pending,
+        SessionModule::package(package.package()),
+        SessionPolicy::live(host_services::Executor::new(2, 64).expect("create service executor")),
+        RecoveryPolicy::Propagate,
+        SurfaceOpacity::Transparent,
+    );
+    host.set_pure_shell(fonts);
+    host.shell_turn(&mut runtime, &cx, ImageChoice::PackageOnly, &[]).expect("mount pure shell");
+    let session = host.sessions().next().expect("active pure-shell session").clone();
+    let surface_of = |name: &str| {
+        session.mount_regions().into_iter().find(|(region, _)| region == name)
+            .unwrap_or_else(|| panic!("missing mount region {name:?}")).1.surface
+    };
+    let wallpaper = surface_of("wallpaper");
+    let dock = surface_of("dock");
+
+    // 1. Per-surface cadence: dock-pinned rAF does NOT fire on wallpaper's redraw, only on dock's.
+    session.invoke("scheduleDockOnly").expect("schedule pinned dock frame");
+    host.surface_event(&mut runtime, &cx, wallpaper, SurfaceEvent::RedrawRequested).expect("redraw wallpaper");
+    host.shell_turn(&mut runtime, &cx, ImageChoice::PackageOnly, &[]).expect("shell turn after wallpaper redraw");
+    session.invoke("expectStep0").expect("wallpaper redraw must not fire dock-pinned rAF");
+    host.surface_event(&mut runtime, &cx, dock, SurfaceEvent::RedrawRequested).expect("redraw dock");
+    host.shell_turn(&mut runtime, &cx, ImageChoice::PackageOnly, &[]).expect("shell turn after dock redraw");
+    session.invoke("expectStep1").expect("dock redraw fires dock-pinned rAF");
+
+    // 2. Occluding wallpaper migrates pending unscoped rAF onto visible dock, while dock-pinned keeps firing.
+    session.invoke("scheduleUnscoped").expect("schedule unscoped rAF on wallpaper");
+    session.invoke("scheduleDockOnly").expect("schedule dock rAF");
+    host.surface_event(&mut runtime, &cx, wallpaper, SurfaceEvent::Occluded(true)).expect("occlude wallpaper");
+    // Wallpaper redraw while occluded must not stall dock or unscoped rAF.
+    host.surface_event(&mut runtime, &cx, wallpaper, SurfaceEvent::RedrawRequested).expect("occluded wallpaper redraw");
+    host.surface_event(&mut runtime, &cx, dock, SurfaceEvent::RedrawRequested).expect("redraw visible dock");
+    host.shell_turn(&mut runtime, &cx, ImageChoice::PackageOnly, &[]).expect("shell turn after occlusion");
+    session.invoke("expectStep2")
+        .expect("both migrated unscoped rAF and dock-pinned rAF fire while wallpaper is occluded");
+
+    // 3. Unoccluding wallpaper, scheduling unscoped rAF, and closing wallpaper migrates it to dock instead of cancelling.
+    host.surface_event(&mut runtime, &cx, wallpaper, SurfaceEvent::Occluded(false)).expect("unocclude wallpaper");
+    session.invoke("scheduleUnscoped").expect("schedule unscoped rAF before wallpaper closes");
+    session.invoke("closeWallpaper").expect("close wallpaper layer");
+    host.shell_turn(&mut runtime, &cx, ImageChoice::PackageOnly, &[]).expect("reconcile wallpaper close");
+    assert!(cx.surface(wallpaper).is_none(), "wallpaper surface must be closed");
+    host.surface_event(&mut runtime, &cx, dock, SurfaceEvent::RedrawRequested).expect("redraw remaining dock");
+    host.shell_turn(&mut runtime, &cx, ImageChoice::PackageOnly, &[]).expect("shell turn after wallpaper close");
+    session.invoke("expectStep3")
+        .expect("unscoped rAF survived wallpaper close via migration to dock");
+
+    host.stop_shell_surfaces(&mut runtime, &cx);
+    let report = session.retire();
+    assert!(report.failure.is_none(), "teardown failed: {:?}", report.failure);
+}
+
+#[test]
+fn live_portal_reduced_motion_updates_bridges_unless_overridden_by_policy() {
+    use zgui::platform::AppHandler;
+
+    const MOTION_APP: &str = r#"
+        export const hostApiVersion = 1;
+        const log = [];
+        export function mount() {
+            log.push('init:' + __zgui.getReducedMotion());
+            __zgui.subscribeReducedMotion(value => log.push('sub:' + value + ':' + __zgui.getReducedMotion()));
+            return () => {};
+        }
+        export function expectLive() {
+            if (log.join(',') !== 'init:false,sub:true:true,sub:false:false') throw Error('live: ' + log.join(','));
+        }
+        export function expectFalse() {
+            if (log.join(',') !== 'init:false') throw Error('false: ' + log.join(','));
+        }
+        export function expectTrue() {
+            if (log.join(',') !== 'init:true') throw Error('true: ' + log.join(','));
+        }
+    "#;
+
+    let run_case = |explicit_override: Option<bool>, check_export: &str| {
+        let package = Fixture::new(MOTION_APP, "");
+        let pending = Rc::new(RefCell::new(Vec::new()));
+        let roots = pending.clone();
+        let fonts = zgui::app::Fonts::shipped_only();
+        let mut runtime = zgui::runtime::App::new()
+            .with_renderer(Box::new(|_, target| {
+                let mut renderer = zgui_testkit_scene::CaptureRenderer::new();
+                zgui::render::Renderer::configure(&mut renderer, target);
+                Ok(Box::new(renderer))
+            }))
+            .into_handler(move |cx| {
+                zgui::reactive::provide_context(fonts.clone());
+                Box::new(Root(roots.clone()).build(cx))
+            })
+            .expect("create reduced-motion test runtime");
+        let cx = zgui_platform_headless::Headless::new();
+        runtime.surfaces_available(&cx);
+        let mut policy = SessionPolicy::live(host_services::Executor::new(2, 64).expect("executor"));
+        if let Some(flag) = explicit_override {
+            policy = policy.with_reduced_motion(flag);
+        }
+        let mut host = SessionHost::new(
+            pending,
+            SessionModule::package(package.package()),
+            policy,
+            RecoveryPolicy::Propagate,
+            SurfaceOpacity::Opaque,
+        );
+        host.attach(&mut RuntimeSurface::new(&mut runtime, &cx, ImageChoice::PackageOnly), cx.waker(), no_retry())
+            .expect("mount reduced-motion app");
+        let session = host.sessions().next().expect("active session").clone();
+        host.sync_reduced_motion(Some(true), &mut RuntimeSurface::new(&mut runtime, &cx, ImageChoice::PackageOnly))
+            .expect("apply portal reduced-motion=true");
+        host.sync_reduced_motion(Some(false), &mut RuntimeSurface::new(&mut runtime, &cx, ImageChoice::PackageOnly))
+            .expect("apply portal reduced-motion=false");
+        session.invoke(check_export).expect("reduced-motion log matches");
+        let report = session.retire();
+        assert!(report.failure.is_none(), "teardown failed: {:?}", report.failure);
+    };
+
+    run_case(None, "expectLive");
+    run_case(Some(false), "expectFalse");
+    run_case(Some(true), "expectTrue");
+}

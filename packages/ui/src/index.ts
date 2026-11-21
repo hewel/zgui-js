@@ -14,8 +14,8 @@ export { LayerSurface, PopupSurface, SessionLockSurface, WindowSurface, getSessi
 export { createSpring } from "./spring.js";
 export type { Spring, SpringOptions } from "./spring.js";
 export {
-  createCanvasScene, focus, getTextContent, getWindowRect, isAnimating, lockScroll, mountStylesheet,
-  observeGeometry, precedes, registerDismissLayer, trapFocus,
+  createCanvasScene, focus, getReducedMotion, getTextContent, getWindowRect, isAnimating, lockScroll, mountStylesheet,
+  observeGeometry, precedes, registerDismissLayer, setReducedMotion, trapFocus,
 } from "./nodes.js";
 export { Portal } from "./portal.js";
 export type { PortalProps } from "./portal.js";

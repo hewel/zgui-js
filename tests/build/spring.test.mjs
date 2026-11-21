@@ -312,3 +312,104 @@ test("jump inside a Solid effect callback converges cleanly with same-turn targe
   assert.equal(mod.value(), 0);
   assert.equal(clock.frames.size, 0, "matching target and jump inside an effect settles with no frame");
 });
+
+test("dynamic reducedMotion settles active springs, updates ThemeProvider tokens, and follows host updates", async t => {
+  const h = createHost({ strictStyles: true });
+  const mod = await moduleFor(t, `
+    import { createSignal, createSpring, getReducedMotion, renderApp, setReducedMotion } from "@hewel/zgui";
+    import { ThemeProvider } from "@hewel/zgui/components";
+    import type { NativeNode, Spring } from "@hewel/zgui";
+
+    const [target, setTarget] = createSignal(0);
+    export { setTarget, getReducedMotion, setReducedMotion };
+    export let value: Spring;
+
+    export function mount(root: NativeNode) {
+      return renderApp(() => {
+        value = createSpring(target, { stiffness: 170, damping: 18 });
+        return (
+          <ThemeProvider>
+            <box style={{ opacity: value() }} />
+          </ThemeProvider>
+        );
+      }, root);
+    }
+  `);
+  let dispose;
+  globalThis.__zgui = h.host;
+  t.after(() => { try { dispose?.(); } finally { delete globalThis.__zgui; } });
+  const clock = createClock(t, h);
+  dispose = mod.mount(h.makeNode("root"));
+
+  const themeCss = () => [...h.stylesheets.entries()].find(([name]) => name.startsWith("zgui-ui-theme-"))?.[1] ?? "";
+  assert.equal(mod.getReducedMotion(), false);
+  assert.ok(!themeCss().includes("--zui-motion-duration-fast: 0ms;"));
+
+  // Start a spring in flight, then flip reduced motion on mid-flight.
+  h.runTurn(() => mod.setTarget(1));
+  clock.advance(16);
+  clock.frame();
+  assert.ok(mod.value() > 0 && mod.value() < 1);
+  assert.equal(clock.frames.size, 1);
+
+  h.runTurn(() => mod.setReducedMotion(true));
+  assert.equal(mod.getReducedMotion(), true);
+  assert.equal(mod.value(), 1, "active spring settles immediately when reduced motion turns on");
+  assert.equal(clock.frames.size, 0, "pending spring frame is cancelled immediately");
+  assert.ok(themeCss().includes("--zui-motion-duration-fast: 0ms;"), "ThemeProvider reinstalls 0ms motion tokens live");
+
+  // Re-enabling motion resumes spring animation on the next target change.
+  h.runTurn(() => mod.setReducedMotion(false));
+  assert.ok(!themeCss().includes("--zui-motion-duration-fast: 0ms;"));
+  h.runTurn(() => mod.setTarget(0));
+  assert.equal(clock.frames.size, 1, "spring schedules animation again after reduced motion turns off");
+  clock.advance(16);
+  clock.frame();
+  assert.ok(mod.value() > 0 && mod.value() < 1);
+
+  // Clearing the override (null) follows live host/portal updates.
+  h.runTurn(() => mod.setReducedMotion(null));
+  h.emitReducedMotion(true);
+  assert.equal(mod.getReducedMotion(), true);
+  assert.equal(mod.value(), 0, "host portal reduced-motion update settles active spring");
+  assert.equal(clock.frames.size, 0);
+  assert.ok(themeCss().includes("--zui-motion-duration-fast: 0ms;"));
+});
+
+test("pure-shell unscoped getReducedMotion syncs eagerly from attached surfaces and receives live updates", async t => {
+  const h = createHost({ strictStyles: true, reducedMotion: true });
+  const mod = await moduleFor(t, `
+    import { LayerSurface, createEffect, getReducedMotion, renderShell } from "@hewel/zgui";
+
+    export const observed: boolean[] = [];
+
+    export function mount() {
+      return renderShell(() => {
+        createEffect(() => getReducedMotion(), value => {
+          observed.push(value);
+        });
+        return (
+          <LayerSurface name="bar">
+            <text>hello</text>
+          </LayerSurface>
+        );
+      });
+    }
+  `);
+  const previousShell = globalThis.__zguiShell;
+  globalThis.__zguiShell = h.shell;
+  let dispose;
+  t.after(() => {
+    try { if (dispose) h.runTurn(dispose); }
+    finally {
+      if (previousShell === undefined) delete globalThis.__zguiShell;
+      else globalThis.__zguiShell = previousShell;
+    }
+  });
+  dispose = h.runTurn(() => mod.mount());
+  h.flush();
+  assert.equal(mod.observed.at(-1), true, "root effect syncs initial reducedMotion when first shell surface attaches");
+
+  h.emitReducedMotion(false);
+  assert.equal(mod.observed.at(-1), false, "root effect receives live reducedMotion updates without any surface reading getReducedMotion");
+});

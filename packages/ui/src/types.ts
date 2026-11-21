@@ -75,6 +75,7 @@ export type PopupSurfaceProps = {
   readonly placement?: PopupSurfacePlacement;
   readonly offset?: NativePoint;
   readonly grab?: boolean;
+  readonly inputRegion?: LayerInputRegion;
   readonly onDismiss?: () => void;
   readonly children?: NativeChild;
 } & (

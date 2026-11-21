@@ -1,7 +1,7 @@
 //! Decode bounded popup requests independently of any live native surface.
 use rquickjs::{Ctx, Exception, Function, Object, Persistent, Value, function::Func};
 use std::{collections::{BTreeMap, VecDeque}, ops::RangeInclusive, rc::Rc};
-use zgui::{geom::{Css, CssPx, Point, Rect, Size}, platform::{Anchor, Constrain, PopupPlacement, SurfaceId}};
+use zgui::{geom::{Css, CssPx, Point, Rect, Size}, platform::{Anchor, Constrain, InputRegion, PopupPlacement, SurfaceId}};
 
 use super::{Lifecycle, MAX_LAYERS, Shell, layer_id, number, owner, string, valid_name};
 
@@ -11,6 +11,7 @@ pub(crate) struct PopupSpec {
     pub(crate) name: String,
     pub(crate) parent: String,
     geometry: PopupGeometry,
+    pub(crate) input: InputRegion,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -47,6 +48,12 @@ impl PopupSpec {
     #[must_use]
     pub(crate) fn is_auto_height(&self) -> bool {
         matches!(self.geometry.height, PopupHeight::Auto { .. })
+    }
+
+    /// Whether two popup specs share identical placement and size geometry.
+    #[must_use]
+    pub(crate) fn geometry_eq(&self, other: &Self) -> bool {
+        self.geometry == other.geometry
     }
 
     /// Native auto-height policy for the runtime, if `height: "auto"` is active.
@@ -104,7 +111,7 @@ impl Shell {
             let name = popup_name(&ctx, &name)?;
             let (parent, geometry) = parse(&ctx, data)?;
             require_acyclic_parent(&ctx, &shell.popups.borrow(), &name, &parent)?;
-            let spec = PopupSpec { name, parent, geometry };
+            let spec = PopupSpec { name, parent, geometry, input: InputRegion::Full };
             let attach = attach.into_function().ok_or_else(|| Exception::throw_type(&ctx, "popup content must be a function"))?;
             let dismiss = dismiss.into_function().ok_or_else(|| Exception::throw_type(&ctx, "popup dismissal handler must be a function"))?;
             if shell.layers.borrow().len() + shell.popups.borrow().len() + shell.windows.borrow().len() >= MAX_LAYERS {

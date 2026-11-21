@@ -72,6 +72,7 @@ impl SessionHost {
         };
         let mut staged = self.shell_windows.empty_successor();
         let result = candidate.update_monitors(&self.monitors)
+            .and_then(|_| candidate.update_reduced_motion(cx.reduced_motion()))
             .and_then(|_| candidate.mount())
             .and_then(|()| staged.mount(runtime, cx, images, &self.shell_windows, &self.monitors, &candidate));
         if let Err(error) = result {
@@ -112,6 +113,7 @@ impl SessionHost {
         let state = cx.session_lock_state();
         let mut worked = session.update_monitors(&self.monitors)?;
         worked |= session.update_lock_state(state)?;
+        worked |= session.update_reduced_motion(cx.reduced_motion())?;
         self.shell_windows.settle(runtime, cx, images, &self.monitors, session, LockReconcile::Current)?;
         let surface = RuntimeSurface::new(runtime, cx, images);
         if session.primary().is_none() || session.shell.has_lock_command() {
@@ -477,6 +479,9 @@ impl RuntimeSurface<'_> {
         }
         let writes = self.seal_image_source_writes(document, checkpoint);
         self.commit_image_policy(document, session, writes);
+        if self.runtime.windows().iter().any(|window| window.surface().id() == surface && window.is_occluded()) {
+            session.set_surface_occluded(surface, true);
+        }
         Ok(())
     }
 }

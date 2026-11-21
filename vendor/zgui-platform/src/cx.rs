@@ -94,6 +94,11 @@ pub trait PlatformCx {
     /// than a guess, because guessing wrong shows every user who chose dark a white flash.
     fn color_scheme(&self) -> Option<ColorScheme>;
 
+    /// Whether the desktop prefers reduced motion, when it can be discovered.
+    fn reduced_motion(&self) -> Option<bool> {
+        None
+    }
+
     /// The clipboards.
     fn clipboard(&self) -> &dyn Clipboard;
 

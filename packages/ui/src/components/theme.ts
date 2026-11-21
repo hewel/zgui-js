@@ -55,22 +55,22 @@ function overrideDeclarations(theme: Theme): string {
   return out;
 }
 
-function rule(selector: string, scheme: "light" | "dark", theme: Theme): string {
-  const motion = getReducedMotion()
+function rule(selector: string, scheme: "light" | "dark", theme: Theme, reducedMotion: boolean): string {
+  const motion = reducedMotion
     ? themeTokens.filter(name => name.startsWith("--zui-motion-duration-")).map(name => `${name}: 0ms;`).join(" ")
     : "";
   const declarations = `color-scheme: ${scheme}; ${presetDeclarations(theme, scheme)} ${overrideDeclarations(theme)} ${motion}`;
   return `${selector} { ${declarations} }`;
 }
 
-function themeSheet(selector: string, light: Theme, dark: Theme, scheme: ColorScheme): string {
+function themeSheet(selector: string, light: Theme, dark: Theme, scheme: ColorScheme, reducedMotion: boolean): string {
   if (scheme !== "system" && scheme !== "light" && scheme !== "dark") {
     throw new TypeError(`Unknown color scheme: ${String(scheme)}`);
   }
   let css = "";
-  if (scheme === "light" || scheme === "system") css += rule(selector, "light", light);
+  if (scheme === "light" || scheme === "system") css += rule(selector, "light", light, reducedMotion);
   if (scheme === "dark" || scheme === "system") {
-    const darkRule = rule(selector, "dark", dark);
+    const darkRule = rule(selector, "dark", dark, reducedMotion);
     css += (css === "" ? "" : "\n")
       + (scheme === "system" ? `@media (prefers-color-scheme: dark) { ${darkRule} }` : darkRule);
   }
@@ -85,9 +85,9 @@ export function portalThemeScope(theme: ThemeContext, child: NativeNode): Native
   setProp(wrapper, "__zguiClass", id);
   setProp(wrapper, "__zguiInvariantStyle", { display: "contents" });
   effect(
-    () => [theme.light(), theme.dark(), theme.scheme()] as const,
-    ([light, dark, scheme]) => {
-      bridge.installStylesheet(sheetName, `@layer zgui.tokens { ${themeSheet(`.${id}`, light, dark, scheme)} }`);
+    () => [theme.light(), theme.dark(), theme.scheme(), getReducedMotion()] as const,
+    ([light, dark, scheme, reducedMotion]) => {
+      bridge.installStylesheet(sheetName, `@layer zgui.tokens { ${themeSheet(`.${id}`, light, dark, scheme, reducedMotion)} }`);
     },
   );
   onCleanup(() => bridge.removeStylesheet(sheetName));
@@ -109,9 +109,9 @@ export function ThemeProvider(props: ThemeProviderProps = {}): NativeChild {
   const bridge = bridgeFor(wrapper);
   spread(wrapper, { __zguiClass: id, __zguiInvariantStyle: { display: "contents" } }, true);
   effect(
-    () => [context.light(), context.dark(), context.scheme()] as const,
-    ([light, dark, scheme]) => {
-      bridge.installStylesheet(sheetName, `@layer zgui.tokens { ${themeSheet(selector, light, dark, scheme)} }`);
+    () => [context.light(), context.dark(), context.scheme(), getReducedMotion()] as const,
+    ([light, dark, scheme, reducedMotion]) => {
+      bridge.installStylesheet(sheetName, `@layer zgui.tokens { ${themeSheet(selector, light, dark, scheme, reducedMotion)} }`);
     },
   );
   onCleanup(() => bridge.removeStylesheet(sheetName));

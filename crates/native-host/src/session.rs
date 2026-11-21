@@ -90,7 +90,7 @@ pub(crate) struct SessionPolicy {
     strict_rejections: bool,
     assets: AssetSource,
     socket_bindings: Option<Rc<BTreeMap<String, String>>>,
-    reduced_motion: bool,
+    reduced_motion: Option<bool>,
     teardown_reporter: Option<TeardownReporter>,
     session_lock: Option<SessionLockState>,
 }
@@ -98,12 +98,12 @@ impl SessionPolicy {
     /// Ordinary live execution: wall clock, ambient limits, and package assets
     /// on the shared worker pool. Unhandled rejections fault under a retained lock.
     pub(crate) fn live(executor: host_services::Executor) -> Self {
-        Self { limits: RuntimeLimits::default(), deadline: None, environment: None, strict_rejections: false, assets: AssetSource::Live(executor), socket_bindings: None, reduced_motion: false, teardown_reporter: None, session_lock: None }
+        Self { limits: RuntimeLimits::default(), deadline: None, environment: None, strict_rejections: false, assets: AssetSource::Live(executor), socket_bindings: None, reduced_motion: None, teardown_reporter: None, session_lock: None }
     }
     /// Deterministic preview execution: supplied limits, an enclosing deadline,
     /// the virtual environment, strict rejection handling and fixture assets.
     pub(crate) fn preview(limits: RuntimeLimits, deadline: Rc<Cell<Instant>>, environment: Rc<Environment>, fixtures: Rc<crate::assets::fixture::FixtureRuntime>) -> Self {
-        Self { limits, deadline: Some(deadline), environment: Some(environment), strict_rejections: true, assets: AssetSource::Fixture(fixtures), socket_bindings: None, reduced_motion: false, teardown_reporter: None, session_lock: None }
+        Self { limits, deadline: Some(deadline), environment: Some(environment), strict_rejections: true, assets: AssetSource::Fixture(fixtures), socket_bindings: None, reduced_motion: Some(false), teardown_reporter: None, session_lock: None }
     }
     /// Install the explicit launch bindings shared by all live candidates.
     #[must_use]
@@ -113,7 +113,7 @@ impl SessionPolicy {
     }
 
     pub(crate) fn with_reduced_motion(mut self, reduced_motion: bool) -> Self {
-        self.reduced_motion = reduced_motion;
+        self.reduced_motion = Some(reduced_motion);
         self
     }
 
@@ -237,6 +237,7 @@ pub(crate) struct Session {
     retired: RefCell<Option<SessionRetirement>>,
     retirement_reported: Cell<bool>,
     policy: SessionPolicy,
+    reduced_motion: Cell<bool>,
     checkpoint_cursor: Cell<usize>,
     waker: Arc<dyn Waker>,
     notifications_after: Cell<u32>,
@@ -307,10 +308,12 @@ impl Session {
                 contract,
             }, waker.clone());
             let work_session = WorkSession { package: module.package.clone(), generation, assets: policy.assets.clone(), resolved };
+            let initial_reduced_motion = policy.reduced_motion.unwrap_or(false);
             let (primary, work) = match startup {
                 Startup::Primary { region, surface } => {
                     let work = Work::new(work_session, region.host.clone(), surface, waker.clone());
-                    let region = Rc::new(Self::build_region(region, "main".into(), surface, generation, &policy, waker.clone(), weak.clone()));
+                    let options = ui_bridge::BridgeOptions { strict_styles: policy.strict_rejections, reduced_motion: initial_reduced_motion, defer_stylesheet_install: true };
+                    let region = Rc::new(Self::build_region(region, "main".into(), surface, generation, options, waker.clone(), weak.clone()));
                     bridges.add(&region.bridge);
                     (Some(region), work)
                 }
@@ -328,13 +331,16 @@ impl Session {
                 fonts,
                 generation, frames: Cell::new(0), module,
                 fault: RefCell::new(None), retired: RefCell::new(None),
-                policy, checkpoint_cursor: Cell::new(0), waker, notifications_after: Cell::new(0),
+                policy, reduced_motion: Cell::new(initial_reduced_motion),
+                checkpoint_cursor: Cell::new(0), waker, notifications_after: Cell::new(0),
             }
         });
         engine.with_context(|ctx| {
             if let Some(environment) = &session.policy.environment { environment.install(&ctx)?; }
             if let Some(primary) = &session.primary {
-                primary.bridge.install(&ctx)?;
+                let api = primary.bridge.api(&ctx)?;
+                session.work.install_region_frame_api(&api, primary.region.host.clone())?;
+                ctx.globals().set("__zgui", api)?;
                 ctx.globals().set("mountRoot", primary.bridge.root(&ctx)?)?;
             }
             let shell_api = session.shell.install(&ctx)?;
@@ -376,10 +382,10 @@ impl Session {
         Ok(session)
     }
 
-    fn build_region(region: MountRegion, name: String, surface: SurfaceId, generation: u64, policy: &SessionPolicy, waker: Arc<dyn Waker>, session: Weak<Self>) -> SessionRegion {
+    fn build_region(region: MountRegion, name: String, surface: SurfaceId, generation: u64, options: ui_bridge::BridgeOptions, waker: Arc<dyn Waker>, session: Weak<Self>) -> SessionRegion {
         let port = HostPort::live(surface, waker, session, Self::dispatch_step);
         let bridge = UiBridge::new_with_options(NodeRegistry::new(region.dom.clone(), region.root, 1, generation, 100_000),
-            region.host.clone(), port, ui_bridge::BridgeOptions { strict_styles: policy.strict_rejections, reduced_motion: policy.reduced_motion, defer_stylesheet_install: true });
+            region.host.clone(), port, options);
         SessionRegion { region, bridge, surface, name, disposer: RefCell::new(None), lock_claim: None, font_validation_revision: Cell::new(None) }
     }
 
@@ -423,6 +429,32 @@ impl Session {
         let mut engine = self.engine.borrow_mut();
         let engine = engine.as_mut().ok_or("session disposed")?;
         let result = self.bridges.run(engine.turn(), |js| js.with_context(|ctx| self.shell.dispatch_lock_state(&ctx)));
+        self.mark_reported(self.check_contract())?;
+        result.map(|()| true).map_err(|error| self.diagnostic(error).into())
+    }
+
+    /// Synchronize desktop reduced-motion preference into all live bridges unless overridden by policy.
+    pub(crate) fn update_reduced_motion(&self, portal: Option<bool>) -> Result<bool> {
+        let effective = self.policy.reduced_motion.or(portal).unwrap_or(false);
+        if self.shutdown_started.get() || self.reduced_motion.get() == effective {
+            return Ok(false);
+        }
+        self.reduced_motion.set(effective);
+        if !self.mount_started.get() {
+            for owned in self.primary.iter().chain(self.layers.borrow().values()) {
+                owned.bridge.seed_reduced_motion(effective);
+            }
+            return Ok(false);
+        }
+        let mut engine = self.engine.borrow_mut();
+        let engine = engine.as_mut().ok_or("session disposed")?;
+        let regions: Vec<Rc<SessionRegion>> = self.primary.iter().chain(self.layers.borrow().values()).cloned().collect();
+        let result = self.bridges.run(engine.turn(), |js| js.with_context(|ctx| {
+            for owned in &regions {
+                owned.bridge.set_reduced_motion(&ctx, effective)?;
+            }
+            Ok(())
+        }));
         self.mark_reported(self.check_contract())?;
         result.map(|()| true).map_err(|error| self.diagnostic(error).into())
     }
@@ -502,12 +534,13 @@ impl Session {
     /// Build and mount an auxiliary document in the already-running JS engine.
     pub(crate) fn attach_layer(self: &Rc<Self>, id: u32, name: String, region: MountRegion, surface: SurfaceId, lock_claim: Option<std::sync::Weak<dyn Surface>>) -> Result<()> {
         let attach = self.shell.attach(id).ok_or("shell surface was closed before attachment")?;
-        let mut owned = Self::build_region(region, name, surface, self.generation, &self.policy, self.waker.clone(), Rc::downgrade(self));
+        let options = ui_bridge::BridgeOptions { strict_styles: self.policy.strict_rejections, reduced_motion: self.reduced_motion.get(), defer_stylesheet_install: true };
+        let mut owned = Self::build_region(region, name, surface, self.generation, options, self.waker.clone(), Rc::downgrade(self));
         owned.lock_claim = lock_claim;
         let owned = Rc::new(owned);
         self.bridges.add(&owned.bridge);
         self.layers.borrow_mut().insert(id, owned.clone());
-        self.refresh_frame_host();
+        self.work.add_frame_host(surface, owned.region.host.clone());
         self.install_sheets(&owned);
         for (name, css) in self.shell_stylesheets.borrow().iter() {
             owned.region.host.install_stylesheet(name, css);
@@ -516,7 +549,9 @@ impl Session {
         let engine = engine.as_mut().ok_or("session disposed")?;
         let result = self.bridges.run(engine.turn(), |js| js.with_context(|ctx| {
             let callback = attach.restore(&ctx)?;
-            let disposer = owned.bridge.mount_shell_region(&ctx, &callback)?;
+            let api = owned.bridge.api(&ctx)?;
+            self.work.install_region_frame_api(&api, owned.region.host.clone())?;
+            let disposer = owned.bridge.mount_shell_region_with_api(&ctx, &callback, api)?;
             Ok(Persistent::save(&ctx, disposer))
         }));
         match result {
@@ -549,16 +584,16 @@ impl Session {
         let scenes = owned.bridge.canvas_scene_count();
         owned.bridge.dispose();
         self.remove_sheets(&owned);
-        self.refresh_frame_host();
+        self.work.remove_frame_host(&owned.region.host);
         if scenes != 0 { return Err(format!("E_TEARDOWN: shell surface {:?} retained {scenes} canvas scenes", owned.name).into()); }
         self.check_contract()?;
         cleanup.map_err(SessionError::from)
     }
 
-    fn refresh_frame_host(&self) {
-        if self.primary.is_none() {
-            self.work.set_frame_host(self.layers.borrow().first_key_value().map(|(_, owned)| owned.region.host.clone()));
-        }
+    /// Update live occlusion state for a shell surface so unscoped frame callbacks migrate off
+    /// occluded surfaces while each visible surface continues ticking on its own cadence.
+    pub(crate) fn set_surface_occluded(&self, surface: SurfaceId, occluded: bool) {
+        self.work.set_frame_host_occluded(surface, occluded);
     }
 
     pub(crate) fn mount(&self) -> Result<()> {

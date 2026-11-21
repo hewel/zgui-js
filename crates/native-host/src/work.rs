@@ -60,15 +60,20 @@ pub(crate) enum Arguments { Timer, Frame(f64) }
 pub(crate) struct ScheduledCall { id: u64, pub callback: Persistent<Function<'static>>, pub arguments: Arguments }
 enum NativeRegistration {
     Timer(TimerId),
-    WindowFrame(FrameRequestId),
-    ShellFrame { host: HostHandle, id: FrameRequestId },
+    Frame { host: HostHandle, id: FrameRequestId, pinned: bool },
 }
 struct Registration { native: NativeRegistration, callback: Persistent<Function<'static>> }
 struct Pending { resolve: Persistent<Function<'static>>, reject: Persistent<Function<'static>>, cancelled: Arc<AtomicBool> }
 
+struct FrameHostEntry {
+    surface: SurfaceId,
+    host: HostHandle,
+    occluded: bool,
+}
+
 enum Scheduler {
     Window(HostHandle),
-    Shell { timers: AppTimers, frame_host: RefCell<Option<HostHandle>> },
+    Shell(AppTimers),
 }
 
 /// Package and service authority owned by one generation of Work.
@@ -87,6 +92,7 @@ pub(crate) struct Work {
     cleanup_shell: OnceCell<Rc<Shell>>,
     generation: u64,
     scheduler: Scheduler,
+    frame_hosts: RefCell<Vec<FrameHostEntry>>,
     provider: Box<dyn AssetProvider>,
     image_blobs: ImageBlobs,
     direct_images: Cell<DirectImageBudget>,
@@ -99,21 +105,28 @@ impl Work {
     /// Builds the owner-thread services for a primary surface.
     pub(crate) fn new(session: WorkSession, host: HostHandle, surface: SurfaceId, waker: Arc<dyn Waker>) -> Rc<Self> {
         let wake: Arc<dyn Fn() + Send + Sync> = Arc::new(move || waker.wake(WakeReason::ReactiveWork { surfaces: vec![surface].into_boxed_slice() }));
-        Self::with_scheduler(session, wake, Scheduler::Window(host))
+        let frame_hosts = vec![FrameHostEntry { surface, host: host.clone(), occluded: false }];
+        Self::with_scheduler(session, wake, Scheduler::Window(host), frame_hosts)
     }
 
     /// Uses application timing and wakes that remain valid without surfaces.
     pub(crate) fn new_shell(session: WorkSession, timers: AppTimers, waker: Arc<dyn Waker>) -> Rc<Self> {
         let wake: Arc<dyn Fn() + Send + Sync> = Arc::new(move || waker.wake(WakeReason::AppWork));
-        Self::with_scheduler(session, wake, Scheduler::Shell { timers, frame_host: RefCell::new(None) })
+        Self::with_scheduler(session, wake, Scheduler::Shell(timers), Vec::new())
     }
 
-    fn with_scheduler(session: WorkSession, wake: Arc<dyn Fn() + Send + Sync>, scheduler: Scheduler) -> Rc<Self> {
+    fn with_scheduler(
+        session: WorkSession,
+        wake: Arc<dyn Fn() + Send + Sync>,
+        scheduler: Scheduler,
+        frame_hosts: Vec<FrameHostEntry>,
+    ) -> Rc<Self> {
         let WorkSession { package, generation, assets, resolved } = session;
         let external = external::External::new(package.clone(), &assets);
         Rc::new(Self {
             registrations: RefCell::new(HashMap::new()), ready: RefCell::new(VecDeque::new()), requests: RefCell::new(HashMap::new()),
             mode: Cell::new(Mode::Loading), cleanup_shell: OnceCell::new(), generation, scheduler,
+            frame_hosts: RefCell::new(frame_hosts),
             provider: assets.bind(package, generation, wake.clone()),
             image_blobs: ImageBlobs::new(generation),
             direct_images: Cell::default(),
@@ -128,29 +141,142 @@ impl Work {
         assert!(self.cleanup_shell.set(shell).is_ok(), "work cleanup barrier must be bound once for generation {}", self.generation);
     }
 
-    /// Sets the shell's native frame source. Retiring a source also cancels its pending frames.
-    pub(crate) fn set_frame_host(&self, host: Option<HostHandle>) {
-        let Scheduler::Shell { frame_host, .. } = &self.scheduler else { return; };
-        let previous = {
-            let mut frame_host = frame_host.borrow_mut();
-            if let (Some(old), Some(new)) = (&*frame_host, &host)
-                && old.ptr_eq(new)
-            {
+    /// Registers a live surface as an available frame source.
+    pub(crate) fn add_frame_host(self: &Rc<Self>, surface: SurfaceId, host: HostHandle) {
+        {
+            let mut hosts = self.frame_hosts.borrow_mut();
+            if hosts.iter().any(|entry| entry.host.ptr_eq(&host)) {
                 return;
             }
-            std::mem::replace(&mut *frame_host, host)
-        };
-        let Some(previous) = previous else { return; };
-        self.registrations.borrow_mut().retain(|_, registration| {
-            if let NativeRegistration::ShellFrame { host, id } = &registration.native
-                && host.ptr_eq(&previous)
-            {
-                host.cancel_frame_callback(*id);
-                return false;
+            hosts.push(FrameHostEntry { surface, host: host.clone(), occluded: false });
+        }
+        self.migrate_unscoped_frames(&host, |current| !current.ptr_eq(&host) && self.is_frame_host_occluded(current));
+    }
+
+    /// Removes a retiring surface and migrates any remaining pending frame callbacks to a
+    /// live non-occluded surface rather than cancelling them mid-flight.
+    pub(crate) fn remove_frame_host(self: &Rc<Self>, removed: &HostHandle) {
+        self.frame_hosts.borrow_mut().retain(|entry| !entry.host.ptr_eq(removed));
+        let replacement = self.pick_frame_host();
+        let mut migrated = false;
+        let mut registrations = self.registrations.borrow_mut();
+        let ids: Vec<u64> = registrations
+            .iter()
+            .filter_map(|(&id, reg)| match &reg.native {
+                NativeRegistration::Frame { host, .. } if host.ptr_eq(removed) => Some(id),
+                _ => None,
+            })
+            .collect();
+        for id in ids {
+            let Some(reg) = registrations.get_mut(&id) else { continue; };
+            let NativeRegistration::Frame { host, id: old_native, .. } = &reg.native else { continue; };
+            host.cancel_frame_callback(*old_native);
+            if let Some(target) = &replacement {
+                let new_native = self.schedule_native_frame(id, target);
+                reg.native = NativeRegistration::Frame { host: target.clone(), id: new_native, pinned: false };
+                migrated = true;
+            } else {
+                registrations.remove(&id);
             }
-            true
-        });
-        self.ready.borrow_mut().retain(|call| matches!(call.arguments, Arguments::Timer));
+        }
+        drop(registrations);
+        if migrated {
+            (self.wake)();
+        }
+    }
+
+    /// Updates occlusion state for a surface and migrates unscoped callbacks off occluded hosts.
+    pub(crate) fn set_frame_host_occluded(self: &Rc<Self>, surface: SurfaceId, occluded: bool) {
+        let changed = {
+            let mut hosts = self.frame_hosts.borrow_mut();
+            let Some(entry) = hosts.iter_mut().find(|entry| entry.surface == surface) else { return; };
+            if entry.occluded == occluded {
+                None
+            } else {
+                entry.occluded = occluded;
+                Some(entry.host.clone())
+            }
+        };
+        let Some(changed_host) = changed else { return; };
+        if occluded {
+            if let Some(replacement) = self.pick_non_occluded_host_other_than(&changed_host) {
+                self.migrate_unscoped_frames(&replacement, |current| current.ptr_eq(&changed_host));
+            }
+        } else {
+            self.migrate_unscoped_frames(&changed_host, |current| {
+                !current.ptr_eq(&changed_host) && self.is_frame_host_occluded(current)
+            });
+        }
+    }
+
+    fn has_frame_host(&self, target: &HostHandle) -> bool {
+        self.frame_hosts.borrow().iter().any(|entry| entry.host.ptr_eq(target))
+    }
+
+    fn pick_frame_host(&self) -> Option<HostHandle> {
+        let hosts = self.frame_hosts.borrow();
+        hosts
+            .iter()
+            .find(|entry| !entry.occluded)
+            .or_else(|| hosts.first())
+            .map(|entry| entry.host.clone())
+    }
+
+    fn pick_non_occluded_host_other_than(&self, excluded: &HostHandle) -> Option<HostHandle> {
+        self.frame_hosts
+            .borrow()
+            .iter()
+            .find(|entry| !entry.occluded && !entry.host.ptr_eq(excluded))
+            .map(|entry| entry.host.clone())
+    }
+
+    fn is_frame_host_occluded(&self, target: &HostHandle) -> bool {
+        self.frame_hosts
+            .borrow()
+            .iter()
+            .find(|entry| entry.host.ptr_eq(target))
+            .is_some_and(|entry| entry.occluded)
+    }
+
+    fn schedule_native_frame(self: &Rc<Self>, id: u64, host: &HostHandle) -> FrameRequestId {
+        let weak = Rc::downgrade(self);
+        host.request_frame_callback(Rc::new(move |timestamp: Timestamp| {
+            if let Some(owner) = weak.upgrade() {
+                owner.fire(id, Arguments::Frame(timestamp.since_origin().as_secs_f64() * 1000.0));
+            }
+        }))
+    }
+
+    fn migrate_unscoped_frames(self: &Rc<Self>, to: &HostHandle, should_migrate: impl Fn(&HostHandle) -> bool) {
+        let mut migrated = false;
+        let mut registrations = self.registrations.borrow_mut();
+        for (&id, reg) in registrations.iter_mut() {
+            if let NativeRegistration::Frame { host, id: old_native, pinned: false } = &reg.native
+                && should_migrate(host)
+            {
+                host.cancel_frame_callback(*old_native);
+                let new_native = self.schedule_native_frame(id, to);
+                reg.native = NativeRegistration::Frame { host: to.clone(), id: new_native, pinned: false };
+                migrated = true;
+            }
+        }
+        drop(registrations);
+        if migrated {
+            (self.wake)();
+        }
+    }
+
+    /// Attaches a region-scoped `requestAnimationFrame` onto a bridge API object so springs and
+    /// effects inside that surface tick on its own Wayland/native frame cadence.
+    pub(crate) fn install_region_frame_api<'js>(
+        self: &Rc<Self>,
+        api: &Object<'js>,
+        host: HostHandle,
+    ) -> rquickjs::Result<()> {
+        let weak = Rc::downgrade(self);
+        api.set("requestAnimationFrame", Func::from(move |ctx: Ctx<'js>, callback: Function<'js>| {
+            owner(&weak, &ctx)?.register_frame(&ctx, callback, Some(host.clone()))
+        }))
     }
 
     pub(crate) fn contract_failure(&self) -> Option<crate::assets::ContractFailure> {
@@ -250,10 +376,10 @@ impl Work {
             let owner = owner(&weak, &ctx)?;
             let delay = delay.0.unwrap_or(0.0);
             if !delay.is_finite() || !(0.0..=u32::MAX as f64).contains(&delay) { return Err(Exception::throw_range(&ctx, "timeout delay must be finite nonnegative milliseconds within u32 range")); }
-            owner.register(&ctx, callback, Some(Duration::from_secs_f64(delay / 1000.0)))
+            owner.register_timer(&ctx, callback, Duration::from_secs_f64(delay / 1000.0))
         }))?;
         let weak = Rc::downgrade(self);
-        ctx.globals().set("requestAnimationFrame", Func::from(move |ctx: Ctx<'js>, callback: Function<'js>| owner(&weak, &ctx)?.register(&ctx, callback, None)))?;
+        ctx.globals().set("requestAnimationFrame", Func::from(move |ctx: Ctx<'js>, callback: Function<'js>| owner(&weak, &ctx)?.register_frame(&ctx, callback, None)))?;
         for (name, frame) in [("clearTimeout", false), ("cancelAnimationFrame", true)] {
             let weak = Rc::downgrade(self);
             ctx.globals().set(name, Func::from(move |ctx: Ctx<'js>, value: f64| {
@@ -322,38 +448,52 @@ impl Work {
         Ok(snapshot)
     }
 
-    fn register<'js>(self: &Rc<Self>, ctx: &Ctx<'js>, callback: Function<'js>, delay: Option<Duration>) -> rquickjs::Result<f64> {
+    fn reserve_callback_id(&self, ctx: &Ctx<'_>) -> rquickjs::Result<u64> {
         self.require_creation(ctx)?;
         if self.registrations.borrow().len() + self.ready.borrow().len() >= MAX_CALLBACKS {
             return Err(Exception::throw_range(ctx, "native scheduled callback limit reached"));
         }
-        let id = self.id(ctx)?;
+        self.id(ctx)
+    }
+
+    fn register_timer<'js>(self: &Rc<Self>, ctx: &Ctx<'js>, callback: Function<'js>, delay: Duration) -> rquickjs::Result<f64> {
+        let id = self.reserve_callback_id(ctx)?;
         let weak = Rc::downgrade(self);
-        let native = if let Some(delay) = delay {
-            let callback = Rc::new(move || {
-                if let Some(owner) = weak.upgrade() { owner.fire(id, Arguments::Timer); }
-            });
-            let timer = match &self.scheduler {
-                Scheduler::Window(host) => host.schedule(delay, Repeat::Once, callback),
-                Scheduler::Shell { timers, .. } => timers.schedule(delay, callback)
-                    .ok_or_else(|| Exception::throw_reference(ctx, "application timer scheduler is unavailable"))?,
-            };
-            NativeRegistration::Timer(timer)
-        } else {
-            let callback = move |timestamp: Timestamp| {
-                if let Some(owner) = weak.upgrade() { owner.fire(id, Arguments::Frame(timestamp.since_origin().as_secs_f64() * 1000.0)); }
-            };
-            match &self.scheduler {
-                Scheduler::Window(host) => NativeRegistration::WindowFrame(host.request_frame_callback(Rc::new(callback))),
-                Scheduler::Shell { frame_host, .. } => {
-                    let host = frame_host.borrow().clone()
-                        .ok_or_else(|| Exception::throw_reference(ctx, "requestAnimationFrame requires an open surface"))?;
-                    let id = host.request_frame_callback(Rc::new(callback));
-                    NativeRegistration::ShellFrame { host, id }
-                }
+        let native_cb = Rc::new(move || {
+            if let Some(owner) = weak.upgrade() { owner.fire(id, Arguments::Timer); }
+        });
+        let timer = match &self.scheduler {
+            Scheduler::Window(host) => host.schedule(delay, Repeat::Once, native_cb),
+            Scheduler::Shell(timers) => timers.schedule(delay, native_cb)
+                .ok_or_else(|| Exception::throw_reference(ctx, "application timer scheduler is unavailable"))?,
+        };
+        self.registrations.borrow_mut().insert(id, Registration {
+            native: NativeRegistration::Timer(timer),
+            callback: Persistent::save(ctx, callback),
+        });
+        Ok(id as f64)
+    }
+
+    fn register_frame<'js>(
+        self: &Rc<Self>,
+        ctx: &Ctx<'js>,
+        callback: Function<'js>,
+        explicit_host: Option<HostHandle>,
+    ) -> rquickjs::Result<f64> {
+        let id = self.reserve_callback_id(ctx)?;
+        let (host, pinned) = match explicit_host {
+            Some(host) if self.has_frame_host(&host) => (host, true),
+            _ => {
+                let fallback = self.pick_frame_host()
+                    .ok_or_else(|| Exception::throw_reference(ctx, "requestAnimationFrame requires an open surface"))?;
+                (fallback, false)
             }
         };
-        self.registrations.borrow_mut().insert(id, Registration { native, callback: Persistent::save(ctx, callback) });
+        let native_id = self.schedule_native_frame(id, &host);
+        self.registrations.borrow_mut().insert(id, Registration {
+            native: NativeRegistration::Frame { host, id: native_id, pinned },
+            callback: Persistent::save(ctx, callback),
+        });
         Ok(id as f64)
     }
 
@@ -364,7 +504,7 @@ impl Work {
         // The owner checkpoint follows native delivery. Drain the batch with
         // a shared budget, rather than resetting a budget per timer or frame.
         self.ready.borrow_mut().push_back(ScheduledCall { id, callback: registration.callback, arguments });
-        if matches!(self.scheduler, Scheduler::Shell { .. }) && matches!(arguments, Arguments::Timer) {
+        if matches!(self.scheduler, Scheduler::Shell(_)) && matches!(arguments, Arguments::Timer) {
             (self.wake)();
         }
     }
@@ -386,13 +526,9 @@ impl Work {
         match native {
             NativeRegistration::Timer(id) => match &self.scheduler {
                 Scheduler::Window(host) => host.cancel_timer(id),
-                Scheduler::Shell { timers, .. } => timers.cancel(id),
+                Scheduler::Shell(timers) => timers.cancel(id),
             },
-            NativeRegistration::WindowFrame(id) => {
-                let Scheduler::Window(host) = &self.scheduler else { unreachable!("window registration in a shell scheduler"); };
-                host.cancel_frame_callback(id);
-            }
-            NativeRegistration::ShellFrame { host, id } => host.cancel_frame_callback(id),
+            NativeRegistration::Frame { host, id, .. } => host.cancel_frame_callback(id),
         }
     }
 
@@ -493,9 +629,7 @@ impl Work {
         self.begin_stop();
         for registration in self.registrations.borrow_mut().drain().map(|(_, registration)| registration) { self.cancel_native(registration.native); }
         self.ready.borrow_mut().clear();
-        if let Scheduler::Shell { frame_host, .. } = &self.scheduler {
-            frame_host.borrow_mut().take();
-        }
+        self.frame_hosts.borrow_mut().clear();
         self.external.clear(self.generation);
         self.mode.set(Mode::Disposed);
     }

@@ -79,3 +79,45 @@ test("WindowSurface renders, resizes, and hosts a zero-flicker auto-height Popup
 
   assert.equal(result.captureCount, 6);
 });
+
+test("PopupSurface inputRegion allows clicks inside active rect and passes through outside it", async () => {
+  const { out } = await runScenario({
+    projectDir: temp.dir,
+    bundle,
+    name: "popup-input-region-hit",
+    requiredCapabilities: [],
+    width: 400,
+    height: 240,
+    scale: 1,
+    assertEmptyResources: true,
+    steps: [
+      { id: "outputs", op: "monitors.set", monitors: [monitor] },
+      click("open-shaped"),
+      advance("settle-shaped"),
+      { id: "click-inside", op: "pointer.click", target: { surface: "shaped-menu", testId: "inside-hit" }, button: "primary" },
+      advance("settle-inside"),
+      capture("after-inside", "shaped-menu"),
+    ],
+  });
+  const tree = await readTree(out, "surfaces/shaped-menu/after-inside");
+  assert.equal(getNode(tree, "shaped-hits").text, "hits=1");
+
+  const { result: blocked } = await runScenario({
+    projectDir: temp.dir,
+    bundle,
+    name: "popup-input-region-passthrough",
+    requiredCapabilities: [],
+    width: 400,
+    height: 240,
+    scale: 1,
+    allowFailure: true,
+    assertEmptyResources: true,
+    steps: [
+      { id: "outputs", op: "monitors.set", monitors: [monitor] },
+      click("open-shaped"),
+      advance("settle-shaped"),
+      { id: "click-outside", op: "pointer.click", target: { surface: "shaped-menu", testId: "outside-hit" }, button: "primary" },
+    ],
+  });
+  assert.notEqual(blocked.exitCode, 0, "target outside PopupSurface inputRegion must not receive clicks");
+});

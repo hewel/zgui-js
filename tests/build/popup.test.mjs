@@ -266,3 +266,48 @@ test("disposing pending popup declarations cancels asynchronous attachment", asy
   harness.flush();
   assert.deepEqual([...harness.surfaces.keys()], ["panel", "menu", "submenu"]);
 });
+
+test("PopupSurface forwards static and reactive inputRegion updates without reopening", async t => {
+  const harness = createHost({ shellSurfaces: true });
+  globalThis.__zguiShell = harness.shell;
+  let dispose;
+  t.after(() => {
+    try { dispose?.(); } finally { delete globalThis.__zguiShell; }
+  });
+  const mod = await moduleFor(t, `
+    import { createSignal, LayerSurface, PopupSurface, renderShell } from "@hewel/zgui";
+    import type { LayerInputRegion } from "@hewel/zgui";
+    const [region, setRegion] = createSignal<LayerInputRegion>([{ x: 10, y: 12, width: 120, height: 80 }]);
+    export { setRegion };
+    export function mount() {
+      return renderShell(() => (
+        <>
+          <LayerSurface name="panel" width={300} height={40}><box /></LayerSurface>
+          <PopupSurface
+            name="morph"
+            parent="panel"
+            width={240}
+            height={300}
+            anchorRect={{ x: 0, y: 0, width: 40, height: 40 }}
+            inputRegion={region()}
+          >
+            <box testId="card" />
+          </PopupSurface>
+        </>
+      ));
+    }
+  `);
+  dispose = harness.runTurn(() => mod.mount());
+  harness.flush();
+  const morph = harness.surfaces.get("morph");
+  assert.ok(morph, "popup surface opened");
+  assert.deepEqual(morph.inputRegion, [{ x: 10, y: 12, width: 120, height: 80 }]);
+
+  harness.runTurn(() => mod.setRegion([{ x: 10, y: 12, width: 120, height: 220 }]));
+  harness.flush();
+  assert.deepEqual(morph.inputRegion, [{ x: 10, y: 12, width: 120, height: 220 }]);
+
+  harness.runTurn(() => mod.setRegion("empty"));
+  harness.flush();
+  assert.equal(morph.inputRegion, "empty");
+});

@@ -156,6 +156,7 @@ impl Application {
         let retry = self.retry_sender(cx);
         {
             let mut surface = RuntimeSurface::new(&mut self.native, cx, ImageChoice::Live);
+            if let Err(error) = self.host.sync_reduced_motion(cx.reduced_motion(), &mut surface) { self.fail(cx, error); return; }
             if let Err(error) = self.host.checkpoint(&mut surface, retry) { self.fail(cx, error); return; }
         }
         self.after_shell(cx);
@@ -451,7 +452,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut application = Application::new(native, pending, package, socket_bindings)?;
     application.layer_primary = layer_config.is_some();
     if let Some(fonts) = fonts { application.host.set_pure_shell(fonts); }
-    application.host.set_reduced_motion(reduced_motion);
+    if reduced_motion { application.host.set_reduced_motion(true); }
     application.exit_after = exit_after;
     application.harness.exercise = exercise;
     application.watch_path = watch.then_some(bundle).flatten();

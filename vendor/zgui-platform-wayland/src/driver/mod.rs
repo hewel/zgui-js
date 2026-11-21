@@ -215,7 +215,7 @@ impl WaylandState {
         // than by nothing until the next launch.
         let watching = crate::theme::watch(
             Arc::clone(&waker) as Arc<dyn zgui_platform::Waker>,
-            Arc::clone(&state.live.scheme),
+            Arc::clone(&state.live.appearance),
         );
         state.live.capabilities = capabilities::of(Offered {
             color_scheme: watching,

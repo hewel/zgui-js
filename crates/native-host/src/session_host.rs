@@ -137,6 +137,7 @@ pub(crate) trait SessionSurface {
     fn request_frame(&self, document: DocumentId);
     fn validate_fonts(&self, _session: &Session) -> SessionResult<()> { Ok(()) }
     fn session_lock_support(&self) -> Option<SessionLockState> { None }
+    fn portal_reduced_motion(&self) -> Option<bool> { None }
     /// Close an auxiliary window; layer surfaces must also disappear from the platform.
     fn close_shell_surface(&mut self, token: WindowToken, removed_surface: Option<SurfaceId>) -> bool;
     fn stage_shell_surfaces(&mut self, staged: &mut ShellWindows, previous: &ShellWindows, monitors: &[Monitor], session: &Rc<Session>) -> SessionResult<()>;
@@ -221,6 +222,7 @@ impl SessionSurface for RuntimeSurface<'_> {
         Ok(())
     }
     fn session_lock_support(&self) -> Option<SessionLockState> { surfaces::platform_lock_state(self.cx) }
+    fn portal_reduced_motion(&self) -> Option<bool> { self.cx.reduced_motion() }
     fn close_shell_surface(&mut self, token: WindowToken, id: Option<SurfaceId>) -> bool {
         surfaces::close_native_surface(self.runtime, self.cx, token, id)
     }
@@ -311,6 +313,12 @@ impl SessionHost {
                     }
                 });
             }
+            SurfaceEvent::Occluded(occluded) => {
+                runtime.surface_event(cx, surface, event);
+                for session in self.sessions.values().chain(self.pure_session.iter()) {
+                    session.set_surface_occluded(surface, occluded);
+                }
+            }
             _ => runtime.surface_event(cx, surface, event),
         }
         Ok(())
@@ -345,6 +353,16 @@ impl SessionHost {
     /// Evaluate a candidate generation on an existing mount region.
     pub(crate) fn replace(&mut self, surface: &mut impl SessionSurface, waker: Arc<dyn Waker>, document: DocumentId, module: SessionModule, retry: Rc<dyn Fn(DocumentId, u64)>) -> ReloadOutcome {
         self.mount_module(surface, waker, document, module, &retry)
+    }
+
+    /// Push live portal reduced-motion updates to every mounted session.
+    pub(crate) fn sync_reduced_motion(&mut self, portal: Option<bool>, surface: &mut impl SessionSurface) -> SessionResult<()> {
+        for session in self.sessions.values().chain(self.pure_session.iter()) {
+            if session.update_reduced_motion(portal)? {
+                session.request_frames(|document| surface.request_frame(document));
+            }
+        }
+        Ok(())
     }
 
     /// Run each mounted session's work turn. Under `Fallback` a session fault
@@ -491,6 +509,7 @@ impl SessionHost {
             }
         };
         if let Err(error) = candidate.update_monitors(&self.monitors) { return ReloadOutcome::Rejected(error); }
+        let _ = candidate.update_reduced_motion(surface.portal_reduced_motion());
         surface.bind(document, &candidate);
         let image_checkpoint = surface.image_source_checkpoint(document);
         let mut staged = self.shell_windows.empty_successor();

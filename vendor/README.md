@@ -394,3 +394,13 @@ Regression gates:
 
     cargo test -j 4 --manifest-path vendor/zgui-dom/Cargo.toml --test engine --offline
     cargo test -j 4 --manifest-path vendor/zgui-runtime/Cargo.toml --test caret --offline
+
+## Desktop portal reduced-motion preference
+
+`zgui-platform` adds a default `PlatformCx::reduced_motion(&self) -> Option<bool>` query so backends that do not expose a system reduced-motion signal remain source-compatible.
+
+`zgui-platform-wayland` extends its existing `zgui-appearance` D-Bus watcher on `org.freedesktop.portal.Settings` (`org.freedesktop.appearance`) to read and watch `reduced-motion` (`0` = no preference / `Some(false)`, `1` = reduce / `Some(true)`, other = `None`) alongside `color-scheme`. Changes wake the driver loop with `WakeReason::AppWork` so `SessionHost` propagates the preference live to mounted bridges unless overridden by `--reduced-motion` or a preview profile.
+
+Regression gate:
+
+    cargo test -j 4 --manifest-path vendor/zgui-platform-wayland/Cargo.toml --lib theme --offline

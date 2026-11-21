@@ -1,11 +1,9 @@
 import { getOwner, onCleanup } from "#solid";
 import { flush } from "./renderer/index.js";
-import { bridgeFor, bridgeForTarget, withCallbackBridge } from "./host.js";
+import { bridgeFor, bridgeForTarget, getReducedMotion, setReducedMotion, withCallbackBridge } from "./host.js";
 import type { CanvasScene, NativeDismissLayer, NativeDismissLayerOptions, NativeDismissReason, NativeFocusOptions, NativeFocusTrapOptions, NativeGeometry, NativeGeometryKind, NativeNode, NativeWindowRect } from "./types.js";
 
-export function getReducedMotion(): boolean {
-  return bridgeFor().getReducedMotion();
-}
+export { getReducedMotion, setReducedMotion };
 
 export function focus(node: NativeNode, options?: NativeFocusOptions): void {
   bridgeFor(node).focus(node, options?.reveal ?? false);

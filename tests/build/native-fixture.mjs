@@ -335,6 +335,18 @@ export function createHost({ strictStyles = false, reducedMotion = false, monito
     region.stylesheets.set(key, css);
   };
 
+  const reducedMotionSubscribers = new Set();
+  const emitReducedMotion = next => {
+    const value = Boolean(next);
+    if (reducedMotion === value) return;
+    reducedMotion = value;
+    runTurn(() => {
+      for (const callback of [...reducedMotionSubscribers]) {
+        if (reducedMotionSubscribers.has(callback)) callback(value);
+      }
+    }, false);
+  };
+
   const makeBridge = region => ({
     createElement: tag => {
       assertActiveHost("createElement");
@@ -525,6 +537,10 @@ export function createHost({ strictStyles = false, reducedMotion = false, monito
       if (!region.retired) region.stylesheets.delete(name);
     },
     getReducedMotion: () => reducedMotion,
+    subscribeReducedMotion: callback => {
+      reducedMotionSubscribers.add(callback);
+      return () => { reducedMotionSubscribers.delete(callback); };
+    },
     focus: (node, reveal = false) => {
       assertLive(node, "focus target", region);
       moveFocus(node, reveal);
@@ -852,7 +868,7 @@ export function createHost({ strictStyles = false, reducedMotion = false, monito
     },
     setInputRegion(id, region) {
       assertActiveHost("setInputRegion");
-      const surface = layerIds.get(id);
+      const surface = layerIds.get(id) ?? popupIds.get(id);
       if (!surface || surface.closing) throw new ReferenceError("closed shell surface");
       surface.inputRegion = structuredClone(region);
       shellLog.push({ op: "input", id, region: surface.inputRegion });
@@ -1000,7 +1016,7 @@ export function createHost({ strictStyles = false, reducedMotion = false, monito
 
   return {
     host, nodes, parents, stylesheets, installs, makeNode, byTestId, focused, rects, texts,
-    shell, surfaces, shellLog, emitMonitors, monitorSubscribers, popupDone, windowClose,
+    shell, surfaces, shellLog, emitMonitors, emitReducedMotion, monitorSubscribers, popupDone, windowClose,
     sessionLockState: () => lockState, sessionLockLog,
     animating, animatingQueries, queries, portals, traps, locks, layers, geometry,
     canvasScenes,
