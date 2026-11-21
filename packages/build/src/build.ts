@@ -156,28 +156,16 @@ export function dependencyVersions({
     signalsFromSolid(appRequire) ??
     signalsFromSolid(require);
   if (signals === undefined) throw new Error("Cannot locate @solidjs/signals");
-  const babelPluginRequire = createRequire(require.resolve("@solidjs/babel-plugin"));
+  const solidCompiler = packageVersion(require, "@solidjs/compiler");
+  if (solidCompiler === undefined) throw new Error("Cannot locate @solidjs/compiler");
   return Object.fromEntries([
     ["solid-js", solid],
     ["@solidjs/signals", signals],
-    ...[
-      "@solidjs/babel-plugin",
-      "@babel/core",
-      "@babel/parser",
-      "@babel/traverse",
-      "@babel/preset-typescript",
-      "lightningcss",
-      "rolldown",
-      "tsrs",
-    ].map(name => [name, manifestVersion(require(`${name}/package.json`), name)] as const),
+    ["@solidjs/compiler", solidCompiler],
+    ...["lightningcss", "rolldown", "tsrs"].map(
+      name => [name, manifestVersion(require(`${name}/package.json`), name)] as const,
+    ),
     ...(universal === undefined ? [] : [["@solidjs/universal", universal] as const]),
-    [
-      "@babel/plugin-syntax-jsx",
-      manifestVersion(
-        babelPluginRequire("@babel/plugin-syntax-jsx/package.json"),
-        "@babel/plugin-syntax-jsx",
-      ),
-    ],
   ]);
 }
 

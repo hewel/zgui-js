@@ -146,7 +146,8 @@ test("real TSX bundles have one reactive runtime, composed maps, resources, and 
   assert.ok(!Object.hasOwn(info, "node"));
   assert.equal(info.packages["solid-js"], "2.0.1");
   assert.equal(info.packages["@solidjs/universal"], "2.0.1");
-  assert.equal(info.packages["@solidjs/babel-plugin"], "2.0.1");
+  assert.equal(info.packages["@solidjs/compiler"], "2.0.1");
+  assert.equal(Object.keys(info.packages).some(name => name.includes("babel")), false);
   assert.equal(info.packages.tsrs, "7.1.0-beta.tsrs2");
   assert.equal(info.engine.name, "QuickJS-NG");
   assert.equal(info.packages.rolldown, "1.3.2");
@@ -207,12 +208,12 @@ ${validEntry.replace("<text>", "<text class={styles.root}>")}`);
   assert.doesNotMatch(css, /@layer/);
 });
 
-test("missing Babel maps and missing CSS output cannot publish a candidate", async t => {
+test("missing Solid compiler maps and missing CSS output cannot publish a candidate", async t => {
   const directory = await fixture(t);
   const source = path.join(directory, "src/main.tsx");
   await assert.rejects(
-    compileBundle(source, { root: workspaceRoot, appDirectory: directory, babelTransform: async () => ({ code: entry, map: null }) }),
-    /no JavaScript or source map/,
+    compileBundle(source, { root: workspaceRoot, appDirectory: directory, jsxTransform: async () => ({ code: entry, map: null }) }),
+    /no code or source map/,
   );
   let pluginRan = false;
   const result = await compileBundle(source, {
@@ -492,16 +493,21 @@ test("native acceptance status files do not trigger another publication", { time
   } finally { await watcher.close(); }
 });
 
-test("persistent compiler caches real Babel transforms, prunes modules, and recovers after syntax errors", { timeout: 30000 }, async t => {
+test("persistent compiler caches real Solid JSX transforms, bypasses plain TS, prunes modules, and recovers after syntax errors", { timeout: 30000 }, async t => {
   const directory = await fixture(t);
   const source = path.join(directory, "src/main.tsx");
-  const dependency = path.join(directory, "src/message.ts");
-  const dependencySource = value => `export const message: string = ${JSON.stringify(value)};`;
-  const mainSource = suffix => `import { message } from "./message";\n${validEntry.replace("Count:", `{message}${suffix}`)}`;
-  await writeFile(dependency, dependencySource("incremental-one"));
+  const jsxDependency = path.join(directory, "src/badge.tsx");
+  const tsDependency = path.join(directory, "src/message.ts");
+  const jsxDependencySource = value => `export function Badge() { return <text>${value}</text>; }\n`;
+  const tsDependencySource = value => `export const message: string = ${JSON.stringify(value)};\n`;
+  const mainSource = suffix =>
+    `import { Badge } from "./badge";\nimport { message } from "./message";\n${validEntry.replace("<text>Count: {count()}</text>", `<box><Badge /><text>{message}${suffix}</text></box>`)}`;
+  await writeFile(jsxDependency, jsxDependencySource("badge-one"));
+  await writeFile(tsDependency, tsDependencySource("incremental-one"));
   await writeFile(source, mainSource("first"));
-  const { transformAsync } = require("@babel/core");
-  let transforms = 0;
+  const { transform: solidTransform } = require("@solidjs/compiler");
+  let jsxTransforms = 0;
+  let tsTransforms = 0;
   let next = Promise.withResolvers();
   const take = async () => {
     const result = await next.promise;
@@ -513,9 +519,10 @@ test("persistent compiler caches real Babel transforms, prunes modules, and reco
     appDirectory: directory,
     temporaryDirectory: path.join(directory, "compiler-output"),
     buildDelay: 20,
-    babelTransform(source, options) {
-      if (options.filename === dependency) transforms++;
-      return transformAsync(source, options);
+    jsxTransform(code, options) {
+      if (options.filename === jsxDependency) jsxTransforms++;
+      if (options.filename === tsDependency) tsTransforms++;
+      return solidTransform(code, options);
     },
     onCompile(result) { next.resolve({ result }); },
     onError(error) { next.resolve({ error }); },
@@ -523,28 +530,32 @@ test("persistent compiler caches real Babel transforms, prunes modules, and reco
   let compiler = start();
   try {
     assert.ok((await take()).result);
-    assert.equal(transforms, 1);
+    assert.equal(jsxTransforms, 1);
+    assert.equal(tsTransforms, 0, "plain .ts modules must bypass @solidjs/compiler");
     await writeFile(source, mainSource("second"));
     assert.match((await take()).result.files.get("app.mjs").toString(), /second/);
-    assert.equal(transforms, 1, "the persistent compiler must retain unchanged Babel transforms");
-    await writeFile(dependency, dependencySource("incremental-two"));
+    assert.equal(jsxTransforms, 1, "the persistent compiler must retain unchanged JSX transforms");
+    await writeFile(tsDependency, tsDependencySource("incremental-two"));
     assert.match((await take()).result.files.get("app.mjs").toString(), /incremental-two/);
-    assert.equal(transforms, 2);
+    assert.equal(tsTransforms, 0, "editing plain .ts modules still bypasses @solidjs/compiler");
+    await writeFile(jsxDependency, jsxDependencySource("badge-two"));
+    assert.match((await take()).result.files.get("app.mjs").toString(), /badge-two/);
+    assert.equal(jsxTransforms, 2);
     await writeFile(source, "export const broken = ;");
     assert.ok((await take()).error);
     await writeFile(source, mainSource("recovered"));
     assert.match((await take()).result.files.get("app.mjs").toString(), /recovered/);
-    const beforePruning = transforms;
+    const beforePruning = jsxTransforms;
     await writeFile(source, validEntry.replace("Count:", "detached"));
-    assert.ok(!(await take()).result.graph.modules.includes(dependency));
+    assert.ok(!(await take()).result.graph.modules.includes(jsxDependency));
     await writeFile(source, mainSource("reattached"));
     assert.match((await take()).result.files.get("app.mjs").toString(), /reattached/);
-    assert.equal(transforms, beforePruning + 1, "removed modules must not retain cached transforms");
+    assert.equal(jsxTransforms, beforePruning + 1, "removed modules must not retain cached transforms");
     await compiler.close();
-    const beforeRestart = transforms;
+    const beforeRestart = jsxTransforms;
     compiler = start();
     assert.ok((await take()).result);
-    assert.equal(transforms, beforeRestart + 1, "closing a compiler clears its transform cache");
+    assert.equal(jsxTransforms, beforeRestart + 1, "closing a compiler clears its transform cache");
   } finally { await compiler.close(); }
 });
 
@@ -753,5 +764,131 @@ test("static component stylesheets hoist into packaged components.css in layer o
   });
   assert.equal(nonHost.files.has("components.css"), false, "hostEntry: false keeps component styles inline for unit harnesses");
   assert.match(nonHost.files.get("app.mjs").toString(), /--zui-button-ring:/);
+});
+
+test("Stage 1 TS-aware validation and Stage 2 scope analysis handle type imports, typeof guards, shadowing, and destructuring", () => {
+  // Stage 1: pure type imports/exports from forbidden modules are erased by Rolldown TS stripping.
+  validateModule(`import type { Stats } from "node:fs";\nexport type { Stats } from "node:fs";\nexport type * from "node:path";\nexport const x: Stats | null = null;\n`, {
+    filename: "src/types.ts",
+  });
+  // Under onlyRemoveTypeImports: true, `import { type X } from "node:fs"` stays as a side-effect import and must be rejected.
+  assert.throws(
+    () => validateModule(`import { type Stats } from "node:fs";\nexport const x: Stats | null = null;\n`, { filename: "src/bad.ts" }),
+    /Incompatible runtime import: node:fs/,
+  );
+  // Stage 2: typeof guards, shadowed bindings, hoisted functions, and catch bindings.
+  validateModule(
+    `${entry}
+    function guarded() {
+      const a = typeof unknownOpt !== "undefined" ? unknownOpt.value : 0;
+      const b = typeof unknownOpt === "undefined" || unknownOpt.ok;
+      if (typeof unknownOpt !== "undefined") { void unknownOpt; }
+      return [a, b, hoisted()];
+    }
+    function hoisted() {
+      const document = { shadowed: true };
+      try { return document.shadowed; } catch (caught) { return caught; }
+    }
+    void guarded;`,
+    { bundled: true, entry: true },
+  );
+  // Unshadowed free global inside destructuring default must still be rejected.
+  assert.throws(
+    () => validateModule(`${entry}\nconst { x = forbiddenGlobal } = {}; void x;`, { bundled: true, entry: true }),
+    /Unsupported runtime global: forbiddenGlobal/,
+  );
+  // Undeclared assignment target must be rejected.
+  assert.throws(
+    () => validateModule(`${entry}\nleakedGlobal = 1;`, { bundled: true, entry: true }),
+    /Unsupported runtime global: leakedGlobal/,
+  );
+  // Shadowed require parameter is allowed; free require is rejected.
+  validateModule(`${entry}\nexport function load(require) { return require("ok"); }`, { bundled: true, entry: true });
+  assert.throws(
+    () => validateModule(`${entry}\nexport function load() { return require("fs"); }`, { filename: "src/req.ts" }),
+    /Runtime require is unsupported/,
+  );
+});
+
+test("Rolldown onlyRemoveTypeImports erases import type while preserving non-type side-effect imports", async t => {
+  const directory = await fixture(t);
+  await writeFile(
+    path.join(directory, "src/erased.ts"),
+    `export interface ErasedType { id: string }\n(globalThis as Record<string, unknown>).__zguiErasedRan = true;\n`,
+  );
+  await writeFile(
+    path.join(directory, "src/retained.ts"),
+    `export class RetainedType { id = "ok"; }\n(globalThis as Record<string, unknown>).__zguiRetainedRan = true;\n`,
+  );
+  await writeFile(
+    path.join(directory, "src/main.tsx"),
+    `import type { ErasedType } from "./erased";
+import { RetainedType } from "./retained";
+import { renderApp } from "@hewel/zgui";
+import type { NativeNode } from "@hewel/zgui";
+export const hostApiVersion = 1;
+const a: ErasedType | null = null;
+const b: RetainedType | null = null;
+export function mount(root: NativeNode): () => void {
+  return renderApp(() => <text>{String(a)}{String(b)}</text>, root);
+}
+`,
+  );
+  const { dist } = await buildApplication("fixture", { appDirectory: directory });
+  const code = await readFile(path.join(dist, "app.mjs"), "utf8");
+  assert.doesNotMatch(code, /__zguiErasedRan/, "explicit `import type` must be erased");
+  assert.match(code, /__zguiRetainedRan/, "non-type import referenced only in a type position must keep its side effect");
+  const prevErased = globalThis.__zguiErasedRan;
+  const prevRetained = globalThis.__zguiRetainedRan;
+  delete globalThis.__zguiErasedRan;
+  delete globalThis.__zguiRetainedRan;
+  try {
+    await import(pathToFileURL(path.join(await realpath(dist), "app.mjs")));
+    assert.equal(globalThis.__zguiErasedRan, undefined);
+    assert.equal(globalThis.__zguiRetainedRan, true);
+  } finally {
+    if (prevErased === undefined) delete globalThis.__zguiErasedRan;
+    else globalThis.__zguiErasedRan = prevErased;
+    if (prevRetained === undefined) delete globalThis.__zguiRetainedRan;
+    else globalThis.__zguiRetainedRan = prevRetained;
+  }
+});
+
+test("compiled JSX getters preserve authored TSX source-map line/column and universal TS/JSX parity", async t => {
+  const directory = await fixture(t);
+  const tsxSource = `import { For, createSignal, renderApp } from "@hewel/zgui";
+import type { NativeNode } from "@hewel/zgui";
+export const hostApiVersion = 1;
+function List<T>(props: { items: T[] }) {
+  return <For<T> each={props.items}>{item => <text>{item as string}</text>}</For>;
+}
+function App() {
+  const [items] = createSignal<string[]>(["alpha"]);
+  const explode = () => {
+    throw new Error("jsx-getter-boom");
+  };
+  return (
+    <box>
+      <List items={items()} />
+      <text>{items().length > 99 ? explode() : "ok"}</text>
+    </box>
+  );
+}
+export function mount(root: NativeNode): () => void {
+  return renderApp(() => <App />, root);
+}
+`;
+  await writeFile(path.join(directory, "src/main.tsx"), tsxSource);
+  const { dist } = await buildApplication("fixture", { appDirectory: directory });
+  const code = await readFile(path.join(dist, "app.mjs"), "utf8");
+  const mapJson = JSON.parse(await readFile(path.join(dist, "app.mjs.map"), "utf8"));
+  const marker = code.indexOf('throw new Error("jsx-getter-boom")');
+  assert.ok(marker >= 0);
+  const prefix = code.slice(0, marker);
+  const generated = { line: prefix.split("\n").length, column: prefix.length - prefix.lastIndexOf("\n") - 1 };
+  const original = originalPositionFor(new TraceMap(mapJson), generated);
+  assert.ok(original.source.endsWith("src/main.tsx"), JSON.stringify(original));
+  assert.equal(original.line, 10, `expected throw on line 10, got ${JSON.stringify(original)}`);
+  assert.equal(original.column, 4, `expected throw at column 4, got ${JSON.stringify(original)}`);
 });
 

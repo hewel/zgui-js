@@ -2,13 +2,10 @@ import path from "node:path";
 import { realpathSync } from "node:fs";
 import { realpath } from "node:fs/promises";
 import {
-  transformAsync,
-  type BabelFileResult,
-  type TransformOptions as BabelTransformOptions,
-} from "@babel/core";
-import { parse } from "@babel/parser";
-import typescriptPresetModule from "@babel/preset-typescript";
-import solidBabelPlugin from "@solidjs/babel-plugin";
+  transform as solidTransform,
+  type TransformOptions as SolidTransformOptions,
+  type TransformResult as SolidTransformResult,
+} from "@solidjs/compiler";
 import {
   rolldown,
   watch as watchCompiler,
@@ -20,6 +17,7 @@ import {
   type PluginContext,
   type SourceDescription,
 } from "rolldown";
+import { parseSync } from "rolldown/utils";
 import { styleSystem, transformStylesheet, validateStylesheet, type StyleSystem } from "./css.ts";
 import { moduleIdentity } from "./identity.ts";
 import {
@@ -30,13 +28,6 @@ import {
   type CompilationGraph,
 } from "./validate.ts";
 
-const typescriptPreset =
-  (
-    typescriptPresetModule as typeof typescriptPresetModule & {
-      default?: typeof typescriptPresetModule;
-    }
-  ).default ?? typescriptPresetModule;
-
 export interface CompilationResult {
   files: Map<string, Buffer>;
   graph: CompilationGraph;
@@ -44,16 +35,19 @@ export interface CompilationResult {
   styleSystem: StyleSystem;
 }
 
-export type BabelTransform = (
+export type JsxTransform = (
   source: string,
-  options: BabelTransformOptions,
-) => Promise<Pick<BabelFileResult, "code" | "map"> | null>;
+  options: SolidTransformOptions,
+) =>
+  | Pick<SolidTransformResult, "code" | "map">
+  | null
+  | Promise<Pick<SolidTransformResult, "code" | "map"> | null>;
 
 interface CompilerOptions {
   root: string;
   appDirectory?: string;
   plugins?: Plugin[];
-  babelTransform?: BabelTransform;
+  jsxTransform?: JsxTransform;
   development?: boolean;
   hoistComponentStyles?: boolean;
 }
@@ -86,13 +80,18 @@ interface StaticComponentSheet {
 const GENERATED_STYLE_FILE =
   /(?:^|[\\/])components[\\/]generated[\\/][A-Za-z0-9]+Style\.[cm]?[jt]s$/;
 
+const JSX_SOURCE_FILE = /\.[cm]?[jt]sx$/i;
+
 function extractStaticComponentSheet(
   source: string,
   filename: string,
 ): StaticComponentSheet | undefined {
   if (!GENERATED_STYLE_FILE.test(filename)) return undefined;
-  const ast = parse(source, { sourceType: "module", plugins: ["typescript"] });
-  if (ast.program.body.length !== 1) return undefined;
+  const ast = parseSync(filename, source, {
+    sourceType: "module",
+    lang: /\.[cm]?ts$/i.test(filename) ? "ts" : "js",
+  });
+  if (ast.errors.length > 0 || ast.program.body.length !== 1) return undefined;
   const statement = ast.program.body[0];
   if (
     statement?.type !== "ExportNamedDeclaration" ||
@@ -109,15 +108,19 @@ function extractStaticComponentSheet(
   ) {
     return undefined;
   }
-  const expr = decl.init.type === "TSAsExpression" ? decl.init.expression : decl.init;
+  const expr =
+    decl.init.type === "TSAsExpression" || decl.init.type === "TSSatisfiesExpression"
+      ? decl.init.expression
+      : decl.init;
   if (expr.type !== "ObjectExpression") return undefined;
   let name: string | undefined;
   let className: string | undefined;
   let css: string | undefined;
   for (const prop of expr.properties) {
-    if (prop.type !== "ObjectProperty" || prop.computed || prop.key.type !== "Identifier")
+    if (prop.type !== "Property" || prop.computed || prop.key.type !== "Identifier") {
       return undefined;
-    if (prop.value.type !== "StringLiteral") return undefined;
+    }
+    if (prop.value.type !== "Literal" || typeof prop.value.value !== "string") return undefined;
     if (prop.key.name === "name") name = prop.value.value;
     else if (prop.key.name === "className") className = prop.value.value;
     else if (prop.key.name === "css") css = prop.value.value;
@@ -130,19 +133,19 @@ function extractStaticComponentSheet(
 interface CachedTransform {
   source: string;
   identity: string;
-  result: SourceDescription;
+  result: SourceDescription | null;
   componentSheet?: StaticComponentSheet;
   cssModuleCss?: string;
 }
 
-// Single-pass Solid Universal + TypeScript lowering paired with Lightning CSS Modules.
+// Native Oxc Solid Universal JSX lowering + Rolldown TypeScript erasure + Lightning CSS Modules.
 function compilerOptions(
   entry: string,
   {
     root,
     appDirectory = path.dirname(entry),
     plugins = [],
-    babelTransform = transformAsync,
+    jsxTransform = solidTransform,
     development = false,
     hoistComponentStyles = true,
   }: CompilerOptions,
@@ -181,6 +184,7 @@ function compilerOptions(
     transform: {
       target: "es2022",
       define: { "process.env.NODE_ENV": development ? '"development"' : '"production"' },
+      typescript: { onlyRemoveTypeImports: true },
     },
     onwarn(warning, warn) {
       if (warning.code === "UNRESOLVED_IMPORT") throw new Error(warning.message);
@@ -278,7 +282,7 @@ function compilerOptions(
             });
             return result;
           }
-          if (!/\.[cm]?[jt]sx?$/.test(filename)) return null;
+          if (!/\.[cm]?[jt]sx?$/i.test(filename)) return null;
           const real = await realpath(filename);
           const cached = transforms.get(real);
           if (cached?.source === source) return cached.result;
@@ -301,37 +305,35 @@ function compilerOptions(
               return result;
             }
           }
-          const transformed = await babelTransform(source, {
+          if (!JSX_SOURCE_FILE.test(real)) {
+            validateModule(source, { filename: real });
+            transforms.set(real, {
+              source,
+              identity,
+              result: null,
+            });
+            return null;
+          }
+          const transformed = await jsxTransform(source, {
             filename: real,
-            babelrc: false,
-            configFile: false,
-            sourceMaps: true,
-            presets: [
-              {
-                plugins: [
-                  [
-                    solidBabelPlugin,
-                    { generate: "universal", moduleName: "@hewel/zgui/renderer", dev: development },
-                  ],
-                ],
-              },
-              [
-                typescriptPreset,
-                {
-                  onlyRemoveTypeImports: true,
-                  allExtensions: true,
-                  isTSX: /\.tsx$/.test(real),
-                },
-              ],
-            ],
+            root: appDirectory,
+            generate: "universal",
+            moduleName: "@hewel/zgui/renderer",
+            dev: development,
+            sourceMap: true,
           });
-          if (!transformed?.code || !transformed.map)
-            throw new Error(`Babel emitted no JavaScript or source map for ${real}`);
-          validateModule(transformed.code, { filename: real });
+          if (!transformed?.code || !transformed.map) {
+            throw new Error(`Solid compiler emitted no code or source map for ${real}`);
+          }
+          const isTypeScript = /\.[cm]?tsx$/i.test(real);
+          validateModule(transformed.code, {
+            filename: real,
+            lang: isTypeScript ? "ts" : "js",
+          });
           const result: SourceDescription = {
             code: transformed.code,
             map: transformed.map,
-            moduleType: "js",
+            moduleType: isTypeScript ? "ts" : "js",
           };
           transforms.set(real, {
             source,
@@ -404,7 +406,7 @@ export async function compileBundle(
     hostEntry = true,
     filename = "app.mjs",
     development = false,
-    babelTransform = transformAsync,
+    jsxTransform = solidTransform,
     plugins = [],
   }: CompileBundleOptions,
 ): Promise<CompilationResult> {
@@ -415,7 +417,7 @@ export async function compileBundle(
       appDirectory,
       development,
       hoistComponentStyles: hostEntry,
-      babelTransform,
+      jsxTransform,
       plugins: [
         {
           name: "capture-native-graph",
@@ -477,6 +479,7 @@ export async function compileWorkerBundle(
     transform: {
       target: "es2022",
       define: { "process.env.NODE_ENV": development ? '"development"' : '"production"' },
+      typescript: { onlyRemoveTypeImports: true },
     },
     onwarn(warning, warn) {
       if (warning.code === "UNRESOLVED_IMPORT") throw new Error(warning.message);
@@ -549,7 +552,7 @@ export function watchBundle(
     filename = "app.mjs",
     buildDelay = 80,
     development = false,
-    babelTransform = transformAsync,
+    jsxTransform = solidTransform,
     watchFiles = [],
     onAttempt,
     onCompile,
@@ -571,7 +574,7 @@ export function watchBundle(
       appDirectory,
       development,
       hoistComponentStyles: true,
-      babelTransform,
+      jsxTransform,
       plugins: [
         {
           name: "immutable-native-compilation",

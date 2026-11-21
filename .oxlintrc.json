@@ -13,6 +13,7 @@
     "vendor/**",
     "packages/ui/src/components/generated/**",
     "tests/build/.fixture-*/**",
+    "tests/build/.dev-mode-*/**",
     "tests/build/.image-*/**",
     "tests/build/.dependency-*/**"
   ],
