@@ -9,6 +9,14 @@ export type Capabilities = {
 };
 
 export type FontDeclaration = { family: string; path: string };
+export type WindowDeclaration = {
+  title?: string;
+  width?: number;
+  height?: number;
+  minWidth?: number;
+  minHeight?: number;
+  resizable?: boolean;
+};
 export type ResolvedApplication = { app: string; appDirectory: string; root: string };
 export type PublishedApplication = { dist: string; manifest: Manifest };
 
@@ -21,6 +29,7 @@ export type Manifest = {
   styles: string[];
   assets: string[];
   fonts: FontDeclaration[];
+  window?: WindowDeclaration;
   capabilities?: Capabilities;
   styleSystem: {
     name: "stylex";

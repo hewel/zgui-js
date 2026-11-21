@@ -9,13 +9,13 @@ export type SpringNumberOption = number | Accessor<number>;
 
 /** All options must resolve to positive finite numbers. */
 export interface SpringOptions {
-  readonly stiffness?: SpringNumberOption;
-  readonly damping?: SpringNumberOption;
-  readonly mass?: SpringNumberOption;
+  readonly stiffness?: SpringNumberOption | undefined;
+  readonly damping?: SpringNumberOption | undefined;
+  readonly mass?: SpringNumberOption | undefined;
   /** Maximum displacement at rest, in target units. */
-  readonly precision?: SpringNumberOption;
+  readonly precision?: SpringNumberOption | undefined;
   /** Maximum speed at rest, in target units per second. */
-  readonly velocityPrecision?: SpringNumberOption;
+  readonly velocityPrecision?: SpringNumberOption | undefined;
 }
 
 export type Spring = Accessor<number> & {

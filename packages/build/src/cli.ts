@@ -22,6 +22,10 @@ Application defaults to the current directory (counter at the repository root).
   dev, preview --host-root DIR          Build the host from this checkout and run it there
   dev, preview --host-executable PATH   Run this prebuilt host instead of invoking Cargo
   dev --exit-after-ms N  Close the native app after N milliseconds
+  dev --width N          Override initial window width in logical pixels
+  dev --height N         Override initial window height in logical pixels
+  dev --title TEXT       Override initial window title
+  dev --max-js-stack-bytes N  Override the QuickJS stack size limit in bytes
   dev --layer-config F  Use an upstream layer-shell configuration
   dev --pure-shell       Start without a primary window (requires shellSurfaces or sessionLock)
   preview --watch       Re-run offscreen scenarios on changes, without a desktop host
@@ -52,6 +56,10 @@ type Command =
       selector?: string;
       capabilitiesFile?: string;
       exitAfterMs?: string;
+      width?: string;
+      height?: string;
+      title?: string;
+      maxJsStackBytes?: string;
       layerConfig?: string;
       pureShell: boolean;
     } & HostOptions)
@@ -73,7 +81,7 @@ function parse(args: string[]): Command {
     ...(command === "build" ? ["--stylex-diagnostics"] : []),
     ...(command === "build" || command === "preview" ? ["--watch"] : []),
     ...(command === "dev" || command === "preview" ? ["--host-root", "--host-executable"] : []),
-    ...(command === "dev" ? ["--exit-after-ms", "--layer-config", "--pure-shell"] : []),
+    ...(command === "dev" ? ["--exit-after-ms", "--width", "--height", "--title", "--max-js-stack-bytes", "--layer-config", "--pure-shell"] : []),
     ...(command === "preview" ? ["--profile", "--fixture", "--scenario", "--out"] : []),
   ]);
   let directory: string | undefined;
@@ -106,6 +114,19 @@ function parse(args: string[]): Command {
   if (exitAfterMs !== undefined && !/^[1-9][0-9]*$/.test(exitAfterMs)) {
     throw new Error("--exit-after-ms requires a positive integer");
   }
+  const maxJsStackBytes = value("--max-js-stack-bytes");
+  if (maxJsStackBytes !== undefined && !/^[1-9][0-9]*$/.test(maxJsStackBytes)) {
+    throw new Error("--max-js-stack-bytes requires a positive integer");
+  }
+  for (const dim of ["--width", "--height"] as const) {
+    const raw = value(dim);
+    if (raw !== undefined) {
+      const parsed = Number(raw);
+      if (!Number.isFinite(parsed) || parsed <= 0 || parsed > 16384) {
+        throw new Error(`${dim} requires a positive finite number <= 16384`);
+      }
+    }
+  }
   const selector = directory ?? value("--app");
   const capabilitiesFile = value("--capabilities-file");
   const host = {
@@ -130,6 +151,10 @@ function parse(args: string[]): Command {
         capabilitiesFile,
         ...host,
         exitAfterMs,
+        width: value("--width"),
+        height: value("--height"),
+        title: value("--title"),
+        maxJsStackBytes,
         layerConfig: value("--layer-config"),
         pureShell: flags.has("--pure-shell"),
       };
@@ -208,6 +233,11 @@ try {
         const hostArgs: string[] = [];
         if (selected.exitAfterMs !== undefined)
           hostArgs.push("--exit-after-ms", selected.exitAfterMs);
+        if (selected.width !== undefined) hostArgs.push("--width", selected.width);
+        if (selected.height !== undefined) hostArgs.push("--height", selected.height);
+        if (selected.title !== undefined) hostArgs.push("--title", selected.title);
+        if (selected.maxJsStackBytes !== undefined)
+          hostArgs.push("--max-js-stack-bytes", selected.maxJsStackBytes);
         if (selected.layerConfig !== undefined)
           hostArgs.push("--layer-config", path.resolve(selected.layerConfig));
         if (selected.pureShell) hostArgs.push("--pure-shell");

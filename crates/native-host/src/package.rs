@@ -18,6 +18,9 @@ pub struct Manifest {
     pub styles: Vec<String>,
     pub assets: Vec<String>,
     pub fonts: Vec<Font>,
+    /// Optional primary window configuration sealed into the package manifest.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub window: Option<WindowConfig>,
     /// Host authority sealed into the package identity; omitted declarations grant nothing.
     #[serde(default, skip_serializing_if = "Capabilities::is_empty")]
     pub capabilities: Capabilities,
@@ -96,6 +99,51 @@ impl Capabilities {
 }
 
 crate::schema::object_struct! {
+/// Optional primary window dimensions and metadata declared in `package.json` (`zgui.window`).
+#[derive(Default)]
+#[serde(default, rename_all = "camelCase", deny_unknown_fields)]
+pub struct WindowConfig {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub width: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub height: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub min_width: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub min_height: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resizable: Option<bool>,
+}
+}
+
+impl WindowConfig {
+    fn validate(&self) -> Result<()> {
+        if let Some(title) = &self.title
+            && (title.is_empty()
+                || title.trim_matches(|c: char| c.is_whitespace() || c == '\u{feff}') != title
+                || title.chars().any(char::is_control))
+        {
+            return Err("manifest window.title must be a non-empty, trimmed string without control characters".into());
+        }
+        for (name, value) in [
+            ("width", self.width),
+            ("height", self.height),
+            ("minWidth", self.min_width),
+            ("minHeight", self.min_height),
+        ] {
+            if let Some(px) = value
+                && !(1..=16384).contains(&px)
+            {
+                return Err(format!("manifest window.{name} must be between 1 and 16384").into());
+            }
+        }
+        Ok(())
+    }
+}
+
+crate::schema::object_struct! {
 #[serde(deny_unknown_fields)]
 pub struct Font {
     pub family: String,
@@ -153,6 +201,9 @@ impl Package {
             || manifest.id.chars().any(char::is_control)
         {
             return Err("package ID must be a non-empty, trimmed string without control characters".into());
+        }
+        if let Some(window) = &manifest.window {
+            window.validate()?;
         }
         manifest.capabilities.validate()?;
         if manifest.style_system.name != "stylex" || manifest.style_system.profile != "zgui-stylex-v1"

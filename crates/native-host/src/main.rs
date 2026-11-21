@@ -371,6 +371,36 @@ pub(crate) const APPLICATION_STYLESHEET: &str =
 pub(crate) const PURE_SHELL_STYLESHEET: &str =
     ":root { background: transparent; color: #edf2fa; font-family: sans-serif; padding: 0; }";
 
+const USAGE: &str = "\
+Usage: native-host [OPTIONS]
+       native-host preview <COMMAND> [OPTIONS]
+       native-host msg <APP_ID> [ARGS...]
+
+Options:
+  -h, --help                   Show this help message and exit
+  --bundle <DIR>               Load a built zgui-js application package directory
+  --watch                      Watch --bundle for new generations and hot-reload
+  --pure-shell                 Start without a primary window (requires shellSurfaces or sessionLock)
+  --layer-config <FILE>        Mount primary surface as a Wayland layer-shell surface
+  --width <PX>                 Override initial primary window width (logical px, default 1024)
+  --height <PX>                Override initial primary window height (logical px, default 720)
+  --title <TEXT>               Override initial primary window title
+  --reduced-motion             Force reduced motion on for this session
+  --max-js-stack-bytes <N>     Override QuickJS stack size limit in bytes (default 1048576)
+  --bind-socket <NAME=PATH>    Bind a declared named Unix socket capability
+  --control-socket <PATH>      Override control channel Unix socket path
+  --exit-after-ms <MS>         Exit cleanly after MS milliseconds
+  --exercise                   Run built-in host self-exercise harness
+  --smoke-module <PATH>        Run a standalone JS smoke module and exit";
+
+fn parse_window_dim(flag: &str, raw: &str) -> Result<f32, Box<dyn Error>> {
+    let value: f32 = raw.parse()?;
+    if !value.is_finite() || value <= 0.0 || value > 16384.0 {
+        return Err(format!("{flag} must be a positive finite number <= 16384").into());
+    }
+    Ok(value)
+}
+
 fn main() -> Result<(), Box<dyn Error>> {
     if std::env::args_os().nth(1).is_some_and(|arg| arg == "msg") {
         return control_cli::command(std::env::args_os().skip(2));
@@ -386,12 +416,19 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut watch = false;
     let mut reduced_motion = false;
     let mut max_js_stack_bytes: Option<usize> = None;
+    let mut width_override: Option<f32> = None;
+    let mut height_override: Option<f32> = None;
+    let mut title_override: Option<String> = None;
     let mut layer_config = None;
     let mut pure_shell = false;
     let mut control_socket = None;
     let mut socket_bindings = BTreeMap::new();
     while let Some(arg) = args.next() {
         match arg.as_str() {
+            "-h" | "--help" => {
+                println!("{USAGE}");
+                return Ok(());
+            }
             "--smoke-module" => {
                 let path = args.next().ok_or("--smoke-module requires a path")?;
                 let mut engine = JsRuntime::new(RuntimeLimits::default())?;
@@ -406,6 +443,21 @@ fn main() -> Result<(), Box<dyn Error>> {
             "--watch" => { watch = true; }
             "--pure-shell" => { pure_shell = true; }
             "--reduced-motion" => { reduced_motion = true; }
+            "--width" => {
+                let raw = args.next().ok_or("--width requires logical pixels")?;
+                width_override = Some(parse_window_dim("--width", &raw)?);
+            }
+            "--height" => {
+                let raw = args.next().ok_or("--height requires logical pixels")?;
+                height_override = Some(parse_window_dim("--height", &raw)?);
+            }
+            "--title" => {
+                let title = args.next().ok_or("--title requires a window title")?;
+                if title.trim().is_empty() || title.chars().any(char::is_control) {
+                    return Err("--title must be a non-empty string without control characters".into());
+                }
+                title_override = Some(title);
+            }
             "--max-js-stack-bytes" => {
                 let bytes: usize = args.next().ok_or("--max-js-stack-bytes requires a byte count")?.parse()?;
                 if bytes == 0 { return Err("--max-js-stack-bytes must be positive".into()); }
@@ -423,7 +475,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 let path: PathBuf = args.next().ok_or("--layer-config requires a JSON file")?.into();
                 layer_config = Some(shell::LayerConfig::load(&path)?);
             }
-            _ => return Err(format!("unknown argument: {arg}").into()),
+            _ => return Err(format!("unknown argument: {arg} (run with --help for usage)").into()),
         }
     }
     if watch && bundle.is_none() { return Err("--watch requires --bundle".into()); }
@@ -447,9 +499,31 @@ fn main() -> Result<(), Box<dyn Error>> {
     } else {
         APPLICATION_STYLESHEET
     };
-    let app = zgui::app().with_title(package.as_ref().map_or("zgui-js integration baseline", |package| package.manifest.id.as_str())).with_application_id(namespace)
-        .with_size(560.0, 180.0)
+    let manifest_window = package.as_ref().and_then(|pkg| pkg.manifest.window.as_ref());
+    let default_title = package.as_ref().map_or("zgui-js integration baseline", |pkg| pkg.manifest.id.as_str());
+    let title = title_override
+        .as_deref()
+        .or_else(|| manifest_window.and_then(|win| win.title.as_deref()))
+        .unwrap_or(default_title);
+    let width = width_override
+        .or_else(|| manifest_window.and_then(|win| win.width).map(|px| px as f32))
+        .unwrap_or(1024.0);
+    let height = height_override
+        .or_else(|| manifest_window.and_then(|win| win.height).map(|px| px as f32))
+        .unwrap_or(720.0);
+    let mut app = zgui::app()
+        .with_title(title)
+        .with_application_id(namespace)
+        .with_size(width, height)
         .with_stylesheet(stylesheet);
+    if let Some(win) = manifest_window {
+        if win.min_width.is_some() || win.min_height.is_some() {
+            app = app.with_min_size(win.min_width.unwrap_or(0) as f32, win.min_height.unwrap_or(0) as f32);
+        }
+        if let Some(resizable) = win.resizable {
+            app = app.with_resizable(resizable);
+        }
+    }
     let mut native = app.into_handler(move || Root(roots.clone()))?.into_runtime();
     let fonts = pure_shell.then(|| native.scope().with(zgui::reactive::use_context::<zgui::app::Fonts>)
         .expect("the native application provides a font collection"));

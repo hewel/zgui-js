@@ -479,6 +479,47 @@ test("capabilities are closed declarations and change the sealed build identity"
   await assert.rejects(build({ unknown: true }), /zgui\.capabilities\.unknown/);
 });
 
+test("zgui.window is validated and sealed into manifest.json", { timeout: 30000 }, async t => {
+  const directory = await externalApplication(t);
+  const compilation = await bundle(path.join(directory, "src/main.tsx"), { appDirectory: directory });
+  const build = async window => {
+    await writeFile(path.join(directory, "package.json"), JSON.stringify({
+      name: "@consumer/window-app", type: "module", zgui: window === undefined ? {} : { window },
+    }));
+    const { manifest } = await publishApplication("window-app", compilation, {
+      appDirectory: directory, root: workspaceRoot,
+    });
+    return manifest;
+  };
+  const omitted = await build(undefined);
+  assert.equal(omitted.window, undefined);
+  assert.deepEqual(await build({}), omitted);
+
+  const declared = await build({
+    title: "My Desktop App",
+    width: 1280,
+    height: 800,
+    minWidth: 640,
+    minHeight: 480,
+    resizable: true,
+  });
+  assert.notEqual(declared.buildId, omitted.buildId);
+  assert.deepEqual(declared.window, {
+    title: "My Desktop App",
+    width: 1280,
+    height: 800,
+    minWidth: 640,
+    minHeight: 480,
+    resizable: true,
+  });
+
+  await assert.rejects(build({ title: "  " }), /zgui\.window\.title/);
+  await assert.rejects(build({ width: 0 }), /zgui\.window\.width/);
+  await assert.rejects(build({ height: 100.5 }), /zgui\.window\.height/);
+  await assert.rejects(build({ resizable: "yes" }), /zgui\.window\.resizable/);
+  await assert.rejects(build({ unknown: 1 }), /zgui\.window key: unknown/);
+});
+
 test("explicit missing application paths never select a repository example", async t => {
   const directory = await externalApplication(t);
   await assert.rejects(resolveApplication("./counter", { cwd: directory }), /Cannot open application directory/);

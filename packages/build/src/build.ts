@@ -5,6 +5,7 @@ import type {
   FontDeclaration,
   Manifest,
   PublishedApplication,
+  WindowDeclaration,
 } from "./index.ts";
 import { readFileSync, realpathSync, type Dirent } from "node:fs";
 import { readFile, readdir, lstat } from "node:fs/promises";
@@ -441,6 +442,44 @@ async function mergeCapabilities(
   return Object.keys(merged).length ? merged : undefined;
 }
 
+const WINDOW_KEYS = new Set(["title", "width", "height", "minWidth", "minHeight", "resizable"]);
+
+function parseWindowDeclaration(input: unknown): WindowDeclaration | undefined {
+  if (input === undefined) return undefined;
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new Error("package.json zgui.window must be an object");
+  }
+  const record = input as Record<string, unknown>;
+  for (const key of Object.keys(record)) {
+    if (!WINDOW_KEYS.has(key)) throw new Error(`Unknown package.json zgui.window key: ${key}`);
+  }
+  const result: WindowDeclaration = {};
+  if (record.title !== undefined) {
+    if (!capabilityString(record.title) || record.title !== record.title.trim()) {
+      throw new Error(
+        "package.json zgui.window.title must be a non-empty, trimmed string without control characters",
+      );
+    }
+    result.title = record.title;
+  }
+  for (const key of ["width", "height", "minWidth", "minHeight"] as const) {
+    const value = record[key];
+    if (value !== undefined) {
+      if (typeof value !== "number" || !Number.isInteger(value) || value < 1 || value > 16384) {
+        throw new Error(`package.json zgui.window.${key} must be an integer between 1 and 16384`);
+      }
+      result[key] = value;
+    }
+  }
+  if (record.resizable !== undefined) {
+    if (typeof record.resizable !== "boolean") {
+      throw new Error("package.json zgui.window.resizable must be a boolean");
+    }
+    result.resizable = record.resizable;
+  }
+  return Object.keys(result).length ? result : undefined;
+}
+
 export async function publishApplication(
   app: string,
   result: CompilationResult,
@@ -468,13 +507,14 @@ export async function publishApplication(
   for (const item of assets) files.set(...item);
   const pkg = await optionalFile(path.join(appDirectory, "package.json"));
   const packageJson:
-    | { zgui?: { id?: unknown; fonts?: unknown; capabilities?: unknown } }
+    | { zgui?: { id?: unknown; fonts?: unknown; capabilities?: unknown; window?: unknown } }
     | undefined = pkg && JSON.parse(pkg.toString("utf8"));
   const id = packageJson?.zgui?.id === undefined ? `dev.example.${app}` : packageJson.zgui.id;
   if (!capabilityString(id) || id !== id.trim())
     throw new Error(
       "package.json zgui.id must be a non-empty, trimmed string without control characters",
     );
+  const windowConfig = parseWindowDeclaration(packageJson?.zgui?.window);
   const capabilities = await mergeCapabilities(packageJson?.zgui?.capabilities, {
     extraCapabilities,
     capabilitiesFile,
@@ -509,6 +549,7 @@ export async function publishApplication(
     styles: css === undefined ? ["app.css"] : ["base.css", "app.css"],
     assets: [...assets.keys()].sort(),
     fonts,
+    ...(windowConfig ? { window: windowConfig } : {}),
     ...(capabilities ? { capabilities } : {}),
     styleSystem: result.styleSystem,
     artifactDigests: Object.fromEntries(
