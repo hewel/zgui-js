@@ -1,444 +1,279 @@
 import {
-  For,
-  Show,
-  createDelay,
-  createEffect,
+  closeWindow,
   createMemo,
-  createSignal,
-  flush,
-  getSelection,
-  observeGeometry,
+  onCloseRequest,
   renderApp,
-  setSelection,
+  useWindowState,
 } from "@hewel/zgui";
-import type { NativeNode, NativeScrollPosition, NativeValueEvent, TextSelectionRange } from "@hewel/zgui";
+import type { NativeKeyEvent, NativeNode } from "@hewel/zgui";
 import {
   Badge,
   Button,
-  Progress,
+  Combobox,
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
   Separator,
-  Slider,
-  Textarea,
   ThemeProvider,
+  ToastProvider,
 } from "@hewel/zgui/components";
-import type { ColorScheme, ThemePreset } from "@hewel/zgui/components";
-import { registerImageBytes } from "@hewel/zgui-services";
-import { parseMarkdown, toggleTaskAtLine } from "./markdown.js";
-import { MarkdownPreview } from "./preview.js";
-import { INITIAL_DOCS, buildPipelineSvg, buildStressMarkdown, encodeUtf8Bytes } from "./samples.js";
-import type { MarkdownDoc } from "./samples.js";
-
-type ViewMode = "split" | "editor" | "preview";
-
-const PRESETS: readonly ThemePreset[] = ["base", "ocean", "midnight", "ember"];
+import type { SelectOption } from "@hewel/zgui/components";
+import {
+  Outlet,
+  RouterProvider,
+  createRouter,
+  useLocation,
+  useNavigate,
+  useRouter,
+} from "@hewel/zgui/router";
+import { StudioContext, createStudioState, useStudio } from "./studio-context.js";
+import { AboutPrefsWindow } from "./views/about-window.js";
+import { EditorView } from "./views/editor-view.js";
+import { SearchView } from "./views/search-view.js";
+import { SettingsView } from "./views/settings-view.js";
 
 export const hostApiVersion = 1;
 
 export function mount(root: NativeNode): () => void {
-  return renderApp(() => <MarkdownStudioApp />, root);
+  return renderApp(() => <MarkdownStudioRoot />, root);
 }
 
-function MarkdownStudioApp() {
-  const [scheme, setScheme] = createSignal<ColorScheme>("dark");
-  const [preset, setPreset] = createSignal<ThemePreset>("base");
-  const [viewMode, setViewMode] = createSignal<ViewMode>("split");
-  const [showSidebar, setShowSidebar] = createSignal(true);
-  const [fontSize, setFontSize] = createSignal(15);
+function StudioShell() {
+  const studio = useStudio();
+  const router = useRouter();
+  const location = useLocation();
+  const navigate = useNavigate();
+  const windowState = useWindowState();
 
-  const [docs, setDocs] = createSignal<readonly MarkdownDoc[]>(INITIAL_DOCS);
-  const [activeDocId, setActiveDocId] = createSignal(INITIAL_DOCS[0]!.id);
-  const [selectionRange, setSelectionRange] = createSignal<TextSelectionRange>({
-    start: 0,
-    end: 0,
-  });
-  const [editorEl, setEditorEl] = createSignal<NativeNode | null>(null);
-  const [highlightedLine, setHighlightedLine] = createSignal<number | null>(null);
-  const [scrollEl, setScrollEl] = createSignal<NativeNode | null>(null);
-  const [scrollInfo, setScrollInfo] = createSignal<NativeScrollPosition | null>(null);
-  const [saveState, setSaveState] = createSignal<"saved" | "editing">("saved");
-  const [statusMsg, setStatusMsg] = createSignal(
-    "Ready — edit Markdown on the left or toggle task checkboxes in the live preview.",
-  );
-
-  observeGeometry(scrollEl, "scrollPosition", setScrollInfo);
-
-  const saveTimer = createDelay();
-  const highlightTimer = createDelay();
-
-  const [pipelineImg, setPipelineImg] = createSignal<string | null>(null);
-  createEffect(
-    () => scheme() === "dark",
-    isDark => {
-      const svg = buildPipelineSvg(isDark);
-      const handle = registerImageBytes(encodeUtf8Bytes(svg));
-      setPipelineImg(handle.src);
-      return () => {
-        handle.release();
-      };
-    },
-  );
-
-  const activeDoc = createMemo(() => docs().find(d => d.id === activeDocId()) ?? docs()[0]!);
-
-  const parsedResult = createMemo(() => {
-    const t0 = Date.now();
-    const parsed = parseMarkdown(activeDoc().content);
-    const parseMs = Date.now() - t0;
-    return { parsed, parseMs };
-  });
-
-  const stats = createMemo(() => {
-    const text = activeDoc().content;
-    const lines = text ? text.split("\n").length : 0;
-    const words = text.trim() ? text.trim().split(/\s+/).length : 0;
-    const readMin = Math.max(1, Math.ceil(words / 220));
-    return { chars: text.length, words, lines, readMin };
-  });
-
-  const setDocContent = (nextContent: string, note?: string) => {
-    const id = activeDoc().id;
-    setDocs(prev => prev.map(d => (d.id === id ? { ...d, content: nextContent } : d)));
-    setSaveState("editing");
-    saveTimer.schedule(650, () => {
-      setSaveState("saved");
-      if (note) setStatusMsg(note);
-    });
-  };
-
-  const handleEditorInput = (event: NativeValueEvent) => {
-    setSelectionRange(event.selection);
-    setDocContent(event.value);
-  };
-
-  const wrapSelection = (before: string, after: string, fallbackText: string) => {
-    const content = activeDoc().content;
-    const sel = getSelection(editorEl) ?? selectionRange();
-    const start = Math.max(0, Math.min(content.length, sel.start));
-    const end = Math.max(start, Math.min(content.length, sel.end));
-    const selected = content.slice(start, end) || fallbackText;
-    const next = `${content.slice(0, start)}${before}${selected}${after}${content.slice(end)}`;
-    const nextStart = start + before.length;
-    const nextEnd = nextStart + selected.length;
-    setDocContent(next, `Inserted ${before.trim() || "snippet"}`);
-    setSelectionRange({ start: nextStart, end: nextEnd });
-    flush();
-    setSelection(editorEl, nextStart, nextEnd);
-    setStatusMsg(`Formatted selection (${start}:${end})`);
-  };
-
-  const appendBlock = (snippet: string, label: string) => {
-    const content = activeDoc().content.trimEnd();
-    setDocContent(`${content}\n\n${snippet}\n`, `Appended ${label}`);
-    setStatusMsg(`Appended ${label}`);
-  };
-
-  const handleToggleTask = (lineIndex: number) => {
-    const updated = toggleTaskAtLine(activeDoc().content, lineIndex);
-    setDocContent(updated, `Toggled task at line ${lineIndex + 1}`);
-    setStatusMsg(`Toggled task checkbox on line ${lineIndex + 1}`);
-  };
-
-  const handleLinkClick = (href: string, label: string) => {
-    setStatusMsg(`Link clicked: "${label}" -> ${href}`);
-  };
-
-  const focusHeading = (lineIndex: number, title: string) => {
-    setHighlightedLine(lineIndex);
-    setStatusMsg(`Outline: "${title}" (line ${lineIndex + 1})`);
-    highlightTimer.schedule(1800, () => setHighlightedLine(null));
-  };
-
-  const loadStressDoc = () => {
-    const existing = docs().find(d => d.id === "stress");
-    if (!existing) {
-      const stressDoc: MarkdownDoc = {
-        id: "stress",
-        title: "120-Block Stress Doc",
-        badge: "Stress",
-        content: buildStressMarkdown(),
-      };
-      setDocs(prev => [...prev, stressDoc]);
+  onCloseRequest(event => {
+    if (studio.hasUnsavedChanges()) {
+      event.preventDefault();
+      studio.setCloseDialogOpen(true);
     }
-    setActiveDocId("stress");
-    setStatusMsg("Loaded 120-block Markdown stress document");
-  };
-
-  const cyclePreset = () => {
-    const idx = PRESETS.indexOf(preset());
-    setPreset(PRESETS[(idx + 1) % PRESETS.length]!);
-  };
-
-  const taskPct = createMemo(() => {
-    const p = parsedResult().parsed;
-    return p.taskTotal > 0 ? Math.round((p.taskDone / p.taskTotal) * 100) : 0;
   });
+
+  const docOptions = createMemo<readonly SelectOption[]>(() =>
+    studio.docs().map(doc => ({
+      value: doc.id,
+      label: `${doc.title}${doc.dirty ? " *" : ""}`,
+      description: doc.relativePath ?? doc.badge,
+    })),
+  );
+
+  const handleGlobalKeyDown = (event: NativeKeyEvent) => {
+    if (!event.modifiers.control) return;
+    const ch = event.character?.toLowerCase();
+    if (ch === "s") {
+      event.preventDefault();
+      void studio.saveActiveDocument();
+    } else if (ch === "o") {
+      event.preventDefault();
+      void studio.openLocalFile();
+    } else if (ch === "f" && event.modifiers.shift) {
+      event.preventDefault();
+      void navigate("/search");
+    }
+  };
+
+  const routeActive = (path: string) =>
+    location().pathname === path || (path === "/editor" && location().pathname === "/");
 
   return (
-    <ThemeProvider scheme={scheme()} light={{ preset: preset() }} dark={{ preset: preset() }}>
-      <column class="mde-root" testId="md-editor-root">
+    <ThemeProvider
+      scheme={studio.scheme()}
+      light={{ preset: studio.preset() }}
+      dark={{ preset: studio.preset() }}
+    >
+      <column class="mde-root" testId="md-editor-root" onKeyDown={handleGlobalKeyDown}>
         <row class="mde-topbar">
-          <row style={{ gap: "10px", "align-items": "center" }}>
-            <Button size="xs" variant="outline" onClick={() => setShowSidebar(v => !v)}>
-              {showSidebar() ? "Hide Outline" : "Show Outline"}
-            </Button>
-            <text style={{ "font-weight": "700" }}>zgui Markdown Studio</text>
-            <Badge variant={saveState() === "editing" ? "default" : "secondary"}>
-              {saveState() === "editing" ? "Editing..." : "Saved"}
-            </Badge>
-            <Badge variant="outline">
-              {`Parse: ${parsedResult().parseMs}ms · ${parsedResult().parsed.blocks.length} blocks`}
-            </Badge>
-          </row>
-
           <row style={{ gap: "6px", "align-items": "center" }}>
             <Button
-              testId="mode-split"
+              testId="nav-back"
               size="xs"
-              variant={viewMode() === "split" ? "default" : "outline"}
-              onClick={() => setViewMode("split")}
+              variant="outline"
+              disabled={!router.canGoBack()}
+              onClick={() => void router.back()}
+              ariaLabel="Back"
             >
-              Split
+              ←
             </Button>
             <Button
-              testId="mode-editor"
+              testId="nav-forward"
               size="xs"
-              variant={viewMode() === "editor" ? "default" : "outline"}
-              onClick={() => setViewMode("editor")}
+              variant="outline"
+              disabled={!router.canGoForward()}
+              onClick={() => void router.forward()}
+              ariaLabel="Forward"
+            >
+              →
+            </Button>
+            <Separator orientation="vertical" />
+            <Button
+              testId="nav-editor"
+              size="xs"
+              variant={routeActive("/editor") ? "default" : "outline"}
+              onClick={() => void navigate("/editor")}
             >
               Editor
             </Button>
             <Button
-              testId="mode-preview"
+              testId="nav-search"
               size="xs"
-              variant={viewMode() === "preview" ? "default" : "outline"}
-              onClick={() => setViewMode("preview")}
+              variant={routeActive("/search") ? "default" : "outline"}
+              onClick={() => void navigate("/search")}
             >
-              Preview
+              Search
+            </Button>
+            <Button
+              testId="nav-settings"
+              size="xs"
+              variant={routeActive("/settings") ? "default" : "outline"}
+              onClick={() => void navigate("/settings")}
+            >
+              Settings
             </Button>
             <Separator orientation="vertical" />
-            <Button size="xs" variant="outline" onClick={loadStressDoc}>
-              120-Block Stress
-            </Button>
-            <Button size="xs" variant="outline" onClick={cyclePreset}>
-              {`Preset: ${preset()}`}
-            </Button>
-            <Button
-              size="xs"
-              variant="outline"
-              onClick={() => setScheme(s => (s === "dark" ? "light" : "dark"))}
-            >
-              {scheme() === "dark" ? "Light" : "Dark"}
-            </Button>
+            <Combobox
+              testId="quick-doc-combo"
+              inputTestId="quick-doc-input"
+              listTestId="quick-doc-list"
+              options={docOptions()}
+              value={studio.activeDoc().id}
+              onValueChange={docId => {
+                studio.setActiveDocId(docId);
+                if (!routeActive("/editor")) void navigate("/editor");
+              }}
+              placeholder="Switch doc..."
+              label="Quick document switcher"
+              style={{ width: "180px" }}
+            />
+            <Badge testId="save-state-badge" variant={studio.activeDoc().dirty ? "default" : "secondary"}>
+              {studio.activeDoc().dirty ? "Unsaved *" : "Saved"}
+            </Badge>
           </row>
-        </row>
 
-        <row class="mde-toolbar">
-          <row style={{ gap: "6px", "align-items": "center", "flex-wrap": "wrap" }}>
-            <text class="muted">Insert:</text>
-            <Button size="xs" variant="outline" onClick={() => wrapSelection("**", "**", "bold")}>
-              B
+          <row style={{ gap: "6px", "align-items": "center" }}>
+            <Button testId="btn-open-file" size="xs" variant="outline" onClick={() => void studio.openLocalFile()}>
+              Open
             </Button>
-            <Button size="xs" variant="outline" onClick={() => wrapSelection("*", "*", "italic")}>
-              I
+            <Button testId="btn-save-file" size="xs" variant="outline" onClick={() => void studio.saveActiveDocument()}>
+              Save
             </Button>
-            <Button size="xs" variant="outline" onClick={() => wrapSelection("~~", "~~", "strike")}>
-              S
-            </Button>
-            <Button size="xs" variant="outline" onClick={() => wrapSelection("`", "`", "code")}>
-              Code
-            </Button>
-            <Button
-              size="xs"
-              variant="outline"
-              onClick={() => wrapSelection("[", "](https://zgui.dev)", "link")}
-            >
-              Link
+            <Button testId="btn-open-folder" size="xs" variant="outline" onClick={() => void studio.openWorkspaceFolder()}>
+              Folder
             </Button>
             <Separator orientation="vertical" />
             <Button
+              testId="btn-about-window"
               size="xs"
               variant="outline"
-              onClick={() => appendBlock("## New Section\n\nParagraph text here.", "Heading")}
+              onClick={() => studio.setPrefsWindowOpen(!studio.prefsWindowOpen())}
             >
-              H2
+              {studio.prefsWindowOpen() ? "Close About" : "About"}
             </Button>
             <Button
+              testId="btn-toggle-scheme"
               size="xs"
               variant="outline"
-              onClick={() => appendBlock("- [ ] New interactive task item", "Task")}
+              onClick={() => studio.setScheme(studio.scheme() === "dark" ? "light" : "dark")}
             >
-              Task
+              {studio.scheme() === "dark" ? "Light" : "Dark"}
             </Button>
-            <Button
-              size="xs"
-              variant="outline"
-              onClick={() =>
-                appendBlock("> [!NOTE]\n> Callout note inserted from toolbar.", "Callout")
-              }
-            >
-              Callout
-            </Button>
-            <Button
-              size="xs"
-              variant="outline"
-              onClick={() =>
-                appendBlock("| Column A | Column B |\n| :--- | ---: |\n| Value 1 | 42 |", "Table")
-              }
-            >
-              Table
-            </Button>
-            <Button
-              size="xs"
-              variant="outline"
-              onClick={() =>
-                appendBlock('```ts\nconst greeting: string = "Hello zgui";\n```', "Code Block")
-              }
-            >
-              Code Block
-            </Button>
-          </row>
-
-          <row style={{ gap: "8px", "align-items": "center" }}>
-            <text class="muted mono">{`Size: ${fontSize()}px`}</text>
-            <box style={{ width: "110px" }}>
-              <Slider
-                value={fontSize()}
-                onValueChange={setFontSize}
-                min={13}
-                max={19}
-                step={1}
-                label="Preview font size"
-              />
-            </box>
           </row>
         </row>
 
-        <row class="mde-body">
-          <Show when={showSidebar()}>
-            <column class="mde-sidebar">
-              <column style={{ gap: "6px" }}>
-                <text class="muted" style={{ "font-weight": "600" }}>
-                  Documents
-                </text>
-                <For each={docs()}>
-                  {doc => (
-                    <box
-                      testId={`doc-${doc.id}`}
-                      class="mde-doc-btn"
-                      role="button"
-                      tabIndex={0}
-                      data-active={activeDoc().id === doc.id ? "true" : "false"}
-                      onClick={() => {
-                        setActiveDocId(doc.id);
-                        setStatusMsg(`Opened "${doc.title}"`);
-                      }}
-                    >
-                      <text>{doc.title}</text>
-                      <Badge variant="secondary">{doc.badge}</Badge>
-                    </box>
-                  )}
-                </For>
-              </column>
-
-              <Separator />
-
-              <Show when={parsedResult().parsed.taskTotal > 0}>
-                <column style={{ gap: "6px" }}>
-                  <row style={{ "justify-content": "space-between" }}>
-                    <text class="muted" style={{ "font-weight": "600" }}>
-                      Task Progress
-                    </text>
-                    <text class="muted mono">
-                      {`${parsedResult().parsed.taskDone}/${parsedResult().parsed.taskTotal}`}
-                    </text>
-                  </row>
-                  <Progress value={taskPct()} max={100} label="Markdown tasks progress" />
-                </column>
-                <Separator />
-              </Show>
-
-              <column style={{ gap: "4px" }}>
-                <text class="muted" style={{ "font-weight": "600" }}>
-                  {`Outline (${parsedResult().parsed.headings.length})`}
-                </text>
-                <For each={parsedResult().parsed.headings}>
-                  {h => (
-                    <box
-                      class="mde-toc-item"
-                      role="button"
-                      tabIndex={0}
-                      style={{ "padding-left": `${(h.level - 1) * 10 + 8}px` }}
-                      onClick={() => focusHeading(h.lineIndex, h.text)}
-                    >
-                      <text>{h.text}</text>
-                    </box>
-                  )}
-                </For>
-              </column>
-            </column>
-          </Show>
-
-          <row class="mde-panes">
-            <Show when={viewMode() !== "preview"}>
-              <column class="mde-editor-pane">
-                <row class="mde-pane-head">
-                  <text style={{ "font-weight": "600" }}>MARKDOWN SOURCE</text>
-                  <text class="mono">
-                    {`sel ${selectionRange().start}:${selectionRange().end}`}
-                  </text>
-                </row>
-                <column class="mde-textarea-wrap">
-                  <Textarea
-                    ref={setEditorEl}
-                    testId="md-source-editor"
-                    class="mde-textarea"
-                    label="Markdown source editor"
-                    placeholder="Type Markdown here..."
-                    value={activeDoc().content}
-                    onInput={handleEditorInput}
-                  />
-                </column>
-              </column>
-            </Show>
-
-            <Show when={viewMode() !== "editor"}>
-              <column class="mde-preview-pane">
-                <row class="mde-pane-head">
-                  <text style={{ "font-weight": "600" }}>LIVE NATIVE PREVIEW</text>
-                  <text class="mono">
-                    {scrollInfo()
-                      ? `scrollY=${Math.round(scrollInfo()!.offset.y)} / ${Math.round(scrollInfo()!.contentSize.height)}`
-                      : "scroll ready"}
-                  </text>
-                </row>
-                <scroll
-                  class="mde-preview-scroll"
-                  ref={node => {
-                    setScrollEl(node);
-                  }}
-                  testId="md-preview-scroll"
-                >
-                  <MarkdownPreview
-                    blocks={parsedResult().parsed.blocks}
-                    fontSize={fontSize}
-                    pipelineImg={pipelineImg}
-                    highlightedLine={highlightedLine}
-                    onToggleTask={handleToggleTask}
-                    onLinkClick={handleLinkClick}
-                  />
-                </scroll>
-              </column>
-            </Show>
-          </row>
-        </row>
+        <box class="mde-outlet">
+          <Outlet />
+        </box>
 
         <row class="mde-statusbar">
-          <text>{statusMsg()}</text>
-          <text class="mono">
-            {`${stats().words} words · ${stats().lines} lines · ${stats().chars} chars · ~${stats().readMin} min read`}
-          </text>
+          <row style={{ gap: "10px", "align-items": "center" }}>
+            <text testId="status-msg">{studio.statusMsg()}</text>
+            <text class="mono" testId="window-title-readout">{windowState().title}</text>
+          </row>
+          <row style={{ gap: "10px", "align-items": "center" }}>
+            <text class="mono" testId="route-readout">{location().pathname}</text>
+            <text class="mono" testId="watch-event-readout">{`watch:${studio.externalEventLog()}`}</text>
+            <text class="mono">
+              {`${studio.stats().words} words · ${studio.stats().lines} lines · ${studio.stats().chars} chars`}
+            </text>
+          </row>
         </row>
+
+        <Dialog open={studio.closeDialogOpen()} onOpenChange={studio.setCloseDialogOpen}>
+          <DialogContent testId="unsaved-close-dialog">
+            <DialogHeader>
+              <DialogTitle>Unsaved Changes</DialogTitle>
+              <DialogDescription>
+                {`"${studio.activeDoc().title}" has unsaved edits. Save before closing Markdown Studio?`}
+              </DialogDescription>
+            </DialogHeader>
+            <DialogFooter>
+              <Button
+                testId="btn-close-cancel"
+                variant="outline"
+                onClick={() => studio.setCloseDialogOpen(false)}
+              >
+                Cancel
+              </Button>
+              <Button
+                testId="btn-close-discard"
+                variant="destructive"
+                onClick={() => {
+                  studio.setCloseDialogOpen(false);
+                  closeWindow({ force: true });
+                }}
+              >
+                Discard & Close
+              </Button>
+              <Button
+                testId="btn-close-save"
+                onClick={() => {
+                  void studio.saveActiveDocument().then(ok => {
+                    if (ok) {
+                      studio.setCloseDialogOpen(false);
+                      closeWindow({ force: true });
+                    }
+                  });
+                }}
+              >
+                Save & Close
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        <AboutPrefsWindow />
+        <ToastProvider corner="bottom-right" regionTestId="studio-toast-region" />
       </column>
     </ThemeProvider>
+  );
+}
+
+function MarkdownStudioRoot() {
+  const studio = createStudioState();
+  const router = createRouter(
+    [
+      {
+        path: "/",
+        component: StudioShell,
+        children: [
+          { path: "", component: EditorView },
+          { path: "editor", component: EditorView },
+          { path: "search", component: SearchView },
+          { path: "settings", component: SettingsView },
+        ],
+      },
+    ] as const,
+    { initialPath: "/editor" },
+  );
+
+  return (
+    <StudioContext value={studio}>
+      <RouterProvider router={router} />
+    </StudioContext>
   );
 }

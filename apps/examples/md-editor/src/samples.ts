@@ -3,6 +3,9 @@ export interface MarkdownDoc {
   readonly title: string;
   readonly badge: string;
   readonly content: string;
+  readonly source?: "builtin" | "file" | "workspace" | undefined;
+  readonly relativePath?: string | undefined;
+  readonly dirty?: boolean | undefined;
 }
 
 export const INITIAL_DOCS: readonly MarkdownDoc[] = [
@@ -10,12 +13,13 @@ export const INITIAL_DOCS: readonly MarkdownDoc[] = [
     id: "guide",
     title: "zgui-js 架构速览",
     badge: "Guide",
+    source: "builtin",
     content: `# zgui-js Markdown Studio
 
-这是一个完全运行在 **Rust + wgpu + Stylo + Parley + QuickJS-NG + Solid 2.0.1** 上的原生 Markdown 实时编辑器，**零浏览器内核、零 DOM**。
+这是一个完全运行在 **Rust + wgpu + Stylo + Parley + QuickJS-NG + Solid 2.0.1** 上的原生本地 Markdown 工作室，**零浏览器内核、零 DOM** 🚀。
 
 > [!TIP]
-> 在右侧预览里直接点击任务清单的复选框，会**实时反向修改左侧 Markdown 源码**；也可以用顶部工具栏在当前光标/选区处插入格式语法（支持中文 UTF-8 偏移换算）。
+> 在右侧预览里直接点击任务清单的复选框，会**实时反向修改左侧 Markdown 源码**；也可以用顶部工具栏在当前光标/选区处插入格式语法（原生 UTF-16 选区索引，完美支持中文与 Emoji ✨）。
 
 ## 核心渲染管线
 

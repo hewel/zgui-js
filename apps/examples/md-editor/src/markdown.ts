@@ -168,7 +168,17 @@ export function tokenizeCodeLine(line: string, lang: string): CodeToken[] {
   if (cursor < line.length) {
     tokens.push({ kind: "plain", text: line.slice(cursor) });
   }
-  return tokens.length > 0 ? tokens : [{ kind: "plain", text: " " }];
+  if (tokens.length === 0) return [{ kind: "plain", text: " " }];
+  const merged: CodeToken[] = [];
+  for (const tok of tokens) {
+    const prev = merged[merged.length - 1];
+    if (prev && prev.kind === tok.kind) {
+      merged[merged.length - 1] = { kind: prev.kind, text: prev.text + tok.text };
+    } else {
+      merged.push(tok);
+    }
+  }
+  return merged;
 }
 
 function splitTableRow(line: string): string[] {
@@ -373,6 +383,48 @@ export function parseMarkdown(source: string): ParsedDocument {
   }
 
   return { blocks, headings, taskTotal, taskDone };
+}
+
+import type { TreeNodeData } from "@hewel/zgui/components";
+
+export interface OutlineNodeMeta {
+  readonly lineIndex: number;
+  readonly level: number;
+  readonly title: string;
+}
+
+export function buildOutlineTree(headings: readonly HeadingOutline[]): readonly TreeNodeData<OutlineNodeMeta>[] {
+  const roots: TreeNodeData<OutlineNodeMeta>[] = [];
+  const stack: { level: number; children: TreeNodeData<OutlineNodeMeta>[] }[] = [];
+
+  for (const h of headings) {
+    const children: TreeNodeData<OutlineNodeMeta>[] = [];
+    const node: TreeNodeData<OutlineNodeMeta> = {
+      id: `heading-${h.lineIndex}`,
+      label: h.text,
+      badge: `H${h.level}`,
+      meta: { lineIndex: h.lineIndex, level: h.level, title: h.text },
+      children,
+    };
+    while (stack.length > 0 && stack[stack.length - 1]!.level >= h.level) {
+      stack.pop();
+    }
+    if (stack.length === 0) {
+      roots.push(node);
+    } else {
+      stack[stack.length - 1]!.children.push(node);
+    }
+    stack.push({ level: h.level, children });
+  }
+
+  const prune = (list: readonly TreeNodeData<OutlineNodeMeta>[]): TreeNodeData<OutlineNodeMeta>[] =>
+    list.map(item => (
+      item.children && item.children.length > 0
+        ? { ...item, children: prune(item.children) }
+        : { id: item.id, label: item.label, badge: item.badge, meta: item.meta }
+    ));
+
+  return prune(roots);
 }
 
 export function toggleTaskAtLine(source: string, lineIndex: number): string {

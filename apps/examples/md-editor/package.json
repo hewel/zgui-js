@@ -8,6 +8,11 @@
     "preview": "zgui-js preview"
   },
   "zgui": {
+    "capabilities": {
+      "sqlite": {
+        "databases": ["studio"]
+      }
+    },
     "window": {
       "title": "zgui Markdown Studio",
       "width": 1320,
