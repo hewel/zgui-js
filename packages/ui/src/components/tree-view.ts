@@ -63,7 +63,6 @@ export interface TreeItemProps extends Omit<NativeElementProps, "children"> {
   readonly children?: NativeChild | undefined;
   readonly icon?: IconData | undefined;
   readonly badge?: string | undefined;
-  readonly disabled?: boolean | undefined;
   readonly expandable?: boolean | undefined;
 }
 

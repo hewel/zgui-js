@@ -40,7 +40,6 @@ export interface SplitPanePanelProps extends NativeElementProps {
 export interface SplitPaneHandleProps extends Omit<NativeElementProps, "children"> {
   children?: NativeChild;
   withHandle?: boolean;
-  disabled?: boolean;
   step?: number;
   label?: string | null;
 }

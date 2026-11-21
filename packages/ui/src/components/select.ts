@@ -31,7 +31,7 @@ export interface SelectOption<T extends string = string> {
   readonly disabled?: boolean | undefined;
 }
 
-export interface SelectProps<T extends string = string> extends Omit<NativeElementProps, "children"> {
+export interface SelectProps<T extends string = string> extends Omit<NativeElementProps, "children" | "open"> {
   children?: never;
   options: readonly SelectOption<T>[];
   value?: T | null | undefined;
@@ -43,15 +43,13 @@ export interface SelectProps<T extends string = string> extends Omit<NativeEleme
   placeholder?: string | undefined;
   emptyText?: string | undefined;
   size?: SelectSize | undefined;
-  disabled?: boolean | undefined;
-  invalid?: boolean | undefined;
   label?: string | null | undefined;
   placement?: PopperPlacement | undefined;
   offset?: number | undefined;
   listTestId?: string | undefined;
 }
 
-export interface ComboboxProps<T extends string = string> extends Omit<NativeElementProps, "children"> {
+export interface ComboboxProps<T extends string = string> extends Omit<NativeElementProps, "children" | "open"> {
   children?: never;
   options: readonly SelectOption<T>[];
   value?: T | null | undefined;
@@ -66,8 +64,6 @@ export interface ComboboxProps<T extends string = string> extends Omit<NativeEle
   onOpenChange?: (open: boolean) => void;
   placeholder?: string | undefined;
   emptyText?: string | undefined;
-  disabled?: boolean | undefined;
-  invalid?: boolean | undefined;
   label?: string | null | undefined;
   placement?: PopperPlacement | undefined;
   offset?: number | undefined;
