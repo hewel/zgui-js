@@ -31,7 +31,7 @@ export function headingToward(from: NativePoint, to: NativePoint, target: Native
 export function MenuSubTrigger(props: MenuSubTriggerProps = {}): NativeNode {
   const sub = useMenuSub(), state = sub?.state;
   const opening = createDelayed(), closing = sub?.closing ?? createDelayed();
-  const rest = omit(props, "children", "inset", "ref", "onPointerMove", "onKeyDown");
+  const rest = omit(props, "children", "inset", "onPointerMove", "onKeyDown");
   let alive = true, scale = 1;
   let last: NativePoint = { x: 0, y: 0 };
   onCleanup(() => { alive = false; opening.cancel(); if (!sub) closing.cancel(); });
@@ -43,7 +43,6 @@ export function MenuSubTrigger(props: MenuSubTriggerProps = {}): NativeNode {
     get "data-state"() { return state?.open() ? "open" : "closed"; },
     get "data-inset"() { return props.inset ? "true" : null; },
   }, rest), {
-    ref(node: NativeNode) { state?.trigger.ref(node); if (typeof props.ref === "function") props.ref(node); },
     onPointerMove(event: NativePointerEvent) {
       if (callHandler(event, props.onPointerMove) && alive) last = device(event.position);
     },
@@ -71,6 +70,7 @@ export function MenuSubTrigger(props: MenuSubTriggerProps = {}): NativeNode {
       closing.after(180, () => state.setOpen(false));
     },
   });
+  state?.trigger.ref(node);
   observeGeometry(node, "viewport", viewport => { scale = viewport.scale; });
   slot(node, memo(() => props.children));
   append(node, Icon({ icon: CHEVRON_RIGHT, class: "zui-menu__chevron" }));

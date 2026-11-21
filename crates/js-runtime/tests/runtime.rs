@@ -577,10 +577,12 @@ fn at_deep_rust_stack<R>(depth: usize, f: impl FnOnce() -> R) -> R {
 
 #[test]
 fn stack_limit_measures_from_entry_not_creation_depth_and_still_bounds_js_recursion() {
+    assert_eq!(RuntimeLimits::default().stack_limit_bytes, 1024 * 1024);
     let mut runtime = JsRuntime::new(RuntimeLimits {
         entry_timeout: Duration::from_secs(2),
         cleanup_timeout: Duration::from_secs(2),
         job_timeout: Duration::from_secs(2),
+        stack_limit_bytes: 256 * 1024,
         ..RuntimeLimits::default()
     })
     .unwrap();

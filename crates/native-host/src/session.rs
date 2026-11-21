@@ -117,6 +117,11 @@ impl SessionPolicy {
         self
     }
 
+    pub(crate) fn with_stack_limit_bytes(mut self, stack_limit_bytes: usize) -> Self {
+        self.limits.stack_limit_bytes = stack_limit_bytes;
+        self
+    }
+
     pub(crate) fn with_session_lock(mut self, state: Option<SessionLockState>) -> Self {
         self.session_lock = state;
         self

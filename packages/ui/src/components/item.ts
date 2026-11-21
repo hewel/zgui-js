@@ -32,7 +32,7 @@ export function Item(props: ItemProps = {}): NativeNode {
   useStylesheet(sheet);
   useStylesheet(partSheet);
   const rest = omit(props, "variant", "size");
-  const [descriptions, setDescriptions] = createSignal(0);
+  const [descriptions, setDescriptions] = createSignal(0, { ownedWrite: true });
   const node = createElement("box");
   spread(node, mergeProps(
     rest,

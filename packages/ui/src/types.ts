@@ -302,3 +302,7 @@ export interface ReactiveOptions { name?: string; }
 export interface MemoOptions<T> extends ReactiveOptions {
   equals?: false | ((previous: T, next: T) => boolean);
 }
+export interface SignalOptions<T> extends MemoOptions<T> {
+  ownedWrite?: boolean;
+  unobserved?: () => void;
+}

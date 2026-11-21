@@ -385,6 +385,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut exercise = false;
     let mut watch = false;
     let mut reduced_motion = false;
+    let mut max_js_stack_bytes: Option<usize> = None;
     let mut layer_config = None;
     let mut pure_shell = false;
     let mut control_socket = None;
@@ -405,6 +406,11 @@ fn main() -> Result<(), Box<dyn Error>> {
             "--watch" => { watch = true; }
             "--pure-shell" => { pure_shell = true; }
             "--reduced-motion" => { reduced_motion = true; }
+            "--max-js-stack-bytes" => {
+                let bytes: usize = args.next().ok_or("--max-js-stack-bytes requires a byte count")?.parse()?;
+                if bytes == 0 { return Err("--max-js-stack-bytes must be positive".into()); }
+                max_js_stack_bytes = Some(bytes);
+            }
             "--bind-socket" => {
                 let binding = args.next().ok_or("--bind-socket requires name=path")?;
                 runtime_capabilities::add_socket_binding(&mut socket_bindings, &binding)?;
@@ -453,6 +459,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     application.layer_primary = layer_config.is_some();
     if let Some(fonts) = fonts { application.host.set_pure_shell(fonts); }
     if reduced_motion { application.host.set_reduced_motion(true); }
+    if let Some(bytes) = max_js_stack_bytes { application.host.set_stack_limit_bytes(bytes); }
     application.exit_after = exit_after;
     application.harness.exercise = exercise;
     application.watch_path = watch.then_some(bundle).flatten();

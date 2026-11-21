@@ -26,7 +26,7 @@ export function useContextMenuPlace(): ContextMenuPlace | undefined {
 export function ContextMenu(props: ContextMenuProps = {}): NativeChild {
   const state = createOverlayState(props);
   const [point, setPoint] = createSignal<ContextMenuPoint>({ x: 0, y: 0 });
-  const [area, setArea] = createSignal<NativeNode | null>(null);
+  const [area, setArea] = createSignal<NativeNode | null>(null, { ownedWrite: true });
   let alive = true;
   onCleanup(() => { alive = false; });
   const openAt = (position: ContextMenuPoint) => {

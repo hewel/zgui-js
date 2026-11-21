@@ -1,6 +1,6 @@
 // Solid 2.x's public declarations include DOM/hydration types. This package-local
 // condition preserves native renderer node branding without acquiring browser globals.
-import type { Accessor, MemoOptions, NativeChild, ReactiveOptions, Signal } from "./types.js";
+import type { Accessor, MemoOptions, NativeChild, ReactiveOptions, Signal, SignalOptions } from "./types.js";
 
 export type Store<T> = T;
 export type StoreSetter<T> = (fn: (draft: T) => T | void) => void;
@@ -9,8 +9,8 @@ export type Owner = object;
 
 export declare function createRoot<T>(callback: (dispose: () => void) => T): T;
 export declare function createSignal<T>(): Signal<T | undefined>;
-export declare function createSignal<T>(initial: Exclude<T, Function>, options?: MemoOptions<T>): Signal<T>;
-export declare function createSignal<T>(compute: (previous: T | undefined) => T | PromiseLike<T>, options?: MemoOptions<T>): Signal<T>;
+export declare function createSignal<T>(initial: Exclude<T, Function>, options?: SignalOptions<T>): Signal<T>;
+export declare function createSignal<T>(compute: (previous: T | undefined) => T | PromiseLike<T>, options?: SignalOptions<T>): Signal<T>;
 export declare function createMemo<T>(compute: (previous: T | undefined) => T | PromiseLike<T>, options?: MemoOptions<T>): Accessor<T>;
 export declare function createEffect<T>(
   compute: (previous: T | undefined) => T | PromiseLike<T>,

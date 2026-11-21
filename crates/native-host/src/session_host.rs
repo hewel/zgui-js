@@ -278,6 +278,9 @@ impl SessionHost {
     pub(crate) fn set_reduced_motion(&mut self, reduced_motion: bool) {
         self.policy = self.policy.clone().with_reduced_motion(reduced_motion);
     }
+    pub(crate) fn set_stack_limit_bytes(&mut self, stack_limit_bytes: usize) {
+        self.policy = self.policy.clone().with_stack_limit_bytes(stack_limit_bytes);
+    }
     /// The module a fresh mount region attaches, or the last mounted one.
     pub(crate) fn module(&self) -> &SessionModule { &self.module }
     /// Adopt a publication that arrived while no mount region existed.

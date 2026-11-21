@@ -80,14 +80,13 @@ export function hoverTrigger(config: {
 }, props: NativeElementProps = {}): NativeNode {
   useStylesheet(config.sheet);
   const intent = useContext(HoverContext), state = intent?.state;
-  const rest = omit(props, "ref", "onPointerEnter", "onPointerLeave", "onFocus", "onBlur", "onKeyDown");
-  return element("box", mergeProps(
+  const rest = omit(props, "onPointerEnter", "onPointerLeave", "onFocus", "onBlur", "onKeyDown");
+  const node = element("box", mergeProps(
     rest,
     withDefaults(config.attrs(state), rest),
     withDefaults({ get "data-state"() { return state?.open() ? "open" : "closed"; } }, rest),
     {
       get __zguiClass() { return classes(config.class); },
-      ref(node: NativeNode) { state?.trigger.ref(node); if (typeof props.ref === "function") props.ref(node); },
       onPointerEnter(event: NativePointerBoundaryEvent) { if (callHandler(event, props.onPointerEnter)) intent?.enter(); },
       onPointerLeave(event: NativePointerBoundaryEvent) { if (callHandler(event, props.onPointerLeave)) intent?.leave(); },
       onFocus(event: NativeFocusEvent) {
@@ -102,6 +101,8 @@ export function hoverTrigger(config: {
       },
     },
   ));
+  state?.trigger.ref(node);
+  return node;
 }
 
 export function hoverSurface(config: {

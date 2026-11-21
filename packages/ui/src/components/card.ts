@@ -35,7 +35,7 @@ export function Card(props: CardProps = {}): NativeNode {
 
 export function CardHeader(props: CardHeaderProps = {}): NativeChild {
   useStylesheet(sheet);
-  const [count, setCount] = createSignal(0);
+  const [count, setCount] = createSignal(0, { ownedWrite: true });
   const state: CardHeaderState = {
     claim() {
       setCount(value => value + 1);

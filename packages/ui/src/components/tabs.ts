@@ -53,7 +53,7 @@ function partValue(value: string): string {
 }
 function createParts() {
   const items: { node: NativeNode; value: Accessor<string> }[] = [];
-  const [version, setVersion] = createSignal(0);
+  const [version, setVersion] = createSignal(0, { ownedWrite: true });
   return {
     register(node: NativeNode, value: Accessor<string>) {
       const part = { node, value };

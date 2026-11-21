@@ -10,8 +10,8 @@ export function groupOrientation(value: GroupOrientation): GroupOrientation {
 }
 export function createRovingFocus(orientation: Accessor<GroupOrientation>, navigation: "target" | "active" = "target") {
   const items: Entry[] = [];
-  const [version, setVersion] = createSignal(0);
-  const [active, setActive] = createSignal<NativeNode>();
+  const [version, setVersion] = createSignal(0, { ownedWrite: true });
+  const [active, setActive] = createSignal<NativeNode | undefined>(undefined, { ownedWrite: true });
   const ordered = () => {
     trackTreeOrder();
     version();

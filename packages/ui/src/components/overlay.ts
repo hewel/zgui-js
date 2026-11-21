@@ -117,7 +117,7 @@ function createPresence(present: Accessor<boolean>) {
 }
 
 function reference() {
-  const [node, setNode] = createSignal<NativeNode | null>(null);
+  const [node, setNode] = createSignal<NativeNode | null>(null, { ownedWrite: true });
   return {
     node,
     ref(value: NativeNode) {
@@ -285,18 +285,19 @@ export function anchoredSurface(state: OverlayState | null | undefined, props: A
 
 export function overlayTrigger(popup: "dialog" | "menu", props: ButtonProps = {}): NativeNode {
   const context = useContext(OverlayContext);
-  const rest = omit(props, "onClick", "ref");
-  return Button(mergeProps(rest, withDefaults({
+  const rest = omit(props, "onClick");
+  const node = Button(mergeProps(rest, withDefaults({
     get expanded() { return context?.open(); },
     get ariaHasPopup() { return context ? popup : null; },
     get ariaControls() { return context?.content.node() ?? null; },
     get "data-state"() { return context ? context.open() ? "open" : "closed" : null; },
   }, rest), {
-    ref(node: NativeNode) { context?.trigger.ref(node); if (typeof props.ref === "function") props.ref(node); },
     onClick(event: NativeEvent) {
       if (callHandler(event, props.onClick) && !props.disabled) context?.setOpen(!context.open());
     },
   }));
+  context?.trigger.ref(node);
+  return node;
 }
 
 export function overlayClose(props: ButtonProps = {}): NativeNode {
@@ -318,11 +319,11 @@ function overlayLabel(
 ): NativeNode {
   useStylesheet(cssSheet);
   const context = useContext(OverlayContext);
-  const rest = omit(props, "ref");
-  return element(tag, mergeProps(rest, {
-    ref(node: NativeNode) { context?.[kind].ref(node); if (typeof props.ref === "function") props.ref(node); },
+  const node = element(tag, mergeProps(props, {
     get __zguiClass() { return classes(className); },
   }));
+  context?.[kind].ref(node);
+  return node;
 }
 
 export function overlayTitle(tag: "label" | "box", cssSheet: Stylesheet, className: string, props: NativeElementProps = {}): NativeNode {

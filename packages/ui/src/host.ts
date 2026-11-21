@@ -151,7 +151,7 @@ function ensureMotionState(bridge?: UiBridge): MotionState {
   let state = motionStates.get(key);
   if (!state) {
     const initial = bridge ? bridge.getReducedMotion() : false;
-    const [hostValue, setHostValue] = createSignal(initial);
+    const [hostValue, setHostValue] = createSignal(initial, { ownedWrite: true });
     const [override, setOverride] = createSignal<boolean | null>(null);
     state = { hostValue, setHostValue, override, setOverride, subscribedBridges: new WeakSet() };
     motionStates.set(key, state);

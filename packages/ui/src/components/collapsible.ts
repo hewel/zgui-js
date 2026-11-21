@@ -16,8 +16,8 @@ export type CollapsibleTriggerProps = NativeElementProps;
 export type CollapsibleContentProps = NativeElementProps;
 
 export function createDisclosure(root: NativeNode, open: Accessor<boolean>, disabled: Accessor<boolean>, write: (open: boolean) => void) {
-  const [trigger, setTrigger] = createSignal<{ node: NativeNode; disabled: Accessor<boolean> } | null>(null);
-  const [content, setContent] = createSignal<NativeNode | null>(null);
+  const [trigger, setTrigger] = createSignal<{ node: NativeNode; disabled: Accessor<boolean> } | null>(null, { ownedWrite: true });
+  const [content, setContent] = createSignal<NativeNode | null>(null, { ownedWrite: true });
   return {
     root, open, disabled, content,
     trigger: () => trigger()?.node ?? null,

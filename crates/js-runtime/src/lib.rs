@@ -38,7 +38,7 @@ pub struct RuntimeLimits {
     /// Engine allocator limit: 64 MiB. Does not cover native/GPU/Rust allocations.
     /// Requires the default allocator; do not enable rquickjs rust-alloc/allocator.
     pub memory_limit_bytes: usize,
-    /// Engine stack limit: 256 KiB by default.
+    /// Engine stack limit: 1 MiB by default.
     pub stack_limit_bytes: usize,
     /// Exception-property access has its own bounded formatting entry: 5 ms.
     pub diagnostic_timeout: Duration,
@@ -59,7 +59,7 @@ impl Default for RuntimeLimits {
             max_jobs_per_pump: 256,
             job_timeout: default_turn_timeout,
             memory_limit_bytes: 64 * 1024 * 1024,
-            stack_limit_bytes: 256 * 1024,
+            stack_limit_bytes: 1024 * 1024,
             diagnostic_timeout: Duration::from_millis(5),
             max_diagnostic_bytes: 16 * 1024,
             max_tracked_rejections: 256,
