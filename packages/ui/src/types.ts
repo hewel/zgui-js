@@ -12,6 +12,8 @@ declare const nativeNode: unique symbol;
  * ref does not retain native ownership; cross-turn detached-node reuse is unsupported.
  */
 export interface NativeNode { readonly [nativeNode]: true; }
+/** A native node or reactive accessor resolving to one (e.g. a `createSignal<NativeNode | null>(null)` wired to `ref={setNode}`). */
+export type NativeNodeTarget = NativeNode | Accessor<NativeNode | null | undefined>;
 export interface NativeWindowRect {
   readonly x: number;
   readonly y: number;

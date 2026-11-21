@@ -2,7 +2,7 @@ import {
   Image, Button, TextField, TextArea, For, Show, Loading, Errored, LayerSurface, PopupSurface,
   createCanvasScene, createContext, createDelay, createEffect, createInterval, createMemo, createSignal, createSpring, createStore, createTimeout, createProjection,
   merge, omit, onCleanup, onSettled, reconcile, renderApp, renderShell, untrack, useContext, useMonitors,
-  focus, getReducedMotion, getTextContent, getWindowRect, isAnimating, lockScroll, mountStylesheet, observeGeometry, precedes, setReducedMotion,
+  focus, getReducedMotion, getTextContent, getWindowRect, isAnimating, lockScroll, mountStylesheet, observeGeometry, precedes, registerDismissLayer, setReducedMotion, trapFocus,
   SessionLockSurface, WindowSurface, VirtualGrid, VirtualList, getSessionGeneration, requestSessionLock,
 } from "@hewel/zgui";
 import type { CanvasCommand, CanvasScene, CanvasTransform, Component, Context, NativeAnimationEvent, NativeChild, NativeContextMenuEvent, NativeFocusOptions, NativeNode, NativePointerBoundaryEvent, NativeRole, NativeTextControlProps, NativeTransitionEvent, NativeViewport, NativeWheelEvent, NativeWindowRect, ParentComponent, Spring, SpringOptions, TextFieldProps, TextAreaProps, VectorProps, WindowDecorations } from "@hewel/zgui";
@@ -274,6 +274,13 @@ void <VirtualGrid each={[1, 2, 3]} itemHeight={64} minColumnWidth={120} gap={8}>
 void <VirtualGrid each={[{ id: 1 }]} itemHeight={64} columns={2} keyed={item => item.id}>
   {(item, index) => <text>{index()}:{item().id}</text>}
 </VirtualGrid>;
+const [refNode, setRefNode] = createSignal<NativeNode | null>(null);
+observeGeometry(refNode, "scrollPosition", pos => { void pos.offset.y; });
+trapFocus(refNode, { wrap: true });
+lockScroll(refNode);
+const dismissAccessor = registerDismissLayer(refNode, reason => { void reason; }, { layer: "popover" });
+dismissAccessor.update({ leaving: true });
+void <scroll ref={setRefNode} />;
 void [isDelayPending, reactiveSpring];
 void borrowed;
 

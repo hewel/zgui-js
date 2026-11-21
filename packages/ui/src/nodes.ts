@@ -1,7 +1,7 @@
-import { getOwner, onCleanup } from "#solid";
+import { createEffect, getOwner, onCleanup } from "#solid";
 import { flush } from "./renderer/index.js";
 import { bridgeFor, bridgeForTarget, getReducedMotion, setReducedMotion, withCallbackBridge } from "./host.js";
-import type { CanvasScene, NativeDismissLayer, NativeDismissLayerOptions, NativeDismissReason, NativeFocusOptions, NativeFocusTrapOptions, NativeGeometry, NativeGeometryKind, NativeNode, NativeWindowRect } from "./types.js";
+import type { Accessor, CanvasScene, NativeDismissLayer, NativeDismissLayerOptions, NativeDismissReason, NativeFocusOptions, NativeFocusTrapOptions, NativeGeometry, NativeGeometryKind, NativeNode, NativeNodeTarget, NativeWindowRect } from "./types.js";
 
 export { getReducedMotion, setReducedMotion };
 
@@ -32,24 +32,69 @@ export function createCanvasScene(): CanvasScene {
   return scene;
 }
 
-export function observeGeometry<K extends NativeGeometryKind>(node: NativeNode, kind: K, callback: (value: NativeGeometry[K]) => void): () => void {
-  const bridge = bridgeFor(node);
-  const dispose = bridge.observeGeometry(node, kind, value => withCallbackBridge(bridge, () => {
-    callback(value);
-    flush();
-  }));
+function bindNodeLease(
+  target: Accessor<NativeNode | null | undefined>,
+  attach: (node: NativeNode) => () => void,
+): () => void {
+  let active: (() => void) | undefined;
+  let disposed = false;
+  const stop = () => {
+    if (disposed) return;
+    disposed = true;
+    active?.();
+    active = undefined;
+  };
+  createEffect(
+    () => (disposed ? null : target()),
+    node => {
+      active?.();
+      active = undefined;
+      if (!node || disposed) return;
+      const lease = attach(node);
+      active = lease;
+      return () => {
+        lease();
+        if (active === lease) active = undefined;
+      };
+    },
+  );
+  if (getOwner()) onCleanup(stop);
+  return stop;
+}
+
+export function observeGeometry<K extends NativeGeometryKind>(
+  node: NativeNodeTarget,
+  kind: K,
+  callback: (value: NativeGeometry[K]) => void,
+): () => void {
+  const attach = (target: NativeNode): () => void => {
+    const bridge = bridgeFor(target);
+    return bridge.observeGeometry(target, kind, value => withCallbackBridge(bridge, () => {
+      callback(value);
+      flush();
+    }));
+  };
+  if (typeof node === "function") return bindNodeLease(node, attach);
+  const dispose = attach(node);
   if (getOwner()) onCleanup(dispose);
   return dispose;
 }
 
-export function trapFocus(node: NativeNode, options?: NativeFocusTrapOptions): () => void {
-  const dispose = bridgeFor(node).trapFocus(node, options?.wrap ?? true, options?.autoFocus ?? true, options?.restore ?? true);
+export function trapFocus(node: NativeNodeTarget, options?: NativeFocusTrapOptions): () => void {
+  const wrap = options?.wrap ?? true;
+  const autoFocus = options?.autoFocus ?? true;
+  const restore = options?.restore ?? true;
+  const attach = (target: NativeNode): () => void => bridgeFor(target).trapFocus(target, wrap, autoFocus, restore);
+  if (typeof node === "function") return bindNodeLease(node, attach);
+  const dispose = attach(node);
   if (getOwner()) onCleanup(dispose);
   return dispose;
 }
 
-export function lockScroll(node: NativeNode): () => void {
-  const dispose = bridgeFor(node).lockScroll(node);
+export function lockScroll(node: NativeNodeTarget): () => void {
+  const attach = (target: NativeNode): () => void => bridgeFor(target).lockScroll(target);
+  if (typeof node === "function") return bindNodeLease(node, attach);
+  const dispose = attach(node);
   if (getOwner()) onCleanup(dispose);
   return dispose;
 }
@@ -60,8 +105,46 @@ function dismissOptions(options: NativeDismissLayerOptions = {}): Required<Nativ
 }
 
 export function registerDismissLayer(
-  node: NativeNode, callback: (reason: NativeDismissReason) => void, options?: NativeDismissLayerOptions,
+  node: NativeNodeTarget, callback: (reason: NativeDismissReason) => void, options?: NativeDismissLayerOptions,
 ): NativeDismissLayer {
+  if (typeof node === "function") {
+    let currentOptions = dismissOptions(options);
+    let active: NativeDismissLayer | undefined;
+    let disposed = false;
+    const dispose = () => {
+      if (disposed) return;
+      disposed = true;
+      active?.dispose();
+      active = undefined;
+    };
+    createEffect(
+      () => (disposed ? null : node()),
+      target => {
+        active?.dispose();
+        active = undefined;
+        if (!target || disposed) return;
+        const bridge = bridgeFor(target);
+        const lease = bridge.registerDismissLayer(
+          target,
+          reason => withCallbackBridge(bridge, () => callback(reason)),
+          currentOptions,
+        );
+        active = lease;
+        return () => {
+          lease.dispose();
+          if (active === lease) active = undefined;
+        };
+      },
+    );
+    if (getOwner()) onCleanup(dispose);
+    return {
+      dispose,
+      update(next) {
+        currentOptions = dismissOptions(next);
+        if (!disposed) active?.update(currentOptions);
+      },
+    };
+  }
   const bridge = bridgeFor(node);
   const lease = bridge.registerDismissLayer(node, reason => withCallbackBridge(bridge, () => callback(reason)), dismissOptions(options));
   if (getOwner()) onCleanup(lease.dispose);
