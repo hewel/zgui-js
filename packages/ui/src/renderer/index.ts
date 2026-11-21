@@ -27,7 +27,7 @@ type MergeSources<T extends readonly object[]> = T extends readonly [infer Head 
 
 // Upstream declarations restrict children to one NodeType and omit null navigation results.
 const createNativeRenderer = createRenderer as (
-  options: Omit<NativeHost["__zgui"], "createElement" | "replaceText" | "clearRoot" | "createPortal" | "createCanvasScene" | "registerDismissLayer" | "installStylesheet" | "removeStylesheet" | "focus" | "trapFocus" | "lockScroll" | "scrollTo" | "scrollBy" | "scrollIntoView" | "getSelection" | "setSelection" | "selectAll" | "getWindowRect" | "getTextContent" | "isAnimating" | "precedes" | "observeGeometry" | "getReducedMotion"> & {
+  options: Omit<NativeHost["__zgui"], "createElement" | "replaceText" | "clearRoot" | "createPortal" | "createCanvasScene" | "registerDismissLayer" | "installStylesheet" | "removeStylesheet" | "focus" | "trapFocus" | "lockScroll" | "scrollTo" | "scrollBy" | "scrollIntoView" | "getSelection" | "setSelection" | "selectAll" | "setWindowTitle" | "setWindowFullscreen" | "setWindowMaximized" | "setWindowMinimized" | "setWindowDecorations" | "beginWindowMoveDrag" | "closeWindow" | "getWindowState" | "subscribeWindowState" | "onCloseRequest" | "getWindowRect" | "getTextContent" | "isAnimating" | "precedes" | "observeGeometry" | "getReducedMotion"> & {
     createElement(tag: NativeTag, staticProps?: Record<string, unknown>): NativeNode;
     replaceText(node: NativeNode, text: string | number): void;
   },

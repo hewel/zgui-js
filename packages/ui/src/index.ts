@@ -11,6 +11,10 @@ export { flush } from "./renderer/index.js";
 
 export { renderApp, renderShell } from "./render-app.js";
 export { LayerSurface, PopupSurface, SessionLockSurface, WindowSurface, getSessionGeneration, mountShellStylesheet, requestSessionLock, useMonitors } from "./shell.js";
+export {
+  beginWindowMoveDrag, closeWindow, getWindowState, onCloseRequest, setWindowDecorations,
+  setWindowFullscreen, setWindowMaximized, setWindowMinimized, setWindowTitle, useWindowState,
+} from "./window.js";
 export { createSpring } from "./spring.js";
 export type { Spring, SpringNumberOption, SpringOptions } from "./spring.js";
 export { createDelay, createInterval, createTimeout } from "./timers.js";

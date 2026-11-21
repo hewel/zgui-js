@@ -312,7 +312,46 @@ impl SessionHost {
         match event {
             SurfaceEvent::CloseRequested if self.shell_window_close_requested(runtime, cx, surface)? => {}
             SurfaceEvent::Destroyed if self.shell_surface_destroyed(runtime, cx, surface)? => {}
-            SurfaceEvent::CloseRequested | SurfaceEvent::Destroyed => {
+            SurfaceEvent::CloseRequested => {
+                let owner = self.sessions.values().find(|session| {
+                    session.primary().is_some_and(|primary| primary.surface == surface)
+                }).cloned();
+                let mut close_error = None;
+                let mut vetoed_primary = false;
+                runtime.surface_event_with_close_veto(
+                    cx,
+                    surface,
+                    event,
+                    || {
+                        let Some(owner) = owner.as_ref() else {
+                            return zgui::runtime::CloseResponse::Close;
+                        };
+                        match owner.request_close(surface) {
+                            Ok(true) => {
+                                vetoed_primary = true;
+                                zgui::runtime::CloseResponse::Veto
+                            }
+                            Ok(false) => zgui::runtime::CloseResponse::Close,
+                            Err(error) => {
+                                close_error = Some(error);
+                                zgui::runtime::CloseResponse::Veto
+                            }
+                        }
+                    },
+                    |runtime| {
+                        if let Some(owner) = owner.as_ref() {
+                            self.shell_windows.retire(owner, |token, id| surfaces::close_native_surface(runtime, cx, token, id));
+                        }
+                    },
+                );
+                if let Some(error) = close_error {
+                    return Err(error);
+                }
+                if vetoed_primary && let Some(window) = runtime.windows_mut().iter_mut().find(|w| w.surface().id() == surface) {
+                    window.request_frame();
+                }
+            }
+            SurfaceEvent::Destroyed => {
                 runtime.surface_event_with_close(cx, surface, event, |runtime| {
                     let owner = self.sessions.values().find(|session| {
                         session.primary().is_some_and(|primary| primary.surface == surface)
@@ -326,6 +365,22 @@ impl SessionHost {
                 runtime.surface_event(cx, surface, event);
                 for session in self.sessions.values().chain(self.pure_session.iter()) {
                     session.set_surface_occluded(surface, occluded);
+                }
+            }
+            SurfaceEvent::Resized(_) => {
+                runtime.surface_event(cx, surface, event);
+                if let Some(native) = cx.surface(surface) {
+                    let fullscreen = native.fullscreen().is_some();
+                    let maximized = native.is_maximized();
+                    let minimized = native.is_minimized();
+                    let sessions: Vec<Rc<Session>> = self.sessions().cloned().collect();
+                    for session in sessions {
+                        if session.sync_window_flags(surface, fullscreen, maximized, minimized)?
+                            && let Some(window) = runtime.windows_mut().iter_mut().find(|w| w.surface().id() == surface)
+                        {
+                            window.request_frame();
+                        }
+                    }
                 }
             }
             _ => runtime.surface_event(cx, surface, event),

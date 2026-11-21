@@ -510,7 +510,8 @@ impl Driver {
     }
 
     fn pump_application(&mut self) -> Result<(), Fault> {
-        if self.shell_capable {
+        let sync_shells = self.shell_capable || self.pipeline.app().host.has_shell_surfaces();
+        if sync_shells {
             // Wakes may open windows; bind their native configuration and evidence
             // before the harness takes its first redraw at the current clock instant.
             self.pipeline.dispatch_wakes();
@@ -519,7 +520,9 @@ impl Driver {
         }
         self.pipeline.pump();
         self.check()?;
-        if self.shell_capable { self.sync_shell_surfaces()?; }
+        if sync_shells || self.pipeline.app().host.has_shell_surfaces() {
+            self.sync_shell_surfaces()?;
+        }
         Ok(())
     }
     pub fn settle(&mut self, require_frame: bool) -> Result<Value, Fault> {

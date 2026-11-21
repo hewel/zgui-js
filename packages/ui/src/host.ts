@@ -1,9 +1,9 @@
 import { createContext, createMemo, createSignal, flush as solidFlush, getOwner, onCleanup, resetErrorHalt, runWithOwner, untrack, useContext } from "#solid";
 import type { Owner } from "#solid";
 import type {
-  CanvasScene, LayerAnchor, LayerSurfacePlacement, Monitor, NativeDismissLayerOptions, NativeDismissReason,
+  CanvasScene, CloseRequestEvent, LayerAnchor, LayerSurfacePlacement, Monitor, NativeDismissLayerOptions, NativeDismissReason,
   NativeGeometry, NativeGeometryKind, NativeNode, NativeOverlayLayer, NativeWindowRect,
-  PopupSurfacePlacement, PopupSurfaceProps, SessionLockState, WindowDecorations,
+  PopupSurfacePlacement, PopupSurfaceProps, SessionLockState, WindowDecorations, WindowState,
 } from "./types.js";
 
 export type LayerPlacement = Required<Omit<LayerSurfacePlacement, "output" | "margin">> &
@@ -63,6 +63,16 @@ export interface NativeHost {
     getSelection(node: NativeNode): { readonly start: number; readonly end: number } | null;
     setSelection(node: NativeNode, start: number, end?: number): void;
     selectAll(node: NativeNode): void;
+    setWindowTitle(title: string): void;
+    setWindowFullscreen(fullscreen: boolean): void;
+    setWindowMaximized(maximized: boolean): void;
+    setWindowMinimized(minimized: boolean): void;
+    setWindowDecorations(decorations: WindowDecorations): void;
+    beginWindowMoveDrag(): void;
+    closeWindow(force?: boolean): void;
+    getWindowState(): WindowState;
+    subscribeWindowState(callback: (state: WindowState) => void): () => void;
+    onCloseRequest(callback: (event: CloseRequestEvent) => void): () => void;
     getWindowRect(node: NativeNode): NativeWindowRect | null;
     getTextContent(node: NativeNode): string;
     isAnimating(node: NativeNode): boolean;

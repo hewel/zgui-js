@@ -1,5 +1,6 @@
-import { createEffect, createMemo, createRoot, createSignal, getOwner, onCleanup, runWithOwner } from "#solid";
+import { createEffect, createMemo, createRoot, createSignal, getOwner, onCleanup, runWithOwner, useContext } from "#solid";
 import { bridgeFor, shellBridge } from "./host.js";
+import { ThemeCssContext } from "./theme-sync.js";
 import type { LayerPlacement, NativeHost, NativeInputRegion, PopupPlacement, UiBridge, WindowOptions } from "./host.js";
 import { flush, renderRegion } from "./renderer/index.js";
 import type {
@@ -327,10 +328,19 @@ export function WindowSurface(props: WindowSurfaceProps): null {
           shell.updateWindow(id, options);
           return;
         }
+        const inheritedTheme = runWithOwner(owner, () => useContext(ThemeCssContext));
         const request = shell.openWindow(name, options, (root, bridge) => {
           if (id !== request) return () => {};
           popupParentRegions.set(bridge, { shell, name });
-          return runWithOwner(owner, () => renderRegion(() => () => props.children, root, bridge));
+          return runWithOwner(owner, () => renderRegion(() => {
+            if (inheritedTheme) {
+              createEffect(inheritedTheme, css => {
+                bridge.installStylesheet("zui-theme-inherited", css);
+              });
+              onCleanup(() => bridge.removeStylesheet("zui-theme-inherited"));
+            }
+            return () => props.children;
+          }, root, bridge));
         }, () => {
           if (id !== request) return;
           flush(() => {

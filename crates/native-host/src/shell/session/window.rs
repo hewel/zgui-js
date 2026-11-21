@@ -40,6 +40,12 @@ impl Shell {
     #[must_use]
     pub(crate) fn owns_window(&self, id: u32) -> bool { self.windows.borrow().contains_key(&id) }
 
+    /// Snapshot one desired toplevel window spec by ID, if owned.
+    #[must_use]
+    pub(crate) fn window_spec(&self, id: u32) -> Option<ShellWindowSpec> {
+        self.windows.borrow().get(&id).map(|window| window.spec.clone())
+    }
+
     /// Invoke the window close handler only if its owning declaration still exists.
     pub(crate) fn dispatch_window_close(&self, ctx: &Ctx<'_>, id: u32) -> rquickjs::Result<()> {
         let callback = self.windows.borrow().get(&id).map(|window| window.close.clone());
@@ -51,7 +57,7 @@ impl Shell {
         let weak = Rc::downgrade(self);
         api.set("openWindow", Func::from(move |ctx: Ctx<'js>, name: Value<'js>, data: Value<'js>, attach: Value<'js>, close: Value<'js>| {
             let shell = owner(&weak, &ctx)?;
-            shell.require_authority(&ctx)?;
+            shell.require_window_authority(&ctx)?;
             shell.require_creation(&ctx)?;
             let name = window_name(&ctx, &name)?;
             let spec = parse(&ctx, name, data)?;
@@ -73,7 +79,7 @@ impl Shell {
         let weak = Rc::downgrade(self);
         api.set("updateWindow", Func::from(move |ctx: Ctx<'js>, id: Value<'js>, data: Value<'js>| {
             let shell = owner(&weak, &ctx)?;
-            shell.require_authority(&ctx)?;
+            shell.require_window_authority(&ctx)?;
             shell.require_active(&ctx)?;
             let id = layer_id(&ctx, &id)?;
             let mut windows = shell.windows.borrow_mut();
@@ -91,7 +97,7 @@ impl Shell {
         let weak = Rc::downgrade(self);
         api.set("closeWindow", Func::from(move |ctx: Ctx<'js>, id: Value<'js>| {
             let shell = owner(&weak, &ctx)?;
-            shell.require_authority(&ctx)?;
+            shell.require_window_authority(&ctx)?;
             if shell.life.get() != Lifecycle::Stopping { shell.require_active(&ctx)?; }
             if shell.windows.borrow_mut().remove(&layer_id(&ctx, &id)?).is_some() { shell.changed(); }
             Ok::<(), rquickjs::Error>(())

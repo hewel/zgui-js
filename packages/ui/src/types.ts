@@ -88,6 +88,27 @@ export type PopupSurfaceProps = {
 /** Window chrome requested from the compositor for a managed toplevel window. */
 export type WindowDecorations = "full" | "none" | "no-title-bar";
 
+/** Reactive runtime state snapshot for a toplevel window (`renderApp` or `WindowSurface`). */
+export interface WindowState {
+  readonly title: string;
+  readonly fullscreen: boolean;
+  readonly maximized: boolean;
+  readonly minimized: boolean;
+  readonly decorations: WindowDecorations;
+}
+
+/** Synchronous close-request event passed to `onCloseRequest` handlers. */
+export interface CloseRequestEvent {
+  readonly defaultPrevented: boolean;
+  preventDefault(): void;
+}
+
+/** Options accepted by `closeWindow(options)`. */
+export interface CloseWindowOptions {
+  /** Bypass registered `onCloseRequest` guards and close immediately. */
+  readonly force?: boolean | undefined;
+}
+
 /** An independently mounted compositor-managed toplevel window (xdg_toplevel). */
 export interface WindowSurfaceProps {
   readonly name: string;

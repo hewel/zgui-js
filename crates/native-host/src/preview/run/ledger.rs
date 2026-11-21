@@ -41,6 +41,7 @@ impl StepDriver for Driver {
             Step::SurfaceScale{surface,scale,..}=>self.scale(surface,*scale).map(|mut trace| { trace["surface"]=json!(surface); trace }),
             Step::SurfaceColorScheme{surface,color_scheme,..}=>self.color_scheme(surface,color_scheme).map(|mut trace| { trace["surface"]=json!(surface); trace }),
             Step::SurfaceRecreate{surface,..}=>self.recreate(surface).map(|mut trace| { trace["surface"]=json!(surface); trace }),
+            Step::SurfaceCloseRequest{surface,..}=>self.close_request(surface),
             Step::MonitorsSet{monitors,..}=>self.set_monitors(monitors),
             Step::PopupDone{surface,..}=>self.popup_done(surface),
         }

@@ -126,6 +126,7 @@ enum Lifecycle { Loading, Active, Stopping }
 pub(crate) struct ShellConfig {
     pub(crate) generation: u64,
     pub(crate) authority: Authority,
+    pub(crate) window_authority: Authority,
     pub(crate) lock_authority: Authority,
     pub(crate) lock_state: SessionLockState,
     pub(crate) contract: ContractPolicy,
@@ -135,6 +136,7 @@ pub(crate) struct ShellConfig {
 pub(crate) struct Shell {
     generation: u64,
     authority: Authority,
+    window_authority: Authority,
     contract: ContractPolicy,
     failure: RefCell<Option<ContractFailure>>,
     life: Cell<Lifecycle>,
@@ -160,8 +162,8 @@ pub(crate) struct Shell {
 impl Shell {
     /// Fixes generation authority before preflight; creation opens only for mount.
     pub(crate) fn new(config: ShellConfig, waker: Arc<dyn Waker>) -> Rc<Self> {
-        let ShellConfig { generation, authority, lock_authority, lock_state, contract } = config;
-        Rc::new(Self { generation, authority, contract, failure: RefCell::new(None), life: Cell::new(Lifecycle::Loading),
+        let ShellConfig { generation, authority, window_authority, lock_authority, lock_state, contract } = config;
+        Rc::new(Self { generation, authority, window_authority, contract, failure: RefCell::new(None), life: Cell::new(Lifecycle::Loading),
             monitors: RefCell::new(Vec::new()), subscriptions: RefCell::new(BTreeMap::new()), layers: RefCell::new(BTreeMap::new()),
             popups: RefCell::new(BTreeMap::new()), windows: RefCell::new(BTreeMap::new()),
             lock_authority, lock_fenced: Cell::new(false), lock_state: Cell::new(lock_state),
@@ -308,6 +310,11 @@ impl Shell {
     fn require_authority(&self, ctx: &Ctx<'_>) -> rquickjs::Result<()> {
         if self.authority == Authority::Allowed { return Ok(()); }
         self.capability_error(ctx, "shell surfaces require capabilities.shellSurfaces")
+    }
+
+    fn require_window_authority(&self, ctx: &Ctx<'_>) -> rquickjs::Result<()> {
+        if self.window_authority == Authority::Allowed { return Ok(()); }
+        self.capability_error(ctx, "window surfaces require a primary window or capabilities.shellSurfaces")
     }
 
     fn require_lock_authority(&self, ctx: &Ctx<'_>) -> rquickjs::Result<()> {
@@ -702,6 +709,7 @@ mod tests {
         let shell = Shell::new(ShellConfig {
             generation: 1,
             authority: Authority::Denied,
+            window_authority: Authority::Denied,
             lock_authority: Authority::Allowed,
             lock_state: SessionLockState::Locked,
             contract: ContractPolicy::Sticky,
@@ -728,6 +736,7 @@ mod tests {
         let shell = Shell::new(ShellConfig {
             generation: 1,
             authority: Authority::Allowed,
+            window_authority: Authority::Allowed,
             lock_authority: Authority::Denied,
             lock_state: SessionLockState::Locked,
             contract: ContractPolicy::Throw,
@@ -788,6 +797,7 @@ mod tests {
             let shell = Shell::new(ShellConfig {
                 generation,
                 authority: Authority::Denied,
+                window_authority: Authority::Denied,
                 lock_authority: Authority::Allowed,
                 lock_state: SessionLockState::Locked,
                 contract: ContractPolicy::Throw,
@@ -830,6 +840,7 @@ mod tests {
         let shell = Shell::new(ShellConfig {
             generation: 1,
             authority: Authority::Denied,
+            window_authority: Authority::Denied,
             lock_authority: Authority::Allowed,
             lock_state: SessionLockState::Locked,
             contract: ContractPolicy::Throw,
@@ -948,6 +959,7 @@ mod tests {
         let denied = Shell::new(ShellConfig {
             generation: 1,
             authority: Authority::Denied,
+            window_authority: Authority::Denied,
             lock_authority: Authority::Denied,
             lock_state: SessionLockState::Unlocked,
             contract: ContractPolicy::Sticky,
@@ -967,6 +979,7 @@ mod tests {
         let allowed = Shell::new(ShellConfig {
             generation: 2,
             authority: Authority::Allowed,
+            window_authority: Authority::Allowed,
             lock_authority: Authority::Denied,
             lock_state: SessionLockState::Unlocked,
             contract: ContractPolicy::Throw,
@@ -1020,6 +1033,7 @@ mod tests {
         let shell = Shell::new(ShellConfig {
             generation: 1,
             authority: Authority::Allowed,
+            window_authority: Authority::Allowed,
             lock_authority: Authority::Denied,
             lock_state: SessionLockState::Unlocked,
             contract: ContractPolicy::Throw,

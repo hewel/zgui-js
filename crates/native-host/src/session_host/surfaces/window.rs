@@ -22,11 +22,110 @@ impl SessionHost {
         }
         result
     }
+
+    /// Apply queued runtime window commands for all live sessions (primary and auxiliary windows).
+    pub(crate) fn apply_window_commands(&mut self, runtime: &mut Runtime, cx: &dyn PlatformCx, images: ImageChoice) -> Result<()> {
+        use crate::session::window_control::WindowCommand;
+        use zgui::platform::FullscreenMode;
+
+        let sessions: Vec<Rc<Session>> = self.sessions().cloned().collect();
+        for session in sessions {
+            let commands = session.take_window_commands();
+            if commands.is_empty() { continue; }
+            for (surface, command) in commands {
+                match command {
+                    WindowCommand::SetTitle(title) => {
+                        if let Some(native) = cx.surface(surface) {
+                            native.set_title(&title);
+                        }
+                        if let Some(running) = self.shell_windows.windows.values_mut().find(|w| w.surface == surface) {
+                            running.spec.title = title;
+                        }
+                        if let Some(region) = session.region_for_surface(surface) {
+                            RuntimeSurface::new(runtime, cx, images).request_frame(region.region.document);
+                        }
+                    }
+                    WindowCommand::SetFullscreen(on) => {
+                        if let Some(native) = cx.surface(surface) {
+                            native.set_fullscreen(on.then_some(FullscreenMode::Borderless));
+                        }
+                        if let Some(region) = session.region_for_surface(surface) {
+                            RuntimeSurface::new(runtime, cx, images).request_frame(region.region.document);
+                        }
+                    }
+                    WindowCommand::SetMaximized(on) => {
+                        if let Some(native) = cx.surface(surface) {
+                            native.set_maximized(on);
+                        }
+                        if let Some(region) = session.region_for_surface(surface) {
+                            RuntimeSurface::new(runtime, cx, images).request_frame(region.region.document);
+                        }
+                    }
+                    WindowCommand::SetMinimized(on) => {
+                        if let Some(native) = cx.surface(surface) {
+                            native.set_minimized(on);
+                        }
+                        if let Some(region) = session.region_for_surface(surface) {
+                            RuntimeSurface::new(runtime, cx, images).request_frame(region.region.document);
+                        }
+                    }
+                    WindowCommand::SetDecorations(decorations) => {
+                        if let Some(native) = cx.surface(surface) {
+                            native.set_decorations(decorations);
+                        }
+                        if let Some(running) = self.shell_windows.windows.values_mut().find(|w| w.surface == surface) {
+                            running.spec.decorations = decorations;
+                        }
+                        if let Some(region) = session.region_for_surface(surface) {
+                            RuntimeSurface::new(runtime, cx, images).request_frame(region.region.document);
+                        }
+                    }
+                    WindowCommand::BeginMoveDrag => {
+                        if let Some(native) = cx.surface(surface) {
+                            let _ = native.begin_move_drag();
+                        }
+                        if let Some(region) = session.region_for_surface(surface) {
+                            RuntimeSurface::new(runtime, cx, images).request_frame(region.region.document);
+                        }
+                    }
+                    WindowCommand::Close { force } => {
+                        let vetoed = if force { false } else { session.request_close(surface)? };
+                        if vetoed {
+                            if let Some(region) = session.region_for_surface(surface) {
+                                RuntimeSurface::new(runtime, cx, images).request_frame(region.region.document);
+                            }
+                            continue;
+                        }
+                        if let Some((&id, _)) = self.shell_windows.windows.iter().find(|(_, w)| w.surface == surface) {
+                            self.shell_windows.dismissed_windows.insert(id);
+                            session.close_window(id, || self.shell_windows.close_window(runtime, cx, &session, id))?;
+                        } else if session.primary().is_some_and(|primary| primary.surface == surface) {
+                            self.shell_windows.retire(&session, |token, id| close_native_surface(runtime, cx, token, id));
+                            runtime.close_window_surface(cx, surface);
+                        }
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Whether any shell/auxiliary windows are live or pending reconciliation.
+    pub(crate) fn has_shell_surfaces(&self) -> bool {
+        self.shell_windows.has_windows()
+            || self.sessions().any(|session| session.shell.is_dirty() || session.has_window_commands())
+    }
 }
 
 impl ShellWindows {
     fn window_close_requested(&mut self, runtime: &mut Runtime, cx: &dyn PlatformCx, session: &Session, surface: SurfaceId) -> Result<bool> {
         let Some((&id, _)) = self.windows.iter().find(|(_, window)| window.surface == surface) else { return Ok(false); };
+        if session.request_close(surface)? {
+            if let Some(window) = runtime.windows_mut().iter_mut().find(|w| w.surface().id() == surface) {
+                window.request_frame();
+            }
+            return Ok(true);
+        }
         self.dismissed_windows.insert(id);
         session.close_window(id, || self.close_window(runtime, cx, session, id))?;
         Ok(true)

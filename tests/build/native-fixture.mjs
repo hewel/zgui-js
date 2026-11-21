@@ -162,6 +162,33 @@ export function createHost({ strictStyles = false, reducedMotion = false, monito
   const traps = [];
   const locks = [];
   const scrollCommands = [];
+  const windowCommands = [];
+  const regionWindows = new WeakMap();
+  const windowStateFor = region => {
+    if (!regionWindows.has(region)) {
+      regionWindows.set(region, {
+        state: { title: "zgui-js", fullscreen: false, maximized: false, minimized: false, decorations: "full" },
+        stateSubscribers: new Set(),
+        closeHandlers: new Set(),
+        closed: false,
+      });
+    }
+    return regionWindows.get(region);
+  };
+  const notifyWindowState = win => {
+    const snapshot = { ...win.state };
+    for (const cb of [...win.stateSubscribers]) cb(snapshot);
+  };
+  const runCloseHandlers = region => {
+    const win = windowStateFor(region);
+    let prevented = false;
+    const event = {
+      get defaultPrevented() { return prevented; },
+      preventDefault() { prevented = true; },
+    };
+    for (const handler of [...win.closeHandlers]) handler(event);
+    return prevented;
+  };
   const selections = new Map();
   const editableTextOf = node => {
     const value = node.props.get("value");
@@ -619,6 +646,72 @@ export function createHost({ strictStyles = false, reducedMotion = false, monito
       const text = editableTextOf(node);
       selections.set(node, { start: 0, end: text.length });
     },
+    setWindowTitle: title => {
+      assertActiveHost("setWindowTitle");
+      if (typeof title !== "string") throw new TypeError("window title must be a string");
+      const win = windowStateFor(region);
+      win.state = { ...win.state, title };
+      windowCommands.push({ op: "setWindowTitle", region, title });
+      notifyWindowState(win);
+    },
+    setWindowFullscreen: fullscreen => {
+      assertActiveHost("setWindowFullscreen");
+      if (typeof fullscreen !== "boolean") throw new TypeError("fullscreen must be a boolean");
+      const win = windowStateFor(region);
+      win.state = { ...win.state, fullscreen };
+      windowCommands.push({ op: "setWindowFullscreen", region, fullscreen });
+      notifyWindowState(win);
+    },
+    setWindowMaximized: maximized => {
+      assertActiveHost("setWindowMaximized");
+      if (typeof maximized !== "boolean") throw new TypeError("maximized must be a boolean");
+      const win = windowStateFor(region);
+      win.state = { ...win.state, maximized };
+      windowCommands.push({ op: "setWindowMaximized", region, maximized });
+      notifyWindowState(win);
+    },
+    setWindowMinimized: minimized => {
+      assertActiveHost("setWindowMinimized");
+      if (typeof minimized !== "boolean") throw new TypeError("minimized must be a boolean");
+      const win = windowStateFor(region);
+      win.state = { ...win.state, minimized };
+      windowCommands.push({ op: "setWindowMinimized", region, minimized });
+      notifyWindowState(win);
+    },
+    setWindowDecorations: decorations => {
+      assertActiveHost("setWindowDecorations");
+      if (decorations !== "full" && decorations !== "none" && decorations !== "no-title-bar") {
+        throw new TypeError("invalid window decorations");
+      }
+      const win = windowStateFor(region);
+      win.state = { ...win.state, decorations };
+      windowCommands.push({ op: "setWindowDecorations", region, decorations });
+      notifyWindowState(win);
+    },
+    beginWindowMoveDrag: () => {
+      assertActiveHost("beginWindowMoveDrag");
+      windowCommands.push({ op: "beginWindowMoveDrag", region });
+    },
+    closeWindow: (force = false) => {
+      assertActiveHost("closeWindow");
+      const win = windowStateFor(region);
+      windowCommands.push({ op: "closeWindow", region, force: Boolean(force) });
+      if (!force && runCloseHandlers(region)) return;
+      win.closed = true;
+    },
+    getWindowState: () => ({ ...windowStateFor(region).state }),
+    subscribeWindowState: callback => {
+      assertActiveHost("subscribeWindowState");
+      const win = windowStateFor(region);
+      win.stateSubscribers.add(callback);
+      return () => { win.stateSubscribers.delete(callback); };
+    },
+    onCloseRequest: callback => {
+      assertActiveHost("onCloseRequest");
+      const win = windowStateFor(region);
+      win.closeHandlers.add(callback);
+      return () => { win.closeHandlers.delete(callback); };
+    },
     getWindowRect: node => {
       assertLive(node, "rect target", region);
       queries.rect.push(node);
@@ -1008,6 +1101,19 @@ export function createHost({ strictStyles = false, reducedMotion = false, monito
       });
     },
   };
+  const requestClose = (name = "main") => {
+    if (name === "main") {
+      const vetoed = runTurn(() => runCloseHandlers(primary), false);
+      if (!vetoed) windowStateFor(primary).closed = true;
+      return !vetoed;
+    }
+    const surface = surfaces.get(name);
+    if (!surface?.window || surface.closing) throw new ReferenceError(`no live window named ${name}`);
+    const vetoed = runTurn(() => runCloseHandlers(surface.region), false);
+    if (vetoed) return false;
+    windowClose(name);
+    return true;
+  };
   const windowClose = name => {
     const surface = surfaces.get(name);
     if (!surface?.window || surface.closing) throw new ReferenceError(`no live window named ${name}`);
@@ -1080,7 +1186,9 @@ export function createHost({ strictStyles = false, reducedMotion = false, monito
 
   return {
     host, nodes, parents, stylesheets, installs, makeNode, byTestId, focused, rects, texts,
-    shell, surfaces, shellLog, emitMonitors, emitReducedMotion, monitorSubscribers, popupDone, windowClose,
+    shell, surfaces, shellLog, emitMonitors, emitReducedMotion, monitorSubscribers, popupDone, windowClose, requestClose,
+    windowCommands, windowState: (name = "main") => ({ ...windowStateFor(name === "main" ? primary : surfaces.get(name)?.region).state }),
+    windowClosed: (name = "main") => windowStateFor(name === "main" ? primary : surfaces.get(name)?.region).closed,
     sessionLockState: () => lockState, sessionLockLog,
     animating, animatingQueries, queries, portals, traps, locks, scrollCommands, layers, geometry,
     canvasScenes,

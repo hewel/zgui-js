@@ -45,6 +45,7 @@ pub enum Step {
     SurfaceScale { id: String, surface: String, scale: f64 },
     SurfaceColorScheme { id: String, surface: String, color_scheme: String },
     SurfaceRecreate { id: String, surface: String },
+    SurfaceCloseRequest { id: String, surface: String },
     MonitorsSet { id: String, monitors: Vec<Monitor> },
     PopupDone { id: String, surface: String },
 }
@@ -60,7 +61,7 @@ impl Step {
             | Self::Assert { id, .. } | Self::AssertService { id, .. }
             | Self::ClockAdvance { id, .. } | Self::ServiceEmit { id, .. }
             | Self::SurfaceResize { id, .. } | Self::SurfaceScale { id, .. } | Self::SurfaceColorScheme { id, .. }
-            | Self::SurfaceRecreate { id, .. } | Self::MonitorsSet { id, .. } | Self::PopupDone { id, .. } => id,
+            | Self::SurfaceRecreate { id, .. } | Self::SurfaceCloseRequest { id, .. } | Self::MonitorsSet { id, .. } | Self::PopupDone { id, .. } => id,
         }
     }
 
@@ -83,6 +84,7 @@ impl Step {
             Self::SurfaceScale { .. } => "surface.scale",
             Self::SurfaceColorScheme { .. } => "surface.colorScheme",
             Self::SurfaceRecreate { .. } => "surface.recreate",
+            Self::SurfaceCloseRequest { .. } => "surface.closeRequest",
             Self::MonitorsSet { .. } => "monitors.set",
             Self::PopupDone { .. } => "popupDone",
         }
@@ -269,6 +271,8 @@ enum StepInput {
     SurfaceColorScheme(ColorSchemeInput),
     #[serde(rename = "surface.recreate")]
     SurfaceRecreate(NamedSurfaceInput),
+    #[serde(rename = "surface.closeRequest")]
+    SurfaceCloseRequest(NamedSurfaceInput),
     #[serde(rename = "monitors.set")]
     MonitorsSet(MonitorsInput),
     #[serde(rename = "popupDone")]
@@ -604,6 +608,10 @@ fn parse(bytes: &[u8], available: &[&str], virtual_profile: bool) -> Result<Scen
                 require(&mut requirements,"surface.recreate");
                 Step::SurfaceRecreate{id:input.id,surface:input.surface}
             }
+            StepInput::SurfaceCloseRequest(input) => {
+                validate_surface(&input.surface, &mut requirements)?;
+                Step::SurfaceCloseRequest { id: input.id, surface: input.surface }
+            }
             StepInput::MonitorsSet(input) => {
                 validate_monitors(&input.monitors)?;
                 require(&mut requirements, "surface.multiple");
@@ -642,7 +650,7 @@ fn parse(bytes: &[u8], available: &[&str], virtual_profile: bool) -> Result<Scen
                     | StepInput::Wheel(_) | StepInput::MonitorsSet(_) | StepInput::PopupDone(_)
                     | StepInput::KeyPress(_) | StepInput::TextCommit(_)
                     | StepInput::Assert(_) | StepInput::ClockAdvance(_) | StepInput::ServiceEmit(_)
-                    | StepInput::SurfaceResize(_) | StepInput::SurfaceScale(_) | StepInput::SurfaceRecreate(_) | StepInput::SurfaceColorScheme(_) => unreachable!(),
+                    | StepInput::SurfaceResize(_) | StepInput::SurfaceScale(_) | StepInput::SurfaceRecreate(_) | StepInput::SurfaceCloseRequest(_) | StepInput::SurfaceColorScheme(_) => unreachable!(),
                 };
                 return Err(unsupported_capability(format!("operation {operation} is unavailable")));
             }

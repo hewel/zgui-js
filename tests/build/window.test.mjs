@@ -153,3 +153,138 @@ test("WindowSurface opens, updates in place, hosts node-anchored auto-height pop
   stop();
   assert.equal(harness.surfaces.size, 0);
 });
+
+const appWindowControlsFixture = `
+import {
+  Show,
+  WindowSurface,
+  beginWindowMoveDrag,
+  closeWindow,
+  createSignal,
+  getWindowState,
+  onCloseRequest,
+  renderApp,
+  setWindowDecorations,
+  setWindowFullscreen,
+  setWindowMaximized,
+  setWindowMinimized,
+  setWindowTitle,
+  useWindowState,
+} from "@hewel/zgui";
+import { ThemeProvider } from "@hewel/zgui/components";
+
+const [dirty, setDirty] = createSignal(true);
+const [confirmOpen, setConfirmOpen] = createSignal(false);
+const [prefsOpen, setPrefsOpen] = createSignal(false);
+const [prefsDirty, setPrefsDirty] = createSignal(true);
+const [scheme, setScheme] = createSignal("dark");
+export const log = [];
+
+export { setDirty, setPrefsOpen, setPrefsDirty, setScheme };
+export function updatePrimary() {
+  setWindowTitle("Studio — Untitled*");
+  setWindowFullscreen(true);
+  setWindowMaximized(true);
+  setWindowMinimized(false);
+  setWindowDecorations("no-title-bar");
+  beginWindowMoveDrag();
+}
+export function forceClosePrimary() {
+  closeWindow({ force: true });
+}
+export function readPrimaryState() {
+  return getWindowState();
+}
+
+export function mount(root) {
+  return renderApp(() => {
+    const winState = useWindowState();
+    onCloseRequest(event => {
+      log.push("primary-close-req");
+      if (dirty()) {
+        event.preventDefault();
+        setConfirmOpen(true);
+      }
+    });
+    return (
+      <ThemeProvider scheme={scheme()}>
+        <column testId="app-root">
+          <text testId="win-title">{winState().title}</text>
+          <text testId="confirm-state">{confirmOpen() ? "confirm-open" : "confirm-closed"}</text>
+          <Show when={prefsOpen()}>
+            <WindowSurface name="prefs" title="Preferences" width={420} height={300} onClose={() => log.push("prefs-closed")}>
+              {(() => {
+                onCloseRequest(event => {
+                  log.push("prefs-close-req");
+                  if (prefsDirty()) event.preventDefault();
+                });
+                return <text testId="prefs-content">Prefs</text>;
+              })()}
+            </WindowSurface>
+          </Show>
+        </column>
+      </ThemeProvider>
+    );
+  }, root);
+}
+`;
+
+test("renderApp primary window controls, close veto, force close, and auxiliary WindowSurface theme sync (#58)", async t => {
+  const harness = createHost();
+  const mod = await moduleFor(t, appWindowControlsFixture);
+  globalThis.__zgui = harness.host;
+  globalThis.__zguiShell = harness.shell;
+  let stop;
+  t.after(() => {
+    try { stop?.(); }
+    finally {
+      delete globalThis.__zgui;
+      delete globalThis.__zguiShell;
+    }
+  });
+
+  stop = harness.runTurn(() => mod.mount(harness.makeNode("root")));
+
+  // Runtime window controls update state reactively and enqueue commands.
+  harness.runTurn(() => mod.updatePrimary());
+  assert.equal(harness.host.getTextContent(harness.byTestId("win-title")), "Studio — Untitled*");
+  assert.deepEqual(mod.readPrimaryState(), {
+    title: "Studio — Untitled*",
+    fullscreen: true,
+    maximized: true,
+    minimized: false,
+    decorations: "no-title-bar",
+  });
+  assert.ok(harness.windowCommands.some(c => c.op === "beginWindowMoveDrag"));
+
+  // Synchronous onCloseRequest vetoes close and opens confirmation state.
+  assert.equal(harness.requestClose("main"), false, "dirty guard vetoes primary close");
+  assert.equal(harness.windowClosed("main"), false);
+  assert.equal(harness.host.getTextContent(harness.byTestId("confirm-state")), "confirm-open");
+
+  // Auxiliary WindowSurface inside renderApp inherits ThemeProvider tokens & has its own close veto.
+  harness.runTurn(() => mod.setPrefsOpen(true));
+  harness.flush();
+  const prefs = harness.surfaces.get("prefs");
+  assert.ok(prefs, "auxiliary WindowSurface opens inside renderApp");
+  assert.ok(prefs.region.stylesheets.has("zui-theme-inherited"), "WindowSurface inherits ThemeProvider stylesheet");
+  const darkThemeCss = prefs.region.stylesheets.get("zui-theme-inherited");
+  harness.runTurn(() => mod.setScheme("light"));
+  harness.flush();
+  assert.notEqual(prefs.region.stylesheets.get("zui-theme-inherited"), darkThemeCss, "theme updates propagate live to WindowSurface");
+
+  assert.equal(harness.requestClose("prefs"), false, "WindowSurface onCloseRequest vetoes close");
+  assert.ok(harness.surfaces.has("prefs"), "vetoed WindowSurface stays open");
+
+  harness.runTurn(() => mod.setPrefsDirty(false));
+  assert.equal(harness.requestClose("prefs"), true, "unvetoed WindowSurface closes");
+  harness.flush();
+  assert.equal(harness.surfaces.has("prefs"), false);
+  assert.ok(mod.log.includes("prefs-closed"));
+
+  // Force close bypasses primary close guard.
+  harness.runTurn(() => mod.forceClosePrimary());
+  assert.equal(harness.windowClosed("main"), true);
+  stop();
+  stop = undefined;
+});

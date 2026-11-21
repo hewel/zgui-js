@@ -430,3 +430,13 @@ Regression gate:
 Regression gate:
 
     cargo test -j 4 --manifest-path vendor/zgui-runtime/Cargo.toml --offline && cargo test -j 4 -p ui-bridge --offline
+
+## Window state tracking & synchronous close-veto hook
+
+`zgui-platform-headless` extends `OffscreenSurface` to record `set_decorations`, `set_maximized`/`is_maximized`, `set_minimized`/`is_minimized`, `set_fullscreen`/`fullscreen`, and `begin_move_drag` (`move_drag_count`) so headless preview scenarios can assert runtime window control changes deterministically.
+
+`zgui-runtime` adds `Runtime::surface_event_with_close_veto` (wiring an external synchronous `CloseResponse::Veto` check into `SurfaceEvent::CloseRequested`) and `Runtime::close_window_surface` (closing a live window by `SurfaceId` and applying exit policy for forced closes).
+
+Regression gate:
+
+    bun run test:vendor zgui-platform-headless && bun run test:vendor zgui-runtime

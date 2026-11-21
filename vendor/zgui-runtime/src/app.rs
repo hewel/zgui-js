@@ -764,6 +764,19 @@ impl Runtime {
         event: SurfaceEvent,
         before_close: impl FnOnce(&mut Self),
     ) {
+        self.surface_event_with_close_veto(cx, surface, event, || CloseResponse::Close, before_close);
+    }
+
+    /// Delivers a surface event with an external synchronous close-veto check wired into
+    /// [`CloseResponse`] alongside the window's own close callbacks.
+    pub fn surface_event_with_close_veto(
+        &mut self,
+        cx: &dyn PlatformCx,
+        surface: SurfaceId,
+        event: SurfaceEvent,
+        veto: impl FnOnce() -> CloseResponse,
+        before_close: impl FnOnce(&mut Self),
+    ) {
         let mut fired = Vec::new();
         match event {
             SurfaceEvent::RedrawRequested => {
@@ -804,7 +817,7 @@ impl Runtime {
             SurfaceEvent::CloseRequested => {
                 // The user asking, which is the one close an application may refuse. Whatever
                 // refuses owes the user another way out.
-                let vetoed = self.live_for_surface(surface).is_some_and(|index| {
+                let mut vetoed = self.live_for_surface(surface).is_some_and(|index| {
                     let callbacks = Rc::clone(&self.live[index].spec.close);
                     let asked = self.scope.with(|| {
                         // As a listener's body is: a callback that reads a signal is reading it,
@@ -814,6 +827,9 @@ impl Runtime {
                     });
                     asked == CloseResponse::Veto
                 });
+                if !vetoed && veto() == CloseResponse::Veto {
+                    vetoed = true;
+                }
                 if !vetoed {
                     before_close(self);
                     self.close_window(cx, surface);
@@ -874,6 +890,16 @@ impl Runtime {
         let token = self.commands.mint();
         self.open_named_surface(cx, token, Box::new(spec))?;
         Ok(token)
+    }
+
+    /// Closes a live window by its platform [`SurfaceId`] and applies the runtime exit policy.
+    pub fn close_window_surface(&mut self, cx: &dyn PlatformCx, surface: SurfaceId) -> bool {
+        if self.live_for_surface(surface).is_none() {
+            return false;
+        }
+        self.close_window(cx, surface);
+        self.apply_exit_policy(cx);
+        true
     }
 
     /// Closes this window and its pop-up descendants, even if its own surface is suspended.

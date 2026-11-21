@@ -4,8 +4,10 @@ import {
   merge, omit, onCleanup, onSettled, reconcile, renderApp, renderShell, untrack, useContext, useMonitors,
   focus, getReducedMotion, getSelection, getTextContent, getWindowRect, isAnimating, lockScroll, mountStylesheet, observeGeometry, precedes, registerDismissLayer, scrollBy, scrollIntoView, scrollTo, selectAll, setReducedMotion, setSelection, trapFocus,
   SessionLockSurface, WindowSurface, VirtualGrid, VirtualList, getSessionGeneration, requestSessionLock,
+  beginWindowMoveDrag, closeWindow, getWindowState, onCloseRequest, setWindowDecorations,
+  setWindowFullscreen, setWindowMaximized, setWindowMinimized, setWindowTitle, useWindowState,
 } from "@hewel/zgui";
-import type { CanvasCommand, CanvasScene, CanvasTransform, Component, Context, NativeAnimationEvent, NativeChild, NativeContextMenuEvent, NativeFocusOptions, NativeNode, NativePointerBoundaryEvent, NativeRole, NativeTextControlProps, NativeTransitionEvent, NativeViewport, NativeWheelEvent, NativeWindowRect, ParentComponent, ScrollIntoViewOptions, ScrollToOptions, Spring, SpringOptions, TextFieldProps, TextAreaProps, TextSelectionRange, VectorProps, VirtualListController, WindowDecorations } from "@hewel/zgui";
+import type { CanvasCommand, CanvasScene, CanvasTransform, CloseRequestEvent, CloseWindowOptions, Component, Context, NativeAnimationEvent, NativeChild, NativeContextMenuEvent, NativeFocusOptions, NativeNode, NativePointerBoundaryEvent, NativeRole, NativeTextControlProps, NativeTransitionEvent, NativeViewport, NativeWheelEvent, NativeWindowRect, ParentComponent, ScrollIntoViewOptions, ScrollToOptions, Spring, SpringOptions, TextFieldProps, TextAreaProps, TextSelectionRange, VectorProps, VirtualListController, WindowDecorations, WindowState } from "@hewel/zgui";
 import type { Accessor } from "@hewel/zgui";
 import type { SessionLockRequest, SessionLockState } from "@hewel/zgui";
 
@@ -292,7 +294,22 @@ const currentSel: TextSelectionRange | null = getSelection(refNode);
 setSelection(refNode, 0);
 setSelection(refNode, 1, 3);
 selectAll(refNode);
-void currentSel;
+setWindowTitle("Studio");
+setWindowFullscreen(true);
+setWindowMaximized(false);
+setWindowMinimized(false);
+setWindowDecorations("no-title-bar");
+beginWindowMoveDrag();
+const closeOpts: CloseWindowOptions = { force: true };
+closeWindow(closeOpts);
+closeWindow();
+const winSnap: WindowState = getWindowState();
+const winAccessor: Accessor<WindowState> = useWindowState();
+const stopCloseGuard = onCloseRequest((event: CloseRequestEvent) => {
+  if (!event.defaultPrevented) event.preventDefault();
+});
+stopCloseGuard();
+void [currentSel, winSnap, winAccessor];
 void <scroll ref={setRefNode} />;
 void [isDelayPending, reactiveSpring];
 void borrowed;

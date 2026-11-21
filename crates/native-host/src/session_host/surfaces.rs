@@ -105,8 +105,18 @@ impl SessionHost {
         let result = self.step_shell(runtime, cx, images, &session);
         if result.is_err() {
             self.shell_windows.retire(&session, |token, id| close_native_surface(runtime, cx, token, id));
+            return result;
         }
-        result
+        self.apply_window_commands(runtime, cx, images)?;
+        // A runtime command may have opened/closed an auxiliary window; settle if dirty.
+        if session.shell.is_dirty() {
+            let result = self.step_shell(runtime, cx, images, &session);
+            if result.is_err() {
+                self.shell_windows.retire(&session, |token, id| close_native_surface(runtime, cx, token, id));
+            }
+            return result;
+        }
+        Ok(())
     }
 
     fn step_shell(&mut self, runtime: &mut Runtime, cx: &dyn PlatformCx, images: ImageChoice, session: &Rc<Session>) -> Result<()> {

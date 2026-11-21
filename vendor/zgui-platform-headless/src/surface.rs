@@ -156,6 +156,16 @@ pub struct OffscreenSurface {
     popup_dismissed: AtomicBool,
     /// The input region to use when routing scripted pointer input.
     input_region: Mutex<InputRegion>,
+    /// Last requested window decorations.
+    decorations: Mutex<Decorations>,
+    /// Last requested maximized flag.
+    maximized: AtomicBool,
+    /// Last requested minimized flag.
+    minimized: AtomicBool,
+    /// Last requested fullscreen mode.
+    fullscreen: Mutex<Option<FullscreenMode>>,
+    /// Number of platform move drags initiated on this surface.
+    move_drags: AtomicU64,
 }
 
 impl OffscreenSurface {
@@ -178,6 +188,11 @@ impl OffscreenSurface {
             requested_attributes: Mutex::new(SurfaceAttributes::default()),
             popup_dismissed: AtomicBool::new(false),
             input_region: Mutex::new(InputRegion::Full),
+            decorations: Mutex::new(Decorations::Full),
+            maximized: AtomicBool::new(false),
+            minimized: AtomicBool::new(false),
+            fullscreen: Mutex::new(None),
+            move_drags: AtomicU64::new(0),
         }
     }
 
@@ -231,9 +246,25 @@ impl OffscreenSurface {
     /// Records what the surface was asked to be.
     pub fn set_requested_attributes(&self, attributes: &SurfaceAttributes) {
         *self
+            .decorations
+            .lock()
+            .expect("the decorations are not poisoned") = attributes.decorations;
+        *self
             .requested_attributes
             .lock()
             .expect("the attributes are not poisoned") = attributes.clone();
+    }
+
+    /// Last requested window decorations.
+    #[must_use]
+    pub fn decorations(&self) -> Decorations {
+        *self.decorations.lock().expect("the decorations are not poisoned")
+    }
+
+    /// How many times `begin_move_drag` was invoked on this surface.
+    #[must_use]
+    pub fn move_drag_count(&self) -> u64 {
+        self.move_drags.load(Ordering::Relaxed)
     }
 
     /// What the surface was most recently asked to be.
@@ -485,15 +516,49 @@ impl Surface for OffscreenSurface {
         }
     }
 
-    fn set_decorations(&self, _decorations: Decorations) {}
+    fn set_decorations(&self, decorations: Decorations) {
+        *self.decorations.lock().expect("the decorations are not poisoned") = decorations;
+        self.requested_attributes
+            .lock()
+            .expect("the attributes are not poisoned")
+            .decorations = decorations;
+    }
 
-    fn set_resizable(&self, _resizable: bool) {}
+    fn set_resizable(&self, resizable: bool) {
+        self.requested_attributes
+            .lock()
+            .expect("the attributes are not poisoned")
+            .resizable = resizable;
+    }
 
-    fn set_maximized(&self, _maximized: bool) {}
+    fn set_maximized(&self, maximized: bool) {
+        self.maximized.store(maximized, Ordering::Relaxed);
+    }
 
-    fn set_minimized(&self, _minimized: bool) {}
+    fn is_maximized(&self) -> bool {
+        self.maximized.load(Ordering::Relaxed)
+    }
 
-    fn set_fullscreen(&self, _mode: Option<FullscreenMode>) {}
+    fn set_minimized(&self, minimized: bool) {
+        self.minimized.store(minimized, Ordering::Relaxed);
+    }
+
+    fn is_minimized(&self) -> Option<bool> {
+        Some(self.minimized.load(Ordering::Relaxed))
+    }
+
+    fn set_fullscreen(&self, mode: Option<FullscreenMode>) {
+        *self.fullscreen.lock().expect("the fullscreen state is not poisoned") = mode;
+    }
+
+    fn fullscreen(&self) -> Option<FullscreenMode> {
+        *self.fullscreen.lock().expect("the fullscreen state is not poisoned")
+    }
+
+    fn begin_move_drag(&self) -> Result<(), Unsupported> {
+        self.move_drags.fetch_add(1, Ordering::Relaxed);
+        Ok(())
+    }
 
     fn set_cursor(&self, cursor: CursorStyle) {
         self.cursor_log

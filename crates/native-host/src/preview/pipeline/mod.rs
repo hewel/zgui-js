@@ -731,6 +731,17 @@ impl ObserverInner {
         ] {
             extra.insert(key.to_owned(), value);
         }
+        if let Some(surface) = data.surface.as_ref() {
+            use zgui::platform::Surface as _;
+            extra.insert("window".into(), json!({
+                "title": surface.title(),
+                "fullscreen": surface.fullscreen().is_some(),
+                "maximized": surface.is_maximized(),
+                "minimized": surface.is_minimized().unwrap_or(false),
+                "decorations": crate::session::window_control::decorations_str(surface.decorations()),
+                "moveDragCount": surface.move_drag_count(),
+            }));
+        }
         if self.context.multiple {
             tree.extra.insert("checkpointSequence".into(), json!(sequence));
             extra.insert("checkpointSequence".into(), json!(sequence));

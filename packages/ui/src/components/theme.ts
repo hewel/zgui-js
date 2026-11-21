@@ -1,7 +1,8 @@
-import { createContext, createUniqueId, onCleanup, useContext } from "#solid";
+import { createContext, createMemo, createUniqueId, onCleanup, useContext } from "#solid";
 import { createElement, effect, insertNode, setProp, spread } from "../renderer/index.js";
 import { getReducedMotion } from "../nodes.js";
 import { bridgeFor } from "../host.js";
+import { ThemeCssContext } from "../theme-sync.js";
 import type { Accessor, NativeChild, NativeNode } from "../types.js";
 import { provide, slot } from "./shared.js";
 import { themes, themeTokens } from "./generated/themes.js";
@@ -108,6 +109,9 @@ export function ThemeProvider(props: ThemeProviderProps = {}): NativeChild {
   const wrapper: NativeNode = createElement("box");
   const bridge = bridgeFor(wrapper);
   spread(wrapper, { __zguiClass: id, __zguiInvariantStyle: { display: "contents" } }, true);
+  const inheritedRootCss = createMemo(() =>
+    `@layer zgui.tokens { ${themeSheet(":root", context.light(), context.dark(), context.scheme(), getReducedMotion())} }`,
+  );
   effect(
     () => [context.light(), context.dark(), context.scheme(), getReducedMotion()] as const,
     ([light, dark, scheme, reducedMotion]) => {
@@ -115,6 +119,6 @@ export function ThemeProvider(props: ThemeProviderProps = {}): NativeChild {
     },
   );
   onCleanup(() => bridge.removeStylesheet(sheetName));
-  slot(wrapper, provide(Internal, context, props));
+  slot(wrapper, provide(Internal, context, () => provide(ThemeCssContext, inheritedRootCss, props)));
   return wrapper;
 }

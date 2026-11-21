@@ -1,3 +1,5 @@
+pub(crate) mod window_control;
+
 use std::{cell::{Cell, RefCell}, collections::BTreeMap, rc::{Rc, Weak}, sync::Arc, time::{Duration, Instant}};
 use js_runtime::{JsRuntime, RejectionPolicy, RuntimeLimits};
 use rquickjs::{Exception, Function, Persistent};
@@ -5,6 +7,7 @@ use ui_bridge::{BridgeGroup, BridgeStep, DispatchOutcome, HostPort, UiBridge, re
 use zgui::{app::Fonts, platform::{SessionLockState, Surface, SurfaceId, WakeReason, Waker}, runtime::{AppTimers, ImageBlobs}, view::DocumentId};
 use crate::{assets::{AssetSource, ContractFailure, MAX_SAFE_ID}, environment::Environment, session_host::MountRegion, package::Package, shell::{Authority, ContractPolicy, Monitor, Shell, ShellConfig}, work::{Arguments, Work, WorkSession}};
 use crate::runtime_capabilities::ResolvedCapabilities;
+use window_control::{WindowCommand, WindowControls, WindowState};
 
 /// Typed session failure: engine diagnostics, sticky provider contracts, and
 /// host invariants keep distinct categories through recovery classification.
@@ -299,6 +302,7 @@ pub(crate) struct Session {
     shell_surfaces: Cell<usize>,
     bridges: Rc<BridgeGroup>,
     pub(crate) shell: Rc<Shell>,
+    window_controls: Rc<WindowControls>,
     work: Rc<Work>,
     engine: RefCell<Option<JsRuntime>>,
     font_leases: RefCell<Vec<zgui::app::fonts::FontLease>>,
@@ -379,17 +383,33 @@ impl Session {
             } else {
                 Authority::Denied
             };
+            let window_authority = if matches!(startup, Startup::Primary { .. }) || module.shell_authority() == Authority::Allowed {
+                Authority::Allowed
+            } else {
+                Authority::Denied
+            };
             let shell = Shell::new(ShellConfig {
                 generation,
                 authority: module.shell_authority(),
+                window_authority,
                 lock_authority,
                 lock_state: policy.session_lock.unwrap_or_default(),
                 contract,
             }, waker.clone());
+            let window_controls = WindowControls::new(waker.clone());
             let work_session = WorkSession { package: module.as_package().cloned(), generation, assets: policy.assets.clone(), resolved };
             let initial_reduced_motion = policy.reduced_motion.unwrap_or(false);
             let (primary, work) = match startup {
                 Startup::Primary { region, surface } => {
+                    let initial_title = module
+                        .as_package()
+                        .and_then(|pkg| pkg.manifest.window.as_ref())
+                        .and_then(|win| win.title.clone())
+                        .unwrap_or_else(|| "zgui-js".into());
+                    window_controls.seed_surface(surface, WindowState {
+                        title: initial_title,
+                        ..WindowState::default()
+                    });
                     let work = Work::new(work_session, region.host.clone(), surface, waker.clone());
                     let options = ui_bridge::BridgeOptions { strict_styles: policy.strict_rejections, reduced_motion: initial_reduced_motion, defer_stylesheet_install: true };
                     let region = Rc::new(Self::build_region(region, "main".into(), surface, generation, options, waker.clone(), weak.clone()));
@@ -400,7 +420,7 @@ impl Session {
             };
             work.guard_cleanup_with(shell.clone());
             Self {
-                disposer: RefCell::new(None), primary, layers: RefCell::new(BTreeMap::new()), bridges, shell, work, engine: RefCell::new(None),
+                disposer: RefCell::new(None), primary, layers: RefCell::new(BTreeMap::new()), bridges, shell, window_controls, work, engine: RefCell::new(None),
                 shell_surfaces: Cell::new(0), retirement_reported: Cell::new(false),
                 shell_stylesheets: RefCell::new(Vec::new()),
                 telemetry: Cell::new(None), shutdown_started: Cell::new(false),
@@ -420,6 +440,7 @@ impl Session {
             if let Some(primary) = &session.primary {
                 let api = primary.bridge.api(&ctx)?;
                 session.work.install_region_frame_api(&api, primary.region.host.clone())?;
+                session.window_controls.install_region_window_api(&api, primary.surface, true)?;
                 ctx.globals().set("__zgui", api)?;
                 ctx.globals().set("mountRoot", primary.bridge.root(&ctx)?)?;
             }
@@ -627,12 +648,21 @@ impl Session {
         for (name, css) in self.shell_stylesheets.borrow().iter() {
             owned.region.host.install_stylesheet(name, css);
         }
+        let is_window = self.shell.owns_window(id);
+        if let Some(spec) = self.shell.window_spec(id) {
+            self.window_controls.seed_surface(surface, WindowState {
+                title: spec.title,
+                decorations: spec.decorations,
+                ..WindowState::default()
+            });
+        }
         let mut engine = self.engine.borrow_mut();
         let engine = engine.as_mut().ok_or("session disposed")?;
         let result = self.bridges.run(engine.turn(), |js| js.with_context(|ctx| {
             let callback = attach.restore(&ctx)?;
             let api = owned.bridge.api(&ctx)?;
             self.work.install_region_frame_api(&api, owned.region.host.clone())?;
+            self.window_controls.install_region_window_api(&api, surface, is_window)?;
             let disposer = owned.bridge.mount_shell_region_with_api(&ctx, &callback, api)?;
             Ok(Persistent::save(&ctx, disposer))
         }));
@@ -653,6 +683,57 @@ impl Session {
 
     pub(crate) fn shell_surface_closed(&self) { self.shell_surfaces.set(self.shell_surfaces.get() - 1); }
 
+    /// Look up the mounted region (primary or shell surface) matching `surface`.
+    pub(crate) fn region_for_surface(&self, surface: SurfaceId) -> Option<Rc<SessionRegion>> {
+        if let Some(primary) = &self.primary && primary.surface == surface {
+            return Some(primary.clone());
+        }
+        self.layers.borrow().values().find(|owned| owned.surface == surface).cloned()
+    }
+
+    /// Invoke registered synchronous `onCloseRequest` guards for `surface`.
+    /// Returns `Ok(true)` if any guard called `event.preventDefault()` (vetoing close).
+    pub(crate) fn request_close(&self, surface: SurfaceId) -> Result<bool> {
+        if self.shutdown_started.get() {
+            return Ok(false);
+        }
+        let mut engine = self.engine.borrow_mut();
+        let engine = engine.as_mut().ok_or("session disposed")?;
+        let result = self.bridges.run(engine.turn(), |js| js.with_context(|ctx| {
+            self.window_controls.dispatch_close_request(&ctx, surface)
+        }));
+        self.mark_reported(self.check_contract())?;
+        result.map_err(|error| self.diagnostic(error).into())
+    }
+
+    /// Synchronize platform-observed fullscreen/maximized/minimized state into JS subscribers.
+    pub(crate) fn sync_window_flags(
+        &self,
+        surface: SurfaceId,
+        fullscreen: bool,
+        maximized: bool,
+        minimized: Option<bool>,
+    ) -> Result<bool> {
+        if self.shutdown_started.get() || !self.mount_started.get() {
+            return Ok(false);
+        }
+        let mut engine = self.engine.borrow_mut();
+        let engine = engine.as_mut().ok_or("session disposed")?;
+        let result = self.bridges.run(engine.turn(), |js| js.with_context(|ctx| {
+            self.window_controls.sync_platform_flags(&ctx, surface, fullscreen, maximized, minimized)
+        }));
+        self.mark_reported(self.check_contract())?;
+        result.map_err(|error| self.diagnostic(error).into())
+    }
+
+    pub(crate) fn has_window_commands(&self) -> bool {
+        self.window_controls.has_commands()
+    }
+
+    pub(crate) fn take_window_commands(&self) -> Vec<(SurfaceId, WindowCommand)> {
+        self.window_controls.take_commands()
+    }
+
     /// Dispose one auxiliary document while the native surface still exists.
     pub(crate) fn detach_layer(&self, id: u32) -> Result<()> {
         let Some(owned) = self.layers.borrow_mut().remove(&id) else { return Ok(()); };
@@ -662,6 +743,7 @@ impl Session {
         }
         let disposer = owned.disposer.borrow_mut().take();
         let cleanup = self.cleanup(disposer);
+        self.window_controls.remove_surface(owned.surface);
         self.bridges.remove(&owned.bridge);
         let scenes = owned.bridge.canvas_scene_count();
         owned.bridge.dispose();
@@ -1134,7 +1216,7 @@ impl Session {
         let (timers, frame_callbacks, requests) = self.work.counts();
         let external = self.work.external_counts();
         let mut counts = ResourceCounts {
-            callbacks: self.shell.callback_count(), timers, frame_callbacks, requests,
+            callbacks: self.shell.callback_count() + self.window_controls.callback_count(), timers, frame_callbacks, requests,
             image_handles: self.image_blobs().len(),
             unix_sockets: external.sockets,
             child_processes: external.processes,
@@ -1235,6 +1317,8 @@ impl Session {
         self.work.finish_stop();
         // Report remaining leases before forced disposal releases the native scenes.
         let canvas_scenes = self.counts().canvas_scenes;
+        let window_callbacks = self.window_controls.callback_count();
+        self.window_controls.clear();
         self.bridges.dispose();
         self.shell.clear();
         self.clear_shell_stylesheets();
@@ -1249,13 +1333,12 @@ impl Session {
         let snapshot = self.engine.borrow().as_ref().map(Self::snapshot_telemetry);
         self.telemetry.set(RuntimeTelemetry::merge(self.telemetry.get(), snapshot));
         drop(self.engine.borrow_mut().take());
-        let counts = ResourceCounts {
-            canvas_scenes,
-            unix_sockets: external.sockets,
-            child_processes: external.processes,
-            control_listeners: external.listeners,
-            ..self.counts()
-        };
+        let mut counts = self.counts();
+        counts.callbacks += window_callbacks;
+        counts.canvas_scenes = canvas_scenes;
+        counts.unix_sockets = external.sockets;
+        counts.child_processes = external.processes;
+        counts.control_listeners = external.listeners;
         self.work.clear_images();
         let failure = if !self.contract_reported.replace(true)
             && let Some(contract) = self.contract_failure()

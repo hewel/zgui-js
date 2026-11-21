@@ -178,6 +178,24 @@ impl Driver {
         Ok(json!({"surface":name,"timeUs":self.environment.now_us(),"readiness":readiness}))
     }
 
+    /// Deliver a compositor close request to a primary or auxiliary toplevel window.
+    pub(in crate::preview) fn close_request(&mut self, name: &str) -> Result<Value, Fault> {
+        self.settle(false)?;
+        let surface = self.window(name)?.surface().id();
+        self.pipeline.deliver(surface, SurfaceEvent::CloseRequested);
+        self.pump_application()?;
+        let still_open = self.by_surface(surface).is_some();
+        if still_open {
+            self.settle(false)?;
+        }
+        Ok(json!({
+            "surface": name,
+            "vetoed": still_open,
+            "closed": !still_open,
+            "timeUs": self.environment.now_us(),
+        }))
+    }
+
     pub fn assert_node(&mut self,target:&Target,check:&Check) -> Result<Value,Fault> {
         self.settle_surface(Some(&target.surface))?;
         let window=self.window(&target.surface)?;

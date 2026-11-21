@@ -26,6 +26,8 @@ const OWNER_CLEANUP_HELPERS = new Set([
   "readTextAsset",
   "useBeforeLeave",
   "bindControlNavigation",
+  "onCloseRequest",
+  "useWindowState",
 ]);
 
 const RUNTIME_SERVICE_APIS = new Set([
