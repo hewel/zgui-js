@@ -190,6 +190,50 @@ export function mount(root: NativeNode): () => void {
     void token;
     scene.update(canvasCommands);
     scene.update([
+      {
+        kind: "rect",
+        x: 0,
+        y: 0,
+        width: 80,
+        height: 40,
+        fill: {
+          kind: "linear",
+          x0: 0,
+          y0: 0,
+          x1: 80,
+          y1: 0,
+          stops: [{ offset: 0, color: "#ff0000" }, { offset: 1, color: "#0000ff" }],
+        },
+      },
+      {
+        kind: "circle",
+        x: 40,
+        y: 40,
+        radius: 24,
+        fill: {
+          kind: "radial",
+          cx: 40,
+          cy: 40,
+          radius: 24,
+          repeating: false,
+          stops: [{ offset: 0, color: "#ffffff" }, { offset: 1, color: "#000000" }],
+        },
+        stroke: {
+          color: {
+            kind: "radial",
+            cx: 40,
+            cy: 40,
+            radiusX: 24,
+            radiusY: 16,
+            stops: [{ offset: 0, color: "#00ff00" }, { offset: 1, color: "#0000ff" }],
+          },
+          width: 3,
+          lineCap: "butt",
+          lineJoin: "miter",
+          lineDash: [6, 4],
+          lineDashOffset: 2,
+        },
+      },
       { kind: "arc", x: 12, y: 12, radius: 10, startAngle: 0, sweepAngle: 3.14, stroke: { color: "#ffffff", width: 2.2, lineCap: "round", lineJoin: "round" } },
     ], canvasTransform);
     scene.update(null, canvasTransform);

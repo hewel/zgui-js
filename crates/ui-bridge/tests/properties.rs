@@ -1010,6 +1010,93 @@ fn a_canvas_handle_from_another_bridge_cannot_be_bound() {
 }
 
 #[test]
+fn canvas_gradients_and_dashed_strokes_decode_and_enforce_bounds() {
+    let mut native = NativeProperties::new();
+    native.script(r#"
+        const scene = __zgui.createCanvasScene();
+        const vector = __zgui.createElement('vector');
+        __zgui.insertNode(root, vector, null);
+        __zgui.setProperty(vector, 'canvas', scene);
+        const linear = {
+            kind: 'linear', x0: 0, y0: 0, x1: 100, y1: 0,
+            stops: [{offset: 0, color: '#ff0000'}, {offset: 0.5, color: '#00ff00'}, {offset: 1, color: '#0000ff'}],
+        };
+        const radialCircular = {
+            kind: 'radial', cx: 50, cy: 50, radius: 40, repeating: true,
+            stops: [{offset: 0, color: '#ffffff'}, {offset: 1, color: '#000000'}],
+        };
+        const radialElliptical = {
+            kind: 'radial', cx: 40, cy: 30, radiusX: 30, radiusY: 15,
+            stops: [{offset: 0, color: '#ff0'}, {offset: 1, color: '#00f'}],
+        };
+        scene.update([
+            {kind: 'rect', x: 0, y: 0, width: 100, height: 40, fill: linear},
+            {kind: 'circle', x: 50, y: 50, radius: 40, fill: radialCircular, stroke: {color: linear, width: 4, lineDash: [8, 4], lineDashOffset: 1000004}},
+            {kind: 'roundedRect', x: 10, y: 10, width: 60, height: 30, radius: 4, fill: radialElliptical, stroke: {color: '#112233', width: 2, lineDash: []}},
+        ]);
+        const tooManyStops = Array.from({length: 65}, (_, i) => ({offset: i / 64, color: '#fff'}));
+        const tooLongDash = Array.from({length: 33}, () => 2);
+        for (const bad of [
+            [{kind: 'rect', x: 0, y: 0, width: 10, height: 10, fill: {kind: 'linear', x0: 0, y0: 0, x1: 10, y1: 0, stops: [{offset: 0, color: '#fff'}]}}],
+            [{kind: 'rect', x: 0, y: 0, width: 10, height: 10, fill: {kind: 'linear', x0: 0, y0: 0, x1: 10, y1: 0, stops: tooManyStops}}],
+            [{kind: 'rect', x: 0, y: 0, width: 10, height: 10, fill: {kind: 'linear', x0: 0, y0: 0, x1: 10, y1: 0, stops: [{offset: -0.1, color: '#fff'}, {offset: 1, color: '#000'}]}}],
+            [{kind: 'rect', x: 0, y: 0, width: 10, height: 10, fill: {kind: 'linear', x0: 0, y0: 0, x1: 10, y1: 0, stops: [{offset: 0.8, color: '#fff'}, {offset: 0.2, color: '#000'}]}}],
+            [{kind: 'rect', x: 0, y: 0, width: 10, height: 10, fill: {kind: 'linear', x0: 0, y0: 0, x1: 10, y1: 0, stops: [{offset: 0, color: 'red'}, {offset: 1, color: '#000'}]}}],
+            [{kind: 'rect', x: 0, y: 0, width: 10, height: 10, fill: {kind: 'conic', cx: 5, cy: 5, stops: [{offset: 0, color: '#fff'}, {offset: 1, color: '#000'}]}}],
+            [{kind: 'rect', x: 0, y: 0, width: 10, height: 10, fill: {kind: 'radial', cx: 5, cy: 5, radius: 0, stops: [{offset: 0, color: '#fff'}, {offset: 1, color: '#000'}]}}],
+            [{kind: 'rect', x: 0, y: 0, width: 10, height: 10, fill: {kind: 'radial', cx: 5, cy: 5, radius: 5, radiusX: 5, radiusY: 5, stops: [{offset: 0, color: '#fff'}, {offset: 1, color: '#000'}]}}],
+            [{kind: 'rect', x: 0, y: 0, width: 10, height: 10, fill: {kind: 'linear', x0: 0, y0: 0, x1: 10, y1: 0, repeating: 'yes', stops: [{offset: 0, color: '#fff'}, {offset: 1, color: '#000'}]}}],
+            [{kind: 'rect', x: 0, y: 0, width: 10, height: 10, stroke: {color: '#fff', width: 2, lineDash: tooLongDash}}],
+            [{kind: 'rect', x: 0, y: 0, width: 10, height: 10, stroke: {color: '#fff', width: 2, lineDash: [-1, 4]}}],
+            [{kind: 'rect', x: 0, y: 0, width: 10, height: 10, stroke: {color: '#fff', width: 2, lineDash: [0, 0]}}],
+            [{kind: 'rect', x: 0, y: 0, width: 10, height: 10, stroke: {color: '#fff', width: 2, lineDash: [4, 2], lineDashOffset: NaN}}],
+            [{kind: 'rect', x: 0, y: 0, width: 100000, height: 100000, stroke: {color: '#fff', width: 2, lineDash: [0.01, 0.01]}}],
+        ]) {
+            try { scene.update(bad); } catch (error) {
+                if (!(error instanceof TypeError || error instanceof RangeError)) throw error;
+                continue;
+            }
+            throw Error('invalid Phase 2a gradient/dash command was accepted');
+        }
+        // View-only transform update preserves geometry & content revision.
+        scene.update(null, [1, 0, 0, 1, 12, 8]);
+        'ok'
+    "#);
+    let parent = native.dom.parent(native.node).expect("mounted");
+    let vector = native.backend.children(parent)[1];
+    let packed = native.backend.property(vector, PropKey::new(drawing::CANVAS)).as_integer().expect("canvas ref");
+    let (token, revision) = drawing::canvas_ref(packed);
+    assert_eq!(revision, 1, "rejected commands and view-only transform must not advance content revision");
+    assert_eq!(native.backend.property(vector, PropKey::new(drawing::CANVAS_VIEW)).as_integer(), Some(1), "view-only transform advances view");
+    let resolved = canvas::resolve(CanvasToken(token)).expect("live scene");
+    let guard = resolved.lock().expect("lock scene");
+    assert_eq!(guard.shapes().len(), 3);
+    let linear_fill = guard.shapes()[0].fill.as_ref().expect("linear fill");
+    match &linear_fill.paint {
+        canvas::Paint::Gradient(grad) => {
+            assert!(!grad.repeating);
+            assert_eq!(grad.stops.len(), 3);
+            assert!(matches!(grad.kind, canvas::GradientKind::Linear { .. }));
+        }
+        other => panic!("expected linear gradient paint, got {other:?}"),
+    }
+    let dashed = guard.shapes()[1].stroke.as_ref().expect("dashed stroke");
+    assert_eq!(dashed.style.dash_pattern.as_slice(), &[8.0, 4.0]);
+    assert!((dashed.style.dash_offset - (1_000_004.0f64).rem_euclid(12.0)).abs() < 1e-6);
+    assert!(matches!(dashed.paint, canvas::Paint::Gradient(_)));
+    let radial_fill = guard.shapes()[1].fill.as_ref().expect("radial fill");
+    match &radial_fill.paint {
+        canvas::Paint::Gradient(grad) => {
+            assert!(grad.repeating);
+            assert!(matches!(grad.kind, canvas::GradientKind::Radial { radius_x, radius_y, .. } if radius_x == 40.0 && radius_y == 40.0));
+        }
+        other => panic!("expected radial gradient paint, got {other:?}"),
+    }
+    let solid_empty_dash = guard.shapes()[2].stroke.as_ref().expect("empty dash stroke");
+    assert!(solid_empty_dash.style.dash_pattern.is_empty());
+}
+
+#[test]
 fn relations_resolve_real_accessibility_ids_and_reject_foreign_or_fabricated_targets() {
     let mut native = NativeProperties::new();
     native.script(r#"

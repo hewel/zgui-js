@@ -430,10 +430,52 @@ export type CanvasLineCap = "butt" | "round" | "square";
 /** Corner join shape for stroked canvas paths. */
 export type CanvasLineJoin = "miter" | "round" | "bevel";
 
-/** One painted shape; supply a hex fill, a hex stroke with positive width, or both. */
+/** One gradient color stop; offset must be in [0, 1] in non-decreasing order. */
+export interface CanvasColorStop {
+  readonly offset: number;
+  readonly color: string;
+}
+
+/** Linear gradient brush along the segment from (x0, y0) to (x1, y1) in canvas-local coordinates. */
+export interface CanvasLinearGradient {
+  readonly kind: "linear";
+  readonly x0: number;
+  readonly y0: number;
+  readonly x1: number;
+  readonly y1: number;
+  readonly stops: readonly CanvasColorStop[];
+  readonly repeating?: boolean;
+}
+
+/** Radial gradient brush centered at (cx, cy) in canvas-local coordinates. */
+export type CanvasRadialGradient = {
+  readonly kind: "radial";
+  readonly cx: number;
+  readonly cy: number;
+  readonly stops: readonly CanvasColorStop[];
+  readonly repeating?: boolean;
+} & (
+  | { readonly radius: number; readonly radiusX?: never; readonly radiusY?: never }
+  | { readonly radius?: never; readonly radiusX: number; readonly radiusY: number }
+);
+
+/** Paint brush for a canvas fill or stroke: hex color string or gradient descriptor. */
+export type CanvasBrush = string | CanvasLinearGradient | CanvasRadialGradient;
+
+/** Stroke configuration for a canvas command. */
+export interface CanvasStroke {
+  readonly color: CanvasBrush;
+  readonly width: number;
+  readonly lineCap?: CanvasLineCap;
+  readonly lineJoin?: CanvasLineJoin;
+  readonly lineDash?: readonly number[];
+  readonly lineDashOffset?: number;
+}
+
+/** One painted shape; supply a fill brush, a stroke with positive width, or both. */
 export type CanvasCommand = {
-  fill?: string;
-  stroke?: { color: string; width: number; lineCap?: CanvasLineCap; lineJoin?: CanvasLineJoin };
+  fill?: CanvasBrush;
+  stroke?: CanvasStroke;
 } & (
   | { kind: "rect"; x: number; y: number; width: number; height: number }
   | { kind: "roundedRect"; x: number; y: number; width: number; height: number; radius: number }

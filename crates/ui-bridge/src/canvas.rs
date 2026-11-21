@@ -26,6 +26,14 @@ const MAX_PATH_SEGMENTS: usize = 16_384;
 // Cap retained native geometry outside the JS heap, including generated path elements.
 const MAX_RETAINED_SHAPES: usize = 8192;
 const MAX_RETAINED_SEGMENTS: usize = 32_768;
+// Bound gradient stop tables per brush, per update, and across retained scenes.
+const MAX_GRADIENT_STOPS: usize = 64;
+const MAX_UPDATE_GRADIENT_STOPS: usize = 4096;
+const MAX_RETAINED_STOPS: usize = 16_384;
+// Bound stroke dash patterns and their effective expansion along stroked geometry.
+const MAX_DASH_PATTERN: usize = 32;
+const MAX_DASH_SUBSEGMENTS: usize = 8192;
+const MAX_UPDATE_DASH_SUBSEGMENTS: usize = 16_384;
 // Use sub-unit curve error at normal scale; larger radii use a relative floor.
 const PATH_TOLERANCE: f64 = 0.1;
 // Leave room for view transforms and derived points in the painter's f32 coordinates.
@@ -43,11 +51,13 @@ struct Scene {
     nodes: HashMap<Handle, NodeId>,
     shape_count: usize,
     segment_count: usize,
+    stop_count: usize,
 }
 
 struct Geometry {
     shapes: Vec<Shape>,
     segments: usize,
+    stops: usize,
 }
 
 pub(super) struct CanvasScenes {
@@ -56,6 +66,7 @@ pub(super) struct CanvasScenes {
     bindings: HashMap<Handle, CanvasToken>,
     retained_shapes: usize,
     retained_segments: usize,
+    retained_stops: usize,
 }
 
 impl CanvasScenes {
@@ -66,6 +77,7 @@ impl CanvasScenes {
             bindings: HashMap::new(),
             retained_shapes: 0,
             retained_segments: 0,
+            retained_stops: 0,
         }
     }
 
@@ -120,10 +132,19 @@ impl CanvasScenes {
             .scenes
             .get_mut(&token)
             .ok_or_else(|| unknown_scene(ctx))?;
-        if let Some(Geometry { shapes, segments }) = geometry {
+        if let Some(Geometry {
+            shapes,
+            segments,
+            stops,
+        }) = geometry
+        {
             let retained_shapes = self.retained_shapes - scene.shape_count + shapes.len();
             let retained_segments = self.retained_segments - scene.segment_count + segments;
-            if retained_shapes > MAX_RETAINED_SHAPES || retained_segments > MAX_RETAINED_SEGMENTS {
+            let retained_stops = self.retained_stops - scene.stop_count + stops;
+            if retained_shapes > MAX_RETAINED_SHAPES
+                || retained_segments > MAX_RETAINED_SEGMENTS
+                || retained_stops > MAX_RETAINED_STOPS
+            {
                 return Err(Exception::throw_range(
                     ctx,
                     "retained canvas geometry limit reached",
@@ -131,8 +152,10 @@ impl CanvasScenes {
             }
             self.retained_shapes = retained_shapes;
             self.retained_segments = retained_segments;
+            self.retained_stops = retained_stops;
             scene.shape_count = shapes.len();
             scene.segment_count = segments;
+            scene.stop_count = stops;
             scene.handle.edit(|canvas| canvas.replace(shapes));
             if !scene.nodes.is_empty() {
                 let revision = scene.handle.revision();
@@ -157,6 +180,7 @@ impl CanvasScenes {
         if let Some(scene) = self.scenes.remove(&token) {
             self.retained_shapes -= scene.shape_count;
             self.retained_segments -= scene.segment_count;
+            self.retained_stops -= scene.stop_count;
             for (handle, node) in scene.nodes {
                 self.bindings.remove(&handle);
                 clear_binding(&self.dom, node);
@@ -187,6 +211,7 @@ impl CanvasScenes {
         self.scenes.clear();
         self.retained_shapes = 0;
         self.retained_segments = 0;
+        self.retained_stops = 0;
     }
 }
 
@@ -310,11 +335,24 @@ pub(super) fn install<'js>(bridge: &Rc<UiBridge>, api: &Object<'js>) -> rquickjs
                     nodes: HashMap::new(),
                     shape_count: 0,
                     segment_count: 0,
+                    stop_count: 0,
                 },
             );
             Ok::<_, rquickjs::Error>(lease)
         }),
     )
+}
+
+struct ParseBudget {
+    segments_left: usize,
+    stops_left: usize,
+    dashes_left: usize,
+}
+
+struct ParsedShape {
+    shape: Shape,
+    segments: usize,
+    stops: usize,
 }
 
 fn parse_geometry<'js>(ctx: &Ctx<'js>, value: Value<'js>) -> rquickjs::Result<Option<Geometry>> {
@@ -326,18 +364,28 @@ fn parse_geometry<'js>(ctx: &Ctx<'js>, value: Value<'js>) -> rquickjs::Result<Op
         .ok_or_else(|| Exception::throw_type(ctx, "canvas commands must be an array or null"))?;
     let len = bounded_array_len(ctx, &array, MAX_SHAPES, "too many canvas commands")?;
     let mut shapes = Vec::with_capacity(len);
-    let mut segments = 0;
-    let mut segments_left = MAX_PATH_SEGMENTS;
+    let mut segments = 0usize;
+    let mut stops = 0usize;
+    let mut budget = ParseBudget {
+        segments_left: MAX_PATH_SEGMENTS,
+        stops_left: MAX_UPDATE_GRADIENT_STOPS,
+        dashes_left: MAX_UPDATE_DASH_SUBSEGMENTS,
+    };
     for index in 0..len {
         let command = record(ctx, array.get(index)?, "canvas command must be an object")?;
-        let shape = parse_shape(&command, &mut segments_left)?;
-        segments += shape.path.elements().len();
-        shapes.push(shape);
+        let parsed = parse_shape(&command, &mut budget)?;
+        segments = segments.saturating_add(parsed.segments);
+        stops = stops.saturating_add(parsed.stops);
+        shapes.push(parsed.shape);
     }
-    Ok(Some(Geometry { shapes, segments }))
+    Ok(Some(Geometry {
+        shapes,
+        segments,
+        stops,
+    }))
 }
 
-fn parse_shape(command: &Object<'_>, segments_left: &mut usize) -> rquickjs::Result<Shape> {
+fn parse_shape(command: &Object<'_>, budget: &mut ParseBudget) -> rquickjs::Result<ParsedShape> {
     let ctx = command.ctx();
     let fill = command.get::<_, Value>("fill")?;
     let stroke = command.get::<_, Value>("stroke")?;
@@ -382,7 +430,7 @@ fn parse_shape(command: &Object<'_>, segments_left: &mut usize) -> rquickjs::Res
             }
             path
         }
-        "path" => parse_path(ctx, command.get("segments")?, segments_left)?,
+        "path" => parse_path(ctx, command.get("segments")?, &mut budget.segments_left)?,
         _ => {
             return Err(Exception::throw_type(
                 ctx,
@@ -390,19 +438,44 @@ fn parse_shape(command: &Object<'_>, segments_left: &mut usize) -> rquickjs::Res
             ));
         }
     };
-    let mut builder = ShapeBuilder::new(path);
-    if !fill.is_undefined() {
-        builder = builder.fill(brush(ctx, fill)?);
-    }
-    if !stroke.is_undefined() {
+    let mut stops = 0usize;
+    let mut dash_segments = 0usize;
+    let base_segments = path.elements().len();
+    let fill_brush = if !fill.is_undefined() {
+        let (parsed, count) = brush(ctx, fill, &mut budget.stops_left)?;
+        stops += count;
+        Some(parsed)
+    } else {
+        None
+    };
+    let stroke_spec = if !stroke.is_undefined() {
         let stroke = record(ctx, stroke, "canvas stroke must be an object")?;
         let width = positive(&stroke, "width")?;
         let cap = line_cap(ctx, stroke.get("lineCap")?)?;
         let join = line_join(ctx, stroke.get("lineJoin")?)?;
-        let style = Stroke::new(width).with_caps(cap).with_join(join);
-        builder = builder.stroke_styled(brush(ctx, stroke.get("color")?)?, style);
+        let mut style = Stroke::new(width).with_caps(cap).with_join(join);
+        if let Some(dash) = parse_dash(ctx, &stroke, &path, &mut budget.dashes_left)? {
+            dash_segments = dash.expanded;
+            style = style.with_dashes(dash.offset, dash.pattern);
+        }
+        let (stroke_brush, count) = brush(ctx, stroke.get("color")?, &mut budget.stops_left)?;
+        stops += count;
+        Some((stroke_brush, style))
+    } else {
+        None
+    };
+    let mut builder = ShapeBuilder::new(path);
+    if let Some(fill_brush) = fill_brush {
+        builder = builder.fill(fill_brush);
     }
-    Ok(builder.build())
+    if let Some((stroke_brush, style)) = stroke_spec {
+        builder = builder.stroke_styled(stroke_brush, style);
+    }
+    Ok(ParsedShape {
+        shape: builder.build(),
+        segments: base_segments.saturating_add(dash_segments),
+        stops,
+    })
 }
 
 fn line_cap<'js>(ctx: &Ctx<'js>, value: Value<'js>) -> rquickjs::Result<Cap> {
@@ -543,16 +616,29 @@ fn number(ctx: &Ctx<'_>, value: Value<'_>, field: &str) -> rquickjs::Result<f64>
         })
 }
 
-fn positive(record: &Object<'_>, field: &str) -> rquickjs::Result<f64> {
-    let value = number(record.ctx(), record.get(field)?, field)?;
+fn positive_value(ctx: &Ctx<'_>, value: Value<'_>, field: &str) -> rquickjs::Result<f64> {
+    let value = number(ctx, value, field)?;
     if value > 0.0 {
         Ok(value)
     } else {
         Err(Exception::throw_range(
-            record.ctx(),
+            ctx,
             &format!("canvas {field} must be positive"),
         ))
     }
+}
+
+fn positive(record: &Object<'_>, field: &str) -> rquickjs::Result<f64> {
+    positive_value(record.ctx(), record.get(field)?, field)
+}
+
+fn optional_bool(ctx: &Ctx<'_>, value: Value<'_>, field: &str) -> rquickjs::Result<bool> {
+    if value.is_undefined() || value.is_null() {
+        return Ok(false);
+    }
+    value
+        .as_bool()
+        .ok_or_else(|| Exception::throw_type(ctx, &format!("canvas {field} must be a boolean")))
 }
 
 fn point(record: &Object<'_>, x: &str, y: &str) -> rquickjs::Result<Point> {
@@ -574,7 +660,132 @@ fn curve_tolerance(radius: f64) -> f64 {
     PATH_TOLERANCE.max(radius * 1e-6)
 }
 
-fn brush<'js>(ctx: &Ctx<'js>, value: Value<'js>) -> rquickjs::Result<Brush> {
+fn path_length_upper_bound(path: &BezPath) -> f64 {
+    let mut total = 0.0;
+    let mut start = Point::ORIGIN;
+    let mut current = Point::ORIGIN;
+    for el in path.elements() {
+        match *el {
+            PathEl::MoveTo(p) => {
+                start = p;
+                current = p;
+            }
+            PathEl::LineTo(p) => {
+                total += current.distance(p);
+                current = p;
+            }
+            PathEl::QuadTo(c, p) => {
+                total += current.distance(c) + c.distance(p);
+                current = p;
+            }
+            PathEl::CurveTo(c1, c2, p) => {
+                total += current.distance(c1) + c1.distance(c2) + c2.distance(p);
+                current = p;
+            }
+            PathEl::ClosePath => {
+                total += current.distance(start);
+                current = start;
+            }
+        }
+    }
+    total
+}
+
+struct ParsedDash {
+    offset: f64,
+    pattern: Vec<f64>,
+    expanded: usize,
+}
+
+fn parse_dash<'js>(
+    ctx: &Ctx<'js>,
+    stroke: &Object<'js>,
+    path: &BezPath,
+    dashes_left: &mut usize,
+) -> rquickjs::Result<Option<ParsedDash>> {
+    let offset_val = stroke.get::<_, Value>("lineDashOffset")?;
+    let offset = if offset_val.is_undefined() || offset_val.is_null() {
+        0.0
+    } else {
+        number(ctx, offset_val, "lineDashOffset")?
+    };
+
+    let dash_val = stroke.get::<_, Value>("lineDash")?;
+    if dash_val.is_undefined() || dash_val.is_null() {
+        return Ok(None);
+    }
+    let array = dash_val.into_array().ok_or_else(|| {
+        Exception::throw_type(
+            ctx,
+            "canvas stroke lineDash must be an array of non-negative numbers",
+        )
+    })?;
+    let len = bounded_array_len(
+        ctx,
+        &array,
+        MAX_DASH_PATTERN,
+        "canvas stroke lineDash exceeds maximum pattern length",
+    )?;
+    if len == 0 {
+        return Ok(None);
+    }
+
+    let mut pattern = Vec::with_capacity(len);
+    let mut period = 0.0;
+    for index in 0..len {
+        let entry = number(ctx, array.get(index)?, "lineDash entry")?;
+        if entry < 0.0 {
+            return Err(Exception::throw_range(
+                ctx,
+                "canvas stroke lineDash entries must be non-negative",
+            ));
+        }
+        period += entry;
+        pattern.push(entry);
+    }
+    if !period.is_finite() || period <= 0.0 {
+        return Err(Exception::throw_range(
+            ctx,
+            "canvas stroke lineDash sum must be positive",
+        ));
+    }
+
+    let path_len = path_length_upper_bound(path);
+    let estimated = ((path_len / period).ceil() + 1.0) * (pattern.len() as f64);
+    if !estimated.is_finite() || estimated > MAX_DASH_SUBSEGMENTS as f64 {
+        return Err(Exception::throw_range(
+            ctx,
+            "canvas dashed stroke exceeds maximum dash expansion limit",
+        ));
+    }
+    let expanded = estimated as usize;
+    if expanded > *dashes_left {
+        return Err(Exception::throw_range(
+            ctx,
+            "canvas dashed strokes exceed update dash expansion limit",
+        ));
+    }
+    *dashes_left -= expanded;
+
+    let repeat_period = if pattern.len().is_multiple_of(2) {
+        period
+    } else {
+        period * 2.0
+    };
+    let normalized_offset = if repeat_period.is_finite() && repeat_period > 0.0 {
+        offset.rem_euclid(repeat_period)
+    } else {
+        0.0
+    };
+
+    Ok(Some(ParsedDash {
+        offset: normalized_offset,
+        pattern,
+        expanded,
+    }))
+}
+
+fn hex_color<'js>(ctx: &Ctx<'js>, value: Value<'js>) -> rquickjs::Result<Color> {
     let invalid = || {
         Exception::throw_type(
             ctx,
@@ -599,5 +810,131 @@ fn brush<'js>(ctx: &Ctx<'js>, value: Value<'js>) -> rquickjs::Result<Brush> {
         6 => [byte(16), byte(8), byte(0), 255],
         _ => [byte(24), byte(16), byte(8), byte(0)],
     };
-    Ok(Brush::Solid(Color::srgb_u8(r, g, b, a)))
+    Ok(Color::srgb_u8(r, g, b, a))
+}
+
+fn parse_gradient_stops<'js>(
+    ctx: &Ctx<'js>,
+    value: Value<'js>,
+    stops_left: &mut usize,
+) -> rquickjs::Result<Vec<(f32, Color)>> {
+    let array = value
+        .into_array()
+        .ok_or_else(|| Exception::throw_type(ctx, "canvas gradient stops must be an array"))?;
+    let len = bounded_array_len(
+        ctx,
+        &array,
+        MAX_GRADIENT_STOPS,
+        "canvas gradient has too many stops",
+    )?;
+    if len < 2 {
+        return Err(Exception::throw_range(
+            ctx,
+            "canvas gradient requires at least two stops",
+        ));
+    }
+    if len > *stops_left {
+        return Err(Exception::throw_range(
+            ctx,
+            "too many canvas gradient stops in update",
+        ));
+    }
+    *stops_left -= len;
+
+    let mut stops = Vec::with_capacity(len);
+    let mut prev_offset = -1.0f64;
+    for index in 0..len {
+        let stop = record(
+            ctx,
+            array.get(index)?,
+            "canvas gradient stop must be an object",
+        )?;
+        let offset = number(ctx, stop.get("offset")?, "gradient stop offset")?;
+        if !(0.0..=1.0).contains(&offset) {
+            return Err(Exception::throw_range(
+                ctx,
+                "canvas gradient stop offset must be between 0 and 1",
+            ));
+        }
+        if offset < prev_offset {
+            return Err(Exception::throw_range(
+                ctx,
+                "canvas gradient stop offsets must be in non-decreasing order",
+            ));
+        }
+        prev_offset = offset;
+        let color = hex_color(ctx, stop.get("color")?)?;
+        stops.push((offset as f32, color));
+    }
+    Ok(stops)
+}
+
+fn brush<'js>(
+    ctx: &Ctx<'js>,
+    value: Value<'js>,
+    stops_left: &mut usize,
+) -> rquickjs::Result<(Brush, usize)> {
+    if value.is_string() {
+        return Ok((Brush::Solid(hex_color(ctx, value)?), 0));
+    }
+    let obj = record(
+        ctx,
+        value,
+        "canvas brush must be a hex color string or gradient object",
+    )?;
+    let kind: String = obj.get("kind").map_err(|_| {
+        Exception::throw_type(
+            ctx,
+            "canvas gradient kind must be \"linear\" or \"radial\"",
+        )
+    })?;
+    let repeating = optional_bool(ctx, obj.get("repeating")?, "gradient repeating")?;
+    let stops = parse_gradient_stops(ctx, obj.get("stops")?, stops_left)?;
+    let stop_count = stops.len();
+    match kind.as_str() {
+        "linear" => Ok((
+            Brush::Linear {
+                start: point(&obj, "x0", "y0")?,
+                end: point(&obj, "x1", "y1")?,
+                stops,
+                repeating,
+            },
+            stop_count,
+        )),
+        "radial" => {
+            let center = point(&obj, "cx", "cy")?;
+            let radius_val = obj.get::<_, Value>("radius")?;
+            let rx_val = obj.get::<_, Value>("radiusX")?;
+            let ry_val = obj.get::<_, Value>("radiusY")?;
+            let (radius_x, radius_y) = if !radius_val.is_undefined() {
+                if !rx_val.is_undefined() || !ry_val.is_undefined() {
+                    return Err(Exception::throw_type(
+                        ctx,
+                        "canvas radial gradient cannot combine radius with radiusX or radiusY",
+                    ));
+                }
+                let radius = positive_value(ctx, radius_val, "radius")?;
+                (radius, radius)
+            } else {
+                (
+                    positive_value(ctx, rx_val, "radiusX")?,
+                    positive_value(ctx, ry_val, "radiusY")?,
+                )
+            };
+            Ok((
+                Brush::Radial {
+                    center,
+                    radius_x,
+                    radius_y,
+                    stops,
+                    repeating,
+                },
+                stop_count,
+            ))
+        }
+        _ => Err(Exception::throw_type(
+            ctx,
+            "canvas gradient kind must be \"linear\" or \"radial\"",
+        )),
+    }
 }
