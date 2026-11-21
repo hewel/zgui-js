@@ -399,12 +399,13 @@ function compilerOptions(
   };
 }
 
-function outputOptions(filename = "app.mjs"): OutputOptions {
+function outputOptions(filename = "app.mjs", { codeSplitting = true } = {}): OutputOptions {
   return {
     format: "esm",
     entryFileNames: filename,
+    chunkFileNames: "chunks/[name]-[hash].mjs",
     sourcemap: "hidden",
-    codeSplitting: false,
+    codeSplitting,
     minify: false,
   };
 }
@@ -415,25 +416,30 @@ function compilationResult(
   moduleIds: Iterable<string>,
   { entry = true }: { entry?: boolean } = {},
 ): CompilationResult {
+  const chunks = output.filter((item): item is OutputChunk => item.type === "chunk");
   const graph: CompilationGraph = {
     modules: [...moduleIds].filter(id => !id.startsWith("\0")).sort(),
-    chunks: output
-      .filter(item => item.type === "chunk")
-      .map(chunk => ({
-        fileName: chunk.fileName,
-        modules: [...chunk.moduleIds].filter(id => !id.startsWith("\0")).sort(),
-        imports: [...chunk.imports],
-        dynamicImports: [...chunk.dynamicImports],
-        exports: [...chunk.exports].sort(),
-      })),
+    chunks: chunks.map(chunk => ({
+      fileName: chunk.fileName,
+      modules: [...chunk.moduleIds].filter(id => !id.startsWith("\0")).sort(),
+      imports: [...chunk.imports],
+      dynamicImports: [...chunk.dynamicImports],
+      exports: [...chunk.exports].sort(),
+    })),
   };
-  const solidRuntime = validateGraph(graph);
+  const solidRuntime = validateGraph(graph, { allowMultipleChunks: entry });
+  const allowedChunks = new Set(chunks.map(chunk => chunk.fileName));
   const files = new Map<string, Buffer>();
   for (const item of output) {
     if (item.type === "chunk") {
       if (!item.map) throw new Error(`Missing composed source map: ${item.fileName}`);
       const code = `${item.code.trimEnd()}\n//# sourceMappingURL=${path.basename(item.fileName)}.map\n`;
-      validateModule(code, { filename: item.fileName, bundled: true, entry });
+      validateModule(code, {
+        filename: item.fileName,
+        bundled: true,
+        entry: entry && item.isEntry,
+        allowedChunks,
+      });
       files.set(item.fileName, Buffer.from(code));
       files.set(`${item.fileName}.map`, Buffer.from(item.map.toString()));
     } else files.set(item.fileName, Buffer.from(item.source));
@@ -484,7 +490,7 @@ export async function compileBundle(
     }),
   );
   try {
-    await compiler.generate(outputOptions(filename));
+    await compiler.generate(outputOptions(filename, { codeSplitting: hostEntry }));
     return result;
   } finally {
     await compiler.close();

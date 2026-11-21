@@ -511,6 +511,9 @@ impl Session {
             }
             session.work.install(&ctx)
         })?;
+        if let Some(package) = session.module.as_package() {
+            engine.set_module_provider(package.module_provider());
+        }
         let source = session.module.take_or_load_source()?;
         let loaded = engine.load_module(session.module.name(), &source);
         drop(source);

@@ -12,7 +12,11 @@
 
 #![deny(unsafe_code)]
 
-use rquickjs::{Context, Ctx, Function, Module, Object, Persistent, Runtime, Value};
+use rquickjs::{
+    Context, Ctx, Function, Module, Object, Persistent, Runtime, Value,
+    loader::{ImportAttributes, Loader, Resolver},
+    module::Declared,
+};
 use std::{
     cell::{Cell, RefCell},
     collections::VecDeque,
@@ -266,6 +270,52 @@ impl RejectionTracker {
     }
 }
 
+/// Host-supplied closed-graph module provider backed strictly by verified
+/// package bytes (never ambient filesystem, cwd, or network resolution).
+pub trait VerifiedModuleProvider: 'static {
+    /// Resolve `specifier` imported from `referrer` into a canonical verified module ID.
+    fn resolve(&self, referrer: &str, specifier: &str) -> Result<String, String>;
+    /// Load verified UTF-8 ESM source for a canonical module ID.
+    fn load(&self, canonical_name: &str) -> Result<String, String>;
+}
+
+struct ProviderResolver {
+    provider: Rc<dyn VerifiedModuleProvider>,
+}
+
+impl Resolver for ProviderResolver {
+    fn resolve<'js>(
+        &mut self,
+        _ctx: &Ctx<'js>,
+        base: &str,
+        name: &str,
+        _attributes: Option<ImportAttributes<'js>>,
+    ) -> rquickjs::Result<String> {
+        self.provider
+            .resolve(base, name)
+            .map_err(|msg| rquickjs::Error::new_resolving_message(base, name, msg))
+    }
+}
+
+struct ProviderLoader {
+    provider: Rc<dyn VerifiedModuleProvider>,
+}
+
+impl Loader for ProviderLoader {
+    fn load<'js>(
+        &mut self,
+        ctx: &Ctx<'js>,
+        name: &str,
+        _attributes: Option<ImportAttributes<'js>>,
+    ) -> rquickjs::Result<Module<'js, Declared>> {
+        let source = self
+            .provider
+            .load(name)
+            .map_err(|msg| rquickjs::Error::new_loading_message(name, msg))?;
+        Module::declare(ctx.clone(), name, source)
+    }
+}
+
 pub struct JsRuntime {
     // Drop clears both module and tracker roots before context/runtime destruction.
     module: Option<Persistent<Object<'static>>>,
@@ -342,6 +392,15 @@ impl JsRuntime {
             enclosing_deadline: None,
             max_entry_duration: Cell::new(Duration::ZERO),
         })
+    }
+
+    /// Install a host-verified closed-graph module loader for static/dynamic ESM chunks.
+    pub fn set_module_provider(&mut self, provider: Rc<dyn VerifiedModuleProvider>) {
+        let resolver = ProviderResolver {
+            provider: Rc::clone(&provider),
+        };
+        let loader = ProviderLoader { provider };
+        self.runtime.set_loader(resolver, loader);
     }
 
     /// Borrow this runtime exclusively for a single Bridge turn entry.
@@ -872,4 +931,73 @@ fn diagnostic_value(
     }
     diagnostic.message = truncate(diagnostic.message, max);
     diagnostic
+}
+
+#[cfg(test)]
+mod loader_tests {
+    use super::*;
+    use std::collections::BTreeMap;
+
+    struct MemoryProvider {
+        chunks: BTreeMap<String, String>,
+    }
+
+    impl VerifiedModuleProvider for MemoryProvider {
+        fn resolve(&self, _referrer: &str, specifier: &str) -> Result<String, String> {
+            let normalized = specifier.trim_start_matches("./");
+            if self.chunks.contains_key(normalized) {
+                Ok(normalized.to_owned())
+            } else {
+                Err(format!("undeclared chunk: {specifier}"))
+            }
+        }
+
+        fn load(&self, canonical_name: &str) -> Result<String, String> {
+            self.chunks
+                .get(canonical_name)
+                .cloned()
+                .ok_or_else(|| format!("missing verified chunk: {canonical_name}"))
+        }
+    }
+
+    #[test]
+    fn verified_module_provider_loads_lazy_chunks_and_rejects_undeclared_imports() {
+        let mut chunks = BTreeMap::new();
+        chunks.insert(
+            "chunks/lazy.mjs".into(),
+            "export const value = 'loaded-from-verified-chunk';".into(),
+        );
+        let mut runtime = JsRuntime::new(RuntimeLimits::default()).expect("runtime");
+        runtime.set_module_provider(Rc::new(MemoryProvider { chunks }));
+        runtime
+            .load_module(
+                "app.mjs",
+                r#"
+                    export let result = "pending";
+                    export let rejected = "none";
+                    export function trigger() {
+                        import("./chunks/lazy.mjs").then(m => { result = m.value; });
+                        import("./chunks/escape.mjs").catch(err => { rejected = String(err); });
+                    }
+                "#,
+            )
+            .expect("load entry");
+        runtime
+            .with_module(|_ctx, m| {
+                let trigger: Function = m.get("trigger")?;
+                trigger.call::<_, ()>(())
+            })
+            .expect("trigger");
+        let pump = runtime.pump_jobs();
+        assert!(pump.diagnostics.is_empty(), "{:?}", pump.diagnostics);
+        let (result, rejected) = runtime
+            .with_module(|_ctx, m| {
+                let r: String = m.get("result")?;
+                let rej: String = m.get("rejected")?;
+                Ok((r, rej))
+            })
+            .expect("read outputs");
+        assert_eq!(result, "loaded-from-verified-chunk");
+        assert!(rejected.contains("escape.mjs") || rejected.contains("undeclared"), "unexpected rejection: {rejected}");
+    }
 }

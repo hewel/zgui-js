@@ -36,6 +36,7 @@ export type Capabilities = {
 };
 
 export type FontDeclaration = { family: string; path: string };
+export type ChunkDeclaration = { path: string; sourceMap: string };
 export type WindowDeclaration = {
   title?: string;
   width?: number;
@@ -53,6 +54,7 @@ export type Manifest = {
   hostApiVersion: 1;
   entry: string;
   sourceMap: string;
+  chunks?: ChunkDeclaration[];
   styles: string[];
   assets: string[];
   fonts: FontDeclaration[];

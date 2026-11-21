@@ -1,4 +1,4 @@
-use std::{cell::{OnceCell, RefCell}, collections::BTreeMap, error::Error, fs, path::{Path, PathBuf}, sync::Arc};
+use std::{cell::{OnceCell, RefCell}, collections::BTreeMap, error::Error, fs, path::{Path, PathBuf}, rc::Rc, sync::Arc};
 use crate::bounded_fs::{self, BoundedReadError};
 use crate::runtime_paths::{canonical_absolute, socket_name, template};
 use sha2::{Digest, Sha256};
@@ -6,6 +6,16 @@ use std::fmt::Write as _;
 
 type Result<T, E = Box<dyn Error>> = std::result::Result<T, E>;
 const MAX_RESOURCE_BYTES: u64 = 64 * 1024 * 1024;
+const MAX_CHUNKS: usize = 256;
+
+crate::schema::object_struct! {
+/// One sealed lazy/shared JS chunk and its paired source map.
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ChunkEntry {
+    pub path: String,
+    pub source_map: String,
+}
+}
 
 crate::schema::object_struct! {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -15,6 +25,9 @@ pub struct Manifest {
     pub host_api_version: u32,
     pub entry: String,
     pub source_map: String,
+    /// Optional closed graph of additional JS chunks sealed into `artifactDigests`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub chunks: Vec<ChunkEntry>,
     pub styles: Vec<String>,
     pub assets: Vec<String>,
     pub fonts: Vec<Font>,
@@ -326,6 +339,15 @@ pub struct Stylesheet {
     pub css: Arc<str>,
 }
 
+struct VerifiedChunk {
+    relative_path: String,
+    canonical_name: String,
+    digest: String,
+    source_map_path: String,
+    source_map_digest: String,
+    source_map: OnceCell<Option<sourcemap::DecodedMap>>,
+}
+
 pub struct Package {
     pub directory: PathBuf,
     pub manifest: Manifest,
@@ -335,6 +357,7 @@ pub struct Package {
     pub source_map_digest: String,
     source_map: OnceCell<Option<sourcemap::DecodedMap>>,
     generated_entry: String,
+    chunks: BTreeMap<String, VerifiedChunk>,
     status_path: Option<PathBuf>,
     assets: BTreeMap<String, Arc<[u8]>>,
 }
@@ -372,10 +395,18 @@ impl Package {
             return Err(format!("native style profile digest mismatch: expected {}, got {}", native_profile_digest(), manifest.style_system.native_profile_digest).into());
         }
         if !valid_digest(&manifest.build_id) { return Err("invalid package buildId".into()); }
+        if manifest.chunks.len() > MAX_CHUNKS {
+            return Err(format!("package exceeds maximum chunk count ({MAX_CHUNKS})").into());
+        }
         let mut files = BTreeMap::new();
-        for name in std::iter::once(&manifest.entry).chain(std::iter::once(&manifest.source_map))
-            .chain(&manifest.styles).chain(&manifest.assets)
-            .map(String::as_str).chain(["style-origins.json", "build-info.json"]) {
+        let chunk_resources = manifest.chunks.iter().flat_map(|chunk| [chunk.path.as_str(), chunk.source_map.as_str()]);
+        for name in std::iter::once(manifest.entry.as_str())
+            .chain(std::iter::once(manifest.source_map.as_str()))
+            .chain(chunk_resources)
+            .chain(manifest.styles.iter().map(String::as_str))
+            .chain(manifest.assets.iter().map(String::as_str))
+            .chain(["style-origins.json", "build-info.json"])
+        {
             if name == "manifest.json" || files.contains_key(name) {
                 return Err(format!("duplicate or reserved resource: {name}").into());
             }
@@ -433,6 +464,38 @@ impl Package {
             .map_err(|error| format!("invalid source map {}: {error}", manifest.source_map))?;
         drop(validated_map);
         drop(map_bytes);
+        let mut chunks = BTreeMap::new();
+        for chunk in &manifest.chunks {
+            if !chunk.path.ends_with(".mjs") || !chunk.source_map.ends_with(".map") {
+                return Err(format!("invalid chunk declaration: {} / {}", chunk.path, chunk.source_map).into());
+            }
+            let chunk_bytes = files.remove(&chunk.path).ok_or_else(|| format!("missing chunk: {}", chunk.path))?;
+            let chunk_digest = digest(&chunk_bytes);
+            // Validate UTF-8 eagerly, then release bytes until QuickJS lazily loads this chunk.
+            let _ = std::str::from_utf8(&chunk_bytes)?;
+            drop(chunk_bytes);
+            let chunk_map_bytes = files.remove(&chunk.source_map).ok_or_else(|| format!("missing chunk source map: {}", chunk.source_map))?;
+            let chunk_map_digest = digest(&chunk_map_bytes);
+            if !sourcemap::is_sourcemap_slice(&chunk_map_bytes) {
+                return Err(format!("invalid source map {}: unrecognized source map document", chunk.source_map).into());
+            }
+            let validated = sourcemap::DecodedMap::from_reader(chunk_map_bytes.as_slice())
+                .map_err(|error| format!("invalid source map {}: {error}", chunk.source_map))?;
+            drop(validated);
+            drop(chunk_map_bytes);
+            let canonical_name = directory.join(&chunk.path).to_string_lossy().into_owned();
+            chunks.insert(
+                chunk.path.clone(),
+                VerifiedChunk {
+                    relative_path: chunk.path.clone(),
+                    canonical_name,
+                    digest: chunk_digest,
+                    source_map_path: chunk.source_map.clone(),
+                    source_map_digest: chunk_map_digest,
+                    source_map: OnceCell::new(),
+                },
+            );
+        }
         let styles: Arc<[Stylesheet]> = manifest.styles.iter().map(|name| {
             Ok(Stylesheet {
                 path: Arc::from(name.as_str()),
@@ -452,6 +515,7 @@ impl Package {
             source_map_digest,
             source_map: OnceCell::new(),
             generated_entry,
+            chunks,
             status_path,
             assets,
         })
@@ -514,6 +578,76 @@ impl Package {
         }).as_ref()
     }
 
+    fn decoded_chunk_source_map<'a>(&'a self, chunk: &'a VerifiedChunk) -> Option<&'a sourcemap::DecodedMap> {
+        chunk.source_map.get_or_init(|| {
+            let bytes = resource(&self.directory, &chunk.source_map_path).ok()?;
+            if digest(&bytes) != chunk.source_map_digest || !sourcemap::is_sourcemap_slice(&bytes) {
+                return None;
+            }
+            sourcemap::DecodedMap::from_reader(bytes.as_slice()).ok()
+        }).as_ref()
+    }
+
+    /// Build a closed-graph QuickJS module provider backed strictly by verified
+    /// package chunk digests (never reading mutable dist, cwd, or network).
+    pub(crate) fn module_provider(self: &Rc<Self>) -> Rc<dyn js_runtime::VerifiedModuleProvider> {
+        Rc::new(PackageModuleProvider {
+            package: Rc::clone(self),
+        })
+    }
+
+    fn relative_module_path<'a>(&'a self, referrer: &'a str) -> Option<&'a str> {
+        if referrer == self.generated_entry || referrer == self.manifest.entry {
+            return Some(self.manifest.entry.as_str());
+        }
+        if let Some(chunk) = self.chunks.values().find(|c| c.canonical_name == referrer || c.relative_path == referrer) {
+            return Some(chunk.relative_path.as_str());
+        }
+        None
+    }
+
+    fn resolve_sealed_import(&self, referrer: &str, specifier: &str) -> std::result::Result<String, String> {
+        if !specifier.starts_with("./") && !specifier.starts_with("../") {
+            return Err(format!("non-relative module specifier is forbidden: {specifier:?}"));
+        }
+        let base_rel = self
+            .relative_module_path(referrer)
+            .ok_or_else(|| format!("unknown module referrer: {referrer:?}"))?;
+        let base_dir = base_rel.rsplit_once('/').map_or("", |(dir, _)| dir);
+        let normalized = normalize_posix_relative(base_dir, specifier)
+            .ok_or_else(|| format!("module specifier escapes sealed package root: {specifier:?}"))?;
+        if normalized == self.manifest.entry {
+            return Ok(self.generated_entry.clone());
+        }
+        if let Some(chunk) = self.chunks.get(&normalized) {
+            return Ok(chunk.canonical_name.clone());
+        }
+        Err(format!("module specifier is not in the sealed chunk graph: {specifier:?} -> {normalized:?}"))
+    }
+
+    fn load_sealed_module(&self, canonical_name: &str) -> std::result::Result<String, String> {
+        if canonical_name == self.generated_entry {
+            return self
+                .read_verified_entry()
+                .map(|src| src.to_string())
+                .map_err(|err| err.to_string());
+        }
+        let chunk = self
+            .chunks
+            .values()
+            .find(|c| c.canonical_name == canonical_name)
+            .ok_or_else(|| format!("undeclared sealed chunk: {canonical_name:?}"))?;
+        let bytes = resource(&self.directory, &chunk.relative_path).map_err(|err| err.to_string())?;
+        let actual = digest(&bytes);
+        if actual != chunk.digest {
+            return Err(format!(
+                "artifact integrity mismatch for {}: expected {}, got {actual}",
+                chunk.relative_path, chunk.digest
+            ));
+        }
+        String::from_utf8(bytes).map_err(|err| err.to_string())
+    }
+
     /// Immutable manifest-declared bytes from the integrity-verified package generation.
     pub fn asset_bytes(&self, name: &str) -> Option<&[u8]> {
         self.assets.get(name).map(AsRef::as_ref)
@@ -553,14 +687,24 @@ impl Package {
                 let body = body.strip_prefix("    at ")?.strip_suffix(')')?;
                 let (file_line, column) = body.rsplit_once(':')?;
                 let (file, line) = file_line.rsplit_once(':')?;
-                let entry = [self.generated_entry.as_str(), self.manifest.entry.as_str()].into_iter().find(|&entry| {
+                let (matched_name, decoded_map) = if let Some(entry) = [self.generated_entry.as_str(), self.manifest.entry.as_str()].into_iter().find(|&entry| {
                     file.strip_suffix(entry).is_some_and(|prefix| prefix.ends_with(" ("))
-                })?;
-                let start = "    at ".len() + file.len() - entry.len();
-                let length = entry.len() + line.len() + column.len() + 2;
+                }) {
+                    (entry, self.decoded_source_map()?)
+                } else {
+                    let (chunk, matched) = self.chunks.values().find_map(|chunk| {
+                        [chunk.canonical_name.as_str(), chunk.relative_path.as_str()]
+                            .into_iter()
+                            .find(|&candidate| file.strip_suffix(candidate).is_some_and(|prefix| prefix.ends_with(" (")))
+                            .map(|matched| (chunk, matched))
+                    })?;
+                    (matched, self.decoded_chunk_source_map(chunk)?)
+                };
+                let start = "    at ".len() + file.len() - matched_name.len();
+                let length = matched_name.len() + line.len() + column.len() + 2;
                 let line = line.parse::<u32>().ok()?.checked_sub(1)?;
                 let column = column.parse::<u32>().ok()?.checked_sub(1)?;
-                let token = self.decoded_source_map()?.lookup_token(line, column)?;
+                let token = decoded_map.lookup_token(line, column)?;
                 if token.get_dst_line() != line { return None; }
                 let source = token.get_source()?;
                 let original_line = token.get_src_line().checked_add(1)?;
@@ -587,6 +731,42 @@ impl Package {
         }
         diagnostic
     }
+}
+
+struct PackageModuleProvider {
+    package: Rc<Package>,
+}
+
+impl js_runtime::VerifiedModuleProvider for PackageModuleProvider {
+    fn resolve(&self, referrer: &str, specifier: &str) -> std::result::Result<String, String> {
+        self.package.resolve_sealed_import(referrer, specifier)
+    }
+
+    fn load(&self, canonical_name: &str) -> std::result::Result<String, String> {
+        self.package.load_sealed_module(canonical_name)
+    }
+}
+
+fn normalize_posix_relative(base_dir: &str, specifier: &str) -> Option<String> {
+    let mut parts: Vec<&str> = Vec::new();
+    for part in base_dir.split('/').chain(specifier.split('/')) {
+        match part {
+            "" | "." => {}
+            ".." => {
+                parts.pop()?;
+            }
+            segment => {
+                if segment.contains('\\') || segment.contains('\0') {
+                    return None;
+                }
+                parts.push(segment);
+            }
+        }
+    }
+    if parts.is_empty() {
+        return None;
+    }
+    Some(parts.join("/"))
 }
 
 fn valid_digest(value: &str) -> bool {
@@ -706,8 +886,11 @@ mod tests {
             self.save(manifest);
         }
         fn save(&self, mut manifest: serde_json::Value) {
+            let chunk_names = manifest.get("chunks").and_then(|v| v.as_array()).into_iter().flatten()
+                .flat_map(|c| [c["path"].as_str().unwrap().to_owned(), c["sourceMap"].as_str().unwrap().to_owned()]);
             let names: Vec<_> = ["entry", "sourceMap"].into_iter().map(|key| manifest[key].as_str().unwrap().to_owned())
                 .chain(["styles", "assets"].into_iter().flat_map(|key| manifest[key].as_array().unwrap().iter().map(|value| value.as_str().unwrap().to_owned())))
+                .chain(chunk_names)
                 .chain(["style-origins.json".into(), "build-info.json".into()]).collect();
             manifest["artifactDigests"] = names.into_iter().map(|name| {
                 let hash = digest(&fs::read(self.0.join(&name)).unwrap()); (name, serde_json::json!(hash))
@@ -1017,6 +1200,51 @@ mod tests {
             let error = Package::load(&fixture.0).err().unwrap().to_string();
             assert!(error.contains("invalid source map app.mjs.map"), "{error}");
         }
+    }
+
+    #[test]
+    fn sealed_chunk_graph_verifies_digests_blocks_escapes_and_remaps_lazy_stacks() {
+        let fixture = Fixture::new();
+        let entry_source = b"export const hostApiVersion = 1; export function mount() { return () => {}; }";
+        let empty_map = br#"{"version":3,"sources":[],"names":[],"mappings":""}"#;
+        fixture.publish(entry_source, empty_map);
+
+        fs::create_dir_all(fixture.0.join("chunks")).unwrap();
+        let chunk_source = b"export function boom() { throw new Error('lazy boom'); }\n";
+        let chunk_map = br#"{"version":3,"sources":["src/lazy.tsx"],"names":[],"mappings":"AAAA"}"#;
+        fs::write(fixture.0.join("chunks/lazy-1.mjs"), chunk_source).unwrap();
+        fs::write(fixture.0.join("chunks/lazy-1.mjs.map"), chunk_map).unwrap();
+
+        let mut manifest: serde_json::Value = serde_json::from_slice(&fs::read(fixture.0.join("manifest.json")).unwrap()).unwrap();
+        manifest["chunks"] = serde_json::json!([{
+            "path": "chunks/lazy-1.mjs",
+            "sourceMap": "chunks/lazy-1.mjs.map",
+        }]);
+        fixture.save(manifest);
+
+        let package = Rc::new(Package::load(&fixture.0).expect("multi-chunk package loads"));
+        let provider = package.module_provider();
+
+        let resolved = provider.resolve(package.generated_entry(), "./chunks/lazy-1.mjs").expect("resolve");
+        assert!(resolved.ends_with("chunks/lazy-1.mjs"));
+        assert_eq!(provider.load(&resolved).expect("load chunk").as_bytes(), chunk_source);
+
+        assert!(provider.resolve(package.generated_entry(), "../outside.mjs").is_err());
+        assert!(provider.resolve(package.generated_entry(), "node:fs").is_err());
+        assert!(provider.resolve(package.generated_entry(), "./chunks/other.mjs").is_err());
+
+        let remapped = package.remap_diagnostic(js_runtime::Diagnostic {
+            kind: js_runtime::DiagnosticKind::Exception,
+            phase: "entry",
+            message: "lazy boom".into(),
+            stack: Some(format!("    at boom ({resolved}:1:1)\n")),
+            generated_stack: None,
+        });
+        assert!(remapped.stack.as_deref().unwrap_or("").contains("src/lazy.tsx:1:1"), "{:?}", remapped.stack);
+
+        fs::write(fixture.0.join("chunks/lazy-1.mjs"), b"export const hacked = 1;").unwrap();
+        assert!(provider.load(&resolved).unwrap_err().contains("integrity mismatch"));
+        assert!(Package::load(&fixture.0).err().unwrap().to_string().contains("integrity mismatch"));
     }
 
     #[test]

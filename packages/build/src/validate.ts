@@ -4,6 +4,7 @@ import traverseModule from "@babel/traverse";
 import type { NodePath } from "@babel/traverse";
 import type { types as t } from "@babel/core";
 import { isBuiltin } from "node:module";
+import path from "node:path";
 
 const traverse =
   (traverseModule as typeof traverseModule & { default?: typeof traverseModule }).default ??
@@ -179,16 +180,26 @@ export function validateImport(specifier: string): void {
   }
 }
 
+function resolveChunkSpecifier(fromFilename: string, specifier: string): string | null {
+  if (!specifier.startsWith("./") && !specifier.startsWith("../")) return null;
+  const fromDir = path.posix.dirname(fromFilename);
+  const resolved = path.posix.normalize(fromDir === "." ? specifier : path.posix.join(fromDir, specifier));
+  if (resolved.startsWith("..") || resolved.startsWith("/")) return null;
+  return resolved;
+}
+
 export function validateModule(
   code: string,
   {
     filename = "app.mjs",
     bundled = false,
     entry = false,
+    allowedChunks,
   }: {
     filename?: string;
     bundled?: boolean;
     entry?: boolean;
+    allowedChunks?: ReadonlySet<string>;
   } = {},
 ): ParseResult<t.File> {
   const ast = parse(code, {
@@ -198,22 +209,34 @@ export function validateModule(
   });
   const exported = new Map<string, string>();
   let program!: NodePath<t.Program>;
+  const assertClosedChunkEdge = (specifier: string, errorMessage: string): void => {
+    const resolved = resolveChunkSpecifier(filename, specifier);
+    if (!resolved || !allowedChunks?.has(resolved)) {
+      throw new Error(errorMessage);
+    }
+  };
   traverse(ast, {
     Program(p) {
       program = p;
     },
     ImportDeclaration(p) {
       validateImport(p.node.source.value);
-      if (bundled) throw new Error("Bundle contains an unresolved runtime import");
+      if (bundled) {
+        assertClosedChunkEdge(p.node.source.value, "Bundle contains an unresolved runtime import");
+      }
     },
     ExportAllDeclaration(p) {
       validateImport(p.node.source.value);
-      if (bundled) throw new Error("Bundle contains an external re-export");
+      if (bundled) {
+        assertClosedChunkEdge(p.node.source.value, "Bundle contains an external re-export");
+      }
     },
     ExportNamedDeclaration(p) {
       if (p.node.source) {
         validateImport(p.node.source.value);
-        if (bundled) throw new Error("Bundle contains an external re-export");
+        if (bundled) {
+          assertClosedChunkEdge(p.node.source.value, "Bundle contains an external re-export");
+        }
       }
       const declaration = p.node.declaration;
       if (declaration?.type === "VariableDeclaration") {
@@ -231,8 +254,14 @@ export function validateModule(
           );
       }
     },
-    ImportExpression() {
-      throw new Error("Dynamic imports are unsupported");
+    ImportExpression(p) {
+      if (p.node.source.type !== "StringLiteral") {
+        throw new Error("Dynamic imports must use a static string literal specifier");
+      }
+      validateImport(p.node.source.value);
+      if (bundled) {
+        assertClosedChunkEdge(p.node.source.value, "Bundle contains an unresolved dynamic import");
+      }
     },
     AwaitExpression(p) {
       if (executesAtTopLevel(p)) throw new Error("Top-level await is unsupported");
@@ -289,7 +318,10 @@ export function validateModule(
   return ast;
 }
 
-export function validateGraph(graph: CompilationGraph): string {
+export function validateGraph(
+  graph: CompilationGraph,
+  { allowMultipleChunks = true }: { allowMultipleChunks?: boolean } = {},
+): string {
   const runtimes = graph.modules.filter(input =>
     /\/solid-js\/dist\/(?:solid(?:\.dev|\.observe)?|dev)\.js$/.test(input),
   );
@@ -318,12 +350,24 @@ export function validateGraph(graph: CompilationGraph): string {
     if (/\/solid-js\/(?:web|.*server)|\/react-dom\//.test(input))
       throw new Error(`Incompatible module graph: ${input}`);
   }
+  if (graph.chunks.length === 0) {
+    throw new Error("Expected at least one ESM artifact");
+  }
   if (
-    graph.chunks.length !== 1 ||
-    graph.chunks[0].imports.length ||
-    graph.chunks[0].dynamicImports.length
+    !allowMultipleChunks &&
+    (graph.chunks.length !== 1 ||
+      graph.chunks[0].imports.length ||
+      graph.chunks[0].dynamicImports.length)
   ) {
     throw new Error("Expected one self-contained ESM artifact");
+  }
+  const knownChunks = new Set(graph.chunks.map(chunk => chunk.fileName));
+  for (const chunk of graph.chunks) {
+    for (const edge of [...chunk.imports, ...chunk.dynamicImports]) {
+      if (!knownChunks.has(edge)) {
+        throw new Error(`Chunk graph contains an unresolved external edge: ${edge}`);
+      }
+    }
   }
   return runtimes[0] ?? signals[0];
 }

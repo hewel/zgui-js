@@ -785,12 +785,18 @@ export async function publishApplication(
       JSON.stringify(await buildInfo(root, result, { appDirectory, development }), null, 2) + "\n",
     ),
   );
+  const chunks = result.graph.chunks
+    .map(chunk => chunk.fileName)
+    .filter(fileName => fileName !== "app.mjs")
+    .sort()
+    .map(chunkPath => ({ path: chunkPath, sourceMap: `${chunkPath}.map` }));
   const identity: ManifestIdentity = {
     schemaVersion: 2,
     id,
     hostApiVersion: 1,
     entry: "app.mjs",
     sourceMap: "app.mjs.map",
+    ...(chunks.length > 0 ? { chunks } : {}),
     styles: [
       ...(componentsCss !== undefined ? ["components.css"] : []),
       ...(css !== undefined ? ["base.css"] : []),

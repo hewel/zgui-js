@@ -74,7 +74,10 @@ test("AST validation distinguishes nested async work from top-level execution", 
   assert.throws(() => validateModule(`${entry}\nawait Promise.resolve();`), /Top-level await/);
   assert.throws(() => validateModule(`${entry}\nfor await (const x of []) {}`), /Top-level await/);
   assert.throws(() => validateModule(`${entry}\nclass C { [await Promise.resolve()]() {} }`), /Top-level await/);
-  assert.throws(() => validateModule(`${entry}\nfunction lazy() { return import('./lazy.js'); }`), /Dynamic imports/);
+  validateModule(`${entry}\nfunction lazy() { return import('./lazy.js'); }`);
+  assert.throws(() => validateModule(`${entry}\nfunction lazy(p) { return import(p); }`), /static string literal/);
+  assert.throws(() => validateModule(`${entry}\nfunction lazy() { return import('./missing.mjs'); }`, { bundled: true, allowedChunks: new Set(["app.mjs"]) }), /unresolved dynamic import/);
+  validateModule(`${entry}\nfunction lazy() { return import('./chunks/lazy.mjs'); }`, { bundled: true, entry: true, allowedChunks: new Set(["app.mjs", "chunks/lazy.mjs"]) });
   assert.throws(() => validateModule(`${entry}\nimport 'unresolved';`, { bundled: true }), /unresolved runtime import/);
   assert.throws(() => validateModule(`${entry}\nexport * from 'external';`, { bundled: true }), /external re-export/);
   assert.throws(() => validateModule(`${entry}\nconsole.log(document);`, { bundled: true }), /Unsupported runtime global: document/);
