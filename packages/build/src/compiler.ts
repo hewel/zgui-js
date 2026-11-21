@@ -1,9 +1,11 @@
 import path from "node:path";
+import { realpathSync } from "node:fs";
 import {
   transformAsync,
   type BabelFileResult,
   type TransformOptions as BabelTransformOptions,
 } from "@babel/core";
+import { parse } from "@babel/parser";
 import typescriptPresetModule from "@babel/preset-typescript";
 import solidBabelPlugin from "@solidjs/babel-plugin";
 import {
@@ -32,6 +34,7 @@ import {
   styleSystem,
   readNativeProfileDigest,
   validateStylexModule,
+  validateStylesheet,
   finalizeStylex,
   type StyleSystem,
   type StylexModule,
@@ -63,6 +66,7 @@ interface CompilerOptions {
   babelTransform?: BabelTransform;
   stylexDiagnostics?: boolean;
   development?: boolean;
+  hoistComponentStyles?: boolean;
 }
 
 export interface CompileBundleOptions extends CompilerOptions {
@@ -84,9 +88,60 @@ export interface BundleWatcher {
   close(): Promise<void>;
 }
 
+interface StaticComponentSheet {
+  readonly name: string;
+  readonly className: string;
+  readonly css: string;
+}
+
+const GENERATED_STYLE_FILE =
+  /(?:^|[\\/])components[\\/]generated[\\/][A-Za-z0-9]+Style\.[cm]?[jt]s$/;
+
+function extractStaticComponentSheet(
+  source: string,
+  filename: string,
+): StaticComponentSheet | undefined {
+  if (!GENERATED_STYLE_FILE.test(filename)) return undefined;
+  const ast = parse(source, { sourceType: "module", plugins: ["typescript"] });
+  if (ast.program.body.length !== 1) return undefined;
+  const statement = ast.program.body[0];
+  if (
+    statement?.type !== "ExportNamedDeclaration" ||
+    statement.declaration?.type !== "VariableDeclaration"
+  ) {
+    return undefined;
+  }
+  const decl = statement.declaration.declarations[0];
+  if (
+    statement.declaration.declarations.length !== 1 ||
+    decl?.id.type !== "Identifier" ||
+    decl.id.name !== "sheet" ||
+    !decl.init
+  ) {
+    return undefined;
+  }
+  const expr = decl.init.type === "TSAsExpression" ? decl.init.expression : decl.init;
+  if (expr.type !== "ObjectExpression") return undefined;
+  let name: string | undefined;
+  let className: string | undefined;
+  let css: string | undefined;
+  for (const prop of expr.properties) {
+    if (prop.type !== "ObjectProperty" || prop.computed || prop.key.type !== "Identifier")
+      return undefined;
+    if (prop.value.type !== "StringLiteral") return undefined;
+    if (prop.key.name === "name") name = prop.value.value;
+    else if (prop.key.name === "className") className = prop.value.value;
+    else if (prop.key.name === "css") css = prop.value.value;
+    else return undefined;
+  }
+  if (name === undefined || className === undefined || css === undefined) return undefined;
+  return { name, className, css };
+}
+
 interface CachedTransform extends StylexModule {
   source: string;
   result: SourceDescription;
+  componentSheet?: StaticComponentSheet;
 }
 
 function isStylexRule(rule: unknown): rule is Rule {
@@ -125,6 +180,7 @@ function compilerOptions(
     babelTransform = transformAsync,
     stylexDiagnostics = false,
     development = false,
+    hoistComponentStyles = true,
   }: CompilerOptions,
 ): InputOptions {
   // Rolldown 1.3.2 watch rescans the graph even with incrementalBuild enabled.
@@ -184,7 +240,7 @@ function compilerOptions(
             },
           };
         },
-        generateBundle() {
+        generateBundle(_options, output) {
           const active = new Set(this.getModuleIds());
           const modules = [...transforms]
             .filter(([filename]) => active.has(filename))
@@ -197,6 +253,36 @@ function compilerOptions(
             source:
               JSON.stringify({ ...origins, styleSystem: publicationStyleSystem }, null, 2) + "\n",
           });
+          if (hoistComponentStyles) {
+            const reachable = new Set<string>();
+            for (const item of Object.values(output)) {
+              if (item.type !== "chunk") continue;
+              for (const id of item.moduleIds) {
+                if (id.startsWith("\0")) continue;
+                reachable.add(id);
+                try {
+                  reachable.add(realpathSync(id));
+                } catch {
+                  // Ignore virtual or non-filesystem module IDs.
+                }
+              }
+            }
+            const hoisted = new Map<string, string>();
+            for (const [filename, record] of transforms) {
+              if (!record.componentSheet || !reachable.has(filename)) continue;
+              if (record.componentSheet.css.trim().length === 0) continue;
+              hoisted.set(record.componentSheet.name, record.componentSheet.css);
+            }
+            if (hoisted.size > 0) {
+              const body = [...hoisted.entries()]
+                .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+                .map(([name, sheetCss]) => `/* ${name} */\n${sheetCss}`)
+                .join("\n");
+              const componentsCss = `@layer zgui.components {\n${body}\n}\n`;
+              validateStylesheet(componentsCss, "components.css");
+              this.emitFile({ type: "asset", fileName: "components.css", source: componentsCss });
+            }
+          }
         },
         closeWatcher() {
           transforms.clear();
@@ -209,6 +295,25 @@ function compilerOptions(
           filename = await realpath(filename);
           const cached = transforms.get(filename);
           if (cached?.source === source) return cached.result;
+          if (hoistComponentStyles) {
+            const componentSheet = extractStaticComponentSheet(source, filename);
+            if (componentSheet) {
+              const code = `export const sheet = { name: ${JSON.stringify(componentSheet.name)}, className: ${JSON.stringify(componentSheet.className)}, css: "" };\n`;
+              const result: SourceDescription = {
+                code,
+                map: { version: 3, sources: [filename], names: [], mappings: "AAAA" },
+                moduleType: "js",
+              };
+              transforms.set(filename, {
+                source,
+                result,
+                rules: [],
+                identity: moduleIdentity(filename, { root, appDirectory }),
+                componentSheet,
+              });
+              return result;
+            }
+          }
           validateStylexModule(source, { filename });
           // Pass one preserves JSX and TypeScript; its metadata is owned by this build pass.
           const first = await transformAsync(source, {
@@ -363,6 +468,7 @@ export async function compileBundle(
       appDirectory,
       stylexDiagnostics,
       development,
+      hoistComponentStyles: hostEntry,
       babelTransform,
       plugins: [
         {
@@ -417,6 +523,7 @@ export function watchBundle(
       appDirectory,
       stylexDiagnostics,
       development,
+      hoistComponentStyles: true,
       babelTransform,
       plugins: [
         {

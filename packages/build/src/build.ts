@@ -498,6 +498,10 @@ export async function publishApplication(
   if (!stylesheet || !files.has("style-origins.json") || !result.styleSystem)
     throw new Error("Missing StyleX compilation output");
   validateStylesheet(stylesheet.toString(), "app.css", { allowDynamicProperties: true });
+  const componentsCss = files.get("components.css");
+  if (componentsCss !== undefined) {
+    validateStylesheet(componentsCss.toString(), "components.css");
+  }
   const css = await optionalFile(path.join(appDirectory, "src/app.css"));
   if (css !== undefined) {
     validateStylesheet(css.toString(), "base.css");
@@ -546,7 +550,11 @@ export async function publishApplication(
     hostApiVersion: 1,
     entry: "app.mjs",
     sourceMap: "app.mjs.map",
-    styles: css === undefined ? ["app.css"] : ["base.css", "app.css"],
+    styles: [
+      ...(componentsCss !== undefined ? ["components.css"] : []),
+      ...(css !== undefined ? ["base.css"] : []),
+      "app.css",
+    ],
     assets: [...assets.keys()].sort(),
     fonts,
     ...(windowConfig ? { window: windowConfig } : {}),

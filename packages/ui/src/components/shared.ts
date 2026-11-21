@@ -52,6 +52,7 @@ export function withDefaults<D extends object, P extends object>(
 }
 
 export function useStylesheet(sheet: Stylesheet): void {
+  if (sheet.css === "") return;
   const host = bridgeFor();
   const installed = installedSheets.get(host);
   if (installed?.has(sheet.name)) return;

@@ -125,7 +125,7 @@ test("SX01-SX12/SX15/SX17: real extracted StyleX renders dynamic native output w
 
   const manifest = JSON.parse(await readFile(path.join(bundle, "manifest.json"), "utf8"));
   assert.equal(manifest.schemaVersion, 2);
-  assert.deepEqual(manifest.styles, ["base.css", "app.css"]);
+  assert.deepEqual(manifest.styles, ["components.css", "base.css", "app.css"]);
   assert.deepEqual(manifest.fonts, [{ family: "StyleX Fixture", path: "assets/StyleXFixture.ttf" }]);
   assert.equal(manifest.styleSystem.name, "stylex");
   assert.match(manifest.styleSystem.nativeProfileDigest, /^sha256:[a-f0-9]{64}$/);

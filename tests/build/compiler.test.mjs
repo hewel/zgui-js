@@ -840,3 +840,34 @@ test("text controls reject children introduced by a reactive spread before evalu
     else delete globalThis.__zgui;
   }
 });
+
+test("static component stylesheets hoist into packaged components.css in layer order without breaking non-host bundles", async t => {
+  const directory = await fixture(t);
+  await writeFile(path.join(directory, "src/app.css"), "text { color: #222; }\n");
+  await writeFile(path.join(directory, "src/main.tsx"), `
+    import { renderApp } from "@hewel/zgui";
+    import type { NativeNode } from "@hewel/zgui";
+    import { Button, ThemeProvider } from "@hewel/zgui/components";
+    export const hostApiVersion = 1;
+    export function mount(root: NativeNode) {
+      return renderApp(() => <ThemeProvider><Button>Save</Button></ThemeProvider>, root);
+    }
+  `);
+
+  const published = await buildApplication("hoisted-components", { appDirectory: directory });
+  assert.deepEqual(published.manifest.styles, ["components.css", "base.css", "app.css"]);
+  const componentsCss = await readFile(path.join(published.dist, "components.css"), "utf8");
+  assert.match(componentsCss, /^@layer zgui\.components \{/);
+  assert.match(componentsCss, /\/\* ButtonStyle \*\//);
+  assert.doesNotMatch(componentsCss, /\/\* CalendarStyle \*\//, "unreachable component styles must stay excluded");
+  const appJs = await readFile(path.join(published.dist, "app.mjs"), "utf8");
+  assert.doesNotMatch(appJs, /--zui-button-ring:/, "ButtonStyle CSS text must be hoisted out of app.mjs");
+
+  const nonHost = await bundle(path.join(directory, "src/main.tsx"), {
+    appDirectory: directory,
+    hostEntry: false,
+  });
+  assert.equal(nonHost.files.has("components.css"), false, "hostEntry: false keeps component styles inline for unit harnesses");
+  assert.match(nonHost.files.get("app.mjs").toString(), /--zui-button-ring:/);
+});
+
