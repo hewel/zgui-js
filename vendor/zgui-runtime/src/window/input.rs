@@ -446,6 +446,7 @@ impl Window {
         // ignored composition would jump from the old text to the committed one with nothing in
         // between.
         if let Some(value) = edited.value {
+            self.host.write_value(node, value.clone());
             self.report_input(node, value, edited.selection, timestamp);
         }
         edited.handled
@@ -471,6 +472,7 @@ impl Window {
             self.report_caret();
         }
         if let Some(value) = edited.value {
+            self.host.write_value(node, value.clone());
             self.report_input(node, value, edited.selection, timestamp);
         }
     }
@@ -818,6 +820,9 @@ impl Window {
                 };
                 // A value that was already there moved nothing, and writing the caret back would
                 // undo a selection made in the same frame by something that ran before this.
+                if let Some(value) = self.editors.value(key) {
+                    self.host.write_value(key, value);
+                }
                 if let Some(selection) = loaded.selection {
                     self.host.write_selection(key, selection);
                 }

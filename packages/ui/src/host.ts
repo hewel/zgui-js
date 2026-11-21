@@ -60,6 +60,9 @@ export interface NativeHost {
     scrollTo(node: NativeNode, left: number | null, top: number | null, behavior?: "instant" | "smooth"): void;
     scrollBy(node: NativeNode, left: number | null, top: number | null, behavior?: "instant" | "smooth"): void;
     scrollIntoView(node: NativeNode, block?: "nearest" | "start" | "center" | "end", behavior?: "instant" | "smooth"): void;
+    getSelection(node: NativeNode): { readonly start: number; readonly end: number } | null;
+    setSelection(node: NativeNode, start: number, end?: number): void;
+    selectAll(node: NativeNode): void;
     getWindowRect(node: NativeNode): NativeWindowRect | null;
     getTextContent(node: NativeNode): string;
     isAnimating(node: NativeNode): boolean;

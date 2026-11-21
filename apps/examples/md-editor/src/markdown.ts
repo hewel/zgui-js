@@ -386,18 +386,3 @@ export function toggleTaskAtLine(source: string, lineIndex: number): string {
   }
   return lines.join("\n");
 }
-
-/** Convert a native UTF-8 byte offset from NativeValueEvent.selection to a JS UTF-16 index. */
-export function utf8OffsetToUtf16(text: string, byteOffset: number): number {
-  let bytes = 0;
-  let i = 0;
-  while (i < text.length && bytes < byteOffset) {
-    const code = text.codePointAt(i)!;
-    const step = code > 0xffff ? 2 : 1;
-    const width = code < 0x80 ? 1 : code < 0x800 ? 2 : code < 0x10000 ? 3 : 4;
-    if (bytes + width > byteOffset) break;
-    bytes += width;
-    i += step;
-  }
-  return i;
-}

@@ -52,7 +52,7 @@ export interface NativeKeyEvent extends NativeEvent {
 }
 export interface NativeValueEvent extends NativeEvent {
   readonly value: string;
-  /** Offsets are UTF-8 bytes, not JavaScript UTF-16 string indices. */
+  /** Selection offsets in JavaScript UTF-16 code units (matching `value.slice(start, end)`). */
   readonly selection: { readonly start: number; readonly end: number };
   readonly valueChange: "input" | "committed";
 }

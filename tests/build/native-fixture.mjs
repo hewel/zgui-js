@@ -162,6 +162,29 @@ export function createHost({ strictStyles = false, reducedMotion = false, monito
   const traps = [];
   const locks = [];
   const scrollCommands = [];
+  const selections = new Map();
+  const editableTextOf = node => {
+    const value = node.props.get("value");
+    if (typeof value === "string") return value;
+    const def = node.props.get("defaultValue");
+    return typeof def === "string" ? def : "";
+  };
+  const assertEditable = (node, op) => {
+    if (node.tag !== "field" && node.tag !== "editor") {
+      throw new TypeError(`${op} requires a field or editor`);
+    }
+  };
+  const clampUtf16Boundary = (text, offset) => {
+    const clamped = Math.max(0, Math.min(text.length, Math.trunc(offset)));
+    if (clamped > 0 && clamped < text.length) {
+      const prev = text.charCodeAt(clamped - 1);
+      const curr = text.charCodeAt(clamped);
+      if (prev >= 0xd800 && prev <= 0xdbff && curr >= 0xdc00 && curr <= 0xdfff) {
+        return clamped - 1;
+      }
+    }
+    return clamped;
+  };
   const layers = [];
   const geometry = [];
   const animatingQueries = [];
@@ -570,6 +593,31 @@ export function createHost({ strictStyles = false, reducedMotion = false, monito
       assertActiveHost("scrollIntoView");
       assertLive(node, "scrollIntoView target", region);
       scrollCommands.push({ kind: "scrollIntoView", node, block, behavior });
+    },
+    getSelection: node => {
+      assertLive(node, "getSelection target", region);
+      assertEditable(node, "getSelection");
+      const current = selections.get(node);
+      return current ? { start: current.start, end: current.end } : null;
+    },
+    setSelection: (node, start, end = start) => {
+      assertActiveHost("setSelection");
+      assertLive(node, "setSelection target", region);
+      assertEditable(node, "setSelection");
+      if (typeof start !== "number" || !Number.isFinite(start) || typeof end !== "number" || !Number.isFinite(end)) {
+        throw new RangeError("selection offset must be a finite number");
+      }
+      const text = editableTextOf(node);
+      const s = clampUtf16Boundary(text, start);
+      const e = Math.max(s, clampUtf16Boundary(text, end));
+      selections.set(node, { start: s, end: e });
+    },
+    selectAll: node => {
+      assertActiveHost("selectAll");
+      assertLive(node, "selectAll target", region);
+      assertEditable(node, "selectAll");
+      const text = editableTextOf(node);
+      selections.set(node, { start: 0, end: text.length });
     },
     getWindowRect: node => {
       assertLive(node, "rect target", region);

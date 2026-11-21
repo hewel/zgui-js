@@ -212,6 +212,14 @@ pub trait ViewHost {
     /// Selects everything in this editable node.
     fn select_all(&self, node: NodeId);
 
+    /// The plain text held by this editable node, if known.
+    ///
+    /// Returns the unmasked model text joined across paragraphs with `\n`, matching the UTF-8 byte
+    /// offsets reported by [`ViewHost::selection`] and accepted by [`ViewHost::set_selection`].
+    fn editable_text(&self, _node: NodeId) -> Option<String> {
+        None
+    }
+
     /// Puts `text` in this editable node, as the value its application owns.
     ///
     /// This is what makes a field bound to a signal possible. An editable node's text is not

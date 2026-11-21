@@ -2,10 +2,10 @@ import {
   Image, Button, TextField, TextArea, For, Show, Loading, Errored, LayerSurface, PopupSurface,
   createCanvasScene, createContext, createDelay, createEffect, createInterval, createMemo, createSignal, createSpring, createStore, createTimeout, createProjection,
   merge, omit, onCleanup, onSettled, reconcile, renderApp, renderShell, untrack, useContext, useMonitors,
-  focus, getReducedMotion, getTextContent, getWindowRect, isAnimating, lockScroll, mountStylesheet, observeGeometry, precedes, registerDismissLayer, scrollBy, scrollIntoView, scrollTo, setReducedMotion, trapFocus,
+  focus, getReducedMotion, getSelection, getTextContent, getWindowRect, isAnimating, lockScroll, mountStylesheet, observeGeometry, precedes, registerDismissLayer, scrollBy, scrollIntoView, scrollTo, selectAll, setReducedMotion, setSelection, trapFocus,
   SessionLockSurface, WindowSurface, VirtualGrid, VirtualList, getSessionGeneration, requestSessionLock,
 } from "@hewel/zgui";
-import type { CanvasCommand, CanvasScene, CanvasTransform, Component, Context, NativeAnimationEvent, NativeChild, NativeContextMenuEvent, NativeFocusOptions, NativeNode, NativePointerBoundaryEvent, NativeRole, NativeTextControlProps, NativeTransitionEvent, NativeViewport, NativeWheelEvent, NativeWindowRect, ParentComponent, ScrollIntoViewOptions, ScrollToOptions, Spring, SpringOptions, TextFieldProps, TextAreaProps, VectorProps, VirtualListController, WindowDecorations } from "@hewel/zgui";
+import type { CanvasCommand, CanvasScene, CanvasTransform, Component, Context, NativeAnimationEvent, NativeChild, NativeContextMenuEvent, NativeFocusOptions, NativeNode, NativePointerBoundaryEvent, NativeRole, NativeTextControlProps, NativeTransitionEvent, NativeViewport, NativeWheelEvent, NativeWindowRect, ParentComponent, ScrollIntoViewOptions, ScrollToOptions, Spring, SpringOptions, TextFieldProps, TextAreaProps, TextSelectionRange, VectorProps, VirtualListController, WindowDecorations } from "@hewel/zgui";
 import type { Accessor } from "@hewel/zgui";
 import type { SessionLockRequest, SessionLockState } from "@hewel/zgui";
 
@@ -288,6 +288,11 @@ scrollIntoView(refNode, intoViewOpts);
 const [listController, setListController] = createSignal<VirtualListController | null>(null);
 void <VirtualList each={["a"]} itemHeight={24} controller={setListController}>{item => <text>{item}</text>}</VirtualList>;
 listController()?.scrollToIndex(0, { align: "start", behavior: "instant" });
+const currentSel: TextSelectionRange | null = getSelection(refNode);
+setSelection(refNode, 0);
+setSelection(refNode, 1, 3);
+selectAll(refNode);
+void currentSel;
 void <scroll ref={setRefNode} />;
 void [isDelayPending, reactiveSpring];
 void borrowed;

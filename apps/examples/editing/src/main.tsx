@@ -63,7 +63,7 @@ function Editing() {
       <row><text>Input events: </text><text class="editing-input-count">{inputCount()}</text></row>
       <row><text>Committed changes: </text><text class="editing-change-count">{changeCount()}</text></row>
       <row><text>Last native value: </text><text class="editing-last-value">{lastValue()}</text></row>
-      <row><text>Selection (UTF-8 bytes): </text><text class="editing-last-selection">{lastSelection()}</text></row>
+      <row><text>Selection (UTF-16): </text><text class="editing-last-selection">{lastSelection()}</text></row>
       <row><text>Event target is control: </text><text class="editing-target-valid">{String(targetValid())}</text></row>
     </column>
   </column>;

@@ -1,7 +1,7 @@
 import { createEffect, getOwner, onCleanup } from "#solid";
 import { flush } from "./renderer/index.js";
 import { bridgeFor, bridgeForTarget, getReducedMotion, setReducedMotion, withCallbackBridge } from "./host.js";
-import type { Accessor, CanvasScene, NativeDismissLayer, NativeDismissLayerOptions, NativeDismissReason, NativeFocusOptions, NativeFocusTrapOptions, NativeGeometry, NativeGeometryKind, NativeNode, NativeNodeTarget, NativeWindowRect, ScrollBehavior, ScrollIntoViewOptions, ScrollToOptions } from "./types.js";
+import type { Accessor, CanvasScene, NativeDismissLayer, NativeDismissLayerOptions, NativeDismissReason, NativeFocusOptions, NativeFocusTrapOptions, NativeGeometry, NativeGeometryKind, NativeNode, NativeNodeTarget, NativeWindowRect, ScrollBehavior, ScrollIntoViewOptions, ScrollToOptions, TextSelectionRange } from "./types.js";
 
 export { getReducedMotion, setReducedMotion };
 
@@ -141,6 +141,33 @@ export function scrollIntoView(target: NativeNodeTarget, options: ScrollIntoView
   }
   const behavior = resolveScrollBehavior(options.behavior);
   bridgeFor(node).scrollIntoView(node, block, behavior);
+}
+
+/** Read the current selection range in UTF-16 code units from an editable field/editor, or `null` when unset. */
+export function getSelection(target: NativeNodeTarget): TextSelectionRange | null {
+  const node = resolveNode(target);
+  if (!node) return null;
+  return bridgeFor(node).getSelection(node);
+}
+
+/** Set the caret or selection range in UTF-16 code units on an editable field/editor. Defaults `end` to `start`. */
+export function setSelection(target: NativeNodeTarget, start: number, end: number = start): void {
+  const node = resolveNode(target);
+  if (!node) return;
+  if (typeof start !== "number" || !Number.isFinite(start)) {
+    throw new RangeError("selection start offset must be a finite number");
+  }
+  if (typeof end !== "number" || !Number.isFinite(end)) {
+    throw new RangeError("selection end offset must be a finite number");
+  }
+  bridgeFor(node).setSelection(node, start, end);
+}
+
+/** Select the entire text value of an editable field/editor. */
+export function selectAll(target: NativeNodeTarget): void {
+  const node = resolveNode(target);
+  if (!node) return;
+  bridgeFor(node).selectAll(node);
 }
 
 export function lockScroll(node: NativeNodeTarget): () => void {

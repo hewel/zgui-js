@@ -420,3 +420,13 @@ Regression gate:
 Regression gate:
 
     cargo test -j 4 --manifest-path vendor/zgui-paint/Cargo.toml --lib --offline
+
+## Editable text query for UTF-16 selection conversion
+
+`zgui-view` adds a default `ViewHost::editable_text(&self, node: NodeId) -> Option<String>` method (implemented on `StubHost` and `RuntimeHost`) returning the unmasked editable text joined across paragraphs with `\n` in the exact UTF-8 byte coordinate space used by `ViewHost::selection` / `ViewHost::set_selection`.
+
+`zgui-runtime` mirrors `RuntimeHost::set_value` and `Editors` text updates into `RuntimeHost::values` (falling back to `selection::text_of` on the DOM subtree) so `editable_text`, `set_selection`, and `select_all` stay accurate across multiline text, secure fields, and same-frame `set_value` + `set_selection` calls.
+
+Regression gate:
+
+    cargo test -j 4 --manifest-path vendor/zgui-runtime/Cargo.toml --offline && cargo test -j 4 -p ui-bridge --offline

@@ -429,6 +429,10 @@ impl ViewHost for StubHost {
         self.selections.borrow_mut().insert(node, 0..usize::MAX);
     }
 
+    fn editable_text(&self, node: NodeId) -> Option<String> {
+        self.values.borrow().get(&node).cloned()
+    }
+
     fn set_value(&self, node: NodeId, text: &str) {
         // The stub keeps the one rule a component's behaviour actually depends on: loading the text
         // that is already there leaves the caret alone. A stub that stored unconditionally would

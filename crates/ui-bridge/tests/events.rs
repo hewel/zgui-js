@@ -473,7 +473,7 @@ fn keyboard_value_and_focus_payloads_preserve_native_meaning() {
     assert_eq!(h.eval(r#"
         if (events[0].key !== 'Enter' || events[0].keyWithoutModifiers !== 'Enter' || events[0].code !== 'Enter' || events[0].location !== 'numpad' || !events[0].repeat) throw Error('key');
         if (events[1].key !== null || events[1].deadKey !== '´' || events[1].code !== null || events[1].physicalCode !== 123) throw Error('dead key');
-        if (events[2].value !== 'é🙂' || events[2].selection.start !== 2 || events[2].selection.end !== 6 || events[2].valueChange !== 'input') throw Error('UTF-8 selection');
+        if (events[2].value !== 'é🙂' || events[2].selection.start !== 1 || events[2].selection.end !== 3 || events[2].value.slice(events[2].selection.start, events[2].selection.end) !== '🙂' || events[2].valueChange !== 'input') throw Error('UTF-16 selection');
         if (events[3].valueChange !== 'committed' || events[3].selection.end !== 4) throw Error('change');
         if (events[4].type !== 'focusin' || events[4].cause !== 'keyboard' || events[5].type !== 'focusout' || events[5].cause !== 'window') throw Error('native focus');
         'verified'

@@ -5,10 +5,13 @@ import {
   createEffect,
   createMemo,
   createSignal,
+  flush,
+  getSelection,
   observeGeometry,
   renderApp,
+  setSelection,
 } from "@hewel/zgui";
-import type { NativeNode, NativeScrollPosition, NativeValueEvent } from "@hewel/zgui";
+import type { NativeNode, NativeScrollPosition, NativeValueEvent, TextSelectionRange } from "@hewel/zgui";
 import {
   Badge,
   Button,
@@ -20,7 +23,7 @@ import {
 } from "@hewel/zgui/components";
 import type { ColorScheme, ThemePreset } from "@hewel/zgui/components";
 import { registerImageBytes } from "@hewel/zgui-services";
-import { parseMarkdown, toggleTaskAtLine, utf8OffsetToUtf16 } from "./markdown.js";
+import { parseMarkdown, toggleTaskAtLine } from "./markdown.js";
 import { MarkdownPreview } from "./preview.js";
 import { INITIAL_DOCS, buildPipelineSvg, buildStressMarkdown, encodeUtf8Bytes } from "./samples.js";
 import type { MarkdownDoc } from "./samples.js";
@@ -44,10 +47,11 @@ function MarkdownStudioApp() {
 
   const [docs, setDocs] = createSignal<readonly MarkdownDoc[]>(INITIAL_DOCS);
   const [activeDocId, setActiveDocId] = createSignal(INITIAL_DOCS[0]!.id);
-  const [selectionBytes, setSelectionBytes] = createSignal<{ start: number; end: number }>({
+  const [selectionRange, setSelectionRange] = createSignal<TextSelectionRange>({
     start: 0,
     end: 0,
   });
+  const [editorEl, setEditorEl] = createSignal<NativeNode | null>(null);
   const [highlightedLine, setHighlightedLine] = createSignal<number | null>(null);
   const [scrollEl, setScrollEl] = createSignal<NativeNode | null>(null);
   const [scrollInfo, setScrollInfo] = createSignal<NativeScrollPosition | null>(null);
@@ -102,18 +106,23 @@ function MarkdownStudioApp() {
   };
 
   const handleEditorInput = (event: NativeValueEvent) => {
-    setSelectionBytes(event.selection);
+    setSelectionRange(event.selection);
     setDocContent(event.value);
   };
 
   const wrapSelection = (before: string, after: string, fallbackText: string) => {
     const content = activeDoc().content;
-    const sel = selectionBytes();
-    const start = utf8OffsetToUtf16(content, sel.start);
-    const end = utf8OffsetToUtf16(content, sel.end);
+    const sel = getSelection(editorEl) ?? selectionRange();
+    const start = Math.max(0, Math.min(content.length, sel.start));
+    const end = Math.max(start, Math.min(content.length, sel.end));
     const selected = content.slice(start, end) || fallbackText;
     const next = `${content.slice(0, start)}${before}${selected}${after}${content.slice(end)}`;
+    const nextStart = start + before.length;
+    const nextEnd = nextStart + selected.length;
     setDocContent(next, `Inserted ${before.trim() || "snippet"}`);
+    setSelectionRange({ start: nextStart, end: nextEnd });
+    flush();
+    setSelection(editorEl, nextStart, nextEnd);
     setStatusMsg(`Formatted selection (${start}:${end})`);
   };
 
@@ -375,11 +384,12 @@ function MarkdownStudioApp() {
                 <row class="mde-pane-head">
                   <text style={{ "font-weight": "600" }}>MARKDOWN SOURCE</text>
                   <text class="mono">
-                    {`sel ${selectionBytes().start}:${selectionBytes().end} (UTF-8)`}
+                    {`sel ${selectionRange().start}:${selectionRange().end}`}
                   </text>
                 </row>
                 <column class="mde-textarea-wrap">
                   <Textarea
+                    ref={setEditorEl}
                     testId="md-source-editor"
                     class="mde-textarea"
                     label="Markdown source editor"

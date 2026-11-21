@@ -69,6 +69,9 @@ impl Window {
             let document = self.document.borrow();
             self.editors.end_composition(&document, node)
         };
+        if let Some(value) = edited.value {
+            self.host.write_value(node, value);
+        }
         if let Some(selection) = edited.selection.clone() {
             self.host.write_selection(node, selection);
         }

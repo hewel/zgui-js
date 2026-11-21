@@ -16,8 +16,8 @@ export type { Spring, SpringNumberOption, SpringOptions } from "./spring.js";
 export { createDelay, createInterval, createTimeout } from "./timers.js";
 export type { DelayHandle } from "./timers.js";
 export {
-  createCanvasScene, focus, getReducedMotion, getTextContent, getWindowRect, isAnimating, lockScroll, mountStylesheet,
-  observeGeometry, precedes, registerDismissLayer, scrollBy, scrollIntoView, scrollTo, setReducedMotion, trapFocus,
+  createCanvasScene, focus, getReducedMotion, getSelection, getTextContent, getWindowRect, isAnimating, lockScroll, mountStylesheet,
+  observeGeometry, precedes, registerDismissLayer, scrollBy, scrollIntoView, scrollTo, selectAll, setReducedMotion, setSelection, trapFocus,
 } from "./nodes.js";
 export { Portal } from "./portal.js";
 export type { PortalProps } from "./portal.js";

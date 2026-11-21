@@ -249,7 +249,7 @@ fn native_internal_input_and_change_targets_retarget_without_losing_listener_cur
             if (received.length !== 2 || received[0].type !== 'input' || received[1].type !== 'change') throw Error('event kinds');
             if (received[0].valueChange !== 'input' || received[1].valueChange !== 'committed') throw Error('value change kinds');
             for (const event of received) {
-                if (event.value !== 'é🙂' || event.selection.start !== 2 || event.selection.end !== 6) throw Error('snapshot lost UTF-8 selection');
+                if (event.value !== 'é🙂' || event.selection.start !== 1 || event.selection.end !== 3 || event.value.slice(event.selection.start, event.selection.end) !== '🙂') throw Error('snapshot lost UTF-16 selection');
             }
             if (__zgui.getFirstChild(node) != null) throw Error('event exposed internals');
             'retargeted'
@@ -368,4 +368,55 @@ fn focus_moves_through_the_host_and_rejects_stale_or_foreign_wrappers() {
         'stale'
     "#);
     foreign.dispose();
+}
+
+#[test]
+fn selection_api_converts_utf16_and_utf8_across_ascii_cjk_emoji_and_rejects_non_editable() {
+    use zgui::view::ViewHost;
+    for tag in ["field", "editor"] {
+        let mut native = Editing::new(tag);
+        // "A中🙂B":
+        // 'A': UTF-8 0..1, UTF-16 0..1
+        // '中': UTF-8 1..4, UTF-16 1..2
+        // '🙂': UTF-8 4..8, UTF-16 2..4 (surrogate pair)
+        // 'B': UTF-8 8..9, UTF-16 4..5
+        native.script(r#"
+            if (__zgui.getSelection(node) !== null) throw Error('expected null before any selection');
+            __zgui.setProperty(node, 'value', 'A中🙂B');
+            // Select CJK + emoji: UTF-16 1..4 -> UTF-8 1..8
+            __zgui.setSelection(node, 1, 4);
+            const sel = __zgui.getSelection(node);
+            if (!sel || sel.start !== 1 || sel.end !== 4) throw Error('roundtrip mismatch: ' + JSON.stringify(sel));
+            if ('A中🙂B'.slice(sel.start, sel.end) !== '中🙂') throw Error('slice mismatch');
+            'selected'
+        "#);
+        assert_eq!(native.host.selection(native.node), Some(1..8));
+
+        // Caret with omitted end + mid-surrogate clamping (UTF-16 index 3 splits '🙂' -> clamps to byte 4 / UTF-16 2)
+        native.script(r#"
+            __zgui.setSelection(node, 3);
+            const clamped = __zgui.getSelection(node);
+            if (!clamped || clamped.start !== 2 || clamped.end !== 2) throw Error('surrogate clamp mismatch: ' + JSON.stringify(clamped));
+            __zgui.selectAll(node);
+            const all = __zgui.getSelection(node);
+            if (!all || all.start !== 0 || all.end !== 5) throw Error('selectAll mismatch: ' + JSON.stringify(all));
+            // Non-editable box must be rejected cleanly
+            const box = __zgui.createElement('box');
+            __zgui.insertNode(root, box, null);
+            for (const fn of [
+                () => __zgui.getSelection(box),
+                () => __zgui.setSelection(box, 0, 1),
+                () => __zgui.selectAll(box),
+                () => __zgui.setSelection(node, NaN, 1),
+                () => __zgui.setSelection(node, 0, Infinity),
+            ]) {
+                let threw = false;
+                try { fn(); } catch { threw = true; }
+                if (!threw) throw Error('expected invalid selection call to throw');
+            }
+            __zgui.removeNode(root, box);
+            'verified'
+        "#);
+        assert_eq!(native.host.selection(native.node), Some(0..usize::MAX));
+    }
 }

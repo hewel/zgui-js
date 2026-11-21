@@ -3,7 +3,7 @@
 //! `onFocus`/`onBlur` deliberately subscribe to native `FocusIn`/`FocusOut`, so their
 //! snapshot types are `focusin`/`focusout` and they participate in native bubbling.
 //! Timestamps are monotonic milliseconds, positions are window-relative CSS pixels,
-//! pointer IDs are lossless decimal strings, and selection offsets are UTF-8 bytes.
+//! pointer IDs are lossless decimal strings, and selection offsets are UTF-16 code units.
 
 use std::{cell::Cell, collections::{HashMap, HashSet}, rc::Rc};
 
@@ -293,8 +293,8 @@ impl EventSnapshot {
             Payload::Value(value) => {
                 object.set("value", value.value.as_str())?;
                 let selection = Object::new(ctx.clone())?;
-                selection.set("start", value.selection.start)?;
-                selection.set("end", value.selection.end)?;
+                selection.set("start", utf8_byte_to_utf16(&value.value, value.selection.start))?;
+                selection.set("end", utf8_byte_to_utf16(&value.value, value.selection.end))?;
                 object.set("selection", selection)?;
                 object.set("valueChange", match value.kind { ValueChange::Input => "input", ValueChange::Committed => "committed", _ => "unknown" })?;
             }
@@ -328,6 +328,41 @@ impl EventSnapshot {
     }
 
     pub(crate) fn dismiss_reason(&self) -> Option<DismissReason> { dismiss_reason(self.kind, &self.payload) }
+}
+
+/// Converts a UTF-8 byte offset in `text` to a UTF-16 code-unit offset.
+///
+/// Offsets beyond `text.len()` clamp to the full UTF-16 length; offsets falling inside a
+/// multi-byte UTF-8 sequence clamp safely down to the preceding scalar boundary.
+pub(crate) fn utf8_byte_to_utf16(text: &str, byte_offset: usize) -> usize {
+    let target = byte_offset.min(text.len());
+    let mut utf16 = 0;
+    for (byte_idx, ch) in text.char_indices() {
+        if byte_idx >= target || byte_idx + ch.len_utf8() > target {
+            break;
+        }
+        utf16 += ch.len_utf16();
+    }
+    utf16
+}
+
+/// Converts a UTF-16 code-unit offset in `text` to a valid UTF-8 byte boundary.
+///
+/// Offsets beyond the string clamp to `text.len()`; offsets splitting a UTF-16 surrogate pair
+/// clamp safely down to the preceding scalar boundary.
+pub(crate) fn utf16_to_utf8_byte(text: &str, utf16_offset: usize) -> usize {
+    let mut utf16 = 0;
+    for (byte_idx, ch) in text.char_indices() {
+        if utf16 >= utf16_offset {
+            return byte_idx;
+        }
+        let next = utf16 + ch.len_utf16();
+        if next > utf16_offset {
+            return byte_idx;
+        }
+        utf16 = next;
+    }
+    text.len()
 }
 
 fn milliseconds(timestamp: Timestamp) -> f64 { timestamp.since_origin().as_secs_f64() * 1000.0 }

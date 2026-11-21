@@ -238,6 +238,11 @@ export interface NativeElementProps extends NativeEventProps {
   ariaValueStep?: number | null;
 }
 export type ButtonProps = Omit<NativeElementProps, "role">;
+/** Caret or selected text range in JavaScript UTF-16 code units. */
+export interface TextSelectionRange {
+  readonly start: number;
+  readonly end: number;
+}
 /** Native editor descendants are opaque and cannot be authored as JSX children. */
 export interface NativeTextControlProps extends Omit<NativeElementProps, "children"> {
   children?: never;

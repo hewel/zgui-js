@@ -89,6 +89,30 @@ pub fn text_length(store: &DocumentStore, node: NodeIndex) -> usize {
     length + paragraphs.max(1) - 1
 }
 
+/// Collects the text of a node's subtree in document order, joining paragraph text nodes with `\n`.
+///
+/// Matches [`text_length`] so UTF-8 byte offsets from [`Selections`] map directly into this string.
+pub fn text_of(store: &DocumentStore, node: NodeIndex) -> String {
+    fn visit(store: &DocumentStore, index: NodeIndex, out: &mut String, paragraphs: &mut usize) {
+        if let Some(text) = zgui_dom::text::text_of(store, index) {
+            if *paragraphs > 0 {
+                out.push('\n');
+            }
+            out.push_str(text);
+            *paragraphs += 1;
+        }
+        let mut child = store.core(index).first_child();
+        while let Some(next) = child {
+            visit(store, next, out, paragraphs);
+            child = store.core(next).next_sibling();
+        }
+    }
+    let mut out = String::new();
+    let mut paragraphs = 0;
+    visit(store, node, &mut out, &mut paragraphs);
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use zgui_dom::{Document, EverythingMatters, NodeIndex};

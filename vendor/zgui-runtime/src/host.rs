@@ -230,6 +230,8 @@ pub struct RuntimeHost {
     /// not part of it: it survives a restyle, it is not inherited, and nothing below the runtime
     /// may keep a second copy of it.
     selections: crate::selection::Selections,
+    /// The latest unmasked text for each editable node written via `set_value` or the editing model.
+    values: RefCell<rustc_hash::FxHashMap<NodeKey, String>>,
     /// The traps installed, innermost last.
     ///
     /// The stack itself is the input system's, not a second one kept here: which subtree confines
@@ -295,6 +297,7 @@ impl RuntimeHost {
             placements: RefCell::new(zgui_scene::Placements::new()),
             sheets: RefCell::default(),
             selections: crate::selection::Selections::new(),
+            values: RefCell::default(),
             focused: focused_writer.into(),
             focused_writer,
             traps: RefCell::new(zgui_input::focus::FocusTraps::default()),
@@ -354,6 +357,11 @@ impl RuntimeHost {
     pub fn write_selection(&self, node: NodeKey, range: Range<usize>) {
         let length = range.end;
         self.selections.set(node, range, length);
+    }
+
+    /// Records the latest unmasked text held by an editable node.
+    pub fn write_value(&self, node: NodeKey, text: String) {
+        self.values.borrow_mut().insert(node, text);
     }
 
     /// What is selected in a node, by the document's own name for it.
@@ -582,6 +590,9 @@ impl RuntimeHost {
 
     /// How many bytes of text a node's subtree holds, or zero when it names no live node.
     fn text_length(&self, key: NodeKey) -> usize {
+        if let Some(value) = self.values.borrow().get(&key) {
+            return value.len();
+        }
         let document = self.document.borrow();
         match document.store().index_of(key) {
             Some(index) => crate::selection::text_length(document.store(), index),
@@ -834,10 +845,21 @@ impl ViewHost for RuntimeHost {
         });
     }
 
-    fn set_value(&self, node: NodeId, text: &str) {
-        if self.key_of(node).is_none() {
-            return;
+    fn editable_text(&self, node: NodeId) -> Option<String> {
+        let key = self.key_of(node)?;
+        if let Some(value) = self.values.borrow().get(&key) {
+            return Some(value.clone());
         }
+        let document = self.document.borrow();
+        let index = document.store().index_of(key)?;
+        Some(crate::selection::text_of(document.store(), index))
+    }
+
+    fn set_value(&self, node: NodeId, text: &str) {
+        let Some(key) = self.key_of(node) else {
+            return;
+        };
+        self.values.borrow_mut().insert(key, text.to_owned());
         // Nothing is decided here, not even whether the text differs from what the field holds:
         // the text of an editable element is the editing model's, the model is the window's, and
         // this is called from effects and handlers that run in the middle of a frame. The model

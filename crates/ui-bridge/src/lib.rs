@@ -1191,6 +1191,60 @@ impl UiBridge {
             Ok::<(), rquickjs::Error>(())
         }))?;
         let weak = Rc::downgrade(self);
+        api.set("getSelection", Func::from(move |ctx: Ctx<'js>, node: Class<'js, NativeNode>| -> rquickjs::Result<Value<'js>> {
+            let bridge = owner(&weak, &ctx)?;
+            let handle = node.borrow().handle;
+            let native = {
+                let registry = bridge.registry.borrow();
+                registry.require_editable(handle).map_err(|e| host_error(&ctx, e))?;
+                registry.native(handle).map_err(|e| host_error(&ctx, e))?
+            };
+            let Some(range) = bridge.host.selection(native) else {
+                return Ok(Value::new_null(ctx.clone()));
+            };
+            let text = bridge.host.editable_text(native).unwrap_or_default();
+            let object = Object::new(ctx.clone())?;
+            object.set("start", events::utf8_byte_to_utf16(&text, range.start))?;
+            object.set("end", events::utf8_byte_to_utf16(&text, range.end))?;
+            Ok(object.into_value())
+        }))?;
+        let weak = Rc::downgrade(self);
+        api.set("setSelection", Func::from(move |ctx: Ctx<'js>, node: Class<'js, NativeNode>, start: Value<'js>, end: Opt<Value<'js>>| {
+            let bridge = owner(&weak, &ctx)?;
+            bridge.require_turn(&ctx)?;
+            let handle = node.borrow().handle;
+            let native = {
+                let registry = bridge.registry.borrow();
+                registry.require_editable(handle).map_err(|e| host_error(&ctx, e))?;
+                registry.native(handle).map_err(|e| host_error(&ctx, e))?
+            };
+            let start_u16 = parse_selection_offset(&ctx, &start, "start")?;
+            let end_u16 = match end.0 {
+                None => start_u16,
+                Some(ref val) if val.is_undefined() => start_u16,
+                Some(ref val) => parse_selection_offset(&ctx, val, "end")?,
+            }
+            .max(start_u16);
+            let text = bridge.host.editable_text(native).unwrap_or_default();
+            let start_byte = events::utf16_to_utf8_byte(&text, start_u16);
+            let end_byte = events::utf16_to_utf8_byte(&text, end_u16).max(start_byte);
+            bridge.host.set_selection(native, start_byte..end_byte);
+            Ok::<(), rquickjs::Error>(())
+        }))?;
+        let weak = Rc::downgrade(self);
+        api.set("selectAll", Func::from(move |ctx: Ctx<'js>, node: Class<'js, NativeNode>| {
+            let bridge = owner(&weak, &ctx)?;
+            bridge.require_turn(&ctx)?;
+            let handle = node.borrow().handle;
+            let native = {
+                let registry = bridge.registry.borrow();
+                registry.require_editable(handle).map_err(|e| host_error(&ctx, e))?;
+                registry.native(handle).map_err(|e| host_error(&ctx, e))?
+            };
+            bridge.host.select_all(native);
+            Ok::<(), rquickjs::Error>(())
+        }))?;
+        let weak = Rc::downgrade(self);
         api.set("registerDismissLayer", Func::from(move |ctx: Ctx<'js>, node: Class<'js, NativeNode>, callback: rquickjs::Function<'js>, options: Object<'js>| {
             let bridge = owner(&weak, &ctx)?;
             bridge.require_creation(&ctx)?;
@@ -1433,6 +1487,19 @@ fn overlay_layer(ctx: &Ctx<'_>, layer: &str) -> rquickjs::Result<zgui::view::Ove
         "toast" => Ok(zgui::view::OverlayLayer::Toast),
         _ => Err(Exception::throw_type(ctx, "unsupported native overlay layer")),
     }
+}
+
+fn parse_selection_offset(ctx: &Ctx<'_>, value: &Value<'_>, name: &str) -> rquickjs::Result<usize> {
+    let Some(number) = value.as_number() else {
+        return Err(Exception::throw_type(ctx, &format!("selection {name} offset must be a finite number")));
+    };
+    if !number.is_finite() {
+        return Err(Exception::throw_range(ctx, &format!("selection {name} offset must be a finite number")));
+    }
+    if number <= 0.0 {
+        return Ok(0);
+    }
+    Ok(number.trunc().min(usize::MAX as f64) as usize)
 }
 
 fn host_error(ctx: &Ctx<'_>, error: BridgeError) -> rquickjs::Error {
