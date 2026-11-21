@@ -353,6 +353,13 @@ impl Work {
         self.provider.next_completion()
     }
     pub(crate) fn has_completions(&self) -> bool { self.provider.has_completions() }
+    pub(crate) fn pending_count(&self) -> usize {
+        self.ready.borrow().len()
+            + self.requests.borrow().len()
+            + self.clipboard.pending_count()
+            + self.sqlite.pending_count()
+            + self.files.pending_count()
+    }
     pub(crate) fn counts(&self) -> (usize, usize, usize) {
         let registrations = self.registrations.borrow();
         let ready = self.ready.borrow();

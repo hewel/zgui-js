@@ -2,6 +2,7 @@ mod bounded_fs;
 mod control_cli;
 mod dev_state;
 mod dnd;
+mod inspector;
 mod package;
 mod runtime_capabilities;
 mod runtime_paths;
@@ -53,6 +54,9 @@ struct Application {
     watcher: Option<watcher::PackageWatcher>,
     monitors: Vec<shell::Monitor>,
     layer_primary: bool,
+    dev_inspector: Option<Rc<inspector::DevInspector>>,
+    dev_inspect_path: Option<PathBuf>,
+    dev_inspect_server: Option<inspector::DevInspectorServer>,
 }
 impl Application {
     fn new(native: zgui::runtime::Runtime, pending: Rc<RefCell<Vec<session_host::MountRegion>>>, package: Option<Rc<Package>>, socket_bindings: BTreeMap<String, String>) -> std::io::Result<Self> {
@@ -75,7 +79,33 @@ impl Application {
             watch_path: None, watcher: None,
             monitors: Vec::new(),
             layer_primary: false,
+            dev_inspector: None,
+            dev_inspect_path: None,
+            dev_inspect_server: None,
         })
+    }
+
+    fn drain_dev_inspector(&mut self) {
+        let Some(inspector) = &self.dev_inspector else { return; };
+        if let Some(session) = self.host.sessions().next() {
+            inspector.record_checkpoint(
+                session.generation,
+                session.checkpoint_queue_depth(),
+                session.live_telemetry(),
+            );
+        }
+        let Some(server) = &self.dev_inspect_server else { return; };
+        while let Some(req) = server.try_recv() {
+            let session = self.host.sessions().next().map(AsRef::as_ref);
+            let snapshot = inspector.capture_snapshot(
+                &self.native,
+                session,
+                req.include_tree,
+                req.include_profile,
+                req.surface.as_deref(),
+            );
+            req.reply(&snapshot);
+        }
     }
 
     fn fail(&self, cx: &dyn PlatformCx, error: impl std::fmt::Display) {
@@ -286,7 +316,16 @@ impl AppHandler for Application {
         self.native.surfaces_available(cx);
         self.monitors = shell::Monitor::snapshot(self.native.monitors());
         self.host.set_monitor_snapshot(&self.monitors);
+        if self.dev_inspect_server.is_none()
+            && let Some(path) = self.dev_inspect_path.clone()
+        {
+            match inspector::DevInspectorServer::start(path, cx.waker()) {
+                Ok(server) => self.dev_inspect_server = Some(server),
+                Err(error) => eprintln!("dev-inspector-error: {error}"),
+            }
+        }
         self.after_native(cx);
+        self.drain_dev_inspector();
         self.reconcile_control(cx);
     }
     fn surfaces_lost(&mut self, cx: &dyn PlatformCx) {
@@ -356,6 +395,7 @@ impl AppHandler for Application {
         // its capability. Route only after committing the resulting ownership.
         self.reconcile_control(cx);
         self.drain_control(cx);
+        self.drain_dev_inspector();
     }
     fn idle(&mut self, cx: &dyn PlatformCx) -> IdlePolicy {
         self.native.idle(cx)
@@ -372,6 +412,9 @@ impl AppHandler for Application {
         self.reconcile_control(cx);
     }
     fn shutting_down(&mut self, cx: &dyn PlatformCx) {
+        if let Some(mut server) = self.dev_inspect_server.take() {
+            server.stop();
+        }
         self.watcher.take();
         if let Err(error) = self.control.close() {
             self.record_failure(format_args!("control socket: {error}"));
@@ -390,11 +433,13 @@ const USAGE: &str = "\
 Usage: native-host [OPTIONS]
        native-host preview <COMMAND> [OPTIONS]
        native-host msg <APP_ID> [ARGS...]
+       native-host inspect --socket <PATH> [--op snapshot|tree|profile] [--surface <NAME>]
 
 Options:
   -h, --help                   Show this help message and exit
   --bundle <DIR>               Load a built zgui-js application package directory
   --watch                      Watch --bundle for new generations and hot-reload
+  --dev-inspect <PATH>         Enable dev-only read-only inspector/profiler on Unix socket PATH
   --pure-shell                 Start without a primary window (requires shellSurfaces or sessionLock)
   --layer-config <FILE>        Mount primary surface as a Wayland layer-shell surface
   --width <PX>                 Override initial primary window width (logical px, default 1024)
@@ -425,6 +470,11 @@ fn main() -> Result<(), Box<dyn Error>> {
         args.next();
         std::process::exit(i32::from(preview::command(args)));
     }
+    if args.peek().is_some_and(|arg| arg == "inspect") {
+        args.next();
+        let rest: Vec<String> = args.collect();
+        return inspector::run_cli_inspect(&rest);
+    }
     let mut exit_after = None;
     let mut bundle: Option<PathBuf> = None;
     let mut exercise = false;
@@ -437,6 +487,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut layer_config = None;
     let mut pure_shell = false;
     let mut control_socket = None;
+    let mut dev_inspect_path: Option<PathBuf> = None;
     let mut socket_bindings = BTreeMap::new();
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -485,6 +536,10 @@ fn main() -> Result<(), Box<dyn Error>> {
             "--control-socket" => {
                 if control_socket.is_some() { return Err("--control-socket can only be specified once".into()); }
                 control_socket = Some(args.next().ok_or("--control-socket requires a path")?.into());
+            }
+            "--dev-inspect" => {
+                if dev_inspect_path.is_some() { return Err("--dev-inspect can only be specified once".into()); }
+                dev_inspect_path = Some(args.next().ok_or("--dev-inspect requires a socket path")?.into());
             }
             "--layer-config" => {
                 let path: PathBuf = args.next().ok_or("--layer-config requires a JSON file")?.into();
@@ -539,6 +594,10 @@ fn main() -> Result<(), Box<dyn Error>> {
             app = app.with_resizable(resizable);
         }
     }
+    let dev_inspector = dev_inspect_path.as_ref().map(|_| inspector::DevInspector::new());
+    if let Some(insp) = &dev_inspector {
+        app = app.with_probe(insp.probe());
+    }
     let mut native = app.into_handler(move || Root(roots.clone()))?.into_runtime();
     let fonts = pure_shell.then(|| native.scope().with(zgui::reactive::use_context::<zgui::app::Fonts>)
         .expect("the native application provides a font collection"));
@@ -546,6 +605,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     let native_failure = native.failure();
     let mut application = Application::new(native, pending, package, socket_bindings)?;
     application.layer_primary = layer_config.is_some();
+    application.dev_inspector = dev_inspector;
+    application.dev_inspect_path = dev_inspect_path;
     if let Some(fonts) = fonts { application.host.set_pure_shell(fonts); }
     if reduced_motion { application.host.set_reduced_motion(true); }
     if let Some(bytes) = max_js_stack_bytes { application.host.set_stack_limit_bytes(bytes); }

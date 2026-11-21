@@ -1,34 +1,16 @@
 use serde_json::json;
 use zgui::{reactive::prelude::GetUntracked, runtime::Window, view::ViewHost};
 
+use crate::inspector::{bounded_text, scroll_metrics};
+pub(crate) use crate::inspector::native_state;
 use crate::session::SessionRegion;
 use super::semantics::SemanticModel;
-use crate::preview::evidence::{Bounds, CaptureIdentity, NodeEvidence, NodeState, ScrollMetrics, TreeEvidence};
+use crate::preview::evidence::{Bounds, CaptureIdentity, NodeEvidence, NodeState, TreeEvidence};
 
 pub struct Snapshot {
     pub tree: TreeEvidence,
     pub native_nodes: Vec<ui_bridge::registry::SnapshotNode>,
     pub metadata_revision: u64,
-}
-
-/// Visibility means a positive native box with computed visibility:visible, not pointer reachability.
-pub fn native_state(window: &Window, native: zgui::view::NodeId) -> Option<(bool, bool)> {
-    let key = zgui_view_dom::id::to_document(native)?;
-    let document = window.document().borrow();
-    let mut next = Some(document.store().index_of(key)?);
-    let mut enabled = true;
-    while let Some(index) = next {
-        let core = document.store().core(index);
-        enabled &= !core.ui_state().contains(zgui::vocab::UiState::DISABLED);
-        next = core.parent();
-    }
-    let layout = window.layout().borrow();
-    let visible = layout.boxes_of(key).iter().any(|box_| {
-        layout.get(*box_).is_some_and(|node| node.style.get_inherited_box().visibility == zgui_css::values::size::VisibilityValue::Visible)
-            && layout.fragments_of_box(*box_).iter().any(|fragment| layout.fragment(*fragment)
-                .is_some_and(|fragment| fragment.border_box.size.width.0 > 0.0 && fragment.border_box.size.height.0 > 0.0))
-    });
-    Some((enabled, visible))
 }
 
 /// Only native data is read. Neither bridge getters nor application formatters run here.
@@ -111,48 +93,4 @@ pub fn snapshot(window: &Window, region: &SessionRegion, generation: u64, ordina
         nodes, extra,
     };
     Snapshot { tree, native_nodes:owned.nodes, metadata_revision:owned.metadata_revision }
-}
-
-fn scroll_metrics(window: &Window, native: zgui::view::NodeId, scale: f64) -> Option<ScrollMetrics> {
-    let key = zgui_view_dom::id::to_document(native)?;
-    let region = {
-        let layout = window.layout().borrow();
-        zgui_layout::scroll_region::region_of_element(&layout, key)?
-    };
-    let position = ViewHost::scroll_position(window.host().as_ref(), native);
-    let epsilon = f64::from(zgui_layout::scroll_region::bar::EPSILON);
-    let viewport_width = f64::from(region.scrollport.size.width.0);
-    let viewport_height = f64::from(region.scrollport.size.height.0);
-    let content_width = f64::from(region.content.width.0);
-    let content_height = f64::from(region.content.height.0);
-    Some(ScrollMetrics {
-        offset_x: f64::from(position.offset.x.0) / scale,
-        offset_y: f64::from(position.offset.y.0) / scale,
-        viewport_width: viewport_width / scale,
-        viewport_height: viewport_height / scale,
-        content_width: content_width / scale,
-        content_height: content_height / scale,
-        overflow_x: region.scrolls_x && content_width > viewport_width + epsilon,
-        overflow_y: region.scrolls_y && content_height > viewport_height + epsilon,
-        scrolls_x: region.scrolls_x,
-        scrolls_y: region.scrolls_y,
-    })
-}
-
-fn bounded_text(document: &zgui_dom::Document, root: zgui_dom::NodeIndex, bytes: usize, visits: &mut usize) -> (String, bool) {
-    let mut text = String::new();
-    let mut pending = vec![root];
-    while let Some(index) = pending.pop() {
-        if *visits == 0 { return (text, true); }
-        *visits -= 1;
-        if let Some(own) = zgui_dom::text::node::text_of(document.store(), index) {
-            let keep = own.floor_char_boundary(bytes.saturating_sub(text.len()).min(own.len()));
-            text.push_str(&own[..keep]);
-            if keep < own.len() { return (text, true); }
-        }
-        let core = document.store().core(index);
-        if index != root && let Some(next) = core.next_sibling() { pending.push(next); }
-        if let Some(child) = core.first_child() { pending.push(child); }
-    }
-    (text, false)
 }

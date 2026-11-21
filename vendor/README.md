@@ -490,3 +490,11 @@ Regression gate:
 Regression gate:
 
     bun run test:vendor zgui-runtime && bun test --isolate tests/preview/document-selection.test.mjs
+
+## Probe-gated frame phase timings (`CompletedFrame::phases`)
+
+`vendor/zgui-runtime/src/probe.rs` and `src/window/frame.rs` add `FramePhaseTimings` (`style_us`, `layout_us`, `paint_us`, `total_us`) to `CompletedFrame`, sampled strictly when a `FrameProbe` is attached (`self.probe.is_some()`). Non-probed production and release frames incur zero timing syscalls and zero overhead. Used by `native-host`'s dev-only read-only runtime inspector (`--dev-inspect`).
+
+Regression gate:
+
+    cargo test -p native-host inspector --offline && bun run test:vendor zgui-runtime

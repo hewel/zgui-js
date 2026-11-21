@@ -39,6 +39,22 @@
 
 use crate::window::Window;
 
+/// Wall-time phase durations in microseconds for one probed frame.
+///
+/// Populated only when a [`FrameProbe`] is installed on the window; zero-cost
+/// in non-probed production frames.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct FramePhaseTimings {
+    /// Stylo cascade/restyle phase duration in microseconds.
+    pub style_us: u64,
+    /// Taffy + Parley box-building and layout phase duration in microseconds.
+    pub layout_us: u64,
+    /// Vello scene emit and GPU draw submission duration in microseconds.
+    pub paint_us: u64,
+    /// End-to-end frame duration in microseconds.
+    pub total_us: u64,
+}
+
 /// Read-only evidence about one completed native frame.
 ///
 /// Available through [`Window::completed_frame`] before [`FrameProbe::frame_ended`] is called,
@@ -77,6 +93,8 @@ pub struct CompletedFrame {
     /// compare [`Self::document_revision`] with `window.dom().revision()`. It says nothing about
     /// whether this frame's pixels were presented; consult [`Self::outcome`] separately.
     pub layout_document_coherent: bool,
+    /// Wall-time phase durations recorded while this probe is attached.
+    pub phases: FramePhaseTimings,
 }
 
 /// Something told about each frame after it has been produced.

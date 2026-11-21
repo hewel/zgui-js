@@ -331,6 +331,12 @@ pub(crate) struct SessionRegion {
     font_validation_revision: Cell<Option<(u64, u64, u64, zgui_style::ColorScheme)>>,
 }
 
+impl SessionRegion {
+    pub(crate) fn is_lock_surface(&self) -> bool {
+        self.lock_claim.is_some()
+    }
+}
+
 enum Startup {
     Primary { region: MountRegion, surface: SurfaceId },
     Shell { fonts: Fonts, timers: AppTimers },
@@ -1557,6 +1563,27 @@ impl Session {
             telemetry: self.telemetry.get(),
         };
         *self.retired.borrow_mut() = Some(report);
+    }
+
+    /// Current read-only runtime telemetry without mutating or evaluating JS.
+    pub(crate) fn live_telemetry(&self) -> Option<RuntimeTelemetry> {
+        let sampled = self.engine.borrow().as_ref().map(|engine| {
+            let live_heap = engine.memory_usage_bytes();
+            RuntimeTelemetry {
+                max_entry_duration: engine.max_entry_duration(),
+                js_heap_bytes: live_heap,
+                js_heap_live_bytes: live_heap,
+                js_heap_post_dispose_bytes: 0,
+                js_stack_limit_bytes: engine.stack_limit_bytes(),
+                process_memory: None,
+            }
+        });
+        RuntimeTelemetry::merge(self.telemetry.get(), sampled)
+    }
+
+    /// Pending checkpoint work depth (events + work items) for dev profiling.
+    pub(crate) fn checkpoint_queue_depth(&self) -> usize {
+        self.work.pending_count()
     }
 
     /// Capture a bounded, plain-data dev reload snapshot if this generation is

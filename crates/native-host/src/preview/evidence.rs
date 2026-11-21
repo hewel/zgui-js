@@ -53,26 +53,26 @@ pub(super) struct NodeState {
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct Bounds {
-    pub(super) x: f64,
-    pub(super) y: f64,
-    pub(super) width: f64,
-    pub(super) height: f64,
+pub(crate) struct Bounds {
+    pub(crate) x: f64,
+    pub(crate) y: f64,
+    pub(crate) width: f64,
+    pub(crate) height: f64,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct ScrollMetrics {
-    pub(super) offset_x: f64,
-    pub(super) offset_y: f64,
-    pub(super) viewport_width: f64,
-    pub(super) viewport_height: f64,
-    pub(super) content_width: f64,
-    pub(super) content_height: f64,
-    pub(super) overflow_x: bool,
-    pub(super) overflow_y: bool,
-    pub(super) scrolls_x: bool,
-    pub(super) scrolls_y: bool,
+pub(crate) struct ScrollMetrics {
+    pub(crate) offset_x: f64,
+    pub(crate) offset_y: f64,
+    pub(crate) viewport_width: f64,
+    pub(crate) viewport_height: f64,
+    pub(crate) content_width: f64,
+    pub(crate) content_height: f64,
+    pub(crate) overflow_x: bool,
+    pub(crate) overflow_y: bool,
+    pub(crate) scrolls_x: bool,
+    pub(crate) scrolls_y: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]

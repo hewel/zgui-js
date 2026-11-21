@@ -302,6 +302,9 @@ impl Window {
     /// The frame itself, with the window's scope already current.
     fn run_frame(&mut self, clock: &dyn Clock) -> FrameReport {
         use zgui_profile::latency::mark;
+        let probed = self.probe.is_some();
+        let frame_wall_start = probed.then(std::time::Instant::now);
+
         mark("f.begin");
         let now = clock.now();
         let timestamp = clock.timestamp();
@@ -409,7 +412,9 @@ impl Window {
         self.drop_focus_that_went(timestamp);
 
         mark("f.restyle");
+        let style_start = probed.then(std::time::Instant::now);
         let restyled = self.restyle();
+        let style_us = style_start.map_or(0, |t| t.elapsed().as_micros() as u64);
         zgui_profile::latency::note_with("f.restyled", || restyled.to_string());
         // The cascade is what starts a keyframe animation, and the tick above ran before it. An
         // element whose animation this frame created is therefore in no report and owes nothing;
@@ -435,6 +440,7 @@ impl Window {
             )
         });
         mark("f.boxes");
+        let layout_start = probed.then(std::time::Instant::now);
         self.build_boxes();
         zgui_profile::latency::note_with("d.prelayout", || {
             format!(
@@ -447,6 +453,7 @@ impl Window {
         });
         mark("f.layout");
         self.lay_out();
+        let layout_us = layout_start.map_or(0, |t| t.elapsed().as_micros() as u64);
         zgui_profile::latency::note_with("d.postlayout", || {
             format!(
                 "full={} n={} area={:?} rects={:?}",
@@ -514,7 +521,9 @@ impl Window {
 
         self.binding.before_paint(timestamp);
         mark("f.paint");
+        let paint_start = probed.then(std::time::Instant::now);
         let outcome = self.paint_and_draw(suppress_first_paint);
+        let paint_us = paint_start.map_or(0, |t| t.elapsed().as_micros() as u64);
         mark("f.painted");
         // Immediately after the frame that produced them, and against the output this window is
         // actually on: what the acquisition made this frame wait for is how much earlier than
@@ -676,6 +685,7 @@ impl Window {
         // probe is handed the window it is stored on.
         if let Some(probe) = self.probe.clone() {
             let document_revision = self.dom.revision();
+            let total_us = frame_wall_start.map_or(0, |t| t.elapsed().as_micros() as u64);
             self.completed_frame = Some(crate::probe::CompletedFrame {
                 ordinal: self.completed_frame.map_or(1, |last| last.ordinal + 1),
                 timestamp,
@@ -686,6 +696,12 @@ impl Window {
                 layout_document_coherent: self.probed_layout_revision == Some(document_revision)
                     && self.consumed_style_revision == self.style_revision
                     && !self.owes_further_work(),
+                phases: crate::probe::FramePhaseTimings {
+                    style_us,
+                    layout_us,
+                    paint_us,
+                    total_us,
+                },
             });
             probe.frame_ended(self);
         }
