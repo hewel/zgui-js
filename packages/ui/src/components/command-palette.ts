@@ -63,7 +63,7 @@ export interface CommandPaletteProviderProps {
   readonly children?: NativeChild;
 }
 
-export interface CommandPaletteProps extends Omit<NativeElementProps, "children" | "open"> {
+export interface CommandPaletteProps extends Omit<NativeElementProps, "children" | "open" | "title"> {
   readonly children?: never;
   readonly commands?: readonly CommandItem[] | undefined;
   readonly open?: boolean | undefined;
