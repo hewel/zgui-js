@@ -17,7 +17,7 @@ export { createDelay, createInterval, createTimeout } from "./timers.js";
 export type { DelayHandle } from "./timers.js";
 export {
   createCanvasScene, focus, getReducedMotion, getTextContent, getWindowRect, isAnimating, lockScroll, mountStylesheet,
-  observeGeometry, precedes, registerDismissLayer, setReducedMotion, trapFocus,
+  observeGeometry, precedes, registerDismissLayer, scrollBy, scrollIntoView, scrollTo, setReducedMotion, trapFocus,
 } from "./nodes.js";
 export { Portal } from "./portal.js";
 export type { PortalProps } from "./portal.js";
@@ -25,4 +25,4 @@ export { Button } from "./button.js";
 export { TextField, TextArea } from "./text-control.js";
 export { Image } from "./image.js";
 export { VirtualGrid, VirtualList } from "./virtual-list.js";
-export type { VirtualGridProps, VirtualListProps } from "./virtual-list.js";
+export type { VirtualGridProps, VirtualListController, VirtualListProps, VirtualScrollAlign, VirtualScrollToIndexOptions } from "./virtual-list.js";

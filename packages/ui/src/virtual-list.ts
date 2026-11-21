@@ -1,8 +1,20 @@
 import { For, createMemo, createSignal, omit } from "#solid";
 import { createElement, mergeProps, setProp, spread } from "./renderer/index.js";
 import { append, slot, withDefaults } from "./components/shared.js";
-import { observeGeometry } from "./nodes.js";
-import type { Accessor, NativeChild, NativeElementProps, NativeNode } from "./types.js";
+import { getReducedMotion, observeGeometry, scrollTo } from "./nodes.js";
+import type { Accessor, NativeChild, NativeElementProps, NativeNode, ScrollBehavior } from "./types.js";
+
+export type VirtualScrollAlign = "auto" | "start" | "center" | "end";
+
+export interface VirtualScrollToIndexOptions {
+  readonly align?: VirtualScrollAlign | undefined;
+  readonly behavior?: ScrollBehavior | undefined;
+}
+
+export interface VirtualListController {
+  /** Scroll the list/grid so the item at `index` (clamped to valid range) is aligned in view. */
+  scrollToIndex(index: number, options?: VirtualScrollToIndexOptions): void;
+}
 
 interface VirtualListBaseProps<T> extends Omit<NativeElementProps, "children"> {
   /** Data array to virtualize. */
@@ -15,6 +27,8 @@ interface VirtualListBaseProps<T> extends Omit<NativeElementProps, "children"> {
   readonly overscan?: number | undefined;
   /** Fallback scrollport height before first layout observation (default 480). */
   readonly initialHeight?: number | undefined;
+  /** Optional imperative handle callback receiving `{ scrollToIndex }`. */
+  readonly controller?: ((handle: VirtualListController) => void) | undefined;
   /** Optional fallback rendered when `each` is empty. */
   readonly fallback?: NativeChild | undefined;
 }
@@ -51,6 +65,8 @@ interface VirtualGridBaseProps<T> extends Omit<NativeElementProps, "children"> {
   readonly initialWidth?: number | undefined;
   /** Fallback scrollport height before first layout observation (default 480). */
   readonly initialHeight?: number | undefined;
+  /** Optional imperative handle callback receiving `{ scrollToIndex }`. */
+  readonly controller?: ((handle: VirtualListController) => void) | undefined;
   /** Optional fallback rendered when `each` is empty. */
   readonly fallback?: NativeChild | undefined;
 }
@@ -112,6 +128,35 @@ function computeWindow(
   return { start, end, topSpacer, bottomSpacer };
 }
 
+function computeTargetScrollTop(
+  rowIndex: number,
+  totalRows: number,
+  rowHeight: number,
+  gap: number,
+  currentScrollTop: number,
+  viewportHeight: number,
+  align: VirtualScrollAlign,
+): number | null {
+  if (totalRows <= 0) return null;
+  const stride = rowHeight + gap;
+  const totalHeight = Math.max(0, totalRows * stride - gap);
+  const maxScroll = Math.max(0, totalHeight - viewportHeight);
+  const rowTop = rowIndex * stride;
+  const rowBottom = rowTop + rowHeight;
+  let target: number;
+  if (align === "start") target = rowTop;
+  else if (align === "end") target = rowBottom - viewportHeight;
+  else if (align === "center") target = rowTop - (viewportHeight - rowHeight) / 2;
+  else if (align === "auto") {
+    if (rowTop < currentScrollTop) target = rowTop;
+    else if (rowBottom > currentScrollTop + viewportHeight) target = rowBottom - viewportHeight;
+    else return null;
+  } else {
+    throw new TypeError(`unsupported VirtualList scrollToIndex align: ${String(align)}`);
+  }
+  return Math.max(0, Math.min(maxScroll, target));
+}
+
 function spacer(height: Accessor<number>): NativeNode {
   const node = createElement("box");
   spread(node, {
@@ -151,7 +196,7 @@ function renderMappedItems<T>(
 export function VirtualList<T>(props: VirtualListIdentityProps<T>): NativeNode;
 export function VirtualList<T>(props: VirtualListKeyedProps<T>): NativeNode;
 export function VirtualList<T>(props: VirtualListProps<T>): NativeNode {
-  const rest = omit(props, "each", "itemHeight", "gap", "overscan", "initialHeight", "keyed", "fallback", "children");
+  const rest = omit(props, "each", "itemHeight", "gap", "overscan", "initialHeight", "controller", "keyed", "fallback", "children");
   const scroller = createElement("scroll");
   spread(scroller, mergeProps(rest, withDefaults({ role: "list" as const }, rest)), true);
 
@@ -179,6 +224,30 @@ export function VirtualList<T>(props: VirtualListProps<T>): NativeNode {
       items,
       ...computeWindow(items.length, itemHeight, gap, overscan, scrollTop(), viewportHeight()),
     };
+  });
+
+  props.controller?.({
+    scrollToIndex(index, options) {
+      if (!Number.isFinite(index)) {
+        throw new RangeError("VirtualList scrollToIndex index must be a finite number");
+      }
+      const { items, itemHeight, gap } = metrics();
+      if (items.length === 0) return;
+      const clamped = Math.max(0, Math.min(items.length - 1, Math.trunc(index)));
+      const targetTop = computeTargetScrollTop(
+        clamped,
+        items.length,
+        itemHeight,
+        gap,
+        scrollTop(),
+        viewportHeight(),
+        options?.align ?? "auto",
+      );
+      if (targetTop === null) return;
+      const behavior = options?.behavior ?? "instant";
+      if (behavior === "instant" || getReducedMotion()) setScrollTop(targetTop);
+      scrollTo(scroller, { top: targetTop, behavior });
+    },
   });
 
   const visibleItems = createMemo<readonly T[]>(() => {
@@ -233,6 +302,7 @@ export function VirtualGrid<T>(props: VirtualGridProps<T>): NativeNode {
     "overscan",
     "initialWidth",
     "initialHeight",
+    "controller",
     "keyed",
     "fallback",
     "children",
@@ -279,9 +349,35 @@ export function VirtualGrid<T>(props: VirtualGridProps<T>): NativeNode {
       itemHeight,
       gap,
       cols,
+      totalRows,
       items,
       ...computeWindow(totalRows, itemHeight, gap, overscan, scrollTop(), viewportHeight()),
     };
+  });
+
+  props.controller?.({
+    scrollToIndex(index, options) {
+      if (!Number.isFinite(index)) {
+        throw new RangeError("VirtualGrid scrollToIndex index must be a finite number");
+      }
+      const { items, itemHeight, gap, cols, totalRows } = metrics();
+      if (items.length === 0) return;
+      const clamped = Math.max(0, Math.min(items.length - 1, Math.trunc(index)));
+      const rowIndex = Math.floor(clamped / cols);
+      const targetTop = computeTargetScrollTop(
+        rowIndex,
+        totalRows,
+        itemHeight,
+        gap,
+        scrollTop(),
+        viewportHeight(),
+        options?.align ?? "auto",
+      );
+      if (targetTop === null) return;
+      const behavior = options?.behavior ?? "instant";
+      if (behavior === "instant" || getReducedMotion()) setScrollTop(targetTop);
+      scrollTo(scroller, { top: targetTop, behavior });
+    },
   });
 
   const visibleRows = createMemo<readonly GridRow<T>[]>(() => {

@@ -1126,6 +1126,71 @@ impl UiBridge {
             Ok::<rquickjs::Function<'js>, rquickjs::Error>(cancel)
         }))?;
         let weak = Rc::downgrade(self);
+        api.set("scrollTo", Func::from(move |ctx: Ctx<'js>, node: Class<'js, NativeNode>, left: Option<f64>, top: Option<f64>, behavior: Opt<String>| {
+            let bridge = owner(&weak, &ctx)?;
+            bridge.require_turn(&ctx)?;
+            let handle = node.borrow().handle;
+            let native = bridge.registry.borrow().native(handle).map_err(|e| host_error(&ctx, e))?;
+            let scale = valid_host_scale(&ctx, bridge.host.scale())?;
+            let behavior = parse_scroll_behavior(&ctx, behavior.0.as_deref())?;
+            let current = if left.is_none() || top.is_none() {
+                Some(bridge.host.scroll_position(native).offset)
+            } else {
+                None
+            };
+            let x = match left {
+                Some(v) => zgui::geom::DevicePx(css_to_device(&ctx, v, scale, "left")?),
+                None => current.expect("current offset sampled").x,
+            };
+            let y = match top {
+                Some(v) => zgui::geom::DevicePx(css_to_device(&ctx, v, scale, "top")?),
+                None => current.expect("current offset sampled").y,
+            };
+            bridge.host.scroll_to(
+                native,
+                zgui::view::ScrollTarget::Offset(zgui::geom::Point::new(x, y)),
+                behavior,
+            );
+            Ok::<(), rquickjs::Error>(())
+        }))?;
+        let weak = Rc::downgrade(self);
+        api.set("scrollBy", Func::from(move |ctx: Ctx<'js>, node: Class<'js, NativeNode>, left: Option<f64>, top: Option<f64>, behavior: Opt<String>| {
+            let bridge = owner(&weak, &ctx)?;
+            bridge.require_turn(&ctx)?;
+            let handle = node.borrow().handle;
+            let native = bridge.registry.borrow().native(handle).map_err(|e| host_error(&ctx, e))?;
+            let scale = valid_host_scale(&ctx, bridge.host.scale())?;
+            let behavior = parse_scroll_behavior(&ctx, behavior.0.as_deref())?;
+            let dx = css_to_device(&ctx, left.unwrap_or(0.0), scale, "left")?;
+            let dy = css_to_device(&ctx, top.unwrap_or(0.0), scale, "top")?;
+            bridge.host.scroll_to(
+                native,
+                zgui::view::ScrollTarget::By(zgui::geom::Point::new(
+                    zgui::geom::DevicePx(dx),
+                    zgui::geom::DevicePx(dy),
+                )),
+                behavior,
+            );
+            Ok::<(), rquickjs::Error>(())
+        }))?;
+        let weak = Rc::downgrade(self);
+        api.set("scrollIntoView", Func::from(move |ctx: Ctx<'js>, node: Class<'js, NativeNode>, block: Opt<String>, behavior: Opt<String>| {
+            let bridge = owner(&weak, &ctx)?;
+            bridge.require_turn(&ctx)?;
+            let handle = node.borrow().handle;
+            let native = bridge.registry.borrow().native(handle).map_err(|e| host_error(&ctx, e))?;
+            let target = match block.0.as_deref().unwrap_or("nearest") {
+                "nearest" => zgui::view::ScrollTarget::IntoView,
+                "start" => zgui::view::ScrollTarget::IntoViewStart,
+                "center" => zgui::view::ScrollTarget::IntoViewCenter,
+                "end" => zgui::view::ScrollTarget::IntoViewEnd,
+                other => return Err(Exception::throw_type(&ctx, &format!("unsupported scrollIntoView block: {other}"))),
+            };
+            let behavior = parse_scroll_behavior(&ctx, behavior.0.as_deref())?;
+            bridge.host.scroll_to(native, target, behavior);
+            Ok::<(), rquickjs::Error>(())
+        }))?;
+        let weak = Rc::downgrade(self);
         api.set("registerDismissLayer", Func::from(move |ctx: Ctx<'js>, node: Class<'js, NativeNode>, callback: rquickjs::Function<'js>, options: Object<'js>| {
             let bridge = owner(&weak, &ctx)?;
             bridge.require_creation(&ctx)?;
@@ -1268,6 +1333,33 @@ impl UiBridge {
 
 impl Drop for UiBridge {
     fn drop(&mut self) { self.dispose(); }
+}
+
+fn valid_host_scale(ctx: &Ctx<'_>, scale: f32) -> rquickjs::Result<f64> {
+    let scale = f64::from(scale);
+    if !scale.is_finite() || scale <= 0.0 {
+        return Err(Exception::throw_range(ctx, "native window scale must be finite and positive"));
+    }
+    Ok(scale)
+}
+
+fn css_to_device(ctx: &Ctx<'_>, css_px: f64, scale: f64, name: &str) -> rquickjs::Result<f32> {
+    if !css_px.is_finite() {
+        return Err(Exception::throw_range(ctx, &format!("scroll {name} offset must be finite")));
+    }
+    let device = css_px * scale;
+    if !device.is_finite() || device.abs() > f64::from(f32::MAX) {
+        return Err(Exception::throw_range(ctx, &format!("scroll {name} offset exceeds device range")));
+    }
+    Ok(device as f32)
+}
+
+fn parse_scroll_behavior(ctx: &Ctx<'_>, value: Option<&str>) -> rquickjs::Result<zgui::view::ScrollBehavior> {
+    match value.unwrap_or("instant") {
+        "instant" => Ok(zgui::view::ScrollBehavior::Instant),
+        "smooth" => Ok(zgui::view::ScrollBehavior::Smooth),
+        other => Err(Exception::throw_type(ctx, &format!("unsupported scroll behavior: {other}"))),
+    }
 }
 
 fn stylesheet_name(ctx: &Ctx<'_>, prefix: &str, key: &str) -> rquickjs::Result<String> {
@@ -1427,5 +1519,93 @@ mod group_tests {
         assert_eq!((left.live_count(), right.live_count()), (0, 0), "fault retained native nodes");
         assert_eq!((left.wrapper_count(), right.wrapper_count()), (0, 0), "fault retained JS wrappers");
         assert_eq!(left.callback_count(), 0, "fault retained geometry callbacks");
+    }
+
+    #[test]
+    fn programmatic_scroll_converts_css_to_device_px_and_validates_handles() {
+        let mut engine = JsRuntime::new(RuntimeLimits::default()).expect("create JS engine");
+        let document = Rc::new(RefCell::new(Document::new()));
+        let backend = Rc::new(DocumentDom::new(document.clone()));
+        let dom = DomHandle::from_rc(backend.clone());
+        let root = dom.create_element(ElementName::new("column"));
+        dom.insert(backend.root_node(), root, None);
+        let stub_host = Rc::new(StubHost::default());
+        stub_host.set_scale(2.0);
+        let bridge = UiBridge::new(
+            NodeRegistry::new(dom, root, 1, 1, 100),
+            HostHandle::from_rc(stub_host.clone()),
+            HostPort::queued(),
+        );
+        engine.with_context(|ctx| {
+            ctx.globals().set("__zgui", bridge.api(&ctx)?)?;
+            ctx.globals().set("root", bridge.root(&ctx)?)
+        }).expect("install bridge");
+
+        let scroller_id = bridge.run_turn(engine.turn(), |_, js| js.evaluate_script(r#"
+            const scroller = __zgui.createElement('scroll');
+            const child = __zgui.createElement('box');
+            __zgui.insertNode(scroller, child, null);
+            __zgui.insertNode(root, scroller, null);
+            globalThis.__scroller = scroller;
+            globalThis.__child = child;
+            'mounted';
+        "#)).expect("mount scroller");
+        assert_eq!(scroller_id, "mounted");
+
+        let (scroller_native, child_native) = {
+            let registry = bridge.registry.borrow();
+            let scroller_handle = registry.first_child(registry.root()).expect("root first child").expect("scroller mounted");
+            let child_handle = registry.first_child(scroller_handle).expect("scroller first child").expect("child mounted");
+            (
+                registry.native(scroller_handle).expect("scroller native id"),
+                registry.native(child_handle).expect("child native id"),
+            )
+        };
+        stub_host.set_scroll_position(scroller_native, zgui::view::ScrollPosition {
+            offset: zgui::geom::Point::new(DevicePx(30.0), DevicePx(80.0)),
+            content_size: Size::new(DevicePx(1000.0), DevicePx(2000.0)),
+            scrollport: Size::new(DevicePx(400.0), DevicePx(300.0)),
+        });
+
+        bridge.run_turn(engine.turn(), |_, js| js.evaluate_script(r#"
+            __zgui.scrollTo(__scroller, null, 120, 'instant');
+            __zgui.scrollTo(__scroller, 25, 50, 'smooth');
+            __zgui.scrollBy(__scroller, 10, -15, 'instant');
+            __zgui.scrollIntoView(__child, 'nearest', 'instant');
+            __zgui.scrollIntoView(__child, 'start', 'smooth');
+            __zgui.scrollIntoView(__child, 'center', 'instant');
+            __zgui.scrollIntoView(__child, 'end', 'instant');
+            for (const bad of [
+                () => __zgui.scrollTo(__scroller, NaN, 0, 'instant'),
+                () => __zgui.scrollBy(__scroller, 0, Infinity, 'instant'),
+                () => __zgui.scrollTo(__scroller, 0, 0, 'bouncy'),
+                () => __zgui.scrollIntoView(__child, 'bogus', 'instant'),
+            ]) {
+                let threw = false;
+                try { bad(); } catch { threw = true; }
+                if (!threw) throw Error('expected invalid scroll arguments to throw');
+            }
+            __zgui.removeNode(root, __scroller);
+            'ok';
+        "#)).expect("issue scroll commands");
+
+        let commands = stub_host.scroll_commands();
+        assert_eq!(commands, vec![
+            (scroller_native, zgui::view::ScrollTarget::Offset(zgui::geom::Point::new(DevicePx(30.0), DevicePx(240.0))), zgui::view::ScrollBehavior::Instant),
+            (scroller_native, zgui::view::ScrollTarget::Offset(zgui::geom::Point::new(DevicePx(50.0), DevicePx(100.0))), zgui::view::ScrollBehavior::Smooth),
+            (scroller_native, zgui::view::ScrollTarget::By(zgui::geom::Point::new(DevicePx(20.0), DevicePx(-30.0))), zgui::view::ScrollBehavior::Instant),
+            (child_native, zgui::view::ScrollTarget::IntoView, zgui::view::ScrollBehavior::Instant),
+            (child_native, zgui::view::ScrollTarget::IntoViewStart, zgui::view::ScrollBehavior::Smooth),
+            (child_native, zgui::view::ScrollTarget::IntoViewCenter, zgui::view::ScrollBehavior::Instant),
+            (child_native, zgui::view::ScrollTarget::IntoViewEnd, zgui::view::ScrollBehavior::Instant),
+        ]);
+
+        // Detached handle throws cleanly on subsequent turn.
+        bridge.run_turn(engine.turn(), |_, js| js.evaluate_script(r#"
+            let threw = false;
+            try { __zgui.scrollTo(__scroller, 0, 0, 'instant'); } catch { threw = true; }
+            if (!threw) throw Error('detached node scrollTo must throw');
+            'ok';
+        "#)).expect("detached scrollTo rejected");
     }
 }

@@ -161,6 +161,7 @@ export function createHost({ strictStyles = false, reducedMotion = false, monito
   const portals = [];
   const traps = [];
   const locks = [];
+  const scrollCommands = [];
   const layers = [];
   const geometry = [];
   const animatingQueries = [];
@@ -554,6 +555,21 @@ export function createHost({ strictStyles = false, reducedMotion = false, monito
       assertActiveHost("lockScroll");
       assertLive(node, "scroll lock target", region);
       return makeLease(locks, { node }).dispose;
+    },
+    scrollTo: (node, left, top, behavior = "instant") => {
+      assertActiveHost("scrollTo");
+      assertLive(node, "scrollTo target", region);
+      scrollCommands.push({ kind: "scrollTo", node, left, top, behavior });
+    },
+    scrollBy: (node, left, top, behavior = "instant") => {
+      assertActiveHost("scrollBy");
+      assertLive(node, "scrollBy target", region);
+      scrollCommands.push({ kind: "scrollBy", node, left, top, behavior });
+    },
+    scrollIntoView: (node, block = "nearest", behavior = "instant") => {
+      assertActiveHost("scrollIntoView");
+      assertLive(node, "scrollIntoView target", region);
+      scrollCommands.push({ kind: "scrollIntoView", node, block, behavior });
     },
     getWindowRect: node => {
       assertLive(node, "rect target", region);
@@ -1018,7 +1034,7 @@ export function createHost({ strictStyles = false, reducedMotion = false, monito
     host, nodes, parents, stylesheets, installs, makeNode, byTestId, focused, rects, texts,
     shell, surfaces, shellLog, emitMonitors, emitReducedMotion, monitorSubscribers, popupDone, windowClose,
     sessionLockState: () => lockState, sessionLockLog,
-    animating, animatingQueries, queries, portals, traps, locks, layers, geometry,
+    animating, animatingQueries, queries, portals, traps, locks, scrollCommands, layers, geometry,
     canvasScenes,
     clearCalls, invalidated, registrationsAfterStop, styleDiagnostics,
     dispatch, createEvent, runTurn, endTurn,

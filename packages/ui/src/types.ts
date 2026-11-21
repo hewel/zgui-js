@@ -158,6 +158,17 @@ export interface NativeDismissLayer {
   dispose(): void;
 }
 export interface NativeFocusOptions { readonly reveal?: boolean; }
+export type ScrollBehavior = "instant" | "smooth";
+export type ScrollBlock = "nearest" | "start" | "center" | "end";
+export interface ScrollToOptions {
+  readonly top?: number | undefined;
+  readonly left?: number | undefined;
+  readonly behavior?: ScrollBehavior | undefined;
+}
+export interface ScrollIntoViewOptions {
+  readonly block?: ScrollBlock | undefined;
+  readonly behavior?: ScrollBehavior | undefined;
+}
 export interface NativeFocusTrapOptions {
   readonly wrap?: boolean;
   readonly autoFocus?: boolean;

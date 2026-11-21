@@ -57,6 +57,9 @@ export interface NativeHost {
     focus(node: NativeNode, reveal?: boolean): void;
     trapFocus(node: NativeNode, wrap: boolean, autoFocus: boolean, restore: boolean): () => void;
     lockScroll(node: NativeNode): () => void;
+    scrollTo(node: NativeNode, left: number | null, top: number | null, behavior?: "instant" | "smooth"): void;
+    scrollBy(node: NativeNode, left: number | null, top: number | null, behavior?: "instant" | "smooth"): void;
+    scrollIntoView(node: NativeNode, block?: "nearest" | "start" | "center" | "end", behavior?: "instant" | "smooth"): void;
     getWindowRect(node: NativeNode): NativeWindowRect | null;
     getTextContent(node: NativeNode): string;
     isAnimating(node: NativeNode): boolean;

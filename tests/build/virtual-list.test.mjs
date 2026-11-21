@@ -129,3 +129,108 @@ test("VirtualGrid mounts only visible rows of columns for 2,000 tiles and reacts
   assert.ok(h.byTestId("tile-300"), "tile 300 mounts when scrolled to row 100");
   assert.ok(countSubtree(root) < 80, `attached node count stays bounded after scrolling: ${countSubtree(root)}`);
 });
+
+test("scrollTo/scrollBy/scrollIntoView respect reducedMotion and VirtualList/VirtualGrid controller.scrollToIndex jumps cleanly (#55)", async t => {
+  const h = createHost({ strictStyles: true });
+  const mod = await moduleFor(t, `
+    import { VirtualGrid, VirtualList, createSignal, renderApp, scrollBy, scrollIntoView, scrollTo, setReducedMotion } from "@hewel/zgui";
+    import type { NativeNode, VirtualListController } from "@hewel/zgui";
+
+    const rows = Array.from({ length: 500 }, (_, i) => ({ id: i, label: "Row " + i }));
+    const tiles = Array.from({ length: 400 }, (_, i) => i);
+    let listCtrl: VirtualListController | null = null;
+    let gridCtrl: VirtualListController | null = null;
+    const [plainScroll, setPlainScroll] = createSignal<NativeNode | null>(null);
+    const [headingNode, setHeadingNode] = createSignal<NativeNode | null>(null);
+
+    export { setReducedMotion };
+    export function jumpList(index: number, align: "auto" | "start" | "center" | "end", behavior: "instant" | "smooth") {
+      listCtrl?.scrollToIndex(index, { align, behavior });
+    }
+    export function jumpGrid(index: number, align: "auto" | "start" | "center" | "end") {
+      gridCtrl?.scrollToIndex(index, { align, behavior: "instant" });
+    }
+    export function drivePlain(behavior: "instant" | "smooth") {
+      scrollTo(plainScroll, { top: 240, behavior });
+      scrollBy(plainScroll, { top: 40, left: 10, behavior });
+      scrollIntoView(headingNode, { block: "start", behavior });
+    }
+
+    export function mount(root: NativeNode) {
+      return renderApp(() => (
+        <column>
+          <scroll testId="plain-scroll" ref={setPlainScroll}>
+            <text testId="heading" ref={setHeadingNode}>Heading</text>
+          </scroll>
+          <VirtualList
+            testId="vlist"
+            each={rows}
+            itemHeight={40}
+            gap={4}
+            overscan={1}
+            initialHeight={200}
+            controller={ctrl => { listCtrl = ctrl; }}
+          >
+            {(row, idx) => <text testId={"row-" + idx()}>{row.label}</text>}
+          </VirtualList>
+          <VirtualGrid
+            testId="vgrid"
+            each={tiles}
+            itemHeight={50}
+            columns={4}
+            gap={10}
+            overscan={1}
+            initialWidth={400}
+            initialHeight={150}
+            controller={ctrl => { gridCtrl = ctrl; }}
+          >
+            {(tile, idx) => <text testId={"tile-" + idx()}>{String(tile)}</text>}
+          </VirtualGrid>
+        </column>
+      ), root);
+    }
+  `);
+  globalThis.__zgui = h.host;
+  let dispose;
+  t.after(() => {
+    try { dispose?.(); }
+    finally { delete globalThis.__zgui; }
+  });
+
+  dispose = h.runTurn(() => mod.mount(h.makeNode("root")));
+  const plain = h.byTestId("plain-scroll");
+  const heading = h.byTestId("heading");
+
+  h.runTurn(() => mod.drivePlain("smooth"));
+  assert.deepEqual(h.scrollCommands.slice(-3), [
+    { kind: "scrollTo", node: plain, left: null, top: 240, behavior: "smooth" },
+    { kind: "scrollBy", node: plain, left: 10, top: 40, behavior: "smooth" },
+    { kind: "scrollIntoView", node: heading, block: "start", behavior: "smooth" },
+  ]);
+
+  // Under reduced motion, smooth downgrades to instant automatically.
+  h.runTurn(() => mod.setReducedMotion(true));
+  h.runTurn(() => mod.drivePlain("smooth"));
+  assert.deepEqual(h.scrollCommands.slice(-3), [
+    { kind: "scrollTo", node: plain, left: null, top: 240, behavior: "instant" },
+    { kind: "scrollBy", node: plain, left: 10, top: 40, behavior: "instant" },
+    { kind: "scrollIntoView", node: heading, block: "start", behavior: "instant" },
+  ]);
+  h.runTurn(() => mod.setReducedMotion(null));
+  h.emitReducedMotion(true);
+  h.runTurn(() => mod.drivePlain("smooth"));
+  assert.equal(h.scrollCommands.at(-1).behavior, "instant", "host reducedMotion also downgrades smooth");
+  h.emitReducedMotion(false);
+
+  // VirtualList.scrollToIndex(100, start): stride = 44 -> top = 4400, mounts row-100 immediately.
+  h.runTurn(() => mod.jumpList(100, "start", "instant"));
+  assert.equal(h.scrollCommands.at(-1).top, 4400);
+  assert.ok(h.byTestId("row-100"), "row-100 mounts immediately on instant scrollToIndex");
+  assert.equal(h.byTestId("row-0"), undefined, "row-0 unmounts after jump");
+
+  // VirtualGrid.scrollToIndex(80, start): 4 cols -> row 20, stride = 60 -> top = 1200, mounts tile-80.
+  h.runTurn(() => mod.jumpGrid(80, "start"));
+  assert.equal(h.scrollCommands.at(-1).top, 1200);
+  assert.ok(h.byTestId("tile-80"), "tile-80 mounts immediately on VirtualGrid scrollToIndex");
+});
+

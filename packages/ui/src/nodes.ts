@@ -1,7 +1,7 @@
 import { createEffect, getOwner, onCleanup } from "#solid";
 import { flush } from "./renderer/index.js";
 import { bridgeFor, bridgeForTarget, getReducedMotion, setReducedMotion, withCallbackBridge } from "./host.js";
-import type { Accessor, CanvasScene, NativeDismissLayer, NativeDismissLayerOptions, NativeDismissReason, NativeFocusOptions, NativeFocusTrapOptions, NativeGeometry, NativeGeometryKind, NativeNode, NativeNodeTarget, NativeWindowRect } from "./types.js";
+import type { Accessor, CanvasScene, NativeDismissLayer, NativeDismissLayerOptions, NativeDismissReason, NativeFocusOptions, NativeFocusTrapOptions, NativeGeometry, NativeGeometryKind, NativeNode, NativeNodeTarget, NativeWindowRect, ScrollBehavior, ScrollIntoViewOptions, ScrollToOptions } from "./types.js";
 
 export { getReducedMotion, setReducedMotion };
 
@@ -89,6 +89,58 @@ export function trapFocus(node: NativeNodeTarget, options?: NativeFocusTrapOptio
   const dispose = attach(node);
   if (getOwner()) onCleanup(dispose);
   return dispose;
+}
+
+function resolveNode(target: NativeNodeTarget): NativeNode | null {
+  return typeof target === "function" ? (target() ?? null) : target;
+}
+
+function resolveScrollBehavior(behavior?: ScrollBehavior): ScrollBehavior {
+  const requested = behavior ?? "instant";
+  if (requested !== "instant" && requested !== "smooth") {
+    throw new TypeError(`unsupported scroll behavior: ${String(requested)}`);
+  }
+  return requested === "smooth" && getReducedMotion() ? "instant" : requested;
+}
+
+function validateScrollOffset(value: number | undefined, name: string): number | null {
+  if (value === undefined) return null;
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    throw new RangeError(`scroll ${name} offset must be a finite number`);
+  }
+  return value;
+}
+
+/** Scroll a scroll container to absolute CSS pixel offsets. Downgrades `smooth` to `instant` under reduced motion. */
+export function scrollTo(target: NativeNodeTarget, options: ScrollToOptions = {}): void {
+  const node = resolveNode(target);
+  if (!node) return;
+  const left = validateScrollOffset(options.left, "left");
+  const top = validateScrollOffset(options.top, "top");
+  const behavior = resolveScrollBehavior(options.behavior);
+  bridgeFor(node).scrollTo(node, left, top, behavior);
+}
+
+/** Scroll a scroll container by relative CSS pixel deltas. Downgrades `smooth` to `instant` under reduced motion. */
+export function scrollBy(target: NativeNodeTarget, options: ScrollToOptions = {}): void {
+  const node = resolveNode(target);
+  if (!node) return;
+  const left = validateScrollOffset(options.left, "left") ?? 0;
+  const top = validateScrollOffset(options.top, "top") ?? 0;
+  const behavior = resolveScrollBehavior(options.behavior);
+  bridgeFor(node).scrollBy(node, left, top, behavior);
+}
+
+/** Bring a node into view inside its nearest scroll container. Downgrades `smooth` to `instant` under reduced motion. */
+export function scrollIntoView(target: NativeNodeTarget, options: ScrollIntoViewOptions = {}): void {
+  const node = resolveNode(target);
+  if (!node) return;
+  const block = options.block ?? "nearest";
+  if (block !== "nearest" && block !== "start" && block !== "center" && block !== "end") {
+    throw new TypeError(`unsupported scrollIntoView block: ${String(block)}`);
+  }
+  const behavior = resolveScrollBehavior(options.behavior);
+  bridgeFor(node).scrollIntoView(node, block, behavior);
 }
 
 export function lockScroll(node: NativeNodeTarget): () => void {

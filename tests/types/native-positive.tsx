@@ -2,10 +2,10 @@ import {
   Image, Button, TextField, TextArea, For, Show, Loading, Errored, LayerSurface, PopupSurface,
   createCanvasScene, createContext, createDelay, createEffect, createInterval, createMemo, createSignal, createSpring, createStore, createTimeout, createProjection,
   merge, omit, onCleanup, onSettled, reconcile, renderApp, renderShell, untrack, useContext, useMonitors,
-  focus, getReducedMotion, getTextContent, getWindowRect, isAnimating, lockScroll, mountStylesheet, observeGeometry, precedes, registerDismissLayer, setReducedMotion, trapFocus,
+  focus, getReducedMotion, getTextContent, getWindowRect, isAnimating, lockScroll, mountStylesheet, observeGeometry, precedes, registerDismissLayer, scrollBy, scrollIntoView, scrollTo, setReducedMotion, trapFocus,
   SessionLockSurface, WindowSurface, VirtualGrid, VirtualList, getSessionGeneration, requestSessionLock,
 } from "@hewel/zgui";
-import type { CanvasCommand, CanvasScene, CanvasTransform, Component, Context, NativeAnimationEvent, NativeChild, NativeContextMenuEvent, NativeFocusOptions, NativeNode, NativePointerBoundaryEvent, NativeRole, NativeTextControlProps, NativeTransitionEvent, NativeViewport, NativeWheelEvent, NativeWindowRect, ParentComponent, Spring, SpringOptions, TextFieldProps, TextAreaProps, VectorProps, WindowDecorations } from "@hewel/zgui";
+import type { CanvasCommand, CanvasScene, CanvasTransform, Component, Context, NativeAnimationEvent, NativeChild, NativeContextMenuEvent, NativeFocusOptions, NativeNode, NativePointerBoundaryEvent, NativeRole, NativeTextControlProps, NativeTransitionEvent, NativeViewport, NativeWheelEvent, NativeWindowRect, ParentComponent, ScrollIntoViewOptions, ScrollToOptions, Spring, SpringOptions, TextFieldProps, TextAreaProps, VectorProps, VirtualListController, WindowDecorations } from "@hewel/zgui";
 import type { Accessor } from "@hewel/zgui";
 import type { SessionLockRequest, SessionLockState } from "@hewel/zgui";
 
@@ -280,6 +280,14 @@ trapFocus(refNode, { wrap: true });
 lockScroll(refNode);
 const dismissAccessor = registerDismissLayer(refNode, reason => { void reason; }, { layer: "popover" });
 dismissAccessor.update({ leaving: true });
+const scrollOpts: ScrollToOptions = { top: 120, left: 0, behavior: "smooth" };
+const intoViewOpts: ScrollIntoViewOptions = { block: "center", behavior: "instant" };
+scrollTo(refNode, scrollOpts);
+scrollBy(refNode, { top: 40 });
+scrollIntoView(refNode, intoViewOpts);
+const [listController, setListController] = createSignal<VirtualListController | null>(null);
+void <VirtualList each={["a"]} itemHeight={24} controller={setListController}>{item => <text>{item}</text>}</VirtualList>;
+listController()?.scrollToIndex(0, { align: "start", behavior: "instant" });
 void <scroll ref={setRefNode} />;
 void [isDelayPending, reactiveSpring];
 void borrowed;
