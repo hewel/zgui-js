@@ -2,6 +2,10 @@ export type ClipboardCapabilities = {
   read?: boolean;
 };
 
+export type SqliteCapabilities = {
+  databases: string[];
+};
+
 export type Capabilities = {
   shellSurfaces?: boolean;
   sessionLock?: boolean;
@@ -11,6 +15,7 @@ export type Capabilities = {
   commands?: string[];
   controlChannel?: boolean;
   clipboard?: ClipboardCapabilities;
+  sqlite?: SqliteCapabilities;
 };
 
 export type FontDeclaration = { family: string; path: string };

@@ -383,6 +383,23 @@ function parseCapabilities(input: unknown, source: string): Capabilities {
         }
         break;
       }
+      case "sqlite": {
+        if (!value || typeof value !== "object" || Array.isArray(value))
+          throw new Error(`${field} must be an object`);
+        for (const [subKey, subVal] of Object.entries(value as Record<string, unknown>)) {
+          if (subKey !== "databases") throw new Error(`Unknown capability: ${field}.${subKey}`);
+          if (!Array.isArray(subVal)) throw new Error(`${field}.databases must be an array`);
+          const names = new Set<string>();
+          for (const item of subVal as unknown[]) {
+            if (typeof item !== "string" || !/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(item))
+              throw new Error(`${field}.databases contains invalid entries`);
+            if (names.has(item)) throw new Error(`${field}.databases contains duplicates`);
+            names.add(item);
+          }
+          if (names.size) capabilities.sqlite = { databases: [...names] };
+        }
+        break;
+      }
       case "imagePrefixes":
       case "unixSockets":
       case "commands":
@@ -450,6 +467,8 @@ async function mergeCapabilities(
     if (union.size) merged[key] = [...union].sort();
   }
   if (sources.some(source => source.clipboard?.read)) merged.clipboard = { read: true };
+  const sqliteDatabases = new Set(sources.flatMap(source => source.sqlite?.databases ?? []));
+  if (sqliteDatabases.size) merged.sqlite = { databases: [...sqliteDatabases].sort() };
   return Object.keys(merged).length ? merged : undefined;
 }
 

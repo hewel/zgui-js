@@ -105,6 +105,32 @@ object_struct! {
         /// Optional initial clipboard content seeded into the preview MemoryClipboard.
         #[serde(default, deserialize_with = "present_provider", skip_serializing_if = "Option::is_none")]
         pub(crate) clipboard: Option<ClipboardFixture>,
+        /// Optional SQLite in-memory database seed statements keyed by database name.
+        #[serde(default, deserialize_with = "present_provider", skip_serializing_if = "Option::is_none")]
+        pub(crate) sqlite: Option<BTreeMap<String, SqliteFixture>>,
+    }
+}
+
+object_struct! {
+    /// Seed SQL statements executed when opening a preview in-memory SQLite database.
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    pub(crate) struct SqliteFixture {
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        pub(crate) statements: Vec<String>,
+    }
+}
+
+impl SqliteFixture {
+    fn validate(&self) -> Result<(), String> {
+        if self.statements.len() > 1000 {
+            return Err("fixture sqlite seed exceeds 1000 statements".into());
+        }
+        for sql in &self.statements {
+            if sql.len() > host_services::sqlite::MAX_SQL_BYTES {
+                return Err("fixture sqlite seed statement exceeds 1 MiB".into());
+            }
+        }
+        Ok(())
     }
 }
 
@@ -340,6 +366,14 @@ impl FixtureDefinition {
         if let Some(provider) = &self.services.assets { provider.initial_state.validate()?; }
         if let Some(images) = &self.services.images { images.validate()?; }
         if let Some(clipboard) = &self.services.clipboard { clipboard.validate()?; }
+        if let Some(sqlite) = &self.services.sqlite {
+            for (name, seed) in sqlite {
+                if !host_services::sqlite::is_valid_database_name(name) {
+                    return Err(format!("fixture services.sqlite has invalid database name: {name:?}"));
+                }
+                seed.validate()?;
+            }
+        }
         self.services.validate_external()?;
         for event in &self.events { self.validate_event(&event.update)?; }
         Ok(())
@@ -596,6 +630,17 @@ impl FixtureRuntime {
     /// Record the headless MemoryClipboard state at teardown for deterministic assertions.
     pub(crate) fn record_clipboard(&self, snapshot: Value) {
         self.record(&mut self.state.borrow_mut(), "clipboard", snapshot);
+    }
+
+    /// Returns optional seed SQL statements for a preview in-memory SQLite database.
+    pub(crate) fn sqlite_seed_statements(&self, name: &str) -> Vec<String> {
+        self.definition
+            .services
+            .sqlite
+            .as_ref()
+            .and_then(|map| map.get(name))
+            .map(|seed| seed.statements.clone())
+            .unwrap_or_default()
     }
 
     pub(crate) fn dispose(&self) {

@@ -329,3 +329,18 @@ export function writeClipboardImage(
 ): HostRequest<void> {
   return globalThis.__zguiServices.writeClipboardImage(source, options);
 }
+
+export { openDatabase, openKvStore } from "./sqlite";
+export type {
+  KvEntry,
+  KvStore,
+  SqlBatchStatement,
+  SqlExecuteResult,
+  SqlParams,
+  SqlQueryOptions,
+  SqlRow,
+  SqlTransactionOptions,
+  SqlValue,
+  SqliteDatabase,
+  SqliteTransaction,
+} from "./sqlite";

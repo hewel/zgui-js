@@ -30,6 +30,8 @@ const OWNER_CLEANUP_HELPERS = new Set([
   "useWindowState",
   "clipboardReadText",
   "clipboardReadImage",
+  "openDatabase",
+  "openKvStore",
 ]);
 
 const RUNTIME_SERVICE_APIS = new Set([
@@ -47,6 +49,8 @@ const RUNTIME_SERVICE_APIS = new Set([
   "readClipboardImage",
   "clipboardReadImage",
   "writeClipboardImage",
+  "openDatabase",
+  "openKvStore",
 ]);
 
 function commentLines(comment) {

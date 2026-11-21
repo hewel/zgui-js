@@ -494,3 +494,116 @@ test("clipboard services preserve receiver, options, owner cancellation, and ima
     else delete globalThis.__zguiServices;
   }
 });
+
+test("SQLite openDatabase and openKvStore close with owner and roll back on transaction failure or timeout", async () => {
+  const { openDatabase, openKvStore } = await import("@hewel/zgui-services");
+  const { createRoot, flush } = await import("solid-js");
+  const previous = Object.getOwnPropertyDescriptor(globalThis, "__zguiServices");
+  let closedCount = 0;
+  let rollbacks = 0;
+  let commits = 0;
+  let triggerTimeout;
+  const rows = new Map();
+  const host = {
+    openDatabase(name) {
+      assert.equal(this, host);
+      return {
+        name,
+        query(sql, params) {
+          if (sql.includes("FROM _zgui_kv WHERE namespace = ?1 AND key = ?2")) {
+            const val = rows.get(`${params[0]}:${params[1]}`);
+            return { promise: Promise.resolve(val === undefined ? [] : [{ value_json: val }]), cancel() {} };
+          }
+          return { promise: Promise.resolve([]), cancel() {} };
+        },
+        execute(sql, params) {
+          if (sql.includes("INSERT INTO _zgui_kv")) {
+            rows.set(`${params[0]}:${params[1]}`, params[2]);
+            return { promise: Promise.resolve({ rowsAffected: 1, lastInsertRowid: 1 }), cancel() {} };
+          }
+          if (sql.includes("DELETE FROM _zgui_kv WHERE namespace = ?1 AND key = ?2")) {
+            const existed = rows.delete(`${params[0]}:${params[1]}`);
+            return { promise: Promise.resolve({ rowsAffected: existed ? 1 : 0, lastInsertRowid: null }), cancel() {} };
+          }
+          return { promise: Promise.resolve({ rowsAffected: 0, lastInsertRowid: null }), cancel() {} };
+        },
+        batch() {
+          return { promise: Promise.resolve([]), cancel() {} };
+        },
+        __beginTransaction() {
+          const timeoutPromise = new Promise((_, reject) => {
+            triggerTimeout = reject;
+          });
+          return {
+            beginPromise: Promise.resolve(),
+            timeoutPromise,
+            query() {
+              return { promise: Promise.resolve([]), cancel() {} };
+            },
+            execute() {
+              return { promise: Promise.resolve({ rowsAffected: 1, lastInsertRowid: 1 }), cancel() {} };
+            },
+            commit() {
+              commits++;
+              return { promise: Promise.resolve(), cancel() {} };
+            },
+            rollback() {
+              rollbacks++;
+              return { promise: Promise.resolve(), cancel() {} };
+            },
+            abort() {},
+          };
+        },
+        close() {
+          closedCount++;
+        },
+      };
+    },
+  };
+  try {
+    Object.defineProperty(globalThis, "__zguiServices", { configurable: true, value: host });
+    let dispose;
+    const { db, kv } = createRoot(d => {
+      dispose = d;
+      return { db: openDatabase("main"), kv: openKvStore("main", "ns") };
+    });
+    flush();
+
+    // Commit path
+    const res = await db.transaction(async tx => {
+      await tx.execute("INSERT INTO t VALUES (1)");
+      return 42;
+    });
+    assert.equal(res, 42);
+    assert.equal(commits, 1);
+
+    // JS throw auto-rollback
+    await assert.rejects(
+      db.transaction(async () => {
+        throw new Error("boom");
+      }),
+      /boom/,
+    );
+    assert.equal(rollbacks, 1);
+
+    // Host timeout race rejects immediately with E_TX_TIMEOUT
+    const timeoutErr = Object.assign(new Error("timed out"), { code: "E_TX_TIMEOUT" });
+    const pendingTx = db.transaction(async () => new Promise(() => {}));
+    await Bun.sleep(0);
+    triggerTimeout(timeoutErr);
+    await assert.rejects(pendingTx, err => err === timeoutErr);
+
+    // KV wrapper roundtrip
+    await kv.set("k1", { ok: true });
+    assert.deepEqual(await kv.get("k1"), { ok: true });
+    assert.equal(await kv.delete("k1"), true);
+    assert.equal(await kv.get("k1"), null);
+
+    dispose();
+    flush();
+    assert.equal(closedCount, 2);
+  } finally {
+    if (previous) Object.defineProperty(globalThis, "__zguiServices", previous);
+    else delete globalThis.__zguiServices;
+  }
+});

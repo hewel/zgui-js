@@ -473,6 +473,9 @@ impl Driver {
     }
     fn runnable(&self) -> bool {
         self.pipeline.platform().has_pending_wakes()
+            || self.pipeline.app().session().is_some_and(|session| {
+                session.has_pending_sqlite_ops() || session.has_sqlite_events()
+            })
             || self.pipeline.app().native.windows().iter().any(|window| {
                 self.pipeline.platform().offscreen(window.surface().id()).is_some_and(|surface|surface.has_pending_redraw())
             })
@@ -528,8 +531,23 @@ impl Driver {
             std::thread::sleep(Duration::from_millis(1));
         }
     }
+    fn wait_host_workers(&mut self) -> Result<(), Fault> {
+        loop {
+            let pending = self
+                .pipeline
+                .app()
+                .session()
+                .is_some_and(|session| session.has_pending_sqlite_ops() && !session.has_sqlite_events());
+            if !pending || self.pipeline.platform().has_pending_wakes() {
+                return Ok(());
+            }
+            self.check()?;
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    }
     fn pump_current(&mut self)->Result<(),Fault> {
         self.wait_asset_barrier()?;
+        self.wait_host_workers()?;
         if !self.environment.is_virtual() {
             let now = self.pipeline.now();
             self.pipeline.advance(Instant::now().saturating_duration_since(now));

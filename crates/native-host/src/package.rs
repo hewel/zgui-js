@@ -50,6 +50,24 @@ impl ClipboardCapabilities {
 }
 
 crate::schema::object_struct! {
+/// App-scoped SQLite database declarations.
+#[derive(Default)]
+#[serde(default, rename_all = "camelCase", deny_unknown_fields)]
+pub struct SqliteCapabilities {
+    /// Named SQLite databases this application may open.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub databases: Vec<String>,
+}
+}
+
+impl SqliteCapabilities {
+    #[must_use]
+    pub(crate) fn is_empty(&self) -> bool {
+        self.databases.is_empty()
+    }
+}
+
+crate::schema::object_struct! {
 /// Host privileges requested by the package, all denied by default.
 #[derive(Default)]
 #[serde(default, rename_all = "camelCase", deny_unknown_fields)]
@@ -78,6 +96,9 @@ pub struct Capabilities {
     /// Clipboard read authorization outside user gestures.
     #[serde(skip_serializing_if = "ClipboardCapabilities::is_empty")]
     pub clipboard: ClipboardCapabilities,
+    /// App-scoped SQLite database declarations.
+    #[serde(skip_serializing_if = "SqliteCapabilities::is_empty")]
+    pub sqlite: SqliteCapabilities,
 }
 }
 
@@ -93,9 +114,16 @@ impl Capabilities {
             && self.commands.is_empty()
             && !self.control_channel
             && self.clipboard.is_empty()
+            && self.sqlite.is_empty()
     }
 
     fn validate(&self) -> Result<()> {
+        let mut seen_dbs = std::collections::BTreeSet::new();
+        for name in &self.sqlite.databases {
+            if !host_services::sqlite::is_valid_database_name(name) || !seen_dbs.insert(name) {
+                return Err(format!("invalid or duplicate capabilities.sqlite.databases entry: {name:?}").into());
+            }
+        }
         for (name, entries) in [
             ("imagePrefixes", &self.image_prefixes),
             ("unixSockets", &self.unix_sockets),

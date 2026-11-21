@@ -7,6 +7,8 @@ import {
   loadImageBytes,
   loadTextAsset,
   onControlMessage,
+  openDatabase,
+  openKvStore,
   readClipboardImage,
   readClipboardText,
   readTextAsset,
@@ -21,7 +23,10 @@ import type {
   HostRequest,
   HostServiceError,
   ImageHandle,
+  KvStore,
   ResolvedCapabilities,
+  SqlExecuteResult,
+  SqliteDatabase,
 } from "@hewel/zgui-services";
 
 const request: HostRequest<string> = readTextAsset("assets/message.txt");
@@ -177,4 +182,32 @@ writeClipboardImage("/etc/passwd");
 writeClipboardText("x", { secret: "yes" });
 
 void [clipTextReq, clipTextScoped, clipImgReq, clipImgScoped, clipWriteTextReq, clipWriteImgBytes, clipWriteImgHandle];
+
+const sqlDb: SqliteDatabase = openDatabase("main");
+const sqlQueryReq: HostRequest<readonly { readonly id: number; readonly title: string }[]> = sqlDb.query<{
+  readonly id: number;
+  readonly title: string;
+}>("SELECT id, title FROM notes WHERE id = ?1", [1], { maxRows: 50 });
+const sqlExecReq: HostRequest<SqlExecuteResult> = sqlDb.execute("INSERT INTO notes (title) VALUES (:title)", {
+  title: "hello",
+});
+const sqlBatchReq: HostRequest<readonly SqlExecuteResult[]> = sqlDb.batch([
+  { sql: "INSERT INTO notes (title) VALUES (?1)", params: ["a"] },
+]);
+const sqlTxPromise: Promise<number> = sqlDb.transaction(
+  async tx => {
+    const res = await tx.execute("INSERT INTO notes (title) VALUES (?1)", ["tx"]);
+    return res.rowsAffected;
+  },
+  { timeoutMs: 2500 },
+);
+sqlDb.close();
+// @ts-expect-error SQLite params cannot contain booleans or functions directly.
+sqlDb.query("SELECT ?1", [true]);
+
+const kv: KvStore<{ readonly theme: string }> = openKvStore<{ readonly theme: string }>("main", "prefs");
+const kvVal: Promise<{ readonly theme: string } | null> = kv.get("ui");
+kv.close();
+
+void [sqlQueryReq, sqlExecReq, sqlBatchReq, sqlTxPromise, kvVal];
 void [promise, cancelled, length, recovered, generic, implicitPromise, asyncCancellation, bytes, element, errorCode, nativeError];

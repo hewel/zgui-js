@@ -198,6 +198,12 @@ pub(crate) struct ResourceCounts {
     /// Inbound control handlers still registered.
     #[serde(skip_serializing_if = "is_zero")]
     pub control_listeners: usize,
+    /// Open SQLite database handles still retained after cleanup.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub sqlite_databases: usize,
+    /// Active SQLite transactions still open after cleanup.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub sqlite_transactions: usize,
     #[serde(skip_serializing_if = "is_zero")]
     pub canvas_scenes: usize,
     /// Native auxiliary shell surfaces still registered with the platform.
@@ -746,6 +752,14 @@ impl Session {
         !self.shutdown_started.get() && self.work.owns_clipboard_read(serial)
     }
 
+    pub(crate) fn has_pending_sqlite_ops(&self) -> bool {
+        !self.shutdown_started.get() && self.work.has_pending_sqlite_ops()
+    }
+
+    pub(crate) fn has_sqlite_events(&self) -> bool {
+        !self.shutdown_started.get() && self.work.has_sqlite_events()
+    }
+
     pub(crate) fn finish_clipboard_read(
         &self,
         serial: zgui::platform::ClipboardSerial,
@@ -940,6 +954,10 @@ impl Session {
                     self.bridges.run(engine.turn(), |js| js.with_context(|ctx| self.work.settle_external(&ctx, event)))
                         .map_err(|error| self.diagnostic(error))?;
                     true
+                } else if let Some((db_id, event)) = self.work.next_sqlite_event() {
+                    self.bridges.run(engine.turn(), |js| js.with_context(|ctx| self.work.settle_sqlite(&ctx, db_id, event)))
+                        .map_err(|error| self.diagnostic(error))?;
+                    true
                 } else { false },
                 _ => {
                     let job_budget = engine.limits().job_timeout;
@@ -965,7 +983,7 @@ impl Session {
         let queued = self.has_queued_notifications()?;
         let jobs_pending = engine.is_job_pending();
         if !jobs_pending { self.shell.clear_cleanup_jobs_pending(); }
-        if jobs_pending || queued || self.work.has_ready() || self.work.has_completions() || self.work.has_clipboard_completions() || self.work.has_clipboard_ops() || self.work.has_external() { self.wake_owner(); }
+        if jobs_pending || queued || self.work.has_ready() || self.work.has_completions() || self.work.has_clipboard_completions() || self.work.has_clipboard_ops() || self.work.has_external() || self.work.has_sqlite_events() { self.wake_owner(); }
         Ok(worked)
     }
 
@@ -1241,12 +1259,15 @@ impl Session {
     pub(crate) fn counts(&self) -> ResourceCounts {
         let (timers, frame_callbacks, requests) = self.work.counts();
         let external = self.work.external_counts();
+        let sqlite = self.work.sqlite_counts();
         let mut counts = ResourceCounts {
             callbacks: self.shell.callback_count() + self.window_controls.callback_count(), timers, frame_callbacks, requests,
             image_handles: self.image_blobs().len(),
             unix_sockets: external.sockets,
             child_processes: external.processes,
             control_listeners: external.listeners,
+            sqlite_databases: sqlite.databases,
+            sqlite_transactions: sqlite.transactions,
             shell_surfaces: self.shell_surfaces.get(),
             fonts: self.font_leases.borrow().len(),
             engine_alive: self.engine.borrow().is_some(),
@@ -1340,6 +1361,7 @@ impl Session {
         }
         if let Some(error) = &cleanup_error { eprintln!("disposer error: {error}"); }
         let external = self.work.external_counts();
+        let sqlite = self.work.sqlite_counts();
         self.work.finish_stop();
         // Report remaining leases before forced disposal releases the native scenes.
         let canvas_scenes = self.counts().canvas_scenes;
@@ -1365,6 +1387,8 @@ impl Session {
         counts.unix_sockets = external.sockets;
         counts.child_processes = external.processes;
         counts.control_listeners = external.listeners;
+        counts.sqlite_databases = sqlite.databases;
+        counts.sqlite_transactions = sqlite.transactions;
         self.work.clear_images();
         let failure = if !self.contract_reported.replace(true)
             && let Some(contract) = self.contract_failure()
