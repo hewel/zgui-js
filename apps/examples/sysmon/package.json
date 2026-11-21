@@ -1,0 +1,29 @@
+{
+  "name": "@hewel/zgui-js-example-sysmon",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "zgui-js dev",
+    "build": "zgui-js build",
+    "preview": "zgui-js preview"
+  },
+  "zgui": {
+    "capabilities": {
+      "commands": [
+        "/usr/bin/vmstat",
+        "/usr/bin/ps",
+        "/usr/bin/free",
+        "/usr/bin/df",
+        "/usr/bin/uname"
+      ],
+      "controlChannel": true
+    }
+  },
+  "devDependencies": {
+    "@hewel/zgui-build": "workspace:*"
+  },
+  "dependencies": {
+    "@hewel/zgui": "workspace:*",
+    "@hewel/zgui-services": "workspace:*"
+  }
+}
