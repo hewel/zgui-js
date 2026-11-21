@@ -81,7 +81,17 @@ function parse(args: string[]): Command {
     ...(command === "build" ? ["--stylex-diagnostics"] : []),
     ...(command === "build" || command === "preview" ? ["--watch"] : []),
     ...(command === "dev" || command === "preview" ? ["--host-root", "--host-executable"] : []),
-    ...(command === "dev" ? ["--exit-after-ms", "--width", "--height", "--title", "--max-js-stack-bytes", "--layer-config", "--pure-shell"] : []),
+    ...(command === "dev"
+      ? [
+          "--exit-after-ms",
+          "--width",
+          "--height",
+          "--title",
+          "--max-js-stack-bytes",
+          "--layer-config",
+          "--pure-shell",
+        ]
+      : []),
     ...(command === "preview" ? ["--profile", "--fixture", "--scenario", "--out"] : []),
   ]);
   let directory: string | undefined;
