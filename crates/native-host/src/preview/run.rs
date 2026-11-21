@@ -155,7 +155,12 @@ pub fn worker(args: impl Iterator<Item=String>) -> supervisor::Report {
         resolved_environment = Some(environment);
         ledger.enter("mount");
         sink.borrow_mut().json("progress/action-000000.json","action-progress",&json!({"stage":"mount","actionSequence":0,"build":build}))?;
-        driver=Some(Driver::new(&profile,package,fixture.definition,sink.clone(),started+Duration::from_millis(profile.profile.limits.max_run_wall_ms),root_styles)?);
+        let reload = super::driver::ReloadConfig {
+            dev_state: scenario.scenario.required_capabilities.iter().any(|cap| cap == "lifecycle.reload"),
+            bundle_dir: options.bundle.clone(),
+            scenario_dir: options.scenario.parent().map(std::path::Path::to_path_buf).unwrap_or_default(),
+        };
+        driver=Some(Driver::new(&profile,package,fixture.definition,sink.clone(),started+Duration::from_millis(profile.profile.limits.max_run_wall_ms),root_styles,reload)?);
         let active=driver.as_mut().expect("driver installed");
         fixture_runtime=Some(active.fixtures.clone());
         // A startup mount fault wins over any later graphics publication failure.

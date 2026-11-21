@@ -25,6 +25,14 @@ pub struct Scenario {
     pub required_capabilities: Vec<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ReloadExpect {
+    #[default]
+    Accepted,
+    Rejected,
+}
+
 #[derive(Debug, Clone)]
 pub enum Step {
     Settle { id: String, timeout_ms: Option<u64> },
@@ -52,6 +60,7 @@ pub enum Step {
     SurfaceCloseRequest { id: String, surface: String },
     MonitorsSet { id: String, monitors: Vec<Monitor> },
     PopupDone { id: String, surface: String },
+    LifecycleReload { id: String, bundle: Option<String>, expect: ReloadExpect },
 }
 
 impl Step {
@@ -66,7 +75,7 @@ impl Step {
             | Self::Assert { id, .. } | Self::AssertService { id, .. }
             | Self::ClockAdvance { id, .. } | Self::ServiceEmit { id, .. }
             | Self::SurfaceResize { id, .. } | Self::SurfaceScale { id, .. } | Self::SurfaceColorScheme { id, .. }
-            | Self::SurfaceRecreate { id, .. } | Self::SurfaceCloseRequest { id, .. } | Self::MonitorsSet { id, .. } | Self::PopupDone { id, .. } => id,
+            | Self::SurfaceRecreate { id, .. } | Self::SurfaceCloseRequest { id, .. } | Self::MonitorsSet { id, .. } | Self::PopupDone { id, .. } | Self::LifecycleReload { id, .. } => id,
         }
     }
 
@@ -96,6 +105,7 @@ impl Step {
             Self::SurfaceCloseRequest { .. } => "surface.closeRequest",
             Self::MonitorsSet { .. } => "monitors.set",
             Self::PopupDone { .. } => "popupDone",
+            Self::LifecycleReload { .. } => "lifecycle.reload",
         }
     }
 }
@@ -296,6 +306,8 @@ enum StepInput {
     DragLeave(NamedSurfaceInput),
     #[serde(rename = "drag.drop")]
     DragDrop(DragPathsInput),
+    #[serde(rename = "lifecycle.reload")]
+    LifecycleReload(LifecycleReloadInput),
     // Later operations remain explicit capability failures, never silently ignored.
     #[serde(rename = "pointer.drag")]
     PointerDrag,
@@ -309,8 +321,16 @@ enum StepInput {
     WaitUntil,
     #[serde(rename = "capture.sequence")]
     CaptureSequence,
-    #[serde(rename = "lifecycle.reload")]
-    LifecycleReload,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct LifecycleReloadInput {
+    id: String,
+    #[serde(default, deserialize_with = "present")]
+    bundle: Option<String>,
+    #[serde(default)]
+    expect: ReloadExpect,
 }
 
 #[derive(Deserialize)]
@@ -693,6 +713,13 @@ fn parse(bytes: &[u8], available: &[&str], virtual_profile: bool) -> Result<Scen
                 let location = pointer_location(input.target, input.surface, input.position, &mut requirements)?;
                 Step::DragDrop { id: input.id, location, paths: input.paths }
             }
+            StepInput::LifecycleReload(input) => {
+                if let Some(bundle) = &input.bundle && bundle.is_empty() {
+                    return Err(invalid("lifecycle.reload bundle must be a non-empty path"));
+                }
+                require(&mut requirements, "lifecycle.reload");
+                Step::LifecycleReload { id: input.id, bundle: input.bundle, expect: input.expect }
+            }
             unsupported => {
                 let operation = match unsupported {
                     StepInput::PointerDrag => "pointer.drag",
@@ -701,11 +728,11 @@ fn parse(bytes: &[u8], available: &[&str], virtual_profile: bool) -> Result<Scen
                     StepInput::ImeCancel => "ime.cancel",
                     StepInput::WaitUntil => "wait.until",
                     StepInput::CaptureSequence => "capture.sequence",
-                    StepInput::LifecycleReload => "lifecycle.reload",
                     StepInput::Settle(_) | StepInput::Capture(_)
                     | StepInput::PointerMove(_) | StepInput::PointerClick(_)
                     | StepInput::PointerDown(_) | StepInput::PointerUp(_) | StepInput::PointerCancel(_)
                     | StepInput::Wheel(_) | StepInput::DragEnter(_) | StepInput::DragMove(_) | StepInput::DragLeave(_) | StepInput::DragDrop(_)
+                    | StepInput::LifecycleReload(_)
                     | StepInput::MonitorsSet(_) | StepInput::PopupDone(_)
                     | StepInput::KeyPress(_) | StepInput::TextCommit(_)
                     | StepInput::Assert(_) | StepInput::ClockAdvance(_) | StepInput::ServiceEmit(_)
@@ -936,7 +963,7 @@ mod tests {
 
     #[test]
     fn future_operations_fail_preflight_even_when_not_declared() {
-        for op in ["pointer.drag", "ime.preedit", "ime.commit", "ime.cancel", "wait.until", "capture.sequence", "lifecycle.reload"] {
+        for op in ["pointer.drag", "ime.preedit", "ime.commit", "ime.cancel", "wait.until", "capture.sequence"] {
             let input = declaration(json!([{"id":"future","op":op,"target":{"surface":"main","testId":"counter"}}]));
             let error = check(&input, &["pixels", "virtual-time", "input.pointer"], true).unwrap_err();
             assert_eq!((error.code, error.exit_code), ("E_UNSUPPORTED_CAPABILITY", 2), "{op}: {error}");

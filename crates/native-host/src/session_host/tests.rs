@@ -1524,3 +1524,69 @@ fn staged_network_deferral_and_reload_under_sse_flood() {
     assert!(report.failure.is_none(), "gen3 teardown failed: {:?}", report.failure);
     assert_eq!(report.counts, ResourceCounts::default());
 }
+
+#[test]
+fn dev_state_never_snapshots_locked_generations_and_hydrates_unlocked_reloads() {
+    let source = r#"
+        export const hostApiVersion = 1;
+        export function mount(root) {
+            const hydrated = globalThis.__zguiDevState.read("secret", 1) ?? "cold";
+            const label = __zgui.createElement("label");
+            const text = __zgui.createTextNode(hydrated);
+            __zgui.insertNode(label, text, null);
+            __zgui.insertNode(root, label, null);
+            globalThis.__zguiDevState.write("secret", JSON.stringify("persisted-value"), 1);
+            return () => {};
+        }
+    "#;
+    let module = SessionModule::inline("dev-lock-test", source, vec![]);
+    let cx = zgui_platform_headless::Headless::new();
+    let backend = Rc::new(DocumentDom::new(Rc::new(RefCell::new(Document::new()))));
+    let dom = DomHandle::from_rc(backend.clone());
+    let root = dom.create_element(ElementName::new("column"));
+    dom.insert(backend.root_node(), root, None);
+    let stub = Rc::new(StubHost::default());
+    let region = MountRegion {
+        document: backend.document_id(),
+        root,
+        dom,
+        host: HostHandle::from_rc(stub),
+        fonts: zgui::app::Fonts::shipped_only(),
+        root_anchor: Rc::new(Cell::new(root)),
+    };
+    let pending = Rc::new(RefCell::new(vec![region.clone()]));
+    let policy = SessionPolicy::live(host_services::Executor::new(1, 16).expect("executor"))
+        .with_dev_state(true);
+    let mut host = SessionHost::new(
+        pending,
+        module.clone(),
+        policy,
+        RecoveryPolicy::Propagate,
+        SurfaceOpacity::Opaque,
+    );
+    let mut surface = StubSurface {
+        document: region.document,
+        bindings: HashMap::new(),
+        images: None,
+        frames: RefCell::new(Vec::new()),
+    };
+    let waker = cx.waker();
+
+    host.attach(&mut surface, waker.clone(), no_retry()).expect("initial mount");
+    assert_eq!(region.dom.text_content(region.root_anchor.get()), "cold");
+
+    // Unlocked reload hydrates persisted plain data cleanly.
+    let outcome = host.replace(&mut surface, waker.clone(), region.document, module.clone(), no_retry());
+    assert!(matches!(outcome, ReloadOutcome::Mounted { .. }));
+    assert_eq!(region.dom.text_content(region.root_anchor.get()), "\"persisted-value\"");
+
+    // Locking the session blocks snapshot capture across reload (forces clean cold start).
+    let live = host.session(region.document).expect("live session").clone();
+    let _ = live.update_lock_state(SessionLockState::Locked);
+    assert!(live.capture_dev_state(&module).is_none(), "locked generation must never snapshot dev state");
+    let outcome = host.replace(&mut surface, waker, region.document, module, no_retry());
+    assert!(matches!(outcome, ReloadOutcome::Mounted { .. }));
+    assert_eq!(region.dom.text_content(region.root_anchor.get()), "cold", "reloading from locked generation must cold-mount");
+
+    host.stop(&mut surface);
+}

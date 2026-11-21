@@ -59,6 +59,8 @@ struct PreviewHost {
     monitors: Vec<Monitor>,
     monitor_change: bool,
     recreate_shell: Option<String>,
+    pending_reload: Option<SessionModule>,
+    last_reload: Option<crate::session_host::ReloadOutcome>,
     fault: Option<Fault>,
     retired: Option<SessionRetirement>,
     retired_telemetry: Option<RuntimeTelemetry>,
@@ -110,6 +112,23 @@ impl PreviewHost {
         {
             self.fail(cx, Fault::application(error));
             return;
+        }
+        if let Some(module) = self.pending_reload.take() {
+            let retry: Rc<dyn Fn(zgui::view::DocumentId, u64)> = Rc::new(|_, _| {});
+            let primary_document = self.host.region_documents().next();
+            let outcome = if self.host.is_pure_shell() {
+                self.host.replace_shell(&mut self.native, cx, ImageChoice::PackageOnly, module)
+            } else if let Some(document) = primary_document {
+                let mut surface = RuntimeSurface::new(&mut self.native, cx, ImageChoice::PackageOnly);
+                self.host.replace(&mut surface, cx.waker(), document, module, retry)
+            } else {
+                crate::session_host::ReloadOutcome::Rejected("no active mount region to reload".into())
+            };
+            self.last_reload = Some(outcome);
+            if let Err(error) = self.host.shell_turn(&mut self.native, cx, ImageChoice::PackageOnly, &self.monitors) {
+                self.fail(cx, Fault::application(error));
+                return;
+            }
         }
         let Some(session) = self.session() else { return; };
         for window in self.native.windows() {
@@ -196,6 +215,8 @@ pub struct Driver {
     pure_shell: bool,
     shell_capable: bool,
     lock_capable: bool,
+    bundle_dir: std::path::PathBuf,
+    scenario_dir: std::path::PathBuf,
     /// A mount fault observed while the harness already owned the session; the
     /// first `check` reports it so the run can persist the cause before finish.
     startup_fault: Option<Fault>,
@@ -206,12 +227,49 @@ pub(super) fn stylesheet(profile:&LoadedProfile)->String {
         if profile.profile.theme=="light" { "color:#171b24;" } else { "" })
 }
 
+#[derive(Default)]
+pub struct ReloadConfig {
+    pub dev_state: bool,
+    pub bundle_dir: std::path::PathBuf,
+    pub scenario_dir: std::path::PathBuf,
+}
+
 impl Driver {
-    pub fn new(profile: &LoadedProfile, package: Rc<Package>, fixture:FixtureDefinition, output: SharedOutput, run_deadline: Instant, stylesheet:String) -> Result<Self, Fault> {
-        Self::with_sink(profile, package, fixture, Box::new(OutputSink(output)), run_deadline, stylesheet)
+    pub fn new(
+        profile: &LoadedProfile,
+        package: Rc<Package>,
+        fixture: FixtureDefinition,
+        output: SharedOutput,
+        run_deadline: Instant,
+        stylesheet: String,
+        reload: ReloadConfig,
+    ) -> Result<Self, Fault> {
+        Self::with_sink_configured(
+            profile,
+            package,
+            fixture,
+            Box::new(OutputSink(output)),
+            run_deadline,
+            stylesheet,
+            reload,
+        )
     }
 
+    #[cfg(test)]
     pub(super) fn with_sink(profile: &LoadedProfile, package: Rc<Package>, fixture:FixtureDefinition, sink: Box<dyn CheckpointSink>, run_deadline: Instant, stylesheet:String) -> Result<Self, Fault> {
+        Self::with_sink_configured(profile, package, fixture, sink, run_deadline, stylesheet, ReloadConfig::default())
+    }
+
+    fn with_sink_configured(
+        profile: &LoadedProfile,
+        package: Rc<Package>,
+        fixture: FixtureDefinition,
+        sink: Box<dyn CheckpointSink>,
+        run_deadline: Instant,
+        stylesheet: String,
+        reload: ReloadConfig,
+    ) -> Result<Self, Fault> {
+        let ReloadConfig { dev_state, bundle_dir, scenario_dir } = reload;
         let mut capabilities = PlatformCapabilities::none();
         capabilities.session_lock = true;
         capabilities.clipboard_formats = vec![
@@ -268,7 +326,9 @@ impl Driver {
         };
         let shell_opacity = if surface.opaque { SurfaceOpacity::Opaque } else { SurfaceOpacity::Transparent };
         let mut session_host = SessionHost::new(pending.clone(), SessionModule::package(package.clone()),
-            SessionPolicy::preview(limits, deadline.clone(), environment.clone(), fixtures.clone()).with_reduced_motion(profile.profile.reduced_motion),
+            SessionPolicy::preview(limits, deadline.clone(), environment.clone(), fixtures.clone())
+                .with_reduced_motion(profile.profile.reduced_motion)
+                .with_dev_state(dev_state),
             RecoveryPolicy::Propagate, shell_opacity);
         if pure_shell { session_host.set_pure_shell(profile.fonts.clone()); }
         platform.set_color_scheme(Some(if profile.profile.theme == "dark" { ColorScheme::Dark } else { ColorScheme::Light }));
@@ -282,13 +342,15 @@ impl Driver {
             monitors: Vec::new(),
             monitor_change: false,
             recreate_shell: None,
+            pending_reload: None,
+            last_reload: None,
             fault: None,
             retired: None,
             retired_telemetry: None,
         })?;
         let mut driver = Self { pipeline,observers,shell_geometry:BTreeMap::new(),deadline,run_deadline,step_start_frame:Cell::new(0),limits:profile.profile.limits.clone(),
             dimensions:(profile.physical_width,profile.physical_height),surface:surface.clone(),
-            environment,fixtures,maximum_time_us:start+profile.profile.limits.max_virtual_duration_ms*1000,startup_fault:None,pure_shell,shell_capable,lock_capable };
+            environment,fixtures,maximum_time_us:start+profile.profile.limits.max_virtual_duration_ms*1000,startup_fault:None,pure_shell,shell_capable,lock_capable,bundle_dir,scenario_dir };
         let setup = if pure_shell { driver.check() } else { driver.bind_main() };
         if let Err(fault) = setup.and_then(|_| driver.sync_shell_surfaces()) { driver.startup_fault = Some(fault); }
         Ok(driver)
@@ -386,6 +448,75 @@ impl Driver {
     }
     pub fn generation(&self) -> u64 { self.pipeline.app().host.generation() }
     /// Recreate the real native document while retaining run time, RNG and fixture history.
+    pub fn lifecycle_reload(
+        &mut self,
+        bundle: Option<&str>,
+        expect: super::scenario::ReloadExpect,
+    ) -> Result<Value, Fault> {
+        use super::scenario::ReloadExpect;
+        self.check()?;
+        let target_path = match bundle {
+            Some(path) => {
+                let pb = std::path::PathBuf::from(path);
+                if pb.is_absolute() { pb } else { self.scenario_dir.join(pb) }
+            }
+            None => self.bundle_dir.clone(),
+        };
+        let package = match Package::load(&target_path) {
+            Ok(package) => Rc::new(package),
+            Err(error) => {
+                if expect == ReloadExpect::Rejected {
+                    return Ok(json!({
+                        "status": "rejected",
+                        "stage": "package",
+                        "generation": self.generation(),
+                        "diagnostic": error.to_string(),
+                    }));
+                }
+                return Err(Error::new("E_BUNDLE", 3, error.to_string()).into());
+            }
+        };
+        let build_id = package.manifest.build_id.clone();
+        self.pipeline.app_mut().pending_reload = Some(SessionModule::package(package));
+        self.pipeline.platform().waker().wake(WakeReason::AppWork);
+        self.pump_application()?;
+        let outcome = self.pipeline.app_mut().last_reload.take();
+        match outcome {
+            Some(crate::session_host::ReloadOutcome::Mounted { generation, predecessor_leak }) => {
+                if expect == ReloadExpect::Rejected {
+                    return Err(Error::new(
+                        "E_ASSERTION",
+                        4,
+                        format!("expected reload candidate to be rejected, but generation {generation} was accepted"),
+                    ).into());
+                }
+                self.bundle_dir = target_path;
+                self.settle(false)?;
+                let mut trace = json!({
+                    "status": "accepted",
+                    "generation": generation,
+                    "buildId": build_id,
+                });
+                if let Some(leak) = predecessor_leak {
+                    trace["predecessorLeak"] = json!(leak);
+                }
+                Ok(trace)
+            }
+            Some(crate::session_host::ReloadOutcome::Rejected(error) | crate::session_host::ReloadOutcome::Fallback(error)) => {
+                if expect == ReloadExpect::Accepted {
+                    return Err(Fault::application(error));
+                }
+                self.settle(false)?;
+                Ok(json!({
+                    "status": "rejected",
+                    "generation": self.generation(),
+                    "diagnostic": error.to_string(),
+                }))
+            }
+            None => Err(Error::new("E_HOST_INVARIANT", 9, "lifecycle.reload did not produce a reload outcome").into()),
+        }
+    }
+
     pub fn recreate(&mut self, name: &str) -> Result<Value, Fault> {
         self.check()?;
         let old_surface = self.window(name)?.surface().id();

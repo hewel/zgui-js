@@ -1,4 +1,5 @@
 import { createMemo, createSignal, getOwner, onCleanup, untrack } from "#solid";
+import { getDevStateChannel, trySerializePlainDevState } from "../dev-state.js";
 import { flush } from "../renderer/index.js";
 import type { Accessor, Component } from "../types.js";
 import {
@@ -96,6 +97,11 @@ export interface CreateRouterOptions<Paths extends string = string, S = unknown>
   readonly initialEntries?: readonly string[] | undefined;
   readonly initialIndex?: number | undefined;
   readonly initialState?: S | undefined;
+  /**
+   * Key used to persist active location and history stack across dev reloads.
+   * Defaults to `"__zgui_router"`; set to `false` to opt out. Ignored in production builds.
+   */
+  readonly devStateKey?: string | false | undefined;
 }
 
 /** Independent, owner-friendly in-memory router instance. */
@@ -209,15 +215,76 @@ export function createRouter<const Routes extends readonly RouteDefinition[]>(
   const branches: CompiledBranch[] = [];
   compileBranches(routes, "", [], branches);
 
-  const rawEntries = options.initialEntries && options.initialEntries.length > 0
-    ? options.initialEntries
-    : [options.initialPath ?? "/"];
-  const initialEntries = rawEntries.map((entry, idx) =>
-    makeLocation(entry, idx === rawEntries.length - 1 ? options.initialState : undefined),
-  );
-  const clampedStart = options.initialIndex === undefined
-    ? initialEntries.length - 1
-    : Math.max(0, Math.min(initialEntries.length - 1, Math.trunc(options.initialIndex)));
+  const devChannel = options.devStateKey === false ? null : getDevStateChannel();
+  const devKey = typeof options.devStateKey === "string" && options.devStateKey.length > 0
+    ? options.devStateKey
+    : "__zgui_router";
+
+  let initialEntries: RouterLocation[];
+  let clampedStart: number;
+
+  const hydratedRouter = (() => {
+    if (!devChannel) return null;
+    const raw = devChannel.read(devKey, 1);
+    if (raw === null) return null;
+    try {
+      const parsed = JSON.parse(raw) as {
+        entries?: readonly { pathname?: unknown; search?: unknown; state?: unknown }[];
+        index?: unknown;
+      };
+      if (!parsed || !Array.isArray(parsed.entries) || parsed.entries.length === 0) return null;
+      const restored: RouterLocation[] = [];
+      for (const item of parsed.entries) {
+        if (!item || typeof item.pathname !== "string") return null;
+        const search = typeof item.search === "string" ? item.search : "";
+        restored.push(makeLocation(`${item.pathname}${search}`, item.state));
+      }
+      const rawIdx = typeof parsed.index === "number" && Number.isInteger(parsed.index)
+        ? parsed.index
+        : restored.length - 1;
+      const idx = Math.max(0, Math.min(restored.length - 1, rawIdx));
+      return { entries: restored, index: idx };
+    } catch {
+      return null;
+    }
+  })();
+
+  if (hydratedRouter) {
+    initialEntries = hydratedRouter.entries;
+    clampedStart = hydratedRouter.index;
+  } else {
+    const rawEntries = options.initialEntries && options.initialEntries.length > 0
+      ? options.initialEntries
+      : [options.initialPath ?? "/"];
+    initialEntries = rawEntries.map((entry, idx) =>
+      makeLocation(entry, idx === rawEntries.length - 1 ? options.initialState : undefined),
+    );
+    clampedStart = options.initialIndex === undefined
+      ? initialEntries.length - 1
+      : Math.max(0, Math.min(initialEntries.length - 1, Math.trunc(options.initialIndex)));
+  }
+
+  const persistRouterState = (list: readonly RouterLocation[], idx: number): void => {
+    if (!devChannel) return;
+    const serialized = trySerializePlainDevState({
+      entries: list.map(entry => ({
+        pathname: entry.pathname,
+        search: entry.search,
+        ...(entry.state !== undefined && trySerializePlainDevState(entry.state) !== null
+          ? { state: entry.state }
+          : {}),
+      })),
+      index: idx,
+    });
+    if (serialized !== null) {
+      try {
+        devChannel.write(devKey, serialized, 1);
+      } catch {
+        // Never fail router navigation if dev snapshot budget is exhausted.
+      }
+    }
+  };
+  persistRouterState(initialEntries, clampedStart);
 
   const [entries, setEntries] = createSignal<readonly RouterLocation[]>(initialEntries);
   const [index, setIndex] = createSignal<number>(clampedStart);
@@ -331,10 +398,13 @@ export function createRouter<const Routes extends readonly RouteDefinition[]>(
         const next = list.slice();
         next[currentIdx] = target;
         setEntries(next);
+        persistRouterState(next, currentIdx);
       } else {
         const next = [...list.slice(0, currentIdx + 1), target];
+        const nextIdx = next.length - 1;
         setEntries(next);
-        setIndex(next.length - 1);
+        setIndex(nextIdx);
+        persistRouterState(next, nextIdx);
       }
     });
   }) as RouterNavigate<Paths>;
@@ -349,6 +419,7 @@ export function createRouter<const Routes extends readonly RouteDefinition[]>(
     const target = list[nextIdx]!;
     return runTransition(target, step, false, () => {
       setIndex(nextIdx);
+      persistRouterState(list, nextIdx);
     });
   };
 

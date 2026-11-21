@@ -57,6 +57,8 @@ export {
 } from "./window.js";
 export { createSpring } from "./spring.js";
 export type { Spring, SpringNumberOption, SpringOptions } from "./spring.js";
+export { createDevState } from "./dev-state.js";
+export type { DevStateOptions } from "./dev-state.js";
 export { createDelay, createInterval, createTimeout } from "./timers.js";
 export type { DelayHandle } from "./timers.js";
 export {

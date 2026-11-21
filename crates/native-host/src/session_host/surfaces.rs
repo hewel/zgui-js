@@ -44,6 +44,12 @@ pub(crate) struct ShellWindows {
     lock_ui_suspended: bool,
 }
 
+impl ShellWindows {
+    pub(super) fn has_active_lock(&self) -> bool {
+        !self.locks.is_empty()
+    }
+}
+
 impl SessionHost {
     /// Configure a generation that launches without a primary mount region.
     pub(crate) fn set_pure_shell(&mut self, fonts: Fonts) { self.pure_fonts = Some(fonts); }
@@ -65,7 +71,20 @@ impl SessionHost {
         self.pure_attempted = true;
         let Some(fonts) = &self.pure_fonts else { return ReloadOutcome::Rejected("pure-shell startup was not configured".into()); };
         let Some(generation) = Self::allocate_generation(&mut self.generation) else { return ReloadOutcome::Rejected("session generation exhausted".into()); };
-        let policy = self.policy.clone().with_session_lock(platform_lock_state(cx));
+        let lock_state = platform_lock_state(cx);
+        let hydrated = if self.policy.dev_state_enabled()
+            && !lock_state.is_some_and(SessionLockState::is_retained)
+            && !self.shell_windows.has_active_lock()
+        {
+            self.pure_session.as_ref().and_then(|prev| prev.capture_dev_state(module))
+        } else {
+            None
+        };
+        let policy = self
+            .policy
+            .clone()
+            .with_session_lock(lock_state)
+            .with_hydrated_dev_state(hydrated);
         let candidate = match Session::prepare_shell(fonts.clone(), runtime.app_timers(), module.clone(), generation, cx.waker(), policy) {
             Ok(candidate) => candidate,
             Err(error) => return ReloadOutcome::Rejected(error),

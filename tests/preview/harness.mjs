@@ -52,7 +52,7 @@ export async function writeScenario(filePath, id, steps, requiredCapabilities) {
   });
 }
 
-export async function buildFixtureApp(appDir, name, source, { rawSource = false, assets = {}, fonts = [], capabilities } = {}) {
+export async function buildFixtureApp(appDir, name, source, { rawSource = false, assets = {}, fonts = [], capabilities, development = false } = {}) {
   await mkdir(path.join(appDir, "src"), { recursive: true });
   const content = rawSource
     ? source
@@ -72,7 +72,7 @@ export async function buildFixtureApp(appDir, name, source, { rawSource = false,
     extends: path.join(workspaceRoot, "packages/ui/tsconfig.native.json"),
     include: ["src/**/*.tsx"],
   });
-  await buildApplication(name, { appDirectory: appDir });
+  await buildApplication(name, { appDirectory: appDir, development });
   return path.join(appDir, "dist");
 }
 

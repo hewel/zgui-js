@@ -5,7 +5,7 @@ use js_runtime::{JsRuntime, RejectionPolicy, RuntimeLimits};
 use rquickjs::{Exception, Function, Persistent};
 use ui_bridge::{BridgeGroup, BridgeStep, DispatchOutcome, HostPort, UiBridge, registry::NodeRegistry};
 use zgui::{app::Fonts, platform::{SessionLockState, Surface, SurfaceId, WakeReason, Waker}, runtime::{AppTimers, ImageBlobs}, view::DocumentId};
-use crate::{assets::{AssetSource, ContractFailure, MAX_SAFE_ID}, environment::Environment, session_host::MountRegion, package::Package, shell::{Authority, ContractPolicy, Monitor, Shell, ShellConfig}, work::{Arguments, Work, WorkSession}};
+use crate::{assets::{AssetSource, ContractFailure, MAX_SAFE_ID}, dev_state::{DevStateScope, DevStateSnapshot, DevStateStore}, environment::Environment, session_host::MountRegion, package::Package, shell::{Authority, ContractPolicy, Monitor, Shell, ShellConfig}, work::{Arguments, Work, WorkSession}};
 use crate::runtime_capabilities::ResolvedCapabilities;
 use window_control::{WindowCommand, WindowControls, WindowState};
 
@@ -135,17 +135,19 @@ pub(crate) struct SessionPolicy {
     reduced_motion: Option<bool>,
     teardown_reporter: Option<TeardownReporter>,
     session_lock: Option<SessionLockState>,
+    dev_state: bool,
+    hydrated_dev_state: Option<DevStateSnapshot>,
 }
 impl SessionPolicy {
     /// Ordinary live execution: wall clock, ambient limits, and package assets
     /// on the shared worker pool. Unhandled rejections fault under a retained lock.
     pub(crate) fn live(executor: host_services::Executor) -> Self {
-        Self { limits: RuntimeLimits::default(), deadline: None, environment: None, strict_rejections: false, assets: AssetSource::Live(executor), socket_bindings: None, reduced_motion: None, teardown_reporter: None, session_lock: None }
+        Self { limits: RuntimeLimits::default(), deadline: None, environment: None, strict_rejections: false, assets: AssetSource::Live(executor), socket_bindings: None, reduced_motion: None, teardown_reporter: None, session_lock: None, dev_state: false, hydrated_dev_state: None }
     }
     /// Deterministic preview execution: supplied limits, an enclosing deadline,
     /// the virtual environment, strict rejection handling and fixture assets.
     pub(crate) fn preview(limits: RuntimeLimits, deadline: Rc<Cell<Instant>>, environment: Rc<Environment>, fixtures: Rc<crate::assets::fixture::FixtureRuntime>) -> Self {
-        Self { limits, deadline: Some(deadline), environment: Some(environment), strict_rejections: true, assets: AssetSource::Fixture(fixtures), socket_bindings: None, reduced_motion: Some(false), teardown_reporter: None, session_lock: None }
+        Self { limits, deadline: Some(deadline), environment: Some(environment), strict_rejections: true, assets: AssetSource::Fixture(fixtures), socket_bindings: None, reduced_motion: Some(false), teardown_reporter: None, session_lock: None, dev_state: false, hydrated_dev_state: None }
     }
     /// Install the explicit launch bindings shared by all live candidates.
     #[must_use]
@@ -167,6 +169,23 @@ impl SessionPolicy {
     pub(crate) fn with_session_lock(mut self, state: Option<SessionLockState>) -> Self {
         self.session_lock = state;
         self
+    }
+
+    /// Enable the dev-only bounded plain-data reload snapshot channel.
+    pub(crate) fn with_dev_state(mut self, enabled: bool) -> Self {
+        self.dev_state = enabled;
+        self
+    }
+
+    /// Attach a compatible plain-data snapshot captured from the settled predecessor.
+    pub(crate) fn with_hydrated_dev_state(mut self, snapshot: Option<DevStateSnapshot>) -> Self {
+        self.hydrated_dev_state = snapshot;
+        self
+    }
+
+    /// Whether the dev-only reload snapshot channel is active.
+    pub(crate) fn dev_state_enabled(&self) -> bool {
+        self.dev_state
     }
 
     /// Report residual external leases to the live application on any retirement path.
@@ -329,6 +348,7 @@ pub(crate) struct Session {
     window_controls: Rc<WindowControls>,
     pub(crate) work: Rc<Work>,
     pub(crate) dnd: crate::dnd::DndState,
+    dev_state: Option<Rc<RefCell<DevStateStore>>>,
     platform_surfaces: RefCell<std::collections::HashMap<SurfaceId, std::sync::Weak<dyn Surface>>>,
     pub(crate) engine: RefCell<Option<JsRuntime>>,
     font_leases: RefCell<Vec<zgui::app::fonts::FontLease>>,
@@ -446,8 +466,14 @@ impl Session {
             };
             work.guard_cleanup_with(shell.clone());
             work.set_gesture_source(bridges.clone());
+            let dev_state = if policy.dev_state {
+                let scope = DevStateScope::for_module(&module);
+                Some(Rc::new(RefCell::new(DevStateStore::new(policy.hydrated_dev_state.clone(), &scope))))
+            } else {
+                None
+            };
             Self {
-                disposer: RefCell::new(None), primary, layers: RefCell::new(BTreeMap::new()), bridges, shell, window_controls, work, dnd: crate::dnd::DndState::new(), platform_surfaces: RefCell::new(std::collections::HashMap::new()), engine: RefCell::new(None),
+                disposer: RefCell::new(None), primary, layers: RefCell::new(BTreeMap::new()), bridges, shell, window_controls, work, dnd: crate::dnd::DndState::new(), dev_state, platform_surfaces: RefCell::new(std::collections::HashMap::new()), engine: RefCell::new(None),
                 shell_surfaces: Cell::new(0), retirement_reported: Cell::new(false),
                 shell_stylesheets: RefCell::new(Vec::new()),
                 telemetry: Cell::new(None), shutdown_started: Cell::new(false),
@@ -474,6 +500,9 @@ impl Session {
             let shell_api = session.shell.install(&ctx)?;
             session.shell.install_stylesheet_api(&shell_api, &session)?;
             session.install_dnd(&ctx)?;
+            if let Some(dev_state) = &session.dev_state {
+                DevStateStore::install(dev_state, &ctx)?;
+            }
             session.work.install(&ctx)
         })?;
         let source = session.module.take_or_load_source()?;
@@ -1475,6 +1504,9 @@ impl Session {
         let active_drags = self.dnd.active_count();
         self.cancel_outbound_drag_on_platform();
         self.dnd.clear();
+        if let Some(dev_state) = &self.dev_state {
+            dev_state.borrow_mut().clear();
+        }
         self.platform_surfaces.borrow_mut().clear();
         self.work.finish_stop();
         // Report remaining leases before forced disposal releases the native scenes.
@@ -1525,6 +1557,25 @@ impl Session {
             telemetry: self.telemetry.get(),
         };
         *self.retired.borrow_mut() = Some(report);
+    }
+
+    /// Capture a bounded, plain-data dev reload snapshot if this generation is
+    /// settled, unlocked, non-faulted, and matches the target module's scope.
+    pub(crate) fn capture_dev_state(&self, target: &SessionModule) -> Option<DevStateSnapshot> {
+        let store = self.dev_state.as_ref()?;
+        if self.shutdown_started.get()
+            || self.fault.borrow().is_some()
+            || self.shell.lock_is_retained()
+            || !self.mount_started.get()
+        {
+            return None;
+        }
+        let own_scope = DevStateScope::for_module(&self.module);
+        let next_scope = DevStateScope::for_module(target);
+        if own_scope != next_scope {
+            return None;
+        }
+        store.borrow().snapshot(own_scope)
     }
 
     /// Report residual resources after the host has attempted native surface closure.

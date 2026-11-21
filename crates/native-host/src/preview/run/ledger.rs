@@ -48,6 +48,7 @@ impl StepDriver for Driver {
             Step::SurfaceCloseRequest{surface,..}=>self.close_request(surface),
             Step::MonitorsSet{monitors,..}=>self.set_monitors(monitors),
             Step::PopupDone{surface,..}=>self.popup_done(surface),
+            Step::LifecycleReload{bundle,expect,..}=>self.lifecycle_reload(bundle.as_deref(),*expect),
         }
     }
     fn readiness(&self)->Value { Driver::readiness(self) }

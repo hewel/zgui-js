@@ -291,6 +291,9 @@ impl SessionHost {
     pub(crate) fn set_stack_limit_bytes(&mut self, stack_limit_bytes: usize) {
         self.policy = self.policy.clone().with_stack_limit_bytes(stack_limit_bytes);
     }
+    pub(crate) fn set_dev_state(&mut self, enabled: bool) {
+        self.policy = self.policy.clone().with_dev_state(enabled);
+    }
     /// The module a fresh mount region attaches, or the last mounted one.
     pub(crate) fn module(&self) -> &SessionModule { &self.module }
     /// Adopt a publication that arrived while no mount region existed.
@@ -628,7 +631,20 @@ impl SessionHost {
         } else { None };
         // Candidate evaluation owns no native children or stylesheet and cannot
         // create work. Rejection must leave the active session untouched.
-        let policy = self.policy.clone().with_session_lock(surface.session_lock_support());
+        let lock_state = surface.session_lock_support();
+        let hydrated = if self.policy.dev_state_enabled()
+            && !lock_state.is_some_and(SessionLockState::is_retained)
+            && !self.shell_windows.has_active_lock()
+        {
+            previous.as_ref().and_then(|prev| prev.capture_dev_state(&module))
+        } else {
+            None
+        };
+        let policy = self
+            .policy
+            .clone()
+            .with_session_lock(lock_state)
+            .with_hydrated_dev_state(hydrated);
         let candidate = match Session::prepare(candidate_region.clone(), module.clone(), generation, waker, target, policy) {
             Ok(candidate) => candidate,
             Err(error) => {

@@ -1,5 +1,6 @@
 mod bounded_fs;
 mod control_cli;
+mod dev_state;
 mod dnd;
 mod package;
 mod runtime_capabilities;
@@ -548,6 +549,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     if let Some(fonts) = fonts { application.host.set_pure_shell(fonts); }
     if reduced_motion { application.host.set_reduced_motion(true); }
     if let Some(bytes) = max_js_stack_bytes { application.host.set_stack_limit_bytes(bytes); }
+    if watch { application.host.set_dev_state(true); }
     application.exit_after = exit_after;
     application.harness.exercise = exercise;
     application.watch_path = watch.then_some(bundle).flatten();
