@@ -32,6 +32,8 @@ const OWNER_CLEANUP_HELPERS = new Set([
   "clipboardReadImage",
   "openDatabase",
   "openKvStore",
+  "openAuthorizedDirectory",
+  "watchDirectory",
 ]);
 
 const RUNTIME_SERVICE_APIS = new Set([
@@ -51,6 +53,15 @@ const RUNTIME_SERVICE_APIS = new Set([
   "writeClipboardImage",
   "openDatabase",
   "openKvStore",
+  "openFileDialog",
+  "saveFileDialog",
+  "openDirectoryDialog",
+  "openAuthorizedDirectory",
+  "persistHandle",
+  "restoreBookmark",
+  "listBookmarks",
+  "revokeBookmark",
+  "watchDirectory",
 ]);
 
 function commentLines(comment) {

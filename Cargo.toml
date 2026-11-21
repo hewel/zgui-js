@@ -27,6 +27,8 @@ serde_json = "1.0"
 sha2 = "0.10"
 sourcemap = "9.3.2"
 rusqlite = { version = "0.43", features = ["bundled"] }
+notify = { version = "9.0", default-features = false }
+zbus = "5.18"
 
 host-services = { path = "crates/host-services" }
 

@@ -474,7 +474,10 @@ impl Driver {
     fn runnable(&self) -> bool {
         self.pipeline.platform().has_pending_wakes()
             || self.pipeline.app().session().is_some_and(|session| {
-                session.has_pending_sqlite_ops() || session.has_sqlite_events()
+                session.has_pending_sqlite_ops()
+                    || session.has_sqlite_events()
+                    || session.has_pending_file_ops()
+                    || session.has_file_events()
             })
             || self.pipeline.app().native.windows().iter().any(|window| {
                 self.pipeline.platform().offscreen(window.surface().id()).is_some_and(|surface|surface.has_pending_redraw())
@@ -533,11 +536,10 @@ impl Driver {
     }
     fn wait_host_workers(&mut self) -> Result<(), Fault> {
         loop {
-            let pending = self
-                .pipeline
-                .app()
-                .session()
-                .is_some_and(|session| session.has_pending_sqlite_ops() && !session.has_sqlite_events());
+            let pending = self.pipeline.app().session().is_some_and(|session| {
+                (session.has_pending_sqlite_ops() && !session.has_sqlite_events())
+                    || (session.has_pending_file_ops() && !session.has_file_events())
+            });
             if !pending || self.pipeline.platform().has_pending_wakes() {
                 return Ok(());
             }

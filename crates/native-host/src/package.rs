@@ -68,6 +68,49 @@ impl SqliteCapabilities {
 }
 
 crate::schema::object_struct! {
+/// One pre-declared directory allowlist grant.
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct FileDirectoryGrant {
+    pub path: String,
+    pub mode: host_services::files::FileMode,
+}
+}
+
+crate::schema::object_struct! {
+/// Local directory allowlist capability declarations.
+#[derive(Default)]
+#[serde(default, rename_all = "camelCase", deny_unknown_fields)]
+pub struct FilesCapabilities {
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub directories: Vec<FileDirectoryGrant>,
+}
+}
+
+impl FilesCapabilities {
+    #[must_use]
+    pub(crate) fn is_empty(&self) -> bool {
+        self.directories.is_empty()
+    }
+}
+
+pub(crate) fn valid_file_directory_path(path: &str) -> bool {
+    if canonical_absolute(path) {
+        return true;
+    }
+    let (root, tail) = match path.split_once('/') {
+        Some((root, tail)) => (root, Some(tail)),
+        None => (path, None),
+    };
+    if !matches!(root, "$HOME" | "$XDG_DATA_HOME" | "$XDG_DOCUMENTS_DIR") {
+        return false;
+    }
+    tail.is_none_or(|t| {
+        t.split('/')
+            .all(|part| crate::runtime_paths::safe_segment(part) && !part.contains('$'))
+    })
+}
+
+crate::schema::object_struct! {
 /// Host privileges requested by the package, all denied by default.
 #[derive(Default)]
 #[serde(default, rename_all = "camelCase", deny_unknown_fields)]
@@ -99,6 +142,9 @@ pub struct Capabilities {
     /// App-scoped SQLite database declarations.
     #[serde(skip_serializing_if = "SqliteCapabilities::is_empty")]
     pub sqlite: SqliteCapabilities,
+    /// Pre-declared local directory allowlist grants.
+    #[serde(skip_serializing_if = "FilesCapabilities::is_empty")]
+    pub files: FilesCapabilities,
 }
 }
 
@@ -115,6 +161,7 @@ impl Capabilities {
             && !self.control_channel
             && self.clipboard.is_empty()
             && self.sqlite.is_empty()
+            && self.files.is_empty()
     }
 
     fn validate(&self) -> Result<()> {
@@ -122,6 +169,12 @@ impl Capabilities {
         for name in &self.sqlite.databases {
             if !host_services::sqlite::is_valid_database_name(name) || !seen_dbs.insert(name) {
                 return Err(format!("invalid or duplicate capabilities.sqlite.databases entry: {name:?}").into());
+            }
+        }
+        let mut seen_dirs = std::collections::BTreeSet::new();
+        for grant in &self.files.directories {
+            if !valid_file_directory_path(&grant.path) || !seen_dirs.insert(&grant.path) {
+                return Err(format!("invalid or duplicate capabilities.files.directories entry: {:?}", grant.path).into());
             }
         }
         for (name, entries) in [

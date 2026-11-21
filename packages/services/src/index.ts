@@ -344,3 +344,34 @@ export type {
   SqliteDatabase,
   SqliteTransaction,
 } from "./sqlite";
+
+export {
+  listBookmarks,
+  openAuthorizedDirectory,
+  openDirectoryDialog,
+  openFileDialog,
+  persistHandle,
+  restoreBookmark,
+  revokeBookmark,
+  saveFileDialog,
+  watchDirectory,
+} from "./files";
+export type {
+  BookmarkInfo,
+  BookmarkToken,
+  DirEntry,
+  DirHandle,
+  FileAccessMode,
+  FileDialogFilter,
+  FileHandle,
+  FileReadOptions,
+  FileStat,
+  MkdirOptions,
+  OpenDirectoryDialogOptions,
+  OpenFileDialogOptions,
+  RemoveOptions,
+  SaveFileDialogOptions,
+  WatchDirectoryOptions,
+  WatchEvent,
+  WatchEventKind,
+} from "./files";

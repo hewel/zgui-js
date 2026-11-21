@@ -6,6 +6,15 @@ export type SqliteCapabilities = {
   databases: string[];
 };
 
+export type FileDirectoryGrant = {
+  path: string;
+  mode: "read" | "readwrite";
+};
+
+export type FilesCapabilities = {
+  directories?: FileDirectoryGrant[];
+};
+
 export type Capabilities = {
   shellSurfaces?: boolean;
   sessionLock?: boolean;
@@ -16,6 +25,7 @@ export type Capabilities = {
   controlChannel?: boolean;
   clipboard?: ClipboardCapabilities;
   sqlite?: SqliteCapabilities;
+  files?: FilesCapabilities;
 };
 
 export type FontDeclaration = { family: string; path: string };

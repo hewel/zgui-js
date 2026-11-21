@@ -8,6 +8,7 @@ use crate::runtime_capabilities::ResolvedCapabilities;
 
 mod clipboard;
 mod external;
+mod files;
 mod sqlite;
 
 const MAX_CALLBACKS: usize = 1024;
@@ -100,6 +101,7 @@ pub(crate) struct Work {
     image_blobs: ImageBlobs,
     direct_images: Cell<DirectImageBudget>,
     clipboard: clipboard::ClipboardState,
+    files: files::FilesState,
     sqlite: sqlite::SqliteState,
     external: external::External,
     resolved: ResolvedCapabilities,
@@ -130,6 +132,7 @@ impl Work {
         let allow_clipboard_read = package
             .as_ref()
             .is_some_and(|pkg| pkg.manifest.capabilities.clipboard.read);
+        let files = files::FilesState::new(package.clone(), &assets, wake.clone());
         let sqlite = sqlite::SqliteState::new(package.clone(), &assets);
         let external = external::External::new(package.clone(), &assets);
         Rc::new(Self {
@@ -140,6 +143,7 @@ impl Work {
             image_blobs: ImageBlobs::new(generation),
             direct_images: Cell::default(),
             clipboard: clipboard::ClipboardState::new(allow_clipboard_read),
+            files,
             sqlite,
             external,
             resolved,
@@ -350,7 +354,7 @@ impl Work {
         let ready = self.ready.borrow();
         let timers = registrations.values().filter(|item| matches!(item.native, NativeRegistration::Timer(_))).count()
             + ready.iter().filter(|item| matches!(item.arguments, Arguments::Timer)).count();
-        (timers, registrations.len() + ready.len() - timers, self.requests.borrow().len() + self.clipboard.pending_count() + self.sqlite.pending_count())
+        (timers, registrations.len() + ready.len() - timers, self.requests.borrow().len() + self.clipboard.pending_count() + self.sqlite.pending_count() + self.files.pending_count())
     }
 
     fn can_create_work(&self) -> bool {
@@ -443,6 +447,7 @@ impl Work {
             owner(&weak, &ctx)?.capability_snapshot(&ctx)
         })))?;
         self.install_clipboard(&services)?;
+        self.install_files(&services)?;
         self.install_sqlite(&services)?;
         self.install_external(&services)?;
         ctx.globals().set("__zguiServices", services)?;
@@ -654,6 +659,7 @@ impl Work {
         self.ready.borrow_mut().clear();
         self.frame_hosts.borrow_mut().clear();
         self.clipboard.clear();
+        self.files.clear();
         self.sqlite.clear();
         self.external.clear(self.generation);
         self.mode.set(Mode::Disposed);

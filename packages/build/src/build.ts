@@ -359,6 +359,18 @@ function capabilityPath(value: string): boolean {
   );
 }
 
+function fileDirectoryPath(value: string): boolean {
+  if (value === "/") return true;
+  if (value.includes("\\")) return false;
+  const parts = value.split("/");
+  const root = parts.shift();
+  const template = root === "$HOME" || root === "$XDG_DATA_HOME" || root === "$XDG_DOCUMENTS_DIR";
+  return (
+    (root === "" || template) &&
+    parts.every(part => part !== "" && part !== "." && part !== ".." && !part.includes("$"))
+  );
+}
+
 function parseCapabilities(input: unknown, source: string): Capabilities {
   if (input !== undefined && (input === null || typeof input !== "object" || Array.isArray(input)))
     throw new Error(`${source} must be an object`);
@@ -397,6 +409,36 @@ function parseCapabilities(input: unknown, source: string): Capabilities {
             names.add(item);
           }
           if (names.size) capabilities.sqlite = { databases: [...names] };
+        }
+        break;
+      }
+      case "files": {
+        if (!value || typeof value !== "object" || Array.isArray(value))
+          throw new Error(`${field} must be an object`);
+        for (const [subKey, subVal] of Object.entries(value as Record<string, unknown>)) {
+          if (subKey !== "directories") throw new Error(`Unknown capability: ${field}.${subKey}`);
+          if (!Array.isArray(subVal)) throw new Error(`${field}.directories must be an array`);
+          const seen = new Set<string>();
+          const dirs: { path: string; mode: "read" | "readwrite" }[] = [];
+          for (const item of subVal as unknown[]) {
+            if (!item || typeof item !== "object" || Array.isArray(item))
+              throw new Error(`${field}.directories entries must be objects`);
+            const record = item as Record<string, unknown>;
+            const keys = Object.keys(record);
+            if (!keys.every(k => k === "path" || k === "mode"))
+              throw new Error(`${field}.directories entry contains unknown keys`);
+            if (
+              !capabilityString(record.path) ||
+              !fileDirectoryPath(record.path) ||
+              (record.mode !== "read" && record.mode !== "readwrite")
+            )
+              throw new Error(`${field}.directories contains invalid entries`);
+            if (seen.has(record.path))
+              throw new Error(`${field}.directories contains duplicate path ${record.path}`);
+            seen.add(record.path);
+            dirs.push({ path: record.path, mode: record.mode });
+          }
+          if (dirs.length) capabilities.files = { directories: dirs };
         }
         break;
       }
@@ -469,6 +511,18 @@ async function mergeCapabilities(
   if (sources.some(source => source.clipboard?.read)) merged.clipboard = { read: true };
   const sqliteDatabases = new Set(sources.flatMap(source => source.sqlite?.databases ?? []));
   if (sqliteDatabases.size) merged.sqlite = { databases: [...sqliteDatabases].sort() };
+  const fileDirs = new Map<string, "read" | "readwrite">();
+  for (const grant of sources.flatMap(source => source.files?.directories ?? [])) {
+    const existing = fileDirs.get(grant.path);
+    if (!existing || grant.mode === "readwrite") fileDirs.set(grant.path, grant.mode);
+  }
+  if (fileDirs.size) {
+    merged.files = {
+      directories: [...fileDirs.entries()]
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([dirPath, mode]) => ({ path: dirPath, mode })),
+    };
+  }
   return Object.keys(merged).length ? merged : undefined;
 }
 

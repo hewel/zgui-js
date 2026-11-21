@@ -16,6 +16,7 @@
 
 pub mod command;
 pub mod control;
+pub mod files;
 pub mod sqlite;
 pub mod unix_socket;
 mod worker;
@@ -25,6 +26,7 @@ const _: () = {
     assert_send::<command::Process>();
     assert_send::<control::Inbound>();
     assert_send::<control::Listener>();
+    assert_send::<files::watcher::DirectoryWatcher>();
     assert_send::<sqlite::SqliteDatabase>();
     assert_send::<sqlite::SqliteTransaction>();
     assert_send::<unix_socket::Socket>();

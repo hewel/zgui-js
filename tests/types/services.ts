@@ -4,22 +4,35 @@ import {
   connectUnixSocket,
   getAuthorizedEndpoint,
   getResolvedCapabilities,
+  listBookmarks,
   loadImageBytes,
   loadTextAsset,
   onControlMessage,
+  openAuthorizedDirectory,
   openDatabase,
+  openDirectoryDialog,
+  openFileDialog,
   openKvStore,
+  persistHandle,
   readClipboardImage,
   readClipboardText,
   readTextAsset,
   registerImageBytes,
+  restoreBookmark,
+  revokeBookmark,
+  saveFileDialog,
   spawnCommand,
+  watchDirectory,
   writeClipboardImage,
   writeClipboardText,
 } from "@hewel/zgui-services";
 import type {
+  BookmarkInfo,
+  BookmarkToken,
   ClipboardWriteOptions,
   CommandResult,
+  DirHandle,
+  FileHandle,
   HostRequest,
   HostServiceError,
   ImageHandle,
@@ -27,6 +40,7 @@ import type {
   ResolvedCapabilities,
   SqlExecuteResult,
   SqliteDatabase,
+  WatchEvent,
 } from "@hewel/zgui-services";
 
 const request: HostRequest<string> = readTextAsset("assets/message.txt");
@@ -210,4 +224,29 @@ const kvVal: Promise<{ readonly theme: string } | null> = kv.get("ui");
 kv.close();
 
 void [sqlQueryReq, sqlExecReq, sqlBatchReq, sqlTxPromise, kvVal];
+
+const openFileReq: HostRequest<FileHandle | null> = openFileDialog({
+  title: "Open Markdown",
+  filters: [{ name: "Markdown", extensions: ["md"] }],
+});
+const saveFileReq: HostRequest<FileHandle | null> = saveFileDialog({ suggestedName: "note.md" });
+const openDirReq: HostRequest<DirHandle | null> = openDirectoryDialog({ title: "Open Folder" });
+const authDir: DirHandle = openAuthorizedDirectory("$XDG_DOCUMENTS_DIR/notes");
+const persisted: HostRequest<BookmarkToken> = persistHandle(authDir);
+const restored: HostRequest<FileHandle | DirHandle> = restoreBookmark("tok");
+const allBookmarks: HostRequest<readonly BookmarkInfo[]> = listBookmarks();
+const revoked: HostRequest<boolean> = revokeBookmark("tok");
+const stopWatch1: () => void = watchDirectory(authDir, (events: readonly WatchEvent[]) => {
+  void events;
+});
+const stopWatch2: () => void = watchDirectory(authDir, { recursive: true, debounceMs: 100 }, events => {
+  void events;
+});
+stopWatch1();
+stopWatch2();
+authDir.close();
+// @ts-expect-error writeText requires a string payload.
+authDir.writeText("note.md", 123);
+
+void [openFileReq, saveFileReq, openDirReq, persisted, restored, allBookmarks, revoked];
 void [promise, cancelled, length, recovered, generic, implicitPromise, asyncCancellation, bytes, element, errorCode, nativeError];

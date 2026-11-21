@@ -48,6 +48,8 @@ object_struct! {
         #[serde(default, deserialize_with = "present_provider", skip_serializing_if = "Option::is_none")]
         xdg_data_home: Option<String>,
         #[serde(default, deserialize_with = "present_provider", skip_serializing_if = "Option::is_none")]
+        xdg_documents_dir: Option<String>,
+        #[serde(default, deserialize_with = "present_provider", skip_serializing_if = "Option::is_none")]
         wayland_display: Option<String>,
         #[serde(default, deserialize_with = "unique_entries", skip_serializing_if = "BTreeMap::is_empty")]
         named_sockets: BTreeMap<String, String>,
@@ -60,6 +62,7 @@ impl RuntimeEnvironment {
             ("xdgRuntimeDir", &self.xdg_runtime_dir),
             ("homeDir", &self.home_dir),
             ("xdgDataHome", &self.xdg_data_home),
+            ("xdgDocumentsDir", &self.xdg_documents_dir),
         ] {
             if path.as_deref().is_some_and(|path| !runtime_paths::canonical_absolute(path)) {
                 return Err(format!("fixture runtimeEnvironment.{field} must be canonical absolute text"));
@@ -108,6 +111,71 @@ object_struct! {
         /// Optional SQLite in-memory database seed statements keyed by database name.
         #[serde(default, deserialize_with = "present_provider", skip_serializing_if = "Option::is_none")]
         pub(crate) sqlite: Option<BTreeMap<String, SqliteFixture>>,
+        /// Optional in-memory virtual filesystem, scripted dialogs, and seeded bookmarks.
+        #[serde(default, deserialize_with = "present_provider", skip_serializing_if = "Option::is_none")]
+        pub(crate) files: Option<FilesFixture>,
+    }
+}
+
+object_struct! {
+    /// Scripted file/directory picker response for preview.
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    pub(crate) struct ScriptedDialogFixture {
+        pub(crate) action: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub(crate) path: Option<String>,
+    }
+}
+
+object_struct! {
+    /// Seeded persistent bookmark entry for preview.
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    pub(crate) struct BookmarkFixture {
+        pub(crate) token: String,
+        pub(crate) kind: host_services::files::HandleKind,
+        pub(crate) path: String,
+        pub(crate) mode: host_services::files::FileMode,
+    }
+}
+
+object_struct! {
+    /// In-memory virtual filesystem and dialog configuration for preview.
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    pub(crate) struct FilesFixture {
+        #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+        pub(crate) files: BTreeMap<String, String>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        pub(crate) dirs: Vec<String>,
+        #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+        pub(crate) symlinks: BTreeMap<String, String>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        pub(crate) dialogs: Vec<ScriptedDialogFixture>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        pub(crate) bookmarks: Vec<BookmarkFixture>,
+    }
+}
+
+impl FilesFixture {
+    fn validate(&self) -> Result<(), String> {
+        for path in self.files.keys().chain(self.dirs.iter()).chain(self.symlinks.keys()) {
+            if !runtime_paths::canonical_absolute(path) {
+                return Err(format!("fixture services.files path must be canonical absolute: {path:?}"));
+            }
+        }
+        for dialog in &self.dialogs {
+            if !matches!(dialog.action.as_str(), "openFile" | "saveFile" | "openDirectory") {
+                return Err(format!("invalid fixture dialog action: {:?}", dialog.action));
+            }
+            if let Some(p) = &dialog.path && !runtime_paths::canonical_absolute(p) {
+                return Err(format!("fixture dialog path must be canonical absolute: {p:?}"));
+            }
+        }
+        for bookmark in &self.bookmarks {
+            if bookmark.token.is_empty() || !runtime_paths::canonical_absolute(&bookmark.path) {
+                return Err("fixture bookmark has invalid token or path".into());
+            }
+        }
+        Ok(())
     }
 }
 
@@ -374,6 +442,7 @@ impl FixtureDefinition {
                 seed.validate()?;
             }
         }
+        if let Some(files) = &self.services.files { files.validate()?; }
         self.services.validate_external()?;
         for event in &self.events { self.validate_event(&event.update)?; }
         Ok(())
@@ -641,6 +710,81 @@ impl FixtureRuntime {
             .and_then(|map| map.get(name))
             .map(|seed| seed.statements.clone())
             .unwrap_or_default()
+    }
+
+    /// Resolves a manifest `files.directories` template lexically against the synthetic preview environment.
+    pub(crate) fn resolve_preview_file_root(&self, template: &str) -> String {
+        let env = self.definition.runtime_environment.as_ref();
+        let home = env
+            .and_then(|e| e.home_dir.as_deref())
+            .unwrap_or("/home/preview");
+        let data = env
+            .and_then(|e| e.xdg_data_home.as_deref())
+            .map(str::to_owned)
+            .unwrap_or_else(|| runtime_paths::default_data_home(home));
+        let docs = env
+            .and_then(|e| e.xdg_documents_dir.as_deref())
+            .map(str::to_owned)
+            .unwrap_or_else(|| format!("{}/Documents", home.trim_end_matches('/')));
+        if let Some(rest) = template.strip_prefix("$XDG_DOCUMENTS_DIR") {
+            return format!("{docs}{rest}");
+        }
+        if let Some(rest) = template.strip_prefix("$XDG_DATA_HOME") {
+            return format!("{data}{rest}");
+        }
+        if let Some(rest) = template.strip_prefix("$HOME") {
+            return format!("{home}{rest}");
+        }
+        template.to_owned()
+    }
+
+    /// Builds an isolated in-memory virtual filesystem seeded from `services.files`.
+    pub(crate) fn build_preview_fs(&self) -> host_services::files::vfs::PreviewFs {
+        use host_services::files::{
+            grants::BookmarkRecord,
+            vfs::{PreviewFs, ScriptedDialog, ScriptedDialogKind},
+        };
+        let mut vfs = PreviewFs::default();
+        if let Some(cfg) = &self.definition.services.files {
+            for dir in &cfg.dirs {
+                vfs.seed_dir(dir);
+            }
+            for (path, text) in &cfg.files {
+                vfs.seed_file(path, text.as_bytes().to_vec(), 0);
+            }
+            for (path, target) in &cfg.symlinks {
+                vfs.seed_symlink(path, target.clone());
+            }
+            for dialog in &cfg.dialogs {
+                let kind = match dialog.action.as_str() {
+                    "openFile" => ScriptedDialogKind::OpenFile,
+                    "saveFile" => ScriptedDialogKind::SaveFile,
+                    _ => ScriptedDialogKind::OpenDirectory,
+                };
+                vfs.push_dialog(ScriptedDialog {
+                    kind,
+                    path: dialog.path.clone(),
+                });
+            }
+            for bm in &cfg.bookmarks {
+                let label = bm
+                    .path
+                    .rsplit('/')
+                    .next()
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or("/")
+                    .to_owned();
+                vfs.seed_bookmark(BookmarkRecord {
+                    token: bm.token.clone(),
+                    kind: bm.kind,
+                    path: bm.path.clone(),
+                    label,
+                    mode: bm.mode,
+                    created_ms: 0,
+                });
+            }
+        }
+        vfs
     }
 
     pub(crate) fn dispose(&self) {

@@ -607,3 +607,57 @@ test("SQLite openDatabase and openKvStore close with owner and roll back on tran
     else delete globalThis.__zguiServices;
   }
 });
+
+test("files openAuthorizedDirectory and watchDirectory register Solid owner cleanup and forward options", async () => {
+  const { openAuthorizedDirectory, watchDirectory } = await import("@hewel/zgui-services");
+  const { createRoot, flush } = await import("solid-js");
+  const previous = Object.getOwnPropertyDescriptor(globalThis, "__zguiServices");
+  let closed = 0;
+  let stopped = 0;
+  let seenWatchOptions = null;
+  const host = {
+    openAuthorizedDirectory(path) {
+      assert.equal(this, host);
+      assert.equal(path, "$XDG_DOCUMENTS_DIR/notes");
+      return {
+        kind: "dir",
+        name: "notes",
+        mode: "readwrite",
+        close() {
+          closed++;
+        },
+      };
+    },
+    watchDirectory(dir, options, cb) {
+      assert.equal(this, host);
+      assert.equal(dir.name, "notes");
+      seenWatchOptions = options;
+      cb([{ path: "a.md", kind: "modify" }]);
+      return () => {
+        stopped++;
+      };
+    },
+  };
+  try {
+    Object.defineProperty(globalThis, "__zguiServices", { configurable: true, value: host });
+    const received = [];
+    let dispose;
+    createRoot(d => {
+      dispose = d;
+      const dir = openAuthorizedDirectory("$XDG_DOCUMENTS_DIR/notes");
+      watchDirectory(dir, { recursive: true, debounceMs: 80 }, events => {
+        received.push(...events);
+      });
+    });
+    flush();
+    assert.deepEqual(seenWatchOptions, { recursive: true, debounceMs: 80 });
+    assert.deepEqual(received, [{ path: "a.md", kind: "modify" }]);
+    dispose();
+    flush();
+    assert.equal(closed, 1);
+    assert.equal(stopped, 1);
+  } finally {
+    if (previous) Object.defineProperty(globalThis, "__zguiServices", previous);
+    else delete globalThis.__zguiServices;
+  }
+});
