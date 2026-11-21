@@ -30,6 +30,7 @@ Commands:
 
 Application defaults to the current directory (counter at the repository root).
   build --watch          Watch packages without starting a host
+  build --bytecode       Compile entry, chunks, and workers to QuickJS bytecode (.qjsb)
   --capabilities-file F   Merge capability declarations into build, dev, preview, or package
   --host-root DIR        Build the host from this Cargo checkout and run it there
   --host-executable PATH Run this prebuilt host instead of resolving packages/Cargo
@@ -44,7 +45,7 @@ Application defaults to the current directory (counter at the repository root).
   dev --strict-typecheck Gate dev publication on tsrs before reloading
   preview --watch        Re-run offscreen scenarios on changes, without a desktop host
   preview --profile F --fixture F --scenario F --out NEW_DIRECTORY
-  package --out DIR [--desktop-entry] [--pure-shell]
+  package --out DIR [--bytecode] [--desktop-entry] [--pure-shell]
   doctor [--json] [--host-root DIR] [--host-executable PATH]
   inspect [--ui] [--host-root DIR] [--host-executable PATH] [--] <native-host inspect args...>
   init [DIR] [--template desktop-app|wayland-shell] [--name NAME] [--force]`;
@@ -61,12 +62,13 @@ type Command =
   | { command: "init"; args: string[] }
   | ({ command: "doctor"; json: boolean } & HostOptions)
   | ({ command: "inspect"; args: string[]; ui: boolean } & HostOptions)
-  | {
+  | ({
       command: "build";
       selector?: string;
       watch: boolean;
+      bytecode: boolean;
       capabilitiesFile?: string;
-    }
+    } & HostOptions)
   | ({
       command: "dev";
       selector?: string;
@@ -92,6 +94,7 @@ type Command =
       selector?: string;
       capabilitiesFile?: string;
       out?: string;
+      bytecode: boolean;
       desktopEntry: boolean;
       pureShell: boolean;
     } & HostOptions);
@@ -155,7 +158,12 @@ function parse(args: string[]): Command {
   const allowed = new Set([
     ...(command === "doctor" || command === "smoke" ? [] : ["--app", "--capabilities-file"]),
     ...(command === "build" || command === "preview" ? ["--watch"] : []),
-    ...(command === "dev" || command === "preview" || command === "package" || command === "doctor"
+    ...(command === "build" || command === "package" ? ["--bytecode"] : []),
+    ...(command === "build" ||
+    command === "dev" ||
+    command === "preview" ||
+    command === "package" ||
+    command === "doctor"
       ? ["--host-root", "--host-executable"]
       : []),
     ...(command === "doctor" ? ["--json"] : []),
@@ -177,6 +185,7 @@ function parse(args: string[]): Command {
   ]);
   const booleanFlags = new Set([
     "--watch",
+    "--bytecode",
     "--pure-shell",
     "--desktop-entry",
     "--json",
@@ -244,7 +253,9 @@ function parse(args: string[]): Command {
         command,
         selector,
         capabilitiesFile,
+        ...host,
         watch: flags.has("--watch"),
+        bytecode: flags.has("--bytecode"),
       };
     case "dev":
       return {
@@ -281,6 +292,7 @@ function parse(args: string[]): Command {
         capabilitiesFile,
         ...host,
         out: value("--out"),
+        bytecode: flags.has("--bytecode"),
         desktopEntry: flags.has("--desktop-entry"),
         pureShell: flags.has("--pure-shell"),
       };
@@ -420,6 +432,7 @@ export async function runCli(rawArgs: readonly string[]): Promise<number> {
       const result = await packageApplication(application.app, {
         ...application,
         out: selected.out,
+        bytecode: selected.bytecode,
         hostRoot: selected.hostRoot,
         hostExecutable: selected.hostExecutable,
         desktopEntry: selected.desktopEntry,
@@ -434,10 +447,18 @@ export async function runCli(rawArgs: readonly string[]): Promise<number> {
     return packaged;
   }
   if (selected.watch) {
+    if (selected.bytecode) {
+      throw new Error("zgui-js build --watch cannot be combined with --bytecode");
+    }
     await watchBuild(application);
     return 0;
   }
-  const { dist, manifest } = await buildApplication(application.app, application);
+  const { dist, manifest } = await buildApplication(application.app, {
+    ...application,
+    bytecode: selected.bytecode,
+    hostRoot: selected.hostRoot,
+    hostExecutable: selected.hostExecutable,
+  });
   console.log(`Published ${dist} ${manifest.buildId}`);
   return 0;
 }

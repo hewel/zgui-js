@@ -55,6 +55,8 @@ export type Manifest = {
   hostApiVersion: 1;
   entry: string;
   sourceMap: string;
+  bytecodeFormat?: "qjs-bytecode-v1";
+  quickjsAbi?: string;
   chunks?: ChunkDeclaration[];
   workers?: WorkerDeclaration[];
   styles: string[];
@@ -105,6 +107,9 @@ export interface BuildApplicationOptions {
   root?: string;
   appDirectory?: string;
   development?: boolean;
+  bytecode?: boolean;
+  hostRoot?: string;
+  hostExecutable?: string;
   extraCapabilities?: Capabilities;
   capabilitiesFile?: string;
 }
@@ -166,6 +171,8 @@ export interface NativeHostAbi {
   platform: string;
   engine?: string | undefined;
   engineRevision?: string | undefined;
+  bytecodeFormat?: string | undefined;
+  quickjsAbi?: string | undefined;
   styleProfile?: string | undefined;
 }
 
@@ -193,6 +200,7 @@ export interface ResolvedNativeHost {
 
 export interface PackageApplicationOptions extends Omit<BuildApplicationOptions, "development"> {
   out?: string | undefined;
+  bytecode?: boolean | undefined;
   hostRoot?: string | undefined;
   hostExecutable?: string | undefined;
   desktopEntry?: boolean | undefined;

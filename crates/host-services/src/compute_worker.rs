@@ -103,6 +103,7 @@ pub struct WorkerConfig {
     pub name: String,
     pub module_id: String,
     pub source: String,
+    pub bytecode: Option<Vec<u8>>,
     pub heap_limit_bytes: usize,
     pub turn_timeout: Duration,
     pub init_timeout: Duration,
@@ -116,12 +117,19 @@ impl WorkerConfig {
             name: name.into(),
             module_id: module_id.into(),
             source: source.into(),
+            bytecode: None,
             heap_limit_bytes: DEFAULT_WORKER_HEAP_BYTES,
             turn_timeout: default_turn_timeout(),
             init_timeout: default_init_timeout(),
             max_jobs_per_turn: 128,
             deterministic_env: None,
         }
+    }
+
+    #[must_use]
+    pub fn with_bytecode(mut self, bytecode: Vec<u8>) -> Self {
+        self.bytecode = Some(bytecode);
+        self
     }
 }
 
@@ -355,9 +363,12 @@ impl WorkerEngine {
             })
             .map_err(WorkerError::from_diagnostic)?;
 
-        runtime
-            .load_module(&config.module_id, &config.source)
-            .map_err(WorkerError::from_diagnostic)?;
+        if let Some(bytecode) = &config.bytecode {
+            runtime.load_bytecode_module(bytecode)
+        } else {
+            runtime.load_module(&config.module_id, &config.source)
+        }
+        .map_err(WorkerError::from_diagnostic)?;
 
         let mut engine = Self {
             runtime,

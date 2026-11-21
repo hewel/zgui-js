@@ -44,6 +44,7 @@ export async function packageApplication(
     root = workspaceRoot,
     appDirectory = path.join(root, "apps/examples", app),
     out = path.join(appDirectory, "dist-package"),
+    bytecode = false,
     hostRoot,
     hostExecutable,
     extraCapabilities,
@@ -60,6 +61,9 @@ export async function packageApplication(
     root,
     appDirectory: resolvedAppDir,
     development: false,
+    bytecode,
+    hostRoot,
+    hostExecutable,
     extraCapabilities,
     capabilitiesFile,
   });

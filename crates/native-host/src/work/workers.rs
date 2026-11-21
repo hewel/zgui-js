@@ -342,7 +342,7 @@ impl Work {
                 Err(e) => e,
             }
         })?;
-        let (module_id, source) = package.load_worker_source(&name).map_err(|msg| {
+        let (module_id, payload) = package.load_worker_payload(&name).map_err(|msg| {
             let code = if msg.contains("integrity mismatch") { "E_BUNDLE" } else { "E_CAPABILITY" };
             match service_error(ctx, code, &msg) {
                 Ok(err) => ctx.throw(err.into_value()),
@@ -401,7 +401,14 @@ impl Work {
             }
         }
 
-        let mut config = WorkerConfig::new(name, module_id, source);
+        let mut config = match payload {
+            js_runtime::VerifiedModulePayload::Source(source) => {
+                WorkerConfig::new(name, module_id, source)
+            }
+            js_runtime::VerifiedModulePayload::Bytecode(bytes) => {
+                WorkerConfig::new(name, module_id, String::new()).with_bytecode(bytes)
+            }
+        };
         config.heap_limit_bytes = heap_limit_bytes;
 
         let id = self.id(ctx)?;

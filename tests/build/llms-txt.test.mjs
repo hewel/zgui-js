@@ -30,26 +30,29 @@ function extractBacktickTokens(markdown) {
   return tokens;
 }
 
-test("llms.txt covers every @hewel/zgui/components, @hewel/zgui, @hewel/zgui/router, and @hewel/zgui-services export", async () => {
-  const [llms, uiIndex, componentsIndex, routerIndex, servicesFiles] = await Promise.all([
-    readFile(llmsPath, "utf8"),
-    readFile(path.join(workspaceRoot, "packages/ui/src/index.ts"), "utf8"),
-    readFile(path.join(workspaceRoot, "packages/ui/src/components/index.ts"), "utf8"),
-    readFile(path.join(workspaceRoot, "packages/ui/src/router/index.ts"), "utf8"),
-    Promise.all([
-      readFile(path.join(workspaceRoot, "packages/services/src/index.ts"), "utf8"),
-      readFile(path.join(workspaceRoot, "packages/services/src/network.ts"), "utf8"),
-      readFile(path.join(workspaceRoot, "packages/services/src/files.ts"), "utf8"),
-      readFile(path.join(workspaceRoot, "packages/services/src/sqlite.ts"), "utf8"),
-      readFile(path.join(workspaceRoot, "packages/services/src/worker.ts"), "utf8"),
-    ]),
-  ]);
+test("llms.txt covers every @hewel/zgui/components, @hewel/zgui/primitives, @hewel/zgui, @hewel/zgui/router, and @hewel/zgui-services export", async () => {
+  const [llms, uiIndex, componentsIndex, primitivesIndex, routerIndex, servicesFiles] =
+    await Promise.all([
+      readFile(llmsPath, "utf8"),
+      readFile(path.join(workspaceRoot, "packages/ui/src/index.ts"), "utf8"),
+      readFile(path.join(workspaceRoot, "packages/ui/src/components/index.ts"), "utf8"),
+      readFile(path.join(workspaceRoot, "packages/ui/src/primitives/index.ts"), "utf8"),
+      readFile(path.join(workspaceRoot, "packages/ui/src/router/index.ts"), "utf8"),
+      Promise.all([
+        readFile(path.join(workspaceRoot, "packages/services/src/index.ts"), "utf8"),
+        readFile(path.join(workspaceRoot, "packages/services/src/network.ts"), "utf8"),
+        readFile(path.join(workspaceRoot, "packages/services/src/files.ts"), "utf8"),
+        readFile(path.join(workspaceRoot, "packages/services/src/sqlite.ts"), "utf8"),
+        readFile(path.join(workspaceRoot, "packages/services/src/worker.ts"), "utf8"),
+      ]),
+    ]);
 
   const documented = extractBacktickTokens(llms);
 
   for (const [label, source] of [
     ["@hewel/zgui", uiIndex],
     ["@hewel/zgui/components", componentsIndex],
+    ["@hewel/zgui/primitives", primitivesIndex],
     ["@hewel/zgui/router", routerIndex],
     ["@hewel/zgui-services", servicesFiles.join("\n")],
   ]) {

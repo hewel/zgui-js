@@ -17,9 +17,9 @@ Install `@hewel/zgui-cli` (or scaffold with `bun create zgui-js`). The binary na
 
 - `zgui-js init [DIR] [--template desktop-app|wayland-shell] [--name NAME] [--force]` — Scaffold a new app.
 - `zgui-js dev [DIR] [--dev-inspect PATH] [--strict-typecheck] [--pure-shell] [--width N] [--height N] [--title TEXT] [--exit-after-ms N]` — Build, watch (non-blocking `tsrs`, CSS-only hot-swap, dev state preservation), and run `native-host`.
-- `zgui-js build [DIR] [--watch] [--capabilities-file FILE]` — Type-check and emit an immutable, SHA-256 sealed `dist/` bundle.
+- `zgui-js build [DIR] [--watch] [--bytecode] [--capabilities-file FILE]` — Type-check and emit an immutable, SHA-256 sealed `dist/` bundle (optional QuickJS `.qjsb` bytecode via `--bytecode`).
 - `zgui-js preview [DIR] [--watch] [--profile F] [--fixture F] [--scenario F] [--out DIR]` — Headless Vulkan/Stylo offscreen capture & scenario assertions.
-- `zgui-js package [DIR] --out DIR [--desktop-entry] [--pure-shell]` — Assemble a self-contained runnable Linux app directory.
+- `zgui-js package [DIR] --out DIR [--bytecode] [--desktop-entry] [--pure-shell]` — Assemble a self-contained runnable Linux app directory.
 - `zgui-js doctor [--json] [--host-root DIR] [--host-executable PATH]` — Verify Bun, `native-host` ABI, Wayland, Vulkan, portal, `tsrs`, and `oxlint`.
 - `zgui-js inspect [--ui] [--socket PATH] [tree|profile|pick ...]` — Query the `0600` `--dev-inspect` socket, toggle the native visual picker (`Ctrl+Shift+I`), or open the self-hosted Inspector window (`--ui`).
 - `zgui-js smoke` — Build the compiler/runtime smoke fixture.
@@ -43,6 +43,13 @@ Install `@hewel/zgui-cli` (or scaffold with `bun create zgui-js`). The binary na
 - **Feedback & Status**: `Alert`, `AlertTitle`, `AlertDescription`, `Avatar`, `AvatarImage`, `AvatarFallback`, `AvatarBadge`, `AvatarGroup`, `AvatarGroupCount`, `Empty`, `EmptyHeader`, `EmptyMedia`, `EmptyTitle`, `EmptyDescription`, `EmptyContent`, `Progress`, `Skeleton`, `Spinner`, `ToastProvider`, `useToast`, `toast`
 - **Disclosure, Navigation & Overlays**: `Tabs`, `TabsList`, `TabsTrigger`, `TabsContent`, `Collapsible`, `CollapsibleTrigger`, `CollapsibleContent`, `Accordion`, `AccordionItem`, `AccordionTrigger`, `AccordionContent`, `Dialog`, `DialogTrigger`, `DialogContent`, `DialogHeader`, `DialogTitle`, `DialogDescription`, `DialogFooter`, `DialogClose`, `DialogDismiss`, `Popover`, `PopoverTrigger`, `PopoverContent`, `PopoverHeader`, `PopoverTitle`, `PopoverDescription`, `PopoverClose`, `Popper`, `solvePopper`, `Tooltip`, `TooltipProvider`, `TooltipTrigger`, `TooltipContent`, `TooltipArrow`, `HoverCard`, `HoverCardTrigger`, `HoverCardContent`, `TreeView`, `TreeItem`, `CommandPalette`, `CommandPaletteProvider`, `useCommandPalette`, `scoreCommandMatch`
 - **Menus**: `DropdownMenu`, `DropdownMenuTrigger`, `DropdownMenuContent`, `MenuContent`, `MenuTypeahead`, `MenuItem`, `MenuCheckboxItem`, `MenuRadioGroup`, `MenuRadioItem`, `MenuLabel`, `MenuGroup`, `MenuSeparator`, `MenuShortcut`, `MenuSub`, `MenuSubTrigger`, `MenuSubContent`, `headingToward`, `ContextMenu`, `ContextMenuTrigger`, `ContextMenuContent`, `useContextMenuPlace`, `Menubar`, `MenubarMenu`, `MenubarTrigger`, `MenubarContent`, `MenubarArrows`, `MenubarItem`, `MenubarCheckboxItem`, `MenubarRadioItem`, `MenubarLabel`, `MenubarSeparator`, `MenubarShortcut`, `MenubarGroup`, `MenubarRadioGroup`
+
+## Headless Primitives (`@hewel/zgui/primitives`)
+
+Zero-stylesheet behavioral primitives decoupled from `Portal`, `Popper`, and built-in component stylesheets (work identically inside `WindowSurface`, `LayerSurface`, and `PopupSurface`):
+
+- **Overlay, Presence, Focus & Delay**: `createPresence`, `createOverlayState`, `createDismissLayer`, `createRovingFocus`, `groupOrientation`, `createDelayed`
+- **Headless Menu**: `MenuRootPrimitive`, `MenuListPrimitive`, `MenuItemPrimitive`, `MenuCheckboxItemPrimitive`, `MenuRadioGroupPrimitive`, `MenuRadioItemPrimitive`, `MenuSubPrimitive` (expose `data-state`, `data-highlighted`, `data-disabled` styling hooks)
 
 ## Router (`@hewel/zgui/router`)
 

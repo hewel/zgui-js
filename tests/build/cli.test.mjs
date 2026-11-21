@@ -238,54 +238,61 @@ test("deterministic host resolution honors precedence, verifies staged packages,
   );
 });
 
-test("zgui-js init and create-zgui-js scaffold desktop-app and wayland-shell templates that build cleanly", { timeout: 30000 }, async t => {
-  const dir = await mkdtemp(path.join(os.tmpdir(), "zgui-init-"));
-  t.after(() => rm(dir, { recursive: true, force: true }));
+test(
+  "zgui-js init and create-zgui-js scaffold desktop-app and wayland-shell templates that build cleanly",
+  { timeout: 30000 },
+  async t => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "zgui-init-"));
+    t.after(() => rm(dir, { recursive: true, force: true }));
 
-  const desktopDir = path.join(dir, "my-desktop");
-  const { stdout: initOut } = await execute(process.execPath, [cli, "init", desktopDir], {
-    cwd: dir,
-  });
-  assert.match(initOut, /Scaffolded zgui-js desktop-app "my-desktop"/);
-
-  // Refuses non-empty directory without --force.
-  await assert.rejects(execute(process.execPath, [cli, "init", desktopDir], { cwd: dir }), /not empty/);
-
-  const shellDir = path.join(dir, "my-shell");
-  const { stdout: createOut } = await execute(
-    process.execPath,
-    [createCli, shellDir, "--template", "wayland-shell"],
-    { cwd: dir },
-  );
-  assert.match(createOut, /Scaffolded zgui-js wayland-shell "my-shell"/);
-
-  for (const [appDir, expectedCap] of [
-    [desktopDir, false],
-    [shellDir, true],
-  ]) {
-    assert.ok(existsSync(path.join(appDir, "tsconfig.json")));
-    assert.ok(existsSync(path.join(appDir, ".oxlintrc.json")));
-    assert.ok(existsSync(path.join(appDir, "zgui.capabilities.json")));
-    assert.ok(existsSync(path.join(appDir, "src/App.module.css")));
-    assert.ok(existsSync(path.join(appDir, "src/main.tsx")));
-
-    await linkWorkspaceSdk(appDir);
-    const { stdout: buildOut } = await execute(process.execPath, [cli, "build"], {
-      cwd: appDir,
-      timeout: 30000,
+    const desktopDir = path.join(dir, "my-desktop");
+    const { stdout: initOut } = await execute(process.execPath, [cli, "init", desktopDir], {
+      cwd: dir,
     });
-    assert.match(buildOut, /Published .* sha256:/);
-    const manifest = JSON.parse(await readFile(path.join(appDir, "dist/manifest.json"), "utf8"));
-    assert.equal(manifest.schemaVersion, 2);
-    assert.equal(manifest.hostApiVersion, 1);
-    if (expectedCap) {
-      assert.equal(manifest.capabilities?.shellSurfaces, true);
-      assert.equal(manifest.capabilities?.controlChannel, true);
-    } else {
-      assert.equal(manifest.window?.width, 960);
+    assert.match(initOut, /Scaffolded zgui-js desktop-app "my-desktop"/);
+
+    // Refuses non-empty directory without --force.
+    await assert.rejects(
+      execute(process.execPath, [cli, "init", desktopDir], { cwd: dir }),
+      /not empty/,
+    );
+
+    const shellDir = path.join(dir, "my-shell");
+    const { stdout: createOut } = await execute(
+      process.execPath,
+      [createCli, shellDir, "--template", "wayland-shell"],
+      { cwd: dir },
+    );
+    assert.match(createOut, /Scaffolded zgui-js wayland-shell "my-shell"/);
+
+    for (const [appDir, expectedCap] of [
+      [desktopDir, false],
+      [shellDir, true],
+    ]) {
+      assert.ok(existsSync(path.join(appDir, "tsconfig.json")));
+      assert.ok(existsSync(path.join(appDir, ".oxlintrc.json")));
+      assert.ok(existsSync(path.join(appDir, "zgui.capabilities.json")));
+      assert.ok(existsSync(path.join(appDir, "src/App.module.css")));
+      assert.ok(existsSync(path.join(appDir, "src/main.tsx")));
+
+      await linkWorkspaceSdk(appDir);
+      const { stdout: buildOut } = await execute(process.execPath, [cli, "build"], {
+        cwd: appDir,
+        timeout: 30000,
+      });
+      assert.match(buildOut, /Published .* sha256:/);
+      const manifest = JSON.parse(await readFile(path.join(appDir, "dist/manifest.json"), "utf8"));
+      assert.equal(manifest.schemaVersion, 2);
+      assert.equal(manifest.hostApiVersion, 1);
+      if (expectedCap) {
+        assert.equal(manifest.capabilities?.shellSurfaces, true);
+        assert.equal(manifest.capabilities?.controlChannel, true);
+      } else {
+        assert.equal(manifest.window?.width, 960);
+      }
     }
-  }
-});
+  },
+);
 
 test("zgui-js doctor --json reports structured checks and fails closed on ABI mismatch", async t => {
   const dir = await mkdtemp(path.join(os.tmpdir(), "zgui-doctor-"));
@@ -369,79 +376,110 @@ test("zgui-js inspect forwards subcommand arguments to the resolved native-host"
   ]);
 });
 
-test("zgui-js package produces a self-contained runnable Linux app directory with zero Cargo invocation", { timeout: 30000 }, async t => {
-  const dir = await mkdtemp(path.join(os.tmpdir(), "zgui-package-"));
-  t.after(() => rm(dir, { recursive: true, force: true }));
+test(
+  "zgui-js package produces a self-contained runnable Linux app directory with zero Cargo invocation",
+  { timeout: 30000 },
+  async t => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "zgui-package-"));
+    t.after(() => rm(dir, { recursive: true, force: true }));
 
-  const appDir = path.join(dir, "packaged-demo");
-  await execute(process.execPath, [cli, "init", appDir], { cwd: dir });
-  await linkWorkspaceSdk(appDir);
+    const appDir = path.join(dir, "packaged-demo");
+    await execute(process.execPath, [cli, "init", appDir], { cwd: dir });
+    await linkWorkspaceSdk(appDir);
 
-  const mockHost = path.join(dir, "mock-native-host");
-  await writeFile(mockHost, makeMockHostScript({ tag: "packaged-host" }), { mode: 0o755 });
+    const mockHost = path.join(dir, "mock-native-host");
+    await writeFile(mockHost, makeMockHostScript({ tag: "packaged-host" }), { mode: 0o755 });
 
-  const outDir = path.join(dir, "release-out");
-  // Empty PATH proves zero Cargo invocation when a prebuilt host is resolved.
-  const packaged = await packageApplication("packaged-demo", {
-    root: workspaceRoot,
-    appDirectory: appDir,
-    out: outDir,
-    hostExecutable: mockHost,
-    desktopEntry: true,
-  });
+    const outDir = path.join(dir, "release-out");
+    // Empty PATH proves zero Cargo invocation when a prebuilt host is resolved.
+    const packaged = await packageApplication("packaged-demo", {
+      root: workspaceRoot,
+      appDirectory: appDir,
+      out: outDir,
+      hostExecutable: mockHost,
+      desktopEntry: true,
+    });
 
-  assert.equal(packaged.out, outDir);
-  assert.equal(packaged.host.source, "explicit");
-  assert.ok(existsSync(packaged.executable));
-  assert.ok(existsSync(packaged.launcher));
-  assert.ok(existsSync(path.join(packaged.bundle, "manifest.json")));
-  assert.ok(existsSync(path.join(packaged.bundle, "app.mjs")));
-  assert.ok(packaged.desktopEntry && existsSync(packaged.desktopEntry));
+    assert.equal(packaged.out, outDir);
+    assert.equal(packaged.host.source, "explicit");
+    assert.ok(existsSync(packaged.executable));
+    assert.ok(existsSync(packaged.launcher));
+    assert.ok(existsSync(path.join(packaged.bundle, "manifest.json")));
+    assert.ok(existsSync(path.join(packaged.bundle, "app.mjs")));
+    assert.ok(packaged.desktopEntry && existsSync(packaged.desktopEntry));
 
-  const launcherMode = (await stat(packaged.launcher)).mode & 0o111;
-  assert.notEqual(launcherMode, 0, "launcher must be executable");
+    const launcherMode = (await stat(packaged.launcher)).mode & 0o111;
+    assert.notEqual(launcherMode, 0, "launcher must be executable");
 
-  const desktopText = await readFile(packaged.desktopEntry, "utf8");
-  assert.match(desktopText, /\[Desktop Entry\]/);
-  assert.match(desktopText, /StartupWMClass=dev\.example\.packaged-demo/);
+    const desktopText = await readFile(packaged.desktopEntry, "utf8");
+    assert.match(desktopText, /\[Desktop Entry\]/);
+    assert.match(desktopText, /StartupWMClass=dev\.example\.packaged-demo/);
 
-  const pkgManifest = JSON.parse(await readFile(path.join(outDir, "package-manifest.json"), "utf8"));
-  assert.equal(pkgManifest.schemaVersion, 1);
-  assert.equal(pkgManifest.hostApiVersion, 1);
-  assert.equal(pkgManifest.buildId, packaged.manifest.buildId);
-
-  // Execute the generated POSIX launcher wrapper and verify it boots bin/native-host --bundle bundle/.
-  const { stdout: runOut } = await execute(packaged.launcher, ["--exit-after-ms", "1"], {
-    cwd: dir,
-  });
-  const boot = JSON.parse(runOut);
-  assert.equal(boot.tag, "packaged-host");
-  assert.deepEqual(boot.args, [
-    "--bundle",
-    path.join(outDir, "bundle"),
-    "--exit-after-ms",
-    "1",
-  ]);
-
-  // If the real native-host binary is already built in target/debug, also verify real binary ABI + packaging.
-  const realHost = path.join(workspaceRoot, "target/debug/native-host");
-  if (existsSync(realHost)) {
-    const cliOutDir = path.join(dir, "real-release");
-    const { stdout: cliPackOut } = await execute(
-      process.execPath,
-      [cli, "package", appDir, "--out", cliOutDir, "--host-executable", realHost, "--desktop-entry"],
-      {
-        cwd: dir,
-        env: { ...process.env, PATH: path.dirname(process.execPath) },
-      },
+    const pkgManifest = JSON.parse(
+      await readFile(path.join(outDir, "package-manifest.json"), "utf8"),
     );
-    assert.match(cliPackOut, /Packaged .* host=explicit/);
-    const abi = probeNativeHost(path.join(cliOutDir, "bin/native-host"));
-    assert.equal(abi.hostApiVersion, 1);
-    assert.equal(abi.schemaVersion, 2);
-    const { stdout: helpOut } = await execute(path.join(cliOutDir, "packaged-demo"), ["--help"], {
+    assert.equal(pkgManifest.schemaVersion, 1);
+    assert.equal(pkgManifest.hostApiVersion, 1);
+    assert.equal(pkgManifest.buildId, packaged.manifest.buildId);
+
+    // Execute the generated POSIX launcher wrapper and verify it boots bin/native-host --bundle bundle/.
+    const { stdout: runOut } = await execute(packaged.launcher, ["--exit-after-ms", "1"], {
       cwd: dir,
     });
-    assert.match(helpOut, /Usage: native-host/);
-  }
-});
+    const boot = JSON.parse(runOut);
+    assert.equal(boot.tag, "packaged-host");
+    assert.deepEqual(boot.args, ["--bundle", path.join(outDir, "bundle"), "--exit-after-ms", "1"]);
+
+    // If the real native-host binary is already built in target/debug, also verify real binary ABI + packaging.
+    const realHost = path.join(workspaceRoot, "target/debug/native-host");
+    if (existsSync(realHost)) {
+      const cliOutDir = path.join(dir, "real-release");
+      const { stdout: cliPackOut } = await execute(
+        process.execPath,
+        [
+          cli,
+          "package",
+          appDir,
+          "--out",
+          cliOutDir,
+          "--host-executable",
+          realHost,
+          "--desktop-entry",
+        ],
+        {
+          cwd: dir,
+          env: { ...process.env, PATH: path.dirname(process.execPath) },
+        },
+      );
+      assert.match(cliPackOut, /Packaged .* host=explicit/);
+      const abi = probeNativeHost(path.join(cliOutDir, "bin/native-host"));
+      assert.equal(abi.hostApiVersion, 1);
+      assert.equal(abi.schemaVersion, 2);
+      const { stdout: helpOut } = await execute(path.join(cliOutDir, "packaged-demo"), ["--help"], {
+        cwd: dir,
+      });
+      assert.match(helpOut, /Usage: native-host/);
+      assert.equal(abi.bytecodeFormat, "qjs-bytecode-v1");
+      assert.match(abi.quickjsAbi ?? "", /^qjs-ng-/);
+
+      const bcOutDir = path.join(dir, "bytecode-release");
+      const { stdout: bcPackOut } = await execute(
+        process.execPath,
+        [cli, "package", appDir, "--out", bcOutDir, "--bytecode", "--host-executable", realHost],
+        {
+          cwd: dir,
+          env: { ...process.env, PATH: path.dirname(process.execPath) },
+        },
+      );
+      assert.match(bcPackOut, /Packaged .* host=explicit/);
+      const bcManifest = JSON.parse(
+        await readFile(path.join(bcOutDir, "bundle/manifest.json"), "utf8"),
+      );
+      assert.equal(bcManifest.entry, "app.qjsb");
+      assert.equal(bcManifest.bytecodeFormat, "qjs-bytecode-v1");
+      assert.equal(bcManifest.quickjsAbi, abi.quickjsAbi);
+      assert.equal(existsSync(path.join(bcOutDir, "bundle/app.qjsb")), true);
+      assert.equal(existsSync(path.join(bcOutDir, "bundle/app.mjs")), false);
+    }
+  },
+);

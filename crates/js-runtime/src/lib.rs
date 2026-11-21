@@ -13,7 +13,7 @@
 #![deny(unsafe_code)]
 
 use rquickjs::{
-    Context, Ctx, Function, Module, Object, Persistent, Runtime, Value,
+    Context, Ctx, Function, Module, Object, Persistent, Runtime, Value, WriteOptions,
     loader::{ImportAttributes, Loader, Resolver},
     module::Declared,
 };
@@ -284,13 +284,166 @@ impl RejectionTracker {
     }
 }
 
+/// Wire format identifier sealed in `manifest.json` for compiled QuickJS bytecode packages.
+pub const BYTECODE_FORMAT: &str = "qjs-bytecode-v1";
+
+/// Deterministic QuickJS bytecode ABI tag tying pinned engine revision, target architecture,
+/// endianness, and pointer width so incompatible `.qjsb` payloads fail closed before loading.
+#[must_use]
+pub fn quickjs_abi_tag() -> String {
+    let endian = if cfg!(target_endian = "little") { "le" } else { "be" };
+    format!(
+        "qjs-ng-6d46d07d-rquickjs-73fcd606-{}-{endian}-{}",
+        std::env::consts::ARCH,
+        usize::BITS,
+    )
+}
+
+struct CompileDirResolver {
+    root: std::path::PathBuf,
+}
+
+impl Resolver for CompileDirResolver {
+    fn resolve<'js>(
+        &mut self,
+        _ctx: &Ctx<'js>,
+        base: &str,
+        name: &str,
+        _attributes: Option<ImportAttributes<'js>>,
+    ) -> rquickjs::Result<String> {
+        let base_dir = base.rsplit_once('/').map_or("", |(dir, _)| dir);
+        let mut parts: Vec<&str> = base_dir
+            .split('/')
+            .filter(|part| !part.is_empty())
+            .collect();
+        for seg in name.split('/') {
+            match seg {
+                "" | "." => {}
+                ".." => {
+                    if parts.pop().is_none() {
+                        return Err(rquickjs::Error::new_resolving_message(
+                            base,
+                            name,
+                            "module specifier escapes compile root",
+                        ));
+                    }
+                }
+                other => parts.push(other),
+            }
+        }
+        let normalized = parts.join("/");
+        let full = self.root.join(&normalized);
+        if full.is_file() {
+            Ok(normalized)
+        } else {
+            Err(rquickjs::Error::new_resolving_message(
+                base,
+                name,
+                format!("sibling chunk not found in compile root: {normalized}"),
+            ))
+        }
+    }
+}
+
+struct CompileDirLoader {
+    root: std::path::PathBuf,
+}
+
+impl Loader for CompileDirLoader {
+    fn load<'js>(
+        &mut self,
+        ctx: &Ctx<'js>,
+        name: &str,
+        _attributes: Option<ImportAttributes<'js>>,
+    ) -> rquickjs::Result<Module<'js, Declared>> {
+        let full = self.root.join(name);
+        let source = std::fs::read_to_string(&full).map_err(|err| {
+            rquickjs::Error::new_loading_message(name, format!("failed to read {name}: {err}"))
+        })?;
+        Module::declare(ctx.clone(), name, source)
+    }
+}
+
+/// Compile an ESM module source into deterministic QuickJS bytecode while retaining debug
+/// line/column tables so sidecar source-map diagnostic remapping stays accurate.
+pub fn compile_module_bytecode(name: &str, source: &str) -> Result<Vec<u8>, Diagnostic> {
+    compile_module_bytecode_in_dir(name, source, None)
+}
+
+/// Compile an ESM module source into deterministic QuickJS bytecode, optionally resolving
+/// sibling static imports inside `source_dir` during `Module::declare`.
+pub fn compile_module_bytecode_in_dir(
+    name: &str,
+    source: &str,
+    source_dir: Option<&Path>,
+) -> Result<Vec<u8>, Diagnostic> {
+    let runtime = Runtime::new().map_err(|e| {
+        Diagnostic::new(DiagnosticKind::Engine, "bytecode compile", e.to_string())
+    })?;
+    if let Some(dir) = source_dir {
+        let root = dir.to_path_buf();
+        runtime.set_loader(
+            CompileDirResolver { root: root.clone() },
+            CompileDirLoader { root },
+        );
+    }
+    let context = Context::full(&runtime).map_err(|e| {
+        Diagnostic::new(DiagnosticKind::Engine, "bytecode compile", e.to_string())
+    })?;
+    context.with(|ctx| {
+        let module = Module::declare(ctx.clone(), name, source).map_err(|err| {
+            let detail = match err {
+                rquickjs::Error::Exception => {
+                    let caught = ctx.catch();
+                    format!("exception while compiling {name}: {caught:?}")
+                }
+                other => other.to_string(),
+            };
+            Diagnostic::new(DiagnosticKind::Exception, "bytecode compile", detail)
+        })?;
+        module
+            .write(WriteOptions {
+                strip_source: false,
+                strip_debug: false,
+                ..WriteOptions::default()
+            })
+            .map_err(|err| {
+                Diagnostic::new(DiagnosticKind::Engine, "bytecode compile", err.to_string())
+            })
+    })
+}
+
+#[allow(unsafe_code)]
+fn load_verified_bytecode_module<'js>(
+    ctx: Ctx<'js>,
+    bytes: &[u8],
+) -> rquickjs::Result<Module<'js, Declared>> {
+    if bytes.is_empty() {
+        return Err(rquickjs::Error::new_loading_message(
+            "<bytecode>",
+            "empty QuickJS bytecode payload",
+        ));
+    }
+    // SAFETY: Callers must pass only QuickJS bytecode compiled for this exact `quickjs_abi_tag()`
+    // and verified fail-closed via SHA-256 `artifactDigests` before reaching `JsRuntime`.
+    // QuickJS-NG (`JS_READ_OBJ_ROM_DATA == 0`) copies the bytecode stream out of `bytes`.
+    unsafe { Module::load(ctx, bytes) }
+}
+
+/// Verified module payload supplied by a host-owned [`VerifiedModuleProvider`].
+#[derive(Clone, Debug)]
+pub enum VerifiedModulePayload {
+    Source(String),
+    Bytecode(Vec<u8>),
+}
+
 /// Host-supplied closed-graph module provider backed strictly by verified
 /// package bytes (never ambient filesystem, cwd, or network resolution).
 pub trait VerifiedModuleProvider: 'static {
     /// Resolve `specifier` imported from `referrer` into a canonical verified module ID.
     fn resolve(&self, referrer: &str, specifier: &str) -> Result<String, String>;
-    /// Load verified UTF-8 ESM source for a canonical module ID.
-    fn load(&self, canonical_name: &str) -> Result<String, String>;
+    /// Load verified ESM source or ABI-verified bytecode for a canonical module ID.
+    fn load(&self, canonical_name: &str) -> Result<VerifiedModulePayload, String>;
 }
 
 struct ProviderResolver {
@@ -322,12 +475,22 @@ impl Loader for ProviderLoader {
         name: &str,
         _attributes: Option<ImportAttributes<'js>>,
     ) -> rquickjs::Result<Module<'js, Declared>> {
-        let source = self
+        match self
             .provider
             .load(name)
-            .map_err(|msg| rquickjs::Error::new_loading_message(name, msg))?;
-        Module::declare(ctx.clone(), name, source)
+            .map_err(|msg| rquickjs::Error::new_loading_message(name, msg))?
+        {
+            VerifiedModulePayload::Source(source) => Module::declare(ctx.clone(), name, source),
+            VerifiedModulePayload::Bytecode(bytes) => {
+                load_verified_bytecode_module(ctx.clone(), &bytes)
+            }
+        }
     }
+}
+
+enum ModuleInput<'a> {
+    Source { name: &'a str, source: &'a str },
+    Bytecode(&'a [u8]),
 }
 
 pub struct JsRuntime {
@@ -669,17 +832,31 @@ impl JsRuntime {
     /// An unsettled module with no runnable jobs is reported, never busy-waited.
     pub fn run_smoke_module(&mut self, name: &str, source: &str) -> Result<String, Diagnostic> {
         let bootstrap_end = Instant::now() + self.limits.bootstrap_timeout;
-        let namespace = self.evaluate_module_namespace(name, source, bootstrap_end)?;
+        let namespace = self.evaluate_module_namespace(
+            ModuleInput::Source { name, source },
+            bootstrap_end,
+        )?;
         self.enter("runSmoke", bootstrap_end, |ctx| {
             let function: Function = namespace.restore(&ctx)?.get("runSmoke")?;
             function.call(())
         })
     }
 
-    /// Evaluate a preflight module. Its namespace remains owned by this runtime.
+    /// Evaluate a preflight module from UTF-8 ESM source. Its namespace remains owned by this runtime.
     pub fn load_module(&mut self, name: &str, source: &str) -> Result<(), Diagnostic> {
         let end = Instant::now() + self.limits.bootstrap_timeout;
-        self.module = Some(self.evaluate_module_namespace(name, source, end)?);
+        self.module = Some(self.evaluate_module_namespace(
+            ModuleInput::Source { name, source },
+            end,
+        )?);
+        Ok(())
+    }
+
+    /// Evaluate a preflight module from host-verified QuickJS bytecode.
+    /// Callers must verify `bytecodeFormat`, `quickjsAbi`, and SHA-256 `artifactDigests` fail-closed first.
+    pub fn load_bytecode_module(&mut self, bytecode: &[u8]) -> Result<(), Diagnostic> {
+        let end = Instant::now() + self.limits.bootstrap_timeout;
+        self.module = Some(self.evaluate_module_namespace(ModuleInput::Bytecode(bytecode), end)?);
         Ok(())
     }
 
@@ -692,7 +869,11 @@ impl JsRuntime {
         })
     }
 
-    fn evaluate_module_namespace(&mut self, name: &str, source: &str, bootstrap_end: Instant) -> Result<Persistent<Object<'static>>, Diagnostic> {
+    fn evaluate_module_namespace(
+        &mut self,
+        input: ModuleInput<'_>,
+        bootstrap_end: Instant,
+    ) -> Result<Persistent<Object<'static>>, Diagnostic> {
         let compile_end = self.clamp_deadline(bootstrap_end);
         if Instant::now() >= compile_end {
             return Err(Diagnostic::new(
@@ -707,8 +888,11 @@ impl JsRuntime {
             let _guard = EntryGuard(&self.interrupt);
             self.update_stack_top();
             self.context.with(|ctx| {
-                let module = Module::declare(ctx.clone(), name, source)
-                    .map_err(|error| self.capture_error(&ctx, "module evaluation", error))?;
+                let module = match input {
+                    ModuleInput::Source { name, source } => Module::declare(ctx.clone(), name, source),
+                    ModuleInput::Bytecode(bytes) => load_verified_bytecode_module(ctx.clone(), bytes),
+                }
+                .map_err(|error| self.capture_error(&ctx, "module evaluation", error))?;
                 let eval_end = self.clamp_deadline(bootstrap_end.min(Instant::now() + self.limits.entry_timeout));
                 if Instant::now() >= eval_end {
                     return Err(Diagnostic::new(
@@ -986,10 +1170,11 @@ mod loader_tests {
             }
         }
 
-        fn load(&self, canonical_name: &str) -> Result<String, String> {
+        fn load(&self, canonical_name: &str) -> Result<VerifiedModulePayload, String> {
             self.chunks
                 .get(canonical_name)
                 .cloned()
+                .map(VerifiedModulePayload::Source)
                 .ok_or_else(|| format!("missing verified chunk: {canonical_name}"))
         }
     }
@@ -1054,5 +1239,74 @@ mod loader_tests {
         assert_eq!(err.kind, DiagnosticKind::Interrupted);
         assert!(start.elapsed() < Duration::from_secs(1), "cancel took too long: {:?}", start.elapsed());
         assert!(runtime.is_cancelled());
+    }
+
+    struct BytecodeProvider {
+        chunks: BTreeMap<String, Vec<u8>>,
+    }
+
+    impl VerifiedModuleProvider for BytecodeProvider {
+        fn resolve(&self, _referrer: &str, specifier: &str) -> Result<String, String> {
+            let normalized = specifier.strip_prefix("./").unwrap_or(specifier);
+            if self.chunks.contains_key(normalized) {
+                Ok(normalized.to_owned())
+            } else {
+                Err(format!("undeclared bytecode chunk: {specifier}"))
+            }
+        }
+
+        fn load(&self, canonical_name: &str) -> Result<VerifiedModulePayload, String> {
+            self.chunks
+                .get(canonical_name)
+                .cloned()
+                .map(VerifiedModulePayload::Bytecode)
+                .ok_or_else(|| format!("missing verified bytecode chunk: {canonical_name}"))
+        }
+    }
+
+    #[test]
+    fn bytecode_modules_compile_deterministically_load_chunks_and_preserve_stack_locations() {
+        let entry_src = r#"
+export let answer = "pending";
+export function trigger() {
+    import("./chunks/lazy.mjs").then(m => { answer = m.value; });
+}
+export function boom() {
+    throw new Error("bytecode-boom");
+}
+"#;
+        let chunk_src = "export const value = 'from-qjsb-chunk';\n";
+        let bc_a = compile_module_bytecode("app.mjs", entry_src).expect("compile entry A");
+        let bc_b = compile_module_bytecode("app.mjs", entry_src).expect("compile entry B");
+        assert_eq!(bc_a, bc_b, "bytecode compilation must be deterministic");
+        let chunk_bc = compile_module_bytecode("chunks/lazy.mjs", chunk_src).expect("compile chunk");
+
+        let mut chunks = BTreeMap::new();
+        chunks.insert("chunks/lazy.mjs".into(), chunk_bc);
+        let mut runtime = JsRuntime::new(RuntimeLimits::default()).expect("runtime");
+        runtime.set_module_provider(Rc::new(BytecodeProvider { chunks }));
+        runtime.load_bytecode_module(&bc_a).expect("load entry bytecode");
+        runtime
+            .with_module(|_ctx, m| {
+                let trigger: Function = m.get("trigger")?;
+                trigger.call::<_, ()>(())
+            })
+            .expect("trigger");
+        let pump = runtime.pump_jobs();
+        assert!(pump.diagnostics.is_empty(), "{:?}", pump.diagnostics);
+        let answer: String = runtime
+            .with_module(|_ctx, m| m.get("answer"))
+            .expect("read answer");
+        assert_eq!(answer, "from-qjsb-chunk");
+
+        let err = runtime
+            .with_module(|_ctx, m| {
+                let boom: Function = m.get("boom")?;
+                boom.call::<_, ()>(())
+            })
+            .expect_err("boom throws");
+        assert!(err.message.contains("bytecode-boom"));
+        let stack = err.stack.as_deref().unwrap_or("");
+        assert!(stack.contains("app.mjs:7:"), "stack must preserve filename:line:col: {stack}");
     }
 }

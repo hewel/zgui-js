@@ -86,6 +86,10 @@ function parseVersionText(text: string): NativeHostAbi | null {
         ...(typeof parsed.engineRevision === "string"
           ? { engineRevision: parsed.engineRevision }
           : {}),
+        ...(typeof parsed.bytecodeFormat === "string"
+          ? { bytecodeFormat: parsed.bytecodeFormat }
+          : {}),
+        ...(typeof parsed.quickjsAbi === "string" ? { quickjsAbi: parsed.quickjsAbi } : {}),
         ...(typeof parsed.styleProfile === "string" ? { styleProfile: parsed.styleProfile } : {}),
       };
     } catch {
@@ -410,4 +414,60 @@ export async function verifyHostPackage(
   }
   const abi = verifyAbi ? probeNativeHost(binaryPath) : undefined;
   return { manifest, binaryPath, ...(abi ? { abi } : {}) };
+}
+
+export async function compileModuleBytecode(
+  hostExecutable: string,
+  {
+    input,
+    output,
+    moduleName,
+    sourceDir,
+    signal,
+  }: {
+    input: string;
+    output: string;
+    moduleName: string;
+    sourceDir?: string;
+    signal?: AbortSignal;
+  },
+): Promise<Buffer> {
+  signal?.throwIfAborted();
+  const child = Bun.spawn(
+    [
+      path.resolve(hostExecutable),
+      "compile-bytecode",
+      "--input",
+      path.resolve(input),
+      "--output",
+      path.resolve(output),
+      "--module-name",
+      moduleName,
+      ...(sourceDir ? ["--source-dir", path.resolve(sourceDir)] : []),
+    ],
+    {
+      stdin: "ignore",
+      stdout: "pipe",
+      stderr: "pipe",
+    },
+  );
+  const onAbort = () => child.kill("SIGTERM");
+  signal?.addEventListener("abort", onAbort, { once: true });
+  try {
+    const [code, stdout, stderr] = await Promise.all([
+      child.exited,
+      new Response(child.stdout).text(),
+      new Response(child.stderr).text(),
+    ]);
+    if (code !== 0 || child.signalCode) {
+      const detail = `${stderr}${stdout}`.trim();
+      throw hostFailure(
+        `native-host compile-bytecode failed for ${moduleName} (exit ${child.signalCode ?? code})${detail ? `: ${detail}` : ""}`,
+      );
+    }
+    return Buffer.from(await readFile(output));
+  } finally {
+    signal?.removeEventListener("abort", onAbort);
+    signal?.throwIfAborted();
+  }
 }

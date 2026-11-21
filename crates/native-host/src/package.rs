@@ -41,6 +41,12 @@ pub struct Manifest {
     pub host_api_version: u32,
     pub entry: String,
     pub source_map: String,
+    /// Optional compiled QuickJS bytecode format (`"qjs-bytecode-v1"`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bytecode_format: Option<String>,
+    /// Optional exact QuickJS bytecode ABI tag matching the linked engine.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quickjs_abi: Option<String>,
     /// Optional closed graph of additional JS chunks sealed into `artifactDigests`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub chunks: Vec<ChunkEntry>,
@@ -369,11 +375,24 @@ struct VerifiedChunk {
     source_map: OnceCell<Option<sourcemap::DecodedMap>>,
 }
 
+/// Verified initial entry module payload (either UTF-8 ESM source or ABI-verified bytecode).
+#[derive(Clone, Debug)]
+pub(crate) enum EntryPayload {
+    Source(Arc<str>),
+    Bytecode(Arc<[u8]>),
+}
+
+fn logical_js_path(rel_path: &str) -> String {
+    rel_path
+        .strip_suffix(".qjsb")
+        .map_or_else(|| rel_path.to_owned(), |stem| format!("{stem}.mjs"))
+}
+
 pub struct Package {
     pub directory: PathBuf,
     pub manifest: Manifest,
     pub entry_digest: String,
-    source: RefCell<Option<Arc<str>>>,
+    entry_payload: RefCell<Option<EntryPayload>>,
     pub styles: Arc<[Stylesheet]>,
     pub source_map_digest: String,
     source_map: OnceCell<Option<sourcemap::DecodedMap>>,
@@ -396,6 +415,8 @@ impl Package {
             || a.id != b.id
             || a.entry != b.entry
             || a.source_map != b.source_map
+            || a.bytecode_format != b.bytecode_format
+            || a.quickjs_abi != b.quickjs_abi
             || a.chunks != b.chunks
             || a.workers != b.workers
             || a.assets != b.assets
@@ -459,6 +480,32 @@ impl Package {
             || !valid_digest(&manifest.style_system.config_digest) {
             return Err("unsupported style system/profile or invalid config digest".into());
         }
+        let is_bytecode = match (manifest.bytecode_format.as_deref(), manifest.quickjs_abi.as_deref()) {
+            (None, None) => false,
+            (Some(fmt), Some(abi)) => {
+                if fmt != js_runtime::BYTECODE_FORMAT {
+                    return Err(format!(
+                        "unsupported bytecodeFormat {fmt:?}; expected {:?}",
+                        js_runtime::BYTECODE_FORMAT
+                    )
+                    .into());
+                }
+                let expected_abi = js_runtime::quickjs_abi_tag();
+                if abi != expected_abi {
+                    return Err(format!(
+                        "incompatible quickjsAbi {abi:?}; host expects {expected_abi:?}"
+                    )
+                    .into());
+                }
+                true
+            }
+            _ => {
+                return Err(
+                    "manifest must specify both bytecodeFormat and quickjsAbi together".into(),
+                );
+            }
+        };
+        let module_ext = if is_bytecode { ".qjsb" } else { ".mjs" };
         if !valid_digest(&manifest.build_id) { return Err("invalid package buildId".into()); }
         if manifest.chunks.len() > MAX_CHUNKS {
             return Err(format!("package exceeds maximum chunk count ({MAX_CHUNKS})").into());
@@ -520,9 +567,23 @@ impl Package {
                 return Err(format!("{name} styleSystem identity is missing or differs from manifest").into());
             }
         }
-        let source_bytes = files.remove(&manifest.entry).ok_or("missing entry")?;
-        let entry_digest = digest(&source_bytes);
-        let source: Arc<str> = Arc::from(String::from_utf8(source_bytes)?);
+        if !manifest.entry.ends_with(module_ext) {
+            return Err(format!(
+                "manifest entry {} must end with {module_ext}",
+                manifest.entry
+            )
+            .into());
+        }
+        let entry_bytes = files.remove(&manifest.entry).ok_or("missing entry")?;
+        let entry_digest = digest(&entry_bytes);
+        let entry_payload = if is_bytecode {
+            if entry_bytes.is_empty() {
+                return Err("bytecode entry payload must be non-empty".into());
+            }
+            EntryPayload::Bytecode(Arc::from(entry_bytes))
+        } else {
+            EntryPayload::Source(Arc::from(String::from_utf8(entry_bytes)?))
+        };
         let map_bytes = files.remove(&manifest.source_map).ok_or("missing source map")?;
         let source_map_digest = digest(&map_bytes);
         // The decoder defaults missing fields, accepting even `{}`; require a
@@ -537,13 +598,19 @@ impl Package {
         drop(map_bytes);
         let mut chunks = BTreeMap::new();
         for chunk in &manifest.chunks {
-            if !chunk.path.ends_with(".mjs") || !chunk.source_map.ends_with(".map") {
+            if !chunk.path.ends_with(module_ext) || !chunk.source_map.ends_with(".map") {
                 return Err(format!("invalid chunk declaration: {} / {}", chunk.path, chunk.source_map).into());
             }
             let chunk_bytes = files.remove(&chunk.path).ok_or_else(|| format!("missing chunk: {}", chunk.path))?;
             let chunk_digest = digest(&chunk_bytes);
-            // Validate UTF-8 eagerly, then release bytes until QuickJS lazily loads this chunk.
-            let _ = std::str::from_utf8(&chunk_bytes)?;
+            if is_bytecode {
+                if chunk_bytes.is_empty() {
+                    return Err(format!("bytecode chunk {} must be non-empty", chunk.path).into());
+                }
+            } else {
+                // Validate UTF-8 eagerly, then release bytes until QuickJS lazily loads this chunk.
+                let _ = std::str::from_utf8(&chunk_bytes)?;
+            }
             drop(chunk_bytes);
             let chunk_map_bytes = files.remove(&chunk.source_map).ok_or_else(|| format!("missing chunk source map: {}", chunk.source_map))?;
             let chunk_map_digest = digest(&chunk_map_bytes);
@@ -570,7 +637,7 @@ impl Package {
         let mut workers = BTreeMap::new();
         for worker in &manifest.workers {
             if !valid_worker_name(&worker.name)
-                || !worker.path.ends_with(".mjs")
+                || !worker.path.ends_with(module_ext)
                 || !worker.source_map.ends_with(".map")
             {
                 return Err(format!("invalid worker declaration: {} ({})", worker.name, worker.path).into());
@@ -580,7 +647,13 @@ impl Package {
             }
             let worker_bytes = files.remove(&worker.path).ok_or_else(|| format!("missing worker: {}", worker.path))?;
             let worker_digest = digest(&worker_bytes);
-            let _ = std::str::from_utf8(&worker_bytes)?;
+            if is_bytecode {
+                if worker_bytes.is_empty() {
+                    return Err(format!("bytecode worker {} must be non-empty", worker.path).into());
+                }
+            } else {
+                let _ = std::str::from_utf8(&worker_bytes)?;
+            }
             drop(worker_bytes);
             let worker_map_bytes = files.remove(&worker.source_map).ok_or_else(|| format!("missing worker source map: {}", worker.source_map))?;
             let worker_map_digest = digest(&worker_map_bytes);
@@ -618,7 +691,7 @@ impl Package {
             directory,
             manifest,
             entry_digest,
-            source: RefCell::new(Some(source)),
+            entry_payload: RefCell::new(Some(entry_payload)),
             styles,
             source_map_digest,
             source_map: OnceCell::new(),
@@ -636,26 +709,37 @@ impl Package {
         &self.generated_entry
     }
 
-    /// Consume the initial entry source buffer so steady-state sessions do not retain
-    /// full JS text in Rust heap after QuickJS evaluation; retries reload from the
+    /// Returns whether this package ships ABI-verified QuickJS bytecode payloads (`.qjsb`).
+    #[must_use]
+    pub fn is_bytecode(&self) -> bool {
+        self.manifest.bytecode_format.is_some()
+    }
+
+    /// Consume the initial entry payload buffer so steady-state sessions do not retain
+    /// full JS/bytecode buffers in Rust heap after QuickJS evaluation; retries reload from the
     /// verified immutable package directory on demand.
-    pub(crate) fn take_or_load_source(&self) -> Result<Arc<str>> {
-        if let Some(cached) = self.source.borrow_mut().take() {
+    pub(crate) fn take_or_load_entry(&self) -> Result<EntryPayload> {
+        if let Some(cached) = self.entry_payload.borrow_mut().take() {
             return Ok(cached);
         }
         self.read_verified_entry()
     }
 
-    fn read_verified_entry(&self) -> Result<Arc<str>> {
+    fn read_verified_entry(&self) -> Result<EntryPayload> {
         let bytes = resource(&self.directory, &self.manifest.entry)?;
         let actual = digest(&bytes);
         if actual != self.entry_digest {
             return Err(format!(
                 "artifact integrity mismatch for {}: expected {}, got {actual}",
                 self.manifest.entry, self.entry_digest
-            ).into());
+            )
+            .into());
         }
-        Ok(Arc::from(String::from_utf8(bytes)?))
+        if self.is_bytecode() {
+            Ok(EntryPayload::Bytecode(Arc::from(bytes)))
+        } else {
+            Ok(EntryPayload::Source(Arc::from(String::from_utf8(bytes)?)))
+        }
     }
 
     /// Read and digest-verify a declared JSON metadata artifact (e.g., `build-info.json`)
@@ -706,10 +790,17 @@ impl Package {
     }
 
     fn relative_module_path<'a>(&'a self, referrer: &'a str) -> Option<&'a str> {
-        if referrer == self.generated_entry || referrer == self.manifest.entry {
+        if referrer == self.generated_entry
+            || referrer == self.manifest.entry
+            || (self.is_bytecode() && referrer == logical_js_path(&self.manifest.entry))
+        {
             return Some(self.manifest.entry.as_str());
         }
-        if let Some(chunk) = self.chunks.values().find(|c| c.canonical_name == referrer || c.relative_path == referrer) {
+        if let Some(chunk) = self.chunks.values().find(|c| {
+            c.canonical_name == referrer
+                || c.relative_path == referrer
+                || (self.is_bytecode() && logical_js_path(&c.relative_path) == referrer)
+        }) {
             return Some(chunk.relative_path.as_str());
         }
         None
@@ -725,21 +816,33 @@ impl Package {
         let base_dir = base_rel.rsplit_once('/').map_or("", |(dir, _)| dir);
         let normalized = normalize_posix_relative(base_dir, specifier)
             .ok_or_else(|| format!("module specifier escapes sealed package root: {specifier:?}"))?;
-        if normalized == self.manifest.entry {
+        let mapped = if self.is_bytecode()
+            && let Some(stem) = normalized.strip_suffix(".mjs")
+        {
+            format!("{stem}.qjsb")
+        } else {
+            normalized.clone()
+        };
+        if normalized == self.manifest.entry || mapped == self.manifest.entry {
             return Ok(self.generated_entry.clone());
         }
-        if let Some(chunk) = self.chunks.get(&normalized) {
+        if let Some(chunk) = self.chunks.get(&normalized).or_else(|| self.chunks.get(&mapped)) {
             return Ok(chunk.canonical_name.clone());
         }
         Err(format!("module specifier is not in the sealed chunk graph: {specifier:?} -> {normalized:?}"))
     }
 
-    fn load_sealed_module(&self, canonical_name: &str) -> std::result::Result<String, String> {
+    fn load_sealed_module(
+        &self,
+        canonical_name: &str,
+    ) -> std::result::Result<js_runtime::VerifiedModulePayload, String> {
         if canonical_name == self.generated_entry {
-            return self
-                .read_verified_entry()
-                .map(|src| src.to_string())
-                .map_err(|err| err.to_string());
+            return match self.read_verified_entry().map_err(|err| err.to_string())? {
+                EntryPayload::Source(src) => Ok(js_runtime::VerifiedModulePayload::Source(src.to_string())),
+                EntryPayload::Bytecode(bytes) => {
+                    Ok(js_runtime::VerifiedModulePayload::Bytecode(bytes.to_vec()))
+                }
+            };
         }
         let chunk = self
             .chunks
@@ -754,12 +857,21 @@ impl Package {
                 chunk.relative_path, chunk.digest
             ));
         }
-        String::from_utf8(bytes).map_err(|err| err.to_string())
+        if self.is_bytecode() {
+            Ok(js_runtime::VerifiedModulePayload::Bytecode(bytes))
+        } else {
+            String::from_utf8(bytes)
+                .map(js_runtime::VerifiedModulePayload::Source)
+                .map_err(|err| err.to_string())
+        }
     }
 
-    /// Reads and SHA-256-verifies a declared compute worker module from the immutable
-    /// package generation on demand.
-    pub(crate) fn load_worker_source(&self, name: &str) -> std::result::Result<(String, String), String> {
+    /// Reads and SHA-256-verifies a declared compute worker module (source or bytecode)
+    /// from the immutable package generation on demand.
+    pub(crate) fn load_worker_payload(
+        &self,
+        name: &str,
+    ) -> std::result::Result<(String, js_runtime::VerifiedModulePayload), String> {
         let worker = self
             .workers
             .get(name)
@@ -772,8 +884,29 @@ impl Package {
                 worker.relative_path, worker.digest
             ));
         }
-        let source = String::from_utf8(bytes).map_err(|err| err.to_string())?;
-        Ok((worker.canonical_name.clone(), source))
+        if self.is_bytecode() {
+            Ok((
+                logical_js_path(&worker.relative_path),
+                js_runtime::VerifiedModulePayload::Bytecode(bytes),
+            ))
+        } else {
+            let source = String::from_utf8(bytes).map_err(|err| err.to_string())?;
+            Ok((
+                worker.canonical_name.clone(),
+                js_runtime::VerifiedModulePayload::Source(source),
+            ))
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn load_worker_source(&self, name: &str) -> std::result::Result<(String, String), String> {
+        let (module_id, payload) = self.load_worker_payload(name)?;
+        match payload {
+            js_runtime::VerifiedModulePayload::Source(source) => Ok((module_id, source)),
+            js_runtime::VerifiedModulePayload::Bytecode(_) => {
+                Err(format!("worker {name:?} is compiled bytecode, not UTF-8 source"))
+            }
+        }
     }
 
     /// Immutable manifest-declared bytes from the integrity-verified package generation.
@@ -815,16 +948,28 @@ impl Package {
                 let body = body.strip_prefix("    at ")?.strip_suffix(')')?;
                 let (file_line, column) = body.rsplit_once(':')?;
                 let (file, line) = file_line.rsplit_once(':')?;
-                let (matched_name, decoded_map) = if let Some(entry) = [self.generated_entry.as_str(), self.manifest.entry.as_str()].into_iter().find(|&entry| {
+                let entry_logical = logical_js_path(&self.manifest.entry);
+                let (matched_name, decoded_map) = if let Some(entry) = [
+                    self.generated_entry.as_str(),
+                    self.manifest.entry.as_str(),
+                    entry_logical.as_str(),
+                ]
+                .into_iter()
+                .find(|&entry| {
                     file.strip_suffix(entry).is_some_and(|prefix| prefix.ends_with(" ("))
                 }) {
-                    (entry, self.decoded_source_map()?)
+                    (entry.to_owned(), self.decoded_source_map()?)
                 } else {
                     let (chunk, matched) = self.chunks.values().chain(self.workers.values()).find_map(|chunk| {
-                        [chunk.canonical_name.as_str(), chunk.relative_path.as_str()]
-                            .into_iter()
-                            .find(|&candidate| file.strip_suffix(candidate).is_some_and(|prefix| prefix.ends_with(" (")))
-                            .map(|matched| (chunk, matched))
+                        let logical = logical_js_path(&chunk.relative_path);
+                        [
+                            chunk.canonical_name.as_str(),
+                            chunk.relative_path.as_str(),
+                            logical.as_str(),
+                        ]
+                        .into_iter()
+                        .find(|&candidate| file.strip_suffix(candidate).is_some_and(|prefix| prefix.ends_with(" (")))
+                        .map(|matched| (chunk, matched.to_owned()))
                     })?;
                     (matched, self.decoded_chunk_source_map(chunk)?)
                 };
@@ -870,7 +1015,7 @@ impl js_runtime::VerifiedModuleProvider for PackageModuleProvider {
         self.package.resolve_sealed_import(referrer, specifier)
     }
 
-    fn load(&self, canonical_name: &str) -> std::result::Result<String, String> {
+    fn load(&self, canonical_name: &str) -> std::result::Result<js_runtime::VerifiedModulePayload, String> {
         self.package.load_sealed_module(canonical_name)
     }
 }
@@ -1281,13 +1426,13 @@ mod tests {
         fixture.publish(source, map);
         let package = Package::load(&fixture.0).unwrap();
         // Consuming the initial buffer releases retained JS source and reloads verified bytes on demand.
-        assert_eq!(package.take_or_load_source().unwrap().as_bytes(), source);
-        assert!(package.source.borrow().is_none(), "initial source buffer should be released after take");
-        assert_eq!(package.take_or_load_source().unwrap().as_bytes(), source);
-        assert!(package.source.borrow().is_none(), "reloaded retry source should not be retained permanently");
+        assert!(matches!(package.take_or_load_entry().unwrap(), EntryPayload::Source(s) if s.as_bytes() == source));
+        assert!(package.entry_payload.borrow().is_none(), "initial source buffer should be released after take");
+        assert!(matches!(package.take_or_load_entry().unwrap(), EntryPayload::Source(s) if s.as_bytes() == source));
+        assert!(package.entry_payload.borrow().is_none(), "reloaded retry source should not be retained permanently");
         assert!(package.read_verified_json("build-info.json").is_ok());
         fs::write(fixture.0.join("app.mjs"), b"tampered").unwrap();
-        assert!(package.take_or_load_source().err().unwrap().to_string().contains("integrity mismatch"));
+        assert!(package.take_or_load_entry().err().unwrap().to_string().contains("integrity mismatch"));
         fs::write(fixture.0.join("app.mjs"), source).unwrap();
         fs::write(fixture.0.join("app.mjs.map"), b"modified").unwrap();
         assert!(Package::load(&fixture.0).err().unwrap().to_string().contains("integrity mismatch"));
@@ -1351,7 +1496,7 @@ mod tests {
 
         let resolved = provider.resolve(package.generated_entry(), "./chunks/lazy-1.mjs").expect("resolve");
         assert!(resolved.ends_with("chunks/lazy-1.mjs"));
-        assert_eq!(provider.load(&resolved).expect("load chunk").as_bytes(), chunk_source);
+        assert!(matches!(provider.load(&resolved).expect("load chunk"), js_runtime::VerifiedModulePayload::Source(s) if s.as_bytes() == chunk_source));
 
         assert!(provider.resolve(package.generated_entry(), "../outside.mjs").is_err());
         assert!(provider.resolve(package.generated_entry(), "node:fs").is_err());
@@ -1476,5 +1621,98 @@ mod tests {
         fs::write(fixture.0.join("app.mjs.map"), b"{}").unwrap();
         let raw = engine.run_smoke_module("app.mjs", source).unwrap_err();
         assert_eq!(tampered_package.remap_diagnostic(raw.clone()), raw);
+    }
+
+    #[test]
+    fn bytecode_package_verifies_abi_digests_chunks_workers_and_remaps_stacks() {
+        let fixture = Fixture::new();
+        let entry_source = "export const hostApiVersion = 1;\nexport function fail() { throw new Error('bc-fail'); }\nexport function mount() { return () => {}; }\n";
+        let chunk_source = "export const chunkValue = 'bc-chunk-ok';\n";
+        let worker_source = "export function onMessage(x) { postMessage(x); }\n";
+
+        let entry_bc = js_runtime::compile_module_bytecode("app.mjs", entry_source).expect("compile entry");
+        let chunk_bc = js_runtime::compile_module_bytecode("chunks/lazy.mjs", chunk_source).expect("compile chunk");
+        let worker_bc = js_runtime::compile_module_bytecode("workers/calc.mjs", worker_source).expect("compile worker");
+
+        let mut builder = sourcemap::SourceMapBuilder::new(Some("app.mjs"));
+        builder.add(1, 0, 19, 0, Some("src/Main.tsx"), None, false);
+        builder.add(1, 25, 19, 10, Some("src/Main.tsx"), None, false);
+        let mut entry_map = Vec::new();
+        builder.into_sourcemap().to_writer(&mut entry_map).unwrap();
+        let empty_map = br#"{"version":3,"sources":["src/lazy.ts"],"names":[],"mappings":"AAAA"}"#;
+
+        fixture.publish(b"placeholder", &entry_map);
+        let _ = fs::remove_file(fixture.0.join("app.mjs"));
+        fs::write(fixture.0.join("app.qjsb"), &entry_bc).unwrap();
+        fs::create_dir_all(fixture.0.join("chunks")).unwrap();
+        fs::write(fixture.0.join("chunks/lazy.qjsb"), &chunk_bc).unwrap();
+        fs::write(fixture.0.join("chunks/lazy.mjs.map"), empty_map).unwrap();
+        fs::create_dir_all(fixture.0.join("workers")).unwrap();
+        fs::write(fixture.0.join("workers/calc.qjsb"), &worker_bc).unwrap();
+        fs::write(fixture.0.join("workers/calc.mjs.map"), empty_map).unwrap();
+
+        let mut manifest: serde_json::Value =
+            serde_json::from_slice(&fs::read(fixture.0.join("manifest.json")).unwrap()).unwrap();
+        manifest["entry"] = serde_json::json!("app.qjsb");
+        manifest["bytecodeFormat"] = serde_json::json!(js_runtime::BYTECODE_FORMAT);
+        manifest["quickjsAbi"] = serde_json::json!(js_runtime::quickjs_abi_tag());
+        manifest["chunks"] = serde_json::json!([{
+            "path": "chunks/lazy.qjsb",
+            "sourceMap": "chunks/lazy.mjs.map",
+        }]);
+        manifest["workers"] = serde_json::json!([{
+            "name": "calc",
+            "path": "workers/calc.qjsb",
+            "sourceMap": "workers/calc.mjs.map",
+        }]);
+        fixture.save(manifest.clone());
+
+        let pkg = Rc::new(Package::load(&fixture.0).expect("bytecode package loads"));
+        assert!(pkg.is_bytecode());
+        let resolved_chunk = pkg
+            .resolve_sealed_import("app.mjs", "./chunks/lazy.mjs")
+            .expect("resolve logical .mjs chunk import to sealed .qjsb");
+        assert!(resolved_chunk.ends_with("chunks/lazy.qjsb"));
+        let loaded_chunk = pkg.load_sealed_module(&resolved_chunk).expect("load chunk bytecode");
+        assert!(matches!(loaded_chunk, js_runtime::VerifiedModulePayload::Bytecode(b) if b == chunk_bc));
+
+        let (worker_id, worker_payload) = pkg.load_worker_payload("calc").expect("load worker bytecode");
+        assert_eq!(worker_id, "workers/calc.mjs");
+        assert!(matches!(worker_payload, js_runtime::VerifiedModulePayload::Bytecode(b) if b == worker_bc));
+
+        // Execute bytecode entry and confirm sidecar source map remaps stack trace cleanly.
+        let mut engine = js_runtime::JsRuntime::new(Default::default()).unwrap();
+        engine.set_module_provider(pkg.module_provider());
+        let EntryPayload::Bytecode(loaded_entry) = pkg.take_or_load_entry().expect("entry") else {
+            panic!("expected bytecode entry");
+        };
+        engine.load_bytecode_module(&loaded_entry).expect("eval bytecode");
+        let err = engine
+            .with_module(|_ctx, m| {
+                let fail: rquickjs::Function = m.get("fail")?;
+                fail.call::<_, ()>(())
+            })
+            .expect_err("fail throws");
+        let remapped = pkg.remap_diagnostic(err);
+        assert!(
+            remapped.stack.as_deref().unwrap_or("").contains("src/Main.tsx:20:"),
+            "expected remapped stack from bytecode: {:?}",
+            remapped.stack
+        );
+
+        // Wrong quickjsAbi fails closed before QuickJS touches bytes.
+        let mut bad_abi = manifest.clone();
+        bad_abi["quickjsAbi"] = serde_json::json!("qjs-ng-incompatible-abi");
+        fixture.save(bad_abi);
+        let abi_err = Package::load(&fixture.0).err().unwrap().to_string();
+        assert!(abi_err.contains("incompatible quickjsAbi"), "unexpected abi error: {abi_err}");
+
+        // Restore valid manifest, then tamper .qjsb bytes -> fail closed on digest mismatch.
+        fixture.save(manifest);
+        let mut corrupted = entry_bc.clone();
+        corrupted[0] ^= 0xff;
+        fs::write(fixture.0.join("app.qjsb"), &corrupted).unwrap();
+        let tamper_err = Package::load(&fixture.0).err().unwrap().to_string();
+        assert!(tamper_err.contains("integrity mismatch"), "unexpected tamper error: {tamper_err}");
     }
 }

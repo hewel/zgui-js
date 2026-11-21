@@ -494,6 +494,7 @@ Usage: native-host [OPTIONS]
        native-host preview <COMMAND> [OPTIONS]
        native-host msg <APP_ID> [ARGS...]
        native-host inspect --socket <PATH> [--op snapshot|tree|profile] [--surface <NAME>]
+       native-host compile-bytecode --input <JS> --output <QJSB> [--module-name <NAME>]
 
 Options:
   -h, --help                   Show this help message and exit
@@ -535,6 +536,8 @@ fn format_version(json_mode: bool) -> String {
             "platform": platform,
             "engine": "QuickJS-NG",
             "engineRevision": "6d46d07d",
+            "bytecodeFormat": js_runtime::BYTECODE_FORMAT,
+            "quickjsAbi": js_runtime::quickjs_abi_tag(),
             "styleProfile": "lightningcss-v1",
         })
         .to_string()
@@ -555,6 +558,66 @@ fn parse_window_dim(flag: &str, raw: &str) -> Result<f32, Box<dyn Error>> {
     Ok(value)
 }
 
+fn run_compile_bytecode(args: &[String]) -> Result<(), Box<dyn Error>> {
+    let mut input: Option<PathBuf> = None;
+    let mut output: Option<PathBuf> = None;
+    let mut module_name: Option<String> = None;
+    let mut source_dir: Option<PathBuf> = None;
+    let mut idx = 0;
+    while idx < args.len() {
+        match args[idx].as_str() {
+            "--input" => {
+                idx += 1;
+                let value = args.get(idx).ok_or("--input requires a JS file path")?;
+                input = Some(PathBuf::from(value));
+            }
+            "--output" => {
+                idx += 1;
+                let value = args.get(idx).ok_or("--output requires a .qjsb output path")?;
+                output = Some(PathBuf::from(value));
+            }
+            "--module-name" => {
+                idx += 1;
+                let value = args.get(idx).ok_or("--module-name requires a module identifier")?;
+                module_name = Some(value.clone());
+            }
+            "--source-dir" => {
+                idx += 1;
+                let value = args.get(idx).ok_or("--source-dir requires a directory path")?;
+                source_dir = Some(PathBuf::from(value));
+            }
+            other => {
+                return Err(format!("unknown compile-bytecode option: {other}").into());
+            }
+        }
+        idx += 1;
+    }
+    let input = input.ok_or("compile-bytecode requires --input <JS>")?;
+    let output = output.ok_or("compile-bytecode requires --output <QJSB>")?;
+    let name = module_name.unwrap_or_else(|| {
+        input
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("app.mjs")
+            .to_owned()
+    });
+    let source = std::fs::read_to_string(&input)?;
+    let bytecode =
+        js_runtime::compile_module_bytecode_in_dir(&name, &source, source_dir.as_deref())?;
+    if let Some(parent) = output.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        std::fs::create_dir_all(parent)?;
+    }
+    let tmp = output.with_extension(format!("qjsb.{}.tmp", std::process::id()));
+    std::fs::write(&tmp, &bytecode)?;
+    if let Err(err) = std::fs::rename(&tmp, &output) {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(err.into());
+    }
+    Ok(())
+}
+
 fn main() -> Result<(), Box<dyn Error>> {
     if std::env::args_os().nth(1).is_some_and(|arg| arg == "msg") {
         return control_cli::command(std::env::args_os().skip(2));
@@ -568,6 +631,11 @@ fn main() -> Result<(), Box<dyn Error>> {
         args.next();
         let rest: Vec<String> = args.collect();
         return inspector::run_cli_inspect(&rest);
+    }
+    if args.peek().is_some_and(|arg| arg == "compile-bytecode") {
+        args.next();
+        let rest: Vec<String> = args.collect();
+        return run_compile_bytecode(&rest);
     }
     let mut exit_after = None;
     let mut bundle: Option<PathBuf> = None;

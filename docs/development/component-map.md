@@ -302,3 +302,23 @@ stateDiagram-v2
     TopMenuOpen --> Idle : "Escape, outside click, or Item select"
     SubmenuOpen --> Idle : "Escape or leaf Item select"
 ```
+
+## Headless Primitives (`@hewel/zgui/primitives`)
+
+Zero-style behavioral primitives extracted from `@hewel/zgui/components` without `Portal`, `Popper`, or built-in stylesheet coupling (usable identically inside `WindowSurface`, `LayerSurface`, and `PopupSurface`):
+
+| Export | Source Module | Role |
+| --- | --- | --- |
+| `createPresence` | `packages/ui/src/primitives/overlay.ts` | Animation-aware mount/unmount presence controller |
+| `createOverlayState` | `packages/ui/src/primitives/overlay.ts` | Controlled/uncontrolled open state and anchor/content/label node refs |
+| `createDismissLayer` | `packages/ui/src/primitives/overlay.ts` | Owner-scoped reactive dismiss layer wrapper |
+| `createRovingFocus` | `packages/ui/src/primitives/roving.ts` | Tree-ordered keyboard roving focus controller |
+| `groupOrientation` | `packages/ui/src/primitives/roving.ts` | Orientation validator (`horizontal` / `vertical` / `both`) |
+| `createDelayed` | `packages/ui/src/primitives/delay.ts` | Cancellable hover/typeahead delay scheduler |
+| `MenuRootPrimitive` | `packages/ui/src/primitives/menu.ts` | Headless menu hierarchy root (no Portal/Popper/CSS) |
+| `MenuListPrimitive` | `packages/ui/src/primitives/menu.ts` | Headless `role="menu"` list with roving focus, typeahead, and Escape dismiss |
+| `MenuItemPrimitive` | `packages/ui/src/primitives/menu.ts` | Headless `role="menuItem"` with `data-highlighted` / `data-disabled` hooks |
+| `MenuCheckboxItemPrimitive` | `packages/ui/src/primitives/menu.ts` | Headless `role="menuItemCheckBox"` with `data-state="checked"\|"unchecked"` |
+| `MenuRadioGroupPrimitive` | `packages/ui/src/primitives/menu.ts` | Headless `role="group"` radio provider |
+| `MenuRadioItemPrimitive` | `packages/ui/src/primitives/menu.ts` | Headless `role="menuItemRadio"` with `data-state` / `data-value` |
+| `MenuSubPrimitive` | `packages/ui/src/primitives/menu.ts` | Headless nested submenu context with cascading dismiss |

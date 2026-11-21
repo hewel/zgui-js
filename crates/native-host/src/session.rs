@@ -98,12 +98,12 @@ impl SessionModule {
         }
     }
 
-    fn take_or_load_source(&self) -> Result<Arc<str>> {
+    fn take_or_load_entry(&self) -> Result<crate::package::EntryPayload> {
         match self {
             Self::Package(package) => package
-                .take_or_load_source()
+                .take_or_load_entry()
                 .map_err(|error| SessionError::InvalidState(error.to_string())),
-            Self::Inline { source, .. } => Ok(Arc::clone(source)),
+            Self::Inline { source, .. } => Ok(crate::package::EntryPayload::Source(Arc::clone(source))),
         }
     }
 
@@ -522,9 +522,15 @@ impl Session {
         if let Some(package) = session.module.as_package() {
             engine.set_module_provider(package.module_provider());
         }
-        let source = session.module.take_or_load_source()?;
-        let loaded = engine.load_module(session.module.name(), &source);
-        drop(source);
+        let entry = session.module.take_or_load_entry()?;
+        let loaded = match entry {
+            crate::package::EntryPayload::Source(source) => {
+                engine.load_module(session.module.name(), &source)
+            }
+            crate::package::EntryPayload::Bytecode(bytes) => {
+                engine.load_bytecode_module(&bytes)
+            }
+        };
         session.check_contract()?;
         loaded.map_err(|error| remap(&session.module, error))?;
         engine.with_module(|ctx, loaded| {

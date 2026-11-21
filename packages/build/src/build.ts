@@ -9,12 +9,14 @@ import type {
   WorkerDeclaration,
 } from "./index.ts";
 import { readFileSync, realpathSync, type Dirent } from "node:fs";
-import { readFile, readdir, lstat } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
+import os from "node:os";
 import path from "node:path";
 import { compileBundle, compileWorkerBundle, type CompilationResult } from "./compiler.ts";
 import { typecheckProject } from "./typecheck.ts";
 import { canonicalJson, sha256, moduleIdentity } from "./identity.ts";
+import { compileModuleBytecode, resolveNativeHost } from "./host.ts";
 import { publishGeneration, resourcePath } from "./publication.ts";
 import { syncCssModuleTypes, validateStylesheet } from "./css.ts";
 import { workspaceRoot } from "./sdk.ts";
@@ -270,6 +272,9 @@ export async function buildApplication(
     root = workspaceRoot,
     appDirectory = path.join(root, "apps/examples", app),
     development = false,
+    bytecode = false,
+    hostRoot,
+    hostExecutable,
     extraCapabilities,
     capabilitiesFile,
   }: BuildApplicationOptions = {},
@@ -288,6 +293,9 @@ export async function buildApplication(
     root,
     appDirectory,
     development,
+    bytecode,
+    hostRoot,
+    hostExecutable,
     extraCapabilities,
     capabilitiesFile,
   });
@@ -751,6 +759,9 @@ export async function publishApplication(
     appDirectory,
     signal,
     development = false,
+    bytecode = false,
+    hostRoot,
+    hostExecutable,
     extraCapabilities,
     capabilitiesFile,
   }: BuildApplicationOptions & { root: string; appDirectory: string; signal?: AbortSignal },
@@ -838,14 +849,93 @@ export async function publishApplication(
     .filter(fileName => fileName !== "app.mjs")
     .sort()
     .map(chunkPath => ({ path: chunkPath, sourceMap: `${chunkPath}.map` }));
+  let entryPath = "app.mjs";
+  let bytecodeMeta: { bytecodeFormat: "qjs-bytecode-v1"; quickjsAbi: string } | undefined;
+  let finalChunks = chunks;
+  let finalWorkers = workers;
+  if (bytecode) {
+    const host = await resolveNativeHost({
+      hostExecutable,
+      hostRoot,
+      root,
+      cwd: appDirectory,
+      searchFrom: [import.meta.url],
+      signal,
+    });
+    const bytecodeFormat = host.abi?.bytecodeFormat;
+    const quickjsAbi = host.abi?.quickjsAbi;
+    if (bytecodeFormat !== "qjs-bytecode-v1" || !quickjsAbi) {
+      throw new Error(
+        `Resolved native-host (${host.executable}) does not report qjs-bytecode-v1 ABI metadata for --bytecode compilation`,
+      );
+    }
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "zgui-bytecode-"));
+    try {
+      const toBytecodePath = (jsPath: string): string => {
+        if (!jsPath.endsWith(".mjs")) {
+          throw new Error(`Expected .mjs module path for bytecode compilation: ${jsPath}`);
+        }
+        return `${jsPath.slice(0, -4)}.qjsb`;
+      };
+      const sourceDir = path.join(tempDir, "src");
+      const outDir = path.join(tempDir, "out");
+      const modulePaths = [
+        "app.mjs",
+        ...chunks.map(chunk => chunk.path),
+        ...workers.map(worker => worker.path),
+      ];
+      for (const jsPath of modulePaths) {
+        const jsBytes = files.get(jsPath);
+        if (!jsBytes) throw new Error(`Missing compiled JS module for bytecode: ${jsPath}`);
+        const dest = path.join(sourceDir, jsPath);
+        await mkdir(path.dirname(dest), { recursive: true });
+        await writeFile(dest, jsBytes);
+      }
+      const compileFile = async (jsPath: string): Promise<string> => {
+        const bcPath = toBytecodePath(jsPath);
+        const inPath = path.join(sourceDir, jsPath);
+        const outPath = path.join(outDir, bcPath);
+        const bcBytes = await compileModuleBytecode(host.executable, {
+          input: inPath,
+          output: outPath,
+          moduleName: jsPath,
+          sourceDir,
+          signal,
+        });
+        files.delete(jsPath);
+        files.set(bcPath, bcBytes);
+        return bcPath;
+      };
+      entryPath = await compileFile("app.mjs");
+      finalChunks = [];
+      for (const chunk of chunks) {
+        finalChunks.push({
+          path: await compileFile(chunk.path),
+          sourceMap: chunk.sourceMap,
+        });
+      }
+      finalWorkers = [];
+      for (const worker of workers) {
+        finalWorkers.push({
+          name: worker.name,
+          path: await compileFile(worker.path),
+          sourceMap: worker.sourceMap,
+        });
+      }
+      bytecodeMeta = { bytecodeFormat: "qjs-bytecode-v1", quickjsAbi };
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  }
   const identity: ManifestIdentity = {
     schemaVersion: 2,
     id,
     hostApiVersion: 1,
-    entry: "app.mjs",
+    entry: entryPath,
     sourceMap: "app.mjs.map",
-    ...(chunks.length > 0 ? { chunks } : {}),
-    ...(workers.length > 0 ? { workers } : {}),
+    ...(bytecodeMeta ?? {}),
+    ...(finalChunks.length > 0 ? { chunks: finalChunks } : {}),
+    ...(finalWorkers.length > 0 ? { workers: finalWorkers } : {}),
     styles: [...(componentsCss !== undefined ? ["components.css"] : []), "app.css"],
     assets: [...assets.keys()].sort(),
     fonts,

@@ -46,6 +46,8 @@
       "files": [
         "packages/ui/src/components/delay.ts",
         "packages/ui/src/components/overlay.ts",
+        "packages/ui/src/primitives/delay.ts",
+        "packages/ui/src/primitives/overlay.ts",
         "packages/ui/src/spring.ts",
         "packages/ui/src/timers.ts"
       ],
