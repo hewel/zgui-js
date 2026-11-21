@@ -265,9 +265,10 @@ fn hash_of(style: &PaintStyle, scale: f32) -> u64 {
     for value in style.border.colors {
         hash = color(hash, value);
     }
-    hash = hash
-        .u32(style.border.style as u32)
-        .u32(u32::from(style.border.invisible));
+    for line in style.border.styles {
+        hash = hash.u32(line as u32);
+    }
+    hash = hash.u32(u32::from(style.border.invisible));
     for shadow in style.shadows.iter().chain(style.text_shadows.iter()) {
         hash = color(hash, shadow.color)
             .f32s(&[

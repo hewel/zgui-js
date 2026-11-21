@@ -172,3 +172,97 @@ test("clip-path: path(...) clips decoded images and boxes, and rounded stroke ca
   const svgCapPx = pixelAt(png, Math.round(svgBounds.x + 15), Math.round(svgBounds.y + 20));
   assert.ok(svgCapPx[0] > 200 && svgCapPx[1] > 120, `svg-round cap at x=15 must be amber, got ${svgCapPx}`);
 });
+
+const clipAndBordersSource = `
+import { mountStylesheet, renderApp } from "@hewel/zgui";
+import type { NativeNode } from "@hewel/zgui";
+
+export const hostApiVersion = 1;
+
+export function mount(root: NativeNode) {
+  return renderApp(() => {
+    mountStylesheet("reset", ":root { padding: 0; background: #10141c; }");
+    return <column style={{ width: "600px", height: "300px", backgroundColor: "#10141c", padding: "36px 20px", gap: "24px" }}>
+      <row style={{ gap: "20px" }}>
+        <box
+          testId="wide-circle"
+          style={{ width: "260px", height: "110px", backgroundColor: "#2563eb", clipPath: "circle(45% at 50% 50%)" }}
+        />
+        <box
+          testId="sibling-inset"
+          style={{ width: "260px", height: "110px", backgroundColor: "#059669", clipPath: "inset(10% 8% round 22px)" }}
+        />
+      </row>
+      <box
+        testId="mixed-borders"
+        style={{
+          width: "240px",
+          height: "60px",
+          backgroundColor: "#10141c",
+          borderTopWidth: "4px",
+          borderRightWidth: "4px",
+          borderBottomWidth: "6px",
+          borderLeftWidth: "4px",
+          borderTopStyle: "dashed",
+          borderRightStyle: "dotted",
+          borderBottomStyle: "double",
+          borderLeftStyle: "solid",
+          borderTopColor: "#3b82f6",
+          borderRightColor: "#10b981",
+          borderBottomColor: "#f59e0b",
+          borderLeftColor: "#ec4899",
+        }}
+      />
+    </column>;
+  }, root);
+}
+`;
+
+test("oversized clip-path stays inside border_box without sibling bleed (#41) and per-side border styles including double render independently (#45)", async t => {
+  const temp = await createTempWorkspace("preview-clip-borders-");
+  t.after(() => temp.cleanup());
+  const bundle = await buildFixtureApp(path.join(temp.dir, "app"), "clip-borders", clipAndBordersSource, {
+    rawSource: true,
+  });
+  const { out } = await runScenario({
+    projectDir: temp.dir,
+    bundle,
+    name: "clip-borders",
+    requiredCapabilities: [],
+    width: 600,
+    height: 300,
+    scale: 1,
+    steps: [{ id: "snap", op: "capture", captureId: "snap" }],
+  });
+
+  const tree = await readTree(out, "snap");
+  const png = await readPng(path.join(out, "captures/snap.png"));
+
+  // #41: Wide circle extends above/below 110px height, so pixels just outside its border_box and above its sibling must stay dark background.
+  const circleBounds = getNode(tree, "wide-circle").boundsLogical;
+  const siblingBounds = getNode(tree, "sibling-inset").boundsLogical;
+  const centerPx = pixelAt(png, Math.round(circleBounds.x + circleBounds.width / 2), Math.round(circleBounds.y + circleBounds.height / 2));
+  assert.ok(centerPx[2] > 180 && centerPx[0] < 80, `wide-circle center must be blue, got ${centerPx}`);
+  for (let x = Math.round(circleBounds.x); x < Math.round(siblingBounds.x + siblingBounds.width); x += 8) {
+    for (const dy of [-4, -12, -20]) {
+      expectBackground(pixelAt(png, x, Math.round(circleBounds.y + dy)), `above clip row at (${x}, ${Math.round(circleBounds.y + dy)})`);
+    }
+    expectBackground(pixelAt(png, x, Math.round(circleBounds.y + circleBounds.height + 6)), `below clip row at x=${x}`);
+  }
+
+  // #45: Left solid border is continuous pink along its vertical span; bottom 6px double border has two distinct amber bands separated by a dark gap.
+  const borderBox = getNode(tree, "mixed-borders").boundsLogical;
+  const leftX = Math.round(borderBox.x + 1);
+  for (let y = Math.round(borderBox.y + 8); y < Math.round(borderBox.y + borderBox.height - 8); y += 3) {
+    const px = pixelAt(png, leftX, y);
+    assert.ok(px[0] > 180 && px[2] > 100 && px[1] < 110, `left solid border at (${leftX},${y}) must be continuous pink, got ${px}`);
+  }
+  const midX = Math.round(borderBox.x + borderBox.width / 2);
+  const bottomY = Math.round(borderBox.y + borderBox.height);
+  const outerAmber = pixelAt(png, midX, bottomY - 1);
+  const gapPx = pixelAt(png, midX, bottomY - 3);
+  const innerAmber = pixelAt(png, midX, bottomY - 5);
+  assert.ok(outerAmber[0] > 180 && outerAmber[1] > 120 && outerAmber[2] < 60, `double bottom outer band must be amber, got ${outerAmber}`);
+  expectBackground(gapPx, "double bottom middle gap");
+  assert.ok(innerAmber[0] > 180 && innerAmber[1] > 120 && innerAmber[2] < 60, `double bottom inner band must be amber, got ${innerAmber}`);
+});

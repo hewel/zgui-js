@@ -67,6 +67,17 @@ enum ClipPathSpec {
 }
 
 impl ClipPathShape {
+    #[cfg(test)]
+    pub(crate) fn from_path(path: BezPath) -> Self {
+        Self {
+            hash: 1,
+            spec: ClipPathSpec::Path {
+                fill_rule: peniko::Fill::NonZero,
+                path: Arc::new(path),
+            },
+        }
+    }
+
     /// Deterministic hash identifying this clip-path geometry.
     #[must_use]
     pub fn hash(&self) -> u64 {

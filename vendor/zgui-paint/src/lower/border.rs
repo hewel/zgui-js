@@ -43,17 +43,12 @@ register_properties! {
 }
 
 /// How the four sides of a box's border are drawn.
-///
-/// One line style is carried rather than four, because a quad is drawn by one shader with one dash
-/// pattern running round it. The four sides' styles are reduced to that one: `dotted` or `dashed`
-/// anywhere wins over `solid`, because those two change the shape of the line rather than only its
-/// shade.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct BorderPaint {
     /// The colours of the top, right, bottom and left sides, in that order.
     pub colors: [Color; 4],
-    /// How the line is drawn.
-    pub style: LineStyle,
+    /// The line styles of the top, right, bottom and left sides, in that order.
+    pub styles: [LineStyle; 4],
     /// Whether every side that has a width is invisible — `none`, `hidden`, or fully transparent.
     pub invisible: bool,
 }
@@ -63,13 +58,35 @@ impl Default for BorderPaint {
     fn default() -> Self {
         Self {
             colors: [Color::TRANSPARENT; 4],
-            style: LineStyle::Solid,
+            styles: [LineStyle::Solid; 4],
             invisible: true,
         }
     }
 }
 
-/// How a border line is drawn, including the two CSS styles that are drawn as something else.
+impl BorderPaint {
+    /// Returns the single scene border style when all visible sides can share one quad pass.
+    pub fn single_quad_style(&self, widths: [f32; 4]) -> Option<BorderStyle> {
+        let mut active: Option<LineStyle> = None;
+        for side in 0..4 {
+            if widths[side] <= 0.0 || self.colors[side].alpha() == 0.0 {
+                continue;
+            }
+            let line = self.styles[side];
+            if line == LineStyle::Double {
+                return None;
+            }
+            match active {
+                None => active = Some(line),
+                Some(prev) if prev == line => {}
+                Some(_) => return None,
+            }
+        }
+        Some(active.unwrap_or(LineStyle::Solid).to_scene())
+    }
+}
+
+/// How a border line is drawn.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum LineStyle {
     /// One continuous line.
@@ -79,13 +96,25 @@ pub enum LineStyle {
     Dashed,
     /// Round dots with gaps.
     Dotted,
+    /// Two parallel solid lines separated by a transparent gap.
+    Double,
 }
 
 impl LineStyle {
-    /// The scene's own spelling of this style.
+    /// Lowers a CSS border style keyword to a painted line style.
+    pub fn from_css(value: BorderStyleValue) -> Self {
+        match value {
+            BorderStyleValue::Dashed => Self::Dashed,
+            BorderStyleValue::Dotted => Self::Dotted,
+            BorderStyleValue::Double => Self::Double,
+            _ => Self::Solid,
+        }
+    }
+
+    /// The scene's own spelling of this style for single-stroke quads.
     pub fn to_scene(self) -> BorderStyle {
         match self {
-            Self::Solid => BorderStyle::Solid,
+            Self::Solid | Self::Double => BorderStyle::Solid,
             Self::Dashed => BorderStyle::Dashed,
             Self::Dotted => BorderStyle::Dotted,
         }
@@ -103,9 +132,10 @@ pub fn of(style: &ComputedStyle) -> BorderPaint {
         (border.border_left_style, &border.border_left_color),
     ];
     let colors = sides.map(|(line, color)| side_color(line, color, current));
+    let styles = sides.map(|(line, _)| LineStyle::from_css(line));
     BorderPaint {
         colors,
-        style: dominant(sides.map(|(line, _)| line)),
+        styles,
         invisible: colors.iter().all(|color| color.alpha() == 0.0),
     }
 }
@@ -124,22 +154,6 @@ fn side_color(
         BorderStyleValue::None | BorderStyleValue::Hidden => Color::TRANSPARENT,
         _ => resolve(color, current),
     }
-}
-
-/// The one line style a quad draws with, chosen from the four sides'.
-///
-/// `dashed` and `dotted` are the two that change the shape of the line rather than only its shade,
-/// so either of them anywhere wins over `solid`; the rest — `double`, `groove`, `ridge`, `inset`,
-/// `outset` — are drawn as a solid line of the same width, which is what a border of one pixel
-/// looks like in every engine anyway.
-fn dominant(styles: [BorderStyleValue; 4]) -> LineStyle {
-    if styles.contains(&BorderStyleValue::Dotted) {
-        return LineStyle::Dotted;
-    }
-    if styles.contains(&BorderStyleValue::Dashed) {
-        return LineStyle::Dashed;
-    }
-    LineStyle::Solid
 }
 
 /// The four elliptical corner radii of a box's border box, in device pixels.
@@ -180,33 +194,46 @@ pub fn inner_radii(
 
 #[cfg(test)]
 mod tests {
+    use zgui_color::Color;
     use zgui_css::values::border::BorderStyleValue;
     use zgui_geom::{Corners, DevicePx, Edges, Vec2};
+    use zgui_scene::prim::quad::BorderStyle;
 
-    use super::{LineStyle, dominant, inner_radii};
+    use super::{BorderPaint, LineStyle, inner_radii};
 
     #[test]
-    fn a_dotted_side_makes_the_whole_border_dotted() {
-        let styles = [
-            BorderStyleValue::Solid,
-            BorderStyleValue::Dotted,
-            BorderStyleValue::Solid,
-            BorderStyleValue::Dashed,
-        ];
-        assert_eq!(dominant(styles), LineStyle::Dotted);
+    fn mixed_per_side_styles_and_double_disable_single_quad_collapse() {
+        let mixed = BorderPaint {
+            colors: [Color::BLACK; 4],
+            styles: [
+                LineStyle::Dashed,
+                LineStyle::Dotted,
+                LineStyle::Double,
+                LineStyle::Solid,
+            ],
+            invisible: false,
+        };
+        assert_eq!(mixed.single_quad_style([3.0, 3.0, 5.0, 4.0]), None);
+        assert_eq!(mixed.single_quad_style([3.0, 0.0, 0.0, 0.0]), Some(BorderStyle::Dashed));
+        assert_eq!(mixed.single_quad_style([0.0, 3.0, 0.0, 0.0]), Some(BorderStyle::Dotted));
+        assert_eq!(mixed.single_quad_style([0.0, 0.0, 5.0, 0.0]), None);
+        assert_eq!(mixed.single_quad_style([0.0, 0.0, 0.0, 4.0]), Some(BorderStyle::Solid));
     }
 
     #[test]
-    fn the_styles_drawn_as_a_solid_line_are_a_solid_line() {
+    fn from_css_preserves_dashed_dotted_double_and_solid() {
+        assert_eq!(LineStyle::from_css(BorderStyleValue::Dashed), LineStyle::Dashed);
+        assert_eq!(LineStyle::from_css(BorderStyleValue::Dotted), LineStyle::Dotted);
+        assert_eq!(LineStyle::from_css(BorderStyleValue::Double), LineStyle::Double);
         for style in [
-            BorderStyleValue::Double,
+            BorderStyleValue::Solid,
             BorderStyleValue::Groove,
             BorderStyleValue::Ridge,
             BorderStyleValue::Inset,
             BorderStyleValue::Outset,
             BorderStyleValue::None,
         ] {
-            assert_eq!(dominant([style; 4]), LineStyle::Solid, "{style:?}");
+            assert_eq!(LineStyle::from_css(style), LineStyle::Solid, "{style:?}");
         }
     }
 

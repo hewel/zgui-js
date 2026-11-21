@@ -404,3 +404,13 @@ Regression gates:
 Regression gate:
 
     cargo test -j 4 --manifest-path vendor/zgui-platform-wayland/Cargo.toml --lib theme --offline
+
+## Clipped background bounds and per-side border styles
+
+`zgui-paint` clips `clip-path` background `VectorItem`s in both vector-local space (`VectorClip` for `0..width, 0..height`) and scene clip space (`ClipLink::shaped` for `border_box` with radii/corner shape) so shapes extending past `border_box` (e.g., `circle(45%)` on a wide/short box) never paint or bleed into neighboring elements.
+
+`BorderPaint` also retains per-side `styles: [LineStyle; 4]` including `LineStyle::Double`. Uniform non-double borders keep the single-quad fast path; mixed per-side styles or `double` borders emit independent per-style border quads (with `double` rendered as outer + inset inner solid bands when width >= 3 device px).
+
+Regression gate:
+
+    cargo test -j 4 --manifest-path vendor/zgui-paint/Cargo.toml --lib --offline

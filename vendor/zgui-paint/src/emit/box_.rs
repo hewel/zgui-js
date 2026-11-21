@@ -15,7 +15,7 @@ use zgui_scene::{
 use crate::emit::paint::gradient_paint;
 use crate::lower::PaintStyle;
 use crate::lower::anim::{OwnedPaints, border_paint};
-use crate::lower::border::inner_radii;
+use crate::lower::border::{LineStyle, inner_radii};
 
 /// Where a box's decorations are drawn.
 #[derive(Clone, Copy, Debug)]
@@ -130,25 +130,152 @@ pub fn background_and_border(
     }
     let (fills, draws_border) = fills_of(scene, style, placement);
     let borders = border_widths(placement.border);
-    let stroke = match placement.owner_of(PaintRole::BorderSides) {
-        Some(name) if draws_border => scene
-            .paints
-            .owned(name, border_paint(style.border.colors, placement.border)),
-        _ => border_stroke(scene, style, borders, true),
-    };
-    let last = fills.len().saturating_sub(1);
+    let uniform_border = draws_border
+        .then(|| style.border.single_quad_style(borders))
+        .flatten();
+    if let Some(border_style) = uniform_border {
+        let stroke = match placement.owner_of(PaintRole::BorderSides) {
+            Some(name) => scene
+                .paints
+                .owned(name, border_paint(style.border.colors, placement.border)),
+            None => border_stroke(scene, style, borders, true),
+        };
+        let last = fills.len().saturating_sub(1);
+        let mut pushed = 0;
+        for (index, fill) in fills.into_iter().enumerate() {
+            pushed += usize::from(
+                push(
+                    scene,
+                    placement,
+                    style,
+                    fill,
+                    (index == last).then_some((borders, stroke, border_style)),
+                )
+                .is_some(),
+            );
+        }
+        return pushed;
+    }
     let mut pushed = 0;
-    for (index, fill) in fills.into_iter().enumerate() {
+    for fill in fills {
+        if fill == PaintRef::NONE {
+            continue;
+        }
+        pushed += usize::from(push(scene, placement, style, fill, None).is_some());
+    }
+    if draws_border {
+        pushed += emit_mixed_borders(scene, placement, style, borders);
+    }
+    pushed
+}
+
+/// Emits independent per-side border quads when sides mix line styles or include `double`.
+fn emit_mixed_borders(
+    scene: &mut Scene,
+    placement: BoxPlacement,
+    style: &PaintStyle,
+    borders: [f32; 4],
+) -> usize {
+    let mut pushed = 0;
+    let owned_stroke = placement.owner_of(PaintRole::BorderSides).map(|name| {
+        scene
+            .paints
+            .owned(name, border_paint(style.border.colors, placement.border))
+    });
+    for line in [LineStyle::Solid, LineStyle::Dashed, LineStyle::Dotted] {
+        let mut masked = [0.0f32; 4];
+        let mut any = false;
+        for side in 0..4 {
+            if style.border.styles[side] == line
+                && borders[side] > 0.0
+                && (owned_stroke.is_some() || style.border.colors[side].alpha() > 0.0)
+            {
+                masked[side] = borders[side];
+                any = true;
+            }
+        }
+        if !any {
+            continue;
+        }
+        let stroke = owned_stroke.unwrap_or_else(|| border_stroke(scene, style, masked, true));
         pushed += usize::from(
             push(
                 scene,
                 placement,
                 style,
-                fill,
-                (index == last).then_some((borders, stroke, style)),
+                PaintRef::NONE,
+                Some((masked, stroke, line.to_scene())),
             )
             .is_some(),
         );
+    }
+    let mut outer_widths = [0.0f32; 4];
+    let mut inner_widths = [0.0f32; 4];
+    let mut inner_insets = [0.0f32; 4];
+    let mut any_outer = false;
+    let mut any_inner = false;
+    for side in 0..4 {
+        let width = borders[side];
+        if style.border.styles[side] != LineStyle::Double
+            || width <= 0.0
+            || (owned_stroke.is_none() && style.border.colors[side].alpha() == 0.0)
+        {
+            inner_insets[side] = width;
+            continue;
+        }
+        if width < 3.0 {
+            outer_widths[side] = width;
+            any_outer = true;
+            inner_insets[side] = width;
+        } else {
+            let band = (width / 3.0).floor().max(1.0);
+            outer_widths[side] = band;
+            inner_widths[side] = band;
+            inner_insets[side] = width - band;
+            any_outer = true;
+            any_inner = true;
+        }
+    }
+    if any_outer {
+        let stroke = owned_stroke.unwrap_or_else(|| border_stroke(scene, style, outer_widths, true));
+        pushed += usize::from(
+            push(
+                scene,
+                placement,
+                style,
+                PaintRef::NONE,
+                Some((outer_widths, stroke, zgui_scene::prim::quad::BorderStyle::Solid)),
+            )
+            .is_some(),
+        );
+    }
+    if any_inner {
+        let inset_edges = Edges {
+            top: DevicePx(inner_insets[0]),
+            right: DevicePx(inner_insets[1]),
+            bottom: DevicePx(inner_insets[2]),
+            left: DevicePx(inner_insets[3]),
+        };
+        let inner_box = placement.border_box.inset(inset_edges);
+        if !inner_box.is_empty() {
+            let inner_placement = BoxPlacement {
+                border_box: inner_box,
+                radii: inner_radii(placement.radii, inset_edges),
+                ..placement
+            };
+            let stroke =
+                owned_stroke.unwrap_or_else(|| border_stroke(scene, style, inner_widths, true));
+            pushed += usize::from(
+                push(
+                    scene,
+                    inner_placement,
+                    style,
+                    PaintRef::NONE,
+                    Some((inner_widths, stroke, zgui_scene::prim::quad::BorderStyle::Solid)),
+                )
+                .is_some(),
+            );
+        }
     }
     pushed
 }
@@ -162,6 +289,8 @@ pub(crate) fn clipped_background(
     clip_shape: &crate::lower::ClipPathShape,
     reference_box: Rect<DevicePx, Device>,
 ) -> usize {
+    use zgui_scene::kurbo::Shape as _;
+
     if placement.border_box.is_empty() {
         return 0;
     }
@@ -185,6 +314,30 @@ pub(crate) fn clipped_background(
     ));
     let local = placement.border_box;
     let ink = crate::emit::vector::under(scene, placement.transform, local);
+    // Clip the vector path in its own local space to [0..width, 0..height] and clip the
+    // composited item to the element's border box so shapes extending past border_box
+    // (e.g., circle(45%) on a wide/short card) never bleed outside the box or corrupt
+    // neighboring rasterized regions.
+    let box_rect = zgui_scene::kurbo::Rect::new(
+        0.0,
+        0.0,
+        f64::from(placement.border_box.size.width.0),
+        f64::from(placement.border_box.size.height.0),
+    );
+    let vector_clips = vec![zgui_scene::VectorClip {
+        path: std::sync::Arc::new(box_rect.to_path(0.05)),
+        rule: zgui_scene::peniko::Fill::NonZero,
+    }];
+    let box_clip = scene.clips.push(
+        placement.clip,
+        zgui_scene::ClipLink::shaped(
+            placement.border_box,
+            placement.radii,
+            style.corner_shape,
+            placement.transform,
+        ),
+    );
+    scene.note_minted_clip(box_clip);
     let mut pushed = 0;
     for fill in fills {
         if fill == PaintRef::NONE {
@@ -192,7 +345,8 @@ pub(crate) fn clipped_background(
         }
         let mut item = zgui_scene::VectorItem::filled(id, std::sync::Arc::clone(&path), fill)
             .placed(place)
-            .clipped(placement.clip);
+            .clipped(box_clip)
+            .inside(vector_clips.clone());
         item.fill_rule = fill_rule;
         item.ink = ink;
         item.local_ink = local;
@@ -331,15 +485,15 @@ fn push(
     placement: BoxPlacement,
     style: &PaintStyle,
     fill: PaintRef,
-    border: Option<([f32; 4], PaintRef, &PaintStyle)>,
+    border: Option<([f32; 4], PaintRef, zgui_scene::prim::quad::BorderStyle)>,
 ) -> Option<zgui_scene::DrawOrder> {
     let mut quad = Quad::filled(placement.border_box, fill)
         .clipped(placement.clip)
         .transformed(placement.transform)
         .with_radii(placement.radii)
         .with_corner_shape(style.corner_shape);
-    if let Some((widths, stroke, style)) = border {
-        quad = quad.with_border(widths, stroke, style.border.style.to_scene());
+    if let Some((widths, stroke, border_style)) = border {
+        quad = quad.with_border(widths, stroke, border_style);
     }
     // Only a paint that is read at a point has an origin to be read from, and saying so is what
     // keeps every flat-filled box in the document carrying a zero it does not use.
@@ -579,5 +733,105 @@ mod tests {
         let radii = Corners::uniform(Vec2::new(DevicePx(2.0), DevicePx(2.0)));
         let shrunk = grow(radii, -10.0);
         assert_eq!(shrunk.top_left, Vec2::new(DevicePx(0.0), DevicePx(0.0)));
+    }
+
+    #[test]
+    fn clipped_background_clips_oversized_shape_to_border_box() {
+        let mut style = crate::lower::lower(&zgui_css::StyleDraft::initial().build(), 1.0);
+        style.background.color = zgui_color::Color::srgb(0.15, 0.39, 0.92, 1.0);
+        let box_rect = Rect::new(
+            Point::new(DevicePx(20.0), DevicePx(40.0)),
+            Size::new(DevicePx(265.0), DevicePx(120.0)),
+        );
+        let place = BoxPlacement {
+            border_box: box_rect,
+            radii: Corners::uniform(Vec2::new(DevicePx(0.0), DevicePx(0.0))),
+            ..placement()
+        };
+        // Oversized shape extending 30px above and below border_box.
+        let mut raw = zgui_scene::kurbo::BezPath::new();
+        raw.move_to((0.0, -30.0));
+        raw.line_to((265.0, -30.0));
+        raw.line_to((265.0, 150.0));
+        raw.line_to((0.0, 150.0));
+        raw.close_path();
+        let shape = crate::lower::ClipPathShape::from_path(raw);
+        let mut scene = zgui_scene::Scene::new();
+        scene.begin_frame(Size::<i32, Device>::new(600, 400));
+        assert_eq!(
+            super::clipped_background(
+                &mut scene,
+                zgui_scene::VectorId(7),
+                &style,
+                place,
+                &shape,
+                box_rect,
+            ),
+            1
+        );
+        let item = &scene.primitives.vectors[0];
+        assert_ne!(item.clip, zgui_scene::ClipId::ROOT, "must push a border_box scene clip");
+        assert_eq!(item.clips.len(), 1, "must clip vector path to local border_box bounds");
+        let clip_bounds = zgui_scene::kurbo::Shape::bounding_box(&*item.clips[0].path);
+        assert_eq!(clip_bounds, zgui_scene::kurbo::Rect::new(0.0, 0.0, 265.0, 120.0));
+    }
+
+    #[test]
+    fn mixed_per_side_borders_and_double_emit_independent_quads() {
+        use zgui_scene::prim::quad::BorderStyle;
+
+        let mut style = crate::lower::lower(&zgui_css::StyleDraft::initial().build(), 1.0);
+        style.background.color = zgui_color::Color::srgb(0.9, 0.9, 0.9, 1.0);
+        style.border.invisible = false;
+        style.border.colors = [
+            zgui_color::Color::srgb(0.2, 0.5, 1.0, 1.0),
+            zgui_color::Color::srgb(0.1, 0.7, 0.5, 1.0),
+            zgui_color::Color::srgb(1.0, 0.6, 0.0, 1.0),
+            zgui_color::Color::srgb(0.9, 0.3, 0.6, 1.0),
+        ];
+        style.border.styles = [
+            super::LineStyle::Dashed,
+            super::LineStyle::Dotted,
+            super::LineStyle::Double,
+            super::LineStyle::Solid,
+        ];
+        let place = BoxPlacement {
+            border_box: Rect::new(
+                Point::new(DevicePx(10.0), DevicePx(10.0)),
+                Size::new(DevicePx(200.0), DevicePx(60.0)),
+            ),
+            border: zgui_geom::Edges {
+                top: DevicePx(3.0),
+                right: DevicePx(3.0),
+                bottom: DevicePx(5.0),
+                left: DevicePx(4.0),
+            },
+            radii: Corners::uniform(Vec2::new(DevicePx(0.0), DevicePx(0.0))),
+            ..placement()
+        };
+        let mut scene = zgui_scene::Scene::new();
+        scene.begin_frame(Size::<i32, Device>::new(400, 200));
+        let pushed = super::background_and_border(
+            &mut scene,
+            &style,
+            place,
+            &crate::content::shader::NoShaders,
+            None,
+        );
+        // 1 fill + 1 solid (left) + 1 dashed (top) + 1 dotted (right) + 2 double bands (bottom) = 6 quads.
+        assert_eq!(pushed, 6);
+        let quads = &scene.primitives.quads;
+        assert_eq!(quads.len(), 6);
+        assert!(quads.iter().any(|q| q.style == BorderStyle::Dashed as u32 && q.border == [3.0, 0.0, 0.0, 0.0]));
+        assert!(quads.iter().any(|q| q.style == BorderStyle::Dotted as u32 && q.border == [0.0, 3.0, 0.0, 0.0]));
+        assert!(quads.iter().any(|q| q.style == BorderStyle::Solid as u32 && q.border == [0.0, 0.0, 0.0, 4.0]));
+        // Bottom 5px double splits into two 1px solid bands separated by a 3px gap (outer at bottom edge, inner inset 4px from bottom).
+        let double_bands: Vec<_> = quads
+            .iter()
+            .filter(|q| q.style == BorderStyle::Solid as u32 && q.border == [0.0, 0.0, 1.0, 0.0])
+            .collect();
+        assert_eq!(double_bands.len(), 2);
+        assert_eq!(double_bands[0].bounds, [10.0, 10.0, 200.0, 60.0]);
+        assert_eq!(double_bands[1].bounds, [14.0, 13.0, 193.0, 53.0]);
     }
 }
