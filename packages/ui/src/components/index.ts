@@ -160,3 +160,10 @@ export { TreeView, TreeItem } from "./tree-view.js";
 export type {
   TreeNodeData, TreeItemRenderState, TreeVirtualizeOptions, TreeViewProps, TreeItemProps,
 } from "./tree-view.js";
+export {
+  CommandPalette, CommandPaletteProvider, useCommandPalette, scoreCommandMatch,
+} from "./command-palette.js";
+export type {
+  CommandItem, CommandFilter, CommandPaletteContextValue,
+  CommandPaletteProviderProps, CommandPaletteProps,
+} from "./command-palette.js";

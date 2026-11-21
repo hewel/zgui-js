@@ -150,6 +150,7 @@ test("gallery renders workbench tab cleanly", async () => {
     check("workbench-split-pane", "exists", true),
     check("workbench-tree", "exists", true),
     check("workbench-tree-declarative", "exists", true),
+    check("workbench-command-trigger", "exists", true),
     click("workbench-toast-success"),
     advance(80),
     capture("tab-workbench"),

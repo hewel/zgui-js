@@ -1,9 +1,10 @@
 import { createSignal } from "@hewel/zgui";
 import {
-  Badge, Button, Combobox, Select, SplitPane, SplitPaneHandle, SplitPanePanel,
-  ToastProvider, TreeItem, TreeView, toast,
+  Badge, Button, Combobox, CommandPalette, CommandPaletteProvider, Kbd, KbdGroup, Select,
+  SplitPane, SplitPaneHandle, SplitPanePanel, ToastProvider, TreeItem, TreeView, toast,
+  useCommandPalette,
 } from "@hewel/zgui/components";
-import type { SelectOption, TreeNodeData } from "@hewel/zgui/components";
+import type { CommandItem, SelectOption, TreeNodeData } from "@hewel/zgui/components";
 import { DemoRow, Panel } from "../shell.js";
 
 const FRAMEWORK_OPTIONS: readonly SelectOption[] = [
@@ -34,15 +35,65 @@ const WORKSPACE_TREE: readonly TreeNodeData[] = [
   { id: "README.md", label: "README.md" },
 ];
 
+function CommandPaletteShowcase(props: {
+  lastCommand: () => string;
+  onRun: (command: CommandItem) => void;
+}) {
+  const palette = useCommandPalette();
+  return (
+    <Panel
+      title="CommandPalette"
+      note="Modal fuzzy command search over Dialog, VirtualList, Kbd badges, and provider-scoped registries"
+      wide
+    >
+      <DemoRow label="Palette trigger">
+        <Button
+          testId="workbench-command-trigger"
+          size="sm"
+          variant="outline"
+          onClick={() => palette.setOpen(true)}
+        >
+          <text>Open Command Palette</text>
+          <KbdGroup>
+            <Kbd>Ctrl</Kbd>
+            <Kbd>K</Kbd>
+          </KbdGroup>
+        </Button>
+        <Badge testId="workbench-command-last" variant="secondary">
+          <text>{props.lastCommand()}</text>
+        </Badge>
+      </DemoRow>
+      <CommandPalette
+        testId="workbench-command-palette"
+        inputTestId="workbench-command-input"
+        listTestId="workbench-command-list"
+        placeholder="Search workbench commands..."
+        onSelect={props.onRun}
+      />
+    </Panel>
+  );
+}
+
 export function WorkbenchSection(props: { onAction: (label: string) => void }) {
   const [splitSizes, setSplitSizes] = createSignal<readonly number[]>([36, 64]);
   const [selectedFramework, setSelectedFramework] = createSignal<string>("zgui");
   const [comboFramework, setComboFramework] = createSignal<string>("solid");
   const [selectedTree, setSelectedTree] = createSignal<string>("docs/intro.md");
   const [expandedTree, setExpandedTree] = createSignal<readonly string[]>(["docs", "src"]);
+  const [lastCommand, setLastCommand] = createSignal<string>("Last: none");
+
+  const galleryCommands: readonly CommandItem[] = [
+    { id: "file.new", label: "New Document", group: "File", shortcut: ["Ctrl", "N"], keywords: ["create", "buffer"] },
+    { id: "file.open", label: "Open Workspace", group: "File", shortcut: ["Ctrl", "O"], keywords: ["folder", "project"] },
+    { id: "file.save", label: "Save All Changes", group: "File", shortcut: ["Ctrl", "S"], keywords: ["write", "disk"] },
+    { id: "view.split", label: "Toggle Split Preview", group: "View", shortcut: ["Ctrl", "\\"], keywords: ["pane", "layout"] },
+    { id: "view.theme", label: "Switch Color Scheme", group: "View", shortcut: ["Ctrl", "Shift", "T"], keywords: ["dark", "light"] },
+    { id: "tools.export", label: "Export Snapshot", group: "Tools", description: "Capture PNG + accessibility tree", disabled: true },
+  ];
 
   return (
-    <row class="panel-grid" testId="section-workbench">
+    <CommandPaletteProvider commands={galleryCommands}>
+      <row class="panel-grid" testId="section-workbench">
       <Panel
         title="SplitPane"
         note="Draggable horizontal split panes with pointer capture, keyboard resize, and collapsible bounds"
@@ -195,7 +246,15 @@ export function WorkbenchSection(props: { onAction: (label: string) => void }) {
           </TreeView>
         </DemoRow>
       </Panel>
+      <CommandPaletteShowcase
+        lastCommand={lastCommand}
+        onRun={cmd => {
+          setLastCommand(`Last: ${cmd.label}`);
+          props.onAction(`Command ${cmd.id}`);
+        }}
+      />
       <ToastProvider />
     </row>
+    </CommandPaletteProvider>
   );
 }

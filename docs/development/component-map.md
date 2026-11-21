@@ -162,6 +162,10 @@ applied before generation and documented in `packages/ui/upstream/ORIGIN`.
 | `toast` | `packages/ui/src/components/toast.ts` | Workbench | `tests/preview/workbench-components.test.mjs` |
 | `TreeView` | `packages/ui/src/components/tree-view.ts` | Workbench | `tests/preview/workbench-components.test.mjs` |
 | `TreeItem` | `packages/ui/src/components/tree-view.ts` | Workbench | `tests/preview/workbench-components.test.mjs` |
+| `CommandPalette` | `packages/ui/src/components/command-palette.ts` | Workbench | `tests/preview/command-palette.test.mjs` |
+| `CommandPaletteProvider` | `packages/ui/src/components/command-palette.ts` | Workbench | `tests/preview/command-palette.test.mjs` |
+| `useCommandPalette` | `packages/ui/src/components/command-palette.ts` | Workbench | `tests/preview/command-palette.test.mjs` |
+| `scoreCommandMatch` | `packages/ui/src/components/command-palette.ts` | Helper | `tests/preview/command-palette.test.mjs` |
 
 ## Gallery `testId` Vocabulary
 
@@ -235,6 +239,9 @@ Dynamic preset items also expose `preset-${name}` (`preset-base`, `preset-ocean`
 | `workbench-tree-selected` | `apps/examples/gallery/src/sections/workbench.tsx` | Active TreeView selection badge |
 | `workbench-tree` | `apps/examples/gallery/src/sections/workbench.tsx` | Data-driven workspace TreeView |
 | `workbench-tree-declarative` | `apps/examples/gallery/src/sections/workbench.tsx` | Declarative TreeItem outline TreeView |
+| `workbench-command-trigger` | `apps/examples/gallery/src/sections/workbench.tsx` | CommandPalette modal trigger button |
+| `workbench-command-last` | `apps/examples/gallery/src/sections/workbench.tsx` | Last executed command readout badge |
+| `workbench-command-palette` | `apps/examples/gallery/src/sections/workbench.tsx` | Workbench CommandPalette dialog surface |
 
 ## Unported Upstream Stylesheets
 
@@ -245,7 +252,6 @@ Upstream stylesheets synced into `packages/ui/src/components/generated/` that ar
 - `CalendarStyle`
 - `CarouselStyle`
 - `ChartStyle`
-- `CommandStyle`
 - `DataTableStyle`
 - `DatePickerStyle`
 - `FieldGroupStyle`
