@@ -21,7 +21,10 @@ use zgui_geom::{Device, DevicePx, Rect};
 use zgui_layout::LayoutStore;
 use zgui_reactive::{LocalStorage, Signal};
 use zgui_view::host::{FocusMove, FocusTrapId, FocusTrapOptions, FrameRequestId, Repeat, TimerId};
-use zgui_view::{DocumentId, NodeId, ScrollBehavior, ScrollPosition, ScrollTarget, ViewHost};
+use zgui_view::{
+    DocumentId, DocumentSelectionSnapshot, NodeId, ScrollBehavior, ScrollPosition, ScrollTarget,
+    ViewHost,
+};
 use zgui_vocab::Timestamp;
 
 mod entering;
@@ -102,6 +105,19 @@ pub enum Command {
         /// Which event.
         event: zgui_vocab::EventKind,
     },
+    /// Set the active read-only cross-block document selection inside `container`.
+    SetDocumentSelection {
+        /// The opt-in document selection container.
+        container: NodeId,
+        /// Anchor `(text_node, utf8_byte_offset)`.
+        anchor: (NodeId, usize),
+        /// Focus `(text_node, utf8_byte_offset)`.
+        focus: (NodeId, usize),
+    },
+    /// Clear the active read-only cross-block document selection.
+    ClearDocumentSelection,
+    /// Select all selectable read-only text inside `container`.
+    SelectDocumentAll(NodeId),
 }
 
 impl core::fmt::Debug for Command {
@@ -152,6 +168,20 @@ impl core::fmt::Debug for Command {
                 .field("node", node)
                 .field("event", event)
                 .finish(),
+            Self::SetDocumentSelection {
+                container,
+                anchor,
+                focus,
+            } => formatter
+                .debug_struct("SetDocumentSelection")
+                .field("container", container)
+                .field("anchor", anchor)
+                .field("focus", focus)
+                .finish(),
+            Self::ClearDocumentSelection => formatter.write_str("ClearDocumentSelection"),
+            Self::SelectDocumentAll(container) => {
+                formatter.debug_tuple("SelectDocumentAll").field(container).finish()
+            }
         }
     }
 }
@@ -232,6 +262,8 @@ pub struct RuntimeHost {
     selections: crate::selection::Selections,
     /// The latest unmasked text for each editable node written via `set_value` or the editing model.
     values: RefCell<rustc_hash::FxHashMap<NodeKey, String>>,
+    /// The active read-only cross-block document selection snapshot, if any.
+    doc_selection: RefCell<Option<DocumentSelectionSnapshot>>,
     /// The traps installed, innermost last.
     ///
     /// The stack itself is the input system's, not a second one kept here: which subtree confines
@@ -298,6 +330,7 @@ impl RuntimeHost {
             sheets: RefCell::default(),
             selections: crate::selection::Selections::new(),
             values: RefCell::default(),
+            doc_selection: RefCell::new(None),
             focused: focused_writer.into(),
             focused_writer,
             traps: RefCell::new(zgui_input::focus::FocusTraps::default()),
@@ -362,6 +395,11 @@ impl RuntimeHost {
     /// Records the latest unmasked text held by an editable node.
     pub fn write_value(&self, node: NodeKey, text: String) {
         self.values.borrow_mut().insert(node, text);
+    }
+
+    /// Publishes the active read-only document selection snapshot from the window.
+    pub(crate) fn write_document_selection(&self, snapshot: Option<DocumentSelectionSnapshot>) {
+        *self.doc_selection.borrow_mut() = snapshot;
     }
 
     /// What is selected in a node, by the document's own name for it.
@@ -853,6 +891,48 @@ impl ViewHost for RuntimeHost {
         let document = self.document.borrow();
         let index = document.store().index_of(key)?;
         Some(crate::selection::text_of(document.store(), index))
+    }
+
+    fn document_selection(&self) -> Option<DocumentSelectionSnapshot> {
+        self.doc_selection.borrow().clone()
+    }
+
+    fn set_document_selection(
+        &self,
+        container: NodeId,
+        anchor: (NodeId, usize),
+        focus: (NodeId, usize),
+    ) {
+        if self.key_of(container).is_none()
+            || self.key_of(anchor.0).is_none()
+            || self.key_of(focus.0).is_none()
+        {
+            return;
+        }
+        self.issue(Command::SetDocumentSelection {
+            container,
+            anchor,
+            focus,
+        });
+    }
+
+    fn clear_document_selection(&self) {
+        *self.doc_selection.borrow_mut() = None;
+        self.issue(Command::ClearDocumentSelection);
+    }
+
+    fn select_document_all(&self, container: NodeId) {
+        if self.key_of(container).is_none() {
+            return;
+        }
+        self.issue(Command::SelectDocumentAll(container));
+    }
+
+    fn node_text(&self, node: NodeId) -> Option<String> {
+        let key = self.key_of(node)?;
+        let document = self.document.borrow();
+        let index = document.store().index_of(key)?;
+        zgui_dom::text::text_of(document.store(), index).map(str::to_owned)
     }
 
     fn set_value(&self, node: NodeId, text: &str) {

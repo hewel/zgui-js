@@ -51,6 +51,7 @@ impl Window {
         self.settle_focused_field(timestamp);
         self.disable_text_input();
         self.cancel_press();
+        self.doc_dragging = None;
         // The caret stops rather than merely being hidden. A blink is a deadline the loop parks on,
         // so a window that kept blinking behind whatever is in front of it would wake twice a
         // second, for ever, to draw an insertion point nobody can see.

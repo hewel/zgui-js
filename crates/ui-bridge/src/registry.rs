@@ -291,6 +291,14 @@ impl NodeRegistry {
         }
     }
 
+    /// Exact reverse lookup for a live native node owned by this bridge's mount region.
+    pub(crate) fn handle_for_native(&self, native: NodeId) -> Option<Handle> {
+        if self.disposed || native.document() != self.root.document { return None; }
+        let &token = self.native_tokens.get(&native)?;
+        let handle = self.handle(token);
+        self.validate(handle).ok().map(|_| handle)
+    }
+
     /// Starts an outermost synchronous update. Nested turns are a host error.
     pub fn begin_turn(&mut self) {
         assert!(!self.disposed, "cannot begin a disposed registry turn");

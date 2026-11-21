@@ -1336,6 +1336,103 @@ impl UiBridge {
             Ok::<(), rquickjs::Error>(())
         }))?;
         let weak = Rc::downgrade(self);
+        api.set("getDocumentSelection", Func::from(move |ctx: Ctx<'js>| -> rquickjs::Result<Value<'js>> {
+            let bridge = owner(&weak, &ctx)?;
+            let Some(snapshot) = bridge.host.document_selection() else {
+                return Ok(Value::new_null(ctx.clone()));
+            };
+            let handles = {
+                let registry = bridge.registry.borrow();
+                let Some(container) = registry.handle_for_native(snapshot.container) else {
+                    return Ok(Value::new_null(ctx.clone()));
+                };
+                let Some(anchor) = registry.handle_for_native(snapshot.anchor_node) else {
+                    return Ok(Value::new_null(ctx.clone()));
+                };
+                let Some(focus) = registry.handle_for_native(snapshot.focus_node) else {
+                    return Ok(Value::new_null(ctx.clone()));
+                };
+                (container, anchor, focus)
+            };
+            let anchor_text = bridge.host.node_text(snapshot.anchor_node).unwrap_or_default();
+            let focus_text = bridge.host.node_text(snapshot.focus_node).unwrap_or_default();
+            let anchor_obj = Object::new(ctx.clone())?;
+            anchor_obj.set("node", bridge.wrap(&ctx, handles.1)?)?;
+            anchor_obj.set("offset", events::utf8_byte_to_utf16(&anchor_text, snapshot.anchor_offset))?;
+            let focus_obj = Object::new(ctx.clone())?;
+            focus_obj.set("node", bridge.wrap(&ctx, handles.2)?)?;
+            focus_obj.set("offset", events::utf8_byte_to_utf16(&focus_text, snapshot.focus_offset))?;
+            let out = Object::new(ctx.clone())?;
+            out.set("container", bridge.wrap(&ctx, handles.0)?)?;
+            out.set("anchor", anchor_obj)?;
+            out.set("focus", focus_obj)?;
+            out.set("text", snapshot.text)?;
+            out.set("isCollapsed", snapshot.is_collapsed)?;
+            Ok(out.into_value())
+        }))?;
+        let weak = Rc::downgrade(self);
+        api.set(
+            "setDocumentSelection",
+            Func::from(move |
+                ctx: Ctx<'js>,
+                container: Class<'js, NativeNode>,
+                anchor_node: Class<'js, NativeNode>,
+                anchor_offset: Value<'js>,
+                focus_node: Opt<Class<'js, NativeNode>>,
+                focus_offset: Opt<Value<'js>>,
+            | {
+                let bridge = owner(&weak, &ctx)?;
+                bridge.require_turn(&ctx)?;
+                let container_handle = container.borrow().handle;
+                let anchor_handle = anchor_node.borrow().handle;
+                let focus_handle = focus_node
+                    .0
+                    .as_ref()
+                    .map(|node| node.borrow().handle)
+                    .unwrap_or(anchor_handle);
+                let (container_native, anchor_native, focus_native) = {
+                    let registry = bridge.registry.borrow();
+                    (
+                        registry.native(container_handle).map_err(|e| host_error(&ctx, e))?,
+                        registry.native(anchor_handle).map_err(|e| host_error(&ctx, e))?,
+                        registry.native(focus_handle).map_err(|e| host_error(&ctx, e))?,
+                    )
+                };
+                let anchor_u16 = parse_selection_offset(&ctx, &anchor_offset, "anchor.offset")?;
+                let focus_u16 = match focus_offset.0 {
+                    None => anchor_u16,
+                    Some(ref val) if val.is_undefined() => anchor_u16,
+                    Some(ref val) => parse_selection_offset(&ctx, val, "focus.offset")?,
+                };
+                let anchor_text = bridge.host.node_text(anchor_native).unwrap_or_default();
+                let focus_text = bridge.host.node_text(focus_native).unwrap_or_default();
+                let anchor_byte = events::utf16_to_utf8_byte(&anchor_text, anchor_u16);
+                let focus_byte = events::utf16_to_utf8_byte(&focus_text, focus_u16);
+                bridge.host.set_document_selection(
+                    container_native,
+                    (anchor_native, anchor_byte),
+                    (focus_native, focus_byte),
+                );
+                Ok::<(), rquickjs::Error>(())
+            }),
+        )?;
+        let weak = Rc::downgrade(self);
+        api.set("clearDocumentSelection", Func::from(move |ctx: Ctx<'js>| {
+            let bridge = owner(&weak, &ctx)?;
+            bridge.require_turn(&ctx)?;
+            bridge.host.clear_document_selection();
+            Ok::<(), rquickjs::Error>(())
+        }))?;
+        let weak = Rc::downgrade(self);
+        api.set("selectDocumentAll", Func::from(move |ctx: Ctx<'js>, container: Class<'js, NativeNode>| {
+            let bridge = owner(&weak, &ctx)?;
+            bridge.require_turn(&ctx)?;
+            let handle = container.borrow().handle;
+            let native = bridge.registry.borrow().native(handle).map_err(|e| host_error(&ctx, e))?;
+            bridge.host.select_document_all(native);
+            Ok::<(), rquickjs::Error>(())
+        }))?;
+        let weak = Rc::downgrade(self);
         api.set("registerDismissLayer", Func::from(move |ctx: Ctx<'js>, node: Class<'js, NativeNode>, callback: rquickjs::Function<'js>, options: Object<'js>| {
             let bridge = owner(&weak, &ctx)?;
             bridge.require_creation(&ctx)?;

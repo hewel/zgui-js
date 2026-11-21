@@ -480,3 +480,13 @@ Regression gate:
 Regression gate:
 
     bun run test:vendor zgui-text-parley
+
+## Opt-in cross-block read-only `<text>` document selection
+
+`zgui-view` adds `DocumentSelectionSnapshot` and default `ViewHost::{document_selection, set_document_selection, clear_document_selection, select_document_all, node_text}` hooks.
+
+`zgui-runtime` adds a dedicated `window::doc_select` module (strictly separate from `editing.rs`) storing directional `(source_text_node, byte_offset, affinity)` endpoints on `Window` scoped to an opt-in `data-zgui-document-selection="true"` container. Pointer hit-testing maps through each inline formatting context's `TextMap` (`Located::hit_source`) and renders multi-block selection highlights via `caret::Plan` (`plan_for_document_bands` + `Located::bands_for_sources`) through `window/caret.rs`'s scroll/transform/damage pipeline. Selection respects `user-select`, excludes editable/secure inputs and nested containers, copies in document order (`\t` across `role="row"` cells, `\n` across blocks, never inserting `\n` on soft line wraps), recomputes bands on reflow, and clears safely when an endpoint detaches.
+
+Regression gate:
+
+    bun run test:vendor zgui-runtime && bun test --isolate tests/preview/document-selection.test.mjs

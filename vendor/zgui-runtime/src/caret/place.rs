@@ -87,6 +87,15 @@ impl Located {
     /// caret to sit on and inventing one would put it at the window's corner.
     pub fn of(layout: &LayoutStore, clusters: &dyn ShapedClusters, node: NodeKey) -> Option<Self> {
         let box_ = text_box(layout, node)?;
+        Self::of_box(layout, clusters, box_)
+    }
+
+    /// Reads one inline formatting context box's laid-out text out of the frame that produced it.
+    pub fn of_box(
+        layout: &LayoutStore,
+        clusters: &dyn ShapedClusters,
+        box_: zgui_dom::side::BoxKey,
+    ) -> Option<Self> {
         let resolution = layout.inline_resolution(box_)?;
         // The *fragment's* content box and not the layout result's. A layout result is measured
         // against the box's own parent; a fragment is where the composition pass put it on the
@@ -207,6 +216,16 @@ impl Located {
         point: Point<DevicePx, Device>,
         spatial: &zgui_scene::SpatialTree,
     ) -> Option<(usize, Affinity)> {
+        let (source, affinity) = self.hit_source(point, spatial)?;
+        Some((self.to_model(source), affinity))
+    }
+
+    /// The `(source_run, byte_offset)` position a surface point lands on, and its visual affinity.
+    pub fn hit_source(
+        &self,
+        point: Point<DevicePx, Device>,
+        spatial: &zgui_scene::SpatialTree,
+    ) -> Option<(SourcePos, Affinity)> {
         let placed =
             zgui_layout::fragment::hit::transform::into_local(point, self.transform, spatial)?;
         let local = Point::<CssPx, Css>::new(
@@ -218,7 +237,7 @@ impl Located {
             .map
             .to_source(hit.offset)
             .or_else(|| self.map.to_source_snapped(hit.offset))?;
-        Some((self.to_model(source), hit.affinity))
+        Some((source, hit.affinity))
     }
 
     /// Where the caret for a model offset is drawn, in the paragraph's own coordinates.
@@ -254,6 +273,23 @@ impl Located {
             return Vec::new();
         };
         self.lines.highlight(start.min(end)..start.max(end))
+    }
+
+    /// The highlight bands for a range expressed directly as two [`SourcePos`] endpoints.
+    pub fn bands_for_sources(&self, start: SourcePos, end: SourcePos) -> Vec<Band> {
+        if start == end {
+            return Vec::new();
+        }
+        let (Some(a), Some(b)) = (
+            self.map.to_generated_snapped(start),
+            self.map.to_generated_snapped(end),
+        ) else {
+            return Vec::new();
+        };
+        if a == b {
+            return Vec::new();
+        }
+        self.lines.highlight(a.min(b)..a.max(b))
     }
 
     /// Where the caret lands when it moves one line up or down, and the column it aimed for.

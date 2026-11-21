@@ -13,6 +13,7 @@ pub mod caret;
 mod clicks;
 mod crossing;
 mod cursor;
+pub mod doc_select;
 pub mod frame;
 pub mod input;
 pub mod observe;
@@ -400,6 +401,10 @@ pub struct Window {
     selecting: Option<crate::window::pointer_text::Selecting>,
     /// Consecutive text presses, separate from generic double-click activations.
     text_clicks: crate::window::pointer_text::TextClicks,
+    /// Active read-only cross-block document selection, kept separate from [`Editors`].
+    doc_selection: Option<crate::window::doc_select::DocumentSelection>,
+    /// Container currently being dragged for read-only document selection.
+    doc_dragging: Option<zgui_dom::NodeKey>,
     /// Text an editing command asked to be put on the clipboard, waiting for a turn of the loop
     /// that holds the platform context.
     ///
@@ -805,6 +810,8 @@ impl Window {
             vertical_goal: None,
             selecting: None,
             text_clicks: crate::window::pointer_text::TextClicks::default(),
+            doc_selection: None,
+            doc_dragging: None,
             clipboard: Vec::new(),
             wants_paste: Vec::new(),
             secure_changes,

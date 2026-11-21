@@ -75,21 +75,28 @@ impl Mark {
     }
 }
 
-/// What one frame draws for the caret and the selection.
-///
-/// Empty for every window nobody is typing into, which is most of them, and asked once per line
-/// fragment by the emit walk.
-#[derive(Debug, Default)]
-pub struct Plan {
-    /// The box whose lines carry the marks or logical caret. Two boxes that hold
-    /// the same text share one paragraph, so the paragraph alone names both.
-    owner: Option<zgui_dom::side::BoxKey>,
-    /// The paragraph the marks and logical caret belong to.
-    paragraph: Option<ParagraphId>,
+/// The marks belonging to one inline formatting context box and its shaped paragraph.
+#[derive(Debug)]
+struct HighlightGroup {
+    /// The box whose lines carry these marks.
+    owner: zgui_dom::side::BoxKey,
+    /// The paragraph the marks belong to.
+    paragraph: ParagraphId,
     /// The rectangles, in the order they were computed.
     marks: Vec<Mark>,
-    /// The insertion point, retained even while its painted mark is blinked off.
-    caret: Option<Mark>,
+}
+
+/// What one frame draws for the caret and the selection.
+///
+/// Empty for every window nobody is typing into or selecting in, and asked once per line
+/// fragment by the emit walk. Supports one editable caret/selection or multiple inline-context
+/// blocks for read-only cross-block document selection.
+#[derive(Debug, Default)]
+pub struct Plan {
+    /// Highlight groups, one per inline formatting context carrying marks.
+    groups: Vec<HighlightGroup>,
+    /// The logical insertion point, retained even while its painted mark is blinked off.
+    caret: Option<(zgui_dom::side::BoxKey, ParagraphId, Mark)>,
     /// A fingerprint of the whole plan, which is what stops a blink from being replayed.
     fingerprint: u64,
 }
@@ -102,12 +109,17 @@ impl Plan {
 
     /// Whether the plan draws anything at all.
     pub fn is_empty(&self) -> bool {
-        self.marks.is_empty()
+        self.groups.iter().all(|group| group.marks.is_empty())
     }
 
     /// How many rectangles it draws.
     pub fn len(&self) -> usize {
-        self.marks.len()
+        self.groups.iter().map(|group| group.marks.len()).sum()
+    }
+
+    /// Every box key that holds marks in this plan.
+    pub(crate) fn owners(&self) -> impl Iterator<Item = zgui_dom::side::BoxKey> + '_ {
+        self.groups.iter().map(|group| group.owner)
     }
 
     /// The colour the caret itself is drawn in, if one is planned.
@@ -117,8 +129,9 @@ impl Plan {
     /// drawn from a plan, so what colour it came out is absent from the document, the fragment tree
     /// and the display list alike.
     pub fn caret_color(&self) -> Option<Color> {
-        self.marks
+        self.groups
             .iter()
+            .flat_map(|group| group.marks.iter())
             .find(|mark| mark.layer == HighlightLayer::InFront)
             .map(|mark| mark.color)
     }
@@ -131,15 +144,17 @@ impl Plan {
     /// Recomputes the fingerprint from what the plan holds.
     fn seal(mut self) -> Self {
         let mut hasher = rustc_hash::FxHasher::default();
-        self.owner.hash(&mut hasher);
-        self.paragraph.map(ParagraphId::index).hash(&mut hasher);
-        for mark in &self.marks {
-            mark.hash_into(&mut hasher);
+        for group in &self.groups {
+            group.owner.hash(&mut hasher);
+            group.paragraph.index().hash(&mut hasher);
+            for mark in &group.marks {
+                mark.hash_into(&mut hasher);
+            }
         }
         // A plan that draws nothing must not fingerprint as one that draws something, and the empty
         // hash of an empty list is a real value: it is written down rather than left at zero so
         // that "no caret" and "a caret nobody has hashed yet" cannot collide.
-        self.fingerprint = if self.marks.is_empty() {
+        self.fingerprint = if self.is_empty() {
             0
         } else {
             hasher.finish() | 1
@@ -155,10 +170,10 @@ impl Plan {
         line: u16,
         origin: Point<DevicePx, Device>,
     ) -> Option<Rect<DevicePx, Device>> {
-        if self.owner != Some(owner) || self.paragraph != Some(paragraph) {
+        let (caret_owner, caret_paragraph, caret) = self.caret?;
+        if caret_owner != owner || caret_paragraph != paragraph || caret.line != line {
             return None;
         }
-        let caret = self.caret.filter(|caret| caret.line == line)?;
         Some(Rect::new(
             Point::new(
                 DevicePx(origin.x.0 + caret.offset.x.0),
@@ -192,12 +207,16 @@ impl Plan {
 impl HighlightSource for Plan {
     fn fingerprint(&self, owner: zgui_dom::side::BoxKey, paragraph: ParagraphId, line: u16) -> u64 {
         // Two boxes that hold the same text share one paragraph; the owner tells them apart.
-        if self.owner != Some(owner) || self.paragraph != Some(paragraph) {
+        let Some(group) = self
+            .groups
+            .iter()
+            .find(|group| group.owner == owner && group.paragraph == paragraph)
+        else {
             return 0;
-        }
+        };
         // Per line, so that a paragraph whose caret is on its third line does not force its first
         // two to be encoded again on every blink.
-        if !self.marks.iter().any(|mark| mark.line == line) {
+        if !group.marks.iter().any(|mark| mark.line == line) {
             return 0;
         }
         self.fingerprint
@@ -211,10 +230,14 @@ impl HighlightSource for Plan {
         request: HighlightRequest,
         visit: &mut dyn FnMut(Highlight),
     ) {
-        if self.owner != Some(owner) || self.paragraph != Some(paragraph) {
+        let Some(group) = self
+            .groups
+            .iter()
+            .find(|group| group.owner == owner && group.paragraph == paragraph)
+        else {
             return;
-        }
-        for mark in self.marks.iter().filter(|mark| mark.line == line) {
+        };
+        for mark in group.marks.iter().filter(|mark| mark.line == line) {
             visit(Highlight {
                 bounds: Rect::new(
                     Point::new(
@@ -347,12 +370,57 @@ pub fn plan_for(
     if visible && let Some(caret) = caret {
         marks.push(caret);
     }
-    let has_geometry = !marks.is_empty() || caret.is_some();
+    let groups = if marks.is_empty() {
+        Vec::new()
+    } else {
+        vec![HighlightGroup {
+            owner: located.owner,
+            paragraph: located.paragraph,
+            marks,
+        }]
+    };
     Plan {
-        owner: has_geometry.then_some(located.owner),
-        paragraph: has_geometry.then_some(located.paragraph),
-        marks,
-        caret,
+        groups,
+        caret: caret.map(|mark| (located.owner, located.paragraph, mark)),
+        fingerprint: 0,
+    }
+    .seal()
+}
+
+/// Builds a multi-block highlight plan for read-only document selection (selection bands only, no
+/// caret).
+pub(crate) fn plan_for_document_bands<'a>(
+    blocks: impl IntoIterator<Item = (&'a Located, Vec<zgui_edit::hit::Band>, Color)>,
+) -> Plan {
+    let mut groups = Vec::new();
+    for (located, bands, color) in blocks {
+        let mut marks = Vec::with_capacity(bands.len());
+        for band in bands {
+            let Some(origin) = located.line_origin(band.line) else {
+                continue;
+            };
+            marks.push(Mark {
+                line: band.line as u16,
+                offset: Point::new(
+                    DevicePx(band.origin.x.0 - origin.x.0),
+                    DevicePx(band.origin.y.0 - origin.y.0),
+                ),
+                size: Size::new(DevicePx(band.size.width.0), DevicePx(band.size.height.0)),
+                color: color.with_alpha(color.alpha() * BAND_ALPHA),
+                layer: HighlightLayer::Behind,
+            });
+        }
+        if !marks.is_empty() {
+            groups.push(HighlightGroup {
+                owner: located.owner,
+                paragraph: located.paragraph,
+                marks,
+            });
+        }
+    }
+    Plan {
+        groups,
+        caret: None,
         fingerprint: 0,
     }
     .seal()

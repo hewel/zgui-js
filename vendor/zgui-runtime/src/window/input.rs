@@ -269,7 +269,9 @@ impl Window {
         // the rest of them: space and enter activate whatever has focus, and a field that both
         // typed a space and clicked itself is neither. A key the editing model refused still falls
         // through, which is what leaves tab moving the focus out of a field.
-        let typed = dispatched.default_allowed && self.edit_focused(event, timestamp);
+        let typed = dispatched.default_allowed
+            && (self.edit_focused(event, timestamp)
+                || self.handle_document_selection_key(event));
         // A key that arrives during a composition belongs to the composition even though the input
         // method did not consume it — the window system forwards every one of them. Left to take a
         // framework default it moves the focus or activates a control out from under provisional
@@ -314,7 +316,20 @@ impl Window {
         // have focus both focuses it and puts the caret where the press landed, and the second of
         // those is meaningless if the first has not happened yet.
         if dispatched.default_allowed {
-            self.point_at_text(event, target);
+            let editable_took = self.point_at_text(event, target);
+            if editable_took {
+                if matches!(
+                    event,
+                    SurfaceEvent::Pointer {
+                        action: zgui_vocab::PointerAction::Pressed,
+                        ..
+                    }
+                ) {
+                    self.clear_document_selection_state();
+                }
+            } else if self.selecting.is_none() {
+                self.point_at_document_selection(event, target, modifiers);
+            }
         } else if matches!(
             event,
             SurfaceEvent::Pointer {
@@ -325,6 +340,7 @@ impl Window {
             }
         ) {
             self.selecting = None;
+            self.doc_dragging = None;
             self.text_clicks.forget();
         }
         // A finger produces presses and moves and nothing else; what those *mean* is read here and
@@ -852,6 +868,31 @@ impl Window {
                 behavior,
             } => self.owe_scroll(node, target, behavior),
             Command::FreezeScrolling(frozen) => self.freeze_scrolling(frozen),
+            Command::SetDocumentSelection {
+                container,
+                anchor,
+                focus,
+            } => {
+                if let (Some(container_key), Some(anchor_key), Some(focus_key)) = (
+                    zgui_view_dom::id::to_document(container),
+                    zgui_view_dom::id::to_document(anchor.0),
+                    zgui_view_dom::id::to_document(focus.0),
+                ) {
+                    self.set_document_selection_endpoints(
+                        container_key,
+                        (anchor_key, anchor.1),
+                        (focus_key, focus.1),
+                    );
+                }
+            }
+            Command::ClearDocumentSelection => {
+                self.clear_document_selection_state();
+            }
+            Command::SelectDocumentAll(container) => {
+                if let Some(container_key) = zgui_view_dom::id::to_document(container) {
+                    self.select_all_in_document_container(container_key);
+                }
+            }
         }
     }
 

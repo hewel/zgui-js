@@ -329,6 +329,8 @@ export interface NativeElementProps extends NativeEventProps {
   id?: string | null;
   /** Diagnostic identity, not a native/CSS attribute. At most 512 UTF-8 bytes; null clears. */
   testId?: string | null;
+  /** Opt this container into native read-only cross-block `<text>` document selection. */
+  documentSelection?: boolean | null;
   style?: NativeStyle | null;
   [custom: `--${string}`]: string | null | undefined;
   [data: `data-${string}`]: string | null | undefined;
@@ -368,6 +370,19 @@ export type ButtonProps = Omit<NativeElementProps, "role">;
 export interface TextSelectionRange {
   readonly start: number;
   readonly end: number;
+}
+/** One directional endpoint of a read-only cross-block document selection, in UTF-16 code units. */
+export interface DocumentSelectionPoint {
+  readonly node: NativeNode;
+  readonly offset: number;
+}
+/** Snapshot of an active opt-in read-only cross-block document selection. */
+export interface DocumentSelection {
+  readonly container: NativeNode;
+  readonly anchor: DocumentSelectionPoint;
+  readonly focus: DocumentSelectionPoint;
+  readonly text: string;
+  readonly isCollapsed: boolean;
 }
 /** Native editor descendants are opaque and cannot be authored as JSX children. */
 export interface NativeTextControlProps extends Omit<NativeElementProps, "children"> {

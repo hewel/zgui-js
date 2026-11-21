@@ -646,6 +646,23 @@ export function createHost({ strictStyles = false, reducedMotion = false, monito
       const text = editableTextOf(node);
       selections.set(node, { start: 0, end: text.length });
     },
+    getDocumentSelection: () => null,
+    setDocumentSelection: (container, anchorNode, anchorOffset, focusNode = anchorNode, focusOffset = anchorOffset) => {
+      assertActiveHost("setDocumentSelection");
+      assertLive(container, "setDocumentSelection container", region);
+      assertLive(anchorNode, "setDocumentSelection anchor", region);
+      assertLive(focusNode, "setDocumentSelection focus", region);
+      if (!Number.isFinite(anchorOffset) || !Number.isFinite(focusOffset)) {
+        throw new RangeError("document selection offset must be finite");
+      }
+    },
+    clearDocumentSelection: () => {
+      assertActiveHost("clearDocumentSelection");
+    },
+    selectDocumentAll: container => {
+      assertActiveHost("selectDocumentAll");
+      assertLive(container, "selectDocumentAll container", region);
+    },
     setWindowTitle: title => {
       assertActiveHost("setWindowTitle");
       if (typeof title !== "string") throw new TypeError("window title must be a string");

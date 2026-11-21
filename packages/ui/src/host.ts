@@ -1,13 +1,41 @@
-import { createContext, createMemo, createSignal, flush as solidFlush, getOwner, onCleanup, resetErrorHalt, runWithOwner, untrack, useContext } from "#solid";
+import {
+  createContext,
+  createMemo,
+  createSignal,
+  flush as solidFlush,
+  getOwner,
+  onCleanup,
+  resetErrorHalt,
+  runWithOwner,
+  untrack,
+  useContext,
+} from "#solid";
 import type { Owner } from "#solid";
 import type {
-  CanvasScene, CloseRequestEvent, LayerAnchor, LayerSurfacePlacement, Monitor, NativeDismissLayerOptions, NativeDismissReason,
-  NativeGeometry, NativeGeometryKind, NativeNode, NativeOverlayLayer, NativeWindowRect,
-  PopupSurfacePlacement, PopupSurfaceProps, SessionLockState, WindowDecorations, WindowState,
+  CanvasScene,
+  CloseRequestEvent,
+  DocumentSelection,
+  LayerAnchor,
+  LayerSurfacePlacement,
+  Monitor,
+  NativeDismissLayerOptions,
+  NativeDismissReason,
+  NativeGeometry,
+  NativeGeometryKind,
+  NativeNode,
+  NativeOverlayLayer,
+  NativeWindowRect,
+  PopupSurfacePlacement,
+  PopupSurfaceProps,
+  SessionLockState,
+  WindowDecorations,
+  WindowState,
 } from "./types.js";
 
 export type LayerPlacement = Required<Omit<LayerSurfacePlacement, "output" | "margin">> &
-  Pick<LayerSurfacePlacement, "output"> & { readonly margin: Readonly<Record<LayerAnchor, number>>; };
+  Pick<LayerSurfacePlacement, "output"> & {
+    readonly margin: Readonly<Record<LayerAnchor, number>>;
+  };
 export type PopupPlacement = Required<PopupSurfacePlacement> &
   Required<Pick<PopupSurfaceProps, "parent" | "offset" | "grab" | "width">> & {
     readonly height: number | "auto";
@@ -37,9 +65,10 @@ export interface NativeHost {
     createPortal(layer: NativeOverlayLayer): NativeNode;
     createCanvasScene(): CanvasScene;
     registerDismissLayer(
-      node: NativeNode, callback: (reason: NativeDismissReason) => void,
+      node: NativeNode,
+      callback: (reason: NativeDismissReason) => void,
       options: Required<NativeDismissLayerOptions>,
-    ): { update: (options: Required<NativeDismissLayerOptions>) => void; dispose: () => void; };
+    ): { update: (options: Required<NativeDismissLayerOptions>) => void; dispose: () => void };
     createTextNode(text: string): NativeNode;
     replaceText(node: NativeNode, text: string): void;
     isTextNode(node: NativeNode): boolean;
@@ -57,12 +86,36 @@ export interface NativeHost {
     focus(node: NativeNode, reveal?: boolean): void;
     trapFocus(node: NativeNode, wrap: boolean, autoFocus: boolean, restore: boolean): () => void;
     lockScroll(node: NativeNode): () => void;
-    scrollTo(node: NativeNode, left: number | null, top: number | null, behavior?: "instant" | "smooth"): void;
-    scrollBy(node: NativeNode, left: number | null, top: number | null, behavior?: "instant" | "smooth"): void;
-    scrollIntoView(node: NativeNode, block?: "nearest" | "start" | "center" | "end", behavior?: "instant" | "smooth"): void;
+    scrollTo(
+      node: NativeNode,
+      left: number | null,
+      top: number | null,
+      behavior?: "instant" | "smooth",
+    ): void;
+    scrollBy(
+      node: NativeNode,
+      left: number | null,
+      top: number | null,
+      behavior?: "instant" | "smooth",
+    ): void;
+    scrollIntoView(
+      node: NativeNode,
+      block?: "nearest" | "start" | "center" | "end",
+      behavior?: "instant" | "smooth",
+    ): void;
     getSelection(node: NativeNode): { readonly start: number; readonly end: number } | null;
     setSelection(node: NativeNode, start: number, end?: number): void;
     selectAll(node: NativeNode): void;
+    getDocumentSelection(): DocumentSelection | null;
+    setDocumentSelection(
+      container: NativeNode,
+      anchorNode: NativeNode,
+      anchorOffset: number,
+      focusNode?: NativeNode,
+      focusOffset?: number,
+    ): void;
+    clearDocumentSelection(): void;
+    selectDocumentAll(container: NativeNode): void;
     setWindowTitle(title: string): void;
     setWindowFullscreen(fullscreen: boolean): void;
     setWindowMaximized(maximized: boolean): void;
@@ -91,18 +144,40 @@ export interface NativeHost {
     installStylesheet(name: string, css: string): void;
     removeStylesheet(name: string): void;
     subscribeMonitors(callback: (monitors: readonly Monitor[]) => void): () => void;
-    openLayer(name: string, placement: LayerPlacement, attach: (root: NativeNode, bridge: UiBridge) => () => void): number;
+    openLayer(
+      name: string,
+      placement: LayerPlacement,
+      attach: (root: NativeNode, bridge: UiBridge) => () => void,
+    ): number;
     updateLayer(id: number, placement: LayerPlacement): void;
     closeLayer(id: number): void;
     setInputRegion(id: number, region: NativeInputRegion): void;
-    openPopup(name: string, placement: PopupPlacement, attach: (root: NativeNode, bridge: UiBridge) => () => void, dismiss: () => void): number;
+    openPopup(
+      name: string,
+      placement: PopupPlacement,
+      attach: (root: NativeNode, bridge: UiBridge) => () => void,
+      dismiss: () => void,
+    ): number;
     updatePopup(id: number, placement: PopupPlacement): void;
     closePopup(id: number): void;
-    openWindow(name: string, options: WindowOptions, attach: (root: NativeNode, bridge: UiBridge) => () => void, onClose: () => void): number;
+    openWindow(
+      name: string,
+      options: WindowOptions,
+      attach: (root: NativeNode, bridge: UiBridge) => () => void,
+      onClose: () => void,
+    ): number;
     updateWindow(id: number, options: WindowOptions): void;
     closeWindow(id: number): void;
-    requestSessionLock(callback: (state: SessionLockState) => void): { readonly id: number; unlock(this: void): void; unsubscribe(this: void): void };
-    openLock(name: string, output: string, attach: (root: NativeNode, bridge: UiBridge) => () => void): number;
+    requestSessionLock(callback: (state: SessionLockState) => void): {
+      readonly id: number;
+      unlock(this: void): void;
+      unsubscribe(this: void): void;
+    };
+    openLock(
+      name: string,
+      output: string,
+      attach: (root: NativeNode, bridge: UiBridge) => () => void,
+    ): number;
     closeLock(id: number): void;
   };
 }
@@ -177,7 +252,11 @@ function ensureMotionState(bridge?: UiBridge): MotionState {
   return state;
 }
 
-function subscribeMotionBridge(state: MotionState, bridge: UiBridge, allowReadOnlySkip: boolean): (() => void) | undefined {
+function subscribeMotionBridge(
+  state: MotionState,
+  bridge: UiBridge,
+  allowReadOnlySkip: boolean,
+): (() => void) | undefined {
   if (state.subscribedBridges.has(bridge)) return undefined;
   const current = bridge.getReducedMotion();
   if (current !== untrack(state.hostValue)) state.setHostValue(current);
@@ -236,9 +315,17 @@ export function rememberBridge(node: NativeNode, bridge: UiBridge): NativeNode {
 
 export function provideRegion(bridge: UiBridge, mount: () => void): void {
   regionProviders += 1;
-  onCleanup(() => { regionProviders -= 1; });
+  onCleanup(() => {
+    regionProviders -= 1;
+  });
   let owner: Owner | null = null;
-  const children = Region({ value: bridge, get children() { owner = getOwner(); return null; } });
+  const children = Region({
+    value: bridge,
+    get children() {
+      owner = getOwner();
+      return null;
+    },
+  });
   // Evaluate the provider before mounting so native mount errors propagate directly.
   if (typeof children === "function") createMemo(children)();
   runWithOwner(owner, mount);
@@ -249,8 +336,9 @@ export function withCallbackBridge<T>(bridge: UiBridge, fn: () => T): T {
   const previousOwner = callbackOwner;
   callbackBridge = bridge;
   callbackOwner = getOwner();
-  try { return fn(); }
-  finally {
+  try {
+    return fn();
+  } finally {
     callbackBridge = previousBridge;
     callbackOwner = previousOwner;
   }

@@ -32,6 +32,28 @@ pub use crate::host::handle::HostHandle;
 pub use crate::host::shortcut::WindowShortcut;
 pub use crate::host::timer::{Repeat, TimerId};
 
+/// A snapshot of the active read-only cross-block document selection on one window.
+///
+/// Offsets are UTF-8 byte indices within each DOM text node's source string; language bindings
+/// translate them to their host string encoding (e.g. UTF-16) at the JS boundary.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DocumentSelectionSnapshot {
+    /// The opt-in document selection container element.
+    pub container: NodeId,
+    /// Anchor DOM text node where selection started.
+    pub anchor_node: NodeId,
+    /// UTF-8 byte offset within `anchor_node`.
+    pub anchor_offset: usize,
+    /// Focus DOM text node where selection currently ends.
+    pub focus_node: NodeId,
+    /// UTF-8 byte offset within `focus_node`.
+    pub focus_offset: usize,
+    /// Selected plain text in document order (respecting block separators, no soft-wrap newlines).
+    pub text: String,
+    /// Whether `anchor` and `focus` name the exact same point.
+    pub is_collapsed: bool,
+}
+
 /// What a view can ask of, or command in, the engine that laid its tree out.
 ///
 /// Every geometry answer is *as of the last completed frame*. Reading layout in the middle of a
@@ -217,6 +239,33 @@ pub trait ViewHost {
     /// Returns the unmasked model text joined across paragraphs with `\n`, matching the UTF-8 byte
     /// offsets reported by [`ViewHost::selection`] and accepted by [`ViewHost::set_selection`].
     fn editable_text(&self, _node: NodeId) -> Option<String> {
+        None
+    }
+
+    /// The active read-only cross-block document selection on this window, if any.
+    fn document_selection(&self) -> Option<DocumentSelectionSnapshot> {
+        None
+    }
+
+    /// Sets the active read-only cross-block document selection within `container`.
+    ///
+    /// Endpoints are `(text_node, utf8_byte_offset)` pairs belonging to `container`.
+    fn set_document_selection(
+        &self,
+        _container: NodeId,
+        _anchor: (NodeId, usize),
+        _focus: (NodeId, usize),
+    ) {
+    }
+
+    /// Clears the active read-only cross-block document selection on this window.
+    fn clear_document_selection(&self) {}
+
+    /// Selects all selectable read-only text inside `container`.
+    fn select_document_all(&self, _container: NodeId) {}
+
+    /// The raw UTF-8 text content of a single DOM text node, if live and textual.
+    fn node_text(&self, _node: NodeId) -> Option<String> {
         None
     }
 

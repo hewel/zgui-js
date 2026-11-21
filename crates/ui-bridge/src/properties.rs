@@ -162,6 +162,10 @@ impl Mutation {
             "defaultValue" => Ok(Self::DefaultValue(string(value)?.unwrap_or_default())),
             "placeholder" => Ok(Self::Placeholder(string(value)?)),
             "secure" => Ok(Self::Attribute("secure", if !empty && bool::from_js(ctx, value)? { Some(String::new()) } else { None })),
+            "documentSelection" => Ok(Self::Attribute(
+                "data-zgui-document-selection",
+                if !empty && bool::from_js(ctx, value)? { Some("true".to_owned()) } else { None },
+            )),
             "ariaBusy" => Ok(Self::Busy(if empty { false } else { bool::from_js(ctx, value)? })),
             "ariaLive" => {
                 let live = match string(value)?.as_deref() {

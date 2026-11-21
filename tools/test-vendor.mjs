@@ -23,6 +23,7 @@ const SUITES = [
       "--test", "style_revisions",
       "--test", "image_policy",
       "--test", "shell_lifecycle",
+      "--test", "document_selection",
     ],
   },
   {

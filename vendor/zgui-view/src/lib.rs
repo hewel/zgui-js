@@ -120,8 +120,8 @@ pub use crate::flow::{
     SuspenseContext, Transition, ViewError, report_error,
 };
 pub use crate::host::{
-    FocusMove, FocusTrap, FocusTrapId, FocusTrapOptions, FrameRequestId, HostHandle, Repeat,
-    TimerId, ViewHost, WindowShortcut,
+    DocumentSelectionSnapshot, FocusMove, FocusTrap, FocusTrapId, FocusTrapOptions,
+    FrameRequestId, HostHandle, Repeat, TimerId, ViewHost, WindowShortcut,
 };
 pub use crate::id::{DOCUMENT_COUNT, DocumentId, NodeId};
 pub use crate::node_ref::{

@@ -60,8 +60,10 @@ export type { Spring, SpringNumberOption, SpringOptions } from "./spring.js";
 export { createDelay, createInterval, createTimeout } from "./timers.js";
 export type { DelayHandle } from "./timers.js";
 export {
+  clearDocumentSelection,
   createCanvasScene,
   focus,
+  getDocumentSelection,
   getReducedMotion,
   getSelection,
   getTextContent,
@@ -76,6 +78,8 @@ export {
   scrollIntoView,
   scrollTo,
   selectAll,
+  selectDocumentAll,
+  setDocumentSelection,
   setReducedMotion,
   setSelection,
   trapFocus,

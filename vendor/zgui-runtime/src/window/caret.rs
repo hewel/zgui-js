@@ -31,6 +31,7 @@ fn caret_color(style: &zgui_css::ComputedStyle) -> zgui_color::Color {
 impl Window {
     /// Computes this frame's caret and selection, and damages whatever that moved.
     pub(crate) fn plan_caret(&mut self, now: Instant) {
+        self.validate_document_selection();
         let (plan, drawn) = self.caret_plan(now);
         // The marks the last frame drew come first in what is owed. They are pixels of the drawn
         // frame and the rest are this frame's, which tells a scroll that moves composed pixels
@@ -60,92 +61,91 @@ impl Window {
 
     /// This frame's plan, and the absolute rectangles it will draw.
     fn caret_plan(&self, now: Instant) -> (Plan, Vec<Rect<DevicePx, Device>>) {
-        let Some(node) = self.router.interaction().focus.focused() else {
-            return (Plan::empty(), Vec::new());
-        };
-        let document = self.document.borrow();
-        if !crate::editing::Editors::is_selectable(&document, node) {
-            return (Plan::empty(), Vec::new());
+        if let Some(node) = self.router.interaction().focus.focused() {
+            let document = self.document.borrow();
+            if crate::editing::Editors::is_selectable(&document, node) {
+                // A read-only element draws its selection and no caret.
+                let editable = crate::editing::Editors::is_editable(&document, node);
+                // The model's own selection, not the record beside it: the record is a byte range
+                // and has forgotten which end the caret is at and which of the two places a
+                // boundary offset means. In the offsets of the text the document holds, which are
+                // the bullets of a secure field.
+                if let Some(selection) = self.editors.shown_selection(node) {
+                    let layout = self.layout.borrow();
+                    if let (Some(located), Some(box_)) = (
+                        Located::of(&layout, &self.text, node),
+                        crate::caret::place::text_box(&layout, node),
+                    ) {
+                        // The *element's* own style, not the anonymous box that holds the lines:
+                        // an anonymous box inherits everything read here anyway, and reading the
+                        // element's is what makes a caret that a stylesheet can move by writing on
+                        // the field.
+                        let element = layout.boxes_of(node).first().copied().unwrap_or(box_);
+                        let color = caret_color(&layout.node(element).style);
+                        let plan = plan_for(
+                            &located,
+                            selection,
+                            color,
+                            self.scale,
+                            editable && self.carets.blink().is_visible(now),
+                        );
+                        let drawn = self.absolute_rects_for_plan(&layout, &plan);
+                        return (plan, drawn);
+                    }
+                }
+            }
         }
-        // A read-only element draws its selection and no caret.
-        let editable = crate::editing::Editors::is_editable(&document, node);
-        // The model's own selection, not the record beside it: the record is a byte range and has
-        // forgotten which end the caret is at and which of the two places a boundary offset means.
-        // In the offsets of the text the document holds, which are the bullets of a secure field.
-        let Some(selection) = self.editors.shown_selection(node) else {
-            return (Plan::empty(), Vec::new());
-        };
-        let layout = self.layout.borrow();
-        let Some(located) = Located::of(&layout, &self.text, node) else {
-            return (Plan::empty(), Vec::new());
-        };
-        let Some(box_) = crate::caret::place::text_box(&layout, node) else {
-            return (Plan::empty(), Vec::new());
-        };
-        // The *element's* own style, not the anonymous box that holds the lines: an anonymous box
-        // inherits everything read here anyway, and reading the element's is what makes a caret
-        // that a stylesheet can move by writing on the field.
-        let element = layout.boxes_of(node).first().copied().unwrap_or(box_);
-        let color = caret_color(&layout.node(element).style);
-        let plan = plan_for(
-            &located,
-            selection,
-            color,
-            self.scale,
-            editable && self.carets.blink().is_visible(now),
-        );
-        let drawn = self.absolute_rects(&layout, box_, &plan);
-        (plan, drawn)
+        if self.doc_selection.is_some() {
+            return self.doc_selection_plan();
+        }
+        (Plan::empty(), Vec::new())
     }
 
-    /// Every rectangle the plan will draw, on the device.
+    /// Every rectangle the plan will draw, on the device, across all highlighted boxes.
     ///
     /// Placed against the line fragments themselves rather than against the resolution's own line
     /// boxes, because a fragment is where the scroll offset has already been applied — and then
     /// carried through the coordinate system the fragment is in, because that is the one thing a
     /// fragment's own rectangle does *not* have applied to it.
-    ///
-    /// Damage is measured in real pixels and in nothing else. A caret in a field inside a panel
-    /// that is sliding would otherwise damage the rectangle the field would occupy if the panel
-    /// had never moved: pixels cleared where there is no caret, and the caret's own pixels left
-    /// behind wherever it was drawn last.
-    fn absolute_rects(
+    pub(crate) fn absolute_rects_for_plan(
         &self,
         layout: &zgui_layout::LayoutStore,
-        box_: zgui_dom::side::BoxKey,
         plan: &Plan,
     ) -> Vec<Rect<DevicePx, Device>> {
         let placements = self.host.placements();
         let mut out = Vec::new();
-        for frag in layout.fragments_of_box(box_) {
-            let Some(fragment) = layout.fragment(*frag) else {
-                continue;
-            };
-            let FragmentKind::Line { paragraph, line } = fragment.kind else {
-                continue;
-            };
-            out.extend(
-                plan.rects_of(fragment.box_, paragraph, line, fragment.border_box.origin)
-                    .into_iter()
-                    .map(|rect| {
-                        zgui_layout::fragment::transform::placed::onto_device(
-                            rect,
-                            fragment.transform,
-                            &placements,
-                        )
-                    }),
-            );
+        for box_ in plan.owners() {
+            for frag in layout.fragments_of_box(box_) {
+                let Some(fragment) = layout.fragment(*frag) else {
+                    continue;
+                };
+                let FragmentKind::Line { paragraph, line } = fragment.kind else {
+                    continue;
+                };
+                out.extend(
+                    plan.rects_of(fragment.box_, paragraph, line, fragment.border_box.origin)
+                        .into_iter()
+                        .map(|rect| {
+                            zgui_layout::fragment::transform::placed::onto_device(
+                                rect,
+                                fragment.transform,
+                                &placements,
+                            )
+                        }),
+                );
+            }
         }
         out
     }
 
     /// The colour this frame's caret is being drawn in, if one is planned.
-    ///
-    /// Public for the same reason [`Window::caret_rect`] is: a caret is drawn from a plan rather
-    /// than from a fragment, so what colour it came out is not in the document, the fragment tree
-    /// or the display list.
     pub fn caret_color(&self) -> Option<zgui_color::Color> {
         self.carets.plan().caret_color()
+    }
+
+    /// How many highlight/caret marks are in this frame's installed plan.
+    pub fn highlight_plan_len(&self) -> usize {
+        self.carets.plan().len()
     }
 
     /// Where the logical caret is on the screen, including while it is blinked off.

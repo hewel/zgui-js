@@ -1,7 +1,32 @@
 import { createEffect, getOwner, onCleanup } from "#solid";
 import { flush } from "./renderer/index.js";
-import { bridgeFor, bridgeForTarget, getReducedMotion, setReducedMotion, withCallbackBridge } from "./host.js";
-import type { Accessor, CanvasScene, NativeDismissLayer, NativeDismissLayerOptions, NativeDismissReason, NativeFocusOptions, NativeFocusTrapOptions, NativeGeometry, NativeGeometryKind, NativeNode, NativeNodeTarget, NativeWindowRect, ScrollBehavior, ScrollIntoViewOptions, ScrollToOptions, TextSelectionRange } from "./types.js";
+import {
+  bridgeFor,
+  bridgeForTarget,
+  getReducedMotion,
+  setReducedMotion,
+  withCallbackBridge,
+} from "./host.js";
+import type {
+  Accessor,
+  CanvasScene,
+  DocumentSelection,
+  DocumentSelectionPoint,
+  NativeDismissLayer,
+  NativeDismissLayerOptions,
+  NativeDismissReason,
+  NativeFocusOptions,
+  NativeFocusTrapOptions,
+  NativeGeometry,
+  NativeGeometryKind,
+  NativeNode,
+  NativeNodeTarget,
+  NativeWindowRect,
+  ScrollBehavior,
+  ScrollIntoViewOptions,
+  ScrollToOptions,
+  TextSelectionRange,
+} from "./types.js";
 
 export { getReducedMotion, setReducedMotion };
 
@@ -67,12 +92,14 @@ export function observeGeometry<K extends NativeGeometryKind>(
   kind: K,
   callback: (value: NativeGeometry[K]) => void,
 ): () => void {
-  const attach = (target: NativeNode): () => void => {
+  const attach = (target: NativeNode): (() => void) => {
     const bridge = bridgeFor(target);
-    return bridge.observeGeometry(target, kind, value => withCallbackBridge(bridge, () => {
-      callback(value);
-      flush();
-    }));
+    return bridge.observeGeometry(target, kind, value =>
+      withCallbackBridge(bridge, () => {
+        callback(value);
+        flush();
+      }),
+    );
   };
   if (typeof node === "function") return bindNodeLease(node, attach);
   const dispose = attach(node);
@@ -84,7 +111,8 @@ export function trapFocus(node: NativeNodeTarget, options?: NativeFocusTrapOptio
   const wrap = options?.wrap ?? true;
   const autoFocus = options?.autoFocus ?? true;
   const restore = options?.restore ?? true;
-  const attach = (target: NativeNode): () => void => bridgeFor(target).trapFocus(target, wrap, autoFocus, restore);
+  const attach = (target: NativeNode): (() => void) =>
+    bridgeFor(target).trapFocus(target, wrap, autoFocus, restore);
   if (typeof node === "function") return bindNodeLease(node, attach);
   const dispose = attach(node);
   if (getOwner()) onCleanup(dispose);
@@ -132,7 +160,10 @@ export function scrollBy(target: NativeNodeTarget, options: ScrollToOptions = {}
 }
 
 /** Bring a node into view inside its nearest scroll container. Downgrades `smooth` to `instant` under reduced motion. */
-export function scrollIntoView(target: NativeNodeTarget, options: ScrollIntoViewOptions = {}): void {
+export function scrollIntoView(
+  target: NativeNodeTarget,
+  options: ScrollIntoViewOptions = {},
+): void {
   const node = resolveNode(target);
   if (!node) return;
   const block = options.block ?? "nearest";
@@ -170,21 +201,81 @@ export function selectAll(target: NativeNodeTarget): void {
   bridgeFor(node).selectAll(node);
 }
 
+/** Read the active opt-in read-only cross-block document selection (UTF-16 offsets), or `null`. */
+export function getDocumentSelection(regionNode?: NativeNodeTarget): DocumentSelection | null {
+  if (regionNode !== undefined) {
+    const node = resolveNode(regionNode);
+    if (!node) return null;
+    return bridgeFor(node).getDocumentSelection();
+  }
+  return bridgeFor().getDocumentSelection();
+}
+
+/** Programmatically set read-only cross-block document selection inside an opt-in container (UTF-16 offsets). */
+export function setDocumentSelection(
+  containerTarget: NativeNodeTarget,
+  anchor: DocumentSelectionPoint,
+  focus: DocumentSelectionPoint = anchor,
+): void {
+  const container = resolveNode(containerTarget);
+  if (!container) return;
+  if (typeof anchor.offset !== "number" || !Number.isFinite(anchor.offset)) {
+    throw new RangeError("document selection anchor.offset must be a finite number");
+  }
+  if (typeof focus.offset !== "number" || !Number.isFinite(focus.offset)) {
+    throw new RangeError("document selection focus.offset must be a finite number");
+  }
+  bridgeFor(container).setDocumentSelection(
+    container,
+    anchor.node,
+    anchor.offset,
+    focus.node,
+    focus.offset,
+  );
+}
+
+/** Clear the active read-only cross-block document selection in the current window/region. */
+export function clearDocumentSelection(regionNode?: NativeNodeTarget): void {
+  if (regionNode !== undefined) {
+    const node = resolveNode(regionNode);
+    if (!node) return;
+    bridgeFor(node).clearDocumentSelection();
+    return;
+  }
+  bridgeFor().clearDocumentSelection();
+}
+
+/** Select all selectable read-only text inside an opt-in `documentSelection` container. */
+export function selectDocumentAll(containerTarget: NativeNodeTarget): void {
+  const container = resolveNode(containerTarget);
+  if (!container) return;
+  bridgeFor(container).selectDocumentAll(container);
+}
+
 export function lockScroll(node: NativeNodeTarget): () => void {
-  const attach = (target: NativeNode): () => void => bridgeFor(target).lockScroll(target);
+  const attach = (target: NativeNode): (() => void) => bridgeFor(target).lockScroll(target);
   if (typeof node === "function") return bindNodeLease(node, attach);
   const dispose = attach(node);
   if (getOwner()) onCleanup(dispose);
   return dispose;
 }
 
-function dismissOptions(options: NativeDismissLayerOptions = {}): Required<NativeDismissLayerOptions> {
-  return { layer: options.layer ?? "popover", dismissOnOutsidePress: options.dismissOnOutsidePress ?? true,
-    dismissOnEscape: options.dismissOnEscape ?? true, exclude: options.exclude ?? null, leaving: options.leaving ?? false };
+function dismissOptions(
+  options: NativeDismissLayerOptions = {},
+): Required<NativeDismissLayerOptions> {
+  return {
+    layer: options.layer ?? "popover",
+    dismissOnOutsidePress: options.dismissOnOutsidePress ?? true,
+    dismissOnEscape: options.dismissOnEscape ?? true,
+    exclude: options.exclude ?? null,
+    leaving: options.leaving ?? false,
+  };
 }
 
 export function registerDismissLayer(
-  node: NativeNodeTarget, callback: (reason: NativeDismissReason) => void, options?: NativeDismissLayerOptions,
+  node: NativeNodeTarget,
+  callback: (reason: NativeDismissReason) => void,
+  options?: NativeDismissLayerOptions,
 ): NativeDismissLayer {
   if (typeof node === "function") {
     let currentOptions = dismissOptions(options);
@@ -225,7 +316,11 @@ export function registerDismissLayer(
     };
   }
   const bridge = bridgeFor(node);
-  const lease = bridge.registerDismissLayer(node, reason => withCallbackBridge(bridge, () => callback(reason)), dismissOptions(options));
+  const lease = bridge.registerDismissLayer(
+    node,
+    reason => withCallbackBridge(bridge, () => callback(reason)),
+    dismissOptions(options),
+  );
   if (getOwner()) onCleanup(lease.dispose);
   return { dispose: lease.dispose, update: options => lease.update(dismissOptions(options)) };
 }
