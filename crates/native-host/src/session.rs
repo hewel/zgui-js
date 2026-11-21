@@ -219,6 +219,9 @@ pub(crate) struct ResourceCounts {
     /// Open WebSocket connections still active after cleanup.
     #[serde(skip_serializing_if = "is_zero")]
     pub web_sockets: usize,
+    /// Active internal drag sessions still retained after cleanup.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub active_drags: usize,
     #[serde(skip_serializing_if = "is_zero")]
     pub canvas_scenes: usize,
     /// Native auxiliary shell surfaces still registered with the platform.
@@ -321,16 +324,17 @@ pub(crate) struct Session {
     layers: RefCell<BTreeMap<u32, Rc<SessionRegion>>>,
     shell_stylesheets: RefCell<Vec<(String, String)>>,
     shell_surfaces: Cell<usize>,
-    bridges: Rc<BridgeGroup>,
+    pub(crate) bridges: Rc<BridgeGroup>,
     pub(crate) shell: Rc<Shell>,
     window_controls: Rc<WindowControls>,
-    work: Rc<Work>,
-    engine: RefCell<Option<JsRuntime>>,
+    pub(crate) work: Rc<Work>,
+    pub(crate) dnd: crate::dnd::DndState,
+    pub(crate) engine: RefCell<Option<JsRuntime>>,
     font_leases: RefCell<Vec<zgui::app::fonts::FontLease>>,
     reported_unregistered_fonts: RefCell<std::collections::BTreeSet<String>>,
     pub(crate) fonts: Fonts,
     telemetry: Cell<Option<RuntimeTelemetry>>,
-    shutdown_started: Cell<bool>,
+    pub(crate) shutdown_started: Cell<bool>,
     mount_started: Cell<bool>,
     stylesheet_installed: Cell<bool>,
     contract_reported: Cell<bool>,
@@ -442,7 +446,7 @@ impl Session {
             work.guard_cleanup_with(shell.clone());
             work.set_gesture_source(bridges.clone());
             Self {
-                disposer: RefCell::new(None), primary, layers: RefCell::new(BTreeMap::new()), bridges, shell, window_controls, work, engine: RefCell::new(None),
+                disposer: RefCell::new(None), primary, layers: RefCell::new(BTreeMap::new()), bridges, shell, window_controls, work, dnd: crate::dnd::DndState::new(), engine: RefCell::new(None),
                 shell_surfaces: Cell::new(0), retirement_reported: Cell::new(false),
                 shell_stylesheets: RefCell::new(Vec::new()),
                 telemetry: Cell::new(None), shutdown_started: Cell::new(false),
@@ -468,6 +472,7 @@ impl Session {
             }
             let shell_api = session.shell.install(&ctx)?;
             session.shell.install_stylesheet_api(&shell_api, &session)?;
+            session.install_dnd(&ctx)?;
             session.work.install(&ctx)
         })?;
         let source = session.module.take_or_load_source()?;
@@ -798,6 +803,40 @@ impl Session {
         self.work.commit_staged_network();
     }
 
+    pub(crate) fn bridge_for_surface(&self, surface: SurfaceId) -> Option<Rc<UiBridge>> {
+        if let Some(primary) = &self.primary
+            && primary.surface == surface
+        {
+            return Some(primary.bridge.clone());
+        }
+        self.layers
+            .borrow()
+            .values()
+            .find(|owned| owned.surface == surface)
+            .map(|owned| owned.bridge.clone())
+    }
+
+    pub(crate) fn resolve_node_and_surface(
+        &self,
+        ctx: &rquickjs::Ctx<'_>,
+        node: &rquickjs::Class<'_, ui_bridge::NativeNode>,
+    ) -> rquickjs::Result<(SurfaceId, zgui::view::NodeId)> {
+        if let Some(primary) = &self.primary
+            && let Ok(native) = primary.bridge.resolve_native_node(ctx, node)
+        {
+            return Ok((primary.surface, native));
+        }
+        for owned in self.layers.borrow().values() {
+            if let Ok(native) = owned.bridge.resolve_native_node(ctx, node) {
+                return Ok((owned.surface, native));
+            }
+        }
+        Err(Exception::throw_reference(
+            ctx,
+            "drag source node does not belong to any live surface in this session",
+        ))
+    }
+
     pub(crate) fn finish_clipboard_read(
         &self,
         serial: zgui::platform::ClipboardSerial,
@@ -1072,7 +1111,7 @@ impl Session {
         result
     }
 
-    fn diagnostic(&self, error: js_runtime::Diagnostic) -> js_runtime::Diagnostic {
+    pub(crate) fn diagnostic(&self, error: js_runtime::Diagnostic) -> js_runtime::Diagnostic {
         match self.module.as_package() { Some(package) => package.remap_diagnostic(error), None => error }
     }
 
@@ -1322,6 +1361,7 @@ impl Session {
             http_requests: network.http_requests,
             event_streams: network.event_streams,
             web_sockets: network.web_sockets,
+            active_drags: self.dnd.active_internal_count(),
             shell_surfaces: self.shell_surfaces.get(),
             fonts: self.font_leases.borrow().len(),
             engine_alive: self.engine.borrow().is_some(),
@@ -1418,6 +1458,8 @@ impl Session {
         let sqlite = self.work.sqlite_counts();
         let files = self.work.file_counts();
         let network = self.work.network_counts();
+        let active_drags = self.dnd.active_internal_count();
+        self.dnd.clear();
         self.work.finish_stop();
         // Report remaining leases before forced disposal releases the native scenes.
         let canvas_scenes = self.counts().canvas_scenes;
@@ -1450,6 +1492,7 @@ impl Session {
         counts.http_requests = network.http_requests;
         counts.event_streams = network.event_streams;
         counts.web_sockets = network.web_sockets;
+        counts.active_drags = active_drags;
         self.work.clear_images();
         let failure = if !self.contract_reported.replace(true)
             && let Some(contract) = self.contract_failure()

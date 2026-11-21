@@ -234,7 +234,7 @@ impl WaylandState {
     ///
     /// On a thread, for the reason every transfer here is: the other end is another process.
     pub(crate) fn start_drag_read(&mut self) {
-        let Some(offer) = self.drag.to_read() else {
+        let Some((key, offer)) = self.drag.to_read() else {
             return;
         };
         let has_files = offer.with_mime_types(crate::clipboard::mime::has_files);
@@ -259,26 +259,27 @@ impl WaylandState {
                 let paths = crate::clipboard::pipe::read(reader, crate::clipboard::pipe::PATIENCE)
                     .map(|bytes| crate::input::dnd::paths(&bytes))
                     .unwrap_or_default();
-                *answers.lock().unwrap_or_else(|held| held.into_inner()) = Some(paths);
+                crate::input::dnd::Drag::push_completion(
+                    &answers,
+                    crate::input::dnd::ReadCompletion { key, paths },
+                );
                 // The loop is parked on the socket and the answer arrived on a pipe, so it has to
                 // be told. What it does with the wake is drain the answer and report the drag.
                 zgui_platform::Waker::wake(waker.as_ref(), zgui_platform::WakeReason::AppWork);
             });
     }
 
-    /// Reports a drag whose paths have just arrived, if one was waiting for them.
+    /// Reports any drags whose tagged pipe reads have arrived, discarding stale offers.
     pub(crate) fn drag_read_finished(&mut self) {
-        let paths = self
-            .drag
-            .answers()
-            .lock()
-            .unwrap_or_else(|held| held.into_inner())
-            .clone();
-        let Some(paths) = paths else {
-            return;
+        let completed: Vec<_> = {
+            let answers = self.drag.answers();
+            let mut queue = answers.lock().unwrap_or_else(|held| held.into_inner());
+            queue.drain(..).collect()
         };
-        if let Some((id, event)) = self.drag.read_finished(paths) {
-            self.report(id, zgui_platform::SurfaceEvent::Drag(event));
+        for item in completed {
+            if let Some((id, event)) = self.drag.read_finished(item.key, item.paths) {
+                self.report(id, zgui_platform::SurfaceEvent::Drag(event));
+            }
         }
     }
 

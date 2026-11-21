@@ -104,6 +104,68 @@ impl Driver {
         Ok(trace)
     }
 
+    pub fn drag_enter(&mut self, location: &PointerLocation, paths: &[String]) -> Result<Value, Fault> {
+        let (surface, position, accepted, mut trace) = self.input_location(location)?;
+        if !accepted {
+            return Ok(trace);
+        }
+        let path_bufs = paths.iter().map(std::path::PathBuf::from).collect();
+        self.pipeline.deliver_all(
+            surface,
+            [SurfaceEvent::Drag(zgui::platform::DragEvent::Entered {
+                paths: path_bufs,
+                position,
+            })],
+        );
+        self.pump_application()?;
+        self.settle(false)?;
+        trace["pathCount"] = json!(paths.len());
+        Ok(trace)
+    }
+
+    pub fn drag_move(&mut self, location: &PointerLocation) -> Result<Value, Fault> {
+        let (surface, position, accepted, trace) = self.input_location(location)?;
+        if !accepted {
+            return Ok(trace);
+        }
+        self.pipeline.deliver_all(
+            surface,
+            [SurfaceEvent::Drag(zgui::platform::DragEvent::Moved { position })],
+        );
+        self.pump_application()?;
+        self.settle(false)?;
+        Ok(trace)
+    }
+
+    pub fn drag_leave(&mut self, surface_name: &str) -> Result<Value, Fault> {
+        self.settle_surface(Some(surface_name))?;
+        let surface = self.window(surface_name)?.surface().id();
+        self.pipeline
+            .deliver_all(surface, [SurfaceEvent::Drag(zgui::platform::DragEvent::Left)]);
+        self.pump_application()?;
+        self.settle(false)?;
+        Ok(json!({ "surface": surface_name }))
+    }
+
+    pub fn drag_drop(&mut self, location: &PointerLocation, paths: &[String]) -> Result<Value, Fault> {
+        let (surface, position, accepted, mut trace) = self.input_location(location)?;
+        if !accepted {
+            return Ok(trace);
+        }
+        let path_bufs = paths.iter().map(std::path::PathBuf::from).collect();
+        self.pipeline.deliver_all(
+            surface,
+            [SurfaceEvent::Drag(zgui::platform::DragEvent::Dropped {
+                paths: path_bufs,
+                position,
+            })],
+        );
+        self.pump_application()?;
+        self.settle(false)?;
+        trace["pathCount"] = json!(paths.len());
+        Ok(trace)
+    }
+
     pub fn wheel(&mut self, location:&PointerLocation, delta:&WheelDelta, phase:WheelPhase) -> Result<Value,Fault> {
         let (surface,position,accepted,mut trace)=self.input_location(location)?;
         if !accepted {

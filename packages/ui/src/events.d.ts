@@ -8,7 +8,12 @@ export interface NativeEvent {
   readonly phase: "capture" | "target" | "bubble";
   readonly target: NativeNode;
   readonly currentTarget: NativeNode;
-  readonly modifiers: { readonly shift: boolean; readonly control: boolean; readonly alt: boolean; readonly meta: boolean };
+  readonly modifiers: {
+    readonly shift: boolean;
+    readonly control: boolean;
+    readonly alt: boolean;
+    readonly meta: boolean;
+  };
   preventDefault(): void;
   stopPropagation(): void;
   stopImmediatePropagation(): void;
@@ -21,7 +26,11 @@ export interface NativePointerEvent extends NativeEvent {
   readonly button: string | null;
   readonly buttonIndex?: number;
   readonly pressure: number | null;
-  readonly coalesced: readonly { readonly position: { readonly x: number; readonly y: number }; readonly pressure: number | null; readonly timestamp: number }[];
+  readonly coalesced: readonly {
+    readonly position: { readonly x: number; readonly y: number };
+    readonly pressure: number | null;
+    readonly timestamp: number;
+  }[];
   releasePointer(): void;
 }
 export type NativePointerBoundaryEvent = Omit<NativePointerEvent, "releasePointer">;
@@ -57,7 +66,9 @@ export interface NativeValueEvent extends NativeEvent {
   readonly valueChange: "input" | "committed";
 }
 /** onFocus/onBlur subscribe to native bubbling focusin/focusout. */
-export interface NativeFocusEvent extends NativeEvent { readonly cause: string; }
+export interface NativeFocusEvent extends NativeEvent {
+  readonly cause: string;
+}
 export interface NativeAnimationEvent extends NativeEvent {
   readonly animationName: string;
   readonly elapsedTime: number;
@@ -67,6 +78,65 @@ export interface NativeTransitionEvent extends NativeEvent {
   readonly propertyName: string;
   readonly elapsedTime: number;
   readonly pseudoElement: string;
+}
+/** Read-only file capability handle minted by the host on an accepted external file drop. */
+export interface DroppedFileHandle {
+  readonly kind: "file";
+  readonly name: string;
+  readonly mode: "read";
+  readText(options?: { readonly maxBytes?: number }): {
+    readonly promise: Promise<string>;
+    cancel(): void;
+  };
+  readBytes(options?: { readonly maxBytes?: number }): {
+    readonly promise: Promise<Uint8Array>;
+    cancel(): void;
+  };
+  stat(): {
+    readonly promise: Promise<{
+      readonly isFile: boolean;
+      readonly isDir: boolean;
+      readonly size: number;
+      readonly modifiedMs: number | null;
+    }>;
+    cancel(): void;
+  };
+  close(): void;
+}
+/** Hit-tested drag hover event (`onDragEnter`, `onDragOver`, `onDragLeave`). External drags expose MIME types and fileCount only — never raw paths or handles. */
+export interface NativeDragEvent {
+  readonly dragId: number;
+  readonly source: "internal" | "external";
+  readonly types: readonly string[];
+  readonly fileCount: number;
+  readonly clientX: number;
+  readonly clientY: number;
+  readonly localX: number;
+  readonly localY: number;
+  readonly targetWidth: number;
+  readonly targetHeight: number;
+  /** Synchronously negotiate acceptance during `onDragOver`. */
+  accept(effect?: "copy" | "move" | "none"): void;
+  stopPropagation(): void;
+}
+/** Hit-tested drop event delivered only to an accepting target. */
+export interface NativeDropEvent {
+  readonly dragId: number;
+  readonly source: "internal" | "external";
+  readonly types: readonly string[];
+  readonly effect: "copy" | "move" | "none";
+  readonly fileCount: number;
+  readonly clientX: number;
+  readonly clientY: number;
+  readonly localX: number;
+  readonly localY: number;
+  readonly targetWidth: number;
+  readonly targetHeight: number;
+  /** Opaque session-local payload for internal drags (`undefined` for external drops). */
+  readonly payload: unknown;
+  /** Read-only Wave 1 `FileHandle`s minted exclusively for accepted external drops. */
+  readonly files: readonly DroppedFileHandle[];
+  stopPropagation(): void;
 }
 interface EventMap {
   onClick: NativeEvent;
@@ -93,8 +163,16 @@ interface EventMap {
   onTransitionEnd: NativeTransitionEvent;
   onTransitionCancel: NativeTransitionEvent;
 }
+interface DndEventMap {
+  onDragEnter: NativeDragEvent;
+  onDragOver: NativeDragEvent;
+  onDragLeave: NativeDragEvent;
+  onDrop: NativeDropEvent;
+}
 export type NativeEventProps = {
   [Name in keyof EventMap]?: ((event: EventMap[Name]) => void) | null;
 } & {
   [Name in keyof EventMap as `${Name}Capture`]?: ((event: EventMap[Name]) => void) | null;
+} & {
+  [Name in keyof DndEventMap]?: ((event: DndEventMap[Name]) => void) | null;
 };

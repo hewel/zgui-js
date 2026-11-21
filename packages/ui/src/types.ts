@@ -1,7 +1,22 @@
 import "./runtime-globals.js";
 export type { JSX } from "./jsx-runtime.js";
 import type { NativeEventProps } from "./events.js";
-export type { NativeAnimationEvent, NativeContextMenuEvent, NativeEvent, NativePointerEvent, NativePointerBoundaryEvent, NativePointerDownEvent, NativeWheelEvent, NativeKeyEvent, NativeValueEvent, NativeFocusEvent, NativeTransitionEvent } from "./events.js";
+export type {
+  DroppedFileHandle,
+  NativeAnimationEvent,
+  NativeContextMenuEvent,
+  NativeDragEvent,
+  NativeDropEvent,
+  NativeEvent,
+  NativePointerEvent,
+  NativePointerBoundaryEvent,
+  NativePointerDownEvent,
+  NativeWheelEvent,
+  NativeKeyEvent,
+  NativeValueEvent,
+  NativeFocusEvent,
+  NativeTransitionEvent,
+} from "./events.js";
 import type { NativeStyle } from "./styles.js";
 export type { NativeStyle, NativeStyleName } from "./styles.js";
 
@@ -11,7 +26,9 @@ declare const nativeNode: unique symbol;
  * invalidate their handles at the end of the synchronous host turn. A retained
  * ref does not retain native ownership; cross-turn detached-node reuse is unsupported.
  */
-export interface NativeNode { readonly [nativeNode]: true; }
+export interface NativeNode {
+  readonly [nativeNode]: true;
+}
 /** A native node or reactive accessor resolving to one (e.g. a `createSignal<NativeNode | null>(null)` wired to `ref={setNode}`). */
 export type NativeNodeTarget = NativeNode | Accessor<NativeNode | null | undefined>;
 export interface NativeWindowRect {
@@ -20,7 +37,9 @@ export interface NativeWindowRect {
   readonly width: number;
   readonly height: number;
 }
-export interface NativeViewport extends NativeWindowRect { readonly scale: number; }
+export interface NativeViewport extends NativeWindowRect {
+  readonly scale: number;
+}
 
 /** Physical output geometry. Use `id`, not the display `name`, to target the output. */
 export interface Monitor extends NativeViewport {
@@ -45,7 +64,11 @@ export interface LayerSurfacePlacement {
   readonly keyboard?: "none" | "on-demand" | "exclusive";
 }
 /** Rectangles use surface-local logical coordinates. Nodes must belong to this surface. */
-export type LayerInputRegion = "full" | "empty" | readonly NativeWindowRect[] | readonly NativeNode[];
+export type LayerInputRegion =
+  | "full"
+  | "empty"
+  | readonly NativeWindowRect[]
+  | readonly NativeNode[];
 export interface LayerSurfaceProps extends LayerSurfacePlacement {
   readonly name: string;
   readonly inputRegion?: LayerInputRegion;
@@ -53,7 +76,13 @@ export interface LayerSurfaceProps extends LayerSurfacePlacement {
 }
 
 /** Physical point on an anchor rectangle, or direction in which the popup extends. */
-export type PopupPosition = "center" | LayerAnchor | "top-left" | "top-right" | "bottom-left" | "bottom-right";
+export type PopupPosition =
+  | "center"
+  | LayerAnchor
+  | "top-left"
+  | "top-right"
+  | "bottom-left"
+  | "bottom-right";
 export interface PopupSurfacePlacement {
   readonly anchor?: PopupPosition;
   readonly gravity?: PopupPosition;
@@ -128,7 +157,13 @@ export interface WindowSurfaceProps {
 }
 
 /** The compositor's last confirmed session-lock state. */
-export type SessionLockState = "unlocked" | "pending" | "locked" | "refused" | "finished" | "unlocking";
+export type SessionLockState =
+  | "unlocked"
+  | "pending"
+  | "locked"
+  | "refused"
+  | "finished"
+  | "unlocking";
 
 /** The package or selected backend does not grant session-lock authority. */
 export interface SessionLockCapabilityError extends Error {
@@ -150,8 +185,14 @@ export interface SessionLockSurfaceProps {
   readonly output: string;
   readonly children?: NativeChild;
 }
-export interface NativePoint { readonly x: number; readonly y: number; }
-export interface NativeSize { readonly width: number; readonly height: number; }
+export interface NativePoint {
+  readonly x: number;
+  readonly y: number;
+}
+export interface NativeSize {
+  readonly width: number;
+  readonly height: number;
+}
 export interface NativeScrollPosition {
   readonly offset: NativePoint;
   readonly contentSize: NativeSize;
@@ -178,7 +219,9 @@ export interface NativeDismissLayer {
   update(options?: NativeDismissLayerOptions): void;
   dispose(): void;
 }
-export interface NativeFocusOptions { readonly reveal?: boolean; }
+export interface NativeFocusOptions {
+  readonly reveal?: boolean;
+}
 export type ScrollBehavior = "instant" | "smooth";
 export type ScrollBlock = "nearest" | "start" | "center" | "end";
 export interface ScrollToOptions {
@@ -195,13 +238,22 @@ export interface NativeFocusTrapOptions {
   readonly autoFocus?: boolean;
   readonly restore?: boolean;
 }
-export type NativeChild = NativeNode | string | number | boolean | null | undefined
-  | readonly NativeChild[] | (() => NativeChild);
+export type NativeChild =
+  | NativeNode
+  | string
+  | number
+  | boolean
+  | null
+  | undefined
+  | readonly NativeChild[]
+  | (() => NativeChild);
 export type Accessor<T> = () => T;
 export type Setter<T> = {
   <U extends T>(value: (previous: T) => U): U;
   <U extends T>(value: Exclude<U, Function>): U;
-  <U extends T>(...args: undefined extends T ? [] : [value: Exclude<U, Function> | ((previous: T) => U)]): undefined extends T ? undefined : U;
+  <U extends T>(
+    ...args: undefined extends T ? [] : [value: Exclude<U, Function> | ((previous: T) => U)]
+  ): undefined extends T ? undefined : U;
 };
 export type Signal<T> = [get: Accessor<T>, set: Setter<T>];
 export type Component<P = {}> = (props: P) => NativeChild;
@@ -213,7 +265,60 @@ export type ParentComponent<P = {}> = Component<ParentProps<P>>;
  * use a saved ref after its branch is removed. A variable ref is assigned by the compiler.
  */
 export type NativeRef = NativeNode | ((node: NativeNode) => void);
-export type NativeRole = "alert" | "alertDialog" | "button" | "caption" | "cell" | "checkBox" | "columnHeader" | "comboBox" | "complementary" | "dialog" | "figure" | "form" | "genericContainer" | "grid" | "gridCell" | "group" | "heading" | "image" | "label" | "link" | "list" | "listBox" | "listBoxOption" | "listItem" | "main" | "menu" | "menuBar" | "menuItem" | "menuItemCheckBox" | "menuItemRadio" | "multilineTextInput" | "navigation" | "passwordInput" | "progressIndicator" | "radioButton" | "radioGroup" | "region" | "row" | "rowGroup" | "rowHeader" | "scrollBar" | "scrollView" | "slider" | "splitter" | "status" | "switch" | "tab" | "tabList" | "tabPanel" | "table" | "textInput" | "toolbar" | "tooltip";
+export type NativeRole =
+  | "alert"
+  | "alertDialog"
+  | "button"
+  | "caption"
+  | "cell"
+  | "checkBox"
+  | "columnHeader"
+  | "comboBox"
+  | "complementary"
+  | "dialog"
+  | "figure"
+  | "form"
+  | "genericContainer"
+  | "grid"
+  | "gridCell"
+  | "group"
+  | "heading"
+  | "image"
+  | "label"
+  | "link"
+  | "list"
+  | "listBox"
+  | "listBoxOption"
+  | "listItem"
+  | "main"
+  | "menu"
+  | "menuBar"
+  | "menuItem"
+  | "menuItemCheckBox"
+  | "menuItemRadio"
+  | "multilineTextInput"
+  | "navigation"
+  | "passwordInput"
+  | "progressIndicator"
+  | "radioButton"
+  | "radioGroup"
+  | "region"
+  | "row"
+  | "rowGroup"
+  | "rowHeader"
+  | "scrollBar"
+  | "scrollView"
+  | "slider"
+  | "splitter"
+  | "status"
+  | "switch"
+  | "tab"
+  | "tabList"
+  | "tabPanel"
+  | "table"
+  | "textInput"
+  | "toolbar"
+  | "tooltip";
 export type NativeRelation = NativeNode | readonly NativeNode[] | null;
 export interface NativeElementProps extends NativeEventProps {
   children?: NativeChild;
@@ -288,7 +393,14 @@ export interface ImageProps extends Omit<NativeElementProps, "children"> {
 }
 
 /** Affine matrix coefficients in the order [a, b, c, d, e, f]. */
-export type CanvasTransform = readonly [a: number, b: number, c: number, d: number, e: number, f: number];
+export type CanvasTransform = readonly [
+  a: number,
+  b: number,
+  c: number,
+  d: number,
+  e: number,
+  f: number,
+];
 
 type CanvasPathSegment =
   | { kind: "moveTo"; x: number; y: number }
@@ -336,8 +448,22 @@ export interface VectorProps extends Omit<NativeElementProps, "children"> {
   svg?: string | null;
   canvas?: CanvasScene | null;
 }
-export type NativeTag = "image" | "vector" | "box" | "row" | "column" | "stack" | "text" | "label" | "scroll" | "control" | "field" | "editor";
-export interface ReactiveOptions { name?: string; }
+export type NativeTag =
+  | "image"
+  | "vector"
+  | "box"
+  | "row"
+  | "column"
+  | "stack"
+  | "text"
+  | "label"
+  | "scroll"
+  | "control"
+  | "field"
+  | "editor";
+export interface ReactiveOptions {
+  name?: string;
+}
 export interface MemoOptions<T> extends ReactiveOptions {
   equals?: false | ((previous: T, next: T) => boolean);
 }

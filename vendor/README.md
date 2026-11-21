@@ -450,3 +450,13 @@ Regression gate:
 Regression gate:
 
     bun run test:vendor zgui-platform-wayland && bun run test:vendor zgui-platform-headless && bun run test:vendor zgui-runtime
+
+## Hit-tested drag-and-drop and Wayland offer-slot isolation
+
+`zgui-platform-wayland` replaces the single shared `Option<Vec<PathBuf>>` drag-read slot in `input::dnd::Drag` (`DragTracker<O>`) with a bounded queue of `ReadCompletion` items tagged by `OfferKey { offer_id, generation }`. Delayed pipe completions from a superseded or source-cancelled offer are strictly discarded instead of contaminating a newer offer (even when the compositor reuses a protocol ID), and `unescape` decodes percent-encoded `file://` URIs as UTF-8 bytes.
+
+`zgui-runtime` routes `SurfaceEvent::Drag(DragEvent::Dropped { position, .. })` via `world.chain_at(device_point)` instead of keyboard focus, and exposes `Window::chain_at_css` and `Window::node_box_css` so internal reorder DnD and external `Entered`/`Moved`/`Left`/`Dropped` hover/drop negotiation share the exact native paint-clip, transform, scroll-offset, and scale hit-test pipeline.
+
+Regression gate:
+
+    bun run test:vendor zgui-platform-wayland && bun run test:vendor zgui-runtime && bun test --isolate tests/preview/dnd.test.mjs

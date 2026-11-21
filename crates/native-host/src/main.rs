@@ -1,5 +1,6 @@
 mod bounded_fs;
 mod control_cli;
+mod dnd;
 mod package;
 mod runtime_capabilities;
 mod runtime_paths;

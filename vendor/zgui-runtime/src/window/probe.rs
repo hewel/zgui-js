@@ -67,6 +67,33 @@ impl Window {
         world.chain_at(point).path().to_vec()
     }
 
+    /// Hit-tested node chain at a window-relative CSS pixel position, root first,
+    /// using the exact paint clips, transforms, scroll offsets, and scale of the last frame.
+    #[must_use]
+    pub fn chain_at_css(&self, point: zgui_geom::Point<zgui_geom::CssPx, zgui_geom::Css>) -> Vec<zgui_view::NodeId> {
+        let device = Point::new(
+            DevicePx(point.x.0 * self.scale),
+            DevicePx(point.y.0 * self.scale),
+        );
+        self.chain_at(device)
+            .into_iter()
+            .map(zgui_view_dom::id::to_view)
+            .collect()
+    }
+
+    /// Window-relative layout box of `node` in CSS pixels `(x, y, width, height)`.
+    #[must_use]
+    pub fn node_box_css(&self, node: zgui_view::NodeId) -> Option<(f32, f32, f32, f32)> {
+        let rect = zgui_view::ViewHost::window_box(self.host.as_ref(), node)?;
+        let inv = if self.scale > 0.0 { 1.0 / self.scale } else { 1.0 };
+        Some((
+            rect.origin.x.0 * inv,
+            rect.origin.y.0 * inv,
+            rect.size.width.0 * inv,
+            rect.size.height.0 * inv,
+        ))
+    }
+
     /// Whether a live node or its descendant has a hit-eligible fragment at this device point.
     ///
     /// Unlike [`Window::chain_at`], this also sees fragments behind an overlapping element.

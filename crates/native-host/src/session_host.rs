@@ -376,6 +376,10 @@ impl SessionHost {
                 }
             }
             SurfaceEvent::Destroyed => {
+                let sessions: Vec<Rc<Session>> = self.sessions().cloned().collect();
+                for session in sessions {
+                    let _ = session.cancel_drags_for_surface(surface);
+                }
                 runtime.surface_event_with_close(cx, surface, event, |runtime| {
                     let owner = self.sessions.values().find(|session| {
                         session.primary().is_some_and(|primary| primary.surface == surface)
@@ -384,6 +388,44 @@ impl SessionHost {
                         self.shell_windows.retire(owner, |token, id| surfaces::close_native_surface(runtime, cx, token, id));
                     }
                 });
+            }
+            SurfaceEvent::Drag(drag) => {
+                let sessions: Vec<Rc<Session>> = self.sessions().cloned().collect();
+                if let Some(window) = runtime.windows().iter().find(|w| w.surface().id() == surface) {
+                    for session in &sessions {
+                        if session.bridge_for_surface(surface).is_some() {
+                            session.handle_external_drag(window, surface, &drag)?;
+                        }
+                    }
+                }
+                runtime.surface_event(cx, surface, SurfaceEvent::Drag(drag));
+            }
+            SurfaceEvent::Pointer { action, event: ptr, .. } => {
+                let pos = ptr.position;
+                runtime.surface_event(cx, surface, event);
+                let sessions: Vec<Rc<Session>> = self.sessions().cloned().collect();
+                if let Some(window) = runtime.windows().iter().find(|w| w.surface().id() == surface) {
+                    for session in &sessions {
+                        if session.bridge_for_surface(surface).is_some() {
+                            session.handle_internal_drag_pointer(window, surface, action, pos)?;
+                        }
+                    }
+                }
+            }
+            SurfaceEvent::Key { state, event: ref key_ev, .. } => {
+                let mut consumed = false;
+                let sessions: Vec<Rc<Session>> = self.sessions().cloned().collect();
+                for session in &sessions {
+                    if session.bridge_for_surface(surface).is_some()
+                        && session.handle_drag_key(state, key_ev)?
+                    {
+                        consumed = true;
+                        break;
+                    }
+                }
+                if !consumed {
+                    runtime.surface_event(cx, surface, event);
+                }
             }
             SurfaceEvent::Occluded(occluded) => {
                 runtime.surface_event(cx, surface, event);

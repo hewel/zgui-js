@@ -62,8 +62,13 @@ impl DataDeviceHandler for WaylandState {
         else {
             return;
         };
-        self.drag
-            .entered(id, offer, crate::input::pointer::position(x, y));
+        let offer_id = offer.inner().id().protocol_id();
+        if let Some((prev_id, prev_event)) =
+            self.drag
+                .entered(id, offer_id, offer, crate::input::pointer::position(x, y))
+        {
+            self.report(prev_id, SurfaceEvent::Drag(prev_event));
+        }
         self.start_drag_read();
     }
 

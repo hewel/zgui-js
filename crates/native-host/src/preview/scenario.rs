@@ -35,6 +35,10 @@ pub enum Step {
     PointerUp { id: String, location: PointerLocation, button: PointerButton, pointer: PointerDevice },
     PointerCancel { id: String, location: PointerLocation, pointer: PointerDevice },
     Wheel { id: String, location: PointerLocation, delta: WheelDelta, phase: WheelPhase },
+    DragEnter { id: String, location: PointerLocation, paths: Vec<String> },
+    DragMove { id: String, location: PointerLocation },
+    DragLeave { id: String, surface: String },
+    DragDrop { id: String, location: PointerLocation, paths: Vec<String> },
     KeyPress { id: String, surface: String, key: Key, modifiers: Vec<Modifier> },
     TextCommit { id: String, surface: String, text: String },
     Assert { id: String, target: Target, check: Check },
@@ -57,6 +61,7 @@ impl Step {
             | Self::PointerMove { id, .. } | Self::PointerClick { id, .. }
             | Self::PointerDown { id, .. } | Self::PointerUp { id, .. } | Self::PointerCancel { id, .. }
             | Self::Wheel { id, .. }
+            | Self::DragEnter { id, .. } | Self::DragMove { id, .. } | Self::DragLeave { id, .. } | Self::DragDrop { id, .. }
             | Self::KeyPress { id, .. } | Self::TextCommit { id, .. }
             | Self::Assert { id, .. } | Self::AssertService { id, .. }
             | Self::ClockAdvance { id, .. } | Self::ServiceEmit { id, .. }
@@ -75,6 +80,10 @@ impl Step {
             Self::PointerUp { .. } => "pointer.up",
             Self::PointerCancel { .. } => "pointer.cancel",
             Self::Wheel { .. } => "wheel",
+            Self::DragEnter { .. } => "drag.enter",
+            Self::DragMove { .. } => "drag.move",
+            Self::DragLeave { .. } => "drag.leave",
+            Self::DragDrop { .. } => "drag.drop",
             Self::KeyPress { .. } => "key.press",
             Self::TextCommit { .. } => "text.commit",
             Self::Assert { .. } | Self::AssertService { .. } => "assert",
@@ -279,6 +288,14 @@ enum StepInput {
     PopupDone(NamedSurfaceInput),
     #[serde(rename = "wheel")]
     Wheel(WheelInput),
+    #[serde(rename = "drag.enter")]
+    DragEnter(DragPathsInput),
+    #[serde(rename = "drag.move")]
+    DragMove(DragMoveInput),
+    #[serde(rename = "drag.leave")]
+    DragLeave(NamedSurfaceInput),
+    #[serde(rename = "drag.drop")]
+    DragDrop(DragPathsInput),
     // Later operations remain explicit capability failures, never silently ignored.
     #[serde(rename = "pointer.drag")]
     PointerDrag,
@@ -445,6 +462,31 @@ struct WheelInput {
     delta: WheelDelta,
     #[serde(default)]
     phase: WheelPhase,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DragPathsInput {
+    id: String,
+    #[serde(default, deserialize_with = "present_object")]
+    target: Option<TargetInput>,
+    #[serde(default, deserialize_with = "present")]
+    surface: Option<String>,
+    #[serde(default, deserialize_with = "present_object")]
+    position: Option<PositionInput>,
+    paths: Vec<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DragMoveInput {
+    id: String,
+    #[serde(default, deserialize_with = "present_object")]
+    target: Option<TargetInput>,
+    #[serde(default, deserialize_with = "present")]
+    surface: Option<String>,
+    #[serde(default, deserialize_with = "present_object")]
+    position: Option<PositionInput>,
 }
 
 fn present_object<'de, D: Deserializer<'de>, T: Deserialize<'de>>(input: D) -> Result<Option<T>, D::Error> {
@@ -635,6 +677,22 @@ fn parse(bytes: &[u8], available: &[&str], virtual_profile: bool) -> Result<Scen
                 require(&mut requirements, "input.wheel");
                 Step::Wheel { id:input.id, location, delta:input.delta, phase:input.phase }
             }
+            StepInput::DragEnter(input) => {
+                let location = pointer_location(input.target, input.surface, input.position, &mut requirements)?;
+                Step::DragEnter { id: input.id, location, paths: input.paths }
+            }
+            StepInput::DragMove(input) => {
+                let location = pointer_location(input.target, input.surface, input.position, &mut requirements)?;
+                Step::DragMove { id: input.id, location }
+            }
+            StepInput::DragLeave(input) => {
+                validate_surface(&input.surface, &mut requirements)?;
+                Step::DragLeave { id: input.id, surface: input.surface }
+            }
+            StepInput::DragDrop(input) => {
+                let location = pointer_location(input.target, input.surface, input.position, &mut requirements)?;
+                Step::DragDrop { id: input.id, location, paths: input.paths }
+            }
             unsupported => {
                 let operation = match unsupported {
                     StepInput::PointerDrag => "pointer.drag",
@@ -647,7 +705,8 @@ fn parse(bytes: &[u8], available: &[&str], virtual_profile: bool) -> Result<Scen
                     StepInput::Settle(_) | StepInput::Capture(_)
                     | StepInput::PointerMove(_) | StepInput::PointerClick(_)
                     | StepInput::PointerDown(_) | StepInput::PointerUp(_) | StepInput::PointerCancel(_)
-                    | StepInput::Wheel(_) | StepInput::MonitorsSet(_) | StepInput::PopupDone(_)
+                    | StepInput::Wheel(_) | StepInput::DragEnter(_) | StepInput::DragMove(_) | StepInput::DragLeave(_) | StepInput::DragDrop(_)
+                    | StepInput::MonitorsSet(_) | StepInput::PopupDone(_)
                     | StepInput::KeyPress(_) | StepInput::TextCommit(_)
                     | StepInput::Assert(_) | StepInput::ClockAdvance(_) | StepInput::ServiceEmit(_)
                     | StepInput::SurfaceResize(_) | StepInput::SurfaceScale(_) | StepInput::SurfaceRecreate(_) | StepInput::SurfaceCloseRequest(_) | StepInput::SurfaceColorScheme(_) => unreachable!(),

@@ -2,6 +2,7 @@
 //! A structural turn is one outermost JavaScript entry; pending removals expire at its end.
 #![forbid(unsafe_code)]
 
+pub mod dnd;
 pub mod registry;
 mod properties;
 mod events;
@@ -421,6 +422,7 @@ pub struct UiBridge {
     stylesheets: RefCell<Vec<(String, String)>>,
     stylesheet_install_deferred: Cell<bool>,
     events: RefCell<events::Events>,
+    dnd: RefCell<dnd::DndListeners>,
     event_dispatcher: EventDispatcher,
     geometry: RefCell<geometry::Geometry>,
     geometry_dispatcher: GeometryDispatcher,
@@ -482,6 +484,7 @@ impl UiBridge {
                 stylesheets: RefCell::new(Vec::new()),
                 stylesheet_install_deferred: Cell::new(options.defer_stylesheet_install),
                 events,
+                dnd: RefCell::new(dnd::DndListeners::default()),
                 event_dispatcher,
                 geometry,
                 geometry_dispatcher,
@@ -622,13 +625,61 @@ impl UiBridge {
             wrappers.remove(&handle.token());
             self.properties.borrow_mut().remove(handle.token());
             self.events.borrow_mut().remove(handle.token());
+            self.dnd.borrow_mut().remove_owner(handle.token());
         }
     }
 
     pub fn live_count(&self) -> usize { self.registry.borrow().live_count() }
     pub fn wrapper_count(&self) -> usize { self.wrappers.borrow().len() }
     pub fn is_disposed(&self) -> bool { self.disposed.get() }
-    pub fn callback_count(&self) -> usize { self.events.borrow().len() + self.geometry.borrow().len() }
+    pub fn callback_count(&self) -> usize {
+        self.events.borrow().len() + self.geometry.borrow().len() + self.dnd.borrow().len()
+    }
+
+    /// Resolves a branded `NativeNode` owned by this bridge into its native `NodeId`.
+    pub fn resolve_native_node(&self, ctx: &Ctx<'_>, node: &Class<'_, NativeNode>) -> rquickjs::Result<zgui::view::NodeId> {
+        let handle = node.borrow().handle;
+        self.registry.borrow().native(handle).map_err(|e| host_error(ctx, e))
+    }
+
+    /// Returns whether `native` is still live and attached under this bridge's root.
+    #[must_use]
+    pub fn is_native_node_attached(&self, native: zgui::view::NodeId) -> bool {
+        if self.disposed.get() {
+            return false;
+        }
+        let registry = self.registry.borrow();
+        let dom = registry.dom_handle();
+        if !dom.is_live(native) {
+            return false;
+        }
+        let Ok(root_native) = registry.native(registry.root()) else {
+            return false;
+        };
+        let mut cursor = Some(native);
+        let mut hops = 0usize;
+        while let Some(id) = cursor {
+            if id == root_native {
+                return true;
+            }
+            hops += 1;
+            if hops > 4096 {
+                return false;
+            }
+            cursor = dom.parent(id);
+        }
+        false
+    }
+
+    /// Returns the registered JS DnD callback for `(native, kind)`, if any.
+    #[must_use]
+    pub fn dnd_callback(
+        &self,
+        native: zgui::view::NodeId,
+        kind: dnd::DndEventKind,
+    ) -> Option<Persistent<rquickjs::Function<'static>>> {
+        self.dnd.borrow().callback(native, kind)
+    }
     pub fn focus_trap_count(&self) -> usize { self.focus_traps.borrow().len() }
     pub fn scroll_lock_count(&self) -> usize { self.scroll_locks.borrow().len() }
     /// Returns the number of retained canvas scenes still owned by this session.
@@ -808,6 +859,7 @@ impl UiBridge {
             self.events.borrow_mut().remove_callback(callback);
         }
         self.events.borrow_mut().clear();
+        self.dnd.borrow_mut().clear();
         self.geometry.borrow_mut().clear();
         self.scroll_locks.borrow_mut().clear();
         self.pending.borrow_mut().clear();
@@ -921,6 +973,9 @@ impl UiBridge {
             if name.starts_with("on") {
                 if !value.is_null() && !value.is_undefined() { bridge.require_creation(&ctx)?; }
                 let native = bridge.registry.borrow().native(handle).map_err(|e| host_error(&ctx, e))?;
+                if let Some(dnd_kind) = dnd::DndEventKind::parse(&name) {
+                    return bridge.dnd.borrow_mut().set(&ctx, handle, native, dnd_kind, value);
+                }
                 return bridge.events.borrow_mut().set(&ctx, handle, native, &name, value, bridge.event_dispatcher.clone());
             }
             if let Some(relation) = properties::Relation::parse(&name) {

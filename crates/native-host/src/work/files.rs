@@ -597,6 +597,51 @@ impl Work {
         )
     }
 
+    /// Mints read-only Wave 1 `FileHandle` capabilities for paths from an accepted external drop.
+    /// Never exposes raw host paths; only regular existing files are minted.
+    pub(crate) fn mint_dropped_file_handles<'js>(
+        self: &Rc<Self>,
+        ctx: &Ctx<'js>,
+        paths: &[PathBuf],
+    ) -> rquickjs::Result<Array<'js>> {
+        let out = Array::new(ctx.clone())?;
+        let mut idx = 0usize;
+        for raw_path in paths {
+            let resolved = match &self.files.backend {
+                FilesBackend::Preview { vfs, .. } => {
+                    let Some(path_str) = raw_path.to_str() else {
+                        continue;
+                    };
+                    let vfs = vfs.borrow();
+                    match vfs.stat(path_str) {
+                        Ok(stat) if stat.is_file => Some(path_str.to_owned()),
+                        _ => None,
+                    }
+                }
+                FilesBackend::Live { .. } => {
+                    match std::fs::canonicalize(raw_path) {
+                        Ok(canon) if canon.is_file() => canon.to_str().map(str::to_owned),
+                        _ => None,
+                    }
+                }
+            };
+            let Some(path) = resolved else {
+                continue;
+            };
+            let handle_obj = self.register_handle(
+                ctx,
+                OpenHandle {
+                    kind: HandleKind::File,
+                    path,
+                    mode: FileMode::Read,
+                },
+            )?;
+            out.set(idx, handle_obj)?;
+            idx += 1;
+        }
+        Ok(out)
+    }
+
     fn register_handle<'js>(
         self: &Rc<Self>,
         ctx: &Ctx<'js>,
