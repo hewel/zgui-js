@@ -151,6 +151,13 @@ impl DataSourceHandler for WaylandState {
     }
 
     fn cancelled(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, source: &WlDataSource) {
+        if let Some(surface) = self.clipboard.selections().outbound_drag_cancelled(source) {
+            self.report(
+                surface,
+                SurfaceEvent::Drag(zgui_platform::DragEvent::OutboundFinished { accepted: false }),
+            );
+            return;
+        }
         // Somebody else took the selection. Letting go here is what stops this application from
         // answering for a clipboard it no longer owns.
         self.clipboard.selections().lost(source);
@@ -160,29 +167,42 @@ impl DataSourceHandler for WaylandState {
         &mut self,
         _conn: &Connection,
         _qh: &QueueHandle<Self>,
-        _source: &WlDataSource,
-        _mime: Option<String>,
+        source: &WlDataSource,
+        mime: Option<String>,
     ) {
+        self.clipboard
+            .selections()
+            .outbound_drag_accept_mime(source, mime);
     }
 
-    fn dnd_dropped(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, _source: &WlDataSource) {
+    fn dnd_dropped(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, source: &WlDataSource) {
+        self.clipboard.selections().outbound_drag_dropped(source);
     }
 
     fn dnd_finished(
         &mut self,
         _conn: &Connection,
         _qh: &QueueHandle<Self>,
-        _source: &WlDataSource,
+        source: &WlDataSource,
     ) {
+        if let Some(surface) = self.clipboard.selections().outbound_drag_finished(source) {
+            self.report(
+                surface,
+                SurfaceEvent::Drag(zgui_platform::DragEvent::OutboundFinished { accepted: true }),
+            );
+        }
     }
 
     fn action(
         &mut self,
         _conn: &Connection,
         _qh: &QueueHandle<Self>,
-        _source: &WlDataSource,
-        _action: DndAction,
+        source: &WlDataSource,
+        action: DndAction,
     ) {
+        self.clipboard
+            .selections()
+            .outbound_drag_action(source, action);
     }
 }
 

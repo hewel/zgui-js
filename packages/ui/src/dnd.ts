@@ -21,15 +21,37 @@ export interface DragStartOptions<T = unknown> {
   readonly onEnd?: ((result: DragEndResult) => void) | undefined;
 }
 
-/** Handle to an active internal drag operation. */
+/** Handle to an active drag operation. */
 export interface DragHandle {
   readonly id: number;
   /** Cancels the drag immediately, notifying hovered targets (`onDragLeave`) and `onEnd`. */
   cancel(): void;
 }
 
+/** One MIME representation offered to external desktop apps during a Copy-only outbound drag. */
+export interface OutboundDragItem {
+  readonly mime: string;
+  readonly data: string | Uint8Array;
+}
+
+/** Outcome delivered to `OutboundDragOptions.onEnd` when an outbound drag finishes or cancels. */
+export interface OutboundDragEndResult {
+  readonly accepted: boolean;
+  readonly effect: "copy" | "none";
+  readonly reason: "finished" | "cancel" | "surface-lost" | "retired";
+}
+
+/** Options for starting a platform-driven Copy-only outbound drag. */
+export interface OutboundDragOptions {
+  /** Non-empty list of MIME representations (1..=16 entries, <= 4 MiB total). */
+  readonly items: readonly OutboundDragItem[];
+  /** Optional callback invoked when the external drag completes or cancels. */
+  readonly onEnd?: ((result: OutboundDragEndResult) => void) | undefined;
+}
+
 interface NativeDndBridge {
   startInternalDrag(sourceNode: NativeNode, options: DragStartOptions<unknown>): DragHandle;
+  startOutboundDrag(sourceNode: NativeNode, options: OutboundDragOptions): DragHandle;
 }
 
 function nativeDnd(): NativeDndBridge {
@@ -38,7 +60,7 @@ function nativeDnd(): NativeDndBridge {
 
 /**
  * Starts a session-local hit-tested drag operation from `sourceNode`.
- * Only one internal drag may be active per session; pointer capture stays on the source
+ * Only one drag may be active per session; pointer capture stays on the source
  * while drop targets are resolved through native `Window::chain_at` hit-testing.
  * Auto-cancels on Solid owner cleanup, Escape, source node detach, surface loss, or retirement.
  */
@@ -47,6 +69,22 @@ export function startInternalDrag<T = unknown>(
   options: DragStartOptions<T>,
 ): DragHandle {
   const handle = nativeDnd().startInternalDrag(sourceNode, options);
+  if (getOwner()) {
+    onCleanup(() => handle.cancel());
+  }
+  return handle;
+}
+
+/**
+ * Starts a platform-driven outbound `Copy`-only drag from `sourceNode` to external applications.
+ * Requires an active live pointer/touch press on the originating surface (throws `E_DRAG_NO_LIVE_PRESS`
+ * otherwise); never advertises `Move`. Auto-cancels on Solid owner cleanup or session retirement.
+ */
+export function startOutboundDrag(
+  sourceNode: NativeNode,
+  options: OutboundDragOptions,
+): DragHandle {
+  const handle = nativeDnd().startOutboundDrag(sourceNode, options);
   if (getOwner()) {
     onCleanup(() => handle.cancel());
   }

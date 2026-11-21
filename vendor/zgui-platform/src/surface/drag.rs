@@ -48,6 +48,27 @@ pub enum DragEvent {
     },
     /// The drag left the surface without being dropped.
     Left,
+    /// An outbound `Copy`-only drag initiated from this surface completed or was cancelled.
+    OutboundFinished {
+        /// Whether the external destination accepted and finished the copy transfer.
+        accepted: bool,
+    },
+}
+
+/// Owned MIME payload offered during a platform-driven outbound `Copy`-only drag.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct OutboundDragPayload {
+    /// Ordered `(mime_type, bytes)` representations advertised to the desktop.
+    pub items: Vec<(String, Vec<u8>)>,
+}
+
+impl OutboundDragPayload {
+    /// Constructs a new outbound drag payload from `(mime_type, bytes)` pairs.
+    #[must_use]
+    pub fn new(items: Vec<(String, Vec<u8>)>) -> Self {
+        Self { items }
+    }
 }
 
 impl DragEvent {
@@ -55,7 +76,7 @@ impl DragEvent {
     pub fn paths(&self) -> &[PathBuf] {
         match self {
             Self::Entered { paths, .. } | Self::Dropped { paths, .. } => paths,
-            Self::Moved { .. } | Self::Left => &[],
+            Self::Moved { .. } | Self::Left | Self::OutboundFinished { .. } => &[],
         }
     }
 
@@ -65,7 +86,7 @@ impl DragEvent {
             Self::Entered { position, .. }
             | Self::Moved { position }
             | Self::Dropped { position, .. } => Some(*position),
-            Self::Left => None,
+            Self::Left | Self::OutboundFinished { .. } => None,
         }
     }
 

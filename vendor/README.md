@@ -460,3 +460,13 @@ Regression gate:
 Regression gate:
 
     bun run test:vendor zgui-platform-wayland && bun run test:vendor zgui-runtime && bun test --isolate tests/preview/dnd.test.mjs
+
+## Outbound Copy-only Wayland drag source
+
+`zgui-platform` adds `OutboundDragPayload`, `DragEvent::OutboundFinished { accepted }`, and default `Surface::begin_outbound_drag` / `Surface::cancel_outbound_drag` methods.
+
+`zgui-platform-wayland` tracks live active pointer/touch presses on `SeatLink` (`press_started`/`press_ended`/`live_drag_serial`, cleared on release, leave, or cancel so stale serials are rejected) and wires all `DataSourceHandler` callbacks in `driver/data.rs` (`send_request`, `accept_mime`, `action`, `dnd_dropped`, `dnd_finished`, `cancelled`) to `Selections`. Outbound drags create a `DragSource` advertising `DndAction::Copy` only (never `Move`) and explicitly destroy `wl_data_source` on finish, cancellation, or drop. `zgui-platform-headless` tracks `live_press` and outbound drag counts on `OffscreenSurface` for deterministic preview verification.
+
+Regression gate:
+
+    bun run test:vendor zgui-platform && bun run test:vendor zgui-platform-wayland && bun run test:vendor zgui-platform-headless && bun test --isolate tests/preview/dnd.test.mjs

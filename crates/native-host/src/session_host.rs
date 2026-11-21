@@ -179,6 +179,10 @@ impl SessionSurface for RuntimeSurface<'_> {
     fn bind(&mut self, document: DocumentId, session: &Rc<Session>) {
         let window = self.runtime.windows_mut().iter_mut().find(|window| window.document_id() == document)
             .expect("pure preflight cannot destroy its native window");
+        let surface_id = window.surface().id();
+        if let Some(native) = self.cx.surface(surface_id) {
+            session.register_platform_surface(surface_id, &native);
+        }
         // Binding replacement itself neither shuts down the old owner nor
         // requests a frame. Both are explicit at this owner-thread boundary.
         window.install_binding(Box::new(Binding { owner: Rc::downgrade(session), document }));

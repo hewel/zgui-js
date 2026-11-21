@@ -166,6 +166,14 @@ pub struct OffscreenSurface {
     fullscreen: Mutex<Option<FullscreenMode>>,
     /// Number of platform move drags initiated on this surface.
     move_drags: AtomicU64,
+    /// Whether a live pointer press is currently active on this surface.
+    live_press: AtomicBool,
+    /// Active outbound Copy-only drag payload, if one is currently in flight.
+    outbound_drag: Mutex<Option<zgui_platform::OutboundDragPayload>>,
+    /// Number of outbound Copy-only drags started on this surface.
+    outbound_drags: AtomicU64,
+    /// Number of outbound Copy-only drags explicitly cancelled on this surface.
+    outbound_drag_cancels: AtomicU64,
 }
 
 impl OffscreenSurface {
@@ -193,6 +201,10 @@ impl OffscreenSurface {
             minimized: AtomicBool::new(false),
             fullscreen: Mutex::new(None),
             move_drags: AtomicU64::new(0),
+            live_press: AtomicBool::new(false),
+            outbound_drag: Mutex::new(None),
+            outbound_drags: AtomicU64::new(0),
+            outbound_drag_cancels: AtomicU64::new(0),
         }
     }
 
@@ -265,6 +277,32 @@ impl OffscreenSurface {
     #[must_use]
     pub fn move_drag_count(&self) -> u64 {
         self.move_drags.load(Ordering::Relaxed)
+    }
+
+    /// Updates whether a live pointer press is active on this surface.
+    pub fn set_live_press(&self, active: bool) {
+        self.live_press.store(active, Ordering::Release);
+    }
+
+    /// How many outbound Copy-only drags were started on this surface.
+    #[must_use]
+    pub fn outbound_drag_count(&self) -> u64 {
+        self.outbound_drags.load(Ordering::Relaxed)
+    }
+
+    /// How many outbound Copy-only drags were cancelled on this surface.
+    #[must_use]
+    pub fn outbound_drag_cancel_count(&self) -> u64 {
+        self.outbound_drag_cancels.load(Ordering::Relaxed)
+    }
+
+    /// Current active outbound drag payload, if any.
+    #[must_use]
+    pub fn active_outbound_drag(&self) -> Option<zgui_platform::OutboundDragPayload> {
+        self.outbound_drag
+            .lock()
+            .expect("the outbound drag is not poisoned")
+            .clone()
     }
 
     /// What the surface was most recently asked to be.
@@ -558,6 +596,31 @@ impl Surface for OffscreenSurface {
     fn begin_move_drag(&self) -> Result<(), Unsupported> {
         self.move_drags.fetch_add(1, Ordering::Relaxed);
         Ok(())
+    }
+
+    fn begin_outbound_drag(
+        &self,
+        payload: zgui_platform::OutboundDragPayload,
+    ) -> Result<(), Unsupported> {
+        if !self.live_press.load(Ordering::Acquire) || payload.items.is_empty() {
+            return Err(Unsupported);
+        }
+        *self
+            .outbound_drag
+            .lock()
+            .expect("the outbound drag is not poisoned") = Some(payload);
+        self.outbound_drags.fetch_add(1, Ordering::Relaxed);
+        Ok(())
+    }
+
+    fn cancel_outbound_drag(&self) {
+        let mut slot = self
+            .outbound_drag
+            .lock()
+            .expect("the outbound drag is not poisoned");
+        if slot.take().is_some() {
+            self.outbound_drag_cancels.fetch_add(1, Ordering::Relaxed);
+        }
     }
 
     fn set_cursor(&self, cursor: CursorStyle) {

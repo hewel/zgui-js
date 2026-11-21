@@ -61,6 +61,8 @@ pub struct Links {
     pub waker: Arc<dyn zgui_platform::Waker>,
     /// The shell a pop-up's later requests are made against.
     pub shell: Arc<crate::surface::role::xdg::XdgShell>,
+    /// Shared clipboard and outbound Copy-only drag source controller.
+    pub selections: Arc<crate::clipboard::Selections>,
 }
 
 impl core::fmt::Debug for Links {
@@ -165,6 +167,8 @@ pub struct WaylandSurface {
     /// whichever surface asks. So the loop lends each surface a way to reach it, guarded by
     /// whether that surface is the one the pointer is actually on.
     seat: Arc<SeatLink>,
+    /// Shared clipboard and outbound Copy-only drag source controller.
+    selections: Arc<crate::clipboard::Selections>,
 }
 
 impl WaylandSurface {
@@ -195,6 +199,7 @@ impl WaylandSurface {
             shell: links.shell,
             a11y: A11y::open(id, links.waker),
             seat: links.seat,
+            selections: links.selections,
         })
     }
 
@@ -720,6 +725,19 @@ impl Surface for WaylandSurface {
 
     fn begin_resize_drag(&self, edge: zgui_platform::ResizeEdge) -> Result<(), Unsupported> {
         chrome::begin_resize_drag(self, edge)
+    }
+
+    fn begin_outbound_drag(
+        &self,
+        payload: zgui_platform::OutboundDragPayload,
+    ) -> Result<(), Unsupported> {
+        let (_seat, serial) = self.seat.live_drag_serial(self.id)?;
+        self.selections
+            .start_outbound_drag(self.id, self.wl_surface(), serial, payload)
+    }
+
+    fn cancel_outbound_drag(&self) {
+        self.selections.cancel_outbound_drag(self.id);
     }
 
     fn set_text_input(&self, state: Option<TextInput>) {

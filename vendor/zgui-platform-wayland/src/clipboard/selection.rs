@@ -4,18 +4,20 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use smithay_client_toolkit::data_device_manager::DataDeviceManagerState;
 use smithay_client_toolkit::data_device_manager::data_device::DataDevice;
-use smithay_client_toolkit::data_device_manager::data_source::CopyPasteSource;
+use smithay_client_toolkit::data_device_manager::data_source::{CopyPasteSource, DragSource};
 use smithay_client_toolkit::data_device_manager::{ReadPipe, WritePipe};
 use smithay_client_toolkit::primary_selection::PrimarySelectionManagerState;
 use smithay_client_toolkit::primary_selection::device::PrimarySelectionDevice;
 use smithay_client_toolkit::primary_selection::selection::PrimarySelectionSource;
 use smithay_client_toolkit::reexports::client::Connection;
 use smithay_client_toolkit::reexports::client::QueueHandle;
+use smithay_client_toolkit::reexports::client::protocol::wl_data_device_manager::DndAction;
 use smithay_client_toolkit::reexports::client::protocol::wl_data_source::WlDataSource;
+use smithay_client_toolkit::reexports::client::protocol::wl_surface::WlSurface;
 use smithay_client_toolkit::reexports::protocols::wp::primary_selection::zv1::client::zwp_primary_selection_source_v1::ZwpPrimarySelectionSourceV1;
 use zgui_platform::{
     ClipboardData, ClipboardError, ClipboardFormat, ClipboardKind, ClipboardSerial,
-    ClipboardWriteOptions, Waker,
+    ClipboardWriteOptions, OutboundDragPayload, SurfaceId, Unsupported, Waker,
 };
 
 use crate::clipboard::{deliver, mime, pipe};
@@ -48,6 +50,27 @@ struct Inner {
     serial: Option<u32>,
     /// What this application has put on each clipboard.
     held: [Option<Held>; 2],
+    /// Currently active outbound `Copy`-only drag source, if any.
+    outbound_drag: Option<ActiveOutboundDrag>,
+}
+
+/// An active outbound `Copy`-only drag source owned by this client until finished or cancelled.
+#[derive(Debug)]
+struct ActiveOutboundDrag {
+    surface: SurfaceId,
+    source: DragSource,
+    items: Vec<(String, Vec<u8>)>,
+    accepted_mime: Option<String>,
+    selected_action: DndAction,
+    dropped: bool,
+}
+
+impl Drop for ActiveOutboundDrag {
+    fn drop(&mut self) {
+        // `DragSource` derives `Clone` and does not destroy its proxy on drop;
+        // destroy explicitly so retiring or cancelling tears down the Wayland drag cleanly.
+        self.source.inner().destroy();
+    }
 }
 
 /// The ordinary clipboard's objects.
@@ -247,11 +270,25 @@ impl Selections {
     /// On a thread, because the destination is another process and a destination that stops
     /// reading would otherwise hold the loop for as long as it liked.
     pub(crate) fn serve(&self, source: &WlDataSource, requested_mime: &str, destination: WritePipe) {
-        let payload = self.lock().held.iter().flatten().find_map(|held| {
-            matches!(&held.source, Source::Standard(owned) if owned.inner() == source)
-                .then(|| payload_for_mime(&held.data, held.secret, requested_mime))
-                .flatten()
-        });
+        let payload = {
+            let inner = self.lock();
+            if let Some(drag) = inner
+                .outbound_drag
+                .as_ref()
+                .filter(|drag| drag.source.inner() == source)
+            {
+                drag.items
+                    .iter()
+                    .find(|(m, _)| m.eq_ignore_ascii_case(requested_mime))
+                    .map(|(_, bytes)| bytes.clone())
+            } else {
+                inner.held.iter().flatten().find_map(|held| {
+                    matches!(&held.source, Source::Standard(owned) if owned.inner() == source)
+                        .then(|| payload_for_mime(&held.data, held.secret, requested_mime))
+                        .flatten()
+                })
+            }
+        };
         serve_bytes(payload, destination);
     }
 
@@ -411,6 +448,117 @@ impl Selections {
     ) {
         let waker = self.lock().waker.clone();
         deliver(waker.as_ref(), serial, result);
+    }
+
+    /// Starts an outbound `Copy`-only Wayland drag on `origin` using the verified live press `serial`.
+    ///
+    /// Never advertises `DndAction::Move`.
+    pub(crate) fn start_outbound_drag(
+        &self,
+        surface: SurfaceId,
+        origin: &WlSurface,
+        serial: u32,
+        payload: OutboundDragPayload,
+    ) -> Result<(), Unsupported> {
+        if payload.items.is_empty() {
+            return Err(Unsupported);
+        }
+        let mut inner = self.lock();
+        let qh = inner.qh.clone().ok_or(Unsupported)?;
+        let standard = inner.standard.as_ref().ok_or(Unsupported)?;
+        let mimes: Vec<&str> = payload.items.iter().map(|(m, _)| m.as_str()).collect();
+        // Copy-only semantics: never advertise Move without a destination-commit contract.
+        let source = standard
+            .manager
+            .create_drag_and_drop_source(&qh, mimes, DndAction::Copy);
+        source.start_drag(&standard.device, origin, None, serial);
+        inner.outbound_drag = Some(ActiveOutboundDrag {
+            surface,
+            source,
+            items: payload.items,
+            accepted_mime: None,
+            selected_action: DndAction::None,
+            dropped: false,
+        });
+        if let Some(conn) = &inner.conn {
+            let _ = conn.flush();
+        }
+        Ok(())
+    }
+
+    /// Cancels an active outbound drag originating from `surface`, destroying its `wl_data_source`.
+    pub(crate) fn cancel_outbound_drag(&self, surface: SurfaceId) {
+        let mut inner = self.lock();
+        if inner
+            .outbound_drag
+            .as_ref()
+            .is_some_and(|drag| drag.surface == surface)
+        {
+            inner.outbound_drag = None;
+            if let Some(conn) = &inner.conn {
+                let _ = conn.flush();
+            }
+        }
+    }
+
+    /// Records the target's accepted MIME type for the active outbound drag source.
+    pub(crate) fn outbound_drag_accept_mime(&self, source: &WlDataSource, mime: Option<String>) {
+        let mut inner = self.lock();
+        if let Some(drag) = inner
+            .outbound_drag
+            .as_mut()
+            .filter(|drag| drag.source.inner() == source)
+        {
+            drag.accepted_mime = mime;
+        }
+    }
+
+    /// Records the compositor-selected action (`Copy` or `None`) for the active outbound drag.
+    pub(crate) fn outbound_drag_action(&self, source: &WlDataSource, action: DndAction) {
+        let mut inner = self.lock();
+        if let Some(drag) = inner
+            .outbound_drag
+            .as_mut()
+            .filter(|drag| drag.source.inner() == source)
+        {
+            drag.selected_action = if action.contains(DndAction::Copy) {
+                DndAction::Copy
+            } else {
+                DndAction::None
+            };
+        }
+    }
+
+    /// Marks the active outbound drag as dropped while awaiting `dnd_finished` or `cancelled`.
+    pub(crate) fn outbound_drag_dropped(&self, source: &WlDataSource) {
+        let mut inner = self.lock();
+        if let Some(drag) = inner
+            .outbound_drag
+            .as_mut()
+            .filter(|drag| drag.source.inner() == source)
+        {
+            drag.dropped = true;
+        }
+    }
+
+    /// Completes and destroys the active outbound drag on `dnd_finished`, returning its surface.
+    pub(crate) fn outbound_drag_finished(&self, source: &WlDataSource) -> Option<SurfaceId> {
+        let mut inner = self.lock();
+        let matches = inner
+            .outbound_drag
+            .as_ref()
+            .is_some_and(|drag| drag.source.inner() == source);
+        if matches {
+            let drag = inner.outbound_drag.take()?;
+            Some(drag.surface)
+        } else {
+            None
+        }
+    }
+
+    /// Cancels and destroys the active outbound drag on `cancelled`, returning its surface.
+    pub(crate) fn outbound_drag_cancelled(&self, source: &WlDataSource) -> Option<SurfaceId> {
+        self.outbound_drag_finished(source)
     }
 
     /// The state, recovering from a panic on another thread.

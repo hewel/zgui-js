@@ -54,9 +54,16 @@ const SUITES = [
   {
     crate: "zgui-platform-wayland",
     args: [
+      "--lib", "surface::seat",
+    ],
+  },
+  {
+    crate: "zgui-platform-wayland",
+    args: [
       "--test", "layer_protocol",
       "--test", "session_lock_protocol",
       "--test", "popup_protocol",
+      "--test", "dnd_source_protocol",
     ],
   },
   {

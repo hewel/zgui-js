@@ -206,6 +206,13 @@ impl<A: AppHandler> Harness<A> {
                 offscreen.set_scale_factor(*scale_factor);
                 offscreen.resize(*size);
             }
+            SurfaceEvent::Pointer { action, .. } => match action {
+                zgui_vocab::PointerAction::Pressed => offscreen.set_live_press(true),
+                zgui_vocab::PointerAction::Released
+                | zgui_vocab::PointerAction::Cancelled
+                | zgui_vocab::PointerAction::Left => offscreen.set_live_press(false),
+                _ => {}
+            },
             _ => {}
         }
         if configure && self.redraw_on_configure {

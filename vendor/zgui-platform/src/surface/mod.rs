@@ -17,7 +17,7 @@ pub use crate::surface::attributes::{SurfaceAttributes, TitleButtons};
 pub use crate::surface::chrome::{
     CursorStyle, DecorationSource, Decorations, FullscreenMode, ResizeEdge, WindowLevel,
 };
-pub use crate::surface::drag::DragEvent;
+pub use crate::surface::drag::{DragEvent, OutboundDragPayload};
 pub use crate::surface::event::SurfaceEvent;
 pub use crate::surface::gpu::GpuSurface;
 pub use crate::surface::icon::{BadIcon, WindowIcon};
@@ -258,6 +258,18 @@ pub trait Surface: Send + Sync + 'static {
         let _ = edge;
         Err(Unsupported)
     }
+
+    /// Begins a platform-driven outbound `Copy`-only drag from this surface.
+    ///
+    /// Requires an active live press serial on the originating seat/surface; returns
+    /// `Err(Unsupported)` when unsupported or no live press is active.
+    fn begin_outbound_drag(&self, payload: OutboundDragPayload) -> Result<(), Unsupported> {
+        let _ = payload;
+        Err(Unsupported)
+    }
+
+    /// Cancels any active outbound drag initiated from this surface.
+    fn cancel_outbound_drag(&self) {}
 
     /// Sets what the pointer looks like over this surface.
     fn set_cursor(&self, cursor: CursorStyle);

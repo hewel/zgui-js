@@ -93,5 +93,13 @@ export type {
   VirtualScrollAlign,
   VirtualScrollToIndexOptions,
 } from "./virtual-list.js";
-export { startInternalDrag } from "./dnd.js";
-export type { DragEffect, DragEndResult, DragHandle, DragStartOptions } from "./dnd.js";
+export { startInternalDrag, startOutboundDrag } from "./dnd.js";
+export type {
+  DragEffect,
+  DragEndResult,
+  DragHandle,
+  DragStartOptions,
+  OutboundDragEndResult,
+  OutboundDragItem,
+  OutboundDragOptions,
+} from "./dnd.js";

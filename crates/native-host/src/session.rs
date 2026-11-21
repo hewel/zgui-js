@@ -329,6 +329,7 @@ pub(crate) struct Session {
     window_controls: Rc<WindowControls>,
     pub(crate) work: Rc<Work>,
     pub(crate) dnd: crate::dnd::DndState,
+    platform_surfaces: RefCell<std::collections::HashMap<SurfaceId, std::sync::Weak<dyn Surface>>>,
     pub(crate) engine: RefCell<Option<JsRuntime>>,
     font_leases: RefCell<Vec<zgui::app::fonts::FontLease>>,
     reported_unregistered_fonts: RefCell<std::collections::BTreeSet<String>>,
@@ -446,7 +447,7 @@ impl Session {
             work.guard_cleanup_with(shell.clone());
             work.set_gesture_source(bridges.clone());
             Self {
-                disposer: RefCell::new(None), primary, layers: RefCell::new(BTreeMap::new()), bridges, shell, window_controls, work, dnd: crate::dnd::DndState::new(), engine: RefCell::new(None),
+                disposer: RefCell::new(None), primary, layers: RefCell::new(BTreeMap::new()), bridges, shell, window_controls, work, dnd: crate::dnd::DndState::new(), platform_surfaces: RefCell::new(std::collections::HashMap::new()), engine: RefCell::new(None),
                 shell_surfaces: Cell::new(0), retirement_reported: Cell::new(false),
                 shell_stylesheets: RefCell::new(Vec::new()),
                 telemetry: Cell::new(None), shutdown_started: Cell::new(false),
@@ -801,6 +802,19 @@ impl Session {
     /// Releases deferred outbound network operations once the session is accepted.
     pub(crate) fn commit_staged_mount(&self) {
         self.work.commit_staged_network();
+    }
+
+    pub(crate) fn register_platform_surface(&self, id: SurfaceId, surface: &Arc<dyn Surface>) {
+        self.platform_surfaces
+            .borrow_mut()
+            .insert(id, Arc::downgrade(surface));
+    }
+
+    pub(crate) fn platform_surface(&self, id: SurfaceId) -> Option<Arc<dyn Surface>> {
+        self.platform_surfaces
+            .borrow()
+            .get(&id)
+            .and_then(std::sync::Weak::upgrade)
     }
 
     pub(crate) fn bridge_for_surface(&self, surface: SurfaceId) -> Option<Rc<UiBridge>> {
@@ -1361,7 +1375,7 @@ impl Session {
             http_requests: network.http_requests,
             event_streams: network.event_streams,
             web_sockets: network.web_sockets,
-            active_drags: self.dnd.active_internal_count(),
+            active_drags: self.dnd.active_count(),
             shell_surfaces: self.shell_surfaces.get(),
             fonts: self.font_leases.borrow().len(),
             engine_alive: self.engine.borrow().is_some(),
@@ -1458,8 +1472,10 @@ impl Session {
         let sqlite = self.work.sqlite_counts();
         let files = self.work.file_counts();
         let network = self.work.network_counts();
-        let active_drags = self.dnd.active_internal_count();
+        let active_drags = self.dnd.active_count();
+        self.cancel_outbound_drag_on_platform();
         self.dnd.clear();
+        self.platform_surfaces.borrow_mut().clear();
         self.work.finish_stop();
         // Report remaining leases before forced disposal releases the native scenes.
         let canvas_scenes = self.counts().canvas_scenes;

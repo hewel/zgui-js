@@ -7,20 +7,23 @@ use std::{
 };
 
 use rquickjs::{
-    Array, Ctx, Exception, Function, Object, Persistent, Value,
+    Array, Ctx, Exception, Function, Object, Persistent, TypedArray, Value,
     function::{Func, Opt},
     object::Property,
 };
 use ui_bridge::dnd::DndEventKind;
 use zgui::{
     geom::{Css, CssPx, Point},
-    platform::{DragEvent, SurfaceId},
+    platform::{DragEvent, OutboundDragPayload, SurfaceId},
     runtime::Window,
     view::NodeId,
     vocab::{Key, KeyEvent, KeyState, NamedKey, PointerAction},
 };
 
 use crate::session::{Result as SessionResult, Session};
+
+const MAX_OUTBOUND_DRAG_ITEMS: usize = 16;
+const MAX_OUTBOUND_DRAG_BYTES: usize = 4 * 1024 * 1024;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum DragEffect {
@@ -68,11 +71,18 @@ struct ExternalDrag {
     accepted: Option<(NodeId, DragEffect)>,
 }
 
+struct OutboundDrag {
+    id: u64,
+    surface: SurfaceId,
+    on_end: Option<Persistent<Function<'static>>>,
+}
+
 #[derive(Default)]
 pub(crate) struct DndState {
     next_id: Cell<u64>,
     internal: RefCell<Option<InternalDrag>>,
     external: RefCell<Option<ExternalDrag>>,
+    outbound: RefCell<Option<OutboundDrag>>,
 }
 
 impl DndState {
@@ -81,6 +91,7 @@ impl DndState {
             next_id: Cell::new(1),
             internal: RefCell::new(None),
             external: RefCell::new(None),
+            outbound: RefCell::new(None),
         }
     }
 
@@ -90,9 +101,9 @@ impl DndState {
         id
     }
 
-    /// Number of active internal drag operations owned by JS (used for teardown leak detection).
-    pub(crate) fn active_internal_count(&self) -> usize {
-        usize::from(self.internal.borrow().is_some())
+    /// Number of active drag operations owned by JS (used for teardown leak detection).
+    pub(crate) fn active_count(&self) -> usize {
+        usize::from(self.internal.borrow().is_some()) + usize::from(self.outbound.borrow().is_some())
     }
 
     pub(crate) fn has_active_internal(&self) -> bool {
@@ -103,6 +114,7 @@ impl DndState {
     pub(crate) fn clear(&self) {
         self.internal.borrow_mut().take();
         self.external.borrow_mut().take();
+        self.outbound.borrow_mut().take();
     }
 }
 
@@ -240,7 +252,160 @@ impl Session {
                 },
             )),
         )?;
+        let weak = Rc::downgrade(self);
+        dnd_obj.prop(
+            "startOutboundDrag",
+            data_prop(Func::from(
+                move |ctx: Ctx<'js>,
+                      source_node: rquickjs::Class<'js, ui_bridge::NativeNode>,
+                      options: Object<'js>| {
+                    let session = weak
+                        .upgrade()
+                        .ok_or_else(|| Exception::throw_reference(&ctx, "session is disposed"))?;
+                    session.start_outbound_drag(&ctx, source_node, options)
+                },
+            )),
+        )?;
         ctx.globals().set("__zguiDnd", dnd_obj)?;
+        Ok(())
+    }
+
+    /// Cancels any active platform outbound drag during forced session retirement.
+    pub(crate) fn cancel_outbound_drag_on_platform(&self) {
+        if let Some(drag) = self.dnd.outbound.borrow_mut().take()
+            && let Some(surface) = self.platform_surface(drag.surface)
+        {
+            surface.cancel_outbound_drag();
+        }
+    }
+
+    fn start_outbound_drag<'js>(
+        self: &Rc<Self>,
+        ctx: &Ctx<'js>,
+        source_node: rquickjs::Class<'js, ui_bridge::NativeNode>,
+        options: Object<'js>,
+    ) -> rquickjs::Result<Object<'js>> {
+        if self.shutdown_started.get() {
+            return Err(Exception::throw_type(ctx, "drag cannot start during session shutdown"));
+        }
+        if self.dnd.internal.borrow().is_some() || self.dnd.outbound.borrow().is_some() {
+            let err = crate::work::service_error(
+                ctx,
+                "E_DRAG_ACTIVE",
+                "another drag operation is already active",
+            )?;
+            return Err(ctx.throw(err.into_value()));
+        }
+        let (surface_id, _native_node) = self.resolve_node_and_surface(ctx, &source_node)?;
+        let items_arr: Array = options.get("items")?;
+        if items_arr.is_empty() || items_arr.len() > MAX_OUTBOUND_DRAG_ITEMS {
+            return Err(Exception::throw_range(
+                ctx,
+                "outbound drag items must contain between 1 and 16 MIME entries",
+            ));
+        }
+        let mut items = Vec::with_capacity(items_arr.len());
+        let mut total_bytes = 0usize;
+        for entry in items_arr.iter::<Object>() {
+            let entry = entry?;
+            let mime: String = entry.get("mime")?;
+            if mime.trim().is_empty() || mime.chars().any(char::is_control) {
+                return Err(Exception::throw_type(ctx, "outbound drag MIME type must be non-empty without control characters"));
+            }
+            let data_val: Value = entry.get("data")?;
+            let bytes = if let Some(s) = data_val.as_string() {
+                s.to_string()?.into_bytes()
+            } else if let Ok(ta) = TypedArray::<u8>::from_value(data_val) {
+                let raw = ta
+                    .as_raw()
+                    .ok_or_else(|| Exception::throw_type(ctx, "outbound drag Uint8Array is detached"))?;
+                // SAFETY: `ta` keeps the JS backing buffer alive during this copy.
+                unsafe { raw.as_ref().to_vec() }
+            } else {
+                return Err(Exception::throw_type(ctx, "outbound drag item.data must be a string or Uint8Array"));
+            };
+            total_bytes = total_bytes.saturating_add(bytes.len());
+            if total_bytes > MAX_OUTBOUND_DRAG_BYTES {
+                let err = crate::work::service_error(
+                    ctx,
+                    "E_LIMIT",
+                    "outbound drag payload exceeds 4 MiB limit",
+                )?;
+                return Err(ctx.throw(err.into_value()));
+            }
+            items.push((mime, bytes));
+        }
+        let on_end: Option<Function> = options.get("onEnd")?;
+        let Some(native_surface) = self.platform_surface(surface_id) else {
+            let err = crate::work::service_error(
+                ctx,
+                "E_DRAG_NO_LIVE_PRESS",
+                "originating platform surface is unavailable for outbound drag",
+            )?;
+            return Err(ctx.throw(err.into_value()));
+        };
+        if native_surface
+            .begin_outbound_drag(OutboundDragPayload::new(items))
+            .is_err()
+        {
+            let err = crate::work::service_error(
+                ctx,
+                "E_DRAG_NO_LIVE_PRESS",
+                "outbound Copy-only drag requires an active live press on the originating surface",
+            )?;
+            return Err(ctx.throw(err.into_value()));
+        }
+
+        let drag_id = self.dnd.alloc_id();
+        *self.dnd.outbound.borrow_mut() = Some(OutboundDrag {
+            id: drag_id,
+            surface: surface_id,
+            on_end: on_end.map(|f| Persistent::save(ctx, f)),
+        });
+
+        let handle = Object::new(ctx.clone())?;
+        handle.prop("id", data_prop(drag_id as f64))?;
+        let weak = Rc::downgrade(self);
+        handle.prop(
+            "cancel",
+            data_prop(Func::from(move |ctx: Ctx<'js>| {
+                if let Some(session) = weak.upgrade() {
+                    session.cancel_outbound_drag_in_ctx(&ctx, Some(drag_id), "cancel")?;
+                }
+                Ok::<(), rquickjs::Error>(())
+            })),
+        )?;
+        Ok(handle)
+    }
+
+    fn cancel_outbound_drag_in_ctx<'js>(
+        &self,
+        ctx: &Ctx<'js>,
+        expected_id: Option<u64>,
+        reason: &'static str,
+    ) -> rquickjs::Result<()> {
+        let should_take = self
+            .dnd
+            .outbound
+            .borrow()
+            .as_ref()
+            .is_some_and(|drag| expected_id.is_none_or(|id| drag.id == id));
+        if !should_take {
+            return Ok(());
+        }
+        let Some(drag) = self.dnd.outbound.borrow_mut().take() else {
+            return Ok(());
+        };
+        if let Some(surface) = self.platform_surface(drag.surface) {
+            surface.cancel_outbound_drag();
+        }
+        if let Some(on_end) = drag.on_end {
+            let res = Object::new(ctx.clone())?;
+            res.prop("accepted", data_prop(false))?;
+            res.prop("effect", data_prop("none"))?;
+            res.prop("reason", data_prop(reason))?;
+            on_end.restore(ctx)?.call::<_, ()>((res,))?;
+        }
         Ok(())
     }
 
@@ -253,11 +418,11 @@ impl Session {
         if self.shutdown_started.get() {
             return Err(Exception::throw_type(ctx, "drag cannot start during session shutdown"));
         }
-        if self.dnd.internal.borrow().is_some() {
+        if self.dnd.internal.borrow().is_some() || self.dnd.outbound.borrow().is_some() {
             let err = crate::work::service_error(
                 ctx,
                 "E_DRAG_ACTIVE",
-                "another internal drag operation is already active",
+                "another drag operation is already active",
             )?;
             return Err(ctx.throw(err.into_value()));
         }
@@ -370,7 +535,7 @@ impl Session {
             .map_err(|error| self.diagnostic(error).into())
     }
 
-    /// Cancels any internal or external drag targeting a surface that was just destroyed.
+    /// Cancels any internal, external, or outbound drag targeting a surface that was just destroyed.
     pub(crate) fn cancel_drags_for_surface(&self, surface: SurfaceId) -> SessionResult<()> {
         if self
             .dnd
@@ -380,6 +545,22 @@ impl Session {
             .is_some_and(|ext| ext.surface == surface)
         {
             self.dnd.external.borrow_mut().take();
+        }
+        let has_outbound = self
+            .dnd
+            .outbound
+            .borrow()
+            .as_ref()
+            .is_some_and(|d| d.surface == surface);
+        if has_outbound
+            && let Ok(mut engine) = self.engine.try_borrow_mut()
+            && let Some(engine) = engine.as_mut()
+        {
+            self.bridges
+                .run(engine.turn(), |js| {
+                    js.with_context(|ctx| self.cancel_outbound_drag_in_ctx(&ctx, None, "surface-lost"))
+                })
+                .map_err(|error| self.diagnostic(error))?;
         }
         self.cancel_internal_drag(Some(surface), "surface-lost")
     }
@@ -698,6 +879,19 @@ impl Session {
                                     cb.restore(&ctx)?.call::<_, ()>((ev,))?;
                                 }
                             }
+                        }
+                        Ok(())
+                    }
+                    DragEvent::OutboundFinished { accepted } => {
+                        let Some(drag) = self.dnd.outbound.borrow_mut().take() else {
+                            return Ok(());
+                        };
+                        if let Some(on_end) = drag.on_end {
+                            let res = Object::new(ctx.clone())?;
+                            res.prop("accepted", data_prop(*accepted))?;
+                            res.prop("effect", data_prop(if *accepted { "copy" } else { "none" }))?;
+                            res.prop("reason", data_prop(if *accepted { "finished" } else { "cancel" }))?;
+                            on_end.restore(&ctx)?.call::<_, ()>((res,))?;
                         }
                         Ok(())
                     }

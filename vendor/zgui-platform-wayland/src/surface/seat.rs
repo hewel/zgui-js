@@ -46,6 +46,8 @@ struct State {
     over: Option<SurfaceId>,
     /// The serial an interactive drag may quote, which is always from a press.
     grab: Option<u32>,
+    /// Active live press `(surface, serial)` currently held down; cleared on release or leave.
+    active_press: Option<(SurfaceId, u32)>,
     /// What the pointer currently looks like, so that repeating a shape costs nothing.
     style: Option<CursorStyle>,
     /// The input method, once the compositor has offered one for a seat with a keyboard.
@@ -100,11 +102,24 @@ impl SeatLink {
         }
         inner.style = None;
         inner.over = None;
+        inner.active_press = None;
     }
 
     /// Records the serial an interactive drag may quote.
     pub(crate) fn pressed(&self, serial: u32) {
         self.lock().grab = Some(serial);
+    }
+
+    /// Records a live active press on `surface` with `serial` for outbound drag initiation.
+    pub(crate) fn press_started(&self, surface: SurfaceId, serial: u32) {
+        let mut inner = self.lock();
+        inner.grab = Some(serial);
+        inner.active_press = Some((surface, serial));
+    }
+
+    /// Clears the active live press state when the button/touch releases or leaves.
+    pub(crate) fn press_ended(&self) {
+        self.lock().active_press = None;
     }
 
     /// Records which surface the pointer is over.
@@ -114,6 +129,9 @@ impl SeatLink {
             return;
         }
         inner.over = surface;
+        if surface.is_none() {
+            inner.active_press = None;
+        }
         // The next surface to hold the pointer states its own cursor, and the one that lost it
         // must not suppress that by having asked for the same shape earlier.
         inner.style = None;
@@ -273,6 +291,33 @@ impl SeatLink {
         }
     }
 
+    /// Returns the active live press serial for an outbound drag originating on `surface`.
+    ///
+    /// Unlike `drag`, this strictly requires a press that is still live (not yet released
+    /// or left) and originated on `surface`.
+    pub fn live_drag_serial(&self, surface: SurfaceId) -> Result<(WlSeat, u32), Unsupported> {
+        let inner = self.lock();
+        let Some((origin, serial)) = inner.active_press else {
+            return Err(Unsupported);
+        };
+        if origin != surface {
+            return Err(Unsupported);
+        }
+        let Some(seat) = inner.seat.clone() else {
+            return Err(Unsupported);
+        };
+        Ok((seat, serial))
+    }
+
+    /// Tests helper: checks whether an active live press serial is currently held on `surface`.
+    #[cfg(test)]
+    pub(crate) fn live_press_serial_for(&self, surface: SurfaceId) -> Option<u32> {
+        let inner = self.lock();
+        inner
+            .active_press
+            .and_then(|(origin, serial)| (origin == surface).then_some(serial))
+    }
+
     /// The state, recovering from a panic on another thread.
     fn lock(&self) -> MutexGuard<'_, State> {
         self.inner
@@ -317,5 +362,21 @@ mod tests {
         link.over(Some(first));
         // With the shape forgotten, asking again reaches the seat rather than being suppressed.
         link.set_cursor(first, CursorStyle::Text);
+    }
+
+    #[test]
+    fn outbound_drag_requires_active_live_press_on_originating_surface() {
+        let link = SeatLink::default();
+        let s1 = SurfaceId::new(1);
+        let s2 = SurfaceId::new(2);
+        assert_eq!(link.live_press_serial_for(s1), None);
+
+        link.press_started(s1, 77);
+        assert_eq!(link.live_press_serial_for(s1), Some(77));
+        assert_eq!(link.live_press_serial_for(s2), None);
+
+        // Releasing clears the active press so stale serials cannot start an outbound drag.
+        link.press_ended();
+        assert_eq!(link.live_press_serial_for(s1), None);
     }
 }

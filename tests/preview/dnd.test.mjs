@@ -313,3 +313,132 @@ test("preview DnD supports internal hit-tested reorder with source pointer captu
   assert.equal(getNode(doneTree, "focused-drop-log")?.text, "CLEAN");
   assert.equal(getNode(doneTree, "rejected-drop-log")?.text, "CLEAN");
 });
+
+const outboundDragSource = `
+import { createSignal, renderApp, startOutboundDrag } from "@hewel/zgui";
+import type { DragHandle, NativeNode } from "@hewel/zgui";
+
+export const hostApiVersion = 1;
+
+export function mount(root: NativeNode) {
+  return renderApp(() => {
+    const [beforePress, setBeforePress] = createSignal("PENDING");
+    const [duringPress, setDuringPress] = createSignal("PENDING");
+    const [endResult, setEndResult] = createSignal("PENDING");
+    const [afterRelease, setAfterRelease] = createSignal("PENDING");
+
+    let dragNode: NativeNode | undefined;
+    let active: DragHandle | undefined;
+
+    return (
+      <column style="width: 100%; height: 100%; padding: 12px; gap: 8px">
+        <box
+          testId="btn-before"
+          style="height: 28px; padding: 4px; background-color: #262626"
+          onClick={() => {
+            if (!dragNode) return;
+            // Inside click (after pointer release) -> no live press active!
+            try {
+              startOutboundDrag(dragNode, {
+                items: [{ mime: "text/plain", data: "no-press" }],
+              });
+              setBeforePress("UNEXPECTED_ALLOW");
+            } catch (err) {
+              const code = err instanceof Error && "code" in err ? String(err.code) : "ERR";
+              setBeforePress(\`DENIED:\${code}\`);
+            }
+          }}
+        >
+          <text>Check Before Press</text>
+        </box>
+        <box
+          testId="drag-source"
+          ref={el => {
+            dragNode = el;
+          }}
+          style="height: 36px; padding: 6px; background-color: #243b55"
+          onPointerDown={() => {
+            if (!dragNode) return;
+            active = startOutboundDrag(dragNode, {
+              items: [{ mime: "text/plain", data: "copied-out" }],
+              onEnd(res) {
+                setEndResult(\`accepted=\${String(res.accepted)},effect=\${res.effect},reason=\${res.reason}\`);
+              },
+            });
+            setDuringPress(\`STARTED:\${active.id}\`);
+          }}
+          onPointerUp={() => {
+            active?.cancel();
+            active = undefined;
+            if (!dragNode) return;
+            try {
+              startOutboundDrag(dragNode, {
+                items: [{ mime: "text/plain", data: "after-release" }],
+              });
+              setAfterRelease("UNEXPECTED_ALLOW");
+            } catch (err) {
+              const code = err instanceof Error && "code" in err ? String(err.code) : "ERR";
+              setAfterRelease(\`DENIED:\${code}\`);
+            }
+          }}
+        >
+          <text>Outbound Source</text>
+        </box>
+        <text testId="before-press">{beforePress()}</text>
+        <text testId="during-press">{duringPress()}</text>
+        <text testId="end-result">{endResult()}</text>
+        <text testId="after-release">{afterRelease()}</text>
+      </column>
+    );
+  }, root);
+}
+`;
+
+test("preview outbound Copy-only drag enforces live press serial, cancels cleanly, and tears down cleanly (#67)", async t => {
+  const temp = await createTempWorkspace("preview-outbound-dnd-");
+  t.after(() => temp.cleanup());
+
+  const bundle = await buildFixtureApp(
+    path.join(temp.dir, "app"),
+    "outbound-dnd",
+    outboundDragSource,
+    { rawSource: true },
+  );
+
+  const { out, result } = await runScenario({
+    projectDir: temp.dir,
+    bundle,
+    name: "outbound-dnd",
+    requiredCapabilities: [],
+    steps: [
+      {
+        id: "click-before",
+        op: "pointer.click",
+        button: "primary",
+        target: { surface: "main", testId: "btn-before" },
+      },
+      {
+        id: "press-start",
+        op: "pointer.down",
+        button: "primary",
+        target: { surface: "main", testId: "drag-source" },
+      },
+      {
+        id: "release-cancel",
+        op: "pointer.up",
+        button: "primary",
+        target: { surface: "main", testId: "drag-source" },
+      },
+      { id: "settle", op: "clock.advance", byMs: 16 },
+      { id: "cap-done", op: "capture", captureId: "done", surface: "main" },
+    ],
+  });
+
+  assert.equal(result.teardown.clean, true, JSON.stringify(result.teardown));
+
+  const tree = await readTree(out, "done");
+  assert.equal(getNode(tree, "before-press")?.text, "DENIED:E_DRAG_NO_LIVE_PRESS");
+  assert.match(getNode(tree, "during-press")?.text ?? "", /^STARTED:\d+$/);
+  assert.equal(getNode(tree, "end-result")?.text, "accepted=false,effect=none,reason=cancel");
+  assert.equal(getNode(tree, "after-release")?.text, "DENIED:E_DRAG_NO_LIVE_PRESS");
+});

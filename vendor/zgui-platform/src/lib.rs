@@ -96,7 +96,8 @@ pub use crate::session_lock::SessionLockState;
 pub use crate::surface::{
     Anchor, BadIcon, ComposeAhead, Constrain, CursorStyle, DecorationSource, Decorations,
     DragEvent, FullscreenMode, GpuSurface, InputRect, InputRegion, KeyboardInteractivity, Layer,
-    LayerPlacement, PopupPlacement, PresentPacing, PresentationTiming, ResizeEdge, Surface,
+    LayerPlacement, OutboundDragPayload, PopupPlacement, PresentPacing, PresentationTiming,
+    ResizeEdge, Surface,
     SurfaceAttributes, SurfaceEvent, SurfaceId, SurfaceRole, TextInput, TextInputPurpose,
     TitleButtons, Watchdog, WindowIcon, WindowLevel,
 };
