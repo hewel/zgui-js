@@ -3,7 +3,7 @@ import {
   createCanvasScene, createContext, createDelay, createEffect, createInterval, createMemo, createSignal, createSpring, createStore, createTimeout, createProjection,
   merge, omit, onCleanup, onSettled, reconcile, renderApp, renderShell, untrack, useContext, useMonitors,
   focus, getReducedMotion, getTextContent, getWindowRect, isAnimating, lockScroll, mountStylesheet, observeGeometry, precedes, setReducedMotion,
-  SessionLockSurface, WindowSurface, getSessionGeneration, requestSessionLock,
+  SessionLockSurface, WindowSurface, VirtualGrid, VirtualList, getSessionGeneration, requestSessionLock,
 } from "@hewel/zgui";
 import type { CanvasCommand, CanvasScene, CanvasTransform, Component, Context, NativeAnimationEvent, NativeChild, NativeContextMenuEvent, NativeFocusOptions, NativeNode, NativePointerBoundaryEvent, NativeRole, NativeTextControlProps, NativeTransitionEvent, NativeViewport, NativeWheelEvent, NativeWindowRect, ParentComponent, Spring, SpringOptions, TextFieldProps, TextAreaProps, VectorProps, WindowDecorations } from "@hewel/zgui";
 import type { Accessor } from "@hewel/zgui";
@@ -262,6 +262,18 @@ const cancelRepeating: () => void = createInterval(() => {}, () => count() > 0 ?
 cancelRepeating();
 const reactiveSpring = createSpring(count, { stiffness: () => 220, damping: () => 18, mass: 1 });
 reactiveSpring.configure({ stiffness: 300, damping: 24 });
+void <VirtualList each={["a", "b"]} itemHeight={32} gap={4} overscan={2}>
+  {(item, index) => <text>{index()}:{item}</text>}
+</VirtualList>;
+void <VirtualList each={[{ id: 1, name: "a" }]} itemHeight={32} keyed={item => item.id}>
+  {(item, index) => <text>{index()}:{item().name}</text>}
+</VirtualList>;
+void <VirtualGrid each={[1, 2, 3]} itemHeight={64} minColumnWidth={120} gap={8}>
+  {(item, index) => <text>{index()}:{item}</text>}
+</VirtualGrid>;
+void <VirtualGrid each={[{ id: 1 }]} itemHeight={64} columns={2} keyed={item => item.id}>
+  {(item, index) => <text>{index()}:{item().id}</text>}
+</VirtualGrid>;
 void [isDelayPending, reactiveSpring];
 void borrowed;
 

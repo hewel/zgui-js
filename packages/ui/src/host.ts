@@ -96,6 +96,7 @@ declare const globalThis: NativeHost;
 export type UiBridge = NativeHost["__zgui"];
 const Region = createContext<UiBridge | null>(null);
 const nodeBridges = new WeakMap<NativeNode, UiBridge>();
+let regionProviders = 0;
 let callbackBridge: UiBridge | undefined;
 let callbackOwner: Owner | null = null;
 
@@ -116,6 +117,7 @@ export function bridgeFor(node?: NativeNode): UiBridge {
 export function tryBridgeFor(node?: NativeNode): UiBridge | undefined {
   const known = node && nodeBridges.get(node);
   if (known) return known;
+  if (regionProviders === 0) return callbackBridge ?? globalThis.__zgui;
   const owner = getOwner();
   const currentCallback = owner === callbackOwner ? callbackBridge : undefined;
   return currentCallback ?? (owner && useContext(Region)) ?? callbackBridge ?? globalThis.__zgui;
@@ -217,6 +219,8 @@ export function rememberBridge(node: NativeNode, bridge: UiBridge): NativeNode {
 }
 
 export function provideRegion(bridge: UiBridge, mount: () => void): void {
+  regionProviders += 1;
+  onCleanup(() => { regionProviders -= 1; });
   let owner: Owner | null = null;
   const children = Region({ value: bridge, get children() { owner = getOwner(); return null; } });
   // Evaluate the provider before mounting so native mount errors propagate directly.

@@ -24,3 +24,5 @@ export type { PortalProps } from "./portal.js";
 export { Button } from "./button.js";
 export { TextField, TextArea } from "./text-control.js";
 export { Image } from "./image.js";
+export { VirtualGrid, VirtualList } from "./virtual-list.js";
+export type { VirtualGridProps, VirtualListProps } from "./virtual-list.js";
