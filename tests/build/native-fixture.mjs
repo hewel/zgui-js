@@ -184,6 +184,7 @@ let nextLockRequestId = 1;
 export function createHost({
   strictStyles = false,
   reducedMotion = false,
+  backgroundBlurSupported = false,
   monitors = [],
   sessionLock,
   shellSurfaces = true,
@@ -516,6 +517,18 @@ export function createHost({
     }, false);
   };
 
+  const backgroundBlurSubscribers = new Set();
+  const emitBackgroundBlurSupported = next => {
+    const value = Boolean(next);
+    if (backgroundBlurSupported === value) return;
+    backgroundBlurSupported = value;
+    runTurn(() => {
+      for (const callback of [...backgroundBlurSubscribers]) {
+        if (backgroundBlurSubscribers.has(callback)) callback(value);
+      }
+    }, false);
+  };
+
   const makeBridge = region => ({
     createElement: tag => {
       assertActiveHost("createElement");
@@ -743,6 +756,13 @@ export function createHost({
       reducedMotionSubscribers.add(callback);
       return () => {
         reducedMotionSubscribers.delete(callback);
+      };
+    },
+    getBackgroundBlurSupported: () => backgroundBlurSupported,
+    subscribeBackgroundBlurSupported: callback => {
+      backgroundBlurSubscribers.add(callback);
+      return () => {
+        backgroundBlurSubscribers.delete(callback);
       };
     },
     focus: (node, reveal = false) => {
@@ -1102,6 +1122,13 @@ export function createHost({
 
   const shell = {
     getSessionGeneration: () => generation,
+    getBackgroundBlurSupported: () => backgroundBlurSupported,
+    subscribeBackgroundBlurSupported(callback) {
+      backgroundBlurSubscribers.add(callback);
+      return () => {
+        backgroundBlurSubscribers.delete(callback);
+      };
+    },
     installStylesheet(name, css) {
       requireShellWorkAllowed("installStylesheet");
       validateStylesheetName(name);
@@ -1495,6 +1522,8 @@ export function createHost({
     shellLog,
     emitMonitors,
     emitReducedMotion,
+    emitBackgroundBlurSupported,
+    backgroundBlurSubscribers,
     monitorSubscribers,
     popupDone,
     windowClose,

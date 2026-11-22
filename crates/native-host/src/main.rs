@@ -200,6 +200,7 @@ impl Application {
         {
             let mut surface = RuntimeSurface::new(&mut self.native, cx, ImageChoice::Live);
             if let Err(error) = self.host.sync_reduced_motion(cx.reduced_motion(), &mut surface) { self.fail(cx, error); return; }
+            if let Err(error) = self.host.sync_background_blur_supported(cx.capabilities().supports_background_blur, &mut surface) { self.fail(cx, error); return; }
             if let Err(error) = self.host.checkpoint(&mut surface, retry.clone()) { self.fail(cx, error); return; }
             if self.host.drain_clipboard(cx)
                 && let Err(error) = self.host.checkpoint(&mut surface, retry)

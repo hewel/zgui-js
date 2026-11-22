@@ -144,6 +144,7 @@ pub(crate) trait SessionSurface {
     fn validate_fonts(&self, _session: &Session) -> SessionResult<()> { Ok(()) }
     fn session_lock_support(&self) -> Option<SessionLockState> { None }
     fn portal_reduced_motion(&self) -> Option<bool> { None }
+    fn background_blur_supported(&self) -> bool { false }
     /// Close an auxiliary window; layer surfaces must also disappear from the platform.
     fn close_shell_surface(&mut self, token: WindowToken, removed_surface: Option<SurfaceId>) -> bool;
     fn stage_shell_surfaces(&mut self, staged: &mut ShellWindows, previous: &ShellWindows, monitors: &[Monitor], session: &Rc<Session>) -> SessionResult<()>;
@@ -239,6 +240,7 @@ impl SessionSurface for RuntimeSurface<'_> {
     }
     fn session_lock_support(&self) -> Option<SessionLockState> { surfaces::platform_lock_state(self.cx) }
     fn portal_reduced_motion(&self) -> Option<bool> { self.cx.reduced_motion() }
+    fn background_blur_supported(&self) -> bool { self.cx.capabilities().supports_background_blur }
     fn close_shell_surface(&mut self, token: WindowToken, id: Option<SurfaceId>) -> bool {
         surfaces::close_native_surface(self.runtime, self.cx, token, id)
     }
@@ -567,6 +569,16 @@ impl SessionHost {
         Ok(())
     }
 
+    /// Push live compositor background-blur capability updates to every mounted session.
+    pub(crate) fn sync_background_blur_supported(&mut self, supported: bool, surface: &mut impl SessionSurface) -> SessionResult<()> {
+        for session in self.sessions.values().chain(self.pure_session.iter()) {
+            if session.update_background_blur_supported(supported)? {
+                session.request_frames(|document| surface.request_frame(document));
+            }
+        }
+        Ok(())
+    }
+
     /// Run each mounted session's work turn. Under `Fallback` a session fault
     /// retires that generation and shows the fallback; under `Propagate` the
     /// first fault is handed to the caller with the session still owned.
@@ -760,6 +772,7 @@ impl SessionHost {
         };
         if let Err(error) = candidate.update_monitors(&self.monitors) { return ReloadOutcome::Rejected(error); }
         let _ = candidate.update_reduced_motion(surface.portal_reduced_motion());
+        let _ = candidate.update_background_blur_supported(surface.background_blur_supported());
         surface.bind(document, &candidate);
         let image_checkpoint = surface.image_source_checkpoint(document);
         let mut staged = self.shell_windows.empty_successor();

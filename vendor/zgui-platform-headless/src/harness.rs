@@ -126,6 +126,11 @@ impl<A: AppHandler> Harness<A> {
         &self.platform
     }
 
+    /// The platform, mutably, for toggling dynamic capability state such as background blur.
+    pub fn platform_mut(&mut self) -> &mut Headless {
+        &mut self.platform
+    }
+
     /// The application.
     pub fn app(&self) -> &A {
         &self.app

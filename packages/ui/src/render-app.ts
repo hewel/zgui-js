@@ -1,7 +1,13 @@
 import { createEffect } from "#solid";
 import { insert, mountOwned } from "./renderer/index.js";
 import type { NativeChild, NativeNode } from "./types.js";
-import { attachReducedMotionBridge, bridgeFor, rememberBridge } from "./host.js";
+import {
+  attachBackgroundBlurBridge,
+  attachBackgroundBlurShell,
+  attachReducedMotionBridge,
+  bridgeFor,
+  rememberBridge,
+} from "./host.js";
 
 /**
  * Mount native children into a dedicated host root. Cleanup is idempotent and
@@ -14,6 +20,7 @@ export function renderApp(code: () => NativeChild, root: NativeNode): () => void
   return mountOwned(
     () => {
       attachReducedMotionBridge(bridge);
+      attachBackgroundBlurBridge(bridge);
       insert(root, code());
     },
     () => bridge.clearRoot(root),
@@ -23,6 +30,7 @@ export function renderApp(code: () => NativeChild, root: NativeNode): () => void
 /** Own a rootless shell's reactive graph; native content belongs inside shell surfaces. */
 export function renderShell(code: () => NativeChild): () => void {
   return mountOwned(() => {
+    attachBackgroundBlurShell();
     const children = code();
     createEffect(
       () => visitShellChildren(children),

@@ -93,6 +93,7 @@ impl SessionHost {
         candidate.begin_staged_mount();
         let result = candidate.update_monitors(&self.monitors)
             .and_then(|_| candidate.update_reduced_motion(cx.reduced_motion()))
+            .and_then(|_| candidate.update_background_blur_supported(cx.capabilities().supports_background_blur))
             .and_then(|_| candidate.mount())
             .and_then(|()| staged.mount(runtime, cx, images, &self.shell_windows, &self.monitors, &candidate));
         if let Err(error) = result {
@@ -145,6 +146,7 @@ impl SessionHost {
         let mut worked = session.update_monitors(&self.monitors)?;
         worked |= session.update_lock_state(state)?;
         worked |= session.update_reduced_motion(cx.reduced_motion())?;
+        worked |= session.update_background_blur_supported(cx.capabilities().supports_background_blur)?;
         self.shell_windows.settle(runtime, cx, images, &self.monitors, session, LockReconcile::Current)?;
         let surface = RuntimeSurface::new(runtime, cx, images);
         if session.primary().is_none() || session.shell.has_lock_command() {

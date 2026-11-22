@@ -83,6 +83,8 @@ export interface NativeHost {
     removeStylesheet(name: string): void;
     getReducedMotion(): boolean;
     subscribeReducedMotion?(callback: (value: boolean) => void): () => void;
+    getBackgroundBlurSupported?(): boolean;
+    subscribeBackgroundBlurSupported?(callback: (value: boolean) => void): () => void;
     requestAnimationFrame?(callback: (time: number) => void): number;
     focus(node: NativeNode, reveal?: boolean): void;
     trapFocus(node: NativeNode, wrap: boolean, autoFocus: boolean, restore: boolean): () => void;
@@ -145,6 +147,8 @@ export interface NativeHost {
     installStylesheet(name: string, css: string): void;
     removeStylesheet(name: string): void;
     subscribeMonitors(callback: (monitors: readonly Monitor[]) => void): () => void;
+    getBackgroundBlurSupported?(): boolean;
+    subscribeBackgroundBlurSupported?(callback: (value: boolean) => void): () => void;
     openLayer(
       name: string,
       placement: LayerPlacement,
@@ -347,6 +351,108 @@ export function setReducedMotion(value: boolean | null): void {
   if (bridge) subscribeMotionBridge(state, bridge, true);
   state.currentOverride = value;
   state.setOverride(value);
+}
+
+interface BackgroundBlurSource {
+  getBackgroundBlurSupported?(): boolean;
+  subscribeBackgroundBlurSupported?(callback: (value: boolean) => void): () => void;
+}
+
+interface BackgroundBlurState {
+  hostValue: () => boolean;
+  setHostValue: (next: boolean) => void;
+  currentHostValue: boolean;
+  subscribedSources: WeakSet<object>;
+}
+
+const backgroundBlurStates = new WeakMap<object, BackgroundBlurState>();
+
+function ensureBackgroundBlurState(bridge?: UiBridge): BackgroundBlurState {
+  const key = sessionScopeKey(bridge);
+  if (!key) throw new ReferenceError("Native UI requires a mount region or shell session");
+  let state = backgroundBlurStates.get(key);
+  if (!state) {
+    const initial =
+      bridge?.getBackgroundBlurSupported?.() ??
+      globalThis.__zguiShell?.getBackgroundBlurSupported?.() ??
+      false;
+    const [hostValue, setHostValue] = createSignal(initial, { ownedWrite: true });
+    state = {
+      hostValue,
+      setHostValue,
+      currentHostValue: initial,
+      subscribedSources: new WeakSet(),
+    };
+    backgroundBlurStates.set(key, state);
+  }
+  return state;
+}
+
+function subscribeBackgroundBlurSource(
+  state: BackgroundBlurState,
+  source: BackgroundBlurSource,
+  allowReadOnlySkip: boolean,
+): (() => void) | undefined {
+  if (typeof source.getBackgroundBlurSupported !== "function") return undefined;
+  if (state.subscribedSources.has(source)) return undefined;
+  const current = source.getBackgroundBlurSupported();
+  if (current !== state.currentHostValue) {
+    state.currentHostValue = current;
+    state.setHostValue(current);
+  }
+  let unsubscribe: (() => void) | undefined;
+  if (source.subscribeBackgroundBlurSupported) {
+    try {
+      unsubscribe = source.subscribeBackgroundBlurSupported(next => {
+        if (next === state.currentHostValue) return;
+        state.currentHostValue = next;
+        state.setHostValue(next);
+        flushMotion();
+      });
+    } catch (error) {
+      if (allowReadOnlySkip) return undefined;
+      throw error;
+    }
+  }
+  state.subscribedSources.add(source);
+  return unsubscribe
+    ? () => {
+        state.subscribedSources.delete(source);
+        unsubscribe();
+      }
+    : undefined;
+}
+
+/** Eagerly subscribe a mounted region bridge so background-blur readers stay synchronized. */
+export function attachBackgroundBlurBridge(bridge: UiBridge): void {
+  if (typeof bridge.getBackgroundBlurSupported !== "function") return;
+  const state = ensureBackgroundBlurState(bridge);
+  const dispose = subscribeBackgroundBlurSource(state, bridge, false);
+  if (dispose && getOwner()) onCleanup(dispose);
+}
+
+/** Eagerly subscribe the rootless shell bridge so zero-surface shells observe live blur transitions. */
+export function attachBackgroundBlurShell(): void {
+  const shell = globalThis.__zguiShell;
+  if (!shell || typeof shell.getBackgroundBlurSupported !== "function") return;
+  const state = ensureBackgroundBlurState();
+  const dispose = subscribeBackgroundBlurSource(state, shell, false);
+  if (dispose && getOwner()) onCleanup(dispose);
+}
+
+/** Read-only reactive compositor background-blur capability (`ext_background_effect_v1` `Capability::Blur`). */
+export function getBackgroundBlurSupported(): boolean {
+  const bridge = tryBridgeFor();
+  const state = ensureBackgroundBlurState(bridge);
+  if (bridge?.getBackgroundBlurSupported) {
+    const dispose = subscribeBackgroundBlurSource(state, bridge, true);
+    if (dispose && getOwner()) onCleanup(dispose);
+  } else if (globalThis.__zguiShell?.getBackgroundBlurSupported) {
+    const dispose = subscribeBackgroundBlurSource(state, globalThis.__zguiShell, true);
+    if (dispose && getOwner()) onCleanup(dispose);
+  }
+  state.hostValue();
+  return state.currentHostValue;
 }
 
 export function rememberBridge(node: NativeNode, bridge: UiBridge): NativeNode {

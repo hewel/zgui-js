@@ -91,7 +91,8 @@ impl PreviewHost {
         let retry: Rc<dyn Fn(zgui::view::DocumentId, u64)> = Rc::new(|_, _| {});
         let checked = {
             let mut surface = RuntimeSurface::new(&mut self.native, cx, ImageChoice::PackageOnly);
-            let first = self.host.checkpoint(&mut surface, retry.clone());
+            let blur_sync = self.host.sync_background_blur_supported(cx.capabilities().supports_background_blur, &mut surface);
+            let first = blur_sync.and_then(|()| self.host.checkpoint(&mut surface, retry.clone()));
             if first.is_ok() && self.host.drain_clipboard(cx) {
                 self.host.checkpoint(&mut surface, retry)
             } else {
@@ -270,6 +271,7 @@ impl Driver {
         let ReloadConfig { dev_state, bundle_dir, scenario_dir } = reload;
         let mut capabilities = PlatformCapabilities::none();
         capabilities.session_lock = true;
+        capabilities.supports_background_blur = profile.profile.background_blur;
         capabilities.clipboard_formats = vec![
             zgui::platform::ClipboardFormat::Text,
             zgui::platform::ClipboardFormat::Image,
@@ -411,6 +413,19 @@ impl Driver {
             self.check()?;
         }
         Ok(())
+    }
+
+    /// Toggle live offscreen compositor background blur support and settle reactive updates.
+    pub fn set_background_blur_supported(&mut self, supported: bool) -> Result<Value, Fault> {
+        self.settle(false)?;
+        self.pipeline.platform_mut().set_background_blur_supported(supported);
+        self.settle(false)?;
+        self.sync_shell_surfaces()?;
+        Ok(json!({
+            "supported": supported,
+            "timeUs": self.environment.now_us(),
+            "readiness": self.readiness(),
+        }))
     }
 
     /// Apply a preview output snapshot and settle the resulting shell surface changes.

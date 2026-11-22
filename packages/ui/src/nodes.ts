@@ -3,6 +3,7 @@ import { flush } from "./renderer/index.js";
 import {
   bridgeFor,
   bridgeForTarget,
+  getBackgroundBlurSupported,
   getReducedMotion,
   setReducedMotion,
   withCallbackBridge,
@@ -28,7 +29,7 @@ import type {
   TextSelectionRange,
 } from "./types.js";
 
-export { getReducedMotion, setReducedMotion };
+export { getBackgroundBlurSupported, getReducedMotion, setReducedMotion };
 
 export function focus(node: NativeNode, options?: NativeFocusOptions): void {
   bridgeFor(node).focus(node, options?.reveal ?? false);

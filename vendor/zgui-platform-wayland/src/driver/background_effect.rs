@@ -168,10 +168,16 @@ impl WaylandState {
             return;
         };
         self.live.capabilities.supports_background_blur = now_supported;
-        if was_supported && !now_supported {
-            self.on_background_blur_lost();
-        } else if !was_supported && now_supported {
-            self.on_background_blur_gained();
+        if was_supported != now_supported {
+            if now_supported {
+                self.on_background_blur_gained();
+            } else {
+                self.on_background_blur_lost();
+            }
+            zgui_platform::Waker::wake(
+                self.live.waker.as_ref(),
+                zgui_platform::WakeReason::AppWork,
+            );
         }
     }
 
@@ -189,6 +195,10 @@ impl WaylandState {
         self.live.capabilities.supports_background_blur = false;
         if was_supported {
             self.on_background_blur_lost();
+            zgui_platform::Waker::wake(
+                self.live.waker.as_ref(),
+                zgui_platform::WakeReason::AppWork,
+            );
         }
     }
 
@@ -203,6 +213,12 @@ impl WaylandState {
         if had_manager || was_supported {
             self.live.capabilities.supports_background_blur = false;
             self.on_background_blur_lost();
+        }
+        if was_supported {
+            zgui_platform::Waker::wake(
+                self.live.waker.as_ref(),
+                zgui_platform::WakeReason::AppWork,
+            );
         }
     }
 

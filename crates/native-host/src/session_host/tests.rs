@@ -1810,3 +1810,113 @@ fn auto_to_auto_popup_anchor_update_with_geometry_insets_does_not_inflate_bleed(
     let report = session.retire();
     assert!(report.failure.is_none(), "teardown failed: {:?}", report.failure);
 }
+
+#[test]
+fn background_blur_capability_seeds_and_syncs_across_zero_surface_shell_and_mounted_layers() {
+    use zgui::platform::{AppHandler, PlatformCapabilities, WakeReason};
+    use zgui::view::IntoView;
+
+    const BLUR_CAP_APP: &str = r#"
+        export const hostApiVersion = 1;
+        const events = [];
+        let unsubShell;
+        let unsubLayer;
+        let layerId;
+        export function mount() {
+            events.push('init:' + __zguiShell.getBackgroundBlurSupported());
+            unsubShell = __zguiShell.subscribeBackgroundBlurSupported(v => {
+                events.push('shell:' + v);
+            });
+            return () => {
+                if (unsubLayer) unsubLayer();
+                if (unsubShell) unsubShell();
+                if (layerId !== undefined) __zguiShell.closeLayer(layerId);
+            };
+        }
+        export function openBar() {
+            const placement = {
+                layer: 'top', anchor: ['top', 'left'], width: 160, height: 32,
+                margin: { top: 0, right: 0, bottom: 0, left: 0 }, exclusiveZone: 0, keyboard: 'none',
+            };
+            layerId = __zguiShell.openLayer('bar', placement, (_root, bridge) => {
+                events.push('layerInit:' + bridge.getBackgroundBlurSupported());
+                unsubLayer = bridge.subscribeBackgroundBlurSupported(v => {
+                    events.push('layer:' + v);
+                });
+                return () => {
+                    if (unsubLayer) { unsubLayer(); unsubLayer = undefined; }
+                };
+            });
+        }
+        function assertEvents(expected) {
+            const actual = events.join(',');
+            if (actual !== expected) throw Error('expected ' + expected + ', got ' + actual);
+        }
+        export function checkInit() {
+            assertEvents('init:false');
+        }
+        export function checkZeroSurfaceTrue() {
+            assertEvents('init:false,shell:true');
+        }
+        export function checkLayerSeededTrue() {
+            assertEvents('init:false,shell:true,layerInit:true');
+        }
+        export function checkBothFalse() {
+            assertEvents('init:false,shell:true,layerInit:true,shell:false,layer:false');
+        }
+    "#;
+
+    let package = Fixture::new(BLUR_CAP_APP, "").with_capabilities(crate::package::Capabilities {
+        shell_surfaces: true,
+        ..Default::default()
+    });
+    let pending = Rc::new(RefCell::new(Vec::new()));
+    let fonts = zgui::app::Fonts::shipped_only();
+    let mut runtime = zgui::runtime::App::new()
+        .with_renderer(Box::new(|_, target| {
+            let mut renderer = zgui_testkit_scene::CaptureRenderer::new();
+            zgui::render::Renderer::configure(&mut renderer, target);
+            Ok(Box::new(renderer))
+        }))
+        .into_handler(|cx| Box::new(zgui::elements::column().into_view().build(cx)))
+        .expect("create pure-shell runtime");
+    runtime.without_primary_surface();
+    let mut caps = PlatformCapabilities::none();
+    caps.supports_background_blur = false;
+    let mut cx = zgui_platform_headless::Headless::new().with_capabilities(caps);
+    runtime.surfaces_available(&cx);
+
+    let mut host = SessionHost::new(
+        pending,
+        SessionModule::package(package.package()),
+        SessionPolicy::live(host_services::Executor::new(2, 64).expect("create service executor")),
+        RecoveryPolicy::Propagate,
+        SurfaceOpacity::Transparent,
+    );
+    host.set_pure_shell(fonts);
+    host.shell_turn(&mut runtime, &cx, ImageChoice::PackageOnly, &[]).expect("mount zero-surface pure shell");
+    let session = host.sessions().next().expect("active pure-shell session").clone();
+    session.invoke("checkInit").expect("seeded false at zero surfaces");
+
+    // Toggle false -> true while still at zero surfaces: Headless wakes AppWork, shell_turn delivers live!
+    cx.set_background_blur_supported(true);
+    assert!(cx.drain_wakes().iter().any(|wake| matches!(wake, WakeReason::AppWork)));
+    host.shell_turn(&mut runtime, &cx, ImageChoice::PackageOnly, &[]).expect("sync true at zero surfaces");
+    session.invoke("checkZeroSurfaceTrue").expect("zero-surface shell received true");
+
+    // Now open first LayerSurface: its UiBridge must inherit current true!
+    session.invoke("openBar").expect("request layer");
+    host.shell_turn(&mut runtime, &cx, ImageChoice::PackageOnly, &[]).expect("mount bar layer");
+    session.invoke("checkLayerSeededTrue").expect("layer seeded true");
+
+    // Toggle true -> false: both shell and mounted layer bridge receive false.
+    cx.set_background_blur_supported(false);
+    assert!(cx.drain_wakes().iter().any(|wake| matches!(wake, WakeReason::AppWork)));
+    host.shell_turn(&mut runtime, &cx, ImageChoice::PackageOnly, &[]).expect("sync false across shell and layer");
+    session.invoke("checkBothFalse").expect("shell and layer received false");
+
+    host.stop_shell_surfaces(&mut runtime, &cx);
+    let report = session.retire();
+    assert!(report.failure.is_none(), "teardown failed: {:?}", report.failure);
+    assert_eq!(report.counts.callbacks, 0, "all blur subscriptions must clean up with zero leaks");
+}

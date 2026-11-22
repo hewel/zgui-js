@@ -26,13 +26,15 @@ pub struct NativeNode {
 /// Bounded capacity for deferred native notifications awaiting a host flush.
 pub const MAX_QUEUED_NOTIFICATIONS: usize = 256;
 
-/// Host-selected failure policy and motion preference, fixed for one session.
+/// Host-selected failure policy, motion preference, and capability state for one session.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct BridgeOptions {
     /// Preview rejects invalid style maps; live sessions retain their last valid map.
     pub strict_styles: bool,
     /// Suppresses shared SDK motion durations through ThemeProvider.
     pub reduced_motion: bool,
+    /// Live compositor background blur capability (`ext_background_effect_v1` `Capability::Blur`).
+    pub background_blur_supported: bool,
     /// Holds mount-generated sheets until the session admits them.
     pub defer_stylesheet_install: bool,
 }
@@ -418,6 +420,9 @@ pub struct UiBridge {
     reduced_motion: Cell<bool>,
     reduced_motion_subscribers: RefCell<HashMap<u64, Persistent<rquickjs::Function<'static>>>>,
     next_reduced_motion_id: Cell<u64>,
+    background_blur_supported: Cell<bool>,
+    background_blur_subscribers: RefCell<HashMap<u64, Persistent<rquickjs::Function<'static>>>>,
+    next_background_blur_id: Cell<u64>,
     style_diagnostics: RefCell<Vec<StyleDiagnostic>>,
     stylesheets: RefCell<Vec<(String, String)>>,
     stylesheet_install_deferred: Cell<bool>,
@@ -480,6 +485,9 @@ impl UiBridge {
                 reduced_motion: Cell::new(options.reduced_motion),
                 reduced_motion_subscribers: RefCell::new(HashMap::new()),
                 next_reduced_motion_id: Cell::new(1),
+                background_blur_supported: Cell::new(options.background_blur_supported),
+                background_blur_subscribers: RefCell::new(HashMap::new()),
+                next_background_blur_id: Cell::new(1),
                 style_diagnostics: RefCell::new(Vec::new()),
                 stylesheets: RefCell::new(Vec::new()),
                 stylesheet_install_deferred: Cell::new(options.defer_stylesheet_install),
@@ -868,6 +876,7 @@ impl UiBridge {
         if !self.disposed.replace(true) { self.registry.borrow_mut().dispose(); }
         self.canvas_scenes.borrow_mut().clear();
         self.reduced_motion_subscribers.borrow_mut().clear();
+        self.background_blur_subscribers.borrow_mut().clear();
         self.wrappers.borrow_mut().clear();
         self.properties.borrow_mut().clear();
     }
@@ -875,6 +884,11 @@ impl UiBridge {
     /// Sets the initial reduced-motion preference before JS mounts (no subscriber dispatch).
     pub fn seed_reduced_motion(&self, value: bool) {
         self.reduced_motion.set(value);
+    }
+
+    /// Sets the initial background-blur capability before JS mounts (no subscriber dispatch).
+    pub fn seed_background_blur_supported(&self, value: bool) {
+        self.background_blur_supported.set(value);
     }
 
     /// Updates the bridge's live reduced-motion preference and notifies JS subscribers.
@@ -895,6 +909,33 @@ impl UiBridge {
             }
         }
         Ok(true)
+    }
+
+    /// Updates the bridge's live background-blur capability and notifies JS subscribers.
+    ///
+    /// # Errors
+    ///
+    /// Propagates any JavaScript exception thrown by a subscriber callback.
+    pub fn set_background_blur_supported(&self, ctx: &Ctx<'_>, value: bool) -> rquickjs::Result<bool> {
+        if self.background_blur_supported.get() == value {
+            return Ok(false);
+        }
+        self.background_blur_supported.set(value);
+        let mut ids: Vec<u64> = self.background_blur_subscribers.borrow().keys().copied().collect();
+        ids.sort_unstable();
+        for id in ids {
+            let callback = self.background_blur_subscribers.borrow().get(&id).cloned();
+            if let Some(callback) = callback {
+                callback.restore(ctx)?.call::<_, ()>((value,))?;
+            }
+        }
+        Ok(true)
+    }
+
+    /// Number of currently active background-blur capability subscribers on this bridge.
+    #[must_use]
+    pub fn background_blur_subscriber_count(&self) -> usize {
+        self.background_blur_subscribers.borrow().len()
     }
 
     fn require_turn(&self, ctx: &Ctx<'_>) -> rquickjs::Result<()> {
@@ -1061,6 +1102,29 @@ impl UiBridge {
             rquickjs::Function::new(ctx, move || {
                 if let Some(bridge) = unsub_weak.upgrade() {
                     bridge.reduced_motion_subscribers.borrow_mut().remove(&id);
+                }
+            })
+        }))?;
+        let weak = Rc::downgrade(self);
+        api.set("getBackgroundBlurSupported", Func::from(move |ctx: Ctx<'js>| -> rquickjs::Result<bool> {
+            Ok(owner(&weak, &ctx)?.background_blur_supported.get())
+        }))?;
+        let weak = Rc::downgrade(self);
+        api.set("subscribeBackgroundBlurSupported", Func::from(move |ctx: Ctx<'js>, callback: rquickjs::Function<'js>| {
+            let bridge = owner(&weak, &ctx)?;
+            bridge.require_creation(&ctx)?;
+            let mut subs = bridge.background_blur_subscribers.borrow_mut();
+            if subs.len() >= 128 {
+                return Err(Exception::throw_range(&ctx, "background-blur subscription limit reached"));
+            }
+            let id = bridge.next_background_blur_id.get();
+            bridge.next_background_blur_id.set(id.checked_add(1).ok_or_else(|| Exception::throw_range(&ctx, "background-blur subscriber IDs exhausted"))?);
+            subs.insert(id, Persistent::save(&ctx, callback));
+            drop(subs);
+            let unsub_weak = weak.clone();
+            rquickjs::Function::new(ctx, move || {
+                if let Some(bridge) = unsub_weak.upgrade() {
+                    bridge.background_blur_subscribers.borrow_mut().remove(&id);
                 }
             })
         }))?;
@@ -1862,5 +1926,74 @@ mod group_tests {
             if (!threw) throw Error('detached node scrollTo must throw');
             'ok';
         "#)).expect("detached scrollTo rejected");
+    }
+
+    #[test]
+    fn background_blur_capability_seeds_notifies_unsubscribes_and_disposes_cleanly() {
+        let mut engine = JsRuntime::new(RuntimeLimits::default()).expect("create JS engine");
+        let document = Rc::new(RefCell::new(Document::new()));
+        let backend = Rc::new(DocumentDom::new(document.clone()));
+        let dom = DomHandle::from_rc(backend.clone());
+        let root = dom.create_element(ElementName::new("column"));
+        dom.insert(backend.root_node(), root, None);
+        let stub_host = Rc::new(StubHost::default());
+        let bridge = UiBridge::new_with_options(
+            NodeRegistry::new(dom, root, 1, 1, 32),
+            HostHandle::from_rc(stub_host),
+            HostPort::queued(),
+            BridgeOptions { background_blur_supported: false, ..BridgeOptions::default() },
+        );
+        bridge.seed_background_blur_supported(true);
+        engine
+            .with_context(|ctx| {
+                ctx.globals().set("__zgui", bridge.api(&ctx)?)?;
+                ctx.globals().set("root", bridge.root(&ctx)?)
+            })
+            .expect("install bridge");
+
+        bridge.run_turn(engine.turn(), |_, js| js.evaluate_script(r#"
+            if (__zgui.getBackgroundBlurSupported() !== true) {
+                throw Error('expected seeded true');
+            }
+            globalThis.__blurEvents = [];
+            globalThis.__unsub1 = __zgui.subscribeBackgroundBlurSupported(v => globalThis.__blurEvents.push(['a', v]));
+            globalThis.__unsub2 = __zgui.subscribeBackgroundBlurSupported(v => globalThis.__blurEvents.push(['b', v]));
+            'ok';
+        "#)).expect("subscribe blur");
+        assert_eq!(bridge.background_blur_subscriber_count(), 2);
+
+        // Dedup: setting same value (true) does not dispatch.
+        let changed = bridge.run_turn(engine.turn(), |_, js| {
+            js.with_context(|ctx| bridge.set_background_blur_supported(&ctx, true))
+        }).expect("dedup set true");
+        assert!(!changed);
+
+        // Transition true -> false dispatches to both subscribers.
+        let changed = bridge.run_turn(engine.turn(), |_, js| {
+            js.with_context(|ctx| bridge.set_background_blur_supported(&ctx, false))
+        }).expect("set false");
+        assert!(changed);
+
+        // Unsubscribe first subscriber, then transition false -> true.
+        bridge.run_turn(engine.turn(), |_, js| js.evaluate_script(r#"
+            globalThis.__unsub1();
+            'ok';
+        "#)).expect("unsubscribe first");
+        assert_eq!(bridge.background_blur_subscriber_count(), 1);
+
+        let changed = bridge.run_turn(engine.turn(), |_, js| {
+            js.with_context(|ctx| bridge.set_background_blur_supported(&ctx, true))
+        }).expect("set true");
+        assert!(changed);
+
+        let summary = bridge.run_turn(engine.turn(), |_, js| js.evaluate_script(r#"
+            if (__zgui.getBackgroundBlurSupported() !== true) throw Error('expected live true');
+            JSON.stringify(globalThis.__blurEvents);
+        "#)).expect("read blur events");
+        assert_eq!(summary, r#"[["a",false],["b",false],["b",true]]"#);
+
+        // Disposal clears remaining subscribers with zero leaks.
+        bridge.dispose();
+        assert_eq!(bridge.background_blur_subscriber_count(), 0);
     }
 }

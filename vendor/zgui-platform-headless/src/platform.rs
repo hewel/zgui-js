@@ -285,6 +285,15 @@ impl Headless {
         self.desktop().session_lock.next_decision = decision;
     }
 
+    /// Updates whether the offscreen compositor advertises background blur support, waking the
+    /// platform loop with [`WakeReason::AppWork`] when the state changes.
+    pub fn set_background_blur_supported(&mut self, supported: bool) {
+        if self.capabilities.supports_background_blur != supported {
+            self.capabilities.supports_background_blur = supported;
+            self.waker.wake(WakeReason::AppWork);
+        }
+    }
+
     /// Observes lock ownership and presentation without changing them or advancing the fixture.
     #[must_use]
     pub fn session_lock_snapshot(&self) -> SessionLockSnapshot {

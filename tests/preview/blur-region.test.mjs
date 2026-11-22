@@ -533,3 +533,149 @@ test('input-pass-through gap remains non-clickable under blurRegion="full"', asy
   );
   assert.equal(result.teardown?.clean, true, "failed hit-test run must still tear down cleanly");
 });
+
+test("getBackgroundBlurSupported defaults false, honors profile backgroundBlur, and reacts live to setBackgroundBlurSupported", async () => {
+  const base = JSON.parse(await readFile(defaultProfile, "utf8"));
+  const manifest = path.resolve(path.dirname(defaultProfile), base.fonts.manifest);
+  const pureShellDefaultProfile = path.join(temp.dir, "pure-shell-blur-default.json");
+  const pureShellEnabledProfile = path.join(temp.dir, "pure-shell-blur-enabled.json");
+  const basePure = {
+    ...base,
+    pureShell: true,
+    fonts: { ...base.fonts, manifest: path.relative(temp.dir, manifest) },
+    surface: {
+      ...base.surface,
+      width: 320,
+      height: 120,
+      scale: 1,
+      opaque: false,
+      background: "#00000000",
+    },
+  };
+  await writeJson(pureShellDefaultProfile, basePure);
+  await writeJson(pureShellEnabledProfile, { ...basePure, backgroundBlur: true });
+
+  const shellBundle = await buildFixtureApp(
+    path.join(temp.dir, "app-blur-cap"),
+    "blur-capability",
+    `
+    import {
+      LayerSurface,
+      createMemo,
+      getBackgroundBlurSupported,
+      mountShellStylesheet,
+      renderShell,
+    } from "@hewel/zgui";
+
+    export const hostApiVersion = 1;
+
+    export function mount() {
+      return renderShell(() => {
+        mountShellStylesheet("reset", ":root { padding: 0; background-color: transparent; }");
+        const mode = createMemo(() => (getBackgroundBlurSupported() ? "glass" : "solid"));
+        return (
+          <LayerSurface
+            name="status-bar"
+            output="DP-1"
+            layer="top"
+            anchor={["top", "left"]}
+            width={240}
+            height={60}
+            blurRegion={getBackgroundBlurSupported() ? "full" : "none"}
+          >
+            <box
+              testId="panel"
+              style={{
+                width: "240px",
+                height: "60px",
+                backgroundColor: getBackgroundBlurSupported() ? "#38bdf880" : "#1e293b",
+              }}
+            >
+              <text testId="blur-mode">{mode()}</text>
+            </box>
+          </LayerSurface>
+        );
+      });
+    }
+    `,
+    { rawSource: true, capabilities: { shellSurfaces: true } },
+  );
+
+  // 1. Default profile (backgroundBlur omitted -> false): live false -> true -> false.
+  {
+    const { out, result } = await runScenario({
+      projectDir: temp.dir,
+      bundle: shellBundle,
+      profile: pureShellDefaultProfile,
+      name: "blur-capability-toggle",
+      requiredCapabilities: ["pixels", "capture.transparent", "surface.multiple"],
+      assertEmptyResources: true,
+      steps: [
+        { id: "outputs", op: "monitors.set", monitors: [monitor] },
+        capture("initial-solid", "status-bar"),
+        { id: "enable-blur", op: "setBackgroundBlurSupported", supported: true },
+        capture("live-glass", "status-bar"),
+        { id: "disable-blur", op: "setBackgroundBlurSupported", supported: false },
+        capture("fallback-solid", "status-bar"),
+      ],
+    });
+    assert.equal(result.teardown?.clean, true, "default toggle run must tear down cleanly");
+
+    const solidTree = await readTree(out, "surfaces/status-bar/initial-solid");
+    assert.equal(getNode(solidTree, "blur-mode").text, "solid");
+    const solidFrame = await readFrame(out, "surfaces/status-bar/initial-solid");
+    assert.equal(solidFrame.blurRegion, "none");
+    assert.equal(solidFrame.renderer.compositorTransparencyValidated, false);
+    const solidPng = await readPng(
+      path.join(out, "captures/surfaces/status-bar/initial-solid.png"),
+    );
+    assert.equal(pixelAt(solidPng, 200, 30)[3], 255, "solid fallback must render opaque alpha");
+
+    const glassTree = await readTree(out, "surfaces/status-bar/live-glass");
+    assert.equal(getNode(glassTree, "blur-mode").text, "glass");
+    const glassFrame = await readFrame(out, "surfaces/status-bar/live-glass");
+    assert.equal(glassFrame.blurRegion, "full");
+    assert.equal(glassFrame.renderer.compositorTransparencyValidated, false);
+    const glassPng = await readPng(path.join(out, "captures/surfaces/status-bar/live-glass.png"));
+    assert.ok(
+      pixelAt(glassPng, 200, 30)[3] < 200 && pixelAt(glassPng, 200, 30)[3] > 60,
+      "glass mode must render translucent panel pixels",
+    );
+
+    const fallbackTree = await readTree(out, "surfaces/status-bar/fallback-solid");
+    assert.equal(getNode(fallbackTree, "blur-mode").text, "solid");
+    const fallbackFrame = await readFrame(out, "surfaces/status-bar/fallback-solid");
+    assert.equal(fallbackFrame.blurRegion, "none");
+    assert.equal(fallbackFrame.renderer.compositorTransparencyValidated, false);
+  }
+
+  // 2. Profile with backgroundBlur: true starts directly in glass mode and falls back on toggle false.
+  {
+    const { out, result } = await runScenario({
+      projectDir: temp.dir,
+      bundle: shellBundle,
+      profile: pureShellEnabledProfile,
+      name: "blur-capability-profile-enabled",
+      requiredCapabilities: ["pixels", "capture.transparent", "surface.multiple"],
+      assertEmptyResources: true,
+      steps: [
+        { id: "outputs", op: "monitors.set", monitors: [monitor] },
+        capture("initial-glass", "status-bar"),
+        { id: "withdraw-blur", op: "setBackgroundBlurSupported", supported: false },
+        capture("withdrawn-solid", "status-bar"),
+      ],
+    });
+    assert.equal(result.teardown?.clean, true, "profile-enabled run must tear down cleanly");
+
+    const initTree = await readTree(out, "surfaces/status-bar/initial-glass");
+    assert.equal(getNode(initTree, "blur-mode").text, "glass");
+    const initFrame = await readFrame(out, "surfaces/status-bar/initial-glass");
+    assert.equal(initFrame.blurRegion, "full");
+    assert.equal(initFrame.renderer.compositorTransparencyValidated, false);
+
+    const withdrawnTree = await readTree(out, "surfaces/status-bar/withdrawn-solid");
+    assert.equal(getNode(withdrawnTree, "blur-mode").text, "solid");
+    const withdrawnFrame = await readFrame(out, "surfaces/status-bar/withdrawn-solid");
+    assert.equal(withdrawnFrame.blurRegion, "none");
+  }
+});

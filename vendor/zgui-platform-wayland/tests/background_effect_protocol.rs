@@ -42,15 +42,17 @@ enum Scenario {
     ZeroFlagsManager,
     DynamicCapabilitiesAndRecreation,
     EarlyPopupRetirement,
+    ZeroSurfaceCapabilityWakes,
 }
 
 impl Scenario {
-    const ALL: [Self; 5] = [
+    const ALL: [Self; 6] = [
         Self::ManagerWithBlur,
         Self::AbsentManager,
         Self::ZeroFlagsManager,
         Self::DynamicCapabilitiesAndRecreation,
         Self::EarlyPopupRetirement,
+        Self::ZeroSurfaceCapabilityWakes,
     ];
 
     fn name(self) -> &'static str {
@@ -60,6 +62,7 @@ impl Scenario {
             Self::ZeroFlagsManager => "zero-flags-manager",
             Self::DynamicCapabilitiesAndRecreation => "dynamic-capabilities-and-recreation",
             Self::EarlyPopupRetirement => "early-popup-retirement",
+            Self::ZeroSurfaceCapabilityWakes => "zero-surface-capability-wakes",
         }
     }
 }
@@ -75,6 +78,19 @@ fn background_effect_protocol_on_the_wire() {
             WaylandApp::new(Client::new(scenario)).expect("connect to the protocol fixture");
         app.run().expect("Wayland client loop");
         assert!(app.handler().done, "{scenario:?} client did not finish");
+        if scenario == Scenario::DynamicCapabilitiesAndRecreation {
+            assert_eq!(
+                app.handler().app_work_wakes,
+                vec![true, false, true],
+                "dynamic gain -> removal -> rebound gain must wake via WakeReason::AppWork"
+            );
+        } else if scenario == Scenario::ZeroSurfaceCapabilityWakes {
+            assert_eq!(
+                app.handler().app_work_wakes,
+                vec![true, false, true, false],
+                "zero-surface client must wake via WakeReason::AppWork on gain/withdraw/regain/remove"
+            );
+        }
         return;
     }
 
@@ -165,6 +181,7 @@ struct Client {
     popup2: Option<Arc<dyn Surface>>,
     stage: u32,
     done: bool,
+    app_work_wakes: Vec<bool>,
 }
 
 impl Client {
@@ -177,6 +194,7 @@ impl Client {
             popup2: None,
             stage: 0,
             done: false,
+            app_work_wakes: Vec::new(),
         }
     }
 }
@@ -223,6 +241,12 @@ impl AppHandler for Client {
                 assert!(cx.capabilities().supports_background_blur);
                 let layer = open_layer(cx, 200.0, 40.0);
                 self.primary = Some(layer);
+            }
+            Scenario::ZeroSurfaceCapabilityWakes => {
+                assert!(
+                    !cx.capabilities().supports_background_blur,
+                    "zero-surface client starts with blur capability false before events"
+                );
             }
         }
     }
@@ -330,10 +354,22 @@ impl AppHandler for Client {
                     self.stage = 4;
                 }
             }
+            Scenario::ZeroSurfaceCapabilityWakes => {}
         }
     }
 
     fn wake(&mut self, cx: &dyn PlatformCx, reason: WakeReason) {
+        if matches!(reason, WakeReason::AppWork) {
+            self.app_work_wakes
+                .push(cx.capabilities().supports_background_blur);
+            if self.scenario == Scenario::ZeroSurfaceCapabilityWakes
+                && self.app_work_wakes.len() == 4
+            {
+                self.done = true;
+                cx.request_exit();
+            }
+            return;
+        }
         if !matches!(reason, WakeReason::MonitorsChanged) {
             return;
         }
@@ -489,11 +525,58 @@ impl Compositor {
     }
 
     fn run(&mut self) {
+        if self.scenario == Scenario::ZeroSurfaceCapabilityWakes {
+            self.stream
+                .set_read_timeout(Some(Duration::from_millis(40)))
+                .expect("short read timeout for zero-surface idle checks");
+        }
+        let started = Instant::now();
         loop {
             let mut header = [0u8; 8];
             match self.stream.read_exact(&mut header) {
                 Ok(()) => {}
-                Err(error) if error.kind() == std::io::ErrorKind::UnexpectedEof => return,
+                Err(error)
+                    if self.scenario == Scenario::ZeroSurfaceCapabilityWakes
+                        && matches!(
+                            error.kind(),
+                            std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                        ) =>
+                {
+                    assert!(
+                        started.elapsed() < TIMEOUT,
+                        "zero-surface scenario timed out waiting for client exit"
+                    );
+                    if let Some(&(_, mgr1)) = self.effect_managers.first() {
+                        match self.phase {
+                            0 => {
+                                self.phase = 1;
+                                self.event(mgr1, 0, &words(&[1])); // false -> true
+                            }
+                            1 => {
+                                self.phase = 2;
+                                self.event(mgr1, 0, &words(&[0])); // true -> false
+                            }
+                            2 => {
+                                self.phase = 3;
+                                self.event(mgr1, 0, &words(&[1])); // false -> true
+                            }
+                            3 => {
+                                self.phase = 4;
+                                self.event(self.registry, 1, &words(&[GLOBAL_EFFECT_1])); // true -> false
+                            }
+                            _ => {}
+                        }
+                    }
+                    continue;
+                }
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        std::io::ErrorKind::UnexpectedEof | std::io::ErrorKind::ConnectionReset
+                    ) =>
+                {
+                    return;
+                }
                 Err(error) => panic!("reading Wayland request: {error}"),
             }
             let id = word(&header, 0);
@@ -591,7 +674,8 @@ impl Compositor {
                         Scenario::ZeroFlagsManager => {
                             self.event(bound, 0, &words(&[0])); // No capabilities
                         }
-                        Scenario::DynamicCapabilitiesAndRecreation => {
+                        Scenario::DynamicCapabilitiesAndRecreation
+                        | Scenario::ZeroSurfaceCapabilityWakes => {
                             // Deliberately withhold capabilities initially to verify false until advertised!
                         }
                         Scenario::AbsentManager => unreachable!(),
@@ -885,7 +969,9 @@ impl Compositor {
                     }
                 }
             }
-            Scenario::AbsentManager | Scenario::ZeroFlagsManager => {}
+            Scenario::AbsentManager
+            | Scenario::ZeroFlagsManager
+            | Scenario::ZeroSurfaceCapabilityWakes => {}
         }
     }
 
@@ -1023,6 +1109,16 @@ impl Compositor {
                 assert_eq!(
                     self.committed_blurs.get(&popup2),
                     Some(&vec![CommittedBlur::Rects(vec![[0, 0, 60, 30]])]),
+                );
+            }
+            Scenario::ZeroSurfaceCapabilityWakes => {
+                assert!(
+                    self.surface_order.is_empty(),
+                    "zero-surface scenario must not create any wl_surface"
+                );
+                assert!(
+                    self.effect_creations.is_empty(),
+                    "zero-surface scenario must not create any ext_background_effect_surface_v1"
                 );
             }
         }

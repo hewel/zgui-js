@@ -1,4 +1,4 @@
-import { Image, LayerSurface, PopupSurface, SessionLockSurface, TextField, TextArea, WindowSurface, createCanvasScene, createProjection, createSpring, createStore, getSessionGeneration, reconcile, renderApp, renderShell, requestSessionLock, useMonitors } from "@hewel/zgui";
+import { Image, LayerSurface, PopupSurface, SessionLockSurface, TextField, TextArea, WindowSurface, createCanvasScene, createProjection, createSpring, createStore, getBackgroundBlurSupported, getSessionGeneration, reconcile, renderApp, renderShell, requestSessionLock, useMonitors } from "@hewel/zgui";
 import type { BlurRegion, NativeElementProps, NativeNode } from "@hewel/zgui";
 import { createRetainedPresence } from "@hewel/zgui/primitives";
 
@@ -196,6 +196,8 @@ void <SessionLockSurface name="lock" output="DP-1" geometryInsets={28} />;
 void <LayerSurface name="panel" geometryInsets={28} />;
 // @ts-expect-error SurfaceInsets uses physical edge names (top/right/bottom/left).
 void <PopupSurface name="menu" parent="panel" anchorNode={fabricated} width={10} geometryInsets={{ inlineStart: 12 }} />;
+// @ts-expect-error getBackgroundBlurSupported is read-only and accepts no arguments.
+getBackgroundBlurSupported(true);
 const negSpring = createSpring(() => 0);
 // @ts-expect-error initial is mount-only and rejected by configure().
 negSpring.configure({ initial: 0 });

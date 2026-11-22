@@ -263,6 +263,10 @@ impl<H: AppHandler> Pipeline<H> {
         self.inner().platform()
     }
 
+    pub fn platform_mut(&mut self) -> &mut Headless {
+        self.inner_mut().platform_mut()
+    }
+
     pub fn now(&self) -> Instant {
         self.inner().now()
     }

@@ -33,6 +33,7 @@ import {
   useContext,
   useMonitors,
   focus,
+  getBackgroundBlurSupported,
   getReducedMotion,
   getSelection,
   getTextContent,
@@ -980,6 +981,8 @@ void (
 );
 const scalarInsets: SurfaceInsets = 28;
 const edgeInsets: SurfaceInsets = { top: 12, right: 24, bottom: 32 };
+const blurSupported: boolean = getBackgroundBlurSupported();
+void blurSupported;
 void (
   <PopupSurface
     name="shadow-scalar"

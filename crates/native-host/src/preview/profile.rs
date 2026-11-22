@@ -59,6 +59,8 @@ pub(crate) struct Profile {
     pub theme: String,
     #[serde(default)]
     pub reduced_motion: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub background_blur: bool,
     pub locale: String,
     pub direction: String,
     pub time_zone: String,
@@ -417,6 +419,24 @@ mod tests {
         assert!(validate(&reduced).is_ok());
         value["reducedMotion"] = json!("reduce");
         assert!(serde_json::from_value::<Profile>(value).is_err());
+    }
+
+    #[test]
+    fn background_blur_defaults_false_and_omits_from_serialized_json_unless_true() {
+        let base = default_profile();
+        assert!(!base.background_blur);
+        let serialized = serde_json::to_value(&base).unwrap();
+        assert!(
+            serialized.get("backgroundBlur").is_none(),
+            "false default must omit backgroundBlur so existing profile digests stay unchanged"
+        );
+        let mut enabled_json = serialized;
+        enabled_json["backgroundBlur"] = json!(true);
+        let enabled: Profile = serde_json::from_value(enabled_json.clone()).unwrap();
+        assert!(enabled.background_blur);
+        assert!(validate(&enabled).is_ok());
+        enabled_json["backgroundBlur"] = json!("blur");
+        assert!(serde_json::from_value::<Profile>(enabled_json).is_err());
     }
 
     fn default_profile() -> Profile {

@@ -60,6 +60,7 @@ pub enum Step {
     SurfaceCloseRequest { id: String, surface: String },
     MonitorsSet { id: String, monitors: Vec<Monitor> },
     PopupDone { id: String, surface: String },
+    SetBackgroundBlurSupported { id: String, supported: bool },
     LifecycleReload { id: String, bundle: Option<String>, expect: ReloadExpect },
 }
 
@@ -75,7 +76,7 @@ impl Step {
             | Self::Assert { id, .. } | Self::AssertService { id, .. }
             | Self::ClockAdvance { id, .. } | Self::ServiceEmit { id, .. }
             | Self::SurfaceResize { id, .. } | Self::SurfaceScale { id, .. } | Self::SurfaceColorScheme { id, .. }
-            | Self::SurfaceRecreate { id, .. } | Self::SurfaceCloseRequest { id, .. } | Self::MonitorsSet { id, .. } | Self::PopupDone { id, .. } | Self::LifecycleReload { id, .. } => id,
+            | Self::SurfaceRecreate { id, .. } | Self::SurfaceCloseRequest { id, .. } | Self::MonitorsSet { id, .. } | Self::PopupDone { id, .. } | Self::SetBackgroundBlurSupported { id, .. } | Self::LifecycleReload { id, .. } => id,
         }
     }
 
@@ -105,6 +106,7 @@ impl Step {
             Self::SurfaceCloseRequest { .. } => "surface.closeRequest",
             Self::MonitorsSet { .. } => "monitors.set",
             Self::PopupDone { .. } => "popupDone",
+            Self::SetBackgroundBlurSupported { .. } => "setBackgroundBlurSupported",
             Self::LifecycleReload { .. } => "lifecycle.reload",
         }
     }
@@ -296,6 +298,8 @@ enum StepInput {
     MonitorsSet(MonitorsInput),
     #[serde(rename = "popupDone")]
     PopupDone(NamedSurfaceInput),
+    #[serde(rename = "setBackgroundBlurSupported")]
+    SetBackgroundBlurSupported(BackgroundBlurSupportedInput),
     #[serde(rename = "wheel")]
     Wheel(WheelInput),
     #[serde(rename = "drag.enter")]
@@ -453,6 +457,10 @@ struct AssertInput {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct AdvanceInput { id:String,by_ms:u64 }
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct BackgroundBlurSupportedInput { id: String, supported: bool }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct EmitInput { id:String,channel:String,value:serde_json::Value }
@@ -684,6 +692,9 @@ fn parse(bytes: &[u8], available: &[&str], virtual_profile: bool) -> Result<Scen
                 require(&mut requirements, "surface.multiple");
                 Step::PopupDone { id: input.id, surface: input.surface }
             }
+            StepInput::SetBackgroundBlurSupported(input) => {
+                Step::SetBackgroundBlurSupported { id: input.id, supported: input.supported }
+            }
             StepInput::Wheel(input) => {
                 let location = pointer_location(input.target, input.surface, input.position, &mut requirements)?;
                 if [input.delta.x, input.delta.y].into_iter().any(|v| !v.is_finite() || !(v as f32).is_finite()) {
@@ -733,7 +744,7 @@ fn parse(bytes: &[u8], available: &[&str], virtual_profile: bool) -> Result<Scen
                     | StepInput::PointerDown(_) | StepInput::PointerUp(_) | StepInput::PointerCancel(_)
                     | StepInput::Wheel(_) | StepInput::DragEnter(_) | StepInput::DragMove(_) | StepInput::DragLeave(_) | StepInput::DragDrop(_)
                     | StepInput::LifecycleReload(_)
-                    | StepInput::MonitorsSet(_) | StepInput::PopupDone(_)
+                    | StepInput::MonitorsSet(_) | StepInput::PopupDone(_) | StepInput::SetBackgroundBlurSupported(_)
                     | StepInput::KeyPress(_) | StepInput::TextCommit(_)
                     | StepInput::Assert(_) | StepInput::ClockAdvance(_) | StepInput::ServiceEmit(_)
                     | StepInput::SurfaceResize(_) | StepInput::SurfaceScale(_) | StepInput::SurfaceRecreate(_) | StepInput::SurfaceCloseRequest(_) | StepInput::SurfaceColorScheme(_) => unreachable!(),

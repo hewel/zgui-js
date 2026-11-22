@@ -671,23 +671,24 @@ The 20 ms step is an explicit scenario choice. If the selected backend/profile r
 
 ### 8.3 Initial operation set
 
-| Operation        | Required payload                                                               | Behavior                                                                          |
-| ---------------- | ------------------------------------------------------------------------------ | --------------------------------------------------------------------------------- |
-| `settle`         | None; optional lower per-step budget                                           | Drain current-time work under Section 7.                                          |
-| `clock.advance`  | `byMs`                                                                         | Advance by a nonnegative integer number of milliseconds.                          |
-| `pointer.move`   | `target` or `position` plus `surface`                                          | Deliver native pointer movement.                                                  |
-| `pointer.click`  | `target` or explicit position; `button`                                        | Resolve, move, press, release using native dispatch.                              |
-| `pointer.down`   | `target` or explicit position; `button`                                        | Dispatch one native press and settle.                                             |
-| `pointer.up`     | `target` or explicit position; `button`                                        | Dispatch one native release and settle.                                           |
-| `pointer.cancel` | `target` or explicit position                                                  | Dispatch one native cancel and settle.                                            |
-| `wheel`          | `target` or `position` plus `surface`; `delta`; optional `phase`               | Deliver one native wheel event through the real scroll pipeline.                  |
-| `key.press`      | `surface`, `key`, optional `modifiers`                                         | Deliver key down/up, preserving native defaults.                                  |
-| `text.commit`    | `surface`, `text`                                                              | Commit text through the supported native text-input path.                         |
-| `service.emit`   | `channel`, `value`                                                             | Apply a typed fixture update and enqueue its notification.                        |
-| `assert`         | Target/check or service-call check                                             | Evaluate a defined predicate; never arbitrary JS.                                 |
-| `capture`        | `captureId`; optional `surface` (defaults to `main`) and `requiredFrameTimeUs` | Save coherent pixels, tree, and metadata for the selected surface.                |
-| `monitors.set`   | `monitors`                                                                     | Replace the synthetic output inventory without advancing virtual time.            |
-| `popupDone`      | `surface`                                                                      | Deliver a native destruction event to a named popup, as for compositor dismissal. |
+| Operation                    | Required payload                                                               | Behavior                                                                                     |
+| ---------------------------- | ------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------- |
+| `settle`                     | None; optional lower per-step budget                                           | Drain current-time work under Section 7.                                                     |
+| `clock.advance`              | `byMs`                                                                         | Advance by a nonnegative integer number of milliseconds.                                     |
+| `pointer.move`               | `target` or `position` plus `surface`                                          | Deliver native pointer movement.                                                             |
+| `pointer.click`              | `target` or explicit position; `button`                                        | Resolve, move, press, release using native dispatch.                                         |
+| `pointer.down`               | `target` or explicit position; `button`                                        | Dispatch one native press and settle.                                                        |
+| `pointer.up`                 | `target` or explicit position; `button`                                        | Dispatch one native release and settle.                                                      |
+| `pointer.cancel`             | `target` or explicit position                                                  | Dispatch one native cancel and settle.                                                       |
+| `wheel`                      | `target` or `position` plus `surface`; `delta`; optional `phase`               | Deliver one native wheel event through the real scroll pipeline.                             |
+| `key.press`                  | `surface`, `key`, optional `modifiers`                                         | Deliver key down/up, preserving native defaults.                                             |
+| `text.commit`                | `surface`, `text`                                                              | Commit text through the supported native text-input path.                                    |
+| `service.emit`               | `channel`, `value`                                                             | Apply a typed fixture update and enqueue its notification.                                   |
+| `assert`                     | Target/check or service-call check                                             | Evaluate a defined predicate; never arbitrary JS.                                            |
+| `capture`                    | `captureId`; optional `surface` (defaults to `main`) and `requiredFrameTimeUs` | Save coherent pixels, tree, and metadata for the selected surface.                           |
+| `monitors.set`               | `monitors`                                                                     | Replace the synthetic output inventory without advancing virtual time.                       |
+| `popupDone`                  | `surface`                                                                      | Deliver a native destruction event to a named popup, as for compositor dismissal.            |
+| `setBackgroundBlurSupported` | `supported` (boolean)                                                          | Toggle offscreen `supports_background_blur` capability live and settle reactive subscribers. |
 
 For explicit position, use `{"x": 120, "y": 40}` in logical surface pixels. The target form and position form are mutually exclusive. Supported pointer buttons are `primary`, `secondary`, and `middle`; reject other values until explicitly implemented. `pointer.down` and `pointer.up` require a button; `pointer.move` and `pointer.cancel` reject one.
 
@@ -1114,7 +1115,7 @@ Store baseline images in an appropriate repository artifact store or versioned l
 
 ### 12.4 Transparency and platform limits
 
-A transparent offscreen image can test alpha pixels and text/render-target policy. Its `PreMultiplied` metadata describes stored pixels, not the Wayland compositor's blend mode; `compositorTransparencyValidated` remains `false`. [Z21] Similarly, headless preview records normalized `blurRegion` (`"none"`, `"full"`, or surface-local CSS rectangles) from `OffscreenSurface` in frame evidence (`*.frame.json`) without synthesizing blurred desktop pixels; Wayland wire semantics are verified separately by `vendor/zgui-platform-wayland/tests/background_effect_protocol.rs`.
+A transparent offscreen image can test alpha pixels and text/render-target policy. Its `PreMultiplied` metadata describes stored pixels, not the Wayland compositor's blend mode; `compositorTransparencyValidated` remains `false`. [Z21] Similarly, headless preview defaults `supports_background_blur` to `false` (configurable via optional profile `backgroundBlur?: boolean` and live `setBackgroundBlurSupported` scenario steps so apps can test both solid fallback and glass branches deterministically via `getBackgroundBlurSupported()`), and records normalized `blurRegion` (`"none"`, `"full"`, or surface-local CSS rectangles) from `OffscreenSurface` in frame evidence (`*.frame.json`) without synthesizing blurred desktop pixels; Wayland wire semantics are verified separately by `vendor/zgui-platform-wayland/tests/background_effect_protocol.rs`.
 
 Do not claim cross-GPU byte identity. Use the recorded environment to distinguish a UI regression from an environment change, then choose the appropriate comparison policy deliberately.
 

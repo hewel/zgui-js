@@ -75,6 +75,7 @@ export {
   clearDocumentSelection,
   createCanvasScene,
   focus,
+  getBackgroundBlurSupported,
   getDocumentSelection,
   getReducedMotion,
   getSelection,

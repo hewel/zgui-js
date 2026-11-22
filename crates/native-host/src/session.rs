@@ -378,6 +378,7 @@ pub(crate) struct Session {
     retirement_reported: Cell<bool>,
     policy: SessionPolicy,
     reduced_motion: Cell<bool>,
+    background_blur_supported: Cell<bool>,
     checkpoint_cursor: Cell<usize>,
     waker: Arc<dyn Waker>,
     notifications_after: Cell<u32>,
@@ -468,7 +469,12 @@ impl Session {
                         ..WindowState::default()
                     });
                     let work = Work::new(work_session, region.host.clone(), surface, waker.clone());
-                    let options = ui_bridge::BridgeOptions { strict_styles: policy.strict_rejections, reduced_motion: initial_reduced_motion, defer_stylesheet_install: true };
+                    let options = ui_bridge::BridgeOptions {
+                        strict_styles: policy.strict_rejections,
+                        reduced_motion: initial_reduced_motion,
+                        background_blur_supported: false,
+                        defer_stylesheet_install: true,
+                    };
                     let region = Rc::new(Self::build_region(region, "main".into(), surface, generation, options, waker.clone(), weak.clone()));
                     bridges.add(&region.bridge);
                     (Some(region), work)
@@ -499,6 +505,7 @@ impl Session {
                 module,
                 fault: RefCell::new(None), retired: RefCell::new(None),
                 policy, reduced_motion: Cell::new(initial_reduced_motion),
+                background_blur_supported: Cell::new(false),
                 checkpoint_cursor: Cell::new(0), waker, notifications_after: Cell::new(0),
             }
         });
@@ -642,6 +649,34 @@ impl Session {
         result.map(|()| true).map_err(|error| self.diagnostic(error).into())
     }
 
+    /// Synchronize live compositor background-blur capability into the shell bridge and all live
+    /// document bridges.
+    pub(crate) fn update_background_blur_supported(&self, supported: bool) -> Result<bool> {
+        if self.shutdown_started.get() || self.background_blur_supported.get() == supported {
+            return Ok(false);
+        }
+        self.background_blur_supported.set(supported);
+        self.shell.seed_background_blur_supported(supported);
+        if !self.mount_started.get() {
+            for owned in self.primary.iter().chain(self.layers.borrow().values()) {
+                owned.bridge.seed_background_blur_supported(supported);
+            }
+            return Ok(false);
+        }
+        let mut engine = self.engine.borrow_mut();
+        let engine = engine.as_mut().ok_or("session disposed")?;
+        let regions: Vec<Rc<SessionRegion>> = self.primary.iter().chain(self.layers.borrow().values()).cloned().collect();
+        let result = self.bridges.run(engine.turn(), |js| js.with_context(|ctx| {
+            self.shell.dispatch_background_blur_supported(&ctx, supported)?;
+            for owned in &regions {
+                owned.bridge.set_background_blur_supported(&ctx, supported)?;
+            }
+            Ok(())
+        }));
+        self.mark_reported(self.check_contract())?;
+        result.map(|()| true).map_err(|error| self.diagnostic(error).into())
+    }
+
     /// Settle active jobs, retire the popup subtree, and notify its owner after cleanup.
     pub(crate) fn dismiss_popup(&self, id: u32, close: impl FnOnce() -> Result<()>) -> Result<()> {
         if self.shutdown_started.get() { return close(); }
@@ -717,7 +752,12 @@ impl Session {
     /// Build and mount an auxiliary document in the already-running JS engine.
     pub(crate) fn attach_layer(self: &Rc<Self>, id: u32, name: String, region: MountRegion, surface: SurfaceId, lock_claim: Option<std::sync::Weak<dyn Surface>>) -> Result<()> {
         let attach = self.shell.attach(id).ok_or("shell surface was closed before attachment")?;
-        let options = ui_bridge::BridgeOptions { strict_styles: self.policy.strict_rejections, reduced_motion: self.reduced_motion.get(), defer_stylesheet_install: true };
+        let options = ui_bridge::BridgeOptions {
+            strict_styles: self.policy.strict_rejections,
+            reduced_motion: self.reduced_motion.get(),
+            background_blur_supported: self.background_blur_supported.get(),
+            defer_stylesheet_install: true,
+        };
         let mut owned = Self::build_region(region, name, surface, self.generation, options, self.waker.clone(), Rc::downgrade(self));
         owned.lock_claim = lock_claim;
         let owned = Rc::new(owned);

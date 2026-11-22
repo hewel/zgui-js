@@ -762,3 +762,136 @@ test("PopupSurface normalizes geometryInsets scalar, partial object, omitted, an
   harness.runTurn(() => mod.setInsets(undefined));
   assert.deepEqual(pop.placement.geometryInsets, { top: 0, right: 0, bottom: 0, left: 0 });
 });
+
+test("getBackgroundBlurSupported reacts in renderApp and zero-surface renderShell with clean disposal and no public setter", async t => {
+  const source = `
+    import * as zgui from "@hewel/zgui";
+    import {
+      LayerSurface,
+      Show,
+      createEffect,
+      createMemo,
+      createSignal,
+      getBackgroundBlurSupported,
+      renderApp,
+      renderShell,
+    } from "@hewel/zgui";
+    import type { NativeNode } from "@hewel/zgui";
+    export const hasPublicSetter = "setBackgroundBlurSupported" in zgui;
+    export const [showBar, setShowBar] = createSignal(false);
+    export const observed: boolean[] = [];
+    export function mountShell() {
+      return renderShell(() => {
+        const mode = createMemo(() => (getBackgroundBlurSupported() ? "glass" : "solid"));
+        createEffect(
+          () => getBackgroundBlurSupported(),
+          value => {
+            observed.push(value);
+          },
+        );
+        return (
+          <Show when={showBar()}>
+            <LayerSurface name="bar" output="DP-1" width={200} height={36}>
+              <text testId="bar-mode">{mode()}</text>
+            </LayerSurface>
+          </Show>
+        );
+      });
+    }
+    export function mountApp(root: NativeNode) {
+      return renderApp(() => {
+        const mode = createMemo(() => (getBackgroundBlurSupported() ? "glass" : "solid"));
+        return <text testId="app-mode">{mode()}</text>;
+      }, root);
+    }
+  `;
+  const mod = await moduleFor(t, source);
+  assert.equal(mod.hasPublicSetter, false, "getBackgroundBlurSupported must be read-only");
+
+  // 1. Rootless zero-surface renderShell: observes false -> true before any LayerSurface mounts,
+  //    then mounts first LayerSurface, toggles true -> false -> true, and cleans up subscribers.
+  {
+    const harness = createHost({ monitors: [desk], backgroundBlurSupported: false });
+    const prevShell = globalThis.__zguiShell;
+    const prevUi = globalThis.__zgui;
+    delete globalThis.__zgui;
+    globalThis.__zguiShell = harness.shell;
+    let dispose;
+    t.after(() => {
+      try {
+        dispose?.();
+        harness.flush();
+      } finally {
+        if (prevUi === undefined) delete globalThis.__zgui;
+        else globalThis.__zgui = prevUi;
+        if (prevShell === undefined) delete globalThis.__zguiShell;
+        else globalThis.__zguiShell = prevShell;
+      }
+    });
+    dispose = harness.runTurn(() => mod.mountShell());
+    harness.flush();
+    assert.equal(harness.surfaces.size, 0, "starts at zero mounted surfaces");
+    assert.deepEqual(mod.observed, [false]);
+
+    harness.emitBackgroundBlurSupported(true);
+    assert.deepEqual(mod.observed, [false, true], "zero-surface shell reacts immediately");
+
+    harness.runTurn(() => mod.setShowBar(true));
+    harness.flush();
+    assert.equal(textOf(harness, "bar-mode"), "glass");
+
+    harness.emitBackgroundBlurSupported(false);
+    assert.equal(textOf(harness, "bar-mode"), "solid");
+    assert.deepEqual(mod.observed, [false, true, false]);
+
+    harness.emitBackgroundBlurSupported(true);
+    assert.equal(textOf(harness, "bar-mode"), "glass");
+    assert.deepEqual(mod.observed, [false, true, false, true]);
+
+    dispose();
+    dispose = undefined;
+    harness.flush();
+    assert.equal(
+      harness.backgroundBlurSubscribers.size,
+      0,
+      "disposing renderShell must remove all background-blur subscriptions",
+    );
+  }
+
+  // 2. renderApp: seeded true, live true -> false -> true, clean disposal.
+  {
+    const harness = createHost({ monitors: [desk], backgroundBlurSupported: true });
+    const prevUi = globalThis.__zgui;
+    const prevShell = globalThis.__zguiShell;
+    globalThis.__zgui = harness.host;
+    delete globalThis.__zguiShell;
+    let dispose;
+    t.after(() => {
+      try {
+        dispose?.();
+      } finally {
+        if (prevUi === undefined) delete globalThis.__zgui;
+        else globalThis.__zgui = prevUi;
+        if (prevShell === undefined) delete globalThis.__zguiShell;
+        else globalThis.__zguiShell = prevShell;
+      }
+    });
+    const root = harness.makeNode("root");
+    dispose = harness.runTurn(() => mod.mountApp(root));
+    assert.equal(textOf(harness, "app-mode"), "glass");
+
+    harness.emitBackgroundBlurSupported(false);
+    assert.equal(textOf(harness, "app-mode"), "solid");
+
+    harness.emitBackgroundBlurSupported(true);
+    assert.equal(textOf(harness, "app-mode"), "glass");
+
+    dispose();
+    dispose = undefined;
+    assert.equal(
+      harness.backgroundBlurSubscribers.size,
+      0,
+      "disposing renderApp must remove all background-blur subscriptions",
+    );
+  }
+});

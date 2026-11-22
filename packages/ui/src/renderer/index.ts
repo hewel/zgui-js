@@ -13,6 +13,7 @@ import type {
   VectorProps,
 } from "../types.js";
 import {
+  attachBackgroundBlurBridge,
   attachReducedMotionBridge,
   bridgeFor,
   provideRegion,
@@ -124,6 +125,7 @@ const createNativeRenderer = createRenderer as (
     | "precedes"
     | "observeGeometry"
     | "getReducedMotion"
+    | "getBackgroundBlurSupported"
   > & {
     createElement(tag: NativeTag, staticProps?: Record<string, unknown>): NativeNode;
     replaceText(node: NativeNode, text: string | number): void;
@@ -343,7 +345,10 @@ export function mergeProps<T extends readonly object[]>(...sources: T): MergeSou
 export function render(code: () => NativeChild, root: NativeNode): () => void {
   const dispose = renderer.render(() => {
     const bridge = tryBridgeFor(root);
-    if (bridge) attachReducedMotionBridge(bridge);
+    if (bridge) {
+      attachReducedMotionBridge(bridge);
+      attachBackgroundBlurBridge(bridge);
+    }
     return code();
   }, root);
   return () => {
@@ -362,6 +367,7 @@ export function renderRegion(
     () =>
       provideRegion(bridge, () => {
         attachReducedMotionBridge(bridge);
+        attachBackgroundBlurBridge(bridge);
         insert(root, code());
       }),
     () => bridge.clearRoot(root),
