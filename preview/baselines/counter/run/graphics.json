@@ -8,7 +8,7 @@
   "device": 29772,
   "deviceType": "DiscreteGpu",
   "driver": "radv",
-  "driverInfo": "Mesa 26.2.6-arch3.1",
+  "driverInfo": "Mesa 26.3.1-arch3.4",
   "pngColor": "straight-alpha-gamma-encoded",
   "sceneFormat": "Bgra8Unorm",
   "scratchFormat": "Rgba8Unorm",

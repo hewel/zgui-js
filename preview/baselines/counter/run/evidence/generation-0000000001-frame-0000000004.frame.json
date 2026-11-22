@@ -1,6 +1,6 @@
 {
   "actionSequence": 5,
-  "buildId": "sha256:1933d07df8f59e6756ad7dc7a1e23399ea5c2775e49013de87a44c915eca47f2",
+  "buildId": "sha256:386017922559bbfe19ead8b0d3acc6fec4dc2ea48f6c33d836e5abed7c2df3cc",
   "configurationId": 2,
   "documentIdentity": "DocumentId(0)",
   "generation": 1,
@@ -33,7 +33,7 @@
     "device": 29772,
     "deviceType": "DiscreteGpu",
     "driver": "radv",
-    "driverInfo": "Mesa 26.2.6-arch3.1",
+    "driverInfo": "Mesa 26.3.1-arch3.4",
     "pngColor": "straight-alpha-gamma-encoded",
     "sceneFormat": "Bgra8Unorm",
     "scratchFormat": "Rgba8Unorm",
@@ -69,5 +69,13 @@
     "ordinal": 4,
     "outcome": "Skipped(Undamaged)",
     "timeUs": 20000
+  },
+  "window": {
+    "decorations": "full",
+    "fullscreen": false,
+    "maximized": false,
+    "minimized": false,
+    "moveDragCount": 0,
+    "title": "zgui TSX preview"
   }
 }

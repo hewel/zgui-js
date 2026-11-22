@@ -1,7 +1,7 @@
 {
   "actionSequence": 0,
   "allowedPendingAssets": [],
-  "buildId": "sha256:1933d07df8f59e6756ad7dc7a1e23399ea5c2775e49013de87a44c915eca47f2",
+  "buildId": "sha256:386017922559bbfe19ead8b0d3acc6fec4dc2ea48f6c33d836e5abed7c2df3cc",
   "captureId": "initial",
   "configurationId": 2,
   "documentIdentity": "DocumentId(0)",
@@ -35,19 +35,18 @@
     "generation": 1,
     "nativeAcceptance": {
       "candidate": {
-        "buildId": "sha256:1933d07df8f59e6756ad7dc7a1e23399ea5c2775e49013de87a44c915eca47f2",
+        "buildId": "sha256:386017922559bbfe19ead8b0d3acc6fec4dc2ea48f6c33d836e5abed7c2df3cc",
         "id": "dev.example.counter",
         "styleSystem": {
-          "configDigest": "sha256:33c7891b27d625d83284f9d24aef2ee1b62041f5b423dbd3b41411a61ccada45",
-          "name": "stylex",
-          "nativeProfileDigest": "sha256:984726d33988e8d259cc03cfa755440dfe1753277ee13a6e42b658ff8d662b9e",
-          "profile": "zgui-stylex-v1"
+          "configDigest": "sha256:864ab49f77e8240f0abc9c85c23764f2eb766d29c61091c83c908d47e69f1ee1",
+          "name": "lightningcss",
+          "profile": "lightningcss-v1"
         }
       },
       "diagnostic": null,
       "document": "DocumentId(0)",
       "generation": 1,
-      "lastSuccessfulBuildId": "sha256:1933d07df8f59e6756ad7dc7a1e23399ea5c2775e49013de87a44c915eca47f2",
+      "lastSuccessfulBuildId": "sha256:386017922559bbfe19ead8b0d3acc6fec4dc2ea48f6c33d836e5abed7c2df3cc",
       "schemaVersion": 1,
       "status": "accepted"
     },
@@ -75,7 +74,7 @@
     "device": 29772,
     "deviceType": "DiscreteGpu",
     "driver": "radv",
-    "driverInfo": "Mesa 26.2.6-arch3.1",
+    "driverInfo": "Mesa 26.3.1-arch3.4",
     "pngColor": "straight-alpha-gamma-encoded",
     "sceneFormat": "Bgra8Unorm",
     "scratchFormat": "Rgba8Unorm",
@@ -105,12 +104,20 @@
   "surface": "main",
   "surfaceConfiguration": 0,
   "timingDeterministic": true,
-  "treeDigest": "sha256:3e36816e5d6611d48d379f9a2d5bdf249d16cba8fc86d5cb90ebb2a7ed1fe211",
+  "treeDigest": "sha256:cb21a95c769d02f092da0e7040edd0db2feae1e3316c13e1114dc264cb2a26c9",
   "validatedStateRevision": 37,
   "validationFrame": {
     "drawId": 1,
     "ordinal": 1,
     "outcome": "Presented(FrameStats { draw_calls: 4, vector_passes: 0, damage_px: 1470000, bytes_uploaded: 3140, memory: MemoryReport { fixed: 0, targets: 7864320, scratch: 0, atlases: 4194304, buffers: 534256 } })",
     "timeUs": 0
+  },
+  "window": {
+    "decorations": "full",
+    "fullscreen": false,
+    "maximized": false,
+    "minimized": false,
+    "moveDragCount": 0,
+    "title": "zgui TSX preview"
   }
 }

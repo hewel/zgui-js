@@ -1,7 +1,7 @@
 {
   "actionSequence": 5,
   "allowedPendingAssets": [],
-  "buildId": "sha256:1933d07df8f59e6756ad7dc7a1e23399ea5c2775e49013de87a44c915eca47f2",
+  "buildId": "sha256:386017922559bbfe19ead8b0d3acc6fec4dc2ea48f6c33d836e5abed7c2df3cc",
   "captureId": "after-increment",
   "configurationId": 2,
   "documentIdentity": "DocumentId(0)",
@@ -35,19 +35,18 @@
     "generation": 1,
     "nativeAcceptance": {
       "candidate": {
-        "buildId": "sha256:1933d07df8f59e6756ad7dc7a1e23399ea5c2775e49013de87a44c915eca47f2",
+        "buildId": "sha256:386017922559bbfe19ead8b0d3acc6fec4dc2ea48f6c33d836e5abed7c2df3cc",
         "id": "dev.example.counter",
         "styleSystem": {
-          "configDigest": "sha256:33c7891b27d625d83284f9d24aef2ee1b62041f5b423dbd3b41411a61ccada45",
-          "name": "stylex",
-          "nativeProfileDigest": "sha256:984726d33988e8d259cc03cfa755440dfe1753277ee13a6e42b658ff8d662b9e",
-          "profile": "zgui-stylex-v1"
+          "configDigest": "sha256:864ab49f77e8240f0abc9c85c23764f2eb766d29c61091c83c908d47e69f1ee1",
+          "name": "lightningcss",
+          "profile": "lightningcss-v1"
         }
       },
       "diagnostic": null,
       "document": "DocumentId(0)",
       "generation": 1,
-      "lastSuccessfulBuildId": "sha256:1933d07df8f59e6756ad7dc7a1e23399ea5c2775e49013de87a44c915eca47f2",
+      "lastSuccessfulBuildId": "sha256:386017922559bbfe19ead8b0d3acc6fec4dc2ea48f6c33d836e5abed7c2df3cc",
       "schemaVersion": 1,
       "status": "accepted"
     },
@@ -75,7 +74,7 @@
     "device": 29772,
     "deviceType": "DiscreteGpu",
     "driver": "radv",
-    "driverInfo": "Mesa 26.2.6-arch3.1",
+    "driverInfo": "Mesa 26.3.1-arch3.4",
     "pngColor": "straight-alpha-gamma-encoded",
     "sceneFormat": "Bgra8Unorm",
     "scratchFormat": "Rgba8Unorm",
@@ -105,12 +104,20 @@
   "surface": "main",
   "surfaceConfiguration": 0,
   "timingDeterministic": true,
-  "treeDigest": "sha256:7aacc96199fa902adc11b182e2753e253ac24769f1ba022d9583b05a081edeae",
+  "treeDigest": "sha256:6da903bb5ba9983adee8bf36ed08bed2799998b27038c14b5743316373f89224",
   "validatedStateRevision": 45,
   "validationFrame": {
     "drawId": 4,
     "ordinal": 4,
     "outcome": "Skipped(Undamaged)",
     "timeUs": 20000
+  },
+  "window": {
+    "decorations": "full",
+    "fullscreen": false,
+    "maximized": false,
+    "minimized": false,
+    "moveDragCount": 0,
+    "title": "zgui TSX preview"
   }
 }

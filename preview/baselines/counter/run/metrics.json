@@ -4,13 +4,20 @@
     "jsHeap": true,
     "mutationCost": false,
     "nativeFrames": true,
-    "rss": false,
+    "rss": true,
     "wallDuration": true
   },
   "captures": 2,
-  "jsHeapBytes": 467007,
-  "jsStackLimitBytes": 262144,
-  "maxJsEntryDurationUs": 1030,
+  "jsHeapBytes": 503884,
+  "jsHeapLiveBytes": 503884,
+  "jsHeapPostDisposeBytes": 501726,
+  "jsStackLimitBytes": 1048576,
+  "maxJsEntryDurationUs": 381,
   "nativeFrames": 4,
-  "wallDurationUs": 1208543
+  "privateDirtyBytes": 36286464,
+  "pssAnonBytes": 36286464,
+  "pssBytes": 75447296,
+  "pssFileBytes": 39160832,
+  "rssBytes": 119316480,
+  "wallDurationUs": 388582
 }

@@ -1,13 +1,13 @@
 {
   "schemaVersion": 1,
   "run": "run",
-  "artifactsDigest": "sha256:304158317240bad5537f8676d55ece7298a9e83cadc7ca87b62168021e97b931",
+  "artifactsDigest": "sha256:b97488bd42609b62ac11679a41ce8d20066d9090e16402a1f938db1b6b416040",
   "policyDigest": "sha256:618dc201dcc2cc976d3b0ff41d440eca02b71b68c79b01d10814734b044bbeb9",
   "review": {
     "by": "coding-assistant",
-    "at": "2026-11-19T08:03:00Z",
-    "summary": "Counter baseline refresh for Bun 1.4.4 toolchain and bun.lock provenance (tsrs 7.1.0-beta.tsrs2, oxlint 1.94.0, oxfmt 0.79.0). Verified initial.png (25d53f3895...) and after-increment.png (ba8ba349d1...) remain byte-for-byte identical to the prior reviewed baseline.",
-    "buildId": "sha256:1933d07df8f59e6756ad7dc7a1e23399ea5c2775e49013de87a44c915eca47f2",
+    "at": "2026-11-22T10:30:00Z",
+    "summary": "Counter baseline refresh after Wave 2/3, Lightning CSS Modules, @solidjs/compiler, and Cargo dev opt-level=2. Verified initial.png (25d53f3895...) and after-increment.png (ba8ba349d1...) remain byte-for-byte identical to the prior reviewed baseline.",
+    "buildId": "sha256:386017922559bbfe19ead8b0d3acc6fec4dc2ea48f6c33d836e5abed7c2df3cc",
     "captures": [
       {
         "captureId": "initial",
