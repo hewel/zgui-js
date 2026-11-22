@@ -1,6 +1,6 @@
 import { Image, LayerSurface, PopupSurface, SessionLockSurface, TextField, TextArea, WindowSurface, createCanvasScene, createProjection, createSpring, createStore, getBackgroundBlurSupported, getSessionGeneration, reconcile, renderApp, renderShell, requestSessionLock, useMonitors } from "@hewel/zgui";
 import type { BlurRegion, NativeElementProps, NativeNode } from "@hewel/zgui";
-import { createRetainedPresence } from "@hewel/zgui/primitives";
+import { createRetainedPresence, createVirtualFocus } from "@hewel/zgui/primitives";
 
 // @ts-expect-error Browser document is not a host global.
 document.createElement("div");
@@ -250,3 +250,15 @@ void (
     }}
   />
 );
+createVirtualFocus({
+  items: () => [{ id: "a" }],
+  getId: item => item.id,
+  // @ts-expect-error horizontalKeys only accepts "always" | "whenEmpty" | "never".
+  horizontalKeys: "sometimes",
+});
+createVirtualFocus({
+  items: () => [{ id: "a" }],
+  getId: item => item.id,
+  // @ts-expect-error columns must be number or Accessor<number>.
+  columns: "4",
+});

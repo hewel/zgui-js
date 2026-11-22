@@ -405,6 +405,13 @@ test(
       advance(40),
       check("cp-input-a", "focused", true),
       check("cp-active-id", "text", "cmd-02"),
+      // With non-empty query ("Workspace"), Home/End belong to the search input caret, NOT jumping activeId!
+      key("Home"),
+      advance(20),
+      check("cp-active-id", "text", "cmd-02"),
+      key("End"),
+      advance(20),
+      check("cp-active-id", "text", "cmd-02"),
       capture("filtered-preserve-active"),
 
       // Clear with Ctrl+A + Backspace and test fuzzy subsequence "ows" -> "Open Workspace Settings"
@@ -470,6 +477,172 @@ test(
       !scopeBList.joinedText.includes("Alpha Workspace Overview"),
       `Scope A command leaked into Scope B: ${scopeBList.joinedText}`,
     );
+    assert.equal(result.teardown?.clean, true);
+  },
+);
+
+const GRID_VIRTUAL_FOCUS_FIXTURE = `
+import { VirtualGrid, createSignal, focus, renderApp } from "@hewel/zgui";
+import type { NativeNode, VirtualListController } from "@hewel/zgui";
+import { createVirtualFocus } from "@hewel/zgui/primitives";
+
+interface Tile {
+  readonly id: string;
+  readonly label: string;
+  readonly disabled?: boolean;
+}
+
+const TILES: readonly Tile[] = Array.from({ length: 32 }, (_, i) => ({
+  id: \`tile-\${String(i).padStart(2, "0")}\`,
+  label: \`Tile \${String(i).padStart(2, "0")}\`,
+  disabled: i === 1,
+}));
+
+function App() {
+  const [query, setQuery] = createSignal("");
+  const [activated, setActivated] = createSignal("none");
+  let gridCtrl: VirtualListController | null = null;
+  let searchEl!: NativeNode;
+
+  const vf = createVirtualFocus<Tile>({
+    items: () => TILES,
+    getId: item => item.id,
+    isDisabled: item => !!item.disabled,
+    columns: 6,
+    textValue: query,
+    onReveal(_id, itemIndex) {
+      gridCtrl?.scrollToIndex(itemIndex, { align: "auto", behavior: "instant" });
+    },
+    onActivate(tile) {
+      setActivated(tile.id);
+    },
+  });
+
+  return (
+    <column style={{ width: "100%", height: "100%", padding: "12px", gap: "8px" }}>
+      <row style={{ gap: "12px" }}>
+        <text testId="vf-active-id">{vf.activeId() ?? "none"}</text>
+        <text testId="vf-node-mounted">{vf.activeNode() !== null ? "mounted" : "null"}</text>
+        <text testId="vf-activated">{activated()}</text>
+      </row>
+      <field
+        testId="vf-search"
+        role="comboBox"
+        ariaActiveDescendant={vf.activeNode()}
+        value={query()}
+        onInput={e => setQuery(e.value)}
+        onKeyDown={vf.onKeyDown}
+        style={{ width: "280px", height: "32px" }}
+        ref={el => {
+          searchEl = el;
+          focus(searchEl);
+        }}
+      />
+      <VirtualGrid
+        testId="vf-grid"
+        each={TILES}
+        keyed={item => item.id}
+        columns={6}
+        itemHeight={48}
+        initialHeight={100}
+        overscan={1}
+        controller={ctrl => {
+          gridCtrl = ctrl;
+        }}
+        style={{ height: "100px", width: "420px" }}
+      >
+        {itemAccessor => {
+          const id = itemAccessor().id;
+          return (
+            <control
+              role="listBoxOption"
+              tabIndex={-1}
+              ref={el => {
+                vf.register(id, el);
+              }}
+              selected={vf.activeId() === id}
+              disabled={!!itemAccessor().disabled}
+              style={{ height: "44px", width: "64px" }}
+            >
+              <text>{itemAccessor().label}</text>
+            </control>
+          );
+        }}
+      </VirtualGrid>
+    </column>
+  );
+}
+
+export const hostApiVersion = 1;
+export function mount(root: NativeNode): () => void {
+  return renderApp(() => <App />, root);
+}
+`;
+
+test(
+  "createVirtualFocus 2D VirtualGrid reveals unmounted bottom rows, resolves activeNode/ariaActiveDescendant, retains desired column, and keeps TextField focus",
+  { timeout: 30000 },
+  async () => {
+    const gridBundle = await buildFixtureApp(
+      path.join(temp.dir, "app-vf-grid"),
+      "virtual-focus-grid",
+      GRID_VIRTUAL_FOCUS_FIXTURE,
+      { rawSource: true },
+    );
+    const { result } = await runScenario({
+      projectDir: temp.dir,
+      bundle: gridBundle,
+      name: "vf-grid-2d",
+      id: "virtual-focus-grid-2d",
+      requiredCapabilities: CAPS,
+      steps: [
+        resize(600, 320),
+        advance(60),
+        check("vf-search", "focused", true),
+        check("vf-active-id", "text", "tile-00"),
+        check("vf-node-mounted", "text", "mounted"),
+
+        // ArrowRight skips disabled tile-01 -> tile-02, then End moves to row 0 col 5 (tile-05).
+        key("ArrowRight"),
+        advance(20),
+        check("vf-active-id", "text", "tile-02"),
+        key("End"),
+        advance(20),
+        check("vf-active-id", "text", "tile-05"),
+
+        // 5x ArrowDown down a 32-item 6-col grid (rows 0..4 full, row 5 has only tile-30, tile-31):
+        // col 5 -> 11 -> 17 -> 23 -> 29 -> clamps to tile-31 (unmounted initially, scrolled & mounted!).
+        key("ArrowDown"),
+        key("ArrowDown"),
+        key("ArrowDown"),
+        key("ArrowDown"),
+        key("ArrowDown"),
+        advance(60),
+        check("vf-active-id", "text", "tile-31"),
+        check("vf-node-mounted", "text", "mounted"),
+        check("vf-search", "focused", true),
+
+        // ArrowUp restores desiredColumn = 5 -> tile-29!
+        key("ArrowUp"),
+        advance(30),
+        check("vf-active-id", "text", "tile-29"),
+        check("vf-search", "focused", true),
+
+        // Enter activates tile-29 once while keeping TextField focused.
+        key("Enter"),
+        advance(30),
+        check("vf-activated", "text", "tile-29"),
+        check("vf-search", "focused", true),
+
+        // Typing into TextField: Space inserts space, ArrowLeft does not move activeId while non-empty!
+        commitText("hi"),
+        key({ character: " " }),
+        key("ArrowLeft"),
+        advance(30),
+        check("vf-active-id", "text", "tile-29"),
+        check("vf-search", "focused", true),
+      ],
+    });
     assert.equal(result.teardown?.clean, true);
   },
 );

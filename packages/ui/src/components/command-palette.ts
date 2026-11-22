@@ -9,6 +9,7 @@ import {
 } from "#solid";
 import { createElement, mergeProps, spread } from "../renderer/index.js";
 import { focus } from "../nodes.js";
+import { createVirtualFocus } from "../primitives/virtual-focus.js";
 import { VirtualList, type VirtualListController } from "../virtual-list.js";
 import type {
   Accessor,
@@ -334,8 +335,7 @@ export function useCommandPalette(): CommandPaletteContextValue {
 
 interface FilteredCommandModel {
   readonly rows: readonly CommandRow[];
-  readonly enabledIds: readonly string[];
-  readonly enabledById: ReadonlyMap<string, CommandItem>;
+  readonly items: readonly CommandItem[];
   readonly rowIndexById: ReadonlyMap<string, number>;
 }
 
@@ -397,8 +397,7 @@ function buildFilteredModel(
   }
 
   const rows: CommandRow[] = [];
-  const enabledIds: string[] = [];
-  const enabledById = new Map<string, CommandItem>();
+  const items: CommandItem[] = [];
   const rowIndexById = new Map<string, number>();
 
   for (const bucket of orderedGroups) {
@@ -409,15 +408,12 @@ function buildFilteredModel(
       const cmd = entry.command;
       const rowIndex = rows.length;
       rows.push({ kind: "item", key: `item:${cmd.id}`, command: cmd });
+      items.push(cmd);
       rowIndexById.set(cmd.id, rowIndex);
-      if (!cmd.disabled) {
-        enabledIds.push(cmd.id);
-        enabledById.set(cmd.id, cmd);
-      }
     }
   }
 
-  return { rows, enabledIds, enabledById, rowIndexById };
+  return { rows, items, rowIndexById };
 }
 
 export function CommandPalette(props: CommandPaletteProps = {}): NativeChild {
@@ -507,7 +503,6 @@ export function CommandPalette(props: CommandPaletteProps = {}): NativeChild {
   });
 
   const model = createMemo(() => buildFilteredModel(allCommands(), query(), props.filter));
-  const [activeId, setActiveId] = createSignal<string | null>(null, { ownedWrite: true });
 
   let listController: VirtualListController | null = null;
   let invokedInOpenCycle = false;
@@ -522,6 +517,33 @@ export function CommandPalette(props: CommandPaletteProps = {}): NativeChild {
       revealTopHeader && rowIndex === 1 && currentModel.rows[0]?.kind === "group" ? 0 : rowIndex;
     listController.scrollToIndex(targetRow, { align: "auto", behavior: "instant" });
   };
+
+  const executeCommand = (command: CommandItem) => {
+    if (command.disabled) return;
+    const closeOnSelect = props.closeOnSelect ?? true;
+    if (closeOnSelect && invokedInOpenCycle) return;
+    if (closeOnSelect) {
+      invokedInOpenCycle = true;
+      setOpen(false);
+    }
+    command.onSelect?.();
+    props.onSelect?.(command);
+  };
+
+  const virtualFocus = createVirtualFocus<CommandItem>({
+    items: () => model().items,
+    getId: item => item.id,
+    isDisabled: item => !!item.disabled,
+    columns: 1,
+    wrap: true,
+    textValue: query,
+    onReveal(commandId, itemIndex) {
+      scrollActiveIntoView(commandId, itemIndex === 0);
+    },
+    onActivate(command) {
+      executeCommand(command);
+    },
+  });
 
   createEffect(
     () => open(),
@@ -538,61 +560,31 @@ export function CommandPalette(props: CommandPaletteProps = {}): NativeChild {
     },
   );
 
-  // Keep activeId pinned to a valid enabled command ID across filter/list changes.
+  // Reveal the active item when opening or when filtering changes the result set.
+  let lastRevealedModel: FilteredCommandModel | null = null;
   createEffect(
-    () => ({ isOpen: open(), current: model() }),
-    ({ isOpen, current }) => {
-      if (!isOpen) return;
-      const prev = untrack(activeId);
-      if (prev !== null && current.enabledById.has(prev)) return;
-      const next = current.enabledIds[0] ?? null;
-      setActiveId(next);
-      if (next !== null) scrollActiveIntoView(next, true);
+    () => ({ isOpen: open(), current: model(), id: virtualFocus.activeId() }),
+    ({ isOpen, current, id }) => {
+      if (!isOpen) {
+        lastRevealedModel = null;
+        return;
+      }
+      if (lastRevealedModel !== current) {
+        lastRevealedModel = current;
+        if (id !== null) {
+          const rowIndex = current.rowIndexById.get(id);
+          scrollActiveIntoView(id, rowIndex === 1);
+        }
+      }
     },
   );
 
   createEffect(
-    () => ({ isOpen: open(), id: activeId() }),
+    () => ({ isOpen: open(), id: virtualFocus.activeId() }),
     ({ isOpen, id }) => {
       props.onActiveIdChange?.(isOpen ? id : null);
     },
   );
-
-  const executeCommand = (command: CommandItem) => {
-    if (command.disabled) return;
-    const closeOnSelect = props.closeOnSelect ?? true;
-    if (closeOnSelect && invokedInOpenCycle) return;
-    if (closeOnSelect) {
-      invokedInOpenCycle = true;
-      setOpen(false);
-    }
-    command.onSelect?.();
-    props.onSelect?.(command);
-  };
-
-  const moveActive = (direction: "next" | "prev" | "first" | "last") => {
-    const currentModel = untrack(model);
-    const ids = currentModel.enabledIds;
-    if (ids.length === 0) {
-      setActiveId(null);
-      return;
-    }
-    const currentId = untrack(activeId);
-    const currentIndex = currentId === null ? -1 : ids.indexOf(currentId);
-    let nextIndex: number;
-    if (direction === "first") {
-      nextIndex = 0;
-    } else if (direction === "last") {
-      nextIndex = ids.length - 1;
-    } else if (direction === "next") {
-      nextIndex = currentIndex < 0 ? 0 : (currentIndex + 1) % ids.length;
-    } else {
-      nextIndex = currentIndex < 0 ? ids.length - 1 : (currentIndex - 1 + ids.length) % ids.length;
-    }
-    const nextId = ids[nextIndex]!;
-    setActiveId(nextId);
-    scrollActiveIntoView(nextId, nextIndex === 0);
-  };
 
   const buildBody = (): NativeChild => {
     const itemHeight = props.itemHeight ?? DEFAULT_ITEM_HEIGHT;
@@ -610,6 +602,9 @@ export function CommandPalette(props: CommandPaletteProps = {}): NativeChild {
       role: "comboBox",
       ariaHasPopup: "listbox",
       expanded: true,
+      get ariaActiveDescendant() {
+        return virtualFocus.activeNode();
+      },
       class: "zui-command__input",
       get testId() {
         return props.inputTestId ?? null;
@@ -628,40 +623,7 @@ export function CommandPalette(props: CommandPaletteProps = {}): NativeChild {
       },
       onKeyDown(event: NativeKeyEvent) {
         if (!callHandler(event, props.onKeyDown)) return;
-        if (event.isComposing) return;
-        if (event.key === "ArrowDown") {
-          event.preventDefault();
-          event.stopPropagation();
-          moveActive("next");
-          return;
-        }
-        if (event.key === "ArrowUp") {
-          event.preventDefault();
-          event.stopPropagation();
-          moveActive("prev");
-          return;
-        }
-        if (event.key === "Home") {
-          event.preventDefault();
-          event.stopPropagation();
-          moveActive("first");
-          return;
-        }
-        if (event.key === "End") {
-          event.preventDefault();
-          event.stopPropagation();
-          moveActive("last");
-          return;
-        }
-        if (event.key === "Enter") {
-          event.preventDefault();
-          event.stopPropagation();
-          if (event.repeat) return;
-          const id = untrack(activeId);
-          if (id === null) return;
-          const cmd = untrack(model).enabledById.get(id);
-          if (cmd) executeCommand(cmd);
-        }
+        virtualFocus.onKeyDown(event);
       },
     });
 
@@ -741,6 +703,7 @@ export function CommandPalette(props: CommandPaletteProps = {}): NativeChild {
         };
 
         const itemNode = createElement("control");
+        virtualFocus.register(initial.command.id, itemNode);
         spread(
           itemNode,
           {
@@ -756,10 +719,10 @@ export function CommandPalette(props: CommandPaletteProps = {}): NativeChild {
               return !!command().disabled;
             },
             get selected() {
-              return activeId() === command().id;
+              return virtualFocus.activeId() === command().id;
             },
             get "data-active"() {
-              return activeId() === command().id ? "true" : "false";
+              return virtualFocus.activeId() === command().id ? "true" : "false";
             },
             get "data-disabled"() {
               return command().disabled ? "true" : "false";
@@ -769,7 +732,7 @@ export function CommandPalette(props: CommandPaletteProps = {}): NativeChild {
             },
             onPointerEnter() {
               const cmd = command();
-              if (!cmd.disabled) setActiveId(cmd.id);
+              if (!cmd.disabled) virtualFocus.setActive(cmd.id);
             },
             onPointerDown(event: NativePointerDownEvent) {
               // Keep keyboard focus and IME composition inside the search input field.

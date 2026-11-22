@@ -307,19 +307,20 @@ stateDiagram-v2
 
 Zero-style behavioral primitives extracted from `@hewel/zgui/components` without `Portal`, `Popper`, or built-in stylesheet coupling (usable identically inside `WindowSurface`, `LayerSurface`, and `PopupSurface`):
 
-| Export                      | Source Module                           | Role                                                                                            |
-| --------------------------- | --------------------------------------- | ----------------------------------------------------------------------------------------------- |
-| `createPresence`            | `packages/ui/src/primitives/overlay.ts` | Animation-aware mount/unmount presence controller                                               |
-| `createRetainedPresence`    | `packages/ui/src/primitives/overlay.ts` | Non-nullish payload-retaining presence controller with dual CSS + reactive `settled` exit gates |
-| `createOverlayState`        | `packages/ui/src/primitives/overlay.ts` | Controlled/uncontrolled open state and anchor/content/label node refs                           |
-| `createDismissLayer`        | `packages/ui/src/primitives/overlay.ts` | Owner-scoped reactive dismiss layer wrapper                                                     |
-| `createRovingFocus`         | `packages/ui/src/primitives/roving.ts`  | Tree-ordered keyboard roving focus controller                                                   |
-| `groupOrientation`          | `packages/ui/src/primitives/roving.ts`  | Orientation validator (`horizontal` / `vertical` / `both`)                                      |
-| `createDelayed`             | `packages/ui/src/primitives/delay.ts`   | Cancellable hover/typeahead delay scheduler                                                     |
-| `MenuRootPrimitive`         | `packages/ui/src/primitives/menu.ts`    | Headless menu hierarchy root (no Portal/Popper/CSS)                                             |
-| `MenuListPrimitive`         | `packages/ui/src/primitives/menu.ts`    | Headless `role="menu"` list with roving focus, typeahead, and Escape dismiss                    |
-| `MenuItemPrimitive`         | `packages/ui/src/primitives/menu.ts`    | Headless `role="menuItem"` with `data-highlighted` / `data-disabled` hooks                      |
-| `MenuCheckboxItemPrimitive` | `packages/ui/src/primitives/menu.ts`    | Headless `role="menuItemCheckBox"` with `data-state="checked"\|"unchecked"`                     |
-| `MenuRadioGroupPrimitive`   | `packages/ui/src/primitives/menu.ts`    | Headless `role="group"` radio provider                                                          |
-| `MenuRadioItemPrimitive`    | `packages/ui/src/primitives/menu.ts`    | Headless `role="menuItemRadio"` with `data-state` / `data-value`                                |
-| `MenuSubPrimitive`          | `packages/ui/src/primitives/menu.ts`    | Headless nested submenu context with cascading dismiss                                          |
+| Export                      | Source Module                                 | Role                                                                                            |
+| --------------------------- | --------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| `createPresence`            | `packages/ui/src/primitives/overlay.ts`       | Animation-aware mount/unmount presence controller                                               |
+| `createRetainedPresence`    | `packages/ui/src/primitives/overlay.ts`       | Non-nullish payload-retaining presence controller with dual CSS + reactive `settled` exit gates |
+| `createOverlayState`        | `packages/ui/src/primitives/overlay.ts`       | Controlled/uncontrolled open state and anchor/content/label node refs                           |
+| `createDismissLayer`        | `packages/ui/src/primitives/overlay.ts`       | Owner-scoped reactive dismiss layer wrapper                                                     |
+| `createRovingFocus`         | `packages/ui/src/primitives/roving.ts`        | Tree-ordered keyboard roving focus controller                                                   |
+| `createVirtualFocus`        | `packages/ui/src/primitives/virtual-focus.ts` | Data-driven 1D/2D virtual focus controller (`ariaActiveDescendant`, IME/caret-safe key routing) |
+| `groupOrientation`          | `packages/ui/src/primitives/roving.ts`        | Orientation validator (`horizontal` / `vertical` / `both`)                                      |
+| `createDelayed`             | `packages/ui/src/primitives/delay.ts`         | Cancellable hover/typeahead delay scheduler                                                     |
+| `MenuRootPrimitive`         | `packages/ui/src/primitives/menu.ts`          | Headless menu hierarchy root (no Portal/Popper/CSS)                                             |
+| `MenuListPrimitive`         | `packages/ui/src/primitives/menu.ts`          | Headless `role="menu"` list with roving focus, typeahead, and Escape dismiss                    |
+| `MenuItemPrimitive`         | `packages/ui/src/primitives/menu.ts`          | Headless `role="menuItem"` with `data-highlighted` / `data-disabled` hooks                      |
+| `MenuCheckboxItemPrimitive` | `packages/ui/src/primitives/menu.ts`          | Headless `role="menuItemCheckBox"` with `data-state="checked"\|"unchecked"`                     |
+| `MenuRadioGroupPrimitive`   | `packages/ui/src/primitives/menu.ts`          | Headless `role="group"` radio provider                                                          |
+| `MenuRadioItemPrimitive`    | `packages/ui/src/primitives/menu.ts`          | Headless `role="menuItemRadio"` with `data-state` / `data-value`                                |
+| `MenuSubPrimitive`          | `packages/ui/src/primitives/menu.ts`          | Headless nested submenu context with cascading dismiss                                          |

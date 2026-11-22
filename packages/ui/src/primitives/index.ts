@@ -4,6 +4,13 @@ export type { DelayedController } from "./delay.js";
 export { createRovingFocus, groupOrientation } from "./roving.js";
 export type { GroupOrientation, RovingFocusController, RovingFocusItem } from "./roving.js";
 
+export { createVirtualFocus } from "./virtual-focus.js";
+export type {
+  VirtualFocusController,
+  VirtualFocusHorizontalKeys,
+  VirtualFocusOptions,
+} from "./virtual-focus.js";
+
 export {
   createDismissLayer,
   createOverlayState,

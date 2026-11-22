@@ -111,7 +111,7 @@ import type {
 } from "@hewel/zgui";
 import type { Accessor } from "@hewel/zgui";
 import type { SessionLockRequest, SessionLockState } from "@hewel/zgui";
-import { createRetainedPresence } from "@hewel/zgui/primitives";
+import { createRetainedPresence, createVirtualFocus } from "@hewel/zgui/primitives";
 import type {
   PresenceController,
   RetainedPresenceController,
@@ -1027,3 +1027,35 @@ void (
 );
 void (<box ariaActiveDescendant={null} />);
 void (<box ariaActiveDescendant={undefined} />);
+const vfController = createVirtualFocus<{ readonly id: string; readonly disabled?: boolean }>({
+  items: () => [{ id: "a" }, { id: "b", disabled: true }],
+  getId: item => item.id,
+  isDisabled: item => !!item.disabled,
+  columns: () => 4,
+  wrap: false,
+  horizontalKeys: "whenEmpty",
+  textValue: () => "",
+  onReveal: (id: string, itemIndex: number) => {
+    void id;
+    void itemIndex;
+  },
+  onActivate: item => {
+    const activatedId: string = item.id;
+    void activatedId;
+  },
+});
+const vfId: string | null = vfController.activeId();
+const vfNode: NativeNode | null = vfController.activeNode();
+vfController.setActive(null);
+vfController.setActive("a");
+const unregVf: () => void = vfController.register("a", activeOptionNode);
+void vfId;
+void vfNode;
+void unregVf;
+void (
+  <field
+    role="comboBox"
+    ariaActiveDescendant={vfController.activeNode()}
+    onKeyDown={vfController.onKeyDown}
+  />
+);
