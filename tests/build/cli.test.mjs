@@ -512,3 +512,70 @@ test(
     }
   },
 );
+
+test("installed @hewel/zgui-cli stages apps/devtools/inspector so inspect --ui works outside a repo checkout", async t => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "zgui-cli-inspector-pack-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+
+  const packScript = path.join(workspaceRoot, "packages/cli/pack-resources.ts");
+  const stagedDir = path.join(workspaceRoot, "packages/cli/inspector");
+  await execute(process.execPath, [packScript], { cwd: path.join(workspaceRoot, "packages/cli") });
+  t.after(async () => {
+    await execute(process.execPath, [packScript, "--clean"], {
+      cwd: path.join(workspaceRoot, "packages/cli"),
+    }).catch(() => {});
+  });
+
+  assert.equal(existsSync(path.join(stagedDir, "package.json")), true);
+  assert.equal(existsSync(path.join(stagedDir, "src/main.tsx")), true);
+  assert.equal(existsSync(path.join(stagedDir, "dist")), false);
+
+  // Copy only the published CLI files (`src` + `inspector`) into an isolated external directory.
+  const installedCli = path.join(dir, "node_modules/@hewel/zgui-cli");
+  await mkdir(path.join(installedCli, "src"), { recursive: true });
+  await cp(stagedDir, path.join(installedCli, "inspector"), { recursive: true });
+
+  const { findInspectorAppDir } = await import("../../packages/cli/src/inspect.ts");
+  const resolved = findInspectorAppDir({
+    cliDir: path.join(installedCli, "src"),
+    cwd: dir,
+  });
+  assert.equal(resolved, path.join(installedCli, "inspector"));
+});
+
+test("typecheck.ts --app checks a single app and preview harness pre-validates scenarios and fixtures", async () => {
+  const { stdout } = await execute(
+    process.execPath,
+    [path.join(workspaceRoot, "packages/build/src/typecheck.ts"), "--app", "md-editor"],
+    { cwd: workspaceRoot },
+  );
+  assert.match(stdout, /Typechecked apps\/examples\/md-editor\/tsconfig\.json/);
+
+  const { validateScenarioSpec, validateFixtureSpec } = await import("../preview/harness.mjs");
+  assert.throws(
+    () =>
+      validateScenarioSpec({
+        schemaVersion: 1,
+        id: "bad-capture",
+        steps: [{ id: "c1", op: "capture", label: "oops" }],
+      }),
+    /captureId/,
+  );
+  assert.throws(
+    () =>
+      validateScenarioSpec({
+        schemaVersion: 1,
+        id: "bad-clock",
+        steps: [{ id: "t1", op: "clock.virtual", byMs: 10 }],
+      }),
+    /clock\.advance/,
+  );
+  assert.throws(
+    () =>
+      validateFixtureSpec({
+        schemaVersion: 1,
+        services: { sockets: [{ path: "/tmp/x.sock" }] },
+      }),
+    /events/,
+  );
+});

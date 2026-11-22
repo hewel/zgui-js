@@ -64,18 +64,52 @@ export async function typecheckProjectAsync(
   }
 }
 
-export async function typecheckWorkspace(
-  root = fileURLToPath(new URL("../../../", import.meta.url)),
-): Promise<void> {
-  const configs = [
-    path.join(root, "packages/build/tsconfig.json"),
-    path.join(root, "packages/cli/tsconfig.json"),
-    path.join(root, "packages/create-zgui-js/tsconfig.json"),
-    path.join(root, "packages/ui/tsconfig.native.json"),
-    path.join(root, "packages/services/tsconfig.json"),
-    path.join(root, "tests/types/tsconfig.json"),
-    path.join(root, "tests/types/tsconfig.services.json"),
-  ];
+async function fileExists(filePath: string): Promise<boolean> {
+  try {
+    await access(filePath);
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw error;
+  }
+}
+
+async function discoverPackageConfigs(root: string): Promise<string[]> {
+  const packagesDir = path.join(root, "packages");
+  let entries: Dirent[] = [];
+  try {
+    entries = await readdir(packagesDir, { withFileTypes: true });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+  const configs: string[] = [];
+  for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
+    if (!entry.isDirectory()) continue;
+    const pkgDir = path.join(packagesDir, entry.name);
+    for (const candidate of ["tsconfig.json", "tsconfig.native.json"]) {
+      const configPath = path.join(pkgDir, candidate);
+      if (await fileExists(configPath)) configs.push(configPath);
+    }
+  }
+  return configs;
+}
+
+async function discoverTypeTestConfigs(root: string): Promise<string[]> {
+  const typesDir = path.join(root, "tests/types");
+  let entries: Dirent[] = [];
+  try {
+    entries = await readdir(typesDir, { withFileTypes: true });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+  return entries
+    .filter(entry => entry.isFile() && /^tsconfig.*\.json$/.test(entry.name))
+    .sort((a, b) => a.name.localeCompare(b.name))
+    .map(entry => path.join(typesDir, entry.name));
+}
+
+async function discoverAppConfigs(root: string, appFilter?: string): Promise<string[]> {
+  const configs: string[] = [];
   for (const group of ["apps/devtools", "apps/examples"]) {
     const groupDir = path.join(root, group);
     let entries: Dirent[] = [];
@@ -86,17 +120,41 @@ export async function typecheckWorkspace(
     }
     for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
       if (!entry.isDirectory()) continue;
+      if (appFilter && entry.name !== appFilter && `${group}/${entry.name}` !== appFilter) {
+        continue;
+      }
       const appDir = path.join(groupDir, entry.name);
       const config = path.join(appDir, "tsconfig.json");
-      try {
-        await access(config);
-        await syncCssModuleTypes(appDir, { root });
-        configs.push(config);
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-      }
+      if (!(await fileExists(config))) continue;
+      // Run outside ENOENT guard so CSS Module type generation failures surface instead of silently skipping.
+      await syncCssModuleTypes(appDir, { root });
+      configs.push(config);
     }
   }
+  if (appFilter && configs.length === 0) {
+    const directDir = path.resolve(root, appFilter);
+    const directConfig = path.join(directDir, "tsconfig.json");
+    if (await fileExists(directConfig)) {
+      await syncCssModuleTypes(directDir, { root });
+      configs.push(directConfig);
+    } else {
+      throw new Error(`No app tsconfig.json found for --app ${appFilter}`);
+    }
+  }
+  return configs;
+}
+
+export async function typecheckWorkspace(
+  root = fileURLToPath(new URL("../../../", import.meta.url)),
+  { app }: { app?: string } = {},
+): Promise<void> {
+  const configs = app
+    ? await discoverAppConfigs(root, app)
+    : [
+        ...(await discoverPackageConfigs(root)),
+        ...(await discoverTypeTestConfigs(root)),
+        ...(await discoverAppConfigs(root)),
+      ];
   for (const config of configs) {
     typecheckProject(config);
     console.log(`Typechecked ${path.relative(root, config)}`);
@@ -105,7 +163,17 @@ export async function typecheckWorkspace(
 
 if (import.meta.main) {
   try {
-    await typecheckWorkspace();
+    const args = process.argv.slice(2);
+    let app: string | undefined;
+    for (let i = 0; i < args.length; i++) {
+      if (args[i] === "--app") {
+        app = args[++i];
+        if (!app) throw new Error("--app requires an application name or directory");
+      } else {
+        throw new Error(`Unknown option: ${args[i]}`);
+      }
+    }
+    await typecheckWorkspace(undefined, { app });
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));
     process.exitCode = 1;

@@ -32,11 +32,8 @@ async function runOxlint(args) {
   }
 }
 
-test("repository passes oxlint with zero warnings or errors", async () => {
-  const result = await runOxlint(["."]);
-  assert.equal(result.status, 0, result.output);
-});
-
+// Repository-wide oxlint is enforced directly by `bun run lint` in `bun run check` and CI;
+// this test file verifies custom rule diagnostics, standalone downstream presets, and oxfmt.
 const negativeCases = [
   {
     name: "zgui/no-direct-bridge",
@@ -135,6 +132,20 @@ const negativeCases = [
     code: 'import * as svc from "@hewel/zgui-services";\nexport const caps = svc.getResolvedCapabilities();\n',
     expected: /zgui\(no-top-level-service-call\)/,
     guidance: /inside mount\(\)/,
+  },
+  {
+    name: "zgui/no-top-level-service-call (spawnWorker)",
+    file: "top-level-worker.ts",
+    code: 'import { spawnWorker } from "@hewel/zgui-services";\nexport const w = spawnWorker("compute");\n',
+    expected: /zgui\(no-top-level-service-call\)/,
+    guidance: /module top level before mount\(\)/,
+  },
+  {
+    name: "zgui/no-top-level-service-call (registerImageAsset)",
+    file: "top-level-register-image.ts",
+    code: 'import { registerImageAsset } from "@hewel/zgui-services";\nexport const img = registerImageAsset("hero.png");\n',
+    expected: /zgui\(no-top-level-service-call\)/,
+    guidance: /module top level before mount\(\)/,
   },
   {
     name: "zgui/no-solid-web-imports (solid-js/web)",
@@ -262,25 +273,6 @@ export const View = () => {
 });
 
 test("oxfmt checks and formats files with repository configuration", async t => {
-  await execFileAsync(
-    process.execPath,
-    [
-      oxfmtBin,
-      "--check",
-      "-c",
-      fmtConfigPath,
-      ".oxfmtrc.json",
-      ".oxlintrc.json",
-      "package.json",
-      "packages/build/package.json",
-      "packages/build/src",
-      "packages/cli/package.json",
-      "packages/cli/src",
-      "packages/create-zgui-js/package.json",
-      "packages/create-zgui-js/src",
-    ],
-    { cwd: workspaceRoot, encoding: "utf8" },
-  );
   const dir = await mkdtemp(path.join(os.tmpdir(), "zgui-fmt-"));
   t.after(() => rm(dir, { recursive: true, force: true }));
   const file = path.join(dir, "sample.ts");

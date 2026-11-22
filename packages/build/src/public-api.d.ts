@@ -143,7 +143,7 @@ export interface DevApplicationOptions extends Omit<BuildApplicationOptions, "de
 
 export interface PreviewApplicationOptions extends Omit<
   DevApplicationOptions,
-  "hostArgs" | "mode" | "stylexDiagnostics"
+  "hostArgs" | "mode"
 > {
   watch?: boolean;
   profile?: string;

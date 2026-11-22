@@ -319,49 +319,49 @@ export type NativeRole =
   | "textInput"
   | "toolbar"
   | "tooltip";
-export type NativeRelation = NativeNode | readonly NativeNode[] | null;
+export type NativeRelation = NativeNode | readonly NativeNode[] | null | undefined;
 export interface NativeElementProps extends NativeEventProps {
   children?: NativeChild;
-  ref?: NativeRef;
-  class?: string | null;
-  id?: string | null;
+  ref?: NativeRef | undefined;
+  class?: string | null | undefined;
+  id?: string | null | undefined;
   /** Diagnostic identity, not a native/CSS attribute. At most 512 UTF-8 bytes; null clears. */
-  testId?: string | null;
+  testId?: string | null | undefined;
   /** Opt this container into native read-only cross-block `<text>` document selection. */
-  documentSelection?: boolean | null;
-  style?: NativeStyle | null;
+  documentSelection?: boolean | null | undefined;
+  style?: NativeStyle | null | undefined;
   [custom: `--${string}`]: string | null | undefined;
   [data: `data-${string}`]: string | null | undefined;
-  title?: string | null;
-  tabIndex?: number | null;
-  disabled?: boolean | null;
-  checked?: boolean | "mixed" | null;
+  title?: string | null | undefined;
+  tabIndex?: number | null | undefined;
+  disabled?: boolean | null | undefined;
+  checked?: boolean | "mixed" | null | undefined;
   expanded?: boolean | null | undefined;
-  selected?: boolean | null;
-  open?: boolean | null;
-  invalid?: boolean | null;
-  required?: boolean | null;
-  ariaHidden?: boolean | null;
-  ariaLevel?: number | null;
-  ariaModal?: boolean | null;
-  ariaHasPopup?: "menu" | "listbox" | "tree" | "grid" | "dialog" | null;
-  ariaPopupFor?: NativeNode | null;
-  orientation?: "horizontal" | "vertical" | null;
-  role?: NativeRole | null;
-  ariaLabel?: string | null;
-  ariaDescription?: string | null;
-  ariaKeyShortcuts?: string | null;
+  selected?: boolean | null | undefined;
+  open?: boolean | null | undefined;
+  invalid?: boolean | null | undefined;
+  required?: boolean | null | undefined;
+  ariaHidden?: boolean | null | undefined;
+  ariaLevel?: number | null | undefined;
+  ariaModal?: boolean | null | undefined;
+  ariaHasPopup?: "menu" | "listbox" | "tree" | "grid" | "dialog" | null | undefined;
+  ariaPopupFor?: NativeNode | null | undefined;
+  orientation?: "horizontal" | "vertical" | null | undefined;
+  role?: NativeRole | null | undefined;
+  ariaLabel?: string | null | undefined;
+  ariaDescription?: string | null | undefined;
+  ariaKeyShortcuts?: string | null | undefined;
   ariaLabelledBy?: NativeRelation;
   ariaDescribedBy?: NativeRelation;
   ariaControls?: NativeRelation;
   ariaOwns?: NativeRelation;
   ariaRadioGroup?: NativeRelation;
-  ariaBusy?: boolean | null;
-  ariaLive?: "off" | "polite" | "assertive" | null;
-  ariaValueMin?: number | null;
-  ariaValueMax?: number | null;
-  ariaValueNow?: number | null;
-  ariaValueStep?: number | null;
+  ariaBusy?: boolean | null | undefined;
+  ariaLive?: "off" | "polite" | "assertive" | null | undefined;
+  ariaValueMin?: number | null | undefined;
+  ariaValueMax?: number | null | undefined;
+  ariaValueNow?: number | null | undefined;
+  ariaValueStep?: number | null | undefined;
 }
 export type ButtonProps = Omit<NativeElementProps, "role">;
 /** Caret or selected text range in JavaScript UTF-16 code units. */
@@ -386,15 +386,15 @@ export interface DocumentSelection {
 export interface NativeTextControlProps extends Omit<NativeElementProps, "children"> {
   children?: never;
   /** Reactive native value; null clears, later undefined clears, initial undefined is absent. */
-  value?: string | null;
+  value?: string | null | undefined;
   /** Initial-only; later changes and assignments after any explicit value are ignored. */
-  defaultValue?: string | null;
+  defaultValue?: string | null | undefined;
   /** Native read-only editing state and accessibility semantics; focus remains available. */
-  readOnly?: boolean | null;
-  placeholder?: string | null;
+  readOnly?: boolean | null | undefined;
+  placeholder?: string | null | undefined;
 }
 export interface NativeFieldProps extends NativeTextControlProps {
-  secure?: boolean | null;
+  secure?: boolean | null | undefined;
 }
 export type TextFieldProps = Omit<NativeFieldProps, "role">;
 export type TextAreaProps = Omit<NativeTextControlProps, "role">;

@@ -1,5 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+staged_files=$(git diff --cached --name-only --diff-filter=ACMR)
+if [ -n "$staged_files" ]; then
+  # Filter through oxfmt's ignorePatterns by running --check on staged files when eligible.
+  printf '%s\n' "$staged_files" | xargs -r bun --bun run oxfmt --check --no-error-on-unmatched-pattern
+fi
+
 bun run lint
 bun run typecheck

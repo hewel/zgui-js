@@ -18,6 +18,7 @@ jobs:
         with:
           bun-version: "1.4.4"
       - run: bun install --frozen-lockfile
+      - run: bun run fmt:check
       - run: bun run lint
       - run: bun run typecheck
       - run: bun run test:build
@@ -52,7 +53,16 @@ jobs:
           bun tools/test-vendor.mjs --fetch
       - run: bun run test:rust
       - run: bun run test:vendor
-      - name: Run headless preview tests
+      # Run all cross-renderer headless preview suites (including strict comparison.test.mjs).
+      # Hardware-pinned tests/preview/ci.test.mjs requires a runner-matched baseline for preview/baselines/counter.
+      - name: Run headless preview tests (Lavapipe)
         env:
           VK_DRIVER_FILES: /usr/share/vulkan/icd.d/lvp_icd.x86_64.json
-        run: bun run test:preview
+        run: bun run test:preview:ci
+      - name: Upload retained preview failure artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: preview-failure-artifacts
+          path: target/zgui-preview-*
+          if-no-files-found: ignore

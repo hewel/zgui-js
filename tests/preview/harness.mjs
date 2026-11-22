@@ -8,8 +8,10 @@ import { pngRgba } from "./png.mjs";
 
 export { workspaceRoot };
 export const defaultProfile = path.join(workspaceRoot, "preview/profiles/default.json");
+export const functionalProfile = path.join(workspaceRoot, "preview/profiles/functional.json");
 export const emptyFixture = path.join(workspaceRoot, "preview/fixtures/empty.json");
 export const nativeHostBinary = path.join(workspaceRoot, "target/debug/native-host");
+const failedWorkspaces = new Set();
 export const emptyResources = {
   nodes: 0,
   wrappers: 0,
@@ -30,7 +32,10 @@ export async function createTempWorkspace(prefix) {
   return {
     dir,
     async cleanup() {
-      if (process.env.ZGUI_KEEP_PREVIEW_OUTPUT === "1") {
+      const failed = [...failedWorkspaces].some(
+        outDir => outDir === dir || outDir.startsWith(`${dir}${path.sep}`),
+      );
+      if (process.env.ZGUI_KEEP_PREVIEW_OUTPUT === "1" || failed) {
         console.log(`retained preview output: ${dir}`);
       } else {
         await rm(dir, { recursive: true, force: true });
@@ -39,17 +44,60 @@ export async function createTempWorkspace(prefix) {
   };
 }
 
+export function validateScenarioSpec(spec) {
+  assert.equal(spec?.schemaVersion, 1, "scenario.schemaVersion must be 1");
+  assert.equal(typeof spec.id, "string", "scenario.id must be a string");
+  assert.ok(Array.isArray(spec.steps), "scenario.steps must be an array");
+  for (let i = 0; i < spec.steps.length; i++) {
+    const step = spec.steps[i];
+    assert.ok(step && typeof step === "object", `scenario.steps[${i}] must be an object`);
+    assert.equal(typeof step.op, "string", `scenario.steps[${i}].op must be a string`);
+    if (step.op === "capture") {
+      assert.ok(
+        !("label" in step),
+        `scenario.steps[${i}]: use "captureId" (not "label") on capture steps`,
+      );
+      assert.equal(
+        typeof step.captureId,
+        "string",
+        `scenario.steps[${i}]: capture step requires string captureId`,
+      );
+    }
+    if (step.op === "clock.virtual") {
+      assert.fail(`scenario.steps[${i}]: use "clock.advance" (not "clock.virtual")`);
+    }
+  }
+}
+
+export function validateFixtureSpec(spec) {
+  assert.equal(spec?.schemaVersion, 1, "fixture.schemaVersion must be 1");
+  const services = spec.services;
+  if (!services || typeof services !== "object") return;
+  for (const kind of ["sockets", "commands"]) {
+    const scripts = services[kind];
+    if (!Array.isArray(scripts)) continue;
+    for (let i = 0; i < scripts.length; i++) {
+      assert.ok(
+        Array.isArray(scripts[i]?.events),
+        `fixture.services.${kind}[${i}] must declare an "events" array (use [] if none)`,
+      );
+    }
+  }
+}
+
 export async function writeJson(filePath, value) {
   await writeFile(filePath, JSON.stringify(value));
 }
 
 export async function writeScenario(filePath, id, steps, requiredCapabilities) {
-  await writeJson(filePath, {
+  const spec = {
     schemaVersion: 1,
     id,
     requiredCapabilities,
     steps,
-  });
+  };
+  validateScenarioSpec(spec);
+  await writeJson(filePath, spec);
 }
 
 export async function buildFixtureApp(
@@ -141,6 +189,14 @@ export async function runPreview({
   if (timeoutMs !== undefined) args.push("--timeout-ms", String(timeoutMs));
   if (maxJsStackBytes !== undefined) args.push("--max-js-stack-bytes", String(maxJsStackBytes));
 
+  if (!allowFailure) {
+    try {
+      validateScenarioSpec(JSON.parse(await readFile(scenario, "utf8")));
+      validateFixtureSpec(JSON.parse(await readFile(fixture, "utf8")));
+    } catch (error) {
+      throw new Error(`Preview input preflight failed before native-host launch: ${error.message}`);
+    }
+  }
   const proc = spawnSync(nativeHostBinary, args, {
     cwd: workspaceRoot,
     encoding: "utf8",
@@ -152,15 +208,37 @@ export async function runPreview({
   const result = JSON.parse(proc.stdout);
   assert.equal(proc.status, result.exitCode);
   if (!allowFailure) {
-    assert.equal(result.exitCode, 0, proc.stdout);
-    assert.equal(result.status, "passed", proc.stdout);
-    assert.equal(result.assertions.failed, 0, proc.stdout);
-    if (expectedAssertions !== undefined) {
-      assert.equal(result.assertions.passed, expectedAssertions);
+    const ok =
+      result.exitCode === 0 &&
+      result.status === "passed" &&
+      result.assertions.failed === 0 &&
+      (expectedAssertions === undefined || result.assertions.passed === expectedAssertions) &&
+      result.teardown.clean === true;
+    if (!ok) {
+      failedWorkspaces.add(out);
+      const summary = JSON.stringify({
+        out,
+        code: result.firstError?.code ?? null,
+        stage: result.firstError?.stage ?? null,
+        message: result.firstError?.message ?? null,
+        details: result.firstError?.details ?? null,
+        teardownClean: result.teardown?.clean ?? null,
+      });
+      assert.equal(result.exitCode, 0, `${summary}\n${proc.stdout}`);
+      assert.equal(result.status, "passed", `${summary}\n${proc.stdout}`);
+      assert.equal(result.assertions.failed, 0, `${summary}\n${proc.stdout}`);
+      if (expectedAssertions !== undefined) {
+        assert.equal(result.assertions.passed, expectedAssertions, summary);
+      }
+      assert.equal(result.teardown.clean, true, `${summary}\n${proc.stdout}`);
     }
-    assert.equal(result.teardown.clean, true, proc.stdout);
     if (assertEmptyResources) {
-      assert.deepEqual(result.teardown.resources, emptyResources);
+      try {
+        assert.deepEqual(result.teardown.resources, emptyResources);
+      } catch (error) {
+        failedWorkspaces.add(out);
+        throw error;
+      }
     }
   }
   return { result, out, stderr: proc.stderr ?? "" };

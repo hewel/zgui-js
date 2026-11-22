@@ -4,20 +4,14 @@ import { fileURLToPath } from "node:url";
 
 const REVISION = "80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a";
 const workspaceRoot = fileURLToPath(new URL("../../../", import.meta.url));
-const snapshotPath = process.argv[2];
-if (!snapshotPath)
-  throw new Error("Usage: bun packages/build/src/sync-ui-resources.ts <snapshot.json>");
 
-interface ResourceSnapshot {
+export interface ResourceSnapshot {
   revision: string;
   styles: Record<string, { className: string; css: string }>;
   themes: Record<string, { light: string; dark: string }>;
   tokens: string[];
   icons: Record<string, { name: string; d: string; viewBox: number }>;
 }
-
-const snapshot: unknown = await Bun.file(path.resolve(snapshotPath)).json();
-validateSnapshot(snapshot);
 
 function assertRecord(value: unknown, label: string): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -67,11 +61,10 @@ function validateSnapshot(value: unknown): asserts value is ResourceSnapshot {
   }
 }
 
-const generated = path.join(workspaceRoot, "packages/ui/src/components/generated");
-await mkdir(generated, { recursive: true });
-
-function adaptUpstreamCss(name: string, className: string, css: string): string {
+export function adaptUpstreamCss(name: string, className: string, css: string): string {
   switch (name) {
+    case "TextareaStyle":
+      return css.replace("overflow: hidden;", "overflow-x: hidden;\n        overflow-y: auto;");
     case "TabsStyle":
       return css
         .replaceAll(
@@ -108,39 +101,71 @@ function adaptUpstreamCss(name: string, className: string, css: string): string 
   }
 }
 
-const literal = (value: string) => JSON.stringify(value);
-const outputs = new Map<string, string>();
-for (const name of Object.keys(snapshot.styles).sort()) {
-  const sheet = snapshot.styles[name];
-  const adaptedCss = adaptUpstreamCss(name, sheet.className, sheet.css);
-  outputs.set(
-    `${name}.ts`,
-    `export const sheet = { name: ${literal(name)}, className: ${literal(sheet.className)}, css: ${literal(adaptedCss)} } as const;\n`,
-  );
-}
-const themeEntries = Object.keys(snapshot.themes)
-  .sort()
-  .map(name => `${JSON.stringify(name)}: ${JSON.stringify(snapshot.themes[name])}`)
-  .join(", ");
-outputs.set(
-  "themes.ts",
-  [
-    `export const upstreamRevision = ${literal(REVISION)} as const;`,
-    `export const themes = { ${themeEntries} } as const;`,
-    `export const themeTokens = ${JSON.stringify(snapshot.tokens)} as const;`,
-    "",
-  ].join("\n"),
-);
-const iconExports = Object.keys(snapshot.icons)
-  .sort()
-  .map(name => {
-    const icon = snapshot.icons[name];
-    return `export const ${name} = { name: ${literal(icon.name)}, viewBox: ${icon.viewBox}, d: ${literal(icon.d)} } as const;`;
-  })
-  .join("\n");
-outputs.set("icons.ts", `${iconExports}\n`);
+export async function syncUiResources(
+  snapshotPath: string,
+  outDir = path.join(workspaceRoot, "packages/ui/src/components/generated"),
+): Promise<number> {
+  const snapshot: unknown = await Bun.file(path.resolve(snapshotPath)).json();
+  validateSnapshot(snapshot);
+  await mkdir(outDir, { recursive: true });
 
-for (const [filename, content] of [...outputs].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) {
-  await Bun.write(path.join(generated, filename), content);
+  const literal = (value: string) => JSON.stringify(value);
+  const outputs = new Map<string, string>();
+  for (const name of Object.keys(snapshot.styles).sort()) {
+    const sheet = snapshot.styles[name];
+    const adaptedCss = adaptUpstreamCss(name, sheet.className, sheet.css);
+    outputs.set(
+      `${name}.ts`,
+      `export const sheet = { name: ${literal(name)}, className: ${literal(sheet.className)}, css: ${literal(adaptedCss)} } as const;\n`,
+    );
+  }
+  const themeEntries = Object.keys(snapshot.themes)
+    .sort()
+    .map(name => `${JSON.stringify(name)}: ${JSON.stringify(snapshot.themes[name])}`)
+    .join(", ");
+  outputs.set(
+    "themes.ts",
+    [
+      `export const upstreamRevision = ${literal(REVISION)} as const;`,
+      `export const themes = { ${themeEntries} } as const;`,
+      `export const themeTokens = ${JSON.stringify(snapshot.tokens)} as const;`,
+      "",
+    ].join("\n"),
+  );
+  const iconExports = Object.keys(snapshot.icons)
+    .sort()
+    .map(name => {
+      const icon = snapshot.icons[name];
+      return `export const ${name} = { name: ${literal(icon.name)}, viewBox: ${icon.viewBox}, d: ${literal(icon.d)} } as const;`;
+    })
+    .join("\n");
+  outputs.set("icons.ts", `${iconExports}\n`);
+
+  for (const [filename, content] of [...outputs].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) {
+    await Bun.write(path.join(outDir, filename), content);
+  }
+  return outputs.size;
 }
-console.log(`Wrote ${outputs.size} generated files from ${snapshotPath}`);
+
+if (import.meta.main) {
+  const args = process.argv.slice(2);
+  let snapshotPath: string | undefined;
+  let outDir: string | undefined;
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === "--out") {
+      outDir = args[++i];
+      if (!outDir) throw new Error("--out requires a directory");
+    } else if (!snapshotPath) {
+      snapshotPath = args[i];
+    } else {
+      throw new Error(`Unexpected argument: ${args[i]}`);
+    }
+  }
+  if (!snapshotPath) {
+    throw new Error(
+      "Usage: bun packages/build/src/sync-ui-resources.ts <snapshot.json> [--out DIR]",
+    );
+  }
+  const count = await syncUiResources(snapshotPath, outDir ? path.resolve(outDir) : undefined);
+  console.log(`Wrote ${count} generated files from ${snapshotPath}`);
+}

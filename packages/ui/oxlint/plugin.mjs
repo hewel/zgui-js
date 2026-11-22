@@ -22,6 +22,7 @@ const OWNER_CLEANUP_HELPERS = new Set([
   "onControlMessage",
   "loadImageAsset",
   "loadImageBytes",
+  "registerImageAsset",
   "registerImageBytes",
   "readTextAsset",
   "useBeforeLeave",
@@ -37,6 +38,7 @@ const OWNER_CLEANUP_HELPERS = new Set([
   "httpRequest",
   "openEventStream",
   "connectWebSocket",
+  "spawnWorker",
 ]);
 
 const RUNTIME_SERVICE_APIS = new Set([
@@ -45,6 +47,7 @@ const RUNTIME_SERVICE_APIS = new Set([
   "onControlMessage",
   "loadImageAsset",
   "loadImageBytes",
+  "registerImageAsset",
   "registerImageBytes",
   "readTextAsset",
   "getResolvedCapabilities",
@@ -68,6 +71,7 @@ const RUNTIME_SERVICE_APIS = new Set([
   "httpRequest",
   "openEventStream",
   "connectWebSocket",
+  "spawnWorker",
 ]);
 
 function commentLines(comment) {

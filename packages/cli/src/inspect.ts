@@ -16,17 +16,26 @@ export interface RunInspectOptions {
   signal?: AbortSignal;
 }
 
-function findInspectorAppDir(): string {
+export function findInspectorAppDir({
+  cliDir = import.meta.dir,
+  cwd = process.cwd(),
+}: {
+  cliDir?: string;
+  cwd?: string;
+} = {}): string {
   const candidates = [
-    path.resolve(import.meta.dir, "../../../apps/devtools/inspector"),
-    path.resolve(process.cwd(), "apps/devtools/inspector"),
+    path.resolve(cliDir, "../inspector"),
+    path.resolve(cliDir, "../../../apps/devtools/inspector"),
+    path.resolve(cwd, "apps/devtools/inspector"),
   ];
   for (const candidate of candidates) {
     if (existsSync(path.join(candidate, "package.json"))) {
       return candidate;
     }
   }
-  throw new Error("Unable to locate apps/devtools/inspector for `zgui-js inspect --ui`.");
+  throw new Error(
+    "Unable to locate bundled inspector or apps/devtools/inspector for `zgui-js inspect --ui`.",
+  );
 }
 
 function parseUiFlags(
@@ -104,7 +113,7 @@ export async function runInspect({
   const runRoot = hostRoot ? path.resolve(resolvedCwd, hostRoot) : (host.cargoRoot ?? resolvedCwd);
   if (ui) {
     const options = parseUiFlags(args, resolvedCwd);
-    const inspectorDir = findInspectorAppDir();
+    const inspectorDir = findInspectorAppDir({ cwd: resolvedCwd });
     const resolvedApp = await resolveApplication(inspectorDir);
     const built = await buildApplication(resolvedApp.app, {
       ...resolvedApp,

@@ -11,10 +11,15 @@
     }
   },
   "files": [
-    "src"
+    "src",
+    "inspector"
   ],
   "bin": {
     "zgui-js": "./src/cli.ts"
+  },
+  "scripts": {
+    "prepack": "bun pack-resources.ts",
+    "postpack": "bun pack-resources.ts --clean"
   },
   "dependencies": {
     "@hewel/zgui-build": "workspace:*"

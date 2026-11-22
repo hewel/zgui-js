@@ -37,8 +37,9 @@
     "inspect": "bun packages/cli/src/cli.ts inspect",
     "preview:check": "bun packages/build/src/preview-check.ts",
     "test:preview": "bun run build --app counter && cargo build -j 4 -p native-host --locked --offline && bun test --isolate --timeout=30000 tests/preview/*.test.mjs",
+    "test:preview:ci": "bun run build --app counter && cargo build -j 4 -p native-host --locked --offline && bun test --isolate --timeout=30000 $(find tests/preview -maxdepth 1 -name '*.test.mjs' ! -name 'ci.test.mjs' | sort)",
     "smoke": "bun packages/cli/src/cli.ts smoke && bun packages/build/src/check-smoke.ts",
-    "check": "bun run lint && bun run typecheck && bun run test:build && bun run test:rust"
+    "check": "bun run fmt:check && bun run lint && bun run typecheck && bun run test:build && bun run test:rust && bun run test:vendor"
   },
   "devDependencies": {
     "@hewel/zgui": "workspace:*",
