@@ -38,26 +38,63 @@ fn options(args: impl Iterator<Item=String>) -> Result<Options,Error> {
     })
 }
 
-pub(super) fn validate(args: &[String]) -> Result<(Options, profile::Profile, usize), Error> {
+pub(super) struct ValidatedRun {
+    pub(super) options: Options,
+    pub(super) profile: profile::Profile,
+    pub(super) total_steps: usize,
+}
+
+pub(super) fn validate(args: &[String]) -> Result<ValidatedRun, Error> {
     let options=options(args.iter().cloned())?;
     let (_,profile)=profile::read_profile(&options.common.profile,&options.common.overrides)?;
     // Capability/schema errors cannot execute the application, allocate a GPU, or claim a run.
     let scenario = scenario::load(&options.scenario,super::RUN_CAPABILITIES,profile.clock.is_virtual())?;
     validate_steps(&scenario.scenario, &profile)?;
     fixture::load(&options.fixture)?;
-    Ok((options, profile, scenario.scenario.steps.len()))
+    let total_steps = scenario.scenario.steps.len();
+    Ok(ValidatedRun { options, profile, total_steps })
 }
 
 pub fn command(args: Vec<String>) -> Result<Value,Error> {
     controlled(args, None)
 }
 
-fn watchdog_progress(root: &std::path::Path, total_steps: usize) -> Option<Value> {
+#[derive(Debug)]
+struct WatchdogProgress {
+    total_steps: usize,
+    completed_steps: u64,
+    last_completed: Option<Value>,
+    in_flight: Option<Value>,
+    in_flight_label: Option<String>,
+    avg_completed_step_ms: Option<u128>,
+}
+
+impl WatchdogProgress {
+    fn summary_suffix(&self) -> String {
+        let in_flight = self.in_flight_label.as_deref().unwrap_or("none");
+        format!(
+            "completed {}/{} steps; in-flight: {in_flight}",
+            self.completed_steps, self.total_steps
+        )
+    }
+
+    fn to_details(&self) -> Value {
+        json!({
+            "totalSteps": self.total_steps,
+            "completedSteps": self.completed_steps,
+            "lastCompletedStep": self.last_completed,
+            "inFlightStep": self.in_flight,
+            "avgCompletedStepMs": self.avg_completed_step_ms,
+        })
+    }
+}
+
+fn watchdog_progress(root: &std::path::Path, total_steps: usize) -> Option<WatchdogProgress> {
     let progress_dir = root.join("progress");
     let entries = std::fs::read_dir(&progress_dir).ok()?;
-    let mut max_result: Option<(u64, PathBuf)> = None;
+    let mut max_result: Option<(u64, Value)> = None;
     let mut max_action: Option<(u64, PathBuf)> = None;
-    let mut completed_count: u64 = 0;
+    let mut completed_steps: u64 = 0;
     let mut total_completed_wall_us: u128 = 0;
 
     for entry in entries.flatten() {
@@ -66,15 +103,16 @@ fn watchdog_progress(root: &std::path::Path, total_steps: usize) -> Option<Value
         if let Some(seq_str) = name.strip_prefix("result-").and_then(|s| s.strip_suffix(".json"))
             && let Ok(seq) = seq_str.parse::<u64>()
         {
-            completed_count += 1;
+            completed_steps += 1;
             if let Ok(bytes) = evidence::read_evidence(&entry.path())
                 && let Ok(row) = serde_json::from_slice::<Value>(&bytes)
-                && let Some(dur) = row["wallDurationUs"].as_u64()
             {
-                total_completed_wall_us += u128::from(dur);
-            }
-            if max_result.as_ref().is_none_or(|(prev, _)| seq > *prev) {
-                max_result = Some((seq, entry.path()));
+                if let Some(dur) = row["wallDurationUs"].as_u64() {
+                    total_completed_wall_us += u128::from(dur);
+                }
+                if max_result.as_ref().is_none_or(|(prev, _)| seq > *prev) {
+                    max_result = Some((seq, row));
+                }
             }
         } else if let Some(seq_str) = name.strip_prefix("action-").and_then(|s| s.strip_suffix(".json"))
             && let Ok(seq) = seq_str.parse::<u64>()
@@ -84,44 +122,52 @@ fn watchdog_progress(root: &std::path::Path, total_steps: usize) -> Option<Value
         }
     }
 
-    let last_completed = max_result.and_then(|(seq, path)| {
-        let bytes = evidence::read_evidence(&path).ok()?;
-        let row: Value = serde_json::from_slice(&bytes).ok()?;
-        Some(json!({
+    let last_completed_seq = max_result.as_ref().map(|(seq, _)| *seq);
+    let last_completed = max_result.map(|(seq, row)| {
+        json!({
             "sequence": seq,
             "id": row["id"],
             "op": row["op"],
             "wallDurationUs": row["wallDurationUs"],
-        }))
+        })
     });
-    let in_flight = max_action.and_then(|(seq, path)| {
-        if last_completed.as_ref().and_then(|v| v["sequence"].as_u64()).is_some_and(|done| seq <= done) {
-            return None;
+    let (in_flight, in_flight_label) = match max_action {
+        Some((seq, path)) if !last_completed_seq.is_some_and(|done| seq <= done) => {
+            evidence::read_evidence(&path)
+                .ok()
+                .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+                .map_or((None, None), |row| {
+                    let label = row["step"]
+                        .as_str()
+                        .or_else(|| row["stage"].as_str())
+                        .map(str::to_owned);
+                    let value = json!({
+                        "sequence": seq,
+                        "step": row["step"],
+                        "stage": row["stage"],
+                    });
+                    (Some(value), label)
+                })
         }
-        let bytes = evidence::read_evidence(&path).ok()?;
-        let row: Value = serde_json::from_slice(&bytes).ok()?;
-        Some(json!({
-            "sequence": seq,
-            "step": row["step"],
-            "stage": row["stage"],
-        }))
-    });
-    if completed_count == 0 && in_flight.is_none() {
+        _ => (None, None),
+    };
+    if completed_steps == 0 && in_flight.is_none() {
         return None;
     }
-    let avg_completed_step_ms = (completed_count > 0)
-        .then(|| (total_completed_wall_us / u128::from(completed_count)) / 1000);
-    Some(json!({
-        "totalSteps": total_steps,
-        "completedSteps": completed_count,
-        "lastCompletedStep": last_completed,
-        "inFlightStep": in_flight,
-        "avgCompletedStepMs": avg_completed_step_ms,
-    }))
+    let avg_completed_step_ms = (completed_steps > 0)
+        .then(|| (total_completed_wall_us / u128::from(completed_steps)) / 1000);
+    Some(WatchdogProgress {
+        total_steps,
+        completed_steps,
+        last_completed,
+        in_flight,
+        in_flight_label,
+        avg_completed_step_ms,
+    })
 }
 
 pub(super) fn controlled(args: Vec<String>, canceled: Option<&std::sync::atomic::AtomicBool>) -> Result<Value,Error> {
-    let (options, profile, total_steps)=validate(&args)?;
+    let ValidatedRun { options, profile, total_steps } = validate(&args)?;
     let mut output=Output::create(options.common.out.as_deref().expect("required output"),profile.limits.max_output_bytes)?;
     let mut child=std::process::Command::new(std::env::current_exe().map_err(|error|Error::new("E_WORKER_CRASH",9,error.to_string()))?);
     child.args(["preview","_run-worker"]).args(args).env("ZGUI_PREVIEW_PARENT_PID",std::process::id().to_string()).env("TZ","UTC");
@@ -148,17 +194,13 @@ pub(super) fn controlled(args: Vec<String>, canceled: Option<&std::sync::atomic:
                 } else if is_watchdog
                     && let Some(progress) = watchdog_progress(output.root(), total_steps)
                 {
-                    let completed = progress["completedSteps"].as_u64().unwrap_or(0);
-                    let in_flight = progress["inFlightStep"]["step"]
-                        .as_str()
-                        .or_else(|| progress["inFlightStep"]["stage"].as_str())
-                        .unwrap_or("none");
                     if let Some(msg) = failed["firstError"]["message"].as_str().map(str::to_owned) {
                         failed["firstError"]["message"] = json!(format!(
-                            "{msg} (completed {completed}/{total_steps} steps; in-flight: {in_flight})"
+                            "{msg} ({})",
+                            progress.summary_suffix()
                         ));
                     }
-                    failed["firstError"]["details"] = progress;
+                    failed["firstError"]["details"] = progress.to_details();
                 }
                 evidence::recover(&mut output)
             })();

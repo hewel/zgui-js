@@ -13,27 +13,25 @@ below is retained and does not describe the currently shipped API or test suite.
 
 ## Dependency policy
 
-| Component                      | Selected identity                                                                                                                           |
-| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------- |
-| Rust                           | 1.100.0, minimal profile plus rustfmt/clippy                                                                                                |
-| zgui                           | `80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a`                                                                                                  |
-| Fontique                       | Root Cargo patch from the same zgui revision                                                                                                |
-| Native runtime / Wayland       | Same revision, with the documented [local patches](../../vendor/README.md)                                                                  |
-| rquickjs                       | `73fcd6062ee615aeb2a4675cd32be67a56e93973`; Phase 0 `std`, Phase 1 adds `macro` for opaque native classes                                   |
-| QuickJS-NG                     | Resolved submodule `6d46d07d04041b40f4f49eaa7fdebe44c314c699`                                                                               |
-| Bun                            | `>= 1.4.4` — runtime, package manager, and test runner (`bunfig.toml`, `bun.lock`)                                                          |
-| Solid / Universal / Signals    | Exact registry versions `solid-js` 2.0.1 / `@solidjs/universal` 2.0.1 / `@solidjs/signals` 2.0.1                                            |
-| StyleX compiler / runtime      | Exact registry versions `@stylexjs/babel-plugin` 0.19.2 / `@stylexjs/stylex` 0.19.2; release tag `d7e6174c5384c64b87bc5fde1f57eedd7c11c5aa` |
-| StyleX merge dependency        | `styleq` 0.2.1                                                                                                                              |
-| JSX compiler                   | `@solidjs/babel-plugin` 2.0.1                                                                                                               |
-| Babel core / TypeScript preset | 7.29.13 / 7.29.7                                                                                                                            |
-| Rolldown / tsrs                | 1.3.2 / 7.1.0-beta.tsrs2                                                                                                                    |
-| Oxlint / Oxfmt                 | 1.94.0 (`--deny-warnings` + `typeAware` via `tsrs` + `tools/oxlint-zgui-plugin.mjs`) / 0.79.0                                               |
-| Parley                         | 0.11.1 with `complex-scripts`; required for CJK layout segmentation                                                                         |
+| Component                   | Selected identity                                                                                         |
+| --------------------------- | --------------------------------------------------------------------------------------------------------- |
+| Rust                        | 1.100.0, minimal profile plus rustfmt/clippy                                                              |
+| zgui                        | `80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a`                                                                |
+| Fontique                    | Root Cargo patch from the same zgui revision                                                              |
+| Native runtime / Wayland    | Same revision, with the documented [local patches](../../vendor/README.md)                                |
+| rquickjs                    | `73fcd6062ee615aeb2a4675cd32be67a56e93973`; Phase 0 `std`, Phase 1 adds `macro` for opaque native classes |
+| QuickJS-NG                  | Resolved submodule `6d46d07d04041b40f4f49eaa7fdebe44c314c699`                                             |
+| Bun                         | `>= 1.4.4` — runtime, package manager, and test runner (`bunfig.toml`, `bun.lock`)                        |
+| Solid / Universal / Signals | Exact registry versions `solid-js` 2.0.1 / `@solidjs/universal` 2.0.1 / `@solidjs/signals` 2.0.1          |
+| CSS Modules compiler        | `lightningcss` 1.33.0 (`lightningcss-v1` native profile; supersedes StyleX per ADR-0006)                  |
+| JSX compiler                | `@solidjs/compiler` 2.0.1 (native Oxc + WASI fallback; supersedes Babel per ADR-0007)                     |
+| Rolldown / tsrs             | 1.3.2 / 7.1.0-beta.tsrs2                                                                                  |
+| Oxlint / Oxfmt              | 1.94.0 (`--deny-warnings` + `typeAware` via `tsrs` + `packages/ui/oxlint/plugin.mjs`) / 0.79.0            |
+| Parley                      | 0.11.1 with `complex-scripts`; required for CJK layout segmentation                                       |
 
 The Fontique patch is selected deliberately for parity with the audited upstream performance implementation; it is not presented as necessary for correctness. `bun.lock` and `Cargo.lock` record the resolved graphs. Phase 0 graph inspection confirmed patched Fontique 0.11.1 and rquickjs `std`; Phase 1 deliberately added `macro`.
 
-`tsrs` (`oxc-project/tsrs`) is pinned to `7.1.0-beta.tsrs2` in both the root and `@hewel/zgui-build` manifests. Workspace checks and one-shot application builds invoke the installed package's `bin/tsrs` synchronously through the current Bun executable with `--project … --noEmit`; development uses a cancellable asynchronous child, and `oxlint` uses `tsrs`'s `tsrs-lint` binary for type-aware rules (`options.typeAware: true`). Compiler diagnostics remain the thrown error text. The CLI is resolved from `@hewel/zgui-build`'s local dependency, never from the shell or a global `tsc`/`tsrs`. Babel/Rolldown perform runtime compilation; typechecking does not emit JavaScript or change native consumers' ES2022-only, DOM/Node-free environment.
+`tsrs` (`oxc-project/tsrs`) is pinned to `7.1.0-beta.tsrs2` in both the root and `@hewel/zgui-build` manifests. Workspace checks and one-shot application builds invoke the installed package's `bin/tsrs` synchronously through the current Bun executable with `--project … --noEmit`; development uses a cancellable asynchronous child, and `oxlint` uses `tsrs`'s `tsrs-lint` binary for type-aware rules (`options.typeAware: true`). Compiler diagnostics remain the thrown error text. The CLI is resolved from `@hewel/zgui-build`'s local dependency, never from the shell or a global `tsc`/`tsrs`. `@solidjs/compiler` + Lightning CSS + Rolldown perform runtime compilation; typechecking does not emit JavaScript or change native consumers' ES2022-only, DOM/Node-free environment.
 
 ## Commands currently implemented
 

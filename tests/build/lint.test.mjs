@@ -120,6 +120,20 @@ const negativeCases = [
     guidance: /ref=\{setNode\}/,
   },
   {
+    name: "zgui/no-cleanup-in-ref (spawnWorker in ref arrow)",
+    file: "worker-in-ref.tsx",
+    code: 'import { spawnWorker } from "@hewel/zgui-services";\nexport const V = () => <box ref={() => spawnWorker("compute")} />;\n',
+    expected: /zgui\(no-cleanup-in-ref\)/,
+    guidance: /ref=\{setNode\}/,
+  },
+  {
+    name: "zgui/no-cleanup-in-ref (registerImageAsset in ref arrow)",
+    file: "register-image-in-ref.tsx",
+    code: 'import { registerImageAsset } from "@hewel/zgui-services";\nexport const V = () => <box ref={() => registerImageAsset("hero.png")} />;\n',
+    expected: /zgui\(no-cleanup-in-ref\)/,
+    guidance: /ref=\{setNode\}/,
+  },
+  {
     name: "zgui/no-top-level-service-call (named import)",
     file: "top-level-service.ts",
     code: 'import { spawnCommand } from "@hewel/zgui-services";\nexport const req = spawnCommand("/usr/bin/uname", ["-s"]);\n',

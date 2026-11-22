@@ -74,16 +74,20 @@ async function fileExists(filePath: string): Promise<boolean> {
   }
 }
 
+async function readSortedEntries(directory: string): Promise<Dirent[]> {
+  try {
+    const entries = await readdir(directory, { withFileTypes: true });
+    return entries.sort((a, b) => a.name.localeCompare(b.name));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+    throw error;
+  }
+}
+
 async function discoverPackageConfigs(root: string): Promise<string[]> {
   const packagesDir = path.join(root, "packages");
-  let entries: Dirent[] = [];
-  try {
-    entries = await readdir(packagesDir, { withFileTypes: true });
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-  }
   const configs: string[] = [];
-  for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
+  for (const entry of await readSortedEntries(packagesDir)) {
     if (!entry.isDirectory()) continue;
     const pkgDir = path.join(packagesDir, entry.name);
     for (const candidate of ["tsconfig.json", "tsconfig.native.json"]) {
@@ -96,15 +100,8 @@ async function discoverPackageConfigs(root: string): Promise<string[]> {
 
 async function discoverTypeTestConfigs(root: string): Promise<string[]> {
   const typesDir = path.join(root, "tests/types");
-  let entries: Dirent[] = [];
-  try {
-    entries = await readdir(typesDir, { withFileTypes: true });
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-  }
-  return entries
+  return (await readSortedEntries(typesDir))
     .filter(entry => entry.isFile() && /^tsconfig.*\.json$/.test(entry.name))
-    .sort((a, b) => a.name.localeCompare(b.name))
     .map(entry => path.join(typesDir, entry.name));
 }
 
@@ -112,13 +109,7 @@ async function discoverAppConfigs(root: string, appFilter?: string): Promise<str
   const configs: string[] = [];
   for (const group of ["apps/devtools", "apps/examples"]) {
     const groupDir = path.join(root, group);
-    let entries: Dirent[] = [];
-    try {
-      entries = await readdir(groupDir, { withFileTypes: true });
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-    }
-    for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
+    for (const entry of await readSortedEntries(groupDir)) {
       if (!entry.isDirectory()) continue;
       if (appFilter && entry.name !== appFilter && `${group}/${entry.name}` !== appFilter) {
         continue;

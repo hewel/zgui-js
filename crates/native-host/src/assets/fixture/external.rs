@@ -591,18 +591,25 @@ impl FixtureRuntime {
                 ),
             ));
         };
-        let Some(script) = scripts.get(state.external.next_command) else {
+        let cmd_index = state.external.next_command;
+        let total_commands = scripts.len();
+        let Some(script) = scripts.get(cmd_index) else {
             return Err(self.external_failure(
                 &mut state,
-                format!("no fixture command script remains for {program:?} {args:?} ({mode:?})"),
+                format!(
+                    "no fixture command script remains for {program:?} {args:?} ({mode:?}) (consumed {cmd_index}/{total_commands} command scripts)"
+                ),
             ));
         };
         if script.program != program || script.args != args || script.mode != mode {
             return Err(self.external_failure(
                 &mut state,
                 format!(
-                    "expected command {:?} {:?} ({:?}), received {program:?} {args:?} ({mode:?})",
-                    script.program, script.args, script.mode
+                    "command script #{}/{total_commands} expected {:?} {:?} ({:?}), received {program:?} {args:?} ({mode:?})",
+                    cmd_index + 1,
+                    script.program,
+                    script.args,
+                    script.mode
                 ),
             ));
         }

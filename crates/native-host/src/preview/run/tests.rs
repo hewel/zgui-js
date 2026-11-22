@@ -212,7 +212,9 @@ fn watchdog_progress_summarizes_last_completed_and_in_flight_steps() {
     )
     .unwrap();
 
-    let summary = watchdog_progress(&directory.0, 10).expect("progress summary");
+    let progress = watchdog_progress(&directory.0, 10).expect("progress summary");
+    let summary = progress.to_details();
+    assert_eq!(progress.summary_suffix(), "completed 1/10 steps; in-flight: click-btn");
     assert_eq!(summary["totalSteps"], 10);
     assert_eq!(summary["completedSteps"], 1);
     assert_eq!(summary["lastCompletedStep"]["id"], "initial");

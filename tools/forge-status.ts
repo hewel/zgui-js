@@ -13,11 +13,15 @@ const repoRoot = fileURLToPath(new URL("../", import.meta.url));
 const defaultHost = process.env.FORGE_HOST ?? "forge";
 const defaultRemoteDir = process.env.FORGE_DIR ?? "/home/hewel/Codes/zgui-js";
 
+function shellQuote(value: string): string {
+  return `'${value.replaceAll("'", "'\\''")}'`;
+}
+
 function run(command: string, args: string[], cwd = repoRoot) {
   const proc = spawnSync(command, args, { cwd, encoding: "utf8", timeout: 10000 });
   return {
     ok: !proc.error && proc.status === 0,
-    stdout: (proc.stdout ?? "").trim(),
+    stdout: (proc.stdout ?? "").trimEnd(),
     stderr: (proc.stderr ?? "").trim(),
   };
 }
@@ -25,6 +29,16 @@ function run(command: string, args: string[], cwd = repoRoot) {
 function sha256File(filePath: string): string | null {
   if (!existsSync(filePath)) return null;
   return createHash("sha256").update(readFileSync(filePath)).digest("hex").slice(0, 12);
+}
+
+interface CheckoutSnapshot {
+  branch: string | null;
+  head: string | null;
+  dirtyCount: number;
+  dirtyPaths: string[];
+  bunLockSha12: string | null;
+  cargoLockSha12: string | null;
+  debugHostPresent: boolean;
 }
 
 export function collectLocalSnapshot(root = repoRoot) {
@@ -35,8 +49,8 @@ export function collectLocalSnapshot(root = repoRoot) {
   const nativeHostPath = path.join(root, "target/debug/native-host");
   return {
     root,
-    branch: branch.ok ? branch.stdout : null,
-    head: head.ok ? head.stdout : null,
+    branch: branch.ok ? branch.stdout.trim() : null,
+    head: head.ok ? head.stdout.trim() : null,
     dirtyCount: dirtyPaths.length,
     dirtyPaths,
     bunLockSha12: sha256File(path.join(root, "bun.lock")),
@@ -48,7 +62,7 @@ export function collectLocalSnapshot(root = repoRoot) {
 export function collectRemoteSnapshot(host = defaultHost, remoteDir = defaultRemoteDir) {
   const probe = `
     set -eu
-    cd ${JSON.stringify(remoteDir)}
+    cd ${shellQuote(remoteDir)}
     echo "BRANCH=$(git rev-parse --abbrev-ref HEAD)"
     echo "HEAD=$(git rev-parse --short HEAD)"
     echo "BUN_LOCK=$(sha256sum bun.lock 2>/dev/null | cut -c1-12 || true)"
@@ -59,7 +73,7 @@ export function collectRemoteSnapshot(host = defaultHost, remoteDir = defaultRem
   `;
   const res = run("ssh", ["-o", "BatchMode=yes", "-o", "ConnectTimeout=5", host, probe]);
   if (!res.ok) {
-    return { reachable: false, host, remoteDir, error: res.stderr || "ssh probe failed" };
+    return { reachable: false as const, host, remoteDir, error: res.stderr || "ssh probe failed" };
   }
   const lines = res.stdout.split("\n");
   const fields = new Map<string, string>();
@@ -71,14 +85,14 @@ export function collectRemoteSnapshot(host = defaultHost, remoteDir = defaultRem
       continue;
     }
     if (inDirty) {
-      if (line.trim()) dirtyPaths.push(line);
+      if (line.length > 0) dirtyPaths.push(line);
       continue;
     }
     const idx = line.indexOf("=");
     if (idx > 0) fields.set(line.slice(0, idx), line.slice(idx + 1));
   }
   return {
-    reachable: true,
+    reachable: true as const,
     host,
     remoteDir,
     branch: fields.get("BRANCH") ?? null,
@@ -89,6 +103,12 @@ export function collectRemoteSnapshot(host = defaultHost, remoteDir = defaultRem
     cargoLockSha12: fields.get("CARGO_LOCK") || null,
     debugHostPresent: fields.get("DEBUG_HOST") === "1",
   };
+}
+
+function formatSnapshot(label: string, snap: CheckoutSnapshot): string {
+  const summary = `${label}: ${snap.branch}@${snap.head} dirty=${snap.dirtyCount} bun.lock=${snap.bunLockSha12} Cargo.lock=${snap.cargoLockSha12} host=${snap.debugHostPresent ? "present" : "missing"}`;
+  if (snap.dirtyPaths.length === 0) return summary;
+  return `${summary}\n${snap.dirtyPaths.map(entry => `  ${entry}`).join("\n")}`;
 }
 
 if (import.meta.main) {
@@ -106,6 +126,8 @@ if (import.meta.main) {
       remote &&
       remote.reachable &&
       local.head === remote.head &&
+      local.dirtyCount === 0 &&
+      remote.dirtyCount === 0 &&
       local.bunLockSha12 === remote.bunLockSha12 &&
       local.cargoLockSha12 === remote.cargoLockSha12,
     ),
@@ -113,16 +135,12 @@ if (import.meta.main) {
   if (asJson) {
     console.log(JSON.stringify(report, null, 2));
   } else {
-    console.log(
-      `Local : ${local.branch}@${local.head} dirty=${local.dirtyCount} bun.lock=${local.bunLockSha12} Cargo.lock=${local.cargoLockSha12} host=${local.debugHostPresent ? "present" : "missing"}`,
-    );
+    console.log(formatSnapshot("Local ", local));
     if (remote) {
       if (!remote.reachable) {
         console.log(`Remote: ${remote.host}:${remote.remoteDir} unreachable (${remote.error})`);
       } else {
-        console.log(
-          `Remote: ${remote.branch}@${remote.head} dirty=${remote.dirtyCount} bun.lock=${remote.bunLockSha12} Cargo.lock=${remote.cargoLockSha12} host=${remote.debugHostPresent ? "present" : "missing"}`,
-        );
+        console.log(formatSnapshot("Remote", remote));
       }
     }
   }

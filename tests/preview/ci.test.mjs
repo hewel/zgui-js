@@ -36,37 +36,44 @@ async function json(file) {
   return JSON.parse(await readFile(file, "utf8"));
 }
 
-// Deliberately required: missing build prerequisites, baseline, or real GPU fail this test.
-test("required preview gate runs counter then compares the reviewed baseline", async t => {
-  const directory = await temporaryProject(t);
-  const out = path.join(directory, "gate");
-  const { child, result } = check(["--out", out]);
-  assert.equal(child.status, 0, `${child.stdout}\n${child.stderr}`);
-  assert.equal(result.status, "passed");
-  assert.equal(result.stage, "compare");
-  assert.equal(result.run.exitCode, 0);
-  assert.equal(result.comparison.exitCode, 0);
-  assert.equal(result.firstError, null);
-  assert.deepEqual(await json(path.join(out, "result.json")), result);
+// Deliberately required on matching baseline hardware; CI Lavapipe runs set
+// ZGUI_CI_SKIP_HARDWARE_BASELINE=1 so non-baseline error-contract gates still execute.
+const skipHardwareBaseline = process.env.ZGUI_CI_SKIP_HARDWARE_BASELINE === "1";
 
-  const run = await json(path.join(out, "actual/result.json"));
-  assert.equal(run.command, "run");
-  assert.equal(run.status, "passed");
-  assert.equal(run.captureCount, 2);
-  assert.equal(run.assertions.failed, 0);
-  assert.ok(run.assertions.passed > 0);
-  const comparison = await json(path.join(out, "comparison/result.json"));
-  assert.equal(comparison.command, "compare");
-  assert.equal(comparison.status, "passed");
-  assert.equal(comparison.exitCode, 0);
-  await readFile(path.join(out, "comparison/report.json"));
-  for (const capture of ["initial", "after-increment"]) {
-    const image = await readFile(path.join(out, `actual/captures/${capture}.png`));
-    assert.deepEqual(image.subarray(0, 8), Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
-    await json(path.join(out, `actual/captures/${capture}.frame.json`));
-    await json(path.join(out, `actual/captures/${capture}.tree.json`));
-  }
-});
+test(
+  "required preview gate runs counter then compares the reviewed baseline",
+  { skip: skipHardwareBaseline },
+  async t => {
+    const directory = await temporaryProject(t);
+    const out = path.join(directory, "gate");
+    const { child, result } = check(["--out", out]);
+    assert.equal(child.status, 0, `${child.stdout}\n${child.stderr}`);
+    assert.equal(result.status, "passed");
+    assert.equal(result.stage, "compare");
+    assert.equal(result.run.exitCode, 0);
+    assert.equal(result.comparison.exitCode, 0);
+    assert.equal(result.firstError, null);
+    assert.deepEqual(await json(path.join(out, "result.json")), result);
+
+    const run = await json(path.join(out, "actual/result.json"));
+    assert.equal(run.command, "run");
+    assert.equal(run.status, "passed");
+    assert.equal(run.captureCount, 2);
+    assert.equal(run.assertions.failed, 0);
+    assert.ok(run.assertions.passed > 0);
+    const comparison = await json(path.join(out, "comparison/result.json"));
+    assert.equal(comparison.command, "compare");
+    assert.equal(comparison.status, "passed");
+    assert.equal(comparison.exitCode, 0);
+    await readFile(path.join(out, "comparison/report.json"));
+    for (const capture of ["initial", "after-increment"]) {
+      const image = await readFile(path.join(out, `actual/captures/${capture}.png`));
+      assert.deepEqual(image.subarray(0, 8), Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
+      await json(path.join(out, `actual/captures/${capture}.frame.json`));
+      await json(path.join(out, `actual/captures/${capture}.tree.json`));
+    }
+  },
+);
 
 test("unavailable Vulkan fails the required gate with exit 7 and never compares", async t => {
   const directory = await temporaryProject(t);

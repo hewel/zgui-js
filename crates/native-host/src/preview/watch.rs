@@ -209,7 +209,7 @@ fn execute(args:Vec<String>) -> Result<u8,Error> {
         } else { common.push(key); common.push(value); }
     }
     let maximum=maximum.unwrap_or(64);
-    let (options,profile,_)=run::validate(&common)?;
+    let run::ValidatedRun { options, profile, .. } = run::validate(&common)?;
     let bundle=std::path::absolute(&options.bundle).map_err(io)?;
     let status_path=bundle.parent().ok_or_else(||schema("bundle publication has no parent"))?.join(STATUS_FILE);
     let _signals=Signals::install()?;

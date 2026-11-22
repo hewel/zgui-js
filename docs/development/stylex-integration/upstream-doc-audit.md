@@ -1,3 +1,5 @@
+> **Historical — Superseded by [`ADR-0006`](../../adr/0006-lightning-css-modules-replace-stylex.md).** Retained strictly as archival audit evidence.
+
 # Upstream Doc Audit — StyleX + Solid Assumptions in STYLEX_INTEGRATION_SPEC.md
 
 **Date:** 2026-11-18

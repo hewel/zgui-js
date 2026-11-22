@@ -203,19 +203,13 @@ export async function runPreview({
     timeout: Math.max(60000, timeoutMs ?? 0),
   });
   if (proc.stderr && stderrPath) await writeFile(stderrPath, proc.stderr);
-  assert.ifError(proc.error);
-  assert.equal(proc.signal, null, proc.stderr);
-  const result = JSON.parse(proc.stdout);
-  assert.equal(proc.status, result.exitCode);
-  if (!allowFailure) {
-    const ok =
-      result.exitCode === 0 &&
-      result.status === "passed" &&
-      result.assertions.failed === 0 &&
-      (expectedAssertions === undefined || result.assertions.passed === expectedAssertions) &&
-      result.teardown.clean === true;
-    if (!ok) {
-      failedWorkspaces.add(out);
+  let result;
+  try {
+    assert.ifError(proc.error);
+    assert.equal(proc.signal, null, proc.stderr);
+    result = JSON.parse(proc.stdout);
+    assert.equal(proc.status, result.exitCode);
+    if (!allowFailure) {
       const summary = JSON.stringify({
         out,
         code: result.firstError?.code ?? null,
@@ -231,15 +225,13 @@ export async function runPreview({
         assert.equal(result.assertions.passed, expectedAssertions, summary);
       }
       assert.equal(result.teardown.clean, true, `${summary}\n${proc.stdout}`);
-    }
-    if (assertEmptyResources) {
-      try {
-        assert.deepEqual(result.teardown.resources, emptyResources);
-      } catch (error) {
-        failedWorkspaces.add(out);
-        throw error;
+      if (assertEmptyResources) {
+        assert.deepEqual(result.teardown.resources, emptyResources, summary);
       }
     }
+  } catch (error) {
+    if (!allowFailure) failedWorkspaces.add(out);
+    throw error;
   }
   return { result, out, stderr: proc.stderr ?? "" };
 }

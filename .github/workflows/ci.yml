@@ -64,5 +64,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: preview-failure-artifacts
-          path: target/zgui-preview-*
+          path: |
+            target/preview-*
+            target/inspector-ui-*
           if-no-files-found: ignore

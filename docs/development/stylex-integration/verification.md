@@ -1,3 +1,5 @@
+> **Historical — Superseded by [`ADR-0006`](../../adr/0006-lightning-css-modules-replace-stylex.md).** Retained strictly as archival verification evidence.
+
 # StyleX Integration Verification
 
 **Status:** implemented and verified
