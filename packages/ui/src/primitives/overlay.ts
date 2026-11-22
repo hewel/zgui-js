@@ -1,4 +1,13 @@
-import { createContext, createEffect, createMemo, createSignal, onCleanup, untrack } from "#solid";
+import {
+  createContext,
+  createEffect,
+  createMemo,
+  createSignal,
+  getOwner,
+  onCleanup,
+  untrack,
+} from "#solid";
+import { tryBridgeFor } from "../host.js";
 import { isAnimating, registerDismissLayer } from "../nodes.js";
 import type {
   Accessor,
@@ -26,6 +35,15 @@ export interface PresenceController {
   readonly onEnd: (event: NativeAnimationEvent | NativeTransitionEvent) => void;
 }
 
+export interface RetainedPresenceOptions {
+  readonly settled?: Accessor<boolean> | undefined;
+}
+
+export interface RetainedPresenceController<T> extends PresenceController {
+  readonly present: Accessor<boolean>;
+  readonly value: Accessor<NonNullable<T> | undefined>;
+}
+
 export interface OverlayNodeRef {
   readonly node: Accessor<NativeNode | null>;
   ref(value: NativeNode): void;
@@ -40,27 +58,101 @@ export interface OverlayState {
   readonly description: OverlayNodeRef;
 }
 
-export function createPresence(present: Accessor<boolean>): PresenceController {
-  const [mounted, setMounted] = createSignal(untrack(present));
+interface PresenceLifecycleOptions {
+  readonly settled?: Accessor<boolean> | undefined;
+  readonly onExitComplete?: (() => void) | undefined;
+}
+
+function createPresenceLifecycle(
+  present: Accessor<boolean>,
+  options?: PresenceLifecycleOptions,
+): PresenceController {
+  let isMounted = untrack(present);
+  const [mountedSignal, setMountedSignal] = createSignal(isMounted);
+  const setMounted = (next: boolean) => {
+    isMounted = next;
+    setMountedSignal(next);
+  };
+  const mounted: Accessor<boolean> = () => {
+    mountedSignal();
+    return isMounted;
+  };
+  let isJsGateArmed = false;
+  const [jsGateArmedSignal, setJsGateArmedSignal] = createSignal(false);
+  const setJsGateArmed = (next: boolean) => {
+    isJsGateArmed = next;
+    setJsGateArmedSignal(next);
+  };
+  const settledAccessor = options?.settled;
   let surface: NativeNode | undefined;
   let frame: number | undefined;
   let pending: number | undefined;
   let deadline: number | undefined;
   let generation = 0;
+  let exiting = false;
+  let cssGateSatisfied = false;
+
+  const clearDeadline = () => {
+    if (deadline !== undefined) {
+      clearTimeout(deadline);
+      deadline = undefined;
+    }
+  };
+  const clearFrameAndPending = () => {
+    if (frame !== undefined) {
+      cancelAnimationFrame(frame);
+      frame = undefined;
+    }
+    if (pending !== undefined) {
+      clearTimeout(pending);
+      pending = undefined;
+    }
+  };
   const cancel = () => {
     generation += 1;
-    if (frame !== undefined) cancelAnimationFrame(frame);
-    if (pending !== undefined) clearTimeout(pending);
-    if (deadline !== undefined) clearTimeout(deadline);
-    frame = pending = deadline = undefined;
+    exiting = false;
+    cssGateSatisfied = false;
+    clearFrameAndPending();
+    clearDeadline();
+    if (settledAccessor) setJsGateArmed(false);
   };
-  const leave = () => {
+  const completeExit = () => {
     cancel();
     setMounted(false);
+    options?.onExitComplete?.();
   };
-  const finish = () => {
-    if (!untrack(present) && untrack(mounted) && (!surface || !isAnimating(surface))) leave();
+  const tryComplete = () => {
+    if (!exiting || !cssGateSatisfied) return;
+    if (untrack(present) || !isMounted) return;
+    if (settledAccessor && (!isJsGateArmed || !untrack(settledAccessor))) return;
+    completeExit();
   };
+  const scheduleFrame = (cb: (time: number) => void): number => {
+    const bridge = surface ? tryBridgeFor(surface) : tryBridgeFor();
+    return bridge?.requestAnimationFrame
+      ? bridge.requestAnimationFrame(cb)
+      : requestAnimationFrame(cb);
+  };
+  const checkCssGate = () => {
+    if (!exiting || cssGateSatisfied) return;
+    if (!surface || !isAnimating(surface)) {
+      cssGateSatisfied = true;
+      clearDeadline();
+    }
+  };
+
+  if (settledAccessor) {
+    createEffect(
+      () => {
+        jsGateArmedSignal();
+        return isJsGateArmed ? Boolean(settledAccessor()) : false;
+      },
+      isSettled => {
+        if (isSettled) tryComplete();
+      },
+    );
+  }
+
   createEffect(
     () => present(),
     open => {
@@ -69,38 +161,132 @@ export function createPresence(present: Accessor<boolean>): PresenceController {
         setMounted(true);
         return;
       }
-      if (!untrack(mounted)) return;
+      if (!isMounted) return;
+      exiting = true;
+      cssGateSatisfied = false;
       const current = generation;
-      frame = requestAnimationFrame(() => {
+      frame = scheduleFrame(() => {
         if (current !== generation) return;
         frame = undefined;
         pending = setTimeout(() => {
           if (current !== generation) return;
           pending = undefined;
-          finish();
+          checkCssGate();
+          if (settledAccessor) setJsGateArmed(true);
+          tryComplete();
         }, 0);
       });
       deadline = setTimeout(() => {
-        if (current === generation && !untrack(present)) leave();
+        if (current !== generation) return;
+        deadline = undefined;
+        clearFrameAndPending();
+        cssGateSatisfied = true;
+        if (settledAccessor) setJsGateArmed(true);
+        tryComplete();
       }, 1000);
     },
   );
+
   onCleanup(() => {
     cancel();
     surface = undefined;
   });
+
   return {
     mounted,
     state: (): "open" | "closed" => (present() ? "open" : "closed"),
     ref(node: NativeNode) {
       surface = node;
-      onCleanup(() => {
-        if (surface === node) surface = undefined;
-      });
+      if (getOwner()) {
+        onCleanup(() => {
+          if (surface === node) surface = undefined;
+        });
+      }
     },
     onEnd(event: NativeAnimationEvent | NativeTransitionEvent) {
-      if (frame === undefined && pending === undefined && event.target === surface) finish();
+      if (
+        exiting &&
+        !cssGateSatisfied &&
+        frame === undefined &&
+        pending === undefined &&
+        event.target === surface
+      ) {
+        checkCssGate();
+        tryComplete();
+      }
     },
+  };
+}
+
+export function createPresence(present: Accessor<boolean>): PresenceController {
+  return createPresenceLifecycle(present);
+}
+
+interface RetainedBox<T> {
+  readonly value: NonNullable<T> | undefined;
+}
+
+const EMPTY_RETAINED: RetainedBox<never> = { value: undefined };
+
+function isPresentValue<T>(value: T | null | undefined): value is NonNullable<T> {
+  return value !== null && value !== undefined;
+}
+
+/**
+ * Retain the last non-nullish payload while exit animations and/or a reactive JS gate (`settled`)
+ * finish, then unmount and release the payload atomically.
+ */
+export function createRetainedPresence<T>(
+  source: Accessor<T | null | undefined>,
+  options?: RetainedPresenceOptions,
+): RetainedPresenceController<T> {
+  const initialRaw = untrack(source);
+  let retainedValue: NonNullable<T> | undefined = isPresentValue(initialRaw)
+    ? initialRaw
+    : undefined;
+  const [retained, setRetainedSignal] = createSignal<RetainedBox<T>>(
+    retainedValue !== undefined ? { value: retainedValue } : EMPTY_RETAINED,
+  );
+  const setRetained = (next: NonNullable<T> | undefined) => {
+    retainedValue = next;
+    setRetainedSignal(next !== undefined ? { value: next } : EMPTY_RETAINED);
+  };
+  const present = createMemo(() => isPresentValue(source()));
+
+  const lifecycle = createPresenceLifecycle(present, {
+    settled: options?.settled,
+    onExitComplete: () => {
+      setRetained(undefined);
+    },
+  });
+
+  createEffect(
+    () => source(),
+    next => {
+      if (isPresentValue(next) && !Object.is(retainedValue, next)) {
+        setRetained(next);
+      }
+    },
+  );
+
+  onCleanup(() => {
+    setRetained(undefined);
+  });
+
+  const value: Accessor<NonNullable<T> | undefined> = () => {
+    const current = source();
+    if (isPresentValue(current)) return current;
+    retained();
+    return retainedValue;
+  };
+
+  return {
+    mounted: lifecycle.mounted,
+    state: lifecycle.state,
+    ref: lifecycle.ref,
+    onEnd: lifecycle.onEnd,
+    present,
+    value,
   };
 }
 

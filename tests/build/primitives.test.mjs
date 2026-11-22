@@ -18,6 +18,7 @@ import {
   createDismissLayer,
   createOverlayState,
   createPresence,
+  createRetainedPresence,
   createRovingFocus,
 } from "@hewel/zgui/primitives";
 
@@ -28,9 +29,12 @@ function Demo() {
   const [choice, setChoice] = createSignal("a");
   const overlay = createOverlayState({ defaultOpen: true });
   const presence = createPresence(overlay.open);
+  const retained = createRetainedPresence(() => (overlay.open() ? choice() : null), {
+    settled: undefined,
+  });
   const delayed = createDelayed();
   const roving = createRovingFocus(() => "vertical");
-  void [presence, delayed, roving, createDismissLayer];
+  void [presence, retained, delayed, roving, createDismissLayer];
 
   return (
     <MenuRootPrimitive open={overlay.open()} onOpenChange={overlay.setOpen}>

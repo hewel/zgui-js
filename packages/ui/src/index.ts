@@ -56,7 +56,7 @@ export {
   useWindowState,
 } from "./window.js";
 export { createSpring } from "./spring.js";
-export type { Spring, SpringNumberOption, SpringOptions } from "./spring.js";
+export type { Spring, SpringNumberOption, SpringOptions, SpringPhysicsOptions } from "./spring.js";
 export { createDevState } from "./dev-state.js";
 export type { DevStateOptions } from "./dev-state.js";
 export { cx } from "./cx.js";

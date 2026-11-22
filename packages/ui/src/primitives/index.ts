@@ -4,12 +4,19 @@ export type { DelayedController } from "./delay.js";
 export { createRovingFocus, groupOrientation } from "./roving.js";
 export type { GroupOrientation, RovingFocusController, RovingFocusItem } from "./roving.js";
 
-export { createDismissLayer, createOverlayState, createPresence } from "./overlay.js";
+export {
+  createDismissLayer,
+  createOverlayState,
+  createPresence,
+  createRetainedPresence,
+} from "./overlay.js";
 export type {
   OverlayNodeRef,
   OverlayRootProps,
   OverlayState,
   PresenceController,
+  RetainedPresenceController,
+  RetainedPresenceOptions,
 } from "./overlay.js";
 
 export {

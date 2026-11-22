@@ -91,6 +91,7 @@ import type {
   ScrollToOptions,
   Spring,
   SpringOptions,
+  SpringPhysicsOptions,
   TextFieldProps,
   TextAreaProps,
   TextSelectionRange,
@@ -101,22 +102,54 @@ import type {
 } from "@hewel/zgui";
 import type { Accessor } from "@hewel/zgui";
 import type { SessionLockRequest, SessionLockState } from "@hewel/zgui";
+import { createRetainedPresence } from "@hewel/zgui/primitives";
+import type {
+  PresenceController,
+  RetainedPresenceController,
+  RetainedPresenceOptions,
+} from "@hewel/zgui/primitives";
 
 const Greeting: Component<{ name: string }> = props => <text>{props.name}</text>;
 const Container: ParentComponent = props => <box>{props.children}</box>;
 const [count, setCount] = createSignal(0);
-const springOptions: SpringOptions = {
+const springPhysics: SpringPhysicsOptions = {
   stiffness: 170,
   damping: 26,
   mass: 1,
   precision: 0.01,
   velocityPrecision: 0.02,
 };
+const springOptions: SpringOptions = {
+  ...springPhysics,
+  initial: 0,
+};
 const sprungCount: Spring = createSpring(count, springOptions);
 const sprungAccessor: Accessor<number> = sprungCount;
 const springValue: number = sprungAccessor();
+const springSettled: Accessor<boolean> = sprungCount.settled;
+const settledFlag: boolean = springSettled();
 const jumpResult: void = sprungCount.jump(0);
-void [springValue, jumpResult];
+const impulseResult: void = sprungCount.impulse(120);
+const configureResult: void = sprungCount.configure(springPhysics);
+const [retainedInput] = createSignal<{ id: string } | null>(null);
+const retainedOptions: RetainedPresenceOptions = { settled: sprungCount.settled };
+const retained: RetainedPresenceController<{ id: string }> = createRetainedPresence(
+  retainedInput,
+  retainedOptions,
+);
+const asPresence: PresenceController = retained;
+const retainedPresent: boolean = retained.present();
+const retainedValue: { id: string } | undefined = retained.value();
+void [
+  springValue,
+  settledFlag,
+  jumpResult,
+  impulseResult,
+  configureResult,
+  asPresence,
+  retainedPresent,
+  retainedValue,
+];
 const [optional, setOptional] = createSignal<string>();
 setOptional();
 const doubled = createMemo(() => count() * 2);

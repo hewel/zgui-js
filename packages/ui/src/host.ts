@@ -7,7 +7,6 @@ import {
   onCleanup,
   resetErrorHalt,
   runWithOwner,
-  untrack,
   useContext,
 } from "#solid";
 import type { Owner } from "#solid";
@@ -190,8 +189,30 @@ export type UiBridge = NativeHost["__zgui"];
 const Region = createContext<UiBridge | null>(null);
 const nodeBridges = new WeakMap<NativeNode, UiBridge>();
 let regionProviders = 0;
+const regionPresenceListeners = new Set<(hasRegions: boolean) => void>();
 let callbackBridge: UiBridge | undefined;
 let callbackOwner: Owner | null = null;
+
+function notifyRegionPresence(hasRegions: boolean): void {
+  for (const listener of [...regionPresenceListeners]) {
+    listener(hasRegions);
+  }
+}
+
+/** Subscribe to transitions between zero and one-or-more mounted SDK regions. */
+export function onRegionPresenceChange(listener: (hasRegions: boolean) => void): () => void {
+  regionPresenceListeners.add(listener);
+  return () => {
+    regionPresenceListeners.delete(listener);
+  };
+}
+
+/** Whether the current runtime is a rootless shell with zero mounted surface regions. */
+export function isRootlessWithoutRegions(): boolean {
+  return (
+    regionProviders === 0 && globalThis.__zgui === undefined && globalThis.__zguiShell !== undefined
+  );
+}
 
 /** Resolves an explicit target without consulting the current owner or ambient bridge. */
 export function bridgeForTarget(node: NativeNode): UiBridge {
@@ -224,8 +245,10 @@ export function sessionScopeKey(bridge?: UiBridge): object | undefined {
 interface MotionState {
   hostValue: () => boolean;
   setHostValue: (next: boolean) => void;
+  currentHostValue: boolean;
   override: () => boolean | null;
   setOverride: (next: boolean | null) => void;
+  currentOverride: boolean | null;
   subscribedBridges: WeakSet<UiBridge>;
 }
 
@@ -248,7 +271,15 @@ function ensureMotionState(bridge?: UiBridge): MotionState {
     const initial = bridge ? bridge.getReducedMotion() : false;
     const [hostValue, setHostValue] = createSignal(initial, { ownedWrite: true });
     const [override, setOverride] = createSignal<boolean | null>(null);
-    state = { hostValue, setHostValue, override, setOverride, subscribedBridges: new WeakSet() };
+    state = {
+      hostValue,
+      setHostValue,
+      currentHostValue: initial,
+      override,
+      setOverride,
+      currentOverride: null,
+      subscribedBridges: new WeakSet(),
+    };
     motionStates.set(key, state);
   }
   return state;
@@ -261,11 +292,15 @@ function subscribeMotionBridge(
 ): (() => void) | undefined {
   if (state.subscribedBridges.has(bridge)) return undefined;
   const current = bridge.getReducedMotion();
-  if (current !== untrack(state.hostValue)) state.setHostValue(current);
+  if (current !== state.currentHostValue) {
+    state.currentHostValue = current;
+    state.setHostValue(current);
+  }
   let unsubscribe: (() => void) | undefined;
   if (bridge.subscribeReducedMotion) {
     try {
       unsubscribe = bridge.subscribeReducedMotion(next => {
+        state.currentHostValue = next;
         state.setHostValue(next);
         flushMotion();
       });
@@ -296,7 +331,9 @@ export function getReducedMotion(): boolean {
   const bridge = tryBridgeFor();
   const state = ensureMotionState(bridge);
   if (bridge) subscribeMotionBridge(state, bridge, true);
-  return state.override() ?? state.hostValue();
+  state.override();
+  state.hostValue();
+  return state.currentOverride ?? state.currentHostValue;
 }
 
 /** Override reduced motion dynamically for this session, or pass `null` to follow the host/desktop setting. */
@@ -307,6 +344,7 @@ export function setReducedMotion(value: boolean | null): void {
   const bridge = tryBridgeFor();
   const state = ensureMotionState(bridge);
   if (bridge) subscribeMotionBridge(state, bridge, true);
+  state.currentOverride = value;
   state.setOverride(value);
 }
 
@@ -316,9 +354,11 @@ export function rememberBridge(node: NativeNode, bridge: UiBridge): NativeNode {
 }
 
 export function provideRegion(bridge: UiBridge, mount: () => void): void {
+  const wasEmpty = regionProviders === 0;
   regionProviders += 1;
   onCleanup(() => {
     regionProviders -= 1;
+    if (regionProviders === 0) notifyRegionPresence(false);
   });
   let owner: Owner | null = null;
   const children = Region({
@@ -331,6 +371,7 @@ export function provideRegion(bridge: UiBridge, mount: () => void): void {
   // Evaluate the provider before mounting so native mount errors propagate directly.
   if (typeof children === "function") createMemo(children)();
   runWithOwner(owner, mount);
+  if (wasEmpty && regionProviders > 0) notifyRegionPresence(true);
 }
 
 export function withCallbackBridge<T>(bridge: UiBridge, fn: () => T): T {

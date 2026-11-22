@@ -1,5 +1,6 @@
 import { Image, LayerSurface, PopupSurface, SessionLockSurface, TextField, TextArea, WindowSurface, createCanvasScene, createSpring, getSessionGeneration, renderApp, renderShell, requestSessionLock, useMonitors } from "@hewel/zgui";
 import type { BlurRegion, NativeElementProps, NativeNode } from "@hewel/zgui";
+import { createRetainedPresence } from "@hewel/zgui/primitives";
 
 // @ts-expect-error Browser document is not a host global.
 document.createElement("div");
@@ -187,3 +188,17 @@ void <PopupSurface name="menu" parent="panel" anchorNode={fabricated}
 void <PopupSurface name="menu" parent="panel" anchorNode={fabricated} />;
 // @ts-expect-error Wayland popup placement uses physical positions.
 void <PopupSurface name="menu" parent="panel" anchorNode={fabricated} width={10} height={10} placement={{ gravity: "inline-start" }} />;
+const negSpring = createSpring(() => 0);
+// @ts-expect-error initial is mount-only and rejected by configure().
+negSpring.configure({ initial: 0 });
+// @ts-expect-error initial is a mount-only number, not a reactive accessor.
+createSpring(() => 0, { initial: () => 0 });
+// @ts-expect-error impulse requires a numeric velocity delta.
+negSpring.impulse("50");
+// @ts-expect-error settled must be an Accessor<boolean>, not a raw boolean.
+createRetainedPresence(() => "a", { settled: true });
+// @ts-expect-error createRetainedPresence has no exitDelayMs option.
+createRetainedPresence(() => "a", { exitDelayMs: 200 });
+const negRetained = createRetainedPresence(() => "a");
+// @ts-expect-error createRetainedPresence has no finishExit method.
+negRetained.finishExit();
