@@ -63,7 +63,8 @@ Never invoke host services at module top level; call them inside component mount
 - **IPC & Processes**: `connectUnixSocket`, `spawnCommand`, `onControlMessage`
 - **Clipboard**: `readClipboardText`, `clipboardReadText`, `writeClipboardText`, `readClipboardImage`, `clipboardReadImage`, `writeClipboardImage`
 - **Files & Bookmarks**: `openFileDialog`, `saveFileDialog`, `openDirectoryDialog`, `openAuthorizedDirectory`, `persistHandle`, `restoreBookmark`, `listBookmarks`, `revokeBookmark`, `watchDirectory`
-- **SQLite & KV**: `openDatabase`, `openKvStore`
+- **SQLite & KV**: `openDatabase`, `openKvStore`, `createKvState` (owner-scoped single-key `{ v, data }` persistence over a borrowed `KvStateStorage` with `validate`, serialized coalescing writeback, and async durability `KvState.flush()` — distinct from Solid's synchronous render `flush()`)
+- **Reactive Host Reads**: `createHostQuery` (owner-scoped latest-wins `HostRequest<T>` adapter with generation cancellation and `keepPreviousData`)
 - **Network (Origin-Allowlisted)**: `httpRequest`, `openEventStream`, `connectWebSocket`, `createScopedFetch`
 - **Workers**: `spawnWorker`
 

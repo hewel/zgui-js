@@ -400,3 +400,9 @@ export type {
 
 export { spawnWorker } from "./worker";
 export type { WorkerErrorEvent, WorkerHandle, WorkerOptions } from "./worker";
+
+export { createKvState } from "./kv-state";
+export type { KvState, KvStateOptions, KvStateStorage } from "./kv-state";
+
+export { createHostQuery } from "./host-query";
+export type { HostQuery, HostQueryOptions } from "./host-query";

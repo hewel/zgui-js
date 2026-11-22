@@ -1,4 +1,4 @@
-import { Image, LayerSurface, PopupSurface, SessionLockSurface, TextField, TextArea, WindowSurface, createCanvasScene, createSpring, getSessionGeneration, renderApp, renderShell, requestSessionLock, useMonitors } from "@hewel/zgui";
+import { Image, LayerSurface, PopupSurface, SessionLockSurface, TextField, TextArea, WindowSurface, createCanvasScene, createProjection, createSpring, createStore, getSessionGeneration, reconcile, renderApp, renderShell, requestSessionLock, useMonitors } from "@hewel/zgui";
 import type { BlurRegion, NativeElementProps, NativeNode } from "@hewel/zgui";
 import { createRetainedPresence } from "@hewel/zgui/primitives";
 
@@ -202,3 +202,24 @@ createRetainedPresence(() => "a", { exitDelayMs: 200 });
 const negRetained = createRetainedPresence(() => "a");
 // @ts-expect-error createRetainedPresence has no finishExit method.
 negRetained.finishExit();
+
+interface NegReadonlyStore {
+  readonly fontSize: number;
+  readonly nested: { readonly label: string };
+}
+const [, setNegStore] = createStore<NegReadonlyStore>({ fontSize: 14, nested: { label: "a" } });
+// @ts-expect-error Solid 2.0 store setters do not accept v1 path-setter arguments.
+setNegStore("fontSize", 16);
+setNegStore(draft => {
+  // @ts-expect-error Own-slot Draft<T> does not strip readonly on nested objects.
+  draft.nested.label = "b";
+});
+// @ts-expect-error Seedless createStore rejects array roots.
+createStore(() => [1, 2, 3]);
+// @ts-expect-error Seedless createProjection rejects array roots.
+createProjection(() => [1, 2, 3]);
+// @ts-expect-error seedLoadingValue is disallowed on seedless projections.
+createProjection(() => ({ ok: true }), null, { seedLoadingValue: true });
+// @ts-expect-error reconcile returns void, not a data value to consume.
+const reconciledData: number[] = reconcile([1, 2])([0]);
+void reconciledData;

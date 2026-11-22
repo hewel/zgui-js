@@ -2,6 +2,8 @@ import {
   clipboardReadImage,
   clipboardReadText,
   connectUnixSocket,
+  createHostQuery,
+  createKvState,
   getAuthorizedEndpoint,
   getResolvedCapabilities,
   listBookmarks,
@@ -37,9 +39,15 @@ import type {
   CommandResult,
   DirHandle,
   FileHandle,
+  HostQuery,
+  HostQueryOptions,
   HostRequest,
   HostServiceError,
   ImageHandle,
+  JsonValue,
+  KvState,
+  KvStateOptions,
+  KvStateStorage,
   KvStore,
   ResolvedCapabilities,
   SqlExecuteResult,
@@ -247,6 +255,69 @@ const kv: KvStore<{ readonly theme: string }> = openKvStore<{ readonly theme: st
 );
 const kvVal: Promise<{ readonly theme: string } | null> = kv.get("ui");
 kv.close();
+
+const rawKv: KvStore<JsonValue> = openKvStore("main", "settings");
+const borrowedKv: KvStateStorage = rawKv;
+type DemoPrefs = { readonly theme: string; readonly fontSize: number };
+const kvStateOpts: KvStateOptions<DemoPrefs> = {
+  validate: raw => raw as DemoPrefs,
+  version: 2,
+  debounceMs: 120,
+};
+const kvState: KvState<DemoPrefs> = createKvState(
+  borrowedKv,
+  "settings",
+  { theme: "dark", fontSize: 14 },
+  kvStateOpts,
+);
+const {
+  value: readKv,
+  set: writeKv,
+  reset: resetKv,
+  hydrated,
+  saving,
+  error: kvErr,
+  flush: flushKv,
+} = kvState;
+writeKv(prev => ({ ...prev, fontSize: prev.fontSize + 1 }));
+resetKv();
+const kvFlushPromise: Promise<void> = flushKv();
+const kvSnapshot: DemoPrefs = readKv();
+const kvFlags: readonly [boolean, boolean, Error | undefined] = [hydrated(), saving(), kvErr()];
+// @ts-expect-error createKvState requires a synchronous validate function.
+createKvState(borrowedKv, "settings", { theme: "dark" }, {});
+// @ts-expect-error createKvState rejects non-JSON initial values.
+createKvState(borrowedKv, "settings", { bad: () => {} }, { validate: raw => raw as never });
+
+const queryOpts: HostQueryOptions<string> = {
+  initialValue: "",
+  keepPreviousData: true,
+  onError(err) {
+    const msg: string = err.message;
+    void msg;
+  },
+};
+const query: HostQuery<string> = createHostQuery(
+  (): string | null | undefined | false => "assets/a.txt",
+  path => {
+    const narrowed: string = path;
+    return readTextAsset(narrowed);
+  },
+  queryOpts,
+);
+const { data: queryData, loading: queryLoading, error: queryError, refetch: queryRefetch } = query;
+queryRefetch();
+const queryOut: readonly [string | undefined, boolean, Error | undefined] = [
+  queryData(),
+  queryLoading(),
+  queryError(),
+];
+createHostQuery(
+  () => "a",
+  // @ts-expect-error createHostQuery requires a synchronous HostRequest fetcher, not a bare Promise.
+  async input => input,
+);
+void [kvFlushPromise, kvSnapshot, kvFlags, queryOut];
 
 void [sqlQueryReq, sqlExecReq, sqlBatchReq, sqlTxPromise, kvVal];
 

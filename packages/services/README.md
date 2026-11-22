@@ -209,6 +209,28 @@ never uses live environment or host file access to resolve them. Socket scripts
 and image mappings use the resolved literal paths. An undeclared endpoint
 query records a sticky `E_CAPABILITY` failure even when the exception is caught.
 
+## Reactive persistence and query adapters
+
+Keep Solid 2.0 as the sole client state model (`createSignal` → `createContext` → `createStore` / `createProjection` / `reconcile`). `@hewel/zgui-services` provides two narrow owner-scoped adapters where Solid meets Native Host I/O:
+
+### `createKvState(kv, key, initial, options)`
+
+Binds one versioned key of a borrowed `KvStateStorage` (`KvStore<JsonValue>` satisfies this directly) to Solid signals without opening or closing the database.
+
+- Requires an active Solid owner, nonempty `key`, safe-integer `version` (default `1`), integer `debounceMs` in `0..0xffffffff` (default `180`), and synchronous `options.validate(raw)`.
+- Publishes the validated frozen JSON `initial` snapshot synchronously for non-blocking first paint, then launches one `kv.get(key)`. Persists `{ v: version, data: value }` in one `kv.set`.
+- Early `set` / `reset` calls before hydration finishes win as a whole record; functional updaters receive the last accepted local snapshot so same-turn updates compose cleanly.
+- Serializes at most one in-flight `kv.set` with trailing debounce and coalesces newer edits into the latest pending snapshot. Write failures retain the dirty snapshot, surface `error()`, and stop automatic retries until a later edit or `flush()`.
+- **`KvState.flush()` vs Solid `flush()`**: `KvState.flush(): Promise<void>` is an **asynchronous disk durability barrier** that bypasses debounce, waits for hydration and any preceding write, and resolves once the caller's revision (or a newer coalesced revision) persists (or rejects on write failure / disposal). It is unrelated to `@hewel/zgui`'s synchronous Solid render `flush()`.
+
+### `createHostQuery(source, fetcher, options?)`
+
+Non-suspending latest-wins adapter for replaceable cancellable `HostRequest<T>` reads (such as SQLite FTS queries or text asset loads — not mutations or an HTTP cache).
+
+- Requires an active Solid owner; tracks only `source` and explicit `refetch()` calls. `0` and `""` are enabled; `null`, `undefined`, and `false` disable, cancel any pending request, and reset `data()` to `initialValue` regardless of `keepPreviousData`.
+- `fetcher(input)` must synchronously return a `HostRequest<T>` (bare `Promise`s are rejected).
+- On source change, `refetch()`, disabling, or owner cleanup, invalidates the previous generation before calling `old.cancel()`, coalesces same-turn source changes + `refetch()`, preserves previous `data()` by default (`keepPreviousData: true`), discards superseded settlements without clearing active `loading()`, and suppresses only its own generation cancellations (never blindly swallowing an external `Cancelled` error on the current request).
+
 ## Runtime boundaries
 
 This package provides generic resource and communication services, not

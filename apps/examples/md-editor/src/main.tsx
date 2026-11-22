@@ -42,11 +42,28 @@ function StudioShell() {
   const navigate = useNavigate();
   const windowState = useWindowState();
 
+  let closingWindow = false;
+  const flushAndForceClose = () => {
+    if (closingWindow) return;
+    closingWindow = true;
+    void studio
+      .flushPrefs()
+      .catch(() => {
+        // Persistence errors are surfaced via studio.prefsError()
+      })
+      .finally(() => {
+        closeWindow({ force: true });
+      });
+  };
+
   onCloseRequest(event => {
     if (studio.hasUnsavedChanges()) {
       event.preventDefault();
       studio.setCloseDialogOpen(true);
+      return;
     }
+    event.preventDefault();
+    flushAndForceClose();
   });
 
   const docOptions = createMemo<readonly SelectOption[]>(() =>
@@ -243,7 +260,7 @@ function StudioShell() {
                 variant="destructive"
                 onClick={() => {
                   studio.setCloseDialogOpen(false);
-                  closeWindow({ force: true });
+                  flushAndForceClose();
                 }}
               >
                 Discard & Close
@@ -254,7 +271,7 @@ function StudioShell() {
                   void studio.saveActiveDocument().then(ok => {
                     if (ok) {
                       studio.setCloseDialogOpen(false);
-                      closeWindow({ force: true });
+                      flushAndForceClose();
                     }
                   });
                 }}

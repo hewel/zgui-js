@@ -2,11 +2,20 @@ import {
   LayerSurface,
   PopupSurface,
   WindowSurface,
+  createProjection,
   createSpring,
+  createStore,
   cx,
   renderApp,
 } from "@hewel/zgui";
-import type { BlurRegion, NativeNode, SpringOptions, SpringPhysicsOptions } from "@hewel/zgui";
+import type {
+  BlurRegion,
+  NativeNode,
+  ProjectionOptions,
+  SpringOptions,
+  SpringPhysicsOptions,
+  StoreOptions,
+} from "@hewel/zgui";
 import { Button, ThemeProvider } from "@hewel/zgui/components";
 import {
   MenuCheckboxItemPrimitive,
@@ -22,7 +31,15 @@ import {
 } from "@hewel/zgui/primitives";
 import type { RetainedPresenceOptions } from "@hewel/zgui/primitives";
 import { createRouter, RouterProvider, Outlet } from "@hewel/zgui/router";
-import { httpRequest, spawnWorker } from "@hewel/zgui-services";
+import {
+  createHostQuery,
+  createKvState,
+  httpRequest,
+  openKvStore,
+  readTextAsset,
+  spawnWorker,
+} from "@hewel/zgui-services";
+import type { HostQueryOptions, KvStateOptions } from "@hewel/zgui-services";
 
 const maybeDisabled: boolean | undefined = undefined;
 const maybeChecked: boolean | undefined = undefined;
@@ -46,12 +63,47 @@ export function strictOptionalProbe(root: NativeNode) {
   spring.configure({ stiffness: undefined, damping: undefined });
   const retainedOpts: RetainedPresenceOptions = { settled: undefined };
   const retained = createRetainedPresence(() => (overlay.open() ? "ok" : null), retainedOpts);
+  const storeOpts: StoreOptions = { name: undefined, loc: undefined, shallow: undefined };
+  const projOpts: ProjectionOptions = {
+    name: undefined,
+    loc: undefined,
+    shallow: undefined,
+    key: undefined,
+    seedLoadingValue: undefined,
+  };
+  const [strictStore] = createStore({ count: 0 }, storeOpts);
+  const strictProj = createProjection(
+    draft => {
+      draft.count = strictStore.count;
+    },
+    { count: 0 },
+    projOpts,
+  );
+  const kvOpts: KvStateOptions<{ readonly count: number }> = {
+    validate: raw => raw as { readonly count: number },
+    version: undefined,
+    debounceMs: undefined,
+  };
+  const strictKv = createKvState(openKvStore("main", "strict"), "k", { count: 0 }, kvOpts);
+  const queryOpts: HostQueryOptions<string> = {
+    initialValue: undefined,
+    keepPreviousData: undefined,
+    onError: undefined,
+  };
+  const strictQuery = createHostQuery(
+    () => (overlay.open() ? "assets/a.txt" : false),
+    path => readTextAsset(path),
+    queryOpts,
+  );
   const roving = createRovingFocus(() => "vertical");
   void [
     presence.mounted(),
     spring.settled(),
     retained.present(),
     retained.value(),
+    strictProj.count,
+    strictKv.value(),
+    strictQuery.data(),
     roving.active(),
   ];
   void httpRequest;

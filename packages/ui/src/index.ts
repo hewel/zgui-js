@@ -28,7 +28,15 @@ export {
   refresh,
   action,
 } from "#solid";
-export type { Context, Owner, Store, StoreReturn, StoreSetter } from "#solid";
+export type {
+  Context,
+  Owner,
+  ProjectionOptions,
+  Store,
+  StoreOptions,
+  StoreReturn,
+  StoreSetter,
+} from "#solid";
 
 export { flush } from "./renderer/index.js";
 

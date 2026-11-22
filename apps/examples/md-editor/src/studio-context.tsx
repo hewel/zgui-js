@@ -15,14 +15,25 @@ import {
 import type { Accessor, NativeNode, TextSelectionRange } from "@hewel/zgui";
 import { toast } from "@hewel/zgui/components";
 import type { ColorScheme, ThemePreset, TreeNodeData } from "@hewel/zgui/components";
-import { readClipboardImage, registerImageBytes, writeClipboardText } from "@hewel/zgui-services";
+import {
+  createHostQuery,
+  createKvState,
+  readClipboardImage,
+  registerImageBytes,
+  writeClipboardText,
+} from "@hewel/zgui-services";
 import type { BookmarkInfo, ImageHandle, WatchEvent } from "@hewel/zgui-services";
 import { buildOutlineTree, parseMarkdown, toggleTaskAtLine } from "./markdown.js";
 import type { OutlineNodeMeta, ParsedDocument } from "./markdown.js";
 import { INITIAL_DOCS, buildPipelineSvg, buildStressMarkdown, encodeUtf8Bytes } from "./samples.js";
 import type { MarkdownDoc } from "./samples.js";
-import { DEFAULT_PREFS, createStudioStorage } from "./storage.js";
-import type { SearchHit } from "./storage.js";
+import {
+  DEFAULT_PREFS,
+  createStudioStorage,
+  sanitizeFtsQuery,
+  validateStudioPrefs,
+} from "./storage.js";
+import type { SearchHit, StudioPrefs } from "./storage.js";
 import { createWorkspaceController } from "./workspace.js";
 import type { WorkspaceNodeMeta } from "./workspace.js";
 
@@ -76,7 +87,13 @@ export interface StudioState {
   readonly searchQuery: Accessor<string>;
   readonly setSearchQuery: (q: string) => void;
   readonly searchHits: Accessor<readonly SearchHit[]>;
-  readonly runSearch: (query: string) => Promise<void>;
+  readonly searchLoading: Accessor<boolean>;
+  readonly searchError: Accessor<Error | undefined>;
+  readonly refetchSearch: () => void;
+  readonly prefsHydrated: Accessor<boolean>;
+  readonly prefsSaving: Accessor<boolean>;
+  readonly prefsError: Accessor<Error | undefined>;
+  readonly flushPrefs: () => Promise<void>;
 
   readonly prefsWindowOpen: Accessor<boolean>;
   readonly setPrefsWindowOpen: (open: boolean) => void;
@@ -131,11 +148,17 @@ export function createStudioState(): StudioState {
   const storage = createStudioStorage();
   const workspace = createWorkspaceController();
 
-  const [scheme, setSchemeRaw] = createSignal<ColorScheme>(DEFAULT_PREFS.scheme);
-  const [preset, setPresetRaw] = createSignal<ThemePreset>(DEFAULT_PREFS.preset);
-  const [fontSize, setFontSizeRaw] = createSignal<number>(DEFAULT_PREFS.fontSize);
-  const [splitSizes, setSplitSizesRaw] = createSignal<readonly number[]>(DEFAULT_PREFS.splitSizes);
-  const [lastBookmark, setLastBookmark] = createSignal<string | null>(null);
+  const prefs = createKvState<StudioPrefs>(storage.prefsStorage, "settings", DEFAULT_PREFS, {
+    validate: validateStudioPrefs,
+    version: 1,
+    debounceMs: 180,
+  });
+
+  const scheme = () => prefs.value().scheme;
+  const preset = () => prefs.value().preset;
+  const fontSize = () => prefs.value().fontSize;
+  const splitSizes = () => prefs.value().splitSizes;
+  const lastBookmark = () => prefs.value().lastWorkspaceBookmark;
   const [viewMode, setViewMode] = createSignal<ViewMode>("split");
 
   const [docs, setDocs] = createSignal<readonly MarkdownDoc[]>(INITIAL_DOCS);
@@ -159,9 +182,9 @@ export function createStudioState(): StudioState {
   const [statusMsg, setStatusMsg] = createSignal("Ready — local-first Markdown Studio");
   const [lastCopiedSnippet, setLastCopiedSnippet] = createSignal("");
 
+  const [ftsReady, setFtsReady] = createSignal(false);
   const [indexedCount, setIndexedCount] = createSignal(0);
   const [searchQuery, setSearchQuery] = createSignal("");
-  const [searchHits, setSearchHits] = createSignal<readonly SearchHit[]>([]);
 
   const [prefsWindowOpen, setPrefsWindowOpen] = createSignal(false);
   const [closeDialogOpen, setCloseDialogOpen] = createSignal(false);
@@ -171,9 +194,26 @@ export function createStudioState(): StudioState {
   const headingNodes = new Map<number, NativeNode>();
   const highlightTimer = createDelay();
   const reindexTimer = createDelay();
-  const prefsSaveTimer = createDelay();
   let pastedHandle: ImageHandle | null = null;
   let disposed = false;
+
+  const searchHostQuery = createHostQuery(
+    () => {
+      if (!ftsReady()) return false;
+      const sanitized = sanitizeFtsQuery(searchQuery());
+      return sanitized.length > 0 ? searchQuery() : false;
+    },
+    query => storage.searchNotes(query),
+    {
+      initialValue: [] as readonly SearchHit[],
+      onError: err => {
+        if (!disposed) {
+          setStatusMsg(`Search failed: ${err.message}`);
+        }
+      },
+    },
+  );
+  const searchHits = () => searchHostQuery.data() ?? [];
 
   onCleanup(() => {
     disposed = true;
@@ -183,6 +223,15 @@ export function createStudioState(): StudioState {
     storage.close();
     headingNodes.clear();
   });
+
+  createEffect(
+    () => prefs.error(),
+    err => {
+      if (!err || disposed) return;
+      setStatusMsg(`Preferences error: ${err.message}`);
+      toast.error("Preferences persistence failed", { description: err.message });
+    },
+  );
 
   createEffect(
     () => scheme() === "dark",
@@ -221,49 +270,34 @@ export function createStudioState(): StudioState {
     return { chars: text.length, words, lines, readMin };
   });
 
-  const persistCurrentPrefs = (immediate = false) => {
-    const commit = () => {
-      if (disposed) return;
-      void storage
-        .savePrefs({
-          scheme: scheme(),
-          preset: preset(),
-          fontSize: fontSize(),
-          splitSizes: splitSizes(),
-          lastWorkspaceBookmark: lastBookmark(),
-        })
-        .catch(() => {});
-    };
-    if (immediate) {
-      prefsSaveTimer.cancel();
-      commit();
-    } else {
-      prefsSaveTimer.schedule(180, commit);
-    }
-  };
-
   const setScheme = (next: ColorScheme) => {
-    setSchemeRaw(next);
-    persistCurrentPrefs(true);
+    prefs.set(prev => ({ ...prev, scheme: next }));
   };
   const setPreset = (next: ThemePreset) => {
-    setPresetRaw(next);
-    persistCurrentPrefs(true);
+    prefs.set(prev => ({ ...prev, preset: next }));
   };
   const setFontSize = (next: number) => {
-    setFontSizeRaw(next);
-    persistCurrentPrefs();
+    prefs.set(prev => ({ ...prev, fontSize: next }));
   };
   const setSplitSizes = (next: readonly number[]) => {
-    setSplitSizesRaw(next);
-    persistCurrentPrefs();
+    prefs.set(prev => ({ ...prev, splitSizes: [...next] }));
+  };
+  const setLastBookmark = (next: string | null) => {
+    prefs.set(prev => ({ ...prev, lastWorkspaceBookmark: next }));
   };
 
   const reindexAll = async (list: readonly MarkdownDoc[]) => {
     if (disposed) return;
     try {
       const count = await storage.indexDocuments(list);
-      if (!disposed) setIndexedCount(count);
+      if (disposed) return;
+      const wasReady = ftsReady();
+      setIndexedCount(count);
+      if (!wasReady) {
+        setFtsReady(true);
+      } else if (sanitizeFtsQuery(searchQuery()).length > 0) {
+        searchHostQuery.refetch();
+      }
     } catch {
       // Ignore if disposed during shutdown
     }
@@ -344,26 +378,17 @@ export function createStudioState(): StudioState {
     })();
   };
 
-  // Defer SQLite/bookmark bootstrap to next turn so initial mount stays well inside entry budget
-  const bootstrapTimer = createDelay();
-  bootstrapTimer.schedule(0, () => {
-    if (disposed) return;
-    void (async () => {
-      try {
-        const prefs = await storage.loadPrefs();
-        if (disposed) return;
-        setSchemeRaw(prefs.scheme);
-        setPresetRaw(prefs.preset);
-        setFontSizeRaw(prefs.fontSize);
-        setSplitSizesRaw(prefs.splitSizes);
-        setLastBookmark(prefs.lastWorkspaceBookmark);
-        await reindexAll(docs());
-        await refreshBookmarks();
-        if (prefs.lastWorkspaceBookmark) {
-          const restored = await workspace.restoreWorkspaceBookmark(
-            prefs.lastWorkspaceBookmark,
-            handleExternalEvents,
-          );
+  let restoredHydratedBookmark = false;
+  createEffect(
+    () => prefs.hydrated(),
+    hydrated => {
+      if (!hydrated || restoredHydratedBookmark || disposed) return;
+      restoredHydratedBookmark = true;
+      const bookmark = prefs.value().lastWorkspaceBookmark;
+      if (!bookmark || workspaceName()) return;
+      void workspace
+        .restoreWorkspaceBookmark(bookmark, handleExternalEvents)
+        .then(restored => {
           if (restored && !disposed) {
             setWorkspaceName(restored.dir.name);
             setWorkspaceTree(restored.scanned.tree);
@@ -371,7 +396,23 @@ export function createStudioState(): StudioState {
             mergeWorkspaceDocs(restored.scanned.docs, true);
             setStatusMsg(`Restored workspace "${restored.dir.name}"`);
           }
-        }
+        })
+        .catch(() => {
+          // Ignore unavailable/revoked bookmark on startup
+        });
+    },
+  );
+
+  // Defer SQLite FTS & bookmark bootstrap to next turn so initial mount stays well inside entry budget
+  const bootstrapTimer = createDelay();
+  bootstrapTimer.schedule(0, () => {
+    if (disposed) return;
+    void (async () => {
+      try {
+        await storage.init();
+        if (disposed) return;
+        await reindexAll(docs());
+        await refreshBookmarks();
       } catch {
         // Fallback gracefully to in-memory defaults
       }
@@ -529,7 +570,6 @@ export function createStudioState(): StudioState {
       mergeWorkspaceDocs(opened.scanned.docs, true);
       if (opened.bookmarkToken) {
         setLastBookmark(opened.bookmarkToken);
-        persistCurrentPrefs(true);
       }
       await refreshBookmarks();
       setStatusMsg(`Opened workspace "${opened.dir.name}" (${opened.scanned.docs.length} files)`);
@@ -555,7 +595,6 @@ export function createStudioState(): StudioState {
       setWorkspaceExpanded(restored.scanned.expandedDirIds);
       mergeWorkspaceDocs(restored.scanned.docs, true);
       setLastBookmark(token);
-      persistCurrentPrefs(true);
       toast.success(`Restored "${restored.dir.name}"`);
     } catch (err) {
       toast.error("Restore bookmark failed", {
@@ -569,7 +608,6 @@ export function createStudioState(): StudioState {
       const ok = await workspace.revokeSavedBookmark(token);
       if (ok && lastBookmark() === token) {
         setLastBookmark(null);
-        persistCurrentPrefs(true);
       }
       await refreshBookmarks();
       if (ok) toast.info("Revoked workspace bookmark");
@@ -577,16 +615,6 @@ export function createStudioState(): StudioState {
       toast.error("Revoke bookmark failed", {
         description: err instanceof Error ? err.message : String(err),
       });
-    }
-  };
-
-  const runSearch = async (rawQuery: string) => {
-    setSearchQuery(rawQuery);
-    try {
-      const hits = await storage.searchNotes(rawQuery);
-      if (!disposed) setSearchHits(hits);
-    } catch {
-      if (!disposed) setSearchHits([]);
     }
   };
 
@@ -608,12 +636,13 @@ export function createStudioState(): StudioState {
   };
 
   const resetPrefs = async () => {
-    setSchemeRaw(DEFAULT_PREFS.scheme);
-    setPresetRaw(DEFAULT_PREFS.preset);
-    setFontSizeRaw(DEFAULT_PREFS.fontSize);
-    setSplitSizesRaw(DEFAULT_PREFS.splitSizes);
-    persistCurrentPrefs(true);
+    prefs.reset();
     toast.info("Preferences reset to defaults");
+    try {
+      await prefs.flush();
+    } catch {
+      // Surfaced via prefs.error() effect
+    }
   };
 
   return {
@@ -655,7 +684,13 @@ export function createStudioState(): StudioState {
     searchQuery,
     setSearchQuery,
     searchHits,
-    runSearch,
+    searchLoading: searchHostQuery.loading,
+    searchError: searchHostQuery.error,
+    refetchSearch: searchHostQuery.refetch,
+    prefsHydrated: prefs.hydrated,
+    prefsSaving: prefs.saving,
+    prefsError: prefs.error,
+    flushPrefs: prefs.flush,
     prefsWindowOpen,
     setPrefsWindowOpen,
     closeDialogOpen,

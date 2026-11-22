@@ -37,21 +37,18 @@ export function SearchView() {
             <Input
               testId="fts-search-input"
               value={studio.searchQuery()}
-              onValueChange={q => void studio.runSearch(q)}
+              onValueChange={q => studio.setSearchQuery(q)}
               placeholder="Search notes (e.g. Wayland, SQLite, 渲染管线)..."
               label="Full-text search query"
             />
           </box>
-          <Button
-            testId="fts-search-btn"
-            onClick={() => void studio.runSearch(studio.searchQuery())}
-          >
+          <Button testId="fts-search-btn" onClick={() => studio.refetchSearch()}>
             Search
           </Button>
           <Button
             testId="fts-clear-btn"
             variant="outline"
-            onClick={() => void studio.runSearch("")}
+            onClick={() => studio.setSearchQuery("")}
           >
             Clear
           </Button>

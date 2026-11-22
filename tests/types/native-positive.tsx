@@ -25,8 +25,10 @@ import {
   onCleanup,
   onSettled,
   reconcile,
+  refresh,
   renderApp,
   renderShell,
+  snapshot,
   untrack,
   useContext,
   useMonitors,
@@ -87,11 +89,16 @@ import type {
   NativeWheelEvent,
   NativeWindowRect,
   ParentComponent,
+  ProjectionOptions,
   ScrollIntoViewOptions,
   ScrollToOptions,
   Spring,
   SpringOptions,
   SpringPhysicsOptions,
+  Store,
+  StoreOptions,
+  StoreReturn,
+  StoreSetter,
   TextFieldProps,
   TextAreaProps,
   TextSelectionRange,
@@ -158,14 +165,57 @@ const [state, setState] = createStore({ items: ["a"] });
 setState(draft => {
   draft.items.push("b");
 });
+interface ReadonlyPrefs {
+  readonly fontSize: number;
+  readonly note?: string;
+  readonly nested: { readonly label: string };
+}
+const storeOpts: StoreOptions = { name: "prefs", shallow: true };
+const prefsReturn: StoreReturn<ReadonlyPrefs> = createStore<ReadonlyPrefs>(
+  { fontSize: 14, nested: { label: "v1" } },
+  storeOpts,
+);
+const [prefsStore, setPrefsStore]: [Store<ReadonlyPrefs>, StoreSetter<ReadonlyPrefs>] = prefsReturn;
+setPrefsStore(draft => {
+  draft.fontSize = 16;
+  const maybeNote: string | undefined = draft.note;
+  draft.note = maybeNote ?? "updated";
+  draft.nested = { label: "v2" };
+});
+const prefsSnap: ReadonlyPrefs = snapshot(prefsStore);
+const projOpts: ProjectionOptions = { key: "id", seedLoadingValue: true };
 const projected = createProjection(
   draft => {
     draft.total = count();
   },
   { total: 0 },
+  projOpts,
 );
-const reconciled = reconcile(["c"]);
-void [state, projected, reconciled];
+const seedlessProj = createProjection(() => ({ count: count() }));
+const asyncProj = createProjection(async () => ({ count: count() }));
+const streamProj = createProjection(async function* () {
+  yield { count: count() };
+});
+const [derivedStore, setDerivedStore] = createStore(
+  async draft => {
+    draft.total = count();
+  },
+  { total: 0 },
+  { name: "derived" },
+);
+const [seedlessStore] = createStore(() => ({ active: count() > 0 }));
+void refresh(projected);
+void refresh(seedlessProj);
+void refresh(asyncProj);
+void refresh(streamProj);
+void refresh(derivedStore);
+void refresh(seedlessStore);
+setDerivedStore(reconcile({ total: 5 }));
+const reconciled: (state: string[]) => void = reconcile(["c"], null);
+setState(draft => {
+  reconciled(draft.items);
+});
+void [state, prefsSnap, projected, reconciled];
 createEffect(
   () => [doubled(), previous()] as const,
   ([d, p]) => {

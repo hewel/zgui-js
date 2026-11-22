@@ -1,5 +1,6 @@
 // Solid 2.x's public declarations include DOM/hydration types. This package-local
 // condition preserves native renderer node branding without acquiring browser globals.
+import type { Refreshable } from "@solidjs/signals";
 import type {
   Accessor,
   MemoOptions,
@@ -9,9 +10,30 @@ import type {
   SignalOptions,
 } from "./types.js";
 
+type NoFn<T> = T extends Function ? never : T;
+type NoArray<T> = Extract<T, readonly unknown[]> extends never ? unknown : never;
+type Key = string | ((item: any) => any) | null;
+type Answer<T> = T | Promise<T> | AsyncIterable<T>;
+type Draft<T> = { -readonly [P in keyof T]: T[P] };
+type Seedless<T> = (() => Answer<T>) & NoArray<T>;
+type Seeded<T> = (draft: Draft<T>) => Answer<T | void>;
+
 export type Store<T> = T;
-export type StoreSetter<T> = (fn: (draft: T) => T | void) => void;
+export type StoreSetter<T> = (fn: (draft: Draft<T>) => T | void) => void;
 export type StoreReturn<T> = [get: Store<T>, set: StoreSetter<T>];
+type Projected<T> = Refreshable<Store<T>>;
+
+export interface StoreOptions {
+  readonly name?: string | undefined;
+  readonly loc?: string | undefined;
+  readonly shallow?: boolean | undefined;
+}
+export interface ProjectionOptions extends StoreOptions {
+  readonly key?: Key | undefined;
+  readonly seedLoadingValue?: boolean | undefined;
+}
+type SeedlessOptions = Omit<ProjectionOptions, "seedLoadingValue">;
+
 export type Owner = object;
 
 export declare function createRoot<T>(callback: (dispose: () => void) => T): T;
@@ -130,18 +152,32 @@ type MergeSources<T extends readonly object[]> = T extends readonly [
 export declare function merge<T extends readonly object[]>(...sources: T): MergeSources<T>;
 
 export declare function createStore<T extends object = {}>(
-  initialValue: T,
-  options?: ReactiveOptions & { shallow?: boolean },
+  initial: NoFn<T>,
+  options?: StoreOptions,
 ): StoreReturn<T>;
+export declare function createStore<T extends object = {}>(
+  fn: Seedless<T>,
+  seed?: null,
+  options?: SeedlessOptions,
+): [get: Projected<T>, set: StoreSetter<T>];
+export declare function createStore<T extends object = {}>(
+  fn: Seeded<T>,
+  seed: NoFn<T>,
+  options?: ProjectionOptions,
+): [get: Projected<T>, set: StoreSetter<T>];
+
 export declare function createProjection<T extends object = {}>(
-  derive: (draft: T) => void | T,
-  seed: T,
-  options?: ReactiveOptions & { key?: string | ((item: any) => any) | null },
-): Store<T>;
-export declare function reconcile<T>(
-  value: T,
-  key?: string | ((item: any) => any) | null,
-): (state: T) => T;
+  fn: Seedless<T>,
+  seed?: null,
+  options?: SeedlessOptions,
+): Projected<T>;
+export declare function createProjection<T extends object = {}>(
+  fn: Seeded<T>,
+  seed: NoFn<T>,
+  options?: ProjectionOptions,
+): Projected<T>;
+
+export declare function reconcile<T extends U, U = T>(value: T, key?: Key): (state: U) => void;
 export declare function snapshot<T>(value: T): T;
 export declare function isPending(fn: () => unknown): boolean;
 export declare function latest<T>(fn: () => T): T;

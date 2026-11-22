@@ -221,6 +221,7 @@
       "name": "@hewel/zgui",
       "version": "0.1.0",
       "dependencies": {
+        "@solidjs/signals": "2.0.1",
         "@solidjs/universal": "2.0.1",
         "solid-js": "2.0.1",
       },
