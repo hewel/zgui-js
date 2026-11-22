@@ -33,6 +33,7 @@ const emptyResources = {
   timers: 0,
   frameCallbacks: 0,
   requests: 0,
+  shellSurfaces: 0,
   fonts: 0,
   engineAlive: false,
 };

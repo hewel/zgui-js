@@ -13,7 +13,6 @@
 use zgui_platform::{DecorationSource, Surface as _, SurfaceEvent, SurfaceId};
 
 use crate::driver::WaylandState;
-use crate::surface::role::toplevel;
 use crate::surface::role::xdg::configure::Pending;
 
 impl WaylandState {
@@ -58,7 +57,15 @@ impl WaylandState {
         let Some(surface) = self.live.surface(id) else {
             return;
         };
-        let pending = surface.shared().pending_configure.take();
+        let (pending, current) = {
+            let mut shared = surface.shared();
+            (shared.pending_configure.take(), shared.sequence.accepts())
+        };
+        // A configure for a mapping the surface left is dropped unacknowledged, see `sequence`.
+        if !current {
+            tracing::debug!(?id, serial, "dropped a configure sent before the unmap");
+            return;
+        }
         let Some(pending) = pending else {
             // A surface acknowledging a description it never received would be acknowledging
             // nothing; the compositor sends the two halves together.
@@ -66,15 +73,15 @@ impl WaylandState {
             return;
         };
 
-        let (resized, visibility, resizing, answered) = {
+        let (resized, visibility, resizing, answered, state_flip) = {
             let mut shared = surface.shared();
-            let extent = toplevel::extent(pending.size, shared.wanted, shared.logical);
-            let state_flip =
-                shared.maximized != pending.maximized || shared.fullscreen != pending.fullscreen;
-            shared.maximized = pending.maximized;
-            shared.fullscreen = pending.fullscreen;
+            let wanted = shared.wanted;
+            let (extent, state_flip) = shared.apply_shell_states(&pending, wanted);
             shared.resizing = pending.resizing;
-            shared.visibility.configured = true;
+            // A configure that reaches a surface the application hid answers a commit made before
+            // the hide. Drawing into it would map the surface again, so it waits for the show.
+            shared.visibility.configured |= !shared.unmapped;
+            shared.configured_unshown |= shared.unmapped;
             // The state this whole shell is bound at version six for, and the only signal on this
             // desktop that reliably says a window is not being seen.
             shared.visibility.suspended = pending.suspended;
@@ -89,11 +96,20 @@ impl WaylandState {
                 shared.visibility_edge(),
                 shared.resizing_edge(),
                 answered,
+                state_flip,
             )
         };
 
         surface.role().ack(serial);
         surface.popup_configured();
+        if state_flip {
+            // The runtime reads these states on resize, and a flip can keep the extent, so the
+            // flip is reported on its own. A flip that also resized reads the same state twice.
+            zgui_platform::Waker::wake(
+                self.live.waker.as_ref(),
+                zgui_platform::WakeReason::SurfaceStateChanged(id),
+            );
+        }
 
         if let Some(event) = visibility {
             self.report(id, event);

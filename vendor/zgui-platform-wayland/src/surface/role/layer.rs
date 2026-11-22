@@ -1,12 +1,14 @@
 //! A part of the desktop shell: what the contract asks for, in the shell's own terms.
 
 use smithay_client_toolkit::shell::wlr_layer::{
-    Anchor, KeyboardInteractivity, Layer, LayerSurface,
+    Anchor, KeyboardInteractivity, Layer, LayerSurface, SurfaceKind,
 };
-use smithay_client_toolkit::shell::wlr_layer::SurfaceKind;
 use wayland_client::Proxy;
-use zgui_geom::{Css, CssPx, Size};
-use zgui_platform::{LayerPlacement, PlatformError, Unsupported};
+use zgui_geom::{Css, CssPx, Edges, Size};
+use zgui_platform::{ExclusiveZone, LayerPlacement, PlatformError, Unsupported};
+
+/// The namespace a layer surface is made under when neither it nor the application names one.
+pub const DEFAULT_NAMESPACE: &str = "zgui";
 
 /// Which layer of the desktop, in the shell's numbering.
 pub const fn layer(layer: zgui_platform::Layer) -> Layer {
@@ -41,15 +43,71 @@ pub const fn keyboard(
 
 /// How much room the compositor should reserve, in whole logical pixels.
 ///
-/// An absent value uses protocol `-1`: ignore the space reserved by other surfaces.
-pub fn exclusive_zone(zone: Option<CssPx>) -> i32 {
-    zone.map_or(-1, |zone| zone.0.round().max(0.0) as i32)
+/// The shell spells the three answers as numbers: zero moves the surface out of the room other
+/// surfaces reserve, a positive number reserves that much, and -1 extends the surface under the
+/// room the others reserve. A reservation rounds to the nearest pixel and never goes below zero.
+pub fn exclusive_zone(zone: ExclusiveZone) -> i32 {
+    match zone {
+        ExclusiveZone::Reserve(room) => room.0.round().max(0.0) as i32,
+        ExclusiveZone::Ignore => -1,
+        _ => 0,
+    }
 }
 
-/// Applies the placement shared by initial creation and live reconfiguration.
+/// The extent to ask the shell for, in whole logical pixels.
+///
+/// An axis fastened to both of its edges is sent as zero, which is the shell's word for "as wide
+/// as the edges are apart". The shell centres a surface that states an extent on such an axis,
+/// at that extent. Every other axis is sent at least one pixel, because zero on an axis that is
+/// not fastened to both edges is a protocol error.
+pub fn size(size: Size<CssPx, Css>, anchors: Edges<bool>) -> (u32, u32) {
+    let axis = |extent: CssPx, stretched: bool| {
+        if stretched {
+            0
+        } else {
+            extent.0.round().max(1.0) as u32
+        }
+    };
+    (
+        axis(size.width, anchors.left && anchors.right),
+        axis(size.height, anchors.top && anchors.bottom),
+    )
+}
+
+/// The namespace the surface is made under: its own, the application's, or the default.
+///
+/// An empty name counts as no name.
+pub fn namespace<'a>(placement: &'a LayerPlacement, application: Option<&'a str>) -> &'a str {
+    let named = |name: &&str| !name.is_empty();
+    placement
+        .namespace
+        .as_deref()
+        .filter(named)
+        .or(application.filter(named))
+        .unwrap_or(DEFAULT_NAMESPACE)
+}
+
+/// Applies the placement fields shared by initial creation and live reconfiguration.
 pub(crate) fn apply(surface: &LayerSurface, placement: &LayerPlacement) {
     surface.set_anchor(anchor(placement.anchors));
     apply_fields(surface, placement);
+}
+
+/// Applies `placement` and `extent` to `surface` without committing it, preserving explicit
+/// positive extents on oppositely anchored axes.
+pub(crate) fn apply_with_extent(
+    surface: &LayerSurface,
+    placement: &LayerPlacement,
+    requested: Size<CssPx, Css>,
+) {
+    if version(surface) >= 2 {
+        surface.set_layer(layer(placement.layer));
+    }
+    surface.set_anchor(anchor(placement.anchors));
+    apply_fields(surface, placement);
+    let (width, height) = extent(requested, placement)
+        .unwrap_or_else(|_| size(requested, placement.anchors));
+    surface.set_size(width, height);
 }
 
 fn apply_fields(surface: &LayerSurface, placement: &LayerPlacement) {
@@ -137,10 +195,12 @@ pub(crate) fn reconfigure(
 
 #[cfg(test)]
 mod tests {
-    use super::{anchor, exclusive_zone, extent, keyboard, layer};
+    use super::{
+        DEFAULT_NAMESPACE, anchor, exclusive_zone, extent, keyboard, layer, namespace, size,
+    };
     use smithay_client_toolkit::shell::wlr_layer::{Anchor, KeyboardInteractivity, Layer};
     use zgui_geom::{CssPx, Edges, Size};
-    use zgui_platform::LayerPlacement;
+    use zgui_platform::{ExclusiveZone, LayerPlacement};
 
     #[test]
     fn layer_extent_accepts_the_largest_representable_f32_below_the_protocol_limit() {
@@ -179,15 +239,46 @@ mod tests {
     }
 
     #[test]
-    fn ignoring_other_reservations_differs_from_reserving_nothing() {
-        assert_eq!(exclusive_zone(None), -1);
-        assert_eq!(exclusive_zone(Some(CssPx(0.0))), 0);
-        assert_eq!(exclusive_zone(Some(CssPx(36.4))), 36);
+    fn avoiding_reserving_and_ignoring_are_three_different_numbers() {
+        // 0 moves out of the room a bar reserves; -1 extends under it. A pop-over that sent -1
+        // would open under the bar.
+        assert_eq!(exclusive_zone(ExclusiveZone::Avoid), 0);
+        assert_eq!(exclusive_zone(ExclusiveZone::Ignore), -1);
+        assert_eq!(exclusive_zone(ExclusiveZone::Reserve(CssPx(36.4))), 36);
     }
 
     #[test]
-    fn a_negative_reservation_is_clamped_rather_than_read_as_the_default() {
-        assert_eq!(exclusive_zone(Some(CssPx(-8.0))), 0);
+    fn a_negative_reservation_is_clamped_rather_than_read_as_ignoring() {
+        assert_eq!(exclusive_zone(ExclusiveZone::Reserve(CssPx(-8.0))), 0);
+    }
+
+    #[test]
+    fn an_axis_fastened_to_both_edges_is_sent_as_zero() {
+        let bar = Edges::new(true, true, false, true);
+        assert_eq!(size(Size::new(CssPx(1920.0), CssPx(34.0)), bar), (0, 34));
+        let corner = Edges::new(true, true, false, false);
+        assert_eq!(size(Size::new(CssPx(320.4), CssPx(0.0)), corner), (320, 1));
+        let full = Edges::new(true, true, true, true);
+        assert_eq!(size(Size::new(CssPx(10.0), CssPx(10.0)), full), (0, 0));
+    }
+
+    #[test]
+    fn the_namespace_falls_back_to_the_application_then_to_the_default() {
+        let named = LayerPlacement::default().with_namespace("bar");
+        assert_eq!(namespace(&named, Some("dev.example.Shell")), "bar");
+        let unnamed = LayerPlacement::default();
+        assert_eq!(
+            namespace(&unnamed, Some("dev.example.Shell")),
+            "dev.example.Shell"
+        );
+        assert_eq!(namespace(&unnamed, None), DEFAULT_NAMESPACE);
+        assert_eq!(namespace(&unnamed, Some("")), DEFAULT_NAMESPACE);
+        let empty = LayerPlacement::default().with_namespace("");
+        assert_eq!(
+            namespace(&empty, Some("dev.example.Shell")),
+            "dev.example.Shell"
+        );
+        assert_eq!(namespace(&empty, None), DEFAULT_NAMESPACE);
     }
 
     #[test]

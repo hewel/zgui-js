@@ -57,8 +57,9 @@ pub enum Command {
         /// Whether to animate getting there.
         behavior: ScrollBehavior,
     },
-    /// Route subsequent pointer events to this node until the button is released.
-    CapturePointer(NodeId),
+    /// Route the pointer's subsequent events to this node until its button is released or its
+    /// contact lifts.
+    CapturePointer(NodeId, zgui_vocab::PointerId),
     /// Install this style sheet at the author origin, or replace it when the name is taken.
     InstallStylesheet {
         /// What the sheet is installed under.
@@ -73,8 +74,9 @@ pub enum Command {
     },
     /// Stop, or let go of, the window's own scrolling, leaving it exactly where it is.
     FreezeScrolling(bool),
-    /// End a capture early.
-    ReleasePointer(NodeId),
+    /// End this node's capture of the pointer early. With no pointer, end every capture the node
+    /// holds.
+    ReleasePointer(NodeId, Option<zgui_vocab::PointerId>),
     /// Put this node's own editing model's selection here.
     ///
     /// Recording the range is not enough on its own. An editable element's caret lives in its
@@ -134,9 +136,11 @@ impl core::fmt::Debug for Command {
                 .field("target", target)
                 .field("behavior", behavior)
                 .finish(),
-            Self::CapturePointer(node) => {
-                formatter.debug_tuple("CapturePointer").field(node).finish()
-            }
+            Self::CapturePointer(node, pointer) => formatter
+                .debug_tuple("CapturePointer")
+                .field(node)
+                .field(pointer)
+                .finish(),
             Self::InstallStylesheet { name, css } => formatter
                 .debug_struct("InstallStylesheet")
                 .field("name", name)
@@ -150,9 +154,11 @@ impl core::fmt::Debug for Command {
                 .debug_tuple("FreezeScrolling")
                 .field(frozen)
                 .finish(),
-            Self::ReleasePointer(node) => {
-                formatter.debug_tuple("ReleasePointer").field(node).finish()
-            }
+            Self::ReleasePointer(node, pointer) => formatter
+                .debug_tuple("ReleasePointer")
+                .field(node)
+                .field(pointer)
+                .finish(),
             Self::Select { node, range } => formatter
                 .debug_struct("Select")
                 .field("node", node)
@@ -197,7 +203,6 @@ impl core::fmt::Debug for Redacted {
 
 pub(crate) struct QueuedCommand {
     pub(crate) command: Command,
-    pub(crate) pointer: Option<zgui_vocab::PointerId>,
     pub(crate) restore_from: Option<NodeKey>,
 }
 
@@ -353,7 +358,7 @@ impl RuntimeHost {
     }
 
     /// When the first pending frame callback was registered, for the deadline merge.
-    pub(crate) fn frame_callbacks_since(&self) -> Option<std::time::Instant> {
+    pub(crate) fn frame_callbacks_since(&self) -> Option<web_time::Instant> {
         self.frame_callbacks.borrow().pending_since()
     }
 
@@ -367,11 +372,7 @@ impl RuntimeHost {
 
     /// Appends a command for the next frame to carry out.
     pub fn issue(&self, command: Command) {
-        self.issue_scoped(command, None);
-    }
-
-    pub(crate) fn issue_scoped(&self, command: Command, pointer: Option<zgui_vocab::PointerId>) {
-        self.issue_queued(QueuedCommand { command, pointer, restore_from: None });
+        self.issue_queued(QueuedCommand { command, restore_from: None });
     }
 
     fn issue_queued(&self, command: QueuedCommand) {
@@ -539,7 +540,6 @@ impl RuntimeHost {
             if restore && !self.focus_left(root) {
                 self.issue_queued(QueuedCommand {
                     command: Command::Focus(node.map(zgui_view_dom::id::to_view)),
-                    pointer: None,
                     restore_from: Some(root),
                 });
             }
@@ -665,6 +665,16 @@ impl ViewHost for RuntimeHost {
             first,
             &self.placements.borrow(),
         )
+    }
+
+    fn is_rtl(&self, node: NodeId) -> bool {
+        let document = self.document.borrow();
+        zgui_view_dom::id::to_document(node)
+            .and_then(|key| document.store().index_of(key))
+            .and_then(|index| document.node(index).primary_style())
+            .is_some_and(|style| {
+                style.get_inherited_box().direction == zgui_css::values::text::Direction::Rtl
+            })
     }
 
     fn scale(&self) -> f32 {
@@ -833,7 +843,6 @@ impl ViewHost for RuntimeHost {
         // the person was on before they opened anything.
         self.issue_queued(QueuedCommand {
             command: Command::Focus(trap.restore_to.map(zgui_view_dom::id::to_view)),
-            pointer: None,
             restore_from: Some(trap.root),
         });
     }

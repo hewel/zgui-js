@@ -8,8 +8,9 @@ use std::time::Duration;
 
 use zgui_geom::{Css, CssPx, DevicePx, Edges, Point, Size};
 use zgui_platform::{
-    AppHandler, InputRect, InputRegion, LayerPlacement, MonitorInfo, PlatformCapabilities,
-    PlatformCx, SessionLockState, Surface, SurfaceAttributes, SurfaceEvent, SurfaceRole,
+    AppHandler, InputRect, InputRegion, LayerPlacement, MonitorInfo, MonitorTarget,
+    PlatformCapabilities, PlatformCx, SessionLockState, Surface, SurfaceAttributes, SurfaceEvent,
+    SurfaceRole,
 };
 use zgui_platform_headless::Headless;
 use zgui_runtime::{App, WindowContent, WindowSpec};
@@ -54,11 +55,11 @@ fn named_layers_open_update_suspend_and_close_without_a_primary() {
     let open = |output: &str| {
         let mut attrs = SurfaceAttributes::new(output);
         attrs.size = Some(dimensions(1080.0, 32.0));
-        attrs.role = SurfaceRole::Layer(LayerPlacement {
-            anchors: Edges::new(true, true, false, true),
-            monitor: Some(output.to_owned()),
-            ..LayerPlacement::default()
-        });
+        attrs.role = SurfaceRole::Layer(
+            LayerPlacement::default()
+                .with_anchors(Edges::new(true, true, false, true))
+                .with_monitor(MonitorTarget::Name(output.to_owned())),
+        );
         WindowSpec::new(attrs, WindowContent::default(), Box::new(empty))
     };
     let a = runtime.open_surface(&platform, open("A")).expect("open first layer");
@@ -74,11 +75,9 @@ fn named_layers_open_update_suspend_and_close_without_a_primary() {
         "both layer windows must be live after synchronous open"
     );
 
-    let vertical = LayerPlacement {
-        anchors: Edges::new(true, true, true, false),
-        monitor: Some("A".to_owned()),
-        ..LayerPlacement::default()
-    };
+    let vertical = LayerPlacement::default()
+        .with_anchors(Edges::new(true, true, true, false))
+        .with_monitor(MonitorTarget::Name("A".to_owned()));
     let extent = dimensions(44.0, 1080.0);
     runtime.reconfigure_layer(a, vertical.clone(), extent).expect("flip live layer");
     let first = platform.offscreen(first_id).expect("same offscreen surface");
@@ -88,7 +87,7 @@ fn named_layers_open_update_suspend_and_close_without_a_primary() {
         "live reconfiguration resizes the same offscreen surface"
     );
     let region = InputRegion::Rects(vec![InputRect { x: 1, y: 2, width: 3, height: 4 }]);
-    first.set_input_region(&region).expect("configure input region");
+    first.set_shell_input_region(&region).expect("configure input region");
     assert_eq!(
         first.input_region(), region,
         "the offscreen layer retains the configured input rectangle"
@@ -187,7 +186,7 @@ fn retiring_or_suspending_a_lock_window_leaves_platform_fallback() {
     );
 
     let mut attrs = SurfaceAttributes::new("App lock");
-    attrs.role = SurfaceRole::Lock("A".to_owned());
+    attrs.role = SurfaceRole::Lock(MonitorTarget::Name("A".to_owned()));
     let token = runtime
         .open_surface(&platform, WindowSpec::new(attrs, WindowContent::default(), Box::new(empty)))
         .expect("claim A for app content");
@@ -197,7 +196,7 @@ fn retiring_or_suspending_a_lock_window_leaves_platform_fallback() {
     assert!(offscreen.lock_fallback_frame().is_none(), "a presented app frame replaces fallback");
 
     let mut attrs = SurfaceAttributes::new("Replacement lock");
-    attrs.role = SurfaceRole::Lock("A".to_owned());
+    attrs.role = SurfaceRole::Lock(MonitorTarget::Name("A".to_owned()));
     attrs.replacing_lock = Some(id);
     let replacement = runtime
         .open_surface(

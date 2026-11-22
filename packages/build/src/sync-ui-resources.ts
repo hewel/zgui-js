@@ -2,7 +2,7 @@ import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-const REVISION = "80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a";
+const REVISION = "ee29c7dc66206eb04ba7bcf514058a278c9070ba";
 const workspaceRoot = fileURLToPath(new URL("../../../", import.meta.url));
 
 export interface ResourceSnapshot {

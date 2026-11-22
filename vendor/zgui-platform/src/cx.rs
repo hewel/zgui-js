@@ -6,6 +6,7 @@ use crate::capabilities::PlatformCapabilities;
 use crate::clipboard::Clipboard;
 use crate::clock::Clock;
 use crate::error::PlatformError;
+use crate::grab::FocusGrabId;
 use crate::menu::AppMenu;
 use crate::monitor::MonitorInfo;
 use crate::scroll::ScrollSettings;
@@ -30,7 +31,6 @@ pub trait PlatformCx {
     /// Creates a surface.
     ///
     /// The surface is created hidden and is shown once its first frame has been drawn.
-    /// A lock role instead claims the platform-owned surface for that output.
     fn create_surface(
         &self,
         attributes: &SurfaceAttributes,
@@ -46,7 +46,6 @@ pub trait PlatformCx {
     ///
     /// Destroying a surface that has already gone does nothing. A backend whose surfaces are not
     /// windows has nothing to do here and says so with an empty body.
-    /// Releasing a lock role restores the platform's fallback without unlocking.
     fn destroy_surface(&self, id: SurfaceId);
 
     /// The surface with this identifier, while it still exists.
@@ -61,40 +60,16 @@ pub trait PlatformCx {
     /// The output the desktop considers primary, when it names one.
     fn primary_monitor(&self) -> Option<MonitorInfo>;
 
-    /// Requests a session lock independently of any application surface.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the backend cannot start or retain a lock.
-    fn request_session_lock(&self) -> Result<(), PlatformError> {
-        Err(crate::Unsupported.into())
-    }
-
-    /// The latest compositor decision, not merely the application's intent.
-    #[must_use]
-    fn session_lock_state(&self) -> SessionLockState {
-        SessionLockState::Unlocked
-    }
-
-    /// Explicitly requests unlock of an acquired session lock.
-    ///
-    /// The backend preserves the lock surfaces until the compositor acknowledges the request.
-    /// An asynchronous backend reports completion through [`Self::session_lock_state`].
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when no lock is acquired or the request cannot be sent.
-    fn unlock_session(&self) -> Result<(), PlatformError> {
-        Err(crate::Unsupported.into())
-    }
-
     /// The desktop's light or dark preference, when it can be discovered.
     ///
     /// Absent means unknown, not light. A platform that cannot be asked returns nothing rather
     /// than a guess, because guessing wrong shows every user who chose dark a white flash.
     fn color_scheme(&self) -> Option<ColorScheme>;
 
-    /// Whether the desktop prefers reduced motion, when it can be discovered.
+    /// The desktop's reduced-motion preference, when it can be discovered.
+    ///
+    /// Absent means unknown or unsupported. A backend that cannot query the desktop portal
+    /// returns `None` so callers keep their default motion policy.
     fn reduced_motion(&self) -> Option<bool> {
         None
     }
@@ -137,6 +112,84 @@ pub trait PlatformCx {
     /// it, which is what the default does.
     fn set_app_menu(&self, menu: &AppMenu) {
         let _ = menu;
+    }
+
+    /// Makes a focus grab with no surfaces, which limits nothing until surfaces are given to it.
+    ///
+    /// Nothing where the desktop cannot limit focus, which
+    /// [`PlatformCapabilities::focus_grab`] says beforehand. The default is a desktop that cannot.
+    fn create_focus_grab(&self) -> Option<FocusGrabId> {
+        None
+    }
+
+    /// Limits the keyboard and the pointer to `surfaces` while `grab` exists.
+    ///
+    /// The set replaces the one given before. A set with surfaces in it starts the grab, and an
+    /// empty set stops it. After the desktop clears a grab its set is empty, so the next set
+    /// with surfaces in it starts the grab again. A surface that has gone is left out.
+    fn set_focus_grab(&self, grab: FocusGrabId, surfaces: &[SurfaceId]) {
+        let _ = (grab, surfaces);
+    }
+
+    /// Destroys `grab`, which stops it.
+    ///
+    /// Destroying a grab that has already gone does nothing.
+    fn destroy_focus_grab(&self, grab: FocusGrabId) {
+        let _ = grab;
+    }
+
+    /// Asks the desktop to lock the session, with this application drawing the lock screen.
+    ///
+    /// The answer arrives later. [`WakeReason::SessionLocked`](crate::WakeReason::SessionLocked)
+    /// says the desktop hides everything else now.
+    /// [`WakeReason::SessionLockFinished`](crate::WakeReason::SessionLockFinished) says the desktop
+    /// refused the lock or ended it. Make a surface of role
+    /// [`SurfaceRole::Lock`](crate::SurfaceRole::Lock) for each output as soon as this returns.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PlatformError::Unsupported`] where the desktop has no session lock, which
+    /// [`PlatformCapabilities::session_lock`] says beforehand, and [`PlatformError::Backend`]
+    /// while this application holds a lock already.
+    fn lock_session(&self) -> Result<(), PlatformError> {
+        Err(crate::Unsupported.into())
+    }
+
+    /// Unlocks the session that this application locked.
+    ///
+    /// Does nothing before the desktop confirmed the lock with
+    /// [`WakeReason::SessionLocked`](crate::WakeReason::SessionLocked), and nothing after it
+    /// ended. Destroy the lock surfaces after this call: a lock surface destroyed while the
+    /// session is locked leaves its output blank.
+    fn unlock_session(&self) {}
+
+    /// Requests a session lock independently of any application surface.
+    ///
+    /// Delegates to [`PlatformCx::lock_session`] by default so both upstream and host callers
+    /// share the same fail-closed lock owner.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the backend cannot start or retain a lock.
+    fn request_session_lock(&self) -> Result<(), PlatformError> {
+        self.lock_session()
+    }
+
+    /// The latest compositor decision, not merely the application's intent.
+    #[must_use]
+    fn session_lock_state(&self) -> SessionLockState {
+        SessionLockState::Unlocked
+    }
+
+    /// Explicitly requests unlock of an acquired session lock, reporting failure when no
+    /// confirmed lock is held.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the backend does not support session locks or no confirmed lock is
+    /// currently held.
+    fn try_unlock_session(&self) -> Result<(), PlatformError> {
+        Err(crate::Unsupported.into())
     }
 
     /// Asks the loop to finish.

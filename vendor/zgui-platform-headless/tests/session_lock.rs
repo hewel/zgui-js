@@ -27,15 +27,16 @@ fn lock_platform() -> Headless {
 fn lock_surface(output: &str) -> SurfaceAttributes {
     let mut attributes =
         SurfaceAttributes::new("lock UI").with_size(Size::new(CssPx(1.0), CssPx(1.0)));
-    attributes.role = SurfaceRole::Lock(output.to_owned());
+    attributes.role = SurfaceRole::Lock(output.into());
     attributes
 }
 
 fn fallback_for(platform: &Headless, output: &str) -> Arc<OffscreenSurface> {
+    let target = zgui_platform::MonitorTarget::from(output);
     platform
         .offscreens()
         .into_iter()
-        .find(|surface| matches!(surface.requested_attributes().role, SurfaceRole::Lock(name) if name == output))
+        .find(|surface| matches!(surface.requested_attributes().role, SurfaceRole::Lock(ref t) if t == &target))
         .expect("the output has a platform-owned lock role")
 }
 
@@ -81,14 +82,14 @@ fn headless_lock_is_opt_in_and_consumes_one_refusal() {
         platform.session_lock_snapshot().covered_outputs.is_empty(),
         "refusal creates no lock coverage"
     );
-    assert!(platform.unlock_session().is_err(), "a refused lock cannot be unlocked");
+    assert!(platform.try_unlock_session().is_err(), "a refused lock cannot be unlocked");
     assert_eq!(
         platform.session_lock_snapshot().unlock_count,
         0,
         "a rejected unlock must not count as acknowledged"
     );
     assert!(
-        matches!(platform.drain_wakes().as_slice(), [WakeReason::AppWork]),
+        matches!(platform.drain_wakes().as_slice(), [WakeReason::SessionLockFinished]),
         "refusal wakes the app to observe the decision"
     );
 
@@ -101,7 +102,7 @@ fn headless_lock_is_opt_in_and_consumes_one_refusal() {
         "refusal is consumed by only one request"
     );
     assert!(
-        matches!(platform.drain_wakes().as_slice(), [WakeReason::AppWork]),
+        matches!(platform.drain_wakes().as_slice(), [WakeReason::SessionLocked]),
         "acquisition wakes the app to observe the decision"
     );
     assert_eq!(
@@ -219,7 +220,7 @@ fn headless_covers_outputs_until_explicit_unlock_even_without_a_ui() {
 
     platform.drain_wakes();
     platform
-        .unlock_session()
+        .try_unlock_session()
         .expect("the deterministic compositor acknowledged unlock");
     let snapshot = platform.session_lock_snapshot();
     assert_eq!(snapshot.state, SessionLockState::Unlocked, "explicit unlock is acknowledged");
@@ -230,10 +231,10 @@ fn headless_covers_outputs_until_explicit_unlock_even_without_a_ui() {
     assert!(platform.offscreen(c.id()).is_none(), "unlock removes C's claimed role");
     assert!(platform.offscreen(ordinary.id()).is_some(), "unlock preserves unrelated surfaces");
     assert!(
-        matches!(platform.drain_wakes().as_slice(), [WakeReason::AppWork]),
+        matches!(platform.drain_wakes().as_slice(), [WakeReason::SessionLockFinished]),
         "unlock wakes the application to observe acknowledgement"
     );
-    assert!(platform.unlock_session().is_err(), "the acknowledged lock cannot be unlocked twice");
+    assert!(platform.try_unlock_session().is_err(), "the acknowledged lock cannot be unlocked twice");
     assert_eq!(
         platform.session_lock_snapshot().unlock_count,
         1,

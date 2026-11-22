@@ -8,15 +8,16 @@ repository = "https://github.com/zortax/zgui"
 homepage = "https://zgui.zortax.de"
 rust-version = "1.90"
 
-# Standalone snapshot of upstream 80baa3c7; sibling crates retain the same revision.
+# Standalone snapshot of upstream ee29c7dc; sibling crates retain the same revision.
 [workspace]
 
 [dependencies]
+web-time = "1.1.0"
 accesskit = "0.24.1"
 raw-window-handle = "0.6.2"
 thiserror = "2.0.19"
-zgui-geom = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a" }
-zgui-vocab = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a" }
+zgui-geom = { git = "https://github.com/zortax/zgui", rev = "ee29c7dc66206eb04ba7bcf514058a278c9070ba" }
+zgui-vocab = { git = "https://github.com/zortax/zgui", rev = "ee29c7dc66206eb04ba7bcf514058a278c9070ba" }
 
 [lints.rust]
 missing_docs = "deny"

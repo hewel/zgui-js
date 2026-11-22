@@ -18,8 +18,9 @@ use std::time::{Duration, Instant};
 
 use zgui_geom::{Css, CssPx, Edges, Size};
 use zgui_platform::{
-    AppHandler, InputRect, InputRegion, KeyboardInteractivity, Layer, LayerPlacement, PlatformCx,
-    Surface, SurfaceAttributes, SurfaceEvent, SurfaceId, SurfaceRole, WakeReason,
+    AppHandler, ExclusiveZone, InputRect, InputRegion, KeyboardInteractivity, Layer,
+    LayerPlacement, MonitorTarget, PlatformCx, Surface, SurfaceAttributes, SurfaceEvent,
+    SurfaceId, SurfaceRole, WakeReason,
 };
 use zgui_platform_wayland::WaylandApp;
 
@@ -131,12 +132,10 @@ struct Bar {
 }
 
 fn horizontal(output: &str) -> LayerPlacement {
-    LayerPlacement {
-        anchors: Edges { top: true, right: true, bottom: false, left: true },
-        exclusive_zone: Some(CssPx(32.0)),
-        monitor: Some(output.to_owned()),
-        ..LayerPlacement::default()
-    }
+    LayerPlacement::default()
+        .with_anchors(Edges { top: true, right: true, bottom: false, left: true })
+        .with_exclusive_zone(ExclusiveZone::Reserve(CssPx(32.0)))
+        .with_monitor(MonitorTarget::Name(output.to_owned()))
 }
 
 fn size(width: f32, height: f32) -> Size<CssPx, Css> {
@@ -166,14 +165,12 @@ impl AppHandler for Bar {
         if self.updated || id != primary.id() || !matches!(event, SurfaceEvent::Resized(_)) {
             return;
         }
-        let vertical = LayerPlacement {
-            layer: Layer::Overlay,
-            anchors: Edges { top: true, right: true, bottom: true, left: false },
-            margin: Edges { top: CssPx(7.0), right: CssPx(-2.0), bottom: CssPx(9.0), left: CssPx(1.0) },
-            exclusive_zone: Some(CssPx(17.0)),
-            keyboard: KeyboardInteractivity::OnDemand,
-            monitor: Some("TEST-1".to_owned()),
-        };
+        let vertical = LayerPlacement::new(Layer::Overlay)
+            .with_anchors(Edges { top: true, right: true, bottom: true, left: false })
+            .with_margin(Edges { top: CssPx(7.0), right: CssPx(-2.0), bottom: CssPx(9.0), left: CssPx(1.0) })
+            .with_exclusive_zone(ExclusiveZone::Reserve(CssPx(17.0)))
+            .with_keyboard(KeyboardInteractivity::OnDemand)
+            .with_monitor(MonitorTarget::Name("TEST-1".to_owned()));
         let signed_overflow = i32::MAX as f32;
         for (width, height) in [(signed_overflow, 32.0), (32.0, signed_overflow)] {
             assert!(
@@ -191,13 +188,16 @@ impl AppHandler for Bar {
         primary.reconfigure_layer(&vertical, size(44.0, 0.0)).expect("flip to the right edge");
         primary.reconfigure_layer(&horizontal("TEST-1"), size(0.0, 32.0)).expect("flip back to the top edge");
         assert!(primary.reconfigure_layer(&horizontal("TEST-2"), size(0.0, 32.0)).is_err(), "an existing surface cannot move to another output");
-        primary.set_input_region(&InputRegion::Rects(RECTANGLES.map(|[x, y, width, height]| InputRect { x, y, width, height }).to_vec())).expect("commit two hit rectangles");
-        primary.set_input_region(&InputRegion::Empty).expect("commit pointer passthrough");
-        primary.set_input_region(&InputRegion::Full).expect("restore compositor-default input");
+        primary.set_shell_input_region(&InputRegion::Rects(RECTANGLES.map(|[x, y, width, height]| InputRect { x, y, width, height }).to_vec())).expect("commit two hit rectangles");
+        primary.set_shell_input_region(&InputRegion::Empty).expect("commit pointer passthrough");
+        primary.set_shell_input_region(&InputRegion::Full).expect("restore compositor-default input");
         self.updated = true;
     }
 
-    fn monitors_changed(&mut self, cx: &dyn PlatformCx) {
+    fn wake(&mut self, cx: &dyn PlatformCx, reason: WakeReason) {
+        if !matches!(reason, WakeReason::MonitorsChanged) {
+            return;
+        }
         let monitors = cx.monitors();
         let second = monitors.iter().find(|monitor| monitor.name.as_deref() == Some("TEST-2"));
         match (self.hotplug, second) {
@@ -232,8 +232,6 @@ impl AppHandler for Bar {
         }
         self.hotplug += 1;
     }
-
-    fn wake(&mut self, _cx: &dyn PlatformCx, _reason: WakeReason) {}
 }
 
 #[derive(Clone, Copy, Debug)]

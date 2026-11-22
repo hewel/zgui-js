@@ -45,11 +45,6 @@ pub trait AppHandler: 'static {
         let _ = cx;
     }
 
-    /// The monitor inventory changed after the initial snapshot in `surfaces_available`.
-    ///
-    /// Read the latest inventory through [`PlatformCx::monitors`].
-    fn monitors_changed(&mut self, _cx: &dyn PlatformCx) {}
-
     /// Something happened to one surface.
     fn surface_event(&mut self, cx: &dyn PlatformCx, surface: SurfaceId, event: SurfaceEvent);
 
@@ -88,10 +83,6 @@ impl<T: AppHandler + ?Sized> AppHandler for Box<T> {
 
     fn surfaces_lost(&mut self, cx: &dyn PlatformCx) {
         (**self).surfaces_lost(cx);
-    }
-
-    fn monitors_changed(&mut self, cx: &dyn PlatformCx) {
-        (**self).monitors_changed(cx);
     }
 
     fn surface_event(&mut self, cx: &dyn PlatformCx, surface: SurfaceId, event: SurfaceEvent) {

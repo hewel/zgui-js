@@ -3,8 +3,8 @@
 use std::sync::Arc;
 
 use zgui_platform::{
-    Clipboard, Clock, ColorScheme, MonitorInfo, PlatformCapabilities, PlatformCx, PlatformError,
-    SessionLockState, Surface, SurfaceAttributes, SurfaceId, Waker,
+    Clipboard, Clock, ColorScheme, FocusGrabId, MonitorInfo, PlatformCapabilities, PlatformCx,
+    PlatformError, SessionLockState, Surface, SurfaceAttributes, SurfaceId, Waker,
 };
 
 use crate::driver::WaylandState;
@@ -67,6 +67,39 @@ impl PlatformCx for WaylandCx<'_> {
         self.state.live.monitors.borrow().clone()
     }
 
+    fn primary_monitor(&self) -> Option<MonitorInfo> {
+        // A compositor names no primary output, and inventing one — the first advertised, the
+        // largest — would be a different answer on every desktop and on every reconnect.
+        None
+    }
+
+    fn create_focus_grab(&self) -> Option<FocusGrabId> {
+        self.state.grabs.create(&self.state.qh)
+    }
+
+    fn set_focus_grab(&self, grab: FocusGrabId, surfaces: &[SurfaceId]) {
+        // A surface the application closed is already off the list of live surfaces, and its
+        // destruction takes it off the whitelist.
+        let wanted: Vec<_> = surfaces
+            .iter()
+            .filter_map(|id| self.state.live.surface(*id))
+            .map(|surface| surface.wl_surface().clone())
+            .collect();
+        self.state.grabs.set(grab, &wanted);
+    }
+
+    fn destroy_focus_grab(&self, grab: FocusGrabId) {
+        self.state.grabs.destroy(grab);
+    }
+
+    fn lock_session(&self) -> Result<(), PlatformError> {
+        self.state.request_session_lock()
+    }
+
+    fn unlock_session(&self) {
+        let _ = self.state.unlock_session();
+    }
+
     fn request_session_lock(&self) -> Result<(), PlatformError> {
         self.state.request_session_lock()
     }
@@ -75,14 +108,8 @@ impl PlatformCx for WaylandCx<'_> {
         self.state.session_lock_state()
     }
 
-    fn unlock_session(&self) -> Result<(), PlatformError> {
+    fn try_unlock_session(&self) -> Result<(), PlatformError> {
         self.state.unlock_session()
-    }
-
-    fn primary_monitor(&self) -> Option<MonitorInfo> {
-        // A compositor names no primary output, and inventing one — the first advertised, the
-        // largest — would be a different answer on every desktop and on every reconnect.
-        None
     }
 
     fn color_scheme(&self) -> Option<ColorScheme> {

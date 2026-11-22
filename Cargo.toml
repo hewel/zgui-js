@@ -30,7 +30,7 @@ unused_qualifications = "warn"
 all = "warn"
 
 [workspace.dependencies]
-zgui = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a" }
+zgui = { git = "https://github.com/zortax/zgui", rev = "ee29c7dc66206eb04ba7bcf514058a278c9070ba" }
 rquickjs = { git = "https://github.com/DelSkayn/rquickjs", rev = "73fcd6062ee615aeb2a4675cd32be67a56e93973", default-features = false, features = [
   "std",
   "macro",
@@ -82,7 +82,7 @@ strip = "symbols"
 codegen-units = 1
 
 [patch.crates-io]
-fontique = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a" }
+fontique = { git = "https://github.com/zortax/zgui", rev = "ee29c7dc66206eb04ba7bcf514058a278c9070ba" }
 
 [patch."https://github.com/zortax/zgui"]
 zgui-dom = { path = "vendor/zgui-dom" }

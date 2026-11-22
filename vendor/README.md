@@ -2,7 +2,15 @@
 
 For a crate-by-crate ownership table (vendored vs unvendored upstream crates), see [`docs/development/crate-map.md`](../docs/development/crate-map.md).
 
-`zgui-runtime/` is copied from `zortax/zgui` revision `80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a`, with its Apache-2.0 LICENSE and NOTICE. The manifest is standalone; every sibling zgui dependency retains that revision. The root Cargo patch selects this copy for the entire dependency graph. Upstream source and tests are retained.
+`zgui-runtime/` is copied from `zortax/zgui` revision `ee29c7dc66206eb04ba7bcf514058a278c9070ba`, with its Apache-2.0 LICENSE and NOTICE. The manifest is standalone; every sibling zgui dependency retains that revision. The root Cargo patch selects this copy for the entire dependency graph. Upstream source and tests are retained.
+
+## Upstream `ee29c7dc` rebase notes (retired vs retained contracts)
+
+Upgrading the pin from `80baa3c7` to `ee29c7dc66206eb04ba7bcf514058a278c9070ba` (`wgpu 30.0.2`, `vello 0.11.0`, partial present, subpixel AA `#70`, resize pacing `#57`, Wayland shell/popup/session-lock `#66`, inbound DnD `#40/#41/#44`, caret reveal & IME `#38/#39`, window state `#42/#43`, frame reports `#48`, RTL `ViewHost::is_rtl` `#62`) retired overlapping downstream shims while retaining every `zgui-js` contract:
+
+- **Retired**: `AppHandler::monitors_changed` (replaced by upstream `WakeReason::MonitorsChanged`), bespoke `LayerPlacement` struct literals (adopted upstream builders, `ExclusiveZone::{Ignore, Avoid, Reserve}`, and `MonitorTarget`), bespoke `PopupPlacement::grab: bool` (adopted upstream `Option<InputSerial>` populated from `parent.input_serial()`), and ad-hoc startup without a primary window (adopted `App::without_primary_window().with_exit_policy(ExitPolicy::Explicit)`).
+- **Disambiguated coexistence**: Immediate-commit shell input regions use `Surface::set_shell_input_region(&InputRegion)` alongside upstream frame-staged `Surface::set_input_region(Option<&[Rect<CssPx, Css>]>)` (sharing one wire encoder). Fail-closed session unlock uses `PlatformCx::try_unlock_session() -> Result<(), PlatformError>` alongside upstream `PlatformCx::unlock_session() -> ()`, both operating on the **single** lock owner (`driver/session_lock.rs` + `surface/role/lock.rs` on Wayland, `Desktop.session_lock` on headless; upstream `zgui-platform-wayland/src/lock.rs` is intentionally excluded).
+- **Retained**: All 13 vendored crates remain patched for our contracts below, including `fontique 0.11.1` from `ee29c7dc`, `#76` per-contour synthetic bold winding (now preserving `#70` `STRIPE_OFFSETS` subpixel AA) and `>= 600` weight threshold, `#48/#52` `ImagePolicy` / SVG `fontdb`, `#56/#68` `doc_select`, `#67` outbound Copy DnD, `LayerPatch` + atomic stretch-axis reconfiguration, `PopupPlacement` `offset`/`reactive` + auto-height settling, probe-gated `CompletedFrame::phases` alongside upstream `FrameReport`, and `ViewHost::is_rtl` reading inherited CSS `direction`.
 
 ## Disabled activation
 
@@ -243,7 +251,7 @@ recorded in [preview verification](../docs/development/preview-verification.md#p
 
 ## Geometry observation deliveries
 
-`zgui-view-dom/` is copied from the same pinned revision `80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a`, with its Apache-2.0 LICENSE and NOTICE and standalone manifest; the same patch pattern selects it for the whole graph. Its delivery patch applies:
+`zgui-view-dom/` is copied from the same pinned revision `ee29c7dc66206eb04ba7bcf514058a278c9070ba`, with its Apache-2.0 LICENSE and NOTICE and standalone manifest; the same patch pattern selects it for the whole graph. Its delivery patch applies:
 
 - Observation callbacks are invoked outside the registry's `RefCell` borrow, so a callback may register, cancel itself or cancel a sibling.
 - Each registration receives its own fresh post-layout sample, including a first zero measurement and subscribers added inside another delivery; a prepared callback whose registration was cancelled is skipped.
@@ -262,7 +270,7 @@ Remove each local patch only when an upgraded pinned upstream revision implement
 
 ## Text replay content identity
 
-`zgui-paint/` is copied from the same pinned revision `80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a`, with its Apache-2.0 LICENSE and NOTICE and standalone manifest; the same patch pattern selects it for the whole graph. Its replay signature patch applies:
+`zgui-paint/` is copied from the same pinned revision `ee29c7dc66206eb04ba7bcf514058a278c9070ba`, with its Apache-2.0 LICENSE and NOTICE and standalone manifest; the same patch pattern selects it for the whole graph. Its replay signature patch applies:
 
 - A `Line`/`TextRun` fragment's painted content signature carries the shaped paragraph key, because layout reclaims and reuses paragraph slots across the prepaint layout passes a single frame can run. Without it, a recycled slot replays the previous frame's glyph pixels for different shaped content.
 
@@ -278,7 +286,7 @@ Remove each local patch only when an upgraded pinned upstream revision implement
 
 ## Inherited colour on raw text items
 
-`zgui-layout/` is copied from revision `80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a` with its LICENSE and NOTICE. Standalone manifests and the root patch retain the pinned dependency graph.
+`zgui-layout/` is copied from revision `ee29c7dc66206eb04ba7bcf514058a278c9070ba` with its LICENSE and NOTICE. Standalone manifests and the root patch retain the pinned dependency graph.
 
 Raw text items in Flex and Grid own text-change marks while inheriting their parent's appearance. Fragment damage now includes the style generator's repaint/reshape marks for these items. Colour transitions repaint their glyphs without remounting or forcing full-surface damage.
 
@@ -293,7 +301,7 @@ The recording renderer checks every incremental frame; the last frame alone can 
 
 ## Cross-parent node moves
 
-`zgui-dom/` is copied from revision `80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a` with its LICENSE and NOTICE and a standalone manifest.
+`zgui-dom/` is copied from revision `ee29c7dc66206eb04ba7bcf514058a278c9070ba` with its LICENSE and NOTICE and a standalone manifest.
 
 Cross-parent insertion marks the old parent for child-list rebuilding, layout, repaint, and accessibility updates. This retires the moved subtree's old layout and paint records even when its new parent is detached. Same-parent reorders retain their existing path.
 
@@ -314,7 +322,7 @@ a press that landed on a control outside the surface keeps the focus it was give
 
 ## Animation counts on generated content
 
-`vendor/zgui-style` is pinned upstream zgui rev `80baa3c` with one change:
+`vendor/zgui-style` is pinned upstream zgui rev `ee29c7dc` with one change:
 `Animations::running_on` sums the running animation/transition count across the
 element's own set and its native `::before`/`::after` sets. Each motion counts
 individually, finished motions kept for a lifecycle edge are not running, and
@@ -329,7 +337,7 @@ Regression gates:
 
 ## Frozen elastic scrolling
 
-`zgui-scroll/` is copied from revision `80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a` with its LICENSE and NOTICE. Its standalone manifest and the root patch retain the pinned graph.
+`zgui-scroll/` is copied from revision `ee29c7dc66206eb04ba7bcf514058a278c9070ba` with its LICENSE and NOTICE. Its standalone manifest and the root patch retain the pinned graph.
 
 The runtime pauses elastic advancement on a frozen window root and excludes that paused edge from animation deadlines. It preserves displacement and resumes released edges on thaw. Other containers keep advancing. Existing root input filtering and motion cancellation remain in place.
 
@@ -341,7 +349,7 @@ Regression gates:
 
 ## StyleX stylesheet preflight and revisions
 
-`zgui-style/` and `zgui-runtime/` retain upstream revision `80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a` and their upstream licenses. The style crate exposes preflight through the actual sheet parser, returning structured diagnostics without installing a candidate. The `zgui-stylex-v1` profile rejects parser recovery and unsupported browser-root RTL wrappers, typed/general `@property`, container/reduced-motion queries, CSS resource URLs/imports/image-set, and `@font-face`; official priority selectors and keyframes remain unchanged. Official dynamic-function `@property --* { syntax:"*"; inherits:false }` rules use Stylo's registration machinery, including descendant noninheritance and replacement/removal cleanup.
+`zgui-style/` and `zgui-runtime/` retain upstream revision `ee29c7dc66206eb04ba7bcf514058a278c9070ba` and their upstream licenses. The style crate exposes preflight through the actual sheet parser, returning structured diagnostics without installing a candidate. The `zgui-stylex-v1` profile rejects parser recovery and unsupported browser-root RTL wrappers, typed/general `@property`, container/reduced-motion queries, CSS resource URLs/imports/image-set, and `@font-face`; official priority selectors and keyframes remain unchanged. Official dynamic-function `@property --* { syntax:"*"; inherits:false }` rules use Stylo's registration machinery, including descendant noninheritance and replacement/removal cleanup.
 
 The runtime advances a per-document style revision only for applied stylesheet mutations. Identical replacements and absent removals are no-ops, same-name replacement retains cascade position, and frame observations include the consumed revision plus pending-sheet state. Removal also invalidates stale rule-chain caches before early frame filtering.
 

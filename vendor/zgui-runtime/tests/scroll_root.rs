@@ -13,7 +13,7 @@
 mod support;
 
 use zgui_geom::{Css, CssPx, Point};
-use zgui_platform::{Clock, PlatformCx, SurfaceEvent};
+use zgui_platform::{PlatformCx, SurfaceEvent};
 use zgui_view::{BuildCx, IntoView, View, ViewHost};
 use zgui_vocab::{
     Modifiers, PointerId, PointerKind, ScrollDelta, ScrollPhase, Timestamp, WheelEvent,

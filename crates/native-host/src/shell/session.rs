@@ -3,7 +3,7 @@ use std::{cell::{Cell, RefCell}, collections::BTreeMap, rc::{Rc, Weak}, sync::{A
 
 use rquickjs::{Array, Ctx, Exception, Function, Object, Persistent, Value, function::Func, object::Property};
 use serde::{Deserialize, Serialize};
-use zgui::{geom::{Css, CssPx, Edges, Size}, platform::{InputRect, InputRegion, KeyboardInteractivity, Layer, LayerPlacement, MonitorInfo, SessionLockState, WakeReason, Waker}};
+use zgui::{geom::{Css, CssPx, Edges, Size}, platform::{ExclusiveZone, InputRect, InputRegion, KeyboardInteractivity, Layer, LayerPlacement, MonitorInfo, MonitorTarget, SessionLockState, WakeReason, Waker}};
 
 use crate::{assets::{ContractFailure, MAX_SAFE_ID}, session::Session, work::service_error};
 
@@ -617,9 +617,11 @@ fn placement<'js>(ctx: &Ctx<'js>, value: Value<'js>) -> rquickjs::Result<(LayerP
     let zone: Value = value.get("exclusiveZone")?;
     let zone = if zone.is_undefined() { 0.0 } else { number(ctx, &zone, "exclusiveZone")? };
     let exclusive_zone = if zone == -1.0 {
-        None
+        ExclusiveZone::Ignore
+    } else if zone == 0.0 {
+        ExclusiveZone::Avoid
     } else if (0.0..=f64::from(i32::MAX)).contains(&zone) {
-        Some(CssPx(zone as f32))
+        ExclusiveZone::Reserve(CssPx(zone as f32))
     } else {
         return Err(Exception::throw_range(ctx, "exclusiveZone must be -1 or a nonnegative Wayland distance"));
     };
@@ -629,7 +631,15 @@ fn placement<'js>(ctx: &Ctx<'js>, value: Value<'js>) -> rquickjs::Result<(LayerP
         Edges::new(distance(ctx, &margin, "top", 0.0, -16384.0)?, distance(ctx, &margin, "right", 0.0, -16384.0)?,
             distance(ctx, &margin, "bottom", 0.0, -16384.0)?, distance(ctx, &margin, "left", 0.0, -16384.0)?)
     };
-    Ok((LayerPlacement { layer, anchors, margin, exclusive_zone, keyboard, monitor }, Size::new(width, height)))
+    let mut placement = LayerPlacement::new(layer)
+        .with_anchors(anchors)
+        .with_margin(margin)
+        .with_exclusive_zone(exclusive_zone)
+        .with_keyboard(keyboard);
+    if let Some(name) = monitor {
+        placement = placement.with_monitor(MonitorTarget::Name(name));
+    }
+    Ok((placement, Size::new(width, height)))
 }
 
 fn distance(ctx: &Ctx<'_>, value: &Object<'_>, key: &str, default: f64, min: f64) -> rquickjs::Result<CssPx> {
@@ -896,10 +906,10 @@ mod tests {
         let context = rquickjs::Context::full(&runtime).expect("create QuickJS context");
         context.with(|ctx| {
             for (source, expected) in [
-                ("({exclusiveZone:-1})", None),
-                ("({exclusiveZone:0})", Some(CssPx(0.0))),
-                ("({exclusiveZone:24})", Some(CssPx(24.0))),
-                ("({exclusiveZone:1.5})", Some(CssPx(1.5))),
+                ("({exclusiveZone:-1})", ExclusiveZone::Ignore),
+                ("({exclusiveZone:0})", ExclusiveZone::Avoid),
+                ("({exclusiveZone:24})", ExclusiveZone::Reserve(CssPx(24.0))),
+                ("({exclusiveZone:1.5})", ExclusiveZone::Reserve(CssPx(1.5))),
             ] {
                 let input = ctx.eval::<Value, _>(source).expect("evaluate placement input");
                 let (layer, _) = placement(&ctx, input).expect("valid exclusive zone");
@@ -1071,13 +1081,13 @@ mod tests {
         let bounded_auto = by_name("auto-bounded");
         assert!(bounded_auto.is_auto_height());
         assert_eq!(bounded_auto.size(), Size::new(CssPx(320.0), CssPx(420.0)));
-        let policy = bounded_auto.auto_height(zgui::platform::SurfaceId::new(1)).expect("auto policy");
+        let policy = bounded_auto.auto_height(zgui::platform::SurfaceId::new(1), None).expect("auto policy");
         assert_eq!(policy.min_height, CssPx(48.0));
         assert_eq!(policy.max_height, CssPx(420.0));
         let fixed = by_name("fixed");
         assert!(!fixed.is_auto_height());
         assert_eq!(fixed.size(), Size::new(CssPx(320.0), CssPx(180.0)));
-        assert!(fixed.auto_height(zgui::platform::SurfaceId::new(1)).is_none());
+        assert!(fixed.auto_height(zgui::platform::SurfaceId::new(1), None).is_none());
         shell.clear();
     }
 }

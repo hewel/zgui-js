@@ -1,7 +1,7 @@
 use crate::{Application, bounded_fs::{self, BoundedReadError}};
 use serde::Deserialize;
 use std::{error::Error, path::Path};
-use zgui::{geom::{CssPx, Edges, Size}, platform::{AppHandler, IdlePolicy, KeyboardInteractivity, Layer, LayerPlacement, PlatformCx, SurfaceAttributes, SurfaceEvent, SurfaceId, SurfaceRole, WakeReason}};
+use zgui::{geom::{CssPx, Edges, Size}, platform::{AppHandler, ExclusiveZone, IdlePolicy, KeyboardInteractivity, Layer, LayerPlacement, MonitorTarget, PlatformCx, SurfaceAttributes, SurfaceEvent, SurfaceId, SurfaceRole, WakeReason}};
 
 type Result<T> = std::result::Result<T, Box<dyn Error>>;
 
@@ -77,16 +77,21 @@ impl LayerConfig {
     }
 
     fn configure(&self, attributes: &mut SurfaceAttributes) -> Result<()> {
-        attributes.role = SurfaceRole::Layer(LayerPlacement {
-            layer: match self.layer { Stack::Background => Layer::Background, Stack::Bottom => Layer::Bottom, Stack::Top => Layer::Top, Stack::Overlay => Layer::Overlay },
-            anchors: self.edges()?,
-            margin: Edges::new(CssPx(f32::from(self.margins.top)), CssPx(f32::from(self.margins.right)), CssPx(f32::from(self.margins.bottom)), CssPx(f32::from(self.margins.left))),
-            // Never use None: the pinned backend emits protocol -1 for it, which
-            // ignores other exclusive zones rather than reserving our extent.
-            exclusive_zone: Some(CssPx(f32::from(self.exclusive_zone))),
-            keyboard: match self.keyboard { Keyboard::None => KeyboardInteractivity::None, Keyboard::OnDemand => KeyboardInteractivity::OnDemand, Keyboard::Exclusive => KeyboardInteractivity::Exclusive },
-            monitor: Some(self.monitor.clone()),
-        });
+        let layer = match self.layer { Stack::Background => Layer::Background, Stack::Bottom => Layer::Bottom, Stack::Top => Layer::Top, Stack::Overlay => Layer::Overlay };
+        let exclusive_zone = if self.exclusive_zone == 0 {
+            ExclusiveZone::Avoid
+        } else {
+            ExclusiveZone::Reserve(CssPx(f32::from(self.exclusive_zone)))
+        };
+        let keyboard = match self.keyboard { Keyboard::None => KeyboardInteractivity::None, Keyboard::OnDemand => KeyboardInteractivity::OnDemand, Keyboard::Exclusive => KeyboardInteractivity::Exclusive };
+        attributes.role = SurfaceRole::Layer(
+            LayerPlacement::new(layer)
+                .with_anchors(self.edges()?)
+                .with_margin(Edges::new(CssPx(f32::from(self.margins.top)), CssPx(f32::from(self.margins.right)), CssPx(f32::from(self.margins.bottom)), CssPx(f32::from(self.margins.left))))
+                .with_exclusive_zone(exclusive_zone)
+                .with_keyboard(keyboard)
+                .with_monitor(MonitorTarget::Name(self.monitor.clone())),
+        );
         attributes.size = Some(Size::new(CssPx(f32::from(self.width)), CssPx(f32::from(self.height))));
         attributes.transparent = self.transparent;
         Ok(())
@@ -138,7 +143,7 @@ impl AppHandler for LayerHost {
 
     fn surface_event(&mut self, cx: &dyn PlatformCx, surface: SurfaceId, event: SurfaceEvent) {
         let owned = self.inner.native.windows().iter().any(|window| window.surface().id() == surface);
-        if owned && !cx.is_exiting() && matches!(event, SurfaceEvent::CloseRequested | SurfaceEvent::Destroyed)
+        if owned && !cx.is_exiting() && matches!(event, SurfaceEvent::CloseRequested | SurfaceEvent::Destroyed | SurfaceEvent::Closed(_))
             && !self.config.monitor_present(cx)
         {
             self.suspend_output(cx);
@@ -150,22 +155,24 @@ impl AppHandler for LayerHost {
         self.inner.surface_event(cx, surface, event);
     }
 
-    fn wake(&mut self, cx: &dyn PlatformCx, reason: WakeReason) { self.inner.wake(cx, reason); }
+    fn wake(&mut self, cx: &dyn PlatformCx, reason: WakeReason) {
+        if matches!(reason, WakeReason::MonitorsChanged) {
+            if cx.is_exiting() { return; }
+            if !self.config.monitor_present(cx) {
+                if !self.waiting_for_output { self.suspend_output(cx); }
+            } else if self.waiting_for_output {
+                if let Err(error) = self.open(cx) { self.inner.fail(cx, error); }
+            } else {
+                self.inner.wake(cx, reason);
+            }
+            return;
+        }
+        self.inner.wake(cx, reason);
+    }
 
     fn idle(&mut self, cx: &dyn PlatformCx) -> IdlePolicy { self.inner.idle(cx) }
 
     fn deadline_reached(&mut self, cx: &dyn PlatformCx) { self.inner.deadline_reached(cx); }
-
-    fn monitors_changed(&mut self, cx: &dyn PlatformCx) {
-        if cx.is_exiting() { return; }
-        if !self.config.monitor_present(cx) {
-            if !self.waiting_for_output { self.suspend_output(cx); }
-        } else if self.waiting_for_output {
-            if let Err(error) = self.open(cx) { self.inner.fail(cx, error); }
-        } else {
-            self.inner.monitors_changed(cx);
-        }
-    }
 
     fn shutting_down(&mut self, cx: &dyn PlatformCx) {
         self.inner.shutting_down(cx);

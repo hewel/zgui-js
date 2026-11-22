@@ -14,18 +14,34 @@ use crate::surface::role::layer;
 ///
 /// A Wayland client is not granted a size; it draws at one and the compositor accepts it. So this
 /// takes effect rather than being requested, and the frame that follows is the one that shows it.
-/// A compositor that disagrees says so with the next configure, which wins.
+/// A compositor that disagrees says so with the next configure, which wins. A request made while
+/// the window is maximised or full screen does not survive a restore: the saved normal extent
+/// replaces it.
 ///
-/// Returns `None` unless both dimensions are positive, finite, and fit the signed extent range.
+/// A shell layer may name zero along an axis, which leaves that axis to the compositor: a bar
+/// across the screen changes its height alone this way. It is drawn at its current extent along
+/// that axis until the compositor answers.
+///
+/// Returns `None` unless dimensions are finite, fit the signed extent range, and are positive
+/// (allowing a single zero axis on shell layers).
 pub fn request_size(
     surface: &WaylandSurface,
     size: Size<CssPx, Css>,
 ) -> Option<Size<DevicePx, Device>> {
     // The lock parent is sized by the compositor and the child must not extend past it.
-    if matches!(surface.role(), super::Role::LockContent(_)) {
+    if matches!(surface.role(), super::Role::LockContent(_)) || !surface.active() {
         return None;
     }
-    if !valid_size(size) || !surface.active() {
+    let is_layer = surface.role().layer().is_some();
+    let axis_ok = |axis: f32| {
+        axis.is_finite()
+            && f64::from(axis) <= f64::from(i32::MAX)
+            && (axis > 0.0 || (is_layer && axis == 0.0))
+    };
+    if !axis_ok(size.width.0)
+        || !axis_ok(size.height.0)
+        || (size.width.0 == 0.0 && size.height.0 == 0.0)
+    {
         return None;
     }
     // For a popup, the compositor's configure is the authority on the new extent.
@@ -36,15 +52,27 @@ pub fn request_size(
         let scale = surface.shared().scale;
         return Some(device_extent(size, scale));
     }
-    let scale = {
+    surface.set_wanted(size);
+    let (scale, size) = {
         let mut shared = surface.shared();
-        if let Some(role) = surface.role().layer() {
-            role.set_size(size.width.0.round().max(1.0) as u32, size.height.0.round().max(1.0) as u32);
-            shared.wanted = size;
-        }
         let scale = shared.scale;
-        shared.resized(size, scale);
-        scale
+        let resolved = Size::new(
+            if size.width.0 > 0.0 {
+                size.width
+            } else {
+                shared.logical.width
+            },
+            if size.height.0 > 0.0 {
+                size.height
+            } else {
+                shared.logical.height
+            },
+        );
+        let resized = shared.resized(resolved, scale);
+        shared.unreported = resized;
+        // A shell layer states its extent with the frame drawn at it, so the two change together.
+        shared.layer_owed |= shared.layer.is_some();
+        (scale, resolved)
     };
     zgui_platform::Surface::request_redraw(surface);
     Some(device_extent(size, scale))
@@ -109,7 +137,19 @@ pub fn set_resizable(surface: &WaylandSurface, resizable: bool) {
 /// configure sequence and all.
 ///
 /// An unmapped surface is shown again by the same empty commit that asked for its first configure.
-/// The pacer holds the redraw until that configure arrives.
+/// The pacer holds the redraw until a configure that answers that commit arrives. A shell layer is
+/// a fresh surface to the shell after an unmap, so its whole placement and extent go out again
+/// before that commit.
+///
+/// A surface hidden before the first buffer of its mapping is still in that mapping's configure
+/// sequence. Hiding it commits nothing, and showing it again only lets the next frame draw once
+/// that configure is in.
+///
+/// A hide asked for while the surface draws waits for the end of that delivery, because the frame
+/// being drawn commits its buffer after the request. Until the surface is shown again it commits
+/// nothing: an empty commit on an unmapped surface asks the shell to map it.
+///
+/// A lock surface stays shown. A lock surface with no buffer is a protocol error.
 pub fn set_visible(surface: &WaylandSurface, visible: bool) {
     if !surface.active() {
         return;
@@ -131,35 +171,72 @@ pub fn set_visible(surface: &WaylandSurface, visible: bool) {
         return;
     }
     if visible {
-        let mut shared = surface.shared();
-        if std::mem::take(&mut shared.unmapped) {
-            if let (Some(role), Some(placement)) = (surface.role().layer(), &shared.layer) {
-                let (width, height) = layer::extent(shared.wanted, placement)
-                    .expect("retained layer extent was validated");
-                if layer::version(role) >= 2 {
-                    role.set_layer(layer::layer(placement.layer));
-                }
-                layer::apply(role, placement);
-                role.set_size(width, height);
+        let remap = {
+            let mut shared = surface.shared();
+            shared.hide_owed = false;
+            let unmapped = std::mem::take(&mut shared.unmapped);
+            let remap = unmapped && shared.sequence.needs_initial_commit();
+            if unmapped && !remap {
+                let configured = std::mem::take(&mut shared.configured_unshown);
+                shared.visibility.configured |= configured;
             }
+            if remap {
+                shared.sequence.restarted();
+            }
+            remap
+        };
+        if remap {
+            surface.send_layer(true);
+            surface.send_regions();
             surface.wl_surface().commit();
         }
         zgui_platform::Surface::request_redraw(surface);
         return;
     }
+    {
+        let mut shared = surface.shared();
+        if shared.unmapped {
+            return;
+        }
+        if shared.drawing {
+            shared.hide_owed = true;
+            return;
+        }
+    }
+    unmap(surface);
+}
+
+/// Commits no buffer, which unmaps the surface, and forgets what the compositor owed it.
+///
+/// A surface that shows no buffer is not mapped, so it commits nothing. It keeps the configure it
+/// holds for the show. A mapped surface sends a barrier right after the commit, and every
+/// configure that arrives before the answer is dropped unacknowledged: the shell sent it for the
+/// mapping that is gone.
+pub(crate) fn unmap(surface: &WaylandSurface) {
+    let shown = surface.shared().shown;
+    if shown {
+        let wl = surface.wl_surface();
+        wl.attach(None, 0, 0);
+        wl.commit();
+        let serial = surface.shared().sequence.reset();
+        surface.send_barrier(serial);
+    }
     let mut shared = surface.shared();
-    let wl = surface.wl_surface();
-    wl.attach(None, 0, 0);
-    wl.commit();
+    shared.hide_owed = false;
+    shared.shown = false;
     shared.mapped = false;
+    if !shown {
+        shared.configured_unshown |= shared.visibility.configured;
+    }
     shared.visibility.configured = false;
     shared.unmapped = true;
+    // A frame held for the compositor would map the surface again when it is presented.
+    shared.pacer.cancel_held();
     shared.cancel_callbacks();
 }
 
-/// Commits pointer input now rather than waiting for a frame.
-pub(crate) fn set_input_region(surface: &WaylandSurface, input: &InputRegion) {
-    let _transaction = surface.shared();
+/// Encodes `input` into `wl_surface.set_input_region` without committing.
+fn write_input_region(surface: &WaylandSurface, input: &InputRegion) {
     let wl = surface.wl_surface();
     match input {
         InputRegion::Full => wl.set_input_region(None),
@@ -178,7 +255,38 @@ pub(crate) fn set_input_region(surface: &WaylandSurface, input: &InputRegion) {
         }
         _ => wl.set_input_region(None),
     }
-    wl.commit();
+}
+
+/// Makes the surface transparent to the pointer, or takes it back.
+pub fn set_pointer_passthrough(
+    surface: &WaylandSurface,
+    passthrough: bool,
+) -> Result<(), Unsupported> {
+    let bare = {
+        let mut shared = surface.shared();
+        shared.input_owed = None;
+        shared.may_commit_bare()
+    };
+    let input = if passthrough {
+        InputRegion::Empty
+    } else {
+        InputRegion::Full
+    };
+    write_input_region(surface, &input);
+    if bare {
+        surface.wl_surface().commit();
+    }
+    surface.ping.ping();
+    Ok(())
+}
+
+/// Commits a shell surface input region immediately rather than waiting for the next frame.
+pub(crate) fn set_shell_input_region(surface: &WaylandSurface, input: &InputRegion) {
+    let mut shared = surface.shared();
+    shared.input_owed = None;
+    write_input_region(surface, input);
+    surface.wl_surface().commit();
+    drop(shared);
     surface.ping.ping();
 }
 
@@ -188,9 +296,13 @@ pub(crate) fn reconfigure_layer(
     placement: &LayerPlacement,
     size: Size<CssPx, Css>,
 ) -> Result<(), PlatformError> {
-    let Some(role) = surface.role().layer() else { return Err(Unsupported.into()) };
+    let Some(role) = surface.role().layer() else {
+        return Err(Unsupported.into());
+    };
     let mut shared = surface.shared();
-    let Some(current) = &shared.layer else { return Err(Unsupported.into()) };
+    let Some(current) = &shared.layer else {
+        return Err(Unsupported.into());
+    };
     if current == placement && shared.wanted == size {
         return Ok(());
     }
@@ -199,7 +311,9 @@ pub(crate) fn reconfigure_layer(
     layer::reconfigure(role, current, previous, placement, next)?;
     shared.wanted = size;
     shared.layer = Some(placement.clone());
+    shared.layer_owed = false;
     surface.wl_surface().commit();
+    drop(shared);
     surface.ping.ping();
     Ok(())
 }
@@ -224,18 +338,26 @@ pub fn pre_present(surface: &WaylandSurface, size: Size<i32, Device>, scale: f64
         let mut shared = surface.shared();
         shared.presented = true;
         shared.mapped = true;
+        shared.shown = true;
+        shared.committing_frame(size);
         (
             shared.frame_metadata(size, scale),
             shared.ladder.is_fractional(),
         )
     };
     if let Some(logical) = metadata {
-        crate::surface::scale::declare(surface, scale, fractional);
+        // A surface with a viewport is always mapped through it: the buffer can be larger than the
+        // frame, and only the frame's extent is shown.
+        let viewport = surface.fractional().crops();
+        crate::surface::scale::declare(surface, scale, fractional || viewport);
+        surface.fractional().source(size);
         surface.fractional().destination(logical);
         if let Some(window) = surface.role().window() {
             window.set_geometry(logical);
         }
     }
+    surface.send_layer(false);
+    surface.send_regions();
     surface.ask_for_callback();
     surface.ask_for_feedback();
     // Counted where it becomes a statement about visibility: a compositor that is not compositing

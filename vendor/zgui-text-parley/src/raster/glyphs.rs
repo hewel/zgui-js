@@ -45,6 +45,13 @@ const COLOR_ONLY_SOURCES: [Source; 2] = [
 /// Alpha bitmap fallback for bitmap-only faces when synthetic bolding is requested.
 const BITMAP_ONLY_SOURCES: [Source; 1] = [Source::Bitmap(StrikeWith::BestFit)];
 
+/// How far the outline moves along x for the red, the green and the blue coverage, in pixels.
+///
+/// The red stripe is a third of a pixel to the left of the centre of its pixel. The outline moves
+/// to the right by that distance, so the centre of the pixel reads the coverage at the red stripe.
+/// The blue stripe is the mirror of that.
+const STRIPE_OFFSETS: [f32; 3] = [1.0 / 3.0, 0.0, -1.0 / 3.0];
+
 /// Rasterises glyphs from the faces one font system holds.
 ///
 /// Hinted, and capable of subpixel coverage and of the face's own colour glyphs. Which of those a
@@ -187,7 +194,7 @@ fn renderer(key: &GlyphKey, sources: &'static [Source]) -> Render<'static> {
 /// The mask format matching a raster style.
 fn format_for(style: RasterStyle) -> Format {
     match style {
-        RasterStyle::Subpixel => Format::Subpixel,
+        RasterStyle::Subpixel => Format::CustomSubpixel(STRIPE_OFFSETS),
         RasterStyle::Grayscale | RasterStyle::Color => Format::Alpha,
     }
 }

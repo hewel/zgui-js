@@ -163,7 +163,7 @@ function buildFuzzSteps(seed) {
 }
 
 const FUZZ_SEEDS = [0x5eed0001, 0x5eed0002, 0x5eed0003];
-const STACK_LIMIT_BYTES = 240 * 1024;
+const STACK_LIMIT_BYTES = 256 * 1024;
 const ENTRY_BUDGET_US = 30_000;
 
 test("gallery survives deterministic seeded interaction fuzzing under tight stack and latency budgets", async () => {

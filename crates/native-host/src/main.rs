@@ -410,6 +410,10 @@ impl AppHandler for Application {
                     self.native.wake(cx, WakeReason::ClipboardRead { serial, result });
                 }
             }
+            WakeReason::MonitorsChanged => {
+                self.native.wake(cx, WakeReason::MonitorsChanged);
+                self.monitors = shell::Monitor::snapshot(self.native.monitors());
+            }
             other => self.native.wake(cx, other),
         }
         self.after_native(cx);
@@ -459,12 +463,6 @@ impl AppHandler for Application {
     }
     fn idle(&mut self, cx: &dyn PlatformCx) -> IdlePolicy {
         self.native.idle(cx)
-    }
-    fn monitors_changed(&mut self, cx: &dyn PlatformCx) {
-        self.native.monitors_changed(cx);
-        self.monitors = shell::Monitor::snapshot(self.native.monitors());
-        self.after_native(cx);
-        self.reconcile_control(cx);
     }
     fn deadline_reached(&mut self, cx: &dyn PlatformCx) {
         self.native.deadline_reached(cx);
@@ -771,10 +769,14 @@ fn main() -> Result<(), Box<dyn Error>> {
     if let Some(insp) = &dev_inspector {
         app = app.with_probe(insp.probe());
     }
-    let mut native = app.into_handler(move || Root(roots.clone()))?.into_runtime();
+    if pure_shell {
+        app = app
+            .without_primary_window()
+            .with_exit_policy(zgui::runtime::ExitPolicy::Explicit);
+    }
+    let native = app.into_handler(move || Root(roots.clone()))?.into_runtime();
     let fonts = pure_shell.then(|| native.scope().with(zgui::reactive::use_context::<zgui::app::Fonts>)
         .expect("the native application provides a font collection"));
-    if pure_shell { native.without_primary_surface(); }
     let native_failure = native.failure();
     let mut application = Application::new(native, pending, package, socket_bindings)?;
     application.layer_primary = layer_config.is_some();
@@ -794,7 +796,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     application.watch_path = watch.then_some(bundle).flatten();
     application.control.override_path = control_socket;
     let failure = application.failure.clone();
-    eprintln!("zgui=80baa3c7 rquickjs=73fcd606 QuickJS-NG=6d46d07d fontique=patched platform-selection={}", std::env::var("ZGUI_PLATFORM").unwrap_or_else(|_| "desktop-auto".into()));
+    eprintln!("zgui=ee29c7dc rquickjs=73fcd606 QuickJS-NG=6d46d07d fontique=patched platform-selection={}", std::env::var("ZGUI_PLATFORM").unwrap_or_else(|_| "desktop-auto".into()));
     let handler: Box<dyn AppHandler> = match layer_config {
         Some(config) => Box::new(shell::LayerHost::new(application, config)),
         None => Box::new(application),

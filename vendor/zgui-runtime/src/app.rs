@@ -24,9 +24,9 @@ use std::sync::Arc;
 
 use zgui_geom::{Css, CssPx, Size};
 use zgui_platform::{
-    AppHandler, Clock, IdlePolicy, LayerPlacement, MonitorInfo, PlatformCx, PlatformError,
-    PopupPlacement, SessionLockState, Surface, SurfaceAttributes, SurfaceEvent, SurfaceId,
-    SurfaceRole, WakeReason,
+    AppHandler, Clock, CloseReason, IdlePolicy, LayerPlacement, MonitorInfo, PlatformCx,
+    PlatformError, PopupPlacement, SessionLockState, Surface, SurfaceAttributes, SurfaceEvent,
+    SurfaceId, SurfaceRole, WakeReason,
 };
 use zgui_render::{RenderTarget, Renderer};
 use zgui_view::{Anchor, BuildCx};
@@ -156,6 +156,10 @@ pub struct App {
     style_threads: Option<usize>,
     /// How many workers the layout engine may use, when the default is not wanted.
     layout_threads: Option<usize>,
+    /// How every window antialiases its text.
+    text_antialiasing: crate::TextAntialiasing,
+    /// Whether the application opens a window when it starts.
+    primary_window: bool,
 }
 
 impl Default for App {
@@ -181,7 +185,38 @@ impl App {
             menu: None,
             style_threads: None,
             layout_threads: None,
+            text_antialiasing: crate::TextAntialiasing::default(),
+            primary_window: true,
         }
+    }
+
+    /// Starts the application with no window open.
+    ///
+    /// The view that [`App::into_handler`] and [`App::run`] take is then not built, and the window
+    /// attributes set on this builder are not used. The application opens its windows itself, from
+    /// [`App::with_context`] or from anything that runs under it, through
+    /// [`use_windows`](crate::windows::use_windows). This is what a desktop shell does: it opens
+    /// one bar for each monitor and a pop-over on demand, and no one of them is the main window.
+    ///
+    /// Pair it with [`ExitPolicy::Explicit`] when the application must keep running while no
+    /// window is open. With [`ExitPolicy::WhenPrimaryCloses`] there is no primary window to wait
+    /// for, and the application stops when its last window closes.
+    pub fn without_primary_window(mut self) -> Self {
+        self.primary_window = false;
+        self
+    }
+
+    /// Whether the application opens a window when it starts.
+    pub fn has_primary_window(&self) -> bool {
+        self.primary_window
+    }
+
+    /// Makes the window the application starts with a shell window, placed as `layer` says.
+    ///
+    /// See [`WindowOptions::layer`](crate::windows::WindowOptions::layer).
+    pub fn with_layer(mut self, layer: crate::windows::LayerOptions) -> Self {
+        layer.apply_to(&mut self.attributes);
+        self
     }
 
     /// How many workers the layout engine may use.
@@ -203,6 +238,21 @@ impl App {
     pub fn with_style_threads(mut self, threads: usize) -> Self {
         self.style_threads = Some(threads);
         self
+    }
+
+    /// How every window antialiases its text.
+    ///
+    /// The default follows the display, see [`TextAntialiasing::Auto`](crate::TextAntialiasing).
+    /// The `ZGUI_TEXT_AA` environment variable overrides whatever is set here, so a user whose
+    /// display reports no layout or a wrong one can state it: `auto`, `gray`, `rgb` or `bgr`.
+    pub fn with_text_antialiasing(mut self, antialiasing: crate::TextAntialiasing) -> Self {
+        self.text_antialiasing = antialiasing;
+        self
+    }
+
+    /// Returns the setting stated with [`App::with_text_antialiasing`].
+    pub fn text_antialiasing(&self) -> crate::TextAntialiasing {
+        self.text_antialiasing
     }
 
     /// Returns the style worker count set with [`App::with_style_threads`], if one was set.
@@ -446,16 +496,18 @@ pub struct Runtime {
     app_options: WindowContent,
     /// Every window the application wants, open or not, in creation order.
     live: Vec<LiveWindow>,
-    /// The name of the window the application launched with.
+    /// The name of the window the application launched with, when it launched with one.
     primary: Option<WindowToken>,
-    /// The last inventory reported by the platform.
-    monitors: Vec<MonitorInfo>,
     /// What the application has asked its own runtime to do.
     commands: WindowCommands,
     /// The desktop's clipboards, as the application asks for them.
     clipboards: crate::clipboard::Clipboards,
     /// The windows as the application holds them.
     windows_api: crate::windows::Windows,
+    /// The outputs, as the application reads them.
+    monitors: crate::monitors::Monitors,
+    /// The last inventory reported by the platform, mirrored for synchronous slice reads.
+    monitor_snapshot: Vec<MonitorInfo>,
     /// The scope above every window's, where what is shared between them lives.
     scope: zgui_reactive::Mounted,
     /// When the application stops.
@@ -466,8 +518,8 @@ pub struct Runtime {
     menu: Option<crate::desktop::MenuSlot>,
     /// The shortcuts of the menu's actions, shared with every window.
     menu_keys: crate::desktop::MenuKeys,
-    /// The next document identity to mint.
-    next_document: u16,
+    /// The document identities, fresh and given back by closed windows.
+    documents: crate::documents::Documents,
     /// What the desktop groups this application's windows under.
     ///
     /// Application-wide rather than per window: it is what a compositor matches window rules,
@@ -506,7 +558,7 @@ pub struct Runtime {
     /// would be woken every tick and asked to draw on none of them.
     parked: Vec<(
         SurfaceId,
-        std::time::Instant,
+        web_time::Instant,
         crate::window::frame::DeadlineKind,
     )>,
     /// Why the application stopped, if it did.
@@ -520,6 +572,8 @@ pub struct Runtime {
     ///
     /// Its workers start on the first batch or pre-shape that layout distributes.
     layout_pool: Option<std::sync::Arc<zgui_layout::tree::parallel::LayoutPool>>,
+    /// How every window antialiases its text.
+    text_antialiasing: crate::TextAntialiasing,
 }
 
 /// The cascade's worker pool, started on first use.
@@ -608,6 +662,8 @@ impl Runtime {
     fn new(mut app: App, view: ViewFactory) -> Self {
         let style_pool = style_pool_for(app.style_threads);
         let layout_pool = layout_pool_for(app.layout_threads);
+        let text_antialiasing =
+            crate::TextAntialiasing::from_env().unwrap_or(app.text_antialiasing);
         let commands = WindowCommands::new();
         let clipboards = crate::clipboard::Clipboards::new();
         // The scope above every window: what is provided here is visible in all of them, and what a
@@ -615,6 +671,7 @@ impl Runtime {
         // scope can be mounted under it.
         let scope = zgui_reactive::Mounted::new();
         let windows_api = crate::windows::Windows::new(commands.clone());
+        let monitors = crate::monitors::Monitors::new();
         let shared = app.shared.take();
         let hooks = crate::desktop::AppHooks::new();
         let build_menu = app.menu.take();
@@ -623,6 +680,8 @@ impl Runtime {
             zgui_reactive::provide_local_context(commands.clone());
             // How every window reaches the others, and how any of them opens one.
             zgui_reactive::provide_local_context(windows_api.clone());
+            // The outputs, the same list in every window.
+            zgui_reactive::provide_local_context(monitors.clone());
             // The desktop's clipboards, reachable from every window.
             zgui_reactive::provide_local_context(clipboards.clone());
             // What the application hears from outside its windows.
@@ -637,37 +696,43 @@ impl Runtime {
             menu = build_menu.map(crate::desktop::MenuSlot::new);
         });
         let application_id = app.attributes.application_id.clone();
-        let primary = commands.mint();
-        let live = vec![LiveWindow {
-            token: primary,
-            spec: Box::new(WindowSpec::new(
-                app.attributes,
-                WindowContent::default(),
-                view,
-            )),
-            surface: None,
-            // The window the application launched with is opened rather than asked for, and still
-            // needs the handle every other window has.
-            handle: crate::windows::WindowHandle::pending(
-                primary,
-                commands.clone(),
-                Rc::clone(windows_api.capabilities_slot()),
-            ),
-        }];
+        let mut live = Vec::new();
+        let mut primary = None;
+        if app.primary_window {
+            let token = commands.mint();
+            primary = Some(token);
+            live.push(LiveWindow {
+                token,
+                spec: Box::new(WindowSpec::new(
+                    app.attributes,
+                    WindowContent::default(),
+                    view,
+                )),
+                surface: None,
+                // The window the application launched with opens directly, with no request. It
+                // still needs the handle every other window has.
+                handle: crate::windows::WindowHandle::pending(
+                    token,
+                    commands.clone(),
+                    Rc::clone(windows_api.capabilities_slot()),
+                ),
+            });
+        }
         Self {
             app_options: app.options,
             live,
-            primary: Some(primary),
-            monitors: Vec::new(),
+            primary,
             commands,
             clipboards,
             windows_api,
+            monitors,
+            monitor_snapshot: Vec::new(),
             scope,
             exit: app.exit,
             hooks,
             menu,
             menu_keys: crate::desktop::MenuKeys::default(),
-            next_document: 0,
+            documents: crate::documents::Documents::default(),
             application_id: application_id.clone(),
             renderer: app.renderer.unwrap_or_else(|| {
                 Box::new(|_, _| Err(AppError::GpuUnavailable(zgui_render::GpuUnavailable::new())))
@@ -691,6 +756,7 @@ impl Runtime {
             clock: None,
             style_pool,
             layout_pool,
+            text_antialiasing,
             parked: Vec::new(),
             failure: Failure::default(),
         }
@@ -721,7 +787,7 @@ impl Runtime {
 
     /// The monitor inventory from startup or the most recent platform notification.
     pub fn monitors(&self) -> &[MonitorInfo] {
-        &self.monitors
+        &self.monitor_snapshot
     }
 
     /// Requests a compositor lock that does not depend on any window's lifetime.
@@ -745,7 +811,7 @@ impl Runtime {
     ///
     /// Returns the platform's error if the lock is not acquired or the request cannot be sent.
     pub fn unlock_session(&self, cx: &dyn PlatformCx) -> Result<(), PlatformError> {
-        cx.unlock_session()
+        cx.try_unlock_session()
     }
 
     /// Schedules application work independently of frames and surface lifetime.
@@ -832,14 +898,19 @@ impl Runtime {
                 }
                 if !vetoed {
                     before_close(self);
-                    self.close_window(cx, surface);
+                    self.close_window(cx, surface, CloseReason::User);
                     self.apply_exit_policy(cx);
                 }
             }
             // The platform took it. There is nothing to refuse: the window is already gone.
             SurfaceEvent::Destroyed => {
                 before_close(self);
-                self.close_window(cx, surface);
+                self.close_window(cx, surface, CloseReason::Desktop);
+                self.apply_exit_policy(cx);
+            }
+            SurfaceEvent::Closed(reason) => {
+                before_close(self);
+                self.close_window(cx, surface, reason);
                 self.apply_exit_policy(cx);
             }
             other => {
@@ -897,7 +968,7 @@ impl Runtime {
         if self.live_for_surface(surface).is_none() {
             return false;
         }
-        self.close_window(cx, surface);
+        self.close_window(cx, surface, CloseReason::Application);
         self.apply_exit_policy(cx);
         true
     }
@@ -1085,18 +1156,21 @@ impl Runtime {
         &self.scope
     }
 
-    /// Mints the next document identity.
+    /// A document for a window that opens, under a fresh identity or one a closed window gave
+    /// back.
     ///
-    /// Never reused. A node handle carries the document it was minted in, and state above the
-    /// windows can outlive a window while still holding one: with reuse, such a handle would
-    /// resolve inside an unrelated later document and pass every ownership assertion while doing
-    /// it. Four thousand window-opens in one process is the honest limit that buys that, and
-    /// reaching it fails loudly rather than aliasing.
-    fn allocate_document(&mut self) -> Result<zgui_dom::DocumentId, AppError> {
-        let id =
-            zgui_dom::DocumentId::new(self.next_document).ok_or(AppError::DocumentsExhausted)?;
-        self.next_document += 1;
-        Ok(id)
+    /// See [`documents`](crate::documents) for when an identity comes back and why a stale node
+    /// handle never resolves in the document that takes it over.
+    ///
+    /// The timers of the identity are forgotten here. Whatever kept a closed document alive could
+    /// set a timer after its window closed, and that timer must not fire in the window that takes
+    /// the identity over.
+    fn allocate_document(&mut self) -> Result<zgui_dom::Document, AppError> {
+        let document = self.documents.allocate()?;
+        if let Some(id) = zgui_view::DocumentId::new(document.store().document().get()) {
+            self.timers.borrow_mut().forget(id);
+        }
+        Ok(document)
     }
 
     /// The window `token` names, if it is one the application still wants.
@@ -1132,7 +1206,22 @@ impl Runtime {
     /// The one path a window is opened by, whether it is the window the application launched with,
     /// one it asked for later, or one being opened again after the platform took its surface away.
     fn open_live_window(&mut self, cx: &dyn PlatformCx, index: usize) -> Result<(), AppError> {
-        let document = self.allocate_document()?;
+        let mut document = Some(self.allocate_document()?);
+        let opened = self.open_live_window_into(cx, index, &mut document);
+        // A window that failed to open gives its document's identity straight back.
+        if let Some(unused) = document {
+            self.documents.give_back(&Rc::new(RefCell::new(unused)));
+        }
+        opened
+    }
+
+    /// The same, building the window into the document `document` holds and taking it.
+    fn open_live_window_into(
+        &mut self,
+        cx: &dyn PlatformCx,
+        index: usize,
+        document: &mut Option<zgui_dom::Document>,
+    ) -> Result<(), AppError> {
         // A window opened while the application runs belongs to the same application as the one it
         // was opened from. Without this the desktop sees an unnamed window: no icon, no window
         // rule matches it, and it groups under nothing.
@@ -1142,6 +1231,28 @@ impl Runtime {
                 .attributes
                 .application_id
                 .clone_from(&self.application_id);
+        }
+        if matches!(
+            self.live[index].spec.attributes.role,
+            zgui_platform::SurfaceRole::Lock(_)
+        ) && self.commands.session_lock().is_none()
+            && !cx.session_lock_state().is_retained()
+        {
+            return Err(zgui_platform::PlatformError::SurfaceCreation(
+                "a lock window needs the session lock this application holds".to_owned(),
+            )
+            .into());
+        }
+        if let Some(parent) = self.live[index].spec.popup_parent {
+            let surface = self
+                .live_index(parent)
+                .and_then(|parent| self.live[parent].surface)
+                .ok_or_else(|| {
+                    zgui_platform::PlatformError::SurfaceCreation(
+                        "the window this pop-up belongs to is not open".to_owned(),
+                    )
+                })?;
+            crate::windows::popup::set_parent(&mut self.live[index].spec.attributes, surface);
         }
         let surface = cx.create_surface(&self.live[index].spec.attributes)?;
         // A predecessor identifies only this creation, not any subsequent resume.
@@ -1186,6 +1297,16 @@ impl Runtime {
         let metrics = (self.metrics)();
         let timers = Rc::clone(&self.timers);
         let handle = self.live[index].handle.clone();
+        // A shell window, a pop-up and a lock window are given the keyboard by an edge of their
+        // own, and one that takes no keyboard is never given it. Every other window is given it
+        // as it opens.
+        let starts_focused = !matches!(
+            self.live[index].spec.attributes.role,
+            zgui_platform::SurfaceRole::Layer(_)
+                | zgui_platform::SurfaceRole::Popup(_)
+                | zgui_platform::SurfaceRole::Lock(_)
+        );
+        handle.set_focused(starts_focused);
         let close = Rc::clone(&self.live[index].spec.close);
         let view = &mut self.live[index].spec.view;
         // Under the application's scope, so that this window's own scope is a child of it: what the
@@ -1193,7 +1314,7 @@ impl Runtime {
         let mut window = self.scope.with(|| {
             Window::open(
                 Arc::clone(&surface),
-                document,
+                document.take().expect("the document is taken once"),
                 renderer,
                 text,
                 raster,
@@ -1221,6 +1342,14 @@ impl Runtime {
         window.set_translucent(translucent);
         if matches!(self.live[index].spec.attributes.role, SurfaceRole::Lock(_)) {
             window.enable_lock_backdrop();
+        }
+        window.set_text_antialiasing(self.text_antialiasing);
+        window.assume_surface_focus(starts_focused);
+        // A window opened hidden is hidden before its first frame, so that frame never reaches
+        // the screen. Only the first open: a window shown since then is shown again on a resume.
+        if std::mem::take(&mut self.live[index].spec.hidden) {
+            surface.set_visible(false);
+            window.keep_hidden();
         }
         if let Some(pool) = &self.style_pool {
             window.set_style_pool(Rc::clone(pool));
@@ -1273,18 +1402,16 @@ impl Runtime {
             Err(PlatformError::SurfaceCreation("surfaces are not available".to_owned()).into())
         };
         if result.is_err() {
-            self.discard_window(index);
+            self.forget_unopened(token, CloseReason::Desktop);
         }
         result
     }
 
     fn close_named_surface(&mut self, cx: &dyn PlatformCx, token: WindowToken) -> bool {
-        let Some(index) = self.live_index(token) else { return false };
-        if let Some(surface) = self.live[index].surface {
-            self.close_window(cx, surface);
-        } else {
-            self.discard_window(index);
+        if self.live_index(token).is_none() {
+            return false;
         }
+        self.close_token(cx, token, CloseReason::Application);
         true
     }
 
@@ -1308,14 +1435,91 @@ impl Runtime {
                 WindowCommand::Open { token, spec } => {
                     if let Err(error) = self.open_named_surface(cx, token, spec) {
                         tracing::error!(target: "zgui::app", %error, "the window could not be opened");
+                        self.forget_unopened(token, CloseReason::Desktop);
                     }
                 }
-                WindowCommand::Close(token) => closed_any |= self.close_named_surface(cx, token),
+                WindowCommand::Close(token) => {
+                    self.close_token(cx, token, CloseReason::Application);
+                    closed_any = true;
+                }
+                WindowCommand::Lock(lock) => {
+                    if let Err(error) = cx.lock_session() {
+                        tracing::warn!(target: "zgui::app", %error, "the session could not be locked");
+                        // A refused lock that had no window yet closes nothing, so an
+                        // application with no window lives on to hear of the refusal.
+                        closed_any |= self.lock_ended(cx, &lock);
+                    }
+                }
+                WindowCommand::Unlock(lock) => {
+                    // Unlocked before the lock windows go: a lock window destroyed while the
+                    // session is locked leaves its output blank.
+                    cx.unlock_session();
+                    for window in lock.windows() {
+                        self.close_token(cx, window.id(), CloseReason::Application);
+                    }
+                    closed_any = true;
+                }
+                // Carried out below, once every window this drain opens or closes has.
+                WindowCommand::SyncGrabs => {}
                 WindowCommand::Quit => cx.request_exit(),
             }
         }
+        self.sync_grabs(cx);
         if closed_any {
             self.apply_exit_policy(cx);
+        }
+    }
+
+    /// Closes the window `token` names, whether it is open or only asked for.
+    fn close_token(&mut self, cx: &dyn PlatformCx, token: WindowToken, reason: CloseReason) {
+        if let Some(index) = self.live_index(token)
+            && let Some(surface) = self.live[index].surface
+        {
+            self.close_window(cx, surface, reason);
+        } else {
+            // Asked for before it ever opened: it is simply no longer wanted.
+            self.forget_unopened(token, reason);
+        }
+    }
+
+    /// Forgets a window that has no surface, and tells its handle that it closed and why.
+    ///
+    /// The window was closed before it opened, or it could not be opened. Its handle hears of the
+    /// close as the handle of an open window does, so code that waits for
+    /// [`WindowHandle::close_reason`](crate::windows::WindowHandle::close_reason) is answered.
+    fn forget_unopened(&mut self, token: WindowToken, reason: CloseReason) {
+        self.commands.note_closed(token);
+        if let Some(index) = self.live_index(token) {
+            self.live[index].handle.note_closed();
+            self.live[index].handle.set_close_reason(reason);
+            self.windows_api.note_closed(token);
+            self.live.remove(index);
+        }
+    }
+
+    /// Records that the session lock is over, and closes its lock windows. Answers whether the
+    /// lock had a window to close.
+    fn lock_ended(&mut self, cx: &dyn PlatformCx, lock: &crate::lock::LockEntry) -> bool {
+        self.scope.with(|| lock.ended());
+        let windows = lock.windows();
+        for window in &windows {
+            self.close_token(cx, window.id(), CloseReason::Desktop);
+        }
+        !windows.is_empty()
+    }
+
+    /// Gives every focus grab the surfaces of its windows that are open, and forgets the grabs
+    /// the application dropped.
+    fn sync_grabs(&self, cx: &dyn PlatformCx) {
+        let mut gone = Vec::new();
+        for grab in self.commands.grabs() {
+            if !grab.sync(cx, &self.commands) {
+                gone.push(grab);
+            }
+        }
+        if !gone.is_empty() {
+            self.commands
+                .retain_grabs(|grab| !gone.iter().any(|held| Rc::ptr_eq(held, grab)));
         }
     }
 
@@ -1372,9 +1576,10 @@ impl Runtime {
     fn apply_exit_policy(&self, cx: &dyn PlatformCx) {
         let done = match self.exit {
             ExitPolicy::WhenAllWindowsClose => self.live.is_empty(),
-            ExitPolicy::WhenPrimaryCloses => {
-                self.primary.is_none_or(|token| self.live_index(token).is_none())
-            }
+            ExitPolicy::WhenPrimaryCloses => match self.primary {
+                Some(primary) => !self.live.iter().any(|live| live.token == primary),
+                None => self.live.is_empty(),
+            },
             ExitPolicy::Explicit => false,
         };
         if done {
@@ -1436,24 +1641,47 @@ impl Runtime {
     ///
     /// The window stops being one the application wants, which is what tells this apart from a
     /// platform taking every surface away: a window closed here does not come back on resume.
-    fn close_window(&mut self, cx: &dyn PlatformCx, surface: SurfaceId) {
-        // A pop-up is opened after its parent. Take a snapshot so removals cannot invalidate
-        // indices, then go in reverse creation order to close each child before its parent.
+    fn close_window(&mut self, cx: &dyn PlatformCx, surface: SurfaceId, reason: CloseReason) {
+        // The pop-ups placed against the window close first: a desktop takes a parent down only
+        // after its pop-ups. Check both `spec.popup_parent` (for `open_popup` handles) and
+        // `SurfaceRole::Popup` (for direct `open_surface` pop-ups), closing deepest descendants
+        // first.
         let mut descendants = Vec::new();
+        let mut descendant_tokens = Vec::new();
+        if let Some(index) = self.live_for_surface(surface) {
+            descendant_tokens.push(self.live[index].token);
+        }
         for live in &self.live {
-            if let SurfaceRole::Popup(placement) = &live.spec.attributes.role
-                && let Some(id) = live.surface
-                && (placement.parent == surface || descendants.contains(&placement.parent))
-            {
+            let Some(id) = live.surface else {
+                continue;
+            };
+            if id == surface || descendants.contains(&id) {
+                continue;
+            }
+            let by_role = matches!(
+                &live.spec.attributes.role,
+                SurfaceRole::Popup(placement)
+                    if placement.parent == surface || descendants.contains(&placement.parent)
+            );
+            let by_token = live
+                .spec
+                .popup_parent
+                .is_some_and(|parent| descendant_tokens.contains(&parent));
+            if by_role || by_token {
                 descendants.push(id);
+                descendant_tokens.push(live.token);
             }
         }
-        for id in descendants.into_iter().rev().chain(std::iter::once(surface)) {
-            self.close_one_window(cx, id);
+        for id in descendants.into_iter().rev() {
+            self.close_one_window(cx, id, CloseReason::Dismissed);
         }
+        self.close_one_window(cx, surface, reason);
+        // A grab over the window lets go of it before the surface is destroyed at the end of the
+        // turn.
+        self.sync_grabs(cx);
     }
 
-    fn close_one_window(&mut self, cx: &dyn PlatformCx, surface: SurfaceId) {
+    fn close_one_window(&mut self, cx: &dyn PlatformCx, surface: SurfaceId, reason: CloseReason) {
         // Looked up before the teardown, which is what clears the surface this names it by.
         let index = self.live_for_surface(surface);
         self.forget_surface(surface);
@@ -1462,7 +1690,11 @@ impl Runtime {
         // the screen, and a window nothing draws into is one that no longer responds or closes.
         cx.destroy_surface(surface);
         if let Some(index) = index {
-            self.discard_window(index);
+            self.commands.note_closed(self.live[index].token);
+            self.live[index].handle.note_closed();
+            self.live[index].handle.set_close_reason(reason);
+            self.windows_api.note_closed(self.live[index].token);
+            self.live.remove(index);
         }
     }
 
@@ -1473,12 +1705,14 @@ impl Runtime {
             if !matches!(live.spec.attributes.role, SurfaceRole::Popup(_)) {
                 continue;
             }
+            let token = live.token;
             if let Some(surface) = live.surface {
-                self.close_one_window(cx, surface);
+                self.close_one_window(cx, surface, CloseReason::Dismissed);
             } else {
-                self.discard_window(index);
+                self.forget_unopened(token, CloseReason::Dismissed);
             }
         }
+        self.sync_grabs(cx);
     }
 
     /// Tears down the window drawing into `surface`, leaving what the application wants alone.
@@ -1492,7 +1726,11 @@ impl Runtime {
             .position(|window| window.surface().id() == surface)
         {
             self.windows[position].close();
-            self.windows.remove(position);
+            let window = self.windows.remove(position);
+            // The identity comes back once the document is dropped, which is here unless
+            // something outside the window still holds it.
+            self.documents.give_back(window.document());
+            drop(window);
         }
         if let Some(live) = self
             .live
@@ -1506,6 +1744,19 @@ impl Runtime {
         if let Some(waker) = &self.waker {
             waker.disowns(surface);
         }
+    }
+
+    /// Flushes the reactive work above the windows when no window is open, and reports whether it
+    /// did.
+    ///
+    /// A window's frame is what ordinarily flushes, so with no window open nothing else would.
+    /// That work still has to run: it is what opens the next window.
+    fn flush_without_windows(&self) -> bool {
+        if !self.windows.is_empty() {
+            return false;
+        }
+        self.scope.with(zgui_reactive::flush);
+        true
     }
 
     /// Asks every other window whether this frame wrote its document, and asks it to draw if so.
@@ -1559,13 +1810,14 @@ impl AppHandler for Runtime {
         // between frames is queued with nothing to ask for the frame that would poll it.
         self.clock = Some(cx.clock());
         self.app_timers.attach(cx);
-        self.monitors_changed(cx);
         let waker = Arc::new(RuntimeWaker::new(cx.waker(), Arc::clone(&self.gate)));
         zgui_reactive::set_frame_waker(Arc::clone(&waker) as Arc<dyn zgui_reactive::FrameWaker>);
         self.waker = Some(waker);
         self.commands.set_platform(cx.waker());
         self.clipboards.set_platform(cx.waker());
         *self.windows_api.capabilities_slot().borrow_mut() = cx.capabilities().clone();
+        // Before any window opens, so a view built for a window reads the outputs there are.
+        let _ = self.monitors.refresh_into(cx, &mut self.monitor_snapshot);
 
         // Every window the application wants and has no surface for. At launch that is the window
         // it launched with; after a suspend it is all of them, which is why a specification is kept
@@ -1586,6 +1838,11 @@ impl AppHandler for Runtime {
             }
         }
         self.drain_window_commands(cx);
+        // An application that opened no window has had no frame to start the effects its setup
+        // made. Until the first flush polls them, a write to what they read wakes nothing.
+        if self.flush_without_windows() {
+            self.drain_window_commands(cx);
+        }
         self.apply_menu(cx);
     }
 
@@ -1615,10 +1872,6 @@ impl AppHandler for Runtime {
         self.waker = None;
     }
 
-    fn monitors_changed(&mut self, cx: &dyn PlatformCx) {
-        self.monitors = cx.monitors();
-    }
-
     fn surface_event(&mut self, cx: &dyn PlatformCx, surface: SurfaceId, event: SurfaceEvent) {
         self.surface_event_with_close(cx, surface, event, |_| {});
     }
@@ -1634,6 +1887,7 @@ impl AppHandler for Runtime {
                         window.request_frame();
                     }
                 }
+                self.flush_without_windows();
             }
             // The desktop-wide route, which a backend that has no per-surface notification uses.
             // The preference is *read* here and pushed into every window, because a frame alone
@@ -1679,8 +1933,40 @@ impl AppHandler for Runtime {
                 self.clipboards.resolve(serial, result);
             }
             WakeReason::App(event) => self.app_event(cx, event),
-            // A resize is where the state is read, and the last resize came before the change
-            // was done.
+            // The effects that read the list run in the next frame's flush, or here when no window
+            // is open. One that opens or closes a window queues it like any other caller.
+            WakeReason::SessionLocked => {
+                if let Some(lock) = self.commands.session_lock() {
+                    self.scope.with(|| lock.confirmed());
+                }
+            }
+            WakeReason::SessionLockFinished => {
+                if let Some(lock) = self.commands.session_lock()
+                    && self.lock_ended(cx, &lock)
+                {
+                    self.apply_exit_policy(cx);
+                }
+            }
+            WakeReason::FocusGrabCleared(grab) => {
+                if let Some(entry) = self
+                    .commands
+                    .grabs()
+                    .into_iter()
+                    .find(|entry| entry.is(grab))
+                {
+                    self.scope.with(|| entry.cleared());
+                }
+            }
+            WakeReason::MonitorsChanged
+                if self.monitors.refresh_into(cx, &mut self.monitor_snapshot) =>
+            {
+                for window in &self.windows {
+                    window.request_frame();
+                }
+                self.flush_without_windows();
+            }
+            // The desktop changed the state with no resize, or after the last resize of the
+            // change. Read the state again and draw it.
             WakeReason::SurfaceStateChanged(surface) => {
                 if let Some(window) = self.window_mut(surface) {
                     window.refresh_window_state();

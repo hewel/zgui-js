@@ -326,7 +326,7 @@ fn dismiss_in_pointer_capture(prevent_default: bool) -> Script {
             let trap = held.borrow_mut().take();
             drop(trap);
         });
-    let window = script.harness.app().windows().first().expect("a window").clone();
+    let window = script.harness.app().windows().first().expect("a window");
     let scale = window.host().scale();
     let rect = window
         .host()

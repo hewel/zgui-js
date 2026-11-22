@@ -97,19 +97,27 @@ impl Window {
     /// stream of pointer moves is.
     pub(crate) fn drain_input(&mut self, timestamp: Timestamp) -> bool {
         let mut owed = false;
+        let events = core::mem::take(&mut self.queued);
         // The answers to paste requests an earlier frame recorded, applied ahead of this frame's
         // own events and settled like one of them, so a handler for the input a paste announces
-        // has mounted whatever it opens before the next event is routed.
+        // has mounted whatever it opens before the next event is routed. A paste carries the
+        // earliest stamp of the batch, so the stamps of the events after it do not go backwards.
+        let earliest = events
+            .iter()
+            .filter_map(|queued| queued.event.timestamp())
+            .fold(timestamp, Timestamp::min);
         for (node, text) in core::mem::take(&mut self.pastes) {
-            self.apply_paste(node, &text, timestamp);
-            owed |= self.settle_between_events(timestamp);
+            self.apply_paste(node, &text, earliest);
+            owed |= self.settle_between_events(earliest);
         }
-        let events = core::mem::take(&mut self.queued);
         let last = events.len().saturating_sub(1);
         for (position, queued) in events.iter().enumerate() {
-            self.dispatch_one(&queued.event, &queued.samples, timestamp);
+            // Each event and the events it causes carry the moment the platform stamped it. Events
+            // without a stamp carry the frame's moment.
+            let stamp = queued.event.timestamp().unwrap_or(timestamp);
+            self.dispatch_one(&queued.event, &queued.samples, stamp);
             if position < last {
-                owed |= self.settle_between_events(timestamp);
+                owed |= self.settle_between_events(stamp);
             }
         }
         owed
@@ -163,7 +171,22 @@ impl Window {
                 action: zgui_vocab::PointerAction::Pressed,
                 ..
             } => self.focus_modality = zgui_input::FocusSource::Pointer,
+            // A pointer that lets go also lets go of its capture, once the release is dispatched
+            // and its commands are carried out.
+            SurfaceEvent::Pointer {
+                action: zgui_vocab::PointerAction::Released | zgui_vocab::PointerAction::Cancelled,
+                event,
+                ..
+            } => self.lifted.push(event.id),
             _ => {}
+        }
+        // A drag's motion is tracked first, so a drop's listeners already see the drag-over
+        // state cleared. Only the drop itself goes on to the dispatch below.
+        if let SurfaceEvent::Drag(drag) = event {
+            self.drag_moved(drag, timestamp);
+            if !drag.is_drop() {
+                return;
+            }
         }
         let Some((kind, payload)) = event.to_dispatch() else {
             return;
@@ -210,11 +233,10 @@ impl Window {
                     (routed.target(), routed.steps.to_vec(), routed.default)
                 }
                 SurfaceEvent::Drag(zgui_platform::DragEvent::Dropped { position, .. }) => {
-                    let device = zgui_geom::Point::new(
+                    let chain = world.chain_at(zgui_geom::Point::new(
                         zgui_geom::DevicePx(position.x.0 * self.scale),
                         zgui_geom::DevicePx(position.y.0 * self.scale),
-                    );
-                    let chain = world.chain_at(device);
+                    ));
                     let mut plan = zgui_input::dispatch::Plan::default();
                     zgui_input::dispatch::resolve(document.store(), &chain, kind, &mut plan);
                     (chain.target(), plan.steps().to_vec(), None)
@@ -252,11 +274,11 @@ impl Window {
 
         let dispatched = {
             let host = std::rc::Rc::clone(&self.host);
-            let pointer = match &payload {
-                Payload::Pointer(pointer) => Some(pointer.id),
-                _ => None,
+            let pointer = match event {
+                SurfaceEvent::Pointer { event, .. } => event.id,
+                _ => zgui_vocab::PointerId::MOUSE,
             };
-            let mut sink = HostSink::new(&host).with_pointer(pointer);
+            let mut sink = HostSink::for_pointer(&host, pointer);
             dispatch::run(
                 self, &steps, kind, target, &payload, samples, modifiers, timestamp, &mut sink,
             )
@@ -344,9 +366,8 @@ impl Window {
             self.text_clicks.forget();
         }
         // A finger produces presses and moves and nothing else; what those *mean* is read here and
-        // acted on after the listeners, exactly as the wheel's own default is. A handler that took
-        // responsibility for the press has already stopped the reading from reaching a scroll,
-        // because the recogniser only ever sees what the platform sent.
+        // acted on after the listeners, exactly as the wheel's own default is. A handler that
+        // captured the pointer keeps the reading from reaching a scroll.
         if let SurfaceEvent::Pointer {
             action,
             event,
@@ -627,8 +648,16 @@ impl Window {
     /// to the corner of the field every time the surface hands the keyboard back — the candidate
     /// window of a person who alt-tabbed away mid-word opens at the start of the field they are
     /// halfway along.
+    ///
+    /// A surface without the keyboard has no input method, so text input stays disabled there
+    /// even while an element of its document has focus.
     pub(crate) fn report_text_input(&mut self) {
-        let focused = self.router.interaction().focus.focused();
+        let focused = self
+            .router
+            .interaction()
+            .focus
+            .focused()
+            .filter(|_| self.surface_focused);
         let editable = focused.filter(|node| {
             let document = self.document.borrow();
             crate::editing::Editors::is_editable(&document, *node)
@@ -737,6 +766,16 @@ impl Window {
     /// Bounded: a command that issues a command that issues a command settles or is dropped, so a
     /// handler that focuses whatever gains focus cannot hold the frame.
     pub(crate) fn carry_out_commands(&mut self, timestamp: Timestamp) {
+        self.carry_out_issued(timestamp);
+        // After the commands, so a handler for the release still had the capture it held, and a
+        // capture that a handler asked for on the release does not outlive it.
+        for pointer in core::mem::take(&mut self.lifted) {
+            self.router.capture_mut().release(pointer);
+        }
+    }
+
+    /// Carries out the commands in the queue until none are left, for at most eight rounds.
+    fn carry_out_issued(&mut self, timestamp: Timestamp) {
         for _ in 0..8u8 {
             // Before the commands are taken, because a focus move made by the event that has just
             // finished has to be announced before anything that move causes is acted on — and
@@ -754,7 +793,7 @@ impl Window {
                 if queued.restore_from.is_some_and(|root| self.host.focus_left(root)) {
                     continue;
                 }
-                self.carry_out(queued.command, queued.pointer, timestamp);
+                self.carry_out(queued.command, timestamp);
             }
         }
         self.announce_focus(timestamp);
@@ -792,30 +831,33 @@ impl Window {
     }
 
     /// Carries out one command.
-    fn carry_out(&mut self, command: Command, pointer: Option<zgui_vocab::PointerId>, timestamp: Timestamp) {
+    fn carry_out(&mut self, command: Command, timestamp: Timestamp) {
         match command {
             Command::Focus(node) => {
                 let key = node.and_then(zgui_view_dom::id::to_document);
                 self.move_focus(key, zgui_input::FocusSource::Script, timestamp);
             }
-            Command::CapturePointer(node) => {
+            Command::CapturePointer(node, pointer) => {
                 if let Some(key) = zgui_view_dom::id::to_document(node)
                     && self.document.borrow().store().get(key).is_some()
                 {
-                    let pointer = pointer.unwrap_or(zgui_vocab::PointerId::MOUSE);
                     self.router.capture_mut().set(pointer, key);
                     if !self.command_captures.contains(&pointer) {
                         self.command_captures.push(pointer);
                     }
                 }
             }
-            Command::ReleasePointer(node) => {
-                if let Some(key) = zgui_view_dom::id::to_document(node) {
-                    if let Some(pointer) = pointer {
+            Command::ReleasePointer(node, pointer) => {
+                let Some(key) = zgui_view_dom::id::to_document(node) else {
+                    return;
+                };
+                match pointer {
+                    Some(pointer) => {
                         if self.router.capture().of(pointer) == Some(key) {
                             self.router.capture_mut().release(pointer);
                         }
-                    } else {
+                    }
+                    None => {
                         self.router.capture_mut().release_node(key);
                     }
                 }

@@ -379,15 +379,19 @@ pub(crate) fn for_preview<H: AppHandler>(
         capture::renderer_factory(move |surface| registry.register_renderer(surface)),
     )
     .with_probe(Rc::new(observers.clone()));
-    let app = resources::configure(app, package);
+    let mut app = resources::configure(app, package);
+    if profile.profile.pure_shell {
+        app = app
+            .without_primary_window()
+            .with_exit_policy(zgui::runtime::ExitPolicy::Explicit);
+    }
     let fonts = profile.fonts.clone();
-    let mut native = app
+    let native = app
         .into_handler(move |cx| {
             zgui::reactive::provide_context(fonts.clone());
             Box::new(View::build(Root(pending.clone()), cx))
         })
         .map_err(preview_app_error)?;
-    if profile.profile.pure_shell { native.without_primary_surface(); }
     let host = build_host(native);
     Ok(Pipeline::from_harness(Harness::over(platform, host)))
 }

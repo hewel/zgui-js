@@ -86,7 +86,11 @@ pub struct EventCx<'a, E: EventView = AnyEvent> {
     pub phase: Phase,
     /// Which modifier keys were held.
     pub modifiers: Modifiers,
-    /// When the event happened.
+    /// When the event happened, on the application's clock.
+    ///
+    /// An event that an input event causes, such as a click or a focus change, carries the stamp
+    /// of that input event. An event without a platform stamp carries the frame's moment. Use
+    /// [`Timestamp::saturating_since`] to compare two stamps.
     pub timestamp: Timestamp,
     /// What the event carries.
     payload: &'a Payload,
@@ -191,13 +195,14 @@ impl<'a, E: EventView> EventCx<'a, E> {
         self.control.default_action.set(DefaultAction::Prevented);
     }
 
-    /// Routes every subsequent pointer event to the current node until the button is released.
+    /// Routes this event's pointer to the current node until its button is released or its
+    /// contact lifts.
     pub fn capture_pointer(&mut self) {
         let node = self.current;
         self.sink.capture_pointer(node);
     }
 
-    /// Ends a capture early.
+    /// Ends the current node's capture of this event's pointer early.
     pub fn release_pointer(&mut self) {
         let node = self.current;
         self.sink.release_pointer(node);

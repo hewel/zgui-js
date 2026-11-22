@@ -35,7 +35,7 @@ test("syncUiResources writes adapted styles into an explicit --out directory wit
   await writeFile(
     snapshotPath,
     JSON.stringify({
-      revision: "80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a",
+      revision: "ee29c7dc66206eb04ba7bcf514058a278c9070ba",
       styles: {
         TextareaStyle: {
           className: committedTextarea.className,

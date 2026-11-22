@@ -1,6 +1,6 @@
 //! Reconcile compositor-owned popup trees in parent-before-child open order.
 use std::{collections::BTreeSet, rc::Rc};
-use zgui::{platform::{InputRegion, PlatformCx, SurfaceId}, runtime::{Runtime, WindowToken}};
+use zgui::{platform::{InputRegion, InputSerial, PlatformCx, SurfaceId}, runtime::{Runtime, WindowToken}};
 
 use super::{ImageChoice, Monitor, RuntimeSurface, Session, SessionHost, SessionSurface, ShellKind, ShellWindows, SurfaceOpacity, close_native_surface, open_region, present, shell_window_content};
 use crate::{session::Result, shell::PopupSpec};
@@ -11,7 +11,7 @@ pub(super) struct RunningPopup {
     pub(super) parent: SurfaceId,
     pub(super) spec: PopupSpec,
     pub(super) id: u32,
-    grab: bool,
+    grab: Option<InputSerial>,
 }
 
 #[derive(Clone, Copy)]
@@ -101,15 +101,11 @@ impl ShellWindows {
                 continue;
             };
             blocked = 0;
-            let mut placement = spec.placement(parent);
             if let Some(index) = running {
                 let popup = &mut self.popups[index];
                 if !popup.spec.geometry_eq(&spec) {
-                    placement.grab = popup.grab;
-                    let auto = spec.auto_height(parent).map(|mut policy| {
-                        policy.placement.grab = popup.grab;
-                        policy
-                    });
+                    let placement = spec.placement(parent, popup.grab);
+                    let auto = spec.auto_height(parent, popup.grab);
                     let next_size = match (&auto, popup.spec.is_auto_height()) {
                         (Some(policy), true) => {
                             let current_h = cx.surface(popup.surface).map_or(policy.max_height.0, |surface| {
@@ -127,14 +123,18 @@ impl ShellWindows {
                 }
                 if popup.spec.input != spec.input {
                     cx.surface(popup.surface).ok_or("running popup has no platform surface")?
-                        .set_input_region(&spec.input).map_err(|error| error.to_string())?;
+                        .set_shell_input_region(&spec.input).map_err(|error| error.to_string())?;
                 }
                 popup.spec = spec;
                 continue;
             }
             let name = spec.name.clone();
-            let grab = placement.grab;
-            let auto = spec.auto_height(parent);
+            let grab = spec
+                .wants_grab()
+                .then(|| cx.surface(parent).and_then(|surface| surface.input_serial()))
+                .flatten();
+            let placement = spec.placement(parent, grab);
+            let auto = spec.auto_height(parent, grab);
             let mut attrs = zgui::platform::SurfaceAttributes::popup(placement);
             attrs.title = name.as_str().into();
             attrs.size = Some(spec.size());
@@ -150,7 +150,7 @@ impl ShellWindows {
             if let Some(input) = session.shell.updated_input(id, &popup.spec.input) { popup.spec.input = input; }
             if popup.spec.input != InputRegion::Full {
                 cx.surface(surface).ok_or("opened popup has no platform surface")?
-                    .set_input_region(&popup.spec.input).map_err(|error| error.to_string())?;
+                    .set_shell_input_region(&popup.spec.input).map_err(|error| error.to_string())?;
             }
             binding.request_frame(document);
         }

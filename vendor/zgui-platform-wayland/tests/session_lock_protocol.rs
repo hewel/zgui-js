@@ -21,8 +21,8 @@ use std::time::{Duration, Instant};
 
 use rustix::net::{RecvAncillaryBuffer, RecvAncillaryMessage, RecvFlags, recvmsg};
 use zgui_platform::{
-    AppHandler, InputRegion, PlatformCx, PlatformError, SessionLockState, Surface, SurfaceAttributes,
-    SurfaceEvent, SurfaceId, SurfaceRole, WakeReason,
+    AppHandler, InputRegion, MonitorTarget, PlatformCx, PlatformError, SessionLockState, Surface,
+    SurfaceAttributes, SurfaceEvent, SurfaceId, SurfaceRole, WakeReason,
 };
 use zgui_platform_wayland::WaylandApp;
 
@@ -232,7 +232,7 @@ impl Locker {
 
 fn lock_attributes(replacing_lock: Option<SurfaceId>) -> SurfaceAttributes {
     let mut attrs = SurfaceAttributes::default();
-    attrs.role = SurfaceRole::Lock("TEST-1".to_owned());
+    attrs.role = SurfaceRole::Lock(MonitorTarget::Name("TEST-1".to_owned()));
     attrs.replacing_lock = replacing_lock;
     attrs
 }
@@ -263,7 +263,7 @@ impl AppHandler for Locker {
             SessionLockState::Unlocked,
             "the initial lock state is unlocked"
         );
-        assert!(cx.unlock_session().is_err(), "no lock exists to unlock");
+        assert!(cx.try_unlock_session().is_err(), "no lock exists to unlock");
         cx.request_session_lock().expect("request session lock");
         cx.request_session_lock()
             .expect("pending requests are idempotent");
@@ -273,7 +273,7 @@ impl AppHandler for Locker {
             "a request is not acquisition until the compositor confirms it"
         );
         assert!(
-            cx.unlock_session().is_err(),
+            cx.try_unlock_session().is_err(),
             "cannot unlock an unconfirmed lock"
         );
         assert!(
@@ -311,7 +311,7 @@ impl AppHandler for Locker {
                 .expect("stage another candidate after rejection");
             assert_ne!(replacement.id(), rejected.id(), "rejected handles cannot be reused");
             first
-                .set_input_region(&InputRegion::Empty)
+                .set_shell_input_region(&InputRegion::Empty)
                 .expect("claim before configure");
             first.set_visible(false);
             first.set_visible(true);
@@ -320,64 +320,67 @@ impl AppHandler for Locker {
         }
     }
 
-    fn monitors_changed(&mut self, cx: &dyn PlatformCx) {
-        let second = cx
-            .monitors()
-            .iter()
-            .any(|m| m.name.as_deref() == Some("TEST-2"));
-        if second && !self.hotplug_seen {
-            self.hotplug_seen = true;
-            if self.scenario == Scenario::Disconnect {
-                assert_eq!(
-                    cx.session_lock_state(),
-                    SessionLockState::Locked,
-                    "hotplug before disconnect must leave the lock acquired"
-                );
-                self.complete = true;
-                cx.request_exit();
-            } else if self.scenario.explicitly_unlocks() {
-                let first = self.first.as_ref().expect("predecessor is still claimed");
-                let replacement = self.replacement.as_ref().expect("candidate remains staged");
-                assert_eq!(first.size().width.0, 48.0, "configure resized the predecessor");
-                assert_eq!(replacement.size(), first.size(), "configure also resized the candidate");
-                if self.scenario == Scenario::Unlock {
-                    cx.destroy_surface(first.id());
-                    assert!(cx.surface(first.id()).is_none(), "promotion retires the old claim");
-                    assert!(
-                        cx.surface(replacement.id()).is_some(),
-                        "promotion keeps the candidate live without reacquiring a lock role"
-                    );
-                    assert!(
-                        cx.create_surface(&lock_attributes(Some(first.id()))).is_err(),
-                        "a retired predecessor cannot authorize another replacement"
-                    );
-                    self.first = self.replacement.take();
-                }
-            }
-        } else if !second && self.hotplug_seen && !self.hotplug_removed {
-            self.hotplug_removed = true;
-            assert_eq!(
-                cx.session_lock_state(),
-                SessionLockState::Locked,
-                "removing an output does not release the remaining lock"
-            );
-            cx.unlock_session().expect("explicit unlock");
-            assert_eq!(
-                cx.session_lock_state(),
-                SessionLockState::Unlocking,
-                "explicit unlock is pending until the compositor sync"
-            );
-            assert!(cx.unlock_session().is_err(), "do not send a second unlock");
-            if self.scenario == Scenario::UnlockAndExit {
-                cx.request_exit();
-            }
-        }
-    }
-
     fn surface_event(&mut self, _cx: &dyn PlatformCx, _id: SurfaceId, _event: SurfaceEvent) {}
 
     fn wake(&mut self, cx: &dyn PlatformCx, reason: WakeReason) {
-        if !matches!(reason, WakeReason::AppWork) {
+        if matches!(reason, WakeReason::MonitorsChanged) {
+            let second = cx
+                .monitors()
+                .iter()
+                .any(|m| m.name.as_deref() == Some("TEST-2"));
+            if second && !self.hotplug_seen {
+                self.hotplug_seen = true;
+                if self.scenario == Scenario::Disconnect {
+                    assert_eq!(
+                        cx.session_lock_state(),
+                        SessionLockState::Locked,
+                        "hotplug before disconnect must leave the lock acquired"
+                    );
+                    self.complete = true;
+                    cx.request_exit();
+                } else if self.scenario.explicitly_unlocks() {
+                    let first = self.first.as_ref().expect("predecessor is still claimed");
+                    let replacement = self.replacement.as_ref().expect("candidate remains staged");
+                    assert_eq!(first.size().width.0, 48.0, "configure resized the predecessor");
+                    assert_eq!(replacement.size(), first.size(), "configure also resized the candidate");
+                    if self.scenario == Scenario::Unlock {
+                        cx.destroy_surface(first.id());
+                        assert!(cx.surface(first.id()).is_none(), "promotion retires the old claim");
+                        assert!(
+                            cx.surface(replacement.id()).is_some(),
+                            "promotion keeps the candidate live without reacquiring a lock role"
+                        );
+                        assert!(
+                            cx.create_surface(&lock_attributes(Some(first.id()))).is_err(),
+                            "a retired predecessor cannot authorize another replacement"
+                        );
+                        self.first = self.replacement.take();
+                    }
+                }
+            } else if !second && self.hotplug_seen && !self.hotplug_removed {
+                self.hotplug_removed = true;
+                assert_eq!(
+                    cx.session_lock_state(),
+                    SessionLockState::Locked,
+                    "removing an output does not release the remaining lock"
+                );
+                cx.try_unlock_session().expect("explicit unlock");
+                assert_eq!(
+                    cx.session_lock_state(),
+                    SessionLockState::Unlocking,
+                    "explicit unlock is pending until the compositor sync"
+                );
+                assert!(cx.try_unlock_session().is_err(), "do not send a second unlock");
+                if self.scenario == Scenario::UnlockAndExit {
+                    cx.request_exit();
+                }
+            }
+            return;
+        }
+        if !matches!(
+            reason,
+            WakeReason::AppWork | WakeReason::SessionLocked | WakeReason::SessionLockFinished
+        ) {
             return;
         }
         match cx.session_lock_state() {
@@ -387,14 +390,14 @@ impl AppHandler for Locker {
                     .expect("locked requests are idempotent");
             }
             SessionLockState::Refused if self.scenario == Scenario::Refuse => {
-                assert!(cx.unlock_session().is_err(), "refusal did not acquire a lock to release");
+                assert!(cx.try_unlock_session().is_err(), "refusal did not acquire a lock to release");
                 self.complete = true;
                 cx.request_exit();
             }
             SessionLockState::Finished if self.scenario == Scenario::Finish => {
                 assert!(self.locked_seen, "finish follows a confirmed acquisition");
                 assert!(
-                    cx.unlock_session().is_err(),
+                    cx.try_unlock_session().is_err(),
                     "finished is not authorization to unlock"
                 );
                 assert!(

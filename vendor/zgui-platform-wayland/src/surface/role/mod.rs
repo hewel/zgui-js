@@ -26,7 +26,7 @@ pub enum Role {
     Toplevel(Box<Toplevel>),
     /// A surface placed against a rectangle of another, dismissed with it.
     Popup(Box<Popup>),
-    /// A part of the desktop shell: a panel or a wallpaper.
+    /// A part of the desktop shell: a panel, a wallpaper, a notification.
     Layer(Box<LayerSurface>),
     /// Application content above an output's compositor lock surface.
     LockContent(lock::LockContent),
@@ -75,7 +75,8 @@ impl Role {
         match self {
             Self::Toplevel(window) => window.ack(serial),
             Self::Popup(popup) => popup.ack(serial),
-            // The toolkit's layer surface acknowledges its own.
+            // A layer surface acknowledges in its own dispatch, and lock surfaces are
+            // acknowledged by the fail-closed session lock owner.
             Self::Layer(_) | Self::LockContent(_) => {}
         }
     }
@@ -84,6 +85,14 @@ impl Role {
     pub fn layer(&self) -> Option<&LayerSurface> {
         match self {
             Self::Layer(layer) => Some(layer),
+            _ => None,
+        }
+    }
+
+    /// The lock content subsurface, when this is one.
+    pub fn lock(&self) -> Option<&lock::LockContent> {
+        match self {
+            Self::LockContent(content) => Some(content),
             _ => None,
         }
     }

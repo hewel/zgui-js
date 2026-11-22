@@ -7,7 +7,7 @@ use wayland_protocols::xdg::shell::client::xdg_popup::{self, XdgPopup};
 use wayland_protocols::xdg::shell::client::xdg_positioner::XdgPositioner;
 use wayland_protocols::xdg::shell::client::xdg_surface::XdgSurface;
 use zgui_geom::{Css, CssPx, Size};
-use zgui_platform::{PopupPlacement, SurfaceEvent, SurfaceId};
+use zgui_platform::{CloseReason, PopupPlacement, SurfaceEvent, SurfaceId};
 
 use crate::driver::WaylandState;
 use crate::surface::role::popup as placement;
@@ -79,6 +79,11 @@ impl Popup {
     /// The shell object a configure arrives on.
     pub const fn xdg_surface(&self) -> &XdgSurface {
         &self.xdg
+    }
+
+    /// The pop-up role, for a shell layer to adopt as its child.
+    pub const fn xdg_popup(&self) -> &XdgPopup {
+        &self.popup
     }
 
     /// Acknowledges a configure.
@@ -154,11 +159,11 @@ impl Dispatch<XdgPopup, SurfaceId> for WaylandState {
             xdg_popup::Event::Configure { width, height, .. } => {
                 state.stash_popup(*id, (width, height));
             }
-            // The compositor dismissed it — a click outside a menu, the parent losing focus. There
+            // The compositor dismissed it — a press outside a menu, the parent losing focus. There
             // is no way back for this surface; the application closes it and makes another.
             xdg_popup::Event::PopupDone => {
                 if state.live.surface(*id).is_some_and(|surface| surface.mark_popup_done()) {
-                    state.report(*id, SurfaceEvent::Destroyed);
+                    state.report(*id, SurfaceEvent::Closed(CloseReason::Dismissed));
                 }
             }
             _ => {}

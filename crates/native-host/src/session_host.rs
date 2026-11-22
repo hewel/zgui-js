@@ -402,7 +402,7 @@ impl SessionHost {
         use zgui::platform::{AppHandler, SurfaceEvent};
         match event {
             SurfaceEvent::CloseRequested if self.shell_window_close_requested(runtime, cx, surface)? => {}
-            SurfaceEvent::Destroyed if self.shell_surface_destroyed(runtime, cx, surface)? => {}
+            SurfaceEvent::Destroyed | SurfaceEvent::Closed(_) if self.shell_surface_destroyed(runtime, cx, surface)? => {}
             SurfaceEvent::CloseRequested => {
                 let owner = self.sessions.values().find(|session| {
                     session.primary().is_some_and(|primary| primary.surface == surface)
@@ -442,7 +442,7 @@ impl SessionHost {
                     window.request_frame();
                 }
             }
-            SurfaceEvent::Destroyed => {
+            SurfaceEvent::Destroyed | SurfaceEvent::Closed(_) => {
                 let sessions: Vec<Rc<Session>> = self.sessions().cloned().collect();
                 for session in sessions {
                     let _ = session.cancel_drags_for_surface(surface);

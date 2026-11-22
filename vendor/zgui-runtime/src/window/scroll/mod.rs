@@ -308,11 +308,22 @@ impl Window {
     /// The container a drag acts on is decided when the drag begins and not looked at again, so a
     /// finger that carries a list past the edge of its own scrollport keeps carrying that list.
     /// One drag at a time: a second contact that begins panning takes the scroll over, which is
-    /// what a second finger landing on a list is asking for.
+    /// what a second finger landing on a list is asking for. The moves and the lift of any other
+    /// contact are ignored.
+    ///
+    /// A captured pointer belongs to the element that captured it, such as a slider or a drawing
+    /// surface, and pans nothing. A capture that arrives during a drag ends the drag.
     pub(crate) fn carry_out_gestures(&mut self, read: &[zgui_input::Gesture]) {
         for gesture in read {
             match gesture {
-                zgui_input::Gesture::PanStart { from, .. } => {
+                zgui_input::Gesture::PanStart { pointer, from } => {
+                    if self.router.capture().of(*pointer).is_some() {
+                        if self.panning_pointer == Some(*pointer) {
+                            self.end_pan();
+                        }
+                        continue;
+                    }
+                    self.panning_pointer = Some(*pointer);
                     // Decided once, where the finger went down, and held for the whole drag. A
                     // container re-derived from where the finger is *now* is a list that stops
                     // following it the moment the drag leaves the scrollport — which is most
@@ -323,7 +334,14 @@ impl Window {
                         None => Vec::new(),
                     };
                 }
-                zgui_input::Gesture::PanMove { by, .. } => {
+                zgui_input::Gesture::PanMove { pointer, by } => {
+                    if self.panning_pointer != Some(*pointer) {
+                        continue;
+                    }
+                    if self.router.capture().of(*pointer).is_some() {
+                        self.end_pan();
+                        continue;
+                    }
                     if self.panning.is_empty() {
                         continue;
                     }
@@ -349,9 +367,12 @@ impl Window {
                     self.panning = chain;
                     self.mark_scrolled(&touched);
                 }
-                zgui_input::Gesture::PanEnd { velocity, .. } => {
+                zgui_input::Gesture::PanEnd { pointer, velocity } => {
+                    if self.panning_pointer != Some(*pointer) {
+                        continue;
+                    }
                     let container = self.panning.first().copied();
-                    self.panning = Vec::new();
+                    self.end_pan();
                     let Some(container) = container else {
                         continue;
                     };
@@ -371,17 +392,19 @@ impl Window {
         }
     }
 
+    /// Stops following the drag in progress.
+    fn end_pan(&mut self) {
+        self.panning = Vec::new();
+        self.panning_pointer = None;
+    }
+
     /// Reports every contact that has now been held long enough to mean something else.
     ///
     /// A long press is the one reading of the touch stream that is produced by time passing rather
     /// than by anything arriving, so the frame has to ask. What it means is the platform's own
     /// convention and not an invention here: on a touch surface, pressing and holding is how a
     /// context menu is opened, and that is the event it is delivered as.
-    pub(crate) fn advance_gestures(
-        &mut self,
-        wall: std::time::Instant,
-        now: zgui_vocab::Timestamp,
-    ) {
+    pub(crate) fn advance_gestures(&mut self, wall: web_time::Instant, now: zgui_vocab::Timestamp) {
         if !self.gestures.awaits_deadline() {
             self.long_press_due = None;
             return;
@@ -424,7 +447,7 @@ impl Window {
     /// is held: nothing about the contact changes between the press and the half-second mark, so
     /// every frame in between draws the same pixels. This is the moment the recogniser actually
     /// owes an answer at, and it is the only wake a held contact is worth.
-    pub(crate) fn gesture_deadline(&self) -> Option<std::time::Instant> {
+    pub(crate) fn gesture_deadline(&self) -> Option<web_time::Instant> {
         self.long_press_due
     }
 
@@ -499,7 +522,7 @@ impl Window {
     ///
     /// The same as [`Window::place`] with an instant behaviour, less the frame request: the
     /// fragment pass of this frame is still to run, and it composes the mark.
-    fn place_in_frame(
+    pub(crate) fn place_in_frame(
         &mut self,
         container: NodeKey,
         to: Point<zgui_geom::DevicePx, zgui_geom::Device>,

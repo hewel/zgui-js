@@ -69,30 +69,55 @@ pub(crate) fn watch(waker: Arc<dyn Waker>, settled: Arc<std::sync::Mutex<Appeara
 }
 
 /// Reads the settings, then stays on the bus reporting every change to them.
+///
+/// The connection runs on this thread alone. It drives its own executor, so zbus starts no driver
+/// thread and no runtime of its own for it.
 fn follow(waker: &Arc<dyn Waker>, settled: &Arc<std::sync::Mutex<Appearance>>) {
-    let Ok(connection) = zbus::blocking::Connection::session() else {
-        tracing::debug!("no session bus, so this desktop's appearance preferences are unknown");
-        return;
-    };
-    let proxy = zbus::blocking::Proxy::new(&connection, PORTAL, PATH, SETTINGS);
-    let Ok(proxy) = proxy else {
+    futures::executor::block_on(async {
+        let connection = match zbus::connection::Builder::session() {
+            Ok(builder) => builder.internal_executor(false).build().await,
+            Err(error) => Err(error),
+        };
+        let Ok(connection) = connection else {
+            tracing::debug!(
+                "no session bus, so this desktop's appearance preferences are unknown"
+            );
+            return;
+        };
+        let ticking = std::pin::pin!(async {
+            loop {
+                connection.executor().tick().await;
+            }
+        });
+        let watching = std::pin::pin!(watch_portal(&connection, waker, settled));
+        futures::future::select(ticking, watching).await;
+    });
+}
+
+/// Reads the appearance settings on `connection` and reports every change to them.
+async fn watch_portal(
+    connection: &zbus::Connection,
+    waker: &Arc<dyn Waker>,
+    settled: &Arc<std::sync::Mutex<Appearance>>,
+) {
+    let Ok(proxy) = zbus::Proxy::new(connection, PORTAL, PATH, SETTINGS).await else {
         return;
     };
 
-    if let Some(found) = read_u32(&proxy, SCHEME).and_then(scheme) {
+    if let Some(found) = read_u32(&proxy, SCHEME).await.and_then(scheme) {
         publish_scheme(waker, settled, found);
     }
-    if let Some(found) = read_u32(&proxy, REDUCED_MOTION).and_then(reduced_motion) {
+    if let Some(found) = read_u32(&proxy, REDUCED_MOTION).await.and_then(reduced_motion) {
         publish_reduced_motion(waker, settled, found);
     }
 
     // The portal reports a change as a signal naming the namespace and the key, so everything else
     // on the interface is ignored rather than filtered by the bus — the traffic is a handful of
     // messages a session.
-    let Ok(signals) = proxy.receive_signal("SettingChanged") else {
+    let Ok(mut signals) = proxy.receive_signal("SettingChanged").await else {
         return;
     };
-    for message in signals {
+    while let Some(message) = futures::StreamExt::next(&mut signals).await {
         let body = message.body();
         let Ok((namespace, key, value)) =
             body.deserialize::<(String, String, zbus::zvariant::OwnedValue)>()
@@ -119,15 +144,17 @@ fn follow(waker: &Arc<dyn Waker>, settled: &Arc<std::sync::Mutex<Appearance>>) {
 }
 
 /// Asks the portal what a u32 appearance setting is now.
-fn read_u32(proxy: &zbus::blocking::Proxy<'_>, key: &str) -> Option<u32> {
+async fn read_u32(proxy: &zbus::Proxy<'_>, key: &str) -> Option<u32> {
     // `ReadOne` is the newer call and answers with the value itself; `Read` is what older portals
     // have and wraps it twice. Both are tried, because a desktop that only has the second is a
     // desktop this would otherwise report as having no preference at all.
-    let one: Option<zbus::zvariant::OwnedValue> = proxy.call("ReadOne", &(APPEARANCE, key)).ok();
+    let one: Option<zbus::zvariant::OwnedValue> =
+        proxy.call("ReadOne", &(APPEARANCE, key)).await.ok();
     if let Some(found) = one.and_then(|value| u32::try_from(value).ok()) {
         return Some(found);
     }
-    let nested: zbus::zvariant::OwnedValue = proxy.call("Read", &(APPEARANCE, key)).ok()?;
+    let nested: zbus::zvariant::OwnedValue =
+        proxy.call("Read", &(APPEARANCE, key)).await.ok()?;
     unwrap_twice(nested)
 }
 

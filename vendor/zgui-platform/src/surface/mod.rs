@@ -9,6 +9,8 @@ mod icon;
 mod id;
 mod region;
 mod role;
+mod serial;
+mod subpixel;
 mod text_input;
 mod timing;
 mod watchdog;
@@ -18,20 +20,23 @@ pub use crate::surface::chrome::{
     CursorStyle, DecorationSource, Decorations, FullscreenMode, ResizeEdge, WindowLevel,
 };
 pub use crate::surface::drag::{DragEvent, OutboundDragPayload};
-pub use crate::surface::event::SurfaceEvent;
+pub use crate::surface::event::{CloseReason, SurfaceEvent};
 pub use crate::surface::gpu::GpuSurface;
 pub use crate::surface::icon::{BadIcon, WindowIcon};
 pub use crate::surface::id::SurfaceId;
 pub use crate::surface::region::{InputRect, InputRegion};
 pub use crate::surface::role::{
-    Anchor, Constrain, KeyboardInteractivity, Layer, LayerPlacement, PopupPlacement, SurfaceRole,
+    Anchor, Constrain, ExclusiveZone, KeyboardInteractivity, Layer, LayerPatch, LayerPlacement,
+    PopupPlacement, SurfaceRole,
 };
+pub use crate::surface::serial::InputSerial;
+pub use crate::surface::subpixel::SubpixelLayout;
 pub use crate::surface::text_input::{TextInput, TextInputPurpose};
 pub use crate::surface::timing::{ComposeAhead, PresentPacing, PresentationTiming};
 pub use crate::surface::watchdog::Watchdog;
 
 use accesskit::TreeUpdate;
-use zgui_geom::{Css, CssPx, Device, DevicePx, Point, Size};
+use zgui_geom::{Css, CssPx, Device, DevicePx, Point, Rect, Size};
 
 use crate::error::{PlatformError, Unsupported};
 use crate::theme::ColorScheme;
@@ -64,6 +69,13 @@ pub trait Surface: Send + Sync + 'static {
     /// How many physical pixels there are to a CSS pixel on this surface.
     fn scale_factor(&self) -> f64;
 
+    /// How the colour stripes of the display under this surface are arranged.
+    ///
+    /// Read once a frame. A backend asks for a redraw when the answer changes.
+    fn subpixel_layout(&self) -> SubpixelLayout {
+        SubpixelLayout::Unknown
+    }
+
     /// How many frames per second this surface is presented at, in thousandths.
     ///
     /// Absent when the platform does not say, in which case a deadline should be computed against
@@ -82,6 +94,17 @@ pub trait Surface: Send + Sync + 'static {
         PresentPacing::Display
     }
 
+    /// Whether a frame may be presented in a buffer larger than the frame.
+    ///
+    /// A backend that answers `true` shows only the top-left part of each buffer, at the extent of
+    /// the frame it presents. The renderer can then keep its swap chain at a coarser extent and
+    /// rebuild it less often while the window is resized. Rebuilding a swap chain waits for the
+    /// graphics device to go idle, so a drag that rebuilds it on every frame pays that wait on
+    /// every frame.
+    fn crops_buffers(&self) -> bool {
+        false
+    }
+
     /// When this surface's frames reach the screen, as far as the platform knows.
     ///
     /// Absent means the platform reports no timing at all, and a caller falls back to
@@ -89,6 +112,13 @@ pub trait Surface: Send + Sync + 'static {
     /// rather than a borrow of whatever the backend keeps.
     fn presentation_timing(&self) -> Option<PresentationTiming> {
         None
+    }
+
+    /// Whether the platform sends [`SurfaceEvent::Presented`] for this surface.
+    ///
+    /// Without it, a caller counts the first frame handed to the surface as shown.
+    fn reports_presentation(&self) -> bool {
+        false
     }
 
     /// Asks for a different content size, and reports the size actually taken.
@@ -228,6 +258,15 @@ pub trait Surface: Send + Sync + 'static {
     /// behaviour focus-stealing prevention exists to stop.
     fn focus(&self) {}
 
+    /// The token of the latest press the user made on this surface's seat.
+    ///
+    /// A request that the desktop grants only against a press quotes it: a pop-up's grab, read in
+    /// the handler of the press that opens the pop-up. `None` before the first press, and on a
+    /// desktop that needs no token.
+    fn input_serial(&self) -> Option<InputSerial> {
+        None
+    }
+
     /// Asks the desktop to draw attention to this surface, or stops asking.
     ///
     /// What that looks like is the desktop's business — a bouncing icon, a flashing task-bar
@@ -259,20 +298,19 @@ pub trait Surface: Send + Sync + 'static {
         Err(Unsupported)
     }
 
-    /// Begins a platform-driven outbound `Copy`-only drag from this surface.
-    ///
-    /// Requires an active live press serial on the originating seat/surface; returns
-    /// `Err(Unsupported)` when unsupported or no live press is active.
-    fn begin_outbound_drag(&self, payload: OutboundDragPayload) -> Result<(), Unsupported> {
-        let _ = payload;
-        Err(Unsupported)
-    }
-
-    /// Cancels any active outbound drag initiated from this surface.
-    fn cancel_outbound_drag(&self) {}
-
     /// Sets what the pointer looks like over this surface.
     fn set_cursor(&self, cursor: CursorStyle);
+
+    /// Changes where a shell layer sits and what it claims, for a surface that is one.
+    ///
+    /// The change is shown with the next frame: the platform sends it together with that frame,
+    /// so the new placement and the content drawn for it reach the screen at once. Every field the
+    /// patch leaves absent stays as it is. A surface that is not a shell layer answers with
+    /// [`Unsupported`], and so does a platform that has none.
+    fn set_layer_placement(&self, patch: &LayerPatch) -> Result<(), Unsupported> {
+        let _ = patch;
+        Err(Unsupported)
+    }
 
     /// Makes the surface transparent to the pointer, so presses reach whatever is behind it.
     fn set_pointer_passthrough(&self, passthrough: bool) -> Result<(), Unsupported> {
@@ -280,25 +318,47 @@ pub trait Surface: Send + Sync + 'static {
         Err(Unsupported)
     }
 
-    /// Replaces the pointer input region in surface-local logical pixels.
+    /// Sets the part of the surface that takes pointer and touch input, in CSS pixels.
     ///
-    /// # Errors
+    /// Input on the rest of the surface reaches whatever is behind it. `None` makes the whole
+    /// surface take input, and an empty set of rectangles makes none of it take input. The
+    /// rectangles are in the surface's own coordinates and may overlap. A platform rounds each
+    /// edge outwards to the pixels it measures in, so a rectangle never takes less than it covers.
     ///
-    /// Returns [`PlatformError::Unsupported`] when the backend does not support input regions.
-    fn set_input_region(&self, region: &InputRegion) -> Result<(), PlatformError> {
-        match region {
-            InputRegion::Full => self.set_pointer_passthrough(false)?,
-            InputRegion::Empty => self.set_pointer_passthrough(true)?,
-            InputRegion::Rects(_) => return Err(Unsupported.into()),
-        }
-        Ok(())
+    /// The change is shown with the next frame, together with the content drawn for it. A platform
+    /// that cannot do this answers with [`Unsupported`]; see
+    /// [`PlatformCapabilities::input_regions`](crate::PlatformCapabilities::input_regions).
+    fn set_input_region(&self, region: Option<&[Rect<CssPx, Css>]>) -> Result<(), Unsupported> {
+        let _ = region;
+        Err(Unsupported)
     }
 
-    /// Updates a layer surface's placement and requested size without changing its output.
+    /// Tells the platform which part of the surface is opaque, in CSS pixels.
+    ///
+    /// A hint, and nothing else: a compositor skips drawing what is behind an opaque part. `None`
+    /// and an empty set of rectangles both say nothing is opaque. A platform rounds each edge
+    /// inwards, so a rectangle never claims a pixel it only partly covers. The change is shown
+    /// with the next frame. Where it means nothing it costs nothing.
+    fn set_opaque_region(&self, region: Option<&[Rect<CssPx, Css>]>) {
+        let _ = region;
+    }
+
+    /// Sets the shell surface input region and commits it immediately rather than staging it
+    /// until the next frame.
     ///
     /// # Errors
     ///
-    /// Non-layer surfaces, output changes and unsupported or invalid placement are rejected.
+    /// Returns an error when the backend does not support immediate shell input regions or the
+    /// rectangles are invalid.
+    fn set_shell_input_region(&self, _region: &InputRegion) -> Result<(), PlatformError> {
+        Err(Unsupported.into())
+    }
+
+    /// Atomically updates a shell layer's placement and logical size in place.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for non-layer surfaces, output changes, or invalid placement/extent.
     fn reconfigure_layer(
         &self,
         _placement: &LayerPlacement,
@@ -309,12 +369,11 @@ pub trait Surface: Send + Sync + 'static {
 
     /// Updates a pop-up's placement and requested size without recreating it.
     ///
-    /// The parent and grab cannot change after creation. The backend may apply the new size
-    /// immediately or report the compositor's choice through [`SurfaceEvent::Resized`].
+    /// The parent and grab cannot change after creation.
     ///
     /// # Errors
     ///
-    /// Returns an error when the role, backend or placement does not support the change.
+    /// Returns an error when the role, backend, or placement does not support the change.
     fn reconfigure_popup(
         &self,
         _placement: &PopupPlacement,
@@ -334,6 +393,20 @@ pub trait Surface: Send + Sync + 'static {
     fn supports_popup_reposition(&self) -> bool {
         false
     }
+
+    /// Starts a platform-driven outbound `Copy`-only drag from the current active pointer or
+    /// touch press on this surface.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the backend does not support outbound drags or no live press is
+    /// active on this surface.
+    fn begin_outbound_drag(&self, _payload: OutboundDragPayload) -> Result<(), PlatformError> {
+        Err(Unsupported.into())
+    }
+
+    /// Cancels any active outbound drag initiated from this surface.
+    fn cancel_outbound_drag(&self) {}
 
     /// Tells the platform where text is being typed and what kind, or that none is.
     ///

@@ -173,6 +173,22 @@ impl Tasks {
         }
     }
 
+    pub(super) fn start_local(
+        self: &Rc<Self>,
+        key: SourceKey,
+        generation: u64,
+        future: impl std::future::Future<Output = Arrival> + 'static,
+    ) {
+        let completed = Rc::clone(&self.ready);
+        let task = zgui_reactive::spawn_local(async move {
+            let arrival = future.await;
+            completed.borrow_mut().push((key, generation, arrival));
+        });
+        let mut live = self.live.borrow_mut();
+        live.retain(|task| !task.is_finished());
+        live.push(task);
+    }
+
     pub(super) fn poll(&self) -> bool {
         let mut strict = self.strict.borrow_mut();
         let Some(batch) = strict.as_mut() else { return true; };

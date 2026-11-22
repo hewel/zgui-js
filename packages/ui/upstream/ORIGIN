@@ -1,5 +1,5 @@
 Source: https://github.com/zortax/zgui
-Revision: 80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a
+Revision: ee29c7dc66206eb04ba7bcf514058a278c9070ba
 The components in this package are adapted to Solid/TypeScript. Resource files under src/components/generated are generated from that revision by packages/build/src/sync-ui-resources.ts.
 
 Native-profile adaptations are applied in crates/ui-bridge/examples/ui_resources.rs

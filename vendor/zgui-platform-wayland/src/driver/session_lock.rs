@@ -20,8 +20,8 @@ use wayland_protocols::ext::session_lock::v1::client::{
 use wayland_protocols::wp::viewporter::client::wp_viewport::WpViewport;
 use zgui_geom::{Css, CssPx, Size};
 use zgui_platform::{
-    PlatformError, SessionLockState, Surface, SurfaceAttributes, SurfaceEvent, SurfaceId,
-    Unsupported, WakeReason, Waker,
+    CloseReason, MonitorTarget, PlatformError, SessionLockState, Surface, SurfaceAttributes,
+    SurfaceEvent, SurfaceId, Unsupported, WakeReason, Waker,
 };
 
 use crate::driver::WaylandState;
@@ -230,7 +230,7 @@ impl WaylandState {
             session.phase = Phase::Pending(protocols.manager.lock(&self.qh, ()));
         }
         self.cover_lock_outputs();
-        self.lock_changed();
+        self.lock_changed(WakeReason::AppWork);
         Ok(())
     }
 
@@ -246,12 +246,12 @@ impl WaylandState {
         lock.unlock_and_destroy();
         self.conn.display().sync(&self.qh, UnlockSync);
         session.phase = Phase::Unlocking;
-        self.lock_changed();
+        self.lock_changed(WakeReason::AppWork);
         Ok(())
     }
 
-    fn lock_changed(&self) {
-        self.live.waker.wake(WakeReason::AppWork);
+    fn lock_changed(&self, reason: WakeReason) {
+        self.live.waker.wake(reason);
     }
 
     fn cover_lock_outputs(&self) {
@@ -287,7 +287,7 @@ impl WaylandState {
 
     pub(super) fn claim_lock_output(
         &self,
-        name: &str,
+        target: &MonitorTarget,
         attributes: &SurfaceAttributes,
     ) -> Result<Arc<WaylandSurface>, PlatformError> {
         let mut session = self.session_lock.borrow_mut();
@@ -304,17 +304,19 @@ impl WaylandState {
             .iter_mut()
             .find_map(|output| {
                 let info = self.outputs.info(&output.output)?;
-                (info.name.as_deref() == Some(name)).then_some((output, info))
+                target
+                    .matches(&crate::output::describe(&info))
+                    .then_some((output, info))
             })
             .ok_or_else(|| {
-                PlatformError::SurfaceCreation(format!("lock output {name:?} is not available"))
+                PlatformError::SurfaceCreation(format!("lock output {target:?} is not available"))
             })?;
         let replacing = match (output.claim, attributes.replacing_lock, output.replacement) {
             (None, None, None) => false,
             (Some(claim), Some(previous), None) if claim == previous => true,
             _ => {
                 return Err(PlatformError::SurfaceCreation(format!(
-                    "lock output {name:?} does not accept this application claim"
+                    "lock output {target:?} does not accept this application claim"
                 )));
             }
         };
@@ -406,7 +408,11 @@ impl WaylandState {
             claims
         };
         for id in claims.into_iter().flatten() {
-            self.out.push((id, SurfaceEvent::Destroyed, super::Delivery::Removed));
+            self.out.push((
+                id,
+                SurfaceEvent::Closed(CloseReason::OutputGone),
+                super::Delivery::Removed,
+            ));
         }
     }
 
@@ -565,23 +571,29 @@ impl Dispatch<ExtSessionLockV1, ()> for WaylandState {
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {
-        let retire = {
+        let (retire, wake) = {
             let mut session = state.session_lock.borrow_mut();
             match (&session.phase, event) {
                 (Phase::Pending(lock), ext_session_lock_v1::Event::Locked) if lock == proxy => {
                     session.phase = Phase::Locked(proxy.clone());
-                    None
+                    (None, WakeReason::SessionLocked)
                 }
                 (Phase::Pending(lock), ext_session_lock_v1::Event::Finished) if lock == proxy => {
                     proxy.destroy();
                     session.phase = Phase::Refused;
-                    Some(LockRetireMode::DestroyFallback)
+                    (
+                        Some(LockRetireMode::DestroyFallback),
+                        WakeReason::SessionLockFinished,
+                    )
                 }
                 (Phase::Locked(lock), ext_session_lock_v1::Event::Finished) if lock == proxy => {
                     // The only legal destructor would unlock. Leave the object inert until
                     // disconnect instead: a compositor event is not authorization from the host.
                     session.phase = Phase::Finished;
-                    Some(LockRetireMode::KeepFallback)
+                    (
+                        Some(LockRetireMode::KeepFallback),
+                        WakeReason::SessionLockFinished,
+                    )
                 }
                 _ => return,
             }
@@ -589,7 +601,7 @@ impl Dispatch<ExtSessionLockV1, ()> for WaylandState {
         if let Some(mode) = retire {
             state.retire_lock_outputs(mode);
         }
-        state.lock_changed();
+        state.lock_changed(wake);
     }
 }
 
@@ -630,7 +642,7 @@ impl Dispatch<wl_callback::WlCallback, UnlockSync> for WaylandState {
         {
             state.retire_lock_outputs(LockRetireMode::DestroyFallback);
             state.session_lock.borrow_mut().phase = Phase::Unlocked;
-            state.lock_changed();
+            state.lock_changed(WakeReason::SessionLockFinished);
         }
     }
 }

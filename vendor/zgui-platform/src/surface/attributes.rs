@@ -3,9 +3,10 @@
 use zgui_geom::{Css, CssPx, Point, Size};
 use zgui_vocab::SharedString;
 
-use crate::SurfaceId;
+use crate::monitor::MonitorTarget;
 use crate::surface::chrome::{Decorations, FullscreenMode, WindowLevel};
 use crate::surface::icon::WindowIcon;
+use crate::surface::id::SurfaceId;
 use crate::surface::role::{LayerPlacement, PopupPlacement, SurfaceRole};
 use crate::surface::timing::ComposeAhead;
 use crate::theme::ColorScheme;
@@ -28,7 +29,8 @@ pub struct SurfaceAttributes {
     /// What this surface is to the desktop.
     ///
     /// A role a backend cannot make is refused rather than downgraded, so a component asks
-    /// [`PlatformCapabilities`](crate::PlatformCapabilities) first.
+    /// [`PlatformCapabilities`](crate::PlatformCapabilities) first. Everything below this field
+    /// describes a window and is ignored by the roles that are not one.
     pub role: SurfaceRole,
     /// For a lock role, the current claim this hidden surface is staged to replace.
     ///
@@ -166,6 +168,18 @@ impl SurfaceAttributes {
             ..Self::new("")
         }
     }
+
+    /// The lock screen on the output `monitor` names.
+    ///
+    /// Undecorated and not resizable: the desktop gives it the extent of the whole output.
+    pub fn lock(monitor: impl Into<MonitorTarget>) -> Self {
+        Self {
+            role: SurfaceRole::Lock(monitor.into()),
+            resizable: false,
+            decorations: Decorations::None,
+            ..Self::new("")
+        }
+    }
 }
 
 #[cfg(test)]
@@ -212,6 +226,11 @@ mod tests {
         let layer = SurfaceAttributes::layer(LayerPlacement::default());
         assert!(matches!(layer.role, SurfaceRole::Layer(_)));
         assert_eq!(layer.decorations, Decorations::None);
+
+        let lock = SurfaceAttributes::lock("DP-1");
+        assert_eq!(lock.role, SurfaceRole::Lock("DP-1".into()));
+        assert!(!lock.resizable);
+        assert_eq!(lock.decorations, Decorations::None);
     }
 
     #[test]

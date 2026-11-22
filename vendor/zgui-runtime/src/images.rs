@@ -39,6 +39,8 @@
 //! cache was trimmed.
 
 use std::cell::RefCell;
+use std::future::Future;
+use std::pin::Pin;
 use std::rc::{Rc, Weak};
 use std::sync::Arc;
 
@@ -60,6 +62,56 @@ mod visibility;
 pub(crate) use visibility::ImageVisibility;
 use tasks::Tasks;
 use crate::image_policy::{ImageResource, ImageResources, ImageState};
+
+/// Loads the image a `src` names, where a file system cannot.
+///
+/// Without a loader a `src` is a path on disk, read and decoded on the blocking pool. A platform
+/// with no file system sets one: in a browser a `src` is a URL, and the browser reads and decodes
+/// it off the thread the interface runs on. Both answers arrive later, on the UI thread.
+pub trait SourceLoader {
+    /// The pixel extent of the image `src` names, as width and height.
+    fn size(&self, src: String) -> Loading<(u32, u32)>;
+
+    /// The image `src` names, scaled down until its long edge fits `long_edge`.
+    fn pixels(&self, src: String, long_edge: u32) -> Loading<LoadedPixels>;
+}
+
+/// One answer of a [`SourceLoader`] in flight: the result, or why there is none.
+pub type Loading<T> = Pin<Box<dyn Future<Output = Result<T, String>>>>;
+
+/// A decoded image from a [`SourceLoader`].
+#[derive(Clone, Debug)]
+pub struct LoadedPixels {
+    /// The width in pixels.
+    pub width: u32,
+    /// The height in pixels.
+    pub height: u32,
+    /// The texels: premultiplied, gamma-encoded sRGB, RGBA, four bytes per texel, tightly
+    /// packed, top row first.
+    pub texels: Vec<u8>,
+}
+
+thread_local! {
+    /// The loader every window of this thread loads an image `src` through, once one is set.
+    static LOADER: RefCell<Option<Rc<dyn SourceLoader>>> = const { RefCell::new(None) };
+}
+
+/// Routes every image `src` that is not registered bytes through `loader`.
+///
+/// The loader serves every window made on this thread afterwards.
+pub fn set_source_loader(loader: Rc<dyn SourceLoader>) {
+    LOADER.with(|held| *held.borrow_mut() = Some(loader));
+}
+
+/// The loader that is set, if one is.
+fn source_loader() -> Option<Rc<dyn SourceLoader>> {
+    LOADER.with(|held| held.borrow().clone())
+}
+
+/// The error of a loader that could not produce the image.
+fn unloaded(reason: String) -> zgui_image::DecodeError {
+    zgui_image::DecodeError::Io(std::io::Error::other(reason))
+}
 
 /// What one `src` string names.
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
@@ -1199,25 +1251,78 @@ fn intrinsic_of(native: Size<u32, Device>) -> Intrinsic {
 /// the blocking pool. The wake edge when it finishes is what requests the frame whose settle will
 /// apply the result.
 fn kick_probe(key: SourceKey, generation: u64, completed: &DecodeQueue, limits: zgui_image::Limits) {
+    if !completed.restricted()
+        && let SourceKey::Path(src) = &key
+        && let Some(loader) = source_loader()
+    {
+        let measuring = loader.size(src.clone());
+        completed.start_local(key, generation, async move {
+            let result = match measuring.await {
+                Ok((0, _) | (_, 0)) => Err(zgui_image::DecodeError::Empty),
+                Ok((width, height)) => Ok(Size::new(width, height)),
+                Err(reason) => Err(unloaded(reason)),
+            };
+            Arrival::Probe(result)
+        });
+        return;
+    }
     let input = completed.input(&key);
     let svg_fonts = completed.svg_fonts();
-    completed.start(key, generation, move |key| Arrival::Probe(input.probe(key.name(), limits, svg_fonts.as_deref())));
+    completed.start(key, generation, move |key| {
+        Arrival::Probe(input.probe(key.name(), limits, svg_fonts.as_deref()))
+    });
 }
 
 /// Starts one decode off the frame thread, landing its result in `completed`.
 ///
 /// A variant whose long edge lands over [`STANDALONE_LONG_EDGE`] gets its levels of detail built
 /// on the same worker, so the frame thread never runs the filter.
-fn kick_decode(key: SourceKey, generation: u64, class: Class, handle: u64, completed: DecodeQueue, limits: zgui_image::Limits) {
+fn kick_decode(
+    key: SourceKey,
+    generation: u64,
+    class: Class,
+    handle: u64,
+    completed: DecodeQueue,
+    limits: zgui_image::Limits,
+) {
+    let with_levels = |decoded: zgui_image::Decoded| {
+        let mips = if decoded.size.width.max(decoded.size.height) > STANDALONE_LONG_EDGE {
+            zgui_image::mip_chain(&decoded)
+        } else {
+            Vec::new()
+        };
+        DecodedVariant { decoded, mips }
+    };
+    if !completed.restricted()
+        && let SourceKey::Path(src) = &key
+        && let Some(loader) = source_loader()
+    {
+        let loading = loader.pixels(src.clone(), class.min(limits.max_dimension));
+        completed.start_local(key, generation, async move {
+            let result = match loading.await {
+                Ok(loaded) if loaded.width == 0 || loaded.height == 0 => {
+                    Err(zgui_image::DecodeError::Empty)
+                }
+                Ok(loaded) => {
+                    let decoded = zgui_image::Decoded {
+                        size: Size::new(loaded.width, loaded.height),
+                        texels: Arc::new(loaded.texels),
+                    };
+                    // The levels of detail are the one part still filtered here.
+                    Ok(zgui_reactive::blocking(move || with_levels(decoded)).await)
+                }
+                Err(reason) => Err(unloaded(reason)),
+            };
+            Arrival::Variant(class, handle, result)
+        });
+        return;
+    }
     let input = completed.input(&key);
     let svg_fonts = completed.svg_fonts();
     completed.start(key, generation, move |key| {
-        let decoded = input.decode(key.name(), class, limits, svg_fonts.as_deref()).map(|decoded| {
-            let mips = if decoded.size.width.max(decoded.size.height) > STANDALONE_LONG_EDGE {
-                zgui_image::mip_chain(&decoded)
-            } else { Vec::new() };
-            DecodedVariant { decoded, mips }
-        });
+        let decoded = input
+            .decode(key.name(), class, limits, svg_fonts.as_deref())
+            .map(with_levels);
         Arrival::Variant(class, handle, decoded)
     });
 }

@@ -17,8 +17,9 @@ use std::time::{Duration, Instant};
 
 use zgui_geom::{Css, CssPx, Point, Rect, Size};
 use zgui_platform::{
-    Anchor, AppHandler, Constrain, LayerPlacement, PlatformCx, PlatformError, PopupPlacement,
-    SurfaceAttributes, SurfaceEvent, SurfaceId, SurfaceRole, WakeReason,
+    Anchor, AppHandler, CloseReason, Constrain, InputSerial, LayerPlacement, PlatformCx,
+    PlatformError, PopupPlacement, SurfaceAttributes, SurfaceEvent, SurfaceId, SurfaceRole,
+    WakeReason,
 };
 use zgui_platform_wayland::WaylandApp;
 use zgui_vocab::PointerAction;
@@ -106,13 +107,14 @@ fn size(width: f32, height: f32) -> Size<CssPx, Css> {
     Size::new(CssPx(width), CssPx(height))
 }
 
-fn placement(parent: SurfaceId) -> PopupPlacement {
+fn placement(parent: SurfaceId, grab: Option<InputSerial>) -> PopupPlacement {
     let rect = Rect::new(Point::new(CssPx(4.0), CssPx(6.0)), size(14.0, 9.0));
     let mut placement = PopupPlacement::below(parent, rect);
     placement.anchor = Anchor::TopRight;
     placement.gravity = Anchor::BottomLeft;
     placement.offset = Point::new(CssPx(-2.5), CssPx(6.5));
     placement.constrain = Constrain { slide: true, flip: false, resize: true };
+    placement.grab = grab;
     placement.reactive = true;
     placement
 }
@@ -135,19 +137,22 @@ impl AppHandler for Menus {
         match event {
             SurfaceEvent::Pointer { action: PointerAction::Pressed, .. } if Some(id) == self.layer => {
                 assert!(self.first.is_none(), "only one press on the layer");
-                let mut invalid = placement(id);
+                let serial = cx.surface(id).expect("configured layer parent").input_serial();
+                let mut invalid = placement(id, serial);
                 invalid.offset.x = CssPx(2_147_483_648.0);
                 let attrs = SurfaceAttributes::popup(invalid);
                 assert!(
                     matches!(cx.create_surface(&attrs), Err(PlatformError::SurfaceCreation(_))),
                     "creating a popup with an out-of-range offset must fail"
                 );
-                self.first = Some(open_popup(cx, placement(id), size(60.0, 30.0)));
+                self.first = Some(open_popup(cx, placement(id, serial), size(60.0, 30.0)));
                 cx.surface(id).expect("configured layer parent").pre_present_notify();
             }
             SurfaceEvent::Resized(_) if Some(id) == self.first && !self.moved => {
                 let popup = cx.surface(id).expect("first popup remains live");
-                let mut moved = placement(self.layer.expect("layer parent"));
+                let parent = self.layer.expect("layer parent");
+                let serial = cx.surface(parent).expect("layer parent").input_serial();
+                let mut moved = placement(parent, serial);
                 moved.offset = Point::new(CssPx(10.5), CssPx(f32::NAN));
                 assert!(
                     matches!(
@@ -164,10 +169,11 @@ impl AppHandler for Menus {
             }
             SurfaceEvent::Pointer { action: PointerAction::Pressed, .. } if Some(id) == self.first => {
                 assert!(self.nested.is_none(), "only one press on the first popup");
+                let serial = cx.surface(id).expect("first popup").input_serial().expect("popup press serial");
                 let rect = Rect::new(Point::new(CssPx(1.0), CssPx(2.0)), size(6.0, 8.0));
-                self.nested = Some(open_popup(cx, PopupPlacement::below(id, rect), size(28.0, 16.0)));
+                self.nested = Some(open_popup(cx, PopupPlacement::below(id, rect).with_grab(serial), size(28.0, 16.0)));
             }
-            SurfaceEvent::Destroyed if Some(id) == self.nested => {
+            SurfaceEvent::Closed(CloseReason::Dismissed) | SurfaceEvent::Destroyed if Some(id) == self.nested => {
                 assert!(!self.dismissed, "one dismissal for the nested popup");
                 self.dismissed = true;
                 cx.destroy_surface(self.layer.expect("destroy the root of the popup chain"));

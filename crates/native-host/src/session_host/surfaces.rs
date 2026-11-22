@@ -1,7 +1,7 @@
 //! Realize one generation's shell requests outside JavaScript and native window frames.
 use std::collections::{BTreeMap, BTreeSet};
 
-use zgui::{app::Fonts, geom::{Css, CssPx, Size}, platform::{InputRegion, PlatformCx, SessionLockState, SurfaceAttributes, SurfaceId, SurfaceRole}, runtime::{Runtime, WindowContent, WindowSpec, WindowToken}, view::View};
+use zgui::{app::Fonts, geom::{Css, CssPx, Size}, platform::{InputRegion, MonitorTarget, PlatformCx, SessionLockState, SurfaceAttributes, SurfaceId, SurfaceRole}, runtime::{Runtime, WindowContent, WindowSpec, WindowToken}, view::View};
 
 use super::{ImageChoice, MountRegion, PredecessorLeak, ReloadOutcome, Root, RuntimeSurface, SessionHost, SessionSurface, SurfaceOpacity};
 use crate::{session::{ResourceCounts, Result, Session, SessionModule, SessionRetirement}, shell::{LayerSpec, LockCommand, LockSpec, Monitor}};
@@ -168,7 +168,7 @@ impl SessionHost {
                     return Err("lock UI disposal did not settle before unlock".into());
                 }
                 if !cx.is_exiting() && cx.session_lock_state() == SessionLockState::Locked {
-                    cx.unlock_session().map_err(|error| error.to_string())?;
+                    cx.try_unlock_session().map_err(|error| error.to_string())?;
                 }
             }
             _ => {}
@@ -189,7 +189,7 @@ impl SessionHost {
                 parent = ancestor.parent;
             }
             let output = self.shell_windows.running.values().find(|layer| layer.surface == parent)
-                .and_then(|layer| layer.spec.placement.monitor.as_deref());
+                .and_then(|layer| monitor_name(layer.spec.placement.monitor.as_ref()));
             let size = popup.spec.size();
             return Some((f64::from(size.width.0), f64::from(size.height.0), output));
         }
@@ -197,7 +197,7 @@ impl SessionHost {
             return Some((f64::from(window.spec.size.width.0), f64::from(window.spec.size.height.0), None));
         }
         let running = self.shell_windows.running.values().find(|running| running.surface == surface)?;
-        Some((f64::from(running.spec.size.width.0), f64::from(running.spec.size.height.0), running.spec.placement.monitor.as_deref()))
+        Some((f64::from(running.spec.size.width.0), f64::from(running.spec.size.height.0), monitor_name(running.spec.placement.monitor.as_ref())))
     }
 
     /// Recreate one named surface for preview while retaining its session and other regions.
@@ -353,7 +353,7 @@ impl ShellWindows {
             let Some(monitor) = monitors.iter().find(|monitor| monitor.id == spec.monitor) else { continue; };
             if self.locks.contains_key(&id) || !session.shell.owns_lock(id) { continue; }
             let mut attrs = SurfaceAttributes::new(spec.name.as_str());
-            attrs.role = SurfaceRole::Lock(spec.monitor.clone());
+            attrs.role = SurfaceRole::Lock(MonitorTarget::Name(spec.monitor.clone()));
             if let LockReconcile::Stage(previous) = mode {
                 attrs.replacing_lock = previous.locks.values().find(|lock| {
                     lock.spec.monitor == spec.monitor && cx.surface(lock.surface).is_some()
@@ -401,7 +401,7 @@ impl ShellWindows {
                 }
                 if running.spec.input != spec.input {
                     let surface = cx.surface(running.surface).ok_or("layer surface disappeared during update")?;
-                    surface.set_input_region(&spec.input).map_err(|error| error.to_string())?;
+                    surface.set_shell_input_region(&spec.input).map_err(|error| error.to_string())?;
                 }
                 running.spec = spec;
             } else {
@@ -443,7 +443,7 @@ impl ShellWindows {
         let input = &running.spec.input;
         if *input != InputRegion::Full {
             cx.surface(surface).ok_or("opened shell window has no platform surface")?
-                .set_input_region(input).map_err(|error| error.to_string())?;
+                .set_shell_input_region(input).map_err(|error| error.to_string())?;
         }
         RuntimeSurface::new(runtime, cx, images).request_frame(document);
         Ok(())
@@ -522,13 +522,20 @@ pub(super) fn close_native_surface(runtime: &mut Runtime, cx: &dyn PlatformCx, t
     runtime.surface_id(token).is_none() && removed_surface.is_none_or(|id| cx.surface(id).is_none())
 }
 
+fn monitor_name(target: Option<&MonitorTarget>) -> Option<&str> {
+    match target {
+        Some(MonitorTarget::Name(name)) => Some(name.as_str()),
+        _ => None,
+    }
+}
+
 fn present(spec: &LayerSpec, monitors: &[Monitor]) -> bool {
-    spec.placement.monitor.as_ref().is_none_or(|id| monitors.iter().any(|monitor| monitor.id == *id))
+    monitor_name(spec.placement.monitor.as_ref()).is_none_or(|id| monitors.iter().any(|monitor| monitor.id == id))
 }
 
 fn used_size(spec: &LayerSpec, monitors: &[Monitor], images: ImageChoice) -> Result<Size<CssPx, Css>> {
     if matches!(images, ImageChoice::Live) { return Ok(spec.size); }
-    let monitor = spec.placement.monitor.as_ref().map_or_else(|| monitors.first(), |id| monitors.iter().find(|monitor| monitor.id == *id));
+    let monitor = monitor_name(spec.placement.monitor.as_ref()).map_or_else(|| monitors.first(), |id| monitors.iter().find(|monitor| monitor.id == id));
     let margin = &spec.placement.margin;
     let width = if spec.size.width.0 == 0.0 {
         monitor.map_or(1.0, |output| (output.logical_width() - f64::from(margin.left.0 + margin.right.0)).round().clamp(1.0, 16384.0))

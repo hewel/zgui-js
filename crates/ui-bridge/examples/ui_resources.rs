@@ -63,5 +63,5 @@ fn main() {
     icons!(mark; CHECK, MINUS, PLUS, CROSS, DISC, DOT);
     icons!(status; ALERT_CIRCLE, ALERT_TRIANGLE, INFO, CHECK_CIRCLE, CROSS_CIRCLE);
     icons!(ui; SEARCH, SPINNER, ELLIPSIS, PANEL_LEFT);
-    println!("{}", json!({"revision":"80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a", "styles":styles, "themes":themes, "tokens":Theme::properties(), "icons":icons}));
+    println!("{}", json!({"revision":"ee29c7dc66206eb04ba7bcf514058a278c9070ba", "styles":styles, "themes":themes, "tokens":Theme::properties(), "icons":icons}));
 }

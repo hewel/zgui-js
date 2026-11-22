@@ -67,6 +67,7 @@ pub mod clipboard;
 pub mod clock;
 pub mod cx;
 pub mod error;
+pub mod grab;
 pub mod menu;
 pub mod monitor;
 pub mod scroll;
@@ -89,15 +90,18 @@ pub use crate::clipboard::{
 pub use crate::clock::{Clock, VirtualClock};
 pub use crate::cx::PlatformCx;
 pub use crate::error::{PlatformError, Unsupported};
+pub use crate::grab::FocusGrabId;
 pub use crate::menu::{AppMenu, MenuAction, MenuEntry, MenuId, MenuRole, Shortcut, Submenu};
-pub use crate::monitor::{MonitorInfo, refresh_interval};
+pub use crate::monitor::{
+    MonitorId, MonitorInfo, MonitorTarget, MonitorTransform, refresh_interval,
+};
 pub use crate::scroll::ScrollSettings;
 pub use crate::session_lock::SessionLockState;
 pub use crate::surface::{
-    Anchor, BadIcon, ComposeAhead, Constrain, CursorStyle, DecorationSource, Decorations,
-    DragEvent, FullscreenMode, GpuSurface, InputRect, InputRegion, KeyboardInteractivity, Layer,
-    LayerPlacement, OutboundDragPayload, PopupPlacement, PresentPacing, PresentationTiming,
-    ResizeEdge, Surface,
+    Anchor, BadIcon, CloseReason, ComposeAhead, Constrain, CursorStyle, DecorationSource,
+    Decorations, DragEvent, ExclusiveZone, FullscreenMode, GpuSurface, InputRect, InputRegion,
+    InputSerial, KeyboardInteractivity, Layer, LayerPatch, LayerPlacement, OutboundDragPayload,
+    PopupPlacement, PresentPacing, PresentationTiming, ResizeEdge, SubpixelLayout, Surface,
     SurfaceAttributes, SurfaceEvent, SurfaceId, SurfaceRole, TextInput, TextInputPurpose,
     TitleButtons, Watchdog, WindowIcon, WindowLevel,
 };

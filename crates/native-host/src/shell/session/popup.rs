@@ -1,7 +1,7 @@
 //! Decode bounded popup requests independently of any live native surface.
 use rquickjs::{Ctx, Exception, Function, Object, Persistent, Value, function::Func};
 use std::{collections::{BTreeMap, VecDeque}, ops::RangeInclusive, rc::Rc};
-use zgui::{geom::{Css, CssPx, Point, Rect, Size}, platform::{Anchor, Constrain, InputRegion, PopupPlacement, SurfaceId}};
+use zgui::{geom::{Css, CssPx, Point, Rect, Size}, platform::{Anchor, Constrain, InputRegion, InputSerial, PopupPlacement, SurfaceId}};
 
 use super::{Lifecycle, MAX_LAYERS, Shell, layer_id, number, owner, string, valid_name};
 
@@ -56,14 +56,20 @@ impl PopupSpec {
         self.geometry == other.geometry
     }
 
+    /// Whether this popup requested a seat grab on open.
+    #[must_use]
+    pub(crate) fn wants_grab(&self) -> bool {
+        self.geometry.grab
+    }
+
     /// Native auto-height policy for the runtime, if `height: "auto"` is active.
     #[must_use]
-    pub(crate) fn auto_height(&self, parent: SurfaceId) -> Option<zgui::runtime::PopupAutoHeight> {
+    pub(crate) fn auto_height(&self, parent: SurfaceId, grab: Option<InputSerial>) -> Option<zgui::runtime::PopupAutoHeight> {
         let PopupHeight::Auto { min, max } = self.geometry.height else {
             return None;
         };
         Some(zgui::runtime::PopupAutoHeight {
-            placement: self.placement(parent),
+            placement: self.placement(parent, grab),
             width: self.geometry.width,
             min_height: min,
             max_height: max,
@@ -72,8 +78,8 @@ impl PopupSpec {
 
     /// Resolve the placement against a live parent in the same generation.
     #[must_use]
-    pub(crate) fn placement(&self, parent: SurfaceId) -> PopupPlacement {
-        let PopupGeometry { anchor_rect, anchor, gravity, offset, constrain, grab, reactive, .. } = self.geometry;
+    pub(crate) fn placement(&self, parent: SurfaceId, grab: Option<InputSerial>) -> PopupPlacement {
+        let PopupGeometry { anchor_rect, anchor, gravity, offset, constrain, reactive, .. } = self.geometry;
         PopupPlacement { parent, anchor_rect, anchor, gravity, offset, constrain, grab, reactive }
     }
 }

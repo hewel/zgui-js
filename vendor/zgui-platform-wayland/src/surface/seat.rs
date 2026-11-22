@@ -122,6 +122,11 @@ impl SeatLink {
         self.lock().active_press = None;
     }
 
+    /// The serial of the latest press, for a request the desktop grants only against one.
+    pub(crate) fn press_serial(&self) -> Option<u32> {
+        self.lock().grab
+    }
+
     /// Records which surface the pointer is over.
     pub(crate) fn over(&self, surface: Option<SurfaceId>) {
         let mut inner = self.lock();

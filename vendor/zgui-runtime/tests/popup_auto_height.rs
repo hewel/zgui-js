@@ -31,7 +31,7 @@ fn popup_placement(parent: SurfaceId) -> PopupPlacement {
         gravity: Anchor::BottomRight,
         offset: Point::new(CssPx(0.0), CssPx(4.0)),
         constrain: Constrain::default(),
-        grab: false,
+        grab: None,
         reactive: false,
     }
 }
@@ -93,8 +93,8 @@ impl Surface for AsyncPopupSurface {
     fn set_cursor(&self, cursor: CursorStyle) {
         self.inner.set_cursor(cursor);
     }
-    fn set_input_region(&self, region: &InputRegion) -> Result<(), PlatformError> {
-        self.inner.set_input_region(region)
+    fn set_shell_input_region(&self, region: &InputRegion) -> Result<(), PlatformError> {
+        self.inner.set_shell_input_region(region)
     }
     fn reconfigure_layer(
         &self,
@@ -203,8 +203,11 @@ impl PlatformCx for AsyncPopupPlatform {
     fn request_session_lock(&self) -> Result<(), PlatformError> {
         self.inner.request_session_lock()
     }
-    fn unlock_session(&self) -> Result<(), PlatformError> {
-        self.inner.unlock_session()
+    fn try_unlock_session(&self) -> Result<(), PlatformError> {
+        self.inner.try_unlock_session()
+    }
+    fn unlock_session(&self) {
+        self.inner.unlock_session();
     }
 }
 

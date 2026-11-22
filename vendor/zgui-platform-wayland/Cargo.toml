@@ -8,7 +8,7 @@ repository = "https://github.com/zortax/zgui"
 homepage = "https://zgui.zortax.de"
 rust-version = "1.90"
 
-# Standalone snapshot of upstream 80baa3c7; sibling crates retain the same revision.
+# Standalone snapshot of upstream ee29c7dc; sibling crates retain the same revision.
 [workspace]
 
 [target.'cfg(any(target_os = "linux", target_os = "dragonfly", target_os = "freebsd", target_os = "netbsd", target_os = "openbsd"))'.dependencies]
@@ -16,6 +16,7 @@ accesskit = "0.24.1"
 accesskit_unix = "0.22.1"
 calloop = "0.14.4"
 calloop-wayland-source = "0.4.1"
+futures = { version = "0.3", features = ["thread-pool"] }
 raw-window-handle = "0.6.2"
 rustix = { version = "1.1", default-features = false, features = ["std", "fs", "mm", "event", "time"] }
 smithay-client-toolkit = "0.20.0"
@@ -23,24 +24,26 @@ tracing = "0.1.44"
 wayland-backend = { version = "0.3.16", features = ["client_system"] }
 wayland-client = "0.31.15"
 wayland-protocols = { version = "0.32.13", features = ["client", "staging", "unstable"] }
+wayland-scanner = "0.31.11"
 zbus = "5.18"
-zgui-geom = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a" }
-zgui-platform = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a" }
-zgui-profile = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a" }
-zgui-vocab = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a" }
+zgui-geom = { git = "https://github.com/zortax/zgui", rev = "ee29c7dc66206eb04ba7bcf514058a278c9070ba" }
+zgui-platform = { git = "https://github.com/zortax/zgui", rev = "ee29c7dc66206eb04ba7bcf514058a278c9070ba" }
+zgui-profile = { git = "https://github.com/zortax/zgui", rev = "ee29c7dc66206eb04ba7bcf514058a278c9070ba" }
+zgui-vocab = { git = "https://github.com/zortax/zgui", rev = "ee29c7dc66206eb04ba7bcf514058a278c9070ba" }
 
 [target.'cfg(any(target_os = "linux", target_os = "dragonfly", target_os = "freebsd", target_os = "netbsd", target_os = "openbsd"))'.dev-dependencies]
 rustix = { version = "1.1", default-features = false, features = ["std", "net"] }
 tracing = "0.1.44"
 tracing-subscriber = "0.3"
 wayland-protocols-wlr = { version = "0.3.12", features = ["client"] }
-zgui-elements = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a" }
-zgui-platform-headless = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a" }
-zgui-render = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a" }
-zgui-render-wgpu = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a" }
-zgui-runtime = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a" }
-zgui-testkit-scene = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a" }
-zgui-view = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a" }
+wayland-protocols-misc = { version = "0.3.12", features = ["client"] }
+zgui-elements = { git = "https://github.com/zortax/zgui", rev = "ee29c7dc66206eb04ba7bcf514058a278c9070ba" }
+zgui-platform-headless = { git = "https://github.com/zortax/zgui", rev = "ee29c7dc66206eb04ba7bcf514058a278c9070ba" }
+zgui-render = { git = "https://github.com/zortax/zgui", rev = "ee29c7dc66206eb04ba7bcf514058a278c9070ba" }
+zgui-render-wgpu = { git = "https://github.com/zortax/zgui", rev = "ee29c7dc66206eb04ba7bcf514058a278c9070ba" }
+zgui-runtime = { git = "https://github.com/zortax/zgui", rev = "ee29c7dc66206eb04ba7bcf514058a278c9070ba" }
+zgui-testkit-scene = { git = "https://github.com/zortax/zgui", rev = "ee29c7dc66206eb04ba7bcf514058a278c9070ba" }
+zgui-view = { git = "https://github.com/zortax/zgui", rev = "ee29c7dc66206eb04ba7bcf514058a278c9070ba" }
 
 [[test]]
 name = "frame_chain"
@@ -63,6 +66,11 @@ path = "tests/clipboard.rs"
 harness = false
 
 [[test]]
+name = "file_drop"
+path = "tests/file_drop.rs"
+harness = false
+
+[[test]]
 name = "wake_idle"
 path = "tests/wake_idle.rs"
 harness = false
@@ -75,6 +83,56 @@ harness = false
 [[test]]
 name = "output_rate"
 path = "tests/output_rate.rs"
+harness = false
+
+[[test]]
+name = "layer_shell"
+path = "tests/layer_shell.rs"
+harness = false
+
+[[test]]
+name = "hidden_layer"
+path = "tests/hidden_layer.rs"
+harness = false
+
+[[test]]
+name = "layer_toggle"
+path = "tests/layer_toggle.rs"
+harness = false
+
+[[test]]
+name = "fatal_error"
+path = "tests/fatal_error.rs"
+harness = false
+
+[[test]]
+name = "connection_lost"
+path = "tests/connection_lost.rs"
+harness = false
+
+[[test]]
+name = "monitors"
+path = "tests/monitors.rs"
+harness = false
+
+[[test]]
+name = "focus_grab"
+path = "tests/focus_grab.rs"
+harness = false
+
+[[test]]
+name = "layer_popup"
+path = "tests/layer_popup.rs"
+harness = false
+
+[[test]]
+name = "session_lock"
+path = "tests/session_lock.rs"
+harness = false
+
+[[test]]
+name = "lock_keys"
+path = "tests/lock_keys.rs"
 harness = false
 
 [[test]]

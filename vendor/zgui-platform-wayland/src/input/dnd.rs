@@ -170,7 +170,14 @@ impl<O: OfferLifecycle> DragTracker<O> {
     }
 
     /// Records the drag leaving or being cancelled by the source without a drop.
+    ///
+    /// A dropped drag also leaves. Its session stays until its read finishes.
     pub fn left(&mut self) -> Option<(SurfaceId, DragEvent)> {
+        // A drop is followed by wl_data_device.leave. The read of a dropped session may still
+        // run, so keep the session.
+        if self.session.as_ref().is_some_and(|session| session.dropped) {
+            return None;
+        }
         let session = self.session.take()?;
         session.offer.destroy_offer();
         session
@@ -244,40 +251,53 @@ impl<O: OfferLifecycle> DragTracker<O> {
 ///
 /// The format is one address per line with comment lines, and only `file` addresses are paths at
 /// all — a drag of a web address carries something no file system can open, and turning it into a
-/// path would produce a name nothing can read rather than nothing.
+/// path would produce a name nothing can read rather than nothing. An address with a host other
+/// than `localhost` names a file on another machine, so it is dropped too.
+///
+/// Read as bytes, because a Unix file name is bytes and need not be UTF-8.
 pub fn paths(bytes: &[u8]) -> Vec<PathBuf> {
-    String::from_utf8_lossy(bytes)
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty() && !line.starts_with('#'))
-        .filter_map(|line| line.strip_prefix("file://"))
-        .map(|address| PathBuf::from(unescape(address)))
+    use std::os::unix::ffi::OsStringExt;
+    bytes
+        .split(|byte| *byte == b'\n')
+        .map(<[u8]>::trim_ascii)
+        .filter(|line| !line.is_empty() && !line.starts_with(b"#"))
+        .filter_map(|line| line.strip_prefix(b"file://"))
+        .filter_map(|address| {
+            let path = address.strip_prefix(b"localhost").unwrap_or(address);
+            if !path.starts_with(b"/") {
+                return None;
+            }
+            let bytes = unescape(path);
+            (!bytes.contains(&0)).then(|| PathBuf::from(std::ffi::OsString::from_vec(bytes)))
+        })
         .collect()
 }
 
-/// One address with its percent escapes resolved as UTF-8 bytes.
-fn unescape(address: &str) -> String {
-    let bytes = address.as_bytes();
+/// One address with its percent escapes resolved.
+fn unescape(bytes: &[u8]) -> Vec<u8> {
+    let digit = |byte: u8| (byte as char).to_digit(16).map(|value| value as u8);
     let mut out = Vec::with_capacity(bytes.len());
     let mut index = 0;
     while index < bytes.len() {
-        if bytes[index] == b'%' && index + 2 < bytes.len() {
-            let pair = &address[index + 1..index + 3];
-            if let Ok(byte) = u8::from_str_radix(pair, 16) {
-                out.push(byte);
-                index += 3;
-                continue;
-            }
+        if bytes[index] == b'%'
+            && index + 2 < bytes.len()
+            && let (Some(high), Some(low)) = (digit(bytes[index + 1]), digit(bytes[index + 2]))
+        {
+            out.push(high * 16 + low);
+            index += 3;
+            continue;
         }
         out.push(bytes[index]);
         index += 1;
     }
-    String::from_utf8_lossy(&out).into_owned()
+    out
 }
 
 #[cfg(test)]
 mod tests {
     use super::{DragTracker, OfferLifecycle, paths};
+    use std::ffi::OsStr;
+    use std::os::unix::ffi::OsStrExt;
     use std::path::PathBuf;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -302,6 +322,46 @@ mod tests {
 
     fn pt(x: f32, y: f32) -> Point<CssPx, Css> {
         Point::new(CssPx(x), CssPx(y))
+    }
+
+    #[test]
+    fn a_utf8_name_survives_its_escapes() {
+        assert_eq!(
+            paths("file:///tmp/flight%20%C3%BC.ulg\nfile://localhost/tmp/日本.ulg\n".as_bytes()),
+            vec![
+                PathBuf::from("/tmp/flight ü.ulg"),
+                PathBuf::from("/tmp/日本.ulg")
+            ]
+        );
+    }
+
+    #[test]
+    fn a_name_that_is_not_utf8_keeps_its_bytes() {
+        let name = |bytes: &[u8]| PathBuf::from(OsStr::from_bytes(bytes));
+        assert_eq!(paths(b"file:///tmp/%FF.ulg"), vec![name(b"/tmp/\xFF.ulg")]);
+        assert_eq!(paths(b"file:///tmp/\xFE.ulg"), vec![name(b"/tmp/\xFE.ulg")]);
+    }
+
+    #[test]
+    fn a_split_character_after_a_percent_is_kept() {
+        assert_eq!(
+            paths("file:///tmp/%aé.ulg".as_bytes()),
+            vec![PathBuf::from("/tmp/%aé.ulg")]
+        );
+        assert_eq!(
+            paths("file:///tmp/%é.ulg".as_bytes()),
+            vec![PathBuf::from("/tmp/%é.ulg")]
+        );
+    }
+
+    #[test]
+    fn a_file_on_another_host_is_dropped() {
+        assert!(paths(b"file://remote/tmp/log.ulg\nfile://localhostfoo/tmp/log.ulg").is_empty());
+    }
+
+    #[test]
+    fn a_name_with_an_escaped_nul_is_dropped() {
+        assert!(paths(b"file:///tmp/bad%00.ulg").is_empty());
     }
 
     #[test]
@@ -431,5 +491,40 @@ mod tests {
         // Announced offer emits Left on source cancellation.
         assert_eq!(drag.left(), Some((surface, DragEvent::Left)));
         assert_eq!(offer_2.destroyed.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn drop_then_leave_preserves_session_until_late_pipe_read_finishes() {
+        let mut drag = DragTracker::<MockOffer>::default();
+        let surface = SurfaceId::new(3);
+        let offer = MockOffer::default();
+
+        assert!(drag.entered(surface, 99, offer.clone(), pt(12.0, 34.0)).is_none());
+        let (key, _) = drag.to_read().expect("start async pipe read");
+
+        // User drops before pipe read completes, then compositor sends wl_data_device.leave.
+        assert!(drag.dropped().is_none(), "drop waits for async pipe read");
+        assert!(
+            drag.left().is_none(),
+            "leave after drop must keep session alive without emitting Left"
+        );
+        assert_eq!(offer.destroyed.load(Ordering::Relaxed), 0);
+
+        // Pipe read finishes late and delivers Dropped, finishing and destroying the offer.
+        let event = drag
+            .read_finished(key, vec![PathBuf::from("/late/drop.png")])
+            .expect("late read completes dropped offer");
+        assert_eq!(
+            event,
+            (
+                surface,
+                DragEvent::Dropped {
+                    paths: vec![PathBuf::from("/late/drop.png")],
+                    position: pt(12.0, 34.0),
+                }
+            )
+        );
+        assert_eq!(offer.finished.load(Ordering::Relaxed), 1);
+        assert_eq!(offer.destroyed.load(Ordering::Relaxed), 1);
     }
 }

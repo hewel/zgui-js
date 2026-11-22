@@ -57,7 +57,6 @@ struct PreviewHost {
     deadline: Rc<Cell<Instant>>,
     observers: FrameObservers,
     monitors: Vec<Monitor>,
-    monitor_change: bool,
     recreate_shell: Option<String>,
     pending_reload: Option<SessionModule>,
     last_reload: Option<crate::session_host::ReloadOutcome>,
@@ -171,7 +170,6 @@ impl AppHandler for PreviewHost {
     }
     fn wake(&mut self, cx: &dyn PlatformCx, reason: WakeReason) {
         if self.fault.is_some() { return; }
-        if std::mem::take(&mut self.monitor_change) { self.native.monitors_changed(cx); }
         match reason {
             WakeReason::ClipboardRead { serial, result } => {
                 if let Err(result) = self.host.resolve_clipboard_read(serial, result) {
@@ -340,7 +338,6 @@ impl Driver {
             deadline: deadline_ref,
             observers: observer_ref,
             monitors: Vec::new(),
-            monitor_change: false,
             recreate_shell: None,
             pending_reload: None,
             last_reload: None,
@@ -437,8 +434,6 @@ impl Driver {
             self.pipeline.platform().set_monitors(native);
             let app = self.pipeline.app_mut();
             app.monitors = normalized.clone();
-            app.monitor_change = true;
-            self.pipeline.platform().waker().wake(WakeReason::AppWork);
         }
         self.settle(false)?;
         let surfaces = self.pipeline.app().session().map(|session| {
