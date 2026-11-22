@@ -1114,7 +1114,7 @@ Store baseline images in an appropriate repository artifact store or versioned l
 
 ### 12.4 Transparency and platform limits
 
-A transparent offscreen image can test alpha pixels and text/render-target policy. Its `PreMultiplied` metadata describes stored pixels, not the Wayland compositor's blend mode; `compositorTransparencyValidated` remains `false`. [Z21]
+A transparent offscreen image can test alpha pixels and text/render-target policy. Its `PreMultiplied` metadata describes stored pixels, not the Wayland compositor's blend mode; `compositorTransparencyValidated` remains `false`. [Z21] Similarly, headless preview records normalized `blurRegion` (`"none"`, `"full"`, or surface-local CSS rectangles) from `OffscreenSurface` in frame evidence (`*.frame.json`) without synthesizing blurred desktop pixels; Wayland wire semantics are verified separately by `vendor/zgui-platform-wayland/tests/background_effect_protocol.rs`.
 
 Do not claim cross-GPU byte identity. Use the recorded environment to distinguish a UI regression from an environment change, then choose the appropriate comparison policy deliberately.
 

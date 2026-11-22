@@ -273,6 +273,7 @@ impl WaylandState {
             seat: std::sync::Arc::clone(&self.link),
             shell: std::sync::Arc::clone(&self.xdg),
             selections: std::sync::Arc::clone(self.clipboard.selections()),
+            background_effect: std::sync::Arc::clone(&self.background_effect),
             waker: std::sync::Arc::clone(&self.live.waker)
                 as std::sync::Arc<dyn zgui_platform::Waker>,
         }

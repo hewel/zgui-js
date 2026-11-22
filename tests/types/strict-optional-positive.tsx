@@ -1,5 +1,5 @@
-import { cx, renderApp } from "@hewel/zgui";
-import type { NativeNode } from "@hewel/zgui";
+import { LayerSurface, PopupSurface, WindowSurface, cx, renderApp } from "@hewel/zgui";
+import type { BlurRegion, NativeNode } from "@hewel/zgui";
 import { Button, ThemeProvider } from "@hewel/zgui/components";
 import {
   MenuCheckboxItemPrimitive,
@@ -19,6 +19,7 @@ const maybeDisabled: boolean | undefined = undefined;
 const maybeChecked: boolean | undefined = undefined;
 const maybeClass: string | undefined = undefined;
 const maybeOpen: boolean | undefined = undefined;
+const maybeBlur: BlurRegion | undefined = undefined;
 
 export function strictOptionalProbe(root: NativeNode) {
   const router = createRouter([{ path: "/", component: () => <text>home</text> }]);
@@ -52,6 +53,21 @@ export function strictOptionalProbe(root: NativeNode) {
               </MenuListPrimitive>
             </MenuRootPrimitive>
             <Outlet />
+            <WindowSurface
+              name="glass-win"
+              title="Glass"
+              width={300}
+              height={200}
+              blurRegion={maybeBlur}
+            />
+            <LayerSurface name="glass-layer" blurRegion={maybeBlur} />
+            <PopupSurface
+              name="glass-pop"
+              parent="glass-layer"
+              anchorRect={{ x: 0, y: 0, width: 10, height: 10 }}
+              width={100}
+              blurRegion={maybeBlur}
+            />
           </box>
         </RouterProvider>
       </ThemeProvider>

@@ -186,6 +186,7 @@ pub fn set_visible(surface: &WaylandSurface, visible: bool) {
             remap
         };
         if remap {
+            surface.restage_blur_for_remap();
             surface.send_layer(true);
             surface.send_regions();
             surface.wl_surface().commit();

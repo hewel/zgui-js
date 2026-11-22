@@ -57,6 +57,7 @@ export interface WindowOptions {
   readonly transparent: boolean;
 }
 export type NativeInputRegion = "full" | "empty" | readonly NativeWindowRect[];
+export type NativeBlurRegion = "none" | "full" | readonly NativeWindowRect[];
 
 /** Installed by the host; resolving either bridge must remain lazy during preflight. */
 export interface NativeHost {
@@ -152,6 +153,7 @@ export interface NativeHost {
     updateLayer(id: number, placement: LayerPlacement): void;
     closeLayer(id: number): void;
     setInputRegion(id: number, region: NativeInputRegion): void;
+    setBlurRegion(id: number, region: NativeBlurRegion): void;
     openPopup(
       name: string,
       placement: PopupPlacement,

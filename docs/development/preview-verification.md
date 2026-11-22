@@ -93,7 +93,11 @@ decoded straight-alpha PNG samples. The current `capture.transparent` flag
 follows `pixels`; both are false on `E_GRAPHICS_UNAVAILABLE` in the doctor
 result and the run's `environment.json`. Neither establishes compositor
 transparency. Lock surfaces paint an opaque black backdrop beneath author
-content, even when the profile and the document root are transparent.
+content, even when the profile and the document root are transparent. Frame
+evidence (`*.frame.json`) also exposes the backend's recorded normalized
+`blurRegion` (`"none" | "full" | [{ x, y, width, height }]`) from
+`OffscreenSurface` without synthesizing blurred pixels;
+`renderer.compositorTransparencyValidated` remains `false`.
 
 ## P1 — real TSX capture
 

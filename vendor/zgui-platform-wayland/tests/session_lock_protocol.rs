@@ -21,8 +21,8 @@ use std::time::{Duration, Instant};
 
 use rustix::net::{RecvAncillaryBuffer, RecvAncillaryMessage, RecvFlags, recvmsg};
 use zgui_platform::{
-    AppHandler, InputRegion, MonitorTarget, PlatformCx, PlatformError, SessionLockState, Surface,
-    SurfaceAttributes, SurfaceEvent, SurfaceId, SurfaceRole, WakeReason,
+    AppHandler, BlurRegion, InputRegion, MonitorTarget, PlatformCx, PlatformError,
+    SessionLockState, Surface, SurfaceAttributes, SurfaceEvent, SurfaceId, SurfaceRole, WakeReason,
 };
 use zgui_platform_wayland::WaylandApp;
 
@@ -32,6 +32,7 @@ const TIMEOUT: Duration = Duration::from_secs(5);
 const FIRST: u32 = 6;
 const SECOND: u32 = 7;
 const VIEWPORTER: u32 = 8;
+const BACKGROUND_EFFECT: u32 = 9;
 const INITIAL: [u32; 2] = [32, 20];
 const RESIZED: [u32; 2] = [48, 25];
 
@@ -196,6 +197,10 @@ fn run_fixture(scenario: Scenario) {
             assert!(!server.unlock_sent, "unsupported locking cannot trigger an unlock");
         }
     }
+    assert_eq!(
+        server.background_effects, 0,
+        "session lock surfaces must never allocate ext_background_effect_surface_v1"
+    );
 }
 
 struct SocketFile(std::path::PathBuf);
@@ -283,6 +288,8 @@ impl AppHandler for Locker {
         if self.scenario.explicitly_unlocks() {
             let attrs = lock_attributes(None);
             let first = cx.create_surface(&attrs).expect("claim the platform-owned output");
+            // Hard exclusion: blur requests on lock content surfaces must remain inert no-ops.
+            first.set_blur_region(BlurRegion::Full);
             assert!(cx.create_surface(&attrs).is_err(), "implicit replacement is forbidden");
             let replacement_attrs = lock_attributes(Some(first.id()));
             let rejected = cx
@@ -466,6 +473,7 @@ enum Object {
     Region,
     Viewporter,
     Viewport(u32),
+    BackgroundEffectManager,
 }
 
 struct OutputLock {
@@ -498,6 +506,7 @@ struct Compositor {
     coverage: Vec<(u32, [u32; 2])>,
     role_destroys: Vec<u32>,
     claims: u32,
+    background_effects: u32,
 }
 
 impl Compositor {
@@ -521,6 +530,7 @@ impl Compositor {
             coverage: Vec::new(),
             role_destroys: Vec::new(),
             claims: 0,
+            background_effects: 0,
         }
     }
 
@@ -600,6 +610,7 @@ impl Compositor {
                     if self.scenario == Scenario::Disconnect {
                         self.global(VIEWPORTER, "wp_viewporter", 1);
                     }
+                    self.global(BACKGROUND_EFFECT, "ext_background_effect_manager_v1", 1);
                     self.global(FIRST, "wl_output", 4);
                 }
                 _ => panic!("unexpected display opcode {opcode}"),
@@ -618,9 +629,13 @@ impl Compositor {
                     5 => Object::Subcompositor,
                     FIRST | SECOND => Object::Output(global),
                     VIEWPORTER => Object::Viewporter,
+                    BACKGROUND_EFFECT => Object::BackgroundEffectManager,
                     _ => panic!("unexpected global {global}"),
                 };
                 self.objects.insert(bound, object);
+                if matches!(object, Object::BackgroundEffectManager) {
+                    self.event(bound, 0, &[1]); // Capability::Blur
+                }
                 if let Object::Output(output) = object {
                     self.geometry(bound, 0);
                     self.event(bound, 1, &[3, INITIAL[0], INITIAL[1], 60_000]);
@@ -641,6 +656,9 @@ impl Compositor {
             }
             (Object::Compositor, 1) => {
                 self.objects.insert(arg(0), Object::Region);
+            }
+            (Object::BackgroundEffectManager, 1) => {
+                self.background_effects += 1;
             }
             (Object::Manager, 1) => {
                 self.lock_requests += 1;

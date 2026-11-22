@@ -187,6 +187,14 @@ close, the host disposes the popup tree before the primary document.
 
     cargo test -j 4 --manifest-path vendor/zgui-platform-wayland/Cargo.toml --test popup_protocol --offline
 
+## Declarative background blur (`ext_background_effect_v1`)
+
+`zgui-platform` adds `#[non_exhaustive] BlurRegion<'a> { None, Full, Rects(&'a [Rect<CssPx, Css>]) }`, `Surface::set_blur_region` (default no-op), and `PlatformCapabilities::supports_background_blur` (default `false` in `none()`). `zgui-platform-headless` records normalized blur state (`RecordedBlurRegion`) on `OffscreenSurface` for preview evidence while ignoring lock surfaces.
+
+`zgui-platform-wayland` binds optional `ext_background_effect_manager_v1` (`1..=1`) from pinned `wayland-protocols 0.32.13` (no local XML), starts `supports_background_blur` at `false` until the live manager advertises `Capability::Blur`, tracks dynamic registry add/remove while ignoring late events from retired managers, and stages updates through `send_regions` / `owes_surface_change` / `pre_present` / `finish_redraw` / remap without touching input or opaque pending state or committing unconditionally in the setter. Each eligible surface (`Toplevel`, `Layer`, `Popup`) lazily creates at most one `ext_background_effect_surface_v1` when non-empty blur is desired and `Blur` is advertised, encodes `Full` as `add(0, 0, i32::MAX, i32::MAX)` and `Rects` via `region::outward` after finite/range validation, destroys temporary `wl_region` objects immediately, preserves desired intent across capability loss/regain, destroys `ext_background_effect_surface_v1` strictly before `wl_surface.destroy()` on both early role retirement and `Drop`, and hard-excludes `SessionLockSurface` (both persistent lock parent and `Role::LockContent` subsurface).
+
+    cargo test -j 4 --manifest-path vendor/zgui-platform-wayland/Cargo.toml --test background_effect_protocol --offline
+
 ## Package image authority and capture readiness
 
 Package images retain verified immutable bytes rather than reopening ambient

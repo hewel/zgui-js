@@ -1,5 +1,5 @@
-import { Image, LayerSurface, PopupSurface, SessionLockSurface, TextField, TextArea, createCanvasScene, createSpring, getSessionGeneration, renderApp, renderShell, requestSessionLock, useMonitors } from "@hewel/zgui";
-import type { NativeElementProps, NativeNode } from "@hewel/zgui";
+import { Image, LayerSurface, PopupSurface, SessionLockSurface, TextField, TextArea, WindowSurface, createCanvasScene, createSpring, getSessionGeneration, renderApp, renderShell, requestSessionLock, useMonitors } from "@hewel/zgui";
+import type { BlurRegion, NativeElementProps, NativeNode } from "@hewel/zgui";
 
 // @ts-expect-error Browser document is not a host global.
 document.createElement("div");
@@ -161,6 +161,15 @@ renderShell(() => null, fabricated);
 void <SessionLockSurface name="lock" />;
 // @ts-expect-error Lock surfaces are not layers and cannot configure pointer pass-through.
 void <SessionLockSurface name="lock" output="DP-1" inputRegion="empty" />;
+// @ts-expect-error Lock surfaces are excluded from declarative background blur.
+void <SessionLockSurface name="lock" output="DP-1" blurRegion="full" />;
+// @ts-expect-error Lock surfaces reject node-based blur regions too.
+void <SessionLockSurface name="lock" output="DP-1" blurRegion={[fabricated]} />;
+// @ts-expect-error BlurRegion uses "none", not inputRegion's "empty".
+const invalidBlurMode: BlurRegion = "empty";
+void invalidBlurMode;
+// @ts-expect-error BlurRegion cannot mix nodes and rectangles in one array.
+void <WindowSurface name="glass" title="Glass" width={300} height={200} blurRegion={[fabricated, { x: 0, y: 0, width: 10, height: 10 }]} />;
 // @ts-expect-error Unlock is an explicit operation, not a request option.
 requestSessionLock({ unlock: true });
 // @ts-expect-error The lock identity is read-only.

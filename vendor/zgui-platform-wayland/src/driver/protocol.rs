@@ -109,6 +109,9 @@ impl Dispatch<WlCallback, FrameCallback> for WaylandState {
                 frame.serial,
                 zgui_platform::Clock::now(state.live.clock.as_ref()),
             );
+            if shared.owes_surface_change() {
+                shared.pacer.request();
+            }
             [
                 shared.visibility_edge(),
                 shared.presentation_edge(unreported),
@@ -232,7 +235,12 @@ impl ProvidesRegistryState for WaylandState {
         &mut self.registry
     }
 
-    registry_handlers![OutputState, SeatState, super::session_lock::SessionLock];
+    registry_handlers![
+        OutputState,
+        SeatState,
+        super::session_lock::SessionLock,
+        super::background_effect::BackgroundEffectHandler
+    ];
 }
 
 impl Dispatch<WlRegion, ()> for WaylandState {

@@ -3,6 +3,7 @@
 use std::time::{Duration, Instant};
 
 use smithay_client_toolkit::reexports::client::protocol::wl_output::WlOutput;
+use wayland_protocols::ext::background_effect::v1::client::ext_background_effect_surface_v1::ExtBackgroundEffectSurfaceV1;
 use zgui_geom::{Css, CssPx, Device, DevicePx, Size};
 use zgui_platform::{PresentationTiming, SurfaceEvent};
 
@@ -195,6 +196,12 @@ pub(crate) struct Shared {
     pub(crate) input_owed: crate::surface::region::Owed,
     /// The part of the surface that is opaque, as asked for and not yet sent.
     pub(crate) opaque_owed: crate::surface::region::Owed,
+    /// Desired background blur region retained across capability changes.
+    pub(crate) blur_desired: crate::surface::region::OwnedBlurRegion,
+    /// Whether background blur state owes a staged protocol update or commit.
+    pub(crate) blur_owed: bool,
+    /// At most one `ext_background_effect_surface_v1` associated with this `wl_surface`.
+    pub(crate) blur_surface: Option<ExtBackgroundEffectSurfaceV1>,
 }
 
 impl Shared {
@@ -244,6 +251,9 @@ impl Shared {
             layer_owed: false,
             input_owed: None,
             opaque_owed: None,
+            blur_desired: crate::surface::region::OwnedBlurRegion::None,
+            blur_owed: false,
+            blur_surface: None,
         }
     }
 
@@ -390,10 +400,11 @@ impl Shared {
 
     /// Whether a change of the surface waits for a commit: a layer placement, a region, or a
     /// buffer at an exact extent.
-    const fn owes_surface_change(&self) -> bool {
+    pub(crate) const fn owes_surface_change(&self) -> bool {
         self.layer_owed
             || self.input_owed.is_some()
             || self.opaque_owed.is_some()
+            || self.blur_owed
             || self.exact_owed
     }
 
@@ -515,9 +526,10 @@ impl Shared {
     ///
     /// Such a commit keeps the buffer on the screen. It is refused while the surface is hidden or
     /// about to be, because it would map the surface again. It is refused while a lock surface owes
-    /// a buffer at a new extent, because the buffer on the screen has the old one.
+    /// a buffer at a new extent, because the buffer on the screen has the old one, and while a
+    /// partial configure has arrived without its terminating `xdg_surface.configure`.
     pub(crate) const fn may_commit_bare(&self) -> bool {
-        !self.unmapped && !self.hide_owed && !self.exact_owed
+        !self.unmapped && !self.hide_owed && !self.exact_owed && self.pending_configure.is_none()
     }
 
     /// The configured extent, in whole device pixels.

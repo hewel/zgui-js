@@ -3,7 +3,7 @@ use rquickjs::{Ctx, Exception, Function, Object, Persistent, Value, function::Fu
 use std::{collections::BTreeMap, ops::RangeInclusive, rc::Rc};
 use zgui::{geom::{Css, CssPx, Size}, platform::Decorations};
 
-use super::{Lifecycle, MAX_LAYERS, Shell, layer_id, number, owner, popup::duplicate_name, string, valid_name};
+use super::{DesiredBlur, Lifecycle, MAX_LAYERS, Shell, layer_id, number, owner, popup::duplicate_name, string, valid_name};
 
 const MAX_TITLE_BYTES: usize = 4096;
 const MAX_APP_ID_BYTES: usize = 256;
@@ -21,6 +21,7 @@ pub(crate) struct ShellWindowSpec {
     pub(crate) resizable: bool,
     pub(crate) decorations: Decorations,
     pub(crate) transparent: bool,
+    pub(crate) blur: DesiredBlur,
 }
 
 pub(super) struct WantedWindow {
@@ -84,13 +85,14 @@ impl Shell {
             let id = layer_id(&ctx, &id)?;
             let mut windows = shell.windows.borrow_mut();
             let window = windows.get_mut(&id).ok_or_else(|| Exception::throw_reference(&ctx, "window is no longer owned"))?;
-            let spec = parse(&ctx, window.spec.name.clone(), data)?;
+            let mut spec = parse(&ctx, window.spec.name.clone(), data)?;
             if window.spec.app_id != spec.app_id {
                 return Err(Exception::throw_type(&ctx, "changing window appId requires a new shell surface"));
             }
             if window.spec.transparent != spec.transparent {
                 return Err(Exception::throw_type(&ctx, "changing window transparency requires a new shell surface"));
             }
+            spec.blur = window.spec.blur.clone();
             if window.spec != spec { window.spec = spec; shell.changed(); }
             Ok::<(), rquickjs::Error>(())
         }))?;
@@ -153,6 +155,7 @@ fn parse(ctx: &Ctx<'_>, name: String, data: Value<'_>) -> rquickjs::Result<Shell
         resizable,
         decorations,
         transparent,
+        blur: DesiredBlur::None,
     })
 }
 

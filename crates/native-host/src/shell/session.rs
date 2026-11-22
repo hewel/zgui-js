@@ -3,7 +3,7 @@ use std::{cell::{Cell, RefCell}, collections::BTreeMap, rc::{Rc, Weak}, sync::{A
 
 use rquickjs::{Array, Ctx, Exception, Function, Object, Persistent, Value, function::Func, object::Property};
 use serde::{Deserialize, Serialize};
-use zgui::{geom::{Css, CssPx, Edges, Size}, platform::{ExclusiveZone, InputRect, InputRegion, KeyboardInteractivity, Layer, LayerPlacement, MonitorInfo, MonitorTarget, SessionLockState, WakeReason, Waker}};
+use zgui::{geom::{Css, CssPx, Edges, Point, Rect, Size}, platform::{BlurRegion, ExclusiveZone, InputRect, InputRegion, KeyboardInteractivity, Layer, LayerPlacement, MonitorInfo, MonitorTarget, SessionLockState, WakeReason, Waker}};
 
 use crate::{assets::{ContractFailure, MAX_SAFE_ID}, session::Session, work::service_error};
 
@@ -17,7 +17,29 @@ use window::WantedWindow;
 pub(crate) const MAX_LAYERS: usize = 32;
 const MAX_SUBSCRIPTIONS: usize = 64;
 const MAX_INPUT_RECTS: u32 = 256;
+const MAX_BLUR_RECTS: u32 = 256;
 static NEXT_LOCK_ID: AtomicU64 = AtomicU64::new(1);
+
+/// Owned normalized background blur intent stored on shell surface specs.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) enum DesiredBlur {
+    #[default]
+    None,
+    Full,
+    Rects(Vec<Rect<CssPx, Css>>),
+}
+
+impl DesiredBlur {
+    /// Borrow as the platform-level [`BlurRegion`] contract.
+    #[must_use]
+    pub(crate) fn as_platform(&self) -> BlurRegion<'_> {
+        match self {
+            Self::None => BlurRegion::None,
+            Self::Full => BlurRegion::Full,
+            Self::Rects(rects) => BlurRegion::Rects(rects),
+        }
+    }
+}
 
 fn allocate_lock_id(next: &AtomicU64) -> Option<u64> {
     next.try_update(Ordering::Relaxed, Ordering::Relaxed, |id| {
@@ -90,6 +112,7 @@ pub(crate) struct LayerSpec {
     pub placement: LayerPlacement,
     pub size: Size<CssPx, Css>,
     pub input: InputRegion,
+    pub blur: DesiredBlur,
 }
 
 struct WantedLayer {
@@ -282,6 +305,18 @@ impl Shell {
         (input != current).then(|| input.clone())
     }
 
+    pub(crate) fn updated_blur(&self, id: u32, current: &DesiredBlur) -> Option<DesiredBlur> {
+        if let Some(layer) = self.layers.borrow().get(&id) {
+            return (layer.spec.blur != *current).then(|| layer.spec.blur.clone());
+        }
+        if let Some(popup) = self.popups.borrow().get(&id) {
+            return (popup.spec.blur != *current).then(|| popup.spec.blur.clone());
+        }
+        let windows = self.windows.borrow();
+        let blur = &windows.get(&id)?.spec.blur;
+        (blur != current).then(|| blur.clone())
+    }
+
     /// Store the new inventory before dispatch; subscriptions added in dispatch start current.
     pub(crate) fn set_monitors(&self, monitors: &[Monitor]) -> bool {
         let mut current = self.monitors.borrow_mut();
@@ -392,7 +427,7 @@ impl Shell {
             }
             if shell.name_is_taken(&name) { return Err(duplicate_name(&ctx)); }
             let id = shell.id(&ctx)?;
-            shell.layers.borrow_mut().insert(id, WantedLayer { spec: LayerSpec { name, placement, size, input: InputRegion::Full }, attach: Persistent::save(&ctx, attach) });
+            shell.layers.borrow_mut().insert(id, WantedLayer { spec: LayerSpec { name, placement, size, input: InputRegion::Full, blur: DesiredBlur::None }, attach: Persistent::save(&ctx, attach) });
             shell.changed();
             Ok(id)
         }))?;
@@ -438,6 +473,52 @@ impl Shell {
             let mut popups = shell.popups.borrow_mut();
             let Some(popup) = popups.get_mut(&id) else { return Ok(()); };
             if popup.spec.input != input { popup.spec.input = input; shell.changed(); }
+            Ok::<(), rquickjs::Error>(())
+        }))?;
+        let weak = Rc::downgrade(self);
+        api.set("setBlurRegion", Func::from(move |ctx: Ctx<'js>, id: Value<'js>, data: Value<'js>| {
+            let shell = owner(&weak, &ctx)?;
+            if shell.authority == Authority::Denied && shell.window_authority == Authority::Denied {
+                shell.require_authority(&ctx)?;
+            }
+            if shell.life.get() == Lifecycle::Stopping { return Ok(()); }
+            shell.require_active(&ctx)?;
+            let id = layer_id(&ctx, &id)?;
+            if shell.owns_lock(id) {
+                return Err(Exception::throw_type(&ctx, "session lock surfaces do not support blurRegion"));
+            }
+            enum BlurOwner { Layer, Popup, Window }
+            let target = if shell.owns(id) {
+                shell.require_authority(&ctx)?;
+                BlurOwner::Layer
+            } else if shell.owns_popup(id) {
+                shell.require_authority(&ctx)?;
+                BlurOwner::Popup
+            } else if shell.owns_window(id) {
+                shell.require_window_authority(&ctx)?;
+                BlurOwner::Window
+            } else {
+                return Err(Exception::throw_reference(&ctx, "shell surface is no longer owned"));
+            };
+            // Parse completely before borrowing maps so getters cannot re-enter or leave partial state.
+            let blur = blur_region(&ctx, data)?;
+            match target {
+                BlurOwner::Layer => {
+                    let mut layers = shell.layers.borrow_mut();
+                    let layer = layers.get_mut(&id).ok_or_else(|| Exception::throw_reference(&ctx, "shell surface is no longer owned"))?;
+                    if layer.spec.blur != blur { layer.spec.blur = blur; shell.changed(); }
+                }
+                BlurOwner::Popup => {
+                    let mut popups = shell.popups.borrow_mut();
+                    let popup = popups.get_mut(&id).ok_or_else(|| Exception::throw_reference(&ctx, "shell surface is no longer owned"))?;
+                    if popup.spec.blur != blur { popup.spec.blur = blur; shell.changed(); }
+                }
+                BlurOwner::Window => {
+                    let mut windows = shell.windows.borrow_mut();
+                    let window = windows.get_mut(&id).ok_or_else(|| Exception::throw_reference(&ctx, "shell surface is no longer owned"))?;
+                    if window.spec.blur != blur { window.spec.blur = blur; shell.changed(); }
+                }
+            }
             Ok::<(), rquickjs::Error>(())
         }))?;
         self.install_popup(&api)?;
@@ -686,6 +767,80 @@ fn region_int(ctx: &Ctx<'_>, value: f64) -> rquickjs::Result<i32> {
         return Err(Exception::throw_range(ctx, "input rectangle exceeds protocol coordinate range"));
     }
     Ok(value as i32)
+}
+
+fn blur_region<'js>(ctx: &Ctx<'js>, value: Value<'js>) -> rquickjs::Result<DesiredBlur> {
+    if value.is_string() {
+        return match string(ctx, &value, "blur region")?.as_str() {
+            "none" => Ok(DesiredBlur::None),
+            "full" => Ok(DesiredBlur::Full),
+            _ => Err(Exception::throw_type(
+                ctx,
+                "blur region must be \"none\", \"full\", or an array of rectangles",
+            )),
+        };
+    }
+    let array = value
+        .into_array()
+        .ok_or_else(|| Exception::throw_type(ctx, "blur region requires an array of rectangles"))?;
+    let len = array_length(ctx, &array, MAX_BLUR_RECTS, "blur region rectangle limit exceeded")?;
+    let mut rects = Vec::with_capacity(len);
+    for index in 0..len {
+        let item: Value = array.get(index)?;
+        let rect = item
+            .into_object()
+            .ok_or_else(|| Exception::throw_type(ctx, "blur region entry must be a rectangle object"))?;
+        let x = number(ctx, &rect.get("x")?, "blur rectangle x")?;
+        let y = number(ctx, &rect.get("y")?, "blur rectangle y")?;
+        let width = number(ctx, &rect.get("width")?, "blur rectangle width")?;
+        let height = number(ctx, &rect.get("height")?, "blur rectangle height")?;
+        if width < 0.0 || height < 0.0 {
+            return Err(Exception::throw_range(ctx, "blur rectangle dimensions must be nonnegative"));
+        }
+        let right_sum = x + width;
+        let bottom_sum = y + height;
+        if !right_sum.is_finite() || !bottom_sum.is_finite() {
+            return Err(Exception::throw_range(ctx, "blur rectangle edges must be finite"));
+        }
+        let range = f64::from(i32::MIN)..=f64::from(i32::MAX);
+        let left = x.floor();
+        let top = y.floor();
+        let right = right_sum.ceil();
+        let bottom = bottom_sum.ceil();
+        if !range.contains(&left)
+            || !range.contains(&top)
+            || !range.contains(&right)
+            || !range.contains(&bottom)
+        {
+            return Err(Exception::throw_range(ctx, "blur rectangle exceeds protocol coordinate range"));
+        }
+        let (li, ti, ri, bi) = (left as i32, top as i32, right as i32, bottom as i32);
+        if ri.checked_sub(li).is_none() || bi.checked_sub(ti).is_none() {
+            return Err(Exception::throw_range(ctx, "blur rectangle extent exceeds protocol range"));
+        }
+        if width == 0.0 || height == 0.0 {
+            continue;
+        }
+        let (xf, yf, wf, hf) = (x as f32, y as f32, width as f32, height as f32);
+        if !xf.is_finite()
+            || !yf.is_finite()
+            || !wf.is_finite()
+            || !hf.is_finite()
+            || !(xf + wf).is_finite()
+            || !(yf + hf).is_finite()
+        {
+            return Err(Exception::throw_range(ctx, "blur rectangle exceeds finite CSS pixel range"));
+        }
+        rects.push(Rect::new(
+            Point::new(CssPx(xf), CssPx(yf)),
+            Size::new(CssPx(wf), CssPx(hf)),
+        ));
+    }
+    Ok(if rects.is_empty() {
+        DesiredBlur::None
+    } else {
+        DesiredBlur::Rects(rects)
+    })
 }
 
 fn array_length(ctx: &Ctx<'_>, array: &Array<'_>, max: u32, error: &str) -> rquickjs::Result<usize> {
@@ -1089,5 +1244,178 @@ mod tests {
         assert_eq!(fixed.size(), Size::new(CssPx(320.0), CssPx(180.0)));
         assert!(fixed.auto_height(zgui::platform::SurfaceId::new(1), None).is_none());
         shell.clear();
+    }
+
+    #[test]
+    fn blur_region_enforces_authority_role_ownership_and_atomic_bounds() {
+        let runtime = rquickjs::Runtime::new().expect("create QuickJS runtime");
+        let waker = zgui::platform::PlatformCx::waker(&zgui_platform_headless::Headless::new());
+
+        // 1. sessionLock alone grants zero blur authority (sticky E_CAPABILITY).
+        {
+            let context = rquickjs::Context::full(&runtime).expect("create QuickJS context");
+            let lock_only = Shell::new(ShellConfig {
+                generation: 1,
+                authority: Authority::Denied,
+                window_authority: Authority::Denied,
+                lock_authority: Authority::Allowed,
+                lock_state: SessionLockState::Locked,
+                contract: ContractPolicy::Sticky,
+            }, waker.clone());
+            lock_only.activate();
+            context.with(|ctx| {
+                lock_only.install(&ctx).expect("install shell bridge");
+                let code = ctx.eval::<String, _>(r#"
+                    const lockId = __zguiShell.openLock('lock-dp1', 'DP-1', () => {});
+                    try { __zguiShell.setBlurRegion(lockId, 'full'); 'accepted' }
+                    catch (error) { error.code ?? error.name }
+                "#).expect("eval lock-only blur denial");
+                assert_eq!(code, "E_CAPABILITY", "sessionLock alone must never grant blur authority");
+            });
+            assert_eq!(lock_only.failure().map(|f| f.code), Some("E_CAPABILITY"));
+            lock_only.clear();
+        }
+
+        // 2. Window-only authority allows owned windows, rejects lock & foreign/closed IDs.
+        {
+            let context = rquickjs::Context::full(&runtime).expect("create QuickJS context");
+            let window_only = Shell::new(ShellConfig {
+                generation: 2,
+                authority: Authority::Denied,
+                window_authority: Authority::Allowed,
+                lock_authority: Authority::Allowed,
+                lock_state: SessionLockState::Locked,
+                contract: ContractPolicy::Throw,
+            }, waker.clone());
+            window_only.activate();
+            context.with(|ctx| {
+                window_only.install(&ctx).expect("install shell bridge");
+                ctx.eval::<(), _>(r#"
+                    const winId = __zguiShell.openWindow('aux', {
+                        title: 'Aux', width: 320, height: 240, transparent: true,
+                    }, () => {}, () => {});
+                    const lockId = __zguiShell.openLock('lock-dp1', 'DP-1', () => {});
+                    __zguiShell.setBlurRegion(winId, 'full');
+                    __zguiShell.updateWindow(winId, {
+                        title: 'Aux Renamed', width: 360, height: 240, transparent: true,
+                    });
+                    const expectErr = (fn, name) => {
+                        try { fn(); throw new Error('expected ' + name); }
+                        catch (error) {
+                            if (error.name !== name) throw new Error('expected ' + name + ', got ' + error.name + ': ' + error.message);
+                        }
+                    };
+                    expectErr(() => __zguiShell.setBlurRegion(lockId, 'full'), 'TypeError');
+                    expectErr(() => __zguiShell.setBlurRegion(999, 'full'), 'ReferenceError');
+                    __zguiShell.closeWindow(winId);
+                    expectErr(() => __zguiShell.setBlurRegion(winId, 'none'), 'ReferenceError');
+                "#).expect("window-only authority checks");
+            });
+            window_only.clear();
+        }
+
+        // 3. Full authority: lock rejection, persistence across updates, bounded atomic parser, retired owner.
+        {
+            let context = rquickjs::Context::full(&runtime).expect("create QuickJS context");
+            let shell = Shell::new(ShellConfig {
+                generation: 3,
+                authority: Authority::Allowed,
+                window_authority: Authority::Allowed,
+                lock_authority: Authority::Allowed,
+                lock_state: SessionLockState::Locked,
+                contract: ContractPolicy::Throw,
+            }, waker);
+            shell.activate();
+            context.with(|ctx| {
+                shell.install(&ctx).expect("install shell bridge");
+                ctx.eval::<(), _>(r#"
+                    const s = __zguiShell;
+                    const layerId = s.openLayer('bar', { layer: 'top', anchor: ['top', 'left', 'right'], width: 0, height: 40 }, () => {});
+                    const popupId = s.openPopup('pop', {
+                        parent: 'bar', width: 200, height: 120,
+                        anchorRect: { x: 0, y: 0, width: 20, height: 20 },
+                        anchor: 'bottom-left', gravity: 'bottom-right', offset: { x: 0, y: 0 },
+                        slide: true, flip: true, resize: false, reactive: false, grab: false,
+                    }, () => {}, () => {});
+                    const winId = s.openWindow('win', { title: 'Win', width: 400, height: 300, transparent: true }, () => {}, () => {});
+                    const lockId = s.openLock('lock-main', 'DP-1', () => {});
+
+                    // Valid updates + zero-area skipping + persistence across unrelated updates.
+                    s.setBlurRegion(layerId, [
+                        { x: 10.5, y: 4, width: 100, height: 32 },
+                        { x: 0, y: 0, width: 0, height: 20 },
+                    ]);
+                    s.updateLayer(layerId, { layer: 'overlay', anchor: ['top', 'left', 'right'], width: 0, height: 48 });
+                    s.setBlurRegion(popupId, 'full');
+                    s.updatePopup(popupId, {
+                        parent: 'bar', width: 240, height: 120,
+                        anchorRect: { x: 0, y: 0, width: 20, height: 20 },
+                        anchor: 'bottom-left', gravity: 'bottom-right', offset: { x: 0, y: 0 },
+                        slide: true, flip: true, resize: false, reactive: false, grab: false,
+                    });
+                    s.setBlurRegion(winId, [{ x: 0, y: 0, width: 0, height: 0 }]);
+
+                    // Lock surface rejected even with all authorities allowed.
+                    let lockRejected = false;
+                    try { s.setBlurRegion(lockId, 'full'); } catch (e) { lockRejected = e instanceof TypeError; }
+                    if (!lockRejected) throw new Error('lock surface must reject blurRegion');
+
+                    // Atomic rejection: invalid inputs must NOT mutate layerId's stored rect!
+                    const tooMany = Array.from({ length: 257 }, (_, i) => ({ x: i, y: 0, width: 1, height: 1 }));
+                    const badInputs = [
+                        'empty',
+                        42,
+                        tooMany,
+                        [{ x: 1, y: 1, width: 10, height: 10 }, { x: NaN, y: 0, width: 10, height: 10 }],
+                        [{ x: Infinity, y: 0, width: 10, height: 10 }],
+                        [{ x: 0, y: 0, width: -1, height: 10 }],
+                        [{ x: 1e308, y: 0, width: 1e308, height: 10 }],
+                        [{ x: 2147483640, y: 0, width: 100, height: 10 }],
+                        [{ x: -2000000000, y: 0, width: 3000000000, height: 10 }],
+                        ['not-a-rect'],
+                    ];
+                    for (const bad of badInputs) {
+                        let threw = false;
+                        try { s.setBlurRegion(layerId, bad); } catch { threw = true; }
+                        if (!threw) throw new Error('expected invalid blur region rejection');
+                    }
+
+                    // Single length snapshot: mutating array during getter read cannot expand beyond snapshot.
+                    const sneaky = [{ x: 1, y: 2, width: 3, height: 4 }];
+                    Object.defineProperty(sneaky, '0', {
+                        get() {
+                            if (sneaky.length < 20) sneaky.push({ x: 9, y: 9, width: 9, height: 9 });
+                            return { x: 1, y: 2, width: 3, height: 4 };
+                        },
+                    });
+                    s.setBlurRegion(winId, sneaky);
+                "#).expect("run host boundary blur tests");
+            });
+
+            let layer_spec = shell.specs().into_values().next().expect("layer spec");
+            assert_eq!(
+                layer_spec.blur,
+                DesiredBlur::Rects(vec![Rect::new(Point::new(CssPx(10.5), CssPx(4.0)), Size::new(CssPx(100.0), CssPx(32.0)))]),
+                "atomic rejection and updateLayer must preserve prior valid blur"
+            );
+            let popup_spec = shell.popup_specs().pop_front().expect("popup spec").1;
+            assert_eq!(popup_spec.blur, DesiredBlur::Full, "updatePopup must preserve blur");
+            let win_spec = shell.window_specs().into_values().next().expect("window spec");
+            assert_eq!(
+                win_spec.blur,
+                DesiredBlur::Rects(vec![Rect::new(Point::new(CssPx(1.0), CssPx(2.0)), Size::new(CssPx(3.0), CssPx(4.0)))]),
+                "single length snapshot must read only the initial length"
+            );
+
+            // Retired generation rejects setBlurRegion cleanly.
+            shell.clear();
+            drop(shell);
+            context.with(|ctx| {
+                let err = ctx.eval::<String, _>(
+                    "try { __zguiShell.setBlurRegion(1, 'full'); 'ok' } catch (e) { e.name }"
+                ).expect("eval retired shell blur");
+                assert_eq!(err, "ReferenceError", "retired shell generation must reject setBlurRegion");
+            });
+        }
     }
 }

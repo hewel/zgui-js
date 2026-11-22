@@ -1,6 +1,7 @@
 //! The loop, and the state every protocol handler is written on.
 
 mod activation;
+pub(crate) mod background_effect;
 mod data;
 mod failure;
 mod ime;
@@ -93,6 +94,8 @@ pub struct WaylandState {
     pub(crate) presentation: Presentation,
     /// The globals the toolkit has no wrapper for.
     pub(crate) extras: Extras,
+    /// Shared handle to the live `ext_background_effect_manager_v1` global and blur capability.
+    pub(crate) background_effect: Arc<background_effect::BackgroundEffectLink>,
     /// The focus grabs, where the compositor offers them.
     pub(crate) grabs: crate::grab::Grabs,
     /// The desktop's clipboards.
@@ -164,6 +167,9 @@ impl WaylandState {
             (shell, version)
         });
         let extras = Extras::bind(globals, &qh);
+        let background_effect = Arc::new(background_effect::BackgroundEffectLink::new(
+            extras.background_effect.clone(),
+        ));
         let grabs = crate::grab::Grabs::bind(globals, &qh);
         let presentation = Presentation::bind(globals, &qh);
         let text_input: Option<ZwpTextInputManagerV3> = globals.bind(&qh, 1..=1, GlobalData).ok();
@@ -202,6 +208,7 @@ impl WaylandState {
             events,
             presentation,
             extras,
+            background_effect,
             grabs,
             clipboard: WaylandClipboard::default(),
             drag: Drag::default(),

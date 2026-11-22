@@ -3,7 +3,7 @@ use std::rc::Rc;
 use zgui::{platform::{PlatformCx, SurfaceAttributes, SurfaceId, SurfaceRole}, runtime::{Runtime, WindowToken}};
 
 use super::{ImageChoice, RuntimeSurface, Session, SessionHost, SessionSurface, ShellKind, ShellWindows, close_native_surface, open_region, shell_window_content};
-use crate::{session::Result, shell::ShellWindowSpec};
+use crate::{session::Result, shell::{DesiredBlur, ShellWindowSpec}};
 
 pub(super) struct RunningWindow {
     pub(super) token: WindowToken,
@@ -164,7 +164,13 @@ impl ShellWindows {
         for (id, spec) in specs {
             if self.dismissed_windows.contains(&id) || !session.shell.owns_window(id) { continue; }
             if let Some(running) = self.windows.get_mut(&id) {
-                if running.spec != spec {
+                let chrome_changed = running.spec.title != spec.title
+                    || running.spec.size != spec.size
+                    || running.spec.min_size != spec.min_size
+                    || running.spec.max_size != spec.max_size
+                    || running.spec.resizable != spec.resizable
+                    || running.spec.decorations != spec.decorations;
+                if chrome_changed {
                     let size_changed = (running.spec.size != spec.size).then_some(spec.size);
                     runtime.reconfigure_window(
                         running.token,
@@ -175,6 +181,12 @@ impl ShellWindows {
                         spec.resizable,
                         spec.decorations,
                     ).map_err(|error| error.to_string())?;
+                }
+                if running.spec.blur != spec.blur {
+                    cx.surface(running.surface).ok_or("running window has no platform surface")?
+                        .set_blur_region(spec.blur.as_platform());
+                }
+                if chrome_changed || running.spec.blur != spec.blur {
                     running.spec = spec;
                 }
                 continue;
@@ -195,6 +207,12 @@ impl ShellWindows {
             self.windows.insert(id, RunningWindow { token, surface, spec });
             let mut binding = RuntimeSurface::new(runtime, cx, images);
             binding.attach_shell(session, id, name, region, surface, ShellKind::Layer)?;
+            let running = self.windows.get_mut(&id).expect("new window is tracked before its first frame");
+            if let Some(blur) = session.shell.updated_blur(id, &running.spec.blur) { running.spec.blur = blur; }
+            if running.spec.blur != DesiredBlur::None {
+                cx.surface(surface).ok_or("opened window has no platform surface")?
+                    .set_blur_region(running.spec.blur.as_platform());
+            }
             binding.request_frame(document);
         }
         Ok(())

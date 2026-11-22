@@ -103,6 +103,8 @@ const SUITES = [
       "popup_protocol",
       "--test",
       "dnd_source_protocol",
+      "--test",
+      "background_effect_protocol",
     ],
   },
   {

@@ -66,6 +66,7 @@ import {
   useWindowState,
 } from "@hewel/zgui";
 import type {
+  BlurRegion,
   CanvasCommand,
   CanvasScene,
   CanvasTransform,
@@ -863,3 +864,33 @@ export type ContextMenuHasNoPointerActions = AssertBoundary<
     ? true
     : false
 >;
+const blurNone: BlurRegion = "none";
+const blurFull: BlurRegion = "full";
+const blurRects: BlurRegion = [{ x: 4, y: 8, width: 120, height: 40 }];
+const blurNodes: BlurRegion = [assigned];
+void (
+  <WindowSurface
+    name="glass"
+    title="Glass"
+    width={320}
+    height={240}
+    transparent
+    blurRegion={blurFull}
+  />
+);
+void (<LayerSurface name="glass-bar" blurRegion={blurRects} />);
+void (
+  <PopupSurface
+    name="glass-pop"
+    parent="glass-bar"
+    anchorRect={{ x: 0, y: 0, width: 10, height: 10 }}
+    width={120}
+    blurRegion={blurNodes}
+  />
+);
+void (
+  <WindowSurface name="clear-glass" title="Clear" width={320} height={240} blurRegion={blurNone} />
+);
+void (
+  <WindowSurface name="undef-glass" title="Undef" width={320} height={240} blurRegion={undefined} />
+);

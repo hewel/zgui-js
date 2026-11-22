@@ -628,3 +628,96 @@ test("mountShellStylesheet works in an ownerless Solid createEffect apply callba
   assert.deepEqual(sheetTexts(harness, desk.id), []);
   assert.equal(harness.byTestId("styled:DP-1"), node);
 });
+
+test("blurRegion tracks WindowSurface/LayerSurface nodes, preserves ThemeProvider sync, and rejects foreign nodes", async t => {
+  const source = `
+    import { LayerSurface, WindowSurface, createSignal, renderApp } from "@hewel/zgui";
+    import { ThemeProvider } from "@hewel/zgui/components";
+    import type { BlurRegion, NativeNode } from "@hewel/zgui";
+    export const hostApiVersion = 1;
+    export const [winBlur, setWinBlur] = createSignal<BlurRegion | undefined>("full");
+    export const [layerBlur, setLayerBlur] = createSignal<BlurRegion | undefined>(undefined);
+    export const [themeMode, setThemeMode] = createSignal<"light" | "dark">("light");
+    export let winNode: NativeNode | undefined;
+    export let layerNode: NativeNode | undefined;
+    export function mount(root: NativeNode) {
+      return renderApp(() => (
+        <ThemeProvider scheme={themeMode()}>
+          <WindowSurface name="glass-win" title="Glass" width={300} height={200} transparent blurRegion={winBlur()}>
+            <box ref={el => { winNode = el; }} testId="win-box"><text>Win</text></box>
+          </WindowSurface>
+          <LayerSurface name="glass-bar" output="DP-1" blurRegion={layerBlur()}>
+            <box ref={el => { layerNode = el; }} testId="layer-box"><text>Bar</text></box>
+          </LayerSurface>
+        </ThemeProvider>
+      ), root);
+    }
+  `;
+  const harness = createHost({ monitors: [desk] });
+  const mod = await moduleFor(t, source);
+  const prevUi = globalThis.__zgui;
+  const prevShell = globalThis.__zguiShell;
+  globalThis.__zgui = harness.host;
+  globalThis.__zguiShell = harness.shell;
+  let dispose;
+  t.after(() => {
+    try {
+      dispose?.();
+      harness.flush();
+    } finally {
+      if (prevUi === undefined) delete globalThis.__zgui;
+      else globalThis.__zgui = prevUi;
+      if (prevShell === undefined) delete globalThis.__zguiShell;
+      else globalThis.__zguiShell = prevShell;
+    }
+  });
+  const root = harness.makeNode("root");
+  dispose = harness.runTurn(() => mod.mount(root));
+  harness.flush();
+
+  const winSurface = harness.surfaces.get("glass-win");
+  const layerSurface = harness.surfaces.get("glass-bar");
+  assert.ok(winSurface && layerSurface);
+  assert.equal(winSurface.blurRegion, "full");
+  assert.equal(layerSurface.blurRegion, "none");
+
+  // Inherited ThemeProvider stylesheet sync still works on WindowSurface with blurRegion.
+  assert.ok(
+    winSurface.region.stylesheets.has("zui-theme-inherited"),
+    "WindowSurface must still inherit ThemeProvider stylesheet",
+  );
+  const initialThemeCss = winSurface.region.stylesheets.get("zui-theme-inherited");
+  harness.runTurn(() => mod.setThemeMode("dark"));
+  assert.notEqual(
+    winSurface.region.stylesheets.get("zui-theme-inherited"),
+    initialThemeCss,
+    "WindowSurface inherited ThemeProvider stylesheet must update reactively",
+  );
+
+  // Node-tracked blurRegion on WindowSurface resolves positive border box and isolates stale observers.
+  const rect = { x: 12, y: 18, width: 140, height: 60 };
+  harness.runTurn(() => mod.setWinBlur([mod.winNode]));
+  const observer = harness.geometry.find(
+    record => record.node === mod.winNode && record.kind === "borderBox",
+  );
+  assert.ok(observer, "blur node is observed in WindowSurface's mount region");
+  observer.emit(rect);
+  harness.flush();
+  assert.deepEqual(winSurface.blurRegion, [rect]);
+
+  // Switching blurRegion away disposes the observer and ignores stale callbacks.
+  harness.runTurn(() => mod.setWinBlur("none"));
+  assert.equal(observer.active, false);
+  assert.equal(winSurface.blurRegion, "none");
+
+  // Foreign-surface node is rejected cleanly with ReferenceError and leaves no active observers.
+  assert.throws(
+    () => harness.runTurn(() => mod.setLayerBlur([mod.layerNode, mod.winNode])),
+    /ReferenceError|must belong to the owning surface/,
+  );
+  assert.equal(
+    harness.geometry.filter(record => record.node === mod.layerNode && record.active).length,
+    0,
+    "failed foreign-node registration must dispose earlier observers cleanly",
+  );
+});

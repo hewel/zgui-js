@@ -103,6 +103,12 @@ pub struct PlatformCapabilities {
     /// set. A page of a browser is no window: the browser owns the tab, and a button that closes
     /// the application leaves an empty page.
     pub window_controls: bool,
+    /// Whether the platform currently advertises compositor background blur effects for eligible
+    /// surfaces (such as Wayland `ext_background_effect_v1` with `Capability::Blur`).
+    ///
+    /// This is a live platform fact only and may change dynamically across registry/capability
+    /// updates. Callers must not drop or gate desired blur intent on an initial snapshot.
+    pub supports_background_blur: bool,
 }
 
 impl PlatformCapabilities {
@@ -135,6 +141,7 @@ impl PlatformCapabilities {
             app_menu: false,
             reopen: false,
             window_controls: false,
+            supports_background_blur: false,
         }
     }
 

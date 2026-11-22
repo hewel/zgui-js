@@ -69,9 +69,16 @@ export type LayerInputRegion =
   | "empty"
   | readonly NativeWindowRect[]
   | readonly NativeNode[];
+/**
+ * Declarative background blur region for an owned non-lock surface.
+ * Rectangles use surface-local logical coordinates. Nodes must belong to this surface.
+ * Omitted or `[]` defaults to `"none"`.
+ */
+export type BlurRegion = "none" | "full" | readonly NativeWindowRect[] | readonly NativeNode[];
 export interface LayerSurfaceProps extends LayerSurfacePlacement {
   readonly name: string;
   readonly inputRegion?: LayerInputRegion;
+  readonly blurRegion?: BlurRegion | undefined;
   readonly children?: NativeChild;
 }
 
@@ -107,6 +114,7 @@ export type PopupSurfaceProps = {
   readonly offset?: NativePoint;
   readonly grab?: boolean;
   readonly inputRegion?: LayerInputRegion;
+  readonly blurRegion?: BlurRegion | undefined;
   readonly onDismiss?: () => void;
   readonly children?: NativeChild;
 } & (
@@ -152,6 +160,7 @@ export interface WindowSurfaceProps {
   readonly resizable?: boolean;
   readonly decorations?: WindowDecorations;
   readonly transparent?: boolean;
+  readonly blurRegion?: BlurRegion | undefined;
   readonly onClose?: () => void;
   readonly children?: NativeChild;
 }

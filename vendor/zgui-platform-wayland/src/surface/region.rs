@@ -7,6 +7,7 @@
 //! hides what is behind it.
 
 use zgui_geom::{Css, CssPx, Rect};
+use zgui_platform::BlurRegion;
 
 /// A rectangle in whole logical pixels: left, top, width, height.
 pub type Whole = (i32, i32, i32, i32);
@@ -16,6 +17,85 @@ pub type Whole = (i32, i32, i32, i32);
 /// The outer absence is "nothing to send". The inner one is the region the protocol spells as no
 /// region at all: the whole surface for input, nothing for opacity.
 pub type Owed = Option<Option<Vec<Rect<CssPx, Css>>>>;
+
+/// Owned normalized background blur intent retained by a Wayland surface across capability changes.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub enum OwnedBlurRegion {
+    /// No background blur is requested.
+    #[default]
+    None,
+    /// Full-surface background blur (`wl_region.add(0, 0, i32::MAX, i32::MAX)`).
+    Full,
+    /// Validated non-empty union of CSS rectangles.
+    Rects(Vec<Rect<CssPx, Css>>),
+}
+
+impl OwnedBlurRegion {
+    /// Whether no background blur is desired.
+    #[must_use]
+    pub const fn is_none(&self) -> bool {
+        matches!(self, Self::None)
+    }
+}
+
+/// Normalizes a [`BlurRegion`] into owned validated intent, dropping non-finite, non-positive,
+/// or out-of-protocol-range rectangles and collapsing an empty list to [`OwnedBlurRegion::None`].
+#[must_use]
+pub fn normalize_blur(region: BlurRegion<'_>) -> OwnedBlurRegion {
+    match region {
+        BlurRegion::None => OwnedBlurRegion::None,
+        BlurRegion::Full => OwnedBlurRegion::Full,
+        BlurRegion::Rects(rects) => {
+            let valid: Vec<_> = rects
+                .iter()
+                .copied()
+                .filter(|&rect| valid_blur_rect(rect))
+                .collect();
+            if valid.is_empty() {
+                OwnedBlurRegion::None
+            } else {
+                OwnedBlurRegion::Rects(valid)
+            }
+        }
+        _ => OwnedBlurRegion::None,
+    }
+}
+
+fn valid_blur_rect(rect: Rect<CssPx, Css>) -> bool {
+    let x = f64::from(rect.origin.x.0);
+    let y = f64::from(rect.origin.y.0);
+    let w = f64::from(rect.size.width.0);
+    let h = f64::from(rect.size.height.0);
+    if !x.is_finite() || !y.is_finite() || !w.is_finite() || !h.is_finite() || w <= 0.0 || h <= 0.0 {
+        return false;
+    }
+    let right_sum = x + w;
+    let bottom_sum = y + h;
+    if !right_sum.is_finite() || !bottom_sum.is_finite() {
+        return false;
+    }
+    let left = x.floor();
+    let top = y.floor();
+    let right = right_sum.ceil();
+    let bottom = bottom_sum.ceil();
+    let range = f64::from(i32::MIN)..=f64::from(i32::MAX);
+    if !range.contains(&left)
+        || !range.contains(&top)
+        || !range.contains(&right)
+        || !range.contains(&bottom)
+    {
+        return false;
+    }
+    let Some(width) = (right as i32).checked_sub(left as i32) else {
+        return false;
+    };
+    let Some(height) = (bottom as i32).checked_sub(top as i32) else {
+        return false;
+    };
+    width > 0
+        && height > 0
+        && outward(rect).is_some_and(|(_, _, rw, rh)| rw > 0 && rh > 0)
+}
 
 /// `rect` grown to the whole pixels it touches.
 pub fn outward(rect: Rect<CssPx, Css>) -> Option<Whole> {

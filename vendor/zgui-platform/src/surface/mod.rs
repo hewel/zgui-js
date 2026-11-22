@@ -24,7 +24,7 @@ pub use crate::surface::event::{CloseReason, SurfaceEvent};
 pub use crate::surface::gpu::GpuSurface;
 pub use crate::surface::icon::{BadIcon, WindowIcon};
 pub use crate::surface::id::SurfaceId;
-pub use crate::surface::region::{InputRect, InputRegion};
+pub use crate::surface::region::{BlurRegion, InputRect, InputRegion};
 pub use crate::surface::role::{
     Anchor, Constrain, ExclusiveZone, KeyboardInteractivity, Layer, LayerPatch, LayerPlacement,
     PopupPlacement, SurfaceRole,
@@ -340,6 +340,15 @@ pub trait Surface: Send + Sync + 'static {
     /// inwards, so a rectangle never claims a pixel it only partly covers. The change is shown
     /// with the next frame. Where it means nothing it costs nothing.
     fn set_opaque_region(&self, region: Option<&[Rect<CssPx, Css>]>) {
+        let _ = region;
+    }
+
+    /// Requests compositor background blur behind `region` of this surface, in CSS pixels.
+    ///
+    /// Unsupported backends and surfaces excluded from background effects (such as session lock
+    /// surfaces) ignore the request. Backends with double-buffered surface state stage updates
+    /// onto the next legal commit without altering input or opaque regions.
+    fn set_blur_region(&self, region: BlurRegion<'_>) {
         let _ = region;
     }
 

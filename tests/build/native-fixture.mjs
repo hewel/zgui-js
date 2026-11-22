@@ -1276,6 +1276,16 @@ export function createHost({
       surface.inputRegion = structuredClone(region);
       shellLog.push({ op: "input", id, region: surface.inputRegion });
     },
+    setBlurRegion(id, region) {
+      assertActiveHost("setBlurRegion");
+      if (lockIds.has(id)) {
+        throw new TypeError("session lock surfaces do not support blurRegion");
+      }
+      const surface = layerIds.get(id) ?? popupIds.get(id) ?? windowIds.get(id);
+      if (!surface || surface.closing) throw new ReferenceError("closed shell surface");
+      surface.blurRegion = structuredClone(region);
+      shellLog.push({ op: "blur", id, region: surface.blurRegion });
+    },
     openPopup(name, placement, attach, dismiss) {
       requireShellWorkAllowed("openPopup");
       requireShell();

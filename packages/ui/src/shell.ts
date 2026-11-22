@@ -8,10 +8,11 @@ import {
   runWithOwner,
   useContext,
 } from "#solid";
-import { bridgeFor, shellBridge } from "./host.js";
+import { bridgeFor, bridgeForTarget, shellBridge } from "./host.js";
 import { ThemeCssContext } from "./theme-sync.js";
 import type {
   LayerPlacement,
+  NativeBlurRegion,
   NativeHost,
   NativeInputRegion,
   PopupPlacement,
@@ -21,6 +22,7 @@ import type {
 import { flush, renderRegion } from "./renderer/index.js";
 import type {
   Accessor,
+  BlurRegion,
   LayerAnchor,
   LayerInputRegion,
   LayerSurfaceProps,
@@ -129,14 +131,14 @@ function placementOf(props: LayerSurfaceProps): LayerPlacement {
   };
 }
 
-function bindInputRegion(
-  props: { readonly inputRegion?: LayerInputRegion },
+function bindSurfaceRegion<TMode extends string>(
+  read: () => TMode | readonly NativeWindowRect[] | readonly NativeNode[],
   bridge: UiBridge,
-  publish: (region: NativeInputRegion) => void,
+  publish: (region: TMode | readonly NativeWindowRect[]) => void,
 ): void {
   createEffect(
     () => {
-      const region = props.inputRegion ?? "full";
+      const region = read();
       if (typeof region === "string") return region;
       return region.map(item =>
         "x" in item ? { x: item.x, y: item.y, width: item.width, height: item.height } : item,
@@ -166,42 +168,95 @@ function bindInputRegion(
       };
       const publishBoxes = () => publish([...fixed, ...boxes.values()]);
       let initializing = true;
-      const observers = nodes.map(node =>
-        bridge.observeGeometry(
-          node,
-          "borderBox",
-          rect => {
-            if (setBox(node, rect)) publishBoxes();
-          },
-          attached => {
-            if (setBox(node, attached ? bridge.getWindowRect(node) : null) && !initializing)
-              publishBoxes();
-          },
-        ),
-      );
+      let disposed = false;
+      const observers: Array<() => void> = [];
+      try {
+        for (const node of nodes) {
+          if (bridgeForTarget(node) !== bridge) {
+            throw new ReferenceError("Surface region node must belong to the owning surface");
+          }
+          observers.push(
+            bridge.observeGeometry(
+              node,
+              "borderBox",
+              rect => {
+                if (!disposed && setBox(node, rect)) publishBoxes();
+              },
+              attached => {
+                if (
+                  !disposed &&
+                  setBox(node, attached ? bridge.getWindowRect(node) : null) &&
+                  !initializing
+                ) {
+                  publishBoxes();
+                }
+              },
+            ),
+          );
+        }
+      } catch (error) {
+        disposed = true;
+        for (const dispose of observers) dispose();
+        throw error;
+      }
       initializing = false;
       publishBoxes();
       return () => {
+        disposed = true;
         for (const dispose of observers) dispose();
       };
     },
   );
 }
 
-function mountInputSurface(
+function bindInputRegion(
+  props: { readonly inputRegion?: LayerInputRegion },
+  bridge: UiBridge,
+  publish: (region: NativeInputRegion) => void,
+): void {
+  bindSurfaceRegion(() => props.inputRegion ?? "full", bridge, publish);
+}
+
+function bindBlurRegion(
+  props: { readonly blurRegion?: BlurRegion | undefined },
+  bridge: UiBridge,
+  publish: (region: NativeBlurRegion) => void,
+): void {
+  bindSurfaceRegion(() => props.blurRegion ?? "none", bridge, publish);
+}
+
+function mountManagedSurface(
   owner: ReturnType<typeof getOwner>,
-  props: { readonly inputRegion?: LayerInputRegion; readonly children?: NativeChild },
+  props: {
+    readonly inputRegion?: LayerInputRegion;
+    readonly blurRegion?: BlurRegion | undefined;
+    readonly children?: NativeChild;
+  },
   root: NativeNode,
   bridge: UiBridge,
-  publishInput: (region: NativeInputRegion) => void,
+  options: {
+    readonly publishInput?: (region: NativeInputRegion) => void;
+    readonly publishBlur?: (region: NativeBlurRegion) => void;
+    readonly setup?: () => void;
+  },
 ): () => void {
   let attached = true;
   const dispose = runWithOwner(owner, () =>
     renderRegion(
       () => {
-        bindInputRegion(props, bridge, region => {
-          if (attached) publishInput(region);
-        });
+        options.setup?.();
+        if (options.publishInput) {
+          const publishInput = options.publishInput;
+          bindInputRegion(props, bridge, region => {
+            if (attached) publishInput(region);
+          });
+        }
+        if (options.publishBlur) {
+          const publishBlur = options.publishBlur;
+          bindBlurRegion(props, bridge, region => {
+            if (attached) publishBlur(region);
+          });
+        }
         return () => props.children;
       },
       root,
@@ -248,8 +303,13 @@ export function LayerSurface(props: LayerSurfaceProps): null {
         id: shell.openLayer(name, placement, (root, bridge) => {
           if (request.closed) return () => {};
           popupParentRegions.set(bridge, { shell, name });
-          return mountInputSurface(owner, props, root, bridge, region => {
-            if (!request.closed) shell.setInputRegion(request.id, region);
+          return mountManagedSurface(owner, props, root, bridge, {
+            publishInput: region => {
+              if (!request.closed) shell.setInputRegion(request.id, region);
+            },
+            publishBlur: region => {
+              if (!request.closed) shell.setBlurRegion(request.id, region);
+            },
           });
         }),
         name,
@@ -356,8 +416,13 @@ export function PopupSurface(props: PopupSurfaceProps): null {
                 (root, bridge) => {
                   if (id !== request) return () => {};
                   popupParentRegions.set(bridge, { shell, name });
-                  return mountInputSurface(owner, props, root, bridge, region => {
-                    if (id === request) shell.setInputRegion(request, region);
+                  return mountManagedSurface(owner, props, root, bridge, {
+                    publishInput: region => {
+                      if (id === request) shell.setInputRegion(request, region);
+                    },
+                    publishBlur: region => {
+                      if (id === request) shell.setBlurRegion(request, region);
+                    },
                   });
                 },
                 () => {
@@ -437,21 +502,19 @@ export function WindowSurface(props: WindowSurfaceProps): null {
                 (root, bridge) => {
                   if (id !== request) return () => {};
                   popupParentRegions.set(bridge, { shell, name });
-                  return runWithOwner(owner, () =>
-                    renderRegion(
-                      () => {
-                        if (inheritedTheme) {
-                          createEffect(inheritedTheme, css => {
-                            bridge.installStylesheet("zui-theme-inherited", css);
-                          });
-                          onCleanup(() => bridge.removeStylesheet("zui-theme-inherited"));
-                        }
-                        return () => props.children;
-                      },
-                      root,
-                      bridge,
-                    ),
-                  );
+                  return mountManagedSurface(owner, props, root, bridge, {
+                    setup: () => {
+                      if (inheritedTheme) {
+                        createEffect(inheritedTheme, css => {
+                          bridge.installStylesheet("zui-theme-inherited", css);
+                        });
+                        onCleanup(() => bridge.removeStylesheet("zui-theme-inherited"));
+                      }
+                    },
+                    publishBlur: region => {
+                      if (id === request) shell.setBlurRegion(request, region);
+                    },
+                  });
                 },
                 () => {
                   if (id !== request) return;

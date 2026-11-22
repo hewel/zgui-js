@@ -7,9 +7,9 @@ use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use accesskit::TreeUpdate;
 use zgui_geom::{Css, CssPx, Device, DevicePx, Point, Rect, Size};
 use zgui_platform::{
-    CursorStyle, Decorations, FullscreenMode, InputRect, InputRegion, InputSerial, LayerPatch,
-    LayerPlacement, PlatformError, PopupPlacement, Surface, SurfaceAttributes, SurfaceId,
-    SurfaceRole, TextInput, Unsupported,
+    BlurRegion, CursorStyle, Decorations, FullscreenMode, InputRect, InputRegion, InputSerial,
+    LayerPatch, LayerPlacement, PlatformError, PopupPlacement, Surface, SurfaceAttributes,
+    SurfaceId, SurfaceRole, TextInput, Unsupported,
 };
 
 /// How many accessibility nodes the surface keeps across the updates it retains.
@@ -49,6 +49,18 @@ impl A11yLog {
 
 /// A region a surface was given: rectangles in CSS pixels, or `None` for the whole surface.
 pub type Region = Option<Vec<Rect<CssPx, Css>>>;
+
+/// Normalized background blur region recorded on an offscreen surface.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub enum RecordedBlurRegion {
+    /// No background blur is requested.
+    #[default]
+    None,
+    /// Background blur covers the entire surface extent.
+    Full,
+    /// Background blur covers the union of these surface-local CSS rectangles.
+    Rects(Vec<Rect<CssPx, Css>>),
+}
 
 /// The currently presented solid-color fallback, in physical pixels.
 ///
@@ -153,6 +165,12 @@ pub struct OffscreenSurface {
     input_region_log: Mutex<Vec<Region>>,
     /// Every opaque region the surface was given, in order.
     opaque_region_log: Mutex<Vec<Region>>,
+    /// Normalized background blur region currently applied to this surface.
+    blur_region: Mutex<RecordedBlurRegion>,
+    /// Monotonic revision bumped whenever the recorded blur region changes.
+    blur_revision: AtomicU64,
+    /// Every normalized background blur region accepted by this surface, in order.
+    blur_region_log: Mutex<Vec<RecordedBlurRegion>>,
     /// What the offscreen compositor is showing on this surface.
     presentation: Mutex<Presentation>,
     /// The last title it was given.
@@ -206,6 +224,9 @@ impl OffscreenSurface {
             layer_log: Mutex::new(Vec::new()),
             input_region_log: Mutex::new(Vec::new()),
             opaque_region_log: Mutex::new(Vec::new()),
+            blur_region: Mutex::new(RecordedBlurRegion::None),
+            blur_revision: AtomicU64::new(0),
+            blur_region_log: Mutex::new(Vec::new()),
             presentation: Mutex::new(Presentation::Window { visible: false }),
             title: Mutex::new(String::new()),
             requested_attributes: Mutex::new(SurfaceAttributes::default()),
@@ -252,6 +273,7 @@ impl OffscreenSurface {
             *presentation = Presentation::UnclaimedLock(LockFallbackFrame { size: self.size() });
             self.pending.store(0, Ordering::Relaxed);
             *self.input_region.lock().expect("the input region is not poisoned") = InputRegion::Full;
+            *self.blur_region.lock().expect("the blur region is not poisoned") = RecordedBlurRegion::None;
         }
     }
 
@@ -287,6 +309,30 @@ impl OffscreenSurface {
     #[must_use]
     pub fn decorations(&self) -> Decorations {
         *self.decorations.lock().expect("the decorations are not poisoned")
+    }
+
+    /// Current normalized background blur region recorded on this surface.
+    #[must_use]
+    pub fn blur_region(&self) -> RecordedBlurRegion {
+        self.blur_region
+            .lock()
+            .expect("the blur region is not poisoned")
+            .clone()
+    }
+
+    /// Monotonic revision incremented whenever [`OffscreenSurface::blur_region`] changes.
+    #[must_use]
+    pub fn blur_revision(&self) -> u64 {
+        self.blur_revision.load(Ordering::Acquire)
+    }
+
+    /// Every normalized background blur region accepted by this surface, in order.
+    #[must_use]
+    pub fn blur_region_log(&self) -> Vec<RecordedBlurRegion> {
+        self.blur_region_log
+            .lock()
+            .expect("the blur region log is not poisoned")
+            .clone()
     }
 
     /// How many times `begin_move_drag` was invoked on this surface.
@@ -765,6 +811,72 @@ impl Surface for OffscreenSurface {
             .lock()
             .expect("the log is not poisoned")
             .push(region.map(<[_]>::to_vec));
+    }
+
+    fn set_blur_region(&self, region: BlurRegion<'_>) {
+        let is_lock = !matches!(
+            *self
+                .presentation
+                .lock()
+                .expect("the presentation is not poisoned"),
+            Presentation::Window { .. }
+        ) || matches!(
+            self.requested_attributes
+                .lock()
+                .expect("the attributes are not poisoned")
+                .role,
+            SurfaceRole::Lock(_)
+        );
+        if is_lock {
+            return;
+        }
+        let normalized = match region {
+            BlurRegion::None => RecordedBlurRegion::None,
+            BlurRegion::Full => RecordedBlurRegion::Full,
+            BlurRegion::Rects(rects) => {
+                let valid: Vec<_> = rects
+                    .iter()
+                    .copied()
+                    .filter(|rect| {
+                        let x = rect.origin.x.0;
+                        let y = rect.origin.y.0;
+                        let w = rect.size.width.0;
+                        let h = rect.size.height.0;
+                        x.is_finite()
+                            && y.is_finite()
+                            && w.is_finite()
+                            && h.is_finite()
+                            && (x + w).is_finite()
+                            && (y + h).is_finite()
+                            && w > 0.0
+                            && h > 0.0
+                    })
+                    .collect();
+                if valid.is_empty() {
+                    RecordedBlurRegion::None
+                } else {
+                    RecordedBlurRegion::Rects(valid)
+                }
+            }
+            _ => RecordedBlurRegion::None,
+        };
+        let changed = {
+            let mut slot = self
+                .blur_region
+                .lock()
+                .expect("the blur region is not poisoned");
+            let changed = *slot != normalized;
+            *slot = normalized.clone();
+            changed
+        };
+        self.blur_region_log
+            .lock()
+            .expect("the blur region log is not poisoned")
+            .push(normalized);
+        if changed {
+            self.blur_revision.fetch_add(1, Ordering::Release);
+            self.request_redraw();
+        }
     }
 
     fn set_shell_input_region(&self, region: &InputRegion) -> Result<(), PlatformError> {

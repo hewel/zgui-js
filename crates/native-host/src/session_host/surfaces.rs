@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use zgui::{app::Fonts, geom::{Css, CssPx, Size}, platform::{InputRegion, MonitorTarget, PlatformCx, SessionLockState, SurfaceAttributes, SurfaceId, SurfaceRole}, runtime::{Runtime, WindowContent, WindowSpec, WindowToken}, view::View};
 
 use super::{ImageChoice, MountRegion, PredecessorLeak, ReloadOutcome, Root, RuntimeSurface, SessionHost, SessionSurface, SurfaceOpacity};
-use crate::{session::{ResourceCounts, Result, Session, SessionModule, SessionRetirement}, shell::{LayerSpec, LockCommand, LockSpec, Monitor}};
+use crate::{session::{ResourceCounts, Result, Session, SessionModule, SessionRetirement}, shell::{DesiredBlur, LayerSpec, LockCommand, LockSpec, Monitor}};
 use std::{cell::RefCell, rc::Rc};
 
 mod popup;
@@ -403,6 +403,10 @@ impl ShellWindows {
                     let surface = cx.surface(running.surface).ok_or("layer surface disappeared during update")?;
                     surface.set_shell_input_region(&spec.input).map_err(|error| error.to_string())?;
                 }
+                if running.spec.blur != spec.blur {
+                    let surface = cx.surface(running.surface).ok_or("layer surface disappeared during update")?;
+                    surface.set_blur_region(spec.blur.as_platform());
+                }
                 running.spec = spec;
             } else {
                 self.open(runtime, cx, images, session, id, spec)?;
@@ -444,6 +448,11 @@ impl ShellWindows {
         if *input != InputRegion::Full {
             cx.surface(surface).ok_or("opened shell window has no platform surface")?
                 .set_shell_input_region(input).map_err(|error| error.to_string())?;
+        }
+        if let Some(blur) = session.shell.updated_blur(id, &running.spec.blur) { running.spec.blur = blur; }
+        if running.spec.blur != DesiredBlur::None {
+            cx.surface(surface).ok_or("opened shell window has no platform surface")?
+                .set_blur_region(running.spec.blur.as_platform());
         }
         RuntimeSurface::new(runtime, cx, images).request_frame(document);
         Ok(())

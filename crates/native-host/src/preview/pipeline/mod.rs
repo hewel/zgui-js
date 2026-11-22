@@ -17,7 +17,7 @@ use zgui::{
     runtime::{App, AppError, FrameProbe, Runtime, Window},
     view::{IntoView, NodeId, View},
 };
-use zgui_platform_headless::{Harness, Headless, OffscreenSurface};
+use zgui_platform_headless::{Harness, Headless, OffscreenSurface, RecordedBlurRegion};
 use zgui_render_wgpu::Pixels;
 
 use crate::{
@@ -546,12 +546,14 @@ struct OwnedFrame {
     native_nodes: Vec<ui_bridge::registry::SnapshotNode>,
     presentation: u64,
     metadata_revision: u64,
+    blur_revision: u64,
     frame: FrameEvidence,
     tree: TreeEvidence,
 }
 
 struct ObserverData {
     requested_metadata: u64,
+    requested_blur: u64,
     semantics: SemanticModel,
     ledger: FrameLedger,
     session: Weak<Session>,
@@ -735,6 +737,7 @@ impl ObserverInner {
         ] {
             extra.insert(key.to_owned(), value);
         }
+        let mut blur_revision = 0;
         if let Some(surface) = data.surface.as_ref() {
             use zgui::platform::Surface as _;
             extra.insert("window".into(), json!({
@@ -745,6 +748,8 @@ impl ObserverInner {
                 "decorations": crate::session::window_control::decorations_str(surface.decorations()),
                 "moveDragCount": surface.move_drag_count(),
             }));
+            blur_revision = surface.blur_revision();
+            extra.insert("blurRegion".into(), serialize_blur_region(&surface.blur_region()));
         }
         if self.context.multiple {
             tree.extra.insert("checkpointSequence".into(), json!(sequence));
@@ -800,6 +805,7 @@ impl ObserverInner {
             configuration: state.configuration_id,
             presentation: state.presentation_id,
             metadata_revision: snapshot.metadata_revision,
+            blur_revision,
             frame,
             tree,
             native_nodes: snapshot.native_nodes,
@@ -808,6 +814,24 @@ impl ObserverInner {
         if self.context.graphics.borrow().is_null() {
             self.context.graphics.replace(self.capture.metadata());
         }
+    }
+}
+
+fn serialize_blur_region(region: &RecordedBlurRegion) -> Value {
+    match region {
+        RecordedBlurRegion::None => json!("none"),
+        RecordedBlurRegion::Full => json!("full"),
+        RecordedBlurRegion::Rects(rects) => json!(
+            rects
+                .iter()
+                .map(|rect| json!({
+                    "x": f64::from(rect.origin.x.0),
+                    "y": f64::from(rect.origin.y.0),
+                    "width": f64::from(rect.size.width.0),
+                    "height": f64::from(rect.size.height.0),
+                }))
+                .collect::<Vec<_>>()
+        ),
     }
 }
 
@@ -866,6 +890,7 @@ impl FrameObserver {
             context,
             data: RefCell::new(ObserverData {
                 requested_metadata: 0,
+                requested_blur: 0,
                 semantics: SemanticModel::default(),
                 ledger: FrameLedger::default(),
                 session: Weak::new(),
@@ -881,8 +906,11 @@ impl FrameObserver {
 
     pub fn request_metadata_frame(&self, window: &Window, revision: u64) {
         let mut data = self.0.data.borrow_mut();
-        if data.requested_metadata != revision {
+        let blur_revision = data.surface.as_ref().map_or(0, |s| s.blur_revision());
+        let needs_frame = data.requested_metadata != revision || data.requested_blur != blur_revision;
+        if needs_frame {
             data.requested_metadata = revision;
+            data.requested_blur = blur_revision;
             window.request_frame();
         }
     }
@@ -896,6 +924,7 @@ impl FrameObserver {
         data.session = Weak::new();
         data.surface = None;
         data.requested_metadata = 0;
+        data.requested_blur = 0;
         data.semantics = SemanticModel::default();
         data.last = None;
         data.ledger.reset_surface();
@@ -925,7 +954,9 @@ impl FrameObserver {
         let session = session?;
         let region = session.mount_region(window.document_id())?;
         let data = self.0.data.borrow();
-        if data.surface.as_ref()?.id() != region.surface { return None; }
+        let surface = data.surface.as_ref()?;
+        if surface.id() != region.surface { return None; }
+        let blur_revision = surface.blur_revision();
         let capture_state = self.0.capture.state();
         let completed = window.completed_frame();
         if window.has_pending_stylesheets() { return None; }
@@ -944,7 +975,9 @@ impl FrameObserver {
             completed_ordinal: completed.as_ref().map(|frame| frame.ordinal),
             completed_status: completed.as_ref().map(|frame| FrameStatus::from(frame.outcome)),
         };
-        if data.ledger.is_settled(&query) && data.last.is_some() {
+        if data.ledger.is_settled(&query)
+            && data.last.as_ref().is_some_and(|last| last.blur_revision == blur_revision)
+        {
             Some(SettledFrame { data })
         } else {
             None

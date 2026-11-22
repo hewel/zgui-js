@@ -3,7 +3,7 @@ use rquickjs::{Ctx, Exception, Function, Object, Persistent, Value, function::Fu
 use std::{collections::{BTreeMap, VecDeque}, ops::RangeInclusive, rc::Rc};
 use zgui::{geom::{Css, CssPx, Point, Rect, Size}, platform::{Anchor, Constrain, InputRegion, InputSerial, PopupPlacement, SurfaceId}};
 
-use super::{Lifecycle, MAX_LAYERS, Shell, layer_id, number, owner, string, valid_name};
+use super::{DesiredBlur, Lifecycle, MAX_LAYERS, Shell, layer_id, number, owner, string, valid_name};
 
 /// A named popup and its parent-independent configuration.
 #[derive(Clone, Debug, PartialEq)]
@@ -12,6 +12,7 @@ pub(crate) struct PopupSpec {
     pub(crate) parent: String,
     geometry: PopupGeometry,
     pub(crate) input: InputRegion,
+    pub(crate) blur: DesiredBlur,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -117,7 +118,7 @@ impl Shell {
             let name = popup_name(&ctx, &name)?;
             let (parent, geometry) = parse(&ctx, data)?;
             require_acyclic_parent(&ctx, &shell.popups.borrow(), &name, &parent)?;
-            let spec = PopupSpec { name, parent, geometry, input: InputRegion::Full };
+            let spec = PopupSpec { name, parent, geometry, input: InputRegion::Full, blur: DesiredBlur::None };
             let attach = attach.into_function().ok_or_else(|| Exception::throw_type(&ctx, "popup content must be a function"))?;
             let dismiss = dismiss.into_function().ok_or_else(|| Exception::throw_type(&ctx, "popup dismissal handler must be a function"))?;
             if shell.layers.borrow().len() + shell.popups.borrow().len() + shell.windows.borrow().len() >= MAX_LAYERS {
