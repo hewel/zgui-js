@@ -2,15 +2,15 @@
 
 Machine-checked index of ported `@hewel/zgui/components` exports, Gallery interactive vocabulary (`testId`), unported upstream stylesheets, and key interactive statecharts. Verified against source by [`tests/build/component-map.test.mjs`](../../tests/build/component-map.test.mjs).
 
-Root-forwarding components accept `class` and its StyleX alias `className`;
+Root-forwarding components accept `class` (compose CSS Module classes with `cx(...)` from `@hewel/zgui`);
 SDK structural classes remain privately owned, including through wrapped
 components. Providers and multi-root composites have no implicit styling target.
 `ThemeProvider` owns SDK tokens and applies the host's reduced-motion preference.
-Props/ownership coverage: `tests/build/stylex-props.test.mjs` and native
+Props/ownership coverage: `tests/build/css-modules.test.mjs`, `tests/types/native-negative.tsx`, and native
 `crates/ui-bridge/tests/properties.rs`.
 All generated component sheets and theme presets are admitted by the strict native
-parser in `crates/ui-bridge/tests/sdk_resources.rs`. Pinned native adaptations are
-applied before generation and documented in `packages/ui/upstream/ORIGIN`.
+parser in `crates/ui-bridge/tests/sdk_resources.rs`. Pinned native adaptations live in
+`packages/build/src/sync-ui-resources.ts` (verified by `tests/build/sync-ui-resources.test.mjs`) and are documented in `packages/ui/upstream/ORIGIN`.
 
 ## Exported Component & Helper Inventory
 

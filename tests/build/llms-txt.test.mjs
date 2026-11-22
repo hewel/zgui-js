@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { test } from "node:test";
@@ -62,5 +63,22 @@ test("llms.txt covers every @hewel/zgui/components, @hewel/zgui/primitives, @hew
 
   for (const cmd of ["init", "dev", "build", "preview", "package", "doctor", "inspect", "smoke"]) {
     assert.match(llms, new RegExp(`\`zgui-js ${cmd}\\b`), `llms.txt must document zgui-js ${cmd}`);
+  }
+  assert.match(
+    llms,
+    /--op tree\|profile/,
+    "llms.txt must document `--op tree|profile` flag grammar rather than positional tree|profile",
+  );
+});
+
+test("active agent entry docs (AGENTS.md and README.md) reference only existing local paths", async () => {
+  for (const doc of ["AGENTS.md", "README.md"]) {
+    const content = await readFile(path.join(workspaceRoot, doc), "utf8");
+    for (const match of content.matchAll(/\]\(([^)]+)\)/g)) {
+      const target = match[1].split("#")[0];
+      if (!target || /^(?:https?:|mailto:|file:)/.test(target)) continue;
+      const resolved = path.resolve(workspaceRoot, target);
+      assert.ok(existsSync(resolved), `${doc} references missing local path: ${target}`);
+    }
   }
 });

@@ -21,7 +21,7 @@ Install `@hewel/zgui-cli` (or scaffold with `bun create zgui-js`). The binary na
 - `zgui-js preview [DIR] [--watch] [--profile F] [--fixture F] [--scenario F] [--out DIR]` — Headless Vulkan/Stylo offscreen capture & scenario assertions.
 - `zgui-js package [DIR] --out DIR [--bytecode] [--desktop-entry] [--pure-shell]` — Assemble a self-contained runnable Linux app directory.
 - `zgui-js doctor [--json] [--host-root DIR] [--host-executable PATH]` — Verify Bun, `native-host` ABI, Wayland, Vulkan, portal, `tsrs`, and `oxlint`.
-- `zgui-js inspect [--ui] [--socket PATH] [tree|profile|pick ...]` — Query the `0600` `--dev-inspect` socket, toggle the native visual picker (`Ctrl+Shift+I`), or open the self-hosted Inspector window (`--ui`).
+- `zgui-js inspect [--ui] [--socket PATH] [--op tree|profile | pick]` — Query the `0600` `--dev-inspect` socket (`--op tree` / `--op profile`), toggle the native visual picker (`pick` or `Ctrl+Shift+I`), or open the self-hosted Inspector window (`--ui`).
 - `zgui-js smoke` — Build the compiler/runtime smoke fixture.
 
 ## Core SDK (`@hewel/zgui`)

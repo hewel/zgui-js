@@ -1,3 +1,5 @@
+> **Historical — Superseded by [`ADR-0006`](../../adr/0006-lightning-css-modules-replace-stylex.md).** Retained strictly as archival decision history.
+
 # StyleX Integration Decision Record
 
 **Status:** implemented and verified

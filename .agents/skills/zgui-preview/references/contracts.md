@@ -125,7 +125,7 @@ Other supported ops: `pointer.move`, `wheel` (`delta: { x, y, unit: "pixels" | "
 
 ## Inspecting PNG pixels in Bun tests
 
-Inside `zgui-js`, reuse `tests/preview/png.mjs` (`decodePng(bytes)` -> `{ width, height, rgba }`, `pixel(png, x, y)` -> `[r, g, b, a]`) and `tests/preview/harness.mjs` (`runPreview`, `readJson`, `writeJson`). For transparent captures:
+Inside `zgui-js`, reuse `tests/preview/png.mjs` (`pngRgba(filePath)` -> `{ width, height, data }`) and `tests/preview/harness.mjs` (`runPreview`, `runScenario`, `functionalProfile`, `readPng`, `pixelAt(image, x, y)` -> `[r, g, b, a]`, `regionStats`, `uniqueColors`, `readTree`, `readFrame`, `readMetrics`, `getNode`, `writeJson`). For transparent captures:
 - Uncovered `#00000000` background pixels decode to `[0, 0, 0, 0]`.
 - Translucent overlays/shadows decode to straight-alpha `[r, g, b, a]` with `0 < a < 255`.
 - Opaque foregrounds and `<SessionLockSurface>` pixels decode with `a === 255`.

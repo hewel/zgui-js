@@ -17,25 +17,28 @@ Workflow for headless visual verification, pixel inspection, and regression test
 
 ## 2. Core verification loop
 
-1. **Build the bundle** (`dist/manifest.json`):
-   - Inside `zgui-js`: `bun run build --app <name>` (or `previewApplication()` from `@hewel/zgui-build`).
-   - From a downstream repo (such as `z-shell`): call `buildApplication(...)` or `previewApplication(..., { hostExecutable })` from `@hewel/zgui-build`.
-2. **Author `profile.json`, `fixture.json`, and `scenario.json`**:
-   - Use minimal copy-pasteable templates and op schemas in [`references/contracts.md`](references/contracts.md).
-   - Keep profiles on `"clock": { "mode": "virtual", ... }` whenever driving timers, springs, animations, or deterministic captures; advance virtual time explicitly with `clock.advance`.
-3. **Run headless preview**:
-   ```sh
-   nix-shell --run "target/debug/native-host preview run \
-     --bundle <dist-dir> \
-     --profile <profile.json> \
-     --fixture <fixture.json> \
-     --scenario <scenario.json> \
-     --out <fresh-empty-dir>"
-   ```
-   - `--out` must target a non-existent or empty directory per run.
-4. **Inspect evidence**:
-   - Check `<out>/result.json`: `status === "passed"`, `exitCode === 0`, `firstError === null`, `assertions.failed === 0`, and `teardown.clean === true`.
-   - Inspect `<out>/captures/<captureId>.frame.json` (geometry, `alphaMode`, readiness, resource counts) and `<out>/captures/<captureId>.png` (straight-alpha 8-bit RGBA PNG; decode and sample pixels programmatically or view the PNG directly).
+Choose one of two workflows:
+- **One-step CLI / programmatic run**: `bun run preview --app <name> [--scenario ...] [--out ...]` or `previewApplication(...)` from `@hewel/zgui-build` (builds **and** executes `native-host preview run` in one call).
+- **Manual build + run** (when reusing one bundle across multiple scenarios):
+  1. **Build the bundle** (`dist/manifest.json`): `bun run build --app <name>` (or `buildApplication(...)` from `@hewel/zgui-build`).
+  2. **Author `profile.json`, `fixture.json`, and `scenario.json`**:
+     - Use minimal copy-pasteable templates and op schemas in [`references/contracts.md`](references/contracts.md).
+     - Use `preview/profiles/default.json` (`maxJsEntryWallMs: 25`) for timing-sensitive gates (`gallery`, `disclosure`), and `preview/profiles/functional.json` (`maxJsEntryWallMs: 250`, `maxRunWallMs: 30000`) for heavy debug-binary functional scenarios (such as `md-editor`).
+     - Keep profiles on `"clock": { "mode": "virtual", ... }` whenever driving timers, springs, animations, or deterministic captures; advance virtual time explicitly with `clock.advance`.
+  3. **Run headless preview** (never overlap multiple `tests/preview/*.test.mjs` runs concurrently on `llvmpipe` or CPU contention will trip `E_WATCHDOG`):
+     ```sh
+     nix-shell --run "target/debug/native-host preview run \
+       --bundle <dist-dir> \
+       --profile <profile.json> \
+       --fixture <fixture.json> \
+       --scenario <scenario.json> \
+       --out <fresh-empty-dir>"
+     ```
+     - `--out` must target a non-existent or empty directory per run.
+  4. **Inspect evidence**:
+     - Check `<out>/result.json`: `status === "passed"`, `exitCode === 0`, `firstError === null`, `assertions.failed === 0`, and `teardown.clean === true`.
+     - On unexpected test failure, `tests/preview/harness.mjs` automatically retains the output directory and prints its path alongside `firstError` (`E_WATCHDOG` includes `lastCompletedStep` / `inFlightStep` progress details).
+     - Inspect `<out>/captures/<captureId>.frame.json` (geometry, `alphaMode`, readiness, resource counts) and `<out>/captures/<captureId>.png` (straight-alpha 8-bit RGBA PNG; decode and sample pixels programmatically or view the PNG directly).
 
 ## 3. Transparent & shell surface verification
 

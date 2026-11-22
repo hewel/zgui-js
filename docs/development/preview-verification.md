@@ -776,7 +776,9 @@ the named `.log` files retain real protocol/lifecycle observations. The desktop
 images and logs may contain window titles and are deliberately not committed.
 Temporary source packages and native input helper sources/binaries were removed.
 
-## StyleX native integration gate
+## StyleX native integration gate (Historical — superseded by ADR-0006)
+
+> **Archival note:** StyleX was replaced by Lightning CSS Modules in ADR-0006 (`#78`); the active styling preview gate is now `apps/examples/css-modules` + `tests/preview/css-modules.test.mjs`. The record below is kept solely as historical evidence.
 
 The StyleX gate builds the real example package and uses the production schema-v2 loader, QuickJS session, native bridge, stylesheets, fonts, images, layout, and GPU paint:
 

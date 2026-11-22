@@ -40,7 +40,7 @@ The Fontique patch is selected deliberately for parity with the audited upstream
 ```sh
 bun install --frozen-lockfile
 bun run typecheck
-bun packages/build/src/cli.ts smoke
+bun packages/cli/src/cli.ts smoke
 bun run smoke
 bun run build --app counter
 bun run build --app lists

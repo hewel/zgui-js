@@ -1,3 +1,5 @@
+> **Historical — Superseded by [`ADR-0006`](../adr/0006-lightning-css-modules-replace-stylex.md).** StyleX and `@stylexjs/*` have been removed from `zgui-js`. Use plain `src/app.css` and Lightning CSS Modules (`*.module.css`) with `cx(...)` instead (see `apps/examples/css-modules` and `llms.txt`).
+
 # StyleX authoring and native packaging
 
 zgui-js compiles [`@stylexjs/stylex` 0.19.2](https://www.npmjs.com/package/@stylexjs/stylex/v/0.19.2) ahead of execution. The QuickJS host receives the transformed application and StyleX merge runtime; native zgui receives the complete extracted stylesheet. There is no browser DOM, runtime stylesheet injector, or CSS string post-processing.
