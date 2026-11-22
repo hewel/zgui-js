@@ -8,7 +8,7 @@
 
 Build a repeatable native preview runner that allows an agent to compile a UI change, run a short interaction scenario, inspect a screenshot and structured state, and fix the next concrete failure. The preview must execute the real application bundle through rquickjs and the real zgui layout and rendering pipeline.
 
-This is an implementation specification. The `native-host preview` commands, JSON schemas, readiness APIs, selectors, and artifact formats below are project functionality to implement. They are not existing commands supplied by zgui, rquickjs, Solid, or Preact. Upstream capabilities and integration gaps are identified in Section 2.
+This is an implementation specification. The `zgui-host preview` commands, JSON schemas, readiness APIs, selectors, and artifact formats below are project functionality to implement. They are not existing commands supplied by zgui, rquickjs, Solid, or Preact. Upstream capabilities and integration gaps are identified in Section 2.
 
 The selected stack remains **zgui + rquickjs + ahead-of-time compiled TSX**. Solid Universal remains the initial frontend from the companion specification. Preview must depend on the native host contract, so a future Preact adapter can use the same runner without a second preview implementation.
 
@@ -193,7 +193,7 @@ Preview changes the platform selection, asset-service provider, clock, and evide
 
 Fixture services cover packaged text assets only, not compositor state or live WM integration. Native images continue through the real resource/decoder/renderer path. Platform and compositor support remains upstream zgui's responsibility; offscreen evidence does not certify real-desktop focus, IME, or compositor behavior.
 
-Implementation entry points: [process supervisor](../../crates/native-host/src/preview/supervisor.rs), [run orchestration](../../crates/native-host/src/preview/run.rs), [native driver](../../crates/native-host/src/preview/driver.rs), [asset fixture runtime](../../crates/native-host/src/work/fixture.rs), and [saved-run comparison](../../crates/native-host/src/preview/compare.rs).
+Implementation entry points: [process supervisor](../../crates/zgui-host/src/preview/supervisor.rs), [run orchestration](../../crates/zgui-host/src/preview/run.rs), [native driver](../../crates/zgui-host/src/preview/driver.rs), [asset fixture runtime](../../crates/zgui-host/src/work/fixture.rs), and [saved-run comparison](../../crates/zgui-host/src/preview/compare.rs).
 
 A preview fixture may deliberately choose a component or route through a documented application launch parameter. Record those parameters. Do not add hidden branches that change layout or event behavior merely because preview is running.
 
@@ -201,23 +201,23 @@ A preview fixture may deliberately choose a component or route through a documen
 
 Start with modules where possible; separate crates only when dependency ownership warrants it.
 
-| Location                                     | Responsibility                                                     |
-| -------------------------------------------- | ------------------------------------------------------------------ |
-| `crates/native-host/src/preview/`            | CLI dispatch, one-shot process supervision, run orchestration      |
-| `crates/native-host/src/preview/driver.rs`   | Headless harness and virtual-time stepping                         |
-| `crates/native-host/src/preview/capture.rs`  | Renderer wrapper, readback, PNG conversion                         |
-| `crates/native-host/src/preview/inspect.rs`  | Frame-aligned native/semantic tree projection                      |
-| `crates/native-host/src/preview/scenario.rs` | Validated actions, selectors, assertions                           |
-| `crates/host-services/src/mock/`             | Typed fixture providers and call recording                         |
-| `crates/js-runtime/`                         | Existing runtime ownership, jobs, exceptions, deadlines            |
-| `crates/ui-bridge/`                          | Existing input, nodes, callbacks, test metadata, generation checks |
-| `packages/ui/`                               | Native `testId` declarations and optional ready-marker API         |
-| `packages/build/`                            | Existing compilation, source maps, atomic bundle publication       |
-| `preview/profiles/`                          | Viewport, fonts, clock, graphics, and limits                       |
-| `preview/fixtures/`                          | Typed service state and declared resources                         |
-| `preview/scenarios/`                         | Ordered reproducible interactions and assertions                   |
-| `preview/baselines/`                         | Reviewed image/semantic baselines and comparison metadata          |
-| `schemas/preview/`                           | Versioned closed JSON schemas and example fixtures                 |
+| Location                                   | Responsibility                                                     |
+| ------------------------------------------ | ------------------------------------------------------------------ |
+| `crates/zgui-host/src/preview/`            | CLI dispatch, one-shot process supervision, run orchestration      |
+| `crates/zgui-host/src/preview/driver.rs`   | Headless harness and virtual-time stepping                         |
+| `crates/zgui-host/src/preview/capture.rs`  | Renderer wrapper, readback, PNG conversion                         |
+| `crates/zgui-host/src/preview/inspect.rs`  | Frame-aligned native/semantic tree projection                      |
+| `crates/zgui-host/src/preview/scenario.rs` | Validated actions, selectors, assertions                           |
+| `crates/host-services/src/mock/`           | Typed fixture providers and call recording                         |
+| `crates/js-runtime/`                       | Existing runtime ownership, jobs, exceptions, deadlines            |
+| `crates/ui-bridge/`                        | Existing input, nodes, callbacks, test metadata, generation checks |
+| `packages/ui/`                             | Native `testId` declarations and optional ready-marker API         |
+| `packages/build/`                          | Existing compilation, source maps, atomic bundle publication       |
+| `preview/profiles/`                        | Viewport, fonts, clock, graphics, and limits                       |
+| `preview/fixtures/`                        | Typed service state and declared resources                         |
+| `preview/scenarios/`                       | Ordered reproducible interactions and assertions                   |
+| `preview/baselines/`                       | Reviewed image/semantic baselines and comparison metadata          |
+| `schemas/preview/`                         | Versioned closed JSON schemas and example fixtures                 |
 
 ### 3.3 Ownership rules
 
@@ -243,25 +243,25 @@ Use a small internal control channel for progress and completion. Application st
 
 All commands below are proposed project commands.
 
-| Command                       | Purpose                                                   | Phase     |
-| ----------------------------- | --------------------------------------------------------- | --------- |
-| `native-host preview doctor`  | Report build, graphics, fonts, and supported capabilities | P0        |
-| `native-host preview run`     | Execute one package/profile/fixture/scenario              | P1 onward |
-| `native-host preview inspect` | Query saved tree/evidence without loading the runtime     | P2        |
-| `native-host preview compare` | Compare complete run artifacts with reviewed baselines    | P4        |
-| `native-host preview watch`   | Rebuild and rerun using the same one-shot engine          | P5        |
-| `native-host preview serve`   | Persistent protocol adapter                               | Deferred  |
+| Command                     | Purpose                                                   | Phase     |
+| --------------------------- | --------------------------------------------------------- | --------- |
+| `zgui-host preview doctor`  | Report build, graphics, fonts, and supported capabilities | P0        |
+| `zgui-host preview run`     | Execute one package/profile/fixture/scenario              | P1 onward |
+| `zgui-host preview inspect` | Query saved tree/evidence without loading the runtime     | P2        |
+| `zgui-host preview compare` | Compare complete run artifacts with reviewed baselines    | P4        |
+| `zgui-host preview watch`   | Rebuild and rerun using the same one-shot engine          | P5        |
+| `zgui-host preview serve`   | Persistent protocol adapter                               | Deferred  |
 
 The full deterministic loop, available after P3, uses the companion specification's proposed workspace scripts:
 
 ```sh
-cargo build -p native-host
+cargo build -p zgui-host
 bun run typecheck
 bun run build --app counter
 
-./target/debug/native-host preview doctor --profile preview/profiles/default.json
+./target/debug/zgui-host preview doctor --profile preview/profiles/default.json
 
-./target/debug/native-host preview run --bundle apps/examples/counter/dist --profile preview/profiles/default.json --fixture preview/fixtures/empty.json --scenario preview/scenarios/counter.json --out artifacts/preview/counter-001
+./target/debug/zgui-host preview run --bundle apps/examples/counter/dist --profile preview/profiles/default.json --fixture preview/fixtures/empty.json --scenario preview/scenarios/counter.json --out artifacts/preview/counter-001
 ```
 
 For the earlier P1/P2 loop, use the explicit wall-clock profile and static scenario defined in Sections 5.5 and 8.9. Fixture-only provider construction and a real watchdog are required from P1; P3 adds the richer timing/resource capabilities.
@@ -932,7 +932,7 @@ Do not call application getters or arbitrary `toString` methods while inspecting
 ### 10.5 Saved inspection command
 
 ```sh
-./target/debug/native-host preview inspect --run artifacts/preview/counter-001 --capture after-increment --test-id count-label --fields text,state,boundsLogical
+./target/debug/zgui-host preview inspect --run artifacts/preview/counter-001 --capture after-increment --test-id count-label --fields text,state,boundsLogical
 ```
 
 This command reads saved artifacts and does not start QuickJS or a GPU. Add
@@ -1077,7 +1077,7 @@ Keep service payloads fixture-scoped. Do not copy the developer's process enviro
 ### 12.1 Compare complete evidence
 
 ```sh
-./target/debug/native-host preview compare --baseline preview/baselines/counter --actual artifacts/preview/counter-001 --policy preview/comparison/strict.json --out artifacts/preview/counter-diff-001
+./target/debug/zgui-host preview compare --baseline preview/baselines/counter --actual artifacts/preview/counter-001 --policy preview/comparison/strict.json --out artifacts/preview/counter-diff-001
 ```
 
 Comparison reads complete artifacts; it does not rerun the application. Match captures by stable capture ID and logical surface, not directory ordering. Strict comparison requires the expected capture set on both sides, rejects missing/unexpected captures, and never scores only the intersection. An empty capture set cannot pass. A deliberately selected subset must be explicit in the comparison policy and reported in the result.

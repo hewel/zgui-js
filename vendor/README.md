@@ -18,7 +18,7 @@ Upstream `Router::key` keeps the focused node after it becomes disabled. Its def
 
 The activation patch checks the live node's disabled state immediately before `FrameworkDefault::Activate` executes. This also prevents activation when a key listener disables the control during that same event. It does not synthesize JS events, alter keyboard repeat policy, or replace native controls.
 
-Regression gate: `ZGUI_PLATFORM=wayland cargo test -p native-host native_tests::native_button_actions -- --ignored --exact --nocapture`. The gate includes cached focus, same-event disabling, pointer/Enter/Space activation and native cancellation.
+Regression gate: `ZGUI_PLATFORM=wayland cargo test -p zgui-host native_tests::native_button_actions -- --ignored --exact --nocapture`. The gate includes cached focus, same-event disabling, pointer/Enter/Space activation and native cancellation.
 
 ## Occluded frame callbacks
 
@@ -383,8 +383,8 @@ Regression gates:
 
 Regression gates:
 
-    cargo test -j 4 -p native-host package:: --offline
-    cargo test -j 4 -p native-host session_host::tests --offline
+    cargo test -j 4 -p zgui-host package:: --offline
+    cargo test -j 4 -p zgui-host session_host::tests --offline
     node --test --test-concurrency=1 tests/preview/stylex.test.mjs
 
 ## Compositor session lock
@@ -509,8 +509,8 @@ Regression gate:
 
 ## Probe-gated frame phase timings (`CompletedFrame::phases`)
 
-`vendor/zgui-runtime/src/probe.rs` and `src/window/frame.rs` add `FramePhaseTimings` (`style_us`, `layout_us`, `paint_us`, `total_us`) to `CompletedFrame`, sampled strictly when a `FrameProbe` is attached (`self.probe.is_some()`). Non-probed production and release frames incur zero timing syscalls and zero overhead. Used by `native-host`'s dev-only read-only runtime inspector (`--dev-inspect`).
+`vendor/zgui-runtime/src/probe.rs` and `src/window/frame.rs` add `FramePhaseTimings` (`style_us`, `layout_us`, `paint_us`, `total_us`) to `CompletedFrame`, sampled strictly when a `FrameProbe` is attached (`self.probe.is_some()`). Non-probed production and release frames incur zero timing syscalls and zero overhead. Used by `zgui-host`'s dev-only read-only runtime inspector (`--dev-inspect`).
 
 Regression gate:
 
-    cargo test -p native-host inspector --offline && bun run test:vendor zgui-runtime
+    cargo test -p zgui-host inspector --offline && bun run test:vendor zgui-runtime

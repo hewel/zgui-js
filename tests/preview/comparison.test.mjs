@@ -50,7 +50,7 @@ async function policyFixture(directory, mutate) {
 async function compare(actual, out, reviewed = baseline, policy = strictPolicy) {
   // Saved comparisons must not initialize a graphics backend or connect to Wayland.
   const child = spawnSync(
-    path.join(workspaceRoot, "target/debug/native-host"),
+    path.join(workspaceRoot, "target/debug/zgui-host"),
     [
       "preview",
       "compare",

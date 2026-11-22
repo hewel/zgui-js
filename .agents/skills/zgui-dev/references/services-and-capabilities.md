@@ -37,7 +37,7 @@ Call host service APIs during mount, effects, or event handlers (never at module
 | Dynamic encoded bytes (PNG/JPEG/WebP/SVG) | `loadImageBytes(uint8Array)` | `registerImageBytes(uint8Array)` (`{ src, release }`) |
 | Unix domain socket (`"line"` or `"length"` framing) | `connectUnixSocket(path, opts)` | — (also returns `.close()`) |
 | Subprocess (direct `exec`, no shell) | `spawnCommand(program, args, opts)` | — (buffered returns `{ promise, cancel }`; `stream: true` returns `{ cancel, kill }`) |
-| Inbound CLI control messages (`native-host msg`) | `onControlMessage(handler)` | — (returns unsubscribe `() => void`) |
+| Inbound CLI control messages (`zgui-host msg`) | `onControlMessage(handler)` | — (returns unsubscribe `() => void`) |
 
 - **`length` framing binary images**: in `connectUnixSocket(path, { framing: "length", onMessage, onBinaryImage })`, frames prefixed with kind byte `0x00` deliver UTF-8 to `onMessage`, and frames prefixed with `0x01` deliver a session-scoped `ImageHandle` to `onBinaryImage` (release it explicitly when replaced or disposed).
 - **Dynamic image bytes**: `loadImageBytes(bytes)` / `registerImageBytes(bytes)` enforces session memory/count budgets and returns an opaque `zgui-blob://` `src` accepted by `<Image src={handle.src} />`.
@@ -63,5 +63,5 @@ const { dist, manifest } = await buildApplication("shell", {
 });
 ```
 
-- Pass `hostExecutable` to `devApplication` / `previewApplication` when pointing at a prebuilt `native-host` binary from another workspace.
+- Pass `hostExecutable` to `devApplication` / `previewApplication` when pointing at a prebuilt `zgui-host` binary from another workspace.
 - Pass `capabilitiesFile` (or `extraCapabilities`) when composing plugin capabilities dynamically at build time.

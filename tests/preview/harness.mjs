@@ -10,7 +10,7 @@ export { workspaceRoot };
 export const defaultProfile = path.join(workspaceRoot, "preview/profiles/default.json");
 export const functionalProfile = path.join(workspaceRoot, "preview/profiles/functional.json");
 export const emptyFixture = path.join(workspaceRoot, "preview/fixtures/empty.json");
-export const nativeHostBinary = path.join(workspaceRoot, "target/debug/native-host");
+export const nativeHostBinary = path.join(workspaceRoot, "target/debug/zgui-host");
 const failedWorkspaces = new Set();
 export const emptyResources = {
   nodes: 0,
@@ -194,7 +194,7 @@ export async function runPreview({
       validateScenarioSpec(JSON.parse(await readFile(scenario, "utf8")));
       validateFixtureSpec(JSON.parse(await readFile(fixture, "utf8")));
     } catch (error) {
-      throw new Error(`Preview input preflight failed before native-host launch: ${error.message}`);
+      throw new Error(`Preview input preflight failed before zgui-host launch: ${error.message}`);
     }
   }
   const proc = spawnSync(nativeHostBinary, args, {

@@ -81,5 +81,5 @@ For either CLI command, `--host-root <dir>` selects the checkout used to build t
 
 ```sh
 zgui-js dev ./my-app --host-root ../zgui-js
-zgui-js preview ./my-app --watch --host-executable ../zgui-js/target/debug/native-host
+zgui-js preview ./my-app --watch --host-executable ../zgui-js/target/debug/zgui-host
 ```

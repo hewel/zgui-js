@@ -146,7 +146,7 @@ The implemented runtime separates owner-thread JavaScript/native UI work from ba
 ```mermaid
 flowchart TB
     subgraph Owner["Owner UI thread"]
-        Session["native-host::Session: preflight, mount, checkpoint, shutdown"]
+        Session["zgui-host::Session: preflight, mount, checkpoint, shutdown"]
         subgraph VM["js-runtime: QuickJS-NG via rquickjs"]
             App["Compiled application and Solid reactivity"]
             UI["@hewel/zgui: Solid Universal renderer"]
@@ -155,7 +155,7 @@ flowchart TB
             App --> SDK
         end
         Bridge["ui-bridge: generation-scoped nodes and callbacks"]
-        Work["native-host::Work: requests, timers, frame callbacks"]
+        Work["zgui-host::Work: requests, timers, frame callbacks"]
         Native["Upstream zgui: retained native tree and host binding"]
         Session -.-> App
         Session -.-> Bridge
@@ -178,13 +178,13 @@ The bridge owns the application-facing node/event contract; Solid owns reactivit
 
 Synchronous bridge operations mutate zgui's retained tree within a bounded JavaScript turn. Layout and painting remain scheduled by zgui. The session checkpoint interleaves resource completions, scheduled callbacks, native events, and Promise jobs so ready native work does not starve cancellation.
 
-Implementation entry points: [Session](../../crates/native-host/src/session.rs), [Work](../../crates/native-host/src/work.rs), [Solid renderer adapter](../../packages/ui/src/renderer/index.ts), and [resource executor](../../crates/host-services/src/lib.rs). For the build-to-platform overview, see [How it works](../../README.md#how-it-works).
+Implementation entry points: [Session](../../crates/zgui-host/src/session.rs), [Work](../../crates/zgui-host/src/work.rs), [Solid renderer adapter](../../packages/ui/src/renderer/index.ts), and [resource executor](../../crates/host-services/src/lib.rs). For the build-to-platform overview, see [How it works](../../README.md#how-it-works).
 
 ### 3.2 Proposed workspace
 
 | Path                        | Responsibility                                                                     |
 | --------------------------- | ---------------------------------------------------------------------------------- |
-| `crates/native-host/`       | Executable, platform startup, window lifecycle, application loading                |
+| `crates/zgui-host/`         | Executable, platform startup, window lifecycle, application loading                |
 | `crates/js-runtime/`        | rquickjs ownership, bootstrap, jobs, errors, interruption                          |
 | `crates/ui-bridge/`         | Node handles, topology, properties, events, native scheduling                      |
 | `crates/host-services/`     | Typed application/system services and completion messages                          |
@@ -866,7 +866,7 @@ For each eligible owner-thread turn:
 
 A limit checked between jobs cannot stop one infinite job. The interpreter interrupt handler must also enforce the current entry deadline. Count attempted jobs that return errors against the job budget, and clamp each job's interrupt deadline to the earlier of its normal entry deadline and the pump's remaining deadline. Repeated exceptions or freshly reset per-job budgets must not evade the turn bound.
 
-This is a bounded native-host policy, not a claim of exact browser event-loop ordering.
+This is a bounded zgui-host policy, not a claim of exact browser event-loop ordering.
 
 ### 10.5 Timers
 
@@ -1405,16 +1405,16 @@ A release is complete when:
 
 Implement these scripts or equivalent documented commands as part of the workspace:
 
-| Command                                                                                   | Intended behavior                                                                            |
-| ----------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
-| pnpm typecheck                                                                            | Type-check SDK declarations and examples with their appropriate configurations               |
-| pnpm build --app counter                                                                  | Produce a validated counter package                                                          |
-| pnpm dev --app counter                                                                    | Prepare the host, watch atomic application builds, open a native window, and manage shutdown |
-| pnpm preview --app counter --watch                                                        | Prepare the host, watch builds, and rerun offscreen scenarios without a desktop host         |
-| cargo test -p ui-bridge                                                                   | Run bridge tests that do not need a live compositor                                          |
-| cargo test -p js-runtime                                                                  | Run real-engine lifecycle/job tests                                                          |
-| cargo run -p native-host -- --bundle apps/examples/counter/dist                           | Load the built package                                                                       |
-| env ZGUI_PLATFORM=wayland cargo run -p native-host -- --bundle apps/examples/counter/dist | Exercise direct Wayland explicitly                                                           |
+| Command                                                                                 | Intended behavior                                                                            |
+| --------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| pnpm typecheck                                                                          | Type-check SDK declarations and examples with their appropriate configurations               |
+| pnpm build --app counter                                                                | Produce a validated counter package                                                          |
+| pnpm dev --app counter                                                                  | Prepare the host, watch atomic application builds, open a native window, and manage shutdown |
+| pnpm preview --app counter --watch                                                      | Prepare the host, watch builds, and rerun offscreen scenarios without a desktop host         |
+| cargo test -p ui-bridge                                                                 | Run bridge tests that do not need a live compositor                                          |
+| cargo test -p js-runtime                                                                | Run real-engine lifecycle/job tests                                                          |
+| cargo run -p zgui-host -- --bundle apps/examples/counter/dist                           | Load the built package                                                                       |
+| env ZGUI_PLATFORM=wayland cargo run -p zgui-host -- --bundle apps/examples/counter/dist | Exercise direct Wayland explicitly                                                           |
 
 These are proposed project command names, not commands already supplied by the upstream repositories.
 

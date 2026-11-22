@@ -1,5 +1,5 @@
 //! Real compositor gate; run with:
-//! ZGUI_PLATFORM=wayland cargo test -p native-host native_tests::native_button_actions -- --ignored --exact --nocapture
+//! ZGUI_PLATFORM=wayland cargo test -p zgui-host native_tests::native_button_actions -- --ignored --exact --nocapture
 
 use super::*;
 use session::Session;

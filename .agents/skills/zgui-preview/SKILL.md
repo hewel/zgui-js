@@ -1,16 +1,16 @@
 ---
 name: zgui-preview
-description: Run, write, and debug headless zgui-js preview visual tests with native-host preview. Use when verifying UI renders or PNG pixels, testing transparent surfaces (capture.transparent), multi-surface LayerSurface/PopupSurface/SessionLockSurface scenarios, running preview doctor/compare, or troubleshooting Nix/Vulkan headless rendering and E_TEARDOWN/readiness faults.
+description: Run, write, and debug headless zgui-js preview visual tests with zgui-host preview. Use when verifying UI renders or PNG pixels, testing transparent surfaces (capture.transparent), multi-surface LayerSurface/PopupSurface/SessionLockSurface scenarios, running preview doctor/compare, or troubleshooting Nix/Vulkan headless rendering and E_TEARDOWN/readiness faults.
 ---
 
-Workflow for headless visual verification, pixel inspection, and regression testing with `native-host preview`.
+Workflow for headless visual verification, pixel inspection, and regression testing with `zgui-host preview`.
 
 ## 1. Environment & preflight
 
-- **Nix-based Linux hosts**: wrap every Cargo build and `native-host preview` / `bun test tests/preview/...` invocation in the `zgui-js` root devShell so `pkg-config`, native libraries (`libxkbcommon`, `fontconfig`, `freetype`, `vulkan-loader`, `wayland`), and Mesa Vulkan ICDs (`VK_DRIVER_FILES`) share the same glibc:
+- **Nix-based Linux hosts**: wrap every Cargo build and `zgui-host preview` / `bun test tests/preview/...` invocation in the `zgui-js` root devShell so `pkg-config`, native libraries (`libxkbcommon`, `fontconfig`, `freetype`, `vulkan-loader`, `wayland`), and Mesa Vulkan ICDs (`VK_DRIVER_FILES`) share the same glibc:
   ```sh
-  nix-shell --run "cargo build --offline -p native-host"
-  nix-shell --run "target/debug/native-host preview doctor --profile preview/profiles/default.json"
+  nix-shell --run "cargo build --offline -p zgui-host"
+  nix-shell --run "target/debug/zgui-host preview doctor --profile preview/profiles/default.json"
   ```
 - **GPU vs CPU rendering**: when `/dev/dri/renderD128` is readable (`render` group), Vulkan uses hardware AMD/Intel RADV automatically; otherwise Mesa falls back to CPU `llvmpipe` (fully functional for pixel tests, slower on large surfaces).
 - **Preflight criterion**: `preview doctor` exits `0` with `"status": "passed"`, `"pixels": true`, and `"capture.transparent": true`.
@@ -18,7 +18,7 @@ Workflow for headless visual verification, pixel inspection, and regression test
 ## 2. Core verification loop
 
 Choose one of two workflows:
-- **One-step CLI / programmatic run**: `bun run preview --app <name> [--scenario ...] [--out ...]` or `previewApplication(...)` from `@hewel/zgui-build` (builds **and** executes `native-host preview run` in one call).
+- **One-step CLI / programmatic run**: `bun run preview --app <name> [--scenario ...] [--out ...]` or `previewApplication(...)` from `@hewel/zgui-build` (builds **and** executes `zgui-host preview run` in one call).
 - **Manual build + run** (when reusing one bundle across multiple scenarios):
   1. **Build the bundle** (`dist/manifest.json`): `bun run build --app <name>` (or `buildApplication(...)` from `@hewel/zgui-build`).
   2. **Author `profile.json`, `fixture.json`, and `scenario.json`**:
@@ -27,7 +27,7 @@ Choose one of two workflows:
      - Keep profiles on `"clock": { "mode": "virtual", ... }` whenever driving timers, springs, animations, or deterministic captures; advance virtual time explicitly with `clock.advance`.
   3. **Run headless preview** (never overlap multiple `tests/preview/*.test.mjs` runs concurrently on `llvmpipe` or CPU contention will trip `E_WATCHDOG`):
      ```sh
-     nix-shell --run "target/debug/native-host preview run \
+     nix-shell --run "target/debug/zgui-host preview run \
        --bundle <dist-dir> \
        --profile <profile.json> \
        --fixture <fixture.json> \
@@ -54,7 +54,7 @@ Choose one of two workflows:
 ## 4. Visual baseline comparison (`preview compare`)
 
 ```sh
-nix-shell --run "target/debug/native-host preview compare \
+nix-shell --run "target/debug/zgui-host preview compare \
   --baseline <baseline-dir> \
   --actual <run-dir> \
   --policy preview/comparison/strict.json \

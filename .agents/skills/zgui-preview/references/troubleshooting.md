@@ -17,7 +17,7 @@ Diagnose headless preview failures by error code (`result.json -> firstError.cod
 
 ## Nix & Vulkan Linux pitfalls
 
-- **Segfault (exit 139) in `bun` or `native-host`**: caused by pointing `LD_LIBRARY_PATH` at `/usr/lib/x86_64-linux-gnu` (loads host distro `libc.so.6` into a Nix glibc process). Always use `nix-shell --run "..."` from `zgui-js/shell.nix` instead of setting distro `LD_LIBRARY_PATH`.
-- **Missing `xkbcommon.pc` / `fontconfig.pc` during `cargo build`**: `cargo` and `pkg-config` came from Nix without dev headers in `PKG_CONFIG_PATH`. Run builds inside `nix-shell --run "cargo build --offline -p native-host"`.
+- **Segfault (exit 139) in `bun` or `zgui-host`**: caused by pointing `LD_LIBRARY_PATH` at `/usr/lib/x86_64-linux-gnu` (loads host distro `libc.so.6` into a Nix glibc process). Always use `nix-shell --run "..."` from `zgui-js/shell.nix` instead of setting distro `LD_LIBRARY_PATH`.
+- **Missing `xkbcommon.pc` / `fontconfig.pc` during `cargo build`**: `cargo` and `pkg-config` came from Nix without dev headers in `PKG_CONFIG_PATH`. Run builds inside `nix-shell --run "cargo build --offline -p zgui-host"`.
 - **Unexpected CPU `llvmpipe` instead of AMD/Intel hardware Vulkan**: check `ls -l /dev/dri/renderD128` and `id -nG`. If the user is not in the `render` group, hardware DRI render nodes are unreadable and Mesa falls back to `llvmpipe`; adding the user to `render` and re-logging unlocks RADV.
 - **Transient test timeouts under high `bun test` parallelism**: `bun test` defaults to a 5s timeout; pass `--timeout=30000` (and `--isolate` for multi-file preview runs, matching `package.json`).

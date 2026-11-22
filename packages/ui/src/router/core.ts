@@ -568,7 +568,7 @@ function defaultParseControlPayload(payload: unknown): ControlNavigationTarget |
   return { to: target, params, search, replace, state: record.state };
 }
 
-/** Bind host control messages (e.g. `onControlMessage` / `native-host msg`) to a router instance. */
+/** Bind host control messages (e.g. `onControlMessage` / `zgui-host msg`) to a router instance. */
 export function bindControlNavigation<Paths extends string>(
   router: Router<Paths>,
   options: ControlNavigationOptions,

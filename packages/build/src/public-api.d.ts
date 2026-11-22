@@ -164,7 +164,7 @@ export type RunNativeHostOptions = NativeHostOptions;
 export type NativeHostSource = "explicit" | "env" | "platform-package" | "cargo";
 
 export interface NativeHostAbi {
-  name: "native-host";
+  name: "zgui-host";
   version: string;
   hostApiVersion: number;
   schemaVersion: number;

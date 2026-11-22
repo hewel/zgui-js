@@ -10,7 +10,7 @@ const hash = bytes => `sha256:${createHash("sha256").update(bytes).digest("hex")
 const json = async file => JSON.parse(await readFile(file, "utf8"));
 function native(args, env = process.env) {
   const child = spawnSync(
-    path.join(workspaceRoot, "target/debug/native-host"),
+    path.join(workspaceRoot, "target/debug/zgui-host"),
     ["preview", ...args],
     {
       cwd: workspaceRoot,

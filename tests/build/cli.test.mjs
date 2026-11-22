@@ -34,7 +34,7 @@ const args = process.argv.slice(2);
 if (args[0] === "--version" || args[0] === "-V") {
   if (args.includes("--json")) {
     console.log(JSON.stringify({
-      name: "native-host",
+      name: "zgui-host",
       version: ${JSON.stringify(version)},
       hostApiVersion: ${JSON.stringify(hostApiVersion)},
       schemaVersion: ${JSON.stringify(schemaVersion)},
@@ -43,7 +43,7 @@ if (args[0] === "--version" || args[0] === "-V") {
       styleProfile: "lightningcss-v1",
     }));
   } else {
-    console.log(${JSON.stringify(`native-host ${version} (hostApiVersion=${hostApiVersion} schemaVersion=${schemaVersion} platform=${platform})`)});
+    console.log(${JSON.stringify(`zgui-host ${version} (hostApiVersion=${hostApiVersion} schemaVersion=${schemaVersion} platform=${platform})`)});
   }
   process.exit(0);
 }
@@ -316,12 +316,12 @@ test("zgui-js doctor --json reports structured checks and fails closed on ABI mi
   assert.equal(report.schemaVersion, 1);
   assert.equal(report.ok, true);
   const byId = new Map(report.checks.map(item => [item.id, item]));
-  for (const id of ["bun", "native-host", "wayland", "vulkan", "xdg-portal", "tsrs", "oxlint"]) {
+  for (const id of ["bun", "zgui-host", "wayland", "vulkan", "xdg-portal", "tsrs", "oxlint"]) {
     assert.ok(byId.has(id), `expected doctor check ${id}`);
   }
   assert.equal(byId.get("bun").status, "ok");
-  assert.equal(byId.get("native-host").status, "ok");
-  assert.match(byId.get("native-host").detail, /hostApiVersion=1 schemaVersion=2/);
+  assert.equal(byId.get("zgui-host").status, "ok");
+  assert.match(byId.get("zgui-host").detail, /hostApiVersion=1 schemaVersion=2/);
   assert.equal(byId.get("tsrs").status, "ok");
 
   await assert.rejects(
@@ -332,7 +332,7 @@ test("zgui-js doctor --json reports structured checks and fails closed on ABI mi
       assert.equal(error.code, 1);
       const failedReport = JSON.parse(error.stdout);
       assert.equal(failedReport.ok, false);
-      const hostCheck = failedReport.checks.find(item => item.id === "native-host");
+      const hostCheck = failedReport.checks.find(item => item.id === "zgui-host");
       assert.equal(hostCheck?.status, "fail");
       assert.match(hostCheck?.detail ?? "", /ABI mismatch/);
       return true;
@@ -340,7 +340,7 @@ test("zgui-js doctor --json reports structured checks and fails closed on ABI mi
   );
 });
 
-test("zgui-js inspect forwards subcommand arguments to the resolved native-host", async t => {
+test("zgui-js inspect forwards subcommand arguments to the resolved zgui-host", async t => {
   const dir = await mkdtemp(path.join(os.tmpdir(), "zgui-inspect-"));
   t.after(() => rm(dir, { recursive: true, force: true }));
 
@@ -401,7 +401,7 @@ test("zgui-js package resolves explicit host and output paths from the caller's 
     { cwd: dir },
   );
 
-  assert.equal(await readFile(path.join(dir, "release/bin/native-host"), "utf8"), host);
+  assert.equal(await readFile(path.join(dir, "release/bin/zgui-host"), "utf8"), host);
   assert.equal(existsSync(path.join(appDir, "release")), false);
 });
 
@@ -416,7 +416,7 @@ test(
     await execute(process.execPath, [cli, "init", appDir], { cwd: dir });
     await linkWorkspaceSdk(appDir);
 
-    const mockHost = path.join(dir, "mock-native-host");
+    const mockHost = path.join(dir, "mock-zgui-host");
     await writeFile(mockHost, makeMockHostScript({ tag: "packaged-host" }), { mode: 0o755 });
 
     const outDir = path.join(dir, "release-out");
@@ -451,7 +451,7 @@ test(
     assert.equal(pkgManifest.hostApiVersion, 1);
     assert.equal(pkgManifest.buildId, packaged.manifest.buildId);
 
-    // Execute the generated POSIX launcher wrapper and verify it boots bin/native-host --bundle bundle/.
+    // Execute the generated POSIX launcher wrapper and verify it boots bin/zgui-host --bundle bundle/.
     const { stdout: runOut } = await execute(packaged.launcher, ["--exit-after-ms", "1"], {
       cwd: dir,
     });
@@ -459,8 +459,8 @@ test(
     assert.equal(boot.tag, "packaged-host");
     assert.deepEqual(boot.args, ["--bundle", path.join(outDir, "bundle"), "--exit-after-ms", "1"]);
 
-    // If the real native-host binary is already built in target/debug, also verify real binary ABI + packaging.
-    const realHost = path.join(workspaceRoot, "target/debug/native-host");
+    // If the real zgui-host binary is already built in target/debug, also verify real binary ABI + packaging.
+    const realHost = path.join(workspaceRoot, "target/debug/zgui-host");
     if (existsSync(realHost)) {
       const cliOutDir = path.join(dir, "real-release");
       const { stdout: cliPackOut } = await execute(
@@ -481,13 +481,13 @@ test(
         },
       );
       assert.match(cliPackOut, /Packaged .* host=explicit/);
-      const abi = probeNativeHost(path.join(cliOutDir, "bin/native-host"));
+      const abi = probeNativeHost(path.join(cliOutDir, "bin/zgui-host"));
       assert.equal(abi.hostApiVersion, 1);
       assert.equal(abi.schemaVersion, 2);
       const { stdout: helpOut } = await execute(path.join(cliOutDir, "packaged-demo"), ["--help"], {
         cwd: dir,
       });
-      assert.match(helpOut, /Usage: native-host/);
+      assert.match(helpOut, /Usage: zgui-host/);
       assert.equal(abi.bytecodeFormat, "qjs-bytecode-v1");
       assert.match(abi.quickjsAbi ?? "", /^qjs-ng-/);
 

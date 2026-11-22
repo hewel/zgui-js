@@ -15,7 +15,7 @@ Judgement-call engineering standards for code review and authoring. Mechanical r
 - **Bounded Rust array reads**: Read inbound native array lengths in Rust with a single bounded `u32` snapshot before allocation, without consulting mutable JavaScript globals.
 - **Atomic inline styles**: A native `style` string replaces all inline declarations including `--*` custom properties. Emit dynamic styles and `--*` variables together or pass typed `NativeStyle` objects.
 - **Host-owned dev overlays & lock-surface isolation**: Inserting a host-owned overlay (such as `PickerOverlay` or `DevBanner`) increments `window.dom().revision()`; ensure same-frame hover→click hit-testing tolerates the overlay revision bump, never evaluate app JS getters, redact secure inputs, and hard-refuse dev overlays/inspection on `SessionLockSurface`.
-- **QuickJS bytecode compilation contract**: `native-host compile-bytecode` must keep `strip_debug: false` so sidecar `.mjs.map` stack remapping remains accurate, and pass a contained `--source-dir` so Rolldown-split static sibling chunks resolve deterministically.
+- **QuickJS bytecode compilation contract**: `zgui-host compile-bytecode` must keep `strip_debug: false` so sidecar `.mjs.map` stack remapping remains accurate, and pass a contained `--source-dir` so Rolldown-split static sibling chunks resolve deterministically.
 - **Runtime budgets**: Keep interactive trees and event handlers within QuickJS stack and entry-duration budgets (`--max-js-stack-bytes`, `metrics.json`).
 
 ## Scoped Styles & Upstream Provenance

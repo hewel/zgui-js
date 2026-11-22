@@ -15,7 +15,7 @@ packages/ui (TSX / Solid 2.0 / styles.d.ts / primitives / components)
   → vendor/zgui-paint (lower, emit, ContentCache/atlas, walk/replay)
   → vendor/zgui-runtime (App, Window frame loop, editing/caret, doc_select, images)
   → vendor/zgui-platform-{wayland,headless} + unvendored zgui-render-wgpu
-  → crates/native-host (shell surfaces, session host, inspector, dev_banner, bytecode, preview)
+  → crates/zgui-host (shell surfaces, session host, inspector, dev_banner, bytecode, preview)
 ```
 
 ## Workspace Packages, Apps & Crates
@@ -27,13 +27,13 @@ packages/ui (TSX / Solid 2.0 / styles.d.ts / primitives / components)
 | `packages/build`                  | `@hewel/zgui-build` programmatic compiler (`@solidjs/compiler` Oxc + Lightning CSS Modules + Rolldown), `validate.ts`, `typecheck.ts`, `host.ts`, `package-app.ts`                   |
 | `packages/cli`                    | `@hewel/zgui-cli` npm CLI (`zgui-js`: `init`, `dev`, `build`, `preview`, `package`, `doctor`, `inspect`, `smoke`)                                                                    |
 | `packages/create-zgui-js`         | `create-zgui-js` scaffolding entrypoint (`bun create zgui-js`)                                                                                                                       |
-| `packages/host-linux-{x64,arm64}` | Prebuilt `native-host` npm `optionalDependencies` platform packages                                                                                                                  |
+| `packages/host-linux-{x64,arm64}` | Prebuilt `zgui-host` npm `optionalDependencies` platform packages                                                                                                                    |
 | `apps/devtools/inspector`         | Self-hosted `zgui-js` visual Inspector window (`zgui-js inspect --ui`)                                                                                                               |
 | `apps/examples/*`                 | Runnable example applications (`counter`, `css-modules`, `md-editor`, `gallery`, etc.)                                                                                               |
 | `crates/ui-bridge`                | QuickJS↔DOM bridge (`properties.rs`, `canvas.rs`, `doc_select.rs`)                                                                                                                   |
 | `crates/js-runtime`               | QuickJS-NG engine, verified module/bytecode loader, bounded bridge turns, host globals                                                                                               |
 | `crates/host-services`            | Async network (`network/`), SQLite (`sqlite.rs`), files/bookmarks (`files.rs`), compute workers (`compute_worker.rs`), sockets, commands, clipboard                                  |
-| `crates/native-host`              | Wayland/headless runner, atomic/CSS-only reload (`session_host.rs`), dev banner (`dev_banner.rs`), visual inspector (`inspector.rs`), bytecode compiler, preview driver (`preview/`) |
+| `crates/zgui-host`                | Wayland/headless runner, atomic/CSS-only reload (`session_host.rs`), dev banner (`dev_banner.rs`), visual inspector (`inspector.rs`), bytecode compiler, preview driver (`preview/`) |
 
 ## Vendored Upstream Crates (`vendor/`)
 

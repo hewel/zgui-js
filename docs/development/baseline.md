@@ -49,16 +49,16 @@ bun run preview --app counter
 bun run preview --app counter --watch
 bun run test:build
 cargo test -p js-runtime
-cargo run -p native-host -- --smoke-module target/solid-smoke.mjs
-env ZGUI_PLATFORM=wayland cargo run -p native-host
-env ZGUI_PLATFORM=wayland cargo run -p native-host -- --exit-after-ms 5000
-env ZGUI_PLATFORM=wayland cargo run -p native-host -- --bundle apps/examples/counter/dist
-env ZGUI_PLATFORM=wayland cargo run -p native-host -- --bundle apps/examples/counter/dist --watch
-env ZGUI_PLATFORM=wayland cargo run -p native-host -- --bundle apps/examples/lists/dist --exercise --exit-after-ms 12000
-env ZGUI_PLATFORM=wayland cargo test -p native-host native_tests::native_button_actions -- --ignored --exact --nocapture
-env ZGUI_PLATFORM=wayland cargo test -p native-host --bin native-host reload_tests::native_full_reload -- --ignored --exact --nocapture
-env ZGUI_PLATFORM=wayland ZGUI_EDITING_WAYLAND_IME=1 cargo test -p native-host editing_tests::native_text_editing -- --ignored --exact --nocapture --test-threads=1
-cargo test -p native-host --test native_timer
+cargo run -p zgui-host -- --smoke-module target/solid-smoke.mjs
+env ZGUI_PLATFORM=wayland cargo run -p zgui-host
+env ZGUI_PLATFORM=wayland cargo run -p zgui-host -- --exit-after-ms 5000
+env ZGUI_PLATFORM=wayland cargo run -p zgui-host -- --bundle apps/examples/counter/dist
+env ZGUI_PLATFORM=wayland cargo run -p zgui-host -- --bundle apps/examples/counter/dist --watch
+env ZGUI_PLATFORM=wayland cargo run -p zgui-host -- --bundle apps/examples/lists/dist --exercise --exit-after-ms 12000
+env ZGUI_PLATFORM=wayland cargo test -p zgui-host native_tests::native_button_actions -- --ignored --exact --nocapture
+env ZGUI_PLATFORM=wayland cargo test -p zgui-host --bin zgui-host reload_tests::native_full_reload -- --ignored --exact --nocapture
+env ZGUI_PLATFORM=wayland ZGUI_EDITING_WAYLAND_IME=1 cargo test -p zgui-host editing_tests::native_text_editing -- --ignored --exact --nocapture --test-threads=1
+cargo test -p zgui-host --test native_timer
 ```
 
 `--smoke-module` executes the bundled Solid fixture in the actual embedded engine without creating a window. `--exit-after-ms` requests orderly event-loop shutdown, for native integration checks. The native baseline creates a dedicated Rust-owned mount region, installs a HostBinding, creates/updates native text from JavaScript, and schedules a native one-shot timer and an owned background completion with an explicit platform wake. These are integration harness behaviors, not the public SDK.
@@ -71,9 +71,9 @@ The build uses browser/production Solid export conditions and a StyleX pass befo
 - `pnpm test:build`: 37 checks passed, including external application directories,
   composed source maps, Babel transform caching, and process cancellation.
 - After removing publication deduplication, `node --test tests/build/compiler.test.mjs tests/preview/watch.test.mjs` passed all 20 checks. Recovery to the exact original source now produces a fresh preview run even when the build ID is unchanged.
-- `pnpm smoke` and `target/debug/native-host --smoke-module target/solid-smoke.mjs`
+- `pnpm smoke` and `target/debug/zgui-host --smoke-module target/solid-smoke.mjs`
   passed in Node and embedded QuickJS respectively.
-- `cargo test -p native-host --bin native-host --locked package::`: five package
+- `cargo test -p zgui-host --bin zgui-host --locked package::`: five package
   integrity/source-map checks passed.
 - A real Wayland development session recovered from an initially invalid app,
   retained its package after a later type error, reloaded changed TSX and CSS
@@ -143,7 +143,7 @@ scenario. The real compositor/IME run is recorded in
 ## Pure-shell startup
 
 Run `bun run dev --app <app> --pure-shell` (or pass `--pure-shell --bundle <dist>`
-to `native-host`). Declare `zgui.capabilities.shellSurfaces` or
+to `zgui-host`). Declare `zgui.capabilities.shellSurfaces` or
 `zgui.capabilities.sessionLock` and export a synchronous `mount()` returning
 a disposer. The Session starts without a primary window and can remain alive
 with zero Shell surfaces.
@@ -186,12 +186,12 @@ tests described below were retired with the niri service and panel example.
 - `pnpm typecheck`: passed for the Phase 0 smoke fixture.
 - `pnpm smoke`: passed twice in Node; verifies signal/effect updates, equality, batching, effect cleanup, root cleanup, and absence of updates after disposal.
 - `pnpm list --recursive --depth Infinity`: resolved package graph inspected.
-- `cargo build -p native-host`: passed against the pinned downstream dependencies.
+- `cargo build -p zgui-host`: passed against the pinned downstream dependencies.
 - `cargo test -p js-runtime`: 12 passed, including exception preservation, native callbacks, throwing jobs, interruption and actual engine memory exhaustion.
-- `target/debug/native-host --smoke-module target/solid-smoke.mjs`: `solid-smoke:ok`.
+- `target/debug/zgui-host --smoke-module target/solid-smoke.mjs`: `solid-smoke:ok`.
 - Direct Wayland native run: binding installed before first paint; native text updated from JS, a one-second native timer, and a two-second background completion without input.
 - `target/native-baseline.png`: captured and visually inspected the real niri window showing “External wake updated JavaScript”.
-- Orderly exit after 20 seconds: `session-disposed: frames=62`, `native-host: clean shutdown`, exit code 0. Frame count includes compositor activity and is not an idle-wake benchmark.
+- Orderly exit after 20 seconds: `session-disposed: frames=62`, `zgui-host: clean shutdown`, exit code 0. Frame count includes compositor activity and is not an idle-wake benchmark.
 - Phase 1: 12 real-DocumentDom topology tests and 2 real-rquickjs wrapper tests passed. Tests cross native frame reclamation, verify identity-preserving moves, fabricated/stale/foreign-handle rejection, root protection and cleanup of never-linked nodes.
 - Phase 1 native integration: timer and external wake updated class-backed opaque nodes; five native frames and clean exit, with no raw native IDs exposed to JavaScript.
 - Phase 2: native declaration typechecks, both package builds and seven compiler tests passed (AST validation, composed maps, atomic publication, watcher recovery and symlink rejection).
@@ -233,7 +233,7 @@ existing execution/ownership model.
 ### Configuration and procedure
 
 - AMD Ryzen 9 7950X, 16 cores / 32 threads; Linux `7.3.3-1-cachyos`.
-- The pinned dependencies above, `cargo build --release -p native-host`, and
+- The pinned dependencies above, `cargo build --release -p zgui-host`, and
   freshly built counter, lists and panel bundles. Release build and all three
   bundle builds passed.
 - Real shared niri desktop, three outputs at scale 1.75; panel on DP-1. The
@@ -253,13 +253,13 @@ existing execution/ownership model.
 The remaining counter and lists workload setup and native trace capture use:
 
 ```sh
-cargo build --release -p native-host
+cargo build --release -p zgui-host
 pnpm build --app counter
 pnpm build --app lists
 env ZGUI_PLATFORM=wayland ZGUI_LATENCY=target/counter-run.jsonl \
-  target/release/native-host --bundle apps/examples/counter/dist --exit-after-ms 10000
+  target/release/zgui-host --bundle apps/examples/counter/dist --exit-after-ms 10000
 env ZGUI_PLATFORM=wayland ZGUI_LATENCY=target/lists-run.jsonl \
-  target/release/native-host --bundle apps/examples/lists/dist --exercise --exit-after-ms 10000
+  target/release/zgui-host --bundle apps/examples/lists/dist --exercise --exit-after-ms 10000
 ```
 
 Use a fresh trace path per run: the native sink appends. The recorded bundle IDs

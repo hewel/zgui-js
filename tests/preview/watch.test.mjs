@@ -107,7 +107,7 @@ async function fixture(t) {
 function start(f, maximum = 64, consume = true) {
   const out = path.join(f.directory, "watch");
   const child = spawn(
-    path.join(workspaceRoot, "target/debug/native-host"),
+    path.join(workspaceRoot, "target/debug/zgui-host"),
     [
       "preview",
       "watch",

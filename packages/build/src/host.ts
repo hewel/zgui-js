@@ -47,7 +47,7 @@ export function platformHostPackageName(
 function hasCargoNativeHost(directory: string): boolean {
   return (
     existsSync(path.join(directory, "Cargo.toml")) &&
-    existsSync(path.join(directory, "crates/native-host/Cargo.toml"))
+    existsSync(path.join(directory, "crates/zgui-host/Cargo.toml"))
   );
 }
 
@@ -68,7 +68,7 @@ function parseVersionText(text: string): NativeHostAbi | null {
     try {
       const parsed = JSON.parse(trimmed) as Record<string, unknown>;
       if (
-        parsed.name !== "native-host" ||
+        parsed.name !== "zgui-host" ||
         typeof parsed.version !== "string" ||
         typeof parsed.hostApiVersion !== "number" ||
         typeof parsed.schemaVersion !== "number" ||
@@ -77,7 +77,7 @@ function parseVersionText(text: string): NativeHostAbi | null {
         return null;
       }
       return {
-        name: "native-host",
+        name: "zgui-host",
         version: parsed.version,
         hostApiVersion: parsed.hostApiVersion,
         schemaVersion: parsed.schemaVersion,
@@ -97,11 +97,11 @@ function parseVersionText(text: string): NativeHostAbi | null {
     }
   }
   const match = trimmed.match(
-    /^native-host\s+(\S+)\s+\(hostApiVersion=(\d+)\s+schemaVersion=(\d+)(?:\s+platform=([^\s)]+))?\)$/,
+    /^zgui-host\s+(\S+)\s+\(hostApiVersion=(\d+)\s+schemaVersion=(\d+)(?:\s+platform=([^\s)]+))?\)$/,
   );
   if (!match) return null;
   return {
-    name: "native-host",
+    name: "zgui-host",
     version: match[1]!,
     hostApiVersion: Number(match[2]),
     schemaVersion: Number(match[3]),
@@ -121,12 +121,12 @@ export function probeNativeHost(
 ): NativeHostAbi {
   const resolved = path.resolve(executable);
   if (!existsSync(resolved)) {
-    throw hostFailure(`native-host executable not found: ${resolved}`);
+    throw hostFailure(`zgui-host executable not found: ${resolved}`);
   }
   try {
     accessSync(resolved, fsConstants.X_OK);
   } catch {
-    throw hostFailure(`native-host executable is not executable: ${resolved}`);
+    throw hostFailure(`zgui-host executable is not executable: ${resolved}`);
   }
   const child = Bun.spawnSync([resolved, "--version", "--json"], {
     stdin: "ignore",
@@ -137,14 +137,14 @@ export function probeNativeHost(
   if (!child.success) {
     const detail = `${child.stderr.toString()}${child.stdout.toString()}`.trim();
     throw hostFailure(
-      `native-host ABI handshake failed (${resolved} --version --json exited with ${child.signalCode ?? child.exitCode})${detail ? `: ${detail}` : ""}`,
+      `zgui-host ABI handshake failed (${resolved} --version --json exited with ${child.signalCode ?? child.exitCode})${detail ? `: ${detail}` : ""}`,
     );
   }
   const stdout = child.stdout.toString("utf8").trim();
   const abi = parseVersionText(stdout);
   if (!abi) {
     throw hostFailure(
-      `native-host ABI handshake returned unrecognized version metadata from ${resolved}: ${stdout || "(empty output)"}`,
+      `zgui-host ABI handshake returned unrecognized version metadata from ${resolved}: ${stdout || "(empty output)"}`,
     );
   }
   if (
@@ -152,7 +152,7 @@ export function probeNativeHost(
     abi.schemaVersion !== expectedSchemaVersion
   ) {
     throw hostFailure(
-      `native-host ABI mismatch at ${resolved}: host reports hostApiVersion=${abi.hostApiVersion} schemaVersion=${abi.schemaVersion}, expected hostApiVersion=${expectedHostApiVersion} schemaVersion=${expectedSchemaVersion}`,
+      `zgui-host ABI mismatch at ${resolved}: host reports hostApiVersion=${abi.hostApiVersion} schemaVersion=${abi.schemaVersion}, expected hostApiVersion=${expectedHostApiVersion} schemaVersion=${expectedSchemaVersion}`,
     );
   }
   return abi;
@@ -228,7 +228,7 @@ export async function resolveNativeHost({
     ];
     const pkgDir = tryResolvePlatformPackage(packageName, searchBases);
     if (pkgDir) {
-      const binaryPath = path.join(pkgDir, "bin", "native-host");
+      const binaryPath = path.join(pkgDir, "bin", "zgui-host");
       if (existsSync(binaryPath)) {
         const manifestPath = path.join(pkgDir, "host-manifest.json");
         if (existsSync(manifestPath)) {
@@ -259,7 +259,7 @@ export async function resolveNativeHost({
     }
   }
 
-  // 3. Local Cargo workspace build (--host-root or detected checkout containing crates/native-host).
+  // 3. Local Cargo workspace build (--host-root or detected checkout containing crates/zgui-host).
   const resolvedRoot = path.resolve(root);
   const cargoRoot =
     hostRoot !== undefined
@@ -270,7 +270,7 @@ export async function resolveNativeHost({
 
   if (cargoRoot !== undefined) {
     if (!allowCargoBuild) {
-      for (const rel of ["target/debug/native-host", "target/release/native-host"]) {
+      for (const rel of ["target/debug/zgui-host", "target/release/zgui-host"]) {
         const built = path.join(cargoRoot, rel);
         if (existsSync(built)) {
           const abi = verifyAbi ? probeNativeHost(built) : undefined;
@@ -283,7 +283,7 @@ export async function resolveNativeHost({
         }
       }
       throw hostFailure(
-        `Local Cargo checkout detected at ${cargoRoot}, but native-host has not been built yet. Run \`cargo build -p native-host\` or invoke \`zgui-js dev\`.`,
+        `Local Cargo checkout detected at ${cargoRoot}, but zgui-host has not been built yet. Run \`cargo build -p zgui-host\` or invoke \`zgui-js dev\`.`,
       );
     }
     const executable = await prepareNativeHost({ root: cargoRoot, signal });
@@ -300,10 +300,10 @@ export async function resolveNativeHost({
     ? `Install the prebuilt host package (${packageName})`
     : `No prebuilt host package is published for ${currentPlatform}`;
   throw hostFailure(
-    `Cannot locate a zgui-js native-host binary for ${currentPlatform}.\n` +
+    `Cannot locate a zgui-js zgui-host binary for ${currentPlatform}.\n` +
       `  1. ${installHint} (included in @hewel/zgui-cli optionalDependencies on supported platforms), or\n` +
       `  2. Pass --host-executable <PATH> or set ZGUI_JS_HOST_EXECUTABLE=<PATH>, or\n` +
-      `  3. Pass --host-root <DIR> pointing to a zgui-js Cargo checkout containing crates/native-host.`,
+      `  3. Pass --host-root <DIR> pointing to a zgui-js Cargo checkout containing crates/zgui-host.`,
   );
 }
 
@@ -331,7 +331,7 @@ export async function stageHostPackage({
   }
   const sourceBinary = path.resolve(binary);
   if (!existsSync(sourceBinary)) {
-    throw hostFailure(`Source native-host binary not found: ${sourceBinary}`);
+    throw hostFailure(`Source zgui-host binary not found: ${sourceBinary}`);
   }
   const targetDir = path.resolve(
     packageDir ?? path.join(workspaceRoot, `packages/host-${platform}`),
@@ -361,7 +361,7 @@ export async function stageHostPackage({
   }
 
   const binDir = path.join(targetDir, "bin");
-  const destBinary = path.join(binDir, "native-host");
+  const destBinary = path.join(binDir, "zgui-host");
   await mkdir(binDir, { recursive: true });
   await copyFile(sourceBinary, destBinary);
   await chmod(destBinary, 0o755);
@@ -396,7 +396,7 @@ export async function verifyHostPackage(
   if (manifest.schemaVersion !== 1 || manifest.package !== pkgJson.name) {
     throw hostFailure(`Invalid host-manifest.json in ${dir}`);
   }
-  const binaryPath = path.join(dir, "bin", "native-host");
+  const binaryPath = path.join(dir, "bin", "zgui-host");
   if (!existsSync(binaryPath)) {
     throw hostFailure(`Missing staged binary: ${binaryPath}`);
   }
@@ -462,7 +462,7 @@ export async function compileModuleBytecode(
     if (code !== 0 || child.signalCode) {
       const detail = `${stderr}${stdout}`.trim();
       throw hostFailure(
-        `native-host compile-bytecode failed for ${moduleName} (exit ${child.signalCode ?? code})${detail ? `: ${detail}` : ""}`,
+        `zgui-host compile-bytecode failed for ${moduleName} (exit ${child.signalCode ?? code})${detail ? `: ${detail}` : ""}`,
       );
     }
     return Buffer.from(await readFile(output));

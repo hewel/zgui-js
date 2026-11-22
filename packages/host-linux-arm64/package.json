@@ -1,7 +1,7 @@
 {
   "name": "@hewel/zgui-host-linux-arm64",
   "version": "0.1.0",
-  "description": "Prebuilt zgui-js native-host binary for Linux arm64",
+  "description": "Prebuilt zgui-js zgui-host binary for Linux arm64",
   "license": "Apache-2.0",
   "type": "module",
   "os": [

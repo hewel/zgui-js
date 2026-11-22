@@ -14,7 +14,7 @@
 flowchart TB
     Source["Application: TSX, TypeScript, CSS Modules (*.module.css), assets"] --> Build["packages/build: tsrs + @solidjs/compiler (Oxc) + Lightning CSS + Rolldown"]
     Build --> Package["Immutable package: JS or .qjsb bytecode, sourcemaps, CSS, assets, manifest"]
-    Package --> Host["native-host: QuickJS-NG session, Solid 2.0, ui-bridge, host-services"]
+    Package --> Host["zgui-host: QuickJS-NG session, Solid 2.0, ui-bridge, host-services"]
     Host <--> Native["Upstream zgui: native tree, Stylo CSS, Parley text, wgpu/Vello"]
     Native -->|Live application| Desktop["Native platform backend: desktop / Wayland"]
     Native -->|Offscreen preview| Preview["Headless platform: real GPU frames and sealed evidence"]
@@ -26,10 +26,10 @@ The host and SDK are structured around four core architectural boundaries (domai
 
 1. **Zero-DOM Native UI & Lightning CSS Modules (`@hewel/zgui`)**
    A custom Solid 2.0 universal renderer drives native handles across `crates/ui-bridge`, paired with a themed component library (`@hewel/zgui/components`), selective headless primitives (`@hewel/zgui/primitives`), typed memory router (`@hewel/zgui/router`), vector icons (`@hewel/zgui/icons`), and Lightning CSS Modules (`lightningcss-v1`) validated against Stylo's native CSS subset.
-2. **Immutable Packages & Fast Dev Loop (`packages/build`, `packages/cli`, `crates/native-host`)**
+2. **Immutable Packages & Fast Dev Loop (`packages/build`, `packages/cli`, `crates/zgui-host`)**
    Builds type-check with pinned `tsrs`, compile TSX via native `@solidjs/compiler` (zero Babel) and CSS Modules via Lightning CSS, and publish immutable SHA-256-verified packages (with optional code-splitting chunks, compute workers, and `--bytecode` `.qjsb` output). In `dev`, `tsrs` runs asynchronously without blocking rebuilds, CSS-only edits hot-swap Stylo stylesheets in place without restarting QuickJS, JS edits perform atomic staged reload with opt-in `createDevState` / router preservation, and failures surface in a non-blocking native dev error banner while keeping the last healthy frame alive.
-3. **Shared Production Preview Pipeline & Self-Hosted Visual Inspector (`crates/native-host/src/preview`, `apps/devtools/inspector`)**
-   Offscreen previews use the exact same package loader, QuickJS runtime, bridge, layout, and GPU renderer ([`driver.rs`](crates/native-host/src/preview/driver.rs), [`evidence.rs`](crates/native-host/src/preview/evidence.rs), [`output.rs`](crates/native-host/src/preview/output.rs)) rather than a mock DOM, emitting sealed `result.json` evidence, screenshots, and native tree snapshots. Live `--dev-inspect` sessions expose a read-only `0600` Unix socket, an in-window element picker (`Ctrl+Shift+I`), and a self-hosted Inspector window (`zgui-js inspect --ui`).
+3. **Shared Production Preview Pipeline & Self-Hosted Visual Inspector (`crates/zgui-host/src/preview`, `apps/devtools/inspector`)**
+   Offscreen previews use the exact same package loader, QuickJS runtime, bridge, layout, and GPU renderer ([`driver.rs`](crates/zgui-host/src/preview/driver.rs), [`evidence.rs`](crates/zgui-host/src/preview/evidence.rs), [`output.rs`](crates/zgui-host/src/preview/output.rs)) rather than a mock DOM, emitting sealed `result.json` evidence, screenshots, and native tree snapshots. Live `--dev-inspect` sessions expose a read-only `0600` Unix socket, an in-window element picker (`Ctrl+Shift+I`), and a self-hosted Inspector window (`zgui-js inspect --ui`).
 4. **Bounded Host Authority (`crates/js-runtime`, `crates/host-services`, `@hewel/zgui-services`)**
    JavaScript runs without `window`, `document`, `fetch`, `process`, or `setInterval`. Capability-gated host services (origin-allowlisted HTTP/SSE/WebSocket, SQLite/KV, local files & XDG portals, clipboard, Unix sockets, commands, control messages, and isolated background compute workers) retire cleanly with each session generation.
 
@@ -61,7 +61,7 @@ bun run dev --app counter
 Useful CLI workflows via `@hewel/zgui-cli` (`zgui-js`):
 
 ```sh
-bun run doctor                     # check Bun, native-host ABI, Wayland, Vulkan, XDG portal, tsrs, oxlint
+bun run doctor                     # check Bun, zgui-host ABI, Wayland, Vulkan, XDG portal, tsrs, oxlint
 bun run dev --app md-editor        # build & open Markdown Studio with async tsrs + CSS-only live reload
 bun run build --app counter --bytecode
 bun run package --app md-editor --bytecode --out target/md-editor-pkg
@@ -129,7 +129,7 @@ bun run test:build    # Bun build, CLI, CSS Modules, primitives, llms.txt, and c
 bun run test:rust     # workspace Rust tests + cargo clippy (-D warnings) offline
 bun run test:vendor   # required offline test suites for patched vendor/ crates
 bun run check         # fmt:check + lint + typecheck + test:build + test:rust + test:vendor
-bun run test:preview  # build counter + native-host and run headless GPU preview suites
+bun run test:preview  # build counter + zgui-host and run headless GPU preview suites
 ```
 
 - Install the tracked pre-commit hook (staged `oxfmt --check`, `lint`, `typecheck`) with `bun run hooks:install`.
@@ -139,7 +139,7 @@ bun run test:preview  # build counter + native-host and run headless GPU preview
 
 | Path                                                 | Purpose                                                                                                            |
 | ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
-| [`crates/native-host`](crates/native-host)           | Package/bytecode loader, Wayland/desktop hosting, atomic & CSS-only reload, dev banner, visual inspector, preview  |
+| [`crates/zgui-host`](crates/zgui-host)               | Package/bytecode loader, Wayland/desktop hosting, atomic & CSS-only reload, dev banner, visual inspector, preview  |
 | [`crates/js-runtime`](crates/js-runtime)             | Embedded QuickJS-NG runtime, verified module/bytecode evaluation, turn guards, and rejection tracking              |
 | [`crates/ui-bridge`](crates/ui-bridge)               | Native node handles, properties, event dispatch, geometry queries, canvas, and document selection                  |
 | [`crates/host-services`](crates/host-services)       | Rust-backed async network, SQLite, files/bookmarks, clipboard, sockets, commands, and compute workers              |
@@ -148,7 +148,7 @@ bun run test:preview  # build counter + native-host and run headless GPU preview
 | [`packages/build`](packages/build)                   | `@hewel/zgui-build` programmatic compiler (`@solidjs/compiler`, Lightning CSS, Rolldown), typecheck, packager      |
 | [`packages/cli`](packages/cli)                       | `@hewel/zgui-cli` npm CLI (`zgui-js`: `init`, `dev`, `build`, `preview`, `package`, `doctor`, `inspect`, `smoke`)  |
 | [`packages/create-zgui-js`](packages/create-zgui-js) | `create-zgui-js` project scaffolder (`bun create zgui-js`)                                                         |
-| [`packages/host-linux-x64`](packages/host-linux-x64) | Prebuilt Linux x64 `native-host` npm `optionalDependencies` package                                                |
+| [`packages/host-linux-x64`](packages/host-linux-x64) | Prebuilt Linux x64 `zgui-host` npm `optionalDependencies` package                                                  |
 | [`apps/devtools/inspector`](apps/devtools/inspector) | Self-hosted `zgui-js` visual Inspector window (`zgui-js inspect --ui`)                                             |
 | [`apps/examples`](apps/examples)                     | Runnable example applications                                                                                      |
 | [`preview`](preview)                                 | Preview profiles (`default.json`, `functional.json`), fixtures, scenarios, Noto fonts, comparison policies         |

@@ -4,10 +4,10 @@ use std::{
 };
 
 fn run(args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_native-host"))
+    Command::new(env!("CARGO_BIN_EXE_zgui-host"))
         .args(args)
         .output()
-        .expect("launch native-host CLI")
+        .expect("launch zgui-host CLI")
 }
 
 #[test]
@@ -18,7 +18,7 @@ fn accepts_repeated_bind_socket_flags_without_opening_a_desktop() {
         "export function runSmoke() { return 'solid-smoke:ok'; }",
     )
     .expect("write CLI smoke module");
-    let result = Command::new(env!("CARGO_BIN_EXE_native-host"))
+    let result = Command::new(env!("CARGO_BIN_EXE_zgui-host"))
         .args([
             "--bind-socket",
             "niri=/run/user/42/niri.sock",
@@ -29,7 +29,7 @@ fn accepts_repeated_bind_socket_flags_without_opening_a_desktop() {
         .arg(&path)
         .output();
     fs::remove_file(path).expect("remove CLI smoke module");
-    let result = result.expect("launch native-host with explicit socket bindings");
+    let result = result.expect("launch zgui-host with explicit socket bindings");
     assert!(
         result.status.success(),
         "{}",

@@ -2373,40 +2373,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "native-host"
-version = "0.1.0"
-dependencies = [
- "accesskit",
- "accesskit_consumer",
- "host-services",
- "js-runtime",
- "libc",
- "parley",
- "png 0.18.1",
- "rquickjs",
- "serde",
- "serde_json",
- "sha2",
- "sourcemap",
- "toml",
- "ui-bridge",
- "web-time",
- "zgui",
- "zgui-a11y",
- "zgui-css",
- "zgui-dom",
- "zgui-layout",
- "zgui-platform-headless",
- "zgui-render-vector-vello",
- "zgui-render-wgpu",
- "zgui-style",
- "zgui-testkit-scene",
- "zgui-text-style",
- "zgui-view",
- "zgui-view-dom",
-]
-
-[[package]]
 name = "ndk"
 version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6150,6 +6116,40 @@ version = "0.1.0"
 source = "git+https://github.com/zortax/zgui?rev=ee29c7dc66206eb04ba7bcf514058a278c9070ba#ee29c7dc66206eb04ba7bcf514058a278c9070ba"
 dependencies = [
  "bytemuck",
+]
+
+[[package]]
+name = "zgui-host"
+version = "0.1.0"
+dependencies = [
+ "accesskit",
+ "accesskit_consumer",
+ "host-services",
+ "js-runtime",
+ "libc",
+ "parley",
+ "png 0.18.1",
+ "rquickjs",
+ "serde",
+ "serde_json",
+ "sha2",
+ "sourcemap",
+ "toml",
+ "ui-bridge",
+ "web-time",
+ "zgui",
+ "zgui-a11y",
+ "zgui-css",
+ "zgui-dom",
+ "zgui-layout",
+ "zgui-platform-headless",
+ "zgui-render-vector-vello",
+ "zgui-render-wgpu",
+ "zgui-style",
+ "zgui-testkit-scene",
+ "zgui-text-style",
+ "zgui-view",
+ "zgui-view-dom",
 ]
 
 [[package]]

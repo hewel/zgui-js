@@ -16,7 +16,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 function parseArgs(argv) {
   const opts = {
-    binary: path.join(root, "target/release/native-host"),
+    binary: path.join(root, "target/release/zgui-host"),
     apps: ["baseline", "counter", "motion-lab", "sysmon", "workspace", "gallery"],
     width: 1240,
     height: 780,
@@ -48,7 +48,7 @@ function parseArgs(argv) {
 function readBinaryInfo(binary) {
   if (!existsSync(binary)) {
     throw new Error(
-      `native-host binary not found at ${binary}. Run: nix-shell --run "cargo build --release -p native-host --offline"`,
+      `zgui-host binary not found at ${binary}. Run: nix-shell --run "cargo build --release -p zgui-host --offline"`,
     );
   }
   const bytes = statSync(binary).size;
@@ -126,7 +126,7 @@ function writeSysmonFixture(filePath) {
               status: 0,
               stdout:
                 "  PID %CPU %MEM   RSS STAT COMMAND\n" +
-                "  100  2.4  0.8 42000 Sl   native-host\n" +
+                "  100  2.4  0.8 42000 Sl   zgui-host\n" +
                 "    1  0.1  0.1 14200 Ss   systemd\n",
               stderr: "",
             },

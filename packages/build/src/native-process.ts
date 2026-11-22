@@ -136,7 +136,7 @@ export async function prepareNativeHost(
   let executable: string | undefined;
   const exitCode = await ownedProcess(
     "cargo",
-    ["build", "-p", "native-host", "--locked", "--message-format=json-render-diagnostics"],
+    ["build", "-p", "zgui-host", "--locked", "--message-format=json-render-diagnostics"],
     {
       root,
       signal,
@@ -152,7 +152,7 @@ export async function prepareNativeHost(
           process.stderr.write(message.message.rendered);
         if (
           message?.reason === "compiler-artifact" &&
-          message.target?.name === "native-host" &&
+          message.target?.name === "zgui-host" &&
           message.target.kind?.includes("bin") &&
           typeof message.executable === "string"
         ) {
@@ -162,8 +162,8 @@ export async function prepareNativeHost(
     },
     processOptions,
   );
-  if (exitCode !== 0) throw failure(`native-host build exited with code ${exitCode}`, exitCode);
-  if (!executable) throw failure("Cargo did not report a native-host executable");
+  if (exitCode !== 0) throw failure(`zgui-host build exited with code ${exitCode}`, exitCode);
+  if (!executable) throw failure("Cargo did not report a zgui-host executable");
   return executable;
 }
 

@@ -3,7 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const workspaceRoot = fileURLToPath(new URL("../../../", import.meta.url));
-const nativeHost = path.join(workspaceRoot, "target/debug/native-host");
+const nativeHost = path.join(workspaceRoot, "target/debug/zgui-host");
 const maxSummaryBytes = 8 * 1024;
 const exitCodes = new Set([0, 2, 3, 4, 5, 6, 7, 8, 9, 130]);
 const usage =

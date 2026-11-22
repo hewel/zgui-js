@@ -1415,8 +1415,8 @@ fn handle_client(mut stream: UnixStream, tx: &mpsc::SyncSender<InspectRequest>, 
     }
 }
 
-/// CLI client helper for `native-host inspect --socket <path> [--op snapshot|tree|profile|pick] [--surface <name>]`
-/// and `native-host inspect pick --socket <path> [--off|--status|--select <node-N>]`.
+/// CLI client helper for `zgui-host inspect --socket <path> [--op snapshot|tree|profile|pick] [--surface <name>]`
+/// and `zgui-host inspect pick --socket <path> [--off|--status|--select <node-N>]`.
 pub(crate) fn run_cli_inspect(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     let mut socket: Option<PathBuf> = None;
     let mut op = "snapshot".to_owned();

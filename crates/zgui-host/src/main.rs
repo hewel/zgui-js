@@ -125,7 +125,7 @@ impl Application {
     }
 
     fn record_failure(&self, error: impl std::fmt::Display) {
-        eprintln!("native-host error: {error}");
+        eprintln!("zgui-host error: {error}");
         self.failure.borrow_mut().get_or_insert_with(|| error.to_string());
     }
 
@@ -489,15 +489,15 @@ pub(crate) const PURE_SHELL_STYLESHEET: &str =
     ":root { background: transparent; color: #edf2fa; font-family: sans-serif; padding: 0; }";
 
 const USAGE: &str = "\
-Usage: native-host [OPTIONS]
-       native-host preview <COMMAND> [OPTIONS]
-       native-host msg <APP_ID> [ARGS...]
-       native-host inspect --socket <PATH> [--op snapshot|tree|profile] [--surface <NAME>]
-       native-host compile-bytecode --input <JS> --output <QJSB> [--module-name <NAME>]
+Usage: zgui-host [OPTIONS]
+       zgui-host preview <COMMAND> [OPTIONS]
+       zgui-host msg <APP_ID> [ARGS...]
+       zgui-host inspect --socket <PATH> [--op snapshot|tree|profile] [--surface <NAME>]
+       zgui-host compile-bytecode --input <JS> --output <QJSB> [--module-name <NAME>]
 
 Options:
   -h, --help                   Show this help message and exit
-  -V, --version [--json]       Print native-host version and ABI handshake metadata
+  -V, --version [--json]       Print zgui-host version and ABI handshake metadata
   --bundle <DIR>               Load a built zgui-js application package directory
   --watch                      Watch --bundle for new generations and hot-reload
   --dev-inspect <PATH>         Enable dev-only read-only inspector/profiler on Unix socket PATH
@@ -528,7 +528,7 @@ fn format_version(json_mode: bool) -> String {
     let platform = host_platform_id();
     if json_mode {
         serde_json::json!({
-            "name": "native-host",
+            "name": "zgui-host",
             "version": version,
             "hostApiVersion": package::HOST_API_VERSION,
             "schemaVersion": package::SCHEMA_VERSION,
@@ -542,7 +542,7 @@ fn format_version(json_mode: bool) -> String {
         .to_string()
     } else {
         format!(
-            "native-host {version} (hostApiVersion={} schemaVersion={} platform={platform})",
+            "zgui-host {version} (hostApiVersion={} schemaVersion={} platform={platform})",
             package::HOST_API_VERSION,
             package::SCHEMA_VERSION,
         )
@@ -807,7 +807,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     if let Some(error) = failure.borrow_mut().take() { return Err(error.into()); }
     result?;
     if let Some(error) = native_failure.take() { return Err(error.into()); }
-    eprintln!("native-host: clean shutdown");
+    eprintln!("zgui-host: clean shutdown");
     Ok(())
 }
 
@@ -818,12 +818,12 @@ mod version_tests {
     #[test]
     fn version_output_exposes_abi_handshake_fields() {
         let text = format_version(false);
-        assert!(text.starts_with("native-host "));
+        assert!(text.starts_with("zgui-host "));
         assert!(text.contains("hostApiVersion=1"));
         assert!(text.contains("schemaVersion=2"));
 
         let parsed: serde_json::Value = serde_json::from_str(&format_version(true)).expect("valid JSON");
-        assert_eq!(parsed["name"], "native-host");
+        assert_eq!(parsed["name"], "zgui-host");
         assert_eq!(parsed["hostApiVersion"], 1);
         assert_eq!(parsed["schemaVersion"], 2);
         assert_eq!(parsed["styleProfile"], "lightningcss-v1");

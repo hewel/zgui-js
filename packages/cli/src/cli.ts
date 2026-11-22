@@ -20,11 +20,11 @@ const usage = `Usage: zgui-js <command> [options]
 
 Commands:
   init      Scaffold a new zgui-js app (desktop-app or wayland-shell)
-  dev       Resolve/build native-host, open the app, and reload on changes
+  dev       Resolve/build zgui-host, open the app, and reload on changes
   build     Type-check and publish an immutable application package
   preview   Build the app and host, then capture an offscreen native frame
   package   Assemble a self-contained runnable Linux app directory
-  doctor    Verify Bun, native-host ABI, Wayland, Vulkan, portal, tsrs, and oxlint
+  doctor    Verify Bun, zgui-host ABI, Wayland, Vulkan, portal, tsrs, and oxlint
   inspect   Query --dev-inspect socket, toggle visual picker, or open --ui Inspector window
   smoke     Build the compiler/runtime smoke fixture
 
@@ -48,7 +48,7 @@ Relative file and directory flags are resolved from the current working director
   preview --profile F --fixture F --scenario F --out NEW_DIRECTORY
   package --out DIR [--bytecode] [--desktop-entry] [--pure-shell]
   doctor [--json] [--host-root DIR] [--host-executable PATH]
-  inspect [--ui] [--host-root DIR] [--host-executable PATH] [--] <native-host inspect args...>
+  inspect [--ui] [--host-root DIR] [--host-executable PATH] [--] <zgui-host inspect args...>
   init [DIR] [--template desktop-app|wayland-shell] [--name NAME] [--force]`;
 
 type PreviewOptions = Pick<

@@ -339,8 +339,8 @@ export function mount(root: NativeNode) {
       `#!${process.execPath}
 if (process.cwd() !== ${JSON.stringify(hostRoot)}) process.exit(72);
 console.log(JSON.stringify({
-  reason: "compiler-artifact", target: { name: "native-host", kind: ["bin"] },
-  executable: "target/native-host",
+  reason: "compiler-artifact", target: { name: "zgui-host", kind: ["bin"] },
+  executable: "target/zgui-host",
 }));
 `,
       { mode: 0o755 },
@@ -348,13 +348,13 @@ console.log(JSON.stringify({
     const hostScript = `#!${process.execPath}
 const args = process.argv.slice(2);
 if (args.includes("--version")) {
-  console.log(JSON.stringify({ name: "native-host", version: "0.1.0", hostApiVersion: 1, schemaVersion: 2, platform: "linux-x64" }));
+  console.log(JSON.stringify({ name: "zgui-host", version: "0.1.0", hostApiVersion: 1, schemaVersion: 2, platform: "linux-x64" }));
   process.exit(0);
 }
 const manifest = await Bun.file(args[args.indexOf("--bundle") + 1] + "/manifest.json").json();
 console.log(JSON.stringify({ script: import.meta.path, cwd: process.cwd(), args, styleSystem: manifest.styleSystem }));
 `;
-    const preparedHost = path.join(hostRoot, "target/native-host");
+    const preparedHost = path.join(hostRoot, "target/zgui-host");
     const prebuiltHost = path.join(bin, "prebuilt host");
     await writeFile(preparedHost, hostScript, { mode: 0o755 });
     await writeFile(prebuiltHost, hostScript, { mode: 0o755 });

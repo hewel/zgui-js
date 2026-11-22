@@ -6,7 +6,7 @@ Use when authoring multi-output desktop shell UIs (status bars, docks, launchers
 
 - Mount a headless root with `renderShell(() => <Shell />)` when the app owns compositor surfaces without a default `main` window.
 - Require `capabilities.shellSurfaces: true` (for `<LayerSurface>` / `<PopupSurface>`) and/or `capabilities.sessionLock: true` (for `requestSessionLock()` / `<SessionLockSurface>`) in `package.json` under `zgui.capabilities`.
-- Launch live with `native-host --pure-shell` (or set `"pureShell": true` in a preview profile).
+- Launch live with `zgui-host --pure-shell` (or set `"pureShell": true` in a preview profile).
 - Track hotplug outputs reactively with `useMonitors(): Accessor<readonly Monitor[]>` inside a Solid owner.
 - Read the monotonic session generation (safe even during module preflight) via `getSessionGeneration()`.
 

@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 const packageDir = path.dirname(fileURLToPath(import.meta.url));
 
 export const platform = "linux-x64";
-export const binaryPath = path.join(packageDir, "bin", "native-host");
+export const binaryPath = path.join(packageDir, "bin", "zgui-host");
 export const manifestPath = path.join(packageDir, "host-manifest.json");
 
 export function resolveHostBinary() {

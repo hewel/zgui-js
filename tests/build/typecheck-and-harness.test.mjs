@@ -17,7 +17,7 @@ test("typecheck.ts --app checks a single app with CSS Module type sync", async (
   assert.match(stdout, /Typechecked apps\/examples\/md-editor\/tsconfig\.json/);
 });
 
-test("preview harness pre-validates scenario and fixture contracts before launching native-host", () => {
+test("preview harness pre-validates scenario and fixture contracts before launching zgui-host", () => {
   assert.throws(
     () =>
       validateScenarioSpec({

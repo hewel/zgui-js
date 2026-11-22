@@ -4,7 +4,7 @@
 
 ## Architecture & Constraints
 
-- **Runtime**: QuickJS-NG (`rquickjs`) executes compiled ES2022 modules inside the Rust `native-host` process. There is no `window`, `document`, `fetch`, or WebView.
+- **Runtime**: QuickJS-NG (`rquickjs`) executes compiled ES2022 modules inside the Rust `zgui-host` process. There is no `window`, `document`, `fetch`, or WebView.
 - **Reactivity & Compiler**: SolidJS 2.0 (`solid-js@2.0.1`) compiled with `@solidjs/compiler@2.0.1` (`generate: "universal"`, `moduleName: "@hewel/zgui/renderer"`) + Rolldown native TypeScript stripping.
 - **Styling**: Plain CSS + Lightning CSS Modules (`*.module.css`). StyleX and Babel are removed. Never use `composes` or `dashedIdents` in CSS Modules. Always import `./*.module.css` as a default object and join classes with `cx()`.
 - **Capabilities & Security**: All host I/O (files, Unix sockets, commands, HTTP/SSE/WS origins, clipboard, SQLite, workers, shell surfaces) is capability-gated in `package.json` under `zgui.capabilities` and sealed into `manifest.json` with SHA-256 `artifactDigests`.
@@ -16,11 +16,11 @@
 Install `@hewel/zgui-cli` (or scaffold with `bun create zgui-js`). The binary name is `zgui-js` (never `zgui`).
 
 - `zgui-js init [DIR] [--template desktop-app|wayland-shell] [--name NAME] [--force]` — Scaffold a new app.
-- `zgui-js dev [DIR] [--dev-inspect PATH] [--strict-typecheck] [--pure-shell] [--width N] [--height N] [--title TEXT] [--exit-after-ms N]` — Build, watch (non-blocking `tsrs`, CSS-only hot-swap, dev state preservation), and run `native-host`.
+- `zgui-js dev [DIR] [--dev-inspect PATH] [--strict-typecheck] [--pure-shell] [--width N] [--height N] [--title TEXT] [--exit-after-ms N]` — Build, watch (non-blocking `tsrs`, CSS-only hot-swap, dev state preservation), and run `zgui-host`.
 - `zgui-js build [DIR] [--watch] [--bytecode] [--capabilities-file FILE]` — Type-check and emit an immutable, SHA-256 sealed `dist/` bundle (optional QuickJS `.qjsb` bytecode via `--bytecode`).
 - `zgui-js preview [DIR] [--watch] [--profile F] [--fixture F] [--scenario F] [--out DIR]` — Headless Vulkan/Stylo offscreen capture & scenario assertions.
 - `zgui-js package [DIR] --out DIR [--bytecode] [--desktop-entry] [--pure-shell]` — Assemble a self-contained runnable Linux app directory.
-- `zgui-js doctor [--json] [--host-root DIR] [--host-executable PATH]` — Verify Bun, `native-host` ABI, Wayland, Vulkan, portal, `tsrs`, and `oxlint`.
+- `zgui-js doctor [--json] [--host-root DIR] [--host-executable PATH]` — Verify Bun, `zgui-host` ABI, Wayland, Vulkan, portal, `tsrs`, and `oxlint`.
 - `zgui-js inspect [--ui] [--socket PATH] [--op tree|profile | pick]` — Query the `0600` `--dev-inspect` socket (`--op tree` / `--op profile`), toggle the native visual picker (`pick` or `Ctrl+Shift+I`), or open the self-hosted Inspector window (`--ui`).
 - `zgui-js smoke` — Build the compiler/runtime smoke fixture.
 

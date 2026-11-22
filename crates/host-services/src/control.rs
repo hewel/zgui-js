@@ -489,7 +489,7 @@ mod tests {
         }
     }
 
-    // Use a text codec to exercise the transport independently of native-host's JSON codec.
+    // Use a text codec to exercise the transport independently of zgui-host's JSON codec.
     fn decode(frame: &str) -> Result<Vec<String>, String> {
         if frame.is_empty() {
             return Err("empty test frame".to_owned());

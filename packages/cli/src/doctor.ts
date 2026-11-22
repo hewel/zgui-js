@@ -117,7 +117,7 @@ export async function runDoctor({
       : { remediation: `Upgrade Bun to ${minBun} or enter the repository nix-shell.` }),
   });
 
-  // 2. native-host resolution + ABI handshake.
+  // 2. zgui-host resolution + ABI handshake.
   let hostCheck: DoctorCheck;
   try {
     const resolved: ResolvedNativeHost = await resolveNativeHost({
@@ -134,8 +134,8 @@ export async function runDoctor({
       ? `v${abi.version} hostApiVersion=${abi.hostApiVersion} schemaVersion=${abi.schemaVersion} (${abi.platform})`
       : `expected hostApiVersion=${EXPECTED_HOST_API_VERSION} schemaVersion=${EXPECTED_SCHEMA_VERSION}`;
     hostCheck = {
-      id: "native-host",
-      label: "native-host binary & ABI",
+      id: "zgui-host",
+      label: "zgui-host binary & ABI",
       status: "ok",
       detail: `${resolved.executable} [${resolved.source}] ${abiSummary}`,
     };
@@ -144,12 +144,12 @@ export async function runDoctor({
     const isUnbuiltCargo = message.includes("has not been built yet");
     const expectedPkg = platformHostPackageName();
     hostCheck = {
-      id: "native-host",
-      label: "native-host binary & ABI",
+      id: "zgui-host",
+      label: "zgui-host binary & ABI",
       status: isUnbuiltCargo ? "warn" : "fail",
       detail: message.split("\n")[0] ?? message,
       remediation: isUnbuiltCargo
-        ? "Run `cargo build -p native-host` or launch `zgui-js dev` to build the local Cargo host."
+        ? "Run `cargo build -p zgui-host` or launch `zgui-js dev` to build the local Cargo host."
         : expectedPkg
           ? `Install ${expectedPkg}, set ZGUI_JS_HOST_EXECUTABLE, or pass --host-executable / --host-root.`
           : "Pass --host-executable <PATH> or --host-root <DIR> pointing to a zgui-js checkout.",

@@ -46,7 +46,7 @@ export function collectLocalSnapshot(root = repoRoot) {
   const branch = run("git", ["rev-parse", "--abbrev-ref", "HEAD"], root);
   const status = run("git", ["status", "--porcelain"], root);
   const dirtyPaths = status.ok && status.stdout ? status.stdout.split("\n") : [];
-  const nativeHostPath = path.join(root, "target/debug/native-host");
+  const nativeHostPath = path.join(root, "target/debug/zgui-host");
   return {
     root,
     branch: branch.ok ? branch.stdout.trim() : null,
@@ -67,7 +67,7 @@ export function collectRemoteSnapshot(host = defaultHost, remoteDir = defaultRem
     echo "HEAD=$(git rev-parse --short HEAD)"
     echo "BUN_LOCK=$(sha256sum bun.lock 2>/dev/null | cut -c1-12 || true)"
     echo "CARGO_LOCK=$(sha256sum Cargo.lock 2>/dev/null | cut -c1-12 || true)"
-    echo "DEBUG_HOST=$(test -x target/debug/native-host && echo 1 || echo 0)"
+    echo "DEBUG_HOST=$(test -x target/debug/zgui-host && echo 1 || echo 0)"
     echo "DIRTY_START"
     git status --porcelain
   `;

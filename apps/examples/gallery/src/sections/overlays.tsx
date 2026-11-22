@@ -100,7 +100,7 @@ export function OverlaysSection(props: { onAction: (label: string) => void }) {
             <AccordionTrigger>Can I verify pixels headlessly?</AccordionTrigger>
             <AccordionContent>
               <text>
-                Yes -- native-host preview renders real offscreen GPU frames and dumps trees.
+                Yes -- zgui-host preview renders real offscreen GPU frames and dumps trees.
               </text>
             </AccordionContent>
           </AccordionItem>

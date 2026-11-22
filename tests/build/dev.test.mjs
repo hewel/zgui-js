@@ -243,7 +243,7 @@ test(
   "native executable comes from Cargo artifacts, including incremental fresh builds",
   { timeout: 5000 },
   async () => {
-    const executable = path.join(workspaceRoot, "custom-cargo-target/debug/native-host");
+    const executable = path.join(workspaceRoot, "custom-cargo-target/debug/zgui-host");
     let builds = 0;
     const spawnProcess = (_command, _args, options) => {
       builds++;
@@ -253,7 +253,7 @@ test(
           "-e",
           `
       console.log(JSON.stringify({ reason: 'compiler-artifact', target: { name: 'dependency', kind: ['bin'] }, executable: '/wrong/dependency' }));
-      console.log(JSON.stringify({ reason: 'compiler-artifact', target: { name: 'native-host', kind: ['bin'] }, fresh: true, executable: ${JSON.stringify(executable)} }));
+      console.log(JSON.stringify({ reason: 'compiler-artifact', target: { name: 'zgui-host', kind: ['bin'] }, fresh: true, executable: ${JSON.stringify(executable)} }));
     `,
         ],
         options,
@@ -287,7 +287,7 @@ test(
             spawn(process.execPath, ["-e", "void 0"], options),
         },
       ),
-      /did not report a native-host executable/,
+      /did not report a zgui-host executable/,
     );
   },
 );

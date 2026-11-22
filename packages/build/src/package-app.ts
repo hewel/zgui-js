@@ -14,7 +14,7 @@ function buildLauncherScript(app: string, { pureShell = false }: { pureShell?: b
   return `#!/usr/bin/env sh
 set -eu
 DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-exec "$DIR/bin/native-host" --bundle "$DIR/bundle"${extraFlags} "$@"
+exec "$DIR/bin/zgui-host" --bundle "$DIR/bundle"${extraFlags} "$@"
 `;
 }
 
@@ -88,7 +88,7 @@ export async function packageApplication(
   const stagingDir = `${outputDir}.staging-${process.pid}-${Date.now()}`;
   const binDir = path.join(stagingDir, "bin");
   const bundleDir = path.join(stagingDir, "bundle");
-  const executablePath = path.join(binDir, "native-host");
+  const executablePath = path.join(binDir, "zgui-host");
   const launcherPath = path.join(stagingDir, app);
   const desktopFileName = `${app}.desktop`;
 
@@ -121,7 +121,7 @@ export async function packageApplication(
       hostApiVersion: host.abi?.hostApiVersion ?? EXPECTED_HOST_API_VERSION,
       hostVersion: host.abi?.version ?? "local",
       hostSource: host.source,
-      executable: "bin/native-host",
+      executable: "bin/zgui-host",
       bundle: "bundle",
       launcher: app,
       ...(desktopEntry ? { desktopEntry: desktopFileName } : {}),
@@ -142,7 +142,7 @@ export async function packageApplication(
   return {
     out: outputDir,
     launcher: path.join(outputDir, app),
-    executable: path.join(outputDir, "bin/native-host"),
+    executable: path.join(outputDir, "bin/zgui-host"),
     bundle: path.join(outputDir, "bundle"),
     ...(desktopEntry ? { desktopEntry: path.join(outputDir, desktopFileName) } : {}),
     host,

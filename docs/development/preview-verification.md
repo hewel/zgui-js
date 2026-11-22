@@ -14,7 +14,7 @@ remain in scope; platform and window-manager support is determined by zgui.
 
 ## P0 — environment and real calibration
 
-Implemented `native-host preview doctor --profile PATH [--out NEW_OR_EMPTY_DIR]`.
+Implemented `zgui-host preview doctor --profile PATH [--out NEW_OR_EMPTY_DIR]`.
 It validates the closed profile and shipped-font manifest, records exact embedded
 lockfile inventories and native source identity, then runs native calibration in
 a supervised child process. `--width`, `--height`, `--scale`, `--theme`, and
@@ -23,12 +23,12 @@ Stdout is one JSON object, bounded to 8 KiB. Detailed inventory and PNG evidence
 are saved when `--out` is supplied.
 
 ```sh
-cargo build -p native-host --locked
-target/debug/native-host preview doctor \
+cargo build -p zgui-host --locked
+target/debug/zgui-host preview doctor \
   --profile preview/profiles/default.json --out target/preview-p0-calibration
-ZGUI_BACKENDS=none target/debug/native-host preview doctor \
+ZGUI_BACKENDS=none target/debug/zgui-host preview doctor \
   --profile preview/profiles/default.json --out target/preview-p0-no-adapter
-target/debug/native-host preview doctor \
+target/debug/zgui-host preview doctor \
   --profile preview/profiles/default.json --timeout-ms 1 \
   --out target/preview-p0-watchdog
 ```
@@ -109,7 +109,7 @@ The headless platform supplies real elapsed monotonic time in the explicitly
 nondeterministic wall profile. It does not invoke example `advance` functions.
 
 ```sh
-target/debug/native-host preview run \
+target/debug/zgui-host preview run \
   --bundle apps/examples/counter/dist \
   --profile preview/profiles/wall-static.json \
   --fixture preview/fixtures/empty.json \
@@ -172,11 +172,11 @@ retain conservative rejection and verify the next explicit validation frame;
 the production coherence invariant was not weakened.
 
 ```sh
-cargo test -p native-host preview::scenario
-cargo test -p native-host preview::fixture
-cargo test -p native-host session::tests
-cargo test -p native-host package::tests
-cargo test -p native-host preview::run::tests
+cargo test -p zgui-host preview::scenario
+cargo test -p zgui-host preview::fixture
+cargo test -p zgui-host session::tests
+cargo test -p zgui-host package::tests
+cargo test -p zgui-host preview::run::tests
 cargo test -p ui-bridge --test topology
 cargo test -p js-runtime owner_deadline
 cargo test --manifest-path vendor/zgui-runtime/Cargo.toml --offline --test held_frame
@@ -197,13 +197,13 @@ and request a real native validation frame without manufacturing a DOM write.
 
 ```sh
 pnpm build --app counter
-target/debug/native-host preview run \
+target/debug/zgui-host preview run \
   --bundle apps/examples/counter/dist \
   --profile preview/profiles/wall-static.json \
   --fixture preview/fixtures/empty.json \
   --scenario preview/scenarios/counter-static.json \
   --out artifacts/preview/counter-interaction-new-run
-target/debug/native-host preview inspect \
+target/debug/zgui-host preview inspect \
   --run artifacts/preview/counter-interaction-new-run \
   --capture after-increment --test-id count-label \
   --fields text,state,boundsLogical --max-nodes 1
@@ -280,11 +280,11 @@ The affected positive matrix was repeated under `target/preview-p2-v2-*`;
 the earlier negative-target cases remain valid.
 
 ```sh
-cargo test -p native-host preview::scenario::tests
-cargo test -p native-host preview::semantics::tests
-cargo test -p native-host preview::saved::tests
+cargo test -p zgui-host preview::scenario::tests
+cargo test -p zgui-host preview::semantics::tests
+cargo test -p zgui-host preview::saved::tests
 cargo test -p ui-bridge --test properties test_ids_follow_native_ownership_without_changing_dom_attributes
-cargo build -p native-host
+cargo build -p zgui-host
 node --test tests/preview/final-input.test.mjs
 ```
 
@@ -292,8 +292,8 @@ node --test tests/preview/final-input.test.mjs
 
 ```sh
 pnpm build --app counter
-cargo build -p native-host
-target/debug/native-host preview run \
+cargo build -p zgui-host
+target/debug/zgui-host preview run \
   --bundle apps/examples/counter/dist \
   --profile preview/profiles/default.json \
   --fixture preview/fixtures/empty.json \
@@ -370,8 +370,8 @@ not make the old logical configuration current.
 
 Focused gates passed:
 
-- `cargo test -p native-host preview::`: 54 passed, one opt-in test ignored.
-- `cargo test -p native-host work::fixture::tests`: 16 passed.
+- `cargo test -p zgui-host preview::`: 54 passed, one opt-in test ignored.
+- `cargo test -p zgui-host work::fixture::tests`: 16 passed.
 - Native runtime `image_policy` and `images_end_to_end`: nine passed;
   `delayed_`: two passed; `live_package_images_`: one passed.
 - UI bridge property tests: 13 passed; image build test: one passed;
@@ -401,7 +401,7 @@ valid, while visibility and subsequent visible readiness are the contract.
 
 ## P4 — reviewed native visual comparisons
 
-`native-host preview compare --baseline preview/baselines/counter --actual RUN_DIR
+`zgui-host preview compare --baseline preview/baselines/counter --actual RUN_DIR
 --policy preview/comparison/strict.json --out NEW_DIR` compares saved captures
 without opening a graphics device or desktop connection. Exit codes are 0 for a
 policy pass, 2 for invalid policy or incompatible inputs, 4 for visual differences,
@@ -456,8 +456,8 @@ pixels. No self-hosted CI runner was provisioned or exposed to untrusted PR code
 
 ### Observed gates
 
-- `cargo test -p native-host preview::`: 67 passed, one opt-in test ignored;
-  `cargo build -p native-host` passed.
+- `cargo test -p zgui-host preview::`: 67 passed, one opt-in test ignored;
+  `cargo build -p zgui-host` passed.
 - `node --test tests/preview/*.test.mjs`: 20 passed, zero skipped. This includes
   genuine GPU baseline comparison, invalid Vulkan exit 7 without comparison,
   output failure exit 8, offline comparisons, integrity and review-policy failures,
@@ -611,7 +611,7 @@ Named captures store evidence in
 - Native preview Rust tests: 68 passed, one opt-in watchdog fixture ignored.
   Fixture tests: 17 passed; live work tests: eight passed. Session tests: all 14
   passed across the initial run and the focused corrected contract check.
-  `cargo build -p native-host` passed without warnings.
+  `cargo build -p zgui-host` passed without warnings.
 - Build compiler/watcher tests: ten passed, including real compilation failure,
   recovery and failed status publication.
 - Four public watch tests passed: real compile failure and recovery; frozen native
@@ -668,7 +668,7 @@ that niri-specific command is no longer available.
 
 ```sh
 ZGUI_PLATFORM=wayland ZGUI_EDITING_REPLACE_CLIPBOARD=1 \
-  ZGUI_EDITING_WAYLAND_IME=1 cargo test -p native-host --bin native-host \
+  ZGUI_EDITING_WAYLAND_IME=1 cargo test -p zgui-host --bin zgui-host \
   editing_tests::native_text_editing -- --ignored --exact --nocapture
 ```
 
@@ -693,7 +693,7 @@ a command available in the current test suite:
 
 ```text
 ZGUI_PLATFORM=wayland ZGUI_SHELL_LIFECYCLE=1 \
-  cargo test -p native-host --bin native-host \
+  cargo test -p zgui-host --bin zgui-host \
   shell::proof::real_panel_layer -- --ignored --exact --nocapture
 ```
 
@@ -721,7 +721,7 @@ An initial native frame log is not a compositor mapping/presentation barrier.
 
 ### Actual compositor transparency
 
-Two temporary TSX packages used ordinary production `native-host --bundle`,
+Two temporary TSX packages used ordinary production `zgui-host --bundle`,
 `--layer-config` and, for the background only, `--watch`. An opaque top-layer
 background covered the test area; a transparent overlay-layer foreground held a
 300×200 logical-pixel `#ff000080` rectangle and an opaque red reference. Both
@@ -790,7 +790,7 @@ The StyleX gate builds the real example package and uses the production schema-v
 
 ```sh
 bun run build --app stylex
-cargo build -j 4 -p native-host --locked --offline
+cargo build -j 4 -p zgui-host --locked --offline
 bun test --isolate --timeout=30000 tests/preview/stylex.test.mjs
 ```
 

@@ -1183,7 +1183,7 @@ test("rootless shell global-fallback spring parks at zero surfaces and rearms on
   const h = createHost({ strictStyles: true });
   const clock = createClock(t, h);
 
-  // Mirror native-host: global requestAnimationFrame throws when zero surfaces are mounted.
+  // Mirror zgui-host: global requestAnimationFrame throws when zero surfaces are mounted.
   let openSurfaces = 0;
   let rafAttemptsWhileClosed = 0;
   const baseRaf = globalThis.requestAnimationFrame;

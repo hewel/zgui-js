@@ -43,7 +43,7 @@ struct PreviewWatcher {
     pending: VecDeque<Vec<WatchEvent>>,
 }
 
-/// Deterministic in-memory filesystem + grant table + scripted dialogs for `native-host preview`.
+/// Deterministic in-memory filesystem + grant table + scripted dialogs for `zgui-host preview`.
 pub struct PreviewFs {
     nodes: BTreeMap<String, VfsNode>,
     dialogs: VecDeque<ScriptedDialog>,

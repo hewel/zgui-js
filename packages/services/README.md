@@ -101,7 +101,7 @@ the effective user with mode `0700`; there is no `/tmp` fallback. Explicit
 When `XDG_DATA_HOME` is unset, it defaults to `$HOME/.local/share` under a
 valid home, even if the default directory does not exist yet.
 
-Use repeatable `native-host --bind-socket name=/canonical/path` options to
+Use repeatable `zgui-host --bind-socket name=/canonical/path` options to
 bind named endpoints. Each name can be supplied once. An explicit binding
 overrides the allowlisted environment binding (`niri` → `NIRI_SOCKET`);
 no other environment names are inferred. Only manifest-declared names can
@@ -188,8 +188,8 @@ Start the application with `--control-socket /canonical/path` to override it.
 Send a message to a running application with one of:
 
 ```sh
-native-host msg --app-id example -- status "argument with spaces"
-native-host msg --control-socket /canonical/path -- status "argument with spaces"
+zgui-host msg --app-id example -- status "argument with spaces"
+zgui-host msg --control-socket /canonical/path -- status "argument with spaces"
 ```
 
 Use `--` to end the client options and preserve all subsequent argument

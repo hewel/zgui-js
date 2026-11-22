@@ -65,7 +65,7 @@ for (const [name, steps, message] of [
       }),
     );
     const process = spawnSync(
-      path.join(workspaceRoot, "target/debug/native-host"),
+      path.join(workspaceRoot, "target/debug/zgui-host"),
       [
         "preview",
         "run",

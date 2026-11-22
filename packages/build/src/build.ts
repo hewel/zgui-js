@@ -866,7 +866,7 @@ export async function publishApplication(
     const quickjsAbi = host.abi?.quickjsAbi;
     if (bytecodeFormat !== "qjs-bytecode-v1" || !quickjsAbi) {
       throw new Error(
-        `Resolved native-host (${host.executable}) does not report qjs-bytecode-v1 ABI metadata for --bytecode compilation`,
+        `Resolved zgui-host (${host.executable}) does not report qjs-bytecode-v1 ABI metadata for --bytecode compilation`,
       );
     }
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "zgui-bytecode-"));
