@@ -256,8 +256,9 @@ function cleanup(t, harness, dispose) {
   t.after(() => {
     const previous = globalThis.__zgui;
     globalThis.__zgui = harness.host;
-    try { dispose(); }
-    finally {
+    try {
+      dispose();
+    } finally {
       if (previous && previous !== harness.host) globalThis.__zgui = previous;
       else delete globalThis.__zgui;
     }
@@ -280,11 +281,17 @@ async function mounted(t, name, ...args) {
 const prop = (harness, testId, name) => harness.byTestId(testId)?.props.get(name);
 const node = (harness, testId) => harness.byTestId(testId);
 const textOf = current =>
-  current.tag === "#text" ? current.props.get("text") ?? "" : current.children.map(textOf).join("");
-const focusIn = (harness, testId) => harness.dispatch(node(harness, testId), "FocusIn", { cause: "program" });
+  current.tag === "#text"
+    ? (current.props.get("text") ?? "")
+    : current.children.map(textOf).join("");
+const focusIn = (harness, testId) =>
+  harness.dispatch(node(harness, testId), "FocusIn", { cause: "program" });
 const press = (harness, testId) => harness.dispatch(node(harness, testId), "Click");
 const sendKey = (harness, testId, keyName) =>
-  harness.dispatch(node(harness, testId), "KeyDown", { key: keyName, keyWithoutModifiers: keyName });
+  harness.dispatch(node(harness, testId), "KeyDown", {
+    key: keyName,
+    keyWithoutModifiers: keyName,
+  });
 
 test("collapsible keeps mounted children stable across close and open", async t => {
   const { mod, harness, registrations } = await mounted(t, "mountCollapsible");
@@ -404,14 +411,26 @@ test("measured borderSize merges with caller style overrides", async t => {
   mod.measured.setCallerStyle({ border: "2px" });
   harness.flush();
   style = prop(harness, "m-content", "style");
-  assert.equal(style["--zui-collapsible-height"], "41px", "measurement retained across style change");
+  assert.equal(
+    style["--zui-collapsible-height"],
+    "41px",
+    "measurement retained across style change",
+  );
   assert.equal(style.border, "2px");
 
   mod.measured.setCallerStyle("color:blue;");
   harness.flush();
   style = prop(harness, "m-content", "style");
-  assert.equal(style["--zui-collapsible-height"], "41px", "string replacement keeps internal measurement");
-  assert.equal(style.color, "blue", "serialized application declarations replace the previous object map");
+  assert.equal(
+    style["--zui-collapsible-height"],
+    "41px",
+    "string replacement keeps internal measurement",
+  );
+  assert.equal(
+    style.color,
+    "blue",
+    "serialized application declarations replace the previous object map",
+  );
   assert.equal(style.border, undefined, "the previous application object declaration is removed");
   assert.equal(node(harness, "m-content"), content);
 });
@@ -425,9 +444,17 @@ test("collapsed marker tracks the clipping viewport height", async t => {
   assert.equal(prop(harness, "m-content", "data-collapsed"), undefined, "visible while clipping");
   outerObs.callback({ scrollport: { width: 100, height: 0 } });
   harness.flush();
-  assert.equal(prop(harness, "m-content", "data-collapsed"), "", "hidden once viewport reaches zero");
+  assert.equal(
+    prop(harness, "m-content", "data-collapsed"),
+    "",
+    "hidden once viewport reaches zero",
+  );
   press(harness, "m-trig");
-  assert.equal(prop(harness, "m-content", "data-collapsed"), undefined, "opening clears immediately");
+  assert.equal(
+    prop(harness, "m-content", "data-collapsed"),
+    undefined,
+    "opening clears immediately",
+  );
   assert.equal(prop(harness, "m-content", "ariaHidden"), false);
 });
 
@@ -502,11 +529,17 @@ test("unmount cancels observations and remount registers fresh ones", async t =>
   assert.equal(registrations[3].active, true);
   const newContent = node(harness, "s-content");
   assert.notEqual(newContent, oldContent, "fresh content node");
-  assert.equal(prop(harness, "s-trig", "ariaControls"), newContent, "relation points at fresh content");
+  assert.equal(
+    prop(harness, "s-trig", "ariaControls"),
+    newContent,
+    "relation points at fresh content",
+  );
   registrations[0].callback({ width: 1, height: 999 });
   harness.flush();
-  assert.ok(oldContent.props.get("style")?.["--zui-collapsible-height"] == null,
-    "stale emission stays inert");
+  assert.ok(
+    oldContent.props.get("style")?.["--zui-collapsible-height"] == null,
+    "stale emission stays inert",
+  );
 });
 
 test("accordion arrows and Home/End move focus without changing expansion", async t => {
@@ -616,13 +649,25 @@ test("nested accordion state and focus stay isolated", async t => {
   assert.deepEqual(mod.log.changes, [["inner", "i2"]], "inner change only");
   assert.equal(prop(harness, "o-trig-1", "expanded"), true, "outer item untouched");
   press(harness, "o-trig-2");
-  assert.deepEqual(mod.log.changes, [["inner", "i2"], ["outer", "o2"]],
-    "outer toggles independently of inner");
+  assert.deepEqual(
+    mod.log.changes,
+    [
+      ["inner", "i2"],
+      ["outer", "o2"],
+    ],
+    "outer toggles independently of inner",
+  );
   assert.equal(prop(harness, "o-trig-1", "expanded"), false, "single mode replaced outer");
   const bodyDescendant = node(harness, "i-cont-1");
-  harness.dispatch(bodyDescendant, "KeyDown", { key: "ArrowDown", keyWithoutModifiers: "ArrowDown" });
-  assert.notEqual(harness.focused.current, node(harness, "o-trig-2"),
-    "body keydown does not navigate headings");
+  harness.dispatch(bodyDescendant, "KeyDown", {
+    key: "ArrowDown",
+    keyWithoutModifiers: "ArrowDown",
+  });
+  assert.notEqual(
+    harness.focused.current,
+    node(harness, "o-trig-2"),
+    "body keydown does not navigate headings",
+  );
   press(harness, "o-trig-1");
   assert.equal(prop(harness, "o-trig-1", "expanded"), true);
   sendKey(harness, "i-trig-1", "ArrowDown");
@@ -665,8 +710,11 @@ test("keyed reorder preserves nodes and drives Home/End order", async t => {
   const newTrigB = node(harness, "r-trig-b");
   assert.ok(newTrigB);
   assert.notEqual(newTrigB, recreatedTrigB, "re-created item gets fresh handles");
-  assert.equal(prop(harness, "r-trig-b", "ariaControls"), node(harness, "r-cont-b"),
-    "fresh trigger relates to fresh content");
+  assert.equal(
+    prop(harness, "r-trig-b", "ariaControls"),
+    node(harness, "r-cont-b"),
+    "fresh trigger relates to fresh content",
+  );
 });
 
 test("heading wrapper, region relation, chevron, and measure classes", async t => {
@@ -707,8 +755,11 @@ test("heading wrapper, region relation, chevron, and measure classes", async t =
   const outerMeasure = nested.byTestId("o-cont-1").children[0];
   const plainMeasure = nested.byTestId("nc-content").children[0];
   assert.equal(outerMeasure.props.get("class"), "zui-collapsible__measure zui-accordion__measure");
-  assert.equal(plainMeasure.props.get("class"), "zui-collapsible__measure",
-    "nested plain collapsible keeps its own measure class");
+  assert.equal(
+    plainMeasure.props.get("class"),
+    "zui-collapsible__measure",
+    "nested plain collapsible keeps its own measure class",
+  );
   assert.equal(registrations.length, 6, "one borderSize and one scrollPosition per content");
 });
 
@@ -728,7 +779,9 @@ test("invalid selection, item value, and heading level throw", async t => {
   const mod = await moduleFor(t, fixture);
   const harness = createHost();
   globalThis.__zgui = harness.host;
-  t.after(() => { delete globalThis.__zgui; });
+  t.after(() => {
+    delete globalThis.__zgui;
+  });
   assert.throws(() => mod.mountInvalid(harness.makeNode("root"), "selection"), TypeError);
   assert.throws(() => mod.mountInvalid(harness.makeNode("root"), "itemValue"), TypeError);
   assert.throws(() => mod.mountInvalid(harness.makeNode("root"), "level"), RangeError);

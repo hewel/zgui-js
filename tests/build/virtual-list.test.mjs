@@ -10,7 +10,9 @@ function countSubtree(node) {
 
 test("VirtualList mounts only the visible slice for 10,000 items and slides cleanly as scrollPosition changes", async t => {
   const h = createHost({ strictStyles: true });
-  const mod = await moduleFor(t, `
+  const mod = await moduleFor(
+    t,
+    `
     import { VirtualList, createSignal, renderApp } from "@hewel/zgui";
     import type { NativeNode } from "@hewel/zgui";
 
@@ -33,12 +35,16 @@ test("VirtualList mounts only the visible slice for 10,000 items and slides clea
         </VirtualList>
       ), root);
     }
-  `);
+  `,
+  );
   globalThis.__zgui = h.host;
   let dispose;
   t.after(() => {
-    try { dispose?.(); }
-    finally { delete globalThis.__zgui; }
+    try {
+      dispose?.();
+    } finally {
+      delete globalThis.__zgui;
+    }
   });
 
   const root = h.makeNode("root");
@@ -47,28 +53,47 @@ test("VirtualList mounts only the visible slice for 10,000 items and slides clea
   assert.ok(h.byTestId("row-0"), "row 0 should be mounted");
   assert.ok(h.byTestId("row-5"), "row 5 should be mounted");
   assert.equal(h.byTestId("row-500"), undefined, "far offscreen row 500 must NOT be mounted");
-  assert.ok(countSubtree(root) < 40, `expected <40 attached nodes for 10,000 items, got ${countSubtree(root)}`);
+  assert.ok(
+    countSubtree(root) < 40,
+    `expected <40 attached nodes for 10,000 items, got ${countSubtree(root)}`,
+  );
 
   // Simulate scrolling down to y = 4000 (row 100).
   const scroller = h.byTestId("vlist");
-  const observer = h.geometry.find(record => record.active && record.node === scroller && record.kind === "scrollPosition");
+  const observer = h.geometry.find(
+    record => record.active && record.node === scroller && record.kind === "scrollPosition",
+  );
   assert.ok(observer, "VirtualList must subscribe to scrollPosition geometry");
-  h.runTurn(() => observer.callback({
-    offset: { x: 0, y: 4000 },
-    contentSize: { width: 400, height: 400000 },
-    scrollport: { width: 400, height: 200 },
-  }));
+  h.runTurn(() =>
+    observer.callback({
+      offset: { x: 0, y: 4000 },
+      contentSize: { width: 400, height: 400000 },
+      scrollport: { width: 400, height: 200 },
+    }),
+  );
   assert.equal(h.byTestId("row-0"), undefined, "row 0 unmounts after scrolling to row 100");
   assert.ok(h.byTestId("row-100"), "row 100 mounts after scrolling to y=4000");
   assert.ok(h.byTestId("row-104"), "row 104 mounts in visible window");
-  assert.ok(countSubtree(root) < 40, `attached node count stays bounded after scrolling: ${countSubtree(root)}`);
+  assert.ok(
+    countSubtree(root) < 40,
+    `attached node count stays bounded after scrolling: ${countSubtree(root)}`,
+  );
 
   // Updating an item with the same key reactively updates its mounted text without losing scroll window.
-  h.runTurn(() => mod.setItems(prev => prev.map((it, idx) => idx === 100 ? { id: 100, label: "Updated 100" } : it)));
+  h.runTurn(() =>
+    mod.setItems(prev =>
+      prev.map((it, idx) => (idx === 100 ? { id: 100, label: "Updated 100" } : it)),
+    ),
+  );
   assert.equal(h.host.getTextContent(h.byTestId("row-100")), "Updated 100");
 
   // Shrinking the list while scrolled down clamps immediately into the valid slice.
-  h.runTurn(() => mod.setItems([{ id: 1, label: "Only 1" }, { id: 2, label: "Only 2" }]));
+  h.runTurn(() =>
+    mod.setItems([
+      { id: 1, label: "Only 1" },
+      { id: 2, label: "Only 2" },
+    ]),
+  );
   assert.ok(h.byTestId("row-0"), "row 0 should appear immediately when list shrinks");
   assert.equal(h.host.getTextContent(h.byTestId("row-0")), "Only 1");
 
@@ -79,7 +104,9 @@ test("VirtualList mounts only the visible slice for 10,000 items and slides clea
 
 test("VirtualGrid mounts only visible rows of columns for 2,000 tiles and reacts to scrollport resize", async t => {
   const h = createHost({ strictStyles: true });
-  const mod = await moduleFor(t, `
+  const mod = await moduleFor(
+    t,
+    `
     import { VirtualGrid, renderApp } from "@hewel/zgui";
     import type { NativeNode } from "@hewel/zgui";
 
@@ -101,12 +128,16 @@ test("VirtualGrid mounts only visible rows of columns for 2,000 tiles and reacts
         </VirtualGrid>
       ), root);
     }
-  `);
+  `,
+  );
   globalThis.__zgui = h.host;
   let dispose;
   t.after(() => {
-    try { dispose?.(); }
-    finally { delete globalThis.__zgui; }
+    try {
+      dispose?.();
+    } finally {
+      delete globalThis.__zgui;
+    }
   });
 
   const root = h.makeNode("root");
@@ -114,25 +145,37 @@ test("VirtualGrid mounts only visible rows of columns for 2,000 tiles and reacts
   // 320px width with 100px minWidth + 10px gap => 3 columns; ~6 visible rows => ~18 tiles out of 2,000.
   assert.ok(h.byTestId("tile-0"));
   assert.equal(h.byTestId("tile-1000"), undefined);
-  assert.ok(countSubtree(root) < 80, `expected <80 attached nodes for 2,000 tiles, got ${countSubtree(root)}`);
+  assert.ok(
+    countSubtree(root) < 80,
+    `expected <80 attached nodes for 2,000 tiles, got ${countSubtree(root)}`,
+  );
 
   // Scroll to row 100 (stride = 60px -> y = 6000 -> tile 300).
   const scroller = h.byTestId("vgrid");
-  const observer = h.geometry.find(record => record.active && record.node === scroller && record.kind === "scrollPosition");
+  const observer = h.geometry.find(
+    record => record.active && record.node === scroller && record.kind === "scrollPosition",
+  );
   assert.ok(observer);
-  h.runTurn(() => observer.callback({
-    offset: { x: 0, y: 6000 },
-    contentSize: { width: 320, height: 40000 },
-    scrollport: { width: 320, height: 150 },
-  }));
+  h.runTurn(() =>
+    observer.callback({
+      offset: { x: 0, y: 6000 },
+      contentSize: { width: 320, height: 40000 },
+      scrollport: { width: 320, height: 150 },
+    }),
+  );
   assert.equal(h.byTestId("tile-0"), undefined);
   assert.ok(h.byTestId("tile-300"), "tile 300 mounts when scrolled to row 100");
-  assert.ok(countSubtree(root) < 80, `attached node count stays bounded after scrolling: ${countSubtree(root)}`);
+  assert.ok(
+    countSubtree(root) < 80,
+    `attached node count stays bounded after scrolling: ${countSubtree(root)}`,
+  );
 });
 
 test("scrollTo/scrollBy/scrollIntoView respect reducedMotion and VirtualList/VirtualGrid controller.scrollToIndex jumps cleanly (#55)", async t => {
   const h = createHost({ strictStyles: true });
-  const mod = await moduleFor(t, `
+  const mod = await moduleFor(
+    t,
+    `
     import { VirtualGrid, VirtualList, createSignal, renderApp, scrollBy, scrollIntoView, scrollTo, setReducedMotion } from "@hewel/zgui";
     import type { NativeNode, VirtualListController } from "@hewel/zgui";
 
@@ -189,12 +232,16 @@ test("scrollTo/scrollBy/scrollIntoView respect reducedMotion and VirtualList/Vir
         </column>
       ), root);
     }
-  `);
+  `,
+  );
   globalThis.__zgui = h.host;
   let dispose;
   t.after(() => {
-    try { dispose?.(); }
-    finally { delete globalThis.__zgui; }
+    try {
+      dispose?.();
+    } finally {
+      delete globalThis.__zgui;
+    }
   });
 
   dispose = h.runTurn(() => mod.mount(h.makeNode("root")));
@@ -219,7 +266,11 @@ test("scrollTo/scrollBy/scrollIntoView respect reducedMotion and VirtualList/Vir
   h.runTurn(() => mod.setReducedMotion(null));
   h.emitReducedMotion(true);
   h.runTurn(() => mod.drivePlain("smooth"));
-  assert.equal(h.scrollCommands.at(-1).behavior, "instant", "host reducedMotion also downgrades smooth");
+  assert.equal(
+    h.scrollCommands.at(-1).behavior,
+    "instant",
+    "host reducedMotion also downgrades smooth",
+  );
   h.emitReducedMotion(false);
 
   // VirtualList.scrollToIndex(100, start): stride = 44 -> top = 4400, mounts row-100 immediately.
@@ -233,4 +284,3 @@ test("scrollTo/scrollBy/scrollIntoView respect reducedMotion and VirtualList/Vir
   assert.equal(h.scrollCommands.at(-1).top, 1200);
   assert.ok(h.byTestId("tile-80"), "tile-80 mounts immediately on VirtualGrid scrollToIndex");
 });
-

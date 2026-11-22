@@ -9,7 +9,7 @@ import { themes, themeTokens } from "./generated/themes.js";
 
 export type ColorScheme = "system" | "light" | "dark";
 export type ThemePreset = keyof typeof themes;
-export type ThemeToken = typeof themeTokens[number];
+export type ThemeToken = (typeof themeTokens)[number];
 export interface Theme {
   readonly preset?: ThemePreset;
   readonly tokens?: Partial<Record<ThemeToken, string>>;
@@ -56,24 +56,40 @@ function overrideDeclarations(theme: Theme): string {
   return out;
 }
 
-function rule(selector: string, scheme: "light" | "dark", theme: Theme, reducedMotion: boolean): string {
+function rule(
+  selector: string,
+  scheme: "light" | "dark",
+  theme: Theme,
+  reducedMotion: boolean,
+): string {
   const motion = reducedMotion
-    ? themeTokens.filter(name => name.startsWith("--zui-motion-duration-")).map(name => `${name}: 0ms;`).join(" ")
+    ? themeTokens
+        .filter(name => name.startsWith("--zui-motion-duration-"))
+        .map(name => `${name}: 0ms;`)
+        .join(" ")
     : "";
   const declarations = `color-scheme: ${scheme}; ${presetDeclarations(theme, scheme)} ${overrideDeclarations(theme)} ${motion}`;
   return `${selector} { ${declarations} }`;
 }
 
-function themeSheet(selector: string, light: Theme, dark: Theme, scheme: ColorScheme, reducedMotion: boolean): string {
+function themeSheet(
+  selector: string,
+  light: Theme,
+  dark: Theme,
+  scheme: ColorScheme,
+  reducedMotion: boolean,
+): string {
   if (scheme !== "system" && scheme !== "light" && scheme !== "dark") {
     throw new TypeError(`Unknown color scheme: ${String(scheme)}`);
   }
   let css = "";
-  if (scheme === "light" || scheme === "system") css += rule(selector, "light", light, reducedMotion);
+  if (scheme === "light" || scheme === "system")
+    css += rule(selector, "light", light, reducedMotion);
   if (scheme === "dark" || scheme === "system") {
     const darkRule = rule(selector, "dark", dark, reducedMotion);
-    css += (css === "" ? "" : "\n")
-      + (scheme === "system" ? `@media (prefers-color-scheme: dark) { ${darkRule} }` : darkRule);
+    css +=
+      (css === "" ? "" : "\n") +
+      (scheme === "system" ? `@media (prefers-color-scheme: dark) { ${darkRule} }` : darkRule);
   }
   return css;
 }
@@ -88,7 +104,10 @@ export function portalThemeScope(theme: ThemeContext, child: NativeNode): Native
   effect(
     () => [theme.light(), theme.dark(), theme.scheme(), getReducedMotion()] as const,
     ([light, dark, scheme, reducedMotion]) => {
-      bridge.installStylesheet(sheetName, `@layer zgui.tokens { ${themeSheet(`.${id}`, light, dark, scheme, reducedMotion)} }`);
+      bridge.installStylesheet(
+        sheetName,
+        `@layer zgui.tokens { ${themeSheet(`.${id}`, light, dark, scheme, reducedMotion)} }`,
+      );
     },
   );
   onCleanup(() => bridge.removeStylesheet(sheetName));
@@ -109,16 +128,23 @@ export function ThemeProvider(props: ThemeProviderProps = {}): NativeChild {
   const wrapper: NativeNode = createElement("box");
   const bridge = bridgeFor(wrapper);
   spread(wrapper, { __zguiClass: id, __zguiInvariantStyle: { display: "contents" } }, true);
-  const inheritedRootCss = createMemo(() =>
-    `@layer zgui.tokens { ${themeSheet(":root", context.light(), context.dark(), context.scheme(), getReducedMotion())} }`,
+  const inheritedRootCss = createMemo(
+    () =>
+      `@layer zgui.tokens { ${themeSheet(":root", context.light(), context.dark(), context.scheme(), getReducedMotion())} }`,
   );
   effect(
     () => [context.light(), context.dark(), context.scheme(), getReducedMotion()] as const,
     ([light, dark, scheme, reducedMotion]) => {
-      bridge.installStylesheet(sheetName, `@layer zgui.tokens { ${themeSheet(selector, light, dark, scheme, reducedMotion)} }`);
+      bridge.installStylesheet(
+        sheetName,
+        `@layer zgui.tokens { ${themeSheet(selector, light, dark, scheme, reducedMotion)} }`,
+      );
     },
   );
   onCleanup(() => bridge.removeStylesheet(sheetName));
-  slot(wrapper, provide(Internal, context, () => provide(ThemeCssContext, inheritedRootCss, props)));
+  slot(
+    wrapper,
+    provide(Internal, context, () => provide(ThemeCssContext, inheritedRootCss, props)),
+  );
   return wrapper;
 }

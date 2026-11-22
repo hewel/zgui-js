@@ -2,12 +2,7 @@ import assert from "node:assert/strict";
 import { before, after, test } from "node:test";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
-import {
-  buildExampleApp,
-  createTempWorkspace,
-  runPreview,
-  workspaceRoot,
-} from "./harness.mjs";
+import { buildExampleApp, createTempWorkspace, runPreview, workspaceRoot } from "./harness.mjs";
 
 let temp;
 let bundle;
@@ -15,7 +10,9 @@ before(async () => {
   bundle = await buildExampleApp("controls");
   temp = await createTempWorkspace("preview-controls-test-");
 });
-after(async () => { await temp?.cleanup(); });
+after(async () => {
+  await temp?.cleanup();
+});
 
 const byTestId = (tree, id) => tree.nodes.find(node => node.testId === id);
 

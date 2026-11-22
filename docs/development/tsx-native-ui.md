@@ -45,16 +45,16 @@ requirements below describe the remaining generic UI and upstream integrations.
 
 ### 1.1 Confirmed requirements and implementation defaults
 
-| Decision | Status | Implementation consequence |
-| --- | --- | --- |
-| zgui is the native UI foundation | User selected | Keep native rendering and platform integration in zgui. |
-| rquickjs embeds the JavaScript engine | User selected | Use its public Rust API and lifetime model. |
-| Application UI is authored in TypeScript and TSX | User selected | Compile ahead of runtime; ship JavaScript, CSS, assets, and metadata. |
-| Solid Universal supplies the first TSX frontend | Recommended default | Implement its custom renderer contract; keep the host interface replaceable. |
-| One owner UI thread executes JavaScript and mutates UI | Recommended default | Native asynchronous tasks send owned data back to that thread. |
-| One runtime and one context serve the initial application bundle | Recommended default | Establish correct ownership before adding multiple independent sessions. |
-| The first executable uses a regular desktop window | Recommended default | Validate rendering and scheduling before layer-shell integration. |
-| The first bundles are locally authored application code | Initial trust assumption | Define explicit host APIs; do not present in-process execution as a hostile-code sandbox. |
+| Decision                                                         | Status                   | Implementation consequence                                                                |
+| ---------------------------------------------------------------- | ------------------------ | ----------------------------------------------------------------------------------------- |
+| zgui is the native UI foundation                                 | User selected            | Keep native rendering and platform integration in zgui.                                   |
+| rquickjs embeds the JavaScript engine                            | User selected            | Use its public Rust API and lifetime model.                                               |
+| Application UI is authored in TypeScript and TSX                 | User selected            | Compile ahead of runtime; ship JavaScript, CSS, assets, and metadata.                     |
+| Solid Universal supplies the first TSX frontend                  | Recommended default      | Implement its custom renderer contract; keep the host interface replaceable.              |
+| One owner UI thread executes JavaScript and mutates UI           | Recommended default      | Native asynchronous tasks send owned data back to that thread.                            |
+| One runtime and one context serve the initial application bundle | Recommended default      | Establish correct ownership before adding multiple independent sessions.                  |
+| The first executable uses a regular desktop window               | Recommended default      | Validate rendering and scheduling before layer-shell integration.                         |
+| The first bundles are locally authored application code          | Initial trust assumption | Define explicit host APIs; do not present in-process execution as a hostile-code sandbox. |
 
 These defaults allow implementation to proceed without requiring a separate framework decision. Replacing Solid later should affect the frontend adapter and compiler, not the system-service layer or zgui platform integration.
 
@@ -92,13 +92,13 @@ The last two items are separate extensions. Resource limits and capability check
 
 ### 2.1 Audited source revisions
 
-| Component | Source revision | Observed version | Required treatment |
-| --- | --- | --- | --- |
-| zgui | `80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a` | Workspace 0.1.0; Rust 1.90 minimum | Pin the git revision initially. |
-| rquickjs | `73fcd6062ee615aeb2a4675cd32be67a56e93973` | Manifest 0.14.0; Rust 1.87 minimum | Pin this revision for the source behavior specified here. |
-| QuickJS-NG inside rquickjs | `6d46d07d04041b40f4f49eaa7fdebe44c314c699` | Engine submodule revision | Record the actual resolved engine identity in build metadata. |
-| Solid and babel-preset-solid | `99714d4e2875d2d7ef8023e82f4ef6aa63ff0752` | Both source manifests declare 1.9.19 | Verify registry availability before selecting exact npm versions. |
-| dom-expressions reference implementation | Tag `v0.40.14` | Universal renderer/compiler reference | Inspect the actual transitive version in the lockfile. |
+| Component                                | Source revision                            | Observed version                      | Required treatment                                                |
+| ---------------------------------------- | ------------------------------------------ | ------------------------------------- | ----------------------------------------------------------------- |
+| zgui                                     | `80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a` | Workspace 0.1.0; Rust 1.90 minimum    | Pin the git revision initially.                                   |
+| rquickjs                                 | `73fcd6062ee615aeb2a4675cd32be67a56e93973` | Manifest 0.14.0; Rust 1.87 minimum    | Pin this revision for the source behavior specified here.         |
+| QuickJS-NG inside rquickjs               | `6d46d07d04041b40f4f49eaa7fdebe44c314c699` | Engine submodule revision             | Record the actual resolved engine identity in build metadata.     |
+| Solid and babel-preset-solid             | `99714d4e2875d2d7ef8023e82f4ef6aa63ff0752` | Both source manifests declare 1.9.19  | Verify registry availability before selecting exact npm versions. |
+| dom-expressions reference implementation | Tag `v0.40.14`                             | Universal renderer/compiler reference | Inspect the actual transitive version in the lockfile.            |
 
 The Solid source manifests establish the examined API, not a validated registry installation. During Phase 0, verify the available package versions, install a compatible exact pair, and record the resolved compiler/runtime matrix. If 1.9.19 is unavailable, choose an available compatible pair and re-run the compiler and QuickJS smoke tests. Do not silently substitute versions.
 
@@ -108,11 +108,13 @@ The current rquickjs README identifies its backend as **QuickJS-NG**. The projec
 
 Proposed initial declarations:
 
-~~~toml
+```toml
 [dependencies]
 zgui = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a" }
-rquickjs = { git = "https://github.com/DelSkayn/rquickjs", rev = "73fcd6062ee615aeb2a4675cd32be67a56e93973", default-features = false, features = ["std"] }
-~~~
+rquickjs = { git = "https://github.com/DelSkayn/rquickjs", rev = "73fcd6062ee615aeb2a4675cd32be67a56e93973", default-features = false, features = [
+  "std",
+] }
+```
 
 Add rquickjs `macro` only when the implementation uses its procedural macros, and `loader` only when implementing a runtime module graph. Start without `full`, `full-async`, `parallel`, `dyn-load`, or `rust-alloc`.
 
@@ -128,10 +130,10 @@ The zgui vendor documentation describes the released Fontique as functionally us
 
 If adopted, add an application-root patch and validate dependency resolution:
 
-~~~toml
+```toml
 [patch.crates-io]
 fontique = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a" }
-~~~
+```
 
 Commit Cargo.lock, the JavaScript lockfile, the selected package-manager version, and the compiler configuration. Record whether the Fontique patch is active. [Z3]
 
@@ -141,7 +143,7 @@ Commit Cargo.lock, the JavaScript lockfile, the selected package-manager version
 
 The implemented runtime separates owner-thread JavaScript/native UI work from background resource reads:
 
-~~~mermaid
+```mermaid
 flowchart TB
     subgraph Owner["Owner UI thread"]
         Session["native-host::Session: preflight, mount, checkpoint, shutdown"]
@@ -168,7 +170,7 @@ flowchart TB
     end
     Work -->|Owned request, generation and cancellation flag| Workers["host-services::Executor: live text-asset reads"]
     Workers -->|Owned completion and owner wakeup| Work
-~~~
+```
 
 Dotted edges denote session ownership. All JavaScript entry and native-tree mutation stay on the owner UI thread. Background workers receive owned Rust data, never JavaScript values or native node handles; the owner checks request/generation liveness before settling a completion.
 
@@ -180,36 +182,36 @@ Implementation entry points: [Session](../../crates/native-host/src/session.rs),
 
 ### 3.2 Proposed workspace
 
-| Path | Responsibility |
-| --- | --- |
-| `crates/native-host/` | Executable, platform startup, window lifecycle, application loading |
-| `crates/js-runtime/` | rquickjs ownership, bootstrap, jobs, errors, interruption |
-| `crates/ui-bridge/` | Node handles, topology, properties, events, native scheduling |
-| `crates/host-services/` | Typed application/system services and completion messages |
-| `packages/ui/` | Proposed `@hewel/zgui` SDK, native JSX types, components |
-| `packages/ui/src/renderer/` | Solid Universal adapter and compiler helper exports |
-| `packages/build/` | Babel/Rolldown integration, package validation, managed development and watch mode |
-| `apps/examples/counter/` | First real TSX application |
-| `apps/examples/lists/` | Conditional content, list movement, cleanup |
-| `apps/examples/async/` | Timers, Promise work, service completion |
-| `apps/examples/editing/` | Native field, selection, composition, controlled values |
-| `tests/integration/` | Cross-layer tests for actual failure modes |
-| `docs/development/` | Architecture, API contracts, dependency matrix, measured results |
+| Path                        | Responsibility                                                                     |
+| --------------------------- | ---------------------------------------------------------------------------------- |
+| `crates/native-host/`       | Executable, platform startup, window lifecycle, application loading                |
+| `crates/js-runtime/`        | rquickjs ownership, bootstrap, jobs, errors, interruption                          |
+| `crates/ui-bridge/`         | Node handles, topology, properties, events, native scheduling                      |
+| `crates/host-services/`     | Typed application/system services and completion messages                          |
+| `packages/ui/`              | Proposed `@hewel/zgui` SDK, native JSX types, components                           |
+| `packages/ui/src/renderer/` | Solid Universal adapter and compiler helper exports                                |
+| `packages/build/`           | Babel/Rolldown integration, package validation, managed development and watch mode |
+| `apps/examples/counter/`    | First real TSX application                                                         |
+| `apps/examples/lists/`      | Conditional content, list movement, cleanup                                        |
+| `apps/examples/async/`      | Timers, Promise work, service completion                                           |
+| `apps/examples/editing/`    | Native field, selection, composition, controlled values                            |
+| `tests/integration/`        | Cross-layer tests for actual failure modes                                         |
+| `docs/development/`         | Architecture, API contracts, dependency matrix, measured results                   |
 
 Keep the initial workspace small. These boundaries may begin as modules rather than separate crates; split them when dependency ownership becomes useful.
 
 ### 3.3 Proposed runtime objects
 
-| Object | Owns |
-| --- | --- |
-| `UiSession` | Runtime, context, generation, lifecycle state, application entry/disposer roots |
-| `NodeRegistry` | Opaque handle validation and logical topology for JS-owned nodes |
-| `CallbackRegistry` | Persistent callback references, listener associations, callback IDs |
-| `RequestRegistry` | Pending host requests and persistent Promise resolvers |
-| `SchedulerState` | Entry guard, deadlines, pending jobs, timers, frame callback bookkeeping |
-| `HostInbox` | Owned completion messages from external Rust tasks |
-| `WindowBinding` | The zgui HostBinding implementation and its session association |
-| `BundleManager` | Validated package identity, loading, reload generation, last good build |
+| Object             | Owns                                                                            |
+| ------------------ | ------------------------------------------------------------------------------- |
+| `UiSession`        | Runtime, context, generation, lifecycle state, application entry/disposer roots |
+| `NodeRegistry`     | Opaque handle validation and logical topology for JS-owned nodes                |
+| `CallbackRegistry` | Persistent callback references, listener associations, callback IDs             |
+| `RequestRegistry`  | Pending host requests and persistent Promise resolvers                          |
+| `SchedulerState`   | Entry guard, deadlines, pending jobs, timers, frame callback bookkeeping        |
+| `HostInbox`        | Owned completion messages from external Rust tasks                              |
+| `WindowBinding`    | The zgui HostBinding implementation and its session association                 |
+| `BundleManager`    | Validated package identity, loading, reload generation, last good build         |
 
 Use short-lived interior-mutability borrows. A `UiSession` must not be implemented as one large mutable borrow held while JavaScript calls back into the host.
 
@@ -267,7 +269,7 @@ Node.js and package-manager dependencies exist on the development/build side. Th
 
 Proposed configuration:
 
-~~~js
+```js
 const babelOptions = {
   babelrc: false,
   configFile: false,
@@ -277,16 +279,13 @@ const babelOptions = {
       {
         generate: "universal",
         moduleName: "@hewel/zgui/renderer",
-        hydratable: false
-      }
+        hydratable: false,
+      },
     ],
-    [
-      "@babel/preset-typescript",
-      { onlyRemoveTypeImports: true }
-    ]
-  ]
+    ["@babel/preset-typescript", { onlyRemoveTypeImports: true }],
+  ],
 };
-~~~
+```
 
 Pass the source filename for each transformation so the TypeScript preset distinguishes TS and TSX. Preserve source-map input/output.
 
@@ -296,26 +295,26 @@ Solid must see the JSX structure. Do not run React's automatic JSX transform or 
 
 Rolldown settings, with a Babel `transform` hook supplied by the build package:
 
-~~~js
+```js
 const buildOptions = {
   input: "src/main.tsx",
   platform: "neutral",
   resolve: {
     conditionNames: ["browser", "production", "import", "default"],
-    mainFields: ["module", "main"]
+    mainFields: ["module", "main"],
   },
   transform: {
     target: "es2022",
-    define: { "process.env.NODE_ENV": '"production"' }
+    define: { "process.env.NODE_ENV": '"production"' },
   },
   output: {
     format: "esm",
     entryFileNames: "app.mjs",
     sourcemap: "hidden",
-    codeSplitting: false
-  }
+    codeSplitting: false,
+  },
 };
-~~~
+```
 
 The configuration object is an integration recipe, not a complete build script. The Babel plugin returns transformed JavaScript with composed source maps. The package builder validates the resulting module/chunk graph and publishes an immutable generation; Rolldown never writes partial files into the active `dist` directory. Development retains the same production Solid runtime conditions and uses a persistent watcher with source-keyed Babel/Solid transform caching. Rolldown 1.3.2's public watcher still rescans the graph; this is not full graph-incremental compilation. Type checking gates publication; full-session reload does not imply state-preserving HMR.
 
@@ -327,7 +326,7 @@ An ES2022 target controls syntax lowering; the actual bundle still needs executi
 
 ### 4.6 Native TypeScript configuration
 
-~~~json
+```json
 {
   "compilerOptions": {
     "target": "ES2022",
@@ -341,7 +340,7 @@ An ES2022 target controls syntax lowering; the actual bundle still needs executi
     "jsxImportSource": "@hewel/zgui"
   }
 }
-~~~
+```
 
 Publish a `@hewel/zgui/jsx-runtime` declaration entry containing the native JSX namespace. Expose only supported tags and properties; a catch-all intrinsic-element index signature would conceal unsupported APIs and spelling errors.
 
@@ -355,14 +354,14 @@ Acceptance requires native TSX to type-check while `document`, `HTMLElement`, br
 
 ### 4.7 Package artifacts
 
-| Artifact | Purpose |
-| --- | --- |
-| `manifest.json` | Package ID, schema/API versions, entry/resources, build identity |
-| `app.mjs` | Complete runtime JavaScript bundle |
-| `app.mjs.map` | Source mapping for diagnostics |
-| `app.css` | Styles loaded by the native host |
-| `assets/` | Packaged images, fonts, and other declared resources |
-| `build-info.json` | Compiler versions, lockfile identity, engine/host baseline |
+| Artifact          | Purpose                                                          |
+| ----------------- | ---------------------------------------------------------------- |
+| `manifest.json`   | Package ID, schema/API versions, entry/resources, build identity |
+| `app.mjs`         | Complete runtime JavaScript bundle                               |
+| `app.mjs.map`     | Source mapping for diagnostics                                   |
+| `app.css`         | Styles loaded by the native host                                 |
+| `assets/`         | Packaged images, fonts, and other declared resources             |
+| `build-info.json` | Compiler versions, lockfile identity, engine/host baseline       |
 
 The first runtime accepts no unresolved external imports, runtime CSS imports, arbitrary dynamic imports, or top-level await. Validate these properties structurally rather than relying only on substring searches.
 
@@ -370,7 +369,7 @@ Use a package generation directory or temporary output followed by atomic public
 
 Proposed minimal manifest:
 
-~~~json
+```json
 {
   "schemaVersion": 1,
   "id": "dev.example.counter",
@@ -380,7 +379,7 @@ Proposed minimal manifest:
   "assets": [],
   "buildId": "sha256:<generated-content-digest>"
 }
-~~~
+```
 
 The build tool fills the real digest. Resolve resources relative to the package root, validate canonical paths, and require the manifest hostApiVersion to agree with the module export. Reject incompatible versions before mounting. The manifest describes requested resources; the host remains responsible for its service policy.
 
@@ -390,7 +389,7 @@ The build tool fills the real digest. Resolve resources relative to the package 
 
 Proposed application entry:
 
-~~~tsx
+```tsx
 import { createSignal, renderApp, Button } from "@hewel/zgui";
 import type { NativeNode } from "@hewel/zgui";
 
@@ -400,9 +399,7 @@ function App() {
   return (
     <column class="counter">
       <text>Count: {count()}</text>
-      <Button onClick={() => setCount(value => value + 1)}>
-        Increment
-      </Button>
+      <Button onClick={() => setCount(value => value + 1)}>Increment</Button>
     </column>
   );
 }
@@ -412,7 +409,7 @@ export const hostApiVersion = 1;
 export function mount(root: NativeNode): () => void {
   return renderApp(() => <App />, root);
 }
-~~~
+```
 
 This is the target application API to implement. Button and renderApp are project SDK exports. zgui does not provide this TypeScript package.
 
@@ -434,17 +431,17 @@ The project mount wrapper must deliberately adapt this child type to Universal's
 
 Provide only implemented globals and SDK services:
 
-| API | Initial policy |
-| --- | --- |
-| `console` | Structured host logging with safe argument formatting |
-| Promise and standard language built-ins | Engine-provided |
-| `setTimeout`, `clearTimeout` | Host-managed timer registration |
-| `requestAnimationFrame`, cancellation | Native frame callback integration |
-| `queueMicrotask` | Preserve the engine-provided function in the audited Context::full baseline; verify its behavior |
-| `performance.now` | Optional monotonic host clock, if exposed |
-| `window`, `document`, `require`, `process` | Absent |
-| `fetch` | Absent initially; expose a typed service or implement a defined fetch surface later |
-| File/process/system APIs | Only explicitly registered host services |
+| API                                        | Initial policy                                                                                   |
+| ------------------------------------------ | ------------------------------------------------------------------------------------------------ |
+| `console`                                  | Structured host logging with safe argument formatting                                            |
+| Promise and standard language built-ins    | Engine-provided                                                                                  |
+| `setTimeout`, `clearTimeout`               | Host-managed timer registration                                                                  |
+| `requestAnimationFrame`, cancellation      | Native frame callback integration                                                                |
+| `queueMicrotask`                           | Preserve the engine-provided function in the audited Context::full baseline; verify its behavior |
+| `performance.now`                          | Optional monotonic host clock, if exposed                                                        |
+| `window`, `document`, `require`, `process` | Absent                                                                                           |
+| `fetch`                                    | Absent initially; expose a typed service or implement a defined fetch surface later              |
+| File/process/system APIs                   | Only explicitly registered host services                                                         |
 
 rquickjs provides an engine binding, not a browser or Node runtime. A dependency must be evaluated against this actual environment. Add a queueMicrotask shim only if a later engine baseline lacks the function; a Promise.then replacement changes thrown-error reporting and must not silently replace the native implementation. [Q1] [Q9]
 
@@ -484,7 +481,7 @@ Solid requires synchronous parent, first-child, and next-sibling lookup. The pub
 
 Maintain adapter-owned topology for JS-owned regions:
 
-~~~text
+```text
 NodeRecord:
   native_id
   session_generation
@@ -494,7 +491,7 @@ NodeRecord:
   ordered_children or sibling links
   lifecycle_state
   listener_ids
-~~~
+```
 
 Use efficient lookup appropriate to the expected list sizes. Updates to native structure and bridge topology must be coordinated in the same owner-thread operation.
 
@@ -504,18 +501,18 @@ Treat native editor-managed children as opaque. They do not belong in the JS log
 
 ### 6.3 Solid Universal mapping
 
-| Universal operation | Proposed adapter behavior | zgui primitive |
-| --- | --- | --- |
-| createElement(tag) | Validate a supported native tag, allocate an opaque node | create_element |
-| createTextNode(value) | Allocate text, including empty text | create_text |
-| replaceText(node, value) | Validate text kind and update content | set_text |
-| isTextNode(node) | Read bridge node metadata | No native query required |
-| setProperty(node, name, value, previous) | Use explicit property dispatch | Attribute/style/state/property/event APIs |
-| insertNode(parent, node, anchor) | Insert or move, update topology | insert |
-| removeNode(parent, node) | Detach under the lifecycle policy below | detach |
-| getParentNode(node) | Return logical parent | Bridge metadata |
-| getFirstChild(node) | Return first logical child | Bridge metadata |
-| getNextSibling(node) | Return next logical sibling | Bridge metadata |
+| Universal operation                      | Proposed adapter behavior                                | zgui primitive                            |
+| ---------------------------------------- | -------------------------------------------------------- | ----------------------------------------- |
+| createElement(tag)                       | Validate a supported native tag, allocate an opaque node | create_element                            |
+| createTextNode(value)                    | Allocate text, including empty text                      | create_text                               |
+| replaceText(node, value)                 | Validate text kind and update content                    | set_text                                  |
+| isTextNode(node)                         | Read bridge node metadata                                | No native query required                  |
+| setProperty(node, name, value, previous) | Use explicit property dispatch                           | Attribute/style/state/property/event APIs |
+| insertNode(parent, node, anchor)         | Insert or move, update topology                          | insert                                    |
+| removeNode(parent, node)                 | Detach under the lifecycle policy below                  | detach                                    |
+| getParentNode(node)                      | Return logical parent                                    | Bridge metadata                           |
+| getFirstChild(node)                      | Return first logical child                               | Bridge metadata                           |
+| getNextSibling(node)                     | Return next logical sibling                              | Bridge metadata                           |
 
 The renderer module must export the named helpers expected by the compiler: render, effect, memo, createComponent, createElement, createTextNode, insertNode, insert, spread, setProp, mergeProps, and use.
 
@@ -542,20 +539,20 @@ Retaining an invalid wrapper as a JS object is safe; using it for a native opera
 
 This restriction affects ordinary cached JSX patterns too. For example, the following is unsupported after the content has been hidden and its removal finalized:
 
-~~~tsx
+```tsx
 const cached = <text>Retained content</text>;
 return <Show when={visible()}>{cached}</Show>;
-~~~
+```
 
 The initial supported form constructs the branch lazily:
 
-~~~tsx
+```tsx
 return (
   <Show when={visible()}>
     <text>Fresh content</text>
   </Show>
 );
-~~~
+```
 
 Verify that form with the actual compiler/runtime matrix and a delayed hide/show test across native frames. Describe compatibility as the documented reactive APIs and TSX patterns, rather than arbitrary Solid application compatibility. [S11]
 
@@ -585,18 +582,18 @@ When a window/document is being destroyed, its normal document destruction compl
 
 Expose a deliberate subset of zgui's native vocabulary:
 
-| Native TSX tag | Purpose |
-| --- | --- |
-| box | General container |
-| row | Horizontal flex container |
-| column | Vertical flex container |
-| stack | Stacking container |
-| text | Inline text element containing primitive text nodes |
-| label | Label semantics/layout as supported by zgui |
-| scroll | Native scrolling container |
-| control | Base interactive control |
-| image | Native image element after asset-loading integration |
-| field / editor | Native editable controls after the editing gate |
+| Native TSX tag | Purpose                                              |
+| -------------- | ---------------------------------------------------- |
+| box            | General container                                    |
+| row            | Horizontal flex container                            |
+| column         | Vertical flex container                              |
+| stack          | Stacking container                                   |
+| text           | Inline text element containing primitive text nodes  |
+| label          | Label semantics/layout as supported by zgui          |
+| scroll         | Native scrolling container                           |
+| control        | Base interactive control                             |
+| image          | Native image element after asset-loading integration |
+| field / editor | Native editable controls after the editing gate      |
 
 Native names also include vector, canvas, surface, and spacer, but their specialized contracts should be added separately.
 
@@ -606,18 +603,18 @@ There is no built-in HTML button/input tag in the audited vocabulary. The SDK ma
 
 Use an explicit property table rather than converting every value into a string attribute.
 
-| Property category | Required behavior |
-| --- | --- |
-| class | Normalize and replace the native class list |
-| style | Apply supported CSS properties; remove keys that disappear |
-| CSS custom property | Use the native custom-property path |
-| Attribute | Set or remove through the typed attribute API |
-| Native state | Map to UiState/custom state |
-| Native property | Convert to PropValue; clear with PropValue::Unset |
-| Accessibility | Set/clear Semantics |
-| Event | Register, replace, or remove a listener and callback root |
-| ref | Handled by the frontend; expose a NativeNode |
-| children | Handled by reconciliation, not generic setProperty |
+| Property category   | Required behavior                                          |
+| ------------------- | ---------------------------------------------------------- |
+| class               | Normalize and replace the native class list                |
+| style               | Apply supported CSS properties; remove keys that disappear |
+| CSS custom property | Use the native custom-property path                        |
+| Attribute           | Set or remove through the typed attribute API              |
+| Native state        | Map to UiState/custom state                                |
+| Native property     | Convert to PropValue; clear with PropValue::Unset          |
+| Accessibility       | Set/clear Semantics                                        |
+| Event               | Register, replace, or remove a listener and callback root  |
+| ref                 | Handled by the frontend; expose a NativeNode               |
+| children            | Handled by reconciliation, not generic setProperty         |
 
 Use null/undefined clearing semantics consistently. A spread property removed on the next update must remove its previous native value.
 
@@ -727,11 +724,11 @@ Use one synchronous Runtime and one Context for the initial UiSession.
 
 Verified upstream entry points include:
 
-~~~rust
+```rust
 Runtime::new()
 Context::full(&runtime)
 context.with(|ctx| { /* JavaScript operations */ })
-~~~
+```
 
 Context::with acquires the runtime's internal access guard. In the default configuration the guard is based on RefCell; with parallel it uses a mutex.
 
@@ -800,11 +797,11 @@ Bytecode caching is also deferred. Module::load is unsafe and expects valid comp
 
 ### 10.1 Keep three scheduling systems distinct
 
-| System | Responsibility |
-| --- | --- |
-| Solid reactivity | Track dependencies and run affected computations |
-| JavaScript host loop | Deliver events/completions and execute Promise jobs fairly |
-| zgui frame loop | Input routing, native scheduling, style/layout, paint, reclamation |
+| System               | Responsibility                                                     |
+| -------------------- | ------------------------------------------------------------------ |
+| Solid reactivity     | Track dependencies and run affected computations                   |
+| JavaScript host loop | Deliver events/completions and execute Promise jobs fairly         |
+| zgui frame loop      | Input routing, native scheduling, style/layout, paint, reclamation |
 
 Solid batch groups reactive writes; it is not a native frame transaction and does not extend across an await.
 
@@ -842,10 +839,10 @@ Use the frame checkpoint as an additional opportunity to drain jobs and completi
 
 The preferred upstream host API is:
 
-~~~rust
+```rust
 Runtime::execute_pending_job()
     -> Result<bool, JobException>
-~~~
+```
 
 Interpret Ok(true) as a job executed, Ok(false) as no pending job, and Err(JobException(context)) as an exception associated with that context.
 
@@ -855,7 +852,7 @@ Do not base the production scheduler on Ctx::execute_pending_job: at the audited
 
 Proposed scheduler algorithm:
 
-~~~text
+```text
 For each eligible owner-thread turn:
   deliver a bounded number of host completions or scheduled callbacks
   exit every context entry before calling Runtime methods
@@ -865,7 +862,7 @@ For each eligible owner-thread turn:
   arrange native style/layout through normal dirty-state scheduling
   if work remains, request a real follow-up wake
   otherwise allow the host to sleep
-~~~
+```
 
 A limit checked between jobs cannot stop one infinite job. The interpreter interrupt handler must also enforce the current entry deadline. Count attempted jobs that return errors against the job budget, and clamp each job's interrupt deadline to the earlier of its normal entry deadline and the pump's remaining deadline. Repeated exceptions or freshly reset per-job budgets must not evade the turn bound.
 
@@ -934,7 +931,7 @@ Use this sequence:
 9. Release resolver roots on both success and failure; duplicate completions cannot settle the request again.
 10. Pump resulting Promise jobs and schedule affected UI work.
 
-~~~mermaid
+```mermaid
 sequenceDiagram
     participant JS as JavaScript
     participant Bridge as UI bridge
@@ -947,18 +944,18 @@ sequenceDiagram
     Loop->>Bridge: Safe owner-thread delivery
     Bridge->>JS: Resolve or reject
     Bridge->>JS: Execute pending jobs
-~~~
+```
 
 ### 11.2 Message contract
 
 A proposed completion message contains:
 
-~~~text
+```text
 session_id
 generation
 request_id
 result_or_error
-~~~
+```
 
 Do not move Ctx, Value, Function, Persistent, DomHandle, or NativeNode objects into worker tasks. Keep native UI and JS resources on the owner thread even if a Cargo feature makes selected runtime types Send.
 
@@ -982,7 +979,7 @@ Use Index only when positional identity is intended. [S6]
 
 ### 12.1 Session states
 
-~~~mermaid
+```mermaid
 stateDiagram-v2
     [*] --> Created
     Created --> Loading
@@ -995,7 +992,7 @@ stateDiagram-v2
     Faulted --> Stopping: Cleanup
     Stopping --> Disposed
     Disposed --> [*]
-~~~
+```
 
 A reload creates a new generation. It does not revive a disposed context or reassign old callback/node IDs to the new application.
 
@@ -1066,17 +1063,17 @@ If multiple windows later share one runtime, closing one window must not destroy
 
 Report these categories separately:
 
-| Category | Required context |
-| --- | --- |
-| Build/type error | Source file, diagnostic, package build ID |
-| Module/bootstrap error | Bundle ID, phase, source-mapped stack |
-| Synchronous callback exception | Event/timer/request source and callback ID |
-| Pending-job exception | Session generation and recovered JS exception |
-| Unhandled Promise rejection | Reason, handling status, source context where available |
-| Host validation error | Operation, expected contract, rejected handle/property |
-| Interruption | Entry kind, configured deadline, elapsed time |
-| Resource exhaustion | Allocator/limit configuration and affected session |
-| Native integration failure | Window/document identity and native operation |
+| Category                       | Required context                                        |
+| ------------------------------ | ------------------------------------------------------- |
+| Build/type error               | Source file, diagnostic, package build ID               |
+| Module/bootstrap error         | Bundle ID, phase, source-mapped stack                   |
+| Synchronous callback exception | Event/timer/request source and callback ID              |
+| Pending-job exception          | Session generation and recovered JS exception           |
+| Unhandled Promise rejection    | Reason, handling status, source context where available |
+| Host validation error          | Operation, expected contract, rejected handle/property  |
+| Interruption                   | Entry kind, configured deadline, elapsed time           |
+| Resource exhaustion            | Allocator/limit configuration and affected session      |
+| Native integration failure     | Window/document identity and native operation           |
 
 Capture exception details while their context is valid, then retain owned diagnostic data. Bound formatting work and handle exceptions thrown during formatting.
 
@@ -1133,12 +1130,12 @@ Use the native inspector/instrumentation where available, and retain source-map 
 
 The audited public path includes:
 
-~~~text
+```text
 zgui::App::into_handler
   Handler::into_runtime
   Runtime::windows_mut
   Window::install_binding
-~~~
+```
 
 BuildCx::dom_handle() and host_handle() return cloned handles to a custom Rust root view. A Window also exposes its concrete Dom, DomHandle, and HostHandle. Clone the host handle before releasing the temporary window borrow; it supplies set_value, schedule, and request_frame_callback through ViewHost. [Z16]
 
@@ -1161,12 +1158,12 @@ If public ergonomics are insufficient, add a small, explicit factory/accessor ex
 
 ### 14.3 Hook responsibilities
 
-| Hook | Bridge responsibility |
-| --- | --- |
-| before_dispatch | Normally allow native dispatch; optional narrow bookkeeping |
-| checkpoint | Bounded pending jobs/completions before style/layout |
-| before_paint | Read-only timing/diagnostic work; no general layout-changing rAF |
-| shutting_down | Begin explicit session teardown |
+| Hook            | Bridge responsibility                                            |
+| --------------- | ---------------------------------------------------------------- |
+| before_dispatch | Normally allow native dispatch; optional narrow bookkeeping      |
+| checkpoint      | Bounded pending jobs/completions before style/layout             |
+| before_paint    | Read-only timing/diagnostic work; no general layout-changing rAF |
+| shutting_down   | Begin explicit session teardown                                  |
 
 Do not intercept all native events simply to build a second event dispatcher. Normal listeners already provide target, phase, payload, and cancellation behavior.
 
@@ -1344,38 +1341,38 @@ These tests target integration risks. Reuse upstream tests for upstream behavior
 
 ### 17.1 Required cross-layer tests
 
-| ID | Scenario | Required result |
-| --- | --- | --- |
-| T01 | Build a TSX counter and execute it in the real rquickjs host | Initial text renders and a signal update changes native text. |
-| T02 | Inspect compiler output and dependency graph | Correct renderer helper imports, one Solid runtime, no server/web renderer. |
-| T03 | Mixed static/dynamic children and empty text positions | Ordering and anchors remain correct. |
-| T04 | Reorder retained items A,B,C to C,A,B | Existing native node identities move; no duplicates. |
-| T05 | Remove a branch, finish a frame, recreate from supported lazy JSX | New live nodes appear and old handles remain invalid. |
-| T06 | Hide a cached pre-created NativeNode and reuse it after a frame | Defined unsupported-operation failure until retention is implemented. |
-| T07 | Mount fails after creating never-linked nodes | Nodes and callback roots are reclaimed; no orphan growth. |
-| T08 | Remove properties from a spread and style object | Old attributes/styles/handlers are actually removed. |
-| T09 | Replace an event callback repeatedly | Only the current callback executes; old roots are released. |
-| T10 | Event callback mutates the same native tree | No bridge/runtime RefCell reentry failure. |
-| T11 | preventDefault during native input | The chosen real native default is suppressed. |
-| T12 | preventDefault after await | No false cancellation claim; defined expired-dispatch behavior. |
-| T13 | Pointer/Enter/Space activation and disabled Button | Exactly-once activation and correct disabled/focus behavior. |
-| T14 | Timer fires while application is idle | Callback executes without unrelated user input. |
-| T15 | Rust service completes while application is idle | Completion wakes the host and updates UI. |
-| T16 | Completion arrives after reload | Old generation is ignored without touching the new context. |
-| T17 | Two completion paths race for one request | Exactly one settlement and complete resolver cleanup. |
-| T18 | Promise job throws | Original exception is recovered and reported; later jobs remain usable. |
-| T19 | Infinite synchronous loop | Interrupt policy returns control and faults/cleans the session. |
-| T20 | Infinite or repeatedly throwing microtask chain | Time/count budget applies to successful and failed attempts. |
-| T21 | rAF changes a layout-affecting property | Change participates in the scheduled native layout pass. |
-| T22 | Occlusion and restoration with pending work | Defined housekeeping behavior, no busy loop, visual state catches up. |
-| T23 | Controlled field with caret, selection, and IME | Native editing state remains coherent. |
-| T24 | Dispose twice, then close the window | Idempotent cleanup; no persistent values survive runtime destruction. |
-| T25 | Repeated full reload with timers/listeners/requests | Resource counts stabilize after warmup and reclamation. |
-| T26 | Foreign-document or stale NativeNode | Validation error before unsafe/incorrect native mutation. |
-| T27 | App type-check uses browser globals or unsupported tags | Compile-time rejection through native SDK declarations. |
-| T28 | Stage a module that starts timers/services at top level | Preflight policy rejects or safely stages the operation. |
-| T29 | Engine memory exhaustion under selected allocator | The configured policy is actually effective and reported. |
-| T30 | New/recreated native window after initial startup | Correct binding and document-scoped identities are installed. |
+| ID  | Scenario                                                          | Required result                                                             |
+| --- | ----------------------------------------------------------------- | --------------------------------------------------------------------------- |
+| T01 | Build a TSX counter and execute it in the real rquickjs host      | Initial text renders and a signal update changes native text.               |
+| T02 | Inspect compiler output and dependency graph                      | Correct renderer helper imports, one Solid runtime, no server/web renderer. |
+| T03 | Mixed static/dynamic children and empty text positions            | Ordering and anchors remain correct.                                        |
+| T04 | Reorder retained items A,B,C to C,A,B                             | Existing native node identities move; no duplicates.                        |
+| T05 | Remove a branch, finish a frame, recreate from supported lazy JSX | New live nodes appear and old handles remain invalid.                       |
+| T06 | Hide a cached pre-created NativeNode and reuse it after a frame   | Defined unsupported-operation failure until retention is implemented.       |
+| T07 | Mount fails after creating never-linked nodes                     | Nodes and callback roots are reclaimed; no orphan growth.                   |
+| T08 | Remove properties from a spread and style object                  | Old attributes/styles/handlers are actually removed.                        |
+| T09 | Replace an event callback repeatedly                              | Only the current callback executes; old roots are released.                 |
+| T10 | Event callback mutates the same native tree                       | No bridge/runtime RefCell reentry failure.                                  |
+| T11 | preventDefault during native input                                | The chosen real native default is suppressed.                               |
+| T12 | preventDefault after await                                        | No false cancellation claim; defined expired-dispatch behavior.             |
+| T13 | Pointer/Enter/Space activation and disabled Button                | Exactly-once activation and correct disabled/focus behavior.                |
+| T14 | Timer fires while application is idle                             | Callback executes without unrelated user input.                             |
+| T15 | Rust service completes while application is idle                  | Completion wakes the host and updates UI.                                   |
+| T16 | Completion arrives after reload                                   | Old generation is ignored without touching the new context.                 |
+| T17 | Two completion paths race for one request                         | Exactly one settlement and complete resolver cleanup.                       |
+| T18 | Promise job throws                                                | Original exception is recovered and reported; later jobs remain usable.     |
+| T19 | Infinite synchronous loop                                         | Interrupt policy returns control and faults/cleans the session.             |
+| T20 | Infinite or repeatedly throwing microtask chain                   | Time/count budget applies to successful and failed attempts.                |
+| T21 | rAF changes a layout-affecting property                           | Change participates in the scheduled native layout pass.                    |
+| T22 | Occlusion and restoration with pending work                       | Defined housekeeping behavior, no busy loop, visual state catches up.       |
+| T23 | Controlled field with caret, selection, and IME                   | Native editing state remains coherent.                                      |
+| T24 | Dispose twice, then close the window                              | Idempotent cleanup; no persistent values survive runtime destruction.       |
+| T25 | Repeated full reload with timers/listeners/requests               | Resource counts stabilize after warmup and reclamation.                     |
+| T26 | Foreign-document or stale NativeNode                              | Validation error before unsafe/incorrect native mutation.                   |
+| T27 | App type-check uses browser globals or unsupported tags           | Compile-time rejection through native SDK declarations.                     |
+| T28 | Stage a module that starts timers/services at top level           | Preflight policy rejects or safely stages the operation.                    |
+| T29 | Engine memory exhaustion under selected allocator                 | The configured policy is actually effective and reported.                   |
+| T30 | New/recreated native window after initial startup                 | Correct binding and document-scoped identities are installed.               |
 
 Tests T05 and T06 must cross an actual native frame boundary. Immediate remove/reinsert tests cannot reveal end-of-frame reclamation mistakes.
 
@@ -1408,16 +1405,16 @@ A release is complete when:
 
 Implement these scripts or equivalent documented commands as part of the workspace:
 
-| Command | Intended behavior |
-| --- | --- |
-| pnpm typecheck | Type-check SDK declarations and examples with their appropriate configurations |
-| pnpm build --app counter | Produce a validated counter package |
-| pnpm dev --app counter | Prepare the host, watch atomic application builds, open a native window, and manage shutdown |
-| pnpm preview --app counter --watch | Prepare the host, watch builds, and rerun offscreen scenarios without a desktop host |
-| cargo test -p ui-bridge | Run bridge tests that do not need a live compositor |
-| cargo test -p js-runtime | Run real-engine lifecycle/job tests |
-| cargo run -p native-host -- --bundle apps/examples/counter/dist | Load the built package |
-| env ZGUI_PLATFORM=wayland cargo run -p native-host -- --bundle apps/examples/counter/dist | Exercise direct Wayland explicitly |
+| Command                                                                                   | Intended behavior                                                                            |
+| ----------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| pnpm typecheck                                                                            | Type-check SDK declarations and examples with their appropriate configurations               |
+| pnpm build --app counter                                                                  | Produce a validated counter package                                                          |
+| pnpm dev --app counter                                                                    | Prepare the host, watch atomic application builds, open a native window, and manage shutdown |
+| pnpm preview --app counter --watch                                                        | Prepare the host, watch builds, and rerun offscreen scenarios without a desktop host         |
+| cargo test -p ui-bridge                                                                   | Run bridge tests that do not need a live compositor                                          |
+| cargo test -p js-runtime                                                                  | Run real-engine lifecycle/job tests                                                          |
+| cargo run -p native-host -- --bundle apps/examples/counter/dist                           | Load the built package                                                                       |
+| env ZGUI_PLATFORM=wayland cargo run -p native-host -- --bundle apps/examples/counter/dist | Exercise direct Wayland explicitly                                                           |
 
 These are proposed project command names, not commands already supplied by the upstream repositories.
 
@@ -1495,7 +1492,7 @@ A source audit is not a successful build, and a successful build is not a valida
 
 ### 19.4 Handoff prompt
 
-~~~text
+```text
 Implement the attached zgui, rquickjs, and TSX Development Specification.
 
 Use zgui as the native retained UI engine and rquickjs as the JavaScript
@@ -1525,7 +1522,7 @@ verify the actual revision and make the smallest documented adaptation.
 Deliver working code, updated development instructions, and a phase-by-phase
 verification report. Do not claim later phases are complete until their
 acceptance criteria are met.
-~~~
+```
 
 ## 20. Extension decisions
 
@@ -1657,7 +1654,6 @@ The links below identify the upstream contracts used by this specification. Vers
 [Z23]: https://github.com/zortax/zgui/blob/80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a/crates/zgui-dom/src/arena/recycle/subtree.rs
 [Z24]: https://github.com/zortax/zgui/blob/80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a/crates/zgui-view-dom/src/dom/mod.rs
 [Z25]: https://github.com/zortax/zgui/blob/80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a/crates/zgui-platform/src/cx.rs
-
 [Q1]: https://github.com/DelSkayn/rquickjs/blob/73fcd6062ee615aeb2a4675cd32be67a56e93973/README.md
 [Q2]: https://github.com/DelSkayn/rquickjs/blob/73fcd6062ee615aeb2a4675cd32be67a56e93973/core/src/context/base.rs
 [Q3]: https://github.com/DelSkayn/rquickjs/blob/73fcd6062ee615aeb2a4675cd32be67a56e93973/core/src/persistent.rs
@@ -1669,7 +1665,6 @@ The links below identify the upstream contracts used by this specification. Vers
 [Q9]: https://github.com/DelSkayn/rquickjs/blob/73fcd6062ee615aeb2a4675cd32be67a56e93973/core/src/context/ctx.rs
 [Q10]: https://docs.rs/rquickjs/0.14.0/rquickjs/
 [Q11]: https://github.com/DelSkayn/rquickjs/blob/73fcd6062ee615aeb2a4675cd32be67a56e93973/Cargo.toml
-
 [S1]: https://github.com/solidjs/solid/blob/99714d4e2875d2d7ef8023e82f4ef6aa63ff0752/packages/solid/package.json
 [S2]: https://github.com/solidjs/solid/blob/99714d4e2875d2d7ef8023e82f4ef6aa63ff0752/packages/solid/universal/README.md
 [S3]: https://github.com/solidjs/solid/blob/99714d4e2875d2d7ef8023e82f4ef6aa63ff0752/packages/solid/src/render/component.ts
@@ -1681,11 +1676,5 @@ The links below identify the upstream contracts used by this specification. Vers
 [S9]: https://github.com/ryansolid/dom-expressions/blob/v0.40.14/packages/dom-expressions/src/universal.d.ts
 [S10]: https://github.com/solidjs/solid/blob/99714d4e2875d2d7ef8023e82f4ef6aa63ff0752/packages/babel-preset-solid/package.json
 [S11]: https://github.com/ryansolid/dom-expressions/blob/v0.40.14/packages/babel-plugin-jsx-dom-expressions/src/shared/component.js
-
 [B1]: https://babeljs.io/docs/babel-preset-typescript
 [B2]: https://rolldown.rs/guide/getting-started
-
-
-
-
-

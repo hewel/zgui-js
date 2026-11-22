@@ -24,7 +24,9 @@ export type PopoverTitleProps = NativeElementProps;
 export type PopoverDescriptionProps = NativeElementProps;
 export type PopoverContentProps = AnchoredContentProps;
 
-export function Popover(props: PopoverProps = {}): NativeChild { return OverlayRoot(props); }
+export function Popover(props: PopoverProps = {}): NativeChild {
+  return OverlayRoot(props);
+}
 
 export function PopoverTrigger(props: PopoverTriggerProps = {}): NativeNode {
   return overlayTrigger("dialog", props);
@@ -47,8 +49,19 @@ export function PopoverDescription(props: PopoverDescriptionProps = {}): NativeN
 export function PopoverContent(props: PopoverContentProps = {}): NativeChild {
   useStylesheet(sheet);
   const context = useContext(OverlayContext);
-  return anchoredSurface(context, mergeProps({
-    get ariaLabelledBy() { return context?.title.node() ?? null; },
-    get ariaDescribedBy() { return context?.description.node() ?? null; },
-  }, props), { class: `${sheet.className} zui-popover`, role: "dialog", trap: true });
+  return anchoredSurface(
+    context,
+    mergeProps(
+      {
+        get ariaLabelledBy() {
+          return context?.title.node() ?? null;
+        },
+        get ariaDescribedBy() {
+          return context?.description.node() ?? null;
+        },
+      },
+      props,
+    ),
+    { class: `${sheet.className} zui-popover`, role: "dialog", trap: true },
+  );
 }

@@ -12,48 +12,81 @@
     "alpha": { "const": "include" },
     "captureSet": { "$ref": "#/$defs/captureSet" },
     "masks": {
-      "type": "array", "maxItems": 256, "uniqueItems": true,
+      "type": "array",
+      "maxItems": 256,
+      "uniqueItems": true,
       "description": "Physical-pixel rectangles. Runtime rejects repeated capture/surface/rectangle tuples regardless of reason, unknown or excluded capture targets, out-of-image geometry, and a union covering the whole image, even when both images are identical. Overlapping masks count once. Masked samples remain in raw-difference metrics and the diff PNG, but not in scoring or its denominator.",
       "items": { "$ref": "#/$defs/mask" }
     },
     "thresholds": { "$ref": "#/$defs/thresholds" },
     "reviewReason": { "$ref": "#/$defs/reason" },
     "limits": {
-      "type": "object", "additionalProperties": false,
+      "type": "object",
+      "additionalProperties": false,
       "required": ["maxPixels", "maxOutputBytes"],
       "properties": {
         "maxPixels": { "type": "integer", "minimum": 1, "maximum": 268435456, "default": 67108864 },
-        "maxOutputBytes": { "type": "integer", "minimum": 1, "maximum": 1073741824, "default": 268435456 }
+        "maxOutputBytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1073741824,
+          "default": 268435456
+        }
       }
     }
   },
-  "allOf": [{
-    "if": { "properties": { "mode": { "const": "exact" } } },
-    "then": { "not": { "anyOf": [{ "required": ["thresholds"] }, { "required": ["reviewReason"] }] } },
-    "else": { "required": ["thresholds", "reviewReason"] }
-  }],
+  "allOf": [
+    {
+      "if": { "properties": { "mode": { "const": "exact" } } },
+      "then": {
+        "not": { "anyOf": [{ "required": ["thresholds"] }, { "required": ["reviewReason"] }] }
+      },
+      "else": { "required": ["thresholds", "reviewReason"] }
+    }
+  ],
   "$defs": {
-    "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-z0-9][a-z0-9._-]*$" },
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[a-z0-9][a-z0-9._-]*$"
+    },
     "reason": { "type": "string", "minLength": 1, "maxLength": 1024, "pattern": "\\S" },
     "key": {
-      "type": "object", "additionalProperties": false, "required": ["captureId", "surface"],
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["captureId", "surface"],
       "properties": { "captureId": { "$ref": "#/$defs/id" }, "surface": { "$ref": "#/$defs/id" } }
     },
     "captureSet": {
-      "oneOf": [{
-        "type": "object", "additionalProperties": false, "required": ["mode"],
-        "properties": { "mode": { "const": "all" } }
-      }, {
-        "type": "object", "additionalProperties": false, "required": ["mode", "captures", "reason"],
-        "properties": {
-          "mode": { "const": "subset" },
-          "captures": { "type": "array", "minItems": 1, "maxItems": 4096, "uniqueItems": true, "items": { "$ref": "#/$defs/key" } },
-          "reason": { "$ref": "#/$defs/reason" }
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["mode"],
+          "properties": { "mode": { "const": "all" } }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["mode", "captures", "reason"],
+          "properties": {
+            "mode": { "const": "subset" },
+            "captures": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 4096,
+              "uniqueItems": true,
+              "items": { "$ref": "#/$defs/key" }
+            },
+            "reason": { "$ref": "#/$defs/reason" }
+          }
         }
-      }]
+      ]
     },
     "thresholds": {
-      "type": "object", "additionalProperties": false,
+      "type": "object",
+      "additionalProperties": false,
       "required": ["channel", "maxChangedPixels", "maxChangedRatio"],
       "description": "A scored pixel changes only if any absolute RGBA channel delta is strictly greater than channel. Both changedPixels <= maxChangedPixels AND changedPixels/scoredPixels <= maxChangedRatio must pass. Raw equality and raw differences are reported independently, so a tolerant pass is not reported as exact equality.",
       "properties": {
@@ -63,13 +96,17 @@
       }
     },
     "mask": {
-      "type": "object", "additionalProperties": false,
+      "type": "object",
+      "additionalProperties": false,
       "required": ["captureId", "surface", "rect", "reason"],
       "properties": {
-        "captureId": { "$ref": "#/$defs/id" }, "surface": { "$ref": "#/$defs/id" },
+        "captureId": { "$ref": "#/$defs/id" },
+        "surface": { "$ref": "#/$defs/id" },
         "reason": { "$ref": "#/$defs/reason" },
         "rect": {
-          "type": "object", "additionalProperties": false, "required": ["x", "y", "width", "height"],
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["x", "y", "width", "height"],
           "description": "Half-open [x,x+width) by [y,y+height); runtime checks sums and capture bounds before scoring.",
           "properties": {
             "x": { "type": "integer", "minimum": 0, "maximum": 16383 },

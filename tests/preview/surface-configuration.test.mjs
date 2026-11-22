@@ -12,29 +12,65 @@ before(async () => {
   await mkdir(path.join(workspaceRoot, "target"), { recursive: true });
   project = await mkdtemp(path.join(workspaceRoot, "target/preview-configuration-"));
   await mkdir(path.join(project, "src"));
-  await copyFile(fileURLToPath(new URL("./fixtures/surface-configuration.tsx", import.meta.url)), path.join(project, "src/main.tsx"));
-  await writeFile(path.join(project, "tsconfig.json"), JSON.stringify({
-    extends: path.join(workspaceRoot, "packages/ui/tsconfig.native.json"), include: ["src/**/*.tsx"],
-  }));
+  await copyFile(
+    fileURLToPath(new URL("./fixtures/surface-configuration.tsx", import.meta.url)),
+    path.join(project, "src/main.tsx"),
+  );
+  await writeFile(
+    path.join(project, "tsconfig.json"),
+    JSON.stringify({
+      extends: path.join(workspaceRoot, "packages/ui/tsconfig.native.json"),
+      include: ["src/**/*.tsx"],
+    }),
+  );
   await buildApplication("surface-configuration", { appDirectory: project });
 });
-after(async () => { if (project) await rm(project, { recursive: true, force: true }); });
+after(async () => {
+  if (project) await rm(project, { recursive: true, force: true });
+});
 
 const reconfigure = [
   { op: "capture", captureId: "initial" },
   { op: "surface.resize", surface: "main", width: 400, height: 300 },
   { op: "surface.scale", surface: "main", scale: 2 },
 ];
-const click = { op: "pointer.click", target: { surface: "main", testId: "trip" }, button: "primary" };
+const click = {
+  op: "pointer.click",
+  target: { surface: "main", testId: "trip" },
+  button: "primary",
+};
 async function run(name, steps) {
-  const scenario = path.join(project, `${name}.json`), out = path.join(project, `${name}-run`);
-  await writeFile(scenario, JSON.stringify({ schemaVersion: 1, id: name, requiredCapabilities: [],
-    steps: steps.map((step, index) => ({ id: `action-${index}`, ...step })),
-  }));
-  const process = spawnSync(path.join(workspaceRoot, "target/debug/native-host"), ["preview", "run",
-    "--bundle", path.join(project, "dist"), "--profile", "preview/profiles/default.json", "--scale", "1",
-    "--fixture", "preview/fixtures/empty.json", "--scenario", scenario, "--out", out,
-  ], { cwd: workspaceRoot, encoding: "utf8", timeout: 25000 });
+  const scenario = path.join(project, `${name}.json`),
+    out = path.join(project, `${name}-run`);
+  await writeFile(
+    scenario,
+    JSON.stringify({
+      schemaVersion: 1,
+      id: name,
+      requiredCapabilities: [],
+      steps: steps.map((step, index) => ({ id: `action-${index}`, ...step })),
+    }),
+  );
+  const process = spawnSync(
+    path.join(workspaceRoot, "target/debug/native-host"),
+    [
+      "preview",
+      "run",
+      "--bundle",
+      path.join(project, "dist"),
+      "--profile",
+      "preview/profiles/default.json",
+      "--scale",
+      "1",
+      "--fixture",
+      "preview/fixtures/empty.json",
+      "--scenario",
+      scenario,
+      "--out",
+      out,
+    ],
+    { cwd: workspaceRoot, encoding: "utf8", timeout: 25000 },
+  );
   assert.ifError(process.error);
   const result = JSON.parse(process.stdout);
   assert.equal(process.status, result.exitCode);
@@ -42,7 +78,10 @@ async function run(name, steps) {
 }
 
 test("same pixel extent cannot certify a preceding logical configuration", async () => {
-  const { result, out } = await run("capture", [...reconfigure, { op: "capture", captureId: "changed" }]);
+  const { result, out } = await run("capture", [
+    ...reconfigure,
+    { op: "capture", captureId: "changed" },
+  ]);
   if (result.exitCode === 5) {
     assert.equal(result.firstError.code, "E_CAPTURE_NOT_READY");
     assert.equal(result.captureCount, 1);
@@ -65,17 +104,27 @@ test("a final action cannot disappear behind deferred reconfiguration", async ()
     assert.equal(result.firstError.code, "E_CAPTURE_NOT_READY");
   } else {
     assert.equal(result.exitCode, 3, JSON.stringify(result));
-    assert.match(await readFile(path.join(out, "diagnostics.jsonl"), "utf8"), /configuration-action-dispatched/);
+    assert.match(
+      await readFile(path.join(out, "diagnostics.jsonl"), "utf8"),
+      /configuration-action-dispatched/,
+    );
   }
   assert.equal(result.firstError.stage, "pointer.click");
 });
 
 test("explicit advance validates the new configuration and dispatches input", async () => {
-  const { result, out } = await run("advanced", [...reconfigure,
-    { op: "clock.advance", byMs: 20 }, { op: "capture", captureId: "changed" }, click]);
+  const { result, out } = await run("advanced", [
+    ...reconfigure,
+    { op: "clock.advance", byMs: 20 },
+    { op: "capture", captureId: "changed" },
+    click,
+  ]);
   assert.equal(result.exitCode, 3, JSON.stringify(result));
   assert.equal(result.firstError.stage, "pointer.click");
-  assert.match(await readFile(path.join(out, "diagnostics.jsonl"), "utf8"), /configuration-action-dispatched/);
+  assert.match(
+    await readFile(path.join(out, "diagnostics.jsonl"), "utf8"),
+    /configuration-action-dispatched/,
+  );
   const frame = JSON.parse(await readFile(path.join(out, "captures/changed.frame.json"), "utf8"));
   assert.equal(frame.scale, 2);
   assert.equal(frame.surfaceConfiguration, 2);

@@ -2,66 +2,71 @@
 export type SearchParams = Readonly<Record<string, string>>;
 
 /** Input map accepted when building or updating query parameters. */
-export type SearchParamsInput = Readonly<Record<string, string | number | boolean | null | undefined>>;
+export type SearchParamsInput = Readonly<
+  Record<string, string | number | boolean | null | undefined>
+>;
 
 type TrimLeadingSlash<S extends string> = S extends `/${infer Rest}` ? TrimLeadingSlash<Rest> : S;
-type TrimTrailingSlash<S extends string> = S extends "/" ? "/" : S extends `${infer Head}/` ? TrimTrailingSlash<Head> : S;
+type TrimTrailingSlash<S extends string> = S extends "/"
+  ? "/"
+  : S extends `${infer Head}/`
+    ? TrimTrailingSlash<Head>
+    : S;
 
 /** Normalize a route pattern string at the type level. */
 export type NormalizePath<P extends string> =
-  TrimLeadingSlash<P> extends ""
-    ? "/"
-    : TrimTrailingSlash<`/${TrimLeadingSlash<P>}`>;
+  TrimLeadingSlash<P> extends "" ? "/" : TrimTrailingSlash<`/${TrimLeadingSlash<P>}`>;
 
 /** Join a parent route prefix and a child route segment at the type level. */
-export type JoinPaths<Parent extends string, Child extends string> =
-  Child extends ""
-    ? Parent extends "" ? "/" : NormalizePath<Parent>
-    : Child extends `/${string}`
+export type JoinPaths<Parent extends string, Child extends string> = Child extends ""
+  ? Parent extends ""
+    ? "/"
+    : NormalizePath<Parent>
+  : Child extends `/${string}`
+    ? NormalizePath<Child>
+    : Parent extends "" | "/"
       ? NormalizePath<Child>
-      : Parent extends "" | "/"
-        ? NormalizePath<Child>
-        : NormalizePath<`${TrimTrailingSlash<Parent>}/${TrimLeadingSlash<Child>}`>;
+      : NormalizePath<`${TrimTrailingSlash<Parent>}/${TrimLeadingSlash<Child>}`>;
 
-type SegmentParam<Segment extends string> =
-  Segment extends `:${infer Name}`
-    ? { readonly [K in Name]: string }
-    : Segment extends "*"
-      ? { readonly "*": string }
-      : Segment extends `*${infer Name}`
-        ? { readonly [K in Name]: string }
-        : {};
+type SegmentParam<Segment extends string> = Segment extends `:${infer Name}`
+  ? { readonly [K in Name]: string }
+  : Segment extends "*"
+    ? { readonly "*": string }
+    : Segment extends `*${infer Name}`
+      ? { readonly [K in Name]: string }
+      : {};
 
 type MergeIntersection<T> = { readonly [K in keyof T]: T[K] };
 
-type ExtractPathParamsInner<P extends string> =
-  P extends `${infer Head}/${infer Tail}`
-    ? SegmentParam<Head> & ExtractPathParamsInner<Tail>
-    : SegmentParam<P>;
+type ExtractPathParamsInner<P extends string> = P extends `${infer Head}/${infer Tail}`
+  ? SegmentParam<Head> & ExtractPathParamsInner<Tail>
+  : SegmentParam<P>;
 
 /** Extract typed `:param` and `*` splat fields from a route pattern. */
-export type ExtractRouteParams<P extends string> =
-  keyof ExtractPathParamsInner<TrimLeadingSlash<P>> extends never
-    ? Readonly<Record<string, never>>
-    : MergeIntersection<ExtractPathParamsInner<TrimLeadingSlash<P>>>;
+export type ExtractRouteParams<P extends string> = keyof ExtractPathParamsInner<
+  TrimLeadingSlash<P>
+> extends never
+  ? Readonly<Record<string, never>>
+  : MergeIntersection<ExtractPathParamsInner<TrimLeadingSlash<P>>>;
 
 /** Whether a route pattern requires parameter values to materialize a concrete path. */
-export type HasRouteParams<P extends string> =
-  keyof ExtractPathParamsInner<TrimLeadingSlash<P>> extends never ? false : true;
+export type HasRouteParams<P extends string> = keyof ExtractPathParamsInner<
+  TrimLeadingSlash<P>
+> extends never
+  ? false
+  : true;
 
-type ConcreteSegment<Segment extends string> =
-  Segment extends `:${string}` | `*${string}` ? string : Segment;
+type ConcreteSegment<Segment extends string> = Segment extends `:${string}` | `*${string}`
+  ? string
+  : Segment;
 
-type ConcreteInner<P extends string> =
-  P extends `${infer Head}/${infer Tail}`
-    ? `${ConcreteSegment<Head>}/${ConcreteInner<Tail>}`
-    : ConcreteSegment<P>;
+type ConcreteInner<P extends string> = P extends `${infer Head}/${infer Tail}`
+  ? `${ConcreteSegment<Head>}/${ConcreteInner<Tail>}`
+  : ConcreteSegment<P>;
 
 /** Concrete pathname shape matching a route pattern (e.g. `"/docs/:id"` -> `` `/docs/${string}` ``). */
 export type ConcretePath<P extends string> =
-  NormalizePath<P> extends "/"
-    ? "/"
-    : `/${ConcreteInner<TrimLeadingSlash<NormalizePath<P>>>}`;
+  NormalizePath<P> extends "/" ? "/" : `/${ConcreteInner<TrimLeadingSlash<NormalizePath<P>>>}`;
 
 /** Normalize a runtime pathname: always starts with `/`, collapses slashes, trims trailing `/`. */
 export function normalizePath(raw: string): string {
@@ -82,7 +87,11 @@ export function joinPaths(parent: string, child: string): string {
 }
 
 /** Split a path string into normalized `pathname` and canonical `search` (`""` or `"?a=1"`). */
-export function splitPathAndSearch(raw: string): { pathname: string; search: string; searchParams: SearchParams } {
+export function splitPathAndSearch(raw: string): {
+  pathname: string;
+  search: string;
+  searchParams: SearchParams;
+} {
   const noHash = raw.split("#", 1)[0] ?? "";
   const queryIdx = noHash.indexOf("?");
   const rawPath = queryIdx >= 0 ? noHash.slice(0, queryIdx) : noHash;
@@ -144,7 +153,10 @@ export function normalizeSearchInput(params?: SearchParamsInput | null): SearchP
 }
 
 /** Interpolate `:param` and `*` splat placeholders in a pattern to produce a concrete pathname. */
-export function buildPath(pattern: string, params?: Readonly<Record<string, string>> | null): string {
+export function buildPath(
+  pattern: string,
+  params?: Readonly<Record<string, string>> | null,
+): string {
   const normalized = normalizePath(pattern);
   if (normalized === "/") return "/";
   const segments = normalized.slice(1).split("/");
@@ -179,7 +191,11 @@ export interface PatternMatchResult {
 }
 
 /** Match a normalized pathname against a normalized pattern. */
-export function matchPattern(pattern: string, pathname: string, exact = true): PatternMatchResult | null {
+export function matchPattern(
+  pattern: string,
+  pathname: string,
+  exact = true,
+): PatternMatchResult | null {
   const normPattern = normalizePath(pattern);
   const normPath = normalizePath(pathname);
   const patSegs = normPattern === "/" ? [] : normPattern.slice(1).split("/");

@@ -4,7 +4,19 @@
   "title": "Native package v2",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schemaVersion", "id", "hostApiVersion", "entry", "sourceMap", "styles", "assets", "fonts", "styleSystem", "artifactDigests", "buildId"],
+  "required": [
+    "schemaVersion",
+    "id",
+    "hostApiVersion",
+    "entry",
+    "sourceMap",
+    "styles",
+    "assets",
+    "fonts",
+    "styleSystem",
+    "artifactDigests",
+    "buildId"
+  ],
   "properties": {
     "schemaVersion": { "const": 2 },
     "hostApiVersion": { "const": 1 },
@@ -18,9 +30,12 @@
     "styles": { "type": "array", "uniqueItems": true, "items": { "$ref": "#/$defs/path" } },
     "assets": { "type": "array", "uniqueItems": true, "items": { "$ref": "#/$defs/path" } },
     "fonts": {
-      "type": "array", "maxItems": 16,
+      "type": "array",
+      "maxItems": 16,
       "items": {
-        "type": "object", "additionalProperties": false, "required": ["family", "path"],
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["family", "path"],
         "properties": {
           "family": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "\\S" },
           "path": { "$ref": "#/$defs/path" }
@@ -28,7 +43,8 @@
       }
     },
     "capabilities": {
-      "type": "object", "additionalProperties": false,
+      "type": "object",
+      "additionalProperties": false,
       "description": "Omitted flags and lists grant no authority. Only non-default declarations are included in the build identity.",
       "properties": {
         "shellSurfaces": { "type": "boolean", "default": false },
@@ -36,18 +52,24 @@
         "imagePrefixes": { "$ref": "#/$defs/hostPaths", "default": [] },
         "unixSockets": { "$ref": "#/$defs/hostPaths", "default": [] },
         "namedSockets": {
-          "type": "array", "uniqueItems": true, "default": [],
+          "type": "array",
+          "uniqueItems": true,
+          "default": [],
           "items": { "$ref": "#/$defs/socketName" }
         },
         "commands": {
-          "type": "array", "uniqueItems": true, "default": [],
+          "type": "array",
+          "uniqueItems": true,
+          "default": [],
           "items": { "type": "string", "pattern": "^(?=.*[^ ])[^\\u0000-\\u001f\\u007f-\\u009f]+$" }
         },
         "controlChannel": { "type": "boolean", "default": false }
       }
     },
     "styleSystem": {
-      "type": "object", "additionalProperties": false, "required": ["name", "profile", "configDigest"],
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "profile", "configDigest"],
       "properties": {
         "name": { "const": "lightningcss" },
         "profile": { "const": "lightningcss-v1" },
@@ -55,26 +77,34 @@
       }
     },
     "artifactDigests": {
-      "type": "object", "required": ["build-info.json"],
+      "type": "object",
+      "required": ["build-info.json"],
       "propertyNames": { "$ref": "#/$defs/path" },
       "additionalProperties": { "$ref": "#/$defs/digest" }
     },
     "buildId": { "$ref": "#/$defs/digest" }
   },
   "$defs": {
-    "path": { "type": "string", "minLength": 1, "pattern": "^(?!/)(?!.*[\\\\\\u0000])(?!(?:.*\/)?\\.{1,2}(?:\/|$))[^/]+(?:/[^/]+)*$" },
+    "path": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^(?!/)(?!.*[\\\\\\u0000])(?!(?:.*\/)?\\.{1,2}(?:\/|$))[^/]+(?:/[^/]+)*$"
+    },
     "socketName": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,63}(?![\\s\\S])" },
     "literalHostPath": {
       "type": "string",
       "pattern": "^/(?:$|(?:(?!\\.{1,2}(?:/|$))[^/\\\\\\u0000-\\u001f\\u007f-\\u009f]+/)*(?!\\.{1,2}$)[^/\\\\\\u0000-\\u001f\\u007f-\\u009f]+$)"
     },
     "hostPaths": {
-      "type": "array", "uniqueItems": true,
+      "type": "array",
+      "uniqueItems": true,
       "items": {
         "type": "string",
         "anyOf": [
           { "$ref": "#/$defs/literalHostPath" },
-          { "pattern": "^\\$(?:XDG_RUNTIME_DIR|HOME|XDG_DATA_HOME)(?:/(?!\\.{1,2}(?:/|$))(?:\\$WAYLAND_DISPLAY(?=/|$)|(?:[^$/\\\\\\u0000-\\u001f\\u007f-\\u009f]|\\$\\{WAYLAND_DISPLAY\\})+))*(?![\\s\\S])" }
+          {
+            "pattern": "^\\$(?:XDG_RUNTIME_DIR|HOME|XDG_DATA_HOME)(?:/(?!\\.{1,2}(?:/|$))(?:\\$WAYLAND_DISPLAY(?=/|$)|(?:[^$/\\\\\\u0000-\\u001f\\u007f-\\u009f]|\\$\\{WAYLAND_DISPLAY\\})+))*(?![\\s\\S])"
+          }
         ]
       }
     },

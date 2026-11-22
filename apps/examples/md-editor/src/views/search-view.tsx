@@ -1,5 +1,13 @@
 import { For, Show } from "@hewel/zgui";
-import { Badge, Button, Card, CardContent, CardHeader, CardTitle, Input } from "@hewel/zgui/components";
+import {
+  Badge,
+  Button,
+  Card,
+  CardContent,
+  CardHeader,
+  CardTitle,
+  Input,
+} from "@hewel/zgui/components";
 import { useNavigate } from "@hewel/zgui/router";
 import { useStudio } from "../studio-context.js";
 
@@ -12,7 +20,9 @@ export function SearchView() {
       <column class="mde-page-inner">
         <row style={{ "justify-content": "space-between", "align-items": "center" }}>
           <column style={{ gap: "4px" }}>
-            <text style={{ "font-size": "20px", "font-weight": "700" }}>Workspace Full-Text Search</text>
+            <text style={{ "font-size": "20px", "font-weight": "700" }}>
+              Workspace Full-Text Search
+            </text>
             <text class="muted">
               Powered by app-scoped SQLite FTS5 across local workspace files and built-in notes.
             </text>
@@ -59,7 +69,13 @@ export function SearchView() {
               {(hit, idx) => (
                 <Card testId={`fts-hit-${idx()}`}>
                   <CardHeader>
-                    <row style={{ "justify-content": "space-between", "align-items": "center", width: "100%" }}>
+                    <row
+                      style={{
+                        "justify-content": "space-between",
+                        "align-items": "center",
+                        width: "100%",
+                      }}
+                    >
                       <CardTitle>{hit.title}</CardTitle>
                       <row style={{ gap: "8px", "align-items": "center" }}>
                         <Badge variant="outline">{hit.path}</Badge>

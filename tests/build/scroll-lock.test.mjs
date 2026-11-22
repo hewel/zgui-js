@@ -33,11 +33,27 @@ async function mounted(t) {
   const mod = await moduleFor(t, fixture);
   assert.equal(leases.length, 0, "module import must not acquire native scroll locks");
   let dispose;
-  t.after(() => { try { dispose?.(); } finally { delete globalThis.__zgui; } });
+  t.after(() => {
+    try {
+      dispose?.();
+    } finally {
+      delete globalThis.__zgui;
+    }
+  });
   globalThis.__zgui = harness.host;
   const root = harness.makeNode("root");
   dispose = mod.mount(root);
-  return { mod, harness, root, leases, finish: () => { const end = dispose; dispose = undefined; end?.(); } };
+  return {
+    mod,
+    harness,
+    root,
+    leases,
+    finish: () => {
+      const end = dispose;
+      dispose = undefined;
+      end?.();
+    },
+  };
 }
 
 test("owner-bound scroll locks track mounts, effect reruns and disposal exactly once", async t => {

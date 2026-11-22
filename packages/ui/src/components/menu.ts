@@ -5,16 +5,39 @@ import { classes, element, slot, useStylesheet, withDefaults } from "./shared.js
 import { callHandler } from "./state.js";
 import { sheet } from "./generated/MenuStyle.js";
 import {
-  MENU_VARIANT, MenuShortcutPart, buildMenuCheckboxItem, buildMenuItem, buildMenuRadioGroup,
-  buildMenuRadioItem, buildMenuSeparator, renderMenuSurface, useMenuState, useMenuTypeahead,
-  type MenuCheckboxItemProps, type MenuContentProps, type MenuGroupProps, type MenuItemProps,
-  type MenuLabelProps, type MenuRadioGroupProps, type MenuRadioItemProps, type MenuSeparatorProps,
-  type MenuShortcutProps, type MenuTypeaheadProps,
+  MENU_VARIANT,
+  MenuShortcutPart,
+  buildMenuCheckboxItem,
+  buildMenuItem,
+  buildMenuRadioGroup,
+  buildMenuRadioItem,
+  buildMenuSeparator,
+  renderMenuSurface,
+  useMenuState,
+  useMenuTypeahead,
+  type MenuCheckboxItemProps,
+  type MenuContentProps,
+  type MenuGroupProps,
+  type MenuItemProps,
+  type MenuLabelProps,
+  type MenuRadioGroupProps,
+  type MenuRadioItemProps,
+  type MenuSeparatorProps,
+  type MenuShortcutProps,
+  type MenuTypeaheadProps,
 } from "./menu-core.js";
 
 export type {
-  MenuContentProps, MenuTypeaheadProps, MenuShortcutProps, MenuLabelProps, MenuGroupProps,
-  MenuSeparatorProps, MenuItemProps, MenuCheckboxItemProps, MenuRadioGroupProps, MenuRadioItemProps,
+  MenuContentProps,
+  MenuTypeaheadProps,
+  MenuShortcutProps,
+  MenuLabelProps,
+  MenuGroupProps,
+  MenuSeparatorProps,
+  MenuItemProps,
+  MenuCheckboxItemProps,
+  MenuRadioGroupProps,
+  MenuRadioItemProps,
 };
 
 export function MenuContent(props: MenuContentProps = {}): NativeChild {
@@ -26,12 +49,18 @@ export function MenuTypeahead(props: MenuTypeaheadProps = {}): NativeNode {
   const onTypeahead = useMenuTypeahead();
   const rest = omit(props, "children", "onKeyDown");
   const node = createElement("box");
-  spread(node, mergeProps(rest, {
-    get __zguiClass() { return classes("zui-menu__keys"); },
-    onKeyDown(event: NativeKeyEvent) {
-      if (callHandler(event, props.onKeyDown)) onTypeahead(event);
-    },
-  }), true);
+  spread(
+    node,
+    mergeProps(rest, {
+      get __zguiClass() {
+        return classes("zui-menu__keys");
+      },
+      onKeyDown(event: NativeKeyEvent) {
+        if (callHandler(event, props.onKeyDown)) onTypeahead(event);
+      },
+    }),
+    true,
+  );
   slot(node, () => props.children);
   return node;
 }
@@ -55,18 +84,41 @@ export function MenuRadioItem(props: MenuRadioItemProps): NativeNode {
 export function MenuLabel(props: MenuLabelProps = {}): NativeNode {
   useStylesheet(sheet);
   const rest = omit(props, "inset");
-  return element("label", mergeProps(rest, {
-    get __zguiClass() { return classes("zui-menu__label", props.inset && "zui-menu__label--inset"); },
-  }));
+  return element(
+    "label",
+    mergeProps(rest, {
+      get __zguiClass() {
+        return classes("zui-menu__label", props.inset && "zui-menu__label--inset");
+      },
+    }),
+  );
 }
 
 export function MenuGroup(props: MenuGroupProps = {}): NativeNode {
   useStylesheet(sheet);
   const rest = omit(props, "children", "label");
   const node = createElement("box");
-  spread(node, mergeProps(rest, withDefaults({ role: "group" as const, get ariaLabel() { return props.label ?? null; } }, rest), {
-    get __zguiClass() { return classes("zui-menu__group"); },
-  }), true);
+  spread(
+    node,
+    mergeProps(
+      rest,
+      withDefaults(
+        {
+          role: "group" as const,
+          get ariaLabel() {
+            return props.label ?? null;
+          },
+        },
+        rest,
+      ),
+      {
+        get __zguiClass() {
+          return classes("zui-menu__group");
+        },
+      },
+    ),
+    true,
+  );
   slot(node, () => props.children);
   return node;
 }

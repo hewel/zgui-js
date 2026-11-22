@@ -1,4 +1,13 @@
-import { createContext, createEffect, createMemo, createSignal, onCleanup, omit, untrack, useContext } from "#solid";
+import {
+  createContext,
+  createEffect,
+  createMemo,
+  createSignal,
+  onCleanup,
+  omit,
+  untrack,
+  useContext,
+} from "#solid";
 import { createElement, mergeProps, spread } from "../renderer/index.js";
 import { focus, getWindowRect, precedes } from "../nodes.js";
 import type {
@@ -74,7 +83,11 @@ interface SplitPaneContextValue {
   readonly isCollapsed: (entry: PanelEntry) => boolean;
   readonly pairBounds: (handleIdx: number) => { min: number; max: number; now: number } | null;
   readonly snapshotSizes: () => readonly number[];
-  readonly applyPairDelta: (handleIdx: number, baseSizes: readonly number[], deltaPct: number) => void;
+  readonly applyPairDelta: (
+    handleIdx: number,
+    baseSizes: readonly number[],
+    deltaPct: number,
+  ) => void;
   readonly nudgeHandle: (handleIdx: number, deltaPct: number) => void;
   readonly snapHandleEdge: (handleIdx: number, edge: "min" | "max") => void;
   readonly toggleCollapseAt: (handleIdx: number) => void;
@@ -137,11 +150,20 @@ function computeInitialSizes(
   return raw.map(val => roundPct((val / sum) * 100));
 }
 
-function panelLimits(panel: PanelEntry): { min: number; max: number; collapsed: number; collapsible: boolean } {
+function panelLimits(panel: PanelEntry): {
+  min: number;
+  max: number;
+  collapsed: number;
+  collapsible: boolean;
+} {
   const min = clamp(Number.isFinite(panel.minSize()) ? panel.minSize() : 5, 0, 100);
   const max = clamp(Number.isFinite(panel.maxSize()) ? panel.maxSize() : 100, min, 100);
   const collapsible = panel.collapsible();
-  const collapsed = clamp(Number.isFinite(panel.collapsedSize()) ? panel.collapsedSize() : 0, 0, min);
+  const collapsed = clamp(
+    Number.isFinite(panel.collapsedSize()) ? panel.collapsedSize() : 0,
+    0,
+    min,
+  );
   return { min, max, collapsed, collapsible };
 }
 
@@ -156,13 +178,23 @@ function computePair(
   if (l.collapsible && rawLeft <= (l.collapsed + l.min) / 2) {
     const left = l.collapsed;
     const right = clamp(pairTotal - left, r.collapsible ? r.collapsed : r.min, r.max);
-    return { left: roundPct(pairTotal - right), right: roundPct(right), leftCollapsed: true, rightCollapsed: false };
+    return {
+      left: roundPct(pairTotal - right),
+      right: roundPct(right),
+      leftCollapsed: true,
+      rightCollapsed: false,
+    };
   }
   const rawRight = pairTotal - rawLeft;
   if (r.collapsible && rawRight <= (r.collapsed + r.min) / 2) {
     const right = r.collapsed;
     const left = clamp(pairTotal - right, l.collapsible ? l.collapsed : l.min, l.max);
-    return { left: roundPct(left), right: roundPct(pairTotal - left), leftCollapsed: false, rightCollapsed: true };
+    return {
+      left: roundPct(left),
+      right: roundPct(pairTotal - left),
+      leftCollapsed: false,
+      rightCollapsed: true,
+    };
   }
   const minLeft = Math.max(l.min, pairTotal - r.max);
   const maxLeft = Math.min(l.max, pairTotal - r.min);
@@ -178,7 +210,16 @@ function computePair(
 
 export function SplitPane(props: SplitPaneProps = {}): NativeNode {
   useStylesheet(sheet);
-  const rest = omit(props, "direction", "sizes", "defaultSizes", "onSizesChange", "keyboardStep", "label", "children");
+  const rest = omit(
+    props,
+    "direction",
+    "sizes",
+    "defaultSizes",
+    "onSizesChange",
+    "keyboardStep",
+    "label",
+    "children",
+  );
   const direction = createMemo<SplitPaneDirection>(() => {
     const dir = props.direction ?? "horizontal";
     if (dir !== "horizontal" && dir !== "vertical") {
@@ -210,7 +251,8 @@ export function SplitPane(props: SplitPaneProps = {}): NativeNode {
   const commitSizes = (next: readonly number[]) => {
     const list = panels();
     const prev = untrack(resolvedSizes);
-    const same = prev.length === next.length && prev.every((v, i) => Math.abs(v - next[i]!) < 0.001);
+    const same =
+      prev.length === next.length && prev.every((v, i) => Math.abs(v - next[i]!) < 0.001);
     if (same) return;
     if (untrack(() => props.sizes) === undefined) {
       setInnerSizes(next);
@@ -238,7 +280,10 @@ export function SplitPane(props: SplitPaneProps = {}): NativeNode {
       const list = untrack(panels);
       const current = untrack(innerSizes);
       if (current.length !== count) {
-        const init = computeInitialSizes(list, untrack(() => props.sizes ?? props.defaultSizes));
+        const init = computeInitialSizes(
+          list,
+          untrack(() => props.sizes ?? props.defaultSizes),
+        );
         setInnerSizes(init);
         for (let i = 0; i < list.length; i++) {
           const panel = list[i]!;
@@ -297,13 +342,18 @@ export function SplitPane(props: SplitPaneProps = {}): NativeNode {
     pairBounds(handleIdx) {
       const list = panels();
       const sizes = resolvedSizes();
-      if (handleIdx < 0 || handleIdx + 1 >= list.length || sizes.length !== list.length) return null;
+      if (handleIdx < 0 || handleIdx + 1 >= list.length || sizes.length !== list.length)
+        return null;
       const l = panelLimits(list[handleIdx]!);
       const r = panelLimits(list[handleIdx + 1]!);
       const pairTotal = sizes[handleIdx]! + sizes[handleIdx + 1]!;
       const min = l.collapsible ? l.collapsed : Math.max(l.min, pairTotal - r.max);
       const max = Math.min(l.max, pairTotal - (r.collapsible ? r.collapsed : r.min));
-      return { min: Math.round(min), max: Math.round(Math.max(min, max)), now: Math.round(sizes[handleIdx]!) };
+      return {
+        min: Math.round(min),
+        max: Math.round(Math.max(min, max)),
+        now: Math.round(sizes[handleIdx]!),
+      };
     },
     snapshotSizes: () => [...untrack(resolvedSizes)],
     applyPairDelta(handleIdx, baseSizes, deltaPct) {
@@ -329,9 +379,12 @@ export function SplitPane(props: SplitPaneProps = {}): NativeNode {
       const l = panelLimits(list[handleIdx]!);
       const r = panelLimits(list[handleIdx + 1]!);
       const pairTotal = base[handleIdx]! + base[handleIdx + 1]!;
-      const target = edge === "min"
-        ? (l.collapsible ? l.collapsed : l.min)
-        : Math.min(l.max, pairTotal - (r.collapsible ? r.collapsed : r.min));
+      const target =
+        edge === "min"
+          ? l.collapsible
+            ? l.collapsed
+            : l.min
+          : Math.min(l.max, pairTotal - (r.collapsible ? r.collapsed : r.min));
       applyPairTarget(handleIdx, base, target);
     },
     toggleCollapseAt(handleIdx) {
@@ -345,13 +398,17 @@ export function SplitPane(props: SplitPaneProps = {}): NativeNode {
       const pairTotal = base[handleIdx]! + base[handleIdx + 1]!;
       if (l.collapsible) {
         const isCollapsedNow = base[handleIdx]! <= l.collapsed + 0.01;
-        const target = isCollapsedNow ? Math.max(l.min, leftPanel.lastExpanded || l.min) : l.collapsed;
+        const target = isCollapsedNow
+          ? Math.max(l.min, leftPanel.lastExpanded || l.min)
+          : l.collapsed;
         applyPairTarget(handleIdx, base, target);
         return;
       }
       if (r.collapsible) {
         const isCollapsedNow = base[handleIdx + 1]! <= r.collapsed + 0.01;
-        const desiredRight = isCollapsedNow ? Math.max(r.min, rightPanel.lastExpanded || r.min) : r.collapsed;
+        const desiredRight = isCollapsedNow
+          ? Math.max(r.min, rightPanel.lastExpanded || r.min)
+          : r.collapsed;
         applyPairTarget(handleIdx, base, pairTotal - desiredRight);
       }
     },
@@ -359,17 +416,30 @@ export function SplitPane(props: SplitPaneProps = {}): NativeNode {
 
   const root = createElement("box");
   setContainer(root);
-  spread(root, mergeProps(
-    rest,
-    withDefaults({
-      role: "group" as const,
-      get ariaLabel() { return props.label ?? null; },
-      get "data-direction"() { return direction(); },
-    }, rest),
-    {
-      get __zguiClass() { return classes(sheet.className, "zui-split-pane"); },
-    },
-  ), true);
+  spread(
+    root,
+    mergeProps(
+      rest,
+      withDefaults(
+        {
+          role: "group" as const,
+          get ariaLabel() {
+            return props.label ?? null;
+          },
+          get "data-direction"() {
+            return direction();
+          },
+        },
+        rest,
+      ),
+      {
+        get __zguiClass() {
+          return classes(sheet.className, "zui-split-pane");
+        },
+      },
+    ),
+    true,
+  );
   slot(root, provide(SplitPaneContext, context, props));
   return root;
 }
@@ -409,27 +479,38 @@ export function SplitPanePanel(props: SplitPanePanelProps = {}): NativeNode {
     onCleanup(unregister);
   }
 
-  spread(node, mergeProps(
-    rest,
-    withDefaults({
-      get "data-collapsed"() { return context?.isCollapsed(entry) ? "true" : "false"; },
-      get __zguiStyle() {
-        if (!context) return {};
-        const size = context.sizeFor(entry);
-        const horizontal = context.direction() === "horizontal";
-        return {
-          flexBasis: `${size}%`,
-          width: horizontal ? `${size}%` : "100%",
-          height: horizontal ? "100%" : `${size}%`,
-          minWidth: "0px",
-          minHeight: "0px",
-        };
+  spread(
+    node,
+    mergeProps(
+      rest,
+      withDefaults(
+        {
+          get "data-collapsed"() {
+            return context?.isCollapsed(entry) ? "true" : "false";
+          },
+          get __zguiStyle() {
+            if (!context) return {};
+            const size = context.sizeFor(entry);
+            const horizontal = context.direction() === "horizontal";
+            return {
+              flexBasis: `${size}%`,
+              width: horizontal ? `${size}%` : "100%",
+              height: horizontal ? "100%" : `${size}%`,
+              minWidth: "0px",
+              minHeight: "0px",
+            };
+          },
+        },
+        rest,
+      ),
+      {
+        get __zguiClass() {
+          return classes("zui-resizable__panel");
+        },
       },
-    }, rest),
-    {
-      get __zguiClass() { return classes("zui-resizable__panel"); },
-    },
-  ), true);
+    ),
+    true,
+  );
   slot(node, () => props.children);
   return node;
 }
@@ -464,7 +545,9 @@ export function SplitPaneHandle(props: SplitPaneHandleProps = {}): NativeNode {
   let startSizes: readonly number[] = [];
 
   const disabled = () => !!props.disabled;
-  onCleanup(() => { captured = undefined; });
+  onCleanup(() => {
+    captured = undefined;
+  });
 
   const endDrag = (event: NativePointerEvent) => {
     captured = undefined;
@@ -477,100 +560,142 @@ export function SplitPaneHandle(props: SplitPaneHandleProps = {}): NativeNode {
     return context.pairBounds(context.handleIndex(entry));
   });
 
-  spread(root, mergeProps(
-    rest,
-    withDefaults({
-      role: "splitter" as const,
-      tabIndex: 0,
-      get disabled() { return disabled(); },
-      get orientation() {
-        return context?.direction() === "vertical" ? ("horizontal" as const) : ("vertical" as const);
-      },
-      get ariaLabel() { return props.label ?? "Resize panels"; },
-      get ariaValueMin() { return bounds()?.min ?? 0; },
-      get ariaValueMax() { return bounds()?.max ?? 100; },
-      get ariaValueNow() { return bounds()?.now ?? 50; },
-      get "data-direction"() { return context?.direction() ?? "horizontal"; },
-      get "data-dragging"() { return dragging() ? "true" : "false"; },
-    }, rest),
-    {
-      get __zguiClass() { return classes("zui-resizable__handle"); },
-      onKeyDown(event: NativeKeyEvent) {
-        if (!callHandler(event, props.onKeyDown) || disabled() || !context) return;
-        const idx = context.handleIndex(entry);
-        if (idx < 0) return;
-        const horizontal = context.direction() === "horizontal";
-        const baseStep = props.step !== undefined && Number.isFinite(props.step) && props.step > 0
-          ? props.step
-          : context.keyboardStep();
-        const step = event.modifiers.shift ? baseStep * 5 : baseStep;
-        if ((horizontal && event.key === "ArrowLeft") || (!horizontal && event.key === "ArrowUp")) {
-          context.nudgeHandle(idx, -step);
+  spread(
+    root,
+    mergeProps(
+      rest,
+      withDefaults(
+        {
+          role: "splitter" as const,
+          tabIndex: 0,
+          get disabled() {
+            return disabled();
+          },
+          get orientation() {
+            return context?.direction() === "vertical"
+              ? ("horizontal" as const)
+              : ("vertical" as const);
+          },
+          get ariaLabel() {
+            return props.label ?? "Resize panels";
+          },
+          get ariaValueMin() {
+            return bounds()?.min ?? 0;
+          },
+          get ariaValueMax() {
+            return bounds()?.max ?? 100;
+          },
+          get ariaValueNow() {
+            return bounds()?.now ?? 50;
+          },
+          get "data-direction"() {
+            return context?.direction() ?? "horizontal";
+          },
+          get "data-dragging"() {
+            return dragging() ? "true" : "false";
+          },
+        },
+        rest,
+      ),
+      {
+        get __zguiClass() {
+          return classes("zui-resizable__handle");
+        },
+        onKeyDown(event: NativeKeyEvent) {
+          if (!callHandler(event, props.onKeyDown) || disabled() || !context) return;
+          const idx = context.handleIndex(entry);
+          if (idx < 0) return;
+          const horizontal = context.direction() === "horizontal";
+          const baseStep =
+            props.step !== undefined && Number.isFinite(props.step) && props.step > 0
+              ? props.step
+              : context.keyboardStep();
+          const step = event.modifiers.shift ? baseStep * 5 : baseStep;
+          if (
+            (horizontal && event.key === "ArrowLeft") ||
+            (!horizontal && event.key === "ArrowUp")
+          ) {
+            context.nudgeHandle(idx, -step);
+            event.preventDefault();
+            event.stopPropagation();
+          } else if (
+            (horizontal && event.key === "ArrowRight") ||
+            (!horizontal && event.key === "ArrowDown")
+          ) {
+            context.nudgeHandle(idx, step);
+            event.preventDefault();
+            event.stopPropagation();
+          } else if (event.key === "Home") {
+            context.snapHandleEdge(idx, "min");
+            event.preventDefault();
+            event.stopPropagation();
+          } else if (event.key === "End") {
+            context.snapHandleEdge(idx, "max");
+            event.preventDefault();
+            event.stopPropagation();
+          } else if (event.key === "Enter" || event.key === "Space" || event.key === " ") {
+            context.toggleCollapseAt(idx);
+            event.preventDefault();
+            event.stopPropagation();
+          }
+        },
+        onPointerDown(event: NativePointerDownEvent) {
+          if (!callHandler(event, props.onPointerDown) || disabled() || !context || !event.primary)
+            return;
+          if (
+            !(
+              event.button === "primary" ||
+              (event.button === null && event.pointerKind !== "mouse")
+            )
+          )
+            return;
+          const containerNode = context.container();
+          const rect = containerNode ? getWindowRect(containerNode) : null;
+          if (!rect) return;
+          const horizontal = context.direction() === "horizontal";
+          const span = horizontal ? rect.width : rect.height;
+          if (span <= 0) return;
+          captured = event.pointerId;
+          startCoord = horizontal ? event.position.x : event.position.y;
+          startSpan = span;
+          startSizes = context.snapshotSizes();
+          setDragging(true);
+          event.capturePointer();
+          focus(root);
           event.preventDefault();
-          event.stopPropagation();
-        } else if ((horizontal && event.key === "ArrowRight") || (!horizontal && event.key === "ArrowDown")) {
-          context.nudgeHandle(idx, step);
-          event.preventDefault();
-          event.stopPropagation();
-        } else if (event.key === "Home") {
-          context.snapHandleEdge(idx, "min");
-          event.preventDefault();
-          event.stopPropagation();
-        } else if (event.key === "End") {
-          context.snapHandleEdge(idx, "max");
-          event.preventDefault();
-          event.stopPropagation();
-        } else if (event.key === "Enter" || event.key === "Space" || event.key === " ") {
-          context.toggleCollapseAt(idx);
-          event.preventDefault();
-          event.stopPropagation();
-        }
-      },
-      onPointerDown(event: NativePointerDownEvent) {
-        if (!callHandler(event, props.onPointerDown) || disabled() || !context || !event.primary) return;
-        if (!(event.button === "primary" || (event.button === null && event.pointerKind !== "mouse"))) return;
-        const containerNode = context.container();
-        const rect = containerNode ? getWindowRect(containerNode) : null;
-        if (!rect) return;
-        const horizontal = context.direction() === "horizontal";
-        const span = horizontal ? rect.width : rect.height;
-        if (span <= 0) return;
-        captured = event.pointerId;
-        startCoord = horizontal ? event.position.x : event.position.y;
-        startSpan = span;
-        startSizes = context.snapshotSizes();
-        setDragging(true);
-        event.capturePointer();
-        focus(root);
-        event.preventDefault();
-      },
-      onPointerMove(event: NativePointerEvent) {
-        const allowed = callHandler(event, props.onPointerMove);
-        if (event.pointerId !== captured) return;
-        if (!dragging() || disabled() || !context) { endDrag(event); return; }
-        if (!allowed || startSpan <= 0) return;
-        const horizontal = context.direction() === "horizontal";
-        const coord = horizontal ? event.position.x : event.position.y;
-        const deltaPct = ((coord - startCoord) / startSpan) * 100;
-        context.applyPairDelta(context.handleIndex(entry), startSizes, deltaPct);
-      },
-      onPointerUp(event: NativePointerEvent) {
-        const allowed = callHandler(event, props.onPointerUp);
-        if (event.pointerId !== captured) return;
-        if (allowed && dragging() && !disabled() && context && startSpan > 0) {
+        },
+        onPointerMove(event: NativePointerEvent) {
+          const allowed = callHandler(event, props.onPointerMove);
+          if (event.pointerId !== captured) return;
+          if (!dragging() || disabled() || !context) {
+            endDrag(event);
+            return;
+          }
+          if (!allowed || startSpan <= 0) return;
           const horizontal = context.direction() === "horizontal";
           const coord = horizontal ? event.position.x : event.position.y;
           const deltaPct = ((coord - startCoord) / startSpan) * 100;
           context.applyPairDelta(context.handleIndex(entry), startSizes, deltaPct);
-        }
-        endDrag(event);
+        },
+        onPointerUp(event: NativePointerEvent) {
+          const allowed = callHandler(event, props.onPointerUp);
+          if (event.pointerId !== captured) return;
+          if (allowed && dragging() && !disabled() && context && startSpan > 0) {
+            const horizontal = context.direction() === "horizontal";
+            const coord = horizontal ? event.position.x : event.position.y;
+            const deltaPct = ((coord - startCoord) / startSpan) * 100;
+            context.applyPairDelta(context.handleIndex(entry), startSizes, deltaPct);
+          }
+          endDrag(event);
+        },
+        onPointerCancel(event: NativePointerEvent) {
+          callHandler(event, props.onPointerCancel);
+          if (event.pointerId === captured) endDrag(event);
+        },
       },
-      onPointerCancel(event: NativePointerEvent) {
-        callHandler(event, props.onPointerCancel);
-        if (event.pointerId === captured) endDrag(event);
-      },
-    },
-  ), true);
+    ),
+    true,
+  );
 
   append(root, element("box", { class: "zui-resizable__line", ariaHidden: true }));
   slot(root, () => {

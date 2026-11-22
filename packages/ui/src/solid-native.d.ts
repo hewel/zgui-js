@@ -1,6 +1,13 @@
 // Solid 2.x's public declarations include DOM/hydration types. This package-local
 // condition preserves native renderer node branding without acquiring browser globals.
-import type { Accessor, MemoOptions, NativeChild, ReactiveOptions, Signal, SignalOptions } from "./types.js";
+import type {
+  Accessor,
+  MemoOptions,
+  NativeChild,
+  ReactiveOptions,
+  Signal,
+  SignalOptions,
+} from "./types.js";
 
 export type Store<T> = T;
 export type StoreSetter<T> = (fn: (draft: T) => T | void) => void;
@@ -9,15 +16,26 @@ export type Owner = object;
 
 export declare function createRoot<T>(callback: (dispose: () => void) => T): T;
 export declare function createSignal<T>(): Signal<T | undefined>;
-export declare function createSignal<T>(initial: Exclude<T, Function>, options?: SignalOptions<T>): Signal<T>;
-export declare function createSignal<T>(compute: (previous: T | undefined) => T | PromiseLike<T>, options?: SignalOptions<T>): Signal<T>;
-export declare function createMemo<T>(compute: (previous: T | undefined) => T | PromiseLike<T>, options?: MemoOptions<T>): Accessor<T>;
+export declare function createSignal<T>(
+  initial: Exclude<T, Function>,
+  options?: SignalOptions<T>,
+): Signal<T>;
+export declare function createSignal<T>(
+  compute: (previous: T | undefined) => T | PromiseLike<T>,
+  options?: SignalOptions<T>,
+): Signal<T>;
+export declare function createMemo<T>(
+  compute: (previous: T | undefined) => T | PromiseLike<T>,
+  options?: MemoOptions<T>,
+): Accessor<T>;
 export declare function createEffect<T>(
   compute: (previous: T | undefined) => T | PromiseLike<T>,
-  apply: ((value: T, previous: T | undefined) => (() => void) | void) | {
-    effect: (value: T, previous: T | undefined) => (() => void) | void;
-    error: (err: unknown, cleanup: () => void) => void;
-  },
+  apply:
+    | ((value: T, previous: T | undefined) => (() => void) | void)
+    | {
+        effect: (value: T, previous: T | undefined) => (() => void) | void;
+        error: (err: unknown, cleanup: () => void) => void;
+      },
   options?: ReactiveOptions,
 ): void;
 export declare function onSettled(callback: () => (() => void) | void): void;
@@ -68,7 +86,10 @@ export declare function Show<T>(props: {
   children: NativeChild | ((item: NonNullable<T>) => NativeChild);
 }): NativeChild;
 
-export declare function Switch(props: { fallback?: NativeChild; children: NativeChild }): NativeChild;
+export declare function Switch(props: {
+  fallback?: NativeChild;
+  children: NativeChild;
+}): NativeChild;
 export declare function Match<T>(props: {
   when: T | null | undefined | false;
   keyed?: boolean;
@@ -100,7 +121,10 @@ export declare function omit<T extends object, K extends readonly (keyof T)[]>(
   props: T,
   ...keys: K
 ): { [P in keyof T as Exclude<P, K[number]>]: T[P] };
-type MergeSources<T extends readonly object[]> = T extends readonly [infer Head extends object, ...infer Tail extends object[]]
+type MergeSources<T extends readonly object[]> = T extends readonly [
+  infer Head extends object,
+  ...infer Tail extends object[],
+]
   ? Omit<Head, keyof MergeSources<Tail>> & MergeSources<Tail>
   : {};
 export declare function merge<T extends readonly object[]>(...sources: T): MergeSources<T>;
@@ -114,7 +138,10 @@ export declare function createProjection<T extends object = {}>(
   seed: T,
   options?: ReactiveOptions & { key?: string | ((item: any) => any) | null },
 ): Store<T>;
-export declare function reconcile<T>(value: T, key?: string | ((item: any) => any) | null): (state: T) => T;
+export declare function reconcile<T>(
+  value: T,
+  key?: string | ((item: any) => any) | null,
+): (state: T) => T;
 export declare function snapshot<T>(value: T): T;
 export declare function isPending(fn: () => unknown): boolean;
 export declare function latest<T>(fn: () => T): T;

@@ -8,16 +8,26 @@ function textControl(
   props: TextFieldProps | TextAreaProps,
 ): NativeNode {
   // Track spread shape changes without evaluating a lazy child getter.
-  effect(() => "children" in props, hasChildren => {
-    if (hasChildren) throw new TypeError(`${name} does not accept children; use value or defaultValue`);
-  });
-  const control = createElement(tag);
-  spread(control, mergeProps(props, {
-    get tabIndex() { return props.tabIndex ?? 0; },
-    get role() {
-      return tag === "field" && "secure" in props && props.secure ? "passwordInput" : role;
+  effect(
+    () => "children" in props,
+    hasChildren => {
+      if (hasChildren)
+        throw new TypeError(`${name} does not accept children; use value or defaultValue`);
     },
-  }), true);
+  );
+  const control = createElement(tag);
+  spread(
+    control,
+    mergeProps(props, {
+      get tabIndex() {
+        return props.tabIndex ?? 0;
+      },
+      get role() {
+        return tag === "field" && "secure" in props && props.secure ? "passwordInput" : role;
+      },
+    }),
+    true,
+  );
   return control;
 }
 

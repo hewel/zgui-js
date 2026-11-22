@@ -1,14 +1,59 @@
-.tabs-scroll { width: 100%; height: 100%; overflow: auto; }
-.tabs-page {
-  display: flex; flex-direction: column; gap: 20px; padding: 24px; min-height: 100%;
-  background-color: var(--zui-color-background); color: var(--zui-color-foreground);
-  font-family: var(--zui-type-family-sans); font-size: var(--zui-type-size-sm);
+.tabs-scroll {
+  width: 100%;
+  height: 100%;
+  overflow: auto;
 }
-.tabs-header { display: flex; flex-direction: row; align-items: center; justify-content: space-between; gap: 16px; }
-.tabs-heading { font-size: 20px; font-weight: 600; }
-.tabs-columns { display: flex; flex-direction: row; flex-wrap: wrap; gap: 32px; }
-.tabs-column { display: flex; flex-direction: column; flex: 1 1 300px; min-width: 0; gap: 12px; }
-.tabs-actions { display: flex; flex-direction: row; flex-wrap: wrap; align-items: center; gap: 8px; }
-.tabs-title { font-weight: 600; }
-.tabs-panel { display: flex; flex-direction: column; gap: 10px; padding-top: 8px; }
-.tabs-hint { color: var(--zui-color-muted-foreground); }
+.tabs-page {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  padding: 24px;
+  min-height: 100%;
+  background-color: var(--zui-color-background);
+  color: var(--zui-color-foreground);
+  font-family: var(--zui-type-family-sans);
+  font-size: var(--zui-type-size-sm);
+}
+.tabs-header {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+.tabs-heading {
+  font-size: 20px;
+  font-weight: 600;
+}
+.tabs-columns {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  gap: 32px;
+}
+.tabs-column {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 300px;
+  min-width: 0;
+  gap: 12px;
+}
+.tabs-actions {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.tabs-title {
+  font-weight: 600;
+}
+.tabs-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-top: 8px;
+}
+.tabs-hint {
+  color: var(--zui-color-muted-foreground);
+}

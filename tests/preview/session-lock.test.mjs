@@ -2,7 +2,16 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { after, before, test } from "node:test";
-import { buildFixtureApp, createTempWorkspace, emptyResources, getNode, readPng, readTree, runScenario, writeJson } from "./harness.mjs";
+import {
+  buildFixtureApp,
+  createTempWorkspace,
+  emptyResources,
+  getNode,
+  readPng,
+  readTree,
+  runScenario,
+  writeJson,
+} from "./harness.mjs";
 
 let temp;
 let bundle;
@@ -10,8 +19,16 @@ let refusal;
 before(async () => {
   temp = await createTempWorkspace("preview-session-lock-");
   refusal = path.join(temp.dir, "refusal.json");
-  await writeJson(refusal, { schemaVersion: 1, id: "lock-refusal", services: { sessionLock: { outcome: "finished" } }, events: [] });
-  bundle = await buildFixtureApp(path.join(temp.dir, "authorized"), "authorized-lock", `
+  await writeJson(refusal, {
+    schemaVersion: 1,
+    id: "lock-refusal",
+    services: { sessionLock: { outcome: "finished" } },
+    events: [],
+  });
+  bundle = await buildFixtureApp(
+    path.join(temp.dir, "authorized"),
+    "authorized-lock",
+    `
     import { Button, For, SessionLockSurface, Show, createSignal, onCleanup, renderApp, requestSessionLock, useMonitors } from "@hewel/zgui";
     import type { NativeNode, SessionLockRequest } from "@hewel/zgui";
     export const hostApiVersion = 1;
@@ -38,27 +55,69 @@ before(async () => {
         </column>;
       }, root);
     }
-  `, { rawSource: true, capabilities: { sessionLock: true } });
+  `,
+    { rawSource: true, capabilities: { sessionLock: true } },
+  );
 });
-after(async () => { await temp?.cleanup(); });
+after(async () => {
+  await temp?.cleanup();
+});
 
-const left = { id: "left", name: "Left", x: 0, y: 0, width: 320, height: 240, scale: 1, refreshRateMilliHz: 60000 };
+const left = {
+  id: "left",
+  name: "Left",
+  x: 0,
+  y: 0,
+  width: 320,
+  height: 240,
+  scale: 1,
+  refreshRateMilliHz: 60000,
+};
 const right = { ...left, id: "right", name: "Right", x: 320, width: 400, scale: 2 };
 const spare = { ...left, id: "spare", name: "Spare", x: 720 };
 const monitors = (id, ...monitors) => ({ id, op: "monitors.set", monitors });
 const capture = (id, surface = "main") => ({ id, op: "capture", surface, captureId: id });
-const click = (surface, testId) => ({ id: testId, op: "pointer.click", target: { surface, testId }, button: "primary" });
+const click = (surface, testId) => ({
+  id: testId,
+  op: "pointer.click",
+  target: { surface, testId },
+  button: "primary",
+});
 const advance = id => ({ id, op: "clock.advance", byMs: 40 });
-const start = [monitors("initial-outputs", left, spare), click("main", "start"), advance("dispatch-start")];
+const start = [
+  monitors("initial-outputs", left, spare),
+  click("main", "start"),
+  advance("dispatch-start"),
+];
 
 function run(name, steps, options = {}) {
-  return runScenario({ projectDir: temp.dir, bundle, name, steps,
-    requiredCapabilities: ["session-lock", "surface.multiple", "pixels", "input.pointer", "selectors.test-id", "virtual-time"],
-    width: 400, height: 240, scale: 1,
-    ...options });
+  return runScenario({
+    projectDir: temp.dir,
+    bundle,
+    name,
+    steps,
+    requiredCapabilities: [
+      "session-lock",
+      "surface.multiple",
+      "pixels",
+      "input.pointer",
+      "selectors.test-id",
+      "virtual-time",
+    ],
+    width: 400,
+    height: 240,
+    scale: 1,
+    ...options,
+  });
 }
 
-function verifyLock(snapshot, state, unlockCount, coveredOutputs = [], fallbackOutputs = coveredOutputs) {
+function verifyLock(
+  snapshot,
+  state,
+  unlockCount,
+  coveredOutputs = [],
+  fallbackOutputs = coveredOutputs,
+) {
   assert.deepEqual(snapshot, { state, unlockCount, coveredOutputs, fallbackOutputs });
 }
 
@@ -68,12 +127,18 @@ async function lockTrace(out) {
 }
 
 async function stepResult(out, id) {
-  const steps = (await readFile(path.join(out, "steps.jsonl"), "utf8")).trim().split("\n").map(JSON.parse);
+  const steps = (await readFile(path.join(out, "steps.jsonl"), "utf8"))
+    .trim()
+    .split("\n")
+    .map(JSON.parse);
   return steps.find(step => step.id === id).result;
 }
 
 test("caught default-denied locking is a sticky E_CAPABILITY in preview", async () => {
-  const denied = await buildFixtureApp(path.join(temp.dir, "denied"), "denied-lock", `
+  const denied = await buildFixtureApp(
+    path.join(temp.dir, "denied"),
+    "denied-lock",
+    `
     import { renderApp, requestSessionLock } from "@hewel/zgui";
     import type { NativeNode } from "@hewel/zgui";
     export const hostApiVersion = 1;
@@ -85,8 +150,13 @@ test("caught default-denied locking is a sticky E_CAPABILITY in preview", async 
         return <text>caught</text>;
       }, root);
     }
-  `, { rawSource: true });
-  const { result } = await run("denied", [capture("denied")], { bundle: denied, allowFailure: true });
+  `,
+    { rawSource: true },
+  );
+  const { result } = await run("denied", [capture("denied")], {
+    bundle: denied,
+    allowFailure: true,
+  });
   assert.equal(result.firstError?.code, "E_CAPABILITY");
   assert.match(result.firstError?.message, /sessionLock/);
   assert.equal(result.captureCount, 0);
@@ -94,11 +164,21 @@ test("caught default-denied locking is a sticky E_CAPABILITY in preview", async 
 
 test("confirmed lock uses distinct output regions, covers undeclared outputs, and explicitly unlocks", async () => {
   const { out, result } = await run("unlock", [
-    ...start, capture("left-locked", "lock-left"), monitors("hotplug", left, right, spare),
-    advance("present-hotplug"), capture("right-locked", "lock-right"), monitors("remove-left", right, spare),
-    advance("present-after-removal"), click("lock-right", "unlock"), advance("dispatch-unlock"), capture("unlocked"),
+    ...start,
+    capture("left-locked", "lock-left"),
+    monitors("hotplug", left, right, spare),
+    advance("present-hotplug"),
+    capture("right-locked", "lock-right"),
+    monitors("remove-left", right, spare),
+    advance("present-after-removal"),
+    click("lock-right", "unlock"),
+    advance("dispatch-unlock"),
+    capture("unlocked"),
   ]);
-  for (const [output, width] of [["left", 320], ["right", 400]]) {
+  for (const [output, width] of [
+    ["left", 320],
+    ["right", 400],
+  ]) {
     const file = `surfaces/lock-${output}/${output}-locked`;
     const tree = await readTree(out, file);
     assert.equal(getNode(tree, "state").text, `locked:${output}`);
@@ -114,17 +194,30 @@ test("confirmed lock uses distinct output regions, covers undeclared outputs, an
 });
 
 test("compositor refusal never attaches lock regions or sends unlock", async () => {
-  const { out, result } = await run("refused", [...start, capture("refused")], { fixture: refusal });
+  const { out, result } = await run("refused", [...start, capture("refused")], {
+    fixture: refusal,
+  });
   assert.equal(getNode(await readTree(out, "refused"), "state").text, "refused");
   verifyLock(await lockTrace(out), "refused", 0);
   assert.deepEqual(result.teardown.resources, emptyResources);
 });
 
-for (const [action, code] of [["throw", "E_JS_EXCEPTION"], ["budget", "E_JOB_BUDGET"], ["arm", "E_TEARDOWN"]]) {
+for (const [action, code] of [
+  ["throw", "E_JS_EXCEPTION"],
+  ["budget", "E_JOB_BUDGET"],
+  ["arm", "E_TEARDOWN"],
+]) {
   test(`${code} keeps Rust fallback coverage without unlocking`, async () => {
-    const { out, result } = await run(action, [
-      ...start, capture("locked", "lock-left"), click("lock-left", action), advance("dispatch-action"),
-    ], { allowFailure: true });
+    const { out, result } = await run(
+      action,
+      [
+        ...start,
+        capture("locked", "lock-left"),
+        click("lock-left", action),
+        advance("dispatch-action"),
+      ],
+      { allowFailure: true },
+    );
     assert.equal(result.captureCount, 1, "the lock UI must have presented before fault injection");
     assert.equal(result.firstError?.code, code);
     if (code === "E_TEARDOWN") assert.match(result.firstError.message, /disposal/);
@@ -135,7 +228,9 @@ for (const [action, code] of [["throw", "E_JS_EXCEPTION"], ["budget", "E_JOB_BUD
 
 test("surfaces lost retires JavaScript but does not release the platform lock", async () => {
   const { out, result } = await run("retire", [
-    ...start, capture("locked", "lock-left"), { id: "retire", op: "surface.recreate", surface: "main" },
+    ...start,
+    capture("locked", "lock-left"),
+    { id: "retire", op: "surface.recreate", surface: "main" },
   ]);
   const recreated = await stepResult(out, "retire");
   assert.equal(recreated.retired.clean, true);
@@ -145,7 +240,10 @@ test("surfaces lost retires JavaScript but does not release the platform lock", 
 });
 
 test("lock request IDs stay stable through compositor outcomes and advance after recreation", async () => {
-  const identityBundle = await buildFixtureApp(path.join(temp.dir, "lock-identity"), "lock-identity", `
+  const identityBundle = await buildFixtureApp(
+    path.join(temp.dir, "lock-identity"),
+    "lock-identity",
+    `
     import { getSessionGeneration, renderApp, requestSessionLock, type NativeNode } from "@hewel/zgui";
     const generation = getSessionGeneration();
     export const hostApiVersion = 1;
@@ -157,15 +255,25 @@ test("lock request IDs stay stable through compositor outcomes and advance after
         return <text testId="identity">{JSON.stringify([generation, getSessionGeneration(), requested, first.id, second.id, first.state()])}</text>;
       }, root);
     }
-  `, { rawSource: true, capabilities: { sessionLock: true } });
-  const { out, result } = await run("lock-identity", [
-    advance("first-lock"), capture("first"),
-    { id: "recreate", op: "surface.recreate", surface: "main" },
-    advance("recreated-lock"), capture("second"),
-  ], { bundle: identityBundle, fixture: refusal });
+  `,
+    { rawSource: true, capabilities: { sessionLock: true } },
+  );
+  const { out, result } = await run(
+    "lock-identity",
+    [
+      advance("first-lock"),
+      capture("first"),
+      { id: "recreate", op: "surface.recreate", surface: "main" },
+      advance("recreated-lock"),
+      capture("second"),
+    ],
+    { bundle: identityBundle, fixture: refusal },
+  );
   const identity = async (id, expectedState) => {
     const tree = await readTree(out, id);
-    const [generation, mounted, requested, first, second, state] = JSON.parse(getNode(tree, "identity").text);
+    const [generation, mounted, requested, first, second, state] = JSON.parse(
+      getNode(tree, "identity").text,
+    );
     assert.equal(generation, mounted, "the preflight and mounted identities agree");
     assert.equal(first, requested, "the compositor outcome does not change the request ID");
     assert.equal(state, expectedState);

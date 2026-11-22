@@ -17,7 +17,9 @@ export interface DelayHandle {
 
 function validateDelay(delay: number, label: string, requirePositive = false): void {
   if (!Number.isFinite(delay) || (requirePositive ? delay <= 0 : delay < 0)) {
-    throw new RangeError(`${label} must be a finite ${requirePositive ? "positive" : "non-negative"} number`);
+    throw new RangeError(
+      `${label} must be a finite ${requirePositive ? "positive" : "non-negative"} number`,
+    );
   }
 }
 

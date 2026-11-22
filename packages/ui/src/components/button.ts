@@ -32,7 +32,11 @@ export function Button(props: ButtonProps = {}): NativeNode {
     setProp(node, "role", props.role ?? "button");
     setProp(node, "data-variant", (props as Record<string, unknown>)["data-variant"] ?? variant);
     setProp(node, "data-size", (props as Record<string, unknown>)["data-size"] ?? size);
-    setProp(node, "__zguiClass", classes(sheet.className, "zui-button", `zui-button--${variant}`, SIZE_CLASSES[size]));
+    setProp(
+      node,
+      "__zguiClass",
+      classes(sheet.className, "zui-button", `zui-button--${variant}`, SIZE_CLASSES[size]),
+    );
     if ("variant" in props || "size" in props) {
       const copy: Record<string, unknown> = {};
       for (const key of Object.keys(props)) {
@@ -48,20 +52,33 @@ export function Button(props: ButtonProps = {}): NativeNode {
     return node;
   }
   const rest = omit(props, "variant", "size");
-  return element("control", mergeProps(
-    rest,
-    withDefaults({
-      tabIndex: 0,
-      role: "button" as const,
-      get "data-variant"() { return props.variant ?? "default"; },
-      get "data-size"() { return props.size ?? "md"; },
-    }, rest),
-    {
-      get __zguiClass() {
-        return classes(sheet.className, "zui-button",
-        `zui-button--${props.variant ?? "default"}`,
-        SIZE_CLASSES[props.size ?? "md"], );
+  return element(
+    "control",
+    mergeProps(
+      rest,
+      withDefaults(
+        {
+          tabIndex: 0,
+          role: "button" as const,
+          get "data-variant"() {
+            return props.variant ?? "default";
+          },
+          get "data-size"() {
+            return props.size ?? "md";
+          },
+        },
+        rest,
+      ),
+      {
+        get __zguiClass() {
+          return classes(
+            sheet.className,
+            "zui-button",
+            `zui-button--${props.variant ?? "default"}`,
+            SIZE_CLASSES[props.size ?? "md"],
+          );
+        },
       },
-    },
-  ));
+    ),
+  );
 }

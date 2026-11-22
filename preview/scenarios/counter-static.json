@@ -1,14 +1,35 @@
 {
   "schemaVersion": 1,
   "id": "counter-static",
-  "requiredCapabilities": ["pixels", "selectors.test-id", "selectors.semantic", "input.pointer", "tree.inspect"],
+  "requiredCapabilities": [
+    "pixels",
+    "selectors.test-id",
+    "selectors.semantic",
+    "input.pointer",
+    "tree.inspect"
+  ],
   "steps": [
     { "id": "ready", "op": "settle" },
     { "id": "before", "op": "capture", "captureId": "initial" },
-    { "id": "click", "op": "pointer.click", "target": { "surface": "main", "testId": "increment" }, "button": "primary" },
+    {
+      "id": "click",
+      "op": "pointer.click",
+      "target": { "surface": "main", "testId": "increment" },
+      "button": "primary"
+    },
     { "id": "updated", "op": "settle" },
-    { "id": "verify", "op": "assert", "target": { "surface": "main", "testId": "count-label" }, "check": { "property": "text", "equals": "Count: 1" } },
-    { "id": "native-name", "op": "assert", "target": { "surface": "main", "role": "button", "name": "Increment" }, "check": { "property": "enabled", "equals": true } },
+    {
+      "id": "verify",
+      "op": "assert",
+      "target": { "surface": "main", "testId": "count-label" },
+      "check": { "property": "text", "equals": "Count: 1" }
+    },
+    {
+      "id": "native-name",
+      "op": "assert",
+      "target": { "surface": "main", "role": "button", "name": "Increment" },
+      "check": { "property": "enabled", "equals": true }
+    },
     { "id": "after", "op": "capture", "captureId": "after-increment" }
   ]
 }

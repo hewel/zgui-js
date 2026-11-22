@@ -32,7 +32,14 @@ test("node queries resolve the host lazily and forward native snapshots", async 
   const mod = await moduleFor(t, fixture);
   assert.equal(harness.queries.rect.length, 0);
   let dispose;
-  t.after(() => { try { dispose?.(); } finally { delete globalThis.__zgui; delete globalThis.__seen; } });
+  t.after(() => {
+    try {
+      dispose?.();
+    } finally {
+      delete globalThis.__zgui;
+      delete globalThis.__seen;
+    }
+  });
   globalThis.__zgui = harness.host;
   globalThis.__seen = {};
   const root = harness.makeNode("root");
@@ -51,7 +58,11 @@ test("node queries resolve the host lazily and forward native snapshots", async 
   assert.equal(order.self, false);
   assert.deepEqual(harness.queries.rect, [first, second]);
   assert.deepEqual(harness.queries.text, [first]);
-  assert.deepEqual(harness.queries.precedes, [[first, second], [second, first], [first, first]]);
+  assert.deepEqual(harness.queries.precedes, [
+    [first, second],
+    [second, first],
+    [first, first],
+  ]);
 });
 
 const textFixture = `
@@ -70,7 +81,13 @@ test("getTextContent reads current subtree text after reactive updates and reord
   const harness = createHost();
   const mod = await moduleFor(t, textFixture);
   let dispose;
-  t.after(() => { try { dispose?.(); } finally { delete globalThis.__zgui; } });
+  t.after(() => {
+    try {
+      dispose?.();
+    } finally {
+      delete globalThis.__zgui;
+    }
+  });
   globalThis.__zgui = harness.host;
   const root = harness.makeNode("root");
   dispose = mod.mount(root);
@@ -97,7 +114,13 @@ test("mountStylesheet installs on mount and removes the stylesheet on disposal",
   const harness = createHost();
   const mod = await moduleFor(t, stylesheetFixture);
   let dispose;
-  t.after(() => { try { dispose?.(); } finally { delete globalThis.__zgui; } });
+  t.after(() => {
+    try {
+      dispose?.();
+    } finally {
+      delete globalThis.__zgui;
+    }
+  });
   globalThis.__zgui = harness.host;
   const root = harness.makeNode("root");
   dispose = mod.mount(root);
@@ -143,8 +166,10 @@ test("mountStylesheet uses an explicit target node from an ownerless callback", 
   globalThis.__zguiShell = harness.shell;
   let dispose;
   t.after(() => {
-    try { dispose?.(); harness.flush(); }
-    finally {
+    try {
+      dispose?.();
+      harness.flush();
+    } finally {
       if (previous === undefined) delete globalThis.__zguiShell;
       else globalThis.__zguiShell = previous;
     }
@@ -168,12 +193,18 @@ test("mountStylesheet uses an explicit target node from an ownerless callback", 
   assert.equal(harness.surfaces.get("target"), target);
 
   globalThis.__zgui = harness.host;
-  t.after(() => { delete globalThis.__zgui; });
+  t.after(() => {
+    delete globalThis.__zgui;
+  });
   assert.throws(
     () => harness.runTurn(() => mod.mountStylesheet("unknown", css, harness.makeNode("box"))),
     /unknown|invalid/i,
   );
-  assert.equal(harness.stylesheets.has("unknown"), false, "an unknown target must not use the ambient bridge");
+  assert.equal(
+    harness.stylesheets.has("unknown"),
+    false,
+    "an unknown target must not use the ambient bridge",
+  );
 
   const node = mod.target();
   harness.runTurn(() => {
@@ -195,5 +226,9 @@ test("mountStylesheet uses an explicit target node from an ownerless callback", 
     () => harness.runTurn(() => mod.mountStylesheet("stale", css, node)),
     /stale|detached|disposed/i,
   );
-  assert.equal(harness.stylesheets.has("stale"), false, "a retired target must not use the ambient bridge");
+  assert.equal(
+    harness.stylesheets.has("stale"),
+    false,
+    "a retired target must not use the ambient bridge",
+  );
 });

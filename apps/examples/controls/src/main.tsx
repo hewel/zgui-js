@@ -1,8 +1,20 @@
 import { createSignal, renderApp } from "@hewel/zgui";
 import type { NativeNode } from "@hewel/zgui";
 import {
-  Alert, AlertDescription, AlertTitle, Button, Checkbox, Input, Label,
-  Progress, Skeleton, Spinner, Switch, Textarea, ThemeProvider, Toggle,
+  Alert,
+  AlertDescription,
+  AlertTitle,
+  Button,
+  Checkbox,
+  Input,
+  Label,
+  Progress,
+  Skeleton,
+  Spinner,
+  Switch,
+  Textarea,
+  ThemeProvider,
+  Toggle,
 } from "@hewel/zgui/components";
 import type { AlertVariant, CheckedState } from "@hewel/zgui/components";
 
@@ -30,32 +42,48 @@ function Form() {
       <scroll class="form-scroll">
         <row class="form">
           <column class="form-column">
-            <Label testId="name-label" ref={setNameLabel}
-              control={() => nameInput}>Name</Label>
-            <Input testId="name-input" ref={node => { nameInput = node; }}
+            <Label testId="name-label" ref={setNameLabel} control={() => nameInput}>
+              Name
+            </Label>
+            <Input
+              testId="name-input"
+              ref={node => {
+                nameInput = node;
+              }}
               ariaLabelledBy={nameLabel()}
-              value={name()} onValueChange={setName} />
+              value={name()}
+              onValueChange={setName}
+            />
             <text testId="name-value">Name: {name()}</text>
             <row class="form-row">
-              <Checkbox testId="checkbox" ariaLabel="Checkbox" defaultChecked="mixed"
+              <Checkbox
+                testId="checkbox"
+                ariaLabel="Checkbox"
+                defaultChecked="mixed"
                 onCheckedChange={value => {
                   setCheckbox(value);
                   setCheckboxEvents(count => count + 1);
-                }} />
+                }}
+              />
               <text testId="checkbox-state">Checkbox: {String(checkbox())}</text>
               <text testId="checkbox-events">{checkboxEvents()}</text>
             </row>
             <row class="form-row">
-              <Switch testId="switch" ariaLabel="Switch" checked={switched()}
+              <Switch
+                testId="switch"
+                ariaLabel="Switch"
+                checked={switched()}
                 onCheckedChange={value => {
                   setSwitched(value);
                   setSwitchEvents(count => count + 1);
-                }} />
+                }}
+              />
               <text testId="switch-state">Switch: {String(switched())}</text>
               <text testId="switch-events">{switchEvents()}</text>
             </row>
-            <Toggle pressed={pressed()} label="Toggle"
-              onPressedChange={setPressed}>Toggle me</Toggle>
+            <Toggle pressed={pressed()} label="Toggle" onPressedChange={setPressed}>
+              Toggle me
+            </Toggle>
           </column>
           <column class="form-column">
             <Input testId="password" label="Password" secure defaultValue="secret" />
@@ -67,16 +95,35 @@ function Form() {
               <AlertTitle testId="alert-title">Ready</AlertTitle>
               <AlertDescription>
                 All controls are live.
-                <Toggle testId="alert-body-toggle" label="Inside"
-                  onPressedChange={setAlertBodyPressed}>Inside</Toggle>
+                <Toggle
+                  testId="alert-body-toggle"
+                  label="Inside"
+                  onPressedChange={setAlertBodyPressed}
+                >
+                  Inside
+                </Toggle>
               </AlertDescription>
             </Alert>
             <text testId="alert-body-state">{String(alertBodyPressed())}</text>
             <row class="form-row">
-              <Button testId="alert-icon-toggle" size="sm" variant="outline"
-                onClick={() => setAlertIcon(value => !value)}>Icon</Button>
-              <Button testId="alert-variant-toggle" size="sm" variant="outline"
-                onClick={() => setAlertVariant(value => value === "default" ? "destructive" : "default")}>Variant</Button>
+              <Button
+                testId="alert-icon-toggle"
+                size="sm"
+                variant="outline"
+                onClick={() => setAlertIcon(value => !value)}
+              >
+                Icon
+              </Button>
+              <Button
+                testId="alert-variant-toggle"
+                size="sm"
+                variant="outline"
+                onClick={() =>
+                  setAlertVariant(value => (value === "default" ? "destructive" : "default"))
+                }
+              >
+                Variant
+              </Button>
             </row>
             <row class="form-row">
               <Spinner testId="spinner" />

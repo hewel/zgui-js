@@ -1,14 +1,51 @@
 import { createSignal } from "@hewel/zgui";
 import {
-  Accordion, AccordionContent, AccordionItem, AccordionTrigger,
-  Avatar, AvatarFallback, Badge, Button, Collapsible, CollapsibleContent,
-  CollapsibleTrigger, Dialog, DialogClose, DialogContent, DialogDescription,
-  DialogDismiss, DialogFooter, DialogHeader, DialogTitle, DialogTrigger,
-  DropdownMenu, DropdownMenuContent, DropdownMenuTrigger, HoverCard,
-  HoverCardContent, HoverCardTrigger, Input, Label, MenuItem, MenuLabel,
-  MenuSeparator, Popover, PopoverClose, PopoverContent, PopoverDescription,
-  PopoverHeader, PopoverTitle, PopoverTrigger, Tabs, TabsContent, TabsList,
-  TabsTrigger, Tooltip, TooltipArrow, TooltipContent, TooltipProvider,
+  Accordion,
+  AccordionContent,
+  AccordionItem,
+  AccordionTrigger,
+  Avatar,
+  AvatarFallback,
+  Badge,
+  Button,
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogDescription,
+  DialogDismiss,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuTrigger,
+  HoverCard,
+  HoverCardContent,
+  HoverCardTrigger,
+  Input,
+  Label,
+  MenuItem,
+  MenuLabel,
+  MenuSeparator,
+  Popover,
+  PopoverClose,
+  PopoverContent,
+  PopoverDescription,
+  PopoverHeader,
+  PopoverTitle,
+  PopoverTrigger,
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
+  Tooltip,
+  TooltipArrow,
+  TooltipContent,
+  TooltipProvider,
   TooltipTrigger,
 } from "@hewel/zgui/components";
 import { DemoRow, Panel } from "../shell.js";
@@ -46,19 +83,25 @@ export function OverlaysSection(props: { onAction: (label: string) => void }) {
           <AccordionItem value="architecture">
             <AccordionTrigger>How does native JSX render?</AccordionTrigger>
             <AccordionContent>
-              <text>Solid Universal talks directly to QuickJS and upstream zgui without a DOM.</text>
+              <text>
+                Solid Universal talks directly to QuickJS and upstream zgui without a DOM.
+              </text>
             </AccordionContent>
           </AccordionItem>
           <AccordionItem value="overlays">
             <AccordionTrigger>How are stacked layers dismissed?</AccordionTrigger>
             <AccordionContent>
-              <text>Each surface registers a dismiss layer band so Escape closes only the top band.</text>
+              <text>
+                Each surface registers a dismiss layer band so Escape closes only the top band.
+              </text>
             </AccordionContent>
           </AccordionItem>
           <AccordionItem value="preview">
             <AccordionTrigger>Can I verify pixels headlessly?</AccordionTrigger>
             <AccordionContent>
-              <text>Yes -- native-host preview renders real offscreen GPU frames and dumps trees.</text>
+              <text>
+                Yes -- native-host preview renders real offscreen GPU frames and dumps trees.
+              </text>
             </AccordionContent>
           </AccordionItem>
         </Accordion>
@@ -85,10 +128,14 @@ export function OverlaysSection(props: { onAction: (label: string) => void }) {
               <TabsList variant="line" label="Report tabs">
                 <TabsTrigger value="summary">Summary</TabsTrigger>
                 <TabsTrigger value="metrics">Metrics</TabsTrigger>
-                <TabsTrigger value="audit" disabled>Audit</TabsTrigger>
+                <TabsTrigger value="audit" disabled>
+                  Audit
+                </TabsTrigger>
               </TabsList>
               <TabsContent value="summary">
-                <text>Summary panel -- automatic activation switches immediately on Arrow keys.</text>
+                <text>
+                  Summary panel -- automatic activation switches immediately on Arrow keys.
+                </text>
               </TabsContent>
               <TabsContent value="metrics">
                 <text>Metrics panel -- underline rule highlights the active tab.</text>
@@ -150,7 +197,9 @@ export function OverlaysSection(props: { onAction: (label: string) => void }) {
                   <DropdownMenuContent style="width: 190px">
                     <MenuLabel>Access scope</MenuLabel>
                     <MenuSeparator />
-                    <MenuItem onSelect={() => props.onAction("Scope: Private")}>Private workspace</MenuItem>
+                    <MenuItem onSelect={() => props.onAction("Scope: Private")}>
+                      Private workspace
+                    </MenuItem>
                     <MenuItem onSelect={() => props.onAction("Scope: Team")}>Shared team</MenuItem>
                   </DropdownMenuContent>
                 </DropdownMenu>
@@ -178,7 +227,8 @@ export function OverlaysSection(props: { onAction: (label: string) => void }) {
               <DialogHeader>
                 <DialogTitle>Confirm deletion</DialogTitle>
                 <DialogDescription>
-                  Explicit DialogDismiss renders the top-right close button when dismissControl is false.
+                  Explicit DialogDismiss renders the top-right close button when dismissControl is
+                  false.
                 </DialogDescription>
               </DialogHeader>
               <DialogFooter>
@@ -211,7 +261,9 @@ export function OverlaysSection(props: { onAction: (label: string) => void }) {
             >
               <PopoverHeader>
                 <PopoverTitle>Surface width</PopoverTitle>
-                <PopoverDescription>Popper flips/shifts automatically inside the viewport.</PopoverDescription>
+                <PopoverDescription>
+                  Popper flips/shifts automatically inside the viewport.
+                </PopoverDescription>
               </PopoverHeader>
               <row class="demo-pair">
                 <Label>Width</Label>
@@ -234,7 +286,9 @@ export function OverlaysSection(props: { onAction: (label: string) => void }) {
           <TooltipProvider delay={180} closeDelay={120}>
             <Tooltip>
               <TooltipTrigger>
-                <Button size="sm" variant="outline" ariaLabel="Bold action">Bold (Hover)</Button>
+                <Button size="sm" variant="outline" ariaLabel="Bold action">
+                  Bold (Hover)
+                </Button>
               </TooltipTrigger>
               <TooltipContent>
                 <text>Toggle bold weight</text>
@@ -243,7 +297,9 @@ export function OverlaysSection(props: { onAction: (label: string) => void }) {
             </Tooltip>
             <Tooltip>
               <TooltipTrigger>
-                <Button size="sm" variant="outline" ariaLabel="Inspect layers">Inspect</Button>
+                <Button size="sm" variant="outline" ariaLabel="Inspect layers">
+                  Inspect
+                </Button>
               </TooltipTrigger>
               <TooltipContent>Handoff skips delay across siblings</TooltipContent>
             </Tooltip>

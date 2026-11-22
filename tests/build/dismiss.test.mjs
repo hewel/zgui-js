@@ -40,19 +40,47 @@ async function mounted(t) {
   const mod = await moduleFor(t, fixture);
   assert.equal(registrations.length, 0, "module import must not register native dismiss layers");
   let dispose;
-  t.after(() => { try { dispose?.(); } finally { delete globalThis.__zgui; } });
+  t.after(() => {
+    try {
+      dispose?.();
+    } finally {
+      delete globalThis.__zgui;
+    }
+  });
   globalThis.__zgui = harness.host;
   const root = harness.makeNode("root");
   dispose = mod.mount(root);
-  return { mod, harness, root, registrations, finish: () => { const end = dispose; dispose = undefined; end?.(); } };
+  return {
+    mod,
+    harness,
+    root,
+    registrations,
+    finish: () => {
+      const end = dispose;
+      dispose = undefined;
+      end?.();
+    },
+  };
 }
 
 test("owner-bound leases track mounts, effects and disposal exactly once", async t => {
   const { mod, harness, root, registrations, finish } = await mounted(t);
   assert.equal(registrations.length, 2);
   const [conditional, effect] = registrations;
-  assert.deepEqual(conditional.options, { layer: "toast", dismissOnOutsidePress: true, dismissOnEscape: true, exclude: root, leaving: false });
-  assert.deepEqual(effect.options, { layer: "popover", dismissOnOutsidePress: true, dismissOnEscape: true, exclude: null, leaving: false });
+  assert.deepEqual(conditional.options, {
+    layer: "toast",
+    dismissOnOutsidePress: true,
+    dismissOnEscape: true,
+    exclude: root,
+    leaving: false,
+  });
+  assert.deepEqual(effect.options, {
+    layer: "popover",
+    dismissOnOutsidePress: true,
+    dismissOnEscape: true,
+    exclude: null,
+    leaving: false,
+  });
   const first = root.children[0].children[1];
   const second = root.children[0].children[2];
   assert.equal(effect.node, first);
@@ -89,7 +117,10 @@ test("a manual lease outside an owner survives disposal until released", async t
   assert.equal(registrations.length, 3);
   const manual = registrations[2];
   assert.equal(manual.node, root);
-  assert.deepEqual([manual.options.layer, manual.options.dismissOnOutsidePress, manual.options.dismissOnEscape], ["modal", true, true]);
+  assert.deepEqual(
+    [manual.options.layer, manual.options.dismissOnOutsidePress, manual.options.dismissOnEscape],
+    ["modal", true, true],
+  );
 
   finish();
   assert.equal(manual.active, true, "a lease outside an owner is not released by disposal");
@@ -108,8 +139,20 @@ test("update replaces the option snapshot and reasons reach the callback", async
   lease.update({ layer: "toast", dismissOnEscape: false });
   lease.update();
   assert.deepEqual(record.updates, [
-    { layer: "toast", dismissOnOutsidePress: true, dismissOnEscape: false, exclude: null, leaving: false },
-    { layer: "popover", dismissOnOutsidePress: true, dismissOnEscape: true, exclude: null, leaving: false },
+    {
+      layer: "toast",
+      dismissOnOutsidePress: true,
+      dismissOnEscape: false,
+      exclude: null,
+      leaving: false,
+    },
+    {
+      layer: "popover",
+      dismissOnOutsidePress: true,
+      dismissOnEscape: true,
+      exclude: null,
+      leaving: false,
+    },
   ]);
 
   record.callback("escape");

@@ -1,12 +1,28 @@
 {
   "schemaVersion": 1,
   "id": "counter-virtual",
-  "requiredCapabilities": ["pixels", "virtual-time", "selectors.test-id", "input.pointer", "tree.inspect"],
+  "requiredCapabilities": [
+    "pixels",
+    "virtual-time",
+    "selectors.test-id",
+    "input.pointer",
+    "tree.inspect"
+  ],
   "steps": [
     { "id": "initial", "op": "capture", "captureId": "initial", "requiredFrameTimeUs": 0 },
-    { "id": "click", "op": "pointer.click", "target": { "surface": "main", "testId": "increment" }, "button": "primary" },
+    {
+      "id": "click",
+      "op": "pointer.click",
+      "target": { "surface": "main", "testId": "increment" },
+      "button": "primary"
+    },
     { "id": "advance", "op": "clock.advance", "byMs": 20 },
-    { "id": "verify", "op": "assert", "target": { "surface": "main", "testId": "count-label" }, "check": { "property": "text", "equals": "Count: 1" } },
+    {
+      "id": "verify",
+      "op": "assert",
+      "target": { "surface": "main", "testId": "count-label" },
+      "check": { "property": "text", "equals": "Count: 1" }
+    },
     { "id": "after", "op": "capture", "captureId": "after-increment", "requiredFrameTimeUs": 20000 }
   ]
 }

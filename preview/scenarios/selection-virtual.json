@@ -391,9 +391,7 @@
       "op": "key.press",
       "surface": "main",
       "key": "Tab",
-      "modifiers": [
-        "Shift"
-      ]
+      "modifiers": ["Shift"]
     },
     {
       "id": "format-underline-after-removal",

@@ -43,7 +43,11 @@ function resolvePhysics(options: SpringOptions): ResolvedSpringPhysics {
   const velocityPrecision = readOption(options.velocityPrecision, precision);
   const stiffnessPerMass = stiffness / mass;
   const dampingPerMass = damping / mass;
-  if (![stiffnessPerMass, dampingPerMass, mass, precision, velocityPrecision].every(n => Number.isFinite(n) && n > 0)) {
+  if (
+    ![stiffnessPerMass, dampingPerMass, mass, precision, velocityPrecision].every(
+      n => Number.isFinite(n) && n > 0,
+    )
+  ) {
     throw new RangeError("Spring options must produce finite positive rates and thresholds");
   }
   return { stiffnessPerMass, dampingPerMass, precision, velocityPrecision };
@@ -75,12 +79,22 @@ export function createSpring(target: Accessor<number>, options: SpringOptions = 
     const overrides = overrideOptions();
     if (!overrides) return options;
     return {
-      get stiffness() { return overrides.stiffness !== undefined ? overrides.stiffness : options.stiffness; },
-      get damping() { return overrides.damping !== undefined ? overrides.damping : options.damping; },
-      get mass() { return overrides.mass !== undefined ? overrides.mass : options.mass; },
-      get precision() { return overrides.precision !== undefined ? overrides.precision : options.precision; },
+      get stiffness() {
+        return overrides.stiffness !== undefined ? overrides.stiffness : options.stiffness;
+      },
+      get damping() {
+        return overrides.damping !== undefined ? overrides.damping : options.damping;
+      },
+      get mass() {
+        return overrides.mass !== undefined ? overrides.mass : options.mass;
+      },
+      get precision() {
+        return overrides.precision !== undefined ? overrides.precision : options.precision;
+      },
       get velocityPrecision() {
-        return overrides.velocityPrecision !== undefined ? overrides.velocityPrecision : options.velocityPrecision;
+        return overrides.velocityPrecision !== undefined
+          ? overrides.velocityPrecision
+          : options.velocityPrecision;
       },
     };
   };
@@ -93,7 +107,9 @@ export function createSpring(target: Accessor<number>, options: SpringOptions = 
   const ownerBridge = tryBridgeFor();
   const scheduleFrame = (cb: (time: number) => void): number => {
     const bridge = ownerBridge ?? tryBridgeFor();
-    return bridge?.requestAnimationFrame ? bridge.requestAnimationFrame(cb) : requestAnimationFrame(cb);
+    return bridge?.requestAnimationFrame
+      ? bridge.requestAnimationFrame(cb)
+      : requestAnimationFrame(cb);
   };
 
   let destination = untrack(readTarget);
@@ -109,7 +125,9 @@ export function createSpring(target: Accessor<number>, options: SpringOptions = 
     if (frame !== undefined) cancelAnimationFrame(frame);
     frame = previousTime = undefined;
   };
-  const atRest = () => Math.abs(destination - position) <= physics.precision && Math.abs(velocity) <= physics.velocityPrecision;
+  const atRest = () =>
+    Math.abs(destination - position) <= physics.precision &&
+    Math.abs(velocity) <= physics.velocityPrecision;
   const settle = () => {
     cancelFrame();
     velocity = 0;
@@ -128,69 +146,96 @@ export function createSpring(target: Accessor<number>, options: SpringOptions = 
     // Implicit midpoint keeps the damped oscillator stable at irregular intervals.
     const half = dt / 2;
     const divisor = 1 + half * (physics.dampingPerMass + half * physics.stiffnessPerMass);
-    const midpointVelocity = (velocity + half * physics.stiffnessPerMass * (destination - position)) / divisor;
+    const midpointVelocity =
+      (velocity + half * physics.stiffnessPerMass * (destination - position)) / divisor;
     position += dt * midpointVelocity;
     velocity = 2 * midpointVelocity - velocity;
-    if (!Number.isFinite(divisor) || !Number.isFinite(position) || !Number.isFinite(velocity) || atRest()) settle();
+    if (
+      !Number.isFinite(divisor) ||
+      !Number.isFinite(position) ||
+      !Number.isFinite(velocity) ||
+      atRest()
+    )
+      settle();
     else {
       frame = scheduleFrame(step);
       setValue(position);
     }
   };
-  if (getOwner()) onCleanup(() => {
-    disposed = true;
-    cancelFrame();
-  });
-  createEffect(() => resolvePhysics(currentOptions()), next => {
-    physics = next;
-    if (!disposed && !untrack(getReducedMotion) && !atRest()) {
-      frame ??= scheduleFrame(step);
-    }
-  });
-  createEffect(() => [readTarget(), getReducedMotion()] as const, ([next, reduced]) => {
-    if (refreshingTarget) return;
-    destination = next;
-    if (reduced || atRest()) settle();
-    else frame ??= scheduleFrame(step);
-  });
-  return withControls(() => {
-    if (getReducedMotion()) return readTarget();
-    value();
-    return position;
-  }, next => {
-    if (disposed) return;
-    // Solid stages same-turn target writes until a flush.
-    if (!refreshingTarget) {
-      refreshingTarget = true;
-      try { flush(); } finally { refreshingTarget = false; }
-    }
-    if (disposed) return;
-    const nextDestination = untrack(readTarget);
-    if (disposed) return;
-    cancelFrame();
-    position = next;
-    velocity = 0;
-    destination = nextDestination;
-    if (untrack(getReducedMotion) || atRest()) settle();
-    else {
-      setValue(position);
-      frame = scheduleFrame(step);
-    }
-  }, next => {
-    if (disposed) return;
-    const merged: SpringOptions = { ...untrack(overrideOptions), ...next };
-    // Validate eagerly so invalid calls fail synchronously at the call site.
-    const nextPhysics = untrack(() => resolvePhysics({
-      stiffness: merged.stiffness !== undefined ? merged.stiffness : options.stiffness,
-      damping: merged.damping !== undefined ? merged.damping : options.damping,
-      mass: merged.mass !== undefined ? merged.mass : options.mass,
-      precision: merged.precision !== undefined ? merged.precision : options.precision,
-      velocityPrecision: merged.velocityPrecision !== undefined ? merged.velocityPrecision : options.velocityPrecision,
-    }));
-    physics = nextPhysics;
-    setOverrideOptions(merged);
-    if (!untrack(getReducedMotion) && !atRest()) {
-      frame ??= scheduleFrame(step);
-    }
-  });
+  if (getOwner())
+    onCleanup(() => {
+      disposed = true;
+      cancelFrame();
+    });
+  createEffect(
+    () => resolvePhysics(currentOptions()),
+    next => {
+      physics = next;
+      if (!disposed && !untrack(getReducedMotion) && !atRest()) {
+        frame ??= scheduleFrame(step);
+      }
+    },
+  );
+  createEffect(
+    () => [readTarget(), getReducedMotion()] as const,
+    ([next, reduced]) => {
+      if (refreshingTarget) return;
+      destination = next;
+      if (reduced || atRest()) settle();
+      else frame ??= scheduleFrame(step);
+    },
+  );
+  return withControls(
+    () => {
+      if (getReducedMotion()) return readTarget();
+      value();
+      return position;
+    },
+    next => {
+      if (disposed) return;
+      // Solid stages same-turn target writes until a flush.
+      if (!refreshingTarget) {
+        refreshingTarget = true;
+        try {
+          flush();
+        } finally {
+          refreshingTarget = false;
+        }
+      }
+      if (disposed) return;
+      const nextDestination = untrack(readTarget);
+      if (disposed) return;
+      cancelFrame();
+      position = next;
+      velocity = 0;
+      destination = nextDestination;
+      if (untrack(getReducedMotion) || atRest()) settle();
+      else {
+        setValue(position);
+        frame = scheduleFrame(step);
+      }
+    },
+    next => {
+      if (disposed) return;
+      const merged: SpringOptions = { ...untrack(overrideOptions), ...next };
+      // Validate eagerly so invalid calls fail synchronously at the call site.
+      const nextPhysics = untrack(() =>
+        resolvePhysics({
+          stiffness: merged.stiffness !== undefined ? merged.stiffness : options.stiffness,
+          damping: merged.damping !== undefined ? merged.damping : options.damping,
+          mass: merged.mass !== undefined ? merged.mass : options.mass,
+          precision: merged.precision !== undefined ? merged.precision : options.precision,
+          velocityPrecision:
+            merged.velocityPrecision !== undefined
+              ? merged.velocityPrecision
+              : options.velocityPrecision,
+        }),
+      );
+      physics = nextPhysics;
+      setOverrideOptions(merged);
+      if (!untrack(getReducedMotion) && !atRest()) {
+        frame ??= scheduleFrame(step);
+      }
+    },
+  );
 }

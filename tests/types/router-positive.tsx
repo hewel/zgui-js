@@ -20,7 +20,11 @@ import type {
   Router,
 } from "@hewel/zgui/router";
 
-const RootLayout = () => <column><Outlet /></column>;
+const RootLayout = () => (
+  <column>
+    <Outlet />
+  </column>
+);
 const HomePage = () => <text>home</text>;
 const DocPage = () => {
   const params = useParams<"/docs/:docId">();
@@ -33,7 +37,11 @@ const DocPage = () => {
   });
   void setSearch({ tab: "preview", line: 12 }, { replace: true });
   void navigate("/settings/:section", { params: { section: "theme" } });
-  return <text>{params().docId}:{search().tab}:{String(loc().state?.fromOutline)}:{matched()?.pathname}</text>;
+  return (
+    <text>
+      {params().docId}:{search().tab}:{String(loc().state?.fromOutline)}:{matched()?.pathname}
+    </text>
+  );
 };
 const SettingsPage = () => <text>settings</text>;
 const NotFound = () => <text>404</text>;
@@ -62,10 +70,7 @@ export type DocParamsCheck = AssertEqual<
   ExtractRouteParams<"/docs/:docId">,
   { readonly docId: string }
 >;
-export type WildcardParamsCheck = AssertEqual<
-  ExtractRouteParams<"/*">,
-  { readonly "*": string }
->;
+export type WildcardParamsCheck = AssertEqual<ExtractRouteParams<"/*">, { readonly "*": string }>;
 export type StaticParamsCheck = AssertEqual<
   ExtractRouteParams<"/">,
   Readonly<Record<string, never>>
@@ -96,8 +101,17 @@ stopControl();
 const InRouter = () => {
   const active = useRouter<AppPaths>();
   void active.canGoBack();
-  return <Link to="/docs/:docId" params={{ docId: "guide" }} search={{ q: "test" }}>Guide</Link>;
+  return (
+    <Link to="/docs/:docId" params={{ docId: "guide" }} search={{ q: "test" }}>
+      Guide
+    </Link>
+  );
 };
 
-void <RouterProvider router={router}><InRouter /><Outlet /></RouterProvider>;
-void <RouterProvider router={router} />;
+void (
+  <RouterProvider router={router}>
+    <InRouter />
+    <Outlet />
+  </RouterProvider>
+);
+void (<RouterProvider router={router} />);

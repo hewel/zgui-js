@@ -97,7 +97,11 @@ async function mounted(t, mountName = "mount") {
   const clock = createClock(t, h);
   let dispose;
   t.after(() => {
-    try { dispose?.(); } finally { delete globalThis.__zgui; }
+    try {
+      dispose?.();
+    } finally {
+      delete globalThis.__zgui;
+    }
     assert.equal(h.locks.length, 0, "context menu must not lock scroll");
   });
   globalThis.__zgui = h.host;
@@ -109,11 +113,30 @@ async function mounted(t, mountName = "mount") {
     return h.dispatch(node, name, extras);
   };
   const emit = (record, value) => record.emit(value);
-  const flush = () => { h.flush(); clock.frame(); clock.advance(0); };
+  const flush = () => {
+    h.flush();
+    clock.frame();
+    clock.advance(0);
+  };
   const active = records => records.filter(record => record.active).length;
   return {
-    h, mod, clock, busy, traps, layers, portals, geometry, send, emit, flush, active,
-    finish: () => { const stop = dispose; dispose = undefined; stop?.(); },
+    h,
+    mod,
+    clock,
+    busy,
+    traps,
+    layers,
+    portals,
+    geometry,
+    send,
+    emit,
+    flush,
+    active,
+    finish: () => {
+      const stop = dispose;
+      dispose = undefined;
+      stop?.();
+    },
   };
 }
 
@@ -138,12 +161,20 @@ test("trigger renders zero-sized anchor after dynamic children and stays lazy", 
 
   mod.setRows(["alpha", "beta", "gamma"]);
   h.flush();
-  assert.equal(trigger.children[trigger.children.length - 1], anchor, "dynamic child updates keep anchor intact at end");
+  assert.equal(
+    trigger.children[trigger.children.length - 1],
+    anchor,
+    "dynamic child updates keep anchor intact at end",
+  );
   assert.ok(h.byTestId("child-gamma"));
 
   mod.setRows([]);
   h.flush();
-  assert.equal(trigger.children[trigger.children.length - 1], anchor, "emptying dynamic list does not clobber anchor");
+  assert.equal(
+    trigger.children[trigger.children.length - 1],
+    anchor,
+    "emptying dynamic list does not clobber anchor",
+  );
   finish();
 });
 
@@ -153,7 +184,10 @@ test("onContextMenu, secondary pointerdown, and useContextMenuPlace position anc
   const anchor = trigger.children[trigger.children.length - 1];
   h.rects.set(trigger, { x: 80, y: 60, width: 320, height: 240 });
 
-  const primary = send("trigger", "onPointerDown", { button: "primary", position: { x: 140, y: 120 } });
+  const primary = send("trigger", "onPointerDown", {
+    button: "primary",
+    position: { x: 140, y: 120 },
+  });
   assert.equal(primary.defaultPrevented, false);
   assert.equal(h.byTestId("surface"), undefined, "primary press does not open context menu");
 
@@ -166,7 +200,11 @@ test("onContextMenu, secondary pointerdown, and useContextMenuPlace position anc
   assert.equal(trigger.props.get("data-state"), "open");
   assert.deepEqual(anchor.props.get("style"), { left: "65px", top: "52px" });
   assert.equal(layers.length, 1);
-  assert.equal(layers[0].options.exclude, anchor, "only the 0x0 anchor is excluded so clicking area dismisses");
+  assert.equal(
+    layers[0].options.exclude,
+    anchor,
+    "only the 0x0 anchor is excluded so clicking area dismisses",
+  );
   assert.equal(layers[0].options.dismissOnOutsidePress, true);
   assert.equal(layers[0].options.dismissOnEscape, true);
   assert.equal(surface.props.get("ariaPopupFor"), anchor);
@@ -189,7 +227,10 @@ test("onContextMenu, secondary pointerdown, and useContextMenuPlace position anc
   assert.equal(active(traps), 0);
   assert.equal(active(layers), 0);
 
-  const secondary = send("trigger", "onPointerDown", { button: "secondary", position: { x: 200, y: 180 } });
+  const secondary = send("trigger", "onPointerDown", {
+    button: "secondary",
+    position: { x: 200, y: 180 },
+  });
   assert.equal(secondary.defaultPrevented, true);
   assert.ok(h.byTestId("surface"));
   assert.deepEqual(anchor.props.get("style"), { left: "120px", top: "120px" });
@@ -232,7 +273,10 @@ test("caller preventDefault and disabled trigger block opening", async t => {
   const ctx = send("trigger", "onContextMenu", { position: { x: 120, y: 90 } });
   assert.equal(ctx.defaultPrevented, false);
   assert.equal(h.byTestId("surface"), undefined);
-  const right = send("trigger", "onPointerDown", { button: "secondary", position: { x: 120, y: 90 } });
+  const right = send("trigger", "onPointerDown", {
+    button: "secondary",
+    position: { x: 120, y: 90 },
+  });
   assert.equal(right.defaultPrevented, false);
   assert.equal(h.byTestId("surface"), undefined);
   finish();
@@ -289,7 +333,11 @@ test("context menu forwards application classes, focuses MenuSubTrigger on Escap
   h.host.focus(h.byTestId("sub-item"));
   layers.findLast(record => record.active).callback("escape");
   assert.equal(subTrigger.props.get("expanded"), false);
-  assert.equal(h.focused.current, subTrigger, "submenu Escape inside context menu focuses MenuSubTrigger");
+  assert.equal(
+    h.focused.current,
+    subTrigger,
+    "submenu Escape inside context menu focuses MenuSubTrigger",
+  );
   flush();
   assert.equal(h.byTestId("sub-surface"), undefined);
   assert.equal(h.byTestId("surface"), surface);
@@ -297,7 +345,11 @@ test("context menu forwards application classes, focuses MenuSubTrigger on Escap
   send(subTrigger, "onClick");
   mod.log.subOpens.length = 0;
   send("sub-item", "onClick");
-  assert.deepEqual(mod.log.subOpens, [false], "submenu leaf selection notifies onOpenChange(false)");
+  assert.deepEqual(
+    mod.log.subOpens,
+    [false],
+    "submenu leaf selection notifies onOpenChange(false)",
+  );
   flush();
   assert.equal(h.byTestId("surface"), undefined);
   finish();

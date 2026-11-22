@@ -23,28 +23,46 @@ export const AlertDescription = part("box", sheet, "zui-alert__description");
 export function Alert(props: AlertProps = {}): NativeNode {
   useStylesheet(sheet);
   const rest = omit(props, "variant", "live", "icon", "children");
-  const mark = memo(() => (props.icon ?? true) ? Icon({
-    get icon() {
-      return (props.variant ?? "default") === "destructive" ? ALERT_TRIANGLE : INFO;
-    },
-    class: "zui-alert__icon",
-  }) : null);
+  const mark = memo(() =>
+    (props.icon ?? true)
+      ? Icon({
+          get icon() {
+            return (props.variant ?? "default") === "destructive" ? ALERT_TRIANGLE : INFO;
+          },
+          class: "zui-alert__icon",
+        })
+      : null,
+  );
   const content = memo(() => props.children);
-  return element("box", mergeProps(
-    rest,
-    withDefaults({
-      get role() { return (props.live ?? true) ? "alert" as const : "group" as const; },
-      get ariaLive() { return (props.live ?? true) ? "polite" as const : null; },
-      get "data-variant"() { return props.variant ?? "default"; },
-      get "data-icon"() { return String(props.icon ?? true); },
-    }, rest),
-    {
-      get __zguiClass() {
-        return classes(sheet.className, "zui-alert", `zui-alert--${props.variant ?? "default"}`, );
+  return element(
+    "box",
+    mergeProps(
+      rest,
+      withDefaults(
+        {
+          get role() {
+            return (props.live ?? true) ? ("alert" as const) : ("group" as const);
+          },
+          get ariaLive() {
+            return (props.live ?? true) ? ("polite" as const) : null;
+          },
+          get "data-variant"() {
+            return props.variant ?? "default";
+          },
+          get "data-icon"() {
+            return String(props.icon ?? true);
+          },
+        },
+        rest,
+      ),
+      {
+        get __zguiClass() {
+          return classes(sheet.className, "zui-alert", `zui-alert--${props.variant ?? "default"}`);
+        },
+        get children() {
+          return [mark, content];
+        },
       },
-      get children() {
-        return [mark, content];
-      },
-    },
-  ));
+    ),
+  );
 }

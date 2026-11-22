@@ -33,18 +33,37 @@ async function mounted(t) {
   const mod = await moduleFor(t, fixture);
   assert.equal(registrations.length, 0, "module import must not register native traps");
   let dispose;
-  t.after(() => { try { dispose?.(); } finally { delete globalThis.__zgui; } });
+  t.after(() => {
+    try {
+      dispose?.();
+    } finally {
+      delete globalThis.__zgui;
+    }
+  });
   globalThis.__zgui = harness.host;
   const root = harness.makeNode("root");
   dispose = mod.mount(root);
-  return { mod, harness, root, registrations, finish: () => { const end = dispose; dispose = undefined; end?.(); } };
+  return {
+    mod,
+    harness,
+    root,
+    registrations,
+    finish: () => {
+      const end = dispose;
+      dispose = undefined;
+      end?.();
+    },
+  };
 }
 
 test("owner-bound traps track mounts, effects and disposal exactly once", async t => {
   const { mod, harness, root, registrations, finish } = await mounted(t);
   assert.equal(registrations.length, 2);
   const [conditional, effect] = registrations;
-  assert.deepEqual([conditional.wrap, conditional.autoFocus, conditional.restore], [true, true, true]);
+  assert.deepEqual(
+    [conditional.wrap, conditional.autoFocus, conditional.restore],
+    [true, true, true],
+  );
   assert.deepEqual([effect.wrap, effect.autoFocus, effect.restore], [false, true, true]);
   const first = root.children[0].children[1];
   const second = root.children[0].children[2];

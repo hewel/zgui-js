@@ -1,11 +1,35 @@
 import { createSignal, renderApp } from "@hewel/zgui";
 import type { NativeNode } from "@hewel/zgui";
 import {
-  Avatar, AvatarBadge, AvatarFallback, AvatarGroup, AvatarGroupCount, AvatarImage,
-  Button, Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle,
-  Icon, InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput,
-  InputGroupText, InputGroupTextarea, Item, ItemActions, ItemContent,
-  ItemDescription, ItemGroup, ItemMedia, ItemSeparator, ItemTitle, ThemeProvider,
+  Avatar,
+  AvatarBadge,
+  AvatarFallback,
+  AvatarGroup,
+  AvatarGroupCount,
+  AvatarImage,
+  Button,
+  Empty,
+  EmptyContent,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+  Icon,
+  InputGroup,
+  InputGroupAddon,
+  InputGroupButton,
+  InputGroupInput,
+  InputGroupText,
+  InputGroupTextarea,
+  Item,
+  ItemActions,
+  ItemContent,
+  ItemDescription,
+  ItemGroup,
+  ItemMedia,
+  ItemSeparator,
+  ItemTitle,
+  ThemeProvider,
 } from "@hewel/zgui/components";
 import type { ColorScheme } from "@hewel/zgui/components";
 import { CHECK, SEARCH } from "@hewel/zgui/icons";
@@ -42,51 +66,106 @@ function Panel() {
                 <AvatarImage src="assets/red.png" />
               </Avatar>
               <AvatarGroup size="sm" ariaLabel="Team">
-                <Avatar size="sm" src="assets/red.png" label="One"><AvatarFallback>1</AvatarFallback></Avatar>
-                <Avatar size="sm" label="Two"><AvatarFallback>2</AvatarFallback></Avatar>
+                <Avatar size="sm" src="assets/red.png" label="One">
+                  <AvatarFallback>1</AvatarFallback>
+                </Avatar>
+                <Avatar size="sm" label="Two">
+                  <AvatarFallback>2</AvatarFallback>
+                </Avatar>
                 <AvatarGroupCount>+3</AvatarGroupCount>
               </AvatarGroup>
             </row>
             <row class="panel-row">
-              <Button testId="avatar-source" size="sm" variant="outline"
-                onClick={() => setAvatarSrc(value => value == null ? "assets/red.png" : null)}>Source</Button>
-              <Button testId="composition-theme" size="sm" variant="outline"
-                onClick={() => setScheme(value => value === "light" ? "dark" : "light")}>Theme</Button>
+              <Button
+                testId="avatar-source"
+                size="sm"
+                variant="outline"
+                onClick={() => setAvatarSrc(value => (value == null ? "assets/red.png" : null))}
+              >
+                Source
+              </Button>
+              <Button
+                testId="composition-theme"
+                size="sm"
+                variant="outline"
+                onClick={() => setScheme(value => (value === "light" ? "dark" : "light"))}
+              >
+                Theme
+              </Button>
             </row>
             <Empty ariaLabel="Empty state">
               <EmptyHeader>
-                <EmptyMedia variant="icon"><Icon icon={SEARCH} /></EmptyMedia>
+                <EmptyMedia variant="icon">
+                  <Icon icon={SEARCH} />
+                </EmptyMedia>
                 <EmptyTitle>No results</EmptyTitle>
                 <EmptyDescription>Adjust your filters and try again.</EmptyDescription>
               </EmptyHeader>
               <EmptyContent>
-                <Button testId="empty-reset" size="sm" variant="outline"
-                  onClick={() => { setQuery(""); setInvalid(false); }}>Clear filters</Button>
+                <Button
+                  testId="empty-reset"
+                  size="sm"
+                  variant="outline"
+                  onClick={() => {
+                    setQuery("");
+                    setInvalid(false);
+                  }}
+                >
+                  Clear filters
+                </Button>
               </EmptyContent>
             </Empty>
             <Item testId="item" variant="outline">
-              <ItemMedia variant="icon"><Icon icon={CHECK} /></ItemMedia>
+              <ItemMedia variant="icon">
+                <Icon icon={CHECK} />
+              </ItemMedia>
               <ItemContent>
                 <ItemTitle>Document</ItemTitle>
-                {descCount() >= 1 && <ItemDescription testId="item-description-a">Synced an hour ago.</ItemDescription>}
-                {descCount() >= 2 && <ItemDescription testId="item-description-b">Shared with two people.</ItemDescription>}
-                <ItemActions><Button size="xs" variant="ghost">Open</Button></ItemActions>
+                {descCount() >= 1 && (
+                  <ItemDescription testId="item-description-a">Synced an hour ago.</ItemDescription>
+                )}
+                {descCount() >= 2 && (
+                  <ItemDescription testId="item-description-b">
+                    Shared with two people.
+                  </ItemDescription>
+                )}
+                <ItemActions>
+                  <Button size="xs" variant="ghost">
+                    Open
+                  </Button>
+                </ItemActions>
               </ItemContent>
             </Item>
             <row class="panel-row">
-              <Button testId="item-descriptions" size="sm" variant="outline"
-                onClick={() => setDescCount(count => (count + 2) % 3)}>Descriptions</Button>
+              <Button
+                testId="item-descriptions"
+                size="sm"
+                variant="outline"
+                onClick={() => setDescCount(count => (count + 2) % 3)}
+              >
+                Descriptions
+              </Button>
               <text testId="item-description-count">{descCount()}</text>
             </row>
           </column>
           <column class="panel-column">
             <InputGroup testId="group" invalid={invalid()}>
-              <InputGroupAddon><Icon icon={SEARCH} /></InputGroupAddon>
-              <InputGroupInput testId="grouped-input" label="Search"
-                value={query()} onValueChange={setQuery} />
+              <InputGroupAddon>
+                <Icon icon={SEARCH} />
+              </InputGroupAddon>
+              <InputGroupInput
+                testId="grouped-input"
+                label="Search"
+                value={query()}
+                onValueChange={setQuery}
+              />
               <InputGroupAddon align="inline-end">
-                <InputGroupButton testId="grouped-action"
-                  onClick={() => setActions(count => count + 1)}>Go</InputGroupButton>
+                <InputGroupButton
+                  testId="grouped-action"
+                  onClick={() => setActions(count => count + 1)}
+                >
+                  Go
+                </InputGroupButton>
               </InputGroupAddon>
             </InputGroup>
             <row class="panel-row">
@@ -99,12 +178,26 @@ function Panel() {
                 <InputGroupText>Read only</InputGroupText>
               </InputGroupAddon>
             </InputGroup>
-            <Button testId="frame-toggle" size="sm" variant="outline"
-              onClick={() => setInvalid(value => !value)}>Frame</Button>
+            <Button
+              testId="frame-toggle"
+              size="sm"
+              variant="outline"
+              onClick={() => setInvalid(value => !value)}
+            >
+              Frame
+            </Button>
             <ItemGroup ariaLabel="Files">
-              <Item><ItemContent><ItemTitle>First</ItemTitle></ItemContent></Item>
+              <Item>
+                <ItemContent>
+                  <ItemTitle>First</ItemTitle>
+                </ItemContent>
+              </Item>
               <ItemSeparator />
-              <Item><ItemContent><ItemTitle>Second</ItemTitle></ItemContent></Item>
+              <Item>
+                <ItemContent>
+                  <ItemTitle>Second</ItemTitle>
+                </ItemContent>
+              </Item>
             </ItemGroup>
           </column>
         </row>

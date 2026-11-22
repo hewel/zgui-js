@@ -1,4 +1,13 @@
-import { For, createContext, createEffect, createSignal, onCleanup, omit, untrack, useContext } from "#solid";
+import {
+  For,
+  createContext,
+  createEffect,
+  createSignal,
+  onCleanup,
+  omit,
+  untrack,
+  useContext,
+} from "#solid";
 import { createElement, mergeProps, setProp, spread } from "../renderer/index.js";
 import { tryBridgeFor } from "../host.js";
 import { getReducedMotion, observeGeometry } from "../nodes.js";
@@ -59,13 +68,19 @@ export interface ToastRecord {
 }
 
 export interface ToastController {
-  readonly show: (titleOrOptions: string | ToastOptions, options?: Omit<ToastOptions, "title">) => string;
+  readonly show: (
+    titleOrOptions: string | ToastOptions,
+    options?: Omit<ToastOptions, "title">,
+  ) => string;
   readonly success: (title: string, options?: Omit<ToastOptions, "title" | "kind">) => string;
   readonly error: (title: string, options?: Omit<ToastOptions, "title" | "kind">) => string;
   readonly info: (title: string, options?: Omit<ToastOptions, "title" | "kind">) => string;
   readonly warning: (title: string, options?: Omit<ToastOptions, "title" | "kind">) => string;
   readonly dismiss: (id?: string) => void;
-  readonly promise: <T>(work: Promise<T> | (() => Promise<T>), messages: ToastPromiseMessages<T>) => Promise<T>;
+  readonly promise: <T>(
+    work: Promise<T> | (() => Promise<T>),
+    messages: ToastPromiseMessages<T>,
+  ) => Promise<T>;
   readonly items: Accessor<readonly ToastRecord[]>;
 }
 
@@ -115,12 +130,18 @@ function resolveController(): ToastController | null {
 
 function iconForKind(kind: ToastKind): IconData | null {
   switch (kind) {
-    case "success": return CHECK_CIRCLE;
-    case "info": return INFO;
-    case "warning": return ALERT_TRIANGLE;
-    case "error": return CROSS_CIRCLE;
-    case "loading": return SPINNER;
-    default: return null;
+    case "success":
+      return CHECK_CIRCLE;
+    case "info":
+      return INFO;
+    case "warning":
+      return ALERT_TRIANGLE;
+    case "error":
+      return CROSS_CIRCLE;
+    case "loading":
+      return SPINNER;
+    default:
+      return null;
   }
 }
 
@@ -202,49 +223,56 @@ function ToastRow(props: ToastRowProps): NativeNode {
     },
   );
 
-  createEffect(
-    props.paused,
-    isPaused => {
-      if (!Number.isFinite(remainingMs) || remainingMs <= 0) {
-        timer.cancel();
-        return;
+  createEffect(props.paused, isPaused => {
+    if (!Number.isFinite(remainingMs) || remainingMs <= 0) {
+      timer.cancel();
+      return;
+    }
+    if (isPaused) {
+      if (startedAt > 0) {
+        remainingMs = Math.max(0, remainingMs - (nowMs() - startedAt));
+        startedAt = 0;
       }
-      if (isPaused) {
-        if (startedAt > 0) {
-          remainingMs = Math.max(0, remainingMs - (nowMs() - startedAt));
-          startedAt = 0;
-        }
-        timer.cancel();
-      } else {
-        armTimer();
-      }
-    },
-  );
+      timer.cancel();
+    } else {
+      armTimer();
+    }
+  });
 
   const slotNode = createElement("box");
-  spread(slotNode, {
-    __zguiClass: "zui-toast__slot",
-    get "data-front"() { return props.index() === 0 ? "true" : "false"; },
-    get __zguiStyle() {
-      const idx = props.index();
-      return {
-        "--zui-toast-offset": `${props.offsetFor(props.record.id)}px`,
-        "--zui-toast-depth": String(idx),
-        "--zui-toast-layer": String(100 - idx),
-      };
+  spread(
+    slotNode,
+    {
+      __zguiClass: "zui-toast__slot",
+      get "data-front"() {
+        return props.index() === 0 ? "true" : "false";
+      },
+      get __zguiStyle() {
+        const idx = props.index();
+        return {
+          "--zui-toast-offset": `${props.offsetFor(props.record.id)}px`,
+          "--zui-toast-depth": String(idx),
+          "--zui-toast-layer": String(100 - idx),
+        };
+      },
     },
-  }, true);
+    true,
+  );
 
   const card = createElement("box");
   const isUrgent = props.record.kind === "error" || props.record.kind === "warning";
-  spread(card, {
-    role: isUrgent ? "alert" : "status",
-    ariaLive: isUrgent ? "assertive" : "polite",
-    testId: `toast-item-${props.record.id}`,
-    "data-kind": props.record.kind,
-    "data-state": "open",
-    __zguiClass: "zui-toast",
-  }, true);
+  spread(
+    card,
+    {
+      role: isUrgent ? "alert" : "status",
+      ariaLive: isUrgent ? "assertive" : "polite",
+      testId: `toast-item-${props.record.id}`,
+      "data-kind": props.record.kind,
+      "data-state": "open",
+      __zguiClass: "zui-toast",
+    },
+    true,
+  );
 
   observeGeometry(card, "contentSize", size => {
     if (size.height > 0) props.reportHeight(props.record.id, size.height);
@@ -260,7 +288,10 @@ function ToastRow(props: ToastRowProps): NativeNode {
   const textBox = element("box", { class: "zui-toast__text" });
   append(textBox, element("label", { class: "zui-toast__title", children: props.record.title }));
   if (props.record.description) {
-    append(textBox, element("label", { class: "zui-toast__description", children: props.record.description }));
+    append(
+      textBox,
+      element("label", { class: "zui-toast__description", children: props.record.description }),
+    );
   }
   append(card, textBox);
 
@@ -317,10 +348,21 @@ function ToastRow(props: ToastRowProps): NativeNode {
 
 export function ToastProvider(props: ToastProviderProps = {}): NativeChild {
   useStylesheet(sheet);
-  const rest = omit(props, "children", "corner", "maxVisible", "defaultDuration", "gap", "regionTestId");
+  const rest = omit(
+    props,
+    "children",
+    "corner",
+    "maxVisible",
+    "defaultDuration",
+    "gap",
+    "regionTestId",
+  );
   const [items, setItems] = createSignal<readonly ToastRecord[]>([], { ownedWrite: true });
   const [paused, setPaused] = createSignal(false, { ownedWrite: true });
-  const [heights, setHeights] = createSignal<Readonly<Record<string, number>>>({}, { ownedWrite: true });
+  const [heights, setHeights] = createSignal<Readonly<Record<string, number>>>(
+    {},
+    { ownedWrite: true },
+  );
 
   const maxVisible = () => {
     const n = props.maxVisible ?? DEFAULT_MAX_VISIBLE;
@@ -344,13 +386,15 @@ export function ToastProvider(props: ToastProviderProps = {}): NativeChild {
       return;
     }
     let dismissedItem: ToastRecord | undefined;
-    setItems(prev => prev.filter(item => {
-      if (item.id === id) {
-        dismissedItem = item;
-        return false;
-      }
-      return true;
-    }));
+    setItems(prev =>
+      prev.filter(item => {
+        if (item.id === id) {
+          dismissedItem = item;
+          return false;
+        }
+        return true;
+      }),
+    );
     if (dismissedItem) {
       setHeights(prev => {
         if (!(id in prev)) return prev;
@@ -366,9 +410,14 @@ export function ToastProvider(props: ToastProviderProps = {}): NativeChild {
     const id = opts.id ?? nextToastId();
     const kind: ToastKind = opts.kind ?? "default";
     const rawDuration = opts.duration;
-    const duration = rawDuration !== undefined
-      ? (rawDuration === 0 ? Infinity : rawDuration)
-      : (kind === "loading" ? Infinity : defaultDuration());
+    const duration =
+      rawDuration !== undefined
+        ? rawDuration === 0
+          ? Infinity
+          : rawDuration
+        : kind === "loading"
+          ? Infinity
+          : defaultDuration();
     const record: ToastRecord = {
       id,
       title: opts.title,
@@ -407,15 +456,20 @@ export function ToastProvider(props: ToastProviderProps = {}): NativeChild {
     info: (title, options) => upsert(normalizeOptions(title, options, "info")),
     warning: (title, options) => upsert(normalizeOptions(title, options, "warning")),
     dismiss,
-    async promise<T>(work: Promise<T> | (() => Promise<T>), messages: ToastPromiseMessages<T>): Promise<T> {
+    async promise<T>(
+      work: Promise<T> | (() => Promise<T>),
+      messages: ToastPromiseMessages<T>,
+    ): Promise<T> {
       const id = upsert({ title: messages.loading, kind: "loading", duration: Infinity });
       try {
         const result = await (typeof work === "function" ? work() : work);
-        const resolved = typeof messages.success === "function" ? messages.success(result) : messages.success;
+        const resolved =
+          typeof messages.success === "function" ? messages.success(result) : messages.success;
         upsert({ ...normalizeOptions(resolved, undefined, "success"), id });
         return result;
       } catch (err) {
-        const resolved = typeof messages.error === "function" ? messages.error(err) : messages.error;
+        const resolved =
+          typeof messages.error === "function" ? messages.error(err) : messages.error;
         upsert({ ...normalizeOptions(resolved, undefined, "error"), id });
         throw err;
       }
@@ -463,42 +517,64 @@ export function ToastProvider(props: ToastProviderProps = {}): NativeChild {
     return sum;
   };
 
-  const mountRegion = () => overlayPortal({ layer: "toast", depth: 0 }, () => {
-    const region = createElement("box");
-    spread(region, mergeProps(rest, {
-      role: "group" as const,
-      ariaLabel: "Notifications",
-      get testId() { return props.regionTestId ?? "toast-region"; },
-      get "data-corner"() { return props.corner ?? "bottom-right"; },
-      "data-expanded": "true",
-      get "data-paused"() { return paused() ? "true" : "false"; },
-      get __zguiClass() { return classes(sheet.className, "zui-toast__region"); },
-      get __zguiStyle() {
-        return {
-          "--zui-toast-extent": `${totalExtent()}px`,
-          "--zui-toast-gap": `${gapPx()}px`,
-          ...(getReducedMotion() ? { "--zui-toast-move": "0ms" } : {}),
-        };
-      },
-      onPointerEnter() { setPaused(true); },
-      onPointerLeave() { setPaused(false); },
-    }), true);
+  const mountRegion = () =>
+    overlayPortal({ layer: "toast", depth: 0 }, () => {
+      const region = createElement("box");
+      spread(
+        region,
+        mergeProps(rest, {
+          role: "group" as const,
+          ariaLabel: "Notifications",
+          get testId() {
+            return props.regionTestId ?? "toast-region";
+          },
+          get "data-corner"() {
+            return props.corner ?? "bottom-right";
+          },
+          "data-expanded": "true",
+          get "data-paused"() {
+            return paused() ? "true" : "false";
+          },
+          get __zguiClass() {
+            return classes(sheet.className, "zui-toast__region");
+          },
+          get __zguiStyle() {
+            return {
+              "--zui-toast-extent": `${totalExtent()}px`,
+              "--zui-toast-gap": `${gapPx()}px`,
+              ...(getReducedMotion() ? { "--zui-toast-move": "0ms" } : {}),
+            };
+          },
+          onPointerEnter() {
+            setPaused(true);
+          },
+          onPointerLeave() {
+            setPaused(false);
+          },
+        }),
+        true,
+      );
 
-    slot(region, For({
-      get each() { return items(); },
-      children(record: ToastRecord, index: Accessor<number>) {
-        return ToastRow({
-          record,
-          index,
-          paused,
-          offsetFor,
-          reportHeight,
-          dismiss,
-        });
-      },
-    }));
-    return region;
-  });
+      slot(
+        region,
+        For({
+          get each() {
+            return items();
+          },
+          children(record: ToastRecord, index: Accessor<number>) {
+            return ToastRow({
+              record,
+              index,
+              paused,
+              offsetFor,
+              reportHeight,
+              dismiss,
+            });
+          },
+        }),
+      );
+      return region;
+    });
 
   const holder = createElement("box");
   setProp(holder, "__zguiInvariantStyle", { display: "none" });

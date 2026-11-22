@@ -393,7 +393,9 @@ export interface OutlineNodeMeta {
   readonly title: string;
 }
 
-export function buildOutlineTree(headings: readonly HeadingOutline[]): readonly TreeNodeData<OutlineNodeMeta>[] {
+export function buildOutlineTree(
+  headings: readonly HeadingOutline[],
+): readonly TreeNodeData<OutlineNodeMeta>[] {
   const roots: TreeNodeData<OutlineNodeMeta>[] = [];
   const stack: { level: number; children: TreeNodeData<OutlineNodeMeta>[] }[] = [];
 
@@ -418,11 +420,11 @@ export function buildOutlineTree(headings: readonly HeadingOutline[]): readonly 
   }
 
   const prune = (list: readonly TreeNodeData<OutlineNodeMeta>[]): TreeNodeData<OutlineNodeMeta>[] =>
-    list.map(item => (
+    list.map(item =>
       item.children && item.children.length > 0
         ? { ...item, children: prune(item.children) }
-        : { id: item.id, label: item.label, badge: item.badge, meta: item.meta }
-    ));
+        : { id: item.id, label: item.label, badge: item.badge, meta: item.meta },
+    );
 
   return prune(roots);
 }

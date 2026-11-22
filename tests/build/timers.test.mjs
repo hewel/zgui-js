@@ -21,7 +21,9 @@ function installFakeTimers(t) {
     globalThis.clearTimeout = originalClear;
   });
   return {
-    get count() { return scheduled.size; },
+    get count() {
+      return scheduled.size;
+    },
     advance(ms) {
       const target = now + ms;
       while (true) {
@@ -46,7 +48,9 @@ function installFakeTimers(t) {
 test("createDelay, createTimeout, and createInterval schedule, pause, and cancel cleanly on owner disposal", async t => {
   const timers = installFakeTimers(t);
   const h = createHost({ strictStyles: true });
-  const mod = await moduleFor(t, `
+  const mod = await moduleFor(
+    t,
+    `
     import { createDelay, createInterval, createSignal, createTimeout, renderApp } from "@hewel/zgui";
     import type { DelayHandle, NativeNode } from "@hewel/zgui";
 
@@ -63,12 +67,16 @@ test("createDelay, createTimeout, and createInterval schedule, pause, and cancel
         return <text>timers</text>;
       }, root);
     }
-  `);
+  `,
+  );
   globalThis.__zgui = h.host;
   let dispose;
   t.after(() => {
-    try { dispose?.(); }
-    finally { delete globalThis.__zgui; }
+    try {
+      dispose?.();
+    } finally {
+      delete globalThis.__zgui;
+    }
   });
 
   dispose = h.runTurn(() => mod.mount(h.makeNode("root")));

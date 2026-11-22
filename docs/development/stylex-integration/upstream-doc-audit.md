@@ -10,24 +10,24 @@ Citation shorthand: `stylex@6d7464d:<path>:<lines>` = file at the pinned commit,
 
 ## 1. Findings table (ordered by integration risk)
 
-| # | Finding | Verdict vs spec | Risk |
-|---|---------|-----------------|------|
-| F1 | Output CSS depends on `:root` matching whenever tokens are used; untyped variables have **no** `@property` fallback | Spec understates (§5 flags it, but it is deeper than a test note) | **High** |
-| F2 | Finalizer emits `html:not([dir='rtl'])` / `html[dir='rtl']` ancestors around RTL rules | Not mentioned in spec | **High** |
-| F3 | `useLayers:false` output uses `:not(#\#)` specificity chains and doubled theme selectors `.x.x, .x.x:root` | Spec correct; native support is a hard gate | **High** |
-| F4 | Pinned StyleX commit ≠ installable 0.19.2; pinned Solid commit = 1.9.19 but npm `latest` is now 2.0.0 | Spec caveat (§1) confirmed and sharpened | **High** |
-| F5 | Dynamic numeric values are unit-suffixed **by compiled code** for length/time properties; NaN becomes `'NaNpx'` before the adapter | Spec §4.3 correct but narrower than implied | Medium |
-| F6 | styleq needs `WeakMap` and `console.error`; drops `undefined` inline values unvalidated | Not mentioned; host surface for rquickjs | Medium |
-| F7 | `dev` docs contradict source on runtime injection | Spec follows **source**, contradicts pinned docs | Medium |
-| F8 | Two-pass Babel order is safe; JSX preservation is only mandatory for the `sx` prop transform (disabled here) | Spec correct; one constraint relaxed | Medium |
-| F9 | Token modules must be transformed too; cross-file value resolution reads source from disk (Node fs at build time) | Spec correct (§2.3) | Medium |
-| F10 | All option names/types/defaults in §2.1 verified | Correct | Low |
-| F11 | `processStylexRules` signature and layer behavior verified; README's older name is `processStyles` | Correct | Low |
-| F12 | `props()`/`attrs()` shapes, empty-field omission, `styleq@0.2.1` as sole runtime dep; styleq is host-neutral pure JS | Correct | Low |
-| F13 | `.stylex.ts` supported; `themeFileExtension` default `.stylex` | Correct | Low |
-| F14 | Omitted theme overrides revert to defaults; themes for the same VarGroup do not merge | Correct (docs + mechanism) | Low |
-| F15 | Solid Universal `generate:"universal"` + `moduleName` passthrough; renderer `setProperty` receives object `style` as-is; Solid does not normalize `class`/`className` | Correct; typing TODO confirmed | Low |
-| F16 | `stylex-inject` is `document`/`window`-based; runtime `stylex.js` has no host deps | Correct | Low |
+| #   | Finding                                                                                                                                                               | Verdict vs spec                                                   | Risk     |
+| --- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------- | -------- |
+| F1  | Output CSS depends on `:root` matching whenever tokens are used; untyped variables have **no** `@property` fallback                                                   | Spec understates (§5 flags it, but it is deeper than a test note) | **High** |
+| F2  | Finalizer emits `html:not([dir='rtl'])` / `html[dir='rtl']` ancestors around RTL rules                                                                                | Not mentioned in spec                                             | **High** |
+| F3  | `useLayers:false` output uses `:not(#\#)` specificity chains and doubled theme selectors `.x.x, .x.x:root`                                                            | Spec correct; native support is a hard gate                       | **High** |
+| F4  | Pinned StyleX commit ≠ installable 0.19.2; pinned Solid commit = 1.9.19 but npm `latest` is now 2.0.0                                                                 | Spec caveat (§1) confirmed and sharpened                          | **High** |
+| F5  | Dynamic numeric values are unit-suffixed **by compiled code** for length/time properties; NaN becomes `'NaNpx'` before the adapter                                    | Spec §4.3 correct but narrower than implied                       | Medium   |
+| F6  | styleq needs `WeakMap` and `console.error`; drops `undefined` inline values unvalidated                                                                               | Not mentioned; host surface for rquickjs                          | Medium   |
+| F7  | `dev` docs contradict source on runtime injection                                                                                                                     | Spec follows **source**, contradicts pinned docs                  | Medium   |
+| F8  | Two-pass Babel order is safe; JSX preservation is only mandatory for the `sx` prop transform (disabled here)                                                          | Spec correct; one constraint relaxed                              | Medium   |
+| F9  | Token modules must be transformed too; cross-file value resolution reads source from disk (Node fs at build time)                                                     | Spec correct (§2.3)                                               | Medium   |
+| F10 | All option names/types/defaults in §2.1 verified                                                                                                                      | Correct                                                           | Low      |
+| F11 | `processStylexRules` signature and layer behavior verified; README's older name is `processStyles`                                                                    | Correct                                                           | Low      |
+| F12 | `props()`/`attrs()` shapes, empty-field omission, `styleq@0.2.1` as sole runtime dep; styleq is host-neutral pure JS                                                  | Correct                                                           | Low      |
+| F13 | `.stylex.ts` supported; `themeFileExtension` default `.stylex`                                                                                                        | Correct                                                           | Low      |
+| F14 | Omitted theme overrides revert to defaults; themes for the same VarGroup do not merge                                                                                 | Correct (docs + mechanism)                                        | Low      |
+| F15 | Solid Universal `generate:"universal"` + `moduleName` passthrough; renderer `setProperty` receives object `style` as-is; Solid does not normalize `class`/`className` | Correct; typing TODO confirmed                                    | Low      |
+| F16 | `stylex-inject` is `document`/`window`-based; runtime `stylex.js` has no host deps                                                                                    | Correct                                                           | Low      |
 
 ---
 
@@ -66,7 +66,9 @@ With `useLayers:false, legacyDisableLayers:false`, each priority group gets `:no
 
 ```js
 // Adds :not(#\#) to bump up specificity. as a polyfill for @layer
-const pseudo = Array.from({ length: index }).map(() => ':not(#\\#)').join('');
+const pseudo = Array.from({ length: index })
+  .map(() => ":not(#\\#)")
+  .join("");
 ```
 
 and theme-like rules matching `/\.([a-zA-Z0-9]+), \.([a-zA-Z0-9]+):root/` are rewritten to doubled classes (stylex@6d7464d:.../babel-plugin/src/index.js:946-956: `.$1.$1, .$1.$1:root`). Spec §2.3 ("retains the official specificity mechanism, including generated priority selectors … Native support for that exact output is an acceptance gate") is exactly right; the exact selector atoms zgui must support are `:not()` with an ID argument and repeated-class selectors.
@@ -117,16 +119,16 @@ Cross-file token references are resolved by parsing and evaluating the imported 
 
 Verified against stylex@6d7464d:.../babel-plugin/src/utils/state-manager.js (option parsing) and the pinned docs page (packages/docs/content/docs/api/configuration/babel-plugin.mdx):
 
-| Option | Spec value | Source behavior | Match |
-|---|---|---|---|
-| `dev` | `false` | bool, default `false` (l.216-221) | yes |
-| `runtimeInjection` | `false` | bool|string|{from,as}, default `false`; `true`→`'@stylexjs/stylex/lib/stylex-inject'` (l.319-334, 161) | yes |
-| `test` | `false` | bool, default `false` (l.312-317); emits `{$$css:true}` + `file__namespace` dev classes, no rules (dev-classname.js:51-62; docs: "will _not_ generate any styles or functional classNames") — spec's "unsuitable for real pixel evidence" correct | yes |
-| `debug` | conditional `true` | bool, default `dev`; gates `data-style-src` via `enableDebugDataProp` (default `debug`) + `addSourceMapData` emitting `$$css: "<shortFilename>:<line>"` (stylex-create.js:268-272, add-sourcemap-data.js:135-144); consumed by styleq into `debugString` | yes ("can add" is accurate — separately disableable) |
-| `styleResolution` | `"property-specificity"` | enum `'application-order'|'property-specificity'|'legacy-expand-shorthands'` (docs list only the first two), default `'property-specificity'` (l.355-369) | yes |
-| `sxPropName` | `false` | string|false, default `'sx'`; `false` disables the JSX visitor (l.305-310; index.js:311) | yes |
-| `unstable_moduleResolution` | `{type:"commonJS", rootDir}` | union of `commonJS`/`haste`/`custom`/`experimental_crossFileParsing` (l.37-56); docs literally say of `commonJS`: "Use this value when using `ESModules`" — spec's "does not require CommonJS output" correct | yes |
-| `importSources` | implied default | default `[]`, always prepended with package name and `'stylex'` (l.341-353); accepts `string | {from, as}` (l.134-135). SDK re-export needs an explicit entry — spec correct | yes |
+| Option                      | Spec value                   | Source behavior                                                                                                                                                                                                                                          | Match                                                                             |
+| --------------------------- | ---------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
+| `dev`                       | `false`                      | bool, default `false` (l.216-221)                                                                                                                                                                                                                        | yes                                                                               |
+| `runtimeInjection`          | `false`                      | bool                                                                                                                                                                                                                                                     | string                                                                            | {from,as}, default `false`; `true`→`'@stylexjs/stylex/lib/stylex-inject'` (l.319-334, 161)             | yes |
+| `test`                      | `false`                      | bool, default `false` (l.312-317); emits `{$$css:true}` + `file__namespace` dev classes, no rules (dev-classname.js:51-62; docs: "will _not_ generate any styles or functional classNames") — spec's "unsuitable for real pixel evidence" correct        | yes                                                                               |
+| `debug`                     | conditional `true`           | bool, default `dev`; gates `data-style-src` via `enableDebugDataProp` (default `debug`) + `addSourceMapData` emitting `$$css: "<shortFilename>:<line>"` (stylex-create.js:268-272, add-sourcemap-data.js:135-144); consumed by styleq into `debugString` | yes ("can add" is accurate — separately disableable)                              |
+| `styleResolution`           | `"property-specificity"`     | enum `'application-order'                                                                                                                                                                                                                                | 'property-specificity'                                                            | 'legacy-expand-shorthands'`(docs list only the first two), default`'property-specificity'` (l.355-369) | yes |
+| `sxPropName`                | `false`                      | string                                                                                                                                                                                                                                                   | false, default `'sx'`; `false` disables the JSX visitor (l.305-310; index.js:311) | yes                                                                                                    |
+| `unstable_moduleResolution` | `{type:"commonJS", rootDir}` | union of `commonJS`/`haste`/`custom`/`experimental_crossFileParsing` (l.37-56); docs literally say of `commonJS`: "Use this value when using `ESModules`" — spec's "does not require CommonJS output" correct                                            | yes                                                                               |
+| `importSources`             | implied default              | default `[]`, always prepended with package name and `'stylex'` (l.341-353); accepts `string                                                                                                                                                             | {from, as}` (l.134-135). SDK re-export needs an explicit entry — spec correct     | yes                                                                                                    |
 
 ### F11 — `processStylexRules` (Low; spec correct)
 
@@ -174,11 +176,13 @@ Browser-only or host-sensitive surfaces found: `stylex-inject`/`stylesheet/*` (`
 ## 4. Contradictions and missing evidence (separated from product choices)
 
 **Contradictions found (upstream-internal):**
+
 - C1: Official docs say `dev:true` inserts runtime injection calls; source at the same commit says injection is independent of `dev` (F7). Spec follows source. Treat docs as stale.
 - C2: Official docs list only two `styleResolution` values; source accepts a third, `'legacy-expand-shorthands'` (state-manager.js:356-360). No spec impact (spec uses a documented value).
 - C3: Official docs list only `commonJS`/`haste` for `unstable_moduleResolution`; source also accepts `custom` and `experimental_crossFileParsing` (state-manager.js:37-56). No spec impact.
 
 **Missing / not fully evidenced (requires implementation-time verification, not more reading):**
+
 - M1: Whether zgui (revision `80baa3c…`) matches `:root`, `html[dir='rtl']`, `:not(#\#)` with ID args, doubled classes, and `@property` — cross-reference the zgui audit (ZG refs); cannot be resolved from StyleX/Solid sources.
 - M2: Whether rquickjs's QuickJS build exposes `WeakMap` and a usable `console` (F6).
 - M3: `babel-plugin-jsx-dom-expressions@0.40.14`'s exact universal spread codegen was not read (dependency not vendored in the Solid repo; the universal README example at the pinned commit is the authoritative statement, F15). Published `babel-preset-solid@1.9.19` dependency range `^0.40.14` verified from registry.
@@ -186,6 +190,7 @@ Browser-only or host-sensitive surfaces found: `stylex-inject`/`stylesheet/*` (`
 - M5: Live stylexjs.com docs may drift from the pinned in-repo docs; all doc claims above were verified at the pinned commit only.
 
 **Product choices (not upstream facts — listed to keep the audit honest):**
+
 - P1: Deferring `attrs()`; P2: `useLayers:false` over `@layer` output; P3: `class` canonical + `className` alias with `CLASS_ALIAS_CONFLICT`; P4: adapter-side validation/rejection table in §4.3; P5: Preview identity/revision scheme in §9; P6: manifest fields in §6. These are internally consistent with upstream behavior but are project decisions; no upstream confirmation is expected or needed.
 
 ## 5. Decisions that genuinely require the user

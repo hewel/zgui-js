@@ -11,32 +11,64 @@ function resolveEventSpec(name) {
   const stem = raw.replace(/^on/, "");
   const lower = stem.toLowerCase();
   if (lower === "focus" || lower === "focusin") {
-    return { prop: "onFocus", captureProp: "onFocusCapture", type: lower === "focus" ? "focusin" : lower, bubbles: true };
+    return {
+      prop: "onFocus",
+      captureProp: "onFocusCapture",
+      type: lower === "focus" ? "focusin" : lower,
+      bubbles: true,
+    };
   }
   if (lower === "blur" || lower === "focusout") {
-    return { prop: "onBlur", captureProp: "onBlurCapture", type: lower === "blur" ? "focusout" : lower, bubbles: true };
+    return {
+      prop: "onBlur",
+      captureProp: "onBlurCapture",
+      type: lower === "blur" ? "focusout" : lower,
+      bubbles: true,
+    };
   }
   const pascal = stem.charAt(0).toUpperCase() + stem.slice(1);
-  return { prop: `on${pascal}`, captureProp: `on${pascal}Capture`, type: lower, bubbles: !BUBBLE_EXEMPT.has(lower) };
+  return {
+    prop: `on${pascal}`,
+    captureProp: `on${pascal}Capture`,
+    type: lower,
+    bubbles: !BUBBLE_EXEMPT.has(lower),
+  };
 }
 
 function eventFamilyDefaults(type, extras) {
   if (type === "keydown" || type === "keyup") {
     return {
-      key: null, character: null, keyWithoutModifiers: extras.key ?? null,
-      deadKey: null, code: null, physicalCode: null, location: "standard", repeat: false,
+      key: null,
+      character: null,
+      keyWithoutModifiers: extras.key ?? null,
+      deadKey: null,
+      code: null,
+      physicalCode: null,
+      location: "standard",
+      repeat: false,
     };
   }
   if (type.startsWith("pointer") || type === "contextmenu") {
     return {
-      position: { x: 0, y: 0 }, pointerId: "1", pointerKind: "mouse", primary: true, button: "primary",
-      pressure: null, coalesced: [], activateNow() {}, capturePointer() {}, releasePointer() {},
+      position: { x: 0, y: 0 },
+      pointerId: "1",
+      pointerKind: "mouse",
+      primary: true,
+      button: "primary",
+      pressure: null,
+      coalesced: [],
+      activateNow() {},
+      capturePointer() {},
+      releasePointer() {},
     };
   }
   if (type === "wheel") {
     return {
-      position: { x: 0, y: 0 }, pointerId: "1", pointerKind: "mouse",
-      delta: { x: 0, y: 0, unit: "lines" }, scrollPhase: "discrete",
+      position: { x: 0, y: 0 },
+      pointerId: "1",
+      pointerKind: "mouse",
+      delta: { x: 0, y: 0, unit: "lines" },
+      scrollPhase: "discrete",
     };
   }
   if (type === "focusin" || type === "focusout") {
@@ -69,26 +101,48 @@ export function createEvent(nameOrType, target, extras = {}) {
     ...extras,
     phase: dispatchPhase,
     currentTarget: current,
-    get defaultPrevented() { return prevented; },
-    get propagationStopped() { return stopped; },
-    get immediatePropagationStopped() { return immediate; },
-    preventDefault() { requireActive(isActive); prevented = true; },
-    stopPropagation() { requireActive(isActive); stopped = true; },
-    stopImmediatePropagation() { requireActive(isActive); immediate = true; stopped = true; },
+    get defaultPrevented() {
+      return prevented;
+    },
+    get propagationStopped() {
+      return stopped;
+    },
+    get immediatePropagationStopped() {
+      return immediate;
+    },
+    preventDefault() {
+      requireActive(isActive);
+      prevented = true;
+    },
+    stopPropagation() {
+      requireActive(isActive);
+      stopped = true;
+    },
+    stopImmediatePropagation() {
+      requireActive(isActive);
+      immediate = true;
+      stopped = true;
+    },
   });
   const requireActive = isActive => {
-    if (!isActive()) throw new ReferenceError("expired-dispatch: native event cancellation is synchronous");
+    if (!isActive())
+      throw new ReferenceError("expired-dispatch: native event cancellation is synchronous");
   };
   return {
     spec,
-    get event() { return snapshot(currentTarget, phase, () => false); },
+    get event() {
+      return snapshot(currentTarget, phase, () => false);
+    },
     invoke(handler, nextPhase, nextCurrent) {
       phase = nextPhase;
       currentTarget = nextCurrent;
       if (!handler) return;
       let active = true;
-      try { handler(snapshot(currentTarget, phase, () => active)); }
-      finally { active = false; }
+      try {
+        handler(snapshot(currentTarget, phase, () => active));
+      } finally {
+        active = false;
+      }
     },
     isStopped: () => stopped,
     isImmediate: () => immediate,
@@ -127,8 +181,15 @@ let nextCanvasToken = 0;
 let nextSessionGeneration = 1;
 let nextLockRequestId = 1;
 
-export function createHost({ strictStyles = false, reducedMotion = false, monitors = [], sessionLock, shellSurfaces = true } = {}) {
-  if (!Number.isSafeInteger(nextSessionGeneration)) throw new RangeError("session generation exhausted");
+export function createHost({
+  strictStyles = false,
+  reducedMotion = false,
+  monitors = [],
+  sessionLock,
+  shellSurfaces = true,
+} = {}) {
+  if (!Number.isSafeInteger(nextSessionGeneration))
+    throw new RangeError("session generation exhausted");
   const generation = nextSessionGeneration++;
   let nextId = 0;
   let stopping = false;
@@ -144,7 +205,8 @@ export function createHost({ strictStyles = false, reducedMotion = false, monito
   };
   const requireShellWorkAllowed = op => {
     assertActiveHost(op);
-    if (inCleanup || cleanupJobsPending) throw new TypeError("shell work is unavailable during disposal");
+    if (inCleanup || cleanupJobsPending)
+      throw new TypeError("shell work is unavailable during disposal");
   };
   const nodes = new Map();
   const parents = new Map();
@@ -167,7 +229,13 @@ export function createHost({ strictStyles = false, reducedMotion = false, monito
   const windowStateFor = region => {
     if (!regionWindows.has(region)) {
       regionWindows.set(region, {
-        state: { title: "zgui-js", fullscreen: false, maximized: false, minimized: false, decorations: "full" },
+        state: {
+          title: "zgui-js",
+          fullscreen: false,
+          maximized: false,
+          minimized: false,
+          decorations: "full",
+        },
         stateSubscribers: new Set(),
         closeHandlers: new Set(),
         closed: false,
@@ -183,8 +251,12 @@ export function createHost({ strictStyles = false, reducedMotion = false, monito
     const win = windowStateFor(region);
     let prevented = false;
     const event = {
-      get defaultPrevented() { return prevented; },
-      preventDefault() { prevented = true; },
+      get defaultPrevented() {
+        return prevented;
+      },
+      preventDefault() {
+        prevented = true;
+      },
     };
     for (const handler of [...win.closeHandlers]) handler(event);
     return prevented;
@@ -224,7 +296,16 @@ export function createHost({ strictStyles = false, reducedMotion = false, monito
   const styleDiagnostics = [];
   const styling = new WeakMap();
   const stateFor = node => {
-    if (!styling.has(node)) styling.set(node, { aliases: {}, applied: null, internal: null, defaults: {}, application: {}, invariants: {}, direct: {} });
+    if (!styling.has(node))
+      styling.set(node, {
+        aliases: {},
+        applied: null,
+        internal: null,
+        defaults: {},
+        application: {},
+        invariants: {},
+        direct: {},
+      });
     return styling.get(node);
   };
   const failStyle = (code, message) => {
@@ -239,28 +320,61 @@ export function createHost({ strictStyles = false, reducedMotion = false, monito
       for (const declaration of value.split(";").filter(part => part.trim())) {
         const colon = declaration.indexOf(":");
         if (colon < 0) throw new TypeError("invalid declaration");
-        result[declaration.slice(0, colon).trim()] = declaration.slice(colon + 1).trim().replace(/\s*!important$/, "");
+        result[declaration.slice(0, colon).trim()] = declaration
+          .slice(colon + 1)
+          .trim()
+          .replace(/\s*!important$/, "");
       }
       value = result;
     }
-    if (typeof value !== "object" || Array.isArray(value)) throw new TypeError("style must be a string or object");
+    if (typeof value !== "object" || Array.isArray(value))
+      throw new TypeError("style must be a string or object");
     const result = {};
-    const unitless = new Set(["opacity", "flex-grow", "flex-shrink", "font-weight", "line-height", "z-index", "order", "animation-iteration-count", "scale"]);
+    const unitless = new Set([
+      "opacity",
+      "flex-grow",
+      "flex-shrink",
+      "font-weight",
+      "line-height",
+      "z-index",
+      "order",
+      "animation-iteration-count",
+      "scale",
+    ]);
     for (const [key, raw] of Object.entries(value)) {
-      const name = key.startsWith("--") ? key : key.replace(/[A-Z]/g, match => `-${match.toLowerCase()}`);
+      const name = key.startsWith("--")
+        ? key
+        : key.replace(/[A-Z]/g, match => `-${match.toLowerCase()}`);
       if (raw == null) continue;
-      if (typeof raw === "number" && (!Number.isFinite(raw) || !(name.startsWith("--") || unitless.has(name)))) throw new TypeError(`invalid numeric ${name}`);
-      if (typeof raw !== "string" && typeof raw !== "number") throw new TypeError(`invalid ${name}`);
+      if (
+        typeof raw === "number" &&
+        (!Number.isFinite(raw) || !(name.startsWith("--") || unitless.has(name)))
+      )
+        throw new TypeError(`invalid numeric ${name}`);
+      if (typeof raw !== "string" && typeof raw !== "number")
+        throw new TypeError(`invalid ${name}`);
       const text = String(raw);
-      if (/\b(?:NaN|Infinity)(?:[a-z%]*)\b|\b(?:url|image-set)\s*\(/i.test(text) || /^(?:invalid|not-a-colour)$/.test(text) || name === "unknown-property" || name === "colour") throw new TypeError(`invalid native declaration ${name}`);
+      if (
+        /\b(?:NaN|Infinity)(?:[a-z%]*)\b|\b(?:url|image-set)\s*\(/i.test(text) ||
+        /^(?:invalid|not-a-colour)$/.test(text) ||
+        name === "unknown-property" ||
+        name === "colour"
+      )
+        throw new TypeError(`invalid native declaration ${name}`);
       result[name] = text;
     }
     return result;
   };
   const commitStyle = (node, state) => {
-    const styles = { ...state.defaults, ...state.application, ...state.direct, ...state.invariants };
+    const styles = {
+      ...state.defaults,
+      ...state.application,
+      ...state.direct,
+      ...state.invariants,
+    };
     for (const key of node.props.keys()) if (key.startsWith("--")) node.props.delete(key);
-    for (const [key, value] of Object.entries(styles)) if (key.startsWith("--")) node.props.set(key, value);
+    for (const [key, value] of Object.entries(styles))
+      if (key.startsWith("--")) node.props.set(key, value);
     if (Object.keys(styles).length) node.props.set("style", styles);
     else node.props.delete("style");
   };
@@ -316,8 +430,9 @@ export function createHost({ strictStyles = false, reducedMotion = false, monito
 
   const runTurn = (fn, checkpoint = true) => {
     turnDepth += 1;
-    try { return fn(); }
-    finally {
+    try {
+      return fn();
+    } finally {
       try {
         if (turnDepth === 1 && !stopping && checkpoint) {
           drainMicrotasks();
@@ -330,49 +445,52 @@ export function createHost({ strictStyles = false, reducedMotion = false, monito
     }
   };
 
-  const dispatch = (target, nameOrType, extras = {}) => runTurn(() => {
-    assertLive(target, "event target");
-    const path = [];
-    for (let current = target; current; current = parents.get(current)) path.push(current);
-    const carrier = createEvent(nameOrType, target, extras);
-    const { spec } = carrier;
-    const bubbles = extras.bubbles ?? spec.bubbles;
-    for (let i = path.length - 1; i >= 1 && !carrier.isStopped(); i -= 1) {
-      carrier.invoke(path[i].callbacks[spec.captureProp], "capture", path[i]);
-    }
-    if (!carrier.isStopped()) {
-      for (const name of Object.keys(target.callbacks)) {
-        if (name === spec.prop || name === spec.captureProp) {
-          carrier.invoke(target.callbacks[name], "target", target);
-          if (carrier.isImmediate()) break;
+  const dispatch = (target, nameOrType, extras = {}) =>
+    runTurn(() => {
+      assertLive(target, "event target");
+      const path = [];
+      for (let current = target; current; current = parents.get(current)) path.push(current);
+      const carrier = createEvent(nameOrType, target, extras);
+      const { spec } = carrier;
+      const bubbles = extras.bubbles ?? spec.bubbles;
+      for (let i = path.length - 1; i >= 1 && !carrier.isStopped(); i -= 1) {
+        carrier.invoke(path[i].callbacks[spec.captureProp], "capture", path[i]);
+      }
+      if (!carrier.isStopped()) {
+        for (const name of Object.keys(target.callbacks)) {
+          if (name === spec.prop || name === spec.captureProp) {
+            carrier.invoke(target.callbacks[name], "target", target);
+            if (carrier.isImmediate()) break;
+          }
         }
       }
-    }
-    if (bubbles) {
-      for (let i = 1; i < path.length && !carrier.isStopped(); i += 1) {
-        carrier.invoke(path[i].callbacks[spec.prop], "bubble", path[i]);
+      if (bubbles) {
+        for (let i = 1; i < path.length && !carrier.isStopped(); i += 1) {
+          carrier.invoke(path[i].callbacks[spec.prop], "bubble", path[i]);
+        }
       }
-    }
-    return carrier.event;
-  });
+      return carrier.event;
+    });
 
-  const moveFocus = (node, reveal = false, cause = "programmatic") => runTurn(() => {
-    if (node != null) assertLive(node, "focus target");
-    const previous = focused.current;
-    focused.current = node ?? null;
-    focused.reveal = Boolean(reveal);
-    if (previous === node) return;
-    if (previous && !invalidated.has(previous)) {
-      dispatch(previous, "FocusOut", { cause });
-    }
-    if (node != null && !invalidated.has(node)) {
-      dispatch(node, "FocusIn", { cause });
-    }
-  });
+  const moveFocus = (node, reveal = false, cause = "programmatic") =>
+    runTurn(() => {
+      if (node != null) assertLive(node, "focus target");
+      const previous = focused.current;
+      focused.current = node ?? null;
+      focused.reveal = Boolean(reveal);
+      if (previous === node) return;
+      if (previous && !invalidated.has(previous)) {
+        dispatch(previous, "FocusOut", { cause });
+      }
+      if (node != null && !invalidated.has(node)) {
+        dispatch(node, "FocusIn", { cause });
+      }
+    });
 
   const syncGeometryAttachment = region => {
     for (const record of geometry) {
-      if (!record.active || !record.onAttachment || nodeRegions.get(record.node) !== region) continue;
+      if (!record.active || !record.onAttachment || nodeRegions.get(record.node) !== region)
+        continue;
       const next = attached(record.node);
       if (next === record.attached) continue;
       record.attached = next;
@@ -412,14 +530,26 @@ export function createHost({ strictStyles = false, reducedMotion = false, monito
     createCanvasScene: () => {
       assertActiveHost("createCanvasScene");
       const token = ++nextCanvasToken;
-      const record = { token, region, active: true, disposals: 0, commands: [], transform: [1, 0, 0, 1, 0, 0] };
+      const record = {
+        token,
+        region,
+        active: true,
+        disposals: 0,
+        commands: [],
+        transform: [1, 0, 0, 1, 0, 0],
+      };
       const handle = {
-        get token() { return token; },
+        get token() {
+          return token;
+        },
         update(commands, transform) {
           if (!record.active) throw new ReferenceError("canvas scene has been disposed");
           assertActiveHost("canvasScene.update");
           if (commands !== null) record.commands = structuredClone(commands);
-          if (transform !== undefined && transform.some((value, index) => value !== record.transform[index])) {
+          if (
+            transform !== undefined &&
+            transform.some((value, index) => value !== record.transform[index])
+          ) {
             record.transform = [...transform];
           }
         },
@@ -428,7 +558,8 @@ export function createHost({ strictStyles = false, reducedMotion = false, monito
           record.active = false;
           record.disposals += 1;
           for (const node of nodes.values()) {
-            if (!invalidated.has(node) && node.props.get("canvas") === token) node.props.delete("canvas");
+            if (!invalidated.has(node) && node.props.get("canvas") === token)
+              node.props.delete("canvas");
           }
         },
       };
@@ -446,7 +577,7 @@ export function createHost({ strictStyles = false, reducedMotion = false, monito
         callback,
         options,
         updates: [],
-        trigger: reason => record.active ? runTurn(() => record.callback(reason)) : undefined,
+        trigger: reason => (record.active ? runTurn(() => record.callback(reason)) : undefined),
       });
       return {
         update: next => {
@@ -518,11 +649,14 @@ export function createHost({ strictStyles = false, reducedMotion = false, monito
       const parent = parents.get(node);
       if (!parent) return null;
       const index = parent.children.indexOf(node);
-      return index >= 0 ? parent.children[index + 1] ?? null : null;
+      return index >= 0 ? (parent.children[index + 1] ?? null) : null;
     },
     setProperty: (node, name, value) => {
       assertLive(node, "node", region);
-      if (stopping && ((name.startsWith("on") && value != null) || (name === "src" && value != null))) {
+      if (
+        stopping &&
+        ((name.startsWith("on") && value != null) || (name === "src" && value != null))
+      ) {
         if (name.startsWith("on")) registrationsAfterStop.push(name);
         throw new ReferenceError("native session is stopping");
       }
@@ -535,32 +669,52 @@ export function createHost({ strictStyles = false, reducedMotion = false, monito
           node.props.set(name, value);
         } else {
           const record = scenesByHandle.get(value);
-          if (!record || record.region !== region) throw new TypeError("canvas must be a scene from this region");
+          if (!record || record.region !== region)
+            throw new TypeError("canvas must be a scene from this region");
           if (!record.active) throw new ReferenceError("canvas scene has been disposed");
           node.props.set(name, record.token);
         }
         return;
       }
       if (name === "class" || name === "__zguiClass") {
-        if (value != null && typeof value !== "string") throw new TypeError("class must be a string");
+        if (value != null && typeof value !== "string")
+          throw new TypeError("class must be a string");
         const state = stateFor(node);
         value = value?.trim() ? value : null;
         if (name === "__zguiClass") state.internal = value;
         else state.applied = value;
-        const classes = [...new Set(`${state.internal ?? ""} ${state.applied ?? ""}`.split(/[\t\n\f\r ]+/).filter(Boolean))].join(" ");
-        if (classes) node.props.set("class", classes); else node.props.delete("class");
+        const classes = [
+          ...new Set(
+            `${state.internal ?? ""} ${state.applied ?? ""}`.split(/[\t\n\f\r ]+/).filter(Boolean),
+          ),
+        ].join(" ");
+        if (classes) node.props.set("class", classes);
+        else node.props.delete("class");
         return;
       }
-      if (name === "style" || name === "__zguiStyle" || name === "__zguiInvariantStyle" || name.startsWith("--")) {
+      if (
+        name === "style" ||
+        name === "__zguiStyle" ||
+        name === "__zguiInvariantStyle" ||
+        name.startsWith("--")
+      ) {
         const state = stateFor(node);
         let next;
-        try { next = normalizeStyle(name.startsWith("--") ? { [name]: value } : value); }
-        catch (error) { failStyle("STYLE_VALUE_INVALID", error.message); return; }
+        try {
+          next = normalizeStyle(name.startsWith("--") ? { [name]: value } : value);
+        } catch (error) {
+          failStyle("STYLE_VALUE_INVALID", error.message);
+          return;
+        }
         if (name.startsWith("--")) {
-          if (value == null) delete state.direct[name]; else Object.assign(state.direct, next);
+          if (value == null) delete state.direct[name];
+          else Object.assign(state.direct, next);
         } else if (name === "__zguiStyle") state.defaults = next;
         else if (name === "__zguiInvariantStyle") state.invariants = next;
-        else { state.application = next; state.direct = {}; }
+        else {
+          state.application = next;
+          state.direct = {};
+        }
         commitStyle(node, state);
         return;
       }
@@ -587,7 +741,9 @@ export function createHost({ strictStyles = false, reducedMotion = false, monito
     getReducedMotion: () => reducedMotion,
     subscribeReducedMotion: callback => {
       reducedMotionSubscribers.add(callback);
-      return () => { reducedMotionSubscribers.delete(callback); };
+      return () => {
+        reducedMotionSubscribers.delete(callback);
+      };
     },
     focus: (node, reveal = false) => {
       assertLive(node, "focus target", region);
@@ -628,7 +784,12 @@ export function createHost({ strictStyles = false, reducedMotion = false, monito
       assertActiveHost("setSelection");
       assertLive(node, "setSelection target", region);
       assertEditable(node, "setSelection");
-      if (typeof start !== "number" || !Number.isFinite(start) || typeof end !== "number" || !Number.isFinite(end)) {
+      if (
+        typeof start !== "number" ||
+        !Number.isFinite(start) ||
+        typeof end !== "number" ||
+        !Number.isFinite(end)
+      ) {
         throw new RangeError("selection offset must be a finite number");
       }
       const text = editableTextOf(node);
@@ -644,7 +805,13 @@ export function createHost({ strictStyles = false, reducedMotion = false, monito
       selections.set(node, { start: 0, end: text.length });
     },
     getDocumentSelection: () => null,
-    setDocumentSelection: (container, anchorNode, anchorOffset, focusNode = anchorNode, focusOffset = anchorOffset) => {
+    setDocumentSelection: (
+      container,
+      anchorNode,
+      anchorOffset,
+      focusNode = anchorNode,
+      focusOffset = anchorOffset,
+    ) => {
       assertActiveHost("setDocumentSelection");
       assertLive(container, "setDocumentSelection container", region);
       assertLive(anchorNode, "setDocumentSelection anchor", region);
@@ -718,13 +885,17 @@ export function createHost({ strictStyles = false, reducedMotion = false, monito
       assertActiveHost("subscribeWindowState");
       const win = windowStateFor(region);
       win.stateSubscribers.add(callback);
-      return () => { win.stateSubscribers.delete(callback); };
+      return () => {
+        win.stateSubscribers.delete(callback);
+      };
     },
     onCloseRequest: callback => {
       assertActiveHost("onCloseRequest");
       const win = windowStateFor(region);
       win.closeHandlers.add(callback);
-      return () => { win.closeHandlers.delete(callback); };
+      return () => {
+        win.closeHandlers.delete(callback);
+      };
     },
     getWindowRect: node => {
       assertLive(node, "rect target", region);
@@ -750,11 +921,17 @@ export function createHost({ strictStyles = false, reducedMotion = false, monito
         callback,
         onAttachment,
         attached: onAttachment ? attached(node) : undefined,
-        emit: value => record.active && (!onAttachment || record.attached)
-          ? runTurn(() => record.callback(value)) : undefined,
+        emit: value =>
+          record.active && (!onAttachment || record.attached)
+            ? runTurn(() => record.callback(value))
+            : undefined,
       });
-      try { onAttachment?.(record.attached); }
-      catch (error) { dispose(); throw error; }
+      try {
+        onAttachment?.(record.attached);
+      } catch (error) {
+        dispose();
+        throw error;
+      }
       return dispose;
     },
     precedes: (first, second) => {
@@ -797,7 +974,12 @@ export function createHost({ strictStyles = false, reducedMotion = false, monito
     for (const { region } of surfaces.values()) apply(region);
   };
   const validateStylesheetName = name => {
-    if (typeof name !== "string" || name.length === 0 || name.length > 128 || /[^a-zA-Z0-9_.:-]/.test(name)) {
+    if (
+      typeof name !== "string" ||
+      name.length === 0 ||
+      name.length > 128 ||
+      /[^a-zA-Z0-9_.:-]/.test(name)
+    ) {
       throw new TypeError("stylesheet names use 1-128 ASCII bytes from [a-zA-Z0-9_.:-]");
     }
   };
@@ -811,15 +993,19 @@ export function createHost({ strictStyles = false, reducedMotion = false, monito
   const shellTasks = [];
   const shellLog = [];
   const monitorSubscribers = new Set();
-  const normalizeMonitors = list => structuredClone(list).map(monitor => ({
-    ...monitor,
-    logicalWidth: monitor.logicalWidth ?? monitor.width / monitor.scale,
-    logicalHeight: monitor.logicalHeight ?? monitor.height / monitor.scale,
-  }));
+  const normalizeMonitors = list =>
+    structuredClone(list).map(monitor => ({
+      ...monitor,
+      logicalWidth: monitor.logicalWidth ?? monitor.width / monitor.scale,
+      logicalHeight: monitor.logicalHeight ?? monitor.height / monitor.scale,
+    }));
   let monitorSnapshot = normalizeMonitors(monitors);
   let nextLayerId = 0;
   const requireShell = () => {
-    if (!shellSurfaces) throw Object.assign(new Error("shell surfaces require capabilities.shellSurfaces"), { code: "E_CAPABILITY" });
+    if (!shellSurfaces)
+      throw Object.assign(new Error("shell surfaces require capabilities.shellSurfaces"), {
+        code: "E_CAPABILITY",
+      });
   };
   const requireAcyclicPopupParent = (name, parent) => {
     if (name === parent) throw new TypeError("a popup cannot parent itself");
@@ -837,7 +1023,10 @@ export function createHost({ strictStyles = false, reducedMotion = false, monito
     }
   };
   const requireLock = () => {
-    if (!sessionLock) throw Object.assign(new Error("session lock requires capabilities.sessionLock"), { code: "E_CAPABILITY" });
+    if (!sessionLock)
+      throw Object.assign(new Error("session lock requires capabilities.sessionLock"), {
+        code: "E_CAPABILITY",
+      });
   };
   const setLockState = next => {
     lockState = next;
@@ -852,8 +1041,11 @@ export function createHost({ strictStyles = false, reducedMotion = false, monito
       const parent = surfaces.get(surface.placement.parent);
       return parent && !parent.lock && !parent.closing;
     }
-    return (!surface.lock || lockState === "locked")
-      && (surface.placement.output === undefined || monitorSnapshot.some(monitor => monitor.id === surface.placement.output));
+    return (
+      (!surface.lock || lockState === "locked") &&
+      (surface.placement.output === undefined ||
+        monitorSnapshot.some(monitor => monitor.id === surface.placement.output))
+    );
   };
   const attachSurface = surface => {
     if (surface.closing || surface.root || !present(surface)) return;
@@ -870,8 +1062,9 @@ export function createHost({ strictStyles = false, reducedMotion = false, monito
     const region = surface.region;
     const previous = inCleanup;
     inCleanup = true;
-    try { surface.dispose?.(); }
-    finally {
+    try {
+      surface.dispose?.();
+    } finally {
       inCleanup = previous;
       cleanupJobsPending ||= microtasks.length > 0;
       region.retired = true;
@@ -925,12 +1118,15 @@ export function createHost({ strictStyles = false, reducedMotion = false, monito
       const sheet = shellStylesheets.get(name);
       if (!sheet) return;
       shellStylesheets.delete(name);
-      forEachRegion(region => { region.stylesheets.delete(sheet.key); });
+      forEachRegion(region => {
+        region.stylesheets.delete(sheet.key);
+      });
     },
     requestSessionLock(callback) {
       requireShellWorkAllowed("requestSessionLock");
       requireLock();
-      if (!Number.isSafeInteger(nextLockRequestId)) throw new RangeError("session lock request identifiers exhausted");
+      if (!Number.isSafeInteger(nextLockRequestId))
+        throw new RangeError("session lock request identifiers exhausted");
       const id = nextLockRequestId++;
       lockSubscribers.set(id, callback);
       try {
@@ -955,7 +1151,8 @@ export function createHost({ strictStyles = false, reducedMotion = false, monito
       const handle = {
         unlock() {
           if (stopping) throw new TypeError("session is stopping");
-          if (!lockSubscribers.has(id)) throw new ReferenceError("session lock handle was unsubscribed");
+          if (!lockSubscribers.has(id))
+            throw new ReferenceError("session lock handle was unsubscribed");
           if (lockState !== "locked") throw new TypeError("session is not locked");
           requireShellWorkAllowed("unlock");
           shellTasks.push(() => {
@@ -965,7 +1162,9 @@ export function createHost({ strictStyles = false, reducedMotion = false, monito
             setLockState("unlocked");
           });
         },
-        unsubscribe: () => { lockSubscribers.delete(id); },
+        unsubscribe: () => {
+          lockSubscribers.delete(id);
+        },
       };
       return Object.defineProperty(handle, "id", {
         value: id,
@@ -980,8 +1179,18 @@ export function createHost({ strictStyles = false, reducedMotion = false, monito
       if (name === "main" || !/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$/.test(name)) {
         throw new TypeError("invalid or reserved shell surface name");
       }
-      if ([...layerIds.values(), ...lockIds.values(), ...popupIds.values(), ...windowIds.values()].some(surface =>
-        !surface.closing && (surface.name === name || (surface.lock && surface.placement.output === output)))) {
+      if (
+        [
+          ...layerIds.values(),
+          ...lockIds.values(),
+          ...popupIds.values(),
+          ...windowIds.values(),
+        ].some(
+          surface =>
+            !surface.closing &&
+            (surface.name === name || (surface.lock && surface.placement.output === output)),
+        )
+      ) {
         throw new TypeError("duplicate lock surface name or output");
       }
       const id = ++nextLayerId;
@@ -995,25 +1204,44 @@ export function createHost({ strictStyles = false, reducedMotion = false, monito
       if (!surface || surface.closing) return;
       surface.closing = true;
       shellTasks.push(() => {
-        try { detachSurface(surface); }
-        finally { lockIds.delete(id); }
+        try {
+          detachSurface(surface);
+        } finally {
+          lockIds.delete(id);
+        }
       });
     },
     subscribeMonitors(callback) {
       requireShellWorkAllowed("subscribeMonitors");
       monitorSubscribers.add(callback);
       callback(structuredClone(monitorSnapshot));
-      return () => { monitorSubscribers.delete(callback); };
+      return () => {
+        monitorSubscribers.delete(callback);
+      };
     },
     openLayer(name, placement, attach) {
       requireShellWorkAllowed("openLayer");
       requireShell();
-      if (name === "main" || !/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$/.test(name)) throw new TypeError("invalid or reserved shell surface name");
-      if ([...layerIds.values(), ...lockIds.values(), ...popupIds.values(), ...windowIds.values()].some(surface => !surface.closing && surface.name === name)) {
+      if (name === "main" || !/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$/.test(name))
+        throw new TypeError("invalid or reserved shell surface name");
+      if (
+        [
+          ...layerIds.values(),
+          ...lockIds.values(),
+          ...popupIds.values(),
+          ...windowIds.values(),
+        ].some(surface => !surface.closing && surface.name === name)
+      ) {
         throw new TypeError(`duplicate shell surface: ${name}`);
       }
       const id = ++nextLayerId;
-      const surface = { id, name, placement: structuredClone(placement), attach, inputRegion: "full" };
+      const surface = {
+        id,
+        name,
+        placement: structuredClone(placement),
+        attach,
+        inputRegion: "full",
+      };
       layerIds.set(id, surface);
       shellLog.push({ op: "open", id, name, placement: surface.placement });
       shellTasks.push(() => attachSurface(surface));
@@ -1023,7 +1251,8 @@ export function createHost({ strictStyles = false, reducedMotion = false, monito
       assertActiveHost("updateLayer");
       const surface = layerIds.get(id);
       if (!surface || surface.closing) throw new ReferenceError("closed shell surface");
-      if (surface.placement.output !== placement.output) throw new TypeError("changing an output requires a new shell surface");
+      if (surface.placement.output !== placement.output)
+        throw new TypeError("changing an output requires a new shell surface");
       surface.placement = structuredClone(placement);
       shellLog.push({ op: "update", id, placement: surface.placement });
     },
@@ -1033,8 +1262,11 @@ export function createHost({ strictStyles = false, reducedMotion = false, monito
       surface.closing = true;
       shellLog.push({ op: "close", id });
       shellTasks.push(() => {
-        try { detachTree(surface, "owner-closed"); }
-        finally { layerIds.delete(id); }
+        try {
+          detachTree(surface, "owner-closed");
+        } finally {
+          layerIds.delete(id);
+        }
       });
     },
     setInputRegion(id, region) {
@@ -1051,11 +1283,25 @@ export function createHost({ strictStyles = false, reducedMotion = false, monito
         throw new TypeError("invalid popup name");
       }
       requireAcyclicPopupParent(name, placement.parent);
-      if ([...layerIds.values(), ...lockIds.values(), ...popupIds.values(), ...windowIds.values()].some(surface => !surface.closing && surface.name === name)) {
+      if (
+        [
+          ...layerIds.values(),
+          ...lockIds.values(),
+          ...popupIds.values(),
+          ...windowIds.values(),
+        ].some(surface => !surface.closing && surface.name === name)
+      ) {
         throw new TypeError(`duplicate shell surface: ${name}`);
       }
       const id = ++nextLayerId;
-      const surface = { id, popup: true, name, placement: structuredClone(placement), attach, dismiss };
+      const surface = {
+        id,
+        popup: true,
+        name,
+        placement: structuredClone(placement),
+        attach,
+        dismiss,
+      };
       popupIds.set(id, surface);
       return id;
     },
@@ -1074,8 +1320,11 @@ export function createHost({ strictStyles = false, reducedMotion = false, monito
       if (!surface || surface.closing) return;
       surface.closing = true;
       shellTasks.push(() => {
-        try { detachTree(surface, "owner-closed"); }
-        finally { popupIds.delete(id); }
+        try {
+          detachTree(surface, "owner-closed");
+        } finally {
+          popupIds.delete(id);
+        }
       });
     },
     openWindow(name, options, attach, onClose) {
@@ -1084,11 +1333,25 @@ export function createHost({ strictStyles = false, reducedMotion = false, monito
       if (name === "main" || !/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$/.test(name)) {
         throw new TypeError("invalid or reserved window surface name");
       }
-      if ([...layerIds.values(), ...lockIds.values(), ...popupIds.values(), ...windowIds.values()].some(surface => !surface.closing && surface.name === name)) {
+      if (
+        [
+          ...layerIds.values(),
+          ...lockIds.values(),
+          ...popupIds.values(),
+          ...windowIds.values(),
+        ].some(surface => !surface.closing && surface.name === name)
+      ) {
         throw new TypeError(`duplicate shell surface: ${name}`);
       }
       const id = ++nextLayerId;
-      const surface = { id, window: true, name, options: structuredClone(options), attach, onClose };
+      const surface = {
+        id,
+        window: true,
+        name,
+        options: structuredClone(options),
+        attach,
+        onClose,
+      };
       windowIds.set(id, surface);
       shellLog.push({ op: "openWindow", id, name, options: surface.options });
       shellTasks.push(() => attachSurface(surface));
@@ -1098,7 +1361,10 @@ export function createHost({ strictStyles = false, reducedMotion = false, monito
       assertActiveHost("updateWindow");
       const surface = windowIds.get(id);
       if (!surface || surface.closing) throw new ReferenceError("closed window surface");
-      if (surface.options.appId !== options.appId || surface.options.transparent !== options.transparent) {
+      if (
+        surface.options.appId !== options.appId ||
+        surface.options.transparent !== options.transparent
+      ) {
         throw new TypeError("changing window appId or transparency requires a new shell surface");
       }
       surface.options = structuredClone(options);
@@ -1110,8 +1376,11 @@ export function createHost({ strictStyles = false, reducedMotion = false, monito
       surface.closing = true;
       shellLog.push({ op: "closeWindow", id });
       shellTasks.push(() => {
-        try { detachTree(surface, "owner-closed"); }
-        finally { windowIds.delete(id); }
+        try {
+          detachTree(surface, "owner-closed");
+        } finally {
+          windowIds.delete(id);
+        }
       });
     },
   };
@@ -1122,7 +1391,8 @@ export function createHost({ strictStyles = false, reducedMotion = false, monito
       return !vetoed;
     }
     const surface = surfaces.get(name);
-    if (!surface?.window || surface.closing) throw new ReferenceError(`no live window named ${name}`);
+    if (!surface?.window || surface.closing)
+      throw new ReferenceError(`no live window named ${name}`);
     const vetoed = runTurn(() => runCloseHandlers(surface.region), false);
     if (vetoed) return false;
     windowClose(name);
@@ -1130,7 +1400,8 @@ export function createHost({ strictStyles = false, reducedMotion = false, monito
   };
   const windowClose = name => {
     const surface = surfaces.get(name);
-    if (!surface?.window || surface.closing) throw new ReferenceError(`no live window named ${name}`);
+    if (!surface?.window || surface.closing)
+      throw new ReferenceError(`no live window named ${name}`);
     runTurn(() => {});
     surface.closing = true;
     try {
@@ -1199,17 +1470,54 @@ export function createHost({ strictStyles = false, reducedMotion = false, monito
   hostMicrotasks.set(shell, microtasks);
 
   return {
-    host, nodes, parents, stylesheets, installs, makeNode, byTestId, focused, rects, texts,
-    shell, surfaces, shellLog, emitMonitors, emitReducedMotion, monitorSubscribers, popupDone, windowClose, requestClose,
-    windowCommands, windowState: (name = "main") => ({ ...windowStateFor(name === "main" ? primary : surfaces.get(name)?.region).state }),
-    windowClosed: (name = "main") => windowStateFor(name === "main" ? primary : surfaces.get(name)?.region).closed,
-    sessionLockState: () => lockState, sessionLockLog,
-    animating, animatingQueries, queries, portals, traps, locks, scrollCommands, layers, geometry,
+    host,
+    nodes,
+    parents,
+    stylesheets,
+    installs,
+    makeNode,
+    byTestId,
+    focused,
+    rects,
+    texts,
+    shell,
+    surfaces,
+    shellLog,
+    emitMonitors,
+    emitReducedMotion,
+    monitorSubscribers,
+    popupDone,
+    windowClose,
+    requestClose,
+    windowCommands,
+    windowState: (name = "main") => ({
+      ...windowStateFor(name === "main" ? primary : surfaces.get(name)?.region).state,
+    }),
+    windowClosed: (name = "main") =>
+      windowStateFor(name === "main" ? primary : surfaces.get(name)?.region).closed,
+    sessionLockState: () => lockState,
+    sessionLockLog,
+    animating,
+    animatingQueries,
+    queries,
+    portals,
+    traps,
+    locks,
+    scrollCommands,
+    layers,
+    geometry,
     canvasScenes,
-    clearCalls, invalidated, registrationsAfterStop, styleDiagnostics,
-    dispatch, createEvent, runTurn, endTurn,
+    clearCalls,
+    invalidated,
+    registrationsAfterStop,
+    styleDiagnostics,
+    dispatch,
+    createEvent,
+    runTurn,
+    endTurn,
     flush,
-    focus: (node, options) => moveFocus(node, options?.reveal ?? false, options?.cause ?? "programmatic"),
+    focus: (node, options) =>
+      moveFocus(node, options?.reveal ?? false, options?.cause ?? "programmatic"),
     beginStop: () => {
       stopping = true;
       forEachRegion(region => {
@@ -1247,7 +1555,9 @@ export function createClock(t, harness) {
     timers.set(id, { at: now + Math.max(0, delay), callback });
     return id;
   });
-  t.mock.method(globalThis, "clearTimeout", id => { timers.delete(id); });
+  t.mock.method(globalThis, "clearTimeout", id => {
+    timers.delete(id);
+  });
   const previousFrame = Object.getOwnPropertyDescriptor(globalThis, "requestAnimationFrame");
   const previousCancel = Object.getOwnPropertyDescriptor(globalThis, "cancelAnimationFrame");
   globalThis.requestAnimationFrame = callback => {
@@ -1255,7 +1565,9 @@ export function createClock(t, harness) {
     frames.set(id, callback);
     return id;
   };
-  globalThis.cancelAnimationFrame = id => { frames.delete(id); };
+  globalThis.cancelAnimationFrame = id => {
+    frames.delete(id);
+  };
   t.after(() => {
     if (previousFrame) Object.defineProperty(globalThis, "requestAnimationFrame", previousFrame);
     else delete globalThis.requestAnimationFrame;
@@ -1275,7 +1587,12 @@ export function createClock(t, harness) {
     for (;;) {
       let earliest;
       for (const [id, timer] of timers) {
-        if (timer.at <= target && (!earliest || timer.at < earliest.timer.at || (timer.at === earliest.timer.at && id < earliest.id))) {
+        if (
+          timer.at <= target &&
+          (!earliest ||
+            timer.at < earliest.timer.at ||
+            (timer.at === earliest.timer.at && id < earliest.id))
+        ) {
           earliest = { id, timer };
         }
       }

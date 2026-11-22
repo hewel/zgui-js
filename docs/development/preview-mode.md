@@ -74,20 +74,20 @@ This slice is useful before images, multiple surfaces, animation timelines, or p
 
 ### 1.3 Design decisions
 
-| Decision | Requirement |
-| --- | --- |
-| Same application | Load the same manifest, JS, CSS, assets, SDK, and bridge used by the interactive host. |
-| Same renderer | Use zgui's actual native pipeline for pixel evidence. |
-| Fixture services | Instantiate mock providers by default; never fall through to live services. |
-| Scripted time | Use one virtual application clock for supported deterministic runs. |
-| Real watchdog | Use a separate real monotonic clock to bound execution and GPU/worker waits. |
-| Native input | Exercise hit testing, focus, default behavior, and event cancellation. |
-| Stable targeting | Prefer unique test IDs, then verified semantic selectors. |
-| Coherent evidence | Associate pixels, tree, layout, build, session, and presentation identities. |
-| Bounded work | Every run, step, job pump, resource wait, and teardown has a limit. |
-| Small responses | Print a bounded machine result; keep detailed evidence in files. |
-| Framework independence | Put preview below the Solid/Preact adapter boundary. |
-| Early usefulness | Ship one-shot execution before watch, RPC, MCP, or an inspector UI. |
+| Decision               | Requirement                                                                            |
+| ---------------------- | -------------------------------------------------------------------------------------- |
+| Same application       | Load the same manifest, JS, CSS, assets, SDK, and bridge used by the interactive host. |
+| Same renderer          | Use zgui's actual native pipeline for pixel evidence.                                  |
+| Fixture services       | Instantiate mock providers by default; never fall through to live services.            |
+| Scripted time          | Use one virtual application clock for supported deterministic runs.                    |
+| Real watchdog          | Use a separate real monotonic clock to bound execution and GPU/worker waits.           |
+| Native input           | Exercise hit testing, focus, default behavior, and event cancellation.                 |
+| Stable targeting       | Prefer unique test IDs, then verified semantic selectors.                              |
+| Coherent evidence      | Associate pixels, tree, layout, build, session, and presentation identities.           |
+| Bounded work           | Every run, step, job pump, resource wait, and teardown has a limit.                    |
+| Small responses        | Print a bounded machine result; keep detailed evidence in files.                       |
+| Framework independence | Put preview below the Solid/Preact adapter boundary.                                   |
+| Early usefulness       | Ship one-shot execution before watch, RPC, MCP, or an inspector UI.                    |
 
 ### 1.4 Scope boundaries
 
@@ -101,27 +101,27 @@ It does not establish compositor protocol correctness, operating-system service 
 
 Use the same application dependencies as the companion specification:
 
-| Component | Audited baseline |
-| --- | --- |
-| zgui | `80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a` |
-| rquickjs | `73fcd6062ee615aeb2a4675cd32be67a56e93973` |
-| QuickJS-NG engine submodule | `6d46d07d04041b40f4f49eaa7fdebe44c314c699` |
+| Component                      | Audited baseline                           |
+| ------------------------------ | ------------------------------------------ |
+| zgui                           | `80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a` |
+| rquickjs                       | `73fcd6062ee615aeb2a4675cd32be67a56e93973` |
+| QuickJS-NG engine submodule    | `6d46d07d04041b40f4f49eaa7fdebe44c314c699` |
 | Solid/compiler source baseline | `99714d4e2875d2d7ef8023e82f4ef6aa63ff0752` |
 
 Preserve the companion document's package-resolution gates. Record actual lockfile versions and source revisions in every run. Do not silently upgrade dependencies while implementing preview.
 
 ### 2.2 Existing building blocks
 
-| Existing upstream capability | Use in this project | Boundary |
-| --- | --- | --- |
-| Headless `Harness` | Deliver events, pump work, advance virtual time, inspect deadlines | It is a test driver, not the proposed CLI. |
-| `VirtualClock` | Native timers, frame scheduling, and animations | JS and service adapters must use the same clock. |
-| Offscreen wgpu builder and readback | Actual pixel capture | A usable graphics adapter is still required. |
-| `scale_capture` example | Reference integration for runtime, fonts, renderer, scale, and capture | It is a fixed Rust gallery, not a TSX runner. |
-| `FrameProbe` and public window queries | Collect frame-aligned diagnostics | An agent-facing schema and inspector must be implemented. |
-| Headless accessibility logs | Observe native semantic updates | Updates are incremental, not complete snapshots. |
-| Shipped-only font registration | Reproducible font selection | The project must supply and verify its own font files. |
-| Scene/view testkits | Fast structural tests | Their recording/fixed-metric paths do not constitute native screenshots. |
+| Existing upstream capability           | Use in this project                                                    | Boundary                                                                 |
+| -------------------------------------- | ---------------------------------------------------------------------- | ------------------------------------------------------------------------ |
+| Headless `Harness`                     | Deliver events, pump work, advance virtual time, inspect deadlines     | It is a test driver, not the proposed CLI.                               |
+| `VirtualClock`                         | Native timers, frame scheduling, and animations                        | JS and service adapters must use the same clock.                         |
+| Offscreen wgpu builder and readback    | Actual pixel capture                                                   | A usable graphics adapter is still required.                             |
+| `scale_capture` example                | Reference integration for runtime, fonts, renderer, scale, and capture | It is a fixed Rust gallery, not a TSX runner.                            |
+| `FrameProbe` and public window queries | Collect frame-aligned diagnostics                                      | An agent-facing schema and inspector must be implemented.                |
+| Headless accessibility logs            | Observe native semantic updates                                        | Updates are incremental, not complete snapshots.                         |
+| Shipped-only font registration         | Reproducible font selection                                            | The project must supply and verify its own font files.                   |
+| Scene/view testkits                    | Fast structural tests                                                  | Their recording/fixed-metric paths do not constitute native screenshots. |
 
 The headless and capture integration is demonstrated by zgui's own source. Keep structural test evidence and real rendered-pixel evidence separately identified. [Z1] [Z2] [Z3] [Z4] [Z5] [Z6] [Z7]
 
@@ -154,7 +154,7 @@ Do not copy ambiguous frame-count semantics: this specification's `capture.seque
 
 The implemented deterministic preview path uses a supervised process, not a second UI runtime:
 
-~~~mermaid
+```mermaid
 flowchart TB
     Controller["preview CLI controller: deadline and process supervision"]
     Inputs["Application package, profile, asset fixtures, scenario"]
@@ -185,7 +185,7 @@ flowchart TB
     Artifacts --> Inspect["preview inspect: saved native-tree queries"]
     Artifacts --> Compare["preview compare: offline pixel comparison"]
     Baseline["Reviewed baseline and comparison policy"] --> Compare
-~~~
+```
 
 The diagram shows the default virtual-clock profile. Wall-clock profiles are explicitly nondeterministic. The controller enforces a real elapsed-time deadline even when application time is virtual.
 
@@ -201,23 +201,23 @@ A preview fixture may deliberately choose a component or route through a documen
 
 Start with modules where possible; separate crates only when dependency ownership warrants it.
 
-| Location | Responsibility |
-| --- | --- |
-| `crates/native-host/src/preview/` | CLI dispatch, one-shot process supervision, run orchestration |
-| `crates/native-host/src/preview/driver.rs` | Headless harness and virtual-time stepping |
-| `crates/native-host/src/preview/capture.rs` | Renderer wrapper, readback, PNG conversion |
-| `crates/native-host/src/preview/inspect.rs` | Frame-aligned native/semantic tree projection |
-| `crates/native-host/src/preview/scenario.rs` | Validated actions, selectors, assertions |
-| `crates/host-services/src/mock/` | Typed fixture providers and call recording |
-| `crates/js-runtime/` | Existing runtime ownership, jobs, exceptions, deadlines |
-| `crates/ui-bridge/` | Existing input, nodes, callbacks, test metadata, generation checks |
-| `packages/ui/` | Native `testId` declarations and optional ready-marker API |
-| `packages/build/` | Existing compilation, source maps, atomic bundle publication |
-| `preview/profiles/` | Viewport, fonts, clock, graphics, and limits |
-| `preview/fixtures/` | Typed service state and declared resources |
-| `preview/scenarios/` | Ordered reproducible interactions and assertions |
-| `preview/baselines/` | Reviewed image/semantic baselines and comparison metadata |
-| `schemas/preview/` | Versioned closed JSON schemas and example fixtures |
+| Location                                     | Responsibility                                                     |
+| -------------------------------------------- | ------------------------------------------------------------------ |
+| `crates/native-host/src/preview/`            | CLI dispatch, one-shot process supervision, run orchestration      |
+| `crates/native-host/src/preview/driver.rs`   | Headless harness and virtual-time stepping                         |
+| `crates/native-host/src/preview/capture.rs`  | Renderer wrapper, readback, PNG conversion                         |
+| `crates/native-host/src/preview/inspect.rs`  | Frame-aligned native/semantic tree projection                      |
+| `crates/native-host/src/preview/scenario.rs` | Validated actions, selectors, assertions                           |
+| `crates/host-services/src/mock/`             | Typed fixture providers and call recording                         |
+| `crates/js-runtime/`                         | Existing runtime ownership, jobs, exceptions, deadlines            |
+| `crates/ui-bridge/`                          | Existing input, nodes, callbacks, test metadata, generation checks |
+| `packages/ui/`                               | Native `testId` declarations and optional ready-marker API         |
+| `packages/build/`                            | Existing compilation, source maps, atomic bundle publication       |
+| `preview/profiles/`                          | Viewport, fonts, clock, graphics, and limits                       |
+| `preview/fixtures/`                          | Typed service state and declared resources                         |
+| `preview/scenarios/`                         | Ordered reproducible interactions and assertions                   |
+| `preview/baselines/`                         | Reviewed image/semantic baselines and comparison metadata          |
+| `schemas/preview/`                           | Versioned closed JSON schemas and example fixtures                 |
 
 ### 3.3 Ownership rules
 
@@ -243,18 +243,18 @@ Use a small internal control channel for progress and completion. Application st
 
 All commands below are proposed project commands.
 
-| Command | Purpose | Phase |
-| --- | --- | --- |
-| `native-host preview doctor` | Report build, graphics, fonts, and supported capabilities | P0 |
-| `native-host preview run` | Execute one package/profile/fixture/scenario | P1 onward |
-| `native-host preview inspect` | Query saved tree/evidence without loading the runtime | P2 |
-| `native-host preview compare` | Compare complete run artifacts with reviewed baselines | P4 |
-| `native-host preview watch` | Rebuild and rerun using the same one-shot engine | P5 |
-| `native-host preview serve` | Persistent protocol adapter | Deferred |
+| Command                       | Purpose                                                   | Phase     |
+| ----------------------------- | --------------------------------------------------------- | --------- |
+| `native-host preview doctor`  | Report build, graphics, fonts, and supported capabilities | P0        |
+| `native-host preview run`     | Execute one package/profile/fixture/scenario              | P1 onward |
+| `native-host preview inspect` | Query saved tree/evidence without loading the runtime     | P2        |
+| `native-host preview compare` | Compare complete run artifacts with reviewed baselines    | P4        |
+| `native-host preview watch`   | Rebuild and rerun using the same one-shot engine          | P5        |
+| `native-host preview serve`   | Persistent protocol adapter                               | Deferred  |
 
 The full deterministic loop, available after P3, uses the companion specification's proposed workspace scripts:
 
-~~~sh
+```sh
 cargo build -p native-host
 bun run typecheck
 bun run build --app counter
@@ -262,7 +262,7 @@ bun run build --app counter
 ./target/debug/native-host preview doctor --profile preview/profiles/default.json
 
 ./target/debug/native-host preview run --bundle apps/examples/counter/dist --profile preview/profiles/default.json --fixture preview/fixtures/empty.json --scenario preview/scenarios/counter.json --out artifacts/preview/counter-001
-~~~
+```
 
 For the earlier P1/P2 loop, use the explicit wall-clock profile and static scenario defined in Sections 5.5 and 8.9. Fixture-only provider construction and a real watchdog are required from P1; P3 adds the richer timing/resource capabilities.
 
@@ -270,18 +270,18 @@ Do not rebuild Rust for an ordinary TSX or CSS edit when the host and bridge hav
 
 ### 4.2 Run options
 
-| Option | Contract |
-| --- | --- |
-| `--bundle PATH` | Required application package directory containing `manifest.json`. |
-| `--profile PATH` | Required validated preview environment profile. |
-| `--fixture PATH` | Required service/resource fixture; an explicit empty fixture is allowed. |
-| `--scenario PATH` | Required ordered scenario document. |
-| `--out PATH` | Required new or empty run directory. |
-| `--width N`, `--height N` | Optional logical-pixel overrides, reflected in the resolved profile. |
-| `--scale N` | Optional finite positive scale override. |
-| `--theme NAME` | Optional supported theme override. |
-| `--timeout-ms N` | Optional real run deadline, subject to the host's maximum. |
-| `--format json` | Machine result; the default for preview commands. |
+| Option                    | Contract                                                                 |
+| ------------------------- | ------------------------------------------------------------------------ |
+| `--bundle PATH`           | Required application package directory containing `manifest.json`.       |
+| `--profile PATH`          | Required validated preview environment profile.                          |
+| `--fixture PATH`          | Required service/resource fixture; an explicit empty fixture is allowed. |
+| `--scenario PATH`         | Required ordered scenario document.                                      |
+| `--out PATH`              | Required new or empty run directory.                                     |
+| `--width N`, `--height N` | Optional logical-pixel overrides, reflected in the resolved profile.     |
+| `--scale N`               | Optional finite positive scale override.                                 |
+| `--theme NAME`            | Optional supported theme override.                                       |
+| `--timeout-ms N`          | Optional real run deadline, subject to the host's maximum.               |
+| `--format json`           | Machine result; the default for preview commands.                        |
 
 CLI overrides take precedence over profile values. Store the complete resolved profile and its digest. Reject unknown options, schema versions, actions, and unsupported capabilities before mounting.
 
@@ -314,7 +314,7 @@ A successful exit verifies the configured assertions. It does not mean an agent 
 
 ### 5.1 Profile example
 
-~~~json
+```json
 {
   "schemaVersion": 1,
   "id": "desktop-800x600-175",
@@ -359,7 +359,7 @@ A successful exit verifies the configured assertions. It does not mean an agent 
     "maxOutputBytes": 33554432
   }
 }
-~~~
+```
 
 The numbers are initial development defaults, not measured performance guarantees. Make them configurable within implementation limits and record any override. The fixed epoch is 2026-11-14 00:00:00 UTC.
 
@@ -379,10 +379,10 @@ All numerical time inputs must be finite, nonnegative, and exactly representable
 
 Compute physical extents as:
 
-~~~text
+```text
 physicalWidth  = floor(logicalWidth  * scale + 0.5)
 physicalHeight = floor(logicalHeight * scale + 0.5)
-~~~
+```
 
 Reject overflow and zero physical dimensions. Report requested logical size, actual physical size, and effective logical size `physical / scale`; fractional rounding can make the last value slightly different.
 
@@ -404,9 +404,9 @@ The seeded random contract must identify an algorithm and revision. It applies o
 
 To make P1/P2 useful before full time virtualization, create `preview/profiles/wall-static.json` by copying the default profile and replacing its entire clock object with:
 
-~~~json
+```json
 { "mode": "wall" }
-~~~
+```
 
 Omit `epochMs` and `startUs` in wall mode. Keep fixture-only services, packaged fonts/assets, and real watchdog limits. Record `timingDeterministic: false`; reject `clock.advance`, exact-frame-time requirements, and a requested `virtual-time` capability. Strict visual baselines reject this profile.
 
@@ -424,20 +424,20 @@ This default directly improves agent iteration: a click in a preview can exercis
 
 ### 6.2 Minimal fixture
 
-~~~json
+```json
 {
   "schemaVersion": 1,
   "id": "empty",
   "services": {},
   "events": []
 }
-~~~
+```
 
 The counter example needs no system services. An application that requests one with this fixture must fail with `E_FIXTURE_MISSING_SERVICE`.
 
 ### 6.3 Stateful service fixture
 
-~~~json
+```json
 {
   "schemaVersion": 1,
   "id": "desktop-demo",
@@ -470,7 +470,7 @@ The counter example needs no system services. An application that requests one w
     }
   ]
 }
-~~~
+```
 
 These provider names and payloads are proposed examples. Implement and version their typed contracts with the corresponding service API.
 
@@ -516,10 +516,10 @@ Wait for resources under a real deadline while application virtual time remains 
 
 ### 7.1 Two separate clocks
 
-| Clock | Controls | Must not control |
-| --- | --- | --- |
-| Virtual application clock | Native timers/animation, JS timers/rAF timestamps, mock service deadlines, supported UI time APIs | Real watchdogs and I/O deadlines |
-| Real monotonic clock | JS execution limits, worker/GPU waits, process timeout, performance measurements | Scenario state or animation position |
+| Clock                     | Controls                                                                                          | Must not control                     |
+| ------------------------- | ------------------------------------------------------------------------------------------------- | ------------------------------------ |
+| Virtual application clock | Native timers/animation, JS timers/rAF timestamps, mock service deadlines, supported UI time APIs | Real watchdogs and I/O deadlines     |
+| Real monotonic clock      | JS execution limits, worker/GPU waits, process timeout, performance measurements                  | Scenario state or animation position |
 
 The following exact-time rules apply to virtual profiles. Wall profiles follow Section 5.5 and report real elapsed time rather than a fictitious frozen application timestamp.
 
@@ -569,13 +569,13 @@ It does not wait for every future timer, a forever-running clock, or all future 
 
 Separate these conditions in diagnostics:
 
-| Condition | Meaning |
-| --- | --- |
-| App ready | Mount succeeded and any explicitly required ready marker was observed. |
-| Current work settled | No covered runnable work remains at the current virtual time. |
+| Condition             | Meaning                                                                             |
+| --------------------- | ----------------------------------------------------------------------------------- |
+| App ready             | Mount succeeded and any explicitly required ready marker was observed.              |
+| Current work settled  | No covered runnable work remains at the current virtual time.                       |
 | Required assets ready | Visible required native resources have been attached or explicitly allowed pending. |
-| Frame current | A successful frame covers the required state/configuration revision. |
-| Readback complete | The corresponding GPU pixels are available. |
+| Frame current         | A successful frame covers the required state/configuration revision.                |
+| Readback complete     | The corresponding GPU pixels are available.                                         |
 
 A quiet event queue alone does not establish all five conditions.
 
@@ -623,7 +623,7 @@ Step IDs and capture IDs use `[a-z0-9][a-z0-9._-]*`, must not contain path trave
 
 Add `testId` as a project-owned, typed SDK property. It is diagnostic metadata, not an upstream zgui attribute requirement.
 
-~~~tsx
+```tsx
 function Counter() {
   const [count, setCount] = createSignal(0);
 
@@ -636,20 +636,15 @@ function Counter() {
     </column>
   );
 }
-~~~
+```
 
 Use the existing bundle entry and `renderApp` mount/disposal contract from the companion specification.
 
-~~~json
+```json
 {
   "schemaVersion": 1,
   "id": "counter-increments",
-  "requiredCapabilities": [
-    "pixels",
-    "virtual-time",
-    "selectors.test-id",
-    "input.pointer"
-  ],
+  "requiredCapabilities": ["pixels", "virtual-time", "selectors.test-id", "input.pointer"],
   "steps": [
     { "id": "mount-settle", "op": "settle" },
     { "id": "initial", "op": "capture", "captureId": "initial" },
@@ -670,29 +665,29 @@ Use the existing bundle entry and `renderApp` mount/disposal contract from the c
     { "id": "updated", "op": "capture", "captureId": "after-increment" }
   ]
 }
-~~~
+```
 
 The 20 ms step is an explicit scenario choice. If the selected backend/profile requires another deadline, report that fact; do not insert an undocumented sleep or time advance.
 
 ### 8.3 Initial operation set
 
-| Operation | Required payload | Behavior |
-| --- | --- | --- |
-| `settle` | None; optional lower per-step budget | Drain current-time work under Section 7. |
-| `clock.advance` | `byMs` | Advance by a nonnegative integer number of milliseconds. |
-| `pointer.move` | `target` or `position` plus `surface` | Deliver native pointer movement. |
-| `pointer.click` | `target` or explicit position; `button` | Resolve, move, press, release using native dispatch. |
-| `pointer.down` | `target` or explicit position; `button` | Dispatch one native press and settle. |
-| `pointer.up` | `target` or explicit position; `button` | Dispatch one native release and settle. |
-| `pointer.cancel` | `target` or explicit position | Dispatch one native cancel and settle. |
-| `wheel` | `target` or `position` plus `surface`; `delta`; optional `phase` | Deliver one native wheel event through the real scroll pipeline. |
-| `key.press` | `surface`, `key`, optional `modifiers` | Deliver key down/up, preserving native defaults. |
-| `text.commit` | `surface`, `text` | Commit text through the supported native text-input path. |
-| `service.emit` | `channel`, `value` | Apply a typed fixture update and enqueue its notification. |
-| `assert` | Target/check or service-call check | Evaluate a defined predicate; never arbitrary JS. |
-| `capture` | `captureId`; optional `surface` (defaults to `main`) and `requiredFrameTimeUs` | Save coherent pixels, tree, and metadata for the selected surface. |
-| `monitors.set` | `monitors` | Replace the synthetic output inventory without advancing virtual time. |
-| `popupDone` | `surface` | Deliver a native destruction event to a named popup, as for compositor dismissal. |
+| Operation        | Required payload                                                               | Behavior                                                                          |
+| ---------------- | ------------------------------------------------------------------------------ | --------------------------------------------------------------------------------- |
+| `settle`         | None; optional lower per-step budget                                           | Drain current-time work under Section 7.                                          |
+| `clock.advance`  | `byMs`                                                                         | Advance by a nonnegative integer number of milliseconds.                          |
+| `pointer.move`   | `target` or `position` plus `surface`                                          | Deliver native pointer movement.                                                  |
+| `pointer.click`  | `target` or explicit position; `button`                                        | Resolve, move, press, release using native dispatch.                              |
+| `pointer.down`   | `target` or explicit position; `button`                                        | Dispatch one native press and settle.                                             |
+| `pointer.up`     | `target` or explicit position; `button`                                        | Dispatch one native release and settle.                                           |
+| `pointer.cancel` | `target` or explicit position                                                  | Dispatch one native cancel and settle.                                            |
+| `wheel`          | `target` or `position` plus `surface`; `delta`; optional `phase`               | Deliver one native wheel event through the real scroll pipeline.                  |
+| `key.press`      | `surface`, `key`, optional `modifiers`                                         | Deliver key down/up, preserving native defaults.                                  |
+| `text.commit`    | `surface`, `text`                                                              | Commit text through the supported native text-input path.                         |
+| `service.emit`   | `channel`, `value`                                                             | Apply a typed fixture update and enqueue its notification.                        |
+| `assert`         | Target/check or service-call check                                             | Evaluate a defined predicate; never arbitrary JS.                                 |
+| `capture`        | `captureId`; optional `surface` (defaults to `main`) and `requiredFrameTimeUs` | Save coherent pixels, tree, and metadata for the selected surface.                |
+| `monitors.set`   | `monitors`                                                                     | Replace the synthetic output inventory without advancing virtual time.            |
+| `popupDone`      | `surface`                                                                      | Deliver a native destruction event to a named popup, as for compositor dismissal. |
 
 For explicit position, use `{"x": 120, "y": 40}` in logical surface pixels. The target form and position form are mutually exclusive. Supported pointer buttons are `primary`, `secondary`, and `middle`; reject other values until explicitly implemented. `pointer.down` and `pointer.up` require a button; `pointer.move` and `pointer.cancel` reject one.
 
@@ -700,9 +695,14 @@ Pointer operations accept an optional pointer object: `{"id":"7","kind":"pen","p
 
 Wheel accepts the same mutually exclusive location forms as pointer operations, including the resolved-target visibility and enabled checks. `delta` is `{"x": 0, "y": 3, "unit": "lines"}`: `x` and `y` are signed CSS pixels when `unit` is `pixels` and line counts when `unit` is `lines`, with positive `y` scrolling down. `phase` is `discrete`, `started`, `moved`, `ended`, or `momentum` and defaults to `discrete`; the named phases carry native gesture semantics, so a wheel-gesture scenario sends a `started`/`moved`/`ended` sequence explicitly. Wheel uses the primary mouse identity and does not advance virtual time implicitly.
 
-~~~json
-{ "id": "scroll", "op": "wheel", "target": { "surface": "main", "testId": "list" }, "delta": { "x": 0, "y": 3, "unit": "lines" } }
-~~~
+```json
+{
+  "id": "scroll",
+  "op": "wheel",
+  "target": { "surface": "main", "testId": "list" },
+  "delta": { "x": 0, "y": 3, "unit": "lines" }
+}
+```
 
 Version 1 key names are an explicit tested enum: `Tab`, `Enter`, `Escape`, `Space`, arrow keys, `Home`, `End`, `PageUp`, `PageDown`, `Backspace`, and `Delete`. Modifiers are an array from `Shift`, `Control`, `Alt`, and `Meta`. Reject unsupported key mappings. `key.press` delivers the native key events exactly; delivering a navigation key such as `PageDown` does not invent window scrolling defaults the runtime lacks, so scroll scenarios use `wheel`. Use `"key": {"character": "é"}` for a character-producing key. The text must be nonempty and may contain multiple codepoints; it is delivered as native `Key::Character` without inventing a physical key or an IME commit. Named `"Space"` and character `{"character":" "}` retain their distinct native categories.
 
@@ -725,15 +725,15 @@ A sequence cannot rely on repeated real-time sleeps. If an advanced operation is
 
 Version 1 requires exactly one matching node for a target:
 
-~~~json
+```json
 { "surface": "main", "testId": "increment" }
-~~~
+```
 
 The semantic extension supports exact role and accessible name:
 
-~~~json
+```json
 { "surface": "main", "role": "button", "name": "Increment" }
-~~~
+```
 
 Do not combine selector forms. Test IDs are unique within a logical surface; duplicates fail validation or target resolution. Accessible names need not be unique; ambiguous matches return candidate summaries and fail.
 
@@ -778,7 +778,7 @@ Assertions are read-only. A failed assertion cannot run a recovery mutation, bro
 
 The P1 path can execute just the first two steps below with the `pixels` capability. P2 adds the remaining native interaction steps and their capabilities. Use the wall-clock profile from Section 5.5.
 
-~~~json
+```json
 {
   "schemaVersion": 1,
   "id": "counter-static",
@@ -802,7 +802,7 @@ The P1 path can execute just the first two steps below with the `pixels` capabil
     { "id": "after", "op": "capture", "captureId": "after-increment" }
   ]
 }
-~~~
+```
 
 In wall mode, frame-dependent operations wait for their required validation frame using native pacing and the real step budget. They must still reject stale evidence. For P1, create a separate two-step scenario with only `pixels` required; do not edit capability validation to make the P2 scenario run prematurely.
 
@@ -852,12 +852,12 @@ Keep `validationFrame` separate from `pixelPresentation`. A completed frame repo
 
 Each named capture writes:
 
-| File | Contents |
-| --- | --- |
-| `captures/<id>.png` | Displayable pixel evidence |
+| File                       | Contents                                                                        |
+| -------------------------- | ------------------------------------------------------------------------------- |
+| `captures/<id>.png`        | Displayable pixel evidence                                                      |
 | `captures/<id>.frame.json` | Build, generation, timing, dimensions, renderer, readiness, and content digests |
-| `captures/<id>.tree.json` | Coherent structured native/semantic projection |
-| `captures/<id>.rgba` | Optional raw diagnostic bytes; format declared in frame metadata |
+| `captures/<id>.tree.json`  | Coherent structured native/semantic projection                                  |
+| `captures/<id>.rgba`       | Optional raw diagnostic bytes; format declared in frame metadata                |
 
 These are the unchanged paths for `main`. Named Shell surfaces write the same
 files under `captures/surfaces/<surface>/`; a `captureId` may be reused on another
@@ -881,7 +881,7 @@ Use public window/DOM inspection and a passive frame probe. The existing devtool
 
 An illustrative node record:
 
-~~~json
+```json
 {
   "token": "node-17",
   "parent": "node-9",
@@ -902,7 +902,7 @@ An illustrative node record:
   "boundsDevice": { "x": 28, "y": 84, "width": 210, "height": 63 },
   "source": null
 }
-~~~
+```
 
 This record is a schema example, not a captured measurement. Actual records must carry their frame/layout version through the enclosing snapshot.
 
@@ -930,9 +930,9 @@ Do not call application getters or arbitrary `toString` methods while inspecting
 
 ### 10.5 Saved inspection command
 
-~~~sh
+```sh
 ./target/debug/native-host preview inspect --run artifacts/preview/counter-001 --capture after-increment --test-id count-label --fields text,state,boundsLogical
-~~~
+```
 
 This command reads saved artifacts and does not start QuickJS or a GPU. Add
 `--surface <name>` to inspect a named capture; the default is `main`. Support a
@@ -944,18 +944,18 @@ Default responses should contain the selected node and a small amount of parent/
 
 ### 11.1 Artifact layout
 
-| Path inside a run | Required contents |
-| --- | --- |
-| `result.json` | Final bounded machine result, written last |
-| `artifacts.json` | Complete artifact inventory, roles, digests, frame associations |
-| `environment.json` | Actual runtime, graphics, font, and build environment |
-| `inputs/profile.json` | Resolved profile including CLI overrides |
-| `inputs/fixture.json` | Exact fixture input |
-| `inputs/scenario.json` | Exact scenario input |
-| `steps.jsonl` | Ordered action outcomes, timing, and selected target information |
-| `diagnostics.jsonl` | Bounded structured errors, logs, fixture calls, and pending-work reports |
-| `metrics.json` | Work counts and real-time measurements, with availability flags |
-| `captures/` | Named frame evidence defined in Section 9 |
+| Path inside a run      | Required contents                                                        |
+| ---------------------- | ------------------------------------------------------------------------ |
+| `result.json`          | Final bounded machine result, written last                               |
+| `artifacts.json`       | Complete artifact inventory, roles, digests, frame associations          |
+| `environment.json`     | Actual runtime, graphics, font, and build environment                    |
+| `inputs/profile.json`  | Resolved profile including CLI overrides                                 |
+| `inputs/fixture.json`  | Exact fixture input                                                      |
+| `inputs/scenario.json` | Exact scenario input                                                     |
+| `steps.jsonl`          | Ordered action outcomes, timing, and selected target information         |
+| `diagnostics.jsonl`    | Bounded structured errors, logs, fixture calls, and pending-work reports |
+| `metrics.json`         | Work counts and real-time measurements, with availability flags          |
+| `captures/`            | Named frame evidence defined in Section 9                                |
 
 An artifact inventory distinguishes `complete`, `historical`, and `partial` entries. Partial files are not accepted as baseline inputs.
 
@@ -965,7 +965,7 @@ The input digest covers the canonical resolved inputs and application package id
 
 The following is an illustrative result shape, not evidence that this specification has already been implemented:
 
-~~~json
+```json
 {
   "schemaVersion": 1,
   "command": "run",
@@ -985,7 +985,7 @@ The following is an illustrative result shape, not evidence that this specificat
     "environment": "environment.json"
   }
 }
-~~~
+```
 
 The artifact inventory and environment file contain the actual full build/input digests. The summary must remain small even when a sequence produces many images.
 
@@ -1016,18 +1016,18 @@ Capture diagnostics without executing arbitrary application formatting code. If 
 
 ### 11.4 Exit codes
 
-| Exit | Meaning | Representative codes |
-| --- | --- | --- |
-| 0 | Requested operation passed | No outstanding failure |
-| 2 | Invalid command, schema, incompatible input, or unsupported capability | `E_SCHEMA`, `E_UNSUPPORTED_CAPABILITY`, `E_BASELINE_INCOMPATIBLE` |
-| 3 | Bundle evaluation, JS execution, or unhandled rejection failed | `E_BUNDLE`, `E_JS_EXCEPTION`, `E_UNHANDLED_REJECTION` |
-| 4 | Target, assertion, or visual comparison failed | `E_TARGET_MISSING`, `E_TARGET_AMBIGUOUS`, `E_ASSERTION`, `E_VISUAL_DIFF` |
-| 5 | Execution/readiness budget exhausted or required frame not ready | `E_JOB_BUDGET`, `E_WATCHDOG`, `E_CAPTURE_NOT_READY`, `E_ASSET_TIMEOUT` |
-| 6 | Fixture or resource contract failed | `E_FIXTURE_MISSING_SERVICE`, `E_FIXTURE_CALL`, `E_ASSET_FAILED` |
-| 7 | Graphics setup, drawing, or readback failed | `E_GRAPHICS_UNAVAILABLE`, `E_DEVICE_LOST`, `E_READBACK` |
-| 8 | Artifacts could not be safely published | `E_OUTPUT_IO`, `E_OUTPUT_LIMIT` |
-| 9 | Host lifecycle/internal failure or worker crash | `E_TEARDOWN`, `E_HOST_INVARIANT`, `E_WORKER_CRASH` |
-| 130 | Explicit cancellation | `E_CANCELED` |
+| Exit | Meaning                                                                | Representative codes                                                     |
+| ---- | ---------------------------------------------------------------------- | ------------------------------------------------------------------------ |
+| 0    | Requested operation passed                                             | No outstanding failure                                                   |
+| 2    | Invalid command, schema, incompatible input, or unsupported capability | `E_SCHEMA`, `E_UNSUPPORTED_CAPABILITY`, `E_BASELINE_INCOMPATIBLE`        |
+| 3    | Bundle evaluation, JS execution, or unhandled rejection failed         | `E_BUNDLE`, `E_JS_EXCEPTION`, `E_UNHANDLED_REJECTION`                    |
+| 4    | Target, assertion, or visual comparison failed                         | `E_TARGET_MISSING`, `E_TARGET_AMBIGUOUS`, `E_ASSERTION`, `E_VISUAL_DIFF` |
+| 5    | Execution/readiness budget exhausted or required frame not ready       | `E_JOB_BUDGET`, `E_WATCHDOG`, `E_CAPTURE_NOT_READY`, `E_ASSET_TIMEOUT`   |
+| 6    | Fixture or resource contract failed                                    | `E_FIXTURE_MISSING_SERVICE`, `E_FIXTURE_CALL`, `E_ASSET_FAILED`          |
+| 7    | Graphics setup, drawing, or readback failed                            | `E_GRAPHICS_UNAVAILABLE`, `E_DEVICE_LOST`, `E_READBACK`                  |
+| 8    | Artifacts could not be safely published                                | `E_OUTPUT_IO`, `E_OUTPUT_LIMIT`                                          |
+| 9    | Host lifecycle/internal failure or worker crash                        | `E_TEARDOWN`, `E_HOST_INVARIANT`, `E_WORKER_CRASH`                       |
+| 130  | Explicit cancellation                                                  | `E_CANCELED`                                                             |
 
 The first causal failure determines the run category. If final artifact publication itself fails, exit 8 and report both the publication failure and original cause when a result channel remains available.
 
@@ -1039,7 +1039,7 @@ A failed teardown changes an otherwise passing run to failure. Later cleanup dia
 
 Initial names:
 
-~~~text
+```text
 pixels
 virtual-time
 selectors.test-id
@@ -1057,7 +1057,7 @@ surface.scale
 surface.multiple
 lifecycle.reload
 source.node-location
-~~~
+```
 
 Do not imply that a flag alone establishes correctness. Store the capability implementation revision and the selected dependency baseline.
 
@@ -1075,9 +1075,9 @@ Keep service payloads fixture-scoped. Do not copy the developer's process enviro
 
 ### 12.1 Compare complete evidence
 
-~~~sh
+```sh
 ./target/debug/native-host preview compare --baseline preview/baselines/counter --actual artifacts/preview/counter-001 --policy preview/comparison/strict.json --out artifacts/preview/counter-diff-001
-~~~
+```
 
 Comparison reads complete artifacts; it does not rerun the application. Match captures by stable capture ID and logical surface, not directory ordering. Strict comparison requires the expected capture set on both sides, rejects missing/unexpected captures, and never scores only the intersection. An empty capture set cannot pass. A deliberately selected subset must be explicit in the comparison policy and reported in the result.
 
@@ -1206,17 +1206,17 @@ Never keep the application awake for the inspector. After the scenario reaches a
 
 Use these workloads to assess improvements, without assuming a target result in advance:
 
-| Workload | What it measures |
-| --- | --- |
-| Static counter mount | Minimum end-to-end overhead |
-| One click and one text update | Typical short agent loop |
-| Keyed list insertion/reorder | Identity and native mutation cost |
-| Native field editing | Input, selection, controlled value, and IME path |
-| Delayed mock service | Loading/error/success transitions |
+| Workload                          | What it measures                                  |
+| --------------------------------- | ------------------------------------------------- |
+| Static counter mount              | Minimum end-to-end overhead                       |
+| One click and one text update     | Typical short agent loop                          |
+| Keyed list insertion/reorder      | Identity and native mutation cost                 |
+| Native field editing              | Input, selection, controlled value, and IME path  |
+| Delayed mock service              | Loading/error/success transitions                 |
 | Repeated image source/DPR changes | Native resource readiness and capture correctness |
-| Scripted animation sequence | Timing and frame evidence |
-| Repeated reloads | Cleanup stability and accumulated overhead |
-| Idle native application | Unnecessary wakeups and redraws |
+| Scripted animation sequence       | Timing and frame evidence                         |
+| Repeated reloads                  | Cleanup stability and accumulated overhead        |
+| Idle native application           | Unnecessary wakeups and redraws                   |
 
 Record results in a separate measured report. The default limits in this specification are execution safeguards and feedback controls, not benchmark claims.
 
@@ -1249,15 +1249,15 @@ not provide compositor-specific IPC services or a window-manager abstraction.
 
 ## 16. Implementation phases
 
-| Phase | Deliverable | Completion gate |
-| --- | --- | --- |
-| P0: Environment and source seams | Doctor command, exact dependency inventory, real offscreen calibration capture | Real fonts and GPU pixels; explicit no-adapter failure |
-| P1: Real TSX capture | Existing bundle loader/session/bridge in one-shot preview; PNG and result | Counter mounts through actual rquickjs; clean teardown |
-| P2: Agent interaction loop | Test IDs, coherent tree, native click, text assertion, saved inspection | Counter changes through real input; target errors are actionable |
-| P3: Deterministic environment | Shared virtual time, typed fixture providers, budgets, native asset readiness | Timing/fixture/resource tests pass without hidden sleeps or live fallbacks |
-| P4: Visual regression and CI | Artifact identity, compare policy, strict/tolerant evidence, CI graphics gate | Compatible comparisons are reproducible; incompatible environments are explicit |
-| P5: Watch and lifecycle | Atomic-build watcher, fresh worker reruns, cancellation; persistent reload only if needed | Old builds and generations cannot contaminate new results |
-| P6: Desktop parity | Real supported-backend smoke checks and documented upstream platform limits | Actual compositor/input/resource-service behavior is verified; no specific window manager is required |
+| Phase                            | Deliverable                                                                               | Completion gate                                                                                       |
+| -------------------------------- | ----------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| P0: Environment and source seams | Doctor command, exact dependency inventory, real offscreen calibration capture            | Real fonts and GPU pixels; explicit no-adapter failure                                                |
+| P1: Real TSX capture             | Existing bundle loader/session/bridge in one-shot preview; PNG and result                 | Counter mounts through actual rquickjs; clean teardown                                                |
+| P2: Agent interaction loop       | Test IDs, coherent tree, native click, text assertion, saved inspection                   | Counter changes through real input; target errors are actionable                                      |
+| P3: Deterministic environment    | Shared virtual time, typed fixture providers, budgets, native asset readiness             | Timing/fixture/resource tests pass without hidden sleeps or live fallbacks                            |
+| P4: Visual regression and CI     | Artifact identity, compare policy, strict/tolerant evidence, CI graphics gate             | Compatible comparisons are reproducible; incompatible environments are explicit                       |
+| P5: Watch and lifecycle          | Atomic-build watcher, fresh worker reruns, cancellation; persistent reload only if needed | Old builds and generations cannot contaminate new results                                             |
+| P6: Desktop parity               | Real supported-backend smoke checks and documented upstream platform limits               | Actual compositor/input/resource-service behavior is verified; no specific window manager is required |
 
 P0-P2 should produce a useful static-fixture loop using the explicit transitional wall-clock profile. Fixture-only services and the real watchdog already apply in P1. Do not advertise full virtual time, images-ready, transparent capture, semantic selectors, or reload before their respective gates pass.
 
@@ -1269,48 +1269,48 @@ Implementation should reuse the main development specification's completed phase
 
 These cases test cross-layer behavior. They are implementation requirements, not claims that tests have already run.
 
-| ID | Scenario | Required result |
-| --- | --- | --- |
-| PV01 | Real renderer calibration | PNG comes from actual offscreen wgpu with real font shaping and rasterization. |
-| PV02 | No usable graphics adapter | Required-pixels run fails explicitly; no transcript fallback passes. |
-| PV03 | Odd physical width and corner colors | Correct extent, orientation, channel order, and row-padding removal. |
-| PV04 | Color and alpha calibration | Gray/color swatches and premultiplication conversion match the renderer contract. |
-| PV05 | Real TSX counter bundle | Actual rquickjs evaluation and production bridge create the visible UI. |
-| PV06 | Atomic bundle publication | Mixed JS/CSS/manifest generations are never loaded. |
-| PV07 | Source-mapped application exception | Original error, producing build, generated position, and valid source mapping are retained. |
-| PV08 | Initial mount failure | Bounded failure and native/JS cleanup; no successful capture is claimed. |
-| PV09 | Native counter click | Hit-tested movement/press/release changes Count: 0 to Count: 1. |
-| PV10 | Duplicate/missing test ID | Unique-match failure with bounded useful candidates; no first-match fallback. |
-| PV11 | Clipped or obscured button | Pointer action reports the visibility/blocker failure instead of invoking a callback. |
-| PV12 | Scales 1.0/1.25/1.5/1.75/2.0 | Geometry-selected input hits the intended control; pixel dimensions are correct. |
-| PV13 | Keyboard activation and focus | Native Tab/Enter/Space behavior and cancellation semantics are preserved. |
-| PV14 | Saved tree inspection | Queries use the chosen capture version and do not start a runtime. |
-| PV15 | Semantic tree updates | Ordered incremental updates reconstruct a full current tree and remove retired nodes. |
-| PV16 | Frozen time plus infinite JS loop | Real watchdog interrupts/terminates; virtual time does not need to advance. |
-| PV17 | Infinite or repeatedly throwing jobs | Every attempt consumes budget; original job failures remain actionable. |
-| PV18 | Due timers and cancellation | Equal deadlines follow native ordering; a canceled due JS timer is suppressed by bridge guards. |
-| PV19 | Resize under held clock | No implicit advance; pending pacing deadline is reported. |
-| PV20 | Native RAF and extra same-time frames | Native ordinals are recorded and bounded; no false once-per-timestamp promise. |
-| PV21 | Delayed mock response | Loading UI can settle/capture while a future response remains pending. |
-| PV22 | Fixture writes and missing providers | Only mock state changes; unexpected calls fail with zero live-provider calls. |
-| PV23 | Simultaneous service completions | Stable documented ordering independent of real thread arrival. |
-| PV24 | Delayed/corrupt/replaced image | Readiness detects pending, failure, and stale completion; placeholders cannot pass as ready. |
-| PV25 | Font and time reproducibility | Declared fonts, locale, epoch, clock APIs, and random policy agree across reruns. |
-| PV26 | Frame/tree coherence | Pixels and tree cover the same generation, revision, scale, and presentation state. |
-| PV27 | Pacing/readback failure | Old pixels are not relabeled current; readiness/graphics code and last valid evidence are retained. |
-| PV28 | Exact visual baseline | Same controlled inputs compare correctly; app changes produce a reviewable diff. |
-| PV29 | Incompatible baseline or mask | Dimension/environment mismatch is explicit; all-image masking is rejected. |
-| PV30 | CI without GPU or with output failure | Required jobs fail with the correct category; no false green/skipped pass. |
-| PV31 | Watch build failure | Last-success remains labeled historical; latest-attempt identifies the failed build. |
-| PV32 | Superseded run | Cancellation is bounded; only the newest complete build becomes latest-attempt. |
-| PV33 | Late completion after reload | Retired generation cannot mutate the new session; roots are released. |
-| PV34 | Persistent candidate/mount failure | Preflight and post-disposal failure behavior follow the declared transaction boundary. |
-| PV35 | Repeated reload/disposal | Node, callback, request, and timer counts return to the established baseline. |
-| PV36 | Surface loss/resume | New native IDs are rebound once; obsolete surfaces/captures are never targeted. |
-| PV37 | Native text and IME scenario | Synthetic routing preserves selection/composition; real IME remains a separate desktop test. |
+| ID   | Scenario                              | Required result                                                                                                      |
+| ---- | ------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| PV01 | Real renderer calibration             | PNG comes from actual offscreen wgpu with real font shaping and rasterization.                                       |
+| PV02 | No usable graphics adapter            | Required-pixels run fails explicitly; no transcript fallback passes.                                                 |
+| PV03 | Odd physical width and corner colors  | Correct extent, orientation, channel order, and row-padding removal.                                                 |
+| PV04 | Color and alpha calibration           | Gray/color swatches and premultiplication conversion match the renderer contract.                                    |
+| PV05 | Real TSX counter bundle               | Actual rquickjs evaluation and production bridge create the visible UI.                                              |
+| PV06 | Atomic bundle publication             | Mixed JS/CSS/manifest generations are never loaded.                                                                  |
+| PV07 | Source-mapped application exception   | Original error, producing build, generated position, and valid source mapping are retained.                          |
+| PV08 | Initial mount failure                 | Bounded failure and native/JS cleanup; no successful capture is claimed.                                             |
+| PV09 | Native counter click                  | Hit-tested movement/press/release changes Count: 0 to Count: 1.                                                      |
+| PV10 | Duplicate/missing test ID             | Unique-match failure with bounded useful candidates; no first-match fallback.                                        |
+| PV11 | Clipped or obscured button            | Pointer action reports the visibility/blocker failure instead of invoking a callback.                                |
+| PV12 | Scales 1.0/1.25/1.5/1.75/2.0          | Geometry-selected input hits the intended control; pixel dimensions are correct.                                     |
+| PV13 | Keyboard activation and focus         | Native Tab/Enter/Space behavior and cancellation semantics are preserved.                                            |
+| PV14 | Saved tree inspection                 | Queries use the chosen capture version and do not start a runtime.                                                   |
+| PV15 | Semantic tree updates                 | Ordered incremental updates reconstruct a full current tree and remove retired nodes.                                |
+| PV16 | Frozen time plus infinite JS loop     | Real watchdog interrupts/terminates; virtual time does not need to advance.                                          |
+| PV17 | Infinite or repeatedly throwing jobs  | Every attempt consumes budget; original job failures remain actionable.                                              |
+| PV18 | Due timers and cancellation           | Equal deadlines follow native ordering; a canceled due JS timer is suppressed by bridge guards.                      |
+| PV19 | Resize under held clock               | No implicit advance; pending pacing deadline is reported.                                                            |
+| PV20 | Native RAF and extra same-time frames | Native ordinals are recorded and bounded; no false once-per-timestamp promise.                                       |
+| PV21 | Delayed mock response                 | Loading UI can settle/capture while a future response remains pending.                                               |
+| PV22 | Fixture writes and missing providers  | Only mock state changes; unexpected calls fail with zero live-provider calls.                                        |
+| PV23 | Simultaneous service completions      | Stable documented ordering independent of real thread arrival.                                                       |
+| PV24 | Delayed/corrupt/replaced image        | Readiness detects pending, failure, and stale completion; placeholders cannot pass as ready.                         |
+| PV25 | Font and time reproducibility         | Declared fonts, locale, epoch, clock APIs, and random policy agree across reruns.                                    |
+| PV26 | Frame/tree coherence                  | Pixels and tree cover the same generation, revision, scale, and presentation state.                                  |
+| PV27 | Pacing/readback failure               | Old pixels are not relabeled current; readiness/graphics code and last valid evidence are retained.                  |
+| PV28 | Exact visual baseline                 | Same controlled inputs compare correctly; app changes produce a reviewable diff.                                     |
+| PV29 | Incompatible baseline or mask         | Dimension/environment mismatch is explicit; all-image masking is rejected.                                           |
+| PV30 | CI without GPU or with output failure | Required jobs fail with the correct category; no false green/skipped pass.                                           |
+| PV31 | Watch build failure                   | Last-success remains labeled historical; latest-attempt identifies the failed build.                                 |
+| PV32 | Superseded run                        | Cancellation is bounded; only the newest complete build becomes latest-attempt.                                      |
+| PV33 | Late completion after reload          | Retired generation cannot mutate the new session; roots are released.                                                |
+| PV34 | Persistent candidate/mount failure    | Preflight and post-disposal failure behavior follow the declared transaction boundary.                               |
+| PV35 | Repeated reload/disposal              | Node, callback, request, and timer counts return to the established baseline.                                        |
+| PV36 | Surface loss/resume                   | New native IDs are rebound once; obsolete surfaces/captures are never targeted.                                      |
+| PV37 | Native text and IME scenario          | Synthetic routing preserves selection/composition; real IME remains a separate desktop test.                         |
 | PV38 | Upstream layer-shell placement/popups | Actual supported roles, focus, exclusive zones, and popup limitations are verified on the selected upstream backend. |
-| PV39 | Real transparency and output scaling | Actual compositor blending and fractional/output transitions are verified. |
-| PV40 | Idle/occlusion/live service behavior | Native wakeups and real service integration work without continuous artificial redraw. |
+| PV39 | Real transparency and output scaling  | Actual compositor blending and fractional/output transitions are verified.                                           |
+| PV40 | Idle/occlusion/live service behavior  | Native wakeups and real service integration work without continuous artificial redraw.                               |
 
 For each implemented capability, record the command, dependency baseline, environment, outcome, and evidence paths. Do not mark unimplemented cases as passing. Use targeted subsets during ordinary UI edits and the relevant broader gate when changing shared lifecycle, timing, input, or rendering behavior.
 
@@ -1338,7 +1338,7 @@ For each implemented capability, record the command, dependency baseline, enviro
 
 ### 18.2 Ready-to-use English handoff prompt
 
-~~~text
+```text
 Implement Preview Mode for the existing zgui + rquickjs + TSX native UI host.
 
 Read the repository instructions, the main native UI development
@@ -1388,7 +1388,7 @@ Deliver the working implementation, versioned schemas and example inputs,
 updated local commands, and a phase-by-phase verification report. Stop
 optional expansion once the requested phase and its acceptance gates are
 complete.
-~~~
+```
 
 ### 18.3 Rules for an agent using preview
 
@@ -1406,7 +1406,7 @@ A final change report should identify the affected scenario, actual assertions, 
 
 After one-shot behavior is reliable, expose the same typed commands through a persistent adapter:
 
-~~~text
+```text
 initialize
 load
 reset
@@ -1415,7 +1415,7 @@ inspect
 capture
 compare
 dispose
-~~~
+```
 
 A persistent request includes request ID, expected session generation, and command sequence. Serialize mutations. Read-only responses identify the snapshot version they describe.
 
@@ -1524,5 +1524,3 @@ The following sources establish the upstream contracts used here. Proposed CLI/s
 [A2]: https://github.com/bea4dev/AntiWebUI/blob/43f0b88b3e5cf882c157563a547b05273fed7ebb/src/anti-webui-app/examples/interaction_snapshot.rs
 [A3]: https://github.com/bea4dev/shoji-bar-4/blob/a30d90cb80754f45785a6c444e31c59e9ea1fac0/docs/development.md
 [A4]: https://github.com/bea4dev/shoji-bar-4/blob/a30d90cb80754f45785a6c444e31c59e9ea1fac0/src/preview.rs
-
-

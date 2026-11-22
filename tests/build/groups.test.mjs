@@ -179,8 +179,9 @@ function cleanup(t, harness, dispose) {
   t.after(() => {
     const previous = globalThis.__zgui;
     globalThis.__zgui = harness.host;
-    try { dispose(); }
-    finally {
+    try {
+      dispose();
+    } finally {
       if (previous && previous !== harness.host) globalThis.__zgui = previous;
       else delete globalThis.__zgui;
     }
@@ -245,7 +246,11 @@ test("radio group selects on click and focus with roving tab stops and live orde
   mod.controls.setCancelRadioKeys(true);
   harness.flush();
   sendKey(harness, harness.byTestId("ra"), "ArrowDown");
-  assert.notEqual(harness.focused.current, harness.byTestId("rb"), "a caller-prevented key does not navigate");
+  assert.notEqual(
+    harness.focused.current,
+    harness.byTestId("rb"),
+    "a caller-prevented key does not navigate",
+  );
   mod.controls.setCancelRadioKeys(false);
 
   const countBeforeCancel = mod.api.log.radio.length;
@@ -293,7 +298,11 @@ test("disabled and removed radio items recover the tab stop and skip navigation"
 
   harness.dispatch(a, "Click");
   assert.deepEqual(mod.api.log.radio, ["a"]);
-  assert.equal(checked(harness, "rb"), false, "the disabled item only stays checked until a new choice");
+  assert.equal(
+    checked(harness, "rb"),
+    false,
+    "the disabled item only stays checked until a new choice",
+  );
   mod.controls.setRadioDefault("c");
   harness.flush();
   assert.equal(checked(harness, "ra"), true, "defaultValue changes never reset owned state");
@@ -314,7 +323,11 @@ test("disabled and removed radio items recover the tab stop and skip navigation"
   harness.dispatch(c, "Click");
   mod.controls.setShowC(false);
   harness.flush();
-  assert.equal(tabIndex(harness, "ra"), 0, "removing the active item recovers a surviving tab stop");
+  assert.equal(
+    tabIndex(harness, "ra"),
+    0,
+    "removing the active item recovers a surviving tab stop",
+  );
   const fresh = harness.byTestId("rc");
   assert.equal(fresh, undefined);
   mod.controls.setShowC(true);
@@ -429,11 +442,19 @@ test("group disabled and inherited variant, size, spacing stay reactive", async 
   harness.flush();
   assert.equal(prop(harness, "ta", "data-variant"), "outline");
   assert.match(prop(harness, "ta", "class"), /zui-toggle--outline/);
-  assert.equal(prop(harness, "ta", "data-size"), "sm", "group size inherits when the item does not override");
+  assert.equal(
+    prop(harness, "ta", "data-size"),
+    "sm",
+    "group size inherits when the item does not override",
+  );
 
   mod.controls.setGroupDisabled(true);
   harness.flush();
-  assert.equal(prop(harness, "tb", "disabled"), true, "item disabled=false cannot override the group");
+  assert.equal(
+    prop(harness, "tb", "disabled"),
+    true,
+    "item disabled=false cannot override the group",
+  );
   const length = mod.api.log.toggle.length;
   harness.dispatch(b, "Click");
   assert.equal(mod.api.log.toggle.length, length);
@@ -449,7 +470,11 @@ test("nested groups only own their items and standalone items are inert", async 
   assert.equal(tabIndex(harness, "i1"), 0);
   sendKey(harness, i1, "ArrowDown");
   assert.equal(harness.focused.current, harness.byTestId("i2"));
-  const foreign = harness.dispatch(outer, "KeyDown", { target: i1, key: "ArrowUp", keyWithoutModifiers: "ArrowUp" });
+  const foreign = harness.dispatch(outer, "KeyDown", {
+    target: i1,
+    key: "ArrowUp",
+    keyWithoutModifiers: "ArrowUp",
+  });
   assert.equal(foreign.defaultPrevented, false, "a group ignores keys targeting another group");
   harness.dispatch(i1, "Click");
   assert.deepEqual(mod.api.log.radio, ["i2", "i1"]);
@@ -477,7 +502,14 @@ test("invalid group inputs fail clearly and radio children are rejected lazily",
   assert.throws(() => mod.mountInvalidSpacing(root, Number.NaN), /finite non-negative/);
   assert.throws(() => mod.mountInvalidSpacing(root, -1), /finite non-negative/);
   let ran = false;
-  assert.throws(() => mod.mountRadioChildren(root, () => { ran = true; return "x"; }), /does not accept children/);
+  assert.throws(
+    () =>
+      mod.mountRadioChildren(root, () => {
+        ran = true;
+        return "x";
+      }),
+    /does not accept children/,
+  );
   assert.equal(ran, false, "children are rejected before the getter runs");
 });
 

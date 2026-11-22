@@ -1,4 +1,14 @@
-import { For, createContext, createEffect, createMemo, createSignal, onCleanup, omit, untrack, useContext } from "#solid";
+import {
+  For,
+  createContext,
+  createEffect,
+  createMemo,
+  createSignal,
+  onCleanup,
+  omit,
+  untrack,
+  useContext,
+} from "#solid";
 import { createElement, mergeProps, spread } from "../renderer/index.js";
 import { focus, precedes, scrollIntoView } from "../nodes.js";
 import { VirtualList, type VirtualListController } from "../virtual-list.js";
@@ -42,7 +52,10 @@ export interface TreeVirtualizeOptions {
   readonly gap?: number | undefined;
 }
 
-export interface TreeViewProps<T = unknown> extends Omit<NativeElementProps, "children" | "onSelect"> {
+export interface TreeViewProps<T = unknown> extends Omit<
+  NativeElementProps,
+  "children" | "onSelect"
+> {
   readonly items?: readonly TreeNodeData<T>[] | undefined;
   readonly children?: NativeChild | undefined;
   readonly selectedId?: string | null | undefined;
@@ -52,7 +65,9 @@ export interface TreeViewProps<T = unknown> extends Omit<NativeElementProps, "ch
   readonly expandedIds?: readonly string[] | undefined;
   readonly defaultExpandedIds?: readonly string[] | undefined;
   readonly onExpandedChange?: ((ids: readonly string[]) => void) | undefined;
-  readonly renderItem?: ((node: TreeNodeData<T>, state: TreeItemRenderState) => NativeChild) | undefined;
+  readonly renderItem?:
+    | ((node: TreeNodeData<T>, state: TreeItemRenderState) => NativeChild)
+    | undefined;
   readonly virtualize?: boolean | TreeVirtualizeOptions | undefined;
   readonly emptyText?: string | undefined;
   readonly label?: string | null | undefined;
@@ -98,7 +113,10 @@ interface TreeContextValue {
 }
 
 const TreeContext = createContext<TreeContextValue | null>(null);
-const TreeBranchContext = createContext<{ readonly depth: number; readonly parentId: string | null }>({
+const TreeBranchContext = createContext<{
+  readonly depth: number;
+  readonly parentId: string | null;
+}>({
   depth: 0,
   parentId: null,
 });
@@ -121,7 +139,10 @@ function flattenTree<T>(
   return out;
 }
 
-function findNodeById<T>(nodes: readonly TreeNodeData<T>[], id: string): TreeNodeData<T> | undefined {
+function findNodeById<T>(
+  nodes: readonly TreeNodeData<T>[],
+  id: string,
+): TreeNodeData<T> | undefined {
   for (const node of nodes) {
     if (node.id === id) return node;
     if (node.children) {
@@ -166,26 +187,37 @@ export function TreeView<T = unknown>(props: TreeViewProps<T> = {}): NativeNode 
     "onKeyDown",
   );
 
-  const [selectedId, setSelectedId] = createControllable<string | null>({
-    value: () => props.selectedId,
-    defaultValue: () => props.defaultSelectedId ?? null,
-    onChange: () => next => {
-      if (next !== null) {
-        const node = props.items ? findNodeById(props.items, next) : undefined;
-        props.onSelect?.(next, node);
-      }
+  const [selectedId, setSelectedId] = createControllable<string | null>(
+    {
+      value: () => props.selectedId,
+      defaultValue: () => props.defaultSelectedId ?? null,
+      onChange: () => next => {
+        if (next !== null) {
+          const node = props.items ? findNodeById(props.items, next) : undefined;
+          props.onSelect?.(next, node);
+        }
+      },
     },
-  }, null);
+    null,
+  );
 
-  const [expandedIds, setExpandedIds] = createControllable<readonly string[]>({
-    value: () => props.expandedIds,
-    defaultValue: () => props.defaultExpandedIds ?? [],
-    onChange: () => props.onExpandedChange,
-  }, []);
+  const [expandedIds, setExpandedIds] = createControllable<readonly string[]>(
+    {
+      value: () => props.expandedIds,
+      defaultValue: () => props.defaultExpandedIds ?? [],
+      onChange: () => props.onExpandedChange,
+    },
+    [],
+  );
 
   const expandedSet = createMemo(() => new Set(expandedIds()));
-  const [focusedId, setFocusedId] = createSignal<string | null>(untrack(selectedId), { ownedWrite: true });
-  const [declarativeItems, setDeclarativeItems] = createSignal<readonly DeclarativeItemEntry[]>([], { ownedWrite: true });
+  const [focusedId, setFocusedId] = createSignal<string | null>(untrack(selectedId), {
+    ownedWrite: true,
+  });
+  const [declarativeItems, setDeclarativeItems] = createSignal<readonly DeclarativeItemEntry[]>(
+    [],
+    { ownedWrite: true },
+  );
 
   const rowNodes = new Map<string, NativeNode>();
   let virtualController: VirtualListController | null = null;
@@ -196,13 +228,15 @@ export function TreeView<T = unknown>(props: TreeViewProps<T> = {}): NativeNode 
     return flattenTree(props.items, expandedSet());
   });
 
-  const visibleEntries = createMemo<readonly {
-    id: string;
-    parentId: string | null;
-    hasChildren: boolean;
-    disabled: boolean;
-    node?: TreeNodeData<T> | undefined;
-  }[]>(() => {
+  const visibleEntries = createMemo<
+    readonly {
+      id: string;
+      parentId: string | null;
+      hasChildren: boolean;
+      disabled: boolean;
+      node?: TreeNodeData<T> | undefined;
+    }[]
+  >(() => {
     if (props.items) {
       return flatData().map(item => ({
         id: item.id,
@@ -353,12 +387,9 @@ export function TreeView<T = unknown>(props: TreeViewProps<T> = {}): NativeNode 
     }
   };
 
-  createEffect(
-    selectedId,
-    sel => {
-      if (sel && untrack(focusedId) === null) setFocusedId(sel);
-    },
-  );
+  createEffect(selectedId, sel => {
+    if (sel && untrack(focusedId) === null) setFocusedId(sel);
+  });
 
   const registerDeclarative = (entry: DeclarativeItemEntry): (() => void) => {
     rowNodes.set(entry.id, entry.node);
@@ -394,31 +425,55 @@ export function TreeView<T = unknown>(props: TreeViewProps<T> = {}): NativeNode 
     const isFocused = () => focusedId() === itemId;
     const isOpen = () => isExpanded(itemId);
 
-    spread(row, {
-      role: "listItem",
-      tabIndex: 0,
-      get ariaLevel() { return entryAccessor().depth + 1; },
-      testId: `tree-item-${itemId}`,
-      get disabled() { return !!entryAccessor().node.disabled; },
-      get selected() { return isSelected(); },
-      get expanded() { return entryAccessor().hasChildren ? isOpen() : null; },
-      get "data-selected"() { return isSelected() ? "true" : "false"; },
-      get "data-focused"() { return isFocused() ? "true" : "false"; },
-      get "data-expanded"() { return entryAccessor().hasChildren ? (isOpen() ? "true" : "false") : null; },
-      get "data-disabled"() { return entryAccessor().node.disabled ? "true" : "false"; },
-      "data-item-id": itemId,
-      __zguiClass: "zui-tree__row",
-      get __zguiStyle() { return { "--zui-tree-depth": String(entryAccessor().depth) }; },
-      onFocus() { setFocusedId(itemId); },
-      onKeyDown: handleKeyDown,
-      onClick() {
-        const cur = untrack(entryAccessor);
-        if (cur.node.disabled) return;
-        focus(row);
-        if (cur.hasChildren) toggleExpand(itemId);
-        activateId(itemId);
+    spread(
+      row,
+      {
+        role: "listItem",
+        tabIndex: 0,
+        get ariaLevel() {
+          return entryAccessor().depth + 1;
+        },
+        testId: `tree-item-${itemId}`,
+        get disabled() {
+          return !!entryAccessor().node.disabled;
+        },
+        get selected() {
+          return isSelected();
+        },
+        get expanded() {
+          return entryAccessor().hasChildren ? isOpen() : null;
+        },
+        get "data-selected"() {
+          return isSelected() ? "true" : "false";
+        },
+        get "data-focused"() {
+          return isFocused() ? "true" : "false";
+        },
+        get "data-expanded"() {
+          return entryAccessor().hasChildren ? (isOpen() ? "true" : "false") : null;
+        },
+        get "data-disabled"() {
+          return entryAccessor().node.disabled ? "true" : "false";
+        },
+        "data-item-id": itemId,
+        __zguiClass: "zui-tree__row",
+        get __zguiStyle() {
+          return { "--zui-tree-depth": String(entryAccessor().depth) };
+        },
+        onFocus() {
+          setFocusedId(itemId);
+        },
+        onKeyDown: handleKeyDown,
+        onClick() {
+          const cur = untrack(entryAccessor);
+          if (cur.node.disabled) return;
+          focus(row);
+          if (cur.hasChildren) toggleExpand(itemId);
+          activateId(itemId);
+        },
       },
-    }, true);
+      true,
+    );
 
     slot(row, () => {
       const cur = entryAccessor();
@@ -428,7 +483,11 @@ export function TreeView<T = unknown>(props: TreeViewProps<T> = {}): NativeNode 
       const chevron = element("control", {
         role: "button",
         tabIndex: -1,
-        get ariaLabel() { return isOpen() ? `Collapse ${entryAccessor().node.label}` : `Expand ${entryAccessor().node.label}`; },
+        get ariaLabel() {
+          return isOpen()
+            ? `Collapse ${entryAccessor().node.label}`
+            : `Expand ${entryAccessor().node.label}`;
+        },
         testId: `tree-toggle-${itemId}`,
         class: "zui-tree__chevron",
         onClick(event: NativeEvent) {
@@ -442,12 +501,24 @@ export function TreeView<T = unknown>(props: TreeViewProps<T> = {}): NativeNode 
 
     if (props.renderItem) {
       const custom = props.renderItem(initial.node, {
-        get depth() { return entryAccessor().depth; },
-        get expanded() { return isOpen(); },
-        get selected() { return isSelected(); },
-        get focused() { return isFocused(); },
-        get hasChildren() { return entryAccessor().hasChildren; },
-        get disabled() { return !!entryAccessor().node.disabled; },
+        get depth() {
+          return entryAccessor().depth;
+        },
+        get expanded() {
+          return isOpen();
+        },
+        get selected() {
+          return isSelected();
+        },
+        get focused() {
+          return isFocused();
+        },
+        get hasChildren() {
+          return entryAccessor().hasChildren;
+        },
+        get disabled() {
+          return !!entryAccessor().node.disabled;
+        },
         toggleExpand: () => toggleExpand(itemId),
       });
       slot(row, custom);
@@ -459,75 +530,122 @@ export function TreeView<T = unknown>(props: TreeViewProps<T> = {}): NativeNode 
         append(iconWrap, Icon({ icon: iconData, size: "sm" }));
         return iconWrap;
       });
-      append(row, element("label", {
-        class: "zui-tree__label",
-        get children() { return entryAccessor().node.label; },
-      }));
+      append(
+        row,
+        element("label", {
+          class: "zui-tree__label",
+          get children() {
+            return entryAccessor().node.label;
+          },
+        }),
+      );
       slot(row, () => {
         const badgeText = entryAccessor().node.badge;
-        return badgeText ? element("label", { class: "zui-tree__badge", children: badgeText }) : null;
+        return badgeText
+          ? element("label", { class: "zui-tree__badge", children: badgeText })
+          : null;
       });
     }
 
     if (pendingFocusId === itemId) {
-      createEffect(() => true, () => {
-        if (pendingFocusId === itemId) {
-          pendingFocusId = null;
-          focus(row);
-        }
-      });
+      createEffect(
+        () => true,
+        () => {
+          if (pendingFocusId === itemId) {
+            pendingFocusId = null;
+            focus(row);
+          }
+        },
+      );
     }
     return row;
   };
 
   const root = createElement("box");
-  spread(root, mergeProps(
-    rest,
-    withDefaults({
-      role: "list" as const,
-      tabIndex: 0,
-      get ariaLabel() { return props.label ?? null; },
-      get "data-virtualized"() { return props.virtualize ? "true" : "false"; },
-    }, rest),
-    {
-      get __zguiClass() { return classes(treeSheet.className); },
-      onKeyDown(event: NativeKeyEvent) {
-        if (!callHandler(event, props.onKeyDown)) return;
-        handleKeyDown(event);
+  spread(
+    root,
+    mergeProps(
+      rest,
+      withDefaults(
+        {
+          role: "list" as const,
+          tabIndex: 0,
+          get ariaLabel() {
+            return props.label ?? null;
+          },
+          get "data-virtualized"() {
+            return props.virtualize ? "true" : "false";
+          },
+        },
+        rest,
+      ),
+      {
+        get __zguiClass() {
+          return classes(treeSheet.className);
+        },
+        onKeyDown(event: NativeKeyEvent) {
+          if (!callHandler(event, props.onKeyDown)) return;
+          handleKeyDown(event);
+        },
       },
-    },
-  ), true);
+    ),
+    true,
+  );
 
   if (props.items !== undefined) {
-    const emptyFallback = () => element("box", {
-      class: "zui-tree__empty",
-      role: "status",
-      get children() { return props.emptyText ?? "No items"; },
-    });
+    const emptyFallback = () =>
+      element("box", {
+        class: "zui-tree__empty",
+        role: "status",
+        get children() {
+          return props.emptyText ?? "No items";
+        },
+      });
     if (props.virtualize) {
       const opts = typeof props.virtualize === "object" ? props.virtualize : {};
-      append(root, VirtualList({
-        get each() { return flatData(); },
-        keyed: entry => entry.id,
-        itemHeight: opts.itemHeight ?? 28,
-        overscan: opts.overscan ?? 4,
-        initialHeight: opts.initialHeight ?? 320,
-        gap: opts.gap ?? 0,
-        style: { flexGrow: 1, height: "100%", minHeight: "0px" },
-        controller: handle => { virtualController = handle; },
-        get fallback() { return emptyFallback(); },
-        children: entry => renderDataRow(entry),
-      }));
+      append(
+        root,
+        VirtualList({
+          get each() {
+            return flatData();
+          },
+          keyed: entry => entry.id,
+          itemHeight: opts.itemHeight ?? 28,
+          overscan: opts.overscan ?? 4,
+          initialHeight: opts.initialHeight ?? 320,
+          gap: opts.gap ?? 0,
+          style: { flexGrow: 1, height: "100%", minHeight: "0px" },
+          controller: handle => {
+            virtualController = handle;
+          },
+          get fallback() {
+            return emptyFallback();
+          },
+          children: entry => renderDataRow(entry),
+        }),
+      );
     } else {
-      slot(root, For({
-        get each() { return flatData(); },
-        keyed: entry => entry.id,
-        get fallback() { return emptyFallback(); },
-        children: entry => renderDataRow(entry),
-      }));
+      slot(
+        root,
+        For({
+          get each() {
+            return flatData();
+          },
+          keyed: entry => entry.id,
+          get fallback() {
+            return emptyFallback();
+          },
+          children: entry => renderDataRow(entry),
+        }),
+      );
     }
   } else {
-    slot(root, provide(TreeContext, context, () => provide(TreeBranchContext, { depth: 0, parentId: null }, props)));
+    slot(
+      root,
+      provide(TreeContext, context, () =>
+        provide(TreeBranchContext, { depth: 0, parentId: null }, props),
+      ),
+    );
   }
 
   return root;
@@ -537,9 +655,20 @@ export function TreeItem(props: TreeItemProps): NativeNode {
   useStylesheet(treeSheet);
   const context = useContext(TreeContext);
   const branch = useContext(TreeBranchContext);
-  const rest = omit(props, "itemId", "label", "children", "icon", "badge", "disabled", "expandable", "onClick", "onKeyDown");
+  const rest = omit(
+    props,
+    "itemId",
+    "label",
+    "children",
+    "icon",
+    "badge",
+    "disabled",
+    "expandable",
+    "onClick",
+    "onKeyDown",
+  );
 
-  const hasChildren = () => props.expandable ?? ("children" in props);
+  const hasChildren = () => props.expandable ?? "children" in props;
   const isExpanded = () => context?.isExpanded(props.itemId) ?? false;
   const isSelected = () => context?.selectedId() === props.itemId;
   const isFocused = () => context?.focusedId() === props.itemId;
@@ -559,37 +688,64 @@ export function TreeItem(props: TreeItemProps): NativeNode {
     onCleanup(unregister);
   }
 
-  spread(row, mergeProps(
-    rest,
-    withDefaults({
-      role: "listItem" as const,
-      tabIndex: 0,
-      ariaLevel: branch.depth + 1,
-      get disabled() { return !!props.disabled; },
-      get selected() { return isSelected(); },
-      get expanded() { return hasChildren() ? isExpanded() : null; },
-      get "data-selected"() { return isSelected() ? "true" : "false"; },
-      get "data-focused"() { return isFocused() ? "true" : "false"; },
-      get "data-expanded"() { return hasChildren() ? (isExpanded() ? "true" : "false") : null; },
-      get "data-disabled"() { return props.disabled ? "true" : "false"; },
-      get "data-item-id"() { return props.itemId; },
-      __zguiStyle: { "--zui-tree-depth": String(branch.depth) },
-    }, rest),
-    {
-      get __zguiClass() { return classes("zui-tree__row"); },
-      onFocus() { context?.focusId(props.itemId); },
-      onKeyDown(event: NativeKeyEvent) {
-        if (!callHandler(event, props.onKeyDown)) return;
-        context?.handleKeyDown(event);
+  spread(
+    row,
+    mergeProps(
+      rest,
+      withDefaults(
+        {
+          role: "listItem" as const,
+          tabIndex: 0,
+          ariaLevel: branch.depth + 1,
+          get disabled() {
+            return !!props.disabled;
+          },
+          get selected() {
+            return isSelected();
+          },
+          get expanded() {
+            return hasChildren() ? isExpanded() : null;
+          },
+          get "data-selected"() {
+            return isSelected() ? "true" : "false";
+          },
+          get "data-focused"() {
+            return isFocused() ? "true" : "false";
+          },
+          get "data-expanded"() {
+            return hasChildren() ? (isExpanded() ? "true" : "false") : null;
+          },
+          get "data-disabled"() {
+            return props.disabled ? "true" : "false";
+          },
+          get "data-item-id"() {
+            return props.itemId;
+          },
+          __zguiStyle: { "--zui-tree-depth": String(branch.depth) },
+        },
+        rest,
+      ),
+      {
+        get __zguiClass() {
+          return classes("zui-tree__row");
+        },
+        onFocus() {
+          context?.focusId(props.itemId);
+        },
+        onKeyDown(event: NativeKeyEvent) {
+          if (!callHandler(event, props.onKeyDown)) return;
+          context?.handleKeyDown(event);
+        },
+        onClick(event: NativeEvent) {
+          if (!callHandler(event, props.onClick) || props.disabled) return;
+          focus(row);
+          if (hasChildren()) context?.toggleExpand(props.itemId);
+          context?.activateId(props.itemId);
+        },
       },
-      onClick(event: NativeEvent) {
-        if (!callHandler(event, props.onClick) || props.disabled) return;
-        focus(row);
-        if (hasChildren()) context?.toggleExpand(props.itemId);
-        context?.activateId(props.itemId);
-      },
-    },
-  ), true);
+    ),
+    true,
+  );
 
   slot(row, () => {
     if (!hasChildren()) return element("box", { class: "zui-tree__spacer", ariaHidden: true });
@@ -620,7 +776,9 @@ export function TreeItem(props: TreeItemProps): NativeNode {
   append(container, row);
   slot(container, () => {
     if (!hasChildren() || !isExpanded()) return null;
-    return provide(TreeBranchContext, { depth: branch.depth + 1, parentId: props.itemId }, () => untrack(() => props.children));
+    return provide(TreeBranchContext, { depth: branch.depth + 1, parentId: props.itemId }, () =>
+      untrack(() => props.children),
+    );
   });
 
   return container;

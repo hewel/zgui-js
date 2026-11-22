@@ -1,13 +1,38 @@
 import { createSignal, getWindowRect } from "@hewel/zgui";
 import type { NativeNode } from "@hewel/zgui";
 import {
-  Badge, Button, ContextMenu, ContextMenuContent, ContextMenuTrigger,
-  DropdownMenu, DropdownMenuContent, DropdownMenuTrigger,
-  MenuCheckboxItem, MenuGroup, MenuItem, MenuLabel, MenuRadioGroup, MenuRadioItem,
-  MenuSeparator, MenuShortcut, MenuSub, MenuSubContent, MenuSubTrigger,
-  Menubar, MenubarArrows, MenubarCheckboxItem, MenubarContent, MenubarGroup,
-  MenubarItem, MenubarLabel, MenubarMenu, MenubarRadioGroup, MenubarRadioItem,
-  MenubarSeparator, MenubarShortcut, MenubarTrigger,
+  Badge,
+  Button,
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuTrigger,
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuTrigger,
+  MenuCheckboxItem,
+  MenuGroup,
+  MenuItem,
+  MenuLabel,
+  MenuRadioGroup,
+  MenuRadioItem,
+  MenuSeparator,
+  MenuShortcut,
+  MenuSub,
+  MenuSubContent,
+  MenuSubTrigger,
+  Menubar,
+  MenubarArrows,
+  MenubarCheckboxItem,
+  MenubarContent,
+  MenubarGroup,
+  MenubarItem,
+  MenubarLabel,
+  MenubarMenu,
+  MenubarRadioGroup,
+  MenubarRadioItem,
+  MenubarSeparator,
+  MenubarShortcut,
+  MenubarTrigger,
   useContextMenuPlace,
 } from "@hewel/zgui/components";
 import { DemoRow, Panel } from "../shell.js";
@@ -116,7 +141,12 @@ export function MenusSection(props: { onAction: (label: string) => void }) {
       >
         <ContextMenu>
           <column class="demo-stack">
-            <ContextMenuTrigger testId="menus-context-trigger" ref={el => { areaNode = el; }}>
+            <ContextMenuTrigger
+              testId="menus-context-trigger"
+              ref={el => {
+                areaNode = el;
+              }}
+            >
               <column class="dashed-frame">
                 <text style={{ "font-weight": "600" }}>Right-click or long-press here</text>
                 <text class="muted-caption">Opens anchored at the pointer coordinate</text>
@@ -215,7 +245,9 @@ export function MenusSection(props: { onAction: (label: string) => void }) {
                   <MenubarRadioGroup value={density()} onValueChange={setDensity}>
                     <MenubarRadioItem value="compact">Compact</MenubarRadioItem>
                     <MenubarRadioItem value="cosy">Cosy</MenubarRadioItem>
-                    <MenubarRadioItem testId="menus-editor-spacious" value="spacious">Spacious</MenubarRadioItem>
+                    <MenubarRadioItem testId="menus-editor-spacious" value="spacious">
+                      Spacious
+                    </MenubarRadioItem>
                   </MenubarRadioGroup>
                 </MenubarGroup>
               </MenubarContent>

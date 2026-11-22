@@ -9,7 +9,9 @@
   "properties": {
     "schemaVersion": { "const": 1 },
     "faces": {
-      "type": "array", "minItems": 1, "maxItems": 16,
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 16,
       "items": {
         "type": "object",
         "additionalProperties": false,
@@ -23,17 +25,24 @@
       }
     },
     "fallbackOrder": {
-      "type": "array", "minItems": 1, "maxItems": 16, "uniqueItems": true,
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 16,
+      "uniqueItems": true,
       "items": { "$ref": "#/$defs/alias" }
     }
   },
   "$defs": {
     "alias": {
-      "type": "string", "minLength": 1, "maxLength": 128,
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
       "allOf": [{ "pattern": "\\S" }, { "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*$" }]
     },
     "resourcePath": {
-      "type": "string", "minLength": 1, "maxLength": 1024,
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024,
       "pattern": "^(?!/)(?!.*[\\\\\\u0000])(?!(?:.*\/)?\\.{1,2}(?:\/|$))[^/]+(?:/[^/]+)*$"
     }
   }

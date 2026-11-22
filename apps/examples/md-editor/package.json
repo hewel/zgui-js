@@ -10,7 +10,9 @@
   "zgui": {
     "capabilities": {
       "sqlite": {
-        "databases": ["studio"]
+        "databases": [
+          "studio"
+        ]
       }
     },
     "window": {

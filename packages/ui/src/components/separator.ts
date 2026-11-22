@@ -16,19 +16,40 @@ export function Separator(props: SeparatorProps = {}): NativeNode {
   forbidChildren("Separator", props);
   const rest = omit(props, "orientation", "decorative");
   const node = createElement("box");
-  spread(node, mergeProps(
-    rest,
-    withDefaults({
-      get role() { return (props.decorative ?? true) ? "genericContainer" as const : "splitter" as const; },
-      get ariaHidden() { return (props.decorative ?? true) || null; },
-      get orientation() { return (props.decorative ?? true) ? null : (props.orientation ?? "horizontal"); },
-      get "data-orientation"() { return props.orientation ?? "horizontal"; },
-    }, rest),
-    {
-      get __zguiClass() {
-        return classes(sheet.className, "zui-separator", `zui-separator--${props.orientation ?? "horizontal"}`);
+  spread(
+    node,
+    mergeProps(
+      rest,
+      withDefaults(
+        {
+          get role() {
+            return (props.decorative ?? true)
+              ? ("genericContainer" as const)
+              : ("splitter" as const);
+          },
+          get ariaHidden() {
+            return (props.decorative ?? true) || null;
+          },
+          get orientation() {
+            return (props.decorative ?? true) ? null : (props.orientation ?? "horizontal");
+          },
+          get "data-orientation"() {
+            return props.orientation ?? "horizontal";
+          },
+        },
+        rest,
+      ),
+      {
+        get __zguiClass() {
+          return classes(
+            sheet.className,
+            "zui-separator",
+            `zui-separator--${props.orientation ?? "horizontal"}`,
+          );
+        },
       },
-    },
-  ), true);
+    ),
+    true,
+  );
   return node;
 }

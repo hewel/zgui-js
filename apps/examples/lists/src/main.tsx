@@ -7,12 +7,21 @@ let cleanedItems = 0;
 let cleanedBranches = 0;
 
 function ItemView(props: { item: Item }) {
-  onCleanup(() => { cleanedItems += 1; });
-  return <row><label>{props.item.id}</label><text>{props.item.title}</text></row>;
+  onCleanup(() => {
+    cleanedItems += 1;
+  });
+  return (
+    <row>
+      <label>{props.item.id}</label>
+      <text>{props.item.title}</text>
+    </row>
+  );
 }
 
 function ConditionalContent() {
-  onCleanup(() => { cleanedBranches += 1; });
+  onCleanup(() => {
+    cleanedBranches += 1;
+  });
   return <text>Fresh conditional branch</text>;
 }
 
@@ -40,12 +49,24 @@ function Lists() {
       setSlots(["first", "second"]);
     }
   };
-  onCleanup(() => { next = undefined; });
-  return <column>
-    <For each={items()}>{item => <ItemView item={item} />}</For>
-    <Show when={visible()}><ConditionalContent /></Show>
-    <For each={slots()} keyed={false}>{(value, index) => <text>{index}: {value()}</text>}</For>
-  </column>;
+  onCleanup(() => {
+    next = undefined;
+  });
+  return (
+    <column>
+      <For each={items()}>{item => <ItemView item={item} />}</For>
+      <Show when={visible()}>
+        <ConditionalContent />
+      </Show>
+      <For each={slots()} keyed={false}>
+        {(value, index) => (
+          <text>
+            {index}: {value()}
+          </text>
+        )}
+      </For>
+    </column>
+  );
 }
 
 export const hostApiVersion = 1;

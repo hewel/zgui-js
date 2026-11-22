@@ -35,9 +35,11 @@ const styles = stylex.create({
 });
 
 function Progress(props: { compact: boolean; width: number }) {
-  return <column {...stylex.props(styles.panel, props.compact && styles.compact)}>
-    <box {...stylex.props(styles.fill, styles.fillWidth(props.width))} />
-  </column>;
+  return (
+    <column {...stylex.props(styles.panel, props.compact && styles.compact)}>
+      <box {...stylex.props(styles.fill, styles.fillWidth(props.width))} />
+    </column>
+  );
 }
 ```
 
@@ -100,9 +102,7 @@ Declare application font family/resource mappings in `package.json`; each path m
 ```json
 {
   "zgui": {
-    "fonts": [
-      { "family": "Example Sans", "path": "assets/ExampleSans.ttf" }
-    ]
+    "fonts": [{ "family": "Example Sans", "path": "assets/ExampleSans.ttf" }]
   }
 }
 ```

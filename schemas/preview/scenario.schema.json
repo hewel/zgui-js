@@ -116,8 +116,16 @@
       "additionalProperties": false,
       "required": ["x", "y"],
       "properties": {
-        "x": { "type": "number", "minimum": -1.7976931348623157e308, "maximum": 1.7976931348623157e308 },
-        "y": { "type": "number", "minimum": -1.7976931348623157e308, "maximum": 1.7976931348623157e308 }
+        "x": {
+          "type": "number",
+          "minimum": -1.7976931348623157e308,
+          "maximum": 1.7976931348623157e308
+        },
+        "y": {
+          "type": "number",
+          "minimum": -1.7976931348623157e308,
+          "maximum": 1.7976931348623157e308
+        }
       },
       "description": "Finite logical surface coordinates; position is not a selector."
     },
@@ -170,7 +178,20 @@
         "surface": { "$ref": "#/$defs/surface" },
         "key": {
           "type": "string",
-          "enum": ["Tab", "Enter", "Escape", "Space", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Home", "End", "Backspace", "Delete"]
+          "enum": [
+            "Tab",
+            "Enter",
+            "Escape",
+            "Space",
+            "ArrowUp",
+            "ArrowDown",
+            "ArrowLeft",
+            "ArrowRight",
+            "Home",
+            "End",
+            "Backspace",
+            "Delete"
+          ]
         },
         "modifiers": {
           "type": "array",
@@ -256,7 +277,9 @@
         "op": { "const": "clock.advance" },
         "byMs": {
           "description": "Nonnegative JSON integer literal. Cumulative advances must not exceed profile.limits.maxVirtualDurationMs. Visits native and fixture deadlines, then the exact endpoint; zero drains current work without moving time.",
-          "type": "integer", "minimum": 0, "maximum": 18446744073709551615
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 18446744073709551615
         }
       }
     },
@@ -356,7 +379,11 @@
               "width": { "type": "number", "minimum": 1, "maximum": 16384 },
               "height": { "type": "number", "minimum": 1, "maximum": 16384 },
               "scale": { "type": "number", "exclusiveMinimum": 0, "maximum": 8 },
-              "refreshRateMilliHz": { "type": ["integer", "null"], "minimum": 1, "maximum": 1000000 }
+              "refreshRateMilliHz": {
+                "type": ["integer", "null"],
+                "minimum": 1,
+                "maximum": 1000000
+              }
             }
           }
         }

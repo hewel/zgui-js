@@ -10,10 +10,26 @@ test("Image forwards reactive src replacements/clears and rejects lazy child spr
   t.after(() => rm(directory, { recursive: true, force: true }));
   await mkdir(path.join(directory, "src"));
   await writeFile(path.join(directory, "package.json"), '{"type":"module"}');
-  await writeFile(path.join(directory, "tsconfig.json"), JSON.stringify({
-    compilerOptions: { target: "ES2022", module: "ESNext", moduleResolution: "Bundler", lib: ["ES2022"], types: [], strict: true, noEmit: true, jsx: "preserve", jsxImportSource: "@hewel/zgui" }, include: ["src"],
-  }));
-  await writeFile(path.join(directory, "src/main.tsx"), `
+  await writeFile(
+    path.join(directory, "tsconfig.json"),
+    JSON.stringify({
+      compilerOptions: {
+        target: "ES2022",
+        module: "ESNext",
+        moduleResolution: "Bundler",
+        lib: ["ES2022"],
+        types: [],
+        strict: true,
+        noEmit: true,
+        jsx: "preserve",
+        jsxImportSource: "@hewel/zgui",
+      },
+      include: ["src"],
+    }),
+  );
+  await writeFile(
+    path.join(directory, "src/main.tsx"),
+    `
     import { Image, createSignal, flush } from "@hewel/zgui";
     import type { NativeNode } from "@hewel/zgui";
     import { mergeProps, render } from "@hewel/zgui/renderer";
@@ -38,22 +54,37 @@ test("Image forwards reactive src replacements/clears and rejects lazy child spr
       finally { dispose(); }
       return { rejected, reads };
     }
-  `);
+  `,
+  );
   const { dist } = await buildApplication("image-fixture", { appDirectory: directory });
   const previous = Object.getOwnPropertyDescriptor(globalThis, "__zgui");
   const writes = [];
   try {
     // Only SDK forwarding/shape guarding is modeled here. Native loading is tested in Rust.
-    Object.defineProperty(globalThis, "__zgui", { configurable: true, value: {
-      createElement: tag => { assert.equal(tag, "image"); return { tag }; },
-      setProperty: (_node, name, value) => { writes.push([name, value]); },
-    } });
+    Object.defineProperty(globalThis, "__zgui", {
+      configurable: true,
+      value: {
+        createElement: tag => {
+          assert.equal(tag, "image");
+          return { tag };
+        },
+        setProperty: (_node, name, value) => {
+          writes.push([name, value]);
+        },
+      },
+    });
     const module = await import(pathToFileURL(path.join(await realpath(dist), "app.mjs")));
     assert.deepEqual(module.probe({}), { rejected: true, reads: 0 });
-    assert.deepEqual(writes.filter(([name]) => name === "src"), [
-      ["src", "assets/first.png"], ["src", "assets/second.png"], ["src", null],
-      ["src", "assets/third.png"], ["src", undefined],
-    ]);
+    assert.deepEqual(
+      writes.filter(([name]) => name === "src"),
+      [
+        ["src", "assets/first.png"],
+        ["src", "assets/second.png"],
+        ["src", null],
+        ["src", "assets/third.png"],
+        ["src", undefined],
+      ],
+    );
   } finally {
     if (previous) Object.defineProperty(globalThis, "__zgui", previous);
     else delete globalThis.__zgui;

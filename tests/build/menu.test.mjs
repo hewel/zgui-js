@@ -211,7 +211,11 @@ async function mounted(t, mountName = "mount", allowScrollLock = false) {
   const clock = createClock(t, h);
   let dispose;
   t.after(() => {
-    try { dispose?.(); } finally { delete globalThis.__zgui; }
+    try {
+      dispose?.();
+    } finally {
+      delete globalThis.__zgui;
+    }
     if (!allowScrollLock) assert.equal(locks.length, 0, "menu surfaces must not lock scroll");
   });
   globalThis.__zgui = h.host;
@@ -229,16 +233,44 @@ async function mounted(t, mountName = "mount", allowScrollLock = false) {
   };
   const emit = (record, value) => record.emit(value);
   const end = node => h.dispatch(node, "AnimationEnd");
-  const flush = () => { h.flush(); clock.frame(); clock.advance(0); };
+  const flush = () => {
+    h.flush();
+    clock.frame();
+    clock.advance(0);
+  };
   const active = records => records.filter(record => record.active).length;
-  const textOf = node => node.tag === "#text" ? node.props.get("text") ?? "" : node.children.map(textOf).join("");
-  return { h, mod, clock, busy, traps, locks, layers, portals, geometry, activations, root,
-    send, key, emit, end, flush, active, textOf,
-    finish: () => { const stop = dispose; dispose = undefined; stop?.(); } };
+  const textOf = node =>
+    node.tag === "#text" ? (node.props.get("text") ?? "") : node.children.map(textOf).join("");
+  return {
+    h,
+    mod,
+    clock,
+    busy,
+    traps,
+    locks,
+    layers,
+    portals,
+    geometry,
+    activations,
+    root,
+    send,
+    key,
+    emit,
+    end,
+    flush,
+    active,
+    textOf,
+    finish: () => {
+      const stop = dispose;
+      dispose = undefined;
+      stop?.();
+    },
+  };
 }
 
 test("dropdown stays lazy, wires trigger relations, contracts and vetoable opens", async t => {
-  const { h, mod, traps, locks, layers, portals, geometry, send, key, flush, finish } = await mounted(t);
+  const { h, mod, traps, locks, layers, portals, geometry, send, key, flush, finish } =
+    await mounted(t);
   const trigger = h.byTestId("trigger");
   assert.equal(h.byTestId("surface"), undefined, "content children stay lazy before open");
   assert.equal(traps.length, 0);
@@ -279,7 +311,11 @@ test("dropdown stays lazy, wires trigger relations, contracts and vetoable opens
   h.flush();
   send("trigger", "onClick");
   key("trigger", { key: "ArrowDown" });
-  assert.equal(h.byTestId("surface"), undefined, "caller preventDefault vetoes click and arrow open");
+  assert.equal(
+    h.byTestId("surface"),
+    undefined,
+    "caller preventDefault vetoes click and arrow open",
+  );
   mod.setVeto(false);
   h.flush();
   mod.setTrigOff(true);
@@ -309,7 +345,11 @@ test("selection requests close and presence keeps busy exits", async t => {
   flush();
   assert.equal(h.byTestId("surface"), surface, "busy exit keeps the surface mounted");
   assert.equal(surface.props.get("data-state"), "closed");
-  assert.equal(h.byTestId("trigger").props.get("ariaControls"), surface, "ariaControls survives a busy exit");
+  assert.equal(
+    h.byTestId("trigger").props.get("ariaControls"),
+    surface,
+    "ariaControls survives a busy exit",
+  );
   send("trigger", "onClick");
   assert.equal(h.byTestId("surface"), surface, "reopen while leaving preserves surface identity");
   mod.bump("menu-counter");
@@ -349,7 +389,11 @@ test("controlled root only requests and onSelect unmounting emits no late reques
   assert.equal(h.byTestId("surface"), surface, "controlled true keeps surface until accepted");
   send("item-gone", "onClick");
   assert.deepEqual(mod.log.selects, ["print", "gone"]);
-  assert.deepEqual(mod.log.opens, [true, false], "root disposal during onSelect emits no late request");
+  assert.deepEqual(
+    mod.log.opens,
+    [true, false],
+    "root disposal during onSelect emits no late request",
+  );
   assert.equal(h.byTestId("surface"), undefined);
   finish();
 });
@@ -357,8 +401,11 @@ test("controlled root only requests and onSelect unmounting emits no late reques
 test("roving keeps native tree order, wraps, skips disabled and survives keyed edits", async t => {
   const { h, mod, send, key, finish } = await mounted(t);
   send("trigger", "onClick");
-  const print = h.byTestId("item-print"), props = h.byTestId("item-props");
-  const save = h.byTestId("item-save"), sendItem = h.byTestId("item-send"), pending = h.byTestId("item-pending");
+  const print = h.byTestId("item-print"),
+    props = h.byTestId("item-props");
+  const save = h.byTestId("item-save"),
+    sendItem = h.byTestId("item-send"),
+    pending = h.byTestId("item-pending");
   assert.equal(print.props.get("tabIndex"), 0);
   assert.equal(props.props.get("tabIndex"), -1);
   assert.equal(pending.props.get("tabIndex"), -1, "disabled rows are never tab stops");
@@ -383,7 +430,11 @@ test("roving keeps native tree order, wraps, skips disabled and survives keyed e
   assert.equal(lateral.defaultPrevented, false, "horizontal keys are ignored by a vertical menu");
   assert.equal(h.focused.current, sendItem);
   key(sendItem, { key: "ArrowDown", character: "ArrowDown", keyWithoutModifiers: "ArrowDown" });
-  assert.equal(h.focused.current, sendItem, "character keys never fall through to named-key roving");
+  assert.equal(
+    h.focused.current,
+    sendItem,
+    "character keys never fall through to named-key roving",
+  );
   assert.deepEqual(mod.log.selects, [], "focus alone never selects");
   mod.setLoose(["pending", "props", "print"]);
   h.flush();
@@ -404,7 +455,11 @@ test("roving keeps native tree order, wraps, skips disabled and survives keyed e
   mod.setLoose(["pending"]);
   h.flush();
   assert.equal(h.byTestId("item-print"), undefined);
-  assert.equal(h.byTestId("item-save").props.get("tabIndex"), 0, "remaining enabled row keeps a valid tab stop");
+  assert.equal(
+    h.byTestId("item-save").props.get("tabIndex"),
+    0,
+    "remaining enabled row keeps a valid tab stop",
+  );
   finish();
 });
 
@@ -421,7 +476,8 @@ test("typeahead queries live native text, cycles, resets and ignores non-charact
   key(focusOf("sendnow"), { key: "s", character: "s" });
   assert.equal(h.focused.current, focusOf("save"), "repeated s wraps back to Save");
   clock.advance(1500);
-  for (const character of ["n", "e", "w", " "]) key(h.focused.current, { key: character, character });
+  for (const character of ["n", "e", "w", " "])
+    key(h.focused.current, { key: character, character });
   assert.equal(h.focused.current, focusOf("new"), "prefix 'new ' matches the multiword item");
   clock.advance(1500);
   key(h.focused.current, { key: "É", character: "É" });
@@ -441,7 +497,11 @@ test("typeahead queries live native text, cycles, resets and ignores non-charact
   const named = key(focusOf("dsy"), { key: " ", character: null });
   assert.equal(named.defaultPrevented, false, "named Space is not typeahead text");
   assert.equal(h.focused.current, focusOf("dsy"));
-  key(focusOf("dsy"), { key: "s", character: "s", modifiers: { shift: true, control: true, alt: false, meta: false } });
+  key(focusOf("dsy"), {
+    key: "s",
+    character: "s",
+    modifiers: { shift: true, control: true, alt: false, meta: false },
+  });
   assert.equal(h.focused.current, focusOf("save"), "modifiers do not filter character matching");
   mod.setOverrides({ save: "Upload" });
   h.flush();
@@ -476,7 +536,11 @@ test("typeahead queries live native text, cycles, resets and ignores non-charact
   assert.equal(h.focused.current, focusOf("sendnow"), "prefix 'se' keeps Send Now");
   stale();
   key(focusOf("sendnow"), { key: "n", character: "n" });
-  assert.equal(h.focused.current, focusOf("sendnow"), "a cancelled reset never clears a live prefix");
+  assert.equal(
+    h.focused.current,
+    focusOf("sendnow"),
+    "a cancelled reset never clears a live prefix",
+  );
   finish();
   assert.equal(clock.timers.size, 0, "disposal cancels the reset timer");
 });
@@ -485,7 +549,9 @@ test("pointer boundaries track focus and primary activation without stealing", a
   const { h, mod, send, key, activations, finish } = await mounted(t);
   send("trigger", "onClick");
   const surface = h.byTestId("surface");
-  const print = h.byTestId("item-print"), props = h.byTestId("item-props"), pending = h.byTestId("item-pending");
+  const print = h.byTestId("item-print"),
+    props = h.byTestId("item-props"),
+    pending = h.byTestId("item-pending");
   send(print, "onPointerEnter");
   assert.equal(h.focused.current, print, "pointer enter focuses the row");
   assert.equal(h.focused.reveal, false, "hover focus does not reveal");
@@ -547,7 +613,11 @@ test("checkbox and radio items keep native state, indicators and group isolation
   flush();
   assert.equal(h.byTestId("surface"), undefined, "checkbox defaults closeOnSelect true");
   send("trigger", "onClick");
-  assert.equal(h.byTestId("check-a").props.get("checked"), false, "uncontrolled state is owned by the fresh mount");
+  assert.equal(
+    h.byTestId("check-a").props.get("checked"),
+    false,
+    "uncontrolled state is owned by the fresh mount",
+  );
   const checkB = h.byTestId("check-b");
   assert.equal(checkB.props.get("checked"), true);
   const indicator = checkB.children[0];
@@ -562,11 +632,16 @@ test("checkbox and radio items keep native state, indicators and group isolation
   send("check-b", "onClick");
   assert.deepEqual(mod.log.checks, [true, false, true, false, true]);
   assert.ok(h.byTestId("surface"), "closeOnSelect false keeps the menu open");
-  assert.equal(h.byTestId("check-b").children[0], indicator, "indicator container survives toggles");
+  assert.equal(
+    h.byTestId("check-b").children[0],
+    indicator,
+    "indicator container survives toggles",
+  );
   assert.notEqual(indicator.children[0], firstIcon, "each check draws a fresh tick icon");
   assert.equal(h.byTestId("check-counter"), counter, "body counter survives indicator swaps");
   assert.equal(textOf(h.byTestId("check-counter")), "1", "counter state preserved");
-  const radioX = h.byTestId("radio-x"), radioY = h.byTestId("radio-y");
+  const radioX = h.byTestId("radio-x"),
+    radioY = h.byTestId("radio-y");
   assert.equal(h.byTestId("group-a").props.get("role"), "group");
   assert.equal(h.byTestId("group-a").props.get("ariaLabel"), "Tone");
   assert.equal(radioX.props.get("role"), "menuItemRadio");
@@ -584,14 +659,22 @@ test("checkbox and radio items keep native state, indicators and group isolation
   flush();
   assert.equal(h.byTestId("surface"), undefined, "radio defaults closeOnSelect true");
   send("trigger", "onClick");
-  assert.equal(h.byTestId("radio-y").props.get("checked"), false, "uncontrolled radio resets per mount");
+  assert.equal(
+    h.byTestId("radio-y").props.get("checked"),
+    false,
+    "uncontrolled radio resets per mount",
+  );
   mod.setRadioValue("x");
   h.flush();
   assert.equal(h.byTestId("radio-x").props.get("checked"), true);
   send("radio-y", "onClick");
   send("trigger", "onClick");
   assert.deepEqual(mod.log.radios, ["x", "y", "y"], "controlled denial still logs the request");
-  assert.equal(h.byTestId("radio-x").props.get("checked"), true, "controlled parent vetoes the change");
+  assert.equal(
+    h.byTestId("radio-x").props.get("checked"),
+    true,
+    "controlled parent vetoes the change",
+  );
   mod.setRadioValue("y");
   h.flush();
   assert.equal(h.byTestId("radio-y").props.get("checked"), true);
@@ -603,7 +686,11 @@ test("checkbox and radio items keep native state, indicators and group isolation
   send("check-a", "onClick");
   send("trigger", "onClick");
   assert.equal(mod.log.checks.at(-1), true);
-  assert.equal(h.byTestId("check-a").props.get("checked"), false, "controlled checked vetoed until accepted");
+  assert.equal(
+    h.byTestId("check-a").props.get("checked"),
+    false,
+    "controlled checked vetoed until accepted",
+  );
   finish();
 });
 
@@ -616,7 +703,11 @@ test("nested roots isolate dismissal, dialogs own the scroll lock and orphans st
   nested.send("inner-item", "onClick");
   assert.deepEqual(nested.mod.log.selects, ["inner"]);
   nested.flush();
-  assert.equal(nested.h.byTestId("inner-surface"), undefined, "inner select closes the inner root only");
+  assert.equal(
+    nested.h.byTestId("inner-surface"),
+    undefined,
+    "inner select closes the inner root only",
+  );
   assert.ok(nested.h.byTestId("outer-surface"), "outer root stays open");
   nested.send("outer-item", "onClick");
   assert.deepEqual(nested.mod.log.selects, ["inner", "outer"]);
@@ -646,7 +737,10 @@ test("nested roots isolate dismissal, dialogs own the scroll lock and orphans st
 
 test("metadata parts keep caller attrs and runtime rejects invalid props", async t => {
   const { h, mod, finish, textOf } = await mounted(t, "mountMeta");
-  const label = h.byTestId("label"), group = h.byTestId("group"), sep = h.byTestId("sep"), item = h.byTestId("meta-item");
+  const label = h.byTestId("label"),
+    group = h.byTestId("group"),
+    sep = h.byTestId("sep"),
+    item = h.byTestId("meta-item");
   assert.ok(label.props.get("class").includes("zui-menu__label"));
   assert.ok(label.props.get("class").includes("zui-menu__label--inset"));
   assert.ok(label.props.get("class").includes("caller-label"));
@@ -684,7 +778,11 @@ test("metadata parts keep caller attrs and runtime rejects invalid props", async
   mod.setShortcut(null);
   h.flush();
   assert.equal(shortcutOf(h.byTestId("meta-item")), undefined);
-  assert.equal(h.byTestId("meta-item").props.get("ariaKeyShortcuts"), undefined, "removed shortcut clears the semantic");
+  assert.equal(
+    h.byTestId("meta-item").props.get("ariaKeyShortcuts"),
+    undefined,
+    "removed shortcut clears the semantic",
+  );
   assert.equal(h.byTestId("meta-counter"), counter);
   assert.equal(item.props.get("data-destructive"), undefined);
   assert.equal(item.props.get("data-inset"), undefined);
@@ -692,7 +790,11 @@ test("metadata parts keep caller attrs and runtime rejects invalid props", async
   h.flush();
   mod.setItemInset(true);
   h.flush();
-  assert.equal(item.props.get("data-destructive"), "true", "destructive data attribute updates reactively");
+  assert.equal(
+    item.props.get("data-destructive"),
+    "true",
+    "destructive data attribute updates reactively",
+  );
   assert.equal(item.props.get("data-inset"), "true", "inset data attribute updates reactively");
   assert.ok(String(item.props.get("class")).includes("zui-menu__item--destructive"));
   assert.ok(String(item.props.get("class")).includes("zui-menu__item--inset"));
@@ -706,7 +808,10 @@ test("metadata parts keep caller attrs and runtime rejects invalid props", async
   delete globalThis.__zgui;
 
   const bad = await mounted(t, "none");
-  assert.throws(() => bad.mod.mountBadSeparator(bad.root), /MenuSeparator does not accept children/);
+  assert.throws(
+    () => bad.mod.mountBadSeparator(bad.root),
+    /MenuSeparator does not accept children/,
+  );
   assert.throws(() => bad.mod.mountBadRadio(bad.root), /non-empty string/);
   assert.throws(() => bad.mod.mountBadCheck(bad.root), /must be a boolean/);
   bad.finish();
@@ -716,8 +821,12 @@ test("roving steps from the active member under descendants and honors propagati
   const { h, clock, send, key, finish } = await mounted(t, "mountDescendants");
   send("trigger", "onClick");
   const surface = h.byTestId("surface");
-  const rowA = h.byTestId("row-a"), rowB = h.byTestId("row-b"), rowC = h.byTestId("row-c");
-  const child = h.byTestId("child"), loose = h.byTestId("loose"), blocked = h.byTestId("blocked");
+  const rowA = h.byTestId("row-a"),
+    rowB = h.byTestId("row-b"),
+    rowC = h.byTestId("row-c");
+  const child = h.byTestId("child"),
+    loose = h.byTestId("loose"),
+    blocked = h.byTestId("blocked");
   h.host.focus(loose);
   key(loose, { key: "ArrowDown" });
   assert.equal(h.focused.current, rowB, "with no member focus the first row seeds the step");
@@ -735,14 +844,22 @@ test("roving steps from the active member under descendants and honors propagati
   assert.equal(h.focused.current, rowB, "a nonmember target still steps from the last active row");
   h.host.focus(child);
   send(rowA, "onPointerLeave");
-  assert.equal(h.focused.current, surface, "a row focused through a descendant still leaves to the surface");
+  assert.equal(
+    h.focused.current,
+    surface,
+    "a row focused through a descendant still leaves to the surface",
+  );
   h.host.focus(blocked);
   const stopped = key(blocked, { key: "ArrowDown" });
   assert.equal(stopped.propagationStopped, true);
   assert.equal(stopped.defaultPrevented, false);
   assert.equal(h.focused.current, blocked, "caller stopPropagation blocks ancestor navigation");
   h.host.focus(child);
-  const character = key(child, { key: "ArrowDown", character: "ArrowDown", keyWithoutModifiers: "ArrowDown" });
+  const character = key(child, {
+    key: "ArrowDown",
+    character: "ArrowDown",
+    keyWithoutModifiers: "ArrowDown",
+  });
   assert.equal(character.defaultPrevented, false);
   assert.equal(h.focused.current, child, "character-producing arrows never navigate");
   clock.advance(1000);
@@ -750,12 +867,33 @@ test("roving steps from the active member under descendants and honors propagati
 });
 
 test("submenus open by click and named keys, keep identity and right placement", async t => {
-  const { h, mod, busy, activations, traps, locks, geometry, send, key, emit, flush, active, finish, textOf } = await mounted(t, "mountSub");
+  const {
+    h,
+    mod,
+    busy,
+    activations,
+    traps,
+    locks,
+    geometry,
+    send,
+    key,
+    emit,
+    flush,
+    active,
+    finish,
+    textOf,
+  } = await mounted(t, "mountSub");
   send("trigger", "onClick");
-  const surface = h.byTestId("surface"), trigger = h.byTestId("trigger"), subTrigger = h.byTestId("sub-trigger");
+  const surface = h.byTestId("surface"),
+    trigger = h.byTestId("trigger"),
+    subTrigger = h.byTestId("sub-trigger");
   for (const name of ["ArrowRight", "Enter", " "])
     key(subTrigger, { key: name, character: name, keyWithoutModifiers: name });
-  assert.equal(h.byTestId("sub-surface"), undefined, "character-producing keys never open a submenu");
+  assert.equal(
+    h.byTestId("sub-surface"),
+    undefined,
+    "character-producing keys never open a submenu",
+  );
   const opened = key(subTrigger, { key: "ArrowRight" });
   const subSurface = h.byTestId("sub-surface");
   assert.ok(subSurface, "named ArrowRight opens the submenu");
@@ -767,26 +905,52 @@ test("submenus open by click and named keys, keep identity and right placement",
   assert.equal(subTrigger.props.get("data-inset"), "true");
   assert.equal(subTrigger.props.get("ariaControls"), subSurface);
   assert.equal(subSurface.props.get("ariaPopupFor"), subTrigger);
-  assert.equal(trigger.props.get("ariaControls"), surface, "the root trigger keeps its own relation");
+  assert.equal(
+    trigger.props.get("ariaControls"),
+    surface,
+    "the root trigger keeps its own relation",
+  );
   assert.ok(subSurface.props.get("class").includes("zui-menu--sub"));
   const chevron = (() => {
     let found;
-    const walk = current => { for (const child of current.children) { if (child.props.get("class")?.includes("zui-menu__chevron")) found = child; walk(child); } };
+    const walk = current => {
+      for (const child of current.children) {
+        if (child.props.get("class")?.includes("zui-menu__chevron")) found = child;
+        walk(child);
+      }
+    };
     walk(subTrigger);
     return found;
   })();
   assert.ok(chevron, "the trigger renders a chevron affordance");
   send(subTrigger, "onPointerDown", { button: "primary" });
   send(subTrigger, "onPointerDown", { button: "secondary" });
-  assert.deepEqual(activations.filter(node => node === subTrigger), [], "submenu triggers never activate on press");
+  assert.deepEqual(
+    activations.filter(node => node === subTrigger),
+    [],
+    "submenu triggers never activate on press",
+  );
   send(subTrigger, "onClick");
   assert.equal(h.byTestId("sub-surface"), subSurface, "click on an open submenu stays mounted");
   const positioner = h.parents.get(subSurface);
-  emit(geometry.find(record => record.node === subTrigger && record.kind === "borderBox"), { x: 200, y: 100, width: 160, height: 28 });
-  emit(geometry.find(record => record.node === positioner && record.kind === "viewport"), { x: 0, y: 0, width: 800, height: 600, scale: 1 });
-  emit(geometry.find(record => record.node === positioner && record.kind === "contentSize"), { width: 180, height: 100 });
+  emit(
+    geometry.find(record => record.node === subTrigger && record.kind === "borderBox"),
+    { x: 200, y: 100, width: 160, height: 28 },
+  );
+  emit(
+    geometry.find(record => record.node === positioner && record.kind === "viewport"),
+    { x: 0, y: 0, width: 800, height: 600, scale: 1 },
+  );
+  emit(
+    geometry.find(record => record.node === positioner && record.kind === "contentSize"),
+    { width: 180, height: 100 },
+  );
   const style = positioner.props.get("style");
-  assert.equal(style.left, "356px", `right placement applies the -4 offset: ${JSON.stringify(style)}`);
+  assert.equal(
+    style.left,
+    "356px",
+    `right placement applies the -4 offset: ${JSON.stringify(style)}`,
+  );
   assert.equal(style.top, "100px", `start alignment follows the anchor: ${JSON.stringify(style)}`);
   assert.equal(positioner.props.get("data-side"), "right");
   assert.equal(traps.length, 2, "each mounted surface owns a focus trap");
@@ -831,7 +995,8 @@ test("submenus open by click and named keys, keep identity and right placement",
 test("submenu hover corridor opens, defers and cancels closes", async t => {
   const { h, mod, clock, geometry, send, emit, flush, finish } = await mounted(t, "mountSub");
   send("trigger", "onClick");
-  const surface = h.byTestId("surface"), subTrigger = h.byTestId("sub-trigger");
+  const surface = h.byTestId("surface"),
+    subTrigger = h.byTestId("sub-trigger");
   send(subTrigger, "onPointerEnter");
   clock.advance(119);
   assert.equal(h.byTestId("sub-surface"), undefined, "hover open waits the full 120 ms");
@@ -843,7 +1008,10 @@ test("submenu hover corridor opens, defers and cancels closes", async t => {
   clock.advance(120);
   const subSurface = h.byTestId("sub-surface");
   assert.ok(subSurface, "120 ms of hover opens the submenu");
-  emit(geometry.find(record => record.node === subTrigger && record.kind === "viewport"), { x: 0, y: 0, width: 800, height: 600, scale: 1 });
+  emit(
+    geometry.find(record => record.node === subTrigger && record.kind === "viewport"),
+    { x: 0, y: 0, width: 800, height: 600, scale: 1 },
+  );
   h.rects.set(subSurface, { x: 200, y: 100, width: 160, height: 200 });
   const keep = h.byTestId("keep");
   h.host.focus(keep);
@@ -870,7 +1038,11 @@ test("submenu hover corridor opens, defers and cancels closes", async t => {
   clock.advance(100);
   send(reopened, "onPointerEnter");
   clock.advance(200);
-  assert.equal(subTrigger.props.get("expanded"), true, "entering the panel cancels the armed close");
+  assert.equal(
+    subTrigger.props.get("expanded"),
+    true,
+    "entering the panel cancels the armed close",
+  );
   send(subTrigger, "onPointerMove", { position: { x: 100, y: 110 } });
   send(subTrigger, "onPointerLeave", { position: { x: 100, y: 400 } });
   send(subTrigger, "onPointerEnter");
@@ -890,29 +1062,46 @@ test("headingToward corridors and device-space tracking survive DPI changes", as
   const { h, mod, clock, geometry, send, emit, flush, finish } = await mounted(t, "mountSub");
   const toward = mod.headingToward;
   const right = { x: 200, y: 100, width: 160, height: 200 };
-  for (const to of [[140, 150], [170, 200], [190, 280]])
+  for (const to of [
+    [140, 150],
+    [170, 200],
+    [190, 280],
+  ])
     assert.equal(toward({ x: 100, y: 110 }, { x: to[0], y: to[1] }, right), true, `to ${to}`);
-  for (const to of [[100, 400], [120, 500]])
+  for (const to of [
+    [100, 400],
+    [120, 500],
+  ])
     assert.equal(toward({ x: 100, y: 110 }, { x: to[0], y: to[1] }, right), false, `to ${to}`);
   const left = { x: 0, y: 100, width: 160, height: 200 };
   assert.equal(toward({ x: 300, y: 110 }, { x: 220, y: 180 }, left), true);
   assert.equal(toward({ x: 300, y: 110 }, { x: 300, y: 400 }, left), false);
   const edge = { x: 10, y: 0, width: 10, height: 10 };
-  for (const to of [[10, 5], [5, 0], [5, 4]])
+  for (const to of [
+    [10, 5],
+    [5, 0],
+    [5, 4],
+  ])
     assert.equal(toward({ x: 0, y: 0 }, { x: to[0], y: to[1] }, edge), true, `to ${to}`);
   assert.equal(toward({ x: 0, y: 0 }, { x: 5, y: 6 }, edge), false);
   send("trigger", "onClick");
   const subTrigger = h.byTestId("sub-trigger");
   send(subTrigger, "onClick");
   const subSurface = h.byTestId("sub-surface");
-  const viewport = geometry.find(record => record.node === subTrigger && record.kind === "viewport");
+  const viewport = geometry.find(
+    record => record.node === subTrigger && record.kind === "viewport",
+  );
   emit(viewport, { x: 0, y: 0, width: 800, height: 600, scale: 1 });
   send(subTrigger, "onPointerMove", { position: { x: 100, y: 110 } });
   emit(viewport, { x: 0, y: 0, width: 800, height: 600, scale: 2 });
   h.rects.set(subSurface, { x: 100, y: 50, width: 80, height: 100 });
   send(subTrigger, "onPointerLeave", { position: { x: 70, y: 80 } });
   clock.advance(180);
-  assert.equal(subTrigger.props.get("expanded"), true, "the stored device point survives a DPI change");
+  assert.equal(
+    subTrigger.props.get("expanded"),
+    true,
+    "the stored device point survives a DPI change",
+  );
   h.rects.set(subSurface, { x: 0, y: 50, width: 80, height: 100 });
   send(subTrigger, "onPointerMove", { position: { x: 150, y: 55 } });
   send(subTrigger, "onPointerLeave", { position: { x: 110, y: 90 } });
@@ -951,7 +1140,11 @@ test("controlled submenu requests, vetoes, disabled state and stale callbacks", 
   key(subTrigger, { key: "ArrowRight" });
   send(subTrigger, "onPointerDown", { button: "primary" });
   assert.deepEqual(mod.log.subOpens, [true, true], "a disabled trigger requests nothing");
-  assert.deepEqual(activations.filter(node => node === subTrigger), [], "a disabled trigger never activates");
+  assert.deepEqual(
+    activations.filter(node => node === subTrigger),
+    [],
+    "a disabled trigger never activates",
+  );
   mod.setSubOff(false);
   h.flush();
   mod.setSubOpen(true);
@@ -978,7 +1171,8 @@ test("controlled submenu requests, vetoes, disabled state and stale callbacks", 
   mod.setSubOpen(false);
   flush();
   assert.equal(h.byTestId("sub-surface"), undefined, "an accepted close retires the branch");
-  const staleKey = subTrigger.callbacks.onKeyDown, staleMove = subTrigger.callbacks.onPointerMove;
+  const staleKey = subTrigger.callbacks.onKeyDown,
+    staleMove = subTrigger.callbacks.onPointerMove;
   finish();
   staleKey({ key: "ArrowRight", character: null, preventDefault() {}, stopPropagation() {} });
   staleMove({ position: { x: 10, y: 10 }, preventDefault() {}, stopPropagation() {} });
@@ -987,15 +1181,23 @@ test("controlled submenu requests, vetoes, disabled state and stale callbacks", 
 });
 
 test("submenu disposal cancels its own timers but never the root-owned close", async t => {
-  const { h, mod, clock, geometry, traps, layers, send, active, finish } = await mounted(t, "mountSub");
+  const { h, mod, clock, geometry, traps, layers, send, active, finish } = await mounted(
+    t,
+    "mountSub",
+  );
   send("trigger", "onClick");
   mod.setRemoveOnFocus(true);
   h.flush();
   const subTrigger = h.byTestId("sub-trigger");
-  const viewportLease = () => geometry.find(record => record.node === subTrigger && record.kind === "viewport");
+  const viewportLease = () =>
+    geometry.find(record => record.node === subTrigger && record.kind === "viewport");
   assert.ok(viewportLease()?.active, "a mounted trigger owns a viewport subscription");
   send(subTrigger, "onPointerEnter");
-  assert.equal(h.byTestId("sub-trigger"), undefined, "a focus callback may remove the whole submenu");
+  assert.equal(
+    h.byTestId("sub-trigger"),
+    undefined,
+    "a focus callback may remove the whole submenu",
+  );
   clock.advance(120);
   assert.deepEqual(mod.log.subOpens, [], "no open is armed after disposal");
   assert.equal(h.byTestId("sub-surface"), undefined);
@@ -1021,7 +1223,8 @@ test("submenu disposal cancels its own timers but never the root-owned close", a
 test("submenu Escape returns focus to trigger while outside-press does not", async t => {
   const { h, layers, send, flush, finish } = await mounted(t, "mountSub");
   send("trigger", "onClick");
-  const surface = h.byTestId("surface"), subTrigger = h.byTestId("sub-trigger");
+  const surface = h.byTestId("surface"),
+    subTrigger = h.byTestId("sub-trigger");
   send(subTrigger, "onClick");
   const keep = h.byTestId("keep");
   h.host.focus(keep);
@@ -1041,7 +1244,11 @@ test("submenu Escape returns focus to trigger while outside-press does not", asy
   subOutsideLayer.callback("outside-press");
   h.flush();
   assert.equal(subTrigger.props.get("expanded"), false);
-  assert.notEqual(h.focused.current, subTrigger, "outside-press does not force focus onto MenuSubTrigger");
+  assert.notEqual(
+    h.focused.current,
+    subTrigger,
+    "outside-press does not force focus onto MenuSubTrigger",
+  );
   flush();
   finish();
 });
@@ -1049,7 +1256,8 @@ test("submenu Escape returns focus to trigger while outside-press does not", asy
 test("leaf selection cascades outward through nested and controlled submenus before root dismissal", async t => {
   const { h, mod, busy, send, key, flush, finish } = await mounted(t, "mountSub");
   send("trigger", "onClick");
-  const surface = h.byTestId("surface"), subTrigger = h.byTestId("sub-trigger");
+  const surface = h.byTestId("surface"),
+    subTrigger = h.byTestId("sub-trigger");
   busy.set(surface, true);
   send(subTrigger, "onClick");
   const deepTrigger = h.byTestId("deep-trigger");
@@ -1059,9 +1267,21 @@ test("leaf selection cascades outward through nested and controlled submenus bef
   mod.log.opens.length = 0;
 
   send("leaf", "onClick");
-  assert.equal(deepTrigger.props.get("expanded"), false, "innermost submenu closes synchronously on leaf selection");
-  assert.equal(subTrigger.props.get("expanded"), false, "enclosing submenu closes synchronously even when root exit is busy");
-  assert.deepEqual(mod.log.subOpens, [false], "enclosing MenuSub notifies onOpenChange(false) during cascade");
+  assert.equal(
+    deepTrigger.props.get("expanded"),
+    false,
+    "innermost submenu closes synchronously on leaf selection",
+  );
+  assert.equal(
+    subTrigger.props.get("expanded"),
+    false,
+    "enclosing submenu closes synchronously even when root exit is busy",
+  );
+  assert.deepEqual(
+    mod.log.subOpens,
+    [false],
+    "enclosing MenuSub notifies onOpenChange(false) during cascade",
+  );
   assert.deepEqual(mod.log.opens, [false], "root menu dismisses after branch cascade");
 
   busy.set(surface, false);
@@ -1076,7 +1296,11 @@ test("leaf selection cascades outward through nested and controlled submenus bef
   mod.log.opens.length = 0;
   send("leaf", "onClick");
   assert.equal(h.byTestId("deep-trigger").props.get("expanded"), false);
-  assert.deepEqual(mod.log.subOpens, [false], "controlled MenuSub receives onOpenChange(false) on leaf selection");
+  assert.deepEqual(
+    mod.log.subOpens,
+    [false],
+    "controlled MenuSub receives onOpenChange(false) on leaf selection",
+  );
   assert.deepEqual(mod.log.opens, [false]);
   mod.setSubOpen(false);
   flush();

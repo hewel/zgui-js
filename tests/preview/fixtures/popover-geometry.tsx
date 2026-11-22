@@ -1,6 +1,15 @@
 import { createSignal, mountStylesheet, renderApp } from "@hewel/zgui";
 import type { NativeNode } from "@hewel/zgui";
-import { Input, Popover, PopoverClose, PopoverContent, PopoverTitle, PopoverTrigger, Popper, ThemeProvider } from "@hewel/zgui/components";
+import {
+  Input,
+  Popover,
+  PopoverClose,
+  PopoverContent,
+  PopoverTitle,
+  PopoverTrigger,
+  Popper,
+  ThemeProvider,
+} from "@hewel/zgui/components";
 export const hostApiVersion = 1;
 const css = `:root { background-color: #ffffff; color: #111827; font-size: 14px; }
 .popover-geometry-page { position: fixed; inset: 0; background-color: #ffffff; color: #111827; }
@@ -11,23 +20,32 @@ export function mount(root: NativeNode) {
   return renderApp(() => {
     mountStylesheet("popover-geometry-fixture", css);
     const [anchor, setAnchor] = createSignal<NativeNode | null>(null);
-    return <ThemeProvider scheme="light">
-      <box class="popover-geometry-page" />
-      <box testId="size-anchor" class="popover-size-anchor" ref={setAnchor} />
-      <Popper anchor={anchor()}><box testId="sized" class="popover-sized" /></Popper>
-      <Popover defaultOpen>
-        <PopoverTrigger testId="cap-anchor" class="popover-geometry-anchor">Details</PopoverTrigger>
-        <PopoverContent testId="cap-surface" style="height: 700px; gap: 8px">
-          <column style="flex-shrink: 0; gap: 8px">
-            <PopoverTitle>Geometry</PopoverTitle>
-            <Input testId="cap-input" label="Measurement" defaultValue="Measured" />
-            <column testId="tall-content" style="height: 1000px; flex-shrink: 0; gap: 180px">
-              <text>First detail</text><text>Second detail</text><text>Third detail</text><text>Last detail</text>
-              <PopoverClose testId="cap-close">Close</PopoverClose>
+    return (
+      <ThemeProvider scheme="light">
+        <box class="popover-geometry-page" />
+        <box testId="size-anchor" class="popover-size-anchor" ref={setAnchor} />
+        <Popper anchor={anchor()}>
+          <box testId="sized" class="popover-sized" />
+        </Popper>
+        <Popover defaultOpen>
+          <PopoverTrigger testId="cap-anchor" class="popover-geometry-anchor">
+            Details
+          </PopoverTrigger>
+          <PopoverContent testId="cap-surface" style="height: 700px; gap: 8px">
+            <column style="flex-shrink: 0; gap: 8px">
+              <PopoverTitle>Geometry</PopoverTitle>
+              <Input testId="cap-input" label="Measurement" defaultValue="Measured" />
+              <column testId="tall-content" style="height: 1000px; flex-shrink: 0; gap: 180px">
+                <text>First detail</text>
+                <text>Second detail</text>
+                <text>Third detail</text>
+                <text>Last detail</text>
+                <PopoverClose testId="cap-close">Close</PopoverClose>
+              </column>
             </column>
-          </column>
-        </PopoverContent>
-      </Popover>
-    </ThemeProvider>;
+          </PopoverContent>
+        </Popover>
+      </ThemeProvider>
+    );
   }, root);
 }

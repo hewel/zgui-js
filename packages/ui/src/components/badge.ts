@@ -5,7 +5,14 @@ import { classes, element, isStaticProps, useStylesheet, withDefaults } from "./
 import { sheet } from "./generated/BadgeStyle.js";
 
 export type BadgeVariant =
-  "default" | "secondary" | "destructive" | "success" | "warning" | "outline" | "ghost" | "link";
+  | "default"
+  | "secondary"
+  | "destructive"
+  | "success"
+  | "warning"
+  | "outline"
+  | "ghost"
+  | "link";
 export interface BadgeProps extends NativeElementProps {
   variant?: BadgeVariant;
 }
@@ -32,13 +39,23 @@ export function Badge(props: BadgeProps = {}): NativeNode {
     return node;
   }
   const rest = omit(props, "variant");
-  return element("box", mergeProps(
-    rest,
-    withDefaults({ get "data-variant"() { return props.variant ?? "default"; } }, rest),
-    {
-      get __zguiClass() {
-        return classes(sheet.className, "zui-badge", `zui-badge--${props.variant ?? "default"}`);
+  return element(
+    "box",
+    mergeProps(
+      rest,
+      withDefaults(
+        {
+          get "data-variant"() {
+            return props.variant ?? "default";
+          },
+        },
+        rest,
+      ),
+      {
+        get __zguiClass() {
+          return classes(sheet.className, "zui-badge", `zui-badge--${props.variant ?? "default"}`);
+        },
       },
-    },
-  ));
+    ),
+  );
 }

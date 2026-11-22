@@ -4,7 +4,11 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import { buildApplication, workspaceRoot } from "../../packages/build/src/build.ts";
-import { syncCssModuleTypes, transformStylesheet, validateStylesheet } from "../../packages/build/src/css.ts";
+import {
+  syncCssModuleTypes,
+  transformStylesheet,
+  validateStylesheet,
+} from "../../packages/build/src/css.ts";
 
 test("Lightning CSS AST validator rejects unsupported Stylo features and v1 CSS Module ICSS/composes", () => {
   const disallowedNative = [
@@ -92,17 +96,31 @@ export function mount(root: NativeNode): () => void {
 
   assert.match(componentsCss, /^@layer zgui\.components\s*\{/);
   // Adapted Tabs selectors survive static hoisting (no dead runtime .replaceAll).
-  assert.match(componentsCss, /\.zui-tabs__trigger\[data-variant=["']default["']\]\[data-state=["']active["']\]/);
+  assert.match(
+    componentsCss,
+    /\.zui-tabs__trigger\[data-variant=["']default["']\]\[data-state=["']active["']\]/,
+  );
   assert.match(componentsCss, /\.zui-tabs__trigger\[data-orientation=["']vertical["']\]/);
-  assert.doesNotMatch(componentsCss, /\.zui-tabs__list\[data-variant=["']default["']\]\s+\.zui-tabs__trigger/);
+  assert.doesNotMatch(
+    componentsCss,
+    /\.zui-tabs__list\[data-variant=["']default["']\]\s+\.zui-tabs__trigger/,
+  );
   // Adapted Accordion & Collapsible rules survive static hoisting.
   assert.match(componentsCss, /\.zui-accordion__chevron\[data-state=["']open["']\]/);
   assert.match(componentsCss, /\.zui-accordion__measure/);
   assert.match(componentsCss, /\.zui-collapsible__content\[data-collapsed\]/);
   // TreeView stylesheet is hoisted into components.css and stripped from app.mjs.
   assert.match(componentsCss, /\.zui-tree__row/);
-  assert.doesNotMatch(appJs, /padding-left:\s*calc\(8px \+ var\(--zui-tree-depth/, "TreeViewStyle CSS must not remain in app.mjs");
-  assert.doesNotMatch(appJs, /\.zui-collapsible__content\[data-collapsed\]/, "Collapsible extra CSS must not remain in app.mjs");
+  assert.doesNotMatch(
+    appJs,
+    /padding-left:\s*calc\(8px \+ var\(--zui-tree-depth/,
+    "TreeViewStyle CSS must not remain in app.mjs",
+  );
+  assert.doesNotMatch(
+    appJs,
+    /\.zui-collapsible__content\[data-collapsed\]/,
+    "Collapsible extra CSS must not remain in app.mjs",
+  );
 });
 
 test("two separate checkout directories produce byte-identical CSS Modules artifacts and identical buildId, and .d.ts sync skips unchanged writes", async t => {
@@ -146,7 +164,11 @@ test("two separate checkout directories produce byte-identical CSS Modules artif
   await new Promise(resolve => setTimeout(resolve, 25));
   await syncCssModuleTypes(dirA, { root: workspaceRoot });
   const afterStat = await stat(dtsPath);
-  assert.equal(afterStat.mtimeMs, beforeStat.mtimeMs, "unchanged .module.css.d.ts must not be rewritten");
+  assert.equal(
+    afterStat.mtimeMs,
+    beforeStat.mtimeMs,
+    "unchanged .module.css.d.ts must not be rewritten",
+  );
 
   await rm(path.join(dirA, "src/card.module.css"));
   await syncCssModuleTypes(dirA, { root: workspaceRoot });

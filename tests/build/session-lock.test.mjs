@@ -30,7 +30,16 @@ export function mount() {
 }
 `;
 
-const monitor = id => ({ id, name: id, x: 0, y: 0, width: 100, height: 100, scale: 1, refreshRateMilliHz: 60000 });
+const monitor = id => ({
+  id,
+  name: id,
+  x: 0,
+  y: 0,
+  width: 100,
+  height: 100,
+  scale: 1,
+  refreshRateMilliHz: 60000,
+});
 async function setup(t, options) {
   const mod = await moduleFor(t, source);
   const harness = createHost({ monitors: [monitor("DP-1")], ...options });
@@ -101,7 +110,13 @@ test("a synchronous lock observer failure consumes its request ID", async t => {
   harness.runTurn(() => {
     const first = harness.shell.requestSessionLock(() => {});
     const failure = new Error("initial observer failed");
-    assert.throws(() => harness.shell.requestSessionLock(() => { throw failure; }), error => error === failure);
+    assert.throws(
+      () =>
+        harness.shell.requestSessionLock(() => {
+          throw failure;
+        }),
+      error => error === failure,
+    );
     const next = harness.shell.requestSessionLock(() => {});
     assert.equal(next.id, first.id + 2);
     first.unsubscribe();
@@ -114,7 +129,11 @@ test("a synchronous lock observer failure consumes its request ID", async t => {
 test("lock surfaces follow hotplug and only explicit unlock releases the lock", async t => {
   const { harness, mod } = await setup(t, { sessionLock: "locked" });
   const dispose = harness.runTurn(mod.mount);
-  assert.equal(mod.state(), "unlocked", "a bridge request does not report acquisition synchronously");
+  assert.equal(
+    mod.state(),
+    "unlocked",
+    "a bridge request does not report acquisition synchronously",
+  );
   harness.flush();
   assert.equal(mod.state(), "locked");
   const first = harness.byTestId("DP-1");
@@ -154,7 +173,11 @@ test("retirement revokes unlock authority but keeps the platform locked", async 
   locked.harness.beginStop();
   locked.harness.runTurn(disposeLocked);
   locked.harness.flush();
-  assert.equal(locked.mod.cleanupGeneration(), generation, "cleanup sees the stopping session's generation");
+  assert.equal(
+    locked.mod.cleanupGeneration(),
+    generation,
+    "cleanup sees the stopping session's generation",
+  );
   assert.ok(locked.mod.cleanupError() instanceof TypeError, "cleanup cannot request unlock");
   assert.equal(locked.harness.surfaces.size, 0);
   assert.equal(locked.harness.sessionLockState(), "locked");

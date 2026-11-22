@@ -6,13 +6,26 @@ let increment: (() => void) | undefined;
 function Counter() {
   const [count, setCount] = createSignal(0);
   const doubled = createMemo(() => count() * 2);
-  increment = () => { setCount(value => value + 1); };
-  onCleanup(() => { increment = undefined; });
-  return <column style={{ gap: "12px" }}>
-    <text testId="count-label">Count: {count()}</text><text testId="doubled-label">Doubled: {doubled()}</text>
-    <Button testId="increment" class="increment" style={{ padding: "8px", "border-radius": "6px", background: "#314665" }}
-      onClick={() => setCount(value => value + 1)}>Increment</Button>
-  </column>;
+  increment = () => {
+    setCount(value => value + 1);
+  };
+  onCleanup(() => {
+    increment = undefined;
+  });
+  return (
+    <column style={{ gap: "12px" }}>
+      <text testId="count-label">Count: {count()}</text>
+      <text testId="doubled-label">Doubled: {doubled()}</text>
+      <Button
+        testId="increment"
+        class="increment"
+        style={{ padding: "8px", "border-radius": "6px", background: "#314665" }}
+        onClick={() => setCount(value => value + 1)}
+      >
+        Increment
+      </Button>
+    </column>
+  );
 }
 
 export const hostApiVersion = 1;

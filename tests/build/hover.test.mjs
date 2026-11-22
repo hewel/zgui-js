@@ -128,7 +128,11 @@ async function mounted(t, mountName = "mount", allowScrollLock = false) {
   const clock = createClock(t, h);
   let dispose;
   t.after(() => {
-    try { dispose?.(); } finally { delete globalThis.__zgui; }
+    try {
+      dispose?.();
+    } finally {
+      delete globalThis.__zgui;
+    }
     if (!allowScrollLock) assert.equal(locks.length, 0, "hover surfaces must not lock scroll");
   });
   globalThis.__zgui = h.host;
@@ -141,14 +145,39 @@ async function mounted(t, mountName = "mount", allowScrollLock = false) {
   };
   const emit = (record, value) => (record.emit ?? record.trigger)(value);
   const end = node => h.dispatch(node, "AnimationEnd");
-  const flush = () => { h.flush(); clock.frame(); clock.advance(0); };
+  const flush = () => {
+    h.flush();
+    clock.frame();
+    clock.advance(0);
+  };
   const active = records => records.filter(record => record.active).length;
-  return { h, mod, clock, busy, traps, locks, layers, portals, geometry, root, send, emit, end, flush, active,
-    finish: () => { const stop = dispose; dispose = undefined; stop?.(); } };
+  return {
+    h,
+    mod,
+    clock,
+    busy,
+    traps,
+    locks,
+    layers,
+    portals,
+    geometry,
+    root,
+    send,
+    emit,
+    end,
+    flush,
+    active,
+    finish: () => {
+      const stop = dispose;
+      dispose = undefined;
+      stop?.();
+    },
+  };
 }
 
 test("default tooltip opens synchronously, wires relations, geometry and arrow lifecycle", async t => {
-  const { h, mod, clock, traps, locks, layers, portals, geometry, send, emit, flush, finish } = await mounted(t, "mountDefault");
+  const { h, mod, clock, traps, locks, layers, portals, geometry, send, emit, flush, finish } =
+    await mounted(t, "mountDefault");
   const trigger = h.byTestId("trigger");
   assert.equal(mod.log.mounts, 0);
   assert.equal(h.byTestId("surface"), undefined);
@@ -159,7 +188,11 @@ test("default tooltip opens synchronously, wires relations, geometry and arrow l
   assert.equal(surface.props.get("role"), "tooltip");
   assert.equal(surface.props.get("ariaModal"), false);
   assert.equal(surface.props.get("tabIndex"), undefined);
-  assert.equal(trigger.props.get("tabIndex"), undefined, "tooltip trigger is not an added tab stop");
+  assert.equal(
+    trigger.props.get("tabIndex"),
+    undefined,
+    "tooltip trigger is not an added tab stop",
+  );
   assert.equal(trigger.props.get("ariaDescribedBy"), surface);
   assert.equal(surface.props.get("ariaPopupFor"), trigger);
   assert.equal(surface.props.get("data-state"), "open");
@@ -188,9 +221,14 @@ test("default tooltip opens synchronously, wires relations, geometry and arrow l
   emit(viewport, { x: 0, y: 0, width: 800, height: 600, scale: 1 });
   flush();
   assert.equal(place.props.get("data-side"), "top");
-  assert.equal(place.props.get("style").top, "90px", "arrow clamps the supplied zero offset to the default reach");
+  assert.equal(
+    place.props.get("style").top,
+    "90px",
+    "arrow clamps the supplied zero offset to the default reach",
+  );
   assert.equal(place.props.get("style").left, "250px");
-  const arrowOf = () => surface.children.find(child => child.props.get("class")?.includes("zui-tooltip__arrow"));
+  const arrowOf = () =>
+    surface.children.find(child => child.props.get("class")?.includes("zui-tooltip__arrow"));
   const firstArrow = arrowOf();
   assert.ok(firstArrow, "default arrow is rendered");
   assert.equal(firstArrow.props.get("ariaHidden"), true);
@@ -199,7 +237,11 @@ test("default tooltip opens synchronously, wires relations, geometry and arrow l
   flush();
   assert.equal(arrowOf(), undefined);
   assert.equal(h.byTestId("counter"), counter, "arrow toggle must preserve child state");
-  assert.equal(place.props.get("style").top, "100px", "without an arrow the supplied offset is preserved");
+  assert.equal(
+    place.props.get("style").top,
+    "100px",
+    "without an arrow the supplied offset is preserved",
+  );
   mod.setArrow(true);
   flush();
   const secondArrow = arrowOf();
@@ -211,7 +253,8 @@ test("default tooltip opens synchronously, wires relations, geometry and arrow l
 });
 
 test("delayed tooltip cancels pending intent, retains busy exit and remounts fresh", async t => {
-  const { h, mod, clock, busy, layers, geometry, send, end, flush, active, finish } = await mounted(t);
+  const { h, mod, clock, busy, layers, geometry, send, end, flush, active, finish } =
+    await mounted(t);
   const trigger = h.byTestId("trigger");
   send("trigger", "onPointerEnter", { position: { x: 0, y: 0 }, pointerKind: "mouse" });
   assert.equal(clock.timers.size, 1, "delayed enter queues one opening timer");
@@ -236,11 +279,23 @@ test("delayed tooltip cancels pending intent, retains busy exit and remounts fre
   assert.equal(h.byTestId("surface"), surface, "busy animation retains the exiting surface");
   mod.bump();
   h.flush();
-  assert.equal(h.byTestId("counter").children.map(node => node.props.get("text")).join(""), "1");
+  assert.equal(
+    h
+      .byTestId("counter")
+      .children.map(node => node.props.get("text"))
+      .join(""),
+    "1",
+  );
   send("trigger", "onPointerEnter", { position: { x: 0, y: 0 }, pointerKind: "mouse" });
   clock.advance(100);
   assert.equal(h.byTestId("surface"), surface, "reopening mid-exit preserves the surface");
-  assert.equal(h.byTestId("counter").children.map(node => node.props.get("text")).join(""), "1");
+  assert.equal(
+    h
+      .byTestId("counter")
+      .children.map(node => node.props.get("text"))
+      .join(""),
+    "1",
+  );
   assert.equal(mod.log.mounts, 1);
   send("trigger", "onPointerLeave", { position: { x: 0, y: 0 }, pointerKind: "mouse" });
   clock.advance(80);
@@ -255,7 +310,13 @@ test("delayed tooltip cancels pending intent, retains busy exit and remounts fre
   clock.advance(100);
   const fresh = h.byTestId("surface");
   assert.ok(fresh && fresh !== surface, "reopen after full exit remounts");
-  assert.equal(h.byTestId("counter").children.map(node => node.props.get("text")).join(""), "0");
+  assert.equal(
+    h
+      .byTestId("counter")
+      .children.map(node => node.props.get("text"))
+      .join(""),
+    "0",
+  );
   assert.equal(mod.log.mounts, 2);
   assert.equal(mod.log.ends, 1, "caller animation-end forwarded once for the released exit");
   finish();
@@ -286,15 +347,20 @@ test("tooltip focus causes, caller veto and escape policy", async t => {
   assert.equal(h.byTestId("surface"), undefined, "blur cancels a pending open");
   mod.setCancel(true);
   h.flush();
-  const entered = send("trigger", "onPointerEnter", { position: { x: 0, y: 0 }, pointerKind: "mouse" });
+  const entered = send("trigger", "onPointerEnter", {
+    position: { x: 0, y: 0 },
+    pointerKind: "mouse",
+  });
   assert.equal(entered.defaultPrevented, true);
   assert.equal(h.byTestId("surface"), undefined, "caller preventDefault vetoes hover opening");
   assert.equal(clock.timers.size, 0);
   const focused = send("trigger", "onFocus", { cause: "keyboard" });
   assert.equal(focused.defaultPrevented, true);
   assert.equal(h.byTestId("surface"), undefined, "caller preventDefault vetoes focus opening");
-  assert.ok(mod.log.calls.includes("trigger:enter") && mod.log.calls.includes("trigger:focus"),
-    "caller handlers still run before the veto");
+  assert.ok(
+    mod.log.calls.includes("trigger:enter") && mod.log.calls.includes("trigger:focus"),
+    "caller handlers still run before the veto",
+  );
   mod.setCancel(false);
   h.flush();
   const closedEscape = send("trigger", "onKeyDown", { key: "Escape" });
@@ -326,7 +392,10 @@ test("hover card honours 700/300 defaults, re-entry keeps identity and dismissal
   assert.equal(h.byTestId("surface"), surface, "re-entry keeps the same surface");
   send("surface", "onPointerEnter", { position: { x: 0, y: 0 }, pointerKind: "mouse" });
   assert.equal(clock.timers.size, 1, "entering an open surface queues an opening job");
-  emit(layers.find(record => record.node === surface), undefined);
+  emit(
+    layers.find(record => record.node === surface),
+    undefined,
+  );
   flush();
   assert.equal(h.byTestId("surface"), undefined, "dismiss closes the surface");
   clock.advance(1000);
@@ -354,7 +423,11 @@ test("controlled hover card refocuses without false-then-true churn and honours 
   assert.equal(traps.length, 0, "hover card must not trap focus");
   mod.log.changes.length = 0;
   send("trigger", "onFocus", { cause: "keyboard" });
-  assert.deepEqual(mod.log.changes, [], "refocusing an already-open card calls openNow() without false-then-true churn");
+  assert.deepEqual(
+    mod.log.changes,
+    [],
+    "refocusing an already-open card calls openNow() without false-then-true churn",
+  );
   assert.equal(h.byTestId("surface"), surface, "same surface survives refocus");
   mod.log.changes.length = 0;
   send("surface", "onPointerEnter", { position: { x: 0, y: 0 }, pointerKind: "mouse" });
@@ -383,7 +456,14 @@ test("provider handoff preserves identity, isolates nested groups and clears dis
   h.flush();
   assert.equal(h.byTestId("trigger-a"), triggerA, "keyed reorder keeps trigger identity");
   assert.equal(h.byTestId("surface-a"), surfaceA, "keyed reorder keeps content identity");
-  assert.equal(h.byTestId("counter-a").children.map(node => node.props.get("text")).join(""), "1", "child state survives reorder");
+  assert.equal(
+    h
+      .byTestId("counter-a")
+      .children.map(node => node.props.get("text"))
+      .join(""),
+    "1",
+    "child state survives reorder",
+  );
   send("trigger-a", "onPointerLeave", { position: { x: 0, y: 0 }, pointerKind: "mouse" });
   send("trigger-b", "onPointerEnter", { position: { x: 0, y: 0 }, pointerKind: "mouse" });
   const surfaceB = h.byTestId("surface-b");
@@ -391,7 +471,11 @@ test("provider handoff preserves identity, isolates nested groups and clears dis
   assert.equal(surfaceA.props.get("data-state"), "closed");
   assert.equal(surfaceA.props.get("data-instant"), "", "replaced surface is marked instant");
   flush();
-  assert.equal(h.byTestId("surface-a"), undefined, "instant exit completes on the idle styled frame");
+  assert.equal(
+    h.byTestId("surface-a"),
+    undefined,
+    "instant exit completes on the idle styled frame",
+  );
   clock.advance(200);
   assert.equal(h.byTestId("surface-b"), surfaceB, "b persists past a's old close deadline");
   send("surface-b", "onPointerEnter", { position: { x: 0, y: 0 }, pointerKind: "mouse" });
@@ -410,7 +494,11 @@ test("provider handoff preserves identity, isolates nested groups and clears dis
   assert.equal(h.byTestId("trigger-a"), undefined);
   send("trigger-b", "onPointerEnter", { position: { x: 0, y: 0 }, pointerKind: "mouse" });
   clock.advance(99);
-  assert.equal(h.byTestId("surface-b"), undefined, "disposed remembered member cannot fast-track b");
+  assert.equal(
+    h.byTestId("surface-b"),
+    undefined,
+    "disposed remembered member cannot fast-track b",
+  );
   clock.advance(1);
   assert.ok(h.byTestId("surface-b"));
   finish();
@@ -419,7 +507,10 @@ test("provider handoff preserves identity, isolates nested groups and clears dis
 });
 
 test("controlled tooltip honours parent veto, retained dismiss and pending cancellation", async t => {
-  const { h, mod, clock, layers, send, emit, end, flush, finish } = await mounted(t, "mountControlled");
+  const { h, mod, clock, layers, send, emit, end, flush, finish } = await mounted(
+    t,
+    "mountControlled",
+  );
   send("trigger", "onPointerEnter", { position: { x: 0, y: 0 }, pointerKind: "mouse" });
   clock.advance(100);
   assert.deepEqual(mod.log.changes, [true]);
@@ -428,7 +519,10 @@ test("controlled tooltip honours parent veto, retained dismiss and pending cance
   h.flush();
   const surface = h.byTestId("surface");
   assert.ok(surface);
-  emit(layers.find(record => record.node === surface), undefined);
+  emit(
+    layers.find(record => record.node === surface),
+    undefined,
+  );
   assert.deepEqual(mod.log.changes, [true, false], "dismiss reports the close request");
   assert.equal(h.byTestId("surface"), surface, "parent may retain the surface");
   send("surface", "onPointerEnter", { position: { x: 0, y: 0 }, pointerKind: "mouse" });
@@ -458,7 +552,11 @@ test("removed owner cancels deferred tooltip construction entirely", async t => 
   const { h, mod, traps, layers, portals, geometry, finish } = await mounted(t, "mountCancelled");
   assert.equal(h.byTestId("surface"), undefined);
   assert.equal(mod.log.mounts, 0, "counter is never constructed");
-  assert.equal(portals[0]?.node.children.length ?? 0, 0, "aborted portal placeholder builds nothing");
+  assert.equal(
+    portals[0]?.node.children.length ?? 0,
+    0,
+    "aborted portal placeholder builds nothing",
+  );
   assert.equal(traps.length, 0);
   assert.equal(layers.length, 0);
   assert.equal(geometry.length, 0);
@@ -471,9 +569,16 @@ test("hover surfaces nest inside a dialog on the modal band without traps or for
   const tip = h.byTestId("tip");
   const card = h.byTestId("card");
   assert.ok(dialog && tip && card, "dialog and both default-open hover surfaces mount");
-  assert.equal(h.byTestId("stray"), undefined, "orphaned TooltipContent must not borrow the dialog state");
+  assert.equal(
+    h.byTestId("stray"),
+    undefined,
+    "orphaned TooltipContent must not borrow the dialog state",
+  );
   assert.equal(portals.length, 3);
-  assert.ok(portals.every(portal => portal.layer === "modal"), "nested surfaces inherit the modal band");
+  assert.ok(
+    portals.every(portal => portal.layer === "modal"),
+    "nested surfaces inherit the modal band",
+  );
   assert.equal(traps.length, 1, "only the dialog traps focus");
   assert.equal(locks.length, 1, "only the dialog locks scroll");
   const tipTrigger = h.byTestId("tip-trigger");

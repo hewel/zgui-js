@@ -31,19 +31,47 @@ test("lifecycle handlers forward name, seconds and pseudo; isAnimating reflects 
   const mod = await moduleFor(t, fixture);
   assert.equal(harness.animatingQueries.length, 0, "module import must not query the host");
   let dispose;
-  t.after(() => { try { dispose?.(); } finally { delete globalThis.__zgui; } });
+  t.after(() => {
+    try {
+      dispose?.();
+    } finally {
+      delete globalThis.__zgui;
+    }
+  });
   globalThis.__zgui = harness.host;
   const root = harness.makeNode("root");
   dispose = mod.mount(root);
   const box = root.children[0].children[0];
-  for (const name of ["onAnimationEnd", "onAnimationCancel", "onTransitionEnd", "onTransitionRun",
-    "onAnimationStartCapture", "onTransitionCancelCapture"]) {
+  for (const name of [
+    "onAnimationEnd",
+    "onAnimationCancel",
+    "onTransitionEnd",
+    "onTransitionRun",
+    "onAnimationStartCapture",
+    "onTransitionCancelCapture",
+  ]) {
     assert.equal(typeof box.callbacks[name], "function", name);
   }
-  harness.dispatch(box, "AnimationEnd", { animationName: "fade", elapsedTime: 0.125, pseudoElement: "::before" });
-  harness.dispatch(box, "TransitionEnd", { propertyName: "opacity", elapsedTime: 0.25, pseudoElement: "" });
-  harness.dispatch(box, "AnimationStart", { animationName: "pulse", elapsedTime: 0, pseudoElement: "::after" });
-  harness.dispatch(box, "TransitionCancel", { propertyName: "width", elapsedTime: 0.05, pseudoElement: "" });
+  harness.dispatch(box, "AnimationEnd", {
+    animationName: "fade",
+    elapsedTime: 0.125,
+    pseudoElement: "::before",
+  });
+  harness.dispatch(box, "TransitionEnd", {
+    propertyName: "opacity",
+    elapsedTime: 0.25,
+    pseudoElement: "",
+  });
+  harness.dispatch(box, "AnimationStart", {
+    animationName: "pulse",
+    elapsedTime: 0,
+    pseudoElement: "::after",
+  });
+  harness.dispatch(box, "TransitionCancel", {
+    propertyName: "width",
+    elapsedTime: 0.05,
+    pseudoElement: "",
+  });
   assert.deepEqual(mod.taken(), [
     "a:animationend|fade|0.125|::before",
     "t:transitionend|opacity|0.25|",

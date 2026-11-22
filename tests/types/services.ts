@@ -54,7 +54,8 @@ const promise: Promise<string> = request.promise;
 const cancelled: void = request.cancel();
 const length: Promise<number> = request.promise.then(text => text.length);
 const recovered: Promise<string> = request.promise.catch((reason: unknown) => {
-  if (reason instanceof Error && "code" in reason && reason.code === "Cancelled") return "cancelled";
+  if (reason instanceof Error && "code" in reason && reason.code === "Cancelled")
+    return "cancelled";
   throw reason;
 });
 const generic: HostRequest<{ value: number }> = {
@@ -100,7 +101,8 @@ loadImageBytes([1, 2]);
 
 const resolved: ResolvedCapabilities = getResolvedCapabilities();
 const optionalEndpoint: string | null = getAuthorizedEndpoint("niri");
-if (optionalEndpoint !== null) connectUnixSocket(optionalEndpoint, { framing: "line", onMessage() {} });
+if (optionalEndpoint !== null)
+  connectUnixSocket(optionalEndpoint, { framing: "line", onMessage() {} });
 // @ts-expect-error The namespace is keyed by a string name.
 getAuthorizedEndpoint(12);
 // @ts-expect-error A named endpoint can be unbound.
@@ -139,7 +141,9 @@ connectUnixSocket("/run/example.sock", { framing: "json", onMessage() {} });
 
 const args = ["argument with spaces"] as const;
 const command: HostRequest<CommandResult> = spawnCommand("/usr/bin/echo", args);
-const buffered: Promise<CommandResult> = spawnCommand("/usr/bin/echo", args, { stream: false }).promise;
+const buffered: Promise<CommandResult> = spawnCommand("/usr/bin/echo", args, {
+  stream: false,
+}).promise;
 const output: Promise<{ status: number | null; stdout: string; stderr: string }> = command.promise;
 const running = spawnCommand("/usr/bin/echo", args, {
   stream: true,
@@ -190,7 +194,9 @@ const clipImgReq: HostRequest<ImageHandle | null> = readClipboardImage();
 const clipImgScoped: Promise<ImageHandle | null> = clipboardReadImage();
 const clipWriteOpts: ClipboardWriteOptions = { secret: true };
 const clipWriteTextReq: HostRequest<void> = writeClipboardText("hello", clipWriteOpts);
-const clipWriteImgBytes: HostRequest<void> = writeClipboardImage(new Uint8Array([1, 2]), { secret: false });
+const clipWriteImgBytes: HostRequest<void> = writeClipboardImage(new Uint8Array([1, 2]), {
+  secret: false,
+});
 const clipWriteImgHandle: HostRequest<void> = writeClipboardImage(directImage, clipWriteOpts);
 // @ts-expect-error Clipboard write text requires a string.
 writeClipboardText(123);
@@ -199,16 +205,28 @@ writeClipboardImage("/etc/passwd");
 // @ts-expect-error secret option must be a boolean.
 writeClipboardText("x", { secret: "yes" });
 
-void [clipTextReq, clipTextScoped, clipImgReq, clipImgScoped, clipWriteTextReq, clipWriteImgBytes, clipWriteImgHandle];
+void [
+  clipTextReq,
+  clipTextScoped,
+  clipImgReq,
+  clipImgScoped,
+  clipWriteTextReq,
+  clipWriteImgBytes,
+  clipWriteImgHandle,
+];
 
 const sqlDb: SqliteDatabase = openDatabase("main");
-const sqlQueryReq: HostRequest<readonly { readonly id: number; readonly title: string }[]> = sqlDb.query<{
-  readonly id: number;
-  readonly title: string;
-}>("SELECT id, title FROM notes WHERE id = ?1", [1], { maxRows: 50 });
-const sqlExecReq: HostRequest<SqlExecuteResult> = sqlDb.execute("INSERT INTO notes (title) VALUES (:title)", {
-  title: "hello",
-});
+const sqlQueryReq: HostRequest<readonly { readonly id: number; readonly title: string }[]> =
+  sqlDb.query<{
+    readonly id: number;
+    readonly title: string;
+  }>("SELECT id, title FROM notes WHERE id = ?1", [1], { maxRows: 50 });
+const sqlExecReq: HostRequest<SqlExecuteResult> = sqlDb.execute(
+  "INSERT INTO notes (title) VALUES (:title)",
+  {
+    title: "hello",
+  },
+);
 const sqlBatchReq: HostRequest<readonly SqlExecuteResult[]> = sqlDb.batch([
   { sql: "INSERT INTO notes (title) VALUES (?1)", params: ["a"] },
 ]);
@@ -223,7 +241,10 @@ sqlDb.close();
 // @ts-expect-error SQLite params cannot contain booleans or functions directly.
 sqlDb.query("SELECT ?1", [true]);
 
-const kv: KvStore<{ readonly theme: string }> = openKvStore<{ readonly theme: string }>("main", "prefs");
+const kv: KvStore<{ readonly theme: string }> = openKvStore<{ readonly theme: string }>(
+  "main",
+  "prefs",
+);
 const kvVal: Promise<{ readonly theme: string } | null> = kv.get("ui");
 kv.close();
 
@@ -243,9 +264,13 @@ const revoked: HostRequest<boolean> = revokeBookmark("tok");
 const stopWatch1: () => void = watchDirectory(authDir, (events: readonly WatchEvent[]) => {
   void events;
 });
-const stopWatch2: () => void = watchDirectory(authDir, { recursive: true, debounceMs: 100 }, events => {
-  void events;
-});
+const stopWatch2: () => void = watchDirectory(
+  authDir,
+  { recursive: true, debounceMs: 100 },
+  events => {
+    void events;
+  },
+);
 stopWatch1();
 stopWatch2();
 authDir.close();
@@ -278,5 +303,26 @@ worker.terminate();
 // @ts-expect-error spawnWorker name must be a string.
 spawnWorker(123);
 
-void [openFileReq, saveFileReq, openDirReq, persisted, restored, allBookmarks, revoked, workerClosed];
-void [promise, cancelled, length, recovered, generic, implicitPromise, asyncCancellation, bytes, element, errorCode, nativeError];
+void [
+  openFileReq,
+  saveFileReq,
+  openDirReq,
+  persisted,
+  restored,
+  allBookmarks,
+  revoked,
+  workerClosed,
+];
+void [
+  promise,
+  cancelled,
+  length,
+  recovered,
+  generic,
+  implicitPromise,
+  asyncCancellation,
+  bytes,
+  element,
+  errorCode,
+  nativeError,
+];

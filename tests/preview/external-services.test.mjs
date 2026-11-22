@@ -41,9 +41,7 @@ const text = (testId, equals) => ({
 async function setup(t) {
   const { dir, cleanup } = await createTempWorkspace("preview-external-services-");
   t.after(cleanup);
-  const image = await readFile(
-    new URL("./fixtures/red.png", import.meta.url),
-  );
+  const image = await readFile(new URL("./fixtures/red.png", import.meta.url));
   return {
     build: (name, source, grants = capabilities) =>
       buildFixtureApp(path.join(dir, name), name, source, {
@@ -51,9 +49,21 @@ async function setup(t) {
         assets: { "socket.png": image },
         capabilities: grants,
       }),
-    async run(name, bundle, services, steps, { events = [], allowFailure = false, runtimeEnvironment } = {}) {
+    async run(
+      name,
+      bundle,
+      services,
+      steps,
+      { events = [], allowFailure = false, runtimeEnvironment } = {},
+    ) {
       const fixture = path.join(dir, `${name}-fixture.json`);
-      await writeJson(fixture, { schemaVersion: 1, id: name, services, events, runtimeEnvironment });
+      await writeJson(fixture, {
+        schemaVersion: 1,
+        id: name,
+        services,
+        events,
+        runtimeEnvironment,
+      });
       return runScenario({
         projectDir: dir,
         name,
@@ -261,8 +271,10 @@ test("preview connects only to resolved sockets and reports unbound and undeclar
   const host = "/zgui-preview-only/runtime/z-shell/host-wayland-2.sock";
   const niri = "/zgui-preview-only/compositor.sock";
   const runtimeEnvironment = {
-    xdgRuntimeDir: "/zgui-preview-only/runtime", waylandDisplay: "wayland-2",
-    homeDir: "/zgui-preview-only/home", namedSockets: { niri, ambient: "/not-authorized.sock" },
+    xdgRuntimeDir: "/zgui-preview-only/runtime",
+    waylandDisplay: "wayland-2",
+    homeDir: "/zgui-preview-only/home",
+    namedSockets: { niri, ambient: "/not-authorized.sock" },
   };
   const imports = `
     import { getAuthorizedEndpoint, getResolvedCapabilities } from "@hewel/zgui-services";
@@ -273,7 +285,10 @@ test("preview connects only to resolved sockets and reports unbound and undeclar
     imagePrefixes: ["$XDG_DATA_HOME/icons"],
     namedSockets: ["niri", "optional", "constructor"],
   };
-  const bundle = await build("portable-sockets", imports + shell(`
+  const bundle = await build(
+    "portable-sockets",
+    imports +
+      shell(`
     const named = getAuthorizedEndpoint("niri");
     const literal = snapshot.unixSockets[0];
     if (!named || !literal || getAuthorizedEndpoint("optional") !== null
@@ -293,15 +308,30 @@ test("preview connects only to resolved sockets and reports unbound and undeclar
       connectUnixSocket(path, { framing: "line", onMessage(message) { setStatus(s => s + message); } });
     }
     return <text testId="status">{status()}</text>;
-  `), grants);
-  const sockets = [[host, "host"], [niri, "niri"]].map(([path, text]) => ({
-    path, framing: "line", send: [], events: [{ atMs: 0, kind: "message", text }],
+  `),
+    grants,
+  );
+  const sockets = [
+    [host, "host"],
+    [niri, "niri"],
+  ].map(([path, text]) => ({
+    path,
+    framing: "line",
+    send: [],
+    events: [{ atMs: 0, kind: "message", text }],
   }));
-  await run("resolved-sockets", bundle, { sockets }, [
-    text("status", "hostniri"), calls("sockets", "connectUnixSocket", 2), capture,
-  ], { runtimeEnvironment });
+  await run(
+    "resolved-sockets",
+    bundle,
+    { sockets },
+    [text("status", "hostniri"), calls("sockets", "connectUnixSocket", 2), capture],
+    { runtimeEnvironment },
+  );
 
-  const denied = await build("undeclared-endpoint", imports + shell(`
+  const denied = await build(
+    "undeclared-endpoint",
+    imports +
+      shell(`
     try {
       getAuthorizedEndpoint("ambient");
       throw new Error("undeclared environment binding was exposed");
@@ -309,10 +339,19 @@ test("preview connects only to resolved sockets and reports unbound and undeclar
       if (!(error instanceof Error) || !("code" in error) || error.code !== "E_CAPABILITY") throw error;
     }
     return <text>caught</text>;
-  `), grants);
-  const { result } = await run("undeclared-endpoint", denied, {}, [capture], { runtimeEnvironment, allowFailure: true });
+  `),
+    grants,
+  );
+  const { result } = await run("undeclared-endpoint", denied, {}, [capture], {
+    runtimeEnvironment,
+    allowFailure: true,
+  });
   assert.equal(result.firstError?.code, "E_CAPABILITY");
-  assert.equal(result.captureCount, 0, "catching the capability error cannot clear the fixture failure");
+  assert.equal(
+    result.captureCount,
+    0,
+    "catching the capability error cannot clear the fixture failure",
+  );
 });
 
 test(

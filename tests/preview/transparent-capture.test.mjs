@@ -5,14 +5,25 @@ import { copyFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { after, before, test } from "node:test";
 import {
-  buildFixtureApp, createTempWorkspace, defaultProfile, nativeHostBinary, pixelAt,
-  readFrame, readPng, runScenario, workspaceRoot, writeJson,
+  buildFixtureApp,
+  createTempWorkspace,
+  defaultProfile,
+  nativeHostBinary,
+  pixelAt,
+  readFrame,
+  readPng,
+  runScenario,
+  workspaceRoot,
+  writeJson,
 } from "./harness.mjs";
 
 const requiredCapabilities = ["pixels", "capture.transparent"];
 const capture = (surface = "main") => ({ id: surface, op: "capture", captureId: surface, surface });
 const readJson = async file => JSON.parse(await readFile(file, "utf8"));
-const digest = async file => `sha256:${createHash("sha256").update(await readFile(file)).digest("hex")}`;
+const digest = async file =>
+  `sha256:${createHash("sha256")
+    .update(await readFile(file))
+    .digest("hex")}`;
 let temp;
 let base;
 let profile;
@@ -23,13 +34,19 @@ before(async () => {
   base = await readJson(defaultProfile);
   profile = await writeProfile("transparent");
 });
-after(async () => { await temp?.cleanup(); });
+after(async () => {
+  await temp?.cleanup();
+});
 
-async function writeProfile(name, { pureShell = false, opaque = false, background = "#00000000" } = {}) {
+async function writeProfile(
+  name,
+  { pureShell = false, opaque = false, background = "#00000000" } = {},
+) {
   const file = path.join(temp.dir, `${name}.json`);
   const manifest = path.resolve(path.dirname(defaultProfile), base.fonts.manifest);
   await writeJson(file, {
-    ...base, pureShell,
+    ...base,
+    pureShell,
     fonts: { ...base.fonts, manifest: path.relative(temp.dir, manifest) },
     surface: { ...base.surface, width: 120, height: 80, scale: 1, opaque, background },
   });
@@ -37,7 +54,12 @@ async function writeProfile(name, { pureShell = false, opaque = false, backgroun
 }
 
 function native(args, env = process.env) {
-  const proc = spawnSync(nativeHostBinary, ["preview", ...args], { cwd: workspaceRoot, env, encoding: "utf8", timeout: 30000 });
+  const proc = spawnSync(nativeHostBinary, ["preview", ...args], {
+    cwd: workspaceRoot,
+    env,
+    encoding: "utf8",
+    timeout: 30000,
+  });
   assert.ifError(proc.error);
   assert.equal(proc.signal, null, proc.stderr);
   const result = JSON.parse(proc.stdout);
@@ -51,15 +73,25 @@ function assertTransparentRenderer(renderer) {
 }
 
 function assertRgba(actual, expected, tolerance = 0) {
-  assert.ok(actual.every((channel, index) => Math.abs(channel - expected[index]) <= tolerance),
-    `expected ${expected} ±${tolerance}, got ${actual}`);
+  assert.ok(
+    actual.every((channel, index) => Math.abs(channel - expected[index]) <= tolerance),
+    `expected ${expected} ±${tolerance}, got ${actual}`,
+  );
 }
 
 test("doctor validates raw and PNG alpha on clear and translucent backgrounds", async () => {
   const tinted = await writeProfile("tinted", { background: "#11223380" });
   for (const [name, file, rawRoot, pngRoot, rawSwatch, pngSwatch, tolerance] of [
     ["clear", profile, [0, 0, 0, 0], [0, 0, 0, 0], [128, 0, 0, 128], [255, 0, 0, 128], 0],
-    ["tinted", tinted, [9, 17, 26, 128], [17, 34, 51, 128], [132, 9, 13, 192], [175, 11, 17, 192], 1],
+    [
+      "tinted",
+      tinted,
+      [9, 17, 26, 128],
+      [17, 34, 51, 128],
+      [132, 9, 13, 192],
+      [175, 11, 17, 192],
+      1,
+    ],
   ]) {
     const out = path.join(temp.dir, `doctor-${name}`);
     const result = native(["doctor", "--profile", file, "--out", out]);
@@ -78,7 +110,10 @@ test("doctor validates raw and PNG alpha on clear and translucent backgrounds", 
 });
 
 async function mainBundle() {
-  main ??= await buildFixtureApp(path.join(temp.dir, "main"), "transparent-main", `
+  main ??= await buildFixtureApp(
+    path.join(temp.dir, "main"),
+    "transparent-main",
+    `
     import { renderApp } from "@hewel/zgui";
     import type { NativeNode } from "@hewel/zgui";
     export const hostApiVersion = 1;
@@ -88,23 +123,52 @@ async function mainBundle() {
         <box style="display: block; position: fixed; left: 60px; top: 10px; width: 30px; height: 30px; background: #123456" />
       </box>, root);
     }
-  `, { rawSource: true });
+  `,
+    { rawSource: true },
+  );
   return main;
 }
 
 async function runMain(name, input = profile, out) {
   const bundle = await mainBundle();
-  return runScenario({ projectDir: temp.dir, bundle, name, id: "alpha", steps: [capture()],
-    requiredCapabilities, profile: input, out });
+  return runScenario({
+    projectDir: temp.dir,
+    bundle,
+    name,
+    id: "alpha",
+    steps: [capture()],
+    requiredCapabilities,
+    profile: input,
+    out,
+  });
 }
 
 test("unavailable graphics disables pixel and transparent-capture capabilities", async () => {
   const scenario = path.join(temp.dir, "no-graphics.json");
-  await writeJson(scenario, { schemaVersion: 1, id: "no-graphics", requiredCapabilities, steps: [capture()] });
+  await writeJson(scenario, {
+    schemaVersion: 1,
+    id: "no-graphics",
+    requiredCapabilities,
+    steps: [capture()],
+  });
   const env = { ...process.env, ZGUI_BACKENDS: "none" };
   const out = path.join(temp.dir, "no-graphics");
-  const run = native(["run", "--bundle", await mainBundle(), "--profile", profile,
-    "--fixture", path.join(workspaceRoot, "preview/fixtures/empty.json"), "--scenario", scenario, "--out", out], env);
+  const run = native(
+    [
+      "run",
+      "--bundle",
+      await mainBundle(),
+      "--profile",
+      profile,
+      "--fixture",
+      path.join(workspaceRoot, "preview/fixtures/empty.json"),
+      "--scenario",
+      scenario,
+      "--out",
+      out,
+    ],
+    env,
+  );
   const doctor = native(["doctor", "--profile", profile], env);
   for (const result of [run, doctor]) {
     assert.equal(result.exitCode, 7, JSON.stringify(result));
@@ -128,7 +192,10 @@ test("main capture writes clear, straight-alpha and opaque pixels", async () => 
 
 test("pure-shell layer and popup capture transparent surround and retire cleanly", async () => {
   const shellProfile = await writeProfile("shell-profile", { pureShell: true });
-  const bundle = await buildFixtureApp(path.join(temp.dir, "shell"), "transparent-shell", `
+  const bundle = await buildFixtureApp(
+    path.join(temp.dir, "shell"),
+    "transparent-shell",
+    `
     import { LayerSurface, PopupSurface, renderShell } from "@hewel/zgui";
     export const hostApiVersion = 1;
     function Card() {
@@ -141,11 +208,36 @@ test("pure-shell layer and popup capture transparent surround and retire cleanly
           width={64} height={48}><Card /></PopupSurface>
       </>);
     }
-  `, { rawSource: true, capabilities: { shellSurfaces: true } });
-  const { out, result } = await runScenario({ projectDir: temp.dir, bundle, profile: shellProfile, name: "shell", requiredCapabilities, steps: [
-    { id: "output", op: "monitors.set", monitors: [{ id: "left", name: "Left", x: 0, y: 0, width: 320, height: 240, scale: 1, refreshRateMilliHz: 60000 }] },
-    capture("bar"), capture("menu"),
-  ] });
+  `,
+    { rawSource: true, capabilities: { shellSurfaces: true } },
+  );
+  const { out, result } = await runScenario({
+    projectDir: temp.dir,
+    bundle,
+    profile: shellProfile,
+    name: "shell",
+    requiredCapabilities,
+    steps: [
+      {
+        id: "output",
+        op: "monitors.set",
+        monitors: [
+          {
+            id: "left",
+            name: "Left",
+            x: 0,
+            y: 0,
+            width: 320,
+            height: 240,
+            scale: 1,
+            refreshRateMilliHz: 60000,
+          },
+        ],
+      },
+      capture("bar"),
+      capture("menu"),
+    ],
+  });
   assert.equal(result.captureCount, 2);
   for (const name of ["bar", "menu"]) {
     const artifact = `surfaces/${name}/${name}`;
@@ -161,7 +253,10 @@ test("lock surfaces stay opaque when author CSS makes the root transparent", asy
   const app = path.join(temp.dir, "lock");
   await mkdir(path.join(app, "src"), { recursive: true });
   await writeFile(path.join(app, "src/app.css"), ":root { background-color: transparent; }\n");
-  const bundle = await buildFixtureApp(app, "transparent-lock", `
+  const bundle = await buildFixtureApp(
+    app,
+    "transparent-lock",
+    `
     import { Button, SessionLockSurface, mountShellStylesheet, renderApp, requestSessionLock } from "@hewel/zgui";
     import type { NativeNode } from "@hewel/zgui";
     export const hostApiVersion = 1;
@@ -177,16 +272,43 @@ test("lock surfaces stay opaque when author CSS makes the root transparent", asy
         </column>;
       }, root);
     }
-  `, { rawSource: true, capabilities: { sessionLock: true } });
-  const { out } = await runScenario({ projectDir: temp.dir, bundle, profile, name: "lock", requiredCapabilities: [
-    ...requiredCapabilities, "session-lock",
-  ], steps: [
-    { id: "output", op: "monitors.set", monitors: [{ id: "left", name: "Left", x: 0, y: 0, width: 120, height: 80, scale: 1, refreshRateMilliHz: 60000 }] },
-    capture(),
-    { id: "request", op: "pointer.click", target: { surface: "main", testId: "lock" }, button: "primary" },
-    { id: "dispatch", op: "clock.advance", byMs: 40 },
-    capture("lock-left"),
-  ] });
+  `,
+    { rawSource: true, capabilities: { sessionLock: true } },
+  );
+  const { out } = await runScenario({
+    projectDir: temp.dir,
+    bundle,
+    profile,
+    name: "lock",
+    requiredCapabilities: [...requiredCapabilities, "session-lock"],
+    steps: [
+      {
+        id: "output",
+        op: "monitors.set",
+        monitors: [
+          {
+            id: "left",
+            name: "Left",
+            x: 0,
+            y: 0,
+            width: 120,
+            height: 80,
+            scale: 1,
+            refreshRateMilliHz: 60000,
+          },
+        ],
+      },
+      capture(),
+      {
+        id: "request",
+        op: "pointer.click",
+        target: { surface: "main", testId: "lock" },
+        button: "primary",
+      },
+      { id: "dispatch", op: "clock.advance", byMs: 40 },
+      capture("lock-left"),
+    ],
+  });
   assertTransparentRenderer((await readFrame(out, "main")).renderer);
   const main = await readPng(path.join(out, "captures/main.png"));
   assertRgba(pixelAt(main, 20, 60), [18, 52, 86, 255]);
@@ -206,15 +328,30 @@ test("compare rejects opaque and transparent captures of the same scenario", asy
   const policy = path.join(reviewed, "policy.json");
   await copyFile(path.join(workspaceRoot, "preview/comparison/strict.json"), policy);
   await writeJson(path.join(reviewed, "baseline.json"), {
-    schemaVersion: 1, run: "run", artifactsDigest: await digest(path.join(baseline.out, "artifacts.json")),
+    schemaVersion: 1,
+    run: "run",
+    artifactsDigest: await digest(path.join(baseline.out, "artifacts.json")),
     policyDigest: await digest(policy),
     review: {
-      by: "transparent-capture-test", at: "2026-11-18", summary: "Review an opaque capture for alpha compatibility.",
-      buildId: baseline.result.build.buildId, captures: [{ captureId: "main", surface: "main" }],
+      by: "transparent-capture-test",
+      at: "2026-11-18",
+      summary: "Review an opaque capture for alpha compatibility.",
+      buildId: baseline.result.build.buildId,
+      captures: [{ captureId: "main", surface: "main" }],
     },
   });
   const out = path.join(temp.dir, "compare");
-  const result = native(["compare", "--baseline", reviewed, "--actual", actual.out, "--policy", policy, "--out", out]);
+  const result = native([
+    "compare",
+    "--baseline",
+    reviewed,
+    "--actual",
+    actual.out,
+    "--policy",
+    policy,
+    "--out",
+    out,
+  ]);
   assert.equal(result.firstError?.code, "E_BASELINE_INCOMPATIBLE", JSON.stringify(result));
   assert.equal(result.captures.compared, 0);
   const report = await readJson(path.join(out, "report.json"));

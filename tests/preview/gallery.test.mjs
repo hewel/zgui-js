@@ -24,14 +24,43 @@ after(async () => {
 
 let serial = 0;
 const id = () => `step-${++serial}`;
-const click = testId => ({ id: id(), op: "pointer.click", target: { surface: "main", testId }, button: "primary" });
-const wheelAt = (x, y, dy) => ({ id: id(), op: "wheel", surface: "main", position: { x, y }, delta: { x: 0, y: dy, unit: "pixels" } });
-const wheelPhase = (x, y, dy, phase) => ({ id: id(), op: "wheel", surface: "main", position: { x, y }, delta: { x: 0, y: dy, unit: "pixels" }, phase });
+const click = testId => ({
+  id: id(),
+  op: "pointer.click",
+  target: { surface: "main", testId },
+  button: "primary",
+});
+const wheelAt = (x, y, dy) => ({
+  id: id(),
+  op: "wheel",
+  surface: "main",
+  position: { x, y },
+  delta: { x: 0, y: dy, unit: "pixels" },
+});
+const wheelPhase = (x, y, dy, phase) => ({
+  id: id(),
+  op: "wheel",
+  surface: "main",
+  position: { x, y },
+  delta: { x: 0, y: dy, unit: "pixels" },
+  phase,
+});
 const key = name => ({ id: id(), op: "key.press", surface: "main", key: name });
-const check = (testId, property, equals) => ({ id: id(), op: "assert", target: { surface: "main", testId }, check: { property, equals } });
+const check = (testId, property, equals) => ({
+  id: id(),
+  op: "assert",
+  target: { surface: "main", testId },
+  check: { property, equals },
+});
 const capture = captureId => ({ id: id(), op: "capture", captureId });
 const advance = byMs => ({ id: id(), op: "clock.advance", byMs });
-const resize = (width, height) => ({ id: id(), op: "surface.resize", surface: "main", width, height });
+const resize = (width, height) => ({
+  id: id(),
+  op: "surface.resize",
+  surface: "main",
+  width,
+  height,
+});
 
 const STACK_LIMIT_BYTES = 256 * 1024;
 
@@ -42,8 +71,15 @@ async function runScenario(name, steps, expectedCaptures) {
     name,
     id: `gallery-${name}`,
     requiredCapabilities: [
-      "pixels", "virtual-time", "selectors.test-id", "input.pointer",
-      "input.wheel", "input.keyboard", "tree.inspect", "surface.resize", "surface.scale",
+      "pixels",
+      "virtual-time",
+      "selectors.test-id",
+      "input.pointer",
+      "input.wheel",
+      "input.keyboard",
+      "tree.inspect",
+      "surface.resize",
+      "surface.scale",
     ],
     steps,
     maxJsStackBytes: STACK_LIMIT_BYTES,
@@ -65,116 +101,132 @@ async function runScenario(name, steps, expectedCaptures) {
 }
 
 test("gallery renders atoms, feedback, fields, choices, and composites tabs cleanly", async () => {
-  await runScenario("sections-a", [
-    resize(1280, 860),
-    advance(100),
-    check("section-atoms", "exists", true),
-    capture("tab-atoms"),
+  await runScenario(
+    "sections-a",
+    [
+      resize(1280, 860),
+      advance(100),
+      check("section-atoms", "exists", true),
+      capture("tab-atoms"),
 
-    click("tab-feedback"),
-    advance(100),
-    check("section-feedback", "exists", true),
-    capture("tab-feedback"),
+      click("tab-feedback"),
+      advance(100),
+      check("section-feedback", "exists", true),
+      capture("tab-feedback"),
 
-    click("tab-fields"),
-    advance(100),
-    check("section-fields", "exists", true),
-    capture("tab-fields"),
+      click("tab-fields"),
+      advance(100),
+      check("section-fields", "exists", true),
+      capture("tab-fields"),
 
-    click("tab-choices"),
-    advance(100),
-    check("section-choices", "exists", true),
-    capture("tab-choices"),
+      click("tab-choices"),
+      advance(100),
+      check("section-choices", "exists", true),
+      capture("tab-choices"),
 
-    click("tab-composites"),
-    advance(250),
-    check("section-composites", "exists", true),
-    check("composites-card", "exists", true),
-    capture("tab-composites"),
-  ], ["tab-atoms", "tab-feedback", "tab-fields", "tab-choices", "tab-composites"]);
+      click("tab-composites"),
+      advance(250),
+      check("section-composites", "exists", true),
+      check("composites-card", "exists", true),
+      capture("tab-composites"),
+    ],
+    ["tab-atoms", "tab-feedback", "tab-fields", "tab-choices", "tab-composites"],
+  );
 });
 
 test("gallery renders overlays, menus, and dark ocean theme cleanly", async () => {
-  await runScenario("sections-b", [
-    resize(1280, 860),
-    advance(100),
+  await runScenario(
+    "sections-b",
+    [
+      resize(1280, 860),
+      advance(100),
 
-    click("tab-overlays"),
-    advance(100),
-    check("section-overlays", "exists", true),
-    click("overlay-dialog-trigger"),
-    advance(250),
-    check("overlay-dialog-content", "exists", true),
-    capture("tab-overlays-dialog"),
-    key("Escape"),
-    advance(300),
-    check("overlay-dialog-content", "exists", false),
+      click("tab-overlays"),
+      advance(100),
+      check("section-overlays", "exists", true),
+      click("overlay-dialog-trigger"),
+      advance(250),
+      check("overlay-dialog-content", "exists", true),
+      capture("tab-overlays-dialog"),
+      key("Escape"),
+      advance(300),
+      check("overlay-dialog-content", "exists", false),
 
-    click("tab-menus"),
-    advance(100),
-    check("section-menus", "exists", true),
-    click("menus-dropdown-trigger"),
-    advance(250),
-    check("menus-dropdown-content", "exists", true),
-    capture("tab-menus-dropdown"),
-    key("Escape"),
-    advance(300),
-    check("menus-dropdown-content", "exists", false),
+      click("tab-menus"),
+      advance(100),
+      check("section-menus", "exists", true),
+      click("menus-dropdown-trigger"),
+      advance(250),
+      check("menus-dropdown-content", "exists", true),
+      capture("tab-menus-dropdown"),
+      key("Escape"),
+      advance(300),
+      check("menus-dropdown-content", "exists", false),
 
-    click("menus-editor-view"),
-    advance(200),
-    check("menus-editor-view-content", "exists", true),
-    check("menus-editor-spacious", "exists", true),
-    click("menus-editor-spacious"),
-    advance(250),
-    check("menus-editor-view-content", "exists", false),
+      click("menus-editor-view"),
+      advance(200),
+      check("menus-editor-view-content", "exists", true),
+      check("menus-editor-spacious", "exists", true),
+      click("menus-editor-spacious"),
+      advance(250),
+      check("menus-editor-view-content", "exists", false),
 
-    click("scheme-switch"),
-    click("preset-trigger"),
-    advance(250),
-    check("preset-ocean", "exists", true),
-    click("preset-ocean"),
-    advance(600),
-    check("scheme-badge", "text", "ocean / dark"),
-    capture("dark-theme"),
-  ], ["tab-overlays-dialog", "tab-menus-dropdown", "dark-theme"]);
+      click("scheme-switch"),
+      click("preset-trigger"),
+      advance(250),
+      check("preset-ocean", "exists", true),
+      click("preset-ocean"),
+      advance(600),
+      check("scheme-badge", "text", "ocean / dark"),
+      capture("dark-theme"),
+    ],
+    ["tab-overlays-dialog", "tab-menus-dropdown", "dark-theme"],
+  );
 });
 
 test("gallery renders workbench tab cleanly", async () => {
-  await runScenario("sections-workbench", [
-    resize(1280, 860),
-    advance(100),
-    click("tab-workbench"),
-    advance(120),
-    check("section-workbench", "exists", true),
-    check("workbench-split-pane", "exists", true),
-    check("workbench-tree", "exists", true),
-    check("workbench-tree-declarative", "exists", true),
-    check("workbench-command-trigger", "exists", true),
-    click("workbench-toast-success"),
-    advance(80),
-    capture("tab-workbench"),
-    click("workbench-toast-dismiss"),
-    advance(40),
-  ], ["tab-workbench"]);
+  await runScenario(
+    "sections-workbench",
+    [
+      resize(1280, 860),
+      advance(100),
+      click("tab-workbench"),
+      advance(120),
+      check("section-workbench", "exists", true),
+      check("workbench-split-pane", "exists", true),
+      check("workbench-tree", "exists", true),
+      check("workbench-tree-declarative", "exists", true),
+      check("workbench-command-trigger", "exists", true),
+      click("workbench-toast-success"),
+      advance(80),
+      capture("tab-workbench"),
+      click("workbench-toast-dismiss"),
+      advance(40),
+    ],
+    ["tab-workbench"],
+  );
 });
 
 test("gallery scrolls vertically via wheel and touchpad in a compact desktop window", async () => {
-  const runOut = await runScenario("scroll-compact", [
-    resize(560, 180),
-    advance(100),
-    check("gallery-page", "exists", true),
-    capture("scroll-before"),
-    wheelAt(280, 120, 220),
-    advance(40),
-    capture("scroll-wheel"),
-    wheelPhase(280, 120, 0, "started"),
-    advance(16),
-    wheelPhase(280, 120, 180, "moved"),
-    wheelPhase(280, 120, 0, "ended"),
-    advance(40),
-    capture("scroll-after"),
-  ], ["scroll-before", "scroll-wheel", "scroll-after"]);
+  const runOut = await runScenario(
+    "scroll-compact",
+    [
+      resize(560, 180),
+      advance(100),
+      check("gallery-page", "exists", true),
+      capture("scroll-before"),
+      wheelAt(280, 120, 220),
+      advance(40),
+      capture("scroll-wheel"),
+      wheelPhase(280, 120, 0, "started"),
+      advance(16),
+      wheelPhase(280, 120, 180, "moved"),
+      wheelPhase(280, 120, 0, "ended"),
+      advance(40),
+      capture("scroll-after"),
+    ],
+    ["scroll-before", "scroll-wheel", "scroll-after"],
+  );
 
   const beforeTree = await readTree(runOut, "scroll-before");
   const wheelTree = await readTree(runOut, "scroll-wheel");

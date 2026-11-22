@@ -18,22 +18,45 @@ function Controls() {
   const [report, setReport] = createSignal("");
 
   function publish() {
-    setReport(JSON.stringify({ mode: mode(), primary, guarded, disabled, replacement, expired, log, disabledInKeydown: disabledInKeydown(), disableKeydowns }));
+    setReport(
+      JSON.stringify({
+        mode: mode(),
+        primary,
+        guarded,
+        disabled,
+        replacement,
+        expired,
+        log,
+        disabledInKeydown: disabledInKeydown(),
+        disableKeydowns,
+      }),
+    );
   }
   function checkExpired() {
     if (!retained) throw new Error("No native event was retained");
-    if (retained.type !== "click" || retained.phase !== "target" || retained.target !== retainedTarget) {
+    if (
+      retained.type !== "click" ||
+      retained.phase !== "target" ||
+      retained.target !== retainedTarget
+    ) {
       throw new Error("Retained native snapshot changed after dispatch");
     }
-    for (const cancel of [retained.preventDefault, retained.stopPropagation, retained.stopImmediatePropagation]) {
+    for (const cancel of [
+      retained.preventDefault,
+      retained.stopPropagation,
+      retained.stopImmediatePropagation,
+    ]) {
       let rejected = false;
-      try { cancel(); }
-      catch (error) {
-        if (!(error instanceof ReferenceError) || !error.message.includes("expired-dispatch")) throw error;
+      try {
+        cancel();
+      } catch (error) {
+        if (!(error instanceof ReferenceError) || !error.message.includes("expired-dispatch"))
+          throw error;
         rejected = true;
         expired++;
       }
-      if (!rejected) throw new Error("Retained cancellation remained active after its handler returned");
+      if (!rejected)
+        throw new Error("Retained cancellation remained active after its handler returned");
     }
   }
   function record(name: string, event: NativeEvent) {
@@ -66,48 +89,75 @@ function Controls() {
   };
   publish();
 
-  return <column class="controls"
-    onClickCapture={event => record("outer-capture", event)}
-    onClick={event => record("outer-bubble", event)}>
-    <column class="middle"
-      onClickCapture={event => {
-        record("middle-capture", event);
-        if (mode() === 6) event.stopPropagation();
-      }}
-      onClick={event => record("middle-bubble", event)}>
-      <Button class="primary" disabled={mode() === 3 || disabledInKeydown()}
-        onClickCapture={primaryCapture}
-        onClick={mode() === 8 ? null : mode() === 7 ? replacementClick : primaryClick}
-        onKeyDown={event => {
-          if (mode() === 1) event.preventDefault();
-          if (mode() === 9) {
-            // Do not cancel: the native default must recheck this synchronous mutation.
-            disableKeydowns++;
-            setDisabledInKeydown(true);
+  return (
+    <column
+      class="controls"
+      onClickCapture={event => record("outer-capture", event)}
+      onClick={event => record("outer-bubble", event)}
+    >
+      <column
+        class="middle"
+        onClickCapture={event => {
+          record("middle-capture", event);
+          if (mode() === 6) event.stopPropagation();
+        }}
+        onClick={event => record("middle-bubble", event)}
+      >
+        <Button
+          class="primary"
+          disabled={mode() === 3 || disabledInKeydown()}
+          onClickCapture={primaryCapture}
+          onClick={mode() === 8 ? null : mode() === 7 ? replacementClick : primaryClick}
+          onKeyDown={event => {
+            if (mode() === 1) event.preventDefault();
+            if (mode() === 9) {
+              // Do not cancel: the native default must recheck this synchronous mutation.
+              disableKeydowns++;
+              setDisabledInKeydown(true);
+              publish();
+            }
+          }}
+        >
+          Primary
+        </Button>
+        <Button
+          class="guarded"
+          onPointerDown={event => {
+            if (mode() === 2) event.preventDefault();
+          }}
+          onPointerUp={event => {
+            if (mode() === 3) event.preventDefault();
+          }}
+          onClick={() => {
+            guarded++;
             publish();
-          }
-        }}>
-        Primary
-      </Button>
-      <Button class="guarded"
-        onPointerDown={event => { if (mode() === 2) event.preventDefault(); }}
-        onPointerUp={event => { if (mode() === 3) event.preventDefault(); }}
-        onClick={() => { guarded++; publish(); }}>
-        Guarded
-      </Button>
-      <Button class="disabled" disabled
-        onClick={() => { disabled++; publish(); }}>
-        Disabled
-      </Button>
+          }}
+        >
+          Guarded
+        </Button>
+        <Button
+          class="disabled"
+          disabled
+          onClick={() => {
+            disabled++;
+            publish();
+          }}
+        >
+          Disabled
+        </Button>
+      </column>
+      <text class="report">{report()}</text>
     </column>
-    <text class="report">{report()}</text>
-  </column>;
+  );
 }
 
 export const hostApiVersion = 1;
 export function mount(root: NativeNode): () => void {
   const dispose = renderApp(() => <Controls />, root);
-  return () => { nextMode = undefined; dispose(); };
+  return () => {
+    nextMode = undefined;
+    dispose();
+  };
 }
 export function advance(): void {
   if (!nextMode) throw new Error("Native controls fixture is not mounted");

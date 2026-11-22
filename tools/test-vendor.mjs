@@ -4,26 +4,46 @@ const SUITES = [
   {
     crate: "zgui-runtime",
     args: [
-      "--test", "controlled",
-      "--test", "value",
-      "--test", "editing",
-      "--test", "caret",
-      "--test", "cursor",
-      "--test", "popup_auto_height",
-      "--test", "geometry_observation",
-      "--test", "observe_owed",
-      "--test", "observed_place",
-      "--test", "scale",
-      "--test", "damage",
-      "--test", "shared_text",
-      "--test", "anim_lifecycle",
-      "--test", "scroll_root",
-      "--test", "scroll_touchpad",
-      "--test", "scroll_owed",
-      "--test", "style_revisions",
-      "--test", "image_policy",
-      "--test", "shell_lifecycle",
-      "--test", "document_selection",
+      "--test",
+      "controlled",
+      "--test",
+      "value",
+      "--test",
+      "editing",
+      "--test",
+      "caret",
+      "--test",
+      "cursor",
+      "--test",
+      "popup_auto_height",
+      "--test",
+      "geometry_observation",
+      "--test",
+      "observe_owed",
+      "--test",
+      "observed_place",
+      "--test",
+      "scale",
+      "--test",
+      "damage",
+      "--test",
+      "shared_text",
+      "--test",
+      "anim_lifecycle",
+      "--test",
+      "scroll_root",
+      "--test",
+      "scroll_touchpad",
+      "--test",
+      "scroll_owed",
+      "--test",
+      "style_revisions",
+      "--test",
+      "image_policy",
+      "--test",
+      "shell_lifecycle",
+      "--test",
+      "document_selection",
     ],
   },
   {
@@ -36,35 +56,31 @@ const SUITES = [
   },
   {
     crate: "zgui-platform-wayland",
-    args: [
-      "--lib", "theme",
-    ],
+    args: ["--lib", "theme"],
+  },
+  {
+    crate: "zgui-platform-wayland",
+    args: ["--lib", "clipboard"],
+  },
+  {
+    crate: "zgui-platform-wayland",
+    args: ["--lib", "input::dnd"],
+  },
+  {
+    crate: "zgui-platform-wayland",
+    args: ["--lib", "surface::seat"],
   },
   {
     crate: "zgui-platform-wayland",
     args: [
-      "--lib", "clipboard",
-    ],
-  },
-  {
-    crate: "zgui-platform-wayland",
-    args: [
-      "--lib", "input::dnd",
-    ],
-  },
-  {
-    crate: "zgui-platform-wayland",
-    args: [
-      "--lib", "surface::seat",
-    ],
-  },
-  {
-    crate: "zgui-platform-wayland",
-    args: [
-      "--test", "layer_protocol",
-      "--test", "session_lock_protocol",
-      "--test", "popup_protocol",
-      "--test", "dnd_source_protocol",
+      "--test",
+      "layer_protocol",
+      "--test",
+      "session_lock_protocol",
+      "--test",
+      "popup_protocol",
+      "--test",
+      "dnd_source_protocol",
     ],
   },
   {
@@ -175,6 +191,14 @@ if (fetchOnly) {
   }
 } else {
   for (const suite of selected) {
-    runCargo(["test", "-j", "4", "--manifest-path", `vendor/${suite.crate}/Cargo.toml`, ...suite.args, "--offline"]);
+    runCargo([
+      "test",
+      "-j",
+      "4",
+      "--manifest-path",
+      `vendor/${suite.crate}/Cargo.toml`,
+      ...suite.args,
+      "--offline",
+    ]);
   }
 }

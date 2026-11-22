@@ -1,6 +1,14 @@
 import {
-  Badge, Button, ButtonGroup, ButtonGroupSeparator, ButtonGroupText,
-  Icon, Kbd, KbdGroup, Separator, Spinner,
+  Badge,
+  Button,
+  ButtonGroup,
+  ButtonGroupSeparator,
+  ButtonGroupText,
+  Icon,
+  Kbd,
+  KbdGroup,
+  Separator,
+  Spinner,
 } from "@hewel/zgui/components";
 import { PLUS } from "@hewel/zgui/icons";
 import { DemoRow, Panel } from "../shell.js";
@@ -13,18 +21,38 @@ export function AtomsSection(props: { onAction: (label: string) => void }) {
         note="Six variants, sizes, icon button, loading state, and joined groups"
       >
         <DemoRow label="Variants">
-          <Button testId="btn-default" onClick={() => props.onAction("Button: Default")}>Default</Button>
-          <Button variant="secondary" onClick={() => props.onAction("Button: Secondary")}>Secondary</Button>
-          <Button variant="destructive" onClick={() => props.onAction("Button: Destructive")}>Destructive</Button>
-          <Button variant="outline" onClick={() => props.onAction("Button: Outline")}>Outline</Button>
-          <Button variant="ghost" onClick={() => props.onAction("Button: Ghost")}>Ghost</Button>
-          <Button variant="link" onClick={() => props.onAction("Button: Link")}>Link</Button>
+          <Button testId="btn-default" onClick={() => props.onAction("Button: Default")}>
+            Default
+          </Button>
+          <Button variant="secondary" onClick={() => props.onAction("Button: Secondary")}>
+            Secondary
+          </Button>
+          <Button variant="destructive" onClick={() => props.onAction("Button: Destructive")}>
+            Destructive
+          </Button>
+          <Button variant="outline" onClick={() => props.onAction("Button: Outline")}>
+            Outline
+          </Button>
+          <Button variant="ghost" onClick={() => props.onAction("Button: Ghost")}>
+            Ghost
+          </Button>
+          <Button variant="link" onClick={() => props.onAction("Button: Link")}>
+            Link
+          </Button>
         </DemoRow>
         <DemoRow label="Sizes, icon & loading">
-          <Button size="xs" variant="outline">XS</Button>
-          <Button size="sm" variant="outline">Small</Button>
-          <Button size="lg" variant="outline">Large</Button>
-          <Button size="icon" variant="outline" ariaLabel="Add"><Icon icon={PLUS} /></Button>
+          <Button size="xs" variant="outline">
+            XS
+          </Button>
+          <Button size="sm" variant="outline">
+            Small
+          </Button>
+          <Button size="lg" variant="outline">
+            Large
+          </Button>
+          <Button size="icon" variant="outline" ariaLabel="Add">
+            <Icon icon={PLUS} />
+          </Button>
           <Button size="sm" onClick={() => props.onAction("Create item")}>
             <Icon icon={PLUS} size="sm" />
             <text>Create</text>
@@ -36,14 +64,22 @@ export function AtomsSection(props: { onAction: (label: string) => void }) {
         </DemoRow>
         <DemoRow label="ButtonGroup">
           <ButtonGroup>
-            <Button variant="outline" size="sm" onClick={() => props.onAction("Prev")}>Prev</Button>
+            <Button variant="outline" size="sm" onClick={() => props.onAction("Prev")}>
+              Prev
+            </Button>
             <ButtonGroupText>2 / 5</ButtonGroupText>
-            <Button variant="outline" size="sm" onClick={() => props.onAction("Next")}>Next</Button>
+            <Button variant="outline" size="sm" onClick={() => props.onAction("Next")}>
+              Next
+            </Button>
           </ButtonGroup>
           <ButtonGroup>
-            <Button variant="secondary" size="sm" onClick={() => props.onAction("Copy")}>Copy</Button>
+            <Button variant="secondary" size="sm" onClick={() => props.onAction("Copy")}>
+              Copy
+            </Button>
             <ButtonGroupSeparator />
-            <Button variant="secondary" size="sm" onClick={() => props.onAction("Paste")}>Paste</Button>
+            <Button variant="secondary" size="sm" onClick={() => props.onAction("Paste")}>
+              Paste
+            </Button>
           </ButtonGroup>
         </DemoRow>
       </Panel>

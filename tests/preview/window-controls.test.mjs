@@ -120,9 +120,14 @@ test("renderApp primary window controls, synchronous close veto, force close, an
   const temp = await createTempWorkspace("preview-window-controls-");
   t.after(() => temp.cleanup());
   // Intentionally NO capabilities.shellSurfaces: renderApp gets auxiliary WindowSurface natively!
-  const bundle = await buildFixtureApp(path.join(temp.dir, "app"), "window-controls", windowControlsPreviewSource, {
-    rawSource: true,
-  });
+  const bundle = await buildFixtureApp(
+    path.join(temp.dir, "app"),
+    "window-controls",
+    windowControlsPreviewSource,
+    {
+      rawSource: true,
+    },
+  );
 
   const click = (id, testId, surface = "main") => ({
     id,

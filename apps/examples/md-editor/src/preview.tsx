@@ -68,9 +68,16 @@ export function MarkdownPreview(props: {
       <Show when={props.pastedImg()}>
         {src => (
           <column class="md-figure md-pasted-card" testId="pasted-image-card">
-            <row style={{ width: "100%", "justify-content": "space-between", "align-items": "center" }}>
+            <row
+              style={{ width: "100%", "justify-content": "space-between", "align-items": "center" }}
+            >
               <Badge variant="secondary">Clipboard Image Preview</Badge>
-              <Button testId="btn-clear-pasted-img" size="xs" variant="ghost" onClick={props.onClearPastedImg}>
+              <Button
+                testId="btn-clear-pasted-img"
+                size="xs"
+                variant="ghost"
+                onClick={props.onClearPastedImg}
+              >
                 Dismiss Image
               </Button>
             </row>
@@ -95,11 +102,7 @@ export function MarkdownPreview(props: {
           }
 
           if (block.kind === "paragraph") {
-            return (
-              <box class="md-p">
-                {renderInlines(block.inlines, props.onLinkClick)}
-              </box>
-            );
+            return <box class="md-p">{renderInlines(block.inlines, props.onLinkClick)}</box>;
           }
 
           if (block.kind === "hr") {
@@ -107,11 +110,7 @@ export function MarkdownPreview(props: {
           }
 
           if (block.kind === "blockquote") {
-            return (
-              <box class="md-quote">
-                {renderInlines(block.inlines, props.onLinkClick)}
-              </box>
-            );
+            return <box class="md-quote">{renderInlines(block.inlines, props.onLinkClick)}</box>;
           }
 
           if (block.kind === "callout") {
@@ -121,9 +120,7 @@ export function MarkdownPreview(props: {
                   {CALLOUT_LABELS[block.callout]}
                 </text>
                 {block.lines.map(line => (
-                  <box class="md-callout-body">
-                    {renderInlines(line, props.onLinkClick)}
-                  </box>
+                  <box class="md-callout-body">{renderInlines(line, props.onLinkClick)}</box>
                 ))}
               </column>
             );
@@ -174,9 +171,7 @@ export function MarkdownPreview(props: {
                         ariaLabel={`Toggle task at line ${item.lineIndex + 1}`}
                       />
                     ) : (
-                      <text class="md-list-marker">
-                        {block.ordered ? `${idx + 1}.` : "•"}
-                      </text>
+                      <text class="md-list-marker">{block.ordered ? `${idx + 1}.` : "•"}</text>
                     )}
                     <box
                       class="md-list-content"

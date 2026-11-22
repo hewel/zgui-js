@@ -100,7 +100,9 @@ export async function scanWorkspaceDir(dir: DirHandle): Promise<ScannedWorkspace
 
 export interface WorkspaceController {
   readonly openLocalFile: () => Promise<{ doc: MarkdownDoc; handle: FileHandle } | null>;
-  readonly saveDocument: (doc: MarkdownDoc) => Promise<{ savedName: string; relativePath?: string } | null>;
+  readonly saveDocument: (
+    doc: MarkdownDoc,
+  ) => Promise<{ savedName: string; relativePath?: string } | null>;
   readonly openFolder: (
     onExternalEvents: (events: readonly WatchEvent[]) => void,
   ) => Promise<{ dir: DirHandle; bookmarkToken: string | null; scanned: ScannedWorkspace } | null>;
@@ -137,7 +139,11 @@ export function createWorkspaceController(): WorkspaceController {
       activeDir.close();
     }
     activeDir = nextDir;
-    activeWatcherStop = watchDirectory(nextDir, { recursive: true, debounceMs: 60 }, onExternalEvents);
+    activeWatcherStop = watchDirectory(
+      nextDir,
+      { recursive: true, debounceMs: 60 },
+      onExternalEvents,
+    );
   };
 
   return {

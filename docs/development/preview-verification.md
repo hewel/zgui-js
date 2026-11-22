@@ -43,14 +43,14 @@ no-replace publication.
 
 ### Observed gates
 
-| Gate | Result and evidence |
-| --- | --- |
-| PV01: real renderer and fonts | Passed. Actual Vulkan/wgpu pixels and native shaped/rasterized text; `target/preview-p0-calibration/calibration.png` is 1400 × 1050 at scale 1.75. Its bytes match the earlier calibration image that was opened and visually reviewed. |
-| PV02: unavailable adapter | Passed. `ZGUI_BACKENDS=none` returned exit 7 / `E_GRAPHICS_UNAVAILABLE`; no PNG was published. |
-| PV03: extent, orientation, channels, stride | Passed. Real 1400-wide and odd 1399-wide readbacks; corner swatches and tightly packed lengths checked by the calibration. |
-| PV04: color and alpha | Passed for the opaque capture scope. Gray and half-alpha-over-white swatches match gamma-encoded compositing; every final alpha is 255. Separate conversion tests cover zero/low/opaque alpha and BGRA ordering without an extra transfer curve. |
-| Hard watchdog | Passed. Public 1 ms deadline returned exit 5 / `E_WATCHDOG`. An isolated blocked subprocess regression also verified termination without a teardown claim. |
-| Artifact protocol | Passed. All three public CLI results matched their saved `result.json`; every inventoried file's length and SHA-256 matched. Successful stdout was 2766 bytes. |
+| Gate                                        | Result and evidence                                                                                                                                                                                                                              |
+| ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| PV01: real renderer and fonts               | Passed. Actual Vulkan/wgpu pixels and native shaped/rasterized text; `target/preview-p0-calibration/calibration.png` is 1400 × 1050 at scale 1.75. Its bytes match the earlier calibration image that was opened and visually reviewed.          |
+| PV02: unavailable adapter                   | Passed. `ZGUI_BACKENDS=none` returned exit 7 / `E_GRAPHICS_UNAVAILABLE`; no PNG was published.                                                                                                                                                   |
+| PV03: extent, orientation, channels, stride | Passed. Real 1400-wide and odd 1399-wide readbacks; corner swatches and tightly packed lengths checked by the calibration.                                                                                                                       |
+| PV04: color and alpha                       | Passed for the opaque capture scope. Gray and half-alpha-over-white swatches match gamma-encoded compositing; every final alpha is 255. Separate conversion tests cover zero/low/opaque alpha and BGRA ordering without an extra transfer curve. |
+| Hard watchdog                               | Passed. Public 1 ms deadline returned exit 5 / `E_WATCHDOG`. An isolated blocked subprocess regression also verified termination without a teardown claim.                                                                                       |
+| Artifact protocol                           | Passed. All three public CLI results matched their saved `result.json`; every inventoried file's length and SHA-256 matched. Successful stdout was 2766 bytes.                                                                                   |
 
 The native renderer reported AMD Radeon RX 7900 XTX (RADV NAVI31), Vulkan,
 Mesa `26.2.6-arch3.1`, `Bgra8Unorm` target/scene, `Rgba8Unorm` scratch,
@@ -145,16 +145,16 @@ application code or labels historical evidence as a fresh successful capture.
 
 ### Observed gates
 
-| Gate | Result and evidence |
-| --- | --- |
-| PV05: production TSX path | Passed. Counter displays `Count: 0`, `Doubled: 0` and `Increment`; real 1400 × 1050 PNG visually checked. Final evidence: `target/preview-p1-v2-counter/`. |
-| PV06: package integrity/publication | Passed. Existing loader tests verify declared-resource integrity and source maps. A mixed entry/manifest bundle returned `E_BUNDLE` without mounting. |
-| PV07: actual source mapping | Passed. A compiled TSX mount exception retained generated `app.mjs` coordinates and mapped `src/main.tsx:7`, with the producing build/map digest. |
-| PV08: failed mount | Passed. No capture claimed; all eight resource counters/engine ownership returned to zero. |
-| Fixture-only construction | Passed. Caught and uncaught mount attempts and a caught disposer attempt returned `E_FIXTURE_MISSING_SERVICE`, never success. |
-| Teardown failure evidence | Passed. A throwing disposer returned `E_TEARDOWN`; historical tree/frame/PNG remained available, with no claim of clean teardown. |
-| Bounded control/artifacts | Passed. A 70 KiB package ID stayed in the detailed identity artifact while stdout remained bounded. An output-budget failure retained the original mapped JS error through controller publication failures. |
-| Graphics/watchdog | Passed. No adapter returned exit 7; a 1 ms watchdog returned exit 5 with teardown explicitly unverified. |
+| Gate                                | Result and evidence                                                                                                                                                                                         |
+| ----------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| PV05: production TSX path           | Passed. Counter displays `Count: 0`, `Doubled: 0` and `Increment`; real 1400 × 1050 PNG visually checked. Final evidence: `target/preview-p1-v2-counter/`.                                                  |
+| PV06: package integrity/publication | Passed. Existing loader tests verify declared-resource integrity and source maps. A mixed entry/manifest bundle returned `E_BUNDLE` without mounting.                                                       |
+| PV07: actual source mapping         | Passed. A compiled TSX mount exception retained generated `app.mjs` coordinates and mapped `src/main.tsx:7`, with the producing build/map digest.                                                           |
+| PV08: failed mount                  | Passed. No capture claimed; all eight resource counters/engine ownership returned to zero.                                                                                                                  |
+| Fixture-only construction           | Passed. Caught and uncaught mount attempts and a caught disposer attempt returned `E_FIXTURE_MISSING_SERVICE`, never success.                                                                               |
+| Teardown failure evidence           | Passed. A throwing disposer returned `E_TEARDOWN`; historical tree/frame/PNG remained available, with no claim of clean teardown.                                                                           |
+| Bounded control/artifacts           | Passed. A 70 KiB package ID stayed in the detailed identity artifact while stdout remained bounded. An output-budget failure retained the original mapped JS error through controller publication failures. |
+| Graphics/watchdog                   | Passed. No adapter returned exit 7; a 1 ms watchdog returned exit 5 with teardown explicitly unverified.                                                                                                    |
 
 Focused checks covered scenario/fixture preflight, session/provider policy,
 package integrity/mapping, bridge topology, enclosing JS deadlines, publication
@@ -241,15 +241,15 @@ both snapshot digest and query. Responses remain within 8 KiB.
 
 ### Observed gates
 
-| Gate | Result and evidence |
-| --- | --- |
-| PV09: real native activation | Passed. Counter changed from `Count: 0` to `Count: 1` through native pointer events, with coherent before/after captures. |
-| PV10: selector errors | Passed. Missing and duplicate IDs returned exit 4 with bounded candidates and frame identity; no fallback target. |
-| PV11: clipped/obscured targets | Passed. Fully clipped and covered controls failed without activation; partially clipped and transformed controls each activated through actual hit testing. Disabled ancestors and hidden controls also failed explicitly. |
-| PV12: scale conversion | Passed at 1, 1.25, 1.5, 1.75 and 2. Logical/device input coordinates and actual PNG extents matched; every run incremented once. |
-| PV13: keyboard defaults | Passed. Tab focused controls; Enter cancellation suppressed activation; Space activated. Native Home/Shift+ArrowRight selection followed by IME commit replaced `a` with `界`, producing `界bc` in both the editor and its input-event consumer. |
-| PV14: saved inspection | Passed with graphics disabled and an invalid Wayland endpoint. The selected initial/after captures returned different correct counter values; ten-node pagination was complete and a cursor from the other capture was rejected. |
-| PV15: incremental semantic tree | Passed. Ordered native-provider tests cover unchanged nodes, focus, root replacement and retirement. Public branch removal removed `Retired child` from the retained full semantic tree; metadata rename retired the old test ID. |
+| Gate                            | Result and evidence                                                                                                                                                                                                                              |
+| ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| PV09: real native activation    | Passed. Counter changed from `Count: 0` to `Count: 1` through native pointer events, with coherent before/after captures.                                                                                                                        |
+| PV10: selector errors           | Passed. Missing and duplicate IDs returned exit 4 with bounded candidates and frame identity; no fallback target.                                                                                                                                |
+| PV11: clipped/obscured targets  | Passed. Fully clipped and covered controls failed without activation; partially clipped and transformed controls each activated through actual hit testing. Disabled ancestors and hidden controls also failed explicitly.                       |
+| PV12: scale conversion          | Passed at 1, 1.25, 1.5, 1.75 and 2. Logical/device input coordinates and actual PNG extents matched; every run incremented once.                                                                                                                 |
+| PV13: keyboard defaults         | Passed. Tab focused controls; Enter cancellation suppressed activation; Space activated. Native Home/Shift+ArrowRight selection followed by IME commit replaced `a` with `界`, producing `界bc` in both the editor and its input-event consumer. |
+| PV14: saved inspection          | Passed with graphics disabled and an invalid Wayland endpoint. The selected initial/after captures returned different correct counter values; ten-node pagination was complete and a cursor from the other capture was rejected.                 |
+| PV15: incremental semantic tree | Passed. Ordered native-provider tests cover unchanged nodes, focus, root replacement and retirement. Public branch removal removed `Retired child` from the retained full semantic tree; metadata rename retired the old test ID.                |
 
 The fifteen public runs are retained under `target/preview-p2-v1-*`. Every
 inventoried artifact's length/hash and terminal stdout/result agreement was
@@ -347,20 +347,20 @@ not make the old logical configuration current.
 
 ### Observed gates
 
-| Case | Observed result |
-| --- | --- |
-| PV16 | Infinite JS under a frozen clock exits 5 with `E_JOB_BUDGET`; no virtual advance is required. |
-| PV17 | Infinite queued work is bounded; a throwing job exits 3 and preserves `original-p3-job-error`. |
-| PV18 | A 0.25 ms native timer fires at its actual deadline; equal-deadline cancellation preserves A→Promise ordering and suppresses B. |
-| PV19 | Resize/scale retain the held timestamp. A resize then scale returning to the original pixel extent cannot validate the old logical configuration or dispatch against it. |
-| PV20 | Native validation ordinals include genuine additional frames at 0, 40 and 80 ms; unchanged pixels retain their earlier presentation identity. |
-| PV21 | Loading captures succeed while 25/50 ms fixture responses remain pending; subsequent explicit advances render their results. |
+| Case | Observed result                                                                                                                                                                                                                               |
+| ---- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| PV16 | Infinite JS under a frozen clock exits 5 with `E_JOB_BUDGET`; no virtual advance is required.                                                                                                                                                 |
+| PV17 | Infinite queued work is bounded; a throwing job exits 3 and preserves `original-p3-job-error`.                                                                                                                                                |
+| PV18 | A 0.25 ms native timer fires at its actual deadline; equal-deadline cancellation preserves A→Promise ordering and suppresses B.                                                                                                               |
+| PV19 | Resize/scale retain the held timestamp. A resize then scale returning to the original pixel extent cannot validate the old logical configuration or dispatch against it.                                                                      |
+| PV20 | Native validation ordinals include genuine additional frames at 0, 40 and 80 ms; unchanged pixels retain their earlier presentation identity.                                                                                                 |
+| PV21 | Loading captures succeed while 25/50 ms fixture responses remain pending; subsequent explicit advances render their results.                                                                                                                  |
 | PV22 | Historical: `service.emit` changed fixture state; missing assets/niri providers failed with exit 6. The retired absent-niri test's owned Unix sentinel observed zero live connections. The niri provider and its tests are no longer shipped. |
-| PV23 | Historical: same-deadline asset completions retained request order; two declared niri events retained source order. Zero-latency completion was deferred until after the caller returned. The niri event case is no longer shipped. |
-| PV24 | Actual GPU captures cover placeholder→red→blue→clear, corrupt/remote failure, offscreen→visible, and real atlas exhaustion. Controlled delayed-worker tests reject stale replacement/clear completions. |
-| PV25 | Timeline reruns produce byte-identical PNGs and service traces, matching shipped font identities, UTC Date values, native performance time and seeded random values despite a Honolulu parent timezone. |
-| PV26 | Saved inspection enforces tree/frame/resource/configuration identities without GPU access. Complete artifact inventories verify 760 byte lengths and SHA-256 digests across the final v3/v4 matrices. |
-| PV27 | Held pacing/configuration and exact-time mismatch reject stale pixels with exit 5; the existing graphics boundary remains distinct from asset allocation failure. |
+| PV23 | Historical: same-deadline asset completions retained request order; two declared niri events retained source order. Zero-latency completion was deferred until after the caller returned. The niri event case is no longer shipped.           |
+| PV24 | Actual GPU captures cover placeholder→red→blue→clear, corrupt/remote failure, offscreen→visible, and real atlas exhaustion. Controlled delayed-worker tests reject stale replacement/clear completions.                                       |
+| PV25 | Timeline reruns produce byte-identical PNGs and service traces, matching shipped font identities, UTC Date values, native performance time and seeded random values despite a Honolulu parent timezone.                                       |
+| PV26 | Saved inspection enforces tree/frame/resource/configuration identities without GPU access. Complete artifact inventories verify 760 byte lengths and SHA-256 digests across the final v3/v4 matrices.                                         |
+| PV27 | Held pacing/configuration and exact-time mismatch reject stale pixels with exit 5; the existing graphics boundary remains distinct from asset allocation failure.                                                                             |
 
 Focused gates passed:
 
@@ -552,7 +552,16 @@ so a `LayerSurface` stretching horizontally without margins uses 600 logical pix
   "id": "plug",
   "op": "monitors.set",
   "monitors": [
-    { "id": "left", "name": "Left", "x": 0, "y": 0, "width": 1200, "height": 800, "scale": 2, "refreshRateMilliHz": 60000 }
+    {
+      "id": "left",
+      "name": "Left",
+      "x": 0,
+      "y": 0,
+      "width": 1200,
+      "height": 800,
+      "scale": 2,
+      "refreshRateMilliHz": 60000
+    }
   ]
 }
 ```
@@ -716,11 +725,11 @@ The foreground retained its PID and generation throughout.
 
 Full-output captures after presentation showed:
 
-| Sample | Green background RGB | Blue background RGB |
-| --- | --- | --- |
-| Transparent area | 0, 255, 0 | 0, 0, 255 |
-| Half-alpha red | 128, 127, 0 | 128, 0, 127 |
-| Opaque reference | 255, 0, 0 | 255, 0, 0 |
+| Sample           | Green background RGB | Blue background RGB |
+| ---------------- | -------------------- | ------------------- |
+| Transparent area | 0, 255, 0            | 0, 0, 255           |
+| Half-alpha red   | 128, 127, 0          | 128, 0, 127         |
+| Opaque reference | 255, 0, 0            | 255, 0, 0           |
 
 These are compositor-composited pixels, not an offscreen alpha-channel assertion.
 They describe this desktop's observed blending path, not a cross-compositor color

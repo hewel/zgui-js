@@ -1,6 +1,14 @@
 #!/usr/bin/env bun
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -39,7 +47,9 @@ function parseArgs(argv) {
 
 function readBinaryInfo(binary) {
   if (!existsSync(binary)) {
-    throw new Error(`native-host binary not found at ${binary}. Run: nix-shell --run "cargo build --release -p native-host --offline"`);
+    throw new Error(
+      `native-host binary not found at ${binary}. Run: nix-shell --run "cargo build --release -p native-host --offline"`,
+    );
   }
   const bytes = statSync(binary).size;
   let sections = null;
@@ -84,7 +94,9 @@ function writeSysmonFixture(filePath) {
           program: "/usr/bin/uname",
           args: ["-srm"],
           mode: "buffered",
-          events: [{ kind: "output", atMs: 1, status: 0, stdout: "Linux 6.12.0 x86_64\n", stderr: "" }],
+          events: [
+            { kind: "output", atMs: 1, status: 0, stdout: "Linux 6.12.0 x86_64\n", stderr: "" },
+          ],
         },
         {
           program: "/usr/bin/free",
@@ -259,7 +271,9 @@ function measurePreview(binary, bundle, fixturePath, scenarioPath, outDir, width
 }
 
 function fmtMiB(bytes) {
-  return bytes === null || bytes === undefined ? "n/a" : `${(bytes / (1024 * 1024)).toFixed(2)} MiB`;
+  return bytes === null || bytes === undefined
+    ? "n/a"
+    : `${(bytes / (1024 * 1024)).toFixed(2)} MiB`;
 }
 
 function fmtKiB(bytes) {
@@ -310,7 +324,10 @@ async function main() {
         const appDir = path.join(root, "apps/examples", app);
         distDir = path.join(appDir, "dist");
         if (opts.build || !existsSync(path.join(distDir, "manifest.json"))) {
-          const build = spawnSync("bun", ["run", "build", "--app", app], { cwd: root, encoding: "utf8" });
+          const build = spawnSync("bun", ["run", "build", "--app", app], {
+            cwd: root,
+            encoding: "utf8",
+          });
           if (build.status !== 0) {
             throw new Error(`Failed to build ${app}: ${build.stderr || build.stdout}`);
           }

@@ -1,8 +1,17 @@
 import { createSignal } from "@hewel/zgui";
 import type { NativeNode } from "@hewel/zgui";
 import {
-  Button, Icon, Input, InputGroup, InputGroupAddon, InputGroupButton,
-  InputGroupInput, InputGroupText, InputGroupTextarea, Label, Textarea,
+  Button,
+  Icon,
+  Input,
+  InputGroup,
+  InputGroupAddon,
+  InputGroupButton,
+  InputGroupInput,
+  InputGroupText,
+  InputGroupTextarea,
+  Label,
+  Textarea,
 } from "@hewel/zgui/components";
 import { SEARCH } from "@hewel/zgui/icons";
 import { DemoRow, Panel } from "../shell.js";
@@ -26,7 +35,9 @@ export function FieldsSection(props: { onAction: (label: string) => void }) {
           <Label control={() => nameInput}>Display name</Label>
           <Input
             testId="inputs-name"
-            ref={el => { nameInput = el; }}
+            ref={el => {
+              nameInput = el;
+            }}
             label="Display name"
             value={name()}
             onValueChange={value => {
@@ -61,7 +72,9 @@ export function FieldsSection(props: { onAction: (label: string) => void }) {
         <column class="demo-stack">
           <text class="demo-row-label">Search bar with leading icon & trailing action</text>
           <InputGroup>
-            <InputGroupAddon><Icon icon={SEARCH} size="sm" /></InputGroupAddon>
+            <InputGroupAddon>
+              <Icon icon={SEARCH} size="sm" />
+            </InputGroupAddon>
             <InputGroupInput
               value={query()}
               onValueChange={setQuery}

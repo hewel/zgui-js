@@ -10,13 +10,17 @@
     "schemaVersion": { "type": "integer", "const": 1 },
     "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "\\S" },
     "runtimeEnvironment": {
-      "type": "object", "additionalProperties": false,
+      "type": "object",
+      "additionalProperties": false,
       "description": "Synthetic values for sealed paths. No ambient environment or filesystem lookup.",
       "properties": {
         "xdgRuntimeDir": { "$ref": "../package.schema.json#/$defs/literalHostPath" },
         "homeDir": { "$ref": "../package.schema.json#/$defs/literalHostPath" },
         "xdgDataHome": { "$ref": "../package.schema.json#/$defs/literalHostPath" },
-        "waylandDisplay": { "type": "string", "pattern": "^(?!\\.{1,2}(?![\\s\\S]))[^/\\\\\\u0000-\\u001f\\u007f-\\u009f]+(?![\\s\\S])" },
+        "waylandDisplay": {
+          "type": "string",
+          "pattern": "^(?!\\.{1,2}(?![\\s\\S]))[^/\\\\\\u0000-\\u001f\\u007f-\\u009f]+(?![\\s\\S])"
+        },
         "namedSockets": {
           "type": "object",
           "propertyNames": { "$ref": "../package.schema.json#/$defs/socketName" },
@@ -29,7 +33,8 @@
       "additionalProperties": false,
       "properties": {
         "assets": {
-          "type": "object", "additionalProperties": false,
+          "type": "object",
+          "additionalProperties": false,
           "required": ["provider", "latencyMs", "initialState"],
           "properties": {
             "provider": { "const": "mock-text-assets-v1" },
@@ -38,16 +43,19 @@
           }
         },
         "images": {
-          "type": "object", "additionalProperties": false,
+          "type": "object",
+          "additionalProperties": false,
           "properties": {
             "files": {
-              "type": "object", "default": {},
+              "type": "object",
+              "default": {},
               "description": "Exact file:// URIs map to manifest-declared assets; imagePrefixes authority is still required.",
               "propertyNames": { "pattern": "^file:///" },
               "additionalProperties": { "$ref": "../package.schema.json#/$defs/path" }
             },
             "blobs": {
-              "type": "object", "default": {},
+              "type": "object",
+              "default": {},
               "description": "Declared registration asset paths map to declared assets supplying fixture bytes.",
               "propertyNames": { "$ref": "../package.schema.json#/$defs/path" },
               "additionalProperties": { "$ref": "../package.schema.json#/$defs/path" }
@@ -55,27 +63,32 @@
           }
         },
         "sockets": {
-          "type": "array", "maxItems": 1024,
+          "type": "array",
+          "maxItems": 1024,
           "description": "Required to connect. Each connect consumes the next script exactly; all listed scripts must be consumed.",
           "items": { "$ref": "#/$defs/socketScript" }
         },
         "commands": {
-          "type": "array", "maxItems": 1024,
+          "type": "array",
+          "maxItems": 1024,
           "description": "Required to spawn. Each spawn consumes the next script exactly; all listed scripts must be consumed.",
           "items": { "$ref": "#/$defs/commandScript" }
         },
         "control": {
-          "type": "object", "additionalProperties": false,
+          "type": "object",
+          "additionalProperties": false,
           "description": "Enables fixture control registration and control.message events without an OS listener."
         }
       }
     },
     "events": {
-      "type": "array", "maxItems": 4096,
+      "type": "array",
+      "maxItems": 4096,
       "items": {
         "oneOf": [
           {
-            "type": "object", "additionalProperties": false,
+            "type": "object",
+            "additionalProperties": false,
             "required": ["atMs", "channel", "value"],
             "properties": {
               "atMs": { "$ref": "#/$defs/milliseconds" },
@@ -84,7 +97,8 @@
             }
           },
           {
-            "type": "object", "additionalProperties": false,
+            "type": "object",
+            "additionalProperties": false,
             "required": ["atMs", "channel", "value"],
             "properties": {
               "atMs": { "$ref": "#/$defs/milliseconds" },
@@ -99,24 +113,39 @@
   "$defs": {
     "milliseconds": { "type": "integer", "minimum": 0, "maximum": 4294967295 },
     "error": {
-      "type": "object", "additionalProperties": false, "required": ["code", "message"],
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "message"],
       "properties": {
         "code": { "enum": ["Io", "TooLarge", "InvalidUtf8"] },
-        "message": { "type": "string", "maxLength": 4096, "description": "Also limited to 4096 UTF-8 bytes at runtime." }
+        "message": {
+          "type": "string",
+          "maxLength": 4096,
+          "description": "Also limited to 4096 UTF-8 bytes at runtime."
+        }
       }
     },
     "nullableError": { "anyOf": [{ "$ref": "#/$defs/error" }, { "type": "null" }] },
     "socketScript": {
-      "type": "object", "additionalProperties": false, "required": ["path", "framing", "send", "events"],
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "framing", "send", "events"],
       "properties": {
-        "path": { "type": "string", "pattern": "^/", "description": "Canonical absolute Unix socket path." },
+        "path": {
+          "type": "string",
+          "pattern": "^/",
+          "description": "Canonical absolute Unix socket path."
+        },
         "framing": { "enum": ["line", "length"] },
         "send": {
-          "type": "array", "maxItems": 1024, "items": { "type": "string" },
+          "type": "array",
+          "maxItems": 1024,
+          "items": { "type": "string" },
           "description": "Exact outbound text in order, before scripted or explicit close. The run checks outstanding expectations at finalization; forced generation retirement discards pending work. Line framing forbids newline bytes."
         },
         "events": {
-          "type": "array", "maxItems": 1024,
+          "type": "array",
+          "maxItems": 1024,
           "description": "Sorted by call-relative atMs. Omit close to leave the socket open. Close, if present, must be last. Images require length framing.",
           "items": {
             "oneOf": [
@@ -141,83 +170,140 @@
       }
     },
     "socketMessage": {
-      "type": "object", "additionalProperties": false, "required": ["kind", "atMs", "text"],
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "atMs", "text"],
       "properties": {
-        "kind": { "const": "message" }, "atMs": { "$ref": "#/$defs/milliseconds" }, "text": { "type": "string" }
+        "kind": { "const": "message" },
+        "atMs": { "$ref": "#/$defs/milliseconds" },
+        "text": { "type": "string" }
       }
     },
     "socketImage": {
-      "type": "object", "additionalProperties": false, "required": ["kind", "atMs", "asset"],
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "atMs", "asset"],
       "properties": {
-        "kind": { "const": "image" }, "atMs": { "$ref": "#/$defs/milliseconds" },
-        "asset": { "$ref": "../package.schema.json#/$defs/path", "description": "Image bytes come from this declared package asset." }
+        "kind": { "const": "image" },
+        "atMs": { "$ref": "#/$defs/milliseconds" },
+        "asset": {
+          "$ref": "../package.schema.json#/$defs/path",
+          "description": "Image bytes come from this declared package asset."
+        }
       }
     },
     "socketClose": {
-      "type": "object", "additionalProperties": false, "required": ["kind", "atMs"],
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "atMs"],
       "properties": {
-        "kind": { "const": "close" }, "atMs": { "$ref": "#/$defs/milliseconds" }, "error": { "$ref": "#/$defs/nullableError" }
+        "kind": { "const": "close" },
+        "atMs": { "$ref": "#/$defs/milliseconds" },
+        "error": { "$ref": "#/$defs/nullableError" }
       }
     },
     "commandScript": {
-      "type": "object", "additionalProperties": false, "required": ["program", "args", "mode", "events"],
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["program", "args", "mode", "events"],
       "properties": {
         "program": { "type": "string", "minLength": 1 },
-        "args": { "type": "array", "items": { "type": "string" }, "description": "Ordered executable arguments, matched without shell interpretation." },
+        "args": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Ordered executable arguments, matched without shell interpretation."
+        },
         "mode": { "enum": ["buffered", "streaming"] },
         "events": {
-          "type": "array", "maxItems": 1024,
+          "type": "array",
+          "maxItems": 1024,
           "description": "Sorted by call-relative atMs. Output, exit, and error are terminal and must be last when present."
         }
       },
       "if": { "properties": { "mode": { "const": "buffered" } } },
       "then": {
-        "properties": { "events": { "items": { "oneOf": [{ "$ref": "#/$defs/commandOutput" }, { "$ref": "#/$defs/commandError" }] } } }
+        "properties": {
+          "events": {
+            "items": {
+              "oneOf": [{ "$ref": "#/$defs/commandOutput" }, { "$ref": "#/$defs/commandError" }]
+            }
+          }
+        }
       },
       "else": {
         "properties": {
           "events": {
-            "items": { "oneOf": [{ "$ref": "#/$defs/commandLine" }, { "$ref": "#/$defs/commandExit" }, { "$ref": "#/$defs/commandError" }] }
+            "items": {
+              "oneOf": [
+                { "$ref": "#/$defs/commandLine" },
+                { "$ref": "#/$defs/commandExit" },
+                { "$ref": "#/$defs/commandError" }
+              ]
+            }
           }
         }
       }
     },
     "commandLine": {
-      "type": "object", "additionalProperties": false, "required": ["kind", "atMs", "text"],
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "atMs", "text"],
       "properties": {
-        "kind": { "enum": ["stdout", "stderr"] }, "atMs": { "$ref": "#/$defs/milliseconds" }, "text": { "type": "string" }
+        "kind": { "enum": ["stdout", "stderr"] },
+        "atMs": { "$ref": "#/$defs/milliseconds" },
+        "text": { "type": "string" }
       }
     },
     "exitStatus": { "type": ["integer", "null"], "minimum": -2147483648, "maximum": 2147483647 },
     "commandOutput": {
-      "type": "object", "additionalProperties": false, "required": ["kind", "atMs", "status", "stdout", "stderr"],
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "atMs", "status", "stdout", "stderr"],
       "properties": {
-        "kind": { "const": "output" }, "atMs": { "$ref": "#/$defs/milliseconds" },
-        "status": { "$ref": "#/$defs/exitStatus" }, "stdout": { "type": "string" }, "stderr": { "type": "string" }
+        "kind": { "const": "output" },
+        "atMs": { "$ref": "#/$defs/milliseconds" },
+        "status": { "$ref": "#/$defs/exitStatus" },
+        "stdout": { "type": "string" },
+        "stderr": { "type": "string" }
       }
     },
     "commandExit": {
-      "type": "object", "additionalProperties": false, "required": ["kind", "atMs", "status"],
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "atMs", "status"],
       "properties": {
-        "kind": { "const": "exit" }, "atMs": { "$ref": "#/$defs/milliseconds" }, "status": { "$ref": "#/$defs/exitStatus" }
+        "kind": { "const": "exit" },
+        "atMs": { "$ref": "#/$defs/milliseconds" },
+        "status": { "$ref": "#/$defs/exitStatus" }
       }
     },
     "commandError": {
-      "type": "object", "additionalProperties": false, "required": ["kind", "atMs", "error"],
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "atMs", "error"],
       "properties": {
-        "kind": { "const": "error" }, "atMs": { "$ref": "#/$defs/milliseconds" }, "error": { "$ref": "#/$defs/error" }
+        "kind": { "const": "error" },
+        "atMs": { "$ref": "#/$defs/milliseconds" },
+        "error": { "$ref": "#/$defs/error" }
       }
     },
     "controlMessage": {
-      "type": "object", "additionalProperties": false, "required": ["args", "reply"],
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["args", "reply"],
       "description": "Requires services.control and a registered listener at dispatch. Also the value shape for service.emit control.message. Replies match literal text, serialized JSON, or literal error text exactly; an undefined handler return is the empty text reply.",
       "properties": {
         "args": {
-          "type": "array", "maxItems": 64, "items": { "type": "string" },
+          "type": "array",
+          "maxItems": 64,
+          "items": { "type": "string" },
           "description": "The serialized JSON argument array must not exceed 64 KiB of UTF-8."
         },
         "reply": {
-          "type": "object", "additionalProperties": false, "minProperties": 1, "maxProperties": 1,
+          "type": "object",
+          "additionalProperties": false,
+          "minProperties": 1,
+          "maxProperties": 1,
           "properties": {
             "text": { "$ref": "#/$defs/controlReplyText" },
             "error": { "$ref": "#/$defs/controlReplyText" }
@@ -225,15 +311,23 @@
         }
       }
     },
-    "controlReplyText": { "type": "string", "maxLength": 65536, "description": "Limited to 64 KiB of UTF-8." },
+    "controlReplyText": {
+      "type": "string",
+      "maxLength": 65536,
+      "description": "Limited to 64 KiB of UTF-8."
+    },
     "assetState": {
-      "type": "object", "additionalProperties": false, "required": ["assets"],
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["assets"],
       "properties": {
         "assets": {
-          "type": "object", "maxProperties": 1024,
+          "type": "object",
+          "maxProperties": 1024,
           "description": "Keys must be canonical package-relative manifest asset paths. Empty behavior reads verified package text. State replacement affects subsequent requests, not admitted requests.",
           "additionalProperties": {
-            "type": "object", "additionalProperties": false,
+            "type": "object",
+            "additionalProperties": false,
             "properties": { "error": { "$ref": "#/$defs/nullableError" } }
           }
         }

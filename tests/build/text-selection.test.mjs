@@ -48,8 +48,11 @@ test("getSelection, setSelection, and selectAll handle UTF-16 ranges, null acces
   globalThis.__zgui = h.host;
   let dispose;
   t.after(() => {
-    try { dispose?.(); }
-    finally { delete globalThis.__zgui; }
+    try {
+      dispose?.();
+    } finally {
+      delete globalThis.__zgui;
+    }
   });
 
   dispose = h.runTurn(() => mod.mount(h.makeNode("root")));

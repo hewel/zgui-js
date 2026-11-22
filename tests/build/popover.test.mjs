@@ -71,7 +71,9 @@ export function mountCancelled(root: NativeNode) {
 `;
 
 const textOf = current =>
-  current.tag === "#text" ? current.props.get("text") ?? "" : current.children.map(textOf).join("");
+  current.tag === "#text"
+    ? (current.props.get("text") ?? "")
+    : current.children.map(textOf).join("");
 
 async function mounted(t, mountName = "mount", allowScrollLock = false) {
   const h = createHost();
@@ -82,7 +84,11 @@ async function mounted(t, mountName = "mount", allowScrollLock = false) {
   const clock = createClock(t, h);
   let dispose;
   t.after(() => {
-    try { dispose?.(); } finally { delete globalThis.__zgui; }
+    try {
+      dispose?.();
+    } finally {
+      delete globalThis.__zgui;
+    }
     if (!allowScrollLock) assert.equal(locks.length, 0, "Popover must not lock scroll");
   });
   globalThis.__zgui = h.host;
@@ -95,10 +101,34 @@ async function mounted(t, mountName = "mount", allowScrollLock = false) {
   };
   const emit = (record, value) => record.emit(value);
   const end = node => h.dispatch(node, "AnimationEnd");
-  const flush = () => { h.flush(); clock.frame(); clock.advance(0); };
+  const flush = () => {
+    h.flush();
+    clock.frame();
+    clock.advance(0);
+  };
   const active = records => records.filter(record => record.active).length;
-  return { h, mod, clock, busy, traps, locks, layers, portals, geometry, root, click, emit, end, flush, active,
-    finish: () => { const stop = dispose; dispose = undefined; stop?.(); } };
+  return {
+    h,
+    mod,
+    clock,
+    busy,
+    traps,
+    locks,
+    layers,
+    portals,
+    geometry,
+    root,
+    click,
+    emit,
+    end,
+    flush,
+    active,
+    finish: () => {
+      const stop = dispose;
+      dispose = undefined;
+      stop?.();
+    },
+  };
 }
 
 test("popover mounts lazily, wires relations and acquires trap dismiss and geometry leases without a scrim", async t => {
@@ -109,7 +139,11 @@ test("popover mounts lazily, wires relations and acquires trap dismiss and geome
   mod.setCancel(true);
   h.flush();
   assert.equal(click("trigger"), true);
-  assert.equal(h.byTestId("surface"), undefined, "cancelled trigger click keeps the popover closed");
+  assert.equal(
+    h.byTestId("surface"),
+    undefined,
+    "cancelled trigger click keeps the popover closed",
+  );
   mod.setCancel(false);
   h.flush();
   click("trigger");
@@ -136,7 +170,13 @@ test("popover mounts lazily, wires relations and acquires trap dismiss and geome
   assert.deepEqual([traps[0].wrap, traps[0].autoFocus, traps[0].restore], [true, true, true]);
   assert.equal(layers.length, 1);
   assert.equal(layers[0].node, surface);
-  assert.deepEqual(layers[0].options, { layer: "popover", dismissOnOutsidePress: true, dismissOnEscape: true, exclude: trigger, leaving: false });
+  assert.deepEqual(layers[0].options, {
+    layer: "popover",
+    dismissOnOutsidePress: true,
+    dismissOnEscape: true,
+    exclude: trigger,
+    leaving: false,
+  });
   assert.equal(portals.length, 1);
   assert.equal(portals[0].layer, "popover");
   const scrims = [];
@@ -147,7 +187,10 @@ test("popover mounts lazily, wires relations and acquires trap dismiss and geome
   walk(portals[0].node);
   assert.equal(scrims.length, 0, "popover renders no scrim");
   assert.equal(geometry.length, 3);
-  assert.deepEqual(geometry.map(r => r.kind), ["borderBox", "contentSize", "viewport"]);
+  assert.deepEqual(
+    geometry.map(r => r.kind),
+    ["borderBox", "contentSize", "viewport"],
+  );
   assert.equal(geometry[0].node, trigger);
   const positioner = h.parents.get(surface);
   assert.equal(positioner.props.get("style").visibility, "hidden");
@@ -169,7 +212,8 @@ test("popover mounts lazily, wires relations and acquires trap dismiss and geome
 });
 
 test("popover exit retains a busy surface and reopening preserves identity", async t => {
-  const { h, mod, clock, busy, traps, layers, geometry, click, end, flush, active, finish } = await mounted(t);
+  const { h, mod, clock, busy, traps, layers, geometry, click, end, flush, active, finish } =
+    await mounted(t);
   click("trigger");
   const surface = h.byTestId("surface");
   const counter = h.byTestId("counter");
@@ -242,19 +286,35 @@ test("controlled popover lets the parent veto every transition", async t => {
 });
 
 test("default-open popovers nest inside a dialog with shared modal band and per-layer relations", async t => {
-  const { h, traps, locks, layers, portals, geometry, finish } = await mounted(t, "mountNested", true);
+  const { h, traps, locks, layers, portals, geometry, finish } = await mounted(
+    t,
+    "mountNested",
+    true,
+  );
   const dialog = h.byTestId("dialog");
   const outer = h.byTestId("outer");
   const inner = h.byTestId("inner");
   assert.ok(dialog);
   assert.ok(outer);
   assert.ok(inner);
-  assert.deepEqual(traps.map(record => record.node.props.get("testId")), ["dialog", "outer", "inner"]);
-  assert.deepEqual(layers.map(record => record.node.props.get("testId")), ["dialog", "outer", "inner"]);
+  assert.deepEqual(
+    traps.map(record => record.node.props.get("testId")),
+    ["dialog", "outer", "inner"],
+  );
+  assert.deepEqual(
+    layers.map(record => record.node.props.get("testId")),
+    ["dialog", "outer", "inner"],
+  );
   assert.equal(locks.length, 1, "only the dialog locks scroll");
   assert.equal(locks[0].node, dialog);
-  assert.deepEqual(portals.map(record => record.layer), ["modal", "modal", "modal"]);
-  assert.deepEqual(layers.map(record => record.options.layer), ["modal", "modal", "modal"]);
+  assert.deepEqual(
+    portals.map(record => record.layer),
+    ["modal", "modal", "modal"],
+  );
+  assert.deepEqual(
+    layers.map(record => record.options.layer),
+    ["modal", "modal", "modal"],
+  );
   const depthOf = node => {
     for (let current = h.parents.get(node); current; current = h.parents.get(current)) {
       const names = (current.props.get("class") ?? "").split(/\s+/);
@@ -279,7 +339,10 @@ test("default-open popovers nest inside a dialog with shared modal band and per-
 });
 
 test("removing an owner before its deferred overlay mounts cancels popover construction", async t => {
-  const { h, mod, clock, traps, layers, geometry, active, finish } = await mounted(t, "mountCancelled");
+  const { h, mod, clock, traps, layers, geometry, active, finish } = await mounted(
+    t,
+    "mountCancelled",
+  );
   assert.equal(mod.log.mounts, 0);
   assert.equal(h.byTestId("surface"), undefined);
   assert.equal(h.byTestId("counter"), undefined);

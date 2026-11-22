@@ -2,44 +2,195 @@
   "schemaVersion": 1,
   "id": "controls-virtual",
   "requiredCapabilities": [
-    "pixels", "virtual-time", "selectors.test-id", "selectors.semantic",
-    "input.pointer", "input.keyboard", "input.text", "tree.inspect"
+    "pixels",
+    "virtual-time",
+    "selectors.test-id",
+    "selectors.semantic",
+    "input.pointer",
+    "input.keyboard",
+    "input.text",
+    "tree.inspect"
   ],
   "steps": [
     { "id": "initial", "op": "capture", "captureId": "initial", "requiredFrameTimeUs": 0 },
-    { "id": "focus-name", "op": "pointer.click", "target": { "surface": "main", "testId": "name-label" }, "button": "primary" },
-    { "id": "name-focused", "op": "assert", "target": { "surface": "main", "testId": "name-input" }, "check": { "property": "focused", "equals": true } },
-    { "id": "name-labelled", "op": "assert", "target": { "surface": "main", "testId": "name-input" }, "check": { "property": "name", "equals": "Name" } },
+    {
+      "id": "focus-name",
+      "op": "pointer.click",
+      "target": { "surface": "main", "testId": "name-label" },
+      "button": "primary"
+    },
+    {
+      "id": "name-focused",
+      "op": "assert",
+      "target": { "surface": "main", "testId": "name-input" },
+      "check": { "property": "focused", "equals": true }
+    },
+    {
+      "id": "name-labelled",
+      "op": "assert",
+      "target": { "surface": "main", "testId": "name-input" },
+      "check": { "property": "name", "equals": "Name" }
+    },
     { "id": "type-name", "op": "text.commit", "surface": "main", "text": "Ada🙂" },
-    { "id": "name-echo", "op": "assert", "target": { "surface": "main", "testId": "name-value" }, "check": { "property": "text", "equals": "Name: Ada🙂" } },
-    { "id": "press-checkbox", "op": "pointer.click", "target": { "surface": "main", "testId": "checkbox" }, "button": "primary" },
-    { "id": "checkbox-true", "op": "assert", "target": { "surface": "main", "testId": "checkbox-state" }, "check": { "property": "text", "equals": "Checkbox: true" } },
-    { "id": "checkbox-event-one", "op": "assert", "target": { "surface": "main", "testId": "checkbox-events" }, "check": { "property": "text", "equals": "1" } },
+    {
+      "id": "name-echo",
+      "op": "assert",
+      "target": { "surface": "main", "testId": "name-value" },
+      "check": { "property": "text", "equals": "Name: Ada🙂" }
+    },
+    {
+      "id": "press-checkbox",
+      "op": "pointer.click",
+      "target": { "surface": "main", "testId": "checkbox" },
+      "button": "primary"
+    },
+    {
+      "id": "checkbox-true",
+      "op": "assert",
+      "target": { "surface": "main", "testId": "checkbox-state" },
+      "check": { "property": "text", "equals": "Checkbox: true" }
+    },
+    {
+      "id": "checkbox-event-one",
+      "op": "assert",
+      "target": { "surface": "main", "testId": "checkbox-events" },
+      "check": { "property": "text", "equals": "1" }
+    },
     { "id": "space-checkbox", "op": "key.press", "surface": "main", "key": "Space" },
-    { "id": "checkbox-false", "op": "assert", "target": { "surface": "main", "testId": "checkbox-state" }, "check": { "property": "text", "equals": "Checkbox: false" } },
-    { "id": "checkbox-event-two", "op": "assert", "target": { "surface": "main", "testId": "checkbox-events" }, "check": { "property": "text", "equals": "2" } },
-    { "id": "press-switch", "op": "pointer.click", "target": { "surface": "main", "testId": "switch" }, "button": "primary" },
-    { "id": "switch-true", "op": "assert", "target": { "surface": "main", "testId": "switch-state" }, "check": { "property": "text", "equals": "Switch: true" } },
-    { "id": "switch-event-one", "op": "assert", "target": { "surface": "main", "testId": "switch-events" }, "check": { "property": "text", "equals": "1" } },
+    {
+      "id": "checkbox-false",
+      "op": "assert",
+      "target": { "surface": "main", "testId": "checkbox-state" },
+      "check": { "property": "text", "equals": "Checkbox: false" }
+    },
+    {
+      "id": "checkbox-event-two",
+      "op": "assert",
+      "target": { "surface": "main", "testId": "checkbox-events" },
+      "check": { "property": "text", "equals": "2" }
+    },
+    {
+      "id": "press-switch",
+      "op": "pointer.click",
+      "target": { "surface": "main", "testId": "switch" },
+      "button": "primary"
+    },
+    {
+      "id": "switch-true",
+      "op": "assert",
+      "target": { "surface": "main", "testId": "switch-state" },
+      "check": { "property": "text", "equals": "Switch: true" }
+    },
+    {
+      "id": "switch-event-one",
+      "op": "assert",
+      "target": { "surface": "main", "testId": "switch-events" },
+      "check": { "property": "text", "equals": "1" }
+    },
     { "id": "enter-switch", "op": "key.press", "surface": "main", "key": "Enter" },
-    { "id": "switch-false", "op": "assert", "target": { "surface": "main", "testId": "switch-state" }, "check": { "property": "text", "equals": "Switch: false" } },
-    { "id": "switch-event-two", "op": "assert", "target": { "surface": "main", "testId": "switch-events" }, "check": { "property": "text", "equals": "2" } },
-    { "id": "press-readonly", "op": "pointer.click", "target": { "surface": "main", "testId": "readonly" }, "button": "primary" },
+    {
+      "id": "switch-false",
+      "op": "assert",
+      "target": { "surface": "main", "testId": "switch-state" },
+      "check": { "property": "text", "equals": "Switch: false" }
+    },
+    {
+      "id": "switch-event-two",
+      "op": "assert",
+      "target": { "surface": "main", "testId": "switch-events" },
+      "check": { "property": "text", "equals": "2" }
+    },
+    {
+      "id": "press-readonly",
+      "op": "pointer.click",
+      "target": { "surface": "main", "testId": "readonly" },
+      "button": "primary"
+    },
     { "id": "type-readonly", "op": "text.commit", "surface": "main", "text": "ignored" },
-    { "id": "readonly-held", "op": "assert", "target": { "surface": "main", "testId": "readonly" }, "check": { "property": "value", "equals": "Read only" } },
-    { "id": "password-role", "op": "assert", "target": { "surface": "main", "testId": "password" }, "check": { "property": "role", "equals": "passwordInput" } },
-    { "id": "password-masked", "op": "assert", "target": { "surface": "main", "testId": "password" }, "check": { "property": "value", "equals": "••••••" } },
-    { "id": "password-reversed-role", "op": "assert", "target": { "surface": "main", "testId": "password-reversed" }, "check": { "property": "role", "equals": "passwordInput" } },
-    { "id": "password-reversed-masked", "op": "assert", "target": { "surface": "main", "testId": "password-reversed" }, "check": { "property": "value", "equals": "••••••" } },
-    { "id": "press-body-toggle", "op": "pointer.click", "target": { "surface": "main", "testId": "alert-body-toggle" }, "button": "primary" },
-    { "id": "body-toggle-on", "op": "assert", "target": { "surface": "main", "testId": "alert-body-state" }, "check": { "property": "text", "equals": "true" } },
-    { "id": "hide-alert-icon", "op": "pointer.click", "target": { "surface": "main", "testId": "alert-icon-toggle" }, "button": "primary" },
-    { "id": "alert-hidden", "op": "capture", "captureId": "alert-hidden", "requiredFrameTimeUs": 0 },
-    { "id": "variant-while-hidden", "op": "pointer.click", "target": { "surface": "main", "testId": "alert-variant-toggle" }, "button": "primary" },
-    { "id": "show-alert-icon", "op": "pointer.click", "target": { "surface": "main", "testId": "alert-icon-toggle" }, "button": "primary" },
-    { "id": "alert-title-back", "op": "assert", "target": { "surface": "main", "testId": "alert-title" }, "check": { "property": "exists", "equals": true } },
-    { "id": "press-body-toggle-again", "op": "pointer.click", "target": { "surface": "main", "testId": "alert-body-toggle" }, "button": "primary" },
-    { "id": "body-toggle-off", "op": "assert", "target": { "surface": "main", "testId": "alert-body-state" }, "check": { "property": "text", "equals": "false" } },
+    {
+      "id": "readonly-held",
+      "op": "assert",
+      "target": { "surface": "main", "testId": "readonly" },
+      "check": { "property": "value", "equals": "Read only" }
+    },
+    {
+      "id": "password-role",
+      "op": "assert",
+      "target": { "surface": "main", "testId": "password" },
+      "check": { "property": "role", "equals": "passwordInput" }
+    },
+    {
+      "id": "password-masked",
+      "op": "assert",
+      "target": { "surface": "main", "testId": "password" },
+      "check": { "property": "value", "equals": "••••••" }
+    },
+    {
+      "id": "password-reversed-role",
+      "op": "assert",
+      "target": { "surface": "main", "testId": "password-reversed" },
+      "check": { "property": "role", "equals": "passwordInput" }
+    },
+    {
+      "id": "password-reversed-masked",
+      "op": "assert",
+      "target": { "surface": "main", "testId": "password-reversed" },
+      "check": { "property": "value", "equals": "••••••" }
+    },
+    {
+      "id": "press-body-toggle",
+      "op": "pointer.click",
+      "target": { "surface": "main", "testId": "alert-body-toggle" },
+      "button": "primary"
+    },
+    {
+      "id": "body-toggle-on",
+      "op": "assert",
+      "target": { "surface": "main", "testId": "alert-body-state" },
+      "check": { "property": "text", "equals": "true" }
+    },
+    {
+      "id": "hide-alert-icon",
+      "op": "pointer.click",
+      "target": { "surface": "main", "testId": "alert-icon-toggle" },
+      "button": "primary"
+    },
+    {
+      "id": "alert-hidden",
+      "op": "capture",
+      "captureId": "alert-hidden",
+      "requiredFrameTimeUs": 0
+    },
+    {
+      "id": "variant-while-hidden",
+      "op": "pointer.click",
+      "target": { "surface": "main", "testId": "alert-variant-toggle" },
+      "button": "primary"
+    },
+    {
+      "id": "show-alert-icon",
+      "op": "pointer.click",
+      "target": { "surface": "main", "testId": "alert-icon-toggle" },
+      "button": "primary"
+    },
+    {
+      "id": "alert-title-back",
+      "op": "assert",
+      "target": { "surface": "main", "testId": "alert-title" },
+      "check": { "property": "exists", "equals": true }
+    },
+    {
+      "id": "press-body-toggle-again",
+      "op": "pointer.click",
+      "target": { "surface": "main", "testId": "alert-body-toggle" },
+      "button": "primary"
+    },
+    {
+      "id": "body-toggle-off",
+      "op": "assert",
+      "target": { "surface": "main", "testId": "alert-body-state" },
+      "check": { "property": "text", "equals": "false" }
+    },
     { "id": "advance-final", "op": "clock.advance", "byMs": 300 },
     { "id": "final", "op": "capture", "captureId": "final", "requiredFrameTimeUs": 300000 }
   ]

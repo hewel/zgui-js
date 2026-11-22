@@ -2,10 +2,10 @@
 
 These are unmodified upstream font binaries, redistributed under the SIL Open Font License 1.1. The adjacent license files reproduce the licenses at the pinned source revisions. Copyright and license statements are also embedded in each font's `name` table.
 
-| Local file | Upstream revision and source | Embedded version and copyright | SHA-256 |
-| --- | --- | --- | --- |
-| `NotoSans-Regular.ttf` | [notofonts/noto-fonts, ffebf8c1ee449e544955a7e813c54f9b73848eac](https://github.com/notofonts/noto-fonts/blob/ffebf8c1ee449e544955a7e813c54f9b73848eac/hinted/ttf/NotoSans/NotoSans-Regular.ttf) | Version 2.008; Copyright 2015–2021 Google LLC. All Rights Reserved. | `b85c38ecea8a7cfb39c24e395a4007474fa5a4fc864f6ee33309eb4948d232d5` |
-| `NotoSansCJKsc-Regular.otf` | [notofonts/noto-cjk, f8d157532fbfaeda587e826d4cd5b21a49186f7c](https://github.com/notofonts/noto-cjk/blob/f8d157532fbfaeda587e826d4cd5b21a49186f7c/Sans/OTF/SimplifiedChinese/NotoSansCJKsc-Regular.otf) | Version 2.004; © 2014–2021 Adobe (http://www.adobe.com/). | `2c76254f6fc379fddfce0a7e84fb5385bb135d3e399294f6eeb6680d0365b74b` |
+| Local file                  | Upstream revision and source                                                                                                                                                                             | Embedded version and copyright                                      | SHA-256                                                            |
+| --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------- | ------------------------------------------------------------------ |
+| `NotoSans-Regular.ttf`      | [notofonts/noto-fonts, ffebf8c1ee449e544955a7e813c54f9b73848eac](https://github.com/notofonts/noto-fonts/blob/ffebf8c1ee449e544955a7e813c54f9b73848eac/hinted/ttf/NotoSans/NotoSans-Regular.ttf)         | Version 2.008; Copyright 2015–2021 Google LLC. All Rights Reserved. | `b85c38ecea8a7cfb39c24e395a4007474fa5a4fc864f6ee33309eb4948d232d5` |
+| `NotoSansCJKsc-Regular.otf` | [notofonts/noto-cjk, f8d157532fbfaeda587e826d4cd5b21a49186f7c](https://github.com/notofonts/noto-cjk/blob/f8d157532fbfaeda587e826d4cd5b21a49186f7c/Sans/OTF/SimplifiedChinese/NotoSansCJKsc-Regular.otf) | Version 2.004; © 2014–2021 Adobe (http://www.adobe.com/).           | `2c76254f6fc379fddfce0a7e84fb5385bb135d3e399294f6eeb6680d0365b74b` |
 
 Original license sources:
 

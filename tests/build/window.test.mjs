@@ -73,13 +73,16 @@ async function setup(t, options) {
     harness.flush();
   };
   t.after(() => {
-    try { stop(); }
-    finally {
+    try {
+      stop();
+    } finally {
       if (previous === undefined) delete globalThis.__zguiShell;
       else globalThis.__zguiShell = previous;
     }
   });
-  const mount = () => { dispose = harness.runTurn(() => mod.mount()); };
+  const mount = () => {
+    dispose = harness.runTurn(() => mod.mount());
+  };
   return { harness, mod, mount, stop };
 }
 
@@ -107,7 +110,9 @@ test("WindowSurface opens, updates in place, hosts node-anchored auto-height pop
 
   // Child PopupSurface anchors to a NativeNode inside WindowSurface via popupParentRegions.
   const anchorNode = harness.byTestId("window-anchor");
-  const observer = harness.geometry.find(record => record.active && record.node === anchorNode && record.kind === "borderBox");
+  const observer = harness.geometry.find(
+    record => record.active && record.node === anchorNode && record.kind === "borderBox",
+  );
   assert.ok(observer);
   observer.emit({ x: 20, y: 30, width: 100, height: 28 });
   harness.flush();
@@ -236,8 +241,9 @@ test("renderApp primary window controls, close veto, force close, and auxiliary 
   globalThis.__zguiShell = harness.shell;
   let stop;
   t.after(() => {
-    try { stop?.(); }
-    finally {
+    try {
+      stop?.();
+    } finally {
       delete globalThis.__zgui;
       delete globalThis.__zguiShell;
     }
@@ -267,11 +273,18 @@ test("renderApp primary window controls, close veto, force close, and auxiliary 
   harness.flush();
   const prefs = harness.surfaces.get("prefs");
   assert.ok(prefs, "auxiliary WindowSurface opens inside renderApp");
-  assert.ok(prefs.region.stylesheets.has("zui-theme-inherited"), "WindowSurface inherits ThemeProvider stylesheet");
+  assert.ok(
+    prefs.region.stylesheets.has("zui-theme-inherited"),
+    "WindowSurface inherits ThemeProvider stylesheet",
+  );
   const darkThemeCss = prefs.region.stylesheets.get("zui-theme-inherited");
   harness.runTurn(() => mod.setScheme("light"));
   harness.flush();
-  assert.notEqual(prefs.region.stylesheets.get("zui-theme-inherited"), darkThemeCss, "theme updates propagate live to WindowSurface");
+  assert.notEqual(
+    prefs.region.stylesheets.get("zui-theme-inherited"),
+    darkThemeCss,
+    "theme updates propagate live to WindowSurface",
+  );
 
   assert.equal(harness.requestClose("prefs"), false, "WindowSurface onCloseRequest vetoes close");
   assert.ok(harness.surfaces.has("prefs"), "vetoed WindowSurface stays open");

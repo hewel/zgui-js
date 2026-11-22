@@ -1,11 +1,4 @@
-import {
-  createEffect,
-  createRoot,
-  createSignal,
-  flush,
-  onCleanup,
-  type Setter,
-} from "solid-js";
+import { createEffect, createRoot, createSignal, flush, onCleanup, type Setter } from "solid-js";
 
 export function runSmoke(): string {
   const events: string[] = [];

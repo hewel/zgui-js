@@ -5,18 +5,40 @@
   "description": "Closed declaration, at most 64 KiB. Runtime additionally rounds physical extents floor(logical * scale + 0.5), requires each extent in 1..16384 and a product at most 16777216 pixels (64 MiB RGBA8). Clock start plus maxVirtualDurationMs must remain a safe integer in microseconds, and epoch plus elapsed time must remain inside the ECMAScript Date range. These arithmetic cross-field constraints are enforced by the loader before allocation. Supports opaque and transparent surfaces, en-US, UTC, ltr, dark/light themes, packaged assets and shipped fonts.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schemaVersion", "id", "surface", "theme", "locale", "direction", "timeZone", "clock", "random", "fonts", "assets", "limits"],
+  "required": [
+    "schemaVersion",
+    "id",
+    "surface",
+    "theme",
+    "locale",
+    "direction",
+    "timeZone",
+    "clock",
+    "random",
+    "fonts",
+    "assets",
+    "limits"
+  ],
   "properties": {
     "schemaVersion": { "const": 1 },
     "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "\\S" },
     "pureShell": {
-      "type": "boolean", "default": false,
+      "type": "boolean",
+      "default": false,
       "description": "Start without the default main window. The package must declare capabilities.shellSurfaces."
     },
     "surface": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["name", "width", "height", "scale", "refreshRateMilliHz", "opaque", "background"],
+      "required": [
+        "name",
+        "width",
+        "height",
+        "scale",
+        "refreshRateMilliHz",
+        "opaque",
+        "background"
+      ],
       "properties": {
         "name": { "const": "main" },
         "width": { "type": "integer", "minimum": 1, "maximum": 16384 },
@@ -24,7 +46,12 @@
         "scale": { "type": "number", "exclusiveMinimum": 0, "maximum": 8 },
         "refreshRateMilliHz": { "type": "integer", "minimum": 1, "maximum": 1000000 },
         "opaque": { "type": "boolean" },
-        "background": { "type": "string", "minLength": 9, "maxLength": 9, "pattern": "^#[0-9a-fA-F]{8}$" }
+        "background": {
+          "type": "string",
+          "minLength": 9,
+          "maxLength": 9,
+          "pattern": "^#[0-9a-fA-F]{8}$"
+        }
       },
       "if": { "properties": { "opaque": { "const": true } } },
       "then": { "properties": { "background": { "pattern": "^#[0-9a-fA-F]{6}[fF]{2}$" } } }
@@ -69,7 +96,9 @@
         "mode": { "const": "shipped-only" },
         "manifest": {
           "description": "Relative to the profile directory. This explicitly declared manifest establishes an independent font root; parent segments are permitted here, never in face/license paths.",
-          "type": "string", "minLength": 1, "maxLength": 1024,
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024,
           "pattern": "^(?!/)(?!.*[\\\\\\u0000])(?!(?:.*\/)?\\.(?:\/|$))[^/]+(?:/[^/]+)*$"
         }
       }
@@ -86,7 +115,17 @@
     "limits": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["maxRunWallMs", "maxStepWallMs", "maxJsEntryWallMs", "maxJobsPerPump", "maxPumpWallMs", "maxSettleTurns", "maxFramesPerStep", "maxVirtualDurationMs", "maxOutputBytes"],
+      "required": [
+        "maxRunWallMs",
+        "maxStepWallMs",
+        "maxJsEntryWallMs",
+        "maxJobsPerPump",
+        "maxPumpWallMs",
+        "maxSettleTurns",
+        "maxFramesPerStep",
+        "maxVirtualDurationMs",
+        "maxOutputBytes"
+      ],
       "properties": {
         "maxRunWallMs": { "type": "integer", "minimum": 1, "maximum": 300000 },
         "maxStepWallMs": { "type": "integer", "minimum": 1, "maximum": 60000 },

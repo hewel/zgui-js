@@ -2,12 +2,21 @@ import { createSignal, onCleanup, omit, untrack } from "#solid";
 import { createElement, memo, mergeProps, spread } from "../renderer/index.js";
 import { getWindowRect } from "../nodes.js";
 import type {
-  NativeChild, NativeContextMenuEvent, NativeElementProps, NativeNode, NativePointerDownEvent,
+  NativeChild,
+  NativeContextMenuEvent,
+  NativeElementProps,
+  NativeNode,
+  NativePointerDownEvent,
 } from "../types.js";
 import { MenuContent, type MenuContentProps } from "./menu.js";
 import {
-  type ContextMenuPlace, type ContextMenuPoint, type ContextMenuRecord,
-  provideContextMenu, provideMenuRoot, useContextMenuRecord, useMenuState,
+  type ContextMenuPlace,
+  type ContextMenuPoint,
+  type ContextMenuRecord,
+  provideContextMenu,
+  provideMenuRoot,
+  useContextMenuRecord,
+  useMenuState,
 } from "./menu-core.js";
 import { OverlayContext, createOverlayState, type OverlayRootProps } from "./overlay.js";
 import { callHandler } from "./state.js";
@@ -28,7 +37,9 @@ export function ContextMenu(props: ContextMenuProps = {}): NativeChild {
   const [point, setPoint] = createSignal<ContextMenuPoint>({ x: 0, y: 0 });
   const [area, setArea] = createSignal<NativeNode | null>(null, { ownedWrite: true });
   let alive = true;
-  onCleanup(() => { alive = false; });
+  onCleanup(() => {
+    alive = false;
+  });
   const openAt = (position: ContextMenuPoint) => {
     if (!position || !Number.isFinite(position.x) || !Number.isFinite(position.y)) {
       throw new RangeError("ContextMenu position must have finite x and y coordinates");
@@ -43,8 +54,10 @@ export function ContextMenu(props: ContextMenuProps = {}): NativeChild {
   };
   const record: ContextMenuRecord = { place: { openAt }, point, setArea };
   return provide(OverlayContext, state, () =>
-    provideMenuRoot(state, () => state.setOpen(false), () =>
-      provideContextMenu(record, props),
+    provideMenuRoot(
+      state,
+      () => state.setOpen(false),
+      () => provideContextMenu(record, props),
     ),
   );
 }
@@ -62,26 +75,45 @@ export function ContextMenuTrigger(props: ContextMenuTriggerProps = {}): NativeN
     alive = false;
     context?.setArea(null);
   });
-  spread(area, mergeProps(rest, withDefaults({
-    ariaHasPopup: "menu" as const,
-    get expanded() { return state?.open() ?? false; },
-    get ariaControls() { return state?.content.node() ?? null; },
-    get "data-state"() { return state?.open() ? "open" : "closed"; },
-  }, rest), {
-    get __zguiClass() { return classes(sheet.className, "zui-context-menu__area"); },
-    onContextMenu(event: NativeContextMenuEvent) {
-      if (!callHandler(event, props.onContextMenu) || !alive || rest.disabled) return;
-      event.preventDefault();
-      place?.openAt(event.position);
-    },
-    onPointerDown(event: NativePointerDownEvent) {
-      if (!callHandler(event, props.onPointerDown) || !alive || rest.disabled) return;
-      if (event.button === "secondary") {
-        event.preventDefault();
-        place?.openAt(event.position);
-      }
-    },
-  }), true);
+  spread(
+    area,
+    mergeProps(
+      rest,
+      withDefaults(
+        {
+          ariaHasPopup: "menu" as const,
+          get expanded() {
+            return state?.open() ?? false;
+          },
+          get ariaControls() {
+            return state?.content.node() ?? null;
+          },
+          get "data-state"() {
+            return state?.open() ? "open" : "closed";
+          },
+        },
+        rest,
+      ),
+      {
+        get __zguiClass() {
+          return classes(sheet.className, "zui-context-menu__area");
+        },
+        onContextMenu(event: NativeContextMenuEvent) {
+          if (!callHandler(event, props.onContextMenu) || !alive || rest.disabled) return;
+          event.preventDefault();
+          place?.openAt(event.position);
+        },
+        onPointerDown(event: NativePointerDownEvent) {
+          if (!callHandler(event, props.onPointerDown) || !alive || rest.disabled) return;
+          if (event.button === "secondary") {
+            event.preventDefault();
+            place?.openAt(event.position);
+          }
+        },
+      },
+    ),
+    true,
+  );
   if (typeof props.ref === "function") props.ref(area);
   const anchor = element("box", {
     class: "zui-context-menu__anchor",
@@ -93,10 +125,19 @@ export function ContextMenuTrigger(props: ContextMenuTriggerProps = {}): NativeN
   });
   state?.trigger.ref(anchor);
   append(area, anchor);
-  slot(area, memo(() => props.children), anchor);
+  slot(
+    area,
+    memo(() => props.children),
+    anchor,
+  );
   return area;
 }
 
 export function ContextMenuContent(props: ContextMenuContentProps = {}): NativeChild {
-  return MenuContent(mergeProps(props, withDefaults({ placement: { side: "bottom", align: "start" } as const, offset: 0 }, props)));
+  return MenuContent(
+    mergeProps(
+      props,
+      withDefaults({ placement: { side: "bottom", align: "start" } as const, offset: 0 }, props),
+    ),
+  );
 }

@@ -22,8 +22,9 @@ function cleanup(t, harness, dispose) {
   t.after(() => {
     const previous = globalThis.__zgui;
     globalThis.__zgui = harness.host;
-    try { dispose(); }
-    finally {
+    try {
+      dispose();
+    } finally {
       if (previous && previous !== harness.host) globalThis.__zgui = previous;
       else delete globalThis.__zgui;
     }

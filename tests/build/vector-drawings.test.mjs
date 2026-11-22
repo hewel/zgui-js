@@ -8,10 +8,20 @@ async function setup(t, source) {
   const root = harness.makeNode("root");
   globalThis.__zgui = harness.host;
   let dispose;
-  t.after(() => { try { dispose?.(); } finally { delete globalThis.__zgui; } });
+  t.after(() => {
+    try {
+      dispose?.();
+    } finally {
+      delete globalThis.__zgui;
+    }
+  });
   return {
-    mod, harness, root,
-    mount: (...args) => { dispose = harness.runTurn(() => mod.mount(root, ...args)); },
+    mod,
+    harness,
+    root,
+    mount: (...args) => {
+      dispose = harness.runTurn(() => mod.mount(root, ...args));
+    },
     unmount: () => {
       const cleanup = dispose;
       dispose = undefined;
@@ -21,7 +31,9 @@ async function setup(t, source) {
 }
 
 test("vector forwards reactive SVG documents and clears them without losing path data", async t => {
-  const { mod, harness, root, mount } = await setup(t, `
+  const { mod, harness, root, mount } = await setup(
+    t,
+    `
     import { createSignal, renderApp } from "@hewel/zgui";
     import type { NativeNode } from "@hewel/zgui";
     const [svg, setSvg] = createSignal<string | null>();
@@ -29,7 +41,8 @@ test("vector forwards reactive SVG documents and clears them without losing path
     export function mount(root: NativeNode) {
       return renderApp(() => <vector svg={svg()} d="M0 0 L8 8" viewBox="0 0 8 8" />, root);
     }
-  `);
+  `,
+  );
   const first = '<svg viewBox="0 0 8 8"><rect width="8" height="8" fill="#f00"/></svg>';
   const second = '<svg viewBox="0 0 8 8"><circle cx="4" cy="4" r="3" stroke="#00f"/></svg>';
   mod.setSvg(first);
@@ -50,7 +63,9 @@ test("vector forwards reactive SVG documents and clears them without losing path
 });
 
 test("an unowned canvas scene updates and binds to multiple vectors until explicitly disposed", async t => {
-  const { mod, harness, root, mount, unmount } = await setup(t, `
+  const { mod, harness, root, mount, unmount } = await setup(
+    t,
+    `
     import { createCanvasScene, createSignal, renderApp } from "@hewel/zgui";
     import type { CanvasScene, NativeNode, Setter } from "@hewel/zgui";
     export { createCanvasScene };
@@ -65,7 +80,8 @@ test("an unowned canvas scene updates and binds to multiple vectors until explic
       }, root);
     }
     export let setCanvas: Setter<CanvasScene | null | undefined>;
-  `);
+  `,
+  );
   const scene = mod.createCanvasScene();
   const [record] = harness.canvasScenes;
   assert.equal(typeof scene.token, "number");
@@ -115,7 +131,9 @@ test("an unowned canvas scene updates and binds to multiple vectors until explic
 });
 
 test("Solid disposes a canvas scene when its owning branch is removed", async t => {
-  const { mod, harness, root, mount, unmount } = await setup(t, `
+  const { mod, harness, root, mount, unmount } = await setup(
+    t,
+    `
     import { Show, createCanvasScene, createSignal, renderApp } from "@hewel/zgui";
     import type { CanvasScene, NativeNode } from "@hewel/zgui";
     const [visible, setVisible] = createSignal(true);
@@ -128,7 +146,8 @@ test("Solid disposes a canvas scene when its owning branch is removed", async t 
     export function mount(root: NativeNode) {
       return renderApp(() => <Show when={visible()}><Drawing /></Show>, root);
     }
-  `);
+  `,
+  );
   mount();
   const first = mod.scene;
   assert.equal(root.children[0].props.get("canvas"), first.token);

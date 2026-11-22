@@ -32,10 +32,14 @@ export interface RouteDefinition<P extends string = string> {
 export type RoutePaths<
   Routes extends readonly RouteDefinition[],
   Prefix extends string = "",
-> = Routes extends readonly [infer Head extends RouteDefinition, ...infer Tail extends readonly RouteDefinition[]]
-  ? (Head["children"] extends readonly RouteDefinition[]
-      ? JoinPaths<Prefix, Head["path"]> | RoutePaths<Head["children"], JoinPaths<Prefix, Head["path"]>>
-      : JoinPaths<Prefix, Head["path"]>)
+> = Routes extends readonly [
+  infer Head extends RouteDefinition,
+  ...infer Tail extends readonly RouteDefinition[],
+]
+  ? | (Head["children"] extends readonly RouteDefinition[]
+        ? | JoinPaths<Prefix, Head["path"]>
+          | RoutePaths<Head["children"], JoinPaths<Prefix, Head["path"]>>
+        : JoinPaths<Prefix, Head["path"]>)
     | RoutePaths<Tail, Prefix>
   : never;
 
@@ -67,7 +71,9 @@ export interface BeforeLeaveEvent {
 }
 
 /** Sync or async guard that vetoes navigation when returning `false` or calling `preventDefault()`. */
-export type BeforeLeaveGuard = (event: BeforeLeaveEvent) => boolean | void | Promise<boolean | void>;
+export type BeforeLeaveGuard = (
+  event: BeforeLeaveEvent,
+) => boolean | void | Promise<boolean | void>;
 
 /** Options for `router.navigate(to, options)`. */
 export interface NavigateOptions<P extends string = string, S = unknown> {
@@ -78,15 +84,21 @@ export interface NavigateOptions<P extends string = string, S = unknown> {
 }
 
 /** Allowed targets for typed `navigate(...)` calls. */
-export type NavigateTarget<Paths extends string> =
-  Paths | ConcretePath<Paths> | (string & {});
+export type NavigateTarget<Paths extends string> = Paths | ConcretePath<Paths> | (string & {});
 
 /** Strict `navigate` signature requiring `params` when navigating by parameterized route pattern. */
-export type RouterNavigate<Paths extends string = string> = <To extends NavigateTarget<Paths>, S = unknown>(
+export type RouterNavigate<Paths extends string = string> = <
+  To extends NavigateTarget<Paths>,
+  S = unknown,
+>(
   to: To,
   ...rest: To extends Paths
     ? HasRouteParams<To> extends true
-      ? [options: Omit<NavigateOptions<To, S>, "params"> & { readonly params: ExtractRouteParams<To> }]
+      ? [
+          options: Omit<NavigateOptions<To, S>, "params"> & {
+            readonly params: ExtractRouteParams<To>;
+          },
+        ]
       : [options?: NavigateOptions<To, S>]
     : [options?: NavigateOptions<string, S>]
 ) => Promise<boolean>;
@@ -153,8 +165,15 @@ function compileBranches(
   }
 }
 
-function resolveMatches(branches: readonly CompiledBranch[], pathname: string): readonly RouteMatch[] {
-  let best: { branch: CompiledBranch; score: number; params: Readonly<Record<string, string>> } | null = null;
+function resolveMatches(
+  branches: readonly CompiledBranch[],
+  pathname: string,
+): readonly RouteMatch[] {
+  let best: {
+    branch: CompiledBranch;
+    score: number;
+    params: Readonly<Record<string, string>>;
+  } | null = null;
   for (const branch of branches) {
     const result = matchPattern(branch.leafPattern, pathname, true);
     if (!result) continue;
@@ -180,7 +199,11 @@ function nextKey(): string {
   return `loc-${keyCounter}`;
 }
 
-function makeLocation(raw: string, state?: unknown, extraSearch?: SearchParamsInput): RouterLocation {
+function makeLocation(
+  raw: string,
+  state?: unknown,
+  extraSearch?: SearchParamsInput,
+): RouterLocation {
   const split = splitPathAndSearch(raw);
   if (extraSearch) {
     const merged: Record<string, string> = { ...split.searchParams };
@@ -216,9 +239,10 @@ export function createRouter<const Routes extends readonly RouteDefinition[]>(
   compileBranches(routes, "", [], branches);
 
   const devChannel = options.devStateKey === false ? null : getDevStateChannel();
-  const devKey = typeof options.devStateKey === "string" && options.devStateKey.length > 0
-    ? options.devStateKey
-    : "__zgui_router";
+  const devKey =
+    typeof options.devStateKey === "string" && options.devStateKey.length > 0
+      ? options.devStateKey
+      : "__zgui_router";
 
   let initialEntries: RouterLocation[];
   let clampedStart: number;
@@ -239,9 +263,10 @@ export function createRouter<const Routes extends readonly RouteDefinition[]>(
         const search = typeof item.search === "string" ? item.search : "";
         restored.push(makeLocation(`${item.pathname}${search}`, item.state));
       }
-      const rawIdx = typeof parsed.index === "number" && Number.isInteger(parsed.index)
-        ? parsed.index
-        : restored.length - 1;
+      const rawIdx =
+        typeof parsed.index === "number" && Number.isInteger(parsed.index)
+          ? parsed.index
+          : restored.length - 1;
       const idx = Math.max(0, Math.min(restored.length - 1, rawIdx));
       return { entries: restored, index: idx };
     } catch {
@@ -253,15 +278,17 @@ export function createRouter<const Routes extends readonly RouteDefinition[]>(
     initialEntries = hydratedRouter.entries;
     clampedStart = hydratedRouter.index;
   } else {
-    const rawEntries = options.initialEntries && options.initialEntries.length > 0
-      ? options.initialEntries
-      : [options.initialPath ?? "/"];
+    const rawEntries =
+      options.initialEntries && options.initialEntries.length > 0
+        ? options.initialEntries
+        : [options.initialPath ?? "/"];
     initialEntries = rawEntries.map((entry, idx) =>
       makeLocation(entry, idx === rawEntries.length - 1 ? options.initialState : undefined),
     );
-    clampedStart = options.initialIndex === undefined
-      ? initialEntries.length - 1
-      : Math.max(0, Math.min(initialEntries.length - 1, Math.trunc(options.initialIndex)));
+    clampedStart =
+      options.initialIndex === undefined
+        ? initialEntries.length - 1
+        : Math.max(0, Math.min(initialEntries.length - 1, Math.trunc(options.initialIndex)));
   }
 
   const persistRouterState = (list: readonly RouterLocation[], idx: number): void => {
@@ -300,8 +327,12 @@ export function createRouter<const Routes extends readonly RouteDefinition[]>(
     return list[idx]!;
   });
 
-  const matches = createMemo<readonly RouteMatch[]>(() => resolveMatches(branches, location().pathname));
-  const params = createMemo<Readonly<Record<string, string>>>(() => matches().at(-1)?.params ?? Object.freeze({}));
+  const matches = createMemo<readonly RouteMatch[]>(() =>
+    resolveMatches(branches, location().pathname),
+  );
+  const params = createMemo<Readonly<Record<string, string>>>(
+    () => matches().at(-1)?.params ?? Object.freeze({}),
+  );
   const searchParams = createMemo<SearchParams>(() => location().searchParams);
   const canGoBack = createMemo<boolean>(() => index() > 0);
   const canGoForward = createMemo<boolean>(() => index() < entries().length - 1);
@@ -323,8 +354,12 @@ export function createRouter<const Routes extends readonly RouteDefinition[]>(
       to: target,
       delta,
       replace,
-      get defaultPrevented() { return prevented; },
-      preventDefault() { prevented = true; },
+      get defaultPrevented() {
+        return prevented;
+      },
+      preventDefault() {
+        prevented = true;
+      },
     };
 
     const finish = (approved: boolean, asyncPath: boolean): boolean => {
@@ -372,16 +407,21 @@ export function createRouter<const Routes extends readonly RouteDefinition[]>(
     return Promise.resolve(finish(true, false));
   };
 
-  const navigate = ((to: string, navOptions?: NavigateOptions<string, unknown>): Promise<boolean> => {
+  const navigate = ((
+    to: string,
+    navOptions?: NavigateOptions<string, unknown>,
+  ): Promise<boolean> => {
     const rawStr = String(to);
     const split = splitPathAndSearch(rawStr);
-    const pathname = rawStr.includes(":") || rawStr.includes("*")
-      ? buildPath(split.pathname, navOptions?.params)
-      : normalizePath(split.pathname);
+    const pathname =
+      rawStr.includes(":") || rawStr.includes("*")
+        ? buildPath(split.pathname, navOptions?.params)
+        : normalizePath(split.pathname);
     const baseQuery = split.searchParams;
-    const finalSearch = navOptions?.search !== undefined
-      ? normalizeSearchInput({ ...baseQuery, ...navOptions.search })
-      : baseQuery;
+    const finalSearch =
+      navOptions?.search !== undefined
+        ? normalizeSearchInput({ ...baseQuery, ...navOptions.search })
+        : baseQuery;
     const target: RouterLocation = Object.freeze({
       key: nextKey(),
       pathname,
@@ -431,7 +471,10 @@ export function createRouter<const Routes extends readonly RouteDefinition[]>(
     };
   };
 
-  const match = <P extends Paths | (string & {})>(pattern: P, exact = true): Accessor<RouteMatch | null> =>
+  const match = <P extends Paths | (string & {})>(
+    pattern: P,
+    exact = true,
+  ): Accessor<RouteMatch | null> =>
     createMemo<RouteMatch | null>(() => {
       const normPattern = normalizePath(pattern);
       const result = matchPattern(normPattern, location().pathname, exact);
@@ -506,19 +549,22 @@ function defaultParseControlPayload(payload: unknown): ControlNavigationTarget |
   }
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) return null;
   const record = payload as Record<string, unknown>;
-  const target = typeof record.to === "string"
-    ? record.to
-    : typeof record.path === "string"
-      ? record.path
-      : null;
+  const target =
+    typeof record.to === "string"
+      ? record.to
+      : typeof record.path === "string"
+        ? record.path
+        : null;
   if (!target) return null;
   const replace = typeof record.replace === "boolean" ? record.replace : undefined;
-  const search = record.search && typeof record.search === "object" && !Array.isArray(record.search)
-    ? (record.search as SearchParamsInput)
-    : undefined;
-  const params = record.params && typeof record.params === "object" && !Array.isArray(record.params)
-    ? (record.params as Readonly<Record<string, string>>)
-    : undefined;
+  const search =
+    record.search && typeof record.search === "object" && !Array.isArray(record.search)
+      ? (record.search as SearchParamsInput)
+      : undefined;
+  const params =
+    record.params && typeof record.params === "object" && !Array.isArray(record.params)
+      ? (record.params as Readonly<Record<string, string>>)
+      : undefined;
   return { to: target, params, search, replace, state: record.state };
 }
 

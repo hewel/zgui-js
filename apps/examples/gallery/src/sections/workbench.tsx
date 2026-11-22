@@ -1,7 +1,20 @@
 import { createSignal } from "@hewel/zgui";
 import {
-  Badge, Button, Combobox, CommandPalette, CommandPaletteProvider, Kbd, KbdGroup, Select,
-  SplitPane, SplitPaneHandle, SplitPanePanel, ToastProvider, TreeItem, TreeView, toast,
+  Badge,
+  Button,
+  Combobox,
+  CommandPalette,
+  CommandPaletteProvider,
+  Kbd,
+  KbdGroup,
+  Select,
+  SplitPane,
+  SplitPaneHandle,
+  SplitPanePanel,
+  ToastProvider,
+  TreeItem,
+  TreeView,
+  toast,
   useCommandPalette,
 } from "@hewel/zgui/components";
 import type { CommandItem, SelectOption, TreeNodeData } from "@hewel/zgui/components";
@@ -83,178 +96,230 @@ export function WorkbenchSection(props: { onAction: (label: string) => void }) {
   const [lastCommand, setLastCommand] = createSignal<string>("Last: none");
 
   const galleryCommands: readonly CommandItem[] = [
-    { id: "file.new", label: "New Document", group: "File", shortcut: ["Ctrl", "N"], keywords: ["create", "buffer"] },
-    { id: "file.open", label: "Open Workspace", group: "File", shortcut: ["Ctrl", "O"], keywords: ["folder", "project"] },
-    { id: "file.save", label: "Save All Changes", group: "File", shortcut: ["Ctrl", "S"], keywords: ["write", "disk"] },
-    { id: "view.split", label: "Toggle Split Preview", group: "View", shortcut: ["Ctrl", "\\"], keywords: ["pane", "layout"] },
-    { id: "view.theme", label: "Switch Color Scheme", group: "View", shortcut: ["Ctrl", "Shift", "T"], keywords: ["dark", "light"] },
-    { id: "tools.export", label: "Export Snapshot", group: "Tools", description: "Capture PNG + accessibility tree", disabled: true },
+    {
+      id: "file.new",
+      label: "New Document",
+      group: "File",
+      shortcut: ["Ctrl", "N"],
+      keywords: ["create", "buffer"],
+    },
+    {
+      id: "file.open",
+      label: "Open Workspace",
+      group: "File",
+      shortcut: ["Ctrl", "O"],
+      keywords: ["folder", "project"],
+    },
+    {
+      id: "file.save",
+      label: "Save All Changes",
+      group: "File",
+      shortcut: ["Ctrl", "S"],
+      keywords: ["write", "disk"],
+    },
+    {
+      id: "view.split",
+      label: "Toggle Split Preview",
+      group: "View",
+      shortcut: ["Ctrl", "\\"],
+      keywords: ["pane", "layout"],
+    },
+    {
+      id: "view.theme",
+      label: "Switch Color Scheme",
+      group: "View",
+      shortcut: ["Ctrl", "Shift", "T"],
+      keywords: ["dark", "light"],
+    },
+    {
+      id: "tools.export",
+      label: "Export Snapshot",
+      group: "Tools",
+      description: "Capture PNG + accessibility tree",
+      disabled: true,
+    },
   ];
 
   return (
     <CommandPaletteProvider commands={galleryCommands}>
       <row class="panel-grid" testId="section-workbench">
-      <Panel
-        title="SplitPane"
-        note="Draggable horizontal split panes with pointer capture, keyboard resize, and collapsible bounds"
-        wide
-      >
-        <box style={{ width: "100%", height: "140px", border: "1px solid var(--zui-color-border)", borderRadius: "var(--zui-radius-md)", overflow: "hidden" }}>
-          <SplitPane
-            testId="workbench-split-pane"
-            sizes={splitSizes()}
-            onSizesChange={next => {
-              setSplitSizes(next);
-              props.onAction(`Split ${Math.round(next[0] ?? 0)}/${Math.round(next[1] ?? 0)}`);
+        <Panel
+          title="SplitPane"
+          note="Draggable horizontal split panes with pointer capture, keyboard resize, and collapsible bounds"
+          wide
+        >
+          <box
+            style={{
+              width: "100%",
+              height: "140px",
+              border: "1px solid var(--zui-color-border)",
+              borderRadius: "var(--zui-radius-md)",
+              overflow: "hidden",
             }}
-            label="Workbench split demo"
           >
-            <SplitPanePanel minSize={20} collapsible collapsedSize={0}>
-              <column style={{ padding: "12px", gap: "6px" }}>
-                <text style={{ fontWeight: "600" }}>Navigator</text>
-                <Badge testId="workbench-split-left" variant="secondary">
-                  <text>{`${Math.round(splitSizes()[0] ?? 0)}%`}</text>
-                </Badge>
-              </column>
-            </SplitPanePanel>
-            <SplitPaneHandle testId="workbench-split-handle" withHandle label="Resize navigator" />
-            <SplitPanePanel minSize={30}>
-              <column style={{ padding: "12px", gap: "6px" }}>
-                <text style={{ fontWeight: "600" }}>Editor Surface</text>
-                <Badge testId="workbench-split-right" variant="outline">
-                  <text>{`${Math.round(splitSizes()[1] ?? 0)}%`}</text>
-                </Badge>
-              </column>
-            </SplitPanePanel>
-          </SplitPane>
-        </box>
-      </Panel>
+            <SplitPane
+              testId="workbench-split-pane"
+              sizes={splitSizes()}
+              onSizesChange={next => {
+                setSplitSizes(next);
+                props.onAction(`Split ${Math.round(next[0] ?? 0)}/${Math.round(next[1] ?? 0)}`);
+              }}
+              label="Workbench split demo"
+            >
+              <SplitPanePanel minSize={20} collapsible collapsedSize={0}>
+                <column style={{ padding: "12px", gap: "6px" }}>
+                  <text style={{ fontWeight: "600" }}>Navigator</text>
+                  <Badge testId="workbench-split-left" variant="secondary">
+                    <text>{`${Math.round(splitSizes()[0] ?? 0)}%`}</text>
+                  </Badge>
+                </column>
+              </SplitPanePanel>
+              <SplitPaneHandle
+                testId="workbench-split-handle"
+                withHandle
+                label="Resize navigator"
+              />
+              <SplitPanePanel minSize={30}>
+                <column style={{ padding: "12px", gap: "6px" }}>
+                  <text style={{ fontWeight: "600" }}>Editor Surface</text>
+                  <Badge testId="workbench-split-right" variant="outline">
+                    <text>{`${Math.round(splitSizes()[1] ?? 0)}%`}</text>
+                  </Badge>
+                </column>
+              </SplitPanePanel>
+            </SplitPane>
+          </box>
+        </Panel>
 
-      <Panel
-        title="Select & Combobox"
-        note="Anchored listbox overlays with keyboard navigation, scrollIntoView reveal, typeahead, and search filtering"
-      >
-        <DemoRow label="Select">
-          <Select
-            testId="workbench-select"
-            listTestId="workbench-select-list"
-            options={FRAMEWORK_OPTIONS}
-            value={selectedFramework()}
-            onValueChange={value => {
-              setSelectedFramework(value);
-              props.onAction(`Select ${value}`);
+        <Panel
+          title="Select & Combobox"
+          note="Anchored listbox overlays with keyboard navigation, scrollIntoView reveal, typeahead, and search filtering"
+        >
+          <DemoRow label="Select">
+            <Select
+              testId="workbench-select"
+              listTestId="workbench-select-list"
+              options={FRAMEWORK_OPTIONS}
+              value={selectedFramework()}
+              onValueChange={value => {
+                setSelectedFramework(value);
+                props.onAction(`Select ${value}`);
+              }}
+              label="Choose engine"
+            />
+            <Badge testId="workbench-select-value" variant="outline">
+              <text>{selectedFramework()}</text>
+            </Badge>
+          </DemoRow>
+          <DemoRow label="Combobox">
+            <Combobox
+              testId="workbench-combobox"
+              inputTestId="workbench-combobox-input"
+              listTestId="workbench-combobox-list"
+              options={FRAMEWORK_OPTIONS}
+              value={comboFramework()}
+              onValueChange={value => {
+                setComboFramework(value);
+                props.onAction(`Combobox ${value}`);
+              }}
+              placeholder="Filter components..."
+              label="Filter engine"
+            />
+            <Badge testId="workbench-combobox-value" variant="outline">
+              <text>{comboFramework()}</text>
+            </Badge>
+          </DemoRow>
+        </Panel>
+
+        <Panel
+          title="Toast Notifications"
+          note="OverlayLayer::Toast stack with owner-scoped auto-dismiss, hover-pause, actions, and reduced motion"
+        >
+          <DemoRow label="Triggers">
+            <Button
+              testId="workbench-toast-success"
+              size="sm"
+              onClick={() => {
+                toast.success("Workspace saved", {
+                  description: "All markdown notes synced cleanly.",
+                  action: {
+                    label: "Undo",
+                    onClick: () => props.onAction("Toast Undo"),
+                  },
+                });
+                props.onAction("Toast Success");
+              }}
+            >
+              Success Toast
+            </Button>
+            <Button
+              testId="workbench-toast-error"
+              size="sm"
+              variant="destructive"
+              onClick={() => {
+                toast.error("Sync failed", { description: "Disk permission denied." });
+                props.onAction("Toast Error");
+              }}
+            >
+              Error Toast
+            </Button>
+            <Button
+              testId="workbench-toast-dismiss"
+              size="sm"
+              variant="outline"
+              onClick={() => {
+                toast.dismiss();
+                props.onAction("Toast Dismissed");
+              }}
+            >
+              Dismiss All
+            </Button>
+          </DemoRow>
+        </Panel>
+
+        <Panel
+          title="TreeView & TreeItem"
+          note="Keyboard-navigable hierarchical tree supporting data-driven items and declarative TreeItem children"
+        >
+          <DemoRow label="Data-driven workspace tree">
+            <Badge testId="workbench-tree-selected" variant="secondary">
+              <text>{`Selected: ${selectedTree()}`}</text>
+            </Badge>
+          </DemoRow>
+          <TreeView
+            testId="workbench-tree"
+            items={WORKSPACE_TREE}
+            selectedId={selectedTree()}
+            onSelect={id => {
+              setSelectedTree(id);
+              props.onAction(`Tree ${id}`);
             }}
-            label="Choose engine"
+            expandedIds={expandedTree()}
+            onExpandedChange={setExpandedTree}
+            label="Workspace files"
           />
-          <Badge testId="workbench-select-value" variant="outline">
-            <text>{selectedFramework()}</text>
-          </Badge>
-        </DemoRow>
-        <DemoRow label="Combobox">
-          <Combobox
-            testId="workbench-combobox"
-            inputTestId="workbench-combobox-input"
-            listTestId="workbench-combobox-list"
-            options={FRAMEWORK_OPTIONS}
-            value={comboFramework()}
-            onValueChange={value => {
-              setComboFramework(value);
-              props.onAction(`Combobox ${value}`);
-            }}
-            placeholder="Filter components..."
-            label="Filter engine"
-          />
-          <Badge testId="workbench-combobox-value" variant="outline">
-            <text>{comboFramework()}</text>
-          </Badge>
-        </DemoRow>
-      </Panel>
-
-      <Panel
-        title="Toast Notifications"
-        note="OverlayLayer::Toast stack with owner-scoped auto-dismiss, hover-pause, actions, and reduced motion"
-      >
-        <DemoRow label="Triggers">
-          <Button
-            testId="workbench-toast-success"
-            size="sm"
-            onClick={() => {
-              toast.success("Workspace saved", {
-                description: "All markdown notes synced cleanly.",
-                action: {
-                  label: "Undo",
-                  onClick: () => props.onAction("Toast Undo"),
-                },
-              });
-              props.onAction("Toast Success");
-            }}
-          >
-            Success Toast
-          </Button>
-          <Button
-            testId="workbench-toast-error"
-            size="sm"
-            variant="destructive"
-            onClick={() => {
-              toast.error("Sync failed", { description: "Disk permission denied." });
-              props.onAction("Toast Error");
-            }}
-          >
-            Error Toast
-          </Button>
-          <Button
-            testId="workbench-toast-dismiss"
-            size="sm"
-            variant="outline"
-            onClick={() => {
-              toast.dismiss();
-              props.onAction("Toast Dismissed");
-            }}
-          >
-            Dismiss All
-          </Button>
-        </DemoRow>
-      </Panel>
-
-      <Panel
-        title="TreeView & TreeItem"
-        note="Keyboard-navigable hierarchical tree supporting data-driven items and declarative TreeItem children"
-      >
-        <DemoRow label="Data-driven workspace tree">
-          <Badge testId="workbench-tree-selected" variant="secondary">
-            <text>{`Selected: ${selectedTree()}`}</text>
-          </Badge>
-        </DemoRow>
-        <TreeView
-          testId="workbench-tree"
-          items={WORKSPACE_TREE}
-          selectedId={selectedTree()}
-          onSelect={id => {
-            setSelectedTree(id);
-            props.onAction(`Tree ${id}`);
+          <DemoRow label="Declarative TreeItem">
+            <TreeView
+              testId="workbench-tree-declarative"
+              defaultExpandedIds={["outline"]}
+              label="Outline"
+            >
+              <TreeItem itemId="outline" label="Outline">
+                <TreeItem itemId="h1" label="Introduction" />
+                <TreeItem itemId="h2" label="Implementation" />
+              </TreeItem>
+            </TreeView>
+          </DemoRow>
+        </Panel>
+        <CommandPaletteShowcase
+          lastCommand={lastCommand}
+          onRun={cmd => {
+            setLastCommand(`Last: ${cmd.label}`);
+            props.onAction(`Command ${cmd.id}`);
           }}
-          expandedIds={expandedTree()}
-          onExpandedChange={setExpandedTree}
-          label="Workspace files"
         />
-        <DemoRow label="Declarative TreeItem">
-          <TreeView testId="workbench-tree-declarative" defaultExpandedIds={["outline"]} label="Outline">
-            <TreeItem itemId="outline" label="Outline">
-              <TreeItem itemId="h1" label="Introduction" />
-              <TreeItem itemId="h2" label="Implementation" />
-            </TreeItem>
-          </TreeView>
-        </DemoRow>
-      </Panel>
-      <CommandPaletteShowcase
-        lastCommand={lastCommand}
-        onRun={cmd => {
-          setLastCommand(`Last: ${cmd.label}`);
-          props.onAction(`Command ${cmd.id}`);
-        }}
-      />
-      <ToastProvider />
-    </row>
+        <ToastProvider />
+      </row>
     </CommandPaletteProvider>
   );
 }

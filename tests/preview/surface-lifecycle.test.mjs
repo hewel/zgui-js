@@ -7,9 +7,16 @@ import { buildApplication, workspaceRoot } from "../../packages/build/src/build.
 
 const json = async file => JSON.parse(await readFile(file, "utf8"));
 function native(args) {
-  const child = spawnSync(path.join(workspaceRoot, "target/debug/native-host"), ["preview", ...args], {
-    cwd: workspaceRoot, encoding: "utf8", timeout: 25000, maxBuffer: 1024 * 1024,
-  });
+  const child = spawnSync(
+    path.join(workspaceRoot, "target/debug/native-host"),
+    ["preview", ...args],
+    {
+      cwd: workspaceRoot,
+      encoding: "utf8",
+      timeout: 25000,
+      maxBuffer: 1024 * 1024,
+    },
+  );
   assert.ifError(child.error);
   assert.equal(child.signal, null, child.stderr);
   const result = JSON.parse(child.stdout);
@@ -17,8 +24,18 @@ function native(args) {
   assert.equal(result.exitCode, 0, `${child.stdout}\n${child.stderr}`);
   return result;
 }
-const emptyResources = { nodes: 0, wrappers: 0, callbacks: 0, focusTraps: 0, scrollLocks: 0, timers: 0,
-  frameCallbacks: 0, requests: 0, fonts: 0, engineAlive: false };
+const emptyResources = {
+  nodes: 0,
+  wrappers: 0,
+  callbacks: 0,
+  focusTraps: 0,
+  scrollLocks: 0,
+  timers: 0,
+  frameCallbacks: 0,
+  requests: 0,
+  fonts: 0,
+  engineAlive: false,
+};
 
 // Real GPU/native lifecycle gate: no platform fallback, graphics skip, or synthetic success.
 test("surface recreation retires ownership and rebinds input, captures and fixture work", async t => {
@@ -28,10 +45,16 @@ test("surface recreation retires ownership and rebinds input, captures and fixtu
   await mkdir(path.join(app, "src"), { recursive: true });
   await mkdir(path.join(app, "assets"));
   await writeFile(path.join(app, "assets/message.txt"), "delivered");
-  await writeFile(path.join(app, "tsconfig.json"), JSON.stringify({
-    extends: path.join(workspaceRoot, "packages/ui/tsconfig.native.json"), include: ["src/**/*.tsx"],
-  }));
-  await writeFile(path.join(app, "src/main.tsx"), `
+  await writeFile(
+    path.join(app, "tsconfig.json"),
+    JSON.stringify({
+      extends: path.join(workspaceRoot, "packages/ui/tsconfig.native.json"),
+      include: ["src/**/*.tsx"],
+    }),
+  );
+  await writeFile(
+    path.join(app, "src/main.tsx"),
+    `
     import { Button, createSignal, renderApp, type NativeNode } from "@hewel/zgui";
     import { readTextAsset } from "@hewel/zgui-services";
     export const hostApiVersion = 1;
@@ -53,13 +76,25 @@ test("surface recreation retires ownership and rebinds input, captures and fixtu
       </column>, root);
       return () => { retired = true; dispose(); };
     }
-  `);
+  `,
+  );
   await buildApplication("surface-lifecycle-regression", { appDirectory: app });
   const fixture = path.join(directory, "fixture.json");
-  await writeFile(fixture, JSON.stringify({ schemaVersion: 1, id: "lifecycle", services: {
-    assets: { provider: "mock-text-assets-v1", latencyMs: 200,
-      initialState: { assets: { "assets/message.txt": {} } } },
-  }, events: [{ atMs: 100, channel: "assets.state", value: { assets: {} } }] }));
+  await writeFile(
+    fixture,
+    JSON.stringify({
+      schemaVersion: 1,
+      id: "lifecycle",
+      services: {
+        assets: {
+          provider: "mock-text-assets-v1",
+          latencyMs: 200,
+          initialState: { assets: { "assets/message.txt": {} } },
+        },
+      },
+      events: [{ atMs: 100, channel: "assets.state", value: { assets: {} } }],
+    }),
+  );
   const profile = await json(path.join(workspaceRoot, "preview/profiles/default.json"));
   const steps = [
     { op: "surface.resize", surface: "main", width: 400, height: 300 },
@@ -69,26 +104,58 @@ test("surface recreation retires ownership and rebinds input, captures and fixtu
     { op: "pointer.click", target: { surface: "main", testId: "arm" }, button: "primary" },
     { op: "surface.recreate", surface: "main" },
     { op: "capture", captureId: "resumed", requiredFrameTimeUs: 20000 },
-    { op: "pointer.click", target: { surface: "main", role: "button", name: "Increment" }, button: "primary" },
+    {
+      op: "pointer.click",
+      target: { surface: "main", role: "button", name: "Increment" },
+      button: "primary",
+    },
     { op: "clock.advance", byMs: 220 },
-    ...[["count", "1"], ["asset", "delivered"], ["mounted-at", String(profile.clock.epochMs + 20)]].map(([testId, text]) => ({
-      op: "assert", target: { surface: "main", testId }, check: { property: "text", equals: text },
+    ...[
+      ["count", "1"],
+      ["asset", "delivered"],
+      ["mounted-at", String(profile.clock.epochMs + 20)],
+    ].map(([testId, text]) => ({
+      op: "assert",
+      target: { surface: "main", testId },
+      check: { property: "text", equals: text },
     })),
     { op: "assert", serviceCall: { service: "assets", method: "readTextAsset", count: 2 } },
     { op: "capture", captureId: "after", requiredFrameTimeUs: 240000 },
   ];
   const scenario = path.join(directory, "scenario.json");
-  await writeFile(scenario, JSON.stringify({ schemaVersion: 1, id: "surface-lifecycle", requiredCapabilities: ["surface.recreate"],
-    steps: steps.map((step, index) => ({ id: `action-${index}`, ...step })),
-  }));
+  await writeFile(
+    scenario,
+    JSON.stringify({
+      schemaVersion: 1,
+      id: "surface-lifecycle",
+      requiredCapabilities: ["surface.recreate"],
+      steps: steps.map((step, index) => ({ id: `action-${index}`, ...step })),
+    }),
+  );
   const out = path.join(directory, "run");
-  const result = native(["run", "--bundle", path.join(app, "dist"), "--profile", "preview/profiles/default.json",
-    "--scale", "1", "--fixture", fixture, "--scenario", scenario, "--out", out]);
+  const result = native([
+    "run",
+    "--bundle",
+    path.join(app, "dist"),
+    "--profile",
+    "preview/profiles/default.json",
+    "--scale",
+    "1",
+    "--fixture",
+    fixture,
+    "--scenario",
+    scenario,
+    "--out",
+    out,
+  ]);
   assert.equal(result.generation, 2);
   assert.equal(result.captureCount, 3);
   assert.equal(result.teardown.clean, true);
   assert.deepEqual(result.teardown.resources, emptyResources);
-  const rows = (await readFile(path.join(out, "steps.jsonl"), "utf8")).trim().split("\n").map(JSON.parse);
+  const rows = (await readFile(path.join(out, "steps.jsonl"), "utf8"))
+    .trim()
+    .split("\n")
+    .map(JSON.parse);
   const lifecycle = rows.find(row => row.op === "surface.recreate").result;
   assert.notEqual(lifecycle.oldSurfaceId, lifecycle.newSurfaceId);
   assert.notEqual(lifecycle.oldDocumentId, lifecycle.newDocumentId);
@@ -116,8 +183,15 @@ test("surface recreation retires ownership and rebinds input, captures and fixtu
   const beforeTree = await json(path.join(out, "captures/before.tree.json"));
   const resumedTree = await json(path.join(out, "captures/resumed.tree.json"));
   const node = (tree, id) => tree.nodes.find(node => node.testId === id);
-  assert.notEqual(node(beforeTree, "random").text, node(resumedTree, "random").text, "the run RNG must not restart");
-  assert.equal(Number(node(resumedTree, "mounted-at").text) - Number(node(beforeTree, "mounted-at").text), 20);
+  assert.notEqual(
+    node(beforeTree, "random").text,
+    node(resumedTree, "random").text,
+    "the run RNG must not restart",
+  );
+  assert.equal(
+    Number(node(resumedTree, "mounted-at").text) - Number(node(beforeTree, "mounted-at").text),
+    20,
+  );
   const trace = (await json(path.join(out, "services.json"))).records;
   const requests = trace.filter(row => row.kind === "request").map(row => row.detail.requestId);
   assert.equal(requests.length, 2);
@@ -126,8 +200,16 @@ test("surface recreation retires ownership and rebinds input, captures and fixtu
     assert.ok(trace.some(row => row.kind === "cancellation" && row.detail.requestId === oldId));
     assert.ok(!trace.some(row => row.kind === "response" && row.detail.requestId === oldId));
   }
-  assert.equal(trace.filter(row => row.kind === "state").length, 1, "scheduled scenario state survives recreation");
-  assert.equal(trace.filter(row => row.kind === "disposal").length, 1, "only whole-run finish disposes fixture history");
+  assert.equal(
+    trace.filter(row => row.kind === "state").length,
+    1,
+    "scheduled scenario state survives recreation",
+  );
+  assert.equal(
+    trace.filter(row => row.kind === "disposal").length,
+    1,
+    "only whole-run finish disposes fixture history",
+  );
   for (const capture of ["before", "resumed", "after"]) {
     const inspected = native(["inspect", "--run", out, "--capture", capture, "--test-id", "count"]);
     assert.equal(inspected.generation, capture === "before" ? 1 : 2);

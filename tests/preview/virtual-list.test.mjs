@@ -119,7 +119,11 @@ test("VirtualList (1,000 rows) and VirtualGrid (800 tiles) mount within default 
     vlistScrolled.scrollMetrics.offsetY > 1000,
     `expected wheel to scroll vlist past y=1000, got ${vlistScrolled.scrollMetrics.offsetY}`,
   );
-  assert.equal(findNode(scrolled, "row-0"), undefined, "row-0 must unmount after scrolling down 1800px");
+  assert.equal(
+    findNode(scrolled, "row-0"),
+    undefined,
+    "row-0 must unmount after scrolling down 1800px",
+  );
   assert.ok(getNode(scrolled, "row-50"), "row-50 must mount around y=1800 (stride=36px)");
 });
 
@@ -183,9 +187,14 @@ export function mount(root: NativeNode) {
 test("scrollTo, scrollBy, scrollIntoView, and VirtualList.scrollToIndex update real scrollPosition and rendered tree (#55)", async t => {
   const temp = await createTempWorkspace("preview-imperative-scroll-");
   t.after(() => temp.cleanup());
-  const bundle = await buildFixtureApp(path.join(temp.dir, "app"), "imperative-scroll", imperativeScrollSource, {
-    rawSource: true,
-  });
+  const bundle = await buildFixtureApp(
+    path.join(temp.dir, "app"),
+    "imperative-scroll",
+    imperativeScrollSource,
+    {
+      rawSource: true,
+    },
+  );
 
   const { out, result } = await runScenario({
     projectDir: temp.dir,
@@ -197,14 +206,34 @@ test("scrollTo, scrollBy, scrollIntoView, and VirtualList.scrollToIndex update r
     scale: 1,
     steps: [
       { id: "settle-0", op: "clock.advance", byMs: 32 },
-      { id: "click-to", op: "pointer.click", button: "primary", target: { surface: "main", testId: "btn-scroll-to" } },
+      {
+        id: "click-to",
+        op: "pointer.click",
+        button: "primary",
+        target: { surface: "main", testId: "btn-scroll-to" },
+      },
       { id: "settle-to", op: "clock.advance", byMs: 32 },
       { id: "cap-to", op: "capture", captureId: "after-to" },
-      { id: "click-by", op: "pointer.click", button: "primary", target: { surface: "main", testId: "btn-scroll-by" } },
+      {
+        id: "click-by",
+        op: "pointer.click",
+        button: "primary",
+        target: { surface: "main", testId: "btn-scroll-by" },
+      },
       { id: "settle-by", op: "clock.advance", byMs: 32 },
       { id: "cap-by", op: "capture", captureId: "after-by" },
-      { id: "click-into", op: "pointer.click", button: "primary", target: { surface: "main", testId: "btn-into-view" } },
-      { id: "click-jump", op: "pointer.click", button: "primary", target: { surface: "main", testId: "btn-jump-list" } },
+      {
+        id: "click-into",
+        op: "pointer.click",
+        button: "primary",
+        target: { surface: "main", testId: "btn-into-view" },
+      },
+      {
+        id: "click-jump",
+        op: "pointer.click",
+        button: "primary",
+        target: { surface: "main", testId: "btn-jump-list" },
+      },
       { id: "settle-final", op: "clock.advance", byMs: 32 },
       { id: "cap-final", op: "capture", captureId: "final" },
     ],
@@ -228,6 +257,8 @@ test("scrollTo, scrollBy, scrollIntoView, and VirtualList.scrollToIndex update r
     `VirtualList.scrollToIndex(120) should scroll to y=4320, got ${getNode(finalTree, "jump-vlist").scrollMetrics.offsetY}`,
   );
   assert.ok(getNode(finalTree, "jump-row-120"), "jump-row-120 must be mounted after scrollToIndex");
-  assert.equal(finalTree.nodes.find(entry => entry.testId === "jump-row-0"), undefined);
+  assert.equal(
+    finalTree.nodes.find(entry => entry.testId === "jump-row-0"),
+    undefined,
+  );
 });
-

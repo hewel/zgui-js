@@ -5,6 +5,7 @@
 Wave 1 (ADR-0004) closed the local-first desktop workbench loop, Wave 2 (ADR-0005) established authority- and generation-isolated networking, DnD, rich document selection, canvas extensions, code-splitting, and background workers, and ADR-0006 + ADR-0007 eliminated StyleX and Babel so `zgui-js`'s entire frontend/host stack is 100% native-compiled (`Bun` + `Rolldown/Oxc` + `@solidjs/compiler` + `Lightning CSS` + `tsrs` + `Oxlint` + `Oxfmt` + `Cargo/native-host`).
 
 However, the end-to-end developer experience still carries four structural friction points compared to mainstream desktop/web frameworks:
+
 1. External JS/TS users cannot scaffold, run `dev`, or package an app without a full `zgui-js` Cargo checkout (`prepareNativeHost` rejects installed SDKs with no Rust workspace), while CLI responsibilities are bundled inside `@hewel/zgui-build`.
 2. `watchApplication` blocks every dev rebuild on synchronous `tsrs`, restarts QuickJS even for CSS-only edits, and leaves the native window silently frozen on build errors even though `.zgui-build-status.json` is already written.
 3. `#73`'s `--dev-inspect` socket is CLI-only with no visual element picker, box-model highlight, source-location jump, or self-hosted Inspector UI, and external developers/agents lack a concise `llms.txt` API map.

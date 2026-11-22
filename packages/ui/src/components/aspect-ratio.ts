@@ -11,17 +11,24 @@ export interface AspectRatioProps extends NativeElementProps {
 export function AspectRatio(props: AspectRatioProps = {}): NativeNode {
   useStylesheet(sheet);
   const rest = omit(props, "ratio");
-  return element("box", mergeProps(
-    {
-      get __zguiStyle() {
-        const ratio = props.ratio ?? 1;
-        if (!Number.isFinite(ratio) || ratio <= 0) {
-          throw new TypeError(`AspectRatio ratio must be a positive finite number`);
-        }
-        return { "--zui-aspect-ratio": String(ratio) };
+  return element(
+    "box",
+    mergeProps(
+      {
+        get __zguiStyle() {
+          const ratio = props.ratio ?? 1;
+          if (!Number.isFinite(ratio) || ratio <= 0) {
+            throw new TypeError(`AspectRatio ratio must be a positive finite number`);
+          }
+          return { "--zui-aspect-ratio": String(ratio) };
+        },
       },
-    },
-    rest,
-    { get __zguiClass() { return classes(sheet.className); } },
-  ));
+      rest,
+      {
+        get __zguiClass() {
+          return classes(sheet.className);
+        },
+      },
+    ),
+  );
 }

@@ -39,7 +39,10 @@ export interface CommandItem {
   readonly onSelect?: (() => void) | undefined;
 }
 
-export type CommandFilter = (command: CommandItem, query: string) => boolean | number | null | undefined;
+export type CommandFilter = (
+  command: CommandItem,
+  query: string,
+) => boolean | number | null | undefined;
 
 export interface CommandPaletteContextValue {
   readonly open: Accessor<boolean>;
@@ -63,7 +66,10 @@ export interface CommandPaletteProviderProps {
   readonly children?: NativeChild;
 }
 
-export interface CommandPaletteProps extends Omit<NativeElementProps, "children" | "open" | "title"> {
+export interface CommandPaletteProps extends Omit<
+  NativeElementProps,
+  "children" | "open" | "title"
+> {
   readonly children?: never;
   readonly commands?: readonly CommandItem[] | undefined;
   readonly open?: boolean | undefined;
@@ -154,7 +160,8 @@ function scoreSingleToken(command: CommandItem, token: string): number | null {
   }
 
   const secondaryParts: string[] = [];
-  if (command.keywords && command.keywords.length > 0) secondaryParts.push(command.keywords.join(" "));
+  if (command.keywords && command.keywords.length > 0)
+    secondaryParts.push(command.keywords.join(" "));
   if (command.group) secondaryParts.push(command.group);
   if (command.description) secondaryParts.push(command.description);
   const secondary = secondaryParts.join(" ").toLowerCase();
@@ -195,7 +202,9 @@ export function scoreCommandMatch(command: CommandItem, rawQuery: string): numbe
   return total;
 }
 
-function mergeCommands(...sources: readonly (readonly CommandItem[] | undefined)[]): readonly CommandItem[] {
+function mergeCommands(
+  ...sources: readonly (readonly CommandItem[] | undefined)[]
+): readonly CommandItem[] {
   const byId = new Map<string, CommandItem>();
   const order: string[] = [];
   for (const source of sources) {
@@ -259,17 +268,23 @@ function renderShortcut(shortcut: string | readonly string[] | undefined): Nativ
 }
 
 export function CommandPaletteProvider(props: CommandPaletteProviderProps = {}): NativeChild {
-  const [open, setOpen] = createControllable<boolean>({
-    value: () => props.open,
-    defaultValue: () => props.defaultOpen,
-    onChange: () => props.onOpenChange,
-  }, false);
+  const [open, setOpen] = createControllable<boolean>(
+    {
+      value: () => props.open,
+      defaultValue: () => props.defaultOpen,
+      onChange: () => props.onOpenChange,
+    },
+    false,
+  );
 
-  const [query, setQuery] = createControllable<string>({
-    value: () => props.query,
-    defaultValue: () => props.defaultQuery,
-    onChange: () => props.onQueryChange,
-  }, "");
+  const [query, setQuery] = createControllable<string>(
+    {
+      value: () => props.query,
+      defaultValue: () => props.defaultQuery,
+      onChange: () => props.onQueryChange,
+    },
+    "",
+  );
 
   const [batches, setBatches] = createSignal<readonly RegistryBatch[]>([], { ownedWrite: true });
 
@@ -375,9 +390,9 @@ function buildFilteredModel(
 
   const orderedGroups = [...groups.values()];
   if (hasQuery) {
-    orderedGroups.sort((a, b) => (b.bestScore - a.bestScore) || (a.order - b.order));
+    orderedGroups.sort((a, b) => b.bestScore - a.bestScore || a.order - b.order);
     for (const bucket of orderedGroups) {
-      bucket.items.sort((a, b) => (b.score - a.score) || (a.order - b.order));
+      bucket.items.sort((a, b) => b.score - a.score || a.order - b.order);
     }
   }
 
@@ -443,12 +458,16 @@ export function CommandPalette(props: CommandPaletteProps = {}): NativeChild {
     "onKeyDown",
   );
 
-  const useProviderOpen = provider !== null && props.open === undefined && props.defaultOpen === undefined;
-  const [localOpen, setLocalOpen] = createControllable<boolean>({
-    value: () => props.open,
-    defaultValue: () => props.defaultOpen,
-    onChange: () => props.onOpenChange,
-  }, false);
+  const useProviderOpen =
+    provider !== null && props.open === undefined && props.defaultOpen === undefined;
+  const [localOpen, setLocalOpen] = createControllable<boolean>(
+    {
+      value: () => props.open,
+      defaultValue: () => props.defaultOpen,
+      onChange: () => props.onOpenChange,
+    },
+    false,
+  );
 
   const open: Accessor<boolean> = useProviderOpen ? () => provider.open() : localOpen;
   const setOpen = (next: boolean) => {
@@ -460,12 +479,16 @@ export function CommandPalette(props: CommandPaletteProps = {}): NativeChild {
     }
   };
 
-  const useProviderQuery = provider !== null && props.query === undefined && props.defaultQuery === undefined;
-  const [localQuery, setLocalQuery] = createControllable<string>({
-    value: () => props.query,
-    defaultValue: () => props.defaultQuery,
-    onChange: () => props.onQueryChange,
-  }, "");
+  const useProviderQuery =
+    provider !== null && props.query === undefined && props.defaultQuery === undefined;
+  const [localQuery, setLocalQuery] = createControllable<string>(
+    {
+      value: () => props.query,
+      defaultValue: () => props.defaultQuery,
+      onChange: () => props.onQueryChange,
+    },
+    "",
+  );
 
   const query: Accessor<string> = useProviderQuery ? () => provider.query() : localQuery;
   const setQuery = (next: string) => {
@@ -495,9 +518,8 @@ export function CommandPalette(props: CommandPaletteProps = {}): NativeChild {
     const currentModel = untrack(model);
     const rowIndex = currentModel.rowIndexById.get(commandId);
     if (rowIndex === undefined) return;
-    const targetRow = revealTopHeader && rowIndex === 1 && currentModel.rows[0]?.kind === "group"
-      ? 0
-      : rowIndex;
+    const targetRow =
+      revealTopHeader && rowIndex === 1 && currentModel.rows[0]?.kind === "group" ? 0 : rowIndex;
     listController.scrollToIndex(targetRow, { align: "auto", behavior: "instant" });
   };
 
@@ -589,10 +611,18 @@ export function CommandPalette(props: CommandPaletteProps = {}): NativeChild {
       ariaHasPopup: "listbox",
       expanded: true,
       class: "zui-command__input",
-      get testId() { return props.inputTestId ?? null; },
-      get value() { return query(); },
-      get placeholder() { return props.placeholder ?? "Type a command or search..."; },
-      get label() { return props.label ?? props.title ?? "Command Palette"; },
+      get testId() {
+        return props.inputTestId ?? null;
+      },
+      get value() {
+        return query();
+      },
+      get placeholder() {
+        return props.placeholder ?? "Type a command or search...";
+      },
+      get label() {
+        return props.label ?? props.title ?? "Command Palette";
+      },
       onValueChange(nextValue: string) {
         setQuery(nextValue);
       },
@@ -646,13 +676,19 @@ export function CommandPalette(props: CommandPaletteProps = {}): NativeChild {
     append(root, fieldRow);
 
     const listNode = VirtualList<CommandRow>({
-      get each() { return model().rows; },
+      get each() {
+        return model().rows;
+      },
       keyed: row => row.key,
       itemHeight,
       initialHeight: listHeight,
-      get overscan() { return props.overscan ?? DEFAULT_OVERSCAN; },
+      get overscan() {
+        return props.overscan ?? DEFAULT_OVERSCAN;
+      },
       role: "listBox",
-      get testId() { return props.listTestId ?? null; },
+      get testId() {
+        return props.listTestId ?? null;
+      },
       class: "zui-command__list",
       style: { maxHeight: `${listHeight}px` },
       controller(ctrl) {
@@ -662,8 +698,12 @@ export function CommandPalette(props: CommandPaletteProps = {}): NativeChild {
         return element("box", {
           __zguiClass: "zui-combobox__empty",
           role: "status",
-          get testId() { return props.emptyTestId ?? null; },
-          get children() { return props.emptyText ?? "No commands found."; },
+          get testId() {
+            return props.emptyTestId ?? null;
+          },
+          get children() {
+            return props.emptyText ?? "No commands found.";
+          },
         });
       },
       children(rowAccessor: Accessor<CommandRow>) {
@@ -680,14 +720,17 @@ export function CommandPalette(props: CommandPaletteProps = {}): NativeChild {
               paddingBottom: "0px",
             },
           });
-          append(groupNode, element("label", {
-            __zguiClass: "zui-menu__label",
-            __zguiStyle: { paddingTop: "0px", paddingBottom: "0px" },
-            get children() {
-              const r = rowAccessor();
-              return r.kind === "group" ? r.label : "";
-            },
-          }));
+          append(
+            groupNode,
+            element("label", {
+              __zguiClass: "zui-menu__label",
+              __zguiStyle: { paddingTop: "0px", paddingBottom: "0px" },
+              get children() {
+                const r = rowAccessor();
+                return r.kind === "group" ? r.label : "";
+              },
+            }),
+          );
           return groupNode;
         }
 
@@ -697,32 +740,46 @@ export function CommandPalette(props: CommandPaletteProps = {}): NativeChild {
         };
 
         const itemNode = createElement("control");
-        spread(itemNode, {
-          role: "listBoxOption",
-          tabIndex: -1,
-          __zguiClass: classes("zui-select__item", "zui-command__item"),
-          __zguiStyle: {
-            height: `${itemHeight}px`,
-            flexShrink: 0,
-            boxSizing: "border-box",
+        spread(
+          itemNode,
+          {
+            role: "listBoxOption",
+            tabIndex: -1,
+            __zguiClass: classes("zui-select__item", "zui-command__item"),
+            __zguiStyle: {
+              height: `${itemHeight}px`,
+              flexShrink: 0,
+              boxSizing: "border-box",
+            },
+            get disabled() {
+              return !!command().disabled;
+            },
+            get selected() {
+              return activeId() === command().id;
+            },
+            get "data-active"() {
+              return activeId() === command().id ? "true" : "false";
+            },
+            get "data-disabled"() {
+              return command().disabled ? "true" : "false";
+            },
+            get "data-command-id"() {
+              return command().id;
+            },
+            onPointerEnter() {
+              const cmd = command();
+              if (!cmd.disabled) setActiveId(cmd.id);
+            },
+            onPointerDown(event: NativePointerDownEvent) {
+              // Keep keyboard focus and IME composition inside the search input field.
+              event.preventDefault();
+            },
+            onClick() {
+              executeCommand(command());
+            },
           },
-          get disabled() { return !!command().disabled; },
-          get selected() { return activeId() === command().id; },
-          get "data-active"() { return activeId() === command().id ? "true" : "false"; },
-          get "data-disabled"() { return command().disabled ? "true" : "false"; },
-          get "data-command-id"() { return command().id; },
-          onPointerEnter() {
-            const cmd = command();
-            if (!cmd.disabled) setActiveId(cmd.id);
-          },
-          onPointerDown(event: NativePointerDownEvent) {
-            // Keep keyboard focus and IME composition inside the search input field.
-            event.preventDefault();
-          },
-          onClick() {
-            executeCommand(command());
-          },
-        }, true);
+          true,
+        );
 
         slot(itemNode, () => {
           const iconData = command().icon;
@@ -738,10 +795,15 @@ export function CommandPalette(props: CommandPaletteProps = {}): NativeChild {
             overflow: "hidden",
           },
         });
-        append(textWrap, element("label", {
-          __zguiStyle: { whiteSpace: "nowrap" },
-          get children() { return command().label; },
-        }));
+        append(
+          textWrap,
+          element("label", {
+            __zguiStyle: { whiteSpace: "nowrap" },
+            get children() {
+              return command().label;
+            },
+          }),
+        );
         slot(textWrap, () => {
           const desc = command().description;
           if (!desc) return null;
@@ -767,23 +829,37 @@ export function CommandPalette(props: CommandPaletteProps = {}): NativeChild {
   };
 
   return Dialog({
-    get open() { return open(); },
+    get open() {
+      return open();
+    },
     onOpenChange: setOpen,
     get children() {
-      return DialogContent(mergeProps(rest, {
-        get class() { return classes("zui-command__dialog", props.class); },
-        get dismissControl() { return props.dismissControl ?? false; },
-        get dismissOnOutsidePress() { return props.dismissOnOutsidePress ?? true; },
-        get dismissOnEscape() { return props.dismissOnEscape ?? true; },
-        get children() {
-          return [
-            DialogTitle({
-              get children() { return props.title ?? "Command Palette"; },
-            }),
-            buildBody(),
-          ];
-        },
-      }));
+      return DialogContent(
+        mergeProps(rest, {
+          get class() {
+            return classes("zui-command__dialog", props.class);
+          },
+          get dismissControl() {
+            return props.dismissControl ?? false;
+          },
+          get dismissOnOutsidePress() {
+            return props.dismissOnOutsidePress ?? true;
+          },
+          get dismissOnEscape() {
+            return props.dismissOnEscape ?? true;
+          },
+          get children() {
+            return [
+              DialogTitle({
+                get children() {
+                  return props.title ?? "Command Palette";
+                },
+              }),
+              buildBody(),
+            ];
+          },
+        }),
+      );
     },
   });
 }

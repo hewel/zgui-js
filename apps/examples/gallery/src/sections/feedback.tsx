@@ -1,11 +1,28 @@
 import { createSignal } from "@hewel/zgui";
 import {
-  Alert, AlertDescription, AlertTitle, AspectRatio, Button,
-  Icon, Progress, Separator, Skeleton, Spinner,
+  Alert,
+  AlertDescription,
+  AlertTitle,
+  AspectRatio,
+  Button,
+  Icon,
+  Progress,
+  Separator,
+  Skeleton,
+  Spinner,
 } from "@hewel/zgui/components";
 import {
-  ALERT_CIRCLE, ALERT_TRIANGLE, CHECK, CHECK_CIRCLE,
-  CROSS, ELLIPSIS, INFO, MINUS, PANEL_LEFT, PLUS, SEARCH,
+  ALERT_CIRCLE,
+  ALERT_TRIANGLE,
+  CHECK,
+  CHECK_CIRCLE,
+  CROSS,
+  ELLIPSIS,
+  INFO,
+  MINUS,
+  PANEL_LEFT,
+  PLUS,
+  SEARCH,
 } from "@hewel/zgui/icons";
 import { DemoRow, Panel } from "../shell.js";
 
@@ -34,7 +51,12 @@ export function FeedbackSection(props: { onAction: (label: string) => void }) {
         </column>
         <DemoRow label="Determinate & indeterminate progress">
           <column class="demo-stack">
-            <Progress testId="atoms-progress" value={progress()} max={100} label="Upload progress" />
+            <Progress
+              testId="atoms-progress"
+              value={progress()}
+              max={100}
+              label="Upload progress"
+            />
             <row class="demo-items">
               <Button
                 testId="progress-minus"

@@ -1,8 +1,17 @@
 import { createSignal, renderApp, setReducedMotion } from "@hewel/zgui";
 import type { NativeNode } from "@hewel/zgui";
 import {
-  Button, Combobox, Select, SplitPane, SplitPaneHandle, SplitPanePanel,
-  ThemeProvider, ToastProvider, TreeView, toast, useToast,
+  Button,
+  Combobox,
+  Select,
+  SplitPane,
+  SplitPaneHandle,
+  SplitPanePanel,
+  ThemeProvider,
+  ToastProvider,
+  TreeView,
+  toast,
+  useToast,
 } from "@hewel/zgui/components";
 import type { ColorScheme, SelectOption, TreeNodeData } from "@hewel/zgui/components";
 
@@ -58,7 +67,12 @@ function WorkbenchFixture() {
 
   return (
     <ThemeProvider scheme={scheme()}>
-      <ToastProvider maxVisible={2} defaultDuration={200} corner="bottom-right" regionTestId="wb-toast-region">
+      <ToastProvider
+        maxVisible={2}
+        defaultDuration={200}
+        corner="bottom-right"
+        regionTestId="wb-toast-region"
+      >
         <column
           testId="wb-root"
           style={{
@@ -72,7 +86,11 @@ function WorkbenchFixture() {
           }}
         >
           <row style={{ gap: "8px", alignItems: "center" }}>
-            <Button testId="toggle-scheme" size="xs" onClick={() => setScheme(s => s === "light" ? "dark" : "light")}>
+            <Button
+              testId="toggle-scheme"
+              size="xs"
+              onClick={() => setScheme(s => (s === "light" ? "dark" : "light"))}
+            >
               {`Scheme:${scheme()}`}
             </Button>
             <Button
@@ -129,7 +147,12 @@ function WorkbenchFixture() {
             >
               Toast Promise
             </Button>
-            <Button testId="btn-toast-clear" size="xs" variant="ghost" onClick={() => toast.dismiss()}>
+            <Button
+              testId="btn-toast-clear"
+              size="xs"
+              variant="ghost"
+              onClick={() => toast.dismiss()}
+            >
               Clear Toasts
             </Button>
             <ToastCountBadge />
@@ -170,12 +193,7 @@ function WorkbenchFixture() {
               overflow: "hidden",
             }}
           >
-            <SplitPane
-              testId="wb-split"
-              sizes={sizes()}
-              onSizesChange={setSizes}
-              keyboardStep={5}
-            >
+            <SplitPane testId="wb-split" sizes={sizes()} onSizesChange={setSizes} keyboardStep={5}>
               <SplitPanePanel
                 testId="wb-split-left"
                 minSize={20}
@@ -200,7 +218,15 @@ function WorkbenchFixture() {
           <row style={{ gap: "12px", flexGrow: 1, minHeight: "0px" }}>
             <column style={{ width: "360px", gap: "6px" }}>
               <text testId="wb-tree-state">{`sel:${treeSelected()},act:${treeActivated()},exp:${treeExpanded().join("|")}`}</text>
-              <box style={{ border: "1px solid var(--zui-color-border)", borderRadius: "6px", padding: "4px", height: "200px", overflow: "auto" }}>
+              <box
+                style={{
+                  border: "1px solid var(--zui-color-border)",
+                  borderRadius: "6px",
+                  padding: "4px",
+                  height: "200px",
+                  overflow: "auto",
+                }}
+              >
                 <TreeView
                   testId="wb-tree"
                   items={TREE_ITEMS}
@@ -216,7 +242,17 @@ function WorkbenchFixture() {
 
             <column style={{ width: "360px", gap: "6px" }}>
               <text testId="wb-vtree-state">{`vsel:${virtSelected()}`}</text>
-              <box style={{ display: "flex", flexDirection: "column", border: "1px solid var(--zui-color-border)", borderRadius: "6px", padding: "4px", height: "200px", overflow: "hidden" }}>
+              <box
+                style={{
+                  display: "flex",
+                  flexDirection: "column",
+                  border: "1px solid var(--zui-color-border)",
+                  borderRadius: "6px",
+                  padding: "4px",
+                  height: "200px",
+                  overflow: "hidden",
+                }}
+              >
                 <TreeView
                   testId="wb-vtree"
                   items={LARGE_TREE}

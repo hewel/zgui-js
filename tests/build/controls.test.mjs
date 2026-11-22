@@ -120,7 +120,13 @@ async function mounted(t) {
   globalThis.__zgui = harness.host;
   const root = harness.makeNode("root");
   const dispose = mod.mount(root);
-  t.after(() => { try { dispose(); } finally { delete globalThis.__zgui; } });
+  t.after(() => {
+    try {
+      dispose();
+    } finally {
+      delete globalThis.__zgui;
+    }
+  });
   return { mod, harness };
 }
 
@@ -224,13 +230,28 @@ test("switch and toggle share the controllable primitive and press requests acti
 
   const activations = { count: 0 };
   const check = harness.byTestId("check");
-  harness.dispatch(check, "PointerDown", { button: "primary", activateNow: () => { activations.count += 1; } });
+  harness.dispatch(check, "PointerDown", {
+    button: "primary",
+    activateNow: () => {
+      activations.count += 1;
+    },
+  });
   assert.equal(activations.count, 1);
-  harness.dispatch(check, "PointerDown", { button: "secondary", activateNow: () => { activations.count += 1; } });
+  harness.dispatch(check, "PointerDown", {
+    button: "secondary",
+    activateNow: () => {
+      activations.count += 1;
+    },
+  });
   assert.equal(activations.count, 1);
   mod.api.setSwitchDisabled(true);
   harness.flush();
-  harness.dispatch(sw, "PointerDown", { button: "primary", activateNow: () => { activations.count += 1; } });
+  harness.dispatch(sw, "PointerDown", {
+    button: "primary",
+    activateNow: () => {
+      activations.count += 1;
+    },
+  });
   assert.equal(activations.count, 1);
   mod.api.setSwitchDisabled(false);
   harness.flush();
@@ -330,7 +351,12 @@ test("progress clamps and reports determinate and indeterminate states", async t
   assert.equal(progress.props.get("data-state"), "indeterminate");
   assert.equal(harness.byTestId("progress"), progress);
 
-  for (const [value, max] of [[10, 0], [10, -2], [Number.NaN, 100], [Number.POSITIVE_INFINITY, 100]]) {
+  for (const [value, max] of [
+    [10, 0],
+    [10, -2],
+    [Number.NaN, 100],
+    [Number.POSITIVE_INFINITY, 100],
+  ]) {
     assert.throws(() => mod.mountProgress(harness.makeNode("root"), value, max), TypeError);
   }
 });
@@ -399,12 +425,29 @@ test("childless controls reject lazy children without evaluating them", async t 
   const mod = await moduleFor(t, fixture);
   const harness = createHost();
   globalThis.__zgui = harness.host;
-  t.after(() => { delete globalThis.__zgui; });
+  t.after(() => {
+    delete globalThis.__zgui;
+  });
 
   let evaluated = 0;
-  const child = () => { evaluated += 1; return null; };
-  for (const name of ["Input", "Textarea", "Checkbox", "Switch", "Skeleton", "Spinner", "Progress"]) {
-    assert.throws(() => mod.mountWithChildren(harness.makeNode("root"), name, child), TypeError, name);
+  const child = () => {
+    evaluated += 1;
+    return null;
+  };
+  for (const name of [
+    "Input",
+    "Textarea",
+    "Checkbox",
+    "Switch",
+    "Skeleton",
+    "Spinner",
+    "Progress",
+  ]) {
+    assert.throws(
+      () => mod.mountWithChildren(harness.makeNode("root"), name, child),
+      TypeError,
+      name,
+    );
   }
   assert.equal(evaluated, 0);
 });

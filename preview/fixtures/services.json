@@ -14,7 +14,9 @@
       "channel": "assets.state",
       "value": {
         "assets": {
-          "assets/message.txt": { "error": { "code": "Io", "message": "scripted text service failure" } }
+          "assets/message.txt": {
+            "error": { "code": "Io", "message": "scripted text service failure" }
+          }
         }
       }
     }

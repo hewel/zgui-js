@@ -18,14 +18,21 @@ before(async () => {
   bundle = await buildExampleApp("composition");
   temp = await createTempWorkspace("preview-composition-test-");
 });
-after(async () => { await temp?.cleanup(); });
+after(async () => {
+  await temp?.cleanup();
+});
 
 const byTestId = (tree, id) => tree.nodes.find(node => node.testId === id);
 const childrenOf = (tree, token, excluded) =>
-  tree.nodes.filter(node => node.parent === token && node.ownership === "application" && !excluded.has(node.testId));
+  tree.nodes.filter(
+    node => node.parent === token && node.ownership === "application" && !excluded.has(node.testId),
+  );
 
 async function minimalApp(directory, name, source, assets = {}) {
-  const appBundle = await buildFixtureApp(path.join(directory, name), name, source, { rawSource: true, assets });
+  const appBundle = await buildFixtureApp(path.join(directory, name), name, source, {
+    rawSource: true,
+    assets,
+  });
   const scenario = path.join(directory, `${name}.scenario.json`);
   await writeScenario(
     scenario,
@@ -49,7 +56,9 @@ test("composition scenario passes and avatar ownership survives source removal",
   for (const capture of ["initial", "fallback", "final"]) {
     const frame = await readFrame(temp.dir, capture);
     assert.equal(frame.resources.requiredAssetsReady, true, `${capture} readiness`);
-    const broken = frame.resources.resources.filter(resource => resource.source === "assets/broken.png");
+    const broken = frame.resources.resources.filter(
+      resource => resource.source === "assets/broken.png",
+    );
     assert.equal(broken.length, 1, `${capture} tracks the failed fixture`);
     assert.equal(broken[0].state, "failed", `${capture} records the decode failure`);
     assert.equal(broken[0].visible, false, `${capture} failed image is not paint-visible`);
@@ -86,15 +95,25 @@ test("composition scenario passes and avatar ownership survives source removal",
 test("a visible decode failure still fails the capture", async t => {
   const neg = await createTempWorkspace("preview-composition-neg-visible-");
   t.after(() => neg.cleanup());
-  const { bundle: negBundle, scenario } = await minimalApp(neg.dir, "composition-neg-visible", `
+  const { bundle: negBundle, scenario } = await minimalApp(
+    neg.dir,
+    "composition-neg-visible",
+    `
     import { Image, type NativeNode } from "@hewel/zgui";
     import { render } from "@hewel/zgui/renderer";
     export const hostApiVersion = 1;
     export function mount(root: NativeNode) {
       return render(() => <Image src="assets/bad.png" style={{ width: "64px", height: "16px" }} />, root);
     }
-  `, { "bad.png": Buffer.from("not a raster image") });
-  const { result } = await harnessRunPreview({ bundle: negBundle, scenario, out: path.join(neg.dir, "actual"), allowFailure: true });
+  `,
+    { "bad.png": Buffer.from("not a raster image") },
+  );
+  const { result } = await harnessRunPreview({
+    bundle: negBundle,
+    scenario,
+    out: path.join(neg.dir, "actual"),
+    allowFailure: true,
+  });
   assert.equal(result.exitCode, 6);
   assert.equal(result.firstError.code, "E_ASSET_FAILED");
   assert.equal(result.captureCount, 0);
@@ -103,15 +122,24 @@ test("a visible decode failure still fails the capture", async t => {
 test("an undeclared source fails the capture even when hidden", async t => {
   const neg = await createTempWorkspace("preview-composition-neg-undeclared-");
   t.after(() => neg.cleanup());
-  const { bundle: negBundle, scenario } = await minimalApp(neg.dir, "composition-neg-undeclared", `
+  const { bundle: negBundle, scenario } = await minimalApp(
+    neg.dir,
+    "composition-neg-undeclared",
+    `
     import { Image, type NativeNode } from "@hewel/zgui";
     import { render } from "@hewel/zgui/renderer";
     export const hostApiVersion = 1;
     export function mount(root: NativeNode) {
       return render(() => <Image src="assets/missing.png" style={{ display: "none", width: "64px", height: "16px" }} />, root);
     }
-  `);
-  const { result } = await harnessRunPreview({ bundle: negBundle, scenario, out: path.join(neg.dir, "actual"), allowFailure: true });
+  `,
+  );
+  const { result } = await harnessRunPreview({
+    bundle: negBundle,
+    scenario,
+    out: path.join(neg.dir, "actual"),
+    allowFailure: true,
+  });
   assert.equal(result.exitCode, 6);
   assert.equal(result.firstError.code, "E_ASSET_FAILED");
   assert.match(result.firstError.message, /declared package asset/);

@@ -1,10 +1,24 @@
 import { createContext, createMemo, getOwner, omit, onCleanup, useContext } from "#solid";
 import { createElement, mergeProps, spread } from "../renderer/index.js";
 import { provide, withDefaults } from "../components/shared.js";
-import type { Accessor, NativeChild, NativeElementProps, NativeEvent, NativeKeyEvent, NativeNode } from "../types.js";
+import type {
+  Accessor,
+  NativeChild,
+  NativeElementProps,
+  NativeEvent,
+  NativeKeyEvent,
+  NativeNode,
+} from "../types.js";
 import { buildPath, matchPattern, normalizePath } from "./path.js";
 import type { ExtractRouteParams, SearchParams, SearchParamsInput } from "./path.js";
-import type { BeforeLeaveGuard, NavigateOptions, RouteMatch, Router, RouterLocation, RouterNavigate } from "./core.js";
+import type {
+  BeforeLeaveGuard,
+  NavigateOptions,
+  RouteMatch,
+  Router,
+  RouterLocation,
+  RouterNavigate,
+} from "./core.js";
 
 const RouterContext = createContext<Router<string> | null>(null);
 const OutletDepthContext = createContext<number>(0);
@@ -84,7 +98,9 @@ export interface RouterProviderProps<Paths extends string = string> {
 }
 
 /** Provide a router instance to a subtree; renders `<Outlet />` directly when `children` is omitted. */
-export function RouterProvider<Paths extends string = string>(props: RouterProviderProps<Paths>): NativeChild {
+export function RouterProvider<Paths extends string = string>(
+  props: RouterProviderProps<Paths>,
+): NativeChild {
   const hasChildrenProp = "children" in props;
   return provide(RouterContext, props.router as unknown as Router<string>, () =>
     provide(OutletDepthContext, 0, () => {
@@ -141,14 +157,30 @@ function runCallerHandler<E extends NativeEvent>(
 ): boolean {
   if (!handler) return false;
   let cancelled = false;
-  handler({ ...event, preventDefault() { event.preventDefault(); cancelled = true; } });
+  handler({
+    ...event,
+    preventDefault() {
+      event.preventDefault();
+      cancelled = true;
+    },
+  });
   return cancelled;
 }
 
 /** Declarative navigation trigger bound to the enclosing router. */
 export function Link(props: LinkProps): NativeNode {
   const router = requireRouter("Link");
-  const rest = omit(props, "to", "params", "search", "replace", "state", "exact", "onClick", "onKeyDown");
+  const rest = omit(
+    props,
+    "to",
+    "params",
+    "search",
+    "replace",
+    "state",
+    "exact",
+    "onClick",
+    "onKeyDown",
+  );
 
   const resolvedPathname = createMemo(() => {
     const raw = props.to;
@@ -175,25 +207,35 @@ export function Link(props: LinkProps): NativeNode {
   };
 
   const node = createElement("box");
-  spread(node, mergeProps(
-    rest,
-    withDefaults({
-      role: "link" as const,
-      get tabIndex() { return props.disabled ? -1 : 0; },
-      get "data-active"() { return isActive() ? "true" : "false"; },
-    }, rest),
-    {
-      onClick(event: NativeEvent) {
-        if (!runCallerHandler(props.onClick, event)) trigger();
+  spread(
+    node,
+    mergeProps(
+      rest,
+      withDefaults(
+        {
+          role: "link" as const,
+          get tabIndex() {
+            return props.disabled ? -1 : 0;
+          },
+          get "data-active"() {
+            return isActive() ? "true" : "false";
+          },
+        },
+        rest,
+      ),
+      {
+        onClick(event: NativeEvent) {
+          if (!runCallerHandler(props.onClick, event)) trigger();
+        },
+        onKeyDown(event: NativeKeyEvent) {
+          if (runCallerHandler(props.onKeyDown, event) || props.disabled) return;
+          if (event.key === "Enter" || event.key === " " || event.key === "Space") {
+            event.preventDefault();
+            trigger();
+          }
+        },
       },
-      onKeyDown(event: NativeKeyEvent) {
-        if (runCallerHandler(props.onKeyDown, event) || props.disabled) return;
-        if (event.key === "Enter" || event.key === " " || event.key === "Space") {
-          event.preventDefault();
-          trigger();
-        }
-      },
-    },
-  ));
+    ),
+  );
   return node;
 }

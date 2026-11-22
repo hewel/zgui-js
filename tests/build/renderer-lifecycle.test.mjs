@@ -45,7 +45,11 @@ async function mounted(t) {
   const harness = createHost();
   globalThis.__zgui = harness.host;
   const root = harness.makeNode("root");
-  t.after(() => { globalThis.__zgui = harness.host; harness.host.clearRoot(root); delete globalThis.__zgui; });
+  t.after(() => {
+    globalThis.__zgui = harness.host;
+    harness.host.clearRoot(root);
+    delete globalThis.__zgui;
+  });
   return { mod, harness, root };
 }
 
@@ -75,7 +79,12 @@ for (const mode of ["app", "raw"]) {
       const dispose = mod.mount(root, mode, tail);
       t.after(() => {
         globalThis.__zgui = harness.host;
-        try { dispose(); } finally { harness.host.clearRoot(root); delete globalThis.__zgui; }
+        try {
+          dispose();
+        } finally {
+          harness.host.clearRoot(root);
+          delete globalThis.__zgui;
+        }
       });
       runs.push(harness.queries.precedes.length);
       assert.equal(tabIndex(harness, "b"), 0);
@@ -88,18 +97,24 @@ for (const mode of ["app", "raw"]) {
 
 test("renderApp cleans up and preserves the original mount error", async t => {
   const { mod, harness, root } = await mounted(t);
-  assert.throws(() => mod.mountFailing(root), (error) => error instanceof Error && error.message === "mount failed");
+  assert.throws(
+    () => mod.mountFailing(root),
+    error => error instanceof Error && error.message === "mount failed",
+  );
   assert.equal(mod.cleanups, 1, "cleanup ran exactly once");
   assert.equal(harness.clearCalls.length, 1, "clearRoot ran on mount failure");
 });
 
 test("renderApp still clears the root when cleanup throws", async t => {
   const { mod, harness, root } = await mounted(t);
-  assert.throws(() => mod.mountFailing(root, "cleanup failed"), (error) =>
-    error instanceof AggregateError &&
-    error.errors.length === 2 &&
-    error.errors[0].message === "mount failed" &&
-    error.errors[1].message === "cleanup failed");
+  assert.throws(
+    () => mod.mountFailing(root, "cleanup failed"),
+    error =>
+      error instanceof AggregateError &&
+      error.errors.length === 2 &&
+      error.errors[0].message === "mount failed" &&
+      error.errors[1].message === "cleanup failed",
+  );
   assert.equal(harness.clearCalls.length, 1, "clearRoot still attempted");
 });
 

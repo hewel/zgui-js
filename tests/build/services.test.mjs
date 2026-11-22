@@ -6,11 +6,18 @@ test("services defer host lookup and preserve the host request, receiver and syn
   try {
     Object.defineProperty(globalThis, "__zguiServices", {
       configurable: true,
-      get() { throw new Error("Host must not be accessed during module evaluation"); },
+      get() {
+        throw new Error("Host must not be accessed during module evaluation");
+      },
     });
     const { loadTextAsset, readTextAsset } = await import("@hewel/zgui-services");
     let cancellations = 0;
-    const request = { promise: Promise.resolve("text"), cancel() { cancellations++; } };
+    const request = {
+      promise: Promise.resolve("text"),
+      cancel() {
+        cancellations++;
+      },
+    };
     const failure = new Error("undeclared asset");
     const cancelledError = Object.assign(new Error("request cancelled"), { code: "Cancelled" });
     let pendingReject;
@@ -19,8 +26,16 @@ test("services defer host lookup and preserve the host request, receiver and syn
         assert.equal(this, host);
         if (asset === "assets/missing.txt") throw failure;
         if (asset === "assets/cancelled.txt") {
-          const cancelledPromise = new Promise((_, reject) => { pendingReject = reject; });
-          return { promise: cancelledPromise, cancel() { cancellations++; pendingReject(cancelledError); } };
+          const cancelledPromise = new Promise((_, reject) => {
+            pendingReject = reject;
+          });
+          return {
+            promise: cancelledPromise,
+            cancel() {
+              cancellations++;
+              pendingReject(cancelledError);
+            },
+          };
         }
         assert.equal(asset, "assets/message.txt");
         return request;
@@ -32,7 +47,10 @@ test("services defer host lookup and preserve the host request, receiver and syn
     assert.equal(result.promise, request.promise);
     result.cancel();
     assert.equal(cancellations, 1);
-    assert.throws(() => readTextAsset("assets/missing.txt"), error => error === failure);
+    assert.throws(
+      () => readTextAsset("assets/missing.txt"),
+      error => error === failure,
+    );
 
     const { createRoot, flush } = await import("solid-js");
     let dispose;
@@ -98,7 +116,10 @@ test("image asset handles preserve the host receiver, with explicit or owner-sco
     assert.deepEqual([...live], [unscoped]);
     unscoped.release();
     assert.equal(live.size, 0);
-    assert.throws(() => loadImageAsset("assets/missing.png"), error => error === failure);
+    assert.throws(
+      () => loadImageAsset("assets/missing.png"),
+      error => error === failure,
+    );
   } finally {
     if (previous) Object.defineProperty(globalThis, "__zguiServices", previous);
     else delete globalThis.__zguiServices;
@@ -117,7 +138,12 @@ test("byte image handles release with their owner unless explicitly registered",
       assert.equal(this, host);
       if (input.length === 0) throw failure;
       assert.equal(input, bytes, "forward the view without copying it in JS");
-      const handle = { src: `zgui-blob://${live.size}`, release() { live.delete(this); } };
+      const handle = {
+        src: `zgui-blob://${live.size}`,
+        release() {
+          live.delete(this);
+        },
+      };
       live.add(handle);
       return handle;
     },
@@ -138,7 +164,10 @@ test("byte image handles release with their owner unless explicitly registered",
     explicit.release();
     unscoped.release();
     assert.equal(live.size, 0);
-    assert.throws(() => loadImageBytes(new Uint8Array()), error => error === failure);
+    assert.throws(
+      () => loadImageBytes(new Uint8Array()),
+      error => error === failure,
+    );
   } finally {
     if (previous) Object.defineProperty(globalThis, "__zguiServices", previous);
     else delete globalThis.__zguiServices;
@@ -150,7 +179,9 @@ test("endpoint queries defer host access and preserve unbound and undeclared out
   try {
     Object.defineProperty(globalThis, "__zguiServices", {
       configurable: true,
-      get() { throw new Error("Host must not be accessed during module evaluation"); },
+      get() {
+        throw new Error("Host must not be accessed during module evaluation");
+      },
     });
     const { getResolvedCapabilities, getAuthorizedEndpoint } = await import("@hewel/zgui-services");
     const denied = Object.assign(new Error("undeclared socket"), { code: "E_CAPABILITY" });
@@ -167,10 +198,15 @@ test("endpoint queries defer host access and preserve unbound and undeclared out
     };
     Object.defineProperty(globalThis, "__zguiServices", { configurable: true, value: host });
     assert.deepEqual(getResolvedCapabilities(), {
-      imagePrefixes: [], unixSockets: [], namedSockets: { niri: null },
+      imagePrefixes: [],
+      unixSockets: [],
+      namedSockets: { niri: null },
     });
     assert.equal(getAuthorizedEndpoint("niri"), null);
-    assert.throws(() => getAuthorizedEndpoint("other"), error => error === denied);
+    assert.throws(
+      () => getAuthorizedEndpoint("other"),
+      error => error === denied,
+    );
   } finally {
     if (previous) Object.defineProperty(globalThis, "__zguiServices", previous);
     else delete globalThis.__zguiServices;
@@ -512,20 +548,32 @@ test("SQLite openDatabase and openKvStore close with owner and roll back on tran
         query(sql, params) {
           if (sql.includes("FROM _zgui_kv WHERE namespace = ?1 AND key = ?2")) {
             const val = rows.get(`${params[0]}:${params[1]}`);
-            return { promise: Promise.resolve(val === undefined ? [] : [{ value_json: val }]), cancel() {} };
+            return {
+              promise: Promise.resolve(val === undefined ? [] : [{ value_json: val }]),
+              cancel() {},
+            };
           }
           return { promise: Promise.resolve([]), cancel() {} };
         },
         execute(sql, params) {
           if (sql.includes("INSERT INTO _zgui_kv")) {
             rows.set(`${params[0]}:${params[1]}`, params[2]);
-            return { promise: Promise.resolve({ rowsAffected: 1, lastInsertRowid: 1 }), cancel() {} };
+            return {
+              promise: Promise.resolve({ rowsAffected: 1, lastInsertRowid: 1 }),
+              cancel() {},
+            };
           }
           if (sql.includes("DELETE FROM _zgui_kv WHERE namespace = ?1 AND key = ?2")) {
             const existed = rows.delete(`${params[0]}:${params[1]}`);
-            return { promise: Promise.resolve({ rowsAffected: existed ? 1 : 0, lastInsertRowid: null }), cancel() {} };
+            return {
+              promise: Promise.resolve({ rowsAffected: existed ? 1 : 0, lastInsertRowid: null }),
+              cancel() {},
+            };
           }
-          return { promise: Promise.resolve({ rowsAffected: 0, lastInsertRowid: null }), cancel() {} };
+          return {
+            promise: Promise.resolve({ rowsAffected: 0, lastInsertRowid: null }),
+            cancel() {},
+          };
         },
         batch() {
           return { promise: Promise.resolve([]), cancel() {} };
@@ -541,7 +589,10 @@ test("SQLite openDatabase and openKvStore close with owner and roll back on tran
               return { promise: Promise.resolve([]), cancel() {} };
             },
             execute() {
-              return { promise: Promise.resolve({ rowsAffected: 1, lastInsertRowid: 1 }), cancel() {} };
+              return {
+                promise: Promise.resolve({ rowsAffected: 1, lastInsertRowid: 1 }),
+                cancel() {},
+              };
             },
             commit() {
               commits++;

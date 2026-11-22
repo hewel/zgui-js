@@ -11,17 +11,23 @@ import { attachReducedMotionBridge, bridgeFor, rememberBridge } from "./host.js"
 export function renderApp(code: () => NativeChild, root: NativeNode): () => void {
   const bridge = bridgeFor(root);
   rememberBridge(root, bridge);
-  return mountOwned(() => {
-    attachReducedMotionBridge(bridge);
-    insert(root, code());
-  }, () => bridge.clearRoot(root));
+  return mountOwned(
+    () => {
+      attachReducedMotionBridge(bridge);
+      insert(root, code());
+    },
+    () => bridge.clearRoot(root),
+  );
 }
 
 /** Own a rootless shell's reactive graph; native content belongs inside shell surfaces. */
 export function renderShell(code: () => NativeChild): () => void {
   return mountOwned(() => {
     const children = code();
-    createEffect(() => visitShellChildren(children), () => {});
+    createEffect(
+      () => visitShellChildren(children),
+      () => {},
+    );
   });
 }
 
@@ -29,4 +35,3 @@ function visitShellChildren(child: NativeChild): void {
   if (typeof child === "function") visitShellChildren(child());
   else if (Array.isArray(child)) for (const item of child) visitShellChildren(item);
 }
-

@@ -1,8 +1,16 @@
 import { createSignal } from "@hewel/zgui";
 import type { NativeNode } from "@hewel/zgui";
 import {
-  Button, Checkbox, Label, RadioGroup, RadioGroupItem,
-  Slider, Switch, Toggle, ToggleGroup, ToggleGroupItem,
+  Button,
+  Checkbox,
+  Label,
+  RadioGroup,
+  RadioGroupItem,
+  Slider,
+  Switch,
+  Toggle,
+  ToggleGroup,
+  ToggleGroupItem,
 } from "@hewel/zgui/components";
 import type { CheckedState } from "@hewel/zgui/components";
 import { DemoRow, Panel } from "../shell.js";
@@ -12,12 +20,16 @@ function RadioOption(props: { value: string; label: string; disabled?: boolean }
   return (
     <row class="demo-pair">
       <RadioGroupItem
-        ref={el => { node = el; }}
+        ref={el => {
+          node = el;
+        }}
         value={props.value}
         label={props.label}
         disabled={props.disabled}
       />
-      <Label control={() => node} disabled={props.disabled}>{props.label}</Label>
+      <Label control={() => node} disabled={props.disabled}>
+        {props.label}
+      </Label>
     </row>
   );
 }
@@ -45,7 +57,9 @@ export function ChoicesSection(props: { onAction: (label: string) => void }) {
           <row class="demo-pair">
             <Checkbox
               testId="inputs-terms"
-              ref={el => { termsBox = el; }}
+              ref={el => {
+                termsBox = el;
+              }}
               checked={terms()}
               onCheckedChange={value => {
                 setTerms(value);
@@ -59,7 +73,9 @@ export function ChoicesSection(props: { onAction: (label: string) => void }) {
           <Button
             size="xs"
             variant="outline"
-            onClick={() => setMixed(cur => (cur === false ? "mixed" : cur === "mixed" ? true : false))}
+            onClick={() =>
+              setMixed(cur => (cur === false ? "mixed" : cur === "mixed" ? true : false))
+            }
           >
             <text>{`Mixed: ${String(mixed())}`}</text>
           </Button>
@@ -68,7 +84,9 @@ export function ChoicesSection(props: { onAction: (label: string) => void }) {
         <DemoRow label="Switch">
           <row class="demo-pair">
             <Switch
-              ref={el => { switchNode = el; }}
+              ref={el => {
+                switchNode = el;
+              }}
               checked={emails()}
               onCheckedChange={value => {
                 setEmails(value);
@@ -107,11 +125,21 @@ export function ChoicesSection(props: { onAction: (label: string) => void }) {
         note="Stateful press toggles, single/multi selection groups, and step slider"
       >
         <DemoRow label="Standalone toggles">
-          <Toggle pressed={bold()} onPressedChange={setBold} ariaLabel="Bold">B</Toggle>
-          <Toggle variant="outline" defaultPressed ariaLabel="Italic">I</Toggle>
-          <Toggle size="sm" variant="outline" ariaLabel="Small toggle">Sm</Toggle>
-          <Toggle size="lg" variant="outline" ariaLabel="Large toggle">Lg</Toggle>
-          <Toggle disabled ariaLabel="Disabled toggle">Off</Toggle>
+          <Toggle pressed={bold()} onPressedChange={setBold} ariaLabel="Bold">
+            B
+          </Toggle>
+          <Toggle variant="outline" defaultPressed ariaLabel="Italic">
+            I
+          </Toggle>
+          <Toggle size="sm" variant="outline" ariaLabel="Small toggle">
+            Sm
+          </Toggle>
+          <Toggle size="lg" variant="outline" ariaLabel="Large toggle">
+            Lg
+          </Toggle>
+          <Toggle disabled ariaLabel="Disabled toggle">
+            Off
+          </Toggle>
         </DemoRow>
         <DemoRow label="ToggleGroup (single vs multiple)">
           <ToggleGroup

@@ -184,7 +184,10 @@ test("SQLite :memory: preview runs fixture seeds, atomic batch, transactions, FT
   assert.equal(getNode(tree, "seeded")?.text, "2:Alpha,Beta");
   assert.equal(getNode(tree, "tx-summary")?.text, "batchRb=true,txRb=true,rows=committed-tx");
   assert.equal(getNode(tree, "fts-hit")?.text, "Markdown Studio");
-  assert.equal(getNode(tree, "kv-summary")?.text, "font=14,prefix=2,del=true,rem=editor.font,window.width");
+  assert.equal(
+    getNode(tree, "kv-summary")?.text,
+    "font=14,prefix=2,del=true,rem=editor.font,window.width",
+  );
   assert.equal(result.teardown.clean, true);
 });
 

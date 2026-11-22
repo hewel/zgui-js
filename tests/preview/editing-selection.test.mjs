@@ -1,11 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import path from "node:path";
-import {
-  buildFixtureApp,
-  createTempWorkspace,
-  runScenario,
-} from "./harness.mjs";
+import { buildFixtureApp, createTempWorkspace, runScenario } from "./harness.mjs";
 
 const selectionPreviewSource = `
 import {
@@ -89,9 +85,14 @@ export function mount(root: NativeNode) {
 test("NativeValueEvent.selection and getSelection/setSelection/selectAll use UTF-16 offsets across ASCII, CJK, and emoji (#56)", async t => {
   const temp = await createTempWorkspace("preview-utf16-selection-");
   t.after(() => temp.cleanup());
-  const bundle = await buildFixtureApp(path.join(temp.dir, "app"), "utf16-selection", selectionPreviewSource, {
-    rawSource: true,
-  });
+  const bundle = await buildFixtureApp(
+    path.join(temp.dir, "app"),
+    "utf16-selection",
+    selectionPreviewSource,
+    {
+      rawSource: true,
+    },
+  );
 
   const check = (id, testId, equals) => ({
     id,
@@ -110,7 +111,14 @@ test("NativeValueEvent.selection and getSelection/setSelection/selectAll use UTF
     projectDir: temp.dir,
     bundle,
     name: "utf16-selection",
-    requiredCapabilities: ["pixels", "virtual-time", "selectors.test-id", "input.pointer", "input.text", "tree.inspect"],
+    requiredCapabilities: [
+      "pixels",
+      "virtual-time",
+      "selectors.test-id",
+      "input.pointer",
+      "input.text",
+      "tree.inspect",
+    ],
     width: 640,
     height: 300,
     scale: 1,

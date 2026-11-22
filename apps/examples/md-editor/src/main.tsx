@@ -1,10 +1,4 @@
-import {
-  closeWindow,
-  createMemo,
-  onCloseRequest,
-  renderApp,
-  useWindowState,
-} from "@hewel/zgui";
+import { closeWindow, createMemo, onCloseRequest, renderApp, useWindowState } from "@hewel/zgui";
 import type { NativeKeyEvent, NativeNode } from "@hewel/zgui";
 import {
   Badge,
@@ -150,19 +144,37 @@ function StudioShell() {
               label="Quick document switcher"
               style={{ width: "180px" }}
             />
-            <Badge testId="save-state-badge" variant={studio.activeDoc().dirty ? "default" : "secondary"}>
+            <Badge
+              testId="save-state-badge"
+              variant={studio.activeDoc().dirty ? "default" : "secondary"}
+            >
               {studio.activeDoc().dirty ? "Unsaved *" : "Saved"}
             </Badge>
           </row>
 
           <row style={{ gap: "6px", "align-items": "center" }}>
-            <Button testId="btn-open-file" size="xs" variant="outline" onClick={() => void studio.openLocalFile()}>
+            <Button
+              testId="btn-open-file"
+              size="xs"
+              variant="outline"
+              onClick={() => void studio.openLocalFile()}
+            >
               Open
             </Button>
-            <Button testId="btn-save-file" size="xs" variant="outline" onClick={() => void studio.saveActiveDocument()}>
+            <Button
+              testId="btn-save-file"
+              size="xs"
+              variant="outline"
+              onClick={() => void studio.saveActiveDocument()}
+            >
               Save
             </Button>
-            <Button testId="btn-open-folder" size="xs" variant="outline" onClick={() => void studio.openWorkspaceFolder()}>
+            <Button
+              testId="btn-open-folder"
+              size="xs"
+              variant="outline"
+              onClick={() => void studio.openWorkspaceFolder()}
+            >
               Folder
             </Button>
             <Separator orientation="vertical" />
@@ -192,11 +204,18 @@ function StudioShell() {
         <row class="mde-statusbar">
           <row style={{ gap: "10px", "align-items": "center" }}>
             <text testId="status-msg">{studio.statusMsg()}</text>
-            <text class="mono" testId="window-title-readout">{windowState().title}</text>
+            <text class="mono" testId="window-title-readout">
+              {windowState().title}
+            </text>
           </row>
           <row style={{ gap: "10px", "align-items": "center" }}>
-            <text class="mono" testId="route-readout">{location().pathname}</text>
-            <text class="mono" testId="watch-event-readout">{`watch:${studio.externalEventLog()}`}</text>
+            <text class="mono" testId="route-readout">
+              {location().pathname}
+            </text>
+            <text
+              class="mono"
+              testId="watch-event-readout"
+            >{`watch:${studio.externalEventLog()}`}</text>
             <text class="mono">
               {`${studio.stats().words} words · ${studio.stats().lines} lines · ${studio.stats().chars} chars`}
             </text>

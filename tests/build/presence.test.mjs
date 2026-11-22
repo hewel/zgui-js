@@ -30,7 +30,9 @@ export function mount(root: NativeNode) {
 `;
 
 const textOf = current =>
-  current.tag === "#text" ? current.props.get("text") ?? "" : current.children.map(textOf).join("");
+  current.tag === "#text"
+    ? (current.props.get("text") ?? "")
+    : current.children.map(textOf).join("");
 
 async function mounted(t) {
   const harness = createHost();
@@ -39,7 +41,13 @@ async function mounted(t) {
   const mod = await moduleFor(t, fixture);
   const clock = createClock(t, harness);
   let dispose;
-  t.after(() => { try { dispose?.(); } finally { delete globalThis.__zgui; } });
+  t.after(() => {
+    try {
+      dispose?.();
+    } finally {
+      delete globalThis.__zgui;
+    }
+  });
   globalThis.__zgui = harness.host;
   const root = harness.makeNode("root");
   dispose = mod.mount(root);
@@ -47,8 +55,23 @@ async function mounted(t) {
   const state = () => surface()?.props.get("data-state");
   const counter = () => textOf(harness.byTestId("counter"));
   const event = (target, type) => harness.dispatch(target, type);
-  return { clock, queries, busy, harness, mod, root, surface, state, counter, event,
-    finish: () => { const end = dispose; dispose = undefined; end?.(); } };
+  return {
+    clock,
+    queries,
+    busy,
+    harness,
+    mod,
+    root,
+    surface,
+    state,
+    counter,
+    event,
+    finish: () => {
+      const end = dispose;
+      dispose = undefined;
+      end?.();
+    },
+  };
 }
 
 test("presence mounts on open, defers its exit check past a styled frame and removes an idle surface", async t => {
@@ -126,7 +149,10 @@ test("reopen cancels a queued exit and stale callbacks cannot close the new exit
   assert.equal(counter(), "1");
   mod.setOpen(false);
   harness.flush();
-  const stale = [...clock.frames.values(), ...[...clock.timers.values()].map(timer => timer.callback)];
+  const stale = [
+    ...clock.frames.values(),
+    ...[...clock.timers.values()].map(timer => timer.callback),
+  ];
   mod.setOpen(true);
   harness.flush();
   const current = surface();
@@ -164,7 +190,10 @@ test("disposal before the styled frame clears timers and saved callbacks stay in
   harness.flush();
   assert.equal(clock.frames.size, 1);
   assert.equal(clock.timers.size, 1);
-  const stale = [...clock.frames.values(), ...[...clock.timers.values()].map(timer => timer.callback)];
+  const stale = [
+    ...clock.frames.values(),
+    ...[...clock.timers.values()].map(timer => timer.callback),
+  ];
   finish();
   assert.equal(clock.frames.size, 0);
   assert.equal(clock.timers.size, 0);

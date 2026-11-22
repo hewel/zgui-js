@@ -31,7 +31,10 @@ export interface SelectOption<T extends string = string> {
   readonly disabled?: boolean | undefined;
 }
 
-export interface SelectProps<T extends string = string> extends Omit<NativeElementProps, "children" | "open"> {
+export interface SelectProps<T extends string = string> extends Omit<
+  NativeElementProps,
+  "children" | "open"
+> {
   children?: never;
   options: readonly SelectOption<T>[];
   value?: T | null | undefined;
@@ -49,7 +52,10 @@ export interface SelectProps<T extends string = string> extends Omit<NativeEleme
   listTestId?: string | undefined;
 }
 
-export interface ComboboxProps<T extends string = string> extends Omit<NativeElementProps, "children" | "open"> {
+export interface ComboboxProps<T extends string = string> extends Omit<
+  NativeElementProps,
+  "children" | "open"
+> {
   children?: never;
   options: readonly SelectOption<T>[];
   value?: T | null | undefined;
@@ -100,7 +106,10 @@ function nextEnabledIndex<T extends string>(
   return -1;
 }
 
-function indexForValue<T extends string>(options: readonly SelectOption<T>[], value: T | null | undefined): number {
+function indexForValue<T extends string>(
+  options: readonly SelectOption<T>[],
+  value: T | null | undefined,
+): number {
   if (value == null) return -1;
   for (let i = 0; i < options.length; i++) {
     if (options[i]!.value === value && !options[i]!.disabled) return i;
@@ -108,7 +117,10 @@ function indexForValue<T extends string>(options: readonly SelectOption<T>[], va
   return -1;
 }
 
-function defaultComboboxFilter<T extends string>(option: SelectOption<T>, rawQuery: string): boolean {
+function defaultComboboxFilter<T extends string>(
+  option: SelectOption<T>,
+  rawQuery: string,
+): boolean {
   const query = rawQuery.trim().toLowerCase();
   if (query.length === 0) return true;
   if (option.label.toLowerCase().includes(query)) return true;
@@ -148,108 +160,163 @@ function mountOptionPopup<T extends string>(config: ListPopupConfig<T>): NativeN
     },
   );
 
-  slot(holder, () => (config.open() ? untrack(() => overlayPortal(elevation, () => {
-    const surface = createElement("box");
-    const dismiss = registerDismissLayer(
-      surface,
-      () => config.setOpen(false),
-      {
-        layer: elevation.layer,
-        dismissOnOutsidePress: true,
-        dismissOnEscape: true,
-        exclude: untrack(config.exclude),
-        leaving: false,
-      },
-    );
-    createEffect(
-      () => ({ exclude: config.exclude(), leaving: !config.open() }),
-      next => dismiss.update({
-        layer: elevation.layer,
-        dismissOnOutsidePress: true,
-        dismissOnEscape: true,
-        exclude: next.exclude,
-        leaving: next.leaving,
-      }),
-    );
+  slot(holder, () =>
+    config.open()
+      ? untrack(() =>
+          overlayPortal(elevation, () => {
+            const surface = createElement("box");
+            const dismiss = registerDismissLayer(surface, () => config.setOpen(false), {
+              layer: elevation.layer,
+              dismissOnOutsidePress: true,
+              dismissOnEscape: true,
+              exclude: untrack(config.exclude),
+              leaving: false,
+            });
+            createEffect(
+              () => ({ exclude: config.exclude(), leaving: !config.open() }),
+              next =>
+                dismiss.update({
+                  layer: elevation.layer,
+                  dismissOnOutsidePress: true,
+                  dismissOnEscape: true,
+                  exclude: next.exclude,
+                  leaving: next.leaving,
+                }),
+            );
 
-    spread(surface, {
-      __zguiClass: classes(overlaySheet.className, "zui-surface"),
-      "data-state": "open",
-    }, true);
+            spread(
+              surface,
+              {
+                __zguiClass: classes(overlaySheet.className, "zui-surface"),
+                "data-state": "open",
+              },
+              true,
+            );
 
-    const listBox = createElement("scroll");
-    spread(listBox, {
-      role: "listBox",
-      get testId() { return config.listTestId() ?? null; },
-      __zguiClass: classes(selectSheet.className, comboboxSheet.className, config.listClass),
-      __zguiStyle: { minWidth: "var(--zui-popper-anchor-width, 160px)" },
-    }, true);
+            const listBox = createElement("scroll");
+            spread(
+              listBox,
+              {
+                role: "listBox",
+                get testId() {
+                  return config.listTestId() ?? null;
+                },
+                __zguiClass: classes(
+                  selectSheet.className,
+                  comboboxSheet.className,
+                  config.listClass,
+                ),
+                __zguiStyle: { minWidth: "var(--zui-popper-anchor-width, 160px)" },
+              },
+              true,
+            );
 
-    slot(listBox, For({
-      get each() { return config.options(); },
-      get fallback() {
-        return element("box", {
-          class: "zui-combobox__empty",
-          role: "status",
-          get children() { return config.emptyText(); },
-        });
-      },
-      children(option: SelectOption<T>, index: Accessor<number>): NativeChild {
-          const row = createElement("control");
-          itemNodes.set(option.value, row);
-          onCleanup(() => {
-            if (itemNodes.get(option.value) === row) itemNodes.delete(option.value);
-          });
-          spread(row, {
-            role: "listBoxOption",
-            tabIndex: -1,
-            get disabled() { return !!option.disabled; },
-            get selected() { return config.selectedValue() === option.value; },
-            get "data-active"() { return config.activeIndex() === index() ? "true" : "false"; },
-            get "data-disabled"() { return option.disabled ? "true" : "false"; },
-            get "data-value"() { return option.value; },
-            __zguiClass: "zui-select__item",
-            onPointerEnter() {
-              if (!option.disabled) config.setActiveIndex(index());
-            },
-            onPointerDown(event: NativePointerDownEvent) {
-              event.preventDefault();
-            },
-            onClick() {
-              if (!option.disabled) config.onSelect(option);
-            },
-          }, true);
-          const labelNode = element("box", {
-            __zguiStyle: { display: "flex", flexDirection: "column", flexGrow: 1, minWidth: "0px" },
-          });
-          append(labelNode, element("label", { children: option.label }));
-          if (option.description) {
-            append(labelNode, element("label", {
-              class: "zui-select__placeholder",
-              __zguiStyle: { fontSize: "var(--zui-type-size-xs)" },
-              children: option.description,
-            }));
-          }
-          append(row, labelNode);
-          slot(row, () => {
-            if (config.selectedValue() !== option.value) return null;
-            const mark = element("box", { class: "zui-select__indicator", ariaHidden: true });
-            append(mark, Icon({ icon: CHECK, size: "sm" }));
-            return mark;
-          });
-          return row;
-        },
-    }));
+            slot(
+              listBox,
+              For({
+                get each() {
+                  return config.options();
+                },
+                get fallback() {
+                  return element("box", {
+                    class: "zui-combobox__empty",
+                    role: "status",
+                    get children() {
+                      return config.emptyText();
+                    },
+                  });
+                },
+                children(option: SelectOption<T>, index: Accessor<number>): NativeChild {
+                  const row = createElement("control");
+                  itemNodes.set(option.value, row);
+                  onCleanup(() => {
+                    if (itemNodes.get(option.value) === row) itemNodes.delete(option.value);
+                  });
+                  spread(
+                    row,
+                    {
+                      role: "listBoxOption",
+                      tabIndex: -1,
+                      get disabled() {
+                        return !!option.disabled;
+                      },
+                      get selected() {
+                        return config.selectedValue() === option.value;
+                      },
+                      get "data-active"() {
+                        return config.activeIndex() === index() ? "true" : "false";
+                      },
+                      get "data-disabled"() {
+                        return option.disabled ? "true" : "false";
+                      },
+                      get "data-value"() {
+                        return option.value;
+                      },
+                      __zguiClass: "zui-select__item",
+                      onPointerEnter() {
+                        if (!option.disabled) config.setActiveIndex(index());
+                      },
+                      onPointerDown(event: NativePointerDownEvent) {
+                        event.preventDefault();
+                      },
+                      onClick() {
+                        if (!option.disabled) config.onSelect(option);
+                      },
+                    },
+                    true,
+                  );
+                  const labelNode = element("box", {
+                    __zguiStyle: {
+                      display: "flex",
+                      flexDirection: "column",
+                      flexGrow: 1,
+                      minWidth: "0px",
+                    },
+                  });
+                  append(labelNode, element("label", { children: option.label }));
+                  if (option.description) {
+                    append(
+                      labelNode,
+                      element("label", {
+                        class: "zui-select__placeholder",
+                        __zguiStyle: { fontSize: "var(--zui-type-size-xs)" },
+                        children: option.description,
+                      }),
+                    );
+                  }
+                  append(row, labelNode);
+                  slot(row, () => {
+                    if (config.selectedValue() !== option.value) return null;
+                    const mark = element("box", {
+                      class: "zui-select__indicator",
+                      ariaHidden: true,
+                    });
+                    append(mark, Icon({ icon: CHECK, size: "sm" }));
+                    return mark;
+                  });
+                  return row;
+                },
+              }),
+            );
 
-    append(surface, listBox);
-    return Popper({
-      get anchor() { return config.anchor(); },
-      get placement() { return config.placement(); },
-      get offset() { return config.offset(); },
-      class: "zui-overlay-positioner",
-      children: surface,
-    });
-  })) : null));
+            append(surface, listBox);
+            return Popper({
+              get anchor() {
+                return config.anchor();
+              },
+              get placement() {
+                return config.placement();
+              },
+              get offset() {
+                return config.offset();
+              },
+              class: "zui-overlay-positioner",
+              children: surface,
+            });
+          }),
+        )
+      : null,
+  );
   return holder;
 }
 
@@ -280,19 +347,25 @@ export function Select<T extends string = string>(props: SelectProps<T>): Native
     "onKeyDown",
   );
 
-  const [value, setValue] = createControllable<T | null>({
-    value: () => props.value,
-    defaultValue: () => props.defaultValue ?? null,
-    onChange: () => next => {
-      if (next !== null) props.onValueChange?.(next);
+  const [value, setValue] = createControllable<T | null>(
+    {
+      value: () => props.value,
+      defaultValue: () => props.defaultValue ?? null,
+      onChange: () => next => {
+        if (next !== null) props.onValueChange?.(next);
+      },
     },
-  }, null);
+    null,
+  );
 
-  const [open, setOpen] = createControllable<boolean>({
-    value: () => props.open,
-    defaultValue: () => props.defaultOpen,
-    onChange: () => props.onOpenChange,
-  }, false);
+  const [open, setOpen] = createControllable<boolean>(
+    {
+      value: () => props.open,
+      defaultValue: () => props.defaultOpen,
+      onChange: () => props.onOpenChange,
+    },
+    false,
+  );
 
   const [activeIndex, setActiveIndex] = createSignal(-1, { ownedWrite: true });
   const [triggerNode, setTriggerNode] = createSignal<NativeNode | null>(null, { ownedWrite: true });
@@ -322,9 +395,13 @@ export function Select<T extends string = string>(props: SelectProps<T>): Native
 
   const handleTypeahead = (ch: string) => {
     typeaheadBuffer += ch.toLowerCase();
-    typeaheadTimer.schedule(500, () => { typeaheadBuffer = ""; });
+    typeaheadTimer.schedule(500, () => {
+      typeaheadBuffer = "";
+    });
     const opts = props.options;
-    const matchIndex = opts.findIndex(opt => !opt.disabled && opt.label.toLowerCase().startsWith(typeaheadBuffer));
+    const matchIndex = opts.findIndex(
+      opt => !opt.disabled && opt.label.toLowerCase().startsWith(typeaheadBuffer),
+    );
     if (matchIndex < 0) return;
     setActiveIndex(matchIndex);
     if (!untrack(open)) {
@@ -335,88 +412,118 @@ export function Select<T extends string = string>(props: SelectProps<T>): Native
   const trigger = createElement("control");
   setTriggerNode(trigger);
 
-  spread(trigger, mergeProps(
-    rest,
-    withDefaults({
-      role: "comboBox" as const,
-      tabIndex: 0,
-      ariaHasPopup: "listbox" as const,
-      get expanded() { return open(); },
-      get disabled() { return !!props.disabled; },
-      get invalid() { return !!props.invalid; },
-      get ariaLabel() { return props.label ?? null; },
-      get "data-size"() { return props.size ?? "md"; },
-      get "data-state"() { return open() ? "open" : "closed"; },
-    }, rest),
-    {
-      get __zguiClass() { return classes(selectSheet.className, "zui-select"); },
-      onClick(event: NativeEvent) {
-        if (!callHandler(event, props.onClick) || props.disabled) return;
-        if (untrack(open)) setOpen(false);
-        else openList();
-      },
-      onKeyDown(event: NativeKeyEvent) {
-        if (!callHandler(event, props.onKeyDown) || props.disabled) return;
-        const opts = props.options;
-        const isOpen = untrack(open);
-        if (event.key === "ArrowDown") {
-          event.preventDefault();
-          event.stopPropagation();
-          if (!isOpen) openList();
-          else setActiveIndex(nextEnabledIndex(opts, untrack(activeIndex), 1));
-          return;
-        }
-        if (event.key === "ArrowUp") {
-          event.preventDefault();
-          event.stopPropagation();
-          if (!isOpen) openList(lastEnabledIndex(opts));
-          else setActiveIndex(nextEnabledIndex(opts, untrack(activeIndex), -1));
-          return;
-        }
-        if (event.key === "Home" && isOpen) {
-          event.preventDefault();
-          event.stopPropagation();
-          setActiveIndex(firstEnabledIndex(opts));
-          return;
-        }
-        if (event.key === "End" && isOpen) {
-          event.preventDefault();
-          event.stopPropagation();
-          setActiveIndex(lastEnabledIndex(opts));
-          return;
-        }
-        if (event.key === "Enter" || event.key === "Space" || event.key === " ") {
-          event.preventDefault();
-          event.stopPropagation();
-          if (!isOpen) {
-            openList();
-          } else {
-            const idx = untrack(activeIndex);
-            if (idx >= 0 && idx < opts.length && !opts[idx]!.disabled) {
-              commitOption(opts[idx]!);
-            } else {
-              setOpen(false);
-            }
+  spread(
+    trigger,
+    mergeProps(
+      rest,
+      withDefaults(
+        {
+          role: "comboBox" as const,
+          tabIndex: 0,
+          ariaHasPopup: "listbox" as const,
+          get expanded() {
+            return open();
+          },
+          get disabled() {
+            return !!props.disabled;
+          },
+          get invalid() {
+            return !!props.invalid;
+          },
+          get ariaLabel() {
+            return props.label ?? null;
+          },
+          get "data-size"() {
+            return props.size ?? "md";
+          },
+          get "data-state"() {
+            return open() ? "open" : "closed";
+          },
+        },
+        rest,
+      ),
+      {
+        get __zguiClass() {
+          return classes(selectSheet.className, "zui-select");
+        },
+        onClick(event: NativeEvent) {
+          if (!callHandler(event, props.onClick) || props.disabled) return;
+          if (untrack(open)) setOpen(false);
+          else openList();
+        },
+        onKeyDown(event: NativeKeyEvent) {
+          if (!callHandler(event, props.onKeyDown) || props.disabled) return;
+          const opts = props.options;
+          const isOpen = untrack(open);
+          if (event.key === "ArrowDown") {
+            event.preventDefault();
+            event.stopPropagation();
+            if (!isOpen) openList();
+            else setActiveIndex(nextEnabledIndex(opts, untrack(activeIndex), 1));
+            return;
           }
-          return;
-        }
-        if (event.key === "Escape" && isOpen) {
-          event.preventDefault();
-          event.stopPropagation();
-          setOpen(false);
-          return;
-        }
-        if (event.character && event.character.length === 1 && !event.modifiers.control && !event.modifiers.meta && !event.modifiers.alt) {
-          handleTypeahead(event.character);
-        }
+          if (event.key === "ArrowUp") {
+            event.preventDefault();
+            event.stopPropagation();
+            if (!isOpen) openList(lastEnabledIndex(opts));
+            else setActiveIndex(nextEnabledIndex(opts, untrack(activeIndex), -1));
+            return;
+          }
+          if (event.key === "Home" && isOpen) {
+            event.preventDefault();
+            event.stopPropagation();
+            setActiveIndex(firstEnabledIndex(opts));
+            return;
+          }
+          if (event.key === "End" && isOpen) {
+            event.preventDefault();
+            event.stopPropagation();
+            setActiveIndex(lastEnabledIndex(opts));
+            return;
+          }
+          if (event.key === "Enter" || event.key === "Space" || event.key === " ") {
+            event.preventDefault();
+            event.stopPropagation();
+            if (!isOpen) {
+              openList();
+            } else {
+              const idx = untrack(activeIndex);
+              if (idx >= 0 && idx < opts.length && !opts[idx]!.disabled) {
+                commitOption(opts[idx]!);
+              } else {
+                setOpen(false);
+              }
+            }
+            return;
+          }
+          if (event.key === "Escape" && isOpen) {
+            event.preventDefault();
+            event.stopPropagation();
+            setOpen(false);
+            return;
+          }
+          if (
+            event.character &&
+            event.character.length === 1 &&
+            !event.modifiers.control &&
+            !event.modifiers.meta &&
+            !event.modifiers.alt
+          ) {
+            handleTypeahead(event.character);
+          }
+        },
       },
-    },
-  ), true);
+    ),
+    true,
+  );
 
   slot(trigger, () => {
     const selected = selectedOption();
     if (selected) return element("label", { children: selected.label });
-    return element("label", { class: "zui-select__placeholder", children: props.placeholder ?? "Select..." });
+    return element("label", {
+      class: "zui-select__placeholder",
+      children: props.placeholder ?? "Select...",
+    });
   });
   append(trigger, Icon({ icon: CHEVRON_DOWN, size: "sm", class: "zui-select__chevron" }));
 
@@ -470,13 +577,16 @@ export function Combobox<T extends string = string>(props: ComboboxProps<T>): Na
     "onKeyDown",
   );
 
-  const [value, setValue] = createControllable<T | null>({
-    value: () => props.value,
-    defaultValue: () => props.defaultValue ?? null,
-    onChange: () => next => {
-      if (next !== null) props.onValueChange?.(next);
+  const [value, setValue] = createControllable<T | null>(
+    {
+      value: () => props.value,
+      defaultValue: () => props.defaultValue ?? null,
+      onChange: () => next => {
+        if (next !== null) props.onValueChange?.(next);
+      },
     },
-  }, null);
+    null,
+  );
 
   const initialQuery = () => {
     if (props.defaultQuery !== undefined) return props.defaultQuery;
@@ -485,17 +595,23 @@ export function Combobox<T extends string = string>(props: ComboboxProps<T>): Na
     return match?.label ?? "";
   };
 
-  const [query, setQuery] = createControllable<string>({
-    value: () => props.query,
-    defaultValue: initialQuery,
-    onChange: () => props.onQueryChange,
-  }, "");
+  const [query, setQuery] = createControllable<string>(
+    {
+      value: () => props.query,
+      defaultValue: initialQuery,
+      onChange: () => props.onQueryChange,
+    },
+    "",
+  );
 
-  const [open, setOpen] = createControllable<boolean>({
-    value: () => props.open,
-    defaultValue: () => props.defaultOpen,
-    onChange: () => props.onOpenChange,
-  }, false);
+  const [open, setOpen] = createControllable<boolean>(
+    {
+      value: () => props.open,
+      defaultValue: () => props.defaultOpen,
+      onChange: () => props.onOpenChange,
+    },
+    false,
+  );
 
   const filteredOptions = createMemo(() => {
     const predicate = props.filter ?? defaultComboboxFilter;
@@ -525,24 +641,43 @@ export function Combobox<T extends string = string>(props: ComboboxProps<T>): Na
 
   const root = createElement("box");
   setRootNode(root);
-  spread(root, mergeProps(
-    rest,
-    {
-      get __zguiClass() { return classes(comboboxSheet.className, "zui-combobox"); },
-      get "data-state"() { return open() ? "open" : "closed"; },
-    },
-  ), true);
+  spread(
+    root,
+    mergeProps(rest, {
+      get __zguiClass() {
+        return classes(comboboxSheet.className, "zui-combobox");
+      },
+      get "data-state"() {
+        return open() ? "open" : "closed";
+      },
+    }),
+    true,
+  );
 
   const inputNode = Input({
     role: "comboBox",
     ariaHasPopup: "listbox",
-    get testId() { return props.inputTestId ?? null; },
-    get value() { return query(); },
-    get placeholder() { return props.placeholder ?? "Search..."; },
-    get disabled() { return !!props.disabled; },
-    get invalid() { return !!props.invalid; },
-    get label() { return props.label ?? null; },
-    get expanded() { return open(); },
+    get testId() {
+      return props.inputTestId ?? null;
+    },
+    get value() {
+      return query();
+    },
+    get placeholder() {
+      return props.placeholder ?? "Search...";
+    },
+    get disabled() {
+      return !!props.disabled;
+    },
+    get invalid() {
+      return !!props.invalid;
+    },
+    get label() {
+      return props.label ?? null;
+    },
+    get expanded() {
+      return open();
+    },
     onFocus() {
       if (!props.disabled && !untrack(open)) setOpen(true);
     },

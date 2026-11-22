@@ -31,9 +31,16 @@ export function SettingsView() {
         <row style={{ "justify-content": "space-between", "align-items": "center" }}>
           <column style={{ gap: "4px" }}>
             <text style={{ "font-size": "20px", "font-weight": "700" }}>Studio Preferences</text>
-            <text class="muted">All settings are persisted to app-scoped SQLite KV (`studio/prefs`).</text>
+            <text class="muted">
+              All settings are persisted to app-scoped SQLite KV (`studio/prefs`).
+            </text>
           </column>
-          <Button testId="settings-reset" variant="outline" size="sm" onClick={() => void studio.resetPrefs()}>
+          <Button
+            testId="settings-reset"
+            variant="outline"
+            size="sm"
+            onClick={() => void studio.resetPrefs()}
+          >
             Reset Defaults
           </Button>
         </row>
@@ -41,14 +48,18 @@ export function SettingsView() {
         <Card>
           <CardHeader>
             <CardTitle>Appearance & Typography</CardTitle>
-            <CardDescription>Customize ThemeProvider scheme, preset, and live preview scale.</CardDescription>
+            <CardDescription>
+              Customize ThemeProvider scheme, preset, and live preview scale.
+            </CardDescription>
           </CardHeader>
           <CardContent>
             <column style={{ gap: "14px" }}>
               <row style={{ "justify-content": "space-between", "align-items": "center" }}>
                 <column style={{ gap: "2px" }}>
                   <text style={{ "font-weight": "600" }}>Theme Preset</text>
-                  <text class="muted">Applied across main window, overlays, and auxiliary windows.</text>
+                  <text class="muted">
+                    Applied across main window, overlays, and auxiliary windows.
+                  </text>
                 </column>
                 <Select
                   testId="settings-preset-select"
@@ -75,7 +86,9 @@ export function SettingsView() {
 
               <row style={{ "justify-content": "space-between", "align-items": "center" }}>
                 <column style={{ gap: "2px" }}>
-                  <text style={{ "font-weight": "600" }}>{`Preview Font Size (${studio.fontSize()}px)`}</text>
+                  <text
+                    style={{ "font-weight": "600" }}
+                  >{`Preview Font Size (${studio.fontSize()}px)`}</text>
                   <text class="muted">Persisted across sessions via SQLite KV.</text>
                 </column>
                 <box style={{ width: "160px" }}>
@@ -94,7 +107,9 @@ export function SettingsView() {
               <row style={{ "justify-content": "space-between", "align-items": "center" }}>
                 <column style={{ gap: "2px" }}>
                   <text style={{ "font-weight": "600" }}>Unsaved Navigation Guard</text>
-                  <text class="muted">Confirm via useBeforeLeave before leaving the editor with unsaved edits.</text>
+                  <text class="muted">
+                    Confirm via useBeforeLeave before leaving the editor with unsaved edits.
+                  </text>
                 </column>
                 <Switch
                   testId="settings-guard-switch"
@@ -109,10 +124,14 @@ export function SettingsView() {
 
         <Card>
           <CardHeader>
-            <row style={{ "justify-content": "space-between", "align-items": "center", width: "100%" }}>
+            <row
+              style={{ "justify-content": "space-between", "align-items": "center", width: "100%" }}
+            >
               <column style={{ gap: "2px" }}>
                 <CardTitle>Persisted Workspace Bookmarks</CardTitle>
-                <CardDescription>Per-app bookmarks granted via XDG FileChooser Portal.</CardDescription>
+                <CardDescription>
+                  Per-app bookmarks granted via XDG FileChooser Portal.
+                </CardDescription>
               </column>
               <Button size="xs" variant="outline" onClick={() => void studio.refreshBookmarks()}>
                 Refresh
@@ -122,7 +141,11 @@ export function SettingsView() {
           <CardContent>
             <Show
               when={studio.bookmarks().length > 0}
-              fallback={<text class="muted" testId="bookmarks-empty">No persisted workspace bookmarks yet.</text>}
+              fallback={
+                <text class="muted" testId="bookmarks-empty">
+                  No persisted workspace bookmarks yet.
+                </text>
+              }
             >
               <column style={{ gap: "8px" }}>
                 <For each={studio.bookmarks()}>

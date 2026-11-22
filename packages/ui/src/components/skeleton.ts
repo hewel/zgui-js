@@ -10,9 +10,12 @@ export interface SkeletonProps extends Omit<NativeElementProps, "children"> {
 export function Skeleton(props: SkeletonProps = {}): NativeNode {
   useStylesheet(sheet);
   forbidChildren("Skeleton", props);
-  return element("box", mergeProps(
-    props,
-    withDefaults({ role: "genericContainer" as const, ariaBusy: true }, props),
-    { get __zguiClass() { return classes(sheet.className, "zui-skeleton"); } },
-  ));
+  return element(
+    "box",
+    mergeProps(props, withDefaults({ role: "genericContainer" as const, ariaBusy: true }, props), {
+      get __zguiClass() {
+        return classes(sheet.className, "zui-skeleton");
+      },
+    }),
+  );
 }

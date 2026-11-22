@@ -39,8 +39,13 @@ export function mount() {
     return (
       <For each={monitors()} keyed={monitor => monitor.id}>
         {monitor => (
-          <LayerSurface name={`bar-${monitor().id.toLowerCase()}`} output={monitor().id}
-            anchor={["top", "left", "right"]} height={32} exclusiveZone={32}>
+          <LayerSurface
+            name={`bar-${monitor().id.toLowerCase()}`}
+            output={monitor().id}
+            anchor={["top", "left", "right"]}
+            height={32}
+            exclusiveZone={32}
+          >
             <text>{monitor().name}</text>
           </LayerSurface>
         )}
@@ -84,9 +89,15 @@ available. JSX nesting is not required and does not set the parent. A primary
 window or a lock surface cannot be the parent.
 
 ```tsx
-<PopupSurface name="quick-menu" parent="bar-dp-1" width={240} height={180}
+<PopupSurface
+  name="quick-menu"
+  parent="bar-dp-1"
+  width={240}
+  height={180}
   anchorRect={{ x: 12, y: 0, width: 32, height: 32 }}
-  offset={{ x: 0, y: 4 }} onDismiss={() => setOpen(false)}>
+  offset={{ x: 0, y: 4 }}
+  onDismiss={() => setOpen(false)}
+>
   <text>Quick actions</text>
 </PopupSurface>
 ```
@@ -299,11 +310,14 @@ newline-separated SVG paths painted with the element's `color`, or `svg` for a
 standalone SVG document with its own fills and strokes:
 
 ```tsx
-<vector style="width: 24px; height: 24px" svg={`
+<vector
+  style="width: 24px; height: 24px"
+  svg={`
   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
     <circle cx="12" cy="12" r="8" fill="#f80" stroke="#246" stroke-width="2"/>
   </svg>
-`} />
+`}
+/>
 ```
 
 Use the vector's `viewBox` for path and canvas coordinates; a standalone SVG
@@ -323,8 +337,7 @@ export function mount(root: NativeNode) {
   return renderApp(() => {
     const scene = createCanvasScene();
     scene.update([{ kind: "rect", x: 4, y: 4, width: 12, height: 12, fill: "#09f" }]);
-    return <vector canvas={scene} viewBox="0 0 24 24"
-      style="width: 24px; height: 24px" />;
+    return <vector canvas={scene} viewBox="0 0 24 24" style="width: 24px; height: 24px" />;
   }, root);
 }
 ```
@@ -360,11 +373,12 @@ import { TextField, TextArea, createSignal } from "@hewel/zgui";
 
 function Form() {
   const [name, setName] = createSignal("A中B");
-  return <column>
-    <TextField ariaLabel="Name" value={name()}
-      onInput={event => setName(event.value)} />
-    <TextArea ariaLabel="Notes" defaultValue={"one\n二"} />
-  </column>;
+  return (
+    <column>
+      <TextField ariaLabel="Name" value={name()} onInput={event => setName(event.value)} />
+      <TextArea ariaLabel="Notes" defaultValue={"one\n二"} />
+    </column>
+  );
 }
 ```
 
@@ -453,7 +467,7 @@ handler to suppress native scrolling, independently of propagation.
 `target()`. Call it in the owner that uses the motion:
 
 ```tsx
-const scale = createSpring(() => expanded() ? 1 : 0.9);
+const scale = createSpring(() => (expanded() ? 1 : 0.9));
 return <box style={{ scale: scale() }} />;
 ```
 
@@ -476,11 +490,12 @@ import { Button, Input, ThemeProvider } from "@hewel/zgui/components";
 
 function Form() {
   const [name, setName] = createSignal("");
-  return <ThemeProvider scheme="system">
-    <Input label="Name" value={name()}
-      onValueChange={value => setName(value)} />
-    <Button>Save</Button>
-  </ThemeProvider>;
+  return (
+    <ThemeProvider scheme="system">
+      <Input label="Name" value={name()} onValueChange={value => setName(value)} />
+      <Button>Save</Button>
+    </ThemeProvider>
+  );
 }
 ```
 
@@ -755,14 +770,14 @@ Build with `bun run build --app editing`, or develop with
 `bun run dev --app editing`. The example uses real native controls and ordinary
 TSX event handlers, without test hooks or a simulated bridge.
 
-| Class | Initial state / action |
-| --- | --- |
-| `editing-field` | Controlled `TextField`, `A中B` |
-| `editing-area` | Controlled `TextArea`, `one\n二` |
-| `editing-default` | Uncontrolled `TextField`, initial `seed` |
-| `editing-readonly` | Read-only `TextField`, `Read only` |
-| `editing-disabled` | Disabled `TextField`, `Disabled` |
-| `editing-reset` | Button writes `Reset 中` to the controlled field |
+| Class                    | Initial state / action                                                                        |
+| ------------------------ | --------------------------------------------------------------------------------------------- |
+| `editing-field`          | Controlled `TextField`, `A中B`                                                                |
+| `editing-area`           | Controlled `TextArea`, `one\n二`                                                              |
+| `editing-default`        | Uncontrolled `TextField`, initial `seed`                                                      |
+| `editing-readonly`       | Read-only `TextField`, `Read only`                                                            |
+| `editing-disabled`       | Disabled `TextField`, `Disabled`                                                              |
+| `editing-reset`          | Button writes `Reset 中` to the controlled field                                              |
 | `editing-change-default` | Button changes the default source to `replacement`; current uncontrolled text stays unchanged |
 
 The visible event report aggregates all five controls. Inputs in the two editable

@@ -34,7 +34,9 @@ export function mount(root: NativeNode) {
 `;
 
 const textOf = current =>
-  current.tag === "#text" ? current.props.get("text") ?? "" : current.children.map(textOf).join("");
+  current.tag === "#text"
+    ? (current.props.get("text") ?? "")
+    : current.children.map(textOf).join("");
 
 async function mounted(t, source) {
   const harness = createHost();
@@ -43,11 +45,27 @@ async function mounted(t, source) {
   const mod = await moduleFor(t, source);
   assert.equal(layers.length, 0, "module import must not allocate native nodes");
   let dispose;
-  t.after(() => { try { dispose?.(); } finally { delete globalThis.__zgui; } });
+  t.after(() => {
+    try {
+      dispose?.();
+    } finally {
+      delete globalThis.__zgui;
+    }
+  });
   globalThis.__zgui = harness.host;
   const root = harness.makeNode("root");
   dispose = mod.mount(root);
-  return { mod, root, layers, harness, finish: () => { const end = dispose; dispose = undefined; end?.(); } };
+  return {
+    mod,
+    root,
+    layers,
+    harness,
+    finish: () => {
+      const end = dispose;
+      dispose = undefined;
+      end?.();
+    },
+  };
 }
 
 test("portal mounts children on the requested band and keeps context", async t => {

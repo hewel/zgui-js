@@ -15,10 +15,14 @@ const fmtConfigPath = path.join(workspaceRoot, ".oxfmtrc.json");
 
 async function runOxlint(args) {
   try {
-    const result = await execFileAsync(process.execPath, [oxlintBin, "--deny-warnings", "-c", configPath, ...args], {
-      cwd: workspaceRoot,
-      encoding: "utf8",
-    });
+    const result = await execFileAsync(
+      process.execPath,
+      [oxlintBin, "--deny-warnings", "-c", configPath, ...args],
+      {
+        cwd: workspaceRoot,
+        encoding: "utf8",
+      },
+    );
     return { status: 0, output: `${result.stdout}\n${result.stderr}` };
   } catch (error) {
     return {
@@ -51,14 +55,14 @@ const negativeCases = [
   {
     name: "zgui/no-raw-insert-or-provider (Context.Provider call)",
     file: "raw-provider.ts",
-    code: 'declare const Ctx: { Provider(props: unknown): unknown };\nexport const x = Ctx.Provider({ value: 1 });\n',
+    code: "declare const Ctx: { Provider(props: unknown): unknown };\nexport const x = Ctx.Provider({ value: 1 });\n",
     expected: /zgui\(no-raw-insert-or-provider\)/,
     guidance: /provide\(\)/,
   },
   {
     name: "zgui/no-raw-insert-or-provider (callable Context call)",
     file: "raw-callable-context.ts",
-    code: 'declare function MyContext(props: { value: number }): unknown;\nexport const x = MyContext({ value: 1 });\n',
+    code: "declare function MyContext(props: { value: number }): unknown;\nexport const x = MyContext({ value: 1 });\n",
     expected: /zgui\(no-raw-insert-or-provider\)/,
     guidance: /provide\(\)/,
   },
@@ -239,10 +243,14 @@ export const View = () => {
   let badOutput = "";
   let badStatus = 0;
   try {
-    await execFileAsync(process.execPath, [oxlintBin, "--deny-warnings", "-c", consumerConfig, badFile], {
-      cwd: dir,
-      encoding: "utf8",
-    });
+    await execFileAsync(
+      process.execPath,
+      [oxlintBin, "--deny-warnings", "-c", consumerConfig, badFile],
+      {
+        cwd: dir,
+        encoding: "utf8",
+      },
+    );
   } catch (error) {
     badStatus = error.code ?? 1;
     badOutput = `${error.stdout ?? ""}\n${error.stderr ?? ""}`;
@@ -254,20 +262,38 @@ export const View = () => {
 });
 
 test("oxfmt checks and formats files with repository configuration", async t => {
-  await execFileAsync(process.execPath, [
-    oxfmtBin, "--check", "-c", fmtConfigPath,
-    ".oxfmtrc.json", ".oxlintrc.json", "package.json",
-    "packages/build/package.json", "packages/build/src",
-    "packages/cli/package.json", "packages/cli/src",
-    "packages/create-zgui-js/package.json", "packages/create-zgui-js/src",
-  ], { cwd: workspaceRoot, encoding: "utf8" });
+  await execFileAsync(
+    process.execPath,
+    [
+      oxfmtBin,
+      "--check",
+      "-c",
+      fmtConfigPath,
+      ".oxfmtrc.json",
+      ".oxlintrc.json",
+      "package.json",
+      "packages/build/package.json",
+      "packages/build/src",
+      "packages/cli/package.json",
+      "packages/cli/src",
+      "packages/create-zgui-js/package.json",
+      "packages/create-zgui-js/src",
+    ],
+    { cwd: workspaceRoot, encoding: "utf8" },
+  );
   const dir = await mkdtemp(path.join(os.tmpdir(), "zgui-fmt-"));
   t.after(() => rm(dir, { recursive: true, force: true }));
   const file = path.join(dir, "sample.ts");
   await writeFile(file, "export const add=(x:number)=>x+1\n", "utf8");
   await assert.rejects(
-    execFileAsync(process.execPath, [oxfmtBin, "--check", "-c", fmtConfigPath, file], { cwd: workspaceRoot }),
+    execFileAsync(process.execPath, [oxfmtBin, "--check", "-c", fmtConfigPath, file], {
+      cwd: workspaceRoot,
+    }),
   );
-  await execFileAsync(process.execPath, [oxfmtBin, "-c", fmtConfigPath, file], { cwd: workspaceRoot });
-  await execFileAsync(process.execPath, [oxfmtBin, "--check", "-c", fmtConfigPath, file], { cwd: workspaceRoot });
+  await execFileAsync(process.execPath, [oxfmtBin, "-c", fmtConfigPath, file], {
+    cwd: workspaceRoot,
+  });
+  await execFileAsync(process.execPath, [oxfmtBin, "--check", "-c", fmtConfigPath, file], {
+    cwd: workspaceRoot,
+  });
 });

@@ -13,11 +13,12 @@ export interface LabelProps extends NativeElementProps {
 export function Label(props: LabelProps = {}): NativeNode {
   useStylesheet(sheet);
   const rest = omit(props, "control", "onClick");
-  return element("label", mergeProps(
-    rest,
-    withDefaults({ role: "label" as const }, rest),
-    {
-      get __zguiClass() { return classes(sheet.className, "zui-label"); },
+  return element(
+    "label",
+    mergeProps(rest, withDefaults({ role: "label" as const }, rest), {
+      get __zguiClass() {
+        return classes(sheet.className, "zui-label");
+      },
       get onClick() {
         return (event: NativeEvent) => {
           if (!callHandler(event, props.onClick) || rest.disabled) return;
@@ -26,6 +27,6 @@ export function Label(props: LabelProps = {}): NativeNode {
           if (node) focus(node);
         };
       },
-    },
-  ));
+    }),
+  );
 }

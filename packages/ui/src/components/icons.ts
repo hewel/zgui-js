@@ -5,11 +5,29 @@ import { classes, forbidChildren, useStylesheet, withDefaults } from "./shared.j
 import { sheet } from "./generated/IconStyle.js";
 
 export {
-  ARROW_UP, ARROW_DOWN, ARROW_LEFT, ARROW_RIGHT,
-  CHEVRON_UP, CHEVRON_DOWN, CHEVRON_LEFT, CHEVRON_RIGHT,
-  CHECK, MINUS, PLUS, CROSS, DISC, DOT,
-  ALERT_CIRCLE, ALERT_TRIANGLE, INFO, CHECK_CIRCLE, CROSS_CIRCLE,
-  SEARCH, SPINNER, ELLIPSIS, PANEL_LEFT,
+  ARROW_UP,
+  ARROW_DOWN,
+  ARROW_LEFT,
+  ARROW_RIGHT,
+  CHEVRON_UP,
+  CHEVRON_DOWN,
+  CHEVRON_LEFT,
+  CHEVRON_RIGHT,
+  CHECK,
+  MINUS,
+  PLUS,
+  CROSS,
+  DISC,
+  DOT,
+  ALERT_CIRCLE,
+  ALERT_TRIANGLE,
+  INFO,
+  CHECK_CIRCLE,
+  CROSS_CIRCLE,
+  SEARCH,
+  SPINNER,
+  ELLIPSIS,
+  PANEL_LEFT,
 } from "./generated/icons.js";
 
 export interface IconData {
@@ -35,10 +53,11 @@ export function Icon(props: IconProps): NativeNode {
   useStylesheet(sheet);
   forbidChildren("Icon", props);
   if (
-    !($PROXY in props) && !("__zguiClass" in props)
-    && Object.getOwnPropertyDescriptor(props, "icon")?.get === undefined
-    && Object.getOwnPropertyDescriptor(props, "size")?.get === undefined
-    && Object.getOwnPropertyDescriptor(props, "label")?.get === undefined
+    !($PROXY in props) &&
+    !("__zguiClass" in props) &&
+    Object.getOwnPropertyDescriptor(props, "icon")?.get === undefined &&
+    Object.getOwnPropertyDescriptor(props, "size")?.get === undefined &&
+    Object.getOwnPropertyDescriptor(props, "label")?.get === undefined
   ) {
     const node = createElement("vector");
     const size = props.size ?? "md";
@@ -68,22 +87,44 @@ export function Icon(props: IconProps): NativeNode {
   }
   const rest = omit(props, "icon", "size", "label");
   const node = createElement("vector");
-  spread(node, mergeProps(
-    rest,
-    withDefaults({
-      get role() { return "image" as const; },
-      get ariaHidden() { return (props.label ?? null) === null ? true : null; },
-      get ariaLabel() { return props.label ?? null; },
-      get d() { return props.icon.d; },
-      get viewBox() { const side = props.icon.viewBox; return `0 0 ${side} ${side}`; },
-      get "data-size"() { return props.size ?? "md"; },
-      get "data-icon"() { return props.icon.name; },
-    }, rest),
-    {
-      get __zguiClass() {
-        return classes("zui-icon", SIZE_CLASSES[props.size ?? "md"], sheet.className);
+  spread(
+    node,
+    mergeProps(
+      rest,
+      withDefaults(
+        {
+          get role() {
+            return "image" as const;
+          },
+          get ariaHidden() {
+            return (props.label ?? null) === null ? true : null;
+          },
+          get ariaLabel() {
+            return props.label ?? null;
+          },
+          get d() {
+            return props.icon.d;
+          },
+          get viewBox() {
+            const side = props.icon.viewBox;
+            return `0 0 ${side} ${side}`;
+          },
+          get "data-size"() {
+            return props.size ?? "md";
+          },
+          get "data-icon"() {
+            return props.icon.name;
+          },
+        },
+        rest,
+      ),
+      {
+        get __zguiClass() {
+          return classes("zui-icon", SIZE_CLASSES[props.size ?? "md"], sheet.className);
+        },
       },
-    },
-  ), true);
+    ),
+    true,
+  );
   return node;
 }

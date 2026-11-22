@@ -59,12 +59,29 @@ async function mounted(t, entry = "mount") {
   assert.equal(globalThis.__zgui, undefined);
   const mod = await moduleFor(t, fixture);
   let dispose;
-  t.after(() => { try { dispose?.(); } finally { delete globalThis.__zgui; } });
+  t.after(() => {
+    try {
+      dispose?.();
+    } finally {
+      delete globalThis.__zgui;
+    }
+  });
   globalThis.__zgui = harness.host;
   const root = harness.makeNode("root");
   dispose = mod[entry](root);
   const emit = (record, value) => record.emit(value);
-  return { mod, harness, root, registrations, emit, finish: () => { const end = dispose; dispose = undefined; end?.(); } };
+  return {
+    mod,
+    harness,
+    root,
+    registrations,
+    emit,
+    finish: () => {
+      const end = dispose;
+      dispose = undefined;
+      end?.();
+    },
+  };
 }
 
 test("geometry callbacks update signals, cancel on removal, and stay inert", async t => {
@@ -152,7 +169,11 @@ test("geometry registrations outside an owner require manual cancellation", asyn
   assert.equal(watchObs.disposals, 0);
   cancel();
   assert.equal(watchObs.disposals, 1);
-  emit(watchObs, { offset: { x: 0, y: 1 }, contentSize: { width: 1, height: 1 }, scrollport: { width: 1, height: 1 } });
+  emit(watchObs, {
+    offset: { x: 0, y: 1 },
+    contentSize: { width: 1, height: 1 },
+    scrollport: { width: 1, height: 1 },
+  });
   assert.equal(mod.measuredSize(), "scroll:64");
   cancel();
   assert.equal(watchObs.disposals, 1);

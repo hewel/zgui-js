@@ -49,13 +49,30 @@ function buildFuzzSteps(seed) {
   const rng = mulberry32(seed);
   let serial = 0;
   const id = () => `fuzz-${seed.toString(16)}-${++serial}`;
-  const click = testId => ({ id: id(), op: "pointer.click", target: { surface: "main", testId }, button: "primary" });
+  const click = testId => ({
+    id: id(),
+    op: "pointer.click",
+    target: { surface: "main", testId },
+    button: "primary",
+  });
   const key = name => ({ id: id(), op: "key.press", surface: "main", key: name });
   const advance = byMs => ({ id: id(), op: "clock.advance", byMs });
-  const wheelY = dy => ({ id: id(), op: "wheel", surface: "main", position: { x: 640, y: 520 }, delta: { x: 0, y: dy, unit: "pixels" } });
+  const wheelY = dy => ({
+    id: id(),
+    op: "wheel",
+    surface: "main",
+    position: { x: 640, y: 520 },
+    delta: { x: 0, y: dy, unit: "pixels" },
+  });
 
   const tabs = ["atoms", "feedback", "fields", "choices", "composites", "overlays", "menus"];
-  const presets = ["preset-base", "preset-ocean", "preset-ember", "preset-midnight", "preset-terminal"];
+  const presets = [
+    "preset-base",
+    "preset-ocean",
+    "preset-ember",
+    "preset-midnight",
+    "preset-terminal",
+  ];
 
   const steps = [
     { id: id(), op: "surface.resize", surface: "main", width: 1280, height: 960 },

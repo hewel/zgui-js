@@ -1,15 +1,66 @@
-.selection-scroll { width: 100%; height: 100%; overflow: auto; }
-.selection-page {
-  display: flex; flex-direction: column; gap: 20px; padding: 24px; min-height: 100%;
-  background-color: var(--zui-color-background); color: var(--zui-color-foreground);
-  font-family: var(--zui-type-family-sans); font-size: var(--zui-type-size-sm);
+.selection-scroll {
+  width: 100%;
+  height: 100%;
+  overflow: auto;
 }
-.selection-header { display: flex; flex-direction: row; align-items: center; justify-content: space-between; gap: 16px; }
-.selection-heading { font-size: 20px; font-weight: 600; }
-.selection-columns { display: flex; flex-direction: row; flex-wrap: wrap; gap: 32px; }
-.selection-column { display: flex; flex-direction: column; flex: 1 1 300px; min-width: 0; gap: 20px; }
-.selection-section { display: flex; flex-direction: column; gap: 8px; }
-.selection-row { display: flex; flex-direction: row; flex-wrap: wrap; align-items: center; gap: 12px; }
-.selection-title { font-weight: 600; }
-.selection-hint { color: var(--zui-color-muted-foreground); }
-.selection-overflow { width: 100%; height: 64px; overflow: auto; padding: 8px; border: 1px solid var(--zui-color-border); border-radius: var(--zui-radius-sm); }
+.selection-page {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  padding: 24px;
+  min-height: 100%;
+  background-color: var(--zui-color-background);
+  color: var(--zui-color-foreground);
+  font-family: var(--zui-type-family-sans);
+  font-size: var(--zui-type-size-sm);
+}
+.selection-header {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+.selection-heading {
+  font-size: 20px;
+  font-weight: 600;
+}
+.selection-columns {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  gap: 32px;
+}
+.selection-column {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 300px;
+  min-width: 0;
+  gap: 20px;
+}
+.selection-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.selection-row {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}
+.selection-title {
+  font-weight: 600;
+}
+.selection-hint {
+  color: var(--zui-color-muted-foreground);
+}
+.selection-overflow {
+  width: 100%;
+  height: 64px;
+  overflow: auto;
+  padding: 8px;
+  border: 1px solid var(--zui-color-border);
+  border-radius: var(--zui-radius-sm);
+}

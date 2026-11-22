@@ -1,7 +1,21 @@
 [workspace]
 resolver = "3"
 members = ["crates/native-host", "crates/js-runtime", "crates/ui-bridge", "crates/host-services"]
-exclude = ["vendor/zgui-runtime", "vendor/zgui-platform", "vendor/zgui-platform-headless", "vendor/zgui-platform-wayland", "vendor/zgui-view-dom", "vendor/zgui-view", "vendor/zgui", "vendor/zgui-text-parley", "vendor/zgui-paint", "vendor/zgui-layout", "vendor/zgui-dom", "vendor/zgui-style", "vendor/zgui-scroll"]
+exclude = [
+  "vendor/zgui-runtime",
+  "vendor/zgui-platform",
+  "vendor/zgui-platform-headless",
+  "vendor/zgui-platform-wayland",
+  "vendor/zgui-view-dom",
+  "vendor/zgui-view",
+  "vendor/zgui",
+  "vendor/zgui-text-parley",
+  "vendor/zgui-paint",
+  "vendor/zgui-layout",
+  "vendor/zgui-dom",
+  "vendor/zgui-style",
+  "vendor/zgui-scroll",
+]
 
 [workspace.package]
 version = "0.1.0"
@@ -17,7 +31,11 @@ all = "warn"
 
 [workspace.dependencies]
 zgui = { git = "https://github.com/zortax/zgui", rev = "80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a" }
-rquickjs = { git = "https://github.com/DelSkayn/rquickjs", rev = "73fcd6062ee615aeb2a4675cd32be67a56e93973", default-features = false, features = ["std", "macro", "loader"] }
+rquickjs = { git = "https://github.com/DelSkayn/rquickjs", rev = "73fcd6062ee615aeb2a4675cd32be67a56e93973", default-features = false, features = [
+  "std",
+  "macro",
+  "loader",
+] }
 libc = "0.2"
 roxmltree = "0.21"
 js-runtime = { path = "crates/js-runtime" }
@@ -29,7 +47,14 @@ sourcemap = "9.3.2"
 rusqlite = { version = "0.43", features = ["bundled"] }
 notify = { version = "9.0", default-features = false }
 zbus = "5.18"
-tokio = { version = "1.54", features = ["rt-multi-thread", "net", "time", "sync", "io-util", "macros"] }
+tokio = { version = "1.54", features = [
+  "rt-multi-thread",
+  "net",
+  "time",
+  "sync",
+  "io-util",
+  "macros",
+] }
 url = "2.5"
 bytes = "1.12"
 flate2 = "1.1"
@@ -41,7 +66,10 @@ http-body-util = "0.1"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
 webpki-roots = "1"
-tokio-tungstenite = { version = "0.28", default-features = false, features = ["connect", "handshake"] }
+tokio-tungstenite = { version = "0.28", default-features = false, features = [
+  "connect",
+  "handshake",
+] }
 
 host-services = { path = "crates/host-services" }
 

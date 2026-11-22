@@ -15,11 +15,7 @@ import {
 import type { Accessor, NativeNode, TextSelectionRange } from "@hewel/zgui";
 import { toast } from "@hewel/zgui/components";
 import type { ColorScheme, ThemePreset, TreeNodeData } from "@hewel/zgui/components";
-import {
-  readClipboardImage,
-  registerImageBytes,
-  writeClipboardText,
-} from "@hewel/zgui-services";
+import { readClipboardImage, registerImageBytes, writeClipboardText } from "@hewel/zgui-services";
 import type { BookmarkInfo, ImageHandle, WatchEvent } from "@hewel/zgui-services";
 import { buildOutlineTree, parseMarkdown, toggleTaskAtLine } from "./markdown.js";
 import type { OutlineNodeMeta, ParsedDocument } from "./markdown.js";
@@ -51,7 +47,12 @@ export interface StudioState {
   readonly hasUnsavedChanges: Accessor<boolean>;
   readonly parsedResult: Accessor<{ readonly parsed: ParsedDocument; readonly parseMs: number }>;
   readonly outlineTree: Accessor<readonly TreeNodeData<OutlineNodeMeta>[]>;
-  readonly stats: Accessor<{ readonly chars: number; readonly words: number; readonly lines: number; readonly readMin: number }>;
+  readonly stats: Accessor<{
+    readonly chars: number;
+    readonly words: number;
+    readonly lines: number;
+    readonly readMin: number;
+  }>;
 
   readonly workspaceName: Accessor<string | null>;
   readonly workspaceTree: Accessor<readonly TreeNodeData<WorkspaceNodeMeta>[]>;
@@ -140,12 +141,17 @@ export function createStudioState(): StudioState {
   const [docs, setDocs] = createSignal<readonly MarkdownDoc[]>(INITIAL_DOCS);
   const [activeDocId, setActiveDocId] = createSignal<string>(INITIAL_DOCS[0]!.id);
   const [workspaceName, setWorkspaceName] = createSignal<string | null>(null);
-  const [workspaceTree, setWorkspaceTree] = createSignal<readonly TreeNodeData<WorkspaceNodeMeta>[]>([]);
+  const [workspaceTree, setWorkspaceTree] = createSignal<
+    readonly TreeNodeData<WorkspaceNodeMeta>[]
+  >([]);
   const [workspaceExpanded, setWorkspaceExpanded] = createSignal<readonly string[]>([]);
   const [bookmarks, setBookmarks] = createSignal<readonly BookmarkInfo[]>([]);
   const [externalEventLog, setExternalEventLog] = createSignal("none");
 
-  const [selectionRange, setSelectionRange] = createSignal<TextSelectionRange>({ start: 0, end: 0 });
+  const [selectionRange, setSelectionRange] = createSignal<TextSelectionRange>({
+    start: 0,
+    end: 0,
+  });
   const [editorEl, setEditorEl] = createSignal<NativeNode | null>(null);
   const [highlightedLine, setHighlightedLine] = createSignal<number | null>(null);
   const [pipelineImg, setPipelineImg] = createSignal<string | null>(null);
@@ -218,13 +224,15 @@ export function createStudioState(): StudioState {
   const persistCurrentPrefs = (immediate = false) => {
     const commit = () => {
       if (disposed) return;
-      void storage.savePrefs({
-        scheme: scheme(),
-        preset: preset(),
-        fontSize: fontSize(),
-        splitSizes: splitSizes(),
-        lastWorkspaceBookmark: lastBookmark(),
-      }).catch(() => {});
+      void storage
+        .savePrefs({
+          scheme: scheme(),
+          preset: preset(),
+          fontSize: fontSize(),
+          splitSizes: splitSizes(),
+          lastWorkspaceBookmark: lastBookmark(),
+        })
+        .catch(() => {});
     };
     if (immediate) {
       prefsSaveTimer.cancel();
@@ -234,10 +242,22 @@ export function createStudioState(): StudioState {
     }
   };
 
-  const setScheme = (next: ColorScheme) => { setSchemeRaw(next); persistCurrentPrefs(true); };
-  const setPreset = (next: ThemePreset) => { setPresetRaw(next); persistCurrentPrefs(true); };
-  const setFontSize = (next: number) => { setFontSizeRaw(next); persistCurrentPrefs(); };
-  const setSplitSizes = (next: readonly number[]) => { setSplitSizesRaw(next); persistCurrentPrefs(); };
+  const setScheme = (next: ColorScheme) => {
+    setSchemeRaw(next);
+    persistCurrentPrefs(true);
+  };
+  const setPreset = (next: ThemePreset) => {
+    setPresetRaw(next);
+    persistCurrentPrefs(true);
+  };
+  const setFontSize = (next: number) => {
+    setFontSizeRaw(next);
+    persistCurrentPrefs();
+  };
+  const setSplitSizes = (next: readonly number[]) => {
+    setSplitSizesRaw(next);
+    persistCurrentPrefs();
+  };
 
   const reindexAll = async (list: readonly MarkdownDoc[]) => {
     if (disposed) return;
@@ -267,7 +287,9 @@ export function createStudioState(): StudioState {
   const mergeWorkspaceDocs = (scannedDocs: readonly MarkdownDoc[], selectFirst: boolean) => {
     setDocs(prev => {
       const nonWorkspace = prev.filter(d => d.source !== "workspace");
-      const dirtyById = new Map(prev.filter(d => d.source === "workspace" && d.dirty).map(d => [d.id, d]));
+      const dirtyById = new Map(
+        prev.filter(d => d.source === "workspace" && d.dirty).map(d => [d.id, d]),
+      );
       const mergedWs = scannedDocs.map(doc => dirtyById.get(doc.id) ?? doc);
       return [...mergedWs, ...nonWorkspace];
     });
@@ -286,9 +308,10 @@ export function createStudioState(): StudioState {
       if (!scanned || disposed) return;
       setWorkspaceTree(scanned.tree);
       const current = activeDoc();
-      const touchedActive = current.source === "workspace"
-        && current.relativePath
-        && events.some(e => e.path === current.relativePath);
+      const touchedActive =
+        current.source === "workspace" &&
+        current.relativePath &&
+        events.some(e => e.path === current.relativePath);
       if (touchedActive && current.dirty && current.relativePath) {
         const rel = current.relativePath;
         toast.warning(`External edit detected in ${current.title}`, {
@@ -298,7 +321,9 @@ export function createStudioState(): StudioState {
             onClick: () => {
               void workspace.readWorkspaceFile(rel).then(fresh => {
                 if (fresh === null || disposed) return;
-                setDocs(prev => prev.map(d => (d.id === current.id ? { ...d, content: fresh, dirty: false } : d)));
+                setDocs(prev =>
+                  prev.map(d => (d.id === current.id ? { ...d, content: fresh, dirty: false } : d)),
+                );
                 setStatusMsg(`Reloaded ${current.title} from disk`);
                 scheduleReindex();
               });
@@ -308,7 +333,9 @@ export function createStudioState(): StudioState {
       } else if (touchedActive && current.relativePath) {
         const fresh = await workspace.readWorkspaceFile(current.relativePath);
         if (fresh !== null && !disposed) {
-          setDocs(prev => prev.map(d => (d.id === current.id ? { ...d, content: fresh, dirty: false } : d)));
+          setDocs(prev =>
+            prev.map(d => (d.id === current.id ? { ...d, content: fresh, dirty: false } : d)),
+          );
           toast.info(`Reloaded ${current.title}`, { description: "Updated from disk." });
         }
       }
@@ -406,9 +433,13 @@ export function createStudioState(): StudioState {
       if (disposed) return;
       setLastCopiedSnippet(code);
       setStatusMsg(`Copied ${lang} snippet (${code.length} chars)`);
-      toast.success("Copied code block", { description: `${lang} (${code.split("\n").length} lines)` });
+      toast.success("Copied code block", {
+        description: `${lang} (${code.split("\n").length} lines)`,
+      });
     } catch (err) {
-      toast.error("Clipboard copy failed", { description: err instanceof Error ? err.message : String(err) });
+      toast.error("Clipboard copy failed", {
+        description: err instanceof Error ? err.message : String(err),
+      });
     }
   };
 
@@ -429,7 +460,9 @@ export function createStudioState(): StudioState {
       setStatusMsg("Pasted PNG image from clipboard");
       toast.success("Pasted clipboard image", { description: "Rendered via host ImageHandle." });
     } catch (err) {
-      toast.error("Paste image failed", { description: err instanceof Error ? err.message : String(err) });
+      toast.error("Paste image failed", {
+        description: err instanceof Error ? err.message : String(err),
+      });
     }
   };
 
@@ -453,7 +486,9 @@ export function createStudioState(): StudioState {
       toast.success(`Opened ${opened.doc.title}`);
       void reindexAll(docs());
     } catch (err) {
-      toast.error("Open file failed", { description: err instanceof Error ? err.message : String(err) });
+      toast.error("Open file failed", {
+        description: err instanceof Error ? err.message : String(err),
+      });
     }
   };
 
@@ -462,16 +497,18 @@ export function createStudioState(): StudioState {
     try {
       const saved = await workspace.saveDocument(doc);
       if (!saved || disposed) return false;
-      setDocs(prev => prev.map(d => (
-        d.id === doc.id
-          ? {
-              ...d,
-              title: saved.savedName,
-              relativePath: saved.relativePath ?? d.relativePath,
-              dirty: false,
-            }
-          : d
-      )));
+      setDocs(prev =>
+        prev.map(d =>
+          d.id === doc.id
+            ? {
+                ...d,
+                title: saved.savedName,
+                relativePath: saved.relativePath ?? d.relativePath,
+                dirty: false,
+              }
+            : d,
+        ),
+      );
       setStatusMsg(`Saved "${saved.savedName}"`);
       toast.success(`Saved ${saved.savedName}`);
       void reindexAll(docs());
@@ -500,7 +537,9 @@ export function createStudioState(): StudioState {
         description: `${opened.scanned.docs.length} markdown files indexed in SQLite FTS5.`,
       });
     } catch (err) {
-      toast.error("Open folder failed", { description: err instanceof Error ? err.message : String(err) });
+      toast.error("Open folder failed", {
+        description: err instanceof Error ? err.message : String(err),
+      });
     }
   };
 
@@ -519,7 +558,9 @@ export function createStudioState(): StudioState {
       persistCurrentPrefs(true);
       toast.success(`Restored "${restored.dir.name}"`);
     } catch (err) {
-      toast.error("Restore bookmark failed", { description: err instanceof Error ? err.message : String(err) });
+      toast.error("Restore bookmark failed", {
+        description: err instanceof Error ? err.message : String(err),
+      });
     }
   };
 
@@ -533,7 +574,9 @@ export function createStudioState(): StudioState {
       await refreshBookmarks();
       if (ok) toast.info("Revoked workspace bookmark");
     } catch (err) {
-      toast.error("Revoke bookmark failed", { description: err instanceof Error ? err.message : String(err) });
+      toast.error("Revoke bookmark failed", {
+        description: err instanceof Error ? err.message : String(err),
+      });
     }
   };
 

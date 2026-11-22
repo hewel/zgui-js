@@ -13,7 +13,10 @@ work.
 import { readTextAsset } from "@hewel/zgui-services";
 
 const request = readTextAsset("assets/message.txt");
-request.promise.then(text => console.log(text), error => console.error(error));
+request.promise.then(
+  text => console.log(text),
+  error => console.error(error),
+);
 // In the UI owner's cleanup:
 request.cancel();
 ```

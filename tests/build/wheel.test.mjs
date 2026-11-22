@@ -35,21 +35,40 @@ test("wheel handlers receive snapshots and cancel only the current dispatch", as
   const root = h.makeNode("root");
   let dispose;
   globalThis.__zgui = h.host;
-  t.after(() => { try { dispose?.(); } finally { delete globalThis.__zgui; } });
+  t.after(() => {
+    try {
+      dispose?.();
+    } finally {
+      delete globalThis.__zgui;
+    }
+  });
   dispose = mod.mount(root);
   const target = h.byTestId("target");
   assert.equal(h.dispatch(target, "Wheel").defaultPrevented, true);
   const first = mod.saved;
-  assert.deepEqual(mod.seen, ["capture:discrete:lines:0", "target:capture", "target:bubble", "bubble"]);
+  assert.deepEqual(mod.seen, [
+    "capture:discrete:lines:0",
+    "target:capture",
+    "target:bubble",
+    "bubble",
+  ]);
   mod.seen.length = 0;
   h.dispatch(h.byTestId("bubble-first"), "Wheel");
-  assert.deepEqual(mod.seen, ["capture:discrete:lines:0", "target:bubble", "target:capture", "bubble"]);
+  assert.deepEqual(mod.seen, [
+    "capture:discrete:lines:0",
+    "target:bubble",
+    "target:capture",
+    "bubble",
+  ]);
   for (const [x, expected, immediate] of [
     [1, ["capture:moved:pixels:15", "target:capture", "target:bubble"], false],
     [2, ["capture:moved:pixels:15", "target:capture"], true],
   ]) {
     mod.seen.length = 0;
-    const result = h.dispatch(target, "Wheel", { delta: { x, y: 15, unit: "pixels" }, scrollPhase: "moved" });
+    const result = h.dispatch(target, "Wheel", {
+      delta: { x, y: 15, unit: "pixels" },
+      scrollPhase: "moved",
+    });
     assert.equal(result.propagationStopped, true);
     assert.equal(result.immediatePropagationStopped, immediate);
     assert.deepEqual(mod.seen, expected);

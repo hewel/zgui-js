@@ -101,9 +101,7 @@ function expectBackground(pixel, label) {
 test("clip-path: path(...) clips decoded images and boxes, and rounded stroke caps render on canvas and vector paths", async t => {
   const temp = await createTempWorkspace("preview-clip-path-stroke-");
   t.after(() => temp.cleanup());
-  const redPng = await readFile(
-    new URL("./fixtures/red.png", import.meta.url),
-  );
+  const redPng = await readFile(new URL("./fixtures/red.png", import.meta.url));
   const bundle = await buildFixtureApp(path.join(temp.dir, "app"), "clip-path-and-stroke", source, {
     rawSource: true,
     assets: { "red.png": redPng },
@@ -128,8 +126,16 @@ test("clip-path: path(...) clips decoded images and boxes, and rounded stroke ca
   // 1. Direct clip-path: path(...) on <Image>
   const imgBounds = getNode(tree, "clipped-img").boundsLogical;
   const imgCenter = pixelAt(png, Math.round(imgBounds.x + 20), Math.round(imgBounds.y + 20));
-  assert.ok(imgCenter[0] > 180 && imgCenter[1] < 60, `clipped-img center must be red, got ${imgCenter}`);
-  for (const [dx, dy] of [[2, 2], [38, 2], [2, 38], [38, 38]]) {
+  assert.ok(
+    imgCenter[0] > 180 && imgCenter[1] < 60,
+    `clipped-img center must be red, got ${imgCenter}`,
+  );
+  for (const [dx, dy] of [
+    [2, 2],
+    [38, 2],
+    [2, 38],
+    [38, 38],
+  ]) {
     expectBackground(
       pixelAt(png, Math.round(imgBounds.x + dx), Math.round(imgBounds.y + dy)),
       `clipped-img corner (${dx},${dy})`,
@@ -139,7 +145,10 @@ test("clip-path: path(...) clips decoded images and boxes, and rounded stroke ca
   // 2. Ancestor <box> clip-path: path(...) clipping child <Image>
   const wrapBounds = getNode(tree, "clipped-wrapper").boundsLogical;
   const wrapCenter = pixelAt(png, Math.round(wrapBounds.x + 20), Math.round(wrapBounds.y + 20));
-  assert.ok(wrapCenter[0] > 180 && wrapCenter[1] < 60, `clipped-wrapper center must be red, got ${wrapCenter}`);
+  assert.ok(
+    wrapCenter[0] > 180 && wrapCenter[1] < 60,
+    `clipped-wrapper center must be red, got ${wrapCenter}`,
+  );
   expectBackground(
     pixelAt(png, Math.round(wrapBounds.x + 2), Math.round(wrapBounds.y + 2)),
     "clipped-wrapper corner (2,2)",
@@ -148,7 +157,10 @@ test("clip-path: path(...) clips decoded images and boxes, and rounded stroke ca
   // 3. Solid <box> background with clip-path: path(...)
   const boxBounds = getNode(tree, "clipped-box").boundsLogical;
   const boxCenter = pixelAt(png, Math.round(boxBounds.x + 20), Math.round(boxBounds.y + 20));
-  assert.ok(boxCenter[1] > 180 && boxCenter[0] < 60, `clipped-box center must be green, got ${boxCenter}`);
+  assert.ok(
+    boxCenter[1] > 180 && boxCenter[0] < 60,
+    `clipped-box center must be green, got ${boxCenter}`,
+  );
   expectBackground(
     pixelAt(png, Math.round(boxBounds.x + 2), Math.round(boxBounds.y + 2)),
     "clipped-box corner (2,2)",
@@ -170,7 +182,10 @@ test("clip-path: path(...) clips decoded images and boxes, and rounded stroke ca
   // 5. --zgui-stroke-linecap: round on <vector d="..."> extends 8px past x=20
   const svgBounds = getNode(tree, "svg-round").boundsLogical;
   const svgCapPx = pixelAt(png, Math.round(svgBounds.x + 15), Math.round(svgBounds.y + 20));
-  assert.ok(svgCapPx[0] > 200 && svgCapPx[1] > 120, `svg-round cap at x=15 must be amber, got ${svgCapPx}`);
+  assert.ok(
+    svgCapPx[0] > 200 && svgCapPx[1] > 120,
+    `svg-round cap at x=15 must be amber, got ${svgCapPx}`,
+  );
 });
 
 const clipAndBordersSource = `
@@ -221,9 +236,14 @@ export function mount(root: NativeNode) {
 test("oversized clip-path stays inside border_box without sibling bleed (#41) and per-side border styles including double render independently (#45)", async t => {
   const temp = await createTempWorkspace("preview-clip-borders-");
   t.after(() => temp.cleanup());
-  const bundle = await buildFixtureApp(path.join(temp.dir, "app"), "clip-borders", clipAndBordersSource, {
-    rawSource: true,
-  });
+  const bundle = await buildFixtureApp(
+    path.join(temp.dir, "app"),
+    "clip-borders",
+    clipAndBordersSource,
+    {
+      rawSource: true,
+    },
+  );
   const { out } = await runScenario({
     projectDir: temp.dir,
     bundle,
@@ -241,28 +261,58 @@ test("oversized clip-path stays inside border_box without sibling bleed (#41) an
   // #41: Wide circle extends above/below 110px height, so pixels just outside its border_box and above its sibling must stay dark background.
   const circleBounds = getNode(tree, "wide-circle").boundsLogical;
   const siblingBounds = getNode(tree, "sibling-inset").boundsLogical;
-  const centerPx = pixelAt(png, Math.round(circleBounds.x + circleBounds.width / 2), Math.round(circleBounds.y + circleBounds.height / 2));
-  assert.ok(centerPx[2] > 180 && centerPx[0] < 80, `wide-circle center must be blue, got ${centerPx}`);
-  for (let x = Math.round(circleBounds.x); x < Math.round(siblingBounds.x + siblingBounds.width); x += 8) {
+  const centerPx = pixelAt(
+    png,
+    Math.round(circleBounds.x + circleBounds.width / 2),
+    Math.round(circleBounds.y + circleBounds.height / 2),
+  );
+  assert.ok(
+    centerPx[2] > 180 && centerPx[0] < 80,
+    `wide-circle center must be blue, got ${centerPx}`,
+  );
+  for (
+    let x = Math.round(circleBounds.x);
+    x < Math.round(siblingBounds.x + siblingBounds.width);
+    x += 8
+  ) {
     for (const dy of [-4, -12, -20]) {
-      expectBackground(pixelAt(png, x, Math.round(circleBounds.y + dy)), `above clip row at (${x}, ${Math.round(circleBounds.y + dy)})`);
+      expectBackground(
+        pixelAt(png, x, Math.round(circleBounds.y + dy)),
+        `above clip row at (${x}, ${Math.round(circleBounds.y + dy)})`,
+      );
     }
-    expectBackground(pixelAt(png, x, Math.round(circleBounds.y + circleBounds.height + 6)), `below clip row at x=${x}`);
+    expectBackground(
+      pixelAt(png, x, Math.round(circleBounds.y + circleBounds.height + 6)),
+      `below clip row at x=${x}`,
+    );
   }
 
   // #45: Left solid border is continuous pink along its vertical span; bottom 6px double border has two distinct amber bands separated by a dark gap.
   const borderBox = getNode(tree, "mixed-borders").boundsLogical;
   const leftX = Math.round(borderBox.x + 1);
-  for (let y = Math.round(borderBox.y + 8); y < Math.round(borderBox.y + borderBox.height - 8); y += 3) {
+  for (
+    let y = Math.round(borderBox.y + 8);
+    y < Math.round(borderBox.y + borderBox.height - 8);
+    y += 3
+  ) {
     const px = pixelAt(png, leftX, y);
-    assert.ok(px[0] > 180 && px[2] > 100 && px[1] < 110, `left solid border at (${leftX},${y}) must be continuous pink, got ${px}`);
+    assert.ok(
+      px[0] > 180 && px[2] > 100 && px[1] < 110,
+      `left solid border at (${leftX},${y}) must be continuous pink, got ${px}`,
+    );
   }
   const midX = Math.round(borderBox.x + borderBox.width / 2);
   const bottomY = Math.round(borderBox.y + borderBox.height);
   const outerAmber = pixelAt(png, midX, bottomY - 1);
   const gapPx = pixelAt(png, midX, bottomY - 3);
   const innerAmber = pixelAt(png, midX, bottomY - 5);
-  assert.ok(outerAmber[0] > 180 && outerAmber[1] > 120 && outerAmber[2] < 60, `double bottom outer band must be amber, got ${outerAmber}`);
+  assert.ok(
+    outerAmber[0] > 180 && outerAmber[1] > 120 && outerAmber[2] < 60,
+    `double bottom outer band must be amber, got ${outerAmber}`,
+  );
   expectBackground(gapPx, "double bottom middle gap");
-  assert.ok(innerAmber[0] > 180 && innerAmber[1] > 120 && innerAmber[2] < 60, `double bottom inner band must be amber, got ${innerAmber}`);
+  assert.ok(
+    innerAmber[0] > 180 && innerAmber[1] > 120 && innerAmber[2] < 60,
+    `double bottom inner band must be amber, got ${innerAmber}`,
+  );
 });

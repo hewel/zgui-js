@@ -23,10 +23,7 @@ function CssModulesDemo() {
           <label testId="card-state">{active() ? "active" : "idle"}</label>
         </column>
         <row class={styles.toolbar}>
-          <Button
-            testId="btn-toggle-active"
-            onClick={() => setActive(prev => !prev)}
-          >
+          <Button testId="btn-toggle-active" onClick={() => setActive(prev => !prev)}>
             Toggle Active
           </Button>
           <Button

@@ -34,11 +34,14 @@ export function AboutPrefsWindow() {
             }}
           >
             <row style={{ "justify-content": "space-between", "align-items": "center" }}>
-              <text style={{ "font-size": "18px", "font-weight": "700" }}>zgui Markdown Studio</text>
+              <text style={{ "font-size": "18px", "font-weight": "700" }}>
+                zgui Markdown Studio
+              </text>
               <Badge variant="secondary">Wave 1</Badge>
             </row>
             <text class="muted">
-              Local-first native Markdown workbench built on Rust + wgpu + Stylo + QuickJS-NG + Solid 2.0.
+              Local-first native Markdown workbench built on Rust + wgpu + Stylo + QuickJS-NG +
+              Solid 2.0.
             </text>
             <Separator />
             <row style={{ "justify-content": "space-between", "align-items": "center" }}>
@@ -55,7 +58,11 @@ export function AboutPrefsWindow() {
               <Badge variant="outline">{`FTS5: ${studio.indexedCount()}`}</Badge>
             </row>
             <row style={{ "justify-content": "flex-end", gap: "8px", "margin-top": "auto" }}>
-              <Button testId="aux-close-btn" size="sm" onClick={() => studio.setPrefsWindowOpen(false)}>
+              <Button
+                testId="aux-close-btn"
+                size="sm"
+                onClick={() => studio.setPrefsWindowOpen(false)}
+              >
                 Close
               </Button>
             </row>

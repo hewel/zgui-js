@@ -94,7 +94,10 @@ test("component modules do not read __zgui before the host is installed", async 
   let touched = false;
   Object.defineProperty(globalThis, "__zgui", {
     configurable: true,
-    get() { touched = true; return undefined; },
+    get() {
+      touched = true;
+      return undefined;
+    },
   });
   try {
     await moduleFor(t, fixture);
@@ -110,7 +113,13 @@ test("reactive props keep native identity and shared sheets deduplicate", async 
   globalThis.__zgui = harness.host;
   const root = harness.makeNode("root");
   const dispose = mod.mount(root);
-  t.after(() => { try { dispose(); } finally { delete globalThis.__zgui; } });
+  t.after(() => {
+    try {
+      dispose();
+    } finally {
+      delete globalThis.__zgui;
+    }
+  });
 
   const button = harness.byTestId("button");
   assert.ok(button);
@@ -169,7 +178,13 @@ test("aspect ratio caller override wins and invalid ratios reject at mount", asy
   globalThis.__zgui = harness.host;
   const root = harness.makeNode("root");
   const dispose = mod.mount(root);
-  t.after(() => { try { dispose(); } finally { delete globalThis.__zgui; } });
+  t.after(() => {
+    try {
+      dispose();
+    } finally {
+      delete globalThis.__zgui;
+    }
+  });
 
   const ratioNode = harness.byTestId("ratio");
   assert.ok(ratioNode);
@@ -197,7 +212,13 @@ test("theme provider replaces one sheet per provider and scopes nested tokens", 
   globalThis.__zgui = harness.host;
   const root = harness.makeNode("root");
   const dispose = mod.mount(root);
-  t.after(() => { try { dispose(); } finally { delete globalThis.__zgui; } });
+  t.after(() => {
+    try {
+      dispose();
+    } finally {
+      delete globalThis.__zgui;
+    }
+  });
 
   const initial = rootSheet(harness);
   assert.ok(initial, "expected a :root theme sheet");
@@ -221,7 +242,9 @@ test("theme provider replaces one sheet per provider and scopes nested tokens", 
   assert.match(system[1], /color-scheme: light/);
   assert.match(system[1], /color-scheme: dark/);
 
-  const wrapper = [...harness.nodes.values()].find(node => node.props.get("class")?.includes("zui-theme-"));
+  const wrapper = [...harness.nodes.values()].find(node =>
+    node.props.get("class")?.includes("zui-theme-"),
+  );
   assert.ok(wrapper);
   assert.match(JSON.stringify(wrapper.props.get("style")), /contents/);
 });
@@ -232,14 +255,21 @@ test("nested theme override, invalid override, and sibling provider lifetimes", 
   globalThis.__zgui = harness.host;
   const root = harness.makeNode("root");
   const dispose = mod.mount(root);
-  t.after(() => { try { dispose(); } finally { delete globalThis.__zgui; } });
+  t.after(() => {
+    try {
+      dispose();
+    } finally {
+      delete globalThis.__zgui;
+    }
+  });
 
   const [rootKey, rootCss] = rootSheet(harness);
 
   mod.api.setNested(true);
   harness.flush();
-  const nestedEntries = [...harness.stylesheets.entries()].filter(([name, css]) =>
-    name !== rootKey && css.includes(".zui-theme-"));
+  const nestedEntries = [...harness.stylesheets.entries()].filter(
+    ([name, css]) => name !== rootKey && css.includes(".zui-theme-"),
+  );
   assert.equal(nestedEntries.length, 1);
   const [[nestedKey, nestedCss]] = nestedEntries;
   assert.match(nestedKey, /^zgui-ui-theme-/);
@@ -254,23 +284,17 @@ test("nested theme override, invalid override, and sibling provider lifetimes", 
   assert.match(overridden, /--zui-color-primary: #102030/);
   assert.equal(harness.stylesheets.get(rootKey), rootCss);
 
-  assert.throws(
-    () => {
-      mod.api.setNestedTheme({ preset: "ocean", tokens: { "--zui-color-primary": "#fff;behavior" } });
-      mod.api.flush();
-      harness.flush();
-    },
-    TypeError,
-  );
+  assert.throws(() => {
+    mod.api.setNestedTheme({ preset: "ocean", tokens: { "--zui-color-primary": "#fff;behavior" } });
+    mod.api.flush();
+    harness.flush();
+  }, TypeError);
   assert.equal(harness.stylesheets.get(nestedKey), overridden);
-  assert.throws(
-    () => {
-      mod.api.setNestedTheme({ tokens: { "--zui-bogus": "red" } });
-      mod.api.flush();
-      harness.flush();
-    },
-    TypeError,
-  );
+  assert.throws(() => {
+    mod.api.setNestedTheme({ tokens: { "--zui-bogus": "red" } });
+    mod.api.flush();
+    harness.flush();
+  }, TypeError);
   assert.equal(harness.stylesheets.get(nestedKey), overridden);
   assert.throws(() => {
     mod.api.setNestedTheme({ preset: "neptune" });
@@ -309,7 +333,9 @@ test("nested theme override, invalid override, and sibling provider lifetimes", 
 
   mod.api.setSibling(true);
   harness.flush();
-  const siblingEntries = [...harness.stylesheets.entries()].filter(([_name, css]) => css.includes(":root"));
+  const siblingEntries = [...harness.stylesheets.entries()].filter(([_name, css]) =>
+    css.includes(":root"),
+  );
   assert.equal(siblingEntries.length, 2);
   const names = new Set(siblingEntries.map(([name]) => name));
   assert.equal(names.size, 2);
@@ -325,7 +351,13 @@ test("card header keeps the action layout until the last action unmounts", async
   globalThis.__zgui = harness.host;
   const root = harness.makeNode("root");
   const dispose = mod.mount(root);
-  t.after(() => { try { dispose(); } finally { delete globalThis.__zgui; } });
+  t.after(() => {
+    try {
+      dispose();
+    } finally {
+      delete globalThis.__zgui;
+    }
+  });
 
   const header = harness.byTestId("header");
   assert.match(header.props.get("class"), /zui-card__header--action/);
@@ -354,7 +386,13 @@ test("icon stays one node across data and label changes and rejects children laz
   globalThis.__zgui = harness.host;
   const root = harness.makeNode("root");
   const dispose = mod.mount(root);
-  t.after(() => { try { dispose(); } finally { delete globalThis.__zgui; } });
+  t.after(() => {
+    try {
+      dispose();
+    } finally {
+      delete globalThis.__zgui;
+    }
+  });
 
   const icon = harness.byTestId("icon");
   assert.ok(icon);
@@ -380,7 +418,10 @@ test("icon stays one node across data and label changes and rejects children laz
   assert.equal(icon.props.get("ariaHidden"), true);
 
   let evaluated = 0;
-  const child = () => { evaluated += 1; return null; };
+  const child = () => {
+    evaluated += 1;
+    return null;
+  };
   const orphan = harness.makeNode("orphan");
   assert.throws(() => mod.mountIconWithChildren(orphan, child), TypeError);
   assert.equal(evaluated, 0);

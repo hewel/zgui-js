@@ -27,8 +27,9 @@ test("numeric children reach the host as text", async t => {
   let dispose;
   t.after(() => {
     globalThis.__zgui = harness.host;
-    try { dispose?.(); }
-    finally {
+    try {
+      dispose?.();
+    } finally {
       if (previous && previous !== harness.host) globalThis.__zgui = previous;
       else delete globalThis.__zgui;
     }

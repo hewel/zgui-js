@@ -29,7 +29,14 @@ export {
   useSearchParams,
 } from "./components.js";
 export type { LinkProps, RouterProviderProps } from "./components.js";
-export { buildPath, joinPaths, matchPattern, normalizePath, parseSearch, serializeSearch } from "./path.js";
+export {
+  buildPath,
+  joinPaths,
+  matchPattern,
+  normalizePath,
+  parseSearch,
+  serializeSearch,
+} from "./path.js";
 export type {
   ConcretePath,
   ExtractRouteParams,

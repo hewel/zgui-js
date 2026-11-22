@@ -221,9 +221,7 @@
       "op": "key.press",
       "surface": "main",
       "key": "End",
-      "modifiers": [
-        "Shift"
-      ]
+      "modifiers": ["Shift"]
     },
     {
       "id": "type-changed",
@@ -358,9 +356,7 @@
       "op": "key.press",
       "surface": "main",
       "key": "End",
-      "modifiers": [
-        "Shift"
-      ]
+      "modifiers": ["Shift"]
     },
     {
       "id": "type-saved-draft",

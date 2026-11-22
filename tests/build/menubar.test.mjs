@@ -137,7 +137,11 @@ async function mounted(t, mountName = "mount") {
   const clock = createClock(t, h);
   let dispose;
   t.after(() => {
-    try { dispose?.(); } finally { delete globalThis.__zgui; }
+    try {
+      dispose?.();
+    } finally {
+      delete globalThis.__zgui;
+    }
     assert.equal(h.locks.length, 0, "menubar must not lock scroll");
   });
   globalThis.__zgui = h.host;
@@ -154,8 +158,29 @@ async function mounted(t, mountName = "mount") {
     return h.dispatch(node, "KeyDown", extras);
   };
   const active = records => records.filter(r => r.active).length;
-  const flush = () => { h.flush(); clock.frame(); clock.advance(0); };
-  return { h, mod, clock, traps, layers, portals, geometry, send, key, active, flush, finish: () => { const stop = dispose; dispose = undefined; stop?.(); } };
+  const flush = () => {
+    h.flush();
+    clock.frame();
+    clock.advance(0);
+  };
+  return {
+    h,
+    mod,
+    clock,
+    traps,
+    layers,
+    portals,
+    geometry,
+    send,
+    key,
+    active,
+    flush,
+    finish: () => {
+      const stop = dispose;
+      dispose = undefined;
+      stop?.();
+    },
+  };
 }
 
 test("menubar roles, horizontal roving tabindex, and closed bar behavior", async t => {
@@ -185,11 +210,23 @@ test("menubar roles, horizontal roving tabindex, and closed bar behavior", async
 
   h.host.focus(editTrigger);
   send("view-trigger", "onPointerEnter");
-  assert.equal(h.byTestId("edit-surface"), undefined, "focusing trigger on closed bar does not open");
-  assert.equal(h.byTestId("view-surface"), undefined, "hovering trigger on closed bar does not open");
+  assert.equal(
+    h.byTestId("edit-surface"),
+    undefined,
+    "focusing trigger on closed bar does not open",
+  );
+  assert.equal(
+    h.byTestId("view-surface"),
+    undefined,
+    "hovering trigger on closed bar does not open",
+  );
 
   key("file-trigger", { key: "ArrowRight", character: "ArrowRight" });
-  assert.equal(h.focused.current, editTrigger, "prior focus stays untouched on character-producing ArrowRight");
+  assert.equal(
+    h.focused.current,
+    editTrigger,
+    "prior focus stays untouched on character-producing ArrowRight",
+  );
   h.host.focus(fileTrigger);
   key("file-trigger", { key: "ArrowRight" });
   assert.equal(h.focused.current, editTrigger, "ArrowRight skips disabled Tools trigger");
@@ -205,9 +242,16 @@ test("menubar roles, horizontal roving tabindex, and closed bar behavior", async
   assert.ok(fileSurface);
   assert.equal(traps.length, 0, "menubar menus never install a focus trap");
   assert.equal(fileSurface.props.get("role"), "menu");
-  assert.ok(!String(fileSurface.props.get("class")).includes("zui-surface"), "menubar content omits zui-surface class");
+  assert.ok(
+    !String(fileSurface.props.get("class")).includes("zui-surface"),
+    "menubar content omits zui-surface class",
+  );
   assert.ok(String(fileSurface.props.get("class")).includes("zui-menubar__content"));
-  assert.equal(h.focused.current, h.byTestId("file-new"), "opening focuses first enabled item, skipping disabled item");
+  assert.equal(
+    h.focused.current,
+    h.byTestId("file-new"),
+    "opening focuses first enabled item, skipping disabled item",
+  );
   finish();
 });
 
@@ -231,7 +275,11 @@ test("open bar switches cleanly via hover, focus, and MenubarArrows without left
   assert.equal(arrowRight.defaultPrevented, true);
   assert.equal(arrowRight.propagationStopped, true);
   flush();
-  assert.equal(h.byTestId("file-surface"), undefined, "previous menu closes and unmounts immediately");
+  assert.equal(
+    h.byTestId("file-surface"),
+    undefined,
+    "previous menu closes and unmounts immediately",
+  );
   assert.equal(h.byTestId("file-menu").props.get("data-state"), "closed");
   assert.ok(h.byTestId("edit-surface"), "next menu opens");
   assert.equal(h.byTestId("edit-menu").props.get("data-state"), "open");
@@ -268,7 +316,11 @@ test("single-menu bar and standalone MenubarArrows leave ArrowLeft and ArrowRigh
   const right = key("only-item", { key: "ArrowRight" });
   assert.equal(right.defaultPrevented, false);
   assert.equal(right.propagationStopped, false);
-  assert.equal(h.focused.current, h.byTestId("only-item"), "focus stays on menu item in 1-enabled-menu bar");
+  assert.equal(
+    h.focused.current,
+    h.byTestId("only-item"),
+    "focus stays on menu item in 1-enabled-menu bar",
+  );
 
   const left = key("only-item", { key: "ArrowLeft" });
   assert.equal(left.defaultPrevented, false);
@@ -321,7 +373,11 @@ test("item structure, check/radio defaults, dismiss focus rules, and unmounting 
   flush();
   assert.equal(h.byTestId("edit-surface"), undefined);
   send("view-trigger", "onPointerEnter");
-  assert.equal(h.byTestId("view-surface"), undefined, "hovering remaining menu stays closed after open menu unmounted");
+  assert.equal(
+    h.byTestId("view-surface"),
+    undefined,
+    "hovering remaining menu stays closed after open menu unmounted",
+  );
 
   // MenubarRadioItem defaults to closeOnSelect = true and restores trigger focus
   send("view-trigger", "onClick");
@@ -337,7 +393,11 @@ test("item structure, check/radio defaults, dismiss focus rules, and unmounting 
 
   send("radio-single", "onClick");
   flush();
-  assert.equal(h.byTestId("view-surface"), undefined, "radio with default closeOnSelect=true closes menu");
+  assert.equal(
+    h.byTestId("view-surface"),
+    undefined,
+    "radio with default closeOnSelect=true closes menu",
+  );
   assert.equal(h.focused.current, h.byTestId("view-trigger"));
 
   // Escape dismisses and focuses trigger
@@ -357,7 +417,11 @@ test("item structure, check/radio defaults, dismiss focus rules, and unmounting 
   outLayer.callback("outside-press");
   flush();
   assert.equal(h.byTestId("file-surface"), undefined);
-  assert.equal(h.focused.current, outsideBtn, "outside press does not steal focus back to menubar trigger");
+  assert.equal(
+    h.focused.current,
+    outsideBtn,
+    "outside press does not steal focus back to menubar trigger",
+  );
 
   finish();
   assert.equal(active(layers), 0);
@@ -387,7 +451,11 @@ test("menubar forwards application classes, returns Escape focus to MenuSubTrigg
   h.host.focus(h.byTestId("file-share-copy"));
   layers.findLast(record => record.active).callback("escape");
   assert.equal(shareTrigger.props.get("expanded"), false);
-  assert.equal(h.focused.current, shareTrigger, "submenu Escape inside menubar focuses MenuSubTrigger");
+  assert.equal(
+    h.focused.current,
+    shareTrigger,
+    "submenu Escape inside menubar focuses MenuSubTrigger",
+  );
   flush();
   assert.equal(h.byTestId("file-share-sub"), undefined);
   assert.equal(h.byTestId("file-surface"), fileSurface);
@@ -397,7 +465,11 @@ test("menubar forwards application classes, returns Escape focus to MenuSubTrigg
   assert.ok(h.byTestId("file-share-more-sub"));
   mod.log.subOpens.length = 0;
   send("file-share-email", "onClick");
-  assert.deepEqual(mod.log.subOpens, [false], "nested menubar leaf selection cascades onOpenChange(false)");
+  assert.deepEqual(
+    mod.log.subOpens,
+    [false],
+    "nested menubar leaf selection cascades onOpenChange(false)",
+  );
   flush();
   assert.equal(h.byTestId("file-surface"), undefined);
   assert.equal(h.focused.current, h.byTestId("file-trigger"));

@@ -14,13 +14,17 @@ function extractTypeUnionStrings(source, typeName) {
 }
 
 function extractRustStringSlice(source, constName) {
-  const match = source.match(new RegExp(`const\\s+${constName}:\\s*&\\[&str\\]\\s*=\\s*&\\[([\\s\\S]*?)\\];`));
+  const match = source.match(
+    new RegExp(`const\\s+${constName}:\\s*&\\[&str\\]\\s*=\\s*&\\[([\\s\\S]*?)\\];`),
+  );
   assert.ok(match, `missing const ${constName} in properties.rs`);
   return [...match[1].matchAll(/"([^"]+)"/g)].map(m => m[1]);
 }
 
 function extractRustPairSlice(source, constName) {
-  const match = source.match(new RegExp(`const\\s+${constName}:\\s*&\\[\\(&str,\\s*&str\\)\\]\\s*=\\s*&\\[([\\s\\S]*?)\\];`));
+  const match = source.match(
+    new RegExp(`const\\s+${constName}:\\s*&\\[\\(&str,\\s*&str\\)\\]\\s*=\\s*&\\[([\\s\\S]*?)\\];`),
+  );
   assert.ok(match, `missing const ${constName} in properties.rs`);
   return [...match[1].matchAll(/\("([^"]+)",\s*"([^"]+)"\)/g)].map(m => [m[1], m[2]]);
 }
@@ -48,7 +52,10 @@ test("styles.d.ts hyphenated OrdinaryStyleName matches ui-bridge CAMEL_PROPERTIE
     .sort((a, b) => a[0].localeCompare(b[0]));
 
   const actualPairs = extractRustPairSlice(rs, "CAMEL_PROPERTIES");
-  assertUnique(actualPairs.map(([alias]) => alias), "CAMEL_PROPERTIES");
+  assertUnique(
+    actualPairs.map(([alias]) => alias),
+    "CAMEL_PROPERTIES",
+  );
 
   const sortedActual = [...actualPairs].sort((a, b) => a[0].localeCompare(b[0]));
   assert.deepEqual(sortedActual, expectedPairs);

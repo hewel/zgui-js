@@ -1,10 +1,23 @@
 import assert from "node:assert/strict";
 import path from "node:path";
 import { test } from "node:test";
-import { buildFixtureApp, createTempWorkspace, getNode, pixelAt, readPng, readTree, runScenario } from "./harness.mjs";
+import {
+  buildFixtureApp,
+  createTempWorkspace,
+  getNode,
+  pixelAt,
+  readPng,
+  readTree,
+  runScenario,
+} from "./harness.mjs";
 
 const capture = name => ({ id: `capture-${name}`, op: "capture", captureId: name });
-const click = testId => ({ id: `click-${testId}`, op: "pointer.click", target: { surface: "main", testId }, button: "primary" });
+const click = testId => ({
+  id: `click-${testId}`,
+  op: "pointer.click",
+  target: { surface: "main", testId },
+  button: "primary",
+});
 const advance = name => ({ id: `advance-${name}`, op: "clock.advance", byMs: 20 });
 
 async function readPixels(out, name) {
@@ -15,8 +28,11 @@ async function readPixels(out, name) {
   return (testId, x, y, expected) => {
     const bounds = getNode(tree, testId).boundsDevice;
     assert.ok(bounds && bounds.width > x && bounds.height > y, `${name}: ${testId} bounds`);
-    assert.deepEqual(pixelAt(image, Math.floor(bounds.x + x), Math.floor(bounds.y + y)), expected,
-      `${name}: ${testId} at (${x}, ${y})`);
+    assert.deepEqual(
+      pixelAt(image, Math.floor(bounds.x + x), Math.floor(bounds.y + y)),
+      expected,
+      `${name}: ${testId} at (${x}, ${y})`,
+    );
   };
 }
 
@@ -38,20 +54,38 @@ function assertSvg(pixel, testId) {
 test("native vectors render SVG and retained canvas, then fall back or clear on disposal", async t => {
   const temp = await createTempWorkspace("preview-vector-drawing-");
   t.after(() => temp.cleanup());
-  const bundle = await buildFixtureApp(temp.dir, "vector-drawing", new URL("./fixtures/vector-drawing.tsx", import.meta.url));
+  const bundle = await buildFixtureApp(
+    temp.dir,
+    "vector-drawing",
+    new URL("./fixtures/vector-drawing.tsx", import.meta.url),
+  );
   const { out } = await runScenario({
     projectDir: temp.dir,
     bundle,
     name: "vector-drawing",
     scale: 1,
     assertEmptyResources: true,
-    requiredCapabilities: ["pixels", "virtual-time", "selectors.test-id", "input.pointer", "tree.inspect"],
+    requiredCapabilities: [
+      "pixels",
+      "virtual-time",
+      "selectors.test-id",
+      "input.pointer",
+      "tree.inspect",
+    ],
     steps: [
       capture("initial"),
-      click("replace"), advance("replace"), capture("replaced"),
-      click("translate"), advance("translate"), capture("translated"),
-      click("clear"), advance("clear"), capture("cleared"),
-      click("dispose"), advance("dispose"), capture("disposed"),
+      click("replace"),
+      advance("replace"),
+      capture("replaced"),
+      click("translate"),
+      advance("translate"),
+      capture("translated"),
+      click("clear"),
+      advance("clear"),
+      capture("cleared"),
+      click("dispose"),
+      advance("dispose"),
+      capture("disposed"),
     ],
   });
 
@@ -81,7 +115,10 @@ test("native vectors render SVG and retained canvas, then fall back or clear on 
 test("preview reports an undisposed ownerless canvas scene at session retirement", async t => {
   const temp = await createTempWorkspace("preview-vector-leak-");
   t.after(() => temp.cleanup());
-  const bundle = await buildFixtureApp(temp.dir, "vector-leak", `
+  const bundle = await buildFixtureApp(
+    temp.dir,
+    "vector-leak",
+    `
     import { createCanvasScene, renderApp, type NativeNode } from "@hewel/zgui";
     export const hostApiVersion = 1;
     export function mount(root: NativeNode) {
@@ -89,7 +126,9 @@ test("preview reports an undisposed ownerless canvas scene at session retirement
       scene.update([{ kind: "rect", x: 0, y: 0, width: 16, height: 16, fill: "#ff0000" }]);
       return renderApp(() => <vector canvas={scene} style="width: 16px; height: 16px" />, root);
     }
-  `, { rawSource: true });
+  `,
+    { rawSource: true },
+  );
   const { result } = await runScenario({
     projectDir: temp.dir,
     bundle,

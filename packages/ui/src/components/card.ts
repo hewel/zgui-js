@@ -1,7 +1,16 @@
 import { createContext, createSignal, onCleanup, omit, useContext } from "#solid";
 import { createElement, mergeProps, setProp, spread } from "../renderer/index.js";
 import type { NativeChild, NativeElementProps, NativeNode } from "../types.js";
-import { classes, element, isStaticProps, part, provide, slot, useStylesheet, withDefaults } from "./shared.js";
+import {
+  classes,
+  element,
+  isStaticProps,
+  part,
+  provide,
+  slot,
+  useStylesheet,
+  withDefaults,
+} from "./shared.js";
 import { sheet } from "./generated/CardStyle.js";
 
 export type CardProps = NativeElementProps;
@@ -26,11 +35,14 @@ export function Card(props: CardProps = {}): NativeNode {
     spread(node, props);
     return node;
   }
-  return element("box", mergeProps(
-    props,
-    withDefaults({ role: "group" as const }, props),
-    { get __zguiClass() { return classes(sheet.className, "zui-card"); } },
-  ));
+  return element(
+    "box",
+    mergeProps(props, withDefaults({ role: "group" as const }, props), {
+      get __zguiClass() {
+        return classes(sheet.className, "zui-card");
+      },
+    }),
+  );
 }
 
 export function CardHeader(props: CardHeaderProps = {}): NativeChild {
@@ -43,11 +55,14 @@ export function CardHeader(props: CardHeaderProps = {}): NativeChild {
     },
   };
   const rest = omit(props, "children");
-  const header = element("box", mergeProps(rest, {
-    get __zguiClass() {
-      return classes("zui-card__header", count() > 0 && "zui-card__header--action");
-    },
-  }));
+  const header = element(
+    "box",
+    mergeProps(rest, {
+      get __zguiClass() {
+        return classes("zui-card__header", count() > 0 && "zui-card__header--action");
+      },
+    }),
+  );
   slot(header, provide(HeaderContext, state, props));
   return header;
 }
@@ -58,9 +73,14 @@ export const CardDescription = part("box", sheet, "zui-card__description");
 export function CardAction(props: CardActionProps = {}): NativeNode {
   useStylesheet(sheet);
   useContext(HeaderContext)?.claim();
-  return element("box", mergeProps(props, {
-    get __zguiClass() { return classes("zui-card__action"); },
-  }));
+  return element(
+    "box",
+    mergeProps(props, {
+      get __zguiClass() {
+        return classes("zui-card__action");
+      },
+    }),
+  );
 }
 
 export const CardContent = part("box", sheet, "zui-card__content");

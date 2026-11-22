@@ -36,7 +36,7 @@ async function listTsxFiles(dir) {
   const files = [];
   for (const entry of entries) {
     const full = path.join(dir, entry.name);
-    if (entry.isDirectory()) files.push(...await listTsxFiles(full));
+    if (entry.isDirectory()) files.push(...(await listTsxFiles(full)));
     else if (entry.name.endsWith(".tsx")) files.push(full);
   }
   return files;
@@ -47,7 +47,9 @@ test("component-map.md matches @hewel/zgui/components value exports bidirectiona
     readFile(docPath, "utf8"),
     readFile(indexPath, "utf8"),
   ]);
-  const docExports = firstTableColumn(sectionBody(markdown, "Exported Component & Helper Inventory"));
+  const docExports = firstTableColumn(
+    sectionBody(markdown, "Exported Component & Helper Inventory"),
+  );
 
   const codeExports = new Set();
   for (const match of indexSource.matchAll(/^export\s+\{([^}]+)\}\s+from\s+["'][^"']+["'];/gm)) {
@@ -84,7 +86,9 @@ test("component-map.md lists every unported generated stylesheet bidirectionally
     readdir(componentsDir),
   ]);
 
-  const bullets = [...sectionBody(markdown, "Unported Upstream Stylesheets").matchAll(/^- `([^`]+)`$/gm)].map(m => m[1]);
+  const bullets = [
+    ...sectionBody(markdown, "Unported Upstream Stylesheets").matchAll(/^- `([^`]+)`$/gm),
+  ].map(m => m[1]);
   const docUnported = new Set(bullets);
 
   const usedStyles = new Set();

@@ -37,14 +37,14 @@ See the [runtime ownership diagram](docs/development/tsx-native-ui.md#31-system-
 
 ## Requirements
 
-| Component | Requirement |
-| --- | --- |
-| Rust | `1.100.0`, pinned by [`rust-toolchain.toml`](rust-toolchain.toml) |
-| Bun | `>=1.4.4` — runtime, package manager, and test runner (`bunfig.toml`, `bun.lock`) |
-| tsrs | `7.1.0-beta.tsrs2`, installed locally via Bun (no global compiler required) |
-| oxlint / oxfmt | `1.94.0` / `0.79.0` (type-aware lint via `tsrs`) |
+| Component        | Requirement                                                                               |
+| ---------------- | ----------------------------------------------------------------------------------------- |
+| Rust             | `1.100.0`, pinned by [`rust-toolchain.toml`](rust-toolchain.toml)                         |
+| Bun              | `>=1.4.4` — runtime, package manager, and test runner (`bunfig.toml`, `bun.lock`)         |
+| tsrs             | `7.1.0-beta.tsrs2`, installed locally via Bun (no global compiler required)               |
+| oxlint / oxfmt   | `1.94.0` / `0.79.0` (type-aware lint via `tsrs`)                                          |
 | Native toolchain | C/C++ compiler toolchain capable of building QuickJS (`rquickjs`) and native dependencies |
-| Graphics | Vulkan / GPU adapter and driver supported by the native `wgpu` renderer |
+| Graphics         | Vulkan / GPU adapter and driver supported by the native `wgpu` renderer                   |
 
 - **Platform support:** Interactive examples have been verified on Linux with Wayland. Platform and window-manager support comes from upstream `zgui`.
 - **Headless previews:** Offscreen previews do not open a desktop window, but still require a working `wgpu` graphics adapter—they render real GPU frames rather than software-only JS mocks.
@@ -93,19 +93,19 @@ bun run preview  # build app + host and capture an offscreen GPU preview frame
 
 Run any example with `bun run dev --app <name>` or `bun run preview --app <name>`:
 
-| Application | Demonstrates |
-| --- | --- |
-| `counter` | Signals, derived values, native buttons, and click events |
-| `stylex` | Compiled StyleX styles, imported tokens/themes, dynamic values, keyframes, and package assets |
-| `lists` | Dynamic lists and identity-based native node reuse |
-| `async` | Timers, frame callbacks, promises, and asynchronous host services |
-| `editing` | Native single-line and multiline editing, selection, IME composition, read-only, and disabled states |
-| `components` | Styled primitives, layout tokens, themes, badges, and cards |
-| `controls` | Inputs, checkboxes, radios, switches, sliders, progress bars, and spinners |
-| `composition` | Accordions, collapsibles, and nested theme providers |
-| `selection` | Controlled and uncontrolled choice controls |
-| `tabs` | Keyboard-navigable tabs and panels |
-| `gallery` | Full interactive component showcase across themes, overlays, and menus |
+| Application   | Demonstrates                                                                                         |
+| ------------- | ---------------------------------------------------------------------------------------------------- |
+| `counter`     | Signals, derived values, native buttons, and click events                                            |
+| `stylex`      | Compiled StyleX styles, imported tokens/themes, dynamic values, keyframes, and package assets        |
+| `lists`       | Dynamic lists and identity-based native node reuse                                                   |
+| `async`       | Timers, frame callbacks, promises, and asynchronous host services                                    |
+| `editing`     | Native single-line and multiline editing, selection, IME composition, read-only, and disabled states |
+| `components`  | Styled primitives, layout tokens, themes, badges, and cards                                          |
+| `controls`    | Inputs, checkboxes, radios, switches, sliders, progress bars, and spinners                           |
+| `composition` | Accordions, collapsibles, and nested theme providers                                                 |
+| `selection`   | Controlled and uncontrolled choice controls                                                          |
+| `tabs`        | Keyboard-navigable tabs and panels                                                                   |
+| `gallery`     | Full interactive component showcase across themes, overlays, and menus                               |
 
 ## Offscreen previews
 
@@ -158,25 +158,25 @@ bun run test:preview  # build counter + native-host and run headless GPU preview
 
 ## Repository layout
 
-| Path | Purpose |
-| --- | --- |
-| [`crates/native-host`](crates/native-host) | Package verification, native desktop/layer hosting, atomic reload, and preview CLI |
-| [`crates/js-runtime`](crates/js-runtime) | Embedded QuickJS runtime, module evaluation, turn guards, and rejection tracking |
-| [`crates/ui-bridge`](crates/ui-bridge) | Native node handles, properties, event dispatch, geometry queries, and structural ops |
-| [`crates/host-services`](crates/host-services) | Rust-backed asynchronous host services |
-| [`packages/ui`](packages/ui) | `@hewel/zgui` TSX SDK, universal renderer, themed components, icons, and native types |
-| [`packages/services`](packages/services) | `@hewel/zgui-services` typed host-service client APIs |
-| [`packages/build`](packages/build) | `@hewel/zgui-build` CLI (`zgui-js`), typecheck runner, StyleX/Babel/Solid compiler, watcher |
-| [`apps/examples`](apps/examples) | Runnable example applications |
-| [`preview`](preview) | Preview profiles, fixtures, scenarios, pinned Noto fonts, comparison policies, baselines |
-| [`schemas/preview`](schemas/preview) | JSON Schemas for preview inputs and sealed output contracts |
-| [`tests`](tests) | Build, type, native-fixture, and GPU preview integration tests |
-| [`tools`](tools) | Custom `oxlint` architectural plugin ([`tools/oxlint-zgui-plugin.mjs`](tools/oxlint-zgui-plugin.mjs)) |
-| [`vendor`](vendor) | Pinned upstream `zgui` crates with documented local patches ([`vendor/README.md`](vendor/README.md)) |
-| [`docs/adr`](docs/adr) | Architecture Decision Records (Solid 2.0 posture, Wayland shell framework boundaries) |
-| [`docs/development`](docs/development) | Engineering specifications, baseline contracts, StyleX docs, and preview verification |
-| [`docs/agents`](docs/agents) | GitHub issue/Project conventions ([`issue-tracker.md`](docs/agents/issue-tracker.md)), triage labels, domain rules |
-| [`GLOSSARY.md`](GLOSSARY.md) | Canonical domain terminology shared across code and documentation |
+| Path                                           | Purpose                                                                                                            |
+| ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| [`crates/native-host`](crates/native-host)     | Package verification, native desktop/layer hosting, atomic reload, and preview CLI                                 |
+| [`crates/js-runtime`](crates/js-runtime)       | Embedded QuickJS runtime, module evaluation, turn guards, and rejection tracking                                   |
+| [`crates/ui-bridge`](crates/ui-bridge)         | Native node handles, properties, event dispatch, geometry queries, and structural ops                              |
+| [`crates/host-services`](crates/host-services) | Rust-backed asynchronous host services                                                                             |
+| [`packages/ui`](packages/ui)                   | `@hewel/zgui` TSX SDK, universal renderer, themed components, icons, and native types                              |
+| [`packages/services`](packages/services)       | `@hewel/zgui-services` typed host-service client APIs                                                              |
+| [`packages/build`](packages/build)             | `@hewel/zgui-build` CLI (`zgui-js`), typecheck runner, StyleX/Babel/Solid compiler, watcher                        |
+| [`apps/examples`](apps/examples)               | Runnable example applications                                                                                      |
+| [`preview`](preview)                           | Preview profiles, fixtures, scenarios, pinned Noto fonts, comparison policies, baselines                           |
+| [`schemas/preview`](schemas/preview)           | JSON Schemas for preview inputs and sealed output contracts                                                        |
+| [`tests`](tests)                               | Build, type, native-fixture, and GPU preview integration tests                                                     |
+| [`tools`](tools)                               | Custom `oxlint` architectural plugin ([`tools/oxlint-zgui-plugin.mjs`](tools/oxlint-zgui-plugin.mjs))              |
+| [`vendor`](vendor)                             | Pinned upstream `zgui` crates with documented local patches ([`vendor/README.md`](vendor/README.md))               |
+| [`docs/adr`](docs/adr)                         | Architecture Decision Records (Solid 2.0 posture, Wayland shell framework boundaries)                              |
+| [`docs/development`](docs/development)         | Engineering specifications, baseline contracts, StyleX docs, and preview verification                              |
+| [`docs/agents`](docs/agents)                   | GitHub issue/Project conventions ([`issue-tracker.md`](docs/agents/issue-tracker.md)), triage labels, domain rules |
+| [`GLOSSARY.md`](GLOSSARY.md)                   | Canonical domain terminology shared across code and documentation                                                  |
 
 ## Status, limitations, and roadmap
 

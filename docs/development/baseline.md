@@ -13,23 +13,23 @@ below is retained and does not describe the currently shipped API or test suite.
 
 ## Dependency policy
 
-| Component | Selected identity |
-| --- | --- |
-| Rust | 1.100.0, minimal profile plus rustfmt/clippy |
-| zgui | `80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a` |
-| Fontique | Root Cargo patch from the same zgui revision |
-| Native runtime / Wayland | Same revision, with the documented [local patches](../../vendor/README.md) |
-| rquickjs | `73fcd6062ee615aeb2a4675cd32be67a56e93973`; Phase 0 `std`, Phase 1 adds `macro` for opaque native classes |
-| QuickJS-NG | Resolved submodule `6d46d07d04041b40f4f49eaa7fdebe44c314c699` |
-| Bun | `>= 1.4.4` — runtime, package manager, and test runner (`bunfig.toml`, `bun.lock`) |
-| Solid / Universal / Signals | Exact registry versions `solid-js` 2.0.1 / `@solidjs/universal` 2.0.1 / `@solidjs/signals` 2.0.1 |
-| StyleX compiler / runtime | Exact registry versions `@stylexjs/babel-plugin` 0.19.2 / `@stylexjs/stylex` 0.19.2; release tag `d7e6174c5384c64b87bc5fde1f57eedd7c11c5aa` |
-| StyleX merge dependency | `styleq` 0.2.1 |
-| JSX compiler | `@solidjs/babel-plugin` 2.0.1 |
-| Babel core / TypeScript preset | 7.29.13 / 7.29.7 |
-| Rolldown / tsrs | 1.3.2 / 7.1.0-beta.tsrs2 |
-| Oxlint / Oxfmt | 1.94.0 (`--deny-warnings` + `typeAware` via `tsrs` + `tools/oxlint-zgui-plugin.mjs`) / 0.79.0 |
-| Parley | 0.11.1 with `complex-scripts`; required for CJK layout segmentation |
+| Component                      | Selected identity                                                                                                                           |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| Rust                           | 1.100.0, minimal profile plus rustfmt/clippy                                                                                                |
+| zgui                           | `80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a`                                                                                                  |
+| Fontique                       | Root Cargo patch from the same zgui revision                                                                                                |
+| Native runtime / Wayland       | Same revision, with the documented [local patches](../../vendor/README.md)                                                                  |
+| rquickjs                       | `73fcd6062ee615aeb2a4675cd32be67a56e93973`; Phase 0 `std`, Phase 1 adds `macro` for opaque native classes                                   |
+| QuickJS-NG                     | Resolved submodule `6d46d07d04041b40f4f49eaa7fdebe44c314c699`                                                                               |
+| Bun                            | `>= 1.4.4` — runtime, package manager, and test runner (`bunfig.toml`, `bun.lock`)                                                          |
+| Solid / Universal / Signals    | Exact registry versions `solid-js` 2.0.1 / `@solidjs/universal` 2.0.1 / `@solidjs/signals` 2.0.1                                            |
+| StyleX compiler / runtime      | Exact registry versions `@stylexjs/babel-plugin` 0.19.2 / `@stylexjs/stylex` 0.19.2; release tag `d7e6174c5384c64b87bc5fde1f57eedd7c11c5aa` |
+| StyleX merge dependency        | `styleq` 0.2.1                                                                                                                              |
+| JSX compiler                   | `@solidjs/babel-plugin` 2.0.1                                                                                                               |
+| Babel core / TypeScript preset | 7.29.13 / 7.29.7                                                                                                                            |
+| Rolldown / tsrs                | 1.3.2 / 7.1.0-beta.tsrs2                                                                                                                    |
+| Oxlint / Oxfmt                 | 1.94.0 (`--deny-warnings` + `typeAware` via `tsrs` + `tools/oxlint-zgui-plugin.mjs`) / 0.79.0                                               |
+| Parley                         | 0.11.1 with `complex-scripts`; required for CJK layout segmentation                                                                         |
 
 The Fontique patch is selected deliberately for parity with the audited upstream performance implementation; it is not presented as necessary for correctness. `bun.lock` and `Cargo.lock` record the resolved graphs. Phase 0 graph inspection confirmed patched Fontique 0.11.1 and rquickjs `std`; Phase 1 deliberately added `macro`.
 
@@ -275,11 +275,11 @@ Each cell lists all three samples in run order; these are not confidence interva
 Startup is process launch to receipt of the host's first-frame log, **not**
 compositor presentation latency.
 
-| Workload | Startup log (ms) | End RSS (MiB) | Sampled process CPU (ms) | Whole-run native frames |
-| --- | --- | --- | --- | --- |
-| Counter | 53.565 / 53.703 / 58.993 | 76.23 / 75.93 / 76.64 | <10 / <10 / <10 | 3 / 3 / 210 |
-| Lists, four updates | 57.178 / 55.299 / 54.206 | 76.25 / 76.43 / 76.44 | <10 / 10 / 10 | 7 / 7 / 7 |
-| Live niri panel | 62.896 / 63.612 / 61.881 | 82.83 / 82.58 / 82.51 | <10 / <10 / <10 | 2 / 2 / 2 |
+| Workload            | Startup log (ms)         | End RSS (MiB)         | Sampled process CPU (ms) | Whole-run native frames |
+| ------------------- | ------------------------ | --------------------- | ------------------------ | ----------------------- |
+| Counter             | 53.565 / 53.703 / 58.993 | 76.23 / 75.93 / 76.64 | <10 / <10 / <10          | 3 / 3 / 210             |
+| Lists, four updates | 57.178 / 55.299 / 54.206 | 76.25 / 76.43 / 76.44 | <10 / 10 / 10            | 7 / 7 / 7               |
+| Live niri panel     | 62.896 / 63.612 / 61.881 | 82.83 / 82.58 / 82.51 | <10 / <10 / <10          | 2 / 2 / 2               |
 
 Zero observed CPU ticks are reported as below the 10 ms sampling resolution, not
 zero work. Counter/panel RSS did not change within their sample windows. Lists
@@ -288,10 +288,10 @@ RSS increased by 72 / 80 / 80 KiB across its four-update windows.
 Native stage maxima across each workload's three runs, including startup:
 
 | Workload | Frame (ms) | Restyle (ms) | Layout (ms) | Paint/draw (ms) |
-| --- | --- | --- | --- | --- |
-| Counter | 6.248 | 0.406 | 0.571 | 5.060 |
-| Lists | 7.338 | 0.469 | 0.782 | 6.069 |
-| Panel | 17.209 | 1.012 | 3.580 | 12.194 |
+| -------- | ---------- | ------------ | ----------- | --------------- |
+| Counter  | 6.248      | 0.406        | 0.571       | 5.060           |
+| Lists    | 7.338      | 0.469        | 0.782       | 6.069           |
+| Panel    | 17.209     | 1.012        | 3.580       | 12.194          |
 
 Intervals use `f.begin`→`f.end`, `f.restyle`→`f.restyled`,
 `f.layout`→`d.postlayout` and `f.paint`→`f.painted`. They include instrumentation

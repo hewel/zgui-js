@@ -1,7 +1,14 @@
 import type { NativeChild, NativeNode } from "@hewel/zgui";
 import {
-  Badge, DropdownMenu, DropdownMenuContent, DropdownMenuTrigger,
-  Label, MenuLabel, MenuRadioGroup, MenuRadioItem, MenuSeparator,
+  Badge,
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuTrigger,
+  Label,
+  MenuLabel,
+  MenuRadioGroup,
+  MenuRadioItem,
+  MenuSeparator,
   Switch,
 } from "@hewel/zgui/components";
 import type { ColorScheme, ThemePreset } from "@hewel/zgui/components";
@@ -25,7 +32,7 @@ export const SECTIONS = [
   "menus",
   "workbench",
 ] as const;
-export type SectionId = typeof SECTIONS[number];
+export type SectionId = (typeof SECTIONS)[number];
 export const SECTION_LABELS: Record<SectionId, string> = {
   atoms: "Atoms",
   feedback: "Feedback & Media",
@@ -111,7 +118,9 @@ export function Masthead(props: {
           <Label control={() => switchNode}>Dark</Label>
           <Switch
             testId="scheme-switch"
-            ref={node => { switchNode = node; }}
+            ref={node => {
+              switchNode = node;
+            }}
             checked={props.scheme() === "dark"}
             onCheckedChange={on => {
               const next: ColorScheme = on ? "dark" : "light";

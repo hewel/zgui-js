@@ -99,7 +99,13 @@ async function mounted(t) {
   globalThis.__zgui = harness.host;
   const root = harness.makeNode("root");
   const dispose = mod.mount(root);
-  t.after(() => { try { dispose(); } finally { delete globalThis.__zgui; } });
+  t.after(() => {
+    try {
+      dispose();
+    } finally {
+      delete globalThis.__zgui;
+    }
+  });
   return { mod, harness };
 }
 
@@ -137,7 +143,10 @@ test("avatar keeps its image node across source changes and allocates fresh on r
 
   mod.api.setAvatarSrc(null);
   harness.flush();
-  assert.equal(avatar.children.some(node => node.tag === "image"), false);
+  assert.equal(
+    avatar.children.some(node => node.tag === "image"),
+    false,
+  );
   assert.equal(harness.byTestId("avatar-fallback"), fallback);
   assert.equal(harness.byTestId("avatar-badge"), badge);
 
@@ -255,12 +264,21 @@ test("childless composition parts reject lazy children without evaluating them",
   const mod = await moduleFor(t, fixture);
   const harness = createHost();
   globalThis.__zgui = harness.host;
-  t.after(() => { delete globalThis.__zgui; });
+  t.after(() => {
+    delete globalThis.__zgui;
+  });
 
   let evaluated = 0;
-  const child = () => { evaluated += 1; return null; };
+  const child = () => {
+    evaluated += 1;
+    return null;
+  };
   for (const name of ["AvatarImage", "ItemSeparator", "InputGroupInput", "InputGroupTextarea"]) {
-    assert.throws(() => mod.mountWithChildren(harness.makeNode("root"), name, child), TypeError, name);
+    assert.throws(
+      () => mod.mountWithChildren(harness.makeNode("root"), name, child),
+      TypeError,
+      name,
+    );
   }
   assert.equal(evaluated, 0);
 });

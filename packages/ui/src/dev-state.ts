@@ -66,7 +66,9 @@ function assertPlainJsonValue(value: unknown, depth: number, seen: Set<object>):
     throw new TypeError("createDevState rejects class instances, Promises, and native handles");
   }
   if (Object.getOwnPropertySymbols(obj).length > 0) {
-    throw new TypeError("createDevState rejects objects carrying opaque symbol markers or native handles");
+    throw new TypeError(
+      "createDevState rejects objects carrying opaque symbol markers or native handles",
+    );
   }
   seen.add(obj);
   for (const entryValue of Object.values(obj as Record<string, unknown>)) {
@@ -152,9 +154,8 @@ export function createDevState<T>(
   const [get, rawSet] = makePlainSignal<T>(startValue);
 
   const set = ((value?: unknown) => {
-    const next = typeof value === "function"
-      ? (value as (previous: T) => T)(untrack(get))
-      : (value as T);
+    const next =
+      typeof value === "function" ? (value as (previous: T) => T)(untrack(get)) : (value as T);
     persist(next);
     return (rawSet as (nextValue: T) => T)(next);
   }) as Setter<T>;

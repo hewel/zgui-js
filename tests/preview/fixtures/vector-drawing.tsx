@@ -18,22 +18,42 @@ export function mount(root: NativeNode) {
     scene.update([tile("#00ffff")]);
     const owned = createCanvasScene();
     owned.update([tile("#0000ff")]);
-    return <column style="position: fixed; inset: 0; padding: 16px; gap: 16px; background-color: #ffffff">
-      <row style="gap: 16px">
-        <vector testId="svg" style={style} viewBox={viewBox} d={d} svg={svg} />
-        <vector testId="canvas-svg" style={style} viewBox={viewBox} d={d} svg={svg} canvas={scene} />
-        <vector testId="canvas-path" style={style} viewBox={viewBox} d={d} canvas={scene} />
-        <vector testId="owned" style={style} viewBox={viewBox} canvas={owned} />
-      </row>
-      <row style="gap: 8px">
-        <Button testId="replace" onClick={() => scene.update([tile("#ffff00")])}>Replace</Button>
-        <Button testId="translate" onClick={() => scene.update(null, [1, 0, 0, 1, 32, 0])}>Translate</Button>
-        <Button testId="clear" onClick={() => scene.update([])}>Clear</Button>
-        <Button testId="dispose" onClick={() => {
-          scene.dispose();
-          owned.dispose();
-        }}>Dispose</Button>
-      </row>
-    </column>;
+    return (
+      <column style="position: fixed; inset: 0; padding: 16px; gap: 16px; background-color: #ffffff">
+        <row style="gap: 16px">
+          <vector testId="svg" style={style} viewBox={viewBox} d={d} svg={svg} />
+          <vector
+            testId="canvas-svg"
+            style={style}
+            viewBox={viewBox}
+            d={d}
+            svg={svg}
+            canvas={scene}
+          />
+          <vector testId="canvas-path" style={style} viewBox={viewBox} d={d} canvas={scene} />
+          <vector testId="owned" style={style} viewBox={viewBox} canvas={owned} />
+        </row>
+        <row style="gap: 8px">
+          <Button testId="replace" onClick={() => scene.update([tile("#ffff00")])}>
+            Replace
+          </Button>
+          <Button testId="translate" onClick={() => scene.update(null, [1, 0, 0, 1, 32, 0])}>
+            Translate
+          </Button>
+          <Button testId="clear" onClick={() => scene.update([])}>
+            Clear
+          </Button>
+          <Button
+            testId="dispose"
+            onClick={() => {
+              scene.dispose();
+              owned.dispose();
+            }}
+          >
+            Dispose
+          </Button>
+        </row>
+      </column>
+    );
   }, root);
 }

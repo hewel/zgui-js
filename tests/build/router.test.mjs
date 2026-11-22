@@ -142,8 +142,9 @@ test("@hewel/zgui/router supports nested Outlets, multi-instance history, Link, 
   globalThis.__zgui = h.host;
   let dispose;
   t.after(() => {
-    try { dispose?.(); }
-    finally {
+    try {
+      dispose?.();
+    } finally {
       delete globalThis.__zgui;
       delete globalThis.__setSearch;
     }
@@ -162,11 +163,13 @@ test("@hewel/zgui/router supports nested Outlets, multi-instance history, Link, 
   assert.equal(h.byTestId("link-home").props.get("data-active"), "true");
 
   // Navigate left router to parameterized doc route; right router is unaffected.
-  await h.runTurn(() => mod.leftRouter.navigate("/docs/:id", {
-    params: { id: "alpha" },
-    search: { tab: "edit" },
-    state: { source: "toc" },
-  }));
+  await h.runTurn(() =>
+    mod.leftRouter.navigate("/docs/:id", {
+      params: { id: "alpha" },
+      search: { tab: "edit" },
+      state: { source: "toc" },
+    }),
+  );
   assert.equal(textOf("page-doc"), "alpha|edit");
   assert.equal(textOf("layout-docs-match"), "alpha");
   assert.equal(textOf("right-item"), "Item:one");
@@ -232,7 +235,9 @@ test("@hewel/zgui/router supports nested Outlets, multi-instance history, Link, 
   // bindControlNavigation routes host control messages cleanly.
   h.runTurn(() => mod.emitControl({ command: "other", payload: "/settings" }));
   assert.equal(mod.leftRouter.location().pathname, "/docs/beta");
-  h.runTurn(() => mod.emitControl({ command: "navigate", payload: { path: "/settings", replace: true } }));
+  h.runTurn(() =>
+    mod.emitControl({ command: "navigate", payload: { path: "/settings", replace: true } }),
+  );
   assert.equal(mod.leftRouter.location().pathname, "/settings");
 
   // Independent right router navigates without touching left router.

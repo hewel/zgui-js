@@ -23,15 +23,27 @@ async function mounted(t, { reducedMotion = false, renderScale = true } = {}) {
   const mod = await moduleFor(t, fixture);
   let dispose;
   globalThis.__zgui = h.host;
-  t.after(() => { try { dispose?.(); } finally { delete globalThis.__zgui; } });
+  t.after(() => {
+    try {
+      dispose?.();
+    } finally {
+      delete globalThis.__zgui;
+    }
+  });
   const clock = createClock(t, h);
   const root = h.makeNode("root");
   dispose = mod.mount(root, renderScale);
   return {
-    clock, value: mod.value, target: mod.target, runTurn: h.runTurn,
+    clock,
+    value: mod.value,
+    target: mod.target,
+    runTurn: h.runTurn,
     scale: () => root.children[0].props.get("style").scale,
     setTarget: next => h.runTurn(() => mod.setTarget(next)),
-    tick(ms = 16) { clock.advance(ms); clock.frame(); },
+    tick(ms = 16) {
+      clock.advance(ms);
+      clock.frame();
+    },
     dispose: () => h.runTurn(dispose),
   };
 }
@@ -109,7 +121,11 @@ test("jump restarts motion toward an unchanged target with fresh velocity and fr
   assert.equal(clock.frames.size, 1);
   assert.equal(clock.frames.has(oldFrame), false);
   tick(100);
-  assert.equal(value(), firstStep, "neither momentum nor the prior frame timestamp survives a jump");
+  assert.equal(
+    value(),
+    firstStep,
+    "neither momentum nor the prior frame timestamp survives a jump",
+  );
   for (let i = 0; i < 240 && clock.frames.size; i += 1) tick();
   assert.equal(value(), 1);
   assert.equal(scale(), "1.01");
@@ -150,7 +166,10 @@ test("jump uses a target written in the same turn before effects flush", async t
 
 function assertRejectsNonFiniteJump(value) {
   for (const nonFinite of [NaN, Infinity, -Infinity]) {
-    assert.throws(() => value.jump(nonFinite), { name: "RangeError", message: "Spring jump value must be finite" });
+    assert.throws(() => value.jump(nonFinite), {
+      name: "RangeError",
+      message: "Spring jump value must be finite",
+    });
   }
 }
 
@@ -212,7 +231,9 @@ test("disposing the owner cancels the pending frame and detaches the target", as
 
 test("jump preserves in-flight motion when reading the target fails or disposes the owner", async t => {
   const h = createHost({ strictStyles: true });
-  const mod = await moduleFor(t, `
+  const mod = await moduleFor(
+    t,
+    `
     import { createSignal, createSpring, renderApp } from "@hewel/zgui";
     import type { NativeNode, Spring } from "@hewel/zgui";
 
@@ -236,10 +257,17 @@ test("jump preserves in-flight motion when reading the target fails or disposes 
       }, root);
       return stop;
     }
-  `);
+  `,
+  );
   let dispose;
   globalThis.__zgui = h.host;
-  t.after(() => { try { dispose?.(); } finally { delete globalThis.__zgui; } });
+  t.after(() => {
+    try {
+      dispose?.();
+    } finally {
+      delete globalThis.__zgui;
+    }
+  });
   const clock = createClock(t, h);
   dispose = mod.mount(h.makeNode("root"));
   h.runTurn(() => mod.setTarget(1));
@@ -250,7 +278,10 @@ test("jump preserves in-flight motion when reading the target fails or disposes 
   assert.equal(pendingFrames.length, 1);
 
   mod.setMode("nan");
-  assert.throws(() => mod.value.jump(0), { name: "RangeError", message: "Spring target must be finite" });
+  assert.throws(() => mod.value.jump(0), {
+    name: "RangeError",
+    message: "Spring target must be finite",
+  });
   assert.equal(mod.value(), before, "non-finite target read must not partially reset position");
   assert.deepEqual([...clock.frames.keys()], pendingFrames, "pending frame must stay intact");
 
@@ -261,13 +292,19 @@ test("jump preserves in-flight motion when reading the target fails or disposes 
 
   mod.setMode("dispose");
   mod.value.jump(0);
-  assert.equal(clock.frames.size, 0, "disposing during target read must not schedule a post-disposal frame");
+  assert.equal(
+    clock.frames.size,
+    0,
+    "disposing during target read must not schedule a post-disposal frame",
+  );
   assert.equal(mod.value(), before, "disposing during target read must not mutate position");
 });
 
 test("jump inside a Solid effect callback converges cleanly with same-turn target updates", async t => {
   const h = createHost({ strictStyles: true });
-  const mod = await moduleFor(t, `
+  const mod = await moduleFor(
+    t,
+    `
     import { createEffect, createSignal, createSpring, renderApp } from "@hewel/zgui";
     import type { NativeNode, Spring } from "@hewel/zgui";
 
@@ -291,10 +328,17 @@ test("jump inside a Solid effect callback converges cleanly with same-turn targe
         return <box style={{ opacity: value() }} />;
       }, root);
     }
-  `);
+  `,
+  );
   let dispose;
   globalThis.__zgui = h.host;
-  t.after(() => { try { dispose?.(); } finally { delete globalThis.__zgui; } });
+  t.after(() => {
+    try {
+      dispose?.();
+    } finally {
+      delete globalThis.__zgui;
+    }
+  });
   const clock = createClock(t, h);
   dispose = mod.mount(h.makeNode("root"));
 
@@ -304,18 +348,27 @@ test("jump inside a Solid effect callback converges cleanly with same-turn targe
   clock.advance(16);
   clock.frame();
   assert.ok(mod.value() > 0 && mod.value() < 1);
-  for (let i = 0; i < 240 && clock.frames.size; i += 1) { clock.advance(16); clock.frame(); }
+  for (let i = 0; i < 240 && clock.frames.size; i += 1) {
+    clock.advance(16);
+    clock.frame();
+  }
   assert.equal(mod.value(), 1);
   assert.equal(clock.frames.size, 0);
 
   h.runTurn(() => mod.setTrigger(2));
   assert.equal(mod.value(), 0);
-  assert.equal(clock.frames.size, 0, "matching target and jump inside an effect settles with no frame");
+  assert.equal(
+    clock.frames.size,
+    0,
+    "matching target and jump inside an effect settles with no frame",
+  );
 });
 
 test("dynamic reducedMotion settles active springs, updates ThemeProvider tokens, and follows host updates", async t => {
   const h = createHost({ strictStyles: true });
-  const mod = await moduleFor(t, `
+  const mod = await moduleFor(
+    t,
+    `
     import { createSignal, createSpring, getReducedMotion, renderApp, setReducedMotion } from "@hewel/zgui";
     import { ThemeProvider } from "@hewel/zgui/components";
     import type { NativeNode, Spring } from "@hewel/zgui";
@@ -334,14 +387,22 @@ test("dynamic reducedMotion settles active springs, updates ThemeProvider tokens
         );
       }, root);
     }
-  `);
+  `,
+  );
   let dispose;
   globalThis.__zgui = h.host;
-  t.after(() => { try { dispose?.(); } finally { delete globalThis.__zgui; } });
+  t.after(() => {
+    try {
+      dispose?.();
+    } finally {
+      delete globalThis.__zgui;
+    }
+  });
   const clock = createClock(t, h);
   dispose = mod.mount(h.makeNode("root"));
 
-  const themeCss = () => [...h.stylesheets.entries()].find(([name]) => name.startsWith("zgui-ui-theme-"))?.[1] ?? "";
+  const themeCss = () =>
+    [...h.stylesheets.entries()].find(([name]) => name.startsWith("zgui-ui-theme-"))?.[1] ?? "";
   assert.equal(mod.getReducedMotion(), false);
   assert.ok(!themeCss().includes("--zui-motion-duration-fast: 0ms;"));
 
@@ -356,13 +417,20 @@ test("dynamic reducedMotion settles active springs, updates ThemeProvider tokens
   assert.equal(mod.getReducedMotion(), true);
   assert.equal(mod.value(), 1, "active spring settles immediately when reduced motion turns on");
   assert.equal(clock.frames.size, 0, "pending spring frame is cancelled immediately");
-  assert.ok(themeCss().includes("--zui-motion-duration-fast: 0ms;"), "ThemeProvider reinstalls 0ms motion tokens live");
+  assert.ok(
+    themeCss().includes("--zui-motion-duration-fast: 0ms;"),
+    "ThemeProvider reinstalls 0ms motion tokens live",
+  );
 
   // Re-enabling motion resumes spring animation on the next target change.
   h.runTurn(() => mod.setReducedMotion(false));
   assert.ok(!themeCss().includes("--zui-motion-duration-fast: 0ms;"));
   h.runTurn(() => mod.setTarget(0));
-  assert.equal(clock.frames.size, 1, "spring schedules animation again after reduced motion turns off");
+  assert.equal(
+    clock.frames.size,
+    1,
+    "spring schedules animation again after reduced motion turns off",
+  );
   clock.advance(16);
   clock.frame();
   assert.ok(mod.value() > 0 && mod.value() < 1);
@@ -378,7 +446,9 @@ test("dynamic reducedMotion settles active springs, updates ThemeProvider tokens
 
 test("pure-shell unscoped getReducedMotion syncs eagerly from attached surfaces and receives live updates", async t => {
   const h = createHost({ strictStyles: true, reducedMotion: true });
-  const mod = await moduleFor(t, `
+  const mod = await moduleFor(
+    t,
+    `
     import { LayerSurface, createEffect, getReducedMotion, renderShell } from "@hewel/zgui";
 
     export const observed: boolean[] = [];
@@ -395,28 +465,40 @@ test("pure-shell unscoped getReducedMotion syncs eagerly from attached surfaces 
         );
       });
     }
-  `);
+  `,
+  );
   const previousShell = globalThis.__zguiShell;
   globalThis.__zguiShell = h.shell;
   let dispose;
   t.after(() => {
-    try { if (dispose) h.runTurn(dispose); }
-    finally {
+    try {
+      if (dispose) h.runTurn(dispose);
+    } finally {
       if (previousShell === undefined) delete globalThis.__zguiShell;
       else globalThis.__zguiShell = previousShell;
     }
   });
   dispose = h.runTurn(() => mod.mount());
   h.flush();
-  assert.equal(mod.observed.at(-1), true, "root effect syncs initial reducedMotion when first shell surface attaches");
+  assert.equal(
+    mod.observed.at(-1),
+    true,
+    "root effect syncs initial reducedMotion when first shell surface attaches",
+  );
 
   h.emitReducedMotion(false);
-  assert.equal(mod.observed.at(-1), false, "root effect receives live reducedMotion updates without any surface reading getReducedMotion");
+  assert.equal(
+    mod.observed.at(-1),
+    false,
+    "root effect receives live reducedMotion updates without any surface reading getReducedMotion",
+  );
 });
 
 test("createSpring accepts reactive physics accessors and configure() without losing position or velocity", async t => {
   const h = createHost({ strictStyles: true });
-  const mod = await moduleFor(t, `
+  const mod = await moduleFor(
+    t,
+    `
     import { createSignal, createSpring, renderApp } from "@hewel/zgui";
     import type { NativeNode, Spring } from "@hewel/zgui";
 
@@ -432,12 +514,16 @@ test("createSpring accepts reactive physics accessors and configure() without lo
         return <box style={{ opacity: spring() }} />;
       }, root);
     }
-  `);
+  `,
+  );
   globalThis.__zgui = h.host;
   let dispose;
   t.after(() => {
-    try { dispose?.(); }
-    finally { delete globalThis.__zgui; }
+    try {
+      dispose?.();
+    } finally {
+      delete globalThis.__zgui;
+    }
   });
   const clock = createClock(t, h);
   dispose = mod.mount(h.makeNode("root"));
@@ -457,7 +543,10 @@ test("createSpring accepts reactive physics accessors and configure() without lo
   clock.advance(16);
   clock.frame();
   const midAfterReactive = mod.spring();
-  assert.ok(midAfterReactive > midBefore, "spring keeps advancing smoothly after reactive option update");
+  assert.ok(
+    midAfterReactive > midBefore,
+    "spring keeps advancing smoothly after reactive option update",
+  );
 
   // configure() validates eagerly and updates physics live without resetting position.
   assert.throws(() => mod.spring.configure({ stiffness: 0 }), RangeError);

@@ -4,7 +4,21 @@ import { createHash } from "node:crypto";
 import { cp, mkdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import { after, before, test } from "node:test";
-import { buildFixtureApp, createTempWorkspace, defaultProfile, emptyResources, getNode, nativeHostBinary, pixelAt, readFrame, readPng, readTree, runScenario, workspaceRoot, writeJson } from "./harness.mjs";
+import {
+  buildFixtureApp,
+  createTempWorkspace,
+  defaultProfile,
+  emptyResources,
+  getNode,
+  nativeHostBinary,
+  pixelAt,
+  readFrame,
+  readPng,
+  readTree,
+  runScenario,
+  workspaceRoot,
+  writeJson,
+} from "./harness.mjs";
 
 let temp;
 let profile;
@@ -15,40 +29,105 @@ before(async () => {
   const fonts = path.resolve(path.dirname(defaultProfile), path.dirname(base.fonts.manifest));
   await mkdir(path.join(temp.dir, "profiles"));
   profile = path.join(temp.dir, "profiles/shell.json");
-  await writeJson(profile, { ...base, pureShell: true, fonts: { ...base.fonts, manifest: path.relative(path.dirname(profile), path.join(fonts, path.basename(base.fonts.manifest))) } });
-  bundle = await buildFixtureApp(path.join(temp.dir, "shell"), "multi-surface", new URL("./fixtures/multi-surface.tsx", import.meta.url), { capabilities: { shellSurfaces: true } });
+  await writeJson(profile, {
+    ...base,
+    pureShell: true,
+    fonts: {
+      ...base.fonts,
+      manifest: path.relative(
+        path.dirname(profile),
+        path.join(fonts, path.basename(base.fonts.manifest)),
+      ),
+    },
+  });
+  bundle = await buildFixtureApp(
+    path.join(temp.dir, "shell"),
+    "multi-surface",
+    new URL("./fixtures/multi-surface.tsx", import.meta.url),
+    { capabilities: { shellSurfaces: true } },
+  );
 });
-after(async () => { await temp?.cleanup(); });
-const left = { id: "left", name: "Left", x: 0, y: 0, width: 240, height: 200, scale: 1, refreshRateMilliHz: 60000 };
+after(async () => {
+  await temp?.cleanup();
+});
+const left = {
+  id: "left",
+  name: "Left",
+  x: 0,
+  y: 0,
+  width: 240,
+  height: 200,
+  scale: 1,
+  refreshRateMilliHz: 60000,
+};
 const right = { ...left, id: "right", name: "Right", x: 240, width: 300, scale: 2 };
 const monitors = (id, ...monitors) => ({ id, op: "monitors.set", monitors });
 const capture = (id, surface, captureId = id) => ({ id, op: "capture", surface, captureId });
 
 function run(name, steps, options = {}) {
-  return runScenario({ projectDir: temp.dir, bundle, profile, name, steps,
-    requiredCapabilities: ["pixels", "virtual-time", "surface.multiple", "selectors.test-id", "input.pointer", "tree.inspect"],
-    ...options });
+  return runScenario({
+    projectDir: temp.dir,
+    bundle,
+    profile,
+    name,
+    steps,
+    requiredCapabilities: [
+      "pixels",
+      "virtual-time",
+      "surface.multiple",
+      "selectors.test-id",
+      "input.pointer",
+      "tree.inspect",
+    ],
+    ...options,
+  });
 }
 
 test("a pure-shell Session captures independent outputs and retains shared state through hotplug", async () => {
   const { out, result } = await run("shell-hotplug", [
-    { id: "zero-windows", op: "settle" }, monitors("plug", left, right),
-    capture("left-initial", "left", "initial"), capture("right-initial", "right", "initial"),
-    { id: "click-left", op: "pointer.click", target: { surface: "left", testId: "counter" }, button: "primary" },
+    { id: "zero-windows", op: "settle" },
+    monitors("plug", left, right),
+    capture("left-initial", "left", "initial"),
+    capture("right-initial", "right", "initial"),
+    {
+      id: "click-left",
+      op: "pointer.click",
+      target: { surface: "left", testId: "counter" },
+      button: "primary",
+    },
     { id: "dispatch-click", op: "clock.advance", byMs: 20 },
-    capture("left-changed", "left"), capture("right-changed", "right"),
-    { id: "hidden-hit-area", op: "pointer.click", surface: "left", position: { x: 48, y: 12 }, button: "primary" },
-    { id: "right-shared-state", op: "assert", target: { surface: "right", testId: "counter" }, check: { property: "text", equals: "Right:1" } },
-    monitors("unplug-left", right), capture("right-alone", "right"),
-    { id: "recreate-right", op: "surface.recreate", surface: "right" }, capture("right-recreated", "right"),
-    monitors("unplug-all"), { id: "settle-empty", op: "settle" },
-    monitors("replug-left", { ...left, width: 260 }), capture("left-replugged", "left"),
+    capture("left-changed", "left"),
+    capture("right-changed", "right"),
+    {
+      id: "hidden-hit-area",
+      op: "pointer.click",
+      surface: "left",
+      position: { x: 48, y: 12 },
+      button: "primary",
+    },
+    {
+      id: "right-shared-state",
+      op: "assert",
+      target: { surface: "right", testId: "counter" },
+      check: { property: "text", equals: "Right:1" },
+    },
+    monitors("unplug-left", right),
+    capture("right-alone", "right"),
+    { id: "recreate-right", op: "surface.recreate", surface: "right" },
+    capture("right-recreated", "right"),
+    monitors("unplug-all"),
+    { id: "settle-empty", op: "settle" },
+    monitors("replug-left", { ...left, width: 260 }),
+    capture("left-replugged", "left"),
   ]);
   assert.equal(result.captureCount, 7);
   const expected = [
-    ["left/initial", "left", "Left:0", 240, 1], ["right/initial", "right", "Right:0", 300, 2],
-    ["left/left-changed", "left", "Left:1", 240, 1], ["right/right-changed", "right", "Right:1", 300, 2],
-    ["right/right-alone", "right", "Right:1", 300, 2], ["right/right-recreated", "right", "Right:1", 300, 2],
+    ["left/initial", "left", "Left:0", 240, 1],
+    ["right/initial", "right", "Right:0", 300, 2],
+    ["left/left-changed", "left", "Left:1", 240, 1],
+    ["right/right-changed", "right", "Right:1", 300, 2],
+    ["right/right-alone", "right", "Right:1", 300, 2],
+    ["right/right-recreated", "right", "Right:1", 300, 2],
     ["left/left-replugged", "left", "Left:1", 260, 1],
   ];
   const documents = new Map();
@@ -68,10 +147,25 @@ test("a pure-shell Session captures independent outputs and retains shared state
     assert.deepEqual([image.width, image.height], [width, 48 * scale]);
     assert.deepEqual(pixelAt(image, width - 2, 48 * scale - 2), [18, 52, 86, 255]);
   }
-  assert.equal(documents.get("right/initial"), documents.get("right/right-alone"), "unplugging left kept the right document");
-  assert.notEqual(documents.get("right/right-alone"), documents.get("right/right-recreated"), "named recreate replaced only its own document");
-  assert.notEqual(documents.get("left/initial"), documents.get("left/left-replugged"), "replugging left mounted a fresh document");
-  const steps = (await readFile(path.join(out, "steps.jsonl"), "utf8")).trim().split("\n").map(JSON.parse);
+  assert.equal(
+    documents.get("right/initial"),
+    documents.get("right/right-alone"),
+    "unplugging left kept the right document",
+  );
+  assert.notEqual(
+    documents.get("right/right-alone"),
+    documents.get("right/right-recreated"),
+    "named recreate replaced only its own document",
+  );
+  assert.notEqual(
+    documents.get("left/initial"),
+    documents.get("left/left-replugged"),
+    "replugging left mounted a fresh document",
+  );
+  const steps = (await readFile(path.join(out, "steps.jsonl"), "utf8"))
+    .trim()
+    .split("\n")
+    .map(JSON.parse);
   const settled = steps.find(step => step.id === "zero-windows").result;
   assert.equal(settled.appReady, true);
   assert.equal(settled.frameCurrent, false);
@@ -79,12 +173,28 @@ test("a pure-shell Session captures independent outputs and retains shared state
   assert.deepEqual(steps.find(step => step.id === "unplug-all").result.surfaces, []);
 
   const native = (...args) => {
-    const child = spawnSync(nativeHostBinary, ["preview", ...args], { cwd: workspaceRoot, encoding: "utf8", timeout: 15000 });
+    const child = spawnSync(nativeHostBinary, ["preview", ...args], {
+      cwd: workspaceRoot,
+      encoding: "utf8",
+      timeout: 15000,
+    });
     assert.ifError(child.error);
     assert.equal(child.status, 0, `${child.stdout}\n${child.stderr}`);
     return JSON.parse(child.stdout);
   };
-  const inspected = native("inspect", "--run", out, "--capture", "initial", "--surface", "right", "--test-id", "counter", "--fields", "surface,text");
+  const inspected = native(
+    "inspect",
+    "--run",
+    out,
+    "--capture",
+    "initial",
+    "--surface",
+    "right",
+    "--test-id",
+    "counter",
+    "--fields",
+    "surface,text",
+  );
   assert.deepEqual(inspected.nodes[0], { surface: "right", text: "Right:0", truncatedFields: [] });
 
   const reviewed = path.join(temp.dir, "reviewed");
@@ -93,24 +203,42 @@ test("a pure-shell Session captures independent outputs and retains shared state
   await mkdir(reviewed);
   await cp(out, copied, { recursive: true });
   await cp(path.join(workspaceRoot, "preview/comparison/strict.json"), policy);
-  const digest = async file => `sha256:${createHash("sha256").update(await readFile(file)).digest("hex")}`;
+  const digest = async file =>
+    `sha256:${createHash("sha256")
+      .update(await readFile(file))
+      .digest("hex")}`;
   await writeJson(path.join(reviewed, "baseline.json"), {
     schemaVersion: 1,
     run: "run",
     artifactsDigest: await digest(path.join(copied, "artifacts.json")),
     policyDigest: await digest(policy),
     review: {
-      by: "multi-surface-test", at: "2026-11-18", summary: "Check both named output capture identities.",
+      by: "multi-surface-test",
+      at: "2026-11-18",
+      summary: "Check both named output capture identities.",
       buildId: result.build.buildId,
       captures: expected.map(([file, surface]) => ({ captureId: path.basename(file), surface })),
     },
   });
-  const compared = native("compare", "--baseline", reviewed, "--actual", out, "--policy", policy, "--out", path.join(temp.dir, "comparison"));
+  const compared = native(
+    "compare",
+    "--baseline",
+    reviewed,
+    "--actual",
+    out,
+    "--policy",
+    policy,
+    "--out",
+    path.join(temp.dir, "comparison"),
+  );
   assert.equal(compared.captures.compared, result.captureCount);
 });
 
 test("LayerSurface retargets to the remaining output when the first output is removed", async () => {
-  const overlay = await buildFixtureApp(path.join(temp.dir, "retarget"), "retarget", `
+  const overlay = await buildFixtureApp(
+    path.join(temp.dir, "retarget"),
+    "retarget",
+    `
     import { LayerSurface, renderShell, useMonitors } from "@hewel/zgui";
     export const hostApiVersion = 1;
     export function mount() {
@@ -122,18 +250,29 @@ test("LayerSurface retargets to the remaining output when the first output is re
         </LayerSurface>;
       });
     }
-  `, { rawSource: true, capabilities: { shellSurfaces: true } });
-  const { out, result } = await run("shell-retarget", [
-    monitors("plug-both", left, right), capture("before", "overlay"),
-    monitors("remove-left", right), capture("after", "overlay"),
-  ], { bundle: overlay, assertEmptyResources: true });
+  `,
+    { rawSource: true, capabilities: { shellSurfaces: true } },
+  );
+  const { out, result } = await run(
+    "shell-retarget",
+    [
+      monitors("plug-both", left, right),
+      capture("before", "overlay"),
+      monitors("remove-left", right),
+      capture("after", "overlay"),
+    ],
+    { bundle: overlay, assertEmptyResources: true },
+  );
   assert.equal(result.firstError, null);
   const before = await readFrame(out, "surfaces/overlay/before");
   const after = await readFrame(out, "surfaces/overlay/after");
   assert.equal(before.scale, 1);
   assert.equal(after.scale, 2);
   assert.notEqual(after.documentIdentity, before.documentIdentity);
-  for (const [id, width, height] of [["before", 240, 24], ["after", 300, 48]]) {
+  for (const [id, width, height] of [
+    ["before", 240, 24],
+    ["after", 300, 48],
+  ]) {
     const image = await readPng(path.join(out, `captures/surfaces/overlay/${id}.png`));
     assert.deepEqual([image.width, image.height], [width, height]);
     assert.deepEqual(pixelAt(image, width - 2, height - 2), [18, 52, 86, 255]);
@@ -141,7 +280,10 @@ test("LayerSurface retargets to the remaining output when the first output is re
 });
 
 test("a caught unauthorized LayerSurface open still retires the Session", async () => {
-  const deniedBundle = await buildFixtureApp(path.join(temp.dir, "denied"), "denied-shell", `
+  const deniedBundle = await buildFixtureApp(
+    path.join(temp.dir, "denied"),
+    "denied-shell",
+    `
     import { LayerSurface, renderApp, renderShell } from "@hewel/zgui";
     import type { NativeNode } from "@hewel/zgui";
     export const hostApiVersion = 1;
@@ -151,9 +293,13 @@ test("a caught unauthorized LayerSurface open still retires the Session", async 
         return <text>caught</text>;
       }, root);
     }
-  `, { rawSource: true });
+  `,
+    { rawSource: true },
+  );
   const { result } = await run("shell-denied", [capture("denied", "main")], {
-    bundle: deniedBundle, profile: defaultProfile, allowFailure: true,
+    bundle: deniedBundle,
+    profile: defaultProfile,
+    allowFailure: true,
   });
   assert.equal(result.firstError?.code, "E_CAPABILITY");
   assert.match(result.firstError?.message, /shellSurfaces/);
@@ -163,15 +309,29 @@ test("a caught unauthorized LayerSurface open still retires the Session", async 
 test("a native fault with two live shell regions releases every bridge and surface", async () => {
   // At 5x scale a stretched width of 16384 device pixels rounds to 3277 logical
   // pixels, exceeding the native preview's device extent limit on reconfigure.
-  const { result } = await run("shell-fault", [
-    monitors("plug-both", left, right), capture("left-before-fault", "left"), capture("right-before-fault", "right"),
-    monitors("oversize-right", left, { ...right, width: 16384, scale: 5 }),
-  ], { allowFailure: true });
+  const { result } = await run(
+    "shell-fault",
+    [
+      monitors("plug-both", left, right),
+      capture("left-before-fault", "left"),
+      capture("right-before-fault", "right"),
+      monitors("oversize-right", left, { ...right, width: 16384, scale: 5 }),
+    ],
+    { allowFailure: true },
+  );
   assert.equal(result.captureCount, 2, "both mount regions must present before the fault");
-  assert.equal(result.firstError?.step, "oversize-right", "the fault must come from reconfiguring a live shell surface");
+  assert.equal(
+    result.firstError?.step,
+    "oversize-right",
+    "the fault must come from reconfiguring a live shell surface",
+  );
   assert.match(result.firstError?.message, /shell surface exceeds its physical extent budget/);
   assert.equal(result.teardown.clean, true, "the faulted session must retire cleanly");
-  assert.deepEqual(result.teardown.resources, emptyResources, "no bridge resources or native shell surfaces may survive");
+  assert.deepEqual(
+    result.teardown.resources,
+    emptyResources,
+    "no bridge resources or native shell surfaces may survive",
+  );
 });
 
 const themeCapabilities = { shellSurfaces: true, controlChannel: true };
@@ -182,18 +342,23 @@ const themeSource = `
   const theme = (color: string) => ":root { --color-primary: " + color + "; }";
 `;
 const themeCommand = command => ({
-  id: command, op: "service.emit", channel: "control.message",
+  id: command,
+  op: "service.emit",
+  channel: "control.message",
   value: { args: [command], reply: { text: "" } },
 });
 
 async function runTheme(name, source, steps) {
   const bundle = await buildFixtureApp(path.join(temp.dir, name), name, themeSource + source, {
-    rawSource: true, capabilities: themeCapabilities,
+    rawSource: true,
+    capabilities: themeCapabilities,
   });
   const fixture = path.join(temp.dir, `${name}-fixture.json`);
   await writeJson(fixture, { schemaVersion: 1, id: name, services: { control: {} }, events: [] });
   return run(name, steps, {
-    bundle, fixture, requiredCapabilities: ["pixels", "surface.multiple", "services.fixtures"],
+    bundle,
+    fixture,
+    requiredCapabilities: ["pixels", "surface.multiple", "services.fixtures"],
   });
 }
 
@@ -205,7 +370,9 @@ async function checkTheme(out, surface, id, color) {
 }
 
 test("a pure CSS custom property replacement presents new pixels on the first settle", async () => {
-  const { out } = await runTheme("region-theme", `
+  const { out } = await runTheme(
+    "region-theme",
+    `
     import { getOwner, LayerSurface, mountStylesheet, renderShell, runWithOwner } from "@hewel/zgui";
     function SurfaceContent() {
       mountStylesheet("theme", theme("#ff0000"));
@@ -218,17 +385,22 @@ test("a pure CSS custom property replacement presents new pixels on the first se
         <SurfaceContent />
       </LayerSurface>);
     }
-  `, [
-    monitors("plug-left", left),
-    { id: "settle-red", op: "settle" },
-    capture("red", "left"),
-    themeCommand("replace-theme"),
-    { id: "settle-blue", op: "settle" },
-    capture("blue", "left"),
-  ]);
+  `,
+    [
+      monitors("plug-left", left),
+      { id: "settle-red", op: "settle" },
+      capture("red", "left"),
+      themeCommand("replace-theme"),
+      { id: "settle-blue", op: "settle" },
+      capture("blue", "left"),
+    ],
+  );
   const red = await checkTheme(out, "left", "red", [255, 0, 0, 255]);
   const blue = await checkTheme(out, "left", "blue", [125, 211, 252, 255]);
-  const steps = (await readFile(path.join(out, "steps.jsonl"), "utf8")).trim().split("\n").map(JSON.parse);
+  const steps = (await readFile(path.join(out, "steps.jsonl"), "utf8"))
+    .trim()
+    .split("\n")
+    .map(JSON.parse);
   const settled = steps.find(step => step.id === "settle-blue").result;
   assert.equal(settled.frameCurrent, true);
   assert.equal(blue.readiness.timeUs, red.readiness.timeUs);
@@ -238,7 +410,9 @@ test("a pure CSS custom property replacement presents new pixels on the first se
 });
 
 test("an ownerless shell theme effect updates live layers and a later popup inherits it", async () => {
-  const { out } = await runTheme("shell-theme", `
+  const { out } = await runTheme(
+    "shell-theme",
+    `
     import { createEffect, createSignal, getOwner, LayerSurface, mountShellStylesheet,
       onCleanup, PopupSurface, renderShell, Show } from "@hewel/zgui";
     export function mount() {
@@ -265,15 +439,19 @@ test("an ownerless shell theme effect updates live layers and a later popup inhe
         </>;
       });
     }
-  `, [
-    monitors("plug-both", left, right),
-    capture("left-red", "left"), capture("right-red", "right"),
-    themeCommand("replace-theme"),
-    { id: "settle-theme", op: "settle" },
-    capture("left-blue", "left"), capture("right-blue", "right"),
-    themeCommand("open-popup"),
-    capture("menu-blue", "menu"),
-  ]);
+  `,
+    [
+      monitors("plug-both", left, right),
+      capture("left-red", "left"),
+      capture("right-red", "right"),
+      themeCommand("replace-theme"),
+      { id: "settle-theme", op: "settle" },
+      capture("left-blue", "left"),
+      capture("right-blue", "right"),
+      themeCommand("open-popup"),
+      capture("menu-blue", "menu"),
+    ],
+  );
   for (const surface of ["left", "right"]) {
     const red = await checkTheme(out, surface, `${surface}-red`, [255, 0, 0, 255]);
     const blue = await checkTheme(out, surface, `${surface}-blue`, [125, 211, 252, 255]);
@@ -283,7 +461,9 @@ test("an ownerless shell theme effect updates live layers and a later popup inhe
 });
 
 test("a shell effect releases its targeted sheet after the output retires", async () => {
-  const { out } = await runTheme("targeted-hotplug", `
+  const { out } = await runTheme(
+    "targeted-hotplug",
+    `
     import { createEffect, createSignal, LayerSurface, mountStylesheet, renderShell } from "@hewel/zgui";
     import type { NativeNode } from "@hewel/zgui";
     export function mount() {
@@ -301,14 +481,16 @@ test("a shell effect releases its targeted sheet after the output retires", asyn
         </>;
       });
     }
-  `, [
-    monitors("plug", left, right),
-    capture("installed", "left"),
-    monitors("unplug-left", right),
-    themeCommand("disable"),
-    monitors("replug-left", left, right),
-    capture("retired", "left"),
-  ]);
+  `,
+    [
+      monitors("plug", left, right),
+      capture("installed", "left"),
+      monitors("unplug-left", right),
+      themeCommand("disable"),
+      monitors("replug-left", left, right),
+      capture("retired", "left"),
+    ],
+  );
   await checkTheme(out, "left", "installed", [255, 0, 0, 255]);
   await checkTheme(out, "left", "retired", [0, 0, 255, 255]);
 });

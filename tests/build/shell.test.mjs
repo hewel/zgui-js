@@ -66,17 +66,31 @@ export function mount() {
 }
 `;
 
-const monitor = (id, name, x) => ({ id, name, x, y: 0, width: 1920, height: 1080, scale: 2, refreshRateMilliHz: 60000 });
+const monitor = (id, name, x) => ({
+  id,
+  name,
+  x,
+  y: 0,
+  width: 1920,
+  height: 1080,
+  scale: 2,
+  refreshRateMilliHz: 60000,
+});
 
-async function mounted(t, { attach = true, source = fixture, monitors = [monitor("DP-1", "Desk", 0)], sessionLock } = {}) {
+async function mounted(
+  t,
+  { attach = true, source = fixture, monitors = [monitor("DP-1", "Desk", 0)], sessionLock } = {},
+) {
   const harness = createHost({ monitors, sessionLock });
   const mod = await moduleFor(t, source);
   const previous = globalThis.__zguiShell;
   globalThis.__zguiShell = harness.shell;
   let dispose;
   t.after(() => {
-    try { dispose?.(); harness.flush(); }
-    finally {
+    try {
+      dispose?.();
+      harness.flush();
+    } finally {
       if (previous === undefined) delete globalThis.__zguiShell;
       else globalThis.__zguiShell = previous;
     }
@@ -84,7 +98,15 @@ async function mounted(t, { attach = true, source = fixture, monitors = [monitor
   dispose = harness.runTurn(mod.mount);
   assert.equal(harness.surfaces.size, 0, "shell opens attach asynchronously");
   if (attach) harness.flush();
-  return { harness, mod, stop: () => { dispose(); dispose = undefined; harness.flush(); } };
+  return {
+    harness,
+    mod,
+    stop: () => {
+      dispose();
+      dispose = undefined;
+      harness.flush();
+    },
+  };
 }
 
 const textOf = (harness, testId) => {
@@ -109,9 +131,16 @@ test("pure-shell mount shares state and routes events across output hotplug", as
   assert.equal(textOf(harness, "counter:DP-1"), "shared:1");
   assert.throws(() => harness.runTurn(() => mod.ordered(panel, first)), /foreign mount region/);
 
-  harness.emitMonitors([{ ...monitor("DP-1", "Desk", 0), scale: 1.5 }, monitor("HDMI-1", "Side", 1920)]);
+  harness.emitMonitors([
+    { ...monitor("DP-1", "Desk", 0), scale: 1.5 },
+    monitor("HDMI-1", "Side", 1920),
+  ]);
   harness.flush();
-  assert.equal(harness.byTestId("counter:DP-1"), first, "geometry changes preserve the keyed surface");
+  assert.equal(
+    harness.byTestId("counter:DP-1"),
+    first,
+    "geometry changes preserve the keyed surface",
+  );
   assert.equal(harness.byTestId("counter"), panel);
   assert.equal(textOf(harness, "geometry:DP-1"), "Desk:1.5:60000");
   assert.equal(textOf(harness, "counter:HDMI-1"), "shared:1");
@@ -135,11 +164,16 @@ test("pure-shell mount shares state and routes events across output hotplug", as
   assert.equal(harness.surfaces.size, 0);
   assert.equal(harness.monitorSubscribers.size, 0);
   assert.equal(mod.disposals(), 5);
-  assert.equal(harness.geometry.some(record => record.active), false);
+  assert.equal(
+    harness.geometry.some(record => record.active),
+    false,
+  );
 });
 
 test("the first-output layer retargets before host reconciliation disposes its old region", async t => {
-  const { harness, mod } = await mounted(t, { monitors: [desk, side], source: `
+  const { harness, mod } = await mounted(t, {
+    monitors: [desk, side],
+    source: `
     import { LayerSurface, onCleanup, renderShell, useMonitors } from "@hewel/zgui";
     export const retired = [];
     function Content(props) {
@@ -155,7 +189,8 @@ test("the first-output layer retargets before host reconciliation disposes its o
         </LayerSurface>;
       });
     }
-  ` });
+  `,
+  });
   const old = harness.surfaces.get("overlay");
   const oldContent = harness.byTestId("overlay-content");
   assert.equal(old.placement.output, desk.id);
@@ -171,7 +206,9 @@ test("the first-output layer retargets before host reconciliation disposes its o
 });
 
 test("monitor subscribers see one snapshot without replacing an unchanged layer", async t => {
-  const { harness, mod, stop } = await mounted(t, { monitors: [desk], source: `
+  const { harness, mod, stop } = await mounted(t, {
+    monitors: [desk],
+    source: `
     import { LayerSurface, Show, createEffect, renderShell, useMonitors } from "@hewel/zgui";
     export const observed = [];
     export function mount() {
@@ -185,10 +222,14 @@ test("monitor subscribers see one snapshot without replacing an unchanged layer"
         </Show>;
       });
     }
-  ` });
+  `,
+  });
   const { id } = harness.surfaces.get("stable");
   harness.emitMonitors([{ ...desk, name: "Renamed" }]);
-  assert.deepEqual(mod.observed, [["Desk", "Desk"], ["Renamed", "Renamed"]]);
+  assert.deepEqual(mod.observed, [
+    ["Desk", "Desk"],
+    ["Renamed", "Renamed"],
+  ]);
   harness.flush();
   assert.equal(harness.surfaces.get("stable").id, id);
   stop();
@@ -196,7 +237,8 @@ test("monitor subscribers see one snapshot without replacing an unchanged layer"
 });
 
 test("host popup dismissal updates the parent and opens its replacement in the same turn", async t => {
-  const { harness, mod } = await mounted(t, { source: `
+  const { harness, mod } = await mounted(t, {
+    source: `
     import { LayerSurface, PopupSurface, Show, createSignal, onCleanup, renderShell } from "@hewel/zgui";
     const [queued, setQueued] = createSignal(false);
     export const queueUpdate = () => setQueued(true);
@@ -220,20 +262,30 @@ test("host popup dismissal updates the parent and opens its replacement in the s
         </>;
       });
     }
-  ` });
+  `,
+  });
   assert.equal(textOf(harness, "status"), "open");
   let rejected = 0;
   mod.onRetire(() => {
     for (const open of [
       () => harness.shell.openLayer("forbidden-layer", {}, () => {}),
-      () => harness.shell.openPopup("forbidden-popup", { parent: "parent" }, () => {}, () => {}),
+      () =>
+        harness.shell.openPopup(
+          "forbidden-popup",
+          { parent: "parent" },
+          () => {},
+          () => {},
+        ),
     ]) {
       assert.throws(open, /shell work is unavailable during disposal/);
       rejected++;
     }
   });
   harness.runTurn(mod.queueUpdate, false);
-  assert.equal(harness.shellLog.some(event => event.name === "queued"), false);
+  assert.equal(
+    harness.shellLog.some(event => event.name === "queued"),
+    false,
+  );
   harness.popupDone("menu");
   assert.equal(harness.surfaces.has("menu"), false);
   assert.equal(textOf(harness, "status"), "dismissed");
@@ -244,7 +296,9 @@ test("host popup dismissal updates the parent and opens its replacement in the s
 });
 
 test("host lock state transitions are observable before the job checkpoint", async t => {
-  const { harness, mod } = await mounted(t, { sessionLock: "locked", source: `
+  const { harness, mod } = await mounted(t, {
+    sessionLock: "locked",
+    source: `
     import { SessionLockSurface, createEffect, renderShell, requestSessionLock } from "@hewel/zgui";
     let lock;
     export const observed = [];
@@ -256,7 +310,8 @@ test("host lock state transitions are observable before the job checkpoint", asy
         return <SessionLockSurface name="locker" output="DP-1"><text testId="locked">{lock.state()}</text></SessionLockSurface>;
       });
     }
-  ` });
+  `,
+  });
   assert.deepEqual(mod.observed, ["unlocked", "pending", "locked"]);
   assert.equal(textOf(harness, "locked"), "locked");
   harness.runTurn(mod.unlock);
@@ -266,7 +321,9 @@ test("host lock state transitions are observable before the job checkpoint", asy
 });
 
 test("region cleanup releases its own resources without flushing an outer effect or admitting direct shell work", async t => {
-  const { harness, mod } = await mounted(t, { monitors: [desk], source: `
+  const { harness, mod } = await mounted(t, {
+    monitors: [desk],
+    source: `
     import { LayerSurface, createEffect, createSignal, lockScroll, mountStylesheet, onCleanup, renderShell } from "@hewel/zgui";
     export const observed = [];
     let attemptCreation = () => {};
@@ -296,7 +353,8 @@ test("region cleanup releases its own resources without flushing an outer effect
         </LayerSurface>;
       });
     }
-  ` });
+  `,
+  });
   const { region: retiring, root } = harness.surfaces.get("retiring");
   const lease = harness.locks.find(record => record.node === harness.byTestId("retiring"));
   assert.equal(lease.active, true);
@@ -307,9 +365,19 @@ test("region cleanup releases its own resources without flushing an outer effect
   mod.onRetire(() => {
     for (const open of [
       () => harness.shell.openLayer("forbidden", {}, () => {}),
-      () => harness.shell.openPopup("forbidden", { parent: "retiring" }, () => {}, () => {}),
+      () =>
+        harness.shell.openPopup(
+          "forbidden",
+          { parent: "retiring" },
+          () => {},
+          () => {},
+        ),
     ]) {
-      try { open(); } catch (error) { failures.push(error.message); }
+      try {
+        open();
+      } catch (error) {
+        failures.push(error.message);
+      }
     }
   });
   harness.emitMonitors([]);
@@ -317,7 +385,11 @@ test("region cleanup releases its own resources without flushing an outer effect
   assert.equal(harness.byTestId("retiring"), undefined);
   assert.equal(retiring.stylesheets.size, 0);
   assert.ok(harness.clearCalls.includes(root), "the disposer must clear the retiring root");
-  assert.deepEqual(released, [false], "the effect's returned cleanup must release the lease before forced teardown");
+  assert.deepEqual(
+    released,
+    [false],
+    "the effect's returned cleanup must release the lease before forced teardown",
+  );
   assert.deepEqual(mod.observed, ["mounted"]);
   harness.flush();
   assert.deepEqual(mod.observed, ["mounted", "retired"]);
@@ -327,7 +399,9 @@ test("live placement preserves the mount region and updates layout-driven input 
   const { harness, mod } = await mounted(t);
   const surface = harness.surfaces.get("panel");
   const panel = harness.byTestId("counter");
-  const observer = harness.geometry.find(record => record.node === panel && record.kind === "borderBox");
+  const observer = harness.geometry.find(
+    record => record.node === panel && record.kind === "borderBox",
+  );
   assert.ok(observer, "input nodes are observed in the surface's mount region");
   assert.deepEqual(surface.inputRegion, []);
   const rect = { x: 10, y: 4, width: 24, height: 12 };
@@ -340,8 +414,14 @@ test("live placement preserves the mount region and updates layout-driven input 
   assert.equal(harness.surfaces.get("panel"), surface);
   assert.equal(harness.byTestId("counter"), panel);
   assert.deepEqual(surface.placement, {
-    output: "DP-1", layer: "overlay", anchor: ["left", "top", "bottom"], width: 28, height: 0,
-    margin: { top: 0, right: 0, bottom: 0, left: 4 }, exclusiveZone: 28, keyboard: "on-demand",
+    output: "DP-1",
+    layer: "overlay",
+    anchor: ["left", "top", "bottom"],
+    width: 28,
+    height: 0,
+    margin: { top: 0, right: 0, bottom: 0, left: 4 },
+    exclusiveZone: 28,
+    keyboard: "on-demand",
   });
   assert.ok(harness.shellLog.some(entry => entry.op === "update" && entry.id === surface.id));
 
@@ -370,7 +450,9 @@ test("a retained input node stops intercepting when its branch detaches", async 
   const { harness, mod } = await mounted(t);
   const surface = harness.surfaces.get("panel");
   const panel = harness.byTestId("counter");
-  const observer = harness.geometry.find(record => record.node === panel && record.kind === "borderBox");
+  const observer = harness.geometry.find(
+    record => record.node === panel && record.kind === "borderBox",
+  );
   assert.ok(observer);
   const rect = { x: 10, y: 4, width: 24, height: 12 };
   observer.emit(rect);
@@ -462,12 +544,20 @@ test("mountShellStylesheet replaces in place and reaches late and reattached sur
   assert.deepEqual(sheetTexts(harness, side.id), [red, override]);
 
   const disposeBlue = harness.runTurn(() => mod.mountShellStylesheet("theme", blue));
-  assert.deepEqual(sheetTexts(harness, desk.id), [blue, override], "replacement preserves cascade order");
+  assert.deepEqual(
+    sheetTexts(harness, desk.id),
+    [blue, override],
+    "replacement preserves cascade order",
+  );
   assert.deepEqual(sheetTexts(harness, side.id), [blue, override]);
   assert.equal(harness.byTestId("styled:DP-1"), deskNode);
   assert.equal(harness.byTestId("styled:HDMI-1"), sideNode);
   harness.runTurn(disposeRed);
-  assert.deepEqual(sheetTexts(harness, side.id), [blue, override], "old disposer cannot remove the replacement");
+  assert.deepEqual(
+    sheetTexts(harness, side.id),
+    [blue, override],
+    "old disposer cannot remove the replacement",
+  );
 
   harness.emitMonitors([desk, side, late]);
   harness.flush();
@@ -483,10 +573,12 @@ test("mountShellStylesheet replaces in place and reaches late and reattached sur
   assert.ok(harness.byTestId("styled:DP-1"));
   assert.notEqual(harness.byTestId("styled:DP-1"), deskNode);
   assert.equal(harness.byTestId("styled:HDMI-1"), sideNode);
-  for (const output of [desk, side, late]) assert.deepEqual(sheetTexts(harness, output.id), [green, override]);
+  for (const output of [desk, side, late])
+    assert.deepEqual(sheetTexts(harness, output.id), [green, override]);
 
   harness.runTurn(disposeGreen);
-  for (const output of [desk, side, late]) assert.deepEqual(sheetTexts(harness, output.id), [override]);
+  for (const output of [desk, side, late])
+    assert.deepEqual(sheetTexts(harness, output.id), [override]);
   harness.runTurn(disposeOverride);
   for (const output of [desk, side, late]) assert.deepEqual(sheetTexts(harness, output.id), []);
 
@@ -509,10 +601,12 @@ test("mountShellStylesheet isolates same-named region-local sheets in either ins
   harness.runTurn(() => mod.mountShellStylesheet("theme", shell));
   assert.deepEqual(sheetTexts(harness, side.id), [shell]);
   harness.dispatch(harness.byTestId("styled:HDMI-1"), "click");
-  for (const output of [desk, side]) assert.deepEqual(sheetTexts(harness, output.id).sort(), [local, shell]);
+  for (const output of [desk, side])
+    assert.deepEqual(sheetTexts(harness, output.id).sort(), [local, shell]);
 
   const dispose = harness.runTurn(() => mod.mountShellStylesheet("theme", replacement));
-  for (const output of [desk, side]) assert.deepEqual(sheetTexts(harness, output.id).sort(), [replacement, local]);
+  for (const output of [desk, side])
+    assert.deepEqual(sheetTexts(harness, output.id).sort(), [replacement, local]);
   harness.runTurn(dispose);
   for (const output of [desk, side]) assert.deepEqual(sheetTexts(harness, output.id), [local]);
 });

@@ -1,13 +1,49 @@
 import { createSignal } from "@hewel/zgui";
 import {
-  Avatar, AvatarBadge, AvatarFallback, AvatarGroup, AvatarGroupCount, AvatarImage,
-  Badge, Button, Card, CardAction, CardContent, CardDescription, CardFooter,
-  CardHeader, CardTitle, Empty, EmptyContent, EmptyDescription, EmptyHeader,
-  EmptyMedia, EmptyTitle, Icon, Item, ItemActions, ItemContent, ItemDescription,
-  ItemFooter, ItemGroup, ItemHeader, ItemMedia, ItemSeparator, ItemTitle,
-  themeTokens, useTheme,
+  Avatar,
+  AvatarBadge,
+  AvatarFallback,
+  AvatarGroup,
+  AvatarGroupCount,
+  AvatarImage,
+  Badge,
+  Button,
+  Card,
+  CardAction,
+  CardContent,
+  CardDescription,
+  CardFooter,
+  CardHeader,
+  CardTitle,
+  Empty,
+  EmptyContent,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+  Icon,
+  Item,
+  ItemActions,
+  ItemContent,
+  ItemDescription,
+  ItemFooter,
+  ItemGroup,
+  ItemHeader,
+  ItemMedia,
+  ItemSeparator,
+  ItemTitle,
+  themeTokens,
+  useTheme,
 } from "@hewel/zgui/components";
-import { CHECK, CHECK_CIRCLE, CHEVRON_RIGHT, INFO, PANEL_LEFT, PLUS, SEARCH } from "@hewel/zgui/icons";
+import {
+  CHECK,
+  CHECK_CIRCLE,
+  CHEVRON_RIGHT,
+  INFO,
+  PANEL_LEFT,
+  PLUS,
+  SEARCH,
+} from "@hewel/zgui/icons";
 import { DemoRow, Panel } from "../shell.js";
 
 export function CompositesSection(props: { onAction: (label: string) => void }) {
@@ -51,7 +87,12 @@ export function CompositesSection(props: { onAction: (label: string) => void }) 
         note="Bundled PNG asset rendering, fallback initials, status badges, and stacked groups"
       >
         <DemoRow label="Sizes & image fallback">
-          <Avatar testId="composites-avatar" size="sm" src={useAsset() ? "assets/avatar.png" : null} label="Ada">
+          <Avatar
+            testId="composites-avatar"
+            size="sm"
+            src={useAsset() ? "assets/avatar.png" : null}
+            label="Ada"
+          >
             <AvatarFallback>AL</AvatarFallback>
           </Avatar>
           <Avatar size="md" src={useAsset() ? "assets/avatar.png" : null} label="Grace">
@@ -61,7 +102,9 @@ export function CompositesSection(props: { onAction: (label: string) => void }) 
           <Avatar size="lg" label="Verified member">
             <AvatarFallback>JS</AvatarFallback>
             <AvatarImage src={useAsset() ? "assets/avatar.png" : undefined} />
-            <AvatarBadge label="Verified"><Icon icon={CHECK} size="sm" /></AvatarBadge>
+            <AvatarBadge label="Verified">
+              <Icon icon={CHECK} size="sm" />
+            </AvatarBadge>
           </Avatar>
           <Button
             testId="avatar-toggle-src"
@@ -78,14 +121,24 @@ export function CompositesSection(props: { onAction: (label: string) => void }) 
         </DemoRow>
         <DemoRow label="AvatarGroup">
           <AvatarGroup ariaLabel="Maintainers">
-            <Avatar src="assets/avatar.png" label="One"><AvatarFallback>A1</AvatarFallback></Avatar>
-            <Avatar label="Two"><AvatarFallback>GH</AvatarFallback></Avatar>
-            <Avatar label="Three"><AvatarFallback>BL</AvatarFallback></Avatar>
+            <Avatar src="assets/avatar.png" label="One">
+              <AvatarFallback>A1</AvatarFallback>
+            </Avatar>
+            <Avatar label="Two">
+              <AvatarFallback>GH</AvatarFallback>
+            </Avatar>
+            <Avatar label="Three">
+              <AvatarFallback>BL</AvatarFallback>
+            </Avatar>
             <AvatarGroupCount>+5</AvatarGroupCount>
           </AvatarGroup>
           <AvatarGroup size="sm" ariaLabel="Compact team">
-            <Avatar size="sm" label="One"><AvatarFallback>1</AvatarFallback></Avatar>
-            <Avatar size="sm" label="Two"><AvatarFallback>2</AvatarFallback></Avatar>
+            <Avatar size="sm" label="One">
+              <AvatarFallback>1</AvatarFallback>
+            </Avatar>
+            <Avatar size="sm" label="Two">
+              <AvatarFallback>2</AvatarFallback>
+            </Avatar>
             <AvatarGroupCount>+9</AvatarGroupCount>
           </AvatarGroup>
         </DemoRow>
@@ -97,7 +150,9 @@ export function CompositesSection(props: { onAction: (label: string) => void }) 
       >
         <column class="demo-stack">
           <Item variant="outline">
-            <ItemMedia variant="icon"><Icon icon={PLUS} size="sm" /></ItemMedia>
+            <ItemMedia variant="icon">
+              <Icon icon={PLUS} size="sm" />
+            </ItemMedia>
             <ItemContent>
               <ItemHeader>
                 <ItemTitle>Invite contributor</ItemTitle>
@@ -109,12 +164,16 @@ export function CompositesSection(props: { onAction: (label: string) => void }) 
               </ItemFooter>
             </ItemContent>
             <ItemActions>
-              <Button size="sm" onClick={() => props.onAction("Item: Invite")}>Send</Button>
+              <Button size="sm" onClick={() => props.onAction("Item: Invite")}>
+                Send
+              </Button>
             </ItemActions>
           </Item>
 
           <Item variant="muted" size="sm">
-            <ItemMedia variant="icon"><Icon icon={INFO} size="sm" /></ItemMedia>
+            <ItemMedia variant="icon">
+              <Icon icon={INFO} size="sm" />
+            </ItemMedia>
             <ItemContent>
               <ItemTitle>QuickJS stack budget synced</ItemTitle>
               {extraLine() && (
@@ -122,11 +181,7 @@ export function CompositesSection(props: { onAction: (label: string) => void }) 
               )}
             </ItemContent>
             <ItemActions>
-              <Button
-                size="xs"
-                variant="outline"
-                onClick={() => setExtraLine(value => !value)}
-              >
+              <Button size="xs" variant="outline" onClick={() => setExtraLine(value => !value)}>
                 {extraLine() ? "Collapse" : "Details"}
               </Button>
             </ItemActions>
@@ -134,8 +189,12 @@ export function CompositesSection(props: { onAction: (label: string) => void }) 
 
           <ItemGroup ariaLabel="Packages">
             <Item size="sm">
-              <ItemMedia variant="icon"><Icon icon={CHECK_CIRCLE} size="sm" /></ItemMedia>
-              <ItemContent><ItemTitle>@hewel/zgui</ItemTitle></ItemContent>
+              <ItemMedia variant="icon">
+                <Icon icon={CHECK_CIRCLE} size="sm" />
+              </ItemMedia>
+              <ItemContent>
+                <ItemTitle>@hewel/zgui</ItemTitle>
+              </ItemContent>
               <ItemActions>
                 <Badge variant="secondary">Native TSX</Badge>
                 <Button size="icon-xs" variant="ghost" ariaLabel="Open package">
@@ -145,8 +204,12 @@ export function CompositesSection(props: { onAction: (label: string) => void }) 
             </Item>
             <ItemSeparator />
             <Item size="sm">
-              <ItemMedia variant="icon"><Icon icon={PANEL_LEFT} size="sm" /></ItemMedia>
-              <ItemContent><ItemTitle>@hewel/zgui-build</ItemTitle></ItemContent>
+              <ItemMedia variant="icon">
+                <Icon icon={PANEL_LEFT} size="sm" />
+              </ItemMedia>
+              <ItemContent>
+                <ItemTitle>@hewel/zgui-build</ItemTitle>
+              </ItemContent>
               <ItemActions>
                 <Badge variant="outline">Rolldown</Badge>
               </ItemActions>
@@ -161,12 +224,18 @@ export function CompositesSection(props: { onAction: (label: string) => void }) 
       >
         <Empty ariaLabel="Empty search results">
           <EmptyHeader>
-            <EmptyMedia variant="icon"><Icon icon={SEARCH} /></EmptyMedia>
+            <EmptyMedia variant="icon">
+              <Icon icon={SEARCH} />
+            </EmptyMedia>
             <EmptyTitle>No matching snapshots</EmptyTitle>
             <EmptyDescription>Adjust filters or capture a fresh offscreen frame.</EmptyDescription>
           </EmptyHeader>
           <EmptyContent>
-            <Button size="sm" variant="outline" onClick={() => props.onAction("Empty action clicked")}>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => props.onAction("Empty action clicked")}
+            >
               Reset filters
             </Button>
           </EmptyContent>

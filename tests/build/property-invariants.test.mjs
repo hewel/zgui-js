@@ -17,10 +17,7 @@ function intRange(rng, lo, hi) {
 }
 
 test("property: solvePopper always produces finite non-negative bounds and fits when space permits", async t => {
-  const mod = await moduleFor(
-    t,
-    'export { solvePopper } from "@hewel/zgui/components";',
-  );
+  const mod = await moduleFor(t, 'export { solvePopper } from "@hewel/zgui/components";');
   const rng = mulberry32(0x10010001);
   const sides = ["top", "right", "bottom", "left"];
   const aligns = ["start", "center", "end"];
@@ -73,7 +70,11 @@ test("property: solvePopper always produces finite non-negative bounds and fits 
       ? verticalSpace >= fh + offset + padding && vw - 2 * padding >= fw
       : horizontalSpace >= fw + offset + padding && vh - 2 * padding >= fh;
     if (flip && shift && mainFit) {
-      assert.equal(solution.overflow, 0, `trial ${i}: expected zero overflow when side and cross axis fit`);
+      assert.equal(
+        solution.overflow,
+        0,
+        `trial ${i}: expected zero overflow when side and cross axis fit`,
+      );
     }
   }
 });
@@ -106,26 +107,46 @@ export function mount(root: NativeNode) {
 `;
   const h = createHost();
   let dispose;
-  t.after(() => { try { dispose?.(); } finally { delete globalThis.__zgui; } });
+  t.after(() => {
+    try {
+      dispose?.();
+    } finally {
+      delete globalThis.__zgui;
+    }
+  });
   globalThis.__zgui = h.host;
   const mod = await moduleFor(t, fixture);
   const root = h.makeNode("root");
   dispose = mod.mount(root);
 
   const slider = h.byTestId("slider");
-  const track = [...h.nodes.values()].find(n => (n.props.get("class") ?? "").includes("zui-slider__track"));
+  const track = [...h.nodes.values()].find(n =>
+    (n.props.get("class") ?? "").includes("zui-slider__track"),
+  );
   assert.ok(slider && track);
   h.rects.set(track, { x: 100, y: 20, width: 200, height: 12 });
 
   const rng = mulberry32(0x20020002);
-  const keys = ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End"];
+  const keys = [
+    "ArrowLeft",
+    "ArrowRight",
+    "ArrowUp",
+    "ArrowDown",
+    "PageUp",
+    "PageDown",
+    "Home",
+    "End",
+  ];
   let activePointer = null;
   let activeStep = 1;
 
   for (let i = 0; i < 220; i++) {
     if (i % 25 === 0) {
       if (activePointer !== null) {
-        h.dispatch(slider, "PointerUp", { pointerId: String(activePointer), position: { x: 150, y: 26 } });
+        h.dispatch(slider, "PointerUp", {
+          pointerId: String(activePointer),
+          position: { x: 150, y: 26 },
+        });
         activePointer = null;
       }
       const nextMin = intRange(rng, -50, 20);
@@ -147,11 +168,21 @@ export function mount(root: NativeNode) {
     } else if (op === 2 && activePointer !== null) {
       const cancel = rng() < 0.35;
       const x = intRange(rng, 60, 340);
-      h.dispatch(slider, cancel ? "PointerCancel" : "PointerUp", { pointerId: "1", position: { x, y: 26 } });
+      h.dispatch(slider, cancel ? "PointerCancel" : "PointerUp", {
+        pointerId: "1",
+        position: { x, y: 26 },
+      });
       activePointer = null;
       const before = slider.props.get("ariaValueNow");
-      h.dispatch(slider, "PointerMove", { pointerId: "1", position: { x: x === 340 ? 60 : 340, y: 26 } });
-      assert.equal(slider.props.get("ariaValueNow"), before, "stray move after up/cancel must not change value");
+      h.dispatch(slider, "PointerMove", {
+        pointerId: "1",
+        position: { x: x === 340 ? 60 : 340, y: 26 },
+      });
+      assert.equal(
+        slider.props.get("ariaValueNow"),
+        before,
+        "stray move after up/cancel must not change value",
+      );
     } else {
       const key = keys[intRange(rng, 0, keys.length - 1)];
       h.dispatch(slider, "KeyDown", { key, keyWithoutModifiers: key });
@@ -160,15 +191,24 @@ export function mount(root: NativeNode) {
     const lo = slider.props.get("ariaValueMin");
     const hi = slider.props.get("ariaValueMax");
     const val = slider.props.get("ariaValueNow");
-    assert.ok(Number.isFinite(val) && val >= lo && val <= hi, `trial ${i}: ${val} outside [${lo}, ${hi}]`);
+    assert.ok(
+      Number.isFinite(val) && val >= lo && val <= hi,
+      `trial ${i}: ${val} outside [${lo}, ${hi}]`,
+    );
     if (activeStep > 0) {
       const stepsFromMin = (val - lo) / activeStep;
       const aligned = Math.abs(stepsFromMin - Math.round(stepsFromMin)) < 1e-9 || val === hi;
-      assert.ok(aligned, `trial ${i}: value ${val} not aligned to step=${activeStep} from min=${lo} (max=${hi})`);
+      assert.ok(
+        aligned,
+        `trial ${i}: value ${val} not aligned to step=${activeStep} from min=${lo} (max=${hi})`,
+      );
     }
     for (let j = prevEmitted; j < mod.log.values.length; j++) {
       const emitted = mod.log.values[j];
-      assert.ok(Number.isFinite(emitted) && emitted >= lo && emitted <= hi, `trial ${i}: emitted ${emitted} outside [${lo}, ${hi}]`);
+      assert.ok(
+        Number.isFinite(emitted) && emitted >= lo && emitted <= hi,
+        `trial ${i}: emitted ${emitted} outside [${lo}, ${hi}]`,
+      );
     }
   }
 });
@@ -211,7 +251,13 @@ export function mount(root: NativeNode) {
   const clock = createClock(t, h);
   const { traps, locks, layers } = h;
   let dispose;
-  t.after(() => { try { dispose?.(); } finally { delete globalThis.__zgui; } });
+  t.after(() => {
+    try {
+      dispose?.();
+    } finally {
+      delete globalThis.__zgui;
+    }
+  });
   globalThis.__zgui = h.host;
   const mod = await moduleFor(t, fixture);
   const root = h.makeNode("root");
@@ -317,14 +363,24 @@ export function mount(root: NativeNode) {
   const clock = createClock(t, h);
   const { traps, layers, geometry } = h;
   let dispose;
-  t.after(() => { try { dispose?.(); } finally { delete globalThis.__zgui; } });
+  t.after(() => {
+    try {
+      dispose?.();
+    } finally {
+      delete globalThis.__zgui;
+    }
+  });
   globalThis.__zgui = h.host;
   const mod = await moduleFor(t, fixture);
   const root = h.makeNode("root");
   dispose = mod.mount(root);
 
-  const clickNode = node => { if (node) h.dispatch(node, "Click"); };
-  const keyNode = (node, key) => { if (node) h.dispatch(node, "KeyDown", { key, keyWithoutModifiers: key }); };
+  const clickNode = node => {
+    if (node) h.dispatch(node, "Click");
+  };
+  const keyNode = (node, key) => {
+    if (node) h.dispatch(node, "KeyDown", { key, keyWithoutModifiers: key });
+  };
 
   const rng = mulberry32(0x40040004);
   const triggers = ["t-one", "t-two", "t-three"];
@@ -336,7 +392,10 @@ export function mount(root: NativeNode) {
       const target = h.byTestId(triggers[intRange(rng, 0, 2)]);
       clickNode(target);
     } else if (op === 2) {
-      const focused = (h.focused.current && !h.invalidated.has(h.focused.current)) ? h.focused.current : h.byTestId("t-one");
+      const focused =
+        h.focused.current && !h.invalidated.has(h.focused.current)
+          ? h.focused.current
+          : h.byTestId("t-one");
       keyNode(focused, navKeys[intRange(rng, 0, navKeys.length - 1)]);
     } else if (op === 3) {
       const subTrigger = h.byTestId("sub-trigger");
@@ -352,12 +411,20 @@ export function mount(root: NativeNode) {
     const openMenus = ["c-one", "c-two", "c-three"].filter(
       id => h.byTestId(id)?.props.get("data-state") === "open",
     );
-    assert.ok(openMenus.length <= 1, `step ${step}: expected at most 1 open menubar menu, got ${openMenus}`);
+    assert.ok(
+      openMenus.length <= 1,
+      `step ${step}: expected at most 1 open menubar menu, got ${openMenus}`,
+    );
     clock.settle();
     const mountedMenus = ["c-one", "c-two", "c-three"].filter(id => Boolean(h.byTestId(id)));
-    assert.ok(mountedMenus.length <= 1, `step ${step}: exiting menu leaked after settle: ${mountedMenus}`);
+    assert.ok(
+      mountedMenus.length <= 1,
+      `step ${step}: exiting menu leaked after settle: ${mountedMenus}`,
+    );
 
-    const activeStops = triggers.map(id => h.byTestId(id)?.props.get("tabIndex")).filter(v => v === 0);
+    const activeStops = triggers
+      .map(id => h.byTestId(id)?.props.get("tabIndex"))
+      .filter(v => v === 0);
     assert.equal(activeStops.length, 1, `step ${step}: expected exactly 1 roving tabIndex=0 stop`);
     for (const id of triggers) {
       const tabIndex = h.byTestId(id)?.props.get("tabIndex");

@@ -131,11 +131,7 @@ export function openDatabase(name: string): SqliteDatabase {
     get name() {
       return raw.name;
     },
-    query<T extends SqlRow = SqlRow>(
-      sql: string,
-      params?: SqlParams,
-      options?: SqlQueryOptions,
-    ) {
+    query<T extends SqlRow = SqlRow>(sql: string, params?: SqlParams, options?: SqlQueryOptions) {
       return raw.query<T>(sql, params, options);
     },
     execute(sql, params) {

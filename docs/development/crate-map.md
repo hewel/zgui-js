@@ -18,34 +18,34 @@ packages/ui (TSX / Solid / styles.d.ts)
 
 ## Workspace Packages & Crates
 
-| Path | Role |
-| --- | --- |
-| `packages/ui` | `@hewel/zgui` renderer, `styles.d.ts`, `shell.ts`, `@hewel/zgui/components` |
-| `packages/services` | `@hewel/zgui-services` host service bindings |
-| `packages/build` | `@hewel/zgui-build` bundler, StyleX pipeline, `validate.ts`, preview CLI |
-| `crates/ui-bridge` | QuickJS↔DOM bridge (`properties.rs` CSS aliases, `canvas.rs` vector commands) |
-| `crates/js-runtime` | QuickJS engine, bounded bridge turns, host globals |
-| `crates/host-services` | Capability-gated Unix sockets, commands, control messages, image handles |
-| `crates/native-host` | Wayland/headless runner, shell surface lifecycle (`session_host/surfaces.rs`, `shell/session.rs`), preview driver (`preview/`) |
+| Path                   | Role                                                                                                                           |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| `packages/ui`          | `@hewel/zgui` renderer, `styles.d.ts`, `shell.ts`, `@hewel/zgui/components`                                                    |
+| `packages/services`    | `@hewel/zgui-services` host service bindings                                                                                   |
+| `packages/build`       | `@hewel/zgui-build` bundler, StyleX pipeline, `validate.ts`, preview CLI                                                       |
+| `crates/ui-bridge`     | QuickJS↔DOM bridge (`properties.rs` CSS aliases, `canvas.rs` vector commands)                                                  |
+| `crates/js-runtime`    | QuickJS engine, bounded bridge turns, host globals                                                                             |
+| `crates/host-services` | Capability-gated Unix sockets, commands, control messages, image handles                                                       |
+| `crates/native-host`   | Wayland/headless runner, shell surface lifecycle (`session_host/surfaces.rs`, `shell/session.rs`), preview driver (`preview/`) |
 
 ## Vendored Upstream Crates (`vendor/`)
 
 All 13 crates below are excluded from the root Cargo workspace (`Cargo.toml` `[workspace] exclude`) and wired via `[patch."https://github.com/zortax/zgui"]`. Run their tests with `bun run test:vendor` (or `bun run test:vendor <crate>`). Patch rationale and upstream provenance live in [`vendor/README.md`](../../vendor/README.md).
 
-| Crate | Owns | Key entry files |
-| --- | --- | --- |
-| `vendor/zgui-dom` | DOM arena, mutations, dirty propagation | `src/mutate/edit/build.rs`, `src/mutate/edit/style/` |
-| `vendor/zgui-style` | Stylo cascade, animations, StyleX profile | `tests/stylex_profile.rs` |
-| `vendor/zgui-layout` | Box tree, layout, scroll regions, fragment diff | `src/boxtree/build.rs`, `src/measure.rs`, `src/fragment/diff/mod.rs` |
-| `vendor/zgui-paint` | Style lowering, `clip-path`, vector/image emit, atlas cache, emit walk | `src/lower/clip.rs`, `src/emit/vector/mod.rs`, `src/content/cache.rs`, `src/walk/mod.rs` |
-| `vendor/zgui-scroll` | Scroll physics, chaining, overscroll | `src/scroller/` |
-| `vendor/zgui-text-parley` | Parley/fontique text shaping & glyph rasterization | `src/lib.rs` |
-| `vendor/zgui-view` / `vendor/zgui-view-dom` | Reactive views & DOM observations | `src/lib.rs` |
-| `vendor/zgui-runtime` | Multi-surface loop, frame pipeline, caret/editing, image decoding | `src/app.rs`, `src/window/frame.rs`, `src/window/caret.rs`, `src/images/input.rs` |
-| `vendor/zgui-platform` | Surface, monitor, input-region traits | `src/surface/mod.rs`, `src/surface/region.rs` |
-| `vendor/zgui-platform-headless` | Deterministic headless backend for tests & preview | `src/platform.rs`, `src/surface.rs` |
-| `vendor/zgui-platform-wayland` | Wayland/SCTK backend (layer-shell, xdg-popup, session-lock) | `src/surface/mod.rs`, `src/driver/protocol.rs` |
-| `vendor/zgui` | Top-level re-export facade | `src/lib.rs` |
+| Crate                                       | Owns                                                                   | Key entry files                                                                          |
+| ------------------------------------------- | ---------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| `vendor/zgui-dom`                           | DOM arena, mutations, dirty propagation                                | `src/mutate/edit/build.rs`, `src/mutate/edit/style/`                                     |
+| `vendor/zgui-style`                         | Stylo cascade, animations, StyleX profile                              | `tests/stylex_profile.rs`                                                                |
+| `vendor/zgui-layout`                        | Box tree, layout, scroll regions, fragment diff                        | `src/boxtree/build.rs`, `src/measure.rs`, `src/fragment/diff/mod.rs`                     |
+| `vendor/zgui-paint`                         | Style lowering, `clip-path`, vector/image emit, atlas cache, emit walk | `src/lower/clip.rs`, `src/emit/vector/mod.rs`, `src/content/cache.rs`, `src/walk/mod.rs` |
+| `vendor/zgui-scroll`                        | Scroll physics, chaining, overscroll                                   | `src/scroller/`                                                                          |
+| `vendor/zgui-text-parley`                   | Parley/fontique text shaping & glyph rasterization                     | `src/lib.rs`                                                                             |
+| `vendor/zgui-view` / `vendor/zgui-view-dom` | Reactive views & DOM observations                                      | `src/lib.rs`                                                                             |
+| `vendor/zgui-runtime`                       | Multi-surface loop, frame pipeline, caret/editing, image decoding      | `src/app.rs`, `src/window/frame.rs`, `src/window/caret.rs`, `src/images/input.rs`        |
+| `vendor/zgui-platform`                      | Surface, monitor, input-region traits                                  | `src/surface/mod.rs`, `src/surface/region.rs`                                            |
+| `vendor/zgui-platform-headless`             | Deterministic headless backend for tests & preview                     | `src/platform.rs`, `src/surface.rs`                                                      |
+| `vendor/zgui-platform-wayland`              | Wayland/SCTK backend (layer-shell, xdg-popup, session-lock)            | `src/surface/mod.rs`, `src/driver/protocol.rs`                                           |
+| `vendor/zgui`                               | Top-level re-export facade                                             | `src/lib.rs`                                                                             |
 
 ## Unvendored Upstream Crates
 

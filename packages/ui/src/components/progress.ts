@@ -25,22 +25,46 @@ export function Progress(props: ProgressProps = {}): NativeNode {
     if (!Number.isFinite(value)) throw new TypeError("Progress value must be a finite number");
     return { max, value: Math.min(Math.max(value, 0), max) };
   });
-  const node = element("box", mergeProps(
-    rest,
-    withDefaults({
-      role: "progressIndicator" as const,
-      get ariaValueMin() { measured(); return 0; },
-      get ariaValueMax() { return measured().max; },
-      get ariaValueNow() { return measured().value; },
-      get ariaLabel() { return props.label ?? null; },
-      get "data-state"() { return measured().value === null ? "indeterminate" : "determinate"; },
-      get __zguiStyle() {
-        const { max, value } = measured();
-        return { "--zui-progress-fraction": value === null ? null : `${(value / max * 100).toFixed(4)}%` };
+  const node = element(
+    "box",
+    mergeProps(
+      rest,
+      withDefaults(
+        {
+          role: "progressIndicator" as const,
+          get ariaValueMin() {
+            measured();
+            return 0;
+          },
+          get ariaValueMax() {
+            return measured().max;
+          },
+          get ariaValueNow() {
+            return measured().value;
+          },
+          get ariaLabel() {
+            return props.label ?? null;
+          },
+          get "data-state"() {
+            return measured().value === null ? "indeterminate" : "determinate";
+          },
+          get __zguiStyle() {
+            const { max, value } = measured();
+            return {
+              "--zui-progress-fraction":
+                value === null ? null : `${((value / max) * 100).toFixed(4)}%`,
+            };
+          },
+        },
+        rest,
+      ),
+      {
+        get __zguiClass() {
+          return classes(sheet.className, "zui-progress");
+        },
       },
-    }, rest),
-    { get __zguiClass() { return classes(sheet.className, "zui-progress"); } },
-  ));
+    ),
+  );
   append(node, element("box", { class: "zui-progress__fill" }));
   return node;
 }

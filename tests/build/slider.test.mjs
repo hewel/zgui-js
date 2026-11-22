@@ -80,9 +80,15 @@ function sendPointer(harness, kind, target, x, options = {}) {
   const state = { captured: 0, released: 0, activated: 0 };
   const event = harness.dispatch(target, kind, {
     position: { x, y: 0 },
-    activateNow: () => { state.activated += 1; },
-    capturePointer: () => { state.captured += 1; },
-    releasePointer: () => { state.released += 1; },
+    activateNow: () => {
+      state.activated += 1;
+    },
+    capturePointer: () => {
+      state.captured += 1;
+    },
+    releasePointer: () => {
+      state.released += 1;
+    },
     ...options,
   });
   return { event, ...state };
@@ -96,8 +102,9 @@ function cleanup(t, harness, dispose) {
   t.after(() => {
     const previous = globalThis.__zgui;
     globalThis.__zgui = harness.host;
-    try { dispose(); }
-    finally {
+    try {
+      dispose();
+    } finally {
       if (previous && previous !== harness.host) globalThis.__zgui = previous;
       else delete globalThis.__zgui;
     }
@@ -125,8 +132,9 @@ const attached = (harness, node) => {
   return false;
 };
 const part = (harness, className) =>
-  [...harness.nodes.values()].find(node =>
-    attached(harness, node) && (node.props.get("class") ?? "").includes(className));
+  [...harness.nodes.values()].find(
+    node => attached(harness, node) && (node.props.get("class") ?? "").includes(className),
+  );
 const track = harness => part(harness, "zui-slider__track");
 const prop = (harness, name) => slider(harness)?.props.get(name);
 const ariaValueNow = harness => prop(harness, "ariaValueNow");
@@ -338,9 +346,18 @@ test("pointer identity keeps concurrent pointers out of the active drag", async 
   sendPointer(harness, "PointerMove", root, 90, pen);
   assert.equal(ariaValueNow(harness), 40, "cancel ends the gesture");
 
-  const touch = sendPointer(harness, "PointerDown", root, 30, { pointerId: "11", pointerKind: "touch", button: null, primary: true });
+  const touch = sendPointer(harness, "PointerDown", root, 30, {
+    pointerId: "11",
+    pointerKind: "touch",
+    button: null,
+    primary: true,
+  });
   assert.equal(touch.captured, 1, "touch with a null button works");
-  sendPointer(harness, "PointerUp", root, 30, { pointerId: "11", pointerKind: "touch", button: null });
+  sendPointer(harness, "PointerUp", root, 30, {
+    pointerId: "11",
+    pointerKind: "touch",
+    button: null,
+  });
 
   const notPrimary = sendPointer(harness, "PointerDown", root, 30, { primary: false });
   assert.equal(notPrimary.captured, 0);

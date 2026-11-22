@@ -39,15 +39,23 @@ export function mount(root: NativeNode) {
 `;
 
 const textOf = current =>
-  current.tag === "#text" ? current.props.get("text") ?? "" : current.children.map(textOf).join("");
+  current.tag === "#text"
+    ? (current.props.get("text") ?? "")
+    : current.children.map(textOf).join("");
 
 const stylesOf = node => {
   const style = node.props.get("style");
   if (style && typeof style === "object") return new Map(Object.entries(style));
-  return new Map(String(style ?? "").split(";").map(part => part.trim()).filter(Boolean).map(part => {
-    const colon = part.indexOf(":");
-    return [part.slice(0, colon).trim(), part.slice(colon + 1).trim()];
-  }));
+  return new Map(
+    String(style ?? "")
+      .split(";")
+      .map(part => part.trim())
+      .filter(Boolean)
+      .map(part => {
+        const colon = part.indexOf(":");
+        return [part.slice(0, colon).trim(), part.slice(colon + 1).trim()];
+      }),
+  );
 };
 
 async function mounted(t) {
@@ -56,13 +64,28 @@ async function mounted(t) {
   assert.equal(globalThis.__zgui, undefined);
   const mod = await moduleFor(t, integrationFixture);
   let dispose;
-  t.after(() => { try { dispose?.(); } finally { delete globalThis.__zgui; } });
+  t.after(() => {
+    try {
+      dispose?.();
+    } finally {
+      delete globalThis.__zgui;
+    }
+  });
   globalThis.__zgui = harness.host;
   const root = harness.makeNode("root");
   dispose = mod.mount(root);
   const emit = (record, value) => record.emit(value);
-  return { mod, harness, registrations, emit,
-    finish: () => { const end = dispose; dispose = undefined; end?.(); } };
+  return {
+    mod,
+    harness,
+    registrations,
+    emit,
+    finish: () => {
+      const end = dispose;
+      dispose = undefined;
+      end?.();
+    },
+  };
 }
 
 test("solvePopper produces every side and alignment", async t => {
@@ -71,10 +94,18 @@ test("solvePopper produces every side and alignment", async t => {
   const floating = { width: 60, height: 40 };
   const viewport = { x: 0, y: 0, width: 800, height: 600 };
   for (const [side, align, x, y] of [
-    ["bottom", "start", 300, 234], ["bottom", "center", 320, 234], ["bottom", "end", 340, 234],
-    ["top", "start", 300, 156], ["top", "center", 320, 156], ["top", "end", 340, 156],
-    ["left", "start", 236, 200], ["left", "center", 236, 195], ["left", "end", 236, 190],
-    ["right", "start", 404, 200], ["right", "center", 404, 195], ["right", "end", 404, 190],
+    ["bottom", "start", 300, 234],
+    ["bottom", "center", 320, 234],
+    ["bottom", "end", 340, 234],
+    ["top", "start", 300, 156],
+    ["top", "center", 320, 156],
+    ["top", "end", 340, 156],
+    ["left", "start", 236, 200],
+    ["left", "center", 236, 195],
+    ["left", "end", 236, 190],
+    ["right", "start", 404, 200],
+    ["right", "center", 404, 195],
+    ["right", "end", 404, 190],
   ]) {
     const solved = mod.solvePopper(anchor, floating, viewport, { placement: { side, align } });
     assert.deepEqual(solved.origin, { x, y }, `${side}/${align}`);
@@ -109,19 +140,30 @@ test("solvePopper flips, shifts and caps against viewport edges", async t => {
   p = s({ x: 100, y: 200, width: 80, height: 24 }, { width: 200, height: 700 }, v);
   assert.equal(p.placement.side, "bottom");
   assert.equal(p.available.height, 364);
-  assert.deepEqual(s({ x: 100, y: 200, width: 80, height: 24 }, { width: 200, height: 364 }, v).origin, p.origin);
-  p = s({ x: 700, y: 200, width: 80, height: 30 }, { width: 200, height: 100 }, v, { placement: { side: "right", align: "center" } });
+  assert.deepEqual(
+    s({ x: 100, y: 200, width: 80, height: 24 }, { width: 200, height: 364 }, v).origin,
+    p.origin,
+  );
+  p = s({ x: 700, y: 200, width: 80, height: 30 }, { width: 200, height: 100 }, v, {
+    placement: { side: "right", align: "center" },
+  });
   assert.equal(p.placement.side, "left");
   assert.deepEqual(p.origin, { x: 496, y: 165 });
   p = s({ x: 100, y: 560, width: 80, height: 24 }, { width: 200, height: 160 }, v, { flip: false });
   assert.equal(p.placement.side, "bottom");
   assert.equal(p.origin.y, 588);
   assert.equal(p.overflow, 148);
-  p = s({ x: 760, y: 100, width: 30, height: 30 }, { width: 240, height: 100 }, v, { shift: false });
+  p = s({ x: 760, y: 100, width: 30, height: 30 }, { width: 240, height: 100 }, v, {
+    shift: false,
+  });
   assert.equal(p.origin.x, 655);
   p = s({ x: 100, y: 590, width: 80, height: 10 }, { width: 200, height: 100 }, v, { flip: false });
   assert.equal(p.available.height, 0);
-  p = s({ x: 120, y: 320, width: 40, height: 20 }, { width: 200, height: 120 }, { x: 100, y: 50, width: 400, height: 300 });
+  p = s(
+    { x: 120, y: 320, width: 40, height: 20 },
+    { width: 200, height: 120 },
+    { x: 100, y: 50, width: 400, height: 300 },
+  );
   assert.deepEqual(p.origin, { x: 108, y: 196 });
   assert.equal(p.placement.side, "top");
 });
@@ -133,7 +175,10 @@ test("solvePopper validates options and accepts negative offsets", async t => {
   const f = { width: 60, height: 40 };
   assert.throws(() => mod.solvePopper(a, f, v, { offset: Number.NaN }), RangeError);
   assert.throws(() => mod.solvePopper(a, f, v, { padding: Number.POSITIVE_INFINITY }), RangeError);
-  assert.throws(() => mod.solvePopper(a, f, v, { placement: { side: "middle", align: "center" } }), TypeError);
+  assert.throws(
+    () => mod.solvePopper(a, f, v, { placement: { side: "middle", align: "center" } }),
+    TypeError,
+  );
   assert.throws(() => mod.solvePopper(a, f, v, { placement: { side: "bottom" } }), TypeError);
   assert.throws(() => mod.solvePopper(a, f, v, { flip: 1 }), TypeError);
   const shifted = mod.solvePopper(a, f, v, { offset: -10 });
@@ -148,7 +193,10 @@ test("popper measures anchor content and viewport before placing", async t => {
   const positioner = () => mod.log.positioner;
   const style = () => positioner().props.get("style");
   assert.equal(registrations.length, 3);
-  assert.deepEqual(registrations.map(r => r.kind), ["borderBox", "contentSize", "viewport"]);
+  assert.deepEqual(
+    registrations.map(r => r.kind),
+    ["borderBox", "contentSize", "viewport"],
+  );
   assert.equal(style().visibility, "hidden");
   const [borderBox, contentSize, viewport] = registrations;
   emit(borderBox, { x: 300.2, y: 200.2, width: 100.2, height: 30.2 });
@@ -222,9 +270,18 @@ test("popper re-anchors and deactivates without losing content state", async t =
   assert.equal(registrations.filter(r => r.active).length, 3);
   assert.equal(style().visibility, "hidden");
   const latest = registrations.slice(4);
-  emit(latest.find(record => record.kind === "borderBox"), { x: 700, y: 200, width: 80, height: 30 });
-  emit(latest.find(record => record.kind === "contentSize"), { width: 200.1, height: 120.2 });
-  emit(latest.find(record => record.kind === "viewport"), { x: 0, y: 0, width: 800, height: 600, scale: 1.75 });
+  emit(
+    latest.find(record => record.kind === "borderBox"),
+    { x: 700, y: 200, width: 80, height: 30 },
+  );
+  emit(
+    latest.find(record => record.kind === "contentSize"),
+    { width: 200.1, height: 120.2 },
+  );
+  emit(
+    latest.find(record => record.kind === "viewport"),
+    { x: 0, y: 0, width: 800, height: 600, scale: 1.75 },
+  );
   assert.equal("visibility" in style(), false);
   assert.equal(textOf(counter), "1");
   assert.equal(mod.log.mounts, 1);

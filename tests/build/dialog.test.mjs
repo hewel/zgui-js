@@ -77,7 +77,9 @@ export function mountCancelled(root: NativeNode) {
 `;
 
 const textOf = current =>
-  current.tag === "#text" ? current.props.get("text") ?? "" : current.children.map(textOf).join("");
+  current.tag === "#text"
+    ? (current.props.get("text") ?? "")
+    : current.children.map(textOf).join("");
 
 async function mounted(t, mountName = "mount") {
   const h = createHost();
@@ -87,7 +89,13 @@ async function mounted(t, mountName = "mount") {
   assert.equal(portals.length, 0, "module import must not allocate native nodes");
   const clock = createClock(t, h);
   let dispose;
-  t.after(() => { try { dispose?.(); } finally { delete globalThis.__zgui; } });
+  t.after(() => {
+    try {
+      dispose?.();
+    } finally {
+      delete globalThis.__zgui;
+    }
+  });
   globalThis.__zgui = h.host;
   const root = h.makeNode("root");
   dispose = mod[mountName](root);
@@ -97,7 +105,11 @@ async function mounted(t, mountName = "mount") {
     return h.dispatch(node, "Click").defaultPrevented;
   };
   const end = node => h.dispatch(node, "AnimationEnd");
-  const flush = () => { h.flush(); clock.frame(); clock.advance(0); };
+  const flush = () => {
+    h.flush();
+    clock.frame();
+    clock.advance(0);
+  };
   const active = records => records.filter(record => record.active).length;
   const settled = () => {
     for (const record of [...traps, ...locks, ...layers]) {
@@ -105,8 +117,27 @@ async function mounted(t, mountName = "mount") {
       assert.equal(record.disposals, 1);
     }
   };
-  return { h, mod, clock, busy, traps, locks, layers, portals, root, click, end, flush, active, settled,
-    finish: () => { const stop = dispose; dispose = undefined; stop?.(); } };
+  return {
+    h,
+    mod,
+    clock,
+    busy,
+    traps,
+    locks,
+    layers,
+    portals,
+    root,
+    click,
+    end,
+    flush,
+    active,
+    settled,
+    finish: () => {
+      const stop = dispose;
+      dispose = undefined;
+      stop?.();
+    },
+  };
 }
 
 test("dialog mounts lazily, wires relations and acquires trap lock and dismiss leases", async t => {
@@ -134,11 +165,18 @@ test("dialog mounts lazily, wires relations and acquires trap lock and dismiss l
   assert.equal(surface.props.get("ariaPopupFor"), trigger);
   assert.equal(surface.props.get("ariaLabelledBy"), h.byTestId("title"));
   assert.equal(surface.props.get("ariaDescribedBy"), h.byTestId("description"));
-  const dismiss = surface.children.find(child => (child.props.get("class") ?? "").includes("zui-dialog__dismiss"));
+  const dismiss = surface.children.find(child =>
+    (child.props.get("class") ?? "").includes("zui-dialog__dismiss"),
+  );
   assert.ok(dismiss, "default dismiss control is a direct child");
   assert.equal(dismiss.props.get("ariaLabel"), "Close");
   const vectors = [];
-  const walk = node => { for (const child of node.children) { if (child.tag === "vector") vectors.push(child); walk(child); } };
+  const walk = node => {
+    for (const child of node.children) {
+      if (child.tag === "vector") vectors.push(child);
+      walk(child);
+    }
+  };
   walk(dismiss);
   assert.equal(vectors.length, 1);
   assert.equal(traps.length, 1);
@@ -148,7 +186,13 @@ test("dialog mounts lazily, wires relations and acquires trap lock and dismiss l
   assert.equal(locks[0].node, surface);
   assert.equal(layers.length, 1);
   assert.equal(layers[0].node, surface);
-  assert.deepEqual(layers[0].options, { layer: "modal", dismissOnOutsidePress: true, dismissOnEscape: true, exclude: trigger, leaving: false });
+  assert.deepEqual(layers[0].options, {
+    layer: "modal",
+    dismissOnOutsidePress: true,
+    dismissOnEscape: true,
+    exclude: trigger,
+    leaving: false,
+  });
   finish();
   settled();
   assert.equal(mod.log.cleans, 1);
@@ -216,7 +260,8 @@ test("cancellation disabled and live dismiss options", async t => {
 });
 
 test("exit retains surface while animating and reopening keeps its identity", async t => {
-  const { h, mod, clock, busy, traps, locks, layers, click, end, flush, active, settled, finish } = await mounted(t);
+  const { h, mod, clock, busy, traps, locks, layers, click, end, flush, active, settled, finish } =
+    await mounted(t);
   click("trigger");
   const surface = h.byTestId("surface");
   click("counter");
@@ -272,7 +317,10 @@ test("optional controls update without rebuilding user children", async t => {
   assert.equal(h.byTestId("surface"), surface);
   assert.equal(h.byTestId("counter"), counter);
   assert.equal(textOf(counter), "1");
-  const hasDismiss = () => surface.children.some(child => (child.props.get("class") ?? "").includes("zui-dialog__dismiss"));
+  const hasDismiss = () =>
+    surface.children.some(child =>
+      (child.props.get("class") ?? "").includes("zui-dialog__dismiss"),
+    );
   assert.equal(hasDismiss(), false);
   const footer = h.byTestId("footer");
   const cancel = footer.children.find(child => textOf(child) === "Cancel");
@@ -296,15 +344,27 @@ test("optional controls update without rebuilding user children", async t => {
 });
 
 test("nested initial-open dialogs register parents before descendants with depth", async t => {
-  const { h, traps, locks, layers, portals, click, flush, active, finish } = await mounted(t, "mountNested");
+  const { h, traps, locks, layers, portals, click, flush, active, finish } = await mounted(
+    t,
+    "mountNested",
+  );
   const outer = h.byTestId("outer");
   const inner = h.byTestId("inner");
   assert.ok(outer);
   assert.ok(inner);
-  assert.deepEqual(traps.map(record => record.node.props.get("testId")), ["outer", "inner"]);
-  assert.deepEqual(layers.map(record => record.node.props.get("testId")), ["outer", "inner"]);
+  assert.deepEqual(
+    traps.map(record => record.node.props.get("testId")),
+    ["outer", "inner"],
+  );
+  assert.deepEqual(
+    layers.map(record => record.node.props.get("testId")),
+    ["outer", "inner"],
+  );
   assert.equal(active(locks), 2);
-  assert.deepEqual(portals.map(record => record.layer), ["modal", "modal"]);
+  assert.deepEqual(
+    portals.map(record => record.layer),
+    ["modal", "modal"],
+  );
   const depthOf = node => {
     for (let current = h.parents.get(node); current; current = h.parents.get(current)) {
       const names = (current.props.get("class") ?? "").split(/\s+/);
@@ -339,7 +399,9 @@ test("scoped theme reacts across the portal without rebuilding content", async t
   const counter = h.byTestId("counter");
   let themeClass;
   for (let current = h.parents.get(surface); current; current = h.parents.get(current)) {
-    themeClass = (current.props.get("class") ?? "").split(/\s+/).find(name => name.startsWith("zui-theme-"));
+    themeClass = (current.props.get("class") ?? "")
+      .split(/\s+/)
+      .find(name => name.startsWith("zui-theme-"));
     if (themeClass) break;
   }
   assert.ok(themeClass, "surface sits under a re-scoped theme wrapper");
@@ -358,7 +420,10 @@ test("scoped theme reacts across the portal without rebuilding content", async t
 });
 
 test("removing an owner before its deferred overlay mounts cancels construction", async t => {
-  const { h, mod, clock, traps, locks, layers, active, finish } = await mounted(t, "mountCancelled");
+  const { h, mod, clock, traps, locks, layers, active, finish } = await mounted(
+    t,
+    "mountCancelled",
+  );
   assert.equal(mod.log.mounts, 0);
   assert.equal(h.byTestId("surface"), undefined);
   assert.equal(h.byTestId("counter"), undefined);
@@ -369,7 +434,10 @@ test("removing an owner before its deferred overlay mounts cancels construction"
 });
 
 test("dialog parts outside a root are inert", async t => {
-  const { h, mod, traps, locks, layers, portals, root, click, finish } = await mounted(t, "mountStandalone");
+  const { h, mod, traps, locks, layers, portals, root, click, finish } = await mounted(
+    t,
+    "mountStandalone",
+  );
   assert.equal(click("trigger"), false);
   assert.equal(click("close"), false);
   assert.equal(h.byTestId("counter"), undefined);

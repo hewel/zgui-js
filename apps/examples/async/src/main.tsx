@@ -42,24 +42,36 @@ function AsyncStatus() {
       setTimerStatus("Timer: fired");
       setServiceStatus("Service: reading");
       request = readTextAsset("assets/message.txt");
-      void request.promise.then(message => {
-        request = undefined;
-        if (active) setServiceStatus(`Service: ${message.trim()}`);
-      }, error => {
-        request = undefined;
-        if (active) setServiceStatus(`Service: failed (${error instanceof Error ? error.message : String(error)})`);
-      });
+      void request.promise.then(
+        message => {
+          request = undefined;
+          if (active) setServiceStatus(`Service: ${message.trim()}`);
+        },
+        error => {
+          request = undefined;
+          if (active)
+            setServiceStatus(
+              `Service: failed (${error instanceof Error ? error.message : String(error)})`,
+            );
+        },
+      );
     }, 50);
   });
 
-  return <column style={{ gap: "8px" }}>
-    <text>Async status</text>
-    <text>{timerStatus()}</text>
-    <text>{frameStatus()}</text>
-    <text>{promiseStatus()}</text>
-    <text>{serviceStatus()}</text>
-    <Show when={layoutReady()}><text class="promise-layout-row" style={{ height: "32px" }}>Promise layout row</text></Show>
-  </column>;
+  return (
+    <column style={{ gap: "8px" }}>
+      <text>Async status</text>
+      <text>{timerStatus()}</text>
+      <text>{frameStatus()}</text>
+      <text>{promiseStatus()}</text>
+      <text>{serviceStatus()}</text>
+      <Show when={layoutReady()}>
+        <text class="promise-layout-row" style={{ height: "32px" }}>
+          Promise layout row
+        </text>
+      </Show>
+    </column>
+  );
 }
 
 export const hostApiVersion = 1;

@@ -2,7 +2,13 @@ import { For, createMemo, createSignal, omit } from "#solid";
 import { createElement, mergeProps, setProp, spread } from "./renderer/index.js";
 import { append, slot, withDefaults } from "./components/shared.js";
 import { getReducedMotion, observeGeometry, scrollTo } from "./nodes.js";
-import type { Accessor, NativeChild, NativeElementProps, NativeNode, ScrollBehavior } from "./types.js";
+import type {
+  Accessor,
+  NativeChild,
+  NativeElementProps,
+  NativeNode,
+  ScrollBehavior,
+} from "./types.js";
 
 export type VirtualScrollAlign = "auto" | "start" | "center" | "end";
 
@@ -159,12 +165,16 @@ function computeTargetScrollTop(
 
 function spacer(height: Accessor<number>): NativeNode {
   const node = createElement("box");
-  spread(node, {
-    get style() {
-      const h = height();
-      return { height: `${h}px`, flexShrink: 0, display: h > 0 ? "flex" : "none" } as const;
+  spread(
+    node,
+    {
+      get style() {
+        const h = height();
+        return { height: `${h}px`, flexShrink: 0, display: h > 0 ? "flex" : "none" } as const;
+      },
     },
-  }, true);
+    true,
+  );
   return node;
 }
 
@@ -172,19 +182,25 @@ function renderMappedItems<T>(
   items: Accessor<readonly T[]>,
   startIndex: Accessor<number>,
   keyed: true | ((item: T) => unknown) | undefined,
-  renderItem: ((item: T, index: Accessor<number>) => NativeChild) | ((item: Accessor<T>, index: Accessor<number>) => NativeChild),
+  renderItem:
+    | ((item: T, index: Accessor<number>) => NativeChild)
+    | ((item: Accessor<T>, index: Accessor<number>) => NativeChild),
 ): NativeChild {
   if (typeof keyed === "function") {
     const renderKeyed = renderItem as (item: Accessor<T>, index: Accessor<number>) => NativeChild;
     return For<T>({
-      get each() { return items(); },
+      get each() {
+        return items();
+      },
       keyed,
       children: (item, localIndex) => renderKeyed(item, () => startIndex() + localIndex()),
     });
   }
   const renderIdentity = renderItem as (item: T, index: Accessor<number>) => NativeChild;
   return For<T>({
-    get each() { return items(); },
+    get each() {
+      return items();
+    },
     children: (item, localIndex) => renderIdentity(item, () => startIndex() + localIndex()),
   });
 }
@@ -196,7 +212,18 @@ function renderMappedItems<T>(
 export function VirtualList<T>(props: VirtualListIdentityProps<T>): NativeNode;
 export function VirtualList<T>(props: VirtualListKeyedProps<T>): NativeNode;
 export function VirtualList<T>(props: VirtualListProps<T>): NativeNode {
-  const rest = omit(props, "each", "itemHeight", "gap", "overscan", "initialHeight", "controller", "keyed", "fallback", "children");
+  const rest = omit(
+    props,
+    "each",
+    "itemHeight",
+    "gap",
+    "overscan",
+    "initialHeight",
+    "controller",
+    "keyed",
+    "fallback",
+    "children",
+  );
   const scroller = createElement("scroll");
   spread(scroller, mergeProps(rest, withDefaults({ role: "list" as const }, rest)), true);
 
@@ -260,12 +287,16 @@ export function VirtualList<T>(props: VirtualListProps<T>): NativeNode {
   const topBox = spacer(() => metrics().topSpacer);
   const bottomBox = spacer(() => metrics().bottomSpacer);
   const body = createElement("column");
-  spread(body, {
-    get style() {
-      const gap = metrics().gap;
-      return gap > 0 ? { width: "100%", gap: `${gap}px` } : { width: "100%" };
+  spread(
+    body,
+    {
+      get style() {
+        const gap = metrics().gap;
+        return gap > 0 ? { width: "100%", gap: `${gap}px` } : { width: "100%" };
+      },
     },
-  }, true);
+    true,
+  );
 
   slot(body, () =>
     metrics().items.length === 0
@@ -396,32 +427,42 @@ export function VirtualGrid<T>(props: VirtualGridProps<T>): NativeNode {
   const topBox = spacer(() => metrics().topSpacer);
   const bottomBox = spacer(() => metrics().bottomSpacer);
   const body = createElement("column");
-  spread(body, {
-    get style() {
-      const gap = metrics().gap;
-      return gap > 0 ? { width: "100%", gap: `${gap}px` } : { width: "100%" };
+  spread(
+    body,
+    {
+      get style() {
+        const gap = metrics().gap;
+        return gap > 0 ? { width: "100%", gap: `${gap}px` } : { width: "100%" };
+      },
     },
-  }, true);
+    true,
+  );
 
   slot(body, () =>
     metrics().items.length === 0
       ? (props.fallback ?? null)
       : For<GridRow<T>>({
-          get each() { return visibleRows(); },
+          get each() {
+            return visibleRows();
+          },
           keyed: row => row.rowIndex,
           children: row => {
             const rowNode = createElement("row");
-            spread(rowNode, {
-              get style() {
-                const { gap, itemHeight } = metrics();
-                return {
-                  width: "100%",
-                  height: `${itemHeight}px`,
-                  flexShrink: 0,
-                  ...(gap > 0 ? { gap: `${gap}px` } : {}),
-                };
+            spread(
+              rowNode,
+              {
+                get style() {
+                  const { gap, itemHeight } = metrics();
+                  return {
+                    width: "100%",
+                    height: `${itemHeight}px`,
+                    flexShrink: 0,
+                    ...(gap > 0 ? { gap: `${gap}px` } : {}),
+                  };
+                },
               },
-            }, true);
+              true,
+            );
             slot(rowNode, () =>
               renderMappedItems(
                 () => row().items,

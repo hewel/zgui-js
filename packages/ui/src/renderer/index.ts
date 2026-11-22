@@ -1,7 +1,25 @@
 import { createRenderer } from "@solidjs/universal";
 import { $PROXY, createRoot, flush as solidFlush, resetErrorHalt } from "#solid";
-import type { Accessor, Component, ImageProps, NativeChild, NativeElementProps, NativeFieldProps, NativeNode, NativeTag, NativeTextControlProps, VectorProps } from "../types.js";
-import { attachReducedMotionBridge, bridgeFor, provideRegion, rememberBridge, tryBridgeFor, withCallbackBridge } from "../host.js";
+import type {
+  Accessor,
+  Component,
+  ImageProps,
+  NativeChild,
+  NativeElementProps,
+  NativeFieldProps,
+  NativeNode,
+  NativeTag,
+  NativeTextControlProps,
+  VectorProps,
+} from "../types.js";
+import {
+  attachReducedMotionBridge,
+  bridgeFor,
+  provideRegion,
+  rememberBridge,
+  tryBridgeFor,
+  withCallbackBridge,
+} from "../host.js";
 import type { NativeHost, UiBridge } from "../host.js";
 import type { InternalProps } from "../internal-props.js";
 import { invalidateTreeOrder } from "../tree-order.js";
@@ -9,35 +27,119 @@ import { invalidateTreeOrder } from "../tree-order.js";
 /** Native specialization of Solid Universal's DOM-independent runtime helpers. */
 interface NativeRenderer {
   render(code: () => NativeChild, root: NativeNode): () => void;
-  effect<T>(compute: (previous: T | undefined) => T, apply: (value: T, previous: T | undefined) => void | (() => void)): void;
+  effect<T>(
+    compute: (previous: T | undefined) => T,
+    apply: (value: T, previous: T | undefined) => void | (() => void),
+  ): void;
   memo<T>(callback: () => T, equal?: boolean): Accessor<T>;
   createComponent<P>(component: Component<P>, props: P): NativeChild;
   createElement(tag: NativeTag): NativeNode;
   createTextNode(text: string): NativeNode;
   insertNode(parent: NativeNode, node: NativeNode, anchor?: NativeNode | null): void;
-  insert(parent: NativeNode, value: NativeChild, marker?: NativeNode | null, initial?: NativeChild): void;
-  spread(node: NativeNode, props: (NativeElementProps | NativeTextControlProps | NativeFieldProps | ImageProps | VectorProps) & InternalProps | Accessor<(NativeElementProps | NativeTextControlProps | NativeFieldProps | ImageProps | VectorProps) & InternalProps>, skipChildren?: boolean): void;
+  insert(
+    parent: NativeNode,
+    value: NativeChild,
+    marker?: NativeNode | null,
+    initial?: NativeChild,
+  ): void;
+  spread(
+    node: NativeNode,
+    props:
+      | ((
+          | NativeElementProps
+          | NativeTextControlProps
+          | NativeFieldProps
+          | ImageProps
+          | VectorProps
+        ) &
+          InternalProps)
+      | Accessor<
+          (
+            | NativeElementProps
+            | NativeTextControlProps
+            | NativeFieldProps
+            | ImageProps
+            | VectorProps
+          ) &
+            InternalProps
+        >,
+    skipChildren?: boolean,
+  ): void;
   setProp<T>(node: NativeNode, name: string, value: T, previous?: T): T;
   mergeProps<T extends readonly object[]>(...sources: T): MergeSources<T>;
-  applyRef(callback: ((node: NativeNode) => void) | ((node: NativeNode) => void)[], node: NativeNode): void;
-  ref(fn: () => ((node: NativeNode) => void) | ((node: NativeNode) => void)[], node: NativeNode): void;
+  applyRef(
+    callback: ((node: NativeNode) => void) | ((node: NativeNode) => void)[],
+    node: NativeNode,
+  ): void;
+  ref(
+    fn: () => ((node: NativeNode) => void) | ((node: NativeNode) => void)[],
+    node: NativeNode,
+  ): void;
 }
-type MergeSources<T extends readonly object[]> = T extends readonly [infer Head extends object, ...infer Tail extends object[]]
-  ? Omit<Head, keyof MergeSources<Tail>> & MergeSources<Tail> : {};
+type MergeSources<T extends readonly object[]> = T extends readonly [
+  infer Head extends object,
+  ...infer Tail extends object[],
+]
+  ? Omit<Head, keyof MergeSources<Tail>> & MergeSources<Tail>
+  : {};
 
 // Upstream declarations restrict children to one NodeType and omit null navigation results.
 const createNativeRenderer = createRenderer as (
-  options: Omit<NativeHost["__zgui"], "createElement" | "replaceText" | "clearRoot" | "createPortal" | "createCanvasScene" | "registerDismissLayer" | "installStylesheet" | "removeStylesheet" | "focus" | "trapFocus" | "lockScroll" | "scrollTo" | "scrollBy" | "scrollIntoView" | "getSelection" | "setSelection" | "selectAll" | "getDocumentSelection" | "setDocumentSelection" | "clearDocumentSelection" | "selectDocumentAll" | "setWindowTitle" | "setWindowFullscreen" | "setWindowMaximized" | "setWindowMinimized" | "setWindowDecorations" | "beginWindowMoveDrag" | "closeWindow" | "getWindowState" | "subscribeWindowState" | "onCloseRequest" | "getWindowRect" | "getTextContent" | "isAnimating" | "precedes" | "observeGeometry" | "getReducedMotion"> & {
+  options: Omit<
+    NativeHost["__zgui"],
+    | "createElement"
+    | "replaceText"
+    | "clearRoot"
+    | "createPortal"
+    | "createCanvasScene"
+    | "registerDismissLayer"
+    | "installStylesheet"
+    | "removeStylesheet"
+    | "focus"
+    | "trapFocus"
+    | "lockScroll"
+    | "scrollTo"
+    | "scrollBy"
+    | "scrollIntoView"
+    | "getSelection"
+    | "setSelection"
+    | "selectAll"
+    | "getDocumentSelection"
+    | "setDocumentSelection"
+    | "clearDocumentSelection"
+    | "selectDocumentAll"
+    | "setWindowTitle"
+    | "setWindowFullscreen"
+    | "setWindowMaximized"
+    | "setWindowMinimized"
+    | "setWindowDecorations"
+    | "beginWindowMoveDrag"
+    | "closeWindow"
+    | "getWindowState"
+    | "subscribeWindowState"
+    | "onCloseRequest"
+    | "getWindowRect"
+    | "getTextContent"
+    | "isAnimating"
+    | "precedes"
+    | "observeGeometry"
+    | "getReducedMotion"
+  > & {
     createElement(tag: NativeTag, staticProps?: Record<string, unknown>): NativeNode;
     replaceText(node: NativeNode, text: string | number): void;
   },
 ) => NativeRenderer;
 
-function setNativeProperty(node: NativeNode, name: string, value: unknown, previous?: unknown): void {
+function setNativeProperty(
+  node: NativeNode,
+  name: string,
+  value: unknown,
+  previous?: unknown,
+): void {
   const bridge = bridgeFor(node);
   if (name.startsWith("on") && typeof value === "function") {
     const callback = value as (this: unknown, event: unknown) => unknown;
-    value = function(this: unknown, event: unknown) {
+    value = function (this: unknown, event: unknown) {
       return withCallbackBridge(bridge, () => callback.call(this, event));
     };
   }
@@ -58,9 +160,13 @@ const renderer = createNativeRenderer({
   },
   createTextNode: (text: string | number) => {
     const bridge = bridgeFor();
-    return rememberBridge(bridge.createTextNode(typeof text === "number" ? `${text}` : text), bridge);
+    return rememberBridge(
+      bridge.createTextNode(typeof text === "number" ? `${text}` : text),
+      bridge,
+    );
   },
-  replaceText: (node, text: string | number) => bridgeFor(node).replaceText(node, typeof text === "number" ? `${text}` : text),
+  replaceText: (node, text: string | number) =>
+    bridgeFor(node).replaceText(node, typeof text === "number" ? `${text}` : text),
   isTextNode: node => bridgeFor(node).isTextNode(node),
   insertNode: (parent, node, anchor) => {
     bridgeFor(parent).insertNode(parent, node, anchor);
@@ -77,13 +183,33 @@ const renderer = createNativeRenderer({
 });
 
 export const {
-  effect, memo, createComponent, createElement, createTextNode,
-  insertNode, insert, setProp, applyRef, ref,
+  effect,
+  memo,
+  createComponent,
+  createElement,
+  createTextNode,
+  insertNode,
+  insert,
+  setProp,
+  applyRef,
+  ref,
 } = renderer;
 
 export function spread(
   node: NativeNode,
-  props: (NativeElementProps | NativeTextControlProps | NativeFieldProps | ImageProps | VectorProps) & InternalProps | Accessor<(NativeElementProps | NativeTextControlProps | NativeFieldProps | ImageProps | VectorProps) & InternalProps>,
+  props:
+    | ((NativeElementProps | NativeTextControlProps | NativeFieldProps | ImageProps | VectorProps) &
+        InternalProps)
+    | Accessor<
+        (
+          | NativeElementProps
+          | NativeTextControlProps
+          | NativeFieldProps
+          | ImageProps
+          | VectorProps
+        ) &
+          InternalProps
+      >,
   skipChildren?: boolean,
 ): void {
   if (props != null && typeof props === "object" && !Array.isArray(props)) {
@@ -113,7 +239,8 @@ export function spread(
         if (key === "children") {
           if (!skipChildren) {
             const desc = Object.getOwnPropertyDescriptor(record, "children");
-            if (desc?.get !== undefined) renderer.insert(node, () => record.children as NativeChild);
+            if (desc?.get !== undefined)
+              renderer.insert(node, () => record.children as NativeChild);
             else if (desc?.value !== undefined) renderer.insert(node, desc.value as NativeChild);
           }
           continue;
@@ -121,7 +248,10 @@ export function spread(
         const value = record[key];
         if (key === "ref") {
           if (typeof value === "function" || Array.isArray(value)) {
-            renderer.ref(() => value as ((node: NativeNode) => void) | ((node: NativeNode) => void)[], node);
+            renderer.ref(
+              () => value as ((node: NativeNode) => void) | ((node: NativeNode) => void)[],
+              node,
+            );
           }
         } else if (value !== undefined) {
           setNativeProperty(node, key, value);
@@ -160,13 +290,16 @@ export function mergeProps<T extends readonly object[]>(...sources: T): MergeSou
     offset += 1;
   }
   const list = inherited ?? sources;
-  let c0 = 0, c1 = 0, c2 = 0;
+  let c0 = 0,
+    c1 = 0,
+    c2 = 0;
   for (const item of list) {
     if ("__zguiClass" in item) c0 += 1;
     if ("__zguiStyle" in item) c1 += 1;
     if ("__zguiInvariantStyle" in item) c2 += 1;
   }
-  if (c0 <= 1 && c1 <= 1 && c2 <= 1) return renderer.mergeProps(...list) as unknown as MergeSources<T>;
+  if (c0 <= 1 && c1 <= 1 && c2 <= 1)
+    return renderer.mergeProps(...list) as unknown as MergeSources<T>;
   const originals = [...list];
   const channelOverrides: Record<string, unknown> = {};
   if (c0 > 1) {
@@ -183,7 +316,10 @@ export function mergeProps<T extends readonly object[]>(...sources: T): MergeSou
       },
     });
   }
-  for (const [count, key] of [[c1, "__zguiStyle"], [c2, "__zguiInvariantStyle"]] as const) {
+  for (const [count, key] of [
+    [c1, "__zguiStyle"],
+    [c2, "__zguiInvariantStyle"],
+  ] as const) {
     if (count > 1) {
       Object.defineProperty(channelOverrides, key, {
         enumerable: true,
@@ -216,15 +352,28 @@ export function render(code: () => NativeChild, root: NativeNode): () => void {
   };
 }
 
-export function renderRegion(code: () => NativeChild, root: NativeNode, bridge: UiBridge): () => void {
+export function renderRegion(
+  code: () => NativeChild,
+  root: NativeNode,
+  bridge: UiBridge,
+): () => void {
   rememberBridge(root, bridge);
-  return mountOwned(() => provideRegion(bridge, () => {
-    attachReducedMotionBridge(bridge);
-    insert(root, code());
-  }), () => bridge.clearRoot(root), "region");
+  return mountOwned(
+    () =>
+      provideRegion(bridge, () => {
+        attachReducedMotionBridge(bridge);
+        insert(root, code());
+      }),
+    () => bridge.clearRoot(root),
+    "region",
+  );
 }
 
-export function mountOwned(mount: () => void, clear?: () => void, scope: "root" | "region" = "root"): () => void {
+export function mountOwned(
+  mount: () => void,
+  clear?: () => void,
+  scope: "root" | "region" = "root",
+): () => void {
   let disposeRoot: (() => void) | undefined;
   let disposed = false;
 

@@ -52,7 +52,19 @@ export async function writeScenario(filePath, id, steps, requiredCapabilities) {
   });
 }
 
-export async function buildFixtureApp(appDir, name, source, { rawSource = false, assets = {}, files = {}, fonts = [], capabilities, development = false } = {}) {
+export async function buildFixtureApp(
+  appDir,
+  name,
+  source,
+  {
+    rawSource = false,
+    assets = {},
+    files = {},
+    fonts = [],
+    capabilities,
+    development = false,
+  } = {},
+) {
   await mkdir(path.join(appDir, "src"), { recursive: true });
   const content = rawSource
     ? source
@@ -65,7 +77,11 @@ export async function buildFixtureApp(appDir, name, source, { rawSource = false,
   }
   const assetEntries = Object.entries(assets);
   if (fonts.length > 0 || capabilities !== undefined) {
-    await writeJson(path.join(appDir, "package.json"), { name, private: true, zgui: { fonts, capabilities } });
+    await writeJson(path.join(appDir, "package.json"), {
+      name,
+      private: true,
+      zgui: { fonts, capabilities },
+    });
   }
   if (assetEntries.length > 0) {
     await mkdir(path.join(appDir, "assets"), { recursive: true });
@@ -107,11 +123,16 @@ export async function runPreview({
   const args = [
     "preview",
     "run",
-    "--bundle", bundle,
-    "--profile", profile,
-    "--fixture", fixture,
-    "--scenario", scenario,
-    "--out", out,
+    "--bundle",
+    bundle,
+    "--profile",
+    profile,
+    "--fixture",
+    fixture,
+    "--scenario",
+    scenario,
+    "--out",
+    out,
   ];
   if (width !== undefined) args.push("--width", String(width));
   if (height !== undefined) args.push("--height", String(height));
@@ -154,7 +175,8 @@ export async function runScenario({
   steps,
   out = path.join(projectDir, `run-${name}`),
   stderrPath = path.join(projectDir, `${name}.stderr`),
-  expectedAssertions = steps.filter(step => step.op === "assert" || step.op === "assert.service").length,
+  expectedAssertions = steps.filter(step => step.op === "assert" || step.op === "assert.service")
+    .length,
   ...rest
 }) {
   const scenario = path.join(projectDir, `${name}.json`);
@@ -184,7 +206,12 @@ export const readPng = pngRgba;
 
 export function pixelAt(image, x, y) {
   const offset = (y * image.width + x) * 4;
-  return [image.data[offset], image.data[offset + 1], image.data[offset + 2], image.data[offset + 3]];
+  return [
+    image.data[offset],
+    image.data[offset + 1],
+    image.data[offset + 2],
+    image.data[offset + 3],
+  ];
 }
 
 export function regionStats(image, rect) {

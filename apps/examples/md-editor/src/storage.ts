@@ -64,9 +64,11 @@ export function createStudioStorage(): StudioStorage {
   const ensureReady = (): Promise<void> => {
     if (!readyPromise) {
       const handles = getHandles();
-      readyPromise = handles.db.execute(
-        "CREATE VIRTUAL TABLE IF NOT EXISTS notes_fts USING fts5(doc_id UNINDEXED, title, path, content)",
-      ).promise.then(() => undefined);
+      readyPromise = handles.db
+        .execute(
+          "CREATE VIRTUAL TABLE IF NOT EXISTS notes_fts USING fts5(doc_id UNINDEXED, title, path, content)",
+        )
+        .promise.then(() => undefined);
     }
     return readyPromise;
   };
@@ -84,26 +86,28 @@ export function createStudioStorage(): StudioStorage {
         store.get("splitSizes"),
         store.get("lastWorkspaceBookmark"),
       ]);
-      const scheme = typeof rawScheme === "string" && VALID_SCHEMES.has(rawScheme as ColorScheme)
-        ? (rawScheme as ColorScheme)
-        : DEFAULT_PREFS.scheme;
-      const preset = typeof rawPreset === "string" && VALID_PRESETS.has(rawPreset as ThemePreset)
-        ? (rawPreset as ThemePreset)
-        : DEFAULT_PREFS.preset;
-      const fontSize = typeof rawFont === "number" && Number.isFinite(rawFont) && rawFont >= 12 && rawFont <= 22
-        ? Math.round(rawFont)
-        : DEFAULT_PREFS.fontSize;
+      const scheme =
+        typeof rawScheme === "string" && VALID_SCHEMES.has(rawScheme as ColorScheme)
+          ? (rawScheme as ColorScheme)
+          : DEFAULT_PREFS.scheme;
+      const preset =
+        typeof rawPreset === "string" && VALID_PRESETS.has(rawPreset as ThemePreset)
+          ? (rawPreset as ThemePreset)
+          : DEFAULT_PREFS.preset;
+      const fontSize =
+        typeof rawFont === "number" && Number.isFinite(rawFont) && rawFont >= 12 && rawFont <= 22
+          ? Math.round(rawFont)
+          : DEFAULT_PREFS.fontSize;
       let splitSizes = DEFAULT_PREFS.splitSizes;
       if (
-        Array.isArray(rawSplit)
-        && rawSplit.length === 3
-        && rawSplit.every(v => typeof v === "number" && Number.isFinite(v) && v >= 0)
+        Array.isArray(rawSplit) &&
+        rawSplit.length === 3 &&
+        rawSplit.every(v => typeof v === "number" && Number.isFinite(v) && v >= 0)
       ) {
         splitSizes = rawSplit as number[];
       }
-      const lastWorkspaceBookmark = typeof rawBookmark === "string" && rawBookmark.length > 0
-        ? rawBookmark
-        : null;
+      const lastWorkspaceBookmark =
+        typeof rawBookmark === "string" && rawBookmark.length > 0 ? rawBookmark : null;
       return { scheme, preset, fontSize, splitSizes, lastWorkspaceBookmark };
     },
 

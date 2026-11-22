@@ -1,8 +1,6 @@
 import { createSignal, renderApp } from "@hewel/zgui";
 import type { NativeNode } from "@hewel/zgui";
-import {
-  Tabs, TabsContent, TabsList, TabsTrigger, ThemeProvider,
-} from "@hewel/zgui/components";
+import { Tabs, TabsContent, TabsList, TabsTrigger, ThemeProvider } from "@hewel/zgui/components";
 import type { ColorScheme, ThemePreset } from "@hewel/zgui/components";
 import { Masthead, SECTION_LABELS } from "./shell.js";
 import type { SectionId } from "./shell.js";
@@ -28,11 +26,7 @@ function GalleryApp() {
   const [lastAction, setLastAction] = createSignal("Ready");
 
   return (
-    <ThemeProvider
-      scheme={scheme()}
-      light={{ preset: preset() }}
-      dark={{ preset: preset() }}
-    >
+    <ThemeProvider scheme={scheme()} light={{ preset: preset() }} dark={{ preset: preset() }}>
       <column testId="gallery-page" class="gallery-page">
         <Masthead
           scheme={scheme}
@@ -53,14 +47,30 @@ function GalleryApp() {
           label="Component gallery sections"
         >
           <TabsList label="Component gallery sections">
-            <TabsTrigger testId="tab-atoms" value="atoms">Atoms</TabsTrigger>
-            <TabsTrigger testId="tab-feedback" value="feedback">Feedback</TabsTrigger>
-            <TabsTrigger testId="tab-fields" value="fields">Fields</TabsTrigger>
-            <TabsTrigger testId="tab-choices" value="choices">Choices</TabsTrigger>
-            <TabsTrigger testId="tab-composites" value="composites">Composites</TabsTrigger>
-            <TabsTrigger testId="tab-overlays" value="overlays">Overlays</TabsTrigger>
-            <TabsTrigger testId="tab-menus" value="menus">Menus</TabsTrigger>
-            <TabsTrigger testId="tab-workbench" value="workbench">Workbench</TabsTrigger>
+            <TabsTrigger testId="tab-atoms" value="atoms">
+              Atoms
+            </TabsTrigger>
+            <TabsTrigger testId="tab-feedback" value="feedback">
+              Feedback
+            </TabsTrigger>
+            <TabsTrigger testId="tab-fields" value="fields">
+              Fields
+            </TabsTrigger>
+            <TabsTrigger testId="tab-choices" value="choices">
+              Choices
+            </TabsTrigger>
+            <TabsTrigger testId="tab-composites" value="composites">
+              Composites
+            </TabsTrigger>
+            <TabsTrigger testId="tab-overlays" value="overlays">
+              Overlays
+            </TabsTrigger>
+            <TabsTrigger testId="tab-menus" value="menus">
+              Menus
+            </TabsTrigger>
+            <TabsTrigger testId="tab-workbench" value="workbench">
+              Workbench
+            </TabsTrigger>
           </TabsList>
           <TabsContent value="atoms">
             <AtomsSection onAction={setLastAction} />

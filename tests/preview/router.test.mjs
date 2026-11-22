@@ -1,11 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import path from "node:path";
-import {
-  buildFixtureApp,
-  createTempWorkspace,
-  runScenario,
-} from "./harness.mjs";
+import { buildFixtureApp, createTempWorkspace, runScenario } from "./harness.mjs";
 
 const routerPreviewSource = `
 import { Button, createSignal, renderApp } from "@hewel/zgui";
@@ -124,9 +120,14 @@ export function mount(root: NativeNode) {
 test("@hewel/zgui/router multi-instance routers, nested Outlet, back/forward, and useBeforeLeave veto work in preview (#57)", async t => {
   const temp = await createTempWorkspace("preview-router-");
   t.after(() => temp.cleanup());
-  const bundle = await buildFixtureApp(path.join(temp.dir, "app"), "router-app", routerPreviewSource, {
-    rawSource: true,
-  });
+  const bundle = await buildFixtureApp(
+    path.join(temp.dir, "app"),
+    "router-app",
+    routerPreviewSource,
+    {
+      rawSource: true,
+    },
+  );
 
   const click = (id, testId) => ({
     id,
@@ -145,7 +146,13 @@ test("@hewel/zgui/router multi-instance routers, nested Outlet, back/forward, an
     projectDir: temp.dir,
     bundle,
     name: "router-multi-instance",
-    requiredCapabilities: ["pixels", "virtual-time", "selectors.test-id", "input.pointer", "tree.inspect"],
+    requiredCapabilities: [
+      "pixels",
+      "virtual-time",
+      "selectors.test-id",
+      "input.pointer",
+      "tree.inspect",
+    ],
     width: 720,
     height: 320,
     scale: 1,

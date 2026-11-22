@@ -17,7 +17,11 @@ async function temporaryProject(t) {
 
 function check(args, env = process.env) {
   const child = spawnSync(process.execPath, [gate, ...args], {
-    cwd: workspaceRoot, env, encoding: "utf8", timeout: 60000, maxBuffer: 1024 * 1024,
+    cwd: workspaceRoot,
+    env,
+    encoding: "utf8",
+    timeout: 60000,
+    maxBuffer: 1024 * 1024,
   });
   assert.ifError(child.error);
   assert.equal(child.signal, null, child.stderr);
@@ -33,7 +37,7 @@ async function json(file) {
 }
 
 // Deliberately required: missing build prerequisites, baseline, or real GPU fail this test.
-test("required preview gate runs counter then compares the reviewed baseline", async (t) => {
+test("required preview gate runs counter then compares the reviewed baseline", async t => {
   const directory = await temporaryProject(t);
   const out = path.join(directory, "gate");
   const { child, result } = check(["--out", out]);
@@ -64,13 +68,15 @@ test("required preview gate runs counter then compares the reviewed baseline", a
   }
 });
 
-test("unavailable Vulkan fails the required gate with exit 7 and never compares", async (t) => {
+test("unavailable Vulkan fails the required gate with exit 7 and never compares", async t => {
   const directory = await temporaryProject(t);
   const out = path.join(directory, "no-graphics");
   const missingDriver = path.join(directory, "unavailable-vulkan-driver.json");
   const { child, result } = check(["--out", out], {
-    ...process.env, ZGUI_BACKENDS: "vulkan",
-    VK_DRIVER_FILES: missingDriver, VK_ICD_FILENAMES: missingDriver,
+    ...process.env,
+    ZGUI_BACKENDS: "vulkan",
+    VK_DRIVER_FILES: missingDriver,
+    VK_ICD_FILENAMES: missingDriver,
   });
   assert.equal(child.status, 7, `${child.stdout}\n${child.stderr}`);
   assert.equal(result.status, "failed");
@@ -86,7 +92,7 @@ test("unavailable Vulkan fails the required gate with exit 7 and never compares"
   assert.deepEqual(await json(path.join(out, "run.stdout.json")), run);
 });
 
-test("output creation failure is exit 8, not a skipped or compared success", async (t) => {
+test("output creation failure is exit 8, not a skipped or compared success", async t => {
   const directory = await temporaryProject(t);
   const blocker = path.join(directory, "not-a-directory");
   await writeFile(blocker, "preserve this output blocker\n");
@@ -100,7 +106,7 @@ test("output creation failure is exit 8, not a skipped or compared success", asy
   assert.equal(await readFile(blocker, "utf8"), "preserve this output blocker\n");
 });
 
-test("existing output roots and symlinks are rejected without changing their contents", async (t) => {
+test("existing output roots and symlinks are rejected without changing their contents", async t => {
   const directory = await temporaryProject(t);
   const empty = path.join(directory, "empty");
   const used = path.join(directory, "used");
@@ -121,12 +127,16 @@ test("existing output roots and symlinks are rejected without changing their con
   await assert.rejects(access(path.join(used, "actual")), { code: "ENOENT" });
 });
 
-test("malformed gate arguments fail before claiming output", async (t) => {
+test("malformed gate arguments fail before claiming output", async t => {
   const directory = await temporaryProject(t);
   const out = path.join(directory, "unclaimed");
   for (const args of [
-    [], ["--out"], ["--unknown", out], ["--out", out, "--out", out],
-    ["--out", out, "--policy"], ["--out", out, "--baseline", ""],
+    [],
+    ["--out"],
+    ["--unknown", out],
+    ["--out", out, "--out", out],
+    ["--out", out, "--policy"],
+    ["--out", out, "--baseline", ""],
   ]) {
     const { child, result } = check(args);
     assert.equal(child.status, 2, `${child.stdout}\n${child.stderr}`);
