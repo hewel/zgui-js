@@ -1010,3 +1010,20 @@ void (
     geometryInsets={undefined}
   />
 );
+const activeOptionNode = undefined as unknown as NativeNode;
+void (
+  <field
+    role="comboBox"
+    ariaActiveDescendant={activeOptionNode}
+    onKeyDown={event => {
+      const composing: boolean = event.isComposing;
+      void composing;
+    }}
+    onKeyUp={event => {
+      const composing: boolean = event.isComposing;
+      void composing;
+    }}
+  />
+);
+void (<box ariaActiveDescendant={null} />);
+void (<box ariaActiveDescendant={undefined} />);

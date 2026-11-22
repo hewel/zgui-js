@@ -514,3 +514,11 @@ Regression gate:
 Regression gate:
 
     cargo test -p zgui-host inspector --offline && bun run test:vendor zgui-runtime
+
+## Per-event IME composition state (`EventCx::is_composing`)
+
+`vendor/zgui-view/src/event/cx.rs` adds `EventCx::with_composing(bool)` and `EventCx::is_composing(&self) -> bool` (defaulting to `false` and preserved across `retype`), and `vendor/zgui-runtime/src/dispatch.rs` + `src/window/input.rs` sample `self.ime.is_composing()` per window before dispatching key listeners so both `KeyDown` and `KeyUp` events carry live IME preedit state into `ui-bridge` (`NativeKeyEvent.isComposing` and capture-phase Escape dismiss protection in `crates/ui-bridge/src/dismiss.rs`).
+
+Regression gate:
+
+    cargo test --manifest-path vendor/zgui-runtime/Cargo.toml --test editing --offline && cargo test -p ui-bridge --offline && cargo test -p zgui-host --offline ime_preedit_protects

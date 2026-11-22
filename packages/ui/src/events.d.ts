@@ -58,6 +58,8 @@ export interface NativeKeyEvent extends NativeEvent {
   readonly physicalCode: number | null;
   readonly location: string;
   readonly repeat: boolean;
+  /** Whether a platform IME composition (preedit) was active when this key event arrived. */
+  readonly isComposing: boolean;
 }
 export interface NativeValueEvent extends NativeEvent {
   readonly value: string;

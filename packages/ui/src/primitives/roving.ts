@@ -153,7 +153,7 @@ export function createRovingFocus(
       return false;
     },
     onKeyDown(event: NativeKeyEvent) {
-      if (event.character != null) return;
+      if (event.isComposing || event.character != null) return;
       const key = event.key;
       const axis = orientation();
       const direction =

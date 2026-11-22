@@ -628,6 +628,7 @@ export function CommandPalette(props: CommandPaletteProps = {}): NativeChild {
       },
       onKeyDown(event: NativeKeyEvent) {
         if (!callHandler(event, props.onKeyDown)) return;
+        if (event.isComposing) return;
         if (event.key === "ArrowDown") {
           event.preventDefault();
           event.stopPropagation();

@@ -77,7 +77,7 @@ impl WindowLayers {
 
     fn select(&self, generation: u64, event: &EventCx<'_>) -> Option<(DismissReason, u64, Rc<Dispatcher>)> {
         if self.generation != generation || self.listeners.is_empty() { return None; }
-        let reason = dismiss_reason(event.kind, event.payload())?;
+        let reason = dismiss_reason(event.kind, event.payload(), event.is_composing())?;
         let (_, entry) = self.entries.iter()
             .filter(|(_, entry)| contains(&self.dom, self.root, entry.node)
                 && (reason != DismissReason::Escape || !entry.options.leaving))

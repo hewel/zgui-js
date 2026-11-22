@@ -109,7 +109,7 @@ export function createMenuTypeahead(
     buffer = "";
   });
   return (event: NativeKeyEvent) => {
-    if (!alive || !group || event.character == null) return;
+    if (!alive || !group || event.isComposing || event.character == null) return;
     if (event.character === " " && buffer === "") return;
     buffer += event.character.toLowerCase();
     reset.after(1000, () => {
@@ -419,6 +419,7 @@ export function MenuListPrimitive(props: MenuListPrimitiveProps = {}): NativeNod
         },
         onKeyDown(event: NativeKeyEvent) {
           if (!callHandler(event, props.onKeyDown)) return;
+          if (event.isComposing) return;
           if (
             (props.dismissOnEscape ?? true) &&
             event.character == null &&

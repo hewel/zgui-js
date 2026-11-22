@@ -272,6 +272,12 @@ impl Window {
             return;
         }
 
+        // Whether an input method has provisional text on the screen right now, read *before* this
+        // event is allowed to do anything (including JS/view key listeners), because the event may
+        // be the one that ends it or cancels it.
+        let composing = self.ime.is_composing();
+        let key_composing = composing && matches!(event, SurfaceEvent::Key { .. });
+
         let dispatched = {
             let host = std::rc::Rc::clone(&self.host);
             let pointer = match event {
@@ -279,14 +285,20 @@ impl Window {
                 _ => zgui_vocab::PointerId::MOUSE,
             };
             let mut sink = HostSink::for_pointer(&host, pointer);
-            dispatch::run(
-                self, &steps, kind, target, &payload, samples, modifiers, timestamp, &mut sink,
+            dispatch::run_with_composing(
+                self,
+                &steps,
+                kind,
+                target,
+                &payload,
+                samples,
+                modifiers,
+                timestamp,
+                key_composing,
+                &mut sink,
             )
         };
 
-        // Whether an input method has provisional text on the screen right now, read *before* this
-        // event is allowed to do anything, because the event may be the one that ends it.
-        let composing = self.ime.is_composing();
         // Editing is the first of the framework's own behaviours, and it takes the event away from
         // the rest of them: space and enter activate whatever has focus, and a field that both
         // typed a space and clicked itself is neither. A key the editing model refused still falls
@@ -299,7 +311,7 @@ impl Window {
         // framework default it moves the focus or activates a control out from under provisional
         // text that is still on the screen, and the commit that follows lands in whatever gained
         // the focus.
-        let held = composing && matches!(event, SurfaceEvent::Key { .. });
+        let held = key_composing;
         // A chord nothing in the document claimed runs the menu action it is the shortcut of.
         if dispatched.default_allowed && !typed && !held && default.is_none() {
             self.note_menu_shortcut(event);

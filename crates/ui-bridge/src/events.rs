@@ -166,10 +166,10 @@ impl DismissReason {
     }
 }
 
-pub(crate) fn dismiss_reason(kind: EventKind, payload: &Payload) -> Option<DismissReason> {
+pub(crate) fn dismiss_reason(kind: EventKind, payload: &Payload, composing: bool) -> Option<DismissReason> {
     match (kind, payload) {
         (EventKind::PointerDown, Payload::Pointer(_)) => Some(DismissReason::OutsidePress),
-        (EventKind::KeyDown, Payload::Key(key)) if key.key == Key::Named(NamedKey::Escape) => Some(DismissReason::Escape),
+        (EventKind::KeyDown, Payload::Key(key)) if !composing && key.key == Key::Named(NamedKey::Escape) => Some(DismissReason::Escape),
         _ => None,
     }
 }
@@ -181,6 +181,7 @@ pub(crate) struct EventSnapshot {
     timestamp: Timestamp,
     phase: Phase,
     modifiers: Modifiers,
+    composing: bool,
     payload: Payload,
     coalesced: Vec<PointerSample>,
 }
@@ -190,7 +191,8 @@ impl EventSnapshot {
         Self {
             target: event.target, current_target: event.current, kind: event.kind,
             timestamp: event.timestamp, phase: event.phase, modifiers: event.modifiers,
-            payload: event.payload().clone(), coalesced: event.coalesced().to_vec(),
+            composing: event.is_composing(), payload: event.payload().clone(),
+            coalesced: event.coalesced().to_vec(),
         }
     }
 
@@ -301,6 +303,7 @@ impl EventSnapshot {
                 object.set("physicalCode", nullable(ctx, match key.physical { PhysicalKey::Unidentified(code) => Some(code), _ => None })?)?;
                 object.set("location", match key.location { KeyLocation::Standard => "standard", KeyLocation::Left => "left", KeyLocation::Right => "right", KeyLocation::Numpad => "numpad", _ => "unknown" })?;
                 object.set("repeat", key.repeat)?;
+                object.set("isComposing", self.composing)?;
             }
             Payload::Value(value) => {
                 object.set("value", value.value.as_str())?;
@@ -339,7 +342,7 @@ impl EventSnapshot {
         Ok((object, control))
     }
 
-    pub(crate) fn dismiss_reason(&self) -> Option<DismissReason> { dismiss_reason(self.kind, &self.payload) }
+    pub(crate) fn dismiss_reason(&self) -> Option<DismissReason> { dismiss_reason(self.kind, &self.payload, self.composing) }
 }
 
 /// Converts a UTF-8 byte offset in `text` to a UTF-16 code-unit offset.

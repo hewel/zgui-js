@@ -1920,3 +1920,378 @@ fn background_blur_capability_seeds_and_syncs_across_zero_surface_shell_and_moun
     assert!(report.failure.is_none(), "teardown failed: {:?}", report.failure);
     assert_eq!(report.counts.callbacks, 0, "all blur subscriptions must clean up with zero leaks");
 }
+
+#[test]
+fn aria_active_descendant_accesskit_initial_incremental_unmount_and_remount() {
+    use accesskit_consumer::{Node, NodeId as ConsumerNodeId, Tree, TreeChangeHandler};
+    use zgui::platform::{AppHandler, PlatformCx, Surface, SurfaceEvent};
+    use zgui::view::{IntoView, View};
+
+    struct IgnoreChanges;
+    impl TreeChangeHandler for IgnoreChanges {
+        fn node_added(&mut self, _: &Node) {}
+        fn node_updated(&mut self, _: &Node, _: &Node) {}
+        fn focus_moved(&mut self, _: Option<&Node>, _: Option<&Node>) {}
+        fn node_removed(&mut self, _: &Node) {}
+    }
+
+    const APP_JS: &str = r#"
+        export const hostApiVersion = 1;
+        let combo, list, opt1, opt2, opt3;
+        export function mount(root) {
+            combo = __zgui.createElement('field');
+            __zgui.setProperty(combo, 'role', 'comboBox');
+            __zgui.setProperty(combo, 'ariaLabel', 'Fruit');
+            __zgui.setProperty(combo, 'expanded', true);
+            __zgui.setProperty(combo, 'style', 'width: 160px; height: 24px');
+
+            list = __zgui.createElement('column');
+            __zgui.setProperty(list, 'role', 'listBox');
+            __zgui.setProperty(list, 'ariaLabel', 'Fruit options');
+            __zgui.setProperty(list, 'style', 'width: 160px; height: 96px');
+
+            opt1 = __zgui.createElement('control');
+            __zgui.setProperty(opt1, 'role', 'listBoxOption');
+            __zgui.setProperty(opt1, 'ariaLabel', 'Apple');
+            __zgui.setProperty(opt1, 'style', 'width: 160px; height: 24px');
+
+            opt2 = __zgui.createElement('control');
+            __zgui.setProperty(opt2, 'role', 'listBoxOption');
+            __zgui.setProperty(opt2, 'ariaLabel', 'Pear');
+            __zgui.setProperty(opt2, 'style', 'width: 160px; height: 24px');
+
+            __zgui.insertNode(list, opt1, null);
+            __zgui.insertNode(list, opt2, null);
+            __zgui.insertNode(root, combo, null);
+            __zgui.insertNode(root, list, null);
+
+            __zgui.setProperty(combo, 'ariaControls', list);
+            __zgui.setProperty(combo, 'ariaActiveDescendant', opt1);
+            __zgui.focus(combo);
+
+            return () => __zgui.clearRoot(root);
+        }
+        export function selectSecond() {
+            __zgui.setProperty(combo, 'ariaActiveDescendant', opt2);
+        }
+        export function clearActive() {
+            __zgui.setProperty(combo, 'ariaActiveDescendant', null);
+        }
+        export function unmountSecond() {
+            __zgui.removeNode(list, opt2);
+        }
+        export function remountThird() {
+            opt3 = __zgui.createElement('control');
+            __zgui.setProperty(opt3, 'role', 'listBoxOption');
+            __zgui.setProperty(opt3, 'ariaLabel', 'Mango');
+            __zgui.setProperty(opt3, 'style', 'width: 160px; height: 24px');
+            __zgui.insertNode(list, opt3, null);
+            __zgui.setProperty(combo, 'ariaActiveDescendant', opt3);
+        }
+    "#;
+
+    let package = Fixture::new(APP_JS, "");
+    let pending = Rc::new(RefCell::new(Vec::new()));
+    let roots = pending.clone();
+    let fonts = zgui::app::Fonts::shipped_only();
+    let mut runtime = zgui::runtime::App::new()
+        .with_renderer(Box::new(|_, target| {
+            let mut renderer = zgui_testkit_scene::CaptureRenderer::new();
+            zgui::render::Renderer::configure(&mut renderer, target);
+            Ok(Box::new(renderer))
+        }))
+        .into_handler(move |cx| {
+            zgui::reactive::provide_context(fonts.clone());
+            Box::new(Root(roots.clone()).into_view().build(cx))
+        })
+        .expect("create runtime");
+    let cx = zgui_platform_headless::Headless::new();
+    runtime.surfaces_available(&cx);
+    let offscreen = cx.offscreens()[0].clone();
+    offscreen.set_a11y_listener(true);
+    let surface_id = offscreen.id();
+    runtime.surface_event(&cx, surface_id, SurfaceEvent::Focused(true));
+
+    let mut host = SessionHost::new(
+        pending,
+        SessionModule::package(package.package()),
+        SessionPolicy::live(host_services::Executor::new(2, 64).expect("create executor")),
+        RecoveryPolicy::Propagate,
+        SurfaceOpacity::Opaque,
+    );
+    {
+        let mut surface = RuntimeSurface::new(&mut runtime, &cx, ImageChoice::PackageOnly);
+        host.attach(&mut surface, cx.waker(), no_retry()).expect("mount combobox app");
+    }
+    let session = host.sessions().next().expect("active session").clone();
+
+    let mut tree: Option<Tree> = None;
+    let pump = |runtime: &mut zgui::runtime::Runtime, tree: &mut Option<Tree>| -> usize {
+        let mut applied = 0;
+        for _ in 0..4 {
+            runtime.surface_event(&cx, surface_id, SurfaceEvent::RedrawRequested);
+            for update in offscreen.take_a11y_log() {
+                applied += 1;
+                if let Some(existing) = tree.as_mut() {
+                    existing.update_and_process_changes(update, &mut IgnoreChanges);
+                } else {
+                    *tree = Some(Tree::new(update, true));
+                }
+            }
+        }
+        applied
+    };
+
+    let find_by_name = |tree: &Tree, name: &str| -> Option<ConsumerNodeId> {
+        let state = tree.state();
+        let mut stack = vec![state.root_id()];
+        while let Some(id) = stack.pop() {
+            if let Some(node) = state.node_by_id(id) {
+                if node.data().label() == Some(name) {
+                    return Some(id);
+                }
+                stack.extend(node.child_ids());
+            }
+        }
+        None
+    };
+
+    let active_descendant_of = |tree: &Tree, id: ConsumerNodeId| -> Option<ConsumerNodeId> {
+        tree.state().node_by_id(id)?.active_descendant().map(|node| node.id())
+    };
+
+    // 1. Initial AccessKit tree: combo is focused and points active_descendant at sibling Apple.
+    assert!(pump(&mut runtime, &mut tree) > 0, "initial frame must publish AccessKit tree");
+    let t = tree.as_ref().expect("tree built");
+    let combo_id = find_by_name(t, "Fruit").expect("combo node present");
+    let apple_id = find_by_name(t, "Apple").expect("Apple option present");
+    let pear_id = find_by_name(t, "Pear").expect("Pear option present");
+    assert_eq!(t.state().focus_id(), Some(combo_id), "native focus must be on combobox");
+    assert_eq!(
+        active_descendant_of(t, combo_id),
+        Some(apple_id),
+        "initial AccessKit tree must expose active_descendant = Apple"
+    );
+
+    // 2. Incremental update: switch active_descendant from Apple -> Pear without moving native focus.
+    session.invoke("selectSecond").expect("switch to Pear");
+    assert!(pump(&mut runtime, &mut tree) > 0, "incremental switch must emit AccessKit update");
+    let t = tree.as_ref().unwrap();
+    assert_eq!(t.state().focus_id(), Some(combo_id), "native focus must stay on combobox");
+    assert_eq!(
+        active_descendant_of(t, combo_id),
+        Some(pear_id),
+        "incremental update must switch active_descendant to Pear"
+    );
+
+    // 3. Incremental clear: null clears active_descendant without moving focus.
+    session.invoke("clearActive").expect("clear active_descendant");
+    assert!(pump(&mut runtime, &mut tree) > 0, "clearing must emit AccessKit update");
+    let t = tree.as_ref().unwrap();
+    assert_eq!(t.state().focus_id(), Some(combo_id), "native focus must stay on combobox");
+    assert_eq!(
+        active_descendant_of(t, combo_id),
+        None,
+        "null must clear active_descendant"
+    );
+
+    // 4. Point to Pear again, then unmount Pear while combo still references it: consumer must see zero dangling IDs.
+    session.invoke("selectSecond").expect("re-select Pear");
+    assert!(pump(&mut runtime, &mut tree) > 0);
+    assert_eq!(active_descendant_of(tree.as_ref().unwrap(), combo_id), Some(pear_id));
+    session.invoke("unmountSecond").expect("unmount Pear");
+    assert!(pump(&mut runtime, &mut tree) > 0, "unmounting referenced option must emit clean AccessKit update");
+    let t = tree.as_ref().unwrap();
+    assert_eq!(t.state().focus_id(), Some(combo_id), "native focus must stay on combobox after option unmount");
+    assert_eq!(
+        active_descendant_of(t, combo_id),
+        None,
+        "unmounted active_descendant must be pruned so AccessKit has no dangling relation"
+    );
+    assert_eq!(find_by_name(t, "Pear"), None, "unmounted Pear must leave tree");
+
+    // 5. Remount a new option (Mango) and point active_descendant to it.
+    session.invoke("remountThird").expect("remount Mango");
+    assert!(pump(&mut runtime, &mut tree) > 0, "remounting option must emit incremental AccessKit update");
+    let t = tree.as_ref().unwrap();
+    let mango_id = find_by_name(t, "Mango").expect("Mango option present");
+    assert_eq!(t.state().focus_id(), Some(combo_id), "native focus must still stay on combobox");
+    assert_eq!(
+        active_descendant_of(t, combo_id),
+        Some(mango_id),
+        "incremental update must expose remounted Mango as active_descendant"
+    );
+
+    let report = session.retire();
+    assert!(report.failure.is_none(), "teardown failed: {:?}", report.failure);
+}
+
+#[test]
+fn ime_preedit_protects_keys_and_escape_dismiss_until_commit() {
+    use zgui::platform::{AppHandler, PlatformCx, Surface, SurfaceEvent};
+    use zgui::view::{IntoView, View};
+    use zgui::vocab::{ImeEvent, Key, KeyCode, KeyEvent, KeyLocation, KeyState, Modifiers, NamedKey, PhysicalKey, Timestamp};
+
+    const IME_APP_JS: &str = r#"
+        export const hostApiVersion = 1;
+        let overlay, field;
+        const observed = [];
+        const actions = [];
+        const dismisses = [];
+
+        export function mount(root) {
+            overlay = __zgui.createElement('box');
+            __zgui.setProperty(overlay, 'style', 'width: 300px; height: 200px');
+            field = __zgui.createElement('field');
+            __zgui.setProperty(field, 'style', 'width: 240px; height: 32px');
+            __zgui.insertNode(overlay, field, null);
+            __zgui.insertNode(root, overlay, null);
+
+            __zgui.setProperty(field, 'onKeyDown', e => {
+                observed.push(['down', e.key, e.isComposing]);
+                if (e.isComposing) return;
+                actions.push(e.key);
+            });
+            __zgui.setProperty(field, 'onKeyUp', e => {
+                observed.push(['up', e.key, e.isComposing]);
+            });
+            const dismissLease = __zgui.registerDismissLayer(
+                overlay,
+                reason => dismisses.push(reason),
+                { layer: 'modal', dismissOnOutsidePress: false, dismissOnEscape: true, exclude: null, leaving: false }
+            );
+            __zgui.focus(field);
+            return () => {
+                dismissLease.dispose();
+                __zgui.clearRoot(root);
+            };
+        }
+        export function assertDuringPreedit() {
+            if (actions.length !== 0) throw Error('expected 0 guarded actions during preedit, got ' + JSON.stringify(actions));
+            if (dismisses.length !== 0) throw Error('expected 0 dismisses during preedit, got ' + JSON.stringify(dismisses));
+            if (observed.length !== 8) throw Error('expected 8 keydown/keyup events during preedit, got ' + JSON.stringify(observed));
+            for (const [kind, key, composing] of observed) {
+                if (composing !== true) throw Error('expected isComposing=true for ' + kind + ' ' + key);
+            }
+        }
+        export function assertAfterCommitEnter() {
+            if (actions.length !== 1 || actions[0] !== 'Enter') {
+                throw Error('expected Enter to activate once after commit, got ' + JSON.stringify(actions));
+            }
+            if (dismisses.length !== 0) {
+                throw Error('expected no dismiss after Enter, got ' + JSON.stringify(dismisses));
+            }
+            const lastTwo = observed.slice(-2);
+            if (lastTwo.length !== 2 || lastTwo[0][2] !== false || lastTwo[1][2] !== false) {
+                throw Error('expected isComposing=false after commit, got ' + JSON.stringify(lastTwo));
+            }
+        }
+        export function assertAfterOrdinaryEscape() {
+            if (dismisses.length !== 1 || dismisses[0] !== 'escape') {
+                throw Error('expected single escape dismiss after commit, got ' + JSON.stringify(dismisses));
+            }
+        }
+    "#;
+
+    let package = Fixture::new(IME_APP_JS, "");
+    let pending = Rc::new(RefCell::new(Vec::new()));
+    let roots = pending.clone();
+    let fonts = zgui::app::Fonts::shipped_only();
+    let mut runtime = zgui::runtime::App::new()
+        .with_renderer(Box::new(|_, target| {
+            let mut renderer = zgui_testkit_scene::CaptureRenderer::new();
+            zgui::render::Renderer::configure(&mut renderer, target);
+            Ok(Box::new(renderer))
+        }))
+        .into_handler(move |cx| {
+            zgui::reactive::provide_context(fonts.clone());
+            Box::new(Root(roots.clone()).into_view().build(cx))
+        })
+        .expect("create runtime");
+    let cx = zgui_platform_headless::Headless::new();
+    runtime.surfaces_available(&cx);
+    let surface_id = cx.offscreens()[0].id();
+    runtime.surface_event(&cx, surface_id, SurfaceEvent::Focused(true));
+
+    let mut host = SessionHost::new(
+        pending,
+        SessionModule::package(package.package()),
+        SessionPolicy::live(host_services::Executor::new(2, 64).expect("create executor")),
+        RecoveryPolicy::Propagate,
+        SurfaceOpacity::Opaque,
+    );
+    {
+        let mut surface = RuntimeSurface::new(&mut runtime, &cx, ImageChoice::PackageOnly);
+        host.attach(&mut surface, cx.waker(), no_retry()).expect("mount IME app");
+    }
+    let session = host.sessions().next().expect("active session").clone();
+
+    let pump = |runtime: &mut zgui::runtime::Runtime, host: &mut SessionHost| {
+        runtime.surface_event(&cx, surface_id, SurfaceEvent::RedrawRequested);
+        let mut surface = RuntimeSurface::new(runtime, &cx, ImageChoice::PackageOnly);
+        host.checkpoint(&mut surface, no_retry()).expect("checkpoint session");
+        runtime.surface_event(&cx, surface_id, SurfaceEvent::RedrawRequested);
+    };
+    pump(&mut runtime, &mut host);
+
+    let send_key = |runtime: &mut zgui::runtime::Runtime, host: &mut SessionHost, event: KeyEvent| {
+        for state in [KeyState::Pressed, KeyState::Released] {
+            runtime.surface_event(
+                &cx,
+                surface_id,
+                SurfaceEvent::Key {
+                    state,
+                    event: event.clone(),
+                    modifiers: Modifiers::NONE,
+                    timestamp: Timestamp::ORIGIN,
+                },
+            );
+            pump(runtime, host);
+        }
+    };
+
+    // Start IME preedit on focused field.
+    runtime.surface_event(&cx, surface_id, SurfaceEvent::Ime(ImeEvent::Enabled));
+    runtime.surface_event(
+        &cx,
+        surface_id,
+        SurfaceEvent::Ime(ImeEvent::Preedit {
+            text: "にほん".into(),
+            cursor: Some(9..9),
+        }),
+    );
+    pump(&mut runtime, &mut host);
+
+    // During preedit: ArrowDown, Space, Enter, Escape must all carry isComposing === true,
+    // must not trigger guarded JS actions, and Escape must NOT dismiss the modal overlay.
+    send_key(&mut runtime, &mut host, KeyEvent::named(NamedKey::ArrowDown, PhysicalKey::Code(KeyCode::ArrowDown)));
+    send_key(
+        &mut runtime,
+        &mut host,
+        KeyEvent {
+            key: Key::Character(" ".into()),
+            key_without_modifiers: Key::Character(" ".into()),
+            physical: PhysicalKey::Code(KeyCode::Space),
+            location: KeyLocation::Standard,
+            repeat: false,
+        },
+    );
+    send_key(&mut runtime, &mut host, KeyEvent::named(NamedKey::Enter, PhysicalKey::Code(KeyCode::Enter)));
+    send_key(&mut runtime, &mut host, KeyEvent::named(NamedKey::Escape, PhysicalKey::Code(KeyCode::Escape)));
+    session.invoke("assertDuringPreedit").expect("preedit protected keys and Escape dismiss");
+
+    // Commit IME text; subsequent ordinary Enter activates exactly once with isComposing === false.
+    runtime.surface_event(&cx, surface_id, SurfaceEvent::Ime(ImeEvent::Commit("日本".into())));
+    pump(&mut runtime, &mut host);
+
+    send_key(&mut runtime, &mut host, KeyEvent::named(NamedKey::Enter, PhysicalKey::Code(KeyCode::Enter)));
+    session.invoke("assertAfterCommitEnter").expect("post-commit Enter activated once");
+
+    // Subsequent ordinary Escape dismisses the modal overlay once.
+    send_key(&mut runtime, &mut host, KeyEvent::named(NamedKey::Escape, PhysicalKey::Code(KeyCode::Escape)));
+    session.invoke("assertAfterOrdinaryEscape").expect("post-commit Escape dismissed overlay");
+
+    let report = session.retire();
+    assert!(report.failure.is_none(), "teardown failed: {:?}", report.failure);
+    assert_eq!(report.counts.callbacks, 0, "all listeners cleaned up");
+}

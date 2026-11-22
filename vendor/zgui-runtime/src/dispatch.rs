@@ -112,6 +112,25 @@ pub fn run(
     timestamp: Timestamp,
     sink: &mut dyn EventSink,
 ) -> Dispatched {
+    run_with_composing(
+        handlers, steps, kind, target, payload, samples, modifiers, timestamp, false, sink,
+    )
+}
+
+/// Runs the listeners `steps` names, carrying whether an IME composition was active on entry.
+#[allow(clippy::too_many_arguments)]
+pub fn run_with_composing(
+    handlers: &dyn Handlers,
+    steps: &[zgui_input::Step],
+    kind: EventKind,
+    target: Option<zgui_dom::NodeKey>,
+    payload: &Payload,
+    samples: &[zgui_vocab::PointerSample],
+    modifiers: Modifiers,
+    timestamp: Timestamp,
+    composing: bool,
+    sink: &mut dyn EventSink,
+) -> Dispatched {
     let Some(target) = target else {
         return Dispatched {
             called: 0,
@@ -147,7 +166,8 @@ pub fn run(
         let mut cx = EventCx::<zgui_view::event::AnyEvent>::new(
             kind, target, current, step.phase, modifiers, timestamp, payload, &control, sink,
         )
-        .with_samples(samples);
+        .with_samples(samples)
+        .with_composing(composing);
         handler(&mut cx);
         called += 1;
     }

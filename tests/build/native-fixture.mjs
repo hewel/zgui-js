@@ -46,6 +46,7 @@ function eventFamilyDefaults(type, extras) {
       physicalCode: null,
       location: "standard",
       repeat: false,
+      isComposing: false,
     };
   }
   if (type.startsWith("pointer") || type === "contextmenu") {

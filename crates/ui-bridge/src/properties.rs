@@ -49,6 +49,7 @@ pub(crate) enum Mutation {
     Live(Option<Live>),
     Numeric(NumericField, Option<f64>),
     Relation(Relation, Vec<zgui::vocab::NodeId>),
+    ScalarRelation(ScalarRelation, Option<zgui::vocab::NodeId>),
 }
 
 #[derive(Clone, Copy)]
@@ -56,6 +57,18 @@ pub(crate) enum NumericField { Min, Max, Value, Step }
 
 #[derive(Clone, Copy)]
 pub(crate) enum Relation { LabelledBy, DescribedBy, Controls, Owns, RadioGroup, PopupFor }
+
+#[derive(Clone, Copy)]
+pub(crate) enum ScalarRelation { ActiveDescendant }
+
+impl ScalarRelation {
+    pub(crate) fn parse(name: &str) -> Option<Self> {
+        match name {
+            "ariaActiveDescendant" => Some(Self::ActiveDescendant),
+            _ => None,
+        }
+    }
+}
 
 impl Relation {
     pub(crate) fn parse(name: &str) -> Option<Self> {
@@ -455,6 +468,9 @@ impl Properties {
                         Relation::Owns => semantics.relations.owns = targets,
                         Relation::RadioGroup => semantics.relations.radio_group = targets,
                         Relation::PopupFor => semantics.relations.popup_for = targets.first().copied(),
+                    },
+                    Mutation::ScalarRelation(relation, target) => match relation {
+                        ScalarRelation::ActiveDescendant => semantics.relations.active_descendant = target,
                     },
                     Mutation::Role(role) => semantics.role = role,
                     Mutation::Level(level) => semantics.position.level = level,

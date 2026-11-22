@@ -367,6 +367,7 @@ export interface NativeElementProps extends NativeEventProps {
   ariaModal?: boolean | null | undefined;
   ariaHasPopup?: "menu" | "listbox" | "tree" | "grid" | "dialog" | null | undefined;
   ariaPopupFor?: NativeNode | null | undefined;
+  ariaActiveDescendant?: NativeNode | null | undefined;
   orientation?: "horizontal" | "vertical" | null | undefined;
   role?: NativeRole | null | undefined;
   ariaLabel?: string | null | undefined;

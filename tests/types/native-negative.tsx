@@ -233,3 +233,20 @@ createProjection(() => ({ ok: true }), null, { seedLoadingValue: true });
 // @ts-expect-error reconcile returns void, not a data value to consume.
 const reconciledData: number[] = reconcile([1, 2])([0]);
 void reconciledData;
+const negOptionNode = undefined as unknown as NativeNode;
+// @ts-expect-error ariaActiveDescendant is a scalar NativeNode | null | undefined, not an array.
+void <box ariaActiveDescendant={[negOptionNode]} />;
+// @ts-expect-error ariaActiveDescendant rejects string IDs.
+void <box ariaActiveDescendant="option-1" />;
+void (
+  <box
+    onKeyDown={event => {
+      // @ts-expect-error NativeKeyEvent.isComposing is readonly.
+      event.isComposing = true;
+    }}
+    onClick={event => {
+      // @ts-expect-error isComposing is only present on NativeKeyEvent, not pointer events.
+      void event.isComposing;
+    }}
+  />
+);

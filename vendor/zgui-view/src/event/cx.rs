@@ -102,6 +102,8 @@ pub struct EventCx<'a, E: EventView = AnyEvent> {
     bounds: Option<Rect<DevicePx, Device>>,
     /// The pointer moves folded into this one, oldest first. Empty for every other event.
     samples: &'a [PointerSample],
+    /// Whether an input-method composition (preedit) was active when this event arrived.
+    composing: bool,
     /// Which event this context is typed for.
     event: PhantomData<fn() -> E>,
 }
@@ -135,6 +137,7 @@ impl<'a, E: EventView> EventCx<'a, E> {
             sink,
             bounds: None,
             samples: &[],
+            composing: false,
             event: PhantomData,
         }
     }
@@ -151,6 +154,21 @@ impl<'a, E: EventView> EventCx<'a, E> {
     pub fn with_samples(mut self, samples: &'a [PointerSample]) -> Self {
         self.samples = samples;
         self
+    }
+
+    /// Records whether an input-method composition (preedit) was active when this event arrived.
+    #[must_use]
+    pub fn with_composing(mut self, composing: bool) -> Self {
+        self.composing = composing;
+        self
+    }
+
+    /// Whether an input-method composition (preedit) was active when this event arrived.
+    ///
+    /// Always `false` for non-key events and whenever no composition is active.
+    #[must_use]
+    pub fn is_composing(&self) -> bool {
+        self.composing
     }
 
     /// The pointer moves folded into this one, oldest first, and not including this one.
@@ -265,6 +283,7 @@ impl<'a, E: EventView> EventCx<'a, E> {
             sink: &mut *self.sink,
             bounds: self.bounds,
             samples: self.samples,
+            composing: self.composing,
             event: PhantomData,
         }
     }
@@ -387,5 +406,28 @@ mod tests {
         ev.stop_immediate_propagation();
         ev.stop_propagation();
         assert_eq!(control.propagation(), Propagation::StopImmediate);
+    }
+
+    #[test]
+    fn composing_flag_defaults_false_and_survives_retype() {
+        let payload = Payload::Text(TextEvent::new(""));
+        let control = EventControl::new();
+        let mut sink = DiscardCommands;
+        let mut ev = EventCx::<crate::event::AnyEvent>::new(
+            events::TEXT.kind(),
+            node(),
+            node(),
+            Phase::Target,
+            Modifiers::NONE,
+            Timestamp::ORIGIN,
+            &payload,
+            &control,
+            &mut sink,
+        );
+        assert!(!ev.is_composing());
+        let mut composing = ev.with_composing(true);
+        assert!(composing.is_composing());
+        let retyped: EventCx<'_, Text> = composing.retype();
+        assert!(retyped.is_composing());
     }
 }

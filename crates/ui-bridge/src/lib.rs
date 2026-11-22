@@ -1019,6 +1019,31 @@ impl UiBridge {
                 }
                 return bridge.events.borrow_mut().set(&ctx, handle, native, &name, value, bridge.event_dispatcher.clone());
             }
+            if let Some(relation) = properties::ScalarRelation::parse(&name) {
+                let target_handle = scalar_relation_handle(&ctx, &name, value)?;
+                let (dom, native, target_native) = {
+                    let registry = bridge.registry.borrow();
+                    let source_native = registry.native(handle).map_err(|e| host_error(&ctx, e))?;
+                    if registry.is_text(handle).map_err(|e| host_error(&ctx, e))? {
+                        return Err(Exception::throw_type(&ctx, &format!("{name} cannot be set on a raw text node")));
+                    }
+                    let target_native = match target_handle {
+                        Some(target) => {
+                            let native = registry.native(target).map_err(|e| host_error(&ctx, e))?;
+                            if registry.is_text(target).map_err(|e| host_error(&ctx, e))? {
+                                return Err(Exception::throw_type(&ctx, &format!("{name} target cannot be a raw text node")));
+                            }
+                            Some(zgui::vocab::NodeId(native.as_u64()))
+                        }
+                        None => None,
+                    };
+                    (registry.dom_handle(), source_native, target_native)
+                };
+                let mutation = properties::Mutation::ScalarRelation(relation, target_native);
+                let result = bridge.properties.borrow_mut().apply(&dom, native, handle.token(), mutation);
+                bridge.style_result(&ctx, result)?;
+                return Ok(());
+            }
             if let Some(relation) = properties::Relation::parse(&name) {
                 if matches!(relation, properties::Relation::PopupFor) && value.is_array() {
                     return Err(Exception::throw_type(&ctx, "ariaPopupFor requires a native node, null, or undefined"));
@@ -1695,6 +1720,29 @@ fn bounded_array_len<'js>(ctx: &Ctx<'js>, array: &rquickjs::Array<'js>, limit: u
     Ok(length)
 }
 
+fn scalar_relation_handle<'js>(ctx: &Ctx<'js>, name: &str, value: Value<'js>) -> rquickjs::Result<Option<Handle>> {
+    if value.is_null() || value.is_undefined() {
+        return Ok(None);
+    }
+    if value.is_array() {
+        return Err(Exception::throw_type(
+            ctx,
+            &format!("{name} requires a native element node, null, or undefined"),
+        ));
+    }
+    let handle = value
+        .as_object()
+        .and_then(|object| object.as_class::<NativeNode>())
+        .map(|class| class.borrow().handle)
+        .ok_or_else(|| {
+            Exception::throw_type(
+                ctx,
+                &format!("{name} requires a native element node, null, or undefined"),
+            )
+        })?;
+    Ok(Some(handle))
+}
+
 fn relation_handles<'js>(ctx: &Ctx<'js>, value: Value<'js>, limit: usize) -> rquickjs::Result<Vec<Handle>> {
     let node = |ctx: &Ctx<'js>, value: Value<'js>| -> rquickjs::Result<Handle> {
         value.as_object()
@@ -1995,5 +2043,363 @@ mod group_tests {
         // Disposal clears remaining subscribers with zero leaks.
         bridge.dispose();
         assert_eq!(bridge.background_blur_subscriber_count(), 0);
+    }
+
+    #[test]
+    fn aria_active_descendant_validates_atomically_and_rejects_invalid_targets() {
+        let mut engine = JsRuntime::new(RuntimeLimits::default()).expect("create JS engine");
+        let document = Rc::new(RefCell::new(Document::new()));
+        let backend = Rc::new(DocumentDom::new(document.clone()));
+        let dom = DomHandle::from_rc(backend.clone());
+        let root = dom.create_element(ElementName::new("column"));
+        dom.insert(backend.root_node(), root, None);
+        let bridge = UiBridge::new(
+            NodeRegistry::new(dom, root, 1, 1, 64),
+            HostHandle::from_rc(Rc::new(StubHost::default())),
+            HostPort::queued(),
+        );
+
+        // Second document / session for cross-document & cross-session rejection.
+        let other_doc = Rc::new(RefCell::new(Document::new()));
+        let other_backend = Rc::new(DocumentDom::new(other_doc));
+        let other_dom = DomHandle::from_rc(other_backend.clone());
+        let other_root = other_dom.create_element(ElementName::new("column"));
+        other_dom.insert(other_backend.root_node(), other_root, None);
+        let other_bridge = UiBridge::new(
+            NodeRegistry::new(other_dom, other_root, 2, 1, 16),
+            HostHandle::from_rc(Rc::new(StubHost::default())),
+            HostPort::queued(),
+        );
+
+        engine
+            .with_context(|ctx| {
+                ctx.globals().set("__zgui", bridge.api(&ctx)?)?;
+                ctx.globals().set("root", bridge.root(&ctx)?)?;
+                ctx.globals().set("__other", other_bridge.api(&ctx)?)?;
+                ctx.globals().set("otherRoot", other_bridge.root(&ctx)?)
+            })
+            .expect("install bridges");
+
+        other_bridge
+            .run_turn(engine.turn(), |_, js| {
+                js.evaluate_script(
+                    r#"
+                    globalThis.__foreignOpt = __other.createElement('control');
+                    __other.insertNode(otherRoot, globalThis.__foreignOpt, null);
+                    'ok';
+                "#,
+                )
+            })
+            .expect("create foreign node");
+
+        bridge
+            .run_turn(engine.turn(), |_, js| {
+                js.evaluate_script(
+                    r#"
+                    const combo = __zgui.createElement('field');
+                    const list = __zgui.createElement('column');
+                    const opt1 = __zgui.createElement('control');
+                    const textEl = __zgui.createElement('text');
+                    const rawText = __zgui.createTextNode('hello');
+                    const deadOpt = __zgui.createElement('control');
+                    __zgui.insertNode(list, opt1, null);
+                    __zgui.insertNode(list, textEl, null);
+                    __zgui.insertNode(list, deadOpt, null);
+                    __zgui.insertNode(root, combo, null);
+                    __zgui.insertNode(root, list, null);
+                    __zgui.insertNode(textEl, rawText, null);
+                    // Remove deadOpt so finish_turn reclaims it.
+                    __zgui.removeNode(list, deadOpt);
+
+                    globalThis.__combo = combo;
+                    globalThis.__opt1 = opt1;
+                    globalThis.__textEl = textEl;
+                    globalThis.__rawText = rawText;
+                    globalThis.__deadOpt = deadOpt;
+
+                    // Sibling option (no physical parent-child ancestry, no layout yet) is valid.
+                    __zgui.setProperty(combo, 'ariaActiveDescendant', opt1);
+                    'ok';
+                "#,
+                )
+            })
+            .expect("set initial valid ariaActiveDescendant");
+
+        let read_active_descendant = |doc: &Rc<RefCell<Document>>, native: zgui::view::NodeId| {
+            let key = zgui_view_dom::id::to_document(native).expect("document node key");
+            doc.borrow()
+                .store()
+                .columns()
+                .semantics
+                .get(key)
+                .and_then(|slot| slot.as_deref())
+                .and_then(|semantics| semantics.relations.active_descendant)
+        };
+
+        let (combo_native, opt1_native, text_el_native) = {
+            let registry = bridge.registry.borrow();
+            let combo_h = registry.first_child(registry.root()).unwrap().unwrap();
+            let list_h = registry.next_sibling(combo_h).unwrap().unwrap();
+            let opt1_h = registry.first_child(list_h).unwrap().unwrap();
+            let text_el_h = registry.next_sibling(opt1_h).unwrap().unwrap();
+            (
+                registry.native(combo_h).unwrap(),
+                registry.native(opt1_h).unwrap(),
+                registry.native(text_el_h).unwrap(),
+            )
+        };
+        assert_eq!(
+            read_active_descendant(&document, combo_native),
+            Some(zgui::vocab::NodeId(opt1_native.as_u64())),
+            "valid sibling target must be stored on semantics.relations.active_descendant"
+        );
+
+        // Every invalid target must throw TypeError atomically and leave opt1 intact!
+        bridge
+            .run_turn(engine.turn(), |_, js| {
+                js.evaluate_script(
+                    r#"
+                    const invalidTargets = [
+                        [],
+                        [__opt1],
+                        'option-1',
+                        123,
+                        true,
+                        {},
+                        { __native: 1 },
+                        __rawText,
+                        __deadOpt,
+                        __foreignOpt,
+                    ];
+                    for (const bad of invalidTargets) {
+                        let caught = null;
+                        try {
+                            __zgui.setProperty(__combo, 'ariaActiveDescendant', bad);
+                        } catch (error) {
+                            caught = error;
+                        }
+                        if (!(caught instanceof TypeError)) {
+                            throw Error('expected TypeError for invalid target, got: ' + caught);
+                        }
+                    }
+                    // Setting ariaActiveDescendant on a raw text source node must also throw TypeError.
+                    let sourceErr = null;
+                    try {
+                        __zgui.setProperty(__rawText, 'ariaActiveDescendant', __opt1);
+                    } catch (error) {
+                        sourceErr = error;
+                    }
+                    if (!(sourceErr instanceof TypeError)) {
+                        throw Error('expected TypeError for raw text source, got: ' + sourceErr);
+                    }
+                    'ok';
+                "#,
+                )
+            })
+            .expect("invalid targets rejected with TypeError");
+
+        assert_eq!(
+            read_active_descendant(&document, combo_native),
+            Some(zgui::vocab::NodeId(opt1_native.as_u64())),
+            "failed assignments must preserve previous active_descendant atomically"
+        );
+
+        // `<text>` element (Kind::Element, not raw text) IS valid.
+        bridge
+            .run_turn(engine.turn(), |_, js| {
+                js.evaluate_script(
+                    r#"
+                    __zgui.setProperty(__combo, 'ariaActiveDescendant', __textEl);
+                    'ok';
+                "#,
+                )
+            })
+            .expect("<text> element is a valid target");
+        assert_eq!(
+            read_active_descendant(&document, combo_native),
+            Some(zgui::vocab::NodeId(text_el_native.as_u64()))
+        );
+
+        // null clears, then set again and undefined clears.
+        bridge
+            .run_turn(engine.turn(), |_, js| {
+                js.evaluate_script(
+                    r#"
+                    __zgui.setProperty(__combo, 'ariaActiveDescendant', null);
+                    'ok';
+                "#,
+                )
+            })
+            .expect("null clears ariaActiveDescendant");
+        assert_eq!(read_active_descendant(&document, combo_native), None);
+
+        bridge
+            .run_turn(engine.turn(), |_, js| {
+                js.evaluate_script(
+                    r#"
+                    __zgui.setProperty(__combo, 'ariaActiveDescendant', __opt1);
+                    __zgui.setProperty(__combo, 'ariaActiveDescendant', undefined);
+                    'ok';
+                "#,
+                )
+            })
+            .expect("undefined clears ariaActiveDescendant");
+        assert_eq!(read_active_descendant(&document, combo_native), None);
+
+        bridge.dispose();
+        other_bridge.dispose();
+    }
+
+    #[test]
+    fn key_event_is_composing_reaches_js_and_guards_capture_escape_dismiss() {
+        let mut engine = JsRuntime::new(RuntimeLimits::default()).expect("create JS engine");
+        let document = Rc::new(RefCell::new(Document::new()));
+        let backend = Rc::new(DocumentDom::new(document.clone()));
+        let dom = DomHandle::from_rc(backend.clone());
+        let doc_root = backend.root_node();
+        let root = dom.create_element(ElementName::new("column"));
+        dom.insert(doc_root, root, None);
+        let bridge = UiBridge::new(
+            NodeRegistry::new(dom, root, 1, 1, 32),
+            HostHandle::from_rc(Rc::new(StubHost::default())),
+            HostPort::queued(),
+        );
+        engine
+            .with_context(|ctx| {
+                ctx.globals().set("__zgui", bridge.api(&ctx)?)?;
+                ctx.globals().set("root", bridge.root(&ctx)?)
+            })
+            .expect("install bridge");
+
+        bridge
+            .run_turn(engine.turn(), |_, js| {
+                js.evaluate_script(
+                    r#"
+                    const overlay = __zgui.createElement('box');
+                    const field = __zgui.createElement('field');
+                    __zgui.insertNode(overlay, field, null);
+                    __zgui.insertNode(root, overlay, null);
+                    globalThis.__events = [];
+                    globalThis.__dismisses = [];
+                    __zgui.setProperty(field, 'onKeyDown', e => {
+                        globalThis.__events.push(['down', e.key, e.isComposing]);
+                    });
+                    __zgui.setProperty(field, 'onKeyUp', e => {
+                        globalThis.__events.push(['up', e.key, e.isComposing]);
+                    });
+                    __zgui.registerDismissLayer(
+                        overlay,
+                        reason => globalThis.__dismisses.push(reason),
+                        { layer: 'modal', dismissOnOutsidePress: false, dismissOnEscape: true, exclude: null, leaving: false }
+                    );
+                    'ok';
+                "#,
+                )
+            })
+            .expect("mount overlay + field + dismiss layer");
+
+        let field_native = {
+            let registry = bridge.registry.borrow();
+            let overlay_h = registry.first_child(registry.root()).unwrap().unwrap();
+            let field_h = registry.first_child(overlay_h).unwrap().unwrap();
+            registry.native(field_h).unwrap()
+        };
+
+        let listeners_for = |node: zgui::view::NodeId, kind: zgui::vocab::EventKind, capture: bool| {
+            let key = zgui_view_dom::id::to_document(node).expect("document key");
+            let doc = document.borrow();
+            let Some(table) = doc.store().columns().listeners.get(key) else {
+                return Vec::new();
+            };
+            table
+                .iter()
+                .filter(|listener| listener.kind == kind && listener.options.capture == capture)
+                .filter_map(|listener| backend.handler(listener.id))
+                .collect::<Vec<_>>()
+        };
+
+        let dispatch_key = |kind: zgui::vocab::EventKind, key: zgui::vocab::NamedKey, code: zgui::vocab::KeyCode, composing: bool| {
+            let payload = zgui::vocab::Payload::Key(zgui::vocab::KeyEvent::named(
+                key,
+                zgui::vocab::PhysicalKey::Code(code),
+            ));
+            let control = zgui::view::EventControl::new();
+            let mut sink = zgui::view::DiscardCommands;
+            // Capture phase on document root (where Dismissals attaches its window listener).
+            for listener in listeners_for(doc_root, kind, true) {
+                let mut cx = zgui::view::EventCx::<zgui::view::AnyEvent>::new(
+                    kind,
+                    field_native,
+                    doc_root,
+                    zgui::vocab::Phase::Capture,
+                    zgui::vocab::Modifiers::NONE,
+                    zgui::vocab::Timestamp::ORIGIN,
+                    &payload,
+                    &control,
+                    &mut sink,
+                )
+                .with_composing(composing);
+                listener(&mut cx);
+            }
+            if control.propagation().continues_to_next_element() {
+                for listener in listeners_for(field_native, kind, false) {
+                    let mut cx = zgui::view::EventCx::<zgui::view::AnyEvent>::new(
+                        kind,
+                        field_native,
+                        field_native,
+                        zgui::vocab::Phase::Target,
+                        zgui::vocab::Modifiers::NONE,
+                        zgui::vocab::Timestamp::ORIGIN,
+                        &payload,
+                        &control,
+                        &mut sink,
+                    )
+                    .with_composing(composing);
+                    listener(&mut cx);
+                }
+            }
+            control.propagation()
+        };
+
+        let flush_all = |engine: &mut JsRuntime| {
+            while bridge.has_queued_notifications().expect("no queue overflow") {
+                bridge
+                    .flush_notification(engine.turn(), |js, cb| js.with_context(|ctx| cb.call(&ctx)))
+                    .expect("flush queued event");
+            }
+        };
+
+        // Escape during IME composition must NOT dismiss or stop propagation, and reaches JS with isComposing === true.
+        let prop = dispatch_key(zgui::vocab::EventKind::KeyDown, zgui::vocab::NamedKey::Escape, zgui::vocab::KeyCode::Escape, true);
+        assert!(prop.continues_to_next_element(), "composing Escape must not be captured by dismiss layer");
+        dispatch_key(zgui::vocab::EventKind::KeyUp, zgui::vocab::NamedKey::Escape, zgui::vocab::KeyCode::Escape, true);
+        flush_all(&mut engine);
+
+        let state = bridge
+            .run_turn(engine.turn(), |_, js| {
+                js.evaluate_script("JSON.stringify({ events: globalThis.__events, dismisses: globalThis.__dismisses })")
+            })
+            .expect("read state after composing escape");
+        assert_eq!(
+            state,
+            r#"{"events":[["down","Escape",true],["up","Escape",true]],"dismisses":[]}"#
+        );
+
+        // Ordinary Escape (isComposing === false) triggers capture-phase dismiss and stops propagation!
+        let prop = dispatch_key(zgui::vocab::EventKind::KeyDown, zgui::vocab::NamedKey::Escape, zgui::vocab::KeyCode::Escape, false);
+        assert!(!prop.continues_to_next_element(), "non-composing Escape must be captured by dismiss layer");
+        flush_all(&mut engine);
+
+        let state = bridge
+            .run_turn(engine.turn(), |_, js| {
+                js.evaluate_script("JSON.stringify({ events: globalThis.__events, dismisses: globalThis.__dismisses })")
+            })
+            .expect("read state after ordinary escape");
+        assert_eq!(
+            state,
+            r#"{"events":[["down","Escape",true],["up","Escape",true]],"dismisses":["escape"]}"#
+        );
+
+        bridge.dispose();
     }
 }

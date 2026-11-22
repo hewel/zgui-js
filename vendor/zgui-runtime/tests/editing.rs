@@ -572,3 +572,98 @@ fn a_field_focused_before_its_first_layout_enables_text_input() {
         "text input stayed disabled for a field focused before its first layout"
     );
 }
+
+#[test]
+fn key_events_carry_is_composing_during_ime_preedit_and_clear_after_commit() {
+    use std::cell::RefCell;
+
+    let editor = NodeRef::new();
+    let log: Rc<RefCell<Vec<(&'static str, bool)>>> = Rc::new(RefCell::new(Vec::new()));
+    let captured_log = Rc::clone(&log);
+    let mut harness = support::app_with_text(CSS, move |cx: &mut BuildCx<'_>| {
+        let down_log = Rc::clone(&captured_log);
+        let up_log = Rc::clone(&captured_log);
+        let view = zgui_elements::column()
+            .class("root")
+            .child(
+                zgui_elements::editor()
+                    .node_ref(editor)
+                    .on(zgui_view::events::KEY_DOWN, move |ev| {
+                        down_log.borrow_mut().push(("down", ev.is_composing()));
+                    })
+                    .on(zgui_view::events::KEY_UP, move |ev| {
+                        up_log.borrow_mut().push(("up", ev.is_composing()));
+                    })
+                    .child(""),
+            )
+            .into_view()
+            .build(cx);
+        editor.focus();
+        Box::new(view)
+    });
+    harness.settle(8);
+    let send_key = |harness: &mut zgui_platform_headless::Harness<zgui_runtime::Runtime>,
+                    state: KeyState,
+                    key: NamedKey,
+                    code: KeyCode| {
+        harness.deliver_to_first(SurfaceEvent::Key {
+            state,
+            event: KeyEvent::named(key, PhysicalKey::Code(code)),
+            modifiers: Modifiers::NONE,
+            timestamp: Timestamp::ORIGIN,
+        });
+        harness.settle(4);
+    };
+
+    // Before composition: keydown + keyup carry is_composing() == false.
+    send_key(&mut harness, KeyState::Pressed, NamedKey::Enter, KeyCode::Enter);
+    send_key(&mut harness, KeyState::Released, NamedKey::Enter, KeyCode::Enter);
+    assert_eq!(
+        *log.borrow(),
+        vec![("down", false), ("up", false)],
+        "ordinary keys must report is_composing = false"
+    );
+    log.borrow_mut().clear();
+
+    // Preedit active: both keydown and keyup carry is_composing() == true.
+    harness.deliver_to_first(SurfaceEvent::Ime(ImeEvent::Enabled));
+    harness.deliver_to_first(SurfaceEvent::Ime(ImeEvent::Preedit {
+        text: "にほん".into(),
+        cursor: Some(9..9),
+    }));
+    harness.settle(4);
+
+    for (key, code) in [
+        (NamedKey::ArrowDown, KeyCode::ArrowDown),
+        (NamedKey::Enter, KeyCode::Enter),
+        (NamedKey::Escape, KeyCode::Escape),
+    ] {
+        send_key(&mut harness, KeyState::Pressed, key, code);
+        send_key(&mut harness, KeyState::Released, key, code);
+    }
+    assert_eq!(
+        *log.borrow(),
+        vec![
+            ("down", true),
+            ("up", true),
+            ("down", true),
+            ("up", true),
+            ("down", true),
+            ("up", true),
+        ],
+        "keys during active IME preedit must report is_composing = true on both down and up"
+    );
+    log.borrow_mut().clear();
+
+    // Commit clears composition: subsequent Enter reports is_composing() == false.
+    harness.deliver_to_first(SurfaceEvent::Ime(ImeEvent::Commit("日本".into())));
+    harness.settle(4);
+    send_key(&mut harness, KeyState::Pressed, NamedKey::Enter, KeyCode::Enter);
+    send_key(&mut harness, KeyState::Released, NamedKey::Enter, KeyCode::Enter);
+    assert_eq!(
+        *log.borrow(),
+        vec![("down", false), ("up", false)],
+        "keys after IME commit must report is_composing = false"
+    );
+    harness.shut_down();
+}
