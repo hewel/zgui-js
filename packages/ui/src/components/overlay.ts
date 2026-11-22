@@ -10,6 +10,7 @@ import {
   useContext,
 } from "#solid";
 import { createElement, mergeProps, setProp, spread } from "../renderer/index.js";
+import { sameDocument } from "../host.js";
 import { lockScroll, trapFocus } from "../nodes.js";
 import { allocatePortal } from "../portal.js";
 import type {
@@ -175,13 +176,16 @@ function mountOverlay(
                 if (config.onDismiss) config.onDismiss(reason);
                 else context.setOpen(false);
               },
-              () => ({
-                layer: elevation.layer,
-                dismissOnOutsidePress: props.dismissOnOutsidePress ?? true,
-                dismissOnEscape: props.dismissOnEscape ?? true,
-                exclude: context.trigger.node(),
-                leaving: !context.open(),
-              }),
+              () => {
+                const trigger = context.trigger.node();
+                return {
+                  layer: elevation.layer,
+                  dismissOnOutsidePress: props.dismissOnOutsidePress ?? true,
+                  dismissOnEscape: props.dismissOnEscape ?? true,
+                  exclude: sameDocument(surface, trigger) ? trigger : null,
+                  leaving: !context.open(),
+                };
+              },
             );
             if (config.lock)
               createEffect(
@@ -198,7 +202,8 @@ function mountOverlay(
                     role: config.role,
                     ariaModal: config.trap ?? false,
                     get ariaPopupFor() {
-                      return context.trigger.node();
+                      const trigger = context.trigger.node();
+                      return sameDocument(surface, trigger) ? trigger : null;
                     },
                     get "data-state"() {
                       return presence.state();

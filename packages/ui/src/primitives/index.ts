@@ -30,13 +30,16 @@ export type {
 } from "./overlay.js";
 
 export {
+  headingToward,
   MenuCheckboxItemPrimitive,
   MenuItemPrimitive,
   MenuListPrimitive,
   MenuRadioGroupPrimitive,
   MenuRadioItemPrimitive,
   MenuRootPrimitive,
+  MenuSubContentPrimitive,
   MenuSubPrimitive,
+  MenuSubTriggerPrimitive,
 } from "./menu.js";
 export type {
   MenuCheckboxItemPrimitiveProps,
@@ -47,6 +50,8 @@ export type {
   MenuRadioGroupPrimitiveProps,
   MenuRadioItemPrimitiveProps,
   MenuRootPrimitiveProps,
+  MenuSubContentPrimitiveProps,
   MenuSubPrimitiveProps,
+  MenuSubTriggerPrimitiveProps,
   MenuSurfaceContextValue,
 } from "./menu.js";

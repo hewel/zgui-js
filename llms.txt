@@ -50,7 +50,7 @@ Zero-stylesheet behavioral primitives decoupled from `Portal`, `Popper`, and bui
 
 - **Overlay, Presence, Focus & Delay**: `createPresence`, `createRetainedPresence`, `createOverlayState`, `createDismissLayer`, `createRovingFocus`, `createVirtualFocus`, `groupOrientation`, `createDelayed`
 - **Headless Radio**: `RadioGroupPrimitive`, `RadioItemPrimitive` (unstyled `role="radioGroup"` / `role="radioButton"` with roving tabindex, arbitrary children, and zero built-in styles)
-- **Headless Menu**: `MenuRootPrimitive`, `MenuListPrimitive`, `MenuItemPrimitive`, `MenuCheckboxItemPrimitive`, `MenuRadioGroupPrimitive`, `MenuRadioItemPrimitive`, `MenuSubPrimitive` (expose `data-state`, `data-highlighted`, `data-disabled` styling hooks)
+- **Headless Menu**: `MenuRootPrimitive`, `MenuListPrimitive`, `MenuItemPrimitive`, `MenuCheckboxItemPrimitive`, `MenuRadioGroupPrimitive`, `MenuRadioItemPrimitive`, `MenuSubPrimitive`, `MenuSubTriggerPrimitive`, `MenuSubContentPrimitive`, `headingToward` (expose `data-state`, `data-highlighted`, `data-disabled` styling hooks; automatically wire `ariaControls`/`ariaPopupFor`/dismiss `exclude` and DPI-aware `headingToward` hover corridors within one native document while omitting foreign node links and using the 180 ms leave grace timer across distinct `PopupSurface` documents)
 
 ## Router (`@hewel/zgui/router`)
 

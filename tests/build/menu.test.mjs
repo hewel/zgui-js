@@ -1156,7 +1156,11 @@ test("controlled submenu requests, vetoes, disabled state and stale callbacks", 
   key(keep, { key: "ArrowLeft" });
   assert.deepEqual(mod.log.subOpens, [true, true, false], "ArrowLeft requests the branch close");
   assert.equal(h.byTestId("sub-surface"), subSurface, "a refused request keeps the surface");
-  assert.equal(h.focused.current, subTrigger, "ArrowLeft still returns focus to the trigger");
+  assert.equal(
+    h.focused.current,
+    keep,
+    "a refused controlled close keeps focus inside the submenu",
+  );
   mod.setVeto(true);
   h.flush();
   h.host.focus(keep);

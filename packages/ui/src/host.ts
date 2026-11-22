@@ -460,6 +460,21 @@ export function rememberBridge(node: NativeNode, bridge: UiBridge): NativeNode {
   return node;
 }
 
+/**
+ * Returns true iff both nodes belong to the same native document/bridge.
+ * Distinct `PopupSurface` / `LayerSurface` / `WindowSurface` regions own distinct bridges,
+ * whereas `Portal` shares its host document's bridge.
+ */
+export function sameDocument(
+  first: NativeNode | null | undefined,
+  second: NativeNode | null | undefined,
+): boolean {
+  if (!first || !second) return false;
+  const firstBridge = nodeBridges.get(first);
+  if (!firstBridge) return false;
+  return firstBridge === nodeBridges.get(second);
+}
+
 export function provideRegion(bridge: UiBridge, mount: () => void): void {
   const wasEmpty = regionProviders === 0;
   regionProviders += 1;

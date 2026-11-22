@@ -1,6 +1,9 @@
 import { Image, LayerSurface, PopupSurface, SessionLockSurface, TextField, TextArea, WindowSurface, createCanvasScene, createProjection, createSpring, createStore, getBackgroundBlurSupported, getSessionGeneration, reconcile, renderApp, renderShell, requestSessionLock, useMonitors } from "@hewel/zgui";
 import type { BlurRegion, NativeElementProps, NativeNode } from "@hewel/zgui";
 import {
+  headingToward,
+  MenuSubContentPrimitive,
+  MenuSubTriggerPrimitive,
   RadioGroupPrimitive,
   RadioItemPrimitive,
   createRetainedPresence,
@@ -277,3 +280,9 @@ void <RadioGroupPrimitive orientation="diagonal" />;
 void <box inert="true" />;
 // @ts-expect-error inert rejects numeric values.
 void <control inert={1} />;
+// @ts-expect-error MenuSubTriggerPrimitive is headless and does not accept styled inset prop.
+void <MenuSubTriggerPrimitive inset />;
+// @ts-expect-error MenuSubContentPrimitive orientation uses GroupOrientation, not arbitrary strings.
+void <MenuSubContentPrimitive orientation="diagonal" />;
+// @ts-expect-error headingToward requires a target NativeWindowRect with width and height.
+headingToward({ x: 0, y: 0 }, { x: 10, y: 10 }, { x: 20, y: 0 });

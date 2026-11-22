@@ -11,6 +11,7 @@ import type {
   NativeRole,
 } from "../types.js";
 import {
+  closeDeepestMenuSub,
   createMenuRow,
   createMenuTypeahead,
   MenuHierarchyContext,
@@ -201,6 +202,7 @@ export function renderMenuSurface(
 ): NativeChild {
   if (options.extraSheet) useStylesheet(options.extraSheet);
   useStylesheet(menuSheet);
+  const hierarchy = useContext(MenuHierarchyContext);
   const trap = options.trap ?? true;
   const rest = omit(props, "children");
   return anchoredSurface(state, rest, {
@@ -208,7 +210,13 @@ export function renderMenuSurface(
     role: "menu",
     trap,
     surfaceClass: options.surfaceClass,
-    onDismiss: options.onDismiss,
+    onDismiss(reason) {
+      if (reason === "escape" && closeDeepestMenuSub(hierarchy, "escape")) {
+        return;
+      }
+      if (options.onDismiss) options.onDismiss(reason);
+      else state?.setOpen(false);
+    },
     children() {
       const roving = createRovingFocus(() => "vertical", "active");
       if (!trap) {

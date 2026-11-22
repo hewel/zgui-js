@@ -1,24 +1,32 @@
-import { onCleanup, omit, untrack } from "#solid";
-import { memo, mergeProps } from "../renderer/index.js";
-import { focus, getWindowRect, observeGeometry } from "../nodes.js";
+import { omit, untrack, useContext } from "#solid";
+import { createElement, memo, mergeProps, setProp } from "../renderer/index.js";
+import { trapFocus } from "../nodes.js";
 import type {
+  NativeAnimationEvent,
   NativeChild,
   NativeElementProps,
-  NativeKeyEvent,
   NativeNode,
-  NativePointerBoundaryEvent,
-  NativePointerEvent,
-  NativePoint,
-  NativeWindowRect,
+  NativeTransitionEvent,
 } from "../types.js";
-import type { OverlayRootProps } from "./overlay.js";
-import { createDelayed } from "./delay.js";
-import { callHandler } from "./state.js";
-import { append, classes, slot, withDefaults } from "./shared.js";
+import { createPresence } from "../primitives/overlay.js";
+import {
+  headingToward,
+  MenuHierarchyContext,
+  MenuSubContentPrimitive,
+  MenuSubPrimitive,
+  MenuSubTriggerPrimitive,
+  shouldAutoFocusMenuSub,
+} from "../primitives/menu.js";
+import { overlayPortal, raiseSurface, type OverlayRootProps } from "./overlay.js";
+import { Popper } from "./popper.js";
+import { append, classes, slot, useStylesheet, withDefaults } from "./shared.js";
 import { Icon } from "./icons.js";
 import { CHEVRON_RIGHT } from "./generated/icons.js";
+import { sheet as menuSheet } from "./generated/MenuStyle.js";
+import { sheet as overlaySheet } from "./generated/OverlayStyle.js";
 import type { MenuContentProps } from "./menu.js";
-import { menuRow, provideMenuSub, renderMenuSurface, useMenuSub } from "./menu-core.js";
+
+export { headingToward };
 
 export type MenuSubProps = OverlayRootProps;
 export interface MenuSubTriggerProps extends NativeElementProps {
@@ -27,58 +35,17 @@ export interface MenuSubTriggerProps extends NativeElementProps {
 export type MenuSubContentProps = MenuContentProps;
 
 export function MenuSub(props: MenuSubProps = {}): NativeChild {
-  return provideMenuSub(props);
-}
-
-export function headingToward(
-  from: NativePoint,
-  to: NativePoint,
-  target: NativeWindowRect,
-): boolean {
-  const near = from.x <= target.x ? target.x : target.x + target.width;
-  const top = { x: near, y: target.y },
-    bottom = { x: near, y: target.y + target.height };
-  const cross = (a: NativePoint, b: NativePoint) =>
-    (b.x - a.x) * (to.y - a.y) - (b.y - a.y) * (to.x - a.x);
-  const first = cross(from, top),
-    second = cross(top, bottom),
-    third = cross(bottom, from);
-  return !((first < 0 || second < 0 || third < 0) && (first > 0 || second > 0 || third > 0));
+  return MenuSubPrimitive(props);
 }
 
 export function MenuSubTrigger(props: MenuSubTriggerProps = {}): NativeNode {
-  const sub = useMenuSub(),
-    state = sub?.state;
-  const opening = createDelayed(),
-    closing = sub?.closing ?? createDelayed();
-  const rest = omit(props, "children", "inset", "onPointerMove", "onKeyDown");
-  let alive = true,
-    scale = 1;
-  let last: NativePoint = { x: 0, y: 0 };
-  onCleanup(() => {
-    alive = false;
-    opening.cancel();
-    if (!sub) closing.cancel();
-  });
-  const device = (point: NativePoint): NativePoint => ({
-    x: Math.fround(point.x * scale),
-    y: Math.fround(point.y * scale),
-  });
-  const node = menuRow(
+  useStylesheet(menuSheet);
+  const rest = omit(props, "children", "inset");
+  const node = MenuSubTriggerPrimitive(
     mergeProps(
       rest,
       withDefaults(
         {
-          ariaHasPopup: "menu" as const,
-          get expanded() {
-            return state?.open() ?? false;
-          },
-          get ariaControls() {
-            return state?.content.node() ?? null;
-          },
-          get "data-state"() {
-            return state?.open() ? "open" : "closed";
-          },
           get "data-inset"() {
             return props.inset ? "true" : null;
           },
@@ -86,68 +53,12 @@ export function MenuSubTrigger(props: MenuSubTriggerProps = {}): NativeNode {
         rest,
       ),
       {
-        onPointerMove(event: NativePointerEvent) {
-          if (callHandler(event, props.onPointerMove) && alive) last = device(event.position);
-        },
-        onKeyDown(event: NativeKeyEvent) {
-          if (
-            !callHandler(event, props.onKeyDown) ||
-            !alive ||
-            rest.disabled ||
-            !state ||
-            event.character != null
-          )
-            return;
-          if (event.key === "ArrowRight" || event.key === "Enter" || event.key === " ") {
-            event.preventDefault();
-            event.stopPropagation();
-            state.setOpen(true);
-          }
+        get __zguiClass() {
+          return classes("zui-menu__item", props.inset && "zui-menu__item--inset");
         },
       },
     ),
-    {
-      role: "menuItem",
-      class: () => classes(props.inset && "zui-menu__item--inset"),
-      activateOnPress: false,
-      select() {
-        opening.cancel();
-        closing.cancel();
-        state?.setOpen(true);
-      },
-      enter(activate) {
-        closing.cancel();
-        activate();
-        if (alive && state)
-          opening.after(120, () => {
-            if (alive) state.setOpen(true);
-          });
-      },
-      leave(event, defocus) {
-        opening.cancel();
-        if (!state?.open()) {
-          defocus();
-          return;
-        }
-        const surface = state.content.node();
-        const rect = surface ? getWindowRect(surface) : null;
-        if (
-          rect &&
-          headingToward(last, device(event.position), {
-            ...device(rect),
-            width: Math.fround(rect.width * scale),
-            height: Math.fround(rect.height * scale),
-          })
-        )
-          return;
-        closing.after(180, () => state.setOpen(false));
-      },
-    },
   );
-  state?.trigger.ref(node);
-  observeGeometry(node, "viewport", viewport => {
-    scale = viewport.scale;
-  });
   slot(
     node,
     memo(() => props.children),
@@ -157,54 +68,76 @@ export function MenuSubTrigger(props: MenuSubTriggerProps = {}): NativeNode {
 }
 
 export function MenuSubContent(props: MenuSubContentProps = {}): NativeChild {
-  const sub = useMenuSub(),
-    state = sub?.state;
-  const rest = omit(props, "onPointerEnter", "onKeyDown");
-  let alive = true;
-  onCleanup(() => {
-    alive = false;
-  });
-  const closeToTrigger = () => {
-    sub?.closing.cancel();
-    state?.setOpen(false);
-    const trigger = state ? untrack(state.trigger.node) : null;
-    if (alive && trigger) focus(trigger);
-  };
-  return renderMenuSurface(
-    state,
-    mergeProps(
-      rest,
-      withDefaults({ placement: { side: "right", align: "start" } as const, offset: -4 }, rest),
-      {
-        get __zguiClass() {
-          return classes("zui-menu--sub");
-        },
-        onPointerEnter(event: NativePointerBoundaryEvent) {
-          if (callHandler(event, props.onPointerEnter) && alive) sub?.closing.cancel();
-        },
-        onKeyDown(event: NativeKeyEvent) {
-          if (
-            !callHandler(event, props.onKeyDown) ||
-            !alive ||
-            !state ||
-            event.character != null ||
-            event.key !== "ArrowLeft"
-          )
-            return;
-          event.preventDefault();
-          event.stopPropagation();
-          closeToTrigger();
-        },
-      },
-    ),
-    {
-      onDismiss(reason) {
-        if (reason === "escape") closeToTrigger();
-        else {
-          sub?.closing.cancel();
-          state?.setOpen(false);
-        }
-      },
-    },
+  useStylesheet(menuSheet);
+  useStylesheet(overlaySheet);
+  const hierarchy = useContext(MenuHierarchyContext);
+  const state = hierarchy?.sub?.state;
+  const presence = createPresence(() => state?.open() ?? false);
+  const elevation = raiseSurface("popover");
+  const holder = createElement("box");
+  setProp(holder, "__zguiInvariantStyle", { display: "none" });
+  slot(holder, () =>
+    presence.mounted()
+      ? untrack(() =>
+          overlayPortal(elevation, () => {
+            const rest = omit(
+              props,
+              "placement",
+              "offset",
+              "orientation",
+              "onAnimationEnd",
+              "onAnimationCancel",
+              "onTransitionEnd",
+              "onTransitionCancel",
+            );
+            const surface = MenuSubContentPrimitive(
+              mergeProps(rest, withDefaults({ ariaModal: true }, rest), {
+                get orientation() {
+                  return props.orientation ?? undefined;
+                },
+                dismissLayer: elevation.layer,
+                autoFocus: false,
+                get "data-state"() {
+                  return presence.state();
+                },
+                get __zguiClass() {
+                  return classes("zui-surface", menuSheet.className, "zui-menu", "zui-menu--sub");
+                },
+                onAnimationEnd(event: NativeAnimationEvent) {
+                  props.onAnimationEnd?.(event);
+                  presence.onEnd(event);
+                },
+                onAnimationCancel(event: NativeAnimationEvent) {
+                  props.onAnimationCancel?.(event);
+                  presence.onEnd(event);
+                },
+                onTransitionEnd(event: NativeTransitionEvent) {
+                  props.onTransitionEnd?.(event);
+                  presence.onEnd(event);
+                },
+                onTransitionCancel(event: NativeTransitionEvent) {
+                  props.onTransitionCancel?.(event);
+                  presence.onEnd(event);
+                },
+              }),
+            );
+            presence.ref(surface);
+            trapFocus(surface, { autoFocus: shouldAutoFocusMenuSub(hierarchy) });
+            return Popper({
+              get anchor() {
+                return state!.trigger.node();
+              },
+              get placement() {
+                return props.placement ?? ({ side: "right", align: "start" } as const);
+              },
+              get offset() {
+                return props.offset ?? -4;
+              },
+              children: surface,
+            });
+          }),
+        )
+      : null,
   );
+  return holder;
 }

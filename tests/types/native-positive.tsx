@@ -112,12 +112,21 @@ import type {
 import type { Accessor } from "@hewel/zgui";
 import type { SessionLockRequest, SessionLockState } from "@hewel/zgui";
 import {
+  headingToward,
+  MenuItemPrimitive,
+  MenuListPrimitive,
+  MenuRootPrimitive,
+  MenuSubContentPrimitive,
+  MenuSubPrimitive,
+  MenuSubTriggerPrimitive,
   RadioGroupPrimitive,
   RadioItemPrimitive,
   createRetainedPresence,
   createVirtualFocus,
 } from "@hewel/zgui/primitives";
 import type {
+  MenuSubContentPrimitiveProps,
+  MenuSubTriggerPrimitiveProps,
   PresenceController,
   RadioGroupPrimitiveProps,
   RadioItemPrimitiveProps,
@@ -1094,3 +1103,36 @@ void (<box inert={false} />);
 void (<box inert={null} />);
 void (<box inert={undefined} />);
 void (<control inert={!retained.present()} />);
+const subTriggerPrimProps: MenuSubTriggerPrimitiveProps = {
+  disabled: false,
+  ariaLabel: "More",
+};
+const subContentPrimProps: MenuSubContentPrimitiveProps = {
+  orientation: "vertical",
+  autoFocus: false,
+  typeahead: true,
+  dismissLayer: "popover",
+  label: "More options",
+};
+const isHeading: boolean = headingToward(
+  { x: 100, y: 110 },
+  { x: 150, y: 150 },
+  { x: 200, y: 100, width: 140, height: 180 },
+);
+void isHeading;
+void (
+  <MenuRootPrimitive>
+    <MenuListPrimitive>
+      <MenuSubPrimitive>
+        <MenuSubTriggerPrimitive {...subTriggerPrimProps}>
+          <text>More</text>
+        </MenuSubTriggerPrimitive>
+        <MenuSubContentPrimitive {...subContentPrimProps}>
+          <MenuItemPrimitive>
+            <text>Leaf</text>
+          </MenuItemPrimitive>
+        </MenuSubContentPrimitive>
+      </MenuSubPrimitive>
+    </MenuListPrimitive>
+  </MenuRootPrimitive>
+);
