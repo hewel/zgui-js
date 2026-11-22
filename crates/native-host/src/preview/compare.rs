@@ -242,7 +242,33 @@ fn execute(options:&Options,policy:&Policy,policy_bytes:&[u8],output:&mut Output
             "actualFrame":{"validation":right.frame.validation_frame,"presentation":right.frame.pixel_presentation,"captureTimeUs":right.frame.detail("readiness")["timeUs"]}}));
     }
     let error=if !global_compatible || incompatible>0 {
-        Some(Error::new("E_BASELINE_INCOMPATIBLE",2,"baseline inputs, capture set or native frame environments are incompatible").with_details(json!({"report":"report.json"})))
+        let mut fields = BTreeSet::new();
+        for issue in &issues {
+            if let Some(field) = issue["field"].as_str() {
+                fields.insert(field.to_owned());
+            }
+        }
+        for capture in &captures {
+            if let Some(list) = capture["compatibilityIssues"].as_array() {
+                for issue in list {
+                    if let Some(field) = issue["field"].as_str() {
+                        fields.insert(field.to_owned());
+                    }
+                }
+            }
+        }
+        let field_list: Vec<String> = fields.into_iter().take(12).collect();
+        let msg = if field_list.is_empty() {
+            "baseline inputs, capture set or native frame environments are incompatible".to_owned()
+        } else {
+            let preview: Vec<&str> = field_list.iter().take(5).map(String::as_str).collect();
+            let suffix = if field_list.len() > 5 { ", ..." } else { "" };
+            format!(
+                "baseline inputs, capture set or native frame environments are incompatible (mismatched: {}{suffix})",
+                preview.join(", ")
+            )
+        };
+        Some(Error::new("E_BASELINE_INCOMPATIBLE",2,msg).with_details(json!({"report":"report.json","incompatibleFields":field_list})))
     } else if mismatched>0 {
         Some(Error::new("E_VISUAL_DIFF",4,"native pixels exceed the reviewed comparison policy").with_details(json!({"report":"report.json"})))
     } else { None };

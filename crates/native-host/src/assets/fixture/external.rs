@@ -444,18 +444,23 @@ impl FixtureRuntime {
             ));
         };
         let script_index = state.external.next_socket;
+        let total_scripts = scripts.len();
         let Some(script) = scripts.get(script_index) else {
             return Err(self.external_failure(
                 &mut state,
-                format!("no fixture socket script remains for {path:?} ({framing:?})"),
+                format!(
+                    "no fixture socket script remains for {path:?} ({framing:?}) (consumed {script_index}/{total_scripts} socket scripts)"
+                ),
             ));
         };
         if script.path != path || script.framing != framing {
             return Err(self.external_failure(
                 &mut state,
                 format!(
-                    "expected socket {:?} ({:?}), received {path:?} ({framing:?})",
-                    script.path, script.framing
+                    "socket script #{}/{total_scripts} expected {:?} ({:?}), received {path:?} ({framing:?})",
+                    script_index + 1,
+                    script.path,
+                    script.framing
                 ),
             ));
         }
@@ -527,17 +532,28 @@ impl FixtureRuntime {
             "arguments",
             json!({"requestId":request,"socketId":id,"message":message}),
         );
-        let expected = self
+        let total_scripts = self
             .definition
             .services
             .sockets
             .as_ref()
-            .and_then(|scripts| scripts.get(script))
-            .and_then(|script| script.send.get(next_send));
+            .map_or(0, Vec::len);
+        let socket_script = self
+            .definition
+            .services
+            .sockets
+            .as_ref()
+            .and_then(|scripts| scripts.get(script));
+        let total_sends = socket_script.map_or(0, |s| s.send.len());
+        let expected = socket_script.and_then(|s| s.send.get(next_send));
         if expected.map(String::as_str) != Some(message) {
             return Err(self.external_failure(
                 &mut state,
-                format!("fixture socket {id} expected send {expected:?}, received {message:?}"),
+                format!(
+                    "fixture socket {id} (script #{}/{total_scripts}, send #{}/{total_sends}) expected send {expected:?}, received {message:?}",
+                    script + 1,
+                    next_send + 1
+                ),
             ));
         }
         if let Some(socket) = state.external.sockets.get_mut(&id) {
@@ -855,17 +871,17 @@ impl FixtureRuntime {
     }
 
     fn missing_socket_sends(&self, id: u64, socket: &SocketConnection) -> Option<String> {
-        let script = self
-            .definition
-            .services
-            .sockets
-            .as_ref()?
-            .get(socket.script)?;
-        let missing = script.send.len() - socket.next_send;
+        let scripts = self.definition.services.sockets.as_ref()?;
+        let script = scripts.get(socket.script)?;
+        let total_sends = script.send.len();
+        let missing = total_sends - socket.next_send;
         (missing > 0).then(|| {
             format!(
-                "fixture socket {id} ({:?}) is missing {missing} expected sends",
-                script.path
+                "fixture socket {id} (script #{}/{}, {:?}) consumed {}/{total_sends} sends (missing {missing} expected sends)",
+                socket.script + 1,
+                scripts.len(),
+                script.path,
+                socket.next_send
             )
         })
     }

@@ -190,3 +190,34 @@ fn ledger_exhausted_output_keeps_the_earliest_cause_and_exit_8() {
     assert_eq!(result["exitCode"],8);
     assert_eq!(result["originalError"]["code"],"E_JS_EXCEPTION");
 }
+
+#[test]
+fn watchdog_progress_summarizes_last_completed_and_in_flight_steps() {
+    let directory = Directory::new();
+    let progress = directory.0.join("progress");
+    std::fs::create_dir_all(&progress).unwrap();
+    std::fs::write(
+        progress.join("action-000001.json"),
+        serde_json::to_vec(&json!({"stage":"capture","step":"initial","actionSequence":1})).unwrap(),
+    )
+    .unwrap();
+    std::fs::write(
+        progress.join("result-000001.json"),
+        serde_json::to_vec(&json!({"sequence":1,"id":"initial","op":"capture","status":"passed","wallDurationUs":12000})).unwrap(),
+    )
+    .unwrap();
+    std::fs::write(
+        progress.join("action-000002.json"),
+        serde_json::to_vec(&json!({"stage":"pointer.click","step":"click-btn","actionSequence":2})).unwrap(),
+    )
+    .unwrap();
+
+    let summary = watchdog_progress(&directory.0, 10).expect("progress summary");
+    assert_eq!(summary["totalSteps"], 10);
+    assert_eq!(summary["completedSteps"], 1);
+    assert_eq!(summary["lastCompletedStep"]["id"], "initial");
+    assert_eq!(summary["lastCompletedStep"]["sequence"], 1);
+    assert_eq!(summary["inFlightStep"]["step"], "click-btn");
+    assert_eq!(summary["inFlightStep"]["sequence"], 2);
+    assert_eq!(summary["avgCompletedStepMs"], 12);
+}

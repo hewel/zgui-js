@@ -38,22 +38,90 @@ fn options(args: impl Iterator<Item=String>) -> Result<Options,Error> {
     })
 }
 
-pub(super) fn validate(args: &[String]) -> Result<(Options, profile::Profile), Error> {
+pub(super) fn validate(args: &[String]) -> Result<(Options, profile::Profile, usize), Error> {
     let options=options(args.iter().cloned())?;
     let (_,profile)=profile::read_profile(&options.common.profile,&options.common.overrides)?;
     // Capability/schema errors cannot execute the application, allocate a GPU, or claim a run.
     let scenario = scenario::load(&options.scenario,super::RUN_CAPABILITIES,profile.clock.is_virtual())?;
     validate_steps(&scenario.scenario, &profile)?;
     fixture::load(&options.fixture)?;
-    Ok((options, profile))
+    Ok((options, profile, scenario.scenario.steps.len()))
 }
 
 pub fn command(args: Vec<String>) -> Result<Value,Error> {
     controlled(args, None)
 }
 
+fn watchdog_progress(root: &std::path::Path, total_steps: usize) -> Option<Value> {
+    let progress_dir = root.join("progress");
+    let entries = std::fs::read_dir(&progress_dir).ok()?;
+    let mut max_result: Option<(u64, PathBuf)> = None;
+    let mut max_action: Option<(u64, PathBuf)> = None;
+    let mut completed_count: u64 = 0;
+    let mut total_completed_wall_us: u128 = 0;
+
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else { continue };
+        if let Some(seq_str) = name.strip_prefix("result-").and_then(|s| s.strip_suffix(".json"))
+            && let Ok(seq) = seq_str.parse::<u64>()
+        {
+            completed_count += 1;
+            if let Ok(bytes) = evidence::read_evidence(&entry.path())
+                && let Ok(row) = serde_json::from_slice::<Value>(&bytes)
+                && let Some(dur) = row["wallDurationUs"].as_u64()
+            {
+                total_completed_wall_us += u128::from(dur);
+            }
+            if max_result.as_ref().is_none_or(|(prev, _)| seq > *prev) {
+                max_result = Some((seq, entry.path()));
+            }
+        } else if let Some(seq_str) = name.strip_prefix("action-").and_then(|s| s.strip_suffix(".json"))
+            && let Ok(seq) = seq_str.parse::<u64>()
+            && max_action.as_ref().is_none_or(|(prev, _)| seq > *prev)
+        {
+            max_action = Some((seq, entry.path()));
+        }
+    }
+
+    let last_completed = max_result.and_then(|(seq, path)| {
+        let bytes = evidence::read_evidence(&path).ok()?;
+        let row: Value = serde_json::from_slice(&bytes).ok()?;
+        Some(json!({
+            "sequence": seq,
+            "id": row["id"],
+            "op": row["op"],
+            "wallDurationUs": row["wallDurationUs"],
+        }))
+    });
+    let in_flight = max_action.and_then(|(seq, path)| {
+        if last_completed.as_ref().and_then(|v| v["sequence"].as_u64()).is_some_and(|done| seq <= done) {
+            return None;
+        }
+        let bytes = evidence::read_evidence(&path).ok()?;
+        let row: Value = serde_json::from_slice(&bytes).ok()?;
+        Some(json!({
+            "sequence": seq,
+            "step": row["step"],
+            "stage": row["stage"],
+        }))
+    });
+    if completed_count == 0 && in_flight.is_none() {
+        return None;
+    }
+    let avg_completed_step_ms = (completed_count > 0)
+        .then(|| (total_completed_wall_us / u128::from(completed_count)) / 1000);
+    Some(json!({
+        "totalSteps": total_steps,
+        "completedSteps": completed_count,
+        "lastCompletedStep": last_completed,
+        "inFlightStep": in_flight,
+        "avgCompletedStepMs": avg_completed_step_ms,
+    }))
+}
+
 pub(super) fn controlled(args: Vec<String>, canceled: Option<&std::sync::atomic::AtomicBool>) -> Result<Value,Error> {
-    let (options, profile)=validate(&args)?;
+    let (options, profile, total_steps)=validate(&args)?;
     let mut output=Output::create(options.common.out.as_deref().expect("required output"),profile.limits.max_output_bytes)?;
     let mut child=std::process::Command::new(std::env::current_exe().map_err(|error|Error::new("E_WORKER_CRASH",9,error.to_string()))?);
     child.args(["preview","_run-worker"]).args(args).env("ZGUI_PREVIEW_PARENT_PID",std::process::id().to_string()).env("TZ","UTC");
@@ -65,6 +133,7 @@ pub(super) fn controlled(args: Vec<String>, canceled: Option<&std::sync::atomic:
             } else { report.result }
         }
         Err(error) => {
+            let is_watchdog = error.code == "E_WATCHDOG";
             let mut failed=super::failure("run",error);
             failed["teardown"]=json!({"verified":false,"clean":null});
             let recovery=(|| {
@@ -76,6 +145,20 @@ pub(super) fn controlled(args: Vec<String>, canceled: Option<&std::sync::atomic:
                     failed["firstError"]=cause["summary"].clone();
                     failed["exitCode"]=cause["summary"]["exitCode"].clone();
                     failed["build"]=cause["build"].clone();
+                } else if is_watchdog
+                    && let Some(progress) = watchdog_progress(output.root(), total_steps)
+                {
+                    let completed = progress["completedSteps"].as_u64().unwrap_or(0);
+                    let in_flight = progress["inFlightStep"]["step"]
+                        .as_str()
+                        .or_else(|| progress["inFlightStep"]["stage"].as_str())
+                        .unwrap_or("none");
+                    if let Some(msg) = failed["firstError"]["message"].as_str().map(str::to_owned) {
+                        failed["firstError"]["message"] = json!(format!(
+                            "{msg} (completed {completed}/{total_steps} steps; in-flight: {in_flight})"
+                        ));
+                    }
+                    failed["firstError"]["details"] = progress;
                 }
                 evidence::recover(&mut output)
             })();

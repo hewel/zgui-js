@@ -13,6 +13,7 @@ export interface PreviewError {
   code: string;
   message: string;
   stage?: string;
+  details?: Record<string, unknown>;
 }
 
 export type PreviewStage = "setup" | "run" | "compare";
@@ -153,10 +154,15 @@ function execute(
 function firstError(error: unknown): PreviewError | null {
   if (!error) return null;
   const data = properties(error);
+  const details =
+    data.details && typeof data.details === "object" && !Array.isArray(data.details)
+      ? (data.details as Record<string, unknown>)
+      : undefined;
   return {
     code: String(data.code).slice(0, 64),
-    message: String(data.message ?? data.code).slice(0, 256),
+    message: String(data.message ?? data.code).slice(0, 512),
     ...(typeof data.stage === "string" ? { stage: data.stage.slice(0, 64) } : {}),
+    ...(details ? { details } : {}),
   };
 }
 
