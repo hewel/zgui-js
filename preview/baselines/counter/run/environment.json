@@ -2,16 +2,16 @@
   "application": {
     "artifactDigests": {
       "app.css": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "app.mjs": "sha256:41fe8f0ec2b756e1b07c0542a2d4d8abd1e3ab8b6f9251e2d04e30fd644a8bcc",
-      "app.mjs.map": "sha256:d5f375c7f6ad2ccfcde138d2768b8e784d9b83837b3a0aee6663537b2a4eaa8e",
-      "build-info.json": "sha256:b0b7bedf2343852a85346ea0f1ba0b8bbfceed3b3d73d257e66224042b4b2b5d"
+      "app.mjs": "sha256:ed0f9c3f2ce05909e4c96d24cd7bd472770c954b8f90e6c2e00a3765b534297b",
+      "app.mjs.map": "sha256:dd69cfdfc21025f7509f8841614d6b6449ecb6d84b6e465fd93bc7ceefe6ccf7",
+      "build-info.json": "sha256:7f3d5071f9aa53258a2991cc25f6da97691d071642250369e3330b3ea97e3fc2"
     },
-    "buildId": "sha256:43d79b2430026ea703c00238ef443c4a92311766e251db4ccf8261b2e837913a",
-    "entryDigest": "sha256:41fe8f0ec2b756e1b07c0542a2d4d8abd1e3ab8b6f9251e2d04e30fd644a8bcc",
+    "buildId": "sha256:9f67d8e09494b51d3758fd991135e948e6b8fac7121b79eb6bac916917f27269",
+    "entryDigest": "sha256:ed0f9c3f2ce05909e4c96d24cd7bd472770c954b8f90e6c2e00a3765b534297b",
     "fonts": [],
     "id": "dev.example.counter",
     "sourceMap": "app.mjs.map",
-    "sourceMapDigest": "sha256:d5f375c7f6ad2ccfcde138d2768b8e784d9b83837b3a0aee6663537b2a4eaa8e",
+    "sourceMapDigest": "sha256:dd69cfdfc21025f7509f8841614d6b6449ecb6d84b6e465fd93bc7ceefe6ccf7",
     "styleSystem": {
       "configDigest": "sha256:864ab49f77e8240f0abc9c85c23764f2eb766d29c61091c83c908d47e69f1ee1",
       "name": "lightningcss",
@@ -59,7 +59,7 @@
     "timeZone": "UTC"
   },
   "dependencies": {
-    "bunLockDigest": "sha256:91e393813998941260208e09d09054db529377182ddef4d0337978dce2982fea",
+    "bunLockDigest": "sha256:c150e7e14a3c4422c17f6822712d9169c96062333450f0379ddc74a8a5ef27e9",
     "cargoLockDigest": "sha256:63b864ef32bceba4cf4ad6ca9720fd5c9f851329e80afaa98a496f4606177ad0",
     "javascriptIdentityKind": "exact bun lockfile v2 package resolution keys",
     "quickJsEngineRevision": "6d46d07d04041b40f4f49eaa7fdebe44c314c699",
@@ -4073,7 +4073,7 @@
   "host": {
     "profile": "debug",
     "rustc": "rustc 1.100.0 (0ef1bc386 2026-11-09)",
-    "sourceTreeDigest": "sha256:a06b67e924c79d45dfdf9d3ef38e66b3cad4b250c80c3f9353372e995dbc7503",
+    "sourceTreeDigest": "sha256:9e76d7364ef7e7a16e3263e861d44878024b76e205fc7c1eab07aa54c20a98e9",
     "sourceTreeScope": "workspace Rust sources, manifests, lockfiles and local native patches; includes test sources",
     "target": "x86_64-unknown-linux-gnu",
     "version": "0.1.0"

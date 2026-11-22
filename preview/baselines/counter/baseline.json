@@ -1,13 +1,13 @@
 {
   "schemaVersion": 1,
   "run": "run",
-  "artifactsDigest": "sha256:ae38de1c71b31fd5b6475dfbf25db06582bfabd2886c569ef28ae9a104ed33ad",
+  "artifactsDigest": "sha256:a1515d7c3b0a45fa1723c19cf974bb6c846c95631689dec8d952361bd791ef66",
   "policyDigest": "sha256:618dc201dcc2cc976d3b0ff41d440eca02b71b68c79b01d10814734b044bbeb9",
   "review": {
     "by": "coding-assistant",
-    "at": "2026-11-22T12:57:45Z",
-    "summary": "Counter baseline resealed on Arch RX 7900 XTX (RADV NAVI31) after upstream zgui upgrade 80baa3c7 -> ee29c7dc (#85: wgpu 30.0.2, vello 0.11.0, subpixel AA #70). Visually inspected initial.png (61b1c8d636...) and after-increment.png (0de971968a...): 0.24% pixel delta strictly within glyph bounding box (44,58)-(242,256) from subpixel text AA; layout and borders unchanged.",
-    "buildId": "sha256:43d79b2430026ea703c00238ef443c4a92311766e251db4ccf8261b2e837913a",
+    "at": "2026-11-22T15:02:18Z",
+    "summary": "Counter baseline metadata refresh after #88 bun.lock update (@solidjs/signals type brand). Verified initial.png (61b1c8d636...) and after-increment.png (0de971968a...) remain byte-for-byte identical.",
+    "buildId": "sha256:9f67d8e09494b51d3758fd991135e948e6b8fac7121b79eb6bac916917f27269",
     "captures": [
       {
         "captureId": "initial",

@@ -3,16 +3,16 @@
   "build": {
     "artifactDigests": {
       "app.css": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "app.mjs": "sha256:41fe8f0ec2b756e1b07c0542a2d4d8abd1e3ab8b6f9251e2d04e30fd644a8bcc",
-      "app.mjs.map": "sha256:d5f375c7f6ad2ccfcde138d2768b8e784d9b83837b3a0aee6663537b2a4eaa8e",
-      "build-info.json": "sha256:b0b7bedf2343852a85346ea0f1ba0b8bbfceed3b3d73d257e66224042b4b2b5d"
+      "app.mjs": "sha256:ed0f9c3f2ce05909e4c96d24cd7bd472770c954b8f90e6c2e00a3765b534297b",
+      "app.mjs.map": "sha256:dd69cfdfc21025f7509f8841614d6b6449ecb6d84b6e465fd93bc7ceefe6ccf7",
+      "build-info.json": "sha256:7f3d5071f9aa53258a2991cc25f6da97691d071642250369e3330b3ea97e3fc2"
     },
-    "buildId": "sha256:43d79b2430026ea703c00238ef443c4a92311766e251db4ccf8261b2e837913a",
-    "entryDigest": "sha256:41fe8f0ec2b756e1b07c0542a2d4d8abd1e3ab8b6f9251e2d04e30fd644a8bcc",
+    "buildId": "sha256:9f67d8e09494b51d3758fd991135e948e6b8fac7121b79eb6bac916917f27269",
+    "entryDigest": "sha256:ed0f9c3f2ce05909e4c96d24cd7bd472770c954b8f90e6c2e00a3765b534297b",
     "fonts": [],
     "id": "dev.example.counter",
     "sourceMap": "app.mjs.map",
-    "sourceMapDigest": "sha256:d5f375c7f6ad2ccfcde138d2768b8e784d9b83837b3a0aee6663537b2a4eaa8e",
+    "sourceMapDigest": "sha256:dd69cfdfc21025f7509f8841614d6b6449ecb6d84b6e465fd93bc7ceefe6ccf7",
     "styleSystem": {
       "configDigest": "sha256:864ab49f77e8240f0abc9c85c23764f2eb766d29c61091c83c908d47e69f1ee1",
       "name": "lightningcss",
@@ -29,7 +29,7 @@
     "generation": 1,
     "nativeAcceptance": {
       "candidate": {
-        "buildId": "sha256:43d79b2430026ea703c00238ef443c4a92311766e251db4ccf8261b2e837913a",
+        "buildId": "sha256:9f67d8e09494b51d3758fd991135e948e6b8fac7121b79eb6bac916917f27269",
         "id": "dev.example.counter",
         "styleSystem": {
           "configDigest": "sha256:864ab49f77e8240f0abc9c85c23764f2eb766d29c61091c83c908d47e69f1ee1",
@@ -40,7 +40,7 @@
       "diagnostic": null,
       "document": "DocumentId(0)",
       "generation": 1,
-      "lastSuccessfulBuildId": "sha256:43d79b2430026ea703c00238ef443c4a92311766e251db4ccf8261b2e837913a",
+      "lastSuccessfulBuildId": "sha256:9f67d8e09494b51d3758fd991135e948e6b8fac7121b79eb6bac916917f27269",
       "schemaVersion": 1,
       "status": "accepted"
     },
