@@ -5,9 +5,9 @@
       "app.css": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "app.mjs": "sha256:41fe8f0ec2b756e1b07c0542a2d4d8abd1e3ab8b6f9251e2d04e30fd644a8bcc",
       "app.mjs.map": "sha256:d5f375c7f6ad2ccfcde138d2768b8e784d9b83837b3a0aee6663537b2a4eaa8e",
-      "build-info.json": "sha256:832d6fea9c63594a5c0a499148448bde4e3504e16578a0453ac438f749351c8b"
+      "build-info.json": "sha256:b0b7bedf2343852a85346ea0f1ba0b8bbfceed3b3d73d257e66224042b4b2b5d"
     },
-    "buildId": "sha256:386017922559bbfe19ead8b0d3acc6fec4dc2ea48f6c33d836e5abed7c2df3cc",
+    "buildId": "sha256:43d79b2430026ea703c00238ef443c4a92311766e251db4ccf8261b2e837913a",
     "entryDigest": "sha256:41fe8f0ec2b756e1b07c0542a2d4d8abd1e3ab8b6f9251e2d04e30fd644a8bcc",
     "fonts": [],
     "id": "dev.example.counter",

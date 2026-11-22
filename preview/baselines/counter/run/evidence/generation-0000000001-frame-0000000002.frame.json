@@ -1,6 +1,6 @@
 {
   "actionSequence": 2,
-  "buildId": "sha256:386017922559bbfe19ead8b0d3acc6fec4dc2ea48f6c33d836e5abed7c2df3cc",
+  "buildId": "sha256:43d79b2430026ea703c00238ef443c4a92311766e251db4ccf8261b2e837913a",
   "configurationId": 2,
   "documentIdentity": "DocumentId(0)",
   "generation": 1,
@@ -14,7 +14,7 @@
     "frame": {
       "drawId": 2,
       "ordinal": 2,
-      "outcome": "Presented(FrameStats { draw_calls: 7, vector_passes: 0, damage_px: 159840, bytes_uploaded: 1316, memory: MemoryReport { fixed: 0, targets: 7864320, scratch: 0, atlases: 4194304, buffers: 534256 } })",
+      "outcome": "Presented(FrameStats { draw_calls: 3, vector_passes: 0, damage_px: 185148, bytes_uploaded: 2300, memory: MemoryReport { fixed: 0, targets: 7864320, scratch: 0, atlases: 4194304, buffers: 557952 } })",
       "timeUs": 0
     },
     "generation": 1,
@@ -67,7 +67,7 @@
   "validationFrame": {
     "drawId": 2,
     "ordinal": 2,
-    "outcome": "Presented(FrameStats { draw_calls: 7, vector_passes: 0, damage_px: 159840, bytes_uploaded: 1316, memory: MemoryReport { fixed: 0, targets: 7864320, scratch: 0, atlases: 4194304, buffers: 534256 } })",
+    "outcome": "Presented(FrameStats { draw_calls: 3, vector_passes: 0, damage_px: 185148, bytes_uploaded: 2300, memory: MemoryReport { fixed: 0, targets: 7864320, scratch: 0, atlases: 4194304, buffers: 557952 } })",
     "timeUs": 0
   },
   "window": {

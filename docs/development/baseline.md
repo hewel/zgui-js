@@ -16,7 +16,7 @@ below is retained and does not describe the currently shipped API or test suite.
 | Component                   | Selected identity                                                                                         |
 | --------------------------- | --------------------------------------------------------------------------------------------------------- |
 | Rust                        | 1.100.0, minimal profile plus rustfmt/clippy                                                              |
-| zgui                        | `80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a`                                                                |
+| zgui                        | `ee29c7dc66206eb04ba7bcf514058a278c9070ba`                                                                |
 | Fontique                    | Root Cargo patch from the same zgui revision                                                              |
 | Native runtime / Wayland    | Same revision, with the documented [local patches](../../vendor/README.md)                                |
 | rquickjs                    | `73fcd6062ee615aeb2a4675cd32be67a56e93973`; Phase 0 `std`, Phase 1 adds `macro` for opaque native classes |

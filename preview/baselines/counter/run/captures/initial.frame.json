@@ -1,7 +1,7 @@
 {
   "actionSequence": 0,
   "allowedPendingAssets": [],
-  "buildId": "sha256:386017922559bbfe19ead8b0d3acc6fec4dc2ea48f6c33d836e5abed7c2df3cc",
+  "buildId": "sha256:43d79b2430026ea703c00238ef443c4a92311766e251db4ccf8261b2e837913a",
   "captureId": "initial",
   "configurationId": 2,
   "documentIdentity": "DocumentId(0)",
@@ -18,7 +18,7 @@
     "frame": {
       "drawId": 1,
       "ordinal": 1,
-      "outcome": "Presented(FrameStats { draw_calls: 4, vector_passes: 0, damage_px: 1470000, bytes_uploaded: 3140, memory: MemoryReport { fixed: 0, targets: 7864320, scratch: 0, atlases: 4194304, buffers: 534256 } })",
+      "outcome": "Presented(FrameStats { draw_calls: 4, vector_passes: 0, damage_px: 1470000, bytes_uploaded: 3076, memory: MemoryReport { fixed: 0, targets: 7864320, scratch: 0, atlases: 4194304, buffers: 555872 } })",
       "timeUs": 0
     },
     "generation": 1,
@@ -27,7 +27,7 @@
     "sequence": 1,
     "styleRevision": 3
   },
-  "pngDigest": "sha256:25d53f38954946a4a86451dec53a8416945acb68515ee454af39f19468fe49ab",
+  "pngDigest": "sha256:61b1c8d636b37f314fc2179b688543d07b7596f9446fa3340c8e14dc7f4325c5",
   "readiness": {
     "appReady": true,
     "currentWorkSettled": true,
@@ -35,7 +35,7 @@
     "generation": 1,
     "nativeAcceptance": {
       "candidate": {
-        "buildId": "sha256:386017922559bbfe19ead8b0d3acc6fec4dc2ea48f6c33d836e5abed7c2df3cc",
+        "buildId": "sha256:43d79b2430026ea703c00238ef443c4a92311766e251db4ccf8261b2e837913a",
         "id": "dev.example.counter",
         "styleSystem": {
           "configDigest": "sha256:864ab49f77e8240f0abc9c85c23764f2eb766d29c61091c83c908d47e69f1ee1",
@@ -46,7 +46,7 @@
       "diagnostic": null,
       "document": "DocumentId(0)",
       "generation": 1,
-      "lastSuccessfulBuildId": "sha256:386017922559bbfe19ead8b0d3acc6fec4dc2ea48f6c33d836e5abed7c2df3cc",
+      "lastSuccessfulBuildId": "sha256:43d79b2430026ea703c00238ef443c4a92311766e251db4ccf8261b2e837913a",
       "schemaVersion": 1,
       "status": "accepted"
     },
@@ -104,12 +104,12 @@
   "surface": "main",
   "surfaceConfiguration": 0,
   "timingDeterministic": true,
-  "treeDigest": "sha256:cb21a95c769d02f092da0e7040edd0db2feae1e3316c13e1114dc264cb2a26c9",
+  "treeDigest": "sha256:c677b66d9f6c11a52e157899527d20f78b50d3b4dab9c930b0e9f08a1218ba01",
   "validatedStateRevision": 37,
   "validationFrame": {
     "drawId": 1,
     "ordinal": 1,
-    "outcome": "Presented(FrameStats { draw_calls: 4, vector_passes: 0, damage_px: 1470000, bytes_uploaded: 3140, memory: MemoryReport { fixed: 0, targets: 7864320, scratch: 0, atlases: 4194304, buffers: 534256 } })",
+    "outcome": "Presented(FrameStats { draw_calls: 4, vector_passes: 0, damage_px: 1470000, bytes_uploaded: 3076, memory: MemoryReport { fixed: 0, targets: 7864320, scratch: 0, atlases: 4194304, buffers: 555872 } })",
     "timeUs": 0
   },
   "window": {

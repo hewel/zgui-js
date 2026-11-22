@@ -1,7 +1,7 @@
 {
   "bun": "1.4.4",
   "cargoLock": {
-    "digest": "sha256:941fb8c1f5c4c21ce14e859c54731860258c660537ee19ecf046f655b392b390",
+    "digest": "sha256:63b864ef32bceba4cf4ad6ca9720fd5c9f851329e80afaa98a496f4606177ad0",
     "path": "Cargo.lock"
   },
   "conditions": [

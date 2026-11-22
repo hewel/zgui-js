@@ -4,9 +4,9 @@
       "app.css": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "app.mjs": "sha256:41fe8f0ec2b756e1b07c0542a2d4d8abd1e3ab8b6f9251e2d04e30fd644a8bcc",
       "app.mjs.map": "sha256:d5f375c7f6ad2ccfcde138d2768b8e784d9b83837b3a0aee6663537b2a4eaa8e",
-      "build-info.json": "sha256:832d6fea9c63594a5c0a499148448bde4e3504e16578a0453ac438f749351c8b"
+      "build-info.json": "sha256:b0b7bedf2343852a85346ea0f1ba0b8bbfceed3b3d73d257e66224042b4b2b5d"
     },
-    "buildId": "sha256:386017922559bbfe19ead8b0d3acc6fec4dc2ea48f6c33d836e5abed7c2df3cc",
+    "buildId": "sha256:43d79b2430026ea703c00238ef443c4a92311766e251db4ccf8261b2e837913a",
     "entryDigest": "sha256:41fe8f0ec2b756e1b07c0542a2d4d8abd1e3ab8b6f9251e2d04e30fd644a8bcc",
     "fonts": [],
     "id": "dev.example.counter",
@@ -60,7 +60,7 @@
   },
   "dependencies": {
     "bunLockDigest": "sha256:91e393813998941260208e09d09054db529377182ddef4d0337978dce2982fea",
-    "cargoLockDigest": "sha256:941fb8c1f5c4c21ce14e859c54731860258c660537ee19ecf046f655b392b390",
+    "cargoLockDigest": "sha256:63b864ef32bceba4cf4ad6ca9720fd5c9f851329e80afaa98a496f4606177ad0",
     "javascriptIdentityKind": "exact bun lockfile v2 package resolution keys",
     "quickJsEngineRevision": "6d46d07d04041b40f4f49eaa7fdebe44c314c699",
     "resolvedCargoPackages": [
@@ -317,10 +317,10 @@
         "version": "1.3.3"
       },
       {
-        "checksum": "34ddef2995421ab6a5c779542c81ee77c115206f4ad9d5a8e05f4ff49716a3dd",
+        "checksum": "09ec2f926cc3060f09db9ebc5b52823d85268d24bb917e472c0c4bea35780a7d",
         "name": "bit-set",
         "source": "registry+https://github.com/rust-lang/crates.io-index",
-        "version": "0.9.1"
+        "version": "0.10.0"
       },
       {
         "checksum": "b71798fca2c1fe1086445a7258a4bc81e6e49dcd24c8d0dd9a1e57395b603f51",
@@ -833,22 +833,10 @@
         "version": "1.0.7"
       },
       {
-        "checksum": "d9c4f5dac5e15c24eb999c26181a6ca40b39fe946cbe4c263c7209467bc83af2",
-        "name": "foldhash",
-        "source": "registry+https://github.com/rust-lang/crates.io-index",
-        "version": "0.1.5"
-      },
-      {
         "checksum": "77ce24cb58228fbb8aa041425bb1050850ac19177686ea6e0f41a70416f56fdb",
         "name": "foldhash",
         "source": "registry+https://github.com/rust-lang/crates.io-index",
         "version": "0.2.0"
-      },
-      {
-        "checksum": "5b38ad915f6dadd993ced50848a8291a543bd41ca62bc10740d5e64e2ab4cfd7",
-        "name": "font-types",
-        "source": "registry+https://github.com/rust-lang/crates.io-index",
-        "version": "0.11.3"
       },
       {
         "checksum": "835ae9d781464a79026cde387f9cbc650c9a4909d7cf7e658b127e3c35d2f35d",
@@ -870,7 +858,7 @@
       },
       {
         "name": "fontique",
-        "source": "git+https://github.com/zortax/zgui?rev=80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a#80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a",
+        "source": "git+https://github.com/zortax/zgui?rev=ee29c7dc66206eb04ba7bcf514058a278c9070ba#ee29c7dc66206eb04ba7bcf514058a278c9070ba",
         "version": "0.11.1"
       },
       {
@@ -1030,18 +1018,6 @@
         "version": "0.28.0"
       },
       {
-        "checksum": "b89c83349105e3732062a895becfc71a8f921bb71ecbbdd8ff99263e3b53a0ca",
-        "name": "gpu-descriptor",
-        "source": "registry+https://github.com/rust-lang/crates.io-index",
-        "version": "0.3.2"
-      },
-      {
-        "checksum": "fdf242682df893b86f33a73828fb09ca4b2d3bb6cc95249707fc684d27484b91",
-        "name": "gpu-descriptor-types",
-        "source": "registry+https://github.com/rust-lang/crates.io-index",
-        "version": "0.2.0"
-      },
-      {
         "checksum": "17e2ac29387b1aa07a1e448f7bb4f35b500787971e965b02842b900afa5c8f6f",
         "name": "guardian",
         "source": "registry+https://github.com/rust-lang/crates.io-index",
@@ -1070,12 +1046,6 @@
         "name": "harfrust",
         "source": "registry+https://github.com/rust-lang/crates.io-index",
         "version": "0.12.0"
-      },
-      {
-        "checksum": "9229cfe53dfd69f0609a49f65461bd93001ea1ef889cd5529dd176593f5338a1",
-        "name": "hashbrown",
-        "source": "registry+https://github.com/rust-lang/crates.io-index",
-        "version": "0.15.5"
       },
       {
         "checksum": "841d1cc9bed7f9236f321df977030373f4a4163ae1a7dbfe1a51a2c1a51d9100",
@@ -1112,12 +1082,6 @@
         "name": "hex",
         "source": "registry+https://github.com/rust-lang/crates.io-index",
         "version": "0.4.3"
-      },
-      {
-        "checksum": "dfa686283ad6dd069f105e5ab091b04c62850d3e4cf5d67debad1933f55023df",
-        "name": "hexf-parse",
-        "source": "registry+https://github.com/rust-lang/crates.io-index",
-        "version": "0.2.1"
       },
       {
         "name": "host-services",
@@ -1518,10 +1482,16 @@
         "version": "1.0.0"
       },
       {
-        "checksum": "b2bf919621e7975acb27d881bae2fb993e0d45c8e0446e85e6272971e00dc8df",
+        "checksum": "fd0dd362bf26c0ffdd143df6da66a25d287e196eff482f117771010b207ad163",
         "name": "naga",
         "source": "registry+https://github.com/rust-lang/crates.io-index",
-        "version": "29.0.4"
+        "version": "30.0.2"
+      },
+      {
+        "checksum": "14474170feb673cfb18b3565111a9869797cc1d290fb9ec969c53f5e1e231c6d",
+        "name": "naga-types",
+        "source": "registry+https://github.com/rust-lang/crates.io-index",
+        "version": "30.0.2"
       },
       {
         "name": "native-host",
@@ -2110,12 +2080,6 @@
         "version": "0.4.4"
       },
       {
-        "checksum": "c4ed38b89c2c77ff968c524145ad65fb010f38af5c7a224b53b81d47ac2daa81",
-        "name": "read-fonts",
-        "source": "registry+https://github.com/rust-lang/crates.io-index",
-        "version": "0.39.2"
-      },
-      {
         "checksum": "046a7d674daf459825b32f5062056d6882db0d2f5a479fbd76ccfc870ac18709",
         "name": "read-fonts",
         "source": "registry+https://github.com/rust-lang/crates.io-index",
@@ -2410,12 +2374,6 @@
         "name": "siphasher",
         "source": "registry+https://github.com/rust-lang/crates.io-index",
         "version": "1.0.4"
-      },
-      {
-        "checksum": "0c34617370ae968efb7161bb2beb517d9084659aae19e24b89e3db25b46e4564",
-        "name": "skrifa",
-        "source": "registry+https://github.com/rust-lang/crates.io-index",
-        "version": "0.42.1"
       },
       {
         "checksum": "819ab7d62b1d3e72d9d9dea5650bac30424f9111364bb94928dbf5ecad1baa68",
@@ -2938,22 +2896,22 @@
         "version": "0.2.15"
       },
       {
-        "checksum": "261359dbef879f8110ef7e1c442246c838d33d3d91cb05e0ea9288d432760c9f",
+        "checksum": "913abde56cab6131b62c0cc69b1a93b671d3c34b3097beb3714fd1dc93be8115",
         "name": "vello",
         "source": "registry+https://github.com/rust-lang/crates.io-index",
-        "version": "0.9.0"
+        "version": "0.11.0"
       },
       {
-        "checksum": "2346f5f0d7dccb3582fcd397b4a57b43165209f1424e0d76e85dd814db164af7",
+        "checksum": "b1fb9548d2b46b0f79137b5b1d208ecbd76d432f74e7a2ba838615d117f11532",
         "name": "vello_encoding",
         "source": "registry+https://github.com/rust-lang/crates.io-index",
-        "version": "0.9.0"
+        "version": "0.11.0"
       },
       {
-        "checksum": "9dd38937516fa4b47423d9255bb5e4a65e839ec9d57c38c4af6189ce56bf46b7",
+        "checksum": "2e653222cee49f2571729c3e4b0fa99bc4f826c6bb9487dbb88b825d552b3a27",
         "name": "vello_shaders",
         "source": "registry+https://github.com/rust-lang/crates.io-index",
-        "version": "0.9.0"
+        "version": "0.11.0"
       },
       {
         "checksum": "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a",
@@ -3124,52 +3082,58 @@
         "version": "0.1.12"
       },
       {
-        "checksum": "76e8840e1ba2881d4cbb18d2147627a56af426ff064c0401eb0c8410c6325d07",
+        "checksum": "146fc3d654250e6207921a66c87534c621bc886c70df83dcf466c1d66813810e",
         "name": "wgpu",
         "source": "registry+https://github.com/rust-lang/crates.io-index",
-        "version": "29.0.4"
+        "version": "30.0.2"
       },
       {
-        "checksum": "2f519832254e56965a9940c4af57dcb75f702b6f6fa4a0b172f685395843a4d7",
+        "checksum": "ad661da2ee99f208c30090b585284b2ab5b8bf2358ddf2d2215592808ec62f1a",
         "name": "wgpu-core",
         "source": "registry+https://github.com/rust-lang/crates.io-index",
-        "version": "29.0.4"
+        "version": "30.0.2"
       },
       {
-        "checksum": "f5e39e26c4c0e07589e67d18546cf79ff45383659fc72fca4dd293358a0347f3",
+        "checksum": "7d3f2f24aee039ffe9ef527300daf6b7428c58edeefdaa1700f4fa0fd754df16",
         "name": "wgpu-core-deps-apple",
         "source": "registry+https://github.com/rust-lang/crates.io-index",
-        "version": "29.0.4"
+        "version": "30.0.2"
       },
       {
-        "checksum": "01e09be551dc939498bdd5f6b2c66e55ab275dad25825267a08605a80fc9f0af",
+        "checksum": "55ccf093bd215ae9dc4f96df293e675513ac1f2569f8293a2911cc34ca3505d1",
         "name": "wgpu-core-deps-emscripten",
         "source": "registry+https://github.com/rust-lang/crates.io-index",
-        "version": "29.0.4"
+        "version": "30.0.2"
       },
       {
-        "checksum": "4e592c1bbef6ad047647ae6e666ebd8cee7a32bb4544d9700ec96cbf73230257",
+        "checksum": "b20f43aeb9962d05e61e3ccb717e2e27ba1b04e979d4ca7e361384f8ee03db56",
+        "name": "wgpu-core-deps-wasm",
+        "source": "registry+https://github.com/rust-lang/crates.io-index",
+        "version": "30.0.2"
+      },
+      {
+        "checksum": "1331b08fa2362c5d454eccc4448e6e4f01eccfea569a00e310adbfc4415f2bdc",
         "name": "wgpu-core-deps-windows-linux-android",
         "source": "registry+https://github.com/rust-lang/crates.io-index",
-        "version": "29.0.4"
+        "version": "30.0.2"
       },
       {
-        "checksum": "97ace1c17727311c22a46e4e3faf56ea6de81af99dcc839bdfb54857b94d448d",
+        "checksum": "a57452fe453658e141aafdb09de1028afa498805fab518238ddf372a518813ff",
         "name": "wgpu-hal",
         "source": "registry+https://github.com/rust-lang/crates.io-index",
-        "version": "29.0.4"
+        "version": "30.0.2"
       },
       {
-        "checksum": "95226013f547544b223281cd16a4fb549aa9dcb562adbda0faae4c73ffbbc161",
+        "checksum": "44a62ead68aad7cd40ac9e2cd2b8ec64f32dfbad2765f429b9fb74b8b735869f",
         "name": "wgpu-naga-bridge",
         "source": "registry+https://github.com/rust-lang/crates.io-index",
-        "version": "29.0.4"
+        "version": "30.0.2"
       },
       {
-        "checksum": "84bf84cd9ca8ca45e2b223a3868f1adf9bfc0c66aeac212e76ee7e40fdadf8f5",
+        "checksum": "a9f6ee0bd50f5ab79fb8c25e3f33afb27126f034af4ba5909c7a0967058659e6",
         "name": "wgpu-types",
         "source": "registry+https://github.com/rust-lang/crates.io-index",
-        "version": "29.0.4"
+        "version": "30.0.2"
       },
       {
         "checksum": "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22",
@@ -3531,47 +3495,47 @@
       },
       {
         "name": "zgui-a11y",
-        "source": "git+https://github.com/zortax/zgui?rev=80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a#80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a",
+        "source": "git+https://github.com/zortax/zgui?rev=ee29c7dc66206eb04ba7bcf514058a278c9070ba#ee29c7dc66206eb04ba7bcf514058a278c9070ba",
         "version": "0.1.0"
       },
       {
         "name": "zgui-anim",
-        "source": "git+https://github.com/zortax/zgui?rev=80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a#80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a",
+        "source": "git+https://github.com/zortax/zgui?rev=ee29c7dc66206eb04ba7bcf514058a278c9070ba#ee29c7dc66206eb04ba7bcf514058a278c9070ba",
         "version": "0.1.0"
       },
       {
         "name": "zgui-arena",
-        "source": "git+https://github.com/zortax/zgui?rev=80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a#80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a",
+        "source": "git+https://github.com/zortax/zgui?rev=ee29c7dc66206eb04ba7bcf514058a278c9070ba#ee29c7dc66206eb04ba7bcf514058a278c9070ba",
         "version": "0.1.0"
       },
       {
         "name": "zgui-atlas",
-        "source": "git+https://github.com/zortax/zgui?rev=80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a#80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a",
+        "source": "git+https://github.com/zortax/zgui?rev=ee29c7dc66206eb04ba7bcf514058a278c9070ba#ee29c7dc66206eb04ba7bcf514058a278c9070ba",
         "version": "0.1.0"
       },
       {
         "name": "zgui-bits",
-        "source": "git+https://github.com/zortax/zgui?rev=80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a#80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a",
+        "source": "git+https://github.com/zortax/zgui?rev=ee29c7dc66206eb04ba7bcf514058a278c9070ba#ee29c7dc66206eb04ba7bcf514058a278c9070ba",
         "version": "0.1.0"
       },
       {
         "name": "zgui-canvas",
-        "source": "git+https://github.com/zortax/zgui?rev=80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a#80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a",
+        "source": "git+https://github.com/zortax/zgui?rev=ee29c7dc66206eb04ba7bcf514058a278c9070ba#ee29c7dc66206eb04ba7bcf514058a278c9070ba",
         "version": "0.1.0"
       },
       {
         "name": "zgui-color",
-        "source": "git+https://github.com/zortax/zgui?rev=80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a#80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a",
+        "source": "git+https://github.com/zortax/zgui?rev=ee29c7dc66206eb04ba7bcf514058a278c9070ba#ee29c7dc66206eb04ba7bcf514058a278c9070ba",
         "version": "0.1.0"
       },
       {
         "name": "zgui-css",
-        "source": "git+https://github.com/zortax/zgui?rev=80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a#80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a",
+        "source": "git+https://github.com/zortax/zgui?rev=ee29c7dc66206eb04ba7bcf514058a278c9070ba#ee29c7dc66206eb04ba7bcf514058a278c9070ba",
         "version": "0.1.0"
       },
       {
         "name": "zgui-custom",
-        "source": "git+https://github.com/zortax/zgui?rev=80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a#80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a",
+        "source": "git+https://github.com/zortax/zgui?rev=ee29c7dc66206eb04ba7bcf514058a278c9070ba#ee29c7dc66206eb04ba7bcf514058a278c9070ba",
         "version": "0.1.0"
       },
       {
@@ -3580,32 +3544,32 @@
       },
       {
         "name": "zgui-edit",
-        "source": "git+https://github.com/zortax/zgui?rev=80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a#80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a",
+        "source": "git+https://github.com/zortax/zgui?rev=ee29c7dc66206eb04ba7bcf514058a278c9070ba#ee29c7dc66206eb04ba7bcf514058a278c9070ba",
         "version": "0.1.0"
       },
       {
         "name": "zgui-elements",
-        "source": "git+https://github.com/zortax/zgui?rev=80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a#80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a",
+        "source": "git+https://github.com/zortax/zgui?rev=ee29c7dc66206eb04ba7bcf514058a278c9070ba#ee29c7dc66206eb04ba7bcf514058a278c9070ba",
         "version": "0.1.0"
       },
       {
         "name": "zgui-geom",
-        "source": "git+https://github.com/zortax/zgui?rev=80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a#80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a",
+        "source": "git+https://github.com/zortax/zgui?rev=ee29c7dc66206eb04ba7bcf514058a278c9070ba#ee29c7dc66206eb04ba7bcf514058a278c9070ba",
         "version": "0.1.0"
       },
       {
         "name": "zgui-image",
-        "source": "git+https://github.com/zortax/zgui?rev=80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a#80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a",
+        "source": "git+https://github.com/zortax/zgui?rev=ee29c7dc66206eb04ba7bcf514058a278c9070ba#ee29c7dc66206eb04ba7bcf514058a278c9070ba",
         "version": "0.1.0"
       },
       {
         "name": "zgui-input",
-        "source": "git+https://github.com/zortax/zgui?rev=80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a#80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a",
+        "source": "git+https://github.com/zortax/zgui?rev=ee29c7dc66206eb04ba7bcf514058a278c9070ba#ee29c7dc66206eb04ba7bcf514058a278c9070ba",
         "version": "0.1.0"
       },
       {
         "name": "zgui-interned",
-        "source": "git+https://github.com/zortax/zgui?rev=80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a#80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a",
+        "source": "git+https://github.com/zortax/zgui?rev=ee29c7dc66206eb04ba7bcf514058a278c9070ba#ee29c7dc66206eb04ba7bcf514058a278c9070ba",
         "version": "0.1.0"
       },
       {
@@ -3629,38 +3593,43 @@
         "version": "0.1.0"
       },
       {
+        "name": "zgui-platform-web",
+        "source": "git+https://github.com/zortax/zgui?rev=ee29c7dc66206eb04ba7bcf514058a278c9070ba#ee29c7dc66206eb04ba7bcf514058a278c9070ba",
+        "version": "0.1.0"
+      },
+      {
         "name": "zgui-platform-winit",
-        "source": "git+https://github.com/zortax/zgui?rev=80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a#80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a",
+        "source": "git+https://github.com/zortax/zgui?rev=ee29c7dc66206eb04ba7bcf514058a278c9070ba#ee29c7dc66206eb04ba7bcf514058a278c9070ba",
         "version": "0.1.0"
       },
       {
         "name": "zgui-profile",
-        "source": "git+https://github.com/zortax/zgui?rev=80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a#80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a",
+        "source": "git+https://github.com/zortax/zgui?rev=ee29c7dc66206eb04ba7bcf514058a278c9070ba#ee29c7dc66206eb04ba7bcf514058a278c9070ba",
         "version": "0.1.0"
       },
       {
         "name": "zgui-reactive",
-        "source": "git+https://github.com/zortax/zgui?rev=80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a#80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a",
+        "source": "git+https://github.com/zortax/zgui?rev=ee29c7dc66206eb04ba7bcf514058a278c9070ba#ee29c7dc66206eb04ba7bcf514058a278c9070ba",
         "version": "0.1.0"
       },
       {
         "name": "zgui-render",
-        "source": "git+https://github.com/zortax/zgui?rev=80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a#80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a",
+        "source": "git+https://github.com/zortax/zgui?rev=ee29c7dc66206eb04ba7bcf514058a278c9070ba#ee29c7dc66206eb04ba7bcf514058a278c9070ba",
         "version": "0.1.0"
       },
       {
         "name": "zgui-render-vector-coverage",
-        "source": "git+https://github.com/zortax/zgui?rev=80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a#80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a",
+        "source": "git+https://github.com/zortax/zgui?rev=ee29c7dc66206eb04ba7bcf514058a278c9070ba#ee29c7dc66206eb04ba7bcf514058a278c9070ba",
         "version": "0.1.0"
       },
       {
         "name": "zgui-render-vector-vello",
-        "source": "git+https://github.com/zortax/zgui?rev=80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a#80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a",
+        "source": "git+https://github.com/zortax/zgui?rev=ee29c7dc66206eb04ba7bcf514058a278c9070ba#ee29c7dc66206eb04ba7bcf514058a278c9070ba",
         "version": "0.1.0"
       },
       {
         "name": "zgui-render-wgpu",
-        "source": "git+https://github.com/zortax/zgui?rev=80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a#80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a",
+        "source": "git+https://github.com/zortax/zgui?rev=ee29c7dc66206eb04ba7bcf514058a278c9070ba#ee29c7dc66206eb04ba7bcf514058a278c9070ba",
         "version": "0.1.0"
       },
       {
@@ -3669,7 +3638,7 @@
       },
       {
         "name": "zgui-scene",
-        "source": "git+https://github.com/zortax/zgui?rev=80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a#80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a",
+        "source": "git+https://github.com/zortax/zgui?rev=ee29c7dc66206eb04ba7bcf514058a278c9070ba#ee29c7dc66206eb04ba7bcf514058a278c9070ba",
         "version": "0.1.0"
       },
       {
@@ -3678,12 +3647,12 @@
       },
       {
         "name": "zgui-shader",
-        "source": "git+https://github.com/zortax/zgui?rev=80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a#80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a",
+        "source": "git+https://github.com/zortax/zgui?rev=ee29c7dc66206eb04ba7bcf514058a278c9070ba#ee29c7dc66206eb04ba7bcf514058a278c9070ba",
         "version": "0.1.0"
       },
       {
         "name": "zgui-shader-macro",
-        "source": "git+https://github.com/zortax/zgui?rev=80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a#80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a",
+        "source": "git+https://github.com/zortax/zgui?rev=ee29c7dc66206eb04ba7bcf514058a278c9070ba#ee29c7dc66206eb04ba7bcf514058a278c9070ba",
         "version": "0.1.0"
       },
       {
@@ -3692,17 +3661,17 @@
       },
       {
         "name": "zgui-svg",
-        "source": "git+https://github.com/zortax/zgui?rev=80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a#80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a",
+        "source": "git+https://github.com/zortax/zgui?rev=ee29c7dc66206eb04ba7bcf514058a278c9070ba#ee29c7dc66206eb04ba7bcf514058a278c9070ba",
         "version": "0.1.0"
       },
       {
         "name": "zgui-testkit-scene",
-        "source": "git+https://github.com/zortax/zgui?rev=80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a#80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a",
+        "source": "git+https://github.com/zortax/zgui?rev=ee29c7dc66206eb04ba7bcf514058a278c9070ba#ee29c7dc66206eb04ba7bcf514058a278c9070ba",
         "version": "0.1.0"
       },
       {
         "name": "zgui-text",
-        "source": "git+https://github.com/zortax/zgui?rev=80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a#80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a",
+        "source": "git+https://github.com/zortax/zgui?rev=ee29c7dc66206eb04ba7bcf514058a278c9070ba#ee29c7dc66206eb04ba7bcf514058a278c9070ba",
         "version": "0.1.0"
       },
       {
@@ -3711,27 +3680,27 @@
       },
       {
         "name": "zgui-text-style",
-        "source": "git+https://github.com/zortax/zgui?rev=80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a#80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a",
+        "source": "git+https://github.com/zortax/zgui?rev=ee29c7dc66206eb04ba7bcf514058a278c9070ba#ee29c7dc66206eb04ba7bcf514058a278c9070ba",
         "version": "0.1.0"
       },
       {
         "name": "zgui-ui",
-        "source": "git+https://github.com/zortax/zgui?rev=80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a#80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a",
+        "source": "git+https://github.com/zortax/zgui?rev=ee29c7dc66206eb04ba7bcf514058a278c9070ba#ee29c7dc66206eb04ba7bcf514058a278c9070ba",
         "version": "0.1.0"
       },
       {
         "name": "zgui-ui-icons",
-        "source": "git+https://github.com/zortax/zgui?rev=80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a#80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a",
+        "source": "git+https://github.com/zortax/zgui?rev=ee29c7dc66206eb04ba7bcf514058a278c9070ba#ee29c7dc66206eb04ba7bcf514058a278c9070ba",
         "version": "0.1.0"
       },
       {
         "name": "zgui-ui-primitives",
-        "source": "git+https://github.com/zortax/zgui?rev=80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a#80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a",
+        "source": "git+https://github.com/zortax/zgui?rev=ee29c7dc66206eb04ba7bcf514058a278c9070ba#ee29c7dc66206eb04ba7bcf514058a278c9070ba",
         "version": "0.1.0"
       },
       {
         "name": "zgui-ui-tokens",
-        "source": "git+https://github.com/zortax/zgui?rev=80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a#80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a",
+        "source": "git+https://github.com/zortax/zgui?rev=ee29c7dc66206eb04ba7bcf514058a278c9070ba#ee29c7dc66206eb04ba7bcf514058a278c9070ba",
         "version": "0.1.0"
       },
       {
@@ -3744,22 +3713,22 @@
       },
       {
         "name": "zgui-view-macro",
-        "source": "git+https://github.com/zortax/zgui?rev=80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a#80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a",
+        "source": "git+https://github.com/zortax/zgui?rev=ee29c7dc66206eb04ba7bcf514058a278c9070ba#ee29c7dc66206eb04ba7bcf514058a278c9070ba",
         "version": "0.1.0"
       },
       {
         "name": "zgui-vocab",
-        "source": "git+https://github.com/zortax/zgui?rev=80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a#80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a",
+        "source": "git+https://github.com/zortax/zgui?rev=ee29c7dc66206eb04ba7bcf514058a278c9070ba#ee29c7dc66206eb04ba7bcf514058a278c9070ba",
         "version": "0.1.0"
       },
       {
         "name": "zgui-wgpu",
-        "source": "git+https://github.com/zortax/zgui?rev=80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a#80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a",
+        "source": "git+https://github.com/zortax/zgui?rev=ee29c7dc66206eb04ba7bcf514058a278c9070ba#ee29c7dc66206eb04ba7bcf514058a278c9070ba",
         "version": "0.1.0"
       },
       {
         "name": "zgui-wgsl",
-        "source": "git+https://github.com/zortax/zgui?rev=80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a#80baa3c7cb0fbbe1c058f10059e076e41c0a1b9a",
+        "source": "git+https://github.com/zortax/zgui?rev=ee29c7dc66206eb04ba7bcf514058a278c9070ba#ee29c7dc66206eb04ba7bcf514058a278c9070ba",
         "version": "0.1.0"
       },
       {
@@ -4104,7 +4073,7 @@
   "host": {
     "profile": "debug",
     "rustc": "rustc 1.100.0 (0ef1bc386 2026-11-09)",
-    "sourceTreeDigest": "sha256:b6fabe0a7b4d3a471cafc41d3e82fcae6e5918fe6e2e36998ff40f4d9c32cfa0",
+    "sourceTreeDigest": "sha256:a06b67e924c79d45dfdf9d3ef38e66b3cad4b250c80c3f9353372e995dbc7503",
     "sourceTreeScope": "workspace Rust sources, manifests, lockfiles and local native patches; includes test sources",
     "target": "x86_64-unknown-linux-gnu",
     "version": "0.1.0"

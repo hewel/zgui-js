@@ -1,7 +1,7 @@
 {
   "actionSequence": 5,
   "allowedPendingAssets": [],
-  "buildId": "sha256:386017922559bbfe19ead8b0d3acc6fec4dc2ea48f6c33d836e5abed7c2df3cc",
+  "buildId": "sha256:43d79b2430026ea703c00238ef443c4a92311766e251db4ccf8261b2e837913a",
   "captureId": "after-increment",
   "configurationId": 2,
   "documentIdentity": "DocumentId(0)",
@@ -18,7 +18,7 @@
     "frame": {
       "drawId": 2,
       "ordinal": 2,
-      "outcome": "Presented(FrameStats { draw_calls: 7, vector_passes: 0, damage_px: 159840, bytes_uploaded: 1316, memory: MemoryReport { fixed: 0, targets: 7864320, scratch: 0, atlases: 4194304, buffers: 534256 } })",
+      "outcome": "Presented(FrameStats { draw_calls: 3, vector_passes: 0, damage_px: 185148, bytes_uploaded: 2300, memory: MemoryReport { fixed: 0, targets: 7864320, scratch: 0, atlases: 4194304, buffers: 557952 } })",
       "timeUs": 0
     },
     "generation": 1,
@@ -27,7 +27,7 @@
     "sequence": 2,
     "styleRevision": 3
   },
-  "pngDigest": "sha256:ba8ba349d198fa851eca53ca5e35435bfbf337b9077c93e49faca6167130704d",
+  "pngDigest": "sha256:0de971968a3968bd3c89434ab381d7ff14cfa487603bc7219a9bb5287d3e60de",
   "readiness": {
     "appReady": true,
     "currentWorkSettled": true,
@@ -35,7 +35,7 @@
     "generation": 1,
     "nativeAcceptance": {
       "candidate": {
-        "buildId": "sha256:386017922559bbfe19ead8b0d3acc6fec4dc2ea48f6c33d836e5abed7c2df3cc",
+        "buildId": "sha256:43d79b2430026ea703c00238ef443c4a92311766e251db4ccf8261b2e837913a",
         "id": "dev.example.counter",
         "styleSystem": {
           "configDigest": "sha256:864ab49f77e8240f0abc9c85c23764f2eb766d29c61091c83c908d47e69f1ee1",
@@ -46,7 +46,7 @@
       "diagnostic": null,
       "document": "DocumentId(0)",
       "generation": 1,
-      "lastSuccessfulBuildId": "sha256:386017922559bbfe19ead8b0d3acc6fec4dc2ea48f6c33d836e5abed7c2df3cc",
+      "lastSuccessfulBuildId": "sha256:43d79b2430026ea703c00238ef443c4a92311766e251db4ccf8261b2e837913a",
       "schemaVersion": 1,
       "status": "accepted"
     },
@@ -104,7 +104,7 @@
   "surface": "main",
   "surfaceConfiguration": 0,
   "timingDeterministic": true,
-  "treeDigest": "sha256:6da903bb5ba9983adee8bf36ed08bed2799998b27038c14b5743316373f89224",
+  "treeDigest": "sha256:b804d81f49090bcceb68d515c0dc7d116c3fea6dbc7309e9876fbc480294c748",
   "validatedStateRevision": 45,
   "validationFrame": {
     "drawId": 4,

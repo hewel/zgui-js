@@ -1,13 +1,13 @@
 {
   "schemaVersion": 1,
   "run": "run",
-  "artifactsDigest": "sha256:b97488bd42609b62ac11679a41ce8d20066d9090e16402a1f938db1b6b416040",
+  "artifactsDigest": "sha256:ae38de1c71b31fd5b6475dfbf25db06582bfabd2886c569ef28ae9a104ed33ad",
   "policyDigest": "sha256:618dc201dcc2cc976d3b0ff41d440eca02b71b68c79b01d10814734b044bbeb9",
   "review": {
     "by": "coding-assistant",
-    "at": "2026-11-22T10:30:00Z",
-    "summary": "Counter baseline refresh after Wave 2/3, Lightning CSS Modules, @solidjs/compiler, and Cargo dev opt-level=2. Verified initial.png (25d53f3895...) and after-increment.png (ba8ba349d1...) remain byte-for-byte identical to the prior reviewed baseline.",
-    "buildId": "sha256:386017922559bbfe19ead8b0d3acc6fec4dc2ea48f6c33d836e5abed7c2df3cc",
+    "at": "2026-11-22T12:57:45Z",
+    "summary": "Counter baseline resealed on Arch RX 7900 XTX (RADV NAVI31) after upstream zgui upgrade 80baa3c7 -> ee29c7dc (#85: wgpu 30.0.2, vello 0.11.0, subpixel AA #70). Visually inspected initial.png (61b1c8d636...) and after-increment.png (0de971968a...): 0.24% pixel delta strictly within glyph bounding box (44,58)-(242,256) from subpixel text AA; layout and borders unchanged.",
+    "buildId": "sha256:43d79b2430026ea703c00238ef443c4a92311766e251db4ccf8261b2e837913a",
     "captures": [
       {
         "captureId": "initial",
