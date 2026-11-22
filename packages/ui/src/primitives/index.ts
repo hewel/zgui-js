@@ -11,6 +11,9 @@ export type {
   VirtualFocusOptions,
 } from "./virtual-focus.js";
 
+export { RadioGroupPrimitive, RadioItemPrimitive } from "./radio.js";
+export type { RadioGroupPrimitiveProps, RadioItemPrimitiveProps } from "./radio.js";
+
 export {
   createDismissLayer,
   createOverlayState,

@@ -49,6 +49,7 @@ Install `@hewel/zgui-cli` (or scaffold with `bun create zgui-js`). The binary na
 Zero-stylesheet behavioral primitives decoupled from `Portal`, `Popper`, and built-in component stylesheets (work identically inside `WindowSurface`, `LayerSurface`, and `PopupSurface`):
 
 - **Overlay, Presence, Focus & Delay**: `createPresence`, `createRetainedPresence`, `createOverlayState`, `createDismissLayer`, `createRovingFocus`, `createVirtualFocus`, `groupOrientation`, `createDelayed`
+- **Headless Radio**: `RadioGroupPrimitive`, `RadioItemPrimitive` (unstyled `role="radioGroup"` / `role="radioButton"` with roving tabindex, arbitrary children, and zero built-in styles)
 - **Headless Menu**: `MenuRootPrimitive`, `MenuListPrimitive`, `MenuItemPrimitive`, `MenuCheckboxItemPrimitive`, `MenuRadioGroupPrimitive`, `MenuRadioItemPrimitive`, `MenuSubPrimitive` (expose `data-state`, `data-highlighted`, `data-disabled` styling hooks)
 
 ## Router (`@hewel/zgui/router`)

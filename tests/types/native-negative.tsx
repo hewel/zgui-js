@@ -1,6 +1,11 @@
 import { Image, LayerSurface, PopupSurface, SessionLockSurface, TextField, TextArea, WindowSurface, createCanvasScene, createProjection, createSpring, createStore, getBackgroundBlurSupported, getSessionGeneration, reconcile, renderApp, renderShell, requestSessionLock, useMonitors } from "@hewel/zgui";
 import type { BlurRegion, NativeElementProps, NativeNode } from "@hewel/zgui";
-import { createRetainedPresence, createVirtualFocus } from "@hewel/zgui/primitives";
+import {
+  RadioGroupPrimitive,
+  RadioItemPrimitive,
+  createRetainedPresence,
+  createVirtualFocus,
+} from "@hewel/zgui/primitives";
 
 // @ts-expect-error Browser document is not a host global.
 document.createElement("div");
@@ -262,3 +267,9 @@ createVirtualFocus({
   // @ts-expect-error columns must be number or Accessor<number>.
   columns: "4",
 });
+// @ts-expect-error RadioItemPrimitive requires a string value prop.
+void <RadioItemPrimitive />;
+// @ts-expect-error RadioItemPrimitive owns checked state from RadioGroupPrimitive.
+void <RadioItemPrimitive value="a" checked={true} />;
+// @ts-expect-error RadioGroupPrimitive orientation uses GroupOrientation, not arbitrary strings.
+void <RadioGroupPrimitive orientation="diagonal" />;

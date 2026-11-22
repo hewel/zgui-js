@@ -111,9 +111,16 @@ import type {
 } from "@hewel/zgui";
 import type { Accessor } from "@hewel/zgui";
 import type { SessionLockRequest, SessionLockState } from "@hewel/zgui";
-import { createRetainedPresence, createVirtualFocus } from "@hewel/zgui/primitives";
+import {
+  RadioGroupPrimitive,
+  RadioItemPrimitive,
+  createRetainedPresence,
+  createVirtualFocus,
+} from "@hewel/zgui/primitives";
 import type {
   PresenceController,
+  RadioGroupPrimitiveProps,
+  RadioItemPrimitiveProps,
   RetainedPresenceController,
   RetainedPresenceOptions,
 } from "@hewel/zgui/primitives";
@@ -1058,4 +1065,27 @@ void (
     ariaActiveDescendant={vfController.activeNode()}
     onKeyDown={vfController.onKeyDown}
   />
+);
+const radioGroupPrimProps: RadioGroupPrimitiveProps = {
+  value: "a",
+  orientation: "horizontal",
+  ariaLabel: "Segments",
+  onValueChange: next => {
+    const chosen: string = next;
+    void chosen;
+  },
+};
+const radioItemPrimProps: RadioItemPrimitiveProps = {
+  value: "a",
+  disabled: false,
+  ariaLabel: "Alpha",
+};
+void (
+  <RadioGroupPrimitive {...radioGroupPrimProps}>
+    <RadioItemPrimitive {...radioItemPrimProps}>
+      <row>
+        <text>Alpha</text>
+      </row>
+    </RadioItemPrimitive>
+  </RadioGroupPrimitive>
 );

@@ -317,6 +317,8 @@ Zero-style behavioral primitives extracted from `@hewel/zgui/components` without
 | `createVirtualFocus`        | `packages/ui/src/primitives/virtual-focus.ts` | Data-driven 1D/2D virtual focus controller (`ariaActiveDescendant`, IME/caret-safe key routing) |
 | `groupOrientation`          | `packages/ui/src/primitives/roving.ts`        | Orientation validator (`horizontal` / `vertical` / `both`)                                      |
 | `createDelayed`             | `packages/ui/src/primitives/delay.ts`         | Cancellable hover/typeahead delay scheduler                                                     |
+| `RadioGroupPrimitive`       | `packages/ui/src/primitives/radio.ts`         | Unstyled `role="radioGroup"` provider with roving tabindex and zero built-in stylesheets        |
+| `RadioItemPrimitive`        | `packages/ui/src/primitives/radio.ts`         | Unstyled `role="radioButton"` accepting arbitrary children with `checked` / `data-state` hooks  |
 | `MenuRootPrimitive`         | `packages/ui/src/primitives/menu.ts`          | Headless menu hierarchy root (no Portal/Popper/CSS)                                             |
 | `MenuListPrimitive`         | `packages/ui/src/primitives/menu.ts`          | Headless `role="menu"` list with roving focus, typeahead, and Escape dismiss                    |
 | `MenuItemPrimitive`         | `packages/ui/src/primitives/menu.ts`          | Headless `role="menuItem"` with `data-highlighted` / `data-disabled` hooks                      |

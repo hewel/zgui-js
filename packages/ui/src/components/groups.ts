@@ -9,17 +9,10 @@ import type {
   NativeNode,
 } from "../types.js";
 import { callHandler, createControllable } from "./state.js";
-import {
-  append,
-  classes,
-  forbidChildren,
-  provide,
-  slot,
-  useStylesheet,
-  withDefaults,
-} from "./shared.js";
+import { classes, forbidChildren, provide, slot, useStylesheet, withDefaults } from "./shared.js";
 import { createRovingFocus, groupOrientation } from "./roving.js";
 import type { GroupOrientation } from "./roving.js";
+import { RadioGroupPrimitive, RadioItemPrimitive } from "../primitives/radio.js";
 import { Icon } from "./icons.js";
 import { DISC } from "./generated/icons.js";
 import { TOGGLE_SIZE_CLASSES } from "./choices.js";
@@ -63,13 +56,6 @@ export interface ToggleGroupItemProps extends Omit<NativeElementProps, "checked"
 }
 
 type Roving = ReturnType<typeof createRovingFocus>;
-interface RadioContextValue {
-  node: NativeNode;
-  disabled: Accessor<boolean>;
-  value: Accessor<string>;
-  choose: (value: string) => void;
-  roving: Roving;
-}
 interface ToggleContextValue {
   disabled: Accessor<boolean>;
   value: Accessor<readonly string[]>;
@@ -79,7 +65,6 @@ interface ToggleContextValue {
   size: Accessor<ToggleSize>;
   roving: Roving;
 }
-const RadioContext = createContext<RadioContextValue | null>(null);
 const ToggleContext = createContext<ToggleContextValue | null>(null);
 
 function itemValue(value: string): string {
@@ -90,47 +75,14 @@ function itemValue(value: string): string {
 
 export function RadioGroup(props: RadioGroupProps = {}): NativeNode {
   useStylesheet(radioGroupSheet);
-  const rest = omit(
-    props,
-    "value",
-    "defaultValue",
-    "onValueChange",
-    "disabled",
-    "orientation",
-    "label",
-    "children",
-    "onKeyDown",
-  );
-  const [value, choose] = createControllable<string>(
-    {
-      value: () => props.value,
-      defaultValue: () => props.defaultValue,
-      onChange: () => props.onValueChange,
-    },
-    "",
-  );
-  const axis = memo(() => groupOrientation(props.orientation ?? "vertical"));
-  const disabled = () => !!props.disabled;
-  const node = createElement("box");
-  const roving = createRovingFocus(axis);
-  spread(
-    node,
+  const rest = omit(props, "label");
+  return RadioGroupPrimitive(
     mergeProps(
       rest,
       withDefaults(
         {
-          role: "radioGroup" as const,
-          get disabled() {
-            return disabled();
-          },
           get ariaLabel() {
             return props.label ?? null;
-          },
-          get orientation() {
-            return axis() === "horizontal" ? ("horizontal" as const) : ("vertical" as const);
-          },
-          get "data-orientation"() {
-            return axis();
           },
         },
         rest,
@@ -139,60 +91,22 @@ export function RadioGroup(props: RadioGroupProps = {}): NativeNode {
         get __zguiClass() {
           return classes(radioGroupSheet.className, "zui-radio-group");
         },
-        get onKeyDown() {
-          return (event: NativeKeyEvent) => {
-            if (callHandler(event, props.onKeyDown) && !disabled()) roving.onKeyDown(event);
-          };
-        },
       },
     ),
   );
-  const context: RadioContextValue = { node, disabled, value, choose, roving };
-  slot(node, provide(RadioContext, context, props));
-  return node;
 }
 
 export function RadioGroupItem(props: RadioGroupItemProps): NativeNode {
   useStylesheet(radioItemSheet);
   forbidChildren("RadioGroupItem", props);
-  const rest = omit(props, "value", "disabled", "label", "onClick", "onFocus");
-  const group = useContext(RadioContext);
-  itemValue(props.value);
-  const value = memo(() => itemValue(props.value));
-  const disabled = () => !!props.disabled || !!group?.disabled();
-  const chosen = () => group?.value() === value();
-  const node = createElement("control");
-  const item = group?.roving.register(node, disabled, chosen);
-  const choose = () => {
-    if (disabled()) return;
-    item?.activate();
-    group?.choose(value());
-  };
-  spread(
-    node,
+  const rest = omit(props, "label", "children");
+  return RadioItemPrimitive(
     mergeProps(
       rest,
       withDefaults(
         {
-          role: "radioButton" as const,
-          get tabIndex() {
-            return item?.tabIndex() ?? 0;
-          },
-          get checked() {
-            return chosen();
-          },
-          get disabled() {
-            return disabled();
-          },
           get ariaLabel() {
             return props.label ?? null;
-          },
-          ariaRadioGroup: group?.node ?? null,
-          get "data-state"() {
-            return chosen() ? "checked" : "unchecked";
-          },
-          get "data-value"() {
-            return value();
           },
         },
         rest,
@@ -201,21 +115,12 @@ export function RadioGroupItem(props: RadioGroupItemProps): NativeNode {
         get __zguiClass() {
           return classes(radioItemSheet.className, "zui-radio-group__item");
         },
-        get onClick() {
-          return (event: NativeEvent) => {
-            if (callHandler(event, props.onClick)) choose();
-          };
-        },
-        get onFocus() {
-          return (event: NativeFocusEvent) => {
-            if (callHandler(event, props.onFocus) && event.target === node) choose();
-          };
+        get children() {
+          return Icon({ icon: DISC });
         },
       },
     ),
   );
-  append(node, Icon({ icon: DISC }));
-  return node;
 }
 
 function toggleValues(current: readonly string[]): readonly string[] {

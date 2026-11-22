@@ -8,6 +8,7 @@ import type { NativeChild, NativeNode } from "@hewel/zgui";
 import {
   RadioGroup, RadioGroupItem, ToggleGroup, ToggleGroupItem,
 } from "@hewel/zgui/components";
+import { RadioGroupPrimitive, RadioItemPrimitive } from "@hewel/zgui/primitives";
 
 const log = {
   radio: [] as string[],
@@ -171,6 +172,76 @@ export function mountRadioChildren(root: NativeNode, child: () => NativeChild): 
     <RadioGroup>
       <RadioGroupItem value="a" {...({ get children() { return child() as never; } })} />
     </RadioGroup>
+  ), root);
+}
+
+const [primDisabledAll, setPrimDisabledAll] = createSignal(false);
+const [primDisableB, setPrimDisableB] = createSignal(false);
+const [primControlled, setPrimControlled] = createSignal<string | undefined>("a");
+const [primEcho, setPrimEcho] = createSignal(false);
+const [primOrientation, setPrimOrientation] = createSignal<"horizontal" | "vertical" | "both">("horizontal");
+export const primControls = {
+  setPrimDisabledAll,
+  setPrimDisableB,
+  setPrimControlled,
+  setPrimEcho,
+  setPrimOrientation,
+};
+
+export function mountPrimitiveRadio(root: NativeNode): () => void {
+  return renderApp(() => (
+    <RadioGroupPrimitive
+      testId="prg"
+      ariaLabel="Segments"
+      orientation={primOrientation()}
+      defaultValue="b"
+      disabled={primDisabledAll()}
+      onValueChange={value => log.radio.push(value)}
+    >
+      <RadioItemPrimitive testId="pa" value="a" ariaLabel="Alpha">
+        <row testId="pa-row">
+          <box testId="pa-dot" />
+          <text testId="pa-text">Alpha</text>
+        </row>
+      </RadioItemPrimitive>
+      <RadioItemPrimitive testId="pb" value="b" disabled={primDisableB()}>
+        <text testId="pb-text">Beta</text>
+      </RadioItemPrimitive>
+      <RadioItemPrimitive testId="pc" value="c">
+        <text testId="pc-text">Gamma</text>
+      </RadioItemPrimitive>
+    </RadioGroupPrimitive>
+  ), root);
+}
+
+export function mountPrimitiveControlledRadio(root: NativeNode): () => void {
+  return renderApp(() => (
+    <RadioGroupPrimitive
+      testId="prg"
+      value={primControlled()}
+      onValueChange={value => {
+        log.radio.push(value);
+        if (primEcho()) setPrimControlled(value);
+      }}
+    >
+      <RadioItemPrimitive testId="pa" value="a">
+        <text>Alpha</text>
+      </RadioItemPrimitive>
+      <RadioItemPrimitive testId="pb" value="b">
+        <text>Beta</text>
+      </RadioItemPrimitive>
+      <RadioItemPrimitive testId="pc" value="c">
+        <text>Gamma</text>
+      </RadioItemPrimitive>
+    </RadioGroupPrimitive>
+  ), root);
+}
+
+export function mountPrimitiveInvalid(root: NativeNode, value: string): () => void {
+  return renderApp(() => (
+    <RadioGroupPrimitive>
+      <RadioItemPrimitive value={value} />
+    </RadioGroupPrimitive>
   ), root);
 }
 `;
@@ -525,4 +596,131 @@ test("hide and show remount produces fresh item nodes", async t => {
   const second = harness.byTestId("ra");
   assert.ok(second);
   assert.notEqual(second, first, "remounting creates fresh item nodes");
+});
+
+test("RadioGroupPrimitive and RadioItemPrimitive provide unstyled headless radio semantics with arbitrary children", async t => {
+  const { mod, harness } = await mounted(t, "mountPrimitiveRadio");
+  assert.equal(
+    harness.stylesheets.size,
+    0,
+    "headless radio primitives install zero built-in stylesheets",
+  );
+  const group = harness.byTestId("prg");
+  const pa = harness.byTestId("pa");
+  const pb = harness.byTestId("pb");
+  const pc = harness.byTestId("pc");
+  assert.equal(prop(harness, "prg", "role"), "radioGroup");
+  assert.equal(prop(harness, "prg", "ariaLabel"), "Segments");
+  assert.equal(prop(harness, "prg", "orientation"), "horizontal");
+  assert.equal(prop(harness, "prg", "data-orientation"), "horizontal");
+  assert.equal(prop(harness, "prg", "class"), undefined, "no built-in class on group");
+  assert.equal(prop(harness, "pa", "class"), undefined, "no built-in class on item");
+  assert.equal(prop(harness, "pa", "role"), "radioButton");
+  assert.equal(prop(harness, "pa", "ariaLabel"), "Alpha");
+  assert.equal(prop(harness, "pa", "ariaRadioGroup"), group);
+  assert.equal(prop(harness, "pb", "ariaRadioGroup"), group);
+  assert.equal(prop(harness, "pc", "ariaRadioGroup"), group);
+
+  // Arbitrary children rendered without built-in icon or extra tab stops
+  assert.ok(harness.byTestId("pa-row"));
+  assert.ok(harness.byTestId("pa-dot"));
+  assert.ok(harness.byTestId("pa-text"));
+  assert.equal(prop(harness, "pa-row", "tabIndex"), undefined);
+  assert.equal(prop(harness, "pa-dot", "tabIndex"), undefined);
+  assert.equal(
+    pa.children.length,
+    1,
+    "only authored child tree is mounted (no built-in DISC icon)",
+  );
+
+  // Checked fallback wins initial tab stop
+  assert.equal(tabIndex(harness, "pa"), -1);
+  assert.equal(tabIndex(harness, "pb"), 0);
+  assert.equal(tabIndex(harness, "pc"), -1);
+  assert.equal(checked(harness, "pb"), true);
+  assert.equal(prop(harness, "pb", "data-state"), "checked");
+  assert.equal(prop(harness, "pa", "data-state"), "unchecked");
+
+  // Horizontal arrow navigation focuses and selects via own-focus
+  sendKey(harness, pb, "ArrowDown");
+  assert.equal(harness.focused.current, null, "vertical arrow ignored in horizontal mode");
+  const right = sendKey(harness, pb, "ArrowRight");
+  assert.equal(right.defaultPrevented, true);
+  assert.equal(harness.focused.current, pc);
+  assert.equal(checked(harness, "pc"), true);
+  assert.deepEqual(mod.api.log.radio, ["c"]);
+
+  // Home / End and pointer click activation
+  sendKey(harness, pc, "Home");
+  assert.equal(harness.focused.current, pa);
+  assert.equal(checked(harness, "pa"), true);
+  sendKey(harness, pa, "End");
+  assert.equal(harness.focused.current, pc);
+  assert.equal(checked(harness, "pc"), true);
+  harness.dispatch(pb, "Click");
+  assert.equal(checked(harness, "pb"), true);
+
+  // Focus bubbling from a descendant child must NOT trigger own-focus selection
+  const countBeforeChildFocus = mod.api.log.radio.length;
+  harness.dispatch(harness.byTestId("pa-row"), "FocusIn");
+  assert.equal(mod.api.log.radio.length, countBeforeChildFocus);
+  assert.equal(checked(harness, "pb"), true);
+
+  // Disabling all items exposes zero tab stops
+  mod.primControls.setPrimDisabledAll(true);
+  harness.flush();
+  assert.equal(tabIndex(harness, "pa"), -1);
+  assert.equal(tabIndex(harness, "pb"), -1);
+  assert.equal(tabIndex(harness, "pc"), -1);
+  mod.primControls.setPrimDisabledAll(false);
+  mod.primControls.setPrimDisableB(true);
+  harness.flush();
+  assert.equal(tabIndex(harness, "pb"), -1);
+  assert.equal(tabIndex(harness, "pa"), 0);
+});
+
+test("RadioGroupPrimitive controlled value never steals focus and honors parent veto", async t => {
+  const { mod, harness } = await mounted(t, "mountPrimitiveControlledRadio");
+  assert.equal(harness.stylesheets.size, 0);
+  const pa = harness.byTestId("pa");
+  const pb = harness.byTestId("pb");
+  const pc = harness.byTestId("pc");
+  assert.equal(tabIndex(harness, "pa"), 0);
+  assert.equal(checked(harness, "pa"), true);
+
+  // Focus moves via arrow key, parent vetoes selection change
+  sendKey(harness, pa, "ArrowDown");
+  assert.equal(harness.focused.current, pb);
+  assert.deepEqual(mod.api.log.radio, ["b"]);
+  assert.equal(
+    checked(harness, "pb"),
+    false,
+    "focus never implies checked without state agreement",
+  );
+  assert.equal(checked(harness, "pa"), true);
+  assert.equal(tabIndex(harness, "pb"), 0, "enabled roving-active item retains tab stop");
+  assert.equal(tabIndex(harness, "pa"), -1);
+
+  // Controlled external value update does NOT steal focus or override active roving tab stop
+  mod.primControls.setPrimControlled("c");
+  harness.flush();
+  assert.equal(checked(harness, "pc"), true);
+  assert.equal(harness.focused.current, pb, "controlled value update never steals focus");
+  assert.equal(
+    tabIndex(harness, "pb"),
+    0,
+    "roving-active item keeps tab stop over checked fallback",
+  );
+  assert.equal(tabIndex(harness, "pc"), -1);
+
+  // When parent echoes, click selects cleanly
+  mod.primControls.setPrimEcho(true);
+  harness.flush();
+  harness.dispatch(pc, "Click");
+  assert.equal(checked(harness, "pc"), true);
+  assert.equal(tabIndex(harness, "pc"), 0);
+
+  // Empty value still throws clearly
+  const root2 = harness.makeNode("root2");
+  assert.throws(() => mod.mountPrimitiveInvalid(root2, ""), /non-empty string/);
 });
