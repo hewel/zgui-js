@@ -130,13 +130,14 @@ test("self-hosted Inspector UI renders native tree, source tag, box model, frame
     extraCapabilities: { unixSockets: [sockPath] },
   });
 
+  const viewportHeight = 780;
   const { out } = await runScenario({
     projectDir: work.dir,
     bundle: built.dist,
     fixture: fixturePath,
     name: "inspector-ui",
-    width: 980,
-    height: 680,
+    width: 1240,
+    height: viewportHeight,
     requiredCapabilities: ["services.fixtures", "pixels", "tree.inspect"],
     steps: [
       { id: "wait-socket", op: "clock.advance", byMs: 20 },
@@ -160,6 +161,17 @@ test("self-hosted Inspector UI renders native tree, source tag, box model, frame
   assert.equal(getNode(loadedTree, "inspector-frame-phases").text, "120us / 240us / 410us");
   assert.equal(getNode(loadedTree, "inspector-frame-total").text, "770us");
   assert.equal(getNode(loadedTree, "inspector-session-stats").text, "gen 3 | 14 nodes");
+
+  const toolbar = getNode(loadedTree, "inspector-toolbar").boundsLogical;
+  const workspaceTop = toolbar.y + toolbar.height;
+  for (const id of ["inspector-tree-pane", "inspector-details-pane", "inspector-divider"]) {
+    const { y, height } = getNode(loadedTree, id).boundsLogical;
+    assert.ok(Math.abs(y - workspaceTop) < 1, `${id} starts at ${y}, expected ${workspaceTop}`);
+    assert.ok(
+      Math.abs(y + height - viewportHeight) < 1,
+      `${id} ends at ${y + height}, expected ${viewportHeight}`,
+    );
+  }
 
   const pickedTree = await readTree(out, "picked");
   assert.equal(getNode(pickedTree, "inspector-status").text, "Picker active");

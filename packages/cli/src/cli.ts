@@ -29,6 +29,7 @@ Commands:
   smoke     Build the compiler/runtime smoke fixture
 
 Application defaults to the current directory (counter at the repository root).
+Relative file and directory flags are resolved from the current working directory.
   build --watch          Watch packages without starting a host
   build --bytecode       Compile entry, chunks, and workers to QuickJS bytecode (.qjsb)
   --capabilities-file F   Merge capability declarations into build, dev, preview, or package
@@ -122,13 +123,13 @@ function parseInspect(args: string[]): Extract<Command, { command: "inspect" }> 
     if (arg === "--host-root") {
       const val = args.shift();
       if (!val || val.startsWith("--")) throw new Error("--host-root requires a value");
-      hostRoot = val;
+      hostRoot = path.resolve(val);
       continue;
     }
     if (arg === "--host-executable") {
       const val = args.shift();
       if (!val || val.startsWith("--")) throw new Error("--host-executable requires a value");
-      hostExecutable = val;
+      hostExecutable = path.resolve(val);
       continue;
     }
     forwarded.push(arg);
@@ -220,6 +221,10 @@ function parse(args: string[]): Command {
     const selected = flags.get(flag);
     return typeof selected === "string" ? selected : undefined;
   };
+  const pathValue = (flag: string): string | undefined => {
+    const selected = value(flag);
+    return selected === undefined ? undefined : path.resolve(selected);
+  };
   const exitAfterMs = value("--exit-after-ms");
   if (exitAfterMs !== undefined && !/^[1-9][0-9]*$/.test(exitAfterMs)) {
     throw new Error("--exit-after-ms requires a positive integer");
@@ -238,10 +243,10 @@ function parse(args: string[]): Command {
     }
   }
   const selector = directory ?? value("--app");
-  const capabilitiesFile = value("--capabilities-file");
+  const capabilitiesFile = pathValue("--capabilities-file");
   const host = {
-    hostRoot: value("--host-root"),
-    hostExecutable: value("--host-executable"),
+    hostRoot: pathValue("--host-root"),
+    hostExecutable: pathValue("--host-executable"),
   };
   switch (command) {
     case "smoke":
@@ -268,8 +273,8 @@ function parse(args: string[]): Command {
         height: value("--height"),
         title: value("--title"),
         maxJsStackBytes,
-        layerConfig: value("--layer-config"),
-        devInspect: value("--dev-inspect"),
+        layerConfig: pathValue("--layer-config"),
+        devInspect: pathValue("--dev-inspect"),
         pureShell: flags.has("--pure-shell"),
         strictTypecheck: flags.has("--strict-typecheck"),
       };
@@ -280,10 +285,10 @@ function parse(args: string[]): Command {
         capabilitiesFile,
         ...host,
         watch: flags.has("--watch"),
-        profile: value("--profile"),
-        fixture: value("--fixture"),
-        scenario: value("--scenario"),
-        out: value("--out"),
+        profile: pathValue("--profile"),
+        fixture: pathValue("--fixture"),
+        scenario: pathValue("--scenario"),
+        out: pathValue("--out"),
       };
     case "package":
       return {
@@ -291,7 +296,7 @@ function parse(args: string[]): Command {
         selector,
         capabilitiesFile,
         ...host,
-        out: value("--out"),
+        out: pathValue("--out"),
         bytecode: flags.has("--bytecode"),
         desktopEntry: flags.has("--desktop-entry"),
         pureShell: flags.has("--pure-shell"),
@@ -401,10 +406,8 @@ export async function runCli(rawArgs: readonly string[]): Promise<number> {
     if (selected.title !== undefined) hostArgs.push("--title", selected.title);
     if (selected.maxJsStackBytes !== undefined)
       hostArgs.push("--max-js-stack-bytes", selected.maxJsStackBytes);
-    if (selected.layerConfig !== undefined)
-      hostArgs.push("--layer-config", path.resolve(selected.layerConfig));
-    if (selected.devInspect !== undefined)
-      hostArgs.push("--dev-inspect", path.resolve(selected.devInspect));
+    if (selected.layerConfig !== undefined) hostArgs.push("--layer-config", selected.layerConfig);
+    if (selected.devInspect !== undefined) hostArgs.push("--dev-inspect", selected.devInspect);
     if (selected.pureShell) hostArgs.push("--pure-shell");
     return withInterrupt(signal =>
       devApplication(application.app, {

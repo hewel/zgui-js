@@ -376,6 +376,35 @@ test("zgui-js inspect forwards subcommand arguments to the resolved native-host"
   ]);
 });
 
+test("zgui-js package resolves explicit host and output paths from the caller's cwd", async t => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "zgui-package-paths-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+
+  const appDir = path.join(dir, "packaged-demo");
+  await execute(process.execPath, [cli, "init", "packaged-demo"], { cwd: dir });
+  await linkWorkspaceSdk(appDir);
+
+  const host = makeMockHostScript({ tag: "caller-host" });
+  await writeFile(path.join(dir, "relative-host"), host, { mode: 0o755 });
+  await execute(
+    process.execPath,
+    [
+      cli,
+      "package",
+      "--app",
+      "packaged-demo",
+      "--host-executable",
+      "./relative-host",
+      "--out",
+      "./release",
+    ],
+    { cwd: dir },
+  );
+
+  assert.equal(await readFile(path.join(dir, "release/bin/native-host"), "utf8"), host);
+  assert.equal(existsSync(path.join(appDir, "release")), false);
+});
+
 test(
   "zgui-js package produces a self-contained runnable Linux app directory with zero Cargo invocation",
   { timeout: 30000 },

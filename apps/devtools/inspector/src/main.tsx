@@ -436,7 +436,7 @@ function InspectorApp() {
             </box>
           </SplitPanePanel>
 
-          <SplitPaneHandle withHandle />
+          <SplitPaneHandle testId="inspector-divider" withHandle />
 
           <SplitPanePanel minSize={30}>
             <scroll class={styles.scrollArea}>
