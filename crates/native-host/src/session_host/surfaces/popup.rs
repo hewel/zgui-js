@@ -108,10 +108,11 @@ impl ShellWindows {
                     let auto = spec.auto_height(parent, popup.grab);
                     let next_size = match (&auto, popup.spec.is_auto_height()) {
                         (Some(policy), true) => {
+                            let old_insets = popup.spec.geometry_insets();
+                            let old_vertical_bleed = old_insets.top.0 + old_insets.bottom.0;
                             let current_h = cx.surface(popup.surface).map_or(policy.max_height.0, |surface| {
                                 let scale = (surface.scale_factor() as f32).max(f32::EPSILON);
-                                (surface.size().height.0 / scale)
-                                    .round()
+                                ((surface.size().height.0 / scale).round() - old_vertical_bleed)
                                     .clamp(policy.min_height.0, policy.max_height.0)
                             });
                             zgui::geom::Size::new(policy.width, zgui::geom::CssPx(current_h))

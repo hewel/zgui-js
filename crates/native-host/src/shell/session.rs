@@ -1418,4 +1418,75 @@ mod tests {
             });
         }
     }
+
+    #[test]
+    fn popup_geometry_insets_validates_edges_and_expanded_extent_atomically() {
+        let runtime = rquickjs::Runtime::new().expect("create QuickJS runtime");
+        let context = rquickjs::Context::full(&runtime).expect("create QuickJS context");
+        let waker = zgui::platform::PlatformCx::waker(&zgui_platform_headless::Headless::new());
+        let shell = Shell::new(
+            ShellConfig {
+                generation: 1,
+                authority: Authority::Allowed,
+                window_authority: Authority::Allowed,
+                lock_authority: Authority::Denied,
+                lock_state: SessionLockState::Unlocked,
+                contract: ContractPolicy::Throw,
+            },
+            waker,
+        );
+        shell.activate();
+        context.with(|ctx| {
+            shell.install(&ctx).expect("install shell bridge");
+            ctx.eval::<(), _>(r#"
+                const s = __zguiShell;
+                s.openLayer('bar', { layer: 'top', anchor: ['top', 'left', 'right'], width: 0, height: 40 }, () => {});
+                const base = {
+                    parent: 'bar', width: 360, height: 200,
+                    anchorRect: { x: 10, y: 10, width: 40, height: 20 },
+                    anchor: 'bottom-left', gravity: 'bottom-right', offset: { x: 0, y: 0 },
+                    slide: true, flip: true, resize: false, reactive: false, grab: false,
+                };
+                const popId = s.openPopup('pop', {
+                    ...base,
+                    geometryInsets: { top: 16, right: 28, bottom: 32, left: 12 },
+                }, () => {}, () => {});
+
+                const badInsets = [
+                    12,
+                    [12, 12, 12, 12],
+                    '28px',
+                    { top: -1, right: 0, bottom: 0, left: 0 },
+                    { top: 0.5, right: 0, bottom: 0, left: 0 },
+                    { top: NaN, right: 0, bottom: 0, left: 0 },
+                    { top: Infinity, right: 0, bottom: 0, left: 0 },
+                    { top: 0, right: 16385, bottom: 0, left: 0 },
+                ];
+                for (const bad of badInsets) {
+                    let threw = false;
+                    try { s.updatePopup(popId, { ...base, geometryInsets: bad }); } catch { threw = true; }
+                    if (!threw) throw new Error('expected invalid geometryInsets rejection');
+                }
+
+                // Expanded logical extent overflow (both fixed height and auto maxHeight).
+                for (const overflow of [
+                    { ...base, width: 16300, geometryInsets: { top: 0, right: 50, bottom: 0, left: 50 } },
+                    { ...base, height: 16300, geometryInsets: { top: 50, right: 0, bottom: 50, left: 0 } },
+                    { ...base, height: 'auto', minHeight: 40, maxHeight: 16300, geometryInsets: { top: 50, right: 0, bottom: 50, left: 0 } },
+                ]) {
+                    let threw = false;
+                    try { s.updatePopup(popId, overflow); } catch (e) { threw = e instanceof RangeError; }
+                    if (!threw) throw new Error('expected RangeError on expanded extent overflow');
+                }
+            "#).expect("run popup geometryInsets validation tests");
+        });
+
+        let popup_spec = shell.popup_specs().pop_front().expect("popup spec").1;
+        assert_eq!(
+            popup_spec.geometry_insets(),
+            Edges::new(CssPx(16.0), CssPx(28.0), CssPx(32.0), CssPx(12.0)),
+            "invalid updates must throw atomically without mutating live popup geometryInsets"
+        );
+        shell.clear();
+    }
 }

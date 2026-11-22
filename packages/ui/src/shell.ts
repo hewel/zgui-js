@@ -34,6 +34,7 @@ import type {
   SessionLockRequest,
   SessionLockState,
   SessionLockSurfaceProps,
+  SurfaceInsets,
   WindowSurfaceProps,
 } from "./types.js";
 
@@ -110,6 +111,21 @@ export function useMonitors(): Accessor<readonly Monitor[]> {
 }
 
 const noAnchors: readonly LayerAnchor[] = [];
+
+function normalizeInsets(insets: SurfaceInsets | undefined): Readonly<Record<LayerAnchor, number>> {
+  if (insets === undefined) {
+    return { top: 0, right: 0, bottom: 0, left: 0 };
+  }
+  if (typeof insets === "number") {
+    return { top: insets, right: insets, bottom: insets, left: insets };
+  }
+  return {
+    top: insets.top ?? 0,
+    right: insets.right ?? 0,
+    bottom: insets.bottom ?? 0,
+    left: insets.left ?? 0,
+  };
+}
 
 function placementOf(props: LayerSurfaceProps): LayerPlacement {
   const anchor = props.anchor === undefined ? noAnchors : [...props.anchor];
@@ -397,6 +413,7 @@ export function PopupSurface(props: PopupSurfaceProps): null {
                 grab: props.grab ?? false,
                 width: props.width,
                 height: props.height ?? "auto",
+                geometryInsets: normalizeInsets(props.geometryInsets),
                 ...(props.minHeight !== undefined ? { minHeight: props.minHeight } : {}),
                 ...(props.maxHeight !== undefined ? { maxHeight: props.maxHeight } : {}),
               };

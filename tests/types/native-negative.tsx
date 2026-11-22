@@ -188,6 +188,14 @@ void <PopupSurface name="menu" parent="panel" anchorNode={fabricated}
 void <PopupSurface name="menu" parent="panel" anchorNode={fabricated} />;
 // @ts-expect-error Wayland popup placement uses physical positions.
 void <PopupSurface name="menu" parent="panel" anchorNode={fabricated} width={10} height={10} placement={{ gravity: "inline-start" }} />;
+// @ts-expect-error WindowSurface does not accept geometryInsets in v1.
+void <WindowSurface name="win" title="Win" width={320} height={240} geometryInsets={28} />;
+// @ts-expect-error SessionLockSurface does not accept geometryInsets.
+void <SessionLockSurface name="lock" output="DP-1" geometryInsets={28} />;
+// @ts-expect-error LayerSurface does not accept geometryInsets.
+void <LayerSurface name="panel" geometryInsets={28} />;
+// @ts-expect-error SurfaceInsets uses physical edge names (top/right/bottom/left).
+void <PopupSurface name="menu" parent="panel" anchorNode={fabricated} width={10} geometryInsets={{ inlineStart: 12 }} />;
 const negSpring = createSpring(() => 0);
 // @ts-expect-error initial is mount-only and rejected by configure().
 negSpring.configure({ initial: 0 });

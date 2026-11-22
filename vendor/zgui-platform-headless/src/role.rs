@@ -17,7 +17,7 @@
 //! [`OffscreenSurface::layer_placement`](crate::surface::OffscreenSurface::layer_placement) and
 //! [`OffscreenSurface::popup_placement`](crate::surface::OffscreenSurface::popup_placement).
 
-use zgui_geom::{Device, DevicePx, Size};
+use zgui_geom::{CssPx, Device, DevicePx, Size};
 use zgui_platform::{
     LayerPlacement, MonitorInfo, MonitorTarget, PlatformError, SurfaceAttributes, SurfaceId,
     SurfaceRole,
@@ -37,8 +37,18 @@ pub(crate) fn extent(
         Size::new(DevicePx(size.width.0), DevicePx(size.height.0))
     });
     match &attributes.role {
-        SurfaceRole::Popup(placement) if !exists(placement.parent) => {
-            Err(PlatformError::NoSuchSurface)
+        SurfaceRole::Popup(placement) => {
+            if !exists(placement.parent) {
+                return Err(PlatformError::NoSuchSurface);
+            }
+            let visual = attributes
+                .size
+                .unwrap_or_else(|| Size::new(CssPx(default.width.0), CssPx(default.height.0)));
+            let (_visual, _insets, drawable) = placement.expand_visual_size(visual)?;
+            Ok(Size::new(
+                DevicePx(drawable.width as f32),
+                DevicePx(drawable.height as f32),
+            ))
         }
         SurfaceRole::Layer(placement) => {
             let output = output(placement.monitor.as_ref(), monitors)?;
@@ -172,6 +182,14 @@ mod tests {
         assert_eq!(
             extent(&attributes, &[], DEFAULT, |_| false),
             Err(PlatformError::NoSuchSurface)
+        );
+
+        let inset_popup = PopupPlacement::below(SurfaceId::new(4), rect)
+            .with_geometry_insets(Edges::new(CssPx(16.0), CssPx(28.0), CssPx(32.0), CssPx(12.0)));
+        let inset_attrs = with_role(SurfaceRole::Popup(inset_popup), Some((120.0, 80.0)));
+        assert_eq!(
+            extent(&inset_attrs, &[], DEFAULT, |id| id == SurfaceId::new(4)),
+            Ok(Size::new(DevicePx(160.0), DevicePx(128.0)))
         );
     }
 

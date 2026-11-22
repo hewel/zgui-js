@@ -200,6 +200,21 @@ impl SessionHost {
         Some((f64::from(running.spec.size.width.0), f64::from(running.spec.size.height.0), monitor_name(running.spec.placement.monitor.as_ref())))
     }
 
+    /// Outer drawable bleed insets declared for a preview popup surface, or zeros for other roles.
+    #[must_use]
+    pub(crate) fn shell_geometry_insets(&self, surface: SurfaceId) -> zgui::geom::Edges<f64> {
+        if let Some(popup) = self.shell_windows.popups.iter().find(|popup| popup.surface == surface) {
+            let insets = popup.spec.geometry_insets();
+            return zgui::geom::Edges::new(
+                f64::from(insets.top.0),
+                f64::from(insets.right.0),
+                f64::from(insets.bottom.0),
+                f64::from(insets.left.0),
+            );
+        }
+        zgui::geom::Edges::new(0.0, 0.0, 0.0, 0.0)
+    }
+
     /// Recreate one named surface for preview while retaining its session and other regions.
     pub(crate) fn recreate_shell_surface(&mut self, runtime: &mut Runtime, cx: &dyn PlatformCx, images: ImageChoice, monitors: &[Monitor], name: &str) -> Result<()> {
         let session = self.sessions().next().cloned().ok_or("no active session")?;

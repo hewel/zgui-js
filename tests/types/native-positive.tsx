@@ -99,6 +99,7 @@ import type {
   StoreOptions,
   StoreReturn,
   StoreSetter,
+  SurfaceInsets,
   TextFieldProps,
   TextAreaProps,
   TextSelectionRange,
@@ -976,4 +977,33 @@ void (
 );
 void (
   <WindowSurface name="undef-glass" title="Undef" width={320} height={240} blurRegion={undefined} />
+);
+const scalarInsets: SurfaceInsets = 28;
+const edgeInsets: SurfaceInsets = { top: 12, right: 24, bottom: 32 };
+void (
+  <PopupSurface
+    name="shadow-scalar"
+    parent="glass-bar"
+    anchorRect={{ x: 0, y: 0, width: 10, height: 10 }}
+    width={360}
+    geometryInsets={scalarInsets}
+  />
+);
+void (
+  <PopupSurface
+    name="shadow-edges"
+    parent="glass-bar"
+    anchorRect={{ x: 0, y: 0, width: 10, height: 10 }}
+    width={360}
+    geometryInsets={edgeInsets}
+  />
+);
+void (
+  <PopupSurface
+    name="shadow-undef"
+    parent="glass-bar"
+    anchorRect={{ x: 0, y: 0, width: 10, height: 10 }}
+    width={360}
+    geometryInsets={undefined}
+  />
 );

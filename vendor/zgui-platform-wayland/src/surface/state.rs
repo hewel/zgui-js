@@ -4,12 +4,29 @@ use std::time::{Duration, Instant};
 
 use smithay_client_toolkit::reexports::client::protocol::wl_output::WlOutput;
 use wayland_protocols::ext::background_effect::v1::client::ext_background_effect_surface_v1::ExtBackgroundEffectSurfaceV1;
-use zgui_geom::{Css, CssPx, Device, DevicePx, Size};
+use zgui_geom::{Css, CssPx, Device, DevicePx, Edges, Size};
 use zgui_platform::{PresentationTiming, SurfaceEvent};
 
 use crate::frame::{Ahead, Pacer, Timing, Visibility, Watchdog};
 use crate::surface::role::toplevel;
 use crate::surface::role::xdg::configure::Pending;
+
+/// The window geometry rectangle declared to `xdg_surface.set_window_geometry`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct WindowGeometry {
+    pub(crate) x: i32,
+    pub(crate) y: i32,
+    pub(crate) width: i32,
+    pub(crate) height: i32,
+}
+
+/// The last buffer extent, scale, and XDG window geometry declared to the compositor.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct DeclaredFrame {
+    pub(crate) size: Size<i32, Device>,
+    pub(crate) scale: f64,
+    pub(crate) window_geometry: Option<WindowGeometry>,
+}
 
 /// The smallest and largest extents a window may be dragged to, in that order.
 ///
@@ -147,12 +164,18 @@ pub(crate) struct Shared {
     /// first configure has to be answered with a frame or the surface is never shown, and every
     /// later restatement is a frame identical to the one already on the screen.
     pub(crate) mapped: bool,
-    /// The extent and scale whose buffer metadata the compositor was last given.
+    /// The extent, scale, and window geometry whose buffer metadata the compositor was last given.
     ///
     /// A buffer scale, a viewport destination and a window geometry are sent only with a buffer
     /// that they describe. Sent at configure time, they ride whatever commit comes next — an empty
     /// one, or a buffer drawn at the extent from before the configure.
-    pub(crate) declared: Option<(Size<i32, Device>, f64)>,
+    pub(crate) declared: Option<DeclaredFrame>,
+    /// Validated outer bleed insets around the visual XDG window geometry, in whole CSS pixels.
+    pub(crate) window_geometry_insets: Edges<i32>,
+    /// The compositor-accepted visual extent for a popup, before adding `window_geometry_insets`.
+    pub(crate) configured_visual: Option<Size<i32, Css>>,
+    /// Whether an updated XDG window geometry owes a commit.
+    pub(crate) geometry_owed: bool,
     /// The scale the compositor wants, from whichever source it offered.
     pub(crate) ladder: crate::surface::Scale,
     /// Whether the compositor last configured the surface as maximised.
@@ -236,6 +259,9 @@ impl Shared {
             answering_resize: false,
             mapped: false,
             declared: None,
+            window_geometry_insets: Edges::new(0, 0, 0, 0),
+            configured_visual: None,
+            geometry_owed: false,
             ladder: crate::surface::Scale::default(),
             maximized: false,
             fullscreen: false,
@@ -398,14 +424,16 @@ impl Shared {
         self.drawing = true;
     }
 
-    /// Whether a change of the surface waits for a commit: a layer placement, a region, or a
-    /// buffer at an exact extent.
+    /// Whether a change of the surface waits for a commit: a layer placement, a region, a window
+    /// geometry update on a mapped surface whose size is already committed, or a buffer at an
+    /// exact extent.
     pub(crate) const fn owes_surface_change(&self) -> bool {
         self.layer_owed
             || self.input_owed.is_some()
             || self.opaque_owed.is_some()
             || self.blur_owed
             || self.exact_owed
+            || (self.geometry_owed && self.mapped && !self.resize_owed)
     }
 
     /// Closes out a delivered redraw: [`Shared::end_of_redraw`], and the redraw's cost for
@@ -436,7 +464,7 @@ impl Shared {
     /// flip that kept the extent is answered too, conservatively. The runtime hears of the flip
     /// through a `SurfaceStateChanged` wake.
     pub(crate) fn answers_restatement(&self, state_flip: bool) -> bool {
-        !self.mapped || state_flip
+        !self.mapped || state_flip || self.geometry_owed
     }
 
     /// How many frames may go unanswered before the compositor is taken to be showing none of them.
@@ -540,7 +568,52 @@ impl Shared {
         )
     }
 
-    /// The logical extent a buffer of `size` drawn at `scale` maps to, when its metadata changed.
+    /// The window geometry matching the surface's current committed logical extent.
+    fn current_window_geometry(&self) -> WindowGeometry {
+        let insets = self.window_geometry_insets;
+        let (width, height) = if let Some(visual) = self.configured_visual {
+            (visual.width.max(1), visual.height.max(1))
+        } else {
+            let lw = (self.logical.width.0.round() as i32).max(1);
+            let lh = (self.logical.height.0.round() as i32).max(1);
+            (
+                lw.saturating_sub(insets.left).saturating_sub(insets.right).max(1),
+                lh.saturating_sub(insets.top).saturating_sub(insets.bottom).max(1),
+            )
+        };
+        WindowGeometry {
+            x: insets.left,
+            y: insets.top,
+            width,
+            height,
+        }
+    }
+
+    /// Consumes a pending origin-only window geometry update for a bare commit when the current
+    /// buffer extent already matches.
+    pub(crate) fn take_bare_window_geometry(&mut self, is_xdg: bool) -> Option<WindowGeometry> {
+        if !is_xdg || !self.mapped || self.resize_owed || !self.geometry_owed {
+            return None;
+        }
+        let geom = self.current_window_geometry();
+        self.geometry_owed = false;
+        let (size, scale) = self
+            .declared
+            .map_or((self.device_extent(), self.scale), |d| (d.size, d.scale));
+        let next = DeclaredFrame {
+            size,
+            scale,
+            window_geometry: Some(geom),
+        };
+        if self.declared == Some(next) {
+            return None;
+        }
+        self.declared = Some(next);
+        Some(geom)
+    }
+
+    /// The logical extent and optional XDG window geometry a buffer of `size` drawn at `scale`
+    /// maps to, when its metadata changed.
     ///
     /// The configured extent is the answer for a buffer at the configured size. A buffer drawn
     /// before the latest configure maps to its own extent, divided back out of its scale.
@@ -548,18 +621,55 @@ impl Shared {
         &mut self,
         size: Size<i32, Device>,
         scale: f64,
-    ) -> Option<Size<CssPx, Css>> {
-        if self.declared == Some((size, scale)) {
+        is_xdg: bool,
+    ) -> Option<(Size<CssPx, Css>, Option<WindowGeometry>)> {
+        let matching_current = self.device_extent() == size && (self.scale - scale).abs() < 1e-5;
+        let logical = if matching_current {
+            self.logical
+        } else {
+            Size::new(
+                CssPx((f64::from(size.width) / scale) as f32),
+                CssPx((f64::from(size.height) / scale) as f32),
+            )
+        };
+        let window_geometry = is_xdg.then(|| {
+            if matching_current {
+                self.current_window_geometry()
+            } else {
+                let insets = self.window_geometry_insets;
+                let lw = (logical.width.0.round() as i32).max(1);
+                let lh = (logical.height.0.round() as i32).max(1);
+                let x = insets.left.min(lw - 1);
+                let y = insets.top.min(lh - 1);
+                let width = lw
+                    .saturating_sub(insets.left)
+                    .saturating_sub(insets.right)
+                    .clamp(1, lw - x);
+                let height = lh
+                    .saturating_sub(insets.top)
+                    .saturating_sub(insets.bottom)
+                    .clamp(1, lh - y);
+                WindowGeometry {
+                    x,
+                    y,
+                    width,
+                    height,
+                }
+            }
+        });
+        let next = DeclaredFrame {
+            size,
+            scale,
+            window_geometry,
+        };
+        if matching_current {
+            self.geometry_owed = false;
+        }
+        if self.declared == Some(next) {
             return None;
         }
-        self.declared = Some((size, scale));
-        if self.device_extent() == size && (self.scale - scale).abs() < 1e-5 {
-            return Some(self.logical);
-        }
-        Some(Size::new(
-            CssPx((f64::from(size.width) / scale) as f32),
-            CssPx((f64::from(size.height) / scale) as f32),
-        ))
+        self.declared = Some(next);
+        Some((logical, window_geometry))
     }
 
     /// Numbers a new frame callback, which makes every older one obsolete.
@@ -868,10 +978,54 @@ mod tests {
         shared.resized(logical(800.0, 600.0), 1.5);
         let buffer = Size::new(1200, 900);
         assert_eq!(
-            shared.frame_metadata(buffer, 1.5),
-            Some(logical(800.0, 600.0))
+            shared.frame_metadata(buffer, 1.5, true),
+            Some((
+                logical(800.0, 600.0),
+                Some(super::WindowGeometry {
+                    x: 0,
+                    y: 0,
+                    width: 800,
+                    height: 600,
+                }),
+            ))
         );
-        assert_eq!(shared.frame_metadata(buffer, 1.5), None);
+        assert_eq!(shared.frame_metadata(buffer, 1.5, true), None);
+    }
+
+    #[test]
+    fn equal_sum_inset_swap_reemits_window_geometry_metadata() {
+        let mut shared = Shared::new();
+        shared.configured_visual = Some(Size::new(360, 200));
+        shared.window_geometry_insets = zgui_geom::Edges::new(28, 28, 28, 28);
+        shared.resized(logical(416.0, 256.0), 1.25);
+        let buffer = Size::new(520, 320);
+        assert_eq!(
+            shared.frame_metadata(buffer, 1.25, true),
+            Some((
+                logical(416.0, 256.0),
+                Some(super::WindowGeometry {
+                    x: 28,
+                    y: 28,
+                    width: 360,
+                    height: 200,
+                }),
+            ))
+        );
+        shared.window_geometry_insets = zgui_geom::Edges::new(28, 44, 28, 12);
+        shared.geometry_owed = true;
+        assert_eq!(
+            shared.frame_metadata(buffer, 1.25, true),
+            Some((
+                logical(416.0, 256.0),
+                Some(super::WindowGeometry {
+                    x: 12,
+                    y: 28,
+                    width: 360,
+                    height: 200,
+                }),
+            ))
+        );
+        assert!(!shared.geometry_owed);
     }
 
     #[test]
@@ -880,13 +1034,29 @@ mod tests {
         shared.resized(logical(800.0, 600.0), 1.25);
         shared.resized(logical(1000.0, 750.0), 1.25);
         assert_eq!(
-            shared.frame_metadata(Size::new(1000, 750), 1.25),
-            Some(logical(800.0, 600.0)),
+            shared.frame_metadata(Size::new(1000, 750), 1.25, true),
+            Some((
+                logical(800.0, 600.0),
+                Some(super::WindowGeometry {
+                    x: 0,
+                    y: 0,
+                    width: 800,
+                    height: 600,
+                }),
+            )),
             "the newer extent was declared for the older buffer"
         );
         assert_eq!(
-            shared.frame_metadata(Size::new(1250, 938), 1.25),
-            Some(logical(1000.0, 750.0))
+            shared.frame_metadata(Size::new(1250, 938), 1.25, true),
+            Some((
+                logical(1000.0, 750.0),
+                Some(super::WindowGeometry {
+                    x: 0,
+                    y: 0,
+                    width: 1000,
+                    height: 750,
+                }),
+            ))
         );
     }
 

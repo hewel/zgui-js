@@ -73,10 +73,52 @@ impl WaylandState {
             return;
         };
 
-        let (resized, visibility, resizing, answered, state_flip) = {
+        let is_popup = surface.role().popup().is_some();
+        let popup_insets = if is_popup {
+            surface.popup_desired_insets()
+        } else {
+            zgui_geom::Edges::new(0, 0, 0, 0)
+        };
+        let (resized, visibility, resizing, answered, state_flip, popup_geom_changed) = {
             let mut shared = surface.shared();
-            let wanted = shared.wanted;
-            let (extent, state_flip) = shared.apply_shell_states(&pending, wanted);
+            let (extent, state_flip, popup_geom_changed) = if is_popup {
+                let fallback_visual = shared.configured_visual.unwrap_or_else(|| {
+                    zgui_geom::Size::new(
+                        (shared.wanted.width.0.round() as i32).max(1),
+                        (shared.wanted.height.0.round() as i32).max(1),
+                    )
+                });
+                let visual = zgui_geom::Size::new(
+                    pending.size.0.map_or(fallback_visual.width, |w| w.get() as i32),
+                    pending.size.1.map_or(fallback_visual.height, |h| h.get() as i32),
+                );
+                let geom_changed = shared.configured_visual != Some(visual)
+                    || shared.window_geometry_insets != popup_insets;
+                shared.configured_visual = Some(visual);
+                shared.window_geometry_insets = popup_insets;
+                if geom_changed {
+                    shared.geometry_owed = true;
+                }
+                let drawable = zgui_geom::Size::new(
+                    zgui_geom::CssPx(
+                        visual
+                            .width
+                            .saturating_add(popup_insets.left)
+                            .saturating_add(popup_insets.right) as f32,
+                    ),
+                    zgui_geom::CssPx(
+                        visual
+                            .height
+                            .saturating_add(popup_insets.top)
+                            .saturating_add(popup_insets.bottom) as f32,
+                    ),
+                );
+                (drawable, false, geom_changed)
+            } else {
+                let wanted = shared.wanted;
+                let (extent, state_flip) = shared.apply_shell_states(&pending, wanted);
+                (extent, state_flip, false)
+            };
             shared.resizing = pending.resizing;
             // A configure that reaches a surface the application hid answers a commit made before
             // the hide. Drawing into it would map the surface again, so it waits for the show.
@@ -97,11 +139,15 @@ impl WaylandState {
                 shared.resizing_edge(),
                 answered,
                 state_flip,
+                popup_geom_changed,
             )
         };
 
         surface.role().ack(serial);
         surface.popup_configured();
+        if popup_geom_changed {
+            surface.notify_popup_children();
+        }
         if state_flip {
             // The runtime reads these states on resize, and a flip can keep the extent, so the
             // flip is reported on its own. A flip that also resized reads the same state twice.

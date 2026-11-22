@@ -1,20 +1,41 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { after, before, test } from "node:test";
 import {
   buildFixtureApp,
   createTempWorkspace,
+  defaultProfile,
   getNode,
+  pixelAt,
   readFrame,
   readPng,
   readTree,
   runScenario,
+  writeJson,
 } from "./harness.mjs";
 
 let temp;
 let bundle;
+let transparentProfile;
 before(async () => {
   temp = await createTempWorkspace("preview-window-auto-popup-");
+  const base = JSON.parse(await readFile(defaultProfile, "utf8"));
+  const manifest = path.resolve(path.dirname(defaultProfile), base.fonts.manifest);
+  transparentProfile = path.join(temp.dir, "transparent-insets.json");
+  await writeJson(transparentProfile, {
+    ...base,
+    pureShell: false,
+    fonts: { ...base.fonts, manifest: path.relative(temp.dir, manifest) },
+    surface: {
+      ...base.surface,
+      width: 400,
+      height: 240,
+      scale: 1,
+      opaque: false,
+      background: "#00000000",
+    },
+  });
   bundle = await buildFixtureApp(
     path.join(temp.dir, "app"),
     "window-and-auto-popup",
@@ -174,4 +195,64 @@ test("PopupSurface inputRegion allows clicks inside active rect and passes throu
     0,
     "target outside PopupSurface inputRegion must not receive clicks",
   );
+});
+
+test("PopupSurface geometryInsets expands transparent auto-height surface at 1.25x and records windowGeometry", async () => {
+  const hidpiMonitor = { ...monitor, scale: 1.25 };
+  const { out, result } = await runScenario({
+    projectDir: temp.dir,
+    bundle,
+    profile: transparentProfile,
+    name: "popup-geometry-insets-125x",
+    requiredCapabilities: ["pixels", "capture.transparent", "surface.multiple"],
+    width: 400,
+    height: 240,
+    scale: 1,
+    assertEmptyResources: true,
+    steps: [
+      { id: "outputs", op: "monitors.set", monitors: [hidpiMonitor] },
+      click("open-shadow"),
+      advance("settle-shadow"),
+      {
+        id: "click-card",
+        op: "pointer.click",
+        target: { surface: "shadow-card", testId: "shadow-panel" },
+        button: "primary",
+      },
+      advance("settle-card-click"),
+      capture("shadow-initial", "shadow-card"),
+      click("swap-shadow-insets"),
+      advance("settle-swap"),
+      capture("shadow-swapped", "shadow-card"),
+    ],
+  });
+
+  assert.equal(result.teardown?.clean, true, "preview teardown must be clean");
+
+  // Visual 360x200 + geometryInsets=28 -> logical 416x256 -> physical 520x320 at 1.25x.
+  const initialPng = await readPng(
+    path.join(out, "captures/surfaces/shadow-card/shadow-initial.png"),
+  );
+  assert.deepEqual([initialPng.width, initialPng.height], [520, 320]);
+  assert.deepEqual(
+    pixelAt(initialPng, 2, 2),
+    [0, 0, 0, 0],
+    "outer bleed gutter must capture fully transparent pixels",
+  );
+  const centerPixel = pixelAt(initialPng, 260, 160);
+  assert.equal(centerPixel[3], 255, "inner visual card must be opaque");
+  assert.ok(centerPixel[2] > 200, "inner visual card must render blue fill");
+
+  const initialFrame = await readFrame(out, "surfaces/shadow-card/shadow-initial");
+  assert.deepEqual(initialFrame.windowGeometry, { x: 28, y: 28, width: 360, height: 200 });
+  const initialTree = await readTree(out, "surfaces/shadow-card/shadow-initial");
+  assert.equal(getNode(initialTree, "shadow-hits").text, "shadow=1");
+
+  // Equal-sum L/R inset swap (28/28 -> 12/44) preserves 520x320 PNG and updates windowGeometry.x.
+  const swappedPng = await readPng(
+    path.join(out, "captures/surfaces/shadow-card/shadow-swapped.png"),
+  );
+  assert.deepEqual([swappedPng.width, swappedPng.height], [520, 320]);
+  const swappedFrame = await readFrame(out, "surfaces/shadow-card/shadow-swapped");
+  assert.deepEqual(swappedFrame.windowGeometry, { x: 12, y: 28, width: 360, height: 200 });
 });

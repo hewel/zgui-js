@@ -60,6 +60,7 @@ Owns an `xdg_popup` attached to a named `<LayerSurface>` or parent `<PopupSurfac
   anchorNode={buttonRef()}     // or anchorRect={{ x, y, width, height }}
   width={280}
   height={320}
+  geometryInsets={28}          // optional outer drawable bleed (whole nonnegative CSS px scalar or { top?, right?, bottom?, left? })
   placement={{ anchor: "bottom-left", gravity: "bottom-right", flip: true, slide: true }}
   offset={{ x: 0, y: 6 }}
   grab={true}
@@ -70,6 +71,7 @@ Owns an `xdg_popup` attached to a named `<LayerSurface>` or parent `<PopupSurfac
 ```
 
 - `anchorNode` must belong to the exact `parent` surface named in `props.parent`.
+- **Outer shadow bleed (`geometryInsets`)**: `width`, numeric `height`, `minHeight`, and `maxHeight` always describe the visual panel box `G`. Setting `geometryInsets` reserves `I = (L, T, R, B)` outer drawable bleed around `G` so the native surface allocates `S = (G.w + L + R, G.h + T + B)` while declaring `xdg_surface.set_window_geometry(L, T, G.w, G.h)`. All DOM layout, `observeGeometry`, `getWindowRect`, `inputRegion`, and `blurRegion` remain in surface-local drawable coordinates `S` (wrap the visual card in matching outer padding and pass `inputRegion={[card]}` / `blurRegion={[card]}` if the shadow gutter should pass clicks through or avoid blur). When `height="auto"`, the runtime subtracts `top + bottom` bleed before clamping to `[minHeight, maxHeight]`. Nested child popups anchored against an inset parent keep parent surface-local `anchorNode`/`anchorRect` coordinates; the Wayland backend subtracts the parent's `(L, T)` automatically.
 - **Cascade teardown**: closing a parent `<LayerSurface>` or `<PopupSurface>` closes descendant popups topmost-first (child before parent) and invokes `onDismiss`.
 - Keep `<PopupSurface>` mounted inside `<Show when={open()}>` so dismissing and reopening always creates a clean owner-scoped surface.
 

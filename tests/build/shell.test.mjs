@@ -721,3 +721,44 @@ test("blurRegion tracks WindowSurface/LayerSurface nodes, preserves ThemeProvide
     "failed foreign-node registration must dispose earlier observers cleanly",
   );
 });
+
+test("PopupSurface normalizes geometryInsets scalar, partial object, omitted, and undefined", async t => {
+  const source = `
+    import { LayerSurface, PopupSurface, createSignal, renderShell } from "@hewel/zgui";
+    import type { SurfaceInsets } from "@hewel/zgui";
+    export const [insets, setInsets] = createSignal<SurfaceInsets | undefined>(undefined);
+    export function mount() {
+      return renderShell(() => (
+        <>
+          <LayerSurface name="bar" output="DP-1" width={400} height={36} />
+          <PopupSurface
+            name="shadow-pop"
+            parent="bar"
+            anchorRect={{ x: 10, y: 10, width: 40, height: 24 }}
+            width={360}
+            height="auto"
+            geometryInsets={insets()}
+          >
+            <box><text>Card</text></box>
+          </PopupSurface>
+        </>
+      ));
+    }
+  `;
+  const { harness, mod } = await mounted(t, { source });
+  const pop = harness.surfaces.get("shadow-pop");
+  assert.ok(pop);
+  assert.deepEqual(pop.placement.geometryInsets, { top: 0, right: 0, bottom: 0, left: 0 });
+
+  harness.runTurn(() => mod.setInsets(28));
+  assert.deepEqual(pop.placement.geometryInsets, { top: 28, right: 28, bottom: 28, left: 28 });
+
+  harness.runTurn(() => mod.setInsets({ top: 12, bottom: 36 }));
+  assert.deepEqual(pop.placement.geometryInsets, { top: 12, right: 0, bottom: 36, left: 0 });
+
+  harness.runTurn(() => mod.setInsets({ top: 16, right: 20, bottom: 24, left: 8 }));
+  assert.deepEqual(pop.placement.geometryInsets, { top: 16, right: 20, bottom: 24, left: 8 });
+
+  harness.runTurn(() => mod.setInsets(undefined));
+  assert.deepEqual(pop.placement.geometryInsets, { top: 0, right: 0, bottom: 0, left: 0 });
+});

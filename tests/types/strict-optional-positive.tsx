@@ -15,6 +15,7 @@ import type {
   SpringOptions,
   SpringPhysicsOptions,
   StoreOptions,
+  SurfaceInsets,
 } from "@hewel/zgui";
 import { Button, ThemeProvider } from "@hewel/zgui/components";
 import {
@@ -46,6 +47,7 @@ const maybeChecked: boolean | undefined = undefined;
 const maybeClass: string | undefined = undefined;
 const maybeOpen: boolean | undefined = undefined;
 const maybeBlur: BlurRegion | undefined = undefined;
+const maybeInsets: SurfaceInsets | undefined = { top: undefined, left: 24 };
 
 export function strictOptionalProbe(root: NativeNode) {
   const router = createRouter([{ path: "/", component: () => <text>home</text> }]);
@@ -145,6 +147,7 @@ export function strictOptionalProbe(root: NativeNode) {
               anchorRect={{ x: 0, y: 0, width: 10, height: 10 }}
               width={100}
               blurRegion={maybeBlur}
+              geometryInsets={maybeInsets}
             />
           </box>
         </RouterProvider>

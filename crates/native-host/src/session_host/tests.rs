@@ -1707,3 +1707,106 @@ fn dev_banner_respects_dev_flag_and_session_lock_and_preserves_healthy_tree() {
     assert!(!native.host.has_dev_banner(document));
     assert!(native.stub.stylesheet(dev_banner::SHEET_NAME).is_none());
 }
+
+#[test]
+fn auto_to_auto_popup_anchor_update_with_geometry_insets_does_not_inflate_bleed() {
+    use zgui::geom::{DevicePx, Size};
+    use zgui::platform::{AppHandler, SurfaceEvent};
+    use zgui::view::IntoView;
+
+    const POPUP_INSET_APP: &str = r#"
+        export const hostApiVersion = 1;
+        let popId;
+        const base = {
+            parent: 'bar', width: 320, height: 'auto', minHeight: 80, maxHeight: 400,
+            anchor: 'bottom-left', gravity: 'bottom-right', offset: { x: 0, y: 0 },
+            slide: true, flip: true, resize: false, reactive: false, grab: false,
+            geometryInsets: { top: 28, right: 28, bottom: 28, left: 28 },
+        };
+        export function mount() {
+            const placement = {
+                layer: 'top', anchor: ['top', 'left'], width: 400, height: 40,
+                margin: { top: 0, right: 0, bottom: 0, left: 0 }, exclusiveZone: 0, keyboard: 'none',
+            };
+            __zguiShell.openLayer('bar', placement, () => () => {});
+            popId = __zguiShell.openPopup(
+                'card',
+                { ...base, anchorRect: { x: 10, y: 10, width: 40, height: 24 } },
+                (root, bridge) => {
+                    const bleed = bridge.createElement('column');
+                    bridge.setProperty(bleed, 'style', { padding: '28px', boxSizing: 'border-box' });
+                    const body = bridge.createElement('column');
+                    bridge.setProperty(body, 'style', { height: '140px' });
+                    bridge.insertNode(bleed, body, null);
+                    bridge.insertNode(root, bleed, null);
+                    return () => {};
+                },
+                () => {},
+            );
+            return () => {};
+        }
+        export function moveAnchor() {
+            __zguiShell.updatePopup(popId, {
+                ...base,
+                anchorRect: { x: 80, y: 10, width: 40, height: 24 },
+            });
+        }
+    "#;
+
+    let package = Fixture::new(POPUP_INSET_APP, "").with_capabilities(crate::package::Capabilities {
+        shell_surfaces: true,
+        ..Default::default()
+    });
+    let pending = Rc::new(RefCell::new(Vec::new()));
+    let fonts = zgui::app::Fonts::shipped_only();
+    let mut runtime = zgui::runtime::App::new()
+        .with_renderer(Box::new(|_, target| {
+            let mut renderer = zgui_testkit_scene::CaptureRenderer::new();
+            zgui::render::Renderer::configure(&mut renderer, target);
+            Ok(Box::new(renderer))
+        }))
+        .into_handler(|cx| Box::new(zgui::elements::column().into_view().build(cx)))
+        .expect("create pure-shell runtime");
+    runtime.without_primary_surface();
+    let cx = zgui_platform_headless::Headless::new();
+    runtime.surfaces_available(&cx);
+
+    let mut host = SessionHost::new(
+        pending,
+        SessionModule::package(package.package()),
+        SessionPolicy::live(host_services::Executor::new(2, 64).expect("create service executor")),
+        RecoveryPolicy::Propagate,
+        SurfaceOpacity::Transparent,
+    );
+    host.set_pure_shell(fonts);
+    host.shell_turn(&mut runtime, &cx, ImageChoice::PackageOnly, &[]).expect("mount shell");
+    let session = host.sessions().next().expect("session").clone();
+    let popup_surface = session
+        .mount_regions()
+        .into_iter()
+        .find(|(name, _)| name == "card")
+        .expect("card popup")
+        .1
+        .surface;
+
+    // Frame 1 settles auto-height to visual 140px -> drawable (320+56)x(140+56) = 376x196.
+    host.surface_event(&mut runtime, &cx, popup_surface, SurfaceEvent::RedrawRequested)
+        .expect("settle popup auto-height");
+    assert_eq!(
+        cx.surface(popup_surface).expect("popup").size(),
+        Size::new(DevicePx(376.0), DevicePx(196.0)),
+    );
+
+    // Anchor-only auto-to-auto update must preserve visual 140px (drawable 376x196), NOT inflate to 196+56=252!
+    session.invoke("moveAnchor").expect("update popup anchor");
+    host.shell_turn(&mut runtime, &cx, ImageChoice::PackageOnly, &[]).expect("reconcile anchor move");
+    assert_eq!(
+        cx.surface(popup_surface).expect("popup").size(),
+        Size::new(DevicePx(376.0), DevicePx(196.0)),
+        "anchor-only update must subtract existing vertical bleed before clamping visual height"
+    );
+
+    host.stop_shell_surfaces(&mut runtime, &cx);
+    let report = session.retire();
+    assert!(report.failure.is_none(), "teardown failed: {:?}", report.failure);
+}

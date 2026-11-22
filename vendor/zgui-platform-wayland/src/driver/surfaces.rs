@@ -65,9 +65,9 @@ impl WaylandState {
             }
             None => self
                 .make_role(id, attributes, wanted, wl.clone(), bound.as_ref())
-                .map(|role| (role, None, wanted)),
+                .map(|role| (role, None, wanted, None)),
         };
-        let (role, popup, wanted) = match made {
+        let (role, popup, wanted, popup_parent) = match made {
             Ok(made) => made,
             Err(error) => {
                 wl.destroy();
@@ -77,6 +77,9 @@ impl WaylandState {
         let fractional = Fractional::attach(&self.extras, &self.qh, &wl, id);
         let seed = self.seed_scale(bound.as_ref(), fractional.crops());
         let surface = WaylandSurface::new(id, role, fractional, wanted, popup, self.links());
+        if let Some(parent) = popup_parent {
+            parent.add_popup_child(&surface);
+        }
         {
             let mut shared = surface.shared();
             shared.ahead =
@@ -143,7 +146,15 @@ impl WaylandState {
         placement: &PopupPlacement,
         offset: PopupOffset,
         attributes: &SurfaceAttributes,
-    ) -> Result<(Role, Option<PopupState>, Size<CssPx, Css>), PlatformError> {
+    ) -> Result<
+        (
+            Role,
+            Option<PopupState>,
+            Size<CssPx, Css>,
+            Option<Arc<WaylandSurface>>,
+        ),
+        PlatformError,
+    > {
         let Some(parent) = self.live.surface(placement.parent) else {
             return Err(PlatformError::SurfaceCreation(
                 "the surface this pop-up belongs to has already gone".to_owned(),
@@ -160,10 +171,17 @@ impl WaylandState {
                     .to_owned(),
             ));
         }
+        let parent_geom = parent.window_geometry_rect();
+        let requested_visual = attributes.size.unwrap_or(parent_geom.size);
+        let (visual_i32, insets, _drawable_i32) = placement.expand_visual_size(requested_visual)?;
+        let size = Size::new(
+            CssPx(visual_i32.width as f32),
+            CssPx(visual_i32.height as f32),
+        );
+        let last_sent_anchor_rect =
+            crate::surface::role::popup::anchor_rect(placement.anchor_rect, parent_geom);
         // No retiring popup can be left underneath the new role in the shell's stack.
         self.live.release_retiring_popups();
-        let extent = parent.geometry_extent();
-        let size = attributes.size.unwrap_or(extent);
         let popup = Popup::new(
             &self.xdg,
             &self.qh,
@@ -173,7 +191,7 @@ impl WaylandState {
             &crate::surface::role::xdg::popup::Placed {
                 place: placement,
                 offset,
-                parent: extent,
+                parent: parent_geom,
                 size,
             },
         );
@@ -187,8 +205,16 @@ impl WaylandState {
         } else {
             None
         };
-        let state = PopupState::new(&parent, placement.clone(), offset, size, grab_seat);
-        Ok((Role::Popup(Box::new(popup)), Some(state), size))
+        let state = PopupState::new(
+            &parent,
+            placement.clone(),
+            offset,
+            size,
+            insets,
+            last_sent_anchor_rect,
+            grab_seat,
+        );
+        Ok((Role::Popup(Box::new(popup)), Some(state), size, Some(parent)))
     }
 
     /// A surface that is part of the desktop shell rather than a window.

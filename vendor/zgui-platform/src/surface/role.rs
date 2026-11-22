@@ -1,7 +1,8 @@
 //! What a surface is to the desktop: an ordinary window, a pop-up, or a shell layer.
 
-use zgui_geom::{Css, CssPx, Edges, Point, Rect};
+use zgui_geom::{Css, CssPx, Edges, Point, Rect, Size};
 
+use crate::error::PlatformError;
 use crate::monitor::MonitorTarget;
 use crate::surface::id::SurfaceId;
 use crate::surface::serial::InputSerial;
@@ -59,6 +60,12 @@ pub struct PopupPlacement {
     pub offset: Point<CssPx, Css>,
     /// Whether the compositor should adjust the placement when the parent changes.
     pub reactive: bool,
+    /// Outer drawable bleed around the visual popup geometry, in nonnegative whole CSS pixels.
+    ///
+    /// A popup requested at visual size `G` with insets `(L, T, R, B)` allocates a drawable
+    /// logical surface of `S = (G.w + L + R, G.h + T + B)` while declaring `xdg_surface` window
+    /// geometry `(L, T, G.w, G.h)`.
+    pub geometry_insets: Edges<CssPx>,
     /// The press that lets the pop-up take the pointer and the keyboard until it is dismissed.
     ///
     /// A menu takes them; a tooltip does not, and has `None`. A desktop grants the grab only
@@ -82,6 +89,7 @@ impl PopupPlacement {
             constrain: Constrain::SLIDE,
             offset: Point::new(CssPx(0.0), CssPx(0.0)),
             reactive: false,
+            geometry_insets: Edges::new(CssPx(0.0), CssPx(0.0), CssPx(0.0), CssPx(0.0)),
             grab: None,
         }
     }
@@ -98,10 +106,86 @@ impl PopupPlacement {
         self
     }
 
+    /// The same placement, reserving outer drawable bleed around the visual popup geometry.
+    pub const fn with_geometry_insets(mut self, insets: Edges<CssPx>) -> Self {
+        self.geometry_insets = insets;
+        self
+    }
+
     /// The same placement, taking the pointer and the keyboard against the press `serial`.
     pub fn with_grab(mut self, serial: InputSerial) -> Self {
         self.grab = Some(serial);
         self
+    }
+
+    /// Validates `geometry_insets` as nonnegative finite whole CSS pixels whose opposite-axis sums
+    /// fit in `i32`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PlatformError::SurfaceCreation`] if any edge is nonfinite, negative, fractional,
+    /// or exceeds the signed 32-bit range (including opposite-side sums).
+    pub fn validated_geometry_insets(&self) -> Result<Edges<i32>, PlatformError> {
+        fn edge(value: CssPx) -> Option<i32> {
+            let v = f64::from(value.0);
+            if v.is_finite() && v >= 0.0 && v.fract() == 0.0 && v <= f64::from(i32::MAX) {
+                Some(v as i32)
+            } else {
+                None
+            }
+        }
+        let invalid = || {
+            PlatformError::SurfaceCreation(
+                "pop-up geometry insets must be finite nonnegative whole CSS pixels".to_owned(),
+            )
+        };
+        let top = edge(self.geometry_insets.top).ok_or_else(invalid)?;
+        let right = edge(self.geometry_insets.right).ok_or_else(invalid)?;
+        let bottom = edge(self.geometry_insets.bottom).ok_or_else(invalid)?;
+        let left = edge(self.geometry_insets.left).ok_or_else(invalid)?;
+        if left.checked_add(right).is_none() || top.checked_add(bottom).is_none() {
+            return Err(invalid());
+        }
+        Ok(Edges::new(top, right, bottom, left))
+    }
+
+    /// Validates a visual extent `visual` and `geometry_insets`, returning the quantized visual
+    /// size, validated integer insets, and checked expanded drawable logical size.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PlatformError::SurfaceCreation`] if `visual` is invalid, any inset is invalid, or
+    /// the expanded drawable extent overflows `i32`.
+    pub fn expand_visual_size(
+        &self,
+        visual: Size<CssPx, Css>,
+    ) -> Result<(Size<i32, Css>, Edges<i32>, Size<i32, Css>), PlatformError> {
+        fn axis(value: CssPx) -> Option<i32> {
+            let v = f64::from(value.0);
+            if v.is_finite() && v > 0.0 && v <= f64::from(i32::MAX) {
+                Some((v.round() as i32).max(1))
+            } else {
+                None
+            }
+        }
+        let vw = axis(visual.width)
+            .ok_or_else(|| PlatformError::SurfaceCreation("invalid pop-up extent".to_owned()))?;
+        let vh = axis(visual.height)
+            .ok_or_else(|| PlatformError::SurfaceCreation("invalid pop-up extent".to_owned()))?;
+        let insets = self.validated_geometry_insets()?;
+        let dw = vw
+            .checked_add(insets.left)
+            .and_then(|v| v.checked_add(insets.right))
+            .ok_or_else(|| {
+                PlatformError::SurfaceCreation("pop-up drawable extent overflows i32".to_owned())
+            })?;
+        let dh = vh
+            .checked_add(insets.top)
+            .and_then(|v| v.checked_add(insets.bottom))
+            .ok_or_else(|| {
+                PlatformError::SurfaceCreation("pop-up drawable extent overflows i32".to_owned())
+            })?;
+        Ok((Size::new(vw, vh), insets, Size::new(dw, dh)))
     }
 }
 
@@ -498,5 +582,51 @@ mod tests {
         assert_eq!(first.exclusive_zone, Some(ExclusiveZone::Ignore));
         assert!(!first.is_empty());
         assert!(LayerPatch::new().is_empty());
+    }
+
+    #[test]
+    fn popup_geometry_insets_validate_whole_nonnegative_edges_and_checked_expansion() {
+        let rect = Rect::new(
+            Point::new(CssPx(0.0), CssPx(0.0)),
+            Size::new(CssPx(40.0), CssPx(24.0)),
+        );
+        let base = PopupPlacement::below(SurfaceId::new(1), rect);
+        assert_eq!(base.validated_geometry_insets(), Ok(Edges::new(0, 0, 0, 0)));
+
+        let inset = base
+            .clone()
+            .with_geometry_insets(Edges::new(CssPx(16.0), CssPx(28.0), CssPx(32.0), CssPx(12.0)));
+        assert_eq!(
+            inset.expand_visual_size(Size::new(CssPx(360.0), CssPx(200.0))),
+            Ok((
+                Size::new(360, 200),
+                Edges::new(16, 28, 32, 12),
+                Size::new(400, 248),
+            ))
+        );
+
+        for bad in [
+            Edges::new(CssPx(-1.0), CssPx(0.0), CssPx(0.0), CssPx(0.0)),
+            Edges::new(CssPx(0.5), CssPx(0.0), CssPx(0.0), CssPx(0.0)),
+            Edges::new(CssPx(f32::NAN), CssPx(0.0), CssPx(0.0), CssPx(0.0)),
+            Edges::new(CssPx(f32::INFINITY), CssPx(0.0), CssPx(0.0), CssPx(0.0)),
+            Edges::new(CssPx(0.0), CssPx(1_500_000_000.0), CssPx(0.0), CssPx(1_500_000_000.0)),
+        ] {
+            assert!(
+                base.clone()
+                    .with_geometry_insets(bad)
+                    .validated_geometry_insets()
+                    .is_err(),
+                "expected invalid insets to fail: {bad:?}"
+            );
+        }
+
+        let overflow = base
+            .with_geometry_insets(Edges::new(CssPx(0.0), CssPx(200.0), CssPx(0.0), CssPx(0.0)));
+        assert!(
+            overflow
+                .expand_visual_size(Size::new(CssPx(2_147_483_520.0), CssPx(10.0)))
+                .is_err()
+        );
     }
 }

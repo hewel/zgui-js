@@ -547,6 +547,7 @@ struct OwnedFrame {
     presentation: u64,
     metadata_revision: u64,
     blur_revision: u64,
+    window_geometry_revision: u64,
     frame: FrameEvidence,
     tree: TreeEvidence,
 }
@@ -554,6 +555,7 @@ struct OwnedFrame {
 struct ObserverData {
     requested_metadata: u64,
     requested_blur: u64,
+    requested_window_geometry: u64,
     semantics: SemanticModel,
     ledger: FrameLedger,
     session: Weak<Session>,
@@ -738,6 +740,7 @@ impl ObserverInner {
             extra.insert(key.to_owned(), value);
         }
         let mut blur_revision = 0;
+        let mut window_geometry_revision = 0;
         if let Some(surface) = data.surface.as_ref() {
             use zgui::platform::Surface as _;
             extra.insert("window".into(), json!({
@@ -750,6 +753,14 @@ impl ObserverInner {
             }));
             blur_revision = surface.blur_revision();
             extra.insert("blurRegion".into(), serialize_blur_region(&surface.blur_region()));
+            window_geometry_revision = surface.window_geometry_revision();
+            let window_geometry = surface.window_geometry();
+            extra.insert("windowGeometry".into(), json!({
+                "x": window_geometry.x,
+                "y": window_geometry.y,
+                "width": window_geometry.width,
+                "height": window_geometry.height,
+            }));
         }
         if self.context.multiple {
             tree.extra.insert("checkpointSequence".into(), json!(sequence));
@@ -806,6 +817,7 @@ impl ObserverInner {
             presentation: state.presentation_id,
             metadata_revision: snapshot.metadata_revision,
             blur_revision,
+            window_geometry_revision,
             frame,
             tree,
             native_nodes: snapshot.native_nodes,
@@ -891,6 +903,7 @@ impl FrameObserver {
             data: RefCell::new(ObserverData {
                 requested_metadata: 0,
                 requested_blur: 0,
+                requested_window_geometry: 0,
                 semantics: SemanticModel::default(),
                 ledger: FrameLedger::default(),
                 session: Weak::new(),
@@ -907,10 +920,14 @@ impl FrameObserver {
     pub fn request_metadata_frame(&self, window: &Window, revision: u64) {
         let mut data = self.0.data.borrow_mut();
         let blur_revision = data.surface.as_ref().map_or(0, |s| s.blur_revision());
-        let needs_frame = data.requested_metadata != revision || data.requested_blur != blur_revision;
+        let window_geometry_revision = data.surface.as_ref().map_or(0, |s| s.window_geometry_revision());
+        let needs_frame = data.requested_metadata != revision
+            || data.requested_blur != blur_revision
+            || data.requested_window_geometry != window_geometry_revision;
         if needs_frame {
             data.requested_metadata = revision;
             data.requested_blur = blur_revision;
+            data.requested_window_geometry = window_geometry_revision;
             window.request_frame();
         }
     }
@@ -925,6 +942,7 @@ impl FrameObserver {
         data.surface = None;
         data.requested_metadata = 0;
         data.requested_blur = 0;
+        data.requested_window_geometry = 0;
         data.semantics = SemanticModel::default();
         data.last = None;
         data.ledger.reset_surface();
@@ -957,6 +975,7 @@ impl FrameObserver {
         let surface = data.surface.as_ref()?;
         if surface.id() != region.surface { return None; }
         let blur_revision = surface.blur_revision();
+        let window_geometry_revision = surface.window_geometry_revision();
         let capture_state = self.0.capture.state();
         let completed = window.completed_frame();
         if window.has_pending_stylesheets() { return None; }
@@ -976,7 +995,10 @@ impl FrameObserver {
             completed_status: completed.as_ref().map(|frame| FrameStatus::from(frame.outcome)),
         };
         if data.ledger.is_settled(&query)
-            && data.last.as_ref().is_some_and(|last| last.blur_revision == blur_revision)
+            && data.last.as_ref().is_some_and(|last| {
+                last.blur_revision == blur_revision
+                    && last.window_geometry_revision == window_geometry_revision
+            })
         {
             Some(SettledFrame { data })
         } else {

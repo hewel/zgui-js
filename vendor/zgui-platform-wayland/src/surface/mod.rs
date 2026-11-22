@@ -28,7 +28,7 @@ use wayland_client::protocol::wl_seat::WlSeat;
 use wayland_client::protocol::wl_region::WlRegion;
 use wayland_client::protocol::wl_surface::WlSurface;
 use wayland_protocols::ext::background_effect::v1::client::ext_background_effect_surface_v1::ExtBackgroundEffectSurfaceV1;
-use zgui_geom::{Css, CssPx, Device, DevicePx, Rect, Size};
+use zgui_geom::{Css, CssPx, Device, DevicePx, Edges, Point, Rect, Size};
 use zgui_platform::{
     BlurRegion, CursorStyle, Decorations, FullscreenMode, GpuSurface, InputRegion, LayerPlacement,
     PlatformError, PopupPlacement, PresentPacing, PresentationTiming, Surface, SurfaceId,
@@ -90,8 +90,11 @@ struct PopupDesired {
     placement: PopupPlacement,
     offset: PopupOffset,
     size: Size<CssPx, Css>,
+    insets: Edges<i32>,
+    last_sent_anchor_rect: (i32, i32, i32, i32),
     phase: PopupPhase,
     pending: bool,
+    reposition_in_flight: bool,
     token: u32,
 }
 
@@ -110,6 +113,8 @@ impl PopupState {
         placement: PopupPlacement,
         offset: PopupOffset,
         size: Size<CssPx, Css>,
+        insets: Edges<i32>,
+        last_sent_anchor_rect: (i32, i32, i32, i32),
         grab_seat: Option<WlSeat>,
     ) -> Self {
         Self {
@@ -121,8 +126,11 @@ impl PopupState {
                 placement,
                 offset,
                 size,
+                insets,
+                last_sent_anchor_rect,
                 phase: PopupPhase::AwaitingConfigure,
                 pending: false,
+                reposition_in_flight: false,
                 token: 0,
             }),
         }
@@ -163,6 +171,9 @@ pub struct WaylandSurface {
     /// Where a request for presentation feedback goes.
     presentation: Presentation,
     popup: Option<PopupState>,
+    /// Live pop-up surfaces whose parent is this surface, so parent geometry changes can
+    /// re-evaluate nested anchor translation.
+    popup_children: Mutex<Vec<Weak<WaylandSurface>>>,
     /// The shell a reposition is made against.
     shell: Arc<crate::surface::role::xdg::XdgShell>,
     /// The channel an assistive technology talks to.
@@ -191,6 +202,13 @@ impl WaylandSurface {
     ) -> Arc<Self> {
         let mut shared = Shared::new();
         shared.wanted = wanted;
+        if let Some(state) = &popup {
+            shared.window_geometry_insets = state
+                .desired
+                .lock()
+                .expect("popup placement lock poisoned")
+                .insets;
+        }
         Arc::new(Self {
             id,
             role,
@@ -204,6 +222,7 @@ impl WaylandSurface {
             compositor: links.compositor,
             presentation: links.presentation,
             popup,
+            popup_children: Mutex::new(Vec::new()),
             shell: links.shell,
             a11y: A11y::open(id, links.waker),
             seat: links.seat,
@@ -595,19 +614,94 @@ impl WaylandSurface {
     }
 
     #[must_use]
-    pub(crate) fn geometry_extent(&self) -> Size<CssPx, Css> {
+    pub(crate) fn window_geometry_rect(&self) -> Rect<CssPx, Css> {
         let shared = self.shared();
-        if shared.logical.width.0 > 0.0 && shared.logical.height.0 > 0.0 {
+        let insets = shared.window_geometry_insets;
+        let size = if let Some(visual) = shared.configured_visual {
+            Size::new(CssPx(visual.width as f32), CssPx(visual.height as f32))
+        } else if self.popup.is_some() {
+            shared.wanted
+        } else if shared.logical.width.0 > 0.0 && shared.logical.height.0 > 0.0 {
             shared.logical
         } else {
             shared.wanted
+        };
+        Rect::new(
+            Point::new(CssPx(insets.left as f32), CssPx(insets.top as f32)),
+            size,
+        )
+    }
+
+    pub(crate) fn add_popup_child(&self, child: &Arc<WaylandSurface>) {
+        let mut children = self
+            .popup_children
+            .lock()
+            .expect("popup children lock poisoned");
+        children.retain(|weak| weak.strong_count() > 0);
+        children.push(Arc::downgrade(child));
+    }
+
+    pub(crate) fn notify_popup_children(&self) {
+        let live: Vec<Arc<WaylandSurface>> = {
+            let mut children = self
+                .popup_children
+                .lock()
+                .expect("popup children lock poisoned");
+            let mut live = Vec::new();
+            children.retain(|weak| match weak.upgrade() {
+                Some(child) if child.active() => {
+                    live.push(child);
+                    true
+                }
+                _ => false,
+            });
+            live
+        };
+        for child in live {
+            child.parent_geometry_changed(self);
         }
+    }
+
+    fn parent_geometry_changed(&self, parent: &WaylandSurface) {
+        let (Some(state), Some(popup)) = (&self.popup, self.role.popup()) else {
+            return;
+        };
+        if !self.active() || !popup.can_reposition() {
+            return;
+        }
+        let mut desired = state.desired.lock().expect("popup placement lock poisoned");
+        if matches!(desired.phase, PopupPhase::Dismissed | PopupPhase::Retired) {
+            return;
+        }
+        let next_anchor = crate::surface::role::popup::anchor_rect(
+            desired.placement.anchor_rect,
+            parent.window_geometry_rect(),
+        );
+        if next_anchor == desired.last_sent_anchor_rect {
+            return;
+        }
+        desired.pending = true;
+        if desired.phase == PopupPhase::Mapped && self.shared().mapped {
+            self.send_popup_placement(parent, &mut desired);
+        }
+    }
+
+    #[must_use]
+    pub(crate) fn popup_desired_insets(&self) -> Edges<i32> {
+        self.popup.as_ref().map_or(Edges::new(0, 0, 0, 0), |state| {
+            state
+                .desired
+                .lock()
+                .expect("popup placement lock poisoned")
+                .insets
+        })
     }
 
     /// Records the configure that makes the popup eligible for its first frame.
     pub(crate) fn popup_configured(&self) {
         let Some(state) = &self.popup else { return };
         let mut desired = state.desired.lock().expect("popup placement lock poisoned");
+        desired.reposition_in_flight = false;
         if desired.phase == PopupPhase::AwaitingConfigure {
             desired.phase = PopupPhase::AwaitingBuffer;
         }
@@ -631,16 +725,65 @@ impl WaylandSurface {
     }
 
     #[must_use]
-    pub(crate) fn resize_popup(&self, size: Size<CssPx, Css>) -> bool {
-        self.role.popup().is_some_and(|popup| popup.can_reposition())
-            && self.update_popup(None, size).is_ok()
+    pub(crate) fn resize_popup(&self, size: Size<CssPx, Css>) -> Option<Size<CssPx, Css>> {
+        if !self.role.popup().is_some_and(|popup| popup.can_reposition()) {
+            return None;
+        }
+        self.update_popup(None, size).ok()
+    }
+
+    fn apply_popup_insets_locally(&self, next_insets: Edges<i32>) -> Size<CssPx, Css> {
+        let (needs_redraw, notify_children, drawable) = {
+            let mut shared = self.shared();
+            let changed = shared.window_geometry_insets != next_insets;
+            shared.window_geometry_insets = next_insets;
+            shared.geometry_owed |= changed;
+            let visual = shared.configured_visual.unwrap_or_else(|| {
+                Size::new(
+                    (shared.wanted.width.0.round() as i32).max(1),
+                    (shared.wanted.height.0.round() as i32).max(1),
+                )
+            });
+            let drawable = Size::new(
+                CssPx(
+                    visual
+                        .width
+                        .saturating_add(next_insets.left)
+                        .saturating_add(next_insets.right) as f32,
+                ),
+                CssPx(
+                    visual
+                        .height
+                        .saturating_add(next_insets.top)
+                        .saturating_add(next_insets.bottom) as f32,
+                ),
+            );
+            if shared.configured_visual.is_some() {
+                let scale = shared.scale;
+                if let Some(event) = shared.resized(drawable, scale) {
+                    shared.unreported = Some(event);
+                } else {
+                    shared.pacer.cancel_held();
+                }
+                (true, changed, drawable)
+            } else {
+                (false, changed, drawable)
+            }
+        };
+        if needs_redraw {
+            Surface::request_redraw(self);
+        }
+        if notify_children {
+            self.notify_popup_children();
+        }
+        drawable
     }
 
     fn update_popup(
         &self,
         placement: Option<&PopupPlacement>,
         size: Size<CssPx, Css>,
-    ) -> Result<(), PlatformError> {
+    ) -> Result<Size<CssPx, Css>, PlatformError> {
         let (Some(state), Some(popup)) = (&self.popup, self.role.popup()) else {
             return Err(PlatformError::Unsupported(Unsupported));
         };
@@ -661,24 +804,75 @@ impl WaylandSurface {
         let offset = placement
             .map(|placement| PopupOffset::new(placement.offset))
             .transpose()?;
-        // Older shells retain their initial geometry.
+        let next_placement = placement.unwrap_or(&desired.placement);
+        let (visual_i32, next_insets, drawable_i32) = next_placement.expand_visual_size(size)?;
+        let visual_size = Size::new(
+            CssPx(visual_i32.width as f32),
+            CssPx(visual_i32.height as f32),
+        );
+        let drawable_size = Size::new(
+            CssPx(drawable_i32.width as f32),
+            CssPx(drawable_i32.height as f32),
+        );
+        let positioner_changed = visual_size != desired.size
+            || placement.is_some_and(|p| {
+                p.anchor_rect != desired.placement.anchor_rect
+                    || p.anchor != desired.placement.anchor
+                    || p.gravity != desired.placement.gravity
+                    || p.constrain != desired.placement.constrain
+                    || offset.is_some_and(|o| o != desired.offset)
+                    || p.reactive != desired.placement.reactive
+            });
+        let insets_changed = next_insets != desired.insets;
+        if !positioner_changed && !insets_changed {
+            return Ok(drawable_size);
+        }
+        // Older shells retain their initial visual placement, while still allowing local inset
+        // updates without calling `xdg_popup.reposition` or tearing down a grabbed popup tree.
         if !popup.can_reposition() {
-            return Ok(());
+            if !insets_changed {
+                return Ok(drawable_size);
+            }
+            desired.placement.geometry_insets = next_placement.geometry_insets;
+            desired.insets = next_insets;
+            drop(desired);
+            return Ok(self.apply_popup_insets_locally(next_insets));
         }
-        if let Some((placement, offset)) = placement.zip(offset) {
-            desired.placement = placement.clone();
-            desired.offset = offset;
+        if positioner_changed {
+            if let Some((placement, offset)) = placement.zip(offset) {
+                desired.placement = placement.clone();
+                desired.offset = offset;
+            }
+            desired.size = visual_size;
+            desired.insets = next_insets;
+            desired.pending = true;
+            self.shared().wanted = visual_size;
+            if desired.phase == PopupPhase::Mapped && self.shared().mapped {
+                self.send_popup_placement(&parent, &mut desired);
+            }
+            return Ok(drawable_size);
         }
-        desired.size = size;
-        desired.pending = true;
-        if desired.phase == PopupPhase::Mapped && self.shared().mapped {
-            self.send_popup_placement(&parent, &mut desired);
+        // Inset-only change: preserve the compositor-accepted visual size without issuing
+        // `xdg_popup.reposition`.
+        desired.placement.geometry_insets = next_placement.geometry_insets;
+        desired.insets = next_insets;
+        let deferred = desired.pending || desired.reposition_in_flight;
+        drop(desired);
+        if deferred {
+            Ok(drawable_size)
+        } else {
+            Ok(self.apply_popup_insets_locally(next_insets))
         }
-        Ok(())
     }
 
     fn send_popup_placement(&self, parent: &WaylandSurface, desired: &mut PopupDesired) {
+        let parent_geom = parent.window_geometry_rect();
+        desired.last_sent_anchor_rect = crate::surface::role::popup::anchor_rect(
+            desired.placement.anchor_rect,
+            parent_geom,
+        );
         desired.pending = false;
+        desired.reposition_in_flight = true;
         desired.token = desired.token.wrapping_add(1);
         self.role.popup().expect("popup state has a popup role").reposition(
             &self.shell,
@@ -686,7 +880,7 @@ impl WaylandSurface {
             &crate::surface::role::xdg::popup::Placed {
                 place: &desired.placement,
                 offset: desired.offset,
-                parent: parent.geometry_extent(),
+                parent: parent_geom,
                 size: desired.size,
             },
             desired.token,
@@ -801,6 +995,12 @@ impl WaylandSurface {
             // A change asked for with no new content to draw still goes out, with this commit.
             self.send_layer(false);
             self.send_regions();
+            let bare_geom = self
+                .shared()
+                .take_bare_window_geometry(self.role.xdg_surface().is_some());
+            if let (Some(xdg), Some(geom)) = (self.role.xdg_surface(), bare_geom) {
+                xdg.set_window_geometry(geom.x, geom.y, geom.width, geom.height);
+            }
             self.ask_for_callback();
             self.role.commit();
         } else if keep_alive {
@@ -1049,7 +1249,7 @@ impl Surface for WaylandSurface {
         if !chrome::valid_size(size) {
             return Err(PlatformError::SurfaceCreation("invalid pop-up extent".to_owned()));
         }
-        self.update_popup(Some(placement), size)
+        self.update_popup(Some(placement), size).map(|_| ())
     }
 
     fn popup_dismissed(&self) -> bool {

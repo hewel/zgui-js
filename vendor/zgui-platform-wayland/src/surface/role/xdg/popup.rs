@@ -6,7 +6,7 @@ use smithay_client_toolkit::reexports::client::{Connection, Dispatch, Proxy, Que
 use wayland_protocols::xdg::shell::client::xdg_popup::{self, XdgPopup};
 use wayland_protocols::xdg::shell::client::xdg_positioner::XdgPositioner;
 use wayland_protocols::xdg::shell::client::xdg_surface::XdgSurface;
-use zgui_geom::{Css, CssPx, Size};
+use zgui_geom::{Css, CssPx, Rect, Size};
 use zgui_platform::{CloseReason, PopupPlacement, SurfaceEvent, SurfaceId};
 
 use crate::driver::WaylandState;
@@ -27,9 +27,9 @@ pub struct Placed<'a> {
     pub place: &'a PopupPlacement,
     /// The validated, quantized translation from the anchor.
     pub offset: placement::Offset,
-    /// The extent of the surface it is placed against.
-    pub parent: Size<CssPx, Css>,
-    /// The extent of the pop-up itself.
+    /// The window geometry (origin and visual extent) of the surface it is placed against.
+    pub parent: Rect<CssPx, Css>,
+    /// The visual extent of the pop-up itself.
     pub size: Size<CssPx, Css>,
 }
 

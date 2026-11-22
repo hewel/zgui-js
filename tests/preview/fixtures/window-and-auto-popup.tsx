@@ -1,14 +1,48 @@
 import {
   createSignal,
   mountShellStylesheet,
+  mountStylesheet,
   PopupSurface,
   renderApp,
   Show,
   WindowSurface,
 } from "@hewel/zgui";
-import type { NativeNode } from "@hewel/zgui";
+import type { NativeNode, SurfaceInsets } from "@hewel/zgui";
 
 export const hostApiVersion = 1;
+
+function ShadowCardContent(props: {
+  setCard: (node: NativeNode) => void;
+  hits: () => number;
+  onHit: () => void;
+}) {
+  mountStylesheet("shadow-root", ":root { background-color: transparent; }");
+  return (
+    <column
+      testId="shadow-bleed"
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        padding: "28px",
+        boxSizing: "border-box",
+        backgroundColor: "transparent",
+      }}
+    >
+      <control
+        ref={props.setCard}
+        testId="shadow-panel"
+        style={{
+          width: "360px",
+          height: "200px",
+          backgroundColor: "#2563eb",
+        }}
+        onClick={props.onHit}
+      >
+        <text testId="shadow-hits">{`shadow=${props.hits()}`}</text>
+      </control>
+    </column>
+  );
+}
 
 export function mount(root: NativeNode) {
   return renderApp(() => {
@@ -18,6 +52,10 @@ export function mount(root: NativeNode) {
     const [windowTitle, setWindowTitle] = createSignal("Settings");
     const [showShaped, setShowShaped] = createSignal(false);
     const [shapedHits, setShapedHits] = createSignal(0);
+    const [showShadow, setShowShadow] = createSignal(false);
+    const [shadowCard, setShadowCard] = createSignal<NativeNode>();
+    const [shadowHits, setShadowHits] = createSignal(0);
+    const [shadowInsets, setShadowInsets] = createSignal<SurfaceInsets>(28);
     return (
       <column>
         <control testId="set-260" onClick={() => setBodyHeight(260)}>
@@ -31,6 +69,15 @@ export function mount(root: NativeNode) {
         </control>
         <control testId="open-shaped" onClick={() => setShowShaped(true)}>
           Open shaped popup
+        </control>
+        <control testId="open-shadow" onClick={() => setShowShadow(true)}>
+          Open shadow popup
+        </control>
+        <control
+          testId="swap-shadow-insets"
+          onClick={() => setShadowInsets({ top: 28, right: 44, bottom: 28, left: 12 })}
+        >
+          Swap shadow insets
         </control>
         <control
           testId="resize-win"
@@ -106,6 +153,25 @@ export function mount(root: NativeNode) {
                 <text>outside</text>
               </control>
             </column>
+          </PopupSurface>
+        </Show>
+        <Show when={showShadow()}>
+          <PopupSurface
+            name="shadow-card"
+            parent="settings"
+            anchorRect={{ x: 16, y: 60, width: 80, height: 28 }}
+            width={360}
+            height="auto"
+            minHeight={80}
+            maxHeight={320}
+            geometryInsets={shadowInsets()}
+            inputRegion={shadowCard() ? [shadowCard()!] : []}
+          >
+            <ShadowCardContent
+              setCard={setShadowCard}
+              hits={shadowHits}
+              onHit={() => setShadowHits(n => n + 1)}
+            />
           </PopupSurface>
         </Show>
       </column>

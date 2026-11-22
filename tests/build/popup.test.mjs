@@ -114,6 +114,7 @@ test("named popups wait for live parents, mount independently, and update placem
     reactive: false,
     width: 48,
     height: 30,
+    geometryInsets: { top: 0, right: 0, bottom: 0, left: 0 },
   });
   assert.deepEqual(harness.surfaces.get("submenu").placement, {
     parent: "menu",
@@ -128,6 +129,7 @@ test("named popups wait for live parents, mount independently, and update placem
     reactive: true,
     width: 12,
     height: 14,
+    geometryInsets: { top: 0, right: 0, bottom: 0, left: 0 },
   });
   harness.runTurn(() => mod.setSize(64));
   harness.flush();

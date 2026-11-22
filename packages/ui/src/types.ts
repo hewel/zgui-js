@@ -99,6 +99,16 @@ export interface PopupSurfacePlacement {
   readonly reactive?: boolean;
 }
 
+/** Outer drawable bleed around a surface's visual XDG window geometry, in whole nonnegative CSS pixels. */
+export type SurfaceInsets =
+  | number
+  | {
+      readonly top?: number | undefined;
+      readonly right?: number | undefined;
+      readonly bottom?: number | undefined;
+      readonly left?: number | undefined;
+    };
+
 /** An independently mounted compositor popup. Its anchor uses parent-local logical coordinates. */
 export type PopupSurfaceProps = {
   readonly name: string;
@@ -113,6 +123,8 @@ export type PopupSurfaceProps = {
   readonly placement?: PopupSurfacePlacement;
   readonly offset?: NativePoint;
   readonly grab?: boolean;
+  /** Outer drawable bleed around the visual popup geometry, in whole nonnegative CSS pixels. */
+  readonly geometryInsets?: SurfaceInsets | undefined;
   readonly inputRegion?: LayerInputRegion;
   readonly blurRegion?: BlurRegion | undefined;
   readonly onDismiss?: () => void;

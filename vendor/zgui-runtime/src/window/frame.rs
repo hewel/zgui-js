@@ -1697,11 +1697,16 @@ impl Window {
         let Some(measured) = measured else {
             return false;
         };
+        let insets = placement
+            .validated_geometry_insets()
+            .unwrap_or_else(|_| zgui_geom::Edges::new(0, 0, 0, 0));
+        let vertical_bleed = (insets.top + insets.bottom) as f32;
         let min_h = min_height.max(1.0);
         let max_h = max_height.max(min_h);
-        let target_css = measured.clamp(min_h, max_h);
+        let target_css = (measured - vertical_bleed).clamp(min_h, max_h);
         let previous = self.surface.size();
-        let current_css = (previous.height.0 / self.scale.max(f32::EPSILON)).round();
+        let current_drawable_css = (previous.height.0 / self.scale.max(f32::EPSILON)).round();
+        let current_css = (current_drawable_css - vertical_bleed).max(1.0);
         if (target_css - current_css).abs() < 1.0 {
             if let Some(state) = self.popup_auto_height.as_mut() {
                 state.last_requested = Some(target_css);

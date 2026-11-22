@@ -7,7 +7,7 @@ use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
 use zgui_a11y::TreeUpdate;
-use zgui_geom::{Css, CssPx, Device, DevicePx, Point, Rect, Size};
+use zgui_geom::{Css, CssPx, Device, DevicePx, Edges, Point, Rect, Size};
 use zgui_platform::{
     Anchor, AppHandler, Clipboard, Clock, ColorScheme, Constrain, CursorStyle, Decorations,
     FullscreenMode, InputRegion, LayerPlacement, MonitorInfo, PlatformCapabilities, PlatformCx,
@@ -33,6 +33,7 @@ fn popup_placement(parent: SurfaceId) -> PopupPlacement {
         constrain: Constrain::default(),
         grab: None,
         reactive: false,
+        geometry_insets: Edges::new(CssPx(0.0), CssPx(0.0), CssPx(0.0), CssPx(0.0)),
     }
 }
 
@@ -466,4 +467,199 @@ fn async_repositionable_translucent_popup_suppresses_first_paint_until_repositio
     assert_eq!(logged.len(), 2, "Frame 2 paints at the repositioned height");
     assert_eq!(logged[1].viewport_height, 120, "Frame 2 viewport height is 120px");
     assert!(logged[1].quad_count > 0, "Frame 2 paints the real popup content");
+}
+
+#[test]
+fn popup_auto_height_with_geometry_insets_clamps_visual_bounds_and_expands_drawable_surface() {
+    let platform = Headless::new();
+    let mut runtime = App::new()
+        .with_renderer(Box::new(support::capture))
+        .into_handler(|cx| Box::new(zgui_elements::column().into_view().build(cx)))
+        .expect("install runtime");
+    runtime.surfaces_available(&platform);
+    let parent = runtime.windows()[0].surface().id();
+
+    let insets = Edges::new(CssPx(28.0), CssPx(28.0), CssPx(28.0), CssPx(28.0));
+    let placement = popup_placement(parent).with_geometry_insets(insets);
+    let mut attrs = SurfaceAttributes::popup(placement.clone());
+    attrs.size = Some(Size::new(CssPx(320.0), CssPx(240.0)));
+    attrs.transparent = true;
+    let css = r#"
+        :root { display: block; width: 100%; height: 100%; margin: 0; padding: 0; }
+        .bleed { display: flex; flex-direction: column; padding: 28px; box-sizing: border-box; max-height: 100%; }
+        .card { display: block; flex: 1; min-height: 0; overflow-y: auto; }
+        .body { width: 100%; background: #222; }
+    "#;
+    let mut content = WindowContent::default();
+    content.window_stylesheets.push(css.into());
+
+    let body_height = Rc::new(RefCell::new(None::<RwSignal<u32>>));
+    let body_slot = body_height.clone();
+    let token = runtime
+        .open_surface(
+            &platform,
+            WindowSpec::new(
+                attrs,
+                content,
+                Box::new(move |cx: &mut BuildCx<'_>| {
+                    let h = RwSignal::new(140u32);
+                    *body_slot.borrow_mut() = Some(h);
+                    let view = zgui_elements::column().class("bleed").child(
+                        zgui_elements::column().class("card").child(
+                            zgui_elements::column()
+                                .class("body")
+                                .style_text(move || Some(format!("height: {}px;", h.get()))),
+                        ),
+                    );
+                    Box::new(view.into_view().build(cx)) as Box<dyn ViewAnchor>
+                }),
+            ),
+        )
+        .expect("open inset auto-height popup");
+    let popup_id = runtime.surface_id(token).expect("popup surface id");
+    runtime
+        .set_popup_auto_height(
+            token,
+            Some(PopupAutoHeight {
+                placement: placement.clone(),
+                width: CssPx(320.0),
+                min_height: CssPx(80.0),
+                max_height: CssPx(240.0),
+            }),
+        )
+        .expect("enable auto-height");
+
+    let run_popup_frame = |rt: &mut zgui_runtime::Runtime| {
+        rt.surface_event(&platform, popup_id, SurfaceEvent::RedrawRequested);
+    };
+
+    // Initial frame: outer measured height = 140 + 56 = 196 -> visual 140 -> drawable 376x196.
+    run_popup_frame(&mut runtime);
+    let surface = platform.offscreen(popup_id).expect("headless popup");
+    assert_eq!(surface.size(), Size::new(DevicePx(376.0), DevicePx(196.0)));
+    assert_eq!(
+        runtime
+            .windows()
+            .iter()
+            .find(|w| w.surface().id() == popup_id)
+            .expect("popup window")
+            .popup_auto_height_resolved(),
+        Some(140.0)
+    );
+
+    // Tall content clamps visual height to maxHeight=240 -> drawable 376x296.
+    let signal = body_height.borrow().expect("height signal");
+    signal.set(500);
+    run_popup_frame(&mut runtime);
+    assert_eq!(surface.size(), Size::new(DevicePx(376.0), DevicePx(296.0)));
+    assert_eq!(
+        runtime
+            .windows()
+            .iter()
+            .find(|w| w.surface().id() == popup_id)
+            .expect("popup window")
+            .popup_auto_height_resolved(),
+        Some(240.0)
+    );
+
+    // Tiny content clamps visual height to minHeight=80 -> drawable 376x136.
+    signal.set(20);
+    run_popup_frame(&mut runtime);
+    assert_eq!(surface.size(), Size::new(DevicePx(376.0), DevicePx(136.0)));
+    assert_eq!(
+        runtime
+            .windows()
+            .iter()
+            .find(|w| w.surface().id() == popup_id)
+            .expect("popup window")
+            .popup_auto_height_resolved(),
+        Some(80.0)
+    );
+}
+
+#[test]
+fn compositor_constrained_auto_height_with_geometry_insets_converges_without_reposition_loop() {
+    let repositioned = Arc::new(Mutex::new(Vec::new()));
+    let platform = AsyncPopupPlatform {
+        inner: Headless::new(),
+        popup_surfaces: Mutex::new(Vec::new()),
+        repositioned: repositioned.clone(),
+    };
+    let mut runtime = App::new()
+        .with_renderer(Box::new(support::capture))
+        .into_handler(|cx| Box::new(zgui_elements::column().into_view().build(cx)))
+        .expect("install runtime");
+    runtime.surfaces_available(&platform);
+    let parent = runtime.windows()[0].surface().id();
+
+    let insets = Edges::new(CssPx(28.0), CssPx(28.0), CssPx(28.0), CssPx(28.0));
+    let placement = popup_placement(parent).with_geometry_insets(insets);
+    let mut attrs = SurfaceAttributes::popup(placement.clone());
+    attrs.size = Some(Size::new(CssPx(320.0), CssPx(280.0)));
+    attrs.transparent = true;
+    let mut content = WindowContent::default();
+    content.window_stylesheets.push(
+        ":root { display: block; width: 100%; height: 100%; } \
+         .bleed { display: flex; flex-direction: column; padding: 28px; box-sizing: border-box; max-height: 100%; } \
+         .card { display: block; flex: 1; min-height: 0; overflow-y: auto; } \
+         .body { height: 200px; background: #336699; }"
+            .into(),
+    );
+
+    let token = runtime
+        .open_surface(
+            &platform,
+            WindowSpec::new(
+                attrs,
+                content,
+                Box::new(|cx| {
+                    let view = zgui_elements::column().class("bleed").child(
+                        zgui_elements::column()
+                            .class("card")
+                            .child(zgui_elements::column().class("body")),
+                    );
+                    Box::new(view.into_view().build(cx))
+                }),
+            ),
+        )
+        .expect("open async inset popup");
+    let popup_id = runtime.surface_id(token).expect("popup surface id");
+    runtime
+        .set_popup_auto_height(
+            token,
+            Some(PopupAutoHeight {
+                placement,
+                width: CssPx(320.0),
+                min_height: CssPx(48.0),
+                max_height: CssPx(280.0),
+            }),
+        )
+        .expect("enable auto-height");
+
+    // Frame 1 measures 200 + 56 = 256 -> requests visual 200.
+    runtime.surface_event(&platform, popup_id, SurfaceEvent::RedrawRequested);
+    assert_eq!(
+        *repositioned.lock().expect("reposition log"),
+        vec![Size::new(CssPx(320.0), CssPx(200.0))]
+    );
+
+    // Compositor constrains visual height to 160 -> expanded drawable height is 160 + 56 = 216.
+    let popup_surface = platform
+        .popup_surfaces
+        .lock()
+        .expect("popup surfaces")
+        .first()
+        .expect("async popup surface")
+        .clone();
+    let constrained = Size::new(DevicePx(376.0), DevicePx(216.0));
+    *popup_surface.size.lock().expect("size lock") = constrained;
+    runtime.surface_event(&platform, popup_id, SurfaceEvent::Resized(constrained));
+    runtime.surface_event(&platform, popup_id, SurfaceEvent::RedrawRequested);
+    runtime.surface_event(&platform, popup_id, SurfaceEvent::RedrawRequested);
+
+    assert_eq!(
+        *repositioned.lock().expect("reposition log"),
+        vec![Size::new(CssPx(320.0), CssPx(200.0))],
+        "compositor-clamped height must not trigger a reposition loop"
+    );
 }

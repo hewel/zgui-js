@@ -41,6 +41,7 @@ export type PopupPlacement = Required<PopupSurfacePlacement> &
     readonly minHeight?: number;
     readonly maxHeight?: number;
     readonly anchorRect: NativeWindowRect;
+    readonly geometryInsets: Readonly<Record<LayerAnchor, number>>;
   };
 export interface WindowOptions {
   readonly title: string;

@@ -373,8 +373,11 @@ impl Driver {
         // Keep synthetic configuration separate from explicit scenario resizes.
         let changed: Vec<_> = app.native.windows().iter().filter_map(|window| {
             let id = window.surface().id();
-            let (width, height, output) = app.host.shell_geometry(id)?;
-            let height = window.popup_auto_height_resolved().map_or(height, f64::from);
+            let (visual_width, visual_height, output) = app.host.shell_geometry(id)?;
+            let visual_height = window.popup_auto_height_resolved().map_or(visual_height, f64::from);
+            let insets = app.host.shell_geometry_insets(id);
+            let width = visual_width + insets.left + insets.right;
+            let height = visual_height + insets.top + insets.bottom;
             let monitor = match output {
                 Some(output) => app.monitors.iter().find(|monitor| monitor.id == output),
                 None => app.monitors.first(),

@@ -1,7 +1,7 @@
 //! Decode bounded popup requests independently of any live native surface.
 use rquickjs::{Ctx, Exception, Function, Object, Persistent, Value, function::Func};
 use std::{collections::{BTreeMap, VecDeque}, ops::RangeInclusive, rc::Rc};
-use zgui::{geom::{Css, CssPx, Point, Rect, Size}, platform::{Anchor, Constrain, InputRegion, InputSerial, PopupPlacement, SurfaceId}};
+use zgui::{geom::{Css, CssPx, Edges, Point, Rect, Size}, platform::{Anchor, Constrain, InputRegion, InputSerial, PopupPlacement, SurfaceId}};
 
 use super::{DesiredBlur, Lifecycle, MAX_LAYERS, Shell, layer_id, number, owner, string, valid_name};
 
@@ -32,10 +32,11 @@ struct PopupGeometry {
     constrain: Constrain,
     grab: bool,
     reactive: bool,
+    geometry_insets: Edges<CssPx>,
 }
 
 impl PopupSpec {
-    /// Requested extent in logical pixels (uses `max_height` as initial budget for auto-height).
+    /// Requested visual extent in logical pixels (uses `max_height` as initial budget for auto-height).
     #[must_use]
     pub(crate) fn size(&self) -> Size<CssPx, Css> {
         let height = match self.geometry.height {
@@ -43,6 +44,12 @@ impl PopupSpec {
             PopupHeight::Auto { max, .. } => max,
         };
         Size::new(self.geometry.width, height)
+    }
+
+    /// Validated outer drawable bleed around the visual popup geometry, in CSS pixels.
+    #[must_use]
+    pub(crate) fn geometry_insets(&self) -> Edges<CssPx> {
+        self.geometry.geometry_insets
     }
 
     /// Whether this popup sizes its height from its laid-out content.
@@ -80,8 +87,8 @@ impl PopupSpec {
     /// Resolve the placement against a live parent in the same generation.
     #[must_use]
     pub(crate) fn placement(&self, parent: SurfaceId, grab: Option<InputSerial>) -> PopupPlacement {
-        let PopupGeometry { anchor_rect, anchor, gravity, offset, constrain, reactive, .. } = self.geometry;
-        PopupPlacement { parent, anchor_rect, anchor, gravity, offset, constrain, grab, reactive }
+        let PopupGeometry { anchor_rect, anchor, gravity, offset, constrain, reactive, geometry_insets, .. } = self.geometry;
+        PopupPlacement { parent, anchor_rect, anchor, gravity, offset, constrain, grab, reactive, geometry_insets }
     }
 }
 
@@ -189,8 +196,23 @@ fn parse(ctx: &Ctx<'_>, data: Value<'_>) -> rquickjs::Result<(String, PopupGeome
     let extent = |value: &Object<'_>, range: RangeInclusive<f64>| -> rquickjs::Result<_> {
         Ok(Size::new(css(ctx, value, "width", range.clone())?, css(ctx, value, "height", range)?))
     };
-    let width = css(ctx, &data, "width", 1.0..=16_384.0)?;
+    let width = css(ctx, &data, "width", 1.0..=MAX_POPUP_EXTENT)?;
     let height = parse_height(ctx, &data)?;
+    let geometry_insets = parse_geometry_insets(ctx, &data)?;
+    let budget_height = match height {
+        PopupHeight::Fixed(value) => f64::from(value.0),
+        PopupHeight::Auto { max, .. } => f64::from(max.0),
+    };
+    let expanded_width =
+        f64::from(width.0) + f64::from(geometry_insets.left.0) + f64::from(geometry_insets.right.0);
+    let expanded_height =
+        budget_height + f64::from(geometry_insets.top.0) + f64::from(geometry_insets.bottom.0);
+    if expanded_width > MAX_POPUP_EXTENT || expanded_height > MAX_POPUP_EXTENT {
+        return Err(Exception::throw_range(
+            ctx,
+            "popup expanded logical extent with geometryInsets exceeds 16384 CSS pixels",
+        ));
+    }
     Ok((parent, PopupGeometry {
         width,
         height,
@@ -199,11 +221,41 @@ fn parse(ctx: &Ctx<'_>, data: Value<'_>) -> rquickjs::Result<(String, PopupGeome
         offset: position(&offset)?,
         constrain: Constrain { slide: flag(ctx, &data, "slide")?, flip: flag(ctx, &data, "flip")?, resize: flag(ctx, &data, "resize")? },
         grab: flag(ctx, &data, "grab")?, reactive: flag(ctx, &data, "reactive")?,
+        geometry_insets,
     }))
 }
 
+const MAX_POPUP_EXTENT: f64 = 16_384.0;
 const DEFAULT_MIN_AUTO_HEIGHT: f64 = 1.0;
 const DEFAULT_MAX_AUTO_HEIGHT: f64 = 600.0;
+
+fn parse_geometry_insets(ctx: &Ctx<'_>, data: &Object<'_>) -> rquickjs::Result<Edges<CssPx>> {
+    let raw: Value = data.get("geometryInsets")?;
+    if raw.is_undefined() || raw.is_null() {
+        return Ok(Edges::new(CssPx(0.0), CssPx(0.0), CssPx(0.0), CssPx(0.0)));
+    }
+    if raw.is_array() {
+        return Err(Exception::throw_type(ctx, "popup geometryInsets must be an object"));
+    }
+    let obj = raw
+        .into_object()
+        .ok_or_else(|| Exception::throw_type(ctx, "popup geometryInsets must be an object"))?;
+    let edge = |side: &str| -> rquickjs::Result<CssPx> {
+        let value: Value = obj.get(side)?;
+        if value.is_undefined() {
+            return Ok(CssPx(0.0));
+        }
+        let value = number(ctx, &value, &format!("geometryInsets.{side}"))?;
+        if !(0.0..=MAX_POPUP_EXTENT).contains(&value) || value.fract() != 0.0 {
+            return Err(Exception::throw_range(
+                ctx,
+                &format!("popup geometryInsets.{side} must be a nonnegative whole CSS pixel integer"),
+            ));
+        }
+        Ok(CssPx(value as f32))
+    };
+    Ok(Edges::new(edge("top")?, edge("right")?, edge("bottom")?, edge("left")?))
+}
 
 fn parse_height(ctx: &Ctx<'_>, data: &Object<'_>) -> rquickjs::Result<PopupHeight> {
     let raw: Value = data.get("height")?;

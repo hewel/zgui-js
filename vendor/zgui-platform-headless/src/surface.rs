@@ -5,7 +5,7 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
 use accesskit::TreeUpdate;
-use zgui_geom::{Css, CssPx, Device, DevicePx, Point, Rect, Size};
+use zgui_geom::{Css, CssPx, Device, DevicePx, Edges, Point, Rect, Size};
 use zgui_platform::{
     BlurRegion, CursorStyle, Decorations, FullscreenMode, InputRect, InputRegion, InputSerial,
     LayerPatch, LayerPlacement, PlatformError, PopupPlacement, Surface, SurfaceAttributes,
@@ -60,6 +60,20 @@ pub enum RecordedBlurRegion {
     Full,
     /// Background blur covers the union of these surface-local CSS rectangles.
     Rects(Vec<Rect<CssPx, Css>>),
+}
+
+/// Normalized XDG-style window geometry rectangle recorded on an offscreen surface, in whole
+/// surface-local CSS pixels.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RecordedWindowGeometry {
+    /// Horizontal offset from the surface's drawable origin.
+    pub x: i32,
+    /// Vertical offset from the surface's drawable origin.
+    pub y: i32,
+    /// Visual width of the declared window geometry.
+    pub width: i32,
+    /// Visual height of the declared window geometry.
+    pub height: i32,
 }
 
 /// The currently presented solid-color fallback, in physical pixels.
@@ -169,6 +183,8 @@ pub struct OffscreenSurface {
     blur_region: Mutex<RecordedBlurRegion>,
     /// Monotonic revision bumped whenever the recorded blur region changes.
     blur_revision: AtomicU64,
+    /// Monotonic revision bumped whenever the declared window geometry changes.
+    window_geometry_revision: AtomicU64,
     /// Every normalized background blur region accepted by this surface, in order.
     blur_region_log: Mutex<Vec<RecordedBlurRegion>>,
     /// What the offscreen compositor is showing on this surface.
@@ -226,6 +242,7 @@ impl OffscreenSurface {
             opaque_region_log: Mutex::new(Vec::new()),
             blur_region: Mutex::new(RecordedBlurRegion::None),
             blur_revision: AtomicU64::new(0),
+            window_geometry_revision: AtomicU64::new(0),
             blur_region_log: Mutex::new(Vec::new()),
             presentation: Mutex::new(Presentation::Window { visible: false }),
             title: Mutex::new(String::new()),
@@ -324,6 +341,46 @@ impl OffscreenSurface {
     #[must_use]
     pub fn blur_revision(&self) -> u64 {
         self.blur_revision.load(Ordering::Acquire)
+    }
+
+    /// Current normalized XDG-style window geometry rectangle in whole surface-local CSS pixels.
+    #[must_use]
+    pub fn window_geometry(&self) -> RecordedWindowGeometry {
+        let scale = self.scale_factor().max(f64::EPSILON);
+        let size = self.size();
+        let logical_w = (f64::from(size.width.0) / scale).round().max(1.0) as i32;
+        let logical_h = (f64::from(size.height.0) / scale).round().max(1.0) as i32;
+        let insets = match &self
+            .requested_attributes
+            .lock()
+            .expect("the attributes are not poisoned")
+            .role
+        {
+            SurfaceRole::Popup(placement) => placement
+                .validated_geometry_insets()
+                .unwrap_or_else(|_| Edges::new(0, 0, 0, 0)),
+            _ => Edges::new(0, 0, 0, 0),
+        };
+        let width = logical_w
+            .saturating_sub(insets.left)
+            .saturating_sub(insets.right)
+            .max(1);
+        let height = logical_h
+            .saturating_sub(insets.top)
+            .saturating_sub(insets.bottom)
+            .max(1);
+        RecordedWindowGeometry {
+            x: insets.left,
+            y: insets.top,
+            width,
+            height,
+        }
+    }
+
+    /// Monotonic revision incremented whenever [`OffscreenSurface::window_geometry`] changes.
+    #[must_use]
+    pub fn window_geometry_revision(&self) -> u64 {
+        self.window_geometry_revision.load(Ordering::Acquire)
     }
 
     /// Every normalized background blur region accepted by this surface, in order.
@@ -641,11 +698,28 @@ impl Surface for OffscreenSurface {
             return None;
         }
         let scale = self.scale_factor();
+        let logical = {
+            let mut attrs = self
+                .requested_attributes
+                .lock()
+                .expect("the attributes are not poisoned");
+            if let SurfaceRole::Popup(placement) = &attrs.role {
+                let (visual, _insets, drawable) = placement.expand_visual_size(size).ok()?;
+                attrs.size = Some(Size::new(
+                    CssPx(visual.width as f32),
+                    CssPx(visual.height as f32),
+                ));
+                Size::new(CssPx(drawable.width as f32), CssPx(drawable.height as f32))
+            } else {
+                size
+            }
+        };
         let taken = Size::new(
-            DevicePx(size.width.0 * scale as f32),
-            DevicePx(size.height.0 * scale as f32),
+            DevicePx((f64::from(logical.width.0) * scale).round() as f32),
+            DevicePx((f64::from(logical.height.0) * scale).round() as f32),
         );
         self.resize(taken);
+        self.window_geometry_revision.fetch_add(1, Ordering::Release);
         Some(taken)
     }
 
@@ -914,24 +988,37 @@ impl Surface for OffscreenSurface {
         placement: &LayerPlacement,
         size: Size<CssPx, Css>,
     ) -> Result<(), PlatformError> {
-        let mut attrs = self.requested_attributes.lock().expect("the attributes are not poisoned");
-        let SurfaceRole::Layer(old) = &attrs.role else {
-            return Err(Unsupported.into());
+        let changed = {
+            let mut attrs = self
+                .requested_attributes
+                .lock()
+                .expect("the attributes are not poisoned");
+            let SurfaceRole::Layer(old) = &attrs.role else {
+                return Err(Unsupported.into());
+            };
+            if old.monitor != placement.monitor {
+                return Err(PlatformError::Backend(
+                    "moving a layer surface to another output requires reopening it".to_owned(),
+                ));
+            }
+            // A fixture has no compositor to assign stretched dimensions.
+            if [size.width.0, size.height.0]
+                .into_iter()
+                .any(|axis| !axis.is_finite() || axis <= 0.0)
+            {
+                return Err(PlatformError::Backend(
+                    "offscreen layers require resolved positive dimensions".to_owned(),
+                ));
+            }
+            if old != placement || attrs.size != Some(size) {
+                attrs.role = SurfaceRole::Layer(placement.clone());
+                attrs.size = Some(size);
+                true
+            } else {
+                false
+            }
         };
-        if old.monitor != placement.monitor {
-            return Err(PlatformError::Backend(
-                "moving a layer surface to another output requires reopening it".to_owned(),
-            ));
-        }
-        // A fixture has no compositor to assign stretched dimensions.
-        if [size.width.0, size.height.0].into_iter().any(|axis| !axis.is_finite() || axis <= 0.0) {
-            return Err(PlatformError::Backend(
-                "offscreen layers require resolved positive dimensions".to_owned(),
-            ));
-        }
-        if old != placement || attrs.size != Some(size) {
-            attrs.role = SurfaceRole::Layer(placement.clone());
-            attrs.size = Some(size);
+        if changed {
             self.request_size(size);
             self.request_redraw();
         }
@@ -946,24 +1033,40 @@ impl Surface for OffscreenSurface {
         if self.popup_dismissed() {
             return Err(Unsupported.into());
         }
-        let mut attrs = self.requested_attributes.lock().expect("the attributes are not poisoned");
-        let SurfaceRole::Popup(old) = &attrs.role else {
-            return Err(Unsupported.into());
+        let changed = {
+            let mut attrs = self
+                .requested_attributes
+                .lock()
+                .expect("the attributes are not poisoned");
+            let SurfaceRole::Popup(old) = &attrs.role else {
+                return Err(Unsupported.into());
+            };
+            if old.parent != placement.parent || old.grab != placement.grab {
+                return Err(PlatformError::Backend(
+                    "changing a pop-up's parent or grab requires reopening it".to_owned(),
+                ));
+            }
+            let (visual_i32, _insets, drawable_i32) = placement.expand_visual_size(size)?;
+            let visual_size = Size::new(
+                CssPx(visual_i32.width as f32),
+                CssPx(visual_i32.height as f32),
+            );
+            if old != placement || attrs.size != Some(visual_size) {
+                attrs.role = SurfaceRole::Popup(placement.clone());
+                attrs.size = Some(visual_size);
+                Some(drawable_i32)
+            } else {
+                None
+            }
         };
-        if old.parent != placement.parent || old.grab != placement.grab {
-            return Err(PlatformError::Backend(
-                "changing a pop-up's parent or grab requires reopening it".to_owned(),
-            ));
-        }
-        if [size.width.0, size.height.0].into_iter().any(|axis| !axis.is_finite() || axis <= 0.0) {
-            return Err(PlatformError::Backend(
-                "offscreen pop-ups require resolved positive dimensions".to_owned(),
-            ));
-        }
-        if old != placement || attrs.size != Some(size) {
-            attrs.role = SurfaceRole::Popup(placement.clone());
-            attrs.size = Some(size);
-            self.request_size(size);
+        if let Some(drawable) = changed {
+            let scale = self.scale_factor();
+            let taken = Size::new(
+                DevicePx((f64::from(drawable.width) * scale).round() as f32),
+                DevicePx((f64::from(drawable.height) * scale).round() as f32),
+            );
+            self.resize(taken);
+            self.window_geometry_revision.fetch_add(1, Ordering::Release);
             self.request_redraw();
         }
         Ok(())

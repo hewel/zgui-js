@@ -46,11 +46,9 @@ pub fn request_size(
     }
     // For a popup, the compositor's configure is the authority on the new extent.
     if surface.role().popup().is_some() {
-        if !surface.resize_popup(size) {
-            return None;
-        }
+        let drawable = surface.resize_popup(size)?;
         let scale = surface.shared().scale;
-        return Some(device_extent(size, scale));
+        return Some(device_extent(drawable, scale));
     }
     surface.set_wanted(size);
     let (scale, size) = {
@@ -342,19 +340,19 @@ pub fn pre_present(surface: &WaylandSurface, size: Size<i32, Device>, scale: f64
         shared.shown = true;
         shared.committing_frame(size);
         (
-            shared.frame_metadata(size, scale),
+            shared.frame_metadata(size, scale, surface.role().xdg_surface().is_some()),
             shared.ladder.is_fractional(),
         )
     };
-    if let Some(logical) = metadata {
+    if let Some((logical, window_geometry)) = metadata {
         // A surface with a viewport is always mapped through it: the buffer can be larger than the
         // frame, and only the frame's extent is shown.
         let viewport = surface.fractional().crops();
         crate::surface::scale::declare(surface, scale, fractional || viewport);
         surface.fractional().source(size);
         surface.fractional().destination(logical);
-        if let Some(window) = surface.role().window() {
-            window.set_geometry(logical);
+        if let (Some(xdg), Some(geom)) = (surface.role().xdg_surface(), window_geometry) {
+            xdg.set_window_geometry(geom.x, geom.y, geom.width, geom.height);
         }
     }
     surface.send_layer(false);

@@ -52,21 +52,29 @@ pub fn constraint(constrain: Constrain) -> ConstraintAdjustment {
     adjustment
 }
 
-/// The anchor rectangle, clamped into the parent's geometry and to a non-empty extent.
+/// The anchor rectangle, translated into the parent's window-geometry coordinates and clamped into
+/// the parent's visual geometry and to a non-empty extent.
 ///
 /// Both are protocol errors rather than mistakes the compositor forgives: a rectangle of zero
 /// extent, and one that leaves the parent's window geometry, each disconnect the client. The
-/// rectangle a menu is anchored to is computed from a layout that knows nothing about either, so
-/// it is corrected here — pulled inward at the edges rather than refused, because a menu placed a
-/// pixel from where it was asked for is a better answer than no menu.
+/// rectangle a menu is anchored to is computed from a layout in the parent's surface-local
+/// coordinates that knows nothing about either, so it is translated by `-parent.origin` and pulled
+/// inward at the edges rather than refused, because a menu placed a pixel from where it was asked
+/// for is a better answer than no menu.
 pub fn anchor_rect(
     rect: Rect<CssPx, Css>,
-    parent: zgui_geom::Size<CssPx, Css>,
+    parent: Rect<CssPx, Css>,
 ) -> (i32, i32, i32, i32) {
-    let limit_x = parent.width.0.max(1.0).round() as i32;
-    let limit_y = parent.height.0.max(1.0).round() as i32;
-    let x = (rect.origin.x.0.round() as i32).clamp(0, limit_x - 1);
-    let y = (rect.origin.y.0.round() as i32).clamp(0, limit_y - 1);
+    let origin_x = parent.origin.x.0.round() as i32;
+    let origin_y = parent.origin.y.0.round() as i32;
+    let limit_x = parent.size.width.0.max(1.0).round() as i32;
+    let limit_y = parent.size.height.0.max(1.0).round() as i32;
+    let x = (rect.origin.x.0.round() as i32)
+        .saturating_sub(origin_x)
+        .clamp(0, limit_x - 1);
+    let y = (rect.origin.y.0.round() as i32)
+        .saturating_sub(origin_y)
+        .clamp(0, limit_y - 1);
     let width = (rect.size.width.0.round() as i32).clamp(1, limit_x - x);
     let height = (rect.size.height.0.round() as i32).clamp(1, limit_y - y);
     (x, y, width, height)
@@ -107,12 +115,13 @@ impl Offset {
     }
 }
 
-/// Fills `positioner` in from `placement`, measured against a parent of `parent` logical pixels.
+/// Fills `positioner` in from `placement`, measured against a parent whose window geometry is
+/// `parent` in logical pixels.
 pub fn describe(
     positioner: &XdgPositioner,
     placement: &PopupPlacement,
     offset: Offset,
-    parent: zgui_geom::Size<CssPx, Css>,
+    parent: Rect<CssPx, Css>,
     size: zgui_geom::Size<CssPx, Css>,
 ) {
     let (x, y, width, height) = anchor_rect(placement.anchor_rect, parent);
@@ -140,8 +149,11 @@ mod tests {
     use zgui_geom::{CssPx, Point, Rect, Size};
     use zgui_platform::Constrain;
 
-    fn parent() -> Size<CssPx, zgui_geom::Css> {
-        Size::new(CssPx(400.0), CssPx(300.0))
+    fn parent() -> Rect<CssPx, zgui_geom::Css> {
+        Rect::new(
+            Point::new(CssPx(0.0), CssPx(0.0)),
+            Size::new(CssPx(400.0), CssPx(300.0)),
+        )
     }
 
     #[test]
@@ -226,5 +238,25 @@ mod tests {
             Size::new(CssPx(10.0), CssPx(10.0)),
         );
         assert_eq!(anchor_rect(before, parent()), (0, 0, 10, 10));
+    }
+
+    #[test]
+    fn an_anchor_on_an_inset_parent_subtracts_parent_window_geometry_origin() {
+        let inset_parent = Rect::new(
+            Point::new(CssPx(28.0), CssPx(16.0)),
+            Size::new(CssPx(360.0), CssPx(200.0)),
+        );
+        let trigger = Rect::new(
+            Point::new(CssPx(40.0), CssPx(46.0)),
+            Size::new(CssPx(100.0), CssPx(24.0)),
+        );
+        assert_eq!(anchor_rect(trigger, inset_parent), (12, 30, 100, 24));
+
+        // A trigger near the right/bottom visual edge clamps to the parent's visual extent.
+        let near_edge = Rect::new(
+            Point::new(CssPx(368.0), CssPx(206.0)),
+            Size::new(CssPx(80.0), CssPx(40.0)),
+        );
+        assert_eq!(anchor_rect(near_edge, inset_parent), (340, 190, 20, 10));
     }
 }

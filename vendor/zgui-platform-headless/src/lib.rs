@@ -84,7 +84,9 @@ pub mod waker;
 pub use crate::clipboard::MemoryClipboard;
 pub use crate::harness::Harness;
 pub use crate::platform::{Headless, SessionLockDecision, SessionLockSnapshot, SessionLockState};
-pub use crate::surface::{LockFallbackFrame, OffscreenSurface, RecordedBlurRegion, Region};
+pub use crate::surface::{
+    LockFallbackFrame, OffscreenSurface, RecordedBlurRegion, RecordedWindowGeometry, Region,
+};
 pub use crate::waker::RecordingWaker;
 
 /// The clock a caller moves by hand, re-exported.
