@@ -120,5 +120,11 @@
     "minimized": false,
     "moveDragCount": 0,
     "title": "zgui TSX preview"
+  },
+  "windowGeometry": {
+    "height": 600,
+    "width": 800,
+    "x": 0,
+    "y": 0
   }
 }

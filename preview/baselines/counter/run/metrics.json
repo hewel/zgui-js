@@ -8,16 +8,16 @@
     "wallDuration": true
   },
   "captures": 2,
-  "jsHeapBytes": 516638,
-  "jsHeapLiveBytes": 516638,
-  "jsHeapPostDisposeBytes": 514480,
+  "jsHeapBytes": 517410,
+  "jsHeapLiveBytes": 517410,
+  "jsHeapPostDisposeBytes": 515252,
   "jsStackLimitBytes": 1048576,
-  "maxJsEntryDurationUs": 460,
+  "maxJsEntryDurationUs": 401,
   "nativeFrames": 4,
-  "privateDirtyBytes": 37531648,
-  "pssAnonBytes": 37531648,
-  "pssBytes": 103121920,
-  "pssFileBytes": 65590272,
-  "rssBytes": 121614336,
-  "wallDurationUs": 382340
+  "privateDirtyBytes": 37523456,
+  "pssAnonBytes": 37523456,
+  "pssBytes": 84501504,
+  "pssFileBytes": 46978048,
+  "rssBytes": 120934400,
+  "wallDurationUs": 350398
 }
