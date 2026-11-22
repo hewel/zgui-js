@@ -140,6 +140,16 @@ impl Dom for DocumentDom {
         self.edit(|edit| edit.set_state(el, state, on));
     }
 
+    fn is_effectively_inert(&self, el: NodeId) -> bool {
+        let Some(index) = self.live_index_of(el) else {
+            return false;
+        };
+        self.document
+            .borrow()
+            .store()
+            .is_effectively_inert_index(index)
+    }
+
     fn set_custom_state(&self, el: NodeId, name: Ident, on: bool) {
         let Some(el) = self.live_index_of(el) else {
             return;

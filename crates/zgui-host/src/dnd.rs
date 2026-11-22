@@ -74,6 +74,7 @@ struct ExternalDrag {
 struct OutboundDrag {
     id: u64,
     surface: SurfaceId,
+    source_node: NodeId,
     on_end: Option<Persistent<Function<'static>>>,
 }
 
@@ -296,7 +297,16 @@ impl Session {
             )?;
             return Err(ctx.throw(err.into_value()));
         }
-        let (surface_id, _native_node) = self.resolve_node_and_surface(ctx, &source_node)?;
+        let (surface_id, native_node) = self.resolve_node_and_surface(ctx, &source_node)?;
+        if self
+            .bridge_for_surface(surface_id)
+            .is_some_and(|bridge| bridge.is_native_node_effectively_inert(native_node))
+        {
+            return Err(Exception::throw_type(
+                ctx,
+                "cannot start outbound drag from an inert node",
+            ));
+        }
         let items_arr: Array = options.get("items")?;
         if items_arr.is_empty() || items_arr.len() > MAX_OUTBOUND_DRAG_ITEMS {
             return Err(Exception::throw_range(
@@ -360,6 +370,7 @@ impl Session {
         *self.dnd.outbound.borrow_mut() = Some(OutboundDrag {
             id: drag_id,
             surface: surface_id,
+            source_node: native_node,
             on_end: on_end.map(|f| Persistent::save(ctx, f)),
         });
 
@@ -427,6 +438,15 @@ impl Session {
             return Err(ctx.throw(err.into_value()));
         }
         let (surface, native_node) = self.resolve_node_and_surface(ctx, &source_node)?;
+        if self
+            .bridge_for_surface(surface)
+            .is_some_and(|bridge| bridge.is_native_node_effectively_inert(native_node))
+        {
+            return Err(Exception::throw_type(
+                ctx,
+                "cannot start internal drag from an inert node",
+            ));
+        }
         let types_arr: Array = options.get("types")?;
         let mut types = Vec::with_capacity(types_arr.len());
         for item in types_arr.iter::<String>() {
@@ -535,6 +555,124 @@ impl Session {
             .map_err(|error| self.diagnostic(error).into())
     }
 
+    /// Cancels any active internal or outbound drag whose source node was detached or became
+    /// effectively inert, and prunes inert targets from an active external drag.
+    pub(crate) fn reconcile_inert_drags(&self) -> SessionResult<()> {
+        if self.shutdown_started.get() {
+            return Ok(());
+        }
+        let internal_cancel = {
+            let guard = self.dnd.internal.borrow();
+            guard.as_ref().and_then(|drag| {
+                let bridge = self.bridge_for_surface(drag.surface);
+                let attached = bridge
+                    .as_ref()
+                    .is_some_and(|b| b.is_native_node_attached(drag.source_node));
+                if !attached {
+                    return Some("detach");
+                }
+                let inert = bridge
+                    .as_ref()
+                    .is_some_and(|b| b.is_native_node_effectively_inert(drag.source_node));
+                inert.then_some("inert")
+            })
+        };
+        if let Some(reason) = internal_cancel {
+            self.cancel_internal_drag(None, reason)?;
+        }
+
+        let outbound_cancel = {
+            let guard = self.dnd.outbound.borrow();
+            guard.as_ref().and_then(|drag| {
+                let bridge = self.bridge_for_surface(drag.surface);
+                let attached = bridge
+                    .as_ref()
+                    .is_some_and(|b| b.is_native_node_attached(drag.source_node));
+                if !attached {
+                    return Some((drag.id, "detach"));
+                }
+                let inert = bridge
+                    .as_ref()
+                    .is_some_and(|b| b.is_native_node_effectively_inert(drag.source_node));
+                inert.then_some((drag.id, "inert"))
+            })
+        };
+        if let Some((drag_id, reason)) = outbound_cancel
+            && let Ok(mut engine) = self.engine.try_borrow_mut()
+            && let Some(engine) = engine.as_mut()
+        {
+            self.bridges
+                .run(engine.turn(), |js| {
+                    js.with_context(|ctx| {
+                        self.cancel_outbound_drag_in_ctx(&ctx, Some(drag_id), reason)
+                    })
+                })
+                .map_err(|error| self.diagnostic(error))?;
+        }
+
+        let external_inert = {
+            let guard = self.dnd.external.borrow();
+            guard.as_ref().and_then(|ext| {
+                let bridge = self.bridge_for_surface(ext.surface)?;
+                let inert_nodes: Vec<NodeId> = ext
+                    .hovered
+                    .iter()
+                    .copied()
+                    .filter(|node| bridge.is_native_node_effectively_inert(*node))
+                    .collect();
+                if inert_nodes.is_empty() {
+                    None
+                } else {
+                    Some((ext.surface, ext.id, ext.types.clone(), ext.file_count, inert_nodes))
+                }
+            })
+        };
+        if let Some((surface, drag_id, types, file_count, inert_nodes)) = external_inert {
+            if let Some(ext) = self.dnd.external.borrow_mut().as_mut()
+                && ext.id == drag_id
+            {
+                ext.hovered.retain(|node| !inert_nodes.contains(node));
+                if ext
+                    .accepted
+                    .is_some_and(|(target, _)| inert_nodes.contains(&target))
+                {
+                    ext.accepted = None;
+                }
+            }
+            if let Some(bridge) = self.bridge_for_surface(surface)
+                && let Ok(mut engine) = self.engine.try_borrow_mut()
+                && let Some(engine) = engine.as_mut()
+            {
+                self.bridges
+                    .run(engine.turn(), |js| {
+                        js.with_context(|ctx| {
+                            for node in inert_nodes {
+                                if let Some(cb) = bridge.dnd_callback(node, DndEventKind::DragLeave)
+                                {
+                                    let ev = build_drag_event(
+                                        &ctx,
+                                        drag_id,
+                                        "external",
+                                        &types,
+                                        file_count,
+                                        Point::new(CssPx(0.0), CssPx(0.0)),
+                                        BoxGeometry::from_window(None, node),
+                                        DragEffect::Copy,
+                                        Rc::new(Cell::new(None)),
+                                        Rc::new(Cell::new(false)),
+                                    )?;
+                                    cb.restore(&ctx)?.call::<_, ()>((ev,))?;
+                                }
+                            }
+                            Ok(())
+                        })
+                    })
+                    .map_err(|error| self.diagnostic(error))?;
+            }
+        }
+        Ok(())
+    }
+
     /// Cancels any internal, external, or outbound drag targeting a surface that was just destroyed.
     pub(crate) fn cancel_drags_for_surface(&self, surface: SurfaceId) -> SessionResult<()> {
         if self
@@ -596,12 +734,19 @@ impl Session {
             };
             (drag.surface, drag.source_node)
         };
-        // Auto-cancel if the source node was detached while dragging.
-        let live = self
-            .bridge_for_surface(drag_surface)
+        // Auto-cancel if the source node was detached or became effectively inert while dragging.
+        let bridge_for_source = self.bridge_for_surface(drag_surface);
+        let live = bridge_for_source
+            .as_ref()
             .is_some_and(|bridge| bridge.is_native_node_attached(source_node));
         if !live {
             return self.cancel_internal_drag(None, "detach");
+        }
+        if bridge_for_source
+            .as_ref()
+            .is_some_and(|bridge| bridge.is_native_node_effectively_inert(source_node))
+        {
+            return self.cancel_internal_drag(None, "inert");
         }
         if action == PointerAction::Cancelled {
             return self.cancel_internal_drag(None, "cancel");

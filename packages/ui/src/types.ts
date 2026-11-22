@@ -356,6 +356,8 @@ export interface NativeElementProps extends NativeEventProps {
   title?: string | null | undefined;
   tabIndex?: number | null | undefined;
   disabled?: boolean | null | undefined;
+  /** Isolates this subtree from pointer hit-testing, focus, keyboard, and AccessKit while keeping layout, paint, and animations running. */
+  inert?: boolean | null | undefined;
   checked?: boolean | "mixed" | null | undefined;
   expanded?: boolean | null | undefined;
   selected?: boolean | null | undefined;

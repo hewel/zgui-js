@@ -1219,7 +1219,7 @@ impl Session {
 
     pub(crate) fn frame_checkpoint(&self) {
         if self.shutdown_started.get() { return; }
-        if let Err(error) = self.checkpoint_inner() {
+        if let Err(error) = self.checkpoint_inner().and_then(|_| self.reconcile_inert_drags()) {
             *self.fault.borrow_mut() = Some(error);
             self.wake_owner();
         }

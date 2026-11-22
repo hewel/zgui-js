@@ -1,0 +1,49 @@
+[package]
+name = "zgui-a11y"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+description = "Accessibility tree for zgui documents, published through AccessKit"
+repository = "https://github.com/zortax/zgui"
+homepage = "https://zgui.zortax.de"
+rust-version = "1.90"
+keywords = ["gui", "ui", "css", "reactive", "wgpu"]
+categories = ["gui"]
+include = ["/src", "/build", "/build.rs", "/README.md", "/LICENSE", "/NOTICE"]
+
+[workspace]
+
+[dependencies]
+zgui-bits = { git = "https://github.com/zortax/zgui", rev = "ee29c7dc66206eb04ba7bcf514058a278c9070ba" }
+zgui-dom = { git = "https://github.com/zortax/zgui", rev = "ee29c7dc66206eb04ba7bcf514058a278c9070ba" }
+zgui-geom = { git = "https://github.com/zortax/zgui", rev = "ee29c7dc66206eb04ba7bcf514058a278c9070ba" }
+zgui-profile = { git = "https://github.com/zortax/zgui", rev = "ee29c7dc66206eb04ba7bcf514058a278c9070ba" }
+zgui-input = { git = "https://github.com/zortax/zgui", rev = "ee29c7dc66206eb04ba7bcf514058a278c9070ba" }
+zgui-layout = { git = "https://github.com/zortax/zgui", rev = "ee29c7dc66206eb04ba7bcf514058a278c9070ba" }
+zgui-scene = { git = "https://github.com/zortax/zgui", rev = "ee29c7dc66206eb04ba7bcf514058a278c9070ba" }
+zgui-vocab = { git = "https://github.com/zortax/zgui", rev = "ee29c7dc66206eb04ba7bcf514058a278c9070ba" }
+
+accesskit = "0.24.1"
+
+[dev-dependencies]
+zgui-interned = { git = "https://github.com/zortax/zgui", rev = "ee29c7dc66206eb04ba7bcf514058a278c9070ba" }
+
+[lints.rust]
+missing_docs = "deny"
+unsafe_code = "deny"
+unreachable_pub = "warn"
+
+[lints.rustdoc]
+broken_intra_doc_links = "deny"
+private_intra_doc_links = "warn"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+undocumented_unsafe_blocks = "warn"
+
+[patch."https://github.com/zortax/zgui"]
+zgui-a11y = { path = "." }
+zgui-dom = { path = "../zgui-dom" }
+zgui-input = { path = "../zgui-input" }
+zgui-layout = { path = "../zgui-layout" }
+zgui-platform = { path = "../zgui-platform" }

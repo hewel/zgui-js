@@ -13,6 +13,8 @@ exclude = [
   "vendor/zgui-paint",
   "vendor/zgui-layout",
   "vendor/zgui-dom",
+  "vendor/zgui-input",
+  "vendor/zgui-a11y",
   "vendor/zgui-style",
   "vendor/zgui-scroll",
 ]
@@ -86,6 +88,8 @@ fontique = { git = "https://github.com/zortax/zgui", rev = "ee29c7dc66206eb04ba7
 
 [patch."https://github.com/zortax/zgui"]
 zgui-dom = { path = "vendor/zgui-dom" }
+zgui-input = { path = "vendor/zgui-input" }
+zgui-a11y = { path = "vendor/zgui-a11y" }
 zgui-runtime = { path = "vendor/zgui-runtime" }
 zgui-platform = { path = "vendor/zgui-platform" }
 zgui-platform-headless = { path = "vendor/zgui-platform-headless" }

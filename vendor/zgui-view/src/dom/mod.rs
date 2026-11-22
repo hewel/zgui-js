@@ -142,6 +142,12 @@ pub trait Dom {
     /// view that could assert them would be lying to it.
     fn set_ui_state(&self, el: NodeId, state: UiState, on: bool);
 
+    /// Whether `el` resolves to a live node that is effectively inert (itself or any native
+    /// ancestor carries [`UiState::INERT`]).
+    fn is_effectively_inert(&self, _el: NodeId) -> bool {
+        false
+    }
+
     /// Turns one author-defined state on or off.
     ///
     /// An author-defined state is matched by `:state(name)` and is how a view expresses a

@@ -147,7 +147,9 @@ impl Window {
             | Intent::ScrollTo { node, .. }
             | Intent::Scroll { node, .. } => *node,
         };
-        if self.document.borrow().store().index_of(node).is_none() {
+        if self.document.borrow().store().index_of(node).is_none()
+            || self.document.borrow().store().is_effectively_inert(node)
+        {
             return false;
         }
 

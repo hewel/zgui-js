@@ -48,6 +48,8 @@ use crate::wake::RuntimeWaker;
 pub enum Command {
     /// Move focus to this node, or take focus away when there is none.
     Focus(Option<NodeId>),
+    /// Move focus to this node and scroll it into view if focus succeeded.
+    FocusReveal(NodeId),
     /// Scroll this container.
     Scroll {
         /// The node to scroll.
@@ -126,6 +128,7 @@ impl core::fmt::Debug for Command {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             Self::Focus(node) => formatter.debug_tuple("Focus").field(node).finish(),
+            Self::FocusReveal(node) => formatter.debug_tuple("FocusReveal").field(node).finish(),
             Self::Scroll {
                 node,
                 target,
@@ -496,19 +499,23 @@ impl RuntimeHost {
         self.shortcuts.borrow().clone()
     }
 
-    /// The innermost installed focus trap, if there is one.
+    /// The innermost installed focus trap whose root is live and not effectively inert, if any.
     ///
     /// Traps over subtrees that have left the document are uninstalled on the way past. This is
     /// the one place anything asks which trap is in force, so it is the one place that can notice.
     pub fn active_trap(&self) -> Option<(NodeId, FocusTrapOptions)> {
         self.drop_stranded_traps();
-        self.traps.borrow().topmost().map(|trap| {
-            let mut options = FocusTrapOptions::MODAL;
-            options.wrap = trap.options.wrap;
-            options.auto_focus = trap.options.auto_focus;
-            options.restore = trap.options.restore;
-            (zgui_view_dom::id::to_view(trap.root), options)
-        })
+        let document = self.document.borrow();
+        self.traps
+            .borrow()
+            .topmost_active(document.store())
+            .map(|trap| {
+                let mut options = FocusTrapOptions::MODAL;
+                options.wrap = trap.options.wrap;
+                options.auto_focus = trap.options.auto_focus;
+                options.restore = trap.options.restore;
+                (zgui_view_dom::id::to_view(trap.root), options)
+            })
     }
 
     /// Uninstalls every trap whose surface has left the document, and puts focus back for them.
@@ -517,7 +524,7 @@ impl RuntimeHost {
     /// that went without doing so: what it leaves behind confines the keyboard to a subtree that
     /// no longer exists, which is a window where no key moves focus anywhere, ever again. Focus is
     /// restored exactly as it would have been by an orderly removal, and only to a node that is
-    /// itself still there.
+    /// itself still there and not effectively inert.
     fn drop_stranded_traps(&self) {
         let stranded = {
             let document = self.document.borrow();
@@ -526,9 +533,10 @@ impl RuntimeHost {
             stranded
                 .into_iter()
                 .map(|trap| {
-                    let restore = trap
-                        .restore_to
-                        .filter(|node| document.store().index_of(*node).is_some());
+                    let restore = trap.restore_to.filter(|node| {
+                        document.store().index_of(*node).is_some()
+                            && !document.store().is_effectively_inert(*node)
+                    });
                     (trap.id, trap.options.restore, trap.root, restore)
                 })
                 .collect::<Vec<_>>()
@@ -561,6 +569,7 @@ impl RuntimeHost {
             .rev()
             .find_map(|queued| match &queued.command {
                 Command::Focus(node) => Some(*node),
+                Command::FocusReveal(node) => Some(Some(*node)),
                 _ => None,
             });
         // A window that is closing has no focus left to keep.
@@ -603,11 +612,20 @@ impl RuntimeHost {
             {
                 continue;
             }
+            let root_inert = self
+                .key_of(owed.root)
+                .is_none_or(|key| self.document.borrow().store().is_effectively_inert(key));
+            if root_inert {
+                continue;
+            }
             let inside = {
                 use zgui_reactive::prelude::GetUntracked;
-                self.focused
-                    .get_untracked()
-                    .is_some_and(|node| self.contains(owed.root, node))
+                self.focused.get_untracked().is_some_and(|node| {
+                    self.contains(owed.root, node)
+                        && self
+                            .key_of(node)
+                            .is_some_and(|key| !self.document.borrow().store().is_effectively_inert(key))
+                })
             };
             if inside {
                 continue;
@@ -716,6 +734,14 @@ impl ViewHost for RuntimeHost {
         self.issue(Command::Focus(Some(node)));
     }
 
+    fn focus_with_reveal(&self, node: NodeId, reveal: bool) {
+        if reveal {
+            self.issue(Command::FocusReveal(node));
+        } else {
+            self.issue(Command::Focus(Some(node)));
+        }
+    }
+
     fn focused(&self) -> Signal<Option<NodeId>, LocalStorage> {
         self.focused
     }
@@ -787,7 +813,7 @@ impl ViewHost for RuntimeHost {
             held,
         );
         let id = FocusTrapId::new(id.get());
-        if options.auto_focus {
+        if options.auto_focus && !self.document.borrow().store().is_effectively_inert(key) {
             // Recorded rather than done. The surface this trap confines was mounted moments ago
             // and has not been laid out, so it has no boxes and nothing inside it can be focused
             // yet; the frame pays this after layout. See [`Entering`].
@@ -838,11 +864,12 @@ impl ViewHost for RuntimeHost {
         if self.focus_left(trap.root) {
             return;
         }
-        // Focus goes back to whatever opened the dialog. Dropping it instead leaves the whole
-        // window unfocused, and the next key press goes to the document rather than to the control
-        // the person was on before they opened anything.
+        // Focus goes back to whatever opened the dialog, unless that target is now inert.
+        let restore_target = trap
+            .restore_to
+            .filter(|node| !self.document.borrow().store().is_effectively_inert(*node));
         self.issue_queued(QueuedCommand {
-            command: Command::Focus(trap.restore_to.map(zgui_view_dom::id::to_view)),
+            command: Command::Focus(restore_target.map(zgui_view_dom::id::to_view)),
             restore_from: Some(trap.root),
         });
     }

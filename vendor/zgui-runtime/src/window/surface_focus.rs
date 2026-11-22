@@ -76,6 +76,21 @@ impl Window {
         self.carets.stop();
     }
 
+    /// Ends any active IME composition on `node` and writes its settled value and selection back
+    /// to the host record.
+    pub(crate) fn end_composition_for(&mut self, node: zgui_dom::NodeKey) {
+        let edited = {
+            let document = self.document.borrow();
+            self.editors.end_composition(&document, node)
+        };
+        if let Some(value) = edited.value {
+            self.host.write_value(node, value);
+        }
+        if let Some(selection) = edited.selection {
+            self.host.write_selection(node, selection);
+        }
+    }
+
     /// Ends a composition and announces the value of whatever field is being typed into.
     ///
     /// In that order: the composition's text is part of the value that settles, and settling first
@@ -84,16 +99,7 @@ impl Window {
         let Some(node) = self.router.interaction().focus.focused() else {
             return;
         };
-        let edited = {
-            let document = self.document.borrow();
-            self.editors.end_composition(&document, node)
-        };
-        if let Some(value) = edited.value {
-            self.host.write_value(node, value);
-        }
-        if let Some(selection) = edited.selection.clone() {
-            self.host.write_selection(node, selection);
-        }
+        self.end_composition_for(node);
         // The text a composition was showing is what the field now holds outright, and a value
         // bound to the field has already been told that text as provisional. Announcing it again
         // as an input event would be announcing a change that nothing can observe; the settled

@@ -94,6 +94,16 @@ impl Window {
         ))
     }
 
+    /// Whether `node` resolves to a live element that is effectively inert (itself or any native
+    /// ancestor carries `UiState::INERT`).
+    #[must_use]
+    pub fn is_node_effectively_inert(&self, node: zgui_view::NodeId) -> bool {
+        let Some(key) = zgui_view_dom::id::to_document(node) else {
+            return false;
+        };
+        self.document.borrow().store().is_effectively_inert(key)
+    }
+
     /// Whether a live node or its descendant has a hit-eligible fragment at this device point.
     ///
     /// Unlike [`Window::chain_at`], this also sees fragments behind an overlapping element.
@@ -102,10 +112,17 @@ impl Window {
     pub fn hit_contains(&self, node: zgui_view::NodeId, point: Point<DevicePx, Device>) -> bool {
         let document = self.document.borrow();
         let Some(target) = zgui_view_dom::id::to_document(node) else { return false; };
-        if document.store().index_of(target).is_none() { return false; }
+        if document.store().index_of(target).is_none()
+            || document.store().is_effectively_inert(target)
+        {
+            return false;
+        }
         let layout = self.layout.borrow();
         for fragment in self.hit.hit(point, &self.scene.clips, &self.scene.spatial) {
             let Some(key) = zgui_input::hit::element_of(&layout, fragment) else { continue; };
+            if document.store().is_effectively_inert(key) {
+                continue;
+            }
             let mut index = document.store().index_of(key);
             while let Some(at) = index {
                 if document.store().key_of(at) == target { return true; }

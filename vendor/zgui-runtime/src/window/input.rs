@@ -106,6 +106,7 @@ impl Window {
             .iter()
             .filter_map(|queued| queued.event.timestamp())
             .fold(timestamp, Timestamp::min);
+        self.reconcile_inert(earliest);
         for (node, text) in core::mem::take(&mut self.pastes) {
             self.apply_paste(node, &text, earliest);
             owed |= self.settle_between_events(earliest);
@@ -115,6 +116,7 @@ impl Window {
             // Each event and the events it causes carry the moment the platform stamped it. Events
             // without a stamp carry the frame's moment.
             let stamp = queued.event.timestamp().unwrap_or(timestamp);
+            self.reconcile_inert(stamp);
             self.dispatch_one(&queued.event, &queued.samples, stamp);
             if position < last {
                 owed |= self.settle_between_events(stamp);
@@ -135,7 +137,9 @@ impl Window {
     /// Answers whether the flush left work for another frame.
     fn settle_between_events(&mut self, timestamp: Timestamp) -> bool {
         let flush = zgui_reactive::flush();
+        self.reconcile_inert(timestamp);
         self.carry_out_commands(timestamp);
+        self.reconcile_inert(timestamp);
         flush.needs_another_frame
     }
 
@@ -152,6 +156,33 @@ impl Window {
         if let Some(focused) = Self::surface_focus_of(event) {
             self.surface_focus_changed(focused, timestamp);
             return;
+        }
+        // If focus evacuation from an inert subtree abandoned an active IME composition, do not
+        // redirect a queued commit or closing preedit from that composition into whatever gained
+        // focus next.
+        if self.drop_abandoned_ime_commit {
+            match event {
+                SurfaceEvent::Ime(zgui_vocab::ImeEvent::Commit(_) | zgui_vocab::ImeEvent::Disabled) => {
+                    self.drop_abandoned_ime_commit = false;
+                    return;
+                }
+                SurfaceEvent::Ime(zgui_vocab::ImeEvent::Preedit { text, .. }) if text.is_empty() => {
+                    return;
+                }
+                SurfaceEvent::Ime(zgui_vocab::ImeEvent::Enabled)
+                | SurfaceEvent::Ime(zgui_vocab::ImeEvent::Preedit { .. })
+                | SurfaceEvent::Key {
+                    state: zgui_vocab::KeyState::Pressed,
+                    ..
+                }
+                | SurfaceEvent::Pointer {
+                    action: zgui_vocab::PointerAction::Pressed,
+                    ..
+                } => {
+                    self.drop_abandoned_ime_commit = false;
+                }
+                _ => {}
+            }
         }
         let modifiers = event.modifiers().unwrap_or(Modifiers::NONE);
         // How the user is interacting right now, remembered for the focus moves scripts make: a
@@ -299,6 +330,11 @@ impl Window {
             )
         };
 
+        // Listeners may have toggled `inert` on the focused, pressed, or hovered subtree.
+        // Reconcile immediately before running framework defaults (editing, click activation,
+        // focus, scroll, text selection) so inert mutations take effect before any default action.
+        self.reconcile_inert(timestamp);
+
         // Editing is the first of the framework's own behaviours, and it takes the event away from
         // the rest of them: space and enter activate whatever has focus, and a field that both
         // typed a space and clicked itself is neither. A key the editing model refused still falls
@@ -350,7 +386,8 @@ impl Window {
         // have focus both focuses it and puts the caret where the press landed, and the second of
         // those is meaningless if the first has not happened yet.
         if dispatched.default_allowed {
-            let editable_took = self.point_at_text(event, target);
+            let target_live = target.filter(|key| !self.document.borrow().store().is_effectively_inert(*key));
+            let editable_took = self.point_at_text(event, target_live);
             if editable_took {
                 if matches!(
                     event,
@@ -362,7 +399,7 @@ impl Window {
                     self.clear_document_selection_state();
                 }
             } else if self.selecting.is_none() {
-                self.point_at_document_selection(event, target, modifiers);
+                self.point_at_document_selection(event, target_live, modifiers);
             }
         } else if matches!(
             event,
@@ -446,6 +483,9 @@ impl Window {
             }
             return false;
         };
+        if self.document.borrow().store().is_effectively_inert(node) {
+            return false;
+        }
         let edited = match event {
             SurfaceEvent::Key {
                 state: zgui_vocab::KeyState::Pressed,
@@ -518,6 +558,9 @@ impl Window {
     /// happened to arrive by another route. The model itself decides whether the element may still
     /// be typed into, so a field disabled between the request and the answer takes nothing.
     fn apply_paste(&mut self, node: zgui_dom::NodeKey, text: &str, timestamp: Timestamp) {
+        if self.document.borrow().store().is_effectively_inert(node) {
+            return;
+        }
         let edited = {
             let document = self.document.borrow();
             self.editors.paste(&document, node, text)
@@ -702,15 +745,22 @@ impl Window {
     ) {
         use zgui_input::FrameworkDefault;
         match default {
-            FrameworkDefault::Focus { node, source } => self.move_focus(node, source, timestamp),
+            FrameworkDefault::Focus { node, source } => {
+                if node.is_some_and(|key| self.document.borrow().store().is_effectively_inert(key))
+                {
+                    return;
+                }
+                self.move_focus(node, source, timestamp);
+            }
             FrameworkDefault::Activate(node) => {
-                // Focus can outlive a disabled-state change, including one made
-                // by a key listener after routing computed this default.
+                // Focus or armed press can outlive a disabled or inert state change, including one
+                // made by a listener after routing computed this default.
                 let enabled = {
                     let document = self.document.borrow();
                     let store = document.store();
                     store.index_of(node).is_some_and(|index| {
                         !store.core(index).ui_state().contains(zgui_vocab::UiState::DISABLED)
+                            && !store.is_effectively_inert_index(index)
                     })
                 };
                 if !enabled { return; }
@@ -749,6 +799,9 @@ impl Window {
                 delta,
                 phase,
             } => {
+                if self.document.borrow().store().is_effectively_inert(container) {
+                    return;
+                }
                 // The event's own stamp, which a gesture measures its speed with.
                 let sent = match event {
                     SurfaceEvent::Wheel { timestamp, .. } => *timestamp,
@@ -760,12 +813,22 @@ impl Window {
                 container,
                 axis,
                 to,
-            } => self.scroll_along(container, axis, to),
+            } => {
+                if self.document.borrow().store().is_effectively_inert(container) {
+                    return;
+                }
+                self.scroll_along(container, axis, to);
+            }
             FrameworkDefault::ScrollPage {
                 container,
                 axis,
                 forward,
-            } => self.scroll_page(container, axis, forward),
+            } => {
+                if self.document.borrow().store().is_effectively_inert(container) {
+                    return;
+                }
+                self.scroll_page(container, axis, forward);
+            }
             FrameworkDefault::MoveFocus(direction) => self.step_focus(direction, timestamp),
             // A behaviour this build has never heard of is not guessed at. Doing nothing is what a
             // handler that cancelled the default would have produced anyway.
@@ -789,6 +852,7 @@ impl Window {
     /// Carries out the commands in the queue until none are left, for at most eight rounds.
     fn carry_out_issued(&mut self, timestamp: Timestamp) {
         for _ in 0..8u8 {
+            self.reconcile_inert(timestamp);
             // Before the commands are taken, because a focus move made by the event that has just
             // finished has to be announced before anything that move causes is acted on — and
             // because a handler for it issues commands of its own, which this loop then drains.
@@ -808,12 +872,112 @@ impl Window {
                 self.carry_out(queued.command, timestamp);
             }
         }
+        self.reconcile_inert(timestamp);
         self.announce_focus(timestamp);
         tracing::warn!(
             target: "zgui::input",
             "the commands a dispatch issued did not settle in eight rounds; the rest are dropped"
         );
         let _ = self.host.take_scoped_commands();
+    }
+
+    /// Reconciles interaction state whenever any node's effective inertness changed.
+    ///
+    /// Cancels affected pointer captures, armed presses, scrollbar/text/selection/touch drags,
+    /// drag-over state, pending pastes, re-hits stationary pointers, and evacuates focus from
+    /// inert subtrees before the next input event, default action, or AT publication.
+    pub(crate) fn reconcile_inert(&mut self, timestamp: Timestamp) -> bool {
+        let current_gen = self.document.borrow().store().inert_generation();
+        if current_gen == self.inert_seen {
+            return false;
+        }
+        self.inert_seen = current_gen;
+        self.inert_rehit_owed = true;
+
+        let affected_pointers = {
+            let document = self.document.borrow();
+            let filter = self.engine.filter();
+            self.router.cancel_inert(&document, &filter)
+        };
+        if !affected_pointers.is_empty() {
+            self.command_captures
+                .retain(|pointer| !affected_pointers.contains(pointer));
+            for pointer in &affected_pointers {
+                self.gestures.cancel(*pointer);
+                if self.panning_pointer == Some(*pointer) {
+                    self.end_pan();
+                }
+            }
+            self.clicks.forget();
+        }
+        let cancel_pan = {
+            let document = self.document.borrow();
+            let store = document.store();
+            let pan_inert = self
+                .panning
+                .iter()
+                .any(|node| store.is_effectively_inert(*node));
+            if self
+                .selecting
+                .is_some_and(|sel| store.is_effectively_inert(sel.node))
+            {
+                self.selecting = None;
+                self.drag_pointer = None;
+                self.text_clicks.forget();
+            }
+            if self
+                .doc_dragging
+                .is_some_and(|node| store.is_effectively_inert(node))
+            {
+                self.doc_dragging = None;
+            }
+            self.wants_paste
+                .retain(|node| !store.is_effectively_inert(*node));
+            self.pastes
+                .retain(|(node, _)| !store.is_effectively_inert(*node));
+            pan_inert
+        };
+        if cancel_pan {
+            if let Some(pointer) = self.panning_pointer {
+                self.gestures.cancel(pointer);
+            }
+            self.end_pan();
+        }
+        self.reconcile_inert_drag(timestamp);
+        self.rehit();
+        self.announce_crossings(timestamp);
+        self.evacuate_inert_focus(timestamp);
+        true
+    }
+
+    /// Vacates keyboard focus when the currently focused node is effectively inert.
+    fn evacuate_inert_focus(&mut self, timestamp: Timestamp) {
+        let Some(focused) = self.router.interaction().focus.focused() else {
+            return;
+        };
+        if !self.document.borrow().store().is_effectively_inert(focused) {
+            return;
+        }
+        let was_composing = self.ime.is_composing();
+        self.end_composition_for(focused);
+        if was_composing {
+            self.drop_abandoned_ime_commit = true;
+        }
+        let target = {
+            let document = self.document.borrow();
+            let layout = self.layout.borrow();
+            self.host
+                .active_trap()
+                .and_then(|(root, _)| zgui_view_dom::id::to_document(root))
+                .and_then(|root_key| {
+                    let layout_opt = layout.root().is_some().then_some(&*layout);
+                    zgui_input::focus::order::focusables(document.store(), layout_opt, root_key)
+                        .into_iter()
+                        .next()
+                })
+        };
+        self.move_focus(target, zgui_input::FocusSource::Script, timestamp);
+        self.announce_focus(timestamp);
     }
 
     /// Puts the keyboard inside every surface that trapped focus and asked to be entered.
@@ -833,7 +997,10 @@ impl Window {
     pub(super) fn prune_pointer_captures(&mut self) {
         let document = self.document.borrow();
         self.command_captures.retain(|pointer| match self.router.capture().of(*pointer) {
-            Some(node) if document.store().get(node).is_none() => {
+            Some(node)
+                if document.store().get(node).is_none()
+                    || document.store().is_effectively_inert(node) =>
+            {
                 self.router.forget(node);
                 false
             }
@@ -847,15 +1014,39 @@ impl Window {
         match command {
             Command::Focus(node) => {
                 let key = node.and_then(zgui_view_dom::id::to_document);
+                if key.is_some_and(|k| self.document.borrow().store().is_effectively_inert(k)) {
+                    return;
+                }
                 self.move_focus(key, zgui_input::FocusSource::Script, timestamp);
             }
+            Command::FocusReveal(node) => {
+                let Some(key) = zgui_view_dom::id::to_document(node) else {
+                    return;
+                };
+                if self.document.borrow().store().is_effectively_inert(key) {
+                    return;
+                }
+                self.move_focus(Some(key), zgui_input::FocusSource::Script, timestamp);
+                if self.router.interaction().focus.focused() == Some(key) {
+                    self.owe_scroll(
+                        node,
+                        zgui_view::ScrollTarget::IntoView,
+                        zgui_view::ScrollBehavior::Instant,
+                    );
+                }
+            }
             Command::CapturePointer(node, pointer) => {
-                if let Some(key) = zgui_view_dom::id::to_document(node)
-                    && self.document.borrow().store().get(key).is_some()
-                {
-                    self.router.capture_mut().set(pointer, key);
-                    if !self.command_captures.contains(&pointer) {
-                        self.command_captures.push(pointer);
+                if let Some(key) = zgui_view_dom::id::to_document(node) {
+                    let eligible = {
+                        let document = self.document.borrow();
+                        let store = document.store();
+                        store.get(key).is_some() && !store.is_effectively_inert(key)
+                    };
+                    if eligible {
+                        self.router.capture_mut().set(pointer, key);
+                        if !self.command_captures.contains(&pointer) {
+                            self.command_captures.push(pointer);
+                        }
                     }
                 }
             }
@@ -932,18 +1123,29 @@ impl Window {
                     zgui_view_dom::id::to_document(anchor.0),
                     zgui_view_dom::id::to_document(focus.0),
                 ) {
-                    self.set_document_selection_endpoints(
-                        container_key,
-                        (anchor_key, anchor.1),
-                        (focus_key, focus.1),
-                    );
+                    let inert = {
+                        let document = self.document.borrow();
+                        let store = document.store();
+                        store.is_effectively_inert(container_key)
+                            || store.is_effectively_inert(anchor_key)
+                            || store.is_effectively_inert(focus_key)
+                    };
+                    if !inert {
+                        self.set_document_selection_endpoints(
+                            container_key,
+                            (anchor_key, anchor.1),
+                            (focus_key, focus.1),
+                        );
+                    }
                 }
             }
             Command::ClearDocumentSelection => {
                 self.clear_document_selection_state();
             }
             Command::SelectDocumentAll(container) => {
-                if let Some(container_key) = zgui_view_dom::id::to_document(container) {
+                if let Some(container_key) = zgui_view_dom::id::to_document(container)
+                    && !self.document.borrow().store().is_effectively_inert(container_key)
+                {
                     self.select_all_in_document_container(container_key);
                 }
             }
@@ -985,7 +1187,13 @@ impl Window {
         source: zgui_input::FocusSource,
         timestamp: Timestamp,
     ) {
+        if node.is_some_and(|key| self.document.borrow().store().is_effectively_inert(key)) {
+            return;
+        }
         let leaving = self.router.interaction().focus.focused();
+        if let Some(left) = leaving.filter(|left| Some(*left) != node) {
+            self.end_composition_for(left);
+        }
         {
             let document = self.document.borrow();
             let layout = self.layout.borrow();
@@ -1163,6 +1371,9 @@ impl Window {
         let Some(key) = zgui_view_dom::id::to_document(node) else {
             return;
         };
+        if self.document.borrow().store().is_effectively_inert(key) {
+            return;
+        }
         // A synthesised activation is a pointer event at wherever the pointer is, because that is
         // what a handler reads off it. With no pointer on the surface it is at the origin.
         let position = self

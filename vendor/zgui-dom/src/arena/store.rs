@@ -66,6 +66,8 @@ pub struct DocumentStore {
     dirty_overflow: std::sync::Mutex<FxHashMap<NodeIndex, FxHashSet<NodeIndex>>>,
     /// How many nodes were dropped since the store was made.
     dropped: u64,
+    /// Monotonic counter bumped whenever any node's effective inertness may have changed.
+    inert_generation: std::sync::atomic::AtomicU64,
 }
 
 const _: () = crate::assert_sync::<DocumentStore>();
@@ -111,6 +113,7 @@ impl DocumentStore {
             host: HostSeams::new(),
             dirty_overflow: std::sync::Mutex::new(FxHashMap::default()),
             dropped: 0,
+            inert_generation: std::sync::atomic::AtomicU64::new(0),
         }
     }
 
@@ -524,6 +527,45 @@ impl DocumentStore {
     /// records can name a node that is gone, and so whether a sweep of them can free anything.
     pub fn dropped(&self) -> u64 {
         self.dropped
+    }
+
+    /// Monotonic counter incremented whenever any node's effective inertness may have changed.
+    ///
+    /// Used by runtime reconciliation and stationary-pointer re-hit checks so state-only inert
+    /// updates still reconcile even when no CSS selector or layout geometry changed.
+    pub fn inert_generation(&self) -> u64 {
+        self.inert_generation
+            .load(std::sync::atomic::Ordering::Acquire)
+    }
+
+    /// Increments [`Self::inert_generation`].
+    pub(crate) fn bump_inert_generation(&self) {
+        self.inert_generation
+            .fetch_add(1, std::sync::atomic::Ordering::Release);
+    }
+
+    /// Whether `index` or any native ancestor in the same document carries [`zgui_vocab::UiState::INERT`].
+    ///
+    /// This is the single source of truth for effective inertness; it never mutates descendants'
+    /// own `disabled` or `ariaHidden` flags.
+    pub fn is_effectively_inert_index(&self, mut index: NodeIndex) -> bool {
+        loop {
+            let record = self.core(index);
+            if record.ui_state().contains(zgui_vocab::UiState::INERT) {
+                return true;
+            }
+            match record.parent() {
+                Some(parent) => index = parent,
+                None => return false,
+            }
+        }
+    }
+
+    /// Whether `key` resolves to a live node that is effectively inert (itself or any native
+    /// ancestor carries [`zgui_vocab::UiState::INERT`]).
+    pub fn is_effectively_inert(&self, key: NodeKey) -> bool {
+        self.index_of(key)
+            .is_some_and(|index| self.is_effectively_inert_index(index))
     }
 
     /// The node arena, for the recycling pass.

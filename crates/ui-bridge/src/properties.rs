@@ -23,6 +23,7 @@ pub(crate) enum Mutation {
     Style(StyleOwner, Style),
     Attribute(&'static str, Option<String>),
     Disabled(bool),
+    Inert(bool),
     ReadOnly(bool),
     Value(String),
     DefaultValue(String),
@@ -169,6 +170,7 @@ impl Mutation {
                 Ok(Self::Attribute("tabindex", Some((number as i32).to_string())))
             }
             "disabled" => Ok(Self::Disabled(if empty { false } else { bool::from_js(ctx, value)? })),
+            "inert" => Ok(Self::Inert(if empty { false } else { bool::from_js(ctx, value)? })),
             "readOnly" => Ok(Self::ReadOnly(if empty { false } else { bool::from_js(ctx, value)? })),
             "value" => Ok(Self::Value(string(value)?.unwrap_or_default())),
             "defaultValue" => Ok(Self::DefaultValue(string(value)?.unwrap_or_default())),
@@ -380,6 +382,7 @@ impl Properties {
             Mutation::Attribute(name, value) => dom.set_attribute(node, AttrName::new(name), value.as_deref()),
             Mutation::DataAttribute(name, value) => dom.set_attribute(node, AttrName::new(&name), value.as_deref()),
             Mutation::Drawing(name, value) => dom.set_property(node, PropKey::new(name), value.as_deref().map_or(PropValue::Unset, PropValue::from)),
+            Mutation::Inert(inert) => dom.set_ui_state(node, UiState::INERT, inert),
             Mutation::Open(open) => dom.set_ui_state(node, UiState::OPEN, open),
             Mutation::Custom(name, value) => {
                 let state = self.styles.entry(token).or_default();

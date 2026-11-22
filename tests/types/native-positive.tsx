@@ -1089,3 +1089,8 @@ void (
     </RadioItemPrimitive>
   </RadioGroupPrimitive>
 );
+void (<box inert={true} />);
+void (<box inert={false} />);
+void (<box inert={null} />);
+void (<box inert={undefined} />);
+void (<control inert={!retained.present()} />);

@@ -650,6 +650,18 @@ impl UiBridge {
         self.registry.borrow().native(handle).map_err(|e| host_error(ctx, e))
     }
 
+    /// Returns whether `native` is still live and effectively inert (itself or any native ancestor
+    /// carries `UiState::INERT`).
+    #[must_use]
+    pub fn is_native_node_effectively_inert(&self, native: zgui::view::NodeId) -> bool {
+        if self.disposed.get() {
+            return false;
+        }
+        let registry = self.registry.borrow();
+        let dom = registry.dom_handle();
+        dom.is_effectively_inert(native)
+    }
+
     /// Returns whether `native` is still live and attached under this bridge's root.
     #[must_use]
     pub fn is_native_node_attached(&self, native: zgui::view::NodeId) -> bool {
@@ -1258,10 +1270,7 @@ impl UiBridge {
             bridge.require_turn(&ctx)?;
             let handle = node.borrow().handle;
             let native = bridge.registry.borrow().native(handle).map_err(|e| host_error(&ctx, e))?;
-            bridge.host.focus(native);
-            if reveal.0.unwrap_or(false) {
-                bridge.host.scroll_to(native, zgui::view::ScrollTarget::IntoView, zgui::view::ScrollBehavior::Instant);
-            }
+            bridge.host.focus_with_reveal(native, reveal.0.unwrap_or(false));
             Ok::<(), rquickjs::Error>(())
         }))?;
         let weak = Rc::downgrade(self);
@@ -2400,6 +2409,94 @@ mod group_tests {
             r#"{"events":[["down","Escape",true],["up","Escape",true]],"dismisses":["escape"]}"#
         );
 
+        bridge.dispose();
+    }
+
+    #[test]
+    fn inert_property_sets_ui_state_independently_and_rejects_non_booleans() {
+        let mut engine = JsRuntime::new(RuntimeLimits::default()).expect("create JS engine");
+        let document = Rc::new(RefCell::new(Document::new()));
+        let backend = Rc::new(DocumentDom::new(document.clone()));
+        let dom = DomHandle::from_rc(backend.clone());
+        let doc_root = backend.root_node();
+        let root = dom.create_element(ElementName::new("column"));
+        dom.insert(doc_root, root, None);
+        let bridge = UiBridge::new(
+            NodeRegistry::new(dom, root, 1, 1, 32),
+            HostHandle::from_rc(Rc::new(StubHost::default())),
+            HostPort::queued(),
+        );
+        engine
+            .with_context(|ctx| {
+                ctx.globals().set("__zgui", bridge.api(&ctx)?)?;
+                ctx.globals().set("root", bridge.root(&ctx)?)
+            })
+            .expect("install bridge");
+
+        let report = bridge
+            .run_turn(engine.turn(), |_, js| {
+                js.evaluate_script(
+                    r#"
+                    const panel = __zgui.createElement("box");
+                    const child = __zgui.createElement("control");
+                    __zgui.insertNode(panel, child, null);
+                    __zgui.insertNode(root, panel, null);
+                    __zgui.setProperty(child, "ariaHidden", true);
+                    __zgui.setProperty(child, "disabled", false);
+                    __zgui.setProperty(panel, "inert", true);
+                    globalThis.__panel = panel;
+                    globalThis.__child = child;
+                    let threw = false;
+                    try {
+                      __zgui.setProperty(panel, "inert", "yes");
+                    } catch {
+                      threw = true;
+                    }
+                    JSON.stringify({ threw });
+                    "#,
+                )
+            })
+            .expect("evaluate inert mutations");
+        assert_eq!(report, r#"{"threw":true}"#);
+
+        let child_native = engine
+            .with_context(|ctx| {
+                let child: Class<NativeNode> = ctx.globals().get("__child")?;
+                bridge.resolve_native_node(&ctx, &child)
+            })
+            .expect("resolve child native node");
+        assert!(bridge.is_native_node_effectively_inert(child_native));
+        {
+            let idx = backend.live_index_of(child_native).expect("child live");
+            let doc = document.borrow();
+            let key = doc.store().key_of(idx);
+            assert!(doc.store().is_effectively_inert(key));
+            assert!(!doc.store().core(idx).ui_state().contains(zgui::vocab::UiState::DISABLED));
+            let sem = doc
+                .store()
+                .columns()
+                .semantics
+                .get(key)
+                .and_then(|slot| slot.as_deref())
+                .expect("child semantics");
+            assert!(sem.flags.contains(zgui::vocab::SemanticFlags::HIDDEN));
+        }
+
+        bridge
+            .run_turn(engine.turn(), |_, js| {
+                js.evaluate_script(
+                    r#"
+                    __zgui.setProperty(__panel, "inert", false);
+                    __zgui.setProperty(__panel, "inert", true);
+                    __zgui.setProperty(__panel, "inert", null);
+                    __zgui.setProperty(__panel, "inert", true);
+                    __zgui.setProperty(__panel, "inert", undefined);
+                    'ok';
+                    "#,
+                )
+            })
+            .expect("clear inert with false/null/undefined");
+        assert!(!bridge.is_native_node_effectively_inert(child_native));
         bridge.dispose();
     }
 }

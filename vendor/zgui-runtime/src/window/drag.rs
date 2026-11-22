@@ -37,6 +37,21 @@ pub(crate) struct DragOver {
 }
 
 impl Window {
+    /// Re-evaluates any active external drag-over path if any hovered element became effectively inert.
+    pub(crate) fn reconcile_inert_drag(&mut self, timestamp: Timestamp) {
+        let has_inert = {
+            let document = self.document.borrow();
+            self.drag
+                .path
+                .iter()
+                .any(|node| document.store().is_effectively_inert(*node))
+        };
+        if has_inert {
+            let at = self.drag.at;
+            self.drag_to(Some(at), true, timestamp);
+        }
+    }
+
     /// Follows one drag event from the platform.
     pub(crate) fn drag_moved(&mut self, event: &DragEvent, timestamp: Timestamp) {
         match event {
@@ -59,7 +74,7 @@ impl Window {
     }
 
     /// Moves the drag onto whatever is under `position`, or off everything.
-    fn drag_to(
+    pub(crate) fn drag_to(
         &mut self,
         position: Option<Point<CssPx, Css>>,
         announce: bool,

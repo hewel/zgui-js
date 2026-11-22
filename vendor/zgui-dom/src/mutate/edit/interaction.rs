@@ -34,6 +34,7 @@ use crate::side::observed::{ObservationSlots, ObservedMask};
 const ANNOUNCED: UiState = UiState::from_bits(
     UiState::CHECKED.bits()
         | UiState::DISABLED.bits()
+        | UiState::INERT.bits()
         | UiState::OPEN.bits()
         | UiState::INDETERMINATE.bits(),
 );
@@ -52,13 +53,18 @@ impl Edit<'_> {
             return;
         }
         let changed = held ^ wanted;
+        let changed_ui = crate::node::element::state::from_engine(changed);
+        let inert_changed = changed_ui.contains(UiState::INERT);
 
         if !changed.intersects(self.watched_states(node)) {
             // Nothing that matches can have changed, so the style engine is not entered. This is
             // deliberately not a repaint either: if no selector names the bit, no computed value
             // moved, and a repaint here is the frame this path exists to avoid.
             self.store().core(node).set_state(wanted);
-            if crate::node::element::state::from_engine(changed).intersects(ANNOUNCED) {
+            if inert_changed {
+                self.store().bump_inert_generation();
+            }
+            if changed_ui.intersects(ANNOUNCED) {
                 ancestors::mark(self.store(), node, Dirty::A11Y);
             }
             return;
@@ -67,8 +73,11 @@ impl Edit<'_> {
         let (store, batch) = self.parts();
         batch.snapshots.record_state(store, node);
         store.core(node).set_state(wanted);
+        if inert_changed {
+            store.bump_inert_generation();
+        }
         ancestors::mark(store, node, Dirty::RESTYLE);
-        if crate::node::element::state::from_engine(changed).intersects(ANNOUNCED) {
+        if changed_ui.intersects(ANNOUNCED) {
             ancestors::mark(store, node, Dirty::A11Y);
         }
     }

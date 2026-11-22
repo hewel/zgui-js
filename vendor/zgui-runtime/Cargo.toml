@@ -81,3 +81,5 @@ zgui-paint = { path = "../zgui-paint" }
 zgui-layout = { path = "../zgui-layout" }
 zgui-style = { path = "../zgui-style" }
 zgui-scroll = { path = "../zgui-scroll" }
+zgui-input = { path = "../zgui-input" }
+zgui-a11y = { path = "../zgui-a11y" }

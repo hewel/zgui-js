@@ -193,6 +193,13 @@ pub struct Window {
     hit: HitIndex,
     /// The hit index generation the stationary pointer was last re-tested against.
     rehit_seen: u64,
+    /// The document inert generation this window last reconciled interaction state against.
+    inert_seen: u64,
+    /// Whether an inertness change owes a stationary-pointer re-hit even without geometry changes.
+    inert_rehit_owed: bool,
+    /// Suppresses a stale queued `ImeEvent::Commit` belonging to a composition abandoned by inert
+    /// focus evacuation so it cannot be redirected into whatever gained focus next.
+    drop_abandoned_ime_commit: bool,
     /// The last pointer activation, which a second one near it turns into a double click.
     clicks: crate::window::clicks::ClickCount,
     /// The reusable buffers the fragment walk works in, warm across frames.
@@ -796,6 +803,9 @@ impl Window {
             layout,
             hit: HitIndex::new(),
             rehit_seen: 0,
+            inert_seen: 0,
+            inert_rehit_owed: false,
+            drop_abandoned_ime_commit: false,
             clicks: crate::window::clicks::ClickCount::default(),
             diff_scratch: zgui_layout::fragment::diff::DiffScratch::default(),
             retired_clips: rustc_hash::FxHashSet::default(),

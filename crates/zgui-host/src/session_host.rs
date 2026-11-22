@@ -463,6 +463,7 @@ impl SessionHost {
                 if let Some(window) = runtime.windows().iter().find(|w| w.surface().id() == surface) {
                     for session in &sessions {
                         if session.bridge_for_surface(surface).is_some() {
+                            session.reconcile_inert_drags()?;
                             session.handle_external_drag(window, surface, &drag)?;
                         }
                     }
@@ -476,6 +477,7 @@ impl SessionHost {
                 if let Some(window) = runtime.windows().iter().find(|w| w.surface().id() == surface) {
                     for session in &sessions {
                         if session.bridge_for_surface(surface).is_some() {
+                            session.reconcile_inert_drags()?;
                             session.handle_internal_drag_pointer(window, surface, action, pos)?;
                         }
                     }
@@ -590,8 +592,19 @@ impl SessionHost {
                 continue;
             }
             match session.checkpoint() {
-                Ok(true) => session.request_frames(|document| surface.request_frame(document)),
-                Ok(false) => {}
+                Ok(true) => {
+                    if let Err(error) = session.reconcile_inert_drags() {
+                        faults.push((document, session.generation, error));
+                        continue;
+                    }
+                    session.request_frames(|document| surface.request_frame(document));
+                }
+                Ok(false) => {
+                    if let Err(error) = session.reconcile_inert_drags() {
+                        faults.push((document, session.generation, error));
+                        continue;
+                    }
+                }
                 Err(error) => faults.push((document, session.generation, error)),
             }
         }

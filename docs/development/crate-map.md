@@ -37,11 +37,13 @@ packages/ui (TSX / Solid 2.0 / styles.d.ts / primitives / components)
 
 ## Vendored Upstream Crates (`vendor/`)
 
-All 13 crates below are excluded from the root Cargo workspace (`Cargo.toml` `[workspace] exclude`) and wired via `[patch."https://github.com/zortax/zgui"]`. Run their tests with `bun run test:vendor` (or `bun run test:vendor <crate>`). Patch rationale and upstream provenance live in [`vendor/README.md`](../../vendor/README.md).
+All 15 crates below are excluded from the root Cargo workspace (`Cargo.toml` `[workspace] exclude`) and wired via `[patch."https://github.com/zortax/zgui"]`. Run their tests with `bun run test:vendor` (or `bun run test:vendor <crate>`). Patch rationale and upstream provenance live in [`vendor/README.md`](../../vendor/README.md).
 
 | Crate                                       | Owns                                                                          | Key entry files                                                                          |
 | ------------------------------------------- | ----------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
-| `vendor/zgui-dom`                           | DOM arena, mutations, dirty propagation                                       | `src/mutate/edit/build.rs`, `src/mutate/edit/style/`                                     |
+| `vendor/zgui-dom`                           | DOM arena, mutations, dirty propagation, effective inert predicate            | `src/arena/store.rs`, `src/mutate/edit/build.rs`, `src/mutate/edit/interaction.rs`       |
+| `vendor/zgui-input`                         | Hit-testing, pointer capture, gestures, IME state, focus order & focus traps  | `src/hit/mod.rs`, `src/focus/order.rs`, `src/focus/trap.rs`, `src/router/mod.rs`         |
+| `vendor/zgui-a11y`                          | AccessKit tree projection, incremental diffing, relations, inbound AT intents | `src/world.rs`, `src/build/mod.rs`, `src/project/children.rs`                            |
 | `vendor/zgui-style`                         | Stylo cascade, animations, native CSS profile                                 | `tests/stylex_profile.rs`                                                                |
 | `vendor/zgui-layout`                        | Box tree, layout, scroll regions, inline `TextMap`, fragment diff             | `src/boxtree/build.rs`, `src/inline/resolved.rs`, `src/fragment/diff/mod.rs`             |
 | `vendor/zgui-paint`                         | Style lowering, `clip-path`, vector/image emit, atlas cache, emit walk        | `src/lower/clip.rs`, `src/emit/vector/mod.rs`, `src/content/cache.rs`, `src/walk/mod.rs` |
@@ -58,6 +60,6 @@ All 13 crates below are excluded from the root Cargo workspace (`Cargo.toml` `[w
 
 These live in the pinned `zortax/zgui` git checkout (`~/.cargo/git/checkouts/zgui-*/`), **not** in `vendor/`:
 
-`zgui-render-wgpu`, `zgui-wgpu`, `zgui-render`, `zgui-scene`, `zgui-atlas`, `zgui-geom`, `zgui-css`, `zgui-color`, `zgui-bits`, `zgui-a11y`, `zgui-edit`, `zgui-input`, `zgui-anim`, `zgui-elements`, `zgui-vocab`, `zgui-reactive`.
+`zgui-render-wgpu`, `zgui-wgpu`, `zgui-render`, `zgui-scene`, `zgui-atlas`, `zgui-geom`, `zgui-css`, `zgui-color`, `zgui-bits`, `zgui-edit`, `zgui-anim`, `zgui-elements`, `zgui-vocab`, `zgui-reactive`.
 
 Check the table above before searching `vendor/` for a crate. Note that `KeyState`/`PointerAction` live in `zgui::vocab`, while `SurfaceEvent::Key` and `PointerEvent` live in `zgui::platform`. When a feature touches GPU rendering (`zgui-render-wgpu`), prefer CPU/atlas-cached solutions in `vendor/zgui-paint` unless vendoring the renderer is explicitly justified.

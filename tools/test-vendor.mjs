@@ -53,6 +53,8 @@ const SUITES = [
       "--test",
       "focus_trap",
       "--test",
+      "inert",
+      "--test",
       "session_lock",
       "--test",
       "shell_lifecycle",
@@ -142,6 +144,14 @@ const SUITES = [
   {
     crate: "zgui-dom",
     args: ["--test", "engine"],
+  },
+  {
+    crate: "zgui-input",
+    args: ["--lib"],
+  },
+  {
+    crate: "zgui-a11y",
+    args: ["--lib"],
   },
   {
     crate: "zgui-text-parley",

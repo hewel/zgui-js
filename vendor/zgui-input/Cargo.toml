@@ -1,0 +1,56 @@
+[package]
+name = "zgui-input"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+description = "Event dispatch: hit testing, interaction state and focus"
+repository = "https://github.com/zortax/zgui"
+homepage = "https://zgui.zortax.de"
+rust-version = "1.90"
+keywords = ["gui", "ui", "css", "reactive", "wgpu"]
+categories = ["gui"]
+include = ["/src", "/build", "/build.rs", "/README.md", "/LICENSE", "/NOTICE"]
+
+[workspace]
+
+[dependencies]
+zgui-css = { git = "https://github.com/zortax/zgui", rev = "ee29c7dc66206eb04ba7bcf514058a278c9070ba" }
+zgui-dom = { git = "https://github.com/zortax/zgui", rev = "ee29c7dc66206eb04ba7bcf514058a278c9070ba" }
+zgui-geom = { git = "https://github.com/zortax/zgui", rev = "ee29c7dc66206eb04ba7bcf514058a278c9070ba" }
+zgui-interned = { git = "https://github.com/zortax/zgui", rev = "ee29c7dc66206eb04ba7bcf514058a278c9070ba" }
+zgui-layout = { git = "https://github.com/zortax/zgui", rev = "ee29c7dc66206eb04ba7bcf514058a278c9070ba" }
+zgui-platform = { git = "https://github.com/zortax/zgui", rev = "ee29c7dc66206eb04ba7bcf514058a278c9070ba" }
+zgui-scene = { git = "https://github.com/zortax/zgui", rev = "ee29c7dc66206eb04ba7bcf514058a278c9070ba" }
+zgui-vocab = { git = "https://github.com/zortax/zgui", rev = "ee29c7dc66206eb04ba7bcf514058a278c9070ba" }
+
+rustc-hash = "2.1"
+smallvec = "1.15"
+
+[dev-dependencies]
+zgui-profile = { git = "https://github.com/zortax/zgui", rev = "ee29c7dc66206eb04ba7bcf514058a278c9070ba", features = ["counters"] }
+zgui-arena = { git = "https://github.com/zortax/zgui", rev = "ee29c7dc66206eb04ba7bcf514058a278c9070ba" }
+zgui-bits = { git = "https://github.com/zortax/zgui", rev = "ee29c7dc66206eb04ba7bcf514058a278c9070ba" }
+zgui-style = { git = "https://github.com/zortax/zgui", rev = "ee29c7dc66206eb04ba7bcf514058a278c9070ba" }
+zgui-text = { git = "https://github.com/zortax/zgui", rev = "ee29c7dc66206eb04ba7bcf514058a278c9070ba" }
+zgui-text-style = { git = "https://github.com/zortax/zgui", rev = "ee29c7dc66206eb04ba7bcf514058a278c9070ba" }
+zgui-testkit-scene = { git = "https://github.com/zortax/zgui", rev = "ee29c7dc66206eb04ba7bcf514058a278c9070ba" }
+
+[lints.rust]
+missing_docs = "deny"
+unsafe_code = "deny"
+unreachable_pub = "warn"
+
+[lints.rustdoc]
+broken_intra_doc_links = "deny"
+private_intra_doc_links = "warn"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+undocumented_unsafe_blocks = "warn"
+
+[patch."https://github.com/zortax/zgui"]
+zgui-dom = { path = "../zgui-dom" }
+zgui-input = { path = "." }
+zgui-layout = { path = "../zgui-layout" }
+zgui-platform = { path = "../zgui-platform" }
+zgui-style = { path = "../zgui-style" }

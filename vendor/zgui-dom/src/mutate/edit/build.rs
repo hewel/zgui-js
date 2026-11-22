@@ -119,8 +119,14 @@ impl Edit<'_> {
         }
 
         let was_root = is_document_child(store, child);
+        let inert_before = old_parent.is_some_and(|p| store.is_effectively_inert_index(p));
+        let inert_after = store.is_effectively_inert_index(parent);
+        let child_is_inert = store.core(child).ui_state().contains(zgui_vocab::UiState::INERT);
         links::link_before(store, parent, child, before);
         set_flag(store, child, NodeFlags::IN_DOCUMENT, true);
+        if inert_before != inert_after || child_is_inert {
+            store.bump_inert_generation();
+        }
         if was_root != is_document_child(store, child) {
             // The cached answer to "which interaction-state bits can matter here" is narrowed by
             // whether the element is the document's root, so a move across that boundary is one of
@@ -179,8 +185,12 @@ impl Edit<'_> {
         let Some(parent) = self.store().core(node).parent() else {
             return;
         };
+        let inert_involved = self.store().is_effectively_inert_index(node);
         self.take_out(node);
         let (store, batch) = self.parts();
+        if inert_involved {
+            store.bump_inert_generation();
+        }
         batch.removed.push(node);
         batch.detached.push(node);
         // The parent, and not the node that left: a removal is the one change whose only surviving

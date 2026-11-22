@@ -74,6 +74,8 @@ zgui-platform = { path = "../zgui-platform" }
 zgui-platform-headless = { path = "../zgui-platform-headless" }
 zgui-platform-wayland = { path = "../zgui-platform-wayland" }
 zgui-runtime = { path = "../zgui-runtime" }
+zgui-input = { path = "../zgui-input" }
+zgui-a11y = { path = "../zgui-a11y" }
 zgui-scroll = { path = "../zgui-scroll" }
 zgui-style = { path = "../zgui-style" }
 zgui-text-parley = { path = "../zgui-text-parley" }

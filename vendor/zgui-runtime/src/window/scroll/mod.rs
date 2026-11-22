@@ -393,7 +393,7 @@ impl Window {
     }
 
     /// Stops following the drag in progress.
-    fn end_pan(&mut self) {
+    pub(crate) fn end_pan(&mut self) {
         self.panning = Vec::new();
         self.panning_pointer = None;
     }

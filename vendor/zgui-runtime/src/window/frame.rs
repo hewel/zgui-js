@@ -450,6 +450,7 @@ impl Window {
         // longer holds, and a key aimed at it reaches nothing at all. Focus goes back to the
         // window, where a shortcut hears it.
         self.drop_focus_that_went(timestamp);
+        self.reconcile_inert(timestamp);
 
         mark("f.restyle");
         let style_start = probed.then(Instant::now);
@@ -536,10 +537,10 @@ impl Window {
         mark("f.popup_auto_height");
         let suppress_first_paint = self.settle_popup_auto_height();
         // Only when something under the pointer could have changed: every fragment that moved,
-        // appeared or went wrote the hit index, and a frame that wrote nothing there leaves the
-        // pointer over exactly what it was over.
+        // appeared or went wrote the hit index, and any inertness change forces a stationary-
+        // pointer re-hit even when geometry did not change.
         mark("f.rehit");
-        if self.hit.generation() != self.rehit_seen {
+        if self.hit.generation() != self.rehit_seen || self.inert_rehit_owed {
             self.rehit_seen = self.hit.generation();
             counter::bump(Counter::HitRetests);
             self.rehit();
@@ -633,6 +634,7 @@ impl Window {
         // reader is told about where a control is has to be where it was drawn rather than where
         // it was about to be; before, because a removal's parent is re-projected out of records
         // that `end_frame` is what drops.
+        self.reconcile_inert(timestamp);
         mark("f.a11y");
         self.publish_a11y();
 
@@ -1637,7 +1639,8 @@ impl Window {
     /// under it. Hover is otherwise derived only from pointer events, so neither would be noticed
     /// until the pointer moved again. Bounded to one pass, and the state it writes is read by the
     /// *next* frame's restyle, so it cannot loop.
-    fn rehit(&mut self) {
+    pub(crate) fn rehit(&mut self) {
+        self.inert_rehit_owed = false;
         let moved = {
             let document = self.document.borrow();
             let layout = self.layout.borrow();

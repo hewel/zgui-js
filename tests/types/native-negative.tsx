@@ -273,3 +273,7 @@ void <RadioItemPrimitive />;
 void <RadioItemPrimitive value="a" checked={true} />;
 // @ts-expect-error RadioGroupPrimitive orientation uses GroupOrientation, not arbitrary strings.
 void <RadioGroupPrimitive orientation="diagonal" />;
+// @ts-expect-error inert accepts boolean | null | undefined, not strings or numbers.
+void <box inert="true" />;
+// @ts-expect-error inert rejects numeric values.
+void <control inert={1} />;

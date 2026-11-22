@@ -158,6 +158,17 @@ pub trait ViewHost {
     /// Moves focus to this node.
     fn focus(&self, node: NodeId);
 
+    /// Moves focus to this node and optionally reveals it in its scroll containers once focused.
+    ///
+    /// A node that cannot receive focus (such as one inside an inert subtree) is neither focused
+    /// nor scrolled into view.
+    fn focus_with_reveal(&self, node: NodeId, reveal: bool) {
+        self.focus(node);
+        if reveal {
+            self.scroll_to(node, ScrollTarget::IntoView, ScrollBehavior::Instant);
+        }
+    }
+
     /// The node that currently holds focus in this window, as a reactive value.
     ///
     /// An implementation creates this signal **once, when the window is created, under the

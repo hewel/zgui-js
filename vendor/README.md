@@ -522,3 +522,17 @@ Regression gate:
 Regression gate:
 
     cargo test --manifest-path vendor/zgui-runtime/Cargo.toml --test editing --offline && cargo test -p ui-bridge --offline && cargo test -p zgui-host --offline ime_preedit_protects
+
+## Native `inert` subtree isolation (`#95`)
+
+`vendor/zgui-dom` reuses `UiState::INERT` (bit 41) as the local declaration, adds `DocumentStore::{is_effectively_inert, is_effectively_inert_index, inert_generation}`, includes `UiState::INERT` in `ANNOUNCED` so state-only toggles mark `Dirty::A11Y` even when no `:inert` CSS selector matches, and bumps `inert_generation` on inert state and structural boundary transitions without mutating descendants' `disabled` or `ariaHidden`.
+
+`vendor/zgui-input` and `vendor/zgui-a11y` are vendored from pinned revision `ee29c7dc66206eb04ba7bcf514058a278c9070ba` (with LICENSE/NOTICE and standalone manifests) to apply effective inertness end-to-end:
+
+- `vendor/zgui-input`: skips effectively inert candidates (including anonymous fragments and scrollbar chrome) in paint-order hit testing so clicks pass through to eligible lower siblings; excludes inert subtrees from `is_focusable` / `focusables`, `Router::key` shortcuts, `Router::focus`, and `FocusTraps::topmost_active`; clears preedit on target switches in `Ime::focused`; and adds `Router::cancel_inert` + `Gestures::cancel` to drop captures, armed presses, scrollbar drags, and `:active` state on inert nodes.
+- `vendor/zgui-a11y`: excludes effectively inert subtrees from `World::is_projected` and projected children/relations on both full and incremental builds (`expand_arrivals` re-projects restored subtrees and external referrers on `inert: true -> false`), preserving independent author `ariaHidden` with zero dangling AccessKit identifiers.
+- `vendor/zgui-view` / `vendor/zgui-view-dom` / `vendor/zgui-runtime`: adds `DomHandle::is_effectively_inert`, `ViewHost::focus_with_reveal` (`Command::FocusReveal`), `Window::reconcile_inert` (cancelling captures/presses/drags/pastes, forcing stationary-pointer re-hit even when geometry is unchanged, and evacuating focus through the normal blur/caret/IME settle path without redirecting pending IME commits or letting Tab escape an empty live trap), and inbound AT action rejection in `Window::apply_a11y_action`.
+
+Regression gate:
+
+    bun run test:vendor zgui-input && bun run test:vendor zgui-a11y && cargo test --manifest-path vendor/zgui-runtime/Cargo.toml --test inert --offline && cargo test -p ui-bridge --offline && bun test --isolate tests/preview/inert-retained-exit.test.mjs
