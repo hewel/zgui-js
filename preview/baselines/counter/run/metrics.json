@@ -12,12 +12,12 @@
   "jsHeapLiveBytes": 517410,
   "jsHeapPostDisposeBytes": 515252,
   "jsStackLimitBytes": 1048576,
-  "maxJsEntryDurationUs": 401,
+  "maxJsEntryDurationUs": 431,
   "nativeFrames": 4,
-  "privateDirtyBytes": 37523456,
-  "pssAnonBytes": 37523456,
-  "pssBytes": 84501504,
-  "pssFileBytes": 46978048,
-  "rssBytes": 120934400,
-  "wallDurationUs": 350398
+  "privateDirtyBytes": 37535744,
+  "pssAnonBytes": 37535744,
+  "pssBytes": 89014272,
+  "pssFileBytes": 51478528,
+  "rssBytes": 120238080,
+  "wallDurationUs": 459194
 }

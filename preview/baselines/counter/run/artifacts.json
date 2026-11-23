@@ -6,7 +6,7 @@
       "role": "run-ownership",
       "status": "complete",
       "bytes": 8,
-      "digest": "sha256:db9a1a6377509d65193bfde08cfb81210119aacc5f6c1c21885953a50efba154"
+      "digest": "sha256:c2c5bbc06acb7d0a5d72f61dc033ab277a98dd41751990cd2f035f1f3109db82"
     },
     {
       "path": "captures/after-increment.frame.json",
@@ -61,8 +61,8 @@
       "path": "environment.json",
       "role": "environment",
       "status": "complete",
-      "bytes": 163110,
-      "digest": "sha256:75faff1f841ffe71ff6c845241071a3c12aa56e4d00bb0050a895711ae1505d5"
+      "bytes": 162826,
+      "digest": "sha256:ed53e482d8f57a558d054c273aa44d807b0ca851840be82e0335e8f3ac59881b"
     },
     {
       "path": "evidence/generation-0000000001-frame-0000000001.frame.json",
@@ -167,7 +167,7 @@
       "role": "metrics",
       "status": "complete",
       "bytes": 529,
-      "digest": "sha256:76e5f1db0bccd9f9d529a6e8b777b093cf2a44d0e92348ff91585b8e0d46b9f2"
+      "digest": "sha256:0e94cabd1bf79582f5c5e13c5c2c7f68912576b02c9d242d8a478ce4f52f06a5"
     },
     {
       "path": "progress/action-000000.json",
@@ -216,14 +216,14 @@
       "role": "action-result",
       "status": "complete",
       "bytes": 1474,
-      "digest": "sha256:f3e620291f6eacb893b3c695881eba5b21234ca11b12f6053ec80ec13e40d149"
+      "digest": "sha256:aa4e3144acb9ccdea188aa8cbcab589e11aa8fce7dde4a8d2399ef4f7629715d"
     },
     {
       "path": "progress/result-000002.json",
       "role": "action-result",
       "status": "complete",
       "bytes": 2231,
-      "digest": "sha256:04c64ca1be937d451468d060a74ab95c4934440d328fb268501438494adca8b5"
+      "digest": "sha256:6aa625d7da5425d2147b8e39c5822d1a291d9354cac6b6f41df6b336927e4a75"
     },
     {
       "path": "progress/result-000003.json",
@@ -244,7 +244,7 @@
       "role": "action-result",
       "status": "complete",
       "bytes": 1508,
-      "digest": "sha256:fee36621f92ccaf30ecea6a23075de8a93357afd41ec2a23dfe0b8e8393b654c"
+      "digest": "sha256:e824cca86b79f6f7d463c135ee240e43c3bbd0223a608f3ea71b1f4f663f979b"
     },
     {
       "path": "services.json",
@@ -258,21 +258,21 @@
       "role": "steps",
       "status": "complete",
       "bytes": 7360,
-      "digest": "sha256:9d21b761f3d3cc02742c7892ea24f3731b3735a4751bfeac9517b9e974073961"
+      "digest": "sha256:6351356b09dcd76e1555a4cd2fccf721408f5849d9d49332d4deb8eaec779ccf"
     },
     {
       "path": "worker-artifacts.json",
       "role": "worker-inventory",
       "status": "complete",
       "bytes": 6729,
-      "digest": "sha256:1f2225c4050fd0933db77bbda2548836e8ed8fc9b00f7b966459c7070a954a22"
+      "digest": "sha256:6b0c5974acdc1211fedcd43a1c5620048afb70ece94c583423b1a0df8cb6ec5e"
     },
     {
       "path": "result.json",
       "role": "result",
       "status": "complete",
       "bytes": 1015,
-      "digest": "sha256:b91c51a2f919ec9e8ca67b97518caa785d10c37dd60cadd0380620f5cd5772a5"
+      "digest": "sha256:d975391c839c97713d9ee015a4ca9dc28db342dc911ac7830066cf38ba4cb5d3"
     }
   ],
   "self": "artifacts.json"

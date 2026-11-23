@@ -1,12 +1,12 @@
 {
   "schemaVersion": 1,
   "run": "run",
-  "artifactsDigest": "sha256:3a21eb6ac9f0db80dc4ce67627e550e3e6fd9b1e73ee1e77e8d17ce51c8e56ab",
+  "artifactsDigest": "sha256:9f9b484f575f988b18d8f1d16e95899849c925063f6c1be7190e83fb1f41e502",
   "policyDigest": "sha256:618dc201dcc2cc976d3b0ff41d440eca02b71b68c79b01d10814734b044bbeb9",
   "review": {
     "by": "coding-assistant",
-    "at": "2026-11-22T17:47:31Z",
-    "summary": "Counter baseline metadata refresh after #90 Cargo.lock update (native-host -> zgui-host rename). Verified initial.png (61b1c8d636...) and after-increment.png (0de971968a...) remain byte-for-byte identical.",
+    "at": "2026-11-23T04:59:28Z",
+    "summary": "Counter baseline metadata refresh after #95 Cargo.lock update (vendored zgui-input & zgui-a11y for native inert). Verified initial.png (61b1c8d636...) and after-increment.png (0de971968a...) remain byte-for-byte identical.",
     "buildId": "sha256:9f67d8e09494b51d3758fd991135e948e6b8fac7121b79eb6bac916917f27269",
     "captures": [
       {

@@ -60,7 +60,7 @@
   },
   "dependencies": {
     "bunLockDigest": "sha256:c150e7e14a3c4422c17f6822712d9169c96062333450f0379ddc74a8a5ef27e9",
-    "cargoLockDigest": "sha256:31ced68541d019ac42b6b966aca385c9d1693b48aa3fd5884e64f5c2893f4a29",
+    "cargoLockDigest": "sha256:5d5654fd9d6fd32f49afe9012f3e4442d69b3d781b090e322d905e152825b140",
     "javascriptIdentityKind": "exact bun lockfile v2 package resolution keys",
     "quickJsEngineRevision": "6d46d07d04041b40f4f49eaa7fdebe44c314c699",
     "resolvedCargoPackages": [
@@ -3491,7 +3491,6 @@
       },
       {
         "name": "zgui-a11y",
-        "source": "git+https://github.com/zortax/zgui?rev=ee29c7dc66206eb04ba7bcf514058a278c9070ba#ee29c7dc66206eb04ba7bcf514058a278c9070ba",
         "version": "0.1.0"
       },
       {
@@ -3564,7 +3563,6 @@
       },
       {
         "name": "zgui-input",
-        "source": "git+https://github.com/zortax/zgui?rev=ee29c7dc66206eb04ba7bcf514058a278c9070ba#ee29c7dc66206eb04ba7bcf514058a278c9070ba",
         "version": "0.1.0"
       },
       {
@@ -4073,7 +4071,7 @@
   "host": {
     "profile": "debug",
     "rustc": "rustc 1.100.0 (0ef1bc386 2026-11-09)",
-    "sourceTreeDigest": "sha256:a8f21cca982ece57e2fe34db517d88c76659e4c6e98ba5ca3b36defe640331a3",
+    "sourceTreeDigest": "sha256:b7aab52200af72a8081873f0f211828df032236cefb931e1c7c3adcf678c413e",
     "sourceTreeScope": "workspace Rust sources, manifests, lockfiles and local native patches; includes test sources",
     "target": "x86_64-unknown-linux-gnu",
     "version": "0.1.0"
