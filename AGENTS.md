@@ -2,7 +2,7 @@
 
 ## Environment Gotchas
 
-- **Nix Linux devShell**: Run Rust builds, `test:vendor`, and headless preview tests inside [`shell.nix`](shell.nix) (`nix-shell --run "<cmd>"`) so `pkg-config`, native libraries, and Mesa Vulkan ICDs (`VK_DRIVER_FILES`) match.
+- **Nix Linux devShell**: On Nix-only hosts (e.g. `forge`), run Rust builds, `test:vendor`, and headless preview tests inside [`shell.nix`](shell.nix) (prefer entering `shell.nix` once per session—e.g. via `hc` template `forge-zgui`—rather than wrapping every command in `nix-shell --run`) so `pkg-config`, native libraries, and Mesa Vulkan ICDs (`VK_DRIVER_FILES`) match. Run pure JS/TS checks (`fmt:check`, `lint`, `typecheck`, `test:build`) directly with `bun`.
 - **Single full gate**: `bun run check` runs `fmt:check`, `lint`, `typecheck`, `test:build`, `test:rust`, and `test:vendor`. Run a single vendored crate with `bun run test:vendor <crate>` or a single app typecheck with `bun run typecheck --app <name>`.
 - **No concurrent preview suites**: Never overlap multiple `tests/preview/*.test.mjs` runs on `llvmpipe`; CPU contention causes `E_WATCHDOG` false negatives.
 - **New workspace packages or apps**: When adding a package under `packages/` or an app under `apps/`, check `package.json` `workspaces`, `.gitignore` build-artifact patterns, `.oxlintrc.json` overrides, and [`docs/development/crate-map.md`](docs/development/crate-map.md) (`typecheck.ts` discovers `packages/` and `apps/` tsconfigs automatically).

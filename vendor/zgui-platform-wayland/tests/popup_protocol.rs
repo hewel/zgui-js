@@ -831,7 +831,7 @@ struct InsetsCompositor {
     positioners: HashMap<u32, Positioner>,
     popups: Vec<InsetsPopup>,
     next_serial: u32,
-    closed: bool,
+    write_closed: bool,
 }
 
 impl InsetsCompositor {
@@ -845,13 +845,14 @@ impl InsetsCompositor {
             positioners: HashMap::new(),
             popups: Vec::new(),
             next_serial: 100,
-            closed: false,
+            write_closed: false,
         }
     }
 
     fn run(&mut self) {
         let mut header = [0; 8];
-        while !self.closed {
+        // A failed callback reply does not consume requests the client already flushed.
+        loop {
             match self.stream.read_exact(&mut header) {
                 Ok(()) => {}
                 Err(error)
@@ -1050,7 +1051,7 @@ impl InsetsCompositor {
     }
 
     fn event_bytes(&mut self, id: u32, opcode: u32, body: &[u8]) {
-        if self.closed {
+        if self.write_closed {
             return;
         }
         let length = u32::try_from(8 + body.len()).expect("small Wayland event");
@@ -1061,7 +1062,7 @@ impl InsetsCompositor {
                 error.kind(),
                 std::io::ErrorKind::BrokenPipe | std::io::ErrorKind::ConnectionReset
             ) {
-                self.closed = true;
+                self.write_closed = true;
             } else {
                 panic!("send Wayland event: {error}");
             }

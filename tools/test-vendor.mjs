@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { runBounded } from "./run-bounded.mjs";
 
 const SUITES = [
   {
@@ -212,26 +212,13 @@ if (selected.length === 0) {
   process.exit(1);
 }
 
-function runCargo(args) {
-  console.log(`\n==> cargo ${args.join(" ")}`);
-  const result = spawnSync("cargo", args, { stdio: "inherit" });
-  if (result.error) {
-    console.error(result.error);
-    process.exit(1);
-  }
-  if (result.status !== 0) {
-    process.exit(result.status ?? 1);
-  }
-}
-
-if (fetchOnly) {
-  const crates = [...new Set(selected.map(suite => suite.crate))];
-  for (const crate of crates) {
-    runCargo(["fetch", "--manifest-path", `vendor/${crate}/Cargo.toml`]);
-  }
-} else {
-  for (const suite of selected) {
-    runCargo([
+const commands = fetchOnly
+  ? [...new Set(selected.map(suite => suite.crate))].map(crate => [
+      "fetch",
+      "--manifest-path",
+      `vendor/${crate}/Cargo.toml`,
+    ])
+  : selected.map(suite => [
       "test",
       "-j",
       "4",
@@ -240,5 +227,12 @@ if (fetchOnly) {
       ...suite.args,
       "--offline",
     ]);
+
+for (const args of commands) {
+  console.log(`\n==> cargo ${args.join(" ")}`);
+  const status = await runBounded("cargo", args);
+  if (status !== 0) {
+    process.exitCode = status;
+    break;
   }
 }

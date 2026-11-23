@@ -176,6 +176,10 @@ extent. Older versions retain the initial placement. The host reconciles
 `popup_done` before issuing placement changes or opening children, even
 when the destroyed-surface event is still queued.
 
+The popup protocol fixture drains client requests to EOF even if a frame
+callback reply hits a closed peer. Otherwise shutdown can hide an already
+flushed XDG v2 geometry update from the wire assertions.
+
 Wayland retires popup roles newest-first, even if callers retain surface
 handles. Closing an older popup can also retire higher sibling branches in
 the same XDG stack. Headless closes descendants before their parents,

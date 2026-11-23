@@ -1,10 +1,23 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-staged_files=$(git diff --cached --name-only --diff-filter=ACMR)
-if [ -n "$staged_files" ]; then
-  # Filter through oxfmt's ignorePatterns by running --check on staged files when eligible.
-  printf '%s\n' "$staged_files" | xargs -r bun --bun run oxfmt --check --no-error-on-unmatched-pattern
+mapfile -d '' -t staged_files < <(git diff --cached --name-only -z --diff-filter=ACMR)
+if [ "${#staged_files[@]}" -gt 0 ]; then
+  # Stage exact index contents into a temporary mirror so oxfmt checks what will be committed
+  # while still honoring repo-relative ignorePatterns and filenames containing spaces.
+  tmp_dir=$(mktemp -d)
+  trap 'rm -rf "$tmp_dir"' EXIT
+  for cfg in .oxfmtrc.json .gitignore .prettierignore; do
+    if [ -f "$cfg" ]; then
+      cp "$cfg" "$tmp_dir/$cfg"
+    fi
+  done
+  printf '%s\0' "${staged_files[@]}" | git checkout-index --prefix="$tmp_dir/" --stdin -z --force
+  oxfmt_bin="$PWD/node_modules/.bin/oxfmt"
+  (
+    cd "$tmp_dir"
+    "$oxfmt_bin" --check --no-error-on-unmatched-pattern "${staged_files[@]}"
+  )
 fi
 
 bun run lint
