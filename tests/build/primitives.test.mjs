@@ -14,6 +14,7 @@ import {
   MenuRadioItemPrimitive,
   MenuRootPrimitive,
   MenuSubPrimitive,
+  SliderPrimitive,
   createDelayed,
   createDismissLayer,
   createOverlayState,
@@ -50,6 +51,13 @@ function Demo() {
         <MenuSubPrimitive defaultOpen={false}>
           <MenuItemPrimitive>Sub</MenuItemPrimitive>
         </MenuSubPrimitive>
+        <SliderPrimitive min={0} max={100} step={5} pointerStep={1} defaultValue={25}>
+          {({ value, fraction, dragging, trackRef }) => (
+            <box ref={trackRef}>
+              <text>{\`\${value()}-\${fraction()}-\${dragging()}\`}</text>
+            </box>
+          )}
+        </SliderPrimitive>
       </MenuListPrimitive>
     </MenuRootPrimitive>
   );

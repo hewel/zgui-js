@@ -521,3 +521,22 @@ test("remount produces fresh nodes with no stale gesture state", async t => {
   assert.notEqual(track(harness), firstTrack);
   assert.equal(ariaValueNow(harness), 0, "a remounted slider starts fresh");
 });
+
+test("AccessKit Change updates uncontrolled and controlled neutral Sliders", async t => {
+  const { mod, harness } = await mounted(t, "mountRange", 0, 100, 5, 20);
+  const root = slider(harness);
+  harness.dispatch(root, "Change", { value: "38", valueChange: "committed" });
+  assert.equal(ariaValueNow(harness), 40);
+  assert.equal(prop(harness, "--zui-slider-fraction"), "40.0000%");
+  assert.deepEqual(mod.log.values, [40]);
+
+  const controlled = await mounted(t, "mountControlled");
+  const cRoot = slider(controlled.harness);
+  controlled.harness.dispatch(cRoot, "Change", { value: "52", valueChange: "committed" });
+  assert.deepEqual(controlled.mod.log.values, [52]);
+  assert.equal(ariaValueNow(controlled.harness), 5, "controlled Slider waits for parent echo");
+  controlled.mod.controls.setEcho(true);
+  controlled.harness.flush();
+  controlled.harness.dispatch(cRoot, "Change", { value: "52", valueChange: "committed" });
+  assert.equal(ariaValueNow(controlled.harness), 52);
+});

@@ -14,6 +14,13 @@ export type {
 export { RadioGroupPrimitive, RadioItemPrimitive } from "./radio.js";
 export type { RadioGroupPrimitiveProps, RadioItemPrimitiveProps } from "./radio.js";
 
+export { SliderPrimitive } from "./slider.js";
+export type {
+  SliderPrimitiveChildren,
+  SliderPrimitiveProps,
+  SliderPrimitiveRenderState,
+} from "./slider.js";
+
 export {
   createDismissLayer,
   createOverlayState,

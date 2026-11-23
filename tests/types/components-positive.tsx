@@ -282,6 +282,12 @@ import type {
 } from "@hewel/zgui/components";
 import { CHECK, CHEVRON_DOWN, Icon as IconComponent, SEARCH } from "@hewel/zgui/icons";
 import type { IconData, IconProps, IconSize } from "@hewel/zgui/icons";
+import { SliderPrimitive } from "@hewel/zgui/primitives";
+import type {
+  SliderPrimitiveChildren,
+  SliderPrimitiveProps,
+  SliderPrimitiveRenderState,
+} from "@hewel/zgui/primitives";
 import type { NativeNode } from "@hewel/zgui";
 
 const scheme: ColorScheme = "system";
@@ -1077,6 +1083,42 @@ const workbench = (
   </ToastProvider>
 );
 
+const headlessSliderRender: SliderPrimitiveChildren = ({
+  value,
+  fraction,
+  dragging,
+  trackRef,
+}: SliderPrimitiveRenderState) => (
+  <box ref={trackRef}>
+    <text>{`${value()} (${Math.round(fraction() * 100)}%) ${dragging()}`}</text>
+  </box>
+);
+const headlessSliderProps: SliderPrimitiveProps = {
+  min: 0,
+  max: 100,
+  step: 5,
+  pointerStep: 1,
+  defaultValue: 25,
+  label: "Volume",
+  onValueChange: next => {
+    const num: number = next;
+    void num;
+  },
+  onDraggingChange: active => {
+    const flag: boolean = active;
+    void flag;
+  },
+  children: headlessSliderRender,
+};
+const headlessSliders = (
+  <box>
+    <SliderPrimitive {...headlessSliderProps} />
+    <SliderPrimitive min={0} max={100} pointerStep={0}>
+      <box />
+    </SliderPrimitive>
+  </box>
+);
+
 void gallery;
 void composed;
 void controls;
@@ -1091,3 +1133,4 @@ void menus;
 void contextMenus;
 void menubar;
 void workbench;
+void headlessSliders;

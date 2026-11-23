@@ -2,10 +2,11 @@ import {
   Alert, AspectRatio, Avatar, AvatarBadge, AvatarGroup, AvatarImage, Button, ButtonGroup, ButtonGroupSeparator,
   Checkbox, ContextMenuTrigger, EmptyMedia, Icon, Input, InputGroupAddon, InputGroupButton, InputGroupInput,
   InputGroupTextarea, Item, ItemMedia, ItemSeparator, Label, Menubar, MenubarItem, MenubarLabel, MenubarMenu,
-  MenubarRadioItem, MenubarSeparator, Progress, Separator, Skeleton, Switch, Textarea, ThemeProvider, Toggle,
+  MenubarRadioItem, MenubarSeparator, Progress, Separator, Skeleton, Slider, Switch, Textarea, ThemeProvider, Toggle,
 } from "@hewel/zgui/components";
 import type { Theme, ThemeToken } from "@hewel/zgui/components";
 import { CHECK } from "@hewel/zgui/icons";
+import { SliderPrimitive } from "@hewel/zgui/primitives";
 
 const bad = <box>
   {/* @ts-expect-error Button variants are the fixed upstream union. */}
@@ -140,6 +141,16 @@ const bad = <box>
   <MenubarSeparator>content</MenubarSeparator>
   {/* @ts-expect-error ContextMenuTrigger onContextMenu cannot capture the pointer. */}
   <ContextMenuTrigger onContextMenu={event => event.capturePointer()} />
+  {/* @ts-expect-error Styled Slider forbids children. */}
+  <Slider><box /></Slider>
+  {/* @ts-expect-error SliderPrimitive is horizontal-only. */}
+  <SliderPrimitive orientation="vertical" />
+  {/* @ts-expect-error SliderPrimitive pointerStep must be a number. */}
+  <SliderPrimitive pointerStep="1" />
+  {/* @ts-expect-error SliderPrimitive onDraggingChange receives a boolean. */}
+  <SliderPrimitive onDraggingChange={(dragging: string) => dragging} />
+  {/* @ts-expect-error SliderPrimitive render state exposes numeric value accessor. */}
+  <SliderPrimitive>{({ value }) => { const badVal: string = value(); return <text>{badVal}</text>; }}</SliderPrimitive>
 </box>;
 
 // @ts-expect-error Presets come from the pinned upstream set.

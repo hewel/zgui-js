@@ -17,7 +17,7 @@ import type {
   StoreOptions,
   SurfaceInsets,
 } from "@hewel/zgui";
-import { Button, ThemeProvider } from "@hewel/zgui/components";
+import { Button, Slider, ThemeProvider } from "@hewel/zgui/components";
 import {
   MenuCheckboxItemPrimitive,
   MenuItemPrimitive,
@@ -25,12 +25,17 @@ import {
   MenuRadioGroupPrimitive,
   MenuRadioItemPrimitive,
   MenuRootPrimitive,
+  SliderPrimitive,
   createOverlayState,
   createPresence,
   createRetainedPresence,
   createRovingFocus,
 } from "@hewel/zgui/primitives";
-import type { RetainedPresenceOptions } from "@hewel/zgui/primitives";
+import type {
+  RetainedPresenceOptions,
+  SliderPrimitiveProps,
+  SliderPrimitiveRenderState,
+} from "@hewel/zgui/primitives";
 import { createRouter, RouterProvider, Outlet } from "@hewel/zgui/router";
 import {
   createHostQuery,
@@ -117,6 +122,40 @@ export function strictOptionalProbe(root: NativeNode) {
         <RouterProvider router={router}>
           <box class={cx("base", maybeClass)}>
             <Button disabled={maybeDisabled}>Save</Button>
+            <Slider
+              value={undefined}
+              defaultValue={undefined}
+              onValueChange={undefined}
+              min={undefined}
+              max={undefined}
+              step={undefined}
+              pointerStep={undefined}
+              orientation={undefined}
+              label={undefined}
+              disabled={maybeDisabled}
+              onDraggingChange={undefined}
+            />
+            <SliderPrimitive
+              {...({
+                value: undefined,
+                defaultValue: undefined,
+                onValueChange: undefined,
+                min: undefined,
+                max: undefined,
+                step: undefined,
+                pointerStep: undefined,
+                orientation: undefined,
+                label: undefined,
+                disabled: maybeDisabled,
+                onDraggingChange: undefined,
+              } satisfies SliderPrimitiveProps)}
+            >
+              {({ value, fraction, dragging, trackRef }: SliderPrimitiveRenderState) => (
+                <box ref={trackRef}>
+                  <text>{`${value()}-${fraction()}-${dragging()}`}</text>
+                </box>
+              )}
+            </SliderPrimitive>
             <MenuRootPrimitive open={maybeOpen} defaultOpen={false}>
               <MenuListPrimitive>
                 <MenuItemPrimitive disabled={maybeDisabled} onSelect={() => {}}>
