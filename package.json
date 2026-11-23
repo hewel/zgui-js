@@ -26,7 +26,7 @@
     "typecheck": "bun packages/build/src/typecheck.ts",
     "typecheck:smoke": "bun --bun run tsrs --project packages/build/tsconfig.smoke.json",
     "test:build": "bun test --parallel --timeout=30000 tests/build/*.test.mjs",
-    "test:rust": "bun tools/run-bounded.mjs cargo test -j 4 --workspace --offline && bun tools/run-bounded.mjs cargo clippy -j 4 --workspace --all-targets --offline -- -D warnings",
+    "test:rust": "bun tools/run-bounded.mjs --build cargo test -j 4 --workspace --offline --no-run && bun tools/run-bounded.mjs --test cargo test -j 4 --workspace --offline && bun tools/run-bounded.mjs --build cargo clippy -j 4 --workspace --all-targets --offline -- -D warnings",
     "test:vendor": "bun tools/test-vendor.mjs",
     "hooks:install": "git config core.hooksPath .githooks",
     "build": "bun packages/cli/src/cli.ts build",

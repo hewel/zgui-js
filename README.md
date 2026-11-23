@@ -132,7 +132,7 @@ bun run check         # fmt:check + lint + typecheck + test:build + test:rust + 
 bun run test:preview  # build counter + zgui-host and run headless GPU preview suites
 ```
 
-- `test:rust` and `test:vendor` allow 10 minutes per Cargo invocation by default, including build time. Override this with `ZGUI_CARGO_TIMEOUT_MS` (milliseconds). A timeout terminates the Cargo process group and fails the check.
+- `test:rust` and `test:vendor` split compilation (`--no-run` / `clippy`, default 20 min via `ZGUI_CARGO_BUILD_TIMEOUT_MS`) from test execution (default 5 min). Set `ZGUI_CARGO_TIMEOUT_MS` (milliseconds) to override both. A timeout terminates the Cargo process group and fails the check.
 - Install the tracked pre-commit hook (staged `oxfmt --check`, `lint`, `typecheck`) with `bun run hooks:install`.
 - Real-desktop integration tests are marked `#[ignore]` and opt-in because they open live windows or interact with clipboard/IME state. Review the [native test notes](docs/development/baseline.md) before running them.
 

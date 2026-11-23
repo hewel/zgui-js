@@ -212,25 +212,65 @@ if (selected.length === 0) {
   process.exit(1);
 }
 
-const commands = fetchOnly
-  ? [...new Set(selected.map(suite => suite.crate))].map(crate => [
-      "fetch",
-      "--manifest-path",
-      `vendor/${crate}/Cargo.toml`,
-    ])
-  : selected.map(suite => [
-      "test",
-      "-j",
-      "4",
-      "--manifest-path",
-      `vendor/${suite.crate}/Cargo.toml`,
-      ...suite.args,
-      "--offline",
-    ]);
+function targetCompileArgs(args) {
+  const compileArgs = [];
+  for (let i = 0; i < args.length; i += 1) {
+    if (args[i] === "--lib") {
+      compileArgs.push("--lib");
+    } else if (args[i] === "--test" && i + 1 < args.length) {
+      compileArgs.push("--test", args[i + 1]);
+      i += 1;
+    }
+  }
+  return compileArgs;
+}
 
-for (const args of commands) {
-  console.log(`\n==> cargo ${args.join(" ")}`);
-  const status = await runBounded("cargo", args);
+const steps = fetchOnly
+  ? [...new Set(selected.map(suite => suite.crate))].map(crate => ({
+      phase: "build",
+      args: ["fetch", "--manifest-path", `vendor/${crate}/Cargo.toml`],
+    }))
+  : (() => {
+      const planned = [];
+      const compiledKeys = new Set();
+      for (const suite of selected) {
+        const compileTargets = targetCompileArgs(suite.args);
+        const compileKey = `${suite.crate}:${compileTargets.join(" ")}`;
+        if (!compiledKeys.has(compileKey)) {
+          compiledKeys.add(compileKey);
+          planned.push({
+            phase: "build",
+            args: [
+              "test",
+              "-j",
+              "4",
+              "--manifest-path",
+              `vendor/${suite.crate}/Cargo.toml`,
+              ...compileTargets,
+              "--offline",
+              "--no-run",
+            ],
+          });
+        }
+        planned.push({
+          phase: "test",
+          args: [
+            "test",
+            "-j",
+            "4",
+            "--manifest-path",
+            `vendor/${suite.crate}/Cargo.toml`,
+            ...suite.args,
+            "--offline",
+          ],
+        });
+      }
+      return planned;
+    })();
+
+for (const step of steps) {
+  console.log(`\n==> cargo ${step.args.join(" ")}`);
+  const status = await runBounded("cargo", step.args, { phase: step.phase });
   if (status !== 0) {
     process.exitCode = status;
     break;

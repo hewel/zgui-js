@@ -3,7 +3,8 @@ import { once } from "node:events";
 import { constants } from "node:os";
 import { setTimeout as delay } from "node:timers/promises";
 
-const DEFAULT_TIMEOUT_MS = 600_000;
+const DEFAULT_BUILD_TIMEOUT_MS = 1_200_000;
+const DEFAULT_TEST_TIMEOUT_MS = 300_000;
 const TERMINATION_GRACE_MS = 500;
 const TIMEOUT_STATUS = 124;
 
@@ -17,13 +18,27 @@ function signalGroup(pid, signal) {
   }
 }
 
-export async function runBounded(command, args) {
+function resolveTimeoutMs(phase) {
+  if (process.env.ZGUI_CARGO_TIMEOUT_MS !== undefined) {
+    return {
+      envName: "ZGUI_CARGO_TIMEOUT_MS",
+      timeoutMs: Number(process.env.ZGUI_CARGO_TIMEOUT_MS),
+    };
+  }
+  if (phase === "build") {
+    return {
+      envName: "ZGUI_CARGO_BUILD_TIMEOUT_MS",
+      timeoutMs: Number(process.env.ZGUI_CARGO_BUILD_TIMEOUT_MS ?? DEFAULT_BUILD_TIMEOUT_MS),
+    };
+  }
+  return { envName: "ZGUI_CARGO_TIMEOUT_MS", timeoutMs: DEFAULT_TEST_TIMEOUT_MS };
+}
+
+export async function runBounded(command, args, { phase = "test" } = {}) {
   const label = [command, ...args].join(" ");
-  const timeoutMs = Number(process.env.ZGUI_CARGO_TIMEOUT_MS ?? DEFAULT_TIMEOUT_MS);
+  const { envName, timeoutMs } = resolveTimeoutMs(phase);
   if (!Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 2_147_483_647) {
-    console.error(
-      `${label}: ZGUI_CARGO_TIMEOUT_MS must be a positive integer no greater than 2147483647`,
-    );
+    console.error(`${label}: ${envName} must be a positive integer no greater than 2147483647`);
     return 1;
   }
 
@@ -79,11 +94,17 @@ export async function runBounded(command, args) {
 }
 
 if (import.meta.main) {
-  const [command, ...args] = process.argv.slice(2);
+  let phase = "test";
+  let rest = process.argv.slice(2);
+  if (rest[0] === "--build" || rest[0] === "--test") {
+    phase = rest[0].slice(2);
+    rest = rest.slice(1);
+  }
+  const [command, ...args] = rest;
   if (command === undefined) {
-    console.error("Usage: bun tools/run-bounded.mjs <command> [args ...]");
+    console.error("Usage: bun tools/run-bounded.mjs [--build | --test] <command> [args ...]");
     process.exitCode = 1;
   } else {
-    process.exitCode = await runBounded(command, args);
+    process.exitCode = await runBounded(command, args, { phase });
   }
 }

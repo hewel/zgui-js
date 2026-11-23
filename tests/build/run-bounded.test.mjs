@@ -76,3 +76,16 @@ test(
     }
   },
 );
+
+test("--build uses ZGUI_CARGO_BUILD_TIMEOUT_MS independently of the test timeout", () => {
+  const env = { ...process.env, ZGUI_CARGO_BUILD_TIMEOUT_MS: "250" };
+  delete env.ZGUI_CARGO_TIMEOUT_MS;
+  const result = spawnSync(
+    process.execPath,
+    [runner, "--build", "sh", "-c", "exec sleep 10", "cold-build-fixture"],
+    { env, encoding: "utf8", timeout: 5_000, killSignal: "SIGKILL" },
+  );
+  assert.ifError(result.error);
+  assert.equal(result.status, 124, `${result.stdout}\n${result.stderr}`);
+  assert.match(result.stderr, /cold-build-fixture.*timed out after \d+ ms \(limit 250 ms\)/s);
+});
