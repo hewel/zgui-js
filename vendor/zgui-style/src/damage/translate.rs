@@ -266,6 +266,17 @@ pub fn translate(
             }
             out.mark(node, Dirty::REBUILD_BOX);
         }
+        // `--zgui-scrollbar-mode` switches between classic layout-reserving gutters and zero-gutter
+        // overlay strips, so toggling it at runtime requires relayout + refragment + rehit.
+        if let Some(before) = before.as_ref()
+            && !record.initial
+            && store.columns().paint_key.get(key).is_some_and(|after| {
+                zgui_css::values::custom::text(&before.style, "zgui-scrollbar-mode")
+                    != zgui_css::values::custom::text(&after.style, "zgui-scrollbar-mode")
+            })
+        {
+            out.mark(node, Dirty::RELAYOUT | Dirty::REFRAGMENT | Dirty::REHIT);
+        }
     }
 
     if store

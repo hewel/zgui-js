@@ -3,37 +3,59 @@
 use zgui_geom::{Device, DevicePx, Point, Rect, Size};
 
 use crate::axis::Axis;
-use crate::scroll_region::bar::{Scrollport, travel};
+use crate::scroll_region::bar::{BarMode, Scrollport, travel};
 
 /// The whole strip the bar on `axis` occupies.
 ///
-/// The strip touches the inner border edge, and the padding on that side stays between it and the
-/// content box. The vertical bar runs the full height of the padding box and takes the square
-/// where the two gutters meet; the horizontal one stops short of it. One of them has to: two
-/// strips that both ran the full length would paint over each other in that square, and two that
-/// both stopped short would leave it — which is exactly the corner a full-window scrim is reported
-/// as missing.
-///
-/// An axis with no gutter answers with an empty rectangle rather than a hairline, so nothing has to
-/// ask twice before drawing.
+/// In classic mode the strip sits in the layout-reserved gutter touching the inner border edge
+/// (with the vertical bar taking the corner). In overlay mode the strip floats inside the
+/// `padding_box` right/bottom inner edges with breadth `strip`, stopping short of the bottom-right
+/// corner on both axes when both axes overflow so the two overlay strips never collide.
 pub fn track(port: &Scrollport, axis: Axis) -> Rect<DevicePx, Device> {
     if !port.reserves(axis) {
         return Rect::ZERO;
     }
     let (outer, content) = (port.padding_box, port.content_box);
-    // The near edge of each strip is the content edge plus the padding on that side, which is the
-    // content edge itself when there is none: an unpadded track stays flush with its content.
-    let left = DevicePx(content.right().0 + port.bar_padding(Axis::Vertical));
-    let top = DevicePx(content.bottom().0 + port.bar_padding(Axis::Horizontal));
-    match axis {
-        Axis::Vertical => Rect::from_corners(
-            Point::new(left, outer.top()),
-            Point::new(outer.right(), outer.bottom()),
-        ),
-        Axis::Horizontal => Rect::from_corners(
-            Point::new(outer.left(), top),
-            Point::new(left, outer.bottom()),
-        ),
+    match port.mode {
+        BarMode::Classic => {
+            // The near edge of each strip is the content edge plus the padding on that side, which
+            // is the content edge itself when there is none: an unpadded track stays flush with its
+            // content.
+            let left = DevicePx(content.right().0 + port.bar_padding(Axis::Vertical));
+            let top = DevicePx(content.bottom().0 + port.bar_padding(Axis::Horizontal));
+            match axis {
+                Axis::Vertical => Rect::from_corners(
+                    Point::new(left, outer.top()),
+                    Point::new(outer.right(), outer.bottom()),
+                ),
+                Axis::Horizontal => Rect::from_corners(
+                    Point::new(outer.left(), top),
+                    Point::new(left, outer.bottom()),
+                ),
+            }
+        }
+        BarMode::Overlay { .. } => {
+            let v_thick = port.thickness(Axis::Vertical);
+            let h_thick = port.thickness(Axis::Horizontal);
+            match axis {
+                Axis::Vertical => {
+                    let left = DevicePx((outer.right().0 - v_thick).max(outer.left().0));
+                    let bottom = DevicePx((outer.bottom().0 - h_thick).max(outer.top().0));
+                    Rect::from_corners(
+                        Point::new(left, outer.top()),
+                        Point::new(outer.right(), bottom),
+                    )
+                }
+                Axis::Horizontal => {
+                    let top = DevicePx((outer.bottom().0 - h_thick).max(outer.top().0));
+                    let right = DevicePx((outer.right().0 - v_thick).max(outer.left().0));
+                    Rect::from_corners(
+                        Point::new(outer.left(), top),
+                        Point::new(right, outer.bottom()),
+                    )
+                }
+            }
+        }
     }
 }
 
@@ -86,6 +108,7 @@ mod tests {
             ),
             content: Size::new(DevicePx(570.0), DevicePx(370.0)),
             offset: Point::new(DevicePx(0.0), DevicePx(0.0)),
+            mode: crate::scroll_region::bar::BarMode::Classic,
         }
     }
 
@@ -164,6 +187,7 @@ mod tests {
             ),
             content: Size::new(DevicePx(1182.25), DevicePx(4000.0)),
             offset: Point::new(DevicePx(0.0), DevicePx(0.0)),
+            mode: crate::scroll_region::bar::BarMode::Classic,
         };
         let down = track(&port, Axis::Vertical);
         assert_eq!(down.left(), port.content_box.right());
@@ -190,6 +214,7 @@ mod tests {
             ),
             content: Size::new(DevicePx(258.0), DevicePx(316.0)),
             offset: Point::new(DevicePx(0.0), DevicePx(0.0)),
+            mode: crate::scroll_region::bar::BarMode::Classic,
         }
     }
 

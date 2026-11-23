@@ -241,6 +241,7 @@ impl Window {
                 spatial: &self.scene.spatial,
                 scale: zgui_geom::Scale::new(self.scale),
                 filter: &filter,
+                scrollbar_filter: &self.overlay_scrollbars,
             };
             match event {
                 SurfaceEvent::Pointer { action, event, .. } => {
@@ -1206,6 +1207,7 @@ impl Window {
                 spatial: &self.scene.spatial,
                 scale: zgui_geom::Scale::new(self.scale),
                 filter: &filter,
+                scrollbar_filter: &self.overlay_scrollbars,
             };
             // A script's move borrows the ring decision from how the user last interacted; the
             // cause recorded below stays programmatic, because *why* focus moved is a different

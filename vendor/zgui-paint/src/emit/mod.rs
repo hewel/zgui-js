@@ -21,7 +21,9 @@ pub use crate::emit::highlight::{
     Highlight, HighlightLayer, HighlightRequest, HighlightSource, NoHighlights,
 };
 pub use crate::emit::replaced::{ReplacedPlacement, Source};
-pub use crate::emit::scrollbar::ScrollbarPaint;
+pub use crate::emit::scrollbar::{
+    NoOverlayScrollbars, OverlayBarVisual, OverlayScrollbarSource, ScrollbarPaint,
+};
 pub use crate::emit::text::{
     DecorationStyle, GlyphRun, GlyphSource, NoGlyphs, PlacedGlyph, RunContent, TextPlacement,
 };

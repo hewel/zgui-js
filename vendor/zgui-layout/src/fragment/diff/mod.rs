@@ -875,7 +875,8 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
         if own.contains(Dirty::RESTACK) {
             self.restacked = true;
         }
-        let (fragments, moved) = self.write_fragments(key, &placed, parent, &owed, between);
+        let (fragments, moved, born_bars) =
+            self.write_fragments(key, &placed, parent, &owed, between);
 
         // A box's first fragment is its own piece and every later one hangs below it, so the later
         // ones are pieces of the subtree and not part of the box's own ink. Folding them into it
@@ -895,15 +896,39 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
             }
         }
 
+        // Overlay scrollbar fragments paint and hit-test AFTER the box's children (in `leave()`),
+        // so children sort between this box's non-scrollbar pieces and its first kept overlay bar.
+        // Classic scrollbars preserve their original pre-child ordering.
+        let defer_bars =
+            self.store.scrollbar_mode(key) == crate::scroll_region::ScrollbarMode::Overlay;
         let mut order = (HitOrder::MAX, 0);
+        let mut non_bar_max: HitOrder = 0;
+        let mut first_bar_order: Option<HitOrder> = None;
+        let mut kept_bar_max: HitOrder = 0;
         for index in fragments.clone() {
-            if let Some(held) = self.hit.order_of(self.scratch.written[index]) {
+            let frag = self.scratch.written[index];
+            let is_bar = defer_bars
+                && self
+                    .store
+                    .fragment(frag)
+                    .is_some_and(|f| matches!(f.kind, FragmentKind::Scrollbar { .. }));
+            if is_bar && born_bars.contains(&frag) {
+                continue;
+            }
+            if let Some(held) = self.hit.order_of(frag) {
                 order = (order.0.min(held), order.1.max(held));
+                if is_bar {
+                    first_bar_order = Some(first_bar_order.map_or(held, |cur| cur.min(held)));
+                    kept_bar_max = kept_bar_max.max(held);
+                } else {
+                    non_bar_max = non_bar_max.max(held);
+                }
             }
         }
-        // Where the next newborn goes: after everything painted so far, which is this box's own
-        // pieces once they are written, or whatever came before the box when it has none.
-        let mut cursor = if order.1 > 0 { order.1 } else { between.0 };
+        // Where the next newborn child goes: after this box's own non-scrollbar pieces (or
+        // whatever came before the box), and strictly before any scrollbar fragments of this box.
+        let mut cursor = if non_bar_max > 0 { non_bar_max } else { between.0 };
+        let children_upper = first_bar_order.unwrap_or(between.1);
 
         // The children are walked in painting order. A box born anywhere below one of them is
         // placed between the order keys of what was walked before it and the next sibling, so
@@ -960,7 +985,7 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
         for index in children_mark..children_end {
             let child = self.scratch.children[index];
             let clean = self.can_skip(child, owed.node);
-            let next = self.next_indexed_after(index + 1, children_end, between.1);
+            let next = self.next_indexed_after(index + 1, children_end, children_upper);
             let child_between = (cursor, next);
             let folded = match movement {
                 // Every shortcut below keeps the name of the coordinate system a child's pieces are
@@ -1041,6 +1066,30 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
             if folded.order.1 > 0 {
                 cursor = cursor.max(folded.order.1);
                 order = (order.0.min(folded.order.0), order.1.max(folded.order.1));
+            }
+        }
+
+        // Place newly-born scrollbar fragments strictly AFTER every child in this subtree and
+        // any kept scrollbar fragments, matching `zgui-paint` drawing scrollbars in `leave()`.
+        if !born_bars.is_empty() {
+            let low = cursor.max(kept_bar_max);
+            let high = between.1;
+            let born = born_bars.len() as HitOrder;
+            let scale = self.tables.device.scale;
+            for (offset, &frag) in born_bars.iter().enumerate() {
+                let index = offset as HitOrder + 1;
+                let key_in_gap = if high.saturating_sub(low) > born {
+                    low + (high - low) / (born + 1) * index
+                } else {
+                    self.renumber = true;
+                    low
+                };
+                if let Some(entry) =
+                    crate::fragment::hit::entry_for(self.store, frag, key_in_gap, scale)
+                {
+                    self.hit.update(frag, entry);
+                    order = (order.0.min(key_in_gap), order.1.max(key_in_gap));
+                }
             }
         }
 
@@ -1475,7 +1524,7 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
         parent: Option<FragKey>,
         owed: &Owed,
         between: (HitOrder, HitOrder),
-    ) -> (core::ops::Range<usize>, bool) {
+    ) -> (core::ops::Range<usize>, bool, smallvec::SmallVec<[FragKey; 4]>) {
         let kinds_mark = self.scratch.kinds.len();
         self.kinds_of(key);
         let count = self.scratch.kinds.len() - kinds_mark;
@@ -1493,13 +1542,27 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
         }
         self.retire(key, keep);
 
-        // Where the pieces born below take their order keys: after the last piece kept and after
-        // everything painted before this box, and before the first thing its children index.
-        let born = count.saturating_sub(keep) as HitOrder;
-        let gap = (born > 0).then(|| {
+        let defer_bars =
+            self.store.scrollbar_mode(key) == crate::scroll_region::ScrollbarMode::Overlay;
+        // Where non-deferred pieces born below take their order keys: after the last kept
+        // non-deferred piece and everything painted before this box, and before the first thing
+        // its children index. Newly-born overlay scrollbar pieces are ordered AFTER the children.
+        let born_non_bars = (keep..count)
+            .filter(|&slot| {
+                !(defer_bars
+                    && matches!(
+                        self.scratch.kinds[kinds_mark + slot],
+                        FragmentKind::Scrollbar { .. }
+                    ))
+            })
+            .count() as HitOrder;
+        let gap = (born_non_bars > 0).then(|| {
             let mut low = between.0;
             for slot in 0..keep {
                 let kind = self.scratch.kinds[kinds_mark + slot];
+                if defer_bars && matches!(kind, FragmentKind::Scrollbar { .. }) {
+                    continue;
+                }
                 if let Some(frag) = self.store.reusable_fragment(key, slot, kind)
                     && let Some(held) = self.hit.order_of(frag)
                 {
@@ -1511,6 +1574,8 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
 
         let written_mark = self.scratch.written.len();
         let mut moved = false;
+        let mut born_bars: smallvec::SmallVec<[FragKey; 4]> = smallvec::SmallVec::new();
+        let mut non_bar_born_index: HitOrder = 0;
         for slot in 0..count {
             let kind = self.scratch.kinds[kinds_mark + slot];
             let geometry = self.geometry_for(key, placed, slot, kind);
@@ -1522,20 +1587,29 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
             let frag = match self.store.reusable_fragment(key, slot, kind) {
                 Some(frag) => frag,
                 None => {
-                    let (low, high) = gap.unwrap_or(between);
-                    let index = (slot - keep) as HitOrder + 1;
-                    // Spread evenly through the gap. A gap too narrow for the pieces born into
-                    // it hands out a key twice, and the renumber after the walk resolves it.
-                    let key_in_gap = if high.saturating_sub(low) > born {
-                        low + (high - low) / (born + 1) * index
+                    if defer_bars && matches!(kind, FragmentKind::Scrollbar { .. }) {
+                        self.born_order = Some(0);
+                        let frag = self.store.insert_fragment(key, |fragment| {
+                            fragment.kind = kind;
+                        });
+                        born_bars.push(frag);
+                        frag
                     } else {
-                        self.renumber = true;
-                        low
-                    };
-                    self.born_order = Some(key_in_gap);
-                    self.store.insert_fragment(key, |fragment| {
-                        fragment.kind = kind;
-                    })
+                        let (low, high) = gap.unwrap_or(between);
+                        non_bar_born_index += 1;
+                        // Spread evenly through the gap. A gap too narrow for the pieces born into
+                        // it hands out a key twice, and the renumber after the walk resolves it.
+                        let key_in_gap = if high.saturating_sub(low) > born_non_bars {
+                            low + (high - low) / (born_non_bars + 1) * non_bar_born_index
+                        } else {
+                            self.renumber = true;
+                            low
+                        };
+                        self.born_order = Some(key_in_gap);
+                        self.store.insert_fragment(key, |fragment| {
+                            fragment.kind = kind;
+                        })
+                    }
                 }
             };
             moved |= self.update(frag, kind, &geometry, parent, owed) != Change::Identical;
@@ -1543,7 +1617,7 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
             self.scratch.written.push(frag);
         }
         self.scratch.kinds.truncate(kinds_mark);
-        (written_mark..self.scratch.written.len(), moved)
+        (written_mark..self.scratch.written.len(), moved, born_bars)
     }
 
     /// The first order key indexed below `key`, or `after` when nothing below it is indexed yet.
@@ -1630,9 +1704,13 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
         // slots its bars occupy — a name is what the hit index, the recorded painting and last
         // frame's damage all refer to, and reuse stops at the first slot that draws something else.
         if let Some(layout) = self.store.layout_of(key) {
+            let mode = self.store.scrollbar_mode(key);
+            let scrollable = crate::scroll_region::scrollable_axes(&self.store.node(key).style);
             self.scratch
                 .kinds
-                .extend(crate::scroll_region::bar::kinds(&layout));
+                .extend(crate::scroll_region::bar::kinds_for(
+                    &layout, mode, scrollable,
+                ));
         }
     }
 
@@ -1817,12 +1895,22 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
             zgui_geom::Point::new(DevicePx(0.0), DevicePx(0.0)),
             |element| self.tables.scroll.of(element),
         );
+        let mode = match self.store.scrollbar_mode(key) {
+            crate::scroll_region::ScrollbarMode::Classic => crate::scroll_region::bar::BarMode::Classic,
+            crate::scroll_region::ScrollbarMode::Overlay => {
+                crate::scroll_region::bar::BarMode::Overlay {
+                    strip: crate::scroll_region::bar::OVERLAY_STRIP_CSS * self.tables.device.scale,
+                    scrollable: crate::scroll_region::scrollable_axes(&self.store.node(key).style),
+                }
+            }
+        };
         crate::scroll_region::bar::Scrollport {
             padding_box: placed.padding_box,
             inner: placed.padding_box.inset(placed.padding),
             content_box: placed.content_box,
             content,
             offset,
+            mode,
         }
     }
 

@@ -68,6 +68,9 @@ pub use crate::damage::ink::{ReadExtent, cull_rect, read_extent_of};
 pub use crate::emit::highlight::{
     Highlight, HighlightLayer, HighlightRequest, HighlightSource, NoHighlights,
 };
+pub use crate::emit::scrollbar::{
+    NoOverlayScrollbars, OverlayBarVisual, OverlayScrollbarSource,
+};
 pub use crate::emit::text::{
     GlyphPlacementSource, GlyphRequest, GlyphRun, GlyphSource, NoGlyphPlacements, NoGlyphs,
     PlacedGlyph, RunContent,

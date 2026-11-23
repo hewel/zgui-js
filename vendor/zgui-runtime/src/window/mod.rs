@@ -409,6 +409,10 @@ pub struct Window {
     editors: crate::editing::Editors,
     /// The caret's phase, and what this frame draws for it.
     carets: crate::caret::Carets,
+    /// Transient visibility, auto-fade, and hover/drag emphasis state for overlay scrollbars.
+    overlay_scrollbars: crate::window::scroll::overlay::OverlayScrollbars,
+    /// Whether reduced-motion preference is active for this window.
+    reduced_motion: bool,
     /// How the user last interacted, which is what a programmatic focus move borrows its ring
     /// decision from.
     ///
@@ -864,6 +868,8 @@ impl Window {
             long_press_due: None,
             editors: crate::editing::Editors::new(),
             carets: crate::caret::Carets::new(),
+            overlay_scrollbars: crate::window::scroll::overlay::OverlayScrollbars::new(),
+            reduced_motion: false,
             focus_modality: zgui_input::FocusSource::Keyboard,
             vertical_goal: None,
             selecting: None,
@@ -1249,6 +1255,29 @@ impl Window {
     /// every window presenting to something with an image always spare.
     pub const fn present_hold(&self) -> std::time::Duration {
         self.present.hold()
+    }
+
+    /// Whether this window is currently honouring reduced-motion preferences.
+    pub const fn reduced_motion(&self) -> bool {
+        self.reduced_motion
+    }
+
+    /// Updates this window's reduced-motion preference, returning whether it changed.
+    pub fn set_reduced_motion(&mut self, reduced_motion: bool) -> bool {
+        if self.reduced_motion == reduced_motion {
+            return false;
+        }
+        self.reduced_motion = reduced_motion;
+        true
+    }
+
+    /// Current transient visual state of an overlay scrollbar axis on `container`.
+    pub fn overlay_scrollbar_visual(
+        &self,
+        container: zgui_dom::NodeKey,
+        axis: zgui_layout::Axis,
+    ) -> zgui_paint::OverlayBarVisual {
+        self.overlay_scrollbars.visual_of(container, axis)
     }
 
     /// Whether the desktop says this window is being interactively resized right now.

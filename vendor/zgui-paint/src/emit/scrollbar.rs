@@ -11,11 +11,94 @@
 //! the grab area.
 
 use zgui_color::Color;
+use zgui_dom::NodeKey;
 use zgui_geom::{Corners, Device, DevicePx, Point, Rect, Size, Vec2};
+use zgui_layout::axis::Axis;
 use zgui_layout::fragment::ScrollbarPart;
-use zgui_scene::{ClipId, Paint, Quad, Scene, SpatialId};
+use zgui_scene::{ClipId, ContentHash, Paint, Quad, Scene, SpatialId};
 
+use crate::emit::group::INVISIBLE_OPACITY;
 use crate::lower::scrollbar::{ScrollbarScheme, ScrollbarStyle};
+
+/// Resting painted thickness of an overlay scrollbar capsule, in CSS pixels.
+///
+/// Centred inside the `12px` logical overlay strip, this leaves a `4px` inset from the outer edge.
+pub const OVERLAY_RESTING_THICKNESS_CSS: f32 = 4.0;
+
+/// Hovered or actively dragged thickness of an overlay scrollbar capsule, in CSS pixels.
+///
+/// Centred inside the `12px` logical overlay strip, this leaves a `3px` inset from the outer edge.
+pub const OVERLAY_EMPHASIZED_THICKNESS_CSS: f32 = 6.0;
+
+/// Transient visual state of one overlay scrollbar axis for the current frame.
+///
+/// Carried sideband into the emit walk so revealing, widening, hovering, dragging, and fading an
+/// overlay scrollbar never mutate DOM style or trigger relayout.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct OverlayBarVisual {
+    /// Overall opacity multiplier in `0.0..=1.0`. At `0.0`, the overlay emits zero quads.
+    pub alpha: f32,
+    /// Hover/drag emphasis blend in `0.0..=1.0`: `0.0` is resting (`4px` capsule), `1.0` is
+    /// hovered/dragged (`6px` capsule with modestly brightened thumb alpha).
+    pub emphasis: f32,
+}
+
+impl OverlayBarVisual {
+    /// Fully faded out (`alpha == 0.0`): emits zero quads.
+    pub const HIDDEN: Self = Self {
+        alpha: 0.0,
+        emphasis: 0.0,
+    };
+
+    /// Fully visible at rest (`4px` capsule).
+    pub const RESTING: Self = Self {
+        alpha: 1.0,
+        emphasis: 0.0,
+    };
+
+    /// Fully visible and emphasized (`6px` capsule, hovered or actively dragged).
+    pub const EMPHASIZED: Self = Self {
+        alpha: 1.0,
+        emphasis: 1.0,
+    };
+
+    /// A non-zero fingerprint of this visual state for the paint replay cache.
+    pub fn signature(self) -> u64 {
+        let alpha = self.alpha.clamp(0.0, 1.0);
+        let emphasis = self.emphasis.clamp(0.0, 1.0);
+        // Canonicalize `-0.0` so both zero signs share one cache key.
+        let alpha_bits = if alpha == 0.0 { 0.0_f32.to_bits() } else { alpha.to_bits() };
+        let emphasis_bits = if emphasis == 0.0 {
+            0.0_f32.to_bits()
+        } else {
+            emphasis.to_bits()
+        };
+        ContentHash::new()
+            .u32(alpha_bits)
+            .u32(emphasis_bits)
+            .finish()
+            | 1
+    }
+}
+
+/// Sideband provider of per-axis visual state for overlay scrollbars.
+///
+/// Returning `None` tells the paint walk to fall back to [`OverlayBarVisual::RESTING`], which is
+/// what static callers without a runtime state machine want.
+pub trait OverlayScrollbarSource {
+    /// Visual state for `container`'s overlay scrollbar on `axis`, if managed by the caller.
+    fn visual(&self, container: NodeKey, axis: Axis) -> Option<OverlayBarVisual>;
+}
+
+/// An overlay scrollbar source with no runtime state machine behind it.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct NoOverlayScrollbars;
+
+impl OverlayScrollbarSource for NoOverlayScrollbars {
+    fn visual(&self, _container: NodeKey, _axis: Axis) -> Option<OverlayBarVisual> {
+        None
+    }
+}
 
 /// How a scrollbar's two parts are painted.
 ///
@@ -115,6 +198,91 @@ pub fn emit(
         .clipped(clip)
         .transformed(transform)
         .with_radii(paint.radii(part, bounds));
+    usize::from(scene.push_quad(quad).is_some())
+}
+
+/// Slims `bounds` to `thickness` centred along the cross-axis of `axis`.
+fn slim_for_axis(
+    bounds: Rect<DevicePx, Device>,
+    axis: Axis,
+    thickness: f32,
+) -> Rect<DevicePx, Device> {
+    let Size { width, height, .. } = bounds.size;
+    match axis {
+        Axis::Vertical => {
+            let painted = thickness.clamp(0.0, width.0);
+            let inset = (width.0 - painted) * 0.5;
+            Rect::new(
+                Point::new(DevicePx(bounds.left().0 + inset), bounds.origin.y),
+                Size::new(DevicePx(painted), height),
+            )
+        }
+        Axis::Horizontal => {
+            let painted = thickness.clamp(0.0, height.0);
+            let inset = (height.0 - painted) * 0.5;
+            Rect::new(
+                Point::new(bounds.origin.x, DevicePx(bounds.top().0 + inset)),
+                Size::new(width, DevicePx(painted)),
+            )
+        }
+    }
+}
+
+/// Emits one part of an overlay scrollbar, and returns how many primitives were pushed.
+///
+/// When `visual.alpha` is invisible (`<= 0`), zero quads are emitted. The thumb starts as a
+/// `4px * scale` capsule centred inside its `12px * scale` strip (`4px` inset from the outer edge)
+/// and widens smoothly to `6px * scale` (`3px` inset) with a modest alpha boost as
+/// `visual.emphasis` rises toward `1.0`. The track remains transparent unless
+/// `--zgui-scrollbar-track` gave it a non-transparent colour, in which case its alpha scales with
+/// `visual.alpha * box_alpha`.
+#[allow(clippy::too_many_arguments)]
+pub fn emit_overlay(
+    scene: &mut Scene,
+    axis: Axis,
+    part: ScrollbarPart,
+    bounds: Rect<DevicePx, Device>,
+    paint: ScrollbarPaint,
+    visual: OverlayBarVisual,
+    scale: f32,
+    box_alpha: f32,
+    clip: ClipId,
+    transform: SpatialId,
+) -> usize {
+    let alpha = (visual.alpha.clamp(0.0, 1.0) * box_alpha.clamp(0.0, 1.0)).clamp(0.0, 1.0);
+    if alpha <= INVISIBLE_OPACITY || bounds.is_empty() {
+        return 0;
+    }
+    let emphasis = visual.emphasis.clamp(0.0, 1.0);
+    let (quad_bounds, color) = match part {
+        ScrollbarPart::Track => {
+            let track_alpha = (paint.track.alpha() * alpha).clamp(0.0, 1.0);
+            if track_alpha <= INVISIBLE_OPACITY {
+                return 0;
+            }
+            (bounds, paint.track.with_alpha(track_alpha))
+        }
+        ScrollbarPart::Thumb => {
+            let thickness_css = OVERLAY_RESTING_THICKNESS_CSS
+                + (OVERLAY_EMPHASIZED_THICKNESS_CSS - OVERLAY_RESTING_THICKNESS_CSS) * emphasis;
+            let capsule = slim_for_axis(bounds, axis, thickness_css * scale.max(0.0));
+            if capsule.is_empty() {
+                return 0;
+            }
+            let base = paint.thumb.alpha().clamp(0.0, 1.0);
+            let boosted = (base + (1.0 - base) * 0.35 * emphasis).clamp(0.0, 1.0);
+            let thumb_alpha = (boosted * alpha).clamp(0.0, 1.0);
+            if thumb_alpha <= INVISIBLE_OPACITY {
+                return 0;
+            }
+            (capsule, paint.thumb.with_alpha(thumb_alpha))
+        }
+    };
+    let fill = scene.paints.add(Paint::Solid(color));
+    let quad = Quad::filled(quad_bounds, fill)
+        .clipped(clip)
+        .transformed(transform)
+        .with_radii(paint.radii(part, quad_bounds));
     usize::from(scene.push_quad(quad).is_some())
 }
 
@@ -326,11 +494,13 @@ mod tests {
         assert_eq!(resolve(window, &ScrollbarStyle::default()), window);
 
         let dark = ScrollbarStyle {
+            mode: zgui_layout::scroll_region::ScrollbarMode::Classic,
             scheme: ScrollbarScheme::Dark,
             colors: None,
         };
         assert_eq!(resolve(window, &dark), dark_paint());
         let light = ScrollbarStyle {
+            mode: zgui_layout::scroll_region::ScrollbarMode::Classic,
             scheme: ScrollbarScheme::Light,
             colors: None,
         };
@@ -338,6 +508,7 @@ mod tests {
 
         let lime = Color::srgb(0.0, 1.0, 0.0, 1.0);
         let themed = ScrollbarStyle {
+            mode: zgui_layout::scroll_region::ScrollbarMode::Classic,
             scheme: ScrollbarScheme::Window,
             colors: Some(Arc::new(ScrollbarColors {
                 thumb: Some(lime),
@@ -347,5 +518,114 @@ mod tests {
         let paint = resolve(window, &themed);
         assert_eq!(paint.thumb, lime);
         assert_eq!(paint.track, window.track, "the track keeps its default");
+    }
+
+    #[test]
+    fn overlay_emit_scales_capsule_thickness_emphasis_and_zero_alpha_omits_quads() {
+        use zgui_color::Color;
+        use zgui_layout::axis::Axis;
+        use zgui_scene::Paint;
+
+        use super::{OverlayBarVisual, emit_overlay};
+
+        let mut scene = Scene::new();
+        scene.begin_frame(Size::new(200, 200));
+        let paint = default_paint();
+
+        // Hidden overlay emits zero quads for both Track and Thumb.
+        assert_eq!(
+            emit_overlay(
+                &mut scene,
+                Axis::Vertical,
+                ScrollbarPart::Thumb,
+                bar(),
+                paint,
+                OverlayBarVisual::HIDDEN,
+                1.0,
+                1.0,
+                ClipId::ROOT,
+                SpatialId::VIEWPORT,
+            ),
+            0
+        );
+        assert!(scene.primitives.quads.is_empty());
+
+        // Resting overlay: 4px capsule centred in 12px strip (4px inset from right edge).
+        assert_eq!(
+            emit_overlay(
+                &mut scene,
+                Axis::Vertical,
+                ScrollbarPart::Thumb,
+                bar(),
+                paint,
+                OverlayBarVisual::RESTING,
+                1.0,
+                1.0,
+                ClipId::ROOT,
+                SpatialId::VIEWPORT,
+            ),
+            1
+        );
+        let resting = &scene.primitives.quads[0];
+        assert_eq!(resting.bounds, [192.0, 0.0, 4.0, 200.0]);
+        assert_eq!(resting.radii, [2.0; 8]);
+        let resting_alpha = match scene.paints.get(resting.fill.id().expect("solid")) {
+            Some(Paint::Solid(c)) => c.alpha(),
+            _ => panic!("expected solid paint"),
+        };
+        assert!((resting_alpha - paint.thumb.alpha()).abs() < 1e-4);
+
+        // Emphasized overlay: 6px capsule centred in 12px strip (3px inset) + brightened alpha.
+        assert_eq!(
+            emit_overlay(
+                &mut scene,
+                Axis::Vertical,
+                ScrollbarPart::Thumb,
+                bar(),
+                paint,
+                OverlayBarVisual::EMPHASIZED,
+                1.0,
+                1.0,
+                ClipId::ROOT,
+                SpatialId::VIEWPORT,
+            ),
+            1
+        );
+        let emphasized = &scene.primitives.quads[1];
+        assert_eq!(emphasized.bounds, [191.0, 0.0, 6.0, 200.0]);
+        assert_eq!(emphasized.radii, [3.0; 8]);
+        let emphasized_alpha = match scene.paints.get(emphasized.fill.id().expect("solid")) {
+            Some(Paint::Solid(c)) => c.alpha(),
+            _ => panic!("expected solid paint"),
+        };
+        assert!(emphasized_alpha > resting_alpha && emphasized_alpha <= 1.0);
+
+        // Explicit --zgui-scrollbar-track scales with overlay visual alpha.
+        let mut custom_track = paint;
+        custom_track.track = Color::srgb(0.2, 0.2, 0.2, 0.5);
+        assert_eq!(
+            emit_overlay(
+                &mut scene,
+                Axis::Vertical,
+                ScrollbarPart::Track,
+                bar(),
+                custom_track,
+                OverlayBarVisual {
+                    alpha: 0.5,
+                    emphasis: 0.0,
+                },
+                1.0,
+                1.0,
+                ClipId::ROOT,
+                SpatialId::VIEWPORT,
+            ),
+            1
+        );
+        let track_quad = &scene.primitives.quads[2];
+        let track_alpha = match scene.paints.get(track_quad.fill.id().expect("solid")) {
+            Some(Paint::Solid(c)) => c.alpha(),
+            _ => panic!("expected solid track paint"),
+        };
+        assert!((track_alpha - 0.25).abs() < 1e-4);
     }
 }

@@ -107,6 +107,13 @@ impl Router {
         &self.pointers
     }
 
+    /// Every scrollbar `(container, axis)` currently held by a pointer (thumb drag or track press).
+    pub fn held_scrollbars(
+        &self,
+    ) -> impl Iterator<Item = (zgui_dom::NodeKey, zgui_layout::Axis)> + '_ {
+        self.bars.held_bars()
+    }
+
     /// Routes one pointer event.
     ///
     /// # Panics

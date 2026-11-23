@@ -41,6 +41,12 @@ const SUITES = [
       "--test",
       "scroll_owed",
       "--test",
+      "overlay_scrollbar",
+      "--test",
+      "scrollbar",
+      "--test",
+      "scroll_hit",
+      "--test",
       "style_revisions",
       "--test",
       "image_policy",
@@ -123,7 +129,7 @@ const SUITES = [
   },
   {
     crate: "zgui-paint",
-    args: ["--lib", "--test", "vector"],
+    args: ["--lib", "--test", "vector", "--test", "scrollbar_style"],
   },
   {
     crate: "zgui-scroll",
@@ -147,7 +153,7 @@ const SUITES = [
   },
   {
     crate: "zgui-input",
-    args: ["--lib"],
+    args: ["--lib", "--test", "dispatch"],
   },
   {
     crate: "zgui-a11y",

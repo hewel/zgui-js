@@ -14,8 +14,9 @@ use zgui_scene::SpatialTree;
 
 use crate::axis::Axis;
 use crate::fragment::{FragmentKind, ScrollbarPart};
-use crate::scroll_region::bar::Scrollport;
+use crate::scroll_region::ScrollbarMode;
 use crate::scroll_region::bar::travel::{self, Travel};
+use crate::scroll_region::bar::{BarMode, OVERLAY_STRIP_CSS, Scrollport};
 use crate::tree::store::LayoutStore;
 
 /// The range one element's thumb moves in, as the last frame placed it.
@@ -27,12 +28,20 @@ pub fn travel_of(store: &LayoutStore, element: NodeKey, axis: Axis) -> Option<Tr
     let frag = *store.fragments_of_box(box_).first()?;
     let fragment = store.fragment(frag)?;
     let content = store.layout_of(box_)?.content_size;
+    let mode = match store.scrollbar_mode(box_) {
+        ScrollbarMode::Classic => BarMode::Classic,
+        ScrollbarMode::Overlay => BarMode::Overlay {
+            strip: OVERLAY_STRIP_CSS * store.device_scale(),
+            scrollable: crate::scroll_region::scrollable_axes(&store.node(box_).style),
+        },
+    };
     let port = Scrollport {
         padding_box: fragment.padding_box(),
         inner: fragment.padding_box().inset(fragment.padding),
         content_box: fragment.content_box(),
         content,
         offset: Point::new(DevicePx(0.0), DevicePx(0.0)),
+        mode,
     };
     port.reserves(axis).then(|| travel::of(&port, axis))
 }

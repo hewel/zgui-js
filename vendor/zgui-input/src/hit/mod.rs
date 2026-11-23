@@ -16,11 +16,14 @@ pub mod scrollbar;
 
 use zgui_dom::{DocumentStore, NodeKey};
 use zgui_geom::{Device, DevicePx, Point};
-use zgui_layout::{FragKey, HitIndex, LayoutStore};
+use zgui_layout::scroll_region::ScrollbarMode;
+use zgui_layout::{FragKey, FragmentKind, HitIndex, LayoutStore};
 use zgui_scene::{ClipTable, SpatialTree};
 
 pub use crate::hit::chain::HitChain;
-pub use crate::hit::scrollbar::Press as ScrollbarPress;
+pub use crate::hit::scrollbar::{
+    AllScrollbarsInteractive, Press as ScrollbarPress, ScrollbarHitFilter,
+};
 
 /// What was under a point.
 #[derive(Clone, Debug, PartialEq)]
@@ -50,11 +53,39 @@ pub fn at(
     spatial: &SpatialTree,
     point: Point<DevicePx, Device>,
 ) -> Option<Hit> {
+    at_with_scrollbar_filter(
+        document,
+        layout,
+        index,
+        clips,
+        spatial,
+        point,
+        &AllScrollbarsInteractive,
+    )
+}
+
+/// Like [`at`], skipping hidden overlay scrollbar fragments rejected by `filter`.
+pub fn at_with_scrollbar_filter(
+    document: &DocumentStore,
+    layout: &LayoutStore,
+    index: &HitIndex,
+    clips: &ClipTable,
+    spatial: &SpatialTree,
+    point: Point<DevicePx, Device>,
+    filter: &dyn ScrollbarHitFilter,
+) -> Option<Hit> {
     for fragment in index.hit(point, clips, spatial) {
         let Some(node) = element_of(layout, fragment) else {
             continue;
         };
         if document.is_effectively_inert(node) {
+            continue;
+        }
+        if let Some(frag) = layout.fragment(fragment)
+            && let FragmentKind::Scrollbar { axis, .. } = frag.kind
+            && layout.scrollbar_mode(frag.box_) == ScrollbarMode::Overlay
+            && !filter.is_scrollbar_interactive(node, axis)
+        {
             continue;
         }
         let chain = HitChain::to_root(document, node);

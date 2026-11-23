@@ -232,6 +232,7 @@ impl Fixture {
             spatial: &self.spatial,
             scale: Scale::<Css, Device>::new(1.0),
             filter,
+            scrollbar_filter: &zgui_input::AllScrollbarsInteractive,
         }
     }
 

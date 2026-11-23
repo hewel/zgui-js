@@ -357,18 +357,60 @@ impl HitIndex {
         };
         let mut order = ORDER_STRIDE;
         let mut staged = Vec::with_capacity(store.fragment_count() as usize);
-        for box_ in crate::fragment::stacking::paint_order(store, root) {
-            for &frag in store.fragments_of_box(box_) {
-                let Some(entry) = crate::fragment::hit::entry_for(store, frag, order, scale) else {
+        self.emit_paint_order(store, root, scale, &mut order, &mut staged);
+        self.forest.fill(staged);
+        self.fold_orders(store, root);
+    }
+
+    /// Walks `key` and its descendants in exact painting order: non-scrollbar fragments first,
+    /// children in CSS stacking order next, and scrollbar fragments last (matching `zgui-paint`
+    /// drawing scrollbars in `leave()` so visible overlay bars win hits over scrolled children).
+    fn emit_paint_order(
+        &mut self,
+        store: &LayoutStore,
+        key: BoxKey,
+        scale: f32,
+        order: &mut HitOrder,
+        staged: &mut Vec<(FragKey, Option<SpatialId>, Rect<DevicePx, Device>)>,
+    ) {
+        let defer_bars =
+            store.scrollbar_mode(key) == crate::scroll_region::ScrollbarMode::Overlay;
+        let mut has_scrollbars = false;
+        for &frag in store.fragments_of_box(key) {
+            if defer_bars
+                && store
+                    .fragment(frag)
+                    .is_some_and(|f| matches!(f.kind, crate::fragment::FragmentKind::Scrollbar { .. }))
+            {
+                has_scrollbars = true;
+                continue;
+            }
+            let Some(entry) = crate::fragment::hit::entry_for(store, frag, *order, scale) else {
+                continue;
+            };
+            staged.push((frag, entry.space, entry.envelope));
+            self.pack(frag, entry);
+            *order += ORDER_STRIDE;
+        }
+        for &child in crate::fragment::stacking::children_in_paint_order(store, key).iter() {
+            self.emit_paint_order(store, child, scale, order, staged);
+        }
+        if has_scrollbars {
+            for &frag in store.fragments_of_box(key) {
+                if !store.fragment(frag).is_some_and(|f| {
+                    matches!(f.kind, crate::fragment::FragmentKind::Scrollbar { .. })
+                }) {
+                    continue;
+                }
+                let Some(entry) = crate::fragment::hit::entry_for(store, frag, *order, scale)
+                else {
                     continue;
                 };
                 staged.push((frag, entry.space, entry.envelope));
                 self.pack(frag, entry);
-                order += ORDER_STRIDE;
+                *order += ORDER_STRIDE;
             }
         }
-        self.forest.fill(staged);
-        self.fold_orders(store, root);
     }
 
     /// The order key one fragment holds, if it is indexed.

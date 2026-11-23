@@ -113,7 +113,10 @@ pub(crate) fn template(
         },
         item_is_table: false,
         item_is_replaced: false,
-        scrollbar_width: device.scrollbar_width,
+        scrollbar_width: match crate::scroll_region::mode::of(style) {
+            crate::scroll_region::ScrollbarMode::Classic => device.scrollbar_width,
+            crate::scroll_region::ScrollbarMode::Overlay => 0.0,
+        },
         aspect_ratio: None,
         size: Size {
             width: length::size(&position.width, scale, calc),

@@ -290,3 +290,67 @@ fn a_press_and_release_over_one_control_activates_it_and_one_that_slides_off_doe
         "letting go somewhere else is how someone changes their mind mid-press"
     );
 }
+
+#[test]
+fn hidden_overlay_scrollbar_passes_hits_through_to_underlying_control() {
+    use zgui_dom::NodeKey;
+    use zgui_geom::{Device, DevicePx, Point};
+    use zgui_input::ScrollbarHitFilter;
+    use zgui_layout::Axis;
+
+    struct ToggleFilter(bool);
+    impl ScrollbarHitFilter for ToggleFilter {
+        fn is_scrollbar_interactive(&self, _container: NodeKey, _axis: Axis) -> bool {
+            self.0
+        }
+    }
+
+    let fixture = Fixture::new(
+        Element::new("root").children(vec![
+            Element::new("overlay_scroller").children(vec![Element::new("edge_btn")]),
+            Element::new("classic_scroller").children(vec![Element::new("classic_btn")]),
+        ]),
+        "root { display: block; width: 200px; height: 220px }
+         overlay_scroller { --zgui-scrollbar-mode: overlay; display: block; width: 200px; height: 100px; overflow-y: auto }
+         edge_btn { display: block; width: 100%; height: 300px }
+         classic_scroller { display: block; width: 200px; height: 100px; overflow-y: auto }
+         classic_btn { display: block; width: 100%; height: 300px }",
+    );
+    let overlay = fixture.key("overlay_scroller");
+    let edge_btn = fixture.key("edge_btn");
+    let classic = fixture.key("classic_scroller");
+    let overlay_edge = Point::<DevicePx, Device>::new(DevicePx(194.0), DevicePx(20.0));
+    let classic_edge = Point::<DevicePx, Device>::new(DevicePx(194.0), DevicePx(120.0));
+
+    let filter = fixture.filter();
+
+    // When hidden (`false`), overlay scrollbar passes BOTH scrollbar_at and chain_at through to
+    // the underlying child control, whereas classic scrollbar remains interactive.
+    let hidden = ToggleFilter(false);
+    let mut world = fixture.world(&filter);
+    world.scrollbar_filter = &hidden;
+
+    assert!(
+        world.scrollbar_at(overlay_edge).is_none(),
+        "hidden overlay scrollbar must not intercept scrollbar hits",
+    );
+    assert_eq!(
+        world.chain_at(overlay_edge).target(),
+        Some(edge_btn),
+        "hidden overlay scrollbar must pass pointer hits directly to underlying child",
+    );
+    assert_eq!(
+        world.scrollbar_at(classic_edge).map(|p| p.container),
+        Some(classic),
+        "classic scrollbar must remain interactive regardless of overlay filter",
+    );
+
+    // When visible (`true`), overlay scrollbar intercepts the edge hit.
+    let visible = ToggleFilter(true);
+    world.scrollbar_filter = &visible;
+    let press = world
+        .scrollbar_at(overlay_edge)
+        .expect("visible overlay scrollbar must be hittable");
+    assert_eq!(press.container, overlay);
+    assert_eq!(press.axis, Axis::Vertical);
+}

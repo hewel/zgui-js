@@ -57,10 +57,15 @@ pub fn revise<C: MeasureContent>(tree: &mut LayoutTree<'_, C>, root: BoxKey) -> 
             return true;
         };
         let held = tree.store().auto_scroll(key);
-        let wanted = (
-            horizontal && layout.content_size.width.0 > layout.size.width.0 + EPSILON,
-            vertical && layout.content_size.height.0 > layout.size.height.0 + EPSILON,
-        );
+        let wanted =
+            if tree.store().scrollbar_mode(key) == crate::scroll_region::ScrollbarMode::Overlay {
+                (false, false)
+            } else {
+                (
+                    horizontal && layout.content_size.width.0 > layout.size.width.0 + EPSILON,
+                    vertical && layout.content_size.height.0 > layout.size.height.0 + EPSILON,
+                )
+            };
         if wanted == held {
             return true;
         }

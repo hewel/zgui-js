@@ -390,12 +390,13 @@ pub(crate) fn for_preview<H: AppHandler>(
             .with_exit_policy(zgui::runtime::ExitPolicy::Explicit);
     }
     let fonts = profile.fonts.clone();
-    let native = app
+    let mut native = app
         .into_handler(move |cx| {
             zgui::reactive::provide_context(fonts.clone());
             Box::new(View::build(Root(pending.clone()), cx))
         })
         .map_err(preview_app_error)?;
+    native.set_reduced_motion(Some(profile.profile.reduced_motion));
     let host = build_host(native);
     Ok(Pipeline::from_harness(Harness::over(platform, host)))
 }

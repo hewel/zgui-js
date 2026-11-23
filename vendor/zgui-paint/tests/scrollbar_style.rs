@@ -76,3 +76,70 @@ fn the_custom_properties_set_the_thumb_and_the_track() {
     );
     assert!(style_of(&harness, "mark").scrollbar.colors.is_none());
 }
+
+#[test]
+fn overlay_scrollbar_paints_after_scrolled_children_and_respects_sideband_visual() {
+    use zgui_dom::NodeKey;
+    use zgui_layout::axis::Axis;
+    use zgui_layout::scroll_region::ScrollbarMode;
+    use zgui_paint::{OverlayBarVisual, OverlayScrollbarSource};
+    use zgui_scene::Paint;
+
+    struct FixedVisual(OverlayBarVisual);
+    impl OverlayScrollbarSource for FixedVisual {
+        fn visual(&self, _container: NodeKey, _axis: Axis) -> Option<OverlayBarVisual> {
+            Some(self.0)
+        }
+    }
+
+    let mut harness = Harness::new(
+        Element::new("root").children(vec![Element::new("scroller").children(vec![
+            Element::new("row"),
+        ])]),
+        "root { --zgui-scrollbar-mode: overlay; display: block; width: 200px; height: 200px }
+         scroller {
+             display: block;
+             width: 200px;
+             height: 100px;
+             overflow-y: auto;
+             background: rgb(255, 255, 255);
+             --zgui-scrollbar-thumb: rgb(255, 0, 0);
+         }
+         row { display: block; width: 200px; height: 300px; background: rgb(0, 0, 255) }",
+    );
+    assert_eq!(
+        style_of(&harness, "scroller").scrollbar.mode,
+        ScrollbarMode::Overlay
+    );
+
+    // 1. Resting overlay bar: container bg -> child row -> red 4px thumb capsule strictly LAST.
+    harness.paint_with_overlay_scrollbars(&FixedVisual(OverlayBarVisual::RESTING));
+    {
+        let scene = harness.scene();
+        assert_eq!(
+            scene.primitives.quads.len(),
+            3,
+            "expected container bg, child row, and overlay thumb (no re-painted container bg on scrollbar strip)",
+        );
+        let child_quad = &scene.primitives.quads[1];
+        let thumb_quad = &scene.primitives.quads[2];
+        assert_eq!(support::unpoisoned(child_quad.bounds), [0.0, 0.0, 200.0, 300.0]);
+        assert_eq!(support::unpoisoned(thumb_quad.bounds)[0], 192.0);
+        assert_eq!(thumb_quad.bounds[2], 4.0);
+        let Some(Paint::Solid(thumb_color)) =
+            scene.paints.get(thumb_quad.fill.id().expect("solid"))
+        else {
+            panic!("expected solid thumb paint");
+        };
+        assert_eq!(thumb_color.to_premultiplied_srgb(), [1.0, 0.0, 0.0, 1.0]);
+    }
+
+    // 2. Hidden overlay bar (`alpha == 0.0`): emits ONLY container bg + child row (0 scrollbar quads),
+    // while replaying the container and child row from cache on the same scene.
+    harness.paint_with_overlay_scrollbars(&FixedVisual(OverlayBarVisual::HIDDEN));
+    assert_eq!(
+        harness.scene().primitives.quads.len(),
+        2,
+        "hidden overlay scrollbar must emit zero quads",
+    );
+}

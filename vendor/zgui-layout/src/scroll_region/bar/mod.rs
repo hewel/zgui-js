@@ -24,7 +24,27 @@ use zgui_geom::{Device, DevicePx, Point, Rect, Size};
 
 use crate::axis::Axis;
 use crate::fragment::{FragmentKind, ScrollbarPart};
+use crate::scroll_region::ScrollbarMode;
 use crate::tree::store::ResolvedLayout;
+
+/// Logical grab-strip breadth of an overlay scrollbar in CSS pixels (`12px * scale`).
+pub const OVERLAY_STRIP_CSS: f32 = 12.0;
+
+/// How a scrollport derives the thickness and placement of its scrollbars.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub enum BarMode {
+    /// Traditional layout-reserving gutter derived from `inner - content_box`.
+    #[default]
+    Classic,
+    /// Zero-gutter floating overlay strip of breadth `strip` (device pixels) placed inside the
+    /// `padding_box` right/bottom edges only on scrollable, overflowing axes.
+    Overlay {
+        /// Grab-strip breadth in device pixels (`OVERLAY_STRIP_CSS * scale`).
+        strip: f32,
+        /// Which axes are allowed to scroll (`overflow: auto | scroll`), as `(horizontal, vertical)`.
+        scrollable: (bool, bool),
+    },
+}
 
 /// One scrollport, as everything about its bars is derived from.
 ///
@@ -43,18 +63,36 @@ pub struct Scrollport {
     pub content: Size<DevicePx, Device>,
     /// How far it has been scrolled, which may be past the end while an edge is displaced.
     pub offset: Point<DevicePx, Device>,
+    /// Whether bars sit in a reserved classic gutter or float in an overlay strip.
+    pub mode: BarMode,
 }
 
 impl Scrollport {
-    /// How thick the bar running along `axis` is, and nothing when that axis reserved no gutter.
+    /// How thick the bar running along `axis` is, and nothing when that axis has no bar.
     ///
-    /// A bar that runs *down* the page is reserved out of the width, so the vertical bar's
-    /// thickness is the width the content lost. This is the one place that has to be the right way
-    /// round, and it is got right here rather than at each caller.
+    /// In classic mode a vertical bar's thickness is the width the content lost; in overlay mode
+    /// it is the decoupled grab-strip breadth (clamped to the padding box) whenever the axis is
+    /// scrollable and actually overflows.
     pub fn thickness(&self, axis: Axis) -> f32 {
-        match axis {
-            Axis::Vertical => self.inner.size.width.0 - self.content_box.size.width.0,
-            Axis::Horizontal => self.inner.size.height.0 - self.content_box.size.height.0,
+        match self.mode {
+            BarMode::Classic => match axis {
+                Axis::Vertical => self.inner.size.width.0 - self.content_box.size.width.0,
+                Axis::Horizontal => self.inner.size.height.0 - self.content_box.size.height.0,
+            },
+            BarMode::Overlay { strip, scrollable } => {
+                let can_scroll = match axis {
+                    Axis::Horizontal => scrollable.0,
+                    Axis::Vertical => scrollable.1,
+                };
+                if !can_scroll || self.reach(axis) <= self.visible(axis) + EPSILON {
+                    return 0.0;
+                }
+                let available = match axis {
+                    Axis::Vertical => self.padding_box.size.width.0,
+                    Axis::Horizontal => self.padding_box.size.height.0,
+                };
+                strip.clamp(0.0, available.max(0.0))
+            }
         }
     }
 
@@ -127,29 +165,64 @@ pub const EPSILON: f32 = 0.75;
 /// A box that reserved no gutter draws nothing, which is every box in a document with nothing to
 /// scroll.
 pub fn kinds(layout: &ResolvedLayout) -> SmallVec<[FragmentKind; 4]> {
+    kinds_for(layout, ScrollbarMode::Classic, (false, false))
+}
+
+/// Which pieces of scrollbar one box draws in `mode`, in the order they are drawn.
+///
+/// In [`ScrollbarMode::Classic`], tracks follow reserved gutters (`layout.scrollbar_size`) and
+/// thumbs appear when the axis overflows. In [`ScrollbarMode::Overlay`], tracks and thumbs are
+/// emitted **only** on scrollable axes that actually overflow (`reach > visible + EPSILON`).
+pub fn kinds_for(
+    layout: &ResolvedLayout,
+    mode: ScrollbarMode,
+    scrollable: (bool, bool),
+) -> SmallVec<[FragmentKind; 4]> {
     let mut kinds = SmallVec::new();
     let content_box = layout.content_box();
     for axis in Axis::BOTH {
-        let thickness = match axis {
-            Axis::Vertical => layout.scrollbar_size.width.0,
-            Axis::Horizontal => layout.scrollbar_size.height.0,
-        };
-        if thickness <= 0.0 {
-            continue;
-        }
-        kinds.push(FragmentKind::Scrollbar {
-            axis,
-            part: ScrollbarPart::Track,
-        });
         let (visible, reach) = match axis {
             Axis::Vertical => (content_box.size.height.0, layout.content_size.height.0),
             Axis::Horizontal => (content_box.size.width.0, layout.content_size.width.0),
         };
-        if reach > visible + EPSILON {
-            kinds.push(FragmentKind::Scrollbar {
-                axis,
-                part: ScrollbarPart::Thumb,
-            });
+        let overflows = reach > visible + EPSILON;
+        match mode {
+            ScrollbarMode::Classic => {
+                let thickness = match axis {
+                    Axis::Vertical => layout.scrollbar_size.width.0,
+                    Axis::Horizontal => layout.scrollbar_size.height.0,
+                };
+                if thickness <= 0.0 {
+                    continue;
+                }
+                kinds.push(FragmentKind::Scrollbar {
+                    axis,
+                    part: ScrollbarPart::Track,
+                });
+                if overflows {
+                    kinds.push(FragmentKind::Scrollbar {
+                        axis,
+                        part: ScrollbarPart::Thumb,
+                    });
+                }
+            }
+            ScrollbarMode::Overlay => {
+                let can_scroll = match axis {
+                    Axis::Horizontal => scrollable.0,
+                    Axis::Vertical => scrollable.1,
+                };
+                if !can_scroll || !overflows {
+                    continue;
+                }
+                kinds.push(FragmentKind::Scrollbar {
+                    axis,
+                    part: ScrollbarPart::Track,
+                });
+                kinds.push(FragmentKind::Scrollbar {
+                    axis,
+                    part: ScrollbarPart::Thumb,
+                });
+            }
         }
     }
     kinds
@@ -188,6 +261,7 @@ mod tests {
             ),
             content: Size::new(DevicePx(185.0), DevicePx(400.0)),
             offset: Point::new(DevicePx(0.0), DevicePx(0.0)),
+            mode: super::BarMode::Classic,
         }
     }
 

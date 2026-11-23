@@ -415,3 +415,244 @@ fn constrained_replaced_element_does_not_leak_natural_size_into_scrollable_overf
     assert!((region.content.width.0 - 1678.0).abs() < 1.0);
     assert!((region.content.height.0 - 1500.0).abs() < 1.0);
 }
+
+#[test]
+fn overlay_scrollbar_reserves_zero_gutter_and_inherits_from_root() {
+    use zgui_layout::scroll_region::ScrollbarMode;
+
+    // Non-overflowing vs overflowing overlay containers keep the exact same content width (zero
+    // gutter), whereas a classic descendant override reserves the classic gutter.
+    let fits = Fixture::new(
+        Element::new("root").children(vec![Element::new("scroller").children(vec![
+            Element::new("child"),
+        ])]),
+        "root { --zgui-scrollbar-mode: overlay; display: block; width: 320px; height: 240px }
+         scroller { display: block; width: 300px; height: 120px; overflow: auto }
+         child { display: block; height: 40px }",
+    );
+    let mut fits_store = fits.box_tree();
+    let mut content = measurer();
+    lay_out(&mut fits_store, &mut content, 320.0, 240.0);
+    let fits_root = fits_store.root().expect("root");
+    let fits_scroller = fits_store.node(fits_root).children[0];
+    let fits_child = fits_store.node(fits_scroller).children[0];
+    assert_eq!(fits_store.scrollbar_mode(fits_scroller), ScrollbarMode::Overlay);
+    let fits_width = fits_store
+        .layout_of(fits_child)
+        .expect("child layout")
+        .size
+        .width
+        .0;
+
+    let overflows = Fixture::new(
+        Element::new("root").children(vec![
+            Element::new("scroller").children(vec![Element::new("child")]),
+            Element::new("classic").children(vec![Element::new("classic_child")]),
+            Element::new("invalid").children(vec![Element::new("invalid_child")]),
+        ]),
+        "root { --zgui-scrollbar-mode: overlay; display: block; width: 320px; height: 600px }
+         scroller { display: block; width: 300px; height: 120px; overflow: auto }
+         child { display: block; height: 400px }
+         classic { --zgui-scrollbar-mode: classic; display: block; width: 300px; height: 120px; overflow: auto }
+         classic_child { display: block; height: 400px }
+         invalid { --zgui-scrollbar-mode: bogus; display: block; width: 300px; height: 120px; overflow: auto }
+         invalid_child { display: block; height: 400px }",
+    );
+    let mut store = overflows.box_tree();
+    let mut content = measurer();
+    lay_out(&mut store, &mut content, 320.0, 600.0);
+    let root = store.root().expect("root");
+    let scroller = store.node(root).children[0];
+    let child = store.node(scroller).children[0];
+    let classic = store.node(root).children[1];
+    let classic_child = store.node(classic).children[0];
+    let invalid = store.node(root).children[2];
+
+    assert_eq!(store.scrollbar_mode(scroller), ScrollbarMode::Overlay);
+    assert_eq!(store.scrollbar_mode(classic), ScrollbarMode::Classic);
+    assert_eq!(store.scrollbar_mode(invalid), ScrollbarMode::Classic);
+
+    let scroller_layout = store.layout_of(scroller).expect("scroller layout");
+    assert_eq!(scroller_layout.scrollbar_size.width.0, 0.0);
+    assert_eq!(scroller_layout.scrollbar_size.height.0, 0.0);
+    assert_eq!(
+        store.layout_of(child).expect("child layout").size.width.0,
+        fits_width,
+        "overlay scrollbar must not narrow content width when overflow turns on",
+    );
+    assert!(
+        store
+            .layout_of(classic_child)
+            .expect("classic child layout")
+            .size
+            .width
+            .0
+            < fits_width,
+        "local --zgui-scrollbar-mode: classic override must still reserve a gutter",
+    );
+}
+
+#[test]
+fn overlay_scrollbar_fragments_emit_only_on_overflowing_axes_and_avoid_corner() {
+    use zgui_layout::axis::Axis;
+    use zgui_layout::fragment::{FragmentKind, ScrollbarPart};
+    use zgui_layout::scroll_region::bar::live;
+
+    // Non-overflowing `overflow: scroll` in overlay mode must emit zero scrollbar fragments.
+    let fits = Fixture::new(
+        Element::new("root").children(vec![Element::new("child")]),
+        "root { --zgui-scrollbar-mode: overlay; display: block; width: 200px; height: 200px; overflow: scroll }
+         child { display: block; width: 100px; height: 100px }",
+    );
+    let mut fits_store = fits.box_tree();
+    let mut content = measurer();
+    lay_out(&mut fits_store, &mut content, 200.0, 200.0);
+    let fits_root = fits_store.root().expect("root");
+    let fits_bars: Vec<_> = fits_store
+        .fragments_of_box(fits_root)
+        .iter()
+        .filter_map(|key| fits_store.fragment(*key))
+        .filter(|frag| matches!(frag.kind, FragmentKind::Scrollbar { .. }))
+        .collect();
+    assert!(
+        fits_bars.is_empty(),
+        "non-overflowing overlay container must emit no scrollbar fragments even with overflow: scroll",
+    );
+
+    // Dual-axis overflowing overlay container emits both axes with 12px logical strips, avoiding
+    // the 12x12 bottom-right corner, and `live::travel_of` / `live::thumb_of` match the fragments.
+    let dual = Fixture::new(
+        Element::new("root").children(vec![Element::new("child")]),
+        "root { --zgui-scrollbar-mode: overlay; display: block; width: 200px; height: 160px; overflow: auto }
+         child { display: block; width: 500px; height: 480px }",
+    );
+    let mut store = dual.box_tree();
+    let mut content = measurer();
+    lay_out(&mut store, &mut content, 200.0, 160.0);
+    let root = store.root().expect("root");
+
+    let mut v_track = None;
+    let mut v_thumb = None;
+    let mut h_track = None;
+    let mut h_thumb = None;
+    for key in store.fragments_of_box(root) {
+        let frag = store.fragment(*key).expect("live");
+        match frag.kind {
+            FragmentKind::Scrollbar {
+                axis: Axis::Vertical,
+                part: ScrollbarPart::Track,
+            } => v_track = Some(frag.border_box),
+            FragmentKind::Scrollbar {
+                axis: Axis::Vertical,
+                part: ScrollbarPart::Thumb,
+            } => v_thumb = Some(frag.border_box),
+            FragmentKind::Scrollbar {
+                axis: Axis::Horizontal,
+                part: ScrollbarPart::Track,
+            } => h_track = Some(frag.border_box),
+            FragmentKind::Scrollbar {
+                axis: Axis::Horizontal,
+                part: ScrollbarPart::Thumb,
+            } => h_thumb = Some(frag.border_box),
+            _ => {}
+        }
+    }
+    let v_track = v_track.expect("vertical overlay track");
+    let v_thumb = v_thumb.expect("vertical overlay thumb");
+    let h_track = h_track.expect("horizontal overlay track");
+    let h_thumb = h_thumb.expect("horizontal overlay thumb");
+
+    assert!((v_track.size.width.0 - 12.0).abs() < 0.01);
+    assert!((v_track.origin.x.0 - 188.0).abs() < 0.01);
+    assert!((v_track.size.height.0 - 148.0).abs() < 0.01);
+
+    assert!((h_track.size.height.0 - 12.0).abs() < 0.01);
+    assert!((h_track.origin.y.0 - 148.0).abs() < 0.01);
+    assert!((h_track.size.width.0 - 188.0).abs() < 0.01);
+
+    // Live travel matches the emitted fragments.
+    let root_node = store.node(root).source.expect("root node");
+    let v_travel = live::travel_of(&store, root_node, Axis::Vertical).expect("vertical travel");
+    let h_travel = live::travel_of(&store, root_node, Axis::Horizontal).expect("horizontal travel");
+    assert!((v_travel.start - v_track.origin.y.0).abs() < 0.01);
+    assert!((v_travel.length - v_track.size.height.0).abs() < 0.01);
+    assert!((v_travel.thumb - v_thumb.size.height.0).abs() < 0.01);
+    assert_eq!(live::thumb_of(&store, root, Axis::Vertical), Some(v_thumb));
+    assert!((h_travel.start - h_track.origin.x.0).abs() < 0.01);
+    assert!((h_travel.length - h_track.size.width.0).abs() < 0.01);
+    assert!((h_travel.thumb - h_thumb.size.width.0).abs() < 0.01);
+    assert_eq!(live::thumb_of(&store, root, Axis::Horizontal), Some(h_thumb));
+}
+
+#[test]
+fn scrollbar_hit_order_sorts_strictly_after_children_on_rebuild_and_incremental_diff() {
+    use zgui_geom::{Device, DevicePx, Point};
+    use zgui_layout::fragment::FragmentKind;
+    use zgui_layout::fragment::diff::Everything;
+
+    let mut fixture = Fixture::new(
+        Element::new("root").children(vec![Element::new("child")]),
+        "root { --zgui-scrollbar-mode: overlay; display: block; width: 200px; height: 100px; overflow: auto }
+         child { display: block; width: 200px; height: 60px }
+         .tall { height: 300px }",
+    );
+    let mut store = fixture.box_tree();
+    let mut content = measurer();
+    let mut frame = lay_out(&mut store, &mut content, 200.0, 100.0);
+    let root = store.root().expect("root");
+    assert!(
+        store
+            .fragments_of_box(root)
+            .iter()
+            .filter_map(|key| store.fragment(*key))
+            .all(|frag| !matches!(frag.kind, FragmentKind::Scrollbar { .. })),
+        "initially non-overflowing"
+    );
+
+    // Toggle child to overflow and run an incremental fragment diff without forcing a full HitIndex
+    // rebuild, verifying the newborn overlay scrollbar sorts strictly above the child.
+    let child_dom = fixture
+        .document
+        .store()
+        .core(fixture.root)
+        .first_child()
+        .expect("child");
+    fixture.edit_and_restyle(|edit| {
+        edit.add_class(child_dom, zgui_interned::ClassName::new("tall"));
+    });
+    let mut store = fixture.box_tree();
+    let mut content = measurer();
+    {
+        let mut tree = zgui_layout::tree::LayoutTree::new(
+            &mut store,
+            &mut content,
+            zgui_layout::DeviceStyle::default(),
+        );
+        assert!(tree.layout_root(cephal::Size {
+            width: 200.0,
+            height: 100.0,
+        }));
+    }
+    let root = store.root().expect("root");
+    support::fragments(&mut frame, &mut store, root, &mut Everything);
+
+    let edge = Point::<DevicePx, Device>::new(DevicePx(194.0), DevicePx(20.0));
+    let hits = frame.hit.hit(edge, &frame.clips, &frame.spatial);
+    assert!(!hits.is_empty(), "edge point must hit scrollbar and child");
+    let topmost = store.fragment(hits[0]).expect("topmost fragment");
+    assert!(
+        matches!(topmost.kind, FragmentKind::Scrollbar { .. }),
+        "topmost hit at the edge after incremental diff must be a Scrollbar fragment, got {:?}",
+        topmost.kind,
+    );
+
+    // A full rebuild must produce the same topmost-scrollbar ordering.
+    frame.hit.rebuild(&mut store, 1.0);
+    let rebuilt_hits = frame.hit.hit(edge, &frame.clips, &frame.spatial);
+    let rebuilt_topmost = store.fragment(rebuilt_hits[0]).expect("rebuilt topmost");
+    assert!(
+        matches!(rebuilt_topmost.kind, FragmentKind::Scrollbar { .. }),
+        "topmost hit at the edge after full HitIndex::rebuild must be a Scrollbar fragment, got {:?}",
+        rebuilt_topmost.kind,
+    );
+}

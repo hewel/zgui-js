@@ -96,7 +96,7 @@ pub use crate::dispatch::{FrameworkDefault, Step};
 pub use crate::drag::{Drag, DragPhase, DragSource, Drags, DropEffect, Dropped};
 pub use crate::focus::{FocusDirection, FocusSource, FocusTrapId, TrapOptions};
 pub use crate::gesture::{Gesture, Gestures};
-pub use crate::hit::{Hit, HitChain};
+pub use crate::hit::{AllScrollbarsInteractive, Hit, HitChain, ScrollbarHitFilter};
 pub use crate::ime::{Ime, Preedit};
 pub use crate::normalize::{HeldModifiers, InputEvent, ScrollUnits};
 pub use crate::router::{Routed, Router, World};

@@ -426,6 +426,22 @@ impl LayoutStore {
         Some(self.styles.style(slot))
     }
 
+    /// The device scale the last layout pass lowered styles at, defaulting to `1.0`.
+    #[must_use]
+    pub fn device_scale(&self) -> f32 {
+        self.styles.device_scale()
+    }
+
+    /// The scrollbar presentation mode of box `key` (inheriting `--zgui-scrollbar-mode`).
+    #[must_use]
+    pub fn scrollbar_mode(&self, key: BoxKey) -> crate::scroll_region::ScrollbarMode {
+        let Some(node) = self.get(key) else {
+            return crate::scroll_region::ScrollbarMode::Classic;
+        };
+        let declared = self.custom_properties(key, &node.style);
+        crate::scroll_region::mode::of_with(&node.style, declared)
+    }
+
     /// Lowers every interned style that owes a lowering for `device`.
     pub(crate) fn ensure_lowered_styles(&mut self, device: crate::style::DeviceStyle) {
         if self.styles.ensure_lowered(device) {

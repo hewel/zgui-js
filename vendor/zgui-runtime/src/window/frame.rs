@@ -554,6 +554,8 @@ impl Window {
         // that is drawn once and then never changes again.
         mark("f.caret");
         self.plan_caret(now);
+        mark("f.overlay_scrollbars");
+        self.plan_overlay_scrollbars(now);
         // After layout and the caret plan, before paint emission: the embed host binds producers
         // to laid-out boxes, attaches whatever they presented, and absorbs the damage the emit
         // walk below is gated on. See the `embed` module for the whole argument.
@@ -831,6 +833,11 @@ impl Window {
         // The next step boundary of the stepped animations, excluded on a hidden or starved
         // surface for the reason the blink is.
         let hold = self.hold_due.filter(|_| !(self.occluded || self.starved));
+        // Hold-expiration deadline for native overlay scrollbars (zero frames during the 800ms
+        // hold period; excluded while hidden or starved).
+        let overlay_bar = (!(self.occluded || self.starved))
+            .then(|| self.overlay_scrollbars.next_deadline())
+            .flatten();
         // A frame being held back owes a moment of its own, and it is the only source that owes one
         // for a frame that has already been asked for. Without it a window whose whole reason to
         // draw is the input it has already queued is held and never woken again.
@@ -848,6 +855,7 @@ impl Window {
             resize,
             blink,
             hold,
+            overlay_bar,
             held,
             retry,
         ]
@@ -954,7 +962,8 @@ impl Window {
     /// marked by both the cheap and the expensive animation paths rather than only by the one that
     /// restyles.
     pub fn is_animating(&self) -> bool {
-        if self.is_scrolling() || self.is_drag_scrolling() {
+        if self.is_scrolling() || self.is_drag_scrolling() || self.overlay_scrollbars.is_animating()
+        {
             return true;
         }
         // An embedded producer that asked to run every refresh is an animation by any measure the
@@ -1653,6 +1662,7 @@ impl Window {
                 spatial: &self.scene.spatial,
                 scale: zgui_geom::Scale::new(self.scale),
                 filter: &filter,
+                scrollbar_filter: &self.overlay_scrollbars,
             };
             self.router.rehit(&world)
         };
@@ -1952,6 +1962,7 @@ impl Window {
                 scrollbars: zgui_paint::emit::scrollbar::paint_for(
                     self.scheme == zgui_style::ColorScheme::Dark,
                 ),
+                overlay_scrollbars: &self.overlay_scrollbars,
                 // A full set means the surface and nothing more. Without the bound, the walk visits
                 // every fragment of the document, also the rows of a long scroll container.
                 surface: Some(zgui_geom::Rect::new(zgui_geom::Point::new(0, 0), viewport)),

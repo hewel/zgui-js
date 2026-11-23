@@ -172,6 +172,9 @@ pub struct Painted {
     /// Those boxes are below the line's own box, so nothing else here moves when one of them is
     /// restyled. Without it, a chip that changes colour replays its old colour.
     pub inline: u64,
+    /// A fingerprint of an overlay scrollbar fragment's transient visual state (alpha and hover
+    /// emphasis), and zero for non-scrollbar and classic scrollbar fragments.
+    pub scrollbar: u64,
 }
 
 /// What one fragment painted last time it was painted.

@@ -6,7 +6,7 @@ use zgui_layout::{HitIndex, LayoutStore};
 use zgui_scene::{ClipTable, SpatialTree};
 use zgui_vocab::UiState;
 
-use crate::hit::HitChain;
+use crate::hit::{HitChain, ScrollbarHitFilter};
 
 /// The document, its geometry, and what it takes to ask questions of both.
 ///
@@ -32,6 +32,8 @@ pub struct World<'a> {
     pub scale: Scale<Css, Device>,
     /// Which changes can affect a computed style, so a state write nothing matches costs nothing.
     pub filter: &'a dyn StyleFilter,
+    /// Decides whether an overlay scrollbar is currently visible and interactive.
+    pub scrollbar_filter: &'a dyn ScrollbarHitFilter,
 }
 
 impl core::fmt::Debug for World<'_> {
@@ -50,13 +52,14 @@ impl World<'_> {
     ///
     /// Empty when the point is over nothing at all.
     pub fn chain_at(&self, point: Point<DevicePx, Device>) -> HitChain {
-        crate::hit::at(
+        crate::hit::at_with_scrollbar_filter(
             self.document.store(),
             self.layout,
             self.hit,
             self.clips,
             self.spatial,
             point,
+            self.scrollbar_filter,
         )
         .map(|hit| hit.chain)
         .unwrap_or_default()
@@ -67,13 +70,14 @@ impl World<'_> {
         &self,
         point: Point<DevicePx, Device>,
     ) -> Option<crate::hit::ScrollbarPress> {
-        crate::hit::scrollbar::at(
+        crate::hit::scrollbar::at_with_filter(
             self.document.store(),
             self.layout,
             self.hit,
             self.clips,
             self.spatial,
             point,
+            self.scrollbar_filter,
         )
     }
 

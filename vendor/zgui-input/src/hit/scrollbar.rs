@@ -8,9 +8,30 @@
 use zgui_dom::{DocumentStore, NodeKey};
 use zgui_geom::{Device, DevicePx, Point};
 use zgui_layout::fragment::ScrollbarPart;
+use zgui_layout::scroll_region::ScrollbarMode;
 use zgui_layout::scroll_region::bar::live;
 use zgui_layout::{Axis, FragmentKind, HitIndex, LayoutStore};
 use zgui_scene::{ClipTable, SpatialTree};
+
+/// Decides whether an overlay scrollbar on `(container, axis)` is currently interactive.
+///
+/// Classic scrollbars are always interactive and are never filtered out. An overlay scrollbar
+/// whose visual opacity has faded to zero (`alpha == 0.0`) returns `false` so presses and hover
+/// pass straight through to the underlying content.
+pub trait ScrollbarHitFilter {
+    /// Returns `true` when the overlay scrollbar on `(container, axis)` may intercept hits.
+    fn is_scrollbar_interactive(&self, container: NodeKey, axis: Axis) -> bool;
+}
+
+/// Default filter that treats every scrollbar as interactive.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct AllScrollbarsInteractive;
+
+impl ScrollbarHitFilter for AllScrollbarsInteractive {
+    fn is_scrollbar_interactive(&self, _container: NodeKey, _axis: Axis) -> bool {
+        true
+    }
+}
 
 /// Where a press on a scrollbar landed.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -64,6 +85,27 @@ pub fn at(
     spatial: &SpatialTree,
     point: Point<DevicePx, Device>,
 ) -> Option<Press> {
+    at_with_filter(
+        document,
+        layout,
+        index,
+        clips,
+        spatial,
+        point,
+        &AllScrollbarsInteractive,
+    )
+}
+
+/// Like [`at`], skipping hidden overlay scrollbars rejected by `filter`.
+pub fn at_with_filter(
+    document: &DocumentStore,
+    layout: &LayoutStore,
+    index: &HitIndex,
+    clips: &ClipTable,
+    spatial: &SpatialTree,
+    point: Point<DevicePx, Device>,
+    filter: &dyn ScrollbarHitFilter,
+) -> Option<Press> {
     for frag in index.hit(point, clips, spatial) {
         let Some(fragment) = layout.fragment(frag) else {
             continue;
@@ -81,6 +123,11 @@ pub fn at(
         let FragmentKind::Scrollbar { axis, part } = fragment.kind else {
             return None;
         };
+        if layout.scrollbar_mode(fragment.box_) == ScrollbarMode::Overlay
+            && !filter.is_scrollbar_interactive(owner, axis)
+        {
+            continue;
+        }
         let local = live::into_bar_space(layout, spatial, fragment.box_, point)?;
         let thumb =
             live::thumb_of(layout, fragment.box_, axis).map(|thumb| along(axis, thumb.origin));

@@ -6,7 +6,7 @@
 //! directions is a thumb that drifts away from the pointer over a long drag.
 
 use crate::axis::Axis;
-use crate::scroll_region::bar::Scrollport;
+use crate::scroll_region::bar::{BarMode, Scrollport};
 
 /// How short a thumb may become, in device pixels.
 ///
@@ -78,7 +78,10 @@ pub fn of(port: &Scrollport, axis: Axis) -> Travel {
     let (start, length) = match axis {
         Axis::Vertical => (
             track.top().0,
-            track.size.height.0 - port.thickness(Axis::Horizontal),
+            match port.mode {
+                BarMode::Classic => track.size.height.0 - port.thickness(Axis::Horizontal),
+                BarMode::Overlay { .. } => track.size.height.0,
+            },
         ),
         Axis::Horizontal => (track.left().0, track.size.width.0),
     };

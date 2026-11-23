@@ -22,6 +22,7 @@ mod asked;
 mod bar;
 mod extent;
 mod frozen;
+pub(crate) mod overlay;
 pub(crate) mod shift;
 
 use zgui_dom::NodeKey;
@@ -126,6 +127,9 @@ impl Window {
         // asked in still has to be one of them, or the wheel does nothing until something else
         // happens to wake the loop. An edge that was let go also needs frames to return.
         self.mark_scrolled(&touched);
+        if travels {
+            self.overlay_scrollbars.note_scrolled(innermost);
+        }
         if travels || returning {
             self.request_scroll_frame();
         }
@@ -464,6 +468,7 @@ impl Window {
             spatial: &self.scene.spatial,
             scale: Scale::new(self.scale),
             filter: &filter,
+            scrollbar_filter: &self.overlay_scrollbars,
         };
         let point = zgui_geom::Point::new(
             zgui_geom::DevicePx(at.x.0 * self.scale),
@@ -540,6 +545,7 @@ impl Window {
         if moved.is_some() && self.scroll.borrow().offset_of(container) != before {
             let mut document = self.document.borrow_mut();
             zgui_scroll::mark::scrolled(&mut document, &[container]);
+            self.overlay_scrollbars.note_scrolled(container);
         }
     }
 
@@ -756,8 +762,49 @@ impl Window {
             let mut document = self.document.borrow_mut();
             zgui_scroll::mark::scrolled(&mut document, containers);
         }
+        for &container in containers {
+            self.overlay_scrollbars.note_scrolled(container);
+        }
         if !self.gate.request() {
             self.request_frame();
+        }
+    }
+
+    /// Advances transient overlay scrollbar visibility, hold timers, fade-out, and hover/drag
+    /// emphasis against `now`, absorbing only the changed scrollbar strip rects into damage
+    /// (zero DOM style, layout, or hit-index invalidation).
+    pub(crate) fn plan_overlay_scrollbars(&mut self, now: web_time::Instant) {
+        let document = self.document.borrow();
+        let layout = self.layout.borrow();
+        let placements = self.host.placements();
+        let pointer = self
+            .router
+            .pointers()
+            .position_of(zgui_vocab::PointerId::MOUSE);
+        let held: Vec<(NodeKey, zgui_layout::Axis)> = self.router.held_scrollbars().collect();
+        let owed = self.overlay_scrollbars.plan(
+            now,
+            document.store(),
+            &layout,
+            &self.hit,
+            &self.scene.clips,
+            &self.scene.spatial,
+            &placements,
+            self.scale,
+            pointer,
+            &held,
+            &self.scrolled_this_frame,
+            self.reduced_motion,
+        );
+        drop(layout);
+        drop(document);
+        for rect in owed {
+            if rect.is_empty() {
+                continue;
+            }
+            let rect = zgui_layout::fragment::diff::pixels(rect);
+            self.damage.absorb(rect);
+            self.damage_after_layout.absorb(rect);
         }
     }
 }

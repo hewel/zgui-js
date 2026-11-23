@@ -536,3 +536,17 @@ Regression gate:
 Regression gate:
 
     bun run test:vendor zgui-input && bun run test:vendor zgui-a11y && cargo test --manifest-path vendor/zgui-runtime/Cargo.toml --test inert --offline && cargo test -p ui-bridge --offline && bun test --isolate tests/preview/inert-retained-exit.test.mjs
+
+## Native overlay scrollbar (`--zgui-scrollbar-mode: overlay`, `#97`)
+
+Adds an inherited CSS custom property `--zgui-scrollbar-mode: classic | overlay` (default `classic`, invalid values fall back to `classic`) that floats auto-hiding capsule scrollbars above scrolled content with zero layout gutter and zero DOM style/layout invalidation:
+
+- `vendor/zgui-layout`: adds `scroll_region::mode` (`SCROLLBAR_MODE`, `ScrollbarMode::{Classic, Overlay}`) using an interned `Property` + `CustomProperties::SCROLLBAR_MODE` bit (same inheritance/lookup pattern as `--zgui-corner-shape`), keys `LayoutKey` on `scrollbar_mode`, passes `scrollbar_width: 0.0` to Taffy and skips classic auto-scroll gutter reservation in `Overlay` mode, decouples `scroll_region::bar` grab geometry (`BarMode::Overlay { strip: 12px * scale, scrollable }`, emitting Track+Thumb only on overflowing axes and avoiding the bottom-right corner on dual-axis overflow, with consistent `live::travel_of`/`live::thumb_of`), and sorts overlay scrollbar fragments strictly after scrolled descendants in `HitIndex::rebuild` and incremental `fragment::diff` (preserving classic pre-child order).
+- `vendor/zgui-style`: translates live `--zgui-scrollbar-mode` changes into `Dirty::RELAYOUT | Dirty::REFRAGMENT | Dirty::REHIT`.
+- `vendor/zgui-paint`: adds `ScrollbarStyle.mode`, `OverlayBarVisual`, `OverlayScrollbarSource`, and `emit::scrollbar::emit_overlay` (`4px` resting / `6px` hovered-or-dragged capsule centred in the `12px` strip with semicircular ends, modest emphasis alpha boost clamped `<= 1.0`, transparent track unless `--zgui-scrollbar-track` is set, and `0` quads when `alpha == 0`), defers overlay `FragmentKind::Scrollbar` painting from `enter()` to `leave()` before closing alpha/group/band, prevents container box decorations from re-painting on `FragmentKind::Scrollbar` fragments, keys `Painted.scrollbar` for targeted replay-cache invalidation, and refuses pixel-shift blitting (`Refusal::Overdrawn`) on overlay scrollers.
+- `vendor/zgui-input`: adds `ScrollbarHitFilter` (`AllScrollbarsInteractive`) to `World`, `hit::scrollbar::at_with_filter`, and `hit::at_with_scrollbar_filter` so faded overlay scrollbars (`alpha == 0`) pass clicks and hover directly through to underlying controls while classic scrollbars stay always interactive, and exposes `Router::held_scrollbars`.
+- `vendor/zgui-runtime` & `crates/zgui-host`: adds `window::scroll::overlay::OverlayScrollbars` keyed by `(NodeKey, Axis)` driven strictly by the deterministic frame clock (`clock.now()`), waking on scroll/hotzone-hover (`16px` right/bottom edge)/drag, holding `800ms` via `scheduled_deadline` (zero frames during hold), fading over `200ms` (or snapping instantaneously with zero fade/emphasis animation frames under `reduced_motion`, propagated from `cx.reduced_motion()`, CLI `--reduced-motion`, and preview profiles), and parking with zero idle wakeups once faded.
+
+Regression gate:
+
+    bun run test:vendor zgui-layout zgui-paint zgui-input zgui-runtime && bun test --isolate tests/preview/overlay-scrollbar.test.mjs

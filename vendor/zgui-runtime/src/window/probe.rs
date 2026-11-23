@@ -63,6 +63,7 @@ impl Window {
             spatial: &self.scene.spatial,
             scale: zgui_geom::Scale::new(self.scale),
             filter: &filter,
+            scrollbar_filter: &self.overlay_scrollbars,
         };
         world.chain_at(point).path().to_vec()
     }

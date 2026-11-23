@@ -9,6 +9,7 @@ Use when styling native nodes, composing UI primitives, rendering custom vectors
 - **Typed inline styles**: pass a `NativeStyle` object to `style={...}` for continuous dynamic values (split sizes, spring transforms, progress widths).
 - **Inline `style` string atomicity**: passing a raw `style="..."` string replaces all inline declarations on that node, including `--*` CSS custom properties. Emit dynamic properties and `--*` variables together in one string, or use a `NativeStyle` object.
 - **Scoped part styles**: scope component part selectors to context-derived data attributes so ancestor selectors do not bleed across nested component roots.
+- **Native overlay scrollbars**: set inherited `--zgui-scrollbar-mode: overlay` on `:root` or any scroll container (override back with `--zgui-scrollbar-mode: classic`; default is `classic`). Overlay scrollbars reserve zero layout gutter, paint above scrolled children only on overflowing axes as an auto-fading `4px` resting / `6px` hovered-or-dragged capsule (`800ms` hold + `200ms` fade, instantaneous under `reduced_motion`, passing clicks through when hidden), and reuse `--zgui-scrollbar-thumb`, `--zgui-scrollbar-track`, and `color-scheme`.
 
 ### Region-local stylesheets
 

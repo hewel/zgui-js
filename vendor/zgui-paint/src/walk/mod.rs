@@ -39,7 +39,9 @@ use zgui_scene::{GroupBoundary, PropertyOwner, Scene};
 use crate::content::vectors::{NoVectorMasks, NoVectors, VectorMaskSource, VectorSource};
 use crate::emit::group::{self, Isolation};
 use crate::emit::highlight::{HighlightSource, NoHighlights};
-use crate::emit::scrollbar::ScrollbarPaint;
+use crate::emit::scrollbar::{
+    NoOverlayScrollbars, OverlayBarVisual, OverlayScrollbarSource, ScrollbarPaint,
+};
 use crate::emit::text::{GlyphPlacementSource, GlyphSource, TextPlacement};
 use crate::emit::{BoxPlacement, NoGlyphs};
 use zgui_dom::NodeKey;
@@ -113,6 +115,8 @@ pub struct PaintInput<'a> {
     pub scale: f32,
     /// How a scrollbar is painted.
     pub scrollbars: ScrollbarPaint,
+    /// Per-axis transient visual state (opacity and hover/drag emphasis) for overlay scrollbars.
+    pub overlay_scrollbars: &'a dyn OverlayScrollbarSource,
     /// Whether to record which fragments were emitted, for the completeness oracle.
     ///
     /// Off by default, because a frame that is not being audited should not pay a push per
@@ -166,6 +170,7 @@ impl<'a> PaintInput<'a> {
             opaque_surface: true,
             scale: 1.0,
             scrollbars: crate::emit::scrollbar::default_paint(),
+            overlay_scrollbars: &NoOverlayScrollbars,
             record_emitted: false,
             verify_replays: zgui_layout::invariants::enabled(),
             placements: None,
@@ -298,6 +303,7 @@ struct WalkScratch {
     alpha: Vec<f32>,
     opaque: Vec<bool>,
     outlines: Vec<Option<(FragKey, PaintStyleRef, Option<OwnedPaints>)>>,
+    scrollbars: Vec<Option<(PaintStyleRef, u64, Option<OwnedPaints>)>>,
     clip_paths: Vec<Option<(std::sync::Arc<crate::lower::ClipPathShape>, Rect<DevicePx, Device>)>>,
     decorations: Decorations,
     text_fills: TextFills,
@@ -314,6 +320,7 @@ impl WalkScratch {
         self.alpha.clear();
         self.opaque.clear();
         self.outlines.clear();
+        self.scrollbars.clear();
         self.clip_paths.clear();
         self.decorations.clear();
         self.text_fills.clear();
@@ -383,6 +390,7 @@ impl Painter {
             alpha: scratch.alpha,
             opaque: scratch.opaque,
             outlines: scratch.outlines,
+            scrollbars: scratch.scrollbars,
             clip_paths: scratch.clip_paths,
             decorations: scratch.decorations,
             text_fills: scratch.text_fills,
@@ -398,6 +406,7 @@ impl Painter {
             alpha,
             opaque,
             outlines,
+            scrollbars,
             clip_paths,
             decorations,
             text_fills,
@@ -412,6 +421,7 @@ impl Painter {
             alpha,
             opaque,
             outlines,
+            scrollbars,
             clip_paths,
             decorations,
             text_fills,
@@ -538,6 +548,9 @@ struct Pass<'a, 'b> {
     /// One entry for each entered box, innermost last: its first fragment, its lowered style and
     /// its owned paints when the box has an outline, or `None`.
     outlines: Vec<Option<(FragKey, PaintStyleRef, Option<OwnedPaints>)>>,
+    /// One entry for each entered box, innermost last: its lowered style, animation signature, and
+    /// owned paints when the box has scrollbar fragments deferred until `leave`, or `None`.
+    scrollbars: Vec<Option<(PaintStyleRef, u64, Option<OwnedPaints>)>>,
     /// One entry for each entered box, innermost last: its CSS `clip-path` shape and border box.
     clip_paths: Vec<Option<(std::sync::Arc<crate::lower::ClipPathShape>, Rect<DevicePx, Device>)>>,
     /// The text decorations contributed by the boxes still on the walk.
@@ -760,7 +773,27 @@ impl Pass<'_, '_> {
             .max(1)
     }
 
+    /// Transient visual state for an overlay scrollbar fragment, or `None` for non-overlay fragments.
+    fn overlay_bar_visual(&self, fragment: &Fragment) -> Option<OverlayBarVisual> {
+        let FragmentKind::Scrollbar { axis, .. } = fragment.kind else {
+            return None;
+        };
+        if self.input.store.scrollbar_mode(fragment.box_)
+            != zgui_layout::scroll_region::ScrollbarMode::Overlay
+        {
+            return None;
+        }
+        let node = fragment.node?;
+        Some(
+            self.input
+                .overlay_scrollbars
+                .visual(node, axis)
+                .unwrap_or(OverlayBarVisual::RESTING),
+        )
+    }
+
     /// Everything one fragment needs in order to be emitted.
+    #[allow(clippy::too_many_arguments)]
     fn emission<'e>(
         &self,
         fragment: &Fragment,
@@ -769,6 +802,7 @@ impl Pass<'_, '_> {
         text_fill: Option<&'e crate::lower::background::GradientSpec>,
         inline: &'e [crate::emit::inline::InlinePaint],
         clip_path: Option<(&'e crate::lower::ClipPathShape, Rect<DevicePx, Device>)>,
+        overlay_bar: Option<OverlayBarVisual>,
     ) -> Emission<'e>
     where
         Self: 'e,
@@ -813,6 +847,7 @@ impl Pass<'_, '_> {
             custom_reference: self.input.store.custom_reference(fragment.box_),
             scale: self.input.scale,
             scrollbars: self.input.scrollbars,
+            overlay_bar,
             clip_path,
         }
     }
@@ -1024,6 +1059,7 @@ impl Pass<'_, '_> {
         let slices = inline_slices(store, fragment);
         let decorations = self.decorations.faded(self.alpha());
         let text_fill = self.text_fills.in_force().cloned();
+        let overlay_bar = self.overlay_bar_visual(fragment);
         let painted = Painted {
             style: style_ref,
             clip,
@@ -1075,6 +1111,7 @@ impl Pass<'_, '_> {
             )),
             highlights: self.highlight_signature(fragment),
             inline: self.inline_signature(slices),
+            scrollbar: overlay_bar.map_or(0, OverlayBarVisual::signature),
         };
         let phase = self.layer_phase(fragment, transform);
         // A record drawing tiles replays only while their source stands: a source the layer cache
@@ -1122,6 +1159,7 @@ impl Pass<'_, '_> {
                     text_fill.as_ref(),
                     &inline,
                     clip_path.as_ref().map(|(shape, rect)| (shape.as_ref(), *rect)),
+                    overlay_bar,
                 );
                 emission.box_placement.owned =
                     owned.map(|owned| (PropertyOwner::of(fragment.box_), owned));
@@ -1341,6 +1379,19 @@ impl stacking::Visitor for Pass<'_, '_> {
                 .filter(|_| style.outline.is_some())
                 .map(|frag| (frag, style_ref, owned)),
         );
+        // Defer overlay scrollbar fragments until `leave`, so floating thumbs paint above scrolled
+        // descendants while staying inside the container's own alpha, clip-path, group, and place
+        // band. Classic scrollbars keep their existing pre-child paint order.
+        let defer_bars =
+            store.scrollbar_mode(key) == zgui_layout::scroll_region::ScrollbarMode::Overlay;
+        let has_scrollbars = defer_bars
+            && fragments.iter().any(|&frag| {
+                store.fragment(frag).is_some_and(|fragment| {
+                    matches!(fragment.kind, FragmentKind::Scrollbar { .. })
+                })
+            });
+        self.scrollbars
+            .push(has_scrollbars.then_some((style_ref, anim, owned)));
         self.clip_paths.push(own.and_then(|frag| {
             style
                 .clip_path
@@ -1356,12 +1407,31 @@ impl stacking::Visitor for Pass<'_, '_> {
         self.text_fills.enter(&node.style, style.text_fill.as_ref());
 
         for &frag in store.fragments_of_box(key) {
+            if defer_bars
+                && store.fragment(frag).is_some_and(|fragment| {
+                    matches!(fragment.kind, FragmentKind::Scrollbar { .. })
+                })
+            {
+                continue;
+            }
             self.paint(frag, style_ref, anim, owned);
         }
         true
     }
 
     fn leave(&mut self, store: &LayoutStore, key: BoxKey) {
+        // Scrollbars paint after the box's descendants so overlay thumbs float cleanly over
+        // scrolled content, while still inheriting the box's alpha, group target, and place band.
+        if let Some((style_ref, anim, owned)) = self.scrollbars.pop().flatten() {
+            for &frag in store.fragments_of_box(key) {
+                if store
+                    .fragment(frag)
+                    .is_some_and(|fragment| matches!(fragment.kind, FragmentKind::Scrollbar { .. }))
+                {
+                    self.paint(frag, style_ref, anim, owned);
+                }
+            }
+        }
         // The outline is drawn after the box's descendants, which is Appendix E's step ten.
         if let Some((frag, style_ref, owned)) = self.outlines.pop().flatten()
             && let Some(fragment) = store.fragment(frag)
@@ -1377,7 +1447,7 @@ impl stacking::Visitor for Pass<'_, '_> {
                 }
                 None => Cow::Borrowed(entry),
             };
-            let mut emission = self.emission(fragment, &style, &[], None, &[], None);
+            let mut emission = self.emission(fragment, &style, &[], None, &[], None, None);
             emission.box_placement.owned = owned.map(|owned| (PropertyOwner::of(key), owned));
             self.report.primitives += order::outline(self.scene, &emission);
         }

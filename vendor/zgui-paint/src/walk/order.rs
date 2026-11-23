@@ -20,7 +20,7 @@ use crate::content::vectors::{Placement as DrawingPlacement, VectorSource};
 use crate::emit::box_::{self, BoxPlacement};
 use crate::emit::highlight::{self, HighlightLayer, HighlightRequest, HighlightSource};
 use crate::emit::replaced::{ReplacedPlacement, Source};
-use crate::emit::scrollbar::{self, ScrollbarPaint};
+use crate::emit::scrollbar::{self, OverlayBarVisual, ScrollbarPaint};
 use crate::emit::text::{self, GlyphSource, TextPlacement};
 use crate::emit::vector::{self, VectorPlacement};
 use crate::lower::PaintStyle;
@@ -122,6 +122,8 @@ pub struct Emission<'a> {
     pub scale: f32,
     /// How a scrollbar is painted.
     pub scrollbars: ScrollbarPaint,
+    /// Transient overlay scrollbar visual state for `FragmentKind::Scrollbar` in overlay mode.
+    pub overlay_bar: Option<OverlayBarVisual>,
     /// Active CSS `clip-path` shape and its reference border box (own or nearest ancestor).
     pub clip_path: Option<(
         &'a crate::lower::ClipPathShape,
@@ -164,7 +166,10 @@ pub(crate) fn fragment_tracked(
         Some((_, owned)) if owned.forces_box() => style.visible,
         _ => !style.paints_nothing(),
     };
-    if draws && !emission.nested_inline {
+    if draws
+        && !emission.nested_inline
+        && !matches!(fragment.kind, FragmentKind::Scrollbar { .. })
+    {
         pushed += box_::outer_shadows(scene, &style, emission.box_placement);
         if let Some((clip_shape, ref_box)) = emission.clip_path {
             pushed += box_::clipped_background(
@@ -395,14 +400,31 @@ fn content_tracked(
             routes = painter.vector_routes;
             painter.pushed
         }
-        FragmentKind::Scrollbar { part, .. } => scrollbar::emit(
-            scene,
-            part,
-            fragment.border_box,
-            scrollbar::resolve(emission.scrollbars, &style.scrollbar),
-            emission.box_placement.clip,
-            emission.box_placement.transform,
-        ),
+        FragmentKind::Scrollbar { axis, part } => {
+            let resolved = scrollbar::resolve(emission.scrollbars, &style.scrollbar);
+            match style.scrollbar.mode {
+                zgui_layout::scroll_region::ScrollbarMode::Classic => scrollbar::emit(
+                    scene,
+                    part,
+                    fragment.border_box,
+                    resolved,
+                    emission.box_placement.clip,
+                    emission.box_placement.transform,
+                ),
+                zgui_layout::scroll_region::ScrollbarMode::Overlay => scrollbar::emit_overlay(
+                    scene,
+                    axis,
+                    part,
+                    fragment.border_box,
+                    resolved,
+                    emission.overlay_bar.unwrap_or(OverlayBarVisual::RESTING),
+                    emission.scale,
+                    emission.alpha,
+                    emission.box_placement.clip,
+                    emission.box_placement.transform,
+                ),
+            }
+        }
     };
     FragmentEmission {
         pushed,

@@ -15,6 +15,7 @@ use zgui_css::parity::Support;
 use zgui_css::values::color::ColorSchemeFlags;
 use zgui_css::values::custom;
 use zgui_css::{ComputedStyle, register_properties};
+use zgui_layout::scroll_region::{ScrollbarMode, mode};
 
 register_properties! {
     color_scheme => Support::Implemented("zgui-paint::lower::scrollbar"),
@@ -53,6 +54,8 @@ pub struct ScrollbarColors {
 /// because they are almost always absent and a lowering is cloned per fragment.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ScrollbarStyle {
+    /// Whether the bars reserve a classic gutter or float as overlays over the content.
+    pub mode: ScrollbarMode,
     /// Which default paint the bars start from.
     pub scheme: ScrollbarScheme,
     /// The colours that replace the default ones, when a style sheet set any.
@@ -67,6 +70,7 @@ pub fn of(style: &ComputedStyle) -> ScrollbarStyle {
     let thumb = custom::color(style, THUMB);
     let track = custom::color(style, TRACK);
     ScrollbarStyle {
+        mode: mode::of(style),
         scheme: scheme_of(style.get_inherited_ui().color_scheme.bits),
         colors: (thumb.is_some() || track.is_some())
             .then(|| Arc::new(ScrollbarColors { thumb, track })),

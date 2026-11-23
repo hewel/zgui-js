@@ -97,6 +97,7 @@ pub use crate::measure::{
 };
 pub use crate::node::box_node::BoxNode;
 pub use crate::node::kind::{BoxKind, FormattingContext, PseudoKind};
+pub use crate::scroll_region::ScrollbarMode;
 pub use crate::style::DeviceStyle;
 pub use crate::text::Paragraphs;
 pub use crate::tree::LayoutTree;

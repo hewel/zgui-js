@@ -59,6 +59,11 @@ impl Bars {
             .copied()
     }
 
+    /// Every `(container, axis)` scrollbar currently held by any pointer.
+    pub(crate) fn held_bars(&self) -> impl Iterator<Item = (NodeKey, Axis)> + '_ {
+        self.held.iter().map(|held| (held.container, held.axis))
+    }
+
     /// Records what a press on `press` began, and answers what the press itself asks for.
     pub(crate) fn press(
         &mut self,

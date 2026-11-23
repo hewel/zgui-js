@@ -294,14 +294,20 @@ impl Harness {
 
     /// Emits a frame against the damage the fragment pass accumulated.
     pub(crate) fn paint(&mut self) -> zgui_paint::PaintReport {
+        self.paint_with_overlay_scrollbars(&zgui_paint::NoOverlayScrollbars)
+    }
+
+    /// Emits a frame with a custom overlay scrollbar visual source.
+    pub(crate) fn paint_with_overlay_scrollbars(
+        &mut self,
+        overlay_scrollbars: &dyn zgui_paint::OverlayScrollbarSource,
+    ) -> zgui_paint::PaintReport {
         self.scene.begin_frame(self.viewport);
-        // Recorded in every profile. The tests below compare what was emitted against what the
-        // damage reaches, so a recording that only happened in one profile would leave the other
-        // asserting nothing at all.
         let placements = zgui_scene::Placements::of(&self.scene.spatial);
         let mut input = PaintInput::new(&self.store, &self.damage);
         input.record_emitted = true;
         input.placements = Some(&placements);
+        input.overlay_scrollbars = overlay_scrollbars;
         let report = self.painter.emit(&input, &mut self.scene);
         self.scene.finish(&self.damage);
         report

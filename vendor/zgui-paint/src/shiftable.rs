@@ -71,6 +71,11 @@ pub fn port_may_be_shifted(
     if scroll_region::region_of(store, box_key).is_none() {
         return Err(Refusal::NotAScroller);
     }
+    // An overlay scrollbar paints its floating capsule inside the scrollport over the scrolled
+    // content, so blitting the port's pixels would smear the floating thumb.
+    if store.scrollbar_mode(box_key) == scroll_region::ScrollbarMode::Overlay {
+        return Err(Refusal::Overdrawn);
+    }
     let Some(port) = scrollport_of(store, box_key) else {
         return Err(Refusal::NotAScroller);
     };

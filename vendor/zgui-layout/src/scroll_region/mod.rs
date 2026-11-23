@@ -9,6 +9,9 @@ pub mod auto;
 pub mod bar;
 pub mod gutter;
 pub mod into_view;
+pub mod mode;
+
+pub use crate::scroll_region::mode::{SCROLLBAR_MODE, ScrollbarMode};
 
 use rustc_hash::FxHashMap;
 use zgui_css::ComputedStyle;
@@ -44,6 +47,13 @@ pub fn scrolls_by_code_only(style: &ComputedStyle) -> bool {
 /// Whether one axis's value makes a box scrollable.
 fn scrolls(value: OverflowValue) -> bool {
     matches!(value, OverflowValue::Auto | OverflowValue::Scroll)
+}
+
+/// Which axes of `style` allow user scrolling (`overflow: auto | scroll`), as `(horizontal, vertical)`.
+#[must_use]
+pub fn scrollable_axes(style: &ComputedStyle) -> (bool, bool) {
+    let box_ = style.get_box();
+    (scrolls(box_.overflow_x), scrolls(box_.overflow_y))
 }
 
 /// One scrollable region, as layout resolved it.

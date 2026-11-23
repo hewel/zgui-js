@@ -55,6 +55,7 @@ fn painted(style: u32) -> crate::walk::replay::Painted {
         corners: 0,
         highlights: 0,
         inline: 0,
+        scrollbar: 0,
     }
 }
 

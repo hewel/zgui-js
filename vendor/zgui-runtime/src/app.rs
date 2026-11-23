@@ -574,6 +574,8 @@ pub struct Runtime {
     layout_pool: Option<std::sync::Arc<zgui_layout::tree::parallel::LayoutPool>>,
     /// How every window antialiases its text.
     text_antialiasing: crate::TextAntialiasing,
+    /// Optional explicit reduced-motion override; when `None`, windows follow `cx.reduced_motion()`.
+    reduced_motion_override: Option<bool>,
 }
 
 /// The cascade's worker pool, started on first use.
@@ -757,8 +759,20 @@ impl Runtime {
             style_pool,
             layout_pool,
             text_antialiasing,
+            reduced_motion_override: None,
             parked: Vec::new(),
             failure: Failure::default(),
+        }
+    }
+
+    /// Sets an explicit reduced-motion override for all open and future windows (`None` follows
+    /// the platform preference).
+    pub fn set_reduced_motion(&mut self, reduced: Option<bool>) {
+        self.reduced_motion_override = reduced;
+        if let Some(effective) = reduced {
+            for window in &mut self.windows {
+                window.set_reduced_motion(effective);
+            }
         }
     }
 
@@ -1335,6 +1349,11 @@ impl Runtime {
         if let Some(scheme) = cx.color_scheme() {
             window.set_platform_color_scheme(scheme);
         }
+        let reduced_motion = self
+            .reduced_motion_override
+            .or_else(|| cx.reduced_motion())
+            .unwrap_or(false);
+        window.set_reduced_motion(reduced_motion);
         // What a detent of a wheel means here, asked of the backend rather than assumed: how far
         // one travels and which way it points are both properties of the desktop, and a constant
         // above this line is a wheel that is wrong on every machine but the one it was written on.
@@ -1896,9 +1915,13 @@ impl AppHandler for Runtime {
             // re-matches nothing.
             WakeReason::ColorSchemeChanged => {
                 let scheme = cx.color_scheme();
+                let reduced = self.reduced_motion_override.or_else(|| cx.reduced_motion());
                 for window in &mut self.windows {
                     if let Some(scheme) = scheme {
                         window.set_platform_color_scheme(scheme);
+                    }
+                    if let Some(reduced) = reduced {
+                        window.set_reduced_motion(reduced);
                     }
                     window.request_frame();
                 }

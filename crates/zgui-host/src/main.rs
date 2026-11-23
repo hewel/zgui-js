@@ -775,7 +775,10 @@ fn main() -> Result<(), Box<dyn Error>> {
             .without_primary_window()
             .with_exit_policy(zgui::runtime::ExitPolicy::Explicit);
     }
-    let native = app.into_handler(move || Root(roots.clone()))?.into_runtime();
+    let mut native = app.into_handler(move || Root(roots.clone()))?.into_runtime();
+    if reduced_motion {
+        native.set_reduced_motion(Some(true));
+    }
     let fonts = pure_shell.then(|| native.scope().with(zgui::reactive::use_context::<zgui::app::Fonts>)
         .expect("the native application provides a font collection"));
     let native_failure = native.failure();

@@ -36,10 +36,11 @@ struct LayoutKey {
     border: usize,
     inherited_box: usize,
     text_align: u8,
+    scrollbar_mode: crate::scroll_region::ScrollbarMode,
 }
 
 impl LayoutKey {
-    fn of(style: &ComputedStyle) -> Self {
+    fn of(style: &ComputedStyle, declared: CustomProperties) -> Self {
         fn address<T>(group: &T) -> usize {
             ::core::ptr::from_ref(group) as usize
         }
@@ -51,6 +52,7 @@ impl LayoutKey {
             border: address(style.get_border()),
             inherited_box: address(style.get_inherited_box()),
             text_align: style.get_inherited_text().text_align as u8,
+            scrollbar_mode: crate::scroll_region::mode::of_with(style, declared),
         }
     }
 }
@@ -127,12 +129,13 @@ impl StyleTable {
             entry.refs += 1;
             return StyleSlot(index);
         }
+        let declared = CustomProperties::of(style);
         let entry = StyleEntry {
             style: style.clone(),
             refs: 1,
             lowered: None,
-            key: LayoutKey::of(style),
-            declared: CustomProperties::of(style),
+            key: LayoutKey::of(style, declared),
+            declared,
         };
         let index = match self.free.pop() {
             Some(index) => {
@@ -187,6 +190,11 @@ impl StyleTable {
         for id in lowering.calc_ids {
             calc.release(id);
         }
+    }
+
+    /// The device scale the held lowerings were lowered for, defaulting to `1.0`.
+    pub(crate) fn device_scale(&self) -> f32 {
+        self.lowered_for.map_or(1.0, |device| device.scale)
     }
 
     /// Lowers every style that owes a lowering for `device`.

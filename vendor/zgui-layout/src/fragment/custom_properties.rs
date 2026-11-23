@@ -27,6 +27,7 @@ impl CustomProperties {
     const FILTER: u8 = 1 << 2;
     const BACKDROP_FILTER: u8 = 1 << 3;
     const CORNER_SHAPE: u8 = 1 << 4;
+    const SCROLLBAR_MODE: u8 = 1 << 5;
     const EFFECTS: u8 = Self::SHADER | Self::SHAPE | Self::FILTER | Self::BACKDROP_FILTER;
 
     /// The properties `style` declares.
@@ -40,6 +41,10 @@ impl CustomProperties {
             (
                 &crate::fragment::corner::CORNER_SHAPE_PROPERTY,
                 Self::CORNER_SHAPE,
+            ),
+            (
+                &crate::scroll_region::mode::SCROLLBAR_MODE_PROPERTY,
+                Self::SCROLLBAR_MODE,
             ),
         ] {
             if property.is_declared(style) {
@@ -62,6 +67,11 @@ impl CustomProperties {
     /// Whether `--zgui-corner-shape` is possibly declared.
     pub const fn corner_shape(self) -> bool {
         self.0 & Self::CORNER_SHAPE != 0
+    }
+
+    /// Whether `--zgui-scrollbar-mode` is possibly declared.
+    pub const fn scrollbar_mode(self) -> bool {
+        self.0 & Self::SCROLLBAR_MODE != 0
     }
 
     /// Whether any of the
