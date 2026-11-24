@@ -108,6 +108,30 @@ impl<A: AppHandler> WaylandApp<A> {
         &self.handler
     }
 
+    /// Mutable access to the application before or after [`Self::run`].
+    pub const fn handler_mut(&mut self) -> &mut A {
+        &mut self.handler
+    }
+
+    /// Returns a live lookup closure resolving any open surface's underlying `wl_surface`.
+    ///
+    /// Allows protocol tests to attach real `wl_shm` buffers alongside
+    /// [`Surface::pre_present_frame`](zgui_platform::Surface::pre_present_frame) without a GPU
+    /// swapchain.
+    pub fn wl_surface_lookup(
+        &self,
+    ) -> impl Fn(zgui_platform::SurfaceId) -> Option<wayland_client::protocol::wl_surface::WlSurface>
+           + 'static {
+        let surfaces = std::rc::Rc::clone(&self.state.live.surfaces);
+        move |id| {
+            surfaces
+                .borrow()
+                .iter()
+                .find(|surface| zgui_platform::Surface::id(surface.as_ref()) == id)
+                .map(|surface| surface.wl_surface().clone())
+        }
+    }
+
     /// How the loop is parked, and how many deadline arrivals it has reported.
     pub const fn park(&self) -> &Park {
         &self.park

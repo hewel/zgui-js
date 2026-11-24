@@ -253,6 +253,25 @@ impl Window {
     pub fn present_held(&mut self, clock: &dyn Clock) {
         let now = clock.now();
         let outcome = self.renderer.present_held();
+        match outcome {
+            FrameOutcome::Presented(_) => {
+                self.surface.finalize_presented_blur();
+                if let Some(held) = self.blur.held.take() {
+                    self.blur.last_applied = held.resolved;
+                    if !held.bootstrap {
+                        self.blur.applied_version = held.version;
+                        self.blur.stale = false;
+                    }
+                }
+            }
+            _ => {
+                self.surface.rollback_unpresented_blur();
+                self.blur.held = None;
+                if self.blur.slot.version() != self.blur.applied_version {
+                    self.blur.stale = true;
+                }
+            }
+        }
         zgui_profile::latency::note_with("f.present_held", || format!("{outcome:?}"));
         self.settle_retry(outcome, now);
         self.show_first_frame(outcome);
@@ -675,8 +694,12 @@ impl Window {
         // this window still owes a frame for something written from over there.
         self.serviced_document();
         let owed = self.gate.end_frame();
-        let needs_another_frame =
-            owed || changed_during || flush.needs_another_frame || drained || observed;
+        let needs_another_frame = owed
+            || changed_during
+            || flush.needs_another_frame
+            || drained
+            || observed
+            || self.blur.updated_since_snapshot();
 
         // The renderer's own answer is a source too, and it is the only one that speaks for the
         // frame *after* the work was submitted. An acquisition that timed out, one against a surface
@@ -1759,16 +1782,63 @@ impl Window {
 
     fn paint_and_draw(&mut self, suppress_first_paint: bool) -> FrameOutcome {
         use zgui_profile::latency::mark;
+        let (blur_registration, blur_version) = self.blur.slot.snapshot();
+        self.blur.snapshot_version = blur_version;
         let vector_before = self.renderer.vector_status();
         let size = self.surface.size();
         let viewport = Size::new(size.width.0 as i32, size.height.0 as i32);
         if suppress_first_paint {
             if self.occluded || self.starved {
+                self.surface.clear_staged_blur_region();
+                self.blur.held = None;
+                if blur_version != self.blur.applied_version
+                    || !matches!(
+                        blur_registration,
+                        crate::window::blur::BlurRegistration::None
+                    )
+                {
+                    self.blur.stale = true;
+                }
                 return FrameOutcome::Skipped(SkipReason::Occluded);
             }
             self.scene.begin_frame(viewport);
             self.scene.finish(&DamageSet::full());
-            return self.renderer.draw(&self.scene, &DamageSet::full());
+            if self.blur.last_applied != crate::window::blur::ResolvedBlur::None {
+                self.surface
+                    .stage_blur_region_for_present(zgui_platform::BlurRegion::None);
+            } else {
+                self.surface.clear_staged_blur_region();
+            }
+            let outcome = self.renderer.draw(&self.scene, &DamageSet::full());
+            match outcome {
+                FrameOutcome::Presented(_) => {
+                    self.surface.finalize_presented_blur();
+                    self.blur.last_applied = crate::window::blur::ResolvedBlur::None;
+                    self.blur.held = None;
+                }
+                FrameOutcome::Skipped(SkipReason::Held) => {
+                    self.blur.held = Some(crate::window::blur::HeldBlur {
+                        resolved: crate::window::blur::ResolvedBlur::None,
+                        version: self.blur.applied_version,
+                        bootstrap: true,
+                    });
+                }
+                _ => {
+                    self.surface.rollback_unpresented_blur();
+                    self.blur.held = None;
+                }
+            }
+            // Keep registered intent pending so the post-reposition visible frame resolves and
+            // applies the real blur mask once configured.
+            if blur_version != self.blur.applied_version
+                || !matches!(
+                    blur_registration,
+                    crate::window::blur::BlurRegistration::None
+                )
+            {
+                self.blur.stale = true;
+            }
+            return outcome;
         }
         // A built rasteriser takes a shape the mask route declines at no setup cost, so the mask
         // route may decline a shape that changes every frame. A cold one would be built by it.
@@ -2108,7 +2178,46 @@ impl Window {
             // fired and a sleeping task resumed behind a minimised window. A starved surface takes
             // the same door for the same reason — its acquisition would block the loop for up to a
             // second, and the probe is the one frame allowed to pay that.
+            self.surface.clear_staged_blur_region();
+            self.blur.held = None;
+            if blur_version != self.blur.applied_version
+                || matches!(
+                    blur_registration,
+                    crate::window::blur::BlurRegistration::Nodes { .. }
+                )
+            {
+                self.blur.stale = true;
+            }
             return FrameOutcome::Skipped(SkipReason::Occluded);
+        }
+        let blur_candidate = {
+            let logical = self
+                .surface
+                .logical_extent_for(viewport, f64::from(self.scale));
+            let mapping = zgui_layout::BlurSurfaceMapping {
+                source: Size::new(
+                    DevicePx(viewport.width as f32),
+                    DevicePx(viewport.height as f32),
+                ),
+                destination: logical,
+            };
+            let layout = self.layout.borrow();
+            let document = self.document.borrow();
+            crate::window::blur::resolve_registration(
+                &blur_registration,
+                &layout,
+                &document,
+                &self.scene.clips,
+                &self.scene.spatial,
+                mapping,
+                self.scale,
+            )
+        };
+        if blur_candidate != self.blur.last_applied {
+            self.surface
+                .stage_blur_region_for_present(blur_candidate.as_platform());
+        } else {
+            self.surface.clear_staged_blur_region();
         }
         zgui_profile::latency::note_with("p.draw", || {
             format!("{}x{}", viewport.width, viewport.height)
@@ -2120,6 +2229,43 @@ impl Window {
             self.renderer.shift_composed(shift);
         }
         let outcome = self.renderer.draw(&self.scene, &self.damage);
+        match outcome {
+            FrameOutcome::Presented(_) => {
+                self.surface.finalize_presented_blur();
+                self.blur.last_applied = blur_candidate;
+                self.blur.applied_version = blur_version;
+                self.blur.held = None;
+                self.blur.stale = false;
+            }
+            FrameOutcome::Skipped(SkipReason::Held) => {
+                self.blur.held = Some(crate::window::blur::HeldBlur {
+                    resolved: blur_candidate,
+                    version: blur_version,
+                    bootstrap: false,
+                });
+                self.blur.stale = true;
+            }
+            FrameOutcome::Skipped(SkipReason::Undamaged) => {
+                self.surface.clear_staged_blur_region();
+                if blur_candidate != self.blur.last_applied {
+                    self.surface
+                        .apply_idle_blur_region(blur_candidate.as_platform());
+                    self.blur.last_applied = blur_candidate;
+                }
+                self.blur.applied_version = blur_version;
+                self.blur.held = None;
+                self.blur.stale = false;
+            }
+            _ => {
+                self.surface.rollback_unpresented_blur();
+                self.blur.held = None;
+                if blur_candidate != self.blur.last_applied
+                    || blur_version != self.blur.applied_version
+                {
+                    self.blur.stale = true;
+                }
+            }
+        }
         let vector_after = self.renderer.vector_status();
         if !vector_before.initialized && vector_after.initialized {
             // Once per renderer: the build is the costliest single step a frame can take, so the

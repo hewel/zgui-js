@@ -679,3 +679,364 @@ test("getBackgroundBlurSupported defaults false, honors profile backgroundBlur, 
     assert.equal(withdrawnFrame.blurRegion, "none");
   }
 });
+
+test("native node blurRegion resolves rounded/superellipse corners, minOpacity, clips, slide-off, idle switch, mode transitions, and 0.5x odd logical width", async () => {
+  const nativeBundle = await buildFixtureApp(
+    path.join(temp.dir, "app-native-node-blur"),
+    "native-node-blur",
+    `
+    import {
+      Button,
+      LayerSurface,
+      WindowSurface,
+      createSignal,
+      mountShellStylesheet,
+      renderApp,
+    } from "@hewel/zgui";
+    import type { BlurRegion, NativeNode } from "@hewel/zgui";
+
+    export const hostApiVersion = 1;
+
+    export function mount(root: NativeNode) {
+      return renderApp(() => {
+        mountShellStylesheet("reset", ":root { padding: 0; background-color: transparent; }");
+        const [mode, setMode] = createSignal<
+          | "squircle"
+          | "min08"
+          | "min00"
+          | "zeroOp"
+          | "roundedClip"
+          | "clipPath"
+          | "slidOff"
+          | "slidBack"
+          | "idleB"
+          | "fixed"
+          | "full"
+          | "none"
+        >("squircle");
+        const [cardOpacity, setCardOpacity] = createSignal(0.6);
+        const [slidOff, setSlidOff] = createSignal(false);
+        const [halfWidth, setHalfWidth] = createSignal(101);
+
+        const [squircleNode, setSquircleNode] = createSignal<NativeNode | null>(null);
+        const [cardBNode, setCardBNode] = createSignal<NativeNode | null>(null);
+        const [clippedChildNode, setClippedChildNode] = createSignal<NativeNode | null>(null);
+        const [clipPathChildNode, setClipPathChildNode] = createSignal<NativeNode | null>(null);
+        const [sliderNode, setSliderNode] = createSignal<NativeNode | null>(null);
+        const [halfNode, setHalfNode] = createSignal<NativeNode | null>(null);
+
+        const resolveBlur = (): BlurRegion | undefined => {
+          switch (mode()) {
+            case "squircle": {
+              const n = squircleNode();
+              return n ? [n] : [];
+            }
+            case "min08": {
+              const n = squircleNode();
+              return n ? { nodes: [n], minOpacity: 0.8 } : [];
+            }
+            case "min00":
+            case "zeroOp": {
+              const n = squircleNode();
+              return n ? { nodes: [n], minOpacity: 0 } : [];
+            }
+            case "roundedClip": {
+              const n = clippedChildNode();
+              return n ? [n] : [];
+            }
+            case "clipPath": {
+              const n = clipPathChildNode();
+              return n ? [n] : [];
+            }
+            case "slidOff":
+            case "slidBack": {
+              const n = sliderNode();
+              return n ? [n] : [];
+            }
+            case "idleB": {
+              const n = cardBNode();
+              return n ? [n] : [];
+            }
+            case "fixed":
+              return [{ x: 10, y: 12, width: 70, height: 30 }];
+            case "full":
+              return "full";
+            case "none":
+              return "none";
+          }
+        };
+
+        return (
+          <column style={{ width: "320px", height: "220px", backgroundColor: "transparent" }}>
+            <row>
+              <Button testId="m-min08" onClick={() => setMode("min08")}>08</Button>
+              <Button testId="m-min00" onClick={() => setMode("min00")}>00</Button>
+              <Button
+                testId="m-zero-op"
+                onClick={() => {
+                  setCardOpacity(0);
+                  setMode("zeroOp");
+                }}
+              >
+                Z0
+              </Button>
+              <Button testId="m-rclip" onClick={() => setMode("roundedClip")}>RC</Button>
+              <Button testId="m-cpath" onClick={() => setMode("clipPath")}>CP</Button>
+            </row>
+            <row>
+              <Button
+                testId="m-slide-off"
+                onClick={() => {
+                  setSlidOff(true);
+                  setMode("slidOff");
+                }}
+              >
+                SO
+              </Button>
+              <Button
+                testId="m-slide-back"
+                onClick={() => {
+                  setSlidOff(false);
+                  setMode("slidBack");
+                }}
+              >
+                SB
+              </Button>
+              <Button testId="m-idle-b" onClick={() => setMode("idleB")}>IB</Button>
+              <Button testId="m-fixed" onClick={() => setMode("fixed")}>FX</Button>
+              <Button testId="m-full" onClick={() => setMode("full")}>FL</Button>
+              <Button testId="m-none" onClick={() => setMode("none")}>NO</Button>
+              <Button testId="m-w102" onClick={() => setHalfWidth(102)}>W2</Button>
+            </row>
+
+            <WindowSurface
+              name="native-blur-win"
+              title="Native Blur"
+              width={260}
+              height={180}
+              transparent
+              blurRegion={resolveBlur()}
+            >
+              <box style={{ width: "260px", height: "180px", backgroundColor: "transparent" }}>
+                <box
+                  ref={setSquircleNode}
+                  testId="squircle-card"
+                  style={{
+                    position: "fixed",
+                    left: "20px",
+                    top: "16px",
+                    width: "120px",
+                    height: "80px",
+                    borderRadius: "20px",
+                    "--zgui-corner-shape": "superellipse(2.83)",
+                    opacity: cardOpacity(),
+                    backgroundColor: "rgba(30, 60, 120, 0.2)",
+                  }}
+                />
+                <box
+                  ref={setCardBNode}
+                  testId="idle-card-b"
+                  style={{
+                    position: "fixed",
+                    left: "150px",
+                    top: "100px",
+                    width: "80px",
+                    height: "50px",
+                    backgroundColor: "rgba(40, 100, 80, 0.4)",
+                  }}
+                />
+                <box
+                  style={{
+                    position: "fixed",
+                    left: "10px",
+                    top: "10px",
+                    width: "100px",
+                    height: "60px",
+                    overflow: "hidden",
+                    borderRadius: "24px",
+                  }}
+                >
+                  <box
+                    ref={setClippedChildNode}
+                    style={{
+                      width: "100px",
+                      height: "60px",
+                      backgroundColor: "rgba(60, 40, 120, 0.4)",
+                    }}
+                  />
+                </box>
+                <box
+                  style={{
+                    position: "fixed",
+                    left: "10px",
+                    top: "100px",
+                    width: "80px",
+                    height: "40px",
+                    clipPath: "inset(4px)",
+                  }}
+                >
+                  <box
+                    ref={setClipPathChildNode}
+                    style={{ width: "80px", height: "40px", backgroundColor: "rgba(90, 90, 90, 0.5)" }}
+                  />
+                </box>
+                <box
+                  ref={setSliderNode}
+                  style={{
+                    position: "fixed",
+                    left: "24px",
+                    top: "24px",
+                    width: "60px",
+                    height: "36px",
+                    transform: slidOff() ? "translateX(400px)" : "translateX(0px)",
+                    backgroundColor: "rgba(100, 120, 200, 0.5)",
+                  }}
+                />
+              </box>
+            </WindowSurface>
+
+            <LayerSurface
+              name="half-scale-bar"
+              output="HALF-1"
+              layer="top"
+              anchor={["top", "left"]}
+              width={halfWidth()}
+              height={40}
+              blurRegion={halfNode() ? [halfNode()!] : []}
+            >
+              <box
+                ref={setHalfNode}
+                style={{
+                  width: "100%",
+                  height: "40px",
+                  backgroundColor: "rgba(20, 40, 80, 0.5)",
+                }}
+              />
+            </LayerSurface>
+          </column>
+        );
+      }, root);
+    }
+    `,
+    { rawSource: true, capabilities: { shellSurfaces: true } },
+  );
+
+  const halfMonitor = {
+    id: "HALF-1",
+    name: "HALF-1",
+    x: 0,
+    y: 0,
+    width: 320,
+    height: 200,
+    scale: 0.5,
+    refreshRateMilliHz: 60000,
+  };
+
+  const { out, result } = await runScenario({
+    projectDir: temp.dir,
+    bundle: nativeBundle,
+    profile,
+    name: "native-node-blur-full",
+    requiredCapabilities: ["pixels", "capture.transparent", "surface.multiple"],
+    assertEmptyResources: true,
+    steps: [
+      { id: "outputs", op: "monitors.set", monitors: [monitor, halfMonitor] },
+      // First checkpoint directly asserts rounded superellipse node blur + 0.5x width=101!
+      capture("squircle-first", "native-blur-win"),
+      capture("half-101", "half-scale-bar"),
+
+      click("main", "m-min08"),
+      capture("min08", "native-blur-win"),
+
+      click("main", "m-min00"),
+      capture("min00", "native-blur-win"),
+
+      click("main", "m-zero-op"),
+      capture("zero-op", "native-blur-win"),
+
+      click("main", "m-rclip"),
+      capture("rounded-clip", "native-blur-win"),
+
+      click("main", "m-cpath"),
+      capture("clip-path", "native-blur-win"),
+
+      click("main", "m-slide-off"),
+      capture("slid-off", "native-blur-win"),
+
+      click("main", "m-slide-back"),
+      capture("slid-back", "native-blur-win"),
+
+      click("main", "m-idle-b"),
+      capture("idle-b", "native-blur-win"),
+
+      click("main", "m-fixed"),
+      capture("mode-fixed", "native-blur-win"),
+
+      click("main", "m-full"),
+      capture("mode-full", "native-blur-win"),
+
+      click("main", "m-none"),
+      capture("mode-none", "native-blur-win"),
+
+      click("main", "m-w102"),
+      capture("half-102", "half-scale-bar"),
+    ],
+  });
+
+  assert.equal(result.teardown?.clean, true, "native node blur teardown must be clean");
+
+  // 1. First-frame rounded superellipse(2.83) card with rgba alpha 0.2 and opacity 0.6 (>= 0.5).
+  const squircle = (await readFrame(out, "surfaces/native-blur-win/squircle-first")).blurRegion;
+  assert.ok(
+    Array.isArray(squircle) && squircle.length > 1,
+    `expected rounded superellipse horizontal strips on first frame, got ${JSON.stringify(squircle)}`,
+  );
+  assert.equal(squircle[0].y, 16);
+  assert.equal(squircle[squircle.length - 1].y + squircle[squircle.length - 1].height, 96);
+  assert.ok(squircle[0].x > 20 && squircle[0].width < 120, "top row must curve inward");
+  const mid = squircle[Math.floor(squircle.length / 2)];
+  assert.equal(mid.x, 20);
+  assert.equal(mid.width, 120);
+
+  // 2. minOpacity thresholds: 0.6 < 0.8 -> none; 0.6 > 0 -> restored; opacity=0 -> none even at minOpacity=0.
+  assert.equal((await readFrame(out, "surfaces/native-blur-win/min08")).blurRegion, "none");
+  assert.deepEqual((await readFrame(out, "surfaces/native-blur-win/min00")).blurRegion, squircle);
+  assert.equal((await readFrame(out, "surfaces/native-blur-win/zero-op")).blurRegion, "none");
+
+  // 3. Ancestor rounded clip produces curved strips inside [10, 10, 100, 60]; ancestor clip-path omits.
+  const rclip = (await readFrame(out, "surfaces/native-blur-win/rounded-clip")).blurRegion;
+  assert.ok(
+    Array.isArray(rclip) && rclip.length > 1,
+    "ancestor rounded clip must produce curved strips",
+  );
+  assert.equal(rclip[0].y, 10);
+  assert.ok(
+    rclip[0].x > 10 && rclip[0].width < 100,
+    "ancestor border-radius must clip child corners",
+  );
+  assert.equal((await readFrame(out, "surfaces/native-blur-win/clip-path")).blurRegion, "none");
+
+  // 4. Slid-off target resolves to none; sliding back restores exact rect.
+  assert.equal((await readFrame(out, "surfaces/native-blur-win/slid-off")).blurRegion, "none");
+  assert.deepEqual((await readFrame(out, "surfaces/native-blur-win/slid-back")).blurRegion, [
+    { x: 24, y: 24, width: 60, height: 36 },
+  ]);
+
+  // 5. Idle target switch + mode transitions (node -> fixed -> full -> none).
+  assert.deepEqual((await readFrame(out, "surfaces/native-blur-win/idle-b")).blurRegion, [
+    { x: 150, y: 100, width: 80, height: 50 },
+  ]);
+  assert.deepEqual((await readFrame(out, "surfaces/native-blur-win/mode-fixed")).blurRegion, [
+    { x: 10, y: 12, width: 70, height: 30 },
+  ]);
+  assert.equal((await readFrame(out, "surfaces/native-blur-win/mode-full")).blurRegion, "full");
+  assert.equal((await readFrame(out, "surfaces/native-blur-win/mode-none")).blurRegion, "none");
+
+  // 6. 0.5x scale 101 -> 102 logical width update counterexample (same 51px physical buffer!).
+  assert.deepEqual((await readFrame(out, "surfaces/half-scale-bar/half-101")).blurRegion, [
+    { x: 0, y: 0, width: 101, height: 40 },
+  ]);
+  assert.deepEqual((await readFrame(out, "surfaces/half-scale-bar/half-102")).blurRegion, [
+    { x: 0, y: 0, width: 102, height: 40 },
+  ]);
+});

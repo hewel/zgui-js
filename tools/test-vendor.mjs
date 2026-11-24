@@ -70,6 +70,8 @@ const SUITES = [
       "windowless",
       "--test",
       "document_selection",
+      "--test",
+      "blur_region",
     ],
   },
   {

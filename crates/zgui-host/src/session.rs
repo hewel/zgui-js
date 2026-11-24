@@ -750,7 +750,15 @@ impl Session {
     }
 
     /// Build and mount an auxiliary document in the already-running JS engine.
-    pub(crate) fn attach_layer(self: &Rc<Self>, id: u32, name: String, region: MountRegion, surface: SurfaceId, lock_claim: Option<std::sync::Weak<dyn Surface>>) -> Result<()> {
+    pub(crate) fn attach_layer(
+        self: &Rc<Self>,
+        id: u32,
+        name: String,
+        region: MountRegion,
+        surface: SurfaceId,
+        lock_claim: Option<std::sync::Weak<dyn Surface>>,
+        blur_slot: Option<Rc<zgui::runtime::BlurSlot>>,
+    ) -> Result<()> {
         let attach = self.shell.attach(id).ok_or("shell surface was closed before attachment")?;
         let options = ui_bridge::BridgeOptions {
             strict_styles: self.policy.strict_rejections,
@@ -758,11 +766,15 @@ impl Session {
             background_blur_supported: self.background_blur_supported.get(),
             defer_stylesheet_install: true,
         };
+        let is_lock = lock_claim.is_some();
         let mut owned = Self::build_region(region, name, surface, self.generation, options, self.waker.clone(), Rc::downgrade(self));
         owned.lock_claim = lock_claim;
         let owned = Rc::new(owned);
         self.bridges.add(&owned.bridge);
         self.layers.borrow_mut().insert(id, owned.clone());
+        if !is_lock {
+            self.shell.attach_blur_target(id, owned.region.document, owned.bridge.clone(), blur_slot);
+        }
         self.work.add_frame_host(surface, owned.region.host.clone());
         self.install_sheets(&owned);
         for (name, css) in self.shell_stylesheets.borrow().iter() {
@@ -789,6 +801,9 @@ impl Session {
         match result {
             Ok(disposer) => *owned.disposer.borrow_mut() = Some(disposer),
             Err(error) => {
+                if !is_lock {
+                    self.shell.detach_blur_target(id);
+                }
                 self.check_contract()?;
                 return Err(self.diagnostic(error).into());
             }
@@ -961,6 +976,7 @@ impl Session {
 
     /// Dispose one auxiliary document while the native surface still exists.
     pub(crate) fn detach_layer(&self, id: u32) -> Result<()> {
+        self.shell.detach_blur_target(id);
         let Some(owned) = self.layers.borrow_mut().remove(&id) else { return Ok(()); };
         // Disposers can remove sheets from the session set after this region leaves it.
         for (name, _) in self.shell_stylesheets.borrow().iter() {

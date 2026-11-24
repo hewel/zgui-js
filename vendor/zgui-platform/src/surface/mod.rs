@@ -352,6 +352,49 @@ pub trait Surface: Send + Sync + 'static {
         let _ = region;
     }
 
+    /// The surface-local logical viewport extent that a buffer of physical `size` drawn at `scale`
+    /// maps onto when presented on this surface.
+    ///
+    /// Backends that declare an explicit viewport destination (such as Wayland `wp_viewport`
+    /// fractional scaling) return that exact logical destination extent so per-axis
+    /// `destination / source` scaling matches the compositor commit.
+    fn logical_extent_for(&self, size: Size<i32, Device>, scale: f64) -> Size<CssPx, Css> {
+        let scale = if scale.is_finite() && scale > 0.0 {
+            scale
+        } else {
+            1.0
+        };
+        Size::new(
+            CssPx((f64::from(size.width.max(0)) / scale) as f32),
+            CssPx((f64::from(size.height.max(0)) / scale) as f32),
+        )
+    }
+
+    /// Stages a picture-bound blur region candidate to ride the next buffer commit via
+    /// [`Surface::pre_present_frame`].
+    ///
+    /// Unlike [`Surface::set_blur_region`], staging does not mark surface metadata owed for bare
+    /// commits or request a redraw on its own; it applies only if a buffer is actually presented.
+    fn stage_blur_region_for_present(&self, region: BlurRegion<'_>) {
+        let _ = region;
+    }
+
+    /// Discards any staged picture-bound blur region that was never handed over.
+    fn clear_staged_blur_region(&self) {}
+
+    /// Confirms that the staged blur region handed over in [`Surface::pre_present_frame`] was
+    /// presented with its buffer.
+    fn finalize_presented_blur(&self) {}
+
+    /// Rolls back any staged or pre-presented blur region after a frame failed to present.
+    fn rollback_unpresented_blur(&self) {}
+
+    /// Applies a blur region update on an idle / undamaged surface without forcing a pixel
+    /// repaint or redundant redraw loop.
+    fn apply_idle_blur_region(&self, region: BlurRegion<'_>) {
+        self.set_blur_region(region);
+    }
+
     /// Sets the shell surface input region and commits it immediately rather than staging it
     /// until the next frame.
     ///

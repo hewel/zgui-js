@@ -95,7 +95,9 @@ result and the run's `environment.json`. Neither establishes compositor
 transparency. Lock surfaces paint an opaque black backdrop beneath author
 content, even when the profile and the document root are transparent. Frame
 evidence (`*.frame.json`) also exposes the backend's recorded normalized
-`blurRegion` (`"none" | "full" | [{ x, y, width, height }]`) and
+`blurRegion` (`"none" | "full" | [{ x, y, width, height }]`, reflecting native
+frame-synchronous rounded/superellipse/clipped strip resolution and exact
+logical viewport mapping once `!window.blur_pending()` converges) and
 `windowGeometry` (`{ x, y, width, height }` in whole surface-local CSS pixels,
 capturing `PopupSurface` `geometryInsets` offsets and visual extent) from
 `OffscreenSurface` without synthesizing blurred pixels;

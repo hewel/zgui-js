@@ -360,6 +360,10 @@ impl Driver {
         let offscreen = self.pipeline.platform().offscreen(surface)
             .ok_or_else(||Error::new("E_HOST_INVARIANT",9,"current native main has no headless surface"))?;
         offscreen.set_refresh_rate_millihertz(Some(self.surface.refresh_rate_milli_hz));
+        offscreen.set_logical_size(Size::new(
+            zgui::geom::CssPx(self.surface.width as f32),
+            zgui::geom::CssPx(self.surface.height as f32),
+        ));
         self.observer(surface)?.bind_surface(offscreen);
         self.pipeline.deliver(surface, SurfaceEvent::ScaleFactorChanged { scale_factor:self.surface.scale,
             size:Size::new(DevicePx(self.dimensions.0 as f32),DevicePx(self.dimensions.1 as f32)) });
@@ -397,12 +401,18 @@ impl Driver {
             let observer = self.observer(surface)?;
             offscreen.set_refresh_rate_millihertz(geometry.refresh);
             let target_size = Size::new(DevicePx(dimensions.0 as f32), DevicePx(dimensions.1 as f32));
+            let target_logical = Size::new(
+                zgui::geom::CssPx(geometry.width as f32),
+                zgui::geom::CssPx(geometry.height as f32),
+            );
             if previous.is_some()
                 && offscreen.size() == target_size
+                && offscreen.logical_size() == target_logical
                 && (offscreen.scale_factor() - geometry.scale).abs() < f64::EPSILON
             {
                 continue;
             }
+            offscreen.set_logical_size(target_logical);
             if previous.is_none() { observer.bind_surface(offscreen); }
             else { observer.bump_surface_configuration(); }
             self.pipeline.deliver(surface, SurfaceEvent::ScaleFactorChanged {

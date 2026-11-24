@@ -1,5 +1,5 @@
 import { Image, LayerSurface, PopupSurface, SessionLockSurface, TextField, TextArea, WindowSurface, createCanvasScene, createProjection, createSpring, createStore, getBackgroundBlurSupported, getSessionGeneration, reconcile, renderApp, renderShell, requestSessionLock, useMonitors } from "@hewel/zgui";
-import type { BlurRegion, NativeElementProps, NativeNode } from "@hewel/zgui";
+import type { BlurRegion, BlurRegionNodes, NativeElementProps, NativeNode } from "@hewel/zgui";
 import {
   headingToward,
   MenuSubContentPrimitive,
@@ -174,9 +174,16 @@ void <SessionLockSurface name="lock" output="DP-1" inputRegion="empty" />;
 void <SessionLockSurface name="lock" output="DP-1" blurRegion="full" />;
 // @ts-expect-error Lock surfaces reject node-based blur regions too.
 void <SessionLockSurface name="lock" output="DP-1" blurRegion={[fabricated]} />;
+// @ts-expect-error Lock surfaces reject BlurRegionNodes object form too.
+void <SessionLockSurface name="lock" output="DP-1" blurRegion={{ nodes: [fabricated], minOpacity: 0.5 }} />;
 // @ts-expect-error BlurRegion uses "none", not inputRegion's "empty".
 const invalidBlurMode: BlurRegion = "empty";
 void invalidBlurMode;
+// @ts-expect-error BlurRegionNodes.nodes accepts only NativeNode[], not rectangles.
+const invalidBlurNodes: BlurRegionNodes = { nodes: [{ x: 0, y: 0, width: 10, height: 10 }] };
+// @ts-expect-error BlurRegionNodes.minOpacity is a number, not a string.
+const invalidBlurCutoff: BlurRegionNodes = { nodes: [fabricated], minOpacity: "0.5" };
+void [invalidBlurNodes, invalidBlurCutoff];
 // @ts-expect-error BlurRegion cannot mix nodes and rectangles in one array.
 void <WindowSurface name="glass" title="Glass" width={300} height={200} blurRegion={[fabricated, { x: 0, y: 0, width: 10, height: 10 }]} />;
 // @ts-expect-error Unlock is an explicit operation, not a request option.

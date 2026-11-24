@@ -8,7 +8,7 @@ import {
   runWithOwner,
   useContext,
 } from "#solid";
-import { bridgeFor, bridgeForTarget, shellBridge } from "./host.js";
+import { bridgeFor, bridgeForTarget, knownBridgeForNode, shellBridge } from "./host.js";
 import { ThemeCssContext } from "./theme-sync.js";
 import type {
   LayerPlacement,
@@ -233,12 +233,122 @@ function bindInputRegion(
   bindSurfaceRegion(() => props.inputRegion ?? "full", bridge, publish);
 }
 
+type BlurSnapshot =
+  | { readonly kind: "mode"; readonly value: unknown }
+  | { readonly kind: "array"; readonly items: readonly unknown[] }
+  | { readonly kind: "nodes"; readonly nodes: unknown; readonly minOpacity: unknown };
+
+function snapshotBlurRegion(raw: unknown): BlurSnapshot {
+  if (raw === undefined || typeof raw === "string") {
+    return { kind: "mode", value: raw };
+  }
+  if (Array.isArray(raw)) {
+    const items: unknown[] = [];
+    for (let i = 0; i < raw.length; i += 1) {
+      const item: unknown = raw[i];
+      if (
+        typeof item === "object" &&
+        item !== null &&
+        knownBridgeForNode(item) === undefined &&
+        "x" in item
+      ) {
+        const rect = item as NativeWindowRect;
+        items.push({ x: rect.x, y: rect.y, width: rect.width, height: rect.height });
+      } else {
+        items.push(item);
+      }
+    }
+    return { kind: "array", items };
+  }
+  if (typeof raw === "object" && raw !== null && knownBridgeForNode(raw) === undefined) {
+    const obj = raw as { readonly nodes?: unknown; readonly minOpacity?: unknown };
+    const rawNodes = obj.nodes;
+    const minOpacity = obj.minOpacity;
+    const nodes = Array.isArray(rawNodes) ? [...rawNodes] : rawNodes;
+    return { kind: "nodes", nodes, minOpacity };
+  }
+  return { kind: "mode", value: raw };
+}
+
+function validateBlurMinOpacity(value: unknown): number {
+  if (value === undefined) return 0.5;
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    throw new TypeError("blurRegion minOpacity must be a finite number");
+  }
+  if (value < 0 || value > 1) {
+    throw new RangeError("blurRegion minOpacity must be within [0, 1]");
+  }
+  return value;
+}
+
+function normalizeBlurSnapshot(snapshot: BlurSnapshot, bridge: UiBridge): NativeBlurRegion {
+  if (snapshot.kind === "mode") {
+    if (snapshot.value === undefined || snapshot.value === "none") return "none";
+    if (snapshot.value === "full") return "full";
+    throw new TypeError('blurRegion must be "none", "full", an array, or { nodes, minOpacity? }');
+  }
+  if (snapshot.kind === "nodes") {
+    const minOpacity = validateBlurMinOpacity(snapshot.minOpacity);
+    if (!Array.isArray(snapshot.nodes)) {
+      throw new TypeError("blurRegion nodes must be an array");
+    }
+    const nodes: NativeNode[] = [];
+    for (const item of snapshot.nodes) {
+      const ownerBridge = knownBridgeForNode(item);
+      if (!ownerBridge) {
+        throw new TypeError("blurRegion nodes must contain only genuine native nodes");
+      }
+      if (ownerBridge !== bridge) {
+        throw new ReferenceError("Surface region node must belong to the owning surface");
+      }
+      nodes.push(item as NativeNode);
+    }
+    if (nodes.length === 0) return "none";
+    return { nodes, minOpacity };
+  }
+  const { items } = snapshot;
+  if (items.length === 0) return "none";
+  if (knownBridgeForNode(items[0]) !== undefined) {
+    const nodes: NativeNode[] = [];
+    for (const item of items) {
+      const ownerBridge = knownBridgeForNode(item);
+      if (!ownerBridge) {
+        throw new TypeError(
+          "blurRegion array cannot mix native nodes with rectangles or invalid entries",
+        );
+      }
+      if (ownerBridge !== bridge) {
+        throw new ReferenceError("Surface region node must belong to the owning surface");
+      }
+      nodes.push(item as NativeNode);
+    }
+    return { nodes, minOpacity: 0.5 };
+  }
+  const rects: NativeWindowRect[] = [];
+  for (const item of items) {
+    if (knownBridgeForNode(item) !== undefined) {
+      throw new TypeError("blurRegion array cannot mix rectangles and native nodes");
+    }
+    if (typeof item !== "object" || item === null) {
+      throw new TypeError("blurRegion entry must be a rectangle object");
+    }
+    const rect = item as NativeWindowRect;
+    rects.push({ x: rect.x, y: rect.y, width: rect.width, height: rect.height });
+  }
+  return rects;
+}
+
 function bindBlurRegion(
   props: { readonly blurRegion?: BlurRegion | undefined },
   bridge: UiBridge,
   publish: (region: NativeBlurRegion) => void,
 ): void {
-  bindSurfaceRegion(() => props.blurRegion ?? "none", bridge, publish);
+  createEffect(
+    () => snapshotBlurRegion(props.blurRegion),
+    snapshot => {
+      publish(normalizeBlurSnapshot(snapshot, bridge));
+    },
+  );
 }
 
 function mountManagedSurface(

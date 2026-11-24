@@ -1,9 +1,11 @@
 //! Generation-owned shell requests and monitor subscriptions. No platform work runs inside JS.
 use std::{cell::{Cell, RefCell}, collections::BTreeMap, rc::{Rc, Weak}, sync::{Arc, atomic::{AtomicU64, Ordering}}};
 
-use rquickjs::{Array, Ctx, Exception, Function, Object, Persistent, Value, function::Func, object::Property};
+use rquickjs::{Array, Class, Ctx, Exception, Function, Object, Persistent, Value, function::Func, object::Property};
 use serde::{Deserialize, Serialize};
-use zgui::{geom::{Css, CssPx, Edges, Point, Rect, Size}, platform::{BlurRegion, ExclusiveZone, InputRect, InputRegion, KeyboardInteractivity, Layer, LayerPlacement, MonitorInfo, MonitorTarget, SessionLockState, WakeReason, Waker}};
+use ui_bridge::{NativeNode, UiBridge};
+use zgui::{geom::{Css, CssPx, Edges, Point, Rect, Size}, platform::{ExclusiveZone, InputRect, InputRegion, KeyboardInteractivity, Layer, LayerPlacement, MonitorInfo, MonitorTarget, SessionLockState, WakeReason, Waker}, runtime::{BlurRegistration, BlurSlot}, view::DocumentId};
+use zgui_dom::NodeKey;
 
 use crate::{assets::{ContractFailure, MAX_SAFE_ID}, session::Session, work::service_error};
 
@@ -18,27 +20,54 @@ pub(crate) const MAX_LAYERS: usize = 32;
 const MAX_SUBSCRIPTIONS: usize = 64;
 const MAX_INPUT_RECTS: u32 = 256;
 const MAX_BLUR_RECTS: u32 = 256;
+const MAX_BLUR_NODES: u32 = 1024;
 static NEXT_LOCK_ID: AtomicU64 = AtomicU64::new(1);
 
 /// Owned normalized background blur intent stored on shell surface specs.
+///
+/// `None`, `Full`, and `Rects` remain valid before the target surface mounts; `Nodes` binds
+/// strictly to the target mounted document instance (`DocumentId`) so named-layer recreation
+/// reusing the same shell request ID never inherits stale node handles.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) enum DesiredBlur {
     #[default]
     None,
     Full,
     Rects(Vec<Rect<CssPx, Css>>),
+    Nodes {
+        document: DocumentId,
+        nodes: Vec<NodeKey>,
+        min_opacity: f64,
+    },
 }
 
 impl DesiredBlur {
-    /// Borrow as the platform-level [`BlurRegion`] contract.
+    /// Convert into a runtime [`BlurRegistration`] for the window owning `target_document`.
     #[must_use]
-    pub(crate) fn as_platform(&self) -> BlurRegion<'_> {
+    pub(crate) fn to_registration(&self, target_document: DocumentId) -> BlurRegistration {
         match self {
-            Self::None => BlurRegion::None,
-            Self::Full => BlurRegion::Full,
-            Self::Rects(rects) => BlurRegion::Rects(rects),
+            Self::None => BlurRegistration::None,
+            Self::Full => BlurRegistration::Full,
+            Self::Rects(rects) => BlurRegistration::Rects(rects.clone()),
+            Self::Nodes { document, nodes, min_opacity } => {
+                if *document == target_document {
+                    BlurRegistration::Nodes {
+                        nodes: nodes.clone(),
+                        min_opacity: *min_opacity,
+                    }
+                } else {
+                    BlurRegistration::None
+                }
+            }
         }
     }
+}
+
+#[derive(Clone)]
+struct AttachedBlurTarget {
+    document: DocumentId,
+    bridge: Rc<UiBridge>,
+    slot: Option<Rc<BlurSlot>>,
 }
 
 fn allocate_lock_id(next: &AtomicU64) -> Option<u64> {
@@ -170,6 +199,7 @@ pub(crate) struct Shell {
     layers: RefCell<BTreeMap<u32, WantedLayer>>,
     popups: RefCell<BTreeMap<u32, WantedPopup>>,
     windows: RefCell<BTreeMap<u32, WantedWindow>>,
+    blur_targets: RefCell<BTreeMap<u32, AttachedBlurTarget>>,
     next_id: Cell<u32>,
     lock_authority: Authority,
     lock_fenced: Cell<bool>,
@@ -193,6 +223,7 @@ impl Shell {
             background_blur_supported: Cell::new(false), blur_support_subscribers: RefCell::new(BTreeMap::new()),
             layers: RefCell::new(BTreeMap::new()),
             popups: RefCell::new(BTreeMap::new()), windows: RefCell::new(BTreeMap::new()),
+            blur_targets: RefCell::new(BTreeMap::new()),
             lock_authority, lock_fenced: Cell::new(false), lock_state: Cell::new(lock_state),
             lock_command: Cell::new(None), lock_subscriptions: RefCell::new(BTreeMap::new()),
             lock_dirty: Cell::new(false),
@@ -206,6 +237,7 @@ impl Shell {
         self.layers.borrow_mut().clear();
         self.popups.borrow_mut().clear();
         self.windows.borrow_mut().clear();
+        self.blur_targets.borrow_mut().clear();
         self.subscriptions.borrow_mut().clear();
         self.blur_support_subscribers.borrow_mut().clear();
         self.lock_surfaces.borrow_mut().clear();
@@ -311,16 +343,42 @@ impl Shell {
         (input != current).then(|| input.clone())
     }
 
-    pub(crate) fn updated_blur(&self, id: u32, current: &DesiredBlur) -> Option<DesiredBlur> {
+    /// Bind a mounted non-lock shell surface's bridge and live window blur slot, seeding any
+    /// pre-mount non-node blur intent immediately before the surface's first composition.
+    pub(crate) fn attach_blur_target(
+        &self,
+        id: u32,
+        document: DocumentId,
+        bridge: Rc<UiBridge>,
+        slot: Option<Rc<BlurSlot>>,
+    ) {
+        let initial = self.current_blur(id);
+        if let Some(slot) = &slot {
+            slot.set(initial.to_registration(document));
+        }
+        self.blur_targets.borrow_mut().insert(id, AttachedBlurTarget { document, bridge, slot });
+    }
+
+    /// Detach the mounted blur target for `id` when its native document closes or recreates.
+    pub(crate) fn detach_blur_target(&self, id: u32) {
+        self.blur_targets.borrow_mut().remove(&id);
+    }
+
+    fn blur_target(&self, id: u32) -> Option<AttachedBlurTarget> {
+        self.blur_targets.borrow().get(&id).cloned()
+    }
+
+    fn current_blur(&self, id: u32) -> DesiredBlur {
         if let Some(layer) = self.layers.borrow().get(&id) {
-            return (layer.spec.blur != *current).then(|| layer.spec.blur.clone());
+            return layer.spec.blur.clone();
         }
         if let Some(popup) = self.popups.borrow().get(&id) {
-            return (popup.spec.blur != *current).then(|| popup.spec.blur.clone());
+            return popup.spec.blur.clone();
         }
-        let windows = self.windows.borrow();
-        let blur = &windows.get(&id)?.spec.blur;
-        (blur != current).then(|| blur.clone())
+        if let Some(window) = self.windows.borrow().get(&id) {
+            return window.spec.blur.clone();
+        }
+        DesiredBlur::None
     }
 
     /// Store the new inventory before dispatch; subscriptions added in dispatch start current.
@@ -542,24 +600,55 @@ impl Shell {
             } else {
                 return Err(Exception::throw_reference(&ctx, "shell surface is no longer owned"));
             };
-            // Parse completely before borrowing maps so getters cannot re-enter or leave partial state.
-            let blur = blur_region(&ctx, data)?;
-            match target {
+            // Snapshot mounted target before running any JS getters or handle lookups with zero
+            // RefCell borrows held.
+            let initial_target = shell.blur_target(id);
+            let blur = blur_region(&ctx, data, initial_target.as_ref())?;
+            if shell.life.get() == Lifecycle::Stopping {
+                return Ok(());
+            }
+            shell.require_active(&ctx)?;
+            let current_target = shell.blur_target(id);
+            if let DesiredBlur::Nodes { document, .. } = &blur {
+                let same_instance = current_target
+                    .as_ref()
+                    .is_some_and(|live| live.document == *document && !live.bridge.is_disposed());
+                if !same_instance {
+                    return Err(Exception::throw_reference(
+                        &ctx,
+                        "shell surface mount instance is no longer active",
+                    ));
+                }
+            }
+            let updated = match target {
                 BlurOwner::Layer => {
                     let mut layers = shell.layers.borrow_mut();
                     let layer = layers.get_mut(&id).ok_or_else(|| Exception::throw_reference(&ctx, "shell surface is no longer owned"))?;
-                    if layer.spec.blur != blur { layer.spec.blur = blur; shell.changed(); }
+                    let changed = layer.spec.blur != blur;
+                    if changed { layer.spec.blur = blur.clone(); }
+                    changed
                 }
                 BlurOwner::Popup => {
                     let mut popups = shell.popups.borrow_mut();
                     let popup = popups.get_mut(&id).ok_or_else(|| Exception::throw_reference(&ctx, "shell surface is no longer owned"))?;
-                    if popup.spec.blur != blur { popup.spec.blur = blur; shell.changed(); }
+                    let changed = popup.spec.blur != blur;
+                    if changed { popup.spec.blur = blur.clone(); }
+                    changed
                 }
                 BlurOwner::Window => {
                     let mut windows = shell.windows.borrow_mut();
                     let window = windows.get_mut(&id).ok_or_else(|| Exception::throw_reference(&ctx, "shell surface is no longer owned"))?;
-                    if window.spec.blur != blur { window.spec.blur = blur; shell.changed(); }
+                    let changed = window.spec.blur != blur;
+                    if changed { window.spec.blur = blur.clone(); }
+                    changed
                 }
+            };
+            if let Some(live) = current_target
+                && let Some(slot) = live.slot
+            {
+                slot.set(blur.to_registration(live.document));
+            } else if updated {
+                shell.changed();
             }
             Ok::<(), rquickjs::Error>(())
         }))?;
@@ -811,24 +900,158 @@ fn region_int(ctx: &Ctx<'_>, value: f64) -> rquickjs::Result<i32> {
     Ok(value as i32)
 }
 
-fn blur_region<'js>(ctx: &Ctx<'js>, value: Value<'js>) -> rquickjs::Result<DesiredBlur> {
+fn blur_region<'js>(
+    ctx: &Ctx<'js>,
+    value: Value<'js>,
+    target: Option<&AttachedBlurTarget>,
+) -> rquickjs::Result<DesiredBlur> {
     if value.is_string() {
         return match string(ctx, &value, "blur region")?.as_str() {
             "none" => Ok(DesiredBlur::None),
             "full" => Ok(DesiredBlur::Full),
             _ => Err(Exception::throw_type(
                 ctx,
-                "blur region must be \"none\", \"full\", or an array of rectangles",
+                "blur region must be \"none\", \"full\", an array of rectangles/nodes, or { nodes, minOpacity? }",
             )),
         };
     }
-    let array = value
+    if let Some(array) = value.as_array() {
+        let len = array_length(
+            ctx,
+            array,
+            MAX_BLUR_NODES.max(MAX_BLUR_RECTS),
+            "blur region entry limit exceeded",
+        )?;
+        if len == 0 {
+            return Ok(DesiredBlur::None);
+        }
+        // Snapshot all elements once before validating so getters cannot alter array length or
+        // observe half-validated state.
+        let mut items = Vec::with_capacity(len);
+        for index in 0..len {
+            items.push(array.get::<Value<'js>>(index)?);
+        }
+        let first_is_node = Class::<NativeNode>::from_value(&items[0]).is_ok();
+        if first_is_node {
+            if len > MAX_BLUR_NODES as usize {
+                return Err(Exception::throw_range(ctx, "blur region node limit exceeded"));
+            }
+            return parse_blur_nodes(ctx, items, 0.5, target);
+        }
+        if len > MAX_BLUR_RECTS as usize {
+            return Err(Exception::throw_range(ctx, "blur region rectangle limit exceeded"));
+        }
+        return parse_blur_rects(ctx, items);
+    }
+    if Class::<NativeNode>::from_value(&value).is_ok() {
+        return Err(Exception::throw_type(
+            ctx,
+            "blur region requires \"none\", \"full\", an array, or { nodes, minOpacity? }",
+        ));
+    }
+    let Some(obj) = value.into_object() else {
+        return Err(Exception::throw_type(
+            ctx,
+            "blur region requires \"none\", \"full\", an array, or { nodes, minOpacity? }",
+        ));
+    };
+    let nodes_value: Value<'js> = obj.get("nodes")?;
+    let min_opacity_value: Value<'js> = obj.get("minOpacity")?;
+    let min_opacity = parse_min_opacity(ctx, &min_opacity_value)?;
+    let nodes_array = nodes_value
         .into_array()
-        .ok_or_else(|| Exception::throw_type(ctx, "blur region requires an array of rectangles"))?;
-    let len = array_length(ctx, &array, MAX_BLUR_RECTS, "blur region rectangle limit exceeded")?;
-    let mut rects = Vec::with_capacity(len);
+        .ok_or_else(|| Exception::throw_type(ctx, "blur region nodes must be an array"))?;
+    let len = array_length(ctx, &nodes_array, MAX_BLUR_NODES, "blur region node limit exceeded")?;
+    let mut items = Vec::with_capacity(len);
     for index in 0..len {
-        let item: Value = array.get(index)?;
+        items.push(nodes_array.get::<Value<'js>>(index)?);
+    }
+    if items.is_empty() {
+        return Ok(DesiredBlur::None);
+    }
+    parse_blur_nodes(ctx, items, min_opacity, target)
+}
+
+fn parse_min_opacity(ctx: &Ctx<'_>, value: &Value<'_>) -> rquickjs::Result<f64> {
+    if value.is_undefined() {
+        return Ok(0.5);
+    }
+    let Some(n) = value.as_number() else {
+        return Err(Exception::throw_type(
+            ctx,
+            "blur region minOpacity must be a finite number",
+        ));
+    };
+    if !n.is_finite() {
+        return Err(Exception::throw_type(
+            ctx,
+            "blur region minOpacity must be a finite number",
+        ));
+    }
+    if !(0.0..=1.0).contains(&n) {
+        return Err(Exception::throw_range(
+            ctx,
+            "blur region minOpacity must be within [0, 1]",
+        ));
+    }
+    Ok(n)
+}
+
+fn parse_blur_nodes<'js>(
+    ctx: &Ctx<'js>,
+    items: Vec<Value<'js>>,
+    min_opacity: f64,
+    target: Option<&AttachedBlurTarget>,
+) -> rquickjs::Result<DesiredBlur> {
+    let mut branded = Vec::with_capacity(items.len());
+    for item in items {
+        let node = Class::<NativeNode>::from_value(&item).map_err(|_| {
+            Exception::throw_type(ctx, "blur region node entries must be genuine native nodes")
+        })?;
+        branded.push(node);
+    }
+    let Some(target) = target else {
+        return Err(Exception::throw_reference(
+            ctx,
+            "blur region node targets require a mounted owning surface",
+        ));
+    };
+    let mut nodes = Vec::with_capacity(branded.len());
+    for node in branded {
+        let native_id = target
+            .bridge
+            .resolve_owned_native_node(&node)
+            .map_err(|msg| Exception::throw_reference(ctx, &msg))?;
+        if native_id.document() != target.document {
+            return Err(Exception::throw_reference(
+                ctx,
+                "blur region node must belong to the owning surface",
+            ));
+        }
+        let key = zgui_view_dom::id::to_document(native_id).ok_or_else(|| {
+            Exception::throw_reference(ctx, "blur region node handle is stale")
+        })?;
+        nodes.push(key);
+    }
+    Ok(DesiredBlur::Nodes {
+        document: target.document,
+        nodes,
+        min_opacity,
+    })
+}
+
+fn parse_blur_rects<'js>(
+    ctx: &Ctx<'js>,
+    items: Vec<Value<'js>>,
+) -> rquickjs::Result<DesiredBlur> {
+    let mut rects = Vec::with_capacity(items.len());
+    for item in items {
+        if Class::<NativeNode>::from_value(&item).is_ok() {
+            return Err(Exception::throw_type(
+                ctx,
+                "blur region array cannot mix rectangles and native nodes",
+            ));
+        }
         let rect = item
             .into_object()
             .ok_or_else(|| Exception::throw_type(ctx, "blur region entry must be a rectangle object"))?;
@@ -1529,6 +1752,151 @@ mod tests {
             Edges::new(CssPx(16.0), CssPx(28.0), CssPx(32.0), CssPx(12.0)),
             "invalid updates must throw atomically without mutating live popup geometryInsets"
         );
+        shell.clear();
+    }
+
+    #[test]
+    fn blur_region_nodes_enforce_document_ownership_atomicity_limits_and_recreation() {
+        let runtime = rquickjs::Runtime::new().expect("create QuickJS runtime");
+        let context = rquickjs::Context::full(&runtime).expect("create QuickJS context");
+        let headless = zgui_platform_headless::Headless::new();
+        let waker = zgui::platform::PlatformCx::waker(&headless);
+        let shell = Shell::new(
+            ShellConfig {
+                generation: 1,
+                authority: Authority::Allowed,
+                window_authority: Authority::Allowed,
+                lock_authority: Authority::Denied,
+                lock_state: SessionLockState::Unlocked,
+                contract: ContractPolicy::Throw,
+            },
+            waker.clone(),
+        );
+        shell.activate();
+
+        // Build two distinct mounted documents + bridges + live BlurSlots.
+        let make_region = |doc_id: u16, generation: u64| {
+            let doc_id = zgui_dom::DocumentId::new(doc_id).expect("nonzero document id");
+            let doc = zgui_dom::Document::with_id(doc_id);
+            let backend = Rc::new(zgui_view_dom::DocumentDom::new(Rc::new(RefCell::new(doc))));
+            let dom = zgui::view::DomHandle::from_rc(backend.clone());
+            let root = dom.create_element(zgui::view::ElementName::new("box"));
+            dom.insert(backend.root_node(), root, None);
+            let host = zgui::view::HostHandle::from_rc(Rc::new(zgui::view::stub::StubHost::default()));
+            let registry = ui_bridge::registry::NodeRegistry::new(dom, root, 1, generation, 100_000);
+            let bridge = UiBridge::new(registry, host, ui_bridge::HostPort::queued());
+            let gate = Arc::new(zgui::runtime::FrameGate::new());
+            let rw = Arc::new(zgui::runtime::RuntimeWaker::new(waker.clone(), gate));
+            let slot = Rc::new(BlurSlot::new(rw));
+            (backend.document_id(), bridge, slot)
+        };
+
+        let (doc_a, bridge_a, slot_a) = make_region(10, 1);
+        let (doc_b, bridge_b, slot_b) = make_region(11, 1);
+
+        context.with(|ctx| {
+            shell.install(&ctx).expect("install shell");
+            let node_a = bridge_a.root(&ctx).expect("node A");
+            let node_b = bridge_b.root(&ctx).expect("node B");
+            ctx.globals().set("nodeA", node_a).expect("set nodeA");
+            ctx.globals().set("nodeB", node_b).expect("set nodeB");
+
+            ctx.eval::<(), _>(
+                r#"
+                const a = __zguiShell.openLayer('bar-a', { width: 200, height: 40 }, () => {});
+                const b = __zguiShell.openLayer('bar-b', { width: 200, height: 40 }, () => {});
+                globalThis.layerA = a;
+                globalThis.layerB = b;
+                "#,
+            )
+            .expect("open layers");
+            let layer_a: u32 = ctx.globals().get("layerA").expect("layerA");
+            let layer_b: u32 = ctx.globals().get("layerB").expect("layerB");
+
+            // Before mount: fixed/full/none work, while node mode rejects with ReferenceError.
+            ctx.eval::<(), _>(
+                r#"
+                __zguiShell.setBlurRegion(layerA, 'full');
+                let unmountedErr = null;
+                try { __zguiShell.setBlurRegion(layerA, [nodeA]); } catch (e) { unmountedErr = e.name; }
+                if (unmountedErr !== 'ReferenceError') {
+                    throw new Error('expected ReferenceError before mount, got ' + unmountedErr);
+                }
+                "#,
+            )
+            .expect("pre-mount checks");
+
+            // Attach mounted instances for layerA and layerB.
+            shell.attach_blur_target(layer_a, doc_a, bridge_a.clone(), Some(Rc::clone(&slot_a)));
+            shell.attach_blur_target(layer_b, doc_b, bridge_b.clone(), Some(Rc::clone(&slot_b)));
+
+            // Register valid node blur on layerA via both [node] and { nodes, minOpacity }.
+            ctx.eval::<(), _>(
+                r#"
+                __zguiShell.setBlurRegion(layerA, [nodeA]);
+                __zguiShell.setBlurRegion(layerA, { nodes: [nodeA], minOpacity: 0.35 });
+                "#,
+            )
+            .expect("register node blur");
+
+            let (reg_before, ver_before) = slot_a.snapshot();
+            assert!(
+                matches!(&reg_before, BlurRegistration::Nodes { nodes, min_opacity } if nodes.len() == 1 && (*min_opacity - 0.35).abs() < 1e-12),
+                "live BlurSlot must reflect valid node registration, got {reg_before:?}"
+            );
+
+            // Atomic rejections: mixed arrays, forged node, foreign node last, bad minOpacity
+            // (including on { nodes: [] }), and > MAX_BLUR_NODES must throw without mutating
+            // live BlurSlot or stored DesiredBlur.
+            ctx.eval::<(), _>(
+                r#"
+                const expectErr = (fn, expected, label) => {
+                    let actual = 'NONE';
+                    try { fn(); } catch (e) { actual = e.name; }
+                    if (actual !== expected) throw new Error(`${label}: expected ${expected}, got ${actual}`);
+                };
+                const rect = { x: 0, y: 0, width: 10, height: 10 };
+                expectErr(() => __zguiShell.setBlurRegion(layerA, [nodeA, rect]), 'TypeError', 'mixed [node, rect]');
+                expectErr(() => __zguiShell.setBlurRegion(layerA, [rect, nodeA]), 'TypeError', 'mixed [rect, node]');
+                expectErr(() => __zguiShell.setBlurRegion(layerA, { nodes: [{}] }), 'TypeError', 'forged node');
+                expectErr(() => __zguiShell.setBlurRegion(layerA, [nodeA, nodeB]), 'ReferenceError', 'foreign node last');
+                expectErr(() => __zguiShell.setBlurRegion(layerA, { nodes: [nodeA, nodeB], minOpacity: 0.5 }), 'ReferenceError', 'foreign node in object');
+                for (const bad of [null, '0.5', NaN, Infinity, -Infinity]) {
+                    expectErr(() => __zguiShell.setBlurRegion(layerA, { nodes: [], minOpacity: bad }), 'TypeError', `bad minOpacity ${bad}`);
+                }
+                for (const oor of [-0.01, 1.01]) {
+                    expectErr(() => __zguiShell.setBlurRegion(layerA, { nodes: [], minOpacity: oor }), 'RangeError', `oor minOpacity ${oor}`);
+                }
+                // > 256 nodes (up to 1024) is accepted (independent of 256 output rect cap),
+                // while 1025 nodes throws RangeError.
+                const many = Array.from({ length: 300 }, () => nodeB);
+                __zguiShell.setBlurRegion(layerB, { nodes: many, minOpacity: 0.2 });
+                const tooMany = Array.from({ length: 1025 }, () => nodeA);
+                expectErr(() => __zguiShell.setBlurRegion(layerA, { nodes: tooMany }), 'RangeError', 'over MAX_BLUR_NODES');
+                "#,
+            )
+            .expect("atomic rejection and node limit checks");
+
+            let (reg_after, ver_after) = slot_a.snapshot();
+            assert_eq!(reg_after, reg_before, "rejected calls must preserve live BlurSlot");
+            assert_eq!(ver_after, ver_before, "rejected calls must not bump intent version");
+
+            // Named-layer recreation reusing the same shell request ID with a new DocumentId:
+            // DesiredBlur::Nodes bound to doc_a must resolve to BlurRegistration::None on doc_c!
+            let spec_a = shell.specs().remove(&layer_a).expect("layer A spec");
+            let doc_c = DocumentId::new(99).expect("nonzero document id");
+            assert_eq!(
+                spec_a.blur.to_registration(doc_c),
+                BlurRegistration::None,
+                "stale DocumentId node blur must never carry onto a recreated mount instance"
+            );
+            assert_eq!(
+                spec_a.blur.to_registration(doc_a),
+                reg_before,
+                "matching DocumentId preserves node registration"
+            );
+        });
+
         shell.clear();
     }
 }

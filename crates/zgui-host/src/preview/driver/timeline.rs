@@ -75,8 +75,12 @@ impl Driver {
             return Ok((f64::from(self.surface.width),f64::from(self.surface.height),self.surface.scale));
         }
         let surface=self.window(name)?.surface();
-        let size=surface.size();
         let scale=surface.scale_factor();
+        if let Some(offscreen) = self.pipeline.platform().offscreen(surface.id()) {
+            let logical = offscreen.logical_size();
+            return Ok((f64::from(logical.width.0), f64::from(logical.height.0), scale));
+        }
+        let size=surface.size();
         Ok((f64::from(size.width.0)/scale,f64::from(size.height.0)/scale,scale))
     }
     fn configure_surface(&mut self,name:&str,width:f64,height:f64,scale:f64,scale_changed:bool)->Result<Value,Fault> {
@@ -89,6 +93,12 @@ impl Driver {
             self.surface.height=height as u32;
             self.surface.scale=scale;
             self.dimensions=dimensions;
+        }
+        if let Some(offscreen) = self.pipeline.platform().offscreen(surface) {
+            offscreen.set_logical_size(Size::new(
+                zgui::geom::CssPx(width as f32),
+                zgui::geom::CssPx(height as f32),
+            ));
         }
         let size=Size::new(DevicePx(dimensions.0 as f32),DevicePx(dimensions.1 as f32));
         let changed=previous!=(width,height,scale);

@@ -73,7 +73,12 @@ fn parse(written: &str) -> Option<CornerShape> {
         .or_else(|| written.strip_prefix("SUPERELLIPSE("))
         .and_then(|rest| rest.strip_suffix(')'))
         .unwrap_or(written);
-    inner.trim().parse::<f32>().ok().map(CornerShape::new)
+    inner
+        .trim()
+        .parse::<f32>()
+        .ok()
+        .filter(|exponent| exponent.is_finite())
+        .map(CornerShape::new)
 }
 
 #[cfg(test)]
@@ -117,5 +122,22 @@ mod tests {
         assert_eq!(parse("wobbly"), None);
         assert_eq!(parse("superellipse(wobbly)"), None);
         assert_eq!(parse(""), None);
+    }
+
+    #[test]
+    fn non_finite_exponents_are_rejected_before_clamping() {
+        for raw in [
+            "NaN",
+            "inf",
+            "-inf",
+            "infinity",
+            "-infinity",
+            "superellipse(NaN)",
+            "superellipse(inf)",
+            "superellipse(-inf)",
+            "SUPERELLIPSE(Infinity)",
+        ] {
+            assert_eq!(parse(raw), None, "{raw:?} must not clamp into a valid shape");
+        }
     }
 }

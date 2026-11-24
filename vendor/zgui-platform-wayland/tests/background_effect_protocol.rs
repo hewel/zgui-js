@@ -8,15 +8,24 @@
     target_os = "openbsd"
 ))]
 
-use std::collections::{HashMap, HashSet};
-use std::io::{Read, Write};
+use std::collections::{HashMap, HashSet, VecDeque};
+use std::io::{IoSliceMut, Write};
+use std::os::fd::{AsFd, OwnedFd};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::process::Command;
 use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use zgui_geom::{Css, CssPx, Point, Rect, Size};
+use rustix::net::{RecvAncillaryBuffer, RecvAncillaryMessage, RecvFlags, recvmsg};
+use wayland_client::globals::{GlobalListContents, registry_queue_init};
+use wayland_client::protocol::wl_buffer::WlBuffer;
+use wayland_client::protocol::wl_registry::WlRegistry;
+use wayland_client::protocol::wl_shm::{self, WlShm};
+use wayland_client::protocol::wl_shm_pool::WlShmPool;
+use wayland_client::protocol::wl_surface::WlSurface;
+use wayland_client::{Connection, Dispatch, EventQueue, QueueHandle};
+use zgui_geom::{Css, CssPx, Device, Edges, Point, Rect, Size};
 use zgui_platform::{
     AppHandler, BlurRegion, LayerPlacement, PlatformCx, PopupPlacement, Surface, SurfaceAttributes,
     SurfaceEvent, SurfaceId, SurfaceRole, WakeReason,
@@ -43,16 +52,18 @@ enum Scenario {
     DynamicCapabilitiesAndRecreation,
     EarlyPopupRetirement,
     ZeroSurfaceCapabilityWakes,
+    FrameSynchronousHandover,
 }
 
 impl Scenario {
-    const ALL: [Self; 6] = [
+    const ALL: [Self; 7] = [
         Self::ManagerWithBlur,
         Self::AbsentManager,
         Self::ZeroFlagsManager,
         Self::DynamicCapabilitiesAndRecreation,
         Self::EarlyPopupRetirement,
         Self::ZeroSurfaceCapabilityWakes,
+        Self::FrameSynchronousHandover,
     ];
 
     fn name(self) -> &'static str {
@@ -63,6 +74,7 @@ impl Scenario {
             Self::DynamicCapabilitiesAndRecreation => "dynamic-capabilities-and-recreation",
             Self::EarlyPopupRetirement => "early-popup-retirement",
             Self::ZeroSurfaceCapabilityWakes => "zero-surface-capability-wakes",
+            Self::FrameSynchronousHandover => "frame-synchronous-handover",
         }
     }
 }
@@ -76,6 +88,11 @@ fn background_effect_protocol_on_the_wire() {
             .expect("known scenario");
         let mut app =
             WaylandApp::new(Client::new(scenario)).expect("connect to the protocol fixture");
+        if scenario == Scenario::FrameSynchronousHandover {
+            let conn = app.connection().clone();
+            let lookup = app.wl_surface_lookup();
+            app.handler_mut().attach_shm_helper(conn, Box::new(lookup));
+        }
         app.run().expect("Wayland client loop");
         assert!(app.handler().done, "{scenario:?} client did not finish");
         if scenario == Scenario::DynamicCapabilitiesAndRecreation {
@@ -173,13 +190,122 @@ fn open_popup(cx: &dyn PlatformCx, parent: SurfaceId) -> Arc<dyn Surface> {
     cx.create_surface(&attrs).expect("create popup surface")
 }
 
+struct ShmState;
+impl Dispatch<WlRegistry, GlobalListContents> for ShmState {
+    fn event(
+        _: &mut Self,
+        _: &WlRegistry,
+        _: <WlRegistry as wayland_client::Proxy>::Event,
+        _: &GlobalListContents,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+    }
+}
+impl Dispatch<WlShm, ()> for ShmState {
+    fn event(
+        _: &mut Self,
+        _: &WlShm,
+        _: wl_shm::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+    }
+}
+impl Dispatch<WlShmPool, ()> for ShmState {
+    fn event(
+        _: &mut Self,
+        _: &WlShmPool,
+        _: wayland_client::protocol::wl_shm_pool::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+    }
+}
+impl Dispatch<WlBuffer, ()> for ShmState {
+    fn event(
+        _: &mut Self,
+        _: &WlBuffer,
+        _: wayland_client::protocol::wl_buffer::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+    }
+}
+
+struct ShmHelper {
+    conn: Connection,
+    _queue: EventQueue<ShmState>,
+    qh: QueueHandle<ShmState>,
+    shm: WlShm,
+    lookup: Box<dyn Fn(SurfaceId) -> Option<WlSurface>>,
+    buffers: Vec<WlBuffer>,
+    seq: u32,
+}
+
+impl ShmHelper {
+    fn new(conn: Connection, lookup: Box<dyn Fn(SurfaceId) -> Option<WlSurface>>) -> Self {
+        let (globals, queue) =
+            registry_queue_init::<ShmState>(&conn).expect("bind sidecar wl_shm");
+        let qh = queue.handle();
+        let shm = globals
+            .bind::<WlShm, _, _>(&qh, 1..=1, ())
+            .expect("bind wl_shm");
+        Self {
+            conn,
+            _queue: queue,
+            qh,
+            shm,
+            lookup,
+            buffers: Vec::new(),
+            seq: 0,
+        }
+    }
+
+    fn present_buffer(&mut self, surface: &Arc<dyn Surface>, width: i32, height: i32) {
+        self.seq += 1;
+        let stride = width * 4;
+        let bytes = stride * height;
+        let path = std::env::temp_dir().join(format!(
+            "zgui-blur-shm-{}-{}",
+            std::process::id(),
+            self.seq
+        ));
+        let mut file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create_new(true)
+            .open(&path)
+            .expect("create shm file");
+        let _ = std::fs::remove_file(&path);
+        file.write_all(&vec![0u8; bytes as usize])
+            .expect("fill shm file");
+        let pool = self.shm.create_pool(file.as_fd(), bytes, &self.qh, ());
+        let buffer =
+            pool.create_buffer(0, width, height, stride, wl_shm::Format::Argb8888, &self.qh, ());
+        pool.destroy();
+
+        surface.pre_present_frame(Size::new(width, height), surface.scale_factor());
+        let wl = (self.lookup)(surface.id()).expect("live wl_surface");
+        wl.attach(Some(&buffer), 0, 0);
+        wl.commit();
+        let _ = self.conn.flush();
+        self.buffers.push(buffer);
+    }
+}
+
 struct Client {
     scenario: Scenario,
     primary: Option<Arc<dyn Surface>>,
     secondary: Option<Arc<dyn Surface>>,
     popup1: Option<Arc<dyn Surface>>,
     popup2: Option<Arc<dyn Surface>>,
+    shm: Option<ShmHelper>,
     stage: u32,
+    idle_redraws: u32,
     done: bool,
     app_work_wakes: Vec<bool>,
 }
@@ -192,10 +318,20 @@ impl Client {
             secondary: None,
             popup1: None,
             popup2: None,
+            shm: None,
             stage: 0,
+            idle_redraws: 0,
             done: false,
             app_work_wakes: Vec::new(),
         }
+    }
+
+    fn attach_shm_helper(
+        &mut self,
+        conn: Connection,
+        lookup: Box<dyn Fn(SurfaceId) -> Option<WlSurface>>,
+    ) {
+        self.shm = Some(ShmHelper::new(conn, lookup));
     }
 }
 
@@ -247,6 +383,11 @@ impl AppHandler for Client {
                     !cx.capabilities().supports_background_blur,
                     "zero-surface client starts with blur capability false before events"
                 );
+            }
+            Scenario::FrameSynchronousHandover => {
+                assert!(cx.capabilities().supports_background_blur);
+                let layer = open_layer(cx, 200.0, 40.0);
+                self.primary = Some(layer);
             }
         }
     }
@@ -355,6 +496,89 @@ impl AppHandler for Client {
                 }
             }
             Scenario::ZeroSurfaceCapabilityWakes => {}
+            Scenario::FrameSynchronousHandover => {
+                let primary = self.primary.as_ref().expect("primary").clone();
+                if id == primary.id() && matches!(event, SurfaceEvent::RedrawRequested) {
+                    match self.stage {
+                        0 => {
+                            // Animated frame 1: buffer + mask A committed atomically.
+                            primary.stage_blur_region_for_present(BlurRegion::Rects(&[rect(
+                                10.0, 4.0, 40.0, 20.0,
+                            )]));
+                            self.shm
+                                .as_mut()
+                                .expect("shm")
+                                .present_buffer(&primary, 200, 40);
+                            primary.finalize_presented_blur();
+                            self.stage = 1;
+                            primary.request_redraw();
+                        }
+                        1 => {
+                            // Animated frame 2: buffer + mask B committed atomically.
+                            primary.stage_blur_region_for_present(BlurRegion::Rects(&[rect(
+                                60.0, 4.0, 40.0, 20.0,
+                            )]));
+                            self.shm
+                                .as_mut()
+                                .expect("shm")
+                                .present_buffer(&primary, 200, 40);
+                            primary.finalize_presented_blur();
+                            self.stage = 2;
+                        }
+                        7 | 8 => {
+                            // Idle metadata-only update/clear: finish_redraw emits ONE bare commit.
+                            self.idle_redraws += 1;
+                        }
+                        _ => {}
+                    }
+                } else if Some(id) == self.popup1.as_ref().map(|s| s.id()) {
+                    let popup = self.popup1.as_ref().expect("popup").clone();
+                    match event {
+                        SurfaceEvent::RedrawRequested if self.stage == 3 => {
+                            // Auto-height bootstrap frame: transparent empty buffer with NO blur.
+                            popup.clear_staged_blur_region();
+                            self.shm
+                                .as_mut()
+                                .expect("shm")
+                                .present_buffer(&popup, 144, 136);
+                            popup.finalize_presented_blur();
+                            let insets =
+                                Edges::new(CssPx(8.0), CssPx(12.0), CssPx(8.0), CssPx(12.0));
+                            let placement = PopupPlacement::below(
+                                primary.id(),
+                                rect(4.0, 4.0, 20.0, 20.0),
+                            )
+                            .with_geometry_insets(insets);
+                            popup
+                                .reconfigure_popup(
+                                    &placement,
+                                    Size::new(CssPx(120.0), CssPx(80.0)),
+                                )
+                                .expect("reposition auto-height popup");
+                            self.stage = 4;
+                        }
+                        SurfaceEvent::Resized(size) if self.stage == 4 => {
+                            assert_eq!(size.width.0, 144.0);
+                            assert_eq!(size.height.0, 96.0);
+                            self.stage = 5;
+                            popup.request_redraw();
+                        }
+                        SurfaceEvent::RedrawRequested if self.stage == 5 => {
+                            // Resized popup frame: buffer + accurate mask + updated window geometry.
+                            popup.stage_blur_region_for_present(BlurRegion::Rects(&[rect(
+                                12.0, 8.0, 120.0, 80.0,
+                            )]));
+                            self.shm
+                                .as_mut()
+                                .expect("shm")
+                                .present_buffer(&popup, 144, 96);
+                            popup.finalize_presented_blur();
+                            self.stage = 6;
+                        }
+                        _ => {}
+                    }
+                }
+            }
         }
     }
 
@@ -430,6 +654,58 @@ impl AppHandler for Client {
                     cx.request_exit();
                 }
             }
+            Scenario::FrameSynchronousHandover => match self.stage {
+                2 => {
+                    let primary = self.primary.as_ref().expect("primary");
+                    // Held frame staged blur cancelled before present + failed acquire rollback:
+                    // must NOT leak any staged blur onto an older buffer via bare commit.
+                    primary.stage_blur_region_for_present(BlurRegion::Rects(&[rect(
+                        99.0, 1.0, 10.0, 10.0,
+                    )]));
+                    primary.clear_staged_blur_region();
+                    primary.stage_blur_region_for_present(BlurRegion::None);
+                    primary.rollback_unpresented_blur();
+
+                    // Open auto-height popup with geometryInsets (top/bottom=8, left/right=12).
+                    let insets = Edges::new(CssPx(8.0), CssPx(12.0), CssPx(8.0), CssPx(12.0));
+                    let placement = PopupPlacement::below(
+                        primary.id(),
+                        rect(4.0, 4.0, 20.0, 20.0),
+                    )
+                    .with_geometry_insets(insets);
+                    let mut attrs = SurfaceAttributes::popup(placement);
+                    attrs.size = Some(Size::new(CssPx(120.0), CssPx(120.0)));
+                    attrs.transparent = true;
+                    let popup = cx.create_surface(&attrs).expect("create inset popup");
+                    self.popup1 = Some(popup);
+                    self.stage = 3;
+                }
+                6 => {
+                    // Idle metadata-only update on primary -> ONE legal bare commit.
+                    self.stage = 7;
+                    self.primary
+                        .as_ref()
+                        .expect("primary")
+                        .apply_idle_blur_region(BlurRegion::Rects(&[rect(20.0, 6.0, 80.0, 24.0)]));
+                }
+                7 => {
+                    // Idle metadata-only clear on primary -> ONE legal bare commit.
+                    self.stage = 8;
+                    self.primary
+                        .as_ref()
+                        .expect("primary")
+                        .apply_idle_blur_region(BlurRegion::None);
+                }
+                8 => {
+                    assert_eq!(
+                        self.idle_redraws, 2,
+                        "idle update + clear must each run exactly one redraw without looping"
+                    );
+                    self.done = true;
+                    cx.request_exit();
+                }
+                _ => {}
+            },
             _ => {}
         }
     }
@@ -447,6 +723,8 @@ enum Object {
     Registry,
     Compositor,
     Shm,
+    ShmPool,
+    Buffer,
     XdgShell,
     LayerShell,
     Output,
@@ -468,8 +746,19 @@ enum CommittedBlur {
     Rects(Vec<[i32; 4]>),
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct CommitRecord {
+    surface_id: u32,
+    commit_ordinal: u32,
+    attached_this_commit: bool,
+    buffer_id: u32,
+    effective_blur: CommittedBlur,
+    window_geometry: Option<[i32; 4]>,
+}
+
 struct Compositor {
     stream: UnixStream,
+    descriptors: VecDeque<OwnedFd>,
     scenario: Scenario,
     objects: HashMap<u32, Object>,
     registry: u32,
@@ -479,6 +768,12 @@ struct Compositor {
     regions: HashMap<u32, Vec<[i32; 4]>>,
     destroyed_regions: HashSet<u32>,
     pending_blur: HashMap<u32, Option<CommittedBlur>>,
+    effective_blur: HashMap<u32, CommittedBlur>,
+    pending_attach: HashMap<u32, Option<u32>>,
+    pending_window_geometry: HashMap<u32, [i32; 4]>,
+    effective_window_geometry: HashMap<u32, [i32; 4]>,
+    commit_ordinals: HashMap<u32, u32>,
+    commit_log: Vec<CommitRecord>,
     committed_blurs: HashMap<u32, Vec<CommittedBlur>>,
     effect_creations: Vec<(u32, u32, u32)>, // (manager_proxy, effect_id, wl_surface_id)
     effect_for_surface: HashMap<u32, Vec<u32>>,
@@ -496,6 +791,7 @@ impl Compositor {
     fn new(stream: UnixStream, scenario: Scenario) -> Self {
         Self {
             stream,
+            descriptors: VecDeque::new(),
             scenario,
             objects: HashMap::new(),
             registry: 0,
@@ -505,6 +801,12 @@ impl Compositor {
             regions: HashMap::new(),
             destroyed_regions: HashSet::new(),
             pending_blur: HashMap::new(),
+            effective_blur: HashMap::new(),
+            pending_attach: HashMap::new(),
+            pending_window_geometry: HashMap::new(),
+            effective_window_geometry: HashMap::new(),
+            commit_ordinals: HashMap::new(),
+            commit_log: Vec::new(),
             committed_blurs: HashMap::new(),
             effect_creations: Vec::new(),
             effect_for_surface: HashMap::new(),
@@ -517,6 +819,33 @@ impl Compositor {
             phase: 0,
             serial: 100,
         }
+    }
+
+    fn read_exact_with_fds(&mut self, mut bytes: &mut [u8]) -> std::io::Result<()> {
+        let mut storage = [std::mem::MaybeUninit::uninit(); rustix::cmsg_space!(ScmRights(8))];
+        while !bytes.is_empty() {
+            let mut ancillary = RecvAncillaryBuffer::new(&mut storage);
+            let message = recvmsg(
+                &self.stream,
+                &mut [IoSliceMut::new(bytes)],
+                &mut ancillary,
+                RecvFlags::empty(),
+            )
+            .map_err(std::io::Error::from)?;
+            for control in ancillary.drain() {
+                if let RecvAncillaryMessage::ScmRights(fds) = control {
+                    self.descriptors.extend(fds);
+                }
+            }
+            if message.bytes == 0 {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::UnexpectedEof,
+                    "peer closed Wayland socket",
+                ));
+            }
+            bytes = &mut bytes[message.bytes..];
+        }
+        Ok(())
     }
 
     fn next_serial(&mut self) -> u32 {
@@ -533,7 +862,7 @@ impl Compositor {
         let started = Instant::now();
         loop {
             let mut header = [0u8; 8];
-            match self.stream.read_exact(&mut header) {
+            match self.read_exact_with_fds(&mut header) {
                 Ok(()) => {}
                 Err(error)
                     if self.scenario == Scenario::ZeroSurfaceCapabilityWakes
@@ -584,7 +913,8 @@ impl Compositor {
             let opcode = descriptor & 0xffff;
             let len = (descriptor >> 16) as usize;
             let mut body = vec![0u8; len - 8];
-            self.stream.read_exact(&mut body).expect("Wayland request body");
+            self.read_exact_with_fds(&mut body)
+                .expect("Wayland request body");
             self.request(id, opcode, &body);
         }
     }
@@ -668,7 +998,9 @@ impl Compositor {
                         self.event(bound, 2, &[]);
                     }
                     Object::EffectManager(GLOBAL_EFFECT_1) => match self.scenario {
-                        Scenario::ManagerWithBlur | Scenario::EarlyPopupRetirement => {
+                        Scenario::ManagerWithBlur
+                        | Scenario::EarlyPopupRetirement
+                        | Scenario::FrameSynchronousHandover => {
                             self.event(bound, 0, &words(&[1])); // Capability::Blur
                         }
                         Scenario::ZeroFlagsManager => {
@@ -689,6 +1021,21 @@ impl Compositor {
                     }
                     _ => {}
                 }
+            }
+            (Object::Shm, 0) => {
+                // wl_shm.create_pool(id: new_id, fd: fd, size: int)
+                let _fd = self.descriptors.pop_front();
+                self.objects.insert(arg(0), Object::ShmPool);
+            }
+            (Object::ShmPool, 0) => {
+                // wl_shm_pool.create_buffer(id: new_id, ...)
+                self.objects.insert(arg(0), Object::Buffer);
+            }
+            (Object::ShmPool, 1) => {
+                self.objects.remove(&id);
+            }
+            (Object::Buffer, 0) => {
+                self.objects.remove(&id);
             }
             (Object::Compositor, 0) => {
                 let wl = arg(0);
@@ -755,6 +1102,11 @@ impl Compositor {
             (Object::XdgSurface(wl), 2) => {
                 self.objects.insert(arg(0), Object::XdgPopup(wl));
             }
+            (Object::XdgSurface(wl), 3) => {
+                // xdg_surface.set_window_geometry(x, y, width, height)
+                let geom = [arg(0) as i32, arg(1) as i32, arg(2) as i32, arg(3) as i32];
+                self.pending_window_geometry.insert(wl, geom);
+            }
             (Object::XdgToplevel(wl), 0) => {
                 self.destroy_log.push((id, "xdg_toplevel", wl));
                 self.objects.remove(&id);
@@ -762,6 +1114,15 @@ impl Compositor {
             (Object::XdgPopup(wl), 0) => {
                 self.destroy_log.push((id, "xdg_popup", wl));
                 self.objects.remove(&id);
+            }
+            (Object::XdgPopup(wl), 2) => {
+                // xdg_popup.reposition(positioner, token)
+                let token = arg(1);
+                let xdg_id = self.find_xdg_surface(wl);
+                let serial = self.next_serial();
+                self.event(id, 2, &words(&[token])); // xdg_popup.repositioned
+                self.event(id, 0, &words(&[4, 24, 120, 80])); // xdg_popup.configure
+                self.event(xdg_id, 0, &words(&[serial])); // xdg_surface.configure
             }
             (Object::EffectManager(_), 0) => {
                 self.objects.remove(&id);
@@ -791,6 +1152,10 @@ impl Compositor {
             (Object::Surface, 0) => {
                 self.destroy_log.push((id, "wl_surface", id));
                 self.objects.remove(&id);
+            }
+            (Object::Surface, 1) => {
+                // wl_surface.attach(buffer, x, y)
+                self.pending_attach.insert(id, Some(arg(0)));
             }
             (Object::Surface, 3) => {
                 let cb = arg(0);
@@ -837,8 +1202,35 @@ impl Compositor {
                     self.scenario
                 );
             }
+            self.effective_blur.insert(wl, blur.clone());
             self.committed_blurs.entry(wl).or_default().push(blur);
         }
+        if let Some(geom) = self.pending_window_geometry.remove(&wl) {
+            self.effective_window_geometry.insert(wl, geom);
+        }
+        let (attached_this_commit, buffer_id) = match self.pending_attach.remove(&wl).flatten() {
+            Some(buf) if buf != 0 => (true, buf),
+            _ => (false, 0),
+        };
+        let ordinal = {
+            let entry = self.commit_ordinals.entry(wl).or_insert(0);
+            *entry += 1;
+            *entry
+        };
+        let effective_blur = self
+            .effective_blur
+            .get(&wl)
+            .cloned()
+            .unwrap_or(CommittedBlur::None);
+        let window_geometry = self.effective_window_geometry.get(&wl).copied();
+        self.commit_log.push(CommitRecord {
+            surface_id: wl,
+            commit_ordinal: ordinal,
+            attached_this_commit,
+            buffer_id,
+            effective_blur,
+            window_geometry,
+        });
 
         self.answer_callbacks(wl);
         self.advance_scenario(wl);
@@ -866,7 +1258,12 @@ impl Compositor {
             }
             Some((popup_id, Object::XdgPopup(_))) => {
                 let xdg_id = self.find_xdg_surface(wl);
-                self.event(popup_id, 0, &words(&[4, 24, 120, 80]));
+                let h = if self.scenario == Scenario::FrameSynchronousHandover {
+                    120
+                } else {
+                    80
+                };
+                self.event(popup_id, 0, &words(&[4, 24, 120, h]));
                 self.event(xdg_id, 0, &words(&[serial]));
             }
             _ => {}
@@ -967,6 +1364,38 @@ impl Compositor {
                         self.phase = 2;
                         self.nudge_client();
                     }
+                }
+            }
+            Scenario::FrameSynchronousHandover => {
+                let primary = self.surface_order[0];
+                let popup = self.surface_order.get(1).copied();
+                let primary_commits = self.commit_ordinals.get(&primary).copied().unwrap_or(0);
+                let popup_commits = popup
+                    .and_then(|p| self.commit_ordinals.get(&p).copied())
+                    .unwrap_or(0);
+                if wl == primary {
+                    match (self.phase, primary_commits) {
+                        (0, 2) => {
+                            // Both animated frames committed with distinct buffers + masks.
+                            self.phase = 1;
+                            self.nudge_client();
+                        }
+                        (2, 3) => {
+                            // Idle update committed via bare commit -> trigger idle clear.
+                            self.phase = 3;
+                            self.nudge_client();
+                        }
+                        (3, 4) => {
+                            // Idle clear committed via bare commit -> finish scenario.
+                            self.phase = 4;
+                            self.nudge_client();
+                        }
+                        _ => {}
+                    }
+                } else if Some(wl) == popup && self.phase == 1 && popup_commits == 2 {
+                    // Popup bootstrap + resized buffer both committed -> trigger idle primary update.
+                    self.phase = 2;
+                    self.nudge_client();
                 }
             }
             Scenario::AbsentManager
@@ -1120,6 +1549,73 @@ impl Compositor {
                     self.effect_creations.is_empty(),
                     "zero-surface scenario must not create any ext_background_effect_surface_v1"
                 );
+            }
+            Scenario::FrameSynchronousHandover => {
+                let primary = self.surface_order[0];
+                let popup = self.surface_order[1];
+                let primary_commits: Vec<&CommitRecord> = self
+                    .commit_log
+                    .iter()
+                    .filter(|r| r.surface_id == primary)
+                    .collect();
+                assert_eq!(
+                    primary_commits.len(),
+                    4,
+                    "primary must commit exactly 2 animated buffer frames + 2 idle bare commits (no leaked held/rollback commits): {primary_commits:?}"
+                );
+                // Commit 1 & 2: distinct attached buffers carrying distinct frame-synchronous masks.
+                assert!(primary_commits[0].attached_this_commit);
+                assert!(primary_commits[1].attached_this_commit);
+                assert_ne!(primary_commits[0].buffer_id, 0);
+                assert_ne!(primary_commits[1].buffer_id, 0);
+                assert_ne!(
+                    primary_commits[0].buffer_id, primary_commits[1].buffer_id,
+                    "animated frames must attach distinct wl_buffers"
+                );
+                assert_eq!(
+                    primary_commits[0].effective_blur,
+                    CommittedBlur::Rects(vec![[10, 4, 40, 20]])
+                );
+                assert_eq!(
+                    primary_commits[1].effective_blur,
+                    CommittedBlur::Rects(vec![[60, 4, 40, 20]])
+                );
+                // Commit 3 & 4: idle metadata-only update and clear via legal bufferless bare commits.
+                assert!(!primary_commits[2].attached_this_commit);
+                assert_eq!(primary_commits[2].buffer_id, 0);
+                assert_eq!(
+                    primary_commits[2].effective_blur,
+                    CommittedBlur::Rects(vec![[20, 6, 80, 24]])
+                );
+                assert!(!primary_commits[3].attached_this_commit);
+                assert_eq!(primary_commits[3].buffer_id, 0);
+                assert_eq!(primary_commits[3].effective_blur, CommittedBlur::None);
+
+                // Popup: commit 1 is auto-height bootstrap buffer with NO blur, commit 2 is resized
+                // buffer with accurate mask + updated xdg_surface.set_window_geometry.
+                let popup_commits: Vec<&CommitRecord> = self
+                    .commit_log
+                    .iter()
+                    .filter(|r| r.surface_id == popup)
+                    .collect();
+                assert_eq!(
+                    popup_commits.len(),
+                    2,
+                    "popup must commit bootstrap frame then repositioned frame: {popup_commits:?}"
+                );
+                assert!(popup_commits[0].attached_this_commit);
+                assert_ne!(popup_commits[0].buffer_id, 0);
+                assert_eq!(popup_commits[0].effective_blur, CommittedBlur::None);
+                assert_eq!(popup_commits[0].window_geometry, Some([12, 8, 120, 120]));
+
+                assert!(popup_commits[1].attached_this_commit);
+                assert_ne!(popup_commits[1].buffer_id, 0);
+                assert_ne!(popup_commits[0].buffer_id, popup_commits[1].buffer_id);
+                assert_eq!(
+                    popup_commits[1].effective_blur,
+                    CommittedBlur::Rects(vec![[12, 8, 120, 80]])
+                );
+                assert_eq!(popup_commits[1].window_geometry, Some([12, 8, 120, 80]));
             }
         }
     }

@@ -34,6 +34,7 @@ function ShadowCardContent(props: {
         style={{
           width: "360px",
           height: "200px",
+          borderRadius: "16px",
           backgroundColor: "#2563eb",
         }}
         onClick={props.onHit}
@@ -166,6 +167,7 @@ export function mount(root: NativeNode) {
             maxHeight={320}
             geometryInsets={shadowInsets()}
             inputRegion={shadowCard() ? [shadowCard()!] : []}
+            blurRegion={shadowCard() ? [shadowCard()!] : []}
           >
             <ShadowCardContent
               setCard={setShadowCard}

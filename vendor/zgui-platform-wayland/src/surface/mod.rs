@@ -381,12 +381,40 @@ impl WaylandSurface {
         let effect = {
             let mut shared = self.shared();
             shared.blur_owed = false;
+            shared.blur_staged = None;
+            shared.blur_pre_presented = None;
+            shared.blur_last_committed = region::OwnedBlurRegion::None;
             shared.blur_surface.take()
         };
         if let Some(effect) = effect
             && effect.is_alive()
         {
             effect.destroy();
+        }
+    }
+
+    /// Promotes any staged picture-bound blur candidate into `blur_desired` / `blur_owed` right
+    /// before `send_regions()` runs inside `chrome::pre_present` (including `present_held`).
+    pub(crate) fn promote_staged_blur_for_present(&self) {
+        if !self.is_blur_eligible() || !self.active() {
+            return;
+        }
+        let supported = self.background_effect.blur_supported();
+        let mut shared = self.shared();
+        if let Some(staged) = shared.blur_staged.take() {
+            let previous = shared.blur_last_committed.clone();
+            shared.blur_pre_presented = Some(previous);
+            if shared.blur_desired != staged {
+                shared.blur_desired = staged;
+                let needs_protocol = (supported
+                    && (!shared.blur_desired.is_none() || shared.blur_surface.is_some()))
+                    || (!supported && shared.blur_surface.is_some());
+                if needs_protocol {
+                    shared.blur_owed = true;
+                }
+            }
+        } else {
+            shared.blur_pre_presented = None;
         }
     }
 
@@ -451,6 +479,9 @@ impl WaylandSurface {
                 return;
             }
             shared.blur_owed = false;
+            if shared.blur_pre_presented.is_none() {
+                shared.blur_last_committed = shared.blur_desired.clone();
+            }
             match manager {
                 Some(manager) => match &shared.blur_desired {
                     region::OwnedBlurRegion::None => {
@@ -1281,6 +1312,8 @@ impl Surface for WaylandSurface {
         let supported = self.background_effect.blur_supported();
         let should_redraw = {
             let mut shared = self.shared();
+            shared.blur_staged = None;
+            shared.blur_pre_presented = None;
             if shared.blur_desired == next {
                 return;
             }
@@ -1294,6 +1327,111 @@ impl Surface for WaylandSurface {
             needs_protocol
         };
         if should_redraw {
+            self.request_redraw();
+        }
+    }
+
+    fn logical_extent_for(&self, size: Size<i32, Device>, scale: f64) -> Size<CssPx, Css> {
+        let scale = if scale.is_finite() && scale > 0.0 {
+            scale
+        } else {
+            1.0
+        };
+        let logical = {
+            let shared = self.shared();
+            let matching_current =
+                shared.device_extent() == size && (shared.scale - scale).abs() < 1e-5;
+            if matching_current {
+                shared.logical
+            } else {
+                Size::new(
+                    CssPx((f64::from(size.width.max(1)) / scale) as f32),
+                    CssPx((f64::from(size.height.max(1)) / scale) as f32),
+                )
+            }
+        };
+        if self.fractional().crops() {
+            Size::new(
+                CssPx((logical.width.0.round() as i32).max(1) as f32),
+                CssPx((logical.height.0.round() as i32).max(1) as f32),
+            )
+        } else {
+            logical
+        }
+    }
+
+    fn stage_blur_region_for_present(&self, region: BlurRegion<'_>) {
+        if !self.is_blur_eligible() || !self.active() {
+            return;
+        }
+        let next = region::normalize_blur(region);
+        let mut shared = self.shared();
+        shared.blur_staged = Some(next);
+    }
+
+    fn clear_staged_blur_region(&self) {
+        let mut shared = self.shared();
+        shared.blur_staged = None;
+        shared.blur_pre_presented = None;
+    }
+
+    fn finalize_presented_blur(&self) {
+        let mut shared = self.shared();
+        shared.blur_pre_presented = None;
+        shared.blur_last_committed = shared.blur_desired.clone();
+    }
+
+    fn rollback_unpresented_blur(&self) {
+        let (should_redraw, drawing) = {
+            let mut shared = self.shared();
+            shared.blur_staged = None;
+            if let Some(previous) = shared.blur_pre_presented.take() {
+                let changed = shared.blur_desired != previous;
+                shared.blur_desired = previous;
+                let supported = self.background_effect.blur_supported();
+                let needs_protocol = changed
+                    && ((supported
+                        && (!shared.blur_desired.is_none() || shared.blur_surface.is_some()))
+                        || (!supported && shared.blur_surface.is_some()));
+                if needs_protocol {
+                    shared.blur_owed = true;
+                }
+                (needs_protocol, shared.drawing)
+            } else {
+                (false, false)
+            }
+        };
+        if should_redraw && !drawing {
+            self.request_redraw();
+        }
+    }
+
+    fn apply_idle_blur_region(&self, region: BlurRegion<'_>) {
+        if !self.is_blur_eligible() || !self.active() {
+            return;
+        }
+        let next = region::normalize_blur(region);
+        let supported = self.background_effect.blur_supported();
+        let (should_redraw, drawing) = {
+            let mut shared = self.shared();
+            shared.blur_staged = None;
+            shared.blur_pre_presented = None;
+            if shared.blur_desired == next {
+                return;
+            }
+            shared.blur_desired = next;
+            let needs_protocol = (supported
+                && (!shared.blur_desired.is_none() || shared.blur_surface.is_some()))
+                || (!supported && shared.blur_surface.is_some());
+            if needs_protocol {
+                shared.blur_owed = true;
+            }
+            (needs_protocol, shared.drawing)
+        };
+        // During an active redraw delivery (`drawing == true`), `finish_redraw` observes
+        // `blur_owed` via `owes_surface_change()` and performs one legal bare commit without
+        // queuing a redundant redraw loop.
+        if should_redraw && !drawing {
             self.request_redraw();
         }
     }

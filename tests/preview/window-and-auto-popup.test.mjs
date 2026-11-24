@@ -245,6 +245,21 @@ test("PopupSurface geometryInsets expands transparent auto-height surface at 1.2
 
   const initialFrame = await readFrame(out, "surfaces/shadow-card/shadow-initial");
   assert.deepEqual(initialFrame.windowGeometry, { x: 28, y: 28, width: 360, height: 200 });
+  assert.ok(
+    Array.isArray(initialFrame.blurRegion) && initialFrame.blurRegion.length > 1,
+    `expected rounded blur strips on first inset auto-height popup frame, got ${JSON.stringify(initialFrame.blurRegion)}`,
+  );
+  const firstStrip = initialFrame.blurRegion[0];
+  const lastStrip = initialFrame.blurRegion[initialFrame.blurRegion.length - 1];
+  const midStrip = initialFrame.blurRegion[Math.floor(initialFrame.blurRegion.length / 2)];
+  assert.equal(firstStrip.y, 28, "top blur strip must start at surface-local y=28");
+  assert.equal(lastStrip.y + lastStrip.height, 228, "bottom blur strip must end at y=228");
+  assert.ok(
+    firstStrip.x > 28 && firstStrip.width < 360,
+    "top strip must curve inward for 16px border-radius",
+  );
+  assert.equal(midStrip.x, 28, "middle strip must span full surface-local card x=28");
+  assert.equal(midStrip.width, 360, "middle strip must span full 360px card width");
   const initialTree = await readTree(out, "surfaces/shadow-card/shadow-initial");
   assert.equal(getNode(initialTree, "shadow-hits").text, "shadow=1");
 

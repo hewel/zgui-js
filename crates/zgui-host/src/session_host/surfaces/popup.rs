@@ -3,7 +3,7 @@ use std::{collections::BTreeSet, rc::Rc};
 use zgui::{platform::{InputRegion, InputSerial, PlatformCx, SurfaceId}, runtime::{Runtime, WindowToken}};
 
 use super::{ImageChoice, Monitor, RuntimeSurface, Session, SessionHost, SessionSurface, ShellKind, ShellWindows, SurfaceOpacity, close_native_surface, open_region, present, shell_window_content};
-use crate::{session::Result, shell::{DesiredBlur, PopupSpec}};
+use crate::{session::Result, shell::PopupSpec};
 
 pub(super) struct RunningPopup {
     pub(super) token: WindowToken,
@@ -126,10 +126,6 @@ impl ShellWindows {
                     cx.surface(popup.surface).ok_or("running popup has no platform surface")?
                         .set_shell_input_region(&spec.input).map_err(|error| error.to_string())?;
                 }
-                if popup.spec.blur != spec.blur {
-                    cx.surface(popup.surface).ok_or("running popup has no platform surface")?
-                        .set_blur_region(spec.blur.as_platform());
-                }
                 popup.spec = spec;
                 continue;
             }
@@ -156,11 +152,6 @@ impl ShellWindows {
             if popup.spec.input != InputRegion::Full {
                 cx.surface(surface).ok_or("opened popup has no platform surface")?
                     .set_shell_input_region(&popup.spec.input).map_err(|error| error.to_string())?;
-            }
-            if let Some(blur) = session.shell.updated_blur(id, &popup.spec.blur) { popup.spec.blur = blur; }
-            if popup.spec.blur != DesiredBlur::None {
-                cx.surface(surface).ok_or("opened popup has no platform surface")?
-                    .set_blur_region(popup.spec.blur.as_platform());
             }
             binding.request_frame(document);
         }

@@ -69,12 +69,24 @@ export type LayerInputRegion =
   | "empty"
   | readonly NativeWindowRect[]
   | readonly NativeNode[];
+/** Native rounded-node background blur target set with an accumulated effective-opacity cutoff. */
+export interface BlurRegionNodes {
+  readonly nodes: readonly NativeNode[];
+  /** Accumulated effective-opacity cutoff in `[0, 1]`. Default `0.5`; `0` skips only `<= 0` and `visibility: hidden`. */
+  readonly minOpacity?: number | undefined;
+}
 /**
  * Declarative background blur region for an owned non-lock surface.
  * Rectangles use surface-local logical coordinates. Nodes must belong to this surface.
- * Omitted or `[]` defaults to `"none"`.
+ * `[card]` is exact shorthand for `{ nodes: [card], minOpacity: 0.5 }`.
+ * Omitted, `[]`, or `{ nodes: [] }` defaults to `"none"`.
  */
-export type BlurRegion = "none" | "full" | readonly NativeWindowRect[] | readonly NativeNode[];
+export type BlurRegion =
+  | "none"
+  | "full"
+  | readonly NativeWindowRect[]
+  | readonly NativeNode[]
+  | BlurRegionNodes;
 export interface LayerSurfaceProps extends LayerSurfacePlacement {
   readonly name: string;
   readonly inputRegion?: LayerInputRegion;

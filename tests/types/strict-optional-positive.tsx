@@ -10,6 +10,7 @@ import {
 } from "@hewel/zgui";
 import type {
   BlurRegion,
+  BlurRegionNodes,
   NativeNode,
   ProjectionOptions,
   SpringOptions,
@@ -52,6 +53,9 @@ const maybeChecked: boolean | undefined = undefined;
 const maybeClass: string | undefined = undefined;
 const maybeOpen: boolean | undefined = undefined;
 const maybeBlur: BlurRegion | undefined = undefined;
+const maybeBlurNodes: BlurRegionNodes = { nodes: [], minOpacity: undefined };
+const maybeBlurAsRegion: BlurRegion = maybeBlurNodes;
+void maybeBlurAsRegion;
 const maybeInsets: SurfaceInsets | undefined = { top: undefined, left: 24 };
 
 export function strictOptionalProbe(root: NativeNode) {

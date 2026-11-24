@@ -89,6 +89,9 @@ pub mod text;
 pub mod tree;
 
 pub use crate::axis::Axis;
+pub use crate::fragment::blur::{
+    BlurPiece, BlurSurfaceMapping, MAX_BLUR_RECTS, is_blur_eligible_kind, resolve_blur_rects,
+};
 pub use crate::fragment::hit::{HitEntry, HitIndex, PointerEvents};
 pub use crate::fragment::{FragKey, Fragment, FragmentExtra, FragmentFlags, FragmentKind};
 pub use crate::key::{from_node_id, to_node_id};

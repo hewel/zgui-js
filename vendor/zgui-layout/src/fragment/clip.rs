@@ -296,4 +296,40 @@ mod tests {
         let radii = inner_radii(&style, rect(), border, 1.0);
         assert!(radii.is_square());
     }
+
+    #[test]
+    fn non_finite_corner_shape_does_not_clamp_into_clip_link() {
+        for raw in ["superellipse(NaN)", "superellipse(inf)", "superellipse(-inf)"] {
+            let mut draft = StyleDraft::initial()
+                .with_custom_property(crate::fragment::corner::CORNER_SHAPE, raw);
+            draft.box_group().overflow_y = zgui_css::values::size::OverflowValue::Hidden;
+            let style = draft.build();
+            let mut clips = ClipTable::rooted();
+            let id = chain_for_children(
+                &mut clips,
+                ClipId::ROOT,
+                &style,
+                CustomProperties::ALL,
+                rect(),
+                Edges::ZERO,
+                1.0,
+                UNMOVED,
+                zgui_scene::SpatialId::VIEWPORT,
+                owner(9),
+            );
+            let Some(zgui_scene::ClipNode::Link {
+                link: zgui_scene::ClipLink::RoundedRect { shape, .. },
+                ..
+            }) = clips.get(id)
+            else {
+                panic!("expected rounded rect clip link");
+            };
+            assert!(shape.get().is_finite(), "{raw:?} produced non-finite clip shape");
+            assert_eq!(
+                *shape,
+                zgui_scene::CornerShape::ROUND,
+                "{raw:?} must fall back to ROUND instead of clamping to NOTCH"
+            );
+        }
+    }
 }

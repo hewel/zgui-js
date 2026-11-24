@@ -928,7 +928,8 @@ impl FrameObserver {
         let window_geometry_revision = data.surface.as_ref().map_or(0, |s| s.window_geometry_revision());
         let needs_frame = data.requested_metadata != revision
             || data.requested_blur != blur_revision
-            || data.requested_window_geometry != window_geometry_revision;
+            || data.requested_window_geometry != window_geometry_revision
+            || window.blur_pending();
         if needs_frame {
             data.requested_metadata = revision;
             data.requested_blur = blur_revision;
@@ -983,7 +984,7 @@ impl FrameObserver {
         let window_geometry_revision = surface.window_geometry_revision();
         let capture_state = self.0.capture.state();
         let completed = window.completed_frame();
-        if window.has_pending_stylesheets() { return None; }
+        if window.has_pending_stylesheets() || window.blur_pending() { return None; }
         let query = SettledQuery {
             generation: session.generation,
             document_revision: window.dom().revision(),

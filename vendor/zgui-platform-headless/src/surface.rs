@@ -127,6 +127,8 @@ pub struct OffscreenSurface {
     id: SurfaceId,
     /// How large the buffer is, in physical pixels.
     size: Mutex<Size<DevicePx, Device>>,
+    /// Explicit surface-local logical viewport extent, when known independently of `size / scale`.
+    logical_size: Mutex<Option<Size<CssPx, Css>>>,
     /// How many physical pixels there are to a CSS pixel.
     scale_factor: Mutex<f64>,
     /// How fast the output this surface is on refreshes, in thousandths of a hertz.
@@ -181,6 +183,10 @@ pub struct OffscreenSurface {
     opaque_region_log: Mutex<Vec<Region>>,
     /// Normalized background blur region currently applied to this surface.
     blur_region: Mutex<RecordedBlurRegion>,
+    /// Picture-bound blur region staged for the next buffer presentation.
+    staged_blur: Mutex<Option<RecordedBlurRegion>>,
+    /// Previous committed blur saved across `pre_present` for rollback on failed present.
+    pre_presented_blur: Mutex<Option<RecordedBlurRegion>>,
     /// Monotonic revision bumped whenever the recorded blur region changes.
     blur_revision: AtomicU64,
     /// Monotonic revision bumped whenever the declared window geometry changes.
@@ -228,6 +234,7 @@ impl OffscreenSurface {
         Self {
             id,
             size: Mutex::new(size),
+            logical_size: Mutex::new(None),
             scale_factor: Mutex::new(1.0),
             refresh_rate_millihertz: AtomicU32::new(0),
             pending: AtomicU64::new(0),
@@ -241,6 +248,8 @@ impl OffscreenSurface {
             input_region_log: Mutex::new(Vec::new()),
             opaque_region_log: Mutex::new(Vec::new()),
             blur_region: Mutex::new(RecordedBlurRegion::None),
+            staged_blur: Mutex::new(None),
+            pre_presented_blur: Mutex::new(None),
             blur_revision: AtomicU64::new(0),
             window_geometry_revision: AtomicU64::new(0),
             blur_region_log: Mutex::new(Vec::new()),
@@ -291,6 +300,8 @@ impl OffscreenSurface {
             self.pending.store(0, Ordering::Relaxed);
             *self.input_region.lock().expect("the input region is not poisoned") = InputRegion::Full;
             *self.blur_region.lock().expect("the blur region is not poisoned") = RecordedBlurRegion::None;
+            *self.staged_blur.lock().expect("the staged blur is not poisoned") = None;
+            *self.pre_presented_blur.lock().expect("the pre-presented blur is not poisoned") = None;
         }
     }
 
@@ -312,6 +323,21 @@ impl OffscreenSurface {
 
     /// Records what the surface was asked to be.
     pub fn set_requested_attributes(&self, attributes: &SurfaceAttributes) {
+        if let Some(size) = attributes.size {
+            let logical = match &attributes.role {
+                SurfaceRole::Popup(placement) => placement
+                    .expand_visual_size(size)
+                    .map(|(_, _, drawable)| {
+                        Size::new(CssPx(drawable.width as f32), CssPx(drawable.height as f32))
+                    })
+                    .unwrap_or(size),
+                _ => size,
+            };
+            *self
+                .logical_size
+                .lock()
+                .expect("the logical size is not poisoned") = Some(logical);
+        }
         *self
             .decorations
             .lock()
@@ -320,6 +346,38 @@ impl OffscreenSurface {
             .requested_attributes
             .lock()
             .expect("the attributes are not poisoned") = attributes.clone();
+    }
+
+    /// Sets the explicit surface-local logical viewport extent (including any popup geometry insets).
+    pub fn set_logical_size(&self, size: Size<CssPx, Css>) {
+        if size.width.0.is_finite()
+            && size.height.0.is_finite()
+            && size.width.0 > 0.0
+            && size.height.0 > 0.0
+        {
+            *self
+                .logical_size
+                .lock()
+                .expect("the logical size is not poisoned") = Some(size);
+        }
+    }
+
+    /// The explicit logical viewport extent if recorded, otherwise `size / scale`.
+    #[must_use]
+    pub fn logical_size(&self) -> Size<CssPx, Css> {
+        if let Some(logical) = *self
+            .logical_size
+            .lock()
+            .expect("the logical size is not poisoned")
+        {
+            return logical;
+        }
+        let scale = self.scale_factor().max(f64::EPSILON);
+        let size = self.size();
+        Size::new(
+            CssPx((f64::from(size.width.0) / scale) as f32),
+            CssPx((f64::from(size.height.0) / scale) as f32),
+        )
     }
 
     /// Last requested window decorations.
@@ -346,10 +404,9 @@ impl OffscreenSurface {
     /// Current normalized XDG-style window geometry rectangle in whole surface-local CSS pixels.
     #[must_use]
     pub fn window_geometry(&self) -> RecordedWindowGeometry {
-        let scale = self.scale_factor().max(f64::EPSILON);
-        let size = self.size();
-        let logical_w = (f64::from(size.width.0) / scale).round().max(1.0) as i32;
-        let logical_h = (f64::from(size.height.0) / scale).round().max(1.0) as i32;
+        let logical = self.logical_size();
+        let logical_w = f64::from(logical.width.0).round().max(1.0) as i32;
+        let logical_h = f64::from(logical.height.0).round().max(1.0) as i32;
         let insets = match &self
             .requested_attributes
             .lock()
@@ -668,6 +725,98 @@ impl OffscreenSurface {
         self.refresh_rate_millihertz
             .store(millihertz.unwrap_or(0), Ordering::Relaxed);
     }
+
+    fn normalize_blur_region(&self, region: BlurRegion<'_>) -> Option<RecordedBlurRegion> {
+        let is_lock = !matches!(
+            *self
+                .presentation
+                .lock()
+                .expect("the presentation is not poisoned"),
+            Presentation::Window { .. }
+        ) || matches!(
+            self.requested_attributes
+                .lock()
+                .expect("the attributes are not poisoned")
+                .role,
+            SurfaceRole::Lock(_)
+        );
+        if is_lock {
+            return None;
+        }
+        Some(match region {
+            BlurRegion::None => RecordedBlurRegion::None,
+            BlurRegion::Full => RecordedBlurRegion::Full,
+            BlurRegion::Rects(rects) => {
+                let valid: Vec<_> = rects
+                    .iter()
+                    .copied()
+                    .filter(|rect| {
+                        let x = rect.origin.x.0;
+                        let y = rect.origin.y.0;
+                        let w = rect.size.width.0;
+                        let h = rect.size.height.0;
+                        x.is_finite()
+                            && y.is_finite()
+                            && w.is_finite()
+                            && h.is_finite()
+                            && (x + w).is_finite()
+                            && (y + h).is_finite()
+                            && w > 0.0
+                            && h > 0.0
+                    })
+                    .collect();
+                if valid.is_empty() {
+                    RecordedBlurRegion::None
+                } else {
+                    RecordedBlurRegion::Rects(valid)
+                }
+            }
+            _ => RecordedBlurRegion::None,
+        })
+    }
+
+    fn commit_blur_region(&self, normalized: RecordedBlurRegion, request_redraw: bool) {
+        let changed = {
+            let mut slot = self
+                .blur_region
+                .lock()
+                .expect("the blur region is not poisoned");
+            let changed = *slot != normalized;
+            *slot = normalized.clone();
+            changed
+        };
+        self.blur_region_log
+            .lock()
+            .expect("the blur region log is not poisoned")
+            .push(normalized);
+        if changed {
+            self.blur_revision.fetch_add(1, Ordering::Release);
+            if request_redraw {
+                self.request_redraw();
+            }
+        }
+    }
+
+    fn promote_staged_blur(&self) {
+        let staged = self
+            .staged_blur
+            .lock()
+            .expect("the staged blur is not poisoned")
+            .take();
+        if let Some(normalized) = staged {
+            let prev = self.blur_region();
+            *self
+                .pre_presented_blur
+                .lock()
+                .expect("the pre-presented blur is not poisoned") = Some(prev);
+            self.commit_blur_region(normalized, false);
+        } else {
+            *self
+                .pre_presented_blur
+                .lock()
+                .expect("the pre-presented blur is not poisoned") = None;
+        }
+    }
 }
 
 impl Surface for OffscreenSurface {
@@ -718,6 +867,7 @@ impl Surface for OffscreenSurface {
             DevicePx((f64::from(logical.width.0) * scale).round() as f32),
             DevicePx((f64::from(logical.height.0) * scale).round() as f32),
         );
+        self.set_logical_size(logical);
         self.resize(taken);
         self.window_geometry_revision.fetch_add(1, Ordering::Release);
         Some(taken)
@@ -732,7 +882,13 @@ impl Surface for OffscreenSurface {
         self.requested.fetch_add(1, Ordering::Relaxed);
     }
 
-    fn pre_present_notify(&self) {}
+    fn pre_present_notify(&self) {
+        self.promote_staged_blur();
+    }
+
+    fn pre_present_frame(&self, _size: Size<i32, Device>, _scale: f64) {
+        self.promote_staged_blur();
+    }
 
     fn set_title(&self, title: &str) {
         *self.title.lock().expect("the title is not poisoned") = title.to_owned();
@@ -888,69 +1044,94 @@ impl Surface for OffscreenSurface {
     }
 
     fn set_blur_region(&self, region: BlurRegion<'_>) {
-        let is_lock = !matches!(
-            *self
-                .presentation
-                .lock()
-                .expect("the presentation is not poisoned"),
-            Presentation::Window { .. }
-        ) || matches!(
-            self.requested_attributes
-                .lock()
-                .expect("the attributes are not poisoned")
-                .role,
-            SurfaceRole::Lock(_)
-        );
-        if is_lock {
-            return;
-        }
-        let normalized = match region {
-            BlurRegion::None => RecordedBlurRegion::None,
-            BlurRegion::Full => RecordedBlurRegion::Full,
-            BlurRegion::Rects(rects) => {
-                let valid: Vec<_> = rects
-                    .iter()
-                    .copied()
-                    .filter(|rect| {
-                        let x = rect.origin.x.0;
-                        let y = rect.origin.y.0;
-                        let w = rect.size.width.0;
-                        let h = rect.size.height.0;
-                        x.is_finite()
-                            && y.is_finite()
-                            && w.is_finite()
-                            && h.is_finite()
-                            && (x + w).is_finite()
-                            && (y + h).is_finite()
-                            && w > 0.0
-                            && h > 0.0
-                    })
-                    .collect();
-                if valid.is_empty() {
-                    RecordedBlurRegion::None
-                } else {
-                    RecordedBlurRegion::Rects(valid)
-                }
-            }
-            _ => RecordedBlurRegion::None,
-        };
-        let changed = {
-            let mut slot = self
-                .blur_region
-                .lock()
-                .expect("the blur region is not poisoned");
-            let changed = *slot != normalized;
-            *slot = normalized.clone();
-            changed
-        };
-        self.blur_region_log
+        *self.staged_blur.lock().expect("the staged blur is not poisoned") = None;
+        *self
+            .pre_presented_blur
             .lock()
-            .expect("the blur region log is not poisoned")
-            .push(normalized);
-        if changed {
-            self.blur_revision.fetch_add(1, Ordering::Release);
-            self.request_redraw();
+            .expect("the pre-presented blur is not poisoned") = None;
+        let Some(normalized) = self.normalize_blur_region(region) else {
+            return;
+        };
+        self.commit_blur_region(normalized, true);
+    }
+
+    fn logical_extent_for(&self, size: Size<i32, Device>, scale: f64) -> Size<CssPx, Css> {
+        let scale = if scale.is_finite() && scale > 0.0 {
+            scale
+        } else {
+            1.0
+        };
+        let current_size = self.size();
+        let matching_current = (current_size.width.0.round() as i32) == size.width
+            && (current_size.height.0.round() as i32) == size.height
+            && (self.scale_factor() - scale).abs() < 1e-5;
+        if matching_current
+            && let Some(logical) = *self
+                .logical_size
+                .lock()
+                .expect("the logical size is not poisoned")
+        {
+            return logical;
         }
+        Size::new(
+            CssPx((f64::from(size.width.max(1)) / scale) as f32),
+            CssPx((f64::from(size.height.max(1)) / scale) as f32),
+        )
+    }
+
+    fn stage_blur_region_for_present(&self, region: BlurRegion<'_>) {
+        let Some(normalized) = self.normalize_blur_region(region) else {
+            return;
+        };
+        *self.staged_blur.lock().expect("the staged blur is not poisoned") = Some(normalized);
+    }
+
+    fn clear_staged_blur_region(&self) {
+        *self.staged_blur.lock().expect("the staged blur is not poisoned") = None;
+        *self
+            .pre_presented_blur
+            .lock()
+            .expect("the pre-presented blur is not poisoned") = None;
+    }
+
+    fn finalize_presented_blur(&self) {
+        // Fallback for non-wgpu test renderers that do not invoke `pre_present_frame`.
+        let staged = self
+            .staged_blur
+            .lock()
+            .expect("the staged blur is not poisoned")
+            .take();
+        *self
+            .pre_presented_blur
+            .lock()
+            .expect("the pre-presented blur is not poisoned") = None;
+        if let Some(normalized) = staged {
+            self.commit_blur_region(normalized, false);
+        }
+    }
+
+    fn rollback_unpresented_blur(&self) {
+        *self.staged_blur.lock().expect("the staged blur is not poisoned") = None;
+        let previous = self
+            .pre_presented_blur
+            .lock()
+            .expect("the pre-presented blur is not poisoned")
+            .take();
+        if let Some(previous) = previous {
+            self.commit_blur_region(previous, false);
+        }
+    }
+
+    fn apply_idle_blur_region(&self, region: BlurRegion<'_>) {
+        *self.staged_blur.lock().expect("the staged blur is not poisoned") = None;
+        *self
+            .pre_presented_blur
+            .lock()
+            .expect("the pre-presented blur is not poisoned") = None;
+        let Some(normalized) = self.normalize_blur_region(region) else {
+            return;
+        };
+        self.commit_blur_region(normalized, false);
     }
 
     fn set_shell_input_region(&self, region: &InputRegion) -> Result<(), PlatformError> {
@@ -1061,10 +1242,12 @@ impl Surface for OffscreenSurface {
         };
         if let Some(drawable) = changed {
             let scale = self.scale_factor();
+            let logical = Size::new(CssPx(drawable.width as f32), CssPx(drawable.height as f32));
             let taken = Size::new(
                 DevicePx((f64::from(drawable.width) * scale).round() as f32),
                 DevicePx((f64::from(drawable.height) * scale).round() as f32),
             );
+            self.set_logical_size(logical);
             self.resize(taken);
             self.window_geometry_revision.fetch_add(1, Ordering::Release);
             self.request_redraw();

@@ -221,6 +221,13 @@ pub(crate) struct Shared {
     pub(crate) opaque_owed: crate::surface::region::Owed,
     /// Desired background blur region retained across capability changes.
     pub(crate) blur_desired: crate::surface::region::OwnedBlurRegion,
+    /// Picture-bound blur region staged for the next buffer commit (`pre_present`), isolated from
+    /// `owes_surface_change()` so it never leaks onto an older buffer via a bare commit.
+    pub(crate) blur_staged: Option<crate::surface::region::OwnedBlurRegion>,
+    /// Last blur region confirmed committed onto the surface.
+    pub(crate) blur_last_committed: crate::surface::region::OwnedBlurRegion,
+    /// Snapshot of `blur_last_committed` saved during `pre_present` until present outcome settles.
+    pub(crate) blur_pre_presented: Option<crate::surface::region::OwnedBlurRegion>,
     /// Whether background blur state owes a staged protocol update or commit.
     pub(crate) blur_owed: bool,
     /// At most one `ext_background_effect_surface_v1` associated with this `wl_surface`.
@@ -278,6 +285,9 @@ impl Shared {
             input_owed: None,
             opaque_owed: None,
             blur_desired: crate::surface::region::OwnedBlurRegion::None,
+            blur_staged: None,
+            blur_last_committed: crate::surface::region::OwnedBlurRegion::None,
+            blur_pre_presented: None,
             blur_owed: false,
             blur_surface: None,
         }
@@ -334,6 +344,8 @@ impl Shared {
         self.size = size;
         self.unreported = None;
         self.pacer.cancel_held();
+        self.blur_staged = None;
+        self.blur_pre_presented = None;
         self.resize_owed = true;
         Some(if moved_scale {
             SurfaceEvent::ScaleFactorChanged {
@@ -561,7 +573,7 @@ impl Shared {
     }
 
     /// The configured extent, in whole device pixels.
-    fn device_extent(&self) -> Size<i32, Device> {
+    pub(crate) fn device_extent(&self) -> Size<i32, Device> {
         Size::new(
             self.size.width.0.round() as i32,
             self.size.height.0.round() as i32,

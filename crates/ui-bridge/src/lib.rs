@@ -650,6 +650,16 @@ impl UiBridge {
         self.registry.borrow().native(handle).map_err(|e| host_error(ctx, e))
     }
 
+    /// Resolves a branded `NativeNode` owned by this bridge without throwing into QuickJS,
+    /// returning a human-readable ownership/liveness failure reason on mismatch.
+    pub fn resolve_owned_native_node(&self, node: &Class<'_, NativeNode>) -> Result<zgui::view::NodeId, String> {
+        if self.disposed.get() {
+            return Err(BridgeError::Disposed.to_string());
+        }
+        let handle = node.borrow().handle;
+        self.registry.borrow().native(handle).map_err(|e| e.to_string())
+    }
+
     /// Returns whether `native` is still live and effectively inert (itself or any native ancestor
     /// carries `UiState::INERT`).
     #[must_use]

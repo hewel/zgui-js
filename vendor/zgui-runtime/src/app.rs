@@ -1095,6 +1095,18 @@ impl Runtime {
         Ok(())
     }
 
+    /// Returns the live blur registration slot for the window owning `document`, if mounted.
+    #[must_use]
+    pub fn blur_slot(
+        &self,
+        document: zgui_view::DocumentId,
+    ) -> Option<Rc<crate::window::blur::BlurSlot>> {
+        self.windows
+            .iter()
+            .find(|window| window.document_id() == document)
+            .map(Window::blur_slot)
+    }
+
     /// Updates a live toplevel window's chrome attributes and optional requested extent.
     ///
     /// # Errors

@@ -111,7 +111,7 @@ fn rejected_shell_stylesheets_fault_strictly_without_replacing_the_previous_shee
             if details["code"] == expected_code && details["sheet"] == "shell:1:theme"), "{export}: {result:?}");
     }
     let id = *session.shell.specs().first_key_value().expect("requested panel").0;
-    session.attach_layer(id, "panel".into(), native.region.clone(), SurfaceId::new(7), None).expect("attach a region after the rejected replacements");
+    session.attach_layer(id, "panel".into(), native.region.clone(), SurfaceId::new(7), None, None).expect("attach a region after the rejected replacements");
     for export in ["invalidCss", "forbiddenUrl"] {
         assert!(matches!(session.invoke(export), Err(SessionError::Style { code: "E_STYLE", .. })));
         assert_eq!(native.host.stylesheet("shell:1:theme").as_deref(), Some("text { color: red }"));
@@ -155,7 +155,7 @@ fn detaching_one_region_rejects_direct_shell_and_host_work() {
         1, native.waker.clone(), policy).expect("prepare rootless shell");
     session.mount().expect("request panel");
     let id = *session.shell.specs().first_key_value().expect("requested panel").0;
-    session.attach_layer(id, "panel".into(), native.region.clone(), SurfaceId::new(7), None).expect("attach panel");
+    session.attach_layer(id, "panel".into(), native.region.clone(), SurfaceId::new(7), None, None).expect("attach panel");
     session.detach_layer(id).expect("detach panel while the session stays active");
     session.invoke("checkFence").expect("reject work only during disposal");
 }
@@ -206,7 +206,7 @@ fn dismissing_a_popup_separates_active_jobs_from_disposer_continuations() {
         1, native.waker.clone(), policy).expect("prepare rootless shell");
     session.mount().expect("request panel and popup");
     let (id, _) = session.shell.popup_specs().pop_front().expect("popup request");
-    session.attach_layer(id, "menu".into(), native.region.clone(), SurfaceId::new(7), None).expect("attach popup");
+    session.attach_layer(id, "menu".into(), native.region.clone(), SurfaceId::new(7), None, None).expect("attach popup");
     session.invoke("queueUpdate").expect("queue active shell creation without a checkpoint");
     session.dismiss_popup(id, || session.detach_layer(id)).expect("retire the popup and notify its owner outside disposal");
     let specs = session.shell.specs();

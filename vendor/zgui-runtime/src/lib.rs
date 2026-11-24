@@ -110,6 +110,7 @@ pub use crate::commands::{
 };
 pub use crate::editing::Editors;
 pub use crate::window::PopupAutoHeight;
+pub use crate::window::blur::{BlurRegistration, BlurSlot};
 pub use crate::embed::{
     EmbedHost, EmbedMaintenanceCx, EmbedMemoryReport, EmbedSyncCx, EmbedSyncReport, NoEmbeds,
 };

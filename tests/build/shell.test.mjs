@@ -694,32 +694,109 @@ test("blurRegion tracks WindowSurface/LayerSurface nodes, preserves ThemeProvide
     "WindowSurface inherited ThemeProvider stylesheet must update reactively",
   );
 
-  // Node-tracked blurRegion on WindowSurface resolves positive border box and isolates stale observers.
-  const rect = { x: 12, y: 18, width: 140, height: 60 };
+  // Node-tracked blurRegion on WindowSurface registers native node payloads directly with ZERO
+  // JS observeGeometry observers.
+  const geometryBefore = harness.geometry.length;
   harness.runTurn(() => mod.setWinBlur([mod.winNode]));
-  const observer = harness.geometry.find(
-    record => record.node === mod.winNode && record.kind === "borderBox",
+  assert.equal(
+    harness.geometry.length,
+    geometryBefore,
+    "blurRegion node targets must not install JS observeGeometry observers",
   );
-  assert.ok(observer, "blur node is observed in WindowSurface's mount region");
-  observer.emit(rect);
-  harness.flush();
-  assert.deepEqual(winSurface.blurRegion, [rect]);
+  assert.deepEqual(winSurface.blurRegion, { nodes: [mod.winNode], minOpacity: 0.5 });
 
-  // Switching blurRegion away disposes the observer and ignores stale callbacks.
-  harness.runTurn(() => mod.setWinBlur("none"));
-  assert.equal(observer.active, false);
+  // Explicit { nodes, minOpacity } form updates minOpacity reactively.
+  harness.runTurn(() => mod.setWinBlur({ nodes: [mod.winNode], minOpacity: 0.25 }));
+  assert.deepEqual(winSurface.blurRegion, { nodes: [mod.winNode], minOpacity: 0.25 });
+
+  // Empty array and { nodes: [] } normalize to "none".
+  harness.runTurn(() => mod.setWinBlur({ nodes: [], minOpacity: 0 }));
+  assert.equal(winSurface.blurRegion, "none");
+  harness.runTurn(() => mod.setWinBlur([mod.winNode]));
+  assert.deepEqual(winSurface.blurRegion, { nodes: [mod.winNode], minOpacity: 0.5 });
+  harness.runTurn(() => mod.setWinBlur([]));
   assert.equal(winSurface.blurRegion, "none");
 
-  // Foreign-surface node is rejected cleanly with ReferenceError and leaves no active observers.
-  assert.throws(
-    () => harness.runTurn(() => mod.setLayerBlur([mod.layerNode, mod.winNode])),
+  // Switching blurRegion to fixed rects and back to "none".
+  const fixedRect = { x: 12, y: 18, width: 140, height: 60 };
+  harness.runTurn(() => mod.setWinBlur([fixedRect]));
+  assert.deepEqual(winSurface.blurRegion, [fixedRect]);
+  harness.runTurn(() => mod.setWinBlur("none"));
+  assert.equal(winSurface.blurRegion, "none");
+
+  // Atomic validation: each invalid payload must throw the expected error without mutating prior
+  // registration or installing any observeGeometry leases.
+  // Use a fresh reactive turn per uncaught Solid flush error so each assertion is independent.
+  const assertAtomicReject = async (makeInvalid, pattern, label) => {
+    const freshMod = await moduleFor(t, source);
+    const freshHarness = createHost({ monitors: [desk] });
+    const savedUi = globalThis.__zgui;
+    const savedShell = globalThis.__zguiShell;
+    globalThis.__zgui = freshHarness.host;
+    globalThis.__zguiShell = freshHarness.shell;
+    let freshDispose;
+    try {
+      const freshRoot = freshHarness.makeNode("root");
+      freshDispose = freshHarness.runTurn(() => freshMod.mount(freshRoot));
+      freshHarness.flush();
+      const freshLayer = freshHarness.surfaces.get("glass-bar");
+      assert.ok(freshLayer);
+      const geoCount = freshHarness.geometry.length;
+      freshHarness.runTurn(() =>
+        freshMod.setLayerBlur({ nodes: [freshMod.layerNode], minOpacity: 0.4 }),
+      );
+      assert.deepEqual(freshLayer.blurRegion, { nodes: [freshMod.layerNode], minOpacity: 0.4 });
+      assert.throws(
+        () => freshHarness.runTurn(() => freshMod.setLayerBlur(makeInvalid(freshMod))),
+        pattern,
+        label,
+      );
+      assert.deepEqual(
+        freshLayer.blurRegion,
+        { nodes: [freshMod.layerNode], minOpacity: 0.4 },
+        `${label}: caught validation error must preserve prior blur registration`,
+      );
+      assert.equal(
+        freshHarness.geometry.length,
+        geoCount,
+        `${label}: blurRegion never creates observeGeometry leases`,
+      );
+    } finally {
+      try {
+        freshDispose?.();
+        freshHarness.flush();
+      } catch {
+        // An uncaught Solid effect throw can leave the effect queue errored during test teardown.
+      }
+      if (savedUi === undefined) delete globalThis.__zgui;
+      else globalThis.__zgui = savedUi;
+      if (savedShell === undefined) delete globalThis.__zguiShell;
+      else globalThis.__zguiShell = savedShell;
+    }
+  };
+
+  await assertAtomicReject(
+    m => [m.layerNode, m.winNode],
     /ReferenceError|must belong to the owning surface/,
+    "foreign-surface node last in list",
   );
-  assert.equal(
-    harness.geometry.filter(record => record.node === mod.layerNode && record.active).length,
-    0,
-    "failed foreign-node registration must dispose earlier observers cleanly",
-  );
+  await assertAtomicReject(m => [m.layerNode, fixedRect], /TypeError/, "mixed [node, rect]");
+  await assertAtomicReject(m => [fixedRect, m.layerNode], /TypeError/, "mixed [rect, node]");
+  await assertAtomicReject(() => ({ nodes: [{}] }), /TypeError/, "forged non-branded node");
+  for (const bad of [null, "0.5", Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
+    await assertAtomicReject(
+      () => ({ nodes: [], minOpacity: bad }),
+      /TypeError/,
+      `invalid minOpacity ${String(bad)} on { nodes: [] }`,
+    );
+  }
+  for (const outOfRange of [-0.01, 1.01]) {
+    await assertAtomicReject(
+      () => ({ nodes: [], minOpacity: outOfRange }),
+      /RangeError/,
+      `out-of-range minOpacity ${outOfRange} on { nodes: [] }`,
+    );
+  }
 });
 
 test("PopupSurface normalizes geometryInsets scalar, partial object, omitted, and undefined", async t => {

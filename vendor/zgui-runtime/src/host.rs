@@ -307,6 +307,8 @@ pub struct RuntimeHost {
     /// for the reason every other answer here is published rather than pulled: a view asking
     /// mid-frame would get the number the frame is in the middle of changing to.
     scale: std::cell::Cell<f32>,
+    /// Shared live blur registration slot read by the owning [`Window`](crate::Window).
+    blur: Rc<crate::window::blur::BlurSlot>,
 }
 
 impl RuntimeHost {
@@ -344,10 +346,17 @@ impl RuntimeHost {
             traps: RefCell::new(zgui_input::focus::FocusTraps::default()),
             shortcuts: RefCell::default(),
             entering: RefCell::default(),
+            blur: Rc::new(crate::window::blur::BlurSlot::new(Arc::clone(&waker))),
             waker,
             clock,
             scale: std::cell::Cell::new(1.0),
         }
+    }
+
+    /// Returns the live blur registration slot shared with the owning window.
+    #[must_use]
+    pub fn blur_slot(&self) -> Rc<crate::window::blur::BlurSlot> {
+        Rc::clone(&self.blur)
     }
 
     /// Publishes how many device pixels one CSS pixel is, for the frames that follow.

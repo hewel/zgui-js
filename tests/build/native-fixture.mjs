@@ -1311,7 +1311,14 @@ export function createHost({
       }
       const surface = layerIds.get(id) ?? popupIds.get(id) ?? windowIds.get(id);
       if (!surface || surface.closing) throw new ReferenceError("closed shell surface");
-      surface.blurRegion = structuredClone(region);
+      const cloned =
+        typeof region === "object" &&
+        region !== null &&
+        !Array.isArray(region) &&
+        Array.isArray(region.nodes)
+          ? { nodes: [...region.nodes], minOpacity: region.minOpacity }
+          : structuredClone(region);
+      surface.blurRegion = cloned;
       shellLog.push({ op: "blur", id, region: surface.blurRegion });
     },
     openPopup(name, placement, attach, dismiss) {

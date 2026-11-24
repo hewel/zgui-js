@@ -57,7 +57,11 @@ export interface WindowOptions {
   readonly transparent: boolean;
 }
 export type NativeInputRegion = "full" | "empty" | readonly NativeWindowRect[];
-export type NativeBlurRegion = "none" | "full" | readonly NativeWindowRect[];
+export type NativeBlurRegion =
+  | "none"
+  | "full"
+  | readonly NativeWindowRect[]
+  | { readonly nodes: readonly NativeNode[]; readonly minOpacity: number };
 
 /** Installed by the host; resolving either bridge must remain lazy during preflight. */
 export interface NativeHost {
@@ -217,6 +221,12 @@ export function isRootlessWithoutRegions(): boolean {
   return (
     regionProviders === 0 && globalThis.__zgui === undefined && globalThis.__zguiShell !== undefined
   );
+}
+
+/** Returns the owning bridge if `value` is a genuine branded native node handle. */
+export function knownBridgeForNode(value: unknown): UiBridge | undefined {
+  if (typeof value !== "object" || value === null) return undefined;
+  return nodeBridges.get(value as NativeNode);
 }
 
 /** Resolves an explicit target without consulting the current owner or ambient bridge. */

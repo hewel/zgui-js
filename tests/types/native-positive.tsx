@@ -70,6 +70,7 @@ import {
 } from "@hewel/zgui";
 import type {
   BlurRegion,
+  BlurRegionNodes,
   CanvasCommand,
   CanvasScene,
   CanvasTransform,
@@ -969,6 +970,10 @@ const blurNone: BlurRegion = "none";
 const blurFull: BlurRegion = "full";
 const blurRects: BlurRegion = [{ x: 4, y: 8, width: 120, height: 40 }];
 const blurNodes: BlurRegion = [assigned];
+const blurNodesConfig: BlurRegionNodes = { nodes: [assigned], minOpacity: 0.25 };
+const blurNodesViaUnion: BlurRegion = blurNodesConfig;
+const blurNodesDefaultMinOpacity: BlurRegionNodes = { nodes: [assigned] };
+void [blurNodesViaUnion, blurNodesDefaultMinOpacity];
 void (
   <WindowSurface
     name="glass"

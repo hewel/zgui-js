@@ -9,6 +9,7 @@
 //! everything downstream sees.
 
 mod anchored;
+pub mod blur;
 pub mod build;
 pub mod clip;
 pub mod corner;

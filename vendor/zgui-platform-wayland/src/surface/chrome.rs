@@ -231,6 +231,8 @@ pub(crate) fn unmap(surface: &WaylandSurface) {
     shared.unmapped = true;
     // A frame held for the compositor would map the surface again when it is presented.
     shared.pacer.cancel_held();
+    shared.blur_staged = None;
+    shared.blur_pre_presented = None;
     shared.cancel_callbacks();
 }
 
@@ -355,6 +357,7 @@ pub fn pre_present(surface: &WaylandSurface, size: Size<i32, Device>, scale: f64
             xdg.set_window_geometry(geom.x, geom.y, geom.width, geom.height);
         }
     }
+    surface.promote_staged_blur_for_present();
     surface.send_layer(false);
     surface.send_regions();
     surface.ask_for_callback();

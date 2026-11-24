@@ -1,6 +1,7 @@
 //! The part of the loop's state the borrowed context is allowed to change.
 
 use std::cell::{Cell, RefCell};
+use std::rc::Rc;
 use std::sync::Arc;
 
 use wayland_client::protocol::wl_seat::WlSeat;
@@ -23,7 +24,7 @@ use crate::waker::PingWaker;
 /// because events are collected during a dispatch and delivered after it has finished.
 pub struct Live {
     /// Every surface that exists.
-    pub(crate) surfaces: RefCell<Vec<Arc<WaylandSurface>>>,
+    pub(crate) surfaces: Rc<RefCell<Vec<Arc<WaylandSurface>>>>,
     /// Surfaces the application has closed, waiting for the end of the turn.
     ///
     /// A surface is not destroyed inside the callback that closed it: the objects underneath are
@@ -62,7 +63,7 @@ impl Live {
     /// The state a loop starts with: no surfaces, nothing closed, nothing known.
     pub(crate) fn new(capabilities: PlatformCapabilities, waker: Arc<PingWaker>) -> Self {
         Self {
-            surfaces: RefCell::new(Vec::new()),
+            surfaces: Rc::new(RefCell::new(Vec::new())),
             retiring: RefCell::new(Vec::new()),
             sibling_closes: RefCell::new(Vec::new()),
             exiting: Cell::new(false),

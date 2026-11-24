@@ -45,6 +45,7 @@ smallvec = "1.15"
 tracing = "0.1.44"
 
 [dev-dependencies]
+zgui-atlas = { git = "https://github.com/zortax/zgui", rev = "ee29c7dc66206eb04ba7bcf514058a278c9070ba" }
 # The box-tree and resolved-layout goldens are written against the shared tree-dump seam, and the
 # counter assertions need the counters compiled in — a build without them would keep every budget
 # green while measuring nothing.

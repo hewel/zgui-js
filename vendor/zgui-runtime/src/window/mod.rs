@@ -7,6 +7,7 @@
 
 pub mod a11y;
 pub mod anim;
+pub mod blur;
 mod brushes;
 mod budget;
 pub mod caret;
@@ -595,6 +596,8 @@ pub struct Window {
     first_frame: bool,
     /// Native content-driven height policy for auto-height pop-up surfaces.
     popup_auto_height: Option<AutoHeightState>,
+    /// Single effective writer state for surface background blur.
+    blur: crate::window::blur::WindowBlurState,
     /// Whether a frame has been asked for and has not run yet.
     ///
     /// The platform coalesces repeated requests into one frame, so a second request costs nothing
@@ -793,6 +796,7 @@ impl Window {
         });
         built.mount(&dom_handle, root, None);
 
+        let blur_slot = host.blur_slot();
         Self {
             surface,
             document,
@@ -917,6 +921,7 @@ impl Window {
             clock,
             first_frame: true,
             popup_auto_height: None,
+            blur: crate::window::blur::WindowBlurState::new(blur_slot),
             awaiting_frame: std::cell::Cell::new(false),
             gate,
             timers,
@@ -1612,6 +1617,26 @@ impl Window {
     /// surface.
     pub fn is_translucent(&self) -> bool {
         self.translucent
+    }
+
+    /// Returns the shared live blur registration slot for this window.
+    #[must_use]
+    pub fn blur_slot(&self) -> Rc<crate::window::blur::BlurSlot> {
+        Rc::clone(&self.blur.slot)
+    }
+
+    /// Updates this window's authoritative blur registration.
+    pub fn set_blur_registration(&mut self, registration: crate::window::blur::BlurRegistration) {
+        self.blur.slot.set(registration);
+    }
+
+    /// Returns `true` while this window's background blur has not yet converged with the latest
+    /// registration or composed picture.
+    ///
+    /// Intentionally decoupled from layout/style convergence (`owes_further_work()`).
+    #[must_use]
+    pub fn blur_pending(&self) -> bool {
+        self.blur.is_pending()
     }
 
     /// Hands this window the application's cascade pool.
