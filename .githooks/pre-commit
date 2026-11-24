@@ -20,5 +20,6 @@ if [ "${#staged_files[@]}" -gt 0 ]; then
   )
 fi
 
+bun run build:packages
 bun run lint
 bun run typecheck

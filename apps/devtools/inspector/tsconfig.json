@@ -1,4 +1,4 @@
 {
-  "extends": "../../../packages/ui/tsconfig.native.json",
+  "extends": "@hewel/zgui/tsconfig.native.json",
   "include": ["src/**/*.ts", "src/**/*.tsx"]
 }

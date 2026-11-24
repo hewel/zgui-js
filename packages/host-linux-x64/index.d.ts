@@ -7,6 +7,8 @@ export interface StagedHostManifest {
   readonly bundleSchemaVersion: number;
   readonly sha256: string;
   readonly bytes: number;
+  readonly libc?: "glibc" | undefined;
+  readonly glibcBaseline?: string | undefined;
 }
 
 export declare const platform: "linux-x64";

@@ -4,6 +4,14 @@
 /node_modules/
 **/node_modules/
 /packages/build/sdk/
+/packages/ui/dist/
+/packages/services/dist/
+/packages/*/.dist-staging-*/
+/packages/cli/inspector/
+/packages/cli/inspector-bundle/
+/packages/*/LICENSE
+/packages/*/NOTICE
+/packages/*/THIRD_PARTY_NOTICES.md
 /packages/host-*/bin/
 /packages/host-*/host-manifest.json
 /apps/examples/*/dist

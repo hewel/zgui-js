@@ -46,7 +46,7 @@ See [`llms.txt`](llms.txt) for a concise SDK/CLI map and [runtime ownership diag
 | Native toolchain | C/C++ compiler toolchain for `rquickjs` / native crates (when not using prebuilt host pkgs)  |
 | Graphics         | Vulkan / GPU adapter and driver supported by the native `wgpu` renderer (or Mesa `llvmpipe`) |
 
-- **Platform support:** Interactive examples and Wayland shells are verified on Linux with Wayland. Prebuilt host distribution follows npm `optionalDependencies` (`@hewel/zgui-host-linux-x64`, `@hewel/zgui-host-linux-arm64`), falling back automatically to Cargo inside a repo checkout.
+- **Platform support:** Interactive examples and Wayland shells are verified on Linux with Wayland. Prebuilt host distribution ships Linux x64 glibc (`@hewel/zgui-host-linux-x64`, `ubuntu-24.04` / `glibc >= 2.39` baseline) via `@hewel/zgui-cli` `optionalDependencies`, falling back automatically to Cargo inside a repo checkout.
 - **Pinned dependencies:** Keep `Cargo.lock` and `bun.lock` when installing or building. See the [implementation baseline](docs/development/baseline.md) and [`vendor/README.md`](vendor/README.md) for audited pins and local native patches.
 
 ## Quick start
@@ -171,14 +171,14 @@ bun run test:preview  # build counter + zgui-host and run headless GPU preview s
 - [`docs/development/crate-map.md`](docs/development/crate-map.md) & [`docs/development/component-map.md`](docs/development/component-map.md) — package/crate layout and component parity map.
 - [`packages/ui/README.md`](packages/ui/README.md), [`packages/services/README.md`](packages/services/README.md), & [`packages/build/README.md`](packages/build/README.md) — package contracts.
 - [`docs/development/tsx-native-ui.md`](docs/development/tsx-native-ui.md) & [`docs/development/preview-mode.md`](docs/development/preview-mode.md) — core runtime and preview specifications.
-- [`docs/development/baseline.md`](docs/development/baseline.md) & [`docs/development/preview-verification.md`](docs/development/preview-verification.md) — pinned baseline and recorded verification evidence.
+- [`docs/development/baseline.md`](docs/development/baseline.md), [`docs/development/preview-verification.md`](docs/development/preview-verification.md), & [`docs/development/npm-release.md`](docs/development/npm-release.md) — pinned baseline, preview verification evidence, and npm Trusted Publishing release guide.
 - [`vendor/README.md`](vendor/README.md) — vendored upstream patches and crate-level regression gates.
 
 ## License
 
 `zgui-js` is licensed under the **Apache License, Version 2.0** (see [`LICENSE`](LICENSE)).
 
-Third-party and upstream attributions are collected in [`NOTICE`](NOTICE):
+Third-party and upstream attributions are collected in [`NOTICE`](NOTICE) and [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md):
 
 - Vendored native crates under `vendor/` and adapted UI resources under `packages/ui/src/components/generated/` originate from [`zortax/zgui`](https://github.com/zortax/zgui) (`Apache-2.0`, rev `ee29c7dc66206eb04ba7bcf514058a278c9070ba`; see [`vendor/README.md`](vendor/README.md) and [`packages/ui/upstream/ORIGIN`](packages/ui/upstream/ORIGIN)), including file-scoped `MPL-2.0` code in [`vendor/zgui-style/src/driver/recalc.rs`](vendor/zgui-style/src/driver/recalc.rs).
 - Unmodified preview fixture fonts under `preview/fonts/` are redistributed under the **SIL Open Font License 1.1** (see [`preview/fonts/PROVENANCE.md`](preview/fonts/PROVENANCE.md)).

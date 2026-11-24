@@ -1,6 +1,6 @@
 import { createEffect, createSignal, getOwner, onCleanup, untrack } from "#solid";
 import type { Accessor } from "#solid";
-import type { HostRequest } from "./index";
+import type { HostRequest } from "./index.js";
 
 /** Configuration for `createHostQuery`. */
 export interface HostQueryOptions<T> {

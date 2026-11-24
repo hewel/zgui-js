@@ -71,7 +71,7 @@ export interface BundleWatcher {
   close(): Promise<void>;
 }
 
-interface StaticComponentSheet {
+export interface StaticComponentSheet {
   readonly name: string;
   readonly className: string;
   readonly css: string;
@@ -168,7 +168,7 @@ function injectDevJsxSourceLocations(source: string, filename: string, identity:
   return output;
 }
 
-function extractStaticComponentSheet(
+export function extractStaticComponentSheet(
   source: string,
   filename: string,
 ): StaticComponentSheet | undefined {

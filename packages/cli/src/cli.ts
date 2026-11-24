@@ -9,7 +9,7 @@ import {
   type PreviewApplicationOptions,
   type ResolvedApplication,
 } from "@hewel/zgui-build";
-import { buildSmoke, typecheckProject, workspaceRoot } from "@hewel/zgui-build/internal";
+import { buildSmoke, resolveSmokeTsconfigPath, typecheckProject } from "@hewel/zgui-build/internal";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { formatDoctorReport, runDoctor } from "./doctor.ts";
@@ -389,11 +389,12 @@ export async function runCli(rawArgs: readonly string[]): Promise<number> {
     );
   }
   if (selected.command === "smoke") {
-    typecheckProject(path.join(workspaceRoot, "packages/build/tsconfig.smoke.json"));
+    typecheckProject(resolveSmokeTsconfigPath());
     await buildSmoke();
     return 0;
   }
 
+  const hostSearchFrom = [import.meta.url];
   const application = {
     ...(await resolveApplication(selected.selector)),
     capabilitiesFile: selected.capabilitiesFile,
@@ -415,6 +416,7 @@ export async function runCli(rawArgs: readonly string[]): Promise<number> {
         strictTypecheck: selected.strictTypecheck,
         hostRoot: selected.hostRoot,
         hostExecutable: selected.hostExecutable,
+        hostSearchFrom,
         hostArgs,
         signal,
       }),
@@ -425,6 +427,7 @@ export async function runCli(rawArgs: readonly string[]): Promise<number> {
       previewApplication(application.app, {
         ...application,
         ...selected,
+        hostSearchFrom,
         signal,
         onOutput: output => console.error(`[preview] Artifacts: ${output}`),
       }),
@@ -438,6 +441,7 @@ export async function runCli(rawArgs: readonly string[]): Promise<number> {
         bytecode: selected.bytecode,
         hostRoot: selected.hostRoot,
         hostExecutable: selected.hostExecutable,
+        hostSearchFrom,
         desktopEntry: selected.desktopEntry,
         pureShell: selected.pureShell,
         signal,
@@ -461,6 +465,7 @@ export async function runCli(rawArgs: readonly string[]): Promise<number> {
     bytecode: selected.bytecode,
     hostRoot: selected.hostRoot,
     hostExecutable: selected.hostExecutable,
+    hostSearchFrom,
   });
   console.log(`Published ${dist} ${manifest.buildId}`);
   return 0;

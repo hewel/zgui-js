@@ -1,6 +1,21 @@
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { mkdir, readdir, writeFile } from "node:fs/promises";
 import path from "node:path";
+
+function cliPackageVersion(): string {
+  const pkg = JSON.parse(
+    readFileSync(path.resolve(import.meta.dir, "../package.json"), "utf8"),
+  ) as { version?: unknown };
+  if (typeof pkg.version !== "string" || !pkg.version.trim()) {
+    throw new Error("Unable to read @hewel/zgui-cli package version");
+  }
+  return pkg.version.trim();
+}
+
+function sdkDependencyRange(): string {
+  const version = cliPackageVersion();
+  return version.includes("-") ? version : `^${version}`;
+}
 
 export type InitTemplate = "desktop-app" | "wayland-shell";
 
@@ -42,6 +57,7 @@ function titleCase(slug: string): string {
 
 function desktopAppFiles(name: string): Record<string, string> {
   const title = titleCase(name);
+  const sdkRange = sdkDependencyRange();
   return {
     "package.json": `${JSON.stringify(
       {
@@ -67,12 +83,12 @@ function desktopAppFiles(name: string): Record<string, string> {
           },
         },
         dependencies: {
-          "@hewel/zgui": "^0.1.0",
-          "@hewel/zgui-services": "^0.1.0",
+          "@hewel/zgui": sdkRange,
+          "@hewel/zgui-services": sdkRange,
           "solid-js": "2.0.1",
         },
         devDependencies: {
-          "@hewel/zgui-cli": "^0.1.0",
+          "@hewel/zgui-cli": sdkRange,
           oxlint: "1.94.0",
           tsrs: "7.1.0-beta.tsrs2",
         },
@@ -90,7 +106,7 @@ function desktopAppFiles(name: string): Record<string, string> {
     )}\n`,
     ".oxlintrc.json": `${JSON.stringify(
       {
-        extends: ["@hewel/zgui/oxlint/recommended"],
+        extends: ["./node_modules/@hewel/zgui/oxlint/recommended.json"],
         ignorePatterns: ["dist/**", "dist-package/**", ".zgui-generations/**"],
       },
       null,
@@ -193,6 +209,7 @@ export function mount(root: NativeNode): () => void {
 
 function waylandShellFiles(name: string): Record<string, string> {
   const title = titleCase(name);
+  const sdkRange = sdkDependencyRange();
   return {
     "package.json": `${JSON.stringify(
       {
@@ -217,12 +234,12 @@ function waylandShellFiles(name: string): Record<string, string> {
           },
         },
         dependencies: {
-          "@hewel/zgui": "^0.1.0",
-          "@hewel/zgui-services": "^0.1.0",
+          "@hewel/zgui": sdkRange,
+          "@hewel/zgui-services": sdkRange,
           "solid-js": "2.0.1",
         },
         devDependencies: {
-          "@hewel/zgui-cli": "^0.1.0",
+          "@hewel/zgui-cli": sdkRange,
           oxlint: "1.94.0",
           tsrs: "7.1.0-beta.tsrs2",
         },
@@ -240,7 +257,7 @@ function waylandShellFiles(name: string): Record<string, string> {
     )}\n`,
     ".oxlintrc.json": `${JSON.stringify(
       {
-        extends: ["@hewel/zgui/oxlint/recommended"],
+        extends: ["./node_modules/@hewel/zgui/oxlint/recommended.json"],
         ignorePatterns: ["dist/**", "dist-package/**", ".zgui-generations/**"],
       },
       null,

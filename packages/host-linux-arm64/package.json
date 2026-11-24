@@ -1,14 +1,18 @@
 {
   "name": "@hewel/zgui-host-linux-arm64",
   "version": "0.1.0",
-  "description": "Prebuilt zgui-js zgui-host binary for Linux arm64",
+  "description": "Prebuilt zgui-js zgui-host binary for Linux arm64 glibc (reserved, not yet published)",
   "license": "Apache-2.0",
+  "private": true,
   "type": "module",
   "os": [
     "linux"
   ],
   "cpu": [
     "arm64"
+  ],
+  "libc": [
+    "glibc"
   ],
   "main": "./index.js",
   "types": "./index.d.ts",
@@ -24,6 +28,9 @@
     "host-manifest.json",
     "index.js",
     "index.d.ts",
-    "README.md"
+    "README.md",
+    "LICENSE",
+    "NOTICE",
+    "THIRD_PARTY_NOTICES.md"
   ]
 }

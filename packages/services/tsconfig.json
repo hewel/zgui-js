@@ -7,7 +7,10 @@
     "types": [],
     "strict": true,
     "noEmit": true,
-    "skipLibCheck": false
+    "skipLibCheck": false,
+    "paths": {
+      "#solid": ["./src/solid.d.ts"]
+    }
   },
-  "include": ["src/**/*.ts"]
+  "include": ["src/**/*.ts", "src/**/*.d.ts"]
 }

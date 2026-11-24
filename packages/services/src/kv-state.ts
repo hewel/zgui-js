@@ -1,6 +1,6 @@
 import { createSignal, getOwner, onCleanup, untrack } from "#solid";
 import type { Accessor } from "#solid";
-import type { JsonValue } from "./index";
+import type { JsonValue } from "./index.js";
 
 /** Minimal borrowed KV storage contract (`KvStore<JsonValue>` satisfies this directly). */
 export interface KvStateStorage {

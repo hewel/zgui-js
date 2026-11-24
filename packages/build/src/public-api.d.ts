@@ -110,6 +110,7 @@ export interface BuildApplicationOptions {
   bytecode?: boolean;
   hostRoot?: string;
   hostExecutable?: string;
+  hostSearchFrom?: readonly string[] | undefined;
   extraCapabilities?: Capabilities;
   capabilitiesFile?: string;
 }

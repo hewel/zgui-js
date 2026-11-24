@@ -20,6 +20,7 @@ import { compileModuleBytecode, resolveNativeHost } from "./host.ts";
 import { publishGeneration, resourcePath } from "./publication.ts";
 import { syncCssModuleTypes, validateStylesheet } from "./css.ts";
 import { workspaceRoot } from "./sdk.ts";
+import { ensureSdkPackagesBuilt } from "./sdk-packages.ts";
 
 export { publishGeneration };
 export { workspaceRoot };
@@ -103,6 +104,7 @@ export async function bundle(
     development = false,
   }: BuildApplicationOptions & { hostEntry?: boolean; filename?: string } = {},
 ): Promise<CompilationResult> {
+  await ensureSdkPackagesBuilt(root);
   return compileBundle(entry, {
     root,
     appDirectory,
@@ -275,6 +277,7 @@ export async function buildApplication(
     bytecode = false,
     hostRoot,
     hostExecutable,
+    hostSearchFrom,
     extraCapabilities,
     capabilitiesFile,
   }: BuildApplicationOptions = {},
@@ -282,6 +285,7 @@ export async function buildApplication(
   if (!/^[a-z][a-z0-9-]*$/.test(app)) throw new Error(`Invalid application name: ${app}`);
   root = path.resolve(root);
   appDirectory = path.resolve(appDirectory);
+  await ensureSdkPackagesBuilt(root);
   await syncCssModuleTypes(appDirectory, { root });
   typecheckProject(path.join(appDirectory, "tsconfig.json"));
   const result = await bundle(path.join(appDirectory, "src/main.tsx"), {
@@ -296,6 +300,7 @@ export async function buildApplication(
     bytecode,
     hostRoot,
     hostExecutable,
+    hostSearchFrom,
     extraCapabilities,
     capabilitiesFile,
   });
@@ -762,6 +767,7 @@ export async function publishApplication(
     bytecode = false,
     hostRoot,
     hostExecutable,
+    hostSearchFrom,
     extraCapabilities,
     capabilitiesFile,
   }: BuildApplicationOptions & { root: string; appDirectory: string; signal?: AbortSignal },
@@ -859,7 +865,7 @@ export async function publishApplication(
       hostRoot,
       root,
       cwd: appDirectory,
-      searchFrom: [import.meta.url],
+      searchFrom: [...(hostSearchFrom ?? []), import.meta.url],
       signal,
     });
     const bytecodeFormat = host.abi?.bytecodeFormat;

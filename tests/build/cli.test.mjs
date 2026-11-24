@@ -1,7 +1,18 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
-import { cp, mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
+import {
+  cp,
+  lstat,
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  rm,
+  stat,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
@@ -16,6 +27,7 @@ import {
   verifyHostPackage,
   workspaceRoot,
 } from "../../packages/build/src/internal.ts";
+import { withPackLock } from "./pack-lock.mjs";
 
 const execute = promisify(execFile);
 const cli = path.join(workspaceRoot, "packages/cli/src/cli.ts");
@@ -87,13 +99,17 @@ test("workspace CLI, scaffolder, and host package manifests follow ADR-0008 boun
   assert.equal(Object.hasOwn(buildPkg, "bin"), false);
   assert.deepEqual(cliPkg.bin, { "zgui-js": "./src/cli.ts" });
   assert.equal(Object.hasOwn(cliPkg.bin, "zgui"), false, "CLI must never squat on `zgui`");
-  assert.equal(cliPkg.optionalDependencies["@hewel/zgui-host-linux-x64"], "workspace:*");
-  assert.equal(cliPkg.optionalDependencies["@hewel/zgui-host-linux-arm64"], "workspace:*");
+  assert.deepEqual(cliPkg.optionalDependencies, {
+    "@hewel/zgui-host-linux-x64": "workspace:*",
+  });
   assert.deepEqual(createPkg.bin, { "create-zgui-js": "./src/cli.ts" });
   assert.deepEqual(x64Pkg.os, ["linux"]);
   assert.deepEqual(x64Pkg.cpu, ["x64"]);
+  assert.deepEqual(x64Pkg.libc, ["glibc"]);
+  assert.equal(x64Pkg.private, undefined);
   assert.deepEqual(arm64Pkg.os, ["linux"]);
   assert.deepEqual(arm64Pkg.cpu, ["arm64"]);
+  assert.equal(arm64Pkg.private, true);
 });
 
 test("deterministic host resolution honors precedence, verifies staged packages, and rejects ABI/integrity mismatches fail-closed", async t => {
@@ -204,7 +220,17 @@ test("deterministic host resolution honors precedence, verifies staged packages,
     /integrity mismatch/,
   );
 
-  // 6. Staged platform package without manifest but wrong ABI fails closed (never falls back to Cargo).
+  // 6. Staged platform package without manifest fails closed BEFORE executing the binary (never falls back to Cargo).
+  const markerPath = path.join(dir, "binary-executed.marker");
+  await writeFile(
+    staged.binaryPath,
+    `#!${process.execPath}
+import { writeFileSync } from "node:fs";
+writeFileSync(${JSON.stringify(markerPath)}, "executed");
+console.log(JSON.stringify({ name: "zgui-host", version: "0.1.0", hostApiVersion: 1, schemaVersion: 2, platform: "linux-x64" }));
+`,
+    { mode: 0o755 },
+  );
   await rm(staged.manifestPath);
   await assert.rejects(
     resolveNativeHost({
@@ -215,7 +241,12 @@ test("deterministic host resolution honors precedence, verifies staged packages,
       arch: "x64",
       root: consumerDir,
     }),
-    /ABI mismatch/,
+    /Missing host-manifest\.json/,
+  );
+  assert.equal(
+    existsSync(markerPath),
+    false,
+    "unverified binary must never be executed when host-manifest.json is missing",
   );
 
   // 7. Missing host outside Cargo checkout returns actionable remediation error.
@@ -450,6 +481,14 @@ test(
     assert.equal(pkgManifest.schemaVersion, 1);
     assert.equal(pkgManifest.hostApiVersion, 1);
     assert.equal(pkgManifest.buildId, packaged.manifest.buildId);
+    assert.deepEqual(pkgManifest.licenses, [
+      "licenses/LICENSE",
+      "licenses/NOTICE",
+      "licenses/THIRD_PARTY_NOTICES.md",
+    ]);
+    for (const rel of pkgManifest.licenses) {
+      assert.equal(existsSync(path.join(outDir, rel)), true, `expected ${rel}`);
+    }
 
     // Execute the generated POSIX launcher wrapper and verify it boots bin/zgui-host --bundle bundle/.
     const { stdout: runOut } = await execute(packaged.launcher, ["--exit-after-ms", "1"], {
@@ -513,32 +552,58 @@ test(
   },
 );
 
-test("installed @hewel/zgui-cli stages apps/devtools/inspector so inspect --ui works outside a repo checkout", async t => {
+test("installed @hewel/zgui-cli stages dereferenced prebuilt inspector-bundle and fails closed if missing", async t => {
   const dir = await mkdtemp(path.join(os.tmpdir(), "zgui-cli-inspector-pack-"));
   t.after(() => rm(dir, { recursive: true, force: true }));
 
   const packScript = path.join(workspaceRoot, "packages/cli/pack-resources.ts");
-  const stagedDir = path.join(workspaceRoot, "packages/cli/inspector");
-  await execute(process.execPath, [packScript], { cwd: path.join(workspaceRoot, "packages/cli") });
-  t.after(async () => {
-    await execute(process.execPath, [packScript, "--clean"], {
-      cwd: path.join(workspaceRoot, "packages/cli"),
-    }).catch(() => {});
-  });
-
-  assert.equal(existsSync(path.join(stagedDir, "package.json")), true);
-  assert.equal(existsSync(path.join(stagedDir, "src/main.tsx")), true);
-  assert.equal(existsSync(path.join(stagedDir, "dist")), false);
-
-  // Copy only the published CLI files (`src` + `inspector`) into an isolated external directory.
+  const stagedDir = path.join(workspaceRoot, "packages/cli/inspector-bundle");
   const installedCli = path.join(dir, "node_modules/@hewel/zgui-cli");
   await mkdir(path.join(installedCli, "src"), { recursive: true });
-  await cp(stagedDir, path.join(installedCli, "inspector"), { recursive: true });
 
-  const { findInspectorAppDir } = await import("../../packages/cli/src/inspect.ts");
-  const resolved = findInspectorAppDir({
-    cliDir: path.join(installedCli, "src"),
-    cwd: dir,
+  await withPackLock(async () => {
+    try {
+      await execute(process.execPath, [packScript], {
+        cwd: path.join(workspaceRoot, "packages/cli"),
+      });
+
+      assert.equal(existsSync(path.join(stagedDir, "manifest.json")), true);
+      assert.equal(existsSync(path.join(stagedDir, "app.mjs")), true);
+
+      // Ensure zero symlinks exist inside staged inspector-bundle.
+      const checkNoSymlinks = async current => {
+        for (const entry of await readdir(current, { withFileTypes: true })) {
+          const full = path.join(current, entry.name);
+          const info = await lstat(full);
+          assert.equal(info.isSymbolicLink(), false, `unexpected symlink in bundle: ${full}`);
+          if (info.isDirectory()) await checkNoSymlinks(full);
+        }
+      };
+      await checkNoSymlinks(stagedDir);
+
+      await cp(stagedDir, path.join(installedCli, "inspector-bundle"), { recursive: true });
+    } finally {
+      await execute(process.execPath, [packScript, "--clean"], {
+        cwd: path.join(workspaceRoot, "packages/cli"),
+      }).catch(() => {});
+    }
   });
-  assert.equal(resolved, path.join(installedCli, "inspector"));
+
+  const { resolveInspectorSource } = await import("../../packages/cli/src/inspect.ts");
+  const resolved = resolveInspectorSource({
+    cliDir: path.join(installedCli, "src"),
+  });
+  assert.deepEqual(resolved, {
+    mode: "prebuilt",
+    bundleDir: path.join(installedCli, "inspector-bundle"),
+  });
+
+  // Removing inspector-bundle from an installed CLI must fail closed and never fall back to cwd.
+  await rm(path.join(installedCli, "inspector-bundle"), { recursive: true, force: true });
+  await mkdir(path.join(dir, "apps/devtools/inspector"), { recursive: true });
+  await writeFile(path.join(dir, "apps/devtools/inspector/package.json"), '{"name":"decoy"}\n');
+  assert.throws(
+    () => resolveInspectorSource({ cliDir: path.join(installedCli, "src") }),
+    /Missing prebuilt Inspector bundle/,
+  );
 });

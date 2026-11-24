@@ -22,7 +22,7 @@ export interface VirtualListController {
   scrollToIndex(index: number, options?: VirtualScrollToIndexOptions): void;
 }
 
-interface VirtualListBaseProps<T> extends Omit<NativeElementProps, "children"> {
+export interface VirtualListBaseProps<T> extends Omit<NativeElementProps, "children"> {
   /** Data array to virtualize. */
   readonly each: readonly T[];
   /** Fixed row height in logical pixels (must be finite and positive). */
@@ -54,7 +54,7 @@ export interface VirtualListKeyedProps<T> extends VirtualListBaseProps<T> {
 
 export type VirtualListProps<T> = VirtualListIdentityProps<T> | VirtualListKeyedProps<T>;
 
-interface VirtualGridBaseProps<T> extends Omit<NativeElementProps, "children"> {
+export interface VirtualGridBaseProps<T> extends Omit<NativeElementProps, "children"> {
   /** Data array to virtualize across rows of columns. */
   readonly each: readonly T[];
   /** Fixed row height in logical pixels (must be finite and positive). */

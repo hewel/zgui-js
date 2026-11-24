@@ -9,7 +9,9 @@ import { promisify } from "node:util";
 import { test } from "node:test";
 import { resolveApplication } from "../../packages/build/src/application.ts";
 import { bundle, publishApplication, workspaceRoot } from "../../packages/build/src/build.ts";
+import { ensureSdkPackagesBuilt } from "../../packages/build/src/internal.ts";
 import { typecheckProject } from "../../packages/build/src/typecheck.ts";
+import { withPackLock } from "./pack-lock.mjs";
 
 const execute = promisify(execFile);
 const cli = path.join(workspaceRoot, "packages/cli/src/cli.ts");
@@ -213,9 +215,10 @@ test("build provenance reports the Solid packages bundled from the consumer", as
   const modules = path.join(directory, "node_modules");
   const ui = path.join(modules, "@hewel/zgui");
   const sdk = path.join(workspaceRoot, "packages/ui");
+  await ensureSdkPackagesBuilt(workspaceRoot);
   await rm(ui);
   await mkdir(ui);
-  await cp(path.join(sdk, "src"), path.join(ui, "src"), { recursive: true });
+  await cp(path.join(sdk, "dist"), path.join(ui, "dist"), { recursive: true });
   for (const filename of ["package.json", "tsconfig.native.json"])
     await cp(path.join(sdk, filename), path.join(ui, filename));
 
@@ -257,8 +260,18 @@ test(
       path.resolve(workspaceRoot, "../.zgui-consumer-"),
     );
     const tarball = "zgui-build.tgz";
-    await execute(process.execPath, ["pm", "pack", "--filename", path.join(directory, tarball)], {
-      cwd: path.join(workspaceRoot, "packages/build"),
+    const cliTarball = "zgui-cli.tgz";
+    await withPackLock(async () => {
+      await execute(process.execPath, ["pm", "pack", "--filename", path.join(directory, tarball)], {
+        cwd: path.join(workspaceRoot, "packages/build"),
+      });
+      await execute(
+        process.execPath,
+        ["pm", "pack", "--filename", path.join(directory, cliTarball)],
+        {
+          cwd: path.join(workspaceRoot, "packages/cli"),
+        },
+      );
     });
     const installed = path.join(directory, "node_modules/@hewel/zgui-build");
     await mkdir(installed);
@@ -358,14 +371,6 @@ console.log(JSON.stringify({ script: import.meta.path, cwd: process.cwd(), args,
     const prebuiltHost = path.join(bin, "prebuilt host");
     await writeFile(preparedHost, hostScript, { mode: 0o755 });
     await writeFile(prebuiltHost, hostScript, { mode: 0o755 });
-    const cliTarball = "zgui-cli.tgz";
-    await execute(
-      process.execPath,
-      ["pm", "pack", "--filename", path.join(directory, cliTarball)],
-      {
-        cwd: path.join(workspaceRoot, "packages/cli"),
-      },
-    );
     const installedCliDir = path.join(directory, "node_modules/@hewel/zgui-cli");
     await mkdir(installedCliDir, { recursive: true });
     await execute("tar", [

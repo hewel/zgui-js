@@ -1,0 +1,259 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Release execution mode (non-tag refs only permit dry-run)"
+        type: choice
+        default: dry-run
+        options:
+          - dry-run
+          - publish
+          - bootstrap
+      dist_tag:
+        description: "Optional npm dist-tag override (prereleases cannot use latest)"
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-and-verify-linux-x64:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.4"
+
+      - name: Install native Linux graphics and font libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config \
+            libfontconfig1-dev \
+            libfreetype-dev \
+            libglvnd-dev \
+            libvulkan-dev \
+            libwayland-dev \
+            libxkbcommon-dev \
+            mesa-vulkan-drivers
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install JS workspace dependencies and build SDK packages
+        run: |
+          bun install --frozen-lockfile
+          bun run build:packages
+
+      - name: Validate release version lockstep, tag, and package metadata
+        run: |
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            bun tools/release.ts check --tag "${{ github.ref_name }}"
+          else
+            bun tools/release.ts check
+          fi
+
+      - name: Run JS/TS formatting, lint, typecheck, and build test gates
+        run: |
+          bun run fmt:check
+          bun run lint
+          bun run typecheck
+          bun run test:build
+
+      - name: Fetch Cargo dependencies and run Rust + vendor tests
+        run: |
+          cargo fetch --locked
+          bun tools/test-vendor.mjs --fetch
+          bun run test:rust
+          bun run test:vendor
+
+      - name: Build release zgui-host binary (linux-x64 glibc)
+        run: cargo build --release -j 4 -p zgui-host --locked --offline
+
+      - name: Audit zgui-host dynamic library dependencies and glibc baseline
+        run: |
+          ldd --version | head -n 1
+          ldd target/release/zgui-host
+          if ldd target/release/zgui-host | grep -q "not found"; then
+            echo "ERROR: Unresolved shared library dependency in target/release/zgui-host" >&2
+            exit 1
+          fi
+          objdump -T target/release/zgui-host | grep -oE 'GLIBC_[0-9]+\.[0-9]+(\.[0-9]+)?' | sort -Vu | tail -n 5
+
+      - name: Stage linux-x64 host package and pack audited release tarballs
+        run: |
+          GLIBC_VER=$(ldd --version | head -n 1 | grep -oE '[0-9]+\.[0-9]+' | tail -n 1)
+          bun tools/release.ts pack \
+            --out release-artifacts \
+            --host-binary target/release/zgui-host \
+            --glibc-baseline "ubuntu-24.04-glibc-${GLIBC_VER}"
+
+      - name: Upload release tarballs and integrity manifest
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-artifacts
+          path: release-artifacts/
+          retention-days: 14
+          if-no-files-found: error
+
+  verify-installed-release:
+    needs: [build-and-verify-linux-x64]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.4"
+
+      - name: Install runtime-only Linux graphics and font libraries (no Rust/Cargo)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libfontconfig1 \
+            libfreetype6 \
+            libglvnd0 \
+            libvulkan1 \
+            libwayland-client0 \
+            libxkbcommon0 \
+            mesa-vulkan-drivers
+
+      - name: Download packed release artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: release-artifacts
+          path: release-artifacts
+
+      - name: Verify isolated installation, bytecode packaging, headless preview, read-only inspect/smoke, oxlint, tsrs, and tsc
+        env:
+          VK_DRIVER_FILES: /usr/share/vulkan/icd.d/lvp_icd.x86_64.json
+        run: |
+          bun tools/verify-release-artifacts.ts --manifest release-artifacts/release-manifest.json
+
+  publish-dry-run:
+    needs: [build-and-verify-linux-x64, verify-installed-release]
+    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'dry-run'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.4"
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-artifacts
+          path: release-artifacts
+      - name: Dry-run release publication (no credentials)
+        run: |
+          TAG_ARGS=()
+          if [ -n "${{ inputs.dist_tag }}" ]; then
+            TAG_ARGS=(--tag "${{ inputs.dist_tag }}")
+          fi
+          bun tools/release.ts publish \
+            --manifest release-artifacts/release-manifest.json \
+            --dry-run \
+            "${TAG_ARGS[@]}"
+
+  publish-oidc:
+    needs: [build-and-verify-linux-x64, verify-installed-release]
+    if: >-
+      github.ref_type == 'tag' &&
+      startsWith(github.ref_name, 'v') &&
+      (github.event_name == 'push' || inputs.mode == 'publish')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: npm-release
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.4"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          registry-url: "https://registry.npmjs.org"
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-artifacts
+          path: release-artifacts
+      - name: Publish verified tarballs via strict npm Trusted Publishing OIDC (--provenance)
+        run: |
+          bun tools/release.ts check --tag "${{ github.ref_name }}"
+          TAG_ARGS=()
+          if [ -n "${{ inputs.dist_tag }}" ]; then
+            TAG_ARGS=(--tag "${{ inputs.dist_tag }}")
+          fi
+          bun tools/release.ts publish \
+            --manifest release-artifacts/release-manifest.json \
+            --provenance \
+            "${TAG_ARGS[@]}"
+
+  publish-bootstrap:
+    needs: [build-and-verify-linux-x64, verify-installed-release]
+    if: >-
+      github.event_name == 'workflow_dispatch' &&
+      inputs.mode == 'bootstrap' &&
+      github.ref_type == 'tag' &&
+      startsWith(github.ref_name, 'v')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: npm-bootstrap
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.4"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          registry-url: "https://registry.npmjs.org"
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-artifacts
+          path: release-artifacts
+      - name: Bootstrap initial package creation with protected NPM_TOKEN
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if [ -z "${NODE_AUTH_TOKEN:-}" ]; then
+            echo "ERROR: bootstrap mode requires NPM_TOKEN in the protected npm-bootstrap environment" >&2
+            exit 1
+          fi
+          bun tools/release.ts check --tag "${{ github.ref_name }}"
+          TAG_ARGS=()
+          if [ -n "${{ inputs.dist_tag }}" ]; then
+            TAG_ARGS=(--tag "${{ inputs.dist_tag }}")
+          fi
+          bun tools/release.ts publish \
+            --manifest release-artifacts/release-manifest.json \
+            --no-provenance \
+            "${TAG_ARGS[@]}"

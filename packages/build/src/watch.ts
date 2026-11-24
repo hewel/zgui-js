@@ -7,6 +7,12 @@ import { tmpdir } from "node:os";
 import { publishApplication } from "./build.ts";
 import { syncCssModuleTypes } from "./css.ts";
 import { workspaceRoot } from "./sdk.ts";
+import {
+  buildSdkPackages,
+  ensureSdkPackagesBuilt,
+  hasCheckoutSdkSources,
+  type SdkPackageName,
+} from "./sdk-packages.ts";
 import { watchBundle } from "./compiler.ts";
 import {
   BUILD_STATUS_FILE,
@@ -21,6 +27,8 @@ interface WatchDependencies {
   typecheck?: typeof typecheckProjectAsync;
   publish?: typeof publishApplication;
   publishStatus?: typeof publishBuildStatus;
+  ensureSdk?: typeof ensureSdkPackagesBuilt;
+  buildSdk?: typeof buildSdkPackages;
 }
 
 // Serial execution plus a dirty bit retains edits arriving during a build without overlapping publication.
@@ -114,6 +122,8 @@ export function watchApplication(
     typecheck = typecheckProjectAsync,
     publish = publishApplication,
     publishStatus = publishBuildStatus,
+    ensureSdk = ensureSdkPackagesBuilt,
+    buildSdk = buildSdkPackages,
   }: WatchDependencies = {},
 ): ApplicationWatcher {
   if (!/^[a-z][a-z0-9-]*$/.test(app)) throw new Error(`Invalid application name: ${app}`);
@@ -135,6 +145,10 @@ export function watchApplication(
   let closed = false;
   let closing: Promise<void> | undefined;
   let restart = false;
+  const dirtySdkPackages = new Set<SdkPackageName>();
+  const checkoutSdk = hasCheckoutSdkSources(root);
+  const uiPackageDir = path.join(root, "packages/ui");
+  const servicesPackageDir = path.join(root, "packages/services");
   const watchers: FSWatcher[] = [];
   let targetWatcher: FSWatcher | undefined;
   const dependencyWatchers = new Map<string, FSWatcher>();
@@ -354,6 +368,17 @@ export function watchApplication(
     async () => {
       await initialized;
       if (closed || controller.signal.aborted) return;
+      if (dirtySdkPackages.size > 0) {
+        const packages = [...dirtySdkPackages];
+        dirtySdkPackages.clear();
+        try {
+          await buildSdk({ root, packages, silent: true });
+        } catch (error) {
+          for (const pkg of packages) dirtySdkPackages.add(pkg);
+          throw error;
+        }
+        if (closed || controller.signal.aborted) return;
+      }
       if (restart) {
         restart = false;
         await compiler?.close();
@@ -380,12 +405,33 @@ export function watchApplication(
       )
     )
       return;
+    if (checkoutSdk) {
+      const sdkPkg: SdkPackageName | undefined =
+        directory === uiPackageDir
+          ? "ui"
+          : directory === servicesPackageDir
+            ? "services"
+            : undefined;
+      if (
+        sdkPkg !== undefined &&
+        (parts.length === 0 ||
+          parts[0] === "src" ||
+          parts.some(part => /^tsconfig.*\.json$/.test(part)))
+      ) {
+        dirtySdkPackages.add(sdkPkg);
+      }
+    }
     if (
       parts.some(part => part === "package.json" || /^tsconfig.*\.json$/.test(part)) ||
       parts.some(part => ["bun.lock", "bunfig.toml"].includes(part))
     )
       restart = true;
-    else if (filename && graphModules.has(path.resolve(directory, filename.toString()))) return;
+    else if (
+      dirtySdkPackages.size === 0 &&
+      filename &&
+      graphModules.has(path.resolve(directory, filename.toString()))
+    )
+      return;
     queue.request();
   };
   try {
@@ -457,6 +503,8 @@ export function watchApplication(
     throw error;
   }
   const initialized = (async () => {
+    await ensureSdk(root, { silent: true });
+    if (closed || controller.signal.aborted) return;
     temporary = await mkdtemp(path.join(tmpdir(), "zgui-compiler-"));
     await writeFile(path.join(temporary, "invalidate"), "");
     if (!closed && !controller.signal.aborted) startCompiler();

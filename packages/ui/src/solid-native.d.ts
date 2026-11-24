@@ -143,7 +143,7 @@ export declare function omit<T extends object, K extends readonly (keyof T)[]>(
   props: T,
   ...keys: K
 ): { [P in keyof T as Exclude<P, K[number]>]: T[P] };
-type MergeSources<T extends readonly object[]> = T extends readonly [
+export type MergeSources<T extends readonly object[]> = T extends readonly [
   infer Head extends object,
   ...infer Tail extends object[],
 ]

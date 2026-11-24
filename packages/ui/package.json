@@ -1,51 +1,92 @@
 {
   "name": "@hewel/zgui",
   "version": "0.1.0",
+  "description": "Zero-DOM native TSX UI SDK, renderer, themed components, headless primitives, router, icons, and oxlint preset for zgui-js",
   "license": "Apache-2.0",
-  "private": true,
   "type": "module",
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hewel/zgui-js.git",
+    "directory": "packages/ui"
+  },
+  "homepage": "https://github.com/hewel/zgui-js#readme",
+  "bugs": {
+    "url": "https://github.com/hewel/zgui-js/issues"
+  },
+  "keywords": [
+    "zgui",
+    "zgui-js",
+    "solid-js",
+    "native-ui",
+    "desktop",
+    "wayland",
+    "quickjs",
+    "tsx"
+  ],
+  "engines": {
+    "bun": ">=1.4.4"
+  },
+  "files": [
+    "dist",
+    "oxlint",
+    "tsconfig.native.json",
+    "upstream",
+    "README.md",
+    "LICENSE",
+    "NOTICE",
+    "THIRD_PARTY_NOTICES.md"
+  ],
   "exports": {
     ".": {
-      "types": "./src/index.ts",
-      "default": "./src/index.ts"
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
     },
     "./renderer": {
-      "types": "./src/renderer/index.ts",
-      "default": "./src/renderer/index.ts"
+      "types": "./dist/renderer/index.d.ts",
+      "default": "./dist/renderer/index.js"
     },
     "./components": {
-      "types": "./src/components/index.ts",
-      "default": "./src/components/index.ts"
+      "types": "./dist/components/index.d.ts",
+      "default": "./dist/components/index.js"
     },
     "./primitives": {
-      "types": "./src/primitives/index.ts",
-      "default": "./src/primitives/index.ts"
+      "types": "./dist/primitives/index.d.ts",
+      "default": "./dist/primitives/index.js"
     },
     "./router": {
-      "types": "./src/router/index.ts",
-      "default": "./src/router/index.ts"
+      "types": "./dist/router/index.d.ts",
+      "default": "./dist/router/index.js"
     },
     "./icons": {
-      "types": "./src/components/icons.ts",
-      "default": "./src/components/icons.ts"
+      "types": "./dist/components/icons.d.ts",
+      "default": "./dist/components/icons.js"
     },
     "./jsx-runtime": {
-      "types": "./src/jsx-runtime.ts",
-      "default": "./src/jsx-runtime.ts"
+      "types": "./dist/jsx-runtime.d.ts",
+      "default": "./dist/jsx-runtime.js"
     },
     "./runtime-globals": {
-      "types": "./src/runtime-globals.ts",
-      "default": "./src/runtime-globals.ts"
+      "types": "./dist/runtime-globals.d.ts",
+      "default": "./dist/runtime-globals.js"
     },
     "./oxlint": "./oxlint/plugin.mjs",
     "./oxlint/recommended": "./oxlint/recommended.json",
-    "./tsconfig.native.json": "./tsconfig.native.json"
+    "./tsconfig.native.json": "./tsconfig.native.json",
+    "./package.json": "./package.json"
   },
   "imports": {
     "#solid": {
-      "types": "./src/solid-native.d.ts",
+      "types": "./dist/solid-native.d.ts",
       "default": "solid-js"
     }
+  },
+  "scripts": {
+    "build": "bun ../../tools/build-packages.ts ui",
+    "prepack": "bun ../../tools/build-packages.ts ui && bun ../../tools/pack-package.ts",
+    "postpack": "bun ../../tools/pack-package.ts --clean"
   },
   "dependencies": {
     "@solidjs/signals": "2.0.1",

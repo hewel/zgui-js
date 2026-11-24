@@ -1,10 +1,9 @@
 # `@hewel/zgui-host-linux-arm64`
 
-Prebuilt `zgui-host` runtime binary for `zgui-js` on Linux arm64 (`aarch64`).
-Installed automatically as an optional dependency of `@hewel/zgui-cli`.
+Reserved prebuilt `zgui-host` runtime package for Linux arm64 (`aarch64`, glibc).
 
-To stage a locally built binary into this package before publishing:
+This package is currently marked `"private": true` and is not published in the initial Linux x64 release matrix. On Linux arm64 hosts, build `zgui-host` from source and pass `--host-executable` or `--host-root`.
 
-```bash
-bun tools/stage-host-package.ts --platform linux-arm64 --binary target/release/zgui-host
-```
+## License & Notices
+
+Apache-2.0 with file-scoped MPL-2.0 (`vendor/zgui-style/src/driver/recalc.rs`). See `LICENSE`, `NOTICE`, and `THIRD_PARTY_NOTICES.md`.

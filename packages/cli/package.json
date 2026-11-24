@@ -4,15 +4,44 @@
   "description": "Official npm/Bun CLI for building, running, inspecting, and packaging zgui-js applications",
   "license": "Apache-2.0",
   "type": "module",
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hewel/zgui-js.git",
+    "directory": "packages/cli"
+  },
+  "homepage": "https://github.com/hewel/zgui-js#readme",
+  "bugs": {
+    "url": "https://github.com/hewel/zgui-js/issues"
+  },
+  "keywords": [
+    "zgui",
+    "zgui-js",
+    "cli",
+    "desktop",
+    "wayland",
+    "native-ui",
+    "solid-js"
+  ],
+  "engines": {
+    "bun": ">=1.4.4"
+  },
   "exports": {
     ".": {
       "types": "./src/index.ts",
       "default": "./src/index.ts"
-    }
+    },
+    "./package.json": "./package.json"
   },
   "files": [
     "src",
-    "inspector"
+    "inspector-bundle",
+    "README.md",
+    "LICENSE",
+    "NOTICE",
+    "THIRD_PARTY_NOTICES.md"
   ],
   "bin": {
     "zgui-js": "./src/cli.ts"
@@ -25,8 +54,7 @@
     "@hewel/zgui-build": "workspace:*"
   },
   "optionalDependencies": {
-    "@hewel/zgui-host-linux-x64": "workspace:*",
-    "@hewel/zgui-host-linux-arm64": "workspace:*"
+    "@hewel/zgui-host-linux-x64": "workspace:*"
   },
   "devDependencies": {
     "@types/bun": "1.4.4"

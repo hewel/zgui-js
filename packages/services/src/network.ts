@@ -1,5 +1,5 @@
 import { getOwner, onCleanup } from "#solid";
-import type { HostRequest, HostServiceError } from "./index";
+import type { HostRequest, HostServiceError } from "./index.js";
 
 /** HTTP request headers accepted by `httpRequest` and `createScopedFetch`. */
 export type HttpHeadersInit =

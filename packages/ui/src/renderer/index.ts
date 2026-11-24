@@ -26,7 +26,7 @@ import type { InternalProps } from "../internal-props.js";
 import { invalidateTreeOrder } from "../tree-order.js";
 
 /** Native specialization of Solid Universal's DOM-independent runtime helpers. */
-interface NativeRenderer {
+export interface NativeRenderer {
   render(code: () => NativeChild, root: NativeNode): () => void;
   effect<T>(
     compute: (previous: T | undefined) => T,
@@ -77,7 +77,7 @@ interface NativeRenderer {
     node: NativeNode,
   ): void;
 }
-type MergeSources<T extends readonly object[]> = T extends readonly [
+export type MergeSources<T extends readonly object[]> = T extends readonly [
   infer Head extends object,
   ...infer Tail extends object[],
 ]

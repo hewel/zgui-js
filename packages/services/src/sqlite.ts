@@ -1,5 +1,5 @@
 import { getOwner, onCleanup } from "#solid";
-import type { HostRequest, JsonValue } from "./index";
+import type { HostRequest, JsonValue } from "./index.js";
 
 /** A primitive value that can cross the SQLite parameter and result boundary. */
 export type SqlValue = null | number | string | Uint8Array;

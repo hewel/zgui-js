@@ -1,9 +1,9 @@
 # Native services
 
 `@hewel/zgui-services` is separate from `@hewel/zgui`. Its implementation and public types
-share strict TypeScript source using ES2022 only; no browser or Node globals are
-imported. This private workspace package exports that source directly, and the
-application builder erases types before QuickJS execution. Importing the module
+are authored in strict ES2022 TypeScript without browser or Node globals, and compiled into
+`dist/*.js` + `dist/*.d.ts` (`bun run build:packages`) with `#solid` zero-DOM isolation for
+both `tsrs` and standard `tsc` consumers. Importing the module
 does not inspect the host. Calling a service forwards to the private native
 binding in the active session; start work from mount, lifecycle callbacks or
 events, not module evaluation/preflight or disposal. Cleanup may cancel existing

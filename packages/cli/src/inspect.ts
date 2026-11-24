@@ -16,25 +16,35 @@ export interface RunInspectOptions {
   signal?: AbortSignal;
 }
 
-export function findInspectorAppDir({
+export type InspectorSource =
+  | { readonly mode: "prebuilt"; readonly bundleDir: string }
+  | { readonly mode: "checkout"; readonly appDir: string };
+
+export function resolveInspectorSource({
   cliDir = import.meta.dir,
-  cwd = process.cwd(),
 }: {
   cliDir?: string;
-  cwd?: string;
-} = {}): string {
-  const candidates = [
-    path.resolve(cliDir, "../inspector"),
-    path.resolve(cliDir, "../../../apps/devtools/inspector"),
-    path.resolve(cwd, "apps/devtools/inspector"),
-  ];
-  for (const candidate of candidates) {
-    if (existsSync(path.join(candidate, "package.json"))) {
-      return candidate;
-    }
+} = {}): InspectorSource {
+  const resolvedCliDir = path.resolve(cliDir);
+  const packagedBundleDir = path.resolve(resolvedCliDir, "../inspector-bundle");
+  if (
+    existsSync(path.join(packagedBundleDir, "manifest.json")) &&
+    existsSync(path.join(packagedBundleDir, "app.mjs"))
+  ) {
+    return { mode: "prebuilt", bundleDir: packagedBundleDir };
   }
+
+  const checkoutRoot = path.resolve(resolvedCliDir, "../../..");
+  const checkoutInspectorDir = path.join(checkoutRoot, "apps/devtools/inspector");
+  if (
+    existsSync(path.join(checkoutRoot, "Cargo.toml")) &&
+    existsSync(path.join(checkoutInspectorDir, "package.json"))
+  ) {
+    return { mode: "checkout", appDir: checkoutInspectorDir };
+  }
+
   throw new Error(
-    "Unable to locate bundled inspector or apps/devtools/inspector for `zgui-js inspect --ui`.",
+    `Missing prebuilt Inspector bundle at ${packagedBundleDir}. Reinstall @hewel/zgui-cli or run from a zgui-js checkout.`,
   );
 }
 
@@ -113,15 +123,21 @@ export async function runInspect({
   const runRoot = hostRoot ? path.resolve(resolvedCwd, hostRoot) : (host.cargoRoot ?? resolvedCwd);
   if (ui) {
     const options = parseUiFlags(args, resolvedCwd);
-    const inspectorDir = findInspectorAppDir({ cwd: resolvedCwd });
-    const resolvedApp = await resolveApplication(inspectorDir);
-    const built = await buildApplication(resolvedApp.app, {
-      ...resolvedApp,
-      development: false,
-    });
+    const source = resolveInspectorSource();
+    let bundleDir: string;
+    if (source.mode === "prebuilt") {
+      bundleDir = source.bundleDir;
+    } else {
+      const resolvedApp = await resolveApplication(source.appDir);
+      const built = await buildApplication(resolvedApp.app, {
+        ...resolvedApp,
+        development: false,
+      });
+      bundleDir = built.dist;
+    }
     const hostArgs = [
       "--bundle",
-      built.dist,
+      bundleDir,
       "--title",
       "zgui-js Inspector",
       "--width",

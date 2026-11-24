@@ -20,6 +20,12 @@
     "bun": ">=1.4.4"
   },
   "scripts": {
+    "prepare": "bun tools/build-packages.ts --quiet",
+    "build:packages": "bun tools/build-packages.ts",
+    "release:check": "bun tools/release.ts check",
+    "release:version": "bun tools/release.ts version",
+    "release:pack": "bun tools/release.ts pack",
+    "release:publish": "bun tools/release.ts publish",
     "fmt": "bun --bun run oxfmt",
     "fmt:check": "bun --bun run oxfmt --check",
     "lint": "bun --bun run oxlint --deny-warnings",
@@ -48,6 +54,7 @@
     "oxfmt": "0.79.0",
     "oxlint": "1.94.0",
     "solid-js": "2.0.1",
-    "tsrs": "7.1.0-beta.tsrs2"
+    "tsrs": "7.1.0-beta.tsrs2",
+    "typescript": "7.0.2"
   }
 }

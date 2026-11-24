@@ -330,7 +330,7 @@ export function writeClipboardImage(
   return globalThis.__zguiServices.writeClipboardImage(source, options);
 }
 
-export { openDatabase, openKvStore } from "./sqlite";
+export { openDatabase, openKvStore } from "./sqlite.js";
 export type {
   KvEntry,
   KvStore,
@@ -343,7 +343,7 @@ export type {
   SqlValue,
   SqliteDatabase,
   SqliteTransaction,
-} from "./sqlite";
+} from "./sqlite.js";
 
 export {
   listBookmarks,
@@ -355,7 +355,7 @@ export {
   revokeBookmark,
   saveFileDialog,
   watchDirectory,
-} from "./files";
+} from "./files.js";
 export type {
   BookmarkInfo,
   BookmarkToken,
@@ -374,9 +374,9 @@ export type {
   WatchDirectoryOptions,
   WatchEvent,
   WatchEventKind,
-} from "./files";
+} from "./files.js";
 
-export { connectWebSocket, createScopedFetch, httpRequest, openEventStream } from "./network";
+export { connectWebSocket, createScopedFetch, httpRequest, openEventStream } from "./network.js";
 export type {
   EventStream,
   EventStreamCallbacks,
@@ -396,13 +396,13 @@ export type {
   WebSocketMessage,
   WebSocketOpenInfo,
   WebSocketOptions,
-} from "./network";
+} from "./network.js";
 
-export { spawnWorker } from "./worker";
-export type { WorkerErrorEvent, WorkerHandle, WorkerOptions } from "./worker";
+export { spawnWorker } from "./worker.js";
+export type { WorkerErrorEvent, WorkerHandle, WorkerOptions } from "./worker.js";
 
-export { createKvState } from "./kv-state";
-export type { KvState, KvStateOptions, KvStateStorage } from "./kv-state";
+export { createKvState } from "./kv-state.js";
+export type { KvState, KvStateOptions, KvStateStorage } from "./kv-state.js";
 
-export { createHostQuery } from "./host-query";
-export type { HostQuery, HostQueryOptions } from "./host-query";
+export { createHostQuery } from "./host-query.js";
+export type { HostQuery, HostQueryOptions } from "./host-query.js";

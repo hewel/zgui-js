@@ -1,20 +1,57 @@
 {
   "name": "@hewel/zgui-services",
   "version": "0.1.0",
+  "description": "Capability-gated native host services SDK (HTTP/SSE/WebSocket, SQLite/KV, local files, clipboard, sockets, commands, workers) for zgui-js",
   "license": "Apache-2.0",
-  "private": true,
   "type": "module",
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hewel/zgui-js.git",
+    "directory": "packages/services"
+  },
+  "homepage": "https://github.com/hewel/zgui-js#readme",
+  "bugs": {
+    "url": "https://github.com/hewel/zgui-js/issues"
+  },
+  "keywords": [
+    "zgui",
+    "zgui-js",
+    "services",
+    "sqlite",
+    "wayland",
+    "desktop",
+    "quickjs"
+  ],
+  "engines": {
+    "bun": ">=1.4.4"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE",
+    "NOTICE",
+    "THIRD_PARTY_NOTICES.md"
+  ],
   "exports": {
     ".": {
-      "types": "./src/index.ts",
-      "default": "./src/index.ts"
-    }
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
   },
   "imports": {
     "#solid": {
-      "types": "./src/solid.d.ts",
+      "types": "./dist/solid.d.ts",
       "default": "solid-js"
     }
+  },
+  "scripts": {
+    "build": "bun ../../tools/build-packages.ts services",
+    "prepack": "bun ../../tools/build-packages.ts services && bun ../../tools/pack-package.ts",
+    "postpack": "bun ../../tools/pack-package.ts --clean"
   },
   "dependencies": {
     "solid-js": "2.0.1"

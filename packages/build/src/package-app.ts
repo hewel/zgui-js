@@ -1,9 +1,24 @@
 import type { PackageApplicationOptions, PackagedApplication } from "./index.ts";
+import { existsSync } from "node:fs";
 import { chmod, copyFile, cp, mkdir, realpath, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { buildApplication } from "./build.ts";
 import { EXPECTED_HOST_API_VERSION, resolveNativeHost } from "./host.ts";
-import { workspaceRoot } from "./sdk.ts";
+import { packagedSdkRoot, workspaceRoot } from "./sdk.ts";
+
+const DISTRIBUTED_LICENSE_FILES = ["LICENSE", "NOTICE", "THIRD_PARTY_NOTICES.md"] as const;
+
+function resolveLicenseFile(filename: string, root: string): string {
+  const candidates = [
+    path.join(root, filename),
+    path.join(packagedSdkRoot, filename),
+    path.resolve(packagedSdkRoot, "..", filename),
+  ];
+  for (const candidate of candidates) {
+    if (existsSync(candidate)) return candidate;
+  }
+  throw new Error(`Missing required license notice file for packaging: ${filename}`);
+}
 
 function sanitizeDesktopField(value: string): string {
   return value.replace(/[\r\n]+/g, " ").trim();
@@ -47,6 +62,7 @@ export async function packageApplication(
     bytecode = false,
     hostRoot,
     hostExecutable,
+    hostSearchFrom,
     extraCapabilities,
     capabilitiesFile,
     desktopEntry = false,
@@ -64,6 +80,7 @@ export async function packageApplication(
     bytecode,
     hostRoot,
     hostExecutable,
+    hostSearchFrom,
     extraCapabilities,
     capabilitiesFile,
   });
@@ -80,6 +97,7 @@ export async function packageApplication(
     hostRoot,
     root,
     cwd: resolvedAppDir,
+    searchFrom: hostSearchFrom,
     signal,
   });
   signal?.throwIfAborted();
@@ -97,6 +115,14 @@ export async function packageApplication(
     await copyFile(host.executable, executablePath);
     await chmod(executablePath, 0o755);
     await cp(bundleSource, bundleDir, { recursive: true, dereference: true });
+    const licensesDir = path.join(stagingDir, "licenses");
+    await mkdir(licensesDir, { recursive: true });
+    const licensePaths: string[] = [];
+    for (const filename of DISTRIBUTED_LICENSE_FILES) {
+      const source = resolveLicenseFile(filename, path.resolve(root));
+      await copyFile(source, path.join(licensesDir, filename));
+      licensePaths.push(`licenses/${filename}`);
+    }
     await writeFile(launcherPath, buildLauncherScript(app, { pureShell }), "utf8");
     await chmod(launcherPath, 0o755);
 
@@ -124,6 +150,7 @@ export async function packageApplication(
       executable: "bin/zgui-host",
       bundle: "bundle",
       launcher: app,
+      licenses: licensePaths,
       ...(desktopEntry ? { desktopEntry: desktopFileName } : {}),
     };
     await writeFile(

@@ -4,11 +4,43 @@
   "description": "Scaffold a new zgui-js desktop app or Wayland shell (bun create zgui-js)",
   "license": "Apache-2.0",
   "type": "module",
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hewel/zgui-js.git",
+    "directory": "packages/create-zgui-js"
+  },
+  "homepage": "https://github.com/hewel/zgui-js#readme",
+  "bugs": {
+    "url": "https://github.com/hewel/zgui-js/issues"
+  },
+  "keywords": [
+    "zgui",
+    "zgui-js",
+    "create",
+    "scaffold",
+    "desktop",
+    "wayland",
+    "solid-js"
+  ],
+  "engines": {
+    "bun": ">=1.4.4"
+  },
   "files": [
-    "src"
+    "src",
+    "README.md",
+    "LICENSE",
+    "NOTICE",
+    "THIRD_PARTY_NOTICES.md"
   ],
   "bin": {
     "create-zgui-js": "./src/cli.ts"
+  },
+  "scripts": {
+    "prepack": "bun ../../tools/pack-package.ts",
+    "postpack": "bun ../../tools/pack-package.ts --clean"
   },
   "dependencies": {
     "@hewel/zgui-cli": "workspace:*"

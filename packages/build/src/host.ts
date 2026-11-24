@@ -1,6 +1,13 @@
 import type { NativeHostAbi, ResolvedNativeHost, ResolveNativeHostOptions } from "./index.ts";
 import { createHash } from "node:crypto";
-import { accessSync, constants as fsConstants, existsSync, readFileSync } from "node:fs";
+import {
+  accessSync,
+  constants as fsConstants,
+  existsSync,
+  readFileSync,
+  realpathSync,
+  statSync,
+} from "node:fs";
 import { chmod, copyFile, mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
@@ -24,6 +31,8 @@ export interface StagedHostManifest {
   readonly bundleSchemaVersion: number;
   readonly sha256: string;
   readonly bytes: number;
+  readonly libc?: "glibc" | undefined;
+  readonly glibcBaseline?: string | undefined;
 }
 
 function hostFailure(message: string, exitCode = 1): Error & { exitCode: number } {
@@ -182,6 +191,94 @@ function tryResolvePlatformPackage(
   return undefined;
 }
 
+function parseStagedManifest(manifestPath: string, label: string): StagedHostManifest {
+  if (!existsSync(manifestPath)) {
+    throw hostFailure(
+      `Missing host-manifest.json in ${label} (refusing to execute unverified binary)`,
+    );
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(readFileSync(manifestPath, "utf8"));
+  } catch (error) {
+    throw hostFailure(
+      `Malformed host-manifest.json in ${label}: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw hostFailure(`Invalid host-manifest.json in ${label}: expected JSON object`);
+  }
+  return parsed as StagedHostManifest;
+}
+
+function validateStagedManifest({
+  manifest,
+  binaryPath,
+  expectedPackage,
+  expectedPlatform,
+  expectedVersion,
+}: {
+  manifest: StagedHostManifest;
+  binaryPath: string;
+  expectedPackage: string;
+  expectedPlatform: string;
+  expectedVersion?: string;
+}): void {
+  if (manifest.schemaVersion !== 1) {
+    throw hostFailure(
+      `Unsupported host-manifest.json schemaVersion in ${expectedPackage}: ${String(manifest.schemaVersion)}`,
+    );
+  }
+  if (manifest.package !== expectedPackage) {
+    throw hostFailure(
+      `Prebuilt host manifest package mismatch: expected ${expectedPackage}, got ${String(manifest.package)}`,
+    );
+  }
+  if (manifest.platform !== expectedPlatform) {
+    throw hostFailure(
+      `Prebuilt host manifest platform mismatch in ${expectedPackage}: expected ${expectedPlatform}, got ${String(manifest.platform)}`,
+    );
+  }
+  if (typeof manifest.version !== "string" || !manifest.version.trim()) {
+    throw hostFailure(`Prebuilt host manifest missing version in ${expectedPackage}`);
+  }
+  if (expectedVersion !== undefined && manifest.version !== expectedVersion) {
+    throw hostFailure(
+      `Prebuilt host manifest version mismatch in ${expectedPackage}: expected ${expectedVersion}, got ${manifest.version}`,
+    );
+  }
+  if (
+    manifest.hostApiVersion !== EXPECTED_HOST_API_VERSION ||
+    manifest.bundleSchemaVersion !== EXPECTED_SCHEMA_VERSION
+  ) {
+    throw hostFailure(
+      `Prebuilt host manifest ABI mismatch in ${expectedPackage}: hostApiVersion=${String(manifest.hostApiVersion)} bundleSchemaVersion=${String(manifest.bundleSchemaVersion)}, expected hostApiVersion=${EXPECTED_HOST_API_VERSION} bundleSchemaVersion=${EXPECTED_SCHEMA_VERSION}`,
+    );
+  }
+  const actualBytes = statSync(binaryPath).size;
+  if (typeof manifest.bytes !== "number" || manifest.bytes !== actualBytes) {
+    throw hostFailure(
+      `Prebuilt host integrity mismatch (size) in ${expectedPackage}: expected ${String(manifest.bytes)} bytes, got ${actualBytes}`,
+    );
+  }
+  const actualDigest = sha256File(binaryPath);
+  if (typeof manifest.sha256 !== "string" || manifest.sha256 !== actualDigest) {
+    throw hostFailure(
+      `Prebuilt host integrity mismatch in ${expectedPackage}: expected ${String(manifest.sha256)}, got ${actualDigest}`,
+    );
+  }
+}
+
+function resolveEntryScriptDir(): string | undefined {
+  const arg = process.argv[1];
+  if (typeof arg !== "string" || !arg || !existsSync(arg)) return undefined;
+  try {
+    return path.dirname(realpathSync(arg));
+  } catch {
+    return path.dirname(path.resolve(arg));
+  }
+}
+
 export async function resolveNativeHost({
   hostExecutable,
   hostRoot,
@@ -212,13 +309,11 @@ export async function resolveNativeHost({
     };
   }
 
-  // 2. Installed platform package (@hewel/zgui-host-<os>-<arch>) with ABI handshake.
+  // 2. Installed platform package (@hewel/zgui-host-<os>-<arch>) with mandatory manifest + ABI checks.
+  const currentPlatform = platformId(platform, arch);
   const packageName = platformHostPackageName(platform, arch);
   if (packageName) {
-    const entryScript =
-      typeof process.argv[1] === "string" && existsSync(process.argv[1])
-        ? path.dirname(path.resolve(process.argv[1]))
-        : undefined;
+    const entryScript = resolveEntryScriptDir();
     const searchBases = [
       ...searchFrom,
       resolvedCwd,
@@ -229,25 +324,15 @@ export async function resolveNativeHost({
     const pkgDir = tryResolvePlatformPackage(packageName, searchBases);
     if (pkgDir) {
       const binaryPath = path.join(pkgDir, "bin", "zgui-host");
+      const manifestPath = path.join(pkgDir, "host-manifest.json");
       if (existsSync(binaryPath)) {
-        const manifestPath = path.join(pkgDir, "host-manifest.json");
-        if (existsSync(manifestPath)) {
-          const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as StagedHostManifest;
-          const actualDigest = sha256File(binaryPath);
-          if (manifest.sha256 !== actualDigest) {
-            throw hostFailure(
-              `Prebuilt host integrity mismatch in ${packageName}: expected ${manifest.sha256}, got ${actualDigest}`,
-            );
-          }
-          if (
-            manifest.hostApiVersion !== EXPECTED_HOST_API_VERSION ||
-            manifest.bundleSchemaVersion !== EXPECTED_SCHEMA_VERSION
-          ) {
-            throw hostFailure(
-              `Prebuilt host manifest ABI mismatch in ${packageName}: hostApiVersion=${manifest.hostApiVersion} bundleSchemaVersion=${manifest.bundleSchemaVersion}, expected hostApiVersion=${EXPECTED_HOST_API_VERSION} bundleSchemaVersion=${EXPECTED_SCHEMA_VERSION}`,
-            );
-          }
-        }
+        const manifest = parseStagedManifest(manifestPath, packageName);
+        validateStagedManifest({
+          manifest,
+          binaryPath,
+          expectedPackage: packageName,
+          expectedPlatform: currentPlatform,
+        });
         const abi = verifyAbi ? probeNativeHost(binaryPath) : undefined;
         return {
           executable: binaryPath,
@@ -255,6 +340,11 @@ export async function resolveNativeHost({
           packageName,
           ...(abi ? { abi } : {}),
         };
+      }
+      if (existsSync(manifestPath)) {
+        throw hostFailure(
+          `Incomplete prebuilt host package ${packageName}: found host-manifest.json without bin/zgui-host`,
+        );
       }
     }
   }
@@ -295,7 +385,6 @@ export async function resolveNativeHost({
   }
 
   // 4. Actionable error when no prebuilt host or Cargo checkout is available.
-  const currentPlatform = platformId(platform, arch);
   const installHint = packageName
     ? `Install the prebuilt host package (${packageName})`
     : `No prebuilt host package is published for ${currentPlatform}`;
@@ -312,11 +401,13 @@ export async function stageHostPackage({
   binary,
   packageDir,
   skipProbe = false,
+  glibcBaseline,
 }: {
   platform: string;
   binary: string;
   packageDir?: string;
   skipProbe?: boolean;
+  glibcBaseline?: string;
 }): Promise<{
   packageDir: string;
   binaryPath: string;
@@ -355,6 +446,11 @@ export async function stageHostPackage({
         `Platform mismatch staging ${packageName}: binary reports platform=${abi.platform}, expected ${platform}`,
       );
     }
+    if (abi.version !== pkgJson.version) {
+      throw hostFailure(
+        `Version mismatch staging ${packageName}: binary reports version=${abi.version}, expected package.json version=${pkgJson.version}`,
+      );
+    }
     version = abi.version;
     hostApiVersion = abi.hostApiVersion;
     bundleSchemaVersion = abi.schemaVersion;
@@ -376,6 +472,8 @@ export async function stageHostPackage({
     bundleSchemaVersion,
     sha256: sha256File(destBinary),
     bytes: info.size,
+    ...(platform.startsWith("linux-") ? { libc: "glibc" as const } : {}),
+    ...(glibcBaseline ? { glibcBaseline } : {}),
   };
   const manifestPath = path.join(targetDir, "host-manifest.json");
   await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
@@ -389,30 +487,37 @@ export async function verifyHostPackage(
   const dir = path.resolve(packageDir);
   const pkgJson = JSON.parse(await readFile(path.join(dir, "package.json"), "utf8")) as {
     name?: string;
+    version?: string;
   };
-  const manifest = JSON.parse(
-    await readFile(path.join(dir, "host-manifest.json"), "utf8"),
-  ) as StagedHostManifest;
-  if (manifest.schemaVersion !== 1 || manifest.package !== pkgJson.name) {
-    throw hostFailure(`Invalid host-manifest.json in ${dir}`);
+  if (typeof pkgJson.name !== "string" || typeof pkgJson.version !== "string") {
+    throw hostFailure(`Invalid package.json in ${dir}`);
   }
   const binaryPath = path.join(dir, "bin", "zgui-host");
   if (!existsSync(binaryPath)) {
     throw hostFailure(`Missing staged binary: ${binaryPath}`);
   }
-  const actualDigest = sha256File(binaryPath);
-  if (actualDigest !== manifest.sha256) {
-    throw hostFailure(
-      `Staged host digest mismatch in ${dir}: expected ${manifest.sha256}, got ${actualDigest}`,
-    );
-  }
-  const info = await stat(binaryPath);
-  if (info.size !== manifest.bytes) {
-    throw hostFailure(
-      `Staged host size mismatch in ${dir}: expected ${manifest.bytes}, got ${info.size}`,
-    );
-  }
+  const manifest = parseStagedManifest(path.join(dir, "host-manifest.json"), pkgJson.name);
+  const expectedPlatform = Object.entries(SUPPORTED_HOST_PACKAGES).find(
+    ([, name]) => name === pkgJson.name,
+  )?.[0];
+  validateStagedManifest({
+    manifest,
+    binaryPath,
+    expectedPackage: pkgJson.name,
+    expectedPlatform: expectedPlatform ?? manifest.platform,
+    expectedVersion: pkgJson.version,
+  });
   const abi = verifyAbi ? probeNativeHost(binaryPath) : undefined;
+  if (abi && abi.version !== pkgJson.version) {
+    throw hostFailure(
+      `Staged host version mismatch in ${dir}: binary reports ${abi.version}, expected ${pkgJson.version}`,
+    );
+  }
+  if (abi && expectedPlatform && abi.platform !== expectedPlatform) {
+    throw hostFailure(
+      `Staged host platform mismatch in ${dir}: binary reports ${abi.platform}, expected ${expectedPlatform}`,
+    );
+  }
   return { manifest, binaryPath, ...(abi ? { abi } : {}) };
 }
 

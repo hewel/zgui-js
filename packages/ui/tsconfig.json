@@ -1,0 +1,9 @@
+{
+  "extends": "./tsconfig.native.json",
+  "compilerOptions": {
+    "paths": {
+      "#solid": ["./src/solid-native.d.ts"]
+    }
+  },
+  "include": ["src/**/*.ts", "src/**/*.d.ts"]
+}

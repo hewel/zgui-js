@@ -451,7 +451,7 @@ export type CanvasTransform = readonly [
   f: number,
 ];
 
-type CanvasPathSegment =
+export type CanvasPathSegment =
   | { kind: "moveTo"; x: number; y: number }
   | { kind: "lineTo"; x: number; y: number }
   | { kind: "quadTo"; cx: number; cy: number; x: number; y: number }

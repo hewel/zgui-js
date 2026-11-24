@@ -33,6 +33,7 @@ export async function devApplication(
     hostArgs = [],
     hostRoot,
     hostExecutable,
+    hostSearchFrom,
     strictTypecheck = false,
     mode = "desktop",
     extraCapabilities,
@@ -121,6 +122,7 @@ export async function devApplication(
             hostRoot: explicitHostRoot,
             root,
             cwd: appDirectory,
+            searchFrom: hostSearchFrom,
             signal: controller.signal,
           });
           executable = resolvedHost.executable;

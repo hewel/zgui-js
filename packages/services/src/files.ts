@@ -1,5 +1,5 @@
 import { getOwner, onCleanup } from "#solid";
-import type { HostRequest } from "./index";
+import type { HostRequest } from "./index.js";
 
 /** Access level granted to a file or directory capability handle. */
 export type FileAccessMode = "read" | "readwrite";

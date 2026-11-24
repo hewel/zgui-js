@@ -1,14 +1,41 @@
 {
   "name": "@hewel/zgui-host-linux-x64",
   "version": "0.1.0",
-  "description": "Prebuilt zgui-js zgui-host binary for Linux x64",
+  "description": "Prebuilt zgui-js zgui-host binary for Linux x64 glibc (ubuntu-24.04, glibc >= 2.39 baseline)",
   "license": "Apache-2.0",
   "type": "module",
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hewel/zgui-js.git",
+    "directory": "packages/host-linux-x64"
+  },
+  "homepage": "https://github.com/hewel/zgui-js#readme",
+  "bugs": {
+    "url": "https://github.com/hewel/zgui-js/issues"
+  },
+  "keywords": [
+    "zgui",
+    "zgui-js",
+    "zgui-host",
+    "linux",
+    "x64",
+    "glibc",
+    "wayland"
+  ],
+  "engines": {
+    "bun": ">=1.4.4"
+  },
   "os": [
     "linux"
   ],
   "cpu": [
     "x64"
+  ],
+  "libc": [
+    "glibc"
   ],
   "main": "./index.js",
   "types": "./index.d.ts",
@@ -24,6 +51,12 @@
     "host-manifest.json",
     "index.js",
     "index.d.ts",
-    "README.md"
-  ]
+    "README.md",
+    "LICENSE",
+    "NOTICE",
+    "THIRD_PARTY_NOTICES.md"
+  ],
+  "scripts": {
+    "prepack": "bun prepack-check.ts"
+  }
 }

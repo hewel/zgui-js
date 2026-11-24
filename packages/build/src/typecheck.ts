@@ -4,6 +4,7 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { syncCssModuleTypes } from "./css.ts";
+import { ensureSdkPackagesBuilt } from "./sdk-packages.ts";
 
 const compilerCli = path.join(
   path.dirname(createRequire(import.meta.url).resolve("tsrs/package.json")),
@@ -92,7 +93,10 @@ async function discoverPackageConfigs(root: string): Promise<string[]> {
     const pkgDir = path.join(packagesDir, entry.name);
     for (const candidate of ["tsconfig.json", "tsconfig.native.json"]) {
       const configPath = path.join(pkgDir, candidate);
-      if (await fileExists(configPath)) configs.push(configPath);
+      if (await fileExists(configPath)) {
+        configs.push(configPath);
+        break;
+      }
     }
   }
   return configs;
@@ -139,6 +143,7 @@ export async function typecheckWorkspace(
   root = fileURLToPath(new URL("../../../", import.meta.url)),
   { app }: { app?: string } = {},
 ): Promise<void> {
+  await ensureSdkPackagesBuilt(root);
   const configs = app
     ? await discoverAppConfigs(root, app)
     : [

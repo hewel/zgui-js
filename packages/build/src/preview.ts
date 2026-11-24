@@ -58,6 +58,7 @@ export async function previewApplication(
     hostRoot: explicitHostRoot,
     root,
     cwd: buildOptions.appDirectory ?? process.cwd(),
+    searchFrom: buildOptions.hostSearchFrom,
     signal,
   });
   const runRoot = explicitHostRoot ?? resolvedHost.cargoRoot ?? buildOptions.appDirectory ?? root;

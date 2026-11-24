@@ -5,13 +5,11 @@ Native TSX components and reactive primitives for the zgui-js host. Use the pack
 not browser elements. `renderApp` owns the mounted subtree and returns its
 idempotent disposer.
 
-The UI runtime is authored in strict TypeScript. This private workspace package
-exports its checked source directly, so application types and component
-implementations share one contract without a separate declaration build.
-Babel/Rolldown erase types and bundle ES2022 JavaScript for QuickJS; the native host
-remains Rust.
-Source-linked SDK entry points support strict consumer projects with
-`noUncheckedIndexedAccess` and `exactOptionalPropertyTypes` enabled.
+The UI runtime is authored in strict TypeScript and compiled into ES2022 `.js` + `.d.ts`
+artifacts under `dist/` (`bun run build:packages`). Published entry points support strict
+consumer projects with `noUncheckedIndexedAccess`, `exactOptionalPropertyTypes`, and
+`skipLibCheck: false` under both `tsrs` and standard `tsc`, while preserving static
+`components.css` stylesheet hoisting in `@hewel/zgui-build`.
 
 The package-local `#solid` import uses a native-only type contract for the pinned
 Solid runtime and resolves to `solid-js` when bundled. This intentionally avoids
