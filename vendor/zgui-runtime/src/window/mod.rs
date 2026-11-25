@@ -1636,7 +1636,7 @@ impl Window {
     /// Intentionally decoupled from layout/style convergence (`owes_further_work()`).
     #[must_use]
     pub fn blur_pending(&self) -> bool {
-        self.blur.is_pending()
+        self.blur.is_pending(&*self.surface)
     }
 
     /// Hands this window the application's cascade pool.

@@ -27,17 +27,17 @@ use wayland_client::protocol::wl_compositor::WlCompositor;
 use wayland_client::protocol::wl_seat::WlSeat;
 use wayland_client::protocol::wl_region::WlRegion;
 use wayland_client::protocol::wl_surface::WlSurface;
-use wayland_protocols::ext::background_effect::v1::client::ext_background_effect_surface_v1::ExtBackgroundEffectSurfaceV1;
 use zgui_geom::{Css, CssPx, Device, DevicePx, Edges, Point, Rect, Size};
 use zgui_platform::{
-    BlurRegion, CursorStyle, Decorations, FullscreenMode, GpuSurface, InputRegion, LayerPlacement,
+    BlurRegion, BlurShape, CursorStyle, Decorations, FullscreenMode, GpuSurface, InputRegion, LayerPlacement,
     PlatformError, PopupPlacement, PresentPacing, PresentationTiming, Surface, SurfaceId,
     TextInput, Unsupported,
 };
 
 use crate::driver::WaylandState;
-use crate::driver::background_effect::BackgroundEffectLink;
+use crate::driver::background_effect::{ActiveBlurProtocol, BackgroundEffectLink};
 use crate::frame::Presentation;
+use crate::surface::region::{BlurBeforePresent, CommittedBlurSnapshot, OwnedBlurRegion};
 use crate::surface::role::popup::Offset as PopupOffset;
 use crate::surface::state::{Bounds, Shared};
 
@@ -318,11 +318,7 @@ impl WaylandSurface {
         crate::surface::role::layer::apply_with_extent(layer, &placement, extent);
     }
 
-    /// Sends the input, opaque, and background blur regions asked for since the last send, right
-    /// before a commit.
-    ///
-    /// Nothing is committed here: all three regions are double-buffered state of the surface that
-    /// the next commit applies, and updating one never alters the pending state of the others.
+    /// Sends staged input and opaque regions before the commit that applies them.
     pub(crate) fn send_regions(&self) {
         let (input, opaque) = {
             let mut shared = self.shared();
@@ -349,10 +345,9 @@ impl WaylandSurface {
                 _ => wl.set_opaque_region(None),
             }
         }
-        self.send_blur_region();
     }
 
-    /// Whether this surface's logical role may participate in `ext_background_effect_v1`.
+    /// Whether this surface's logical role may participate in compositor background blur.
     ///
     /// Session lock surfaces (both persistent parents and disposable content subsurfaces) are
     /// unconditionally excluded by logical role.
@@ -360,183 +355,179 @@ impl WaylandSurface {
         matches!(self.role, Role::Toplevel(_) | Role::Layer(_) | Role::Popup(_))
     }
 
-    /// Re-marks a non-empty desired blur region dirty before a remap commit.
     pub(crate) fn restage_blur_for_remap(&self) {
-        if !self.is_blur_eligible() || !self.active() {
-            return;
-        }
-        if !self.background_effect.blur_supported() {
-            return;
-        }
         let mut shared = self.shared();
-        if !shared.blur_desired.is_none() {
-            shared.blur_owed = true;
-        }
+        shared.blur_owed |= !shared.blur_desired.is_none() || shared.niri_ever_bound;
     }
 
-    /// Idempotently destroys any `ext_background_effect_surface_v1` associated with this surface.
-    ///
-    /// Must run before `wl_surface.destroy()` on both early role retirement and `Drop`.
+    /// Destroy both auxiliaries before retiring the role or its `wl_surface`.
     pub(crate) fn destroy_blur_surface(&self) {
-        let effect = {
-            let mut shared = self.shared();
-            shared.blur_owed = false;
-            shared.blur_staged = None;
-            shared.blur_pre_presented = None;
-            shared.blur_last_committed = region::OwnedBlurRegion::None;
-            shared.blur_surface.take()
-        };
-        if let Some(effect) = effect
-            && effect.is_alive()
-        {
-            effect.destroy();
-        }
+        let mut shared = self.shared();
+        shared.blur_owed = false;
+        shared.blur_staged = None;
+        shared.blur_pre_presented = None;
+        shared.blur_pending_commit = None;
+        shared.blur_last_committed = CommittedBlurSnapshot::Unbound;
+        shared.retire_stale_blur(&ActiveBlurProtocol::None);
     }
 
-    /// Promotes any staged picture-bound blur candidate into `blur_desired` / `blur_owed` right
-    /// before `send_regions()` runs inside `chrome::pre_present` (including `present_held`).
     pub(crate) fn promote_staged_blur_for_present(&self) {
         if !self.is_blur_eligible() || !self.active() {
             return;
         }
+        let mut shared = self.shared();
+        let desired = shared.blur_staged.take().and_then(|next| {
+            (shared.blur_desired != next).then(|| {
+                shared.blur_owed = true;
+                std::mem::replace(&mut shared.blur_desired, next)
+            })
+        });
+        shared.blur_pre_presented = Some(BlurBeforePresent {
+            desired,
+            niri_ever_bound: shared.niri_ever_bound,
+        });
+    }
+
+    /// Mark reconciliation dirty without altering the compositor's pending surface state.
+    pub(crate) fn blur_protocol_changed(&self) {
+        if self.is_blur_eligible() && self.active() {
+            let mut shared = self.shared();
+            shared.blur_owed |= shared.has_blur_object()
+                || shared.niri_ever_bound || !shared.blur_desired.is_none();
+            drop(shared);
+            self.request_redraw();
+        }
+    }
+
+    /// Reconcile both object lifetimes and the replacement payload in the same commit batch.
+    pub(crate) fn send_blur_region(&self, frame_logical: Option<Size<CssPx, Css>>) {
+        if !self.is_blur_eligible() || !self.active() || !self.wl_surface().is_alive() {
+            return;
+        }
+        let mut shared = self.shared();
+        let full = matches!(shared.blur_desired, OwnedBlurRegion::Full);
+        let full_changed = full && shared.niri_blur_surface.is_some()
+            && frame_logical.is_some_and(|extent| Some(extent) != shared.niri_last_full_extent);
+        if !std::mem::take(&mut shared.blur_owed) && !full_changed {
+            return;
+        }
+        let active = self.background_effect.active();
+        shared.retire_stale_blur(&active);
+        let snapshot = match active {
+            ActiveBlurProtocol::ExtBackgroundEffect(generation, manager) if manager.is_alive() => {
+                // Never turn a continuous-opacity mask into an unconditional binary one.
+                let desired = match &shared.blur_desired {
+                    OwnedBlurRegion::Shapes(_) => &OwnedBlurRegion::None,
+                    region => region,
+                };
+                if desired.is_none() && shared.ext_blur_surface.is_none() {
+                    CommittedBlurSnapshot::Unbound
+                } else {
+                    let region = match desired {
+                        OwnedBlurRegion::Full => {
+                            let region = self.create_region();
+                            region.add(0, 0, i32::MAX, i32::MAX);
+                            Some(region)
+                        }
+                        OwnedBlurRegion::Rects(rects) => Some(self.region_of(rects, region::outward)),
+                        _ => None,
+                    };
+                    let (_, effect) = shared.ext_blur_surface.get_or_insert_with(|| {
+                        (generation, manager.get_background_effect(self.wl_surface(), &self.qh, ()))
+                    });
+                    if effect.is_alive() {
+                        effect.set_blur_region(region.as_ref());
+                    }
+                    if let Some(region) = region {
+                        region.destroy();
+                    }
+                    let committed = match &shared.blur_desired {
+                        OwnedBlurRegion::Shapes(_) => OwnedBlurRegion::None,
+                        region => region.clone(),
+                    };
+                    CommittedBlurSnapshot::Ext(committed)
+                }
+            }
+            ActiveBlurProtocol::NiriBlurShape(generation, manager) if manager.is_alive()
+                && (!shared.blur_desired.is_none() || shared.niri_ever_bound) =>
+            {
+                let (_, effect) = shared.niri_blur_surface.get_or_insert_with(|| {
+                    (generation, manager.get_surface(self.wl_surface(), &self.qh, ()))
+                });
+                let effect = effect.clone();
+                if !effect.is_alive() {
+                    return;
+                }
+                shared.niri_ever_bound = true;
+                let mut count = 0;
+                effect.clear();
+                let mut add = |shape: BlurShape| {
+                    let [tl, tr, br, bl] = shape.radii;
+                    effect.add_rounded_rect(shape.x, shape.y, shape.width, shape.height,
+                        tl, tr, br, bl, shape.corner_exponent, shape.opacity);
+                    count += 1;
+                };
+                let extent = full.then(|| {
+                    frame_logical.or(shared.niri_last_full_extent).unwrap_or(shared.logical)
+                });
+                match &shared.blur_desired {
+                    OwnedBlurRegion::None => {}
+                    OwnedBlurRegion::Full => {
+                        let extent = extent.expect("full has a logical extent");
+                        if let Some(shape) = (BlurShape {
+                            x: 0.0, y: 0.0, width: f64::from(extent.width.0),
+                            height: f64::from(extent.height.0), radii: [0.0; 4],
+                            corner_exponent: 2.0, opacity: 1.0,
+                        }).wire_canonical() {
+                            add(shape);
+                        }
+                    }
+                    OwnedBlurRegion::Shapes(shapes) => shapes.iter().copied().for_each(add),
+                    OwnedBlurRegion::Rects(rects) => {
+                        for s in zgui_layout::resolve_blur_shape_rects(rects) {
+                            add(BlurShape { x: s.x, y: s.y, width: s.width, height: s.height,
+                                radii: s.radii, corner_exponent: s.corner_exponent, opacity: s.opacity });
+                        }
+                    }
+                }
+                shared.niri_last_full_extent = extent;
+                if count == 0 {
+                    CommittedBlurSnapshot::NiriCleared
+                } else {
+                    CommittedBlurSnapshot::NiriActive {
+                        region: shared.blur_desired.clone(), full_extent: extent,
+                    }
+                }
+            }
+            _ => CommittedBlurSnapshot::Unbound,
+        };
+        if frame_logical.is_some() {
+            shared.blur_pending_commit = Some(snapshot);
+        } else {
+            shared.blur_last_committed = snapshot;
+        }
+    }
+
+    fn update_blur_intent(&self, region: BlurRegion<'_>) {
+        if !self.is_blur_eligible() || !self.active() {
+            return;
+        }
+        let next = region::normalize_blur(region);
         let supported = self.background_effect.blur_supported();
         let mut shared = self.shared();
-        if let Some(staged) = shared.blur_staged.take() {
-            let previous = shared.blur_last_committed.clone();
-            shared.blur_pre_presented = Some(previous);
-            if shared.blur_desired != staged {
-                shared.blur_desired = staged;
-                let needs_protocol = (supported
-                    && (!shared.blur_desired.is_none() || shared.blur_surface.is_some()))
-                    || (!supported && shared.blur_surface.is_some());
-                if needs_protocol {
-                    shared.blur_owed = true;
-                }
-            }
-        } else {
-            shared.blur_pre_presented = None;
-        }
-    }
-
-    /// Handles capability loss or manager removal: preserves desired intent, retires the protocol
-    /// effect object once, and arranges a legal commit so the compositor clears the effect.
-    pub(crate) fn background_blur_lost(&self) {
-        if !self.is_blur_eligible() || !self.active() {
+        shared.blur_staged = None;
+        if shared.blur_desired == next {
             return;
         }
-        let (retired, needs_commit) = {
-            let mut shared = self.shared();
-            let retired = shared.blur_surface.take();
-            let needs_commit = retired.is_some();
-            if needs_commit {
-                shared.blur_owed = true;
-            }
-            (retired, needs_commit)
-        };
-        if let Some(effect) = retired
-            && effect.is_alive()
-        {
-            effect.destroy();
-        }
-        if needs_commit {
-            Surface::request_redraw(self);
-        }
-    }
-
-    /// Handles capability gain/regain: marks surfaces with non-empty desired blur intent dirty
-    /// and arranges a legal commit to lazily bind and apply the latest desired region.
-    pub(crate) fn background_blur_gained(&self) {
-        if !self.is_blur_eligible() || !self.active() {
-            return;
-        }
-        let needs_apply = {
-            let mut shared = self.shared();
-            let needs = !shared.blur_desired.is_none();
-            if needs {
-                shared.blur_owed = true;
-            }
-            needs
-        };
-        if needs_apply {
-            Surface::request_redraw(self);
-        }
-    }
-
-    fn send_blur_region(&self) {
-        if !self.is_blur_eligible() || !self.active() {
-            return;
-        }
-        enum BlurAction {
-            Clear(ExtBackgroundEffectSurfaceV1),
-            Full(ExtBackgroundEffectSurfaceV1),
-            Rects(ExtBackgroundEffectSurfaceV1, Vec<Rect<CssPx, Css>>),
-            Retire(ExtBackgroundEffectSurfaceV1),
-        }
-        let manager = self.background_effect.active_manager_for_blur();
-        let action = {
-            let mut shared = self.shared();
-            if !shared.blur_owed {
-                return;
-            }
-            shared.blur_owed = false;
-            if shared.blur_pre_presented.is_none() {
-                shared.blur_last_committed = shared.blur_desired.clone();
-            }
-            match manager {
-                Some(manager) => match &shared.blur_desired {
-                    region::OwnedBlurRegion::None => {
-                        shared.blur_surface.clone().map(BlurAction::Clear)
-                    }
-                    region::OwnedBlurRegion::Full => {
-                        let effect = shared
-                            .blur_surface
-                            .get_or_insert_with(|| {
-                                manager.get_background_effect(self.wl_surface(), &self.qh, ())
-                            })
-                            .clone();
-                        Some(BlurAction::Full(effect))
-                    }
-                    region::OwnedBlurRegion::Rects(rects) => {
-                        let rects = rects.clone();
-                        let effect = shared
-                            .blur_surface
-                            .get_or_insert_with(|| {
-                                manager.get_background_effect(self.wl_surface(), &self.qh, ())
-                            })
-                            .clone();
-                        Some(BlurAction::Rects(effect, rects))
-                    }
-                },
-                None => shared.blur_surface.take().map(BlurAction::Retire),
-            }
-        };
-        match action {
-            Some(BlurAction::Clear(effect)) => {
-                if effect.is_alive() {
-                    effect.set_blur_region(None);
-                }
-            }
-            Some(BlurAction::Full(effect)) => {
-                if effect.is_alive() {
-                    let region = self.create_region();
-                    region.add(0, 0, i32::MAX, i32::MAX);
-                    effect.set_blur_region(Some(&region));
-                    region.destroy();
-                }
-            }
-            Some(BlurAction::Rects(effect, rects)) => {
-                if effect.is_alive() {
-                    let region = self.region_of(&rects, region::outward);
-                    effect.set_blur_region(Some(&region));
-                    region.destroy();
-                }
-            }
-            Some(BlurAction::Retire(effect)) => {
-                if effect.is_alive() {
-                    effect.destroy();
-                }
-            }
-            None => {}
+        shared.blur_desired = next;
+        shared.niri_last_full_extent = None;
+        let needs_commit = shared.has_blur_object() || (supported
+            && (shared.niri_ever_bound || !shared.blur_desired.is_none()));
+        shared.blur_owed |= needs_commit;
+        let should_redraw = needs_commit && (!shared.drawing || shared.presented);
+        drop(shared);
+        if should_redraw {
+            self.request_redraw();
         }
     }
 
@@ -1033,6 +1024,7 @@ impl WaylandSurface {
                 xdg.set_window_geometry(geom.x, geom.y, geom.width, geom.height);
             }
             self.ask_for_callback();
+            self.send_blur_region(None);
             self.role.commit();
         } else if keep_alive {
             // Nothing was committed, so no callback is on its way.
@@ -1304,31 +1296,12 @@ impl Surface for WaylandSurface {
         self.request_redraw();
     }
 
+    fn prefers_blur_shapes(&self) -> bool {
+        self.is_blur_eligible() && self.active() && self.background_effect.supports_blur_shapes()
+    }
+
     fn set_blur_region(&self, region: BlurRegion<'_>) {
-        if !self.is_blur_eligible() || !self.active() {
-            return;
-        }
-        let next = region::normalize_blur(region);
-        let supported = self.background_effect.blur_supported();
-        let should_redraw = {
-            let mut shared = self.shared();
-            shared.blur_staged = None;
-            shared.blur_pre_presented = None;
-            if shared.blur_desired == next {
-                return;
-            }
-            shared.blur_desired = next;
-            let needs_protocol = (supported
-                && (!shared.blur_desired.is_none() || shared.blur_surface.is_some()))
-                || (!supported && shared.blur_surface.is_some());
-            if needs_protocol {
-                shared.blur_owed = true;
-            }
-            needs_protocol
-        };
-        if should_redraw {
-            self.request_redraw();
-        }
+        self.update_blur_intent(region);
     }
 
     fn logical_extent_for(&self, size: Size<i32, Device>, scale: f64) -> Size<CssPx, Css> {
@@ -1372,34 +1345,48 @@ impl Surface for WaylandSurface {
     fn clear_staged_blur_region(&self) {
         let mut shared = self.shared();
         shared.blur_staged = None;
-        shared.blur_pre_presented = None;
     }
 
     fn finalize_presented_blur(&self) {
         let mut shared = self.shared();
         shared.blur_pre_presented = None;
-        shared.blur_last_committed = shared.blur_desired.clone();
+        if let Some(snapshot) = shared.blur_pending_commit.take() {
+            shared.blur_last_committed = snapshot;
+        }
     }
 
     fn rollback_unpresented_blur(&self) {
         let (should_redraw, drawing) = {
             let mut shared = self.shared();
             shared.blur_staged = None;
-            if let Some(previous) = shared.blur_pre_presented.take() {
-                let changed = shared.blur_desired != previous;
-                shared.blur_desired = previous;
-                let supported = self.background_effect.blur_supported();
-                let needs_protocol = changed
-                    && ((supported
-                        && (!shared.blur_desired.is_none() || shared.blur_surface.is_some()))
-                        || (!supported && shared.blur_surface.is_some()));
-                if needs_protocol {
-                    shared.blur_owed = true;
+            let Some(before) = shared.blur_pre_presented.take() else {
+                return;
+            };
+            shared.presented = false;
+            let previous_desired = before.desired;
+            shared.niri_ever_bound = before.niri_ever_bound;
+            let changed = shared.blur_pending_commit.take()
+                .is_some_and(|pending| pending != shared.blur_last_committed);
+            if changed {
+                shared.blur_desired = match &shared.blur_last_committed {
+                    CommittedBlurSnapshot::Ext(region)
+                    | CommittedBlurSnapshot::NiriActive { region, .. } => region.clone(),
+                    CommittedBlurSnapshot::Unbound | CommittedBlurSnapshot::NiriCleared => {
+                        OwnedBlurRegion::None
+                    }
+                };
+                shared.niri_last_full_extent = match shared.blur_last_committed {
+                    CommittedBlurSnapshot::NiriActive { full_extent, .. } => full_extent,
+                    _ => None,
+                };
+                if matches!(shared.blur_last_committed, CommittedBlurSnapshot::Unbound) {
+                    shared.retire_stale_blur(&ActiveBlurProtocol::None);
                 }
-                (needs_protocol, shared.drawing)
-            } else {
-                (false, false)
+                shared.blur_owed = true;
+            } else if let Some(desired) = previous_desired {
+                shared.blur_desired = desired;
             }
+            (changed, shared.drawing)
         };
         if should_redraw && !drawing {
             self.request_redraw();
@@ -1407,33 +1394,8 @@ impl Surface for WaylandSurface {
     }
 
     fn apply_idle_blur_region(&self, region: BlurRegion<'_>) {
-        if !self.is_blur_eligible() || !self.active() {
-            return;
-        }
-        let next = region::normalize_blur(region);
-        let supported = self.background_effect.blur_supported();
-        let (should_redraw, drawing) = {
-            let mut shared = self.shared();
-            shared.blur_staged = None;
-            shared.blur_pre_presented = None;
-            if shared.blur_desired == next {
-                return;
-            }
-            shared.blur_desired = next;
-            let needs_protocol = (supported
-                && (!shared.blur_desired.is_none() || shared.blur_surface.is_some()))
-                || (!supported && shared.blur_surface.is_some());
-            if needs_protocol {
-                shared.blur_owed = true;
-            }
-            (needs_protocol, shared.drawing)
-        };
-        // During an active redraw delivery (`drawing == true`), `finish_redraw` observes
-        // `blur_owed` via `owes_surface_change()` and performs one legal bare commit without
-        // queuing a redundant redraw loop.
-        if should_redraw && !drawing {
-            self.request_redraw();
-        }
+        // finish_redraw observes blur_owed during an active redraw.
+        self.update_blur_intent(region);
     }
 
     fn begin_move_drag(&self) -> Result<(), Unsupported> {

@@ -8,11 +8,11 @@ use wayland_protocols::wp::fractional_scale::v1::client::wp_fractional_scale_man
 use wayland_protocols::wp::viewporter::client::wp_viewporter::WpViewporter;
 
 use crate::driver::WaylandState;
+use crate::driver::background_effect::NiriBlurShapeManagerV1;
 
 /// The optional protocols the toolkit has no wrapper for.
 ///
-/// Both fractional scaling globals are read as a pair; background effects are optional and remain
-/// inactive until the compositor advertises capabilities on the bound manager.
+/// Fractional scaling globals are used as a pair; both background blur globals are optional.
 #[derive(Debug, Default)]
 pub struct Extras {
     /// `wp_fractional_scale_manager_v1`: what scale the compositor wants for a surface.
@@ -21,6 +21,8 @@ pub struct Extras {
     pub viewporter: Option<WpViewporter>,
     /// `ext_background_effect_manager_v1` along with its Wayland registry global name.
     pub background_effect: Option<(u32, ExtBackgroundEffectManagerV1)>,
+    /// `niri_blur_shape_manager_v1` along with its Wayland registry global name.
+    pub niri_blur_shape: Option<(u32, NiriBlurShapeManagerV1)>,
 }
 
 impl Extras {
@@ -32,6 +34,7 @@ impl Extras {
         let fractional_scale = bind(globals, qh);
         let viewporter = bind(globals, qh);
         let background_effect = bind_named::<ExtBackgroundEffectManagerV1>(globals, qh);
+        let niri_blur_shape = bind_named::<NiriBlurShapeManagerV1>(globals, qh);
         if fractional_scale.is_some() != viewporter.is_some() {
             tracing::debug!(
                 fractional_scale = fractional_scale.is_some(),
@@ -43,6 +46,7 @@ impl Extras {
             fractional_scale,
             viewporter,
             background_effect,
+            niri_blur_shape,
         }
     }
 

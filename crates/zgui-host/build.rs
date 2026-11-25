@@ -10,7 +10,7 @@ fn sources(path: &Path, files: &mut Vec<PathBuf>) {
             if !matches!(entry.file_name().to_str(), Some("target" | ".git" | "node_modules")) {
                 sources(&path, files);
             }
-        } else if matches!(path.extension().and_then(|value| value.to_str()), Some("rs" | "toml")) {
+        } else if matches!(path.extension().and_then(|value| value.to_str()), Some("rs" | "toml" | "xml")) {
             files.push(path);
         }
     }
@@ -30,6 +30,7 @@ fn main() {
     files.sort();
     let mut hash = Sha256::new();
     for file in files {
+        println!("cargo:rerun-if-changed={}", file.display());
         let name = file.strip_prefix(&root).expect("source belongs to workspace").to_string_lossy();
         let bytes = fs::read(&file).expect("read build source");
         hash.update((name.len() as u64).to_le_bytes());

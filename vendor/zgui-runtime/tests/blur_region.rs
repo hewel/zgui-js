@@ -289,7 +289,10 @@ fn min_opacity_zero_handles_deep_chain_underflow_and_animated_ancestor_opacity_c
             height: 40px;
             animation: fade-dip 100ms linear forwards;
         }
-        .fade-child { width: 80px; height: 40px; }
+        .fade-child {
+            width: 80px; height: 40px; border-radius: 10px;
+            --zgui-corner-shape: superellipse(2.83);
+        }
         .dim { opacity: 0.0001; width: 60px; height: 30px; }
         .deep-leaf { width: 60px; height: 30px; }
     "#;
@@ -355,6 +358,22 @@ fn min_opacity_zero_handles_deep_chain_underflow_and_animated_ancestor_opacity_c
         RecordedBlurRegion::None,
         "animated ancestor opacity below 0.5 must drop blur"
     );
+
+    // Re-resolve the same layout and animation sample without any DOM or registration write.
+    harness.platform_mut().set_blur_shapes_supported(true);
+    assert!(harness.app().windows()[0].blur_pending());
+    harness.pump();
+    let RecordedBlurRegion::Shapes(shapes) = surface.blur_region() else {
+        panic!("continuous blur below minOpacity was lost");
+    };
+    assert_eq!(shapes.len(), 1);
+    assert_eq!(shapes[0].opacity, 51.0 / 256.0);
+    assert_eq!(shapes[0].corner_exponent, 724.0 / 256.0);
+    assert_eq!(shapes[0].radii, [10.0; 4]);
+    assert!(!harness.app().windows()[0].blur_pending());
+    harness.platform_mut().set_blur_shapes_supported(false);
+    harness.pump();
+    assert_eq!(surface.blur_region(), RecordedBlurRegion::None);
 
     // At t=100ms: animated parent opacity returns to 0.9 >= 0.5 -> restored!
     harness.advance(Duration::from_millis(50));
@@ -466,6 +485,31 @@ fn held_frame_and_failed_present_never_publish_or_mark_applied_early() {
     harness.advance(Duration::from_millis(20));
     harness.pump();
     assert_eq!(surface.blur_region(), RecordedBlurRegion::None);
+
+    // Hold an exact union, then withdraw shape support before its buffer arrives.
+    let explicit = vec![
+        Rect::new(Point::new(CssPx(-0.25), CssPx(0.0)), Size::new(CssPx(8.0), CssPx(4.0))),
+        Rect::new(Point::new(CssPx(3.0), CssPx(0.0)), Size::new(CssPx(8.0), CssPx(4.0))),
+    ];
+    harness.platform_mut().set_blur_shapes_supported(true);
+    gate.hold.set(true);
+    slot.set(BlurRegistration::Rects(explicit.clone()));
+    harness.pump();
+    assert_eq!(surface.blur_region(), RecordedBlurRegion::None);
+    harness.platform_mut().set_blur_shapes_supported(false);
+    gate.hold.set(false);
+    harness.deliver(surface_id, SurfaceEvent::PresentReady);
+    assert_eq!(surface.blur_region(), RecordedBlurRegion::None);
+    assert!(harness.app().windows()[0].blur_pending());
+    harness.pump();
+    assert_eq!(surface.blur_region(), RecordedBlurRegion::Rects(explicit));
+    harness.platform_mut().set_blur_shapes_supported(true);
+    harness.pump();
+    let RecordedBlurRegion::Shapes(shapes) = surface.blur_region() else {
+        panic!("mode flip did not re-resolve explicit rects");
+    };
+    assert_eq!(shapes.len(), 1);
+    assert_eq!((shapes[0].x, shapes[0].width), (-0.25, 11.25));
     assert!(!harness.app().windows()[0].blur_pending());
 }
 
@@ -585,6 +629,9 @@ impl Surface for AsyncBlurPopupSurface {
     }
     fn logical_extent_for(&self, size: Size<i32, Device>, scale: f64) -> Size<CssPx, Css> {
         self.inner.logical_extent_for(size, scale)
+    }
+    fn prefers_blur_shapes(&self) -> bool {
+        self.inner.prefers_blur_shapes()
     }
     fn stage_blur_region_for_present(&self, region: BlurRegion<'_>) {
         self.inner.stage_blur_region_for_present(region);
@@ -718,7 +765,7 @@ impl PlatformCx for AsyncBlurPopupPlatform {
 #[test]
 fn suppress_first_paint_bootstrap_frame_emits_no_blur_and_preserves_registered_intent() {
     let platform = AsyncBlurPopupPlatform {
-        inner: Headless::new(),
+        inner: Headless::new().with_blur_capabilities(false, true),
         popup_surfaces: Mutex::new(Vec::new()),
     };
     let mut runtime = App::new()
@@ -828,13 +875,14 @@ fn suppress_first_paint_bootstrap_frame_emits_no_blur_and_preserves_registered_i
     runtime.surface_event(&platform, popup_id, SurfaceEvent::Resized(settled));
     runtime.surface_event(&platform, popup_id, SurfaceEvent::RedrawRequested);
 
-    let RecordedBlurRegion::Rects(rects) = offscreen.blur_region() else {
+    let RecordedBlurRegion::Shapes(shapes) = offscreen.blur_region() else {
         panic!(
             "repositioned frame must publish rounded blur mask, got {:?}",
             offscreen.blur_region()
         );
     };
-    assert!(rects.len() > 1, "expected rounded blur strips on repositioned popup");
+    assert_eq!(shapes.len(), 1);
+    assert_eq!(shapes[0].radii, [14.0; 4]);
     assert!(
         !runtime
             .windows()

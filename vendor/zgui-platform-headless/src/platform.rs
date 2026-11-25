@@ -189,6 +189,8 @@ pub struct Headless {
     clipboard: MemoryClipboard,
     /// What this platform declares it can do.
     capabilities: PlatformCapabilities,
+    ext_background_blur_supported: bool,
+    blur_shapes_supported: Arc<AtomicBool>,
     /// Where a wake from another thread is queued.
     waker: Arc<RecordingWaker>,
     /// The surfaces and monitor inventory, together so a locked output is never published bare.
@@ -227,6 +229,8 @@ impl Headless {
             clock: Arc::new(VirtualClock::new()),
             clipboard,
             capabilities,
+            ext_background_blur_supported: false,
+            blur_shapes_supported: Arc::default(),
             waker,
             desktop: Mutex::new(Desktop::default()),
             next_surface: AtomicU64::new(1),
@@ -243,7 +247,17 @@ impl Headless {
     /// Enabling `session_lock` opts into the deterministic offscreen compositor lock, not a
     /// lock on the machine running the fixture.
     pub fn with_capabilities(mut self, capabilities: PlatformCapabilities) -> Self {
+        self.ext_background_blur_supported = capabilities.supports_background_blur;
+        let shapes = capabilities.supports_blur_shapes;
         self.capabilities = capabilities;
+        self.set_blur_shapes_supported(shapes);
+        self
+    }
+
+    /// Configures independent binary blur and rounded-shape compositor capabilities.
+    pub fn with_blur_capabilities(mut self, ext_blur: bool, blur_shapes: bool) -> Self {
+        self.ext_background_blur_supported = ext_blur;
+        self.set_blur_shapes_supported(blur_shapes);
         self
     }
 
@@ -285,11 +299,23 @@ impl Headless {
         self.desktop().session_lock.next_decision = decision;
     }
 
-    /// Updates whether the offscreen compositor advertises background blur support, waking the
-    /// platform loop with [`WakeReason::AppWork`] when the state changes.
+    /// Updates the binary blur capability independently of rounded shapes.
     pub fn set_background_blur_supported(&mut self, supported: bool) {
-        if self.capabilities.supports_background_blur != supported {
-            self.capabilities.supports_background_blur = supported;
+        self.ext_background_blur_supported = supported;
+        self.set_blur_shapes_supported(self.capabilities.supports_blur_shapes);
+    }
+
+    /// Updates rounded-shape support and wakes the loop when either public capability changes.
+    pub fn set_blur_shapes_supported(&mut self, supported: bool) {
+        let shapes_changed = self.blur_shapes_supported.swap(supported, Ordering::Relaxed) != supported;
+        let blur = supported || self.ext_background_blur_supported;
+        let blur_changed = self.capabilities.supports_background_blur != blur;
+        self.capabilities.supports_blur_shapes = supported;
+        self.capabilities.supports_background_blur = blur;
+        if shapes_changed || blur_changed {
+            for surface in &self.desktop().surfaces {
+                surface.request_redraw();
+            }
             self.waker.wake(WakeReason::AppWork);
         }
     }
@@ -531,7 +557,9 @@ impl PlatformCx for Headless {
                 .iter()
                 .any(|surface| surface.id() == parent && surface.can_parent_popup())
         })?;
-        let surface = Arc::new(OffscreenSurface::new(self.next_surface_id(), size));
+        let surface = Arc::new(OffscreenSurface::with_blur_shapes(
+            self.next_surface_id(), size, Arc::clone(&self.blur_shapes_supported),
+        ));
         surface.set_title(attributes.title.as_str());
         surface.set_requested_attributes(attributes);
         desktop.surfaces.push(Arc::clone(&surface));

@@ -1,0 +1,93 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<protocol name="niri_blur_shape_v1">
+  <copyright>
+    Copyright (C) 2026 niri contributors
+    SPDX-License-Identifier: GPL-3.0-or-later
+  </copyright>
+
+  <description summary="precise rounded/superellipse blur shapes for surfaces">
+    Allows clients to submit exact floating-point (wl_fixed) rounded or
+    superellipse rectangle arrays for surface background blur, overriding
+    ext_background_effect_surface_v1.set_blur_region when active.
+  </description>
+
+  <interface name="niri_blur_shape_manager_v1" version="1">
+    <description summary="manager for per-surface precise blur shapes"/>
+
+    <enum name="error">
+      <entry name="blur_shape_exists" value="0"
+             summary="wl_surface already has a niri_blur_shape_surface_v1 object"/>
+    </enum>
+
+    <request name="destroy" type="destructor">
+      <description summary="destroy the manager">
+        This has no effect on existing niri_blur_shape_surface_v1 objects.
+      </description>
+    </request>
+
+    <request name="get_surface">
+      <description summary="create a blur shape object for a surface">
+        Creates a niri_blur_shape_surface_v1 object for the given wl_surface.
+        If the wl_surface already has an active niri_blur_shape_surface_v1
+        object, the blur_shape_exists protocol error is raised.
+      </description>
+      <arg name="id" type="new_id" interface="niri_blur_shape_surface_v1"/>
+      <arg name="surface" type="object" interface="wl_surface"/>
+    </request>
+  </interface>
+
+  <interface name="niri_blur_shape_surface_v1" version="1">
+    <description summary="per-surface precise blur shape list">
+      Double-buffered blur shape state for a wl_surface. All requests mutate
+      pending state and take effect on the next wl_surface.commit.
+    </description>
+
+    <enum name="error">
+      <entry name="surface_destroyed" value="0"
+             summary="the associated wl_surface was destroyed"/>
+    </enum>
+
+    <request name="destroy" type="destructor">
+      <description summary="destroy the blur shape surface object">
+        Unsets any pending blur shapes on the associated surface (effective on
+        the next commit) and destroys this object.
+      </description>
+    </request>
+
+    <request name="clear">
+      <description summary="clear pending blur shapes to an empty list">
+        Sets the pending blur shape state to an explicit empty list (suppressing
+        fallback to ext_background_effect_v1) so subsequent add_rounded_rect
+        calls build a fresh list for this commit.
+      </description>
+    </request>
+
+    <request name="add_rounded_rect">
+      <description summary="append a rounded or superellipse rectangle">
+        Appends a rounded/superellipse rectangle in surface-local logical
+        coordinates (wl_fixed, 1/256 logical pixel precision) to the pending
+        blur shape list. Clients should submit non-overlapping shapes;
+        overlapping shapes are composited sequentially in submission order.
+      </description>
+      <arg name="x" type="fixed"/>
+      <arg name="y" type="fixed"/>
+      <arg name="width" type="fixed"/>
+      <arg name="height" type="fixed"/>
+      <arg name="radius_tl" type="fixed"/>
+      <arg name="radius_tr" type="fixed"/>
+      <arg name="radius_br" type="fixed"/>
+      <arg name="radius_bl" type="fixed"/>
+      <arg name="corner_exponent" type="fixed"
+           summary="superellipse exponent (2.0 = circular, 2.83 = z-shell superellipse)"/>
+      <arg name="opacity" type="fixed"
+           summary="blur mask opacity multiplier in [0.0, 1.0]"/>
+    </request>
+
+    <request name="unset">
+      <description summary="unset blur shapes and allow fallback">
+        Clears the pending blur shape override so the surface falls back to
+        ext_background_effect_v1 / compositor rules on the next commit.
+      </description>
+    </request>
+  </interface>
+</protocol>

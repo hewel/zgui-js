@@ -34,6 +34,49 @@ pub struct BlurPiece {
     pub clip: ClipId,
 }
 
+/// A rounded blur candidate and its effective (ancestor-multiplied) opacity.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct BlurShapePiece {
+    /// Border box, corners, transform and ancestor clip chain.
+    pub piece: BlurPiece,
+    /// Effective opacity from zero to one.
+    pub opacity: f64,
+}
+
+/// A disjoint surface-local blur mask; all values are canonical signed 24.8 fixed point.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct BlurShape {
+    /// Left edge in logical pixels.
+    pub x: f64,
+    /// Top edge in logical pixels.
+    pub y: f64,
+    /// Width in logical pixels.
+    pub width: f64,
+    /// Height in logical pixels.
+    pub height: f64,
+    /// Scalar radii in top-left, top-right, bottom-right, bottom-left order.
+    pub radii: [f64; 4],
+    /// Superellipse exponent (2 for circular corners).
+    pub corner_exponent: f64,
+    /// Effective mask opacity.
+    pub opacity: f64,
+}
+
+/// Rounds to the nearest signed 24.8 wire tick; rejects non-finite or overflowing values.
+#[must_use]
+pub fn quantize_wl_fixed(value: f64) -> Option<i32> {
+    let ticks = (value * 256.0).round();
+    (f64::from(i32::MIN)..=f64::from(i32::MAX))
+        .contains(&ticks)
+        .then_some(ticks as i32)
+}
+
+/// Converts wire ticks to a value a truncating encoder can round-trip exactly.
+#[must_use]
+pub fn from_wl_fixed(ticks: i32) -> f64 {
+    f64::from(ticks) / 256.0
+}
+
 impl BlurPiece {
     /// Builds a [`BlurPiece`] from a laid-out fragment and its box's computed style.
     ///
@@ -744,6 +787,396 @@ where
     final_rects.into_iter().map(IntRect::to_css_rect).collect()
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct TickRect {
+    l: i32,
+    t: i32,
+    r: i32,
+    b: i32,
+}
+
+impl TickRect {
+    fn from_edges([l, t, r, b]: [f64; 4]) -> Option<Self> {
+        let rect = Self {
+            l: quantize_wl_fixed(l)?,
+            t: quantize_wl_fixed(t)?,
+            r: quantize_wl_fixed(r)?,
+            b: quantize_wl_fixed(b)?,
+        };
+        (rect.r.checked_sub(rect.l)? > 0 && rect.b.checked_sub(rect.t)? > 0).then_some(rect)
+    }
+
+    fn overlaps(self, other: Self) -> bool {
+        self.l < other.r && other.l < self.r && self.t < other.b && other.t < self.b
+    }
+
+    fn shape(self, radii: [i32; 4], exponent: i32, opacity: i32) -> BlurShape {
+        BlurShape {
+            x: from_wl_fixed(self.l),
+            y: from_wl_fixed(self.t),
+            width: from_wl_fixed(self.r - self.l),
+            height: from_wl_fixed(self.b - self.t),
+            radii: radii.map(from_wl_fixed),
+            corner_exponent: from_wl_fixed(exponent),
+            opacity: from_wl_fixed(opacity),
+        }
+    }
+}
+
+impl LogicalRoundedRect {
+    fn corners(self) -> [((f64, f64), [f64; 4]); 4] {
+        let Self { left: l, top: t, right: r, bottom: b, tl, tr, br, bl, .. } = self;
+        [
+            (tl, [l, t, l + tl.0, t + tl.1]),
+            (tr, [r - tr.0, t, r, t + tr.1]),
+            (br, [r - br.0, b - br.1, r, b]),
+            (bl, [l, b - bl.1, l + bl.0, b]),
+        ]
+    }
+}
+
+fn logical_overlap([l, t, r, b]: [f64; 4], [cl, ct, cr, cb]: [f64; 4]) -> bool {
+    l < cr && cl < r && t < cb && ct < b
+}
+
+fn exact_corners(
+    target: LogicalRoundedRect,
+    rounded_clips: &[LogicalRoundedRect],
+    bounds: [f64; 4],
+) -> Option<([i32; 4], i32)> {
+    if rounded_clips.iter().any(|clip| {
+        clip.corners().iter().any(|&((rx, ry), corner)| {
+            rx > 0.0 && ry > 0.0 && logical_overlap(bounds, corner)
+        })
+    }) {
+        return None;
+    }
+    let [l, t, r, b] = bounds;
+    let clipped_x = [l > target.left, r < target.right, r < target.right, l > target.left];
+    let clipped_y = [t > target.top, t > target.top, b < target.bottom, b < target.bottom];
+    let mut radii = [0; 4];
+    for (i, ((rx, ry), corner)) in target.corners().into_iter().enumerate() {
+        if rx <= 0.0 || ry <= 0.0 {
+            continue;
+        }
+        if !logical_overlap(bounds, corner) {
+            continue;
+        }
+        let [cl, ct, cr, cb] = corner;
+        if clipped_x[i] || clipped_y[i] || l > cl || t > ct || r < cr || b < cb {
+            return None;
+        }
+        let diff = (rx - ry).abs();
+        if diff > 0.5 || diff > 0.02 * rx.max(ry) + 1e-4 {
+            return None;
+        }
+        radii[i] = quantize_wl_fixed((rx + ry) * 0.5)?;
+    }
+    let exponent = if radii == [0; 4] { 512 } else {
+        quantize_wl_fixed(target.exponent.clamp(3.0 / 256.0, 64.0))?
+    };
+    Some((radii, exponent))
+}
+
+struct ShapeCandidate {
+    target: LogicalRoundedRect,
+    clips: Vec<LogicalRoundedRect>,
+    edges: [f64; 4],
+    ticks: TickRect,
+    // Conservative envelope of the integer strips; a sampled pixel cell can straddle an edge.
+    strip_ticks: TickRect,
+    corners: Option<([i32; 4], i32)>,
+    opacity: i32,
+}
+
+fn prepare_shape<F>(
+    candidate: BlurShapePiece,
+    clips: &ClipTable,
+    resolve_space: &F,
+    dst: (f64, f64),
+    scale: (f64, f64),
+) -> Option<ShapeCandidate>
+where
+    F: Fn(SpatialId) -> Option<Matrix4>,
+{
+    let BlurShapePiece { piece, opacity } = candidate;
+    if !opacity.is_finite() {
+        return None;
+    }
+    let opacity = quantize_wl_fixed(opacity.clamp(0.0, 1.0))?;
+    if opacity == 0 {
+        return None;
+    }
+    let target = transform_rounded_rect(
+        piece.border_box, piece.radii, piece.shape, piece.transform, resolve_space, scale.0, scale.1,
+    )?;
+    let mut edges = [
+        target.left.max(0.0), target.top.max(0.0), target.right.min(dst.0), target.bottom.min(dst.1),
+    ];
+    let mut rounded = Vec::new();
+    let mut cursor = piece.clip;
+    for _ in 0..=clips.len() {
+        match clips.get(cursor)? {
+            ClipNode::Root => {
+                let ticks = TickRect::from_edges(edges)?;
+                let corners = exact_corners(target, &rounded, edges);
+                let cell_edge = |edge: f64| {
+                    // The viewport has already been checked against signed wire range.
+                    quantize_center(edge, i32::MAX / 256) * 256
+                };
+                let [l, t, r, b] = edges.map(cell_edge);
+                return Some(ShapeCandidate {
+                    target, clips: rounded, edges, ticks, corners, opacity,
+                    strip_ticks: TickRect { l, t, r, b },
+                });
+            }
+            ClipNode::Link { link, parent, .. } => {
+                let ClipLink::RoundedRect { rect, radii, shape, space } = link else {
+                    return None;
+                };
+                let clip = transform_rounded_rect(
+                    *rect, *radii, *shape, Some(*space), resolve_space, scale.0, scale.1,
+                )?;
+                edges[0] = edges[0].max(clip.left);
+                edges[1] = edges[1].max(clip.top);
+                edges[2] = edges[2].min(clip.right);
+                edges[3] = edges[3].min(clip.bottom);
+                if !clip.is_square {
+                    rounded.push(clip);
+                }
+                cursor = *parent;
+            }
+        }
+    }
+    None
+}
+
+type OpacitySpan = (i32, i32, i32);
+
+// Sweep all span edges; an opacity tick is only 1..=256, so no tree is needed for active spans.
+fn max_opacity_spans(input: &[OpacitySpan], events: &mut Vec<(i32, i32)>, out: &mut Vec<OpacitySpan>) {
+    out.clear();
+    if input.len() <= 1 {
+        out.extend_from_slice(input);
+        return;
+    }
+    events.clear();
+    for &(l, r, opacity) in input {
+        events.push((l, opacity));
+        events.push((r, -opacity));
+    }
+    events.sort_unstable_by_key(|&(x, _)| x);
+    let mut active = [0usize; 257];
+    let mut max = 0;
+    let mut left = events[0].0;
+    for &(x, delta) in &*events {
+        if left < x && max != 0 {
+            if let Some((l, r, opacity)) = out.last_mut()
+                && *r == left && *opacity == max as i32 && x.checked_sub(*l).is_some()
+            {
+                *r = x;
+            } else {
+                out.push((left, x, max as i32));
+            }
+        }
+        left = x;
+        let opacity = delta.unsigned_abs() as usize;
+        if delta > 0 {
+            active[opacity] += 1;
+            max = max.max(opacity);
+        } else {
+            active[opacity] -= 1;
+            while max != 0 && active[max] == 0 {
+                max -= 1;
+            }
+        }
+    }
+}
+
+type Strip = (TickRect, i32);
+
+#[derive(Default)]
+struct Strips {
+    open: Vec<Strip>,
+    next: Vec<Strip>,
+    finished: Vec<Strip>,
+}
+
+impl Strips {
+    fn band(&mut self, t: i32, b: i32, spans: &[OpacitySpan]) {
+        let mut open = self.open.drain(..).peekable();
+        for &(l, r, opacity) in spans {
+            while open.peek().is_some_and(|&(rect, _)| rect.l < l) {
+                self.finished.extend(open.next());
+            }
+            let rect = if open.peek().is_some_and(|&(rect, op)| {
+                rect.b == t && rect.l == l && rect.r == r && op == opacity
+                    && b.checked_sub(rect.t).is_some()
+            }) {
+                let (mut rect, _) = open.next().expect("matching open span");
+                rect.b = b;
+                rect
+            } else {
+                TickRect { l, t, r, b }
+            };
+            self.next.push((rect, opacity));
+        }
+        self.finished.extend(open);
+        std::mem::swap(&mut self.open, &mut self.next);
+        // Keep only the highest-area candidates, including on tall complex surfaces.
+        if self.finished.len() > MAX_BLUR_RECTS * 2 {
+            self.limit(MAX_BLUR_RECTS);
+        }
+    }
+
+    fn limit(&mut self, count: usize) {
+        if self.finished.len() > count {
+            self.finished.select_nth_unstable_by_key(count, |&(r, _)| {
+                (std::cmp::Reverse(i64::from(r.r - r.l) * i64::from(r.b - r.t)), r.t, r.l)
+            });
+            self.finished.truncate(count);
+        }
+    }
+
+    fn append_to(mut self, output: &mut Vec<BlurShape>) {
+        self.finished.append(&mut self.open);
+        self.limit(MAX_BLUR_RECTS - output.len());
+        self.finished.sort_unstable_by_key(|&(r, _)| (r.t, r.l));
+        output.extend(self.finished.into_iter().map(|(r, op)| r.shape([0; 4], 512, op)));
+    }
+}
+
+/// Resolves exact rounded masks wherever possible; intersecting or unrepresentable corners
+/// fall back to disjoint pixel-center strips, using the maximum mask opacity at each point.
+#[must_use]
+pub fn resolve_blur_shapes<F>(
+    pieces: &[BlurShapePiece],
+    clips: &ClipTable,
+    resolve_space: F,
+    mapping: BlurSurfaceMapping,
+) -> Vec<BlurShape>
+where
+    F: Fn(SpatialId) -> Option<Matrix4>,
+{
+    let sw = f64::from(mapping.source.width.0);
+    let sh = f64::from(mapping.source.height.0);
+    let dw = f64::from(mapping.destination.width.0);
+    let dh = f64::from(mapping.destination.height.0);
+    if !sw.is_finite() || !sh.is_finite() || sw <= 0.0 || sh <= 0.0
+        || dw <= 0.0 || dh <= 0.0 || quantize_wl_fixed(dw).is_none() || quantize_wl_fixed(dh).is_none()
+    {
+        return Vec::new();
+    }
+    let mut prepared: Vec<_> = pieces.iter().filter_map(|&piece| {
+        prepare_shape(piece, clips, &resolve_space, (dw, dh), (dw / sw, dh / sh))
+    }).collect();
+
+    // First mark exact-tick intersections, then propagate through strip envelopes until stable.
+    let mut degraded = Vec::new();
+    for i in 0..prepared.len() {
+        let (before, rest) = prepared.split_at_mut(i);
+        let p = &mut rest[0];
+        for other in before {
+            if p.ticks.overlaps(other.ticks) {
+                p.corners = None;
+                other.corners = None;
+            }
+        }
+    }
+    degraded.extend(prepared.iter().enumerate().filter(|(_, p)| p.corners.is_none()).map(|(i, _)| i));
+    let mut cursor = 0;
+    while let Some(&index) = degraded.get(cursor) {
+        let bounds = prepared[index].strip_ticks;
+        cursor += 1;
+        if bounds.l == bounds.r || bounds.t == bounds.b {
+            continue;
+        }
+        for (i, p) in prepared.iter_mut().enumerate() {
+            if p.corners.is_some() && p.ticks.overlaps(bounds) {
+                p.corners = None;
+                degraded.push(i);
+            }
+        }
+    }
+
+    let mut exact: Vec<_> = prepared.iter().filter_map(|p| {
+        let (r, e) = p.corners?;
+        Some((p.ticks, p.ticks.shape(r, e, p.opacity)))
+    }).collect();
+    if exact.len() > MAX_BLUR_RECTS {
+        exact.sort_unstable_by_key(|(r, _)| {
+            (std::cmp::Reverse(i64::from(r.r - r.l) * i64::from(r.b - r.t)), r.t, r.l)
+        });
+        exact.truncate(MAX_BLUR_RECTS);
+    }
+    let mut output: Vec<_> = exact.into_iter().map(|(_, shape)| shape).collect();
+    if output.len() == MAX_BLUR_RECTS || degraded.is_empty() {
+        return output;
+    }
+
+    let mut row_ranges: Vec<_> = degraded.iter().map(|&i| {
+        let r = prepared[i].strip_ticks;
+        (r.t / 256, r.b / 256)
+    }).collect();
+    union_spans(&mut row_ranges);
+    let (mut input, mut events, mut spans) = (Vec::new(), Vec::new(), Vec::new());
+    let mut strips = Strips::default();
+    for (start, end) in row_ranges {
+        for y in start..end {
+            input.clear();
+            let s = f64::from(y) + 0.5;
+            for &index in &degraded {
+                let p = &prepared[index];
+                if y * 256 < p.strip_ticks.t || y * 256 >= p.strip_ticks.b {
+                    continue;
+                }
+                let Some((l, r)) = p.target.row_interval(s) else { continue };
+                let Some((l, r)) = p.clips.iter().try_fold(
+                    (l.max(p.edges[0]), r.min(p.edges[2])),
+                    |(l, r), clip| {
+                        let (cl, cr) = clip.row_interval(s)?;
+                        Some((l.max(cl), r.min(cr)))
+                    },
+                ) else { continue };
+                let left = quantize_center(l, i32::MAX / 256) * 256;
+                let right = quantize_center(r, i32::MAX / 256) * 256;
+                if left < right {
+                    input.push((left, right, p.opacity));
+                }
+            }
+            max_opacity_spans(&input, &mut events, &mut spans);
+            strips.band(y * 256, (y + 1) * 256, &spans);
+        }
+    }
+    strips.append_to(&mut output);
+    output
+}
+
+/// Converts explicit logical rectangles into a disjoint union without losing subpixel edges.
+#[must_use]
+pub fn resolve_blur_shape_rects(rects: &[Rect<CssPx, Css>]) -> Vec<BlurShape> {
+    let ticks: Vec<_> = rects.iter().filter_map(|r| {
+        let l = f64::from(r.origin.x.0);
+        let t = f64::from(r.origin.y.0);
+        TickRect::from_edges([l, t, l + f64::from(r.size.width.0), t + f64::from(r.size.height.0)])
+    }).collect();
+    let mut edges: Vec<_> = ticks.iter().flat_map(|r| [r.t, r.b]).collect();
+    edges.sort_unstable();
+    edges.dedup();
+    let (mut input, mut events, mut spans) = (Vec::new(), Vec::new(), Vec::new());
+    let mut strips = Strips::default();
+    for band in edges.windows(2) {
+        input.clear();
+        input.extend(ticks.iter().filter(|r| r.t <= band[0] && band[1] <= r.b)
+            .map(|r| (r.l, r.r, 256)));
+        max_opacity_spans(&input, &mut events, &mut spans);
+        strips.band(band[0], band[1], &spans);
+    }
+    let mut result = Vec::new();
+    strips.append_to(&mut result);
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -762,6 +1195,78 @@ mod tests {
             source: Size::new(DevicePx(w), DevicePx(h)),
             destination: Size::new(CssPx(w), CssPx(h)),
         }
+    }
+
+    fn wire_bounds(s: &BlurShape) -> TickRect {
+        let tick = |v: f64| (v * 256.0) as i32;
+        TickRect { l: tick(s.x), t: tick(s.y), r: tick(s.x) + tick(s.width),
+            b: tick(s.y) + tick(s.height) }
+    }
+
+    fn assert_wire_disjoint(shapes: &[BlurShape]) {
+        for (i, shape) in shapes.iter().enumerate() {
+            let rect = wire_bounds(shape);
+            assert!(rect.l < rect.r && rect.t < rect.b);
+            assert!(shapes[..i].iter().all(|s| !rect.overlaps(wire_bounds(s))));
+        }
+    }
+
+    #[test]
+    fn fixed_round_trips_scanner_and_checks_signed_limits() {
+        for (value, ticks) in [(2.83, 724), (-2.83, -724),
+            (from_wl_fixed(i32::MAX), i32::MAX), (from_wl_fixed(i32::MIN), i32::MIN)] {
+            assert_eq!(quantize_wl_fixed(value), Some(ticks));
+            assert_eq!((from_wl_fixed(ticks) * 256.0) as i32, ticks);
+        }
+        assert_eq!(quantize_wl_fixed(from_wl_fixed(i32::MAX) + 1.0 / 256.0), None);
+        assert_eq!(quantize_wl_fixed(from_wl_fixed(i32::MIN) - 1.0 / 256.0), None);
+        assert!(TickRect::from_edges([from_wl_fixed(i32::MIN), 0.0, 0.0, 1.0]).is_none());
+    }
+
+    #[test]
+    fn explicit_rects_partition_exact_negative_and_shared_edges_within_budget() {
+        let rect = |x, y, w, h| Rect::new(Point::new(CssPx(x), CssPx(y)), Size::new(CssPx(w), CssPx(h)));
+        let out = resolve_blur_shape_rects(&[rect(-3.328125, -0.25, 5.0, 2.0), rect(-1.0, 0.0, 5.0, 1.0)]);
+        assert_wire_disjoint(&out);
+        assert_eq!(out.iter().map(|s| s.width * s.height).sum::<f64>(), 12.328125);
+        let many: Vec<_> = (0..300).map(|i| rect(i as f32 * 2.0, -2.0, 1.0, 1.0)).collect();
+        let out = resolve_blur_shape_rects(&many);
+        assert_eq!(out.len(), MAX_BLUR_RECTS);
+        assert_wire_disjoint(&out);
+    }
+
+    #[test]
+    fn exact_squircle_clipping_and_clip_corner_intersection() {
+        let square = LogicalRoundedRect {
+            left: -10.0, top: 0.0, right: 70.0, bottom: 40.0,
+            tl: (10.0, 10.0), tr: (10.0, 10.0), br: (10.0, 10.0), bl: (10.0, 10.0),
+            exponent: 2.83, is_square: false,
+        };
+        assert_eq!(exact_corners(square, &[], [0.0, 0.0, 70.0, 40.0]), Some(([0, 2560, 2560, 0], 724)));
+        assert_eq!(exact_corners(square, &[], [-1.0, 0.0, 70.0, 40.0]), None);
+        assert_eq!(exact_corners(square, &[], [0.0, 0.0, 65.0, 40.0]), None);
+        assert_eq!(exact_corners(square, &[square], [0.0, 0.0, 60.0, 30.0]), Some(([0; 4], 512)));
+        assert_eq!(exact_corners(square, &[square], [0.0, 0.0, 61.0, 30.0]), None);
+        let elliptical = LogicalRoundedRect { tl: (30.0, 10.0), ..square };
+        assert_eq!(exact_corners(elliptical, &[], [-10.0, 0.0, 70.0, 40.0]), None);
+    }
+
+    #[test]
+    fn weighted_strip_union_uses_max_opacity_and_propagates_to_subpixel_neighbors() {
+        let clips = ClipTable::rooted();
+        let make = |x, w, opacity| BlurShapePiece {
+            piece: BlurPiece { border_box: drect(x, 1.0, w, 12.0),
+                radii: Corners::uniform(Vec2::splat(DevicePx(0.0))),
+                shape: CornerShape::ROUND, transform: None, clip: ClipId::ROOT },
+            opacity,
+        };
+        let result = resolve_blur_shapes(&[
+            make(-2.0, 6.0, 0.25), make(2.0, 5.6, 0.75),
+            make(7.7, 3.0, 0.5), make(2.0, 7.0, 0.001),
+        ], &clips, |_| None, map_1x(40.0, 40.0));
+        assert_wire_disjoint(&result);
+        assert_eq!(result.iter().map(|s| (s.x, s.width, s.opacity)).collect::<Vec<_>>(),
+            [(0.0, 2.0, 0.25), (2.0, 6.0, 0.75), (8.0, 3.0, 0.5)]);
     }
 
     /// Completely independent brute-force pixel-center point-membership oracle matching `sdf.wgsl`

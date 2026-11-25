@@ -90,7 +90,9 @@ pub mod tree;
 
 pub use crate::axis::Axis;
 pub use crate::fragment::blur::{
-    BlurPiece, BlurSurfaceMapping, MAX_BLUR_RECTS, is_blur_eligible_kind, resolve_blur_rects,
+    BlurPiece, BlurShape, BlurShapePiece, BlurSurfaceMapping, MAX_BLUR_RECTS, from_wl_fixed,
+    is_blur_eligible_kind, quantize_wl_fixed, resolve_blur_rects, resolve_blur_shape_rects,
+    resolve_blur_shapes,
 };
 pub use crate::fragment::hit::{HitEntry, HitIndex, PointerEvents};
 pub use crate::fragment::{FragKey, Fragment, FragmentExtra, FragmentFlags, FragmentKind};

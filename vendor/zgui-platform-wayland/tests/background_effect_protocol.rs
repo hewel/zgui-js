@@ -1,4 +1,4 @@
-//! Wire-level `ext_background_effect_v1` protocol tests over a private Unix socket.
+//! Wire tests for binary and rounded compositor blur over a private Unix socket.
 
 #![cfg(any(
     target_os = "linux",
@@ -25,9 +25,9 @@ use wayland_client::protocol::wl_shm::{self, WlShm};
 use wayland_client::protocol::wl_shm_pool::WlShmPool;
 use wayland_client::protocol::wl_surface::WlSurface;
 use wayland_client::{Connection, Dispatch, EventQueue, QueueHandle};
-use zgui_geom::{Css, CssPx, Device, Edges, Point, Rect, Size};
+use zgui_geom::{Css, CssPx, Edges, Point, Rect, Size};
 use zgui_platform::{
-    AppHandler, BlurRegion, LayerPlacement, PlatformCx, PopupPlacement, Surface, SurfaceAttributes,
+    AppHandler, BlurRegion, BlurShape, InputRegion, LayerPlacement, PlatformCx, PopupPlacement, Surface, SurfaceAttributes,
     SurfaceEvent, SurfaceId, SurfaceRole, WakeReason,
 };
 use zgui_platform_wayland::WaylandApp;
@@ -43,6 +43,20 @@ const GLOBAL_LAYER: u32 = 4;
 const GLOBAL_OUTPUT: u32 = 5;
 const GLOBAL_EFFECT_1: u32 = 6;
 const GLOBAL_EFFECT_2: u32 = 7;
+const GLOBAL_NIRI_1: u32 = 8;
+const GLOBAL_NIRI_2: u32 = 9;
+const GLOBAL_NIRI_3: u32 = 10;
+const NIRI_INTERFACE: &str = "niri_blur_shape_manager_v1";
+
+const SHAPE: BlurShape = BlurShape {
+    x: -2.83, y: 1.0 / 256.0, width: 30.25, height: 20.0,
+    radii: [4.0, 5.0, 6.0, 7.0], corner_exponent: 2.83, opacity: 0.25,
+};
+const SHAPE_TICKS: [i32; 10] = [-724, 1, 7744, 5120, 1024, 1280, 1536, 1792, 724, 64];
+
+fn full_ticks(width: i32, height: i32) -> [i32; 10] {
+    [0, 0, width * 256, height * 256, 0, 0, 0, 0, 512, 256]
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Scenario {
@@ -53,10 +67,14 @@ enum Scenario {
     EarlyPopupRetirement,
     ZeroSurfaceCapabilityWakes,
     FrameSynchronousHandover,
+    NiriLifecycle,
+    NiriDualHandover,
+    NiriPopupRetirement,
+    NiriZeroSurfaceWakes,
 }
 
 impl Scenario {
-    const ALL: [Self; 7] = [
+    const ALL: [Self; 11] = [
         Self::ManagerWithBlur,
         Self::AbsentManager,
         Self::ZeroFlagsManager,
@@ -64,6 +82,10 @@ impl Scenario {
         Self::EarlyPopupRetirement,
         Self::ZeroSurfaceCapabilityWakes,
         Self::FrameSynchronousHandover,
+        Self::NiriLifecycle,
+        Self::NiriDualHandover,
+        Self::NiriPopupRetirement,
+        Self::NiriZeroSurfaceWakes,
     ];
 
     fn name(self) -> &'static str {
@@ -75,7 +97,19 @@ impl Scenario {
             Self::EarlyPopupRetirement => "early-popup-retirement",
             Self::ZeroSurfaceCapabilityWakes => "zero-surface-capability-wakes",
             Self::FrameSynchronousHandover => "frame-synchronous-handover",
+            Self::NiriLifecycle => "niri-lifecycle",
+            Self::NiriDualHandover => "niri-dual-handover",
+            Self::NiriPopupRetirement => "niri-popup-retirement",
+            Self::NiriZeroSurfaceWakes => "niri-zero-surface-wakes",
         }
+    }
+
+    fn niri_only(self) -> bool {
+        matches!(self, Self::NiriLifecycle | Self::NiriPopupRetirement | Self::NiriZeroSurfaceWakes)
+    }
+
+    fn zero_surfaces(self) -> bool {
+        matches!(self, Self::ZeroSurfaceCapabilityWakes | Self::NiriZeroSurfaceWakes)
     }
 }
 
@@ -88,7 +122,7 @@ fn background_effect_protocol_on_the_wire() {
             .expect("known scenario");
         let mut app =
             WaylandApp::new(Client::new(scenario)).expect("connect to the protocol fixture");
-        if scenario == Scenario::FrameSynchronousHandover {
+        if matches!(scenario, Scenario::FrameSynchronousHandover | Scenario::NiriLifecycle | Scenario::NiriDualHandover) {
             let conn = app.connection().clone();
             let lookup = app.wl_surface_lookup();
             app.handler_mut().attach_shm_helper(conn, Box::new(lookup));
@@ -107,6 +141,9 @@ fn background_effect_protocol_on_the_wire() {
                 vec![true, false, true, false],
                 "zero-surface client must wake via WakeReason::AppWork on gain/withdraw/regain/remove"
             );
+        } else if scenario == Scenario::NiriZeroSurfaceWakes {
+            assert_eq!(app.handler().app_work_wakes, [true, false, true, false]);
+            assert_eq!(app.handler().shape_wakes, [true, false, true, false]);
         }
         return;
     }
@@ -308,6 +345,7 @@ struct Client {
     idle_redraws: u32,
     done: bool,
     app_work_wakes: Vec<bool>,
+    shape_wakes: Vec<bool>,
 }
 
 impl Client {
@@ -323,6 +361,7 @@ impl Client {
             idle_redraws: 0,
             done: false,
             app_work_wakes: Vec::new(),
+            shape_wakes: Vec::new(),
         }
     }
 
@@ -332,6 +371,93 @@ impl Client {
         lookup: Box<dyn Fn(SurfaceId) -> Option<WlSurface>>,
     ) {
         self.shm = Some(ShmHelper::new(conn, lookup));
+    }
+
+    fn draw_shm(&mut self, surface: &Arc<dyn Surface>, width: i32, height: i32) {
+        self.shm.as_mut().expect("shm").present_buffer(surface, width, height);
+        surface.finalize_presented_blur();
+    }
+
+    fn niri_lifecycle(&mut self, id: SurfaceId, event: SurfaceEvent) {
+        let primary = self.primary.as_ref().expect("primary").clone();
+        if primary.id() != id || !matches!(event, SurfaceEvent::RedrawRequested) {
+            return;
+        }
+        match self.stage {
+            0 => self.draw_shm(&primary, 200, 40),
+            1 => {
+                // A never-presented first shape object must be destroyed, not left cleared.
+                primary.stage_blur_region_for_present(BlurRegion::Shapes(&[SHAPE]));
+                primary.pre_present_frame(Size::new(200, 40), 1.0);
+                primary.rollback_unpresented_blur();
+            }
+            2 => {
+                let mut shapes = vec![BlurShape { opacity: 0.001, ..SHAPE },
+                    BlurShape { x: f64::NAN, ..SHAPE },
+                    BlurShape { x: f64::from(i32::MAX) / 256.0, ..SHAPE }];
+                shapes.extend((0..257).map(|i| BlurShape { x: SHAPE.x + f64::from(i) * 32.0, ..SHAPE }));
+                primary.stage_blur_region_for_present(BlurRegion::Shapes(&shapes));
+                self.draw_shm(&primary, 200, 40);
+            }
+            3 => primary.apply_idle_blur_region(BlurRegion::None),
+            4 => {
+                primary.stage_blur_region_for_present(BlurRegion::Full);
+                primary.pre_present_frame(Size::new(200, 40), 1.0);
+                primary.rollback_unpresented_blur();
+            }
+            5 => {
+                primary.stage_blur_region_for_present(BlurRegion::Full);
+                self.draw_shm(&primary, 200, 40);
+            }
+            6 if primary.size().width.0 == 400.0 => {
+                primary.pre_present_frame(Size::new(400, 60), 1.0);
+                primary.rollback_unpresented_blur();
+            }
+            6 => return,
+            7 => self.draw_shm(&primary, 400, 60),
+            _ => return,
+        }
+        // Each commit pairs with a server nudge, except the configure-driven resize.
+        self.stage += 10;
+    }
+
+    fn niri_dual_handover(&mut self, id: SurfaceId, event: SurfaceEvent) {
+        let primary = self.primary.as_ref().expect("primary").clone();
+        if primary.id() != id || !matches!(event, SurfaceEvent::RedrawRequested) {
+            return;
+        }
+        match self.stage {
+            0 => {
+                assert!(primary.prefers_blur_shapes());
+                primary.stage_blur_region_for_present(BlurRegion::Shapes(&[SHAPE]));
+                self.draw_shm(&primary, 200, 40);
+                // Represents a held frame composed against the old shape capability.
+                primary.stage_blur_region_for_present(BlurRegion::Shapes(&[BlurShape { x: 44.0, ..SHAPE }]));
+                self.stage = 1;
+            }
+            1 if !primary.prefers_blur_shapes() => {
+                primary.set_shell_input_region(&InputRegion::Empty).expect("independent shell commit");
+                self.draw_shm(&primary, 200, 40);
+                self.stage = 2;
+                primary.request_redraw();
+            }
+            2 => {
+                primary.stage_blur_region_for_present(BlurRegion::Rects(&[rect(6.0, 8.0, 30.0, 16.0)]));
+                self.draw_shm(&primary, 200, 40);
+                self.stage = 3;
+            }
+            3 if primary.prefers_blur_shapes() => {
+                primary.stage_blur_region_for_present(BlurRegion::Shapes(&[SHAPE]));
+                self.draw_shm(&primary, 200, 40);
+                self.stage = 4;
+                primary.request_redraw();
+            }
+            4 => {
+                primary.apply_idle_blur_region(BlurRegion::None);
+                self.stage = 5;
+            }
+            _ => {}
+        }
     }
 }
 
@@ -373,12 +499,12 @@ impl AppHandler for Client {
                 layer.set_blur_region(BlurRegion::Rects(&[rect(5.0, 5.0, 50.0, 20.0)]));
                 self.primary = Some(layer);
             }
-            Scenario::EarlyPopupRetirement => {
+            Scenario::EarlyPopupRetirement | Scenario::NiriPopupRetirement => {
                 assert!(cx.capabilities().supports_background_blur);
                 let layer = open_layer(cx, 200.0, 40.0);
                 self.primary = Some(layer);
             }
-            Scenario::ZeroSurfaceCapabilityWakes => {
+            Scenario::ZeroSurfaceCapabilityWakes | Scenario::NiriZeroSurfaceWakes => {
                 assert!(
                     !cx.capabilities().supports_background_blur,
                     "zero-surface client starts with blur capability false before events"
@@ -387,6 +513,13 @@ impl AppHandler for Client {
             Scenario::FrameSynchronousHandover => {
                 assert!(cx.capabilities().supports_background_blur);
                 let layer = open_layer(cx, 200.0, 40.0);
+                self.primary = Some(layer);
+            }
+            Scenario::NiriLifecycle | Scenario::NiriDualHandover => {
+                assert!(cx.capabilities().supports_background_blur);
+                assert!(cx.capabilities().supports_blur_shapes);
+                let layer = open_layer(cx, 200.0, 40.0);
+                assert!(layer.prefers_blur_shapes());
                 self.primary = Some(layer);
             }
         }
@@ -473,7 +606,7 @@ impl AppHandler for Client {
                     }
                 }
             }
-            Scenario::EarlyPopupRetirement => {
+            Scenario::EarlyPopupRetirement | Scenario::NiriPopupRetirement => {
                 let primary_id = self.primary.as_ref().expect("parent").id();
                 if id == primary_id && matches!(event, SurfaceEvent::RedrawRequested) && self.stage == 0 {
                     // Mark parent mapped so popups may draw/commit.
@@ -495,7 +628,15 @@ impl AppHandler for Client {
                     self.stage = 4;
                 }
             }
-            Scenario::ZeroSurfaceCapabilityWakes => {}
+            Scenario::ZeroSurfaceCapabilityWakes | Scenario::NiriZeroSurfaceWakes => {}
+            Scenario::NiriLifecycle => {
+                if self.stage == 15 && matches!(event, SurfaceEvent::Resized(size) if size.width.0 == 400.0) {
+                    self.stage = 6;
+                    self.primary.as_ref().expect("primary").request_redraw();
+                }
+                self.niri_lifecycle(id, event);
+            }
+            Scenario::NiriDualHandover => self.niri_dual_handover(id, event),
             Scenario::FrameSynchronousHandover => {
                 let primary = self.primary.as_ref().expect("primary").clone();
                 if id == primary.id() && matches!(event, SurfaceEvent::RedrawRequested) {
@@ -586,8 +727,8 @@ impl AppHandler for Client {
         if matches!(reason, WakeReason::AppWork) {
             self.app_work_wakes
                 .push(cx.capabilities().supports_background_blur);
-            if self.scenario == Scenario::ZeroSurfaceCapabilityWakes
-                && self.app_work_wakes.len() == 4
+            self.shape_wakes.push(cx.capabilities().supports_blur_shapes);
+            if self.scenario.zero_surfaces() && self.app_work_wakes.len() == 4
             {
                 self.done = true;
                 cx.request_exit();
@@ -637,7 +778,7 @@ impl AppHandler for Client {
                     cx.request_exit();
                 }
             }
-            Scenario::EarlyPopupRetirement => {
+            Scenario::EarlyPopupRetirement | Scenario::NiriPopupRetirement => {
                 if self.stage == 2 {
                     let parent_id = self.primary.as_ref().expect("parent").id();
                     let p1 = self.popup1.take().expect("popup1");
@@ -706,6 +847,22 @@ impl AppHandler for Client {
                 }
                 _ => {}
             },
+            Scenario::NiriLifecycle => {
+                self.stage = match self.stage {
+                    10..=14 | 16 => self.stage - 9,
+                    17 => {
+                        self.done = true;
+                        cx.request_exit();
+                        return;
+                    }
+                    _ => return,
+                };
+                self.primary.as_ref().expect("primary").request_redraw();
+            }
+            Scenario::NiriDualHandover if self.stage == 5 => {
+                self.done = true;
+                cx.request_exit();
+            }
             _ => {}
         }
     }
@@ -729,6 +886,8 @@ enum Object {
     LayerShell,
     Output,
     EffectManager(u32), // global name
+    NiriManager(u32), // global name
+    NiriSurface(u32), // wl_surface id
     Surface,
     Region,
     Layer(u32),       // wl_surface id
@@ -744,6 +903,7 @@ enum Object {
 enum CommittedBlur {
     None,
     Rects(Vec<[i32; 4]>),
+    Shapes(Vec<[i32; 10]>),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -769,6 +929,9 @@ struct Compositor {
     destroyed_regions: HashSet<u32>,
     pending_blur: HashMap<u32, Option<CommittedBlur>>,
     effective_blur: HashMap<u32, CommittedBlur>,
+    niri_pending: HashMap<u32, Option<Vec<[i32; 10]>>>,
+    niri_effective: HashMap<u32, Vec<[i32; 10]>>,
+    niri_creations: Vec<(u32, u32, u32)>, // (global name, object id, wl_surface id)
     pending_attach: HashMap<u32, Option<u32>>,
     pending_window_geometry: HashMap<u32, [i32; 4]>,
     effective_window_geometry: HashMap<u32, [i32; 4]>,
@@ -802,6 +965,9 @@ impl Compositor {
             destroyed_regions: HashSet::new(),
             pending_blur: HashMap::new(),
             effective_blur: HashMap::new(),
+            niri_pending: HashMap::new(),
+            niri_effective: HashMap::new(),
+            niri_creations: Vec::new(),
             pending_attach: HashMap::new(),
             pending_window_geometry: HashMap::new(),
             effective_window_geometry: HashMap::new(),
@@ -854,7 +1020,7 @@ impl Compositor {
     }
 
     fn run(&mut self) {
-        if self.scenario == Scenario::ZeroSurfaceCapabilityWakes {
+        if self.scenario.zero_surfaces() {
             self.stream
                 .set_read_timeout(Some(Duration::from_millis(40)))
                 .expect("short read timeout for zero-surface idle checks");
@@ -865,7 +1031,7 @@ impl Compositor {
             match self.read_exact_with_fds(&mut header) {
                 Ok(()) => {}
                 Err(error)
-                    if self.scenario == Scenario::ZeroSurfaceCapabilityWakes
+                    if self.scenario.zero_surfaces()
                         && matches!(
                             error.kind(),
                             std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
@@ -875,7 +1041,20 @@ impl Compositor {
                         started.elapsed() < TIMEOUT,
                         "zero-surface scenario timed out waiting for client exit"
                     );
-                    if let Some(&(_, mgr1)) = self.effect_managers.first() {
+                    if self.scenario == Scenario::NiriZeroSurfaceWakes {
+                        let name = if self.phase < 2 { GLOBAL_NIRI_1 } else { GLOBAL_NIRI_2 };
+                        match self.phase {
+                            0 | 2 => {
+                                self.global(name, NIRI_INTERFACE, 1);
+                                self.phase += 1;
+                            }
+                            1 | 3 if self.objects.values().any(|o| *o == Object::NiriManager(name)) => {
+                                self.event(self.registry, 1, &words(&[name]));
+                                self.phase += 1;
+                            }
+                            _ => {}
+                        }
+                    } else if let Some(&(_, mgr1)) = self.effect_managers.first() {
                         match self.phase {
                             0 => {
                                 self.phase = 1;
@@ -906,7 +1085,8 @@ impl Compositor {
                 {
                     return;
                 }
-                Err(error) => panic!("reading Wayland request: {error}"),
+                Err(error) => panic!("{:?} phase {} after {} commits: reading Wayland request: {error}",
+                    self.scenario, self.phase, self.commit_log.len()),
             }
             let id = word(&header, 0);
             let descriptor = word(&header, 1);
@@ -948,6 +1128,7 @@ impl Compositor {
                     self.event(1, 1, &words(&[cb]));
                 }
                 1 => {
+                    let live_registry = self.registry;
                     self.registry = arg(0);
                     self.objects.insert(self.registry, Object::Registry);
                     self.global(GLOBAL_COMPOSITOR, "wl_compositor", 6);
@@ -955,8 +1136,14 @@ impl Compositor {
                     self.global(GLOBAL_XDG, "xdg_wm_base", 6);
                     self.global(GLOBAL_LAYER, "zwlr_layer_shell_v1", 4);
                     self.global(GLOBAL_OUTPUT, "wl_output", 4);
-                    if self.scenario != Scenario::AbsentManager {
+                    if self.scenario != Scenario::AbsentManager && !self.scenario.niri_only() {
                         self.global(GLOBAL_EFFECT_1, "ext_background_effect_manager_v1", 1);
+                    }
+                    if matches!(self.scenario, Scenario::NiriLifecycle | Scenario::NiriDualHandover | Scenario::NiriPopupRetirement) {
+                        self.global(GLOBAL_NIRI_1, NIRI_INTERFACE, 1);
+                    }
+                    if live_registry != 0 {
+                        self.registry = live_registry;
                     }
                 }
                 _ => panic!("unexpected wl_display opcode {opcode}"),
@@ -986,6 +1173,10 @@ impl Compositor {
                         self.effect_managers.push((global, bound));
                         Object::EffectManager(global)
                     }
+                    GLOBAL_NIRI_1 | GLOBAL_NIRI_2 | GLOBAL_NIRI_3 => {
+                        assert_eq!(arg(version_index), 1);
+                        Object::NiriManager(global)
+                    }
                     _ => panic!("unexpected global {global}"),
                 };
                 self.objects.insert(bound, object);
@@ -1000,7 +1191,7 @@ impl Compositor {
                     Object::EffectManager(GLOBAL_EFFECT_1) => match self.scenario {
                         Scenario::ManagerWithBlur
                         | Scenario::EarlyPopupRetirement
-                        | Scenario::FrameSynchronousHandover => {
+                        | Scenario::FrameSynchronousHandover | Scenario::NiriDualHandover => {
                             self.event(bound, 0, &words(&[1])); // Capability::Blur
                         }
                         Scenario::ZeroFlagsManager => {
@@ -1010,7 +1201,7 @@ impl Compositor {
                         | Scenario::ZeroSurfaceCapabilityWakes => {
                             // Deliberately withhold capabilities initially to verify false until advertised!
                         }
-                        Scenario::AbsentManager => unreachable!(),
+                        _ => unreachable!(),
                     },
                     Object::EffectManager(GLOBAL_EFFECT_2) => {
                         // Send a late Capability::Blur on the RETIRED first manager (must be ignored!)
@@ -1124,6 +1315,38 @@ impl Compositor {
                 self.event(id, 0, &words(&[4, 24, 120, 80])); // xdg_popup.configure
                 self.event(xdg_id, 0, &words(&[serial])); // xdg_surface.configure
             }
+            (Object::NiriManager(_), 0) => {
+                assert!(body.is_empty());
+                self.objects.remove(&id);
+            }
+            (Object::NiriManager(name), 1) => {
+                assert_eq!(body.len(), 8);
+                let (effect, wl) = (arg(0), arg(1));
+                assert!(!self.objects.values().any(|obj| *obj == Object::NiriSurface(wl)
+                    || *obj == Object::EffectSurface(wl)));
+                self.objects.insert(effect, Object::NiriSurface(wl));
+                self.niri_creations.push((name, effect, wl));
+            }
+            (Object::NiriSurface(wl), 0) => {
+                assert!(body.is_empty());
+                self.destroy_log.push((id, "niri_surface", wl));
+                self.objects.remove(&id);
+                self.niri_pending.insert(wl, None);
+            }
+            (Object::NiriSurface(wl), 1) => {
+                assert!(body.is_empty());
+                self.niri_pending.insert(wl, Some(Vec::new()));
+            }
+            (Object::NiriSurface(wl), 2) => {
+                assert_eq!(body.len(), 40);
+                let shapes = self.niri_pending.get_mut(&wl).and_then(Option::as_mut)
+                    .expect("add_rounded_rect must follow clear");
+                assert!(shapes.len() < 256, "client must enforce protocol shape cap");
+                shapes.push(std::array::from_fn(|i| arg(i) as i32));
+            }
+            (Object::NiriSurface(_) | Object::NiriManager(_), _) => {
+                panic!("unexpected niri opcode {opcode}: unset is not an empty mask")
+            }
             (Object::EffectManager(_), 0) => {
                 self.objects.remove(&id);
             }
@@ -1132,6 +1355,7 @@ impl Compositor {
                 let effect_id = arg(0);
                 let wl = arg(1);
                 self.objects.insert(effect_id, Object::EffectSurface(wl));
+                assert!(!self.objects.values().any(|obj| *obj == Object::NiriSurface(wl)));
                 self.effect_creations.push((id, effect_id, wl));
                 self.effect_for_surface.entry(wl).or_default().push(effect_id);
             }
@@ -1188,6 +1412,7 @@ impl Compositor {
                 "{:?}: surface {wl} created effect object before initial configure",
                 self.scenario
             );
+            assert!(!self.niri_pending.contains_key(&wl));
             self.configured_surfaces.insert(wl);
             self.send_initial_configure(wl);
             return;
@@ -1204,6 +1429,14 @@ impl Compositor {
             }
             self.effective_blur.insert(wl, blur.clone());
             self.committed_blurs.entry(wl).or_default().push(blur);
+        }
+        if let Some(pending) = self.niri_pending.remove(&wl) {
+            if let Some(shapes) = pending {
+                self.committed_blurs.entry(wl).or_default().push(CommittedBlur::Shapes(shapes.clone()));
+                self.niri_effective.insert(wl, shapes);
+            } else {
+                self.niri_effective.remove(&wl);
+            }
         }
         if let Some(geom) = self.pending_window_geometry.remove(&wl) {
             self.effective_window_geometry.insert(wl, geom);
@@ -1351,7 +1584,7 @@ impl Compositor {
                     }
                 }
             }
-            Scenario::EarlyPopupRetirement => {
+            Scenario::EarlyPopupRetirement | Scenario::NiriPopupRetirement => {
                 let popup1 = self.surface_order.get(1).copied();
                 let popup2 = self.surface_order.get(2).copied();
                 if Some(wl) == popup1 && self.phase == 0 {
@@ -1398,14 +1631,16 @@ impl Compositor {
                     self.nudge_client();
                 }
             }
+            Scenario::NiriLifecycle => self.advance_niri_lifecycle(wl),
+            Scenario::NiriDualHandover => self.advance_niri_dual(wl),
             Scenario::AbsentManager
             | Scenario::ZeroFlagsManager
-            | Scenario::ZeroSurfaceCapabilityWakes => {}
+            | Scenario::ZeroSurfaceCapabilityWakes | Scenario::NiriZeroSurfaceWakes => {}
         }
     }
 
     fn verify(&self) {
-        assert_eq!(self.input_region_calls, 0, "{:?}: blur must not touch input region", self.scenario);
+        assert_eq!(self.input_region_calls, u32::from(self.scenario == Scenario::NiriDualHandover));
         assert_eq!(self.opaque_region_calls, 0, "{:?}: blur must not touch opaque region", self.scenario);
 
         // Universal destroy ordering invariant: for every surface that ever created an effect surface,
@@ -1429,6 +1664,17 @@ impl Compositor {
                     "{:?}: effect_surface {effect_id} destroyed at {eff_pos}, after wl_surface {wl} at {wl_pos}",
                     self.scenario
                 );
+            }
+        }
+
+        for &(_, id, wl) in &self.niri_creations {
+            let niri = self.destroy_log.iter().position(|entry| *entry == (id, "niri_surface", wl))
+                .expect("niri_surface.destroy");
+            let surface = self.destroy_log.iter().position(|entry| *entry == (wl, "wl_surface", wl))
+                .expect("wl_surface.destroy");
+            assert!(niri < surface);
+            if let Some(popup) = self.destroy_log.iter().position(|&(_, kind, s)| kind == "xdg_popup" && s == wl) {
+                assert!(niri < popup);
             }
         }
 
@@ -1617,7 +1863,102 @@ impl Compositor {
                 );
                 assert_eq!(popup_commits[1].window_geometry, Some([12, 8, 120, 80]));
             }
+            Scenario::NiriLifecycle => {
+                assert_eq!(self.phase, 8);
+                assert_eq!(self.niri_creations.len(), 2, "one rolled-back object and one durable object");
+            }
+            Scenario::NiriDualHandover => {
+                assert_eq!(self.phase, 7);
+                assert_eq!(self.effect_creations.len(), 1);
+                assert_eq!(self.niri_creations.iter().map(|&(global, _, _)| global).collect::<Vec<_>>(),
+                    [GLOBAL_NIRI_1, GLOBAL_NIRI_2, GLOBAL_NIRI_3]);
+            }
+            Scenario::NiriPopupRetirement => {
+                let (_, first, first_wl) = self.niri_creations[0];
+                let (_, _, second_wl) = self.niri_creations[1];
+                assert_eq!(self.niri_creations.len(), 2);
+                assert_ne!(first_wl, second_wl);
+                assert!(self.destroy_log.contains(&(first, "niri_surface", first_wl)));
+                assert!(self.effect_creations.is_empty());
+            }
+            Scenario::NiriZeroSurfaceWakes => {
+                assert_eq!(self.phase, 4);
+                assert!(self.surface_order.is_empty());
+                assert!(self.niri_creations.is_empty());
+            }
         }
+    }
+
+    fn advance_niri_lifecycle(&mut self, wl: u32) {
+        let attached = self.commit_log.last().expect("recorded commit").attached_this_commit;
+        let shapes = self.niri_effective.get(&wl).map(Vec::as_slice);
+        match self.phase {
+            0 if attached => {
+                assert_eq!(shapes, None);
+                assert!(self.niri_creations.is_empty(), "untouched surface is lazy");
+            }
+            1 if !attached && self.niri_creations.len() == 1 => {
+                assert_eq!(shapes, None, "failed first frame left explicit niri state");
+            }
+            2 if attached => {
+                let shapes = shapes.expect("shapes");
+                assert_eq!(shapes.len(), 256);
+                assert_eq!(shapes[0], SHAPE_TICKS);
+            }
+            3 | 4 if !attached && shapes == Some(&[]) => {}
+            5 if attached => {
+                assert_eq!(shapes, Some([full_ticks(200, 40)].as_slice()));
+                self.phase += 1;
+                let layer = self.find_layer(wl);
+                let serial = self.next_serial();
+                self.event(layer, 0, &words(&[serial, 400, 60]));
+                return;
+            }
+            6 if !attached => {
+                assert_eq!(shapes, Some([full_ticks(200, 40)].as_slice()), "failed resize must restore displayed extent");
+            }
+            7 if attached => {
+                assert_eq!(shapes, Some([full_ticks(400, 60)].as_slice()));
+            }
+            _ => return,
+        }
+        self.phase += 1;
+        self.nudge_client();
+    }
+
+    fn advance_niri_dual(&mut self, wl: u32) {
+        let attached = self.commit_log.last().expect("recorded commit").attached_this_commit;
+        let shapes = self.niri_effective.get(&wl).map(Vec::as_slice);
+        match self.phase {
+            0 if attached => {
+                assert_eq!(shapes, Some([SHAPE_TICKS].as_slice()));
+                assert!(self.effect_creations.is_empty());
+                self.event(self.registry, 1, &words(&[GLOBAL_NIRI_1]));
+            }
+            1 if self.input_region_calls == 1 => {
+                assert!(!attached);
+                assert_eq!(shapes, Some([SHAPE_TICKS].as_slice()), "input commit must not consume blur teardown");
+            }
+            2 if attached => {
+                assert_eq!(shapes, None);
+                assert!(self.effect_creations.is_empty(), "stale shapes must not project to ext");
+            }
+            3 if attached => {
+                assert_eq!(self.effective_blur[&wl], CommittedBlur::Rects(vec![[6, 8, 30, 16]]));
+                self.global(GLOBAL_NIRI_2, NIRI_INTERFACE, 1);
+            }
+            4 if attached => assert_eq!(shapes, Some([SHAPE_TICKS].as_slice())),
+            5 if shapes == Some(&[]) => {
+                self.global(GLOBAL_NIRI_3, NIRI_INTERFACE, 1);
+                self.event(self.registry, 1, &words(&[GLOBAL_NIRI_2]));
+            }
+            6 if self.niri_creations.len() == 3 => {
+                assert_eq!(shapes, Some(&[][..]), "replacement must rebind a cleared surface");
+                self.nudge_client();
+            }
+            _ => return,
+        }
+        self.phase += 1;
     }
 
     fn global(&mut self, name: u32, interface: &str, version: u32) {

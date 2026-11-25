@@ -6,8 +6,8 @@
 //! control lets a press through, and inwards for opacity, so no pixel that is partly transparent
 //! hides what is behind it.
 
-use zgui_geom::{Css, CssPx, Rect};
-use zgui_platform::BlurRegion;
+use zgui_geom::{Css, CssPx, Rect, Size};
+use zgui_platform::{BlurRegion, BlurShape};
 
 /// A rectangle in whole logical pixels: left, top, width, height.
 pub type Whole = (i32, i32, i32, i32);
@@ -28,6 +28,8 @@ pub enum OwnedBlurRegion {
     Full,
     /// Validated non-empty union of CSS rectangles.
     Rects(Vec<Rect<CssPx, Css>>),
+    /// Validated wire-canonical rounded masks.
+    Shapes(Vec<BlurShape>),
 }
 
 impl OwnedBlurRegion {
@@ -36,6 +38,26 @@ impl OwnedBlurRegion {
     pub const fn is_none(&self) -> bool {
         matches!(self, Self::None)
     }
+}
+
+/// What the most recent buffer or bare commit actually submitted.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) enum CommittedBlurSnapshot {
+    #[default]
+    Unbound,
+    Ext(OwnedBlurRegion),
+    NiriCleared,
+    NiriActive {
+        region: OwnedBlurRegion,
+        full_extent: Option<Size<CssPx, Css>>,
+    },
+}
+
+/// State displaced while handing a frame to the presenter but before it confirms a commit.
+#[derive(Debug)]
+pub(crate) struct BlurBeforePresent {
+    pub(crate) desired: Option<OwnedBlurRegion>,
+    pub(crate) niri_ever_bound: bool,
 }
 
 /// Normalizes a [`BlurRegion`] into owned validated intent, dropping non-finite, non-positive,
@@ -56,6 +78,11 @@ pub fn normalize_blur(region: BlurRegion<'_>) -> OwnedBlurRegion {
             } else {
                 OwnedBlurRegion::Rects(valid)
             }
+        }
+        BlurRegion::Shapes(shapes) => {
+            let valid: Vec<_> = shapes.iter().copied().filter_map(BlurShape::wire_canonical)
+                .take(BlurShape::MAX_COUNT).collect();
+            if valid.is_empty() { OwnedBlurRegion::None } else { OwnedBlurRegion::Shapes(valid) }
         }
         _ => OwnedBlurRegion::None,
     }

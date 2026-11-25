@@ -284,12 +284,12 @@ impl Driver {
         let ReloadConfig { dev_state, bundle_dir, scenario_dir } = reload;
         let mut capabilities = PlatformCapabilities::none();
         capabilities.session_lock = true;
-        capabilities.supports_background_blur = profile.profile.background_blur;
         capabilities.clipboard_formats = vec![
             zgui::platform::ClipboardFormat::Text,
             zgui::platform::ClipboardFormat::Image,
         ];
-        let platform = Headless::new().with_capabilities(capabilities);
+        let platform = Headless::new().with_capabilities(capabilities)
+            .with_blur_capabilities(profile.profile.background_blur, profile.profile.blur_shapes);
         if let Some(clip) = &fixture.services.clipboard {
             use zgui::platform::{Clipboard, ClipboardData, ClipboardKind, ClipboardWriteOptions};
             let opts = if clip.secret { ClipboardWriteOptions::SECRET } else { ClipboardWriteOptions::default() };
@@ -326,6 +326,7 @@ impl Driver {
             else if shell_capable { ObservationMode::PrimaryAndShell }
             else { ObservationMode::PrimaryOnly };
         let observers = FrameObservers::new(package.manifest.build_id.clone(), environment.clone(), sink, mode);
+        observers.set_emit_blur_shapes(profile.profile.blur_shapes);
         let pending = Rc::new(RefCell::new(Vec::new()));
         let surface = &profile.profile.surface;
         let step_budget = Duration::from_millis(profile.profile.limits.max_step_wall_ms);
@@ -451,6 +452,19 @@ impl Driver {
     pub fn set_background_blur_supported(&mut self, supported: bool) -> Result<Value, Fault> {
         self.settle(false)?;
         self.pipeline.platform_mut().set_background_blur_supported(supported);
+        self.settle(false)?;
+        self.sync_shell_surfaces()?;
+        Ok(json!({
+            "supported": supported,
+            "timeUs": self.environment.now_us(),
+            "readiness": self.readiness(),
+        }))
+    }
+
+    pub fn set_blur_shapes_supported(&mut self, supported: bool) -> Result<Value, Fault> {
+        self.settle(false)?;
+        self.observers.set_emit_blur_shapes(supported);
+        self.pipeline.platform_mut().set_blur_shapes_supported(supported);
         self.settle(false)?;
         self.sync_shell_surfaces()?;
         Ok(json!({

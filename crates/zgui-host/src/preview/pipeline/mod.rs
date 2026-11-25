@@ -560,6 +560,7 @@ struct OwnedFrame {
 struct ObserverData {
     requested_metadata: u64,
     requested_blur: u64,
+    requested_emit_blur_shapes: bool,
     requested_window_geometry: u64,
     semantics: SemanticModel,
     ledger: FrameLedger,
@@ -573,6 +574,7 @@ struct ObservationContext {
     build_id: String,
     environment: Rc<Environment>,
     multiple: Cell<bool>,
+    emit_blur_shapes: Cell<bool>,
     action: Cell<u64>,
     frames: Cell<u64>,
     current_checkpoint: Cell<Option<SurfaceId>>,
@@ -610,11 +612,16 @@ impl FrameObservers {
         let has_primary = !matches!(mode, ObservationMode::ShellOnly);
         let context = Rc::new(ObservationContext {
             sink: RefCell::new(sink), build_id, environment, multiple: Cell::new(!matches!(mode, ObservationMode::PrimaryOnly)),
+            emit_blur_shapes: Cell::new(false),
             action: Cell::new(0), frames: Cell::new(0), current_checkpoint: Cell::new(None),
             graphics: RefCell::new(Value::Null), fault: RefCell::new(None),
         });
         let main = has_primary.then(|| FrameObserver::new(context.clone()));
         Self(Rc::new(ObserverRegistry { context, main, next_is_main: Cell::new(has_primary), surfaces: RefCell::default() }))
+    }
+
+    pub fn set_emit_blur_shapes(&self, emit: bool) {
+        self.0.context.emit_blur_shapes.set(emit);
     }
 
     fn register_renderer(&self, surface: SurfaceId) -> CaptureHandle {
@@ -757,7 +764,11 @@ impl ObserverInner {
                 "moveDragCount": surface.move_drag_count(),
             }));
             blur_revision = surface.blur_revision();
-            extra.insert("blurRegion".into(), serialize_blur_region(&surface.blur_region()));
+            let blur = surface.blur_region();
+            extra.insert("blurRegion".into(), serialize_blur_region(&blur));
+            if self.context.emit_blur_shapes.get() {
+                extra.insert("blurShapes".into(), serialize_blur_shapes(&blur));
+            }
             window_geometry_revision = surface.window_geometry_revision();
             let window_geometry = surface.window_geometry();
             extra.insert("windowGeometry".into(), json!({
@@ -853,6 +864,24 @@ fn serialize_blur_region(region: &RecordedBlurRegion) -> Value {
                 }))
                 .collect::<Vec<_>>()
         ),
+        RecordedBlurRegion::Shapes(shapes) => json!(
+            shapes.iter().map(|s| json!({
+                "x": s.x, "y": s.y, "width": s.width, "height": s.height
+            })).collect::<Vec<_>>()
+        ),
+    }
+}
+
+fn serialize_blur_shapes(region: &RecordedBlurRegion) -> Value {
+    match region {
+        RecordedBlurRegion::None | RecordedBlurRegion::Rects(_) => json!("none"),
+        RecordedBlurRegion::Full => json!("full"),
+        RecordedBlurRegion::Shapes(shapes) => json!(
+            shapes.iter().map(|s| json!({
+                "x": s.x, "y": s.y, "width": s.width, "height": s.height,
+                "radii": s.radii, "cornerExponent": s.corner_exponent, "opacity": s.opacity
+            })).collect::<Vec<_>>()
+        ),
     }
 }
 
@@ -912,6 +941,7 @@ impl FrameObserver {
             data: RefCell::new(ObserverData {
                 requested_metadata: 0,
                 requested_blur: 0,
+                requested_emit_blur_shapes: false,
                 requested_window_geometry: 0,
                 semantics: SemanticModel::default(),
                 ledger: FrameLedger::default(),
@@ -930,13 +960,16 @@ impl FrameObserver {
         let mut data = self.0.data.borrow_mut();
         let blur_revision = data.surface.as_ref().map_or(0, |s| s.blur_revision());
         let window_geometry_revision = data.surface.as_ref().map_or(0, |s| s.window_geometry_revision());
+        let emit_blur_shapes = self.0.context.emit_blur_shapes.get();
         let needs_frame = data.requested_metadata != revision
             || data.requested_blur != blur_revision
+            || data.requested_emit_blur_shapes != emit_blur_shapes
             || data.requested_window_geometry != window_geometry_revision
             || window.blur_pending();
         if needs_frame {
             data.requested_metadata = revision;
             data.requested_blur = blur_revision;
+            data.requested_emit_blur_shapes = emit_blur_shapes;
             data.requested_window_geometry = window_geometry_revision;
             window.request_frame();
         }
@@ -1007,6 +1040,7 @@ impl FrameObserver {
         if data.ledger.is_settled(&query)
             && data.last.as_ref().is_some_and(|last| {
                 last.blur_revision == blur_revision
+                    && last.frame.extra.contains_key("blurShapes") == self.0.context.emit_blur_shapes.get()
                     && last.window_geometry_revision == window_geometry_revision
             })
         {

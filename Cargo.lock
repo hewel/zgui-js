@@ -6278,6 +6278,7 @@ dependencies = [
  "wayland-scanner",
  "zbus",
  "zgui-geom",
+ "zgui-layout",
  "zgui-platform",
  "zgui-profile",
  "zgui-vocab",

@@ -109,6 +109,8 @@ pub struct PlatformCapabilities {
     /// This is a live platform fact only and may change dynamically across registry/capability
     /// updates. Callers must not drop or gate desired blur intent on an initial snapshot.
     pub supports_background_blur: bool,
+    /// Whether eligible surfaces can submit rounded blur shapes with continuous opacity.
+    pub supports_blur_shapes: bool,
 }
 
 impl PlatformCapabilities {
@@ -142,6 +144,7 @@ impl PlatformCapabilities {
             reopen: false,
             window_controls: false,
             supports_background_blur: false,
+            supports_blur_shapes: false,
         }
     }
 

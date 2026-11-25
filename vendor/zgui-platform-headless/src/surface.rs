@@ -1,13 +1,13 @@
 //! A surface that is a buffer, with no window behind it.
 
 use std::collections::VecDeque;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
 use accesskit::TreeUpdate;
 use zgui_geom::{Css, CssPx, Device, DevicePx, Edges, Point, Rect, Size};
 use zgui_platform::{
-    BlurRegion, CursorStyle, Decorations, FullscreenMode, InputRect, InputRegion, InputSerial,
+    BlurRegion, BlurShape, CursorStyle, Decorations, FullscreenMode, InputRect, InputRegion, InputSerial,
     LayerPatch, LayerPlacement, PlatformError, PopupPlacement, Surface, SurfaceAttributes,
     SurfaceId, SurfaceRole, TextInput, Unsupported,
 };
@@ -60,6 +60,8 @@ pub enum RecordedBlurRegion {
     Full,
     /// Background blur covers the union of these surface-local CSS rectangles.
     Rects(Vec<Rect<CssPx, Css>>),
+    /// Disjoint rounded masks in wire-canonical logical coordinates.
+    Shapes(Vec<BlurShape>),
 }
 
 /// Normalized XDG-style window geometry rectangle recorded on an offscreen surface, in whole
@@ -181,6 +183,7 @@ pub struct OffscreenSurface {
     input_region_log: Mutex<Vec<Region>>,
     /// Every opaque region the surface was given, in order.
     opaque_region_log: Mutex<Vec<Region>>,
+    blur_shapes_supported: Option<Arc<AtomicBool>>,
     /// Normalized background blur region currently applied to this surface.
     blur_region: Mutex<RecordedBlurRegion>,
     /// Picture-bound blur region staged for the next buffer presentation.
@@ -231,6 +234,22 @@ pub struct OffscreenSurface {
 impl OffscreenSurface {
     /// A surface of `size`, hidden, with nothing recorded yet.
     pub fn new(id: SurfaceId, size: Size<DevicePx, Device>) -> Self {
+        Self::new_inner(id, size, None)
+    }
+
+    pub(crate) fn with_blur_shapes(
+        id: SurfaceId,
+        size: Size<DevicePx, Device>,
+        supported: Arc<AtomicBool>,
+    ) -> Self {
+        Self::new_inner(id, size, Some(supported))
+    }
+
+    fn new_inner(
+        id: SurfaceId,
+        size: Size<DevicePx, Device>,
+        blur_shapes_supported: Option<Arc<AtomicBool>>,
+    ) -> Self {
         Self {
             id,
             size: Mutex::new(size),
@@ -247,6 +266,7 @@ impl OffscreenSurface {
             layer_log: Mutex::new(Vec::new()),
             input_region_log: Mutex::new(Vec::new()),
             opaque_region_log: Mutex::new(Vec::new()),
+            blur_shapes_supported,
             blur_region: Mutex::new(RecordedBlurRegion::None),
             staged_blur: Mutex::new(None),
             pre_presented_blur: Mutex::new(None),
@@ -726,8 +746,8 @@ impl OffscreenSurface {
             .store(millihertz.unwrap_or(0), Ordering::Relaxed);
     }
 
-    fn normalize_blur_region(&self, region: BlurRegion<'_>) -> Option<RecordedBlurRegion> {
-        let is_lock = !matches!(
+    fn is_lock(&self) -> bool {
+        !matches!(
             *self
                 .presentation
                 .lock()
@@ -739,8 +759,11 @@ impl OffscreenSurface {
                 .expect("the attributes are not poisoned")
                 .role,
             SurfaceRole::Lock(_)
-        );
-        if is_lock {
+        )
+    }
+
+    fn normalize_blur_region(&self, region: BlurRegion<'_>) -> Option<RecordedBlurRegion> {
+        if self.is_lock() {
             return None;
         }
         Some(match region {
@@ -771,8 +794,26 @@ impl OffscreenSurface {
                     RecordedBlurRegion::Rects(valid)
                 }
             }
+            BlurRegion::Shapes(shapes) if self.shape_mode() => {
+                let valid: Vec<_> = shapes.iter().copied().filter_map(BlurShape::wire_canonical)
+                    .take(BlurShape::MAX_COUNT).collect();
+                if valid.is_empty() { RecordedBlurRegion::None } else { RecordedBlurRegion::Shapes(valid) }
+            }
             _ => RecordedBlurRegion::None,
         })
+    }
+
+    fn shape_mode(&self) -> bool {
+        self.blur_shapes_supported.as_ref().is_some_and(|flag| flag.load(Ordering::Relaxed))
+    }
+
+    fn commit_staged_blur(&self, normalized: RecordedBlurRegion) {
+        let normalized = if matches!(normalized, RecordedBlurRegion::Shapes(_)) && !self.shape_mode() {
+            RecordedBlurRegion::None
+        } else {
+            normalized
+        };
+        self.commit_blur_region(normalized, false);
     }
 
     fn commit_blur_region(&self, normalized: RecordedBlurRegion, request_redraw: bool) {
@@ -809,7 +850,7 @@ impl OffscreenSurface {
                 .pre_presented_blur
                 .lock()
                 .expect("the pre-presented blur is not poisoned") = Some(prev);
-            self.commit_blur_region(normalized, false);
+            self.commit_staged_blur(normalized);
         } else {
             *self
                 .pre_presented_blur
@@ -1043,6 +1084,10 @@ impl Surface for OffscreenSurface {
             .push(region.map(<[_]>::to_vec));
     }
 
+    fn prefers_blur_shapes(&self) -> bool {
+        self.shape_mode() && !self.is_lock()
+    }
+
     fn set_blur_region(&self, region: BlurRegion<'_>) {
         *self.staged_blur.lock().expect("the staged blur is not poisoned") = None;
         *self
@@ -1106,7 +1151,7 @@ impl Surface for OffscreenSurface {
             .lock()
             .expect("the pre-presented blur is not poisoned") = None;
         if let Some(normalized) = staged {
-            self.commit_blur_region(normalized, false);
+            self.commit_staged_blur(normalized);
         }
     }
 
@@ -1296,6 +1341,49 @@ mod tests {
     use super::OffscreenSurface;
     use zgui_geom::{DevicePx, Size};
     use zgui_platform::{Surface, SurfaceId};
+
+    #[test]
+    fn shape_mode_tracks_independent_capabilities_and_normalizes_wire_values() {
+        use super::{Arc, AtomicBool, RecordedBlurRegion};
+        use crate::Headless;
+        use zgui_platform::{BlurRegion, BlurShape, PlatformCx, SurfaceAttributes};
+
+        for ext_first in [false, true] {
+            let mut platform = Headless::new();
+            let surface = platform.create_surface(&SurfaceAttributes::default()).unwrap();
+            let set_ext: fn(&mut Headless, bool) = Headless::set_background_blur_supported;
+            let set_shapes: fn(&mut Headless, bool) = Headless::set_blur_shapes_supported;
+            let (first, second) = if ext_first { (set_ext, set_shapes) } else { (set_shapes, set_ext) };
+            first(&mut platform, true);
+            assert!(platform.capabilities().supports_background_blur);
+            assert_eq!(surface.prefers_blur_shapes(), !ext_first);
+            second(&mut platform, true);
+            assert!(surface.prefers_blur_shapes());
+            first(&mut platform, false);
+            assert!(platform.capabilities().supports_background_blur);
+            assert_eq!(surface.prefers_blur_shapes(), ext_first);
+            second(&mut platform, false);
+            assert!(!platform.capabilities().supports_background_blur);
+        }
+
+        let size = Size::new(DevicePx(400.0), DevicePx(400.0));
+        let normal = OffscreenSurface::with_blur_shapes(SurfaceId::new(1), size, Arc::new(AtomicBool::new(true)));
+        let lock = OffscreenSurface::new_lock(SurfaceId::new(2), size);
+        let shape = BlurShape {
+            x: -2.83, y: 0.0, width: 8.0, height: 12.0, radii: [-1.0, 3.2, 0.0, 0.0],
+            corner_exponent: 2.83, opacity: 0.2,
+        };
+        let payload = [BlurShape { opacity: 0.001, ..shape }, shape];
+        normal.set_blur_region(BlurRegion::Shapes(&payload));
+        lock.set_blur_region(BlurRegion::Shapes(&payload));
+        let RecordedBlurRegion::Shapes(shapes) = normal.blur_region() else { panic!("no recorded shapes") };
+        assert_eq!(shapes, [BlurShape {
+            x: -724.0 / 256.0, radii: [0.0, 819.0 / 256.0, 0.0, 0.0],
+            corner_exponent: 724.0 / 256.0, opacity: 51.0 / 256.0, ..shape
+        }]);
+        assert!(!lock.prefers_blur_shapes());
+        assert_eq!(lock.blur_region(), RecordedBlurRegion::None);
+    }
 
     /// A surface four hundred pixels square.
     fn surface() -> OffscreenSurface {

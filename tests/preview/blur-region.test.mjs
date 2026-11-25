@@ -415,6 +415,7 @@ test("blurRegion end-to-end across transparent WindowSurface, LayerSurface, Popu
       advance("after-reopen"),
       capture("pop-reopened", "glass-pop"),
 
+      { id: "enable-lock-shapes", op: "setBlurShapesSupported", supported: true },
       // 6. SessionLockSurface remains opaque and blurRegion === "none"
       click("main", "lock-start"),
       advance("after-lock"),
@@ -433,6 +434,7 @@ test("blurRegion end-to-end across transparent WindowSurface, LayerSurface, Popu
   ]) {
     const frame = await readFrame(out, `surfaces/${surface}/${cap}`);
     assert.equal(frame.blurRegion, "none", `${surface} defaults to blurRegion "none"`);
+    assert.ok(!Object.hasOwn(frame, "blurShapes"), "default evidence omits blurShapes");
     assert.equal(frame.renderer.compositorTransparencyValidated, false);
     assert.equal(frame.renderer.alphaMode, "PreMultiplied");
   }
@@ -498,6 +500,7 @@ test("blurRegion end-to-end across transparent WindowSurface, LayerSurface, Popu
   // Lock surface stays opaque (alpha 255) and blurRegion === "none"
   const lockFrame = await readFrame(out, "surfaces/lock-dp1/lock-surface");
   assert.equal(lockFrame.blurRegion, "none");
+  assert.equal(lockFrame.blurShapes, "none");
   const lockPng = await readPng(path.join(out, "captures/surfaces/lock-dp1/lock-surface.png"));
   assert.equal(pixelAt(lockPng, 10, 10)[3], 255, "lock surface must remain opaque");
 
@@ -690,6 +693,7 @@ test("native node blurRegion resolves rounded/superellipse corners, minOpacity, 
       LayerSurface,
       WindowSurface,
       createSignal,
+      getBackgroundBlurSupported,
       mountShellStylesheet,
       renderApp,
     } from "@hewel/zgui";
@@ -702,6 +706,7 @@ test("native node blurRegion resolves rounded/superellipse corners, minOpacity, 
         mountShellStylesheet("reset", ":root { padding: 0; background-color: transparent; }");
         const [mode, setMode] = createSignal<
           | "squircle"
+          | "straightClip"
           | "min08"
           | "min00"
           | "zeroOp"
@@ -727,7 +732,8 @@ test("native node blurRegion resolves rounded/superellipse corners, minOpacity, 
 
         const resolveBlur = (): BlurRegion | undefined => {
           switch (mode()) {
-            case "squircle": {
+            case "squircle":
+            case "straightClip": {
               const n = squircleNode();
               return n ? [n] : [];
             }
@@ -808,6 +814,11 @@ test("native node blurRegion resolves rounded/superellipse corners, minOpacity, 
               <Button testId="m-none" onClick={() => setMode("none")}>NO</Button>
               <Button testId="m-w102" onClick={() => setHalfWidth(102)}>W2</Button>
             </row>
+            <row>
+              <Button testId="m-dim" onClick={() => setCardOpacity(0.25)}>Dim</Button>
+              <Button testId="m-slice" onClick={() => setMode("straightClip")}>Slice</Button>
+              <text testId="blur-support">{getBackgroundBlurSupported() ? "available" : "unavailable"}</text>
+            </row>
 
             <WindowSurface
               name="native-blur-win"
@@ -823,7 +834,7 @@ test("native node blurRegion resolves rounded/superellipse corners, minOpacity, 
                   testId="squircle-card"
                   style={{
                     position: "fixed",
-                    left: "20px",
+                    left: mode() === "straightClip" ? "-20px" : "20px",
                     top: "16px",
                     width: "120px",
                     height: "80px",
@@ -861,6 +872,7 @@ test("native node blurRegion resolves rounded/superellipse corners, minOpacity, 
                     style={{
                       width: "100px",
                       height: "60px",
+                      opacity: cardOpacity() === 0.25 ? 0.25 : 1,
                       backgroundColor: "rgba(60, 40, 120, 0.4)",
                     }}
                   />
@@ -1039,4 +1051,78 @@ test("native node blurRegion resolves rounded/superellipse corners, minOpacity, 
   assert.deepEqual((await readFrame(out, "surfaces/half-scale-bar/half-102")).blurRegion, [
     { x: 0, y: 0, width: 102, height: 40 },
   ]);
+
+  const shapeProfile = path.join(temp.dir, "native-node-shapes.json");
+  await writeJson(shapeProfile, {
+    ...JSON.parse(await readFile(profile, "utf8")),
+    blurShapes: true,
+  });
+  const mode = (id, op, supported) => ({ id, op, supported });
+  const shapeCapture = id => capture(id, "native-blur-win");
+  const shapeOp = "setBlurShapesSupported";
+  const binaryOp = "setBackgroundBlurSupported";
+  const shapes = await runScenario({
+    projectDir: temp.dir,
+    bundle: nativeBundle,
+    profile: shapeProfile,
+    name: "native-exact-blur-shapes",
+    requiredCapabilities: ["pixels", "capture.transparent", "surface.multiple"],
+    assertEmptyResources: true,
+    steps: [
+      { id: "outputs", op: "monitors.set", monitors: [monitor, halfMonitor] },
+      shapeCapture("exact"),
+      click("main", "m-dim"),
+      shapeCapture("dim"),
+      mode("binary-on-after-shapes", binaryOp, true),
+      mode("shape-off", shapeOp, false),
+      shapeCapture("binary-fallback"),
+      capture("binary-support", "main"),
+      mode("binary-off", binaryOp, false),
+      capture("neither-support", "main"),
+      mode("binary-first", binaryOp, true),
+      mode("shape-after-binary", shapeOp, true),
+      mode("binary-withdrawn", binaryOp, false),
+      capture("shape-support", "main"),
+      click("main", "m-slice"),
+      shapeCapture("straight-cut"),
+      click("main", "m-rclip"),
+      shapeCapture("rounded-cut"),
+      mode("withdraw-shape", shapeOp, false),
+      capture("neither-again", "main"),
+    ],
+  });
+  const shapeFrame = id => readFrame(shapes.out, `surfaces/native-blur-win/${id}`);
+  const exact = {
+    x: 20,
+    y: 16,
+    width: 120,
+    height: 80,
+    radii: [20, 20, 20, 20],
+    cornerExponent: 724 / 256,
+    opacity: 154 / 256,
+  };
+  assert.deepEqual((await shapeFrame("exact")).blurShapes, [exact]);
+  assert.deepEqual((await shapeFrame("dim")).blurShapes, [{ ...exact, opacity: 0.25 }]);
+  const fallback = await shapeFrame("binary-fallback");
+  assert.equal(fallback.blurRegion, "none");
+  assert.ok(!Object.hasOwn(fallback, "blurShapes"));
+  for (const [id, support] of [
+    ["binary-support", "available"],
+    ["neither-support", "unavailable"],
+    ["shape-support", "available"],
+    ["neither-again", "unavailable"],
+  ]) {
+    assert.equal(getNode(await readTree(shapes.out, id), "blur-support").text, support);
+  }
+  assert.deepEqual((await shapeFrame("straight-cut")).blurShapes, [
+    { ...exact, x: 0, width: 100, radii: [0, 20, 20, 0], opacity: 0.25 },
+  ]);
+  const rounded = (await shapeFrame("rounded-cut")).blurShapes;
+  assert.ok(Array.isArray(rounded) && rounded.length > 1);
+  assert.ok(rounded[0].x > 10);
+  for (const strip of rounded) {
+    assert.deepEqual(strip.radii, [0, 0, 0, 0]);
+    assert.equal(strip.cornerExponent, 2);
+    assert.equal(strip.opacity, 0.25);
+  }
 });
