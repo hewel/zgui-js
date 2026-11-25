@@ -44,29 +44,53 @@ Before the first public release:
 
 ## 4. First-Time Bootstrap & OIDC Trusted Publisher Binding
 
+> **Status:** Initial bootstrap for the 6 packages above completed with `v0.1.0`. Routine releases
+> follow Section 5 directly via `publish-oidc`. Retain this procedure when onboarding any future
+> brand-new public package (such as `@hewel/zgui-host-linux-arm64`).
+
 npm requires a package to exist before Trusted Publishing (OIDC) can be configured in the npm UI.
 
-1. Generate a temporary, short-lived npm **Automation** token with publish access to `@hewel` and
-   `create-zgui-js`, and store it as `NPM_TOKEN` **only** inside the protected `npm-bootstrap`
-   GitHub Environment (never as a repository-wide secret).
-2. Cut and push the initial release tag `vX.Y.Z` (see Section 5). Wait for `verify-rust-and-vendor`,
-   `build-and-verify-linux-x64`, and `verify-installed-release` to succeed, or dispatch `release.yml`
-   manually on tag `vX.Y.Z` with `mode=bootstrap`.
-3. Immediately after all 6 packages appear on npmjs.org, open **Settings -> Publishing access ->
-   Trusted Publisher** for **each** of the 6 packages and add GitHub Actions:
+1. Generate a temporary, short-lived npm **Granular Access Token** (legacy classic Automation tokens
+   are phased out) and store it as `NPM_TOKEN` **only** inside the protected `npm-bootstrap` GitHub
+   Environment (never as a repository-wide secret):
+   - **Packages and scopes:** select **All packages** (brand-new packages do not appear in the
+     existing-package picker) with **`Read and write (publish and stage)`** — selecting
+     `Read and write (stage only)` causes direct `npm publish` to fail with `E_STAGE_REQUIRED`.
+   - **Two-factor authentication:** check **"Bypass two-factor authentication (2FA)"** at creation
+     time (this flag cannot be toggled afterward; omitting it fails CI publishing with `EOTP`).
+2. Cut and push the initial release tag `vX.Y.Z` (see Section 5), then dispatch `release.yml`
+   manually on tag `vX.Y.Z` with `mode=bootstrap`:
+   ```sh
+   gh workflow run release.yml --ref vX.Y.Z -f mode=bootstrap
+   ```
+   - Because `.github/workflows/release.yml` serializes runs per ref (`concurrency: group: release-${{ github.ref }}`, `cancel-in-progress: false`), the automatic `push` run triggered by pushing `vX.Y.Z` (which will fail at `publish-oidc` before OIDC is bound) holds the concurrency lock. Cancel that automatic `push` run (`gh run cancel <push-run-id>`) so the `mode=bootstrap` run starts immediately.
+   - Wait for `verify-rust-and-vendor`, `build-and-verify-linux-x64`, `verify-installed-release`, and `publish-bootstrap` to succeed.
+3. Immediately after all new packages appear on npmjs.org, open **Settings -> Publishing access ->
+   Trusted Publisher** for **each** package and add GitHub Actions:
    - **Organization / user:** `hewel`
    - **Repository:** `zgui-js`
    - **Workflow filename:** `release.yml`
    - **Environment name:** `npm-release`
 4. On each package's npm settings page, enable **"Require two-factor authentication and disallow
    tokens"** (or restrict publishing exclusively to Trusted Publishing), then **revoke** the
-   temporary `NPM_TOKEN` and delete it from the `npm-bootstrap` environment.
+   temporary Granular Access Token on npmjs.org and delete `NPM_TOKEN` from the `npm-bootstrap`
+   environment (`gh secret delete NPM_TOKEN --env npm-bootstrap`).
 
 From that point onward, standard `v*` tag pushes run `publish-oidc` using `id-token: write` and
 `npm publish --provenance` with zero static npm secrets. `publish-oidc` never reads `NPM_TOKEN`
 and never downgrades from OIDC provenance.
 
 ## 5. Cutting a Release
+
+Optional pre-release cloud rehearsal on `main` (runs the full Ubuntu 24.04 build, Rust/vendor
+tests, isolated install verification, and `--dry-run` publish with `contents: read` and zero
+publish credentials):
+
+```sh
+gh workflow run release.yml --ref main -f mode=dry-run
+```
+
+Standard release cut:
 
 ```sh
 # 1. Bump all 7 workspace packages, root package.json, Cargo.toml, and Cargo.lock in lockstep
@@ -76,27 +100,29 @@ bun run release:version -- --set 0.2.0
 bun install
 bun run build:packages
 
-# 3. Run read-only release preflight and full repository gate
+# 3. Run read-only release preflight and full repository gate (inside shell.nix on Nix Linux hosts)
 bun run release:check -- --tag v0.2.0
 bun run check
 
-# 4. Commit and tag
+# 4. Update CHANGELOG.md, commit, and tag
 git commit -am "chore(release): v0.2.0"
 git tag v0.2.0
 git push origin main v0.2.0
 ```
 
 - Pushing tag `vX.Y.Z` triggers `.github/workflows/release.yml`:
-  1. `verify-rust-and-vendor` (parallel): runs workspace Rust tests, Clippy, and all vendored crate
-     test suites on `ubuntu-24.04`.
-  2. `build-and-verify-linux-x64` (parallel): runs `release.ts check --tag`, JS/TS formatting,
-     lint, typecheck, and build tests, builds release `zgui-host`, audits `ldd`, packs and audits
-     all 6 tarballs, and uploads `release-artifacts`.
-  3. `verify-installed-release`: clean `ubuntu-24.04` runner without Rust/Cargo that serves the
-     exact uploaded tarballs over a local HTTP registry, installs via `bun install --linker isolated`
-     (with no direct host dependency), and verifies `create-zgui-js`, `doctor`, `build` (including
-     static `components.css` hoisting), `package --bytecode` (including `licenses/`), headless
-     Vulkan `preview`, read-only `smoke` & `inspect --ui`, `oxlint`, `tsrs`, and pinned `tsc`.
+  1. `verify-rust-and-vendor` (parallel, 60m timeout): runs workspace Rust tests, Clippy, and all
+     vendored crate test suites on `ubuntu-24.04`.
+  2. `build-and-verify-linux-x64` (parallel, 60m timeout): runs `release.ts check --tag`, JS/TS
+     formatting, lint, typecheck, and build tests, builds release `zgui-host`, audits `ldd`, packs
+     and audits all 6 tarballs, and uploads `release-artifacts`.
+  3. `verify-installed-release`: clean `ubuntu-24.04` runner without Rust/Cargo that runs
+     `tools/verify-release-artifacts.ts` over an in-process local HTTP registry serving the exact
+     uploaded tarballs, installs via `bun install --linker isolated` (with no direct host
+     dependency), and verifies `create-zgui-js`, `doctor`, `build` (including static
+     `components.css` hoisting), `package --bytecode` (including `licenses/`), headless Lavapipe
+     Vulkan `preview` (`status === "passed"`, `teardown.clean === true`), read-only `smoke` &
+     `inspect --ui`, `oxlint`, `tsrs`, and pinned `tsc`.
   4. `publish-oidc`: gated on all three verification jobs, publishes the exact verified tarballs
      from `release-artifacts` using OIDC `--provenance`.
 - Prerelease tags (e.g. `v0.2.0-rc.1`) automatically publish under their prerelease dist-tag
@@ -106,13 +132,17 @@ git push origin main v0.2.0
 
 ## 6. Partial-Failure Idempotent Resume
 
-If publishing fails midway (e.g. after 3 of 6 packages were uploaded due to transient registry
-errors):
+If publishing fails midway (e.g. due to transient registry errors or credential/permission fixes):
 
 1. **Never rebuild fresh tarballs** for the same version — always reuse the exact `release-artifacts`
    bundle (including `release-manifest.json`) produced by the failed workflow run.
-2. Re-run the `publish-oidc` job on that workflow run (or run
-   `bun tools/release.ts publish --manifest release-artifacts/release-manifest.json --provenance`).
+2. Re-run only the failed publish job on that workflow run — via **Re-run failed jobs** in the
+   GitHub Actions UI or:
+   ```sh
+   gh run rerun <run-id> --failed
+   ```
+   (Or locally against downloaded artifacts:
+   `bun tools/release.ts publish --manifest release-artifacts/release-manifest.json --provenance`.)
 3. `tools/release.ts publish` queries each package version's `dist.integrity` (`sha512-...`) on the
    registry:
    - **Exact SRI match:** logs `SKIP` and proceeds to the next package in topological order.

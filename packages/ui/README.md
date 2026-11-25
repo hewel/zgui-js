@@ -5,6 +5,21 @@ Native TSX components and reactive primitives for the zgui-js host. Use the pack
 not browser elements. `renderApp` owns the mounted subtree and returns its
 idempotent disposer.
 
+## Install
+
+Scaffold a full app (recommended):
+
+```sh
+bun create zgui-js my-app
+```
+
+Or add `@hewel/zgui` to an existing Bun project:
+
+```sh
+bun add @hewel/zgui solid-js
+bun add -d @hewel/zgui-cli
+```
+
 The UI runtime is authored in strict TypeScript and compiled into ES2022 `.js` + `.d.ts`
 artifacts under `dist/` (`bun run build:packages`). Published entry points support strict
 consumer projects with `noUncheckedIndexedAccess`, `exactOptionalPropertyTypes`, and

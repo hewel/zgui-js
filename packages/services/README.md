@@ -1,4 +1,12 @@
-# Native services
+# `@hewel/zgui-services`
+
+Capability-gated native host services for `zgui-js` applications.
+
+## Install
+
+```sh
+bun add @hewel/zgui-services
+```
 
 `@hewel/zgui-services` is separate from `@hewel/zgui`. Its implementation and public types
 are authored in strict ES2022 TypeScript without browser or Node globals, and compiled into

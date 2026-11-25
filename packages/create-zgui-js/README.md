@@ -14,8 +14,11 @@ Then install dependencies and start developing:
 ```sh
 cd my-app
 bun install
+bunx zgui-js doctor
 bun run dev
 ```
+
+On Linux `x86_64` (`glibc >= 2.39`), `bun install` automatically downloads the prebuilt `@hewel/zgui-host-linux-x64` runtime via `@hewel/zgui-cli`'s `optionalDependencies` — no Rust toolchain is required.
 
 ## Options
 

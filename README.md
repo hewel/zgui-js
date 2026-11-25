@@ -37,28 +37,72 @@ See [`llms.txt`](llms.txt) for a concise SDK/CLI map and [runtime ownership diag
 
 ## Requirements
 
-| Component        | Requirement                                                                                  |
-| ---------------- | -------------------------------------------------------------------------------------------- |
-| Rust             | `1.100.0`, pinned by [`rust-toolchain.toml`](rust-toolchain.toml) (only for building host)   |
-| Bun              | `>=1.4.4` — runtime, package manager, and test runner (`bunfig.toml`, `bun.lock`)            |
-| tsrs             | `7.1.0-beta.tsrs2`, installed locally via Bun (no global compiler required)                  |
-| oxlint / oxfmt   | `1.94.0` / `0.79.0` (type-aware lint via `tsrs`, formatting via `oxfmt`)                     |
-| Native toolchain | C/C++ compiler toolchain for `rquickjs` / native crates (when not using prebuilt host pkgs)  |
-| Graphics         | Vulkan / GPU adapter and driver supported by the native `wgpu` renderer (or Mesa `llvmpipe`) |
+### App development (published npm packages)
 
-- **Platform support:** Interactive examples and Wayland shells are verified on Linux with Wayland. Prebuilt host distribution ships Linux x64 glibc (`@hewel/zgui-host-linux-x64`, `ubuntu-24.04` / `glibc >= 2.39` baseline) via `@hewel/zgui-cli` `optionalDependencies`, falling back automatically to Cargo inside a repo checkout.
-- **Pinned dependencies:** Keep `Cargo.lock` and `bun.lock` when installing or building. See the [implementation baseline](docs/development/baseline.md) and [`vendor/README.md`](vendor/README.md) for audited pins and local native patches.
+No Rust or C/C++ toolchain is required on Linux `x86_64` (`glibc >= 2.39`):
+
+| Component     | Requirement                                                                                                                             |
+| ------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| Bun           | `>=1.4.4` — runtime, package manager, and CLI runner                                                                                    |
+| Linux runtime | `x86_64` GNU `glibc >= 2.39` (`ubuntu-24.04` baseline) with Wayland, Vulkan, Fontconfig, FreeType, and `libxkbcommon` runtime libraries |
+| Graphics      | Vulkan / GPU adapter and driver supported by the native `wgpu` renderer (or Mesa `llvmpipe` for headless preview)                       |
+
+### Building `zgui-host` from source (repository contributors & other Linux targets)
+
+| Component        | Requirement                                                                                                                                                |
+| ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Rust             | `1.100.0`, pinned by [`rust-toolchain.toml`](rust-toolchain.toml)                                                                                          |
+| Native toolchain | C/C++ compiler toolchain and `-dev` headers for `rquickjs`, Wayland, Vulkan, Fontconfig, FreeType, and `libxkbcommon` (or [`shell.nix`](shell.nix) on Nix) |
+| Pinned dev tools | `tsrs` (`7.1.0-beta.tsrs2`), `oxlint` (`1.94.0`), `oxfmt` (`0.79.0`) installed locally via Bun                                                             |
+
+- **Platform support:** Interactive examples and Wayland shells are verified on Linux with Wayland. Prebuilt host distribution ships Linux x64 glibc ([`@hewel/zgui-host-linux-x64`](https://www.npmjs.com/package/@hewel/zgui-host-linux-x64)) automatically via `@hewel/zgui-cli` `optionalDependencies`, falling back automatically to Cargo inside a repo checkout.
+- **Pinned dependencies:** Keep `Cargo.lock` and `bun.lock` when developing inside this repository. See the [implementation baseline](docs/development/baseline.md) and [`vendor/README.md`](vendor/README.md) for audited pins and local native patches.
+
+## Published packages
+
+All 6 public packages are published in lockstep on npmjs.org (see [`CHANGELOG.md`](CHANGELOG.md) and [`docs/development/npm-release.md`](docs/development/npm-release.md)):
+
+| Package                                                                                  | Purpose                                                                                                                                        |
+| ---------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| [`@hewel/zgui`](https://www.npmjs.com/package/@hewel/zgui)                               | Zero-DOM Solid 2.0 native UI SDK, renderer, themed components, headless primitives, router, icons, `tsconfig.native.json`, and `oxlint` preset |
+| [`@hewel/zgui-services`](https://www.npmjs.com/package/@hewel/zgui-services)             | Capability-gated host service APIs (HTTP/SSE/WS, SQLite/KV, files/bookmarks, clipboard, sockets, commands, workers)                            |
+| [`@hewel/zgui-build`](https://www.npmjs.com/package/@hewel/zgui-build)                   | Programmatic compiler (`@solidjs/compiler`, Lightning CSS, Rolldown), `tsrs` typechecker, host resolver, and packager                          |
+| [`@hewel/zgui-cli`](https://www.npmjs.com/package/@hewel/zgui-cli)                       | `zgui-js` CLI (`init`, `dev`, `build`, `preview`, `package`, `doctor`, `inspect`, `smoke`) with prebuilt Inspector UI                          |
+| [`create-zgui-js`](https://www.npmjs.com/package/create-zgui-js)                         | Project scaffolder (`bun create zgui-js`)                                                                                                      |
+| [`@hewel/zgui-host-linux-x64`](https://www.npmjs.com/package/@hewel/zgui-host-linux-x64) | Prebuilt Linux `x86_64` glibc `zgui-host` binary (installed automatically via `@hewel/zgui-cli` `optionalDependencies`)                        |
 
 ## Quick start
 
-From the repository root:
+### Create a standalone app (from npm)
+
+```sh
+bun create zgui-js my-app
+# or a Wayland desktop shell:
+# bun create zgui-js my-shell --template wayland-shell
+
+cd my-app
+bun install
+bunx zgui-js doctor    # verify Bun, prebuilt zgui-host ABI, Wayland, Vulkan, portal, tsrs, oxlint
+bun run dev
+```
+
+Common standalone CLI commands via `@hewel/zgui-cli` (`zgui-js`):
+
+```sh
+bunx zgui-js build --bytecode
+bunx zgui-js package --bytecode --desktop-entry --out dist-app
+bunx zgui-js preview --out preview-out
+bunx zgui-js inspect --ui --socket /tmp/app.inspect.sock
+```
+
+### Develop from this repository
 
 ```sh
 bun install --frozen-lockfile
 bun run dev --app counter
 ```
 
-Useful CLI workflows via `@hewel/zgui-cli` (`zgui-js`):
+Useful repository workflows:
 
 ```sh
 bun run doctor                     # check Bun, zgui-host ABI, Wayland, Vulkan, XDG portal, tsrs, oxlint
@@ -66,13 +110,6 @@ bun run dev --app md-editor        # build & open Markdown Studio with async tsr
 bun run build --app counter --bytecode
 bun run package --app md-editor --bytecode --out target/md-editor-pkg
 bun run inspect --ui --socket /tmp/app.inspect.sock
-```
-
-To scaffold a new standalone project:
-
-```sh
-bun create zgui-js my-app
-# or: bun packages/cli/src/cli.ts init my-app --template desktop-app|wayland-shell
 ```
 
 ## Application model & SDK
@@ -101,6 +138,9 @@ Run any example with `bun run dev --app <name>` or `bun run preview --app <name>
 | `selection`   | Controlled and uncontrolled choice controls                                                                      |
 | `tabs`        | Keyboard-navigable tabs and panels                                                                               |
 | `gallery`     | Full interactive component showcase across themes, overlays, menus, and `CommandPalette`                         |
+| `motion-lab`  | `createSpring` presets, `createCanvasScene` vector arena & stroke matrix, `<VirtualGrid>`, and reduced motion    |
+| `sysmon`      | Live system monitor using `spawnCommand`, `onControlMessage`, canvas gauges/timelines, and `<VirtualList>`       |
+| `workspace`   | Multi-panel Studio workspace combining `Menubar`, `ContextMenu`, `DropdownMenu`, `Dialog`, `HoverCard`, and tabs |
 
 ## Offscreen previews
 
@@ -138,33 +178,34 @@ bun run test:preview  # build counter + zgui-host and run headless GPU preview s
 
 ## Repository layout
 
-| Path                                                 | Purpose                                                                                                            |
-| ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
-| [`crates/zgui-host`](crates/zgui-host)               | Package/bytecode loader, Wayland/desktop hosting, atomic & CSS-only reload, dev banner, visual inspector, preview  |
-| [`crates/js-runtime`](crates/js-runtime)             | Embedded QuickJS-NG runtime, verified module/bytecode evaluation, turn guards, and rejection tracking              |
-| [`crates/ui-bridge`](crates/ui-bridge)               | Native node handles, properties, event dispatch, geometry queries, canvas, and document selection                  |
-| [`crates/host-services`](crates/host-services)       | Rust-backed async network, SQLite, files/bookmarks, clipboard, sockets, commands, and compute workers              |
-| [`packages/ui`](packages/ui)                         | `@hewel/zgui` TSX SDK, renderer, router, primitives, components, icons, and `oxlint/plugin.mjs` preset             |
-| [`packages/services`](packages/services)             | `@hewel/zgui-services` typed host-service client APIs                                                              |
-| [`packages/build`](packages/build)                   | `@hewel/zgui-build` programmatic compiler (`@solidjs/compiler`, Lightning CSS, Rolldown), typecheck, packager      |
-| [`packages/cli`](packages/cli)                       | `@hewel/zgui-cli` npm CLI (`zgui-js`: `init`, `dev`, `build`, `preview`, `package`, `doctor`, `inspect`, `smoke`)  |
-| [`packages/create-zgui-js`](packages/create-zgui-js) | `create-zgui-js` project scaffolder (`bun create zgui-js`)                                                         |
-| [`packages/host-linux-x64`](packages/host-linux-x64) | Prebuilt Linux x64 `zgui-host` npm `optionalDependencies` package                                                  |
-| [`apps/devtools/inspector`](apps/devtools/inspector) | Self-hosted `zgui-js` visual Inspector window (`zgui-js inspect --ui`)                                             |
-| [`apps/examples`](apps/examples)                     | Runnable example applications                                                                                      |
-| [`preview`](preview)                                 | Preview profiles (`default.json`, `functional.json`), fixtures, scenarios, Noto fonts, comparison policies         |
-| [`schemas/preview`](schemas/preview)                 | JSON Schemas for preview inputs and sealed output contracts                                                        |
-| [`tests`](tests)                                     | Build, strict type, native-fixture, and GPU preview integration tests                                              |
-| [`tools`](tools)                                     | Vendor test runner (`test-vendor.mjs`), memory profiler, host package staging, read-only `forge-status.ts`         |
-| [`vendor`](vendor)                                   | Pinned upstream `zgui` crates with documented local patches ([`vendor/README.md`](vendor/README.md))               |
-| [`docs/adr`](docs/adr)                               | Architecture Decision Records (`ADR-0001`–`ADR-0008`)                                                              |
-| [`docs/development`](docs/development)               | Engineering specifications, crate/component maps, baseline contracts, and preview verification                     |
-| [`docs/agents`](docs/agents)                         | GitHub issue/Project conventions ([`issue-tracker.md`](docs/agents/issue-tracker.md)), triage labels, domain rules |
-| [`GLOSSARY.md`](GLOSSARY.md)                         | Canonical domain terminology shared across code and documentation                                                  |
-| [`llms.txt`](llms.txt)                               | Machine-checked SDK & CLI reference for developers and coding agents                                               |
+| Path                                                 | Purpose                                                                                                               |
+| ---------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| [`crates/zgui-host`](crates/zgui-host)               | Package/bytecode loader, Wayland/desktop hosting, atomic & CSS-only reload, dev banner, visual inspector, preview     |
+| [`crates/js-runtime`](crates/js-runtime)             | Embedded QuickJS-NG runtime, verified module/bytecode evaluation, turn guards, and rejection tracking                 |
+| [`crates/ui-bridge`](crates/ui-bridge)               | Native node handles, properties, event dispatch, geometry queries, canvas, and document selection                     |
+| [`crates/host-services`](crates/host-services)       | Rust-backed async network, SQLite, files/bookmarks, clipboard, sockets, commands, and compute workers                 |
+| [`packages/ui`](packages/ui)                         | `@hewel/zgui` TSX SDK, renderer, router, primitives, components, icons, and `oxlint/plugin.mjs` preset                |
+| [`packages/services`](packages/services)             | `@hewel/zgui-services` typed host-service client APIs                                                                 |
+| [`packages/build`](packages/build)                   | `@hewel/zgui-build` programmatic compiler (`@solidjs/compiler`, Lightning CSS, Rolldown), typecheck, packager         |
+| [`packages/cli`](packages/cli)                       | `@hewel/zgui-cli` npm CLI (`zgui-js`: `init`, `dev`, `build`, `preview`, `package`, `doctor`, `inspect`, `smoke`)     |
+| [`packages/create-zgui-js`](packages/create-zgui-js) | `create-zgui-js` project scaffolder (`bun create zgui-js`)                                                            |
+| [`packages/host-linux-x64`](packages/host-linux-x64) | Prebuilt Linux x64 `zgui-host` npm `optionalDependencies` package                                                     |
+| [`apps/devtools/inspector`](apps/devtools/inspector) | Self-hosted `zgui-js` visual Inspector window (`zgui-js inspect --ui`)                                                |
+| [`apps/examples`](apps/examples)                     | Runnable example applications                                                                                         |
+| [`preview`](preview)                                 | Preview profiles (`default.json`, `functional.json`), fixtures, scenarios, Noto fonts, comparison policies            |
+| [`schemas/preview`](schemas/preview)                 | JSON Schemas for preview inputs and sealed output contracts                                                           |
+| [`tests`](tests)                                     | Build, strict type, native-fixture, and GPU preview integration tests                                                 |
+| [`tools`](tools)                                     | Release orchestration (`release.ts`, `verify-release-artifacts.ts`), vendor test runner (`test-vendor.mjs`), profiler |
+| [`vendor`](vendor)                                   | Pinned upstream `zgui` crates with documented local patches ([`vendor/README.md`](vendor/README.md))                  |
+| [`docs/adr`](docs/adr)                               | Architecture Decision Records (`ADR-0001`–`ADR-0008`)                                                                 |
+| [`docs/development`](docs/development)               | Engineering specifications, crate/component maps, baseline contracts, and preview verification                        |
+| [`docs/agents`](docs/agents)                         | GitHub issue/Project conventions ([`issue-tracker.md`](docs/agents/issue-tracker.md)), triage labels, domain rules    |
+| [`GLOSSARY.md`](GLOSSARY.md)                         | Canonical domain terminology shared across code and documentation                                                     |
+| [`llms.txt`](llms.txt)                               | Machine-checked SDK & CLI reference for developers and coding agents                                                  |
 
 ## Documentation
 
+- [`CHANGELOG.md`](CHANGELOG.md) — release history and published package highlights.
 - [`llms.txt`](llms.txt) — concise SDK, primitives, services, and CLI reference.
 - [`GLOSSARY.md`](GLOSSARY.md) — shared domain vocabulary.
 - [`docs/adr/`](docs/adr) — architectural decisions (`ADR-0001` Solid 2.0 through `ADR-0008` Wave 3 DX & Primitives).
