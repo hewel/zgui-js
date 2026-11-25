@@ -38,34 +38,57 @@ function parseArgs(argv: string[]): ParsedArgs {
   return { manifestPath: path.resolve(manifestPath), skipPreview, tscBin };
 }
 
-function runSync(
+async function runCommand(
   cmd: string[],
   {
     cwd,
     env,
     timeout = 120_000,
   }: { cwd: string; env?: Record<string, string | undefined>; timeout?: number },
-): { stdout: string; stderr: string } {
-  const child = Bun.spawnSync(cmd, {
+): Promise<{ stdout: string; stderr: string }> {
+  // Spawn asynchronously so the in-process Bun.serve local release registry keeps serving requests.
+  const child = Bun.spawn(cmd, {
     cwd,
     env,
     stdin: "ignore",
     stdout: "pipe",
     stderr: "pipe",
-    timeout,
   });
-  const stdout = child.stdout.toString("utf8");
-  const stderr = child.stderr.toString("utf8");
-  if (!child.success) {
-    throw new Error(
-      `Command failed (${cmd.join(" ")}) in ${cwd} (exit ${child.signalCode ?? child.exitCode}):\nSTDOUT:\n${stdout}\nSTDERR:\n${stderr}`,
-    );
+  let timedOut = false;
+  let forceKillTimer: ReturnType<typeof setTimeout> | undefined;
+  const timer = setTimeout(() => {
+    timedOut = true;
+    child.kill("SIGTERM");
+    forceKillTimer = setTimeout(() => {
+      child.kill("SIGKILL");
+    }, 5_000);
+    forceKillTimer.unref?.();
+  }, timeout);
+  try {
+    const [stdout, stderr, exitCode] = await Promise.all([
+      new Response(child.stdout).text(),
+      new Response(child.stderr).text(),
+      child.exited,
+    ]);
+    if (timedOut || exitCode !== 0) {
+      const reason = timedOut
+        ? `timed out after ${timeout}ms`
+        : `exit ${child.signalCode ?? exitCode}`;
+      throw new Error(
+        `Command failed (${cmd.join(" ")}) in ${cwd} (${reason}):\nSTDOUT:\n${stdout}\nSTDERR:\n${stderr}`,
+      );
+    }
+    return { stdout, stderr };
+  } finally {
+    clearTimeout(timer);
+    if (forceKillTimer !== undefined) {
+      clearTimeout(forceKillTimer);
+    }
   }
-  return { stdout, stderr };
 }
 
 async function readPackedPackageJson(tarballPath: string): Promise<Record<string, unknown>> {
-  const { stdout } = runSync(["tar", "-xOf", tarballPath, "package/package.json"], {
+  const { stdout } = await runCommand(["tar", "-xOf", tarballPath, "package/package.json"], {
     cwd: path.dirname(tarballPath),
   });
   return JSON.parse(stdout) as Record<string, unknown>;
@@ -141,6 +164,7 @@ async function startLocalReleaseRegistry(manifestPath: string) {
 
       const upstreamUrl = `${UPSTREAM_REGISTRY}${url.pathname}${url.search}`;
       const upstream = await fetch(upstreamUrl, {
+        method: req.method,
         headers: { Accept: req.headers.get("accept") ?? "application/json" },
       });
       return new Response(upstream.body, {
@@ -192,6 +216,7 @@ const cleanPath = (process.env.PATH ?? "")
 const cleanEnv: Record<string, string | undefined> = {
   ...process.env,
   PATH: cleanPath,
+  BUN_INSTALL_CACHE_DIR: path.join(workDir, ".bun-cache"),
   ZGUI_JS_HOST_EXECUTABLE: undefined,
   ZGUI_JS_HOST_ROOT: undefined,
   NPM_CONFIG_REGISTRY: registry.url,
@@ -213,13 +238,13 @@ try {
       dependencies: { "create-zgui-js": registry.manifest.version },
     }),
   );
-  runSync([process.execPath, "install", "--linker", "isolated"], {
+  await runCommand([process.execPath, "install", "--linker", "isolated"], {
     cwd: scaffolderDir,
     env: cleanEnv,
   });
 
   const appDir = path.join(workDir, "demo-app");
-  runSync(
+  await runCommand(
     [path.join(scaffolderDir, "node_modules/.bin/create-zgui-js"), appDir, "--name", "demo-app"],
     { cwd: workDir, env: cleanEnv },
   );
@@ -242,7 +267,7 @@ try {
   );
 
   // 2. Real bun install --linker isolated against the local release registry.
-  runSync([process.execPath, "install", "--linker", "isolated"], {
+  await runCommand([process.execPath, "install", "--linker", "isolated"], {
     cwd: appDir,
     env: cleanEnv,
   });
@@ -251,7 +276,9 @@ try {
   const resolvedTsc = tscBin ?? path.join(appDir, "node_modules/.bin/tsc");
 
   // 3. Doctor must resolve @hewel/zgui-host-linux-x64 via platform-package with zero Cargo/env.
-  const doctorOut = runSync([zguiBin, "doctor", "--json"], { cwd: appDir, env: cleanEnv }).stdout;
+  const doctorOut = (
+    await runCommand([zguiBin, "doctor", "--json"], { cwd: appDir, env: cleanEnv })
+  ).stdout;
   const doctor = JSON.parse(doctorOut) as {
     ok: boolean;
     checks: { id: string; status: string; detail: string }[];
@@ -267,7 +294,7 @@ try {
   console.log("PASS doctor:", hostCheck.detail);
 
   // 4. Build and verify static components.css hoisting.
-  runSync([zguiBin, "build"], { cwd: appDir, env: cleanEnv });
+  await runCommand([zguiBin, "build"], { cwd: appDir, env: cleanEnv });
   const buildManifest = JSON.parse(
     await readFile(path.join(appDir, "dist/manifest.json"), "utf8"),
   ) as { styles: string[] };
@@ -280,7 +307,7 @@ try {
 
   // 5. Package with --bytecode (zero explicit host flags) and verify licenses/ redistribution.
   const pkgOut = path.join(workDir, "packaged-demo");
-  runSync([zguiBin, "package", "--bytecode", "--desktop-entry", "--out", pkgOut], {
+  await runCommand([zguiBin, "package", "--bytecode", "--desktop-entry", "--out", pkgOut], {
     cwd: appDir,
     env: cleanEnv,
   });
@@ -304,7 +331,7 @@ try {
   // 6. Headless Vulkan preview capture (unless explicitly skipped).
   if (!skipPreview) {
     const previewOut = path.join(workDir, "preview-out");
-    runSync([zguiBin, "preview", "--out", previewOut], { cwd: appDir, env: cleanEnv });
+    await runCommand([zguiBin, "preview", "--out", previewOut], { cwd: appDir, env: cleanEnv });
     const resultJson = JSON.parse(await readFile(path.join(previewOut, "result.json"), "utf8")) as {
       status?: string;
     };
@@ -315,11 +342,11 @@ try {
   }
 
   // 7. Lint (oxlint), tsrs, and pinned official tsc (skipLibCheck false & true, exactOptionalPropertyTypes).
-  runSync([path.join(appDir, "node_modules/.bin/oxlint"), "--deny-warnings"], {
+  await runCommand([path.join(appDir, "node_modules/.bin/oxlint"), "--deny-warnings"], {
     cwd: appDir,
     env: cleanEnv,
   });
-  runSync([path.join(appDir, "node_modules/.bin/tsrs"), "--noEmit"], {
+  await runCommand([path.join(appDir, "node_modules/.bin/tsrs"), "--noEmit"], {
     cwd: appDir,
     env: cleanEnv,
   });
@@ -338,7 +365,10 @@ try {
         include: ["src"],
       }),
     );
-    runSync([resolvedTsc, "--project", cfgPath, "--noEmit"], { cwd: appDir, env: cleanEnv });
+    await runCommand([resolvedTsc, "--project", cfgPath, "--noEmit"], {
+      cwd: appDir,
+      env: cleanEnv,
+    });
   }
   console.log(
     "PASS oxlint + tsrs + official tsc (skipLibCheck=false/true, exactOptionalPropertyTypes=true)",
@@ -348,7 +378,7 @@ try {
   const nodeModulesDir = path.join(appDir, "node_modules");
   await chmodTree(nodeModulesDir, 0o555);
   try {
-    runSync([zguiBin, "smoke"], { cwd: appDir, env: cleanEnv });
+    await runCommand([zguiBin, "smoke"], { cwd: appDir, env: cleanEnv });
     console.log("PASS read-only zgui-js smoke");
 
     // Verify prebuilt inspect --ui executes cleanly against a dummy mock host without writing to node_modules.
@@ -365,9 +395,11 @@ console.log(JSON.stringify({ args }));
 `,
       { mode: 0o755 },
     );
-    const inspectOut = runSync(
-      [zguiBin, "inspect", "--ui", "--host-executable", probeHost, "--socket", "/tmp/zgui.sock"],
-      { cwd: appDir, env: cleanEnv },
+    const inspectOut = (
+      await runCommand(
+        [zguiBin, "inspect", "--ui", "--host-executable", probeHost, "--socket", "/tmp/zgui.sock"],
+        { cwd: appDir, env: cleanEnv },
+      )
     ).stdout;
     const inspectParsed = JSON.parse(inspectOut) as { args: string[] };
     const bundleIdx = inspectParsed.args.indexOf("--bundle");

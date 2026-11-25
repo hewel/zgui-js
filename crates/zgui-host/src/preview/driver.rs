@@ -55,6 +55,8 @@ struct PreviewHost {
     native: Runtime,
     host: SessionHost,
     deadline: Rc<Cell<Instant>>,
+    run_deadline: Instant,
+    step_budget: Duration,
     observers: FrameObservers,
     monitors: Vec<Monitor>,
     recreate_shell: Option<String>,
@@ -143,7 +145,16 @@ impl PreviewHost {
     }
 }
 impl AppHandler for PreviewHost {
-    fn surfaces_available(&mut self, cx: &dyn PlatformCx) { self.native.surfaces_available(cx); self.after_native(cx); }
+    fn surfaces_available(&mut self, cx: &dyn PlatformCx) {
+        self.native.surfaces_available(cx);
+        // Cold headless graphics / Lavapipe initialization runs inside `native.surfaces_available`
+        // before any JS executes; start the initial bootstrap step budget afterward while still
+        // clamping to `run_deadline`.
+        if self.host.generation() == 0 {
+            self.deadline.set(self.run_deadline.min(Instant::now() + self.step_budget));
+        }
+        self.after_native(cx);
+    }
     fn surfaces_lost(&mut self, cx: &dyn PlatformCx) {
         let deadline = self.deadline.get();
         self.deadline.set(deadline.min(Instant::now()+Duration::from_millis(20)));
@@ -315,7 +326,8 @@ impl Driver {
         let observers = FrameObservers::new(package.manifest.build_id.clone(), environment.clone(), sink, mode);
         let pending = Rc::new(RefCell::new(Vec::new()));
         let surface = &profile.profile.surface;
-        let deadline = Rc::new(Cell::new(run_deadline.min(Instant::now()+Duration::from_millis(profile.profile.limits.max_step_wall_ms))));
+        let step_budget = Duration::from_millis(profile.profile.limits.max_step_wall_ms);
+        let deadline = Rc::new(Cell::new(run_deadline.min(Instant::now() + step_budget)));
         let limits = js_runtime::RuntimeLimits {
             entry_timeout:Duration::from_millis(profile.profile.limits.max_js_entry_wall_ms),
             bootstrap_timeout:Duration::from_millis(profile.profile.limits.max_step_wall_ms),
@@ -338,6 +350,8 @@ impl Driver {
             native,
             host: session_host,
             deadline: deadline_ref,
+            run_deadline,
+            step_budget,
             observers: observer_ref,
             monitors: Vec::new(),
             recreate_shell: None,
@@ -940,7 +954,7 @@ mod tests {
         use crate::test_package::Fixture;
 
         let profile_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../preview/profiles/default.json");
+            .join("../../preview/profiles/functional.json");
         let profile = profile::load(&profile_path, &profile::Overrides::default()).unwrap();
         let fixture_def: FixtureDefinition = serde_json::from_value(serde_json::json!({
             "schemaVersion": 1, "id": "driver-test", "services": {}, "events": []
@@ -1018,7 +1032,7 @@ mod tests {
         use super::super::evidence;
 
         let profile_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../preview/profiles/default.json");
+            .join("../../preview/profiles/functional.json");
         let profile = profile::load(&profile_path, &profile::Overrides::default()).unwrap();
         let fixture: FixtureDefinition = serde_json::from_value(json!({
             "schemaVersion": 1, "id": "checkpoint-recovery", "services": {}, "events": []
