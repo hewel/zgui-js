@@ -146,9 +146,25 @@ jobs:
           path: release-artifacts
 
       - name: Verify isolated installation, bytecode packaging, headless preview, read-only inspect/smoke, oxlint, tsrs, and tsc
-        env:
-          VK_DRIVER_FILES: /usr/share/vulkan/icd.d/lvp_icd.x86_64.json
         run: |
+          LVP_ICD=""
+          for candidate in \
+            "/usr/share/vulkan/icd.d/lvp_icd.$(uname -m).json" \
+            "/usr/share/vulkan/icd.d/lvp_icd.json" \
+            /usr/share/vulkan/icd.d/lvp_icd*.json; do
+            if [ -f "$candidate" ]; then
+              LVP_ICD="$candidate"
+              break
+            fi
+          done
+          if [ -z "$LVP_ICD" ]; then
+            echo "ERROR: Lavapipe Vulkan ICD manifest (lvp_icd*.json) not found under /usr/share/vulkan/icd.d" >&2
+            ls -la /usr/share/vulkan/icd.d >&2 || true
+            exit 1
+          fi
+          echo "Using Lavapipe ICD: $LVP_ICD"
+          export VK_DRIVER_FILES="$LVP_ICD"
+          export ZGUI_BACKENDS="vulkan"
           bun tools/verify-release-artifacts.ts --manifest release-artifacts/release-manifest.json
 
   publish-dry-run:

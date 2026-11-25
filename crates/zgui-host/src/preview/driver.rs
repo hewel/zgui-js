@@ -1011,4 +1011,77 @@ mod tests {
         assert!(fault2.diagnostic.as_ref().and_then(|d| d["mappedStack"].as_str())
             .is_some_and(|s| s.contains("app.mjs")));
     }
+
+    #[test]
+    fn recovers_latest_main_checkpoint_after_undeclared_named_window() {
+        use crate::test_package::Fixture;
+        use super::super::evidence;
+
+        let profile_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../preview/profiles/default.json");
+        let profile = profile::load(&profile_path, &profile::Overrides::default()).unwrap();
+        let fixture: FixtureDefinition = serde_json::from_value(json!({
+            "schemaVersion": 1, "id": "checkpoint-recovery", "services": {}, "events": []
+        })).unwrap();
+        let app = Fixture::new(r#"
+            export const hostApiVersion = 1;
+            export function mount(root) {
+                const label = __zgui.createTextNode('initial main');
+                __zgui.insertNode(root, label, null);
+                let windowId;
+                setTimeout(() => {
+                    windowId = __zguiShell.openWindow('aux', {
+                        title: 'Aux', width: 320, height: 240, transparent: false,
+                    }, (auxRoot, bridge) => {
+                        bridge.insertNode(auxRoot, bridge.createTextNode('auxiliary'), null);
+                        return () => bridge.clearRoot(auxRoot);
+                    }, () => {});
+                }, 50);
+                setTimeout(() => {
+                    __zguiShell.closeWindow(windowId);
+                    __zgui.replaceText(label, 'updated main');
+                }, 150);
+                return () => __zgui.clearRoot(root);
+            }
+        "#, "");
+        let package = app.package();
+        let root = package.directory.join("preview-output");
+        let output = Rc::new(RefCell::new(Output::create(&root, profile.profile.limits.max_output_bytes).unwrap()));
+        let mut driver = Driver::new(
+            &profile, package, fixture, output.clone(),
+            Instant::now() + Duration::from_secs(10), stylesheet(&profile), ReloadConfig::default(),
+        ).unwrap();
+        driver.begin_step(0, None);
+        driver.settle(true).unwrap();
+        driver.begin_step(1, None);
+        driver.advance(100).unwrap();
+        driver.begin_step(2, None);
+        driver.advance(100).unwrap();
+        drop(driver);
+
+        let recovered = evidence::recover(&mut output.borrow_mut()).unwrap();
+        assert_eq!(recovered["available"], true);
+        let read = |path: &std::path::Path| -> Value {
+            serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap()
+        };
+        let named_frame_path = std::fs::read_dir(root.join("evidence")).unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|path| path.file_name().and_then(|name| name.to_str())
+                .is_some_and(|name| name.contains("-checkpoint-") && name.ends_with(".frame.json")))
+            .max().expect("auxiliary window checkpoint");
+        let named_frame = read(&named_frame_path);
+        let named_tree = read(&named_frame_path.with_file_name(
+            named_frame_path.file_name().unwrap().to_str().unwrap().replace(".frame.json", ".tree.json"),
+        ));
+        assert_eq!(named_frame["surface"], "aux");
+        let named_sequence = named_frame["checkpointSequence"].as_u64().expect("auxiliary checkpoint sequence");
+        assert_eq!(named_tree["checkpointSequence"], named_sequence);
+        let frame = read(&root.join(recovered["frame"].as_str().unwrap()));
+        let tree = read(&root.join(recovered["tree"].as_str().unwrap()));
+        assert_eq!(frame["surface"], "main");
+        let main_sequence = frame["checkpointSequence"].as_u64().expect("main checkpoint sequence");
+        assert!(main_sequence > named_sequence);
+        assert_eq!(tree["checkpointSequence"], main_sequence);
+        assert!(tree["nodes"].as_array().unwrap().iter().any(|node| node["text"] == "updated main"));
+    }
 }

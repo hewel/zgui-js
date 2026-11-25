@@ -572,7 +572,7 @@ struct ObservationContext {
     sink: RefCell<Box<dyn CheckpointSink>>,
     build_id: String,
     environment: Rc<Environment>,
-    multiple: bool,
+    multiple: Cell<bool>,
     action: Cell<u64>,
     frames: Cell<u64>,
     current_checkpoint: Cell<Option<SurfaceId>>,
@@ -609,7 +609,7 @@ impl FrameObservers {
     pub fn new(build_id: String, environment: Rc<Environment>, sink: Box<dyn CheckpointSink>, mode: ObservationMode) -> Self {
         let has_primary = !matches!(mode, ObservationMode::ShellOnly);
         let context = Rc::new(ObservationContext {
-            sink: RefCell::new(sink), build_id, environment, multiple: !matches!(mode, ObservationMode::PrimaryOnly),
+            sink: RefCell::new(sink), build_id, environment, multiple: Cell::new(!matches!(mode, ObservationMode::PrimaryOnly)),
             action: Cell::new(0), frames: Cell::new(0), current_checkpoint: Cell::new(None),
             graphics: RefCell::new(Value::Null), fault: RefCell::new(None),
         });
@@ -767,7 +767,11 @@ impl ObserverInner {
                 "height": window_geometry.height,
             }));
         }
-        if self.context.multiple {
+        let named = region.name != "main";
+        if named {
+            self.context.multiple.set(true);
+        }
+        if self.context.multiple.get() {
             tree.extra.insert("checkpointSequence".into(), json!(sequence));
             extra.insert("checkpointSequence".into(), json!(sequence));
         }
@@ -791,7 +795,7 @@ impl ObserverInner {
         // Persist complete owned evidence before another callback can fail or block.
         // Do not advance committed metadata or `last` if persistence fails.
         let (tree_path, frame_path) = evidence::checkpoint_paths(
-            session.generation, observation.ordinal, (region.name != "main").then_some(sequence));
+            session.generation, observation.ordinal, named.then_some(sequence));
         let publication = (|| {
             let tree_value =
                 serde_json::to_value(&tree).map_err(|e| Error::new("E_OUTPUT_IO", 8, e.to_string()))?;
