@@ -4,6 +4,7 @@ import path from "node:path";
 import {
   buildFixtureApp,
   createTempWorkspace,
+  functionalProfile,
   getNode as get,
   readTree as tree,
   runScenario,
@@ -82,6 +83,7 @@ async function run(steps, name, variant = "main") {
   const res = await runScenario({
     projectDir: temp.dir,
     bundle: bundles[variant],
+    profile: functionalProfile,
     name,
     id: `dialog-${name}`,
     requiredCapabilities: [

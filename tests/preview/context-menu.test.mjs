@@ -4,6 +4,7 @@ import path from "node:path";
 import {
   buildFixtureApp,
   createTempWorkspace,
+  functionalProfile,
   getNode as get,
   readTree as tree,
   runScenario,
@@ -66,6 +67,7 @@ function run(steps, name) {
   return runScenario({
     projectDir: temp.dir,
     bundle,
+    profile: functionalProfile,
     name,
     id: `context-menu-${name}`,
     requiredCapabilities: [

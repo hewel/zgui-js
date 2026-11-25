@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import {
   chmod,
   mkdir,
@@ -24,8 +24,11 @@ import { withPackLock } from "./pack-lock.mjs";
 const execute = promisify(execFile);
 const releaseTool = path.join(workspaceRoot, "tools/release.ts");
 const pinnedTsc = path.join(workspaceRoot, "node_modules/.bin/tsc");
+const { version: workspaceHostVersion } = JSON.parse(
+  readFileSync(path.join(workspaceRoot, "packages/host-linux-x64/package.json"), "utf8"),
+);
 
-function makeMockReleaseHost(version = "0.1.0") {
+function makeMockReleaseHost() {
   return `#!${process.execPath}
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
@@ -34,7 +37,7 @@ const args = process.argv.slice(2);
 if (args[0] === "--version" || args[0] === "-V") {
   console.log(JSON.stringify({
     name: "zgui-host",
-    version: ${JSON.stringify(version)},
+    version: ${JSON.stringify(workspaceHostVersion)},
     hostApiVersion: 1,
     schemaVersion: 2,
     platform: "linux-x64",
@@ -267,7 +270,7 @@ test(
     await mkdir(bunCacheDir, { recursive: true });
 
     const mockHost = path.join(tmpDir, "mock-zgui-host");
-    await writeFile(mockHost, makeMockReleaseHost("0.1.0"), { mode: 0o755 });
+    await writeFile(mockHost, makeMockReleaseHost(), { mode: 0o755 });
 
     await withPackLock(async () => {
       await execute(
@@ -306,7 +309,7 @@ test(
       JSON.stringify({
         name: "scaffolder-test",
         private: true,
-        dependencies: { "create-zgui-js": "0.1.0" },
+        dependencies: { "create-zgui-js": registry.manifest.version },
       }),
     );
     await execute(process.execPath, ["install", "--linker", "isolated"], {
@@ -501,8 +504,9 @@ export function mount(root: NativeNode): () => void {
       [releaseTool, "publish", "--manifest", manifestPath, "--registry", registry.url, "--dry-run"],
       { cwd: workspaceRoot },
     );
-    assert.match(skipOut, /SKIP @hewel\/zgui@0\.1\.0/);
-    assert.match(skipOut, /SKIP create-zgui-js@0\.1\.0/);
+    const { version } = registry.manifest;
+    assert.ok(skipOut.includes(`SKIP @hewel/zgui@${version} (`), skipOut);
+    assert.ok(skipOut.includes(`SKIP create-zgui-js@${version} (`), skipOut);
 
     registry.setTampered("@hewel/zgui-cli");
     await assert.rejects(
@@ -519,7 +523,9 @@ export function mount(root: NativeNode): () => void {
         ],
         { cwd: workspaceRoot },
       ),
-      /FAIL-CLOSED dist\.integrity mismatch for @hewel\/zgui-cli@0\.1\.0/,
+      new RegExp(
+        RegExp.escape(`FAIL-CLOSED dist.integrity mismatch for @hewel/zgui-cli@${version}:`),
+      ),
     );
     registry.setTampered(null);
 

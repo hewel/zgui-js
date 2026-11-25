@@ -4,6 +4,7 @@ import path from "node:path";
 import {
   buildExampleApp,
   createTempWorkspace,
+  functionalProfile,
   getNode,
   readTree,
   runScenario,
@@ -128,6 +129,7 @@ function run(name, steps) {
   return runScenario({
     projectDir: temp.dir,
     bundle,
+    profile: functionalProfile,
     fixture: fixturePath,
     name,
     id: `md-editor-${name}`,

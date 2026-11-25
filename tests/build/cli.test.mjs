@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import {
   cp,
   lstat,
@@ -33,9 +33,12 @@ const execute = promisify(execFile);
 const cli = path.join(workspaceRoot, "packages/cli/src/cli.ts");
 const createCli = path.join(workspaceRoot, "packages/create-zgui-js/src/cli.ts");
 const stageScript = path.join(workspaceRoot, "tools/stage-host-package.ts");
+const { version: workspaceHostVersion } = JSON.parse(
+  readFileSync(path.join(workspaceRoot, "packages/host-linux-x64/package.json"), "utf8"),
+);
 
 function makeMockHostScript({
-  version = "0.1.0",
+  version = workspaceHostVersion,
   hostApiVersion = 1,
   schemaVersion = 2,
   platform = `${process.platform}-${process.arch}`,
@@ -227,7 +230,7 @@ test("deterministic host resolution honors precedence, verifies staged packages,
     `#!${process.execPath}
 import { writeFileSync } from "node:fs";
 writeFileSync(${JSON.stringify(markerPath)}, "executed");
-console.log(JSON.stringify({ name: "zgui-host", version: "0.1.0", hostApiVersion: 1, schemaVersion: 2, platform: "linux-x64" }));
+console.log(JSON.stringify({ name: "zgui-host", version: ${JSON.stringify(workspaceHostVersion)}, hostApiVersion: 1, schemaVersion: 2, platform: "linux-x64" }));
 `,
     { mode: 0o755 },
   );
@@ -331,12 +334,8 @@ test("zgui-js doctor --json reports structured checks and fails closed on ABI mi
 
   const goodHost = path.join(dir, "good-host");
   const badHost = path.join(dir, "bad-host");
-  await writeFile(goodHost, makeMockHostScript({ version: "0.1.0", hostApiVersion: 1 }), {
-    mode: 0o755,
-  });
-  await writeFile(badHost, makeMockHostScript({ version: "0.1.0", hostApiVersion: 7 }), {
-    mode: 0o755,
-  });
+  await writeFile(goodHost, makeMockHostScript(), { mode: 0o755 });
+  await writeFile(badHost, makeMockHostScript({ hostApiVersion: 7 }), { mode: 0o755 });
 
   const { stdout } = await execute(
     process.execPath,

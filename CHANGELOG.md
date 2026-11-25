@@ -7,6 +7,14 @@ packages version in lockstep using [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- CLI and npm release tests use the workspace and packed versions instead of a fixed release number.
+- Preview teardown leaves time for native shutdown and telemetry without removing the per-disposer
+  JavaScript timeout. Debug builds default to 200 ms per disposer; release builds default to 20 ms.
+- Heavy menu, dialog, and Markdown editor preview tests use the functional profile on Lavapipe.
+  Timing-sensitive suites keep the default profile.
+
 ## [0.1.0] - 2026-11-25
 
 Initial public npm release of `zgui-js` — native Linux/Wayland desktop apps and Wayland shells

@@ -37,7 +37,7 @@ pub struct RuntimeLimits {
     pub entry_timeout: Duration,
     /// Whole smoke bootstrap, including module jobs and runSmoke: 2 s by default.
     pub bootstrap_timeout: Duration,
-    /// Bounded disposal entry policy: 20 ms by default, independent of normal entries.
+    /// Bounded disposal entry: 20 ms in release (200 ms in debug), independent of normal entries.
     pub cleanup_timeout: Duration,
     /// Maximum attempted jobs per pump, including throwing jobs: 256 by default.
     pub max_jobs_per_pump: usize,
@@ -63,7 +63,7 @@ impl Default for RuntimeLimits {
         Self {
             entry_timeout: default_turn_timeout,
             bootstrap_timeout: Duration::from_secs(2),
-            cleanup_timeout: Duration::from_millis(20),
+            cleanup_timeout: Duration::from_millis(if cfg!(debug_assertions) { 200 } else { 20 }),
             max_jobs_per_pump: 256,
             job_timeout: default_turn_timeout,
             memory_limit_bytes: 64 * 1024 * 1024,

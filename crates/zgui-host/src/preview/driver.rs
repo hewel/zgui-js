@@ -57,6 +57,7 @@ struct PreviewHost {
     deadline: Rc<Cell<Instant>>,
     run_deadline: Instant,
     step_budget: Duration,
+    teardown_budget: Duration,
     observers: FrameObservers,
     monitors: Vec<Monitor>,
     recreate_shell: Option<String>,
@@ -157,7 +158,7 @@ impl AppHandler for PreviewHost {
     }
     fn surfaces_lost(&mut self, cx: &dyn PlatformCx) {
         let deadline = self.deadline.get();
-        self.deadline.set(deadline.min(Instant::now()+Duration::from_millis(20)));
+        self.deadline.set(deadline.min(Instant::now() + self.teardown_budget));
         self.host.stop_shell_surfaces(&mut self.native, cx);
         if let Some(session) = self.session() {
             let report = session.retire();
@@ -215,6 +216,7 @@ pub struct Driver {
     shell_geometry: BTreeMap<SurfaceId, ShellGeometry>,
     deadline: Rc<Cell<Instant>>,
     run_deadline: Instant,
+    teardown_budget: Duration,
     step_start_frame: Cell<u64>,
     limits: Limits,
     dimensions: (u32,u32),
@@ -328,14 +330,19 @@ impl Driver {
         let surface = &profile.profile.surface;
         let step_budget = Duration::from_millis(profile.profile.limits.max_step_wall_ms);
         let deadline = Rc::new(Cell::new(run_deadline.min(Instant::now() + step_budget)));
+        let defaults = js_runtime::RuntimeLimits::default();
+        let entry_timeout = Duration::from_millis(profile.profile.limits.max_js_entry_wall_ms);
         let limits = js_runtime::RuntimeLimits {
-            entry_timeout:Duration::from_millis(profile.profile.limits.max_js_entry_wall_ms),
-            bootstrap_timeout:Duration::from_millis(profile.profile.limits.max_step_wall_ms),
+            entry_timeout,
+            bootstrap_timeout: step_budget,
+            cleanup_timeout: defaults.cleanup_timeout.max(entry_timeout.min(Duration::from_millis(250))),
             max_jobs_per_pump:profile.profile.limits.max_jobs_per_pump as usize,
             job_timeout:Duration::from_millis(profile.profile.limits.max_pump_wall_ms),
-            stack_limit_bytes:profile.profile.limits.max_js_stack_bytes.unwrap_or_else(|| js_runtime::RuntimeLimits::default().stack_limit_bytes),
-            ..Default::default()
+            stack_limit_bytes: profile.profile.limits.max_js_stack_bytes.unwrap_or(defaults.stack_limit_bytes),
+            ..defaults
         };
+        // Native surface shutdown and telemetry share the enclosing window, not the JS entry's budget.
+        let teardown_budget = step_budget.min(Duration::from_secs(1)).max(limits.cleanup_timeout);
         let shell_opacity = if surface.opaque { SurfaceOpacity::Opaque } else { SurfaceOpacity::Transparent };
         let mut session_host = SessionHost::new(pending.clone(), SessionModule::package(package.clone()),
             SessionPolicy::preview(limits, deadline.clone(), environment.clone(), fixtures.clone())
@@ -352,6 +359,7 @@ impl Driver {
             deadline: deadline_ref,
             run_deadline,
             step_budget,
+            teardown_budget,
             observers: observer_ref,
             monitors: Vec::new(),
             recreate_shell: None,
@@ -361,7 +369,7 @@ impl Driver {
             retired: None,
             retired_telemetry: None,
         })?;
-        let mut driver = Self { pipeline,observers,shell_geometry:BTreeMap::new(),deadline,run_deadline,step_start_frame:Cell::new(0),limits:profile.profile.limits.clone(),
+        let mut driver = Self { pipeline,observers,shell_geometry:BTreeMap::new(),deadline,run_deadline,teardown_budget,step_start_frame:Cell::new(0),limits:profile.profile.limits.clone(),
             dimensions:(profile.physical_width,profile.physical_height),surface:surface.clone(),
             environment,fixtures,maximum_time_us:start+profile.profile.limits.max_virtual_duration_ms*1000,startup_fault:None,pure_shell,shell_capable,lock_capable,bundle_dir,scenario_dir };
         let setup = if pure_shell { driver.check() } else { driver.bind_main() };
@@ -821,7 +829,7 @@ impl Driver {
         self.observer(id)?.publish_failure_evidence(Some(window), readiness, self.window_current(window))
     }
     pub fn finish(mut self) -> (Value, Option<Fault>, Option<RuntimeTelemetry>) {
-        self.deadline.set(self.run_deadline.min(Instant::now()+Duration::from_millis(20)));
+        self.deadline.set(self.run_deadline.min(Instant::now() + self.teardown_budget));
         self.pipeline.shut_down();
         if self.lock_capable { self.fixtures.record_session_lock(self.session_lock_snapshot()); }
         {
@@ -1024,6 +1032,46 @@ mod tests {
         assert_eq!((fault2.error.code, fault2.error.exit_code), ("E_TEARDOWN", 9));
         assert!(fault2.diagnostic.as_ref().and_then(|d| d["mappedStack"].as_str())
             .is_some_and(|s| s.contains("app.mjs")));
+    }
+
+    #[test]
+    fn runaway_disposer_is_interrupted_during_preview_teardown() {
+        use super::pipeline::MemorySink;
+        use crate::test_package::Fixture;
+
+        let profile_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../preview/profiles/functional.json");
+        let profile = profile::load(&profile_path, &profile::Overrides::default()).unwrap();
+        let fixture: FixtureDefinition = serde_json::from_value(json!({
+            "schemaVersion": 1, "id": "runaway-disposer", "services": {}, "events": []
+        })).unwrap();
+        let app = Fixture::new(r#"
+            export const hostApiVersion = 1;
+            export function mount() {
+                return () => { while (true) {} };
+            }
+        "#, "");
+        let mut driver = Driver::with_sink(
+            &profile,
+            app.package(),
+            fixture,
+            MemorySink::new().boxed(),
+            Instant::now() + Duration::from_secs(10),
+            stylesheet(&profile),
+        ).unwrap();
+        driver.check().unwrap();
+
+        let start = Instant::now();
+        let (teardown, fault, _) = driver.finish();
+        let elapsed = start.elapsed();
+        assert!(elapsed < Duration::from_secs(2), "teardown took {elapsed:?}");
+        assert_eq!(teardown["clean"], false);
+        let fault = fault.expect("runaway disposer must fail teardown");
+        assert_eq!((fault.error.code, fault.error.exit_code), ("E_TEARDOWN", 9));
+        let diagnostic = fault.diagnostic.expect("interrupted disposer must have a diagnostic");
+        assert_eq!(diagnostic["phase"], "cleanup");
+        assert_eq!(diagnostic["kind"], "Interrupted");
+        assert!(diagnostic["generatedStack"].as_str().is_some_and(|s| s.contains("app.mjs")));
     }
 
     #[test]
