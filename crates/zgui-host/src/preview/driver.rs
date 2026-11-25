@@ -896,8 +896,21 @@ pub(super) fn evaluate_retirement(report: Option<&SessionRetirement>) -> Option<
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{Mutex, MutexGuard, PoisonError};
     use super::*;
     use crate::session::{RetirementFailure, SessionRetirement};
+
+    // Headless `Driver` unit tests spin up real wgpu/Lavapipe pipelines in one process;
+    // serialize them to prevent Mesa 24 concurrent-teardown SIGSEGV and 4-vCPU startup starvation.
+    static HEADLESS_DRIVER_LOCK: Mutex<()> = Mutex::new(());
+
+    fn lock_headless_driver() -> MutexGuard<'static, ()> {
+        HEADLESS_DRIVER_LOCK.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn run_deadline_for(profile: &LoadedProfile) -> Instant {
+        Instant::now() + Duration::from_millis(profile.profile.limits.max_run_wall_ms)
+    }
 
     #[test]
     fn evaluate_retirement_enforces_teardown_and_precedence() {
@@ -961,6 +974,7 @@ mod tests {
         use super::pipeline::MemorySink;
         use crate::test_package::Fixture;
 
+        let _driver_guard = lock_headless_driver();
         let profile_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../preview/profiles/functional.json");
         let profile = profile::load(&profile_path, &profile::Overrides::default()).unwrap();
@@ -980,7 +994,7 @@ mod tests {
         "#, "");
         let sink1 = MemorySink::new();
         sink1.fail_checkpoint_after(Some(1));
-        let deadline = Instant::now() + Duration::from_secs(10);
+        let deadline = run_deadline_for(&profile);
         let mut driver1 = Driver::with_sink(
             &profile,
             updating.package(),
@@ -1018,7 +1032,7 @@ mod tests {
             bad_cleanup.package(),
             fixture_def,
             sink2.boxed(),
-            Instant::now() + Duration::from_secs(10),
+            run_deadline_for(&profile),
             stylesheet(&profile),
         ).unwrap();
         driver2.begin_step(0, None);
@@ -1039,6 +1053,7 @@ mod tests {
         use super::pipeline::MemorySink;
         use crate::test_package::Fixture;
 
+        let _driver_guard = lock_headless_driver();
         let profile_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../preview/profiles/functional.json");
         let profile = profile::load(&profile_path, &profile::Overrides::default()).unwrap();
@@ -1056,7 +1071,7 @@ mod tests {
             app.package(),
             fixture,
             MemorySink::new().boxed(),
-            Instant::now() + Duration::from_secs(10),
+            run_deadline_for(&profile),
             stylesheet(&profile),
         ).unwrap();
         driver.check().unwrap();
@@ -1079,6 +1094,7 @@ mod tests {
         use crate::test_package::Fixture;
         use super::super::evidence;
 
+        let _driver_guard = lock_headless_driver();
         let profile_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../preview/profiles/functional.json");
         let profile = profile::load(&profile_path, &profile::Overrides::default()).unwrap();
@@ -1111,7 +1127,7 @@ mod tests {
         let output = Rc::new(RefCell::new(Output::create(&root, profile.profile.limits.max_output_bytes).unwrap()));
         let mut driver = Driver::new(
             &profile, package, fixture, output.clone(),
-            Instant::now() + Duration::from_secs(10), stylesheet(&profile), ReloadConfig::default(),
+            run_deadline_for(&profile), stylesheet(&profile), ReloadConfig::default(),
         ).unwrap();
         driver.begin_step(0, None);
         driver.settle(true).unwrap();
