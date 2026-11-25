@@ -481,7 +481,10 @@ export function attachBackgroundBlurShell(): void {
   if (dispose && getOwner()) onCleanup(dispose);
 }
 
-/** Read-only reactive compositor background-blur capability (`ext_background_effect_v1` `Capability::Blur`). */
+/**
+ * Reactive background blur support for eligible surfaces: `niri_blur_shape_v1` or
+ * `ext_background_effect_v1` with `Capability::Blur`. Lock surfaces never request blur.
+ */
 export function getBackgroundBlurSupported(): boolean {
   const bridge = tryBridgeFor();
   const state = ensureBackgroundBlurState(bridge);

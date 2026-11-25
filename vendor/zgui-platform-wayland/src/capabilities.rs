@@ -60,6 +60,8 @@ pub fn of(offered: Offered) -> PlatformCapabilities {
     // of the tree is written against and the two must not both run.
     capabilities.native_gestures = false;
     capabilities.system_color_scheme = offered.color_scheme;
+    capabilities.supports_blur_shapes = offered.niri_blur_shape;
+    capabilities.supports_background_blur = offered.niri_blur_shape;
     capabilities
 }
 
@@ -89,6 +91,8 @@ pub struct Offered {
     pub color_scheme: bool,
     /// `hyprland_focus_grab_manager_v1`.
     pub focus_grab: bool,
+    /// `niri_blur_shape_manager_v1` version 1.
+    pub niri_blur_shape: bool,
 }
 
 #[cfg(test)]
@@ -143,6 +147,7 @@ mod tests {
             text_input: true,
             color_scheme: true,
             focus_grab: true,
+            niri_blur_shape: true,
         });
         assert!(!everything.absolute_window_position);
         assert!(!everything.window_levels);

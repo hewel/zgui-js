@@ -6,8 +6,11 @@ use smithay_client_toolkit::reexports::client::protocol::wl_output::WlOutput;
 use wayland_protocols::ext::background_effect::v1::client::ext_background_effect_surface_v1::ExtBackgroundEffectSurfaceV1;
 use zgui_geom::{Css, CssPx, Device, DevicePx, Edges, Size};
 use zgui_platform::{PresentationTiming, SurfaceEvent};
+use wayland_client::Proxy as _;
 
+use crate::driver::background_effect::{ActiveBlurProtocol, NiriBlurShapeSurfaceV1};
 use crate::frame::{Ahead, Pacer, Timing, Visibility, Watchdog};
+use crate::surface::region::{BlurBeforePresent, CommittedBlurSnapshot, OwnedBlurRegion};
 use crate::surface::role::toplevel;
 use crate::surface::role::xdg::configure::Pending;
 
@@ -224,14 +227,16 @@ pub(crate) struct Shared {
     /// Picture-bound blur region staged for the next buffer commit (`pre_present`), isolated from
     /// `owes_surface_change()` so it never leaks onto an older buffer via a bare commit.
     pub(crate) blur_staged: Option<crate::surface::region::OwnedBlurRegion>,
-    /// Last blur region confirmed committed onto the surface.
-    pub(crate) blur_last_committed: crate::surface::region::OwnedBlurRegion,
-    /// Snapshot of `blur_last_committed` saved during `pre_present` until present outcome settles.
-    pub(crate) blur_pre_presented: Option<crate::surface::region::OwnedBlurRegion>,
+    /// Last blur state confirmed committed onto the surface.
+    pub(crate) blur_last_committed: CommittedBlurSnapshot,
+    pub(crate) blur_pre_presented: Option<BlurBeforePresent>,
+    pub(crate) blur_pending_commit: Option<CommittedBlurSnapshot>,
     /// Whether background blur state owes a staged protocol update or commit.
     pub(crate) blur_owed: bool,
-    /// At most one `ext_background_effect_surface_v1` associated with this `wl_surface`.
-    pub(crate) blur_surface: Option<ExtBackgroundEffectSurfaceV1>,
+    pub(crate) ext_blur_surface: Option<(u64, ExtBackgroundEffectSurfaceV1)>,
+    pub(crate) niri_blur_surface: Option<(u64, NiriBlurShapeSurfaceV1)>,
+    pub(crate) niri_ever_bound: bool,
+    pub(crate) niri_last_full_extent: Option<Size<CssPx, Css>>,
 }
 
 impl Shared {
@@ -286,10 +291,37 @@ impl Shared {
             opaque_owed: None,
             blur_desired: crate::surface::region::OwnedBlurRegion::None,
             blur_staged: None,
-            blur_last_committed: crate::surface::region::OwnedBlurRegion::None,
+            blur_last_committed: CommittedBlurSnapshot::Unbound,
             blur_pre_presented: None,
+            blur_pending_commit: None,
             blur_owed: false,
-            blur_surface: None,
+            ext_blur_surface: None,
+            niri_blur_surface: None,
+            niri_ever_bound: false,
+            niri_last_full_extent: None,
+        }
+    }
+    pub(crate) fn has_blur_object(&self) -> bool {
+        self.ext_blur_surface.is_some() || self.niri_blur_surface.is_some()
+    }
+
+    pub(crate) fn retire_stale_blur(&mut self, active: &ActiveBlurProtocol) {
+        if self.ext_blur_surface.as_ref().is_some_and(|(generation, effect)| {
+            !effect.is_alive()
+                || !matches!(active, ActiveBlurProtocol::ExtBackgroundEffect(g, _) if g == generation)
+        }) && let Some((_, effect)) = self.ext_blur_surface.take()
+            && effect.is_alive()
+        {
+            effect.destroy();
+        }
+        if self.niri_blur_surface.as_ref().is_some_and(|(generation, effect)| {
+            !effect.is_alive()
+                || !matches!(active, ActiveBlurProtocol::NiriBlurShape(g, _) if g == generation)
+        }) && let Some((_, effect)) = self.niri_blur_surface.take() {
+            if effect.is_alive() {
+                effect.destroy();
+            }
+            self.niri_last_full_extent = None;
         }
     }
 
@@ -335,7 +367,7 @@ impl Shared {
             DevicePx((logical.width.0 as f64 * scale).round() as f32),
             DevicePx((logical.height.0 as f64 * scale).round() as f32),
         );
-        let moved_size = size != self.size;
+        let moved_size = size != self.size || logical != self.logical;
         if !moved_scale && !moved_size {
             return None;
         }
@@ -345,7 +377,11 @@ impl Shared {
         self.unreported = None;
         self.pacer.cancel_held();
         self.blur_staged = None;
-        self.blur_pre_presented = None;
+        if matches!(self.blur_desired, OwnedBlurRegion::Full)
+            && self.niri_last_full_extent.take().is_some()
+        {
+            self.blur_owed = true;
+        }
         self.resize_owed = true;
         Some(if moved_scale {
             SurfaceEvent::ScaleFactorChanged {

@@ -103,6 +103,11 @@ capturing `PopupSurface` `geometryInsets` offsets and visual extent) from
 `OffscreenSurface` without synthesizing blurred pixels;
 `renderer.compositorTransparencyValidated` remains `false`.
 
+The `blur-region.test.mjs` gate also enables `blurShapes` and checks exact squircle
+ticks, continuous opacity, clipped and degraded shapes, independent capability
+toggles and lock exclusion. Default captures must omit `blurShapes`. These are
+client-side mask observations, not validation of a compositor shader or blend.
+
 ## P1 — real TSX capture
 
 `preview run` now mounts the integrity-verified package through the production

@@ -58,6 +58,8 @@
     },
     "theme": { "enum": ["dark", "light"] },
     "reducedMotion": { "type": "boolean", "default": false },
+    "backgroundBlur": { "type": "boolean", "default": false },
+    "blurShapes": { "type": "boolean", "default": false },
     "locale": { "const": "en-US" },
     "direction": { "const": "ltr" },
     "timeZone": { "const": "UTC" },

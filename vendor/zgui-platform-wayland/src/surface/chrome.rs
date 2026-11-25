@@ -187,6 +187,7 @@ pub fn set_visible(surface: &WaylandSurface, visible: bool) {
             surface.restage_blur_for_remap();
             surface.send_layer(true);
             surface.send_regions();
+            surface.send_blur_region(None);
             surface.wl_surface().commit();
         }
         zgui_platform::Surface::request_redraw(surface);
@@ -233,6 +234,7 @@ pub(crate) fn unmap(surface: &WaylandSurface) {
     shared.pacer.cancel_held();
     shared.blur_staged = None;
     shared.blur_pre_presented = None;
+    shared.blur_pending_commit = None;
     shared.cancel_callbacks();
 }
 
@@ -362,6 +364,7 @@ pub fn pre_present(surface: &WaylandSurface, size: Size<i32, Device>, scale: f64
     surface.send_regions();
     surface.ask_for_callback();
     surface.ask_for_feedback();
+    surface.send_blur_region(Some(zgui_platform::Surface::logical_extent_for(surface, size, scale)));
     // Counted where it becomes a statement about visibility: a compositor that is not compositing
     // this surface cannot answer for its frames, and a run of unanswered ones is the only thing
     // that says so on a desktop whose shell reports neither suspension nor a leave.

@@ -169,6 +169,7 @@ impl WaylandState {
         let extras = Extras::bind(globals, &qh);
         let background_effect = Arc::new(background_effect::BackgroundEffectLink::new(
             extras.background_effect.clone(),
+            extras.niri_blur_shape.clone(),
         ));
         let grabs = crate::grab::Grabs::bind(globals, &qh);
         let presentation = Presentation::bind(globals, &qh);
@@ -185,6 +186,7 @@ impl WaylandState {
             primary_selection: primary.is_some(),
             text_input: text_input.is_some(),
             focus_grab: grabs.offered(),
+            niri_blur_shape: extras.niri_blur_shape.is_some(),
             // The toolkit asks for a server-drawn frame per window and the compositor answers per
             // window, so this is what it can do rather than what it did; a window that is told
             // otherwise reports it for itself.

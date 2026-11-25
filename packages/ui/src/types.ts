@@ -69,17 +69,20 @@ export type LayerInputRegion =
   | "empty"
   | readonly NativeWindowRect[]
   | readonly NativeNode[];
-/** Native rounded-node background blur target set with an accumulated effective-opacity cutoff. */
+/** Native background blur behind rounded node bounds and their ancestor clips. */
 export interface BlurRegionNodes {
   readonly nodes: readonly NativeNode[];
-  /** Accumulated effective-opacity cutoff in `[0, 1]`. Default `0.5`; `0` skips only `<= 0` and `visibility: hidden`. */
+  /**
+   * Binary-fallback opacity cutoff in `[0, 1]` (default `0.5`). Shape-capable compositors
+   * use continuous effective opacity, independent of this cutoff.
+   */
   readonly minOpacity?: number | undefined;
 }
 /**
- * Declarative background blur region for an owned non-lock surface.
- * Rectangles use surface-local logical coordinates. Nodes must belong to this surface.
- * `[card]` is exact shorthand for `{ nodes: [card], minOpacity: 0.5 }`.
- * Omitted, `[]`, or `{ nodes: [] }` defaults to `"none"`.
+ * Background blur on owned non-lock surfaces; eligible Wayland surfaces prefer niri shapes.
+ * Rectangles are surface-local logical pixels; nodes must belong to this surface.
+ * `[card]` means `{ nodes: [card], minOpacity: 0.5 }`.
+ * Omitted, `[]`, or `{ nodes: [] }` means `"none"`.
  */
 export type BlurRegion =
   | "none"

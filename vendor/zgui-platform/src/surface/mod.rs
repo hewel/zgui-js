@@ -24,7 +24,7 @@ pub use crate::surface::event::{CloseReason, SurfaceEvent};
 pub use crate::surface::gpu::GpuSurface;
 pub use crate::surface::icon::{BadIcon, WindowIcon};
 pub use crate::surface::id::SurfaceId;
-pub use crate::surface::region::{BlurRegion, InputRect, InputRegion};
+pub use crate::surface::region::{BlurRegion, BlurShape, InputRect, InputRegion};
 pub use crate::surface::role::{
     Anchor, Constrain, ExclusiveZone, KeyboardInteractivity, Layer, LayerPatch, LayerPlacement,
     PopupPlacement, SurfaceRole,
@@ -341,6 +341,11 @@ pub trait Surface: Send + Sync + 'static {
     /// with the next frame. Where it means nothing it costs nothing.
     fn set_opaque_region(&self, region: Option<&[Rect<CssPx, Css>]>) {
         let _ = region;
+    }
+
+    /// Whether this surface currently prefers exact blur shapes over binary rectangles.
+    fn prefers_blur_shapes(&self) -> bool {
+        false
     }
 
     /// Requests compositor background blur behind `region` of this surface, in CSS pixels.

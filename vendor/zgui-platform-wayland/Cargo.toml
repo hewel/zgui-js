@@ -27,12 +27,14 @@ wayland-protocols = { version = "0.32.13", features = ["client", "staging", "uns
 wayland-scanner = "0.31.11"
 zbus = "5.18"
 zgui-geom = { git = "https://github.com/zortax/zgui", rev = "ee29c7dc66206eb04ba7bcf514058a278c9070ba" }
+zgui-layout = { git = "https://github.com/zortax/zgui", rev = "ee29c7dc66206eb04ba7bcf514058a278c9070ba" }
 zgui-platform = { git = "https://github.com/zortax/zgui", rev = "ee29c7dc66206eb04ba7bcf514058a278c9070ba" }
 zgui-profile = { git = "https://github.com/zortax/zgui", rev = "ee29c7dc66206eb04ba7bcf514058a278c9070ba" }
 zgui-vocab = { git = "https://github.com/zortax/zgui", rev = "ee29c7dc66206eb04ba7bcf514058a278c9070ba" }
 
 [target.'cfg(any(target_os = "linux", target_os = "dragonfly", target_os = "freebsd", target_os = "netbsd", target_os = "openbsd"))'.dev-dependencies]
 rustix = { version = "1.1", default-features = false, features = ["std", "net"] }
+sha2 = "0.10"
 tracing = "0.1.44"
 tracing-subscriber = "0.3"
 wayland-protocols-wlr = { version = "0.3.12", features = ["client"] }

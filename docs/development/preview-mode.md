@@ -688,7 +688,8 @@ The 20 ms step is an explicit scenario choice. If the selected backend/profile r
 | `capture`                    | `captureId`; optional `surface` (defaults to `main`) and `requiredFrameTimeUs` | Save coherent pixels, tree, and metadata for the selected surface.                           |
 | `monitors.set`               | `monitors`                                                                     | Replace the synthetic output inventory without advancing virtual time.                       |
 | `popupDone`                  | `surface`                                                                      | Deliver a native destruction event to a named popup, as for compositor dismissal.            |
-| `setBackgroundBlurSupported` | `supported` (boolean)                                                          | Toggle offscreen `supports_background_blur` capability live and settle reactive subscribers. |
+| `setBackgroundBlurSupported` | `supported` (boolean)                                                          | Toggle the binary blur protocol independently of shape support; settle reactive subscribers. |
+| `setBlurShapesSupported`     | `supported` (boolean)                                                          | Toggle shape support and frame evidence without changing the binary blur protocol setting.   |
 
 For explicit position, use `{"x": 120, "y": 40}` in logical surface pixels. The target form and position form are mutually exclusive. Supported pointer buttons are `primary`, `secondary`, and `middle`; reject other values until explicitly implemented. `pointer.down` and `pointer.up` require a button; `pointer.move` and `pointer.cancel` reject one.
 
@@ -1115,7 +1116,11 @@ Store baseline images in an appropriate repository artifact store or versioned l
 
 ### 12.4 Transparency and platform limits
 
-A transparent offscreen image can test alpha pixels and text/render-target policy. Its `PreMultiplied` metadata describes stored pixels, not the Wayland compositor's blend mode; `compositorTransparencyValidated` remains `false`. [Z21] Similarly, headless preview defaults `supports_background_blur` to `false` (configurable via optional profile `backgroundBlur?: boolean` and live `setBackgroundBlurSupported` scenario steps so apps can test both solid fallback and glass branches deterministically via `getBackgroundBlurSupported()`), and records normalized `blurRegion` (`"none"`, `"full"`, or surface-local CSS rectangles) from `OffscreenSurface` in frame evidence (`*.frame.json`) without synthesizing blurred desktop pixels; Wayland wire semantics are verified separately by `vendor/zgui-platform-wayland/tests/background_effect_protocol.rs`.
+A transparent offscreen image can test alpha pixels and text/render-target policy. Its `PreMultiplied` metadata describes stored pixels, not the Wayland compositor's blend mode; `compositorTransparencyValidated` remains `false`. [Z21]
+
+Optional profile flags `backgroundBlur` (binary) and `blurShapes` (rounded masks) default to `false`. Their scenario operations toggle each protocol independently. `getBackgroundBlurSupported()` is true if either is enabled. Neither flag gates registered blur intent. Hosts predating shape support reject unknown profile fields and operations: omit `blurShapes` entirely, even when false, and omit `setBlurShapesSupported` for those hosts.
+
+`*.frame.json` records `blurRegion` (`"none"`, `"full"`, or surface-local CSS rectangle bounds). While shape mode is enabled it also records `blurShapes` (`"none"`, `"full"`, or `{ x, y, width, height, radii, cornerExponent, opacity }[]`). Disabling shape mode omits the field, including on lock surfaces. When enabled, lock surfaces report `"none"`. Preview does not synthesize blurred desktop pixels; [Wayland wire and live-compositor checks](niri-blur-shape.md) are separate.
 
 Do not claim cross-GPU byte identity. Use the recorded environment to distinguish a UI regression from an environment change, then choose the appropriate comparison policy deliberately.
 

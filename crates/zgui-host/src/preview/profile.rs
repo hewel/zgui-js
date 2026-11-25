@@ -61,6 +61,8 @@ pub(crate) struct Profile {
     pub reduced_motion: bool,
     #[serde(default, skip_serializing_if = "is_false")]
     pub background_blur: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub blur_shapes: bool,
     pub locale: String,
     pub direction: String,
     pub time_zone: String,
@@ -437,6 +439,19 @@ mod tests {
         assert!(validate(&enabled).is_ok());
         enabled_json["backgroundBlur"] = json!("blur");
         assert!(serde_json::from_value::<Profile>(enabled_json).is_err());
+    }
+
+    #[test]
+    fn blur_shapes_is_opt_in_without_changing_default_profile_digest() {
+        let mut value = serde_json::to_value(default_profile()).unwrap();
+        assert!(value.get("blurShapes").is_none());
+        let base = value.clone();
+        value["blurShapes"] = json!(false);
+        let disabled: Profile = serde_json::from_value(value.clone()).unwrap();
+        assert_eq!(serde_json::to_value(disabled).unwrap(), base);
+        value["blurShapes"] = json!(true);
+        let enabled: Profile = serde_json::from_value(value).unwrap();
+        assert_eq!(serde_json::to_value(enabled).unwrap()["blurShapes"], true);
     }
 
     fn default_profile() -> Profile {

@@ -33,6 +33,7 @@ const FIRST: u32 = 6;
 const SECOND: u32 = 7;
 const VIEWPORTER: u32 = 8;
 const BACKGROUND_EFFECT: u32 = 9;
+const NIRI_BLUR_SHAPE: u32 = 10;
 const INITIAL: [u32; 2] = [32, 20];
 const RESIZED: [u32; 2] = [48, 25];
 
@@ -201,6 +202,7 @@ fn run_fixture(scenario: Scenario) {
         server.background_effects, 0,
         "session lock surfaces must never allocate ext_background_effect_surface_v1"
     );
+    assert_eq!(server.niri_blur_surfaces, 0, "lock roles must never allocate shape objects");
 }
 
 struct SocketFile(std::path::PathBuf);
@@ -288,6 +290,8 @@ impl AppHandler for Locker {
         if self.scenario.explicitly_unlocks() {
             let attrs = lock_attributes(None);
             let first = cx.create_surface(&attrs).expect("claim the platform-owned output");
+            assert!(cx.capabilities().supports_blur_shapes);
+            assert!(!first.prefers_blur_shapes());
             // Hard exclusion: blur requests on lock content surfaces must remain inert no-ops.
             first.set_blur_region(BlurRegion::Full);
             assert!(cx.create_surface(&attrs).is_err(), "implicit replacement is forbidden");
@@ -474,6 +478,7 @@ enum Object {
     Viewporter,
     Viewport(u32),
     BackgroundEffectManager,
+    NiriBlurShapeManager,
 }
 
 struct OutputLock {
@@ -507,6 +512,7 @@ struct Compositor {
     role_destroys: Vec<u32>,
     claims: u32,
     background_effects: u32,
+    niri_blur_surfaces: u32,
 }
 
 impl Compositor {
@@ -531,6 +537,7 @@ impl Compositor {
             role_destroys: Vec::new(),
             claims: 0,
             background_effects: 0,
+            niri_blur_surfaces: 0,
         }
     }
 
@@ -611,6 +618,7 @@ impl Compositor {
                         self.global(VIEWPORTER, "wp_viewporter", 1);
                     }
                     self.global(BACKGROUND_EFFECT, "ext_background_effect_manager_v1", 1);
+                    self.global(NIRI_BLUR_SHAPE, "niri_blur_shape_manager_v1", 1);
                     self.global(FIRST, "wl_output", 4);
                 }
                 _ => panic!("unexpected display opcode {opcode}"),
@@ -630,6 +638,7 @@ impl Compositor {
                     FIRST | SECOND => Object::Output(global),
                     VIEWPORTER => Object::Viewporter,
                     BACKGROUND_EFFECT => Object::BackgroundEffectManager,
+                    NIRI_BLUR_SHAPE => Object::NiriBlurShapeManager,
                     _ => panic!("unexpected global {global}"),
                 };
                 self.objects.insert(bound, object);
@@ -659,6 +668,9 @@ impl Compositor {
             }
             (Object::BackgroundEffectManager, 1) => {
                 self.background_effects += 1;
+            }
+            (Object::NiriBlurShapeManager, 1) => {
+                self.niri_blur_surfaces += 1;
             }
             (Object::Manager, 1) => {
                 self.lock_requests += 1;

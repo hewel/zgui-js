@@ -1,4 +1,4 @@
-//! Optional Wayland `ext_background_effect_v1` manager lifecycle and capability dispatch.
+//! Registry lifecycle and protocol selection for compositor background blur.
 
 use std::sync::Mutex;
 
@@ -10,117 +10,104 @@ use wayland_protocols::ext::background_effect::v1::client::{
     ext_background_effect_surface_v1::ExtBackgroundEffectSurfaceV1,
 };
 
+use zgui_platform::{WakeReason, Waker as _};
+
 use crate::driver::WaylandState;
+
+#[allow(
+    missing_docs, unreachable_pub, dead_code, unused_imports,
+    non_upper_case_globals, non_camel_case_types, clippy::all
+)]
+pub(crate) mod niri_blur_shape_v1 {
+    use wayland_client;
+    use wayland_client::protocol::*;
+
+    pub mod __interfaces {
+        use wayland_client::protocol::__interfaces::*;
+        wayland_scanner::generate_interfaces!("src/driver/niri-blur-shape-v1.xml");
+    }
+    use self::__interfaces::*;
+    wayland_scanner::generate_client_code!("src/driver/niri-blur-shape-v1.xml");
+}
+
+pub(crate) use niri_blur_shape_v1::{
+    niri_blur_shape_manager_v1::NiriBlurShapeManagerV1,
+    niri_blur_shape_surface_v1::NiriBlurShapeSurfaceV1,
+};
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Selection {
+    None,
+    Ext(u64),
+    Niri(u64),
+}
+
+pub(crate) enum ActiveBlurProtocol {
+    None,
+    ExtBackgroundEffect(u64, ExtBackgroundEffectManagerV1),
+    NiriBlurShape(u64, NiriBlurShapeManagerV1),
+}
 
 #[derive(Debug, Default)]
 struct BackgroundEffectInner {
-    active_name: Option<u32>,
-    manager: Option<ExtBackgroundEffectManagerV1>,
-    blur_supported: bool,
+    ext: Option<(u32, ExtBackgroundEffectManagerV1)>,
+    niri: Option<(u32, NiriBlurShapeManagerV1)>,
+    ext_blur: bool,
+    ext_gen: u64,
+    niri_gen: u64,
 }
 
-/// Thread-safe handle to the live `ext_background_effect_manager_v1` global and its blur flag.
+impl BackgroundEffectInner {
+    fn selection(&self) -> Selection {
+        if self.niri.is_some() {
+            Selection::Niri(self.niri_gen)
+        } else if self.ext_blur {
+            Selection::Ext(self.ext_gen)
+        } else {
+            Selection::None
+        }
+    }
+}
+
+/// Thread-safe handle to the live blur managers, preferring niri shapes over binary blur.
 #[derive(Debug, Default)]
 pub struct BackgroundEffectLink {
     inner: Mutex<BackgroundEffectInner>,
 }
 
 impl BackgroundEffectLink {
-    /// Creates a link initialized from an optionally bound startup manager.
-    ///
-    /// Blur support starts `false` even when a manager is bound; only a `capabilities` event from
-    /// the live manager can enable it.
-    pub(crate) fn new(initial: Option<(u32, ExtBackgroundEffectManagerV1)>) -> Self {
-        let (active_name, manager) = match initial {
-            Some((name, manager)) => (Some(name), Some(manager)),
-            None => (None, None),
-        };
+    pub(crate) fn new(
+        ext: Option<(u32, ExtBackgroundEffectManagerV1)>,
+        niri: Option<(u32, NiriBlurShapeManagerV1)>,
+    ) -> Self {
         Self {
-            inner: Mutex::new(BackgroundEffectInner {
-                active_name,
-                manager,
-                blur_supported: false,
-            }),
+            inner: Mutex::new(BackgroundEffectInner { ext, niri, ..Default::default() }),
         }
     }
 
-    /// Whether the currently active manager advertises [`Capability::Blur`].
-    #[must_use]
     pub(crate) fn blur_supported(&self) -> bool {
-        let inner = self
-            .inner
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        inner.blur_supported && inner.manager.as_ref().is_some_and(Proxy::is_alive)
+        self.inner.lock().expect("blur managers not poisoned").selection() != Selection::None
     }
 
-    /// Clones the live manager if and only if background blur is currently supported.
-    #[must_use]
-    pub(crate) fn active_manager_for_blur(&self) -> Option<ExtBackgroundEffectManagerV1> {
-        let inner = self
-            .inner
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        if !inner.blur_supported {
-            return None;
+    pub(crate) fn supports_blur_shapes(&self) -> bool {
+        self.inner.lock().expect("blur managers not poisoned").niri.is_some()
+    }
+
+    pub(crate) fn active(&self) -> ActiveBlurProtocol {
+        let inner = self.inner.lock().expect("blur managers not poisoned");
+        if let Some((_, manager)) = &inner.niri {
+            ActiveBlurProtocol::NiriBlurShape(inner.niri_gen, manager.clone())
+        } else if let Some((_, manager)) = &inner.ext
+            && inner.ext_blur
+        {
+            ActiveBlurProtocol::ExtBackgroundEffect(inner.ext_gen, manager.clone())
+        } else {
+            ActiveBlurProtocol::None
         }
-        inner.manager.as_ref().filter(|m| m.is_alive()).cloned()
-    }
-
-    /// Applies a `capabilities` event if `proxy` is the live manager, ignoring retired managers.
-    ///
-    /// Returns `Some((was_supported, now_supported))` for the live manager or `None` if ignored.
-    fn on_capabilities(
-        &self,
-        proxy: &ExtBackgroundEffectManagerV1,
-        blur: bool,
-    ) -> Option<(bool, bool)> {
-        let mut inner = self
-            .inner
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        if inner.manager.as_ref() != Some(proxy) {
-            return None;
-        }
-        let was_supported = inner.blur_supported;
-        inner.blur_supported = blur;
-        Some((was_supported, blur))
-    }
-
-    /// Installs a freshly bound manager for `name`, retiring any previous manager and resetting
-    /// blur support until the new manager reports its capabilities.
-    fn replace_manager(
-        &self,
-        name: u32,
-        manager: ExtBackgroundEffectManagerV1,
-    ) -> (Option<ExtBackgroundEffectManagerV1>, bool) {
-        let mut inner = self
-            .inner
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        inner.active_name = Some(name);
-        let old = inner.manager.replace(manager);
-        let was_supported = std::mem::replace(&mut inner.blur_supported, false);
-        (old, was_supported)
-    }
-
-    /// Clears the active manager if its registry global `name` was removed.
-    fn remove_manager(&self, name: u32) -> (Option<ExtBackgroundEffectManagerV1>, bool) {
-        let mut inner = self
-            .inner
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        if inner.active_name != Some(name) {
-            return (None, false);
-        }
-        inner.active_name = None;
-        let old = inner.manager.take();
-        let was_supported = std::mem::replace(&mut inner.blur_supported, false);
-        (old, was_supported)
     }
 }
 
-/// Registry handler that tracks dynamic addition and removal of `ext_background_effect_manager_v1`.
+/// Tracks dynamic addition and removal of both background-blur globals.
 pub(super) struct BackgroundEffectHandler;
 
 impl RegistryHandler<WaylandState> for BackgroundEffectHandler {
@@ -132,15 +119,32 @@ impl RegistryHandler<WaylandState> for BackgroundEffectHandler {
         interface: &str,
         version: u32,
     ) {
-        if interface != ExtBackgroundEffectManagerV1::interface().name || version == 0 {
+        if version == 0 {
             return;
         }
-        let manager: ExtBackgroundEffectManagerV1 =
-            state
-                .registry
-                .registry()
-                .bind(name, version.min(1), qh, GlobalData);
-        state.replace_background_effect_manager(name, manager);
+        let registry = state.registry.registry().clone();
+        if interface == NiriBlurShapeManagerV1::interface().name {
+            state.update_blur_managers(|inner| {
+                inner.niri_gen += 1;
+                let manager = registry.bind(name, 1, qh, GlobalData);
+                if let Some((_, old)) = inner.niri.replace((name, manager))
+                    && old.is_alive()
+                {
+                    old.destroy();
+                }
+            });
+        } else if interface == ExtBackgroundEffectManagerV1::interface().name {
+            state.update_blur_managers(|inner| {
+                inner.ext_gen += 1;
+                inner.ext_blur = false;
+                let manager = registry.bind(name, 1, qh, GlobalData);
+                if let Some((_, old)) = inner.ext.replace((name, manager))
+                    && old.is_alive()
+                {
+                    old.destroy();
+                }
+            });
+        }
     }
 
     fn remove_global(
@@ -150,87 +154,53 @@ impl RegistryHandler<WaylandState> for BackgroundEffectHandler {
         name: u32,
         interface: &str,
     ) {
-        if interface == ExtBackgroundEffectManagerV1::interface().name {
-            state.remove_background_effect_manager(name);
+        if interface != NiriBlurShapeManagerV1::interface().name
+            && interface != ExtBackgroundEffectManagerV1::interface().name
+        {
+            return;
         }
+        state.update_blur_managers(|inner| {
+            if inner.niri.as_ref().is_some_and(|(n, _)| *n == name)
+                && let Some((_, manager)) = inner.niri.take()
+                && manager.is_alive()
+            {
+                manager.destroy();
+            }
+            if inner.ext.as_ref().is_some_and(|(n, _)| *n == name) {
+                inner.ext_blur = false;
+                if let Some((_, manager)) = inner.ext.take()
+                    && manager.is_alive()
+                {
+                    manager.destroy();
+                }
+            }
+        });
     }
 }
 
 impl WaylandState {
-    fn handle_background_effect_capabilities(
-        &mut self,
-        proxy: &ExtBackgroundEffectManagerV1,
-        blur: bool,
-    ) {
-        let Some((was_supported, now_supported)) =
-            self.background_effect.on_capabilities(proxy, blur)
-        else {
-            return;
+    fn update_blur_managers(&mut self, update: impl FnOnce(&mut BackgroundEffectInner)) {
+        let (old, new) = {
+            let mut inner = self.background_effect.inner.lock().expect("blur managers not poisoned");
+            let old = inner.selection();
+            update(&mut inner);
+            (old, inner.selection())
         };
-        self.live.capabilities.supports_background_blur = now_supported;
-        if was_supported != now_supported {
-            if now_supported {
-                self.on_background_blur_gained();
-            } else {
-                self.on_background_blur_lost();
-            }
-            zgui_platform::Waker::wake(
-                self.live.waker.as_ref(),
-                zgui_platform::WakeReason::AppWork,
-            );
+        if old == new {
+            return;
         }
-    }
-
-    fn replace_background_effect_manager(
-        &mut self,
-        name: u32,
-        manager: ExtBackgroundEffectManagerV1,
-    ) {
-        let (old, was_supported) = self.background_effect.replace_manager(name, manager);
-        if let Some(old) = old
-            && old.is_alive()
-        {
-            old.destroy();
-        }
-        self.live.capabilities.supports_background_blur = false;
-        if was_supported {
-            self.on_background_blur_lost();
-            zgui_platform::Waker::wake(
-                self.live.waker.as_ref(),
-                zgui_platform::WakeReason::AppWork,
-            );
-        }
-    }
-
-    fn remove_background_effect_manager(&mut self, name: u32) {
-        let (old, was_supported) = self.background_effect.remove_manager(name);
-        let had_manager = old.is_some();
-        if let Some(old) = old
-            && old.is_alive()
-        {
-            old.destroy();
-        }
-        if had_manager || was_supported {
-            self.live.capabilities.supports_background_blur = false;
-            self.on_background_blur_lost();
-        }
-        if was_supported {
-            zgui_platform::Waker::wake(
-                self.live.waker.as_ref(),
-                zgui_platform::WakeReason::AppWork,
-            );
-        }
-    }
-
-    fn on_background_blur_lost(&self) {
+        let blur = new != Selection::None;
+        let shapes = matches!(new, Selection::Niri(_));
+        let capabilities = &mut self.live.capabilities;
+        let changed = blur != capabilities.supports_background_blur
+            || shapes != capabilities.supports_blur_shapes;
+        capabilities.supports_background_blur = blur;
+        capabilities.supports_blur_shapes = shapes;
         for surface in self.live.all() {
-            surface.background_blur_lost();
+            surface.blur_protocol_changed();
         }
-    }
-
-    fn on_background_blur_gained(&self) {
-        for surface in self.live.all() {
-            surface.background_blur_gained();
+        if changed {
+            self.live.waker.wake(WakeReason::AppWork);
         }
     }
 }
@@ -249,20 +219,40 @@ impl Dispatch<ExtBackgroundEffectManagerV1, GlobalData> for WaylandState {
                 WEnum::Value(caps) => caps.contains(Capability::Blur),
                 WEnum::Unknown(raw) => (raw & Capability::Blur.bits()) != 0,
             };
-            state.handle_background_effect_capabilities(proxy, blur);
+            state.update_blur_managers(|inner| {
+                if inner.ext.as_ref().is_some_and(|(_, live)| live == proxy) {
+                    inner.ext_blur = blur;
+                }
+            });
         }
     }
 }
 
-impl Dispatch<ExtBackgroundEffectSurfaceV1, ()> for WaylandState {
-    fn event(
-        _state: &mut Self,
-        _proxy: &ExtBackgroundEffectSurfaceV1,
-        _event: <ExtBackgroundEffectSurfaceV1 as Proxy>::Event,
-        _data: &(),
-        _conn: &Connection,
-        _qh: &QueueHandle<Self>,
-    ) {
-        // `ext_background_effect_surface_v1` has no compositor events.
-    }
+macro_rules! no_events {
+    ($proxy:ty, $data:ty) => {
+        impl Dispatch<$proxy, $data> for WaylandState {
+            fn event(
+                _state: &mut Self,
+                _proxy: &$proxy,
+                _event: <$proxy as Proxy>::Event,
+                _data: &$data,
+                _conn: &Connection,
+                _qh: &QueueHandle<Self>,
+            ) {}
+        }
+    };
+}
+
+no_events!(ExtBackgroundEffectSurfaceV1, ());
+no_events!(NiriBlurShapeManagerV1, GlobalData);
+no_events!(NiriBlurShapeSurfaceV1, ());
+
+#[cfg(test)]
+#[test]
+fn niri_protocol_xml_pin() {
+    use sha2::{Digest, Sha256};
+    assert_eq!(
+        format!("{:x}", Sha256::digest(include_bytes!("niri-blur-shape-v1.xml"))),
+        "b1118671ff88677d9acefb63c5894dbe241e003b435d28f7832eba84909dd352"
+    );
 }

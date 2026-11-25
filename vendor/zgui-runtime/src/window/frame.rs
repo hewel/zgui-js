@@ -261,6 +261,10 @@ impl Window {
                     if !held.bootstrap {
                         self.blur.applied_version = held.version;
                         self.blur.stale = false;
+                        self.blur.last_prefers_shapes = held.prefers_shapes;
+                        if held.prefers_shapes != self.surface.prefers_blur_shapes() {
+                            self.surface.request_redraw();
+                        }
                     }
                 }
             }
@@ -1821,6 +1825,7 @@ impl Window {
                         resolved: crate::window::blur::ResolvedBlur::None,
                         version: self.blur.applied_version,
                         bootstrap: true,
+                        prefers_shapes: self.blur.last_prefers_shapes,
                     });
                 }
                 _ => {
@@ -2190,6 +2195,7 @@ impl Window {
             }
             return FrameOutcome::Skipped(SkipReason::Occluded);
         }
+        let prefer_shapes = self.surface.prefers_blur_shapes();
         let blur_candidate = {
             let logical = self
                 .surface
@@ -2209,11 +2215,12 @@ impl Window {
                 &document,
                 &self.scene.clips,
                 &self.scene.spatial,
-                mapping,
-                self.scale,
+                crate::window::blur::BlurFrame { mapping, scale: self.scale, prefer_shapes },
             )
         };
-        if blur_candidate != self.blur.last_applied {
+        let blur_changed = blur_candidate != self.blur.last_applied
+            || prefer_shapes != self.blur.last_prefers_shapes;
+        if blur_changed {
             self.surface
                 .stage_blur_region_for_present(blur_candidate.as_platform());
         } else {
@@ -2233,6 +2240,7 @@ impl Window {
             FrameOutcome::Presented(_) => {
                 self.surface.finalize_presented_blur();
                 self.blur.last_applied = blur_candidate;
+                self.blur.last_prefers_shapes = prefer_shapes;
                 self.blur.applied_version = blur_version;
                 self.blur.held = None;
                 self.blur.stale = false;
@@ -2242,16 +2250,18 @@ impl Window {
                     resolved: blur_candidate,
                     version: blur_version,
                     bootstrap: false,
+                    prefers_shapes: prefer_shapes,
                 });
                 self.blur.stale = true;
             }
             FrameOutcome::Skipped(SkipReason::Undamaged) => {
                 self.surface.clear_staged_blur_region();
-                if blur_candidate != self.blur.last_applied {
+                if blur_changed {
                     self.surface
                         .apply_idle_blur_region(blur_candidate.as_platform());
                     self.blur.last_applied = blur_candidate;
                 }
+                self.blur.last_prefers_shapes = prefer_shapes;
                 self.blur.applied_version = blur_version;
                 self.blur.held = None;
                 self.blur.stale = false;
@@ -2259,9 +2269,7 @@ impl Window {
             _ => {
                 self.surface.rollback_unpresented_blur();
                 self.blur.held = None;
-                if blur_candidate != self.blur.last_applied
-                    || blur_version != self.blur.applied_version
-                {
+                if blur_changed || blur_version != self.blur.applied_version {
                     self.blur.stale = true;
                 }
             }

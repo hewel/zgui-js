@@ -49,6 +49,7 @@ impl StepDriver for Driver {
             Step::MonitorsSet{monitors,..}=>self.set_monitors(monitors),
             Step::PopupDone{surface,..}=>self.popup_done(surface),
             Step::SetBackgroundBlurSupported{supported,..}=>self.set_background_blur_supported(*supported),
+            Step::SetBlurShapesSupported{supported,..}=>self.set_blur_shapes_supported(*supported),
             Step::LifecycleReload{bundle,expect,..}=>self.lifecycle_reload(bundle.as_deref(),*expect),
         }
     }

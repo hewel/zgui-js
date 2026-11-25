@@ -15,9 +15,12 @@ use zgui_css::values::effect::ClipPathValue;
 use zgui_css::values::size::VisibilityValue;
 use zgui_dom::{Document, NodeKey};
 use zgui_geom::{Css, CssPx, Rect};
-use zgui_layout::{BlurPiece, BlurSurfaceMapping, BoxKind, LayoutStore, resolve_blur_rects};
+use zgui_layout::{
+    BlurPiece, BlurShapePiece, BlurSurfaceMapping, BoxKind, LayoutStore, resolve_blur_rects,
+    resolve_blur_shape_rects, resolve_blur_shapes,
+};
 use zgui_paint::lower::anim::AnimOverrides;
-use zgui_platform::BlurRegion;
+use zgui_platform::{BlurRegion, BlurShape, Surface};
 use zgui_reactive::FrameWaker;
 use zgui_scene::{ClipTable, SpatialTree};
 
@@ -37,8 +40,8 @@ pub enum BlurRegistration {
     Nodes {
         /// Ordered target node keys owned by this window's document.
         nodes: Vec<NodeKey>,
-        /// Accumulated effective-opacity cutoff in `[0.0, 1.0]`. Default `0.5`; `0.0` skips only
-        /// actual `<= 0` opacity factors and `visibility: hidden`.
+        /// Effective-opacity cutoff for binary fallback, default `0.5`. Zero skips only
+        /// actual `<= 0` opacity factors. Shape mode uses continuous opacity instead.
         min_opacity: f64,
     },
 }
@@ -111,6 +114,7 @@ pub(crate) enum ResolvedBlur {
     None,
     Full,
     Rects(Vec<Rect<CssPx, Css>>),
+    Shapes(Vec<BlurShape>),
 }
 
 impl ResolvedBlur {
@@ -121,7 +125,18 @@ impl ResolvedBlur {
             Self::None => BlurRegion::None,
             Self::Full => BlurRegion::Full,
             Self::Rects(rects) => BlurRegion::Rects(rects),
+            Self::Shapes(shapes) => BlurRegion::Shapes(shapes),
         }
+    }
+
+    fn shapes(shapes: Vec<zgui_layout::BlurShape>) -> Self {
+        if shapes.is_empty() {
+            return Self::None;
+        }
+        Self::Shapes(shapes.into_iter().map(|s| BlurShape {
+            x: s.x, y: s.y, width: s.width, height: s.height,
+            radii: s.radii, corner_exponent: s.corner_exponent, opacity: s.opacity,
+        }).collect())
     }
 }
 
@@ -131,6 +146,7 @@ pub(crate) struct HeldBlur {
     pub(crate) resolved: ResolvedBlur,
     pub(crate) version: u64,
     pub(crate) bootstrap: bool,
+    pub(crate) prefers_shapes: bool,
 }
 
 /// Per-window three-state blur tracker: registered intent, held picture candidate, and last
@@ -139,6 +155,7 @@ pub(crate) struct HeldBlur {
 pub(crate) struct WindowBlurState {
     pub(crate) slot: Rc<BlurSlot>,
     pub(crate) last_applied: ResolvedBlur,
+    pub(crate) last_prefers_shapes: bool,
     pub(crate) applied_version: u64,
     pub(crate) snapshot_version: u64,
     pub(crate) held: Option<HeldBlur>,
@@ -151,6 +168,7 @@ impl WindowBlurState {
         Self {
             slot,
             last_applied: ResolvedBlur::None,
+            last_prefers_shapes: false,
             applied_version: initial,
             snapshot_version: initial,
             held: None,
@@ -161,8 +179,9 @@ impl WindowBlurState {
     /// Whether the surface's applied blur has not yet converged with the latest registration or
     /// composed picture. Kept strictly separate from `owes_further_work()`.
     #[must_use]
-    pub(crate) fn is_pending(&self) -> bool {
+    pub(crate) fn is_pending(&self, surface: &dyn Surface) -> bool {
         self.slot.version() != self.applied_version || self.stale
+            || self.last_prefers_shapes != surface.prefers_blur_shapes()
     }
 
     /// Whether a registration write landed after this frame's blur snapshot.
@@ -170,6 +189,12 @@ impl WindowBlurState {
     pub(crate) fn updated_since_snapshot(&self) -> bool {
         self.slot.version() != self.snapshot_version
     }
+}
+
+pub(crate) struct BlurFrame {
+    pub(crate) mapping: BlurSurfaceMapping,
+    pub(crate) scale: f32,
+    pub(crate) prefer_shapes: bool,
 }
 
 /// Resolves a [`BlurRegistration`] against the current frame's layout, live animation overrides,
@@ -181,12 +206,15 @@ pub(crate) fn resolve_registration(
     document: &Document,
     clips: &ClipTable,
     spatial: &SpatialTree,
-    mapping: BlurSurfaceMapping,
-    scale: f32,
+    frame: BlurFrame,
 ) -> ResolvedBlur {
+    let BlurFrame { mapping, scale, prefer_shapes } = frame;
     match registration {
         BlurRegistration::None => ResolvedBlur::None,
         BlurRegistration::Full => ResolvedBlur::Full,
+        BlurRegistration::Rects(rects) if prefer_shapes => {
+            ResolvedBlur::shapes(resolve_blur_shape_rects(rects))
+        }
         BlurRegistration::Rects(rects) => {
             if rects.is_empty() {
                 ResolvedBlur::None
@@ -196,12 +224,12 @@ pub(crate) fn resolve_registration(
         }
         BlurRegistration::Nodes { nodes, min_opacity } => {
             if nodes.is_empty()
-                || !min_opacity.is_finite()
-                || !(0.0..=1.0).contains(min_opacity)
+                || (!prefer_shapes && (!min_opacity.is_finite() || !(0.0..=1.0).contains(min_opacity)))
             {
                 return ResolvedBlur::None;
             }
             let mut pieces = Vec::new();
+            let mut shapes = Vec::new();
             for &node_key in nodes {
                 if document.store().index_of(node_key).is_none() {
                     continue;
@@ -246,7 +274,7 @@ pub(crate) fn resolve_registration(
                     if has_clip_path || has_zero_factor {
                         continue;
                     }
-                    if *min_opacity > 0.0 && effective_opacity < *min_opacity {
+                    if !prefer_shapes && *min_opacity > 0.0 && effective_opacity < *min_opacity {
                         continue;
                     }
                     let declared = layout.custom_properties(box_key, &box_node.style);
@@ -257,10 +285,19 @@ pub(crate) fn resolve_registration(
                         if let Some(piece) =
                             BlurPiece::from_fragment(fragment, &box_node.style, declared, scale)
                         {
-                            pieces.push(piece);
+                            if prefer_shapes {
+                                shapes.push(BlurShapePiece { piece, opacity: effective_opacity });
+                            } else {
+                                pieces.push(piece);
+                            }
                         }
                     }
                 }
+            }
+            if prefer_shapes {
+                return ResolvedBlur::shapes(resolve_blur_shapes(
+                    &shapes, clips, |id| spatial.resolve(id), mapping,
+                ));
             }
             if pieces.is_empty() {
                 return ResolvedBlur::None;
