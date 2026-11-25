@@ -49,9 +49,9 @@ npm requires a package to exist before Trusted Publishing (OIDC) can be configur
 1. Generate a temporary, short-lived npm **Automation** token with publish access to `@hewel` and
    `create-zgui-js`, and store it as `NPM_TOKEN` **only** inside the protected `npm-bootstrap`
    GitHub Environment (never as a repository-wide secret).
-2. Cut and push the initial release tag `vX.Y.Z` (see Section 5). Wait for `build-and-verify-linux-x64`
-   and `verify-installed-release` to succeed, or dispatch `release.yml` manually on tag `vX.Y.Z`
-   with `mode=bootstrap`.
+2. Cut and push the initial release tag `vX.Y.Z` (see Section 5). Wait for `verify-rust-and-vendor`,
+   `build-and-verify-linux-x64`, and `verify-installed-release` to succeed, or dispatch `release.yml`
+   manually on tag `vX.Y.Z` with `mode=bootstrap`.
 3. Immediately after all 6 packages appear on npmjs.org, open **Settings -> Publishing access ->
    Trusted Publisher** for **each** of the 6 packages and add GitHub Actions:
    - **Organization / user:** `hewel`
@@ -87,16 +87,18 @@ git push origin main v0.2.0
 ```
 
 - Pushing tag `vX.Y.Z` triggers `.github/workflows/release.yml`:
-  1. `build-and-verify-linux-x64`: runs `release.ts check --tag`, full JS/TS/Rust/vendor checks,
-     builds release `zgui-host`, audits `ldd`, packs and audits all 6 tarballs, and uploads
-     `release-artifacts`.
-  2. `verify-installed-release`: clean `ubuntu-24.04` runner without Rust/Cargo that serves the
+  1. `verify-rust-and-vendor` (parallel): runs workspace Rust tests, Clippy, and all vendored crate
+     test suites on `ubuntu-24.04`.
+  2. `build-and-verify-linux-x64` (parallel): runs `release.ts check --tag`, JS/TS formatting,
+     lint, typecheck, and build tests, builds release `zgui-host`, audits `ldd`, packs and audits
+     all 6 tarballs, and uploads `release-artifacts`.
+  3. `verify-installed-release`: clean `ubuntu-24.04` runner without Rust/Cargo that serves the
      exact uploaded tarballs over a local HTTP registry, installs via `bun install --linker isolated`
      (with no direct host dependency), and verifies `create-zgui-js`, `doctor`, `build` (including
      static `components.css` hoisting), `package --bytecode` (including `licenses/`), headless
      Vulkan `preview`, read-only `smoke` & `inspect --ui`, `oxlint`, `tsrs`, and pinned `tsc`.
-  3. `publish-oidc`: publishes the exact verified tarballs from `release-artifacts` using OIDC
-     `--provenance`.
+  4. `publish-oidc`: gated on all three verification jobs, publishes the exact verified tarballs
+     from `release-artifacts` using OIDC `--provenance`.
 - Prerelease tags (e.g. `v0.2.0-rc.1`) automatically publish under their prerelease dist-tag
   (`rc`, `beta`, `alpha`, or `next`) and are explicitly forbidden from publishing to `latest`.
 - Running `workflow_dispatch` on a non-tag branch only permits `mode=dry-run` with `contents: read`

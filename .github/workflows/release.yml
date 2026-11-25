@@ -27,9 +27,9 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  build-and-verify-linux-x64:
+  verify-rust-and-vendor:
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 60
     permissions:
       contents: read
     steps:
@@ -58,6 +58,45 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
+      - name: Install JS workspace dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Fetch Cargo dependencies and run Rust + vendor tests
+        run: |
+          cargo fetch --locked
+          bun tools/test-vendor.mjs --fetch
+          bun run test:rust
+          bun run test:vendor
+
+  build-and-verify-linux-x64:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.4"
+
+      - name: Install native Linux graphics and font libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config \
+            libfontconfig1-dev \
+            libfreetype-dev \
+            libglvnd-dev \
+            libvulkan-dev \
+            libwayland-dev \
+            libxkbcommon-dev \
+            mesa-vulkan-drivers
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
       - name: Install JS workspace dependencies and build SDK packages
         run: |
           bun install --frozen-lockfile
@@ -78,15 +117,10 @@ jobs:
           bun run typecheck
           bun run test:build
 
-      - name: Fetch Cargo dependencies and run Rust + vendor tests
+      - name: Fetch Cargo dependencies and build release zgui-host binary (linux-x64 glibc)
         run: |
           cargo fetch --locked
-          bun tools/test-vendor.mjs --fetch
-          bun run test:rust
-          bun run test:vendor
-
-      - name: Build release zgui-host binary (linux-x64 glibc)
-        run: cargo build --release -j 4 -p zgui-host --locked --offline
+          cargo build --release -j 4 -p zgui-host --locked --offline
 
       - name: Audit zgui-host dynamic library dependencies and glibc baseline
         run: |
@@ -168,7 +202,7 @@ jobs:
           bun tools/verify-release-artifacts.ts --manifest release-artifacts/release-manifest.json
 
   publish-dry-run:
-    needs: [build-and-verify-linux-x64, verify-installed-release]
+    needs: [verify-rust-and-vendor, build-and-verify-linux-x64, verify-installed-release]
     if: github.event_name == 'workflow_dispatch' && inputs.mode == 'dry-run'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -195,7 +229,7 @@ jobs:
             "${TAG_ARGS[@]}"
 
   publish-oidc:
-    needs: [build-and-verify-linux-x64, verify-installed-release]
+    needs: [verify-rust-and-vendor, build-and-verify-linux-x64, verify-installed-release]
     if: >-
       github.ref_type == 'tag' &&
       startsWith(github.ref_name, 'v') &&
@@ -232,7 +266,7 @@ jobs:
             "${TAG_ARGS[@]}"
 
   publish-bootstrap:
-    needs: [build-and-verify-linux-x64, verify-installed-release]
+    needs: [verify-rust-and-vendor, build-and-verify-linux-x64, verify-installed-release]
     if: >-
       github.event_name == 'workflow_dispatch' &&
       inputs.mode == 'bootstrap' &&
