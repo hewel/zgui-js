@@ -15,8 +15,15 @@ export type FilesCapabilities = {
   directories?: FileDirectoryGrant[];
 };
 
+export type NetworkOriginRule = {
+  origin: string;
+  allowInsecureHttp?: boolean;
+  allowPrivateNetworks?: boolean;
+};
+
 export type NetworkCapabilities = {
   origins?: string[];
+  originRules?: NetworkOriginRule[];
   allowInsecureHttp?: boolean;
   allowPrivateNetworks?: boolean;
 };

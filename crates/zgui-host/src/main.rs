@@ -1,8 +1,11 @@
 mod bounded_fs;
+mod bytecode_cache;
 mod control_cli;
 mod dev_banner;
 mod dev_state;
 mod dnd;
+mod extensions;
+mod handoff;
 mod inspector;
 mod package;
 mod runtime_capabilities;
@@ -53,6 +56,8 @@ struct Application {
     failure: Rc<RefCell<Option<String>>>,
     watch_path: Option<PathBuf>,
     watcher: Option<watcher::PackageWatcher>,
+    overlay_path: Option<PathBuf>,
+    overlay_watcher: Option<extensions::watcher::OverlayWatcher>,
     monitors: Vec<shell::Monitor>,
     layer_primary: bool,
     dev_inspector: Option<Rc<inspector::DevInspector>>,
@@ -78,6 +83,7 @@ impl Application {
             control: control_cli::Control::default(),
             sender, inbox, exit_after: None, exit_armed: false, failure,
             watch_path: None, watcher: None,
+            overlay_path: None, overlay_watcher: None,
             monitors: Vec::new(),
             layer_primary: false,
             dev_inspector: None,
@@ -181,6 +187,15 @@ impl Application {
             let waker = cx.waker();
             self.watcher = Some(watcher::PackageWatcher::start(path.clone(), initial, Arc::new(move || waker.wake(WakeReason::AppWork)))?);
         }
+        if self.overlay_watcher.is_none() && let Some(path) = &self.overlay_path {
+            let initial_digest = self.host.initial_overlay_digest();
+            let waker = cx.waker();
+            self.overlay_watcher = Some(extensions::watcher::OverlayWatcher::start(
+                path.clone(),
+                initial_digest,
+                Arc::new(move || waker.wake(WakeReason::AppWork)),
+            )?);
+        }
         if !self.exit_armed && let Some(after) = self.exit_after {
             self.exit_armed = true;
             let sender = self.sender.clone();
@@ -210,6 +225,14 @@ impl Application {
             }
         }
         self.after_shell(cx);
+        self.host.tick_observation();
+        let document = self.host.region_documents().next();
+        if let Some(document) = document {
+            let retry = self.retry_sender(cx);
+            let waker = cx.waker();
+            let mut surface = RuntimeSurface::new(&mut self.native, cx, ImageChoice::Live);
+            self.host.drain_pending_overlay_primary_if_unlocked(&mut surface, waker, retry, document);
+        }
         // Checkpoint faults can retire a generation; cancel its registrations
         // before the event loop continues.
         self.reconcile_harness(cx);
@@ -245,7 +268,24 @@ impl Application {
                 }
             }
         }
-        let Some(publication) = self.watcher.as_ref().and_then(watcher::PackageWatcher::next) else { return; };
+        let Some(publication) = self.watcher.as_ref().and_then(watcher::PackageWatcher::next) else {
+            if let Some(overlay_path) = self.overlay_watcher.as_ref().and_then(extensions::watcher::OverlayWatcher::poll) {
+                let document = self.host.region_documents().next();
+                if self.host.is_pure_shell() {
+                    self.host.apply_overlay_update_pure(&mut self.native, cx, ImageChoice::Live, &overlay_path);
+                    self.after_shell(cx);
+                } else if let Some(document) = document {
+                    let retry = self.retry_sender(cx);
+                    let waker = cx.waker();
+                    {
+                        let mut surface = RuntimeSurface::new(&mut self.native, cx, ImageChoice::Live);
+                        self.host.apply_overlay_update_primary(&mut surface, waker, retry, document, &overlay_path);
+                    }
+                    self.after_shell(cx);
+                }
+            }
+            return;
+        };
         match publication {
             Ok(package) => {
                 let module = SessionModule::package(Rc::new(package));
@@ -298,10 +338,10 @@ impl Application {
             cx.request_exit();
             return;
         }
-        let app_id = self.host.module().as_package()
-            .filter(|package| package.manifest.capabilities.control_channel)
-            .map(|package| package.manifest.id.as_str())
-            .filter(|app_id| self.host.sessions().any(|session| session.control_app_id() == Some(*app_id)));
+        let app_id = self
+            .host
+            .sessions()
+            .find_map(|session| session.control_app_id());
         if let Some(app_id) = app_id {
             let host = &self.host;
             let sessions = || host.sessions().filter(move |session| session.control_app_id() == Some(app_id));
@@ -463,10 +503,20 @@ impl AppHandler for Application {
         self.drain_dev_inspector();
     }
     fn idle(&mut self, cx: &dyn PlatformCx) -> IdlePolicy {
-        self.native.idle(cx)
+        let base = self.native.idle(cx);
+        let Some(obs_deadline) = self.host.next_overlay_deadline() else {
+            return base;
+        };
+        match base {
+            IdlePolicy::Spin => IdlePolicy::Spin,
+            IdlePolicy::Block => IdlePolicy::BlockUntil(obs_deadline),
+            IdlePolicy::BlockUntil(other) => IdlePolicy::BlockUntil(other.min(obs_deadline)),
+            _ => base,
+        }
     }
     fn deadline_reached(&mut self, cx: &dyn PlatformCx) {
         self.native.deadline_reached(cx);
+        self.host.tick_observation();
         self.after_native(cx);
         self.reconcile_control(cx);
     }
@@ -475,6 +525,7 @@ impl AppHandler for Application {
             server.stop();
         }
         self.watcher.take();
+        self.overlay_watcher.take();
         if let Err(error) = self.control.close() {
             self.record_failure(format_args!("control socket: {error}"));
         }
@@ -502,6 +553,8 @@ Options:
   --watch                      Watch --bundle for new generations and hot-reload
   --dev-inspect <PATH>         Enable dev-only read-only inspector/profiler on Unix socket PATH
   --pure-shell                 Start without a primary window (requires shellSurfaces or sessionLock)
+  --extensions-overlay <PATH>  Load and watch a verified extensions overlay JSON manifest
+  --bytecode-cache-dir <DIR>   Persistent 0600 QuickJS bytecode cache directory (64 MiB LRU)
   --layer-config <FILE>        Mount primary surface as a Wayland layer-shell surface
   --width <PX>                 Override initial primary window width (logical px, default 1024)
   --height <PX>                Override initial primary window height (logical px, default 720)
@@ -647,6 +700,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut title_override: Option<String> = None;
     let mut layer_config = None;
     let mut pure_shell = false;
+    let mut extensions_overlay: Option<PathBuf> = None;
+    let mut bytecode_cache_dir: Option<PathBuf> = None;
     let mut control_socket = None;
     let mut dev_inspect_path: Option<PathBuf> = None;
     let mut socket_bindings = BTreeMap::new();
@@ -680,6 +735,14 @@ fn main() -> Result<(), Box<dyn Error>> {
             "--exercise" => { exercise = true; }
             "--watch" => { watch = true; }
             "--pure-shell" => { pure_shell = true; }
+            "--extensions-overlay" => {
+                if extensions_overlay.is_some() { return Err("--extensions-overlay can only be specified once".into()); }
+                extensions_overlay = Some(args.next().ok_or("--extensions-overlay requires a file path")?.into());
+            }
+            "--bytecode-cache-dir" => {
+                if bytecode_cache_dir.is_some() { return Err("--bytecode-cache-dir can only be specified once".into()); }
+                bytecode_cache_dir = Some(args.next().ok_or("--bytecode-cache-dir requires a directory path")?.into());
+            }
             "--reduced-motion" => { reduced_motion = true; }
             "--width" => {
                 let raw = args.next().ok_or("--width requires logical pixels")?;
@@ -721,6 +784,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
     }
     if watch && bundle.is_none() { return Err("--watch requires --bundle".into()); }
+    if extensions_overlay.is_some() && bundle.is_none() { return Err("--extensions-overlay requires --bundle".into()); }
     if layer_config.is_some() && bundle.is_none() { return Err("--layer-config requires --bundle".into()); }
     let package = bundle.as_deref().map(Package::load).transpose()?.map(Rc::new);
     if pure_shell && (exercise || layer_config.is_some()) {
@@ -794,6 +858,14 @@ fn main() -> Result<(), Box<dyn Error>> {
         if !pure_shell {
             application.host.set_dev_banner_enabled(true);
         }
+    }
+    if let Some(dir) = bytecode_cache_dir {
+        let cache = bytecode_cache::BytecodeCache::open(&dir, bytecode_cache::DEFAULT_MAX_CACHE_BYTES)?;
+        application.host.set_bytecode_cache(Rc::new(cache));
+    }
+    if let Some(overlay_path) = &extensions_overlay {
+        application.host.configure_initial_overlay(overlay_path);
+        application.overlay_path = Some(overlay_path.clone());
     }
     application.exit_after = exit_after;
     application.harness.exercise = exercise;

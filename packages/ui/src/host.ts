@@ -190,6 +190,37 @@ export interface NativeHost {
     ): number;
     closeLock(id: number): void;
   };
+  readonly __zguiShellHost?: {
+    listApprovedEntries(): readonly {
+      readonly entryId: string;
+      readonly extensionId: string;
+      readonly version: string;
+      readonly kind: string;
+      readonly bundle: string;
+      readonly canonicalSpecifier: string;
+    }[];
+    loadApprovedEntry(entryId: string): Promise<Record<string, unknown>>;
+    registerSharedRuntimeModules(modules: Readonly<Record<string, Record<string, unknown>>>): void;
+    registerSessionHandoff(capture: () => unknown): () => void;
+    takeSessionHandoff(): unknown;
+    onSessionCommitted(callback: (status: unknown) => void): () => void;
+    onBeforeCommit(callback: () => void): () => void;
+    getOverlayStatus(): {
+      readonly generation: number;
+      readonly overlayId: string | null;
+      readonly phase: "base" | "staged" | "observing" | "committed" | "safe-base-shell";
+      readonly safeBaseShell: boolean;
+      readonly activeExtensionIds: readonly string[];
+      readonly clientMetadata: unknown;
+      readonly lastFailure: {
+        readonly overlayId: string | null;
+        readonly phase: "preflight" | "mount" | "commit" | "observation" | "rollback";
+        readonly reason: string;
+        readonly rollbackBlockedByPolicy: boolean;
+        readonly clientMetadata: unknown;
+      } | null;
+    };
+  };
 }
 
 declare const globalThis: NativeHost;

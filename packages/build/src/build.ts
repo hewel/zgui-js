@@ -542,21 +542,87 @@ function parseCapabilities(input: unknown, source: string): Capabilities {
           throw new Error(`${field} must be an object`);
         const network: {
           origins?: string[];
+          originRules?: {
+            origin: string;
+            allowInsecureHttp?: boolean;
+            allowPrivateNetworks?: boolean;
+          }[];
           allowInsecureHttp?: boolean;
           allowPrivateNetworks?: boolean;
         } = {};
+        const originSet = new Set<string>();
+        const ruleSet = new Set<string>();
         for (const [subKey, subVal] of Object.entries(value as Record<string, unknown>)) {
           switch (subKey) {
             case "origins": {
               if (!Array.isArray(subVal)) throw new Error(`${field}.origins must be an array`);
-              const origins = new Set<string>();
               for (const item of subVal as unknown[]) {
                 const parsed = parseNetworkOrigin(item, `${field}.origins`);
-                if (origins.has(parsed.canonical))
+                if (originSet.has(parsed.canonical))
                   throw new Error(`${field}.origins contains duplicate origin ${parsed.canonical}`);
-                origins.add(parsed.canonical);
+                originSet.add(parsed.canonical);
               }
-              if (origins.size) network.origins = [...origins];
+              if (originSet.size) network.origins = [...originSet];
+              break;
+            }
+            case "originRules": {
+              if (!Array.isArray(subVal)) throw new Error(`${field}.originRules must be an array`);
+              const rules: {
+                origin: string;
+                allowInsecureHttp?: boolean;
+                allowPrivateNetworks?: boolean;
+              }[] = [];
+              for (const item of subVal as unknown[]) {
+                if (!item || typeof item !== "object" || Array.isArray(item))
+                  throw new Error(`${field}.originRules entries must be objects`);
+                const record = item as Record<string, unknown>;
+                for (const ruleKey of Object.keys(record)) {
+                  if (
+                    ruleKey !== "origin" &&
+                    ruleKey !== "allowInsecureHttp" &&
+                    ruleKey !== "allowPrivateNetworks"
+                  ) {
+                    throw new Error(`${field}.originRules entry contains unknown key: ${ruleKey}`);
+                  }
+                }
+                const parsed = parseNetworkOrigin(record.origin, `${field}.originRules`);
+                if (
+                  record.allowInsecureHttp !== undefined &&
+                  typeof record.allowInsecureHttp !== "boolean"
+                ) {
+                  throw new Error(`${field}.originRules allowInsecureHttp must be a boolean`);
+                }
+                if (
+                  record.allowPrivateNetworks !== undefined &&
+                  typeof record.allowPrivateNetworks !== "boolean"
+                ) {
+                  throw new Error(`${field}.originRules allowPrivateNetworks must be a boolean`);
+                }
+                const allowInsecureHttp = record.allowInsecureHttp === true;
+                const allowPrivateNetworks = record.allowPrivateNetworks === true;
+                if (parsed.insecure && !allowInsecureHttp) {
+                  throw new Error(
+                    `${field}.originRules contains insecure origin ${parsed.canonical} without allowInsecureHttp: true`,
+                  );
+                }
+                if (isPrivateHost(parsed.host) && !allowPrivateNetworks) {
+                  throw new Error(
+                    `${field}.originRules contains private/loopback origin ${parsed.canonical} without allowPrivateNetworks: true`,
+                  );
+                }
+                if (ruleSet.has(parsed.canonical)) {
+                  throw new Error(
+                    `${field}.originRules contains duplicate origin ${parsed.canonical}`,
+                  );
+                }
+                ruleSet.add(parsed.canonical);
+                rules.push({
+                  origin: parsed.canonical,
+                  ...(allowInsecureHttp ? { allowInsecureHttp: true } : {}),
+                  ...(allowPrivateNetworks ? { allowPrivateNetworks: true } : {}),
+                });
+              }
+              if (rules.length) network.originRules = rules;
               break;
             }
             case "allowInsecureHttp":
@@ -568,6 +634,13 @@ function parseCapabilities(input: unknown, source: string): Capabilities {
             }
             default:
               throw new Error(`Unknown capability: ${field}.${subKey}`);
+          }
+        }
+        for (const origin of ruleSet) {
+          if (originSet.has(origin)) {
+            throw new Error(
+              `${field} declares duplicate origin in origins and originRules: ${origin}`,
+            );
           }
         }
         if (Object.keys(network).length) capabilities.network = network;
@@ -654,28 +727,89 @@ async function mergeCapabilities(
         .map(([dirPath, mode]) => ({ path: dirPath, mode })),
     };
   }
-  const allowInsecureHttp = sources.some(source => source.network?.allowInsecureHttp);
-  const allowPrivateNetworks = sources.some(source => source.network?.allowPrivateNetworks);
-  const networkOrigins = new Set(sources.flatMap(source => source.network?.origins ?? []));
-  for (const origin of networkOrigins) {
-    const parsed = parseNetworkOrigin(origin, "capabilities.network.origins");
-    if (parsed.insecure && !allowInsecureHttp) {
-      throw new Error(
-        `capabilities.network.origins contains insecure origin ${origin} without allowInsecureHttp: true`,
-      );
+  const networkSources = sources
+    .map(source => source.network)
+    .filter((net): net is NonNullable<Capabilities["network"]> => net !== undefined);
+  const usesLegacySingleSource =
+    networkSources.length === 1 &&
+    (networkSources[0]!.originRules === undefined || networkSources[0]!.originRules.length === 0);
+  if (usesLegacySingleSource) {
+    const only = networkSources[0]!;
+    const allowInsecureHttp = Boolean(only.allowInsecureHttp);
+    const allowPrivateNetworks = Boolean(only.allowPrivateNetworks);
+    const networkOrigins = [...new Set(only.origins ?? [])].sort();
+    for (const origin of networkOrigins) {
+      const parsed = parseNetworkOrigin(origin, "capabilities.network.origins");
+      if (parsed.insecure && !allowInsecureHttp) {
+        throw new Error(
+          `capabilities.network.origins contains insecure origin ${origin} without allowInsecureHttp: true`,
+        );
+      }
+      if (isPrivateHost(parsed.host) && !allowPrivateNetworks) {
+        throw new Error(
+          `capabilities.network.origins contains private/loopback origin ${origin} without allowPrivateNetworks: true`,
+        );
+      }
     }
-    if (isPrivateHost(parsed.host) && !allowPrivateNetworks) {
-      throw new Error(
-        `capabilities.network.origins contains private/loopback origin ${origin} without allowPrivateNetworks: true`,
-      );
+    if (networkOrigins.length || allowInsecureHttp || allowPrivateNetworks) {
+      merged.network = {
+        ...(networkOrigins.length ? { origins: networkOrigins } : {}),
+        ...(allowInsecureHttp ? { allowInsecureHttp: true } : {}),
+        ...(allowPrivateNetworks ? { allowPrivateNetworks: true } : {}),
+      };
     }
-  }
-  if (networkOrigins.size || allowInsecureHttp || allowPrivateNetworks) {
-    merged.network = {
-      ...(networkOrigins.size ? { origins: [...networkOrigins].sort() } : {}),
-      ...(allowInsecureHttp ? { allowInsecureHttp: true } : {}),
-      ...(allowPrivateNetworks ? { allowPrivateNetworks: true } : {}),
-    };
+  } else if (networkSources.length > 0) {
+    const byOrigin = new Map<
+      string,
+      { allowInsecureHttp: boolean; allowPrivateNetworks: boolean }
+    >();
+    for (const net of networkSources) {
+      const sourceInsecure = Boolean(net.allowInsecureHttp);
+      const sourcePrivate = Boolean(net.allowPrivateNetworks);
+      for (const origin of net.origins ?? []) {
+        const parsed = parseNetworkOrigin(origin, "capabilities.network.origins");
+        if (parsed.insecure && !sourceInsecure) {
+          throw new Error(
+            `capabilities.network.origins contains insecure origin ${origin} without allowInsecureHttp: true`,
+          );
+        }
+        if (isPrivateHost(parsed.host) && !sourcePrivate) {
+          throw new Error(
+            `capabilities.network.origins contains private/loopback origin ${origin} without allowPrivateNetworks: true`,
+          );
+        }
+        const prev = byOrigin.get(parsed.canonical) ?? {
+          allowInsecureHttp: false,
+          allowPrivateNetworks: false,
+        };
+        byOrigin.set(parsed.canonical, {
+          allowInsecureHttp: prev.allowInsecureHttp || sourceInsecure,
+          allowPrivateNetworks: prev.allowPrivateNetworks || sourcePrivate,
+        });
+      }
+      for (const rule of net.originRules ?? []) {
+        const parsed = parseNetworkOrigin(rule.origin, "capabilities.network.originRules");
+        const prev = byOrigin.get(parsed.canonical) ?? {
+          allowInsecureHttp: false,
+          allowPrivateNetworks: false,
+        };
+        byOrigin.set(parsed.canonical, {
+          allowInsecureHttp: prev.allowInsecureHttp || Boolean(rule.allowInsecureHttp),
+          allowPrivateNetworks: prev.allowPrivateNetworks || Boolean(rule.allowPrivateNetworks),
+        });
+      }
+    }
+    if (byOrigin.size > 0) {
+      merged.network = {
+        originRules: [...byOrigin.entries()]
+          .sort(([a], [b]) => a.localeCompare(b))
+          .map(([origin, flags]) => ({
+            origin,
+            ...(flags.allowInsecureHttp ? { allowInsecureHttp: true } : {}),
+            ...(flags.allowPrivateNetworks ? { allowPrivateNetworks: true } : {}),
+          })),
+      };
+    }
   }
   return Object.keys(merged).length ? merged : undefined;
 }

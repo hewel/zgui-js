@@ -47,8 +47,10 @@ impl Harness {
         let clock = Arc::new(VirtualClock::new());
         let environment = Environment::new(clock.clone(), Some(1000), 7);
         let runtime = FixtureRuntime::new(definition, environment.clone());
+        let pkg = package.package();
+        let capabilities = Arc::new(pkg.manifest.capabilities.clone());
         let work = Work::new(
-            WorkSession { package: Some(package.package()), generation: 7, assets: AssetSource::Fixture(runtime.clone()), resolved: Default::default() },
+            WorkSession { package: Some(pkg), capabilities, generation: 7, assets: AssetSource::Fixture(runtime.clone()), resolved: Default::default() },
             HostHandle::from_rc(Rc::new(StubHost::default())), SurfaceId::new(7), Arc::new(NoWake),
         );
         let mut engine = JsRuntime::new(RuntimeLimits::default()).unwrap();
@@ -487,8 +489,10 @@ fn retired_generation_preserves_fixture_ledger_events_and_new_registrations() {
     let old_ids: Vec<_> = h.runtime.state.borrow().calls.keys().copied().collect();
     h.work.finish_stop();
     assert_eq!(h.work.counts(),(0,0,0));
+    let next_pkg = h._package.package();
+    let capabilities = Arc::new(next_pkg.manifest.capabilities.clone());
     let work = Work::new(
-        WorkSession { package: Some(h._package.package()), generation: 8, assets: AssetSource::Fixture(h.runtime.clone()), resolved: Default::default() },
+        WorkSession { package: Some(next_pkg), capabilities, generation: 8, assets: AssetSource::Fixture(h.runtime.clone()), resolved: Default::default() },
         HostHandle::from_rc(Rc::new(StubHost::default())), SurfaceId::new(8), Arc::new(NoWake),
     );
     h.engine.with_context(|ctx|work.install(&ctx)).unwrap();

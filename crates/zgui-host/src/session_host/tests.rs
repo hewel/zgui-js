@@ -1329,8 +1329,7 @@ fn staged_network_deferral_and_reload_under_sse_flood() {
     let caps = || Capabilities {
         network: NetworkCapabilities {
             origins: vec!["https://api.example.com".into()],
-            allow_insecure_http: false,
-            allow_private_networks: false,
+            ..NetworkCapabilities::default()
         },
         ..Capabilities::default()
     };

@@ -1,12 +1,9 @@
 //! Owner-thread origin-allowlisted HTTP, SSE, and WebSocket bindings with staged deferral
 //! and fair per-registration checkpoint delivery.
 use super::{Mode, Work, data_property, owner, service_error};
-use crate::{
-    assets::{
-        AssetSource,
-        fixture::{FixtureRuntime, NetworkDelivery},
-    },
-    package::Package,
+use crate::assets::{
+    AssetSource,
+    fixture::{FixtureRuntime, NetworkDelivery},
 };
 use host_services::network::{
     DEFAULT_MAX_RESPONSE_BYTES, DEFAULT_MAX_SSE_EVENT_BYTES, DEFAULT_MAX_WS_MESSAGE_BYTES,
@@ -120,10 +117,10 @@ pub(super) struct NetworkState {
 }
 
 impl NetworkState {
-    pub(super) fn new(package: Option<Rc<Package>>, source: &AssetSource) -> Self {
-        let policy = package
-            .as_ref()
-            .and_then(|pkg| pkg.manifest.capabilities.network.to_origin_policy().ok())
+    pub(super) fn new(capabilities: &crate::package::Capabilities, source: &AssetSource) -> Self {
+        let policy = capabilities
+            .network
+            .to_origin_policy()
             .unwrap_or_default();
         let backend = match source {
             AssetSource::Fixture(fixture) => NetworkBackend::Preview {

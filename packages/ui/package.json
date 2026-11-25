@@ -1,6 +1,6 @@
 {
   "name": "@hewel/zgui",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Zero-DOM native TSX UI SDK, renderer, themed components, headless primitives, router, icons, and oxlint preset for zgui-js",
   "license": "Apache-2.0",
   "type": "module",
@@ -63,6 +63,10 @@
     "./icons": {
       "types": "./dist/components/icons.d.ts",
       "default": "./dist/components/icons.js"
+    },
+    "./shell-host": {
+      "types": "./dist/shell-host.d.ts",
+      "default": "./dist/shell-host.js"
     },
     "./jsx-runtime": {
       "types": "./dist/jsx-runtime.d.ts",

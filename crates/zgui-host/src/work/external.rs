@@ -22,6 +22,7 @@ use std::{
     ops::Bound::{Excluded, Unbounded},
     os::unix::net::SocketAddr,
     rc::Rc,
+    sync::Arc,
 };
 
 const MAX_SOCKETS: usize = 16;
@@ -108,6 +109,7 @@ struct SocketImageBudget {
 
 pub(super) struct External {
     package: Option<Rc<Package>>,
+    capabilities: Arc<crate::package::Capabilities>,
     fixture: Option<Rc<FixtureRuntime>>,
     registrations: RefCell<BTreeMap<u64, Registration>>,
     cursor: Cell<u64>,
@@ -117,9 +119,14 @@ pub(super) struct External {
 }
 
 impl External {
-    pub(super) fn new(package: Option<Rc<Package>>, source: &AssetSource) -> Self {
+    pub(super) fn new(
+        package: Option<Rc<Package>>,
+        capabilities: Arc<crate::package::Capabilities>,
+        source: &AssetSource,
+    ) -> Self {
         Self {
             package,
+            capabilities,
             fixture: match source {
                 AssetSource::Fixture(fixture) => Some(fixture.clone()),
                 AssetSource::Live(_) => None,
@@ -632,14 +639,13 @@ impl Work {
         self.require_external(ctx)?;
         let program = self.bounded_text(ctx, program, MAX_PROGRAM_BYTES, "command program")?;
         let program = self.read_text(ctx, &program)?;
-        if !self.external.package.as_ref().is_some_and(|package| {
-            package
-                .manifest
-                .capabilities
-                .commands
-                .iter()
-                .any(|allowed| allowed == program)
-        }) {
+        if !self
+            .external
+            .capabilities
+            .commands
+            .iter()
+            .any(|allowed| allowed == program)
+        {
             return Err(self.invalid_external(
                 ctx,
                 "PermissionDenied",
@@ -745,12 +751,7 @@ impl Work {
         handler: Value<'js>,
     ) -> rquickjs::Result<Function<'js>> {
         self.require_external(ctx)?;
-        if !self
-            .external
-            .package
-            .as_ref()
-            .is_some_and(|package| package.manifest.capabilities.control_channel)
-        {
+        if !self.external.capabilities.control_channel {
             return Err(self.invalid_external(
                 ctx,
                 "PermissionDenied",

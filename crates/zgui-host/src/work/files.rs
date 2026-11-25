@@ -131,13 +131,11 @@ pub(super) struct FilesState {
 impl FilesState {
     pub(super) fn new(
         package: Option<Rc<Package>>,
+        capabilities: &crate::package::Capabilities,
         source: &AssetSource,
         wake: std::sync::Arc<dyn Fn() + Send + Sync>,
     ) -> Self {
-        let grants: Vec<FileDirectoryGrant> = package
-            .as_ref()
-            .map(|p| p.manifest.capabilities.files.directories.clone())
-            .unwrap_or_default();
+        let grants: Vec<FileDirectoryGrant> = capabilities.files.directories.clone();
         let backend = match source {
             AssetSource::Fixture(fixture) => {
                 let mut vfs = fixture.build_preview_fs();

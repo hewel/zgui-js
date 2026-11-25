@@ -1,6 +1,6 @@
 //! Exact origin normalization, manifest allowlist authorization, and connect-time IP enforcement.
 use std::{
-    collections::BTreeSet,
+    collections::BTreeMap,
     fmt,
     io,
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
@@ -171,58 +171,84 @@ impl fmt::Display for Origin {
     }
 }
 
-/// Sealed per-session origin and destination network policy.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct OriginPolicy {
-    origins: BTreeSet<Origin>,
+/// Per-origin transport policy rule (no cross-origin flag leakage).
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct OriginRule {
+    pub origin: Origin,
+    pub allow_insecure_http: bool,
+    pub allow_private_networks: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct OriginFlags {
     allow_insecure_http: bool,
     allow_private_networks: bool,
 }
 
+/// Sealed per-session origin and destination network policy.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct OriginPolicy {
+    rules: BTreeMap<Origin, OriginFlags>,
+}
+
 impl OriginPolicy {
-    /// Builds a validated policy from manifest declarations.
+    /// Builds a validated policy from uniform legacy manifest flags applied to `origins`.
     pub fn new(
         origins: impl IntoIterator<Item = Origin>,
         allow_insecure_http: bool,
         allow_private_networks: bool,
     ) -> Result<Self, String> {
-        let mut set = BTreeSet::new();
-        for origin in origins {
-            if !origin.scheme().is_tls() && !allow_insecure_http {
-                return Err(format!(
-                    "origin {origin} requires capabilities.network.allowInsecureHttp = true"
-                ));
-            }
-            if !allow_private_networks && is_restricted_host(origin.connect_host()) {
-                return Err(format!(
-                    "private/loopback origin {origin} requires capabilities.network.allowPrivateNetworks = true"
-                ));
-            }
-            set.insert(origin);
-        }
-        Ok(Self {
-            origins: set,
+        let unique: std::collections::BTreeSet<Origin> = origins.into_iter().collect();
+        Self::from_rules(unique.into_iter().map(|origin| OriginRule {
+            origin,
             allow_insecure_http,
             allow_private_networks,
-        })
+        }))
+    }
+
+    /// Builds a validated lossless per-origin policy; rules never widen unrelated origins.
+    pub fn from_rules(rules: impl IntoIterator<Item = OriginRule>) -> Result<Self, String> {
+        let mut map = BTreeMap::new();
+        for rule in rules {
+            if !rule.origin.scheme().is_tls() && !rule.allow_insecure_http {
+                return Err(format!(
+                    "origin {} requires allowInsecureHttp = true",
+                    rule.origin
+                ));
+            }
+            if !rule.allow_private_networks && is_restricted_host(rule.origin.connect_host()) {
+                return Err(format!(
+                    "private/loopback origin {} requires allowPrivateNetworks = true",
+                    rule.origin
+                ));
+            }
+            let flags = OriginFlags {
+                allow_insecure_http: rule.allow_insecure_http,
+                allow_private_networks: rule.allow_private_networks,
+            };
+            if map.insert(rule.origin.clone(), flags).is_some() {
+                return Err(format!("duplicate network origin rule: {}", rule.origin));
+            }
+        }
+        Ok(Self { rules: map })
     }
 
     /// Whether this policy grants any network origin.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.origins.is_empty()
+        self.rules.is_empty()
     }
 
-    /// Whether plaintext `http://` / `ws://` origins are permitted.
+    /// Whether plaintext `http://` / `ws://` is permitted for `origin`.
     #[must_use]
-    pub const fn allow_insecure_http(&self) -> bool {
-        self.allow_insecure_http
+    pub fn allows_insecure_http(&self, origin: &Origin) -> bool {
+        self.rules.get(origin).is_some_and(|flags| flags.allow_insecure_http)
     }
 
-    /// Whether loopback/private/link-local destinations are permitted.
+    /// Whether loopback/private/link-local destinations are permitted for `origin`.
     #[must_use]
-    pub const fn allow_private_networks(&self) -> bool {
-        self.allow_private_networks
+    pub fn allows_private_networks(&self, origin: &Origin) -> bool {
+        self.rules.get(origin).is_some_and(|flags| flags.allow_private_networks)
     }
 
     /// Authorizes an HTTP/HTTPS URL before DNS lookup.
@@ -260,19 +286,19 @@ impl OriginPolicy {
         }
         let origin = Origin::from_url(&parsed)
             .map_err(|msg| NetworkError::new("E_NETWORK_POLICY", msg))?;
-        if !origin.scheme().is_tls() && !self.allow_insecure_http {
+        let Some(flags) = self.rules.get(&origin) else {
+            return Err(NetworkError::new(
+                "E_CAPABILITY",
+                format!("origin {origin} is not allowed by capabilities.network"),
+            ));
+        };
+        if !origin.scheme().is_tls() && !flags.allow_insecure_http {
             return Err(NetworkError::new(
                 "E_CAPABILITY",
                 format!("insecure scheme denied for origin {origin}"),
             ));
         }
-        if !self.origins.contains(&origin) {
-            return Err(NetworkError::new(
-                "E_CAPABILITY",
-                format!("origin {origin} is not in capabilities.network.origins"),
-            ));
-        }
-        if !self.allow_private_networks && is_restricted_host(origin.connect_host()) {
+        if !flags.allow_private_networks && is_restricted_host(origin.connect_host()) {
             return Err(NetworkError::new(
                 "E_NETWORK_POLICY",
                 format!("private/loopback host denied for origin {origin}"),
@@ -281,12 +307,18 @@ impl OriginPolicy {
         Ok((parsed, origin))
     }
 
-    /// Verifies a resolved IP address right before connecting.
-    pub fn verify_destination_ip(&self, ip: IpAddr) -> Result<(), NetworkError> {
-        if !self.allow_private_networks && is_restricted_ip(ip) {
+    /// Verifies a resolved IP address against the exact origin's rule right before connecting.
+    pub fn verify_destination_ip_for(&self, origin: &Origin, ip: IpAddr) -> Result<(), NetworkError> {
+        let Some(flags) = self.rules.get(origin) else {
+            return Err(NetworkError::new(
+                "E_CAPABILITY",
+                format!("origin {origin} is not allowed by capabilities.network"),
+            ));
+        };
+        if !flags.allow_private_networks && is_restricted_ip(ip) {
             return Err(NetworkError::new(
                 "E_NETWORK_POLICY",
-                format!("connection to restricted IP {ip} denied by network policy"),
+                format!("connection to restricted IP {ip} denied for origin {origin}"),
             ));
         }
         Ok(())
@@ -424,7 +456,7 @@ pub async fn connect_verified_stream(
     }
 
     for addr in &addrs {
-        policy.verify_destination_ip(addr.ip())?;
+        policy.verify_destination_ip_for(origin, addr.ip())?;
     }
 
     let mut last_err = None;

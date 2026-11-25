@@ -77,6 +77,7 @@ impl Session {
         let (sender, wakes) = mpsc::channel();
         let work = Work::new(
             WorkSession {
+                capabilities: Arc::new(package.manifest.capabilities.clone()),
                 package: Some(package), generation, resolved: Default::default(),
                 assets: AssetSource::Live(host_services::Executor::new(1, 8).unwrap()),
             },

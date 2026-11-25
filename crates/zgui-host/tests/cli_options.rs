@@ -12,6 +12,8 @@ fn help_flags_print_usage_and_exit_zero() {
         assert!(stdout.contains("--height"), "missing --height in help: {stdout}");
         assert!(stdout.contains("--title"), "missing --title in help: {stdout}");
         assert!(stdout.contains("--max-js-stack-bytes"), "missing --max-js-stack-bytes in help: {stdout}");
+        assert!(stdout.contains("--extensions-overlay"), "missing --extensions-overlay in help: {stdout}");
+        assert!(stdout.contains("--bytecode-cache-dir"), "missing --bytecode-cache-dir in help: {stdout}");
     }
 }
 
@@ -23,6 +25,7 @@ fn invalid_window_and_stack_cli_flags_fail_cleanly() {
         &["--height", "-10"][..],
         &["--title", "   "][..],
         &["--max-js-stack-bytes", "0"][..],
+        &["--extensions-overlay", "/tmp/nonexistent-overlay.json"][..],
     ] {
         let output = Command::new(bin).args(args).output().expect("run zgui-host with invalid arg");
         assert!(!output.status.success(), "expected failure for {args:?}");

@@ -27,6 +27,35 @@
     },
     "entry": { "$ref": "#/$defs/path" },
     "sourceMap": { "$ref": "#/$defs/path" },
+    "bytecodeFormat": { "type": "string", "minLength": 1 },
+    "quickjsAbi": { "type": "string", "minLength": 1 },
+    "chunks": {
+      "type": "array",
+      "maxItems": 256,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "sourceMap"],
+        "properties": {
+          "path": { "$ref": "#/$defs/path" },
+          "sourceMap": { "$ref": "#/$defs/path" }
+        }
+      }
+    },
+    "workers": {
+      "type": "array",
+      "maxItems": 32,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "path", "sourceMap"],
+        "properties": {
+          "name": { "type": "string", "minLength": 1, "pattern": "\\S" },
+          "path": { "$ref": "#/$defs/path" },
+          "sourceMap": { "$ref": "#/$defs/path" }
+        }
+      }
+    },
     "styles": { "type": "array", "uniqueItems": true, "items": { "$ref": "#/$defs/path" } },
     "assets": { "type": "array", "uniqueItems": true, "items": { "$ref": "#/$defs/path" } },
     "fonts": {
@@ -40,6 +69,22 @@
           "family": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "\\S" },
           "path": { "$ref": "#/$defs/path" }
         }
+      }
+    },
+    "window": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^(?![\\s\\S]*[\\u0000-\\u001f\\u007f-\\u009f])\\S(?:[\\s\\S]*\\S)?(?![\\s\\S])"
+        },
+        "width": { "type": "integer", "minimum": 1, "maximum": 16384 },
+        "height": { "type": "integer", "minimum": 1, "maximum": 16384 },
+        "minWidth": { "type": "integer", "minimum": 1, "maximum": 16384 },
+        "minHeight": { "type": "integer", "minimum": 1, "maximum": 16384 },
+        "resizable": { "type": "boolean" }
       }
     },
     "capabilities": {
@@ -63,7 +108,76 @@
           "default": [],
           "items": { "type": "string", "pattern": "^(?=.*[^ ])[^\\u0000-\\u001f\\u007f-\\u009f]+$" }
         },
-        "controlChannel": { "type": "boolean", "default": false }
+        "controlChannel": { "type": "boolean", "default": false },
+        "clipboard": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "read": { "type": "boolean", "default": false }
+          }
+        },
+        "sqlite": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "databases": {
+              "type": "array",
+              "uniqueItems": true,
+              "default": [],
+              "items": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"
+              }
+            }
+          }
+        },
+        "files": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "directories": {
+              "type": "array",
+              "default": [],
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["path", "mode"],
+                "properties": {
+                  "path": { "$ref": "#/$defs/fileDirectoryPath" },
+                  "mode": { "enum": ["read", "readwrite"] }
+                }
+              }
+            }
+          }
+        },
+        "network": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "origins": {
+              "type": "array",
+              "uniqueItems": true,
+              "default": [],
+              "items": { "$ref": "#/$defs/networkOrigin" }
+            },
+            "originRules": {
+              "type": "array",
+              "default": [],
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["origin"],
+                "properties": {
+                  "origin": { "$ref": "#/$defs/networkOrigin" },
+                  "allowInsecureHttp": { "type": "boolean", "default": false },
+                  "allowPrivateNetworks": { "type": "boolean", "default": false }
+                }
+              }
+            },
+            "allowInsecureHttp": { "type": "boolean", "default": false },
+            "allowPrivateNetworks": { "type": "boolean", "default": false }
+          }
+        }
       }
     },
     "styleSystem": {
@@ -107,6 +221,19 @@
           }
         ]
       }
+    },
+    "fileDirectoryPath": {
+      "type": "string",
+      "anyOf": [
+        { "$ref": "#/$defs/literalHostPath" },
+        {
+          "pattern": "^\\$(?:HOME|XDG_DATA_HOME|XDG_DOCUMENTS_DIR)(?:/(?!\\.{1,2}(?:/|$))[^$/\\\\\\u0000-\\u001f\\u007f-\\u009f]+)*(?![\\s\\S])"
+        }
+      ]
+    },
+    "networkOrigin": {
+      "type": "string",
+      "pattern": "^(?:https?|wss?)://[^\\s/?#*]+(?![\\s\\S])"
     },
     "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
   }

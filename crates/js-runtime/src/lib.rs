@@ -413,6 +413,67 @@ pub fn compile_module_bytecode_in_dir(
     })
 }
 
+/// Compile a verified ESM module strictly from in-memory [`VerifiedModuleProvider`] bytes
+/// (zero disk reads, eliminating TOCTOU) while resolving static graph edges through the same provider.
+pub fn compile_verified_module_bytecode(
+    canonical_name: &str,
+    provider: Rc<dyn VerifiedModuleProvider>,
+) -> Result<Vec<u8>, Diagnostic> {
+    let source = match provider.load(canonical_name) {
+        Ok(VerifiedModulePayload::Source(source)) => source,
+        Ok(VerifiedModulePayload::Bytecode(_)) => {
+            return Err(Diagnostic::new(
+                DiagnosticKind::Engine,
+                "bytecode compile",
+                format!("verified module {canonical_name} is already bytecode; expected source"),
+            ));
+        }
+        Err(message) => {
+            return Err(Diagnostic::new(
+                DiagnosticKind::Exception,
+                "bytecode compile",
+                message,
+            ));
+        }
+    };
+    let runtime = Runtime::new().map_err(|e| {
+        Diagnostic::new(DiagnosticKind::Engine, "bytecode compile", e.to_string())
+    })?;
+    let limits = RuntimeLimits::default();
+    runtime.set_memory_limit(limits.memory_limit_bytes);
+    runtime.set_max_stack_size(limits.stack_limit_bytes);
+    runtime.set_loader(
+        ProviderResolver {
+            provider: Rc::clone(&provider),
+        },
+        ProviderLoader { provider },
+    );
+    let context = Context::full(&runtime).map_err(|e| {
+        Diagnostic::new(DiagnosticKind::Engine, "bytecode compile", e.to_string())
+    })?;
+    context.with(|ctx| {
+        let module = Module::declare(ctx.clone(), canonical_name, source).map_err(|err| {
+            let detail = match err {
+                rquickjs::Error::Exception => {
+                    let caught = ctx.catch();
+                    format!("exception while compiling {canonical_name}: {caught:?}")
+                }
+                other => other.to_string(),
+            };
+            Diagnostic::new(DiagnosticKind::Exception, "bytecode compile", detail)
+        })?;
+        module
+            .write(WriteOptions {
+                strip_source: false,
+                strip_debug: false,
+                ..WriteOptions::default()
+            })
+            .map_err(|err| {
+                Diagnostic::new(DiagnosticKind::Engine, "bytecode compile", err.to_string())
+            })
+    })
+}
+
 #[allow(unsafe_code)]
 fn load_verified_bytecode_module<'js>(
     ctx: Ctx<'js>,
@@ -1308,5 +1369,55 @@ export function boom() {
         assert!(err.message.contains("bytecode-boom"));
         let stack = err.stack.as_deref().unwrap_or("");
         assert!(stack.contains("app.mjs:7:"), "stack must preserve filename:line:col: {stack}");
+    }
+
+    struct InMemoryGraphProvider {
+        modules: BTreeMap<String, String>,
+    }
+
+    impl VerifiedModuleProvider for InMemoryGraphProvider {
+        fn resolve(&self, referrer: &str, specifier: &str) -> Result<String, String> {
+            if specifier == "./dep.mjs" && referrer == "zgui-ext://demo/dist/entry.mjs" {
+                return Ok("zgui-ext://demo/dist/dep.mjs".into());
+            }
+            Err(format!("blocked import {specifier} from {referrer}"))
+        }
+
+        fn load(&self, canonical_name: &str) -> Result<VerifiedModulePayload, String> {
+            self.modules
+                .get(canonical_name)
+                .cloned()
+                .map(VerifiedModulePayload::Source)
+                .ok_or_else(|| format!("missing module {canonical_name}"))
+        }
+    }
+
+    #[test]
+    fn compile_verified_module_bytecode_compiles_in_memory_without_disk_reads() {
+        let mut modules = BTreeMap::new();
+        modules.insert(
+            "zgui-ext://demo/dist/entry.mjs".into(),
+            "import { value } from './dep.mjs'; export function read() { return value + 1; }\n".into(),
+        );
+        modules.insert(
+            "zgui-ext://demo/dist/dep.mjs".into(),
+            "export const value = 41;\n".into(),
+        );
+        let provider: Rc<dyn VerifiedModuleProvider> = Rc::new(InMemoryGraphProvider { modules });
+        let entry_bc = compile_verified_module_bytecode(
+            "zgui-ext://demo/dist/entry.mjs",
+            Rc::clone(&provider),
+        )
+        .expect("in-memory bytecode compile succeeds");
+        let mut runtime = JsRuntime::new(RuntimeLimits::default()).expect("runtime");
+        runtime.set_module_provider(provider);
+        runtime.load_bytecode_module(&entry_bc).expect("load compiled entry");
+        let answer: i32 = runtime
+            .with_module(|_ctx, m| {
+                let read: Function = m.get("read")?;
+                read.call(())
+            })
+            .expect("call read");
+        assert_eq!(answer, 42);
     }
 }

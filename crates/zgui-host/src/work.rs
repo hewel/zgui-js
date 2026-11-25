@@ -86,6 +86,7 @@ enum Scheduler {
 /// Package and service authority owned by one generation of Work.
 pub(crate) struct WorkSession {
     pub(crate) package: Option<Rc<Package>>,
+    pub(crate) capabilities: Arc<crate::package::Capabilities>,
     pub(crate) generation: u64,
     pub(crate) assets: AssetSource,
     pub(crate) resolved: ResolvedCapabilities,
@@ -134,15 +135,13 @@ impl Work {
         scheduler: Scheduler,
         frame_hosts: Vec<FrameHostEntry>,
     ) -> Rc<Self> {
-        let WorkSession { package, generation, assets, resolved } = session;
-        let allow_clipboard_read = package
-            .as_ref()
-            .is_some_and(|pkg| pkg.manifest.capabilities.clipboard.read);
-        let files = files::FilesState::new(package.clone(), &assets, wake.clone());
-        let network = network::NetworkState::new(package.clone(), &assets);
-        let sqlite = sqlite::SqliteState::new(package.clone(), &assets);
+        let WorkSession { package, capabilities, generation, assets, resolved } = session;
+        let allow_clipboard_read = capabilities.clipboard.read;
+        let files = files::FilesState::new(package.clone(), &capabilities, &assets, wake.clone());
+        let network = network::NetworkState::new(&capabilities, &assets);
+        let sqlite = sqlite::SqliteState::new(package.clone(), Arc::clone(&capabilities), &assets);
         let workers = workers::WorkersState::new(package.clone(), &assets);
-        let external = external::External::new(package.clone(), &assets);
+        let external = external::External::new(package.clone(), capabilities, &assets);
         Rc::new(Self {
             registrations: RefCell::new(HashMap::new()), ready: RefCell::new(VecDeque::new()), requests: RefCell::new(HashMap::new()),
             mode: Cell::new(Mode::Loading), cleanup_shell: OnceCell::new(), gesture_source: OnceCell::new(), generation, scheduler,

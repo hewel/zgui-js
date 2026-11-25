@@ -84,7 +84,11 @@ impl SessionHost {
             .policy
             .clone()
             .with_session_lock(lock_state)
-            .with_hydrated_dev_state(hydrated);
+            .with_hydrated_dev_state(hydrated)
+            .with_extension_overlay(self.overlay.policy_overlay())
+            .with_bytecode_cache(self.overlay.bytecode_cache.clone())
+            .with_safe_base_shell(self.overlay.safe_base_shell)
+            .with_last_overlay_failure(self.overlay.last_failure.clone());
         let candidate = match Session::prepare_shell(fonts.clone(), runtime.app_timers(), module.clone(), generation, cx.waker(), policy) {
             Ok(candidate) => candidate,
             Err(error) => return ReloadOutcome::Rejected(error),
@@ -101,12 +105,30 @@ impl SessionHost {
             if self.pure_session.is_none() { self.pure_session = Some(candidate); }
             return ReloadOutcome::Rejected(error);
         }
+        let capture_handoff = self.overlay.enabled && !self.overlay.safe_base_shell && !self.overlay.is_rollback_mount;
+        let mut handoff = None;
         let predecessor_leak = self.pure_session.take().and_then(|previous| {
+            previous.invoke_before_commit();
+            if capture_handoff && !lock_state.is_some_and(SessionLockState::is_retained) && !self.shell_windows.has_active_lock() {
+                handoff = previous.capture_session_handoff();
+            }
             let report = self.shell_windows.retire(&previous, |token, id| close_native_surface(runtime, cx, token, id));
             staged.fence_after_predecessor(report, &candidate, platform_lock_state(cx), |token, id| close_native_surface(runtime, cx, token, id))
         });
         self.shell_windows = staged;
+        if capture_handoff {
+            candidate.set_incoming_handoff(handoff);
+        }
         candidate.commit_staged_mount();
+        if self.overlay.enabled
+            && let Err(error) = candidate.notify_session_committed(self.overlay.initial_notification_phase())
+        {
+            self.shell_windows.retire(&candidate, |token, id| close_native_surface(runtime, cx, token, id));
+            return ReloadOutcome::Rejected(error);
+        }
+        if self.overlay.enabled && !self.overlay.safe_base_shell && let Some(overlay) = self.overlay.active_overlay.clone() {
+            self.overlay.start_observation(generation, overlay);
+        }
         self.module = module.clone();
         self.last_good = Some(module.clone());
         self.pure_session = Some(candidate);
@@ -119,22 +141,43 @@ impl SessionHost {
         if self.is_pure_shell() && !self.pure_attempted {
             match self.replace_shell(runtime, cx, images, self.module.clone()) {
                 ReloadOutcome::Mounted { .. } => {}
-                ReloadOutcome::Rejected(error) | ReloadOutcome::Fallback(error) => return Err(error),
+                ReloadOutcome::Rejected(error) | ReloadOutcome::Fallback(error) => {
+                    if !self.overlay.enabled {
+                        return Err(error);
+                    }
+                    let failed_meta = self.active_overlay_failed_meta();
+                    self.recover_pure_shell_overlay(runtime, cx, images, "mount", error.to_string(), &failed_meta)?;
+                }
             }
         }
+        self.drain_pending_overlay_pure_if_unlocked(runtime, cx, images);
+        self.tick_observation();
         let session = self.sessions().find(|session| Some(session.generation) == self.shell_windows.generation).cloned();
         let Some(session) = session else { return Ok(()); };
         let result = self.step_shell(runtime, cx, images, &session);
-        if result.is_err() {
+        if let Err(error) = result {
+            let gen_id = session.generation;
             self.shell_windows.retire(&session, |token, id| close_native_surface(runtime, cx, token, id));
-            return result;
+            if self.overlay.enabled && self.overlay.observation.as_ref().is_some_and(|obs| obs.generation == gen_id) {
+                let failed_meta = self.active_overlay_failed_meta();
+                self.pure_session = None;
+                return self.recover_pure_shell_overlay(runtime, cx, images, "observation", error.to_string(), &failed_meta);
+            }
+            return Err(error);
         }
         self.apply_window_commands(runtime, cx, images)?;
         // A runtime command may have opened/closed an auxiliary window; settle if dirty.
         if session.shell.is_dirty() {
             let result = self.step_shell(runtime, cx, images, &session);
-            if result.is_err() {
+            if let Err(error) = result {
+                let gen_id = session.generation;
                 self.shell_windows.retire(&session, |token, id| close_native_surface(runtime, cx, token, id));
+                if self.overlay.enabled && self.overlay.observation.as_ref().is_some_and(|obs| obs.generation == gen_id) {
+                    let failed_meta = self.active_overlay_failed_meta();
+                    self.pure_session = None;
+                    return self.recover_pure_shell_overlay(runtime, cx, images, "observation", error.to_string(), &failed_meta);
+                }
+                return Err(error);
             }
             return result;
         }

@@ -3,6 +3,7 @@ use std::{
     cell::{Cell, RefCell},
     collections::{BTreeMap, HashMap},
     rc::Rc,
+    sync::Arc,
     time::Duration,
 };
 
@@ -48,6 +49,7 @@ pub(crate) struct SqliteCounts {
 
 pub(super) struct SqliteState {
     package: Option<Rc<Package>>,
+    capabilities: Arc<crate::package::Capabilities>,
     fixture: Option<Rc<FixtureRuntime>>,
     memory_scope: u64,
     seeded_memory_dbs: RefCell<std::collections::HashSet<String>>,
@@ -59,9 +61,14 @@ pub(super) struct SqliteState {
 }
 
 impl SqliteState {
-    pub(super) fn new(package: Option<Rc<Package>>, source: &AssetSource) -> Self {
+    pub(super) fn new(
+        package: Option<Rc<Package>>,
+        capabilities: Arc<crate::package::Capabilities>,
+        source: &AssetSource,
+    ) -> Self {
         Self {
             package,
+            capabilities,
             fixture: match source {
                 AssetSource::Fixture(fixture) => Some(fixture.clone()),
                 AssetSource::Live(_) => None,
@@ -197,8 +204,8 @@ impl Work {
                 "SQLite requires a packaged application with capabilities.sqlite.databases",
             ));
         };
-        if !package
-            .manifest
+        if !self
+            .sqlite
             .capabilities
             .sqlite
             .databases

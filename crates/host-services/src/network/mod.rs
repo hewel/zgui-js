@@ -21,7 +21,7 @@ pub use http::{
     HttpEvent, HttpHandle, HttpRequestSpec, HttpResponseHead, MAX_REDIRECTS,
     MAX_REQUEST_BODY_BYTES, MAX_RESPONSE_BYTES, SseEvent,
 };
-pub use policy::{Origin, OriginPolicy, OriginScheme, is_restricted_host, is_restricted_ip};
+pub use policy::{Origin, OriginPolicy, OriginRule, OriginScheme, is_restricted_host, is_restricted_ip};
 pub use sse::{DEFAULT_MAX_SSE_EVENT_BYTES, MAX_SSE_EVENT_BYTES, SseMessage, SseParser};
 pub use ws::{
     DEFAULT_MAX_WS_MESSAGE_BYTES, DEFAULT_MAX_WS_OUTBOUND_BYTES, InboundPayload,
@@ -308,5 +308,97 @@ mod tests {
         }
         assert!(saw_cap, "expected unauthorized redirect to fail with E_CAPABILITY");
         server.join().unwrap();
+    }
+
+    #[test]
+    fn per_origin_rules_prevent_cross_origin_insecure_or_private_pollution() {
+        let public = Origin::parse_manifest_entry("https://public.example.com").unwrap();
+        let local = Origin::parse_manifest_entry("http://127.0.0.1:8080").unwrap();
+        let policy = OriginPolicy::from_rules([
+            OriginRule {
+                origin: public.clone(),
+                allow_insecure_http: false,
+                allow_private_networks: false,
+            },
+            OriginRule {
+                origin: local.clone(),
+                allow_insecure_http: true,
+                allow_private_networks: true,
+            },
+        ])
+        .unwrap();
+
+        assert!(policy.authorize_http("https://public.example.com/v1").is_ok());
+        assert!(policy.authorize_http("http://127.0.0.1:8080/health").is_ok());
+        assert!(!policy.allows_insecure_http(&public));
+        assert!(!policy.allows_private_networks(&public));
+        assert!(policy.allows_insecure_http(&local));
+        assert!(policy.allows_private_networks(&local));
+
+        // Loopback/private IP must be denied for the public origin while allowed for the local origin.
+        assert_eq!(
+            policy
+                .verify_destination_ip_for(&public, IpAddr::V4(Ipv4Addr::LOCALHOST))
+                .unwrap_err()
+                .code,
+            "E_NETWORK_POLICY"
+        );
+        assert!(policy.verify_destination_ip_for(&local, IpAddr::V4(Ipv4Addr::LOCALHOST)).is_ok());
+        // Public origin must not be reachable over plaintext HTTP.
+        assert_eq!(
+            policy.authorize_http("http://public.example.com/v1").unwrap_err().code,
+            "E_CAPABILITY"
+        );
+        // Duplicate rules rejected.
+        assert!(
+            OriginPolicy::from_rules([
+                OriginRule { origin: public.clone(), allow_insecure_http: false, allow_private_networks: false },
+                OriginRule { origin: public, allow_insecure_http: false, allow_private_networks: true },
+            ])
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn per_origin_redirect_cannot_leak_private_network_access_to_strict_origin() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            let (mut sock, _) = listener.accept().unwrap();
+            let mut req_buf = [0u8; 2048];
+            let _ = sock.read(&mut req_buf);
+            let resp = "HTTP/1.1 302 Found\r\nLocation: https://strict.example.com/ok\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+            sock.write_all(resp.as_bytes()).unwrap();
+        });
+
+        let local = Origin::parse_manifest_entry(&format!("http://127.0.0.1:{}", addr.port())).unwrap();
+        let strict = Origin::parse_manifest_entry("https://strict.example.com").unwrap();
+        let policy = OriginPolicy::from_rules([
+            OriginRule {
+                origin: local,
+                allow_insecure_http: true,
+                allow_private_networks: true,
+            },
+            OriginRule {
+                origin: strict.clone(),
+                allow_insecure_http: false,
+                allow_private_networks: false,
+            },
+        ])
+        .unwrap();
+
+        // Direct scheme downgrade or loopback IP for strict target must be blocked despite local rule.
+        assert_eq!(
+            policy.authorize_http("http://strict.example.com/ok").unwrap_err().code,
+            "E_CAPABILITY"
+        );
+        assert_eq!(
+            policy
+                .verify_destination_ip_for(&strict, IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)))
+                .unwrap_err()
+                .code,
+            "E_NETWORK_POLICY"
+        );
+        drop(server);
     }
 }

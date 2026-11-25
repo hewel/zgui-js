@@ -5,7 +5,22 @@ use js_runtime::{JsRuntime, RejectionPolicy, RuntimeLimits};
 use rquickjs::{Exception, Function, Persistent};
 use ui_bridge::{BridgeGroup, BridgeStep, DispatchOutcome, HostPort, UiBridge, registry::NodeRegistry};
 use zgui::{app::Fonts, platform::{SessionLockState, Surface, SurfaceId, WakeReason, Waker}, runtime::{AppTimers, ImageBlobs}, view::DocumentId};
-use crate::{assets::{AssetSource, ContractFailure, MAX_SAFE_ID}, dev_state::{DevStateScope, DevStateSnapshot, DevStateStore}, environment::Environment, session_host::MountRegion, package::Package, shell::{Authority, ContractPolicy, Monitor, Shell, ShellConfig}, work::{Arguments, Work, WorkSession}};
+use crate::{
+    assets::{AssetSource, ContractFailure, MAX_SAFE_ID},
+    bytecode_cache::BytecodeCache,
+    dev_state::{DevStateScope, DevStateSnapshot, DevStateStore},
+    environment::Environment,
+    extensions::{
+        bridge::{OverlayFailureInfo, OverlayPhase, ShellHostBridge},
+        manifest::VerifiedOverlay,
+        provider::{CompositeVerifiedModuleProvider, SharedRuntimeRegistry},
+    },
+    handoff::SessionHandoffSnapshot,
+    package::Package,
+    session_host::MountRegion,
+    shell::{Authority, ContractPolicy, Monitor, Shell, ShellConfig},
+    work::{Arguments, Work, WorkSession},
+};
 use crate::runtime_capabilities::ResolvedCapabilities;
 use window_control::{WindowCommand, WindowControls, WindowState};
 
@@ -137,17 +152,22 @@ pub(crate) struct SessionPolicy {
     session_lock: Option<SessionLockState>,
     dev_state: bool,
     hydrated_dev_state: Option<DevStateSnapshot>,
+    extension_overlay: Option<Rc<VerifiedOverlay>>,
+    bytecode_cache: Option<Rc<BytecodeCache>>,
+    incoming_handoff: Option<SessionHandoffSnapshot>,
+    safe_base_shell: bool,
+    last_overlay_failure: Option<OverlayFailureInfo>,
 }
 impl SessionPolicy {
     /// Ordinary live execution: wall clock, ambient limits, and package assets
     /// on the shared worker pool. Unhandled rejections fault under a retained lock.
     pub(crate) fn live(executor: host_services::Executor) -> Self {
-        Self { limits: RuntimeLimits::default(), deadline: None, environment: None, strict_rejections: false, assets: AssetSource::Live(executor), socket_bindings: None, reduced_motion: None, teardown_reporter: None, session_lock: None, dev_state: false, hydrated_dev_state: None }
+        Self { limits: RuntimeLimits::default(), deadline: None, environment: None, strict_rejections: false, assets: AssetSource::Live(executor), socket_bindings: None, reduced_motion: None, teardown_reporter: None, session_lock: None, dev_state: false, hydrated_dev_state: None, extension_overlay: None, bytecode_cache: None, incoming_handoff: None, safe_base_shell: false, last_overlay_failure: None }
     }
     /// Deterministic preview execution: supplied limits, an enclosing deadline,
     /// the virtual environment, strict rejection handling and fixture assets.
     pub(crate) fn preview(limits: RuntimeLimits, deadline: Rc<Cell<Instant>>, environment: Rc<Environment>, fixtures: Rc<crate::assets::fixture::FixtureRuntime>) -> Self {
-        Self { limits, deadline: Some(deadline), environment: Some(environment), strict_rejections: true, assets: AssetSource::Fixture(fixtures), socket_bindings: None, reduced_motion: Some(false), teardown_reporter: None, session_lock: None, dev_state: false, hydrated_dev_state: None }
+        Self { limits, deadline: Some(deadline), environment: Some(environment), strict_rejections: true, assets: AssetSource::Fixture(fixtures), socket_bindings: None, reduced_motion: Some(false), teardown_reporter: None, session_lock: None, dev_state: false, hydrated_dev_state: None, extension_overlay: None, bytecode_cache: None, incoming_handoff: None, safe_base_shell: false, last_overlay_failure: None }
     }
     /// Install the explicit launch bindings shared by all live candidates.
     #[must_use]
@@ -191,6 +211,26 @@ impl SessionPolicy {
     /// Report residual external leases to the live application on any retirement path.
     pub(crate) fn with_teardown_reporter(mut self, reporter: TeardownReporter) -> Self {
         self.teardown_reporter = Some(reporter);
+        self
+    }
+
+    pub(crate) fn with_extension_overlay(mut self, overlay: Option<Rc<VerifiedOverlay>>) -> Self {
+        self.extension_overlay = overlay;
+        self
+    }
+
+    pub(crate) fn with_bytecode_cache(mut self, cache: Option<Rc<BytecodeCache>>) -> Self {
+        self.bytecode_cache = cache;
+        self
+    }
+
+    pub(crate) fn with_safe_base_shell(mut self, safe_base_shell: bool) -> Self {
+        self.safe_base_shell = safe_base_shell;
+        self
+    }
+
+    pub(crate) fn with_last_overlay_failure(mut self, failure: Option<OverlayFailureInfo>) -> Self {
+        self.last_overlay_failure = failure;
         self
     }
 }
@@ -358,6 +398,8 @@ pub(crate) struct Session {
     pub(crate) work: Rc<Work>,
     pub(crate) dnd: crate::dnd::DndState,
     dev_state: Option<Rc<RefCell<DevStateStore>>>,
+    shell_host: Option<Rc<ShellHostBridge>>,
+    effective_capabilities: Arc<crate::package::Capabilities>,
     platform_surfaces: RefCell<std::collections::HashMap<SurfaceId, std::sync::Weak<dyn Surface>>>,
     pub(crate) engine: RefCell<Option<JsRuntime>>,
     font_leases: RefCell<Vec<zgui::app::fonts::FontLease>>,
@@ -400,19 +442,40 @@ impl Session {
 
     fn prepare_inner(startup: Startup, module: SessionModule, generation: u64, waker: Arc<dyn Waker>, policy: SessionPolicy) -> Result<Rc<Self>> {
         if generation > MAX_SAFE_ID { return Err("session generation exhausted".into()); }
-        let resolved = if let Some(package) = module.as_package() {
-            let declarations = &package.manifest.capabilities;
+        let active_overlay = if module.as_package().is_some() && !policy.safe_base_shell {
+            policy.extension_overlay.clone()
+        } else {
+            None
+        };
+        let effective_capabilities = Arc::new(if let Some(package) = module.as_package() {
+            if let Some(overlay) = &active_overlay {
+                package
+                    .manifest
+                    .capabilities
+                    .merge_overlay(&overlay.effective_host_capabilities)
+                    .map_err(SessionError::InvalidState)?
+            } else {
+                package.manifest.capabilities.clone()
+            }
+        } else {
+            crate::package::Capabilities::default()
+        });
+        let resolved = if module.as_package().is_some() {
             match &policy.assets {
-                AssetSource::Live(_) => ResolvedCapabilities::live(declarations, policy.socket_bindings.as_deref().unwrap_or(&BTreeMap::new()), |key| std::env::var_os(key)),
-                AssetSource::Fixture(fixture) => fixture.resolve_capabilities(declarations),
+                AssetSource::Live(_) => ResolvedCapabilities::live(&effective_capabilities, policy.socket_bindings.as_deref().unwrap_or(&BTreeMap::new()), |key| std::env::var_os(key)),
+                AssetSource::Fixture(fixture) => fixture.resolve_capabilities(&effective_capabilities),
             }?
         } else {
             ResolvedCapabilities::default()
         };
+        let mut combined_styles = module.styles().to_vec();
+        if let Some(overlay) = &active_overlay {
+            combined_styles.extend(overlay.styles.iter().cloned());
+        }
         let fonts = match &startup { Startup::Primary { region, .. } => region.fonts.clone(), Startup::Shell { fonts, .. } => fonts.clone() };
         let mut engine = JsRuntime::new(policy.limits.clone())?;
         let mut font_families = std::collections::BTreeSet::new();
-        for sheet in module.styles() {
+        for sheet in &combined_styles {
             let summary = zgui_style::preflight_stylesheet(&sheet.css)
                 .map_err(|error| SessionError::Style { code: "E_STYLE_PROFILE", message: format!("stylesheet {} rejected", sheet.path),
                     details: serde_json::to_value(error).expect("native stylesheet diagnostics serialize") })?;
@@ -433,6 +496,7 @@ impl Session {
             }
         }
         if let Some(deadline) = &policy.deadline { engine.set_enclosing_deadline(deadline.clone()); }
+        let mut extension_module_provider: Option<Rc<dyn js_runtime::VerifiedModuleProvider>> = None;
         let session = Rc::new_cyclic(|weak: &Weak<Self>| {
             let bridges = Rc::new(BridgeGroup::new());
             let contract = if policy.strict_rejections { ContractPolicy::Sticky } else { ContractPolicy::Throw };
@@ -455,7 +519,13 @@ impl Session {
                 contract,
             }, waker.clone());
             let window_controls = WindowControls::new(waker.clone());
-            let work_session = WorkSession { package: module.as_package().cloned(), generation, assets: policy.assets.clone(), resolved };
+            let work_session = WorkSession {
+                package: module.as_package().cloned(),
+                capabilities: Arc::clone(&effective_capabilities),
+                generation,
+                assets: policy.assets.clone(),
+                resolved,
+            };
             let initial_reduced_motion = policy.reduced_motion.unwrap_or(false);
             let (primary, work) = match startup {
                 Startup::Primary { region, surface } => {
@@ -489,8 +559,32 @@ impl Session {
             } else {
                 None
             };
+            let shell_host = module.as_package().map(|package| {
+                let extra_shared = active_overlay
+                    .as_deref()
+                    .map_or(&[][..], |o| o.shared_runtime_modules.as_slice());
+                let shared_runtime = Rc::new(RefCell::new(SharedRuntimeRegistry::new(extra_shared)));
+                let approved_load_gate = Rc::new(Cell::new(false));
+                let bridge = ShellHostBridge::new(
+                    generation,
+                    active_overlay.clone(),
+                    Rc::clone(&shared_runtime),
+                    Rc::clone(&approved_load_gate),
+                    policy.incoming_handoff.clone(),
+                    policy.safe_base_shell,
+                    policy.last_overlay_failure.clone(),
+                );
+                extension_module_provider = Some(Rc::new(CompositeVerifiedModuleProvider::new(
+                    package.module_provider(),
+                    active_overlay.clone(),
+                    shared_runtime,
+                    policy.bytecode_cache.clone(),
+                    approved_load_gate,
+                )));
+                bridge
+            });
             Self {
-                disposer: RefCell::new(None), primary, layers: RefCell::new(BTreeMap::new()), bridges, shell, window_controls, work, dnd: crate::dnd::DndState::new(), dev_state, platform_surfaces: RefCell::new(std::collections::HashMap::new()), engine: RefCell::new(None),
+                disposer: RefCell::new(None), primary, layers: RefCell::new(BTreeMap::new()), bridges, shell, window_controls, work, dnd: crate::dnd::DndState::new(), dev_state, shell_host, effective_capabilities: Arc::clone(&effective_capabilities), platform_surfaces: RefCell::new(std::collections::HashMap::new()), engine: RefCell::new(None),
                 shell_surfaces: Cell::new(0), retirement_reported: Cell::new(false),
                 shell_stylesheets: RefCell::new(Vec::new()),
                 telemetry: Cell::new(None), shutdown_started: Cell::new(false),
@@ -500,7 +594,7 @@ impl Session {
                 reported_unregistered_fonts: RefCell::new(std::collections::BTreeSet::new()),
                 fonts,
                 generation, frames: Cell::new(0),
-                active_styles: RefCell::new(Arc::from(module.styles())),
+                active_styles: RefCell::new(Arc::from(combined_styles)),
                 active_package: RefCell::new(module.as_package().cloned()),
                 module,
                 fault: RefCell::new(None), retired: RefCell::new(None),
@@ -524,9 +618,14 @@ impl Session {
             if let Some(dev_state) = &session.dev_state {
                 DevStateStore::install(dev_state, &ctx)?;
             }
+            if let Some(shell_host) = &session.shell_host {
+                shell_host.install(&ctx)?;
+            }
             session.work.install(&ctx)
         })?;
-        if let Some(package) = session.module.as_package() {
+        if let Some(provider) = extension_module_provider {
+            engine.set_module_provider(provider);
+        } else if let Some(package) = session.module.as_package() {
             engine.set_module_provider(package.module_provider());
         }
         let entry = session.module.take_or_load_entry()?;
@@ -1097,11 +1196,21 @@ impl Session {
     /// Only a mounted generation with a registered live handler accepts CLI requests.
     pub(crate) fn has_control_handler(&self) -> bool { self.work.has_control_handler() }
 
-    /// The control listener namespace authorized by this active live package.
+    /// The control listener namespace authorized by this active session's effective capabilities.
     pub(crate) fn control_app_id(&self) -> Option<&str> {
-        if self.shutdown_started.get() { return None; }
-        self.module.as_package().filter(|package| package.manifest.capabilities.control_channel)
-            .map(|package| package.manifest.id.as_str())
+        if self.shutdown_started.get() || !self.effective_capabilities.control_channel {
+            return None;
+        }
+        self.module.as_package().map(|package| package.manifest.id.as_str())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn effective_capabilities(&self) -> &crate::package::Capabilities {
+        &self.effective_capabilities
+    }
+
+    pub(crate) fn waker(&self) -> Arc<dyn Waker> {
+        Arc::clone(&self.waker)
     }
 
     /// Admit a validated live CLI request without running application code inline.
@@ -1657,6 +1766,9 @@ impl Session {
         if let Some(dev_state) = &self.dev_state {
             dev_state.borrow_mut().clear();
         }
+        if let Some(shell_host) = &self.shell_host {
+            shell_host.clear_roots();
+        }
         self.platform_surfaces.borrow_mut().clear();
         self.work.finish_stop();
         // Report remaining leases before forced disposal releases the native scenes.
@@ -1748,6 +1860,72 @@ impl Session {
             return None;
         }
         store.borrow().snapshot(own_scope)
+    }
+
+    /// Capture bounded (`<= 64 KiB`) in-memory session handoff JSON from a settled live session.
+    pub(crate) fn capture_session_handoff(&self) -> Option<SessionHandoffSnapshot> {
+        let shell_host = self.shell_host.as_ref()?;
+        if self.shutdown_started.get()
+            || self.fault.borrow().is_some()
+            || self.shell.lock_is_retained()
+            || !self.mount_started.get()
+        {
+            return None;
+        }
+        let mut engine = self.engine.try_borrow_mut().ok()?;
+        let engine = engine.as_mut()?;
+        engine
+            .turn()
+            .with_context(|ctx| Ok(shell_host.capture_handoff(&ctx)))
+            .ok()
+            .flatten()
+    }
+
+    /// Invoke Phase 2 `onBeforeSessionCommit` callbacks right before predecessor retirement.
+    pub(crate) fn invoke_before_commit(&self) {
+        let Some(shell_host) = &self.shell_host else { return; };
+        if self.shutdown_started.get() || !self.mount_started.get() {
+            return;
+        }
+        let Ok(mut engine) = self.engine.try_borrow_mut() else { return; };
+        let Some(engine) = engine.as_mut() else { return; };
+        if let Err(err) = self.bridges.run(engine.turn(), |js| js.with_context(|ctx| shell_host.invoke_before_commit(&ctx))) {
+            eprintln!("before-session-commit-error: {err}");
+        }
+    }
+
+    /// Transition phase and fire Phase 3 `onSessionCommitted` callbacks after predecessor retirement.
+    pub(crate) fn notify_session_committed(&self, phase: OverlayPhase) -> Result<()> {
+        let Some(shell_host) = &self.shell_host else { return Ok(()); };
+        shell_host.set_phase(phase);
+        if self.shutdown_started.get() {
+            return Err("cannot notify a retired session".into());
+        }
+        let mut engine = self.engine.borrow_mut();
+        let engine = engine.as_mut().ok_or("session disposed")?;
+        let result = self.bridges.run(engine.turn(), |js| {
+            js.with_context(|ctx| shell_host.invoke_session_committed(&ctx))
+        });
+        self.mark_reported(self.check_contract())?;
+        result.map_err(|err| self.diagnostic(err).into())
+    }
+
+    pub(crate) fn promote_overlay_committed(&self) {
+        if let Some(shell_host) = &self.shell_host {
+            shell_host.set_phase(OverlayPhase::Committed);
+        }
+    }
+
+    pub(crate) fn record_overlay_failure(&self, failure: OverlayFailureInfo) {
+        if let Some(shell_host) = &self.shell_host {
+            shell_host.set_failure(failure);
+        }
+    }
+
+    pub(crate) fn set_incoming_handoff(&self, snapshot: Option<SessionHandoffSnapshot>) {
+        if let Some(shell_host) = &self.shell_host {
+            shell_host.set_incoming_handoff(snapshot);
+        }
     }
 
     /// Report residual resources after the host has attempted native surface closure.

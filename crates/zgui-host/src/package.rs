@@ -133,51 +133,94 @@ impl FilesCapabilities {
 }
 
 crate::schema::object_struct! {
-/// Origin-allowlisted outbound network capability declarations.
+/// Lossless per-origin network transport rule (prevents global flags from polluting other origins).
 #[derive(Default, PartialEq, Eq)]
 #[serde(default, rename_all = "camelCase", deny_unknown_fields)]
-pub struct NetworkCapabilities {
-    /// Exact normalized origins (`scheme://host[:port]`) the session may contact.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub origins: Vec<String>,
-    /// Explicitly permits `http://` and `ws://` origins when listed.
+pub struct NetworkOriginRule {
+    pub origin: String,
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub allow_insecure_http: bool,
-    /// Explicitly permits loopback, link-local, and RFC1918/ULA private destinations.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub allow_private_networks: bool,
 }
 }
 
+crate::schema::object_struct! {
+/// Origin-allowlisted outbound network capability declarations.
+#[derive(Default, PartialEq, Eq)]
+#[serde(default, rename_all = "camelCase", deny_unknown_fields)]
+pub struct NetworkCapabilities {
+    /// Exact normalized origins (`scheme://host[:port]`) governed by top-level boolean flags.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub origins: Vec<String>,
+    /// Per-origin transport rules that isolate `allowInsecureHttp` and `allowPrivateNetworks`.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub origin_rules: Vec<NetworkOriginRule>,
+    /// Explicitly permits `http://` and `ws://` origins when listed in legacy `origins`.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub allow_insecure_http: bool,
+    /// Explicitly permits loopback, link-local, and RFC1918/ULA private destinations for legacy `origins`.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub allow_private_networks: bool,
+}
+}
+
+fn parse_canonical_network_origin(entry: &str, field: &str) -> std::result::Result<host_services::network::Origin, String> {
+    let origin = host_services::network::Origin::parse_manifest_entry(entry)
+        .map_err(|e| format!("invalid {field} entry {entry:?}: {e}"))?;
+    if origin.to_string() != *entry {
+        return Err(format!(
+            "{field} entry {entry:?} must be in canonical form {:?}",
+            origin.to_string()
+        ));
+    }
+    Ok(origin)
+}
+
 impl NetworkCapabilities {
     #[must_use]
     pub(crate) fn is_empty(&self) -> bool {
-        self.origins.is_empty() && !self.allow_insecure_http && !self.allow_private_networks
+        self.origins.is_empty()
+            && self.origin_rules.is_empty()
+            && !self.allow_insecure_http
+            && !self.allow_private_networks
     }
 
-    pub(crate) fn to_origin_policy(&self) -> std::result::Result<host_services::network::OriginPolicy, String> {
-        let mut parsed = Vec::with_capacity(self.origins.len());
+    pub(crate) fn to_origin_rules(&self) -> std::result::Result<Vec<host_services::network::OriginRule>, String> {
+        let mut rules = Vec::with_capacity(self.origins.len() + self.origin_rules.len());
         let mut seen = std::collections::BTreeSet::new();
         for entry in &self.origins {
-            let origin = host_services::network::Origin::parse_manifest_entry(entry)
-                .map_err(|e| format!("invalid capabilities.network.origins entry {entry:?}: {e}"))?;
-            if origin.to_string() != *entry {
-                return Err(format!(
-                    "capabilities.network.origins entry {entry:?} must be in canonical form {:?}",
-                    origin.to_string()
-                ));
-            }
+            let origin = parse_canonical_network_origin(entry, "capabilities.network.origins")?;
             if !seen.insert(origin.clone()) {
                 return Err(format!("duplicate capabilities.network.origins entry: {entry:?}"));
             }
-            parsed.push(origin);
+            rules.push(host_services::network::OriginRule {
+                origin,
+                allow_insecure_http: self.allow_insecure_http,
+                allow_private_networks: self.allow_private_networks,
+            });
         }
-        host_services::network::OriginPolicy::new(
-            parsed,
-            self.allow_insecure_http,
-            self.allow_private_networks,
-        )
-        .map_err(|e| format!("invalid capabilities.network policy: {e}"))
+        for rule in &self.origin_rules {
+            let origin = parse_canonical_network_origin(&rule.origin, "capabilities.network.originRules")?;
+            if !seen.insert(origin.clone()) {
+                return Err(format!(
+                    "duplicate capabilities.network origin rule: {:?}",
+                    rule.origin
+                ));
+            }
+            rules.push(host_services::network::OriginRule {
+                origin,
+                allow_insecure_http: rule.allow_insecure_http,
+                allow_private_networks: rule.allow_private_networks,
+            });
+        }
+        Ok(rules)
+    }
+
+    pub(crate) fn to_origin_policy(&self) -> std::result::Result<host_services::network::OriginPolicy, String> {
+        let rules = self.to_origin_rules()?;
+        host_services::network::OriginPolicy::from_rules(rules)
+            .map_err(|e| format!("invalid capabilities.network policy: {e}"))
     }
 }
 
@@ -256,7 +299,7 @@ impl Capabilities {
             && self.network.is_empty()
     }
 
-    fn validate(&self) -> Result<()> {
+    pub(crate) fn validate(&self) -> Result<()> {
         if !self.network.is_empty() {
             self.network.to_origin_policy().map_err(Box::<dyn Error>::from)?;
         }
@@ -294,6 +337,81 @@ impl Capabilities {
         }
         Ok(())
     }
+
+    /// Losslessly combines base capabilities with an extension overlay's effective capabilities.
+    /// Never escalates `sessionLock` or `shellSurfaces`, and never leaks per-origin network flags.
+    pub(crate) fn merge_overlay(&self, overlay: &Self) -> std::result::Result<Self, String> {
+        self.validate().map_err(|e| e.to_string())?;
+        overlay.validate().map_err(|e| e.to_string())?;
+        if overlay.session_lock && !self.session_lock {
+            return Err("overlay cannot grant capabilities.sessionLock".into());
+        }
+        if overlay.shell_surfaces && !self.shell_surfaces {
+            return Err("overlay cannot grant capabilities.shellSurfaces".into());
+        }
+        let merge_vec = |a: &[String], b: &[String]| -> Vec<String> {
+            let mut set = std::collections::BTreeSet::new();
+            set.extend(a.iter().cloned());
+            set.extend(b.iter().cloned());
+            set.into_iter().collect()
+        };
+        let mut file_dirs = BTreeMap::new();
+        for grant in self.files.directories.iter().chain(&overlay.files.directories) {
+            let entry = file_dirs.entry(grant.path.clone()).or_insert(grant.mode);
+            if matches!(grant.mode, host_services::files::FileMode::ReadWrite) {
+                *entry = host_services::files::FileMode::ReadWrite;
+            }
+        }
+        let network = if overlay.network.is_empty() {
+            self.network.clone()
+        } else if self.network.is_empty() && self.network.origin_rules.is_empty() && overlay.network.origin_rules.is_empty() {
+            overlay.network.clone()
+        } else {
+            let mut by_origin: BTreeMap<String, (bool, bool)> = BTreeMap::new();
+            for rule in self.network.to_origin_rules()?.into_iter().chain(overlay.network.to_origin_rules()?) {
+                let entry = by_origin.entry(rule.origin.canonical()).or_insert((false, false));
+                entry.0 |= rule.allow_insecure_http;
+                entry.1 |= rule.allow_private_networks;
+            }
+            NetworkCapabilities {
+                origins: Vec::new(),
+                origin_rules: by_origin
+                    .into_iter()
+                    .map(|(origin, (allow_insecure_http, allow_private_networks))| NetworkOriginRule {
+                        origin,
+                        allow_insecure_http,
+                        allow_private_networks,
+                    })
+                    .collect(),
+                allow_insecure_http: false,
+                allow_private_networks: false,
+            }
+        };
+        let merged = Self {
+            shell_surfaces: self.shell_surfaces,
+            session_lock: self.session_lock,
+            image_prefixes: merge_vec(&self.image_prefixes, &overlay.image_prefixes),
+            unix_sockets: merge_vec(&self.unix_sockets, &overlay.unix_sockets),
+            named_sockets: merge_vec(&self.named_sockets, &overlay.named_sockets),
+            commands: merge_vec(&self.commands, &overlay.commands),
+            control_channel: self.control_channel || overlay.control_channel,
+            clipboard: ClipboardCapabilities {
+                read: self.clipboard.read || overlay.clipboard.read,
+            },
+            sqlite: SqliteCapabilities {
+                databases: merge_vec(&self.sqlite.databases, &overlay.sqlite.databases),
+            },
+            files: FilesCapabilities {
+                directories: file_dirs
+                    .into_iter()
+                    .map(|(path, mode)| FileDirectoryGrant { path, mode })
+                    .collect(),
+            },
+            network,
+        };
+        merged.validate().map_err(|e| e.to_string())?;
+        Ok(merged)
+    }
 }
 
 crate::schema::object_struct! {
@@ -317,7 +435,7 @@ pub struct WindowConfig {
 }
 
 impl WindowConfig {
-    fn validate(&self) -> Result<()> {
+    pub(crate) fn validate(&self) -> Result<()> {
         if let Some(title) = &self.title
             && (title.is_empty()
                 || title.trim_matches(|c: char| c.is_whitespace() || c == '\u{feff}') != title
@@ -1714,5 +1832,141 @@ mod tests {
         fs::write(fixture.0.join("app.qjsb"), &corrupted).unwrap();
         let tamper_err = Package::load(&fixture.0).err().unwrap().to_string();
         assert!(tamper_err.contains("integrity mismatch"), "unexpected tamper error: {tamper_err}");
+    }
+
+    #[test]
+    fn package_schema_json_aligns_with_rust_manifest_and_capabilities() {
+        let schema: serde_json::Value =
+            serde_json::from_str(include_str!("../../../schemas/package.schema.json"))
+                .expect("schemas/package.schema.json parses as JSON");
+        let schema_caps = schema["properties"]["capabilities"]["properties"]
+            .as_object()
+            .expect("schema capabilities.properties object");
+        for key in [
+            "shellSurfaces",
+            "sessionLock",
+            "imagePrefixes",
+            "unixSockets",
+            "namedSockets",
+            "commands",
+            "controlChannel",
+            "clipboard",
+            "sqlite",
+            "files",
+            "network",
+        ] {
+            assert!(schema_caps.contains_key(key), "schema missing capability {key}");
+        }
+        let net_props = schema_caps["network"]["properties"]
+            .as_object()
+            .expect("schema network.properties object");
+        for key in ["origins", "originRules", "allowInsecureHttp", "allowPrivateNetworks"] {
+            assert!(net_props.contains_key(key), "schema missing network property {key}");
+        }
+
+        // Round-trip a fully populated Manifest through serde JSON and verify all top-level and capability keys exist in schema.
+        let sample = Manifest {
+            schema_version: SCHEMA_VERSION,
+            id: "dev.test.schema-parity".into(),
+            host_api_version: HOST_API_VERSION,
+            entry: "app.mjs".into(),
+            source_map: "app.mjs.map".into(),
+            bytecode_format: Some("qjs-bytecode-v1".into()),
+            quickjs_abi: Some(js_runtime::quickjs_abi_tag()),
+            chunks: vec![ChunkEntry { path: "chunks/lazy.mjs".into(), source_map: "chunks/lazy.mjs.map".into() }],
+            workers: vec![WorkerEntry { name: "bg".into(), path: "workers/bg.mjs".into(), source_map: "workers/bg.mjs.map".into() }],
+            styles: vec!["styles/app.css".into()],
+            assets: vec!["assets/icon.png".into()],
+            fonts: vec![Font { family: "Inter".into(), path: "assets/inter.ttf".into() }],
+            window: Some(WindowConfig {
+                title: Some("Schema Parity".into()),
+                width: Some(800),
+                height: Some(600),
+                min_width: Some(320),
+                min_height: Some(240),
+                resizable: Some(true),
+            }),
+            capabilities: Capabilities {
+                shell_surfaces: true,
+                session_lock: true,
+                image_prefixes: vec!["$HOME/Pictures".into()],
+                unix_sockets: vec!["$XDG_RUNTIME_DIR/test.sock".into()],
+                named_sockets: vec!["bus".into()],
+                commands: vec!["echo".into()],
+                control_channel: true,
+                clipboard: ClipboardCapabilities { read: true },
+                sqlite: SqliteCapabilities { databases: vec!["main_db".into()] },
+                files: FilesCapabilities {
+                    directories: vec![FileDirectoryGrant {
+                        path: "$XDG_DATA_HOME/app".into(),
+                        mode: host_services::files::FileMode::ReadWrite,
+                    }],
+                },
+                network: NetworkCapabilities {
+                    origins: vec!["https://api.example.com".into()],
+                    origin_rules: vec![NetworkOriginRule {
+                        origin: "http://127.0.0.1:8080".into(),
+                        allow_insecure_http: true,
+                        allow_private_networks: true,
+                    }],
+                    allow_insecure_http: false,
+                    allow_private_networks: false,
+                },
+            },
+            style_system: StyleSystem {
+                name: "lightningcss".into(),
+                profile: "lightningcss-v1".into(),
+                config_digest: format!("sha256:{}", "0".repeat(64)),
+            },
+            artifact_digests: BTreeMap::from([("build-info.json".into(), format!("sha256:{}", "1".repeat(64)))]),
+            build_id: format!("sha256:{}", "2".repeat(64)),
+        };
+        sample.capabilities.validate().expect("sample capabilities validate");
+        let encoded = serde_json::to_value(&sample).expect("serialize manifest");
+        let top_props = schema["properties"].as_object().unwrap();
+        for key in encoded.as_object().unwrap().keys() {
+            assert!(top_props.contains_key(key), "schema missing top-level property {key}");
+        }
+        for key in encoded["capabilities"].as_object().unwrap().keys() {
+            assert!(schema_caps.contains_key(key), "schema missing encoded capability {key}");
+        }
+    }
+
+    #[test]
+    fn overlay_capability_merge_is_lossless_and_blocks_lock_escalation() {
+        let base = Capabilities {
+            shell_surfaces: true,
+            network: NetworkCapabilities {
+                origins: vec!["https://public.example.com".into()],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let overlay = Capabilities {
+            network: NetworkCapabilities {
+                origin_rules: vec![NetworkOriginRule {
+                    origin: "http://127.0.0.1:8080".into(),
+                    allow_insecure_http: true,
+                    allow_private_networks: true,
+                }],
+                ..Default::default()
+            },
+            sqlite: SqliteCapabilities { databases: vec!["ext_db".into()] },
+            ..Default::default()
+        };
+        let merged = base.merge_overlay(&overlay).expect("merge succeeds");
+        assert!(merged.network.origins.is_empty());
+        assert!(!merged.network.allow_insecure_http);
+        assert!(!merged.network.allow_private_networks);
+        let policy = merged.network.to_origin_policy().expect("policy");
+        let public = host_services::network::Origin::parse_manifest_entry("https://public.example.com").unwrap();
+        let local = host_services::network::Origin::parse_manifest_entry("http://127.0.0.1:8080").unwrap();
+        assert!(!policy.allows_insecure_http(&public));
+        assert!(!policy.allows_private_networks(&public));
+        assert!(policy.allows_insecure_http(&local));
+        assert!(policy.allows_private_networks(&local));
+
+        let escalated = Capabilities { session_lock: true, ..Default::default() };
+        assert!(base.merge_overlay(&escalated).unwrap_err().contains("sessionLock"));
     }
 }

@@ -3,7 +3,7 @@
 //! `Application` keeps the event loop and `PreviewHost` keeps renderer probes;
 //! neither owns this algorithm anymore.
 
-use std::{cell::{Cell, RefCell}, collections::HashMap, rc::{Rc, Weak}, sync::Arc};
+use std::{cell::{Cell, RefCell}, collections::HashMap, path::Path, rc::{Rc, Weak}, sync::Arc};
 
 use zgui::{
     platform::{PlatformCx, SessionLockState, SurfaceId, Waker},
@@ -14,12 +14,16 @@ use zgui::{
 
 use crate::{
     assets::MAX_SAFE_ID,
+    bytecode_cache::BytecodeCache,
     dev_banner,
+    extensions::manifest::{FailedOverlayMeta, VerifiedOverlay},
     fallback,
     session::{Result as SessionResult, ResourceCounts, Session, SessionError, SessionModule, SessionPolicy},
 };
 
+mod overlay;
 mod surfaces;
+use overlay::OverlayHostState;
 use surfaces::ShellWindows;
 use crate::shell::Monitor;
 
@@ -274,6 +278,7 @@ pub(crate) struct SessionHost {
     pure_session: Option<Rc<Session>>,
     pure_attempted: bool,
     shell_windows: ShellWindows,
+    overlay: OverlayHostState,
 }
 
 impl SessionHost {
@@ -291,7 +296,97 @@ impl SessionHost {
             acceptance: None,
             monitors: Vec::new(), pure_fonts: None, pure_session: None, pure_attempted: false,
             shell_windows: ShellWindows::new(shell_opacity),
+            overlay: OverlayHostState::default(),
         }
+    }
+
+    pub(crate) fn set_bytecode_cache(&mut self, cache: Rc<BytecodeCache>) {
+        self.overlay.bytecode_cache = Some(cache);
+    }
+
+    /// Configures `--extensions-overlay <path>` and performs initial verified load before first mount.
+    pub(crate) fn configure_initial_overlay(&mut self, path: &Path) {
+        self.overlay.enabled = true;
+        let base_caps = self
+            .module
+            .as_package()
+            .map(|p| &p.manifest.capabilities);
+        match VerifiedOverlay::load_from_path(path, self.overlay.host_abi) {
+            Ok(verified) => {
+                if let Some(caps) = base_caps
+                    && let Err(err) = caps.merge_overlay(&verified.effective_host_capabilities)
+                {
+                    let failed = FailedOverlayMeta {
+                        overlay_id: Some(verified.overlay_id),
+                        rollback_allowed_extensions: verified.rollback_allowed_extensions,
+                        client_metadata: verified.client_metadata,
+                    };
+                    self.overlay.safe_base_shell = true;
+                    self.overlay.last_failure = Some(crate::extensions::bridge::OverlayFailureInfo {
+                        overlay_id: failed.overlay_id,
+                        phase: "preflight",
+                        reason: err,
+                        rollback_blocked_by_policy: false,
+                        client_metadata: failed.client_metadata,
+                    });
+                    return;
+                }
+                self.overlay.active_overlay = Some(Rc::new(verified));
+                self.overlay.safe_base_shell = false;
+                self.overlay.last_failure = None;
+            }
+            Err((reason, failed)) => {
+                self.overlay.safe_base_shell = true;
+                self.overlay.active_overlay = None;
+                self.overlay.last_failure = Some(crate::extensions::bridge::OverlayFailureInfo {
+                    overlay_id: failed.overlay_id,
+                    phase: "preflight",
+                    reason,
+                    rollback_blocked_by_policy: false,
+                    client_metadata: failed.client_metadata,
+                });
+            }
+        }
+    }
+
+    pub(crate) fn initial_overlay_digest(&self) -> Option<[u8; 32]> {
+        self.overlay.active_overlay.as_ref().map(|o| o.raw_sha256)
+    }
+
+    pub(crate) fn next_overlay_deadline(&self) -> Option<std::time::Instant> {
+        self.overlay
+            .observation
+            .as_ref()
+            .map(|obs| obs.started_at + obs.duration)
+    }
+
+    pub(crate) fn tick_observation(&mut self) {
+        let Some(obs) = &self.overlay.observation else { return; };
+        if obs.started_at.elapsed() < obs.duration {
+            return;
+        }
+        let target_gen = obs.generation;
+        let overlay = Rc::clone(&obs.overlay);
+        self.overlay.observation = None;
+        let matched = self.sessions().find(|s| s.generation == target_gen).cloned();
+        if let Some(session) = matched {
+            session.promote_overlay_committed();
+            self.overlay.last_good_overlay = Some(overlay);
+        }
+    }
+
+    pub(crate) fn is_session_locked(&self, lock_state: Option<SessionLockState>) -> bool {
+        lock_state.is_some_and(SessionLockState::is_retained) || self.shell_windows.has_active_lock()
+    }
+
+    fn active_overlay_failed_meta(&self) -> FailedOverlayMeta {
+        self.overlay.active_overlay.as_ref().map_or_else(FailedOverlayMeta::default, |ovl| {
+            FailedOverlayMeta {
+                overlay_id: Some(ovl.overlay_id.clone()),
+                rollback_allowed_extensions: ovl.rollback_allowed_extensions.clone(),
+                client_metadata: ovl.client_metadata.clone(),
+            }
+        })
     }
 
     pub(crate) fn generation(&self) -> u64 { self.generation }
@@ -610,6 +705,27 @@ impl SessionHost {
         }
         for (document, generation, error) in faults {
             eprintln!("session-fault: generation={generation} {error}");
+            if self.overlay.enabled
+                && self.overlay.observation.as_ref().is_some_and(|obs| obs.generation == generation)
+            {
+                let failed_meta = self.active_overlay_failed_meta();
+                if let Some(session) = self.sessions.remove(&document) {
+                    let waker = session.waker();
+                    self.shell_windows.retire(&session, |token, id| surface.close_shell_surface(token, id));
+                    self.recover_primary_overlay(
+                        surface,
+                        waker,
+                        retry.clone(),
+                        document,
+                        overlay::OverlayRecovery {
+                            phase: "observation",
+                            reason: error.to_string(),
+                            failed_meta: &failed_meta,
+                        },
+                    );
+                }
+                continue;
+            }
             match self.recovery {
                 RecoveryPolicy::Fallback => self.show_fallback(surface, document, generation, &error.to_string(), &retry),
                 RecoveryPolicy::Propagate => {
@@ -620,6 +736,7 @@ impl SessionHost {
                 }
             }
         }
+        self.tick_observation();
         Ok(())
     }
 
@@ -769,7 +886,11 @@ impl SessionHost {
             .policy
             .clone()
             .with_session_lock(lock_state)
-            .with_hydrated_dev_state(hydrated);
+            .with_hydrated_dev_state(hydrated)
+            .with_extension_overlay(self.overlay.policy_overlay())
+            .with_bytecode_cache(self.overlay.bytecode_cache.clone())
+            .with_safe_base_shell(self.overlay.safe_base_shell)
+            .with_last_overlay_failure(self.overlay.last_failure.clone());
         let candidate = match Session::prepare(candidate_region.clone(), module.clone(), generation, waker, target, policy) {
             Ok(candidate) => candidate,
             Err(error) => {
@@ -825,11 +946,18 @@ impl SessionHost {
             }
         }
         let mount_writes = surface.seal_image_source_writes(document, image_checkpoint);
+        let capture_handoff = self.overlay.enabled && !self.overlay.safe_base_shell && !self.overlay.is_rollback_mount;
+        let mut handoff = None;
+        let locked = self.is_session_locked(surface.session_lock_support());
         let predecessor_leak = if let Some(previous) = previous {
             if let Some(parent) = staging_parent {
                 region.dom.insert(parent, candidate_region.root, Some(region.root));
                 region.root_anchor.set(candidate_region.root);
                 self.regions.insert(document, candidate_region);
+            }
+            previous.invoke_before_commit();
+            if capture_handoff && !locked {
+                handoff = previous.capture_session_handoff();
             }
             previous.relinquish_stylesheets();
             previous.remove_surplus_stylesheets(&candidate);
@@ -839,7 +967,20 @@ impl SessionHost {
         } else { None };
         self.shell_windows = staged;
         surface.commit_image_policy(document, &candidate, mount_writes);
+        if capture_handoff {
+            candidate.set_incoming_handoff(handoff);
+        }
         candidate.commit_staged_mount();
+        if self.overlay.enabled {
+            let phase = self.overlay.initial_notification_phase();
+            if let Err(error) = candidate.notify_session_committed(phase) {
+                self.shell_windows.retire(&candidate, |token, id| surface.close_shell_surface(token, id));
+                return ReloadOutcome::Rejected(error);
+            }
+            if !self.overlay.safe_base_shell && let Some(overlay) = self.overlay.active_overlay.clone() {
+                self.overlay.start_observation(generation, overlay);
+            }
+        }
         self.clear_fallback(document);
         self.module = module.clone();
         if module.as_package().is_some() { self.last_good = Some(module); }
@@ -870,3 +1011,6 @@ impl SessionHost {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod overlay_tests;

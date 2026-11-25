@@ -1,6 +1,6 @@
 {
   "name": "@hewel/zgui-cli",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Official npm/Bun CLI for building, running, inspecting, and packaging zgui-js applications",
   "license": "Apache-2.0",
   "type": "module",

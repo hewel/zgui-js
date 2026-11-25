@@ -35,6 +35,12 @@ Install `@hewel/zgui-cli` (or scaffold with `bun create zgui-js`). The binary na
 - **Motion, Timers, Styling & Dev State**: `createSpring` (mount-only `initial`, reactive `settled`, `jump`, `impulse`, `configure`, shared per-bridge rAF ticker), `createDelay`, `createInterval`, `createTimeout`, `cx`, `createDevState`. Scroll containers default to `--zgui-scrollbar-mode: classic` and support inherited `--zgui-scrollbar-mode: overlay` (zero layout gutter, auto-hiding `4px`/`6px` floating capsule over a `12px` grab strip / `16px` edge hotzone, `800ms` hold + `200ms` fade, hidden click pass-through, `reduced_motion`-aware, reusing `--zgui-scrollbar-thumb`, `--zgui-scrollbar-track`, and `color-scheme`).
 - **Drag & Drop**: `startInternalDrag`, `startOutboundDrag`
 
+## Privileged Base Shell Host (`@hewel/zgui/shell-host`)
+
+Excluded from the extension shared-runtime allowlist (`@hewel/zgui/shell-host` is base-shell exclusive):
+
+- `SessionLockSurface`, `requestSessionLock`, `loadApprovedExtensionEntry`, `loadApprovedPluginEntry`, `listApprovedExtensionEntries`, `listApprovedPluginEntries`, `registerSessionHandoff`, `takeSessionHandoff`, `onSessionCommitted`, `onBeforeSessionCommit`, `getOverlayStatus`, `registerSharedRuntimeModules`
+
 ## UI Components (`@hewel/zgui/components`)
 
 - **Theming & Icons**: `ThemeProvider`, `useTheme`, `themeTokens`, `Icon`

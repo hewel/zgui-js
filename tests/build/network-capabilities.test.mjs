@@ -82,6 +82,51 @@ export function mount(root: NativeNode) {
       allowInsecureHttp: true,
       allowPrivateNetworks: true,
     });
+
+    // Lossless per-origin rules keep strict origins isolated from insecure/private origins.
+    const perOrigin = await publish({
+      network: {
+        origins: ["https://public.example.com"],
+        originRules: [
+          {
+            origin: "HTTP://127.0.0.1:8080",
+            allowInsecureHttp: true,
+            allowPrivateNetworks: true,
+          },
+        ],
+      },
+    });
+    assert.deepEqual(perOrigin.manifest.capabilities?.network, {
+      originRules: [
+        {
+          origin: "http://127.0.0.1:8080",
+          allowInsecureHttp: true,
+          allowPrivateNetworks: true,
+        },
+        {
+          origin: "https://public.example.com",
+        },
+      ],
+    });
+
+    await assert.rejects(
+      () =>
+        publish({
+          network: {
+            originRules: [{ origin: "http://public.example.com" }],
+          },
+        }),
+      /allowInsecureHttp/i,
+    );
+    await assert.rejects(
+      () =>
+        publish({
+          network: {
+            originRules: [{ origin: "https://127.0.0.1:8443" }],
+          },
+        }),
+      /allowPrivateNetworks/i,
+    );
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
