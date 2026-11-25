@@ -334,9 +334,20 @@ try {
     await runCommand([zguiBin, "preview", "--out", previewOut], { cwd: appDir, env: cleanEnv });
     const resultJson = JSON.parse(await readFile(path.join(previewOut, "result.json"), "utf8")) as {
       status?: string;
+      exitCode?: number;
+      captureCount?: number;
+      teardown?: { clean?: boolean };
+      artifacts?: { latestCapture?: string };
     };
-    if (resultJson.status !== "ok") {
-      throw new Error(`Headless preview returned non-ok status: ${JSON.stringify(resultJson)}`);
+    if (
+      resultJson.status !== "passed" ||
+      resultJson.exitCode !== 0 ||
+      (resultJson.captureCount ?? 0) < 1 ||
+      resultJson.teardown?.clean !== true ||
+      !resultJson.artifacts?.latestCapture ||
+      !existsSync(path.join(previewOut, resultJson.artifacts.latestCapture))
+    ) {
+      throw new Error(`Headless preview failed verification: ${JSON.stringify(resultJson)}`);
     }
     console.log("PASS headless preview capture");
   }
