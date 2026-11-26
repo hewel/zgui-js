@@ -120,6 +120,14 @@ export interface BuildApplicationOptions {
   hostSearchFrom?: readonly string[] | undefined;
   extraCapabilities?: Capabilities;
   capabilitiesFile?: string;
+  cssModuleInclude?: readonly string[] | undefined;
+}
+
+export interface SyncCssModuleTypesOptions {
+  project?: string | undefined;
+  appDirectory?: string | undefined;
+  include?: readonly string[] | undefined;
+  cwd?: string | undefined;
 }
 
 export interface ApplicationWatcher {
@@ -232,6 +240,7 @@ export declare const buildApplication: (
   app: string,
   options?: BuildApplicationOptions,
 ) => Promise<PublishedApplication>;
+export declare const syncCssModuleTypes: (options?: SyncCssModuleTypesOptions) => Promise<string[]>;
 export declare const watchApplication: (
   app: string,
   options?: WatchApplicationOptions,

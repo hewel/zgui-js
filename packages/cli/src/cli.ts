@@ -5,12 +5,13 @@ import {
   packageApplication,
   previewApplication,
   resolveApplication,
+  syncCssModuleTypes,
   watchApplication,
   type PreviewApplicationOptions,
   type ResolvedApplication,
 } from "@hewel/zgui-build";
 import { buildSmoke, resolveSmokeTsconfigPath, typecheckProject } from "@hewel/zgui-build/internal";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import { formatDoctorReport, runDoctor } from "./doctor.ts";
 import { runInitCli } from "./init.ts";
@@ -19,19 +20,21 @@ import { runInspect } from "./inspect.ts";
 const usage = `Usage: zgui-js <command> [options]
 
 Commands:
-  init      Scaffold a new zgui-js app (desktop-app or wayland-shell)
-  dev       Resolve/build zgui-host, open the app, and reload on changes
-  build     Type-check and publish an immutable application package
-  preview   Build the app and host, then capture an offscreen native frame
-  package   Assemble a self-contained runnable Linux app directory
-  doctor    Verify Bun, zgui-host ABI, Wayland, Vulkan, portal, tsrs, and oxlint
-  inspect   Query --dev-inspect socket, toggle visual picker, or open --ui Inspector window
-  smoke     Build the compiler/runtime smoke fixture
+  init       Scaffold a new zgui-js app (desktop-app or wayland-shell)
+  dev        Resolve/build zgui-host, open the app, and reload on changes
+  build      Type-check and publish an immutable application package
+  typecheck  Sync *.module.css.d.ts declarations and run tsrs --noEmit
+  preview    Build the app and host, then capture an offscreen native frame
+  package    Assemble a self-contained runnable Linux app directory
+  doctor     Verify Bun, zgui-host ABI, Wayland, Vulkan, portal, tsrs, and oxlint
+  inspect    Query --dev-inspect socket, toggle visual picker, or open --ui Inspector window
+  smoke      Build the compiler/runtime smoke fixture
 
 Application defaults to the current directory (counter at the repository root).
 Relative file and directory flags are resolved from the current working directory.
   build --watch          Watch packages without starting a host
   build --bytecode       Compile entry, chunks, and workers to QuickJS bytecode (.qjsb)
+  typecheck [DIR] [--project FILE] [--include GLOB] [--types-only]
   --capabilities-file F   Merge capability declarations into build, dev, preview, or package
   --host-root DIR        Build the host from this Cargo checkout and run it there
   --host-executable PATH Run this prebuilt host instead of resolving packages/Cargo
@@ -61,6 +64,14 @@ type HostOptions = Pick<PreviewApplicationOptions, "hostRoot" | "hostExecutable"
 type Command =
   | { command: "smoke" }
   | { command: "init"; args: string[] }
+  | {
+      command: "typecheck";
+      help: boolean;
+      selector?: string;
+      project?: string;
+      include: string[];
+      typesOnly: boolean;
+    }
   | ({ command: "doctor"; json: boolean } & HostOptions)
   | ({ command: "inspect"; args: string[]; ui: boolean } & HostOptions)
   | ({
@@ -137,10 +148,83 @@ function parseInspect(args: string[]): Extract<Command, { command: "inspect" }> 
   return { command: "inspect", args: forwarded, ui, hostRoot, hostExecutable };
 }
 
+const typecheckUsage = `Usage: zgui-js typecheck [DIR] [options]
+
+Options:
+  --app <NAME>         Select a workspace example or app directory
+  -p, --project <FILE> Path to tsconfig.json (or directory containing one)
+  --include <GLOB>     Additional CSS Modules directory or glob (repeatable)
+  --types-only         Sync *.module.css.d.ts declarations without running tsrs
+  -h, --help           Show this help message`;
+
+function parseTypecheck(args: string[]): Extract<Command, { command: "typecheck" }> {
+  if (args.includes("-h") || args.includes("--help")) {
+    return { command: "typecheck", help: true, include: [], typesOnly: false };
+  }
+  let directory: string | undefined;
+  let app: string | undefined;
+  let project: string | undefined;
+  const include: string[] = [];
+  let typesOnly = false;
+  while (args.length > 0) {
+    const arg = args.shift()!;
+    if (arg === "--") continue;
+    if (!arg.startsWith("-")) {
+      if (directory !== undefined) throw new Error("Specify only one application directory");
+      directory = arg;
+      continue;
+    }
+    if (arg === "--types-only") {
+      if (typesOnly) throw new Error(`Unknown or duplicate option: ${arg}`);
+      typesOnly = true;
+      continue;
+    }
+    if (arg === "--app") {
+      if (app !== undefined) throw new Error(`Unknown or duplicate option: ${arg}`);
+      const val = args.shift();
+      if (!val || val.startsWith("-")) throw new Error("--app requires a value");
+      app = val;
+      continue;
+    }
+    if (arg === "--project" || arg === "-p") {
+      if (project !== undefined) throw new Error(`Unknown or duplicate option: ${arg}`);
+      const val = args.shift();
+      if (!val || val.startsWith("-")) throw new Error(`${arg} requires a value`);
+      project = val;
+      continue;
+    }
+    if (arg === "--include") {
+      const val = args.shift();
+      if (!val || val.startsWith("-")) throw new Error("--include requires a value");
+      include.push(val);
+      continue;
+    }
+    throw new Error(`Unknown or duplicate option: ${arg}`);
+  }
+  if (directory !== undefined && app !== undefined) {
+    throw new Error("Use DIRECTORY or --app, not both");
+  }
+  const selector = directory ?? app;
+  if (selector !== undefined && project !== undefined) {
+    throw new Error("Use --project or an application selector, not both");
+  }
+  return {
+    command: "typecheck",
+    help: false,
+    ...(selector !== undefined ? { selector } : {}),
+    ...(project !== undefined ? { project } : {}),
+    include,
+    typesOnly,
+  };
+}
+
 function parse(args: string[]): Command {
   const command = args.shift();
   if (command === "init") {
     return { command: "init", args };
+  }
+  if (command === "typecheck") {
+    return parseTypecheck(args);
   }
   if (command === "inspect") {
     return parseInspect(args);
@@ -391,6 +475,73 @@ export async function runCli(rawArgs: readonly string[]): Promise<number> {
   if (selected.command === "smoke") {
     typecheckProject(resolveSmokeTsconfigPath());
     await buildSmoke();
+    return 0;
+  }
+  if (selected.command === "typecheck") {
+    if (selected.help) {
+      console.log(typecheckUsage);
+      return 0;
+    }
+    if (
+      selected.typesOnly &&
+      selected.project === undefined &&
+      selected.selector === undefined &&
+      !existsSync(path.resolve("tsconfig.json")) &&
+      selected.include.length > 0
+    ) {
+      await syncCssModuleTypes({ include: selected.include, cwd: process.cwd() });
+      return 0;
+    }
+    let projectPath: string;
+    let appDirectory: string | undefined;
+    if (selected.project !== undefined) {
+      let candidate = path.resolve(selected.project);
+      if (existsSync(candidate) && statSync(candidate).isDirectory()) {
+        candidate = path.join(candidate, "tsconfig.json");
+      }
+      if (!existsSync(candidate)) {
+        throw new Error(`tsconfig.json not found: ${candidate}`);
+      }
+      projectPath = candidate;
+    } else if (selected.selector !== undefined) {
+      const direct = path.resolve(selected.selector);
+      const directTsconfig = path.join(direct, "tsconfig.json");
+      const isExplicitDir =
+        path.isAbsolute(selected.selector) ||
+        selected.selector.includes("/") ||
+        selected.selector.includes("\\") ||
+        selected.selector === "." ||
+        selected.selector === "..";
+      if ((isExplicitDir || existsSync(direct)) && existsSync(directTsconfig)) {
+        projectPath = directTsconfig;
+        if (existsSync(path.join(direct, "src"))) {
+          appDirectory = direct;
+        }
+      } else {
+        const resolved = await resolveApplication(selected.selector);
+        appDirectory = resolved.appDirectory;
+        projectPath = path.join(resolved.appDirectory, "tsconfig.json");
+      }
+    } else if (existsSync(path.resolve("tsconfig.json"))) {
+      projectPath = path.resolve("tsconfig.json");
+      if (existsSync(path.resolve("src"))) {
+        appDirectory = process.cwd();
+      }
+    } else {
+      const resolved = await resolveApplication(undefined);
+      appDirectory = resolved.appDirectory;
+      projectPath = path.join(resolved.appDirectory, "tsconfig.json");
+    }
+
+    await syncCssModuleTypes({
+      project: projectPath,
+      ...(appDirectory !== undefined ? { appDirectory } : {}),
+      ...(selected.include.length > 0 ? { include: selected.include } : {}),
+      cwd: process.cwd(),
+    });
+    if (!selected.typesOnly) {
+      typecheckProject(projectPath);
+    }
     return 0;
   }
 

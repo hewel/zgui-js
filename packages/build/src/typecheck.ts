@@ -126,7 +126,7 @@ async function discoverAppConfigs(root: string, appFilter?: string): Promise<str
       const config = path.join(appDir, "tsconfig.json");
       if (!(await fileExists(config))) continue;
       // Run outside ENOENT guard so CSS Module type generation failures surface instead of silently skipping.
-      await syncCssModuleTypes(appDir, { root });
+      await syncCssModuleTypes({ appDirectory: appDir, project: config });
       configs.push(config);
     }
   }
@@ -134,7 +134,7 @@ async function discoverAppConfigs(root: string, appFilter?: string): Promise<str
     const directDir = path.resolve(root, appFilter);
     const directConfig = path.join(directDir, "tsconfig.json");
     if (await fileExists(directConfig)) {
-      await syncCssModuleTypes(directDir, { root });
+      await syncCssModuleTypes({ appDirectory: directDir, project: directConfig });
       configs.push(directConfig);
     } else {
       throw new Error(`No app tsconfig.json found for --app ${appFilter}`);

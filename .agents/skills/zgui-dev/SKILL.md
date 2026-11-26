@@ -31,8 +31,8 @@ Guide for authoring native QuickJS-NG + Solid 2.0.1 applications and Wayland des
    - For CSS Modules rules, `createSpring` (`initial`, `settled`, `jump`, `impulse`, `configure`, shared per-bridge rAF ticker), `createRetainedPresence`, `<vector>` (`svg` / `createCanvasScene`), and wheel/scroll handling, read [`references/styling-and-motion.md`](references/styling-and-motion.md).
 4. **Build, inspect, package, lint, and typecheck**:
    - Target `@hewel/zgui/tsconfig.native.json` (or `"jsxImportSource": "@hewel/zgui"`).
-   - CLI workflow (`@hewel/zgui-cli` / `zgui-js`): `zgui-js doctor`, `zgui-js dev [--dev-inspect SOCK]`, `zgui-js build [--bytecode]`, `zgui-js inspect [--ui] --socket SOCK [--op tree|profile | pick]`, `zgui-js package --out DIR [--bytecode]`.
-   - Programmatic API (`@hewel/zgui-build`): `buildApplication`, `watchApplication`, `devApplication`, `previewApplication`, `packageApplication`.
+   - CLI workflow (`@hewel/zgui-cli` / `zgui-js`): `zgui-js doctor`, `zgui-js typecheck [--project FILE] [--include GLOB] [--types-only]`, `zgui-js dev [--dev-inspect SOCK]`, `zgui-js build [--bytecode]`, `zgui-js inspect [--ui] --socket SOCK [--op tree|profile | pick]`, `zgui-js package --out DIR [--bytecode]`.
+   - Programmatic API (`@hewel/zgui-build`): `buildApplication`, `watchApplication`, `devApplication`, `previewApplication`, `packageApplication`, `syncCssModuleTypes`.
 5. **Verify visually in headless preview**:
    - Hand off to the `zgui-preview` skill to verify rendered layout, alpha transparency, multi-surface lifecycle, and clean resource teardown (`teardown.clean === true`).
 

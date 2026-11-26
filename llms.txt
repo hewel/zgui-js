@@ -18,6 +18,7 @@ Install `@hewel/zgui-cli` (or scaffold with `bun create zgui-js`). The binary na
 - `zgui-js init [DIR] [--template desktop-app|wayland-shell] [--name NAME] [--force]` — Scaffold a new app.
 - `zgui-js dev [DIR] [--dev-inspect PATH] [--strict-typecheck] [--pure-shell] [--width N] [--height N] [--title TEXT] [--exit-after-ms N]` — Build, watch (non-blocking `tsrs`, CSS-only hot-swap, dev state preservation), and run `zgui-host`.
 - `zgui-js build [DIR] [--watch] [--bytecode] [--capabilities-file FILE]` — Type-check and emit an immutable, SHA-256 sealed `dist/` bundle (optional QuickJS `.qjsb` bytecode via `--bytecode`).
+- `zgui-js typecheck [DIR] [--project FILE] [--include GLOB] [--types-only]` — Sync `*.module.css.d.ts` declarations and run `tsrs --noEmit`.
 - `zgui-js preview [DIR] [--watch] [--profile F] [--fixture F] [--scenario F] [--out DIR]` — Headless Vulkan/Stylo offscreen capture & scenario assertions.
 - `zgui-js package [DIR] --out DIR [--bytecode] [--desktop-entry] [--pure-shell]` — Assemble a self-contained runnable Linux app directory.
 - `zgui-js doctor [--json] [--host-root DIR] [--host-executable PATH]` — Verify Bun, `zgui-host` ABI, Wayland, Vulkan, portal, `tsrs`, and `oxlint`.

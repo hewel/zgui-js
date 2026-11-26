@@ -8,6 +8,7 @@ import {
   resolveApplication,
   resolveNativeHost,
   runNativeHost,
+  syncCssModuleTypes,
   watchApplication,
   type ApplicationWatcher,
   type BuildApplicationOptions,
@@ -28,13 +29,25 @@ import {
   type ResolvedNativeHost,
   type ResolveNativeHostOptions,
   type RunNativeHostOptions,
+  type SyncCssModuleTypesOptions,
   type WatchApplicationOptions,
 } from "@hewel/zgui-build";
 
 export async function buildAndPreview(directory: string, signal: AbortSignal) {
   const selection: ResolvedApplication = await resolveApplication(directory);
+  const syncOptions: SyncCssModuleTypesOptions = {
+    appDirectory: selection.appDirectory,
+    project: `${selection.appDirectory}/tsconfig.json`,
+    include: ["src"],
+    cwd: selection.root,
+  };
+  const syncedCssModules: string[] = await syncCssModuleTypes(syncOptions);
   const extraCapabilities: Capabilities = { namedSockets: ["status"] };
-  const build: BuildApplicationOptions = { ...selection, extraCapabilities };
+  const build: BuildApplicationOptions = {
+    ...selection,
+    extraCapabilities,
+    cssModuleInclude: ["src"],
+  };
   const publication: PublishedApplication = await buildApplication(selection.app, build);
   const manifest: Manifest = publication.manifest;
   const fonts: FontDeclaration[] = manifest.fonts;
@@ -63,7 +76,7 @@ export async function buildAndPreview(directory: string, signal: AbortSignal) {
     await devApplication(selection.app, dev),
     await previewApplication(selection.app, preview),
   ];
-  return { abi, fonts, packaged, statuses };
+  return { abi, fonts, packaged, statuses, syncedCssModules };
 }
 
 export type BuildProvenance = Pick<BuildInfo, "lockfile" | "cargoLock">;

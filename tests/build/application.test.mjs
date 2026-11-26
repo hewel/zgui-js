@@ -56,6 +56,7 @@ test("the build package exposes only its programmatic API, without CLI side effe
     "resolveApplication",
     "resolveNativeHost",
     "runNativeHost",
+    "syncCssModuleTypes",
     "watchApplication",
   ]);
   assert.deepEqual(process.listeners("SIGINT"), listeners);

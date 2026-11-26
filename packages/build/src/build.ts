@@ -280,6 +280,7 @@ export async function buildApplication(
     hostSearchFrom,
     extraCapabilities,
     capabilitiesFile,
+    cssModuleInclude,
   }: BuildApplicationOptions = {},
   {
     signal,
@@ -291,7 +292,10 @@ export async function buildApplication(
   root = path.resolve(root);
   appDirectory = path.resolve(appDirectory);
   await ensureSdkPackagesBuilt(root);
-  await syncCssModuleTypes(appDirectory, { root });
+  await syncCssModuleTypes({
+    appDirectory,
+    include: cssModuleInclude,
+  });
   typecheckProject(path.join(appDirectory, "tsconfig.json"));
   const result = await bundle(path.join(appDirectory, "src/main.tsx"), {
     root,

@@ -5,15 +5,22 @@ Build, watch, develop, and preview native zgui applications from Bun (≥ 1.4.4)
 ## Build and watch
 
 ```ts
-import { buildApplication, resolveApplication, watchApplication } from "@hewel/zgui-build";
+import {
+  buildApplication,
+  resolveApplication,
+  syncCssModuleTypes,
+  watchApplication,
+} from "@hewel/zgui-build";
 
 const app = await resolveApplication("./my-app");
 const options = {
   ...app,
   extraCapabilities: { namedSockets: ["status"] },
   capabilitiesFile: "./generated/plugin-capabilities.json",
+  cssModuleInclude: ["../../packages/sdk/src", "../../plugins/*/src"],
 };
 
+await syncCssModuleTypes({ project: "./my-app/tsconfig.json", include: options.cssModuleInclude });
 const { dist, manifest } = await buildApplication(app.app, options);
 console.log(dist, manifest.id, manifest.buildId);
 

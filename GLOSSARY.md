@@ -37,7 +37,8 @@ _Avoid_: Generation (reserved for session incarnations), native acceptance
 
 **Stylesheet revision**: The identity of the stylesheet-set state consumed by a native document. Class and inline-declaration changes retain this identity; applied stylesheet installation, replacement, and removal change it.
 
-**StyleX profile**: The versioned agreement between generated StyleX output and the native CSS behaviors an application may use.
+**Style profile**: The versioned agreement between compiled application stylesheets and the native CSS behaviors a host accepts.
+_Avoid_: StyleX profile
 
 **Shell surface**: A desktop-managed layer, session-lock surface, or anchored popup backing its own mount region within the owning session.
 _Avoid_: Panel window, popup window

@@ -15,6 +15,7 @@ On Linux x64 glibc (`ubuntu-24.04` / glibc >= 2.39 baseline), Bun installs `@hew
 - `zgui-js init [DIR] [--template desktop-app|wayland-shell]` — scaffold a new application.
 - `zgui-js dev` — watch, type-check with `tsrs`, and live-reload inside `zgui-host`.
 - `zgui-js build [--watch] [--bytecode]` — build an immutable SHA-256-sealed bundle.
+- `zgui-js typecheck [DIR] [--project FILE] [--include GLOB] [--types-only]` — sync `*.module.css.d.ts` declarations and run `tsrs --noEmit`.
 - `zgui-js preview` — run headless GPU preview capture scenarios.
 - `zgui-js package --out DIR [--bytecode] [--desktop-entry] [--pure-shell]` — assemble a self-contained runnable Linux directory including `licenses/`.
 - `zgui-js doctor [--json]` — verify Bun, `zgui-host` ABI, Wayland, Vulkan, portal, `tsrs`, and `oxlint`.

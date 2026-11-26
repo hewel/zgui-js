@@ -91,7 +91,17 @@ test("llms.txt covers every @hewel/zgui/components, @hewel/zgui/primitives, @hew
     assert.deepEqual(missing, [], `llms.txt is missing ${label} exports: ${missing.join(", ")}`);
   }
 
-  for (const cmd of ["init", "dev", "build", "preview", "package", "doctor", "inspect", "smoke"]) {
+  for (const cmd of [
+    "init",
+    "dev",
+    "build",
+    "typecheck",
+    "preview",
+    "package",
+    "doctor",
+    "inspect",
+    "smoke",
+  ]) {
     assert.match(llms, new RegExp(`\`zgui-js ${cmd}\\b`), `llms.txt must document zgui-js ${cmd}`);
   }
   assert.match(

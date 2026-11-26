@@ -5,7 +5,7 @@ import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { tmpdir } from "node:os";
 import { publishApplication } from "./build.ts";
-import { syncCssModuleTypes } from "./css.ts";
+import { resolveCssModuleWatchDirectories, syncCssModuleTypes } from "./css.ts";
 import { workspaceRoot } from "./sdk.ts";
 import {
   buildSdkPackages,
@@ -107,6 +107,7 @@ export function watchApplication(
     strictTypecheck = false,
     extraCapabilities,
     capabilitiesFile,
+    cssModuleInclude,
     onSuccess = ({ dist, manifest }) => console.log(`Published ${dist} ${manifest.buildId}`),
     onError = error =>
       console.error(
@@ -127,6 +128,7 @@ export function watchApplication(
   }: WatchDependencies = {},
 ): ApplicationWatcher {
   if (!/^[a-z][a-z0-9-]*$/.test(app)) throw new Error(`Invalid application name: ${app}`);
+  const callerCwd = process.cwd();
   root = path.resolve(root);
   appDirectory = path.resolve(appDirectory);
   if (capabilitiesFile !== undefined) capabilitiesFile = path.resolve(capabilitiesFile);
@@ -152,7 +154,45 @@ export function watchApplication(
   const watchers: FSWatcher[] = [];
   let targetWatcher: FSWatcher | undefined;
   const dependencyWatchers = new Map<string, FSWatcher>();
+  const externalSourceWatchers = new Map<string, FSWatcher>();
   let graphModules = new Set<string>();
+  const isSameOrInside = (candidate: string, ancestor: string): boolean => {
+    const rel = path.relative(ancestor, candidate);
+    return (
+      rel === "" || (!rel.startsWith(`..${path.sep}`) && rel !== ".." && !path.isAbsolute(rel))
+    );
+  };
+  const syncCssTypesOptions = {
+    appDirectory,
+    include: cssModuleInclude,
+    cwd: callerCwd,
+  };
+  async function refreshExternalSourceWatchers() {
+    const directories = await resolveCssModuleWatchDirectories(syncCssTypesOptions);
+    const wanted = new Set(
+      directories.filter(
+        directory =>
+          !isSameOrInside(directory, appDirectory) &&
+          !isSameOrInside(directory, uiPackageDir) &&
+          !isSameOrInside(directory, servicesPackageDir),
+      ),
+    );
+    for (const [directory, watcher] of externalSourceWatchers) {
+      if (!wanted.has(directory)) {
+        watcher.close();
+        externalSourceWatchers.delete(directory);
+      }
+    }
+    for (const directory of wanted) {
+      if (externalSourceWatchers.has(directory)) continue;
+      if (closed || controller.signal.aborted) return;
+      const watcher = watch(directory, { recursive: true }, (_event, filename) =>
+        changed(filename, directory),
+      );
+      watcher.on("error", report);
+      externalSourceWatchers.set(directory, watcher);
+    }
+  }
   const report = (error: unknown) => {
     if (!closed && !controller.signal.aborted) onError(error);
   };
@@ -220,7 +260,8 @@ export function watchApplication(
         status = undefined;
         cancelActiveTypecheck();
         controller.signal.throwIfAborted();
-        await syncCssModuleTypes(appDirectory, { root });
+        await refreshExternalSourceWatchers();
+        await syncCssModuleTypes(syncCssTypesOptions);
         let previousDirectory: string | null;
         try {
           previousDirectory = await realpath(path.join(appDirectory, "dist"));
@@ -255,7 +296,7 @@ export function watchApplication(
       async onCompile(result) {
         graphModules = new Set(result.graph.modules);
         await watchDependencyManifests(result.graph.modules);
-        await syncCssModuleTypes(appDirectory, { root });
+        await syncCssModuleTypes(syncCssTypesOptions);
         if (!asyncTypecheck) {
           await typecheck(path.join(appDirectory, "tsconfig.json"), { signal: controller.signal });
         }
@@ -394,9 +435,12 @@ export function watchApplication(
       parts.some(
         part =>
           part === "dist" ||
+          part === "dist-package" ||
+          part === "target" ||
           part === ".zgui-generations" ||
           part === "node_modules" ||
           part.startsWith(".dist-") ||
+          part.startsWith(".shell-compose-stage-") ||
           part === BUILD_STATUS_FILE ||
           part.startsWith(`${BUILD_STATUS_FILE}.`) ||
           part === NATIVE_STATUS_FILE ||
@@ -505,6 +549,8 @@ export function watchApplication(
   const initialized = (async () => {
     await ensureSdk(root, { silent: true });
     if (closed || controller.signal.aborted) return;
+    await refreshExternalSourceWatchers();
+    if (closed || controller.signal.aborted) return;
     temporary = await mkdtemp(path.join(tmpdir(), "zgui-compiler-"));
     await writeFile(path.join(temporary, "invalidate"), "");
     if (!closed && !controller.signal.aborted) startCompiler();
@@ -517,6 +563,7 @@ export function watchApplication(
         cancelActiveTypecheck();
         controller.abort();
         signal?.removeEventListener("abort", abort);
+        for (const watcher of externalSourceWatchers.values()) watcher.close();
         for (const watcher of dependencyWatchers.values()) watcher.close();
         targetWatcher?.close();
         for (const watcher of watchers) watcher.close();

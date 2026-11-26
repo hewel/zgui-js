@@ -71,7 +71,7 @@ function desktopAppFiles(name: string): Record<string, string> {
           preview: "zgui-js preview",
           package: "zgui-js package",
           doctor: "zgui-js doctor",
-          typecheck: "tsrs --noEmit",
+          typecheck: "zgui-js typecheck",
           lint: "oxlint --deny-warnings",
         },
         zgui: {
@@ -224,7 +224,7 @@ function waylandShellFiles(name: string): Record<string, string> {
           preview: "zgui-js preview",
           package: "zgui-js package --pure-shell",
           doctor: "zgui-js doctor",
-          typecheck: "tsrs --noEmit",
+          typecheck: "zgui-js typecheck",
           lint: "oxlint --deny-warnings",
         },
         zgui: {

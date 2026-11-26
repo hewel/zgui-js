@@ -37,6 +37,7 @@ export async function devApplication(
     mode = "desktop",
     extraCapabilities,
     capabilitiesFile,
+    cssModuleInclude,
     signal,
   }: DevApplicationOptions = {},
   {
@@ -92,6 +93,7 @@ export async function devApplication(
       strictTypecheck,
       extraCapabilities,
       capabilitiesFile,
+      cssModuleInclude,
       signal: controller.signal,
       onSuccess(result) {
         if (controller.signal.aborted) return;

@@ -364,8 +364,16 @@ test(
       assert.ok(existsSync(path.join(appDir, "src/main.tsx")));
       const scaffoldPkg = JSON.parse(await readFile(path.join(appDir, "package.json"), "utf8"));
       assert.equal(scaffoldPkg.devDependencies["eslint-plugin-solid"], "0.20.1");
+      assert.equal(scaffoldPkg.scripts.typecheck, "zgui-js typecheck");
 
       await linkWorkspaceSdk(appDir);
+      assert.equal(existsSync(path.join(appDir, "src/App.module.css.d.ts")), false);
+      await execute(process.execPath, [cli, "typecheck"], {
+        cwd: appDir,
+        timeout: 30000,
+      });
+      assert.equal(existsSync(path.join(appDir, "src/App.module.css.d.ts")), true);
+
       const { stdout: buildOut } = await execute(process.execPath, [cli, "build"], {
         cwd: appDir,
         timeout: 30000,
@@ -660,5 +668,111 @@ test("installed @hewel/zgui-cli stages dereferenced prebuilt inspector-bundle an
   assert.throws(
     () => resolveInspectorSource({ cliDir: path.join(installedCli, "src") }),
     /Missing prebuilt Inspector bundle/,
+  );
+});
+
+test("zgui-js typecheck syncs multi-root CSS Module types, supports --types-only, and surfaces tsrs/CSS errors", async t => {
+  const ws = await mkdtemp(path.join(os.tmpdir(), "zgui-cli-typecheck-"));
+  t.after(() => rm(ws, { recursive: true, force: true }));
+
+  const appDir = path.join(ws, "apps/shell");
+  const sdkSrc = path.join(ws, "packages/sdk/src");
+  const extraDir = path.join(ws, "plugins/custom/src");
+  await mkdir(path.join(appDir, "src"), { recursive: true });
+  await mkdir(sdkSrc, { recursive: true });
+  await mkdir(extraDir, { recursive: true });
+  await symlink(path.join(workspaceRoot, "node_modules"), path.join(ws, "node_modules"), "dir");
+
+  await writeFile(
+    path.join(appDir, "tsconfig.json"),
+    JSON.stringify({
+      extends: "@hewel/zgui/tsconfig.native.json",
+      compilerOptions: { allowImportingTsExtensions: true },
+      include: ["src/**/*.tsx", "../../packages/sdk/src/zgui-*.tsx"],
+    }),
+  );
+  await writeFile(path.join(sdkSrc, "zgui-card.module.css"), `.card { display: flex; }\n`);
+  await writeFile(
+    path.join(sdkSrc, "zgui-card.tsx"),
+    `import styles from "./zgui-card.module.css";
+export function Card() {
+  return <box class={styles.card}><text>Card</text></box>;
+}
+`,
+  );
+  await writeFile(path.join(extraDir, "extra.module.css"), `.badge { padding: 4px; }\n`);
+  await writeFile(
+    path.join(appDir, "src/main.tsx"),
+    `import { renderApp, type NativeNode } from "@hewel/zgui";
+import { Card } from "../../../packages/sdk/src/zgui-card.tsx";
+export const hostApiVersion = 1;
+export function mount(root: NativeNode): () => void {
+  return renderApp(() => <Card />, root);
+}
+`,
+  );
+
+  // --types-only generates .d.ts for tsconfig + --include without running tsrs.
+  await writeFile(
+    path.join(appDir, "src/broken-only-for-tsrs.tsx"),
+    `const bad: number = "oops";\n`,
+  );
+  await execute(
+    process.execPath,
+    [
+      cli,
+      "typecheck",
+      "--project",
+      path.join(appDir, "tsconfig.json"),
+      "--include",
+      "plugins/*/src",
+      "--types-only",
+    ],
+    { cwd: ws, timeout: 30000 },
+  );
+  assert.equal(existsSync(path.join(sdkSrc, "zgui-card.module.css.d.ts")), true);
+  assert.equal(existsSync(path.join(extraDir, "extra.module.css.d.ts")), true);
+
+  // Full typecheck fails on tsrs error, then passes once fixed.
+  await assert.rejects(
+    execute(process.execPath, [cli, "typecheck", "--project", path.join(appDir, "tsconfig.json")], {
+      cwd: ws,
+      timeout: 30000,
+    }),
+    /Type 'string' is not assignable to type 'number'/,
+  );
+  await rm(path.join(appDir, "src/broken-only-for-tsrs.tsx"));
+
+  await execute(
+    process.execPath,
+    [cli, "typecheck", "--project", path.join(appDir, "tsconfig.json")],
+    { cwd: ws, timeout: 30000 },
+  );
+
+  // Fails on unknown CSS class access in TSX.
+  await writeFile(
+    path.join(sdkSrc, "zgui-card.tsx"),
+    `import styles from "./zgui-card.module.css";
+export function Card() {
+  return <box class={styles.missingClass}><text>Card</text></box>;
+}
+`,
+  );
+  await assert.rejects(
+    execute(process.execPath, [cli, "typecheck", "--project", path.join(appDir, "tsconfig.json")], {
+      cwd: ws,
+      timeout: 30000,
+    }),
+    /missingClass/,
+  );
+
+  // Fails on unsupported CSS Modules feature.
+  await writeFile(path.join(sdkSrc, "zgui-card.module.css"), `@import "./other.css";\n`);
+  await assert.rejects(
+    execute(process.execPath, [cli, "typecheck", "--project", path.join(appDir, "tsconfig.json")], {
+      cwd: ws,
+      timeout: 30000,
+    }),
+    /@import/,
   );
 });

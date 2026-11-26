@@ -64,6 +64,7 @@ export async function packageApplication(
     hostSearchFrom,
     extraCapabilities,
     capabilitiesFile,
+    cssModuleInclude,
     desktopEntry = false,
     pureShell = false,
     signal,
@@ -81,6 +82,7 @@ export async function packageApplication(
       hostSearchFrom,
       extraCapabilities,
       capabilitiesFile,
+      cssModuleInclude,
     },
     { hostRoot, hostExecutable, signal },
   );

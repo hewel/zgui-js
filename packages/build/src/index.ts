@@ -2,6 +2,7 @@ import type * as Implementation from "./index.ts";
 import type * as Public from "./public-api.d.ts";
 import { resolveApplication as resolve } from "./application.ts";
 import { buildApplication as build } from "./build.ts";
+import { syncCssModuleTypes as syncCssTypes } from "./css.ts";
 import { devApplication as dev } from "./dev.ts";
 import {
   prepareNativeHost as prepare,
@@ -16,6 +17,7 @@ import { watchApplication as watch } from "./watch.ts";
 export type * from "./public-api.d.ts";
 
 export const buildApplication: typeof Public.buildApplication = build;
+export const syncCssModuleTypes: typeof Public.syncCssModuleTypes = syncCssTypes;
 export const watchApplication: typeof Public.watchApplication = watch;
 export const devApplication: typeof Public.devApplication = dev;
 export const previewApplication: typeof Public.previewApplication = preview;
