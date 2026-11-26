@@ -1,6 +1,6 @@
 {
   "name": "@hewel/zgui-services",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Capability-gated native host services SDK (HTTP/SSE/WebSocket, SQLite/KV, local files, clipboard, sockets, commands, workers) for zgui-js",
   "license": "Apache-2.0",
   "type": "module",

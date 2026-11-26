@@ -7,6 +7,22 @@ packages version in lockstep using [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-11-26
+
+> Note: `0.1.1` was skipped prior to npm publication (`v0.1.2` includes all changes since `0.1.0`).
+
+### Added
+
+- Align `schemas/package.schema.json` and `zgui-host` capability parsing (`clipboard`, `sqlite`,
+  `files`, `network`), add lossless per-origin `NetworkCapabilities.originRules` enforced by
+  `host-services` `OriginPolicy`, and add the base-shell `@hewel/zgui/shell-host` runtime extension
+  overlay host (`--extensions-overlay` watcher with lock-screen deferral, bounded `<= 64 KiB`
+  session handoff, 3-phase commit with observation window, anti-resurrection Safe Base Shell
+  rollback, and `--bytecode-cache-dir` `ZSQB` LRU cache).
+- Support Wayland `niri-blur-shape-v1` rounded blur masks with continuous opacity, disjoint strip
+  fallback, commit-boundary protocol reconciliation, lock-surface isolation, and opt-in preview
+  evidence.
+
 ### Fixed
 
 - CLI and npm release tests use the workspace and packed versions instead of a fixed release number.
@@ -14,6 +30,8 @@ packages version in lockstep using [Semantic Versioning](https://semver.org/).
   JavaScript timeout. Debug builds default to 200 ms per disposer; release builds default to 20 ms.
 - Heavy menu, dialog, and Markdown editor preview tests use the functional profile on Lavapipe.
   Timing-sensitive suites keep the default profile.
+- Serialize headless `wgpu`/Lavapipe `Driver` unit tests inside `zgui-host` to prevent Mesa 24
+  concurrent-teardown `SIGSEGV` and 4-vCPU startup budget exhaustion.
 
 ## [0.1.0] - 2026-11-25
 
@@ -66,5 +84,6 @@ All 6 public packages publish in lockstep at `0.1.0`:
   Rust/vendor verification, `ldd`/glibc audit, isolated clean-runner installation verification,
   idempotent fail-closed SRI publishing, and npm Trusted Publishing (OIDC `--provenance`).
 
-[Unreleased]: https://github.com/hewel/zgui-js/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/hewel/zgui-js/compare/v0.1.2...HEAD
+[0.1.2]: https://github.com/hewel/zgui-js/compare/v0.1.0...v0.1.2
 [0.1.0]: https://github.com/hewel/zgui-js/releases/tag/v0.1.0

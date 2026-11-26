@@ -1,6 +1,6 @@
 {
   "name": "@hewel/zgui",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Zero-DOM native TSX UI SDK, renderer, themed components, headless primitives, router, icons, and oxlint preset for zgui-js",
   "license": "Apache-2.0",
   "type": "module",

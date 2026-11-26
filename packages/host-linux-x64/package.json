@@ -1,6 +1,6 @@
 {
   "name": "@hewel/zgui-host-linux-x64",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Prebuilt zgui-js zgui-host binary for Linux x64 glibc (ubuntu-24.04, glibc >= 2.39 baseline)",
   "license": "Apache-2.0",
   "type": "module",
