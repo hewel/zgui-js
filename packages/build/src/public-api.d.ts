@@ -201,6 +201,8 @@ export interface ResolveNativeHostOptions {
 export interface ResolvedNativeHost {
   executable: string;
   source: NativeHostSource;
+  /** Absolute working directory selected for native host commands. */
+  runRoot: string;
   packageName?: string | undefined;
   cargoRoot?: string | undefined;
   abi?: NativeHostAbi | undefined;

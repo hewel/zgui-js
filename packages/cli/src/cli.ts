@@ -395,6 +395,11 @@ export async function runCli(rawArgs: readonly string[]): Promise<number> {
   }
 
   const hostSearchFrom = [import.meta.url];
+  const host = {
+    hostRoot: selected.hostRoot,
+    hostExecutable: selected.hostExecutable,
+    hostSearchFrom,
+  };
   const application = {
     ...(await resolveApplication(selected.selector)),
     capabilitiesFile: selected.capabilitiesFile,
@@ -414,9 +419,7 @@ export async function runCli(rawArgs: readonly string[]): Promise<number> {
       devApplication(application.app, {
         ...application,
         strictTypecheck: selected.strictTypecheck,
-        hostRoot: selected.hostRoot,
-        hostExecutable: selected.hostExecutable,
-        hostSearchFrom,
+        ...host,
         hostArgs,
         signal,
       }),
@@ -427,7 +430,7 @@ export async function runCli(rawArgs: readonly string[]): Promise<number> {
       previewApplication(application.app, {
         ...application,
         ...selected,
-        hostSearchFrom,
+        ...host,
         signal,
         onOutput: output => console.error(`[preview] Artifacts: ${output}`),
       }),
@@ -439,9 +442,7 @@ export async function runCli(rawArgs: readonly string[]): Promise<number> {
         ...application,
         out: selected.out,
         bytecode: selected.bytecode,
-        hostRoot: selected.hostRoot,
-        hostExecutable: selected.hostExecutable,
-        hostSearchFrom,
+        ...host,
         desktopEntry: selected.desktopEntry,
         pureShell: selected.pureShell,
         signal,
@@ -463,9 +464,7 @@ export async function runCli(rawArgs: readonly string[]): Promise<number> {
   const { dist, manifest } = await buildApplication(application.app, {
     ...application,
     bytecode: selected.bytecode,
-    hostRoot: selected.hostRoot,
-    hostExecutable: selected.hostExecutable,
-    hostSearchFrom,
+    ...host,
   });
   console.log(`Published ${dist} ${manifest.buildId}`);
   return 0;

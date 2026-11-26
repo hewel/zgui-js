@@ -63,96 +63,111 @@ export type NativeBlurRegion =
   | readonly NativeWindowRect[]
   | { readonly nodes: readonly NativeNode[]; readonly minOpacity: number };
 
+/** The native operations Solid Universal needs, independent of session and region services. */
+export interface UniversalRendererBridge {
+  readonly createElement: (tag: string) => NativeNode;
+  readonly createTextNode: (text: string) => NativeNode;
+  readonly replaceText: (node: NativeNode, text: string) => void;
+  readonly isTextNode: (node: NativeNode) => boolean;
+  readonly insertNode: (parent: NativeNode, node: NativeNode, anchor?: NativeNode | null) => void;
+  readonly removeNode: (parent: NativeNode, node: NativeNode) => void;
+  readonly getParentNode: (node: NativeNode) => NativeNode | null | undefined;
+  readonly getFirstChild: (node: NativeNode) => NativeNode | null | undefined;
+  readonly getNextSibling: (node: NativeNode) => NativeNode | null | undefined;
+  readonly setProperty: (
+    node: NativeNode,
+    name: string,
+    value: unknown,
+    previous?: unknown,
+  ) => void;
+}
+
+interface SessionPreferenceBridge {
+  readonly getReducedMotion?: () => boolean;
+  readonly subscribeReducedMotion?: (callback: (value: boolean) => void) => () => void;
+  readonly getBackgroundBlurSupported?: () => boolean;
+  readonly subscribeBackgroundBlurSupported?: (callback: (value: boolean) => void) => () => void;
+}
+
+interface RegionBridge extends SessionPreferenceBridge {
+  createPortal(layer: NativeOverlayLayer): NativeNode;
+  createCanvasScene(): CanvasScene;
+  registerDismissLayer(
+    node: NativeNode,
+    callback: (reason: NativeDismissReason) => void,
+    options: Required<NativeDismissLayerOptions>,
+  ): { update: (options: Required<NativeDismissLayerOptions>) => void; dispose: () => void };
+  readonly getReducedMotion: () => boolean;
+  installStylesheet(name: string, css: string, target?: NativeNode): void;
+  removeStylesheet(name: string): void;
+  requestAnimationFrame?(callback: (time: number) => void): number;
+  focus(node: NativeNode, reveal?: boolean): void;
+  trapFocus(node: NativeNode, wrap: boolean, autoFocus: boolean, restore: boolean): () => void;
+  lockScroll(node: NativeNode): () => void;
+  scrollTo(
+    node: NativeNode,
+    left: number | null,
+    top: number | null,
+    behavior?: "instant" | "smooth",
+  ): void;
+  scrollBy(
+    node: NativeNode,
+    left: number | null,
+    top: number | null,
+    behavior?: "instant" | "smooth",
+  ): void;
+  scrollIntoView(
+    node: NativeNode,
+    block?: "nearest" | "start" | "center" | "end",
+    behavior?: "instant" | "smooth",
+  ): void;
+  getSelection(node: NativeNode): { readonly start: number; readonly end: number } | null;
+  setSelection(node: NativeNode, start: number, end?: number): void;
+  selectAll(node: NativeNode): void;
+  getDocumentSelection(): DocumentSelection | null;
+  setDocumentSelection(
+    container: NativeNode,
+    anchorNode: NativeNode,
+    anchorOffset: number,
+    focusNode?: NativeNode,
+    focusOffset?: number,
+  ): void;
+  clearDocumentSelection(): void;
+  selectDocumentAll(container: NativeNode): void;
+  setWindowTitle(title: string): void;
+  setWindowFullscreen(fullscreen: boolean): void;
+  setWindowMaximized(maximized: boolean): void;
+  setWindowMinimized(minimized: boolean): void;
+  setWindowDecorations(decorations: WindowDecorations): void;
+  beginWindowMoveDrag(): void;
+  closeWindow(force?: boolean): void;
+  getWindowState(): WindowState;
+  subscribeWindowState(callback: (state: WindowState) => void): () => void;
+  onCloseRequest(callback: (event: CloseRequestEvent) => void): () => void;
+  getWindowRect(node: NativeNode): NativeWindowRect | null;
+  getTextContent(node: NativeNode): string;
+  isAnimating(node: NativeNode): boolean;
+  /** The optional attachment callback runs on registration and mount-tree changes, before layout. */
+  observeGeometry<K extends NativeGeometryKind>(
+    node: NativeNode,
+    kind: K,
+    callback: (value: NativeGeometry[K]) => void,
+    onAttachment?: (attached: boolean) => void,
+  ): () => void;
+  precedes(first: NativeNode, second: NativeNode): boolean;
+  clearRoot(root: NativeNode): void;
+}
+
+export type UiBridge = UniversalRendererBridge & RegionBridge;
+
 /** Installed by the host; resolving either bridge must remain lazy during preflight. */
 export interface NativeHost {
-  readonly __zgui: {
-    createElement(tag: string): NativeNode;
-    createPortal(layer: NativeOverlayLayer): NativeNode;
-    createCanvasScene(): CanvasScene;
-    registerDismissLayer(
-      node: NativeNode,
-      callback: (reason: NativeDismissReason) => void,
-      options: Required<NativeDismissLayerOptions>,
-    ): { update: (options: Required<NativeDismissLayerOptions>) => void; dispose: () => void };
-    createTextNode(text: string): NativeNode;
-    replaceText(node: NativeNode, text: string): void;
-    isTextNode(node: NativeNode): boolean;
-    insertNode(parent: NativeNode, node: NativeNode, anchor?: NativeNode | null): void;
-    removeNode(parent: NativeNode, node: NativeNode): void;
-    getParentNode(node: NativeNode): NativeNode | null | undefined;
-    getFirstChild(node: NativeNode): NativeNode | null | undefined;
-    getNextSibling(node: NativeNode): NativeNode | null | undefined;
-    setProperty(node: NativeNode, name: string, value: unknown, previous?: unknown): void;
-    installStylesheet(name: string, css: string, target?: NativeNode): void;
-    removeStylesheet(name: string): void;
-    getReducedMotion(): boolean;
-    subscribeReducedMotion?(callback: (value: boolean) => void): () => void;
-    getBackgroundBlurSupported?(): boolean;
-    subscribeBackgroundBlurSupported?(callback: (value: boolean) => void): () => void;
-    requestAnimationFrame?(callback: (time: number) => void): number;
-    focus(node: NativeNode, reveal?: boolean): void;
-    trapFocus(node: NativeNode, wrap: boolean, autoFocus: boolean, restore: boolean): () => void;
-    lockScroll(node: NativeNode): () => void;
-    scrollTo(
-      node: NativeNode,
-      left: number | null,
-      top: number | null,
-      behavior?: "instant" | "smooth",
-    ): void;
-    scrollBy(
-      node: NativeNode,
-      left: number | null,
-      top: number | null,
-      behavior?: "instant" | "smooth",
-    ): void;
-    scrollIntoView(
-      node: NativeNode,
-      block?: "nearest" | "start" | "center" | "end",
-      behavior?: "instant" | "smooth",
-    ): void;
-    getSelection(node: NativeNode): { readonly start: number; readonly end: number } | null;
-    setSelection(node: NativeNode, start: number, end?: number): void;
-    selectAll(node: NativeNode): void;
-    getDocumentSelection(): DocumentSelection | null;
-    setDocumentSelection(
-      container: NativeNode,
-      anchorNode: NativeNode,
-      anchorOffset: number,
-      focusNode?: NativeNode,
-      focusOffset?: number,
-    ): void;
-    clearDocumentSelection(): void;
-    selectDocumentAll(container: NativeNode): void;
-    setWindowTitle(title: string): void;
-    setWindowFullscreen(fullscreen: boolean): void;
-    setWindowMaximized(maximized: boolean): void;
-    setWindowMinimized(minimized: boolean): void;
-    setWindowDecorations(decorations: WindowDecorations): void;
-    beginWindowMoveDrag(): void;
-    closeWindow(force?: boolean): void;
-    getWindowState(): WindowState;
-    subscribeWindowState(callback: (state: WindowState) => void): () => void;
-    onCloseRequest(callback: (event: CloseRequestEvent) => void): () => void;
-    getWindowRect(node: NativeNode): NativeWindowRect | null;
-    getTextContent(node: NativeNode): string;
-    isAnimating(node: NativeNode): boolean;
-    /** The optional attachment callback runs on registration and mount-tree changes, before layout. */
-    observeGeometry<K extends NativeGeometryKind>(
-      node: NativeNode,
-      kind: K,
-      callback: (value: NativeGeometry[K]) => void,
-      onAttachment?: (attached: boolean) => void,
-    ): () => void;
-    precedes(first: NativeNode, second: NativeNode): boolean;
-    clearRoot(root: NativeNode): void;
-  };
-  readonly __zguiShell: {
+  readonly __zgui: UiBridge;
+  readonly __zguiShell: SessionPreferenceBridge & {
     getSessionGeneration(): number;
     installStylesheet(name: string, css: string): void;
     removeStylesheet(name: string): void;
     subscribeMonitors(callback: (monitors: readonly Monitor[]) => void): () => void;
-    getBackgroundBlurSupported?(): boolean;
-    subscribeBackgroundBlurSupported?(callback: (value: boolean) => void): () => void;
     openLayer(
       name: string,
       placement: LayerPlacement,
@@ -225,7 +240,6 @@ export interface NativeHost {
 
 declare const globalThis: NativeHost;
 
-export type UiBridge = NativeHost["__zgui"];
 const Region = createContext<UiBridge | null>(null);
 const nodeBridges = new WeakMap<NativeNode, UiBridge>();
 let regionProviders = 0;
@@ -288,197 +302,144 @@ export function sessionScopeKey(bridge?: UiBridge): object | undefined {
   return globalThis.__zguiShell ?? bridge ?? tryBridgeFor();
 }
 
-interface MotionState {
-  hostValue: () => boolean;
-  setHostValue: (next: boolean) => void;
-  currentHostValue: boolean;
-  override: () => boolean | null;
-  setOverride: (next: boolean | null) => void;
+const MOTION = ["getReducedMotion", "subscribeReducedMotion"] as const;
+const BACKGROUND_BLUR = ["getBackgroundBlurSupported", "subscribeBackgroundBlurSupported"] as const;
+type Preference = typeof MOTION | typeof BACKGROUND_BLUR;
+
+interface HostPreference {
+  current: boolean;
+  readonly value: () => boolean;
+  readonly set: (value: boolean) => void;
+  readonly sources: WeakMap<
+    SessionPreferenceBridge,
+    {
+      mounts: number;
+      readonly unsubscribe: (() => void) | undefined;
+    }
+  >;
+}
+
+interface SessionPreferences {
+  readonly motion: HostPreference;
+  readonly backgroundBlur: HostPreference;
+  readonly override: () => boolean | null;
+  readonly setOverride: (value: boolean | null) => void;
   currentOverride: boolean | null;
-  subscribedBridges: WeakSet<UiBridge>;
 }
 
-const motionStates = new WeakMap<object, MotionState>();
+const preferencesBySession = new WeakMap<object, SessionPreferences>();
 
-function flushMotion(): void {
-  try {
-    solidFlush();
-  } catch (error) {
-    resetErrorHalt();
-    throw error;
-  }
+function newHostPreference(): HostPreference {
+  const [value, set] = createSignal(false, { ownedWrite: true });
+  return { current: false, value, set, sources: new WeakMap() };
 }
 
-function ensureMotionState(bridge?: UiBridge): MotionState {
-  const key = sessionScopeKey(bridge);
-  if (!key) throw new ReferenceError("Native UI requires a mount region or shell session");
-  let state = motionStates.get(key);
+function preferencesFor(key: object): SessionPreferences {
+  let state = preferencesBySession.get(key);
   if (!state) {
-    const initial = bridge ? bridge.getReducedMotion() : false;
-    const [hostValue, setHostValue] = createSignal(initial, { ownedWrite: true });
     const [override, setOverride] = createSignal<boolean | null>(null);
     state = {
-      hostValue,
-      setHostValue,
-      currentHostValue: initial,
+      motion: newHostPreference(),
+      backgroundBlur: newHostPreference(),
       override,
       setOverride,
       currentOverride: null,
-      subscribedBridges: new WeakSet(),
     };
-    motionStates.set(key, state);
+    preferencesBySession.set(key, state);
   }
   return state;
 }
 
-function subscribeMotionBridge(
-  state: MotionState,
-  bridge: UiBridge,
-  allowReadOnlySkip: boolean,
-): (() => void) | undefined {
-  if (state.subscribedBridges.has(bridge)) return undefined;
-  const current = bridge.getReducedMotion();
-  if (current !== state.currentHostValue) {
-    state.currentHostValue = current;
-    state.setHostValue(current);
-  }
-  let unsubscribe: (() => void) | undefined;
-  if (bridge.subscribeReducedMotion) {
-    try {
-      unsubscribe = bridge.subscribeReducedMotion(next => {
-        state.currentHostValue = next;
-        state.setHostValue(next);
-        flushMotion();
-      });
-    } catch (error) {
-      if (allowReadOnlySkip) return undefined;
-      throw error;
-    }
-  }
-  state.subscribedBridges.add(bridge);
-  return unsubscribe
-    ? () => {
-        state.subscribedBridges.delete(bridge);
-        unsubscribe();
-      }
-    : undefined;
+function preferenceSource(
+  [read, subscribe]: Preference,
+  bridge?: UiBridge,
+): SessionPreferenceBridge | undefined {
+  const shell = globalThis.__zguiShell;
+  if (shell?.[read] || shell?.[subscribe]) return shell;
+  return bridge?.[read] || bridge?.[subscribe] ? bridge : undefined;
 }
 
-/** Eagerly subscribe a mounted region bridge so unscoped shell-root readers stay synchronized. */
-export function attachReducedMotionBridge(bridge: UiBridge): void {
-  if (typeof bridge.getReducedMotion !== "function") return;
-  const state = ensureMotionState(bridge);
-  const dispose = subscribeMotionBridge(state, bridge, false);
-  if (dispose && getOwner()) onCleanup(dispose);
+function attachPreference(state: HostPreference, preference: Preference, bridge?: UiBridge): void {
+  const source = preferenceSource(preference, bridge);
+  if (!source) return;
+  const [read, subscribe] = preference;
+  let lease = state.sources.get(source);
+  if (!lease) {
+    const get = source[read]?.() ?? bridge?.[read]?.();
+    if (get !== undefined && get !== state.current) {
+      state.current = get;
+      state.set(get);
+    }
+    let mounting = true;
+    const unsubscribe = source[subscribe]?.(next => {
+      if (next === state.current) return;
+      state.current = next;
+      state.set(next);
+      if (!mounting) {
+        try {
+          solidFlush();
+        } catch (error) {
+          resetErrorHalt();
+          throw error;
+        }
+      }
+    });
+    mounting = false;
+    lease = { mounts: 0, unsubscribe };
+    state.sources.set(source, lease);
+  }
+  const mounted = lease;
+  mounted.mounts++;
+  onCleanup(() => {
+    if (--mounted.mounts !== 0) return;
+    state.sources.delete(source);
+    mounted.unsubscribe?.();
+  });
+}
+
+/** Mount owners share shell preferences; older hosts supply them through their region bridges. */
+export function attachSessionPreferences(bridge?: UiBridge): void {
+  const key = sessionScopeKey(bridge);
+  if (!key) return;
+  const state = preferencesFor(key);
+  attachPreference(state.motion, MOTION, bridge);
+  attachPreference(state.backgroundBlur, BACKGROUND_BLUR, bridge);
+}
+
+function readHostPreference(
+  state: HostPreference,
+  preference: Preference,
+  bridge?: UiBridge,
+): boolean {
+  state.value();
+  const source = preferenceSource(preference, bridge);
+  if (source && !state.sources.get(source)?.unsubscribe) {
+    // Getter-only or pre-mount access is a snapshot, not an ownerless subscription.
+    return source[preference[0]]?.() ?? state.current;
+  }
+  return state.current;
 }
 
 /** Reactive reduced-motion preference (runtime override when set, otherwise host/desktop preference). */
 export function getReducedMotion(): boolean {
   const bridge = tryBridgeFor();
-  const state = ensureMotionState(bridge);
-  if (bridge) subscribeMotionBridge(state, bridge, true);
+  const key = sessionScopeKey(bridge);
+  if (!key) throw new ReferenceError("Native UI requires a mount region or shell session");
+  const state = preferencesFor(key);
   state.override();
-  state.hostValue();
-  return state.currentOverride ?? state.currentHostValue;
+  return state.currentOverride ?? readHostPreference(state.motion, MOTION, bridge);
 }
 
-/** Override reduced motion dynamically for this session, or pass `null` to follow the host/desktop setting. */
+/** Override reduced motion for the whole session, or pass `null` to follow the host. */
 export function setReducedMotion(value: boolean | null): void {
   if (value !== null && typeof value !== "boolean") {
     throw new TypeError("setReducedMotion requires a boolean or null");
   }
-  const bridge = tryBridgeFor();
-  const state = ensureMotionState(bridge);
-  if (bridge) subscribeMotionBridge(state, bridge, true);
+  const key = sessionScopeKey();
+  if (!key) throw new ReferenceError("Native UI requires a mount region or shell session");
+  const state = preferencesFor(key);
   state.currentOverride = value;
   state.setOverride(value);
-}
-
-interface BackgroundBlurSource {
-  getBackgroundBlurSupported?(): boolean;
-  subscribeBackgroundBlurSupported?(callback: (value: boolean) => void): () => void;
-}
-
-interface BackgroundBlurState {
-  hostValue: () => boolean;
-  setHostValue: (next: boolean) => void;
-  currentHostValue: boolean;
-  subscribedSources: WeakSet<object>;
-}
-
-const backgroundBlurStates = new WeakMap<object, BackgroundBlurState>();
-
-function ensureBackgroundBlurState(bridge?: UiBridge): BackgroundBlurState {
-  const key = sessionScopeKey(bridge);
-  if (!key) throw new ReferenceError("Native UI requires a mount region or shell session");
-  let state = backgroundBlurStates.get(key);
-  if (!state) {
-    const initial =
-      bridge?.getBackgroundBlurSupported?.() ??
-      globalThis.__zguiShell?.getBackgroundBlurSupported?.() ??
-      false;
-    const [hostValue, setHostValue] = createSignal(initial, { ownedWrite: true });
-    state = {
-      hostValue,
-      setHostValue,
-      currentHostValue: initial,
-      subscribedSources: new WeakSet(),
-    };
-    backgroundBlurStates.set(key, state);
-  }
-  return state;
-}
-
-function subscribeBackgroundBlurSource(
-  state: BackgroundBlurState,
-  source: BackgroundBlurSource,
-  allowReadOnlySkip: boolean,
-): (() => void) | undefined {
-  if (typeof source.getBackgroundBlurSupported !== "function") return undefined;
-  if (state.subscribedSources.has(source)) return undefined;
-  const current = source.getBackgroundBlurSupported();
-  if (current !== state.currentHostValue) {
-    state.currentHostValue = current;
-    state.setHostValue(current);
-  }
-  let unsubscribe: (() => void) | undefined;
-  if (source.subscribeBackgroundBlurSupported) {
-    try {
-      unsubscribe = source.subscribeBackgroundBlurSupported(next => {
-        if (next === state.currentHostValue) return;
-        state.currentHostValue = next;
-        state.setHostValue(next);
-        flushMotion();
-      });
-    } catch (error) {
-      if (allowReadOnlySkip) return undefined;
-      throw error;
-    }
-  }
-  state.subscribedSources.add(source);
-  return unsubscribe
-    ? () => {
-        state.subscribedSources.delete(source);
-        unsubscribe();
-      }
-    : undefined;
-}
-
-/** Eagerly subscribe a mounted region bridge so background-blur readers stay synchronized. */
-export function attachBackgroundBlurBridge(bridge: UiBridge): void {
-  if (typeof bridge.getBackgroundBlurSupported !== "function") return;
-  const state = ensureBackgroundBlurState(bridge);
-  const dispose = subscribeBackgroundBlurSource(state, bridge, false);
-  if (dispose && getOwner()) onCleanup(dispose);
-}
-
-/** Eagerly subscribe the rootless shell bridge so zero-surface shells observe live blur transitions. */
-export function attachBackgroundBlurShell(): void {
-  const shell = globalThis.__zguiShell;
-  if (!shell || typeof shell.getBackgroundBlurSupported !== "function") return;
-  const state = ensureBackgroundBlurState();
-  const dispose = subscribeBackgroundBlurSource(state, shell, false);
-  if (dispose && getOwner()) onCleanup(dispose);
 }
 
 /**
@@ -487,16 +448,9 @@ export function attachBackgroundBlurShell(): void {
  */
 export function getBackgroundBlurSupported(): boolean {
   const bridge = tryBridgeFor();
-  const state = ensureBackgroundBlurState(bridge);
-  if (bridge?.getBackgroundBlurSupported) {
-    const dispose = subscribeBackgroundBlurSource(state, bridge, true);
-    if (dispose && getOwner()) onCleanup(dispose);
-  } else if (globalThis.__zguiShell?.getBackgroundBlurSupported) {
-    const dispose = subscribeBackgroundBlurSource(state, globalThis.__zguiShell, true);
-    if (dispose && getOwner()) onCleanup(dispose);
-  }
-  state.hostValue();
-  return state.currentHostValue;
+  const key = sessionScopeKey(bridge);
+  if (!key) throw new ReferenceError("Native UI requires a mount region or shell session");
+  return readHostPreference(preferencesFor(key).backgroundBlur, BACKGROUND_BLUR, bridge);
 }
 
 export function rememberBridge(node: NativeNode, bridge: UiBridge): NativeNode {

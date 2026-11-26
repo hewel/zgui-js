@@ -67,6 +67,14 @@ Each source is validated independently. `shellSurfaces` and `controlChannel` are
 
 **Only the app's base `package.json` can declare `sessionLock: true`.** Either overlay source specifying it as `true` rejects the build even if the base already grants it. `false` or omission neither grants nor revokes the base declaration.
 
+Build-time overlays may grant `shellSurfaces: true`. The runtime `--extensions-overlay`
+is stricter: it cannot add either `shellSurfaces` or `sessionLock` authority.
+
+`buildApplication(app, { bytecode: true })` resolves a compatible host through the
+same prebuilt/Cargo lookup as `devApplication`. `packageApplication` compiles with
+the same verified executable it ships. `resolveNativeHost` returns the absolute
+`runRoot` for invoking the executable.
+
 ```sh
 zgui-js build ./my-app --watch --capabilities-file ./generated/plugin-capabilities.json
 ```

@@ -1,11 +1,9 @@
 import type {
   BuildApplicationOptions,
   BuildInfo,
-  Capabilities,
-  FontDeclaration,
   Manifest,
   PublishedApplication,
-  WindowDeclaration,
+  ResolvedNativeHost,
   WorkerDeclaration,
 } from "./index.ts";
 import { readFileSync, realpathSync, type Dirent } from "node:fs";
@@ -18,6 +16,7 @@ import { typecheckProject } from "./typecheck.ts";
 import { canonicalJson, sha256, moduleIdentity } from "./identity.ts";
 import { compileModuleBytecode, resolveNativeHost } from "./host.ts";
 import { publishGeneration, resourcePath } from "./publication.ts";
+import { readManifestPolicy } from "./manifest-policy.ts";
 import { syncCssModuleTypes, validateStylesheet } from "./css.ts";
 import { workspaceRoot } from "./sdk.ts";
 import { ensureSdkPackagesBuilt } from "./sdk-packages.ts";
@@ -281,7 +280,12 @@ export async function buildApplication(
     extraCapabilities,
     capabilitiesFile,
   }: BuildApplicationOptions = {},
+  {
+    signal,
+    nativeHost,
+  }: { signal?: AbortSignal | undefined; nativeHost?: ResolvedNativeHost | undefined } = {},
 ): Promise<PublishedApplication> {
+  signal?.throwIfAborted();
   if (!/^[a-z][a-z0-9-]*$/.test(app)) throw new Error(`Invalid application name: ${app}`);
   root = path.resolve(root);
   appDirectory = path.resolve(appDirectory);
@@ -301,593 +305,11 @@ export async function buildApplication(
     hostRoot,
     hostExecutable,
     hostSearchFrom,
+    nativeHost,
+    signal,
     extraCapabilities,
     capabilitiesFile,
   });
-}
-
-function isFontDeclaration(font: unknown): font is FontDeclaration {
-  return (
-    !!font &&
-    typeof font === "object" &&
-    "family" in font &&
-    typeof font.family === "string" &&
-    !!font.family.trim() &&
-    font.family === font.family.trim() &&
-    "path" in font &&
-    typeof font.path === "string" &&
-    Object.keys(font).every(key => key === "family" || key === "path")
-  );
-}
-
-function capabilityString(value: unknown): value is string {
-  if (typeof value !== "string") return false;
-  let nonspace = false;
-  for (const char of value) {
-    const code = char.charCodeAt(0);
-    if (
-      code < 32 ||
-      (code >= 127 && code <= 159) ||
-      (char.length === 1 && code >= 0xd800 && code <= 0xdfff)
-    )
-      return false;
-    nonspace ||= code !== 32;
-  }
-  return nonspace;
-}
-
-function capabilityPath(value: string): boolean {
-  if (value === "/") return true;
-  if (value.includes("\\")) return false;
-  const parts = value.split("/");
-  const root = parts.shift();
-  const template = root === "$XDG_RUNTIME_DIR" || root === "$HOME" || root === "$XDG_DATA_HOME";
-  return (
-    (root === "" || template) &&
-    parts.every(
-      part =>
-        part !== "" &&
-        part !== "." &&
-        part !== ".." &&
-        (!template ||
-          part === "$WAYLAND_DISPLAY" ||
-          !part.replaceAll("${WAYLAND_DISPLAY}", "").includes("$")),
-    )
-  );
-}
-
-function fileDirectoryPath(value: string): boolean {
-  if (value === "/") return true;
-  if (value.includes("\\")) return false;
-  const parts = value.split("/");
-  const root = parts.shift();
-  const template = root === "$HOME" || root === "$XDG_DATA_HOME" || root === "$XDG_DOCUMENTS_DIR";
-  return (
-    (root === "" || template) &&
-    parts.every(part => part !== "" && part !== "." && part !== ".." && !part.includes("$"))
-  );
-}
-
-function isPrivateIpv4(host: string): boolean {
-  const parts = host.split(".");
-  if (parts.length !== 4 || !parts.every(p => /^\d{1,3}$/.test(p))) return false;
-  const nums = parts.map(Number);
-  if (nums.some(n => n > 255)) return false;
-  const [a, b] = nums as [number, number, number, number];
-  return (
-    a === 0 ||
-    a === 10 ||
-    a === 127 ||
-    (a === 100 && b >= 64 && b <= 127) ||
-    (a === 169 && b === 254) ||
-    (a === 172 && b >= 16 && b <= 31) ||
-    (a === 192 && b === 168) ||
-    a >= 224
-  );
-}
-
-function isPrivateHost(hostname: string): boolean {
-  const bare =
-    hostname.startsWith("[") && hostname.endsWith("]")
-      ? hostname.slice(1, -1).toLowerCase()
-      : hostname.toLowerCase();
-  if (bare === "localhost" || bare.endsWith(".localhost")) return true;
-  if (isPrivateIpv4(bare)) return true;
-  if (bare.includes(":")) {
-    // Reject loopback, unspecified, ULA (fc00::/7), link-local (fe80::/10), multicast (ff00::/8),
-    // and IPv4-mapped IPv6 addresses unless allowPrivateNetworks is explicitly opted in.
-    if (bare === "::1" || bare === "::") return true;
-    const first = bare.split(":")[0] ?? "";
-    const head = Number.parseInt(first || "0", 16);
-    if (!Number.isNaN(head)) {
-      if ((head & 0xfe00) === 0xfc00) return true;
-      if ((head & 0xffc0) === 0xfe80) return true;
-      if ((head & 0xff00) === 0xff00) return true;
-    }
-    if (bare.startsWith("::ffff:")) {
-      const mapped = bare.slice("::ffff:".length);
-      if (isPrivateIpv4(mapped)) return true;
-      // Also handle hex form e.g. ::ffff:7f00:1 produced by WHATWG URL parser
-      const hexParts = mapped.split(":");
-      if (hexParts.length === 2) {
-        const hi = Number.parseInt(hexParts[0]!, 16);
-        const lo = Number.parseInt(hexParts[1]!, 16);
-        if (!Number.isNaN(hi) && !Number.isNaN(lo)) {
-          const ipv4 = `${(hi >> 8) & 255}.${hi & 255}.${(lo >> 8) & 255}.${lo & 255}`;
-          if (isPrivateIpv4(ipv4)) return true;
-        }
-      }
-    }
-  }
-  return false;
-}
-
-function parseNetworkOrigin(
-  entry: unknown,
-  field: string,
-): {
-  canonical: string;
-  insecure: boolean;
-  host: string;
-} {
-  if (!capabilityString(entry) || entry !== entry.trim() || entry.includes("*")) {
-    throw new Error(`${field} contains invalid origin ${JSON.stringify(entry)}`);
-  }
-  let parsed: URL;
-  try {
-    parsed = new URL(entry);
-  } catch {
-    throw new Error(`${field} contains invalid origin ${JSON.stringify(entry)}`);
-  }
-  const scheme = parsed.protocol.slice(0, -1).toLowerCase();
-  if (scheme !== "https" && scheme !== "http" && scheme !== "wss" && scheme !== "ws") {
-    throw new Error(`${field} origin scheme must be https, http, wss, or ws: ${entry}`);
-  }
-  if (parsed.username || parsed.password) {
-    throw new Error(`${field} origin must not include userinfo: ${entry}`);
-  }
-  if (parsed.search || parsed.hash) {
-    throw new Error(`${field} origin must not include query or fragment: ${entry}`);
-  }
-  const afterScheme = entry.slice(entry.indexOf("://") + 3);
-  if (afterScheme.includes("/") || afterScheme.includes("?") || afterScheme.includes("#")) {
-    throw new Error(`${field} origin must not include a path, query, or fragment: ${entry}`);
-  }
-  const host = parsed.hostname.toLowerCase();
-  if (!host) {
-    throw new Error(`${field} origin must include a host: ${entry}`);
-  }
-  const defaultPort = scheme === "https" || scheme === "wss" ? 443 : 80;
-  const port = parsed.port ? Number(parsed.port) : defaultPort;
-  if (!Number.isInteger(port) || port < 1 || port > 65535) {
-    throw new Error(`${field} origin has invalid port: ${entry}`);
-  }
-  const canonical = port === defaultPort ? `${scheme}://${host}` : `${scheme}://${host}:${port}`;
-  return { canonical, insecure: scheme === "http" || scheme === "ws", host };
-}
-
-function parseCapabilities(input: unknown, source: string): Capabilities {
-  if (input !== undefined && (input === null || typeof input !== "object" || Array.isArray(input)))
-    throw new Error(`${source} must be an object`);
-
-  const capabilities = Object.create(null) as Capabilities;
-  for (const [key, value] of Object.entries(input ?? {}) as [string, unknown][]) {
-    const field = `${source}.${key}`;
-    switch (key) {
-      case "shellSurfaces":
-      case "sessionLock":
-      case "controlChannel":
-        if (typeof value !== "boolean") throw new Error(`${field} must be a boolean`);
-        if (value) capabilities[key] = true;
-        break;
-      case "clipboard": {
-        if (!value || typeof value !== "object" || Array.isArray(value))
-          throw new Error(`${field} must be an object`);
-        for (const [subKey, subVal] of Object.entries(value as Record<string, unknown>)) {
-          if (subKey !== "read") throw new Error(`Unknown capability: ${field}.${subKey}`);
-          if (typeof subVal !== "boolean") throw new Error(`${field}.read must be a boolean`);
-          if (subVal) capabilities.clipboard = { read: true };
-        }
-        break;
-      }
-      case "sqlite": {
-        if (!value || typeof value !== "object" || Array.isArray(value))
-          throw new Error(`${field} must be an object`);
-        for (const [subKey, subVal] of Object.entries(value as Record<string, unknown>)) {
-          if (subKey !== "databases") throw new Error(`Unknown capability: ${field}.${subKey}`);
-          if (!Array.isArray(subVal)) throw new Error(`${field}.databases must be an array`);
-          const names = new Set<string>();
-          for (const item of subVal as unknown[]) {
-            if (typeof item !== "string" || !/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(item))
-              throw new Error(`${field}.databases contains invalid entries`);
-            if (names.has(item)) throw new Error(`${field}.databases contains duplicates`);
-            names.add(item);
-          }
-          if (names.size) capabilities.sqlite = { databases: [...names] };
-        }
-        break;
-      }
-      case "files": {
-        if (!value || typeof value !== "object" || Array.isArray(value))
-          throw new Error(`${field} must be an object`);
-        for (const [subKey, subVal] of Object.entries(value as Record<string, unknown>)) {
-          if (subKey !== "directories") throw new Error(`Unknown capability: ${field}.${subKey}`);
-          if (!Array.isArray(subVal)) throw new Error(`${field}.directories must be an array`);
-          const seen = new Set<string>();
-          const dirs: { path: string; mode: "read" | "readwrite" }[] = [];
-          for (const item of subVal as unknown[]) {
-            if (!item || typeof item !== "object" || Array.isArray(item))
-              throw new Error(`${field}.directories entries must be objects`);
-            const record = item as Record<string, unknown>;
-            const keys = Object.keys(record);
-            if (!keys.every(k => k === "path" || k === "mode"))
-              throw new Error(`${field}.directories entry contains unknown keys`);
-            if (
-              !capabilityString(record.path) ||
-              !fileDirectoryPath(record.path) ||
-              (record.mode !== "read" && record.mode !== "readwrite")
-            )
-              throw new Error(`${field}.directories contains invalid entries`);
-            if (seen.has(record.path))
-              throw new Error(`${field}.directories contains duplicate path ${record.path}`);
-            seen.add(record.path);
-            dirs.push({ path: record.path, mode: record.mode });
-          }
-          if (dirs.length) capabilities.files = { directories: dirs };
-        }
-        break;
-      }
-      case "network": {
-        if (!value || typeof value !== "object" || Array.isArray(value))
-          throw new Error(`${field} must be an object`);
-        const network: {
-          origins?: string[];
-          originRules?: {
-            origin: string;
-            allowInsecureHttp?: boolean;
-            allowPrivateNetworks?: boolean;
-          }[];
-          allowInsecureHttp?: boolean;
-          allowPrivateNetworks?: boolean;
-        } = {};
-        const originSet = new Set<string>();
-        const ruleSet = new Set<string>();
-        for (const [subKey, subVal] of Object.entries(value as Record<string, unknown>)) {
-          switch (subKey) {
-            case "origins": {
-              if (!Array.isArray(subVal)) throw new Error(`${field}.origins must be an array`);
-              for (const item of subVal as unknown[]) {
-                const parsed = parseNetworkOrigin(item, `${field}.origins`);
-                if (originSet.has(parsed.canonical))
-                  throw new Error(`${field}.origins contains duplicate origin ${parsed.canonical}`);
-                originSet.add(parsed.canonical);
-              }
-              if (originSet.size) network.origins = [...originSet];
-              break;
-            }
-            case "originRules": {
-              if (!Array.isArray(subVal)) throw new Error(`${field}.originRules must be an array`);
-              const rules: {
-                origin: string;
-                allowInsecureHttp?: boolean;
-                allowPrivateNetworks?: boolean;
-              }[] = [];
-              for (const item of subVal as unknown[]) {
-                if (!item || typeof item !== "object" || Array.isArray(item))
-                  throw new Error(`${field}.originRules entries must be objects`);
-                const record = item as Record<string, unknown>;
-                for (const ruleKey of Object.keys(record)) {
-                  if (
-                    ruleKey !== "origin" &&
-                    ruleKey !== "allowInsecureHttp" &&
-                    ruleKey !== "allowPrivateNetworks"
-                  ) {
-                    throw new Error(`${field}.originRules entry contains unknown key: ${ruleKey}`);
-                  }
-                }
-                const parsed = parseNetworkOrigin(record.origin, `${field}.originRules`);
-                if (
-                  record.allowInsecureHttp !== undefined &&
-                  typeof record.allowInsecureHttp !== "boolean"
-                ) {
-                  throw new Error(`${field}.originRules allowInsecureHttp must be a boolean`);
-                }
-                if (
-                  record.allowPrivateNetworks !== undefined &&
-                  typeof record.allowPrivateNetworks !== "boolean"
-                ) {
-                  throw new Error(`${field}.originRules allowPrivateNetworks must be a boolean`);
-                }
-                const allowInsecureHttp = record.allowInsecureHttp === true;
-                const allowPrivateNetworks = record.allowPrivateNetworks === true;
-                if (parsed.insecure && !allowInsecureHttp) {
-                  throw new Error(
-                    `${field}.originRules contains insecure origin ${parsed.canonical} without allowInsecureHttp: true`,
-                  );
-                }
-                if (isPrivateHost(parsed.host) && !allowPrivateNetworks) {
-                  throw new Error(
-                    `${field}.originRules contains private/loopback origin ${parsed.canonical} without allowPrivateNetworks: true`,
-                  );
-                }
-                if (ruleSet.has(parsed.canonical)) {
-                  throw new Error(
-                    `${field}.originRules contains duplicate origin ${parsed.canonical}`,
-                  );
-                }
-                ruleSet.add(parsed.canonical);
-                rules.push({
-                  origin: parsed.canonical,
-                  ...(allowInsecureHttp ? { allowInsecureHttp: true } : {}),
-                  ...(allowPrivateNetworks ? { allowPrivateNetworks: true } : {}),
-                });
-              }
-              if (rules.length) network.originRules = rules;
-              break;
-            }
-            case "allowInsecureHttp":
-            case "allowPrivateNetworks": {
-              if (typeof subVal !== "boolean")
-                throw new Error(`${field}.${subKey} must be a boolean`);
-              if (subVal) network[subKey] = true;
-              break;
-            }
-            default:
-              throw new Error(`Unknown capability: ${field}.${subKey}`);
-          }
-        }
-        for (const origin of ruleSet) {
-          if (originSet.has(origin)) {
-            throw new Error(
-              `${field} declares duplicate origin in origins and originRules: ${origin}`,
-            );
-          }
-        }
-        if (Object.keys(network).length) capabilities.network = network;
-        break;
-      }
-      case "imagePrefixes":
-      case "unixSockets":
-      case "commands":
-      case "namedSockets": {
-        if (!Array.isArray(value)) throw new Error(`${field} must be an array`);
-        const entries = new Set<string>();
-        for (const item of value as unknown[]) {
-          if (
-            !capabilityString(item) ||
-            (key === "namedSockets" && !/^[A-Za-z][A-Za-z0-9_-]{0,63}$/.test(item)) ||
-            ((key === "imagePrefixes" || key === "unixSockets") && !capabilityPath(item))
-          )
-            throw new Error(`${field} contains invalid entries`);
-          if (entries.has(item)) throw new Error(`${field} contains duplicates`);
-          entries.add(item);
-        }
-        if (entries.size) capabilities[key] = [...entries];
-        break;
-      }
-      default:
-        throw new Error(`Unknown capability: ${field}`);
-    }
-  }
-  return capabilities;
-}
-
-function capabilityOverlay(input: unknown, source: string): Capabilities {
-  if (
-    input !== null &&
-    typeof input === "object" &&
-    "sessionLock" in input &&
-    input.sessionLock === true
-  )
-    throw new Error(`${source}.sessionLock: true may only be declared in base package.json`);
-  return parseCapabilities(input, source);
-}
-
-async function mergeCapabilities(
-  input: unknown,
-  {
-    extraCapabilities,
-    capabilitiesFile,
-  }: Pick<BuildApplicationOptions, "extraCapabilities" | "capabilitiesFile">,
-): Promise<Capabilities | undefined> {
-  const base = parseCapabilities(input, "package.json zgui.capabilities");
-  const sources = [base, capabilityOverlay(extraCapabilities, "extraCapabilities")];
-  if (capabilitiesFile !== undefined) {
-    const filename = path.resolve(capabilitiesFile);
-    const source = `capabilitiesFile (${filename})`;
-    let overlay: unknown;
-    try {
-      overlay = JSON.parse(await readFile(filename, "utf8"));
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      throw new Error(`${source}: cannot read JSON: ${message}`, { cause: error });
-    }
-    sources.push(capabilityOverlay(overlay, source));
-  }
-  const merged: Capabilities = {};
-  for (const key of ["shellSurfaces", "controlChannel"] as const)
-    if (sources.some(source => source[key])) merged[key] = true;
-  if (base.sessionLock) merged.sessionLock = true;
-  for (const key of ["imagePrefixes", "unixSockets", "namedSockets", "commands"] as const) {
-    const union = new Set(sources.flatMap(source => source[key] ?? []));
-    if (union.size) merged[key] = [...union].sort();
-  }
-  if (sources.some(source => source.clipboard?.read)) merged.clipboard = { read: true };
-  const sqliteDatabases = new Set(sources.flatMap(source => source.sqlite?.databases ?? []));
-  if (sqliteDatabases.size) merged.sqlite = { databases: [...sqliteDatabases].sort() };
-  const fileDirs = new Map<string, "read" | "readwrite">();
-  for (const grant of sources.flatMap(source => source.files?.directories ?? [])) {
-    const existing = fileDirs.get(grant.path);
-    if (!existing || grant.mode === "readwrite") fileDirs.set(grant.path, grant.mode);
-  }
-  if (fileDirs.size) {
-    merged.files = {
-      directories: [...fileDirs.entries()]
-        .sort(([a], [b]) => a.localeCompare(b))
-        .map(([dirPath, mode]) => ({ path: dirPath, mode })),
-    };
-  }
-  const networkSources = sources
-    .map(source => source.network)
-    .filter((net): net is NonNullable<Capabilities["network"]> => net !== undefined);
-  const usesLegacySingleSource =
-    networkSources.length === 1 &&
-    (networkSources[0]!.originRules === undefined || networkSources[0]!.originRules.length === 0);
-  if (usesLegacySingleSource) {
-    const only = networkSources[0]!;
-    const allowInsecureHttp = Boolean(only.allowInsecureHttp);
-    const allowPrivateNetworks = Boolean(only.allowPrivateNetworks);
-    const networkOrigins = [...new Set(only.origins ?? [])].sort();
-    for (const origin of networkOrigins) {
-      const parsed = parseNetworkOrigin(origin, "capabilities.network.origins");
-      if (parsed.insecure && !allowInsecureHttp) {
-        throw new Error(
-          `capabilities.network.origins contains insecure origin ${origin} without allowInsecureHttp: true`,
-        );
-      }
-      if (isPrivateHost(parsed.host) && !allowPrivateNetworks) {
-        throw new Error(
-          `capabilities.network.origins contains private/loopback origin ${origin} without allowPrivateNetworks: true`,
-        );
-      }
-    }
-    if (networkOrigins.length || allowInsecureHttp || allowPrivateNetworks) {
-      merged.network = {
-        ...(networkOrigins.length ? { origins: networkOrigins } : {}),
-        ...(allowInsecureHttp ? { allowInsecureHttp: true } : {}),
-        ...(allowPrivateNetworks ? { allowPrivateNetworks: true } : {}),
-      };
-    }
-  } else if (networkSources.length > 0) {
-    const byOrigin = new Map<
-      string,
-      { allowInsecureHttp: boolean; allowPrivateNetworks: boolean }
-    >();
-    for (const net of networkSources) {
-      const sourceInsecure = Boolean(net.allowInsecureHttp);
-      const sourcePrivate = Boolean(net.allowPrivateNetworks);
-      for (const origin of net.origins ?? []) {
-        const parsed = parseNetworkOrigin(origin, "capabilities.network.origins");
-        if (parsed.insecure && !sourceInsecure) {
-          throw new Error(
-            `capabilities.network.origins contains insecure origin ${origin} without allowInsecureHttp: true`,
-          );
-        }
-        if (isPrivateHost(parsed.host) && !sourcePrivate) {
-          throw new Error(
-            `capabilities.network.origins contains private/loopback origin ${origin} without allowPrivateNetworks: true`,
-          );
-        }
-        const prev = byOrigin.get(parsed.canonical) ?? {
-          allowInsecureHttp: false,
-          allowPrivateNetworks: false,
-        };
-        byOrigin.set(parsed.canonical, {
-          allowInsecureHttp: prev.allowInsecureHttp || sourceInsecure,
-          allowPrivateNetworks: prev.allowPrivateNetworks || sourcePrivate,
-        });
-      }
-      for (const rule of net.originRules ?? []) {
-        const parsed = parseNetworkOrigin(rule.origin, "capabilities.network.originRules");
-        const prev = byOrigin.get(parsed.canonical) ?? {
-          allowInsecureHttp: false,
-          allowPrivateNetworks: false,
-        };
-        byOrigin.set(parsed.canonical, {
-          allowInsecureHttp: prev.allowInsecureHttp || Boolean(rule.allowInsecureHttp),
-          allowPrivateNetworks: prev.allowPrivateNetworks || Boolean(rule.allowPrivateNetworks),
-        });
-      }
-    }
-    if (byOrigin.size > 0) {
-      merged.network = {
-        originRules: [...byOrigin.entries()]
-          .sort(([a], [b]) => a.localeCompare(b))
-          .map(([origin, flags]) => ({
-            origin,
-            ...(flags.allowInsecureHttp ? { allowInsecureHttp: true } : {}),
-            ...(flags.allowPrivateNetworks ? { allowPrivateNetworks: true } : {}),
-          })),
-      };
-    }
-  }
-  return Object.keys(merged).length ? merged : undefined;
-}
-
-const WINDOW_KEYS = new Set(["title", "width", "height", "minWidth", "minHeight", "resizable"]);
-
-function parseWindowDeclaration(input: unknown): WindowDeclaration | undefined {
-  if (input === undefined) return undefined;
-  if (!input || typeof input !== "object" || Array.isArray(input)) {
-    throw new Error("package.json zgui.window must be an object");
-  }
-  const record = input as Record<string, unknown>;
-  for (const key of Object.keys(record)) {
-    if (!WINDOW_KEYS.has(key)) throw new Error(`Unknown package.json zgui.window key: ${key}`);
-  }
-  const result: WindowDeclaration = {};
-  if (record.title !== undefined) {
-    if (!capabilityString(record.title) || record.title !== record.title.trim()) {
-      throw new Error(
-        "package.json zgui.window.title must be a non-empty, trimmed string without control characters",
-      );
-    }
-    result.title = record.title;
-  }
-  for (const key of ["width", "height", "minWidth", "minHeight"] as const) {
-    const value = record[key];
-    if (value !== undefined) {
-      if (typeof value !== "number" || !Number.isInteger(value) || value < 1 || value > 16384) {
-        throw new Error(`package.json zgui.window.${key} must be an integer between 1 and 16384`);
-      }
-      result[key] = value;
-    }
-  }
-  if (record.resizable !== undefined) {
-    if (typeof record.resizable !== "boolean") {
-      throw new Error("package.json zgui.window.resizable must be a boolean");
-    }
-    result.resizable = record.resizable;
-  }
-  return Object.keys(result).length ? result : undefined;
-}
-
-const WORKER_NAME_RE = /^[a-zA-Z][a-zA-Z0-9_-]{0,63}$/;
-const MAX_WORKERS = 32;
-
-function parseWorkerDeclarations(
-  input: unknown,
-  appDirectory: string,
-): { name: string; entry: string }[] {
-  if (input === undefined) return [];
-  if (!input || typeof input !== "object" || Array.isArray(input)) {
-    throw new Error(
-      "package.json zgui.workers must be an object mapping worker names to relative entry paths",
-    );
-  }
-  const entries = Object.entries(input as Record<string, unknown>);
-  if (entries.length > MAX_WORKERS) {
-    throw new Error(`package.json zgui.workers exceeds maximum of ${MAX_WORKERS} workers`);
-  }
-  const resolvedAppDir = path.resolve(appDirectory);
-  const parsed: { name: string; entry: string }[] = [];
-  for (const [name, relPath] of entries.sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) {
-    if (!WORKER_NAME_RE.test(name)) {
-      throw new Error(`Invalid compute worker name: ${name}`);
-    }
-    if (typeof relPath !== "string" || !relPath.trim()) {
-      throw new Error(`package.json zgui.workers.${name} must be a non-empty relative path`);
-    }
-    resourcePath(relPath);
-    const fullPath = path.resolve(resolvedAppDir, relPath);
-    if (!fullPath.startsWith(`${resolvedAppDir}${path.sep}`)) {
-      throw new Error(
-        `package.json zgui.workers.${name} escapes application directory: ${relPath}`,
-      );
-    }
-    parsed.push({ name, entry: fullPath });
-  }
-  return parsed;
 }
 
 export async function publishApplication(
@@ -902,9 +324,15 @@ export async function publishApplication(
     hostRoot,
     hostExecutable,
     hostSearchFrom,
+    nativeHost,
     extraCapabilities,
     capabilitiesFile,
-  }: BuildApplicationOptions & { root: string; appDirectory: string; signal?: AbortSignal },
+  }: BuildApplicationOptions & {
+    root: string;
+    appDirectory: string;
+    signal?: AbortSignal | undefined;
+    nativeHost?: ResolvedNativeHost | undefined;
+  },
 ): Promise<PublishedApplication> {
   signal?.throwIfAborted();
   const files = new Map(result.files);
@@ -926,29 +354,13 @@ export async function publishApplication(
   files.set("app.css", Buffer.from(mergedAppCss, "utf8"));
   const assets = await collectAssets(path.join(appDirectory, "assets"));
   for (const item of assets) files.set(...item);
-  const pkg = await optionalFile(path.join(appDirectory, "package.json"));
-  const packageJson:
-    | {
-        zgui?: {
-          id?: unknown;
-          fonts?: unknown;
-          capabilities?: unknown;
-          window?: unknown;
-          workers?: unknown;
-        };
-      }
-    | undefined = pkg && JSON.parse(pkg.toString("utf8"));
-  const id = packageJson?.zgui?.id === undefined ? `dev.example.${app}` : packageJson.zgui.id;
-  if (!capabilityString(id) || id !== id.trim())
-    throw new Error(
-      "package.json zgui.id must be a non-empty, trimmed string without control characters",
-    );
-  const windowConfig = parseWindowDeclaration(packageJson?.zgui?.window);
-  const capabilities = await mergeCapabilities(packageJson?.zgui?.capabilities, {
-    extraCapabilities,
-    capabilitiesFile,
-  });
-  const workerEntries = parseWorkerDeclarations(packageJson?.zgui?.workers, appDirectory);
+  const {
+    id,
+    window: windowConfig,
+    capabilities,
+    workerEntries,
+    fonts,
+  } = await readManifestPolicy(app, appDirectory, assets, { extraCapabilities, capabilitiesFile });
   const workers: WorkerDeclaration[] = [];
   for (const worker of workerEntries) {
     signal?.throwIfAborted();
@@ -962,21 +374,6 @@ export async function publishApplication(
       files.set(fileName, bytes);
     }
     workers.push({ name: compiled.name, path: compiled.path, sourceMap: compiled.sourceMap });
-  }
-  const declarations = packageJson?.zgui?.fonts ?? [];
-  if (!Array.isArray(declarations))
-    throw new Error("package.json zgui.fonts must be an array of {family,path}");
-  const fonts: FontDeclaration[] = [];
-  const families = new Set<string>();
-  for (const font of declarations as unknown[]) {
-    if (!isFontDeclaration(font))
-      throw new Error("Invalid application font mapping; expected {family,path}");
-    resourcePath(font.path);
-    if (!assets.has(font.path)) throw new Error(`Font path must be a declared asset: ${font.path}`);
-    const family = font.family.toLowerCase();
-    if (families.has(family)) throw new Error(`Duplicate application font family: ${font.family}`);
-    families.add(family);
-    fonts.push(font);
   }
   files.set(
     "build-info.json",
@@ -994,14 +391,16 @@ export async function publishApplication(
   let finalChunks = chunks;
   let finalWorkers = workers;
   if (bytecode) {
-    const host = await resolveNativeHost({
-      hostExecutable,
-      hostRoot,
-      root,
-      cwd: appDirectory,
-      searchFrom: [...(hostSearchFrom ?? []), import.meta.url],
-      signal,
-    });
+    const host =
+      nativeHost ??
+      (await resolveNativeHost({
+        hostExecutable,
+        hostRoot,
+        root,
+        cwd: appDirectory,
+        searchFrom: hostSearchFrom,
+        signal,
+      }));
     const bytecodeFormat = host.abi?.bytecodeFormat;
     const quickjsAbi = host.abi?.quickjsAbi;
     if (bytecodeFormat !== "qjs-bytecode-v1" || !quickjsAbi) {
@@ -1035,7 +434,7 @@ export async function publishApplication(
         const bcPath = toBytecodePath(jsPath);
         const inPath = path.join(sourceDir, jsPath);
         const outPath = path.join(outDir, bcPath);
-        const bcBytes = await compileModuleBytecode(host.executable, {
+        const bcBytes = await compileModuleBytecode(host, {
           input: inPath,
           output: outPath,
           moduleName: jsPath,

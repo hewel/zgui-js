@@ -3,7 +3,7 @@ import { existsSync } from "node:fs";
 import { chmod, copyFile, cp, mkdir, realpath, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { buildApplication } from "./build.ts";
-import { EXPECTED_HOST_API_VERSION, resolveNativeHost } from "./host.ts";
+import { resolveNativeHost } from "./host.ts";
 import { packagedSdkRoot, workspaceRoot } from "./sdk.ts";
 
 const DISTRIBUTED_LICENSE_FILES = ["LICENSE", "NOTICE", "THIRD_PARTY_NOTICES.md"] as const;
@@ -73,17 +73,27 @@ export async function packageApplication(
   signal?.throwIfAborted();
   const resolvedAppDir = path.resolve(appDirectory);
   const outputDir = path.resolve(out);
-  const { dist, manifest } = await buildApplication(app, {
-    root,
-    appDirectory: resolvedAppDir,
-    development: false,
-    bytecode,
-    hostRoot,
-    hostExecutable,
-    hostSearchFrom,
-    extraCapabilities,
-    capabilitiesFile,
-  });
+  const resolveHost = () =>
+    resolveNativeHost({
+      hostExecutable,
+      hostRoot,
+      root,
+      cwd: resolvedAppDir,
+      searchFrom: hostSearchFrom,
+      signal,
+    });
+  const compilerHost = bytecode ? await resolveHost() : undefined;
+  const { dist, manifest } = await buildApplication(
+    app,
+    {
+      root,
+      appDirectory: resolvedAppDir,
+      bytecode,
+      extraCapabilities,
+      capabilitiesFile,
+    },
+    { signal, nativeHost: compilerHost },
+  );
   signal?.throwIfAborted();
 
   if (pureShell && !manifest.capabilities?.shellSurfaces && !manifest.capabilities?.sessionLock) {
@@ -92,14 +102,9 @@ export async function packageApplication(
     );
   }
 
-  const host = await resolveNativeHost({
-    hostExecutable,
-    hostRoot,
-    root,
-    cwd: resolvedAppDir,
-    searchFrom: hostSearchFrom,
-    signal,
-  });
+  const host = compilerHost ?? (await resolveHost());
+  const abi = host.abi;
+  if (!abi) throw new Error("Resolved zgui-host did not report ABI metadata");
   signal?.throwIfAborted();
 
   const bundleSource = await realpath(dist);
@@ -144,8 +149,8 @@ export async function packageApplication(
       app,
       id: manifest.id,
       buildId: manifest.buildId,
-      hostApiVersion: host.abi?.hostApiVersion ?? EXPECTED_HOST_API_VERSION,
-      hostVersion: host.abi?.version ?? "local",
+      hostApiVersion: abi.hostApiVersion,
+      hostVersion: abi.version,
       hostSource: host.source,
       executable: "bin/zgui-host",
       bundle: "bundle",

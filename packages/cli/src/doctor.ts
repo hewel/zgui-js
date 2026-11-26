@@ -1,13 +1,8 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
-import { resolveNativeHost, type ResolvedNativeHost } from "@hewel/zgui-build";
-import {
-  EXPECTED_HOST_API_VERSION,
-  EXPECTED_SCHEMA_VERSION,
-  platformHostPackageName,
-  platformId,
-} from "@hewel/zgui-build/internal";
+import { resolveNativeHost } from "@hewel/zgui-build";
+import { platformHostPackageName, platformId } from "@hewel/zgui-build/internal";
 
 export type DoctorCheckStatus = "ok" | "warn" | "fail";
 
@@ -120,7 +115,7 @@ export async function runDoctor({
   // 2. zgui-host resolution + ABI handshake.
   let hostCheck: DoctorCheck;
   try {
-    const resolved: ResolvedNativeHost = await resolveNativeHost({
+    const resolved = await resolveNativeHost({
       hostExecutable,
       hostRoot,
       cwd: resolvedCwd,
@@ -130,9 +125,8 @@ export async function runDoctor({
       allowCargoBuild: false,
     });
     const abi = resolved.abi;
-    const abiSummary = abi
-      ? `v${abi.version} hostApiVersion=${abi.hostApiVersion} schemaVersion=${abi.schemaVersion} (${abi.platform})`
-      : `expected hostApiVersion=${EXPECTED_HOST_API_VERSION} schemaVersion=${EXPECTED_SCHEMA_VERSION}`;
+    if (!abi) throw new Error("Resolved zgui-host did not report ABI metadata");
+    const abiSummary = `v${abi.version} hostApiVersion=${abi.hostApiVersion} schemaVersion=${abi.schemaVersion} (${abi.platform})`;
     hostCheck = {
       id: "zgui-host",
       label: "zgui-host binary & ABI",

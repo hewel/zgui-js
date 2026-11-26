@@ -972,3 +972,161 @@ test("getBackgroundBlurSupported reacts in renderApp and zero-surface renderShel
     );
   }
 });
+
+test("all managed surface roles inherit live theme CSS and release it when detached", async t => {
+  const h = createHost({ monitors: [desk], sessionLock: "locked" });
+  const mod = await moduleFor(
+    t,
+    `
+    import { LayerSurface, PopupSurface, WindowSurface, Show, createSignal, renderApp } from "@hewel/zgui";
+    import { SessionLockSurface, requestSessionLock } from "@hewel/zgui/shell-host";
+    import { ThemeProvider } from "@hewel/zgui/components";
+    import type { NativeNode } from "@hewel/zgui";
+    export const [scheme, setScheme] = createSignal<"light" | "dark">("light");
+    export const [visible, setVisible] = createSignal(true);
+    export function mount(root: NativeNode) {
+      return renderApp(() => {
+        requestSessionLock();
+        return (
+          <ThemeProvider scheme={scheme()}>
+            <Show when={visible()}>
+              <LayerSurface name="layer" output="DP-1"><text>bar</text></LayerSurface>
+              <PopupSurface name="popup" parent="layer" anchorRect={{x: 0, y: 0, width: 32, height: 16}} width={80}>
+                <text>popup</text>
+              </PopupSurface>
+              <WindowSurface name="window" title="Theme" width={100} height={100}><text>window</text></WindowSurface>
+              <SessionLockSurface name="lock" output="DP-1" blurRegion="full"><text>lock</text></SessionLockSurface>
+            </Show>
+          </ThemeProvider>
+        );
+      }, root);
+    }
+  `,
+  );
+  const prevUi = globalThis.__zgui;
+  const prevShell = globalThis.__zguiShell;
+  globalThis.__zgui = h.host;
+  globalThis.__zguiShell = h.shell;
+  let dispose;
+  t.after(() => {
+    try {
+      if (dispose) h.runTurn(dispose);
+      h.flush();
+    } finally {
+      if (prevUi === undefined) delete globalThis.__zgui;
+      else globalThis.__zgui = prevUi;
+      if (prevShell === undefined) delete globalThis.__zguiShell;
+      else globalThis.__zguiShell = prevShell;
+    }
+  });
+  dispose = h.runTurn(() => mod.mount(h.makeNode("root")));
+  h.flush();
+  const names = ["layer", "popup", "window", "lock"];
+  const inherited = "zui-theme-inherited";
+  const regions = names.map(name => {
+    const surface = h.surfaces.get(name);
+    assert.ok(surface, `missing ${name} surface`);
+    return surface.region;
+  });
+  assert.equal(h.surfaces.get("lock").blurRegion, undefined);
+  const light = regions[2].stylesheets.get(inherited);
+  assert.match(light, /color-scheme: light/);
+  assert.deepEqual(
+    regions.map(region => region.stylesheets.get(inherited)),
+    names.map(() => light),
+  );
+  h.runTurn(() => mod.setScheme("dark"));
+  const dark = regions[2].stylesheets.get(inherited);
+  assert.match(dark, /color-scheme: dark/);
+  assert.deepEqual(
+    regions.map(region => region.stylesheets.get(inherited)),
+    names.map(() => dark),
+  );
+
+  // The host clears a retired region anyway; observe explicit stylesheet removal before retirement.
+  const removed = [];
+  for (const [index, region] of regions.entries()) {
+    region.stylesheets.delete = function (key) {
+      if (key === inherited) removed.push(names[index]);
+      return Map.prototype.delete.call(this, key);
+    };
+  }
+  h.runTurn(() => mod.setVisible(false));
+  h.flush();
+  assert.equal(h.surfaces.size, 0);
+  assert.deepEqual(removed.sort(), [...names].sort());
+  assert.equal(h.sessionLockState(), "locked");
+});
+
+test("mount entry points retain host preferences until the last mount is disposed", async t => {
+  const h = createHost({ reducedMotion: true, backgroundBlurSupported: true });
+  const mod = await moduleFor(
+    t,
+    `
+    import { LayerSurface, createMemo, getBackgroundBlurSupported, getReducedMotion, renderApp, renderShell } from "@hewel/zgui";
+    import { render } from "@hewel/zgui/renderer";
+    import type { NativeNode } from "@hewel/zgui";
+    function Preferences(props: { id: string }) {
+      const status = createMemo(() => String(getReducedMotion()) + ":" + String(getBackgroundBlurSupported()));
+      return <text testId={props.id}>{status()}</text>;
+    }
+    export function mountApp(root: NativeNode) {
+      return renderApp(() => <Preferences id="app" />, root);
+    }
+    export function mountRenderer(root: NativeNode) {
+      return render(() => <Preferences id="renderer" />, root);
+    }
+    export function mountShell() {
+      return renderShell(() => <LayerSurface name="preferences"><Preferences id="region" /></LayerSurface>);
+    }
+  `,
+  );
+  const prevUi = globalThis.__zgui;
+  const prevShell = globalThis.__zguiShell;
+  const disposers = new Set();
+  t.after(() => {
+    try {
+      for (const dispose of disposers) h.runTurn(dispose);
+      h.flush();
+    } finally {
+      if (prevUi === undefined) delete globalThis.__zgui;
+      else globalThis.__zgui = prevUi;
+      if (prevShell === undefined) delete globalThis.__zguiShell;
+      else globalThis.__zguiShell = prevShell;
+    }
+  });
+  const mount = fn => {
+    const dispose = h.runTurn(fn);
+    disposers.add(dispose);
+    return () => {
+      h.runTurn(dispose);
+      disposers.delete(dispose);
+    };
+  };
+  globalThis.__zgui = h.host;
+  delete globalThis.__zguiShell;
+  const app = mount(() => mod.mountApp(h.makeNode("root")));
+  const renderer = mount(() => mod.mountRenderer(h.makeNode("root")));
+  assert.equal(textOf(h, "app"), "true:true");
+  assert.equal(textOf(h, "renderer"), "true:true");
+  app();
+  h.emitReducedMotion(false);
+  h.emitBackgroundBlurSupported(false);
+  assert.equal(textOf(h, "renderer"), "false:false");
+  renderer();
+  assert.equal(h.reducedMotionSubscribers.size, 0);
+  assert.equal(h.backgroundBlurSubscribers.size, 0);
+
+  delete globalThis.__zgui;
+  globalThis.__zguiShell = h.shell;
+  const shell = mount(mod.mountShell);
+  h.flush();
+  assert.equal(textOf(h, "region"), "false:false");
+  h.emitReducedMotion(true);
+  h.emitBackgroundBlurSupported(true);
+  assert.equal(textOf(h, "region"), "true:true");
+  shell();
+  h.flush();
+  assert.equal(h.reducedMotionSubscribers.size, 0);
+  assert.equal(h.backgroundBlurSubscribers.size, 0);
+});

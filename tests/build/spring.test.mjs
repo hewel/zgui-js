@@ -494,6 +494,64 @@ test("pure-shell unscoped getReducedMotion syncs eagerly from attached surfaces 
   );
 });
 
+test("rootless renderShell follows the session's motion preference before and after surface attachment", async t => {
+  const h = createHost({ reducedMotion: true, shellReducedMotion: true });
+  const mod = await moduleFor(
+    t,
+    `
+    import { LayerSurface, Show, createEffect, createSignal, getReducedMotion, renderShell, setReducedMotion } from "@hewel/zgui";
+    export const [show, setShow] = createSignal(false);
+    export { setReducedMotion };
+    export const observed: boolean[] = [];
+    export function mount() {
+      return renderShell(() => {
+        createEffect(getReducedMotion, value => { observed.push(value); });
+        return (
+          <Show when={show()}>
+            <LayerSurface name="motion">
+              <text testId="surface-motion">{String(getReducedMotion())}</text>
+            </LayerSurface>
+          </Show>
+        );
+      });
+    }
+  `,
+  );
+  const previous = globalThis.__zguiShell;
+  globalThis.__zguiShell = h.shell;
+  let dispose;
+  t.after(() => {
+    try {
+      if (dispose) h.runTurn(dispose);
+    } finally {
+      if (previous === undefined) delete globalThis.__zguiShell;
+      else globalThis.__zguiShell = previous;
+    }
+  });
+  dispose = h.runTurn(mod.mount);
+  assert.equal(h.surfaces.size, 0);
+  assert.deepEqual(mod.observed, [true]);
+  h.emitReducedMotion(false);
+  assert.deepEqual(mod.observed, [true, false]);
+  h.runTurn(() => mod.setReducedMotion(true));
+  assert.deepEqual(mod.observed, [true, false, true]);
+  h.runTurn(() => mod.setShow(true));
+  h.flush();
+  const surfaceMotion = () => h.byTestId("surface-motion").children[0].props.get("text");
+  assert.equal(surfaceMotion(), "true");
+  h.runTurn(() => mod.setReducedMotion(false));
+  h.emitReducedMotion(true);
+  assert.equal(surfaceMotion(), "false");
+  assert.deepEqual(mod.observed, [true, false, true, false]);
+  h.runTurn(() => mod.setReducedMotion(null));
+  assert.equal(surfaceMotion(), "true");
+  assert.deepEqual(mod.observed, [true, false, true, false, true]);
+  h.runTurn(dispose);
+  h.flush();
+  dispose = undefined;
+  assert.equal(h.reducedMotionSubscribers.size, 0);
+});
+
 test("createSpring accepts reactive physics accessors and configure() without losing position or velocity", async t => {
   const h = createHost({ strictStyles: true });
   const mod = await moduleFor(

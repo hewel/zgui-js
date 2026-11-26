@@ -185,6 +185,7 @@ let nextLockRequestId = 1;
 export function createHost({
   strictStyles = false,
   reducedMotion = false,
+  shellReducedMotion = false,
   backgroundBlurSupported = false,
   monitors = [],
   sessionLock,
@@ -1123,6 +1124,12 @@ export function createHost({
 
   const shell = {
     getSessionGeneration: () => generation,
+    ...(shellReducedMotion
+      ? {
+          getReducedMotion: host.getReducedMotion,
+          subscribeReducedMotion: host.subscribeReducedMotion,
+        }
+      : {}),
     getBackgroundBlurSupported: () => backgroundBlurSupported,
     subscribeBackgroundBlurSupported(callback) {
       backgroundBlurSubscribers.add(callback);
@@ -1530,6 +1537,7 @@ export function createHost({
     shellLog,
     emitMonitors,
     emitReducedMotion,
+    reducedMotionSubscribers,
     emitBackgroundBlurSupported,
     backgroundBlurSubscribers,
     monitorSubscribers,

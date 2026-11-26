@@ -8,6 +8,7 @@ import {
   runWithOwner,
   useContext,
 } from "#solid";
+import type { Owner } from "#solid";
 import { bridgeFor, bridgeForTarget, knownBridgeForNode, shellBridge } from "./host.js";
 import { ThemeCssContext } from "./theme-sync.js";
 import type {
@@ -351,55 +352,119 @@ function bindBlurRegion(
   );
 }
 
-function mountManagedSurface(
-  owner: ReturnType<typeof getOwner>,
-  props: {
-    readonly inputRegion?: LayerInputRegion;
-    readonly blurRegion?: BlurRegion | undefined;
-    readonly children?: NativeChild;
-  },
-  root: NativeNode,
-  bridge: UiBridge,
-  options: {
-    readonly publishInput?: (region: NativeInputRegion) => void;
-    readonly publishBlur?: (region: NativeBlurRegion) => void;
-    readonly setup?: () => void;
-  },
-): () => void {
-  let attached = true;
-  const dispose = runWithOwner(owner, () =>
-    renderRegion(
-      () => {
-        options.setup?.();
-        if (options.publishInput) {
-          const publishInput = options.publishInput;
-          bindInputRegion(props, bridge, region => {
-            if (attached) publishInput(region);
-          });
-        }
-        if (options.publishBlur) {
-          const publishBlur = options.publishBlur;
-          bindBlurRegion(props, bridge, region => {
-            if (attached) publishBlur(region);
-          });
-        }
-        return () => props.children;
-      },
-      root,
-      bridge,
-    ),
-  );
-  return () => {
-    attached = false;
-    dispose();
-  };
+interface ManagedContent {
+  readonly inputRegion?: LayerInputRegion;
+  readonly blurRegion?: BlurRegion | undefined;
+  readonly children?: NativeChild;
 }
 
-interface LayerRequest {
-  id: number;
-  name: string;
-  output: string | undefined;
-  closed: boolean;
+type ManagedSurface =
+  | { readonly kind: "layer"; readonly placement: LayerPlacement }
+  | { readonly kind: "popup"; readonly placement: PopupPlacement; readonly onDismiss: () => void }
+  | { readonly kind: "window"; readonly options: WindowOptions; readonly onDismiss: () => void }
+  | { readonly kind: "lock"; readonly output: string };
+
+interface SurfaceRequest {
+  readonly id: number;
+  readonly close: () => void;
+}
+
+/** Own one native request and any regions the compositor attaches to it. */
+function mountManagedSurface(
+  owner: Owner,
+  shell: ShellBridge,
+  name: string,
+  props: ManagedContent,
+  surface: ManagedSurface,
+): SurfaceRequest {
+  const inheritedTheme = runWithOwner(owner, () => useContext(ThemeCssContext));
+  let id: number | undefined;
+  const close = () => {
+    const request = id;
+    if (request === undefined) return;
+    id = undefined;
+    switch (surface.kind) {
+      case "layer":
+        shell.closeLayer(request);
+        break;
+      case "popup":
+        shell.closePopup(request);
+        break;
+      case "window":
+        shell.closeWindow(request);
+        break;
+      case "lock":
+        shell.closeLock(request);
+        break;
+    }
+  };
+  const attach = (root: NativeNode, bridge: UiBridge) => {
+    const request = id;
+    if (request === undefined) return () => {};
+    let attached = true;
+    const dispose = runWithOwner(owner, () =>
+      renderRegion(
+        () => {
+          if (inheritedTheme) {
+            createEffect(inheritedTheme, css => {
+              bridge.installStylesheet("zui-theme-inherited", css);
+            });
+            onCleanup(() => bridge.removeStylesheet("zui-theme-inherited"));
+          }
+          if (surface.kind !== "lock") {
+            // A lock region never serves as a popup parent or publishes input/blur regions.
+            popupParentRegions.set(bridge, { shell, name });
+            onCleanup(() => {
+              popupParentRegions.delete(bridge);
+            });
+            if (surface.kind !== "window") {
+              bindInputRegion(props, bridge, region => {
+                if (attached && id === request) shell.setInputRegion(request, region);
+              });
+            }
+            bindBlurRegion(props, bridge, region => {
+              if (attached && id === request) shell.setBlurRegion(request, region);
+            });
+          }
+          return () => props.children;
+        },
+        root,
+        bridge,
+      ),
+    );
+    return () => {
+      attached = false;
+      dispose();
+    };
+  };
+  const dismiss = () => {
+    if (id === undefined || !("onDismiss" in surface)) return;
+    flush(() => {
+      close();
+      runWithOwner(owner, surface.onDismiss);
+    });
+  };
+  // The host queues attachment until after open returns the request id.
+  switch (surface.kind) {
+    case "layer":
+      id = shell.openLayer(name, surface.placement, attach);
+      break;
+    case "popup":
+      id = shell.openPopup(name, surface.placement, attach, dismiss);
+      break;
+    case "window":
+      id = shell.openWindow(name, surface.options, attach, dismiss);
+      break;
+    case "lock":
+      id = shell.openLock(name, surface.output, attach);
+      break;
+  }
+  return { id, close };
+}
+
+interface LayerRequest extends SurfaceRequest {
+  readonly name: string;
+  readonly output: string | undefined;
 }
 
 /** Own a named compositor surface without inserting a node in the parent region. */
@@ -412,8 +477,7 @@ export function LayerSurface(props: LayerSurfaceProps): null {
     if (!current) return;
     const request = current;
     current = undefined;
-    request.closed = true;
-    shell.closeLayer(request.id);
+    request.close();
   };
   onCleanup(close);
 
@@ -425,24 +489,8 @@ export function LayerSurface(props: LayerSurfaceProps): null {
         return;
       }
       close();
-      const request: LayerRequest = {
-        id: shell.openLayer(name, placement, (root, bridge) => {
-          if (request.closed) return () => {};
-          popupParentRegions.set(bridge, { shell, name });
-          return mountManagedSurface(owner, props, root, bridge, {
-            publishInput: region => {
-              if (!request.closed) shell.setInputRegion(request.id, region);
-            },
-            publishBlur: region => {
-              if (!request.closed) shell.setBlurRegion(request.id, region);
-            },
-          });
-        }),
-        name,
-        output: placement.output,
-        closed: false,
-      };
-      current = request;
+      const request = mountManagedSurface(owner, shell, name, props, { kind: "layer", placement });
+      current = { ...request, name, output: placement.output };
     },
   );
   return null;
@@ -466,13 +514,11 @@ export function PopupSurface(props: PopupSurfaceProps): null {
             node: NativeNode;
             rect: NativeWindowRect;
           }>();
-          let id: number | undefined;
+          let current: SurfaceRequest | undefined;
           const close = () => {
-            if (id !== undefined) {
-              const request = id;
-              id = undefined;
-              shell.closePopup(request);
-            }
+            const request = current;
+            current = undefined;
+            request?.close();
           };
           onCleanup(close);
 
@@ -533,35 +579,19 @@ export function PopupSurface(props: PopupSurfaceProps): null {
                 close();
                 return;
               }
-              if (id !== undefined) {
-                shell.updatePopup(id, placement);
+              if (current) {
+                shell.updatePopup(current.id, placement);
                 return;
               }
-              const request = shell.openPopup(
-                name,
+              current = mountManagedSurface(owner, shell, name, props, {
+                kind: "popup",
                 placement,
-                (root, bridge) => {
-                  if (id !== request) return () => {};
-                  popupParentRegions.set(bridge, { shell, name });
-                  return mountManagedSurface(owner, props, root, bridge, {
-                    publishInput: region => {
-                      if (id === request) shell.setInputRegion(request, region);
-                    },
-                    publishBlur: region => {
-                      if (id === request) shell.setBlurRegion(request, region);
-                    },
-                  });
+                onDismiss: () => {
+                  current = undefined;
+                  dismiss(true);
+                  props.onDismiss?.();
                 },
-                () => {
-                  if (id !== request) return;
-                  flush(() => {
-                    close();
-                    dismiss(true);
-                    runWithOwner(owner, () => props.onDismiss?.());
-                  });
-                },
-              );
-              id = request;
+              });
             },
           );
           return dispose;
@@ -586,13 +616,11 @@ export function WindowSurface(props: WindowSurfaceProps): null {
       runWithOwner(owner, () =>
         createRoot(dispose => {
           const [closed, setClosed] = createSignal(false);
-          let id: number | undefined;
+          let current: SurfaceRequest | undefined;
           const close = () => {
-            if (id !== undefined) {
-              const request = id;
-              id = undefined;
-              shell.closeWindow(request);
-            }
+            const request = current;
+            current = undefined;
+            request?.close();
           };
           onCleanup(close);
 
@@ -618,41 +646,19 @@ export function WindowSurface(props: WindowSurfaceProps): null {
                 close();
                 return;
               }
-              if (id !== undefined) {
-                shell.updateWindow(id, options);
+              if (current) {
+                shell.updateWindow(current.id, options);
                 return;
               }
-              const inheritedTheme = runWithOwner(owner, () => useContext(ThemeCssContext));
-              const request = shell.openWindow(
-                name,
+              current = mountManagedSurface(owner, shell, name, props, {
+                kind: "window",
                 options,
-                (root, bridge) => {
-                  if (id !== request) return () => {};
-                  popupParentRegions.set(bridge, { shell, name });
-                  return mountManagedSurface(owner, props, root, bridge, {
-                    setup: () => {
-                      if (inheritedTheme) {
-                        createEffect(inheritedTheme, css => {
-                          bridge.installStylesheet("zui-theme-inherited", css);
-                        });
-                        onCleanup(() => bridge.removeStylesheet("zui-theme-inherited"));
-                      }
-                    },
-                    publishBlur: region => {
-                      if (id === request) shell.setBlurRegion(request, region);
-                    },
-                  });
+                onDismiss: () => {
+                  current = undefined;
+                  setClosed(true);
+                  props.onClose?.();
                 },
-                () => {
-                  if (id !== request) return;
-                  flush(() => {
-                    close();
-                    setClosed(true);
-                    runWithOwner(owner, () => props.onClose?.());
-                  });
-                },
-              );
-              id = request;
+              });
             },
           );
           return dispose;
@@ -698,19 +704,8 @@ export function SessionLockSurface(props: SessionLockSurfaceProps): null {
     ([name, output]) => {
       if (current?.name === name && current.output === output) return;
       close();
-      let closed = false;
-      const id = shell.openLock(name, output, (root, bridge) => {
-        if (closed) return () => {};
-        return runWithOwner(owner, () => renderRegion(() => props.children, root, bridge));
-      });
-      current = {
-        name,
-        output,
-        close() {
-          closed = true;
-          shell.closeLock(id);
-        },
-      };
+      const request = mountManagedSurface(owner, shell, name, props, { kind: "lock", output });
+      current = { name, output, close: request.close };
     },
   );
   return null;

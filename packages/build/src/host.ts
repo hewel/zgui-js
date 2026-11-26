@@ -1,4 +1,11 @@
-import type { NativeHostAbi, ResolvedNativeHost, ResolveNativeHostOptions } from "./index.ts";
+import type {
+  NativeHostAbi,
+  PrepareNativeHostOptions,
+  ResolvedNativeHost,
+  ResolveNativeHostOptions,
+  RunNativeHostOptions,
+} from "./index.ts";
+import { spawn, type ChildProcess, type SpawnOptions } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   accessSync,
@@ -10,8 +17,9 @@ import {
 } from "node:fs";
 import { chmod, copyFile, mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
+import { constants } from "node:os";
 import path from "node:path";
-import { prepareNativeHost } from "./native-process.ts";
+import { createInterface, type Interface } from "node:readline";
 import { packagedSdkRoot, workspaceRoot } from "./sdk.ts";
 
 export const EXPECTED_HOST_API_VERSION = 1;
@@ -37,6 +45,184 @@ export interface StagedHostManifest {
 
 function hostFailure(message: string, exitCode = 1): Error & { exitCode: number } {
   return Object.assign(new Error(message), { exitCode });
+}
+
+interface ProcessOptions {
+  spawnProcess?: (
+    executable: string,
+    args: readonly string[],
+    options: SpawnOptions,
+  ) => ChildProcess;
+  killAfter?: number;
+}
+
+interface CargoMessage {
+  reason?: string;
+  message?: { rendered?: string };
+  target?: { name?: string; kind?: string[] };
+  executable?: string;
+}
+
+function errorMessage(error: unknown): string {
+  return error !== null && typeof error === "object" && "message" in error
+    ? String(error.message)
+    : String(error);
+}
+
+function signalCode(signal: NodeJS.Signals | null) {
+  return signal ? 128 + (constants.signals[signal] ?? constants.signals.SIGTERM) : 1;
+}
+
+function cancellationSignal(signal?: AbortSignal) {
+  return signal?.reason === "SIGINT" ? "SIGINT" : "SIGTERM";
+}
+
+// A separate POSIX process group also owns cargo's compiler/linker children and native workers.
+function ownedProcess(
+  executable: string,
+  args: readonly string[],
+  {
+    root,
+    signal,
+    onLine,
+    capture,
+  }: {
+    root: string;
+    signal?: AbortSignal;
+    onLine?: (line: string) => void;
+    capture?: { stdout: string[]; stderr: string[] };
+  },
+  { spawnProcess = spawn, killAfter = 1500 }: ProcessOptions = {},
+): Promise<number> {
+  if (signal?.aborted) return Promise.resolve(signalCode(cancellationSignal(signal)));
+  const { promise, resolve, reject } = Promise.withResolvers<number>();
+  try {
+    let child: ChildProcess;
+    let timer: NodeJS.Timeout | undefined;
+    let spawnError: unknown;
+    let lines: Interface | undefined;
+    const grouped = process.platform !== "win32";
+    const kill = (name: NodeJS.Signals) => {
+      if (!child?.pid) return;
+      try {
+        if (grouped) process.kill(-child.pid, name);
+        else child.kill(name);
+      } catch (error) {
+        if (
+          !(
+            error !== null &&
+            typeof error === "object" &&
+            "code" in error &&
+            error.code === "ESRCH"
+          )
+        )
+          spawnError ??= error;
+      }
+    };
+    const abort = () => {
+      kill(cancellationSignal(signal));
+      timer ??= setTimeout(() => kill("SIGKILL"), killAfter);
+    };
+    try {
+      child = spawnProcess(executable, args, {
+        cwd: root,
+        detached: grouped,
+        stdio: [
+          capture ? "ignore" : "inherit",
+          onLine || capture ? "pipe" : "inherit",
+          capture ? "pipe" : "inherit",
+        ],
+      });
+    } catch (error) {
+      reject(hostFailure(`Cannot start ${executable}: ${errorMessage(error)}`));
+      return promise;
+    }
+    child.once("error", error => {
+      spawnError = error;
+    });
+    child.once("close", (code, terminatingSignal) => {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", abort);
+      lines?.close();
+      // A leader may exit before a worker. Never leave a member of our owned group behind.
+      if (grouped) kill("SIGKILL");
+      if (spawnError) reject(hostFailure(`Cannot run ${executable}: ${errorMessage(spawnError)}`));
+      else
+        resolve(
+          signal?.aborted
+            ? signalCode(cancellationSignal(signal))
+            : (code ?? signalCode(terminatingSignal)),
+        );
+    });
+    if (onLine) {
+      lines = createInterface({ input: child.stdout! });
+      lines.on("line", onLine);
+    }
+    if (capture) {
+      child.stdout?.setEncoding("utf8").on("data", (data: string) => capture.stdout.push(data));
+      child.stderr?.setEncoding("utf8").on("data", (data: string) => capture.stderr.push(data));
+    }
+    signal?.addEventListener("abort", abort, { once: true });
+    // Abort can arrive while spawn hooks are running, before the listener was attached.
+    if (signal?.aborted) abort();
+  } catch (error) {
+    reject(error);
+  }
+  return promise;
+}
+
+/** Build incrementally; reject with an exitCode on build/spawn/cancellation failure. */
+export async function prepareNativeHost(
+  { root = workspaceRoot, signal }: PrepareNativeHostOptions = {},
+  processOptions?: ProcessOptions,
+) {
+  root = path.resolve(root);
+  if (root === packagedSdkRoot)
+    throw hostFailure(
+      "The installed SDK has no Cargo workspace; pass root pointing to a zgui-js checkout",
+    );
+  let executable: string | undefined;
+  const exitCode = await ownedProcess(
+    "cargo",
+    ["build", "-p", "zgui-host", "--locked", "--message-format=json-render-diagnostics"],
+    {
+      root,
+      signal,
+      onLine(line) {
+        let message: CargoMessage | null;
+        try {
+          message = JSON.parse(line) as CargoMessage | null;
+        } catch {
+          process.stderr.write(`${line}\n`);
+          return;
+        }
+        if (message?.reason === "compiler-message" && message.message?.rendered)
+          process.stderr.write(message.message.rendered);
+        if (
+          message?.reason === "compiler-artifact" &&
+          message.target?.name === "zgui-host" &&
+          message.target.kind?.includes("bin") &&
+          typeof message.executable === "string"
+        ) {
+          executable = path.resolve(root, message.executable);
+        }
+      },
+    },
+    processOptions,
+  );
+  if (exitCode !== 0) throw hostFailure(`zgui-host build exited with code ${exitCode}`, exitCode);
+  if (!executable) throw hostFailure("Cargo did not report a zgui-host executable");
+  return executable;
+}
+
+/** Inherit native stdio; return its numeric status (signals use 128 + signal number). */
+export async function runNativeHost(
+  executable: string,
+  args: readonly string[],
+  { root = workspaceRoot, signal }: RunNativeHostOptions = {},
+  processOptions?: ProcessOptions,
+) {
+  return ownedProcess(executable, args, { root: path.resolve(root), signal }, processOptions);
 }
 
 export function platformId(
@@ -127,6 +313,7 @@ export function probeNativeHost(
     expectedHostApiVersion?: number;
     expectedSchemaVersion?: number;
   } = {},
+  cwd?: string,
 ): NativeHostAbi {
   const resolved = path.resolve(executable);
   if (!existsSync(resolved)) {
@@ -138,6 +325,7 @@ export function probeNativeHost(
     throw hostFailure(`zgui-host executable is not executable: ${resolved}`);
   }
   const child = Bun.spawnSync([resolved, "--version", "--json"], {
+    cwd,
     stdin: "ignore",
     stdout: "pipe",
     stderr: "pipe",
@@ -279,51 +467,28 @@ function resolveEntryScriptDir(): string | undefined {
   }
 }
 
-async function resolveCargoHost(
+async function resolveCargoExecutable(
   cargoRoot: string,
-  {
-    allowCargoBuild,
-    verifyAbi,
-    signal,
-    explicit,
-  }: {
-    allowCargoBuild: boolean;
-    verifyAbi: boolean;
-    signal?: AbortSignal;
-    explicit: boolean;
-  },
-): Promise<ResolvedNativeHost> {
+  allowCargoBuild: boolean,
+  explicit: boolean,
+  signal?: AbortSignal,
+): Promise<string> {
   if (explicit && !existsSync(cargoRoot)) {
     throw hostFailure(`Explicit --host-root directory not found: ${cargoRoot}`);
   }
-  if (!allowCargoBuild) {
-    for (const rel of ["target/debug/zgui-host", "target/release/zgui-host"]) {
-      const built = path.join(cargoRoot, rel);
-      if (existsSync(built)) {
-        const abi = verifyAbi ? probeNativeHost(built) : undefined;
-        return {
-          executable: built,
-          source: "cargo",
-          cargoRoot,
-          ...(abi ? { abi } : {}),
-        };
-      }
-    }
-    if (explicit && !hasCargoNativeHost(cargoRoot)) {
-      throw hostFailure(
-        `Explicit --host-root is not a zgui-js Cargo checkout (missing crates/zgui-host/Cargo.toml): ${cargoRoot}`,
-      );
-    }
+  if (allowCargoBuild) return prepareNativeHost({ root: cargoRoot, signal });
+  for (const rel of ["target/debug/zgui-host", "target/release/zgui-host"]) {
+    const built = path.join(cargoRoot, rel);
+    if (existsSync(built)) return built;
+  }
+  if (explicit && !hasCargoNativeHost(cargoRoot)) {
     throw hostFailure(
-      `Local Cargo checkout detected at ${cargoRoot}, but zgui-host has not been built yet. Run \`cargo build -p zgui-host\` or invoke \`zgui-js dev\`.`,
+      `Explicit --host-root is not a zgui-js Cargo checkout (missing crates/zgui-host/Cargo.toml): ${cargoRoot}`,
     );
   }
-  const executable = await prepareNativeHost({ root: cargoRoot, signal });
-  return {
-    executable,
-    source: "cargo",
-    cargoRoot,
-  };
+  throw hostFailure(
+    `Local Cargo checkout detected at ${cargoRoot}, but zgui-host has not been built yet. Run \`cargo build -p zgui-host\` or invoke \`zgui-js dev\`.`,
+  );
 }
 
 export async function resolveNativeHost({
@@ -341,6 +506,14 @@ export async function resolveNativeHost({
 }: ResolveNativeHostOptions = {}): Promise<ResolvedNativeHost> {
   signal?.throwIfAborted();
   const resolvedCwd = path.resolve(cwd);
+  const explicitRoot = hostRoot?.trim();
+  const explicitRunRoot = explicitRoot ? path.resolve(resolvedCwd, explicitRoot) : undefined;
+  const finish = (host: Omit<ResolvedNativeHost, "abi" | "runRoot">): ResolvedNativeHost => {
+    signal?.throwIfAborted();
+    const runRoot = explicitRunRoot ?? host.cargoRoot ?? resolvedCwd;
+    const abi = verifyAbi ? probeNativeHost(host.executable, undefined, runRoot) : undefined;
+    return { ...host, runRoot, ...(abi ? { abi } : {}) };
+  };
 
   // 1. Explicit --host-executable or ZGUI_JS_HOST_EXECUTABLE environment variable.
   const explicitRaw = hostExecutable?.trim() || undefined;
@@ -348,23 +521,13 @@ export async function resolveNativeHost({
   if (explicitRaw !== undefined || envRaw !== undefined) {
     const source = explicitRaw !== undefined ? "explicit" : "env";
     const candidate = path.resolve(resolvedCwd, (explicitRaw ?? envRaw)!);
-    const abi = verifyAbi ? probeNativeHost(candidate) : undefined;
-    return {
-      executable: candidate,
-      source,
-      ...(abi ? { abi } : {}),
-    };
+    return finish({ executable: candidate, source });
   }
 
   // 2. Explicit --host-root overrides any installed platform package so external checkouts can test local Rust builds deterministically.
-  const explicitHostRoot = hostRoot?.trim() || undefined;
-  if (explicitHostRoot !== undefined) {
-    return resolveCargoHost(path.resolve(resolvedCwd, explicitHostRoot), {
-      allowCargoBuild,
-      verifyAbi,
-      signal,
-      explicit: true,
-    });
+  if (explicitRunRoot !== undefined) {
+    const executable = await resolveCargoExecutable(explicitRunRoot, allowCargoBuild, true, signal);
+    return finish({ executable, source: "cargo", cargoRoot: explicitRunRoot });
   }
 
   // 3. Installed platform package (@hewel/zgui-host-<os>-<arch>) with mandatory manifest + ABI checks.
@@ -391,13 +554,7 @@ export async function resolveNativeHost({
           expectedPackage: packageName,
           expectedPlatform: currentPlatform,
         });
-        const abi = verifyAbi ? probeNativeHost(binaryPath) : undefined;
-        return {
-          executable: binaryPath,
-          source: "platform-package",
-          packageName,
-          ...(abi ? { abi } : {}),
-        };
+        return finish({ executable: binaryPath, source: "platform-package", packageName });
       }
       if (existsSync(manifestPath)) {
         throw hostFailure(
@@ -415,12 +572,8 @@ export async function resolveNativeHost({
       : findCargoCheckoutUpwards(resolvedCwd);
 
   if (autoCargoRoot !== undefined) {
-    return resolveCargoHost(autoCargoRoot, {
-      allowCargoBuild,
-      verifyAbi,
-      signal,
-      explicit: false,
-    });
+    const executable = await resolveCargoExecutable(autoCargoRoot, allowCargoBuild, false, signal);
+    return finish({ executable, source: "cargo", cargoRoot: autoCargoRoot });
   }
 
   // 5. Actionable error when no prebuilt host or Cargo checkout is available.
@@ -561,7 +714,7 @@ export async function verifyHostPackage(
 }
 
 export async function compileModuleBytecode(
-  hostExecutable: string,
+  host: ResolvedNativeHost,
   {
     input,
     output,
@@ -577,9 +730,10 @@ export async function compileModuleBytecode(
   },
 ): Promise<Buffer> {
   signal?.throwIfAborted();
-  const child = Bun.spawn(
+  const capture = { stdout: [] as string[], stderr: [] as string[] };
+  const code = await ownedProcess(
+    host.executable,
     [
-      path.resolve(hostExecutable),
       "compile-bytecode",
       "--input",
       path.resolve(input),
@@ -589,29 +743,14 @@ export async function compileModuleBytecode(
       moduleName,
       ...(sourceDir ? ["--source-dir", path.resolve(sourceDir)] : []),
     ],
-    {
-      stdin: "ignore",
-      stdout: "pipe",
-      stderr: "pipe",
-    },
+    { root: host.runRoot, signal, capture },
   );
-  const onAbort = () => child.kill("SIGTERM");
-  signal?.addEventListener("abort", onAbort, { once: true });
-  try {
-    const [code, stdout, stderr] = await Promise.all([
-      child.exited,
-      new Response(child.stdout).text(),
-      new Response(child.stderr).text(),
-    ]);
-    if (code !== 0 || child.signalCode) {
-      const detail = `${stderr}${stdout}`.trim();
-      throw hostFailure(
-        `zgui-host compile-bytecode failed for ${moduleName} (exit ${child.signalCode ?? code})${detail ? `: ${detail}` : ""}`,
-      );
-    }
-    return Buffer.from(await readFile(output));
-  } finally {
-    signal?.removeEventListener("abort", onAbort);
-    signal?.throwIfAborted();
+  signal?.throwIfAborted();
+  if (code !== 0) {
+    const detail = `${capture.stderr.join("")}${capture.stdout.join("")}`.trim();
+    throw hostFailure(
+      `zgui-host compile-bytecode failed for ${moduleName} (exit ${code})${detail ? `: ${detail}` : ""}`,
+    );
   }
+  return readFile(output);
 }

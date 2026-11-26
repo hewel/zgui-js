@@ -1,5 +1,5 @@
 import { createContext } from "#solid";
 import type { Accessor } from "./types.js";
 
-/** Reactive `:root` token stylesheet exported by an enclosing `<ThemeProvider>` for auxiliary windows. */
+/** Reactive `:root` tokens for managed child regions owned under a `<ThemeProvider>`. */
 export const ThemeCssContext = createContext<Accessor<string> | null>(null);

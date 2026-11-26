@@ -4,14 +4,14 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { buildApplication } from "./build.ts";
 import { devApplication } from "./dev.ts";
-import { resolveNativeHost } from "./host.ts";
-import { runNativeHost } from "./native-process.ts";
+import { resolveNativeHost, runNativeHost } from "./host.ts";
 import { packagedSdkRoot, workspaceRoot } from "./sdk.ts";
 
 export async function previewApplication(
   app: string,
   {
     root = workspaceRoot,
+    appDirectory = path.join(root, "apps/examples", app),
     hostRoot,
     hostExecutable,
     watch = false,
@@ -24,6 +24,7 @@ export async function previewApplication(
     ),
     signal,
     onOutput,
+    bytecode = false,
     ...buildOptions
   }: PreviewApplicationOptions = {},
 ): Promise<number> {
@@ -45,25 +46,31 @@ export async function previewApplication(
     return devApplication(app, {
       ...buildOptions,
       root,
+      appDirectory,
       ...(explicitHostRoot === undefined ? {} : { hostRoot: explicitHostRoot }),
       hostExecutable,
       mode: "preview",
       hostArgs: args,
       signal,
     });
-  const { dist } = await buildApplication(app, { ...buildOptions, root });
-  signal?.throwIfAborted();
-  const resolvedHost = await resolveNativeHost({
-    hostExecutable,
-    hostRoot: explicitHostRoot,
-    root,
-    cwd: buildOptions.appDirectory ?? process.cwd(),
-    searchFrom: buildOptions.hostSearchFrom,
-    signal,
-  });
-  const runRoot = explicitHostRoot ?? resolvedHost.cargoRoot ?? buildOptions.appDirectory ?? root;
-  return runNativeHost(resolvedHost.executable, ["preview", "run", "--bundle", dist, ...args], {
-    root: runRoot,
+  const resolveHost = () =>
+    resolveNativeHost({
+      hostExecutable,
+      hostRoot: explicitHostRoot,
+      root,
+      cwd: appDirectory,
+      searchFrom: buildOptions.hostSearchFrom,
+      signal,
+    });
+  const compilerHost = bytecode ? await resolveHost() : undefined;
+  const { dist } = await buildApplication(
+    app,
+    { ...buildOptions, root, appDirectory, bytecode },
+    { signal, nativeHost: compilerHost },
+  );
+  const host = compilerHost ?? (await resolveHost());
+  return runNativeHost(host.executable, ["preview", "run", "--bundle", dist, ...args], {
+    root: host.runRoot,
     signal,
   });
 }

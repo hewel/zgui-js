@@ -27,7 +27,7 @@
     },
     "entry": { "$ref": "#/$defs/path" },
     "sourceMap": { "$ref": "#/$defs/path" },
-    "bytecodeFormat": { "type": "string", "minLength": 1 },
+    "bytecodeFormat": { "const": "qjs-bytecode-v1" },
     "quickjsAbi": { "type": "string", "minLength": 1 },
     "chunks": {
       "type": "array",
@@ -50,7 +50,7 @@
         "additionalProperties": false,
         "required": ["name", "path", "sourceMap"],
         "properties": {
-          "name": { "type": "string", "minLength": 1, "pattern": "\\S" },
+          "name": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,63}(?![\\s\\S])$" },
           "path": { "$ref": "#/$defs/path" },
           "sourceMap": { "$ref": "#/$defs/path" }
         }
@@ -233,7 +233,7 @@
     },
     "networkOrigin": {
       "type": "string",
-      "pattern": "^(?:https?|wss?)://[^\\s/?#*]+(?![\\s\\S])"
+      "pattern": "^(?:https?|wss?)://[^\\s/?#*@\\\\\\u0000-\\u001f\\u007f-\\u009f]+(?![\\s\\S])"
     },
     "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
   }

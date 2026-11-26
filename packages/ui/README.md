@@ -38,6 +38,9 @@ exports `mount()` without a primary root and returns the disposer from `renderSh
 An application with a primary window can also use `LayerSurface` inside `renderApp`.
 Each named shell surface has its own mount region, but its children inherit the
 surrounding Solid context and can share signals with other surfaces.
+`LayerSurface`, `PopupSurface`, `WindowSurface`, and `SessionLockSurface`
+also inherit live theme tokens from an enclosing `ThemeProvider`. Lock surfaces
+do not request compositor blur.
 Names must be unique within the session, start with a lowercase ASCII letter or
 digit, use at most 128 lowercase ASCII letters, digits, dots, hyphens or
 underscores, and must not be `main`.
@@ -489,6 +492,10 @@ stops requesting frames once both displacement and speed are within
 `precision` and `velocityPrecision`, or if the integration overflows.
 Owner disposal cancels queued frames.
 With reduced motion, the accessor follows the target without requesting any frames.
+`getReducedMotion()` follows the session host, including before the first surface
+attaches when the shell bridge supplies the preference. `setReducedMotion(true)`
+or `setReducedMotion(false)` overrides it for the session; pass `null` to follow
+the host again.
 
 ## Styled components
 

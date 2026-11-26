@@ -1,10 +1,9 @@
 import type { ApplicationWatcher, DevApplicationOptions } from "./index.ts";
 import path from "node:path";
 import type { EventEmitter } from "node:events";
-import { resolveNativeHost } from "./host.ts";
+import { prepareNativeHost, resolveNativeHost, runNativeHost } from "./host.ts";
 import { workspaceRoot } from "./sdk.ts";
 import { watchApplication } from "./watch.ts";
-import { prepareNativeHost, runNativeHost } from "./native-process.ts";
 
 interface DevDependencies {
   watch?: typeof watchApplication;
@@ -126,7 +125,7 @@ export async function devApplication(
             signal: controller.signal,
           });
           executable = resolvedHost.executable;
-          runRoot = explicitHostRoot ?? resolvedHost.cargoRoot ?? appDirectory;
+          runRoot = resolvedHost.runRoot;
         }
         if (controller.signal.aborted) return;
         const dist = await Promise.race([published.promise, stopped.promise]);

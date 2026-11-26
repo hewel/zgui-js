@@ -2,8 +2,10 @@ import { mkdir, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { resolveNativeHost } from "./host.ts";
+import type { ResolvedNativeHost } from "./index.ts";
+
 const workspaceRoot = fileURLToPath(new URL("../../../", import.meta.url));
-const nativeHost = path.join(workspaceRoot, "target/debug/zgui-host");
 const maxSummaryBytes = 8 * 1024;
 const exitCodes = new Set([0, 2, 3, 4, 5, 6, 7, 8, 9, 130]);
 const usage =
@@ -81,6 +83,7 @@ function options(args: string[]) {
 }
 
 function execute(
+  host: ResolvedNativeHost,
   command: "run" | "compare",
   args: string[],
 ): {
@@ -91,8 +94,8 @@ function execute(
   // Native stderr remains available live, including graphics setup diagnostics.
   let child: Bun.SyncSubprocess<"pipe", "inherit">;
   try {
-    child = Bun.spawnSync([nativeHost, "preview", command, ...args], {
-      cwd: workspaceRoot,
+    child = Bun.spawnSync([host.executable, "preview", command, ...args], {
+      cwd: host.runRoot,
       stdin: "ignore",
       stdout: "pipe",
       stderr: "inherit",
@@ -188,7 +191,13 @@ try {
   }
   root = selected.out;
   result.stage = "run";
-  const run = execute("run", [
+  let host: ResolvedNativeHost;
+  try {
+    host = await resolveNativeHost({ root: workspaceRoot, allowCargoBuild: false });
+  } catch (error) {
+    throw failure("E_WORKER_CRASH", 9, `Cannot resolve native preview host: ${message(error)}`);
+  }
+  const run = execute(host, "run", [
     "--bundle",
     path.join(workspaceRoot, "apps/examples/counter/dist"),
     "--profile",
@@ -211,7 +220,7 @@ try {
   await writeFile(path.join(root, "run.stdout.json"), run.stdout, { flag: "wx" });
   if (run.result.exitCode === 0) {
     result.stage = "compare";
-    const comparison = execute("compare", [
+    const comparison = execute(host, "compare", [
       "--baseline",
       selected.baseline,
       "--actual",

@@ -3,8 +3,12 @@ import type * as Public from "./public-api.d.ts";
 import { resolveApplication as resolve } from "./application.ts";
 import { buildApplication as build } from "./build.ts";
 import { devApplication as dev } from "./dev.ts";
-import { probeNativeHost as probe, resolveNativeHost as resolveHost } from "./host.ts";
-import { prepareNativeHost as prepare, runNativeHost as run } from "./native-process.ts";
+import {
+  prepareNativeHost as prepare,
+  probeNativeHost as probe,
+  resolveNativeHost as resolveHost,
+  runNativeHost as run,
+} from "./host.ts";
 import { packageApplication as packApp } from "./package-app.ts";
 import { previewApplication as preview } from "./preview.ts";
 import { watchApplication as watch } from "./watch.ts";

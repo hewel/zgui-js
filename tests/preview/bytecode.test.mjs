@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { mkdir, readFile, realpath, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { test } from "node:test";
@@ -92,7 +93,8 @@ export function mount(root: NativeNode): () => void {
 }
 `;
 
-test("bytecode packages (--bytecode) execute entry, lazy chunk, and background worker with clean teardown", async t => {
+test("bytecode built with --host-root executes entry, lazy chunk, and background worker with clean teardown", async t => {
+  const cli = path.join(workspaceRoot, "packages/cli/src/cli.ts");
   const work = await createTempWorkspace("preview-bytecode-");
   t.after(() => work.cleanup());
 
@@ -114,11 +116,16 @@ test("bytecode packages (--bytecode) execute entry, lazy chunk, and background w
     include: ["src/**/*.ts", "src/**/*.tsx"],
   });
 
-  const { dist, manifest } = await buildApplication("bytecode-demo", {
-    appDirectory: appDir,
-    bytecode: true,
-    hostExecutable: nativeHostBinary,
-  });
+  execFileSync(
+    process.execPath,
+    [cli, "build", appDir, "--bytecode", "--host-root", workspaceRoot],
+    {
+      cwd: work.dir,
+      env: { ...process.env, CARGO_NET_OFFLINE: "true", ZGUI_JS_HOST_EXECUTABLE: "" },
+    },
+  );
+  const dist = path.join(appDir, "dist");
+  const manifest = JSON.parse(await readFile(path.join(dist, "manifest.json"), "utf8"));
 
   assert.equal(manifest.entry, "app.qjsb");
   assert.equal(manifest.bytecodeFormat, "qjs-bytecode-v1");

@@ -13,15 +13,14 @@ import type {
   VectorProps,
 } from "../types.js";
 import {
-  attachBackgroundBlurBridge,
-  attachReducedMotionBridge,
+  attachSessionPreferences,
   bridgeFor,
   provideRegion,
   rememberBridge,
   tryBridgeFor,
   withCallbackBridge,
 } from "../host.js";
-import type { NativeHost, UiBridge } from "../host.js";
+import type { UiBridge, UniversalRendererBridge } from "../host.js";
 import type { InternalProps } from "../internal-props.js";
 import { invalidateTreeOrder } from "../tree-order.js";
 
@@ -86,47 +85,7 @@ export type MergeSources<T extends readonly object[]> = T extends readonly [
 
 // Upstream declarations restrict children to one NodeType and omit null navigation results.
 const createNativeRenderer = createRenderer as (
-  options: Omit<
-    NativeHost["__zgui"],
-    | "createElement"
-    | "replaceText"
-    | "clearRoot"
-    | "createPortal"
-    | "createCanvasScene"
-    | "registerDismissLayer"
-    | "installStylesheet"
-    | "removeStylesheet"
-    | "focus"
-    | "trapFocus"
-    | "lockScroll"
-    | "scrollTo"
-    | "scrollBy"
-    | "scrollIntoView"
-    | "getSelection"
-    | "setSelection"
-    | "selectAll"
-    | "getDocumentSelection"
-    | "setDocumentSelection"
-    | "clearDocumentSelection"
-    | "selectDocumentAll"
-    | "setWindowTitle"
-    | "setWindowFullscreen"
-    | "setWindowMaximized"
-    | "setWindowMinimized"
-    | "setWindowDecorations"
-    | "beginWindowMoveDrag"
-    | "closeWindow"
-    | "getWindowState"
-    | "subscribeWindowState"
-    | "onCloseRequest"
-    | "getWindowRect"
-    | "getTextContent"
-    | "isAnimating"
-    | "precedes"
-    | "observeGeometry"
-    | "getReducedMotion"
-    | "getBackgroundBlurSupported"
-  > & {
+  options: Omit<UniversalRendererBridge, "createElement" | "replaceText"> & {
     createElement(tag: NativeTag, staticProps?: Record<string, unknown>): NativeNode;
     replaceText(node: NativeNode, text: string | number): void;
   },
@@ -343,18 +302,10 @@ export function mergeProps<T extends readonly object[]>(...sources: T): MergeSou
 }
 
 export function render(code: () => NativeChild, root: NativeNode): () => void {
-  const dispose = renderer.render(() => {
-    const bridge = tryBridgeFor(root);
-    if (bridge) {
-      attachReducedMotionBridge(bridge);
-      attachBackgroundBlurBridge(bridge);
-    }
-    return code();
-  }, root);
-  return () => {
-    dispose();
-    flush();
-  };
+  return mountOwned(() => {
+    attachSessionPreferences(tryBridgeFor(root));
+    insert(root, code());
+  });
 }
 
 export function renderRegion(
@@ -366,8 +317,7 @@ export function renderRegion(
   return mountOwned(
     () =>
       provideRegion(bridge, () => {
-        attachReducedMotionBridge(bridge);
-        attachBackgroundBlurBridge(bridge);
+        attachSessionPreferences(bridge);
         insert(root, code());
       }),
     () => bridge.clearRoot(root),

@@ -235,18 +235,25 @@ test("a pure-shell Session captures independent outputs and retains shared state
 });
 
 test("LayerSurface retargets to the remaining output when the first output is removed", async () => {
+  const reducedProfile = path.join(path.dirname(profile), "reduced-motion.json");
+  await writeJson(reducedProfile, {
+    ...JSON.parse(await readFile(profile, "utf8")),
+    reducedMotion: true,
+  });
   const overlay = await buildFixtureApp(
     path.join(temp.dir, "retarget"),
     "retarget",
     `
-    import { LayerSurface, renderShell, useMonitors } from "@hewel/zgui";
+    import { getReducedMotion, LayerSurface, renderShell, untrack, useMonitors } from "@hewel/zgui";
     export const hostApiVersion = 1;
     export function mount() {
       return renderShell(() => {
+        const reducedMotion = untrack(getReducedMotion);
         const monitors = useMonitors();
         return <LayerSurface name="overlay" output={monitors()[0]?.id} layer="overlay"
           anchor={["top", "left", "right"]} height={24}>
           <box style="position: fixed; left: 0; top: 0; width: 100%; height: 100%; background: #123456" />
+          <text testId="motion-preference">{reducedMotion ? "reduced" : "full"}</text>
         </LayerSurface>;
       });
     }
@@ -260,8 +267,14 @@ test("LayerSurface retargets to the remaining output when the first output is re
       capture("before", "overlay"),
       monitors("remove-left", right),
       capture("after", "overlay"),
+      {
+        id: "shell-motion-preference",
+        op: "assert",
+        target: { surface: "overlay", testId: "motion-preference" },
+        check: { property: "text", equals: "reduced" },
+      },
     ],
-    { bundle: overlay, assertEmptyResources: true },
+    { bundle: overlay, profile: reducedProfile, assertEmptyResources: true },
   );
   assert.equal(result.firstError, null);
   const before = await readFrame(out, "surfaces/overlay/before");

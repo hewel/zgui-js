@@ -120,7 +120,6 @@ export async function runInspect({
     searchFrom: [import.meta.url],
     signal,
   });
-  const runRoot = hostRoot ? path.resolve(resolvedCwd, hostRoot) : (host.cargoRoot ?? resolvedCwd);
   if (ui) {
     const options = parseUiFlags(args, resolvedCwd);
     const source = resolveInspectorSource();
@@ -149,12 +148,12 @@ export async function runInspect({
       ...(options.exitAfterMs ? ["--exit-after-ms", options.exitAfterMs] : []),
     ];
     return runNativeHost(host.executable, hostArgs, {
-      root: runRoot,
+      root: host.runRoot,
       signal,
     });
   }
   return runNativeHost(host.executable, ["inspect", ...args], {
-    root: runRoot,
+    root: host.runRoot,
     signal,
   });
 }
