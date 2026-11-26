@@ -1138,7 +1138,7 @@ export function MenuRadioItemPrimitive(props: MenuRadioItemPrimitiveProps): Nati
     }
     return current;
   };
-  validate(props.value);
+  validate(untrack(() => props.value));
   const value = memo(() => validate(props.value));
   const checked = () => radio?.value() === value();
   const node = createMenuRow(rest, {

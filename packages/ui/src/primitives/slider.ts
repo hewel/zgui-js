@@ -106,6 +106,14 @@ function normalizeDisplay(value: number, bound: Bounds): number {
  * Installs zero built-in stylesheets.
  */
 export function SliderPrimitive(props: SliderPrimitiveProps = {}): NativeNode {
+  return renderSlider(props);
+}
+
+/** @internal */
+export function renderSlider(
+  props: SliderPrimitiveProps = {},
+  rootOverrides?: (state: SliderPrimitiveRenderState) => Record<string, unknown>,
+): NativeNode {
   const rest = omit(
     props,
     "value",
@@ -209,6 +217,7 @@ export function SliderPrimitive(props: SliderPrimitiveProps = {}): NativeNode {
     dragging,
     trackRef,
   };
+  const overrides = rootOverrides?.(renderState);
 
   spread(
     root,
@@ -353,10 +362,11 @@ export function SliderPrimitive(props: SliderPrimitiveProps = {}): NativeNode {
           };
         },
       },
+      ...(overrides ? [overrides] : []),
     ),
   );
 
-  if ("children" in props) {
+  if (!rootOverrides && "children" in props) {
     slot(root, () => {
       const child = props.children;
       return typeof child === "function" ? child(renderState) : child;

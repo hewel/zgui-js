@@ -145,9 +145,9 @@ export async function buildFixtureApp(
   return path.join(appDir, "dist");
 }
 
-export async function buildExampleApp(name) {
+export async function buildExampleApp(name, options = {}) {
   const appDirectory = path.join(workspaceRoot, "apps/examples", name);
-  await buildApplication(name, { appDirectory });
+  await buildApplication(name, { appDirectory, ...options });
   return path.join(appDirectory, "dist");
 }
 

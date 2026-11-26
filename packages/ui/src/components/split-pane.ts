@@ -277,22 +277,21 @@ export function SplitPane(props: SplitPaneProps = {}): NativeNode {
     () => panels().length,
     count => {
       if (count === 0) return;
-      const list = untrack(panels);
-      const current = untrack(innerSizes);
-      if (current.length !== count) {
-        const init = computeInitialSizes(
-          list,
-          untrack(() => props.sizes ?? props.defaultSizes),
-        );
-        setInnerSizes(init);
-        for (let i = 0; i < list.length; i++) {
-          const panel = list[i]!;
-          const limits = panelLimits(panel);
-          const sz = init[i] ?? 0;
-          panel.collapsedState = limits.collapsible && sz <= limits.collapsed + 0.01;
-          if (!panel.collapsedState) panel.lastExpanded = Math.max(limits.min, sz);
+      untrack(() => {
+        const list = panels();
+        const current = innerSizes();
+        if (current.length !== count) {
+          const init = computeInitialSizes(list, props.sizes ?? props.defaultSizes);
+          setInnerSizes(init);
+          for (let i = 0; i < list.length; i++) {
+            const panel = list[i]!;
+            const limits = panelLimits(panel);
+            const sz = init[i] ?? 0;
+            panel.collapsedState = limits.collapsible && sz <= limits.collapsed + 0.01;
+            if (!panel.collapsedState) panel.lastExpanded = Math.max(limits.min, sz);
+          }
         }
-      }
+      });
     },
   );
 
@@ -470,8 +469,8 @@ export function SplitPanePanel(props: SplitPanePanelProps = {}): NativeNode {
     controlledCollapsed: () => props.collapsed,
     defaultCollapsed: () => !!props.defaultCollapsed,
     notifyCollapse: collapsed => props.onCollapseChange?.(collapsed),
-    lastExpanded: props.defaultSize ?? Math.max(props.minSize ?? 5, 25),
-    collapsedState: !!props.defaultCollapsed,
+    lastExpanded: untrack(() => props.defaultSize ?? Math.max(props.minSize ?? 5, 25)),
+    collapsedState: untrack(() => !!props.defaultCollapsed),
   };
 
   if (context) {

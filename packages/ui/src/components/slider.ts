@@ -1,8 +1,6 @@
-import { createSignal } from "#solid";
-import { mergeProps } from "../renderer/index.js";
-import type { Accessor, NativeNode } from "../types.js";
-import { SliderPrimitive } from "../primitives/slider.js";
-import type { SliderPrimitiveProps, SliderPrimitiveRenderState } from "../primitives/slider.js";
+import type { NativeNode } from "../types.js";
+import { renderSlider } from "../primitives/slider.js";
+import type { SliderPrimitiveProps } from "../primitives/slider.js";
 import { append, classes, element, forbidChildren, useStylesheet } from "./shared.js";
 import { sheet } from "./generated/SliderStyle.js";
 
@@ -13,25 +11,23 @@ export interface SliderProps extends Omit<SliderPrimitiveProps, "children"> {
 export function Slider(props: SliderProps = {}): NativeNode {
   useStylesheet(sheet);
   forbidChildren("Slider", props);
-  const [fractionSource, setFractionSource] = createSignal<{ readonly get: Accessor<number> }>({
-    get: () => 0,
-  });
-  return SliderPrimitive(
-    mergeProps(props, {
+  let bindTrack!: (node: NativeNode) => void;
+  const root = renderSlider(props, ({ fraction, trackRef }) => {
+    bindTrack = trackRef;
+    return {
       get __zguiClass() {
         return classes(sheet.className, "zui-slider");
       },
       get __zguiStyle() {
-        return { "--zui-slider-fraction": `${(fractionSource().get() * 100).toFixed(4)}%` };
+        return { "--zui-slider-fraction": `${(fraction() * 100).toFixed(4)}%` };
       },
-      children: ({ fraction, trackRef }: SliderPrimitiveRenderState) => {
-        setFractionSource({ get: fraction });
-        const track = element("box", { class: "zui-slider__track", ariaHidden: true });
-        trackRef(track);
-        append(track, element("box", { class: "zui-slider__range", ariaHidden: true }));
-        const thumb = element("box", { class: "zui-slider__thumb", ariaHidden: true });
-        return [track, thumb];
-      },
-    }),
-  );
+    };
+  });
+  const track = element("box", { class: "zui-slider__track", ariaHidden: true });
+  bindTrack(track);
+  append(track, element("box", { class: "zui-slider__range", ariaHidden: true }));
+  const thumb = element("box", { class: "zui-slider__thumb", ariaHidden: true });
+  append(root, track);
+  append(root, thumb);
+  return root;
 }

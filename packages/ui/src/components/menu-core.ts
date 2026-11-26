@@ -1,4 +1,4 @@
-import { $PROXY, createContext, createEffect, omit, useContext } from "#solid";
+import { $PROXY, createContext, createEffect, omit, untrack, useContext } from "#solid";
 import { createElement, flush, memo, mergeProps, setProp, spread } from "../renderer/index.js";
 import type {
   Accessor,
@@ -438,7 +438,7 @@ export function buildMenuCheckboxItem(
     },
     false,
   );
-  validateMenuChecked(variant, read());
+  validateMenuChecked(variant, untrack(read));
   const checked = memo(() => validateMenuChecked(variant, read()));
   const node = menuRow(rest, {
     role: "menuItemCheckBox",
@@ -478,7 +478,7 @@ export function buildMenuRadioGroup(props: MenuRadioGroupProps = {}): NativeNode
     },
     "",
   );
-  validateMenuRadioGroupValue(read());
+  validateMenuRadioGroupValue(untrack(read));
   const value = memo(() => validateMenuRadioGroupValue(read()));
   const node = createElement("box");
   spread(
@@ -513,7 +513,10 @@ export function buildMenuRadioItem(
   const menu = useMenuHierarchy(),
     radio = useContext(MenuRadioContext);
   const rest = omit(props, "children", "value", "closeOnSelect");
-  validateMenuRadioValue(variant, props.value);
+  validateMenuRadioValue(
+    variant,
+    untrack(() => props.value),
+  );
   const value = memo(() => validateMenuRadioValue(variant, props.value));
   const checked = () => radio?.value() === value();
   const node = menuRow(rest, {

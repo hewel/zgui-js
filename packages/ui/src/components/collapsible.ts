@@ -170,57 +170,51 @@ export function disclosureContent(
   context?.registerContent(node);
   const inner = createElement("box");
   setProp(inner, "class", classes("zui-collapsible__measure", options.measureClass));
+  const defaults: NativeElementProps = {
+    ...(options.role !== undefined ? { role: options.role } : {}),
+    get ariaHidden() {
+      return !open();
+    },
+    get "data-state"() {
+      return open() ? "open" : "closed";
+    },
+  };
+  if (options.ariaLabelledBy) {
+    Object.defineProperty(defaults, "ariaLabelledBy", {
+      enumerable: true,
+      configurable: true,
+      get: options.ariaLabelledBy,
+    });
+  }
   spread(
     node,
-    mergeProps(
-      rest,
-      withDefaults(
-        {
-          ...(options.role !== undefined ? { role: options.role } : {}),
-          ...(options.ariaLabelledBy
-            ? {
-                get ariaLabelledBy() {
-                  return options.ariaLabelledBy!();
-                },
-              }
-            : {}),
-          get ariaHidden() {
-            return !open();
-          },
-          get "data-state"() {
-            return open() ? "open" : "closed";
-          },
-        },
-        rest,
-      ),
-      {
-        get __zguiClass() {
-          return classes("zui-collapsible__content", options.contentClass);
-        },
-        get "data-collapsed"() {
-          return !open() && collapsed() ? "" : null;
-        },
-        get __zguiStyle(): Exclude<NativeStyle, string> {
-          const measured = height();
-          return {
-            "--zui-collapsible-height":
-              props["--zui-collapsible-height"] === undefined
-                ? measured === undefined
-                  ? null
-                  : `${measured}px`
-                : props["--zui-collapsible-height"],
-          };
-        },
-        onFocus(event: NativeFocusEvent) {
-          props.onFocus?.(event);
-          setFocused(true);
-        },
-        onBlur(event: NativeFocusEvent) {
-          setFocused(false);
-          props.onBlur?.(event);
-        },
+    mergeProps(rest, withDefaults(defaults, rest), {
+      get __zguiClass() {
+        return classes("zui-collapsible__content", options.contentClass);
       },
-    ),
+      get "data-collapsed"() {
+        return !open() && collapsed() ? "" : null;
+      },
+      get __zguiStyle(): Exclude<NativeStyle, string> {
+        const measured = height();
+        return {
+          "--zui-collapsible-height":
+            props["--zui-collapsible-height"] === undefined
+              ? measured === undefined
+                ? null
+                : `${measured}px`
+              : props["--zui-collapsible-height"],
+        };
+      },
+      onFocus(event: NativeFocusEvent) {
+        props.onFocus?.(event);
+        setFocused(true);
+      },
+      onBlur(event: NativeFocusEvent) {
+        setFocused(false);
+        props.onBlur?.(event);
+      },
+    }),
   );
   if (!($PROXY in props) && Object.getOwnPropertyDescriptor(props, "children")?.get === undefined) {
     slot(inner, props.children);

@@ -455,7 +455,7 @@ export function CommandPalette(props: CommandPaletteProps = {}): NativeChild {
   );
 
   const useProviderOpen =
-    provider !== null && props.open === undefined && props.defaultOpen === undefined;
+    provider !== null && untrack(() => props.open === undefined && props.defaultOpen === undefined);
   const [localOpen, setLocalOpen] = createControllable<boolean>(
     {
       value: () => props.open,
@@ -476,7 +476,8 @@ export function CommandPalette(props: CommandPaletteProps = {}): NativeChild {
   };
 
   const useProviderQuery =
-    provider !== null && props.query === undefined && props.defaultQuery === undefined;
+    provider !== null &&
+    untrack(() => props.query === undefined && props.defaultQuery === undefined);
   const [localQuery, setLocalQuery] = createControllable<string>(
     {
       value: () => props.query,

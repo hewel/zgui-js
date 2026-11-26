@@ -1,4 +1,4 @@
-import { createContext, omit, useContext } from "#solid";
+import { createContext, omit, untrack, useContext } from "#solid";
 import { createElement, memo, mergeProps, spread } from "../renderer/index.js";
 import type {
   Accessor,
@@ -109,7 +109,7 @@ export function RadioGroupPrimitive(props: RadioGroupPrimitiveProps = {}): Nativ
 export function RadioItemPrimitive(props: RadioItemPrimitiveProps): NativeNode {
   const rest = omit(props, "value", "disabled", "children", "onClick", "onFocus");
   const group = useContext(RadioPrimitiveContext);
-  validateRadioValue(props.value);
+  validateRadioValue(untrack(() => props.value));
   const value = memo(() => validateRadioValue(props.value));
   const disabled = () => !!props.disabled || !!group?.disabled();
   const chosen = () => group?.value() === value();

@@ -1,4 +1,4 @@
-import { $PROXY, createContext, createMemo, omit, useContext } from "#solid";
+import { $PROXY, createContext, createMemo, omit, untrack, useContext } from "#solid";
 import {
   createElement,
   effect,
@@ -105,8 +105,10 @@ export function Accordion(props: AccordionProps = {}): NativeNode {
     },
     [],
   );
-  accordionValues(read());
-  accordionSelection(props.selection);
+  untrack(() => {
+    accordionValues(read());
+    accordionSelection(props.selection);
+  });
   const values = createMemo(() => accordionValues(read()));
   const selection = createMemo(() => accordionSelection(props.selection));
   const disabled = () => !!props.disabled;
@@ -152,9 +154,9 @@ export function Accordion(props: AccordionProps = {}): NativeNode {
 
 export function AccordionItem(props: AccordionItemProps): NativeNode {
   useStylesheet(sheet);
-  const val = accordionItemValue(props.value);
   const group = useContext(AccordionContext);
   if (isStaticProps(props) && !("__zguiClass" in props)) {
+    const val = accordionItemValue(props.value);
     const node = createElement("column");
     const disclosure: ItemDisclosure = {
       ...createDisclosure(
@@ -188,6 +190,7 @@ export function AccordionItem(props: AccordionItemProps): NativeNode {
     return node;
   }
   const rest = omit(props, "value", "disabled", "children");
+  accordionItemValue(untrack(() => props.value));
   const value = createMemo(() => accordionItemValue(props.value));
   const node = createElement("column");
   const disclosure: ItemDisclosure = {
@@ -242,7 +245,7 @@ export function AccordionTrigger(props: AccordionTriggerProps = {}): NativeNode 
           return box;
         })()
       : (() => {
-          accordionHeadingLevel(props.level);
+          accordionHeadingLevel(untrack(() => props.level));
           const level = createMemo(() => accordionHeadingLevel(props.level));
           return element("box", {
             class: "zui-accordion__header",

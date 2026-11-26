@@ -10,6 +10,7 @@ import {
   scrollIntoView,
   setSelection,
   setWindowTitle,
+  untrack,
   useContext,
 } from "@hewel/zgui";
 import type { Accessor, NativeNode, TextSelectionRange } from "@hewel/zgui";
@@ -384,8 +385,8 @@ export function createStudioState(): StudioState {
     hydrated => {
       if (!hydrated || restoredHydratedBookmark || disposed) return;
       restoredHydratedBookmark = true;
-      const bookmark = prefs.value().lastWorkspaceBookmark;
-      if (!bookmark || workspaceName()) return;
+      const bookmark = untrack(() => prefs.value().lastWorkspaceBookmark);
+      if (!bookmark || untrack(workspaceName)) return;
       void workspace
         .restoreWorkspaceBookmark(bookmark, handleExternalEvents)
         .then(restored => {

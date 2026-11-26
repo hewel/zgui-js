@@ -1,4 +1,4 @@
-import { createContext, omit, useContext } from "#solid";
+import { createContext, omit, untrack, useContext } from "#solid";
 import { createElement, memo, mergeProps, spread } from "../renderer/index.js";
 import type {
   Accessor,
@@ -167,10 +167,12 @@ export function ToggleGroup(props: ToggleGroupProps = {}): NativeNode {
     },
     [],
   );
-  toggleValues(read());
-  toggleSelection(props.selection);
-  toggleSpacing(props.spacing);
-  groupOrientation(props.orientation ?? "horizontal");
+  untrack(() => {
+    toggleValues(read());
+    toggleSelection(props.selection);
+    toggleSpacing(props.spacing);
+    groupOrientation(props.orientation ?? "horizontal");
+  });
   const values = memo(() => toggleValues(read()));
   const selection = memo(() => toggleSelection(props.selection));
   const spacing = memo(() => toggleSpacing(props.spacing));
@@ -250,7 +252,7 @@ export function ToggleGroupItem(props: ToggleGroupItemProps): NativeNode {
   useStylesheet(toggleSheet);
   const rest = omit(props, "value", "variant", "size", "disabled", "label", "onClick", "onFocus");
   const group = useContext(ToggleContext);
-  itemValue(props.value);
+  itemValue(untrack(() => props.value));
   const value = memo(() => itemValue(props.value));
   const disabled = () => !!props.disabled || !!group?.disabled();
   const variant = () => props.variant ?? group?.variant() ?? "default";

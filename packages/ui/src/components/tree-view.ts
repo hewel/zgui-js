@@ -592,7 +592,7 @@ export function TreeView<T = unknown>(props: TreeViewProps<T> = {}): NativeNode 
     true,
   );
 
-  if (props.items !== undefined) {
+  if (untrack(() => props.items !== undefined)) {
     const emptyFallback = () =>
       element("box", {
         class: "zui-tree__empty",
@@ -601,8 +601,9 @@ export function TreeView<T = unknown>(props: TreeViewProps<T> = {}): NativeNode 
           return props.emptyText ?? "No items";
         },
       });
-    if (props.virtualize) {
-      const opts = typeof props.virtualize === "object" ? props.virtualize : {};
+    const virtualizeProp = untrack(() => props.virtualize);
+    if (virtualizeProp) {
+      const opts = typeof virtualizeProp === "object" ? virtualizeProp : {};
       append(
         root,
         VirtualList({
@@ -673,12 +674,13 @@ export function TreeItem(props: TreeItemProps): NativeNode {
   const isSelected = () => context?.selectedId() === props.itemId;
   const isFocused = () => context?.focusedId() === props.itemId;
 
+  const initialItemId = untrack(() => props.itemId);
   const container = element("box", { class: "zui-tree__children" });
   const row = createElement("control");
 
   if (context) {
     const unregister = context.registerDeclarative({
-      id: props.itemId,
+      id: initialItemId,
       parentId: branch.parentId,
       depth: branch.depth,
       node: row,
@@ -752,7 +754,9 @@ export function TreeItem(props: TreeItemProps): NativeNode {
     const chevron = element("control", {
       role: "button",
       tabIndex: -1,
-      ariaLabel: isExpanded() ? `Collapse ${props.label}` : `Expand ${props.label}`,
+      get ariaLabel() {
+        return isExpanded() ? `Collapse ${props.label}` : `Expand ${props.label}`;
+      },
       class: "zui-tree__chevron",
       onClick(event: NativeEvent) {
         event.stopPropagation();
@@ -763,20 +767,31 @@ export function TreeItem(props: TreeItemProps): NativeNode {
     return chevron;
   });
 
-  if (props.icon) {
+  slot(row, () => {
+    const iconData = props.icon;
+    if (!iconData) return null;
     const iconWrap = element("box", { class: "zui-tree__icon", ariaHidden: true });
-    append(iconWrap, Icon({ icon: props.icon, size: "sm" }));
-    append(row, iconWrap);
-  }
-  append(row, element("label", { class: "zui-tree__label", children: props.label }));
-  if (props.badge) {
-    append(row, element("label", { class: "zui-tree__badge", children: props.badge }));
-  }
+    append(iconWrap, Icon({ icon: iconData, size: "sm" }));
+    return iconWrap;
+  });
+  append(
+    row,
+    element("label", {
+      class: "zui-tree__label",
+      get children() {
+        return props.label;
+      },
+    }),
+  );
+  slot(row, () => {
+    const badgeText = props.badge;
+    return badgeText ? element("label", { class: "zui-tree__badge", children: badgeText }) : null;
+  });
 
   append(container, row);
   slot(container, () => {
     if (!hasChildren() || !isExpanded()) return null;
-    return provide(TreeBranchContext, { depth: branch.depth + 1, parentId: props.itemId }, () =>
+    return provide(TreeBranchContext, { depth: branch.depth + 1, parentId: initialItemId }, () =>
       untrack(() => props.children),
     );
   });

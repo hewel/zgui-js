@@ -141,6 +141,7 @@ function SysmonApp() {
     },
   );
 
+  let disposed = false;
   const pending = new Set<HostRequest<unknown>>();
   const runBuffered = (
     program: string,
@@ -158,10 +159,13 @@ function SysmonApp() {
         .catch(err => {
           pending.delete(req);
           const msg = err instanceof Error ? err.message : String(err);
-          if (!msg.includes("Cancelled")) setErrorMsg(`${program}: ${msg}`);
+          if (!disposed && !msg.includes("Cancelled")) setErrorMsg(`${program}: ${msg}`);
         });
     } catch (err) {
-      setErrorMsg(err instanceof Error ? err.message : String(err));
+      const msg = err instanceof Error ? err.message : String(err);
+      queueMicrotask(() => {
+        if (!disposed) setErrorMsg(msg);
+      });
     }
   };
 
@@ -225,6 +229,7 @@ function SysmonApp() {
   );
 
   onCleanup(() => {
+    disposed = true;
     streamHandle?.kill();
     for (const req of pending) req.cancel();
     pending.clear();
