@@ -31,7 +31,8 @@
   },
   "files": [
     "dist",
-    "oxlint",
+    "oxlint/recommended.json",
+    "oxlint/strict.json",
     "tsconfig.native.json",
     "upstream",
     "README.md",
@@ -76,7 +77,7 @@
       "types": "./dist/runtime-globals.d.ts",
       "default": "./dist/runtime-globals.js"
     },
-    "./oxlint": "./oxlint/plugin.mjs",
+    "./oxlint": "./dist/oxlint/plugin.js",
     "./oxlint/recommended": "./oxlint/recommended.json",
     "./oxlint/strict": "./oxlint/strict.json",
     "./tsconfig.native.json": "./tsconfig.native.json",
@@ -97,6 +98,9 @@
     "@solidjs/signals": "2.0.1",
     "@solidjs/universal": "2.0.1",
     "solid-js": "2.0.1"
+  },
+  "devDependencies": {
+    "oxlint": "1.94.0"
   },
   "peerDependencies": {
     "eslint-plugin-solid": "^0.20.0"

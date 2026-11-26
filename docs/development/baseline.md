@@ -13,21 +13,21 @@ below is retained and does not describe the currently shipped API or test suite.
 
 ## Dependency policy
 
-| Component                   | Selected identity                                                                                                                        |
-| --------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| Rust                        | 1.100.0, minimal profile plus rustfmt/clippy                                                                                             |
-| zgui                        | `ee29c7dc66206eb04ba7bcf514058a278c9070ba`                                                                                               |
-| Fontique                    | Root Cargo patch from the same zgui revision                                                                                             |
-| Native runtime / Wayland    | Same revision, with the documented [local patches](../../vendor/README.md)                                                               |
-| rquickjs                    | `73fcd6062ee615aeb2a4675cd32be67a56e93973`; Phase 0 `std`, Phase 1 adds `macro` for opaque native classes                                |
-| QuickJS-NG                  | Resolved submodule `6d46d07d04041b40f4f49eaa7fdebe44c314c699`                                                                            |
-| Bun                         | `>= 1.4.4` — runtime, package manager, and test runner (`bunfig.toml`, `bun.lock`)                                                       |
-| Solid / Universal / Signals | Exact registry versions `solid-js` 2.0.1 / `@solidjs/universal` 2.0.1 / `@solidjs/signals` 2.0.1                                         |
-| CSS Modules compiler        | `lightningcss` 1.33.0 (`lightningcss-v1` native profile; supersedes StyleX per ADR-0006)                                                 |
-| JSX compiler                | `@solidjs/compiler` 2.0.1 (native Oxc + WASI fallback; supersedes Babel per ADR-0007)                                                    |
-| Rolldown / tsrs             | 1.3.2 / 7.1.0-beta.tsrs2                                                                                                                 |
-| Oxlint / Oxfmt              | 1.94.0 (`--deny-warnings` + `typeAware` via `tsrs` + `packages/ui/oxlint/{plugin,solid}.mjs` with `eslint-plugin-solid` 0.20.1) / 0.79.0 |
-| Parley                      | 0.11.1 with `complex-scripts`; required for CJK layout segmentation                                                                      |
+| Component                   | Selected identity                                                                                                                           |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| Rust                        | 1.100.0, minimal profile plus rustfmt/clippy                                                                                                |
+| zgui                        | `ee29c7dc66206eb04ba7bcf514058a278c9070ba`                                                                                                  |
+| Fontique                    | Root Cargo patch from the same zgui revision                                                                                                |
+| Native runtime / Wayland    | Same revision, with the documented [local patches](../../vendor/README.md)                                                                  |
+| rquickjs                    | `73fcd6062ee615aeb2a4675cd32be67a56e93973`; Phase 0 `std`, Phase 1 adds `macro` for opaque native classes                                   |
+| QuickJS-NG                  | Resolved submodule `6d46d07d04041b40f4f49eaa7fdebe44c314c699`                                                                               |
+| Bun                         | `>= 1.4.4` — runtime, package manager, and test runner (`bunfig.toml`, `bun.lock`)                                                          |
+| Solid / Universal / Signals | Exact registry versions `solid-js` 2.0.1 / `@solidjs/universal` 2.0.1 / `@solidjs/signals` 2.0.1                                            |
+| CSS Modules compiler        | `lightningcss` 1.33.0 (`lightningcss-v1` native profile; supersedes StyleX per ADR-0006)                                                    |
+| JSX compiler                | `@solidjs/compiler` 2.0.1 (native Oxc + WASI fallback; supersedes Babel per ADR-0007)                                                       |
+| Rolldown / tsrs             | 1.3.2 / 7.1.0-beta.tsrs2                                                                                                                    |
+| Oxlint / Oxfmt              | 1.94.0 (`--deny-warnings` + `typeAware` via `tsrs` + `packages/ui/oxlint/src/{plugin,solid}.ts` with `eslint-plugin-solid` 0.20.1) / 0.79.0 |
+| Parley                      | 0.11.1 with `complex-scripts`; required for CJK layout segmentation                                                                         |
 
 The Fontique patch is selected deliberately for parity with the audited upstream performance implementation; it is not presented as necessary for correctness. `bun.lock` and `Cargo.lock` record the resolved graphs. Phase 0 graph inspection confirmed patched Fontique 0.11.1 and rquickjs `std`; Phase 1 deliberately added `macro`.
 

@@ -28,7 +28,7 @@
     "release:publish": "bun tools/release.ts publish",
     "fmt": "bun --bun run oxfmt",
     "fmt:check": "bun --bun run oxfmt --check",
-    "lint": "bun --bun run oxlint --deny-warnings",
+    "lint": "bun tools/build-packages.ts --if-stale --quiet && bun --bun run oxlint --deny-warnings",
     "typecheck": "bun packages/build/src/typecheck.ts",
     "typecheck:smoke": "bun --bun run tsrs --project packages/build/tsconfig.smoke.json",
     "test:build": "bun test --parallel --timeout=30000 tests/build/*.test.mjs",

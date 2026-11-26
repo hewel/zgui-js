@@ -828,7 +828,7 @@ Two Oxlint presets ship with `@hewel/zgui`:
 - `@hewel/zgui/oxlint/recommended` — enables `zgui/*` architectural & styling
   boundaries (`zgui/no-static-component-stylesheet`, `zgui/no-solid-web-imports`,
   etc.) plus Solid 2.0 reactivity rules from `eslint-plugin-solid` (`0.20.1` via
-  `@hewel/zgui`'s optional peer dependency and `packages/ui/oxlint/solid.mjs`).
+  `@hewel/zgui`'s optional peer dependency and compiled `dist/oxlint/solid.js`).
 - `@hewel/zgui/oxlint/strict` — extends `recommended` and adds
   `zgui/prefer-stylesheet`, flagging static inline styles and finite static
   ternaries on native elements and `@hewel/zgui` components while allowing

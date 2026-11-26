@@ -1,6 +1,6 @@
 {
   "plugins": ["eslint", "typescript", "oxc"],
-  "jsPlugins": ["./plugin.mjs", "./solid.mjs"],
+  "jsPlugins": ["../dist/oxlint/plugin.js", "../dist/oxlint/solid.js"],
   "settings": {
     "solid": {
       "version": 2,

@@ -44,6 +44,13 @@ const SDK_PACKAGE_SPECS: Readonly<Record<SdkPackageName, SdkPackageSpec>> = {
 };
 
 const ALL_SDK_PACKAGES: readonly SdkPackageName[] = ["ui", "services"];
+const OXLINT_OUTPUT_FILES = [
+  "oxlint/plugin.js",
+  "oxlint/solid.js",
+  "oxlint/ast.js",
+  "oxlint/scope.js",
+  "oxlint/style-analysis.js",
+] as const;
 
 const compilerCli = path.join(
   path.dirname(createRequire(import.meta.url).resolve("tsrs/package.json")),
@@ -83,30 +90,41 @@ async function listFilesRecursive(dir: string, prefix = ""): Promise<string[]> {
 
 async function newestInputMtimeMs(pkgDir: string): Promise<number> {
   let newest = 0;
-  for (const cfg of ["tsconfig.json", "tsconfig.build.json"]) {
+  for (const cfg of ["tsconfig.json", "tsconfig.build.json", "tsconfig.oxlint.json"]) {
     const full = path.join(pkgDir, cfg);
     if (existsSync(full)) {
       const info = await stat(full);
       if (info.mtimeMs > newest) newest = info.mtimeMs;
     }
   }
-  const srcDir = path.join(pkgDir, "src");
-  for (const rel of await listFilesRecursive(srcDir)) {
-    const info = await stat(path.join(srcDir, rel));
-    if (info.mtimeMs > newest) newest = info.mtimeMs;
+  for (const inputDir of [path.join(pkgDir, "src"), path.join(pkgDir, "oxlint/src")]) {
+    for (const rel of await listFilesRecursive(inputDir)) {
+      const info = await stat(path.join(inputDir, rel));
+      if (info.mtimeMs > newest) newest = info.mtimeMs;
+    }
   }
   return newest;
 }
 
 async function isPackageDistFresh(pkgDir: string, spec: SdkPackageSpec): Promise<boolean> {
   const distDir = path.join(pkgDir, "dist");
-  const required = ["index.js", "index.d.ts", ...spec.handwrittenDts];
+  const hasOxlintBuild = existsSync(path.join(pkgDir, "tsconfig.oxlint.json"));
+  const required = [
+    "index.js",
+    "index.d.ts",
+    ...spec.handwrittenDts,
+    ...(hasOxlintBuild ? OXLINT_OUTPUT_FILES : []),
+  ];
   let stampMtime = Number.POSITIVE_INFINITY;
   for (const rel of required) {
     const full = path.join(distDir, rel);
     try {
       const info = await stat(full);
-      if (rel === "index.js" || rel === "index.d.ts") {
+      if (
+        rel === "index.js" ||
+        rel === "index.d.ts" ||
+        (hasOxlintBuild && (OXLINT_OUTPUT_FILES as readonly string[]).includes(rel))
+      ) {
         stampMtime = Math.min(stampMtime, info.mtimeMs);
       }
     } catch {
@@ -183,7 +201,7 @@ async function syncDirectoryInPlace(stagingDir: string, distDir: string): Promis
   await removeEmptyDirs(distDir);
 
   const now = new Date();
-  for (const sentinel of ["index.js", "index.d.ts"]) {
+  for (const sentinel of ["index.js", "index.d.ts", ...OXLINT_OUTPUT_FILES]) {
     const target = path.join(distDir, sentinel);
     if (existsSync(target)) {
       await utimes(target, now, now).catch(() => {});
@@ -266,7 +284,10 @@ async function compileSinglePackage(
   if (!existsSync(tsconfigPath)) {
     throw new Error(`Missing SDK build tsconfig: ${tsconfigPath}`);
   }
-  const stagingDir = path.join(pkgDir, `.dist-staging-${process.pid}-${randomUUID()}`);
+  const stagingDir = path.join(
+    os.tmpdir(),
+    `zgui-dist-staging-${spec.name}-${process.pid}-${randomUUID()}`,
+  );
   try {
     const child = Bun.spawn(
       [
@@ -305,6 +326,39 @@ async function compileSinglePackage(
       await copyFile(srcPath, destPath);
     }
 
+    const oxlintTsconfigPath = path.join(pkgDir, "tsconfig.oxlint.json");
+    if (existsSync(oxlintTsconfigPath)) {
+      const oxlintChild = Bun.spawn(
+        [
+          process.execPath,
+          compilerCli,
+          "--project",
+          oxlintTsconfigPath,
+          "--outDir",
+          path.join(stagingDir, "oxlint"),
+          "--pretty",
+          "false",
+        ],
+        {
+          cwd: pkgDir,
+          stdin: "ignore",
+          stdout: "pipe",
+          stderr: "pipe",
+        },
+      );
+      const [oxCode, oxStdout, oxStderr] = await Promise.all([
+        oxlintChild.exited,
+        new Response(oxlintChild.stdout).text(),
+        new Response(oxlintChild.stderr).text(),
+      ]);
+      if (oxCode !== 0 || oxlintChild.signalCode) {
+        const detail = `${oxStdout}${oxStderr}`.trim();
+        throw new Error(
+          `SDK oxlint build failed for ${spec.dir} (exit ${oxlintChild.signalCode ?? oxCode})${detail ? `:\n${detail}` : ""}`,
+        );
+      }
+    }
+
     let verifiedSheets = 0;
     if (spec.verifyGeneratedStyles) {
       verifiedSheets = await verifyGeneratedStyleSheets(stagingDir);
@@ -340,17 +394,22 @@ export async function buildSdkPackages({
 
 export async function ensureSdkPackagesBuilt(
   root: string = workspaceRoot,
-  { silent = true }: { silent?: boolean } = {},
+  {
+    silent = true,
+    packages = ALL_SDK_PACKAGES,
+  }: { silent?: boolean; packages?: readonly SdkPackageName[] } = {},
 ): Promise<void> {
   const resolvedRoot = path.resolve(root);
   if (!hasCheckoutSdkSources(resolvedRoot)) return;
 
-  const existing = inFlight.get(resolvedRoot);
+  const targetPackages = [...new Set(packages)];
+  const cacheKey = `${resolvedRoot}:${[...targetPackages].sort().join(",")}`;
+  const existing = inFlight.get(cacheKey);
   if (existing) return existing;
 
   const run = (async () => {
     const stale: SdkPackageName[] = [];
-    for (const name of ALL_SDK_PACKAGES) {
+    for (const name of targetPackages) {
       const spec = SDK_PACKAGE_SPECS[name];
       if (!(await isPackageDistFresh(path.join(resolvedRoot, spec.dir), spec))) {
         stale.push(name);
@@ -367,10 +426,10 @@ export async function ensureSdkPackagesBuilt(
     });
   })();
 
-  inFlight.set(resolvedRoot, run);
+  inFlight.set(cacheKey, run);
   try {
     await run;
   } finally {
-    if (inFlight.get(resolvedRoot) === run) inFlight.delete(resolvedRoot);
+    if (inFlight.get(cacheKey) === run) inFlight.delete(cacheKey);
   }
 }

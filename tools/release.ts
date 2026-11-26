@@ -401,8 +401,11 @@ function auditTarball(tarballPath: string, expectedName: string, expectedVersion
       "package/dist/components/generated/ButtonStyle.js",
       "package/oxlint/recommended.json",
       "package/oxlint/strict.json",
-      "package/oxlint/plugin.mjs",
-      "package/oxlint/solid.mjs",
+      "package/dist/oxlint/plugin.js",
+      "package/dist/oxlint/solid.js",
+      "package/dist/oxlint/ast.js",
+      "package/dist/oxlint/scope.js",
+      "package/dist/oxlint/style-analysis.js",
       "package/tsconfig.native.json",
       "package/upstream/LICENSE",
       "package/upstream/NOTICE",
@@ -444,7 +447,9 @@ function auditTarball(tarballPath: string, expectedName: string, expectedVersion
   }
 
   if (expectedName === "@hewel/zgui" || expectedName === "@hewel/zgui-services") {
-    const leakedSrc = listing.filter(entry => entry.startsWith("package/src/"));
+    const leakedSrc = listing.filter(
+      entry => entry.startsWith("package/src/") || entry.startsWith("package/oxlint/src/"),
+    );
     if (leakedSrc.length > 0) {
       throw new Error(`Tarball ${tarballPath} should not pack source files: ${leakedSrc[0]}`);
     }

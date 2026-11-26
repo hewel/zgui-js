@@ -6,6 +6,9 @@ import path from "node:path";
 import { test } from "node:test";
 import { promisify } from "node:util";
 import { workspaceRoot } from "../../packages/build/src/build.ts";
+import { ensureSdkPackagesBuilt } from "../../packages/build/src/internal.ts";
+
+await ensureSdkPackagesBuilt(workspaceRoot);
 
 const execFileAsync = promisify(execFile);
 const oxlintBin = path.join(workspaceRoot, "node_modules/oxlint/bin/oxlint");
@@ -457,6 +460,11 @@ export function GoodView(props: {
   const Button = (p: { style?: string }) => <box data-s={p.style} />;
   const mutated = { width: "100px" };
   mutated.width = \`\${untrack(() => props.canvasW())}px\`;
+  function mutateAhead() {
+    preHoistMutated.width = \`\${untrack(() => props.canvasW())}px\`;
+  }
+  const preHoistMutated = { width: "100px" };
+  mutateAhead();
   let mutableStr = "gap: 4px";
   mutableStr = "gap: 8px";
   void mountDynamic;
@@ -477,6 +485,7 @@ export function GoodView(props: {
       <box style={{ width: undefined, transform: props.spring() }} />
       <box style={{ ...props.style }} />
       <box style={mutated} />
+      <box style={preHoistMutated} />
       <box style={mutableStr} />
       <Bar style="floating" />
       <Button style="width: 120px" />

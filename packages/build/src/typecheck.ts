@@ -98,6 +98,10 @@ async function discoverPackageConfigs(root: string): Promise<string[]> {
         break;
       }
     }
+    const oxlintConfigPath = path.join(pkgDir, "tsconfig.oxlint.json");
+    if (await fileExists(oxlintConfigPath)) {
+      configs.push(oxlintConfigPath);
+    }
   }
   return configs;
 }

@@ -164,7 +164,7 @@ See [Preview implementation and verification](docs/development/preview-verificat
 
 ```sh
 bun run fmt:check     # oxfmt formatting check across the repository
-bun run lint          # oxlint --deny-warnings + packages/ui/oxlint/plugin.mjs architectural gates
+bun run lint          # build stale SDK dist + oxlint --deny-warnings architectural gates
 bun run typecheck     # all workspace packages, strict type fixtures, and apps via tsrs (--app <name> for one app)
 bun run smoke         # build and verify the smoke package contract
 bun run test:build    # Bun build, CLI, CSS Modules, primitives, llms.txt, and component-map tests
@@ -186,7 +186,7 @@ bun run test:preview  # build counter + zgui-host and run headless GPU preview s
 | [`crates/js-runtime`](crates/js-runtime)             | Embedded QuickJS-NG runtime, verified module/bytecode evaluation, turn guards, and rejection tracking                 |
 | [`crates/ui-bridge`](crates/ui-bridge)               | Native node handles, properties, event dispatch, geometry queries, canvas, and document selection                     |
 | [`crates/host-services`](crates/host-services)       | Rust-backed async network, SQLite, files/bookmarks, clipboard, sockets, commands, and compute workers                 |
-| [`packages/ui`](packages/ui)                         | `@hewel/zgui` TSX SDK, renderer, router, primitives, components, icons, and `oxlint/plugin.mjs` preset                |
+| [`packages/ui`](packages/ui)                         | `@hewel/zgui` TSX SDK, renderer, router, primitives, components, icons, and `oxlint` preset                           |
 | [`packages/services`](packages/services)             | `@hewel/zgui-services` typed host-service client APIs                                                                 |
 | [`packages/build`](packages/build)                   | `@hewel/zgui-build` programmatic compiler (`@solidjs/compiler`, Lightning CSS, Rolldown), typecheck, packager         |
 | [`packages/cli`](packages/cli)                       | `@hewel/zgui-cli` npm CLI (`zgui-js`: `init`, `dev`, `build`, `preview`, `package`, `doctor`, `inspect`, `smoke`)     |
