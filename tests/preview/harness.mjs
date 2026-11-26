@@ -167,6 +167,7 @@ export async function runPreview({
   expectedAssertions,
   allowFailure = false,
   assertEmptyResources = true,
+  forbidJsDiagnostics = false,
 }) {
   const args = [
     "preview",
@@ -227,6 +228,24 @@ export async function runPreview({
       assert.equal(result.teardown.clean, true, `${summary}\n${proc.stdout}`);
       if (assertEmptyResources) {
         assert.deepEqual(result.teardown.resources, emptyResources, summary);
+      }
+      if (forbidJsDiagnostics) {
+        const bad = (proc.stderr ?? "")
+          .split("\n")
+          .filter(
+            line =>
+              line.includes("js[error]") ||
+              line.includes("js[warn]") ||
+              line.includes("REACTIVE_WRITE_IN_OWNED_SCOPE") ||
+              line.includes("STRICT_READ_UNTRACKED") ||
+              line.includes("REACTIVITY_HALTED") ||
+              line.includes("FLUSH_IN_EFFECT_CALLBACK"),
+          );
+        assert.deepEqual(
+          bad,
+          [],
+          `${summary}\nunexpected JS diagnostics in stderr:\n${bad.join("\n")}`,
+        );
       }
     }
   } catch (error) {

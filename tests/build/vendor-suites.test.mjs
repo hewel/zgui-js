@@ -12,21 +12,39 @@ test("tools/test-vendor.mjs stays in parity with Cargo.toml excludes, vendor/*/t
     readFile(path.join(workspaceRoot, "vendor/README.md"), "utf8"),
   ]);
 
-  // 1. Parse suites and their --test targets from tools/test-vendor.mjs.
+  // 1. Parse suites, --test targets, and --lib filters from tools/test-vendor.mjs.
   const registeredCrates = new Set();
   const registeredTests = new Set();
+  const registeredLibs = new Map();
   for (const block of runnerSource.matchAll(/\{\s*crate:\s*"([^"]+)",\s*args:\s*\[([^\]]+)\]/gs)) {
     const crate = block[1];
     registeredCrates.add(crate);
     const argsText = block[2];
-    for (const target of argsText.matchAll(/"--test",\s*"([^"]+)"/g)) {
-      const testName = target[1];
-      const filePath = path.join(workspaceRoot, "vendor", crate, "tests", `${testName}.rs`);
-      assert.ok(
-        existsSync(filePath),
-        `tools/test-vendor.mjs references missing test target: vendor/${crate}/tests/${testName}.rs`,
-      );
-      registeredTests.add(`${crate}:${testName}`);
+    const argTokens = [...argsText.matchAll(/"([^"]+)"/g)].map(match => match[1]);
+    for (let i = 0; i < argTokens.length; i += 1) {
+      if (argTokens[i] === "--test" && i + 1 < argTokens.length) {
+        const testName = argTokens[i + 1];
+        const filePath = path.join(workspaceRoot, "vendor", crate, "tests", `${testName}.rs`);
+        assert.ok(
+          existsSync(filePath),
+          `tools/test-vendor.mjs references missing test target: vendor/${crate}/tests/${testName}.rs`,
+        );
+        registeredTests.add(`${crate}:${testName}`);
+        i += 1;
+      } else if (argTokens[i] === "--lib") {
+        let filters = registeredLibs.get(crate);
+        if (!filters) {
+          filters = new Set();
+          registeredLibs.set(crate, filters);
+        }
+        const next = argTokens[i + 1];
+        if (next && !next.startsWith("--")) {
+          filters.add(next);
+          i += 1;
+        } else {
+          filters.add("*");
+        }
+      }
     }
   }
 
@@ -51,6 +69,21 @@ test("tools/test-vendor.mjs stays in parity with Cargo.toml excludes, vendor/*/t
     assert.ok(
       registeredTests.has(`${crate}:${testName}`),
       `vendor/README.md documents vendor/${crate}/tests/${testName}.rs, which must be registered in tools/test-vendor.mjs`,
+    );
+  }
+
+  // 4. Every `--lib [filter]` cargo test command in vendor/README.md must be covered by tools/test-vendor.mjs.
+  for (const match of vendorReadme.matchAll(
+    /cargo\s+test[^\n]*?(?:--manifest-path\s+vendor\/([a-z0-9-]+)\/Cargo\.toml|-p\s+(zgui-[a-z0-9-]+))[^\n]*?--lib(?:\s+([A-Za-z0-9_:]+))?/g,
+  )) {
+    const crate = match[1] ?? match[2];
+    const filter = match[3] ?? "*";
+    const covered = registeredLibs.get(crate);
+    assert.ok(
+      covered &&
+        (covered.has("*") ||
+          (filter !== "*" && [...covered].some(prefix => filter.startsWith(prefix)))),
+      `vendor/README.md documents \`--lib${filter === "*" ? "" : ` ${filter}`}\` for ${crate}, which is not covered in tools/test-vendor.mjs`,
     );
   }
 });

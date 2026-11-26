@@ -42,20 +42,6 @@ const capture = (captureId, surface = "main") => ({
 });
 const advance = byMs => ({ id: id(), op: "clock.advance", byMs });
 
-function assertNoJsDiagnostics(stderr, appName) {
-  const bad = stderr
-    .split("\n")
-    .filter(
-      line =>
-        line.includes("js[error]") ||
-        line.includes("js[warn]") ||
-        line.includes("REACTIVE_WRITE_IN_OWNED_SCOPE") ||
-        line.includes("STRICT_READ_UNTRACKED") ||
-        line.includes("REACTIVITY_HALTED"),
-    );
-  assert.deepEqual(bad, [], `unexpected JS diagnostics for ${appName} (dev):\n${bad.join("\n")}`);
-}
-
 const BASE_CAPS = ["pixels", "virtual-time", "selectors.test-id", "input.pointer", "tree.inspect"];
 
 test(
@@ -63,7 +49,7 @@ test(
   { timeout: 60000 },
   async () => {
     const bundle = await buildExampleApp("md-editor", { development: true });
-    const { result, stderr } = await runScenario({
+    const { result } = await runScenario({
       projectDir: temp.dir,
       bundle,
       profile: functionalProfile,
@@ -73,6 +59,7 @@ test(
       width: 960,
       height: 600,
       scale: 1,
+      forbidJsDiagnostics: true,
       requiredCapabilities: [...BASE_CAPS, "surface.multiple"],
       steps: [
         advance(40),
@@ -97,7 +84,6 @@ test(
       ],
     });
     assert.equal(result.teardown?.clean, true);
-    assertNoJsDiagnostics(stderr, "md-editor");
   },
 );
 
@@ -106,7 +92,7 @@ test(
   { timeout: 60000 },
   async () => {
     const bundle = await buildExampleApp("motion-lab", { development: true });
-    const { result, stderr } = await runScenario({
+    const { result } = await runScenario({
       projectDir: temp.dir,
       bundle,
       profile: functionalProfile,
@@ -116,6 +102,7 @@ test(
       width: 960,
       height: 600,
       scale: 1,
+      forbidJsDiagnostics: true,
       requiredCapabilities: BASE_CAPS,
       steps: [
         advance(40),
@@ -132,7 +119,6 @@ test(
       ],
     });
     assert.equal(result.teardown?.clean, true);
-    assertNoJsDiagnostics(stderr, "motion-lab");
   },
 );
 
@@ -141,7 +127,7 @@ test(
   { timeout: 60000 },
   async () => {
     const bundle = await buildExampleApp("workspace", { development: true });
-    const { result, stderr } = await runScenario({
+    const { result } = await runScenario({
       projectDir: temp.dir,
       bundle,
       profile: functionalProfile,
@@ -151,6 +137,7 @@ test(
       width: 1040,
       height: 640,
       scale: 1,
+      forbidJsDiagnostics: true,
       requiredCapabilities: BASE_CAPS,
       steps: [
         advance(40),
@@ -165,7 +152,40 @@ test(
       ],
     });
     assert.equal(result.teardown?.clean, true);
-    assertNoJsDiagnostics(stderr, "workspace");
+  },
+);
+
+test(
+  "gallery runs in development: true without reactive errors or warnings",
+  { timeout: 60000 },
+  async () => {
+    const bundle = await buildExampleApp("gallery", { development: true });
+    const { result } = await runScenario({
+      projectDir: temp.dir,
+      bundle,
+      profile: functionalProfile,
+      fixture: emptyFixture,
+      name: "gallery-dev",
+      id: "examples-dev-gallery",
+      width: 1120,
+      height: 760,
+      scale: 1,
+      forbidJsDiagnostics: true,
+      requiredCapabilities: BASE_CAPS,
+      steps: [
+        advance(40),
+        check("gallery-page", "exists", true),
+        check("section-atoms", "exists", true),
+        click("tab-composites"),
+        advance(40),
+        check("section-composites", "exists", true),
+        click("tab-workbench"),
+        advance(40),
+        check("section-workbench", "exists", true),
+        capture("gallery-dev-final"),
+      ],
+    });
+    assert.equal(result.teardown?.clean, true);
   },
 );
 
@@ -248,7 +268,7 @@ test(
       },
       events: [],
     });
-    const { result, stderr } = await runScenario({
+    const { result } = await runScenario({
       projectDir: temp.dir,
       bundle,
       profile: functionalProfile,
@@ -258,6 +278,7 @@ test(
       width: 1000,
       height: 640,
       scale: 1,
+      forbidJsDiagnostics: true,
       requiredCapabilities: [...BASE_CAPS, "services.fixtures"],
       steps: [
         advance(60),
@@ -273,6 +294,5 @@ test(
       ],
     });
     assert.equal(result.teardown?.clean, true);
-    assertNoJsDiagnostics(stderr, "sysmon");
   },
 );

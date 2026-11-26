@@ -34,6 +34,7 @@ function extractBacktickTokens(markdown) {
 test("llms.txt covers every @hewel/zgui/components, @hewel/zgui/primitives, @hewel/zgui, @hewel/zgui/shell-host, @hewel/zgui/router, and @hewel/zgui-services export", async () => {
   const [
     llms,
+    jsxRuntime,
     uiIndex,
     shellHostIndex,
     componentsIndex,
@@ -42,6 +43,7 @@ test("llms.txt covers every @hewel/zgui/components, @hewel/zgui/primitives, @hew
     servicesFiles,
   ] = await Promise.all([
     readFile(llmsPath, "utf8"),
+    readFile(path.join(workspaceRoot, "packages/ui/src/jsx-runtime.ts"), "utf8"),
     readFile(path.join(workspaceRoot, "packages/ui/src/index.ts"), "utf8"),
     readFile(path.join(workspaceRoot, "packages/ui/src/shell-host.ts"), "utf8"),
     readFile(path.join(workspaceRoot, "packages/ui/src/components/index.ts"), "utf8"),
@@ -55,6 +57,25 @@ test("llms.txt covers every @hewel/zgui/components, @hewel/zgui/primitives, @hew
       readFile(path.join(workspaceRoot, "packages/services/src/worker.ts"), "utf8"),
     ]),
   ]);
+
+  const intrinsicBlock = jsxRuntime.match(/interface IntrinsicElements\s*\{([^}]+)\}/s);
+  assert.ok(intrinsicBlock, "packages/ui/src/jsx-runtime.ts must declare IntrinsicElements");
+  const intrinsicTags = [...intrinsicBlock[1].matchAll(/^\s*([a-z][a-z0-9-]*)\s*:/gm)].map(
+    match => match[1],
+  );
+  const intrinsicLine = llms
+    .split("\n")
+    .find(line => line.startsWith("- **Intrinsic Native Elements**:"));
+  assert.ok(intrinsicLine, "llms.txt must have an Intrinsic Native Elements line");
+  const documentedTags = [
+    ...new Set([...intrinsicLine.matchAll(/`<([a-z][a-z0-9-]*)>`/g)].map(match => match[1])),
+  ];
+  assert.deepEqual(
+    documentedTags.sort(),
+    intrinsicTags.sort(),
+    "llms.txt Intrinsic Native Elements tags must match jsx-runtime.ts",
+  );
+  assert.match(llms, /\bdocumentSelection\b/, "llms.txt must document documentSelection prop");
 
   const documented = extractBacktickTokens(llms);
 

@@ -7,10 +7,10 @@ Workflow for headless visual verification, pixel inspection, and regression test
 
 ## 1. Environment & preflight
 
-- **Nix-based Linux hosts**: wrap every Cargo build and `zgui-host preview` / `bun test tests/preview/...` invocation in the `zgui-js` root devShell so `pkg-config`, native libraries (`libxkbcommon`, `fontconfig`, `freetype`, `vulkan-loader`, `wayland`), and Mesa Vulkan ICDs (`VK_DRIVER_FILES`) share the same glibc:
+- **Nix-only Linux hosts**: enter the `zgui-js` root [`shell.nix`](../../../shell.nix) once per session rather than wrapping every command in `nix-shell --run`, so `pkg-config`, native libraries (`libxkbcommon`, `fontconfig`, `freetype`, `vulkan-loader`, `wayland`), and Mesa Vulkan ICDs (`VK_DRIVER_FILES`) match. On standard Linux distros with native dev packages installed, run `cargo` and `zgui-host` directly:
   ```sh
-  nix-shell --run "cargo build --offline -p zgui-host"
-  nix-shell --run "target/debug/zgui-host preview doctor --profile preview/profiles/default.json"
+  cargo build --offline -p zgui-host
+  target/debug/zgui-host preview doctor --profile preview/profiles/default.json
   ```
 - **GPU vs CPU rendering**: when `/dev/dri/renderD128` is readable (`render` group), Vulkan uses hardware AMD/Intel RADV automatically; otherwise Mesa falls back to CPU `llvmpipe` (fully functional for pixel tests, slower on large surfaces).
 - **Preflight criterion**: `preview doctor` exits `0` with `"status": "passed"`, `"pixels": true`, and `"capture.transparent": true`.
@@ -27,14 +27,15 @@ Choose one of two workflows:
      - Keep profiles on `"clock": { "mode": "virtual", ... }` whenever driving timers, springs, animations, or deterministic captures; advance virtual time explicitly with `clock.advance`.
   3. **Run headless preview** (never overlap multiple `tests/preview/*.test.mjs` runs concurrently on `llvmpipe` or CPU contention will trip `E_WATCHDOG`):
      ```sh
-     nix-shell --run "target/debug/zgui-host preview run \
+     target/debug/zgui-host preview run \
        --bundle <dist-dir> \
        --profile <profile.json> \
        --fixture <fixture.json> \
        --scenario <scenario.json> \
-       --out <fresh-empty-dir>"
+       --out <fresh-empty-dir>
      ```
      - `--out` must target a non-existent or empty directory per run.
+     - When reproducing a `zgui-js dev` fault, pass `development: true` in `buildApplication`/`buildExampleApp` (or `forbidJsDiagnostics: true` in `tests/preview/harness.mjs` `runPreview`/`runScenario`) without injecting ad-hoc debug transforms.
   4. **Inspect evidence**:
      - Check `<out>/result.json`: `status === "passed"`, `exitCode === 0`, `firstError === null`, `assertions.failed === 0`, and `teardown.clean === true`.
      - On unexpected test failure, `tests/preview/harness.mjs` automatically retains the output directory and prints its path alongside `firstError` (`E_WATCHDOG` includes `lastCompletedStep` / `inFlightStep` progress details).
@@ -54,11 +55,11 @@ Choose one of two workflows:
 ## 4. Visual baseline comparison (`preview compare`)
 
 ```sh
-nix-shell --run "target/debug/zgui-host preview compare \
+target/debug/zgui-host preview compare \
   --baseline <baseline-dir> \
   --actual <run-dir> \
   --policy preview/comparison/strict.json \
-  --out <diff-dir>"
+  --out <diff-dir>
 ```
 
 - Strict comparison validates compatibility before pixel diffing: physical extent, scale, font config, `renderer.adapter`/`driver`, `renderer.alphaMode`, `Cargo.lock` digest, and profile/scenario/fixture digests must match.

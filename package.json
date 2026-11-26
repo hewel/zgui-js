@@ -20,7 +20,7 @@
     "bun": ">=1.4.4"
   },
   "scripts": {
-    "prepare": "bun tools/build-packages.ts --quiet",
+    "prepare": "git config core.hooksPath .githooks 2>/dev/null || true; bun tools/build-packages.ts --quiet",
     "build:packages": "bun tools/build-packages.ts",
     "release:check": "bun tools/release.ts check",
     "release:version": "bun tools/release.ts version",

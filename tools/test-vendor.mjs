@@ -76,11 +76,7 @@ const SUITES = [
   },
   {
     crate: "zgui-runtime",
-    args: ["--lib", "images::input::tests"],
-  },
-  {
-    crate: "zgui-runtime",
-    args: ["--lib", "timer::tests"],
+    args: ["--lib"],
   },
   {
     crate: "zgui-platform",
@@ -88,19 +84,7 @@ const SUITES = [
   },
   {
     crate: "zgui-platform-wayland",
-    args: ["--lib", "theme"],
-  },
-  {
-    crate: "zgui-platform-wayland",
-    args: ["--lib", "clipboard"],
-  },
-  {
-    crate: "zgui-platform-wayland",
-    args: ["--lib", "input::dnd"],
-  },
-  {
-    crate: "zgui-platform-wayland",
-    args: ["--lib", "surface::seat"],
+    args: ["--lib"],
   },
   {
     crate: "zgui-platform-wayland",
