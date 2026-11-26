@@ -31,6 +31,7 @@
     "zgui/no-top-level-service-call": "error",
     "zgui/no-solid-web-imports": "error",
     "zgui/no-lint-suppression": "error",
-    "zgui/no-getter-object-spread": "error"
+    "zgui/no-getter-object-spread": "error",
+    "zgui/no-static-component-stylesheet": "error"
   }
 }

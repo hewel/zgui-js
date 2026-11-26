@@ -127,7 +127,7 @@ function Form() {
             </row>
             <row class="form-row">
               <Spinner testId="spinner" />
-              <Skeleton testId="skeleton" style={{ width: "80px", height: "16px" }} />
+              <Skeleton testId="skeleton" class="form-skeleton" />
             </row>
           </column>
         </row>

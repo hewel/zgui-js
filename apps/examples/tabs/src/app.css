@@ -57,3 +57,6 @@
 .tabs-hint {
   color: var(--zui-color-muted-foreground);
 }
+.tabs-stack {
+  gap: 12px;
+}

@@ -76,7 +76,7 @@ export function MenusSection(props: { onAction: (label: string) => void }) {
             <DropdownMenuTrigger testId="menus-dropdown-trigger" variant="outline">
               Account menu
             </DropdownMenuTrigger>
-            <DropdownMenuContent testId="menus-dropdown-content" style="width: 220px">
+            <DropdownMenuContent testId="menus-dropdown-content" class="menu-w-220">
               <MenuLabel>Signed in as ada</MenuLabel>
               <MenuSeparator />
               <MenuGroup>
@@ -115,7 +115,7 @@ export function MenusSection(props: { onAction: (label: string) => void }) {
               <MenuSeparator />
               <MenuSub>
                 <MenuSubTrigger>Export</MenuSubTrigger>
-                <MenuSubContent style="width: 170px">
+                <MenuSubContent class="menu-w-170">
                   <MenuItem onSelect={() => props.onAction("Export: PNG")}>PNG snapshot</MenuItem>
                   <MenuItem onSelect={() => props.onAction("Export: JSON")}>Tree JSON</MenuItem>
                 </MenuSubContent>
@@ -148,7 +148,7 @@ export function MenusSection(props: { onAction: (label: string) => void }) {
               }}
             >
               <column class="dashed-frame">
-                <text style={{ "font-weight": "600" }}>Right-click or long-press here</text>
+                <text class="demo-strong">Right-click or long-press here</text>
                 <text class="muted-caption">Opens anchored at the pointer coordinate</text>
               </column>
             </ContextMenuTrigger>
@@ -159,7 +159,7 @@ export function MenusSection(props: { onAction: (label: string) => void }) {
               </Badge>
             </row>
           </column>
-          <ContextMenuContent testId="menus-context-content" style="width: 210px">
+          <ContextMenuContent testId="menus-context-content" class="menu-w-210">
             <MenuItem shortcut="Ctrl+V" onSelect={() => props.onAction("Context: Paste")}>
               Paste node
             </MenuItem>
@@ -175,7 +175,7 @@ export function MenusSection(props: { onAction: (label: string) => void }) {
             </MenuCheckboxItem>
             <MenuSub>
               <MenuSubTrigger>Inspect</MenuSubTrigger>
-              <MenuSubContent style="width: 165px">
+              <MenuSubContent class="menu-w-165">
                 <MenuItem onSelect={() => props.onAction("Inspect: Bounds")}>Bounds</MenuItem>
                 <MenuItem onSelect={() => props.onAction("Inspect: Styles")}>Styles</MenuItem>
               </MenuSubContent>
@@ -207,7 +207,7 @@ export function MenusSection(props: { onAction: (label: string) => void }) {
                 <MenubarSeparator />
                 <MenuSub>
                   <MenuSubTrigger>Export as</MenuSubTrigger>
-                  <MenuSubContent style="width: 170px">
+                  <MenuSubContent class="menu-w-170">
                     <MenuItem onSelect={() => props.onAction("Editor: PDF")}>PDF</MenuItem>
                     <MenuItem onSelect={() => props.onAction("Editor: SVG")}>SVG</MenuItem>
                   </MenuSubContent>

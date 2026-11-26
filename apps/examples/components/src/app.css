@@ -24,3 +24,8 @@
 .application-override {
   color: #c02030;
 }
+
+.gallery-aspect {
+  width: 120px;
+  background: #314665;
+}

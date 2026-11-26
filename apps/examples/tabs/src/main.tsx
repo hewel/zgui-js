@@ -162,7 +162,7 @@ function Panel() {
                   </TabsTrigger>
                 </TabsList>
                 <TabsContent testId="manual-panel-overview" value="overview">
-                  <column style={{ gap: "12px" }}>
+                  <column class="tabs-stack">
                     <text testId="overview-body">
                       Move focus first. Press Enter or Space to open a panel.
                     </text>

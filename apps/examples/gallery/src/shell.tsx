@@ -95,7 +95,7 @@ export function Masthead(props: {
           <DropdownMenuTrigger testId="preset-trigger" size="sm" variant="outline">
             <text>{`Preset: ${PRESET_LABELS[props.preset()]}`}</text>
           </DropdownMenuTrigger>
-          <DropdownMenuContent testId="preset-menu" style="width: 180px">
+          <DropdownMenuContent testId="preset-menu" class="preset-menu">
             <MenuLabel>Theme preset</MenuLabel>
             <MenuSeparator />
             <MenuRadioGroup

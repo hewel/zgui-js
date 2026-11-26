@@ -210,6 +210,27 @@ const negativeCases = [
     expected: /typescript\(await-thenable\)/,
     guidance: /not Promise-like|non-Promise/,
   },
+  {
+    name: "zgui/no-static-component-stylesheet (named inside component)",
+    file: "static-sheet-named.tsx",
+    code: 'import { mountStylesheet } from "@hewel/zgui";\nexport function App() { mountStylesheet("a", ".x { gap: 4px; }"); return <box />; }\n',
+    expected: /zgui\(no-static-component-stylesheet\)/,
+    guidance: /\*\.module\.css.*StyleDependencies.*Stylist/,
+  },
+  {
+    name: "zgui/no-static-component-stylesheet (aliased + const binding)",
+    file: "static-sheet-alias.tsx",
+    code: 'import { mountStylesheet as install } from "@hewel/zgui";\nexport function App() { const css = `.x { gap: 4px; }`; install("a", css as string); return <box />; }\n',
+    expected: /zgui\(no-static-component-stylesheet\)/,
+    guidance: /src\/app\.css/,
+  },
+  {
+    name: "zgui/no-static-component-stylesheet (namespace mountShellStylesheet)",
+    file: "static-sheet-ns.tsx",
+    code: 'import * as zgui from "@hewel/zgui";\nexport function App() { zgui.mountShellStylesheet("a", ":root { padding: 0; }"); return <box />; }\n',
+    expected: /zgui\(no-static-component-stylesheet\)/,
+    guidance: /Stylist/,
+  },
 ];
 
 test("oxlint rules reject architectural violations with actionable teaching messages", async t => {
@@ -305,6 +326,191 @@ export const View = () => {
   assert.match(badOutput, /zgui\(no-top-level-service-call\)/);
   assert.match(badOutput, /zgui\(no-cleanup-in-ref\)/);
   assert.match(badOutput, /zgui\(no-getter-object-spread\)/);
+});
+
+test("exported @hewel/zgui/oxlint/strict preset enforces prefer-stylesheet without false positives", async t => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "zgui-strict-lint-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const strictConfig = path.join(dir, ".oxlintrc.json");
+  await writeFile(
+    strictConfig,
+    JSON.stringify({
+      extends: [path.join(workspaceRoot, "packages/ui/oxlint/strict.json")],
+    }),
+    "utf8",
+  );
+
+  // Positive fixture: dynamic motion, ratios, progress, custom props, and non-zgui components pass.
+  const goodFile = path.join(dir, "good-strict.tsx");
+  await writeFile(
+    goodFile,
+    `import { createSignal, mountShellStylesheet, mountStylesheet } from "@hewel/zgui";
+import * as zguiNs from "@hewel/zgui";
+import { Button as ZButton } from "@hewel/zgui/components";
+
+mountStylesheet("app-static", ".card { padding: 8px; }");
+mountShellStylesheet("shell-static", ":root { margin: 0; }");
+zguiNs.mountStylesheet("ns-static", ".ns { gap: 4px; }");
+
+function Bar(props: { style?: string }) {
+  return <box data-kind={props.style} />;
+}
+
+export function GoodView(props: {
+  style?: Record<string, string>;
+  display?: string;
+  spring: () => string;
+  ratio: () => number;
+  pct: () => number;
+  canvasW: () => number;
+  canvasH: () => number;
+  measured: () => number;
+  ready: () => boolean;
+  hidden: () => boolean;
+  tone: () => string;
+}) {
+  const [color] = createSignal("#fff");
+  const mountDynamic = () => {
+    mountStylesheet("dyn", \`.dyn { color: \${color()}; }\`);
+  };
+  const shadowedFn = (mountStylesheet: (n: string, c: string) => void) => {
+    mountStylesheet("local", ".x { gap: 4px; }");
+  };
+  const shadowedNs = (zguiNs: { mountStylesheet: (n: string, c: string) => void }) => {
+    zguiNs.mountStylesheet("local", ".y { gap: 4px; }");
+  };
+  const Button = (p: { style?: string }) => <box data-s={p.style} />;
+  const mutated = { width: "100px" };
+  mutated.width = \`\${props.canvasW()}px\`;
+  let mutableStr = "gap: 4px";
+  mutableStr = "gap: 8px";
+  void mountDynamic;
+  void shadowedFn;
+  void shadowedNs;
+
+  return (
+    <column style={props.style}>
+      <box style={{ transform: props.spring(), opacity: props.ratio() }} />
+      <box style={{ flexGrow: props.ratio(), width: \`\${props.pct()}%\` }} />
+      <box style={{ width: \`\${props.canvasW()}px\`, height: \`\${props.canvasH()}px\` }} />
+      <box style={{ "--progress": props.pct(), "--tone": props.tone() }} />
+      <box style={{ "--tone": "accent", "--progress": props.pct() }} />
+      <box style={{ width: props.ready() ? \`\${props.measured()}px\` : "0px" }} />
+      <box style={{ display: props.hidden() ? "none" : props.display }} />
+      <box style={null} />
+      <box style={{ width: null, height: undefined }} />
+      <box style={{ width: undefined, transform: props.spring() }} />
+      <box style={{ ...props.style }} />
+      <box style={mutated} />
+      <box style={mutableStr} />
+      <Bar style="floating" />
+      <Button style="width: 120px" />
+      <ZButton style={{ transform: props.spring() }}>Go</ZButton>
+    </column>
+  );
+}
+`,
+    "utf8",
+  );
+  const goodResult = await execFileAsync(
+    process.execPath,
+    [oxlintBin, "--deny-warnings", "-c", strictConfig, goodFile],
+    { cwd: dir, encoding: "utf8" },
+  );
+  assert.ok(goodResult.stdout.includes("Found 0 warnings and 0 errors"), goodResult.stdout);
+
+  // Negative cases: each strict violation triggers prefer-stylesheet or no-static-component-stylesheet.
+  const strictNegativeCases = [
+    {
+      name: "static string literal",
+      file: "neg-str.tsx",
+      code: 'export const V = () => <box style="width: 220px" />;\n',
+      expected: /zgui\(prefer-stylesheet\)/,
+      guidance: /\*\.module\.css/,
+    },
+    {
+      name: "static template and const string",
+      file: "neg-const-str.tsx",
+      code: "const css = `gap: 8px`;\nexport const V = () => <row style={css} />;\n",
+      expected: /zgui\(prefer-stylesheet\)/,
+      guidance: /src\/app\.css/,
+    },
+    {
+      name: "purely static object with spread and unary minus",
+      file: "neg-obj.tsx",
+      code: 'const base = { padding: "8px" };\nexport const V = () => <box style={{ ...base, zIndex: -1 }} />;\n',
+      expected: /zgui\(prefer-stylesheet\)/,
+      guidance: /padding, zIndex/,
+    },
+    {
+      name: "top-level conditional static object",
+      file: "neg-top-cond.tsx",
+      code: 'export const V = (open: () => boolean) => <box style={open() ? { display: "flex" } : null} />;\n',
+      expected: /zgui\(prefer-stylesheet\)/,
+      guidance: /display/,
+    },
+    {
+      name: "zgui component named, aliased, primitive, and namespace imports",
+      file: "neg-imports.tsx",
+      code: `import { WindowSurface as Win } from "@hewel/zgui";
+import * as UI from "@hewel/zgui/components";
+import { Trigger } from "@hewel/zgui/primitives";
+export const V = () => (
+  <>
+    <Win style="gap: 4px" />
+    <UI.Button style={{ width: "100px" }} />
+    <Trigger style={{ padding: "4px" }} />
+  </>
+);
+`,
+      expected: /zgui\(prefer-stylesheet\)/,
+      guidance: /Found 0 warnings and 3 errors/,
+    },
+    {
+      name: "mixed object reports static ordinary and --zgui-* properties only",
+      file: "neg-mixed.tsx",
+      code: 'export const V = (spring: () => string) => <box style={{ gap: "8px", "--zgui-ring": "2px", "--tone": "ok", transform: spring() }} />;\n',
+      expected: /zgui\(prefer-stylesheet\)/,
+      guidance: /gap, --zgui-ring/,
+    },
+    {
+      name: "finite static conditional on ordinary CSS property",
+      file: "neg-cond-prop.tsx",
+      code: 'export const V = (active: () => boolean) => <text style={{ color: active() ? "var(--a)" : "var(--b)" }}>hi</text>;\n',
+      expected: /zgui\(prefer-stylesheet\)/,
+      guidance: /class=\{cx\(\.\.\.\)\} or \[data-\*\]/,
+    },
+    {
+      name: "static stylesheet in component via strict preset",
+      file: "neg-sheet.tsx",
+      code: 'import { mountStylesheet } from "@hewel/zgui";\nexport const V = () => { mountStylesheet("s", ".a{}"); return <box />; };\n',
+      expected: /zgui\(no-static-component-stylesheet\)/,
+      guidance: /StyleDependencies/,
+    },
+  ];
+
+  for (const item of strictNegativeCases) {
+    const file = path.join(dir, item.file);
+    await writeFile(file, item.code, "utf8");
+    let output = "";
+    let status = 0;
+    try {
+      await execFileAsync(
+        process.execPath,
+        [oxlintBin, "--deny-warnings", "-c", strictConfig, file],
+        {
+          cwd: dir,
+          encoding: "utf8",
+        },
+      );
+    } catch (error) {
+      status = error.code ?? 1;
+      output = `${error.stdout ?? ""}\n${error.stderr ?? ""}`;
+    }
+    assert.notEqual(status, 0, `${item.name} should fail strict lint`);
+    assert.match(output, item.expected, item.name);
+    assert.match(output, item.guidance, item.name);
+  }
 });
 
 test("oxfmt checks and formats files with repository configuration", async t => {

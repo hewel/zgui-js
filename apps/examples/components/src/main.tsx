@@ -115,11 +115,7 @@ function Gallery() {
               <Kbd>Ctrl</Kbd>
               <Kbd>K</Kbd>
             </KbdGroup>
-            <AspectRatio
-              ratio={16 / 9}
-              style={{ width: "120px", background: "#314665" }}
-              testId="aspect"
-            />
+            <AspectRatio ratio={16 / 9} class="gallery-aspect" testId="aspect" />
           </row>
           <ThemeProvider light={{ preset: "ocean" }} dark={{ preset: "ocean" }}>
             <row class="gallery-row" testId="nested-theme">

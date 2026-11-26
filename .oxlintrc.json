@@ -89,6 +89,12 @@
       }
     },
     {
+      "files": ["tests/preview/fixtures/**"],
+      "rules": {
+        "zgui/no-static-component-stylesheet": "off"
+      }
+    },
+    {
       "files": ["tests/build/**", "tests/preview/*.mjs", "tests/native-controls/**"],
       "rules": {
         "zgui/no-direct-bridge": "off",
@@ -111,6 +117,25 @@
         "no-restricted-globals": "off",
         "no-unused-vars": "off",
         "no-unassigned-vars": "off"
+      }
+    },
+    {
+      "files": [
+        "packages/ui/src/**",
+        "packages/services/src/**",
+        "apps/devtools/**",
+        "apps/examples/components/**",
+        "apps/examples/composition/**",
+        "apps/examples/controls/**",
+        "apps/examples/css-modules/**",
+        "apps/examples/editing/**",
+        "apps/examples/gallery/**",
+        "apps/examples/lists/**",
+        "apps/examples/selection/**",
+        "apps/examples/tabs/**"
+      ],
+      "rules": {
+        "zgui/prefer-stylesheet": "error"
       }
     }
   ]

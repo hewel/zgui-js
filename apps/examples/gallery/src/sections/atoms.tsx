@@ -109,7 +109,7 @@ export function AtomsSection(props: { onAction: (label: string) => void }) {
           <column class="demo-stack">
             <text>Upper group</text>
             <Separator />
-            <row style={{ height: "20px", "align-items": "center", gap: "10px" }}>
+            <row class="atoms-separator-row">
               <text>Overview</text>
               <Separator orientation="vertical" />
               <text>Tokens</text>

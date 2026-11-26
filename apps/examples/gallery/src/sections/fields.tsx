@@ -91,7 +91,7 @@ export function FieldsSection(props: { onAction: (label: string) => void }) {
         <column class="demo-stack">
           <text class="demo-row-label">Static suffix & invalid state toggle</text>
           <row class="demo-items">
-            <box style={{ "flex-grow": "1", "min-width": "200px" }}>
+            <box class="demo-grow">
               <InputGroup invalid={invalidGroup()}>
                 <InputGroupInput defaultValue="zgui-js" label="Repository name" />
                 <InputGroupAddon align="inline-end">

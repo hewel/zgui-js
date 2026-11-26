@@ -2,6 +2,26 @@ const UNTHEMED_PRIMITIVES = new Set(["Button", "TextField", "TextArea"]);
 const SUPPRESSION_PATTERN = /\b(?:oxlint|eslint)-disable(?:-next-line|-line)?\b/;
 const INTERNAL_PACKAGE_SRC = /(?:^|\/)packages\/[^/]+\/src(?:\/|$)/;
 const MAX_COMMENT_LINES = 6;
+const NATIVE_JSX_TAGS = new Set([
+  "box",
+  "row",
+  "column",
+  "stack",
+  "text",
+  "label",
+  "scroll",
+  "control",
+  "field",
+  "editor",
+  "image",
+  "vector",
+]);
+const ZGUI_COMPONENT_SOURCES = new Set([
+  "@hewel/zgui",
+  "@hewel/zgui/components",
+  "@hewel/zgui/primitives",
+]);
+const STATIC_STYLESHEET_HELPERS = new Set(["mountStylesheet", "mountShellStylesheet"]);
 
 const OWNER_CLEANUP_HELPERS = new Set([
   "observeGeometry",
@@ -186,6 +206,538 @@ function findObjectGetterInSpread(expr) {
     default:
       return null;
   }
+}
+
+function unwrapExpr(expr) {
+  let cur = expr;
+  while (
+    cur &&
+    (cur.type === "ParenthesizedExpression" ||
+      cur.type === "TSAsExpression" ||
+      cur.type === "TSSatisfiesExpression" ||
+      cur.type === "TSTypeAssertion" ||
+      cur.type === "TSNonNullExpression")
+  ) {
+    cur = cur.expression;
+  }
+  return cur;
+}
+
+function createScope(parent, isFunctionScope) {
+  return { parent, isFunctionScope, bindings: new Map() };
+}
+
+function resolveBinding(scope, name) {
+  for (let cur = scope; cur; cur = cur.parent) {
+    const binding = cur.bindings.get(name);
+    if (binding) return binding;
+  }
+  return null;
+}
+
+function collectPatternNames(pattern, out = []) {
+  if (!pattern) return out;
+  switch (pattern.type) {
+    case "Identifier":
+      out.push(pattern.name);
+      break;
+    case "RestElement":
+      collectPatternNames(pattern.argument, out);
+      break;
+    case "AssignmentPattern":
+      collectPatternNames(pattern.left, out);
+      break;
+    case "ArrayPattern":
+      for (const elem of pattern.elements ?? []) collectPatternNames(elem, out);
+      break;
+    case "ObjectPattern":
+      for (const prop of pattern.properties ?? []) {
+        if (prop.type === "Property") collectPatternNames(prop.value, out);
+        else if (prop.type === "RestElement") collectPatternNames(prop.argument, out);
+      }
+      break;
+  }
+  return out;
+}
+
+function bindPatternNames(pattern, scope) {
+  for (const name of collectPatternNames(pattern)) {
+    scope.bindings.set(name, { kind: "other", scope, mutated: false });
+  }
+}
+
+function registerVariableDecl(decl, scope, varScope) {
+  if (decl.declare) return;
+  const target = decl.kind === "var" ? varScope : scope;
+  for (const item of decl.declarations ?? []) {
+    if (decl.kind === "const" && item.id?.type === "Identifier") {
+      target.bindings.set(item.id.name, {
+        kind: "const",
+        init: item.init ?? null,
+        scope: target,
+        mutated: false,
+      });
+    } else {
+      bindPatternNames(item.id, target);
+    }
+  }
+}
+
+function hoistStatementDecl(stmt, scope, varScope) {
+  if (!stmt) return;
+  if (stmt.type === "ImportDeclaration") {
+    if (stmt.importKind === "type" || typeof stmt.source?.value !== "string") return;
+    const source = stmt.source.value;
+    for (const spec of stmt.specifiers ?? []) {
+      if (spec.importKind === "type") continue;
+      if (spec.type === "ImportSpecifier") {
+        scope.bindings.set(spec.local.name, {
+          kind: "import",
+          source,
+          imported: importedName(spec),
+          scope,
+          mutated: false,
+        });
+      } else if (spec.type === "ImportNamespaceSpecifier") {
+        scope.bindings.set(spec.local.name, {
+          kind: "namespace",
+          source,
+          imported: "*",
+          scope,
+          mutated: false,
+        });
+      } else if (spec.type === "ImportDefaultSpecifier") {
+        scope.bindings.set(spec.local.name, { kind: "other", scope, mutated: false });
+      }
+    }
+    return;
+  }
+  if (stmt.type === "ExportNamedDeclaration" || stmt.type === "ExportDefaultDeclaration") {
+    if (stmt.exportKind !== "type" && stmt.declaration) {
+      hoistStatementDecl(stmt.declaration, scope, varScope);
+    }
+    return;
+  }
+  if (stmt.type === "VariableDeclaration") {
+    registerVariableDecl(stmt, scope, varScope);
+    return;
+  }
+  if (
+    (stmt.type === "FunctionDeclaration" ||
+      stmt.type === "ClassDeclaration" ||
+      stmt.type === "TSEnumDeclaration") &&
+    !stmt.declare &&
+    stmt.id?.type === "Identifier"
+  ) {
+    scope.bindings.set(stmt.id.name, { kind: "other", scope, mutated: false });
+  }
+}
+
+function rootMutatedIdentifier(expr) {
+  const inner = unwrapExpr(expr);
+  if (!inner) return null;
+  if (inner.type === "Identifier") return inner.name;
+  if (inner.type === "MemberExpression") return rootMutatedIdentifier(inner.object);
+  return null;
+}
+
+function markMutated(expr, scope) {
+  const name = rootMutatedIdentifier(expr);
+  if (!name) return;
+  const binding = resolveBinding(scope, name);
+  if (binding) binding.mutated = true;
+}
+
+const RUNTIME_TS_EXPR_TYPES = new Set([
+  "TSAsExpression",
+  "TSSatisfiesExpression",
+  "TSTypeAssertion",
+  "TSNonNullExpression",
+  "TSEnumDeclaration",
+  "TSExportAssignment",
+  "TSParameterProperty",
+]);
+
+function buildScopeIndex(program) {
+  const nodeScope = new WeakMap();
+  const rootScope = createScope(null, true);
+
+  function walkChildren(node, scope, varScope) {
+    for (const key of Object.keys(node)) {
+      if (key === "parent" || key === "loc" || key === "range") continue;
+      if (key === "typeAnnotation" || key === "typeParameters" || key === "returnType") continue;
+      const value = node[key];
+      if (!value || typeof value !== "object") continue;
+      if (Array.isArray(value)) {
+        for (const item of value) {
+          if (item && typeof item.type === "string") walk(item, scope, varScope);
+        }
+      } else if (typeof value.type === "string") {
+        walk(value, scope, varScope);
+      }
+    }
+  }
+
+  function walkFunction(node, scope) {
+    const fnScope = createScope(scope, true);
+    if (node.type === "FunctionExpression" && node.id?.type === "Identifier") {
+      fnScope.bindings.set(node.id.name, { kind: "other", scope: fnScope, mutated: false });
+    }
+    for (const param of node.params ?? []) {
+      const target = param.type === "TSParameterProperty" ? param.parameter : param;
+      bindPatternNames(target, fnScope);
+      walk(param, fnScope, fnScope);
+    }
+    if (node.body) walk(node.body, fnScope, fnScope);
+  }
+
+  function walk(node, scope, varScope) {
+    if (!node || typeof node.type !== "string") return;
+    if (node.type.startsWith("TS") && !RUNTIME_TS_EXPR_TYPES.has(node.type)) return;
+    nodeScope.set(node, scope);
+
+    switch (node.type) {
+      case "Program":
+        for (const stmt of node.body ?? []) hoistStatementDecl(stmt, rootScope, rootScope);
+        for (const stmt of node.body ?? []) walk(stmt, rootScope, rootScope);
+        return;
+      case "ImportDeclaration":
+        return;
+      case "VariableDeclaration":
+        registerVariableDecl(node, scope, varScope);
+        walkChildren(node, scope, varScope);
+        return;
+      case "FunctionDeclaration":
+        if (!node.declare) walkFunction(node, scope);
+        return;
+      case "FunctionExpression":
+      case "ArrowFunctionExpression":
+        walkFunction(node, scope);
+        return;
+      case "BlockStatement": {
+        const blockScope = createScope(scope, false);
+        for (const stmt of node.body ?? []) hoistStatementDecl(stmt, blockScope, varScope);
+        for (const stmt of node.body ?? []) walk(stmt, blockScope, varScope);
+        return;
+      }
+      case "ForStatement":
+      case "ForInStatement":
+      case "ForOfStatement": {
+        const loopScope = createScope(scope, false);
+        const head = node.init ?? node.left;
+        if (head?.type === "VariableDeclaration") registerVariableDecl(head, loopScope, varScope);
+        walkChildren(node, loopScope, varScope);
+        return;
+      }
+      case "CatchClause": {
+        const catchScope = createScope(scope, false);
+        if (node.param) bindPatternNames(node.param, catchScope);
+        if (node.body) walk(node.body, catchScope, varScope);
+        return;
+      }
+      case "SwitchStatement": {
+        if (node.discriminant) walk(node.discriminant, scope, varScope);
+        const switchScope = createScope(scope, false);
+        for (const c of node.cases ?? []) {
+          for (const stmt of c.consequent ?? []) hoistStatementDecl(stmt, switchScope, varScope);
+        }
+        for (const c of node.cases ?? []) walk(c, switchScope, varScope);
+        return;
+      }
+      case "StaticBlock": {
+        const staticScope = createScope(scope, true);
+        for (const stmt of node.body ?? []) hoistStatementDecl(stmt, staticScope, staticScope);
+        for (const stmt of node.body ?? []) walk(stmt, staticScope, staticScope);
+        return;
+      }
+      case "ClassExpression": {
+        if (node.superClass) walk(node.superClass, scope, varScope);
+        const classScope = createScope(scope, false);
+        if (node.id?.type === "Identifier") {
+          classScope.bindings.set(node.id.name, {
+            kind: "other",
+            scope: classScope,
+            mutated: false,
+          });
+        }
+        if (node.body) walk(node.body, classScope, varScope);
+        return;
+      }
+      case "AssignmentExpression":
+        markMutated(node.left, scope);
+        walkChildren(node, scope, varScope);
+        return;
+      case "UpdateExpression":
+        markMutated(node.argument, scope);
+        walkChildren(node, scope, varScope);
+        return;
+      case "UnaryExpression":
+        if (node.operator === "delete") markMutated(node.argument, scope);
+        walkChildren(node, scope, varScope);
+        return;
+      case "CallExpression":
+        if (
+          node.callee.type === "MemberExpression" &&
+          !node.callee.computed &&
+          node.callee.object.type === "Identifier" &&
+          node.callee.object.name === "Object" &&
+          node.callee.property.type === "Identifier" &&
+          node.callee.property.name === "assign" &&
+          node.arguments.length > 0
+        ) {
+          markMutated(node.arguments[0], scope);
+        }
+        walkChildren(node, scope, varScope);
+        return;
+      default:
+        walkChildren(node, scope, varScope);
+    }
+  }
+
+  walk(program, rootScope, rootScope);
+  return { getScope: node => nodeScope.get(node) ?? rootScope };
+}
+
+function resolveConstExpr(expr, scope, visited = new Set()) {
+  const inner = unwrapExpr(expr);
+  if (!inner) return { expr: null, scope };
+  if (inner.type === "Identifier") {
+    const binding = resolveBinding(scope, inner.name);
+    if (binding?.kind === "const" && !binding.mutated && binding.init && !visited.has(binding)) {
+      const next = new Set(visited);
+      next.add(binding);
+      return resolveConstExpr(binding.init, binding.scope, next);
+    }
+  }
+  return { expr: inner, scope };
+}
+
+function isNullishLiteral(expr, scope) {
+  if (!expr) return false;
+  if (expr.type === "Literal") return expr.value === null;
+  return (
+    expr.type === "Identifier" && expr.name === "undefined" && !resolveBinding(scope, "undefined")
+  );
+}
+
+function extractStaticString(expr, scope, visited = new Set()) {
+  const { expr: node } = resolveConstExpr(expr, scope, visited);
+  if (!node) return null;
+  if (node.type === "Literal" && typeof node.value === "string") return node.value;
+  if (node.type === "TemplateLiteral" && node.expressions.length === 0) {
+    return node.quasis[0]?.value?.cooked ?? node.quasis[0]?.value?.raw ?? "";
+  }
+  return null;
+}
+
+function extractStaticNumber(expr, scope, visited = new Set()) {
+  const { expr: node } = resolveConstExpr(expr, scope, visited);
+  if (!node) return null;
+  if (node.type === "Literal" && typeof node.value === "number") return node.value;
+  if (node.type === "UnaryExpression" && node.operator === "-") {
+    const arg = unwrapExpr(node.argument);
+    if (arg?.type === "Literal" && typeof arg.value === "number") return -arg.value;
+  }
+  return null;
+}
+
+function extractStaticPrimitive(expr, scope, visited = new Set()) {
+  const str = extractStaticString(expr, scope, visited);
+  if (str !== null) return str;
+  return extractStaticNumber(expr, scope, visited);
+}
+
+function isFiniteStaticConditional(expr, scope, visited = new Set()) {
+  const { expr: inner, scope: innerScope } = resolveConstExpr(expr, scope, visited);
+  if (!inner || inner.type !== "ConditionalExpression") return false;
+  const checkBranch = (branch, branchScope) => {
+    const { expr: b, scope: bScope } = resolveConstExpr(branch, branchScope, visited);
+    if (!b) return false;
+    if (b.type === "ConditionalExpression") {
+      return checkBranch(b.consequent, bScope) && checkBranch(b.alternate, bScope);
+    }
+    const str = extractStaticString(b, bScope, visited);
+    if (str !== null) return str.trim().length > 0;
+    return extractStaticNumber(b, bScope, visited) !== null;
+  };
+  return checkBranch(inner.consequent, innerScope) && checkBranch(inner.alternate, innerScope);
+}
+
+function normalizeStyleKey(rawKey) {
+  if (rawKey.startsWith("--")) return rawKey;
+  return rawKey.replace(/[A-Z]/g, ch => `-${ch.toLowerCase()}`);
+}
+
+function analyzeStyleObject(objNode, objScope, seenObjects = new Set()) {
+  const entries = new Map();
+  let hasDynamic = false;
+  let hasUnknownSpread = false;
+
+  for (const prop of objNode.properties ?? []) {
+    if (prop.type === "SpreadElement") {
+      const { expr: arg, scope: argScope } = resolveConstExpr(prop.argument, objScope);
+      if (arg?.type === "ObjectExpression" && !seenObjects.has(arg)) {
+        const nextSeen = new Set(seenObjects);
+        nextSeen.add(arg);
+        const sub = analyzeStyleObject(arg, argScope, nextSeen);
+        for (const [k, v] of sub.entries) entries.set(k, v);
+        if (sub.hasDynamic) hasDynamic = true;
+        if (sub.hasUnknownSpread) hasUnknownSpread = true;
+      } else if (!isNullishLiteral(arg, argScope)) {
+        hasUnknownSpread = true;
+      }
+      continue;
+    }
+    if (prop.type !== "Property") continue;
+
+    let rawKey = null;
+    if (prop.computed) {
+      rawKey = extractStaticString(prop.key, objScope);
+    } else if (prop.key?.type === "Identifier") {
+      rawKey = prop.key.name;
+    } else if (prop.key?.type === "Literal") {
+      rawKey = String(prop.key.value);
+    }
+    if (rawKey === null) {
+      hasDynamic = true;
+      continue;
+    }
+
+    const normalizedKey = normalizeStyleKey(rawKey);
+    if (prop.kind !== "init") {
+      entries.set(normalizedKey, { kind: "dynamic", key: rawKey, normalizedKey });
+      hasDynamic = true;
+      continue;
+    }
+
+    const { expr: valExpr, scope: valScope } = resolveConstExpr(prop.value, objScope);
+    if (isNullishLiteral(valExpr, valScope)) {
+      entries.set(normalizedKey, { kind: "nullish", key: rawKey, normalizedKey });
+    } else if (extractStaticPrimitive(prop.value, objScope) !== null) {
+      entries.set(normalizedKey, { kind: "static", key: rawKey, normalizedKey });
+    } else if (!normalizedKey.startsWith("--") && isFiniteStaticConditional(valExpr, valScope)) {
+      entries.set(normalizedKey, { kind: "conditional-static", key: rawKey, normalizedKey });
+    } else {
+      entries.set(normalizedKey, { kind: "dynamic", key: rawKey, normalizedKey });
+      hasDynamic = true;
+    }
+  }
+  return { entries, hasDynamic, hasUnknownSpread };
+}
+
+function collectTopLevelConditionalObjects(expr, scope) {
+  const leaves = [];
+  const visit = (curExpr, curScope) => {
+    const { expr: resolved, scope: resolvedScope } = resolveConstExpr(curExpr, curScope);
+    if (!resolved) return false;
+    if (resolved.type === "ConditionalExpression") {
+      return visit(resolved.consequent, resolvedScope) && visit(resolved.alternate, resolvedScope);
+    }
+    if (isNullishLiteral(resolved, resolvedScope)) {
+      leaves.push({ kind: "nullish" });
+      return true;
+    }
+    if (resolved.type === "ObjectExpression") {
+      const info = analyzeStyleObject(resolved, resolvedScope);
+      const condCount = [...info.entries.values()].filter(
+        e => e.kind === "conditional-static",
+      ).length;
+      if (info.hasDynamic || info.hasUnknownSpread || condCount > 0) return false;
+      leaves.push({ kind: "object", info });
+      return true;
+    }
+    return false;
+  };
+  if (!visit(expr, scope)) return null;
+  const nonEmptyObjects = leaves.filter(
+    l => l.kind === "object" && [...l.info.entries.values()].some(e => e.kind === "static"),
+  );
+  if (nonEmptyObjects.length === 0) return null;
+  return nonEmptyObjects.flatMap(o =>
+    [...o.info.entries.values()].filter(e => e.kind === "static").map(e => e.key),
+  );
+}
+
+function isReportableStaticKey(normalizedKey) {
+  return !normalizedKey.startsWith("--") || normalizedKey.startsWith("--zgui-");
+}
+
+function describeTargetJsxElement(openingEl, scope) {
+  const name = openingEl.name;
+  if (name.type === "JSXIdentifier") {
+    if (NATIVE_JSX_TAGS.has(name.name)) return name.name;
+    const binding = resolveBinding(scope, name.name);
+    if (binding?.kind === "import" && ZGUI_COMPONENT_SOURCES.has(binding.source)) {
+      return name.name;
+    }
+    return null;
+  }
+  if (name.type === "JSXMemberExpression") {
+    const parts = [];
+    let cur = name;
+    while (cur.type === "JSXMemberExpression") {
+      if (cur.property?.type !== "JSXIdentifier") return null;
+      parts.unshift(cur.property.name);
+      cur = cur.object;
+    }
+    if (cur.type !== "JSXIdentifier") return null;
+    const binding = resolveBinding(scope, cur.name);
+    if (binding?.kind === "namespace" && ZGUI_COMPONENT_SOURCES.has(binding.source)) {
+      return `${cur.name}.${parts.join(".")}`;
+    }
+  }
+  return null;
+}
+
+function classifyStyleAttribute(attrValue, scope) {
+  if (!attrValue) return null;
+  if (attrValue.type === "Literal") {
+    if (typeof attrValue.value === "string" && attrValue.value.trim().length > 0) {
+      return { kind: "static-string" };
+    }
+    return null;
+  }
+  if (attrValue.type !== "JSXExpressionContainer") return null;
+  const expr = attrValue.expression;
+  if (!expr || expr.type === "JSXEmptyExpression") return null;
+
+  const { expr: resolved, scope: resolvedScope } = resolveConstExpr(expr, scope);
+  if (!resolved) return null;
+
+  const staticStr = extractStaticString(resolved, resolvedScope);
+  if (staticStr !== null) {
+    return staticStr.trim().length > 0 ? { kind: "static-string" } : null;
+  }
+
+  if (resolved.type === "ObjectExpression") {
+    const info = analyzeStyleObject(resolved, resolvedScope);
+    const staticEntries = [...info.entries.values()].filter(e => e.kind === "static");
+    const condEntries = [...info.entries.values()].filter(e => e.kind === "conditional-static");
+    if (!info.hasDynamic && !info.hasUnknownSpread && condEntries.length === 0) {
+      if (staticEntries.length === 0) return null;
+      return { kind: "static-object", keys: staticEntries.map(e => e.key) };
+    }
+    const reportableStatic = staticEntries
+      .filter(e => isReportableStaticKey(e.normalizedKey))
+      .map(e => e.key);
+    const condKeys = condEntries.map(e => e.key);
+    if (reportableStatic.length === 0 && condKeys.length === 0) return null;
+    if (condKeys.length > 0 && reportableStatic.length === 0) {
+      return { kind: "conditional-static", condKeys };
+    }
+    if (reportableStatic.length > 0 && condKeys.length === 0) {
+      return { kind: "mixed-object", staticKeys: reportableStatic };
+    }
+    return { kind: "mixed-and-conditional", staticKeys: reportableStatic, condKeys };
+  }
+
+  if (resolved.type === "ConditionalExpression") {
+    const keys = collectTopLevelConditionalObjects(resolved, resolvedScope);
+    if (keys && keys.length > 0) {
+      return { kind: "static-object", keys: [...new Set(keys)] };
+    }
+  }
+  return null;
 }
 
 const rules = {
@@ -554,6 +1106,113 @@ const rules = {
               node: prop,
               message: `Do not spread an object literal containing \`get ${keyName}()\`; object spread eagerly evaluates getters once (triggering Solid [STRICT_READ_UNTRACKED] and losing reactivity). Use mergeProps(...) or Object.defineProperty(...) to preserve the getter descriptor.`,
             });
+          }
+        },
+      };
+    },
+  },
+
+  "no-static-component-stylesheet": {
+    meta: {
+      type: "problem",
+      docs: {
+        description:
+          "Disallow installing static stylesheets with mountStylesheet()/mountShellStylesheet() inside components or functions",
+      },
+      schema: [],
+    },
+    create(context) {
+      let scopeIndex = null;
+      return {
+        Program(program) {
+          scopeIndex = buildScopeIndex(program);
+        },
+        CallExpression(node) {
+          if (!scopeIndex || isModuleTopLevel(node)) return;
+          if (node.arguments.length < 2 || node.arguments[1].type === "SpreadElement") return;
+          const scope = scopeIndex.getScope(node);
+          const callee = unwrapExpr(node.callee);
+          let helperName = null;
+          if (callee?.type === "Identifier") {
+            const binding = resolveBinding(scope, callee.name);
+            if (
+              binding?.kind === "import" &&
+              binding.source === "@hewel/zgui" &&
+              STATIC_STYLESHEET_HELPERS.has(binding.imported)
+            ) {
+              helperName = binding.imported;
+            }
+          } else if (
+            callee?.type === "MemberExpression" &&
+            !callee.computed &&
+            callee.object.type === "Identifier" &&
+            callee.property.type === "Identifier" &&
+            STATIC_STYLESHEET_HELPERS.has(callee.property.name)
+          ) {
+            const binding = resolveBinding(scope, callee.object.name);
+            if (binding?.kind === "namespace" && binding.source === "@hewel/zgui") {
+              helperName = callee.property.name;
+            }
+          }
+          if (!helperName) return;
+          if (extractStaticString(node.arguments[1], scope) === null) return;
+          context.report({
+            node,
+            message: `Do not call ${helperName}() with a static stylesheet inside a component or function; move static rules to *.module.css or src/app.css (runtime static stylesheet installation disables StyleDependencies and rebuilds Stylist indexes). Keep ${helperName}() at module top level or pass dynamic runtime CSS only.`,
+          });
+        },
+      };
+    },
+  },
+
+  "prefer-stylesheet": {
+    meta: {
+      type: "suggestion",
+      docs: {
+        description:
+          "Prefer *.module.css or src/app.css over static inline style attributes and finite conditional style values",
+      },
+      schema: [],
+    },
+    create(context) {
+      let scopeIndex = null;
+      return {
+        Program(program) {
+          scopeIndex = buildScopeIndex(program);
+        },
+        JSXOpeningElement(node) {
+          if (!scopeIndex) return;
+          const scope = scopeIndex.getScope(node);
+          const tagName = describeTargetJsxElement(node, scope);
+          if (!tagName) return;
+          for (const attr of node.attributes ?? []) {
+            if (
+              attr.type !== "JSXAttribute" ||
+              attr.name?.type !== "JSXIdentifier" ||
+              attr.name.name !== "style"
+            ) {
+              continue;
+            }
+            const finding = classifyStyleAttribute(attr.value, scope);
+            if (!finding) continue;
+            let message = "";
+            if (finding.kind === "static-string") {
+              message = `Move static inline style string on <${tagName}> to *.module.css or src/app.css (e.g. class={styles.name}). Static inline styles bypass SharedStyles and CascadeMemo sharing.`;
+            } else if (finding.kind === "static-object") {
+              const keys = finding.keys.join(", ");
+              message = `Move static inline style (${keys}) on <${tagName}> to *.module.css or src/app.css (e.g. class={styles.name}). Static inline styles bypass SharedStyles and CascadeMemo sharing.`;
+            } else if (finding.kind === "mixed-object") {
+              const keys = finding.staticKeys.join(", ");
+              message = `Move static style properties (${keys}) on <${tagName}> to *.module.css or src/app.css and keep only dynamic runtime properties inline.`;
+            } else if (finding.kind === "conditional-static") {
+              const keys = finding.condKeys.join(", ");
+              message = `Move finite conditional style properties (${keys}) on <${tagName}> to *.module.css using class={cx(...)} or [data-*] selectors instead of inline ternary values.`;
+            } else {
+              const sKeys = finding.staticKeys.join(", ");
+              const cKeys = finding.condKeys.join(", ");
+              message = `Move static properties (${sKeys}) and finite conditional properties (${cKeys}) on <${tagName}> to *.module.css (using class={cx(...)} or [data-*]) or src/app.css, keeping only dynamic runtime properties inline.`;
+            }
+            context.report({ node: attr, message });
           }
         },
       };

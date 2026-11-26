@@ -813,3 +813,23 @@ are `0`, last value is empty, selection is `0:0`, and target validity is `true`.
 Read-only and disabled controls have handlers too, so an unexpected edit is
 observable rather than hidden. Native focus borders and disabled styles make
 keyboard focus and non-editable states visible.
+
+## Styling and Oxlint presets
+
+Author static layout, tokens, and discrete `[data-*]` or pseudo-class rules in
+`src/app.css` and `*.module.css` (composed via `cx(...)`), and reserve inline
+`style={{ ... }}` (`NativeStyle`) for continuous runtime values such as
+`createSpring` motion, split ratios, or arbitrary `--*` custom properties. See
+the [Styling Guide](https://github.com/hewel/zgui-js/blob/main/docs/development/styling.md)
+for `NativeStyle`, Stylo fast paths, and frame-damage rules.
+
+Two Oxlint presets ship with `@hewel/zgui`:
+
+- `@hewel/zgui/oxlint/recommended` — includes `zgui/no-static-component-stylesheet`,
+  which rejects static `mountStylesheet(...)` / `mountShellStylesheet(...)` calls
+  inside components or helpers so runtime sheet installs do not disable
+  `StyleDependencies` and rebuild `Stylist` indexes.
+- `@hewel/zgui/oxlint/strict` — extends `recommended` and adds
+  `zgui/prefer-stylesheet`, flagging static inline styles and finite static
+  ternaries on native elements and `@hewel/zgui` components while allowing
+  continuous dynamic values and runtime `--*` variables.

@@ -78,6 +78,7 @@
     },
     "./oxlint": "./oxlint/plugin.mjs",
     "./oxlint/recommended": "./oxlint/recommended.json",
+    "./oxlint/strict": "./oxlint/strict.json",
     "./tsconfig.native.json": "./tsconfig.native.json",
     "./package.json": "./package.json"
   },

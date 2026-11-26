@@ -26,7 +26,7 @@ function Editing() {
   }
 
   return (
-    <column class="editing" style={{ gap: "12px" }}>
+    <column class="editing">
       <text class="editing-heading">Native text editing</text>
       <column class="editing-group">
         <text>Controlled single-line field</text>

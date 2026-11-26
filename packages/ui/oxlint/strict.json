@@ -1,0 +1,7 @@
+{
+  "extends": ["./recommended.json"],
+  "rules": {
+    "zgui/prefer-stylesheet": "error",
+    "zgui/no-static-component-stylesheet": "error"
+  }
+}

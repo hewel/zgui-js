@@ -400,6 +400,7 @@ function auditTarball(tarballPath: string, expectedName: string, expectedVersion
       "package/dist/styles.d.ts",
       "package/dist/components/generated/ButtonStyle.js",
       "package/oxlint/recommended.json",
+      "package/oxlint/strict.json",
       "package/oxlint/plugin.mjs",
       "package/tsconfig.native.json",
       "package/upstream/LICENSE",

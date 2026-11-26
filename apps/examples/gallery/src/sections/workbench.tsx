@@ -148,15 +148,7 @@ export function WorkbenchSection(props: { onAction: (label: string) => void }) {
           note="Draggable horizontal split panes with pointer capture, keyboard resize, and collapsible bounds"
           wide
         >
-          <box
-            style={{
-              width: "100%",
-              height: "140px",
-              border: "1px solid var(--zui-color-border)",
-              borderRadius: "var(--zui-radius-md)",
-              overflow: "hidden",
-            }}
-          >
+          <box class="split-frame">
             <SplitPane
               testId="workbench-split-pane"
               sizes={splitSizes()}
@@ -167,8 +159,8 @@ export function WorkbenchSection(props: { onAction: (label: string) => void }) {
               label="Workbench split demo"
             >
               <SplitPanePanel minSize={20} collapsible collapsedSize={0}>
-                <column style={{ padding: "12px", gap: "6px" }}>
-                  <text style={{ fontWeight: "600" }}>Navigator</text>
+                <column class="split-pane-body">
+                  <text class="demo-strong">Navigator</text>
                   <Badge testId="workbench-split-left" variant="secondary">
                     <text>{`${Math.round(splitSizes()[0] ?? 0)}%`}</text>
                   </Badge>
@@ -180,8 +172,8 @@ export function WorkbenchSection(props: { onAction: (label: string) => void }) {
                 label="Resize navigator"
               />
               <SplitPanePanel minSize={30}>
-                <column style={{ padding: "12px", gap: "6px" }}>
-                  <text style={{ fontWeight: "600" }}>Editor Surface</text>
+                <column class="split-pane-body">
+                  <text class="demo-strong">Editor Surface</text>
                   <Badge testId="workbench-split-right" variant="outline">
                     <text>{`${Math.round(splitSizes()[1] ?? 0)}%`}</text>
                   </Badge>

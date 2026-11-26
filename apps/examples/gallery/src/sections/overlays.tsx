@@ -123,7 +123,7 @@ export function OverlaysSection(props: { onAction: (label: string) => void }) {
         note="Underline strip vs manual keyboard activation (Space/Enter commits tab)"
       >
         <DemoRow label="Line variant">
-          <box style={{ width: "100%" }}>
+          <box class="demo-full">
             <Tabs defaultValue="summary" label="Report tabs">
               <TabsList variant="line" label="Report tabs">
                 <TabsTrigger value="summary">Summary</TabsTrigger>
@@ -148,7 +148,7 @@ export function OverlaysSection(props: { onAction: (label: string) => void }) {
         </DemoRow>
 
         <DemoRow label="Manual activation">
-          <box style={{ width: "100%" }}>
+          <box class="demo-full">
             <Tabs defaultValue="one" activation="manual" label="Manual tabs">
               <TabsList label="Manual tabs">
                 <TabsTrigger value="one">Step 1</TabsTrigger>
@@ -194,7 +194,7 @@ export function OverlaysSection(props: { onAction: (label: string) => void }) {
                   <DropdownMenuTrigger size="sm" variant="outline">
                     Visibility presets
                   </DropdownMenuTrigger>
-                  <DropdownMenuContent style="width: 190px">
+                  <DropdownMenuContent class="menu-w-190">
                     <MenuLabel>Access scope</MenuLabel>
                     <MenuSeparator />
                     <MenuItem onSelect={() => props.onAction("Scope: Private")}>
@@ -222,7 +222,7 @@ export function OverlaysSection(props: { onAction: (label: string) => void }) {
             <DialogTrigger testId="overlay-custom-dialog-trigger" variant="destructive">
               Delete token...
             </DialogTrigger>
-            <DialogContent dismissControl={false} style={{ "max-width": "380px" }}>
+            <DialogContent dismissControl={false} class="dialog-narrow">
               <DialogDismiss testId="overlay-custom-dismiss" />
               <DialogHeader>
                 <DialogTitle>Confirm deletion</DialogTitle>
@@ -271,7 +271,7 @@ export function OverlaysSection(props: { onAction: (label: string) => void }) {
                   label="Width"
                   value={widthToken()}
                   onValueChange={setWidthToken}
-                  style={{ width: "130px" }}
+                  class="input-w-130"
                 />
               </row>
               <PopoverClose size="sm" onClick={() => props.onAction(`Width: ${widthToken()}`)}>
@@ -316,8 +316,8 @@ export function OverlaysSection(props: { onAction: (label: string) => void }) {
                 <Avatar src="assets/avatar.png" label="zgui-native">
                   <AvatarFallback>ZN</AvatarFallback>
                 </Avatar>
-                <column style={{ gap: "2px" }}>
-                  <text style={{ "font-weight": "600" }}>zgui-native</text>
+                <column class="hovercard-meta">
+                  <text class="demo-strong">zgui-native</text>
                   <text class="muted-caption">GPU UI engine + QuickJS Solid host bridge</text>
                 </column>
               </row>

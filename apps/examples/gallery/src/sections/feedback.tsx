@@ -116,13 +116,13 @@ export function FeedbackSection(props: { onAction: (label: string) => void }) {
         </DemoRow>
         <DemoRow label="Skeleton lines">
           <column class="demo-stack">
-            <Skeleton style={{ height: "14px", width: "78%" }} />
-            <Skeleton style={{ height: "14px", width: "100%" }} />
-            <Skeleton style={{ height: "14px", width: "46%" }} />
+            <Skeleton class="skeleton-line skeleton-w-78" />
+            <Skeleton class="skeleton-line skeleton-w-100" />
+            <Skeleton class="skeleton-line skeleton-w-46" />
           </column>
         </DemoRow>
         <DemoRow label="AspectRatio (16:9)">
-          <box style={{ width: "220px" }}>
+          <box class="ratio-box">
             <AspectRatio ratio={16 / 9}>
               <box class="ratio-fill">
                 <text>16 : 9 container</text>

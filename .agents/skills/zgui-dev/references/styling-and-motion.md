@@ -1,6 +1,6 @@
 # Styling, components, vectors & spring motion
 
-Use when styling native nodes, composing UI primitives, rendering custom vectors/canvas scenes, or adding physics/wheel interactions in `@hewel/zgui`.
+Use when styling native nodes, composing UI primitives, rendering custom vectors/canvas scenes, or adding physics/wheel interactions in `@hewel/zgui`. For the full styling contract, Stylo 0.19 fast paths, and `@hewel/zgui/oxlint/strict` (`zgui/prefer-stylesheet` + `zgui/no-static-component-stylesheet`) reference, read [`docs/development/styling.md`](../../../../docs/development/styling.md).
 
 ## Styling (Lightning CSS Modules & `NativeStyle`)
 
