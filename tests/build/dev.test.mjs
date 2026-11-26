@@ -4,7 +4,7 @@ import { EventEmitter, getEventListeners } from "node:events";
 import path from "node:path";
 import { test } from "node:test";
 import { devApplication } from "../../packages/build/src/dev.ts";
-import { prepareNativeHost, runNativeHost } from "../../packages/build/src/native-process.ts";
+import { prepareNativeHost, runNativeHost } from "../../packages/build/src/host.ts";
 import { workspaceRoot } from "../../packages/build/src/build.ts";
 
 function deferred() {

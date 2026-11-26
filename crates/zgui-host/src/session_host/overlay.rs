@@ -43,6 +43,12 @@ pub(super) struct OverlayHostState {
     pub(super) is_rollback_mount: bool,
 }
 
+struct ActiveOverlaySnapshot {
+    active_overlay: Option<Rc<VerifiedOverlay>>,
+    safe_base_shell: bool,
+    last_failure: Option<OverlayFailureInfo>,
+}
+
 impl Default for OverlayHostState {
     fn default() -> Self {
         Self {
@@ -116,13 +122,19 @@ impl OverlayHostState {
         &mut self,
         overlay: Option<Rc<VerifiedOverlay>>,
         failure: Option<OverlayFailureInfo>,
-    ) -> (Option<Rc<VerifiedOverlay>>, bool, Option<OverlayFailureInfo>) {
+    ) -> ActiveOverlaySnapshot {
         let safe_base_shell = overlay.is_none();
-        (
-            std::mem::replace(&mut self.active_overlay, overlay),
-            std::mem::replace(&mut self.safe_base_shell, safe_base_shell),
-            std::mem::replace(&mut self.last_failure, failure),
-        )
+        ActiveOverlaySnapshot {
+            active_overlay: std::mem::replace(&mut self.active_overlay, overlay),
+            safe_base_shell: std::mem::replace(&mut self.safe_base_shell, safe_base_shell),
+            last_failure: std::mem::replace(&mut self.last_failure, failure),
+        }
+    }
+
+    fn restore(&mut self, snapshot: ActiveOverlaySnapshot) {
+        self.active_overlay = snapshot.active_overlay;
+        self.safe_base_shell = snapshot.safe_base_shell;
+        self.last_failure = snapshot.last_failure;
     }
 
     pub(super) fn plan_failure_recovery(
@@ -221,30 +233,22 @@ impl SessionHost {
         let Some(path) = self.overlay.pending_overlay.take() else { return; };
         if let Some(document) = document {
             let mut surface = RuntimeSurface::new(runtime, cx, images);
-            let waker = cx.waker();
-            self.apply_overlay(&path, Some(document),
-                |host| host.mount_module(&mut surface, waker.clone(), document, host.module.clone(), retry));
+            self.apply_overlay_update_primary(&mut surface, cx.waker(), retry, document, &path);
         } else {
             self.apply_overlay(&path, None, |host| host.replace_shell(runtime, cx, images, host.module.clone()));
         }
     }
 
-    #[cfg(test)]
     pub(super) fn apply_overlay_update_primary(
         &mut self,
         surface: &mut impl SessionSurface,
         waker: Arc<dyn Waker>,
-        retry: Rc<dyn Fn(DocumentId, u64)>,
+        retry: &Rc<dyn Fn(DocumentId, u64)>,
         document: DocumentId,
         path: &Path,
     ) {
-        if self.is_session_locked(surface.session_lock_support()) {
-            self.queue_overlay_update(path.to_path_buf());
-            return;
-        }
-        self.overlay.enabled = true;
         self.apply_overlay(path, Some(document),
-            |host| host.mount_module(surface, waker.clone(), document, host.module.clone(), &retry));
+            |host| host.mount_module(surface, waker.clone(), document, host.module.clone(), retry));
     }
 
     fn overlay_session(&self, document: Option<DocumentId>) -> Option<&Session> {
@@ -271,7 +275,7 @@ impl SessionHost {
         let previous = self.overlay.replace_active(Some(verified), None);
         if let ReloadOutcome::Rejected(error) | ReloadOutcome::Fallback(error) = mount(self) {
             let phase = if self.overlay_session(document).is_some() { "mount" } else { "commit" };
-            (self.overlay.active_overlay, self.overlay.safe_base_shell, self.overlay.last_failure) = previous;
+            self.overlay.restore(previous);
             let _ = self.recover_overlay(document, OverlayRecovery {
                 phase, reason: error.to_string(), failed_meta: &failed_meta,
             }, mount);
@@ -296,16 +300,6 @@ impl SessionHost {
         Ok(Rc::new(verified))
     }
 
-    pub(super) fn recover_pure_shell_overlay(
-        &mut self,
-        runtime: &mut Runtime,
-        cx: &dyn PlatformCx,
-        images: ImageChoice,
-        recovery: OverlayRecovery<'_>,
-    ) -> SessionResult<()> {
-        self.recover_overlay(None, recovery, |host| host.replace_shell(runtime, cx, images, host.module.clone()))
-    }
-
     pub(super) fn recover_primary_overlay(
         &mut self,
         surface: &mut impl SessionSurface,
@@ -318,7 +312,7 @@ impl SessionHost {
             |host| host.mount_module(surface, waker.clone(), document, host.module.clone(), retry))
     }
 
-    fn recover_overlay(
+    pub(super) fn recover_overlay(
         &mut self,
         document: Option<DocumentId>,
         recovery: OverlayRecovery<'_>,

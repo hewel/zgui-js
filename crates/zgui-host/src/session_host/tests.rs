@@ -107,7 +107,7 @@ fn rejected_preflight_preserves_active_generation_tree_and_stylesheet() {
     let active = native.session();
     let stylesheet = native.stub.stylesheet("application:0").expect("active app owns its stylesheet");
     let generation = active.generation;
-    let outcome = native.host.replace(&mut native.surface, native.waker.clone(), native.region.document, SessionModule::package(bad.package()), no_retry());
+    let outcome = native.host.mount_module(&mut native.surface, native.waker.clone(), native.region.document, SessionModule::package(bad.package()), &no_retry());
     let ReloadOutcome::Rejected(error) = outcome else { panic!("evaluation failure must reject") };
     let SessionError::Diagnostic(diagnostic) = error else { panic!("evaluation must stay a diagnostic") };
     assert_eq!(diagnostic.message, "evaluation exploded");
@@ -115,7 +115,7 @@ fn rejected_preflight_preserves_active_generation_tree_and_stylesheet() {
     assert_eq!(native.text(), "active");
     assert_eq!(native.stub.stylesheet("application:0").as_ref(), Some(&stylesheet));
     // A rejected candidate still consumed its generation; the next mount is fresh.
-    let outcome = native.host.replace(&mut native.surface, native.waker.clone(), native.region.document, SessionModule::package(good.package()), no_retry());
+    let outcome = native.host.mount_module(&mut native.surface, native.waker.clone(), native.region.document, SessionModule::package(good.package()), &no_retry());
     assert!(matches!(outcome, ReloadOutcome::Mounted { generation: g, .. } if g == generation + 2), "{outcome:?}");
 }
 
@@ -127,7 +127,7 @@ fn failed_mount_preserves_successful_session_and_rejects_candidate() {
     native.attach();
     let old = native.session();
     let document = native.region.document;
-    let outcome = native.host.replace(&mut native.surface, native.waker.clone(), document, SessionModule::package(bad.package()), no_retry());
+    let outcome = native.host.mount_module(&mut native.surface, native.waker.clone(), document, SessionModule::package(bad.package()), &no_retry());
     assert!(matches!(outcome, ReloadOutcome::Rejected(_)), "{outcome:?}");
     assert!(Rc::ptr_eq(&old, &native.session()), "failed candidate displaced the successful session");
     assert_eq!(native.text(), "active");
@@ -136,7 +136,7 @@ fn failed_mount_preserves_successful_session_and_rejects_candidate() {
     assert_eq!(native.host.acceptance().unwrap()["status"], "rejected");
     assert_eq!(native.host.acceptance().unwrap()["lastSuccessfulBuildId"], good.package().manifest.build_id);
     assert!(native.host.retry(&mut native.surface, native.waker.clone(), document, 2, no_retry()).is_none());
-    let outcome = native.host.replace(&mut native.surface, native.waker.clone(), document, SessionModule::package(good.package()), no_retry());
+    let outcome = native.host.mount_module(&mut native.surface, native.waker.clone(), document, SessionModule::package(good.package()), &no_retry());
     assert!(matches!(outcome, ReloadOutcome::Mounted { generation: 3, .. }));
     assert_eq!(old.counts(), ResourceCounts::default());
 }
@@ -161,14 +161,14 @@ fn image_policy_commits_only_after_acceptance_and_previous_owner_cleanup() {
     native.attach();
     let old = native.session();
     let document = native.region.document;
-    let outcome = native.host.replace(&mut native.surface, native.waker.clone(), document, SessionModule::package(bad.package()), no_retry());
+    let outcome = native.host.mount_module(&mut native.surface, native.waker.clone(), document, SessionModule::package(bad.package()), &no_retry());
     assert!(matches!(outcome, ReloadOutcome::Rejected(_)), "{outcome:?}");
     assert!(Rc::ptr_eq(&native.surface.bindings[&document].upgrade().unwrap(), &old));
     let (generation, blobs) = native.surface.images.as_ref().unwrap();
     assert_eq!((*generation, blobs.len()), (old.generation, 1));
     assert_eq!(old.counts().image_handles, 1);
 
-    let outcome = native.host.replace(&mut native.surface, native.waker.clone(), document, SessionModule::package(good.package()), no_retry());
+    let outcome = native.host.mount_module(&mut native.surface, native.waker.clone(), document, SessionModule::package(good.package()), &no_retry());
     assert!(matches!(outcome, ReloadOutcome::Mounted { generation: 3, .. }), "{outcome:?}");
     let (generation, blobs) = native.surface.images.as_ref().unwrap();
     assert_eq!((*generation, blobs.len()), (3, 1));
@@ -194,7 +194,7 @@ fn reload_records_predecessor_leaks_without_rejecting_the_successor() {
     let mut native = Native::new(RecoveryPolicy::Fallback, SessionModule::package(first.package()));
     native.attach();
     let old = native.session();
-    let outcome = native.host.replace(&mut native.surface, native.waker.clone(), native.region.document, SessionModule::package(second.package()), no_retry());
+    let outcome = native.host.mount_module(&mut native.surface, native.waker.clone(), native.region.document, SessionModule::package(second.package()), &no_retry());
     let acceptance = native.host.acceptance().unwrap();
     assert_eq!(acceptance["status"], "accepted", "{outcome:?}");
     let leak = &acceptance["predecessorLeak"];
@@ -214,7 +214,7 @@ fn retired_shutdown_cannot_remove_the_successor_stylesheet() {
     native.attach();
     let retired = native.session();
     let document = native.region.document;
-    let outcome = native.host.replace(&mut native.surface, native.waker.clone(), document, SessionModule::package(second.package()), no_retry());
+    let outcome = native.host.mount_module(&mut native.surface, native.waker.clone(), document, SessionModule::package(second.package()), &no_retry());
     assert!(matches!(outcome, ReloadOutcome::Mounted { .. }));
     let stylesheet = native.stub.stylesheet("application:0").expect("successor owns its stylesheet");
     retired.retire();
@@ -239,9 +239,9 @@ fn generation_never_reused_across_surface_loss_and_reattach() {
     // A rejection between mounts still consumes its generation.
     let bad = Fixture::new(BAD_EVAL, "");
     let document = native.region.document;
-    let outcome = native.host.replace(&mut native.surface, native.waker.clone(), document, SessionModule::package(bad.package()), no_retry());
+    let outcome = native.host.mount_module(&mut native.surface, native.waker.clone(), document, SessionModule::package(bad.package()), &no_retry());
     assert!(matches!(outcome, ReloadOutcome::Rejected(_)));
-    let outcome = native.host.replace(&mut native.surface, native.waker.clone(), document, module, no_retry());
+    let outcome = native.host.mount_module(&mut native.surface, native.waker.clone(), document, module, &no_retry());
     assert!(matches!(outcome, ReloadOutcome::Mounted { generation: 4, .. }), "{outcome:?}");
 }
 
@@ -252,7 +252,7 @@ fn propagate_replacement_preserves_last_success_on_failed_mount() {
     let mut native = Native::new(RecoveryPolicy::Propagate, SessionModule::package(good.package()));
     native.attach();
     let document = native.region.document;
-    let outcome = native.host.replace(&mut native.surface, native.waker.clone(), document, SessionModule::package(bad.package()), no_retry());
+    let outcome = native.host.mount_module(&mut native.surface, native.waker.clone(), document, SessionModule::package(bad.package()), &no_retry());
     let ReloadOutcome::Rejected(error) = outcome else { panic!("propagated mount failure must hand back the typed error") };
     let SessionError::Diagnostic(diagnostic) = error else { panic!("mount failure must stay a diagnostic") };
     assert_eq!(diagnostic.message, "mount exploded");
@@ -339,7 +339,7 @@ fn harness_arms_baseline_timer_and_external_wake_then_retirement_cancels() {
         }
         export function advance() { __zgui.replaceText(label, 'exercised'); }
     "#, "");
-    let outcome = native.host.replace(&mut native.surface, native.waker.clone(), document, SessionModule::package(exercise.package()), no_retry());
+    let outcome = native.host.mount_module(&mut native.surface, native.waker.clone(), document, SessionModule::package(exercise.package()), &no_retry());
     assert!(matches!(outcome, ReloadOutcome::Mounted { .. }));
     harness.reconcile(&native.host, &external);
     assert_eq!(native.stub.live_timers(), 0);
@@ -353,7 +353,7 @@ fn harness_arms_baseline_timer_and_external_wake_then_retirement_cancels() {
     assert_eq!(native.stub.live_timers(), 0, "fourth exercise call cancels the timer");
     // A checkpoint fault retires the armed generation; reconciliation cancels
     // its outstanding exercise timer instead of dropping it silently.
-    let outcome = native.host.replace(&mut native.surface, native.waker.clone(), document, SessionModule::package(exercise.package()), no_retry());
+    let outcome = native.host.mount_module(&mut native.surface, native.waker.clone(), document, SessionModule::package(exercise.package()), &no_retry());
     assert!(matches!(outcome, ReloadOutcome::Mounted { .. }));
     harness.reconcile(&native.host, &external);
     assert_eq!(native.stub.live_timers(), 1, "new exercised generation armed");
@@ -384,7 +384,7 @@ fn ordered_sheet_slots_survive_replacement_and_recreated_documents_install_their
     assert_eq!(native.stub.stylesheet("application:1").as_deref(), Some("text {color:blue}"));
     let old = native.session();
     let document = native.region.document;
-    assert!(matches!(native.host.replace(&mut native.surface, native.waker.clone(), document, SessionModule::package(second.package()), no_retry()), ReloadOutcome::Mounted { .. }));
+    assert!(matches!(native.host.mount_module(&mut native.surface, native.waker.clone(), document, SessionModule::package(second.package()), &no_retry()), ReloadOutcome::Mounted { .. }));
     old.retire();
     assert_eq!(native.stub.stylesheet("application:0").as_deref(), Some("text {color:green}"));
     assert_eq!(native.stub.stylesheet("application:1"), None);
@@ -404,7 +404,7 @@ fn rejected_sheet_and_unregistered_font_preflight_preserve_successful_session() 
     let active = native.session();
     for css in ["text {color: definitely-not-a-color}", "text {font-family: MisspelledAppSans}", "@font-face {font-family:AppSans;src:url(font.ttf)}"] {
         let bad = Fixture::new(SIMPLE, css);
-        let outcome = native.host.replace(&mut native.surface, native.waker.clone(), native.region.document, SessionModule::package(bad.package()), no_retry());
+        let outcome = native.host.mount_module(&mut native.surface, native.waker.clone(), native.region.document, SessionModule::package(bad.package()), &no_retry());
         assert!(matches!(outcome, ReloadOutcome::Rejected(_)), "accepted {css}: {outcome:?}");
         assert!(Rc::ptr_eq(&active, &native.session()));
         assert_eq!(native.text(), "active");
@@ -426,7 +426,7 @@ fn mount_generated_sheet_rejection_preserves_successful_session() {
     let mut native = Native::new(RecoveryPolicy::Fallback, SessionModule::package(good.package()));
     native.attach();
     let active = native.session();
-    let outcome = native.host.replace(&mut native.surface, native.waker.clone(), native.region.document, SessionModule::package(bad.package()), no_retry());
+    let outcome = native.host.mount_module(&mut native.surface, native.waker.clone(), native.region.document, SessionModule::package(bad.package()), &no_retry());
     assert!(matches!(outcome, ReloadOutcome::Rejected(_)), "{outcome:?}");
     assert!(Rc::ptr_eq(&active, &native.session()), "mount-generated invalid sheet displaced the predecessor");
     assert!(native.stub.stylesheet_names().iter().all(|name| !name.ends_with("dynamic-theme")), "rejected candidate command reached the host queue");
@@ -471,10 +471,10 @@ fn verified_package_fonts_are_registered_before_mount_and_retired_without_withdr
     assert_eq!(first_session.counts().fonts, 1);
     assert!(native.region.fonts.contains_family("ApplicationSans"));
     let document = native.region.document;
-    assert!(matches!(native.host.replace(&mut native.surface, native.waker.clone(), document, SessionModule::package(malformed.package()), no_retry()), ReloadOutcome::Rejected(_)));
+    assert!(matches!(native.host.mount_module(&mut native.surface, native.waker.clone(), document, SessionModule::package(malformed.package()), &no_retry()), ReloadOutcome::Rejected(_)));
     assert!(Rc::ptr_eq(&first_session, &native.session()));
     assert!(native.region.fonts.contains_family("ApplicationSans"));
-    assert!(matches!(native.host.replace(&mut native.surface, native.waker.clone(), document, SessionModule::package(second.package()), no_retry()), ReloadOutcome::Mounted { .. }));
+    assert!(matches!(native.host.mount_module(&mut native.surface, native.waker.clone(), document, SessionModule::package(second.package()), &no_retry()), ReloadOutcome::Mounted { .. }));
     first_session.retire();
     assert_eq!(first_session.counts().fonts, 0);
     assert!(native.region.fonts.contains_family("ApplicationSans"));
@@ -524,7 +524,7 @@ fn failed_candidate_root_mutations_never_touch_the_successful_mount_root() {
     native.attach();
     let active = native.session();
     let document = native.region.document;
-    assert!(matches!(native.host.replace(&mut native.surface, native.waker.clone(), document, SessionModule::package(bad.package()), no_retry()), ReloadOutcome::Rejected(_)));
+    assert!(matches!(native.host.mount_module(&mut native.surface, native.waker.clone(), document, SessionModule::package(bad.package()), &no_retry()), ReloadOutcome::Rejected(_)));
     assert!(Rc::ptr_eq(&active, &native.session()));
     assert_eq!(native.backend.attribute(active.primary_region().root, zgui::view::AttrName::new("class")), None);
     assert_eq!(native.text(), "active");
@@ -592,11 +592,8 @@ fn failed_shell_child_mount_keeps_the_predecessor_and_last_successful_build() {
     assert_eq!(previous.retire().counts, ResourceCounts::default(), "shutdown releases the working shell without leaks");
 }
 
-#[test]
-fn pure_shell_css_only_reload_updates_open_surfaces_without_restarting_the_session() {
-    use zgui::platform::AppHandler;
-
-    let source = r#"
+fn pure_shell_css_fixture(css: &str) -> Fixture {
+    Fixture::new(r#"
         export const hostApiVersion = 1;
         export function mount() {
             const id = __zguiShell.openLayer('panel', {}, (root, bridge) => {
@@ -605,12 +602,17 @@ fn pure_shell_css_only_reload_updates_open_surfaces_without_restarting_the_sessi
             });
             return () => __zguiShell.closeLayer(id);
         }
-    "#;
-    let fixture = |css| Fixture::new(source, css).with_capabilities(crate::package::Capabilities {
+    "#, css).with_capabilities(crate::package::Capabilities {
         shell_surfaces: true, ..Default::default()
-    });
-    let initial = fixture(":root { background: red; }");
-    let updated = fixture(":root { background: blue; }");
+    })
+}
+
+fn mount_pure_shell_css(
+    initial: &Fixture,
+    dev_state: bool,
+) -> (SessionHost, zgui::runtime::Runtime, zgui_platform_headless::Headless) {
+    use zgui::platform::AppHandler;
+
     let mut runtime = zgui::runtime::App::new()
         .with_renderer(Box::new(|_, target| {
             let mut renderer = zgui_testkit_scene::CaptureRenderer::new();
@@ -624,9 +626,20 @@ fn pure_shell_css_only_reload_updates_open_surfaces_without_restarting_the_sessi
     let mut host = SessionHost::new(Rc::default(), SessionModule::package(initial.package()),
         SessionPolicy::live(host_services::Executor::new(2, 64).unwrap()),
         RecoveryPolicy::Propagate, SurfaceOpacity::Opaque);
+    host.set_dev_state(dev_state);
     host.set_pure_shell(zgui::app::Fonts::shipped_only());
+    host.shell_turn(&mut runtime, &cx, ImageChoice::PackageOnly, &[], &no_retry()).unwrap();
+    (host, runtime, cx)
+}
+
+#[test]
+fn pure_shell_css_only_reload_updates_open_surfaces_without_restarting_the_session() {
+    use zgui::platform::AppHandler;
+
+    let initial = pure_shell_css_fixture(":root { background: red; }");
+    let updated = pure_shell_css_fixture(":root { background: blue; }");
+    let (mut host, mut runtime, cx) = mount_pure_shell_css(&initial, true);
     let images = ImageChoice::PackageOnly;
-    host.shell_turn(&mut runtime, &cx, images, &[], &no_retry()).unwrap();
     let session = host.sessions().next().unwrap().clone();
     let surface = session.mount_regions()[0].1.surface;
     runtime.surface_event(&cx, surface, zgui::platform::SurfaceEvent::RedrawRequested);
@@ -643,6 +656,40 @@ fn pure_shell_css_only_reload_updates_open_surfaces_without_restarting_the_sessi
     runtime.surface_event(&cx, surface, zgui::platform::SurfaceEvent::RedrawRequested);
     let window = runtime.windows().iter().find(|window| window.surface().id() == surface).unwrap();
     assert!(window.style_revision() > revision, "the same native surface must apply the new stylesheet");
+    host.stop(&mut RuntimeSurface::new(&mut runtime, &cx, images));
+}
+
+#[test]
+fn pure_shell_css_only_reload_outside_dev_replaces_the_generation() {
+    let initial = pure_shell_css_fixture(":root { background: red; }");
+    let updated = pure_shell_css_fixture(":root { background: blue; }");
+    let (mut host, mut runtime, cx) = mount_pure_shell_css(&initial, false);
+    let previous = host.sessions().next().unwrap().clone();
+    let images = ImageChoice::PackageOnly;
+
+    let outcome = host.replace_shell(&mut runtime, &cx, images, SessionModule::package(updated.package()));
+    assert!(matches!(outcome, ReloadOutcome::Mounted { generation, css_only: false, .. }
+        if generation > previous.generation), "{outcome:?}");
+    assert!(previous.is_retired());
+    host.stop(&mut RuntimeSurface::new(&mut runtime, &cx, images));
+}
+
+#[test]
+fn pure_shell_css_only_reload_rejected_in_dev_attempts_staged_preflight() {
+    let initial = pure_shell_css_fixture(":root { background: red; }");
+    let invalid = pure_shell_css_fixture(":root { font-family: UnregisteredShellReloadFont; }");
+    let (mut host, mut runtime, cx) = mount_pure_shell_css(&initial, true);
+    let previous = host.sessions().next().unwrap().clone();
+    let images = ImageChoice::PackageOnly;
+
+    let outcome = host.replace_shell(&mut runtime, &cx, images, SessionModule::package(invalid.package()));
+    // The live swap reports E_FONT; only staged preflight reports E_FONT_FAMILY.
+    assert!(matches!(outcome, ReloadOutcome::Rejected(SessionError::Style { code: "E_FONT_FAMILY", .. })),
+        "expected staged candidate rejection, got {outcome:?}");
+    let acceptance = host.acceptance().unwrap();
+    assert_eq!(acceptance["generation"], previous.generation + 1);
+    assert!(Rc::ptr_eq(&previous, host.sessions().next().unwrap()));
+    assert!(!previous.is_retired());
     host.stop(&mut RuntimeSurface::new(&mut runtime, &cx, images));
 }
 
@@ -1537,12 +1584,12 @@ fn staged_network_deferral_and_reload_under_sse_flood() {
 
     // Attempt staged reload with Gen 2: it calls httpRequest then throws.
     // Because staged outbound ops are deferred until acceptance, ZERO HTTP requests hit the fixture!
-    let outcome = host.replace(
+    let outcome = host.mount_module(
         &mut surface,
         cx.waker(),
         region.document,
         SessionModule::package(rejected_pkg.package()),
-        no_retry(),
+        &no_retry(),
     );
     assert!(matches!(outcome, ReloadOutcome::Rejected(_)), "gen2 must be rejected");
     fixture_rt
@@ -1551,12 +1598,12 @@ fn staged_network_deferral_and_reload_under_sse_flood() {
     assert!(fixture_rt.contract_failure().is_none(), "rejected candidate must not trigger unmatched fixture failure");
 
     // Reload to Gen 3: Gen 1 retires cleanly and Gen 3 commits its staged SSE stream.
-    let outcome = host.replace(
+    let outcome = host.mount_module(
         &mut surface,
         cx.waker(),
         region.document,
         SessionModule::package(gen3_pkg.package()),
-        no_retry(),
+        &no_retry(),
     );
     assert!(matches!(outcome, ReloadOutcome::Mounted { .. }), "gen3 must mount cleanly");
     assert_eq!(gen1.counts(), ResourceCounts::default(), "gen1 must retire cleanly");
@@ -1629,7 +1676,7 @@ fn dev_state_never_snapshots_locked_generations_and_hydrates_unlocked_reloads() 
     assert_eq!(region.dom.text_content(region.root_anchor.get()), "cold");
 
     // Unlocked reload hydrates persisted plain data cleanly.
-    let outcome = host.replace(&mut surface, waker.clone(), region.document, module.clone(), no_retry());
+    let outcome = host.mount_module(&mut surface, waker.clone(), region.document, module.clone(), &no_retry());
     assert!(matches!(outcome, ReloadOutcome::Mounted { .. }));
     assert_eq!(region.dom.text_content(region.root_anchor.get()), "\"persisted-value\"");
 
@@ -1637,7 +1684,7 @@ fn dev_state_never_snapshots_locked_generations_and_hydrates_unlocked_reloads() 
     let live = host.session(region.document).expect("live session").clone();
     let _ = live.update_lock_state(SessionLockState::Locked);
     assert!(live.capture_dev_state(&module).is_none(), "locked generation must never snapshot dev state");
-    let outcome = host.replace(&mut surface, waker, region.document, module, no_retry());
+    let outcome = host.mount_module(&mut surface, waker, region.document, module, &no_retry());
     assert!(matches!(outcome, ReloadOutcome::Mounted { .. }));
     assert_eq!(region.dom.text_content(region.root_anchor.get()), "cold", "reloading from locked generation must cold-mount");
 
@@ -1662,12 +1709,12 @@ fn css_only_live_reload_preserves_session_generation_and_swaps_stylesheets() {
     assert_eq!(native.stub.stylesheet("application:0").as_deref(), Some("text { color: rgb(255, 0, 0); }"));
 
     // CSS-only successor swaps stylesheets in place without bumping generation or restarting QuickJS.
-    let outcome = native.host.replace(
+    let outcome = native.host.mount_module(
         &mut native.surface,
         native.waker.clone(),
         document,
         SessionModule::package(css_updated.package()),
-        no_retry(),
+        &no_retry(),
     );
     assert!(
         matches!(outcome, ReloadOutcome::Mounted { generation: 1, predecessor_leak: None, css_only: true }),
@@ -1679,12 +1726,12 @@ fn css_only_live_reload_preserves_session_generation_and_swaps_stylesheets() {
 
     // Invalid CSS and unregistered fonts fail closed and keep the active green stylesheet + live session.
     for invalid in [bad_css.package(), bad_font_css.package()] {
-        let rejected = native.host.replace(
+        let rejected = native.host.mount_module(
             &mut native.surface,
             native.waker.clone(),
             document,
             SessionModule::package(invalid),
-            no_retry(),
+            &no_retry(),
         );
         assert!(matches!(rejected, ReloadOutcome::Rejected(_)), "bad CSS must reject fail-closed: {rejected:?}");
         assert!(Rc::ptr_eq(&initial, &native.session()));
@@ -1692,12 +1739,12 @@ fn css_only_live_reload_preserves_session_generation_and_swaps_stylesheets() {
     }
 
     // JS change triggers normal staged generation reload.
-    let js_outcome = native.host.replace(
+    let js_outcome = native.host.mount_module(
         &mut native.surface,
         native.waker.clone(),
         document,
         SessionModule::package(js_updated.package()),
-        no_retry(),
+        &no_retry(),
     );
     assert!(
         matches!(js_outcome, ReloadOutcome::Mounted { css_only: false, .. }),

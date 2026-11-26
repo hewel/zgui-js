@@ -456,6 +456,8 @@ impl NetworkState {
 
     /// Fair per-registration round-robin poll across active HTTP, SSE, and WebSocket handles.
     fn poll_live_round_robin(&self, generation: u64) -> Option<NetworkEvent> {
+        enum PollKind { Http, Sse, Ws }
+
         let after = self.poll_cursor.get();
         let http = self.http.borrow();
         let sse = self.sse.borrow();
@@ -466,23 +468,22 @@ impl NetworkState {
             let mut ws = ws.range((lower, upper)).peekable();
             loop {
                 let next = [
-                    http.peek().map(|&(&id, _)| id),
-                    sse.peek().map(|&(&id, _)| id),
-                    ws.peek().map(|&(&id, _)| id),
+                    http.peek().map(|&(&id, _)| (id, PollKind::Http)),
+                    sse.peek().map(|&(&id, _)| (id, PollKind::Sse)),
+                    ws.peek().map(|&(&id, _)| (id, PollKind::Ws)),
                 ]
                 .into_iter()
-                .enumerate()
-                .filter_map(|(kind, id)| Some((id?, kind)))
-                .min();
+                .flatten()
+                .min_by_key(|&(id, _)| id);
                 let Some((id, kind)) = next else { break; };
                 let event = match kind {
-                    0 => http.next().and_then(|(_, e)| e.handle.as_ref()?.try_recv()).map(|ev| match ev {
+                    PollKind::Http => http.next().and_then(|(_, e)| e.handle.as_ref()?.try_recv()).map(|ev| match ev {
                         HttpEvent::Head(head) => NetworkEvent::HttpHead { generation, id, head },
                         HttpEvent::Chunk { data, .. } => NetworkEvent::HttpChunk { generation, id, data },
                         HttpEvent::End => NetworkEvent::HttpEnd { generation, id },
                         HttpEvent::Error(error) => NetworkEvent::HttpError { generation, id, error },
                     }),
-                    1 => sse.next().and_then(|(_, e)| e.handle.as_ref()?.try_recv()).map(|ev| match ev {
+                    PollKind::Sse => sse.next().and_then(|(_, e)| e.handle.as_ref()?.try_recv()).map(|ev| match ev {
                         SseEvent::Open { status, url, headers } => {
                             NetworkEvent::SseOpen { generation, id, status, url, headers }
                         }
@@ -492,7 +493,7 @@ impl NetworkState {
                         SseEvent::Error(error) => NetworkEvent::SseError { generation, id, error },
                         SseEvent::Close => NetworkEvent::SseClose { generation, id },
                     }),
-                    _ => ws.next().and_then(|(_, e)| {
+                    PollKind::Ws => ws.next().and_then(|(_, e)| {
                         let event = e.handle.as_ref()?.try_recv()?;
                         Some(match event {
                             WebSocketEvent::Open { protocol } => {

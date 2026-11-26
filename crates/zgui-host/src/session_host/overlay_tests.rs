@@ -9,7 +9,7 @@ use std::{
     cell::{Cell, RefCell},
     collections::HashMap,
     fs,
-    path::PathBuf,
+    path::{Path, PathBuf},
     rc::{Rc, Weak},
     sync::{
         Arc,
@@ -80,6 +80,14 @@ struct Harness {
     stub: Rc<StubHost>,
     document: DocumentId,
     waker: Arc<dyn Waker>,
+}
+
+impl Harness {
+    fn apply_overlay(&mut self, path: &Path) {
+        self.host.apply_overlay_update_primary(
+            &mut self.surface, self.waker.clone(), &no_retry(), self.document, path,
+        );
+    }
 }
 
 impl Drop for Harness {
@@ -353,8 +361,7 @@ fn overlay_three_phase_handoff_bounded_state_and_extension_css_cleanup() {
     );
 
     h.host.configure_initial_overlay(&ovl1);
-    let waker = Arc::clone(&h.waker);
-    h.host.attach(&mut h.surface, waker.clone(), no_retry()).expect("mount ovl1");
+    h.host.attach(&mut h.surface, h.waker.clone(), no_retry()).expect("mount ovl1");
 
     // Verify extension stylesheet from ovl-1 is mounted (slot application:0 alongside empty base).
     let sheets_1: Vec<String> = (0..4).filter_map(|i| h.stub.stylesheet(&format!("application:{i}"))).collect();
@@ -364,7 +371,7 @@ fn overlay_three_phase_handoff_bounded_state_and_extension_css_cleanup() {
     );
 
     // Switch to ovl-2: Phase 2 captures bounded handoff from ovl-1 and delivers to ovl-2 onSessionCommitted.
-    h.host.apply_overlay_update_primary(&mut h.surface, waker, no_retry(), h.document, &ovl2);
+    h.apply_overlay(&ovl2);
     let sess2 = h.host.session(h.document).unwrap().clone();
     let (taken, second, committed_phase): (String, String, String) = sess2
         .engine
@@ -418,8 +425,7 @@ fn overlay_anti_resurrection_degrades_to_safe_base_shell_on_mount_and_observatio
         serde_json::json!({"commands": ["echo"]}),
     );
     h.host.configure_initial_overlay(&ovl_good);
-    let waker = Arc::clone(&h.waker);
-    h.host.attach(&mut h.surface, waker.clone(), no_retry()).expect("mount good overlay");
+    h.host.attach(&mut h.surface, h.waker.clone(), no_retry()).expect("mount good overlay");
     assert!(
         h.host.session(h.document).unwrap().effective_capabilities().commands.contains(&"echo".to_owned())
     );
@@ -443,7 +449,7 @@ fn overlay_anti_resurrection_degrades_to_safe_base_shell_on_mount_and_observatio
         )],
         serde_json::json!({}),
     );
-    h.host.apply_overlay_update_primary(&mut h.surface, waker.clone(), no_retry(), h.document, &ovl_obs_fault);
+    h.apply_overlay(&ovl_obs_fault);
     assert_eq!(h.host.active_overlay_id(), Some("ovl-obs-fault"));
     // Pump jobs + timer fault in observation window.
     let s_obs = h.host.session(h.document).unwrap().clone();
@@ -496,7 +502,7 @@ fn overlay_anti_resurrection_degrades_to_safe_base_shell_on_mount_and_observatio
         &[("acme/keep", "export const ok = 1;", None)],
         serde_json::json!({}),
     );
-    h.host.apply_overlay_update_primary(&mut h.surface, waker.clone(), no_retry(), h.document, &ovl_keep);
+    h.apply_overlay(&ovl_keep);
     std::thread::sleep(Duration::from_millis(50));
     h.host.tick_observation();
     assert_eq!(h.host.last_good_overlay_id(), Some("ovl-keep"));
@@ -522,7 +528,7 @@ fn overlay_anti_resurrection_degrades_to_safe_base_shell_on_mount_and_observatio
         .unwrap(),
     )
     .unwrap();
-    h.host.apply_overlay_update_primary(&mut h.surface, waker.clone(), no_retry(), h.document, &bad_path);
+    h.apply_overlay(&bad_path);
     assert!(!h.host.is_safe_base_shell());
     assert_eq!(h.host.active_overlay_id(), Some("ovl-keep"));
 
@@ -549,7 +555,7 @@ fn overlay_anti_resurrection_degrades_to_safe_base_shell_on_mount_and_observatio
         .unwrap(),
     )
     .unwrap();
-    h.host.apply_overlay_update_primary(&mut h.surface, waker, no_retry(), h.document, &revoke_bad);
+    h.apply_overlay(&revoke_bad);
     assert!(h.host.is_safe_base_shell());
     assert!(h.host.active_overlay_id().is_none());
     assert!(h.host.last_good_overlay_id().is_none());

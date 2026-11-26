@@ -2,9 +2,9 @@ import type { PreviewApplicationOptions } from "./index.ts";
 import { randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { buildApplication } from "./build.ts";
+import { buildWithResolvedHost } from "./build.ts";
 import { devApplication } from "./dev.ts";
-import { resolveNativeHost, runNativeHost } from "./host.ts";
+import { runNativeHost } from "./host.ts";
 import { packagedSdkRoot, workspaceRoot } from "./sdk.ts";
 
 export async function previewApplication(
@@ -53,22 +53,15 @@ export async function previewApplication(
       hostArgs: args,
       signal,
     });
-  const resolveHost = () =>
-    resolveNativeHost({
-      hostExecutable,
-      hostRoot: explicitHostRoot,
-      root,
-      cwd: appDirectory,
-      searchFrom: buildOptions.hostSearchFrom,
-      signal,
-    });
-  const compilerHost = bytecode ? await resolveHost() : undefined;
-  const { dist } = await buildApplication(
+  const {
+    application: { dist },
+    resolveHost,
+  } = await buildWithResolvedHost(
     app,
     { ...buildOptions, root, appDirectory, bytecode },
-    { signal, nativeHost: compilerHost },
+    { hostRoot: explicitHostRoot, hostExecutable, signal },
   );
-  const host = compilerHost ?? (await resolveHost());
+  const host = await resolveHost();
   return runNativeHost(host.executable, ["preview", "run", "--bundle", dist, ...args], {
     root: host.runRoot,
     signal,

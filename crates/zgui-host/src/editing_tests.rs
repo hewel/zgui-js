@@ -157,9 +157,8 @@ impl EditingGate {
         if self.step == Step::Hold {
             if self.hold_until.is_some_and(|at| cx.clock().now() >= at) {
                 self.hold_until = None;
-                let document = window.document_id();
                 let old = self.current()?;
-                if !matches!(self.inner.replace_session(cx, document, SessionModule::package(self.package.clone())), ReloadOutcome::Mounted { .. }) { return Err("editing reload failed".into()); }
+                if !matches!(self.inner.replace_session(cx, SessionModule::package(self.package.clone())), Some(ReloadOutcome::Mounted { .. })) { return Err("editing reload failed".into()); }
                 if old.counts() != session::ResourceCounts::default() { return Err("editing generation retained resources after reload".into()); }
                 self.retired.borrow_mut().push(old);
                 self.step = Step::Reload;

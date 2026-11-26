@@ -3,6 +3,7 @@ import type {
   BuildInfo,
   Manifest,
   PublishedApplication,
+  ResolveNativeHostOptions,
   ResolvedNativeHost,
   WorkerDeclaration,
 } from "./index.ts";
@@ -310,6 +311,33 @@ export async function buildApplication(
     extraCapabilities,
     capabilitiesFile,
   });
+}
+
+export async function buildWithResolvedHost(
+  app: string,
+  options: BuildApplicationOptions & { root: string; appDirectory: string },
+  {
+    hostRoot,
+    hostExecutable,
+    signal,
+  }: Pick<ResolveNativeHostOptions, "hostRoot" | "hostExecutable" | "signal">,
+) {
+  let host: Promise<ResolvedNativeHost> | undefined;
+  const resolveHost = () =>
+    (host ??= resolveNativeHost({
+      hostExecutable,
+      hostRoot,
+      root: options.root,
+      cwd: options.appDirectory,
+      searchFrom: options.hostSearchFrom,
+      signal,
+    }));
+  // Bytecode needs the compiler early; packaging validates the manifest before resolving a runtime-only host.
+  const application = await buildApplication(app, options, {
+    signal,
+    nativeHost: options.bytecode ? await resolveHost() : undefined,
+  });
+  return { application, resolveHost };
 }
 
 export async function publishApplication(

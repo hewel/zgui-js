@@ -108,6 +108,11 @@ pub(crate) enum ReloadOutcome {
     Fallback(SessionError),
 }
 
+pub(crate) struct CurrentReplacement {
+    pub(crate) document: Option<DocumentId>,
+    pub(crate) outcome: ReloadOutcome,
+}
+
 pub(crate) enum TurnError {
     Checkpoint(SessionError),
     Shell(SessionError),
@@ -632,11 +637,6 @@ impl SessionHost {
         });
         self.regions.retain(|document, _| surface.surface(*document).is_some());
         Ok(())
-    }
-
-    /// Evaluate a candidate generation on an existing mount region.
-    pub(crate) fn replace(&mut self, surface: &mut impl SessionSurface, waker: Arc<dyn Waker>, document: DocumentId, module: SessionModule, retry: Rc<dyn Fn(DocumentId, u64)>) -> ReloadOutcome {
-        self.mount_module(surface, waker, document, module, &retry)
     }
 
     /// Complete owner work for a native event before realizing shell requests.

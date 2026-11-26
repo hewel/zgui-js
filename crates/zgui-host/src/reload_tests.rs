@@ -65,7 +65,7 @@ impl ReloadGate {
                 let active = self.current()?;
                 let before = active.primary_region().dom.text_content(active.primary_region().root);
                 if !before.contains("Service: Rust task completed") { return Ok(()); }
-                let outcome = self.inner.replace_session(cx, document, SessionModule::package(self.bad_eval.package()));
+                let outcome = self.inner.replace_session(cx, SessionModule::package(self.bad_eval.package())).ok_or("no mount region to reload")?;
                 if !matches!(outcome, ReloadOutcome::Rejected(_)) { return Err(format!("evaluation failure did not reject: {outcome:?}").into()); }
                 if !Rc::ptr_eq(&active, &self.current()?) || active.primary_region().dom.text_content(active.primary_region().root) != before {
                     return Err("preflight failure changed the active app".into());
@@ -73,7 +73,7 @@ impl ReloadGate {
                 let mut expected = None;
                 for _ in 0..16 {
                     let previous = self.current()?;
-                    let outcome = self.inner.replace_session(cx, document, SessionModule::package(self.good.clone()));
+                    let outcome = self.inner.replace_session(cx, SessionModule::package(self.good.clone())).ok_or("no mount region to reload")?;
                     if !matches!(outcome, ReloadOutcome::Mounted { .. }) { return Err(format!("reload failed: {outcome:?}").into()); }
                     self.retire(previous)?;
                     let counts = self.current()?.counts();
@@ -90,7 +90,7 @@ impl ReloadGate {
                 if self.inner.native.windows()[0].nodes_with_class("promise-layout-row").len() != 1 {
                     return Err("native frame reclamation retained prior-generation layout rows".into());
                 }
-                let outcome = self.inner.replace_session(cx, document, SessionModule::package(self.bad_mount.package()));
+                let outcome = self.inner.replace_session(cx, SessionModule::package(self.bad_mount.package())).ok_or("no mount region to reload")?;
                 if !matches!(outcome, ReloadOutcome::Rejected(_)) { return Err(format!("mount failure was not rejected: {outcome:?}").into()); }
                 if !Rc::ptr_eq(&active, &self.current()?) { return Err("rejected mount displaced the successful generation".into()); }
                 // A later runtime fault still exercises the native fallback/retry input path.
@@ -241,7 +241,7 @@ fn reload_resolves_the_replacement_manifest_with_the_same_launch_bindings() -> T
         }), "initial generation sees only its manifest grants");
 
         let document = first_session.primary_region().document;
-        let outcome = application.replace_session(&cx, document, SessionModule::package(second.package()));
+        let outcome = application.replace_session(&cx, SessionModule::package(second.package())).ok_or("no mount region to reload")?;
         assert!(matches!(outcome, ReloadOutcome::Mounted { generation, .. } if generation == first_session.generation + 1), "{outcome:?}");
         let second_session = application.host.session(document).ok_or("replacement session did not mount")?;
         assert_eq!(snapshot(second_session)?, json!({

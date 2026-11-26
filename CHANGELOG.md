@@ -7,6 +7,11 @@ packages version in lockstep using [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- Pure shells apply CSS-only live reloads only in dev mode. A failed live stylesheet swap falls
+  back to staged replacement, preserving the last healthy generation if the candidate is rejected.
+
 ## [0.1.2] - 2026-11-26
 
 > Note: `0.1.1` was skipped prior to npm publication (`v0.1.2` includes all changes since `0.1.0`).

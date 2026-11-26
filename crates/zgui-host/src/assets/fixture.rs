@@ -4,7 +4,7 @@ use crate::{bounded_fs::relative_path, environment::Environment, package::{Capab
 use host_services::{Completion, ServiceError};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use std::{cell::{OnceCell, RefCell}, collections::{BTreeMap, VecDeque}, marker::PhantomData, path::Path, rc::Rc, sync::Arc};
+use std::{borrow::Cow, cell::RefCell, collections::{BTreeMap, VecDeque}, marker::PhantomData, path::Path, rc::Rc, sync::Arc};
 use crate::schema::{deserialize_object,object_struct};
 
 mod external;
@@ -535,18 +535,16 @@ impl FixtureRuntime {
             || Ok(inputs.and_then(|inputs| inputs.wayland_display.clone())),
             |name| Ok(inputs.and_then(|inputs| inputs.named_sockets.get(name)).cloned()),
         )?;
-        if declarations.files.directories.is_empty() { return Ok(resolved); }
-        let home = inputs.and_then(|env| env.home_dir.as_deref()).unwrap_or("/home/preview");
-        let data = OnceCell::new();
-        let documents = OnceCell::new();
-        Ok(resolved.with_file_directories(declarations, |root| match root {
-            "$HOME" => Some(Path::new(home)),
-            "$XDG_DATA_HOME" => Some(inputs.and_then(|env| env.xdg_data_home.as_deref())
-                .map(Path::new).unwrap_or_else(|| data.get_or_init(|| Path::new(home).join(".local/share")))),
-            "$XDG_DOCUMENTS_DIR" => Some(inputs.and_then(|env| env.xdg_documents_dir.as_deref())
-                .map(Path::new).unwrap_or_else(|| documents.get_or_init(|| Path::new(home).join("Documents")))),
-            _ => None,
-        }))
+        Ok(resolved.with_file_directories(
+            declarations,
+            || {
+                let home = inputs.and_then(|env| env.home_dir.as_deref()).unwrap_or("/home/preview");
+                Some(Cow::Borrowed(Path::new(home)))
+            },
+            || inputs.and_then(|env| env.xdg_data_home.as_deref()).map(|path| Cow::Borrowed(Path::new(path))),
+            || inputs.and_then(|env| env.xdg_documents_dir.as_deref()).map(|path| Cow::Borrowed(Path::new(path))),
+            |home| home.join("Documents"),
+        ))
     }
 
     fn record(&self, state: &mut State, kind: &str, detail: Value) {

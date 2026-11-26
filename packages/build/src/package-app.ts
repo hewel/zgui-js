@@ -2,8 +2,7 @@ import type { PackageApplicationOptions, PackagedApplication } from "./index.ts"
 import { existsSync } from "node:fs";
 import { chmod, copyFile, cp, mkdir, realpath, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { buildApplication } from "./build.ts";
-import { resolveNativeHost } from "./host.ts";
+import { buildWithResolvedHost } from "./build.ts";
 import { packagedSdkRoot, workspaceRoot } from "./sdk.ts";
 
 const DISTRIBUTED_LICENSE_FILES = ["LICENSE", "NOTICE", "THIRD_PARTY_NOTICES.md"] as const;
@@ -73,27 +72,19 @@ export async function packageApplication(
   signal?.throwIfAborted();
   const resolvedAppDir = path.resolve(appDirectory);
   const outputDir = path.resolve(out);
-  const resolveHost = () =>
-    resolveNativeHost({
-      hostExecutable,
-      hostRoot,
-      root,
-      cwd: resolvedAppDir,
-      searchFrom: hostSearchFrom,
-      signal,
-    });
-  const compilerHost = bytecode ? await resolveHost() : undefined;
-  const { dist, manifest } = await buildApplication(
+  const { application, resolveHost } = await buildWithResolvedHost(
     app,
     {
       root,
       appDirectory: resolvedAppDir,
       bytecode,
+      hostSearchFrom,
       extraCapabilities,
       capabilitiesFile,
     },
-    { signal, nativeHost: compilerHost },
+    { hostRoot, hostExecutable, signal },
   );
+  const { dist, manifest } = application;
   signal?.throwIfAborted();
 
   if (pureShell && !manifest.capabilities?.shellSurfaces && !manifest.capabilities?.sessionLock) {
@@ -102,7 +93,7 @@ export async function packageApplication(
     );
   }
 
-  const host = compilerHost ?? (await resolveHost());
+  const host = await resolveHost();
   const abi = host.abi;
   if (!abi) throw new Error("Resolved zgui-host did not report ABI metadata");
   signal?.throwIfAborted();

@@ -105,16 +105,11 @@ impl PreviewHost {
             return;
         }
         if let Some(module) = self.pending_reload.take() {
-            let primary_document = self.host.region_documents().next();
-            let outcome = if self.host.is_pure_shell() {
-                self.host.replace_shell(&mut self.native, cx, ImageChoice::PackageOnly, module)
-            } else if let Some(document) = primary_document {
-                let mut surface = RuntimeSurface::new(&mut self.native, cx, ImageChoice::PackageOnly);
-                self.host.replace(&mut surface, cx.waker(), document, module, retry.clone())
-            } else {
-                crate::session_host::ReloadOutcome::Rejected("no active mount region to reload".into())
-            };
-            self.last_reload = Some(outcome);
+            let mut surface = RuntimeSurface::new(&mut self.native, cx, ImageChoice::PackageOnly);
+            self.last_reload = Some(match self.host.replace_current(&mut surface, module, || retry.clone()) {
+                Ok(replacement) => replacement.outcome,
+                Err(_) => crate::session_host::ReloadOutcome::Rejected("no active mount region to reload".into()),
+            });
             if let Err(error) = self.host.shell_turn(&mut self.native, cx, ImageChoice::PackageOnly, &self.monitors, &retry) {
                 self.fail(cx, Fault::application(error));
                 return;

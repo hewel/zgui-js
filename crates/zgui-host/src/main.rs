@@ -136,8 +136,8 @@ impl Application {
         self.failure.borrow_mut().get_or_insert_with(|| error.to_string());
     }
 
-    fn retry_sender(&self, cx: &dyn PlatformCx) -> Rc<dyn Fn(DocumentId, u64)> {
-        let sender = self.sender.clone();
+    fn retry_sender(sender: &mpsc::SyncSender<Completion>, cx: &dyn PlatformCx) -> Rc<dyn Fn(DocumentId, u64)> {
+        let sender = sender.clone();
         let waker = cx.waker();
         Rc::new(move |document, generation| {
             match sender.try_send(Completion::Retry { document, generation }) {
@@ -164,20 +164,32 @@ impl Application {
         self.harness.reconcile(&self.host, &external);
     }
 
-    fn replace_session(&mut self, cx: &dyn PlatformCx, document: DocumentId, module: SessionModule) -> ReloadOutcome {
-        let retry = self.retry_sender(cx);
-        let waker = cx.waker();
-        let outcome = {
-            let mut surface = RuntimeSurface::new(&mut self.native, cx, ImageChoice::Live);
-            self.host.replace(&mut surface, waker, document, module, retry)
+    fn replace_session(&mut self, cx: &dyn PlatformCx, module: SessionModule) -> Option<ReloadOutcome> {
+        let sender = &self.sender;
+        let mut surface = RuntimeSurface::new(&mut self.native, cx, ImageChoice::Live);
+        let replacement = match self.host.replace_current(&mut surface, module, || Self::retry_sender(sender, cx)) {
+            Ok(replacement) => replacement,
+            Err(module) => {
+                self.host.set_module(module);
+                return None;
+            }
         };
-        self.reconcile_harness(cx);
-        outcome
+        if let Some(document) = replacement.document {
+            self.reconcile_harness(cx);
+            let mut surface = RuntimeSurface::new(&mut self.native, cx, ImageChoice::Live);
+            match &replacement.outcome {
+                ReloadOutcome::Mounted { .. } => self.host.clear_dev_banner(&mut surface, document),
+                ReloadOutcome::Rejected(error) | ReloadOutcome::Fallback(error) => {
+                    self.host.show_dev_banner(&mut surface, document, "Reload rejected", &error.to_string());
+                }
+            }
+        }
+        Some(replacement.outcome)
     }
 
     fn attach(&mut self, cx: &dyn PlatformCx) -> Result<(), Box<dyn Error>> {
         {
-            let retry = self.retry_sender(cx);
+            let retry = Self::retry_sender(&self.sender, cx);
             let waker = cx.waker();
             let mut surface = RuntimeSurface::new(&mut self.native, cx, ImageChoice::Live);
             self.host.attach(&mut surface, waker, retry)?;
@@ -215,7 +227,7 @@ impl Application {
         if let Some(path) = self.overlay_watcher.as_ref().and_then(extensions::watcher::OverlayWatcher::poll) {
             self.host.queue_overlay_update(path);
         }
-        let retry = self.retry_sender(cx);
+        let retry = Self::retry_sender(&self.sender, cx);
         match self.host.turn(&mut self.native, cx, ImageChoice::Live, &self.monitors, &retry) {
             Ok(()) => {}
             Err(TurnError::Checkpoint(error)) => { self.fail(cx, error); return; }
@@ -228,7 +240,7 @@ impl Application {
 
     fn after_shell(&mut self, cx: &dyn PlatformCx) {
         if cx.is_exiting() || self.failure.borrow().is_some() { return; }
-        let retry = self.retry_sender(cx);
+        let retry = Self::retry_sender(&self.sender, cx);
         if let Err(error) = self.host.shell_turn(&mut self.native, cx, ImageChoice::Live, &self.monitors, &retry) {
             self.shell_fault(cx, error);
         }
@@ -271,27 +283,8 @@ impl Application {
                     self.host.record_outcome(&module, document, &outcome);
                     return;
                 }
-                if self.host.is_pure_shell() {
-                    self.host.replace_shell(&mut self.native, cx, ImageChoice::Live, module);
+                if self.replace_session(cx, module).is_some() {
                     self.after_shell(cx);
-                    return;
-                }
-                let document = self.host.region_documents().next();
-                match document {
-                    Some(document) => {
-                        let outcome = self.replace_session(cx, document, module);
-                        let mut surface = RuntimeSurface::new(&mut self.native, cx, ImageChoice::Live);
-                        match &outcome {
-                            ReloadOutcome::Mounted { .. } => {
-                                self.host.clear_dev_banner(&mut surface, document);
-                            }
-                            ReloadOutcome::Rejected(error) | ReloadOutcome::Fallback(error) => {
-                                self.host.show_dev_banner(&mut surface, document, "Reload rejected", &error.to_string());
-                            }
-                        }
-                        self.after_shell(cx);
-                    }
-                    None => self.host.set_module(module),
                 }
             }
             Err(error) => {
@@ -449,7 +442,7 @@ impl AppHandler for Application {
                             Ok(()) => RuntimeSurface::new(&mut self.native, cx, ImageChoice::Live).request_frame(document),
                             Err(error) => {
                                 session.record_fault(error);
-                                let retry = self.retry_sender(cx);
+                                let retry = Self::retry_sender(&self.sender, cx);
                                 {
                                     let mut surface = RuntimeSurface::new(&mut self.native, cx, ImageChoice::Live);
                                     if let Err(error) = self.host.checkpoint(&mut surface, retry) { self.fail(cx, error); }
@@ -460,7 +453,7 @@ impl AppHandler for Application {
                     }
                 }
                 Completion::Retry { document, generation } => {
-                    let retry = self.retry_sender(cx);
+                    let retry = Self::retry_sender(&self.sender, cx);
                     let waker = cx.waker();
                     let outcome = {
                         let mut surface = RuntimeSurface::new(&mut self.native, cx, ImageChoice::Live);

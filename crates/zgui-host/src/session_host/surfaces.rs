@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use zgui::{app::Fonts, geom::{Css, CssPx, Size}, platform::{InputRegion, MonitorTarget, PlatformCx, SessionLockState, SurfaceAttributes, SurfaceId, SurfaceRole}, runtime::{Runtime, WindowContent, WindowSpec, WindowToken}, view::View};
 
-use super::{ImageChoice, MountRegion, PredecessorLeak, ReloadOutcome, Root, RuntimeSurface, SessionHost, SessionSurface, SurfaceOpacity};
+use super::{CurrentReplacement, ImageChoice, MountRegion, PredecessorLeak, ReloadOutcome, Root, RuntimeSurface, SessionHost, SessionSurface, SurfaceOpacity};
 use super::overlay::OverlayRecovery;
 use crate::{session::{ResourceCounts, Result, Session, SessionModule, SessionRetirement}, shell::{LayerSpec, LockCommand, LockSpec, Monitor}};
 use std::{cell::RefCell, rc::Rc};
@@ -55,14 +55,31 @@ impl SessionHost {
     /// Configure a generation that launches without a primary mount region.
     pub(crate) fn set_pure_shell(&mut self, fonts: Fonts) { self.pure_fonts = Some(fonts); }
 
-    /// Whether package replacement goes through the zero-primary startup path.
-    pub(crate) fn is_pure_shell(&self) -> bool { self.pure_fonts.is_some() }
+    pub(super) fn is_pure_shell(&self) -> bool { self.pure_fonts.is_some() }
 
     /// Supply the initial monitor inventory before candidate mounting.
     pub(crate) fn set_monitor_snapshot(&mut self, monitors: &[Monitor]) { self.monitors.clear(); self.monitors.extend_from_slice(monitors); }
 
+    /// Replace the configured shell or the current primary region.
+    /// Return the unmounted module if the primary region has not attached.
+    pub(crate) fn replace_current(
+        &mut self,
+        surface: &mut RuntimeSurface<'_>,
+        module: SessionModule,
+        primary_retry: impl FnOnce() -> Rc<dyn Fn(zgui::view::DocumentId, u64)>,
+    ) -> std::result::Result<CurrentReplacement, SessionModule> {
+        if self.is_pure_shell() {
+            let outcome = self.replace_shell(surface.runtime, surface.cx, surface.images, module);
+            return Ok(CurrentReplacement { document: None, outcome });
+        }
+        let Some(document) = self.region_documents().next() else { return Err(module); };
+        let waker = surface.cx.waker();
+        let outcome = self.mount_module(surface, waker, document, module, &primary_retry());
+        Ok(CurrentReplacement { document: Some(document), outcome })
+    }
+
     /// Mount a candidate and its shell surfaces before replacing the active generation.
-    pub(crate) fn replace_shell(&mut self, runtime: &mut Runtime, cx: &dyn PlatformCx, images: ImageChoice, module: SessionModule) -> ReloadOutcome {
+    pub(super) fn replace_shell(&mut self, runtime: &mut Runtime, cx: &dyn PlatformCx, images: ImageChoice, module: SessionModule) -> ReloadOutcome {
         let outcome = self.mount_shell(runtime, cx, images, &module);
         self.record_outcome(&module, None, &outcome);
         outcome
@@ -72,7 +89,8 @@ impl SessionHost {
         self.pure_attempted = true;
         let Some(fonts) = &self.pure_fonts else { return ReloadOutcome::Rejected("pure-shell startup was not configured".into()); };
         let lock_state = platform_lock_state(cx);
-        if !self.is_session_locked(lock_state)
+        if self.policy.dev_state_enabled()
+            && !self.is_session_locked(lock_state)
             && self.overlay.observation.is_none()
             && !self.overlay.is_rollback_mount
             && let Some(session) = &self.pure_session
@@ -81,14 +99,16 @@ impl SessionHost {
             && let Some(next) = module.as_package()
             && previous.is_css_only_successor(next)
         {
-            if let Err(error) = session.replace_packaged_stylesheets(next) {
-                return ReloadOutcome::Rejected(error);
+            match session.replace_packaged_stylesheets(next) {
+                Ok(()) => {
+                    self.module = module.clone();
+                    self.last_good = Some(module.clone());
+                    let surface = RuntimeSurface::new(runtime, cx, images);
+                    session.request_frames(|doc| surface.request_frame(doc));
+                    return ReloadOutcome::Mounted { generation: session.generation, predecessor_leak: None, css_only: true };
+                }
+                Err(error) => eprintln!("css-live-swap-fallback: {error}"),
             }
-            self.module = module.clone();
-            self.last_good = Some(module.clone());
-            let surface = RuntimeSurface::new(runtime, cx, images);
-            session.request_frames(|doc| surface.request_frame(doc));
-            return ReloadOutcome::Mounted { generation: session.generation, predecessor_leak: None, css_only: true };
         }
         let Some(generation) = Self::allocate_generation(&mut self.generation) else { return ReloadOutcome::Rejected("session generation exhausted".into()); };
         let hydrated = if self.policy.dev_state_enabled()
@@ -173,9 +193,9 @@ impl SessionHost {
                         return Err(error);
                     }
                     let failed_meta = self.active_overlay_failed_meta();
-                    self.recover_pure_shell_overlay(runtime, cx, images, OverlayRecovery {
+                    self.recover_overlay(None, OverlayRecovery {
                         phase: "mount", reason: error.to_string(), failed_meta: &failed_meta,
-                    })?;
+                    }, |host| host.replace_shell(runtime, cx, images, host.module.clone()))?;
                 }
             }
         }
@@ -205,7 +225,8 @@ impl SessionHost {
                             return self.recover_primary_overlay(&mut surface, cx.waker(), retry, document, recovery);
                         }
                         self.pure_session = None;
-                        return self.recover_pure_shell_overlay(runtime, cx, images, recovery);
+                        return self.recover_overlay(None, recovery,
+                            |host| host.replace_shell(runtime, cx, images, host.module.clone()));
                     }
                 }
                 return Err(error);

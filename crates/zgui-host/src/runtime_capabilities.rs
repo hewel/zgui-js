@@ -1,5 +1,5 @@
 //! Session-local path authority. Only live resolution consults host directories and environment.
-use std::{cell::OnceCell, collections::BTreeMap, ffi::OsString, fs, io, path::{Path, PathBuf}};
+use std::{borrow::Cow, cell::OnceCell, collections::BTreeMap, ffi::OsString, fs, io, path::{Path, PathBuf}};
 
 use host_services::files::FileMode;
 
@@ -59,20 +59,13 @@ impl ResolvedCapabilities {
             require_canonical_socket_path(Path::new(path))
                 .map_err(|error| denied(format!("socket path {path:?}: {error}")))?;
         }
-        let home = OnceCell::new();
-        let data = OnceCell::new();
-        let documents = OnceCell::new();
-        let home = || home.get_or_init(|| absolute_env_path(&env, "HOME")).as_deref();
-        Ok(resolved.with_file_directories(declarations, |root| match root {
-            "$HOME" => home(),
-            "$XDG_DATA_HOME" => data.get_or_init(|| {
-                absolute_env_path(&env, "XDG_DATA_HOME").or_else(|| Some(home()?.join(".local/share")))
-            }).as_deref(),
-            "$XDG_DOCUMENTS_DIR" => documents.get_or_init(|| {
-                resolve_live_documents_dir(&env, home)
-            }).as_deref(),
-            _ => None,
-        }))
+        Ok(resolved.with_file_directories(
+            declarations,
+            || absolute_env_path(&env, "HOME").map(Cow::Owned),
+            || absolute_env_path(&env, "XDG_DATA_HOME").map(Cow::Owned),
+            || absolute_env_path(&env, "XDG_DOCUMENTS_DIR").map(Cow::Owned),
+            |home| live_documents_from_home(&env, home),
+        ))
     }
 
     /// Resolves only the sealed declarations using the supplied path values.
@@ -182,15 +175,32 @@ impl ResolvedCapabilities {
         &self.named_sockets
     }
 
+    /// Resolve only roots referenced by file grants; unresolved roots grant nothing.
     pub(crate) fn with_file_directories<'a>(
         mut self,
         declarations: &Capabilities,
-        mut root: impl FnMut(&str) -> Option<&'a Path>,
+        resolve_home: impl Fn() -> Option<Cow<'a, Path>>,
+        resolve_data: impl Fn() -> Option<Cow<'a, Path>>,
+        resolve_documents: impl Fn() -> Option<Cow<'a, Path>>,
+        documents_from_home: impl Fn(&Path) -> PathBuf,
     ) -> Self {
+        let home = OnceCell::new();
+        let data = OnceCell::new();
+        let documents = OnceCell::new();
+        let home = || home.get_or_init(&resolve_home).as_deref();
         self.file_directories = declarations.files.directories.iter().filter_map(|grant| {
             let path = if grant.path.starts_with('$') {
                 let (key, rest) = grant.path.split_once('/').unwrap_or((&grant.path, ""));
-                let base = root(key)?;
+                let base = match key {
+                    "$HOME" => home(),
+                    "$XDG_DATA_HOME" => data.get_or_init(|| {
+                        resolve_data().or_else(|| Some(Cow::Owned(home()?.join(".local/share"))))
+                    }).as_deref(),
+                    "$XDG_DOCUMENTS_DIR" => documents.get_or_init(|| {
+                        resolve_documents().or_else(|| home().map(|home| Cow::Owned(documents_from_home(home))))
+                    }).as_deref(),
+                    _ => None,
+                }?;
                 if rest.is_empty() { base.to_path_buf() } else { base.join(rest) }
             } else {
                 let path = Path::new(&grant.path);
@@ -288,29 +298,22 @@ fn absolute_env_path(env: &impl Fn(&str) -> Option<OsString>, key: &str) -> Opti
     env_text(env, key).ok().flatten().map(PathBuf::from).filter(|path| path.is_absolute())
 }
 
-fn resolve_live_documents_dir<'a>(
-    env: &impl Fn(&str) -> Option<OsString>,
-    home: impl FnOnce() -> Option<&'a Path>,
-) -> Option<PathBuf> {
-    if let Some(path) = absolute_env_path(env, "XDG_DOCUMENTS_DIR") {
-        return Some(path);
-    }
-    let home = home()?;
+fn live_documents_from_home(env: &impl Fn(&str) -> Option<OsString>, home: &Path) -> PathBuf {
     let config = absolute_env_path(env, "XDG_CONFIG_HOME").unwrap_or_else(|| home.join(".config"));
     if let Ok(text) = fs::read_to_string(config.join("user-dirs.dirs")) {
         for line in text.lines() {
             if let Some(value) = line.trim().strip_prefix("XDG_DOCUMENTS_DIR=") {
                 let value = value.trim().trim_matches('"');
                 if let Some(relative) = value.strip_prefix("$HOME/") {
-                    return Some(home.join(relative));
+                    return home.join(relative);
                 }
                 if Path::new(value).is_absolute() {
-                    return Some(value.into());
+                    return value.into();
                 }
             }
         }
     }
-    Some(home.join("Documents"))
+    home.join("Documents")
 }
 
 fn live_root(root: Root, env: &impl Fn(&str) -> Option<OsString>) -> Result<String, String> {
