@@ -101,7 +101,7 @@ impl ImageLoader {
                 request.state = if matches!(entry.probe, Probe::Failed) || request.failure.is_some() {
                     ImageState::Failed
                 } else if request.requested_variant.is_some_and(|target| {
-                    request.attached_variant.is_some_and(|active| active >= target)
+                    request.attached_variant.is_some_and(|active| entry.satisfies(active, target))
                         && request.uploaded
                         && matches!(entry.probe, Probe::Done)
                         && entry.variants.get(&entry.active.unwrap()).is_some_and(|variant| {

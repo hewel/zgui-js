@@ -110,6 +110,13 @@ impl Tasks {
         self.gates.borrow_mut().push_back(gate);
         release
     }
+    pub(super) fn looks_scalable(&self, key: &SourceKey) -> bool {
+        match self.input(key) {
+            Input::Dynamic(bytes) => super::input::is_svg_bytes(&bytes),
+            _ => false,
+        }
+    }
+
     pub(super) fn input(&self, key: &SourceKey) -> Input {
         match key {
             SourceKey::File(uri) => match &self.policy.files {

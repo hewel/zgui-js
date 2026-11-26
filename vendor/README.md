@@ -235,7 +235,14 @@ bytes under a granted component prefix, with no ambient filesystem fallback.
 Only `file://` and `zgui-blob://` sources accept UTF-8 SVG as well as raster
 images. Plain package-relative sources retain the raster decoder. The pinned
 CPU renderer (`resvg` with `raster-images`, `text`, and `system-fonts`) uses
-the same decode limit and native atlas as raster images. SVG DTDs, nested SVGs
+the same decode limit and native atlas as raster images. While raster sources
+bucket into `LADDER` steps capped at their native pixel extent, probed and
+sniffed SVG sources remain scalable (`scalable = true`): they preserve their
+CSS natural extent (`tree.size()`) in `IntrinsicTable` for layout, rasterize at
+the exact demanded device-pixel long edge (up to `limits.max_dimension`,
+allowing crisp HiDPI and enlarged vector supersampling without ladder
+downsampling blur), and prune superseded standalone variants on attach so
+pool slots are reclaimed across resizes. SVG DTDs, nested SVGs
 and external resources are disabled; bounded embedded PNG/JPEG/WebP data URIs
 are verified before decode. SVG `<text>` resolves against an `ImagePolicy`-bound
 `fontdb::Database` (`ImagePolicy::with_svg_fonts`, fed from `Fonts::svg_font_snapshot`):

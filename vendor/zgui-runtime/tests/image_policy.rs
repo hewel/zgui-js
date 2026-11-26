@@ -629,3 +629,54 @@ fn failed_image_state_drives_fallback_and_resets_with_its_source() {
     assert!(app.app().windows()[0].image_resources().resources.iter().all(|image| image.state == ImageState::Canceled));
     app.shut_down();
 }
+
+#[test]
+fn svg_blob_supersamples_on_hidpi_and_prunes_superseded_variants() {
+    let blobs = ImageBlobs::new(4);
+    let src = blobs.register(Arc::from(GREEN_SVG)).unwrap();
+    let mut app = window_with_policy(
+        &src,
+        CSS,
+        ImagePolicy::package_only([]).with_blobs(blobs),
+    );
+    app.settle(8);
+    publish(&mut app);
+    let at_1x = app.app().windows()[0].image_resources().resources[0].clone();
+    assert_eq!(at_1x.state, ImageState::Ready);
+    assert_eq!(at_1x.requested_variant, Some(64));
+    assert_eq!(at_1x.attached_variant, Some(64));
+
+    app.deliver_to_first(zgui_platform::SurfaceEvent::ScaleFactorChanged {
+        scale_factor: 2.0,
+        size: zgui_geom::Size::new(zgui_geom::DevicePx(800.0), zgui_geom::DevicePx(600.0)),
+    });
+    app.settle(8);
+    let pending = app.app().windows()[0].image_resources().resources[0].clone();
+    assert_eq!(pending.state, ImageState::Loading);
+    assert_eq!(pending.requested_variant, Some(128));
+    publish(&mut app);
+    let at_2x = app.app().windows()[0].image_resources().resources[0].clone();
+    assert_eq!(at_2x.state, ImageState::Ready);
+    assert_eq!(at_2x.attached_variant, Some(128));
+
+    let window_node = app.app().windows()[0].nodes_with_class("picture")[0];
+    let dom = DomHandle::from_rc(app.app().windows()[0].dom().clone());
+    for css_width in ["100px", "140px", "180px"] {
+        dom.set_style_property(window_node, "width", Some(css_width));
+        app.app().windows()[0].request_frame();
+        app.settle(8);
+        publish(&mut app);
+    }
+    let resized = app.app().windows()[0].image_resources().resources[0].clone();
+    assert_eq!(resized.state, ImageState::Ready);
+    assert_eq!(resized.attached_variant, Some(360));
+    let decoded_report = app.app_mut().windows_mut()[0]
+        .budget_report()
+        .line(zgui_runtime::CacheId::DecodedImages)
+        .report;
+    assert_eq!(
+        decoded_report.resident, decoded_report.pinned,
+        "superseded scalable SVG variants must be pruned on attach rather than leaking in memory: {decoded_report:?}"
+    );
+    app.shut_down();
+}

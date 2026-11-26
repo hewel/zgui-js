@@ -229,7 +229,13 @@ export function MarkdownPreview(props: {
                   </box>
                 }
               >
-                <Image src={props.pipelineImg()} class="md-diagram-img" />
+                <box class="md-diagram-frame">
+                  <Image
+                    testId="pipeline-diagram-el"
+                    src={props.pipelineImg()}
+                    class="md-diagram-svg"
+                  />
+                </box>
               </Show>
               <Show when={block.alt}>
                 <text class="md-figcaption">{block.alt}</text>

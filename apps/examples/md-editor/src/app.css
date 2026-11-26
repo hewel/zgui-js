@@ -470,6 +470,20 @@
   border: 1px solid var(--zui-color-border);
 }
 
+.md-diagram-frame {
+  width: 100%;
+  max-width: 642px;
+  border-radius: var(--zui-radius-lg);
+  border: 1px solid var(--zui-color-border);
+  overflow: hidden;
+}
+
+.md-diagram-svg {
+  display: block;
+  width: 100%;
+  aspect-ratio: 640 / 150;
+}
+
 .md-image-fallback {
   padding: 16px;
   border-radius: var(--zui-radius-md);

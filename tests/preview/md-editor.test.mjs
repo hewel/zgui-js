@@ -6,6 +6,8 @@ import {
   createTempWorkspace,
   functionalProfile,
   getNode,
+  pixelAt,
+  readPng,
   readTree,
   runScenario,
   writeJson,
@@ -391,6 +393,51 @@ test(
     assert.ok(
       editorModeEditorW > splitEditorW + 150,
       `editor mode must expand editor panel (${editorModeEditorW} vs split ${splitEditorW})`,
+    );
+
+    assert.equal(result.teardown?.clean, true);
+  },
+);
+
+test(
+  "Built-in SVG pipeline diagram renders at exact 640x150 CSS / 1280x300 device extent on 2x HiDPI",
+  { timeout: 60000 },
+  async () => {
+    const { out, result } = await runScenario({
+      projectDir: temp.dir,
+      bundle,
+      profile: functionalProfile,
+      fixture: fixturePath,
+      name: "diagram-hidpi",
+      id: "md-editor-diagram-hidpi",
+      width: 1120,
+      height: 700,
+      scale: 2,
+      requiredCapabilities: CAPS,
+      steps: [
+        advance(32),
+        click("mode-preview"),
+        advance(48),
+        check("pipeline-diagram-el", "exists", true),
+        capture("diagram-2x"),
+      ],
+    });
+
+    const tree = await readTree(out, "diagram-2x");
+    const diagram = getNode(tree, "pipeline-diagram-el");
+    assert.equal(diagram.boundsLogical.width, 640);
+    assert.equal(diagram.boundsLogical.height, 150);
+    assert.equal(diagram.boundsDevice.width, 1280);
+    assert.equal(diagram.boundsDevice.height, 300);
+
+    // Stage 1 circle center is at SVG (42, 52), scaled cleanly by 2x -> device (84, 104).
+    const png = await readPng(path.join(out, "captures/diagram-2x.png"));
+    const ox = Math.round(diagram.boundsDevice.x);
+    const oy = Math.round(diagram.boundsDevice.y);
+    const dot = pixelAt(png, ox + 84, oy + 104);
+    assert.ok(
+      dot[2] > 200 && dot[0] < 90,
+      `expected crisp blue SVG dot at 2x device offset (84, 104), got rgba(${dot.join(", ")})`,
     );
 
     assert.equal(result.teardown?.clean, true);

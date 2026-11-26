@@ -18,6 +18,13 @@ const MAX_SVG_EMBEDDED_BYTES: usize = 4 * 1024 * 1024;
 /// Maximum number of embedded raster images permitted in a single SVG document.
 const MAX_SVG_EMBEDDED_IMAGES: usize = 32;
 
+/// Measured natural extent and whether the image can be cleanly rasterized at higher scales.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct Probed {
+    pub(super) size: Size<u32, Device>,
+    pub(super) scalable: bool,
+}
+
 /// An owned worker job input; preparing it never touches the filesystem.
 pub(super) enum Input {
     Dynamic(Arc<[u8]>),
@@ -34,18 +41,28 @@ impl Input {
         name: &str,
         limits: Limits,
         svg_fonts: Option<&SvgFonts>,
-    ) -> Result<Size<u32, Device>, DecodeError> {
+    ) -> Result<Probed, DecodeError> {
         let probe = |bytes: &[u8]| match svg_tree(bytes, limits, svg_fonts) {
             Some(tree) => {
                 let native = tree?.size().to_int_size();
-                Ok(Size::new(native.width(), native.height()))
+                Ok(Probed {
+                    size: Size::new(native.width(), native.height()),
+                    scalable: true,
+                })
             }
-            None => zgui_image::probe(bytes),
+            None => zgui_image::probe(bytes).map(|size| Probed {
+                size,
+                scalable: false,
+            }),
+        };
+        let raster = |size| Probed {
+            size,
+            scalable: false,
         };
         match self {
-            Self::UnrestrictedPath => zgui_image::probe_file(Path::new(name)),
-            Self::Package(bytes) => zgui_image::probe(&bytes),
-            Self::Registered(bytes) => zgui_image::probe(&bytes),
+            Self::UnrestrictedPath => zgui_image::probe_file(Path::new(name)).map(raster),
+            Self::Package(bytes) => zgui_image::probe(&bytes).map(raster),
+            Self::Registered(bytes) => zgui_image::probe(&bytes).map(raster),
             input => input.with_bytes(name, probe),
         }
     }
@@ -87,14 +104,17 @@ impl Input {
     }
 }
 
+pub(super) fn is_svg_bytes(bytes: &[u8]) -> bool {
+    let bytes = bytes.strip_prefix(b"\xef\xbb\xbf").unwrap_or(bytes);
+    bytes.iter().find(|byte| !byte.is_ascii_whitespace()) == Some(&b'<')
+}
+
 fn svg_tree(
     bytes: &[u8],
     limits: Limits,
     svg_fonts: Option<&SvgFonts>,
 ) -> Option<Result<usvg::Tree, DecodeError>> {
-    let bytes = bytes.strip_prefix(b"\xef\xbb\xbf").unwrap_or(bytes);
-    (bytes.iter().find(|byte| !byte.is_ascii_whitespace()) == Some(&b'<'))
-        .then(|| parse_svg(bytes, limits, svg_fonts))
+    is_svg_bytes(bytes).then(|| parse_svg(bytes, limits, svg_fonts))
 }
 
 fn parse_svg(
@@ -199,16 +219,29 @@ fn svg_error(error: impl std::fmt::Display) -> DecodeError {
     io::Error::new(io::ErrorKind::InvalidData, format!("invalid SVG: {error}")).into()
 }
 
-fn rasterize(tree: &usvg::Tree, max_dimension: u32) -> Result<Decoded, DecodeError> {
+fn rasterize(tree: &usvg::Tree, long_edge: u32) -> Result<Decoded, DecodeError> {
     let native = tree.size();
-    let scale = (max_dimension as f32 / native.width().max(native.height())).min(1.0);
-    let width = (native.width() * scale).round().max(1.0) as u32;
-    let height = (native.height() * scale).round().max(1.0) as u32;
+    let native_long = native.width().max(native.height());
+    if !native.width().is_finite()
+        || !native.height().is_finite()
+        || native.width() <= 0.0
+        || native.height() <= 0.0
+        || !native_long.is_finite()
+        || native_long <= 0.0
+    {
+        return Err(DecodeError::Empty);
+    }
+    let max_px = long_edge.max(1) as f32;
+    let scale = max_px / native_long;
+    let width = (native.width() * scale).round().clamp(1.0, max_px) as u32;
+    let height = (native.height() * scale).round().clamp(1.0, max_px) as u32;
+    let scale_x = width as f32 / native.width();
+    let scale_y = height as f32 / native.height();
     let mut pixmap = tiny_skia::Pixmap::new(width, height)
         .ok_or_else(|| svg_error("could not allocate raster surface"))?;
     resvg::render(
         tree,
-        tiny_skia::Transform::from_scale(scale, scale),
+        tiny_skia::Transform::from_scale(scale_x, scale_y),
         &mut pixmap.as_mut(),
     );
     // tiny-skia already produces tightly packed, premultiplied RGBA.
@@ -261,7 +294,13 @@ mod tests {
         let probed = Input::Dynamic(Arc::clone(&bytes))
             .probe("icon.svg", Limits::default(), None)
             .expect("probing SVG with embedded PNG succeeds");
-        assert_eq!(probed, Size::new(8, 8));
+        assert_eq!(
+            probed,
+            Probed {
+                size: Size::new(8, 8),
+                scalable: true,
+            }
+        );
 
         let decoded = Input::Dynamic(bytes)
             .decode("icon.svg", 8, Limits::default(), None)
@@ -350,5 +389,35 @@ mod tests {
             green_pixels > 40,
             "SVG <text> must render visible glyph pixels using the session fontdb, got {green_pixels}",
         );
+    }
+
+    #[test]
+    fn svg_rasterizes_above_native_extent_within_limits() {
+        let svg = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 16">
+            <rect width="32" height="16" fill="#000000"/>
+            <rect x="8" y="2" width="16" height="12" fill="#00ff88"/>
+        </svg>"##;
+        let bytes: Arc<[u8]> = Arc::from(svg.as_slice());
+
+        let probed = Input::Dynamic(Arc::clone(&bytes))
+            .probe("vector.svg", Limits::default(), None)
+            .expect("SVG probe succeeds");
+        assert_eq!(
+            probed,
+            Probed {
+                size: Size::new(32, 16),
+                scalable: true,
+            }
+        );
+
+        let supersampled = Input::Dynamic(Arc::clone(&bytes))
+            .decode("vector.svg", 128, Limits::default(), None)
+            .expect("SVG decodes above its 32x16 viewBox");
+        assert_eq!(supersampled.size, Size::new(128, 64));
+
+        let capped = Input::Dynamic(bytes)
+            .decode("vector.svg", 128, Limits { max_dimension: 96 }, None)
+            .expect("SVG decode still honors Limits::max_dimension");
+        assert_eq!(capped.size, Size::new(96, 48));
     }
 }

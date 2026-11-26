@@ -241,6 +241,8 @@ enum Probe {
 struct Entry {
     /// The source's own extent, once the probe has reported it.
     intrinsic: Option<Size<u32, Device>>,
+    /// Whether the source is resolution-independent vector content (SVG).
+    scalable: bool,
     /// Where the header probe is.
     probe: Probe,
     /// Every size this source has been decoded at.
@@ -267,6 +269,7 @@ impl Entry {
     fn probing() -> Self {
         Self {
             intrinsic: None,
+            scalable: false,
             probe: Probe::Pending,
             variants: FxHashMap::default(),
             active: None,
@@ -284,15 +287,26 @@ impl Entry {
         self.variants.values().map(Variant::held_bytes).sum()
     }
 
+    /// Whether an already-decoded `class` satisfies `target` without kicking another decode.
+    fn satisfies(&self, class: Class, target: Class) -> bool {
+        if self.scalable {
+            class == target
+        } else {
+            class >= target
+        }
+    }
+
     /// The class the current demand asks to have decoded, or `None` before there is a demand.
     ///
-    /// The extent caps the class once the probe has reported it, so a huge box over a small
-    /// picture does not name a class the source cannot fill. Before the probe answers, the
-    /// demand alone decides — the decode itself never upscales, so an uncapped class costs
-    /// nothing beyond a key naming more than the texels deliver, and waiting for the probe would
-    /// serialise two reads that can run side by side.
+    /// For raster sources, the extent caps the class once the probe has reported it, so a huge
+    /// box over a small picture does not name a class the source cannot fill. Scalable vector
+    /// sources (SVG) instead target the exact demanded device-pixel long edge capped by
+    /// `max_dimension` so crisp edges never pay raster-upscale limits or downsampling blur.
     fn target_class(&self, max_dimension: u32) -> Option<Class> {
         let demand = self.demanded?;
+        if self.scalable {
+            return Some(demand.max(1).min(max_dimension));
+        }
         let step = LADDER
             .into_iter()
             .find(|step| *step >= demand)
@@ -305,7 +319,7 @@ impl Entry {
     }
 
     /// The class that should be attached: the smallest attachable one that satisfies the target,
-    /// or the largest attachable one when none does.
+    /// or the largest attachable one (nearest for scalable vectors) when none does.
     ///
     /// Attachable means decoded and held, or uploaded with the tile standing in for the texels.
     fn best_attachable(&self, max_dimension: u32) -> Option<Class> {
@@ -316,6 +330,31 @@ impl Entry {
             )
         };
         let target = self.target_class(max_dimension);
+        if self.scalable {
+            if let Some(target) = target {
+                if attachable(&target) {
+                    return Some(target);
+                }
+                return self
+                    .variants
+                    .keys()
+                    .filter(|class| attachable(class))
+                    .copied()
+                    .min_by_key(|&class| {
+                        (
+                            class.abs_diff(target),
+                            usize::from(Some(class) != self.active),
+                            std::cmp::Reverse(class),
+                        )
+                    });
+            }
+            return self
+                .variants
+                .keys()
+                .filter(|class| attachable(class))
+                .max()
+                .copied();
+        }
         let sufficient = self
             .variants
             .keys()
@@ -336,7 +375,7 @@ impl Entry {
 /// What one background task delivered.
 enum Arrival {
     /// A header probe's answer.
-    Probe(Result<Size<u32, Device>, zgui_image::DecodeError>),
+    Probe(Result<input::Probed, zgui_image::DecodeError>),
     /// One variant's decode.
     Variant(Class, u64, Result<DecodedVariant, zgui_image::DecodeError>),
 }
@@ -648,8 +687,10 @@ impl ImageLoader {
             }
             self.kicked += 1;
             self.next_generation += 1;
+            let scalable = self.completed.looks_scalable(&key);
             kick_probe(key.clone(), self.next_generation, &self.completed, self.limits);
             let mut entry = Entry::probing();
+            entry.scalable = scalable;
             entry.generation = self.next_generation;
             entry
         });
@@ -687,6 +728,7 @@ impl ImageLoader {
             self.next_generation += 1;
             entry.generation = self.next_generation;
             entry.intrinsic = None;
+            entry.scalable = false;
             entry.active = None;
             entry.attach_owed = false;
             entry.probe = Probe::Failed;
@@ -701,12 +743,13 @@ impl ImageLoader {
         };
         if entry.generation != generation { return; }
         match arrival {
-            Arrival::Probe(Ok(native)) => {
+            Arrival::Probe(Ok(probed)) => {
                 entry.probe = Probe::Done;
-                entry.intrinsic = Some(native);
+                entry.intrinsic = Some(probed.size);
+                entry.scalable = probed.scalable;
                 for &node in &entry.nodes {
                     self.intrinsics
-                        .set(ReplacedId::new(node), intrinsic_of(native));
+                        .set(ReplacedId::new(node), intrinsic_of(probed.size));
                     touched.push(node);
                 }
             }
@@ -807,6 +850,17 @@ impl ImageLoader {
             }
             entry.active = Some(best);
             entry.attach_owed = false;
+            if entry.scalable {
+                entry.variants.retain(|&class, variant| {
+                    if class == best
+                        || matches!(variant.state, VariantState::Pending | VariantState::Failed)
+                    {
+                        return true;
+                    }
+                    content.remove_shared_tile(variant.handle);
+                    false
+                });
+            }
         }
     }
 
@@ -1104,6 +1158,7 @@ impl ImageLoader {
         self.clock += 1;
         let entry = Entry {
             intrinsic: Some(decoded.size),
+            scalable: false,
             probe: Probe::Done,
             variants,
             active: Some(class),
@@ -1142,7 +1197,7 @@ fn wanted_kick(entry: &Entry, max_dimension: u32) -> Option<Class> {
     }
     let target = entry.target_class(max_dimension)?;
     let satisfied = entry.variants.iter().any(|(class, variant)| {
-        *class >= target
+        entry.satisfies(*class, target)
             && matches!(
                 variant.state,
                 VariantState::Ready(_) | VariantState::Pending | VariantState::Uploaded { .. }
@@ -1216,11 +1271,23 @@ fn demand_of(
             }
             let fit = layout.node(*box_).style.get_position().object_fit;
             let demanded = match (fit, native) {
+                (ObjectFitValue::Contain, Some(native)) if native.width > 0 && native.height > 0 => {
+                    let factor = (width / native.width as f32).min(height / native.height as f32);
+                    native_long(native) * factor
+                }
                 (ObjectFitValue::Cover, Some(native)) if native.width > 0 && native.height > 0 => {
                     // The box's device pixels over the source's own, so the factor carries the
                     // display scale with it; the crop shows the scaled picture's long edge.
                     let factor = (width / native.width as f32).max(height / native.height as f32);
                     native_long(native) * factor
+                }
+                (ObjectFitValue::ScaleDown, Some(native))
+                    if native.width > 0 && native.height > 0 =>
+                {
+                    let natural_w = native.width as f32 * scale;
+                    let natural_h = native.height as f32 * scale;
+                    let factor = (width / natural_w).min(height / natural_h).min(1.0);
+                    native_long(native) * scale * factor
                 }
                 (ObjectFitValue::None, Some(native)) => native_long(native) * scale,
                 _ => width.max(height),
@@ -1228,7 +1295,11 @@ fn demand_of(
             long = long.max(demanded);
         }
     }
-    long.max(0.0).ceil() as u32
+    if long > 0.0 {
+        ((long - 1e-4).max(0.0).ceil() as u32).max(1)
+    } else {
+        0
+    }
 }
 
 /// The intrinsic one probe reports: the source's pixel count, read as CSS pixels.
@@ -1259,7 +1330,10 @@ fn kick_probe(key: SourceKey, generation: u64, completed: &DecodeQueue, limits: 
         completed.start_local(key, generation, async move {
             let result = match measuring.await {
                 Ok((0, _) | (_, 0)) => Err(zgui_image::DecodeError::Empty),
-                Ok((width, height)) => Ok(Size::new(width, height)),
+                Ok((width, height)) => Ok(input::Probed {
+                    size: Size::new(width, height),
+                    scalable: false,
+                }),
                 Err(reason) => Err(unloaded(reason)),
             };
             Arrival::Probe(result)
@@ -1565,5 +1639,45 @@ mod tests {
             "and then the next coldest"
         );
         assert!(loader.holds_texels_for_tests("third.png"));
+    }
+
+    #[test]
+    fn scalable_entries_target_exact_demand_above_intrinsic_and_cap_at_limit() {
+        let mut svg = entry(1280);
+        svg.intrinsic = Some(Size::new(640, 150));
+        svg.scalable = true;
+        assert_eq!(
+            svg.target_class(4096),
+            Some(1280),
+            "2x HiDPI SVG supersedes its 640px intrinsic extent without LADDER overshoot"
+        );
+
+        svg.demanded = Some(460);
+        assert_eq!(
+            svg.target_class(4096),
+            Some(460),
+            "fractional pane widths keep exact device demand rather than 512px downsampling"
+        );
+        svg.variants.insert(640, ready(640));
+        assert_eq!(
+            wanted_kick(&svg, 4096),
+            Some(460),
+            "scalable entries re-rasterize to exact demand instead of reusing a mismatched class"
+        );
+        svg.variants.insert(300, ready(300));
+        assert_eq!(
+            svg.best_attachable(4096),
+            Some(300),
+            "closest attachable variant stands in while exact 460px variant decodes (|460-300| < |460-640|)"
+        );
+        svg.variants.insert(460, ready(460));
+        assert_eq!(svg.best_attachable(4096), Some(460));
+
+        svg.demanded = Some(8192);
+        assert_eq!(
+            svg.target_class(2048),
+            Some(2048),
+            "max_dimension still bounds scalable rasterization"
+        );
     }
 }
