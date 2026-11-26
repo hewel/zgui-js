@@ -1,4 +1,4 @@
-import { Show, createSignal, focus, onCleanup, renderApp } from "@hewel/zgui";
+import { Show, createSignal, focus, onCleanup, renderApp, untrack } from "@hewel/zgui";
 import type { NativeNode } from "@hewel/zgui";
 import {
   Button,
@@ -18,11 +18,12 @@ export function mount(root: NativeNode) {
     const bumps = new Map<string, () => void>();
     let first!: NativeNode;
     function Body(props: { id: string; label: string }) {
+      const id = untrack(() => props.id);
       const [count, setCount] = createSignal(0);
       const bump = () => setCount(n => n + 1);
-      bumps.set(props.id, bump);
+      bumps.set(id, bump);
       onCleanup(() => {
-        if (bumps.get(props.id) === bump) bumps.delete(props.id);
+        if (bumps.get(id) === bump) bumps.delete(id);
       });
       return (
         <text testId={props.id + "-value"}>

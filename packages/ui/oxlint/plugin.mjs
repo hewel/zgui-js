@@ -982,15 +982,25 @@ const rules = {
     meta: {
       type: "problem",
       docs: {
-        description: "Disallow importing solid-js or solid-js/web directly instead of @hewel/zgui",
+        description:
+          "Disallow importing solid-js or @solidjs/* runtime packages directly instead of @hewel/zgui",
       },
       schema: [],
     },
     create(context) {
+      const isForbiddenSolidSource = value =>
+        value === "solid-js" ||
+        value.startsWith("solid-js/") ||
+        value === "@solidjs/web" ||
+        value.startsWith("@solidjs/web/") ||
+        value === "@solidjs/signals" ||
+        value.startsWith("@solidjs/signals/") ||
+        value === "@solidjs/universal" ||
+        value.startsWith("@solidjs/universal/");
       const checkSource = node => {
         const source = node.source;
         if (!source || typeof source.value !== "string") return;
-        if (source.value === "solid-js" || source.value.startsWith("solid-js/")) {
+        if (isForbiddenSolidSource(source.value)) {
           context.report({
             node: source,
             message: `Do not import from "${source.value}" in zgui-js apps; import reactive primitives (createSignal, createMemo, createEffect, onCleanup, Show, For, createStore, etc.) from "@hewel/zgui" so the native Solid 2.0.1 runtime stays unified.`,

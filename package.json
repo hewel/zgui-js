@@ -51,6 +51,7 @@
     "@hewel/zgui": "workspace:*",
     "@hewel/zgui-build": "workspace:*",
     "@hewel/zgui-services": "workspace:*",
+    "eslint-plugin-solid": "0.20.1",
     "oxfmt": "0.79.0",
     "oxlint": "1.94.0",
     "solid-js": "2.0.1",

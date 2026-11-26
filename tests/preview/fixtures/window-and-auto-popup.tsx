@@ -37,7 +37,7 @@ function ShadowCardContent(props: {
           borderRadius: "16px",
           backgroundColor: "#2563eb",
         }}
-        onClick={props.onHit}
+        onClick={() => props.onHit()}
       >
         <text testId="shadow-hits">{`shadow=${props.hits()}`}</text>
       </control>

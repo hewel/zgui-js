@@ -453,20 +453,25 @@ export function mount(root: NativeNode): () => void {
       });
     }
 
-    // 7. oxlint passes on valid code and rejects forbidden raw setTimeout via @hewel/zgui/oxlint/recommended.json.
+    // 7. oxlint passes on valid code and rejects forbidden raw setTimeout + Solid 2.0 store mutation via @hewel/zgui/oxlint/recommended.json.
     await execute(path.join(appDir, "node_modules/.bin/oxlint"), ["--deny-warnings"], {
       cwd: appDir,
       env: cleanEnv,
     });
     const badFile = path.join(appDir, "src/bad-lint.ts");
-    await writeFile(badFile, "export function bad() { setTimeout(() => {}, 10); }\n");
+    await writeFile(
+      badFile,
+      'import { createStore } from "@hewel/zgui";\nexport function bad() { setTimeout(() => {}, 10); const [s] = createStore({ n: 0 }); s.n = 1; return s; }\n',
+    );
     await assert.rejects(
       execute(path.join(appDir, "node_modules/.bin/oxlint"), ["--deny-warnings"], {
         cwd: appDir,
         env: cleanEnv,
       }),
       error => {
-        assert.match(`${error.stdout ?? ""}${error.stderr ?? ""}`, /setTimeout/);
+        const output = `${error.stdout ?? ""}${error.stderr ?? ""}`;
+        assert.match(output, /setTimeout/);
+        assert.match(output, /solid\(no-store-mutation-outside-setter\)/);
         return true;
       },
     );

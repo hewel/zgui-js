@@ -292,11 +292,11 @@ export function createStudioState(): StudioState {
     try {
       const count = await storage.indexDocuments(list);
       if (disposed) return;
-      const wasReady = ftsReady();
+      const wasReady = untrack(ftsReady);
       setIndexedCount(count);
       if (!wasReady) {
         setFtsReady(true);
-      } else if (sanitizeFtsQuery(searchQuery()).length > 0) {
+      } else if (sanitizeFtsQuery(untrack(searchQuery)).length > 0) {
         searchHostQuery.refetch();
       }
     } catch {
@@ -306,7 +306,7 @@ export function createStudioState(): StudioState {
 
   const scheduleReindex = () => {
     reindexTimer.schedule(120, () => {
-      void reindexAll(docs());
+      void reindexAll(untrack(docs));
     });
   };
 
@@ -412,7 +412,7 @@ export function createStudioState(): StudioState {
       try {
         await storage.init();
         if (disposed) return;
-        await reindexAll(docs());
+        await reindexAll(untrack(docs));
         await refreshBookmarks();
       } catch {
         // Fallback gracefully to in-memory defaults

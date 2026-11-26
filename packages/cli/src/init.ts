@@ -89,6 +89,7 @@ function desktopAppFiles(name: string): Record<string, string> {
         },
         devDependencies: {
           "@hewel/zgui-cli": sdkRange,
+          "eslint-plugin-solid": "0.20.1",
           oxlint: "1.94.0",
           tsrs: "7.1.0-beta.tsrs2",
         },
@@ -240,6 +241,7 @@ function waylandShellFiles(name: string): Record<string, string> {
         },
         devDependencies: {
           "@hewel/zgui-cli": sdkRange,
+          "eslint-plugin-solid": "0.20.1",
           oxlint: "1.94.0",
           tsrs: "7.1.0-beta.tsrs2",
         },

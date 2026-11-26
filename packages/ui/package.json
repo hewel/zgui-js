@@ -97,5 +97,13 @@
     "@solidjs/signals": "2.0.1",
     "@solidjs/universal": "2.0.1",
     "solid-js": "2.0.1"
+  },
+  "peerDependencies": {
+    "eslint-plugin-solid": "^0.20.0"
+  },
+  "peerDependenciesMeta": {
+    "eslint-plugin-solid": {
+      "optional": true
+    }
   }
 }

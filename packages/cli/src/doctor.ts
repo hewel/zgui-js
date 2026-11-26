@@ -236,19 +236,29 @@ export async function runDoctor({
     ...(tsrsVersion ? {} : { remediation: "Install `tsrs` or `@hewel/zgui-build` dependencies." }),
   });
 
-  // 7. oxlint linter.
-  const oxlintVersion = resolveToolVersion("oxlint", [
-    ...searchBases,
-    path.resolve(import.meta.dir, "../../.."),
-  ]);
+  // 7. oxlint linter & eslint-plugin-solid.
+  const oxlintSearchBases = [...searchBases, path.resolve(import.meta.dir, "../../..")];
+  const oxlintVersion = resolveToolVersion("oxlint", oxlintSearchBases);
+  const solidPluginVersion = resolveToolVersion("eslint-plugin-solid", oxlintSearchBases);
+  const lintReady = Boolean(oxlintVersion && solidPluginVersion);
+  const lintDetail = lintReady
+    ? `oxlint ${oxlintVersion}, eslint-plugin-solid ${solidPluginVersion}`
+    : oxlintVersion
+      ? `oxlint ${oxlintVersion} (eslint-plugin-solid not installed in this project)`
+      : solidPluginVersion
+        ? `oxlint not installed in this project (eslint-plugin-solid ${solidPluginVersion})`
+        : "oxlint and eslint-plugin-solid not installed in this project";
   checks.push({
     id: "oxlint",
     label: "Linter (oxlint)",
-    status: oxlintVersion ? "ok" : "warn",
-    detail: oxlintVersion ? `oxlint ${oxlintVersion}` : "oxlint not installed in this project",
-    ...(oxlintVersion
+    status: lintReady ? "ok" : "warn",
+    detail: lintDetail,
+    ...(lintReady
       ? {}
-      : { remediation: "Install `oxlint` and extend `@hewel/zgui/oxlint/recommended`." }),
+      : {
+          remediation:
+            "Install `oxlint` and `eslint-plugin-solid`, and extend `@hewel/zgui/oxlint/recommended`.",
+        }),
   });
 
   return {

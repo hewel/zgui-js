@@ -13,8 +13,8 @@ export function mount(root: NativeNode) {
     const [open, setOpen] = createSignal(false);
     let mounts = 0;
     function Body() {
-      const [value] = createSignal(++mounts);
-      return <text testId="card-value">Preview {value()}</text>;
+      const value = ++mounts;
+      return <text testId="card-value">Preview {value}</text>;
     }
     return (
       <ThemeProvider scheme="light">

@@ -186,7 +186,7 @@ Damage depends on which CSS properties changed, regardless of whether the change
 
 `@hewel/zgui` ships two Oxlint presets so styling boundaries are enforced automatically:
 
-- **`@hewel/zgui/oxlint/recommended`** (`packages/ui/oxlint/recommended.json`): enables `zgui/no-static-component-stylesheet`, which errors on `mountStylesheet(...)` / `mountShellStylesheet(...)` calls inside components or helper functions when the CSS string is static. Move static rules into `*.module.css` or `src/app.css` so `StyleDependencies` and `Stylist` indexes are not invalidated at runtime.
+- **`@hewel/zgui/oxlint/recommended`** (`packages/ui/oxlint/recommended.json`): enables Solid 2.0 reactivity rules (`eslint-plugin-solid` `0.20.1` via `solid.mjs`), `zgui/no-solid-web-imports`, and `zgui/no-static-component-stylesheet`, which errors on static `mountStylesheet(...)` / `mountShellStylesheet(...)` calls inside components or helper functions so `StyleDependencies` and `Stylist` indexes are not invalidated at runtime.
 - **`@hewel/zgui/oxlint/strict`** (`packages/ui/oxlint/strict.json`): extends `recommended` and enables `zgui/prefer-stylesheet`, which flags static inline `style="..."` strings, purely static `style={{ ... }}` objects, static ordinary properties mixed into dynamic `style={{ ... }}` objects, and finite static ternaries on ordinary CSS properties (such as `color: active() ? "var(--a)" : "var(--b)"`) on the 12 native tags (`box`, `row`, `column`, `stack`, `text`, `label`, `scroll`, `control`, `field`, `editor`, `image`, `vector`) and `@hewel/zgui` components. Continuous dynamic values, dynamic templates, unknown spreads, forwarded `props.style`, and runtime `--*` custom properties are allowed.
 
 ### Incremental Rollout in Large Apps

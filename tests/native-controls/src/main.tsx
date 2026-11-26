@@ -1,4 +1,4 @@
-import { Button, createSignal, renderApp } from "@hewel/zgui";
+import { Button, createSignal, renderApp, untrack } from "@hewel/zgui";
 import type { NativeEvent, NativeNode } from "@hewel/zgui";
 
 let nextMode: (() => void) | undefined;
@@ -20,14 +20,14 @@ function Controls() {
   function publish() {
     setReport(
       JSON.stringify({
-        mode: mode(),
+        mode: untrack(mode),
         primary,
         guarded,
         disabled,
         replacement,
         expired,
         log,
-        disabledInKeydown: disabledInKeydown(),
+        disabledInKeydown: untrack(disabledInKeydown),
         disableKeydowns,
       }),
     );

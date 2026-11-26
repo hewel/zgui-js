@@ -5,6 +5,7 @@ import {
   createSignal,
   onCleanup,
   renderApp,
+  untrack,
   type NativeNode,
 } from "@hewel/zgui";
 import {
@@ -284,7 +285,7 @@ function InspectorApp() {
         setSnapshot(data);
         const surfaces = data.surfaces ?? [];
         const built = buildSurfaceTree(surfaces);
-        if (expandedIds().length === 0 && built.defaultExpanded.length > 0) {
+        if (untrack(expandedIds).length === 0 && built.defaultExpanded.length > 0) {
           setExpandedIds(built.defaultExpanded);
         }
         const picked = data.picker?.selected;
@@ -293,7 +294,7 @@ function InspectorApp() {
           if (built.byId.has(pickedId)) {
             setSelectedId(pickedId);
           }
-        } else if (!selectedId()) {
+        } else if (!untrack(selectedId)) {
           const first = built.byId.keys().next().value;
           if (first) setSelectedId(first);
         }

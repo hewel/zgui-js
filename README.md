@@ -53,7 +53,7 @@ No Rust or C/C++ toolchain is required on Linux `x86_64` (`glibc >= 2.39`):
 | ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Rust             | `1.100.0`, pinned by [`rust-toolchain.toml`](rust-toolchain.toml)                                                                                          |
 | Native toolchain | C/C++ compiler toolchain and `-dev` headers for `rquickjs`, Wayland, Vulkan, Fontconfig, FreeType, and `libxkbcommon` (or [`shell.nix`](shell.nix) on Nix) |
-| Pinned dev tools | `tsrs` (`7.1.0-beta.tsrs2`), `oxlint` (`1.94.0`), `oxfmt` (`0.79.0`) installed locally via Bun                                                             |
+| Pinned dev tools | `tsrs` (`7.1.0-beta.tsrs2`), `oxlint` (`1.94.0`), `eslint-plugin-solid` (`0.20.1`), `oxfmt` (`0.79.0`) installed locally via Bun                           |
 
 - **Platform support:** Interactive examples and Wayland shells are verified on Linux with Wayland. Prebuilt host distribution ships Linux x64 glibc ([`@hewel/zgui-host-linux-x64`](https://www.npmjs.com/package/@hewel/zgui-host-linux-x64)) automatically via `@hewel/zgui-cli` `optionalDependencies`, falling back automatically to Cargo inside a repo checkout.
 - **Pinned dependencies:** Keep `Cargo.lock` and `bun.lock` when developing inside this repository. See the [implementation baseline](docs/development/baseline.md) and [`vendor/README.md`](vendor/README.md) for audited pins and local native patches.

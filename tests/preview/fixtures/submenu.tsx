@@ -1,4 +1,4 @@
-import { Show, createSignal, onCleanup, renderApp } from "@hewel/zgui";
+import { Show, createSignal, onCleanup, renderApp, untrack } from "@hewel/zgui";
 import type { NativeNode } from "@hewel/zgui";
 import {
   Button,
@@ -27,10 +27,11 @@ export function mount(root: NativeNode) {
       [selections, setSelections] = createSignal(0);
     const bumpers: Record<string, () => void> = {};
     function Counter(props: { id: string }) {
+      const id = untrack(() => props.id);
       const [count, setCount] = createSignal(0);
-      bumpers[props.id] = () => setCount(v => v + 1);
+      bumpers[id] = () => setCount(v => v + 1);
       onCleanup(() => {
-        delete bumpers[props.id];
+        delete bumpers[id];
       });
       return <text testId={props.id}>{count()}</text>;
     }

@@ -402,6 +402,7 @@ function auditTarball(tarballPath: string, expectedName: string, expectedVersion
       "package/oxlint/recommended.json",
       "package/oxlint/strict.json",
       "package/oxlint/plugin.mjs",
+      "package/oxlint/solid.mjs",
       "package/tsconfig.native.json",
       "package/upstream/LICENSE",
       "package/upstream/NOTICE",

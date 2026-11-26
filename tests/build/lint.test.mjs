@@ -190,6 +190,55 @@ const negativeCases = [
     guidance: /@hewel\/zgui/,
   },
   {
+    name: "zgui/no-solid-web-imports (@solidjs/web)",
+    file: "solidjs-web.ts",
+    code: 'import { render } from "@solidjs/web";\nexport const r = render;\n',
+    expected: /zgui\(no-solid-web-imports\)/,
+    guidance: /@hewel\/zgui/,
+  },
+  {
+    name: "zgui/no-solid-web-imports (@solidjs/signals)",
+    file: "solidjs-signals.ts",
+    code: 'import { createSignal } from "@solidjs/signals";\nexport const s = createSignal;\n',
+    expected: /zgui\(no-solid-web-imports\)/,
+    guidance: /@hewel\/zgui/,
+  },
+  {
+    name: "solid/no-store-mutation-outside-setter (@hewel/zgui)",
+    file: "store-mutation.ts",
+    code: 'import { createStore } from "@hewel/zgui";\nexport function bad() { const [state] = createStore({ items: [1] }); state.items.push(2); return state; }\n',
+    expected: /solid\(no-store-mutation-outside-setter\)/,
+    guidance: /setter/,
+  },
+  {
+    name: "solid/no-write-in-pure-computation (@hewel/zgui)",
+    file: "write-in-memo.ts",
+    code: 'import { createMemo, createSignal } from "@hewel/zgui";\nexport function bad() { const [count, setCount] = createSignal(0); return createMemo(() => { setCount(1); return count(); }); }\n',
+    expected: /solid\(no-write-in-pure-computation\)/,
+    guidance: /pure/,
+  },
+  {
+    name: "solid/no-destructure (@hewel/zgui)",
+    file: "destructure-props.tsx",
+    code: "export function Bad({ label }: { label: string }) { return <text>{label}</text>; }\n",
+    expected: /solid\(no-destructure\)/,
+    guidance: /Destructuring component props/,
+  },
+  {
+    name: "solid/no-accessor-as-prop (@hewel/zgui)",
+    file: "accessor-as-prop.tsx",
+    code: 'import { createSignal } from "@hewel/zgui";\nexport function Bad() { const [title, setTitle] = createSignal("hi"); return <box title={title} onClick={() => setTitle("next")} />; }\n',
+    expected: /solid\(no-accessor-as-prop\)/,
+    guidance: /signal accessor/,
+  },
+  {
+    name: "solid/no-single-arg-create-effect (@hewel/zgui)",
+    file: "single-arg-effect.ts",
+    code: 'import { createEffect } from "@hewel/zgui";\nexport function bad() { createEffect(() => {}); }\n',
+    expected: /solid\(no-single-arg-create-effect\)/,
+    guidance: /compute and effect/,
+  },
+  {
     name: "no-restricted-globals (setTimeout)",
     file: "timer.ts",
     code: "export function delay() { return setTimeout(() => {}, 10); }\n",
@@ -258,11 +307,20 @@ test("exported @hewel/zgui/oxlint/recommended preset works standalone for downst
     "utf8",
   );
 
-  // Positive fixture: accessor ref pattern + service call inside mount() + @hewel/zgui imports.
+  // Positive fixture: Solid 2.0 idioms (store setter, keyed/unkeyed For, ownedWrite, onSettled, untrack, accessor ref) + @hewel/zgui imports.
   const goodFile = path.join(dir, "good.tsx");
   await writeFile(
     goodFile,
-    `import { createDelay, createSignal, observeGeometry, renderApp } from "@hewel/zgui";
+    `import {
+  For,
+  createDelay,
+  createSignal,
+  createStore,
+  observeGeometry,
+  onSettled,
+  renderApp,
+  untrack,
+} from "@hewel/zgui";
 import type { NativeNode } from "@hewel/zgui";
 import { spawnCommand } from "@hewel/zgui-services";
 
@@ -273,11 +331,25 @@ export function makeExtra(cond: boolean) {
 export function mount(root: NativeNode) {
   return renderApp(() => {
     const [scroller, setScroller] = createSignal<NativeNode | null>(null);
+    const [rev, setRev] = createSignal(0, { ownedWrite: true });
+    const [state, setState] = createStore({ items: [{ id: "a" }] });
     observeGeometry(scroller, "scrollPosition", () => {});
+    onSettled(() => {
+      setRev(untrack(rev) + 1);
+      setState(draft => {
+        draft.items.push({ id: "b" });
+      });
+    });
     const delay = createDelay();
     delay.schedule(50, () => { spawnCommand("/usr/bin/uname", ["-s"]); });
     void makeExtra(true);
-    return <scroll ref={setScroller}><text>ok</text></scroll>;
+    return (
+      <scroll ref={setScroller}>
+        <text>{rev()}</text>
+        <For each={state.items}>{item => <text>{item.id}</text>}</For>
+        <For each={state.items} keyed={false}>{item => <text>{item().id}</text>}</For>
+      </scroll>
+    );
   }, root);
 }
 `,
@@ -290,18 +362,20 @@ export function mount(root: NativeNode) {
   );
   assert.ok(goodResult.stdout.includes("Found 0 warnings and 0 errors"), goodResult.stdout);
 
-  // Negative fixture: ref cleanup + top-level service + solid-js/web import + getter spread all caught by preset.
+  // Negative fixture: ref cleanup + top-level service + solid-js/web import + getter spread + Solid 2.0 violations caught by preset.
   const badFile = path.join(dir, "bad.tsx");
   await writeFile(
     badFile,
     `import { createSignal } from "solid-js";
-import { observeGeometry } from "@hewel/zgui";
+import { createStore, observeGeometry } from "@hewel/zgui";
 import { spawnCommand } from "@hewel/zgui-services";
 export const early = spawnCommand("/usr/bin/uname", ["-a"]);
 export const badSpread = { ...(true ? { get x() { return 1; } } : {}) };
 export const View = () => {
-  const [x] = createSignal(0);
-  return <scroll ref={el => observeGeometry(el, "scrollPosition", () => {})}><text>{x()}</text></scroll>;
+  const [x, setX] = createSignal(0);
+  const [store] = createStore({ items: [1] });
+  store.items.push(2);
+  return <scroll ref={el => observeGeometry(el, "scrollPosition", () => {})} onClick={() => setX(v => v + 1)}><text>{x()}</text></scroll>;
 };
 `,
     "utf8",
@@ -326,6 +400,7 @@ export const View = () => {
   assert.match(badOutput, /zgui\(no-top-level-service-call\)/);
   assert.match(badOutput, /zgui\(no-cleanup-in-ref\)/);
   assert.match(badOutput, /zgui\(no-getter-object-spread\)/);
+  assert.match(badOutput, /solid\(no-store-mutation-outside-setter\)/);
 });
 
 test("exported @hewel/zgui/oxlint/strict preset enforces prefer-stylesheet without false positives", async t => {
@@ -344,7 +419,7 @@ test("exported @hewel/zgui/oxlint/strict preset enforces prefer-stylesheet witho
   const goodFile = path.join(dir, "good-strict.tsx");
   await writeFile(
     goodFile,
-    `import { createSignal, mountShellStylesheet, mountStylesheet } from "@hewel/zgui";
+    `import { createSignal, mountShellStylesheet, mountStylesheet, untrack } from "@hewel/zgui";
 import * as zguiNs from "@hewel/zgui";
 import { Button as ZButton } from "@hewel/zgui/components";
 
@@ -369,7 +444,7 @@ export function GoodView(props: {
   hidden: () => boolean;
   tone: () => string;
 }) {
-  const [color] = createSignal("#fff");
+  const [color, setColor] = createSignal("#fff");
   const mountDynamic = () => {
     mountStylesheet("dyn", \`.dyn { color: \${color()}; }\`);
   };
@@ -381,7 +456,7 @@ export function GoodView(props: {
   };
   const Button = (p: { style?: string }) => <box data-s={p.style} />;
   const mutated = { width: "100px" };
-  mutated.width = \`\${props.canvasW()}px\`;
+  mutated.width = \`\${untrack(() => props.canvasW())}px\`;
   let mutableStr = "gap: 4px";
   mutableStr = "gap: 8px";
   void mountDynamic;
@@ -405,7 +480,7 @@ export function GoodView(props: {
       <box style={mutableStr} />
       <Bar style="floating" />
       <Button style="width: 120px" />
-      <ZButton style={{ transform: props.spring() }}>Go</ZButton>
+      <ZButton style={{ transform: props.spring() }} onClick={() => setColor("#000")}>Go</ZButton>
     </column>
   );
 }

@@ -362,6 +362,8 @@ test(
       assert.ok(existsSync(path.join(appDir, "zgui.capabilities.json")));
       assert.ok(existsSync(path.join(appDir, "src/App.module.css")));
       assert.ok(existsSync(path.join(appDir, "src/main.tsx")));
+      const scaffoldPkg = JSON.parse(await readFile(path.join(appDir, "package.json"), "utf8"));
+      assert.equal(scaffoldPkg.devDependencies["eslint-plugin-solid"], "0.20.1");
 
       await linkWorkspaceSdk(appDir);
       const { stdout: buildOut } = await execute(process.execPath, [cli, "build"], {

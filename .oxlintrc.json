@@ -83,6 +83,38 @@
       }
     },
     {
+      "files": ["packages/ui/src/solid-native.d.ts", "packages/ui/src/renderer/**"],
+      "rules": {
+        "zgui/no-solid-web-imports": "off"
+      }
+    },
+    {
+      "files": [
+        "packages/ui/src/host.ts",
+        "packages/ui/src/portal.ts",
+        "packages/ui/src/shell.ts",
+        "packages/ui/src/spring.ts",
+        "packages/ui/src/virtual-list.ts",
+        "packages/ui/src/router/components.ts",
+        "packages/ui/src/primitives/menu.ts",
+        "packages/ui/src/primitives/radio.ts",
+        "packages/ui/src/components/accordion.ts",
+        "packages/ui/src/components/collapsible.ts",
+        "packages/ui/src/components/groups.ts",
+        "packages/ui/src/components/icons.ts",
+        "packages/ui/src/components/menubar.ts",
+        "packages/ui/src/components/popper.ts",
+        "packages/ui/src/components/select.ts",
+        "packages/ui/src/components/tabs.ts",
+        "packages/ui/src/components/theme.ts",
+        "packages/ui/src/components/toast.ts",
+        "packages/ui/src/components/tree-view.ts"
+      ],
+      "rules": {
+        "solid/reactivity": "off"
+      }
+    },
+    {
       "files": ["tests/fixtures/**"],
       "rules": {
         "zgui/no-solid-web-imports": "off"
@@ -116,7 +148,11 @@
         "zgui/no-top-level-service-call": "off",
         "no-restricted-globals": "off",
         "no-unused-vars": "off",
-        "no-unassigned-vars": "off"
+        "no-unassigned-vars": "off",
+        "solid/no-unassigned-vars": "off",
+        "solid/no-unused-signal": "off",
+        "solid/reactivity": "off",
+        "solid/event-handlers": "off"
       }
     },
     {
