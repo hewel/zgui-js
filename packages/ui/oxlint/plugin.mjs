@@ -161,6 +161,33 @@ function calleeHelperName(callee) {
   return null;
 }
 
+function findObjectGetterInSpread(expr) {
+  if (!expr) return null;
+  switch (expr.type) {
+    case "ParenthesizedExpression":
+    case "TSAsExpression":
+    case "TSSatisfiesExpression":
+    case "TSTypeAssertion":
+    case "TSNonNullExpression":
+      return findObjectGetterInSpread(expr.expression);
+    case "ConditionalExpression":
+      return findObjectGetterInSpread(expr.consequent) ?? findObjectGetterInSpread(expr.alternate);
+    case "LogicalExpression":
+      return findObjectGetterInSpread(expr.left) ?? findObjectGetterInSpread(expr.right);
+    case "SequenceExpression": {
+      const last = expr.expressions?.at(-1);
+      return last ? findObjectGetterInSpread(last) : null;
+    }
+    case "ObjectExpression":
+      return (
+        (expr.properties ?? []).find(prop => prop.type === "Property" && prop.kind === "get") ??
+        null
+      );
+    default:
+      return null;
+  }
+}
+
 const rules = {
   "no-direct-bridge": {
     meta: {
@@ -496,6 +523,38 @@ const rules = {
             }
           }
           flushRun();
+        },
+      };
+    },
+  },
+
+  "no-getter-object-spread": {
+    meta: {
+      type: "problem",
+      docs: {
+        description:
+          "Disallow spreading object literals containing getters, which eagerly evaluates getters and breaks Solid reactivity",
+      },
+      schema: [],
+    },
+    create(context) {
+      return {
+        ObjectExpression(node) {
+          for (const prop of node.properties ?? []) {
+            if (prop.type !== "SpreadElement") continue;
+            const getter = findObjectGetterInSpread(prop.argument);
+            if (!getter) continue;
+            const keyName =
+              getter.key?.type === "Identifier"
+                ? getter.key.name
+                : getter.key?.type === "Literal"
+                  ? String(getter.key.value)
+                  : "getter";
+            context.report({
+              node: prop,
+              message: `Do not spread an object literal containing \`get ${keyName}()\`; object spread eagerly evaluates getters once (triggering Solid [STRICT_READ_UNTRACKED] and losing reactivity). Use mergeProps(...) or Object.defineProperty(...) to preserve the getter descriptor.`,
+            });
+          }
         },
       };
     },

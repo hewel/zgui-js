@@ -418,3 +418,57 @@ fn console_formatting_never_calls_object_getters_or_coercion_hooks() {
     "#), "0");
     assert_eq!(session.work.counts(), (0, 0, 0));
 }
+
+#[test]
+fn console_formatting_surfaces_own_error_message_and_stack_without_calling_getters() {
+    let assets = Assets::new();
+    let mut session = Session::new(assets.package(), 9);
+    let getter_ref = &session.work;
+    let formatted_plain = session
+        .engine
+        .with_context(|ctx| {
+            let err: Value<'_> = ctx.eval("new TypeError('reactive boom')")?;
+            let getter = getter_ref.error_stack_getter(&ctx);
+            format_console_line(&ctx, &[err], getter.as_ref())
+        })
+        .unwrap();
+    assert!(
+        formatted_plain.starts_with("TypeError: reactive boom"),
+        "expected TypeError name and message: {formatted_plain}"
+    );
+    assert!(
+        formatted_plain.contains("<eval>") || formatted_plain.contains("eval"),
+        "expected stack trace in console error output: {formatted_plain}"
+    );
+    assert!(
+        !formatted_plain.contains("<exception>"),
+        "plain Error should not collapse: {formatted_plain}"
+    );
+
+    let (formatted_hostile, hits, has_exc) = session
+        .engine
+        .with_context(|ctx| {
+            ctx.eval::<(), _>(
+                r#"
+                globalThis.__consoleHits = 0;
+                const e = new Error('hidden');
+                Object.defineProperties(e, {
+                    message: { get() { globalThis.__consoleHits++; throw Error('message getter'); } },
+                    stack: { get() { globalThis.__consoleHits++; throw Error('stack getter'); } },
+                });
+                globalThis.__hostileErr = e;
+                "#,
+            )?;
+            let err: Value<'_> = ctx.globals().get("__hostileErr")?;
+            let getter = getter_ref.error_stack_getter(&ctx);
+            let line = format_console_line(&ctx, &[err], getter.as_ref())?;
+            let hits: i32 = ctx.globals().get("__consoleHits")?;
+            let has_exc = ctx.has_exception();
+            Ok((line, hits, has_exc))
+        })
+        .unwrap();
+    assert_eq!(formatted_hostile, "<exception>");
+    assert_eq!(hits, 0);
+    assert!(!has_exc);
+    assert_eq!(session.work.counts(), (0, 0, 0));
+}

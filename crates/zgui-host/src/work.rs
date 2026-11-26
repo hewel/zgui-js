@@ -16,6 +16,7 @@ mod workers;
 pub(crate) use workers::WorkerStep;
 
 const MAX_CALLBACKS: usize = 1024;
+const MAX_CONSOLE_LINE_BYTES: usize = 4096;
 // Match the binary socket frame cap; direct images have a separate session budget.
 const MAX_DIRECT_IMAGE_BYTES: u32 = 8 * 1024 * 1024;
 const MAX_DIRECT_IMAGES: u32 = 64;
@@ -112,6 +113,7 @@ pub(crate) struct Work {
     workers: workers::WorkersState,
     external: external::External,
     resolved: ResolvedCapabilities,
+    error_stack_getter: RefCell<Option<Persistent<Function<'static>>>>,
     wake: Arc<dyn Fn() + Send + Sync>,
 }
 
@@ -156,6 +158,7 @@ impl Work {
             workers,
             external,
             resolved,
+            error_stack_getter: RefCell::new(None),
             wake,
         })
     }
@@ -389,26 +392,21 @@ impl Work {
     }
 
     pub(crate) fn install<'js>(self: &Rc<Self>, ctx: &Ctx<'js>) -> rquickjs::Result<()> {
+        if self.error_stack_getter.borrow().is_none() {
+            *self.error_stack_getter.borrow_mut() = capture_native_error_stack_getter(ctx);
+        }
         let console = Object::new(ctx.clone())?;
         for level in ["log", "info", "warn", "error", "debug"] {
-            console.set(level, Func::from(move |values: Rest<Value<'js>>| -> rquickjs::Result<()> {
-                let mut line = String::with_capacity(256);
-                for value in values.0.iter().take(32) {
-                    if line.len() >= 4096 { break; }
-                    if !line.is_empty() { line.push(' '); }
-                    if let Some(string) = value.as_string() {
-                        let string = string.clone().to_cstring()?;
-                        let text: &str = string.as_ref();
-                        let mut end = text.len().min(4096 - line.len());
-                        while !text.is_char_boundary(end) { end -= 1; }
-                        line.push_str(&text[..end]);
-                    } else if let Some(number) = value.as_number() { let _ = write!(line, "{number}"); }
-                    else if let Some(boolean) = value.as_bool() { let _ = write!(line, "{boolean}"); }
-                    else { let _ = write!(line, "<{}>", value.type_of().as_str()); }
-                }
-                eprintln!("js[{level}]: {line}");
-                Ok(())
-            }))?;
+            let weak = Rc::downgrade(self);
+            console.set(
+                level,
+                Func::from(move |ctx: Ctx<'js>, values: Rest<Value<'js>>| -> rquickjs::Result<()> {
+                    let getter = weak.upgrade().and_then(|work| work.error_stack_getter(&ctx));
+                    let line = format_console_line(&ctx, &values.0, getter.as_ref())?;
+                    eprintln!("js[{level}]: {line}");
+                    Ok(())
+                }),
+            )?;
         }
         ctx.globals().set("console", console)?;
         let weak = Rc::downgrade(self);
@@ -683,7 +681,15 @@ impl Work {
         self.sqlite.clear();
         self.workers.clear();
         self.external.clear(self.generation);
+        self.error_stack_getter.borrow_mut().take();
         self.mode.set(Mode::Disposed);
+    }
+
+    pub(crate) fn error_stack_getter<'js>(&self, ctx: &Ctx<'js>) -> Option<Function<'js>> {
+        self.error_stack_getter
+            .borrow()
+            .as_ref()
+            .and_then(|getter| getter.clone().restore(ctx).ok())
     }
 }
 impl Drop for Work { fn drop(&mut self) { self.finish_stop(); } }
@@ -713,6 +719,255 @@ pub(crate) fn service_error<'js>(ctx: &Ctx<'js>, code: &str, message: &str) -> r
 // Define own data properties without invoking application-installed prototype setters.
 fn data_property<T>(value: T) -> Property<T> {
     Property::from(value).writable().enumerable().configurable()
+}
+
+fn push_console_truncated(line: &mut String, text: &str) {
+    let remaining = MAX_CONSOLE_LINE_BYTES.saturating_sub(line.len());
+    if remaining == 0 || text.is_empty() {
+        return;
+    }
+    let end = text.floor_char_boundary(text.len().min(remaining));
+    line.push_str(&text[..end]);
+}
+
+const MAX_CONSOLE_PROTO_HOPS: usize = 8;
+
+#[allow(unsafe_code)]
+unsafe fn clear_js_exception(ctx_ptr: *mut rquickjs::qjs::JSContext) {
+    // SAFETY: caller ensures `ctx_ptr` is the active single-threaded QuickJS context.
+    if unsafe { rquickjs::qjs::JS_HasException(ctx_ptr) } {
+        let exc = unsafe { rquickjs::qjs::JS_GetException(ctx_ptr) };
+        unsafe { rquickjs::qjs::JS_FreeValue(ctx_ptr, exc) };
+    }
+}
+
+#[allow(unsafe_code)]
+fn capture_native_error_stack_getter(ctx: &Ctx<'_>) -> Option<Persistent<Function<'static>>> {
+    let error_ctor: Object<'_> = ctx.globals().get("Error").ok()?;
+    let error_proto: Object<'_> = error_ctor.get("prototype").ok()?;
+    let ctx_ptr = ctx.as_raw().as_ptr();
+    // SAFETY: `ctx_ptr` and `error_proto.as_raw()` belong to the active single-threaded QuickJS context,
+    // and every `JSAtom`/`JSValue` returned by `JS_GetOwnProperty` is freed before returning.
+    unsafe {
+        let atom = rquickjs::qjs::JS_NewAtom(ctx_ptr, c"stack".as_ptr());
+        if atom == rquickjs::qjs::JS_ATOM_NULL {
+            clear_js_exception(ctx_ptr);
+            return None;
+        }
+        let mut desc = std::mem::MaybeUninit::<rquickjs::qjs::JSPropertyDescriptor>::zeroed();
+        let rc = rquickjs::qjs::JS_GetOwnProperty(
+            ctx_ptr,
+            desc.as_mut_ptr(),
+            error_proto.as_raw(),
+            atom,
+        );
+        rquickjs::qjs::JS_FreeAtom(ctx_ptr, atom);
+        if rc <= 0 {
+            if rc < 0 {
+                clear_js_exception(ctx_ptr);
+            }
+            return None;
+        }
+        let desc = desc.assume_init();
+        let is_getset =
+            (desc.flags as u32 & rquickjs::qjs::JS_PROP_TMASK) == rquickjs::qjs::JS_PROP_GETSET;
+        rquickjs::qjs::JS_FreeValue(ctx_ptr, desc.value);
+        rquickjs::qjs::JS_FreeValue(ctx_ptr, desc.setter);
+        if !is_getset {
+            rquickjs::qjs::JS_FreeValue(ctx_ptr, desc.getter);
+            return None;
+        }
+        let getter = Value::from_raw(ctx.clone(), desc.getter).into_function()?;
+        Some(Persistent::save(ctx, getter))
+    }
+}
+
+enum OwnPropKind {
+    DataString(String),
+    NonStringData,
+    Absent,
+    NativeErrorStackGetter,
+    AccessorOrExotic,
+}
+
+#[allow(unsafe_code)]
+fn inspect_own_prop<'js>(
+    ctx: &Ctx<'js>,
+    obj: &Value<'js>,
+    name: &std::ffi::CStr,
+    native_stack_getter: Option<&Function<'js>>,
+) -> OwnPropKind {
+    let ctx_ptr = ctx.as_raw().as_ptr();
+    // SAFETY: `ctx_ptr` and `obj.as_raw()` belong to the active single-threaded QuickJS context;
+    // proxies are excluded before `JS_GetOwnProperty` and every descriptor handle is freed.
+    unsafe {
+        if !obj.is_object() || rquickjs::qjs::JS_IsProxy(obj.as_raw()) {
+            return OwnPropKind::AccessorOrExotic;
+        }
+        let atom = rquickjs::qjs::JS_NewAtom(ctx_ptr, name.as_ptr());
+        if atom == rquickjs::qjs::JS_ATOM_NULL {
+            clear_js_exception(ctx_ptr);
+            return OwnPropKind::AccessorOrExotic;
+        }
+        let mut desc = std::mem::MaybeUninit::<rquickjs::qjs::JSPropertyDescriptor>::zeroed();
+        let rc = rquickjs::qjs::JS_GetOwnProperty(ctx_ptr, desc.as_mut_ptr(), obj.as_raw(), atom);
+        rquickjs::qjs::JS_FreeAtom(ctx_ptr, atom);
+        if rc == 0 {
+            return OwnPropKind::Absent;
+        }
+        if rc < 0 {
+            clear_js_exception(ctx_ptr);
+            return OwnPropKind::AccessorOrExotic;
+        }
+        let desc = desc.assume_init();
+        let kind_flags = desc.flags as u32 & rquickjs::qjs::JS_PROP_TMASK;
+        if kind_flags == rquickjs::qjs::JS_PROP_NORMAL {
+            rquickjs::qjs::JS_FreeValue(ctx_ptr, desc.getter);
+            rquickjs::qjs::JS_FreeValue(ctx_ptr, desc.setter);
+            let val = Value::from_raw(ctx.clone(), desc.value);
+            return match val.as_string().and_then(|s| s.to_string().ok()) {
+                Some(text) => OwnPropKind::DataString(text),
+                None => OwnPropKind::NonStringData,
+            };
+        }
+        let matches_native_stack = kind_flags == rquickjs::qjs::JS_PROP_GETSET
+            && native_stack_getter.is_some_and(|getter| {
+                rquickjs::qjs::JS_IsStrictEqual(ctx_ptr, desc.getter, getter.as_raw())
+            });
+        rquickjs::qjs::JS_FreeValue(ctx_ptr, desc.value);
+        rquickjs::qjs::JS_FreeValue(ctx_ptr, desc.getter);
+        rquickjs::qjs::JS_FreeValue(ctx_ptr, desc.setter);
+        if matches_native_stack {
+            OwnPropKind::NativeErrorStackGetter
+        } else {
+            OwnPropKind::AccessorOrExotic
+        }
+    }
+}
+
+fn error_proto_data_string<'js>(
+    ctx: &Ctx<'js>,
+    error: &Value<'js>,
+    name: &std::ffi::CStr,
+) -> Option<String> {
+    if !error.is_error() {
+        return None;
+    }
+    let mut current = error.clone();
+    for _ in 0..MAX_CONSOLE_PROTO_HOPS {
+        match inspect_own_prop(ctx, &current, name, None) {
+            OwnPropKind::DataString(text) => return Some(text),
+            OwnPropKind::NonStringData
+            | OwnPropKind::NativeErrorStackGetter
+            | OwnPropKind::AccessorOrExotic => return None,
+            OwnPropKind::Absent => {
+                let proto = current.as_object().and_then(|obj| obj.get_prototype())?;
+                current = proto.into_value();
+            }
+        }
+    }
+    None
+}
+
+#[allow(unsafe_code)]
+fn error_stack_string<'js>(
+    ctx: &Ctx<'js>,
+    error: &Value<'js>,
+    native_stack_getter: Option<&Function<'js>>,
+) -> Option<String> {
+    if !error.is_error() {
+        return None;
+    }
+    let mut current = error.clone();
+    for hop in 0..MAX_CONSOLE_PROTO_HOPS {
+        let expected_getter = if hop == 0 { None } else { native_stack_getter };
+        match inspect_own_prop(ctx, &current, c"stack", expected_getter) {
+            OwnPropKind::DataString(text) => return Some(text),
+            OwnPropKind::NativeErrorStackGetter => {
+                let getter = native_stack_getter?;
+                let stack_val: Value<'js> =
+                    match getter.call((rquickjs::function::This(error.clone()),)) {
+                        Ok(val) => val,
+                        Err(_) => {
+                            // SAFETY: active single-threaded QuickJS context.
+                            unsafe { clear_js_exception(ctx.as_raw().as_ptr()) };
+                            return None;
+                        }
+                    };
+                return stack_val.as_string()?.to_string().ok();
+            }
+            OwnPropKind::NonStringData | OwnPropKind::AccessorOrExotic => return None,
+            OwnPropKind::Absent => {
+                let proto = current.as_object().and_then(|obj| obj.get_prototype())?;
+                current = proto.into_value();
+            }
+        }
+    }
+    None
+}
+
+pub(crate) fn format_console_line<'js>(
+    ctx: &Ctx<'js>,
+    values: &[Value<'js>],
+    native_stack_getter: Option<&Function<'js>>,
+) -> rquickjs::Result<String> {
+    let mut line = String::with_capacity(256);
+    for value in values.iter().take(32) {
+        if line.len() >= MAX_CONSOLE_LINE_BYTES {
+            break;
+        }
+        if !line.is_empty() {
+            line.push(' ');
+        }
+        if let Some(string) = value.as_string() {
+            let string = string.clone().to_cstring()?;
+            push_console_truncated(&mut line, string.as_ref());
+        } else if let Some(number) = value.as_number() {
+            let mut formatted = String::new();
+            let _ = write!(formatted, "{number}");
+            push_console_truncated(&mut line, &formatted);
+        } else if let Some(boolean) = value.as_bool() {
+            push_console_truncated(&mut line, if boolean { "true" } else { "false" });
+        } else if value.is_error() {
+            let own_name = error_proto_data_string(ctx, value, c"name").filter(|s| !s.is_empty());
+            let own_msg = error_proto_data_string(ctx, value, c"message");
+            let own_stack = error_stack_string(ctx, value, native_stack_getter)
+                .filter(|s| !s.is_empty());
+            if own_msg.is_some() || own_stack.is_some() {
+                let label = own_name.as_deref().unwrap_or("Error");
+                match (own_msg.as_deref(), own_stack.as_deref()) {
+                    (Some(msg), Some(stk)) if !msg.is_empty() => {
+                        push_console_truncated(&mut line, label);
+                        push_console_truncated(&mut line, ": ");
+                        push_console_truncated(&mut line, msg);
+                        push_console_truncated(&mut line, "\n");
+                        push_console_truncated(&mut line, stk);
+                    }
+                    (_, Some(stk)) => {
+                        push_console_truncated(&mut line, label);
+                        push_console_truncated(&mut line, "\n");
+                        push_console_truncated(&mut line, stk);
+                    }
+                    (Some(msg), None) if !msg.is_empty() => {
+                        push_console_truncated(&mut line, label);
+                        push_console_truncated(&mut line, ": ");
+                        push_console_truncated(&mut line, msg);
+                    }
+                    (Some(_), None) => {
+                        push_console_truncated(&mut line, label);
+                    }
+                    (None, None) => unreachable!(),
+                }
+            } else {
+                push_console_truncated(&mut line, "<exception>");
+            }
+        } else {
+            let mut formatted = String::new();
+            let _ = write!(formatted, "<{}>", value.type_of().as_str());
+            push_console_truncated(&mut line, &formatted);
+        }
+    }
+    Ok(line)
 }
 
 #[cfg(test)]

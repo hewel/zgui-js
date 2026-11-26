@@ -106,6 +106,20 @@ const negativeCases = [
     guidance: /concise \(<= 6 lines\)/,
   },
   {
+    name: "zgui/no-getter-object-spread (direct)",
+    file: "getter-spread-direct.ts",
+    code: "export const bad = { ...{ get ariaHidden() { return true; } } };\n",
+    expected: /zgui\(no-getter-object-spread\)/,
+    guidance: /mergeProps\(\.\.\.\) or Object\.defineProperty\(\.\.\.\)/,
+  },
+  {
+    name: "zgui/no-getter-object-spread (conditional branch)",
+    file: "getter-spread-cond.ts",
+    code: 'export function bad(cond: boolean, open: () => boolean) { return { ...(cond ? { get ariaLabelledBy() { return open() ? "a" : "b"; } } : {}) }; }\n',
+    expected: /zgui\(no-getter-object-spread\)/,
+    guidance: /get ariaLabelledBy\(\)/,
+  },
+  {
     name: "zgui/no-cleanup-in-ref (observeGeometry in ref arrow)",
     file: "cleanup-in-ref.tsx",
     code: 'import { observeGeometry } from "@hewel/zgui";\nexport const V = () => <scroll ref={el => observeGeometry(el, "scrollPosition", () => {})} />;\n',
@@ -231,12 +245,17 @@ test("exported @hewel/zgui/oxlint/recommended preset works standalone for downst
 import type { NativeNode } from "@hewel/zgui";
 import { spawnCommand } from "@hewel/zgui-services";
 
+export function makeExtra(cond: boolean) {
+  return { ...(cond ? { role: "region" as const } : {}), get id() { return "s"; } };
+}
+
 export function mount(root: NativeNode) {
   return renderApp(() => {
     const [scroller, setScroller] = createSignal<NativeNode | null>(null);
     observeGeometry(scroller, "scrollPosition", () => {});
     const delay = createDelay();
     delay.schedule(50, () => { spawnCommand("/usr/bin/uname", ["-s"]); });
+    void makeExtra(true);
     return <scroll ref={setScroller}><text>ok</text></scroll>;
   }, root);
 }
@@ -250,7 +269,7 @@ export function mount(root: NativeNode) {
   );
   assert.ok(goodResult.stdout.includes("Found 0 warnings and 0 errors"), goodResult.stdout);
 
-  // Negative fixture: ref cleanup + top-level service + solid-js/web import all caught by preset.
+  // Negative fixture: ref cleanup + top-level service + solid-js/web import + getter spread all caught by preset.
   const badFile = path.join(dir, "bad.tsx");
   await writeFile(
     badFile,
@@ -258,6 +277,7 @@ export function mount(root: NativeNode) {
 import { observeGeometry } from "@hewel/zgui";
 import { spawnCommand } from "@hewel/zgui-services";
 export const early = spawnCommand("/usr/bin/uname", ["-a"]);
+export const badSpread = { ...(true ? { get x() { return 1; } } : {}) };
 export const View = () => {
   const [x] = createSignal(0);
   return <scroll ref={el => observeGeometry(el, "scrollPosition", () => {})}><text>{x()}</text></scroll>;
@@ -284,6 +304,7 @@ export const View = () => {
   assert.match(badOutput, /zgui\(no-solid-web-imports\)/);
   assert.match(badOutput, /zgui\(no-top-level-service-call\)/);
   assert.match(badOutput, /zgui\(no-cleanup-in-ref\)/);
+  assert.match(badOutput, /zgui\(no-getter-object-spread\)/);
 });
 
 test("oxfmt checks and formats files with repository configuration", async t => {
