@@ -87,9 +87,10 @@ fn zero_latency_never_enters_javascript_during_construction_and_uses_verified_by
     h.script("globalThis.request = __zguiServices.readTextAsset('test.txt'); request.promise.then(value => seen.push(value));");
     h.jobs();
     assert_eq!(h.script("seen.length"), "0");
-    assert!(!h.work.has_completions());
+    assert!(!h.work.has_deliverable_work());
     assert_eq!(h.runtime.next_deadline_us(), Some(0));
     assert!(h.runtime.release_due().unwrap());
+    assert!(h.work.has_deliverable_work());
     assert_eq!(h.script("seen.length"), "0", "release_due must never enter JS");
     h.deliver();
     assert_eq!(h.script("seen.join(',')"), "completed");

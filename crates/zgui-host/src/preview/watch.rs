@@ -4,7 +4,7 @@ use std::{fs::{self, File, OpenOptions}, io::Write, path::{Path, PathBuf}, sync:
 use serde_json::{Value, json};
 use super::{Error, output::{self, Output}, run};
 
-const STATUS_FILE: &str = ".zgui-build-status.json";
+use crate::build_status::{BuildStatus, MAX_STATUS_BYTES, STATUS_FILE, Status};
 const POLL: Duration = Duration::from_millis(50);
 static SIGNAL: AtomicI32 = AtomicI32::new(0);
 extern "C" fn interrupt(signal: libc::c_int) { SIGNAL.store(signal, Ordering::Relaxed); }
@@ -61,18 +61,6 @@ fn stdout(mut bytes:&[u8])->Result<(),Error> {
     }
     Ok(())
 }
-crate::schema::object_struct! {
-    #[serde(rename_all="camelCase", deny_unknown_fields)]
-    struct BuildStatus {
-        schema_version: u32, attempt_id: String, app: String, status: String,
-        previous_directory: Option<PathBuf>, publication_directory: Option<PathBuf>,
-        build_id: Option<String>, error: Option<BuildError>
-    }
-}
-crate::schema::object_struct! {
-    #[serde(deny_unknown_fields)]
-    struct BuildError { code: String, message: String }
-}
 
 #[derive(Clone, PartialEq)]
 struct Stamp { inode: u64, device: u64, modified: std::time::SystemTime, length: u64 }
@@ -90,21 +78,9 @@ impl StatusReader {
         let stamp=Stamp { inode:metadata.ino(),device:metadata.dev(),modified:metadata.modified().map_err(io)?,length:metadata.len() };
         if self.stamp.as_ref()==Some(&stamp) { return Ok(false); }
         let parent=self.path.parent().filter(|parent|!parent.as_os_str().is_empty()).unwrap_or(Path::new(".")).canonicalize().map_err(io)?;
-        let bytes=crate::bounded_fs::read_contained(&parent,STATUS_FILE,16*1024)
+        let bytes=crate::bounded_fs::read_contained(&parent,STATUS_FILE,MAX_STATUS_BYTES)
             .map_err(|error|output::bounded_read_error(error,"build status is not a bounded regular file"))?;
-        let status:BuildStatus=serde_json::from_slice(&bytes).map_err(|error|schema(format!("invalid build status: {error}")))?;
-        if status.schema_version!=1 || status.attempt_id.len()!=36 || !status.attempt_id.bytes().all(|byte|byte.is_ascii_hexdigit() || byte==b'-')
-            || status.app.is_empty() || status.app.len()>128 || !status.app.bytes().all(|byte|byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte==b'-')
-            || !matches!(status.status.as_str(),"building"|"published"|"failed")
-            || status.previous_directory.as_ref().is_some_and(|path|!path.is_absolute())
-            || status.publication_directory.as_ref().is_some_and(|path|!path.is_absolute())
-            || status.build_id.as_deref().is_some_and(|id|!build_id(id))
-            || (status.status=="published" && (status.publication_directory.is_none() || status.build_id.is_none() || status.error.is_some()))
-            || (status.status!="published" && (status.publication_directory.is_some() || status.build_id.is_some()))
-            || (status.status=="failed")!=status.error.is_some()
-            || status.error.as_ref().is_some_and(|error|error.code!="E_BUILD" || error.message.chars().count()>2048) {
-            return Err(schema("invalid build status identity or state"));
-        }
+        let status=BuildStatus::parse(&bytes).map_err(|error|schema(format!("invalid build status: {error}")))?;
         self.stamp=Some(stamp); self.value=Some(status); Ok(true)
     }
 }
@@ -231,15 +207,15 @@ fn execute(args:Vec<String>) -> Result<u8,Error> {
                 Err(error) if error.kind()==std::io::ErrorKind::NotFound=>None,
                 Err(error)=>return Err(io(error)),
             };
-            let blocked=reader.value.as_ref().filter(|status|status.status!="published" && status.previous_directory==directory);
+            let blocked=reader.value.as_ref().filter(|status|status.status!=Status::Published && status.previous_directory==directory);
             if let Some(status)=blocked {
                 if changed {
                     output.epoch+=1;
                     output.latest=json!({"runId":null,"nativeRunId":null,"buildId":null,"buildAttemptId":status.attempt_id,
-                        "status":status.status,"exitCode":if status.status=="failed" {json!(3)} else {Value::Null},
+                        "status":status.status,"exitCode":if status.status==Status::Failed {json!(3)} else {Value::Null},
                         "publicationDirectory":null,"output":null,"firstError":status.error});
                     pending=None; output.index()?;
-                    output.emit(if status.status=="failed" {"build.failed"} else {"build.started"},output.latest.clone())?;
+                    output.emit(if status.status==Status::Failed {"build.failed"} else {"build.started"},output.latest.clone())?;
                 }
                 observed=directory.clone();
             } else if let Some(directory)=directory {
@@ -319,6 +295,51 @@ fn execute(args:Vec<String>) -> Result<u8,Error> {
 fn compact_error(value:&Value)->Value {
     if value.is_null() { Value::Null } else { json!({"code":value["code"],"message":value["message"].as_str().unwrap_or("unknown error").chars().take(1024).collect::<String>()}) }
 }
-fn build_id(value:&str)->bool { value.len()==71 && value.starts_with("sha256:") && value.as_bytes()[7..].iter().all(u8::is_ascii_hexdigit) }
 fn schema(message:impl Into<String>)->Error { Error::new("E_SCHEMA",2,message) }
 fn io(error:std::io::Error)->Error { Error::new("E_OUTPUT_IO",8,error.to_string()) }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn build_status_reader_accepts_typecheck_updates_but_rejects_invalid_records() {
+        let fixture = crate::test_package::Fixture::new("", "");
+        let directory = &fixture.package().directory;
+        let mut reader = StatusReader { path: directory.join(STATUS_FILE), stamp: None, value: None };
+        let mut record = json!({
+            "schemaVersion": 1, "attemptId": "00000000-1234-4321-9000-000000000000", "app": "watcher-test",
+            "status": "published", "previousDirectory": null, "publicationDirectory": directory,
+            "buildId": format!("sha256:{}", "b".repeat(64)), "error": null,
+        });
+        let publish = |record: &Value| {
+            let staging = directory.join("status.tmp");
+            fs::write(&staging, serde_json::to_vec(record).unwrap()).unwrap();
+            fs::rename(staging, directory.join(STATUS_FILE)).unwrap();
+        };
+        for typecheck in [
+            json!({"status": "running", "diagnostics": null}),
+            json!({"status": "passed", "diagnostics": null}),
+            json!({"status": "failed", "diagnostics": "TS2322"}),
+        ] {
+            record["typecheck"] = typecheck;
+            publish(&record);
+            assert!(reader.refresh().expect("read valid publication"));
+            assert!(!reader.refresh().expect("same publication is unchanged"));
+        }
+        record["unexpected"] = json!(true);
+        publish(&record);
+        assert_eq!(reader.refresh().unwrap_err().code, "E_SCHEMA");
+        record.as_object_mut().unwrap().remove("unexpected");
+        for invalid in [
+            Value::Null, json!(["passed", null]), json!({"status": "unknown", "diagnostics": null}),
+            json!({"status": "passed"}), json!({"status": "running", "diagnostics": "unexpected"}),
+            json!({"status": "failed", "diagnostics": null}),
+            json!({"status": "passed", "diagnostics": null, "extra": true}),
+        ] {
+            record["typecheck"] = invalid;
+            publish(&record);
+            assert_eq!(reader.refresh().unwrap_err().code, "E_SCHEMA", "{}", record["typecheck"]);
+        }
+    }
+}

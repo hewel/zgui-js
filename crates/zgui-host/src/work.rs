@@ -5,6 +5,7 @@ use rquickjs::{Array, Ctx, Exception, Function, IntoJs, Object, Persistent, Type
 use zgui::{platform::{SurfaceId, WakeReason, Waker}, runtime::{AppTimers, ImageBlobs}, view::{HostHandle, host::{FrameRequestId, Repeat, TimerId}}, vocab::Timestamp};
 use crate::{assets::{AssetError, AssetProvider, AssetSource, Delivery, MAX_SAFE_ID}, package::Package, shell::Shell};
 use crate::runtime_capabilities::ResolvedCapabilities;
+use crate::session::ResourceCounts;
 
 mod clipboard;
 mod external;
@@ -139,7 +140,7 @@ impl Work {
     ) -> Rc<Self> {
         let WorkSession { package, capabilities, generation, assets, resolved } = session;
         let allow_clipboard_read = capabilities.clipboard.read;
-        let files = files::FilesState::new(package.clone(), &capabilities, &assets, wake.clone());
+        let files = files::FilesState::new(package.as_deref(), &assets, wake.clone());
         let network = network::NetworkState::new(&capabilities, &assets);
         let sqlite = sqlite::SqliteState::new(package.clone(), Arc::clone(&capabilities), &assets);
         let workers = workers::WorkersState::new(package.clone(), &assets);
@@ -354,19 +355,45 @@ impl Work {
     }
     pub(crate) fn mounting(&self) { self.mode.set(Mode::Mounting); }
     pub(crate) fn mounted(&self) { self.mode.set(Mode::Mounted); }
-    pub(crate) fn has_ready(&self) -> bool { !self.ready.borrow().is_empty() }
     pub(crate) fn next_call(&self) -> Option<ScheduledCall> { self.ready.borrow_mut().pop_front() }
     pub(crate) fn next_completion(&self) -> Option<Completion> {
         if self.mode.get() != Mode::Mounted { return None; }
         self.provider.next_completion()
     }
-    pub(crate) fn has_completions(&self) -> bool { self.provider.has_completions() }
+    pub(crate) fn has_deliverable_work(&self) -> bool {
+        self.mode.get() == Mode::Mounted && (
+            !self.ready.borrow().is_empty()
+            || self.provider.has_completions()
+            || self.clipboard.has_ops()
+            || self.clipboard.has_completions()
+            || self.has_external()
+            || self.sqlite.has_events()
+            || self.files.has_events()
+            || self.network.has_events(self.generation)
+            || self.workers.has_events()
+        )
+    }
+
+    /// Operations that the preview must wait for on wall time, not fixture time.
+    /// Open-ended subscriptions, delayed fixture deliveries and lockstep worker
+    /// quanta are deliberately not part of this barrier.
+    pub(crate) fn has_inflight_host_ops(&self) -> bool {
+        self.mode.get() == Mode::Mounted && (
+            self.sqlite.pending_count() != 0 || self.files.pending_count() != 0
+        )
+    }
+
+    /// Owner-visible backlog. Live worker mailboxes contribute once an event
+    /// has been selected for delivery; idle registrations are not queued work.
     pub(crate) fn pending_count(&self) -> usize {
         self.ready.borrow().len()
             + self.requests.borrow().len()
             + self.clipboard.pending_count()
             + self.sqlite.pending_count()
             + self.files.pending_count()
+            + self.network.pending_count(self.generation)
+            + self.workers.pending_count()
+            + self.external.pending_count(self.generation)
     }
     pub(crate) fn counts(&self) -> (usize, usize, usize) {
         let registrations = self.registrations.borrow();
@@ -374,6 +401,33 @@ impl Work {
         let timers = registrations.values().filter(|item| matches!(item.native, NativeRegistration::Timer(_))).count()
             + ready.iter().filter(|item| matches!(item.arguments, Arguments::Timer)).count();
         (timers, registrations.len() + ready.len() - timers, self.requests.borrow().len() + self.clipboard.pending_count() + self.sqlite.pending_count() + self.files.pending_count())
+    }
+
+    fn service_resources(&self) -> ResourceCounts {
+        let external = self.external.counts();
+        let sqlite = self.sqlite.counts();
+        let files = self.files.counts();
+        let network = self.network.counts();
+        ResourceCounts {
+            image_handles: self.image_blobs.len(),
+            unix_sockets: external.sockets,
+            child_processes: external.processes,
+            control_listeners: external.listeners,
+            sqlite_databases: sqlite.databases,
+            sqlite_transactions: sqlite.transactions,
+            file_handles: files.handles,
+            fs_watchers: files.watchers,
+            http_requests: network.http_requests,
+            event_streams: network.event_streams,
+            web_sockets: network.web_sockets,
+            workers: self.workers.count(),
+            ..ResourceCounts::default()
+        }
+    }
+
+    pub(crate) fn resources(&self) -> ResourceCounts {
+        let (timers, frame_callbacks, requests) = self.counts();
+        ResourceCounts { timers, frame_callbacks, requests, ..self.service_resources() }
     }
 
     fn can_create_work(&self) -> bool {
@@ -669,9 +723,11 @@ impl Work {
         self.workers.stop_all();
         self.provider.stop();
     }
-    pub(crate) fn finish_stop(&self) {
-        if self.mode.get() == Mode::Disposed { return; }
+    /// Account for service leases left by app cleanup before forcibly releasing them.
+    pub(crate) fn finish_stop(&self) -> ResourceCounts {
+        if self.mode.get() == Mode::Disposed { return ResourceCounts::default(); }
         self.begin_stop();
+        let leaked = self.service_resources();
         for registration in self.registrations.borrow_mut().drain().map(|(_, registration)| registration) { self.cancel_native(registration.native); }
         self.ready.borrow_mut().clear();
         self.frame_hosts.borrow_mut().clear();
@@ -683,6 +739,7 @@ impl Work {
         self.external.clear(self.generation);
         self.error_stack_getter.borrow_mut().take();
         self.mode.set(Mode::Disposed);
+        leaked
     }
 
     pub(crate) fn error_stack_getter<'js>(&self, ctx: &Ctx<'js>) -> Option<Function<'js>> {

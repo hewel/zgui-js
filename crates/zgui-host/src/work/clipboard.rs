@@ -368,14 +368,6 @@ impl Work {
             .call::<_, ()>((service_error(ctx, "Cancelled", "clipboard request cancelled")?,))
     }
 
-    pub(crate) fn has_clipboard_ops(&self) -> bool {
-        self.clipboard.has_ops()
-    }
-
-    pub(crate) fn has_clipboard_completions(&self) -> bool {
-        self.clipboard.has_completions()
-    }
-
     pub(crate) fn next_clipboard_completion(&self) -> Option<ClipboardCompletion> {
         if self.mode.get() != Mode::Mounted {
             return None;

@@ -1415,6 +1415,202 @@ mod tests {
         assert_eq!(Package::load(&publication.0.join("dist")).unwrap().manifest.build_id, package.manifest.build_id);
     }
 
+    #[test]
+    fn capability_manifest_conformance() {
+        use host_services::network::Origin;
+        use serde::Deserialize;
+        use serde_json::{Value, json};
+
+        #[derive(Deserialize)]
+        struct Case<T> {
+            value: T,
+            valid: bool,
+        }
+
+        #[derive(Deserialize)]
+        struct NetworkCase {
+            value: NetworkCapabilities,
+            expected: Option<NetworkCapabilities>,
+            error: Option<String>,
+        }
+
+        #[derive(Deserialize)]
+        struct OverlayCase {
+            base: Capabilities,
+            extra: Option<Capabilities>,
+            file: Option<Capabilities>,
+            expected: Option<Capabilities>,
+            error: Option<String>,
+        }
+
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase", deny_unknown_fields)]
+        struct Corpus {
+            manifest_text: Vec<Case<String>>,
+            worker_names: Vec<Case<String>>,
+            worker_counts: Vec<Case<usize>>,
+            bytecode_formats: Vec<Case<String>>,
+            host_paths: Vec<Case<String>>,
+            directories: Vec<Case<Value>>,
+            network: Vec<NetworkCase>,
+            overlays: Vec<OverlayCase>,
+        }
+
+        const SOURCE: &str = "export {};";
+        const MAP: &[u8] = br#"{"version":3,"sources":[],"names":[],"mappings":""}"#;
+        let cases: Corpus = serde_json::from_str(include_str!(
+            "../../../tests/fixtures/capability-conformance.json"
+        ))
+        .expect("decode the shared capability conformance corpus");
+
+        let fixture = Fixture::new();
+        fixture.publish(SOURCE.as_bytes(), MAP);
+        let base = manifest(&fixture);
+        for Case { value, valid } in cases.manifest_text {
+            let mut raw = base.clone();
+            raw["id"] = json!(value);
+            fixture.save(raw);
+            let loaded = Package::load(&fixture.0);
+            assert_eq!(loaded.is_ok(), valid, "id {value:?}: {:?}", loaded.err());
+
+            let window: WindowConfig =
+                serde_json::from_value(json!({ "title": value })).expect("decode window config");
+            let checked = window.validate();
+            assert_eq!(checked.is_ok(), valid, "window {window:?}: {checked:?}");
+        }
+        for Case { value, valid } in cases.worker_names {
+            assert_eq!(valid_worker_name(&value), valid, "worker name {value:?}");
+        }
+        for Case { value, valid } in cases.worker_counts {
+            let fixture = Fixture::new();
+            fixture.publish(SOURCE.as_bytes(), MAP);
+            let workers: Vec<_> = (0..value)
+                .map(|index| {
+                    let name = format!("Worker{index:02}");
+                    let path = format!("{name}.mjs");
+                    let map = format!("{path}.map");
+                    fs::write(fixture.0.join(&path), SOURCE).expect("write worker");
+                    fs::write(fixture.0.join(&map), MAP).expect("write worker map");
+                    json!({ "name": name, "path": path, "sourceMap": map })
+                })
+                .collect();
+            let mut raw = base.clone();
+            raw["workers"] = json!(workers);
+            fixture.save(raw);
+            let loaded = Package::load(&fixture.0);
+            assert_eq!(loaded.is_ok(), valid, "{value} workers: {:?}", loaded.err());
+        }
+
+        let bytecode =
+            js_runtime::compile_module_bytecode("app.mjs", SOURCE).expect("compile fixture entry");
+        fs::remove_file(fixture.0.join("app.mjs")).expect("replace source with bytecode");
+        fs::write(fixture.0.join("app.qjsb"), bytecode).expect("write bytecode fixture");
+        for Case { value, valid } in cases.bytecode_formats {
+            let mut raw = base.clone();
+            raw["entry"] = json!("app.qjsb");
+            raw["bytecodeFormat"] = json!(value);
+            raw["quickjsAbi"] = json!(js_runtime::quickjs_abi_tag());
+            fixture.save(raw);
+            let loaded = Package::load(&fixture.0);
+            assert_eq!(
+                loaded.is_ok(),
+                valid,
+                "bytecode format {value:?}: {:?}",
+                loaded.err()
+            );
+        }
+
+        let validate =
+            |raw: Value| -> Result<()> { serde_json::from_value::<Capabilities>(raw)?.validate() };
+        for Case { value, valid } in cases.host_paths {
+            for field in ["imagePrefixes", "unixSockets"] {
+                let checked = validate(json!({ (field): [value] }));
+                assert_eq!(checked.is_ok(), valid, "{field} {value:?}: {checked:?}");
+            }
+        }
+        for Case { value, valid } in cases.directories {
+            let checked = validate(json!({ "files": { "directories": [value] } }));
+            assert_eq!(checked.is_ok(), valid, "directory {value}: {checked:?}");
+        }
+
+        for NetworkCase {
+            mut value,
+            expected,
+            error,
+        } in cases.network
+        {
+            match (expected, error) {
+                (Some(expected), None) => {
+                    // TS accepts author spellings; the runtime admits only the canonical
+                    // spelling sealed into the published manifest.
+                    let raw = value.to_origin_policy();
+                    let mut changed = false;
+                    for entry in value
+                        .origins
+                        .iter_mut()
+                        .chain(value.origin_rules.iter_mut().map(|rule| &mut rule.origin))
+                    {
+                        let canonical = Origin::parse_manifest_entry(entry)
+                            .unwrap_or_else(|error| panic!("origin {entry:?}: {error}"))
+                            .canonical();
+                        changed |= canonical != *entry;
+                        *entry = canonical;
+                    }
+                    let policy = if changed {
+                        let error = raw.expect_err("unsealed origin spelling must be rejected");
+                        assert!(error.contains("canonical form"), "{error}");
+                        value.to_origin_policy()
+                    } else {
+                        raw
+                    }
+                    .expect("canonical input policy");
+                    let published = expected.to_origin_policy().expect("sealed output policy");
+                    assert_eq!(policy, published, "network case {value:?}");
+                }
+                (None, Some(error)) => {
+                    let rust_error = match error.as_str() {
+                        "invalid origin" => "invalid network origin",
+                        "userinfo" => "credentials",
+                        other => other,
+                    };
+                    let actual = value
+                        .to_origin_policy()
+                        .expect_err("invalid origin or missing transport opt-in must be rejected");
+                    assert!(actual.contains(rust_error), "{value:?}: {actual}");
+                }
+                _ => panic!("network case must specify exactly one outcome: {value:?}"),
+            }
+        }
+
+        for case in cases.overlays {
+            case.base.validate().expect("valid base capabilities");
+            let overlay = match (case.extra, case.file) {
+                (Some(overlay), None) | (None, Some(overlay)) => overlay,
+                _ => panic!("overlay case must specify exactly one input source"),
+            };
+            overlay.validate().expect("valid capability declarations");
+            let runtime = case.base.merge_overlay(&overlay);
+            match (case.expected, case.error) {
+                (Some(sealed), None) => {
+                    sealed.validate().expect("valid sealed build-time grants");
+                    if sealed.shell_surfaces && !case.base.shell_surfaces {
+                        // Build-time grants are sealed authority, not runtime escalation.
+                        let error = runtime.expect_err("runtime cannot add shell surfaces");
+                        assert!(error.contains("shellSurfaces"), "{error}");
+                    } else {
+                        assert_eq!(runtime.expect("runtime merge succeeds"), sealed);
+                    }
+                }
+                (None, Some(error)) => {
+                    assert!(error.contains("sessionLock"), "{error}");
+                    let error = runtime.expect_err("runtime cannot add session lock");
+                    assert!(error.contains("sessionLock"), "{error}");
+                }
+                _ => panic!("overlay case must specify exactly one outcome"),
+            }
+        }
+    }
+
     fn manifest(fixture: &Fixture) -> serde_json::Value {
         serde_json::from_slice(&fs::read(fixture.0.join("manifest.json")).unwrap()).unwrap()
     }

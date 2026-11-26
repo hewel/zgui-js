@@ -719,12 +719,16 @@ impl FixtureRuntime {
 
     /// Report whether this generation has owner-thread work ready for the bridge.
     pub(crate) fn has_external(&self, generation: u64) -> bool {
+        self.pending_external_deliveries(generation) != 0
+    }
+
+    pub(crate) fn pending_external_deliveries(&self, generation: u64) -> usize {
         self.state
             .borrow()
             .external
             .deliveries
             .get(&generation)
-            .is_some_and(|queue| !queue.is_empty())
+            .map_or(0, VecDeque::len)
     }
 
     /// Take this generation's oldest ready event, never entering the application directly.

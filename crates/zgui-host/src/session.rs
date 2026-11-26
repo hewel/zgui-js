@@ -527,6 +527,7 @@ impl Session {
                 resolved,
             };
             let initial_reduced_motion = policy.reduced_motion.unwrap_or(false);
+            shell.seed_reduced_motion(initial_reduced_motion);
             let (primary, work) = match startup {
                 Startup::Primary { region, surface } => {
                     let initial_title = module
@@ -729,6 +730,7 @@ impl Session {
             return Ok(false);
         }
         self.reduced_motion.set(effective);
+        self.shell.seed_reduced_motion(effective);
         if !self.mount_started.get() {
             for owned in self.primary.iter().chain(self.layers.borrow().values()) {
                 owned.bridge.seed_reduced_motion(effective);
@@ -739,6 +741,7 @@ impl Session {
         let engine = engine.as_mut().ok_or("session disposed")?;
         let regions: Vec<Rc<SessionRegion>> = self.primary.iter().chain(self.layers.borrow().values()).cloned().collect();
         let result = self.bridges.run(engine.turn(), |js| js.with_context(|ctx| {
+            self.shell.dispatch_reduced_motion(&ctx, effective)?;
             for owned in &regions {
                 owned.bridge.set_reduced_motion(&ctx, effective)?;
             }
@@ -979,28 +982,21 @@ impl Session {
         !self.shutdown_started.get() && self.work.owns_clipboard_read(serial)
     }
 
-    pub(crate) fn has_pending_sqlite_ops(&self) -> bool {
-        !self.shutdown_started.get() && self.work.has_pending_sqlite_ops()
+    /// Work that can run now, without waiting for wall time or a fixture deadline.
+    pub(crate) fn has_deliverable_work(&self) -> bool {
+        if self.shutdown_started.get() { return false; }
+        let jobs_pending = self.engine.borrow().as_ref().is_some_and(JsRuntime::is_job_pending);
+        // A queued bridge fault requires a checkpoint even without pending jobs.
+        self.fault.borrow().is_some() || self.deliverable_work(jobs_pending).unwrap_or(true)
     }
 
-    pub(crate) fn has_sqlite_events(&self) -> bool {
-        !self.shutdown_started.get() && self.work.has_sqlite_events()
+    fn deliverable_work(&self, jobs_pending: bool) -> Result<bool> {
+        let notifications = self.has_queued_notifications()?;
+        Ok(jobs_pending || notifications || self.work.has_deliverable_work())
     }
 
-    pub(crate) fn has_pending_file_ops(&self) -> bool {
-        !self.shutdown_started.get() && self.work.has_pending_file_ops()
-    }
-
-    pub(crate) fn has_file_events(&self) -> bool {
-        !self.shutdown_started.get() && self.work.has_file_events()
-    }
-
-    pub(crate) fn has_network_events(&self) -> bool {
-        !self.shutdown_started.get() && self.work.has_network_events()
-    }
-
-    pub(crate) fn has_worker_events(&self) -> bool {
-        !self.shutdown_started.get() && self.work.has_worker_events()
+    pub(crate) fn has_inflight_host_ops(&self) -> bool {
+        !self.shutdown_started.get() && self.work.has_inflight_host_ops()
     }
 
     /// Marks the session as a staged mount candidate so irreversible outbound network
@@ -1312,10 +1308,9 @@ impl Session {
             }
         }
         self.check_contract()?;
-        let queued = self.has_queued_notifications()?;
         let jobs_pending = engine.is_job_pending();
         if !jobs_pending { self.shell.clear_cleanup_jobs_pending(); }
-        if jobs_pending || queued || self.work.has_ready() || self.work.has_completions() || self.work.has_clipboard_completions() || self.work.has_clipboard_ops() || self.work.has_external() || self.work.has_sqlite_events() || self.work.has_file_events() || self.work.has_network_events() || self.work.has_worker_events() { self.wake_owner(); }
+        if self.deliverable_work(jobs_pending)? { self.wake_owner(); }
         Ok(worked)
     }
 
@@ -1464,7 +1459,7 @@ impl Session {
     /// Hot-swap packaged Stylo stylesheets across all mounted surfaces of this
     /// live session without restarting QuickJS. Preflights every stylesheet
     /// fail-closed before mutating any installed sheet.
-    pub(crate) fn hot_swap_stylesheets(&self, candidate: &Rc<Package>) -> Result<()> {
+    pub(crate) fn replace_packaged_stylesheets(&self, candidate: &Rc<Package>) -> Result<()> {
         let mut font_families = std::collections::BTreeSet::new();
         for (index, sheet) in candidate.styles.iter().enumerate() {
             let name = format!("application:{index}");
@@ -1497,7 +1492,10 @@ impl Session {
             }
         }
         let previous_len = self.active_styles.borrow().len();
-        let next_styles = Arc::clone(&candidate.styles);
+        let next_styles = match &self.policy.extension_overlay {
+            Some(overlay) if !overlay.styles.is_empty() => candidate.styles.iter().chain(overlay.styles.iter()).cloned().collect(),
+            _ => Arc::clone(&candidate.styles),
+        };
         for owned in self.primary.iter().chain(self.layers.borrow().values()) {
             for (index, sheet) in next_styles.iter().enumerate() {
                 owned.region.host.install_stylesheet(&format!("application:{index}"), &sheet.css);
@@ -1643,30 +1641,17 @@ impl Session {
     }
 
     pub(crate) fn counts(&self) -> ResourceCounts {
-        let (timers, frame_callbacks, requests) = self.work.counts();
-        let external = self.work.external_counts();
-        let sqlite = self.work.sqlite_counts();
-        let files = self.work.file_counts();
-        let network = self.work.network_counts();
+        self.counts_with_work(self.work.resources())
+    }
+
+    fn counts_with_work(&self, work: ResourceCounts) -> ResourceCounts {
         let mut counts = ResourceCounts {
-            callbacks: self.shell.callback_count() + self.window_controls.callback_count(), timers, frame_callbacks, requests,
-            image_handles: self.image_blobs().len(),
-            unix_sockets: external.sockets,
-            child_processes: external.processes,
-            control_listeners: external.listeners,
-            sqlite_databases: sqlite.databases,
-            sqlite_transactions: sqlite.transactions,
-            file_handles: files.handles,
-            fs_watchers: files.watchers,
-            http_requests: network.http_requests,
-            event_streams: network.event_streams,
-            web_sockets: network.web_sockets,
-            workers: self.work.worker_count(),
+            callbacks: self.shell.callback_count() + self.window_controls.callback_count(),
             active_drags: self.dnd.active_count(),
             shell_surfaces: self.shell_surfaces.get(),
             fonts: self.font_leases.borrow().len(),
             engine_alive: self.engine.borrow().is_some(),
-            ..ResourceCounts::default()
+            ..work
         };
         for owned in self.primary.iter().chain(self.layers.borrow().values()) {
             let bridge = &owned.bridge;
@@ -1712,6 +1697,8 @@ impl Session {
         }
     }
 
+    pub(crate) fn is_retired(&self) -> bool { self.shutdown_started.get() }
+
     /// Dispose JavaScript while native mount regions still exist, visiting popup children first.
     pub(crate) fn dispose(&self, popups_in_close_order: impl IntoIterator<Item = u32>) {
         if self.retired.borrow().is_some() { return; }
@@ -1755,11 +1742,6 @@ impl Session {
             cleanup_error.get_or_insert_with(|| self.diagnostic(error));
         }
         if let Some(error) = &cleanup_error { eprintln!("disposer error: {error}"); }
-        let external = self.work.external_counts();
-        let sqlite = self.work.sqlite_counts();
-        let files = self.work.file_counts();
-        let network = self.work.network_counts();
-        let workers = self.work.worker_count();
         let active_drags = self.dnd.active_count();
         self.cancel_outbound_drag_on_platform();
         self.dnd.clear();
@@ -1770,9 +1752,10 @@ impl Session {
             shell_host.clear_roots();
         }
         self.platform_surfaces.borrow_mut().clear();
-        self.work.finish_stop();
+        let leaked_work = self.work.finish_stop();
         // Report remaining leases before forced disposal releases the native scenes.
-        let canvas_scenes = self.counts().canvas_scenes;
+        let canvas_scenes = self.primary.iter().chain(self.layers.borrow().values())
+            .map(|owned| owned.bridge.canvas_scene_count()).sum();
         let window_callbacks = self.window_controls.callback_count();
         self.window_controls.clear();
         self.bridges.dispose();
@@ -1789,20 +1772,9 @@ impl Session {
         let snapshot = self.engine.borrow().as_ref().map(Self::snapshot_telemetry);
         self.telemetry.set(RuntimeTelemetry::merge(self.telemetry.get(), snapshot));
         drop(self.engine.borrow_mut().take());
-        let mut counts = self.counts();
+        let mut counts = self.counts_with_work(leaked_work);
         counts.callbacks += window_callbacks;
         counts.canvas_scenes = canvas_scenes;
-        counts.unix_sockets = external.sockets;
-        counts.child_processes = external.processes;
-        counts.control_listeners = external.listeners;
-        counts.sqlite_databases = sqlite.databases;
-        counts.sqlite_transactions = sqlite.transactions;
-        counts.file_handles = files.handles;
-        counts.fs_watchers = files.watchers;
-        counts.http_requests = network.http_requests;
-        counts.event_streams = network.event_streams;
-        counts.web_sockets = network.web_sockets;
-        counts.workers = workers;
         counts.active_drags = active_drags;
         self.work.clear_images();
         let failure = if !self.contract_reported.replace(true)

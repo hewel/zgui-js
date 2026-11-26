@@ -164,18 +164,6 @@ impl Work {
         )
     }
 
-    pub(crate) fn sqlite_counts(&self) -> SqliteCounts {
-        self.sqlite.counts()
-    }
-
-    pub(crate) fn has_pending_sqlite_ops(&self) -> bool {
-        self.sqlite.pending_count() > 0
-    }
-
-    pub(crate) fn has_sqlite_events(&self) -> bool {
-        self.sqlite.has_events()
-    }
-
     pub(crate) fn next_sqlite_event(&self) -> Option<(u64, SqliteEvent)> {
         if self.mode.get() != Mode::Mounted {
             return None;

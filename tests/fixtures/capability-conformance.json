@@ -1,0 +1,150 @@
+{
+  "manifestText": [
+    { "value": "dev.example.app", "valid": true },
+    { "value": "東京\u00a0App", "valid": true },
+    { "value": "", "valid": false },
+    { "value": "\u00a0App", "valid": false },
+    { "value": "App\ufeff", "valid": false },
+    { "value": "App\u0001name", "valid": false },
+    { "value": "App\u0085name", "valid": false },
+    { "value": "App\u001fname", "valid": false }
+  ],
+  "workerNames": [
+    { "value": "Parse_job-1", "valid": true },
+    { "value": "A000000000000000000000000000000000000000000000000000000000000000", "valid": true },
+    {
+      "value": "A0000000000000000000000000000000000000000000000000000000000000000",
+      "valid": false
+    },
+    { "value": "1worker", "valid": false },
+    { "value": "worker.name", "valid": false },
+    { "value": "worker\n", "valid": false },
+    { "value": "ümlaut", "valid": false }
+  ],
+  "workerCounts": [
+    { "value": 32, "valid": true },
+    { "value": 33, "valid": false }
+  ],
+  "bytecodeFormats": [
+    { "value": "qjs-bytecode-v1", "valid": true },
+    { "value": "qjs-bytecode-v2", "valid": false }
+  ],
+  "hostPaths": [
+    { "value": "/", "valid": true },
+    { "value": "/run/user/1000/wayland-0", "valid": true },
+    { "value": "$HOME", "valid": true },
+    { "value": "$XDG_DATA_HOME/media", "valid": true },
+    { "value": "$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY", "valid": true },
+    { "value": "$XDG_RUNTIME_DIR/socket-${WAYLAND_DISPLAY}", "valid": true },
+    { "value": "$WAYLAND_DISPLAY", "valid": false },
+    { "value": "$XDG_DOCUMENTS_DIR/photos", "valid": false },
+    { "value": "$HOME/$UNKNOWN/media", "valid": false },
+    { "value": "$HOME/../photos", "valid": false },
+    { "value": "/run//user", "valid": false },
+    { "value": "/run/pipe\u007f", "valid": false }
+  ],
+  "directories": [
+    { "value": { "path": "$HOME", "mode": "read" }, "valid": true },
+    { "value": { "path": "$XDG_DATA_HOME/media", "mode": "readwrite" }, "valid": true },
+    { "value": { "path": "$XDG_DOCUMENTS_DIR/notes", "mode": "readwrite" }, "valid": true },
+    { "value": { "path": "/tmp/$literal", "mode": "read" }, "valid": true },
+    { "value": { "path": "$XDG_RUNTIME_DIR", "mode": "read" }, "valid": false },
+    { "value": { "path": "$HOME/$WAYLAND_DISPLAY", "mode": "read" }, "valid": false },
+    { "value": { "path": "$HOME/../notes", "mode": "read" }, "valid": false },
+    { "value": { "path": "$HOME/notes", "mode": "write" }, "valid": false }
+  ],
+  "network": [
+    {
+      "value": { "origins": ["HTTPS://API.Example.COM:443"] },
+      "expected": { "origins": ["https://api.example.com"] }
+    },
+    {
+      "value": { "origins": ["https://8.8.8.8", "https://[2606:4700::1111]"] },
+      "expected": { "origins": ["https://8.8.8.8", "https://[2606:4700::1111]"] }
+    },
+    {
+      "value": { "origins": ["https://*.example.com"] },
+      "error": "invalid origin",
+      "schemaRejects": true
+    },
+    {
+      "value": { "origins": ["https://example.com/path"] },
+      "error": "path",
+      "schemaRejects": true
+    },
+    {
+      "value": { "origins": ["https://user@example.com"] },
+      "error": "userinfo",
+      "schemaRejects": true
+    },
+    { "value": { "origins": ["http://example.com"] }, "error": "allowInsecureHttp" },
+    { "value": { "origins": ["https://100.64.0.1"] }, "error": "allowPrivateNetworks" },
+    { "value": { "origins": ["https://192.0.2.1"] }, "error": "allowPrivateNetworks" },
+    { "value": { "origins": ["https://local.localhost."] }, "error": "allowPrivateNetworks" },
+    { "value": { "origins": ["https://[fe80::2]"] }, "error": "allowPrivateNetworks" },
+    { "value": { "origins": ["https://[fc00::2]"] }, "error": "allowPrivateNetworks" },
+    { "value": { "origins": ["https://[::ffff:127.0.0.1]"] }, "error": "allowPrivateNetworks" },
+    {
+      "value": { "origins": ["https://[::ffff:8.8.8.8]"] },
+      "expected": { "origins": ["https://[::ffff:8.8.8.8]"] }
+    },
+    {
+      "value": { "allowPrivateNetworks": true, "originRules": [{ "origin": "https://[::1]" }] },
+      "error": "allowPrivateNetworks"
+    },
+    {
+      "value": {
+        "origins": ["https://public.example.com"],
+        "originRules": [
+          { "origin": "WS://[::1]:8080", "allowInsecureHttp": true, "allowPrivateNetworks": true }
+        ]
+      },
+      "expected": {
+        "originRules": [
+          { "origin": "https://public.example.com" },
+          { "origin": "ws://[::1]:8080", "allowInsecureHttp": true, "allowPrivateNetworks": true }
+        ]
+      }
+    }
+  ],
+  "overlays": [
+    {
+      "base": { "sessionLock": true },
+      "extra": { "shellSurfaces": true },
+      "expected": { "sessionLock": true, "shellSurfaces": true }
+    },
+    {
+      "base": { "namedSockets": ["base"] },
+      "file": { "shellSurfaces": true, "namedSockets": ["base", "extra"] },
+      "expected": { "shellSurfaces": true, "namedSockets": ["base", "extra"] }
+    },
+    { "base": {}, "extra": { "sessionLock": true }, "error": "extraCapabilities.sessionLock" },
+    {
+      "base": {},
+      "file": { "sessionLock": true },
+      "error": "sessionLock: true may only be declared in base package.json"
+    },
+    {
+      "base": { "network": { "origins": ["https://base.example.com"] } },
+      "extra": {
+        "network": {
+          "origins": ["http://127.0.0.1:9090"],
+          "allowInsecureHttp": true,
+          "allowPrivateNetworks": true
+        }
+      },
+      "expected": {
+        "network": {
+          "originRules": [
+            {
+              "origin": "http://127.0.0.1:9090",
+              "allowInsecureHttp": true,
+              "allowPrivateNetworks": true
+            },
+            { "origin": "https://base.example.com" }
+          ]
+        }
+      }
+    }
+  ]
+}

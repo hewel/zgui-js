@@ -59,5 +59,20 @@ impl Fixture {
         fs::write(self.0.join("manifest.json"), serde_json::to_vec(&manifest).unwrap()).unwrap();
         self
     }
+
+    pub(crate) fn with_worker(self, source: &str) -> Self {
+        let path = self.0.join("manifest.json");
+        let mut manifest: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        let map = br#"{"version":3,"sources":[],"names":[],"mappings":""}"#;
+        for (name, bytes) in [("worker.mjs", source.as_bytes()), ("worker.mjs.map", map.as_slice())] {
+            fs::write(self.0.join(name), bytes).unwrap();
+            manifest["artifactDigests"][name] = serde_json::json!(format!("sha256:{:x}", Sha256::digest(bytes)));
+        }
+        manifest["workers"] = serde_json::json!([{"name":"bg","path":"worker.mjs","sourceMap":"worker.mjs.map"}]);
+        manifest.as_object_mut().unwrap().remove("buildId");
+        manifest["buildId"] = serde_json::json!(format!("sha256:{:x}", Sha256::digest(serde_json::to_vec(&manifest).unwrap())));
+        fs::write(path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+        self
+    }
 }
 impl Drop for Fixture { fn drop(&mut self) { fs::remove_dir_all(&self.0).unwrap(); } }

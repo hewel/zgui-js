@@ -4,7 +4,7 @@ use crate::{bounded_fs::relative_path, environment::Environment, package::{Capab
 use host_services::{Completion, ServiceError};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use std::{cell::RefCell, collections::{BTreeMap, VecDeque}, marker::PhantomData, rc::Rc, sync::Arc};
+use std::{cell::{OnceCell, RefCell}, collections::{BTreeMap, VecDeque}, marker::PhantomData, path::Path, rc::Rc, sync::Arc};
 use crate::schema::{deserialize_object,object_struct};
 
 mod external;
@@ -529,12 +529,24 @@ impl FixtureRuntime {
     pub(crate) fn resolve_capabilities(&self, declarations: &Capabilities) -> Result<ResolvedCapabilities, ContractFailure> {
         if let Some(error) = self.contract_failure() { return Err(error); }
         let inputs = self.definition.runtime_environment.as_ref();
-        ResolvedCapabilities::resolve(
+        let resolved = ResolvedCapabilities::resolve(
             declarations,
             |root| inputs.and_then(|inputs| inputs.root(root)).ok_or_else(|| format!("fixture does not set {}", root.key())),
             || Ok(inputs.and_then(|inputs| inputs.wayland_display.clone())),
             |name| Ok(inputs.and_then(|inputs| inputs.named_sockets.get(name)).cloned()),
-        )
+        )?;
+        if declarations.files.directories.is_empty() { return Ok(resolved); }
+        let home = inputs.and_then(|env| env.home_dir.as_deref()).unwrap_or("/home/preview");
+        let data = OnceCell::new();
+        let documents = OnceCell::new();
+        Ok(resolved.with_file_directories(declarations, |root| match root {
+            "$HOME" => Some(Path::new(home)),
+            "$XDG_DATA_HOME" => Some(inputs.and_then(|env| env.xdg_data_home.as_deref())
+                .map(Path::new).unwrap_or_else(|| data.get_or_init(|| Path::new(home).join(".local/share")))),
+            "$XDG_DOCUMENTS_DIR" => Some(inputs.and_then(|env| env.xdg_documents_dir.as_deref())
+                .map(Path::new).unwrap_or_else(|| documents.get_or_init(|| Path::new(home).join("Documents")))),
+            _ => None,
+        }))
     }
 
     fn record(&self, state: &mut State, kind: &str, detail: Value) {
@@ -723,32 +735,6 @@ impl FixtureRuntime {
             .and_then(|map| map.get(name))
             .map(|seed| seed.statements.clone())
             .unwrap_or_default()
-    }
-
-    /// Resolves a manifest `files.directories` template lexically against the synthetic preview environment.
-    pub(crate) fn resolve_preview_file_root(&self, template: &str) -> String {
-        let env = self.definition.runtime_environment.as_ref();
-        let home = env
-            .and_then(|e| e.home_dir.as_deref())
-            .unwrap_or("/home/preview");
-        let data = env
-            .and_then(|e| e.xdg_data_home.as_deref())
-            .map(str::to_owned)
-            .unwrap_or_else(|| runtime_paths::default_data_home(home));
-        let docs = env
-            .and_then(|e| e.xdg_documents_dir.as_deref())
-            .map(str::to_owned)
-            .unwrap_or_else(|| format!("{}/Documents", home.trim_end_matches('/')));
-        if let Some(rest) = template.strip_prefix("$XDG_DOCUMENTS_DIR") {
-            return format!("{docs}{rest}");
-        }
-        if let Some(rest) = template.strip_prefix("$XDG_DATA_HOME") {
-            return format!("{data}{rest}");
-        }
-        if let Some(rest) = template.strip_prefix("$HOME") {
-            return format!("{home}{rest}");
-        }
-        template.to_owned()
     }
 
     /// Builds an isolated in-memory virtual filesystem seeded from `services.files`.

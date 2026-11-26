@@ -16,7 +16,7 @@ use crate::{
     assets::MAX_SAFE_ID,
     bytecode_cache::BytecodeCache,
     dev_banner,
-    extensions::manifest::{FailedOverlayMeta, VerifiedOverlay},
+    extensions::{bridge::OverlayFailureInfo, manifest::FailedOverlayMeta},
     fallback,
     session::{Result as SessionResult, ResourceCounts, Session, SessionError, SessionModule, SessionPolicy},
 };
@@ -106,6 +106,11 @@ pub(crate) enum ReloadOutcome {
     Mounted { generation: u64, predecessor_leak: Option<PredecessorLeak>, css_only: bool },
     Rejected(SessionError),
     Fallback(SessionError),
+}
+
+pub(crate) enum TurnError {
+    Checkpoint(SessionError),
+    Shell(SessionError),
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -307,38 +312,16 @@ impl SessionHost {
     /// Configures `--extensions-overlay <path>` and performs initial verified load before first mount.
     pub(crate) fn configure_initial_overlay(&mut self, path: &Path) {
         self.overlay.enabled = true;
-        let base_caps = self
-            .module
-            .as_package()
-            .map(|p| &p.manifest.capabilities);
-        match VerifiedOverlay::load_from_path(path, self.overlay.host_abi) {
+        match self.verify_candidate_overlay(path) {
             Ok(verified) => {
-                if let Some(caps) = base_caps
-                    && let Err(err) = caps.merge_overlay(&verified.effective_host_capabilities)
-                {
-                    let failed = FailedOverlayMeta {
-                        overlay_id: Some(verified.overlay_id),
-                        rollback_allowed_extensions: verified.rollback_allowed_extensions,
-                        client_metadata: verified.client_metadata,
-                    };
-                    self.overlay.safe_base_shell = true;
-                    self.overlay.last_failure = Some(crate::extensions::bridge::OverlayFailureInfo {
-                        overlay_id: failed.overlay_id,
-                        phase: "preflight",
-                        reason: err,
-                        rollback_blocked_by_policy: false,
-                        client_metadata: failed.client_metadata,
-                    });
-                    return;
-                }
-                self.overlay.active_overlay = Some(Rc::new(verified));
+                self.overlay.active_overlay = Some(verified);
                 self.overlay.safe_base_shell = false;
                 self.overlay.last_failure = None;
             }
             Err((reason, failed)) => {
                 self.overlay.safe_base_shell = true;
                 self.overlay.active_overlay = None;
-                self.overlay.last_failure = Some(crate::extensions::bridge::OverlayFailureInfo {
+                self.overlay.last_failure = Some(OverlayFailureInfo {
                     overlay_id: failed.overlay_id,
                     phase: "preflight",
                     reason,
@@ -656,24 +639,45 @@ impl SessionHost {
         self.mount_module(surface, waker, document, module, &retry)
     }
 
-    /// Push live portal reduced-motion updates to every mounted session.
-    pub(crate) fn sync_reduced_motion(&mut self, portal: Option<bool>, surface: &mut impl SessionSurface) -> SessionResult<()> {
-        for session in self.sessions.values().chain(self.pure_session.iter()) {
-            if session.update_reduced_motion(portal)? {
+    /// Complete owner work for a native event before realizing shell requests.
+    pub(crate) fn turn(
+        &mut self,
+        runtime: &mut zgui::runtime::Runtime,
+        cx: &dyn PlatformCx,
+        images: ImageChoice,
+        monitors: &[Monitor],
+        retry: &Rc<dyn Fn(DocumentId, u64)>,
+    ) -> Result<(), TurnError> {
+        self.checkpoint_native(runtime, cx, images, retry).map_err(TurnError::Checkpoint)?;
+        self.shell_turn(runtime, cx, images, monitors, retry).map_err(TurnError::Shell)
+    }
+
+    /// Synchronize primary preferences, checkpoint, then dispatch any platform clipboard work.
+    /// Pure shells synchronize and checkpoint when reconciling their shell surfaces.
+    fn checkpoint_native(
+        &mut self,
+        runtime: &mut zgui::runtime::Runtime,
+        cx: &dyn PlatformCx,
+        images: ImageChoice,
+        retry: &Rc<dyn Fn(DocumentId, u64)>,
+    ) -> SessionResult<()> {
+        let mut surface = RuntimeSurface::new(runtime, cx, images);
+        for session in self.sessions.values() {
+            if Self::sync_preferences(session, cx)? {
                 session.request_frames(|document| surface.request_frame(document));
             }
+        }
+        self.checkpoint(&mut surface, retry.clone())?;
+        if self.drain_clipboard(cx) {
+            self.checkpoint(&mut surface, retry.clone())?;
         }
         Ok(())
     }
 
-    /// Push live compositor background-blur capability updates to every mounted session.
-    pub(crate) fn sync_background_blur_supported(&mut self, supported: bool, surface: &mut impl SessionSurface) -> SessionResult<()> {
-        for session in self.sessions.values().chain(self.pure_session.iter()) {
-            if session.update_background_blur_supported(supported)? {
-                session.request_frames(|document| surface.request_frame(document));
-            }
-        }
-        Ok(())
+    fn sync_preferences(session: &Session, cx: &dyn PlatformCx) -> SessionResult<bool> {
+        let motion = session.update_reduced_motion(cx.reduced_motion())?;
+        let blur = session.update_background_blur_supported(cx.capabilities().supports_background_blur)?;
+        Ok(motion || blur)
     }
 
     /// Run each mounted session's work turn. Under `Fallback` a session fault
@@ -705,17 +709,18 @@ impl SessionHost {
         }
         for (document, generation, error) in faults {
             eprintln!("session-fault: generation={generation} {error}");
-            if self.overlay.enabled
-                && self.overlay.observation.as_ref().is_some_and(|obs| obs.generation == generation)
-            {
+            let observing = self.overlay.observation.as_ref().is_some_and(|obs| obs.generation == generation);
+            if observing && self.is_session_locked(surface.session_lock_support()) {
+                self.overlay.observation = None;
+            } else if observing {
                 let failed_meta = self.active_overlay_failed_meta();
                 if let Some(session) = self.sessions.remove(&document) {
                     let waker = session.waker();
                     self.shell_windows.retire(&session, |token, id| surface.close_shell_surface(token, id));
-                    self.recover_primary_overlay(
+                    let _ = self.recover_primary_overlay(
                         surface,
                         waker,
-                        retry.clone(),
+                        &retry,
                         document,
                         overlay::OverlayRecovery {
                             phase: "observation",
@@ -736,7 +741,6 @@ impl SessionHost {
                 }
             }
         }
-        self.tick_observation();
         Ok(())
     }
 
@@ -798,7 +802,11 @@ impl SessionHost {
                 ReloadOutcome::Mounted { .. } => ("accepted", None),
                 ReloadOutcome::Rejected(error) | ReloadOutcome::Fallback(error) => ("rejected", Some(error.to_string())),
             };
-            let mut record = serde_json::json!({"schemaVersion":1,"status":status,"candidate":identity,"generation":self.generation,
+            let generation = match outcome {
+                ReloadOutcome::Mounted { generation, .. } => *generation,
+                _ => self.generation,
+            };
+            let mut record = serde_json::json!({"schemaVersion":1,"status":status,"candidate":identity,"generation":generation,
                 "document":document.map(|document| format!("{document:?}")),"diagnostic":diagnostic,
                 "lastSuccessfulBuildId":self.last_good.as_ref().and_then(SessionModule::as_package).map(|package|&package.manifest.build_id)});
             if let ReloadOutcome::Mounted { predecessor_leak: Some(leak), .. } = &outcome {
@@ -840,11 +848,13 @@ impl SessionHost {
             && !self.fallbacks.contains_key(&document)
             && !lock_state.is_some_and(SessionLockState::is_retained)
             && !self.shell_windows.has_active_lock()
+            && self.overlay.observation.is_none()
+            && !self.overlay.is_rollback_mount
             && let Some(prev_pkg) = prev_session.active_package()
             && let Some(next_pkg) = module.as_package()
             && prev_pkg.is_css_only_successor(next_pkg)
         {
-            match prev_session.hot_swap_stylesheets(next_pkg) {
+            match prev_session.replace_packaged_stylesheets(next_pkg) {
                 Ok(()) => {
                     self.module = module.clone();
                     self.last_good = Some(module);
@@ -975,6 +985,8 @@ impl SessionHost {
             let phase = self.overlay.initial_notification_phase();
             if let Err(error) = candidate.notify_session_committed(phase) {
                 self.shell_windows.retire(&candidate, |token, id| surface.close_shell_surface(token, id));
+                // The previous generation has already retired; do not offer it for rollback.
+                self.sessions.remove(&document);
                 return ReloadOutcome::Rejected(error);
             }
             if !self.overlay.safe_base_shell && let Some(overlay) = self.overlay.active_overlay.clone() {

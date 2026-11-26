@@ -1,10 +1,15 @@
 //! Overlay host state machine: observation window, lock-screen coalescing slot,
 //! and anti-resurrection Safe Base Shell rollback tracking.
 use std::{
-    path::PathBuf,
+    path::{Path, PathBuf},
     rc::Rc,
+    sync::Arc,
     time::{Duration, Instant},
 };
+use zgui::{platform::{PlatformCx, Waker}, runtime::Runtime, view::DocumentId};
+
+use super::{ImageChoice, ReloadOutcome, RuntimeSurface, SessionHost, SessionSurface, surfaces::platform_lock_state};
+use crate::session::{Result as SessionResult, Session};
 
 use crate::{
     bytecode_cache::BytecodeCache,
@@ -71,6 +76,14 @@ pub(super) enum RollbackPlan {
     SafeBaseShell(OverlayFailureInfo),
 }
 
+fn failed_meta(overlay: &VerifiedOverlay) -> FailedOverlayMeta {
+    FailedOverlayMeta {
+        overlay_id: Some(overlay.overlay_id.clone()),
+        rollback_allowed_extensions: overlay.rollback_allowed_extensions.clone(),
+        client_metadata: overlay.client_metadata.clone(),
+    }
+}
+
 impl OverlayHostState {
     pub(super) fn policy_overlay(&self) -> Option<Rc<VerifiedOverlay>> {
         if self.safe_base_shell {
@@ -97,6 +110,19 @@ impl OverlayHostState {
             started_at: Instant::now(),
             duration: self.observation_duration,
         });
+    }
+
+    fn replace_active(
+        &mut self,
+        overlay: Option<Rc<VerifiedOverlay>>,
+        failure: Option<OverlayFailureInfo>,
+    ) -> (Option<Rc<VerifiedOverlay>>, bool, Option<OverlayFailureInfo>) {
+        let safe_base_shell = overlay.is_none();
+        (
+            std::mem::replace(&mut self.active_overlay, overlay),
+            std::mem::replace(&mut self.safe_base_shell, safe_base_shell),
+            std::mem::replace(&mut self.last_failure, failure),
+        )
     }
 
     pub(super) fn plan_failure_recovery(
@@ -160,152 +186,101 @@ impl OverlayHostState {
     }
 }
 
-impl super::SessionHost {
+impl SessionHost {
     #[cfg(test)]
     pub(crate) fn set_observation_duration(&mut self, duration: Duration) {
         self.overlay.observation_duration = duration;
     }
 
-    pub(crate) fn drain_pending_overlay_pure_if_unlocked(
+    /// Coalesce publications until this host has an unlocked mount target.
+    pub(crate) fn queue_overlay_update(&mut self, path: PathBuf) {
+        self.overlay.enabled = true;
+        self.overlay.pending_overlay = Some(path);
+    }
+
+    pub(super) fn drain_pending_overlay_if_unlocked(
         &mut self,
-        runtime: &mut zgui::runtime::Runtime,
-        cx: &dyn zgui::platform::PlatformCx,
-        images: super::ImageChoice,
+        runtime: &mut Runtime,
+        cx: &dyn PlatformCx,
+        images: ImageChoice,
+        retry: &Rc<dyn Fn(DocumentId, u64)>,
     ) {
-        let lock_state = super::surfaces::platform_lock_state(cx);
-        if self.is_session_locked(lock_state) {
+        if self.overlay.pending_overlay.is_none() || cx.is_exiting()
+            || self.is_session_locked(platform_lock_state(cx))
+        {
             return;
         }
-        if let Some(path) = self.overlay.pending_overlay.take() {
-            self.apply_overlay_update_pure(runtime, cx, images, &path);
+        let document = if self.is_pure_shell() {
+            None
+        } else {
+            let Some(document) = self.regions.keys().copied().find(|document| {
+                runtime.windows().iter().any(|window| window.document_id() == *document)
+            }) else { return; };
+            Some(document)
+        };
+        let Some(path) = self.overlay.pending_overlay.take() else { return; };
+        if let Some(document) = document {
+            let mut surface = RuntimeSurface::new(runtime, cx, images);
+            let waker = cx.waker();
+            self.apply_overlay(&path, Some(document),
+                |host| host.mount_module(&mut surface, waker.clone(), document, host.module.clone(), retry));
+        } else {
+            self.apply_overlay(&path, None, |host| host.replace_shell(runtime, cx, images, host.module.clone()));
         }
     }
 
-    pub(crate) fn drain_pending_overlay_primary_if_unlocked(
+    #[cfg(test)]
+    pub(super) fn apply_overlay_update_primary(
         &mut self,
-        surface: &mut impl super::SessionSurface,
-        waker: std::sync::Arc<dyn zgui::platform::Waker>,
-        retry: Rc<dyn Fn(zgui::view::DocumentId, u64)>,
-        document: zgui::view::DocumentId,
+        surface: &mut impl SessionSurface,
+        waker: Arc<dyn Waker>,
+        retry: Rc<dyn Fn(DocumentId, u64)>,
+        document: DocumentId,
+        path: &Path,
     ) {
         if self.is_session_locked(surface.session_lock_support()) {
+            self.queue_overlay_update(path.to_path_buf());
             return;
         }
-        if let Some(path) = self.overlay.pending_overlay.take() {
-            self.apply_overlay_update_primary(surface, waker, retry, document, &path);
-        }
+        self.overlay.enabled = true;
+        self.apply_overlay(path, Some(document),
+            |host| host.mount_module(surface, waker.clone(), document, host.module.clone(), &retry));
     }
 
-    pub(crate) fn apply_overlay_update_pure(
+    fn overlay_session(&self, document: Option<DocumentId>) -> Option<&Session> {
+        match document {
+            Some(document) => self.sessions.get(&document),
+            None => self.pure_session.as_ref(),
+        }.map(Rc::as_ref).filter(|session| !session.is_retired())
+    }
+
+    fn apply_overlay(
         &mut self,
-        runtime: &mut zgui::runtime::Runtime,
-        cx: &dyn zgui::platform::PlatformCx,
-        images: super::ImageChoice,
-        path: &std::path::Path,
+        path: &Path,
+        document: Option<DocumentId>,
+        mut mount: impl FnMut(&mut Self) -> ReloadOutcome,
     ) {
-        self.overlay.enabled = true;
-        let lock_state = super::surfaces::platform_lock_state(cx);
-        if self.is_session_locked(lock_state) {
-            self.overlay.pending_overlay = Some(path.to_path_buf());
-            return;
-        }
         let verified = match self.verify_candidate_overlay(path) {
-            Ok(v) => v,
+            Ok(verified) => verified,
             Err((reason, failed_meta)) => {
-                let _ = self.recover_pure_shell_overlay(runtime, cx, images, "preflight", reason, &failed_meta);
+                let _ = self.recover_overlay(document, OverlayRecovery { phase: "preflight", reason, failed_meta: &failed_meta }, mount);
                 return;
             }
         };
-        let failed_meta = FailedOverlayMeta {
-            overlay_id: Some(verified.overlay_id.clone()),
-            rollback_allowed_extensions: verified.rollback_allowed_extensions.clone(),
-            client_metadata: verified.client_metadata.clone(),
-        };
-        let prev_active = self.overlay.active_overlay.clone();
-        let prev_safe = self.overlay.safe_base_shell;
-        let prev_failure = self.overlay.last_failure.clone();
-
-        self.overlay.active_overlay = Some(verified);
-        self.overlay.safe_base_shell = false;
-        self.overlay.last_failure = None;
-        self.overlay.is_rollback_mount = false;
-        match self.replace_shell(runtime, cx, images, self.module.clone()) {
-            super::ReloadOutcome::Mounted { .. } => {}
-            super::ReloadOutcome::Rejected(err) | super::ReloadOutcome::Fallback(err) => {
-                let phase = if self.pure_session.as_ref().is_some_and(|s| s.generation == self.generation) {
-                    "commit"
-                } else {
-                    "mount"
-                };
-                self.overlay.active_overlay = prev_active;
-                self.overlay.safe_base_shell = prev_safe;
-                self.overlay.last_failure = prev_failure;
-                let _ = self.recover_pure_shell_overlay(runtime, cx, images, phase, err.to_string(), &failed_meta);
-            }
+        let failed_meta = failed_meta(&verified);
+        let previous = self.overlay.replace_active(Some(verified), None);
+        if let ReloadOutcome::Rejected(error) | ReloadOutcome::Fallback(error) = mount(self) {
+            let phase = if self.overlay_session(document).is_some() { "mount" } else { "commit" };
+            (self.overlay.active_overlay, self.overlay.safe_base_shell, self.overlay.last_failure) = previous;
+            let _ = self.recover_overlay(document, OverlayRecovery {
+                phase, reason: error.to_string(), failed_meta: &failed_meta,
+            }, mount);
         }
     }
 
-    pub(crate) fn apply_overlay_update_primary(
-        &mut self,
-        surface: &mut impl super::SessionSurface,
-        waker: std::sync::Arc<dyn zgui::platform::Waker>,
-        retry: Rc<dyn Fn(zgui::view::DocumentId, u64)>,
-        document: zgui::view::DocumentId,
-        path: &std::path::Path,
-    ) {
-        self.overlay.enabled = true;
-        if self.is_session_locked(surface.session_lock_support()) {
-            self.overlay.pending_overlay = Some(path.to_path_buf());
-            return;
-        }
-        let verified = match self.verify_candidate_overlay(path) {
-            Ok(v) => v,
-            Err((reason, failed_meta)) => {
-                self.recover_primary_overlay(
-                    surface,
-                    waker,
-                    retry,
-                    document,
-                    OverlayRecovery { phase: "preflight", reason, failed_meta: &failed_meta },
-                );
-                return;
-            }
-        };
-        let failed_meta = FailedOverlayMeta {
-            overlay_id: Some(verified.overlay_id.clone()),
-            rollback_allowed_extensions: verified.rollback_allowed_extensions.clone(),
-            client_metadata: verified.client_metadata.clone(),
-        };
-        let prev_active = self.overlay.active_overlay.clone();
-        let prev_safe = self.overlay.safe_base_shell;
-        let prev_failure = self.overlay.last_failure.clone();
-
-        self.overlay.active_overlay = Some(verified);
-        self.overlay.safe_base_shell = false;
-        self.overlay.last_failure = None;
-        self.overlay.is_rollback_mount = false;
-        match self.mount_module(surface, waker.clone(), document, self.module.clone(), &retry) {
-            super::ReloadOutcome::Mounted { .. } => {}
-            super::ReloadOutcome::Rejected(err) | super::ReloadOutcome::Fallback(err) => {
-                let live_still_prev = self.sessions.contains_key(&document);
-                let phase = if live_still_prev { "mount" } else { "commit" };
-                self.overlay.active_overlay = prev_active;
-                self.overlay.safe_base_shell = prev_safe;
-                self.overlay.last_failure = prev_failure;
-                self.recover_primary_overlay(
-                    surface,
-                    waker,
-                    retry,
-                    document,
-                    OverlayRecovery { phase, reason: err.to_string(), failed_meta: &failed_meta },
-                );
-            }
-        }
-    }
-
-    fn verify_candidate_overlay(
+    pub(super) fn verify_candidate_overlay(
         &self,
-        path: &std::path::Path,
+        path: &Path,
     ) -> Result<Rc<VerifiedOverlay>, (String, FailedOverlayMeta)> {
         let verified = VerifiedOverlay::load_from_path(path, self.overlay.host_abi)?;
         if let Some(pkg) = self.module.as_package()
@@ -323,112 +298,68 @@ impl super::SessionHost {
 
     pub(super) fn recover_pure_shell_overlay(
         &mut self,
-        runtime: &mut zgui::runtime::Runtime,
-        cx: &dyn zgui::platform::PlatformCx,
-        images: super::ImageChoice,
-        phase: &'static str,
-        reason: String,
-        failed_meta: &FailedOverlayMeta,
-    ) -> crate::session::Result<()> {
-        let active_is_live = self.pure_session.is_some();
-        match self.overlay.plan_failure_recovery(phase, reason, failed_meta, active_is_live) {
-            RollbackPlan::KeepActive(info) => {
-                self.overlay.last_failure = Some(info.clone());
-                if let Some(session) = &self.pure_session {
-                    session.record_overlay_failure(info);
-                }
-                Ok(())
-            }
-            RollbackPlan::MountLastGood { overlay, failure } => {
-                self.overlay.active_overlay = Some(overlay);
-                self.overlay.safe_base_shell = false;
-                self.overlay.last_failure = Some(failure.clone());
-                self.overlay.is_rollback_mount = true;
-                let res = self.replace_shell(runtime, cx, images, self.module.clone());
-                self.overlay.is_rollback_mount = false;
-                if matches!(res, super::ReloadOutcome::Mounted { .. }) {
-                    return Ok(());
-                }
-                self.mount_safe_base_shell_pure(runtime, cx, images, failure)
-            }
-            RollbackPlan::SafeBaseShell(info) => self.mount_safe_base_shell_pure(runtime, cx, images, info),
-        }
-    }
-
-    fn mount_safe_base_shell_pure(
-        &mut self,
-        runtime: &mut zgui::runtime::Runtime,
-        cx: &dyn zgui::platform::PlatformCx,
-        images: super::ImageChoice,
-        info: OverlayFailureInfo,
-    ) -> crate::session::Result<()> {
-        self.overlay.active_overlay = None;
-        self.overlay.observation = None;
-        self.overlay.safe_base_shell = true;
-        self.overlay.last_failure = Some(info);
-        self.overlay.is_rollback_mount = true;
-        let outcome = self.replace_shell(runtime, cx, images, self.module.clone());
-        self.overlay.is_rollback_mount = false;
-        match outcome {
-            super::ReloadOutcome::Mounted { .. } => Ok(()),
-            super::ReloadOutcome::Rejected(err) | super::ReloadOutcome::Fallback(err) => Err(err),
-        }
+        runtime: &mut Runtime,
+        cx: &dyn PlatformCx,
+        images: ImageChoice,
+        recovery: OverlayRecovery<'_>,
+    ) -> SessionResult<()> {
+        self.recover_overlay(None, recovery, |host| host.replace_shell(runtime, cx, images, host.module.clone()))
     }
 
     pub(super) fn recover_primary_overlay(
         &mut self,
-        surface: &mut impl super::SessionSurface,
-        waker: std::sync::Arc<dyn zgui::platform::Waker>,
-        retry: Rc<dyn Fn(zgui::view::DocumentId, u64)>,
-        document: zgui::view::DocumentId,
+        surface: &mut impl SessionSurface,
+        waker: Arc<dyn Waker>,
+        retry: &Rc<dyn Fn(DocumentId, u64)>,
+        document: DocumentId,
         recovery: OverlayRecovery<'_>,
-    ) {
-        let active_is_live = self.sessions.contains_key(&document);
-        match self.overlay.plan_failure_recovery(
-            recovery.phase,
-            recovery.reason,
-            recovery.failed_meta,
-            active_is_live,
+    ) -> SessionResult<()> {
+        self.recover_overlay(Some(document), recovery,
+            |host| host.mount_module(surface, waker.clone(), document, host.module.clone(), retry))
+    }
+
+    fn recover_overlay(
+        &mut self,
+        document: Option<DocumentId>,
+        recovery: OverlayRecovery<'_>,
+        mut mount: impl FnMut(&mut Self) -> ReloadOutcome,
+    ) -> SessionResult<()> {
+        let active_is_live = self.overlay_session(document).is_some();
+        let failure = match self.overlay.plan_failure_recovery(
+            recovery.phase, recovery.reason, recovery.failed_meta, active_is_live,
         ) {
             RollbackPlan::KeepActive(info) => {
-                self.overlay.last_failure = Some(info.clone());
-                if let Some(session) = self.sessions.get(&document) {
-                    session.record_overlay_failure(info);
+                if let Some(session) = self.overlay_session(document) {
+                    session.record_overlay_failure(info.clone());
                 }
+                self.overlay.last_failure = Some(info);
+                return Ok(());
             }
             RollbackPlan::MountLastGood { overlay, failure } => {
-                self.overlay.active_overlay = Some(overlay);
-                self.overlay.safe_base_shell = false;
-                self.overlay.last_failure = Some(failure.clone());
-                self.overlay.is_rollback_mount = true;
-                let res = self.mount_module(surface, waker.clone(), document, self.module.clone(), &retry);
-                self.overlay.is_rollback_mount = false;
-                if matches!(res, super::ReloadOutcome::Mounted { .. }) {
-                    return;
+                if matches!(self.mount_overlay_recovery(Some(overlay), failure.clone(), &mut mount), ReloadOutcome::Mounted { .. }) {
+                    return Ok(());
                 }
-                self.mount_safe_base_shell_primary(surface, waker, retry, document, failure);
+                failure
             }
-            RollbackPlan::SafeBaseShell(info) => {
-                self.mount_safe_base_shell_primary(surface, waker, retry, document, info);
-            }
+            RollbackPlan::SafeBaseShell(failure) => failure,
+        };
+        match self.mount_overlay_recovery(None, failure, mount) {
+            ReloadOutcome::Mounted { .. } => Ok(()),
+            ReloadOutcome::Rejected(error) | ReloadOutcome::Fallback(error) => Err(error),
         }
     }
 
-    fn mount_safe_base_shell_primary(
+    fn mount_overlay_recovery(
         &mut self,
-        surface: &mut impl super::SessionSurface,
-        waker: std::sync::Arc<dyn zgui::platform::Waker>,
-        retry: Rc<dyn Fn(zgui::view::DocumentId, u64)>,
-        document: zgui::view::DocumentId,
-        info: OverlayFailureInfo,
-    ) {
-        self.overlay.active_overlay = None;
-        self.overlay.observation = None;
-        self.overlay.safe_base_shell = true;
-        self.overlay.last_failure = Some(info);
+        overlay: Option<Rc<VerifiedOverlay>>,
+        failure: OverlayFailureInfo,
+        mut mount: impl FnMut(&mut Self) -> ReloadOutcome,
+    ) -> ReloadOutcome {
+        self.overlay.replace_active(overlay, Some(failure));
         self.overlay.is_rollback_mount = true;
-        let _ = self.mount_module(surface, waker, document, self.module.clone(), &retry);
+        let outcome = mount(self);
         self.overlay.is_rollback_mount = false;
+        outcome
     }
 
     #[cfg(test)]
@@ -442,7 +373,7 @@ impl super::SessionHost {
         self.overlay.last_good_overlay.as_deref().map(|o| o.overlay_id.as_str())
     }
     #[cfg(test)]
-    pub(crate) fn pending_overlay_path(&self) -> Option<&std::path::Path> {
+    pub(crate) fn pending_overlay_path(&self) -> Option<&Path> {
         self.overlay.pending_overlay.as_deref()
     }
 }

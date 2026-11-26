@@ -194,6 +194,8 @@ pub(crate) struct Shell {
     life: Cell<Lifecycle>,
     monitors: RefCell<Vec<Monitor>>,
     subscriptions: RefCell<BTreeMap<u32, Persistent<Function<'static>>>>,
+    reduced_motion: Cell<bool>,
+    motion_subscribers: RefCell<BTreeMap<u32, Persistent<Function<'static>>>>,
     background_blur_supported: Cell<bool>,
     blur_support_subscribers: RefCell<BTreeMap<u32, Persistent<Function<'static>>>>,
     layers: RefCell<BTreeMap<u32, WantedLayer>>,
@@ -214,12 +216,28 @@ pub(crate) struct Shell {
     waker: Arc<dyn Waker>,
 }
 
+fn notify_preference(
+    ctx: &Ctx<'_>,
+    subscribers: &RefCell<BTreeMap<u32, Persistent<Function<'static>>>>,
+    value: bool,
+) -> rquickjs::Result<()> {
+    let ids: Vec<_> = subscribers.borrow().keys().copied().collect();
+    for id in ids {
+        let callback = subscribers.borrow().get(&id).cloned();
+        if let Some(callback) = callback {
+            callback.restore(ctx)?.call::<_, ()>((value,))?;
+        }
+    }
+    Ok(())
+}
+
 impl Shell {
     /// Fixes generation authority before preflight; creation opens only for mount.
     pub(crate) fn new(config: ShellConfig, waker: Arc<dyn Waker>) -> Rc<Self> {
         let ShellConfig { generation, authority, window_authority, lock_authority, lock_state, contract } = config;
         Rc::new(Self { generation, authority, window_authority, contract, failure: RefCell::new(None), life: Cell::new(Lifecycle::Loading),
             monitors: RefCell::new(Vec::new()), subscriptions: RefCell::new(BTreeMap::new()),
+            reduced_motion: Cell::new(false), motion_subscribers: RefCell::new(BTreeMap::new()),
             background_blur_supported: Cell::new(false), blur_support_subscribers: RefCell::new(BTreeMap::new()),
             layers: RefCell::new(BTreeMap::new()),
             popups: RefCell::new(BTreeMap::new()), windows: RefCell::new(BTreeMap::new()),
@@ -239,6 +257,7 @@ impl Shell {
         self.windows.borrow_mut().clear();
         self.blur_targets.borrow_mut().clear();
         self.subscriptions.borrow_mut().clear();
+        self.motion_subscribers.borrow_mut().clear();
         self.blur_support_subscribers.borrow_mut().clear();
         self.lock_surfaces.borrow_mut().clear();
         self.lock_subscriptions.borrow_mut().clear();
@@ -248,6 +267,7 @@ impl Shell {
     pub(crate) fn failure(&self) -> Option<ContractFailure> { self.failure.borrow().clone() }
     pub(crate) fn callback_count(&self) -> usize {
         self.layers.borrow().len() + self.subscriptions.borrow().len()
+            + self.motion_subscribers.borrow().len()
             + self.blur_support_subscribers.borrow().len()
             + 2 * self.popups.borrow().len() + 2 * self.windows.borrow().len()
             + self.lock_surfaces.borrow().len() + self.lock_subscriptions.borrow().len()
@@ -392,20 +412,21 @@ impl Shell {
         !self.subscriptions.borrow().is_empty()
     }
 
+    pub(crate) fn seed_reduced_motion(&self, reduced: bool) {
+        self.reduced_motion.set(reduced);
+    }
+
+    pub(crate) fn dispatch_reduced_motion(&self, ctx: &Ctx<'_>, reduced: bool) -> rquickjs::Result<()> {
+        notify_preference(ctx, &self.motion_subscribers, reduced)
+    }
+
     pub(crate) fn seed_background_blur_supported(&self, supported: bool) {
         self.background_blur_supported.set(supported);
     }
 
     pub(crate) fn dispatch_background_blur_supported(&self, ctx: &Ctx<'_>, supported: bool) -> rquickjs::Result<()> {
         self.background_blur_supported.set(supported);
-        let ids: Vec<_> = self.blur_support_subscribers.borrow().keys().copied().collect();
-        for id in ids {
-            let callback = self.blur_support_subscribers.borrow().get(&id).cloned();
-            if let Some(callback) = callback {
-                callback.restore(ctx)?.call::<_, ()>((supported,))?;
-            }
-        }
-        Ok(())
+        notify_preference(ctx, &self.blur_support_subscribers, supported)
     }
 
     pub(crate) fn dispatch_monitors(&self, ctx: &Ctx<'_>) -> rquickjs::Result<()> {
@@ -492,6 +513,26 @@ impl Shell {
             }
             let weak = weak.clone();
             Function::new(ctx, move || { if let Some(shell) = weak.upgrade() { shell.subscriptions.borrow_mut().remove(&id); } })
+        }))?;
+        let weak = Rc::downgrade(self);
+        api.set("getReducedMotion", Func::from(move |ctx: Ctx<'js>| -> rquickjs::Result<bool> {
+            Ok(owner(&weak, &ctx)?.reduced_motion.get())
+        }))?;
+        let weak = Rc::downgrade(self);
+        api.set("subscribeReducedMotion", Func::from(move |ctx: Ctx<'js>, callback: Function<'js>| {
+            let shell = owner(&weak, &ctx)?;
+            shell.require_creation(&ctx)?;
+            if shell.motion_subscribers.borrow().len() >= MAX_SUBSCRIPTIONS {
+                return Err(Exception::throw_range(&ctx, "reduced-motion subscription limit reached"));
+            }
+            let id = shell.id(&ctx)?;
+            shell.motion_subscribers.borrow_mut().insert(id, Persistent::save(&ctx, callback));
+            let weak = weak.clone();
+            Function::new(ctx, move || {
+                if let Some(shell) = weak.upgrade() {
+                    shell.motion_subscribers.borrow_mut().remove(&id);
+                }
+            })
         }))?;
         let weak = Rc::downgrade(self);
         api.set("getBackgroundBlurSupported", Func::from(move |ctx: Ctx<'js>| -> rquickjs::Result<bool> {

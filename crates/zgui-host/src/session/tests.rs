@@ -865,8 +865,12 @@ fn live_control_request_updates_the_tree_and_replies_from_a_bridge_turn() {
     });
     queued.recv_timeout(Duration::from_secs(5)).expect("control transport must notify the owner");
     session.offer_control(listener.try_recv().expect("published inbound request"));
+    assert_eq!(session.checkpoint_queue_depth(), 1, "queued control ingress is pending checkpoint work");
     assert_eq!(native.text(), "waiting", "inbound admission must not execute the handler");
+    assert!(session.has_deliverable_work(), "queued ingress can run without waiting for a worker");
+    assert!(!session.has_inflight_host_ops());
     session.checkpoint().expect("deliver control request in a bounded Bridge turn");
+    assert_eq!(session.checkpoint_queue_depth(), 0, "an idle listener is not queue depth");
     assert_eq!(native.text(), "hello world:--flag", "the handler must receive argv separately and update the tree");
     let reply = peer.join().expect("join socket peer");
     assert_eq!(reply, br#"{"received":["hello world","--flag"]}"#, "the transport must return the handler's serialized reply");
@@ -1123,16 +1127,63 @@ fn preview_installs_clock_before_module_evaluation_and_settles_fixture_through_o
     session.mount().unwrap();
     assert_eq!(native.text(), "1251:17");
     assert_eq!(fixtures.next_deadline_us(), Some(22000));
+    assert!(!session.has_deliverable_work(), "future fixture work must not make the current turn runnable");
+    assert!(!session.has_inflight_host_ops(), "waiting for a fixture deadline must not block the driver on wall time");
     assert!(!fixtures.release_due().unwrap());
     session.checkpoint().unwrap();
     assert_eq!(native.text(), "1251:17");
     clock.advance(Duration::from_millis(5));
     fixtures.release_due().unwrap();
+    assert!(session.has_deliverable_work(), "the fixture is runnable only after the virtual deadline releases it");
     session.checkpoint().unwrap();
     assert_eq!(native.text(), "completed:1256");
     fixtures.assert_calls("assets", "readTextAsset", 1, None).unwrap();
     fixtures.finalize().unwrap();
     session.retire();
+    assert_eq!(session.counts(), ResourceCounts::default());
+}
+
+#[test]
+fn sqlite_ops_keep_preview_waiting_until_owner_delivery_not_while_database_is_idle() {
+    let fixture = Fixture::new(r#"
+        export const hostApiVersion = 1;
+        let db;
+        let delivered = false;
+        export function mount() {
+            db = __zguiServices.openDatabase('main');
+            return () => {};
+        }
+        export function query() {
+            db.query('SELECT 1 AS result').promise.then(() => { delivered = true; });
+        }
+        export function verify() {
+            if (!delivered) throw Error('query completion did not run');
+        }
+    "#, "").with_capabilities(crate::package::Capabilities {
+        sqlite: crate::package::SqliteCapabilities { databases: vec!["main".into()] },
+        ..Default::default()
+    });
+    let native = Native::new();
+    let session = native.preview(fixture.package(), RuntimeLimits::default(),
+        Rc::new(Cell::new(Instant::now() + Duration::from_secs(5)))).unwrap();
+    session.mount().unwrap();
+    assert!(!session.has_inflight_host_ops(), "an open database alone must not hold the preview barrier");
+    session.invoke("query").unwrap();
+    assert!(session.has_inflight_host_ops(), "keep the barrier until the owner delivers the query result");
+    for _ in 0..8 {
+        if !session.has_inflight_host_ops() { break; }
+        if !session.has_deliverable_work() {
+            native.wakes.recv_timeout(Duration::from_secs(5)).expect("SQLite completion must wake the owner");
+        }
+        session.checkpoint().unwrap();
+    }
+    assert!(!session.has_inflight_host_ops(), "owner delivery releases the barrier");
+    // A checkpoint can exhaust the promise-job phase before the service delivery.
+    session.checkpoint().unwrap();
+    session.invoke("verify").unwrap();
+    assert!(!session.has_deliverable_work());
+    assert_eq!(session.retire().counts, ResourceCounts { sqlite_databases: 1, ..Default::default() },
+        "an idle but unclosed database is still a teardown leak");
     assert_eq!(session.counts(), ResourceCounts::default());
 }
 
@@ -1524,5 +1575,72 @@ fn telemetry_samples_live_js_heap_before_disposal_and_post_dispose_separately() 
         let proc_mem = telemetry.process_memory.expect("Linux samples /proc/self/smaps_rollup");
         assert!(proc_mem.rss_bytes > 0);
         assert!(proc_mem.pss_bytes > 0);
+    }
+}
+
+#[test]
+fn checkpoint_queue_depth_counts_staged_network_and_worker_items() {
+    let fixture = Fixture::new(r#"
+        export const hostApiVersion = 1;
+        export function mount() {
+            __zguiServices.httpRequest({url: 'https://api.example.com/staged'});
+            const worker = __zguiServices.spawnWorker('bg');
+            worker.postMessage({id: 1});
+            worker.postMessage({id: 2});
+            return () => {};
+        }
+    "#, "").with_worker("export {};").with_capabilities(crate::package::Capabilities {
+        network: crate::package::NetworkCapabilities { origins: vec!["https://api.example.com".into()], ..Default::default() },
+        ..Default::default()
+    });
+    let native = Native::new();
+    let session = native.prepare(fixture.package(), 1).unwrap();
+    session.begin_staged_mount();
+    session.mount().unwrap();
+    assert_eq!(session.checkpoint_queue_depth(), 4, "one HTTP start, one worker start, and two messages");
+    assert!(!session.has_deliverable_work(), "a staged mount cannot run deferred side effects");
+    assert!(!session.has_inflight_host_ops());
+
+    // Discarding a candidate never commits its effects, but reports work the disposer left open.
+    let report = session.retire();
+    assert_eq!(report.counts, ResourceCounts { http_requests: 1, workers: 1, ..Default::default() });
+    assert_eq!(session.checkpoint_queue_depth(), 0);
+    assert_eq!(session.counts(), ResourceCounts::default());
+}
+
+#[test]
+fn shell_reduced_motion_notifies_window_and_zero_surface_sessions_and_releases_callbacks() {
+    let fixture = Fixture::new(r#"
+        export const hostApiVersion = 1;
+        const events = [];
+        let unsubscribe;
+        export function mount() {
+            events.push('initial:' + __zguiShell.getReducedMotion());
+            unsubscribe = __zguiShell.subscribeReducedMotion(value => events.push(value + ':' + __zguiShell.getReducedMotion()));
+            return () => {};
+        }
+        export function verify() {
+            if (events.join(',') !== 'initial:true,false:false') throw Error('unexpected motion: ' + events);
+            unsubscribe();
+            __zguiShell.subscribeReducedMotion(() => { throw Error('retired callback invoked'); });
+        }
+    "#, "").with_capabilities(crate::package::Capabilities { shell_surfaces: true, ..Default::default() });
+    let native = Native::new();
+    let runtime = zgui::runtime::App::new().into_handler(|_| panic!("no native surfaces needed")).unwrap();
+    for session in [
+        native.prepare(fixture.package(), 1).unwrap(),
+        Session::prepare_shell(Fonts::shipped_only(), runtime.app_timers(), SessionModule::package(fixture.package()),
+            2, native.waker.clone(), SessionPolicy::live(native.executor.clone())).unwrap(),
+    ] {
+        assert!(!session.update_reduced_motion(Some(true)).unwrap(), "seeding does not dispatch callbacks");
+        session.mount().expect("shell preference must be available independently of the primary bridge");
+        assert_eq!(session.shell.callback_count(), 1);
+        assert!(session.update_reduced_motion(Some(false)).unwrap());
+        assert!(!session.update_reduced_motion(Some(false)).unwrap());
+        session.invoke("verify").unwrap();
+        assert_eq!(session.shell.callback_count(), 1, "unsubscribe removes the old callback");
+        assert_eq!(session.retire().counts.callbacks, 0);
+        assert_eq!(session.shell.callback_count(), 0, "retirement releases outstanding subscriptions");
+        assert!(!session.update_reduced_motion(Some(true)).unwrap(), "retired sessions cannot notify");
     }
 }

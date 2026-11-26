@@ -19,6 +19,7 @@ use rquickjs::{
 use std::{
     cell::{Cell, OnceCell, RefCell},
     collections::{BTreeMap, VecDeque},
+    ops::Bound::{Excluded, Included, Unbounded},
     rc::Rc,
     sync::Arc,
 };
@@ -113,6 +114,7 @@ pub(super) struct NetworkState {
     sse: RefCell<BTreeMap<u64, SseEntry>>,
     ws: RefCell<BTreeMap<u64, WsEntry>>,
     local_events: RefCell<VecDeque<NetworkEvent>>,
+    ready: RefCell<Option<NetworkEvent>>,
     poll_cursor: Cell<u64>,
 }
 
@@ -140,6 +142,7 @@ impl NetworkState {
             sse: RefCell::new(BTreeMap::new()),
             ws: RefCell::new(BTreeMap::new()),
             local_events: RefCell::new(VecDeque::new()),
+            ready: RefCell::new(None),
             poll_cursor: Cell::new(0),
         }
     }
@@ -390,10 +393,20 @@ impl NetworkState {
         }
     }
 
+    pub(super) fn pending_count(&self, generation: u64) -> usize {
+        self.staged_ops.borrow().len() + self.local_events.borrow().len()
+            + usize::from(self.ready.borrow().is_some())
+            + match &self.backend {
+                NetworkBackend::Preview { fixture } => fixture.pending_network_deliveries(generation),
+                NetworkBackend::Live { .. } => 0,
+            }
+    }
+
     pub(super) fn clear(&self, generation: u64) {
         self.staging.set(false);
         self.staged_ops.borrow_mut().clear();
         self.local_events.borrow_mut().clear();
+        self.ready.borrow_mut().take();
         for (_, entry) in std::mem::take(&mut *self.http.borrow_mut()) {
             if let Some(handle) = entry.handle {
                 handle.cancel();
@@ -414,21 +427,24 @@ impl NetworkState {
         }
     }
 
-    pub(super) fn has_events(&self) -> bool {
-        if !self.local_events.borrow().is_empty() {
+    pub(super) fn has_events(&self, generation: u64) -> bool {
+        let mut ready = self.ready.borrow_mut();
+        if ready.is_some() || !self.local_events.borrow().is_empty() {
             return true;
         }
         match &self.backend {
-            NetworkBackend::Preview { fixture } => fixture.has_network_delivery(),
+            NetworkBackend::Preview { fixture } => fixture.has_network_delivery(generation),
             NetworkBackend::Live { .. } => {
-                // In live mode we check if any active handle is present only when woken;
-                // handles wake the owner on every pushed event.
-                false
+                *ready = self.poll_live_round_robin(generation);
+                ready.is_some()
             }
         }
     }
 
     pub(super) fn next_event(&self, generation: u64) -> Option<NetworkEvent> {
+        if let Some(ev) = self.ready.borrow_mut().take() {
+            return Some(ev);
+        }
         if let Some(ev) = self.local_events.borrow_mut().pop_front() {
             return Some(ev);
         }
@@ -440,77 +456,65 @@ impl NetworkState {
 
     /// Fair per-registration round-robin poll across active HTTP, SSE, and WebSocket handles.
     fn poll_live_round_robin(&self, generation: u64) -> Option<NetworkEvent> {
-        let mut ids: Vec<u64> = self
-            .http
-            .borrow()
-            .keys()
-            .chain(self.sse.borrow().keys())
-            .chain(self.ws.borrow().keys())
-            .copied()
-            .collect();
-        if ids.is_empty() {
-            return None;
-        }
-        ids.sort_unstable();
         let after = self.poll_cursor.get();
-        let split = ids.partition_point(|&id| id <= after);
-        for &id in ids[split..].iter().chain(ids[..split].iter()) {
-            if let Some(ev) = self
-                .http
-                .borrow()
-                .get(&id)
-                .and_then(|e| e.handle.as_ref())
-                .and_then(|h| h.try_recv())
-            {
-                self.poll_cursor.set(id);
-                return Some(match ev {
-                    HttpEvent::Head(head) => NetworkEvent::HttpHead { generation, id, head },
-                    HttpEvent::Chunk { data, .. } => NetworkEvent::HttpChunk { generation, id, data },
-                    HttpEvent::End => NetworkEvent::HttpEnd { generation, id },
-                    HttpEvent::Error(error) => NetworkEvent::HttpError { generation, id, error },
-                });
-            }
-            if let Some(ev) = self
-                .sse
-                .borrow()
-                .get(&id)
-                .and_then(|e| e.handle.as_ref())
-                .and_then(|h| h.try_recv())
-            {
-                self.poll_cursor.set(id);
-                return Some(match ev {
-                    SseEvent::Open { status, url, headers } => {
-                        NetworkEvent::SseOpen { generation, id, status, url, headers }
-                    }
-                    SseEvent::Message { message, .. } => {
-                        NetworkEvent::SseMessage { generation, id, message }
-                    }
-                    SseEvent::Error(error) => NetworkEvent::SseError { generation, id, error },
-                    SseEvent::Close => NetworkEvent::SseClose { generation, id },
-                });
-            }
-            let ws_ev = {
-                let map = self.ws.borrow();
-                map.get(&id)
-                    .and_then(|e| e.handle.as_ref().and_then(|h| h.try_recv()).map(|ev| (e.url.clone(), ev)))
-            };
-            if let Some((url, ev)) = ws_ev {
-                self.poll_cursor.set(id);
-                return Some(match ev {
-                    WebSocketEvent::Open { protocol } => {
-                        NetworkEvent::WsOpen { generation, id, url, protocol }
-                    }
-                    WebSocketEvent::Message { payload: InboundPayload::Text(text), .. } => {
-                        NetworkEvent::WsText { generation, id, text }
-                    }
-                    WebSocketEvent::Message { payload: InboundPayload::Binary(data), .. } => {
-                        NetworkEvent::WsBinary { generation, id, data }
-                    }
-                    WebSocketEvent::Error(error) => NetworkEvent::WsError { generation, id, error },
-                    WebSocketEvent::Close { code, reason, .. } => {
-                        NetworkEvent::WsClose { generation, id, code, reason }
-                    }
-                });
+        let http = self.http.borrow();
+        let sse = self.sse.borrow();
+        let ws = self.ws.borrow();
+        for (lower, upper) in [(Excluded(after), Unbounded), (Unbounded, Included(after))] {
+            let mut http = http.range((lower, upper)).peekable();
+            let mut sse = sse.range((lower, upper)).peekable();
+            let mut ws = ws.range((lower, upper)).peekable();
+            loop {
+                let next = [
+                    http.peek().map(|&(&id, _)| id),
+                    sse.peek().map(|&(&id, _)| id),
+                    ws.peek().map(|&(&id, _)| id),
+                ]
+                .into_iter()
+                .enumerate()
+                .filter_map(|(kind, id)| Some((id?, kind)))
+                .min();
+                let Some((id, kind)) = next else { break; };
+                let event = match kind {
+                    0 => http.next().and_then(|(_, e)| e.handle.as_ref()?.try_recv()).map(|ev| match ev {
+                        HttpEvent::Head(head) => NetworkEvent::HttpHead { generation, id, head },
+                        HttpEvent::Chunk { data, .. } => NetworkEvent::HttpChunk { generation, id, data },
+                        HttpEvent::End => NetworkEvent::HttpEnd { generation, id },
+                        HttpEvent::Error(error) => NetworkEvent::HttpError { generation, id, error },
+                    }),
+                    1 => sse.next().and_then(|(_, e)| e.handle.as_ref()?.try_recv()).map(|ev| match ev {
+                        SseEvent::Open { status, url, headers } => {
+                            NetworkEvent::SseOpen { generation, id, status, url, headers }
+                        }
+                        SseEvent::Message { message, .. } => {
+                            NetworkEvent::SseMessage { generation, id, message }
+                        }
+                        SseEvent::Error(error) => NetworkEvent::SseError { generation, id, error },
+                        SseEvent::Close => NetworkEvent::SseClose { generation, id },
+                    }),
+                    _ => ws.next().and_then(|(_, e)| {
+                        let event = e.handle.as_ref()?.try_recv()?;
+                        Some(match event {
+                            WebSocketEvent::Open { protocol } => {
+                                NetworkEvent::WsOpen { generation, id, url: e.url.clone(), protocol }
+                            }
+                            WebSocketEvent::Message { payload: InboundPayload::Text(text), .. } => {
+                                NetworkEvent::WsText { generation, id, text }
+                            }
+                            WebSocketEvent::Message { payload: InboundPayload::Binary(data), .. } => {
+                                NetworkEvent::WsBinary { generation, id, data }
+                            }
+                            WebSocketEvent::Error(error) => NetworkEvent::WsError { generation, id, error },
+                            WebSocketEvent::Close { code, reason, .. } => {
+                                NetworkEvent::WsClose { generation, id, code, reason }
+                            }
+                        })
+                    }),
+                };
+                if event.is_some() {
+                    self.poll_cursor.set(id);
+                    return event;
+                }
             }
         }
         None
@@ -645,14 +649,6 @@ impl Work {
 
     pub(crate) fn commit_staged_network(&self) {
         self.network.commit_staged_mount(self.generation, &self.wake);
-    }
-
-    pub(crate) fn network_counts(&self) -> NetworkCounts {
-        self.network.counts()
-    }
-
-    pub(crate) fn has_network_events(&self) -> bool {
-        self.network.has_events()
     }
 
     pub(crate) fn next_network_event(&self) -> Option<NetworkEvent> {

@@ -1,4 +1,5 @@
 mod bounded_fs;
+mod build_status;
 mod bytecode_cache;
 mod control_cli;
 mod dev_banner;
@@ -35,7 +36,7 @@ use js_runtime::{JsRuntime, RuntimeLimits};
 use integration::{ExternalWake, IntegrationHarness};
 use package::Package;
 use session::{SessionModule, SessionPolicy};
-use session_host::{ImageChoice, RecoveryPolicy, ReloadOutcome, Root, RuntimeSurface, SessionHost, SessionSurface, SurfaceOpacity};
+use session_host::{ImageChoice, RecoveryPolicy, ReloadOutcome, Root, RuntimeSurface, SessionHost, SessionSurface, SurfaceOpacity, TurnError};
 use zgui::{platform::{AppHandler, IdlePolicy, PlatformCx, SurfaceEvent, SurfaceId, WakeReason}, view::DocumentId};
 
 enum Completion {
@@ -211,27 +212,14 @@ impl Application {
     fn after_native(&mut self, cx: &dyn PlatformCx) {
         if let Some(error) = self.native.failure().take() { self.fail(cx, error); return; }
         if let Err(error) = self.attach(cx) { self.fail(cx, error); return; }
-        let retry = self.retry_sender(cx);
-        {
-            let mut surface = RuntimeSurface::new(&mut self.native, cx, ImageChoice::Live);
-            if let Err(error) = self.host.sync_reduced_motion(cx.reduced_motion(), &mut surface) { self.fail(cx, error); return; }
-            if let Err(error) = self.host.sync_background_blur_supported(cx.capabilities().supports_background_blur, &mut surface) { self.fail(cx, error); return; }
-            if let Err(error) = self.host.checkpoint(&mut surface, retry.clone()) { self.fail(cx, error); return; }
-            if self.host.drain_clipboard(cx)
-                && let Err(error) = self.host.checkpoint(&mut surface, retry)
-            {
-                self.fail(cx, error);
-                return;
-            }
+        if let Some(path) = self.overlay_watcher.as_ref().and_then(extensions::watcher::OverlayWatcher::poll) {
+            self.host.queue_overlay_update(path);
         }
-        self.after_shell(cx);
-        self.host.tick_observation();
-        let document = self.host.region_documents().next();
-        if let Some(document) = document {
-            let retry = self.retry_sender(cx);
-            let waker = cx.waker();
-            let mut surface = RuntimeSurface::new(&mut self.native, cx, ImageChoice::Live);
-            self.host.drain_pending_overlay_primary_if_unlocked(&mut surface, waker, retry, document);
+        let retry = self.retry_sender(cx);
+        match self.host.turn(&mut self.native, cx, ImageChoice::Live, &self.monitors, &retry) {
+            Ok(()) => {}
+            Err(TurnError::Checkpoint(error)) => { self.fail(cx, error); return; }
+            Err(TurnError::Shell(error)) => self.shell_fault(cx, error),
         }
         // Checkpoint faults can retire a generation; cancel its registrations
         // before the event loop continues.
@@ -240,7 +228,8 @@ impl Application {
 
     fn after_shell(&mut self, cx: &dyn PlatformCx) {
         if cx.is_exiting() || self.failure.borrow().is_some() { return; }
-        if let Err(error) = self.host.shell_turn(&mut self.native, cx, ImageChoice::Live, &self.monitors) {
+        let retry = self.retry_sender(cx);
+        if let Err(error) = self.host.shell_turn(&mut self.native, cx, ImageChoice::Live, &self.monitors, &retry) {
             self.shell_fault(cx, error);
         }
     }
@@ -269,21 +258,6 @@ impl Application {
             }
         }
         let Some(publication) = self.watcher.as_ref().and_then(watcher::PackageWatcher::next) else {
-            if let Some(overlay_path) = self.overlay_watcher.as_ref().and_then(extensions::watcher::OverlayWatcher::poll) {
-                let document = self.host.region_documents().next();
-                if self.host.is_pure_shell() {
-                    self.host.apply_overlay_update_pure(&mut self.native, cx, ImageChoice::Live, &overlay_path);
-                    self.after_shell(cx);
-                } else if let Some(document) = document {
-                    let retry = self.retry_sender(cx);
-                    let waker = cx.waker();
-                    {
-                        let mut surface = RuntimeSurface::new(&mut self.native, cx, ImageChoice::Live);
-                        self.host.apply_overlay_update_primary(&mut surface, waker, retry, document, &overlay_path);
-                    }
-                    self.after_shell(cx);
-                }
-            }
             return;
         };
         match publication {
@@ -516,7 +490,6 @@ impl AppHandler for Application {
     }
     fn deadline_reached(&mut self, cx: &dyn PlatformCx) {
         self.native.deadline_reached(cx);
-        self.host.tick_observation();
         self.after_native(cx);
         self.reconcile_control(cx);
     }

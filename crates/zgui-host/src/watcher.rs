@@ -10,11 +10,10 @@ use std::{
     time::Duration,
 };
 
-use crate::package::Package;
+use crate::{build_status::{BuildStatus, MAX_STATUS_BYTES, STATUS_FILE, Status, Typecheck}, package::Package};
 
 type Publication = Result<Package, String>;
 const POLL_INTERVAL: Duration = Duration::from_millis(250);
-const BUILD_STATUS_FILE: &str = ".zgui-build-status.json";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum DevBuildStatus {
@@ -23,39 +22,21 @@ pub(crate) enum DevBuildStatus {
 }
 
 pub(crate) fn parse_build_status(bytes: &[u8]) -> Option<DevBuildStatus> {
-    let value: serde_json::Value = serde_json::from_slice(bytes).ok()?;
-    let status = value.get("status")?.as_str()?;
-    match status {
-        "failed" => {
-            let detail = value
-                .get("error")
-                .and_then(|err| err.get("message"))
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or("Build failed")
-                .to_owned();
-            Some(DevBuildStatus::Failed { title: "Build failed".into(), detail })
-        }
-        "published" => {
-            if let Some(tc) = value.get("typecheck") {
-                match tc.get("status").and_then(serde_json::Value::as_str) {
-                    Some("failed") => {
-                        let detail = tc
-                            .get("diagnostics")
-                            .and_then(serde_json::Value::as_str)
-                            .unwrap_or("Typecheck failed")
-                            .to_owned();
-                        return Some(DevBuildStatus::Failed {
-                            title: "Typecheck error".into(),
-                            detail,
-                        });
-                    }
-                    Some("running") => return None,
-                    _ => {}
-                }
-            }
-            Some(DevBuildStatus::Clear)
-        }
-        _ => None,
+    let status = BuildStatus::parse(bytes).ok()?;
+    match status.status {
+        Status::Building => None,
+        Status::Failed => Some(DevBuildStatus::Failed {
+            title: "Build failed".into(),
+            detail: status.error?.message,
+        }),
+        Status::Published => match status.typecheck {
+            Some(Typecheck::Failed { diagnostics }) => Some(DevBuildStatus::Failed {
+                title: "Typecheck error".into(),
+                detail: diagnostics,
+            }),
+            Some(Typecheck::Running { .. }) => None,
+            Some(Typecheck::Passed { .. }) | None => Some(DevBuildStatus::Clear),
+        },
     }
 }
 
@@ -78,7 +59,7 @@ impl PackageWatcher {
         let (status_sender, statuses) = mpsc::sync_channel(4);
         let stop = Arc::new(AtomicBool::new(false));
         let worker_stop = stop.clone();
-        let status_path = path.parent().map(|parent| parent.join(BUILD_STATUS_FILE));
+        let status_path = path.parent().map(|parent| parent.join(STATUS_FILE));
         let worker = thread::Builder::new().name("package-watcher".into()).spawn(move || {
             let mut published = PublishedTarget { directory: initial, error: None };
             let mut last_status_bytes: Option<Vec<u8>> = None;
@@ -87,11 +68,12 @@ impl PackageWatcher {
                 if worker_stop.load(Ordering::Acquire) { break; }
                 let mut woke = false;
                 if let Some(status_file) = &status_path
-                    && let Ok(bytes) = fs::read(status_file)
+                    && let Ok(bytes) = crate::bounded_fs::read_input(status_file, MAX_STATUS_BYTES)
                     && last_status_bytes.as_deref() != Some(bytes.as_slice())
                 {
-                    last_status_bytes = Some(bytes.clone());
-                    if let Some(parsed) = parse_build_status(&bytes) {
+                    let parsed = parse_build_status(&bytes);
+                    last_status_bytes = Some(bytes);
+                    if let Some(parsed) = parsed {
                         let _ = status_sender.try_send(parsed);
                         woke = true;
                     }
@@ -384,27 +366,36 @@ mod tests {
     }
 
     #[test]
-    fn parse_build_status_maps_failed_typecheck_and_clean_publications() {
-        assert_eq!(
-            parse_build_status(br#"{"status":"failed","error":{"code":"E_BUILD","message":"src/main.tsx:2:1 bad"}}"#),
-            Some(DevBuildStatus::Failed { title: "Build failed".into(), detail: "src/main.tsx:2:1 bad".into() }),
-        );
-        assert_eq!(
-            parse_build_status(br#"{"status":"published","typecheck":{"status":"failed","diagnostics":"TS2322"}}"#),
-            Some(DevBuildStatus::Failed { title: "Typecheck error".into(), detail: "TS2322".into() }),
-        );
-        assert_eq!(
-            parse_build_status(br#"{"status":"published","typecheck":{"status":"running","diagnostics":null}}"#),
-            None,
-        );
-        assert_eq!(
-            parse_build_status(br#"{"status":"published","typecheck":{"status":"passed","diagnostics":null}}"#),
-            Some(DevBuildStatus::Clear),
-        );
-        assert_eq!(
-            parse_build_status(br#"{"status":"published"}"#),
-            Some(DevBuildStatus::Clear),
-        );
-        assert_eq!(parse_build_status(br#"{"status":"building"}"#), None);
+    fn parse_build_status_reports_build_failure_and_ignores_in_progress_build() {
+        let mut record = serde_json::json!({
+            "schemaVersion": 1, "attemptId": "00000000-1234-4321-9000-000000000000", "app": "watcher-test",
+            "status": "failed", "previousDirectory": "/tmp/previous", "publicationDirectory": null, "buildId": null,
+            "error": {"code": "E_BUILD", "message": "src/main.tsx:2:1 bad"},
+        });
+        let parse = |record: &serde_json::Value| parse_build_status(&serde_json::to_vec(record).unwrap());
+        assert_eq!(parse(&record),
+            Some(DevBuildStatus::Failed { title: "Build failed".into(), detail: "src/main.tsx:2:1 bad".into() }));
+        record["status"] = serde_json::json!("building");
+        record["error"] = serde_json::Value::Null;
+        assert_eq!(parse(&record), None);
+    }
+
+    #[test]
+    fn parse_build_status_uses_the_strict_publication_contract() {
+        let mut record = serde_json::json!({
+            "schemaVersion": 1, "attemptId": "00000000-1234-4321-9000-000000000000", "app": "watcher-test",
+            "status": "published", "previousDirectory": "/tmp/previous",
+            "publicationDirectory": "/tmp/current", "buildId": format!("sha256:{}", "a".repeat(64)),
+            "error": null,
+        });
+        let parse = |record: &serde_json::Value| parse_build_status(&serde_json::to_vec(record).unwrap());
+        record["typecheck"] = serde_json::json!({"status": "failed", "diagnostics": "TS2322"});
+        assert_eq!(parse(&record), Some(DevBuildStatus::Failed { title: "Typecheck error".into(), detail: "TS2322".into() }));
+        record["typecheck"] = serde_json::json!({"status": "running", "diagnostics": null});
+        assert_eq!(parse(&record), None);
+        record["typecheck"] = serde_json::json!({"status": "passed", "diagnostics": null});
+        assert_eq!(parse(&record), Some(DevBuildStatus::Clear));
+        record["typecheck"]["diagnostics"] = serde_json::json!("unexpected");
+        assert_eq!(parse(&record), None, "an invalid typecheck must not clear an existing banner");
     }
 }

@@ -184,6 +184,18 @@ impl WorkersState {
         self.entries.borrow().len()
     }
 
+    pub(super) fn pending_count(&self) -> usize {
+        self.buffered.borrow().len() + self.entries.borrow().values().map(|entry| {
+            match &entry.handle {
+                WorkerHandleKind::Staged { queued, .. } => 1 + queued.len(),
+                WorkerHandleKind::Lockstep(worker) => {
+                    usize::from(worker.has_outbound()) + usize::from(worker.has_pending_quantum())
+                }
+                WorkerHandleKind::Live(_) => 0,
+            }
+        }).sum::<usize>()
+    }
+
     pub(super) fn has_events(&self) -> bool {
         if !self.buffered.borrow().is_empty() {
             return true;
@@ -567,14 +579,6 @@ impl Work {
 
     pub(crate) fn commit_staged_workers(&self) {
         self.workers.commit_staged_mount(self.generation, &self.wake);
-    }
-
-    pub(crate) fn worker_count(&self) -> usize {
-        self.workers.count()
-    }
-
-    pub(crate) fn has_worker_events(&self) -> bool {
-        self.mode.get() == Mode::Mounted && self.workers.has_events()
     }
 
     pub(crate) fn next_worker_step(&self) -> Option<WorkerStep> {

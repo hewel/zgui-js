@@ -1022,7 +1022,11 @@ impl FixtureRuntime {
         self.state.borrow_mut().network.deliveries.pop_front()
     }
 
-    pub(crate) fn has_network_delivery(&self) -> bool {
-        !self.state.borrow().network.deliveries.is_empty()
+    pub(crate) fn pending_network_deliveries(&self, generation: u64) -> usize {
+        self.state.borrow().network.deliveries.iter().filter(|event| event.generation() == generation).count()
+    }
+
+    pub(crate) fn has_network_delivery(&self, generation: u64) -> bool {
+        self.state.borrow().network.deliveries.iter().any(|event| event.generation() == generation)
     }
 }

@@ -5,7 +5,7 @@ use zgui::{geom::{DevicePx, Point, Size}, platform::{AppHandler, ColorScheme, Id
 use zgui_platform_headless::{Headless, SessionLockDecision};
 
 use crate::{package::Package, session::{ResourceCounts, RetirementFailure, RuntimeTelemetry, Session, SessionError, SessionModule, SessionPolicy, SessionRetirement}};
-use crate::session_host::{ImageChoice, RecoveryPolicy, RuntimeSurface, SessionHost, SurfaceOpacity};
+use crate::session_host::{ImageChoice, RecoveryPolicy, RuntimeSurface, SessionHost, SurfaceOpacity, TurnError};
 use crate::shell::Monitor;
 use super::{Error, fixture::FixtureDefinition, output::Output, pipeline::{self, CaptureRequest, CheckpointSink, FrameObserver, FrameObservers, ObservationMode, OutputSink, Pipeline}, profile::{self, Limits, LoadedProfile, Surface}, resources};
 use crate::{assets::{ContractFailure, fixture::{FixtureRuntime, LockOutcome}}, environment::Environment};
@@ -92,21 +92,9 @@ impl PreviewHost {
             if let Err(error) = attached { self.fail(cx, Fault::application(error)); return; }
         }
         let retry: Rc<dyn Fn(zgui::view::DocumentId, u64)> = Rc::new(|_, _| {});
-        let checked = {
-            let mut surface = RuntimeSurface::new(&mut self.native, cx, ImageChoice::PackageOnly);
-            let blur_sync = self.host.sync_background_blur_supported(cx.capabilities().supports_background_blur, &mut surface);
-            let first = blur_sync.and_then(|()| self.host.checkpoint(&mut surface, retry.clone()));
-            if first.is_ok() && self.host.drain_clipboard(cx) {
-                self.host.checkpoint(&mut surface, retry)
-            } else {
-                first
-            }
-        };
-        if let Err(error) = checked {
-            self.fail(cx, Fault::application(error));
-            return;
-        }
-        if let Err(error) = self.host.shell_turn(&mut self.native, cx, ImageChoice::PackageOnly, &self.monitors) {
+        if let Err(TurnError::Checkpoint(error) | TurnError::Shell(error)) =
+            self.host.turn(&mut self.native, cx, ImageChoice::PackageOnly, &self.monitors, &retry)
+        {
             self.fail(cx, Fault::application(error));
             return;
         }
@@ -117,18 +105,17 @@ impl PreviewHost {
             return;
         }
         if let Some(module) = self.pending_reload.take() {
-            let retry: Rc<dyn Fn(zgui::view::DocumentId, u64)> = Rc::new(|_, _| {});
             let primary_document = self.host.region_documents().next();
             let outcome = if self.host.is_pure_shell() {
                 self.host.replace_shell(&mut self.native, cx, ImageChoice::PackageOnly, module)
             } else if let Some(document) = primary_document {
                 let mut surface = RuntimeSurface::new(&mut self.native, cx, ImageChoice::PackageOnly);
-                self.host.replace(&mut surface, cx.waker(), document, module, retry)
+                self.host.replace(&mut surface, cx.waker(), document, module, retry.clone())
             } else {
                 crate::session_host::ReloadOutcome::Rejected("no active mount region to reload".into())
             };
             self.last_reload = Some(outcome);
-            if let Err(error) = self.host.shell_turn(&mut self.native, cx, ImageChoice::PackageOnly, &self.monitors) {
+            if let Err(error) = self.host.shell_turn(&mut self.native, cx, ImageChoice::PackageOnly, &self.monitors, &retry) {
                 self.fail(cx, Fault::application(error));
                 return;
             }
@@ -667,12 +654,7 @@ impl Driver {
     fn runnable(&self) -> bool {
         self.pipeline.platform().has_pending_wakes()
             || self.pipeline.app().session().is_some_and(|session| {
-                session.has_pending_sqlite_ops()
-                    || session.has_sqlite_events()
-                    || session.has_pending_file_ops()
-                    || session.has_file_events()
-                    || session.has_network_events()
-                    || session.has_worker_events()
+                session.has_deliverable_work() || session.has_inflight_host_ops()
             })
             || self.pipeline.app().native.windows().iter().any(|window| {
                 self.pipeline.platform().offscreen(window.surface().id()).is_some_and(|surface|surface.has_pending_redraw())
@@ -732,8 +714,7 @@ impl Driver {
     fn wait_host_workers(&mut self) -> Result<(), Fault> {
         loop {
             let pending = self.pipeline.app().session().is_some_and(|session| {
-                (session.has_pending_sqlite_ops() && !session.has_sqlite_events())
-                    || (session.has_pending_file_ops() && !session.has_file_events())
+                session.has_inflight_host_ops() && !session.has_deliverable_work()
             });
             if !pending || self.pipeline.platform().has_pending_wakes() {
                 return Ok(());

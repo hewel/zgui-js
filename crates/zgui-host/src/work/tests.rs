@@ -201,7 +201,7 @@ fn first_frame_callback_cancels_later_native_fired_callback_in_ready_batch() {
     assert_eq!(session.work.counts(), (0, 1, 0));
     session.invoke_next().unwrap();
     assert_eq!(session.script("events.join(',')"), "first:12.5,third:12.5");
-    assert!(!session.work.has_ready());
+    assert!(!session.work.has_deliverable_work());
     assert_eq!(session.work.counts(), (0, 0, 0));
 }
 

@@ -80,7 +80,6 @@ struct Harness {
     stub: Rc<StubHost>,
     document: DocumentId,
     waker: Arc<dyn Waker>,
-    lock_state: Rc<Cell<SessionLockState>>,
 }
 
 impl Drop for Harness {
@@ -123,7 +122,7 @@ fn setup_harness(base_js: &str) -> Harness {
     let surface = LockableStubSurface {
         document,
         bindings: HashMap::new(),
-        lock_state: Rc::clone(&lock_state),
+        lock_state,
     };
     let mut host = SessionHost::new(
         pending,
@@ -141,7 +140,6 @@ fn setup_harness(base_js: &str) -> Harness {
         stub,
         document,
         waker,
-        lock_state,
     }
 }
 
@@ -255,61 +253,81 @@ export function mount(root) {
 export function pumpEvents() {}
 "#;
 
+
 #[test]
-fn overlay_lock_screen_coalescing_defers_until_unlock_and_applies_latest_only() {
-    let mut h = setup_harness(SHELL_BASE_JS);
-    let ovl1 = write_overlay_file(
-        &h.dir,
-        "ovl1.json",
-        "ovl-1",
-        &["acme/a"],
-        serde_json::json!(null),
-        &[("acme/a", "export const v = 1;", None)],
-        serde_json::json!({}),
+fn primary_shell_turn_applies_only_latest_deferred_overlay_and_keeps_active_on_rejection() {
+    use zgui::platform::{AppHandler, PlatformCapabilities, PlatformCx};
+
+    let fixture = Fixture::new(r#"
+        export const hostApiVersion = 1;
+        export function mount(root) {
+            const id = __zguiShellHost.getOverlayStatus().overlayId;
+            __zgui.insertNode(root, __zgui.createTextNode(id), null);
+            if (id === 'bad-mount') throw Error('deferred candidate mount failed');
+            return () => __zgui.clearRoot(root);
+        }
+    "#, "");
+    let package = fixture.package();
+    let build = package.manifest.build_id.clone();
+    let directory = package.directory.clone();
+    let pending = Rc::new(RefCell::new(Vec::new()));
+    let roots = pending.clone();
+    let mut runtime = zgui::runtime::App::new()
+        .with_renderer(Box::new(|_, target| {
+            let mut renderer = zgui_testkit_scene::CaptureRenderer::new();
+            zgui::render::Renderer::configure(&mut renderer, target);
+            Ok(Box::new(renderer))
+        }))
+        .into_handler(move |cx| {
+            zgui::reactive::provide_context(zgui::app::Fonts::shipped_only());
+            Box::new(Root(roots.clone()).build(cx))
+        })
+        .unwrap();
+    let mut caps = PlatformCapabilities::none();
+    caps.session_lock = true;
+    let cx = zgui_platform_headless::Headless::new().with_capabilities(caps);
+    runtime.surfaces_available(&cx);
+    let mut host = SessionHost::new(pending, SessionModule::package(package),
+        SessionPolicy::live(host_services::Executor::new(2, 64).unwrap()),
+        RecoveryPolicy::Propagate, SurfaceOpacity::Opaque);
+    let overlay = |id, allowed| write_overlay_file(
+        &directory, &format!("{id}.json"), id, allowed, serde_json::Value::Null,
+        &[("acme/a", "export const v = 1;", None)], serde_json::json!({}),
     );
-    let ovl2 = write_overlay_file(
-        &h.dir,
-        "ovl2.json",
-        "ovl-2",
-        &["acme/b"],
-        serde_json::json!(null),
-        &[("acme/b", "export const v = 2;", None)],
-        serde_json::json!({}),
-    );
-    let ovl3 = write_overlay_file(
-        &h.dir,
-        "ovl3.json",
-        "ovl-3",
-        &["acme/c"],
-        serde_json::json!(null),
-        &[("acme/c", "export const v = 3;", None)],
-        serde_json::json!({}),
-    );
-
-    h.host.configure_initial_overlay(&ovl1);
-    let waker = Arc::clone(&h.waker);
-    h.host.attach(&mut h.surface, waker.clone(), no_retry()).expect("initial mount");
-    let gen1 = h.host.session(h.document).unwrap().generation;
-    assert_eq!(h.host.active_overlay_id(), Some("ovl-1"));
-
-    // Simulate active compositor lock: queued updates must never interrupt active generation.
-    h.lock_state.set(SessionLockState::Locked);
-    h.host.apply_overlay_update_primary(&mut h.surface, waker.clone(), no_retry(), h.document, &ovl2);
-    h.host.apply_overlay_update_primary(&mut h.surface, waker.clone(), no_retry(), h.document, &ovl3);
-    assert_eq!(h.host.session(h.document).unwrap().generation, gen1);
-    assert_eq!(h.host.active_overlay_id(), Some("ovl-1"));
-    assert_eq!(h.host.pending_overlay_path(), Some(ovl3.as_path()));
-
-    // Still locked -> drain does nothing.
-    h.host.drain_pending_overlay_primary_if_unlocked(&mut h.surface, waker.clone(), no_retry(), h.document);
-    assert_eq!(h.host.session(h.document).unwrap().generation, gen1);
-
-    // Unlock -> drains single-slot coalesced latest overlay (ovl-3), skipping ovl-2.
-    h.lock_state.set(SessionLockState::Unlocked);
-    h.host.drain_pending_overlay_primary_if_unlocked(&mut h.surface, waker, no_retry(), h.document);
-    assert_ne!(h.host.session(h.document).unwrap().generation, gen1);
-    assert_eq!(h.host.active_overlay_id(), Some("ovl-3"));
-    assert!(h.host.pending_overlay_path().is_none());
+    let a = overlay("a", &["acme/a"]);
+    let b = overlay("b", &["acme/a"]);
+    let rejected = overlay("rejected", &["acme/a"]);
+    let bad_mount = overlay("bad-mount", &["acme/a"]);
+    // This retains the failed manifest's rollback policy but rejects its bundle.
+    let mut manifest: serde_json::Value = serde_json::from_slice(&fs::read(&rejected).unwrap()).unwrap();
+    manifest["extensions"][0]["bundle_root"] = serde_json::json!(directory.join("missing-bundle"));
+    fs::write(&rejected, serde_json::to_vec(&manifest).unwrap()).unwrap();
+    host.configure_initial_overlay(&a);
+    let images = ImageChoice::PackageOnly;
+    host.attach(&mut RuntimeSurface::new(&mut runtime, &cx, images), cx.waker(), no_retry()).unwrap();
+    let document = host.region_documents().next().unwrap();
+    let initial_generation = host.session(document).unwrap().generation;
+    for (latest, accepted) in [(&b, true), (&rejected, false), (&bad_mount, false)] {
+        let previous = host.session(document).unwrap().clone();
+        cx.request_session_lock().unwrap();
+        assert_eq!(cx.session_lock_state(), SessionLockState::Locked);
+        for path in [&a, latest] {
+            host.queue_overlay_update(path.clone());
+        }
+        host.shell_turn(&mut runtime, &cx, images, &[], &no_retry()).unwrap();
+        assert!(Rc::ptr_eq(&previous, host.session(document).unwrap()));
+        cx.try_unlock_session().unwrap();
+        host.shell_turn(&mut runtime, &cx, images, &[], &no_retry()).unwrap();
+        host.shell_turn(&mut runtime, &cx, images, &[], &no_retry()).unwrap();
+        assert_eq!(host.active_overlay_id(), Some("b"));
+        assert_eq!(host.session(document).unwrap().generation, initial_generation + 1);
+        let region = &host.session(document).unwrap().primary().unwrap().region;
+        assert_eq!(region.dom.text_content(region.root), "b", "the primary mount region must show B");
+        assert_eq!(host.acceptance().unwrap()["lastSuccessfulBuildId"], build);
+        assert_eq!(Rc::ptr_eq(&previous, host.session(document).unwrap()), !accepted);
+        assert!(host.pending_overlay_path().is_none());
+    }
+    host.stop(&mut RuntimeSurface::new(&mut runtime, &cx, images));
 }
 
 #[test]

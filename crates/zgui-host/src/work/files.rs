@@ -21,7 +21,7 @@ use host_services::{
         mkdir_scoped,
         portal::{PortalDialogKind, run_file_chooser},
         read_dir_entries, read_file_bytes, read_file_text, remove_scoped, rename_scoped,
-        resolve_documents_dir, resolve_scoped_path, stat_path,
+        resolve_scoped_path, stat_path,
         vfs::{PreviewFs, ScriptedDialogKind},
         watcher::DirectoryWatcher,
     },
@@ -34,10 +34,7 @@ use rquickjs::{
 };
 
 use super::{Mode, Work, data_property, owner, service_error};
-use crate::{
-    assets::AssetSource,
-    package::{FileDirectoryGrant, Package},
-};
+use crate::{assets::AssetSource, package::Package};
 
 const MAX_FILE_HANDLES: usize = 256;
 const MAX_FS_WATCHERS: usize = 32;
@@ -102,13 +99,11 @@ pub(crate) enum FileEvent {
 enum FilesBackend {
     Live {
         app_id: String,
-        allowlist: Vec<(String, PathBuf, FileMode)>,
         tx: SyncSender<FileEvent>,
         rx: Receiver<FileEvent>,
     },
     Preview {
         vfs: RefCell<PreviewFs>,
-        allowlist: Vec<(String, String, FileMode)>,
         queue: RefCell<VecDeque<FileEvent>>,
     },
 }
@@ -130,44 +125,26 @@ pub(super) struct FilesState {
 
 impl FilesState {
     pub(super) fn new(
-        package: Option<Rc<Package>>,
-        capabilities: &crate::package::Capabilities,
+        package: Option<&Package>,
         source: &AssetSource,
         wake: std::sync::Arc<dyn Fn() + Send + Sync>,
     ) -> Self {
-        let grants: Vec<FileDirectoryGrant> = capabilities.files.directories.clone();
         let backend = match source {
             AssetSource::Fixture(fixture) => {
                 let mut vfs = fixture.build_preview_fs();
                 vfs.set_wake(wake);
-                let allowlist = grants
-                    .into_iter()
-                    .map(|g| {
-                        let resolved = fixture.resolve_preview_file_root(&g.path);
-                        (g.path, resolved, g.mode)
-                    })
-                    .collect();
                 FilesBackend::Preview {
                     vfs: RefCell::new(vfs),
-                    allowlist,
                     queue: RefCell::new(VecDeque::new()),
                 }
             }
             AssetSource::Live(_) => {
                 let app_id = package
-                    .as_ref()
                     .map(|p| p.manifest.id.clone())
                     .unwrap_or_else(|| "zgui-app".to_owned());
-                let allowlist = grants
-                    .into_iter()
-                    .filter_map(|g| {
-                        resolve_live_dir_template(&g.path).map(|p| (g.path, p, g.mode))
-                    })
-                    .collect();
                 let (tx, rx) = mpsc::sync_channel(512);
                 FilesBackend::Live {
                     app_id,
-                    allowlist,
                     tx,
                     rx,
                 }
@@ -352,18 +329,6 @@ impl Work {
         )
     }
 
-    pub(crate) fn file_counts(&self) -> FileCounts {
-        self.files.counts()
-    }
-
-    pub(crate) fn has_pending_file_ops(&self) -> bool {
-        self.files.pending_count() > 0
-    }
-
-    pub(crate) fn has_file_events(&self) -> bool {
-        self.files.has_events()
-    }
-
     pub(crate) fn next_file_event(&self) -> Option<FileEvent> {
         if self.mode.get() != Mode::Mounted {
             return None;
@@ -527,23 +492,20 @@ impl Work {
     ) -> rquickjs::Result<Object<'js>> {
         self.require_creation(ctx)?;
         let requested = read_bounded_utf8(ctx, path_val, 4096, "directory path")?;
-        let (resolved_path, mode) = match &self.files.backend {
-            FilesBackend::Preview { vfs, allowlist, .. } => {
-                let found = allowlist
-                    .iter()
-                    .find(|(tpl, resolved, _)| tpl == &requested || resolved == &requested)
-                    .map(|(_, resolved, mode)| (resolved.clone(), *mode));
-                let Some((resolved, mode)) = found else {
-                    return Err(throw_file_error(
-                        ctx,
-                        "E_CAPABILITY",
-                        &format!(
-                            "directory {requested:?} is not authorized by capabilities.files.directories"
-                        ),
-                    ));
-                };
+        let grant = self.resolved.file_directories().iter()
+            .find(|grant| grant.declaration == requested || grant.path.as_os_str() == requested.as_str())
+            .ok_or_else(|| throw_file_error(
+                ctx,
+                "E_CAPABILITY",
+                &format!("directory {requested:?} is not authorized by capabilities.files.directories"),
+            ))?;
+        let resolved_path = match &self.files.backend {
+            FilesBackend::Preview { vfs, .. } => {
+                let resolved = grant.path.to_str().ok_or_else(|| throw_file_error(
+                    ctx, "InvalidPath", "fixture directory path must be UTF-8",
+                ))?;
                 vfs.borrow()
-                    .stat(&resolved)
+                    .stat(resolved)
                     .and_then(|s| {
                         if s.is_dir {
                             Ok(())
@@ -555,25 +517,10 @@ impl Work {
                         }
                     })
                     .map_err(|e| throw_file_error(ctx, e.code, &e.message))?;
-                (resolved, mode)
+                resolved.to_owned()
             }
-            FilesBackend::Live { allowlist, .. } => {
-                let found = allowlist
-                    .iter()
-                    .find(|(tpl, resolved, _)| {
-                        tpl == &requested || resolved.to_string_lossy() == requested
-                    })
-                    .map(|(_, resolved, mode)| (resolved.clone(), *mode));
-                let Some((resolved, mode)) = found else {
-                    return Err(throw_file_error(
-                        ctx,
-                        "E_CAPABILITY",
-                        &format!(
-                            "directory {requested:?} is not authorized by capabilities.files.directories"
-                        ),
-                    ));
-                };
-                let canonical = std::fs::canonicalize(&resolved)
+            FilesBackend::Live { .. } => {
+                let canonical = std::fs::canonicalize(&grant.path)
                     .map_err(|e| throw_file_error(ctx, "NotFound", &e.to_string()))?;
                 if !canonical.is_dir() {
                     return Err(throw_file_error(
@@ -582,7 +529,7 @@ impl Work {
                         "authorized path is not a directory",
                     ));
                 }
-                (canonical.to_string_lossy().into_owned(), mode)
+                canonical.to_string_lossy().into_owned()
             }
         };
         self.register_handle(
@@ -590,7 +537,7 @@ impl Work {
             OpenHandle {
                 kind: HandleKind::Dir,
                 path: resolved_path,
-                mode,
+                mode: grant.mode,
             },
         )
     }
@@ -1481,38 +1428,6 @@ impl Work {
             }
         }
     }
-}
-
-fn resolve_live_dir_template(template: &str) -> Option<PathBuf> {
-    if let Some(rest) = template.strip_prefix("$XDG_DOCUMENTS_DIR") {
-        let base = resolve_documents_dir().ok()?;
-        let rel = rest.trim_start_matches('/');
-        return Some(if rel.is_empty() { base } else { base.join(rel) });
-    }
-    if let Some(rest) = template.strip_prefix("$XDG_DATA_HOME") {
-        let base = std::env::var("XDG_DATA_HOME")
-            .ok()
-            .filter(|v| !v.is_empty() && Path::new(v).is_absolute())
-            .map(PathBuf::from)
-            .or_else(|| {
-                std::env::var("HOME")
-                    .ok()
-                    .filter(|v| !v.is_empty() && Path::new(v).is_absolute())
-                    .map(|h| PathBuf::from(h).join(".local/share"))
-            })?;
-        let rel = rest.trim_start_matches('/');
-        return Some(if rel.is_empty() { base } else { base.join(rel) });
-    }
-    if let Some(rest) = template.strip_prefix("$HOME") {
-        let base = std::env::var("HOME")
-            .ok()
-            .filter(|v| !v.is_empty() && Path::new(v).is_absolute())
-            .map(PathBuf::from)?;
-        let rel = rest.trim_start_matches('/');
-        return Some(if rel.is_empty() { base } else { base.join(rel) });
-    }
-    let p = PathBuf::from(template);
-    p.is_absolute().then_some(p)
 }
 
 fn throw_file_error(ctx: &Ctx<'_>, code: &str, message: &str) -> rquickjs::Error {

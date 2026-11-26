@@ -570,7 +570,7 @@ fn failed_shell_child_mount_keeps_the_predecessor_and_last_successful_build() {
         SessionPolicy::live(host_services::Executor::new(2, 64).expect("create test service executor")),
         RecoveryPolicy::Propagate, SurfaceOpacity::Opaque);
     host.set_pure_shell(zgui::app::Fonts::shipped_only());
-    host.shell_turn(&mut runtime, &cx, ImageChoice::PackageOnly, &[]).expect("mount the working shell");
+    host.shell_turn(&mut runtime, &cx, ImageChoice::PackageOnly, &[], &no_retry()).expect("mount the working shell");
     let previous = host.sessions().next().expect("working session").clone();
     let (_, panel) = previous.mount_regions().pop().expect("working shell region");
     assert_eq!(previous.counts().shell_surfaces, 1, "the working panel owns a native surface");
@@ -590,6 +590,60 @@ fn failed_shell_child_mount_keeps_the_predecessor_and_last_successful_build() {
 
     host.stop_shell_surfaces(&mut runtime, &cx);
     assert_eq!(previous.retire().counts, ResourceCounts::default(), "shutdown releases the working shell without leaks");
+}
+
+#[test]
+fn pure_shell_css_only_reload_updates_open_surfaces_without_restarting_the_session() {
+    use zgui::platform::AppHandler;
+
+    let source = r#"
+        export const hostApiVersion = 1;
+        export function mount() {
+            const id = __zguiShell.openLayer('panel', {}, (root, bridge) => {
+                bridge.insertNode(root, bridge.createTextNode('panel'), null);
+                return () => bridge.clearRoot(root);
+            });
+            return () => __zguiShell.closeLayer(id);
+        }
+    "#;
+    let fixture = |css| Fixture::new(source, css).with_capabilities(crate::package::Capabilities {
+        shell_surfaces: true, ..Default::default()
+    });
+    let initial = fixture(":root { background: red; }");
+    let updated = fixture(":root { background: blue; }");
+    let mut runtime = zgui::runtime::App::new()
+        .with_renderer(Box::new(|_, target| {
+            let mut renderer = zgui_testkit_scene::CaptureRenderer::new();
+            zgui::render::Renderer::configure(&mut renderer, target);
+            Ok(Box::new(renderer))
+        }))
+        .into_handler(|_| panic!("pure shell has no primary window")).unwrap();
+    runtime.without_primary_surface();
+    let cx = zgui_platform_headless::Headless::new();
+    runtime.surfaces_available(&cx);
+    let mut host = SessionHost::new(Rc::default(), SessionModule::package(initial.package()),
+        SessionPolicy::live(host_services::Executor::new(2, 64).unwrap()),
+        RecoveryPolicy::Propagate, SurfaceOpacity::Opaque);
+    host.set_pure_shell(zgui::app::Fonts::shipped_only());
+    let images = ImageChoice::PackageOnly;
+    host.shell_turn(&mut runtime, &cx, images, &[], &no_retry()).unwrap();
+    let session = host.sessions().next().unwrap().clone();
+    let surface = session.mount_regions()[0].1.surface;
+    runtime.surface_event(&cx, surface, zgui::platform::SurfaceEvent::RedrawRequested);
+    let window = || runtime.windows().iter().find(|window| window.surface().id() == surface).unwrap();
+    let revision = window().style_revision();
+    assert!(!window().has_pending_stylesheets());
+
+    let updated = updated.package();
+    let outcome = host.replace_shell(&mut runtime, &cx, images, SessionModule::package(updated.clone()));
+    assert!(matches!(outcome, ReloadOutcome::Mounted { generation, css_only: true, .. }
+        if generation == session.generation), "{outcome:?}");
+    assert!(Rc::ptr_eq(&session, host.sessions().next().unwrap()));
+    assert_eq!(host.acceptance().unwrap()["lastSuccessfulBuildId"], updated.manifest.build_id);
+    runtime.surface_event(&cx, surface, zgui::platform::SurfaceEvent::RedrawRequested);
+    let window = runtime.windows().iter().find(|window| window.surface().id() == surface).unwrap();
+    assert!(window.style_revision() > revision, "the same native surface must apply the new stylesheet");
+    host.stop(&mut RuntimeSurface::new(&mut runtime, &cx, images));
 }
 
 const POPUP_TREE: &str = r#"
@@ -669,7 +723,7 @@ impl PopupTree {
     }
 
     fn turn(&mut self) -> SessionResult<()> {
-        self.host.shell_turn(&mut self.runtime, &self.cx, ImageChoice::PackageOnly, &[])
+        self.host.shell_turn(&mut self.runtime, &self.cx, ImageChoice::PackageOnly, &[], &no_retry())
     }
 
     fn surface(&self, name: &str) -> SurfaceId {
@@ -955,7 +1009,7 @@ impl LockedShell {
     }
 
     fn turn(&mut self) -> SessionResult<()> {
-        self.host.shell_turn(&mut self.runtime, &self.cx, ImageChoice::PackageOnly, &self.monitors)
+        self.host.shell_turn(&mut self.runtime, &self.cx, ImageChoice::PackageOnly, &self.monitors, &no_retry())
     }
 
     fn replace(&mut self, package: &Fixture) -> ReloadOutcome {
@@ -1044,7 +1098,7 @@ fn window_surface_hosts_child_popup_and_closes_on_compositor_close_request() {
     assert_eq!(host.shell_geometry(settings), Some((820.0, 600.0, None)));
 
     session.invoke("resizeWindow").expect("update window title and size");
-    host.shell_turn(&mut runtime, &cx, ImageChoice::PackageOnly, &[]).expect("reconcile window update");
+    host.shell_turn(&mut runtime, &cx, ImageChoice::PackageOnly, &[], &no_retry()).expect("reconcile window update");
     assert_eq!(host.shell_geometry(settings), Some((900.0, 640.0, None)));
 
     host.surface_event(&mut runtime, &cx, settings, zgui::platform::SurfaceEvent::CloseRequested)
@@ -1052,7 +1106,7 @@ fn window_surface_hosts_child_popup_and_closes_on_compositor_close_request() {
     assert!(cx.surface(settings).is_none(), "closed window surface must be gone");
     assert!(cx.surface(menu).is_none(), "child popup anchored to window must close with it");
     assert_eq!(cx.surfaces().len(), 1, "primary surface stays alive after auxiliary window closes");
-    host.shell_turn(&mut runtime, &cx, ImageChoice::PackageOnly, &[]).expect("dismissed window must not reopen");
+    host.shell_turn(&mut runtime, &cx, ImageChoice::PackageOnly, &[], &no_retry()).expect("dismissed window must not reopen");
     assert_eq!(cx.surfaces().len(), 1, "dismissed window stays closed");
     session.invoke("checkClosed").expect("onClose fired once after child popup + window cleanup");
 
@@ -1123,7 +1177,7 @@ fn pure_shell_frame_callbacks_isolate_occlusion_migrate_on_close_and_tick_per_su
         SurfaceOpacity::Transparent,
     );
     host.set_pure_shell(fonts);
-    host.shell_turn(&mut runtime, &cx, ImageChoice::PackageOnly, &[]).expect("mount pure shell");
+    host.shell_turn(&mut runtime, &cx, ImageChoice::PackageOnly, &[], &no_retry()).expect("mount pure shell");
     let session = host.sessions().next().expect("active pure-shell session").clone();
     let surface_of = |name: &str| {
         session.mount_regions().into_iter().find(|(region, _)| region == name)
@@ -1135,10 +1189,10 @@ fn pure_shell_frame_callbacks_isolate_occlusion_migrate_on_close_and_tick_per_su
     // 1. Per-surface cadence: dock-pinned rAF does NOT fire on wallpaper's redraw, only on dock's.
     session.invoke("scheduleDockOnly").expect("schedule pinned dock frame");
     host.surface_event(&mut runtime, &cx, wallpaper, SurfaceEvent::RedrawRequested).expect("redraw wallpaper");
-    host.shell_turn(&mut runtime, &cx, ImageChoice::PackageOnly, &[]).expect("shell turn after wallpaper redraw");
+    host.shell_turn(&mut runtime, &cx, ImageChoice::PackageOnly, &[], &no_retry()).expect("shell turn after wallpaper redraw");
     session.invoke("expectStep0").expect("wallpaper redraw must not fire dock-pinned rAF");
     host.surface_event(&mut runtime, &cx, dock, SurfaceEvent::RedrawRequested).expect("redraw dock");
-    host.shell_turn(&mut runtime, &cx, ImageChoice::PackageOnly, &[]).expect("shell turn after dock redraw");
+    host.shell_turn(&mut runtime, &cx, ImageChoice::PackageOnly, &[], &no_retry()).expect("shell turn after dock redraw");
     session.invoke("expectStep1").expect("dock redraw fires dock-pinned rAF");
 
     // 2. Occluding wallpaper migrates pending unscoped rAF onto visible dock, while dock-pinned keeps firing.
@@ -1148,7 +1202,7 @@ fn pure_shell_frame_callbacks_isolate_occlusion_migrate_on_close_and_tick_per_su
     // Wallpaper redraw while occluded must not stall dock or unscoped rAF.
     host.surface_event(&mut runtime, &cx, wallpaper, SurfaceEvent::RedrawRequested).expect("occluded wallpaper redraw");
     host.surface_event(&mut runtime, &cx, dock, SurfaceEvent::RedrawRequested).expect("redraw visible dock");
-    host.shell_turn(&mut runtime, &cx, ImageChoice::PackageOnly, &[]).expect("shell turn after occlusion");
+    host.shell_turn(&mut runtime, &cx, ImageChoice::PackageOnly, &[], &no_retry()).expect("shell turn after occlusion");
     session.invoke("expectStep2")
         .expect("both migrated unscoped rAF and dock-pinned rAF fire while wallpaper is occluded");
 
@@ -1156,10 +1210,10 @@ fn pure_shell_frame_callbacks_isolate_occlusion_migrate_on_close_and_tick_per_su
     host.surface_event(&mut runtime, &cx, wallpaper, SurfaceEvent::Occluded(false)).expect("unocclude wallpaper");
     session.invoke("scheduleUnscoped").expect("schedule unscoped rAF before wallpaper closes");
     session.invoke("closeWallpaper").expect("close wallpaper layer");
-    host.shell_turn(&mut runtime, &cx, ImageChoice::PackageOnly, &[]).expect("reconcile wallpaper close");
+    host.shell_turn(&mut runtime, &cx, ImageChoice::PackageOnly, &[], &no_retry()).expect("reconcile wallpaper close");
     assert!(cx.surface(wallpaper).is_none(), "wallpaper surface must be closed");
     host.surface_event(&mut runtime, &cx, dock, SurfaceEvent::RedrawRequested).expect("redraw remaining dock");
-    host.shell_turn(&mut runtime, &cx, ImageChoice::PackageOnly, &[]).expect("shell turn after wallpaper close");
+    host.shell_turn(&mut runtime, &cx, ImageChoice::PackageOnly, &[], &no_retry()).expect("shell turn after wallpaper close");
     session.invoke("expectStep3")
         .expect("unscoped rAF survived wallpaper close via migration to dock");
 
@@ -1223,9 +1277,9 @@ fn live_portal_reduced_motion_updates_bridges_unless_overridden_by_policy() {
         host.attach(&mut RuntimeSurface::new(&mut runtime, &cx, ImageChoice::PackageOnly), cx.waker(), no_retry())
             .expect("mount reduced-motion app");
         let session = host.sessions().next().expect("active session").clone();
-        host.sync_reduced_motion(Some(true), &mut RuntimeSurface::new(&mut runtime, &cx, ImageChoice::PackageOnly))
+        session.update_reduced_motion(Some(true))
             .expect("apply portal reduced-motion=true");
-        host.sync_reduced_motion(Some(false), &mut RuntimeSurface::new(&mut runtime, &cx, ImageChoice::PackageOnly))
+        session.update_reduced_motion(Some(false))
             .expect("apply portal reduced-motion=false");
         session.invoke(check_export).expect("reduced-motion log matches");
         let report = session.retire();
@@ -1778,7 +1832,7 @@ fn auto_to_auto_popup_anchor_update_with_geometry_insets_does_not_inflate_bleed(
         SurfaceOpacity::Transparent,
     );
     host.set_pure_shell(fonts);
-    host.shell_turn(&mut runtime, &cx, ImageChoice::PackageOnly, &[]).expect("mount shell");
+    host.shell_turn(&mut runtime, &cx, ImageChoice::PackageOnly, &[], &no_retry()).expect("mount shell");
     let session = host.sessions().next().expect("session").clone();
     let popup_surface = session
         .mount_regions()
@@ -1798,7 +1852,7 @@ fn auto_to_auto_popup_anchor_update_with_geometry_insets_does_not_inflate_bleed(
 
     // Anchor-only auto-to-auto update must preserve visual 140px (drawable 376x196), NOT inflate to 196+56=252!
     session.invoke("moveAnchor").expect("update popup anchor");
-    host.shell_turn(&mut runtime, &cx, ImageChoice::PackageOnly, &[]).expect("reconcile anchor move");
+    host.shell_turn(&mut runtime, &cx, ImageChoice::PackageOnly, &[], &no_retry()).expect("reconcile anchor move");
     assert_eq!(
         cx.surface(popup_surface).expect("popup").size(),
         Size::new(DevicePx(376.0), DevicePx(196.0)),
@@ -1893,25 +1947,25 @@ fn background_blur_capability_seeds_and_syncs_across_zero_surface_shell_and_moun
         SurfaceOpacity::Transparent,
     );
     host.set_pure_shell(fonts);
-    host.shell_turn(&mut runtime, &cx, ImageChoice::PackageOnly, &[]).expect("mount zero-surface pure shell");
+    host.shell_turn(&mut runtime, &cx, ImageChoice::PackageOnly, &[], &no_retry()).expect("mount zero-surface pure shell");
     let session = host.sessions().next().expect("active pure-shell session").clone();
     session.invoke("checkInit").expect("seeded false at zero surfaces");
 
     // Toggle false -> true while still at zero surfaces: Headless wakes AppWork, shell_turn delivers live!
     cx.set_background_blur_supported(true);
     assert!(cx.drain_wakes().iter().any(|wake| matches!(wake, WakeReason::AppWork)));
-    host.shell_turn(&mut runtime, &cx, ImageChoice::PackageOnly, &[]).expect("sync true at zero surfaces");
+    host.shell_turn(&mut runtime, &cx, ImageChoice::PackageOnly, &[], &no_retry()).expect("sync true at zero surfaces");
     session.invoke("checkZeroSurfaceTrue").expect("zero-surface shell received true");
 
     // Now open first LayerSurface: its UiBridge must inherit current true!
     session.invoke("openBar").expect("request layer");
-    host.shell_turn(&mut runtime, &cx, ImageChoice::PackageOnly, &[]).expect("mount bar layer");
+    host.shell_turn(&mut runtime, &cx, ImageChoice::PackageOnly, &[], &no_retry()).expect("mount bar layer");
     session.invoke("checkLayerSeededTrue").expect("layer seeded true");
 
     // Toggle true -> false: both shell and mounted layer bridge receive false.
     cx.set_background_blur_supported(false);
     assert!(cx.drain_wakes().iter().any(|wake| matches!(wake, WakeReason::AppWork)));
-    host.shell_turn(&mut runtime, &cx, ImageChoice::PackageOnly, &[]).expect("sync false across shell and layer");
+    host.shell_turn(&mut runtime, &cx, ImageChoice::PackageOnly, &[], &no_retry()).expect("sync false across shell and layer");
     session.invoke("checkBothFalse").expect("shell and layer received false");
 
     host.stop_shell_surfaces(&mut runtime, &cx);

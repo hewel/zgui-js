@@ -1,5 +1,7 @@
 //! Session-local path authority. Only live resolution consults host directories and environment.
-use std::{collections::BTreeMap, ffi::OsString, fs, io, path::Path};
+use std::{cell::OnceCell, collections::BTreeMap, ffi::OsString, fs, io, path::{Path, PathBuf}};
+
+use host_services::files::FileMode;
 
 use crate::{
     assets::ContractFailure,
@@ -9,12 +11,20 @@ use crate::{
 
 const ENV_SOCKETS: &[(&str, &str)] = &[("niri", "NIRI_SOCKET")];
 
+#[derive(Debug)]
+pub(crate) struct ResolvedFileDirectory {
+    pub(crate) declaration: String,
+    pub(crate) path: PathBuf,
+    pub(crate) mode: FileMode,
+}
+
 /// Immutable path authority resolved from one sealed manifest before evaluation.
 #[derive(Debug, Default)]
 pub(crate) struct ResolvedCapabilities {
     image_prefixes: Vec<String>,
     unix_sockets: Vec<String>,
     named_sockets: BTreeMap<String, Option<String>>,
+    file_directories: Vec<ResolvedFileDirectory>,
 }
 
 impl ResolvedCapabilities {
@@ -49,7 +59,20 @@ impl ResolvedCapabilities {
             require_canonical_socket_path(Path::new(path))
                 .map_err(|error| denied(format!("socket path {path:?}: {error}")))?;
         }
-        Ok(resolved)
+        let home = OnceCell::new();
+        let data = OnceCell::new();
+        let documents = OnceCell::new();
+        let home = || home.get_or_init(|| absolute_env_path(&env, "HOME")).as_deref();
+        Ok(resolved.with_file_directories(declarations, |root| match root {
+            "$HOME" => home(),
+            "$XDG_DATA_HOME" => data.get_or_init(|| {
+                absolute_env_path(&env, "XDG_DATA_HOME").or_else(|| Some(home()?.join(".local/share")))
+            }).as_deref(),
+            "$XDG_DOCUMENTS_DIR" => documents.get_or_init(|| {
+                resolve_live_documents_dir(&env, home)
+            }).as_deref(),
+            _ => None,
+        }))
     }
 
     /// Resolves only the sealed declarations using the supplied path values.
@@ -137,6 +160,7 @@ impl ResolvedCapabilities {
             image_prefixes,
             unix_sockets,
             named_sockets,
+            file_directories: Vec::new(),
         })
     }
 
@@ -156,6 +180,31 @@ impl ResolvedCapabilities {
     #[must_use]
     pub(crate) fn named_sockets(&self) -> &BTreeMap<String, Option<String>> {
         &self.named_sockets
+    }
+
+    pub(crate) fn with_file_directories<'a>(
+        mut self,
+        declarations: &Capabilities,
+        mut root: impl FnMut(&str) -> Option<&'a Path>,
+    ) -> Self {
+        self.file_directories = declarations.files.directories.iter().filter_map(|grant| {
+            let path = if grant.path.starts_with('$') {
+                let (key, rest) = grant.path.split_once('/').unwrap_or((&grant.path, ""));
+                let base = root(key)?;
+                if rest.is_empty() { base.to_path_buf() } else { base.join(rest) }
+            } else {
+                let path = Path::new(&grant.path);
+                if !path.is_absolute() { return None; }
+                path.to_path_buf()
+            };
+            Some(ResolvedFileDirectory { declaration: grant.path.clone(), path, mode: grant.mode })
+        }).collect();
+        self
+    }
+
+    /// Manifest-order file grants; unresolved live templates do not grant authority.
+    pub(crate) fn file_directories(&self) -> &[ResolvedFileDirectory] {
+        &self.file_directories
     }
 
     /// Authorizes only exact paths from either socket declaration list.
@@ -235,6 +284,35 @@ fn env_text(env: &impl Fn(&str) -> Option<OsString>, key: &str) -> Result<Option
         .transpose()
 }
 
+fn absolute_env_path(env: &impl Fn(&str) -> Option<OsString>, key: &str) -> Option<PathBuf> {
+    env_text(env, key).ok().flatten().map(PathBuf::from).filter(|path| path.is_absolute())
+}
+
+fn resolve_live_documents_dir<'a>(
+    env: &impl Fn(&str) -> Option<OsString>,
+    home: impl FnOnce() -> Option<&'a Path>,
+) -> Option<PathBuf> {
+    if let Some(path) = absolute_env_path(env, "XDG_DOCUMENTS_DIR") {
+        return Some(path);
+    }
+    let home = home()?;
+    let config = absolute_env_path(env, "XDG_CONFIG_HOME").unwrap_or_else(|| home.join(".config"));
+    if let Ok(text) = fs::read_to_string(config.join("user-dirs.dirs")) {
+        for line in text.lines() {
+            if let Some(value) = line.trim().strip_prefix("XDG_DOCUMENTS_DIR=") {
+                let value = value.trim().trim_matches('"');
+                if let Some(relative) = value.strip_prefix("$HOME/") {
+                    return Some(home.join(relative));
+                }
+                if Path::new(value).is_absolute() {
+                    return Some(value.into());
+                }
+            }
+        }
+    }
+    Some(home.join("Documents"))
+}
+
 fn live_root(root: Root, env: &impl Fn(&str) -> Option<OsString>) -> Result<String, String> {
     let key = root.key();
     let value = env_text(env, key)?;
@@ -272,6 +350,42 @@ mod tests {
     use super::*;
     use crate::test_package::Fixture;
     use std::os::unix::{fs::symlink, net::UnixListener};
+
+    #[test]
+    fn live_file_directories_keep_declarations_modes_and_skip_missing_roots() {
+        use crate::package::{FileDirectoryGrant, FilesCapabilities};
+        use host_services::files::FileMode;
+
+        let declarations = Capabilities {
+            files: FilesCapabilities {
+                directories: [
+                    ("/literal", FileMode::Read),
+                    ("$HOME/work", FileMode::ReadWrite),
+                    ("$XDG_DATA_HOME/cache", FileMode::Read),
+                    ("$XDG_DOCUMENTS_DIR/notes", FileMode::Read),
+                ].into_iter().map(|(path, mode)| FileDirectoryGrant { path: path.into(), mode }).collect(),
+            },
+            ..Default::default()
+        };
+        let resolve = |home, data, docs| ResolvedCapabilities::live(&declarations, &BTreeMap::new(), |key| {
+            match key {
+                "HOME" => home,
+                "XDG_DATA_HOME" => data,
+                "XDG_DOCUMENTS_DIR" => docs,
+                "XDG_CONFIG_HOME" => Some("/dev/null"),
+                _ => None,
+            }.map(OsString::from)
+        }).unwrap();
+        let all = resolve(Some("/test-home"), Some("/test-data"), Some("/test-documents"));
+        let paths = |caps: &ResolvedCapabilities| caps.file_directories().iter()
+            .map(|grant| grant.path.to_str().unwrap().to_owned()).collect::<Vec<_>>();
+        assert_eq!(paths(&all), ["/literal", "/test-home/work", "/test-data/cache", "/test-documents/notes"]);
+        assert_eq!(all.file_directories()[1].declaration, "$HOME/work");
+        assert_eq!(all.file_directories()[1].mode, FileMode::ReadWrite);
+        assert_eq!(paths(&resolve(None, Some("relative"), None)), ["/literal"]);
+        assert_eq!(paths(&resolve(Some("/test-home"), None, None)),
+            ["/literal", "/test-home/work", "/test-home/.local/share/cache", "/test-home/Documents/notes"]);
+    }
 
     #[test]
     fn live_resolution_rejects_socket_symlinks_before_publishing_authority() {

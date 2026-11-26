@@ -4,6 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use zgui::{app::Fonts, geom::{Css, CssPx, Size}, platform::{InputRegion, MonitorTarget, PlatformCx, SessionLockState, SurfaceAttributes, SurfaceId, SurfaceRole}, runtime::{Runtime, WindowContent, WindowSpec, WindowToken}, view::View};
 
 use super::{ImageChoice, MountRegion, PredecessorLeak, ReloadOutcome, Root, RuntimeSurface, SessionHost, SessionSurface, SurfaceOpacity};
+use super::overlay::OverlayRecovery;
 use crate::{session::{ResourceCounts, Result, Session, SessionModule, SessionRetirement}, shell::{LayerSpec, LockCommand, LockSpec, Monitor}};
 use std::{cell::RefCell, rc::Rc};
 
@@ -70,8 +71,26 @@ impl SessionHost {
     fn mount_shell(&mut self, runtime: &mut Runtime, cx: &dyn PlatformCx, images: ImageChoice, module: &SessionModule) -> ReloadOutcome {
         self.pure_attempted = true;
         let Some(fonts) = &self.pure_fonts else { return ReloadOutcome::Rejected("pure-shell startup was not configured".into()); };
-        let Some(generation) = Self::allocate_generation(&mut self.generation) else { return ReloadOutcome::Rejected("session generation exhausted".into()); };
         let lock_state = platform_lock_state(cx);
+        if !self.is_session_locked(lock_state)
+            && self.overlay.observation.is_none()
+            && !self.overlay.is_rollback_mount
+            && let Some(session) = &self.pure_session
+            && self.shell_windows.generation == Some(session.generation)
+            && let Some(previous) = session.active_package()
+            && let Some(next) = module.as_package()
+            && previous.is_css_only_successor(next)
+        {
+            if let Err(error) = session.replace_packaged_stylesheets(next) {
+                return ReloadOutcome::Rejected(error);
+            }
+            self.module = module.clone();
+            self.last_good = Some(module.clone());
+            let surface = RuntimeSurface::new(runtime, cx, images);
+            session.request_frames(|doc| surface.request_frame(doc));
+            return ReloadOutcome::Mounted { generation: session.generation, predecessor_leak: None, css_only: true };
+        }
+        let Some(generation) = Self::allocate_generation(&mut self.generation) else { return ReloadOutcome::Rejected("session generation exhausted".into()); };
         let hydrated = if self.policy.dev_state_enabled()
             && !lock_state.is_some_and(SessionLockState::is_retained)
             && !self.shell_windows.has_active_lock()
@@ -135,52 +154,65 @@ impl SessionHost {
         ReloadOutcome::Mounted { generation, predecessor_leak, css_only: false }
     }
 
-    /// Deliver output changes, retire superseded surfaces and realize pending shell requests.
-    pub(crate) fn shell_turn(&mut self, runtime: &mut Runtime, cx: &dyn PlatformCx, images: ImageChoice, monitors: &[Monitor]) -> Result<()> {
+    /// Reconcile shell surfaces and consume a deferred overlay only on its configured mount target.
+    pub(crate) fn shell_turn(
+        &mut self,
+        runtime: &mut Runtime,
+        cx: &dyn PlatformCx,
+        images: ImageChoice,
+        monitors: &[Monitor],
+        retry: &Rc<dyn Fn(zgui::view::DocumentId, u64)>,
+    ) -> Result<()> {
+        if cx.is_exiting() { return Ok(()); }
         if self.monitors != monitors { self.set_monitor_snapshot(monitors); }
         if self.is_pure_shell() && !self.pure_attempted {
             match self.replace_shell(runtime, cx, images, self.module.clone()) {
                 ReloadOutcome::Mounted { .. } => {}
                 ReloadOutcome::Rejected(error) | ReloadOutcome::Fallback(error) => {
-                    if !self.overlay.enabled {
+                    if !self.overlay.enabled || self.is_session_locked(platform_lock_state(cx)) {
                         return Err(error);
                     }
                     let failed_meta = self.active_overlay_failed_meta();
-                    self.recover_pure_shell_overlay(runtime, cx, images, "mount", error.to_string(), &failed_meta)?;
+                    self.recover_pure_shell_overlay(runtime, cx, images, OverlayRecovery {
+                        phase: "mount", reason: error.to_string(), failed_meta: &failed_meta,
+                    })?;
                 }
             }
         }
-        self.drain_pending_overlay_pure_if_unlocked(runtime, cx, images);
-        self.tick_observation();
         let session = self.sessions().find(|session| Some(session.generation) == self.shell_windows.generation).cloned();
-        let Some(session) = session else { return Ok(()); };
-        let result = self.step_shell(runtime, cx, images, &session);
-        if let Err(error) = result {
-            let gen_id = session.generation;
-            self.shell_windows.retire(&session, |token, id| close_native_surface(runtime, cx, token, id));
-            if self.overlay.enabled && self.overlay.observation.as_ref().is_some_and(|obs| obs.generation == gen_id) {
-                let failed_meta = self.active_overlay_failed_meta();
-                self.pure_session = None;
-                return self.recover_pure_shell_overlay(runtime, cx, images, "observation", error.to_string(), &failed_meta);
-            }
-            return Err(error);
-        }
-        self.apply_window_commands(runtime, cx, images)?;
-        // A runtime command may have opened/closed an auxiliary window; settle if dirty.
-        if session.shell.is_dirty() {
-            let result = self.step_shell(runtime, cx, images, &session);
-            if let Err(error) = result {
-                let gen_id = session.generation;
+        if let Some(session) = session {
+            let step = match self.step_shell(runtime, cx, images, &session) {
+                Ok(()) => {
+                    self.apply_window_commands(runtime, cx, images)?;
+                    // A window command can open or close a surface and make more requests ready.
+                    if session.shell.is_dirty() { self.step_shell(runtime, cx, images, &session) }
+                    else { Ok(()) }
+                }
+                outcome @ Err(_) => outcome,
+            };
+            if let Err(error) = step {
+                let locked = self.is_session_locked(platform_lock_state(cx));
                 self.shell_windows.retire(&session, |token, id| close_native_surface(runtime, cx, token, id));
-                if self.overlay.enabled && self.overlay.observation.as_ref().is_some_and(|obs| obs.generation == gen_id) {
-                    let failed_meta = self.active_overlay_failed_meta();
-                    self.pure_session = None;
-                    return self.recover_pure_shell_overlay(runtime, cx, images, "observation", error.to_string(), &failed_meta);
+                if self.overlay.observation.as_ref().is_some_and(|obs| obs.generation == session.generation) {
+                    self.overlay.observation = None;
+                    if !locked {
+                        let failed_meta = self.active_overlay_failed_meta();
+                        let recovery = OverlayRecovery { phase: "observation", reason: error.to_string(), failed_meta: &failed_meta };
+                        if let Some(primary) = session.primary() {
+                            let document = primary.region.document;
+                            self.sessions.remove(&document);
+                            let mut surface = RuntimeSurface::new(runtime, cx, images);
+                            return self.recover_primary_overlay(&mut surface, cx.waker(), retry, document, recovery);
+                        }
+                        self.pure_session = None;
+                        return self.recover_pure_shell_overlay(runtime, cx, images, recovery);
+                    }
                 }
                 return Err(error);
             }
-            return result;
         }
+        self.tick_observation();
+        self.drain_pending_overlay_if_unlocked(runtime, cx, images, retry);
         Ok(())
     }
 
@@ -188,8 +220,9 @@ impl SessionHost {
         let state = cx.session_lock_state();
         let mut worked = session.update_monitors(&self.monitors)?;
         worked |= session.update_lock_state(state)?;
-        worked |= session.update_reduced_motion(cx.reduced_motion())?;
-        worked |= session.update_background_blur_supported(cx.capabilities().supports_background_blur)?;
+        if session.primary().is_none() {
+            worked |= Self::sync_preferences(session, cx)?;
+        }
         self.shell_windows.settle(runtime, cx, images, &self.monitors, session, LockReconcile::Current)?;
         let surface = RuntimeSurface::new(runtime, cx, images);
         if session.primary().is_none() || session.shell.has_lock_command() {
@@ -511,7 +544,8 @@ impl ShellWindows {
 }
 
 pub(super) fn platform_lock_state(cx: &dyn PlatformCx) -> Option<SessionLockState> {
-    cx.capabilities().session_lock.then(|| cx.session_lock_state())
+    let state = cx.session_lock_state();
+    (state.is_retained() || cx.capabilities().session_lock).then_some(state)
 }
 
 fn lock_size(monitor: &Monitor) -> Size<CssPx, Css> {

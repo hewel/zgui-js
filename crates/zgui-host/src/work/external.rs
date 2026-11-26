@@ -215,7 +215,12 @@ impl External {
         None
     }
 
-    fn counts(&self) -> Counts {
+    pub(super) fn pending_count(&self, generation: u64) -> usize {
+        usize::from(self.ready.borrow().is_some()) + self.control.borrow().len()
+            + self.fixture.as_ref().map_or(0, |fixture| fixture.pending_external_deliveries(generation))
+    }
+
+    pub(super) fn counts(&self) -> Counts {
         let mut counts = Counts::default();
         for registration in self.registrations.borrow().values() {
             match registration {
@@ -798,11 +803,6 @@ impl Work {
         Ok(())
     }
 
-    /// Report counts before forced cleanup releases external registrations.
-    pub(crate) fn external_counts(&self) -> Counts {
-        self.external.counts()
-    }
-
     /// Whether live ingress can deliver to this mounted generation.
     pub(crate) fn has_control_handler(&self) -> bool {
         self.mode.get() == Mode::Mounted
@@ -841,7 +841,7 @@ impl Work {
     }
 
     /// Detect backlog without dropping an event already taken from a worker inbox.
-    pub(crate) fn has_external(&self) -> bool {
+    pub(super) fn has_external(&self) -> bool {
         if self.mode.get() != Mode::Mounted {
             return false;
         }
