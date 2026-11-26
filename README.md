@@ -112,6 +112,8 @@ bun run package --app md-editor --bytecode --out target/md-editor-pkg
 bun run inspect --ui --socket /tmp/app.inspect.sock
 ```
 
+- Testing unpublished local changes from an external consumer repo (such as a separate Wayland shell): see [Outside the SDK workspace](packages/build/README.md#outside-the-sdk-workspace) for the `link:` two-repo edit loop and `.tgz` tarball snapshot workflows.
+
 ## Application model & SDK
 
 - **Entry point:** `src/main.tsx` exports `hostApiVersion = 1` and `mount(root)`, returning the disposer from `renderApp(() => <App />, root)` (or `renderShell` for `--pure-shell` Wayland shells). See [`apps/examples/counter/src/main.tsx`](apps/examples/counter/src/main.tsx).

@@ -161,9 +161,23 @@ test("deterministic host resolution honors precedence, verifies staged packages,
   ]);
   assert.match(verifyOut, /Verified @hewel\/zgui-host-linux-x64/);
 
-  // 1. Explicit --host-executable beats ZGUI_JS_HOST_EXECUTABLE and platform package.
+  const explicitCargoRoot = path.join(dir, "explicit-cargo-root");
+  await mkdir(path.join(explicitCargoRoot, "crates/zgui-host"), { recursive: true });
+  await mkdir(path.join(explicitCargoRoot, "target/debug"), { recursive: true });
+  await writeFile(path.join(explicitCargoRoot, "Cargo.toml"), "[workspace]\n");
+  await writeFile(
+    path.join(explicitCargoRoot, "crates/zgui-host/Cargo.toml"),
+    '[package]\nname = "zgui-host"\n',
+  );
+  const explicitCargoHost = path.join(explicitCargoRoot, "target/debug/zgui-host");
+  await writeFile(explicitCargoHost, makeMockHostScript({ tag: "cargo-explicit" }), {
+    mode: 0o755,
+  });
+
+  // 1. Explicit --host-executable beats ZGUI_JS_HOST_EXECUTABLE, explicit hostRoot, and platform package.
   const r1 = await resolveNativeHost({
     hostExecutable: explicitHost,
+    hostRoot: explicitCargoRoot,
     env: { ZGUI_JS_HOST_EXECUTABLE: envHost },
     cwd: consumerDir,
     platform: "linux",
@@ -174,8 +188,9 @@ test("deterministic host resolution honors precedence, verifies staged packages,
   assert.equal(r1.executable, explicitHost);
   assert.equal(r1.abi?.hostApiVersion, 1);
 
-  // 2. ZGUI_JS_HOST_EXECUTABLE beats installed platform package.
+  // 2. ZGUI_JS_HOST_EXECUTABLE beats explicit hostRoot and installed platform package.
   const r2 = await resolveNativeHost({
+    hostRoot: explicitCargoRoot,
     env: { ZGUI_JS_HOST_EXECUTABLE: envHost },
     cwd: consumerDir,
     platform: "linux",
@@ -185,18 +200,59 @@ test("deterministic host resolution honors precedence, verifies staged packages,
   assert.equal(r2.source, "env");
   assert.equal(r2.executable, envHost);
 
-  // 3. Installed staged platform package beats Cargo fallback (even if hostRoot is passed).
-  const r3 = await resolveNativeHost({
+  // 3a. Explicit hostRoot beats installed staged platform package.
+  const r3a = await resolveNativeHost({
     env: {},
     cwd: consumerDir,
-    hostRoot: workspaceRoot,
+    hostRoot: explicitCargoRoot,
     platform: "linux",
     arch: "x64",
     root: consumerDir,
+    allowCargoBuild: false,
   });
-  assert.equal(r3.source, "platform-package");
-  assert.equal(r3.packageName, "@hewel/zgui-host-linux-x64");
-  assert.equal(r3.executable, staged.binaryPath);
+  assert.equal(r3a.source, "cargo");
+  assert.equal(r3a.cargoRoot, explicitCargoRoot);
+  assert.equal(r3a.executable, explicitCargoHost);
+
+  // Invalid explicit hostRoot fails closed rather than falling back to the platform package.
+  await assert.rejects(
+    resolveNativeHost({
+      env: {},
+      cwd: consumerDir,
+      hostRoot: path.join(dir, "missing-cargo-root"),
+      platform: "linux",
+      arch: "x64",
+      root: consumerDir,
+      allowCargoBuild: false,
+    }),
+    /Explicit --host-root directory not found/,
+  );
+  const notACheckout = path.join(dir, "not-a-checkout");
+  await mkdir(notACheckout, { recursive: true });
+  await assert.rejects(
+    resolveNativeHost({
+      env: {},
+      cwd: consumerDir,
+      hostRoot: notACheckout,
+      platform: "linux",
+      arch: "x64",
+      root: consumerDir,
+      allowCargoBuild: false,
+    }),
+    /not a zgui-js Cargo checkout/,
+  );
+
+  // 3b. Installed staged platform package beats autodetected Cargo fallback.
+  const r3b = await resolveNativeHost({
+    env: {},
+    cwd: consumerDir,
+    platform: "linux",
+    arch: "x64",
+    root: workspaceRoot,
+  });
+  assert.equal(r3b.source, "platform-package");
+  assert.equal(r3b.packageName, "@hewel/zgui-host-linux-x64");
+  assert.equal(r3b.executable, staged.binaryPath);
 
   // 4. Explicit ABI mismatch fails closed.
   assert.throws(() => probeNativeHost(badAbiHost), /ABI mismatch.*hostApiVersion=99/);
@@ -215,10 +271,9 @@ test("deterministic host resolution honors precedence, verifies staged packages,
     resolveNativeHost({
       env: {},
       cwd: consumerDir,
-      hostRoot: workspaceRoot,
       platform: "linux",
       arch: "x64",
-      root: consumerDir,
+      root: workspaceRoot,
     }),
     /integrity mismatch/,
   );
@@ -239,10 +294,9 @@ console.log(JSON.stringify({ name: "zgui-host", version: ${JSON.stringify(worksp
     resolveNativeHost({
       env: {},
       cwd: consumerDir,
-      hostRoot: workspaceRoot,
       platform: "linux",
       arch: "x64",
-      root: consumerDir,
+      root: workspaceRoot,
     }),
     /Missing host-manifest\.json/,
   );

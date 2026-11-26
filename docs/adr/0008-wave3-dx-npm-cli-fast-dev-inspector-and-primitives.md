@@ -24,9 +24,10 @@ We will execute Wave 3 across four ordered pillars (`DX-1` through `DX-4`).
    - Follow the `esbuild`/`rolldown`/`lightningcss`/`oxlint` npm distribution pattern: define platform host packages (`@hewel/zgui-host-linux-x64`, `@hewel/zgui-host-linux-arm64`) as `optionalDependencies` of `@hewel/zgui-cli` (with packaging/staging tooling and release-manifest verification in-repo).
    - Resolve the `native-host` executable in deterministic order:
      1. Explicit `--host-executable` flag or `ZGUI_JS_HOST_EXECUTABLE` environment variable.
-     2. Installed platform package (`@hewel/zgui-host-<os>-<arch>`), verified against `@hewel/zgui-build`'s expected `hostApiVersion` / protocol handshake.
-     3. Local Cargo workspace build (`--host-root` or detected `zgui-js` checkout containing `crates/native-host`) via `cargo build -p native-host`.
-     4. Actionable error explaining both installing the platform host package and passing `--host-root` / `--host-executable`.
+     2. Explicit `--host-root` flag (`hostRoot`) pointing to a local Cargo checkout (`cargo build -p zgui-host`).
+     3. Installed platform package (`@hewel/zgui-host-<os>-<arch>`), verified against `host-manifest.json` and `@hewel/zgui-build`'s expected `hostApiVersion` / protocol handshake.
+     4. Autodetected local Cargo workspace checkout containing `crates/zgui-host`.
+     5. Actionable error explaining both installing the platform host package and passing `--host-root` / `--host-executable`.
    - External JS/TS developers require **zero Rust toolchain** to run `dev`, `build`, `preview`, `inspect`, or `package`; repo and custom-host Rust developers retain seamless incremental Cargo builds.
 3. **Complete npm-native CLI workflow + scaffolding:**
    - `zgui-js init [dir]` + thin **`create-zgui-js`** package (`bun create zgui-js`): scaffolds `desktop-app` or `wayland-shell` templates pre-wired with `@hewel/zgui`, CSS Modules (`*.module.css`), `@hewel/zgui/oxlint`, `tsconfig.native.json`, `zgui.capabilities.json`, and `package.json` scripts.

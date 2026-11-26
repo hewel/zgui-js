@@ -4,6 +4,7 @@ import { execFile } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import {
   chmod,
+  cp,
   mkdir,
   mkdtemp,
   readdir,
@@ -17,7 +18,7 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import { promisify } from "node:util";
-import { watchApplication } from "../../packages/build/src/index.ts";
+import { buildApplication, watchApplication } from "../../packages/build/src/index.ts";
 import { workspaceRoot } from "../../packages/build/src/internal.ts";
 import { withPackLock } from "./pack-lock.mjs";
 
@@ -702,5 +703,222 @@ export function mount() {
     } finally {
       await watcher.close();
     }
+  },
+);
+
+test(
+  "external sibling app with linked checkout SDK rebuilds on SDK src edits and reports duplicate solid-js paths",
+  { timeout: 30000 },
+  async t => {
+    const parent = await mkdtemp(path.join(os.tmpdir(), "zgui-sibling-link-"));
+    t.after(() => rm(parent, { recursive: true, force: true }));
+
+    const checkout = path.join(parent, "zgui-js");
+    const consumer = path.join(parent, "z-shell");
+    const uiDir = path.join(checkout, "packages/ui");
+    const servicesDir = path.join(checkout, "packages/services");
+    await mkdir(path.join(uiDir, "src/components/generated"), { recursive: true });
+    await mkdir(path.join(servicesDir, "src"), { recursive: true });
+    await mkdir(path.join(checkout, "node_modules/@hewel"), { recursive: true });
+    await mkdir(path.join(consumer, "src"), { recursive: true });
+    await mkdir(path.join(consumer, "node_modules/@hewel"), { recursive: true });
+
+    for (const file of ["Cargo.lock", "bun.lock", "package.json"]) {
+      await writeFile(path.join(checkout, file), await readFile(path.join(workspaceRoot, file)));
+    }
+
+    await writeFile(
+      path.join(uiDir, "package.json"),
+      JSON.stringify({
+        name: "@hewel/zgui",
+        version: "0.1.0",
+        type: "module",
+        exports: {
+          ".": { types: "./dist/index.d.ts", default: "./dist/index.js" },
+          "./renderer": {
+            types: "./dist/renderer/index.d.ts",
+            default: "./dist/renderer/index.js",
+          },
+          "./jsx-runtime": { types: "./dist/jsx-runtime.d.ts", default: "./dist/jsx-runtime.js" },
+          "./tsconfig.native.json": "./tsconfig.native.json",
+        },
+        imports: { "#solid": { types: "./dist/solid-native.d.ts", default: "solid-js" } },
+      }),
+    );
+    await writeFile(
+      path.join(uiDir, "tsconfig.native.json"),
+      await readFile(path.join(workspaceRoot, "packages/ui/tsconfig.native.json")),
+    );
+    await writeFile(
+      path.join(uiDir, "tsconfig.json"),
+      await readFile(path.join(workspaceRoot, "packages/ui/tsconfig.json")),
+    );
+    await writeFile(
+      path.join(uiDir, "tsconfig.build.json"),
+      await readFile(path.join(workspaceRoot, "packages/ui/tsconfig.build.json")),
+    );
+    await writeFile(
+      path.join(uiDir, "src/solid-native.d.ts"),
+      "export declare function createSignal<T>(value: T): [() => T, (next: T) => T];\n",
+    );
+    for (const dts of ["events.d.ts", "styles.d.ts"]) {
+      await writeFile(path.join(uiDir, "src", dts), "export {};\n");
+    }
+    await writeFile(
+      path.join(uiDir, "src/components/generated/MiniStyle.ts"),
+      'export const sheet = { name: "MiniStyle", className: "zs-mini", css: ".zs-mini { color: red; }" };\n',
+    );
+    await writeFile(
+      path.join(uiDir, "src/index.ts"),
+      'export { createSignal } from "#solid";\nexport const sdkMarker = "sibling-v1";\n',
+    );
+
+    await writeFile(
+      path.join(servicesDir, "package.json"),
+      JSON.stringify({
+        name: "@hewel/zgui-services",
+        version: "0.1.0",
+        type: "module",
+        exports: { ".": { types: "./dist/index.d.ts", default: "./dist/index.js" } },
+        imports: { "#solid": { types: "./dist/solid.d.ts", default: "solid-js" } },
+      }),
+    );
+    await writeFile(
+      path.join(servicesDir, "tsconfig.json"),
+      await readFile(path.join(workspaceRoot, "packages/services/tsconfig.json")),
+    );
+    await writeFile(
+      path.join(servicesDir, "tsconfig.build.json"),
+      await readFile(path.join(workspaceRoot, "packages/services/tsconfig.build.json")),
+    );
+    await writeFile(
+      path.join(servicesDir, "src/solid.d.ts"),
+      "export declare function createSignal<T>(value: T): [() => T, (next: T) => T];\n",
+    );
+    await writeFile(
+      path.join(servicesDir, "src/index.ts"),
+      'import { createSignal } from "#solid";\nexport const svcMarker = "svc-v1";\nexport function makeServiceSignal<T>(value: T) {\n  return createSignal(value);\n}\n',
+    );
+
+    const solidBundleNm = path.dirname(
+      await realpath(path.join(workspaceRoot, "node_modules/solid-js")),
+    );
+    const copySolidTree = async targetNodeModules => {
+      for (const dep of ["solid-js", "@solidjs", "seroval", "seroval-plugins"]) {
+        const src = path.join(solidBundleNm, dep);
+        if (existsSync(src)) {
+          await cp(src, path.join(targetNodeModules, dep), {
+            recursive: true,
+            dereference: true,
+          });
+        }
+      }
+    };
+
+    await symlink(uiDir, path.join(checkout, "node_modules/@hewel/zgui"), "dir");
+    await symlink(servicesDir, path.join(checkout, "node_modules/@hewel/zgui-services"), "dir");
+    await copySolidTree(path.join(checkout, "node_modules"));
+
+    // Sibling consumer repository outside `checkout`, linked via node_modules/@hewel/* symlinks.
+    await symlink(uiDir, path.join(consumer, "node_modules/@hewel/zgui"), "dir");
+    await symlink(servicesDir, path.join(consumer, "node_modules/@hewel/zgui-services"), "dir");
+    await writeFile(
+      path.join(consumer, "package.json"),
+      JSON.stringify({ name: "sibling-shell", type: "module" }),
+    );
+    await writeFile(
+      path.join(consumer, "tsconfig.json"),
+      JSON.stringify({
+        extends: "@hewel/zgui/tsconfig.native.json",
+        include: ["src"],
+      }),
+    );
+    await writeFile(
+      path.join(consumer, "src/main.tsx"),
+      `import { createSignal, sdkMarker } from "@hewel/zgui";
+import { makeServiceSignal, svcMarker } from "@hewel/zgui-services";
+export const hostApiVersion = 1;
+export function mount() {
+  const [a] = createSignal(sdkMarker);
+  const [b] = makeServiceSignal(svcMarker);
+  return () => { void a(); void b(); };
+}
+`,
+    );
+
+    let next = Promise.withResolvers();
+    const watcher = watchApplication("sibling-shell", {
+      root: checkout,
+      appDirectory: consumer,
+      onSuccess: result => next.resolve(result),
+      onError: error => next.reject(error),
+    });
+    t.after(() => watcher.close());
+
+    try {
+      const first = await next.promise;
+      assert.equal(existsSync(path.join(uiDir, "dist/index.js")), true);
+      assert.equal(existsSync(path.join(servicesDir, "dist/index.js")), true);
+      const firstCode = await readFile(path.join(first.dist, "app.mjs"), "utf8");
+      assert.match(firstCode, /sibling-v1/);
+      assert.match(firstCode, /svc-v1/);
+
+      next = Promise.withResolvers();
+      await writeFile(
+        path.join(uiDir, "src/index.ts"),
+        'export { createSignal } from "#solid";\nexport const sdkMarker = "sibling-v2";\n',
+      );
+      const second = await next.promise;
+      assert.notEqual(second.manifest.buildId, first.manifest.buildId);
+      const secondCode = await readFile(path.join(second.dist, "app.mjs"), "utf8");
+      assert.match(secondCode, /sibling-v2/);
+    } finally {
+      await watcher.close();
+    }
+
+    // Phase 2: introduce a physically distinct Solid tree in consumer and bare-import solid-js.
+    await copySolidTree(path.join(consumer, "node_modules"));
+    await writeFile(
+      path.join(consumer, "tsconfig.json"),
+      JSON.stringify({
+        extends: "@hewel/zgui/tsconfig.native.json",
+        compilerOptions: { skipLibCheck: true },
+        include: ["src"],
+      }),
+    );
+    await writeFile(
+      path.join(consumer, "src/main.tsx"),
+      `import { createSignal as bareSignal } from "solid-js";
+import { createSignal, sdkMarker } from "@hewel/zgui";
+import { svcMarker } from "@hewel/zgui-services";
+export const hostApiVersion = 1;
+export function mount() {
+  const [a] = createSignal(sdkMarker);
+  const [b] = bareSignal(svcMarker);
+  return () => { void a(); void b(); };
+}
+`,
+    );
+
+    const realCheckout = await realpath(checkout);
+    const realConsumer = await realpath(consumer);
+    await assert.rejects(
+      buildApplication("sibling-shell", {
+        root: checkout,
+        appDirectory: consumer,
+      }),
+      error => {
+        assert.match(error.message, /Expected single Solid runtime instances, found solid=2/);
+        assert.ok(
+          error.message.includes(realCheckout),
+          `Expected checkout path ${realCheckout} in: ${error.message}`,
+        );
+        assert.ok(
+          error.message.includes(realConsumer),
+          `Expected consumer path ${realConsumer} in: ${error.message}`,
+        );
+        return true;
+      },
+    );
   },
 );

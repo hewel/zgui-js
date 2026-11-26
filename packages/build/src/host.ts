@@ -279,6 +279,53 @@ function resolveEntryScriptDir(): string | undefined {
   }
 }
 
+async function resolveCargoHost(
+  cargoRoot: string,
+  {
+    allowCargoBuild,
+    verifyAbi,
+    signal,
+    explicit,
+  }: {
+    allowCargoBuild: boolean;
+    verifyAbi: boolean;
+    signal?: AbortSignal;
+    explicit: boolean;
+  },
+): Promise<ResolvedNativeHost> {
+  if (explicit && !existsSync(cargoRoot)) {
+    throw hostFailure(`Explicit --host-root directory not found: ${cargoRoot}`);
+  }
+  if (!allowCargoBuild) {
+    for (const rel of ["target/debug/zgui-host", "target/release/zgui-host"]) {
+      const built = path.join(cargoRoot, rel);
+      if (existsSync(built)) {
+        const abi = verifyAbi ? probeNativeHost(built) : undefined;
+        return {
+          executable: built,
+          source: "cargo",
+          cargoRoot,
+          ...(abi ? { abi } : {}),
+        };
+      }
+    }
+    if (explicit && !hasCargoNativeHost(cargoRoot)) {
+      throw hostFailure(
+        `Explicit --host-root is not a zgui-js Cargo checkout (missing crates/zgui-host/Cargo.toml): ${cargoRoot}`,
+      );
+    }
+    throw hostFailure(
+      `Local Cargo checkout detected at ${cargoRoot}, but zgui-host has not been built yet. Run \`cargo build -p zgui-host\` or invoke \`zgui-js dev\`.`,
+    );
+  }
+  const executable = await prepareNativeHost({ root: cargoRoot, signal });
+  return {
+    executable,
+    source: "cargo",
+    cargoRoot,
+  };
+}
+
 export async function resolveNativeHost({
   hostExecutable,
   hostRoot,
@@ -309,7 +356,18 @@ export async function resolveNativeHost({
     };
   }
 
-  // 2. Installed platform package (@hewel/zgui-host-<os>-<arch>) with mandatory manifest + ABI checks.
+  // 2. Explicit --host-root overrides any installed platform package so external checkouts can test local Rust builds deterministically.
+  const explicitHostRoot = hostRoot?.trim() || undefined;
+  if (explicitHostRoot !== undefined) {
+    return resolveCargoHost(path.resolve(resolvedCwd, explicitHostRoot), {
+      allowCargoBuild,
+      verifyAbi,
+      signal,
+      explicit: true,
+    });
+  }
+
+  // 3. Installed platform package (@hewel/zgui-host-<os>-<arch>) with mandatory manifest + ABI checks.
   const currentPlatform = platformId(platform, arch);
   const packageName = platformHostPackageName(platform, arch);
   if (packageName) {
@@ -349,42 +407,23 @@ export async function resolveNativeHost({
     }
   }
 
-  // 3. Local Cargo workspace build (--host-root or detected checkout containing crates/zgui-host).
+  // 4. Autodetected local Cargo workspace checkout containing crates/zgui-host.
   const resolvedRoot = path.resolve(root);
-  const cargoRoot =
-    hostRoot !== undefined
-      ? path.resolve(resolvedCwd, hostRoot)
-      : resolvedRoot !== packagedSdkRoot && hasCargoNativeHost(resolvedRoot)
-        ? resolvedRoot
-        : findCargoCheckoutUpwards(resolvedCwd);
+  const autoCargoRoot =
+    resolvedRoot !== packagedSdkRoot && hasCargoNativeHost(resolvedRoot)
+      ? resolvedRoot
+      : findCargoCheckoutUpwards(resolvedCwd);
 
-  if (cargoRoot !== undefined) {
-    if (!allowCargoBuild) {
-      for (const rel of ["target/debug/zgui-host", "target/release/zgui-host"]) {
-        const built = path.join(cargoRoot, rel);
-        if (existsSync(built)) {
-          const abi = verifyAbi ? probeNativeHost(built) : undefined;
-          return {
-            executable: built,
-            source: "cargo",
-            cargoRoot,
-            ...(abi ? { abi } : {}),
-          };
-        }
-      }
-      throw hostFailure(
-        `Local Cargo checkout detected at ${cargoRoot}, but zgui-host has not been built yet. Run \`cargo build -p zgui-host\` or invoke \`zgui-js dev\`.`,
-      );
-    }
-    const executable = await prepareNativeHost({ root: cargoRoot, signal });
-    return {
-      executable,
-      source: "cargo",
-      cargoRoot,
-    };
+  if (autoCargoRoot !== undefined) {
+    return resolveCargoHost(autoCargoRoot, {
+      allowCargoBuild,
+      verifyAbi,
+      signal,
+      explicit: false,
+    });
   }
 
-  // 4. Actionable error when no prebuilt host or Cargo checkout is available.
+  // 5. Actionable error when no prebuilt host or Cargo checkout is available.
   const installHint = packageName
     ? `Install the prebuilt host package (${packageName})`
     : `No prebuilt host package is published for ${currentPlatform}`;

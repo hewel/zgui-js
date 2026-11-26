@@ -1048,14 +1048,18 @@ export function validateGraph(
   const signals = graph.modules.filter(input =>
     /\/@solidjs\/signals\/dist\/(?:(?:prod|observe)\/index|dev)\.js$/.test(input),
   );
+  if (runtimes.length > 1 || signals.length > 1) {
+    const details = [
+      ...(runtimes.length > 1 ? [`solid-js: ${runtimes.join(", ")}`] : []),
+      ...(signals.length > 1 ? [`@solidjs/signals: ${signals.join(", ")}`] : []),
+    ];
+    throw new Error(
+      `Expected single Solid runtime instances, found solid=${runtimes.length}, signals=${signals.length} (${details.join("; ")})`,
+    );
+  }
   if (runtimes.length !== 1 && signals.length !== 1) {
     throw new Error(
       `Expected one reactive Solid runtime, found solid=${runtimes.length}, signals=${signals.length}`,
-    );
-  }
-  if (runtimes.length > 1 || signals.length > 1) {
-    throw new Error(
-      `Expected single Solid runtime instances, found solid=${runtimes.length}, signals=${signals.length}`,
     );
   }
   for (const input of graph.modules) {
