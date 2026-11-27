@@ -2,6 +2,8 @@ import { createSignal } from "@hewel/zgui";
 import type { NativeNode } from "@hewel/zgui";
 import {
   Button,
+  Calendar,
+  DatePicker,
   Icon,
   Input,
   InputGroup,
@@ -134,6 +136,34 @@ export function FieldsSection(props: { onAction: (label: string) => void }) {
               </InputGroupButton>
             </InputGroupAddon>
           </InputGroup>
+        </column>
+      </Panel>
+
+      <Panel
+        title="Calendar & DatePicker"
+        note="Civil dates, keyboard navigation, and a clearable date range"
+      >
+        <column class="demo-stack">
+          <Calendar
+            testId="fields-calendar"
+            defaultMonth="2024-02"
+            onValueChange={value => props.onAction(`Calendar: ${value ?? "(empty)"}`)}
+          />
+          <DatePicker
+            mode="range"
+            defaultValue={{ start: "2024-02-27", end: "2024-03-02" }}
+            placeholder="Choose a date range"
+            captionLayout="dropdown"
+            triggerTestId="fields-date-trigger"
+            contentTestId="fields-date-surface"
+            calendarTestId="fields-date-calendar"
+            clearable
+            onValueChange={value =>
+              props.onAction(
+                value ? `Dates: ${value.start} – ${value.end ?? "…"}` : "Dates cleared",
+              )
+            }
+          />
         </column>
       </Panel>
     </row>

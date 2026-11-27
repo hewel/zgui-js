@@ -15,8 +15,8 @@ use host_services::{
         HandleKind, MAX_READ_BYTES, MAX_WATCH_DEBOUNCE_MS, MAX_WRITE_BYTES, MIN_WATCH_DEBOUNCE_MS,
         WatchEvent, atomic_write_bytes,
         grants::{
-            BookmarkRecord, list_grants, persist_grant, resolve_grant_store_path, restore_grant,
-            revoke_grant,
+            GrantKind, WorkspaceGrantCeiling, list_grants, persist_grant, resolve_grant_store_path,
+            restore_workspace_grant, revoke_grant, revoke_workspace_grant,
         },
         mkdir_scoped,
         portal::{PortalDialogKind, run_file_chooser},
@@ -34,7 +34,7 @@ use rquickjs::{
 };
 
 use super::{Mode, Work, data_property, owner, service_error};
-use crate::{assets::AssetSource, package::Package};
+use crate::{assets::{AssetSource, fixture::FixtureRuntime}, package::Package};
 
 const MAX_FILE_HANDLES: usize = 256;
 const MAX_FS_WATCHERS: usize = 32;
@@ -82,7 +82,34 @@ pub(crate) enum FileCompletionValue {
     DirEntries(Vec<DirEntry>),
     Handle(Option<OpenHandle>),
     BookmarkToken(String),
-    Bookmarks(Vec<BookmarkRecord>),
+    Grants(Vec<GrantInfo>),
+}
+
+#[derive(Clone, Copy)]
+enum GrantInventory {
+    Bookmarks,
+    All,
+}
+
+impl GrantInventory {
+    fn kind_label(self, kind: GrantKind) -> Option<&'static str> {
+        match self {
+            Self::All => Some(kind.as_str()),
+            Self::Bookmarks => match kind.workspace_kind() {
+                Some(HandleKind::File) => Some("file"),
+                Some(HandleKind::Dir) => Some("dir"),
+                None => None,
+            },
+        }
+    }
+}
+
+pub(crate) struct GrantInfo {
+    token: String,
+    kind: &'static str,
+    label: String,
+    mode: FileMode,
+    created_ms: u64,
 }
 
 pub(crate) enum FileEvent {
@@ -103,6 +130,7 @@ enum FilesBackend {
         rx: Receiver<FileEvent>,
     },
     Preview {
+        fixture: Rc<FixtureRuntime>,
         vfs: RefCell<PreviewFs>,
         queue: RefCell<VecDeque<FileEvent>>,
     },
@@ -116,6 +144,7 @@ pub(crate) struct FileCounts {
 
 pub(super) struct FilesState {
     backend: FilesBackend,
+    grant_ceiling: WorkspaceGrantCeiling,
     handles: RefCell<BTreeMap<u64, OpenHandle>>,
     watchers: RefCell<BTreeMap<u64, WatcherEntry>>,
     pending: RefCell<HashMap<u64, PendingFileOp>>,
@@ -126,6 +155,7 @@ pub(super) struct FilesState {
 impl FilesState {
     pub(super) fn new(
         package: Option<&Package>,
+        grant_ceiling: WorkspaceGrantCeiling,
         source: &AssetSource,
         wake: std::sync::Arc<dyn Fn() + Send + Sync>,
     ) -> Self {
@@ -134,6 +164,7 @@ impl FilesState {
                 let mut vfs = fixture.build_preview_fs();
                 vfs.set_wake(wake);
                 FilesBackend::Preview {
+                    fixture: Rc::clone(fixture),
                     vfs: RefCell::new(vfs),
                     queue: RefCell::new(VecDeque::new()),
                 }
@@ -152,6 +183,7 @@ impl FilesState {
         };
         Self {
             backend,
+            grant_ceiling,
             handles: RefCell::new(BTreeMap::new()),
             watchers: RefCell::new(BTreeMap::new()),
             pending: RefCell::new(HashMap::new()),
@@ -305,14 +337,28 @@ impl Work {
         services.prop(
             "listBookmarks",
             data_property(Func::from(move |ctx: Ctx<'js>| {
-                owner(&weak, &ctx)?.list_file_bookmarks(&ctx)
+                owner(&weak, &ctx)?.list_file_grants(&ctx, GrantInventory::Bookmarks)
             })),
         )?;
         let weak = Rc::downgrade(self);
         services.prop(
             "revokeBookmark",
             data_property(Func::from(move |ctx: Ctx<'js>, token: Value<'js>| {
-                owner(&weak, &ctx)?.revoke_file_bookmark(&ctx, token)
+                owner(&weak, &ctx)?.revoke_file_grant(&ctx, token, GrantInventory::Bookmarks)
+            })),
+        )?;
+        let weak = Rc::downgrade(self);
+        services.prop(
+            "listGrants",
+            data_property(Func::from(move |ctx: Ctx<'js>| {
+                owner(&weak, &ctx)?.list_file_grants(&ctx, GrantInventory::All)
+            })),
+        )?;
+        let weak = Rc::downgrade(self);
+        services.prop(
+            "revokeGrant",
+            data_property(Func::from(move |ctx: Ctx<'js>, token: Value<'js>| {
+                owner(&weak, &ctx)?.revoke_file_grant(&ctx, token, GrantInventory::All)
             })),
         )?;
         let weak = Rc::downgrade(self);
@@ -1195,26 +1241,24 @@ impl Work {
         let handle_id = self.extract_brand(ctx, handle_val, None)?;
         let handle = self.lookup_handle(ctx, handle_id)?;
         let (op_id, req) = self.create_file_request(ctx)?;
+        let admission = self.files.grant_ceiling.authorize(handle.kind.into(), handle.mode);
         match &self.files.backend {
-            FilesBackend::Preview { vfs, .. } => {
-                let record =
+            FilesBackend::Preview { vfs, fixture, .. } => {
+                let result = fixture.files_call(self.generation, "persistHandle", || {
+                    admission?;
                     vfs.borrow_mut()
-                        .persist_bookmark(handle.kind, &handle.path, handle.mode, 0);
-                self.push_preview_completion(
-                    op_id,
-                    Ok(FileCompletionValue::BookmarkToken(record.token)),
-                );
+                        .persist_bookmark(handle.kind, &handle.path, handle.mode, 0)
+                        .map(FileCompletionValue::BookmarkToken)
+                });
+                self.push_preview_completion(op_id, result);
             }
             FilesBackend::Live { app_id, .. } => {
                 let app_id = app_id.clone();
                 self.spawn_live_op(op_id, move || {
+                    admission?;
                     let store = resolve_grant_store_path(&app_id)?;
                     let rec = persist_grant(
-                        &store,
-                        &app_id,
-                        handle.kind,
-                        Path::new(&handle.path),
-                        handle.mode,
+                        &store, &app_id, handle.kind, Path::new(&handle.path), handle.mode,
                     )?;
                     Ok(FileCompletionValue::BookmarkToken(rec.token))
                 });
@@ -1230,25 +1274,27 @@ impl Work {
     ) -> rquickjs::Result<Object<'js>> {
         let token = read_bounded_utf8(ctx, token_val, 256, "bookmark token")?;
         let (op_id, req) = self.create_file_request(ctx)?;
+        let ceiling = self.files.grant_ceiling;
         match &self.files.backend {
-            FilesBackend::Preview { vfs, .. } => {
-                let res = vfs.borrow().restore_bookmark(&token).map(|rec| {
-                    FileCompletionValue::Handle(Some(OpenHandle {
-                        kind: rec.kind,
-                        path: rec.path,
-                        mode: rec.mode,
-                    }))
+            FilesBackend::Preview { vfs, fixture, .. } => {
+                let result = fixture.files_call(self.generation, "restoreBookmark", || {
+                    let vfs = vfs.borrow();
+                    let rec = vfs.restore_workspace_grant(&token, ceiling)?;
+                    let kind = rec.kind.workspace_kind().expect("authorized workspace kind");
+                    Ok(FileCompletionValue::Handle(Some(OpenHandle {
+                        kind, path: rec.scope.path.clone(), mode: rec.mode,
+                    })))
                 });
-                self.push_preview_completion(op_id, res);
+                self.push_preview_completion(op_id, result);
             }
             FilesBackend::Live { app_id, .. } => {
                 let app_id = app_id.clone();
                 self.spawn_live_op(op_id, move || {
                     let store = resolve_grant_store_path(&app_id)?;
-                    let rec = restore_grant(&store, &token)?;
-                    let canonical = std::fs::canonicalize(&rec.path)?;
+                    let rec = restore_workspace_grant(&store, &token, ceiling)?;
+                    let canonical = std::fs::canonicalize(&rec.scope.path)?;
                     Ok(FileCompletionValue::Handle(Some(OpenHandle {
-                        kind: rec.kind,
+                        kind: rec.kind.workspace_kind().expect("authorized workspace kind"),
                         path: canonical.to_string_lossy().into_owned(),
                         mode: rec.mode,
                     })))
@@ -1258,41 +1304,82 @@ impl Work {
         Ok(req)
     }
 
-    fn list_file_bookmarks<'js>(self: &Rc<Self>, ctx: &Ctx<'js>) -> rquickjs::Result<Object<'js>> {
+    fn list_file_grants<'js>(
+        self: &Rc<Self>, ctx: &Ctx<'js>, inventory: GrantInventory,
+    ) -> rquickjs::Result<Object<'js>> {
         let (op_id, req) = self.create_file_request(ctx)?;
         match &self.files.backend {
-            FilesBackend::Preview { vfs, .. } => {
-                let list = vfs.borrow().list_bookmarks();
-                self.push_preview_completion(op_id, Ok(FileCompletionValue::Bookmarks(list)));
+            FilesBackend::Preview { vfs, fixture, .. } => {
+                let method = match inventory {
+                    GrantInventory::Bookmarks => "listBookmarks",
+                    GrantInventory::All => "listGrants",
+                };
+                let result = fixture.files_call(self.generation, method, || {
+                    let grants = vfs.borrow().list_grants().iter().filter_map(|record| {
+                        Some(GrantInfo {
+                            kind: inventory.kind_label(record.kind)?,
+                            token: record.token.clone(),
+                            label: record.label.clone(),
+                            mode: record.mode,
+                            created_ms: record.created_ms,
+                        })
+                    }).collect();
+                    Ok(FileCompletionValue::Grants(grants))
+                });
+                self.push_preview_completion(op_id, result);
             }
             FilesBackend::Live { app_id, .. } => {
                 let app_id = app_id.clone();
                 self.spawn_live_op(op_id, move || {
                     let store = resolve_grant_store_path(&app_id)?;
-                    list_grants(&store).map(FileCompletionValue::Bookmarks)
+                    let grants = list_grants(&store)?.into_iter().filter_map(|record| {
+                        Some(GrantInfo {
+                            kind: inventory.kind_label(record.kind)?,
+                            token: record.token,
+                            label: record.label,
+                            mode: record.mode,
+                            created_ms: record.created_ms,
+                        })
+                    }).collect();
+                    Ok(FileCompletionValue::Grants(grants))
                 });
             }
         }
         Ok(req)
     }
 
-    fn revoke_file_bookmark<'js>(
+    fn revoke_file_grant<'js>(
         self: &Rc<Self>,
         ctx: &Ctx<'js>,
         token_val: Value<'js>,
+        inventory: GrantInventory,
     ) -> rquickjs::Result<Object<'js>> {
         let token = read_bounded_utf8(ctx, token_val, 256, "bookmark token")?;
         let (op_id, req) = self.create_file_request(ctx)?;
         match &self.files.backend {
-            FilesBackend::Preview { vfs, .. } => {
-                let removed = vfs.borrow_mut().revoke_bookmark(&token);
-                self.push_preview_completion(op_id, Ok(FileCompletionValue::Bool(removed)));
+            FilesBackend::Preview { vfs, fixture, .. } => {
+                let method = match inventory {
+                    GrantInventory::Bookmarks => "revokeBookmark",
+                    GrantInventory::All => "revokeGrant",
+                };
+                let result = fixture.files_call(self.generation, method, || {
+                    let mut vfs = vfs.borrow_mut();
+                    let removed = match inventory {
+                        GrantInventory::Bookmarks => vfs.revoke_bookmark(&token),
+                        GrantInventory::All => vfs.revoke_grant(&token),
+                    };
+                    Ok(FileCompletionValue::Bool(removed))
+                });
+                self.push_preview_completion(op_id, result);
             }
             FilesBackend::Live { app_id, .. } => {
                 let app_id = app_id.clone();
                 self.spawn_live_op(op_id, move || {
                     let store = resolve_grant_store_path(&app_id)?;
-                    revoke_grant(&store, &token).map(FileCompletionValue::Bool)
+                    match inventory {
+                        GrantInventory::Bookmarks => revoke_workspace_grant(&store, &token),
+                        GrantInventory::All => revoke_grant(&store, &token),
+                    }.map(FileCompletionValue::Bool)
                 });
             }
         }
@@ -1401,8 +1488,8 @@ impl Work {
                                 self.register_handle(ctx, h)?.into_value()
                             }
                             FileCompletionValue::BookmarkToken(tok) => tok.into_js(ctx)?,
-                            FileCompletionValue::Bookmarks(list) => {
-                                bookmarks_to_js(ctx, list)?.into_value()
+                            FileCompletionValue::Grants(list) => {
+                                grants_to_js(ctx, list)?.into_value()
                             }
                         };
                         pending.resolve.restore(ctx)?.call::<_, ()>((js_val,))
@@ -1649,21 +1736,15 @@ fn dir_entries_to_js<'js>(ctx: &Ctx<'js>, entries: Vec<DirEntry>) -> rquickjs::R
     Ok(arr)
 }
 
-fn bookmarks_to_js<'js>(
+fn grants_to_js<'js>(
     ctx: &Ctx<'js>,
-    records: Vec<BookmarkRecord>,
+    records: Vec<GrantInfo>,
 ) -> rquickjs::Result<Array<'js>> {
     let arr = Array::new(ctx.clone())?;
     for (idx, rec) in records.into_iter().enumerate() {
         let obj = Object::new(ctx.clone())?;
         obj.prop("token", data_property(rec.token.as_str()))?;
-        obj.prop(
-            "kind",
-            data_property(match rec.kind {
-                HandleKind::File => "file",
-                HandleKind::Dir => "dir",
-            }),
-        )?;
+        obj.prop("kind", data_property(rec.kind))?;
         obj.prop("label", data_property(rec.label.as_str()))?;
         obj.prop("mode", data_property(rec.mode.as_str()))?;
         obj.prop("createdMs", data_property(rec.created_ms as f64))?;

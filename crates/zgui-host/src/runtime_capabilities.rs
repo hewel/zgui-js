@@ -367,6 +367,7 @@ mod tests {
                     ("$XDG_DATA_HOME/cache", FileMode::Read),
                     ("$XDG_DOCUMENTS_DIR/notes", FileMode::Read),
                 ].into_iter().map(|(path, mode)| FileDirectoryGrant { path: path.into(), mode }).collect(),
+                ..Default::default()
             },
             ..Default::default()
         };

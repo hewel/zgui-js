@@ -1,11 +1,11 @@
-//! Per-app persistent handle bookmark store at `$XDG_STATE_HOME/zgui-host/grants/<appId>.json`.
+//! Per-app persistent filesystem grants at `$XDG_STATE_HOME/zgui-host/grants/<appId>.json`.
 #![forbid(unsafe_code)]
 
 use std::{
     env,
     fs::{self, File},
     io::Read,
-    os::unix::fs::PermissionsExt,
+    os::unix::fs::{DirBuilderExt, PermissionsExt},
     path::{Path, PathBuf},
     sync::atomic::{AtomicU64, Ordering},
     time::{SystemTime, UNIX_EPOCH},
@@ -20,26 +20,123 @@ use crate::{
     sqlite::is_safe_app_id,
 };
 
-const MAX_BOOKMARKS_PER_APP: usize = 256;
+pub const MAX_GRANTS_PER_APP: usize = 256;
 static TOKEN_COUNTER: AtomicU64 = AtomicU64::new(1);
+
+/// Persistent filesystem authority, distinct from the kind of live handle.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum GrantKind {
+    WorkspaceFile,
+    WorkspaceDir,
+    SystemDir,
+}
+
+impl From<HandleKind> for GrantKind {
+    fn from(kind: HandleKind) -> Self {
+        match kind {
+            HandleKind::File => Self::WorkspaceFile,
+            HandleKind::Dir => Self::WorkspaceDir,
+        }
+    }
+}
+
+impl GrantKind {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::WorkspaceFile => "workspace-file",
+            Self::WorkspaceDir => "workspace-dir",
+            Self::SystemDir => "system-dir",
+        }
+    }
+
+    pub const fn workspace_kind(self) -> Option<HandleKind> {
+        match self {
+            Self::WorkspaceFile => Some(HandleKind::File),
+            Self::WorkspaceDir => Some(HandleKind::Dir),
+            Self::SystemDir => None,
+        }
+    }
+}
+
+/// The active package's maximum authority for persisted workspace handles.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum WorkspaceGrantCeiling {
+    Disabled,
+    ReadOnly,
+    #[default]
+    ReadWrite,
+}
+
+impl WorkspaceGrantCeiling {
+    /// Check authority before materializing a handle or persisting a new grant.
+    pub fn authorize(self, kind: GrantKind, mode: FileMode) -> Result<HandleKind, ServiceError> {
+        match kind.workspace_kind() {
+            Some(kind)
+                if match self {
+                    Self::ReadWrite => true,
+                    Self::ReadOnly => !mode.can_write(),
+                    Self::Disabled => false,
+                } =>
+            {
+                Ok(kind)
+            }
+            _ => Err(ServiceError::new(
+                "E_CAPABILITY",
+                "grant exceeds the package workspace grant capability",
+            )),
+        }
+    }
+}
 
 /// Serialized persistent grant record isolated per `appId`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct BookmarkRecord {
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GrantRecord {
     pub token: String,
-    pub kind: HandleKind,
-    pub path: String,
+    pub kind: GrantKind,
     pub label: String,
+    #[serde(rename = "accessMode")]
     pub mode: FileMode,
     pub created_ms: u64,
+    #[serde(rename = "scopeMetadata")]
+    pub scope: GrantScope,
 }
 
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+/// Filesystem scope persisted with a grant; not exposed in the JS inventory.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GrantScope {
+    pub path: String,
+}
+
+#[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct GrantHeader {
+    schema_version: u32,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct LegacyBookmark {
+    token: String,
+    kind: HandleKind,
+    path: String,
+    label: String,
+    mode: FileMode,
+    created_ms: u64,
+}
+
+#[derive(Deserialize)]
+struct LegacyFile {
+    bookmarks: Vec<LegacyBookmark>,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct GrantFile {
     schema_version: u32,
-    bookmarks: Vec<BookmarkRecord>,
+    grants: Vec<GrantRecord>,
 }
 
 /// Resolves `$XDG_STATE_HOME/zgui-host/grants/<appId>.json`.
@@ -102,98 +199,199 @@ fn now_ms() -> u64 {
 }
 
 fn load_grant_file(store_path: &Path) -> Result<GrantFile, ServiceError> {
-    match fs::read(store_path) {
-        Ok(bytes) => {
-            let parsed: GrantFile = serde_json::from_slice(&bytes)
-                .map_err(|err| ServiceError::new("Io", format!("corrupted grant store: {err}")))?;
-            Ok(parsed)
+    let bytes = match fs::read(store_path) {
+        Ok(bytes) => bytes,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(GrantFile {
+                schema_version: 2,
+                grants: Vec::new(),
+            });
         }
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(GrantFile {
-            schema_version: 1,
-            bookmarks: Vec::new(),
-        }),
-        Err(err) => Err(map_io_error(err)),
+        Err(err) => return Err(map_io_error(err)),
+    };
+    let corrupted = |err| ServiceError::new("Io", format!("corrupted grant store: {err}"));
+    let header: GrantHeader = serde_json::from_slice(&bytes).map_err(corrupted)?;
+    let file: GrantFile = match header.schema_version {
+        1 => {
+            let legacy: LegacyFile = serde_json::from_slice(&bytes).map_err(corrupted)?;
+            GrantFile {
+                schema_version: 1,
+                grants: legacy
+                    .bookmarks
+                    .into_iter()
+                    .map(|b| GrantRecord {
+                        token: b.token,
+                        kind: b.kind.into(),
+                        scope: GrantScope { path: b.path },
+                        label: b.label,
+                        mode: b.mode,
+                        created_ms: b.created_ms,
+                    })
+                    .collect(),
+            }
+        }
+        2 => serde_json::from_slice(&bytes).map_err(corrupted)?,
+        _ => {
+            return Err(ServiceError::new(
+                "Io",
+                "unsupported grant store schema version",
+            ));
+        }
+    };
+    if file.grants.len() > MAX_GRANTS_PER_APP {
+        return Err(grant_limit());
     }
+    Ok(file)
 }
 
-fn save_grant_file(store_path: &Path, data: &GrantFile) -> Result<(), ServiceError> {
-    if let Some(parent) = store_path.parent() {
-        fs::create_dir_all(parent).map_err(map_io_error)?;
-        let _ = fs::set_permissions(parent, fs::Permissions::from_mode(0o700));
-    }
-    let bytes = serde_json::to_vec_pretty(data)
-        .map_err(|err| ServiceError::new("Io", err.to_string()))?;
+pub(super) fn grant_limit() -> ServiceError {
+    ServiceError::new(
+        "E_LIMIT",
+        format!("grant limit ({MAX_GRANTS_PER_APP}) reached for app"),
+    )
+}
+
+fn grant_parent(store_path: &Path) -> Result<&Path, ServiceError> {
+    store_path
+        .parent()
+        .filter(|path| !path.as_os_str().is_empty())
+        .ok_or_else(|| ServiceError::new("InvalidPath", "grant store has no parent directory"))
+}
+
+// Lock the directory, not the ledger inode: each atomic rewrite replaces that inode.
+fn lock_grant_directory(parent: &Path) -> Result<Option<File>, ServiceError> {
+    let dir = match File::open(parent) {
+        Ok(dir) => dir,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => return Err(map_io_error(err)),
+    };
+    dir.lock().map_err(map_io_error)?;
+    Ok(Some(dir))
+}
+
+fn save_grant_file(store_path: &Path, data: &mut GrantFile) -> Result<(), ServiceError> {
+    fs::set_permissions(grant_parent(store_path)?, fs::Permissions::from_mode(0o700))
+        .map_err(map_io_error)?;
+    data.schema_version = 2;
+    let bytes =
+        serde_json::to_vec_pretty(data).map_err(|err| ServiceError::new("Io", err.to_string()))?;
     atomic_write_bytes(store_path, &bytes, Some(0o600))
 }
 
-/// Persists a bookmark for `canonical_path` in `store_path`, returning its opaque token.
+/// Persists a workspace bookmark, returning its opaque token and metadata.
 pub fn persist_grant(
     store_path: &Path,
     app_id: &str,
     kind: HandleKind,
     canonical_path: &Path,
     mode: FileMode,
-) -> Result<BookmarkRecord, ServiceError> {
+) -> Result<GrantRecord, ServiceError> {
+    let parent = grant_parent(store_path)?;
+    fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(parent)
+        .map_err(map_io_error)?;
+    let _lock = lock_grant_directory(parent)?
+        .ok_or_else(|| ServiceError::new("NotFound", "grant store directory disappeared"))?;
     let mut file = load_grant_file(store_path)?;
-    let path_str = canonical_path.to_string_lossy().into_owned();
-    if let Some(existing) = file
-        .bookmarks
-        .iter_mut()
-        .find(|b| b.kind == kind && b.path == path_str)
+    let kind = kind.into();
+    let path_str = canonical_path.to_string_lossy();
+    let index = if let Some(index) = file
+        .grants
+        .iter()
+        .position(|b| b.kind == kind && b.scope.path == path_str)
     {
         if mode.can_write() {
-            existing.mode = FileMode::ReadWrite;
+            file.grants[index].mode = FileMode::ReadWrite;
         }
-        let cloned = existing.clone();
-        save_grant_file(store_path, &file)?;
-        return Ok(cloned);
-    }
-    if file.bookmarks.len() >= MAX_BOOKMARKS_PER_APP {
-        return Err(ServiceError::new(
-            "E_LIMIT",
-            format!("bookmark limit ({MAX_BOOKMARKS_PER_APP}) reached for app"),
-        ));
-    }
-    let label = canonical_path
-        .file_name()
-        .map(|s| s.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "/".to_owned());
-    let record = BookmarkRecord {
-        token: generate_bookmark_token(app_id, &path_str),
-        kind,
-        path: path_str,
-        label,
-        mode,
-        created_ms: now_ms(),
+        index
+    } else {
+        let index = file.grants.len();
+        if index >= MAX_GRANTS_PER_APP {
+            return Err(grant_limit());
+        }
+        file.grants.push(GrantRecord {
+            token: generate_bookmark_token(app_id, &path_str),
+            kind,
+            scope: GrantScope {
+                path: path_str.into_owned(),
+            },
+            label: canonical_path
+                .file_name()
+                .map_or_else(|| "/".to_owned(), |s| s.to_string_lossy().into_owned()),
+            mode,
+            created_ms: now_ms(),
+        });
+        index
     };
-    file.schema_version = 1;
-    file.bookmarks.push(record.clone());
-    save_grant_file(store_path, &file)?;
-    Ok(record)
+    save_grant_file(store_path, &mut file)?;
+    Ok(file.grants.swap_remove(index))
 }
 
-/// Restores a previously persisted bookmark by opaque token.
-pub fn restore_grant(store_path: &Path, token: &str) -> Result<BookmarkRecord, ServiceError> {
-    let file = load_grant_file(store_path)?;
-    file.bookmarks
-        .into_iter()
-        .find(|b| b.token == token)
-        .ok_or_else(|| ServiceError::new("NotFound", "bookmark token not found or revoked"))
+pub(super) fn grant_not_found() -> ServiceError {
+    ServiceError::new("NotFound", "bookmark token not found or revoked")
 }
 
-/// Lists all persisted bookmarks for this app.
-pub fn list_grants(store_path: &Path) -> Result<Vec<BookmarkRecord>, ServiceError> {
-    Ok(load_grant_file(store_path)?.bookmarks)
-}
-
-/// Revokes a bookmark by opaque token, returning `true` if it existed.
-pub fn revoke_grant(store_path: &Path, token: &str) -> Result<bool, ServiceError> {
+/// Redeems only workspace grants admitted by the current package, never a system grant.
+pub fn restore_workspace_grant(
+    store_path: &Path,
+    token: &str,
+    ceiling: WorkspaceGrantCeiling,
+) -> Result<GrantRecord, ServiceError> {
+    let Some(_lock) = lock_grant_directory(grant_parent(store_path)?)? else {
+        return Err(grant_not_found());
+    };
     let mut file = load_grant_file(store_path)?;
-    let before = file.bookmarks.len();
-    file.bookmarks.retain(|b| b.token != token);
-    let removed = file.bookmarks.len() != before;
-    if removed {
-        save_grant_file(store_path, &file)?;
+    let index = file
+        .grants
+        .iter()
+        .position(|r| r.token == token)
+        .ok_or_else(grant_not_found)?;
+    ceiling.authorize(file.grants[index].kind, file.grants[index].mode)?;
+    if file.schema_version == 1 {
+        save_grant_file(store_path, &mut file)?;
+    }
+    Ok(file.grants.swap_remove(index))
+}
+
+/// Lists all persisted grants for this app, upgrading an existing legacy ledger.
+pub fn list_grants(store_path: &Path) -> Result<Vec<GrantRecord>, ServiceError> {
+    let Some(_lock) = lock_grant_directory(grant_parent(store_path)?)? else {
+        return Ok(Vec::new());
+    };
+    let mut file = load_grant_file(store_path)?;
+    if file.schema_version == 1 {
+        save_grant_file(store_path, &mut file)?;
+    }
+    Ok(file.grants)
+}
+
+/// Revokes a grant by opaque token, returning `true` if it existed.
+pub fn revoke_grant(store_path: &Path, token: &str) -> Result<bool, ServiceError> {
+    revoke(store_path, token, |_| true)
+}
+
+/// Revokes a workspace bookmark without touching system grants.
+pub fn revoke_workspace_grant(store_path: &Path, token: &str) -> Result<bool, ServiceError> {
+    revoke(store_path, token, |kind| kind.workspace_kind().is_some())
+}
+
+fn revoke(
+    store_path: &Path,
+    token: &str,
+    includes: impl Fn(GrantKind) -> bool,
+) -> Result<bool, ServiceError> {
+    let Some(_lock) = lock_grant_directory(grant_parent(store_path)?)? else {
+        return Ok(false);
+    };
+    let mut file = load_grant_file(store_path)?;
+    let before = file.grants.len();
+    file.grants
+        .retain(|b| b.token != token || !includes(b.kind));
+    let removed = file.grants.len() != before;
+    if removed || file.schema_version == 1 {
+        save_grant_file(store_path, &mut file)?;
     }
     Ok(removed)
 }
@@ -201,6 +399,67 @@ pub fn revoke_grant(store_path: &Path, token: &str) -> Result<bool, ServiceError
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn denied_legacy_restore_leaves_ledger_and_target_untouched_then_list_migrates() {
+        use std::os::unix::fs::MetadataExt;
+
+        let dir = env::temp_dir().join(format!(
+            "zgui-grants-migration-{}-{}",
+            std::process::id(),
+            TOKEN_COUNTER.fetch_add(1, Ordering::Relaxed)
+        ));
+        let ledger_dir = dir.join("grants");
+        fs::create_dir_all(&ledger_dir).unwrap();
+        let target = dir.join("notes.txt");
+        fs::write(&target, "keep me").unwrap();
+        let store = ledger_dir.join("app.json");
+        let legacy = serde_json::to_vec(&serde_json::json!({
+            "schemaVersion": 1, "bookmarks": [
+                {"token": "saved", "kind": "file", "path": target, "label": "My notes", "mode": "readwrite", "createdMs": 42},
+                {"token": "folder", "kind": "dir", "path": dir, "label": "My workspace", "mode": "read", "createdMs": 43}
+            ]
+        })).unwrap();
+        fs::write(&store, &legacy).unwrap();
+        let original = File::open(&store).unwrap();
+
+        assert_eq!(
+            restore_workspace_grant(&store, "saved", WorkspaceGrantCeiling::ReadOnly)
+                .unwrap_err()
+                .code,
+            "E_CAPABILITY"
+        );
+        assert_eq!(fs::read(&store).unwrap(), legacy);
+        assert_eq!(fs::read_to_string(&target).unwrap(), "keep me");
+
+        let grants = list_grants(&store).unwrap();
+        assert_eq!(grants[0].kind, GrantKind::WorkspaceFile);
+        assert_eq!(grants[1].kind, GrantKind::WorkspaceDir);
+        assert_eq!(grants[0].label, "My notes");
+        assert_eq!(grants[0].created_ms, 42);
+        assert_eq!(
+            restore_workspace_grant(&store, "saved", WorkspaceGrantCeiling::ReadWrite).unwrap(),
+            grants[0]
+        );
+        let migrated: serde_json::Value =
+            serde_json::from_slice(&fs::read(&store).unwrap()).unwrap();
+        assert_eq!(migrated["schemaVersion"], 2);
+        assert_eq!(migrated["grants"][1]["kind"], "workspace-dir");
+        assert_eq!(migrated["grants"][0]["accessMode"], "readwrite");
+        assert_eq!(
+            migrated["grants"][0]["scopeMetadata"]["path"],
+            target.to_str().unwrap()
+        );
+        let metadata = fs::metadata(&store).unwrap();
+        assert_ne!(original.metadata().unwrap().ino(), metadata.ino());
+        assert_eq!(metadata.permissions().mode() & 0o777, 0o600);
+        assert_eq!(
+            fs::metadata(&ledger_dir).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+        assert_eq!(fs::read_dir(&ledger_dir).unwrap().count(), 1);
+        fs::remove_dir_all(dir).unwrap();
+    }
 
     #[test]
     fn bookmark_store_isolates_apps_and_supports_roundtrip_and_revoke() {
@@ -213,24 +472,69 @@ mod tests {
         let app_b = dir.join("app-b.json");
         let target = Path::new("/tmp/workspace-demo");
 
-        let rec = persist_grant(&app_a, "app-a", HandleKind::Dir, target, FileMode::ReadWrite)
-            .expect("persist grant");
+        let rec = persist_grant(
+            &app_a,
+            "app-a",
+            HandleKind::Dir,
+            target,
+            FileMode::ReadWrite,
+        )
+        .expect("persist grant");
         assert_eq!(rec.token.len(), 32);
         assert_eq!(rec.label, "workspace-demo");
 
         // App A can restore and list it.
-        let restored = restore_grant(&app_a, &rec.token).expect("restore grant");
+        let restored =
+            restore_workspace_grant(&app_a, &rec.token, WorkspaceGrantCeiling::ReadWrite)
+                .expect("restore grant");
         assert_eq!(restored, rec);
         assert_eq!(list_grants(&app_a).unwrap().len(), 1);
 
         // App B cannot restore App A's token.
-        assert!(restore_grant(&app_b, &rec.token).is_err());
+        assert!(
+            restore_workspace_grant(&app_b, &rec.token, WorkspaceGrantCeiling::ReadWrite).is_err()
+        );
 
         // Revoking removes it cleanly.
         assert!(revoke_grant(&app_a, &rec.token).unwrap());
         assert!(!revoke_grant(&app_a, &rec.token).unwrap());
-        assert!(restore_grant(&app_a, &rec.token).is_err());
+        assert!(
+            restore_workspace_grant(&app_a, &rec.token, WorkspaceGrantCeiling::ReadWrite).is_err()
+        );
 
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn full_ledger_still_allows_deduplication_and_revocation() {
+        let dir = env::temp_dir().join(format!(
+            "zgui-grant-cap-{}-{}",
+            std::process::id(),
+            TOKEN_COUNTER.fetch_add(1, Ordering::Relaxed)
+        ));
+        let store = dir.join("app.json");
+        for i in 0..256 {
+            let target = dir.join(i.to_string());
+            persist_grant(&store, "app", HandleKind::File, &target, FileMode::Read).unwrap();
+        }
+        let extra = dir.join("overflow");
+        assert_eq!(
+            persist_grant(&store, "app", HandleKind::File, &extra, FileMode::Read)
+                .unwrap_err()
+                .code,
+            "E_LIMIT"
+        );
+        let first = persist_grant(
+            &store,
+            "app",
+            HandleKind::File,
+            &dir.join("0"),
+            FileMode::ReadWrite,
+        )
+        .unwrap();
+        assert_eq!(list_grants(&store).unwrap().len(), 256);
+        assert!(revoke_grant(&store, &first.token).unwrap());
+        persist_grant(&store, "app", HandleKind::File, &extra, FileMode::Read).unwrap();
+        fs::remove_dir_all(dir).unwrap();
     }
 }

@@ -136,6 +136,8 @@
           "type": "object",
           "additionalProperties": false,
           "properties": {
+            "allowBookmarks": { "type": "boolean", "default": true },
+            "readOnlyGrants": { "type": "boolean", "default": false },
             "directories": {
               "type": "array",
               "default": [],

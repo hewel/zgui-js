@@ -146,7 +146,7 @@ impl Work {
     ) -> Rc<Self> {
         let WorkSession { package, capabilities, generation, assets, resolved, launch } = session;
         let allow_clipboard_read = capabilities.clipboard.read;
-        let files = files::FilesState::new(package.as_deref(), &assets, wake.clone());
+        let files = files::FilesState::new(package.as_deref(), capabilities.files.workspace_grant_ceiling(), &assets, wake.clone());
         let invocations = invocation::Invocations::new(&assets, launch);
         let locale = match &assets {
             AssetSource::Live(_) => host_services::locale::LocaleContext::live(),

@@ -211,6 +211,8 @@
             "ArrowRight",
             "Home",
             "End",
+            "PageUp",
+            "PageDown",
             "Backspace",
             "Delete"
           ]

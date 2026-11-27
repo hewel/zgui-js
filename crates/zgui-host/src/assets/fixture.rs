@@ -6,7 +6,7 @@ use host_services::{Completion, ServiceError};
 use host_services::locale::LocaleContext;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use std::{borrow::Cow, cell::RefCell, collections::{BTreeMap, VecDeque}, marker::PhantomData, path::Path, rc::Rc, sync::Arc};
+use std::{borrow::Cow, cell::RefCell, collections::{BTreeMap, BTreeSet, VecDeque}, marker::PhantomData, path::Path, rc::Rc, sync::Arc};
 use crate::schema::{deserialize_object,object_struct};
 
 mod external;
@@ -153,6 +153,18 @@ object_struct! {
 }
 
 object_struct! {
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    pub(crate) struct GrantFixture {
+        pub(crate) token: String,
+        pub(crate) kind: host_services::files::grants::GrantKind,
+        pub(crate) path: String,
+        pub(crate) mode: host_services::files::FileMode,
+        pub(crate) label: String,
+        pub(crate) created_ms: u64,
+    }
+}
+
+object_struct! {
     /// In-memory virtual filesystem and dialog configuration for preview.
     #[serde(rename_all = "camelCase", deny_unknown_fields)]
     pub(crate) struct FilesFixture {
@@ -166,6 +178,8 @@ object_struct! {
         pub(crate) dialogs: Vec<ScriptedDialogFixture>,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         pub(crate) bookmarks: Vec<BookmarkFixture>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        pub(crate) grants: Vec<GrantFixture>,
     }
 }
 
@@ -184,9 +198,15 @@ impl FilesFixture {
                 return Err(format!("fixture dialog path must be canonical absolute: {p:?}"));
             }
         }
-        for bookmark in &self.bookmarks {
-            if bookmark.token.is_empty() || !runtime_paths::canonical_absolute(&bookmark.path) {
-                return Err("fixture bookmark has invalid token or path".into());
+        use host_services::files::grants::MAX_GRANTS_PER_APP;
+        if self.bookmarks.len() + self.grants.len() > MAX_GRANTS_PER_APP {
+            return Err("fixture files grant count exceeds the per-app limit".into());
+        }
+        let mut tokens = BTreeSet::new();
+        for (token, path) in self.bookmarks.iter().map(|b| (&b.token, &b.path))
+            .chain(self.grants.iter().map(|g| (&g.token, &g.path))) {
+            if token.is_empty() || token.len() > 256 || !tokens.insert(token) || !runtime_paths::canonical_absolute(path) {
+                return Err("fixture grant has invalid or duplicate token or invalid path".into());
             }
         }
         Ok(())
@@ -786,10 +806,30 @@ impl FixtureRuntime {
             .unwrap_or_default()
     }
 
+    pub(crate) fn files_call<T>(
+        &self,
+        generation: u64,
+        method: &'static str,
+        operation: impl FnOnce() -> Result<T, ServiceError>,
+    ) -> Result<T, ServiceError> {
+        let id = self.registration_id().ok_or_else(|| ServiceError { code: "E_LIMIT", message: "fixture request limit reached".into() })?;
+        self.admission("files", method, id, generation).map_err(|error| ServiceError { code: error.code, message: error.message })?;
+        let result = operation();
+        let error = result.as_ref().err().map(|err| err.code);
+        let mut state = self.state.borrow_mut();
+        if let Some(call) = state.calls.get_mut(&id) {
+            call.error = error;
+            // Policy denials and missing tokens are real service outcomes, not injected faults.
+            call.acknowledged = true;
+        }
+        self.record(&mut state, "response", json!({"requestId":id,"errorCode":error}));
+        result
+    }
+
     /// Builds an isolated in-memory virtual filesystem seeded from `services.files`.
     pub(crate) fn build_preview_fs(&self) -> host_services::files::vfs::PreviewFs {
         use host_services::files::{
-            grants::BookmarkRecord,
+            grants::{GrantRecord, GrantScope},
             vfs::{PreviewFs, ScriptedDialog, ScriptedDialogKind},
         };
         let mut vfs = PreviewFs::default();
@@ -822,13 +862,23 @@ impl FixtureRuntime {
                     .filter(|s| !s.is_empty())
                     .unwrap_or("/")
                     .to_owned();
-                vfs.seed_bookmark(BookmarkRecord {
+                vfs.seed_grant(GrantRecord {
                     token: bm.token.clone(),
-                    kind: bm.kind,
-                    path: bm.path.clone(),
+                    kind: bm.kind.into(),
+                    scope: GrantScope { path: bm.path.clone() },
                     label,
                     mode: bm.mode,
                     created_ms: 0,
+                });
+            }
+            for grant in &cfg.grants {
+                vfs.seed_grant(GrantRecord {
+                    token: grant.token.clone(),
+                    kind: grant.kind,
+                    scope: GrantScope { path: grant.path.clone() },
+                    label: grant.label.clone(),
+                    mode: grant.mode,
+                    created_ms: grant.created_ms,
                 });
             }
         }
@@ -859,6 +909,7 @@ impl FixtureRuntime {
             ("assets", "readTextAsset") | ("sockets", "connectUnixSocket" | "send")
             | ("commands", "spawnCommand") | ("control", "onControlMessage" | "reply")
             | ("activation", "getInitialActivation" | "onActivation")
+            | ("files", "persistHandle" | "restoreBookmark" | "listBookmarks" | "revokeBookmark" | "listGrants" | "revokeGrant")
             | ("network", "httpRequest" | "openEventStream" | "connectWebSocket"))
         {
             return Err(failure("E_ASSERTION", format!("unknown fixture method {service}.{method}")));

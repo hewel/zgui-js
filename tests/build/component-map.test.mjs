@@ -71,7 +71,9 @@ test("component-map.md matches literal gallery testId vocabulary bidirectionally
   const codeTestIds = new Set();
   for (const file of await listTsxFiles(gallerySrcDir)) {
     const source = await readFile(file, "utf8");
-    for (const match of source.matchAll(/testId="([^"]+)"/g)) {
+    for (const match of source.matchAll(
+      /\b(?:testId|triggerTestId|contentTestId|calendarTestId)="([^"]+)"/g,
+    )) {
       codeTestIds.add(match[1]);
     }
   }

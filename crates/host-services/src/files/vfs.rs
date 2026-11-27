@@ -11,7 +11,12 @@ use crate::{
     ServiceError,
     files::{
         DirEntry, FileMode, FileStat, HandleKind, MAX_DIR_ENTRIES, MAX_READ_BYTES, MAX_WRITE_BYTES,
-        WatchEvent, WatchEventKind, grants::BookmarkRecord, parse_relative_segments,
+        WatchEvent, WatchEventKind,
+        grants::{
+            GrantRecord, GrantScope, MAX_GRANTS_PER_APP, WorkspaceGrantCeiling, grant_limit,
+            grant_not_found,
+        },
+        parse_relative_segments,
     },
 };
 
@@ -47,7 +52,7 @@ struct PreviewWatcher {
 pub struct PreviewFs {
     nodes: BTreeMap<String, VfsNode>,
     dialogs: VecDeque<ScriptedDialog>,
-    bookmarks: Vec<BookmarkRecord>,
+    bookmarks: Vec<GrantRecord>,
     watchers: BTreeMap<u64, PreviewWatcher>,
     next_token: u64,
     next_watcher_id: u64,
@@ -101,12 +106,15 @@ impl PreviewFs {
         self.dialogs.push_back(dialog);
     }
 
-    pub fn seed_bookmark(&mut self, record: BookmarkRecord) {
+    pub fn seed_grant(&mut self, record: GrantRecord) {
         self.bookmarks.push(record);
     }
 
     /// Consumes the next scripted dialog response matching `kind`.
-    pub fn take_dialog(&mut self, kind: ScriptedDialogKind) -> Result<Option<String>, ServiceError> {
+    pub fn take_dialog(
+        &mut self,
+        kind: ScriptedDialogKind,
+    ) -> Result<Option<String>, ServiceError> {
         let Some(next) = self.dialogs.pop_front() else {
             return Err(ServiceError::new(
                 "E_FIXTURE_CONTRACT",
@@ -198,8 +206,14 @@ impl PreviewFs {
                 }
                 Ok(bytes.clone())
             }
-            Some(_) => Err(ServiceError::new("InvalidPath", "target is not a regular file")),
-            None => Err(ServiceError::new("NotFound", format!("file not found: {path}"))),
+            Some(_) => Err(ServiceError::new(
+                "InvalidPath",
+                "target is not a regular file",
+            )),
+            None => Err(ServiceError::new(
+                "NotFound",
+                format!("file not found: {path}"),
+            )),
         }
     }
 
@@ -224,14 +238,25 @@ impl PreviewFs {
         let path = normalize_abs(abs_path);
         let parent = parent_abs(&path);
         if !matches!(self.nodes.get(&parent), Some(VfsNode::Dir)) {
-            return Err(ServiceError::new("NotFound", "parent directory does not exist"));
+            return Err(ServiceError::new(
+                "NotFound",
+                "parent directory does not exist",
+            ));
         }
         let existed = self.nodes.contains_key(&path);
         if matches!(self.nodes.get(&path), Some(VfsNode::Dir)) {
-            return Err(ServiceError::new("InvalidPath", "cannot overwrite directory with file"));
+            return Err(ServiceError::new(
+                "InvalidPath",
+                "cannot overwrite directory with file",
+            ));
         }
-        self.nodes
-            .insert(path.clone(), VfsNode::File { bytes, modified_ms: now_ms });
+        self.nodes.insert(
+            path.clone(),
+            VfsNode::File {
+                bytes,
+                modified_ms: now_ms,
+            },
+        );
         self.notify_watchers(
             &path,
             if existed {
@@ -258,8 +283,13 @@ impl PreviewFs {
                 size: 0,
                 modified_ms: None,
             }),
-            Some(VfsNode::Symlink { .. }) => Err(ServiceError::new("E_PATH_ESCAPE", "unresolved symlink")),
-            None => Err(ServiceError::new("NotFound", format!("path not found: {path}"))),
+            Some(VfsNode::Symlink { .. }) => {
+                Err(ServiceError::new("E_PATH_ESCAPE", "unresolved symlink"))
+            }
+            None => Err(ServiceError::new(
+                "NotFound",
+                format!("path not found: {path}"),
+            )),
         }
     }
 
@@ -267,7 +297,10 @@ impl PreviewFs {
         let root = normalize_abs(root);
         let dir = normalize_abs(dir_path);
         if !matches!(self.nodes.get(&dir), Some(VfsNode::Dir)) {
-            return Err(ServiceError::new("NotFound", format!("directory not found: {dir}")));
+            return Err(ServiceError::new(
+                "NotFound",
+                format!("directory not found: {dir}"),
+            ));
         }
         let prefix = if dir == "/" {
             "/".to_owned()
@@ -332,10 +365,18 @@ impl PreviewFs {
         Ok(entries)
     }
 
-    pub fn mkdir(&mut self, root: &str, rel_path: &str, recursive: bool) -> Result<(), ServiceError> {
+    pub fn mkdir(
+        &mut self,
+        root: &str,
+        rel_path: &str,
+        recursive: bool,
+    ) -> Result<(), ServiceError> {
         let segments = parse_relative_segments(rel_path)?;
         if segments.is_empty() {
-            return Err(ServiceError::new("InvalidPath", "mkdir requires a non-empty relative path"));
+            return Err(ServiceError::new(
+                "InvalidPath",
+                "mkdir requires a non-empty relative path",
+            ));
         }
         let root = normalize_abs(root);
         if recursive {
@@ -361,11 +402,17 @@ impl PreviewFs {
         } else {
             let target = self.resolve_scoped(&root, rel_path, true)?;
             if self.nodes.contains_key(&target) {
-                return Err(ServiceError::new("AlreadyExists", "directory already exists"));
+                return Err(ServiceError::new(
+                    "AlreadyExists",
+                    "directory already exists",
+                ));
             }
             let parent = parent_abs(&target);
             if !matches!(self.nodes.get(&parent), Some(VfsNode::Dir)) {
-                return Err(ServiceError::new("NotFound", "parent directory does not exist"));
+                return Err(ServiceError::new(
+                    "NotFound",
+                    "parent directory does not exist",
+                ));
             }
             self.nodes.insert(target.clone(), VfsNode::Dir);
             self.notify_watchers(&target, WatchEventKind::Create);
@@ -384,7 +431,10 @@ impl PreviewFs {
         let to = self.resolve_scoped(root, to_rel, true)?;
         let parent = parent_abs(&to);
         if !matches!(self.nodes.get(&parent), Some(VfsNode::Dir)) {
-            return Err(ServiceError::new("NotFound", "destination parent directory does not exist"));
+            return Err(ServiceError::new(
+                "NotFound",
+                "destination parent directory does not exist",
+            ));
         }
         let prefix = format!("{from}/");
         let moving: Vec<(String, VfsNode)> = self
@@ -408,9 +458,17 @@ impl PreviewFs {
         Ok(())
     }
 
-    pub fn remove(&mut self, root: &str, rel_path: &str, recursive: bool) -> Result<(), ServiceError> {
+    pub fn remove(
+        &mut self,
+        root: &str,
+        rel_path: &str,
+        recursive: bool,
+    ) -> Result<(), ServiceError> {
         if rel_path.is_empty() {
-            return Err(ServiceError::new("InvalidPath", "cannot remove directory root"));
+            return Err(ServiceError::new(
+                "InvalidPath",
+                "cannot remove directory root",
+            ));
         }
         let target = self.resolve_scoped(root, rel_path, false)?;
         let prefix = format!("{target}/");
@@ -432,53 +490,76 @@ impl PreviewFs {
         path: &str,
         mode: FileMode,
         now_ms: u64,
-    ) -> BookmarkRecord {
+    ) -> Result<String, ServiceError> {
+        let kind = kind.into();
         let normalized = normalize_abs(path);
         if let Some(existing) = self
             .bookmarks
             .iter_mut()
-            .find(|b| b.kind == kind && b.path == normalized)
+            .find(|b| b.kind == kind && b.scope.path == normalized)
         {
             if mode.can_write() {
                 existing.mode = FileMode::ReadWrite;
             }
-            return existing.clone();
+            return Ok(existing.token.clone());
         }
-        let id = self.next_token;
-        self.next_token += 1;
+        if self.bookmarks.len() >= MAX_GRANTS_PER_APP {
+            return Err(grant_limit());
+        }
+        let token = loop {
+            let id = self.next_token;
+            self.next_token += 1;
+            let token = format!("preview-bookmark-{id:08x}");
+            if self.bookmarks.iter().all(|record| record.token != token) {
+                break token;
+            }
+        };
         let label = normalized
             .rsplit('/')
             .next()
             .filter(|s| !s.is_empty())
             .unwrap_or("/")
             .to_owned();
-        let record = BookmarkRecord {
-            token: format!("preview-bookmark-{id:08x}"),
+        self.bookmarks.push(GrantRecord {
+            token: token.clone(),
             kind,
-            path: normalized,
+            scope: GrantScope { path: normalized },
             label,
             mode,
             created_ms: now_ms,
-        };
-        self.bookmarks.push(record.clone());
-        record
+        });
+        Ok(token)
     }
 
-    pub fn restore_bookmark(&self, token: &str) -> Result<BookmarkRecord, ServiceError> {
-        self.bookmarks
+    pub fn restore_workspace_grant(
+        &self,
+        token: &str,
+        ceiling: WorkspaceGrantCeiling,
+    ) -> Result<&GrantRecord, ServiceError> {
+        let record = self
+            .bookmarks
             .iter()
             .find(|b| b.token == token)
-            .cloned()
-            .ok_or_else(|| ServiceError::new("NotFound", "bookmark token not found or revoked"))
+            .ok_or_else(grant_not_found)?;
+        ceiling.authorize(record.kind, record.mode)?;
+        Ok(record)
     }
 
-    pub fn list_bookmarks(&self) -> Vec<BookmarkRecord> {
-        self.bookmarks.clone()
+    pub fn list_grants(&self) -> &[GrantRecord] {
+        &self.bookmarks
+    }
+
+    pub fn revoke_grant(&mut self, token: &str) -> bool {
+        self.revoke(token, |_| true)
     }
 
     pub fn revoke_bookmark(&mut self, token: &str) -> bool {
+        self.revoke(token, |record| record.kind.workspace_kind().is_some())
+    }
+
+    fn revoke(&mut self, token: &str, includes: impl Fn(&GrantRecord) -> bool) -> bool {
         let before = self.bookmarks.len();
-        self.bookmarks.retain(|b| b.token != token);
+        self.bookmarks.retain(|b| b.token != token || !includes(b));
         self.bookmarks.len() != before
     }
 

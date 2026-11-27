@@ -47,6 +47,10 @@ export type {
 } from "./button-group.js";
 export { Input, Textarea } from "./input.js";
 export type { InputProps, TextareaProps } from "./input.js";
+export { Calendar } from "./calendar.js";
+export type { CalendarProps, DateRangeValue } from "./calendar.js";
+export { DatePicker } from "./date-picker.js";
+export type { DatePickerProps } from "./date-picker.js";
 export { Label } from "./label.js";
 export type { LabelProps } from "./label.js";
 export { Checkbox, Switch, Toggle } from "./choices.js";

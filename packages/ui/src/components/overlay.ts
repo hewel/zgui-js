@@ -19,6 +19,7 @@ import type {
   NativeDismissReason,
   NativeElementProps,
   NativeEvent,
+  NativeFocusTrapOptions,
   NativeNode,
   NativeOverlayLayer,
   NativeRole,
@@ -70,6 +71,7 @@ interface OverlaySurfaceConfig {
   class: string;
   role: NativeRole;
   trap?: boolean;
+  focusTrap?: NativeFocusTrapOptions | undefined;
   lock?: boolean;
   surfaceClass?: boolean | undefined;
   onDismiss?: ((reason: NativeDismissReason) => void) | undefined;
@@ -169,7 +171,7 @@ function mountOverlay(
             const surface = createElement("box");
             context.content.ref(surface);
             presence.ref(surface);
-            if (config.trap) trapFocus(surface);
+            if (config.trap) trapFocus(surface, config.focusTrap);
             createDismissLayer(
               surface,
               reason => {
@@ -290,7 +292,7 @@ export function anchoredSurface(
   props: AnchoredContentProps,
   defaults: Pick<
     OverlaySurfaceConfig,
-    "class" | "role" | "trap" | "surfaceClass" | "onDismiss" | "children"
+    "class" | "role" | "trap" | "focusTrap" | "surfaceClass" | "onDismiss" | "children"
   >,
 ): NativeChild {
   return mountOverlay(state, props, {

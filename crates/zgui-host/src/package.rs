@@ -116,19 +116,44 @@ pub struct FileDirectoryGrant {
 }
 
 crate::schema::object_struct! {
-/// Local directory allowlist capability declarations.
-#[derive(Default, PartialEq, Eq)]
-#[serde(default, rename_all = "camelCase", deny_unknown_fields)]
+/// Directory allowlists and the ceiling for persisted workspace grants.
+#[derive(PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct FilesCapabilities {
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub directories: Vec<FileDirectoryGrant>,
+    #[serde(default = "default_allow_bookmarks", skip_serializing_if = "is_true")]
+    pub allow_bookmarks: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub read_only_grants: bool,
 }
+}
+
+fn is_true(value: &bool) -> bool { *value }
+
+fn default_allow_bookmarks() -> bool { true }
+
+impl Default for FilesCapabilities {
+    fn default() -> Self {
+        Self { directories: Vec::new(), allow_bookmarks: true, read_only_grants: false }
+    }
 }
 
 impl FilesCapabilities {
     #[must_use]
     pub(crate) fn is_empty(&self) -> bool {
-        self.directories.is_empty()
+        self.directories.is_empty() && self.allow_bookmarks && !self.read_only_grants
+    }
+
+    pub(crate) fn workspace_grant_ceiling(&self) -> host_services::files::grants::WorkspaceGrantCeiling {
+        use host_services::files::grants::WorkspaceGrantCeiling;
+        if !self.allow_bookmarks {
+            WorkspaceGrantCeiling::Disabled
+        } else if self.read_only_grants {
+            WorkspaceGrantCeiling::ReadOnly
+        } else {
+            WorkspaceGrantCeiling::ReadWrite
+        }
     }
 }
 
@@ -414,6 +439,8 @@ impl Capabilities {
                     .into_iter()
                     .map(|(path, mode)| FileDirectoryGrant { path, mode })
                     .collect(),
+                allow_bookmarks: self.files.allow_bookmarks && overlay.files.allow_bookmarks,
+                read_only_grants: self.files.read_only_grants || overlay.files.read_only_grants,
             },
             network,
         };
@@ -2107,6 +2134,7 @@ mod tests {
                         path: "$XDG_DATA_HOME/app".into(),
                         mode: host_services::files::FileMode::ReadWrite,
                     }],
+                    ..Default::default()
                 },
                 network: NetworkCapabilities {
                     origins: vec!["https://api.example.com".into()],

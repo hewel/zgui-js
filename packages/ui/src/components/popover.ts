@@ -1,6 +1,11 @@
 import { useContext } from "#solid";
 import { mergeProps } from "../renderer/index.js";
-import type { NativeChild, NativeElementProps, NativeNode } from "../types.js";
+import type {
+  NativeChild,
+  NativeElementProps,
+  NativeFocusTrapOptions,
+  NativeNode,
+} from "../types.js";
 import type { ButtonProps } from "./button.js";
 import {
   anchoredSurface,
@@ -47,6 +52,13 @@ export function PopoverDescription(props: PopoverDescriptionProps = {}): NativeN
 }
 
 export function PopoverContent(props: PopoverContentProps = {}): NativeChild {
+  return mountPopoverContent(props);
+}
+
+export function mountPopoverContent(
+  props: PopoverContentProps,
+  focusTrap?: NativeFocusTrapOptions,
+): NativeChild {
   useStylesheet(sheet);
   const context = useContext(OverlayContext);
   return anchoredSurface(
@@ -62,6 +74,6 @@ export function PopoverContent(props: PopoverContentProps = {}): NativeChild {
       },
       props,
     ),
-    { class: `${sheet.className} zui-popover`, role: "dialog", trap: true },
+    { class: `${sheet.className} zui-popover`, role: "dialog", trap: true, focusTrap },
   );
 }

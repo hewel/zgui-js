@@ -13,6 +13,10 @@ export type FileDirectoryGrant = {
 
 export type FilesCapabilities = {
   directories?: FileDirectoryGrant[];
+  /** Defaults to true for legacy gesture-authorized bookmarks. */
+  allowBookmarks?: boolean;
+  /** Prevent the persistence or restoration of readwrite workspace grants. */
+  readOnlyGrants?: boolean;
 };
 
 export type NetworkOriginRule = {

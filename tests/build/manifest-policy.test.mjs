@@ -117,6 +117,19 @@ test("host paths and file grants agree with the canonical package schema", async
   }
 });
 
+test("filesystem grant ceilings survive sealing and cannot be widened by overlays", async t => {
+  const publish = await publisher(t);
+  const base = { files: { readOnlyGrants: true, allowBookmarks: false } };
+  const overlay = { files: { readOnlyGrants: false, allowBookmarks: true } };
+  const { capabilities } = await publish({ capabilities: base }, { overlay });
+  assert.deepEqual(capabilities, base);
+  checkSchema(capabilities, props.capabilities);
+  assert.equal((await publish({ capabilities: overlay })).capabilities, undefined);
+  const invalid = { files: { readOnlyGrants: "false" } };
+  checkSchema(invalid, props.capabilities, false);
+  await assert.rejects(publish({ capabilities: invalid }), /readOnlyGrants must be a boolean/);
+});
+
 test("network policy canonicalizes origins and requires independent opt-ins per origin", async t => {
   const publish = await publisher(t);
   for (const { value, expected, error, schemaRejects } of cases.network) {

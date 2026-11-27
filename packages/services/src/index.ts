@@ -376,6 +376,9 @@ export type {
   WatchEventKind,
 } from "./files.js";
 
+export { listGrants, revokeGrant } from "./grants.js";
+export type { GrantToken, GrantKind, GrantAccessMode, GrantInfo } from "./grants.js";
+
 export { connectWebSocket, createScopedFetch, httpRequest, openEventStream } from "./network.js";
 export type {
   EventStream,

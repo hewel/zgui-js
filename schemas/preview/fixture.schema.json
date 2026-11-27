@@ -10,6 +10,8 @@
     "schemaVersion": { "type": "integer", "const": 1 },
     "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "\\S" },
     "activation": { "$ref": "#/$defs/activation" },
+    "locale": { "type": "string" },
+    "timeZone": { "type": "string" },
     "runtimeEnvironment": {
       "type": "object",
       "additionalProperties": false,
@@ -18,6 +20,7 @@
         "xdgRuntimeDir": { "$ref": "../package.schema.json#/$defs/literalHostPath" },
         "homeDir": { "$ref": "../package.schema.json#/$defs/literalHostPath" },
         "xdgDataHome": { "$ref": "../package.schema.json#/$defs/literalHostPath" },
+        "xdgDocumentsDir": { "$ref": "../package.schema.json#/$defs/literalHostPath" },
         "waylandDisplay": {
           "type": "string",
           "pattern": "^(?!\\.{1,2}(?![\\s\\S]))[^/\\\\\\u0000-\\u001f\\u007f-\\u009f]+(?![\\s\\S])"
@@ -63,6 +66,7 @@
             }
           }
         },
+        "files": { "$ref": "#/$defs/files" },
         "sockets": {
           "type": "array",
           "maxItems": 1024,
@@ -122,6 +126,72 @@
     }
   },
   "$defs": {
+    "filePath": {
+      "anyOf": [{ "const": "/" }, { "$ref": "../package.schema.json#/$defs/literalHostPath" }]
+    },
+    "grantToken": { "type": "string", "minLength": 1, "maxLength": 256 },
+    "files": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "files": {
+          "type": "object",
+          "propertyNames": { "$ref": "#/$defs/filePath" },
+          "additionalProperties": { "type": "string" }
+        },
+        "dirs": { "type": "array", "items": { "$ref": "#/$defs/filePath" } },
+        "symlinks": {
+          "type": "object",
+          "propertyNames": { "$ref": "#/$defs/filePath" },
+          "additionalProperties": { "type": "string" }
+        },
+        "dialogs": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["action"],
+            "properties": {
+              "action": { "enum": ["openFile", "saveFile", "openDirectory"] },
+              "path": { "anyOf": [{ "$ref": "#/$defs/filePath" }, { "type": "null" }] }
+            }
+          }
+        },
+        "bookmarks": {
+          "type": "array",
+          "maxItems": 256,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["token", "kind", "path", "mode"],
+            "properties": {
+              "token": { "$ref": "#/$defs/grantToken" },
+              "kind": { "enum": ["file", "dir"] },
+              "path": { "$ref": "#/$defs/filePath" },
+              "mode": { "enum": ["read", "readwrite"] }
+            }
+          }
+        },
+        "grants": {
+          "type": "array",
+          "maxItems": 256,
+          "description": "Grants and legacy bookmarks share a 256-record cap and must have distinct tokens.",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["token", "kind", "path", "mode", "label", "createdMs"],
+            "properties": {
+              "token": { "$ref": "#/$defs/grantToken" },
+              "kind": { "enum": ["workspace-file", "workspace-dir", "system-dir"] },
+              "path": { "$ref": "#/$defs/filePath" },
+              "mode": { "enum": ["read", "readwrite"] },
+              "label": { "type": "string" },
+              "createdMs": { "type": "integer", "minimum": 0 }
+            }
+          }
+        }
+      }
+    },
     "activation": {
       "type": "object",
       "additionalProperties": false,

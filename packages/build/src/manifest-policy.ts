@@ -271,7 +271,15 @@ function parseCapabilities(input: unknown, source: string): Capabilities {
       case "files": {
         if (!value || typeof value !== "object" || Array.isArray(value))
           throw new Error(`${field} must be an object`);
+        const files: NonNullable<Capabilities["files"]> = {};
         for (const [subKey, subVal] of Object.entries(value as Record<string, unknown>)) {
+          if (subKey === "allowBookmarks" || subKey === "readOnlyGrants") {
+            if (typeof subVal !== "boolean")
+              throw new Error(`${field}.${subKey} must be a boolean`);
+            if (subKey === "allowBookmarks" && !subVal) files.allowBookmarks = false;
+            if (subKey === "readOnlyGrants" && subVal) files.readOnlyGrants = true;
+            continue;
+          }
           if (subKey !== "directories") throw new Error(`Unknown capability: ${field}.${subKey}`);
           if (!Array.isArray(subVal)) throw new Error(`${field}.directories must be an array`);
           const seen = new Set<string>();
@@ -294,8 +302,9 @@ function parseCapabilities(input: unknown, source: string): Capabilities {
             seen.add(record.path);
             dirs.push({ path: record.path, mode: record.mode });
           }
-          if (dirs.length) capabilities.files = { directories: dirs };
+          if (dirs.length) files.directories = dirs;
         }
+        if (Object.keys(files).length) capabilities.files = files;
         break;
       }
       case "network": {
@@ -482,13 +491,15 @@ async function mergeCapabilities(
     const existing = fileDirs.get(grant.path);
     if (!existing || grant.mode === "readwrite") fileDirs.set(grant.path, grant.mode);
   }
+  const files: NonNullable<Capabilities["files"]> = {};
   if (fileDirs.size) {
-    merged.files = {
-      directories: [...fileDirs.entries()]
-        .sort(([a], [b]) => a.localeCompare(b))
-        .map(([dirPath, mode]) => ({ path: dirPath, mode })),
-    };
+    files.directories = [...fileDirs.entries()]
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([dirPath, mode]) => ({ path: dirPath, mode }));
   }
+  if (sources.some(source => source.files?.allowBookmarks === false)) files.allowBookmarks = false;
+  if (sources.some(source => source.files?.readOnlyGrants)) files.readOnlyGrants = true;
+  if (Object.keys(files).length) merged.files = files;
   const networkSources = sources
     .map(source => source.network)
     .filter((net): net is NonNullable<Capabilities["network"]> => net !== undefined);

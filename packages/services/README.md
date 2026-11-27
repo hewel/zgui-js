@@ -246,6 +246,26 @@ Both launchers accept at most 64 arguments totaling 64 KiB of UTF-8.
 Preview uses the fixture's `activation` and scenario `service.emit` channel
 `activation` without reading ambient launch state or opening sockets.
 
+## Persistent filesystem grants
+
+`listGrants()` returns this application's `GrantInfo` records (`token`, `kind`,
+`label`, `mode`, `createdMs`), never the underlying pathname. `GrantToken` is
+opaque; `GrantKind` is `workspace-file`, `workspace-dir` or reserved `system-dir`,
+and `GrantAccessMode` is `read` or `readwrite`. `revokeGrant(token)` returns
+whether the entry existed. It prevents future restoration without closing
+existing live handles or touching the underlying filesystem resource.
+
+`persistHandle`, `restoreBookmark`, `listBookmarks` and `revokeBookmark` use the
+same ledger. The bookmark inventory and revocation API remain workspace-only and
+continue to use `file` / `dir`. The host upgrades existing bookmarks without
+changing their tokens. `restoreBookmark` never restores a `system-dir` grant.
+
+Set `capabilities.files.allowBookmarks: false` to disable workspace grant
+persistence and restoration, or `capabilities.files.readOnlyGrants: true` to
+deny only `readwrite` grants. A denied restore rejects with `E_CAPABILITY` and
+leaves the record and target unchanged; those grants can still be listed and
+revoked. Omission preserves legacy behavior.
+
 ## Reactive persistence and query adapters
 
 Keep Solid 2.0 as the sole client state model (`createSignal` → `createContext` → `createStore` / `createProjection` / `reconcile`). `@hewel/zgui-services` provides two narrow owner-scoped adapters where Solid meets Native Host I/O:

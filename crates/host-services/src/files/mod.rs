@@ -11,7 +11,7 @@ use std::{
     env,
     fs::{self, File, OpenOptions},
     io::{self, Read, Write},
-    os::unix::fs::PermissionsExt,
+    os::unix::fs::{OpenOptionsExt, PermissionsExt},
     path::{Component, Path, PathBuf},
     sync::atomic::{AtomicU64, Ordering},
     time::UNIX_EPOCH,
@@ -317,6 +317,7 @@ pub fn atomic_write_bytes(
         match OpenOptions::new()
             .write(true)
             .create_new(true)
+            .mode(mode_octal.unwrap_or(0o666))
             .open(&candidate)
         {
             Ok(opened) => {
