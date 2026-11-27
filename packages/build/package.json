@@ -1,6 +1,6 @@
 {
   "name": "@hewel/zgui-build",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Programmatic compiler, Lightning CSS Modules pipeline, tsrs typechecker, host resolver, and app packager for zgui-js",
   "license": "Apache-2.0",
   "type": "module",

@@ -7,10 +7,39 @@ packages version in lockstep using [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-11-27
+
+### Added
+
+- Export Wayland `xdg_activation_v1` external focus-handoff tokens (`requestActivationToken`,
+  `ActivationTokenOptions`) and lock-modifier queries (`getCapsLock`, `useCapsLock`, plus
+  queue-time `NativeEvent.modifiers.{capsLock,numLock}` and `SessionLockSurface` focus modifier
+  replay) from `@hewel/zgui`, backed by unforgeable physical-input grants and fail-closed session
+  revocation.
+- Add `zgui-js typecheck` CLI command (enabled by default in `zgui-js init` templates), export
+  multi-root `syncCssModuleTypes` and `SyncCssModuleTypesOptions` from `@hewel/zgui-build`, add
+  `BuildApplicationOptions.cssModuleInclude`, and watch external `tsconfig.json` CSS Module roots
+  during `zgui-js dev`.
+- Integrate `eslint-plugin-solid` (`0.20.1`) into `@hewel/zgui/oxlint`, add the
+  `@hewel/zgui/oxlint/strict` preset (`zgui/prefer-stylesheet`), enable
+  `zgui/no-static-component-stylesheet` and `zgui/no-getter-object-spread` in
+  `@hewel/zgui/oxlint/recommended`, and ship precompiled TypeScript Oxlint plugins under
+  `@hewel/zgui` (`dist/oxlint/*.js`).
+
 ### Fixed
 
 - Pure shells apply CSS-only live reloads only in dev mode. A failed live stylesheet swap falls
   back to staged replacement, preserving the last healthy generation if the candidate is rejected.
+- Prioritize explicit `--host-root` ahead of installed `@hewel/zgui-host-*` packages (failing
+  closed when missing or invalid) and report conflicting module paths when duplicate Solid runtimes
+  are detected.
+- Surface plain `Error` `name`/`message` properties and QuickJS `[[ErrorData]]` stack traces in
+  `console.*` without invoking user-defined getters.
+- Rasterize SVG images at exact device-pixel demand so scaled vector assets stay crisp on HiDPI
+  outputs.
+- Resolve Solid 2.0 dev-mode reactive scope warnings, Cargo checkout ABI probing and single-pass
+  bytecode packaging in the host runner, and managed `ShellSurface` theme and reduced-motion signal
+  propagation.
 
 ## [0.1.2] - 2026-11-26
 
@@ -89,6 +118,7 @@ All 6 public packages publish in lockstep at `0.1.0`:
   Rust/vendor verification, `ldd`/glibc audit, isolated clean-runner installation verification,
   idempotent fail-closed SRI publishing, and npm Trusted Publishing (OIDC `--provenance`).
 
-[Unreleased]: https://github.com/hewel/zgui-js/compare/v0.1.2...HEAD
+[Unreleased]: https://github.com/hewel/zgui-js/compare/v0.1.3...HEAD
+[0.1.3]: https://github.com/hewel/zgui-js/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/hewel/zgui-js/compare/v0.1.0...v0.1.2
 [0.1.0]: https://github.com/hewel/zgui-js/releases/tag/v0.1.0
