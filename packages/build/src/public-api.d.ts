@@ -19,6 +19,16 @@ export type FilesCapabilities = {
   readOnlyGrants?: boolean;
 };
 
+export type SystemFilesCapabilities = {
+  read?: boolean;
+  write?: boolean;
+  trash?: boolean;
+  volumes?: boolean;
+  thumbnails?: boolean;
+  openExternal?: boolean;
+  directories?: FileDirectoryGrant[];
+};
+
 export type NetworkOriginRule = {
   origin: string;
   allowInsecureHttp?: boolean;
@@ -45,6 +55,7 @@ export type Capabilities = {
   clipboard?: ClipboardCapabilities;
   sqlite?: SqliteCapabilities;
   files?: FilesCapabilities;
+  systemFiles?: SystemFilesCapabilities;
   network?: NetworkCapabilities;
 };
 

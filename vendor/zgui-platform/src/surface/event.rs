@@ -232,7 +232,8 @@ impl SurfaceEvent {
                 Some((state.event_kind(), Payload::Key(event.clone())))
             }
             Self::Ime(event) => Some((event.event_kind(), Payload::Ime(event.clone()))),
-            Self::Drag(DragEvent::Dropped { paths, position }) => Some((
+            Self::Drag(DragEvent::Dropped { paths, position }
+                | DragEvent::DroppedWithAction { paths, position, .. }) => Some((
                 EventKind::Drop,
                 Payload::Drop(DropEvent {
                     paths: paths.clone(),

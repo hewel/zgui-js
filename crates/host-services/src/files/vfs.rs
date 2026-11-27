@@ -10,10 +10,10 @@ use std::{
 use crate::{
     ServiceError,
     files::{
-        DirEntry, FileMode, FileStat, HandleKind, MAX_DIR_ENTRIES, MAX_READ_BYTES, MAX_WRITE_BYTES,
+        DirEntry, FileMode, FileStat, MAX_DIR_ENTRIES, MAX_READ_BYTES, MAX_WRITE_BYTES,
         WatchEvent, WatchEventKind,
         grants::{
-            GrantRecord, GrantScope, MAX_GRANTS_PER_APP, WorkspaceGrantCeiling, grant_limit,
+            GrantKind, GrantRecord, GrantScope, MAX_GRANTS_PER_APP, WorkspaceGrantCeiling, grant_limit,
             grant_not_found,
         },
         parse_relative_segments,
@@ -486,7 +486,7 @@ impl PreviewFs {
 
     pub fn persist_bookmark(
         &mut self,
-        kind: HandleKind,
+        kind: impl Into<GrantKind>,
         path: &str,
         mode: FileMode,
         now_ms: u64,
@@ -496,7 +496,7 @@ impl PreviewFs {
         if let Some(existing) = self
             .bookmarks
             .iter_mut()
-            .find(|b| b.kind == kind && b.scope.path == normalized)
+            .find(|b| b.kind == kind && b.scope.path == normalized && (kind != GrantKind::SystemDir || b.mode == mode))
         {
             if mode.can_write() {
                 existing.mode = FileMode::ReadWrite;

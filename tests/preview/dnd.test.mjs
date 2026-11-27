@@ -22,7 +22,7 @@ import {
   scrollTo,
   startInternalDrag,
 } from "@hewel/zgui";
-import type { DroppedFileHandle, NativeNode } from "@hewel/zgui";
+import type { NativeNode } from "@hewel/zgui";
 
 export const hostApiVersion = 1;
 
@@ -37,7 +37,7 @@ export function mount(root: NativeNode) {
 
     let scrollerEl: NativeNode | undefined;
     let focusInputEl: NativeNode | undefined;
-    const openHandles: DroppedFileHandle[] = [];
+    const openHandles: { close(): void }[] = [];
     onCleanup(() => {
       for (const h of openHandles) h.close();
     });
@@ -136,17 +136,27 @@ export function mount(root: NativeNode) {
               testId="scrolled-drop-zone"
               style="height: 48px; flex-shrink: 0; background-color: #1f3328; padding: 6px"
               onDragEnter={e => {
-                const leakedKeys = "files" in e || "paths" in e;
+                const leakedKeys = "files" in e || "paths" in e || "directories" in e;
                 setHoverLog(
                   \`enter:\${e.source}:\${e.types.join(",")}:n=\${e.fileCount}:leak=\${String(leakedKeys)}\`,
                 );
+                if (e.types.includes("inode/directory")) e.accept("move");
               }}
               onDragOver={e => {
-                if (e.source === "external" && e.types.includes("text/uri-list")) {
+                if (e.source === "external" && e.types.includes("text/uri-list") && !e.types.includes("inode/directory")) {
                   e.accept("copy");
                 }
               }}
               onDrop={e => {
+                const dir = e.directories[0];
+                if (dir) {
+                  openHandles.push(dir, ...e.files);
+                  const escape = dir.readText("outside").promise.then(() => "UNEXPECTED", error => error.code);
+                  void Promise.all([dir.readDir().promise, dir.stat().promise, escape]).then(([entries, stat, escaped]) => {
+                    setDropLog(\`effect=\${e.effect},files=\${e.files.length},name=\${dir.name},mode=\${dir.mode},dir=\${stat.isDir},entries=\${entries.map(entry => entry.name).join(",")},escape=\${escaped}\`);
+                  });
+                  return;
+                }
                 if (e.source !== "external" || e.files.length === 0) return;
                 const file = e.files[0]!;
                 openHandles.push(file);
@@ -199,9 +209,13 @@ test("preview DnD supports internal hit-tested reorder with source pointer captu
     id: "dnd-preview",
     services: {
       files: {
-        dirs: ["/home/preview/Incoming"],
+        dirs: ["/home/preview/Incoming", "/home/preview/Incoming/Album"],
         files: {
           "/home/preview/Incoming/dropped.md": "hello from external drop",
+          "/home/preview/Incoming/Album/photo.txt": "inside album",
+        },
+        symlinks: {
+          "/home/preview/Incoming/Album/outside": "/home/preview/Incoming/dropped.md",
         },
       },
     },
@@ -289,6 +303,40 @@ test("preview DnD supports internal hit-tested reorder with source pointer captu
       },
       { id: "settle-drop", op: "clock.advance", byMs: 32 },
       { id: "cap-done", op: "capture", captureId: "done", surface: "main" },
+      {
+        id: "ext-folder-enter",
+        op: "drag.enter",
+        target: { surface: "main", testId: "scrolled-drop-zone" },
+        paths: ["/home/preview/Incoming/Album", "/home/preview/Incoming/dropped.md"],
+      },
+      {
+        id: "ext-folder-mismatch",
+        op: "drag.drop",
+        action: "copy",
+        target: { surface: "main", testId: "scrolled-drop-zone" },
+        paths: ["/home/preview/Incoming/Album", "/home/preview/Incoming/dropped.md"],
+      },
+      { id: "cap-mismatch", op: "capture", captureId: "mismatch", surface: "main" },
+      {
+        id: "ext-folder-enter-again",
+        op: "drag.enter",
+        target: { surface: "main", testId: "scrolled-drop-zone" },
+        paths: ["/home/preview/Incoming/Album", "/home/preview/Incoming/dropped.md"],
+      },
+      {
+        id: "ext-folder-hover",
+        op: "drag.move",
+        target: { surface: "main", testId: "scrolled-drop-zone" },
+      },
+      {
+        id: "ext-folder-move",
+        op: "drag.drop",
+        action: "move",
+        target: { surface: "main", testId: "scrolled-drop-zone" },
+        paths: ["/home/preview/Incoming/Album", "/home/preview/Incoming/dropped.md"],
+      },
+      { id: "settle-folder", op: "clock.advance", byMs: 32 },
+      { id: "cap-folder", op: "capture", captureId: "folder", surface: "main" },
     ],
   });
 
@@ -312,6 +360,17 @@ test("preview DnD supports internal hit-tested reorder with source pointer captu
   );
   assert.equal(getNode(doneTree, "focused-drop-log")?.text, "CLEAN");
   assert.equal(getNode(doneTree, "rejected-drop-log")?.text, "CLEAN");
+  const mismatchTree = await readTree(out, "mismatch");
+  assert.equal(getNode(mismatchTree, "drop-log")?.text, getNode(doneTree, "drop-log")?.text);
+  const folderTree = await readTree(out, "folder");
+  assert.equal(
+    getNode(folderTree, "hover-log")?.text,
+    "enter:external:text/uri-list,inode/directory,text/markdown:n=2:leak=false",
+  );
+  assert.equal(
+    getNode(folderTree, "drop-log")?.text,
+    "effect=move,files=1,name=Album,mode=read,dir=true,entries=photo.txt,escape=E_PATH_ESCAPE",
+  );
 });
 
 const outboundDragSource = `
@@ -361,6 +420,7 @@ export function mount(root: NativeNode) {
             if (!dragNode) return;
             active = startOutboundDrag(dragNode, {
               items: [{ mime: "text/plain", data: "copied-out" }],
+              allowedEffects: ["copy", "move"],
               onEnd(res) {
                 setEndResult(\`accepted=\${String(res.accepted)},effect=\${res.effect},reason=\${res.reason}\`);
               },

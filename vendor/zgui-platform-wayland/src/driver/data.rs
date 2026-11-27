@@ -19,7 +19,7 @@ use smithay_client_toolkit::reexports::protocols::wp::primary_selection::zv1::cl
 use smithay_client_toolkit::reexports::protocols::wp::primary_selection::zv1::client::zwp_primary_selection_source_v1::ZwpPrimarySelectionSourceV1;
 use smithay_client_toolkit::{delegate_data_device, delegate_primary_selection};
 
-use zgui_platform::SurfaceEvent;
+use zgui_platform::{DragAction, DragEvent, SurfaceEvent};
 
 use crate::driver::WaylandState;
 
@@ -40,16 +40,6 @@ impl WaylandState {
             (manager, device)
         });
         self.clipboard.selections().devices(standard, primary);
-    }
-}
-
-/// Copy and nothing else. A move would ask the source to delete what it handed over, and this
-/// application has no way to promise it took responsibility for it.
-pub(crate) fn copy_only(actions: DndAction) -> DndAction {
-    if actions.contains(DndAction::Copy) {
-        DndAction::Copy
-    } else {
-        DndAction::None
     }
 }
 
@@ -92,7 +82,7 @@ impl DataDeviceHandler for WaylandState {
     ) {
         let at = crate::input::pointer::position(x, y);
         if let Some((id, event)) = self.drag.moved(at) {
-            self.report(id, SurfaceEvent::Drag(event));
+            self.report_drag(id, event);
         }
     }
 
@@ -108,8 +98,8 @@ impl DataDeviceHandler for WaylandState {
         _qh: &QueueHandle<Self>,
         _device: &WlDataDevice,
     ) {
-        if let Some((id, event)) = self.drag.dropped() {
-            self.report(id, SurfaceEvent::Drag(event));
+        if let Some((id, event)) = self.drag.dropped(self.drag.drop_action()) {
+            self.report_drag(id, event);
         }
     }
 
@@ -128,17 +118,17 @@ impl DataOfferHandler for WaylandState {
         offer: &mut DragOffer,
         actions: DndAction,
     ) {
-        let taken = copy_only(actions);
-        offer.set_actions(taken, taken);
+        self.drag.source_actions(offer, actions);
     }
 
     fn selected_action(
         &mut self,
         _conn: &Connection,
         _qh: &QueueHandle<Self>,
-        _offer: &mut DragOffer,
-        _actions: DndAction,
+        offer: &mut DragOffer,
+        action: DndAction,
     ) {
+        self.drag.selected_action(offer, action);
     }
 }
 
@@ -158,7 +148,7 @@ impl DataSourceHandler for WaylandState {
         if let Some(surface) = self.clipboard.selections().outbound_drag_cancelled(source) {
             self.report(
                 surface,
-                SurfaceEvent::Drag(zgui_platform::DragEvent::OutboundFinished { accepted: false }),
+                SurfaceEvent::Drag(DragEvent::OutboundFinished { action: DragAction::None }),
             );
             return;
         }
@@ -171,17 +161,12 @@ impl DataSourceHandler for WaylandState {
         &mut self,
         _conn: &Connection,
         _qh: &QueueHandle<Self>,
-        source: &WlDataSource,
-        mime: Option<String>,
+        _source: &WlDataSource,
+        _mime: Option<String>,
     ) {
-        self.clipboard
-            .selections()
-            .outbound_drag_accept_mime(source, mime);
     }
 
-    fn dnd_dropped(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, source: &WlDataSource) {
-        self.clipboard.selections().outbound_drag_dropped(source);
-    }
+    fn dnd_dropped(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, _source: &WlDataSource) {}
 
     fn dnd_finished(
         &mut self,
@@ -189,10 +174,10 @@ impl DataSourceHandler for WaylandState {
         _qh: &QueueHandle<Self>,
         source: &WlDataSource,
     ) {
-        if let Some(surface) = self.clipboard.selections().outbound_drag_finished(source) {
+        if let Some((surface, action)) = self.clipboard.selections().outbound_drag_finished(source) {
             self.report(
                 surface,
-                SurfaceEvent::Drag(zgui_platform::DragEvent::OutboundFinished { accepted: true }),
+                SurfaceEvent::Drag(DragEvent::OutboundFinished { action }),
             );
         }
     }

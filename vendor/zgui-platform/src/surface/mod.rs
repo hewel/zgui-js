@@ -19,7 +19,7 @@ pub use crate::surface::attributes::{SurfaceAttributes, TitleButtons};
 pub use crate::surface::chrome::{
     CursorStyle, DecorationSource, Decorations, FullscreenMode, ResizeEdge, WindowLevel,
 };
-pub use crate::surface::drag::{DragEvent, OutboundDragPayload};
+pub use crate::surface::drag::{DragAction, DragActions, DragEvent, OutboundDragPayload};
 pub use crate::surface::event::{CloseReason, SurfaceEvent};
 pub use crate::surface::gpu::GpuSurface;
 pub use crate::surface::icon::{BadIcon, WindowIcon};
@@ -454,8 +454,8 @@ pub trait Surface: Send + Sync + 'static {
         false
     }
 
-    /// Starts a platform-driven outbound `Copy`-only drag from the current active pointer or
-    /// touch press on this surface.
+    /// Starts a platform-driven outbound drag from the current active pointer or touch press
+    /// on this surface.
     ///
     /// # Errors
     ///
@@ -467,6 +467,12 @@ pub trait Surface: Send + Sync + 'static {
 
     /// Cancels any active outbound drag initiated from this surface.
     fn cancel_outbound_drag(&self) {}
+
+    /// Responds to an external drag event during its synchronous surface callback.
+    ///
+    /// During enter and motion this selects an action, clamped to the offer. During a
+    /// drop this confirms the negotiated action after the destination has accepted the data.
+    fn set_drag_action(&self, _action: DragAction) {}
 
     /// Requests a single-use external activation token quoting `grant` on this surface.
     ///

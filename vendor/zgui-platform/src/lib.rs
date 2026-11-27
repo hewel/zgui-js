@@ -100,7 +100,7 @@ pub use crate::session_lock::SessionLockState;
 pub use crate::surface::{
     ActivationToken, ActivationTokenSerial, ActivationTokenSerials, Anchor, BadIcon, BlurRegion,
     BlurShape, CloseReason, ComposeAhead, Constrain, CursorStyle, DecorationSource, Decorations,
-    DragEvent, ExclusiveZone, FullscreenMode, GpuSurface, InputGrant, InputRect, InputRegion,
+    DragAction, DragActions, DragEvent, ExclusiveZone, FullscreenMode, GpuSurface, InputGrant, InputRect, InputRegion,
     InputSerial, KeyboardInteractivity, Layer, LayerPatch, LayerPlacement, OutboundDragPayload,
     PendingActivationToken, PopupPlacement, PresentPacing, PresentationTiming, ResizeEdge,
     SubpixelLayout, Surface, SurfaceAttributes, SurfaceEvent, SurfaceId, SurfaceRole, TextInput,

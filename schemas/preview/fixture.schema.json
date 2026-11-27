@@ -67,6 +67,7 @@
           }
         },
         "files": { "$ref": "#/$defs/files" },
+        "systemFiles": { "$ref": "#/$defs/systemFiles" },
         "sockets": {
           "type": "array",
           "maxItems": 1024,
@@ -190,6 +191,83 @@
             }
           }
         }
+      }
+    },
+    "systemFiles": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "dirs": { "type": "array", "items": { "$ref": "#/$defs/filePath" } },
+        "files": {
+          "type": "object",
+          "propertyNames": { "$ref": "#/$defs/filePath" },
+          "additionalProperties": { "type": "string" }
+        },
+        "symlinks": {
+          "type": "object",
+          "propertyNames": { "$ref": "#/$defs/filePath" },
+          "additionalProperties": { "type": "string", "minLength": 1 }
+        },
+        "metadata": {
+          "type": "object",
+          "propertyNames": { "$ref": "#/$defs/filePath" },
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "mode": { "type": "integer", "minimum": 0, "maximum": 4294967295 },
+              "modifiedMs": { "type": "integer" }
+            }
+          }
+        },
+        "generated": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["directory", "prefix", "suffix", "count"],
+            "properties": {
+              "directory": { "$ref": "#/$defs/filePath" },
+              "prefix": { "type": "string", "pattern": "^[^/\\u0000]*$" },
+              "suffix": { "type": "string", "pattern": "^[^/\\u0000]*$" },
+              "count": { "type": "integer", "minimum": 0, "maximum": 100000 }
+            }
+          }
+        },
+        "volumes": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["mountPoint", "source", "fileSystem", "readOnly", "removable"],
+            "properties": {
+              "mountPoint": { "$ref": "#/$defs/filePath" },
+              "source": { "type": "string" },
+              "fileSystem": { "type": "string" },
+              "readOnly": { "type": "boolean" },
+              "removable": { "type": "boolean" }
+            }
+          }
+        },
+        "thumbnails": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["path", "mtime", "png"],
+            "properties": {
+              "path": { "$ref": "#/$defs/filePath" },
+              "size": { "enum": ["normal", "large", "x-large", "xx-large"] },
+              "mtime": { "type": "integer" },
+              "png": { "type": "string", "contentEncoding": "base64" }
+            }
+          }
+        },
+        "dialogs": {
+          "type": "array",
+          "items": { "anyOf": [{ "$ref": "#/$defs/filePath" }, { "type": "null" }] }
+        },
+        "trashUnavailable": { "type": "boolean", "default": false }
       }
     },
     "activation": {

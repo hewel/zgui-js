@@ -1,7 +1,10 @@
 import "./runtime-globals.js";
+import type { NativeNode } from "./native-node.js";
+export type { NativeNode } from "./native-node.js";
 export type { JSX } from "./jsx-runtime.js";
 import type { NativeEventProps } from "./events.js";
 export type {
+  DroppedDirectoryHandle,
   DroppedFileHandle,
   NativeAnimationEvent,
   NativeContextMenuEvent,
@@ -20,15 +23,6 @@ export type {
 import type { NativeStyle } from "./styles.js";
 export type { NativeStyle, NativeStyleName } from "./styles.js";
 
-declare const nativeNode: unique symbol;
-/**
- * Borrowed opaque handle, never a native numeric ID. Permanently removed branches
- * invalidate their handles at the end of the synchronous host turn. A retained
- * ref does not retain native ownership; cross-turn detached-node reuse is unsupported.
- */
-export interface NativeNode {
-  readonly [nativeNode]: true;
-}
 /** A native node or reactive accessor resolving to one (e.g. a `createSignal<NativeNode | null>(null)` wired to `ref={setNode}`). */
 export type NativeNodeTarget = NativeNode | Accessor<NativeNode | null | undefined>;
 export interface NativeWindowRect {
@@ -395,6 +389,16 @@ export interface NativeElementProps extends NativeEventProps {
   role?: NativeRole | null | undefined;
   ariaLabel?: string | null | undefined;
   ariaDescription?: string | null | undefined;
+  ariaCurrent?:
+    | "false"
+    | "true"
+    | "page"
+    | "step"
+    | "location"
+    | "date"
+    | "time"
+    | null
+    | undefined;
   ariaKeyShortcuts?: string | null | undefined;
   ariaLabelledBy?: NativeRelation;
   ariaDescribedBy?: NativeRelation;

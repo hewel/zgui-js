@@ -46,7 +46,7 @@ pub enum Step {
     DragEnter { id: String, location: PointerLocation, paths: Vec<String> },
     DragMove { id: String, location: PointerLocation },
     DragLeave { id: String, surface: String },
-    DragDrop { id: String, location: PointerLocation, paths: Vec<String> },
+    DragDrop { id: String, location: PointerLocation, paths: Vec<String>, action: DragDropAction },
     KeyPress { id: String, surface: String, key: Key, modifiers: Vec<Modifier> },
     TextCommit { id: String, surface: String, text: String },
     Assert { id: String, target: Target, check: Check },
@@ -315,7 +315,7 @@ enum StepInput {
     #[serde(rename = "drag.leave")]
     DragLeave(NamedSurfaceInput),
     #[serde(rename = "drag.drop")]
-    DragDrop(DragPathsInput),
+    DragDrop(DragDropInput),
     #[serde(rename = "lifecycle.reload")]
     LifecycleReload(LifecycleReloadInput),
     // Later operations remain explicit capability failures, never silently ignored.
@@ -509,6 +509,29 @@ struct DragPathsInput {
     #[serde(default, deserialize_with = "present_object")]
     position: Option<PositionInput>,
     paths: Vec<String>,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum DragDropAction {
+    #[default]
+    Copy,
+    Move,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DragDropInput {
+    id: String,
+    #[serde(default, deserialize_with = "present_object")]
+    target: Option<TargetInput>,
+    #[serde(default, deserialize_with = "present")]
+    surface: Option<String>,
+    #[serde(default, deserialize_with = "present_object")]
+    position: Option<PositionInput>,
+    paths: Vec<String>,
+    #[serde(default)]
+    action: DragDropAction,
 }
 
 #[derive(Deserialize)]
@@ -731,7 +754,7 @@ fn parse(bytes: &[u8], available: &[&str], virtual_profile: bool) -> Result<Scen
             }
             StepInput::DragDrop(input) => {
                 let location = pointer_location(input.target, input.surface, input.position, &mut requirements)?;
-                Step::DragDrop { id: input.id, location, paths: input.paths }
+                Step::DragDrop { id: input.id, location, paths: input.paths, action: input.action }
             }
             StepInput::LifecycleReload(input) => {
                 if let Some(bundle) = &input.bundle && bundle.is_empty() {

@@ -187,6 +187,13 @@ parser in `crates/ui-bridge/tests/sdk_resources.rs`. Pinned native adaptations l
 | `TableCell`              | `packages/ui/src/components/table.ts`            | Workbench                          | `tests/preview/wave4a-components.test.mjs`          |
 | `TableCaption`           | `packages/ui/src/components/table.ts`            | Workbench                          | `tests/build/components.test.mjs`                   |
 | `DataTable`              | `packages/ui/src/components/data-table.ts`       | Workbench                          | `tests/preview/wave4a-components.test.mjs`          |
+| `Breadcrumb`             | `packages/ui/src/components/breadcrumb.ts`       | Composites                         | `tests/preview/wave4c-ui-selection.test.mjs`        |
+| `BreadcrumbList`         | `packages/ui/src/components/breadcrumb.ts`       | Composites                         | `tests/preview/wave4c-ui-selection.test.mjs`        |
+| `BreadcrumbItem`         | `packages/ui/src/components/breadcrumb.ts`       | Composites                         | `tests/preview/wave4c-ui-selection.test.mjs`        |
+| `BreadcrumbLink`         | `packages/ui/src/components/breadcrumb.ts`       | Composites                         | `tests/preview/wave4c-ui-selection.test.mjs`        |
+| `BreadcrumbPage`         | `packages/ui/src/components/breadcrumb.ts`       | Composites                         | `tests/preview/wave4c-ui-selection.test.mjs`        |
+| `BreadcrumbSeparator`    | `packages/ui/src/components/breadcrumb.ts`       | Composites                         | `tests/preview/wave4c-ui-selection.test.mjs`        |
+| `BreadcrumbEllipsis`     | `packages/ui/src/components/breadcrumb.ts`       | Composites                         | `tests/preview/wave4c-ui-selection.test.mjs`        |
 
 ## Gallery `testId` Vocabulary
 
@@ -228,6 +235,9 @@ Dynamic preset items also expose `preset-${name}` (`preset-base`, `preset-ocean`
 | `inputs-slider`                 | `apps/examples/gallery/src/sections/choices.tsx`    | Interactive range slider                |
 | `inputs-slider-text`            | `apps/examples/gallery/src/sections/choices.tsx`    | Slider numeric value readout            |
 | `section-composites`            | `apps/examples/gallery/src/sections/composites.tsx` | Composites tab section grid             |
+| `composites-breadcrumb`         | `apps/examples/gallery/src/sections/composites.tsx` | Path navigation landmark                |
+| `breadcrumb-workspace`          | `apps/examples/gallery/src/sections/composites.tsx` | Navigate to the workspace ancestor      |
+| `breadcrumb-current`            | `apps/examples/gallery/src/sections/composites.tsx` | Current folder label                    |
 | `composites-card`               | `apps/examples/gallery/src/sections/composites.tsx` | Sample card with action slot            |
 | `composites-avatar`             | `apps/examples/gallery/src/sections/composites.tsx` | Avatar with fallback + badge            |
 | `avatar-toggle-src`             | `apps/examples/gallery/src/sections/composites.tsx` | Toggle broken/valid avatar source       |
@@ -278,7 +288,6 @@ Dynamic preset items also expose `preset-${name}` (`preset-base`, `preset-ocean`
 
 Upstream stylesheets synced into `packages/ui/src/components/generated/` that are not yet wrapped by components:
 
-- `BreadcrumbStyle`
 - `CarouselStyle`
 - `ChartStyle`
 - `FieldGroupStyle`
@@ -341,6 +350,8 @@ Zero-style behavioral primitives extracted from `@hewel/zgui/components` without
 | `createDismissLayer`        | `packages/ui/src/primitives/overlay.ts`       | Owner-scoped reactive dismiss layer wrapper                                                                                                                                |
 | `createRovingFocus`         | `packages/ui/src/primitives/roving.ts`        | Tree-ordered keyboard roving focus controller                                                                                                                              |
 | `createVirtualFocus`        | `packages/ui/src/primitives/virtual-focus.ts` | Data-driven 1D/2D virtual focus controller (`ariaActiveDescendant`, IME/caret-safe key routing)                                                                            |
+| `createSelectionModel`      | `packages/ui/src/primitives/selection.ts`     | Controlled or uncontrolled selection over ordered keys; click modifiers, keyboard ranges, Select All, and Escape                                                           |
+| `createMarqueeSelection`    | `packages/ui/src/primitives/selection.ts`     | Pointer capture, edge auto-scroll and caller-resolved hits in scroll-content coordinates                                                                                   |
 | `groupOrientation`          | `packages/ui/src/primitives/roving.ts`        | Orientation validator (`horizontal` / `vertical` / `both`)                                                                                                                 |
 | `createDelayed`             | `packages/ui/src/primitives/delay.ts`         | Cancellable hover/typeahead delay scheduler                                                                                                                                |
 | `RadioGroupPrimitive`       | `packages/ui/src/primitives/radio.ts`         | Unstyled `role="radioGroup"` provider with roving tabindex and zero built-in stylesheets                                                                                   |

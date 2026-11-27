@@ -5,11 +5,21 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use smithay_client_toolkit::data_device_manager::data_offer::DragOffer;
+use smithay_client_toolkit::reexports::client::Proxy;
+use smithay_client_toolkit::reexports::client::protocol::wl_data_device_manager::DndAction;
 use zgui_geom::{Css, CssPx, Point};
-use zgui_platform::{DragEvent, SurfaceId};
+use zgui_platform::{DragAction, DragEvent, SurfaceId};
 
 /// Bounded capacity for out-of-band pipe completions waiting on the main loop.
 const MAX_PENDING_READS: usize = 64;
+
+pub(crate) fn negotiated_action(action: DndAction) -> DragAction {
+    match action {
+        DndAction::Copy => DragAction::Copy,
+        DndAction::Move => DragAction::Move,
+        _ => DragAction::None,
+    }
+}
 
 /// Unique identity for one external drag offer so delayed pipe reads from a
 /// previous or cancelled offer can never be attributed to a newer offer.
@@ -48,6 +58,22 @@ impl OfferLifecycle for DragOffer {
     }
 }
 
+/// Owns a dropped offer until the destination callback confirms it or discards it.
+#[derive(Debug)]
+pub(crate) struct PendingDrop<O: OfferLifecycle>(O);
+
+impl<O: OfferLifecycle> PendingDrop<O> {
+    pub(crate) fn finish(self) {
+        self.0.finish_offer();
+    }
+}
+
+impl<O: OfferLifecycle> Drop for PendingDrop<O> {
+    fn drop(&mut self) {
+        self.0.destroy_offer();
+    }
+}
+
 /// The drag that is currently over a window, if there is one.
 ///
 /// Every asynchronous pipe read is tagged with `(offer_id, generation)` and queued
@@ -60,6 +86,7 @@ pub struct DragTracker<O: OfferLifecycle> {
     next_generation: u64,
     /// The active session, while one is over a window.
     session: Option<Session<O>>,
+    pending_drop: Option<PendingDrop<O>>,
     /// Tagged pipe completions waiting to be drained on the Wayland loop thread.
     reads: Arc<Mutex<VecDeque<ReadCompletion>>>,
 }
@@ -69,6 +96,7 @@ impl<O: OfferLifecycle> Default for DragTracker<O> {
         Self {
             next_generation: 1,
             session: None,
+            pending_drop: None,
             reads: Arc::new(Mutex::new(VecDeque::new())),
         }
     }
@@ -94,8 +122,10 @@ struct Session<O: OfferLifecycle> {
     read_started: bool,
     /// Whether the paths have been reported via `Entered`.
     announced: bool,
-    /// Whether the user has let go and the drop is waiting on the read.
-    dropped: bool,
+    /// The committed action, if the drop is waiting on the read.
+    dropped: Option<DragAction>,
+    requested: DragAction,
+    applied: Option<DragAction>,
 }
 
 impl<O: OfferLifecycle> DragTracker<O> {
@@ -128,9 +158,19 @@ impl<O: OfferLifecycle> DragTracker<O> {
             paths: None,
             read_started: false,
             announced: false,
-            dropped: false,
+            dropped: None,
+            requested: DragAction::None,
+            applied: None,
         });
         displaced
+    }
+
+    pub(crate) fn key(&self) -> Option<OfferKey> {
+        self.session.as_ref().map(|session| session.key)
+    }
+
+    pub(crate) fn take_pending_drop(&mut self) -> Option<PendingDrop<O>> {
+        self.pending_drop.take()
     }
 
     /// Returns the active offer and its `OfferKey` if no pipe read has been started yet.
@@ -163,6 +203,9 @@ impl<O: OfferLifecycle> DragTracker<O> {
     /// Records the pointer moving.
     pub fn moved(&mut self, at: Point<CssPx, Css>) -> Option<(SurfaceId, DragEvent)> {
         let session = self.session.as_mut()?;
+        if session.dropped.is_some() {
+            return None;
+        }
         session.at = at;
         session
             .announced
@@ -175,7 +218,7 @@ impl<O: OfferLifecycle> DragTracker<O> {
     pub fn left(&mut self) -> Option<(SurfaceId, DragEvent)> {
         // A drop is followed by wl_data_device.leave. The read of a dropped session may still
         // run, so keep the session.
-        if self.session.as_ref().is_some_and(|session| session.dropped) {
+        if self.session.as_ref().is_some_and(|session| session.dropped.is_some()) {
             return None;
         }
         let session = self.session.take()?;
@@ -190,11 +233,14 @@ impl<O: OfferLifecycle> DragTracker<O> {
     /// Answers with the drop when this offer's own paths are already known, and with
     /// nothing when its read is still in flight — in which case `read_finished`
     /// produces the drop once the matching `(offer_id, generation)` arrives.
-    pub fn dropped(&mut self) -> Option<(SurfaceId, DragEvent)> {
+    pub fn dropped(&mut self, action: DragAction) -> Option<(SurfaceId, DragEvent)> {
+        if action == DragAction::None {
+            return self.left();
+        }
         let session = self.session.as_mut()?;
-        session.dropped = true;
-        let paths = session.paths.clone()?;
-        Some(self.finish(paths))
+        session.dropped = Some(action);
+        let paths = session.paths.take()?;
+        Some(self.finish(paths, action))
     }
 
     /// Records a tagged pipe read finishing.
@@ -207,16 +253,18 @@ impl<O: OfferLifecycle> DragTracker<O> {
         paths: Vec<PathBuf>,
     ) -> Option<(SurfaceId, DragEvent)> {
         let session = self.session.as_mut()?;
-        if session.key != key {
+        if session.key != key || session.announced {
             return None;
+        }
+        if paths.is_empty() {
+            let session = self.session.take()?;
+            session.offer.destroy_offer();
+            return None;
+        }
+        if let Some(action) = session.dropped {
+            return Some(self.finish(paths, action));
         }
         session.paths = Some(paths.clone());
-        if session.dropped {
-            return Some(self.finish(paths));
-        }
-        if session.announced {
-            return None;
-        }
         session.announced = true;
         Some((
             session.surface,
@@ -227,23 +275,83 @@ impl<O: OfferLifecycle> DragTracker<O> {
         ))
     }
 
-    /// Completes the drop and takes the session down.
-    fn finish(&mut self, paths: Vec<PathBuf>) -> (SurfaceId, DragEvent) {
+    /// Prepares a drop for delivery, without telling the source its data was accepted yet.
+    fn finish(&mut self, paths: Vec<PathBuf>, action: DragAction) -> (SurfaceId, DragEvent) {
         let session = self
             .session
             .take()
             .expect("a drop is only finished while a session exists");
-        // The offer is told the transfer worked and then retired. A drop that is never finished
-        // leaves the source waiting, which on some desktops leaves the dragged icon on screen.
-        session.offer.finish_offer();
-        session.offer.destroy_offer();
+        self.pending_drop = Some(PendingDrop(session.offer));
         (
             session.surface,
-            DragEvent::Dropped {
+            DragEvent::DroppedWithAction {
                 paths,
                 position: session.at,
+                action,
             },
         )
+    }
+}
+
+impl DragTracker<DragOffer> {
+    /// Applies the response to the same offer that produced the hover callback.
+    pub(crate) fn set_action(&mut self, key: OfferKey, action: DragAction) {
+        if let Some(session) = self.session.as_mut().filter(|session| session.key == key) {
+            session.requested = action;
+            session.apply_action();
+        }
+    }
+
+    pub(crate) fn source_actions(&mut self, offer: &DragOffer, actions: DndAction) {
+        if let Some(session) = self.session.as_mut().filter(|session| session.offer == *offer) {
+            session.offer.source_actions = actions;
+            if session.applied.is_some() {
+                session.apply_action();
+            }
+        }
+    }
+
+    pub(crate) fn selected_action(&mut self, offer: &DragOffer, action: DndAction) {
+        if let Some(session) = self.session.as_mut().filter(|session| session.offer == *offer) {
+            session.offer.selected_action = action;
+        }
+    }
+
+    pub(crate) fn drop_action(&self) -> DragAction {
+        let Some(session) = &self.session else { return DragAction::None };
+        let selected = if session.offer.inner().version() >= 3 {
+            negotiated_action(session.offer.selected_action)
+        } else {
+            DragAction::Copy
+        };
+        if session.applied == Some(selected) { selected } else { DragAction::None }
+    }
+}
+
+impl Session<DragOffer> {
+    fn apply_action(&mut self) {
+        if self.dropped.is_some() {
+            return;
+        }
+        let offered = if self.offer.inner().version() >= 3 {
+            self.offer.source_actions
+        } else {
+            DndAction::Copy
+        };
+        let protocol_action = match self.requested {
+            DragAction::Copy if offered.contains(DndAction::Copy) => DndAction::Copy,
+            DragAction::Move if offered.contains(DndAction::Move) => DndAction::Move,
+            _ => DndAction::None,
+        };
+        let action = negotiated_action(protocol_action);
+        if self.applied.replace(action) == Some(action) {
+            return;
+        }
+        self.offer.accept_mime_type(
+            self.offer.serial,
+            (action != DragAction::None).then(|| crate::clipboard::mime::URI_LIST.to_owned()),
+        );
+        self.offer.set_actions(protocol_action, protocol_action);
     }
 }
 
@@ -302,7 +410,7 @@ mod tests {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use zgui_geom::{Css, CssPx, Point};
-    use zgui_platform::{DragEvent, SurfaceId};
+    use zgui_platform::{DragAction, DragEvent, SurfaceId};
 
     #[derive(Clone, Debug, Default)]
     struct MockOffer {
@@ -422,7 +530,7 @@ mod tests {
         assert_ne!(key_a, key_b);
 
         // User drops offer B before offer B's pipe finishes, while stale offer A's read completes!
-        assert!(drag.dropped().is_none());
+        assert!(drag.dropped(DragAction::Copy).is_none());
         assert!(
             drag.read_finished(key_a, vec![PathBuf::from("/stale/from-a.txt")])
                 .is_none(),
@@ -438,12 +546,15 @@ mod tests {
             event,
             (
                 surface,
-                DragEvent::Dropped {
+                DragEvent::DroppedWithAction {
                     paths: vec![PathBuf::from("/fresh/from-b.txt")],
                     position: pt(50.0, 60.0),
+                    action: DragAction::Copy,
                 }
             )
         );
+        assert_eq!(offer_b.finished.load(Ordering::Relaxed), 0, "delivery is not acceptance");
+        drag.take_pending_drop().expect("offer awaiting confirmation").finish();
         assert_eq!(offer_b.finished.load(Ordering::Relaxed), 1);
         assert_eq!(offer_b.destroyed.load(Ordering::Relaxed), 1);
     }
@@ -503,7 +614,7 @@ mod tests {
         let (key, _) = drag.to_read().expect("start async pipe read");
 
         // User drops before pipe read completes, then compositor sends wl_data_device.leave.
-        assert!(drag.dropped().is_none(), "drop waits for async pipe read");
+        assert!(drag.dropped(DragAction::Move).is_none(), "drop waits for async pipe read");
         assert!(
             drag.left().is_none(),
             "leave after drop must keep session alive without emitting Left"
@@ -518,12 +629,14 @@ mod tests {
             event,
             (
                 surface,
-                DragEvent::Dropped {
+                DragEvent::DroppedWithAction {
                     paths: vec![PathBuf::from("/late/drop.png")],
                     position: pt(12.0, 34.0),
+                    action: DragAction::Move,
                 }
             )
         );
+        drag.take_pending_drop().expect("offer awaiting confirmation").finish();
         assert_eq!(offer.finished.load(Ordering::Relaxed), 1);
         assert_eq!(offer.destroyed.load(Ordering::Relaxed), 1);
     }

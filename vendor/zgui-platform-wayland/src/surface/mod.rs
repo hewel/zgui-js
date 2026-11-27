@@ -30,7 +30,7 @@ use wayland_client::protocol::wl_surface::WlSurface;
 use zgui_geom::{Css, CssPx, Device, DevicePx, Edges, Point, Rect, Size};
 use zgui_platform::{
     ActivationToken,
-    BlurRegion, BlurShape, CursorStyle, Decorations, FullscreenMode, GpuSurface, InputGrant,
+    BlurRegion, BlurShape, CursorStyle, Decorations, DragAction, FullscreenMode, GpuSurface, InputGrant,
     InputRegion, LayerPlacement, PendingActivationToken, PlatformError, PopupPlacement,
     PresentPacing, PresentationTiming, Surface, SurfaceId, TextInput, Unsupported,
 };
@@ -67,7 +67,7 @@ pub struct Links {
     pub waker: Arc<dyn zgui_platform::Waker>,
     /// The shell a pop-up's later requests are made against.
     pub shell: Arc<crate::surface::role::xdg::XdgShell>,
-    /// Shared clipboard and outbound Copy-only drag source controller.
+    /// Shared clipboard and outbound drag source controller.
     pub selections: Arc<crate::clipboard::Selections>,
     /// Shared handle to the live `ext_background_effect_manager_v1` global and blur capability.
     pub background_effect: Arc<BackgroundEffectLink>,
@@ -188,8 +188,9 @@ pub struct WaylandSurface {
     /// whichever surface asks. So the loop lends each surface a way to reach it, guarded by
     /// whether that surface is the one the pointer is actually on.
     seat: Arc<SeatLink>,
-    /// Shared clipboard and outbound Copy-only drag source controller.
+    /// Shared clipboard and outbound drag source controller.
     selections: Arc<crate::clipboard::Selections>,
+    drag_action: Mutex<Option<DragAction>>,
     /// Shared handle to the live `ext_background_effect_manager_v1` global and blur capability.
     background_effect: Arc<BackgroundEffectLink>,
     /// Shared handle for synchronous external `xdg_activation_v1` token requests.
@@ -233,6 +234,7 @@ impl WaylandSurface {
             a11y: A11y::open(id, links.waker),
             seat: links.seat,
             selections: links.selections,
+            drag_action: Mutex::new(None),
             background_effect: links.background_effect,
             activation: links.activation,
         })
@@ -251,6 +253,10 @@ impl WaylandSurface {
     /// The connection this surface belongs to.
     pub const fn connection(&self) -> &Connection {
         &self.conn
+    }
+
+    pub(crate) fn take_drag_action(&self) -> Option<DragAction> {
+        self.drag_action.lock().expect("drag reply lock poisoned").take()
     }
 
     /// The changing half, recovering from a panic on another thread.
@@ -1445,6 +1451,10 @@ impl Surface for WaylandSurface {
 
     fn cancel_outbound_drag(&self) {
         self.selections.cancel_outbound_drag(self.id);
+    }
+
+    fn set_drag_action(&self, action: DragAction) {
+        *self.drag_action.lock().expect("drag reply lock poisoned") = Some(action);
     }
 
     fn request_activation_token(

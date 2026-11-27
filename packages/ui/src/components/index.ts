@@ -15,6 +15,15 @@ export type { ButtonProps, ButtonSize, ButtonVariant } from "./button.js";
 export { Badge } from "./badge.js";
 export type { BadgeProps, BadgeVariant } from "./badge.js";
 export {
+  Breadcrumb,
+  BreadcrumbList,
+  BreadcrumbItem,
+  BreadcrumbLink,
+  BreadcrumbPage,
+  BreadcrumbSeparator,
+  BreadcrumbEllipsis,
+} from "./breadcrumb.js";
+export {
   Card,
   CardHeader,
   CardTitle,

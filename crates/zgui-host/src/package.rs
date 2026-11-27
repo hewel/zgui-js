@@ -129,6 +129,47 @@ pub struct FilesCapabilities {
 }
 }
 
+crate::schema::object_struct! {
+/// Desktop filesystem capabilities, independent of confined workspace files.
+#[derive(Default, PartialEq, Eq)]
+#[serde(default, rename_all = "camelCase", deny_unknown_fields)]
+pub struct SystemFilesCapabilities {
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub read: bool,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub write: bool,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub trash: bool,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub volumes: bool,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub thumbnails: bool,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub open_external: bool,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub directories: Vec<FileDirectoryGrant>,
+}
+}
+
+impl SystemFilesCapabilities {
+    fn is_empty(&self) -> bool {
+        self == &Self::default()
+    }
+
+    fn covers(&self, other: &Self) -> bool {
+        (!other.read || self.read)
+            && (!other.write || self.write)
+            && (!other.trash || self.trash)
+            && (!other.volumes || self.volumes)
+            && (!other.thumbnails || self.thumbnails)
+            && (!other.open_external || self.open_external)
+            && other.directories.iter().all(|wanted| {
+                self.directories.iter().any(|grant| grant.path == wanted.path &&
+                    (grant.mode == wanted.mode || grant.mode == host_services::files::FileMode::ReadWrite))
+            })
+    }
+}
+
 fn is_true(value: &bool) -> bool { *value }
 
 fn default_allow_bookmarks() -> bool { true }
@@ -304,6 +345,9 @@ pub struct Capabilities {
     /// Pre-declared local directory allowlist grants.
     #[serde(skip_serializing_if = "FilesCapabilities::is_empty")]
     pub files: FilesCapabilities,
+    /// Base-package desktop filesystem authority.
+    #[serde(skip_serializing_if = "SystemFilesCapabilities::is_empty")]
+    pub system_files: SystemFilesCapabilities,
     /// Origin-allowlisted outbound network declarations.
     #[serde(skip_serializing_if = "NetworkCapabilities::is_empty")]
     pub network: NetworkCapabilities,
@@ -325,6 +369,7 @@ impl Capabilities {
             && self.clipboard.is_empty()
             && self.sqlite.is_empty()
             && self.files.is_empty()
+            && self.system_files.is_empty()
             && self.network.is_empty()
     }
 
@@ -342,6 +387,12 @@ impl Capabilities {
         for grant in &self.files.directories {
             if !valid_file_directory_path(&grant.path) || !seen_dirs.insert(&grant.path) {
                 return Err(format!("invalid or duplicate capabilities.files.directories entry: {:?}", grant.path).into());
+            }
+        }
+        let mut seen_system_dirs = std::collections::BTreeSet::new();
+        for grant in &self.system_files.directories {
+            if !valid_file_directory_path(&grant.path) || !seen_system_dirs.insert(&grant.path) {
+                return Err(format!("invalid or duplicate capabilities.systemFiles.directories entry: {:?}", grant.path).into());
             }
         }
         for (name, entries) in [
@@ -380,6 +431,9 @@ impl Capabilities {
         }
         if overlay.single_instance && !self.single_instance {
             return Err("overlay cannot grant capabilities.singleInstance".into());
+        }
+        if !self.system_files.covers(&overlay.system_files) {
+            return Err("overlay cannot grant capabilities.systemFiles".into());
         }
         let merge_vec = |a: &[String], b: &[String]| -> Vec<String> {
             let mut set = std::collections::BTreeSet::new();
@@ -442,6 +496,7 @@ impl Capabilities {
                 allow_bookmarks: self.files.allow_bookmarks && overlay.files.allow_bookmarks,
                 read_only_grants: self.files.read_only_grants || overlay.files.read_only_grants,
             },
+            system_files: self.system_files.clone(),
             network,
         };
         merged.validate().map_err(|e| e.to_string())?;
@@ -2085,6 +2140,7 @@ mod tests {
             "clipboard",
             "sqlite",
             "files",
+            "systemFiles",
             "network",
         ] {
             assert!(schema_caps.contains_key(key), "schema missing capability {key}");
@@ -2132,6 +2188,15 @@ mod tests {
                 files: FilesCapabilities {
                     directories: vec![FileDirectoryGrant {
                         path: "$XDG_DATA_HOME/app".into(),
+                        mode: host_services::files::FileMode::ReadWrite,
+                    }],
+                    ..Default::default()
+                },
+                system_files: SystemFilesCapabilities {
+                    read: true,
+                    write: true,
+                    directories: vec![FileDirectoryGrant {
+                        path: "$HOME".into(),
                         mode: host_services::files::FileMode::ReadWrite,
                     }],
                     ..Default::default()
@@ -2202,5 +2267,25 @@ mod tests {
 
         let escalated = Capabilities { session_lock: true, ..Default::default() };
         assert!(base.merge_overlay(&escalated).unwrap_err().contains("sessionLock"));
+    }
+
+    #[test]
+    fn runtime_extensions_cannot_add_system_file_authority() {
+        let decode = |system_files| -> Capabilities {
+            serde_json::from_value(serde_json::json!({ "systemFiles": system_files })).unwrap()
+        };
+        let base = decode(serde_json::json!({
+            "read": true, "directories": [{"path": "$HOME", "mode": "read"}]
+        }));
+        let subset = decode(serde_json::json!({ "read": true }));
+        assert_eq!(base.merge_overlay(&subset).unwrap(), base);
+        for escalation in [
+            serde_json::json!({ "write": true }),
+            serde_json::json!({ "volumes": true }),
+            serde_json::json!({ "directories": [{"path": "$HOME", "mode": "readwrite"}] }),
+            serde_json::json!({ "directories": [{"path": "/", "mode": "read"}] }),
+        ] {
+            assert!(base.merge_overlay(&decode(escalation)).unwrap_err().contains("systemFiles"));
+        }
     }
 }

@@ -20,6 +20,16 @@
 #[path = "support/mod.rs"]
 mod support;
 
+#[cfg(any(
+    target_os = "linux",
+    target_os = "dragonfly",
+    target_os = "freebsd",
+    target_os = "netbsd",
+    target_os = "openbsd"
+))]
+#[path = "support/dnd_wire.rs"]
+mod wire;
+
 /// Runs the test where the platform under test exists, and does nothing elsewhere.
 fn main() {
     #[cfg(any(
@@ -29,7 +39,9 @@ fn main() {
         target_os = "netbsd",
         target_os = "openbsd"
     ))]
-    supported::main();
+    if supported::private_socket() {
+        supported::main();
+    }
 }
 
 /// The test, built only where the platform under test exists.
@@ -49,8 +61,58 @@ mod supported {
 
     use wayland_client::protocol::wl_data_device_manager::DndAction;
     use zgui_platform::{
-        AppHandler, DragEvent, IdlePolicy, PlatformCx, SurfaceEvent, SurfaceId, WakeReason,
+        AppHandler, DragAction, DragEvent, IdlePolicy, PlatformCx, SurfaceAttributes, SurfaceEvent,
+        SurfaceId, WakeReason,
     };
+
+    const CLIENT: &str = "ZGUI_FILE_DROP_PROTOCOL_CLIENT";
+
+    #[derive(Default)]
+    struct DropClient {
+        drops: Vec<DragAction>,
+    }
+
+    impl AppHandler for DropClient {
+        fn surfaces_available(&mut self, cx: &dyn PlatformCx) {
+            cx.create_surface(&SurfaceAttributes::new("file-drop-wire"))
+                .expect("create drop target");
+        }
+
+        fn surface_event(&mut self, cx: &dyn PlatformCx, id: SurfaceId, event: SurfaceEvent) {
+            let Some(surface) = cx.surface(id) else { return };
+            match event {
+                SurfaceEvent::Drag(DragEvent::Entered { position, .. } | DragEvent::Moved { position }) => {
+                    surface.set_drag_action(if position.x.0 < 80.0 { DragAction::Copy } else { DragAction::Move });
+                }
+                SurfaceEvent::Drag(DragEvent::DroppedWithAction { paths, action, .. }) => {
+                    assert_eq!(paths, [PathBuf::from("/tmp/Family Photos/"), PathBuf::from("/tmp/notes.txt")]);
+                    self.drops.push(action);
+                    if self.drops.len() == 3 {
+                        // A callback that doesn't confirm the data must not finish a Move.
+                        cx.request_exit();
+                    } else {
+                        surface.set_drag_action(action);
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        fn wake(&mut self, _cx: &dyn PlatformCx, _reason: WakeReason) {}
+    }
+
+    pub(super) fn private_socket() -> bool {
+        if std::env::var_os(CLIENT).is_some() {
+            let mut app = zgui_platform_wayland::WaylandApp::new(DropClient::default())
+                .expect("connect to the private compositor");
+            app.run().expect("Wayland client loop");
+            assert_eq!(app.handler().drops, [DragAction::Move, DragAction::Copy, DragAction::Move]);
+            false
+        } else {
+            super::wire::run_client(CLIENT, &[], None);
+            true
+        }
+    }
 
     /// The text a drag with no files on it carries.
     const TEXT: &str = "a few dragged words";
@@ -96,8 +158,20 @@ mod supported {
             match &event {
                 SurfaceEvent::Drag(DragEvent::Entered { .. }) => {
                     ENTERED.store(true, Ordering::Relaxed);
+                    if let Some(target) = cx.surface(surface) {
+                        target.set_drag_action(DragAction::Copy);
+                    }
                 }
-                SurfaceEvent::Drag(DragEvent::Dropped { paths, .. }) => {
+                SurfaceEvent::Drag(DragEvent::Moved { .. }) => {
+                    if let Some(target) = cx.surface(surface) {
+                        target.set_drag_action(DragAction::Copy);
+                    }
+                }
+                SurfaceEvent::Drag(DragEvent::DroppedWithAction { paths, action, .. }) => {
+                    assert_eq!(*action, DragAction::Copy);
+                    if let Some(target) = cx.surface(surface) {
+                        target.set_drag_action(*action);
+                    }
                     *DROPPED_PATHS.lock().expect("the record is not poisoned") =
                         Some(paths.clone());
                 }

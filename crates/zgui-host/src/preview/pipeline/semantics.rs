@@ -5,7 +5,7 @@
 
 use std::fmt;
 
-use accesskit::{NodeId as LocalNodeId, TreeId, TreeUpdate};
+use accesskit::{AriaCurrent, NodeId as LocalNodeId, TreeId, TreeUpdate};
 use accesskit_consumer::{TreeChangeHandler, Node, Tree};
 use serde::Serialize;
 use zgui::{platform::{Surface, SurfaceId}, runtime::Window, view::NodeId};
@@ -22,6 +22,8 @@ const MAX_TEXT_BYTES: usize = 128 * 1024;
 pub struct SemanticNode {
     pub role: String,
     pub name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub aria_current: Option<&'static str>,
     /// The node's own AccessKit disabled flag, not disabled-ancestor or input-reachability proof.
     pub enabled: Option<bool>,
     /// Inherited semantic hidden state, including native no-box projection. This does not prove
@@ -218,6 +220,15 @@ fn project_node(node: Node<'_>, budget: &mut usize) -> SemanticNode {
     SemanticNode {
         role,
         name: (has_name.unwrap_or(name.truncated)).then_some(name.text),
+        aria_current: node.aria_current().map(|current| match current {
+            AriaCurrent::False => "false",
+            AriaCurrent::True => "true",
+            AriaCurrent::Page => "page",
+            AriaCurrent::Step => "step",
+            AriaCurrent::Location => "location",
+            AriaCurrent::Date => "date",
+            AriaCurrent::Time => "time",
+        }),
         enabled: Some(!node.is_disabled()),
         hidden: Some(node.is_hidden()),
         value: (has_value.unwrap_or(value.truncated)).then_some(value.text),

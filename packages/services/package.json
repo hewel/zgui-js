@@ -54,6 +54,7 @@
     "postpack": "bun ../../tools/pack-package.ts --clean"
   },
   "dependencies": {
+    "@hewel/zgui": "workspace:*",
     "solid-js": "2.0.1"
   }
 }

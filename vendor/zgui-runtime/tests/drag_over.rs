@@ -13,7 +13,7 @@ use std::path::PathBuf;
 use std::rc::Rc;
 
 use zgui_geom::{Css, CssPx, Point};
-use zgui_platform::{DragEvent, SurfaceEvent};
+use zgui_platform::{DragAction, DragEvent, SurfaceEvent};
 use zgui_reactive::prelude::GetUntracked;
 use zgui_view::event::events;
 use zgui_view::{BuildCx, IntoView, View, ViewHost};
@@ -174,9 +174,10 @@ fn a_drop_goes_to_the_element_under_it_and_not_to_the_focused_one() {
         "the fixture never focused the control"
     );
 
-    app.deliver_to_first(SurfaceEvent::Drag(DragEvent::Dropped {
+    app.deliver_to_first(SurfaceEvent::Drag(DragEvent::DroppedWithAction {
         paths: vec![PathBuf::from("/tmp/a.wav")],
         position: at(10.0, 10.0),
+        action: DragAction::Move,
     }));
     app.settle(8);
     assert_eq!(*log.borrow(), ["zone"]);

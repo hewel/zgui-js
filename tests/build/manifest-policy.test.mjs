@@ -130,6 +130,54 @@ test("filesystem grant ceilings survive sealing and cannot be widened by overlay
   await assert.rejects(publish({ capabilities: invalid }), /readOnlyGrants must be a boolean/);
 });
 
+test("system file grants seal separately from workspace grants", async t => {
+  const publish = await publisher(t);
+  const base = {
+    files: { directories: [{ path: "$HOME", mode: "read" }] },
+    systemFiles: { read: true, directories: [{ path: "$HOME", mode: "read" }] },
+  };
+  const { capabilities } = await publish(
+    { capabilities: base },
+    {
+      extraCapabilities: { systemFiles: { write: true, trash: false } },
+      overlay: { systemFiles: { directories: [{ path: "$HOME", mode: "readwrite" }] } },
+    },
+  );
+  checkSchema(capabilities, props.capabilities);
+  assert.deepEqual(capabilities, {
+    files: base.files,
+    systemFiles: {
+      read: true,
+      write: true,
+      directories: [{ path: "$HOME", mode: "readwrite" }],
+    },
+  });
+  for (const systemFiles of [
+    { follow: true },
+    { trash: "yes" },
+    { directories: [{ path: "../", mode: "read" }] },
+  ]) {
+    checkSchema({ systemFiles }, props.capabilities, false);
+    await assert.rejects(publish({ capabilities: { systemFiles } }), /systemFiles/);
+  }
+  await assert.rejects(
+    publish(
+      { capabilities: base },
+      {
+        overlay: {
+          systemFiles: {
+            directories: [
+              { path: "$HOME", mode: "read" },
+              { path: "$HOME", mode: "readwrite" },
+            ],
+          },
+        },
+      },
+    ),
+    /duplicate path/,
+  );
+});
+
 test("network policy canonicalizes origins and requires independent opt-ins per origin", async t => {
   const publish = await publisher(t);
   for (const { value, expected, error, schemaRejects } of cases.network) {

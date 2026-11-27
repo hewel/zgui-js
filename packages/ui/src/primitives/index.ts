@@ -11,6 +11,16 @@ export type {
   VirtualFocusOptions,
 } from "./virtual-focus.js";
 
+export { createMarqueeSelection, createSelectionModel } from "./selection.js";
+export type {
+  MarqueeRect,
+  MarqueeSelection,
+  MarqueeSelectionOptions,
+  SelectionClickModifiers,
+  SelectionModel,
+  SelectionOptions,
+} from "./selection.js";
+
 export { RadioGroupPrimitive, RadioItemPrimitive } from "./radio.js";
 export type { RadioGroupPrimitiveProps, RadioItemPrimitiveProps } from "./radio.js";
 

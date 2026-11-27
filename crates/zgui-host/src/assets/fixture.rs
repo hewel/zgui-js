@@ -11,6 +11,7 @@ use crate::schema::{deserialize_object,object_struct};
 
 mod external;
 mod network;
+mod system_files;
 pub(crate) use external::ExternalDelivery;
 pub(crate) use network::NetworkDelivery;
 use external::{CommandScript, ControlMessage, ControlProvider, ExternalJob, ExternalState, SocketScript};
@@ -125,6 +126,8 @@ object_struct! {
         /// Optional in-memory virtual filesystem, scripted dialogs, and seeded bookmarks.
         #[serde(default, deserialize_with = "present_provider", skip_serializing_if = "Option::is_none")]
         pub(crate) files: Option<FilesFixture>,
+        #[serde(rename = "systemFiles", default, deserialize_with = "present_provider", skip_serializing_if = "Option::is_none")]
+        system_files: Option<system_files::SystemFilesFixture>,
         /// Optional deterministic network scripts (`http`, `sse`, `websockets`).
         #[serde(default, deserialize_with = "present_provider", skip_serializing_if = "Option::is_none")]
         pub(crate) network: Option<NetworkFixture>,
@@ -488,6 +491,7 @@ impl FixtureDefinition {
             }
         }
         if let Some(files) = &self.services.files { files.validate()?; }
+        if let Some(files) = &self.services.system_files { files.validate()?; }
         if let Some(network) = &self.services.network { network.validate()?; }
         self.services.validate_external()?;
         for event in &self.events { self.validate_event(&event.update)?; }
@@ -545,13 +549,18 @@ pub(crate) struct FixtureRuntime {
     environment: Rc<Environment>,
     locale: LocaleContext,
     state: RefCell<State>,
+    system_files: Arc<host_services::system_files::PreviewSystemFiles>,
 }
 fn failure(code: &'static str, message: impl Into<String>) -> ContractFailure { ContractFailure { code, message: message.into() } }
 impl FixtureRuntime {
     pub(crate) fn new(definition: FixtureDefinition, environment: Rc<Environment>) -> Rc<Self> {
-        let (locale, invalid) = match definition.validate_with_locale() {
-            Ok(locale) => (locale, None),
-            Err(message) => (LocaleContext::preview_default(), Some(failure("E_FIXTURE_CONTRACT", message))),
+        let (locale, system_files, invalid) = match definition.validate_with_locale().and_then(|locale| {
+            let files = definition.services.system_files.as_ref().map(system_files::SystemFilesFixture::build)
+                .transpose()?.unwrap_or_default();
+            Ok((locale, files))
+        }) {
+            Ok((locale, system_files)) => (locale, system_files, None),
+            Err(message) => (LocaleContext::preview_default(), Arc::default(), Some(failure("E_FIXTURE_CONTRACT", message))),
         };
         let scheduled = definition.events.iter().enumerate().map(|(index, event)| {
             let key = ScheduleKey {
@@ -566,11 +575,32 @@ impl FixtureRuntime {
             external: ExternalState::default(),
             network: NetworkState::default(),
             calls: BTreeMap::new(), next_registration_id: 1, sequence: 0, trace: vec![], trace_bytes: 0, dropped: 0, failure: invalid, disposed: false,
-        }), definition, environment, locale })
+        }), definition, environment, locale, system_files })
     }
 
     pub(crate) fn locale(&self) -> &LocaleContext {
         &self.locale
+    }
+
+    pub(crate) fn system_files(&self) -> &Arc<host_services::system_files::PreviewSystemFiles> {
+        &self.system_files
+    }
+
+    pub(crate) fn record_open_external(&self, generation: u64, result: &Result<String, ServiceError>, token_present: bool) -> Result<(), ServiceError> {
+        let id = self.registration_id().ok_or_else(|| ServiceError { code: "E_LIMIT", message: "fixture request limit reached".into() })?;
+        self.admission("system-files", "openExternal", id, generation)
+            .map_err(|error| ServiceError { code: error.code, message: error.message })?;
+        let mut state = self.state.borrow_mut();
+        let error_code = result.as_ref().err().map(|error| error.code);
+        if let Some(call) = state.calls.get_mut(&id) {
+            call.error = error_code;
+            call.acknowledged = true;
+        }
+        self.record(&mut state, "externalOpen", json!({
+            "requestId": id, "service": "system-files", "method": "openExternal", "generation": generation,
+            "target": result.as_ref().ok(), "activationTokenPresent": token_present, "errorCode": error_code,
+        }));
+        Ok(())
     }
 
     pub(crate) fn initial_activation(&self) -> Option<&ActivationInfo> { self.definition.activation.as_ref() }
@@ -910,6 +940,7 @@ impl FixtureRuntime {
             | ("commands", "spawnCommand") | ("control", "onControlMessage" | "reply")
             | ("activation", "getInitialActivation" | "onActivation")
             | ("files", "persistHandle" | "restoreBookmark" | "listBookmarks" | "revokeBookmark" | "listGrants" | "revokeGrant")
+            | ("system-files", "openExternal")
             | ("network", "httpRequest" | "openEventStream" | "connectWebSocket"))
         {
             return Err(failure("E_ASSERTION", format!("unknown fixture method {service}.{method}")));

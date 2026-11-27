@@ -147,7 +147,12 @@ impl Driver {
         Ok(json!({ "surface": surface_name }))
     }
 
-    pub fn drag_drop(&mut self, location: &PointerLocation, paths: &[String]) -> Result<Value, Fault> {
+    pub fn drag_drop(&mut self, location: &PointerLocation, paths: &[String], action: super::super::scenario::DragDropAction) -> Result<Value, Fault> {
+        use super::super::scenario::DragDropAction;
+        let action = match action {
+            DragDropAction::Copy => zgui::platform::DragAction::Copy,
+            DragDropAction::Move => zgui::platform::DragAction::Move,
+        };
         let (surface, position, accepted, mut trace) = self.input_location(location)?;
         if !accepted {
             return Ok(trace);
@@ -155,9 +160,10 @@ impl Driver {
         let path_bufs = paths.iter().map(std::path::PathBuf::from).collect();
         self.pipeline.deliver_all(
             surface,
-            [SurfaceEvent::Drag(zgui::platform::DragEvent::Dropped {
+            [SurfaceEvent::Drag(zgui::platform::DragEvent::DroppedWithAction {
                 paths: path_bufs,
                 position,
+                action,
             })],
         );
         self.pump_application()?;

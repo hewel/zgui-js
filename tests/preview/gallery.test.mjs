@@ -129,6 +129,9 @@ test("gallery renders atoms, feedback, fields, choices, and composites tabs clea
       check("section-composites", "exists", true),
       check("composites-card", "exists", true),
       capture("tab-composites"),
+      check("breadcrumb-current", "text", "Invoices"),
+      click("breadcrumb-workspace"),
+      check("breadcrumb-current", "text", "Workspace"),
     ],
     ["tab-atoms", "tab-feedback", "tab-fields", "tab-choices", "tab-composites"],
   );

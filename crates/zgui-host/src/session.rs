@@ -280,6 +280,14 @@ pub(crate) struct ResourceCounts {
     /// Active directory watchers still running after cleanup.
     #[serde(skip_serializing_if = "is_zero")]
     pub fs_watchers: usize,
+    #[serde(skip_serializing_if = "is_zero")]
+    pub system_file_handles: usize,
+    #[serde(skip_serializing_if = "is_zero")]
+    pub file_jobs: usize,
+    #[serde(skip_serializing_if = "is_zero")]
+    pub file_conflicts: usize,
+    #[serde(skip_serializing_if = "is_zero")]
+    pub volume_watchers: usize,
     /// In-flight HTTP requests or open HTTP response body streams still active after cleanup.
     #[serde(skip_serializing_if = "is_zero")]
     pub http_requests: usize,
@@ -1376,6 +1384,10 @@ impl Session {
                     true
                 } else if let Some(event) = self.work.next_file_event() {
                     self.bridges.run(engine.turn(), |js| js.with_context(|ctx| self.work.settle_file_event(&ctx, event)))
+                        .map_err(|error| self.diagnostic(error))?;
+                    true
+                } else if let Some(event) = self.work.next_system_file_event() {
+                    self.bridges.run(engine.turn(), |js| js.with_context(|ctx| self.work.settle_system_file_event(&ctx, event)))
                         .map_err(|error| self.diagnostic(error))?;
                     true
                 } else { false },

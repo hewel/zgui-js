@@ -14,6 +14,7 @@ mod invocation;
 mod locale;
 mod network;
 mod sqlite;
+mod system_files;
 mod workers;
 
 pub(crate) use workers::WorkerStep;
@@ -117,6 +118,7 @@ pub(crate) struct Work {
     locale: host_services::locale::LocaleContext,
     network: network::NetworkState,
     sqlite: sqlite::SqliteState,
+    system_files: system_files::SystemFilesState,
     workers: workers::WorkersState,
     external: external::External,
     resolved: ResolvedCapabilities,
@@ -147,6 +149,11 @@ impl Work {
         let WorkSession { package, capabilities, generation, assets, resolved, launch } = session;
         let allow_clipboard_read = capabilities.clipboard.read;
         let files = files::FilesState::new(package.as_deref(), capabilities.files.workspace_grant_ceiling(), &assets, wake.clone());
+        let system_files = system_files::SystemFilesState::new(
+            capabilities.system_files.clone(),
+            package.as_ref().map_or_else(|| "zgui-app".to_owned(), |package| package.manifest.id.clone()),
+            &assets,
+        );
         let invocations = invocation::Invocations::new(&assets, launch);
         let locale = match &assets {
             AssetSource::Live(_) => host_services::locale::LocaleContext::live(),
@@ -170,6 +177,7 @@ impl Work {
             network,
             sqlite,
             workers,
+            system_files,
             external,
             resolved,
             error_stack_getter: RefCell::new(None),
@@ -382,6 +390,7 @@ impl Work {
             || self.has_external()
             || self.sqlite.has_events()
             || self.files.has_events()
+            || self.system_files.has_events()
             || self.network.has_events(self.generation)
             || self.workers.has_events()
         )
@@ -393,6 +402,7 @@ impl Work {
     pub(crate) fn has_inflight_host_ops(&self) -> bool {
         self.mode.get() == Mode::Mounted && (
             self.sqlite.pending_count() != 0 || self.files.pending_count() != 0
+            || self.system_files.has_inflight()
         )
     }
 
@@ -405,6 +415,7 @@ impl Work {
             + self.invocations.pending()
             + self.sqlite.pending_count()
             + self.files.pending_count()
+            + self.system_files.pending_count()
             + self.network.pending_count(self.generation)
             + self.workers.pending_count()
             + self.external.pending_count(self.generation)
@@ -414,13 +425,14 @@ impl Work {
         let ready = self.ready.borrow();
         let timers = registrations.values().filter(|item| matches!(item.native, NativeRegistration::Timer(_))).count()
             + ready.iter().filter(|item| matches!(item.arguments, Arguments::Timer)).count();
-        (timers, registrations.len() + ready.len() - timers, self.requests.borrow().len() + self.clipboard.pending_count() + self.sqlite.pending_count() + self.files.pending_count())
+        (timers, registrations.len() + ready.len() - timers, self.requests.borrow().len() + self.clipboard.pending_count() + self.sqlite.pending_count() + self.files.pending_count() + self.system_files.pending_count())
     }
 
     fn service_resources(&self) -> ResourceCounts {
         let external = self.external.counts();
         let sqlite = self.sqlite.counts();
         let files = self.files.counts();
+        let system_files = self.system_files.counts();
         let network = self.network.counts();
         ResourceCounts {
             image_handles: self.image_blobs.len(),
@@ -431,6 +443,10 @@ impl Work {
             sqlite_transactions: sqlite.transactions,
             file_handles: files.handles,
             fs_watchers: files.watchers,
+            system_file_handles: system_files.handles,
+            file_jobs: system_files.jobs,
+            file_conflicts: system_files.conflicts,
+            volume_watchers: system_files.watchers,
             http_requests: network.http_requests,
             event_streams: network.event_streams,
             web_sockets: network.web_sockets,
@@ -530,6 +546,7 @@ impl Work {
         })))?;
         self.install_clipboard(&services)?;
         self.install_files(&services)?;
+        self.install_system_files(&services)?;
         self.install_invocations(&services)?;
         self.install_locale(&services)?;
         self.install_network(&services)?;
@@ -736,6 +753,7 @@ impl Work {
         self.mode.set(Mode::Stopping);
         for pending in self.requests.borrow_mut().drain().map(|(_, pending)| pending) { pending.cancelled.store(true, Ordering::Release); }
         self.clipboard.clear();
+        self.system_files.stop();
         self.workers.stop_all();
         self.provider.stop();
     }
@@ -743,12 +761,14 @@ impl Work {
     pub(crate) fn finish_stop(&self) -> ResourceCounts {
         if self.mode.get() == Mode::Disposed { return ResourceCounts::default(); }
         self.begin_stop();
+        self.system_files.wait_for_shutdown();
         let leaked = self.service_resources();
         for registration in self.registrations.borrow_mut().drain().map(|(_, registration)| registration) { self.cancel_native(registration.native); }
         self.ready.borrow_mut().clear();
         self.frame_hosts.borrow_mut().clear();
         self.clipboard.clear();
         self.files.clear();
+        self.system_files.clear();
         self.invocations.clear();
         self.network.clear(self.generation);
         self.sqlite.clear();

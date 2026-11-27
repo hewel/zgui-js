@@ -153,6 +153,31 @@
             }
           }
         },
+        "systemFiles": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "read": { "type": "boolean", "default": false },
+            "write": { "type": "boolean", "default": false },
+            "trash": { "type": "boolean", "default": false },
+            "volumes": { "type": "boolean", "default": false },
+            "thumbnails": { "type": "boolean", "default": false },
+            "openExternal": { "type": "boolean", "default": false },
+            "directories": {
+              "type": "array",
+              "default": [],
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["path", "mode"],
+                "properties": {
+                  "path": { "$ref": "#/$defs/fileDirectoryPath" },
+                  "mode": { "enum": ["read", "readwrite"] }
+                }
+              }
+            }
+          }
+        },
         "network": {
           "type": "object",
           "additionalProperties": false,

@@ -225,6 +225,39 @@ function parseNetworkOrigin(
   return { canonical, insecure: scheme === "http" || scheme === "ws", host };
 }
 
+const systemFileFlags = [
+  "read",
+  "write",
+  "trash",
+  "volumes",
+  "thumbnails",
+  "openExternal",
+] as const;
+
+function parseDirectoryGrants(
+  value: unknown,
+  field: string,
+): NonNullable<NonNullable<Capabilities["files"]>["directories"]> {
+  if (!Array.isArray(value)) throw new Error(`${field} must be an array`);
+  const seen = new Set<string>();
+  return (value as unknown[]).map(item => {
+    if (!item || typeof item !== "object" || Array.isArray(item))
+      throw new Error(`${field} entries must be objects`);
+    const record = item as Record<string, unknown>;
+    if (!Object.keys(record).every(key => key === "path" || key === "mode"))
+      throw new Error(`${field} entry contains unknown keys`);
+    if (
+      !capabilityString(record.path) ||
+      !capabilityPath(record.path, "directory") ||
+      (record.mode !== "read" && record.mode !== "readwrite")
+    )
+      throw new Error(`${field} contains invalid entries`);
+    if (seen.has(record.path)) throw new Error(`${field} contains duplicate path ${record.path}`);
+    seen.add(record.path);
+    return { path: record.path, mode: record.mode };
+  });
+}
+
 /** Validate each source before any of its grants can enter the union. */
 function parseCapabilities(input: unknown, source: string): Capabilities {
   if (input !== undefined && (input === null || typeof input !== "object" || Array.isArray(input)))
@@ -281,30 +314,28 @@ function parseCapabilities(input: unknown, source: string): Capabilities {
             continue;
           }
           if (subKey !== "directories") throw new Error(`Unknown capability: ${field}.${subKey}`);
-          if (!Array.isArray(subVal)) throw new Error(`${field}.directories must be an array`);
-          const seen = new Set<string>();
-          const dirs: { path: string; mode: "read" | "readwrite" }[] = [];
-          for (const item of subVal as unknown[]) {
-            if (!item || typeof item !== "object" || Array.isArray(item))
-              throw new Error(`${field}.directories entries must be objects`);
-            const record = item as Record<string, unknown>;
-            const keys = Object.keys(record);
-            if (!keys.every(k => k === "path" || k === "mode"))
-              throw new Error(`${field}.directories entry contains unknown keys`);
-            if (
-              !capabilityString(record.path) ||
-              !capabilityPath(record.path, "directory") ||
-              (record.mode !== "read" && record.mode !== "readwrite")
-            )
-              throw new Error(`${field}.directories contains invalid entries`);
-            if (seen.has(record.path))
-              throw new Error(`${field}.directories contains duplicate path ${record.path}`);
-            seen.add(record.path);
-            dirs.push({ path: record.path, mode: record.mode });
-          }
+          const dirs = parseDirectoryGrants(subVal, `${field}.directories`);
           if (dirs.length) files.directories = dirs;
         }
         if (Object.keys(files).length) capabilities.files = files;
+        break;
+      }
+      case "systemFiles": {
+        if (!value || typeof value !== "object" || Array.isArray(value))
+          throw new Error(`${field} must be an object`);
+        const systemFiles: NonNullable<Capabilities["systemFiles"]> = {};
+        for (const [subKey, subVal] of Object.entries(value as Record<string, unknown>)) {
+          if (subKey === "directories") {
+            const dirs = parseDirectoryGrants(subVal, `${field}.directories`);
+            if (dirs.length) systemFiles.directories = dirs;
+          } else {
+            const flag = systemFileFlags.find(candidate => candidate === subKey);
+            if (!flag) throw new Error(`Unknown capability: ${field}.${subKey}`);
+            if (typeof subVal !== "boolean") throw new Error(`${field}.${flag} must be a boolean`);
+            if (subVal) systemFiles[flag] = true;
+          }
+        }
+        if (Object.keys(systemFiles).length) capabilities.systemFiles = systemFiles;
         break;
       }
       case "network": {
@@ -486,20 +517,29 @@ async function mergeCapabilities(
   if (sources.some(source => source.clipboard?.read)) merged.clipboard = { read: true };
   const sqliteDatabases = new Set(sources.flatMap(source => source.sqlite?.databases ?? []));
   if (sqliteDatabases.size) merged.sqlite = { databases: [...sqliteDatabases].sort() };
-  const fileDirs = new Map<string, "read" | "readwrite">();
-  for (const grant of sources.flatMap(source => source.files?.directories ?? [])) {
-    const existing = fileDirs.get(grant.path);
-    if (!existing || grant.mode === "readwrite") fileDirs.set(grant.path, grant.mode);
-  }
-  const files: NonNullable<Capabilities["files"]> = {};
-  if (fileDirs.size) {
-    files.directories = [...fileDirs.entries()]
+  const mergeDirs = (key: "files" | "systemFiles") => {
+    const dirs = new Map<string, "read" | "readwrite">();
+    for (const { path: dirPath, mode } of sources.flatMap(
+      source => source[key]?.directories ?? [],
+    )) {
+      if (!dirs.has(dirPath) || mode === "readwrite") dirs.set(dirPath, mode);
+    }
+    return [...dirs.entries()]
       .sort(([a], [b]) => a.localeCompare(b))
       .map(([dirPath, mode]) => ({ path: dirPath, mode }));
-  }
+  };
+  const files: NonNullable<Capabilities["files"]> = {};
+  const fileDirs = mergeDirs("files");
+  if (fileDirs.length) files.directories = fileDirs;
   if (sources.some(source => source.files?.allowBookmarks === false)) files.allowBookmarks = false;
   if (sources.some(source => source.files?.readOnlyGrants)) files.readOnlyGrants = true;
   if (Object.keys(files).length) merged.files = files;
+  const systemFiles: NonNullable<Capabilities["systemFiles"]> = {};
+  const systemDirs = mergeDirs("systemFiles");
+  if (systemDirs.length) systemFiles.directories = systemDirs;
+  for (const flag of systemFileFlags)
+    if (sources.some(source => source.systemFiles?.[flag])) systemFiles[flag] = true;
+  if (Object.keys(systemFiles).length) merged.systemFiles = systemFiles;
   const networkSources = sources
     .map(source => source.network)
     .filter((net): net is NonNullable<Capabilities["network"]> => net !== undefined);

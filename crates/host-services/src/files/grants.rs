@@ -278,11 +278,11 @@ fn save_grant_file(store_path: &Path, data: &mut GrantFile) -> Result<(), Servic
     atomic_write_bytes(store_path, &bytes, Some(0o600))
 }
 
-/// Persists a workspace bookmark, returning its opaque token and metadata.
+/// Persists a filesystem grant, returning its opaque token and metadata.
 pub fn persist_grant(
     store_path: &Path,
     app_id: &str,
-    kind: HandleKind,
+    kind: impl Into<GrantKind>,
     canonical_path: &Path,
     mode: FileMode,
 ) -> Result<GrantRecord, ServiceError> {
@@ -296,11 +296,14 @@ pub fn persist_grant(
         .ok_or_else(|| ServiceError::new("NotFound", "grant store directory disappeared"))?;
     let mut file = load_grant_file(store_path)?;
     let kind = kind.into();
+    if kind == GrantKind::SystemDir && canonical_path.to_str().is_none() {
+        return Err(ServiceError::new("InvalidPath", "system grants require a UTF-8 root path"));
+    }
     let path_str = canonical_path.to_string_lossy();
     let index = if let Some(index) = file
         .grants
         .iter()
-        .position(|b| b.kind == kind && b.scope.path == path_str)
+        .position(|b| b.kind == kind && b.scope.path == path_str && (kind != GrantKind::SystemDir || b.mode == mode))
     {
         if mode.can_write() {
             file.grants[index].mode = FileMode::ReadWrite;
@@ -339,6 +342,31 @@ pub fn restore_workspace_grant(
     token: &str,
     ceiling: WorkspaceGrantCeiling,
 ) -> Result<GrantRecord, ServiceError> {
+    restore_grant(store_path, token, |record| ceiling.authorize(record.kind, record.mode).map(|_| ()))
+}
+
+/// Redeem a system directory grant under the current write ceiling.
+pub fn restore_system_grant(
+    store_path: &Path,
+    token: &str,
+    allow_write: bool,
+) -> Result<GrantRecord, ServiceError> {
+    restore_grant(store_path, token, |record| authorize_system_grant(record, allow_write))
+}
+
+/// Validate the kind and mode of a persisted desktop filesystem grant.
+pub fn authorize_system_grant(record: &GrantRecord, allow_write: bool) -> Result<(), ServiceError> {
+    if record.kind != GrantKind::SystemDir || (record.mode.can_write() && !allow_write) {
+        return Err(ServiceError::new("E_CAPABILITY", "grant exceeds the package systemFiles capability"));
+    }
+    Ok(())
+}
+
+fn restore_grant(
+    store_path: &Path,
+    token: &str,
+    authorize: impl FnOnce(&GrantRecord) -> Result<(), ServiceError>,
+) -> Result<GrantRecord, ServiceError> {
     let Some(_lock) = lock_grant_directory(grant_parent(store_path)?)? else {
         return Err(grant_not_found());
     };
@@ -348,7 +376,7 @@ pub fn restore_workspace_grant(
         .iter()
         .position(|r| r.token == token)
         .ok_or_else(grant_not_found)?;
-    ceiling.authorize(file.grants[index].kind, file.grants[index].mode)?;
+    authorize(&file.grants[index])?;
     if file.schema_version == 1 {
         save_grant_file(store_path, &mut file)?;
     }

@@ -25,6 +25,7 @@ pub(crate) struct ResolvedCapabilities {
     unix_sockets: Vec<String>,
     named_sockets: BTreeMap<String, Option<String>>,
     file_directories: Vec<ResolvedFileDirectory>,
+    system_directories: Vec<ResolvedFileDirectory>,
 }
 
 impl ResolvedCapabilities {
@@ -154,6 +155,7 @@ impl ResolvedCapabilities {
             unix_sockets,
             named_sockets,
             file_directories: Vec::new(),
+            system_directories: Vec::new(),
         })
     }
 
@@ -188,7 +190,7 @@ impl ResolvedCapabilities {
         let data = OnceCell::new();
         let documents = OnceCell::new();
         let home = || home.get_or_init(&resolve_home).as_deref();
-        self.file_directories = declarations.files.directories.iter().filter_map(|grant| {
+        let resolve = |grant: &crate::package::FileDirectoryGrant| {
             let path = if grant.path.starts_with('$') {
                 let (key, rest) = grant.path.split_once('/').unwrap_or((&grant.path, ""));
                 let base = match key {
@@ -208,9 +210,13 @@ impl ResolvedCapabilities {
                 path.to_path_buf()
             };
             Some(ResolvedFileDirectory { declaration: grant.path.clone(), path, mode: grant.mode })
-        }).collect();
+        };
+        self.file_directories = declarations.files.directories.iter().filter_map(resolve).collect();
+        self.system_directories = declarations.system_files.directories.iter().filter_map(resolve).collect();
         self
     }
+
+    pub(crate) fn system_directories(&self) -> &[ResolvedFileDirectory] { &self.system_directories }
 
     /// Manifest-order file grants; unresolved live templates do not grant authority.
     pub(crate) fn file_directories(&self) -> &[ResolvedFileDirectory] {

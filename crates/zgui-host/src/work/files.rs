@@ -56,6 +56,7 @@ pub(crate) struct OpenHandle {
     kind: HandleKind,
     path: String,
     mode: FileMode,
+    dropped: bool,
 }
 
 struct PendingFileOp {
@@ -494,6 +495,7 @@ impl Work {
                         kind: handle_kind,
                         path,
                         mode,
+                        dropped: false,
                     }))
                 });
                 self.push_preview_completion(op_id, res);
@@ -521,6 +523,7 @@ impl Work {
                                 kind: handle_kind,
                                 path: canonical.to_string_lossy().into_owned(),
                                 mode,
+                                dropped: false,
                             })
                         }
                     };
@@ -584,53 +587,98 @@ impl Work {
                 kind: HandleKind::Dir,
                 path: resolved_path,
                 mode: grant.mode,
+                dropped: false,
             },
         )
     }
 
-    /// Mints read-only Wave 1 `FileHandle` capabilities for paths from an accepted external drop.
-    /// Never exposes raw host paths; only regular existing files are minted.
-    pub(crate) fn mint_dropped_file_handles<'js>(
+    /// Reports directory MIME evidence without opening a dropped path or touching the live
+    /// filesystem in preview mode.
+    pub(crate) fn dropped_path_is_directory(&self, path: &Path) -> bool {
+        match &self.files.backend {
+            FilesBackend::Preview { vfs, .. } => path
+                .to_str()
+                .is_some_and(|path| vfs.borrow().stat(path).is_ok_and(|stat| stat.is_dir)),
+            FilesBackend::Live { .. } => std::fs::symlink_metadata(path)
+                .is_ok_and(|metadata| metadata.is_dir()),
+        }
+    }
+
+    /// Mints confined read-only handles without exposing host paths.
+    pub(crate) fn mint_dropped_handles<'js>(
         self: &Rc<Self>,
         ctx: &Ctx<'js>,
         paths: &[PathBuf],
-    ) -> rquickjs::Result<Array<'js>> {
-        let out = Array::new(ctx.clone())?;
-        let mut idx = 0usize;
+        action: zgui::platform::DragAction,
+    ) -> rquickjs::Result<Option<(Array<'js>, Array<'js>)>> {
+        let slots = MAX_FILE_HANDLES - self.files.handles.borrow().len();
+        let mut handles = Vec::new();
         for raw_path in paths {
-            let resolved = match &self.files.backend {
+            let (path, kind) = match &self.files.backend {
                 FilesBackend::Preview { vfs, .. } => {
-                    let Some(path_str) = raw_path.to_str() else {
+                    let Some(path) = raw_path.to_str() else { continue };
+                    let Ok(stat) = vfs.borrow().stat(path) else { continue };
+                    let kind = if stat.is_file {
+                        HandleKind::File
+                    } else if stat.is_dir {
+                        HandleKind::Dir
+                    } else {
                         continue;
                     };
-                    let vfs = vfs.borrow();
-                    match vfs.stat(path_str) {
-                        Ok(stat) if stat.is_file => Some(path_str.to_owned()),
-                        _ => None,
-                    }
+                    (path.to_owned(), kind)
                 }
                 FilesBackend::Live { .. } => {
-                    match std::fs::canonicalize(raw_path) {
-                        Ok(canon) if canon.is_file() => canon.to_str().map(str::to_owned),
-                        _ => None,
-                    }
+                    let Ok(path) = std::fs::canonicalize(raw_path) else { continue };
+                    let Ok(metadata) = std::fs::symlink_metadata(&path) else { continue };
+                    let kind = if metadata.is_file() {
+                        HandleKind::File
+                    } else if metadata.is_dir() && self.dropped_path_is_directory(raw_path) {
+                        HandleKind::Dir
+                    } else {
+                        continue;
+                    };
+                    let Ok(path) = path.into_os_string().into_string() else { continue };
+                    (path, kind)
                 }
             };
-            let Some(path) = resolved else {
-                continue;
-            };
-            let handle_obj = self.register_handle(
-                ctx,
-                OpenHandle {
-                    kind: HandleKind::File,
-                    path,
-                    mode: FileMode::Read,
-                },
-            )?;
-            out.set(idx, handle_obj)?;
-            idx += 1;
+            if handles.len() == slots {
+                return Ok(None);
+            }
+            handles.push(OpenHandle { kind, path, mode: FileMode::Read, dropped: true });
         }
-        Ok(out)
+        // A Move must never acknowledge a partial list: the source can discard its data
+        // after receiving the compositor's successful finish.
+        if handles.is_empty() || (action == zgui::platform::DragAction::Move && handles.len() != paths.len()) {
+            return Ok(None);
+        }
+        let files = Array::new(ctx.clone())?;
+        let directories = Array::new(ctx.clone())?;
+        let (mut file_index, mut directory_index) = (0, 0);
+        for handle in handles {
+            let (array, index) = match handle.kind {
+                HandleKind::File => (&files, &mut file_index),
+                HandleKind::Dir => (&directories, &mut directory_index),
+            };
+            array.set(*index, self.register_handle(ctx, handle)?)?;
+            *index += 1;
+        }
+        Ok(Some((files, directories)))
+    }
+
+    pub(super) fn dropped_directory_path(&self, ctx: &Ctx<'_>, handle: Value<'_>) -> rquickjs::Result<String> {
+        let id = self.extract_brand(ctx, handle, Some(HandleKind::Dir))?;
+        let handle = self.lookup_handle(ctx, id)?;
+        if !handle.dropped {
+            return Err(throw_file_error(ctx, "E_CAPABILITY", "directory handle did not originate from an accepted external drop"));
+        }
+        Ok(handle.path)
+    }
+
+    pub(super) fn preview_workspace_files(&self) -> Option<&RefCell<PreviewFs>> {
+        match &self.files.backend {
+            FilesBackend::Preview { vfs, .. } => Some(vfs),
+            FilesBackend::Live { .. } => None,
+        }
     }
 
     fn register_handle<'js>(
@@ -1283,6 +1331,7 @@ impl Work {
                     let kind = rec.kind.workspace_kind().expect("authorized workspace kind");
                     Ok(FileCompletionValue::Handle(Some(OpenHandle {
                         kind, path: rec.scope.path.clone(), mode: rec.mode,
+                        dropped: false,
                     })))
                 });
                 self.push_preview_completion(op_id, result);
@@ -1297,6 +1346,7 @@ impl Work {
                         kind: rec.kind.workspace_kind().expect("authorized workspace kind"),
                         path: canonical.to_string_lossy().into_owned(),
                         mode: rec.mode,
+                        dropped: false,
                     })))
                 });
             }
@@ -1517,14 +1567,14 @@ impl Work {
     }
 }
 
-fn throw_file_error(ctx: &Ctx<'_>, code: &str, message: &str) -> rquickjs::Error {
+pub(super) fn throw_file_error(ctx: &Ctx<'_>, code: &str, message: &str) -> rquickjs::Error {
     match service_error(ctx, code, message) {
         Ok(err) => ctx.throw(err.into_value()),
         Err(err) => err,
     }
 }
 
-fn read_bounded_utf8(
+pub(super) fn read_bounded_utf8(
     ctx: &Ctx<'_>,
     value: Value<'_>,
     limit: usize,
@@ -1604,7 +1654,7 @@ fn parse_recursive_option(ctx: &Ctx<'_>, val: Option<Value<'_>>) -> rquickjs::Re
         .ok_or_else(|| Exception::throw_type(ctx, "options.recursive must be a boolean"))
 }
 
-fn parse_dialog_options(
+pub(super) fn parse_dialog_options(
     ctx: &Ctx<'_>,
     val: Option<Value<'_>>,
 ) -> rquickjs::Result<(DialogOptions, bool)> {

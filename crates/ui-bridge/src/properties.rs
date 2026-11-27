@@ -8,7 +8,7 @@
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 use rquickjs::{Ctx, Exception, FromJs, Value};
-use zgui::{view::{AttrName, ClassName, CustomPropertyName, DomHandle, NodeId, PropKey, PropValue, Semantics, UiState}, vocab::{HasPopup, Invalid, Live, Orientation, Role, SemanticFlags, Toggled}};
+use zgui::{view::{AttrName, ClassName, CustomPropertyName, DomHandle, NodeId, PropKey, PropValue, Semantics, UiState}, vocab::{AriaCurrent, HasPopup, Invalid, Live, Orientation, Role, SemanticFlags, Toggled}};
 use zgui::vocab::prop::drawing;
 
 #[derive(Clone, Default, PartialEq)]
@@ -31,6 +31,7 @@ pub(crate) enum Mutation {
     Role(Role),
     Label(Option<String>),
     Description(Option<String>),
+    Current(Option<AriaCurrent>),
     KeyShortcuts(Option<String>),
     Custom(String, Option<String>),
     DataAttribute(String, Option<String>),
@@ -252,6 +253,17 @@ impl Mutation {
             }
             "ariaLabel" => Ok(Self::Label(string(value)?)),
             "ariaDescription" => Ok(Self::Description(string(value)?)),
+            "ariaCurrent" => Ok(Self::Current(match string(value)?.as_deref() {
+                None => None,
+                Some("false") => Some(AriaCurrent::False),
+                Some("true") => Some(AriaCurrent::True),
+                Some("page") => Some(AriaCurrent::Page),
+                Some("step") => Some(AriaCurrent::Step),
+                Some("location") => Some(AriaCurrent::Location),
+                Some("date") => Some(AriaCurrent::Date),
+                Some("time") => Some(AriaCurrent::Time),
+                Some(_) => return Err(Exception::throw_type(ctx, "unsupported ariaCurrent value")),
+            })),
             "ariaKeyShortcuts" => Ok(Self::KeyShortcuts(string(value)?)),
             "role" => {
                 let role = match string(value)?.as_deref() {
@@ -479,6 +491,7 @@ impl Properties {
                     Mutation::Level(level) => semantics.position.level = level,
                     Mutation::Label(label) => semantics.label = label.map(Into::into),
                     Mutation::Description(description) => semantics.description = description.map(Into::into),
+                    Mutation::Current(current) => semantics.current = current,
                     Mutation::KeyShortcuts(shortcuts) => semantics.keyboard_shortcut = shortcuts.map(Into::into),
                     _ => unreachable!(),
                 }

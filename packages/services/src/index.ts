@@ -379,6 +379,40 @@ export type {
 export { listGrants, revokeGrant } from "./grants.js";
 export type { GrantToken, GrantKind, GrantAccessMode, GrantInfo } from "./grants.js";
 
+export {
+  listTrash,
+  listVolumes,
+  loadCachedThumbnail,
+  openDroppedSystemDirectory,
+  openExternal,
+  openSystemDirectory,
+  openSystemDirectoryDialog,
+  persistSystemGrant,
+  restoreSystemGrant,
+  startFileJob,
+  startOutboundSystemDrag,
+  watchVolumes,
+} from "./system-files.js";
+export type {
+  FileConflictInfo,
+  FileConflictResolution,
+  FileJobOptions,
+  FileJobProgress,
+  FileJobSpec,
+  OpenExternalTarget,
+  OutboundSystemDragOptions,
+  ReadSystemDirOptions,
+  SystemDirHandle,
+  SystemDirPage,
+  SystemEntryInfo,
+  SystemEntryKind,
+  SystemEntryRef,
+  SystemVolume,
+  ThumbnailOptions,
+  ThumbnailSize,
+  TrashEntry,
+} from "./system-files.js";
+
 export { connectWebSocket, createScopedFetch, httpRequest, openEventStream } from "./network.js";
 export type {
   EventStream,

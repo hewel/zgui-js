@@ -250,7 +250,7 @@ Preview uses the fixture's `activation` and scenario `service.emit` channel
 
 `listGrants()` returns this application's `GrantInfo` records (`token`, `kind`,
 `label`, `mode`, `createdMs`), never the underlying pathname. `GrantToken` is
-opaque; `GrantKind` is `workspace-file`, `workspace-dir` or reserved `system-dir`,
+opaque; `GrantKind` is `workspace-file`, `workspace-dir` or `system-dir`,
 and `GrantAccessMode` is `read` or `readwrite`. `revokeGrant(token)` returns
 whether the entry existed. It prevents future restoration without closing
 existing live handles or touching the underlying filesystem resource.
@@ -265,6 +265,62 @@ persistence and restoration, or `capabilities.files.readOnlyGrants: true` to
 deny only `readwrite` grants. A denied restore rejects with `E_CAPABILITY` and
 leaves the record and target unchanged; those grants can still be listed and
 revoked. Omission preserves legacy behavior.
+
+## System files
+
+Declare only the axes the application uses. Runtime extension overlays cannot
+add system-file flags or expand roots beyond the base manifest.
+
+```json
+{
+  "systemFiles": {
+    "read": true,
+    "write": true,
+    "trash": true,
+    "volumes": true,
+    "thumbnails": true,
+    "openExternal": true,
+    "directories": [{ "path": "$HOME", "mode": "readwrite" }]
+  }
+}
+```
+
+- `openSystemDirectory` opens an exact declaration (literal path or `$HOME`,
+  `$XDG_DATA_HOME`, `$XDG_DOCUMENTS_DIR` template). `openSystemDirectoryDialog`
+  requires a gesture and grants read-only access unless write is declared and
+  `readOnly` is not set. `openDroppedSystemDirectory(ev.directories[i])` redeems
+  an accepted drop as a read-only system root. It does not convert arbitrary
+  workspace handles. A Solid owner closes the system handle on cleanup.
+- `lstat` and `readDir` expose symlink metadata without following the final link
+  for `lstat`. Traversal requires an active root covering the resolved target;
+  mutations require write authority at both ends. Use an entry's returned
+  `relativePath` verbatim. Pages default to 2,000 entries (max 5,000); cursors
+  continue the same sort and filter on the current listing, not a snapshot.
+- `persistSystemGrant` and `restoreSystemGrant` use the same per-app ledger as
+  workspace grants, without promoting either kind. `restoreSystemGrant` rejects
+  a stored readwrite grant if the current manifest no longer declares write.
+- `startFileJob` copies or moves each source into the destination directory and
+  never reads file contents into JavaScript. It also supports Trash, permanent
+  removal, mkdir, symlink creation, and chmod. A job pauses on conflict
+  until `onConflict` returns `overwrite`, `skip`, `autoRename`, or `cancel`;
+  no handler means cancel. Cancelling stops further work without rolling back
+  entries already committed. Trash never falls back to permanent removal.
+  `listTrash` shows entries within active roots; restoration needs a writable root.
+- `listVolumes` inventories Linux mounts, and `watchVolumes` delivers an initial
+  inventory and later changes until stopped or the Solid owner is disposed.
+- `loadCachedThumbnail` returns a native `ImageHandle` for a fresh Freedesktop
+  cache hit and `null` for a miss. Release the returned handle when no longer used.
+- `openExternal` accepts a granted entry or an HTTP(S)/mailto URL during a user
+  gesture or with a single-use token minted by this session via
+  `requestActivationToken()`. Preview records the target in
+  `services.json` instead of launching a process.
+- `startOutboundSystemDrag` offers granted paths as `text/uri-list` from a live
+  press, without buffering file contents. Move requires write authority. The
+  host never deletes source data after a drag.
+
+The separate `services.systemFiles` preview fixture supplies a virtual desktop
+filesystem, generated entries, scripted directory dialogs, volumes, Trash
+availability, and cached PNGs. It cannot grant authority or access host paths.
 
 ## Reactive persistence and query adapters
 

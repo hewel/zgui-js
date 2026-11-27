@@ -266,17 +266,6 @@ impl WaylandState {
         if !has_files {
             return;
         }
-        // Accepted before it is asked for, which the protocol requires and which is also what
-        // tells the source this window is a target at all.
-        offer.accept_mime_type(
-            offer.serial,
-            Some(crate::clipboard::mime::URI_LIST.to_owned()),
-        );
-        // The source actions arrive before the offer becomes a drag offer, so the toolkit never
-        // passes them to `source_actions`. Without an action set here, the compositor cancels the
-        // drop.
-        let taken = crate::driver::data::copy_only(offer.source_actions);
-        offer.set_actions(taken, taken);
         let Ok(reader) = offer.receive(crate::clipboard::mime::URI_LIST.to_owned()) else {
             return;
         };
@@ -308,9 +297,25 @@ impl WaylandState {
         };
         for item in completed {
             if let Some((id, event)) = self.drag.read_finished(item.key, item.paths) {
-                self.report(id, zgui_platform::SurfaceEvent::Drag(event));
+                self.report_drag(id, event);
             }
         }
+    }
+
+    pub(crate) fn report_drag(&mut self, id: SurfaceId, event: zgui_platform::DragEvent) {
+        use zgui_platform::DragEvent;
+        let delivery = match &event {
+            DragEvent::Entered { .. } | DragEvent::Moved { .. } => {
+                let Some(key) = self.drag.key() else { return };
+                Delivery::DragHover(key)
+            }
+            DragEvent::DroppedWithAction { action, .. } => {
+                let Some(offer) = self.drag.take_pending_drop() else { return };
+                Delivery::DragDrop(offer, *action)
+            }
+            _ => Delivery::Protocol,
+        };
+        self.out.push((id, SurfaceEvent::Drag(event), delivery));
     }
 
     /// Records something that happened to a surface, for delivery after this dispatch.
@@ -397,6 +402,11 @@ impl core::fmt::Debug for WaylandState {
 
 pub(crate) enum Delivery {
     Protocol,
+    DragHover(crate::input::dnd::OfferKey),
+    DragDrop(
+        crate::input::dnd::PendingDrop<smithay_client_toolkit::data_device_manager::data_offer::DragOffer>,
+        zgui_platform::DragAction,
+    ),
     /// Logical removal was already performed, but the handler still needs to know.
     Removed,
 }

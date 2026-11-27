@@ -7,6 +7,13 @@ import {
   AvatarGroupCount,
   AvatarImage,
   Badge,
+  Breadcrumb,
+  BreadcrumbEllipsis,
+  BreadcrumbItem,
+  BreadcrumbLink,
+  BreadcrumbList,
+  BreadcrumbPage,
+  BreadcrumbSeparator,
   Button,
   Card,
   CardAction,
@@ -49,10 +56,37 @@ import { DemoRow, Panel } from "../shell.js";
 export function CompositesSection(props: { onAction: (label: string) => void }) {
   const [useAsset, setUseAsset] = createSignal(true);
   const [extraLine, setExtraLine] = createSignal(true);
+  const [folder, setFolder] = createSignal("Invoices");
   const theme = useTheme();
 
   return (
     <row class="panel-grid" testId="section-composites">
+      <Panel title="Breadcrumb" note="Select an ancestor to navigate back">
+        <Breadcrumb testId="composites-breadcrumb">
+          <BreadcrumbList>
+            {folder() !== "Workspace" && (
+              <>
+                <BreadcrumbItem>
+                  <BreadcrumbLink
+                    testId="breadcrumb-workspace"
+                    onClick={() => setFolder("Workspace")}
+                  >
+                    Workspace
+                  </BreadcrumbLink>
+                </BreadcrumbItem>
+                <BreadcrumbSeparator />
+                <BreadcrumbItem>
+                  <BreadcrumbEllipsis />
+                </BreadcrumbItem>
+                <BreadcrumbSeparator />
+              </>
+            )}
+            <BreadcrumbItem>
+              <BreadcrumbPage testId="breadcrumb-current">{folder()}</BreadcrumbPage>
+            </BreadcrumbItem>
+          </BreadcrumbList>
+        </Breadcrumb>
+      </Panel>
       <Panel
         title="Card"
         note="Structured surface with header, action badge, body, and footer actions"

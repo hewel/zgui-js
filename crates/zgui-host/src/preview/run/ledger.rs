@@ -34,7 +34,7 @@ impl StepDriver for Driver {
             Step::DragEnter{location,paths,..}=>self.drag_enter(location,paths),
             Step::DragMove{location,..}=>self.drag_move(location),
             Step::DragLeave{surface,..}=>self.drag_leave(surface),
-            Step::DragDrop{location,paths,..}=>self.drag_drop(location,paths),
+            Step::DragDrop{location,paths,action,..}=>self.drag_drop(location,paths,*action),
             Step::KeyPress{surface,key,modifiers,..}=>self.key(surface,key,modifiers).map(|mut trace| { trace["surface"]=json!(surface); trace }),
             Step::TextCommit{surface,text,..}=>self.text(surface,text).map(|mut trace| { trace["surface"]=json!(surface); trace }),
             Step::Assert{target,check,..}=>self.assert_node(target,check),

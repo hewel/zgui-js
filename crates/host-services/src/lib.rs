@@ -21,6 +21,7 @@ pub mod files;
 pub mod locale;
 pub mod network;
 pub mod sqlite;
+pub mod system_files;
 pub mod unix_socket;
 mod worker;
 

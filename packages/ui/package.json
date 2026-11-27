@@ -49,6 +49,10 @@
       "types": "./dist/renderer/index.d.ts",
       "default": "./dist/renderer/index.js"
     },
+    "./dnd": {
+      "types": "./dist/dnd.d.ts",
+      "default": "./dist/dnd.js"
+    },
     "./components": {
       "types": "./dist/components/index.d.ts",
       "default": "./dist/components/index.js"

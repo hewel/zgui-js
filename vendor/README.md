@@ -504,11 +504,13 @@ Regression gate:
 
     bun run test:vendor zgui-platform-wayland && bun run test:vendor zgui-runtime && bun test --isolate tests/preview/dnd.test.mjs
 
-## Outbound Copy-only Wayland drag source
+## Wayland Copy and Move drag negotiation
 
-`zgui-platform` adds `OutboundDragPayload`, `DragEvent::OutboundFinished { accepted }`, and default `Surface::begin_outbound_drag` / `Surface::cancel_outbound_drag` methods.
+`zgui-platform` carries the compositor-selected `DragAction` on `DragEvent::DroppedWithAction` and the committed action on `DragEvent::OutboundFinished`. Non-negotiating backends such as the pinned Winit adapter still use the Copy-only `DragEvent::Dropped`. `OutboundDragPayload` defaults to Copy; its action set can also allow Move. The live pointer/touch press serial remains mandatory for an outbound drag.
 
-`zgui-platform-wayland` tracks live active pointer/touch presses on `SeatLink` (`press_started`/`press_ended`/`live_drag_serial`, cleared on release, leave, or cancel so stale serials are rejected) and wires all `DataSourceHandler` callbacks in `driver/data.rs` (`send_request`, `accept_mime`, `action`, `dnd_dropped`, `dnd_finished`, `cancelled`) to `Selections`. Outbound drags create a `DragSource` advertising `DndAction::Copy` only (never `Move`) and explicitly destroy `wl_data_source` on finish, cancellation, or drop. `zgui-platform-headless` tracks `live_press` and outbound drag counts on `OffscreenSurface` for deterministic preview verification.
+`zgui-platform-wayland` reads `text/uri-list` for hover metadata without accepting the offer first. The destination responds through `Surface::set_drag_action`; the driver binds the reply to the originating offer and clamps it to the source's action mask. On drop it delivers the compositor-selected action and finishes the offer only if the destination confirms that action after handling the drop. Local directory URIs travel through the same decoder as file URIs. An outbound source reports the selected allowed action only on `dnd_finished`; cancellation reports `None` and destroys the source.
+
+The private-socket `file_drop` test exercises directory URI delivery, Copy-to-Move hover negotiation, unsupported Move rejection, and destruction without finish when the destination declines the drop. `dnd_source_protocol` checks action advertisements, Copy and Move completion, cancellation after an action was selected, and rejection of stale press serials.
 
 Regression gate:
 

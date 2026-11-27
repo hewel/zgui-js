@@ -303,7 +303,10 @@ impl Window {
                         .key(&world, *state, event, modifiers, &shortcuts);
                     (routed.target(), routed.steps.to_vec(), routed.default)
                 }
-                SurfaceEvent::Drag(zgui_platform::DragEvent::Dropped { position, .. }) => {
+                SurfaceEvent::Drag(
+                    zgui_platform::DragEvent::Dropped { position, .. }
+                    | zgui_platform::DragEvent::DroppedWithAction { position, .. },
+                ) => {
                     let chain = world.chain_at(zgui_geom::Point::new(
                         zgui_geom::DevicePx(position.x.0 * self.scale),
                         zgui_geom::DevicePx(position.y.0 * self.scale),

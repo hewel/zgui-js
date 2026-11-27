@@ -223,11 +223,11 @@ pub struct OffscreenSurface {
     move_drags: AtomicU64,
     /// Whether a live pointer press is currently active on this surface.
     live_press: AtomicBool,
-    /// Active outbound Copy-only drag payload, if one is currently in flight.
+    /// Active outbound drag payload, if one is currently in flight.
     outbound_drag: Mutex<Option<zgui_platform::OutboundDragPayload>>,
-    /// Number of outbound Copy-only drags started on this surface.
+    /// Number of outbound drags started on this surface.
     outbound_drags: AtomicU64,
-    /// Number of outbound Copy-only drags explicitly cancelled on this surface.
+    /// Number of outbound drags explicitly cancelled on this surface.
     outbound_drag_cancels: AtomicU64,
 }
 
@@ -480,13 +480,13 @@ impl OffscreenSurface {
         self.live_press.store(active, Ordering::Release);
     }
 
-    /// How many outbound Copy-only drags were started on this surface.
+    /// How many outbound drags were started on this surface.
     #[must_use]
     pub fn outbound_drag_count(&self) -> u64 {
         self.outbound_drags.load(Ordering::Relaxed)
     }
 
-    /// How many outbound Copy-only drags were cancelled on this surface.
+    /// How many outbound drags were cancelled on this surface.
     #[must_use]
     pub fn outbound_drag_cancel_count(&self) -> u64 {
         self.outbound_drag_cancels.load(Ordering::Relaxed)
@@ -993,7 +993,10 @@ impl Surface for OffscreenSurface {
         &self,
         payload: zgui_platform::OutboundDragPayload,
     ) -> Result<(), PlatformError> {
-        if !self.live_press.load(Ordering::Acquire) || payload.items.is_empty() {
+        if !self.live_press.load(Ordering::Acquire)
+            || payload.items.is_empty()
+            || payload.allowed_actions == zgui_platform::DragActions::None
+        {
             return Err(Unsupported.into());
         }
         *self

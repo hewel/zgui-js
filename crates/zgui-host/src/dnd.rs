@@ -14,7 +14,7 @@ use rquickjs::{
 use ui_bridge::dnd::DndEventKind;
 use zgui::{
     geom::{Css, CssPx, Point},
-    platform::{DragEvent, OutboundDragPayload, SurfaceId},
+    platform::{DragAction, DragActions, DragEvent, OutboundDragPayload, SurfaceId},
     runtime::Window,
     view::NodeId,
     vocab::{Key, KeyEvent, KeyState, NamedKey, PointerAction},
@@ -51,6 +51,26 @@ impl DragEffect {
     }
 }
 
+impl From<DragAction> for DragEffect {
+    fn from(action: DragAction) -> Self {
+        match action {
+            DragAction::Copy => Self::Copy,
+            DragAction::Move => Self::Move,
+            _ => Self::None,
+        }
+    }
+}
+
+impl From<DragEffect> for DragAction {
+    fn from(effect: DragEffect) -> Self {
+        match effect {
+            DragEffect::Copy => Self::Copy,
+            DragEffect::Move => Self::Move,
+            DragEffect::None => Self::None,
+        }
+    }
+}
+
 struct InternalDrag {
     id: u64,
     surface: SurfaceId,
@@ -68,6 +88,7 @@ struct ExternalDrag {
     types: Vec<String>,
     file_count: usize,
     hovered: Vec<NodeId>,
+    enter_effects: Vec<(NodeId, DragEffect)>,
     accepted: Option<(NodeId, DragEffect)>,
 }
 
@@ -124,13 +145,17 @@ fn data_prop<T>(value: T) -> Property<T> {
 }
 
 /// Derives safe MIME type strings from dropped paths without exposing raw paths or filenames.
-fn infer_external_mime_types(paths: &[std::path::PathBuf]) -> Vec<String> {
+fn infer_external_mime_types(work: &crate::work::Work, paths: &[std::path::PathBuf]) -> Vec<String> {
     let mut types = Vec::new();
     if !paths.is_empty() {
         types.push("text/uri-list".to_owned());
     }
     for path in paths {
-        let mime = mime_for_path(path);
+        let mime = if work.dropped_path_is_directory(path) {
+            "inode/directory"
+        } else {
+            mime_for_path(path)
+        };
         if !types.iter().any(|existing| existing == mime) {
             types.push(mime.to_owned());
         }
@@ -217,12 +242,7 @@ fn build_drag_event<'js>(
     ev.prop(
         "accept",
         data_prop(Func::from(move |effect: Opt<String>| {
-            let chosen = DragEffect::parse(effect.0.as_deref(), default_effect);
-            if chosen == DragEffect::None {
-                acc_cell.set(None);
-            } else {
-                acc_cell.set(Some(chosen));
-            }
+            acc_cell.set(Some(DragEffect::parse(effect.0.as_deref(), default_effect)));
         })),
     )?;
     let stop_cell = stopped;
@@ -263,7 +283,21 @@ impl Session {
                     let session = weak
                         .upgrade()
                         .ok_or_else(|| Exception::throw_reference(&ctx, "session is disposed"))?;
-                    session.start_outbound_drag(&ctx, source_node, options)
+                    session.start_outbound_drag(&ctx, source_node, options, false)
+                },
+            )),
+        )?;
+        let weak = Rc::downgrade(self);
+        dnd_obj.prop(
+            "startOutboundSystemDrag",
+            data_prop(Func::from(
+                move |ctx: Ctx<'js>,
+                      source_node: rquickjs::Class<'js, ui_bridge::NativeNode>,
+                      options: Object<'js>| {
+                    let session = weak
+                        .upgrade()
+                        .ok_or_else(|| Exception::throw_reference(&ctx, "session is disposed"))?;
+                    session.start_outbound_drag(&ctx, source_node, options, true)
                 },
             )),
         )?;
@@ -285,6 +319,7 @@ impl Session {
         ctx: &Ctx<'js>,
         source_node: rquickjs::Class<'js, ui_bridge::NativeNode>,
         options: Object<'js>,
+        system_paths: bool,
     ) -> rquickjs::Result<Object<'js>> {
         if self.shutdown_started.get() {
             return Err(Exception::throw_type(ctx, "drag cannot start during session shutdown"));
@@ -307,17 +342,50 @@ impl Session {
                 "cannot start outbound drag from an inert node",
             ));
         }
+        let allowed_actions = if let Some(effects) = options.get::<_, Option<Array>>("allowedEffects")? {
+            let len: u32 = effects.as_object().get("length")?;
+            if !(1..=2).contains(&len) {
+                return Err(Exception::throw_range(ctx, "allowedEffects must contain 1 or 2 entries"));
+            }
+            let (mut copy, mut move_) = (false, false);
+            for index in 0..len as usize {
+                match effects.get::<String>(index)?.as_str() {
+                    "copy" => copy = true,
+                    "move" => move_ = true,
+                    _ => return Err(Exception::throw_type(ctx, "allowedEffects must contain only copy or move")),
+                }
+            }
+            match (copy, move_) {
+                (true, false) => DragActions::Copy,
+                (false, true) => DragActions::Move,
+                (true, true) => DragActions::CopyMove,
+                (false, false) => unreachable!("validated a nonempty action set"),
+            }
+        } else {
+            DragActions::Copy
+        };
+        let items = if system_paths {
+            let mode = if allowed_actions.contains(DragAction::Move) {
+                host_services::files::FileMode::ReadWrite
+            } else {
+                host_services::files::FileMode::Read
+            };
+            let uris = self.work.system_drag_uris(ctx, options.get("entries")?, mode)?;
+            vec![("text/uri-list".into(), uris)]
+        } else {
         let items_arr: Array = options.get("items")?;
-        if items_arr.is_empty() || items_arr.len() > MAX_OUTBOUND_DRAG_ITEMS {
+        let len: u32 = items_arr.as_object().get("length")?;
+        let len = len as usize;
+        if !(1..=MAX_OUTBOUND_DRAG_ITEMS).contains(&len) {
             return Err(Exception::throw_range(
                 ctx,
                 "outbound drag items must contain between 1 and 16 MIME entries",
             ));
         }
-        let mut items = Vec::with_capacity(items_arr.len());
+        let mut items = Vec::with_capacity(len);
         let mut total_bytes = 0usize;
-        for entry in items_arr.iter::<Object>() {
-            let entry = entry?;
+        for index in 0..len {
+            let entry: Object = items_arr.get(index)?;
             let mime: String = entry.get("mime")?;
             if mime.trim().is_empty() || mime.chars().any(char::is_control) {
                 return Err(Exception::throw_type(ctx, "outbound drag MIME type must be non-empty without control characters"));
@@ -345,6 +413,8 @@ impl Session {
             }
             items.push((mime, bytes));
         }
+            items
+        };
         let on_end: Option<Function> = options.get("onEnd")?;
         let Some(native_surface) = self.platform_surface(surface_id) else {
             let err = crate::work::service_error(
@@ -355,13 +425,13 @@ impl Session {
             return Err(ctx.throw(err.into_value()));
         };
         if native_surface
-            .begin_outbound_drag(OutboundDragPayload::new(items))
+            .begin_outbound_drag(OutboundDragPayload::new(items).with_allowed_actions(allowed_actions))
             .is_err()
         {
             let err = crate::work::service_error(
                 ctx,
                 "E_DRAG_NO_LIVE_PRESS",
-                "outbound Copy-only drag requires an active live press on the originating surface",
+                "outbound drag requires an active live press on the originating surface",
             )?;
             return Err(ctx.throw(err.into_value()));
         }
@@ -788,6 +858,7 @@ impl Session {
                         DragEffect::Move,
                         &prev_hovered,
                         &chain,
+                        None,
                     )?;
                     if action == PointerAction::Moved {
                         if let Some(drag) = self.dnd.internal.borrow_mut().as_mut()
@@ -861,7 +932,7 @@ impl Session {
     /// through the exact `Window::chain_at_css` hit-testing pipeline.
     ///
     /// Hover stages expose MIME types & file count only (never raw paths or handles).
-    /// Only an accepted drop mints read-only Wave 1 `FileHandle` capabilities.
+    /// Only an accepted drop mints confined read-only file and directory capabilities.
     pub(crate) fn handle_external_drag(
         self: &Rc<Self>,
         window: &Window,
@@ -880,69 +951,50 @@ impl Session {
         let Some(engine) = engine.as_mut() else {
             return Ok(());
         };
+        let mut reply = None;
         self.bridges
             .run(engine.turn(), |js| {
                 js.with_context(|ctx| match event {
-                    DragEvent::Entered { paths, position } => {
-                        let types = infer_external_mime_types(paths);
-                        let file_count = paths.len();
-                        let drag_id = self.dnd.alloc_id();
-                        let chain = window.chain_at_css(*position);
-                        let accepted = self.dispatch_hover_and_over(
-                            &ctx,
-                            &bridge,
-                            Some(window),
-                            drag_id,
-                            "external",
-                            &types,
-                            file_count,
-                            *position,
-                            DragEffect::Copy,
-                            &[],
-                            &chain,
-                        )?;
-                        *self.dnd.external.borrow_mut() = Some(ExternalDrag {
-                            id: drag_id,
-                            surface,
-                            types,
-                            file_count,
-                            hovered: chain,
-                            accepted,
-                        });
-                        Ok(())
-                    }
-                    DragEvent::Moved { position } => {
-                        let (drag_id, types, file_count, prev_hovered) = {
-                            let guard = self.dnd.external.borrow();
-                            let Some(ext) = guard.as_ref().filter(|e| e.surface == surface) else {
+                    DragEvent::Entered { position, .. } | DragEvent::Moved { position } => {
+                        let mut drag = if let DragEvent::Entered { paths, .. } = event {
+                            ExternalDrag {
+                                id: self.dnd.alloc_id(),
+                                surface,
+                                types: infer_external_mime_types(&self.work, paths),
+                                file_count: paths.len(),
+                                hovered: Vec::new(),
+                                enter_effects: Vec::new(),
+                                accepted: None,
+                            }
+                        } else {
+                            let Some(drag) = self.dnd.external.borrow_mut().take_if(|drag| drag.surface == surface) else {
                                 return Ok(());
                             };
-                            (ext.id, ext.types.clone(), ext.file_count, ext.hovered.clone())
+                            drag
                         };
                         let chain = window.chain_at_css(*position);
-                        let accepted = self.dispatch_hover_and_over(
+                        drag.accepted = self.dispatch_hover_and_over(
                             &ctx,
                             &bridge,
                             Some(window),
-                            drag_id,
+                            drag.id,
                             "external",
-                            &types,
-                            file_count,
+                            &drag.types,
+                            drag.file_count,
                             *position,
                             DragEffect::Copy,
-                            &prev_hovered,
+                            &drag.hovered,
                             &chain,
+                            Some(&mut drag.enter_effects),
                         )?;
-                        if let Some(ext) = self.dnd.external.borrow_mut().as_mut()
-                            && ext.id == drag_id
-                        {
-                            ext.hovered = chain;
-                            ext.accepted = accepted;
-                        }
+                        let requested = drag.accepted.map_or(DragAction::None, |(_, effect)| effect.into());
+                        reply = Some(requested);
+                        drag.hovered = chain;
+                        *self.dnd.external.borrow_mut() = Some(drag);
                         Ok(())
                     }
                     DragEvent::Left => {
-                        let Some(ext) = self.dnd.external.borrow_mut().take() else {
+                        let Some(ext) = self.dnd.external.borrow_mut().take_if(|drag| drag.surface == surface) else {
                             return Ok(());
                         };
                         for node in ext.hovered {
@@ -964,52 +1016,37 @@ impl Session {
                         }
                         Ok(())
                     }
-                    DragEvent::Dropped { paths, position } => {
-                        let existing = self.dnd.external.borrow_mut().take();
-                        let (drag_id, types, prev_hovered) = match existing {
-                            Some(ext) if ext.surface == surface => {
-                                let types = if ext.types.is_empty() {
-                                    infer_external_mime_types(paths)
-                                } else {
-                                    ext.types
-                                };
-                                (ext.id, types, ext.hovered)
-                            }
-                            _ => (self.dnd.alloc_id(), infer_external_mime_types(paths), Vec::new()),
-                        };
+                    DragEvent::Dropped { paths, position }
+                    | DragEvent::DroppedWithAction { paths, position, .. } => {
+                        let action = event.drop_action().expect("matched a drop");
+                        let existing = self.dnd.external.borrow_mut().take_if(|drag| drag.surface == surface);
                         let chain = window.chain_at_css(*position);
-                        let accepted = self.dispatch_hover_and_over(
-                            &ctx,
-                            &bridge,
-                            Some(window),
-                            drag_id,
-                            "external",
-                            &types,
-                            paths.len(),
-                            *position,
-                            DragEffect::Copy,
-                            &prev_hovered,
-                            &chain,
-                        )?;
-                        if let Some((target_node, effect)) = accepted {
-                            // Mint strictly read-only Wave 1 FileHandle capabilities ONLY on accepted drop.
-                            let files = self.work.mint_dropped_file_handles(&ctx, paths)?;
-                            self.dispatch_drop(
-                                &ctx,
-                                &bridge,
-                                Some(window),
-                                drag_id,
-                                "external",
-                                &types,
-                                *position,
-                                effect,
-                                target_node,
-                                &chain,
-                                None,
-                                Some(files),
-                            )?;
+                        let (drag_id, types, hovered, accepted) = if let Some(drag) = existing {
+                            (drag.id, drag.types, drag.hovered, drag.accepted)
                         } else {
-                            for node in chain {
+                            // Preview can simulate a drop without separate enter/motion steps.
+                            let id = self.dnd.alloc_id();
+                            let types = infer_external_mime_types(&self.work, paths);
+                            let accepted = self.dispatch_hover_and_over(
+                                &ctx, &bridge, Some(window), id, "external", &types, paths.len(),
+                                *position, DragEffect::Copy, &[], &chain, Some(&mut Vec::new()),
+                            )?;
+                            (id, types, chain.clone(), accepted)
+                        };
+                        if action != DragAction::None
+                            && let Some((target, effect)) = accepted
+                            && DragAction::from(effect) == action
+                            && let Some(index) = chain.iter().position(|&node| node == target)
+                            && chain[..=index].iter().any(|&node| bridge.dnd_callback(node, DndEventKind::Drop).is_some())
+                            && let Some(entries) = self.work.mint_dropped_handles(&ctx, paths, action)?
+                        {
+                            self.dispatch_drop(
+                                &ctx, &bridge, Some(window), drag_id, "external", &types, *position,
+                                effect, target, &chain, None, Some(entries),
+                            )?;
+                            reply = Some(action);
+                        } else {
+                            for node in hovered {
                                 if let Some(cb) = bridge.dnd_callback(node, DndEventKind::DragLeave) {
                                     let ev = build_drag_event(
                                         &ctx,
@@ -1029,15 +1066,16 @@ impl Session {
                         }
                         Ok(())
                     }
-                    DragEvent::OutboundFinished { accepted } => {
-                        let Some(drag) = self.dnd.outbound.borrow_mut().take() else {
+                    DragEvent::OutboundFinished { action } => {
+                        let Some(drag) = self.dnd.outbound.borrow_mut().take_if(|drag| drag.surface == surface) else {
                             return Ok(());
                         };
+                        let accepted = *action != DragAction::None;
                         if let Some(on_end) = drag.on_end {
                             let res = Object::new(ctx.clone())?;
-                            res.prop("accepted", data_prop(*accepted))?;
-                            res.prop("effect", data_prop(if *accepted { "copy" } else { "none" }))?;
-                            res.prop("reason", data_prop(if *accepted { "finished" } else { "cancel" }))?;
+                            res.prop("accepted", data_prop(accepted))?;
+                            res.prop("effect", data_prop(DragEffect::from(*action).as_str()))?;
+                            res.prop("reason", data_prop(if accepted { "finished" } else { "cancel" }))?;
                             on_end.restore(&ctx)?.call::<_, ()>((res,))?;
                         }
                         Ok(())
@@ -1045,7 +1083,11 @@ impl Session {
                     _ => Ok(()),
                 })
             })
-            .map_err(|error| self.diagnostic(error).into())
+            .map_err(|error| self.diagnostic(error))?;
+        if let Some(action) = reply {
+            window.surface().set_drag_action(action);
+        }
+        Ok(())
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1062,6 +1104,7 @@ impl Session {
         default_effect: DragEffect,
         prev_hovered: &[NodeId],
         chain: &[NodeId],
+        mut enter_effects: Option<&mut Vec<(NodeId, DragEffect)>>,
     ) -> rquickjs::Result<Option<(NodeId, DragEffect)>> {
         // 1. Fire onDragLeave on nodes no longer under the pointer.
         for &node in prev_hovered {
@@ -1083,11 +1126,15 @@ impl Session {
                 cb.restore(ctx)?.call::<_, ()>((ev,))?;
             }
         }
+        if let Some(effects) = &mut enter_effects {
+            effects.retain(|(node, _)| chain.contains(node));
+        }
         // 2. Fire onDragEnter on newly entered nodes (root to leaf).
         for &node in chain {
             if !prev_hovered.contains(&node)
                 && let Some(cb) = bridge.dnd_callback(node, DndEventKind::DragEnter)
             {
+                let acc_cell = Rc::new(Cell::new(None));
                 let ev = build_drag_event(
                     ctx,
                     drag_id,
@@ -1097,10 +1144,15 @@ impl Session {
                     position,
                     BoxGeometry::from_window(window, node),
                     default_effect,
-                    Rc::new(Cell::new(None)),
+                    acc_cell.clone(),
                     Rc::new(Cell::new(false)),
                 )?;
                 cb.restore(ctx)?.call::<_, ()>((ev,))?;
+                if let Some(effects) = &mut enter_effects
+                    && let Some(effect) = acc_cell.get().filter(|effect| *effect != DragEffect::None)
+                {
+                    effects.push((node, effect));
+                }
             }
         }
         // 3. Fire synchronous onDragOver bubbling from leaf to root; first acceptor wins.
@@ -1110,6 +1162,9 @@ impl Session {
             if stopped.get() {
                 break;
             }
+            let mut effect = enter_effects.as_deref().and_then(|effects| {
+                effects.iter().find_map(|(entered, effect)| (*entered == node).then_some(*effect))
+            });
             if let Some(cb) = bridge.dnd_callback(node, DndEventKind::DragOver) {
                 let acc_cell = Rc::new(Cell::new(None));
                 let ev = build_drag_event(
@@ -1125,11 +1180,12 @@ impl Session {
                     stopped.clone(),
                 )?;
                 cb.restore(ctx)?.call::<_, ()>((ev,))?;
-                if accepted.is_none()
-                    && let Some(effect) = acc_cell.get()
-                {
-                    accepted = Some((node, effect));
-                }
+                effect = acc_cell.get().or(effect);
+            }
+            if accepted.is_none()
+                && let Some(effect) = effect.filter(|effect| *effect != DragEffect::None)
+            {
+                accepted = Some((node, effect));
             }
         }
         Ok(accepted)
@@ -1149,7 +1205,7 @@ impl Session {
         target_node: NodeId,
         chain: &[NodeId],
         payload: Option<Value<'js>>,
-        files: Option<Array<'js>>,
+        entries: Option<(Array<'js>, Array<'js>)>,
     ) -> rquickjs::Result<()> {
         let stopped = Rc::new(Cell::new(false));
         // Bubble from the accepting target up through its ancestors in `chain`.
@@ -1158,7 +1214,7 @@ impl Session {
             Some(idx) => &chain[..=idx],
             None => chain,
         };
-        let files_len = files.as_ref().map_or(0, Array::len);
+        let files_len = entries.as_ref().map_or(0, |(files, _)| files.len());
         for &node in slice.iter().rev() {
             if stopped.get() {
                 break;
@@ -1182,11 +1238,12 @@ impl Session {
                 } else {
                     ev.prop("payload", data_prop(Value::new_undefined(ctx.clone())))?;
                 }
-                if let Some(f) = files.clone() {
-                    ev.prop("files", data_prop(f))?;
-                } else {
-                    ev.prop("files", data_prop(Array::new(ctx.clone())?))?;
-                }
+                let (files, directories) = match &entries {
+                    Some((files, directories)) => (files.clone(), directories.clone()),
+                    None => (Array::new(ctx.clone())?, Array::new(ctx.clone())?),
+                };
+                ev.prop("files", data_prop(files))?;
+                ev.prop("directories", data_prop(directories))?;
                 let stop_cell = stopped.clone();
                 ev.prop(
                     "stopPropagation",

@@ -64,7 +64,7 @@ impl Window {
                 self.drag_to(None, true, timestamp);
                 self.drag.paths.clear();
             }
-            DragEvent::Dropped { .. } => {
+            DragEvent::Dropped { .. } | DragEvent::DroppedWithAction { .. } => {
                 self.drag_to(None, false, timestamp);
                 self.drag.paths.clear();
             }

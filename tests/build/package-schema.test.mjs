@@ -5,12 +5,12 @@ import { test } from "node:test";
 import { buildApplication, workspaceRoot } from "../../packages/build/src/build.ts";
 import { validateAgainstSchema } from "./schema-fixture.mjs";
 
-test("package.schema.json aligns with Rust and TS manifests including clipboard, sqlite, files, and network.originRules", async () => {
+test("package.schema.json aligns with Rust and TS capabilities", async () => {
   const schema = JSON.parse(
     await readFile(path.join(workspaceRoot, "schemas/package.schema.json"), "utf8"),
   );
   const capProps = schema.properties.capabilities.properties;
-  for (const key of ["clipboard", "sqlite", "files", "network", "singleInstance"]) {
+  for (const key of ["clipboard", "sqlite", "files", "systemFiles", "network", "singleInstance"]) {
     assert.ok(key in capProps, `schema missing capabilities.${key}`);
   }
   assert.ok("originRules" in capProps.network.properties, "schema missing network.originRules");
@@ -50,6 +50,7 @@ test("package.schema.json aligns with Rust and TS manifests including clipboard,
               clipboard: { read: true },
               sqlite: { databases: ["app_state"] },
               files: { directories: [{ path: "$XDG_DOCUMENTS_DIR/notes", mode: "readwrite" }] },
+              systemFiles: { read: true, directories: [{ path: "/", mode: "read" }] },
               network: {
                 originRules: [
                   { origin: "https://api.example.com" },

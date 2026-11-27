@@ -1,5 +1,7 @@
 import { getOwner, onCleanup } from "#solid";
-import type { NativeNode } from "./types.js";
+import type { NativeNode } from "./native-node.js";
+
+export type { NativeNode } from "./native-node.js";
 
 /** Drop effect negotiated synchronously during `onDragOver`. */
 export type DragEffect = "copy" | "move" | "none";
@@ -28,7 +30,7 @@ export interface DragHandle {
   cancel(): void;
 }
 
-/** One MIME representation offered to external desktop apps during a Copy-only outbound drag. */
+/** One MIME representation offered to external desktop apps during an outbound drag. */
 export interface OutboundDragItem {
   readonly mime: string;
   readonly data: string | Uint8Array;
@@ -37,14 +39,16 @@ export interface OutboundDragItem {
 /** Outcome delivered to `OutboundDragOptions.onEnd` when an outbound drag finishes or cancels. */
 export interface OutboundDragEndResult {
   readonly accepted: boolean;
-  readonly effect: "copy" | "none";
+  readonly effect: DragEffect;
   readonly reason: "finished" | "cancel" | "surface-lost" | "retired";
 }
 
-/** Options for starting a platform-driven Copy-only outbound drag. */
+/** Options for starting a platform-driven outbound drag. */
 export interface OutboundDragOptions {
   /** Non-empty list of MIME representations (1..=16 entries, <= 4 MiB total). */
   readonly items: readonly OutboundDragItem[];
+  /** Actions the destination may choose. Defaults to Copy only. */
+  readonly allowedEffects?: readonly ("copy" | "move")[] | undefined;
   /** Optional callback invoked when the external drag completes or cancels. */
   readonly onEnd?: ((result: OutboundDragEndResult) => void) | undefined;
 }
@@ -76,9 +80,10 @@ export function startInternalDrag<T = unknown>(
 }
 
 /**
- * Starts a platform-driven outbound `Copy`-only drag from `sourceNode` to external applications.
+ * Starts a platform-driven outbound drag from `sourceNode` to external applications.
  * Requires an active live pointer/touch press on the originating surface (throws `E_DRAG_NO_LIVE_PRESS`
- * otherwise); never advertises `Move`. Auto-cancels on Solid owner cleanup or session retirement.
+ * otherwise). Auto-cancels on Solid owner cleanup or session retirement. The host never deletes
+ * source data; only act on a Move after `onEnd` reports it as committed.
  */
 export function startOutboundDrag(
   sourceNode: NativeNode,

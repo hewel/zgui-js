@@ -263,8 +263,22 @@ impl<A: AppHandler> WaylandApp<A> {
                 }
             }
             let closing = matches!(event, SurfaceEvent::Destroyed | SurfaceEvent::Closed(_));
+            let drag_surface = surface.as_ref().filter(|_| {
+                matches!(delivery, Delivery::DragHover(_) | Delivery::DragDrop(..))
+            });
+            if let Some(surface) = drag_surface {
+                surface.take_drag_action();
+            }
             let cx = WaylandCx::new(&self.state);
             self.handler.surface_event(&cx, id, event);
+            if let Some(surface) = drag_surface {
+                let reply = surface.take_drag_action();
+                match delivery {
+                    Delivery::DragHover(key) => self.state.drag.set_action(key, reply.unwrap_or_default()),
+                    Delivery::DragDrop(offer, action) if reply == Some(action) => offer.finish(),
+                    _ => {}
+                }
+            }
             if closing {
                 self.state.destroy_surface(id);
             } else if let Some(surface) = surface {

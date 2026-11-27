@@ -312,7 +312,10 @@ impl Session {
             && !self.shell.lock_is_retained()
             && !self.shell.has_lock_command();
         match token.filter(|_| allowed) {
-            Some(text) => resolve.restore(ctx)?.call::<_, ()>((text,)),
+            Some(text) => {
+                self.work.remember_external_activation(&text);
+                resolve.restore(ctx)?.call::<_, ()>((text,))
+            }
             None => resolve
                 .restore(ctx)?
                 .call::<_, ()>((Value::new_null(ctx.clone()),)),

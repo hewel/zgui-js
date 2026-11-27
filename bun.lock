@@ -215,6 +215,7 @@
       "name": "@hewel/zgui-services",
       "version": "0.1.3",
       "dependencies": {
+        "@hewel/zgui": "workspace:*",
         "solid-js": "2.0.1",
       },
     },

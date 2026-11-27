@@ -83,30 +83,55 @@ export interface NativeTransitionEvent extends NativeEvent {
   readonly elapsedTime: number;
   readonly pseudoElement: string;
 }
+
+interface DroppedRequest<T> {
+  readonly promise: Promise<T>;
+  readonly cancel: () => void;
+}
+
+interface DroppedStat {
+  readonly isFile: boolean;
+  readonly isDir: boolean;
+  readonly size: number;
+  readonly modifiedMs: number | null;
+}
+
+interface DroppedDirectoryEntry {
+  readonly name: string;
+  readonly isFile: boolean;
+  readonly isDir: boolean;
+  readonly size: number;
+}
+
 /** Read-only file capability handle minted by the host on an accepted external file drop. */
 export interface DroppedFileHandle {
   readonly kind: "file";
   readonly name: string;
   readonly mode: "read";
-  readText(options?: { readonly maxBytes?: number }): {
-    readonly promise: Promise<string>;
-    cancel(): void;
-  };
-  readBytes(options?: { readonly maxBytes?: number }): {
-    readonly promise: Promise<Uint8Array>;
-    cancel(): void;
-  };
-  stat(): {
-    readonly promise: Promise<{
-      readonly isFile: boolean;
-      readonly isDir: boolean;
-      readonly size: number;
-      readonly modifiedMs: number | null;
-    }>;
-    cancel(): void;
-  };
-  close(): void;
+  readonly readText: (options?: { readonly maxBytes?: number }) => DroppedRequest<string>;
+  readonly readBytes: (options?: { readonly maxBytes?: number }) => DroppedRequest<Uint8Array>;
+  readonly stat: () => DroppedRequest<DroppedStat>;
+  readonly close: () => void;
 }
+
+/** Read-only, confined directory capability minted on an accepted external drop. */
+export interface DroppedDirectoryHandle {
+  readonly kind: "dir";
+  readonly name: string;
+  readonly mode: "read";
+  readonly readText: (
+    relativePath: string,
+    options?: { readonly maxBytes?: number },
+  ) => DroppedRequest<string>;
+  readonly readBytes: (
+    relativePath: string,
+    options?: { readonly maxBytes?: number },
+  ) => DroppedRequest<Uint8Array>;
+  readonly stat: (relativePath?: string) => DroppedRequest<DroppedStat>;
+  readonly readDir: (relativePath?: string) => DroppedRequest<readonly DroppedDirectoryEntry[]>;
+  readonly close: () => void;
+}
+
 /** Hit-tested drag hover event (`onDragEnter`, `onDragOver`, `onDragLeave`). External drags expose MIME types and fileCount only — never raw paths or handles. */
 export interface NativeDragEvent {
   readonly dragId: number;
@@ -119,7 +144,7 @@ export interface NativeDragEvent {
   readonly localY: number;
   readonly targetWidth: number;
   readonly targetHeight: number;
-  /** Synchronously negotiate acceptance during `onDragOver`. */
+  /** Synchronously negotiate acceptance in external `onDragEnter` or in `onDragOver`. Only accept Move if the destination takes responsibility for the data. */
   accept(effect?: "copy" | "move" | "none"): void;
   stopPropagation(): void;
 }
@@ -140,6 +165,8 @@ export interface NativeDropEvent {
   readonly payload: unknown;
   /** Read-only Wave 1 `FileHandle`s minted exclusively for accepted external drops. */
   readonly files: readonly DroppedFileHandle[];
+  /** Read-only directories scoped to their dropped roots; empty for internal or file-only drops. */
+  readonly directories: readonly DroppedDirectoryHandle[];
   stopPropagation(): void;
 }
 interface EventMap {

@@ -17,10 +17,12 @@ import {
   SliderPrimitive,
   createDelayed,
   createDismissLayer,
+  createMarqueeSelection,
   createOverlayState,
   createPresence,
   createRetainedPresence,
   createRovingFocus,
+  createSelectionModel,
 } from "@hewel/zgui/primitives";
 
 export const hostApiVersion = 1;
@@ -35,10 +37,22 @@ function Demo() {
   });
   const delayed = createDelayed();
   const roving = createRovingFocus(() => "vertical");
+  const [container, setContainer] = createSignal<NativeNode | null>(null);
+  const selection = createSelectionModel({ items: () => ["a", "b"] });
+  const marquee = createMarqueeSelection({
+    container,
+    selection,
+    resolveIntersectingKeys: rect => rect.width > 100 ? ["a", "b"] : ["a"],
+  });
   void [presence, retained, delayed, roving, createDismissLayer];
 
   return (
     <MenuRootPrimitive open={overlay.open()} onOpenChange={overlay.setOpen}>
+      <scroll ref={setContainer} onPointerDown={marquee.onPointerDown}
+        onPointerMove={marquee.onPointerMove} onPointerUp={marquee.onPointerUp}
+        onPointerCancel={marquee.onPointerCancel}>
+        <text>{selection.selectedKeys().size}</text>
+      </scroll>
       <MenuListPrimitive label="Primitives Menu">
         <MenuItemPrimitive onSelect={() => overlay.setOpen(false)}>Action</MenuItemPrimitive>
         <MenuCheckboxItemPrimitive checked={checked()} onCheckedChange={setChecked}>

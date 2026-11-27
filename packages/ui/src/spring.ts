@@ -3,7 +3,7 @@ import { isRootlessWithoutRegions, onRegionPresenceChange, tryBridgeFor } from "
 import type { UiBridge } from "./host.js";
 import { getReducedMotion } from "./nodes.js";
 import { flush } from "./renderer/index.js";
-import type { Accessor } from "./types.js";
+import type { Accessor, NativeNode } from "./types.js";
 
 /** Numeric spring tuning option accepting either a static number or a reactive accessor. */
 export type SpringNumberOption = number | Accessor<number>;
@@ -173,6 +173,14 @@ function tickerFor(ownerBridge: UiBridge | undefined): SpringTicker {
     return ticker;
   }
   return globalTicker;
+}
+
+/** Start an SDK frame step on the same per-region ticker as springs. Return false to stop. */
+export function animateFrames(node: NativeNode, step: (time: number) => boolean): () => void {
+  const ticker = tickerFor(tryBridgeFor(node));
+  const entry = { revision: 0, step, resetHistory() {} };
+  ticker.enroll(entry);
+  return () => ticker.unenroll(entry);
 }
 
 function readOption(value: SpringNumberOption | undefined, fallback: number): number {
