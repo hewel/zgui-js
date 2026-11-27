@@ -18,6 +18,7 @@ pub mod command;
 pub mod compute_worker;
 pub mod control;
 pub mod files;
+pub mod frame_stream;
 pub mod locale;
 pub mod network;
 pub mod sqlite;
@@ -88,7 +89,10 @@ pub struct ServiceError {
 
 impl ServiceError {
     fn new(code: &'static str, message: impl Into<String>) -> Self {
-        Self { code, message: message.into() }
+        Self {
+            code,
+            message: message.into(),
+        }
     }
 
     fn cancelled() -> Self {
@@ -143,7 +147,10 @@ impl Executor {
     /// construction never joins them.
     pub fn new(workers: usize, queue_capacity: usize) -> io::Result<Self> {
         if workers == 0 {
-            return Err(io::Error::new(io::ErrorKind::InvalidInput, "at least one worker is required"));
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "at least one worker is required",
+            ));
         }
         let (sender, receiver) = mpsc::sync_channel(queue_capacity);
         let receiver = Arc::new(Mutex::new(receiver));
@@ -170,7 +177,9 @@ fn worker(receiver: Arc<Mutex<Receiver<Request>>>) {
         // std's receiver is not Sync. Hold this lock only while receiving, never
         // across file reads, completion backpressure, or the wake callback.
         let request = {
-            let Ok(receiver) = receiver.lock() else { return };
+            let Ok(receiver) = receiver.lock() else {
+                return;
+            };
             match receiver.recv() {
                 Ok(request) => request,
                 Err(_) => return,
@@ -200,45 +209,72 @@ fn worker(receiver: Arc<Mutex<Receiver<Request>>>) {
 fn read_text_asset(root: &Path, path: &str, max_bytes: usize) -> Result<String, ServiceError> {
     if path.is_empty()
         || path.contains(['\\', '\0'])
-        || path.split('/').any(|part| part.is_empty() || part == "." || part == "..")
-        || !Path::new(path).components().all(|part| matches!(part, Component::Normal(_)))
+        || path
+            .split('/')
+            .any(|part| part.is_empty() || part == "." || part == "..")
+        || !Path::new(path)
+            .components()
+            .all(|part| matches!(part, Component::Normal(_)))
     {
-        return Err(ServiceError::new("InvalidPath", "asset path must be a canonical relative path"));
+        return Err(ServiceError::new(
+            "InvalidPath",
+            "asset path must be a canonical relative path",
+        ));
     }
 
     let mut target = root.canonicalize()?;
     if !target.is_dir() {
-        return Err(ServiceError::new("InvalidPath", "asset root must be a directory"));
+        return Err(ServiceError::new(
+            "InvalidPath",
+            "asset root must be a directory",
+        ));
     }
     let mut parts = path.split('/').peekable();
     while let Some(part) = parts.next() {
         target.push(part);
         let metadata = fs::symlink_metadata(&target)?;
         if metadata.file_type().is_symlink() {
-            return Err(ServiceError::new("InvalidPath", "asset path must not contain symlinks"));
+            return Err(ServiceError::new(
+                "InvalidPath",
+                "asset path must not contain symlinks",
+            ));
         }
         if parts.peek().is_some() && !metadata.is_dir() {
-            return Err(ServiceError::new("InvalidPath", "asset parent must be a directory"));
+            return Err(ServiceError::new(
+                "InvalidPath",
+                "asset parent must be a directory",
+            ));
         }
         if parts.peek().is_none() && !metadata.is_file() {
-            return Err(ServiceError::new("InvalidPath", "asset must be a regular file"));
+            return Err(ServiceError::new(
+                "InvalidPath",
+                "asset must be a regular file",
+            ));
         }
     }
 
     let file = File::open(target)?;
     if !file.metadata()?.is_file() {
-        return Err(ServiceError::new("InvalidPath", "asset must be a regular file"));
+        return Err(ServiceError::new(
+            "InvalidPath",
+            "asset must be a regular file",
+        ));
     }
     read_text(file, max_bytes)
 }
 
 fn read_text(reader: impl Read, max_bytes: usize) -> Result<String, ServiceError> {
     // Do not trust metadata length: a file may grow or report an inaccurate size.
-    let limit = u64::try_from(max_bytes).unwrap_or(u64::MAX).saturating_add(1);
+    let limit = u64::try_from(max_bytes)
+        .unwrap_or(u64::MAX)
+        .saturating_add(1);
     let mut bytes = Vec::new();
     reader.take(limit).read_to_end(&mut bytes)?;
     if bytes.len() > max_bytes {
-        return Err(ServiceError::new("TooLarge", "asset exceeds the text read byte limit"));
+        return Err(ServiceError::new(
+            "TooLarge",
+            "asset exceeds the text read byte limit",
+        ));
     }
     String::from_utf8(bytes)
         .map_err(|error| ServiceError::new("InvalidUtf8", error.utf8_error().to_string()))

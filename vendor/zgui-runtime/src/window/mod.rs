@@ -24,6 +24,8 @@ pub mod present;
 pub mod probe;
 pub mod query;
 pub mod resize;
+#[cfg(test)]
+mod resource_tests;
 mod reveal;
 pub mod scale;
 pub mod scheme;
@@ -34,8 +36,6 @@ mod sheets;
 mod surface_focus;
 pub mod text_aa;
 mod value;
-#[cfg(test)]
-mod resource_tests;
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -57,8 +57,8 @@ use zgui_view::{Anchor, BuildCxOwned, DomHandle, HostHandle};
 use zgui_view_dom::DocumentDom;
 
 use crate::binding::{HostBinding, NoBinding};
-pub use crate::images::{ImageSourceCheckpoint, ImageSourceMountWrites};
 use crate::host::RuntimeHost;
+pub use crate::images::{ImageSourceCheckpoint, ImageSourceMountWrites};
 use crate::text::TextEngine;
 
 /// What the first starvation probe waits, which is also what the graphics API's acquisition is
@@ -621,6 +621,8 @@ pub struct Window {
     completed_frame: Option<crate::probe::CompletedFrame>,
     /// Input revision of this frame's last completed layout/fragment pass, for the probe.
     probed_layout_revision: Option<u64>,
+    probed_style_passes: u64,
+    probed_relayouts: u64,
     /// What the last frame did, or `None` before the first frame.
     last_report: Option<crate::window::frame::FrameReport>,
     /// What the accessibility tree was last told, and what it is owed.
@@ -749,7 +751,9 @@ impl Window {
             .iter()
             .chain(&options.window_stylesheets)
         {
-            if !images.audit_css(css) { continue; }
+            if !images.audit_css(css) {
+                continue;
+            }
             let borrowed = document.borrow();
             let (handle, diagnostics) =
                 engine.add_sheet(&borrowed, SheetOrigin::Author, SheetSource::Text(css));
@@ -757,7 +761,9 @@ impl Window {
                 tracing::warn!(target: "zgui::css", "{}", report.message);
             }
             sheets.push(handle);
-            style_revision = style_revision.checked_add(1).expect("stylesheet revision exhausted");
+            style_revision = style_revision
+                .checked_add(1)
+                .expect("stylesheet revision exhausted");
         }
         let gate = Arc::clone(waker.gate());
         let scope = zgui_reactive::Mounted::new();
@@ -935,6 +941,8 @@ impl Window {
             probe: options.probe.clone(),
             completed_frame: None,
             probed_layout_revision: None,
+            probed_style_passes: 0,
+            probed_relayouts: 0,
             last_report: None,
             a11y: zgui_a11y::A11yBuilder::new(),
             a11y_moves: Vec::new(),
@@ -973,7 +981,10 @@ impl Window {
     ///
     /// # Panics
     /// Panics if the checkpoint is stale or belongs to a different window.
-    pub fn seal_image_source_writes(&self, checkpoint: ImageSourceCheckpoint) -> ImageSourceMountWrites {
+    pub fn seal_image_source_writes(
+        &self,
+        checkpoint: ImageSourceCheckpoint,
+    ) -> ImageSourceMountWrites {
         self.images.seal_image_source_writes(checkpoint)
     }
 
@@ -999,8 +1010,10 @@ impl Window {
     }
 
     fn apply_image_policy(&mut self, policy: crate::ImagePolicy) {
-        self.painter.clear_records(&mut self.scene, &self.content.tile_owner());
-        self.images.replace_policy(policy, &self.document, &mut self.content);
+        self.painter
+            .clear_records(&mut self.scene, &self.content.tile_owner());
+        self.images
+            .replace_policy(policy, &self.document, &mut self.content);
         self.damage = zgui_bits::DamageSet::full();
         self.request_frame();
     }
@@ -1026,7 +1039,9 @@ impl Window {
     /// False means workers remain outstanding; callers wait under their own real deadline.
     pub fn poll_image_barrier(&mut self) -> bool {
         let ready = self.images.poll_barrier();
-        if ready && self.images.has_arrivals() { self.request_frame(); }
+        if ready && self.images.has_arrivals() {
+            self.request_frame();
+        }
         ready
     }
 
@@ -1059,7 +1074,7 @@ impl Window {
     /// multiplexes its producers. Installing one over another replaces it without ceremony, which
     /// is the same contract `install_binding` states.
     pub fn install_embed_host(&mut self, host: Box<dyn crate::embed::EmbedHost>) {
-        self.embed.shutting_down();
+        self.detach_embed();
         self.embed = host;
         // Whatever the new host will show, the old host's attachments are stale now.
         self.damage = DamageSet::full();
@@ -1130,9 +1145,10 @@ impl Window {
     pub(crate) fn set_popup_auto_height(&mut self, policy: Option<PopupAutoHeight>) {
         match policy {
             Some(next) => {
-                let reset = self.popup_auto_height.as_ref().is_none_or(|state| {
-                    state.policy != next
-                });
+                let reset = self
+                    .popup_auto_height
+                    .as_ref()
+                    .is_none_or(|state| state.policy != next);
                 if reset {
                     self.popup_auto_height = Some(AutoHeightState {
                         policy: next,
@@ -1568,10 +1584,22 @@ impl Window {
             .collect()
     }
 
+    fn detach_embed(&mut self) {
+        self.embed.detach(&mut crate::embed::EmbedMaintenanceCx {
+            renderer: &mut *self.renderer,
+            content: &mut self.content,
+            intrinsics: &self.replaced_surfaces,
+            timestamp: self
+                .last_frame
+                .unwrap_or_else(|| zgui_vocab::Timestamp::from_origin(Duration::ZERO)),
+        });
+        self.embed.shutting_down();
+    }
+
     /// Unmounts the view and drops everything the window was holding on its behalf.
     pub fn close(&mut self) {
         self.binding.shutting_down();
-        self.embed.shutting_down();
+        self.detach_embed();
         // Unmounting disposes of every scope the view made, in tree order, before this returns. A
         // scope that a rebuild reused is reachable only through the view that holds it.
         if let Some(mut view) = self.view.take() {

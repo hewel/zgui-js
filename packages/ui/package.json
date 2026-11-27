@@ -53,6 +53,9 @@
       "types": "./dist/dnd.d.ts",
       "default": "./dist/dnd.js"
     },
+    "./frame-stream": {
+      "types": "./dist/frame-stream.d.ts"
+    },
     "./components": {
       "types": "./dist/components/index.d.ts",
       "default": "./dist/components/index.js"

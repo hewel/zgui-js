@@ -11,6 +11,7 @@ exclude = [
   "vendor/zgui",
   "vendor/zgui-text-parley",
   "vendor/zgui-paint",
+  "vendor/zgui-render-wgpu",
   "vendor/zgui-layout",
   "vendor/zgui-dom",
   "vendor/zgui-input",
@@ -110,6 +111,7 @@ zgui-platform-headless = { path = "vendor/zgui-platform-headless" }
 zgui-platform-wayland = { path = "vendor/zgui-platform-wayland" }
 zgui-view-dom = { path = "vendor/zgui-view-dom" }
 zgui-paint = { path = "vendor/zgui-paint" }
+zgui-render-wgpu = { path = "vendor/zgui-render-wgpu" }
 zgui-layout = { path = "vendor/zgui-layout" }
 zgui-style = { path = "vendor/zgui-style" }
 zgui-scroll = { path = "vendor/zgui-scroll" }

@@ -1,3 +1,4 @@
+mod assets;
 mod bounded_fs;
 mod build_status;
 mod bytecode_cache;
@@ -5,45 +6,65 @@ mod control_cli;
 mod dev_banner;
 mod dev_state;
 mod dnd;
+#[cfg(test)]
+mod editing_tests;
+mod environment;
 mod extensions;
+mod fallback;
+mod frame_stream;
 mod handoff;
 mod inspector;
 mod instance;
-mod invocation;
-mod package;
-mod runtime_capabilities;
-mod runtime_paths;
-mod session;
-mod session_host;
 mod integration;
-mod work;
-mod assets;
-mod environment;
-mod schema;
-mod watcher;
-mod fallback;
-mod shell;
-mod preview;
+mod invocation;
 #[cfg(test)]
 mod native_tests;
-#[cfg(test)]
-mod test_package;
+mod package;
+mod preview;
 #[cfg(test)]
 mod reload_tests;
+mod runtime_capabilities;
+mod runtime_paths;
+mod schema;
+mod session;
+mod session_host;
+mod shell;
 #[cfg(test)]
-mod editing_tests;
+mod test_package;
+mod watcher;
+mod work;
 
-use std::{cell::RefCell, collections::BTreeMap, error::Error, path::PathBuf, rc::Rc, sync::{mpsc, Arc}, time::Duration};
-use js_runtime::{JsRuntime, RuntimeLimits};
 use integration::{ExternalWake, IntegrationHarness};
+use js_runtime::{JsRuntime, RuntimeLimits};
 use package::Package;
 use session::{SessionModule, SessionPolicy};
-use session_host::{ImageChoice, RecoveryPolicy, ReloadOutcome, Root, RuntimeSurface, SessionHost, SessionSurface, SurfaceOpacity, TurnError};
-use zgui::{platform::{AppHandler, IdlePolicy, PlatformCx, SurfaceEvent, SurfaceId, WakeReason}, view::DocumentId};
+use session_host::{
+    ImageChoice, RecoveryPolicy, ReloadOutcome, Root, RuntimeSurface, SessionHost, SessionSurface,
+    SurfaceOpacity, TurnError,
+};
+use std::{
+    cell::RefCell,
+    collections::BTreeMap,
+    error::Error,
+    path::PathBuf,
+    rc::Rc,
+    sync::{Arc, mpsc},
+    time::Duration,
+};
+use zgui::{
+    platform::{AppHandler, IdlePolicy, PlatformCx, SurfaceEvent, SurfaceId, WakeReason},
+    view::DocumentId,
+};
 
 enum Completion {
-    Update { document: DocumentId, generation: u64 },
-    Retry { document: DocumentId, generation: u64 },
+    Update {
+        document: DocumentId,
+        generation: u64,
+    },
+    Retry {
+        document: DocumentId,
+        generation: u64,
+    },
     Exit,
 }
 
@@ -69,7 +90,12 @@ struct Application {
     dev_inspect_server: Option<inspector::DevInspectorServer>,
 }
 impl Application {
-    fn new(native: zgui::runtime::Runtime, pending: Rc<RefCell<Vec<session_host::MountRegion>>>, package: Option<Rc<Package>>, socket_bindings: BTreeMap<String, String>) -> std::io::Result<Self> {
+    fn new(
+        native: zgui::runtime::Runtime,
+        pending: Rc<RefCell<Vec<session_host::MountRegion>>>,
+        package: Option<Rc<Package>>,
+        socket_bindings: BTreeMap<String, String>,
+    ) -> std::io::Result<Self> {
         let (sender, inbox) = mpsc::sync_channel(8);
         let module = package.map_or_else(integration::baseline_module, SessionModule::package);
         let failure = Rc::new(RefCell::new(None));
@@ -78,17 +104,33 @@ impl Application {
             .with_socket_bindings(socket_bindings)
             .with_teardown_reporter(Rc::new(move |counts| {
                 teardown_failure.borrow_mut().get_or_insert_with(|| {
-                    format!("E_TEARDOWN: external service resources remained after cleanup: {counts:?}")
+                    format!(
+                        "E_TEARDOWN: external service resources remained after cleanup: {counts:?}"
+                    )
                 });
             }));
-        let host = SessionHost::new(pending, module, policy, RecoveryPolicy::Fallback, SurfaceOpacity::Transparent);
+        let host = SessionHost::new(
+            pending,
+            module,
+            policy,
+            RecoveryPolicy::Fallback,
+            SurfaceOpacity::Transparent,
+        );
         Ok(Self {
-            native, host, harness: IntegrationHarness::new(),
+            native,
+            host,
+            harness: IntegrationHarness::new(),
             control: control_cli::Control::default(),
             instance: None,
-            sender, inbox, exit_after: None, exit_armed: false, failure,
-            watch_path: None, watcher: None,
-            overlay_path: None, overlay_watcher: None,
+            sender,
+            inbox,
+            exit_after: None,
+            exit_armed: false,
+            failure,
+            watch_path: None,
+            watcher: None,
+            overlay_path: None,
+            overlay_watcher: None,
             monitors: Vec::new(),
             layer_primary: false,
             dev_inspector: None,
@@ -98,7 +140,9 @@ impl Application {
     }
 
     fn drain_dev_inspector(&mut self) {
-        let Some(inspector) = &self.dev_inspector else { return; };
+        let Some(inspector) = &self.dev_inspector else {
+            return;
+        };
         if let Some(session) = self.host.sessions().next() {
             inspector.record_checkpoint(
                 session.generation,
@@ -106,18 +150,22 @@ impl Application {
                 session.live_telemetry(),
             );
         }
-        let Some(server) = &self.dev_inspect_server else { return; };
+        let Some(server) = &self.dev_inspect_server else {
+            return;
+        };
         while let Some(req) = server.try_recv() {
             let session = self.host.sessions().next().map(AsRef::as_ref);
             let response = match &req.action {
-                inspector::InspectAction::Snapshot { include_tree, include_profile } => inspector
-                    .capture_snapshot(
-                        &self.native,
-                        session,
-                        *include_tree,
-                        *include_profile,
-                        req.surface.as_deref(),
-                    ),
+                inspector::InspectAction::Snapshot {
+                    include_tree,
+                    include_profile,
+                } => inspector.capture_snapshot(
+                    &self.native,
+                    session,
+                    *include_tree,
+                    *include_profile,
+                    req.surface.as_deref(),
+                ),
                 inspector::InspectAction::Pick { action, token } => inspector.handle_pick_command(
                     &self.native,
                     session,
@@ -137,14 +185,22 @@ impl Application {
 
     fn record_failure(&self, error: impl std::fmt::Display) {
         eprintln!("zgui-host error: {error}");
-        self.failure.borrow_mut().get_or_insert_with(|| error.to_string());
+        self.failure
+            .borrow_mut()
+            .get_or_insert_with(|| error.to_string());
     }
 
-    fn retry_sender(sender: &mpsc::SyncSender<Completion>, cx: &dyn PlatformCx) -> Rc<dyn Fn(DocumentId, u64)> {
+    fn retry_sender(
+        sender: &mpsc::SyncSender<Completion>,
+        cx: &dyn PlatformCx,
+    ) -> Rc<dyn Fn(DocumentId, u64)> {
         let sender = sender.clone();
         let waker = cx.waker();
         Rc::new(move |document, generation| {
-            match sender.try_send(Completion::Retry { document, generation }) {
+            match sender.try_send(Completion::Retry {
+                document,
+                generation,
+            }) {
                 Ok(()) => waker.wake(WakeReason::AppWork),
                 Err(error) => eprintln!("retry-not-queued: {error}"),
             }
@@ -155,8 +211,16 @@ impl Application {
         let sender = self.sender.clone();
         let waker = cx.waker();
         Arc::new(move |document, generation, surface| {
-            if sender.send(Completion::Update { document, generation }).is_ok() {
-                waker.wake(WakeReason::ReactiveWork { surfaces: vec![surface].into_boxed_slice() });
+            if sender
+                .send(Completion::Update {
+                    document,
+                    generation,
+                })
+                .is_ok()
+            {
+                waker.wake(WakeReason::ReactiveWork {
+                    surfaces: vec![surface].into_boxed_slice(),
+                });
             }
         })
     }
@@ -168,10 +232,17 @@ impl Application {
         self.harness.reconcile(&self.host, &external);
     }
 
-    fn replace_session(&mut self, cx: &dyn PlatformCx, module: SessionModule) -> Option<ReloadOutcome> {
+    fn replace_session(
+        &mut self,
+        cx: &dyn PlatformCx,
+        module: SessionModule,
+    ) -> Option<ReloadOutcome> {
         let sender = &self.sender;
         let mut surface = RuntimeSurface::new(&mut self.native, cx, ImageChoice::Live);
-        let replacement = match self.host.replace_current(&mut surface, module, || Self::retry_sender(sender, cx)) {
+        let replacement = match self
+            .host
+            .replace_current(&mut surface, module, || Self::retry_sender(sender, cx))
+        {
             Ok(replacement) => replacement,
             Err(module) => {
                 self.host.set_module(module);
@@ -184,7 +255,12 @@ impl Application {
             match &replacement.outcome {
                 ReloadOutcome::Mounted { .. } => self.host.clear_dev_banner(&mut surface, document),
                 ReloadOutcome::Rejected(error) | ReloadOutcome::Fallback(error) => {
-                    self.host.show_dev_banner(&mut surface, document, "Reload rejected", &error.to_string());
+                    self.host.show_dev_banner(
+                        &mut surface,
+                        document,
+                        "Reload rejected",
+                        &error.to_string(),
+                    );
                 }
             }
         }
@@ -199,12 +275,26 @@ impl Application {
             self.host.attach(&mut surface, waker, retry)?;
         }
         self.reconcile_harness(cx);
-        if self.watcher.is_none() && let Some(path) = &self.watch_path {
-            let initial = self.host.module().as_package().ok_or("--watch requires a package")?.directory.clone();
+        if self.watcher.is_none()
+            && let Some(path) = &self.watch_path
+        {
+            let initial = self
+                .host
+                .module()
+                .as_package()
+                .ok_or("--watch requires a package")?
+                .directory
+                .clone();
             let waker = cx.waker();
-            self.watcher = Some(watcher::PackageWatcher::start(path.clone(), initial, Arc::new(move || waker.wake(WakeReason::AppWork)))?);
+            self.watcher = Some(watcher::PackageWatcher::start(
+                path.clone(),
+                initial,
+                Arc::new(move || waker.wake(WakeReason::AppWork)),
+            )?);
         }
-        if self.overlay_watcher.is_none() && let Some(path) = &self.overlay_path {
+        if self.overlay_watcher.is_none()
+            && let Some(path) = &self.overlay_path
+        {
             let initial_digest = self.host.initial_overlay_digest();
             let waker = cx.waker();
             self.overlay_watcher = Some(extensions::watcher::OverlayWatcher::start(
@@ -213,28 +303,51 @@ impl Application {
                 Arc::new(move || waker.wake(WakeReason::AppWork)),
             )?);
         }
-        if !self.exit_armed && let Some(after) = self.exit_after {
+        if !self.exit_armed
+            && let Some(after) = self.exit_after
+        {
             self.exit_armed = true;
             let sender = self.sender.clone();
             let waker = cx.waker();
             std::thread::spawn(move || {
                 std::thread::sleep(after);
-                if sender.send(Completion::Exit).is_ok() { waker.wake(WakeReason::AppWork); }
+                if sender.send(Completion::Exit).is_ok() {
+                    waker.wake(WakeReason::AppWork);
+                }
             });
         }
         Ok(())
     }
 
     fn after_native(&mut self, cx: &dyn PlatformCx) {
-        if let Some(error) = self.native.failure().take() { self.fail(cx, error); return; }
-        if let Err(error) = self.attach(cx) { self.fail(cx, error); return; }
-        if let Some(path) = self.overlay_watcher.as_ref().and_then(extensions::watcher::OverlayWatcher::poll) {
+        if let Some(error) = self.native.failure().take() {
+            self.fail(cx, error);
+            return;
+        }
+        if let Err(error) = self.attach(cx) {
+            self.fail(cx, error);
+            return;
+        }
+        if let Some(path) = self
+            .overlay_watcher
+            .as_ref()
+            .and_then(extensions::watcher::OverlayWatcher::poll)
+        {
             self.host.queue_overlay_update(path);
         }
         let retry = Self::retry_sender(&self.sender, cx);
-        match self.host.turn(&mut self.native, cx, ImageChoice::Live, &self.monitors, &retry) {
+        match self.host.turn(
+            &mut self.native,
+            cx,
+            ImageChoice::Live,
+            &self.monitors,
+            &retry,
+        ) {
             Ok(()) => {}
-            Err(TurnError::Checkpoint(error)) => { self.fail(cx, error); return; }
+            Err(TurnError::Checkpoint(error)) => {
+                self.fail(cx, error);
+                return;
+            }
             Err(TurnError::Shell(error)) => self.shell_fault(cx, error),
         }
         // Checkpoint faults can retire a generation; cancel its registrations
@@ -243,9 +356,17 @@ impl Application {
     }
 
     fn after_shell(&mut self, cx: &dyn PlatformCx) {
-        if cx.is_exiting() || self.failure.borrow().is_some() { return; }
+        if cx.is_exiting() || self.failure.borrow().is_some() {
+            return;
+        }
         let retry = Self::retry_sender(&self.sender, cx);
-        if let Err(error) = self.host.shell_turn(&mut self.native, cx, ImageChoice::Live, &self.monitors, &retry) {
+        if let Err(error) = self.host.shell_turn(
+            &mut self.native,
+            cx,
+            ImageChoice::Live,
+            &self.monitors,
+            &retry,
+        ) {
             self.shell_fault(cx, error);
         }
     }
@@ -259,13 +380,18 @@ impl Application {
     }
 
     fn poll_reload(&mut self, cx: &dyn PlatformCx) {
-        if let Some(status) = self.watcher.as_ref().and_then(watcher::PackageWatcher::next_status) {
+        if let Some(status) = self
+            .watcher
+            .as_ref()
+            .and_then(watcher::PackageWatcher::next_status)
+        {
             let document = self.host.region_documents().next();
             if let Some(document) = document {
                 let mut surface = RuntimeSurface::new(&mut self.native, cx, ImageChoice::Live);
                 match status {
                     watcher::DevBuildStatus::Failed { title, detail } => {
-                        self.host.show_dev_banner(&mut surface, document, &title, &detail);
+                        self.host
+                            .show_dev_banner(&mut surface, document, &title, &detail);
                     }
                     watcher::DevBuildStatus::Clear => {
                         self.host.clear_dev_banner(&mut surface, document);
@@ -273,25 +399,49 @@ impl Application {
                 }
             }
         }
-        let Some(publication) = self.watcher.as_ref().and_then(watcher::PackageWatcher::next) else {
+        let Some(publication) = self
+            .watcher
+            .as_ref()
+            .and_then(watcher::PackageWatcher::next)
+        else {
             return;
         };
         match publication {
             Ok(package) => {
                 let launch_package = self.host.module().as_package();
-                let original_instance = launch_package.filter(|p| p.manifest.capabilities.single_instance).map(|p| p.manifest.id.as_str());
-                let next_instance = package.manifest.capabilities.single_instance.then_some(package.manifest.id.as_str());
+                let original_instance = launch_package
+                    .filter(|p| p.manifest.capabilities.single_instance)
+                    .map(|p| p.manifest.id.as_str());
+                let next_instance = package
+                    .manifest
+                    .capabilities
+                    .single_instance
+                    .then_some(package.manifest.id.as_str());
                 if original_instance != next_instance {
-                    let outcome = ReloadOutcome::Rejected("changing single-instance launch policy requires a restart".into());
+                    let outcome = ReloadOutcome::Rejected(
+                        "changing single-instance launch policy requires a restart".into(),
+                    );
                     let document = self.host.region_documents().next();
-                    self.host.record_outcome(&SessionModule::package(Rc::new(package)), document, &outcome);
+                    self.host.record_outcome(
+                        &SessionModule::package(Rc::new(package)),
+                        document,
+                        &outcome,
+                    );
                     return;
                 }
                 let module = SessionModule::package(Rc::new(package));
-                if self.layer_primary && !module.as_package().is_some_and(|package| package.manifest.capabilities.shell_surfaces) {
-                    let outcome = ReloadOutcome::Rejected(assets::ContractFailure {
-                        code: "E_CAPABILITY", message: "--layer-config requires capabilities.shellSurfaces".into(),
-                    }.into());
+                if self.layer_primary
+                    && !module
+                        .as_package()
+                        .is_some_and(|package| package.manifest.capabilities.shell_surfaces)
+                {
+                    let outcome = ReloadOutcome::Rejected(
+                        assets::ContractFailure {
+                            code: "E_CAPABILITY",
+                            message: "--layer-config requires capabilities.shellSurfaces".into(),
+                        }
+                        .into(),
+                    );
                     let document = self.host.region_documents().next();
                     self.host.record_outcome(&module, document, &outcome);
                     return;
@@ -305,7 +455,8 @@ impl Application {
                 let document = self.host.region_documents().next();
                 if let Some(document) = document {
                     let mut surface = RuntimeSurface::new(&mut self.native, cx, ImageChoice::Live);
-                    self.host.show_dev_banner(&mut surface, document, "Package rejected", &error);
+                    self.host
+                        .show_dev_banner(&mut surface, document, "Package rejected", &error);
                 }
             }
         }
@@ -324,14 +475,24 @@ impl Application {
             .find_map(|session| session.control_app_id());
         if let Some(app_id) = app_id {
             let host = &self.host;
-            let sessions = || host.sessions().filter(move |session| session.control_app_id() == Some(app_id));
-            let result = self.control.reconcile(app_id, || sessions().map(|session| session.generation), || {
-                let waker = cx.waker();
-                move || waker.wake(WakeReason::AppWork)
-            });
+            let sessions = || {
+                host.sessions()
+                    .filter(move |session| session.control_app_id() == Some(app_id))
+            };
+            let result = self.control.reconcile(
+                app_id,
+                || sessions().map(|session| session.generation),
+                || {
+                    let waker = cx.waker();
+                    move || waker.wake(WakeReason::AppWork)
+                },
+            );
             match result {
                 Ok(false) if sessions().any(|session| session.has_control_handler()) => {
-                    self.fail(cx, "control handler requires --control-socket or XDG_RUNTIME_DIR");
+                    self.fail(
+                        cx,
+                        "control handler requires --control-socket or XDG_RUNTIME_DIR",
+                    );
                 }
                 Err(error) => self.fail(cx, format_args!("control socket: {error}")),
                 Ok(_) => {}
@@ -343,7 +504,9 @@ impl Application {
 
     fn drain_control(&self, cx: &dyn PlatformCx) {
         for _ in 0..8 {
-            let Some((app_id, generations, request)) = self.control.try_recv() else { return; };
+            let Some((app_id, generations, request)) = self.control.try_recv() else {
+                return;
+            };
             let mut handlers = self.host.sessions().filter(|session| {
                 session.control_app_id() == Some(app_id)
                     && generations.contains(&session.generation)
@@ -371,13 +534,19 @@ impl Application {
             inspector.clear_overlay();
         }
         self.harness.stop();
-        self.host.stop(&mut RuntimeSurface::new(&mut self.native, cx, ImageChoice::Live));
+        self.host.stop(&mut RuntimeSurface::new(
+            &mut self.native,
+            cx,
+            ImageChoice::Live,
+        ));
     }
 }
 impl AppHandler for Application {
     fn surfaces_available(&mut self, cx: &dyn PlatformCx) {
         self.native.surfaces_available(cx);
-        if let Some(primary) = &self.instance { primary.set_waker(cx.waker()); }
+        if let Some(primary) = &self.instance {
+            primary.set_waker(cx.waker());
+        }
         self.monitors = shell::Monitor::snapshot(self.native.monitors());
         self.host.set_monitor_snapshot(&self.monitors);
         if self.dev_inspect_server.is_none()
@@ -396,7 +565,9 @@ impl AppHandler for Application {
         self.stop_control(cx);
         self.stop_sessions(cx);
         self.native.surfaces_lost(cx);
-        if self.failure.borrow().is_some() { cx.request_exit(); }
+        if self.failure.borrow().is_some() {
+            cx.request_exit();
+        }
     }
     fn surface_event(&mut self, cx: &dyn PlatformCx, surface: SurfaceId, event: SurfaceEvent) {
         if let Some(inspector) = &self.dev_inspector {
@@ -408,7 +579,11 @@ impl AppHandler for Application {
                     modifiers,
                     ..
                 } => inspector.handle_key_event(&self.native, session, *state, key_ev, *modifiers),
-                SurfaceEvent::Pointer { action, event: ptr_ev, .. } => {
+                SurfaceEvent::Pointer {
+                    action,
+                    event: ptr_ev,
+                    ..
+                } => {
                     inspector.handle_pointer_event(&self.native, session, surface, *action, ptr_ev)
                 }
                 _ => false,
@@ -417,7 +592,10 @@ impl AppHandler for Application {
                 return;
             }
         }
-        if let Err(error) = self.host.surface_event(&mut self.native, cx, surface, event) {
+        if let Err(error) = self
+            .host
+            .surface_event(&mut self.native, cx, surface, event)
+        {
             self.shell_fault(cx, error);
             self.reconcile_control(cx);
             return;
@@ -429,7 +607,8 @@ impl AppHandler for Application {
         match reason {
             WakeReason::ClipboardRead { serial, result } => {
                 if let Err(result) = self.host.resolve_clipboard_read(serial, result) {
-                    self.native.wake(cx, WakeReason::ClipboardRead { serial, result });
+                    self.native
+                        .wake(cx, WakeReason::ClipboardRead { serial, result });
                 }
             }
             WakeReason::ActivationToken { serial, token } => {
@@ -450,33 +629,57 @@ impl AppHandler for Application {
             return;
         }
         for _ in 0..8 {
-            let Ok(completion) = self.inbox.try_recv() else { break; };
+            let Ok(completion) = self.inbox.try_recv() else {
+                break;
+            };
             match completion {
                 Completion::Exit => cx.request_exit(),
-                Completion::Update { document, generation } => {
-                    if let Some(session) = self.host.session(document).filter(|session| session.generation == generation).cloned() {
+                Completion::Update {
+                    document,
+                    generation,
+                } => {
+                    if let Some(session) = self
+                        .host
+                        .session(document)
+                        .filter(|session| session.generation == generation)
+                        .cloned()
+                    {
                         match session.invoke("external") {
-                            Ok(()) => RuntimeSurface::new(&mut self.native, cx, ImageChoice::Live).request_frame(document),
+                            Ok(()) => RuntimeSurface::new(&mut self.native, cx, ImageChoice::Live)
+                                .request_frame(document),
                             Err(error) => {
                                 session.record_fault(error);
                                 let retry = Self::retry_sender(&self.sender, cx);
                                 {
-                                    let mut surface = RuntimeSurface::new(&mut self.native, cx, ImageChoice::Live);
-                                    if let Err(error) = self.host.checkpoint(&mut surface, retry) { self.fail(cx, error); }
+                                    let mut surface = RuntimeSurface::new(
+                                        &mut self.native,
+                                        cx,
+                                        ImageChoice::Live,
+                                    );
+                                    if let Err(error) = self.host.checkpoint(&mut surface, retry) {
+                                        self.fail(cx, error);
+                                    }
                                 }
                                 self.reconcile_harness(cx);
                             }
                         }
                     }
                 }
-                Completion::Retry { document, generation } => {
+                Completion::Retry {
+                    document,
+                    generation,
+                } => {
                     let retry = Self::retry_sender(&self.sender, cx);
                     let waker = cx.waker();
                     let outcome = {
-                        let mut surface = RuntimeSurface::new(&mut self.native, cx, ImageChoice::Live);
-                        self.host.retry(&mut surface, waker, document, generation, retry)
+                        let mut surface =
+                            RuntimeSurface::new(&mut self.native, cx, ImageChoice::Live);
+                        self.host
+                            .retry(&mut surface, waker, document, generation, retry)
                     };
-                    if outcome.is_some() { self.reconcile_harness(cx); }
+                    if outcome.is_some() {
+                        self.reconcile_harness(cx);
+                    }
                 }
             }
         }
@@ -522,8 +725,7 @@ impl AppHandler for Application {
     }
 }
 
-pub(crate) const APPLICATION_STYLESHEET: &str =
-    ":root { background: #171b24; color: #edf2fa; font-family: sans-serif; font-size: 22px; padding: 24px; }";
+pub(crate) const APPLICATION_STYLESHEET: &str = ":root { background: #171b24; color: #edf2fa; font-family: sans-serif; font-size: 22px; padding: 24px; }";
 pub(crate) const PURE_SHELL_STYLESHEET: &str =
     ":root { background: transparent; color: #edf2fa; font-family: sans-serif; padding: 0; }";
 
@@ -613,17 +815,23 @@ fn run_compile_bytecode(args: &[String]) -> Result<(), Box<dyn Error>> {
             }
             "--output" => {
                 idx += 1;
-                let value = args.get(idx).ok_or("--output requires a .qjsb output path")?;
+                let value = args
+                    .get(idx)
+                    .ok_or("--output requires a .qjsb output path")?;
                 output = Some(PathBuf::from(value));
             }
             "--module-name" => {
                 idx += 1;
-                let value = args.get(idx).ok_or("--module-name requires a module identifier")?;
+                let value = args
+                    .get(idx)
+                    .ok_or("--module-name requires a module identifier")?;
                 module_name = Some(value.clone());
             }
             "--source-dir" => {
                 idx += 1;
-                let value = args.get(idx).ok_or("--source-dir requires a directory path")?;
+                let value = args
+                    .get(idx)
+                    .ok_or("--source-dir requires a directory path")?;
                 source_dir = Some(PathBuf::from(value));
             }
             other => {
@@ -667,15 +875,27 @@ fn main() -> Result<(), Box<dyn Error>> {
     if std::env::args_os().nth(1).is_some_and(|arg| arg == "msg") {
         return control_cli::command(std::env::args_os().skip(2));
     }
-    match std::env::args_os().nth(1).as_deref().and_then(std::ffi::OsStr::to_str) {
-        Some("preview") => std::process::exit(i32::from(preview::command(std::env::args().skip(2)))),
-        Some("inspect") => return inspector::run_cli_inspect(&std::env::args().skip(2).collect::<Vec<_>>()),
-        Some("compile-bytecode") => return run_compile_bytecode(&std::env::args().skip(2).collect::<Vec<_>>()),
+    match std::env::args_os()
+        .nth(1)
+        .as_deref()
+        .and_then(std::ffi::OsStr::to_str)
+    {
+        Some("preview") => {
+            std::process::exit(i32::from(preview::command(std::env::args().skip(2))))
+        }
+        Some("inspect") => {
+            return inspector::run_cli_inspect(&std::env::args().skip(2).collect::<Vec<_>>());
+        }
+        Some("compile-bytecode") => {
+            return run_compile_bytecode(&std::env::args().skip(2).collect::<Vec<_>>());
+        }
         _ => {}
     }
     let mut raw = std::env::args_os().skip(1);
-    let mut args = raw.by_ref().take_while(|arg| arg != "--")
-        .map(|arg| arg.into_string().map_err(|_| "host options must be valid UTF-8"));
+    let mut args = raw.by_ref().take_while(|arg| arg != "--").map(|arg| {
+        arg.into_string()
+            .map_err(|_| "host options must be valid UTF-8")
+    });
     let mut exit_after = None;
     let mut bundle: Option<PathBuf> = None;
     let mut exercise = false;
@@ -703,116 +923,244 @@ fn main() -> Result<(), Box<dyn Error>> {
                 for extra in args {
                     match extra?.as_str() {
                         "--json" => json_mode = true,
-                        other => return Err(format!("unknown argument for --version: {other}").into()),
+                        other => {
+                            return Err(format!("unknown argument for --version: {other}").into());
+                        }
                     }
                 }
                 println!("{}", format_version(json_mode));
                 return Ok(());
             }
             "--smoke-module" => {
-                let path = args.next().transpose()?.ok_or("--smoke-module requires a path")?;
+                let path = args
+                    .next()
+                    .transpose()?
+                    .ok_or("--smoke-module requires a path")?;
                 let mut engine = JsRuntime::new(RuntimeLimits::default())?;
                 let result = engine.run_smoke_module_file(path)?;
-                if result != "solid-smoke:ok" { return Err(format!("unexpected smoke result: {result}").into()); }
+                if result != "solid-smoke:ok" {
+                    return Err(format!("unexpected smoke result: {result}").into());
+                }
                 println!("{result}");
                 return Ok(());
             }
-            "--exit-after-ms" => { exit_after = Some(Duration::from_millis(args.next().transpose()?.ok_or("--exit-after-ms requires milliseconds")?.parse()?)); }
-            "--bundle" => { bundle = Some(args.next().transpose()?.ok_or("--bundle requires a directory")?.into()); }
-            "--exercise" => { exercise = true; }
-            "--watch" => { watch = true; }
-            "--pure-shell" => { pure_shell = true; }
+            "--exit-after-ms" => {
+                exit_after = Some(Duration::from_millis(
+                    args.next()
+                        .transpose()?
+                        .ok_or("--exit-after-ms requires milliseconds")?
+                        .parse()?,
+                ));
+            }
+            "--bundle" => {
+                bundle = Some(
+                    args.next()
+                        .transpose()?
+                        .ok_or("--bundle requires a directory")?
+                        .into(),
+                );
+            }
+            "--exercise" => {
+                exercise = true;
+            }
+            "--watch" => {
+                watch = true;
+            }
+            "--pure-shell" => {
+                pure_shell = true;
+            }
             "--extensions-overlay" => {
-                if extensions_overlay.is_some() { return Err("--extensions-overlay can only be specified once".into()); }
-                extensions_overlay = Some(args.next().transpose()?.ok_or("--extensions-overlay requires a file path")?.into());
+                if extensions_overlay.is_some() {
+                    return Err("--extensions-overlay can only be specified once".into());
+                }
+                extensions_overlay = Some(
+                    args.next()
+                        .transpose()?
+                        .ok_or("--extensions-overlay requires a file path")?
+                        .into(),
+                );
             }
             "--bytecode-cache-dir" => {
-                if bytecode_cache_dir.is_some() { return Err("--bytecode-cache-dir can only be specified once".into()); }
-                bytecode_cache_dir = Some(args.next().transpose()?.ok_or("--bytecode-cache-dir requires a directory path")?.into());
+                if bytecode_cache_dir.is_some() {
+                    return Err("--bytecode-cache-dir can only be specified once".into());
+                }
+                bytecode_cache_dir = Some(
+                    args.next()
+                        .transpose()?
+                        .ok_or("--bytecode-cache-dir requires a directory path")?
+                        .into(),
+                );
             }
-            "--reduced-motion" => { reduced_motion = true; }
+            "--reduced-motion" => {
+                reduced_motion = true;
+            }
             "--width" => {
-                let raw = args.next().transpose()?.ok_or("--width requires logical pixels")?;
+                let raw = args
+                    .next()
+                    .transpose()?
+                    .ok_or("--width requires logical pixels")?;
                 width_override = Some(parse_window_dim("--width", &raw)?);
             }
             "--height" => {
-                let raw = args.next().transpose()?.ok_or("--height requires logical pixels")?;
+                let raw = args
+                    .next()
+                    .transpose()?
+                    .ok_or("--height requires logical pixels")?;
                 height_override = Some(parse_window_dim("--height", &raw)?);
             }
             "--title" => {
-                let title = args.next().transpose()?.ok_or("--title requires a window title")?;
+                let title = args
+                    .next()
+                    .transpose()?
+                    .ok_or("--title requires a window title")?;
                 if title.trim().is_empty() || title.chars().any(char::is_control) {
-                    return Err("--title must be a non-empty string without control characters".into());
+                    return Err(
+                        "--title must be a non-empty string without control characters".into(),
+                    );
                 }
                 title_override = Some(title);
             }
             "--max-js-stack-bytes" => {
-                let bytes: usize = args.next().transpose()?.ok_or("--max-js-stack-bytes requires a byte count")?.parse()?;
-                if bytes == 0 { return Err("--max-js-stack-bytes must be positive".into()); }
+                let bytes: usize = args
+                    .next()
+                    .transpose()?
+                    .ok_or("--max-js-stack-bytes requires a byte count")?
+                    .parse()?;
+                if bytes == 0 {
+                    return Err("--max-js-stack-bytes must be positive".into());
+                }
                 max_js_stack_bytes = Some(bytes);
             }
             "--bind-socket" => {
-                let binding = args.next().transpose()?.ok_or("--bind-socket requires name=path")?;
+                let binding = args
+                    .next()
+                    .transpose()?
+                    .ok_or("--bind-socket requires name=path")?;
                 runtime_capabilities::add_socket_binding(&mut socket_bindings, &binding)?;
             }
             "--control-socket" => {
-                if control_socket.is_some() { return Err("--control-socket can only be specified once".into()); }
-                control_socket = Some(args.next().transpose()?.ok_or("--control-socket requires a path")?.into());
+                if control_socket.is_some() {
+                    return Err("--control-socket can only be specified once".into());
+                }
+                control_socket = Some(
+                    args.next()
+                        .transpose()?
+                        .ok_or("--control-socket requires a path")?
+                        .into(),
+                );
             }
             "--dev-inspect" => {
-                if dev_inspect_path.is_some() { return Err("--dev-inspect can only be specified once".into()); }
-                dev_inspect_path = Some(args.next().transpose()?.ok_or("--dev-inspect requires a socket path")?.into());
+                if dev_inspect_path.is_some() {
+                    return Err("--dev-inspect can only be specified once".into());
+                }
+                dev_inspect_path = Some(
+                    args.next()
+                        .transpose()?
+                        .ok_or("--dev-inspect requires a socket path")?
+                        .into(),
+                );
             }
             "--layer-config" => {
-                let path: PathBuf = args.next().transpose()?.ok_or("--layer-config requires a JSON file")?.into();
+                let path: PathBuf = args
+                    .next()
+                    .transpose()?
+                    .ok_or("--layer-config requires a JSON file")?
+                    .into();
                 layer_config = Some(shell::LayerConfig::load(&path)?);
             }
             _ => return Err(format!("unknown argument: {arg} (run with --help for usage)").into()),
         }
     }
-    let activation = invocation::Activation { info: invocation::ActivationInfo::launch(raw)?, token };
-    if watch && bundle.is_none() { return Err("--watch requires --bundle".into()); }
-    if extensions_overlay.is_some() && bundle.is_none() { return Err("--extensions-overlay requires --bundle".into()); }
-    if layer_config.is_some() && bundle.is_none() { return Err("--layer-config requires --bundle".into()); }
-    let package = bundle.as_deref().map(Package::load).transpose()?.map(Rc::new);
+    let activation = invocation::Activation {
+        info: invocation::ActivationInfo::launch(raw)?,
+        token,
+    };
+    if watch && bundle.is_none() {
+        return Err("--watch requires --bundle".into());
+    }
+    if extensions_overlay.is_some() && bundle.is_none() {
+        return Err("--extensions-overlay requires --bundle".into());
+    }
+    if layer_config.is_some() && bundle.is_none() {
+        return Err("--layer-config requires --bundle".into());
+    }
+    let package = bundle
+        .as_deref()
+        .map(Package::load)
+        .transpose()?
+        .map(Rc::new);
     if pure_shell && (exercise || layer_config.is_some()) {
         return Err("--pure-shell cannot be combined with --exercise or --layer-config".into());
     }
-    let capabilities = package.as_ref().map(|package| &package.manifest.capabilities);
-    if layer_config.is_some() && !capabilities.is_some_and(|capabilities| capabilities.shell_surfaces) {
+    let capabilities = package
+        .as_ref()
+        .map(|package| &package.manifest.capabilities);
+    if layer_config.is_some()
+        && !capabilities.is_some_and(|capabilities| capabilities.shell_surfaces)
+    {
         return Err("E_CAPABILITY: --layer-config requires capabilities.shellSurfaces".into());
     }
-    if pure_shell && !capabilities.is_some_and(|capabilities| capabilities.shell_surfaces || capabilities.session_lock) {
+    if pure_shell
+        && !capabilities
+            .is_some_and(|capabilities| capabilities.shell_surfaces || capabilities.session_lock)
+    {
         return Err("E_CAPABILITY: --pure-shell requires capabilities.shellSurfaces or capabilities.sessionLock".into());
     }
-    let instance = if let Some(package) = package.as_ref().filter(|package| package.manifest.capabilities.single_instance) {
+    let instance = if let Some(package) = package
+        .as_ref()
+        .filter(|package| package.manifest.capabilities.single_instance)
+    {
         let primary = instance::coordinate(&package.manifest.id, &activation)
             .map_err(|error| format!("instance socket for {}: {error}", package.manifest.id))?;
-        let Some(primary) = primary else { return Ok(()); };
+        let Some(primary) = primary else {
+            return Ok(());
+        };
         Some(primary)
     } else {
         None
     };
     let pending = Rc::new(RefCell::new(Vec::new()));
     let roots = pending.clone();
-    let app_id = package.as_ref().map_or("dev.zgui.js", |pkg| pkg.manifest.id.as_str());
-    let namespace = layer_config.as_ref().map_or(app_id, |config| config.namespace.as_str());
-    let stylesheet = if pure_shell || layer_config.as_ref().is_some_and(shell::LayerConfig::is_transparent) {
+    let app_id = package
+        .as_ref()
+        .map_or("dev.zgui.js", |pkg| pkg.manifest.id.as_str());
+    let namespace = layer_config
+        .as_ref()
+        .map_or(app_id, |config| config.namespace.as_str());
+    let stylesheet = if pure_shell
+        || layer_config
+            .as_ref()
+            .is_some_and(shell::LayerConfig::is_transparent)
+    {
         PURE_SHELL_STYLESHEET
     } else {
         APPLICATION_STYLESHEET
     };
-    let manifest_window = package.as_ref().and_then(|pkg| pkg.manifest.window.as_ref());
-    let default_title = package.as_ref().map_or("zgui-js integration baseline", |pkg| pkg.manifest.id.as_str());
+    let manifest_window = package
+        .as_ref()
+        .and_then(|pkg| pkg.manifest.window.as_ref());
+    let default_title = package
+        .as_ref()
+        .map_or("zgui-js integration baseline", |pkg| {
+            pkg.manifest.id.as_str()
+        });
     let title = title_override
         .as_deref()
         .or_else(|| manifest_window.and_then(|win| win.title.as_deref()))
         .unwrap_or(default_title);
     let width = width_override
-        .or_else(|| manifest_window.and_then(|win| win.width).map(|px| px as f32))
+        .or_else(|| {
+            manifest_window
+                .and_then(|win| win.width)
+                .map(|px| px as f32)
+        })
         .unwrap_or(1024.0);
     let height = height_override
-        .or_else(|| manifest_window.and_then(|win| win.height).map(|px| px as f32))
+        .or_else(|| {
+            manifest_window
+                .and_then(|win| win.height)
+                .map(|px| px as f32)
+        })
         .unwrap_or(720.0);
     let mut app = zgui::app()
         .with_title(title)
@@ -821,13 +1169,18 @@ fn main() -> Result<(), Box<dyn Error>> {
         .with_stylesheet(stylesheet);
     if let Some(win) = manifest_window {
         if win.min_width.is_some() || win.min_height.is_some() {
-            app = app.with_min_size(win.min_width.unwrap_or(0) as f32, win.min_height.unwrap_or(0) as f32);
+            app = app.with_min_size(
+                win.min_width.unwrap_or(0) as f32,
+                win.min_height.unwrap_or(0) as f32,
+            );
         }
         if let Some(resizable) = win.resizable {
             app = app.with_resizable(resizable);
         }
     }
-    let dev_inspector = dev_inspect_path.as_ref().map(|_| inspector::DevInspector::new());
+    let dev_inspector = dev_inspect_path
+        .as_ref()
+        .map(|_| inspector::DevInspector::new());
     if let Some(insp) = &dev_inspector {
         app = app.with_probe(insp.probe());
     }
@@ -836,23 +1189,37 @@ fn main() -> Result<(), Box<dyn Error>> {
             .without_primary_window()
             .with_exit_policy(zgui::runtime::ExitPolicy::Explicit);
     }
-    let mut native = app.into_handler(move || Root(roots.clone()))?.into_runtime();
+    let mut native = app
+        .into_handler(move || Root(roots.clone()))?
+        .into_runtime();
     if reduced_motion {
         native.set_reduced_motion(Some(true));
     }
-    let fonts = pure_shell.then(|| native.scope().with(zgui::reactive::use_context::<zgui::app::Fonts>)
-        .expect("the native application provides a font collection"));
+    let fonts = pure_shell.then(|| {
+        native
+            .scope()
+            .with(zgui::reactive::use_context::<zgui::app::Fonts>)
+            .expect("the native application provides a font collection")
+    });
     let native_failure = native.failure();
     let mut application = Application::new(native, pending, package, socket_bindings)?;
-    application.host.set_launch(activation, instance.as_ref().map(instance::Primary::inbox));
+    application
+        .host
+        .set_launch(activation, instance.as_ref().map(instance::Primary::inbox));
     application.control.recover_default_stale = instance.is_some();
     application.instance = instance;
     application.layer_primary = layer_config.is_some();
     application.dev_inspector = dev_inspector;
     application.dev_inspect_path = dev_inspect_path;
-    if let Some(fonts) = fonts { application.host.set_pure_shell(fonts); }
-    if reduced_motion { application.host.set_reduced_motion(true); }
-    if let Some(bytes) = max_js_stack_bytes { application.host.set_stack_limit_bytes(bytes); }
+    if let Some(fonts) = fonts {
+        application.host.set_pure_shell(fonts);
+    }
+    if reduced_motion {
+        application.host.set_reduced_motion(true);
+    }
+    if let Some(bytes) = max_js_stack_bytes {
+        application.host.set_stack_limit_bytes(bytes);
+    }
     if watch {
         application.host.set_dev_state(true);
         if !pure_shell {
@@ -860,7 +1227,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
     }
     if let Some(dir) = bytecode_cache_dir {
-        let cache = bytecode_cache::BytecodeCache::open(&dir, bytecode_cache::DEFAULT_MAX_CACHE_BYTES)?;
+        let cache =
+            bytecode_cache::BytecodeCache::open(&dir, bytecode_cache::DEFAULT_MAX_CACHE_BYTES)?;
         application.host.set_bytecode_cache(Rc::new(cache));
     }
     if let Some(overlay_path) = &extensions_overlay {
@@ -872,16 +1240,23 @@ fn main() -> Result<(), Box<dyn Error>> {
     application.watch_path = watch.then_some(bundle).flatten();
     application.control.override_path = control_socket;
     let failure = application.failure.clone();
-    eprintln!("zgui=ee29c7dc rquickjs=73fcd606 QuickJS-NG=6d46d07d fontique=patched platform-selection={}", std::env::var("ZGUI_PLATFORM").unwrap_or_else(|_| "desktop-auto".into()));
+    eprintln!(
+        "zgui=ee29c7dc rquickjs=73fcd606 QuickJS-NG=6d46d07d fontique=patched platform-selection={}",
+        std::env::var("ZGUI_PLATFORM").unwrap_or_else(|_| "desktop-auto".into())
+    );
     let handler: Box<dyn AppHandler> = match layer_config {
         Some(config) => Box::new(shell::LayerHost::new(application, config)),
         None => Box::new(application),
     };
     let result = zgui::app::desktop()(handler);
     zgui::reactive::shutdown();
-    if let Some(error) = failure.borrow_mut().take() { return Err(error.into()); }
+    if let Some(error) = failure.borrow_mut().take() {
+        return Err(error.into());
+    }
     result?;
-    if let Some(error) = native_failure.take() { return Err(error.into()); }
+    if let Some(error) = native_failure.take() {
+        return Err(error.into());
+    }
     eprintln!("zgui-host: clean shutdown");
     Ok(())
 }
@@ -897,7 +1272,8 @@ mod version_tests {
         assert!(text.contains("hostApiVersion=1"));
         assert!(text.contains("schemaVersion=2"));
 
-        let parsed: serde_json::Value = serde_json::from_str(&format_version(true)).expect("valid JSON");
+        let parsed: serde_json::Value =
+            serde_json::from_str(&format_version(true)).expect("valid JSON");
         assert_eq!(parsed["name"], "zgui-host");
         assert_eq!(parsed["hostApiVersion"], 1);
         assert_eq!(parsed["schemaVersion"], 2);

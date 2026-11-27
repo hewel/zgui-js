@@ -1,20 +1,37 @@
 //! Deterministic, owner-thread service fixtures. This module never opens a file.
 use super::ContractFailure;
 use crate::invocation::ActivationInfo;
-use crate::{bounded_fs::relative_path, environment::Environment, package::{Capabilities, Package}, runtime_capabilities::ResolvedCapabilities, runtime_paths::{self, Root}};
-use host_services::{Completion, ServiceError};
+use crate::schema::{deserialize_object, object_struct};
+use crate::{
+    bounded_fs::relative_path,
+    environment::Environment,
+    package::{Capabilities, Package},
+    runtime_capabilities::ResolvedCapabilities,
+    runtime_paths::{self, Root},
+};
 use host_services::locale::LocaleContext;
+use host_services::{Completion, ServiceError};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use std::{borrow::Cow, cell::RefCell, collections::{BTreeMap, BTreeSet, VecDeque}, marker::PhantomData, path::Path, rc::Rc, sync::Arc};
-use crate::schema::{deserialize_object,object_struct};
+use std::{
+    borrow::Cow,
+    cell::RefCell,
+    collections::{BTreeMap, BTreeSet, VecDeque},
+    marker::PhantomData,
+    path::Path,
+    rc::Rc,
+    sync::Arc,
+};
 
 mod external;
 mod network;
 mod system_files;
+use crate::frame_stream::SyntheticFrame;
 pub(crate) use external::ExternalDelivery;
+use external::{
+    CommandScript, ControlMessage, ControlProvider, ExternalJob, ExternalState, SocketScript,
+};
 pub(crate) use network::NetworkDelivery;
-use external::{CommandScript, ControlMessage, ControlProvider, ExternalJob, ExternalState, SocketScript};
 use network::{NetworkFixture, NetworkJob, NetworkState};
 
 const MAX_TRACE_RECORDS: usize = 4096;
@@ -22,10 +39,14 @@ const MAX_TRACE_BYTES: usize = 1024 * 1024;
 
 struct ByteCount(usize);
 impl std::io::Write for ByteCount {
-    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> { self.0 += bytes.len(); Ok(bytes.len()) }
-    fn flush(&mut self) -> std::io::Result<()> { Ok(()) }
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.0 += bytes.len();
+        Ok(bytes.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
 }
-
 
 object_struct! {
     #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -46,7 +67,18 @@ object_struct! {
     }
 }
 impl Default for FixtureDefinition {
-    fn default() -> Self { Self { schema_version: 1, id: "empty".into(), services: Services::default(), events: vec![], activation: None, locale: None, time_zone: None, runtime_environment: None } }
+    fn default() -> Self {
+        Self {
+            schema_version: 1,
+            id: "empty".into(),
+            services: Services::default(),
+            events: vec![],
+            activation: None,
+            locale: None,
+            time_zone: None,
+            runtime_environment: None,
+        }
+    }
 }
 
 object_struct! {
@@ -76,16 +108,27 @@ impl RuntimeEnvironment {
             ("xdgDataHome", &self.xdg_data_home),
             ("xdgDocumentsDir", &self.xdg_documents_dir),
         ] {
-            if path.as_deref().is_some_and(|path| !runtime_paths::canonical_absolute(path)) {
-                return Err(format!("fixture runtimeEnvironment.{field} must be canonical absolute text"));
+            if path
+                .as_deref()
+                .is_some_and(|path| !runtime_paths::canonical_absolute(path))
+            {
+                return Err(format!(
+                    "fixture runtimeEnvironment.{field} must be canonical absolute text"
+                ));
             }
         }
-        if self.wayland_display.as_deref().is_some_and(|display| !runtime_paths::safe_segment(display)) {
+        if self
+            .wayland_display
+            .as_deref()
+            .is_some_and(|display| !runtime_paths::safe_segment(display))
+        {
             return Err("fixture runtimeEnvironment.waylandDisplay must be a single safe filename component".into());
         }
         for (name, path) in &self.named_sockets {
             if !runtime_paths::socket_name(name) || !runtime_paths::canonical_absolute(path) {
-                return Err(format!("fixture runtimeEnvironment.namedSockets has an invalid name or path for {name:?}"));
+                return Err(format!(
+                    "fixture runtimeEnvironment.namedSockets has an invalid name or path for {name:?}"
+                ));
             }
         }
         Ok(())
@@ -95,7 +138,11 @@ impl RuntimeEnvironment {
         match root {
             Root::Runtime => self.xdg_runtime_dir.clone(),
             Root::Home => self.home_dir.clone(),
-            Root::Data => self.xdg_data_home.clone().or_else(|| self.home_dir.as_deref().map(runtime_paths::default_data_home)),
+            Root::Data => self.xdg_data_home.clone().or_else(|| {
+                self.home_dir
+                    .as_deref()
+                    .map(runtime_paths::default_data_home)
+            }),
         }
     }
 }
@@ -188,17 +235,34 @@ object_struct! {
 
 impl FilesFixture {
     fn validate(&self) -> Result<(), String> {
-        for path in self.files.keys().chain(self.dirs.iter()).chain(self.symlinks.keys()) {
+        for path in self
+            .files
+            .keys()
+            .chain(self.dirs.iter())
+            .chain(self.symlinks.keys())
+        {
             if !runtime_paths::canonical_absolute(path) {
-                return Err(format!("fixture services.files path must be canonical absolute: {path:?}"));
+                return Err(format!(
+                    "fixture services.files path must be canonical absolute: {path:?}"
+                ));
             }
         }
         for dialog in &self.dialogs {
-            if !matches!(dialog.action.as_str(), "openFile" | "saveFile" | "openDirectory") {
-                return Err(format!("invalid fixture dialog action: {:?}", dialog.action));
+            if !matches!(
+                dialog.action.as_str(),
+                "openFile" | "saveFile" | "openDirectory"
+            ) {
+                return Err(format!(
+                    "invalid fixture dialog action: {:?}",
+                    dialog.action
+                ));
             }
-            if let Some(p) = &dialog.path && !runtime_paths::canonical_absolute(p) {
-                return Err(format!("fixture dialog path must be canonical absolute: {p:?}"));
+            if let Some(p) = &dialog.path
+                && !runtime_paths::canonical_absolute(p)
+            {
+                return Err(format!(
+                    "fixture dialog path must be canonical absolute: {p:?}"
+                ));
             }
         }
         use host_services::files::grants::MAX_GRANTS_PER_APP;
@@ -206,9 +270,17 @@ impl FilesFixture {
             return Err("fixture files grant count exceeds the per-app limit".into());
         }
         let mut tokens = BTreeSet::new();
-        for (token, path) in self.bookmarks.iter().map(|b| (&b.token, &b.path))
-            .chain(self.grants.iter().map(|g| (&g.token, &g.path))) {
-            if token.is_empty() || token.len() > 256 || !tokens.insert(token) || !runtime_paths::canonical_absolute(path) {
+        for (token, path) in self
+            .bookmarks
+            .iter()
+            .map(|b| (&b.token, &b.path))
+            .chain(self.grants.iter().map(|g| (&g.token, &g.path)))
+        {
+            if token.is_empty()
+                || token.len() > 256
+                || !tokens.insert(token)
+                || !runtime_paths::canonical_absolute(path)
+            {
                 return Err("fixture grant has invalid or duplicate token or invalid path".into());
             }
         }
@@ -272,10 +344,7 @@ impl ClipboardFixture {
 }
 
 fn decode_base64(input: &str) -> Result<Vec<u8>, String> {
-    let cleaned: Vec<u8> = input
-        .bytes()
-        .filter(|b| !b.is_ascii_whitespace())
-        .collect();
+    let cleaned: Vec<u8> = input.bytes().filter(|b| !b.is_ascii_whitespace()).collect();
     if !cleaned.len().is_multiple_of(4) {
         return Err("invalid base64 length in fixture".into());
     }
@@ -336,7 +405,11 @@ pub(crate) enum LockOutcome {
     /// Refuse before confirming the lock.
     Finished,
 }
-fn present_provider<'de, D: serde::Deserializer<'de>, T: Deserialize<'de>>(deserializer: D) -> Result<Option<T>, D::Error> { T::deserialize(deserializer).map(Some) }
+fn present_provider<'de, D: serde::Deserializer<'de>, T: Deserialize<'de>>(
+    deserializer: D,
+) -> Result<Option<T>, D::Error> {
+    T::deserialize(deserializer).map(Some)
+}
 object_struct! {
     #[serde(rename_all = "camelCase", deny_unknown_fields)]
     pub(crate) struct TextProvider {
@@ -355,7 +428,10 @@ object_struct! {
     }
 }
 #[derive(Clone, Debug, Deserialize, Serialize)]
-pub(crate) enum TextProviderVersion { #[serde(rename = "mock-text-assets-v1")] V1 }
+pub(crate) enum TextProviderVersion {
+    #[serde(rename = "mock-text-assets-v1")]
+    V1,
+}
 object_struct! {
     #[serde(deny_unknown_fields)]
     pub(crate) struct AssetState {
@@ -363,15 +439,24 @@ object_struct! {
         pub assets: BTreeMap<String, AssetBehavior>,
     }
 }
-fn unique_entries<'de, D: serde::Deserializer<'de>, T: Deserialize<'de>>(deserializer: D) -> Result<BTreeMap<String, T>, D::Error> {
+fn unique_entries<'de, D: serde::Deserializer<'de>, T: Deserialize<'de>>(
+    deserializer: D,
+) -> Result<BTreeMap<String, T>, D::Error> {
     struct Entries<T>(PhantomData<T>);
     impl<'de, T: Deserialize<'de>> serde::de::Visitor<'de> for Entries<T> {
         type Value = BTreeMap<String, T>;
-        fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { f.write_str("a fixture object with unique keys") }
-        fn visit_map<M: serde::de::MapAccess<'de>>(self, mut map: M) -> Result<Self::Value, M::Error> {
+        fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("a fixture object with unique keys")
+        }
+        fn visit_map<M: serde::de::MapAccess<'de>>(
+            self,
+            mut map: M,
+        ) -> Result<Self::Value, M::Error> {
             let mut entries = BTreeMap::new();
             while let Some((key, value)) = map.next_entry::<String, T>()? {
-                if entries.insert(key, value).is_some() { return Err(serde::de::Error::custom("duplicate fixture object key")); }
+                if entries.insert(key, value).is_some() {
+                    return Err(serde::de::Error::custom("duplicate fixture object key"));
+                }
             }
             Ok(entries)
         }
@@ -387,12 +472,31 @@ object_struct! {
     pub(crate) struct InjectedError { pub code: ErrorCode, pub message: String }
 }
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
-pub(crate) enum ErrorCode { Io, TooLarge, InvalidUtf8 }
-impl ErrorCode { fn as_str(self) -> &'static str { match self { Self::Io => "Io", Self::TooLarge => "TooLarge", Self::InvalidUtf8 => "InvalidUtf8" } } }
+pub(crate) enum ErrorCode {
+    Io,
+    TooLarge,
+    InvalidUtf8,
+}
+impl ErrorCode {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Io => "Io",
+            Self::TooLarge => "TooLarge",
+            Self::InvalidUtf8 => "InvalidUtf8",
+        }
+    }
+}
 impl InjectedError {
-    fn service_error(&self) -> ServiceError { ServiceError { code: self.code.as_str(), message: self.message.clone() } }
+    fn service_error(&self) -> ServiceError {
+        ServiceError {
+            code: self.code.as_str(),
+            message: self.message.clone(),
+        }
+    }
     fn validate(&self) -> Result<(), String> {
-        if self.message.len() > 4096 { return Err("injected error message exceeds 4096 bytes".into()); }
+        if self.message.len() > 4096 {
+            return Err("injected error message exceeds 4096 bytes".into());
+        }
         Ok(())
     }
 }
@@ -410,49 +514,103 @@ impl<'de> Deserialize<'de> for FixtureEvent {
         #[serde(tag = "channel", deny_unknown_fields)]
         enum Input {
             #[serde(rename = "assets.state")]
-            Assets { #[serde(rename = "atMs")] at_ms: u32, value: AssetState },
+            Assets {
+                #[serde(rename = "atMs")]
+                at_ms: u32,
+                value: AssetState,
+            },
             #[serde(rename = "control.message")]
-            Control { #[serde(rename = "atMs")] at_ms: u32, value: ControlMessage },
+            Control {
+                #[serde(rename = "atMs")]
+                at_ms: u32,
+                value: ControlMessage,
+            },
             #[serde(rename = "activation")]
-            Activation { #[serde(rename = "atMs")] at_ms: u32, value: ActivationInfo },
+            Activation {
+                #[serde(rename = "atMs")]
+                at_ms: u32,
+                value: ActivationInfo,
+            },
+            #[serde(rename = "frame-stream")]
+            Frame {
+                #[serde(rename = "atMs")]
+                at_ms: u32,
+                value: SyntheticFrame,
+            },
         }
         Ok(match deserialize_object::<D, Input>(deserializer)? {
-            Input::Assets { at_ms, value } => Self { at_ms, update: StateEvent::Assets(value) },
-            Input::Control { at_ms, value } => Self { at_ms, update: StateEvent::Control(value) },
-            Input::Activation { at_ms, value } => Self { at_ms, update: StateEvent::Activation(value) },
+            Input::Assets { at_ms, value } => Self {
+                at_ms,
+                update: StateEvent::Assets(value),
+            },
+            Input::Control { at_ms, value } => Self {
+                at_ms,
+                update: StateEvent::Control(value),
+            },
+            Input::Activation { at_ms, value } => Self {
+                at_ms,
+                update: StateEvent::Activation(value),
+            },
+            Input::Frame { at_ms, value } => Self {
+                at_ms,
+                update: StateEvent::Frame(value),
+            },
         })
     }
 }
 #[derive(Clone, Debug, Serialize)]
 #[serde(tag = "channel", content = "value", deny_unknown_fields)]
 pub(crate) enum StateEvent {
-    #[serde(rename = "assets.state")] Assets(AssetState),
-    #[serde(rename = "control.message")] Control(ControlMessage),
-    #[serde(rename = "activation")] Activation(ActivationInfo),
+    #[serde(rename = "assets.state")]
+    Assets(AssetState),
+    #[serde(rename = "control.message")]
+    Control(ControlMessage),
+    #[serde(rename = "activation")]
+    Activation(ActivationInfo),
+    #[serde(rename = "frame-stream")]
+    Frame(SyntheticFrame),
 }
 impl<'de> Deserialize<'de> for StateEvent {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         #[derive(Deserialize)]
         #[serde(tag = "channel", content = "value", deny_unknown_fields)]
         enum Input {
-            #[serde(rename = "assets.state")] Assets(AssetState),
-            #[serde(rename = "control.message")] Control(ControlMessage),
-            #[serde(rename = "activation")] Activation(ActivationInfo),
+            #[serde(rename = "assets.state")]
+            Assets(AssetState),
+            #[serde(rename = "control.message")]
+            Control(ControlMessage),
+            #[serde(rename = "activation")]
+            Activation(ActivationInfo),
+            #[serde(rename = "frame-stream")]
+            Frame(SyntheticFrame),
         }
         Ok(match deserialize_object::<D, Input>(deserializer)? {
             Input::Assets(value) => Self::Assets(value),
             Input::Control(value) => Self::Control(value),
             Input::Activation(value) => Self::Activation(value),
+            Input::Frame(value) => Self::Frame(value),
         })
     }
 }
 
 impl AssetState {
     fn validate(&self) -> Result<(), String> {
-        if self.assets.len() > 1024 { return Err("fixture exceeds 1024 text assets".into()); }
+        if self.assets.len() > 1024 {
+            return Err("fixture exceeds 1024 text assets".into());
+        }
         for (path, behavior) in &self.assets {
-            if path.is_empty() || path.contains('\\') || path.contains('\0') || path.split('/').any(|p| p.is_empty() || p == "." || p == "..") { return Err("fixture asset path must be canonical package-relative text".into()); }
-            if let Some(error) = &behavior.error { error.validate()?; }
+            if path.is_empty()
+                || path.contains('\\')
+                || path.contains('\0')
+                || path
+                    .split('/')
+                    .any(|p| p.is_empty() || p == "." || p == "..")
+            {
+                return Err("fixture asset path must be canonical package-relative text".into());
+            }
+            if let Some(error) = &behavior.error {
+                error.validate()?;
+            }
         }
         Ok(())
     }
@@ -462,7 +620,13 @@ impl ImageProvider {
         if self.files.keys().any(|uri| !uri.starts_with("file:///")) {
             return Err("fixture image file keys must be absolute file:// URIs".into());
         }
-        if self.files.values().chain(self.blobs.keys()).chain(self.blobs.values()).any(|path| relative_path(path).is_err()) {
+        if self
+            .files
+            .values()
+            .chain(self.blobs.keys())
+            .chain(self.blobs.values())
+            .any(|path| relative_path(path).is_err())
+        {
             return Err("fixture image assets must use canonical package-relative paths".into());
         }
         Ok(())
@@ -474,27 +638,53 @@ impl FixtureDefinition {
     }
 
     fn validate_with_locale(&self) -> Result<LocaleContext, String> {
-        if self.schema_version != 1 { return Err("unsupported fixture schemaVersion; expected 1".into()); }
-        if self.id.trim().is_empty() || self.id.chars().count() > 128 { return Err("fixture id must contain 1..=128 characters of nonblank text".into()); }
-        if self.events.len() > 4096 { return Err("fixture exceeds 4096 events".into()); }
-        if let Some(info) = &self.activation { info.validate()?; }
-        if let Some(runtime) = &self.runtime_environment { runtime.validate()?; }
-        if let Some(provider) = &self.services.assets { provider.initial_state.validate()?; }
-        if let Some(images) = &self.services.images { images.validate()?; }
-        if let Some(clipboard) = &self.services.clipboard { clipboard.validate()?; }
+        if self.schema_version != 1 {
+            return Err("unsupported fixture schemaVersion; expected 1".into());
+        }
+        if self.id.trim().is_empty() || self.id.chars().count() > 128 {
+            return Err("fixture id must contain 1..=128 characters of nonblank text".into());
+        }
+        if self.events.len() > 4096 {
+            return Err("fixture exceeds 4096 events".into());
+        }
+        if let Some(info) = &self.activation {
+            info.validate()?;
+        }
+        if let Some(runtime) = &self.runtime_environment {
+            runtime.validate()?;
+        }
+        if let Some(provider) = &self.services.assets {
+            provider.initial_state.validate()?;
+        }
+        if let Some(images) = &self.services.images {
+            images.validate()?;
+        }
+        if let Some(clipboard) = &self.services.clipboard {
+            clipboard.validate()?;
+        }
         if let Some(sqlite) = &self.services.sqlite {
             for (name, seed) in sqlite {
                 if !host_services::sqlite::is_valid_database_name(name) {
-                    return Err(format!("fixture services.sqlite has invalid database name: {name:?}"));
+                    return Err(format!(
+                        "fixture services.sqlite has invalid database name: {name:?}"
+                    ));
                 }
                 seed.validate()?;
             }
         }
-        if let Some(files) = &self.services.files { files.validate()?; }
-        if let Some(files) = &self.services.system_files { files.validate()?; }
-        if let Some(network) = &self.services.network { network.validate()?; }
+        if let Some(files) = &self.services.files {
+            files.validate()?;
+        }
+        if let Some(files) = &self.services.system_files {
+            files.validate()?;
+        }
+        if let Some(network) = &self.services.network {
+            network.validate()?;
+        }
         self.services.validate_external()?;
-        for event in &self.events { self.validate_event(&event.update)?; }
+        for event in &self.events {
+            self.validate_event(&event.update)?;
+        }
         LocaleContext::fixture(self.locale.as_deref(), self.time_zone.as_deref())
             .map_err(|error| format!("invalid fixture: {error}"))
     }
@@ -502,6 +692,7 @@ impl FixtureDefinition {
         match event {
             StateEvent::Assets(state) if self.services.assets.is_some() => state.validate(),
             StateEvent::Control(message) if self.services.control.is_some() => message.validate(),
+            StateEvent::Frame(frame) if self.services.sockets.is_some() => frame.validate(),
             StateEvent::Activation(info) => info.validate().map_err(str::to_owned),
             _ => Err("fixture event requires its declared provider".into()),
         }
@@ -510,9 +701,20 @@ impl FixtureDefinition {
 
 enum Scheduled {
     Event(StateEvent),
-    Asset { generation: u64, id: u64, result: Result<String, ServiceError>, injected: bool },
-    External { generation: u64, job: ExternalJob },
-    Network { generation: u64, job: NetworkJob },
+    Asset {
+        generation: u64,
+        id: u64,
+        result: Result<String, ServiceError>,
+        injected: bool,
+    },
+    External {
+        generation: u64,
+        job: ExternalJob,
+    },
+    Network {
+        generation: u64,
+        job: NetworkJob,
+    },
 }
 
 #[derive(PartialEq, Eq, PartialOrd, Ord)]
@@ -529,7 +731,14 @@ enum ScheduleOrder {
     Call { id: u64, index: usize },
 }
 
-struct Call { generation: u64, service: &'static str, method: &'static str, error: Option<&'static str>, error_delivered: bool, acknowledged: bool }
+struct Call {
+    generation: u64,
+    service: &'static str,
+    method: &'static str,
+    error: Option<&'static str>,
+    error_delivered: bool,
+    acknowledged: bool,
+}
 struct State {
     scheduled: BTreeMap<ScheduleKey, Scheduled>,
     deliveries: VecDeque<Completion>,
@@ -540,7 +749,9 @@ struct State {
     calls: BTreeMap<u64, Call>,
     next_registration_id: u64,
     sequence: u64,
-    trace: Vec<Value>, trace_bytes: usize, dropped: u64,
+    trace: Vec<Value>,
+    trace_bytes: usize,
+    dropped: u64,
     failure: Option<ContractFailure>,
     disposed: bool,
 }
@@ -551,31 +762,70 @@ pub(crate) struct FixtureRuntime {
     state: RefCell<State>,
     system_files: Arc<host_services::system_files::PreviewSystemFiles>,
 }
-fn failure(code: &'static str, message: impl Into<String>) -> ContractFailure { ContractFailure { code, message: message.into() } }
+fn failure(code: &'static str, message: impl Into<String>) -> ContractFailure {
+    ContractFailure {
+        code,
+        message: message.into(),
+    }
+}
 impl FixtureRuntime {
     pub(crate) fn new(definition: FixtureDefinition, environment: Rc<Environment>) -> Rc<Self> {
-        let (locale, system_files, invalid) = match definition.validate_with_locale().and_then(|locale| {
-            let files = definition.services.system_files.as_ref().map(system_files::SystemFilesFixture::build)
-                .transpose()?.unwrap_or_default();
-            Ok((locale, files))
-        }) {
-            Ok((locale, system_files)) => (locale, system_files, None),
-            Err(message) => (LocaleContext::preview_default(), Arc::default(), Some(failure("E_FIXTURE_CONTRACT", message))),
-        };
-        let scheduled = definition.events.iter().enumerate().map(|(index, event)| {
-            let key = ScheduleKey {
-                deadline_us: u64::from(event.at_ms) * 1000,
-                order: ScheduleOrder::Event { index },
+        let (locale, system_files, invalid) =
+            match definition.validate_with_locale().and_then(|locale| {
+                let files = definition
+                    .services
+                    .system_files
+                    .as_ref()
+                    .map(system_files::SystemFilesFixture::build)
+                    .transpose()?
+                    .unwrap_or_default();
+                Ok((locale, files))
+            }) {
+                Ok((locale, system_files)) => (locale, system_files, None),
+                Err(message) => (
+                    LocaleContext::preview_default(),
+                    Arc::default(),
+                    Some(failure("E_FIXTURE_CONTRACT", message)),
+                ),
             };
-            (key, Scheduled::Event(event.update.clone()))
-        }).collect();
-        Rc::new(Self { state: RefCell::new(State {
-            scheduled, deliveries: VecDeque::new(), assets: definition.services.assets.as_ref().map(|p| p.initial_state.clone()),
-            activations: VecDeque::new(),
-            external: ExternalState::default(),
-            network: NetworkState::default(),
-            calls: BTreeMap::new(), next_registration_id: 1, sequence: 0, trace: vec![], trace_bytes: 0, dropped: 0, failure: invalid, disposed: false,
-        }), definition, environment, locale, system_files })
+        let scheduled = definition
+            .events
+            .iter()
+            .enumerate()
+            .map(|(index, event)| {
+                let key = ScheduleKey {
+                    deadline_us: u64::from(event.at_ms) * 1000,
+                    order: ScheduleOrder::Event { index },
+                };
+                (key, Scheduled::Event(event.update.clone()))
+            })
+            .collect();
+        Rc::new(Self {
+            state: RefCell::new(State {
+                scheduled,
+                deliveries: VecDeque::new(),
+                assets: definition
+                    .services
+                    .assets
+                    .as_ref()
+                    .map(|p| p.initial_state.clone()),
+                activations: VecDeque::new(),
+                external: ExternalState::default(),
+                network: NetworkState::default(),
+                calls: BTreeMap::new(),
+                next_registration_id: 1,
+                sequence: 0,
+                trace: vec![],
+                trace_bytes: 0,
+                dropped: 0,
+                failure: invalid,
+                disposed: false,
+            }),
+            definition,
+            environment,
+            locale,
+            system_files,
+        })
     }
 
     pub(crate) fn locale(&self) -> &LocaleContext {
@@ -586,10 +836,21 @@ impl FixtureRuntime {
         &self.system_files
     }
 
-    pub(crate) fn record_open_external(&self, generation: u64, result: &Result<String, ServiceError>, token_present: bool) -> Result<(), ServiceError> {
-        let id = self.registration_id().ok_or_else(|| ServiceError { code: "E_LIMIT", message: "fixture request limit reached".into() })?;
+    pub(crate) fn record_open_external(
+        &self,
+        generation: u64,
+        result: &Result<String, ServiceError>,
+        token_present: bool,
+    ) -> Result<(), ServiceError> {
+        let id = self.registration_id().ok_or_else(|| ServiceError {
+            code: "E_LIMIT",
+            message: "fixture request limit reached".into(),
+        })?;
         self.admission("system-files", "openExternal", id, generation)
-            .map_err(|error| ServiceError { code: error.code, message: error.message })?;
+            .map_err(|error| ServiceError {
+                code: error.code,
+                message: error.message,
+            })?;
         let mut state = self.state.borrow_mut();
         let error_code = result.as_ref().err().map(|error| error.code);
         if let Some(call) = state.calls.get_mut(&id) {
@@ -603,39 +864,77 @@ impl FixtureRuntime {
         Ok(())
     }
 
-    pub(crate) fn initial_activation(&self) -> Option<&ActivationInfo> { self.definition.activation.as_ref() }
-    pub(crate) fn pending_activations(&self) -> usize { self.state.borrow().activations.len() }
-    pub(crate) fn take_activation(&self) -> Option<ActivationInfo> { self.state.borrow_mut().activations.pop_front() }
+    pub(crate) fn initial_activation(&self) -> Option<&ActivationInfo> {
+        self.definition.activation.as_ref()
+    }
+    pub(crate) fn pending_activations(&self) -> usize {
+        self.state.borrow().activations.len()
+    }
+    pub(crate) fn take_activation(&self) -> Option<ActivationInfo> {
+        self.state.borrow_mut().activations.pop_front()
+    }
 
-    pub(crate) fn activation_call(&self, generation: u64, id: u64, method: &'static str) -> Result<(), ContractFailure> {
+    pub(crate) fn activation_call(
+        &self,
+        generation: u64,
+        id: u64,
+        method: &'static str,
+    ) -> Result<(), ContractFailure> {
         self.admission("activation", method, id, generation)
     }
 
     pub(crate) fn activation_delivered(&self, generation: u64, id: u64) {
-        self.record(&mut self.state.borrow_mut(), "delivery", json!({"service":"activation","requestId":id,"generation":generation}));
+        self.record(
+            &mut self.state.borrow_mut(),
+            "delivery",
+            json!({"service":"activation","requestId":id,"generation":generation}),
+        );
     }
 
     /// Resolves the package's path grants against the immutable synthetic environment.
     ///
     /// # Errors
     /// Fails for an invalid fixture or a template with a missing binding.
-    pub(crate) fn resolve_capabilities(&self, declarations: &Capabilities) -> Result<ResolvedCapabilities, ContractFailure> {
-        if let Some(error) = self.contract_failure() { return Err(error); }
+    pub(crate) fn resolve_capabilities(
+        &self,
+        declarations: &Capabilities,
+    ) -> Result<ResolvedCapabilities, ContractFailure> {
+        if let Some(error) = self.contract_failure() {
+            return Err(error);
+        }
         let inputs = self.definition.runtime_environment.as_ref();
         let resolved = ResolvedCapabilities::resolve(
             declarations,
-            |root| inputs.and_then(|inputs| inputs.root(root)).ok_or_else(|| format!("fixture does not set {}", root.key())),
+            |root| {
+                inputs
+                    .and_then(|inputs| inputs.root(root))
+                    .ok_or_else(|| format!("fixture does not set {}", root.key()))
+            },
             || Ok(inputs.and_then(|inputs| inputs.wayland_display.clone())),
-            |name| Ok(inputs.and_then(|inputs| inputs.named_sockets.get(name)).cloned()),
+            |name| {
+                Ok(inputs
+                    .and_then(|inputs| inputs.named_sockets.get(name))
+                    .cloned())
+            },
         )?;
         Ok(resolved.with_file_directories(
             declarations,
             || {
-                let home = inputs.and_then(|env| env.home_dir.as_deref()).unwrap_or("/home/preview");
+                let home = inputs
+                    .and_then(|env| env.home_dir.as_deref())
+                    .unwrap_or("/home/preview");
                 Some(Cow::Borrowed(Path::new(home)))
             },
-            || inputs.and_then(|env| env.xdg_data_home.as_deref()).map(|path| Cow::Borrowed(Path::new(path))),
-            || inputs.and_then(|env| env.xdg_documents_dir.as_deref()).map(|path| Cow::Borrowed(Path::new(path))),
+            || {
+                inputs
+                    .and_then(|env| env.xdg_data_home.as_deref())
+                    .map(|path| Cow::Borrowed(Path::new(path)))
+            },
+            || {
+                inputs
+                    .and_then(|env| env.xdg_documents_dir.as_deref())
+                    .map(|path| Cow::Borrowed(Path::new(path)))
+            },
             |home| home.join("Documents"),
         ))
     }
@@ -649,8 +948,12 @@ impl FixtureRuntime {
         let record = json!({"sequence":state.sequence,"timeUs":self.environment.now_us(),"kind":kind,"detail":detail});
         let mut bytes = ByteCount(0);
         serde_json::to_writer(&mut bytes, &record).expect("JSON trace");
-        if state.trace.len() >= MAX_TRACE_RECORDS || state.trace_bytes + bytes.0 > MAX_TRACE_BYTES { state.dropped += 1; }
-        else { state.trace_bytes += bytes.0; state.trace.push(record); }
+        if state.trace.len() >= MAX_TRACE_RECORDS || state.trace_bytes + bytes.0 > MAX_TRACE_BYTES {
+            state.dropped += 1;
+        } else {
+            state.trace_bytes += bytes.0;
+            state.trace.push(record);
+        }
     }
     fn fail(&self, error: ContractFailure) -> ContractFailure {
         let mut state = self.state.borrow_mut();
@@ -658,34 +961,75 @@ impl FixtureRuntime {
     }
     fn record_failure(&self, state: &mut State, error: ContractFailure) -> ContractFailure {
         state.failure.get_or_insert_with(|| error.clone());
-        self.record(state, "contractFailure", json!({"code":error.code,"message":error.message}));
+        self.record(
+            state,
+            "contractFailure",
+            json!({"code":error.code,"message":error.message}),
+        );
         error
     }
-    pub(crate) fn contract_failure(&self) -> Option<ContractFailure> { self.state.borrow().failure.clone() }
-    pub(crate) fn worker_now_ms(&self) -> u64 { self.environment.virtual_now_ms() }
-    pub(crate) fn next_worker_seed(&self) -> u64 { self.environment.next_seed() }
+    pub(crate) fn contract_failure(&self) -> Option<ContractFailure> {
+        self.state.borrow().failure.clone()
+    }
+    pub(crate) fn worker_now_ms(&self) -> u64 {
+        self.environment.virtual_now_ms()
+    }
+    pub(crate) fn next_worker_seed(&self) -> u64 {
+        self.environment.next_seed()
+    }
     /// Retains a capability denial even when application code catches it.
-    pub(crate) fn deny_capability(&self, message: &str) -> ContractFailure { self.fail(failure("E_CAPABILITY", message)) }
-    pub(super) fn malformed(&self, message: impl Into<String>) -> ContractFailure { self.fail(failure("E_FIXTURE_CONTRACT", message)) }
+    pub(crate) fn deny_capability(&self, message: &str) -> ContractFailure {
+        self.fail(failure("E_CAPABILITY", message))
+    }
+    pub(super) fn malformed(&self, message: impl Into<String>) -> ContractFailure {
+        self.fail(failure("E_FIXTURE_CONTRACT", message))
+    }
     pub(super) fn require_assets(&self) -> Result<(), ContractFailure> {
-        if self.definition.services.assets.is_none() { return Err(self.fail(failure("E_FIXTURE_MISSING_SERVICE", "preview fixture does not provide readTextAsset"))); }
+        if self.definition.services.assets.is_none() {
+            return Err(self.fail(failure(
+                "E_FIXTURE_MISSING_SERVICE",
+                "preview fixture does not provide readTextAsset",
+            )));
+        }
         Ok(())
     }
-    pub(super) fn image_files<'a>(&'a self, package: &'a Package) -> impl Iterator<Item = (String, Arc<[u8]>)> + 'a {
+    pub(super) fn image_files<'a>(
+        &'a self,
+        package: &'a Package,
+    ) -> impl Iterator<Item = (String, Arc<[u8]>)> + 'a {
         // Unavailable targets are not entries in this generation's authority.
-        self.definition.services.images.iter().flat_map(|images| &images.files).filter_map(|(uri, path)| {
-            package.asset_data(path).map(|bytes| (uri.clone(), bytes))
-        })
+        self.definition
+            .services
+            .images
+            .iter()
+            .flat_map(|images| &images.files)
+            .filter_map(|(uri, path)| package.asset_data(path).map(|bytes| (uri.clone(), bytes)))
     }
-    pub(super) fn image_blob(&self, path: &str, package: Option<&Package>) -> Result<Arc<[u8]>, ContractFailure> {
-        if let Some(error) = self.contract_failure() { return Err(error); }
+    pub(super) fn image_blob(
+        &self,
+        path: &str,
+        package: Option<&Package>,
+    ) -> Result<Arc<[u8]>, ContractFailure> {
+        if let Some(error) = self.contract_failure() {
+            return Err(error);
+        }
         let Some(package) = package.filter(|package| package.asset_bytes(path).is_some()) else {
-            return Err(self.malformed(format!("image asset {path:?} is not declared in the loaded package")));
+            return Err(self.malformed(format!(
+                "image asset {path:?} is not declared in the loaded package"
+            )));
         };
-        let target = self.definition.services.images.as_ref().and_then(|images| images.blobs.get(path))
+        let target = self
+            .definition
+            .services
+            .images
+            .as_ref()
+            .and_then(|images| images.blobs.get(path))
             .ok_or_else(|| self.malformed(format!("fixture does not map image blob {path:?}")))?;
-        package.asset_data(target)
-            .ok_or_else(|| self.malformed(format!("fixture image blob target {target:?} is not declared in the loaded package")))
+        package.asset_data(target).ok_or_else(|| {
+            self.malformed(format!(
+                "fixture image blob target {target:?} is not declared in the loaded package"
+            ))
+        })
     }
     pub(super) fn registration_id(&self) -> Option<u64> {
         let mut state = self.state.borrow_mut();
@@ -693,127 +1037,307 @@ impl FixtureRuntime {
     }
     fn allocate_id(state: &mut State) -> Option<u64> {
         let id = state.next_registration_id;
-        if state.disposed || id>super::MAX_SAFE_ID { return None; }
+        if state.disposed || id > super::MAX_SAFE_ID {
+            return None;
+        }
         state.next_registration_id += 1;
         Some(id)
     }
-    fn admission(&self, service: &'static str, method: &'static str, request_id: u64, generation: u64) -> Result<(), ContractFailure> {
+    fn admission(
+        &self,
+        service: &'static str,
+        method: &'static str,
+        request_id: u64,
+        generation: u64,
+    ) -> Result<(), ContractFailure> {
         let mut state = self.state.borrow_mut();
         self.admit(&mut state, service, method, request_id, generation)
     }
-    fn admit(&self, state: &mut State, service: &'static str, method: &'static str, request_id: u64, generation: u64) -> Result<(), ContractFailure> {
-        if let Some(error) = &state.failure { return Err(error.clone()); }
+    fn admit(
+        &self,
+        state: &mut State,
+        service: &'static str,
+        method: &'static str,
+        request_id: u64,
+        generation: u64,
+    ) -> Result<(), ContractFailure> {
+        if let Some(error) = &state.failure {
+            return Err(error.clone());
+        }
         if state.disposed {
-            return Err(self.record_failure(state, failure("E_FIXTURE_CONTRACT", "fixture runtime is disposed")));
+            return Err(self.record_failure(
+                state,
+                failure("E_FIXTURE_CONTRACT", "fixture runtime is disposed"),
+            ));
         }
         // Calls remain bounded independently of the lossy trace: exact assertions cannot rely on trace retention.
         if state.calls.len() >= 16384 {
-            return Err(self.record_failure(state, failure("E_FIXTURE_CONTRACT", "fixture call limit reached")));
+            return Err(self.record_failure(
+                state,
+                failure("E_FIXTURE_CONTRACT", "fixture call limit reached"),
+            ));
         }
         if state.calls.contains_key(&request_id) {
-            return Err(self.record_failure(state, failure("E_FIXTURE_CONTRACT", "duplicate fixture request ID")));
+            return Err(self.record_failure(
+                state,
+                failure("E_FIXTURE_CONTRACT", "duplicate fixture request ID"),
+            ));
         }
-        state.calls.insert(request_id, Call { generation, service, method, error: None, error_delivered: false, acknowledged: false });
-        self.record(state, "request", json!({"requestId":request_id,"service":service,"method":method}));
+        state.calls.insert(
+            request_id,
+            Call {
+                generation,
+                service,
+                method,
+                error: None,
+                error_delivered: false,
+                acknowledged: false,
+            },
+        );
+        self.record(
+            state,
+            "request",
+            json!({"requestId":request_id,"service":service,"method":method}),
+        );
         Ok(())
     }
-    pub(super) fn read_asset(&self, generation: u64, request_id: u64, path: &str, package: Option<&Package>) -> Result<(), ContractFailure> {
+    pub(super) fn read_asset(
+        &self,
+        generation: u64,
+        request_id: u64,
+        path: &str,
+        package: Option<&Package>,
+    ) -> Result<(), ContractFailure> {
         self.admission("assets", "readTextAsset", request_id, generation)?;
-        let Some(provider) = &self.definition.services.assets else { return Err(self.fail(failure("E_FIXTURE_MISSING_SERVICE", "preview fixture does not provide readTextAsset"))); };
-        let behavior = self.state.borrow().assets.as_ref().and_then(|state| state.assets.get(path)).cloned();
-        let Some(behavior) = behavior else { return Err(self.malformed(format!("fixture does not declare text asset {path}"))); };
-        let Some(bytes) = package.and_then(|p| p.asset_bytes(path)) else { return Err(self.malformed(format!("asset {path} is not declared in the loaded package"))); };
+        let Some(provider) = &self.definition.services.assets else {
+            return Err(self.fail(failure(
+                "E_FIXTURE_MISSING_SERVICE",
+                "preview fixture does not provide readTextAsset",
+            )));
+        };
+        let behavior = self
+            .state
+            .borrow()
+            .assets
+            .as_ref()
+            .and_then(|state| state.assets.get(path))
+            .cloned();
+        let Some(behavior) = behavior else {
+            return Err(self.malformed(format!("fixture does not declare text asset {path}")));
+        };
+        let Some(bytes) = package.and_then(|p| p.asset_bytes(path)) else {
+            return Err(self.malformed(format!(
+                "asset {path} is not declared in the loaded package"
+            )));
+        };
         let injected = behavior.error.is_some();
-        let result = if let Some(error) = behavior.error { Err(error.service_error()) }
-            else if bytes.len() > super::MAX_ASSET_BYTES { Err(ServiceError { code: "TooLarge", message: "text asset exceeds 1 MiB".into() }) }
-            else { std::str::from_utf8(bytes).map(str::to_owned).map_err(|_| ServiceError { code: "InvalidUtf8", message: "text asset is not UTF-8".into() }) };
-        let deadline = self.environment.now_us().checked_add(u64::from(provider.latency_ms) * 1000).ok_or_else(|| self.malformed("fixture deadline overflow"))?;
+        let result = if let Some(error) = behavior.error {
+            Err(error.service_error())
+        } else if bytes.len() > super::MAX_ASSET_BYTES {
+            Err(ServiceError {
+                code: "TooLarge",
+                message: "text asset exceeds 1 MiB".into(),
+            })
+        } else {
+            std::str::from_utf8(bytes)
+                .map(str::to_owned)
+                .map_err(|_| ServiceError {
+                    code: "InvalidUtf8",
+                    message: "text asset is not UTF-8".into(),
+                })
+        };
+        let deadline = self
+            .environment
+            .now_us()
+            .checked_add(u64::from(provider.latency_ms) * 1000)
+            .ok_or_else(|| self.malformed("fixture deadline overflow"))?;
         let key = ScheduleKey {
             deadline_us: deadline,
-            order: ScheduleOrder::Call { id: request_id, index: 0 },
+            order: ScheduleOrder::Call {
+                id: request_id,
+                index: 0,
+            },
         };
-        self.state.borrow_mut().scheduled.insert(key, Scheduled::Asset { generation, id: request_id, result, injected });
+        self.state.borrow_mut().scheduled.insert(
+            key,
+            Scheduled::Asset {
+                generation,
+                id: request_id,
+                result,
+                injected,
+            },
+        );
         let mut state = self.state.borrow_mut();
-        self.record(&mut state, "arguments", json!({"requestId":request_id,"path":path}));
+        self.record(
+            &mut state,
+            "arguments",
+            json!({"requestId":request_id,"path":path}),
+        );
         Ok(())
     }
-    pub(crate) fn next_deadline_us(&self) -> Option<u64> { self.state.borrow().scheduled.first_key_value().map(|(key, _)| key.deadline_us) }
+    pub(crate) fn next_deadline_us(&self) -> Option<u64> {
+        self.state
+            .borrow()
+            .scheduled
+            .first_key_value()
+            .map(|(key, _)| key.deadline_us)
+    }
     pub(crate) fn release_due(&self) -> Result<bool, ContractFailure> {
-        if let Some(error) = self.contract_failure() { return Err(error); }
+        if let Some(error) = self.contract_failure() {
+            return Err(error);
+        }
         let now = self.environment.now_us();
         let mut state = self.state.borrow_mut();
         let mut worked = false;
-        while state.scheduled.first_key_value().is_some_and(|(key, _)| key.deadline_us <= now) {
-            let Some((_, scheduled)) = state.scheduled.pop_first() else { break };
+        while state
+            .scheduled
+            .first_key_value()
+            .is_some_and(|(key, _)| key.deadline_us <= now)
+        {
+            let Some((_, scheduled)) = state.scheduled.pop_first() else {
+                break;
+            };
             worked = true;
             match scheduled {
                 Scheduled::Event(event) => self.apply(&mut state, event)?,
-                Scheduled::Asset { generation, id, result, injected } => {
+                Scheduled::Asset {
+                    generation,
+                    id,
+                    result,
+                    injected,
+                } => {
                     self.check_delivery_limit(&mut state)?;
-                    if injected && let Some(call) = state.calls.get_mut(&id) { call.error = result.as_ref().err().map(|e| e.code); }
-                    self.record(&mut state, "response", json!({"requestId":id,"errorCode":result.as_ref().err().map(|e| e.code)}));
-                    state.deliveries.push_back(Completion { generation, request_id: id, result });
+                    if injected && let Some(call) = state.calls.get_mut(&id) {
+                        call.error = result.as_ref().err().map(|e| e.code);
+                    }
+                    self.record(
+                        &mut state,
+                        "response",
+                        json!({"requestId":id,"errorCode":result.as_ref().err().map(|e| e.code)}),
+                    );
+                    state.deliveries.push_back(Completion {
+                        generation,
+                        request_id: id,
+                        result,
+                    });
                 }
-                Scheduled::External { generation, job } => self.enqueue_external(&mut state, generation, job)?,
-                Scheduled::Network { generation, job } => self.enqueue_network(&mut state, generation, job)?,
+                Scheduled::External { generation, job } => {
+                    self.enqueue_external(&mut state, generation, job)?
+                }
+                Scheduled::Network { generation, job } => {
+                    self.enqueue_network(&mut state, generation, job)?
+                }
             }
         }
-        if let Some(error) = &state.failure { return Err(error.clone()); }
+        if let Some(error) = &state.failure {
+            return Err(error.clone());
+        }
         Ok(worked)
     }
     fn check_delivery_limit(&self, state: &mut State) -> Result<(), ContractFailure> {
         if state.deliveries.len() + state.external.delivery_count() >= 1024 {
-            return Err(self.record_failure(state, failure("E_FIXTURE_CONTRACT", "fixture delivery queue exceeds 1024 entries")));
+            return Err(self.record_failure(
+                state,
+                failure(
+                    "E_FIXTURE_CONTRACT",
+                    "fixture delivery queue exceeds 1024 entries",
+                ),
+            ));
         }
         Ok(())
     }
     fn apply(&self, state: &mut State, event: StateEvent) -> Result<(), ContractFailure> {
         match event {
             StateEvent::Assets(assets) => {
-                self.record(state, "state", json!({"channel":"assets.state","value":&assets}));
+                self.record(
+                    state,
+                    "state",
+                    json!({"channel":"assets.state","value":&assets}),
+                );
                 state.assets = Some(assets);
                 Ok(())
             }
             StateEvent::Control(message) => self.dispatch_control(state, message),
+            StateEvent::Frame(frame) => self.dispatch_frame(state, frame),
             StateEvent::Activation(info) => {
                 if state.activations.len() >= 64 {
-                    return Err(self.record_failure(state, failure("E_FIXTURE_CONTRACT", "activation queue exceeds 64 entries")));
+                    return Err(self.record_failure(
+                        state,
+                        failure("E_FIXTURE_CONTRACT", "activation queue exceeds 64 entries"),
+                    ));
                 }
-                self.record(state, "state", json!({"channel":"activation","value":&info}));
+                self.record(
+                    state,
+                    "state",
+                    json!({"channel":"activation","value":&info}),
+                );
                 state.activations.push_back(info);
                 Ok(())
             }
         }
     }
     pub(crate) fn emit(&self, channel: &str, value: &Value) -> Result<(), ContractFailure> {
-        if let Some(error) = self.contract_failure() { return Err(error); }
-        let event: StateEvent = serde_json::from_value(json!({"channel":channel,"value":value})).map_err(|e| self.malformed(format!("invalid fixture event: {e}")))?;
-        self.definition.validate_event(&event).map_err(|e| self.malformed(e))?;
+        if let Some(error) = self.contract_failure() {
+            return Err(error);
+        }
+        let event: StateEvent = serde_json::from_value(json!({"channel":channel,"value":value}))
+            .map_err(|e| self.malformed(format!("invalid fixture event: {e}")))?;
+        self.definition
+            .validate_event(&event)
+            .map_err(|e| self.malformed(e))?;
         let mut state = self.state.borrow_mut();
-        if state.disposed { drop(state); return Err(self.malformed("fixture runtime is disposed")); }
+        if state.disposed {
+            drop(state);
+            return Err(self.malformed("fixture runtime is disposed"));
+        }
         self.apply(&mut state, event)
     }
-    pub(super) fn take(&self) -> Option<Completion> { self.state.borrow_mut().deliveries.pop_front() }
-    pub(super) fn has_delivery(&self) -> bool { !self.state.borrow().deliveries.is_empty() }
+    pub(super) fn take(&self) -> Option<Completion> {
+        self.state.borrow_mut().deliveries.pop_front()
+    }
+    pub(super) fn has_delivery(&self) -> bool {
+        !self.state.borrow().deliveries.is_empty()
+    }
     pub(super) fn delivered(&self, id: u64, error: bool) {
-        if error && let Some(call) = self.state.borrow_mut().calls.get_mut(&id) { call.error_delivered = true; }
+        if error && let Some(call) = self.state.borrow_mut().calls.get_mut(&id) {
+            call.error_delivered = true;
+        }
     }
     pub(super) fn ignored(&self, id: u64, reason: &str) {
         let mut state = self.state.borrow_mut();
-        self.record(&mut state, "ignored", json!({"requestId":id,"reason":reason}));
+        self.record(
+            &mut state,
+            "ignored",
+            json!({"requestId":id,"reason":reason}),
+        );
     }
     pub(super) fn cancel(&self, id: u64) {
         let mut state = self.state.borrow_mut();
-        if let Some(call) = state.calls.get_mut(&id) && !call.error_delivered { call.error = None; }
-        state.scheduled.retain(|_, item| !matches!(item, Scheduled::Asset { id: other, .. } if *other == id));
+        if let Some(call) = state.calls.get_mut(&id)
+            && !call.error_delivered
+        {
+            call.error = None;
+        }
+        state
+            .scheduled
+            .retain(|_, item| !matches!(item, Scheduled::Asset { id: other, .. } if *other == id));
         state.deliveries.retain(|item| item.request_id != id);
         self.record(&mut state, "cancellation", json!({"requestId":id}));
     }
     /// Retire only one session's registrations; scenario events and the exact call ledger survive.
     pub(super) fn cancel_generation(&self, generation: u64) {
-        let ids: Vec<_> = self.state.borrow().calls.iter()
-            .filter_map(|(&id, call)|(call.generation==generation && call.service=="assets").then_some(id)).collect();
-        for id in ids { self.cancel(id); }
+        let ids: Vec<_> = self
+            .state
+            .borrow()
+            .calls
+            .iter()
+            .filter_map(|(&id, call)| {
+                (call.generation == generation && call.service == "assets").then_some(id)
+            })
+            .collect();
+        for id in ids {
+            self.cancel(id);
+        }
     }
     /// Record the headless compositor's state after retiring all JS ownership.
     pub(crate) fn record_session_lock(&self, snapshot: Value) {
@@ -842,8 +1366,15 @@ impl FixtureRuntime {
         method: &'static str,
         operation: impl FnOnce() -> Result<T, ServiceError>,
     ) -> Result<T, ServiceError> {
-        let id = self.registration_id().ok_or_else(|| ServiceError { code: "E_LIMIT", message: "fixture request limit reached".into() })?;
-        self.admission("files", method, id, generation).map_err(|error| ServiceError { code: error.code, message: error.message })?;
+        let id = self.registration_id().ok_or_else(|| ServiceError {
+            code: "E_LIMIT",
+            message: "fixture request limit reached".into(),
+        })?;
+        self.admission("files", method, id, generation)
+            .map_err(|error| ServiceError {
+                code: error.code,
+                message: error.message,
+            })?;
         let result = operation();
         let error = result.as_ref().err().map(|err| err.code);
         let mut state = self.state.borrow_mut();
@@ -852,7 +1383,11 @@ impl FixtureRuntime {
             // Policy denials and missing tokens are real service outcomes, not injected faults.
             call.acknowledged = true;
         }
-        self.record(&mut state, "response", json!({"requestId":id,"errorCode":error}));
+        self.record(
+            &mut state,
+            "response",
+            json!({"requestId":id,"errorCode":error}),
+        );
         result
     }
 
@@ -895,7 +1430,9 @@ impl FixtureRuntime {
                 vfs.seed_grant(GrantRecord {
                     token: bm.token.clone(),
                     kind: bm.kind.into(),
-                    scope: GrantScope { path: bm.path.clone() },
+                    scope: GrantScope {
+                        path: bm.path.clone(),
+                    },
                     label,
                     mode: bm.mode,
                     created_ms: 0,
@@ -905,7 +1442,9 @@ impl FixtureRuntime {
                 vfs.seed_grant(GrantRecord {
                     token: grant.token.clone(),
                     kind: grant.kind,
-                    scope: GrantScope { path: grant.path.clone() },
+                    scope: GrantScope {
+                        path: grant.path.clone(),
+                    },
                     label: grant.label.clone(),
                     mode: grant.mode,
                     created_ms: grant.created_ms,
@@ -917,44 +1456,94 @@ impl FixtureRuntime {
 
     pub(crate) fn dispose(&self) {
         let mut state = self.state.borrow_mut();
-        if state.disposed { return; }
-        let scheduled = state.scheduled.len();
-        let deliveries = state.deliveries.len() + state.activations.len() + state.external.delivery_count() + state.network.delivery_count();
-        for call in state.calls.values_mut() {
-            if !call.error_delivered { call.error = None; }
+        if state.disposed {
+            return;
         }
-        state.disposed = true; state.scheduled.clear(); state.deliveries.clear();
+        let scheduled = state.scheduled.len();
+        let deliveries = state.deliveries.len()
+            + state.activations.len()
+            + state.external.delivery_count()
+            + state.network.delivery_count();
+        for call in state.calls.values_mut() {
+            if !call.error_delivered {
+                call.error = None;
+            }
+        }
+        state.disposed = true;
+        state.scheduled.clear();
+        state.deliveries.clear();
         state.activations.clear();
         state.external.dispose();
         state.network.dispose();
-        self.record(&mut state, "disposal", json!({"cancelledScheduled":scheduled,"cancelledDeliveries":deliveries}));
+        self.record(
+            &mut state,
+            "disposal",
+            json!({"cancelledScheduled":scheduled,"cancelledDeliveries":deliveries}),
+        );
     }
     pub(crate) fn trace(&self) -> Value {
         let state = self.state.borrow();
         json!({"schemaVersion":1,"records":state.trace,"droppedRecords":state.dropped,"recordLimit":MAX_TRACE_RECORDS,"byteLimit":MAX_TRACE_BYTES})
     }
-    pub(crate) fn assert_calls(&self, service: &str, method: &str, count: u64, error_code: Option<&str>) -> Result<(), ContractFailure> {
-        if let Some(error) = self.contract_failure() { return Err(error); }
-        if !matches!((service, method),
-            ("assets", "readTextAsset") | ("sockets", "connectUnixSocket" | "send")
-            | ("commands", "spawnCommand") | ("control", "onControlMessage" | "reply")
-            | ("activation", "getInitialActivation" | "onActivation")
-            | ("files", "persistHandle" | "restoreBookmark" | "listBookmarks" | "revokeBookmark" | "listGrants" | "revokeGrant")
-            | ("system-files", "openExternal")
-            | ("network", "httpRequest" | "openEventStream" | "connectWebSocket"))
-        {
-            return Err(failure("E_ASSERTION", format!("unknown fixture method {service}.{method}")));
+    pub(crate) fn assert_calls(
+        &self,
+        service: &str,
+        method: &str,
+        count: u64,
+        error_code: Option<&str>,
+    ) -> Result<(), ContractFailure> {
+        if let Some(error) = self.contract_failure() {
+            return Err(error);
+        }
+        if !matches!(
+            (service, method),
+            ("assets", "readTextAsset")
+                | ("sockets", "connectUnixSocket" | "send")
+                | ("commands", "spawnCommand")
+                | ("control", "onControlMessage" | "reply")
+                | ("activation", "getInitialActivation" | "onActivation")
+                | (
+                    "files",
+                    "persistHandle"
+                        | "restoreBookmark"
+                        | "listBookmarks"
+                        | "revokeBookmark"
+                        | "listGrants"
+                        | "revokeGrant"
+                )
+                | ("system-files", "openExternal")
+                | (
+                    "network",
+                    "httpRequest" | "openEventStream" | "connectWebSocket"
+                )
+        ) {
+            return Err(failure(
+                "E_ASSERTION",
+                format!("unknown fixture method {service}.{method}"),
+            ));
         }
         let mut state = self.state.borrow_mut();
-        let matches = || state.calls.values().filter(|call| call.service == service && call.method == method);
+        let matches = || {
+            state
+                .calls
+                .values()
+                .filter(|call| call.service == service && call.method == method)
+        };
         let observed = matches().count();
         if u64::try_from(observed).ok() != Some(count)
             || error_code.is_some_and(|code| !matches().any(|call| call.error == Some(code)))
         {
-            return Err(failure("E_ASSERTION", format!("expected {count} {service}.{method} calls with error {error_code:?}; observed {observed}")));
+            return Err(failure(
+                "E_ASSERTION",
+                format!(
+                    "expected {count} {service}.{method} calls with error {error_code:?}; observed {observed}"
+                ),
+            ));
         }
         if let Some(code) = error_code {
-            for call in state.calls.values_mut().filter(|call| call.service == service && call.method == method && call.error == Some(code)) {
+            for call in state.calls.values_mut().filter(|call| {
+                call.service == service && call.method == method && call.error == Some(code)
+            }) {
                 call.acknowledged = true;
             }
         }
@@ -962,11 +1551,21 @@ impl FixtureRuntime {
     }
     pub(crate) fn finalize(&self) -> Result<(), ContractFailure> {
         let state = self.state.borrow();
-        if let Some(error) = &state.failure { return Err(error.clone()); }
+        if let Some(error) = &state.failure {
+            return Err(error.clone());
+        }
         if let Some((call, code)) = state.calls.values().find_map(|call| {
-            call.error.filter(|_| !call.acknowledged).map(|code| (call, code))
+            call.error
+                .filter(|_| !call.acknowledged)
+                .map(|code| (call, code))
         }) {
-            return Err(failure("E_FIXTURE_UNEXPECTED_ERROR", format!("unacknowledged injected {}.{} error {code}", call.service, call.method)));
+            return Err(failure(
+                "E_FIXTURE_UNEXPECTED_ERROR",
+                format!(
+                    "unacknowledged injected {}.{} error {code}",
+                    call.service, call.method
+                ),
+            ));
         }
         let external = self.finalize_external(&state);
         drop(state);

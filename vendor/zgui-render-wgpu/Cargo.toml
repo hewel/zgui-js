@@ -1,0 +1,82 @@
+[package]
+name = "zgui-render-wgpu"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+description = "wgpu renderer for zgui scenes"
+repository = "https://github.com/zortax/zgui"
+homepage = "https://zgui.zortax.de"
+rust-version = "1.90"
+keywords = ["gui", "ui", "css", "reactive", "wgpu"]
+categories = ["gui"]
+include = ["/src", "/build", "/build.rs", "/README.md", "/LICENSE", "/NOTICE"]
+
+[workspace]
+
+[patch."https://github.com/zortax/zgui"]
+[dependencies]
+web-time = "1.1.0"
+bincode = "1.3.3"
+bytemuck = { version = "1.25.2", features = ["derive"] }
+futures = { version = "0.3.34", features = ["thread-pool"] }
+# Named only to turn on the decoding of a shader representation. The type itself is reached through
+# `wgpu::naga`, so if the two ever resolved to different builds of it this crate would not compile.
+naga = { version = "=30.0.2", features = ["deserialize"] }
+rustc-hash = "2.1.3"
+tracing = "0.1.44"
+# `naga-ir` is what lets a pipeline be built from a representation rather than from WGSL text.
+wgpu = { version = "=30.0.2", features = ["naga-ir"] }
+zgui-atlas = { git = "https://github.com/zortax/zgui", rev = "ee29c7dc66206eb04ba7bcf514058a278c9070ba" }
+zgui-bits = { git = "https://github.com/zortax/zgui", rev = "ee29c7dc66206eb04ba7bcf514058a278c9070ba" }
+zgui-color = { git = "https://github.com/zortax/zgui", rev = "ee29c7dc66206eb04ba7bcf514058a278c9070ba" }
+zgui-geom = { git = "https://github.com/zortax/zgui", rev = "ee29c7dc66206eb04ba7bcf514058a278c9070ba" }
+zgui-profile = { git = "https://github.com/zortax/zgui", rev = "ee29c7dc66206eb04ba7bcf514058a278c9070ba" }
+zgui-render = { git = "https://github.com/zortax/zgui", rev = "ee29c7dc66206eb04ba7bcf514058a278c9070ba" }
+zgui-scene = { git = "https://github.com/zortax/zgui", rev = "ee29c7dc66206eb04ba7bcf514058a278c9070ba" }
+zgui-wgsl = { git = "https://github.com/zortax/zgui", rev = "ee29c7dc66206eb04ba7bcf514058a278c9070ba" }
+
+# Parsing the shaders once per build rather than once per launch. The text comes from zgui-wgsl,
+# which is where an application's own shader reads it from too.
+[build-dependencies]
+bincode = "1.3.3"
+naga = { version = "=30.0.2", features = ["wgsl-in", "serialize"] }
+zgui-wgsl = { git = "https://github.com/zortax/zgui", rev = "ee29c7dc66206eb04ba7bcf514058a278c9070ba" }
+
+# A swap chain made through Vulkan itself, where wgpu's would discard what an image held and name no
+# damage. `ash` at the version wgpu-hal links, so its handles are the types wgpu-hal takes. The
+# targets are the ones `build.rs` sets `vulkan_hal` for.
+[target.'cfg(any(windows, target_os = "linux", target_os = "android", target_os = "freebsd"))'.dependencies]
+ash = "0.38"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+rustix = { version = "1.1.6", features = ["event", "fs"] }
+
+# A DXGI swap chain made by the renderer itself, where wgpu's would discard what a buffer held and
+# name no dirty rectangles.
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62.2", default-features = false, features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Direct3D12",
+    "Win32_Graphics_Dxgi",
+    "Win32_Security",
+    "Win32_System_Threading",
+] }
+
+[lints.rust]
+missing_docs = "deny"
+unsafe_code = "deny"
+unreachable_pub = "warn"
+
+[lints.rustdoc]
+broken_intra_doc_links = "deny"
+private_intra_doc_links = "warn"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+undocumented_unsafe_blocks = "warn"
+
+# A browser build. `webgl` is the fallback where the browser has no WebGPU adapter. A build without
+# atomics has one thread, so wgpu's handles can be `Send + Sync` there, which the shared device and
+# the registries built on it need.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wgpu = { version = "=30.0.2", features = ["webgl", "fragile-send-sync-non-atomic-wasm"] }

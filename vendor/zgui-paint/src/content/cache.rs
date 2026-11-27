@@ -454,8 +454,27 @@ impl ContentCache {
 
     /// Attaches a texture this framework does not own to a replaced node.
     pub fn set_external(&mut self, id: ReplacedId, texture: ExternalTextureId) {
-        self.images.insert(id, Content::External(texture));
+        self.images.insert(id, Content::External(texture, None));
         self.note_image_change(id);
+    }
+
+    /// Attaches a frame texture with a natural extent for CSS object fitting.
+    pub fn set_external_frame(
+        &mut self,
+        id: ReplacedId,
+        texture: ExternalTextureId,
+        natural: Size<u32, Device>,
+    ) {
+        self.images
+            .insert(id, Content::External(texture, Some(natural)));
+        self.note_image_change(id);
+    }
+
+    /// Detaches an external without removing a newly attached still image.
+    pub fn remove_external(&mut self, id: ReplacedId) {
+        if matches!(self.images.get(&id), Some(Content::External(..))) {
+            self.remove_image(id);
+        }
     }
 
     /// Detaches whatever was attached to a replaced node.
@@ -819,7 +838,7 @@ impl ReplacedSource for FrameContent<'_> {
             Err(error) => {
                 let key = match content {
                     Content::Decoded { key, .. } | Content::Uploaded { key, .. } => Some(*key),
-                    Content::External(_) => None,
+                    Content::External(..) => None,
                 };
                 if key.is_none_or(|key| self.image_failures.borrow_mut().insert(key)) {
                     tracing::warn!(
@@ -894,7 +913,7 @@ impl ReplacedSource for FrameContent<'_> {
             Err(error) => {
                 let key = match content {
                     Content::Decoded { key, .. } | Content::Uploaded { key, .. } => Some(*key),
-                    Content::External(_) => None,
+                    Content::External(..) => None,
                 };
                 if key.is_none_or(|key| self.image_failures.borrow_mut().insert(key)) {
                     tracing::warn!(
@@ -910,7 +929,9 @@ impl ReplacedSource for FrameContent<'_> {
             if !self.image_failures.borrow().is_empty() {
                 self.image_failures.borrow_mut().remove(&key);
             }
-            if let Content::Decoded { key: base, .. } | Content::Uploaded { key: base, .. } = content {
+            if let Content::Decoded { key: base, .. } | Content::Uploaded { key: base, .. } =
+                content
+            {
                 let mut map = self.clipped_tiles.borrow_mut();
                 let list = map.entry(base.handle()).or_default();
                 if !list.contains(&key) {

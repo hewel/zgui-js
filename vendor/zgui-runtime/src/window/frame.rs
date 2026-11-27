@@ -255,17 +255,23 @@ impl Window {
 
     fn observe_image_demand(&mut self) -> bool {
         if !self.images.restricted_sources() {
-            return self.images.observe_demand(&self.layout.borrow(), self.scale, None);
+            return self
+                .images
+                .observe_demand(&self.layout.borrow(), self.scale, None);
         }
         let layout = self.layout.borrow();
         let placements = self.host.placements();
         let document = self.document.borrow();
-        self.images.observe_demand(&layout, self.scale, Some(&crate::images::ImageVisibility {
-            surface: self.surface.size(),
-            clips: &self.scene.clips,
-            placements: &placements,
-            anim: &*document,
-        }))
+        self.images.observe_demand(
+            &layout,
+            self.scale,
+            Some(&crate::images::ImageVisibility {
+                surface: self.surface.size(),
+                clips: &self.scene.clips,
+                placements: &placements,
+                anim: &*document,
+            }),
+        )
     }
 
     /// What the last frame did, or `None` before the first frame.
@@ -482,7 +488,8 @@ impl Window {
         // that *kicked* decodes is owed one more frame — the tasks it spawned have never been
         // polled, and an unpolled future has no waker for its completion to fire.
         mark("f.images");
-        self.images.audit_inline(&self.document, self.dom.revision());
+        self.images
+            .audit_inline(&self.document, self.dom.revision());
         if self.images.settle(&self.document, &mut self.content) {
             self.request_frame();
         }
@@ -808,6 +815,8 @@ impl Window {
                 outcome,
                 document_revision,
                 style_revision: self.consumed_style_revision,
+                style_passes: self.probed_style_passes,
+                relayouts: self.probed_relayouts,
                 layout_revision: self.probed_layout_revision,
                 layout_document_coherent: self.probed_layout_revision == Some(document_revision)
                     && self.consumed_style_revision == self.style_revision
@@ -971,6 +980,7 @@ impl Window {
         let mut cx = crate::embed::EmbedMaintenanceCx {
             renderer: &mut *self.renderer,
             content: &mut self.content,
+            intrinsics: &self.replaced_surfaces,
             timestamp,
         };
         self.embed.maintain(&mut cx);
@@ -1076,7 +1086,9 @@ impl Window {
     fn run_frame_callbacks(&mut self, at: zgui_vocab::Timestamp) -> usize {
         // Timer-driven housekeeping frames still run while hidden; they must
         // not consume callbacks reserved for the next visible frame.
-        if self.occluded { return 0; }
+        if self.occluded {
+            return 0;
+        }
         let due = self.host.take_frame_callbacks();
         for callback in &due {
             // Inside the non-reactive zone, exactly as a timer's callback is: a callback that
@@ -1317,6 +1329,9 @@ impl Window {
             .and(self.style_pool.as_deref())
             .map(crate::app::StylePoolCell::get);
         let pass = self.engine.restyle(&mut document, pool);
+        if pass.styled != 0 && self.probe.is_some() {
+            self.probed_style_passes += 1;
+        }
         self.consumed_style_revision = self.style_revision;
         self.broad_restyle = false;
         let mut layout = self.layout.borrow_mut();
@@ -1586,6 +1601,9 @@ impl Window {
         // clear of its own scrollport, which for the document's own scroll container is a window
         // with nothing in it. Skipped entirely when no pass ran, because then no extent moved.
         if relaid_out {
+            if self.probe.is_some() {
+                self.probed_relayouts += 1;
+            }
             self.clamp_scroll_to_content();
         }
         // After the clamp, so a scroll is measured against the extents this pass produced, and
@@ -1968,7 +1986,10 @@ impl Window {
             if self.lock_backdrop {
                 let backdrop = zgui_geom::Rect::new(
                     zgui_geom::Point::new(DevicePx(0.0), DevicePx(0.0)),
-                    Size::new(DevicePx(viewport.width as f32), DevicePx(viewport.height as f32)),
+                    Size::new(
+                        DevicePx(viewport.width as f32),
+                        DevicePx(viewport.height as f32),
+                    ),
                 );
                 let black = self.scene.paints.solid(zgui_color::Color::BLACK);
                 self.scene.push_quad(zgui_scene::Quad::filled(
@@ -1998,10 +2019,15 @@ impl Window {
                 .content
                 .frame(&layout, &self.text, self.raster.as_ref());
             let image_source = crate::images::PaintImages {
-                source: &content, images: &self.images, refusals: &image_refusals,
+                source: &content,
+                images: &self.images,
+                refusals: &image_refusals,
             };
-            let replaced: &dyn zgui_paint::walk::order::ReplacedSource =
-                if observe_images { &image_source } else { &content };
+            let replaced: &dyn zgui_paint::walk::order::ReplacedSource = if observe_images {
+                &image_source
+            } else {
+                &content
+            };
             if !retired.is_empty() {
                 self.painter.retire(&retired, &mut self.scene, &content);
             }
@@ -2191,7 +2217,8 @@ impl Window {
                 observe_images.then(|| error.to_string())
             }
         };
-        self.images.finish_paint(image_refusals.into_inner(), upload_error);
+        self.images
+            .finish_paint(image_refusals.into_inner(), upload_error);
         // Uploaded pictures whose tiles this frame found gone — evicted, or lost with the device
         // — have no host copy to re-upload from; the loader decodes them again from their
         // sources, and the completion's wake brings the frame that shows them.
@@ -2244,7 +2271,11 @@ impl Window {
                 &document,
                 &self.scene.clips,
                 &self.scene.spatial,
-                crate::window::blur::BlurFrame { mapping, scale: self.scale, prefer_shapes },
+                crate::window::blur::BlurFrame {
+                    mapping,
+                    scale: self.scale,
+                    prefer_shapes,
+                },
             )
         };
         let blur_changed = blur_candidate != self.blur.last_applied
@@ -2404,8 +2435,10 @@ fn measure_auto_height(
     let mut max_scroll_excess: f32 = 0.0;
     if base_height >= root_layout.size.height.0 - scale.max(1.0) {
         let epsilon = zgui_layout::scroll_region::bar::EPSILON;
-        let mut stack: Vec<(zgui_dom::side::BoxKey, bool)> =
-            in_flow_children.into_iter().map(|child| (child, false)).collect();
+        let mut stack: Vec<(zgui_dom::side::BoxKey, bool)> = in_flow_children
+            .into_iter()
+            .map(|child| (child, false))
+            .collect();
         while let Some((key, ancestor_capped)) = stack.pop() {
             let Some(node) = layout.get(key) else {
                 continue;

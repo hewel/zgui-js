@@ -75,6 +75,10 @@ pub struct CompletedFrame {
     /// May trail [`Window::style_revision`] when a late callback applies a stylesheet after
     /// restyling. This is consumed style evidence, not a claim about presentation.
     pub style_revision: u64,
+    /// Total passes that actually styled nodes since this probed window opened.
+    pub style_passes: u64,
+    /// Total passes that actually measured/arranged boxes, excluding fragment reuse.
+    pub relayouts: u64,
     /// The view-mutation revision entering the last completed layout/fragment pass.
     ///
     /// `None` when this frame completed no such pass. Sampled at layout, including relayouts

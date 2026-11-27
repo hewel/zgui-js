@@ -54,14 +54,14 @@ use zgui_paint::ContentCache;
 use crate::replaced::IntrinsicTable;
 
 mod input;
-mod tasks;
-mod policy;
 mod paint;
+mod policy;
+mod tasks;
 pub(crate) use paint::PaintImages;
 mod visibility;
-pub(crate) use visibility::ImageVisibility;
-use tasks::Tasks;
 use crate::image_policy::{ImageResource, ImageResources, ImageState};
+use tasks::Tasks;
+pub(crate) use visibility::ImageVisibility;
 
 /// Loads the image a `src` names, where a file system cannot.
 ///
@@ -486,9 +486,15 @@ impl ImageLoader {
         }
     }
 
-    pub(crate) fn seal_image_source_writes(&self, checkpoint: ImageSourceCheckpoint) -> ImageSourceMountWrites {
+    pub(crate) fn seal_image_source_writes(
+        &self,
+        checkpoint: ImageSourceCheckpoint,
+    ) -> ImageSourceMountWrites {
         self.validate_checkpoint(&checkpoint);
-        ImageSourceMountWrites { checkpoint, end: self.pending.borrow().len() }
+        ImageSourceMountWrites {
+            checkpoint,
+            end: self.pending.borrow().len(),
+        }
     }
 
     pub(crate) fn discard_image_source_writes(&mut self, checkpoint: ImageSourceCheckpoint) {
@@ -499,13 +505,17 @@ impl ImageLoader {
 
     fn validate_checkpoint(&self, checkpoint: &ImageSourceCheckpoint) {
         assert!(
-            checkpoint.queue.as_ptr() == Rc::as_ptr(&self.pending) && checkpoint.epoch == self.source_epoch,
+            checkpoint.queue.as_ptr() == Rc::as_ptr(&self.pending)
+                && checkpoint.epoch == self.source_epoch,
             "image-source checkpoint is stale or belongs to another window",
         );
     }
 
     fn advance_source_epoch(&mut self) {
-        self.source_epoch = self.source_epoch.checked_add(1).expect("image-source checkpoint epoch exhausted");
+        self.source_epoch = self
+            .source_epoch
+            .checked_add(1)
+            .expect("image-source checkpoint epoch exhausted");
     }
 
     /// Whether anything is waiting for a settle: `src` writes, or finished background work.
@@ -547,7 +557,9 @@ impl ImageLoader {
             pending.retain(|(node, src)| seen.insert(*node) || !is_blob_source(src));
             pending.reverse();
         }
-        if !pending.is_empty() || self.completed.has_ready() { self.revision += 1; }
+        if !pending.is_empty() || self.completed.has_ready() {
+            self.revision += 1;
+        }
         for (node, src) in pending {
             self.set_source(node, src.as_deref(), content, &mut touched);
         }
@@ -564,15 +576,28 @@ impl ImageLoader {
             self.revision += 1;
             {
                 let document = document.borrow();
-                document.edit(&zgui_dom::EverythingMatters, |edit| {
-                    for &node in &touched {
-                        let Some(index) = document.store().index_of(node) else { continue; };
-                        let broken = self.by_node.get(&node).and_then(|key| self.entries.get(key))
-                            .is_some_and(|entry| matches!(entry.probe, Probe::Failed) || entry.failure.is_some());
-                        edit.set_state(index, zgui_vocab::UiState::BROKEN, broken);
-                        edit.set_custom_state(index, zgui_interned::Ident::new("zgui-image-broken"), broken);
-                    }
-                }).expect("image state updates require a live document");
+                document
+                    .edit(&zgui_dom::EverythingMatters, |edit| {
+                        for &node in &touched {
+                            let Some(index) = document.store().index_of(node) else {
+                                continue;
+                            };
+                            let broken = self
+                                .by_node
+                                .get(&node)
+                                .and_then(|key| self.entries.get(key))
+                                .is_some_and(|entry| {
+                                    matches!(entry.probe, Probe::Failed) || entry.failure.is_some()
+                                });
+                            edit.set_state(index, zgui_vocab::UiState::BROKEN, broken);
+                            edit.set_custom_state(
+                                index,
+                                zgui_interned::Ident::new("zgui-image-broken"),
+                                broken,
+                            );
+                        }
+                    })
+                    .expect("image state updates require a live document");
             }
             let mut document = document.borrow_mut();
             for node in touched {
@@ -592,7 +617,12 @@ impl ImageLoader {
     ///
     /// Returns whether live tasks need a polling frame, under [`ImageLoader::settle`]'s contract.
     #[must_use = "a demand that kicked decodes is owed the frame that will poll them"]
-    pub(crate) fn observe_demand(&mut self, layout: &LayoutStore, scale: f32, visibility: Option<&ImageVisibility<'_>>) -> bool {
+    pub(crate) fn observe_demand(
+        &mut self,
+        layout: &LayoutStore,
+        scale: f32,
+        visibility: Option<&ImageVisibility<'_>>,
+    ) -> bool {
         let kicked_before = self.kicked;
         let mut demands: FxHashMap<SourceKey, u32> = FxHashMap::default();
         for (node, key) in &self.by_node {
@@ -601,12 +631,18 @@ impl ImageLoader {
             if let Some(request) = self.requests.get_mut(node) {
                 let visible = match visibility {
                     Some(view) => view.visible(layout, *node, native.is_none()),
-                    None => demand > 0 || (native.is_none() && layout.boxes_of(*node).iter().any(|box_| {
-                        layout.node(*box_).style.get_inherited_box().visibility
-                            == zgui_css::values::size::VisibilityValue::Visible
-                    })),
+                    None => {
+                        demand > 0
+                            || (native.is_none()
+                                && layout.boxes_of(*node).iter().any(|box_| {
+                                    layout.node(*box_).style.get_inherited_box().visibility
+                                        == zgui_css::values::size::VisibilityValue::Visible
+                                }))
+                    }
                 };
-                if request.visible != visible { self.revision += 1; }
+                if request.visible != visible {
+                    self.revision += 1;
+                }
                 request.visible = visible;
             }
             if demand > 0 {
@@ -615,13 +651,17 @@ impl ImageLoader {
             }
         }
         for (key, entry) in &mut self.entries {
-            if !demands.contains_key(key) && entry.demanded.take().is_some() { self.revision += 1; }
+            if !demands.contains_key(key) && entry.demanded.take().is_some() {
+                self.revision += 1;
+            }
         }
         for (key, demand) in demands {
             let Some(entry) = self.entries.get_mut(&key) else {
                 continue;
             };
-            if entry.demanded != Some(demand) { self.revision += 1; }
+            if entry.demanded != Some(demand) {
+                self.revision += 1;
+            }
             entry.demanded = Some(demand);
             ensure_variant(
                 entry,
@@ -643,7 +683,10 @@ impl ImageLoader {
         content: &mut ContentCache,
         touched: &mut Vec<NodeKey>,
     ) {
-        let next = src.map(SourceKey::of);
+        // Frame stream sources are owned by the session's embed host, not the image resolver.
+        let next = src
+            .filter(|src| !src.starts_with("zgui-frame://"))
+            .map(SourceKey::of);
         let previous = self.by_node.get(&node).cloned();
         if next == previous {
             return;
@@ -669,26 +712,46 @@ impl ImageLoader {
         };
         self.by_node.insert(node, key.clone());
         let id = ReplacedId::new(node);
-        let policy_error = self.completed.policy_error(&key).map(|error| error.to_string());
+        let policy_error = self
+            .completed
+            .policy_error(&key)
+            .map(|error| error.to_string());
         if let Some(error) = &policy_error {
             self.policy_failure(error);
         }
         self.next_request += 1;
-        self.requests.insert(node, ImageResource {
-            id: format!("image-{}", self.next_request), source: key.name().to_owned(),
-            generation: self.next_request, visible: false, requested_variant: None,
-            attached_variant: None, state: ImageState::Requested, failure: None,
-            uploaded: false,
-        });
+        self.requests.insert(
+            node,
+            ImageResource {
+                id: format!("image-{}", self.next_request),
+                source: key.name().to_owned(),
+                generation: self.next_request,
+                visible: false,
+                requested_variant: None,
+                attached_variant: None,
+                state: ImageState::Requested,
+                failure: None,
+                uploaded: false,
+            },
+        );
 
         let entry = self.entries.entry(key.clone()).or_insert_with(|| {
             if let Some(error) = policy_error {
-                return Entry { probe: Probe::Failed, failure: Some(error), ..Entry::probing() };
+                return Entry {
+                    probe: Probe::Failed,
+                    failure: Some(error),
+                    ..Entry::probing()
+                };
             }
             self.kicked += 1;
             self.next_generation += 1;
             let scalable = self.completed.looks_scalable(&key);
-            kick_probe(key.clone(), self.next_generation, &self.completed, self.limits);
+            kick_probe(
+                key.clone(),
+                self.next_generation,
+                &self.completed,
+                self.limits,
+            );
             let mut entry = Entry::probing();
             entry.scalable = scalable;
             entry.generation = self.next_generation;
@@ -711,7 +774,9 @@ impl ImageLoader {
             return;
         }
         for (key, entry) in &mut self.entries {
-            let SourceKey::Blob(uri) = key else { continue; };
+            let SourceKey::Blob(uri) = key else {
+                continue;
+            };
             if self.completed.owns_blob(uri) {
                 continue;
             }
@@ -737,11 +802,19 @@ impl ImageLoader {
     }
 
     /// Files what one background task produced.
-    fn land(&mut self, key: SourceKey, generation: u64, arrival: Arrival, touched: &mut Vec<NodeKey>) {
+    fn land(
+        &mut self,
+        key: SourceKey,
+        generation: u64,
+        arrival: Arrival,
+        touched: &mut Vec<NodeKey>,
+    ) {
         let Some(entry) = self.entries.get_mut(&key) else {
             return;
         };
-        if entry.generation != generation { return; }
+        if entry.generation != generation {
+            return;
+        }
         match arrival {
             Arrival::Probe(Ok(probed)) => {
                 entry.probe = Probe::Done;
@@ -763,7 +836,9 @@ impl ImageLoader {
             }
             Arrival::Variant(class, handle, Ok(decoded)) => {
                 if let Some(variant) = entry.variants.get_mut(&class) {
-                    if variant.handle != handle { return; }
+                    if variant.handle != handle {
+                        return;
+                    }
                     variant.state = VariantState::Ready(decoded);
                     entry.attach_owed = true;
                 }
@@ -771,7 +846,9 @@ impl ImageLoader {
             Arrival::Variant(class, handle, Err(error)) => {
                 tracing::warn!(target: "zgui::images", src = ?key, "an image failed to decode: {error}");
                 if let Some(variant) = entry.variants.get_mut(&class) {
-                    if variant.handle != handle { return; }
+                    if variant.handle != handle {
+                        return;
+                    }
                     entry.failure = Some(error.to_string());
                     variant.state = VariantState::Failed;
                 }
@@ -891,7 +968,9 @@ impl ImageLoader {
                 freed += held;
             }
         }
-        if residency_changed { self.revision += 1; }
+        if residency_changed {
+            self.revision += 1;
+        }
         if freed > 0 {
             self.recount();
         }
@@ -936,7 +1015,14 @@ impl ImageLoader {
                 entry.attach_owed = true;
                 *kicked += 1;
                 *revision += 1;
-                kick_decode(key.clone(), entry.generation, active, variant.handle, Rc::clone(completed), *limits);
+                kick_decode(
+                    key.clone(),
+                    entry.generation,
+                    active,
+                    variant.handle,
+                    Rc::clone(completed),
+                    *limits,
+                );
             }
         }
         !self.completed.strict() && self.kicked != kicked_before
@@ -1107,7 +1193,8 @@ impl ImageLoader {
 }
 
 fn is_blob_source(src: &Option<String>) -> bool {
-    src.as_deref().is_some_and(|src| src.starts_with("zgui-blob://"))
+    src.as_deref()
+        .is_some_and(|src| src.starts_with("zgui-blob://"))
 }
 
 #[cfg(test)]
@@ -1239,7 +1326,14 @@ fn ensure_variant(
             state: VariantState::Pending,
         },
     );
-    kick_decode(key.clone(), entry.generation, target, *next_handle, Rc::clone(completed), limits);
+    kick_decode(
+        key.clone(),
+        entry.generation,
+        target,
+        *next_handle,
+        Rc::clone(completed),
+        limits,
+    );
 }
 
 /// The longest edge any of `node`'s fragments asks the picture to have, in whole device pixels.
@@ -1259,7 +1353,10 @@ fn demand_of(
     let mut long = 0.0f32;
     for box_ in layout.boxes_of(node) {
         if layout.node(*box_).style.get_inherited_box().visibility
-            != zgui_css::values::size::VisibilityValue::Visible { continue; }
+            != zgui_css::values::size::VisibilityValue::Visible
+        {
+            continue;
+        }
         for fragment in layout.fragments_of_box(*box_) {
             let Some(fragment) = layout.fragment(*fragment) else {
                 continue;
@@ -1271,7 +1368,9 @@ fn demand_of(
             }
             let fit = layout.node(*box_).style.get_position().object_fit;
             let demanded = match (fit, native) {
-                (ObjectFitValue::Contain, Some(native)) if native.width > 0 && native.height > 0 => {
+                (ObjectFitValue::Contain, Some(native))
+                    if native.width > 0 && native.height > 0 =>
+                {
                     let factor = (width / native.width as f32).min(height / native.height as f32);
                     native_long(native) * factor
                 }
@@ -1321,7 +1420,12 @@ fn intrinsic_of(native: Size<u32, Device>) -> Intrinsic {
 /// The task is spawned on the UI thread and owns nothing but the queue; the read itself runs on
 /// the blocking pool. The wake edge when it finishes is what requests the frame whose settle will
 /// apply the result.
-fn kick_probe(key: SourceKey, generation: u64, completed: &DecodeQueue, limits: zgui_image::Limits) {
+fn kick_probe(
+    key: SourceKey,
+    generation: u64,
+    completed: &DecodeQueue,
+    limits: zgui_image::Limits,
+) {
     if !completed.restricted()
         && let SourceKey::Path(src) = &key
         && let Some(loader) = source_loader()

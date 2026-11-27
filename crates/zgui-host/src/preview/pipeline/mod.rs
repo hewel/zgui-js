@@ -20,12 +20,6 @@ use zgui::{
 use zgui_platform_headless::{Harness, Headless, OffscreenSurface, RecordedBlurRegion};
 use zgui_render_wgpu::Pixels;
 
-use crate::{
-    environment::Environment,
-    package::Package,
-    session::Session,
-    session_host::{MountRegion, Root},
-};
 use super::{
     Error,
     driver::{Fault, SharedOutput},
@@ -36,6 +30,12 @@ use super::{
     output,
     profile::LoadedProfile,
     resources,
+};
+use crate::{
+    environment::Environment,
+    package::Package,
+    session::Session,
+    session_host::{MountRegion, Root},
 };
 
 mod capture;
@@ -171,7 +171,11 @@ impl CheckpointSink for MemorySink {
             .fail_checkpoint_after
             .is_some_and(|limit| state.checkpoints.len() >= limit)
         {
-            return Err(Error::new("E_OUTPUT_LIMIT", 8, "simulated checkpoint limit"));
+            return Err(Error::new(
+                "E_OUTPUT_LIMIT",
+                8,
+                "simulated checkpoint limit",
+            ));
         }
         state.checkpoints.push((
             tree_path.to_owned(),
@@ -211,14 +215,17 @@ impl CheckpointSink for MemorySink {
         frame.extra.insert("historical".into(), json!(true));
         frame.extra.insert(
             "satisfiesFailureRevision".into(),
-            status.satisfies_failure_revision.map_or(Value::Null, Value::from),
+            status
+                .satisfies_failure_revision
+                .map_or(Value::Null, Value::from),
         );
         if let Some(readiness) = status.readiness {
             frame.extra.insert("failureReadiness".into(), readiness);
         }
-        frame.extra.insert("pixelsAvailable".into(), json!(pixels.is_some()));
-        self.0.borrow_mut().historical =
-            Some((tree.clone(), frame, pixels.map(<[u8]>::to_vec)));
+        frame
+            .extra
+            .insert("pixelsAvailable".into(), json!(pixels.is_some()));
+        self.0.borrow_mut().historical = Some((tree.clone(), frame, pixels.map(<[u8]>::to_vec)));
         Ok(json!({
             "available": true,
             "historical": true,
@@ -240,7 +247,10 @@ impl<H: AppHandler> Pipeline<H> {
     fn from_harness(mut harness: Harness<H>) -> Self {
         // Explicit callers drive every clock advance once constructed.
         harness.hold_clock(true);
-        Self { harness: Some(harness), shut_down: false }
+        Self {
+            harness: Some(harness),
+            shut_down: false,
+        }
     }
 
     fn inner(&self) -> &Harness<H> {
@@ -348,7 +358,9 @@ fn configure_app(
         .with_stylesheet(stylesheet)
         .with_renderer(renderer)
         .with_metrics(Box::new(move || metrics.metrics()))
-        .with_text_engine(Box::new(move || Box::new(zgui_layout::Paragraphs::new(shaping.shaper()))))
+        .with_text_engine(Box::new(move || {
+            Box::new(zgui_layout::Paragraphs::new(shaping.shaper()))
+        }))
         .with_glyph_raster(Box::new(move || raster.raster()));
     app.attributes_mut().transparent = !opaque;
     app
@@ -608,16 +620,32 @@ pub(crate) enum ObservationMode {
 pub(crate) struct FrameObservers(Rc<ObserverRegistry>);
 
 impl FrameObservers {
-    pub fn new(build_id: String, environment: Rc<Environment>, sink: Box<dyn CheckpointSink>, mode: ObservationMode) -> Self {
+    pub fn new(
+        build_id: String,
+        environment: Rc<Environment>,
+        sink: Box<dyn CheckpointSink>,
+        mode: ObservationMode,
+    ) -> Self {
         let has_primary = !matches!(mode, ObservationMode::ShellOnly);
         let context = Rc::new(ObservationContext {
-            sink: RefCell::new(sink), build_id, environment, multiple: Cell::new(!matches!(mode, ObservationMode::PrimaryOnly)),
+            sink: RefCell::new(sink),
+            build_id,
+            environment,
+            multiple: Cell::new(!matches!(mode, ObservationMode::PrimaryOnly)),
             emit_blur_shapes: Cell::new(false),
-            action: Cell::new(0), frames: Cell::new(0), current_checkpoint: Cell::new(None),
-            graphics: RefCell::new(Value::Null), fault: RefCell::new(None),
+            action: Cell::new(0),
+            frames: Cell::new(0),
+            current_checkpoint: Cell::new(None),
+            graphics: RefCell::new(Value::Null),
+            fault: RefCell::new(None),
         });
         let main = has_primary.then(|| FrameObserver::new(context.clone()));
-        Self(Rc::new(ObserverRegistry { context, main, next_is_main: Cell::new(has_primary), surfaces: RefCell::default() }))
+        Self(Rc::new(ObserverRegistry {
+            context,
+            main,
+            next_is_main: Cell::new(has_primary),
+            surfaces: RefCell::default(),
+        }))
     }
 
     pub fn set_emit_blur_shapes(&self, emit: bool) {
@@ -626,13 +654,22 @@ impl FrameObservers {
 
     fn register_renderer(&self, surface: SurfaceId) -> CaptureHandle {
         let mut surfaces = self.0.surfaces.borrow_mut();
-        surfaces.entry(surface).or_insert_with(|| {
-            if self.0.next_is_main.replace(false) {
-                self.0.main.as_ref().expect("registered main observer").clone()
-            } else {
-                FrameObserver::new(self.0.context.clone())
-            }
-        }).0.capture.clone()
+        surfaces
+            .entry(surface)
+            .or_insert_with(|| {
+                if self.0.next_is_main.replace(false) {
+                    self.0
+                        .main
+                        .as_ref()
+                        .expect("registered main observer")
+                        .clone()
+                } else {
+                    FrameObserver::new(self.0.context.clone())
+                }
+            })
+            .0
+            .capture
+            .clone()
     }
 
     pub fn get(&self, surface: SurfaceId) -> Option<FrameObserver> {
@@ -640,7 +677,10 @@ impl FrameObservers {
     }
 
     pub fn retain(&self, windows: &[Window]) {
-        self.0.surfaces.borrow_mut().retain(|id, _| windows.iter().any(|window| window.surface().id() == *id));
+        self.0
+            .surfaces
+            .borrow_mut()
+            .retain(|id, _| windows.iter().any(|window| window.surface().id() == *id));
     }
 
     pub fn reset(&self) {
@@ -656,16 +696,29 @@ impl FrameObservers {
         self.frames()
     }
 
-    pub fn frames(&self) -> u64 { self.0.context.frames.get() }
-    pub fn take_fault(&self) -> Option<Error> { self.0.context.fault.borrow_mut().take() }
+    pub fn frames(&self) -> u64 {
+        self.0.context.frames.get()
+    }
+    pub fn take_fault(&self) -> Option<Error> {
+        self.0.context.fault.borrow_mut().take()
+    }
     pub fn device_unavailable(&self) -> bool {
-        self.0.surfaces.borrow().values().any(FrameObserver::device_unavailable)
+        self.0
+            .surfaces
+            .borrow()
+            .values()
+            .any(FrameObserver::device_unavailable)
     }
     pub fn graphics_metadata(&self) -> Value {
-        if let Some(main) = &self.0.main { main.0.capture.metadata() }
-        else { self.0.context.graphics.borrow().clone() }
+        if let Some(main) = &self.0.main {
+            main.0.capture.metadata()
+        } else {
+            self.0.context.graphics.borrow().clone()
+        }
     }
-    pub fn latest_checkpoint(&self) -> Option<SurfaceId> { self.0.context.current_checkpoint.get() }
+    pub fn latest_checkpoint(&self) -> Option<SurfaceId> {
+        self.0.context.current_checkpoint.get()
+    }
 }
 
 impl FrameProbe for FrameObservers {
@@ -683,11 +736,19 @@ impl ObserverInner {
         let Some(observation) = window.completed_frame() else {
             return;
         };
-        if self.context.fault.borrow().is_some() { return; }
+        if self.context.fault.borrow().is_some() {
+            return;
+        }
         let data = &mut *self.data.borrow_mut();
-        let Some(session) = data.session.upgrade() else { return; };
-        let Some(region) = session.mount_region(window.document_id()) else { return; };
-        if region.surface != window.surface().id() { return; }
+        let Some(session) = data.session.upgrade() else {
+            return;
+        };
+        let Some(region) = session.mount_region(window.document_id()) else {
+            return;
+        };
+        if region.surface != window.surface().id() {
+            return;
+        }
         if let Some(surface) = data.surface.as_ref()
             && let Err(error) = data.semantics.consume(surface, window)
         {
@@ -716,7 +777,9 @@ impl ObserverInner {
         let Some((stamp, presentation)) = data.ledger.record_outcome(&input) else {
             return;
         };
-        if data.surface.is_none() { return; }
+        if data.surface.is_none() {
+            return;
+        }
         let resources = match resources::snapshot(window, &[], Some(&session)) {
             Ok(resources) => resources,
             Err(error) => {
@@ -733,18 +796,38 @@ impl ObserverInner {
             surface_configuration: Some(surface_configuration),
             style_revision: Some(observation.style_revision),
         };
-        let snapshot =
-            inspect::snapshot(window, &region, session.generation, observation.ordinal, &data.semantics, &identity);
+        let snapshot = inspect::snapshot(
+            window,
+            &region,
+            session.generation,
+            observation.ordinal,
+            &data.semantics,
+            &identity,
+        );
         let mut tree = snapshot.tree;
         let mut extra = serde_json::Map::new();
         for (key, value) in [
-            ("documentIdentity", json!(format!("{:?}", window.document_id()))),
+            (
+                "documentIdentity",
+                json!(format!("{:?}", window.document_id())),
+            ),
             ("actionSequence", json!(self.context.action.get())),
-            ("requiredStateRevision", json!(observation.document_revision)),
-            ("validatedStateRevision", json!(observation.document_revision)),
+            (
+                "requiredStateRevision",
+                json!(observation.document_revision),
+            ),
+            (
+                "validatedStateRevision",
+                json!(observation.document_revision),
+            ),
             ("layoutRevision", json!(observation.layout_revision)),
+            ("stylePasses", json!(observation.style_passes)),
+            ("relayouts", json!(observation.relayouts)),
             ("configurationId", json!(state.configuration_id)),
-            ("timingDeterministic", json!(self.context.environment.is_virtual())),
+            (
+                "timingDeterministic",
+                json!(self.context.environment.is_virtual()),
+            ),
             ("resources", resources),
             ("scale", json!(window.surface().scale_factor())),
             ("renderer", self.capture.metadata()),
@@ -771,19 +854,23 @@ impl ObserverInner {
             }
             window_geometry_revision = surface.window_geometry_revision();
             let window_geometry = surface.window_geometry();
-            extra.insert("windowGeometry".into(), json!({
-                "x": window_geometry.x,
-                "y": window_geometry.y,
-                "width": window_geometry.width,
-                "height": window_geometry.height,
-            }));
+            extra.insert(
+                "windowGeometry".into(),
+                json!({
+                    "x": window_geometry.x,
+                    "y": window_geometry.y,
+                    "width": window_geometry.width,
+                    "height": window_geometry.height,
+                }),
+            );
         }
         let named = region.name != "main";
         if named {
             self.context.multiple.set(true);
         }
         if self.context.multiple.get() {
-            tree.extra.insert("checkpointSequence".into(), json!(sequence));
+            tree.extra
+                .insert("checkpointSequence".into(), json!(sequence));
             extra.insert("checkpointSequence".into(), json!(sequence));
         }
         let frame = FrameEvidence {
@@ -806,15 +893,21 @@ impl ObserverInner {
         // Persist complete owned evidence before another callback can fail or block.
         // Do not advance committed metadata or `last` if persistence fails.
         let (tree_path, frame_path) = evidence::checkpoint_paths(
-            session.generation, observation.ordinal, named.then_some(sequence));
+            session.generation,
+            observation.ordinal,
+            named.then_some(sequence),
+        );
         let publication = (|| {
-            let tree_value =
-                serde_json::to_value(&tree).map_err(|e| Error::new("E_OUTPUT_IO", 8, e.to_string()))?;
-            let frame_value =
-                serde_json::to_value(&frame).map_err(|e| Error::new("E_OUTPUT_IO", 8, e.to_string()))?;
-            self.context.sink
-                .borrow_mut()
-                .write_checkpoint(&tree_path, &tree_value, &frame_path, &frame_value)
+            let tree_value = serde_json::to_value(&tree)
+                .map_err(|e| Error::new("E_OUTPUT_IO", 8, e.to_string()))?;
+            let frame_value = serde_json::to_value(&frame)
+                .map_err(|e| Error::new("E_OUTPUT_IO", 8, e.to_string()))?;
+            self.context.sink.borrow_mut().write_checkpoint(
+                &tree_path,
+                &tree_value,
+                &frame_path,
+                &frame_value,
+            )
         })();
         if let Err(error) = publication {
             self.context.fault.replace(Some(error));
@@ -865,9 +958,12 @@ fn serialize_blur_region(region: &RecordedBlurRegion) -> Value {
                 .collect::<Vec<_>>()
         ),
         RecordedBlurRegion::Shapes(shapes) => json!(
-            shapes.iter().map(|s| json!({
-                "x": s.x, "y": s.y, "width": s.width, "height": s.height
-            })).collect::<Vec<_>>()
+            shapes
+                .iter()
+                .map(|s| json!({
+                    "x": s.x, "y": s.y, "width": s.width, "height": s.height
+                }))
+                .collect::<Vec<_>>()
         ),
     }
 }
@@ -877,10 +973,13 @@ fn serialize_blur_shapes(region: &RecordedBlurRegion) -> Value {
         RecordedBlurRegion::None | RecordedBlurRegion::Rects(_) => json!("none"),
         RecordedBlurRegion::Full => json!("full"),
         RecordedBlurRegion::Shapes(shapes) => json!(
-            shapes.iter().map(|s| json!({
-                "x": s.x, "y": s.y, "width": s.width, "height": s.height,
-                "radii": s.radii, "cornerExponent": s.corner_exponent, "opacity": s.opacity
-            })).collect::<Vec<_>>()
+            shapes
+                .iter()
+                .map(|s| json!({
+                    "x": s.x, "y": s.y, "width": s.width, "height": s.height,
+                    "radii": s.radii, "cornerExponent": s.corner_exponent, "opacity": s.opacity
+                }))
+                .collect::<Vec<_>>()
         ),
     }
 }
@@ -893,7 +992,10 @@ pub(crate) struct SettledFrame<'a> {
 
 impl SettledFrame<'_> {
     fn owned(&self) -> &OwnedFrame {
-        self.data.last.as_ref().expect("settled witness holds owned frame")
+        self.data
+            .last
+            .as_ref()
+            .expect("settled witness holds owned frame")
     }
 
     pub fn tree(&self) -> &TreeEvidence {
@@ -916,10 +1018,7 @@ impl SettledFrame<'_> {
         self.owned().native_nodes.get(index).map(|node| node.native)
     }
 
-    pub fn node_by_document_key(
-        &self,
-        key: zgui_dom::NodeKey,
-    ) -> Option<&evidence::NodeEvidence> {
+    pub fn node_by_document_key(&self, key: zgui_dom::NodeKey) -> Option<&evidence::NodeEvidence> {
         let owned = self.owned();
         let idx = owned
             .native_nodes
@@ -959,7 +1058,10 @@ impl FrameObserver {
     pub fn request_metadata_frame(&self, window: &Window, revision: u64) {
         let mut data = self.0.data.borrow_mut();
         let blur_revision = data.surface.as_ref().map_or(0, |s| s.blur_revision());
-        let window_geometry_revision = data.surface.as_ref().map_or(0, |s| s.window_geometry_revision());
+        let window_geometry_revision = data
+            .surface
+            .as_ref()
+            .map_or(0, |s| s.window_geometry_revision());
         let emit_blur_shapes = self.0.context.emit_blur_shapes.get();
         let needs_frame = data.requested_metadata != revision
             || data.requested_blur != blur_revision
@@ -1016,12 +1118,16 @@ impl FrameObserver {
         let region = session.mount_region(window.document_id())?;
         let data = self.0.data.borrow();
         let surface = data.surface.as_ref()?;
-        if surface.id() != region.surface { return None; }
+        if surface.id() != region.surface {
+            return None;
+        }
         let blur_revision = surface.blur_revision();
         let window_geometry_revision = surface.window_geometry_revision();
         let capture_state = self.0.capture.state();
         let completed = window.completed_frame();
-        if window.has_pending_stylesheets() || window.blur_pending() { return None; }
+        if window.has_pending_stylesheets() || window.blur_pending() {
+            return None;
+        }
         let query = SettledQuery {
             generation: session.generation,
             document_revision: window.dom().revision(),
@@ -1035,12 +1141,15 @@ impl FrameObserver {
                 .as_ref()
                 .is_some_and(|frame| frame.layout_document_coherent),
             completed_ordinal: completed.as_ref().map(|frame| frame.ordinal),
-            completed_status: completed.as_ref().map(|frame| FrameStatus::from(frame.outcome)),
+            completed_status: completed
+                .as_ref()
+                .map(|frame| FrameStatus::from(frame.outcome)),
         };
         if data.ledger.is_settled(&query)
             && data.last.as_ref().is_some_and(|last| {
                 last.blur_revision == blur_revision
-                    && last.frame.extra.contains_key("blurShapes") == self.0.context.emit_blur_shapes.get()
+                    && last.frame.extra.contains_key("blurShapes")
+                        == self.0.context.emit_blur_shapes.get()
                     && last.window_geometry_revision == window_geometry_revision
             })
         {
@@ -1061,10 +1170,17 @@ impl FrameObserver {
         if pixels.pixels.size().width != request.dimensions.0 as i32
             || pixels.pixels.size().height != request.dimensions.1 as i32
         {
-            return Err(Error::new("E_READBACK", 7, "presented extent differs from current surface configuration").into());
+            return Err(Error::new(
+                "E_READBACK",
+                7,
+                "presented extent differs from current surface configuration",
+            )
+            .into());
         }
         let png = capture::png(&pixels.pixels, pixels.target.opaque)?;
-        if owned.presentation != pixels.presentation_id || owned.configuration != pixels.configuration_id {
+        if owned.presentation != pixels.presentation_id
+            || owned.configuration != pixels.configuration_id
+        {
             return Err(Error::new(
                 "E_CAPTURE_NOT_READY",
                 5,
@@ -1077,18 +1193,26 @@ impl FrameObserver {
         frame.capture_id = Some(paths.id().to_owned());
         frame.extra.insert("readiness".into(), request.readiness);
         frame.extra.insert("resources".into(), request.resource);
-        frame.extra.insert("allowedPendingAssets".into(), json!(request.allowed_pending));
-        frame.extra.insert("physicalWidth".into(), json!(pixels.pixels.size().width));
-        frame.extra.insert("physicalHeight".into(), json!(pixels.pixels.size().height));
+        frame.extra.insert(
+            "allowedPendingAssets".into(),
+            json!(request.allowed_pending),
+        );
+        frame
+            .extra
+            .insert("physicalWidth".into(), json!(pixels.pixels.size().width));
+        frame
+            .extra
+            .insert("physicalHeight".into(), json!(pixels.pixels.size().height));
         frame.png_digest = Some(output::digest(&png));
-        let tree_value =
-            serde_json::to_value(&owned.tree).map_err(|e| Error::new("E_OUTPUT_IO", 8, e.to_string()))?;
+        let tree_value = serde_json::to_value(&owned.tree)
+            .map_err(|e| Error::new("E_OUTPUT_IO", 8, e.to_string()))?;
         let tree_bytes = output::json_bytes(&tree_value)?;
         frame.tree_digest = Some(output::digest(&tree_bytes));
-        let frame_value =
-            serde_json::to_value(&frame).map_err(|e| Error::new("E_OUTPUT_IO", 8, e.to_string()))?;
+        let frame_value = serde_json::to_value(&frame)
+            .map_err(|e| Error::new("E_OUTPUT_IO", 8, e.to_string()))?;
         self.0
-            .context.sink
+            .context
+            .sink
             .borrow_mut()
             .write_capture(&paths, &png, &tree_bytes, &frame_value)?;
         Ok(paths.summary())
@@ -1113,7 +1237,10 @@ impl FrameObserver {
         // Read only an already presented buffer; never pump or enter application code.
         let pixels = window
             .and_then(|window| self.0.capture.read_current(window.renderer()).ok())
-            .filter(|pixels| pixels.presentation_id == last.presentation && pixels.configuration_id == last.configuration)
+            .filter(|pixels| {
+                pixels.presentation_id == last.presentation
+                    && pixels.configuration_id == last.configuration
+            })
             .map(|pixels| capture::png(&pixels.pixels, pixels.target.opaque))
             .transpose()?;
         self.0.context.sink.borrow_mut().publish_historical(

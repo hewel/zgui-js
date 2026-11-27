@@ -5,6 +5,7 @@ use super::{
 };
 use crate::{
     bounded_fs::relative_path,
+    frame_stream::SyntheticFrame,
     package::Package,
     schema::{deserialize_object, object_struct},
 };
@@ -57,6 +58,11 @@ enum SocketStep {
         at_ms: u32,
         asset: String,
     },
+    Frame {
+        at_ms: u32,
+        #[serde(flatten)]
+        frame: SyntheticFrame,
+    },
     Close {
         at_ms: u32,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -67,9 +73,10 @@ enum SocketStep {
 impl SocketStep {
     fn time(&self) -> u32 {
         match self {
-            Self::Message { at_ms, .. } | Self::Image { at_ms, .. } | Self::Close { at_ms, .. } => {
-                *at_ms
-            }
+            Self::Message { at_ms, .. }
+            | Self::Image { at_ms, .. }
+            | Self::Frame { at_ms, .. }
+            | Self::Close { at_ms, .. } => *at_ms,
         }
     }
 }
@@ -268,6 +275,12 @@ impl SocketScript {
                 {
                     return Err("fixture socket image requires length framing and a canonical package asset path".into());
                 }
+                SocketStep::Frame { frame, .. } => {
+                    if self.framing != Framing::Length {
+                        return Err("fixture frame streams require length framing".into());
+                    }
+                    frame.validate()?;
+                }
                 SocketStep::Close { error, .. } => {
                     if index + 1 != self.events.len() {
                         return Err("fixture socket close must be the final event".into());
@@ -333,6 +346,8 @@ impl CommandScript {
 pub(crate) enum ExternalDelivery {
     /// One framed message, image, or close notification for the socket ID.
     Socket(u64, unix_socket::Event),
+    /// A synthetic frame recipe, evaluated when delivered rather than when queued.
+    Frame(u64, SyntheticFrame),
     /// One command stream event or buffered completion for the command ID.
     Command(u64, command::Event),
     /// One inbound control message awaiting a checked reply.
@@ -345,6 +360,7 @@ pub(crate) enum ExternalDelivery {
 
 pub(super) enum ExternalJob {
     Socket(u64, unix_socket::Event),
+    Frame(u64, SyntheticFrame),
     Command(u64, command::Event),
     Control {
         listener: u64,
@@ -356,7 +372,7 @@ pub(super) enum ExternalJob {
 impl ExternalJob {
     fn registration(&self) -> u64 {
         match self {
-            Self::Socket(id, _) | Self::Command(id, _) => *id,
+            Self::Socket(id, _) | Self::Frame(id, _) | Self::Command(id, _) => *id,
             Self::Control { listener, .. } => *listener,
         }
     }
@@ -366,6 +382,7 @@ struct SocketConnection {
     generation: u64,
     script: usize,
     next_send: usize,
+    accept_frames: bool,
 }
 
 struct PendingReply {
@@ -424,6 +441,7 @@ impl FixtureRuntime {
         id: u64,
         path: &str,
         framing: unix_socket::Framing,
+        accept_frame_streams: bool,
         package: Option<&Package>,
     ) -> Result<(), ContractFailure> {
         let mut state = self.state.borrow_mut();
@@ -466,6 +484,22 @@ impl FixtureRuntime {
         }
         let now = self.environment.now_us();
         for (index, step) in script.events.iter().enumerate() {
+            if let SocketStep::Frame { frame, .. } = step {
+                if !accept_frame_streams {
+                    return Err(self.external_failure(
+                        &mut state,
+                        "fixture frame requires acceptFrameStreams",
+                    ));
+                }
+                self.schedule_external(
+                    &mut state,
+                    (now, step.time()),
+                    generation,
+                    index,
+                    ExternalJob::Frame(id, frame.clone()),
+                )?;
+                continue;
+            }
             let event = match step {
                 SocketStep::Message { text, .. } => unix_socket::Event::Message(text.clone()),
                 SocketStep::Image { asset, .. } => {
@@ -485,6 +519,7 @@ impl FixtureRuntime {
                 SocketStep::Close { error, .. } => {
                     unix_socket::Event::Close(error.as_ref().map(InjectedError::service_error))
                 }
+                SocketStep::Frame { .. } => unreachable!("frame recipes are scheduled separately"),
             };
             self.schedule_external(
                 &mut state,
@@ -501,6 +536,7 @@ impl FixtureRuntime {
                 generation,
                 script: script_index,
                 next_send: 0,
+                accept_frames: accept_frame_streams,
             },
         );
         Ok(())
@@ -678,6 +714,33 @@ impl FixtureRuntime {
         Ok(())
     }
 
+    pub(super) fn dispatch_frame(
+        &self,
+        state: &mut State,
+        frame: SyntheticFrame,
+    ) -> Result<(), ContractFailure> {
+        let mut sockets = state
+            .external
+            .sockets
+            .iter()
+            .filter(|(_, connection)| connection.accept_frames);
+        let Some((&id, connection)) = sockets.next() else {
+            return Err(self.external_failure(
+                state,
+                "frameStream requires an opted-in active fixture socket",
+            ));
+        };
+        if sockets.next().is_some() {
+            return Err(self.external_failure(
+                state,
+                "frameStream is ambiguous; use socket-script frame events",
+            ));
+        }
+        let generation = connection.generation;
+        self.record(state, "state", json!({"channel":"frame-stream","requestId":id,"streamId":frame.stream_id,"frameId":frame.frame_id}));
+        self.enqueue_external(state, generation, ExternalJob::Frame(id, frame))
+    }
+
     pub(super) fn dispatch_control(
         &self,
         state: &mut State,
@@ -743,6 +806,12 @@ impl FixtureRuntime {
             state.external.deliveries.remove(&generation);
         }
         match job {
+            ExternalJob::Frame(id, frame) => {
+                self.deliver_external_response(&mut state, id, json!({
+                    "requestId": id, "event": "frame", "streamId": frame.stream_id, "frameId": frame.frame_id
+                }), None);
+                Some(ExternalDelivery::Frame(id, frame))
+            }
             ExternalJob::Socket(id, event) => {
                 if matches!(&event, unix_socket::Event::Close(_))
                     && !self.close_fixture_socket(&mut state, id)
@@ -759,6 +828,9 @@ impl FixtureRuntime {
                     }
                     unix_socket::Event::Image(bytes) => {
                         json!({"requestId":id,"event":"image","byteLength":bytes.len()})
+                    }
+                    unix_socket::Event::FrameStream(stream_id) => {
+                        json!({"requestId":id,"event":"frameStream","streamId":stream_id})
                     }
                     unix_socket::Event::Close(_) => {
                         json!({"requestId":id,"event":"close","errorCode":error_code})

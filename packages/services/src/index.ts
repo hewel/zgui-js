@@ -1,3 +1,6 @@
+import type { FrameStreamHandle } from "@hewel/zgui/frame-stream";
+export type { FrameStreamHandle } from "@hewel/zgui/frame-stream";
+
 import { getOwner, onCleanup } from "#solid";
 
 // The native host installs this before evaluation; functions resolve it lazily.
@@ -132,6 +135,10 @@ export interface UnixSocketOptions {
   onMessage(message: string): void;
   /** In length mode, receives kind 0x01 image data, even if the data is valid UTF-8. */
   onBinaryImage?(image: ImageHandle): void;
+  /** Admit kind 0x02 frame submissions on this length-framed connection. */
+  readonly acceptFrameStreams?: boolean | undefined;
+  /** Called once per stream; dimensions are read from the current frame. */
+  readonly onFrameStream?: ((stream: FrameStreamHandle) => void) | undefined;
   /** Called on peer EOF or failure, but not on explicit close. */
   onClose?(error: HostServiceError | null): void;
 }

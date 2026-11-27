@@ -115,6 +115,10 @@ impl<T> Worker<T> {
         Some(event)
     }
 
+    pub(super) fn signal_socket(&self) -> io::Result<UnixStream> {
+        self.signal.try_clone()
+    }
+
     pub(super) fn signal(&self) {
         // A full notification socket is already readable. A broken peer means
         // the worker has exited and does not need to be notified.
@@ -130,6 +134,11 @@ impl<T> Worker<T> {
         let _ = self.signal.shutdown(Shutdown::Write);
     }
 
+    /// Hands shutdown responsibility to the worker's protocol.
+    pub(super) fn detach(mut self) {
+        self.handle.take();
+    }
+
     pub(super) fn close(mut self) -> io::Result<()> {
         self.stop();
         if let Some(handle) = self.handle.take() {
@@ -143,7 +152,9 @@ impl<T> Worker<T> {
 
 impl<T> Drop for Worker<T> {
     fn drop(&mut self) {
-        self.stop();
+        if self.handle.is_some() {
+            self.stop();
+        }
     }
 }
 

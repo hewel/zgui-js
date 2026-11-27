@@ -9,7 +9,7 @@
 use zgui_css::values::size::{ObjectFitValue, ObjectPositionValue};
 use zgui_geom::{Corners, Device, DevicePx, Point, Rect, Size, Vec2};
 use zgui_scene::{
-    ClipId, ColorSprite, ExternalQuad, ExternalTextureId, Resource, Scene, SpatialId,
+    ClipId, ClipLink, ColorSprite, ExternalQuad, ExternalTextureId, Resource, Scene, SpatialId,
 };
 
 /// Where a replaced box's content lives.
@@ -28,7 +28,16 @@ pub enum Source {
         natural: Size<u32, Device>,
     },
     /// A texture owned by something else, drawn from where it already is.
-    External(ExternalTextureId),
+    External(ExternalTextureId, Option<Size<u32, Device>>),
+    /// A foreign texture clipped by a separate coverage tile, without copying its pixels.
+    ExternalMasked {
+        /// The texture remaining in producer storage.
+        texture: ExternalTextureId,
+        /// The natural size used by `object-fit`.
+        natural: Option<Size<u32, Device>>,
+        /// Coverage of the content box, independent of the frame.
+        mask: zgui_atlas::AtlasTile,
+    },
 }
 
 /// Where a replaced box's content is drawn.
@@ -72,13 +81,12 @@ pub fn emit(scene: &mut Scene, source: Source, placement: ReplacedPlacement) -> 
             sprite.opacity = placement.opacity;
             scene.push_color_sprite(sprite).is_some()
         }
-        Source::External(texture) => {
-            let mut quad =
-                ExternalQuad::new(placement.content_box, texture).clipped(placement.clip);
-            quad.transform = placement.transform;
-            quad.opacity = placement.opacity;
-            scene.push_external(quad).is_some()
-        }
+        Source::External(texture, natural) => external(scene, texture, natural, &placement, None),
+        Source::ExternalMasked {
+            texture,
+            natural,
+            mask,
+        } => external(scene, texture, natural, &placement, Some(mask)),
     };
     usize::from(landed)
 }
@@ -98,15 +106,51 @@ pub fn emit_clipped(scene: &mut Scene, source: Source, placement: ReplacedPlacem
             sprite.opacity = placement.opacity;
             scene.push_color_sprite(sprite).is_some()
         }
-        Source::External(texture) => {
-            let mut quad =
-                ExternalQuad::new(placement.content_box, texture).clipped(placement.clip);
-            quad.transform = placement.transform;
-            quad.opacity = placement.opacity;
-            scene.push_external(quad).is_some()
-        }
+        external_source => return emit(scene, external_source, placement),
     };
     usize::from(landed)
+}
+
+fn external(
+    scene: &mut Scene,
+    texture: ExternalTextureId,
+    natural: Option<Size<u32, Device>>,
+    placement: &ReplacedPlacement,
+    mask: Option<zgui_atlas::AtlasTile>,
+) -> bool {
+    let rect = natural.map_or(placement.content_box, |size| destination(placement, size));
+    if rect.is_empty() {
+        return false;
+    }
+    let link = ClipLink::shaped(
+        placement.content_box,
+        placement.radii,
+        zgui_scene::CornerShape::default(),
+        placement.transform,
+    );
+    let mut clip = if mask.is_some() || rect != placement.content_box || link.is_rounded() {
+        let clip = scene.clips.push(placement.clip, link);
+        scene.note_minted_clip(clip);
+        clip
+    } else {
+        placement.clip
+    };
+    if let Some(tile) = mask {
+        // External draws map the tile to the preceding rounded rect in the same space.
+        clip = scene.clips.push(
+            clip,
+            ClipLink::Mask {
+                tile,
+                transform: placement.transform,
+                source: zgui_scene::MaskSource::Raster,
+            },
+        );
+        scene.note_minted_clip(clip);
+    }
+    let mut quad = ExternalQuad::new(rect, texture).clipped(clip);
+    quad.transform = placement.transform;
+    quad.opacity = placement.opacity;
+    scene.push_external(quad).is_some()
 }
 
 /// The rectangle `object-fit` and `object-position` place the content at, in device pixels.
@@ -202,7 +246,7 @@ mod tests {
         assert_eq!(
             emit(
                 &mut scene,
-                Source::External(ExternalTextureId(7)),
+                Source::External(ExternalTextureId(7), None),
                 placement(rect)
             ),
             1
@@ -302,7 +346,7 @@ mod tests {
         assert_eq!(
             emit(
                 &mut scene,
-                Source::External(ExternalTextureId(1)),
+                Source::External(ExternalTextureId(1), None),
                 placement(empty)
             ),
             0

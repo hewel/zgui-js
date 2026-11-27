@@ -60,6 +60,11 @@ test("tools/test-vendor.mjs stays in parity with Cargo.toml excludes, vendor/*/t
       `Vendored crate vendor/${crate} is missing from tools/test-vendor.mjs`,
     );
   }
+  // The media renderer has its own public Vulkan acceptance seam, not a runtime substitute.
+  assert.ok(
+    registeredTests.has("zgui-render-wgpu:dmabuf_import"),
+    "register the external frame import/readback gate in the vendor runner",
+  );
 
   // 3. Every vendor/<crate>/tests/<name>.rs file referenced in vendor/README.md must be registered in tools/test-vendor.mjs.
   for (const match of vendorReadme.matchAll(/vendor\/([a-z0-9-]+)\/tests\/([a-z0-9_]+)\.rs/g)) {

@@ -23,6 +23,8 @@ export type {
 import type { NativeStyle } from "./styles.js";
 export type { NativeStyle, NativeStyleName } from "./styles.js";
 
+export type { FrameStreamHandle } from "./frame-stream.js";
+
 /** A native node or reactive accessor resolving to one (e.g. a `createSignal<NativeNode | null>(null)` wired to `ref={setNode}`). */
 export type NativeNodeTarget = NativeNode | Accessor<NativeNode | null | undefined>;
 export interface NativeWindowRect {

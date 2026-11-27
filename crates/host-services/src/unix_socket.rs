@@ -2,12 +2,14 @@
 
 use crate::{
     ServiceError,
+    frame_stream::{self, FrameBudget, FrameStream, Modifiers, protocol},
     worker::{Publisher, UNWATCHED, Worker, pollfd},
 };
+use rustix::net::{RecvAncillaryBuffer, RecvAncillaryMessage, RecvFlags, ReturnFlags, recvmsg};
 use std::{
     collections::VecDeque,
     fmt, fs,
-    io::{self, BufRead, BufReader, IoSlice, Write},
+    io::{self, IoSlice, IoSliceMut, Write},
     mem,
     os::{
         fd::{AsRawFd, FromRawFd, OwnedFd},
@@ -27,13 +29,14 @@ pub const MAX_MESSAGE_BYTES: usize = 8 * 1024 * 1024;
 const MAX_SENDS: usize = 32;
 const TEXT_KIND: u8 = 0x00;
 const IMAGE_KIND: u8 = 0x01;
+const STREAM_KIND: u8 = 0x02;
 
 /// Delimits messages on a Unix stream.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Framing {
     /// UTF-8 text terminated by LF, which is not part of the delivered text.
     Line,
-    /// A big-endian `u32` byte count including a kind byte (`0x00` text, `0x01` image).
+    /// A big-endian `u32` byte count including a kind byte (text, image or opted-in frame submit).
     Length,
 }
 
@@ -65,6 +68,8 @@ pub enum Event {
     Message(String),
     /// A length frame tagged as image data; image decoding occurs separately.
     Image(Arc<[u8]>),
+    /// The first pending submission opened this stream ID.
+    FrameStream(u64),
     /// The final notification, with an error for abnormal closure.
     Close(Option<ServiceError>),
 }
@@ -77,6 +82,7 @@ pub struct Socket {
     worker: Worker<Event>,
     outgoing: Arc<Mutex<Outgoing>>,
     framing: Framing,
+    frames: Option<Arc<frame_stream::Endpoint>>,
 }
 
 impl fmt::Debug for Socket {
@@ -111,6 +117,32 @@ impl Socket {
         framing: Framing,
         wake: Arc<dyn Fn() + Send + Sync>,
     ) -> io::Result<Self> {
+        Self::start(path, framing, None, wake)
+    }
+
+    /// Starts a length-framed connection which accepts SCM_RIGHTS frame submissions.
+    ///
+    /// Pass the same budget to all frame sockets in the session. `None` advertises memfd
+    /// only; otherwise `modifiers` lists the renderer's supported imports.
+    ///
+    /// # Errors
+    /// Returns the same setup errors as [`Self::connect`].
+    pub fn connect_frames(
+        path: PathBuf,
+        budget: FrameBudget,
+        modifiers: Option<Modifiers>,
+        wake: Arc<dyn Fn() + Send + Sync>,
+    ) -> io::Result<Self> {
+        let frames = Arc::new(frame_stream::Endpoint::new(budget, modifiers, wake.clone()));
+        Self::start(path, Framing::Length, Some(frames), wake)
+    }
+
+    fn start(
+        path: PathBuf,
+        framing: Framing,
+        frames: Option<Arc<frame_stream::Endpoint>>,
+        wake: Arc<dyn Fn() + Send + Sync>,
+    ) -> io::Result<Self> {
         if !path.is_absolute() || path.as_os_str().as_bytes().contains(&0) {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
@@ -119,12 +151,22 @@ impl Socket {
         }
         let outgoing = Arc::new(Mutex::new(Outgoing::default()));
         let worker_outgoing = Arc::clone(&outgoing);
+        let worker_frames = frames.clone();
         let worker = Worker::start(
             "zgui-unix-socket",
             MAX_MESSAGE_BYTES,
             wake,
             move |publisher| {
-                let result = connect_and_serve(&path, framing, &worker_outgoing, publisher);
+                let result = connect_and_serve(
+                    &path,
+                    framing,
+                    &worker_outgoing,
+                    worker_frames.as_ref(),
+                    publisher,
+                );
+                if let Some(frames) = worker_frames {
+                    frames.close();
+                }
                 {
                     let mut outgoing = worker_outgoing
                         .lock()
@@ -137,11 +179,20 @@ impl Socket {
                 Some(Event::Close(result.err()))
             },
         )?;
+        if let Some(frames) = &frames {
+            let _ = frames.signal.set(worker.signal_socket()?);
+        }
         Ok(Self {
             worker,
             outgoing,
             framing,
+            frames,
         })
+    }
+
+    /// Gets a stream opened by the peer. Closed sockets cannot supply new frames.
+    pub fn frame_stream(&self, id: u64) -> Option<Arc<FrameStream>> {
+        self.frames.as_ref()?.stream(id)
     }
 
     /// Queues one message without waiting for the socket to become writable.
@@ -180,6 +231,15 @@ impl Socket {
         self.worker.close()
     }
 
+    /// Stops callback delivery without joining. Frame sockets flush held producer credits
+    /// before the endpoint closes, subject to a bounded write grace after GPU use ends.
+    pub fn retire(self) {
+        if let Some(frames) = self.frames {
+            frames.retire();
+            self.worker.detach();
+        }
+    }
+
     /// Returns the next event if one is ready, without waiting.
     pub fn try_recv(&self) -> Option<Event> {
         self.worker.take()
@@ -196,6 +256,7 @@ fn connect_and_serve(
     path: &Path,
     framing: Framing,
     outgoing: &Mutex<Outgoing>,
+    frames: Option<&Arc<frame_stream::Endpoint>>,
     publisher: &Publisher<Event>,
 ) -> Result<(), ServiceError> {
     if publisher.stopped() {
@@ -232,7 +293,7 @@ fn connect_and_serve(
             }
         }
     }
-    serve(&stream, framing, outgoing, publisher)
+    serve(&stream, framing, outgoing, frames, publisher)
 }
 
 pub(super) fn nonblocking_connect(path: &Path) -> io::Result<(UnixStream, bool)> {
@@ -288,48 +349,91 @@ fn serve(
     stream: &UnixStream,
     framing: Framing,
     outgoing: &Mutex<Outgoing>,
+    frames: Option<&Arc<frame_stream::Endpoint>>,
     publisher: &Publisher<Event>,
 ) -> Result<(), ServiceError> {
-    let mut reader = BufReader::new(stream);
+    let mut buffer = [0; 8192];
+    let (mut start, mut end) = (0, 0);
     let mut decoder = Decoder::new(framing);
     let mut pending_event = None;
-    let mut outgoing_frame: Option<Frame> = None;
+    let mut outgoing_frame = frames
+        .map(|frames| Frame::new(frames.hello(), framing, STREAM_KIND))
+        .transpose()?;
+    let mut flush_deadline = None;
     while !publisher.stopped() {
+        let retiring = frames.is_some_and(|frames| frames.retiring());
+        if retiring {
+            decoder.fds.clear();
+        }
+        let waiting_for_fences = frames
+            .filter(|_| !retiring)
+            .map(|frames| frames.prepare())
+            .transpose()?
+            .unwrap_or(false);
         let mut progressed = false;
-        if let Some((event, bytes)) = pending_event.take() {
+        if !retiring && let Some((event, bytes)) = pending_event.take() {
             pending_event = publisher.offer(event, bytes).err();
             progressed = pending_event.is_none();
         }
-        if pending_event.is_none() {
-            match reader.fill_buf() {
-                Ok([]) if decoder.is_partial() => {
-                    return Err(io::Error::new(
-                        io::ErrorKind::UnexpectedEof,
-                        "peer closed in the middle of a frame",
-                    )
-                    .into());
+        if !retiring
+            && pending_event.is_none()
+            && frames.is_none_or(|frames| frames.allow_receive())
+        {
+            if start == end {
+                let limit = frames.map_or(buffer.len(), |_| decoder.recv_limit().min(buffer.len()));
+                match receive(stream, &mut buffer[..limit]) {
+                    Ok((_, fds))
+                        if !fds.is_empty() && (frames.is_none() || decoder.is_partial()) =>
+                    {
+                        return Err(protocol(
+                            "SCM_RIGHTS must accompany the first byte of an opted-in frame",
+                        ));
+                    }
+                    Ok((0, _)) if decoder.is_partial() => {
+                        return Err(io::Error::new(
+                            io::ErrorKind::UnexpectedEof,
+                            "peer closed in the middle of a frame",
+                        )
+                        .into());
+                    }
+                    Ok((0, _)) => return Ok(()),
+                    Ok((size, fds)) => {
+                        start = 0;
+                        end = size;
+                        if !fds.is_empty() {
+                            decoder.fds = fds;
+                        }
+                    }
+                    Err(error) if error.kind() == io::ErrorKind::WouldBlock => {}
+                    Err(error) if error.kind() == io::ErrorKind::Interrupted => progressed = true,
+                    Err(error) if error.kind() == io::ErrorKind::InvalidData => {
+                        return Err(protocol("truncated Unix socket ancillary data"));
+                    }
+                    Err(error) => return Err(error.into()),
                 }
-                Ok([]) => return Ok(()),
-                Ok(input) => {
-                    let (consumed, event) = decoder.read(input)?;
-                    reader.consume(consumed);
-                    pending_event =
-                        event.and_then(|(event, bytes)| publisher.offer(event, bytes).err());
-                    progressed = true;
-                }
-                Err(error) if error.kind() == io::ErrorKind::WouldBlock => {}
-                Err(error) if error.kind() == io::ErrorKind::Interrupted => progressed = true,
-                Err(error) => return Err(error.into()),
+            }
+            if start != end {
+                let (consumed, event) = decoder.read(&buffer[start..end], frames)?;
+                start += consumed;
+                pending_event =
+                    event.and_then(|(event, bytes)| publisher.offer(event, bytes).err());
+                progressed = true;
             }
         }
-        if outgoing_frame.is_none() {
+        if outgoing_frame.is_none()
+            && let Some(frames) = frames
+            && let Some(message) = frames.next_release()?
+        {
+            outgoing_frame = Some(Frame::new(message, framing, STREAM_KIND)?);
+        }
+        if !retiring && outgoing_frame.is_none() {
             let mut outgoing = outgoing
                 .lock()
                 .expect("outgoing lock is not held during I/O");
             if let Some(message) = outgoing.queue.pop_front() {
                 outgoing.bytes -= message.len();
                 drop(outgoing);
-                outgoing_frame = Some(Frame::new(message, framing)?);
+                outgoing_frame = Some(Frame::new(message, framing, TEXT_KIND)?);
             }
         }
         if let Some(frame) = outgoing_frame.as_mut() {
@@ -344,9 +448,26 @@ fn serve(
                 Err(error) => return Err(error.into()),
             }
         }
+        if let Some(frames) = frames
+            && retiring
+            && frames.claims_done()
+        {
+            if outgoing_frame.is_none() && frames.credits_sent() {
+                return Ok(());
+            }
+            let now = std::time::Instant::now();
+            let deadline =
+                flush_deadline.get_or_insert_with(|| now + std::time::Duration::from_millis(250));
+            if now >= *deadline {
+                return Ok(());
+            }
+        }
         if !progressed {
             let mut interest = 0;
-            if pending_event.is_none() {
+            if !retiring
+                && pending_event.is_none()
+                && frames.is_none_or(|frames| frames.allow_receive())
+            {
                 interest |= libc::POLLIN;
             }
             if outgoing_frame.is_some() {
@@ -357,10 +478,43 @@ fn serve(
             } else {
                 pollfd(stream, interest)
             };
-            publisher.poll(&mut [UNWATCHED, data], -1)?;
+            publisher.poll(
+                &mut [UNWATCHED, data],
+                if flush_deadline.is_some() {
+                    250
+                } else if waiting_for_fences {
+                    5
+                } else {
+                    -1
+                },
+            )?;
         }
     }
     Ok(())
+}
+
+fn receive(stream: &UnixStream, buffer: &mut [u8]) -> io::Result<(usize, Vec<OwnedFd>)> {
+    let mut control =
+        [mem::MaybeUninit::uninit(); rustix::cmsg_space!(ScmRights(frame_stream::MAX_PLANES))];
+    let mut control = RecvAncillaryBuffer::new(&mut control);
+    let msg = recvmsg(
+        stream,
+        &mut [IoSliceMut::new(buffer)],
+        &mut control,
+        RecvFlags::CMSG_CLOEXEC,
+    )?;
+    // Rustix owns the ancillary buffer: even on truncation, its drain/drop closes every
+    // installed descriptor. Linux closes rights that did not fit in the control buffer.
+    if msg.flags.contains(ReturnFlags::CTRUNC) {
+        return Err(io::ErrorKind::InvalidData.into());
+    }
+    let mut rights = Vec::new();
+    for message in control.drain() {
+        if let RecvAncillaryMessage::ScmRights(fds) = message {
+            rights.extend(fds);
+        }
+    }
+    Ok((msg.bytes, rights))
 }
 
 struct Frame {
@@ -370,12 +524,12 @@ struct Frame {
 }
 
 impl Frame {
-    fn new(message: String, framing: Framing) -> Result<Self, ServiceError> {
+    fn new(message: String, framing: Framing, kind: u8) -> Result<Self, ServiceError> {
         let mut header = [0; 5];
         if framing == Framing::Length {
             let length = u32::try_from(message.len() + 1).map_err(|_| too_large())?;
             header[..4].copy_from_slice(&length.to_be_bytes());
-            header[4] = TEXT_KIND;
+            header[4] = kind;
         }
         Ok(Self {
             message,
@@ -410,6 +564,7 @@ type Decoded = (usize, Option<(Event, usize)>);
 struct Decoder {
     frame: Vec<u8>,
     length: Option<LengthHeader>,
+    fds: Vec<OwnedFd>,
 }
 
 #[derive(Default)]
@@ -424,6 +579,7 @@ struct LengthHeader {
 enum FrameKind {
     Text,
     Image,
+    Stream,
 }
 
 impl Decoder {
@@ -431,6 +587,7 @@ impl Decoder {
         Self {
             frame: Vec::new(),
             length: (framing == Framing::Length).then(LengthHeader::default),
+            fds: Vec::new(),
         }
     }
 
@@ -442,7 +599,26 @@ impl Decoder {
                 .is_some_and(|header| header.filled != 0)
     }
 
-    fn read(&mut self, input: &[u8]) -> Result<Decoded, ServiceError> {
+    // A stream recvmsg reports an ancillary barrier but not the byte offset. Reading the
+    // first byte separately, and never reading across the boundary, makes the pairing exact.
+    fn recv_limit(&self) -> usize {
+        let header = self
+            .length
+            .as_ref()
+            .expect("frame streams use length framing");
+        match (header.filled, header.kind) {
+            (0, _) => 1,
+            (1..4, _) => 4 - header.filled,
+            (_, None) => 1,
+            (_, Some(_)) => header.size - self.frame.len(),
+        }
+    }
+
+    fn read(
+        &mut self,
+        input: &[u8],
+        endpoint: Option<&Arc<frame_stream::Endpoint>>,
+    ) -> Result<Decoded, ServiceError> {
         if let Some(header) = &mut self.length {
             let mut consumed = 0;
             if header.filled < header.prefix.len() {
@@ -472,6 +648,10 @@ impl Decoder {
                     let kind = match *byte {
                         TEXT_KIND => FrameKind::Text,
                         IMAGE_KIND => FrameKind::Image,
+                        STREAM_KIND if endpoint.is_some() => FrameKind::Stream,
+                        STREAM_KIND => {
+                            return Err(protocol("frame streams were not enabled on this socket"));
+                        }
                         _ => {
                             return Err(ServiceError::new(
                                 "InvalidMessage",
@@ -479,6 +659,15 @@ impl Decoder {
                             ));
                         }
                     };
+                    if matches!(kind, FrameKind::Stream) {
+                        if self.fds.is_empty() || header.size > frame_stream::MAX_HEADER {
+                            return Err(protocol(
+                                "frame submit requires descriptors and bounded header data",
+                            ));
+                        }
+                    } else if !self.fds.is_empty() {
+                        return Err(protocol("SCM_RIGHTS sent with a non-frame message"));
+                    }
                     header.kind = Some(kind);
                     kind
                 }
@@ -499,6 +688,15 @@ impl Decoder {
                     ServiceError::new("InvalidUtf8", "Unix socket text frame is not valid UTF-8")
                 })?),
                 FrameKind::Image => Event::Image(Arc::from(payload)),
+                FrameKind::Stream => {
+                    let endpoint = endpoint.expect("stream kind requires an opted-in connection");
+                    let frame =
+                        frame_stream::Inbound::new(&payload, mem::take(&mut self.fds), endpoint)?;
+                    return Ok((
+                        consumed,
+                        endpoint.offer(frame)?.map(|id| (Event::FrameStream(id), 0)),
+                    ));
+                }
             };
             Ok((consumed, Some((event, size))))
         } else {
@@ -674,7 +872,8 @@ mod tests {
     fn length_socket_closes_on_invalid_kind_or_text_without_delivering_an_image() {
         for (wire, code, eof) in [
             (&b"\0\0\0\0"[..], "InvalidMessage", false),
-            (&b"\0\0\0\x04\x02"[..], "InvalidMessage", false),
+            (&b"\0\0\0\x04\x03"[..], "InvalidMessage", false),
+            (&b"\0\0\0\x04\x02"[..], "E_PROTOCOL", false),
             (&b"\0\0\0\x03\0\xffx"[..], "InvalidUtf8", false),
             (&b"\0\0\0\x01"[..], "Io", true),
         ] {

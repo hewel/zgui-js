@@ -1,11 +1,7 @@
 pub(crate) mod activation;
 pub(crate) mod window_control;
 
-use std::{cell::{Cell, RefCell}, collections::BTreeMap, rc::{Rc, Weak}, sync::Arc, time::{Duration, Instant}};
-use js_runtime::{JsRuntime, RejectionPolicy, RuntimeLimits};
-use rquickjs::{Exception, Function, Persistent};
-use ui_bridge::{BridgeGroup, BridgeStep, DispatchOutcome, HostPort, UiBridge, registry::NodeRegistry};
-use zgui::{app::Fonts, platform::{SessionLockState, Surface, SurfaceId, WakeReason, Waker}, runtime::{AppTimers, ImageBlobs}, view::DocumentId};
+use crate::runtime_capabilities::ResolvedCapabilities;
 use crate::{
     assets::{AssetSource, ContractFailure, MAX_SAFE_ID},
     bytecode_cache::BytecodeCache,
@@ -22,9 +18,26 @@ use crate::{
     shell::{Authority, ContractPolicy, Monitor, Shell, ShellConfig},
     work::{Arguments, Work, WorkSession},
 };
-use crate::runtime_capabilities::ResolvedCapabilities;
 use activation::ActivationTokens;
+use js_runtime::{JsRuntime, RejectionPolicy, RuntimeLimits};
+use rquickjs::{Exception, Function, Persistent};
+use std::{
+    cell::{Cell, RefCell},
+    collections::BTreeMap,
+    rc::{Rc, Weak},
+    sync::Arc,
+    time::{Duration, Instant},
+};
+use ui_bridge::{
+    BridgeGroup, BridgeStep, DispatchOutcome, HostPort, UiBridge, registry::NodeRegistry,
+};
 use window_control::{WindowCommand, WindowControls, WindowState};
+use zgui::{
+    app::Fonts,
+    platform::{SessionLockState, Surface, SurfaceId, WakeReason, Waker},
+    runtime::{AppTimers, ImageBlobs},
+    view::DocumentId,
+};
 
 /// Typed session failure: engine diagnostics, sticky provider contracts, and
 /// host invariants keep distinct categories through recovery classification.
@@ -33,7 +46,11 @@ pub(crate) enum SessionError {
     Diagnostic(js_runtime::Diagnostic),
     Contract(ContractFailure),
     InvalidState(String),
-    Style { code: &'static str, message: String, details: serde_json::Value },
+    Style {
+        code: &'static str,
+        message: String,
+        details: serde_json::Value,
+    },
 }
 impl std::fmt::Display for SessionError {
     fn fmt(&self, out: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -41,9 +58,15 @@ impl std::fmt::Display for SessionError {
             Self::Diagnostic(diagnostic) => diagnostic.fmt(out),
             Self::Contract(failure) => failure.fmt(out),
             Self::InvalidState(message) => out.write_str(message),
-            Self::Style { code, message, details } => {
+            Self::Style {
+                code,
+                message,
+                details,
+            } => {
                 write!(out, "{code}: {message}")?;
-                if !details.is_null() { write!(out, " {details}")?; }
+                if !details.is_null() {
+                    write!(out, " {details}")?;
+                }
                 Ok(())
             }
         }
@@ -51,16 +74,24 @@ impl std::fmt::Display for SessionError {
 }
 impl std::error::Error for SessionError {}
 impl From<js_runtime::Diagnostic> for SessionError {
-    fn from(error: js_runtime::Diagnostic) -> Self { Self::Diagnostic(error) }
+    fn from(error: js_runtime::Diagnostic) -> Self {
+        Self::Diagnostic(error)
+    }
 }
 impl From<ContractFailure> for SessionError {
-    fn from(error: ContractFailure) -> Self { Self::Contract(error) }
+    fn from(error: ContractFailure) -> Self {
+        Self::Contract(error)
+    }
 }
 impl From<String> for SessionError {
-    fn from(error: String) -> Self { Self::InvalidState(error) }
+    fn from(error: String) -> Self {
+        Self::InvalidState(error)
+    }
 }
 impl From<&str> for SessionError {
-    fn from(error: &str) -> Self { Self::InvalidState(error.into()) }
+    fn from(error: &str) -> Self {
+        Self::InvalidState(error.into())
+    }
 }
 pub(crate) type Result<T> = std::result::Result<T, SessionError>;
 
@@ -120,13 +151,18 @@ impl SessionModule {
             Self::Package(package) => package
                 .take_or_load_entry()
                 .map_err(|error| SessionError::InvalidState(error.to_string())),
-            Self::Inline { source, .. } => Ok(crate::package::EntryPayload::Source(Arc::clone(source))),
+            Self::Inline { source, .. } => {
+                Ok(crate::package::EntryPayload::Source(Arc::clone(source)))
+            }
         }
     }
 
     /// The package declaration is the sole authority for dynamic shell surfaces.
     pub(crate) fn shell_authority(&self) -> Authority {
-        if self.as_package().is_some_and(|package| package.manifest.capabilities.shell_surfaces) {
+        if self
+            .as_package()
+            .is_some_and(|package| package.manifest.capabilities.shell_surfaces)
+        {
             Authority::Allowed
         } else {
             Authority::Denied
@@ -134,7 +170,8 @@ impl SessionModule {
     }
 
     fn declares_session_lock(&self) -> bool {
-        self.as_package().is_some_and(|package| package.manifest.capabilities.session_lock)
+        self.as_package()
+            .is_some_and(|package| package.manifest.capabilities.session_lock)
     }
 }
 
@@ -165,12 +202,53 @@ impl SessionPolicy {
     /// Ordinary live execution: wall clock, ambient limits, and package assets
     /// on the shared worker pool. Unhandled rejections fault under a retained lock.
     pub(crate) fn live(executor: host_services::Executor) -> Self {
-        Self { limits: RuntimeLimits::default(), deadline: None, environment: None, strict_rejections: false, assets: AssetSource::Live(executor), launch: Default::default(), socket_bindings: None, reduced_motion: None, teardown_reporter: None, session_lock: None, dev_state: false, hydrated_dev_state: None, extension_overlay: None, bytecode_cache: None, incoming_handoff: None, safe_base_shell: false, last_overlay_failure: None }
+        Self {
+            limits: RuntimeLimits::default(),
+            deadline: None,
+            environment: None,
+            strict_rejections: false,
+            assets: AssetSource::Live(executor),
+            launch: Default::default(),
+            socket_bindings: None,
+            reduced_motion: None,
+            teardown_reporter: None,
+            session_lock: None,
+            dev_state: false,
+            hydrated_dev_state: None,
+            extension_overlay: None,
+            bytecode_cache: None,
+            incoming_handoff: None,
+            safe_base_shell: false,
+            last_overlay_failure: None,
+        }
     }
     /// Deterministic preview execution: supplied limits, an enclosing deadline,
     /// the virtual environment, strict rejection handling and fixture assets.
-    pub(crate) fn preview(limits: RuntimeLimits, deadline: Rc<Cell<Instant>>, environment: Rc<Environment>, fixtures: Rc<crate::assets::fixture::FixtureRuntime>) -> Self {
-        Self { limits, deadline: Some(deadline), environment: Some(environment), strict_rejections: true, assets: AssetSource::Fixture(fixtures), launch: Default::default(), socket_bindings: None, reduced_motion: Some(false), teardown_reporter: None, session_lock: None, dev_state: false, hydrated_dev_state: None, extension_overlay: None, bytecode_cache: None, incoming_handoff: None, safe_base_shell: false, last_overlay_failure: None }
+    pub(crate) fn preview(
+        limits: RuntimeLimits,
+        deadline: Rc<Cell<Instant>>,
+        environment: Rc<Environment>,
+        fixtures: Rc<crate::assets::fixture::FixtureRuntime>,
+    ) -> Self {
+        Self {
+            limits,
+            deadline: Some(deadline),
+            environment: Some(environment),
+            strict_rejections: true,
+            assets: AssetSource::Fixture(fixtures),
+            launch: Default::default(),
+            socket_bindings: None,
+            reduced_motion: Some(false),
+            teardown_reporter: None,
+            session_lock: None,
+            dev_state: false,
+            hydrated_dev_state: None,
+            extension_overlay: None,
+            bytecode_cache: None,
+            incoming_handoff: None,
+            safe_base_shell: false,
+            last_overlay_failure: None,
+        }
     }
     /// Install the explicit launch bindings shared by all live candidates.
     #[must_use]
@@ -179,10 +257,16 @@ impl SessionPolicy {
         self
     }
 
-    pub(crate) fn set_launch(&mut self, activation: crate::invocation::Activation, inbox: Option<Arc<crate::instance::Inbox>>) {
+    pub(crate) fn set_launch(
+        &mut self,
+        activation: crate::invocation::Activation,
+        inbox: Option<Arc<crate::instance::Inbox>>,
+    ) {
         self.launch = crate::work::Launch {
             initial: Some(Rc::new(activation.info)),
-            token: activation.token.map(|token| Rc::new(RefCell::new(Some(token)))),
+            token: activation
+                .token
+                .map(|token| Rc::new(RefCell::new(Some(token)))),
             inbox,
         };
     }
@@ -259,6 +343,8 @@ pub(crate) struct ResourceCounts {
     pub requests: usize,
     #[serde(skip_serializing_if = "is_zero")]
     pub image_handles: usize,
+    pub frame_streams: usize,
+    pub imported_frame_fds: usize,
     /// Unix socket clients still open after application cleanup.
     #[serde(skip_serializing_if = "is_zero")]
     pub unix_sockets: usize,
@@ -311,7 +397,9 @@ pub(crate) struct ResourceCounts {
     pub engine_alive: bool,
 }
 
-fn is_zero(value: &usize) -> bool { *value == 0 }
+fn is_zero(value: &usize) -> bool {
+    *value == 0
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum RetirementFailure {
@@ -374,7 +462,9 @@ impl RuntimeTelemetry {
                 max_entry_duration: a.max_entry_duration.max(b.max_entry_duration),
                 js_heap_bytes: a.js_heap_bytes.max(b.js_heap_bytes),
                 js_heap_live_bytes: a.js_heap_live_bytes.max(b.js_heap_live_bytes),
-                js_heap_post_dispose_bytes: a.js_heap_post_dispose_bytes.max(b.js_heap_post_dispose_bytes),
+                js_heap_post_dispose_bytes: a
+                    .js_heap_post_dispose_bytes
+                    .max(b.js_heap_post_dispose_bytes),
                 js_stack_limit_bytes: b.js_stack_limit_bytes.max(a.js_stack_limit_bytes),
                 process_memory: ProcessMemory::merge(a.process_memory, b.process_memory),
             }),
@@ -400,8 +490,14 @@ impl SessionRegion {
 }
 
 enum Startup {
-    Primary { region: MountRegion, surface: SurfaceId },
-    Shell { fonts: Fonts, timers: AppTimers },
+    Primary {
+        region: MountRegion,
+        surface: SurfaceId,
+    },
+    Shell {
+        fonts: Fonts,
+        timers: AppTimers,
+    },
 }
 
 pub(crate) struct Session {
@@ -450,20 +546,54 @@ pub(crate) struct Session {
 
 impl Session {
     /// Pure module preflight: bridge mutation is disabled until mount's turn.
-    pub(crate) fn prepare(region: MountRegion, module: SessionModule, generation: u64, waker: Arc<dyn Waker>, surface: SurfaceId, policy: SessionPolicy) -> Result<Rc<Self>> {
-        Self::prepare_inner(Startup::Primary { region, surface }, module, generation, waker, policy)
+    pub(crate) fn prepare(
+        region: MountRegion,
+        module: SessionModule,
+        generation: u64,
+        waker: Arc<dyn Waker>,
+        surface: SurfaceId,
+        policy: SessionPolicy,
+    ) -> Result<Rc<Self>> {
+        Self::prepare_inner(
+            Startup::Primary { region, surface },
+            module,
+            generation,
+            waker,
+            policy,
+        )
     }
 
     /// Pure preflight without a document, window or mount root.
-    pub(crate) fn prepare_shell(fonts: Fonts, timers: AppTimers, module: SessionModule, generation: u64, waker: Arc<dyn Waker>, policy: SessionPolicy) -> Result<Rc<Self>> {
+    pub(crate) fn prepare_shell(
+        fonts: Fonts,
+        timers: AppTimers,
+        module: SessionModule,
+        generation: u64,
+        waker: Arc<dyn Waker>,
+        policy: SessionPolicy,
+    ) -> Result<Rc<Self>> {
         if module.shell_authority() != Authority::Allowed && !module.declares_session_lock() {
             return Err(ContractFailure { code: "E_CAPABILITY", message: "pure-shell startup requires capabilities.shellSurfaces or capabilities.sessionLock".into() }.into());
         }
-        Self::prepare_inner(Startup::Shell { fonts, timers }, module, generation, waker, policy)
+        Self::prepare_inner(
+            Startup::Shell { fonts, timers },
+            module,
+            generation,
+            waker,
+            policy,
+        )
     }
 
-    fn prepare_inner(startup: Startup, module: SessionModule, generation: u64, waker: Arc<dyn Waker>, policy: SessionPolicy) -> Result<Rc<Self>> {
-        if generation > MAX_SAFE_ID { return Err("session generation exhausted".into()); }
+    fn prepare_inner(
+        startup: Startup,
+        module: SessionModule,
+        generation: u64,
+        waker: Arc<dyn Waker>,
+        policy: SessionPolicy,
+    ) -> Result<Rc<Self>> {
+        if generation > MAX_SAFE_ID {
+            return Err("session generation exhausted".into());
+        }
         let active_overlay = if module.as_package().is_some() && !policy.safe_base_shell {
             policy.extension_overlay.clone()
         } else {
@@ -484,8 +614,17 @@ impl Session {
         });
         let resolved = if module.as_package().is_some() {
             match &policy.assets {
-                AssetSource::Live(_) => ResolvedCapabilities::live(&effective_capabilities, policy.socket_bindings.as_deref().unwrap_or(&BTreeMap::new()), |key| std::env::var_os(key)),
-                AssetSource::Fixture(fixture) => fixture.resolve_capabilities(&effective_capabilities),
+                AssetSource::Live(_) => ResolvedCapabilities::live(
+                    &effective_capabilities,
+                    policy
+                        .socket_bindings
+                        .as_deref()
+                        .unwrap_or(&BTreeMap::new()),
+                    |key| std::env::var_os(key),
+                ),
+                AssetSource::Fixture(fixture) => {
+                    fixture.resolve_capabilities(&effective_capabilities)
+                }
             }?
         } else {
             ResolvedCapabilities::default()
@@ -494,52 +633,87 @@ impl Session {
         if let Some(overlay) = &active_overlay {
             combined_styles.extend(overlay.styles.iter().cloned());
         }
-        let fonts = match &startup { Startup::Primary { region, .. } => region.fonts.clone(), Startup::Shell { fonts, .. } => fonts.clone() };
+        let fonts = match &startup {
+            Startup::Primary { region, .. } => region.fonts.clone(),
+            Startup::Shell { fonts, .. } => fonts.clone(),
+        };
         let mut engine = JsRuntime::new(policy.limits.clone())?;
         let mut font_families = std::collections::BTreeSet::new();
         for sheet in &combined_styles {
-            let summary = zgui_style::preflight_stylesheet(&sheet.css)
-                .map_err(|error| SessionError::Style { code: "E_STYLE_PROFILE", message: format!("stylesheet {} rejected", sheet.path),
-                    details: serde_json::to_value(error).expect("native stylesheet diagnostics serialize") })?;
+            let summary = zgui_style::preflight_stylesheet(&sheet.css).map_err(|error| {
+                SessionError::Style {
+                    code: "E_STYLE_PROFILE",
+                    message: format!("stylesheet {} rejected", sheet.path),
+                    details: serde_json::to_value(error)
+                        .expect("native stylesheet diagnostics serialize"),
+                }
+            })?;
             font_families.extend(summary.font_families);
         }
         let mut font_leases = Vec::new();
         if let Some(package) = module.as_package() {
             for font in &package.manifest.fonts {
-                let bytes = package.asset_data(&font.path).ok_or("verified package font is missing")?;
-                let lease = fonts.register_scoped(Arc::new(bytes), &font.family)
-                    .map_err(|error| SessionError::Style { code: "E_FONT", message: format!("font {} as {:?} rejected: {error:?}", font.path, font.family), details: serde_json::Value::Null })?;
+                let bytes = package
+                    .asset_data(&font.path)
+                    .ok_or("verified package font is missing")?;
+                let lease = fonts
+                    .register_scoped(Arc::new(bytes), &font.family)
+                    .map_err(|error| SessionError::Style {
+                        code: "E_FONT",
+                        message: format!(
+                            "font {} as {:?} rejected: {error:?}",
+                            font.path, font.family
+                        ),
+                        details: serde_json::Value::Null,
+                    })?;
                 font_leases.push(lease);
             }
         }
         for family in font_families {
             if !is_css_generic_font_family(&family) && !fonts.contains_family(&family) {
-                return Err(SessionError::Style { code: "E_FONT_FAMILY", message: format!("FONT_FAMILY_UNREGISTERED: {family:?} is not registered"), details: serde_json::Value::Null });
+                return Err(SessionError::Style {
+                    code: "E_FONT_FAMILY",
+                    message: format!("FONT_FAMILY_UNREGISTERED: {family:?} is not registered"),
+                    details: serde_json::Value::Null,
+                });
             }
         }
-        if let Some(deadline) = &policy.deadline { engine.set_enclosing_deadline(deadline.clone()); }
-        let mut extension_module_provider: Option<Rc<dyn js_runtime::VerifiedModuleProvider>> = None;
+        if let Some(deadline) = &policy.deadline {
+            engine.set_enclosing_deadline(deadline.clone());
+        }
+        let mut extension_module_provider: Option<Rc<dyn js_runtime::VerifiedModuleProvider>> =
+            None;
         let session = Rc::new_cyclic(|weak: &Weak<Self>| {
             let bridges = Rc::new(BridgeGroup::new());
-            let contract = if policy.strict_rejections { ContractPolicy::Sticky } else { ContractPolicy::Throw };
-            let lock_authority = if policy.session_lock.is_some() && module.declares_session_lock() {
+            let contract = if policy.strict_rejections {
+                ContractPolicy::Sticky
+            } else {
+                ContractPolicy::Throw
+            };
+            let lock_authority = if policy.session_lock.is_some() && module.declares_session_lock()
+            {
                 Authority::Allowed
             } else {
                 Authority::Denied
             };
-            let window_authority = if matches!(startup, Startup::Primary { .. }) || module.shell_authority() == Authority::Allowed {
+            let window_authority = if matches!(startup, Startup::Primary { .. })
+                || module.shell_authority() == Authority::Allowed
+            {
                 Authority::Allowed
             } else {
                 Authority::Denied
             };
-            let shell = Shell::new(ShellConfig {
-                generation,
-                authority: module.shell_authority(),
-                window_authority,
-                lock_authority,
-                lock_state: policy.session_lock.unwrap_or_default(),
-                contract,
-            }, waker.clone());
+            let shell = Shell::new(
+                ShellConfig {
+                    generation,
+                    authority: module.shell_authority(),
+                    window_authority,
+                    lock_authority,
+                    lock_state: policy.session_lock.unwrap_or_default(),
+                    contract,
+                },
+                waker.clone(),
+            );
             let window_controls = WindowControls::new(waker.clone());
             let work_session = WorkSession {
                 package: module.as_package().cloned(),
@@ -558,10 +732,13 @@ impl Session {
                         .and_then(|pkg| pkg.manifest.window.as_ref())
                         .and_then(|win| win.title.clone())
                         .unwrap_or_else(|| "zgui-js".into());
-                    window_controls.seed_surface(surface, WindowState {
-                        title: initial_title,
-                        ..WindowState::default()
-                    });
+                    window_controls.seed_surface(
+                        surface,
+                        WindowState {
+                            title: initial_title,
+                            ..WindowState::default()
+                        },
+                    );
                     let work = Work::new(work_session, region.host.clone(), surface, waker.clone());
                     let options = ui_bridge::BridgeOptions {
                         strict_styles: policy.strict_rejections,
@@ -569,7 +746,15 @@ impl Session {
                         background_blur_supported: false,
                         defer_stylesheet_install: true,
                     };
-                    let region = Rc::new(Self::build_region(region, "main".into(), surface, generation, options, waker.clone(), weak.clone()));
+                    let region = Rc::new(Self::build_region(
+                        region,
+                        "main".into(),
+                        surface,
+                        generation,
+                        options,
+                        waker.clone(),
+                        weak.clone(),
+                    ));
                     bridges.add(&region.bridge);
                     (Some(region), work, ActivationTokens::new(None))
                 }
@@ -583,7 +768,10 @@ impl Session {
             work.set_gesture_source(bridges.clone());
             let dev_state = if policy.dev_state {
                 let scope = DevStateScope::for_module(&module);
-                Some(Rc::new(RefCell::new(DevStateStore::new(policy.hydrated_dev_state.clone(), &scope))))
+                Some(Rc::new(RefCell::new(DevStateStore::new(
+                    policy.hydrated_dev_state.clone(),
+                    &scope,
+                ))))
             } else {
                 None
             };
@@ -591,7 +779,8 @@ impl Session {
                 let extra_shared = active_overlay
                     .as_deref()
                     .map_or(&[][..], |o| o.shared_runtime_modules.as_slice());
-                let shared_runtime = Rc::new(RefCell::new(SharedRuntimeRegistry::new(extra_shared)));
+                let shared_runtime =
+                    Rc::new(RefCell::new(SharedRuntimeRegistry::new(extra_shared)));
                 let approved_load_gate = Rc::new(Cell::new(false));
                 let bridge = ShellHostBridge::new(
                     generation,
@@ -612,31 +801,60 @@ impl Session {
                 bridge
             });
             Self {
-                disposer: RefCell::new(None), primary, layers: RefCell::new(BTreeMap::new()), bridges, shell, window_controls, work, dnd: crate::dnd::DndState::new(), activation, surface_caps_lock: RefCell::new(std::collections::HashMap::new()), dev_state, shell_host, effective_capabilities: Arc::clone(&effective_capabilities), platform_surfaces: RefCell::new(std::collections::HashMap::new()), engine: RefCell::new(None),
-                shell_surfaces: Cell::new(0), retirement_reported: Cell::new(false),
+                disposer: RefCell::new(None),
+                primary,
+                layers: RefCell::new(BTreeMap::new()),
+                bridges,
+                shell,
+                window_controls,
+                work,
+                dnd: crate::dnd::DndState::new(),
+                activation,
+                surface_caps_lock: RefCell::new(std::collections::HashMap::new()),
+                dev_state,
+                shell_host,
+                effective_capabilities: Arc::clone(&effective_capabilities),
+                platform_surfaces: RefCell::new(std::collections::HashMap::new()),
+                engine: RefCell::new(None),
+                shell_surfaces: Cell::new(0),
+                retirement_reported: Cell::new(false),
                 shell_stylesheets: RefCell::new(Vec::new()),
-                telemetry: Cell::new(None), shutdown_started: Cell::new(false),
-                mount_started: Cell::new(false), staged: Cell::new(false), stylesheet_installed: Cell::new(false),
+                telemetry: Cell::new(None),
+                shutdown_started: Cell::new(false),
+                mount_started: Cell::new(false),
+                staged: Cell::new(false),
+                stylesheet_installed: Cell::new(false),
                 contract_reported: Cell::new(false),
                 font_leases: RefCell::new(Vec::new()),
                 reported_unregistered_fonts: RefCell::new(std::collections::BTreeSet::new()),
                 fonts,
-                generation, frames: Cell::new(0),
+                generation,
+                frames: Cell::new(0),
                 active_styles: RefCell::new(Arc::from(combined_styles)),
                 active_package: RefCell::new(module.as_package().cloned()),
                 module,
-                fault: RefCell::new(None), retired: RefCell::new(None),
-                policy, reduced_motion: Cell::new(initial_reduced_motion),
+                fault: RefCell::new(None),
+                retired: RefCell::new(None),
+                policy,
+                reduced_motion: Cell::new(initial_reduced_motion),
                 background_blur_supported: Cell::new(false),
-                checkpoint_cursor: Cell::new(0), waker, notifications_after: Cell::new(0),
+                checkpoint_cursor: Cell::new(0),
+                waker,
+                notifications_after: Cell::new(0),
             }
         });
         engine.with_context(|ctx| {
-            if let Some(environment) = &session.policy.environment { environment.install(&ctx)?; }
+            if let Some(environment) = &session.policy.environment {
+                environment.install(&ctx)?;
+            }
             if let Some(primary) = &session.primary {
                 let api = primary.bridge.api(&ctx)?;
-                session.work.install_region_frame_api(&api, primary.region.host.clone())?;
-                session.window_controls.install_region_window_api(&api, primary.surface, true)?;
+                session
+                    .work
+                    .install_region_frame_api(&api, primary.region.host.clone())?;
+                session
+                    .window_controls
+                    .install_region_window_api(&api, primary.surface, true)?;
                 ctx.globals().set("__zgui", api)?;
                 ctx.globals().set("mountRoot", primary.bridge.root(&ctx)?)?;
             }
@@ -662,110 +880,191 @@ impl Session {
             crate::package::EntryPayload::Source(source) => {
                 engine.load_module(session.module.name(), &source)
             }
-            crate::package::EntryPayload::Bytecode(bytes) => {
-                engine.load_bytecode_module(&bytes)
-            }
+            crate::package::EntryPayload::Bytecode(bytes) => engine.load_bytecode_module(&bytes),
         };
         session.check_contract()?;
         loaded.map_err(|error| remap(&session.module, error))?;
-        engine.with_module(|ctx, loaded| {
-            let version: rquickjs::Value = loaded.get("hostApiVersion")?;
-            if version.as_int() != Some(1) { return Err(Exception::throw_type(&ctx, "module hostApiVersion must equal manifest version 1")); }
-            let _: Function = loaded.get("mount")?;
-            Ok(())
-        }).map_err(|error| remap(&session.module, error))?;
+        engine
+            .with_module(|ctx, loaded| {
+                let version: rquickjs::Value = loaded.get("hostApiVersion")?;
+                if version.as_int() != Some(1) {
+                    return Err(Exception::throw_type(
+                        &ctx,
+                        "module hostApiVersion must equal manifest version 1",
+                    ));
+                }
+                let _: Function = loaded.get("mount")?;
+                Ok(())
+            })
+            .map_err(|error| remap(&session.module, error))?;
         // Drain bootstrap continuations while every host-creation guard is
         // still closed. Otherwise a top-level Promise could defer side effects
         // until the first mounted checkpoint and bypass preflight.
         let jobs = engine.pump_jobs();
         session.check_contract()?;
-        if let Some(error) = jobs.diagnostics.into_iter().next() { return Err(remap(&session.module, error)); }
+        if let Some(error) = jobs.diagnostics.into_iter().next() {
+            return Err(remap(&session.module, error));
+        }
         if jobs.has_pending_jobs {
             return Err(js_runtime::Diagnostic {
-                kind: js_runtime::DiagnosticKind::BudgetExceeded, phase: "preflight",
-                message: "preflight jobs exceeded their bounded pump".into(), stack: None, generated_stack: None,
-            }.into());
+                kind: js_runtime::DiagnosticKind::BudgetExceeded,
+                phase: "preflight",
+                message: "preflight jobs exceeded their bounded pump".into(),
+                stack: None,
+                generated_stack: None,
+            }
+            .into());
         }
-        let rejections = engine.drain_rejections(RejectionPolicy::Strict).map_err(|error| remap(&session.module, error));
+        let rejections = engine
+            .drain_rejections(RejectionPolicy::Strict)
+            .map_err(|error| remap(&session.module, error));
         session.check_contract()?;
         rejections?;
         if engine.is_job_pending() {
             return Err(js_runtime::Diagnostic {
-                kind: js_runtime::DiagnosticKind::BudgetExceeded, phase: "preflight",
-                message: "preflight diagnostic accessors scheduled more jobs".into(), stack: None, generated_stack: None,
-            }.into());
+                kind: js_runtime::DiagnosticKind::BudgetExceeded,
+                phase: "preflight",
+                message: "preflight diagnostic accessors scheduled more jobs".into(),
+                stack: None,
+                generated_stack: None,
+            }
+            .into());
         }
         *session.engine.borrow_mut() = Some(engine);
         *session.font_leases.borrow_mut() = font_leases;
         Ok(session)
     }
 
-    fn build_region(region: MountRegion, name: String, surface: SurfaceId, generation: u64, options: ui_bridge::BridgeOptions, waker: Arc<dyn Waker>, session: Weak<Self>) -> SessionRegion {
+    fn build_region(
+        region: MountRegion,
+        name: String,
+        surface: SurfaceId,
+        generation: u64,
+        options: ui_bridge::BridgeOptions,
+        waker: Arc<dyn Waker>,
+        session: Weak<Self>,
+    ) -> SessionRegion {
         let port = HostPort::live(surface, waker, session, Self::dispatch_step);
-        let bridge = UiBridge::new_with_options(NodeRegistry::new(region.dom.clone(), region.root, 1, generation, 100_000),
-            region.host.clone(), port, options);
-        SessionRegion { region, bridge, surface, name, disposer: RefCell::new(None), lock_claim: None, font_validation_revision: Cell::new(None) }
+        let bridge = UiBridge::new_with_options(
+            NodeRegistry::new(region.dom.clone(), region.root, 1, generation, 100_000),
+            region.host.clone(),
+            port,
+            options,
+        );
+        SessionRegion {
+            region,
+            bridge,
+            surface,
+            name,
+            disposer: RefCell::new(None),
+            lock_claim: None,
+            font_validation_revision: Cell::new(None),
+        }
     }
 
     /// The primary region is absent for a pure-shell session.
-    pub(crate) fn primary(&self) -> Option<&SessionRegion> { self.primary.as_deref() }
+    pub(crate) fn primary(&self) -> Option<&SessionRegion> {
+        self.primary.as_deref()
+    }
 
     #[cfg(test)]
-    pub(crate) fn primary_region(&self) -> &MountRegion { &self.primary().expect("test session has a primary region").region }
+    pub(crate) fn primary_region(&self) -> &MountRegion {
+        &self
+            .primary()
+            .expect("test session has a primary region")
+            .region
+    }
 
     #[cfg(test)]
-    fn bridge(&self) -> &UiBridge { &self.primary().expect("test session has a primary bridge").bridge }
+    fn bridge(&self) -> &UiBridge {
+        &self
+            .primary()
+            .expect("test session has a primary bridge")
+            .bridge
+    }
 
     /// Find the owner of a native document without changing its generation.
     pub(crate) fn mount_region(&self, document: DocumentId) -> Option<Rc<SessionRegion>> {
-        self.primary.iter().chain(self.layers.borrow().values()).find(|owned| owned.region.document == document).cloned()
+        self.primary
+            .iter()
+            .chain(self.layers.borrow().values())
+            .find(|owned| owned.region.document == document)
+            .cloned()
     }
 
     /// Snapshot region references for preview inspection and native scheduling.
     pub(crate) fn mount_regions(&self) -> Vec<(String, Rc<SessionRegion>)> {
-        self.primary.iter().chain(self.layers.borrow().values()).map(|owned| (owned.name.clone(), owned.clone())).collect()
+        self.primary
+            .iter()
+            .chain(self.layers.borrow().values())
+            .map(|owned| (owned.name.clone(), owned.clone()))
+            .collect()
     }
 
     /// Request presentation in every owned document after shared work runs.
     pub(crate) fn request_frames(&self, mut request: impl FnMut(DocumentId)) {
-        for owned in self.primary.iter().chain(self.layers.borrow().values()) { request(owned.region.document); }
+        for owned in self.primary.iter().chain(self.layers.borrow().values()) {
+            request(owned.region.document);
+        }
     }
 
     /// Deliver monitor changes in one structural turn, even with no current document.
     pub(crate) fn update_monitors(&self, monitors: &[Monitor]) -> Result<bool> {
-        if !self.shell.set_monitors(monitors) || self.shutdown_started.get() { return Ok(false); }
+        if !self.shell.set_monitors(monitors) || self.shutdown_started.get() {
+            return Ok(false);
+        }
         let mut engine = self.engine.borrow_mut();
         let engine = engine.as_mut().ok_or("session disposed")?;
-        let result = self.bridges.run(engine.turn(), |js| js.with_context(|ctx| self.shell.dispatch_monitors(&ctx)));
+        let result = self.bridges.run(engine.turn(), |js| {
+            js.with_context(|ctx| self.shell.dispatch_monitors(&ctx))
+        });
         self.mark_reported(self.check_contract())?;
-        result.map(|()| true).map_err(|error| self.diagnostic(error).into())
+        result
+            .map(|()| true)
+            .map_err(|error| self.diagnostic(error).into())
     }
 
     /// Publish compositor state to this generation in a bounded bridge turn.
     pub(crate) fn update_lock_state(&self, state: SessionLockState) -> Result<bool> {
-        if self.shutdown_started.get() { return Ok(false); }
+        if self.shutdown_started.get() {
+            return Ok(false);
+        }
         let revoked = state.is_retained() && self.activation.revoke_all_to_null();
         let notify_lock = self.shell.update_lock_state(state);
         if revoked {
             self.wake_owner();
         }
-        if !notify_lock { return Ok(revoked); }
+        if !notify_lock {
+            return Ok(revoked);
+        }
         let mut engine = self.engine.borrow_mut();
         let engine = engine.as_mut().ok_or("session disposed")?;
-        let result = self.bridges.run(engine.turn(), |js| js.with_context(|ctx| self.shell.dispatch_lock_state(&ctx)));
+        let result = self.bridges.run(engine.turn(), |js| {
+            js.with_context(|ctx| self.shell.dispatch_lock_state(&ctx))
+        });
         self.mark_reported(self.check_contract())?;
-        result.map(|()| true).map_err(|error| self.diagnostic(error).into())
+        result
+            .map(|()| true)
+            .map_err(|error| self.diagnostic(error).into())
     }
 
     pub(crate) fn seed_surface_caps_lock(&self, surface: SurfaceId, caps_lock: bool) {
-        self.surface_caps_lock.borrow_mut().insert(surface, caps_lock);
+        self.surface_caps_lock
+            .borrow_mut()
+            .insert(surface, caps_lock);
         if let Some(owned) = self.region_for_surface(surface) {
             owned.bridge.seed_caps_lock(caps_lock);
         }
     }
 
-    pub(crate) fn sync_surface_caps_lock(&self, surface: SurfaceId, caps_lock: bool) -> Result<bool> {
-        self.surface_caps_lock.borrow_mut().insert(surface, caps_lock);
+    pub(crate) fn sync_surface_caps_lock(
+        &self,
+        surface: SurfaceId,
+        caps_lock: bool,
+    ) -> Result<bool> {
+        self.surface_caps_lock
+            .borrow_mut()
+            .insert(surface, caps_lock);
         if self.shutdown_started.get() {
             return Ok(false);
         }
@@ -801,16 +1100,25 @@ impl Session {
         }
         let mut engine = self.engine.borrow_mut();
         let engine = engine.as_mut().ok_or("session disposed")?;
-        let regions: Vec<Rc<SessionRegion>> = self.primary.iter().chain(self.layers.borrow().values()).cloned().collect();
-        let result = self.bridges.run(engine.turn(), |js| js.with_context(|ctx| {
-            self.shell.dispatch_reduced_motion(&ctx, effective)?;
-            for owned in &regions {
-                owned.bridge.set_reduced_motion(&ctx, effective)?;
-            }
-            Ok(())
-        }));
+        let regions: Vec<Rc<SessionRegion>> = self
+            .primary
+            .iter()
+            .chain(self.layers.borrow().values())
+            .cloned()
+            .collect();
+        let result = self.bridges.run(engine.turn(), |js| {
+            js.with_context(|ctx| {
+                self.shell.dispatch_reduced_motion(&ctx, effective)?;
+                for owned in &regions {
+                    owned.bridge.set_reduced_motion(&ctx, effective)?;
+                }
+                Ok(())
+            })
+        });
         self.mark_reported(self.check_contract())?;
-        result.map(|()| true).map_err(|error| self.diagnostic(error).into())
+        result
+            .map(|()| true)
+            .map_err(|error| self.diagnostic(error).into())
     }
 
     /// Synchronize live compositor background-blur capability into the shell bridge and all live
@@ -829,43 +1137,67 @@ impl Session {
         }
         let mut engine = self.engine.borrow_mut();
         let engine = engine.as_mut().ok_or("session disposed")?;
-        let regions: Vec<Rc<SessionRegion>> = self.primary.iter().chain(self.layers.borrow().values()).cloned().collect();
-        let result = self.bridges.run(engine.turn(), |js| js.with_context(|ctx| {
-            self.shell.dispatch_background_blur_supported(&ctx, supported)?;
-            for owned in &regions {
-                owned.bridge.set_background_blur_supported(&ctx, supported)?;
-            }
-            Ok(())
-        }));
+        let regions: Vec<Rc<SessionRegion>> = self
+            .primary
+            .iter()
+            .chain(self.layers.borrow().values())
+            .cloned()
+            .collect();
+        let result = self.bridges.run(engine.turn(), |js| {
+            js.with_context(|ctx| {
+                self.shell
+                    .dispatch_background_blur_supported(&ctx, supported)?;
+                for owned in &regions {
+                    owned
+                        .bridge
+                        .set_background_blur_supported(&ctx, supported)?;
+                }
+                Ok(())
+            })
+        });
         self.mark_reported(self.check_contract())?;
-        result.map(|()| true).map_err(|error| self.diagnostic(error).into())
+        result
+            .map(|()| true)
+            .map_err(|error| self.diagnostic(error).into())
     }
 
     /// Settle active jobs, retire the popup subtree, and notify its owner after cleanup.
     pub(crate) fn dismiss_popup(&self, id: u32, close: impl FnOnce() -> Result<()>) -> Result<()> {
-        if self.shutdown_started.get() { return close(); }
+        if self.shutdown_started.get() {
+            return close();
+        }
         // QuickJS shares one queue: settle active work before a disposer can enqueue into it.
         self.settle_popup_jobs()?;
         close()?;
         self.settle_popup_jobs()?;
-        if !self.shell.owns_popup(id) { return Ok(()); }
+        if !self.shell.owns_popup(id) {
+            return Ok(());
+        }
         let mut engine = self.engine.borrow_mut();
         let engine = engine.as_mut().ok_or("session disposed")?;
-        let result = self.bridges.run(engine.turn(), |js| js.with_context(|ctx| self.shell.dispatch_popup_dismiss(&ctx, id)));
+        let result = self.bridges.run(engine.turn(), |js| {
+            js.with_context(|ctx| self.shell.dispatch_popup_dismiss(&ctx, id))
+        });
         self.mark_reported(self.check_contract())?;
         result.map_err(|error| self.diagnostic(error).into())
     }
 
     /// Settle active jobs, retire the shell window and its child popups, and notify its owner.
     pub(crate) fn close_window(&self, id: u32, close: impl FnOnce() -> Result<()>) -> Result<()> {
-        if self.shutdown_started.get() { return close(); }
+        if self.shutdown_started.get() {
+            return close();
+        }
         self.settle_popup_jobs()?;
         close()?;
         self.settle_popup_jobs()?;
-        if !self.shell.owns_window(id) { return Ok(()); }
+        if !self.shell.owns_window(id) {
+            return Ok(());
+        }
         let mut engine = self.engine.borrow_mut();
         let engine = engine.as_mut().ok_or("session disposed")?;
-        let result = self.bridges.run(engine.turn(), |js| js.with_context(|ctx| self.shell.dispatch_window_close(&ctx, id)));
+        let result = self.bridges.run(engine.turn(), |js| {
+            js.with_context(|ctx| self.shell.dispatch_window_close(&ctx, id))
+        });
         self.mark_reported(self.check_contract())?;
         result.map_err(|error| self.diagnostic(error).into())
     }
@@ -882,12 +1214,17 @@ impl Session {
         while engine.is_job_pending() {
             if remaining == 0 || Instant::now() >= end {
                 return Err(js_runtime::Diagnostic {
-                    kind: js_runtime::DiagnosticKind::BudgetExceeded, phase: "popup dismissal",
+                    kind: js_runtime::DiagnosticKind::BudgetExceeded,
+                    phase: "popup dismissal",
                     message: "pending jobs did not settle before the next popup phase".into(),
-                    stack: None, generated_stack: None,
-                }.into());
+                    stack: None,
+                    generated_stack: None,
+                }
+                .into());
             }
-            if let Err(error) = self.bridges.run(engine.turn(), |js| js.execute_job(end.saturating_duration_since(Instant::now()))) {
+            if let Err(error) = self.bridges.run(engine.turn(), |js| {
+                js.execute_job(end.saturating_duration_since(Instant::now()))
+            }) {
                 self.mark_reported(self.check_contract())?;
                 return Err(self.diagnostic(error).into());
             }
@@ -899,17 +1236,28 @@ impl Session {
 
     /// Leave staged lock commands queued while the current checkpoint has more JS jobs to check.
     pub(crate) fn lock_commands_ready(&self) -> bool {
-        !self.shutdown_started.get() && self.fault.borrow().is_none()
-            && self.engine.borrow().as_ref().is_some_and(|engine| !engine.is_job_pending())
+        !self.shutdown_started.get()
+            && self.fault.borrow().is_none()
+            && self
+                .engine
+                .borrow()
+                .as_ref()
+                .is_some_and(|engine| !engine.is_job_pending())
     }
 
     /// Inspect rejections from synchronous unlock teardown without running any queued jobs.
     pub(crate) fn check_unlock_teardown_rejections(&self) -> Result<()> {
         let mut engine = self.engine.borrow_mut();
         let engine = engine.as_mut().ok_or("session disposed")?;
-        let result = self.with_cleanup(engine, |engine| engine.drain_rejections(RejectionPolicy::Strict).map(|_| ()));
-        let result = self.check_contract().and(result.map_err(SessionError::from));
-        if result.is_err() { self.shell.take_lock_command(); }
+        let result = self.with_cleanup(engine, |engine| {
+            engine.drain_rejections(RejectionPolicy::Strict).map(|_| ())
+        });
+        let result = self
+            .check_contract()
+            .and(result.map_err(SessionError::from));
+        if result.is_err() {
+            self.shell.take_lock_command();
+        }
         self.mark_reported(result)
     }
 
@@ -923,7 +1271,10 @@ impl Session {
         lock_claim: Option<std::sync::Weak<dyn Surface>>,
         blur_slot: Option<Rc<zgui::runtime::BlurSlot>>,
     ) -> Result<()> {
-        let attach = self.shell.attach(id).ok_or("shell surface was closed before attachment")?;
+        let attach = self
+            .shell
+            .attach(id)
+            .ok_or("shell surface was closed before attachment")?;
         let options = ui_bridge::BridgeOptions {
             strict_styles: self.policy.strict_rejections,
             reduced_motion: self.reduced_motion.get(),
@@ -931,7 +1282,15 @@ impl Session {
             defer_stylesheet_install: true,
         };
         let is_lock = lock_claim.is_some();
-        let mut owned = Self::build_region(region, name, surface, self.generation, options, self.waker.clone(), Rc::downgrade(self));
+        let mut owned = Self::build_region(
+            region,
+            name,
+            surface,
+            self.generation,
+            options,
+            self.waker.clone(),
+            Rc::downgrade(self),
+        );
         owned.lock_claim = lock_claim;
         owned.bridge.seed_caps_lock(
             self.surface_caps_lock
@@ -944,7 +1303,12 @@ impl Session {
         self.bridges.add(&owned.bridge);
         self.layers.borrow_mut().insert(id, owned.clone());
         if !is_lock {
-            self.shell.attach_blur_target(id, owned.region.document, owned.bridge.clone(), blur_slot);
+            self.shell.attach_blur_target(
+                id,
+                owned.region.document,
+                owned.bridge.clone(),
+                blur_slot,
+            );
         }
         self.work.add_frame_host(surface, owned.region.host.clone());
         self.install_sheets(&owned);
@@ -953,22 +1317,31 @@ impl Session {
         }
         let is_window = self.shell.owns_window(id);
         if let Some(spec) = self.shell.window_spec(id) {
-            self.window_controls.seed_surface(surface, WindowState {
-                title: spec.title,
-                decorations: spec.decorations,
-                ..WindowState::default()
-            });
+            self.window_controls.seed_surface(
+                surface,
+                WindowState {
+                    title: spec.title,
+                    decorations: spec.decorations,
+                    ..WindowState::default()
+                },
+            );
         }
         let mut engine = self.engine.borrow_mut();
         let engine = engine.as_mut().ok_or("session disposed")?;
-        let result = self.bridges.run(engine.turn(), |js| js.with_context(|ctx| {
-            let callback = attach.restore(&ctx)?;
-            let api = owned.bridge.api(&ctx)?;
-            self.work.install_region_frame_api(&api, owned.region.host.clone())?;
-            self.window_controls.install_region_window_api(&api, surface, is_window)?;
-            let disposer = owned.bridge.mount_shell_region_with_api(&ctx, &callback, api)?;
-            Ok(Persistent::save(&ctx, disposer))
-        }));
+        let result = self.bridges.run(engine.turn(), |js| {
+            js.with_context(|ctx| {
+                let callback = attach.restore(&ctx)?;
+                let api = owned.bridge.api(&ctx)?;
+                self.work
+                    .install_region_frame_api(&api, owned.region.host.clone())?;
+                self.window_controls
+                    .install_region_window_api(&api, surface, is_window)?;
+                let disposer = owned
+                    .bridge
+                    .mount_shell_region_with_api(&ctx, &callback, api)?;
+                Ok(Persistent::save(&ctx, disposer))
+            })
+        });
         match result {
             Ok(disposer) => *owned.disposer.borrow_mut() = Some(disposer),
             Err(error) => {
@@ -985,16 +1358,26 @@ impl Session {
         Ok(())
     }
 
-    pub(crate) fn shell_surface_opened(&self) { self.shell_surfaces.set(self.shell_surfaces.get() + 1); }
+    pub(crate) fn shell_surface_opened(&self) {
+        self.shell_surfaces.set(self.shell_surfaces.get() + 1);
+    }
 
-    pub(crate) fn shell_surface_closed(&self) { self.shell_surfaces.set(self.shell_surfaces.get() - 1); }
+    pub(crate) fn shell_surface_closed(&self) {
+        self.shell_surfaces.set(self.shell_surfaces.get() - 1);
+    }
 
     /// Look up the mounted region (primary or shell surface) matching `surface`.
     pub(crate) fn region_for_surface(&self, surface: SurfaceId) -> Option<Rc<SessionRegion>> {
-        if let Some(primary) = &self.primary && primary.surface == surface {
+        if let Some(primary) = &self.primary
+            && primary.surface == surface
+        {
             return Some(primary.clone());
         }
-        self.layers.borrow().values().find(|owned| owned.surface == surface).cloned()
+        self.layers
+            .borrow()
+            .values()
+            .find(|owned| owned.surface == surface)
+            .cloned()
     }
 
     /// Invoke registered synchronous `onCloseRequest` guards for `surface`.
@@ -1005,9 +1388,9 @@ impl Session {
         }
         let mut engine = self.engine.borrow_mut();
         let engine = engine.as_mut().ok_or("session disposed")?;
-        let result = self.bridges.run(engine.turn(), |js| js.with_context(|ctx| {
-            self.window_controls.dispatch_close_request(&ctx, surface)
-        }));
+        let result = self.bridges.run(engine.turn(), |js| {
+            js.with_context(|ctx| self.window_controls.dispatch_close_request(&ctx, surface))
+        });
         self.mark_reported(self.check_contract())?;
         result.map_err(|error| self.diagnostic(error).into())
     }
@@ -1025,9 +1408,12 @@ impl Session {
         }
         let mut engine = self.engine.borrow_mut();
         let engine = engine.as_mut().ok_or("session disposed")?;
-        let result = self.bridges.run(engine.turn(), |js| js.with_context(|ctx| {
-            self.window_controls.sync_platform_flags(&ctx, surface, fullscreen, maximized, minimized)
-        }));
+        let result = self.bridges.run(engine.turn(), |js| {
+            js.with_context(|ctx| {
+                self.window_controls
+                    .sync_platform_flags(&ctx, surface, fullscreen, maximized, minimized)
+            })
+        });
         self.mark_reported(self.check_contract())?;
         result.map_err(|error| self.diagnostic(error).into())
     }
@@ -1053,15 +1439,24 @@ impl Session {
 
     /// Work that can run now, without waiting for wall time or a fixture deadline.
     pub(crate) fn has_deliverable_work(&self) -> bool {
-        if self.shutdown_started.get() { return false; }
-        let jobs_pending = self.engine.borrow().as_ref().is_some_and(JsRuntime::is_job_pending);
+        if self.shutdown_started.get() {
+            return false;
+        }
+        let jobs_pending = self
+            .engine
+            .borrow()
+            .as_ref()
+            .is_some_and(JsRuntime::is_job_pending);
         // A queued bridge fault requires a checkpoint even without pending jobs.
         self.fault.borrow().is_some() || self.deliverable_work(jobs_pending).unwrap_or(true)
     }
 
     fn deliverable_work(&self, jobs_pending: bool) -> Result<bool> {
         let notifications = self.has_queued_notifications()?;
-        Ok(jobs_pending || notifications || self.activation.has_ready() || self.work.has_deliverable_work()
+        Ok(jobs_pending
+            || notifications
+            || self.activation.has_ready()
+            || self.work.has_deliverable_work()
             || (!self.staged.get() && self.work.has_pending_invocations()))
     }
 
@@ -1098,18 +1493,26 @@ impl Session {
     }
 
     fn activation_surface(&self) -> Option<Arc<dyn Surface>> {
-        if self.shell.lock_is_retained() { return None; }
+        if self.shell.lock_is_retained() {
+            return None;
+        }
         if let Some(primary) = self.primary() {
             return self.platform_surface(primary.surface);
         }
-        self.layers.borrow().iter()
+        self.layers
+            .borrow()
+            .iter()
             .filter(|(id, _)| self.shell.owns_window(**id))
             .find_map(|(_, region)| self.platform_surface(region.surface))
     }
 
     fn redeem_startup_activation(&self) {
-        if self.staged.get() { return; }
-        let Some(token) = &self.policy.launch.token else { return; };
+        if self.staged.get() {
+            return;
+        }
+        let Some(token) = &self.policy.launch.token else {
+            return;
+        };
         let pending = token.borrow().is_some();
         if pending
             && let Some(surface) = self.activation_surface()
@@ -1166,7 +1569,9 @@ impl Session {
     /// Dispose one auxiliary document while the native surface still exists.
     pub(crate) fn detach_layer(&self, id: u32) -> Result<()> {
         self.shell.detach_blur_target(id);
-        let Some(owned) = self.layers.borrow_mut().remove(&id) else { return Ok(()); };
+        let Some(owned) = self.layers.borrow_mut().remove(&id) else {
+            return Ok(());
+        };
         // Disposers can remove sheets from the session set after this region leaves it.
         for (name, _) in self.shell_stylesheets.borrow().iter() {
             owned.region.host.remove_stylesheet(name);
@@ -1180,7 +1585,13 @@ impl Session {
         owned.bridge.dispose();
         self.remove_sheets(&owned);
         self.work.remove_frame_host(&owned.region.host);
-        if scenes != 0 { return Err(format!("E_TEARDOWN: shell surface {:?} retained {scenes} canvas scenes", owned.name).into()); }
+        if scenes != 0 {
+            return Err(format!(
+                "E_TEARDOWN: shell surface {:?} retained {scenes} canvas scenes",
+                owned.name
+            )
+            .into());
+        }
         self.check_contract()?;
         cleanup.map_err(SessionError::from)
     }
@@ -1197,8 +1608,12 @@ impl Session {
     }
 
     fn mount_inner(&self) -> Result<()> {
-        if self.shutdown_started.get() { return Err("cannot mount a retired session".into()); }
-        if self.mount_started.replace(true) { return Err("session mount was already attempted".into()); }
+        if self.shutdown_started.get() {
+            return Err("cannot mount a retired session".into());
+        }
+        if self.mount_started.replace(true) {
+            return Err("session mount was already attempted".into());
+        }
         self.work.mounting();
         self.shell.activate();
         if let Some(primary) = self.primary() {
@@ -1207,15 +1622,17 @@ impl Session {
         }
         let mut engine = self.engine.borrow_mut();
         let engine = engine.as_mut().ok_or("session disposed")?;
-        let mounted = self.bridges.run(engine.turn(), |js| js.with_module(|ctx, module| {
-            let mount: Function = module.get("mount")?;
-            let disposer: Function = if let Some(primary) = self.primary() {
-                mount.call((primary.bridge.root(&ctx)?,))?
-            } else {
-                mount.call(())?
-            };
-            Ok(Persistent::save(&ctx, disposer))
-        }));
+        let mounted = self.bridges.run(engine.turn(), |js| {
+            js.with_module(|ctx, module| {
+                let mount: Function = module.get("mount")?;
+                let disposer: Function = if let Some(primary) = self.primary() {
+                    mount.call((primary.bridge.root(&ctx)?,))?
+                } else {
+                    mount.call(())?
+                };
+                Ok(Persistent::save(&ctx, disposer))
+            })
+        });
         match mounted {
             Ok(disposer) => *self.disposer.borrow_mut() = Some(disposer),
             Err(error) => {
@@ -1229,8 +1646,13 @@ impl Session {
         }
         self.check_contract()?;
         if let Some(package) = self.module.as_package() {
-            let nodes = self.primary().map_or(0, |primary| primary.bridge.live_count());
-            eprintln!("mounted: package={} build={} nodes={nodes}", package.manifest.id, package.manifest.build_id);
+            let nodes = self
+                .primary()
+                .map_or(0, |primary| primary.bridge.live_count());
+            eprintln!(
+                "mounted: package={} build={} nodes={nodes}",
+                package.manifest.id, package.manifest.build_id
+            );
         }
         self.record_live_telemetry(engine);
         self.snapshot();
@@ -1244,24 +1666,38 @@ impl Session {
             zgui_style::preflight_stylesheet(&css).map_err(|error| SessionError::Style {
                 code: "E_STYLE_PROFILE",
                 message: format!("stylesheet {name} rejected"),
-                details: serde_json::to_value(error).expect("native stylesheet diagnostics serialize"),
+                details: serde_json::to_value(error)
+                    .expect("native stylesheet diagnostics serialize"),
             })?;
         }
         Ok(())
     }
 
     fn wake_owner(&self) {
-        let reason = self.primary().map_or(WakeReason::AppWork, |primary|
-            WakeReason::ReactiveWork { surfaces: vec![primary.surface].into_boxed_slice() });
+        let reason =
+            self.primary()
+                .map_or(WakeReason::AppWork, |primary| WakeReason::ReactiveWork {
+                    surfaces: vec![primary.surface].into_boxed_slice(),
+                });
         self.waker.wake(reason);
     }
 
     fn dispatch_step(&self, step: BridgeStep<'_>) -> DispatchOutcome {
-        if self.shutdown_started.get() { return DispatchOutcome::Retired; }
-        let Ok(mut engine) = self.engine.try_borrow_mut() else { return DispatchOutcome::Busy; };
-        let Some(engine) = engine.as_mut() else { return DispatchOutcome::Retired; };
-        if let Err(error) = step.run_turn(engine.turn(), |js, cb| js.with_context(|ctx| cb.call(&ctx))) {
-            let failure = self.contract_failure().map(SessionError::from)
+        if self.shutdown_started.get() {
+            return DispatchOutcome::Retired;
+        }
+        let Ok(mut engine) = self.engine.try_borrow_mut() else {
+            return DispatchOutcome::Busy;
+        };
+        let Some(engine) = engine.as_mut() else {
+            return DispatchOutcome::Retired;
+        };
+        if let Err(error) =
+            step.run_turn(engine.turn(), |js, cb| js.with_context(|ctx| cb.call(&ctx)))
+        {
+            let failure = self
+                .contract_failure()
+                .map(SessionError::from)
                 .unwrap_or_else(|| self.diagnostic(error).into());
             self.fault.borrow_mut().get_or_insert(failure);
         }
@@ -1280,19 +1716,25 @@ impl Session {
         // A native provider guard can throw during any job/event entry. Preserve
         // its typed contract failure even when that entry returned a JS exception.
         let result = self.check_contract().and(result);
-        if result.is_err() { self.shell.take_lock_command(); }
+        if result.is_err() {
+            self.shell.take_lock_command();
+        }
         result
     }
 
     /// Only a mounted generation with a registered live handler accepts CLI requests.
-    pub(crate) fn has_control_handler(&self) -> bool { self.work.has_control_handler() }
+    pub(crate) fn has_control_handler(&self) -> bool {
+        self.work.has_control_handler()
+    }
 
     /// The control listener namespace authorized by this active session's effective capabilities.
     pub(crate) fn control_app_id(&self) -> Option<&str> {
         if self.shutdown_started.get() || !self.effective_capabilities.control_channel {
             return None;
         }
-        self.module.as_package().map(|package| package.manifest.id.as_str())
+        self.module
+            .as_package()
+            .map(|package| package.manifest.id.as_str())
     }
 
     #[cfg(test)]
@@ -1310,95 +1752,187 @@ impl Session {
     }
 
     fn checkpoint_work(&self) -> Result<bool> {
-        if let Some(error) = self.fault.borrow_mut().take() { return Err(error); }
+        if let Some(error) = self.fault.borrow_mut().take() {
+            return Err(error);
+        }
         self.check_contract()?;
         self.has_queued_notifications()?;
-        if self.shutdown_started.get() { return Ok(false); }
-        let Ok(mut engine) = self.engine.try_borrow_mut() else { self.wake_owner(); return Ok(false); };
-        let Some(engine) = engine.as_mut() else { return Ok(false); };
+        if self.shutdown_started.get() {
+            return Ok(false);
+        }
+        let Ok(mut engine) = self.engine.try_borrow_mut() else {
+            self.wake_owner();
+            return Ok(false);
+        };
+        let Some(engine) = engine.as_mut() else {
+            return Ok(false);
+        };
         let end = self.deadline(Instant::now() + engine.limits().job_timeout);
         if Instant::now() >= end {
             return Err(js_runtime::Diagnostic {
-                kind: js_runtime::DiagnosticKind::BudgetExceeded, phase: "checkpoint",
-                message: "enclosing deadline exceeded".into(), stack: None, generated_stack: None,
-            }.into());
+                kind: js_runtime::DiagnosticKind::BudgetExceeded,
+                phase: "checkpoint",
+                message: "enclosing deadline exceeded".into(),
+                stack: None,
+                generated_stack: None,
+            }
+            .into());
         }
         self.redeem_startup_activation();
         let max_jobs = engine.limits().max_jobs_per_pump;
-        let mut worked = false;
+        let mut worked = self.frame_streams().take_changed();
         let mut remaining = [32, 32, 32, max_jobs, 32, 16, 16, 16];
         // Interleave work classes and preserve the next class across deadlines.
         // Ready native work, network floods, and workers must not starve timers or promise jobs.
         while Instant::now() < end && remaining.iter().any(|&count| count != 0) {
             let phase = self.checkpoint_cursor.get();
             self.checkpoint_cursor.set((phase + 1) % remaining.len());
-            if remaining[phase] == 0 { continue; }
+            if remaining[phase] == 0 {
+                continue;
+            }
             remaining[phase] -= 1;
             let attempted = match phase {
-                0 => if self.activation.has_ready() {
-                    self.bridges.run(engine.turn(), |js| js.with_context(|ctx| self.settle_next_activation_token(&ctx)))
-                        .map_err(|error| self.diagnostic(error))?;
-                    true
-                } else if let Some(completion) = self.work.next_completion() {
-                    self.bridges.run(engine.turn(), |js| js.with_context(|ctx| self.work.settle(&ctx, completion)))
-                        .map_err(|error| self.diagnostic(error))?;
-                    true
-                } else if let Some(completion) = self.work.next_clipboard_completion() {
-                    self.bridges.run(engine.turn(), |js| js.with_context(|ctx| self.work.settle_clipboard(&ctx, completion)))
-                        .map_err(|error| self.diagnostic(error))?;
-                    true
-                } else { false },
-                1 => if let Some(call) = self.work.next_call() {
-                    self.bridges.run(engine.turn(), |js| js.with_context(|ctx| {
-                        let callback = call.callback.restore(&ctx)?;
-                        match call.arguments { Arguments::Timer => callback.call::<_, ()>(()), Arguments::Frame(timestamp) => callback.call::<_, ()>((timestamp,)) }
-                    })).map_err(|error| self.diagnostic(error))?;
-                    true
-                } else { false },
-                2 => if let Some((id, owned)) = self.next_notification_region()? {
-                    self.notifications_after.set(id);
-                    owned.bridge.flush_notification(engine.turn(), |js, cb| js.with_context(|ctx| cb.call(&ctx)))
-                        .map_err(|error| self.diagnostic(error))?
-                } else { false },
-                7 => if !self.staged.get() && let Some(activation) = self.work.next_invocation() {
-                    if self.policy.launch.inbox.is_some()
-                        && let Some(surface) = self.activation_surface()
-                        && !activation.token.is_some_and(|token| {
-                            surface.activate_with_token(zgui::platform::ActivationToken::new(token)).is_ok()
-                        })
-                    {
-                        surface.set_minimized(false);
-                        surface.request_attention(true);
+                0 => {
+                    if self.activation.has_ready() {
+                        self.bridges
+                            .run(engine.turn(), |js| {
+                                js.with_context(|ctx| self.settle_next_activation_token(&ctx))
+                            })
+                            .map_err(|error| self.diagnostic(error))?;
+                        true
+                    } else if let Some(completion) = self.work.next_completion() {
+                        self.bridges
+                            .run(engine.turn(), |js| {
+                                js.with_context(|ctx| self.work.settle(&ctx, completion))
+                            })
+                            .map_err(|error| self.diagnostic(error))?;
+                        true
+                    } else if let Some(completion) = self.work.next_clipboard_completion() {
+                        self.bridges
+                            .run(engine.turn(), |js| {
+                                js.with_context(|ctx| self.work.settle_clipboard(&ctx, completion))
+                            })
+                            .map_err(|error| self.diagnostic(error))?;
+                        true
+                    } else {
+                        false
                     }
-                    self.bridges.run(engine.turn(), |js| js.with_context(|ctx| self.work.deliver_invocation(&ctx, &activation.info)))
-                        .map_err(|error| self.diagnostic(error))?;
-                    true
-                } else { false },
-                4 => if let Some(event) = self.work.next_external() {
-                    self.bridges.run(engine.turn(), |js| js.with_context(|ctx| self.work.settle_external(&ctx, event)))
-                        .map_err(|error| self.diagnostic(error))?;
-                    true
-                } else if let Some((db_id, event)) = self.work.next_sqlite_event() {
-                    self.bridges.run(engine.turn(), |js| js.with_context(|ctx| self.work.settle_sqlite(&ctx, db_id, event)))
-                        .map_err(|error| self.diagnostic(error))?;
-                    true
-                } else if let Some(event) = self.work.next_file_event() {
-                    self.bridges.run(engine.turn(), |js| js.with_context(|ctx| self.work.settle_file_event(&ctx, event)))
-                        .map_err(|error| self.diagnostic(error))?;
-                    true
-                } else if let Some(event) = self.work.next_system_file_event() {
-                    self.bridges.run(engine.turn(), |js| js.with_context(|ctx| self.work.settle_system_file_event(&ctx, event)))
-                        .map_err(|error| self.diagnostic(error))?;
-                    true
-                } else { false },
-                5 => if let Some(event) = self.work.next_network_event() {
-                    self.bridges.run(engine.turn(), |js| js.with_context(|ctx| self.work.settle_network_event(&ctx, event)))
-                        .map_err(|error| self.diagnostic(error))?;
-                    true
-                } else { false },
+                }
+                1 => {
+                    if let Some(call) = self.work.next_call() {
+                        self.bridges
+                            .run(engine.turn(), |js| {
+                                js.with_context(|ctx| {
+                                    let callback = call.callback.restore(&ctx)?;
+                                    match call.arguments {
+                                        Arguments::Timer => callback.call::<_, ()>(()),
+                                        Arguments::Frame(timestamp) => {
+                                            callback.call::<_, ()>((timestamp,))
+                                        }
+                                    }
+                                })
+                            })
+                            .map_err(|error| self.diagnostic(error))?;
+                        true
+                    } else {
+                        false
+                    }
+                }
+                2 => {
+                    if let Some((id, owned)) = self.next_notification_region()? {
+                        self.notifications_after.set(id);
+                        owned
+                            .bridge
+                            .flush_notification(engine.turn(), |js, cb| {
+                                js.with_context(|ctx| cb.call(&ctx))
+                            })
+                            .map_err(|error| self.diagnostic(error))?
+                    } else {
+                        false
+                    }
+                }
+                7 => {
+                    if !self.staged.get()
+                        && let Some(activation) = self.work.next_invocation()
+                    {
+                        if self.policy.launch.inbox.is_some()
+                            && let Some(surface) = self.activation_surface()
+                            && !activation.token.is_some_and(|token| {
+                                surface
+                                    .activate_with_token(zgui::platform::ActivationToken::new(
+                                        token,
+                                    ))
+                                    .is_ok()
+                            })
+                        {
+                            surface.set_minimized(false);
+                            surface.request_attention(true);
+                        }
+                        self.bridges
+                            .run(engine.turn(), |js| {
+                                js.with_context(|ctx| {
+                                    self.work.deliver_invocation(&ctx, &activation.info)
+                                })
+                            })
+                            .map_err(|error| self.diagnostic(error))?;
+                        true
+                    } else {
+                        false
+                    }
+                }
+                4 => {
+                    if let Some(event) = self.work.next_external() {
+                        self.bridges
+                            .run(engine.turn(), |js| {
+                                js.with_context(|ctx| self.work.settle_external(&ctx, event))
+                            })
+                            .map_err(|error| self.diagnostic(error))?;
+                        true
+                    } else if let Some((db_id, event)) = self.work.next_sqlite_event() {
+                        self.bridges
+                            .run(engine.turn(), |js| {
+                                js.with_context(|ctx| self.work.settle_sqlite(&ctx, db_id, event))
+                            })
+                            .map_err(|error| self.diagnostic(error))?;
+                        true
+                    } else if let Some(event) = self.work.next_file_event() {
+                        self.bridges
+                            .run(engine.turn(), |js| {
+                                js.with_context(|ctx| self.work.settle_file_event(&ctx, event))
+                            })
+                            .map_err(|error| self.diagnostic(error))?;
+                        true
+                    } else if let Some(event) = self.work.next_system_file_event() {
+                        self.bridges
+                            .run(engine.turn(), |js| {
+                                js.with_context(|ctx| {
+                                    self.work.settle_system_file_event(&ctx, event)
+                                })
+                            })
+                            .map_err(|error| self.diagnostic(error))?;
+                        true
+                    } else {
+                        false
+                    }
+                }
+                5 => {
+                    if let Some(event) = self.work.next_network_event() {
+                        self.bridges
+                            .run(engine.turn(), |js| {
+                                js.with_context(|ctx| self.work.settle_network_event(&ctx, event))
+                            })
+                            .map_err(|error| self.diagnostic(error))?;
+                        true
+                    } else {
+                        false
+                    }
+                }
                 6 => match self.work.next_worker_step() {
                     Some(crate::work::WorkerStep::Delivery(delivery)) => {
-                        self.bridges.run(engine.turn(), |js| js.with_context(|ctx| self.work.settle_worker_event(&ctx, delivery)))
+                        self.bridges
+                            .run(engine.turn(), |js| {
+                                js.with_context(|ctx| self.work.settle_worker_event(&ctx, delivery))
+                            })
                             .map_err(|error| self.diagnostic(error))?;
                         true
                     }
@@ -1407,35 +1941,59 @@ impl Session {
                 },
                 _ => {
                     let job_budget = engine.limits().job_timeout;
-                    self.bridges.run(engine.turn(), |js| js.execute_job(job_budget))
+                    self.bridges
+                        .run(engine.turn(), |js| js.execute_job(job_budget))
                         .map_err(|error| self.diagnostic(error))?
                 }
             };
-            if attempted { worked = true; } else { remaining[phase] = 0; }
+            if attempted {
+                worked = true;
+            } else {
+                remaining[phase] = 0;
+            }
         }
-        let policy = if self.strict_rejections() { RejectionPolicy::Strict } else { RejectionPolicy::Log };
-        let drain = engine.drain_rejections(policy).map_err(|error| self.diagnostic(error))?;
+        let policy = if self.strict_rejections() {
+            RejectionPolicy::Strict
+        } else {
+            RejectionPolicy::Log
+        };
+        let drain = engine
+            .drain_rejections(policy)
+            .map_err(|error| self.diagnostic(error))?;
         worked |= !drain.updates.is_empty();
         if policy == RejectionPolicy::Log {
             if drain.dropped_rejections != 0 {
-                eprintln!("promise-rejection: evicted={} (tracking limit)", drain.dropped_rejections);
+                eprintln!(
+                    "promise-rejection: evicted={} (tracking limit)",
+                    drain.dropped_rejections
+                );
             }
             for rejection in drain.updates {
                 let diagnostic = self.diagnostic(rejection.diagnostic);
-                eprintln!("promise-rejection: id={} handled={} {diagnostic}", rejection.id, rejection.handled);
+                eprintln!(
+                    "promise-rejection: id={} handled={} {diagnostic}",
+                    rejection.id, rejection.handled
+                );
             }
         }
         self.check_contract()?;
         let jobs_pending = engine.is_job_pending();
-        if !jobs_pending { self.shell.clear_cleanup_jobs_pending(); }
-        if self.deliverable_work(jobs_pending)? { self.wake_owner(); }
+        if !jobs_pending {
+            self.shell.clear_cleanup_jobs_pending();
+        }
+        if self.deliverable_work(jobs_pending)? {
+            self.wake_owner();
+        }
         Ok(worked)
     }
 
     fn has_queued_notifications(&self) -> Result<bool> {
         let mut queued = false;
         for owned in self.primary.iter().chain(self.layers.borrow().values()) {
-            queued |= owned.bridge.has_queued_notifications().map_err(|error| error.to_string())?;
+            queued |= owned
+                .bridge
+                .has_queued_notifications()
+                .map_err(|error| error.to_string())?;
         }
         Ok(queued)
     }
@@ -1445,10 +2003,17 @@ impl Session {
         let layers = self.layers.borrow();
         use std::ops::Bound::{Excluded, Unbounded};
         let primary = self.primary.iter().map(|owned| (0, owned));
-        for (id, owned) in layers.range((Excluded(previous), Unbounded)).map(|(&id, owned)| (id, owned))
-            .chain(primary).chain(layers.range(..=previous).map(|(&id, owned)| (id, owned)))
+        for (id, owned) in layers
+            .range((Excluded(previous), Unbounded))
+            .map(|(&id, owned)| (id, owned))
+            .chain(primary)
+            .chain(layers.range(..=previous).map(|(&id, owned)| (id, owned)))
         {
-            if owned.bridge.has_queued_notifications().map_err(|error| error.to_string())? {
+            if owned
+                .bridge
+                .has_queued_notifications()
+                .map_err(|error| error.to_string())?
+            {
                 return Ok(Some((id, owned.clone())));
             }
         }
@@ -1456,8 +2021,13 @@ impl Session {
     }
 
     pub(crate) fn frame_checkpoint(&self) {
-        if self.shutdown_started.get() { return; }
-        if let Err(error) = self.checkpoint_inner().and_then(|_| self.reconcile_inert_drags()) {
+        if self.shutdown_started.get() {
+            return;
+        }
+        if let Err(error) = self
+            .checkpoint_inner()
+            .and_then(|_| self.reconcile_inert_drags())
+        {
             *self.fault.borrow_mut() = Some(error);
             self.wake_owner();
         }
@@ -1471,7 +2041,10 @@ impl Session {
     }
 
     pub(crate) fn diagnostic(&self, error: js_runtime::Diagnostic) -> js_runtime::Diagnostic {
-        match self.module.as_package() { Some(package) => package.remap_diagnostic(error), None => error }
+        match self.module.as_package() {
+            Some(package) => package.remap_diagnostic(error),
+            None => error,
+        }
     }
 
     fn strict_rejections(&self) -> bool {
@@ -1479,28 +2052,55 @@ impl Session {
     }
 
     fn deadline(&self, end: Instant) -> Instant {
-        match &self.policy.deadline { Some(deadline) => end.min(deadline.get()), None => end }
+        match &self.policy.deadline {
+            Some(deadline) => end.min(deadline.get()),
+            None => end,
+        }
     }
 
     /// A provider violation is sticky: catching the JavaScript exception cannot
     /// turn an attempted live-service access into a successful preview.
-    pub(crate) fn contract_failure(&self) -> Option<ContractFailure> { self.shell.failure().or_else(|| self.work.contract_failure()) }
+    pub(crate) fn contract_failure(&self) -> Option<ContractFailure> {
+        self.shell
+            .failure()
+            .or_else(|| self.work.contract_failure())
+    }
 
     fn check_contract(&self) -> Result<()> {
-        if let Some(failure) = self.contract_failure() { return Err(failure.into()); }
+        if let Some(failure) = self.contract_failure() {
+            return Err(failure.into());
+        }
         // Shell sheets validate synchronously, so a JS exception must not mask their strict fault.
-        if let Some(failure) = self.fault.borrow_mut().take_if(|error| matches!(error, SessionError::Style { .. })) {
+        if let Some(failure) = self
+            .fault
+            .borrow_mut()
+            .take_if(|error| matches!(error, SessionError::Style { .. }))
+        {
             return Err(failure);
         }
         let mut failure = None;
-        for diagnostic in self.primary.iter().chain(self.layers.borrow().values()).flat_map(|owned| owned.bridge.take_style_diagnostics()) {
-            eprintln!("style-diagnostic: {}: {}", diagnostic.code, diagnostic.message);
+        for diagnostic in self
+            .primary
+            .iter()
+            .chain(self.layers.borrow().values())
+            .flat_map(|owned| owned.bridge.take_style_diagnostics())
+        {
+            eprintln!(
+                "style-diagnostic: {}: {}",
+                diagnostic.code, diagnostic.message
+            );
             if self.policy.strict_rejections && failure.is_none() {
-                failure = Some(SessionError::Style { code: "E_STYLE", message: diagnostic.message,
-                    details: serde_json::json!({"code":diagnostic.code}) });
+                failure = Some(SessionError::Style {
+                    code: "E_STYLE",
+                    message: diagnostic.message,
+                    details: serde_json::json!({"code":diagnostic.code}),
+                });
             }
         }
-        match failure { Some(failure) => Err(failure), None => Ok(()) }
+        match failure {
+            Some(failure) => Err(failure),
+            None => Ok(()),
+        }
     }
 
     /// Integration harness entries ('advance', 'external') run as one bridge
@@ -1512,13 +2112,17 @@ impl Session {
     }
 
     fn invoke_inner(&self, export: &str) -> Result<()> {
-        if self.shutdown_started.get() { return Err("cannot invoke a retired session".into()); }
+        if self.shutdown_started.get() {
+            return Err("cannot invoke a retired session".into());
+        }
         let mut engine = self.engine.borrow_mut();
         let engine = engine.as_mut().ok_or("session disposed")?;
-        let result = self.bridges.run(engine.turn(), |js| js.with_module(|_, module| {
-            let callback: Function = module.get(export)?;
-            callback.call::<_, ()>(())
-        }));
+        let result = self.bridges.run(engine.turn(), |js| {
+            js.with_module(|_, module| {
+                let callback: Function = module.get(export)?;
+                callback.call::<_, ()>(())
+            })
+        });
         match result {
             Ok(()) => {}
             Err(error) => {
@@ -1532,13 +2136,28 @@ impl Session {
     }
 
     pub(crate) fn record_fault(&self, error: SessionError) {
-        if self.shutdown_started.get() { return; }
+        if self.shutdown_started.get() {
+            return;
+        }
         *self.fault.borrow_mut() = Some(error);
         self.wake_owner();
     }
 
-    pub(crate) fn stylesheet_rejected(&self, name: &str, diagnostics: zgui_style::CssDiagnostics) -> String {
-        let message = diagnostics.iter().map(|diagnostic| format!("{}:{}: {}", diagnostic.location.line, diagnostic.location.column, diagnostic.message)).collect::<Vec<_>>().join("; ");
+    pub(crate) fn stylesheet_rejected(
+        &self,
+        name: &str,
+        diagnostics: zgui_style::CssDiagnostics,
+    ) -> String {
+        let message = diagnostics
+            .iter()
+            .map(|diagnostic| {
+                format!(
+                    "{}:{}: {}",
+                    diagnostic.location.line, diagnostic.location.column, diagnostic.message
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("; ");
         self.report_stylesheet_rejection(name, "STYLESHEET_PARSE_INVALID", &message);
         message
     }
@@ -1555,19 +2174,34 @@ impl Session {
         }
     }
 
-    pub(crate) fn package(&self) -> Option<&Rc<Package>> { self.module.as_package() }
-    pub(crate) fn image_blobs(&self) -> &ImageBlobs { self.work.image_blobs() }
+    pub(crate) fn package(&self) -> Option<&Rc<Package>> {
+        self.module.as_package()
+    }
+    pub(crate) fn image_blobs(&self) -> &ImageBlobs {
+        self.work.image_blobs()
+    }
+    pub(crate) fn frame_streams(&self) -> &Rc<crate::frame_stream::Streams> {
+        &self.work.frame_streams
+    }
 
     /// The generation's resolved path authority.
     #[must_use]
-    pub(crate) fn resolved_capabilities(&self) -> &ResolvedCapabilities { self.work.resolved_capabilities() }
-    pub(crate) fn fixture_image_files(&self) -> impl Iterator<Item = (String, Arc<[u8]>)> + '_ {
-        self.policy.assets.fixture_image_files(self.module.as_package().map(Rc::as_ref))
+    pub(crate) fn resolved_capabilities(&self) -> &ResolvedCapabilities {
+        self.work.resolved_capabilities()
     }
-    pub(crate) fn relinquish_stylesheets(&self) { self.stylesheet_installed.set(false); }
+    pub(crate) fn fixture_image_files(&self) -> impl Iterator<Item = (String, Arc<[u8]>)> + '_ {
+        self.policy
+            .assets
+            .fixture_image_files(self.module.as_package().map(Rc::as_ref))
+    }
+    pub(crate) fn relinquish_stylesheets(&self) {
+        self.stylesheet_installed.set(false);
+    }
 
     pub(crate) fn restore_stylesheets(&self) {
-        if let Some(primary) = self.primary() { self.install_sheets(primary); }
+        if let Some(primary) = self.primary() {
+            self.install_sheets(primary);
+        }
     }
 
     pub(crate) fn active_package(&self) -> Option<Rc<Package>> {
@@ -1581,7 +2215,9 @@ impl Session {
         let mut font_families = std::collections::BTreeSet::new();
         for (index, sheet) in candidate.styles.iter().enumerate() {
             let name = format!("application:{index}");
-            if let Err(message) = zgui::runtime::image_policy::audit_stylesheet_image_urls(&sheet.css) {
+            if let Err(message) =
+                zgui::runtime::image_policy::audit_stylesheet_image_urls(&sheet.css)
+            {
                 self.report_stylesheet_rejection(&name, "STYLESHEET_IMAGE_URL_FORBIDDEN", message);
                 return Err(SessionError::Style {
                     code: "E_STYLE_PROFILE",
@@ -1595,7 +2231,8 @@ impl Session {
                     return Err(SessionError::Style {
                         code: "E_STYLE_PROFILE",
                         message: format!("stylesheet {name} rejected"),
-                        details: serde_json::to_value(diagnostics).expect("native stylesheet diagnostics serialize"),
+                        details: serde_json::to_value(diagnostics)
+                            .expect("native stylesheet diagnostics serialize"),
                     });
                 }
             }
@@ -1611,15 +2248,26 @@ impl Session {
         }
         let previous_len = self.active_styles.borrow().len();
         let next_styles = match &self.policy.extension_overlay {
-            Some(overlay) if !overlay.styles.is_empty() => candidate.styles.iter().chain(overlay.styles.iter()).cloned().collect(),
+            Some(overlay) if !overlay.styles.is_empty() => candidate
+                .styles
+                .iter()
+                .chain(overlay.styles.iter())
+                .cloned()
+                .collect(),
             _ => Arc::clone(&candidate.styles),
         };
         for owned in self.primary.iter().chain(self.layers.borrow().values()) {
             for (index, sheet) in next_styles.iter().enumerate() {
-                owned.region.host.install_stylesheet(&format!("application:{index}"), &sheet.css);
+                owned
+                    .region
+                    .host
+                    .install_stylesheet(&format!("application:{index}"), &sheet.css);
             }
             for index in next_styles.len()..previous_len {
-                owned.region.host.remove_stylesheet(&format!("application:{index}"));
+                owned
+                    .region
+                    .host
+                    .remove_stylesheet(&format!("application:{index}"));
             }
         }
         *self.active_styles.borrow_mut() = next_styles;
@@ -1629,28 +2277,44 @@ impl Session {
 
     fn install_sheets(&self, owned: &SessionRegion) {
         for (index, sheet) in self.active_styles.borrow().iter().enumerate() {
-            owned.region.host.install_stylesheet(&format!("application:{index}"), &sheet.css);
+            owned
+                .region
+                .host
+                .install_stylesheet(&format!("application:{index}"), &sheet.css);
         }
     }
 
     fn remove_sheets(&self, owned: &SessionRegion) {
         for index in 0..self.active_styles.borrow().len() {
-            owned.region.host.remove_stylesheet(&format!("application:{index}"));
+            owned
+                .region
+                .host
+                .remove_stylesheet(&format!("application:{index}"));
         }
     }
 
     /// Validates before changing the shared sheet, even when no mount region exists.
-    pub(crate) fn install_shell_stylesheet(&self, name: String, css: String) -> std::result::Result<(), String> {
+    pub(crate) fn install_shell_stylesheet(
+        &self,
+        name: String,
+        css: String,
+    ) -> std::result::Result<(), String> {
         let mut sheets = self.shell_stylesheets.borrow_mut();
         let current = sheets.iter_mut().find(|(key, _)| key == &name);
-        if current.as_ref().is_some_and(|(_, installed)| installed == &css) { return Ok(()); }
+        if current
+            .as_ref()
+            .is_some_and(|(_, installed)| installed == &css)
+        {
+            return Ok(());
+        }
         if self.module.as_package().is_some()
             && let Err(message) = zgui::runtime::image_policy::audit_stylesheet_image_urls(&css)
         {
             self.report_stylesheet_rejection(&name, "STYLESHEET_IMAGE_URL_FORBIDDEN", message);
             return Err(message.to_owned());
         }
-        zgui_style::preflight_stylesheet(&css).map_err(|diagnostics| self.stylesheet_rejected(&name, diagnostics))?;
+        zgui_style::preflight_stylesheet(&css)
+            .map_err(|diagnostics| self.stylesheet_rejected(&name, diagnostics))?;
         for owned in self.primary.iter().chain(self.layers.borrow().values()) {
             owned.region.host.install_stylesheet(&name, &css);
         }
@@ -1664,7 +2328,9 @@ impl Session {
     /// Removes the sheet from both current windows and the set inherited by future windows.
     pub(crate) fn remove_shell_stylesheet(&self, name: &str) {
         let mut sheets = self.shell_stylesheets.borrow_mut();
-        let Some(index) = sheets.iter().position(|(key, _)| key == name) else { return; };
+        let Some(index) = sheets.iter().position(|(key, _)| key == name) else {
+            return;
+        };
         sheets.remove(index);
         for owned in self.primary.iter().chain(self.layers.borrow().values()) {
             owned.region.host.remove_stylesheet(name);
@@ -1673,7 +2339,9 @@ impl Session {
 
     fn clear_shell_stylesheets(&self) {
         let sheets = std::mem::take(&mut *self.shell_stylesheets.borrow_mut());
-        if sheets.is_empty() { return; }
+        if sheets.is_empty() {
+            return;
+        }
         for owned in self.primary.iter().chain(self.layers.borrow().values()) {
             for (name, _) in &sheets {
                 owned.region.host.remove_stylesheet(name);
@@ -1684,30 +2352,52 @@ impl Session {
     pub(crate) fn remove_surplus_stylesheets(&self, successor: &Self) {
         if let Some(primary) = self.primary() {
             for index in successor.active_styles.borrow().len()..self.active_styles.borrow().len() {
-                primary.region.host.remove_stylesheet(&format!("application:{index}"));
+                primary
+                    .region
+                    .host
+                    .remove_stylesheet(&format!("application:{index}"));
             }
         }
     }
 
     #[cfg(test)]
-    fn surface(&self) -> SurfaceId { self.primary().expect("test session has a primary surface").surface }
+    fn surface(&self) -> SurfaceId {
+        self.primary()
+            .expect("test session has a primary surface")
+            .surface
+    }
 
     pub(crate) fn validate_font_families(&self, window: &zgui::runtime::Window) -> Result<()> {
-        let Some(owned) = self.mount_region(window.document_id()) else { return Ok(()); };
-        let revision = (window.dom().revision(), window.style_revision(), window.surface_configures(), window.color_scheme());
-        if owned.font_validation_revision.get() == Some(revision) { return Ok(()); }
+        let Some(owned) = self.mount_region(window.document_id()) else {
+            return Ok(());
+        };
+        let revision = (
+            window.dom().revision(),
+            window.style_revision(),
+            window.surface_configures(),
+            window.color_scheme(),
+        );
+        if owned.font_validation_revision.get() == Some(revision) {
+            return Ok(());
+        }
         let layout = window.layout().borrow();
         let mut missing = std::collections::BTreeSet::new();
         for node in owned.bridge.snapshot(100_000).nodes {
-            let Some(key) = zgui_view_dom::id::to_document(node.native) else { continue; };
+            let Some(key) = zgui_view_dom::id::to_document(node.native) else {
+                continue;
+            };
             for box_id in layout.boxes_of(key) {
-                let Some(node) = layout.get(*box_id) else { continue; };
+                let Some(node) = layout.get(*box_id) else {
+                    continue;
+                };
                 let entries = zgui_text_style::lower::font::family(node.style.get_font());
                 if self.policy.strict_rejections {
                     for family in entries.entries() {
                         if let zgui_text_style::FamilyName::Named(name) = family {
                             let name = name.as_str();
-                            if !is_css_generic_font_family(name) && !owned.region.fonts.contains_family(name) {
+                            if !is_css_generic_font_family(name)
+                                && !owned.region.fonts.contains_family(name)
+                            {
                                 missing.insert(name.to_owned());
                             }
                         }
@@ -1717,14 +2407,17 @@ impl Session {
                         zgui_text_style::FamilyName::Generic(_) => true,
                         zgui_text_style::FamilyName::Named(name) => {
                             let name = name.as_str();
-                            is_css_generic_font_family(name) || owned.region.fonts.contains_family(name)
+                            is_css_generic_font_family(name)
+                                || owned.region.fonts.contains_family(name)
                         }
                     });
                     if !resolves_cleanly {
                         for family in entries.entries() {
                             if let zgui_text_style::FamilyName::Named(name) = family {
                                 let name = name.as_str();
-                                if !is_css_generic_font_family(name) && !owned.region.fonts.contains_family(name) {
+                                if !is_css_generic_font_family(name)
+                                    && !owned.region.fonts.contains_family(name)
+                                {
                                     missing.insert(name.to_owned());
                                 }
                             }
@@ -1736,7 +2429,11 @@ impl Session {
         for family in missing {
             let message = format!("FONT_FAMILY_UNREGISTERED: {family:?} is not registered");
             if self.policy.strict_rejections {
-                return Err(SessionError::Style { code: "E_FONT_FAMILY", message, details: serde_json::Value::Null });
+                return Err(SessionError::Style {
+                    code: "E_FONT_FAMILY",
+                    message,
+                    details: serde_json::Value::Null,
+                });
             }
             if self.reported_unregistered_fonts.borrow_mut().insert(family) {
                 eprintln!("style-diagnostic: {message}");
@@ -1748,7 +2445,11 @@ impl Session {
 
     #[cfg(test)]
     pub(crate) fn reported_unregistered_fonts(&self) -> Vec<String> {
-        self.reported_unregistered_fonts.borrow().iter().cloned().collect()
+        self.reported_unregistered_fonts
+            .borrow()
+            .iter()
+            .cloned()
+            .collect()
     }
 
     fn snapshot(&self) {
@@ -1783,26 +2484,45 @@ impl Session {
         counts
     }
 
-    fn cleanup(&self, disposer: Option<Persistent<Function<'static>>>) -> std::result::Result<(), js_runtime::Diagnostic> {
-        let Some(disposer) = disposer else { return Ok(()); };
+    fn cleanup(
+        &self,
+        disposer: Option<Persistent<Function<'static>>>,
+    ) -> std::result::Result<(), js_runtime::Diagnostic> {
+        let Some(disposer) = disposer else {
+            return Ok(());
+        };
         let mut engine = self.engine.borrow_mut();
-        let Some(engine) = engine.as_mut() else { return Ok(()); };
+        let Some(engine) = engine.as_mut() else {
+            return Ok(());
+        };
         self.with_cleanup(engine, |engine| {
             let call = |ctx: rquickjs::Ctx<'_>| disposer.restore(&ctx)?.call::<_, ()>(());
             // Cleanup may still release process/image leases after the native bridges faulted.
-            if self.primary.iter().chain(self.layers.borrow().values()).any(|owned| owned.bridge.is_disposed()) {
+            if self
+                .primary
+                .iter()
+                .chain(self.layers.borrow().values())
+                .any(|owned| owned.bridge.is_disposed())
+            {
                 engine.with_cleanup_context(call)
             } else {
-                self.bridges.run(engine.turn(), |js| js.with_cleanup_context(call))
+                self.bridges
+                    .run(engine.turn(), |js| js.with_cleanup_context(call))
             }
         })
     }
 
-    fn with_cleanup(&self, engine: &mut JsRuntime, cleanup: impl FnOnce(&mut JsRuntime) -> std::result::Result<(), js_runtime::Diagnostic>) -> std::result::Result<(), js_runtime::Diagnostic> {
+    fn with_cleanup(
+        &self,
+        engine: &mut JsRuntime,
+        cleanup: impl FnOnce(&mut JsRuntime) -> std::result::Result<(), js_runtime::Diagnostic>,
+    ) -> std::result::Result<(), js_runtime::Diagnostic> {
         self.shell.with_cleanup(|| {
             let result = cleanup(engine);
             // Keep synchronous cleanup restrictions active in queued continuations.
-            if engine.is_job_pending() { self.shell.mark_cleanup_jobs_pending(); }
+            if engine.is_job_pending() {
+                self.shell.mark_cleanup_jobs_pending();
+            }
             result.map_err(|error| self.diagnostic(error))
         })
     }
@@ -1815,11 +2535,15 @@ impl Session {
         }
     }
 
-    pub(crate) fn is_retired(&self) -> bool { self.shutdown_started.get() }
+    pub(crate) fn is_retired(&self) -> bool {
+        self.shutdown_started.get()
+    }
 
     /// Dispose JavaScript while native mount regions still exist, visiting popup children first.
     pub(crate) fn dispose(&self, popups_in_close_order: impl IntoIterator<Item = u32>) {
-        if self.retired.borrow().is_some() { return; }
+        if self.retired.borrow().is_some() {
+            return;
+        }
         let before = self.counts();
         let pre_dispose_snapshot = self.engine.borrow().as_ref().map(|engine| {
             let live_heap = engine.memory_usage_bytes();
@@ -1832,7 +2556,10 @@ impl Session {
                 process_memory: sample_process_memory(),
             }
         });
-        self.telemetry.set(RuntimeTelemetry::merge(self.telemetry.get(), pre_dispose_snapshot));
+        self.telemetry.set(RuntimeTelemetry::merge(
+            self.telemetry.get(),
+            pre_dispose_snapshot,
+        ));
         self.shutdown_started.set(true);
         self.hide_lock_ui();
         self.bridges.begin_stop();
@@ -1841,7 +2568,11 @@ impl Session {
         self.fault.borrow_mut().take();
         let mut cleanup_error = None;
         for id in popups_in_close_order {
-            let disposer = self.layers.borrow().get(&id).and_then(|owned| owned.disposer.borrow_mut().take());
+            let disposer = self
+                .layers
+                .borrow()
+                .get(&id)
+                .and_then(|owned| owned.disposer.borrow_mut().take());
             if let Err(error) = self.cleanup(disposer) {
                 cleanup_error.get_or_insert(error);
             }
@@ -1854,12 +2585,15 @@ impl Session {
                 cleanup_error.get_or_insert(error);
             }
         }
-        if self.strict_rejections() && let Some(engine) = self.engine.borrow_mut().as_mut()
+        if self.strict_rejections()
+            && let Some(engine) = self.engine.borrow_mut().as_mut()
             && let Err(error) = engine.drain_rejections(RejectionPolicy::Strict)
         {
             cleanup_error.get_or_insert_with(|| self.diagnostic(error));
         }
-        if let Some(error) = &cleanup_error { eprintln!("disposer error: {error}"); }
+        if let Some(error) = &cleanup_error {
+            eprintln!("disposer error: {error}");
+        }
         let active_drags = self.dnd.active_count();
         self.cancel_outbound_drag_on_platform();
         self.dnd.clear();
@@ -1874,10 +2608,18 @@ impl Session {
         self.platform_surfaces.borrow_mut().clear();
         let leaked_work = self.work.finish_stop();
         // Report remaining leases before forced disposal releases the native scenes.
-        let canvas_scenes = self.primary.iter().chain(self.layers.borrow().values())
-            .map(|owned| owned.bridge.canvas_scene_count()).sum();
-        let caps_lock_callbacks: usize = self.primary.iter().chain(self.layers.borrow().values())
-            .map(|owned| owned.bridge.caps_lock_subscriber_count()).sum();
+        let canvas_scenes = self
+            .primary
+            .iter()
+            .chain(self.layers.borrow().values())
+            .map(|owned| owned.bridge.canvas_scene_count())
+            .sum();
+        let caps_lock_callbacks: usize = self
+            .primary
+            .iter()
+            .chain(self.layers.borrow().values())
+            .map(|owned| owned.bridge.caps_lock_subscriber_count())
+            .sum();
         let window_callbacks = self.window_controls.callback_count();
         self.window_controls.clear();
         self.bridges.dispose();
@@ -1888,11 +2630,14 @@ impl Session {
             self.remove_sheets(&owned);
         }
         self.font_leases.borrow_mut().clear();
-        if self.stylesheet_installed.replace(false) && let Some(primary) = self.primary() {
+        if self.stylesheet_installed.replace(false)
+            && let Some(primary) = self.primary()
+        {
             self.remove_sheets(primary);
         }
         let snapshot = self.engine.borrow().as_ref().map(Self::snapshot_telemetry);
-        self.telemetry.set(RuntimeTelemetry::merge(self.telemetry.get(), snapshot));
+        self.telemetry
+            .set(RuntimeTelemetry::merge(self.telemetry.get(), snapshot));
         drop(self.engine.borrow_mut().take());
         let mut counts = self.counts_with_work(leaked_work);
         counts.callbacks += window_callbacks + caps_lock_callbacks;
@@ -1977,20 +2722,30 @@ impl Session {
 
     /// Invoke Phase 2 `onBeforeSessionCommit` callbacks right before predecessor retirement.
     pub(crate) fn invoke_before_commit(&self) {
-        let Some(shell_host) = &self.shell_host else { return; };
+        let Some(shell_host) = &self.shell_host else {
+            return;
+        };
         if self.shutdown_started.get() || !self.mount_started.get() {
             return;
         }
-        let Ok(mut engine) = self.engine.try_borrow_mut() else { return; };
-        let Some(engine) = engine.as_mut() else { return; };
-        if let Err(err) = self.bridges.run(engine.turn(), |js| js.with_context(|ctx| shell_host.invoke_before_commit(&ctx))) {
+        let Ok(mut engine) = self.engine.try_borrow_mut() else {
+            return;
+        };
+        let Some(engine) = engine.as_mut() else {
+            return;
+        };
+        if let Err(err) = self.bridges.run(engine.turn(), |js| {
+            js.with_context(|ctx| shell_host.invoke_before_commit(&ctx))
+        }) {
             eprintln!("before-session-commit-error: {err}");
         }
     }
 
     /// Transition phase and fire Phase 3 `onSessionCommitted` callbacks after predecessor retirement.
     pub(crate) fn notify_session_committed(&self, phase: OverlayPhase) -> Result<()> {
-        let Some(shell_host) = &self.shell_host else { return Ok(()); };
+        let Some(shell_host) = &self.shell_host else {
+            return Ok(());
+        };
         shell_host.set_phase(phase);
         if self.shutdown_started.get() {
             return Err("cannot notify a retired session".into());
@@ -2025,11 +2780,21 @@ impl Session {
     /// Report residual resources after the host has attempted native surface closure.
     pub(crate) fn retire(&self) -> SessionRetirement {
         self.dispose([]);
-        let mut report = self.retired.borrow().as_ref().expect("disposal records retirement").clone();
+        let mut report = self
+            .retired
+            .borrow()
+            .as_ref()
+            .expect("disposal records retirement")
+            .clone();
         report.counts.shell_surfaces = self.shell_surfaces.get();
         if !self.retirement_reported.replace(true) {
             if report.before.engine_alive {
-                eprintln!("session-disposed: generation={} frames={} resources={:?}", self.generation, self.frames.get(), report.counts);
+                eprintln!(
+                    "session-disposed: generation={} frames={} resources={:?}",
+                    self.generation,
+                    self.frames.get(),
+                    report.counts
+                );
             }
             if report.counts != ResourceCounts::default()
                 && let Some(reporter) = &self.policy.teardown_reporter
@@ -2050,7 +2815,8 @@ impl Session {
             js_stack_limit_bytes: engine.stack_limit_bytes(),
             process_memory: None,
         };
-        self.telemetry.set(RuntimeTelemetry::merge(self.telemetry.get(), Some(sample)));
+        self.telemetry
+            .set(RuntimeTelemetry::merge(self.telemetry.get(), Some(sample)));
     }
 
     fn snapshot_telemetry(engine: &JsRuntime) -> RuntimeTelemetry {
@@ -2065,7 +2831,11 @@ impl Session {
         }
     }
 }
-impl Drop for Session { fn drop(&mut self) { let _ = self.retire(); } }
+impl Drop for Session {
+    fn drop(&mut self) {
+        let _ = self.retire();
+    }
+}
 
 fn sample_process_memory() -> Option<ProcessMemory> {
     #[cfg(target_os = "linux")]
@@ -2074,12 +2844,21 @@ fn sample_process_memory() -> Option<ProcessMemory> {
         let mut memory = ProcessMemory::default();
         let mut saw_rss = false;
         for line in text.lines() {
-            let Some((key, rest)) = line.split_once(':') else { continue; };
-            let Some(kb_str) = rest.split_whitespace().next() else { continue; };
-            let Ok(kb) = kb_str.parse::<u64>() else { continue; };
+            let Some((key, rest)) = line.split_once(':') else {
+                continue;
+            };
+            let Some(kb_str) = rest.split_whitespace().next() else {
+                continue;
+            };
+            let Ok(kb) = kb_str.parse::<u64>() else {
+                continue;
+            };
             let bytes = kb.saturating_mul(1024);
             match key {
-                "Rss" => { memory.rss_bytes = bytes; saw_rss = true; }
+                "Rss" => {
+                    memory.rss_bytes = bytes;
+                    saw_rss = true;
+                }
                 "Pss" => memory.pss_bytes = bytes,
                 "Pss_Anon" => memory.pss_anon_bytes = bytes,
                 "Pss_File" => memory.pss_file_bytes = bytes,

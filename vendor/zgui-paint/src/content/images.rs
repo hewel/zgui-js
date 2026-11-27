@@ -94,7 +94,7 @@ pub(crate) enum Content {
         natural: Size<u32, Device>,
     },
     /// A texture somebody else owns, drawn from where it already is.
-    External(ExternalTextureId),
+    External(ExternalTextureId, Option<Size<u32, Device>>),
 }
 
 impl Content {
@@ -143,7 +143,7 @@ impl Content {
     pub(crate) fn is_shared(&self) -> bool {
         match self {
             Self::Decoded { key, .. } | Self::Uploaded { key, .. } => key.handle() & SHARED != 0,
-            Self::External(_) => false,
+            Self::External(..) => false,
         }
     }
 
@@ -188,7 +188,7 @@ impl Content {
     /// budget that claimed it.
     pub(crate) fn held_bytes(&self) -> u64 {
         match self {
-            Self::External(_) | Self::Uploaded { .. } => 0,
+            Self::External(..) | Self::Uploaded { .. } => 0,
             Self::Decoded { texels, mips, .. } => {
                 texels.len() as u64
                     + mips
@@ -220,7 +220,9 @@ pub(crate) fn source_of(
     content: &Content,
 ) -> Result<Option<(Source, Option<AtlasKey>)>, AtlasError> {
     match content {
-        Content::External(texture) => Ok(Some((Source::External(*texture), None))),
+        Content::External(texture, natural) => {
+            Ok(Some((Source::External(*texture, *natural), None)))
+        }
         Content::Uploaded { key, natural, .. } => Ok(atlas.get(*key).map(|tile| {
             (
                 Source::Decoded {
@@ -277,7 +279,19 @@ pub(crate) fn clipped_source_of(
     reference_box: zgui_geom::Rect<zgui_geom::DevicePx, Device>,
 ) -> Result<Option<(Source, Option<AtlasKey>)>, AtlasError> {
     let (base_key, natural, decoded) = match content {
-        Content::External(_) => return source_of(atlas, content),
+        Content::External(texture, natural) => {
+            return match external_mask(atlas, placement, clip_path, reference_box)? {
+                Some((mask, key)) => Ok(Some((
+                    Source::ExternalMasked {
+                        texture: *texture,
+                        natural: *natural,
+                        mask,
+                    },
+                    Some(key),
+                ))),
+                None => source_of(atlas, content),
+            };
+        }
         Content::Uploaded { key, natural } => (*key, *natural, None),
         Content::Decoded {
             key,
@@ -355,6 +369,61 @@ pub(crate) fn clipped_source_of(
         },
         Some(masked_key),
     )))
+}
+
+/// Cache only the shape, not the foreign pixels or their per-frame revision.
+fn external_mask(
+    atlas: &mut Atlas,
+    placement: &crate::emit::replaced::ReplacedPlacement,
+    shape: &crate::lower::ClipPathShape,
+    reference: zgui_geom::Rect<zgui_geom::DevicePx, Device>,
+) -> Result<Option<(zgui_atlas::AtlasTile, AtlasKey)>, AtlasError> {
+    use zgui_geom::{DevicePx, Point, Rect};
+    let target = placement.content_box;
+    let factor = (MAX_CLIPPED_SIDE as f32 / target.size.width.0.max(target.size.height.0)).min(1.0);
+    let w = (target.size.width.0 * factor).round().max(1.0) as u32;
+    let h = (target.size.height.0 * factor).round().max(1.0) as u32;
+    let rx = reference.origin.x.0 - target.origin.x.0;
+    let ry = reference.origin.y.0 - target.origin.y.0;
+    let hash = zgui_scene::ContentHash::new()
+        .u64(shape.hash())
+        .u32(w)
+        .u32(h)
+        .f32s(&[
+            rx,
+            ry,
+            reference.size.width.0,
+            reference.size.height.0,
+            placement.scale,
+            factor,
+        ])
+        .finish();
+    let key = AtlasKey::new((hash & !(SHARED | CLIPPED)) | CLIPPED, TextureKind::Mono);
+    if let Some(tile) = atlas.get(key) {
+        return Ok(Some((tile, key)));
+    }
+    let Some(mask) = shape.rasterize_mask(
+        Rect::new(
+            Point::new(DevicePx(rx * factor), DevicePx(ry * factor)),
+            Size::new(
+                DevicePx(reference.size.width.0 * factor),
+                DevicePx(reference.size.height.0 * factor),
+            ),
+        ),
+        Rect::new(
+            Point::new(DevicePx(0.0), DevicePx(0.0)),
+            Size::new(DevicePx(w as f32), DevicePx(h as f32)),
+        ),
+        placement.scale * factor,
+        w,
+        h,
+    ) else {
+        return Ok(None);
+    };
+    let tile = atlas.get_or_insert(key, Size::new(w as i32, h as i32), || {
+        std::sync::Arc::new(mask)
+    })?;
+    Ok(Some((tile, key)))
 }
 
 /// Bilinearly resamples premultiplied RGBA8 `src` into `out_w x out_h` fitted to `dest`,

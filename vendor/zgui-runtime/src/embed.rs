@@ -79,6 +79,8 @@ pub struct EmbedMaintenanceCx<'a> {
     pub renderer: &'a mut dyn Renderer,
     /// Replaced attachments, for detaching released callback textures.
     pub content: &'a mut ContentCache,
+    /// Intrinsic measurements the removed embed can clear.
+    pub intrinsics: &'a IntrinsicTable,
     /// The same monotonic clock frames use.
     pub timestamp: Timestamp,
 }
@@ -128,6 +130,9 @@ pub trait EmbedHost {
 
     /// Trims resources at a maintenance-only deadline, without producing a frame.
     fn maintain(&mut self, _cx: &mut EmbedMaintenanceCx<'_>) {}
+
+    /// Detaches registrations and intrinsics before this host is replaced or closed.
+    fn detach(&mut self, _cx: &mut EmbedMaintenanceCx<'_>) {}
 
     /// The content cache forgot direct attachments; retained textures must be reattached on sync.
     fn content_forgotten(&mut self) {}

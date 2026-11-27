@@ -14,7 +14,7 @@ packages/ui (TSX / Solid 2.0 / styles.d.ts / primitives / components)
   → vendor/zgui-layout (boxtree, flex/grid/inline layout, TextMap, fragment diff)
   → vendor/zgui-paint (lower, emit, ContentCache/atlas, walk/replay)
   → vendor/zgui-runtime (App, Window frame loop, editing/caret, doc_select, images)
-  → vendor/zgui-platform-{wayland,headless} + unvendored zgui-render-wgpu
+  → vendor/zgui-platform-{wayland,headless} + vendor/zgui-render-wgpu
   → crates/zgui-host (shell surfaces, session host, inspector, dev_banner, bytecode, preview)
 ```
 
@@ -37,7 +37,7 @@ packages/ui (TSX / Solid 2.0 / styles.d.ts / primitives / components)
 
 ## Vendored Upstream Crates (`vendor/`)
 
-All 15 crates below are excluded from the root Cargo workspace (`Cargo.toml` `[workspace] exclude`) and wired via `[patch."https://github.com/zortax/zgui"]`. Run their tests with `bun run test:vendor` (or `bun run test:vendor <crate>`). Patch rationale and upstream provenance live in [`vendor/README.md`](../../vendor/README.md).
+All 16 crates below are excluded from the root Cargo workspace (`Cargo.toml` `[workspace] exclude`) and wired via `[patch."https://github.com/zortax/zgui"]`. Run their tests with `bun run test:vendor` (or `bun run test:vendor <crate>`). Patch rationale and upstream provenance live in [`vendor/README.md`](../../vendor/README.md).
 
 | Crate                                       | Owns                                                                          | Key entry files                                                                          |
 | ------------------------------------------- | ----------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
@@ -47,6 +47,7 @@ All 15 crates below are excluded from the root Cargo workspace (`Cargo.toml` `[w
 | `vendor/zgui-style`                         | Stylo cascade, animations, native CSS profile                                 | `tests/stylex_profile.rs`                                                                |
 | `vendor/zgui-layout`                        | Box tree, layout, scroll regions, inline `TextMap`, fragment diff             | `src/boxtree/build.rs`, `src/inline/resolved.rs`, `src/fragment/diff/mod.rs`             |
 | `vendor/zgui-paint`                         | Style lowering, `clip-path`, vector/image emit, atlas cache, emit walk        | `src/lower/clip.rs`, `src/emit/vector/mod.rs`, `src/content/cache.rs`, `src/walk/mod.rs` |
+| `vendor/zgui-render-wgpu`                   | GPU composition, frame upload, Vulkan DMA-BUF import                          | `src/frame_texture.rs`, `src/dmabuf.rs`, `src/renderer/draw.rs`                          |
 | `vendor/zgui-scroll`                        | Scroll physics, chaining, overscroll                                          | `src/scroller/`                                                                          |
 | `vendor/zgui-text-parley`                   | Parley/fontique text shaping & CJK-safe glyph rasterization                   | `src/raster/glyphs.rs`, `src/shape/glyphs.rs`                                            |
 | `vendor/zgui-view` / `vendor/zgui-view-dom` | Reactive views & DOM observations                                             | `src/lib.rs`                                                                             |
@@ -60,6 +61,6 @@ All 15 crates below are excluded from the root Cargo workspace (`Cargo.toml` `[w
 
 These live in the pinned `zortax/zgui` git checkout (`~/.cargo/git/checkouts/zgui-*/`), **not** in `vendor/`:
 
-`zgui-render-wgpu`, `zgui-wgpu`, `zgui-render`, `zgui-scene`, `zgui-atlas`, `zgui-image`, `zgui-geom`, `zgui-css`, `zgui-color`, `zgui-bits`, `zgui-edit`, `zgui-anim`, `zgui-elements`, `zgui-vocab`, `zgui-reactive`.
+`zgui-wgpu`, `zgui-render`, `zgui-scene`, `zgui-atlas`, `zgui-image`, `zgui-geom`, `zgui-css`, `zgui-color`, `zgui-bits`, `zgui-edit`, `zgui-anim`, `zgui-elements`, `zgui-vocab`, `zgui-reactive`.
 
 Check the table above before searching `vendor/` for a crate. Locate exact checkout paths offline with `cargo metadata --locked --offline --format-version 1 --filter-platform x86_64-unknown-linux-gnu`. Note that `KeyState`/`PointerAction` live in `zgui::vocab`, while `SurfaceEvent::Key` and `PointerEvent` live in `zgui::platform`. When a feature touches GPU rendering (`zgui-render-wgpu`), prefer CPU/atlas-cached solutions in `vendor/zgui-paint` unless vendoring the renderer is explicitly justified.

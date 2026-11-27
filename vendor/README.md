@@ -205,7 +205,7 @@ The [niri protocol XML](zgui-platform-wayland/src/driver/niri-blur-shape-v1.xml)
 
 The shape solver retains representable rounded and superellipse corners, resolves shared edges in signed 24.8 ticks, and degrades complex clips, elliptical radii and overlap components to disjoint strips with maximum effective opacity. Explicit rectangles are unioned in wire ticks. The runtime re-resolves on preference flips without restyle and applies `minOpacity` only to binary masks; held and bootstrap frames do not settle a new preference early.
 
-`zgui-render-wgpu` intentionally remains **unvendored**. Under the default wgpu swapchain presenter, `Surface::pre_present_frame` runs immediately before the actual swapchain present and failure returns a non-`Presented` outcome so `rollback_unpresented_blur` fires. Under the opt-in `ZGUI_PRESENTER=native` Vulkan path, upstream `zgui-render-wgpu/src/renderer/draw.rs` (`draw` lines 345–356 and `hand_over` lines 722–748) saves the acquisition before `present_native` can refuse and can still report `FrameOutcome::Presented`, which is a known upstream limitation on that opt-in presenter path.
+Under the default wgpu swapchain presenter, `Surface::pre_present_frame` runs immediately before the actual swapchain present and failure returns a non-`Presented` outcome so `rollback_unpresented_blur` fires. Under the opt-in `ZGUI_PRESENTER=native` Vulkan path, `zgui-render-wgpu/src/renderer/draw.rs` can still report `FrameOutcome::Presented` when `present_native` refused; this is a known upstream limitation on that presenter path.
 
 ```sh
 cargo test -j 4 --manifest-path vendor/zgui-layout/Cargo.toml --lib --offline
@@ -603,3 +603,9 @@ Unsupported backends and non-window roles do not consume Wayland protocol object
 Regression gate: `activation_token_protocol.rs` (`bun run test:vendor zgui-platform-wayland`)
 checks both startup and live requests, the target surface ID, commit ordering,
 and that redemption creates no token objects.
+
+## Frame streams
+
+`zgui-render-wgpu/` is copied from `ee29c7dc66206eb04ba7bcf514058a278c9070ba` with its Apache-2.0 LICENSE and NOTICE. The standalone lock pins the same wgpu/Naga/ash versions as the host. The Linux import module validates explicit DRM plane layouts and transfers Vulkan queue ownership without a CPU pixel copy. It returns a producer credit only after the final GPU use and release barrier. NV12 is converted on the GPU; unsupported devices negotiate memfd.
+
+`zgui-paint` fits external frame extents and composes them with rounded and ancestor clips without entering the image atlas. The runtime embed hook retires its renderer bindings when a mount region is replaced. The public renderer readback gate is `vendor/zgui-render-wgpu/tests/dmabuf_import.rs`; run it with `bun run test:vendor zgui-render-wgpu`.

@@ -173,6 +173,10 @@ const SUITES = [
     crate: "zgui",
     args: ["--lib"],
   },
+  {
+    crate: "zgui-render-wgpu",
+    args: ["--lib", "--test", "dmabuf_import"],
+  },
 ];
 
 const argv = process.argv.slice(2);

@@ -152,6 +152,50 @@ on asynchronous failure. Explicit `close()` stops delivery without calling
 `onClose` or waiting for the worker to close the connection. A Solid owner
 closes the socket on cleanup; otherwise close it explicitly.
 
+#### Frame streams
+
+For native video, use length framing with `acceptFrameStreams: true` and
+`onFrameStream(handle)`. The callback runs once per admitted stream. Pass its
+`src` to `<Image>` or `<image>`; subsequent frames update the same source.
+`object-fit`, `border-radius`, and `clip-path` apply without copying the video
+pixels into an image atlas.
+`FrameStreamHandle` is a type export of both `@hewel/zgui-services` and
+`@hewel/zgui`. Its width and height are snapshots, not signals. Use `release()`
+to retire a stream without closing the socket. Neither the pixel bytes nor the
+file descriptors enter JavaScript.
+
+Kind `0x02` carries frame submissions and host control messages. Associate the
+submission's 1–4 `SCM_RIGHTS` descriptors with the **first byte of the length
+prefix**, not with its kind byte or JSON. The host closes unopted sockets that
+receive descriptors and rejects malformed submissions with `E_PROTOCOL`.
+
+On connect, read the host's `hello` (`dmabufSupported`, `supportedFormats`,
+`supportedModifiers`). Modifiers are grouped by format and encoded as decimal
+strings. Use `memfd` unless the `dmabuf` format and modifier are listed.
+Submit JSON with `streamId`, `frameId`, `width`, `height`, `transport`,
+`pixelFormat`, and `planes: [{ fdIndex, offset, stride }]`. Use distinct
+frame IDs for outstanding credits. `rgba8` and `bgra8` use straight-alpha
+sRGB; `nv12` uses studio range, with `colorSpace: "bt601"` (default) or
+`"bt709"`. DMA-BUF submissions also require `drmFourcc` and `drmModifier`;
+linear is explicit modifier `"0"`. A Vulkan producer hands its image off in
+`GENERAL` to `VK_QUEUE_FAMILY_FOREIGN_EXT`. Finish producer writes or publish
+their implicit DMA-BUF fence before sending, and do not reuse the storage
+until the matching `{ type: "release", streamId, frameId }`. On a lost
+connection, discard outstanding credits rather than treating EOF as a fence.
+
+The session admits at most eight streams, with at most two frames held per
+stream. Superseded pending frames return their credits without drawing.
+Replaced GPU frames return credits after the final GPU read and ownership
+release. The software path reads and converts memfd pixels on the socket worker.
+
+In preview, a length-framed `services.sockets[].events[]` entry can specify
+`{ kind: "frame", atMs, streamId, frameId, width, height, pixelFormat, pattern }`.
+Use `pattern: { solid: "#RRGGBB" }` or `{ quadrants: [topLeft, topRight,
+bottomLeft, bottomRight] }` with the same color syntax. Fixture frames render
+through software upload without any daemon or DMA-BUF support.
+For one opted-in socket, the same recipe without `kind` or `atMs` is the
+value of a `service.emit` step on channel `frame-stream`.
+
 ### Commands
 
 `spawnCommand(program, args)` starts an executable whose exact name or path

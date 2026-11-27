@@ -60,6 +60,7 @@ enum Registration {
         framing: Framing,
         message: Callback,
         image: Option<Callback>,
+        frame_stream: Option<Callback>,
         close: Option<Callback>,
     },
     Command {
@@ -72,6 +73,7 @@ enum Registration {
 /// One delivery selected on the owner thread for the next external service turn.
 pub(crate) enum Event {
     Socket(u64, unix_socket::Event),
+    Frame(u64, crate::frame_stream::SyntheticFrame),
     Command(u64, command::Event),
     LiveControl(u64, Inbound),
     FixtureControl {
@@ -84,7 +86,10 @@ pub(crate) enum Event {
 impl Event {
     fn registration(&self) -> u64 {
         match self {
-            Self::Socket(id, _) | Self::Command(id, _) | Self::LiveControl(id, _) => *id,
+            Self::Socket(id, _)
+            | Self::Frame(id, _)
+            | Self::Command(id, _)
+            | Self::LiveControl(id, _) => *id,
             Self::FixtureControl { listener, .. } => *listener,
         }
     }
@@ -173,6 +178,7 @@ impl External {
                 .take_external(generation)
                 .map(|delivery| match delivery {
                     ExternalDelivery::Socket(id, event) => Event::Socket(id, event),
+                    ExternalDelivery::Frame(id, frame) => Event::Frame(id, frame),
                     ExternalDelivery::Command(id, event) => Event::Command(id, event),
                     ExternalDelivery::Control {
                         listener,
@@ -216,8 +222,12 @@ impl External {
     }
 
     pub(super) fn pending_count(&self, generation: u64) -> usize {
-        usize::from(self.ready.borrow().is_some()) + self.control.borrow().len()
-            + self.fixture.as_ref().map_or(0, |fixture| fixture.pending_external_deliveries(generation))
+        usize::from(self.ready.borrow().is_some())
+            + self.control.borrow().len()
+            + self
+                .fixture
+                .as_ref()
+                .map_or(0, |fixture| fixture.pending_external_deliveries(generation))
     }
 
     pub(super) fn counts(&self) -> Counts {
@@ -272,7 +282,15 @@ impl External {
         for (_, inbound) in self.control.borrow_mut().drain(..) {
             inbound.reply(Err("session retired".into()));
         }
-        drop(registrations);
+        for registration in registrations.into_values() {
+            if let Registration::Socket {
+                endpoint: Endpoint::Live(socket),
+                ..
+            } = registration
+            {
+                socket.retire();
+            }
+        }
     }
 }
 
@@ -348,8 +366,9 @@ impl Work {
             .ok_or_else(|| Exception::throw_type(ctx, "endpoint name must be a string"))?;
         let mut length = 0;
         // SAFETY: The primitive string belongs to this live context; its length is intrinsic.
-        let status =
-            unsafe { rquickjs::qjs::JS_GetLength(ctx.as_raw().as_ptr(), name.as_raw(), &mut length) };
+        let status = unsafe {
+            rquickjs::qjs::JS_GetLength(ctx.as_raw().as_ptr(), name.as_raw(), &mut length)
+        };
         if status < 0 {
             return Err(rquickjs::Error::Exception);
         }
@@ -489,6 +508,19 @@ impl Work {
         };
         let message = self.read_callback(ctx, options.get("onMessage")?, "onMessage")?;
         let image = self.optional_callback(ctx, &options, "onBinaryImage")?;
+        let accept_frame_streams = options
+            .get::<_, Option<bool>>("acceptFrameStreams")?
+            .unwrap_or(false);
+        let frame_stream = self.optional_callback(ctx, &options, "onFrameStream")?;
+        if (accept_frame_streams && framing != Framing::Length)
+            || (frame_stream.is_some() && !accept_frame_streams)
+        {
+            return Err(self.invalid_external(
+                ctx,
+                "InvalidArgument",
+                "frame streams require length framing and explicit opt-in",
+            ));
+        }
         let close = self.optional_callback(ctx, &options, "onClose")?;
         if self
             .external
@@ -522,15 +554,28 @@ impl Work {
                     id,
                     path,
                     framing,
+                    accept_frame_streams,
                     self.external.package.as_deref(),
                 )
                 .map_err(|error| self.asset_error(ctx, AssetError::Contract(error)))?;
             Endpoint::Fixture
         } else {
-            Endpoint::Live(
+            let socket = if accept_frame_streams {
+                let changed = self.frame_streams.changed.clone();
+                let wake = self.wake.clone();
+                unix_socket::Socket::connect_frames(
+                    path.into(),
+                    self.frame_streams.budget.clone(),
+                    self.frame_streams.modifiers(),
+                    Arc::new(move || {
+                        changed.store(true, std::sync::atomic::Ordering::Release);
+                        wake();
+                    }),
+                )
+            } else {
                 unix_socket::Socket::connect(path.into(), framing, self.wake.clone())
-                    .map_err(|error| thrown(ctx, &error.into()))?,
-            )
+            };
+            Endpoint::Live(socket.map_err(|error| thrown(ctx, &error.into()))?)
         };
         self.external.registrations.borrow_mut().insert(
             id,
@@ -539,6 +584,7 @@ impl Work {
                 framing,
                 message,
                 image,
+                frame_stream,
                 close,
             },
         );
@@ -786,19 +832,32 @@ impl Work {
     }
 
     fn cancel_external(&self, ctx: &Ctx<'_>, id: u64) -> rquickjs::Result<()> {
-        // Drop cancels live workers without joining inside the Bridge turn.
+        // Frame sockets keep their wire open for outstanding GPU credits, without joining here.
         let registration = self.external.cancel(id);
-        if let Some(Registration::Command {
-            endpoint,
-            callbacks: CommandCallbacks::Buffered { reject, .. },
-        }) = registration
-        {
-            drop(endpoint);
-            reject.restore(ctx)?.call::<_, ()>((service_error(
-                ctx,
-                "Cancelled",
-                "command cancelled",
-            )?,))?;
+        self.frame_streams.close(id);
+        if matches!(registration, Some(Registration::Socket { .. })) {
+            self.frame_streams
+                .changed
+                .store(true, std::sync::atomic::Ordering::Release);
+            (self.wake)();
+        }
+        match registration {
+            Some(Registration::Socket {
+                endpoint: Endpoint::Live(socket),
+                ..
+            }) => socket.retire(),
+            Some(Registration::Command {
+                endpoint,
+                callbacks: CommandCallbacks::Buffered { reject, .. },
+            }) => {
+                drop(endpoint);
+                reject.restore(ctx)?.call::<_, ()>((service_error(
+                    ctx,
+                    "Cancelled",
+                    "command cancelled",
+                )?,))?;
+            }
+            _ => {}
         }
         Ok(())
     }
@@ -863,6 +922,7 @@ impl Work {
         event: Event,
     ) -> rquickjs::Result<()> {
         match event {
+            Event::Frame(id, frame) => self.deliver_frame(ctx, id, frame),
             Event::Socket(id, event) => self.deliver_socket(ctx, id, event),
             Event::Command(id, event) => self.deliver_command(ctx, id, event),
             Event::LiveControl(id, inbound) => {
@@ -918,16 +978,114 @@ impl Work {
                         code: "TooLarge",
                         message: "release socket image handles before receiving more images".into(),
                     };
+                    self.frame_streams.close(id);
                     return self.finish_socket(ctx, self.external.cancel(id), Some(error));
                 }
                 let callback = callback.restore(ctx)?;
                 callback.call::<_, ()>((self.image_handle(ctx, bytes, ImageLease::Socket(len))?,))
             }
+            unix_socket::Event::FrameStream(stream_id) => {
+                let (stream, callback) = {
+                    let registrations = self.external.registrations.borrow();
+                    let Some(Registration::Socket {
+                        endpoint: Endpoint::Live(socket),
+                        frame_stream,
+                        ..
+                    }) = registrations.get(&id)
+                    else {
+                        return Ok(());
+                    };
+                    (socket.frame_stream(stream_id), frame_stream.clone())
+                };
+                let Some(stream) = stream else {
+                    return Ok(());
+                };
+                let Some(callback) = callback else {
+                    stream.close();
+                    return Ok(());
+                };
+                let token = self.frame_streams.open_live(id, stream_id, stream);
+                self.notify_frame_stream(ctx, token, stream_id, callback)
+            }
             unix_socket::Event::Close(error) => {
+                self.frame_streams.close(id);
                 let registration = self.external.registrations.borrow_mut().remove(&id);
                 self.finish_socket(ctx, registration, error)
             }
         }
+    }
+
+    fn deliver_frame(
+        self: &Rc<Self>,
+        ctx: &Ctx<'_>,
+        socket: u64,
+        frame: crate::frame_stream::SyntheticFrame,
+    ) -> rquickjs::Result<()> {
+        let callback = match self.external.registrations.borrow().get(&socket) {
+            Some(Registration::Socket {
+                frame_stream: Some(callback),
+                ..
+            }) => callback.clone(),
+            _ => return Ok(()),
+        };
+        let stream_id = frame.stream_id;
+        let token = match self.frame_streams.submit(socket, frame) {
+            Ok(Some(token)) => token,
+            Ok(None) => return Ok(()),
+            Err(()) => {
+                self.frame_streams.close(socket);
+                return self.finish_socket(
+                    ctx,
+                    self.external.cancel(socket),
+                    Some(ServiceError {
+                        code: "E_PROTOCOL",
+                        message: "session frame stream limit reached".into(),
+                    }),
+                );
+            }
+        };
+        self.notify_frame_stream(ctx, token, stream_id, callback)
+    }
+
+    fn notify_frame_stream(
+        self: &Rc<Self>,
+        ctx: &Ctx<'_>,
+        token: u64,
+        stream_id: u64,
+        callback: Callback,
+    ) -> rquickjs::Result<()> {
+        let handle = Object::new(ctx.clone())?;
+        handle.prop("kind", data_property("frame-stream"))?;
+        handle.prop("streamId", data_property(stream_id as f64))?;
+        handle.prop("src", data_property(self.frame_streams.src(token)))?;
+        let width = Rc::downgrade(&self.frame_streams);
+        let height = width.clone();
+        handle.prop(
+            "width",
+            rquickjs::object::Accessor::new_get(move || {
+                width.upgrade().map_or(0, |s| s.size(token).width)
+            }),
+        )?;
+        handle.prop(
+            "height",
+            rquickjs::object::Accessor::new_get(move || {
+                height.upgrade().map_or(0, |s| s.size(token).height)
+            }),
+        )?;
+        let weak = Rc::downgrade(self);
+        handle.prop(
+            "release",
+            data_property(Func::from(move || {
+                if let Some(work) = weak.upgrade() {
+                    work.frame_streams.release(token);
+                    work.frame_streams
+                        .changed
+                        .store(true, std::sync::atomic::Ordering::Release);
+                    (work.wake)();
+                }
+            })),
+        )?;
+        callback.restore(ctx)?.call::<_, ()>((handle,))
     }
 
     fn finish_socket(
@@ -937,14 +1095,17 @@ impl Work {
         error: Option<ServiceError>,
     ) -> rquickjs::Result<()> {
         let Some(Registration::Socket {
-            endpoint,
-            close: Some(callback),
-            ..
+            endpoint, close, ..
         }) = registration
         else {
             return Ok(());
         };
-        drop(endpoint);
+        if let Endpoint::Live(socket) = endpoint {
+            socket.retire();
+        }
+        let Some(callback) = close else {
+            return Ok(());
+        };
         callback
             .restore(ctx)?
             .call::<_, ()>((error_value(ctx, error)?,))

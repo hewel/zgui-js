@@ -70,6 +70,7 @@ zgui = { path = "../zgui" }
 zgui-dom = { path = "../zgui-dom" }
 zgui-layout = { path = "../zgui-layout" }
 zgui-paint = { path = "../zgui-paint" }
+zgui-render-wgpu = { path = "../zgui-render-wgpu" }
 zgui-platform = { path = "../zgui-platform" }
 zgui-platform-headless = { path = "../zgui-platform-headless" }
 zgui-platform-wayland = { path = "../zgui-platform-wayland" }
