@@ -458,6 +458,10 @@ impl SessionHost {
     pub(crate) fn session(&self, document: DocumentId) -> Option<&Rc<Session>> { self.sessions.get(&document) }
     pub(crate) fn sessions(&self) -> impl Iterator<Item = &Rc<Session>> { self.sessions.values().chain(self.pure_session.iter()) }
 
+    pub(crate) fn set_launch(&mut self, initial: crate::invocation::Activation, inbox: Option<Arc<crate::instance::Inbox>>) {
+        self.policy.set_launch(initial, inbox);
+    }
+
     /// Execute queued session clipboard writes and reads against the platform clipboard.
     pub(crate) fn drain_clipboard(&self, cx: &dyn PlatformCx) -> bool {
         let mut produced = false;

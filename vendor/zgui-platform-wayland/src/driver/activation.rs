@@ -7,6 +7,7 @@
 //! synchronously at the caller's gesture boundary so closing a popup or layer surface later in the
 //! same turn cannot race the outgoing request, destroys the `xdg_activation_token_v1` object
 //! exactly once on completion or cancellation, and never calls `activate` inside this process.
+//! Inbound redemption instead submits an existing token to the target window, without minting.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -69,6 +70,10 @@ impl ActivationLink {
                 })
             }),
         }
+    }
+
+    pub(crate) fn redemption_manager(&self) -> Option<&XdgActivationV1> {
+        self.inner.as_ref().map(|inner| &inner.manager).filter(|manager| manager.is_alive())
     }
 
     /// Synchronously commits an external `xdg_activation_token_v1` request on `conn`.

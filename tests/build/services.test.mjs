@@ -213,6 +213,50 @@ test("endpoint queries defer host access and preserve unbound and undeclared out
   }
 });
 
+test("locale calls resolve the current session and preserve synchronous range errors", async () => {
+  const { getSystemTimeZone, getSystemLocale, fromZonedDateTime, collatorSortIndices } =
+    await import("@hewel/zgui-services");
+  const previous = Object.getOwnPropertyDescriptor(globalThis, "__zguiServices");
+  const preflight = new TypeError("host work is unavailable during preflight");
+  const ambiguous = new RangeError("ambiguous wall time");
+  const install = value =>
+    Object.defineProperty(globalThis, "__zguiServices", { configurable: true, value });
+  try {
+    install({
+      getSystemTimeZone() {
+        throw preflight;
+      },
+    });
+    assert.throws(getSystemTimeZone, error => error === preflight);
+    install({
+      getSystemTimeZone: () => "Asia/Shanghai",
+      getSystemLocale: () => "zh-CN",
+      fromZonedDateTime() {
+        throw ambiguous;
+      },
+      collatorSortIndices: () => Uint32Array.of(1, 0),
+    });
+    assert.deepEqual([getSystemTimeZone(), getSystemLocale()], ["Asia/Shanghai", "zh-CN"]);
+    assert.throws(
+      () =>
+        fromZonedDateTime({ year: 2026, month: 11, day: 1, hour: 1 }, "America/New_York", {
+          disambiguation: "reject",
+        }),
+      error => error === ambiguous,
+    );
+    const values = ["boot-10", "boot-2"];
+    const indices = collatorSortIndices(values);
+    assert.ok(indices instanceof Uint32Array);
+    assert.deepEqual(
+      Array.from(indices, i => values[i]),
+      ["boot-2", "boot-10"],
+    );
+  } finally {
+    if (previous) Object.defineProperty(globalThis, "__zguiServices", previous);
+    else delete globalThis.__zguiServices;
+  }
+});
+
 test("Unix sockets and control subscriptions preserve native delivery and follow their Solid owner", async () => {
   const { connectUnixSocket, onControlMessage } = await import("@hewel/zgui-services");
   const { createRoot, flush } = await import("solid-js");

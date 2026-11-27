@@ -10,11 +10,14 @@ use crate::session::ResourceCounts;
 mod clipboard;
 mod external;
 mod files;
+mod invocation;
+mod locale;
 mod network;
 mod sqlite;
 mod workers;
 
 pub(crate) use workers::WorkerStep;
+pub(crate) use invocation::Launch;
 
 const MAX_CALLBACKS: usize = 1024;
 const MAX_CONSOLE_LINE_BYTES: usize = 4096;
@@ -91,6 +94,7 @@ pub(crate) struct WorkSession {
     pub(crate) capabilities: Arc<crate::package::Capabilities>,
     pub(crate) generation: u64,
     pub(crate) assets: AssetSource,
+    pub(crate) launch: Launch,
     pub(crate) resolved: ResolvedCapabilities,
 }
 
@@ -109,6 +113,8 @@ pub(crate) struct Work {
     direct_images: Cell<DirectImageBudget>,
     clipboard: clipboard::ClipboardState,
     files: files::FilesState,
+    invocations: invocation::Invocations,
+    locale: host_services::locale::LocaleContext,
     network: network::NetworkState,
     sqlite: sqlite::SqliteState,
     workers: workers::WorkersState,
@@ -138,9 +144,14 @@ impl Work {
         scheduler: Scheduler,
         frame_hosts: Vec<FrameHostEntry>,
     ) -> Rc<Self> {
-        let WorkSession { package, capabilities, generation, assets, resolved } = session;
+        let WorkSession { package, capabilities, generation, assets, resolved, launch } = session;
         let allow_clipboard_read = capabilities.clipboard.read;
         let files = files::FilesState::new(package.as_deref(), &assets, wake.clone());
+        let invocations = invocation::Invocations::new(&assets, launch);
+        let locale = match &assets {
+            AssetSource::Live(_) => host_services::locale::LocaleContext::live(),
+            AssetSource::Fixture(fixture) => fixture.locale().clone(),
+        };
         let network = network::NetworkState::new(&capabilities, &assets);
         let sqlite = sqlite::SqliteState::new(package.clone(), Arc::clone(&capabilities), &assets);
         let workers = workers::WorkersState::new(package.clone(), &assets);
@@ -154,6 +165,8 @@ impl Work {
             direct_images: Cell::default(),
             clipboard: clipboard::ClipboardState::new(allow_clipboard_read),
             files,
+            invocations,
+            locale,
             network,
             sqlite,
             workers,
@@ -389,6 +402,7 @@ impl Work {
         self.ready.borrow().len()
             + self.requests.borrow().len()
             + self.clipboard.pending_count()
+            + self.invocations.pending()
             + self.sqlite.pending_count()
             + self.files.pending_count()
             + self.network.pending_count(self.generation)
@@ -516,6 +530,8 @@ impl Work {
         })))?;
         self.install_clipboard(&services)?;
         self.install_files(&services)?;
+        self.install_invocations(&services)?;
+        self.install_locale(&services)?;
         self.install_network(&services)?;
         self.install_sqlite(&services)?;
         self.install_workers(&services)?;
@@ -733,6 +749,7 @@ impl Work {
         self.frame_hosts.borrow_mut().clear();
         self.clipboard.clear();
         self.files.clear();
+        self.invocations.clear();
         self.network.clear(self.generation);
         self.sqlite.clear();
         self.workers.clear();

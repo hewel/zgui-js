@@ -308,11 +308,13 @@
     "serviceEmit": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "op", "channel", "value"],
+      "required": ["id", "op", "value"],
+      "oneOf": [{ "required": ["channel"] }, { "required": ["service"] }],
       "properties": {
         "id": { "$ref": "#/$defs/safeId" },
         "op": { "const": "service.emit" },
         "channel": { "$ref": "#/$defs/safeId" },
+        "service": { "$ref": "#/$defs/safeId" },
         "value": {
           "description": "Closed provider-specific payload, validated against the configured fixture channel. Never invokes a live service.",
           "type": "object"

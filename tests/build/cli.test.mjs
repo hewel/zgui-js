@@ -470,6 +470,35 @@ test("zgui-js inspect forwards subcommand arguments to the resolved zgui-host", 
   ]);
 });
 
+test("zgui-js dev forwards only arguments after the delimiter and keeps the invocation cwd", async t => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "zgui-dev-activation-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const appDir = path.join(dir, "app");
+  const host = path.join(dir, "host");
+  await execute(process.execPath, [cli, "init", appDir], { cwd: dir });
+  await linkWorkspaceSdk(appDir);
+  await writeFile(host, makeMockHostScript(), { mode: 0o755 });
+  const args = [cli, "dev", appDir, "--host-executable", host, "--exit-after-ms", "1"];
+  const { stdout } = await execute(process.execPath, [...args, "--", "--width", "two words", ""], {
+    cwd: dir,
+  });
+  const launched = JSON.parse(stdout);
+  assert.equal(launched.cwd, dir);
+  assert.deepEqual(launched.args.slice(2), [
+    "--watch",
+    "--exit-after-ms",
+    "1",
+    "--",
+    "--width",
+    "two words",
+    "",
+  ]);
+  await assert.rejects(
+    execute(process.execPath, [...args, "--unrecognized", "--", "app argument"], { cwd: dir }),
+    /Unknown or duplicate option: --unrecognized/,
+  );
+});
+
 test("zgui-js package resolves explicit host and output paths from the caller's cwd", async t => {
   const dir = await mkdtemp(path.join(os.tmpdir(), "zgui-package-paths-"));
   t.after(() => rm(dir, { recursive: true, force: true }));
@@ -513,7 +542,7 @@ test(
     const mockHost = path.join(dir, "mock-zgui-host");
     await writeFile(mockHost, makeMockHostScript({ tag: "packaged-host" }), { mode: 0o755 });
 
-    const outDir = path.join(dir, "release-out");
+    const outDir = path.join(dir, "release with spaces %");
     // Empty PATH proves zero Cargo invocation when a prebuilt host is resolved.
     const packaged = await packageApplication("packaged-demo", {
       root: workspaceRoot,
@@ -537,6 +566,11 @@ test(
     const desktopText = await readFile(packaged.desktopEntry, "utf8");
     assert.match(desktopText, /\[Desktop Entry\]/);
     assert.match(desktopText, /StartupWMClass=dev\.example\.packaged-demo/);
+    assert.ok(
+      desktopText.includes(
+        `Exec="${path.join(dir, "release with spaces %%", "packaged-demo")}" -- %F\n`,
+      ),
+    );
 
     const pkgManifest = JSON.parse(
       await readFile(path.join(outDir, "package-manifest.json"), "utf8"),
@@ -560,6 +594,20 @@ test(
     const boot = JSON.parse(runOut);
     assert.equal(boot.tag, "packaged-host");
     assert.deepEqual(boot.args, ["--bundle", path.join(outDir, "bundle"), "--exit-after-ms", "1"]);
+    for (const args of [
+      ["--boot", "-1", "two words", "", "--"],
+      ["--", "--help"],
+    ]) {
+      const { stdout } = await execute(packaged.launcher, args, { cwd: dir });
+      const invocation = JSON.parse(stdout);
+      assert.equal(invocation.cwd, dir);
+      assert.deepEqual(invocation.args, [
+        "--bundle",
+        path.join(outDir, "bundle"),
+        "--",
+        ...(args[0] === "--" ? args.slice(1) : args),
+      ]);
+    }
 
     // If the real zgui-host binary is already built in target/debug, also verify real binary ABI + packaging.
     const realHost = path.join(workspaceRoot, "target/debug/zgui-host");

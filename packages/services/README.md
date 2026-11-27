@@ -217,6 +217,35 @@ never uses live environment or host file access to resolve them. Socket scripts
 and image mappings use the resolved literal paths. An undeclared endpoint
 query records a sticky `E_CAPABILITY` failure even when the exception is caught.
 
+### Application activation
+
+Read `getInitialActivation()` during mount, an effect, or an event handler. It
+returns `{ args, cwd }`: the UTF-8 arguments after `zgui-host --` and the
+canonical launch directory (or `null` when unavailable). The initial value
+does not change on reload. Calls during module evaluation throw.
+
+Set `zgui.capabilities.singleInstance: true` in the base `package.json` to
+route subsequent launches to the running app. Register `onActivation(info => …)`
+to handle those invocations. It returns an idempotent unsubscribe, automatically
+registered as cleanup under a Solid owner. Pending invocations survive generation
+replacement. The secondary's success means the primary queued the invocation,
+not that a handler ran or the compositor granted focus.
+
+In live runs, the instance uses `$XDG_RUNTIME_DIR/zgui-js/<appId>.instance.sock`
+(`0600` in a `0700` directory), independent of the control socket. Changing the
+single-instance setting or its package ID in dev requires a restart. The host
+removes `XDG_ACTIVATION_TOKEN` before creating workers or launching children; tokens
+are never part of `ActivationInfo`.
+
+`zgui-js dev [DIR] -- [args...]` forwards arguments from the caller's directory.
+A packaged launcher accepts application arguments directly. Its standalone
+`--help`, `--version` (optionally `--json`), and `--exit-after-ms N` forms are
+reserved for host diagnostics; prefix them with `--` to pass them literally.
+Both launchers accept at most 64 arguments totaling 64 KiB of UTF-8.
+
+Preview uses the fixture's `activation` and scenario `service.emit` channel
+`activation` without reading ambient launch state or opening sockets.
+
 ## Reactive persistence and query adapters
 
 Keep Solid 2.0 as the sole client state model (`createSignal` → `createContext` → `createStore` / `createProjection` / `reconcile`). `@hewel/zgui-services` provides two narrow owner-scoped adapters where Solid meets Native Host I/O:

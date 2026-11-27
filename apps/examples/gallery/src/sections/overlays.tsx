@@ -4,6 +4,16 @@ import {
   AccordionContent,
   AccordionItem,
   AccordionTrigger,
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogMedia,
+  AlertDialogTitle,
+  AlertDialogTrigger,
   Avatar,
   AvatarFallback,
   Badge,
@@ -244,6 +254,38 @@ export function OverlaysSection(props: { onAction: (label: string) => void }) {
           </Dialog>
         </DemoRow>
         <text class="muted-caption">{`Current project name: ${projectName()}`}</text>
+      </Panel>
+
+      <Panel
+        title="AlertDialog"
+        note="Confirm a destructive action; clicking the backdrop keeps it open"
+      >
+        <DemoRow label="Destructive confirmation">
+          <AlertDialog>
+            <AlertDialogTrigger testId="overlay-alert-trigger" variant="destructive">
+              Clear history…
+            </AlertDialogTrigger>
+            <AlertDialogContent testId="overlay-alert-content" size="sm">
+              <AlertDialogHeader>
+                <AlertDialogMedia ariaHidden>!</AlertDialogMedia>
+                <AlertDialogTitle>Clear activity history?</AlertDialogTitle>
+                <AlertDialogDescription>
+                  This removes the demo activity history.
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel testId="overlay-alert-cancel">Keep history</AlertDialogCancel>
+                <AlertDialogAction
+                  testId="overlay-alert-confirm"
+                  variant="destructive"
+                  onClick={() => props.onAction("Cleared history")}
+                >
+                  Clear
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
+        </DemoRow>
       </Panel>
 
       <Panel

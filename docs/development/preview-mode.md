@@ -435,6 +435,20 @@ This default directly improves agent iteration: a click in a preview can exercis
 
 The counter example needs no system services. An application that requests one with this fixture must fail with `E_FIXTURE_MISSING_SERVICE`.
 
+Time and locale services do not require a fixture provider. The fixture's optional
+top-level `timeZone` and `locale` fields accept an IANA zone (for example,
+`"Asia/Shanghai"`) and a BCP-47 locale (for example, `"zh-CN"`). Omission selects
+`"UTC"` and `"en-US"`, respectively. Preview uses bundled IANA data and does not
+read host `TZ`, `TZDIR`, `LC_ALL`, `LC_TIME`, or `LANG`. Invalid overrides fail
+preflight with `E_SCHEMA`.
+
+The optional top-level `"activation": { "args": ["--boot", "-1"], "cwd": "/logs" }`
+seeds `getInitialActivation()` for every generation (defaults to `[]` and `null`).
+Use `{"id":"open","op":"service.emit","service":"activation","value":{"args":["system.ics"],"cwd":null}}`
+for `onActivation()` delivery. Fixture events can also use `"channel":"activation"`
+with `atMs`. Preview never binds an instance socket or uses ambient activation
+state. `services.json` records calls and which generation received each delivery.
+
 ### 6.3 Stateful service fixture
 
 ```json

@@ -72,10 +72,10 @@ All four application APIs accept `extraCapabilities` and `capabilitiesFile`. The
 
 Each source is validated independently. `shellSurfaces` and `controlChannel` are ORed; `imagePrefixes`, `unixSockets`, `namedSockets`, and `commands` are merged by exact string and sorted. Duplicates within one source are errors. Host path templates, such as `$XDG_RUNTIME_DIR/host-${WAYLAND_DISPLAY}.sock`, are sealed verbatim. False flags and empty arrays are omitted from the manifest. Use only trusted overlays: their merged grants are sealed into the build ID.
 
-**Only the app's base `package.json` can declare `sessionLock: true`.** Either overlay source specifying it as `true` rejects the build even if the base already grants it. `false` or omission neither grants nor revokes the base declaration.
+**Only the app's base `package.json` can declare `sessionLock: true` or `singleInstance: true`.** Either build-time overlay specifying either flag as `true` rejects the build even if the base already enables it. `false` or omission neither enables nor revokes the base declaration.
 
 Build-time overlays may grant `shellSurfaces: true`. The runtime `--extensions-overlay`
-is stricter: it cannot add either `shellSurfaces` or `sessionLock` authority.
+is stricter: it cannot add `shellSurfaces`, `sessionLock`, or `singleInstance`.
 
 `buildApplication(app, { bytecode: true })` resolves a compatible host through the
 same prebuilt/Cargo lookup as `devApplication`. `packageApplication` compiles with

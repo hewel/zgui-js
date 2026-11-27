@@ -184,6 +184,27 @@ test("gallery renders overlays, menus, and dark ocean theme cleanly", async () =
   );
 });
 
+test("gallery AlertDialog preview opens and returns focus on Cancel", async () => {
+  await runScenario(
+    "alert-dialog",
+    [
+      resize(1280, 860),
+      advance(100),
+      click("tab-overlays"),
+      advance(100),
+      click("overlay-alert-trigger"),
+      advance(300),
+      check("overlay-alert-content", "role", "alertDialog"),
+      capture("alert-open"),
+      click("overlay-alert-cancel"),
+      advance(300),
+      check("overlay-alert-trigger", "focused", true),
+      check("overlay-alert-content", "exists", false),
+    ],
+    ["alert-open"],
+  );
+});
+
 test("gallery renders workbench tab cleanly", async () => {
   await runScenario(
     "sections-workbench",
@@ -197,6 +218,8 @@ test("gallery renders workbench tab cleanly", async () => {
       check("workbench-tree", "exists", true),
       check("workbench-tree-declarative", "exists", true),
       check("workbench-command-trigger", "exists", true),
+      check("workbench-table", "role", "table"),
+      check("workbench-data-table", "role", "grid"),
       click("workbench-toast-success"),
       advance(80),
       capture("tab-workbench"),

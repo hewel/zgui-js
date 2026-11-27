@@ -429,3 +429,103 @@ test("icon stays one node across data and label changes and rejects children laz
   assert.throws(() => mod.mountGroupSeparatorWithChildren(orphan, child), TypeError);
   assert.equal(evaluated, 0);
 });
+
+test("Table keeps semantic parts and caller class on the visible table root", async t => {
+  const h = createHost({ strictStyles: true });
+  const mod = await moduleFor(
+    t,
+    `
+    import { renderApp } from "@hewel/zgui";
+    import type { NativeNode } from "@hewel/zgui";
+    import { Table, TableHeader, TableBody, TableFooter, TableRow, TableHead, TableCell, TableCaption } from "@hewel/zgui/components";
+    export function mount(root: NativeNode) {
+      return renderApp(() => <Table testId="table" class="caller" columns="80px 1fr" stickyHeader>
+        <TableHeader testId="header"><TableRow><TableHead testId="head">Name</TableHead><TableHead>Size</TableHead></TableRow></TableHeader>
+        <TableBody><TableRow testId="row" selected><TableCell>Archive</TableCell><TableCell testId="cell" align="end">32 MB</TableCell></TableRow></TableBody>
+        <TableFooter><TableRow><TableCell>Total</TableCell><TableCell>32 MB</TableCell></TableRow></TableFooter>
+        <TableCaption testId="caption">Storage report</TableCaption>
+      </Table>, root);
+    }
+  `,
+  );
+  globalThis.__zgui = h.host;
+  const dispose = h.runTurn(() => mod.mount(h.makeNode("root")));
+  t.after(() => {
+    dispose();
+    delete globalThis.__zgui;
+  });
+  for (const [testId, role] of [
+    ["table", "table"],
+    ["header", "rowGroup"],
+    ["head", "columnHeader"],
+    ["row", "row"],
+    ["cell", "cell"],
+    ["caption", "caption"],
+  ])
+    assert.equal(h.byTestId(testId).props.get("role"), role);
+  const table = h.byTestId("table");
+  assert.match(table.props.get("class"), /\bcaller\b/);
+  assert.equal(table.props.get("data-sticky-header"), "true");
+  assert.equal(h.byTestId("row").props.get("data-selected"), "true");
+  assert.equal(h.byTestId("cell").props.get("data-align"), "end");
+});
+
+test("controlled DataTable requests sort and width updates without changing rows until accepted", async t => {
+  const h = createHost({ strictStyles: true });
+  const mod = await moduleFor(
+    t,
+    `
+    import { createSignal, renderApp } from "@hewel/zgui";
+    import type { NativeNode } from "@hewel/zgui";
+    import { DataTable } from "@hewel/zgui/components";
+    import type { DataTableColumn, DataTableSort } from "@hewel/zgui/components";
+    const [sort, setSort] = createSignal<DataTableSort | null>(null);
+    const [widths, setWidths] = createSignal({ name: 120 });
+    const [data, setData] = createSignal(["Zulu", "Alpha"]);
+    const columns: readonly DataTableColumn<string>[] = [{
+      id: "name", header: () => <text testId="sort-label">Name</text>,
+      cell: (name, index) => <text testId={"at-" + index()}>{name}</text>,
+      sortable: true, resizable: true, minWidth: 100, maxWidth: 133,
+      sortAccessor: name => name,
+    }];
+    export const changes = { sorts: [] as (DataTableSort | null)[], widths: [] as Record<string, number>[] };
+    export const acceptSort = () => setSort(changes.sorts.at(-1) ?? null);
+    export const acceptWidth = () => setWidths({ name: changes.widths.at(-1)!.name! });
+    export const clear = () => setData([]);
+    export function mount(root: NativeNode) {
+      return renderApp(() => <DataTable columns={columns} data={data()} sort={sort()} columnWidths={widths()}
+        onSortChange={next => changes.sorts.push(next)} onColumnWidthsChange={next => changes.widths.push(next)}
+        empty={<text testId="empty-data">No logs</text>} />, root);
+    }
+  `,
+  );
+  globalThis.__zgui = h.host;
+  const root = h.makeNode("root");
+  const dispose = h.runTurn(() => mod.mount(root));
+  t.after(() => {
+    dispose();
+    delete globalThis.__zgui;
+  });
+  const sort = h.parents.get(h.byTestId("sort-label"));
+  const grip = h.parents.get(sort).children.find(node => node.props.get("role") === "splitter");
+  const first = () => h.host.getTextContent(h.byTestId("at-0"));
+  assert.equal(first(), "Zulu");
+  assert.equal(sort.props.get("ariaDescription"), "Not sorted");
+  h.dispatch(sort, "Click");
+  assert.deepEqual(mod.changes.sorts, [{ columnId: "name", direction: "asc" }]);
+  assert.equal(first(), "Zulu");
+  h.runTurn(mod.acceptSort);
+  assert.equal(first(), "Alpha");
+  assert.equal(sort.props.get("ariaDescription"), "Sorted ascending");
+
+  h.dispatch(grip, "KeyDown", { key: "ArrowRight" });
+  assert.equal(grip.props.get("ariaValueNow"), 120);
+  h.runTurn(mod.acceptWidth);
+  assert.ok(grip.props.get("ariaValueNow") > 120);
+  h.dispatch(grip, "KeyDown", { key: "ArrowRight" });
+  h.runTurn(mod.acceptWidth);
+  assert.equal(grip.props.get("ariaValueNow"), 133, "keyboard resize respects maxWidth");
+  h.runTurn(mod.clear);
+  assert.equal(h.byTestId("at-0"), undefined);
+  assert.equal(h.host.getTextContent(h.byTestId("empty-data")), "No logs");
+});

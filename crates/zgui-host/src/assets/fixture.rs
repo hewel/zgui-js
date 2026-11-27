@@ -1,7 +1,9 @@
 //! Deterministic, owner-thread service fixtures. This module never opens a file.
 use super::ContractFailure;
+use crate::invocation::ActivationInfo;
 use crate::{bounded_fs::relative_path, environment::Environment, package::{Capabilities, Package}, runtime_capabilities::ResolvedCapabilities, runtime_paths::{self, Root}};
 use host_services::{Completion, ServiceError};
+use host_services::locale::LocaleContext;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{borrow::Cow, cell::RefCell, collections::{BTreeMap, VecDeque}, marker::PhantomData, path::Path, rc::Rc, sync::Arc};
@@ -31,13 +33,19 @@ object_struct! {
         pub id: String,
         pub services: Services,
         pub events: Vec<FixtureEvent>,
+        #[serde(default, deserialize_with = "present_provider", skip_serializing_if = "Option::is_none")]
+        activation: Option<ActivationInfo>,
+        #[serde(default, deserialize_with = "present_provider", skip_serializing_if = "Option::is_none")]
+        locale: Option<String>,
+        #[serde(default, deserialize_with = "present_provider", skip_serializing_if = "Option::is_none")]
+        time_zone: Option<String>,
         /// Synthetic path bindings; never read from the preview host.
         #[serde(default, deserialize_with = "present_provider", skip_serializing_if = "Option::is_none")]
         runtime_environment: Option<RuntimeEnvironment>,
     }
 }
 impl Default for FixtureDefinition {
-    fn default() -> Self { Self { schema_version: 1, id: "empty".into(), services: Services::default(), events: vec![], runtime_environment: None } }
+    fn default() -> Self { Self { schema_version: 1, id: "empty".into(), services: Services::default(), events: vec![], activation: None, locale: None, time_zone: None, runtime_environment: None } }
 }
 
 object_struct! {
@@ -382,10 +390,13 @@ impl<'de> Deserialize<'de> for FixtureEvent {
             Assets { #[serde(rename = "atMs")] at_ms: u32, value: AssetState },
             #[serde(rename = "control.message")]
             Control { #[serde(rename = "atMs")] at_ms: u32, value: ControlMessage },
+            #[serde(rename = "activation")]
+            Activation { #[serde(rename = "atMs")] at_ms: u32, value: ActivationInfo },
         }
         Ok(match deserialize_object::<D, Input>(deserializer)? {
             Input::Assets { at_ms, value } => Self { at_ms, update: StateEvent::Assets(value) },
             Input::Control { at_ms, value } => Self { at_ms, update: StateEvent::Control(value) },
+            Input::Activation { at_ms, value } => Self { at_ms, update: StateEvent::Activation(value) },
         })
     }
 }
@@ -394,6 +405,7 @@ impl<'de> Deserialize<'de> for FixtureEvent {
 pub(crate) enum StateEvent {
     #[serde(rename = "assets.state")] Assets(AssetState),
     #[serde(rename = "control.message")] Control(ControlMessage),
+    #[serde(rename = "activation")] Activation(ActivationInfo),
 }
 impl<'de> Deserialize<'de> for StateEvent {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
@@ -402,10 +414,12 @@ impl<'de> Deserialize<'de> for StateEvent {
         enum Input {
             #[serde(rename = "assets.state")] Assets(AssetState),
             #[serde(rename = "control.message")] Control(ControlMessage),
+            #[serde(rename = "activation")] Activation(ActivationInfo),
         }
         Ok(match deserialize_object::<D, Input>(deserializer)? {
             Input::Assets(value) => Self::Assets(value),
             Input::Control(value) => Self::Control(value),
+            Input::Activation(value) => Self::Activation(value),
         })
     }
 }
@@ -433,9 +447,14 @@ impl ImageProvider {
 }
 impl FixtureDefinition {
     pub(crate) fn validate(&self) -> Result<(), String> {
+        self.validate_with_locale().map(drop)
+    }
+
+    fn validate_with_locale(&self) -> Result<LocaleContext, String> {
         if self.schema_version != 1 { return Err("unsupported fixture schemaVersion; expected 1".into()); }
         if self.id.trim().is_empty() || self.id.chars().count() > 128 { return Err("fixture id must contain 1..=128 characters of nonblank text".into()); }
         if self.events.len() > 4096 { return Err("fixture exceeds 4096 events".into()); }
+        if let Some(info) = &self.activation { info.validate()?; }
         if let Some(runtime) = &self.runtime_environment { runtime.validate()?; }
         if let Some(provider) = &self.services.assets { provider.initial_state.validate()?; }
         if let Some(images) = &self.services.images { images.validate()?; }
@@ -452,12 +471,14 @@ impl FixtureDefinition {
         if let Some(network) = &self.services.network { network.validate()?; }
         self.services.validate_external()?;
         for event in &self.events { self.validate_event(&event.update)?; }
-        Ok(())
+        LocaleContext::fixture(self.locale.as_deref(), self.time_zone.as_deref())
+            .map_err(|error| format!("invalid fixture: {error}"))
     }
     fn validate_event(&self, event: &StateEvent) -> Result<(), String> {
         match event {
             StateEvent::Assets(state) if self.services.assets.is_some() => state.validate(),
             StateEvent::Control(message) if self.services.control.is_some() => message.validate(),
+            StateEvent::Activation(info) => info.validate().map_err(str::to_owned),
             _ => Err("fixture event requires its declared provider".into()),
         }
     }
@@ -488,6 +509,7 @@ struct Call { generation: u64, service: &'static str, method: &'static str, erro
 struct State {
     scheduled: BTreeMap<ScheduleKey, Scheduled>,
     deliveries: VecDeque<Completion>,
+    activations: VecDeque<ActivationInfo>,
     assets: Option<AssetState>,
     external: ExternalState,
     network: NetworkState,
@@ -501,12 +523,16 @@ struct State {
 pub(crate) struct FixtureRuntime {
     definition: FixtureDefinition,
     environment: Rc<Environment>,
+    locale: LocaleContext,
     state: RefCell<State>,
 }
 fn failure(code: &'static str, message: impl Into<String>) -> ContractFailure { ContractFailure { code, message: message.into() } }
 impl FixtureRuntime {
     pub(crate) fn new(definition: FixtureDefinition, environment: Rc<Environment>) -> Rc<Self> {
-        let invalid = definition.validate().err().map(|message| failure("E_FIXTURE_CONTRACT", message));
+        let (locale, invalid) = match definition.validate_with_locale() {
+            Ok(locale) => (locale, None),
+            Err(message) => (LocaleContext::preview_default(), Some(failure("E_FIXTURE_CONTRACT", message))),
+        };
         let scheduled = definition.events.iter().enumerate().map(|(index, event)| {
             let key = ScheduleKey {
                 deadline_us: u64::from(event.at_ms) * 1000,
@@ -516,10 +542,27 @@ impl FixtureRuntime {
         }).collect();
         Rc::new(Self { state: RefCell::new(State {
             scheduled, deliveries: VecDeque::new(), assets: definition.services.assets.as_ref().map(|p| p.initial_state.clone()),
+            activations: VecDeque::new(),
             external: ExternalState::default(),
             network: NetworkState::default(),
             calls: BTreeMap::new(), next_registration_id: 1, sequence: 0, trace: vec![], trace_bytes: 0, dropped: 0, failure: invalid, disposed: false,
-        }), definition, environment })
+        }), definition, environment, locale })
+    }
+
+    pub(crate) fn locale(&self) -> &LocaleContext {
+        &self.locale
+    }
+
+    pub(crate) fn initial_activation(&self) -> Option<&ActivationInfo> { self.definition.activation.as_ref() }
+    pub(crate) fn pending_activations(&self) -> usize { self.state.borrow().activations.len() }
+    pub(crate) fn take_activation(&self) -> Option<ActivationInfo> { self.state.borrow_mut().activations.pop_front() }
+
+    pub(crate) fn activation_call(&self, generation: u64, id: u64, method: &'static str) -> Result<(), ContractFailure> {
+        self.admission("activation", method, id, generation)
+    }
+
+    pub(crate) fn activation_delivered(&self, generation: u64, id: u64) {
+        self.record(&mut self.state.borrow_mut(), "delivery", json!({"service":"activation","requestId":id,"generation":generation}));
     }
 
     /// Resolves the package's path grants against the immutable synthetic environment.
@@ -682,6 +725,14 @@ impl FixtureRuntime {
                 Ok(())
             }
             StateEvent::Control(message) => self.dispatch_control(state, message),
+            StateEvent::Activation(info) => {
+                if state.activations.len() >= 64 {
+                    return Err(self.record_failure(state, failure("E_FIXTURE_CONTRACT", "activation queue exceeds 64 entries")));
+                }
+                self.record(state, "state", json!({"channel":"activation","value":&info}));
+                state.activations.push_back(info);
+                Ok(())
+            }
         }
     }
     pub(crate) fn emit(&self, channel: &str, value: &Value) -> Result<(), ContractFailure> {
@@ -788,11 +839,12 @@ impl FixtureRuntime {
         let mut state = self.state.borrow_mut();
         if state.disposed { return; }
         let scheduled = state.scheduled.len();
-        let deliveries = state.deliveries.len() + state.external.delivery_count() + state.network.delivery_count();
+        let deliveries = state.deliveries.len() + state.activations.len() + state.external.delivery_count() + state.network.delivery_count();
         for call in state.calls.values_mut() {
             if !call.error_delivered { call.error = None; }
         }
         state.disposed = true; state.scheduled.clear(); state.deliveries.clear();
+        state.activations.clear();
         state.external.dispose();
         state.network.dispose();
         self.record(&mut state, "disposal", json!({"cancelledScheduled":scheduled,"cancelledDeliveries":deliveries}));
@@ -806,6 +858,7 @@ impl FixtureRuntime {
         if !matches!((service, method),
             ("assets", "readTextAsset") | ("sockets", "connectUnixSocket" | "send")
             | ("commands", "spawnCommand") | ("control", "onControlMessage" | "reply")
+            | ("activation", "getInitialActivation" | "onActivation")
             | ("network", "httpRequest" | "openEventStream" | "connectWebSocket"))
         {
             return Err(failure("E_ASSERTION", format!("unknown fixture method {service}.{method}")));

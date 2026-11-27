@@ -1,12 +1,16 @@
 import { For, createMemo, createSignal, omit } from "#solid";
 import { createElement, mergeProps, setProp, spread } from "./renderer/index.js";
 import { append, slot, withDefaults } from "./components/shared.js";
+import { callHandler } from "./components/state.js";
 import { getReducedMotion, observeGeometry, scrollTo } from "./nodes.js";
+import { createDelay } from "./timers.js";
 import type {
   Accessor,
   NativeChild,
   NativeElementProps,
   NativeNode,
+  NativePointerDownEvent,
+  NativeWheelEvent,
   ScrollBehavior,
 } from "./types.js";
 
@@ -22,11 +26,14 @@ export interface VirtualListController {
   scrollToIndex(index: number, options?: VirtualScrollToIndexOptions): void;
 }
 
+/** Use a fixed stride, or measure mounted rows starting from an estimated height. */
+export type VirtualListRowSizing =
+  | { readonly itemHeight: number; readonly estimatedItemHeight?: never }
+  | { readonly itemHeight?: never; readonly estimatedItemHeight: number };
+
 export interface VirtualListBaseProps<T> extends Omit<NativeElementProps, "children"> {
   /** Data array to virtualize. */
   readonly each: readonly T[];
-  /** Fixed row height in logical pixels (must be finite and positive). */
-  readonly itemHeight: number;
   /** Vertical gap between rows in logical pixels (default 0). */
   readonly gap?: number | undefined;
   /** Extra rows mounted above and below the visible scrollport (default 3). */
@@ -39,18 +46,21 @@ export interface VirtualListBaseProps<T> extends Omit<NativeElementProps, "child
   readonly fallback?: NativeChild | undefined;
 }
 
-export interface VirtualListIdentityProps<T> extends VirtualListBaseProps<T> {
+interface VirtualListIdentity<T> extends VirtualListBaseProps<T> {
   readonly keyed?: true | undefined;
   /** Row renderer receiving the item and its 0-based index in `each`. */
   readonly children: (item: T, index: Accessor<number>) => NativeChild;
 }
 
-export interface VirtualListKeyedProps<T> extends VirtualListBaseProps<T> {
+interface VirtualListKeyed<T> extends VirtualListBaseProps<T> {
   /** Stable key extractor; matches Solid `<For keyed={...}>` and passes an item accessor to `children`. */
   readonly keyed: (item: T) => unknown;
   /** Row renderer receiving a reactive item accessor and its 0-based index in `each`. */
   readonly children: (item: Accessor<T>, index: Accessor<number>) => NativeChild;
 }
+
+export type VirtualListIdentityProps<T> = VirtualListIdentity<T> & VirtualListRowSizing;
+export type VirtualListKeyedProps<T> = VirtualListKeyed<T> & VirtualListRowSizing;
 
 export type VirtualListProps<T> = VirtualListIdentityProps<T> | VirtualListKeyedProps<T>;
 
@@ -205,17 +215,301 @@ function renderMappedItems<T>(
   });
 }
 
+/** Prefix sums of row strides (including a gap after each row). */
+class RowOffsets {
+  private readonly sums: Float64Array;
+  private readonly firstBit: number;
+
+  constructor(length: number, stride: number, strideAt?: (index: number) => number) {
+    this.sums = new Float64Array(length + 1);
+    this.firstBit = length > 0 ? 2 ** Math.floor(Math.log2(length)) : 0;
+    if (!strideAt) {
+      for (let i = 1; i <= length; i++) this.sums[i] = (i & -i) * stride;
+      return;
+    }
+    // Each completed subtotal contributes once to its parent: rebuild in linear time.
+    for (let i = 1; i <= length; i++) {
+      this.sums[i]! += strideAt(i - 1);
+      const parent = i + (i & -i);
+      if (parent <= length) this.sums[parent]! += this.sums[i]!;
+    }
+  }
+
+  add(index: number, delta: number): void {
+    for (let i = index + 1; i < this.sums.length; i += i & -i) this.sums[i]! += delta;
+  }
+
+  before(count: number): number {
+    let sum = 0;
+    for (let i = count; i > 0; i -= i & -i) sum += this.sums[i]!;
+    return sum;
+  }
+
+  at(offset: number): number {
+    let count = 0;
+    // Find the longest prefix at or below offset by descending the Fenwick tree once.
+    for (let bit = this.firstBit; bit > 0; bit >>= 1) {
+      const next = count + bit;
+      if (next < this.sums.length && this.sums[next]! <= offset) {
+        offset -= this.sums[next]!;
+        count = next;
+      }
+    }
+    return Math.min(count, this.sums.length - 2);
+  }
+}
+
+interface MeasuredListModel<T> {
+  readonly items: readonly T[];
+  readonly gap: number;
+  readonly estimate: number;
+  readonly offsets: RowOffsets;
+}
+
+interface MeasuredScrollRequest {
+  readonly offsets: RowOffsets;
+  readonly index: number;
+  readonly align: VirtualScrollAlign;
+  readonly smoothTop?: number | undefined;
+}
+
+function mountMeasuredList<T>(
+  scroller: NativeNode,
+  props: VirtualListProps<T>,
+  nativeProps: NativeElementProps,
+  initialHeight: number,
+): NativeNode {
+  const [scrollTop, setScrollTop] = createSignal(0);
+  const [viewportHeight, setViewportHeight] = createSignal(initialHeight);
+  const [version, invalidate] = createSignal(0);
+  const realign = createDelay();
+  let heights = new Map<unknown, number>();
+  const keyed = typeof props.keyed === "function" ? props.keyed : undefined;
+  const keyAt = (items: readonly T[], index: number) => (keyed ? keyed(items[index]!) : index);
+  const model = createMemo<MeasuredListModel<T>>(() => {
+    const items = props.each;
+    const gap = validateNonNegative(props.gap ?? 0, "VirtualList gap");
+    const estimate = validatePositive(
+      props.estimatedItemHeight!,
+      "VirtualList estimatedItemHeight",
+    );
+    const stride = estimate + gap;
+    if (heights.size === 0) {
+      return { items, gap, estimate, offsets: new RowOffsets(items.length, stride) };
+    }
+    const retained = new Map<unknown, number>();
+    const offsets = new RowOffsets(items.length, stride, index => {
+      const key = keyAt(items, index);
+      const height = heights.get(key);
+      if (height === undefined) return stride;
+      retained.set(key, height);
+      return height + gap;
+    });
+    heights = retained;
+    return { items, gap, estimate, offsets };
+  });
+  let pending: MeasuredScrollRequest | undefined;
+  const cancelJump = () => {
+    if (!pending) return;
+    realign.cancel();
+    pending = undefined;
+  };
+  const maxScroll = ({ items, gap, offsets }: MeasuredListModel<T>) =>
+    Math.max(0, offsets.before(items.length) - gap - viewportHeight());
+  const jump = (top: number, behavior: ScrollBehavior) => {
+    if (behavior === "instant" || getReducedMotion()) setScrollTop(top);
+    scrollTo(scroller, { top, behavior });
+  };
+  const target = (
+    current: MeasuredListModel<T>,
+    index: number,
+    align: VirtualScrollAlign,
+  ): number | null => {
+    const top = current.offsets.before(index);
+    const bottom = current.offsets.before(index + 1) - current.gap;
+    const viewport = viewportHeight();
+    let next: number;
+    if (align === "start") next = top;
+    else if (align === "end") next = bottom - viewport;
+    else if (align === "center") next = (top + bottom - viewport) / 2;
+    else if (align === "auto") {
+      if (top < scrollTop()) next = top;
+      else if (bottom > scrollTop() + viewport) next = bottom - viewport;
+      else return null;
+    } else {
+      throw new TypeError(`unsupported VirtualList scrollToIndex align: ${String(align)}`);
+    }
+    return Math.max(0, Math.min(maxScroll(current), next));
+  };
+  const scheduleRealignment = (request: MeasuredScrollRequest) => {
+    // Other rows in this layout can report after the target. Align once after those samples.
+    realign.schedule(0, () => {
+      if (pending !== request) return;
+      pending = undefined;
+      const current = model();
+      if (current.offsets !== request.offsets) return;
+      if (request.smoothTop !== undefined && needsSample(current, request.index)) {
+        // The live prefix may have moved the target outside the native glide's final window.
+        pending = { offsets: request.offsets, index: request.index, align: request.align };
+      }
+      const next = target(current, request.index, request.align);
+      if (next !== null && next !== scrollTop()) jump(next, "instant");
+    });
+  };
+
+  spread(
+    scroller,
+    mergeProps(nativeProps, {
+      onWheel(event: NativeWheelEvent) {
+        if (callHandler(event, props.onWheel)) cancelJump();
+      },
+      onPointerDown(event: NativePointerDownEvent) {
+        if (callHandler(event, props.onPointerDown)) cancelJump();
+      },
+    }),
+    true,
+  );
+
+  observeGeometry(scroller, "scrollPosition", pos => {
+    const offset = Math.max(0, pos.offset.y);
+    setScrollTop(offset);
+    if (pos.scrollport.height > 0) setViewportHeight(pos.scrollport.height);
+    const request = pending;
+    if (request?.smoothTop !== undefined) {
+      // Measurements can change total height before the native animation reaches its destination.
+      const limit = Math.max(0, pos.contentSize.height - pos.scrollport.height);
+      if (Math.abs(offset - Math.min(request.smoothTop, limit)) <= 1) scheduleRealignment(request);
+    }
+  });
+
+  const range = createMemo(() => {
+    const current = model();
+    const { items, offsets } = current;
+    if (items.length === 0) return { start: 0, end: 0, top: 0, bottom: 0 };
+    version();
+    const overscan = validateOverscan(props.overscan ?? 3);
+    const top = Math.min(scrollTop(), maxScroll(current));
+    const start = Math.max(0, offsets.at(top) - overscan);
+    const end = Math.min(items.length, offsets.at(top + viewportHeight()) + 1 + overscan);
+    return {
+      start,
+      end,
+      top: offsets.before(start),
+      bottom: offsets.before(items.length) - offsets.before(end),
+    };
+  });
+  const start = createMemo(() => range().start);
+  const end = createMemo(() => range().end);
+  const top = createMemo(() => range().top);
+  const bottom = createMemo(() => range().bottom);
+  const visible = createMemo(() => model().items.slice(start(), end()));
+  const hasItems = createMemo(() => model().items.length > 0);
+
+  const needsSample = (current: MeasuredListModel<T>, row: number) =>
+    row < start() || row >= end() || !heights.has(keyAt(current.items, row));
+  props.controller?.({
+    scrollToIndex(index, options) {
+      if (!Number.isFinite(index)) {
+        throw new RangeError("VirtualList scrollToIndex index must be a finite number");
+      }
+      const current = model();
+      cancelJump();
+      if (current.items.length === 0) return;
+      const row = Math.max(0, Math.min(current.items.length - 1, Math.trunc(index)));
+      const align = options?.align ?? "auto";
+      const top = target(current, row, align);
+      const behavior = options?.behavior ?? "instant";
+      const smoothTop =
+        top !== null && top !== scrollTop() && behavior === "smooth" && !getReducedMotion()
+          ? top
+          : undefined;
+      if (smoothTop !== undefined || needsSample(current, row)) {
+        pending = { offsets: current.offsets, index: row, align, smoothTop };
+      }
+      if (top !== null) jump(top, behavior);
+    },
+  });
+
+  const measure = (index: Accessor<number>, children: NativeChild) => {
+    const row = createElement("column");
+    setProp(row, "style", { width: "100%", flexShrink: 0 });
+    observeGeometry(row, "borderBox", ({ height }) => {
+      const current = model();
+      const position = index();
+      if (position < 0 || position >= current.items.length) return;
+      const key = keyAt(current.items, position);
+      const previous = heights.get(key);
+      const delta = height - (previous ?? current.estimate);
+      heights.set(key, height);
+      const request = pending?.offsets === current.offsets ? pending : undefined;
+      if (delta !== 0) {
+        const offset = scrollTop();
+        const aboveAnchor =
+          request?.smoothTop === undefined && position < current.offsets.at(offset);
+        current.offsets.add(position, delta);
+        invalidate(value => value + 1);
+        if (aboveAnchor) jump(Math.max(0, Math.min(maxScroll(current), offset + delta)), "instant");
+      }
+      if (request?.index === position && request.smoothTop === undefined && !realign.pending()) {
+        if (delta !== 0) scheduleRealignment(request);
+        else cancelJump();
+      }
+    });
+    slot(row, children);
+    return row;
+  };
+  const content = createElement("column");
+  setProp(content, "style", { width: "100%" });
+  const body = createElement("column");
+  const gap = createMemo(() => model().gap);
+  spread(
+    body,
+    {
+      get style() {
+        return { width: "100%", gap: `${gap()}px` };
+      },
+    },
+    true,
+  );
+  slot(body, () => {
+    if (!hasItems()) return props.fallback ?? null;
+    if (typeof props.keyed === "function") {
+      const { keyed: getKey, children } = props;
+      return renderMappedItems(
+        visible,
+        start,
+        getKey,
+        (item: Accessor<T>, index: Accessor<number>) => measure(index, children(item, index)),
+      );
+    }
+    const children = props.children;
+    return renderMappedItems(visible, start, props.keyed, (item: T, index: Accessor<number>) =>
+      measure(index, children(item, index)),
+    );
+  });
+  append(content, spacer(top));
+  append(content, body);
+  append(content, spacer(bottom));
+  append(scroller, content);
+  return scroller;
+}
+
 /**
- * Windowed vertical list backed by a native `<scroll>` container and `observeGeometry("scrollPosition")`.
- * Mounts only visible rows plus `overscan`, keeping QuickJS turn times constant for large lists.
+ * Windowed vertical list with fixed-stride or measured rows. Only visible rows plus overscan mount.
  */
 export function VirtualList<T>(props: VirtualListIdentityProps<T>): NativeNode;
 export function VirtualList<T>(props: VirtualListKeyedProps<T>): NativeNode;
 export function VirtualList<T>(props: VirtualListProps<T>): NativeNode {
+  const estimated = props.estimatedItemHeight;
+  if ((props.itemHeight === undefined) === (estimated === undefined)) {
+    throw new TypeError("VirtualList requires exactly one of itemHeight or estimatedItemHeight");
+  }
+  if (estimated !== undefined) validatePositive(estimated, "VirtualList estimatedItemHeight");
   const rest = omit(
     props,
     "each",
     "itemHeight",
+    "estimatedItemHeight",
     "gap",
     "overscan",
     "initialHeight",
@@ -225,7 +519,16 @@ export function VirtualList<T>(props: VirtualListProps<T>): NativeNode {
     "children",
   );
   const scroller = createElement("scroll");
-  spread(scroller, mergeProps(rest, withDefaults({ role: "list" as const }, rest)), true);
+  const nativeProps = mergeProps(rest, withDefaults({ role: "list" as const }, rest));
+  if (estimated !== undefined) {
+    return mountMeasuredList(
+      scroller,
+      props,
+      nativeProps,
+      validatePositive(props.initialHeight ?? 480, "VirtualList initialHeight"),
+    );
+  }
+  spread(scroller, nativeProps, true);
 
   const [scrollTop, setScrollTop] = createSignal(0);
   const [viewportHeight, setViewportHeight] = createSignal(
@@ -241,7 +544,7 @@ export function VirtualList<T>(props: VirtualListProps<T>): NativeNode {
   });
 
   const metrics = createMemo(() => {
-    const itemHeight = validatePositive(props.itemHeight, "VirtualList itemHeight");
+    const itemHeight = validatePositive(props.itemHeight!, "VirtualList itemHeight");
     const gap = validateNonNegative(props.gap ?? 0, "VirtualList gap");
     const overscan = validateOverscan(props.overscan ?? 3);
     const items = props.each;

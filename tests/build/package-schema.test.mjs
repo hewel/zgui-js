@@ -10,7 +10,7 @@ test("package.schema.json aligns with Rust and TS manifests including clipboard,
     await readFile(path.join(workspaceRoot, "schemas/package.schema.json"), "utf8"),
   );
   const capProps = schema.properties.capabilities.properties;
-  for (const key of ["clipboard", "sqlite", "files", "network"]) {
+  for (const key of ["clipboard", "sqlite", "files", "network", "singleInstance"]) {
     assert.ok(key in capProps, `schema missing capabilities.${key}`);
   }
   assert.ok("originRules" in capProps.network.properties, "schema missing network.originRules");
@@ -46,6 +46,7 @@ test("package.schema.json aligns with Rust and TS manifests including clipboard,
             capabilities: {
               shellSurfaces: true,
               controlChannel: true,
+              singleInstance: true,
               clipboard: { read: true },
               sqlite: { databases: ["app_state"] },
               files: { directories: [{ path: "$XDG_DOCUMENTS_DIR/notes", mode: "readwrite" }] },
@@ -82,6 +83,7 @@ export function mount(root: NativeNode) {
       appDirectory: dir,
     });
     validateAgainstSchema(manifest, schema, schema);
+    assert.equal(manifest.capabilities?.singleInstance, true);
 
     assert.throws(
       () =>

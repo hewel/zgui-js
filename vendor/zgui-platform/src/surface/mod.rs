@@ -481,6 +481,17 @@ pub trait Surface: Send + Sync + 'static {
         None
     }
 
+    /// Redeems a supplied activation token on this window once it has committed content.
+    ///
+    /// Success means the backend accepted the token, not that the compositor granted focus.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Unsupported`] when the backend, surface or token cannot be used for activation.
+    fn activate_with_token(&self, _token: ActivationToken) -> Result<(), Unsupported> {
+        Err(Unsupported)
+    }
+
     /// Tells the platform where text is being typed and what kind, or that none is.
     ///
     /// One call rather than three, because the parts are only meaningful together: an input method

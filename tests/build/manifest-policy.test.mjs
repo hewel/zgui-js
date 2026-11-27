@@ -151,3 +151,30 @@ test("build-time overlays can grant shell surfaces but cannot grant session lock
     }
   }
 });
+
+test("single-instance launch policy comes from the base package and omits false", async t => {
+  const publish = await publisher(t);
+  assert.equal(
+    (await publish({ capabilities: { singleInstance: false } })).capabilities,
+    undefined,
+  );
+  assert.deepEqual(
+    (
+      await publish(
+        { capabilities: { singleInstance: true } },
+        { overlay: { controlChannel: true } },
+      )
+    ).capabilities,
+    { singleInstance: true, controlChannel: true },
+  );
+  await assert.rejects(
+    publish({ capabilities: { singleInstance: "true" } }),
+    /singleInstance must be a boolean/,
+  );
+  for (const overlay of [
+    { extraCapabilities: { singleInstance: true } },
+    { overlay: { singleInstance: true } },
+  ]) {
+    await assert.rejects(publish({}, overlay), /singleInstance: true may only be declared in base/);
+  }
+});

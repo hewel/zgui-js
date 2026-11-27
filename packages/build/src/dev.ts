@@ -30,6 +30,7 @@ export async function devApplication(
     root = workspaceRoot,
     appDirectory = path.join(root, "apps/examples", app),
     hostArgs = [],
+    hostCwd,
     hostRoot,
     hostExecutable,
     hostSearchFrom,
@@ -137,7 +138,7 @@ export async function devApplication(
           mode === "preview"
             ? ["preview", "watch", "--bundle", dist!, ...hostArgs]
             : ["--bundle", dist!, "--watch", ...hostArgs];
-        stop(await run(executable, args, { root: runRoot, signal: controller.signal }));
+        stop(await run(executable, args, { root: hostCwd ?? runRoot, signal: controller.signal }));
       } catch (error) {
         fail(error);
       }

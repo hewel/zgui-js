@@ -29,6 +29,7 @@ use wayland_client::protocol::wl_region::WlRegion;
 use wayland_client::protocol::wl_surface::WlSurface;
 use zgui_geom::{Css, CssPx, Device, DevicePx, Edges, Point, Rect, Size};
 use zgui_platform::{
+    ActivationToken,
     BlurRegion, BlurShape, CursorStyle, Decorations, FullscreenMode, GpuSurface, InputGrant,
     InputRegion, LayerPlacement, PendingActivationToken, PlatformError, PopupPlacement,
     PresentPacing, PresentationTiming, Surface, SurfaceId, TextInput, Unsupported,
@@ -968,7 +969,13 @@ impl WaylandSurface {
     /// Ends a delivered [`SurfaceEvent::PresentReady`].
     /// `began` is when the present began.
     pub(crate) fn finish_present(&self, began: Instant, now: Instant) {
-        self.shared().end_of_present(began, now);
+        let committed = {
+            let mut shared = self.shared();
+            let committed = shared.presented;
+            shared.end_of_present(began, now);
+            committed
+        };
+        if committed { self.redeem_launch_tokens(); }
         self.end_drawing();
     }
 
@@ -1041,7 +1048,21 @@ impl WaylandSurface {
                 zgui_platform::Surface::request_redraw(self);
             }
         }
+        if end == crate::surface::state::EndOfRedraw::Presented {
+            self.redeem_launch_tokens();
+        }
         self.end_drawing();
+    }
+
+    fn redeem_launch_tokens(&self) {
+        let mut shared = self.shared();
+        if shared.launch_tokens.is_empty() || shared.hide_owed { return; }
+        let tokens = std::mem::take(&mut shared.launch_tokens);
+        if let Some(manager) = self.activation.redemption_manager() {
+            for token in tokens {
+                manager.activate(token.into_string(), self.wl_surface());
+            }
+        }
     }
 }
 
@@ -1445,6 +1466,31 @@ impl Surface for WaylandSurface {
         )?;
         self.ping.ping();
         Some(pending)
+    }
+
+    fn activate_with_token(&self, token: ActivationToken) -> Result<(), Unsupported> {
+        // Keep the request inside the Wayland backend's message buffer.
+        const MAX_TOKEN_BYTES: usize = 4096 - 16;
+        if !self.active() || self.role.window().is_none()
+            || !self.wl_surface().is_alive() || token.as_str().is_empty()
+            || token.as_str().len() > MAX_TOKEN_BYTES
+            || token.as_str().bytes().any(|byte| byte.is_ascii_control())
+        {
+            return Err(Unsupported);
+        }
+        let manager = self.activation.redemption_manager().ok_or(Unsupported)?;
+        let mut shared = self.shared();
+        // `pre_present_frame` marks mapped before the actual buffer commit. The
+        // backend drains this queue only after the frame delivery returns.
+        if !shared.mapped || shared.presented || !shared.launch_tokens.is_empty() {
+            const MAX_PENDING_TOKENS: usize = 65;
+            if shared.launch_tokens.len() >= MAX_PENDING_TOKENS { return Err(Unsupported); }
+            shared.launch_tokens.push(token);
+        } else {
+            manager.activate(token.into_string(), self.wl_surface());
+            self.ping.ping();
+        }
+        Ok(())
     }
 
     fn set_text_input(&self, state: Option<TextInput>) {

@@ -284,3 +284,60 @@ test("scrollTo/scrollBy/scrollIntoView respect reducedMotion and VirtualList/Vir
   assert.equal(h.scrollCommands.at(-1).top, 1200);
   assert.ok(h.byTestId("tile-80"), "tile-80 mounts immediately on VirtualGrid scrollToIndex");
 });
+
+test("measured VirtualList validates its sizing and retains measured offsets across keyed data changes", async t => {
+  const h = createHost({ strictStyles: true });
+  const mod = await moduleFor(
+    t,
+    `
+    import { VirtualList, createSignal, renderApp } from "@hewel/zgui";
+    import type { NativeNode, VirtualListController } from "@hewel/zgui";
+    const [items, update] = createSignal(Array.from({ length: 50000 }, (_, id) => ({ id })));
+    let controller: VirtualListController;
+    export const jump = (index: number) => controller.scrollToIndex(index, { align: "start" });
+    export const shorten = () => update([{ id: 2 }, { id: 1 }, { id: 0 }, { id: 3 }]);
+    export const invalid = (sizes: object) => Reflect.apply(VirtualList, undefined, [{ ...sizes, each: [], children: () => null }]);
+    export function mount(root: NativeNode) {
+      return renderApp(() => (
+        <VirtualList each={items()} estimatedItemHeight={20} gap={4} initialHeight={24} overscan={1}
+          keyed={row => row.id} controller={handle => { controller = handle; }}>
+          {row => <text testId={"measured-" + row().id}>{row().id}</text>}
+        </VirtualList>
+      ), root);
+    }
+  `,
+  );
+  globalThis.__zgui = h.host;
+  let dispose;
+  t.after(() => {
+    dispose?.();
+    delete globalThis.__zgui;
+  });
+
+  for (const sizes of [{}, { itemHeight: 20, estimatedItemHeight: 20 }]) {
+    assert.throws(() => mod.invalid(sizes), TypeError);
+  }
+  for (const estimatedItemHeight of [0, -1, Infinity, NaN]) {
+    assert.throws(() => mod.invalid({ estimatedItemHeight }), RangeError);
+  }
+
+  const root = h.makeNode("root");
+  dispose = h.runTurn(() => mod.mount(root));
+  const row = h.byTestId("measured-0");
+  const geometry = h.geometry.find(
+    lease => lease.active && lease.kind === "borderBox" && lease.node.children.includes(row),
+  );
+  assert.ok(geometry, "mounted row delivers border-box measurements");
+  geometry.emit({ x: 0, y: 0, width: 200, height: 60 });
+
+  h.runTurn(() => mod.jump(49_000));
+  assert.equal(h.scrollCommands.at(-1).top, 1_176_040);
+  assert.ok(h.byTestId("measured-49000"));
+  assert.equal(h.byTestId("measured-0"), undefined);
+  assert.ok(countSubtree(root) < 30);
+  assert.equal(geometry.active, false, "row observation follows the recycled mount");
+
+  h.runTurn(() => mod.shorten());
+  h.runTurn(() => mod.jump(3));
+  assert.equal(h.scrollCommands.at(-1).top, 108, "row 0 carries its measured height to index 2");
+});

@@ -22,6 +22,7 @@ static NEXT_STAGE: AtomicU64 = AtomicU64::new(0);
 #[derive(Default)]
 pub(crate) struct Control {
     pub(crate) override_path: Option<PathBuf>,
+    pub(crate) recover_default_stale: bool,
     active: Option<Active>,
 }
 
@@ -80,7 +81,14 @@ impl Control {
             open_default_parent(&runtime, ParentMode::Create)?;
             &default_path
         };
-        let (listener, socket) = BoundSocket::bind(path)?;
+        let (listener, socket) = if self.recover_default_stale && self.override_path.is_none() {
+            match BoundSocket::elect(path)? {
+                SocketElection::Bound(listener, socket) => (listener, socket),
+                SocketElection::Live(_) => return Err(io::ErrorKind::AddrInUse.into()),
+            }
+        } else {
+            BoundSocket::bind(path)?
+        };
         let listener = control::Listener::start(listener, decode, encode, wake())?;
         self.active = Some(Active {
             app_id: app_id.to_owned(),
@@ -297,7 +305,18 @@ fn runtime_dir() -> Option<PathBuf> {
         .map(PathBuf::from)
 }
 
+pub(crate) fn instance_socket_path(app_id: &str) -> io::Result<PathBuf> {
+    let runtime = runtime_dir().ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "singleInstance requires XDG_RUNTIME_DIR"))?;
+    let path = socket_path(&runtime, app_id, ".instance.sock")?;
+    open_default_parent(&runtime, ParentMode::Create)?;
+    Ok(path)
+}
+
 fn default_socket_path(runtime: &Path, app_id: &str) -> io::Result<PathBuf> {
+    socket_path(runtime, app_id, ".sock")
+}
+
+fn socket_path(runtime: &Path, app_id: &str, suffix: &str) -> io::Result<PathBuf> {
     validate_absolute(runtime)?;
     if app_id.trim().is_empty()
         || app_id.contains('/')
@@ -310,7 +329,7 @@ fn default_socket_path(runtime: &Path, app_id: &str) -> io::Result<PathBuf> {
             "package ID cannot name a control socket",
         ));
     }
-    let path = runtime.join(RUNTIME_SUBDIR).join(format!("{app_id}.sock"));
+    let path = runtime.join(RUNTIME_SUBDIR).join(format!("{app_id}{suffix}"));
     validate_socket_path(&path)?;
     Ok(path)
 }
@@ -409,16 +428,92 @@ fn connect(path: &Path) -> io::Result<UnixStream> {
 }
 
 #[derive(Debug)]
-struct BoundSocket {
+pub(crate) struct BoundSocket {
     path: PathBuf,
     inode: Option<File>,
     _parent: File,
 }
 
+pub(crate) enum SocketElection {
+    Live(UnixStream),
+    Bound(UnixListener, BoundSocket),
+}
+
+fn same_socket(expected: &fs::Metadata, current: &fs::Metadata) -> bool {
+    current.file_type().is_socket()
+        && current.uid() == effective_uid()
+        && (expected.dev(), expected.ino()) == (current.dev(), current.ino())
+}
+
+fn lock_election(directory: &File) -> io::Result<()> {
+    use std::{fs::TryLockError, thread, time::{Duration, Instant}};
+    let end = Instant::now() + Duration::from_secs(2);
+    loop {
+        match directory.try_lock() {
+            Ok(()) => return Ok(()),
+            Err(TryLockError::WouldBlock) => {
+                let remaining = end.saturating_duration_since(Instant::now());
+                if remaining.is_zero() {
+                    return Err(io::Error::new(io::ErrorKind::TimedOut, "socket election deadline exceeded"));
+                }
+                thread::sleep(remaining.min(Duration::from_millis(5)));
+            }
+            Err(TryLockError::Error(error)) => return Err(error),
+        }
+    }
+}
+
 impl BoundSocket {
     fn bind(path: &Path) -> io::Result<(UnixListener, Self)> {
         let (parent, name) = validate_socket_path(path)?;
+        Self::bind_in(open_parent(parent)?, name)
+    }
+
+    pub(crate) fn elect(path: &Path) -> io::Result<SocketElection> {
+        let (parent, name) = validate_socket_path(path)?;
         let parent = open_parent(parent)?;
+        require_private(&parent, 0o777)?;
+        let anchor = fd_path(&parent);
+        let path = anchor.join(name);
+        // Serialize stale checks, unlink and publication, not the application
+        // handshake. Lock the pinned directory without a second persistent path.
+        let election = File::open(anchor)?;
+        lock_election(&election)?;
+        match fs::symlink_metadata(&path) {
+            Ok(metadata) => {
+                if !metadata.file_type().is_socket() || metadata.uid() != effective_uid() {
+                    return Err(io::Error::new(io::ErrorKind::PermissionDenied, "endpoint must be a Unix socket owned by the effective user (no symlinks)"));
+                }
+                let inode = open_inode(&path)?;
+                if !same_socket(&metadata, &inode.metadata()?) {
+                    return Err(io::Error::other("endpoint changed during inspection"));
+                }
+                match control::connect(&fd_path(&inode)) {
+                    Ok(stream) => {
+                        if metadata.mode() & 0o777 != 0o600 {
+                            return Err(io::Error::new(io::ErrorKind::PermissionDenied, "live endpoint is not mode 0600"));
+                        }
+                        return Ok(SocketElection::Live(stream));
+                    }
+                    Err(error) if matches!(error.kind(), io::ErrorKind::ConnectionRefused | io::ErrorKind::NotFound) => {
+                        match fs::symlink_metadata(&path) {
+                            Ok(current) if same_socket(&metadata, &current) => fs::remove_file(&path)?,
+                            Err(error) if error.kind() == io::ErrorKind::NotFound => {},
+                            Err(error) => return Err(error),
+                            Ok(_) => return Err(io::Error::other("endpoint changed during stale recovery")),
+                        }
+                    }
+                    Err(error) => return Err(error),
+                }
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {},
+            Err(error) => return Err(error),
+        }
+        let (listener, bound) = Self::bind_in(parent, name)?;
+        Ok(SocketElection::Bound(listener, bound))
+    }
+
+    fn bind_in(parent: File, name: &std::ffi::OsStr) -> io::Result<(UnixListener, Self)> {
         let anchored = fd_path(&parent);
         let path = anchored.join(name);
         let stage = Stage::new(&anchored)?;
@@ -439,16 +534,14 @@ impl BoundSocket {
         ))
     }
 
-    fn unlink(&mut self) -> io::Result<()> {
+    pub(crate) fn unlink(&mut self) -> io::Result<()> {
         let Some(inode) = self.inode.take() else {
             return Ok(());
         };
         let unlink = || -> io::Result<()> {
             let published = fs::symlink_metadata(&self.path)?;
             let bound = inode.metadata()?;
-            if published.file_type().is_socket()
-                && (published.dev(), published.ino()) == (bound.dev(), bound.ino())
-            {
+            if same_socket(&bound, &published) {
                 fs::remove_file(&self.path)?;
             }
             Ok(())

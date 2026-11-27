@@ -18,6 +18,13 @@ sha2.workspace = true
 rquickjs.workspace = true
 sourcemap.workspace = true
 host-services.workspace = true
+jiff.workspace = true
+jiff-icu.workspace = true
+icu_calendar.workspace = true
+icu_collator.workspace = true
+icu_datetime.workspace = true
+icu_locale_core.workspace = true
+icu_time.workspace = true
 libc.workspace = true
 # zgui-text-parley does not forward this feature; CJK layout analysis needs its dictionaries.
 parley = { version = "=0.11.1", default-features = false, features = ["complex-scripts"] }

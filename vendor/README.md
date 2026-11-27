@@ -589,3 +589,15 @@ Regression gate:
 Regression gate:
 
     bun run test:vendor zgui-platform zgui-platform-wayland zgui-runtime && cargo test -p ui-bridge --offline && cargo test -p zgui-host session_host::activation_tests --offline
+
+## Inbound desktop activation (`#103`)
+
+`Surface::activate_with_token` is distinct from gesture-bound token minting.
+The Wayland backend sends `xdg_activation_v1.activate(token, wl_surface)` on
+the existing toplevel, postponing startup requests until the first buffer
+commit. Empty initial commits and failed or held draws do not redeem a token.
+Unsupported backends and non-window roles do not consume Wayland protocol objects.
+
+Regression gate: `activation_token_protocol.rs` (`bun run test:vendor zgui-platform-wayland`)
+checks both startup and live requests, the target surface ID, commit ordering,
+and that redemption creates no token objects.

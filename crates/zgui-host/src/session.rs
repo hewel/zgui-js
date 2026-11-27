@@ -148,6 +148,7 @@ pub(crate) struct SessionPolicy {
     environment: Option<Rc<Environment>>,
     strict_rejections: bool,
     assets: AssetSource,
+    launch: crate::work::Launch,
     socket_bindings: Option<Rc<BTreeMap<String, String>>>,
     reduced_motion: Option<bool>,
     teardown_reporter: Option<TeardownReporter>,
@@ -164,18 +165,26 @@ impl SessionPolicy {
     /// Ordinary live execution: wall clock, ambient limits, and package assets
     /// on the shared worker pool. Unhandled rejections fault under a retained lock.
     pub(crate) fn live(executor: host_services::Executor) -> Self {
-        Self { limits: RuntimeLimits::default(), deadline: None, environment: None, strict_rejections: false, assets: AssetSource::Live(executor), socket_bindings: None, reduced_motion: None, teardown_reporter: None, session_lock: None, dev_state: false, hydrated_dev_state: None, extension_overlay: None, bytecode_cache: None, incoming_handoff: None, safe_base_shell: false, last_overlay_failure: None }
+        Self { limits: RuntimeLimits::default(), deadline: None, environment: None, strict_rejections: false, assets: AssetSource::Live(executor), launch: Default::default(), socket_bindings: None, reduced_motion: None, teardown_reporter: None, session_lock: None, dev_state: false, hydrated_dev_state: None, extension_overlay: None, bytecode_cache: None, incoming_handoff: None, safe_base_shell: false, last_overlay_failure: None }
     }
     /// Deterministic preview execution: supplied limits, an enclosing deadline,
     /// the virtual environment, strict rejection handling and fixture assets.
     pub(crate) fn preview(limits: RuntimeLimits, deadline: Rc<Cell<Instant>>, environment: Rc<Environment>, fixtures: Rc<crate::assets::fixture::FixtureRuntime>) -> Self {
-        Self { limits, deadline: Some(deadline), environment: Some(environment), strict_rejections: true, assets: AssetSource::Fixture(fixtures), socket_bindings: None, reduced_motion: Some(false), teardown_reporter: None, session_lock: None, dev_state: false, hydrated_dev_state: None, extension_overlay: None, bytecode_cache: None, incoming_handoff: None, safe_base_shell: false, last_overlay_failure: None }
+        Self { limits, deadline: Some(deadline), environment: Some(environment), strict_rejections: true, assets: AssetSource::Fixture(fixtures), launch: Default::default(), socket_bindings: None, reduced_motion: Some(false), teardown_reporter: None, session_lock: None, dev_state: false, hydrated_dev_state: None, extension_overlay: None, bytecode_cache: None, incoming_handoff: None, safe_base_shell: false, last_overlay_failure: None }
     }
     /// Install the explicit launch bindings shared by all live candidates.
     #[must_use]
     pub(crate) fn with_socket_bindings(mut self, bindings: BTreeMap<String, String>) -> Self {
         self.socket_bindings = (!bindings.is_empty()).then(|| Rc::new(bindings));
         self
+    }
+
+    pub(crate) fn set_launch(&mut self, activation: crate::invocation::Activation, inbox: Option<Arc<crate::instance::Inbox>>) {
+        self.launch = crate::work::Launch {
+            initial: Some(Rc::new(activation.info)),
+            token: activation.token.map(|token| Rc::new(RefCell::new(Some(token)))),
+            inbox,
+        };
     }
 
     pub(crate) fn with_reduced_motion(mut self, reduced_motion: bool) -> Self {
@@ -529,6 +538,7 @@ impl Session {
                 capabilities: Arc::clone(&effective_capabilities),
                 generation,
                 assets: policy.assets.clone(),
+                launch: policy.launch.clone(),
                 resolved,
             };
             let initial_reduced_motion = policy.reduced_motion.unwrap_or(false);
@@ -1043,7 +1053,8 @@ impl Session {
 
     fn deliverable_work(&self, jobs_pending: bool) -> Result<bool> {
         let notifications = self.has_queued_notifications()?;
-        Ok(jobs_pending || notifications || self.activation.has_ready() || self.work.has_deliverable_work())
+        Ok(jobs_pending || notifications || self.activation.has_ready() || self.work.has_deliverable_work()
+            || (!self.staged.get() && self.work.has_pending_invocations()))
     }
 
     pub(crate) fn has_inflight_host_ops(&self) -> bool {
@@ -1076,6 +1087,28 @@ impl Session {
             .borrow()
             .get(&id)
             .and_then(std::sync::Weak::upgrade)
+    }
+
+    fn activation_surface(&self) -> Option<Arc<dyn Surface>> {
+        if self.shell.lock_is_retained() { return None; }
+        if let Some(primary) = self.primary() {
+            return self.platform_surface(primary.surface);
+        }
+        self.layers.borrow().iter()
+            .filter(|(id, _)| self.shell.owns_window(**id))
+            .find_map(|(_, region)| self.platform_surface(region.surface))
+    }
+
+    fn redeem_startup_activation(&self) {
+        if self.staged.get() { return; }
+        let Some(token) = &self.policy.launch.token else { return; };
+        let pending = token.borrow().is_some();
+        if pending
+            && let Some(surface) = self.activation_surface()
+            && let Some(token) = token.borrow_mut().take()
+        {
+            let _ = surface.activate_with_token(zgui::platform::ActivationToken::new(token));
+        }
     }
 
     pub(crate) fn bridge_for_surface(&self, surface: SurfaceId) -> Option<Rc<UiBridge>> {
@@ -1282,9 +1315,10 @@ impl Session {
                 message: "enclosing deadline exceeded".into(), stack: None, generated_stack: None,
             }.into());
         }
+        self.redeem_startup_activation();
         let max_jobs = engine.limits().max_jobs_per_pump;
         let mut worked = false;
-        let mut remaining = [32, 32, 32, max_jobs, 32, 16, 16];
+        let mut remaining = [32, 32, 32, max_jobs, 32, 16, 16, 16];
         // Interleave work classes and preserve the next class across deadlines.
         // Ready native work, network floods, and workers must not starve timers or promise jobs.
         while Instant::now() < end && remaining.iter().any(|&count| count != 0) {
@@ -1317,6 +1351,20 @@ impl Session {
                     self.notifications_after.set(id);
                     owned.bridge.flush_notification(engine.turn(), |js, cb| js.with_context(|ctx| cb.call(&ctx)))
                         .map_err(|error| self.diagnostic(error))?
+                } else { false },
+                7 => if !self.staged.get() && let Some(activation) = self.work.next_invocation() {
+                    if self.policy.launch.inbox.is_some()
+                        && let Some(surface) = self.activation_surface()
+                        && !activation.token.is_some_and(|token| {
+                            surface.activate_with_token(zgui::platform::ActivationToken::new(token)).is_ok()
+                        })
+                    {
+                        surface.set_minimized(false);
+                        surface.request_attention(true);
+                    }
+                    self.bridges.run(engine.turn(), |js| js.with_context(|ctx| self.work.deliver_invocation(&ctx, &activation.info)))
+                        .map_err(|error| self.diagnostic(error))?;
+                    true
                 } else { false },
                 4 => if let Some(event) = self.work.next_external() {
                     self.bridges.run(engine.turn(), |js| js.with_context(|ctx| self.work.settle_external(&ctx, event)))

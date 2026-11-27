@@ -6,6 +6,7 @@ const fixture = `
 import { Show, createSignal, onCleanup, renderApp } from "@hewel/zgui";
 import type { NativeNode } from "@hewel/zgui";
 import { Dialog, DialogTrigger, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter, DialogClose, DialogDismiss, ThemeProvider } from "@hewel/zgui/components";
+import { AlertDialog, AlertDialogTrigger, AlertDialogContent, AlertDialogHeader, AlertDialogMedia, AlertDialogTitle, AlertDialogDescription, AlertDialogFooter, AlertDialogAction, AlertDialogCancel } from "@hewel/zgui/components";
 export const log = { mounts: 0, cleans: 0, changes: [] as boolean[], ends: 0, ref: undefined as NativeNode | undefined };
 const [value, setValue] = createSignal(false);
 const [initial, setInitial] = createSignal(false);
@@ -41,6 +42,22 @@ export function mount(root: NativeNode) {
   return renderApp(() => <ThemeProvider scheme="light"><ThemeProvider scheme={scheme()}>
     <Dialog defaultOpen={initial()} onOpenChange={next => log.changes.push(next)}><Body /></Dialog>
   </ThemeProvider></ThemeProvider>, root);
+}
+export function mountAlert(root: NativeNode) {
+  return renderApp(() => <AlertDialog onOpenChange={next => log.changes.push(next)}>
+    <AlertDialogTrigger testId="trigger">Delete</AlertDialogTrigger>
+    <AlertDialogContent testId="surface" size="sm" dismissOnEscape={escape()}>
+      <AlertDialogHeader>
+        <AlertDialogMedia>!</AlertDialogMedia>
+        <AlertDialogTitle testId="title">Delete item?</AlertDialogTitle>
+        <AlertDialogDescription testId="description">This cannot be undone.</AlertDialogDescription>
+      </AlertDialogHeader>
+      <AlertDialogFooter>
+        <AlertDialogCancel testId="cancel">Cancel</AlertDialogCancel>
+        <AlertDialogAction testId="action" disabled={disabled()} onClick={event => { if (cancel()) event.preventDefault(); }}>Delete</AlertDialogAction>
+      </AlertDialogFooter>
+    </AlertDialogContent>
+  </AlertDialog>, root);
 }
 export function mountControlled(root: NativeNode) {
   return renderApp(() => <Dialog open={value()} onOpenChange={next => log.changes.push(next)}><Body /></Dialog>, root);
@@ -448,4 +465,34 @@ test("dialog parts outside a root are inert", async t => {
   assert.equal(layers.length, 0);
   finish();
   assert.equal(root.children.length, 0);
+});
+
+test("AlertDialog is labelled, has no implicit dismiss control, and honors action cancellation", async t => {
+  const { h, mod, layers, click, finish } = await mounted(t, "mountAlert");
+  click("trigger");
+  const surface = h.byTestId("surface");
+  assert.equal(surface.props.get("role"), "alertDialog");
+  assert.equal(surface.props.get("ariaLabelledBy"), h.byTestId("title"));
+  assert.equal(surface.props.get("ariaDescribedBy"), h.byTestId("description"));
+  assert.equal(surface.props.get("data-size"), "sm");
+  assert.equal(h.byTestId("cancel").props.get("data-variant"), "outline");
+  assert.ok(!surface.children.some(child => child.props.get("ariaLabel") === "Close"));
+  assert.equal(layers[0].options.dismissOnOutsidePress, false);
+  assert.equal(layers[0].options.dismissOnEscape, true);
+  mod.setEscape(false);
+  mod.setDisabled(true);
+  h.flush();
+  assert.equal(layers[0].options.dismissOnEscape, false);
+  click("action");
+  assert.deepEqual(mod.log.changes, [true]);
+  mod.setDisabled(false);
+  mod.setCancel(true);
+  h.flush();
+  assert.equal(click("action"), true);
+  assert.deepEqual(mod.log.changes, [true]);
+  mod.setCancel(false);
+  h.flush();
+  click("action");
+  assert.deepEqual(mod.log.changes, [true, false]);
+  finish();
 });

@@ -80,6 +80,7 @@ impl Session {
                 capabilities: Arc::new(package.manifest.capabilities.clone()),
                 package: Some(package), generation, resolved: Default::default(),
                 assets: AssetSource::Live(host_services::Executor::new(1, 8).unwrap()),
+                launch: Default::default(),
             },
             HostHandle::from_rc(host.clone()), SurfaceId::new(7), Arc::new(ChannelWaker(sender)),
         );

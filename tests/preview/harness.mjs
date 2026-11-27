@@ -168,6 +168,7 @@ export async function runPreview({
   allowFailure = false,
   assertEmptyResources = true,
   forbidJsDiagnostics = false,
+  env,
 }) {
   const args = [
     "preview",
@@ -201,6 +202,7 @@ export async function runPreview({
   const proc = spawnSync(nativeHostBinary, args, {
     cwd: workspaceRoot,
     encoding: "utf8",
+    env: env ? { ...process.env, ...env } : undefined,
     timeout: Math.max(60000, timeoutMs ?? 0),
   });
   if (proc.stderr && stderrPath) await writeFile(stderrPath, proc.stderr);

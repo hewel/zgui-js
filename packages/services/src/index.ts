@@ -401,6 +401,34 @@ export type {
 export { spawnWorker } from "./worker.js";
 export type { WorkerErrorEvent, WorkerHandle, WorkerOptions } from "./worker.js";
 
+export { getInitialActivation, onActivation } from "./activation.js";
+export type { ActivationInfo } from "./activation.js";
+
+export {
+  addZonedDuration,
+  collatorSortIndices,
+  compareStrings,
+  formatDateTime,
+  fromZonedDateTime,
+  getCalendarLabels,
+  getSystemLocale,
+  getSystemTimeZone,
+  isValidTimeZone,
+  toZonedDateTime,
+} from "./locale.js";
+export type {
+  AddZonedDurationOptions,
+  CalendarLabels,
+  CalendarLabelsOptions,
+  CivilDateTimeInput,
+  CollatorOptions,
+  FormatDateTimeOptions,
+  ZonedDateTimeParts,
+  ZonedDisambiguation,
+  ZonedDisambiguationOptions,
+  ZonedDurationInput,
+} from "./locale.js";
+
 export { createKvState } from "./kv-state.js";
 export type { KvState, KvStateOptions, KvStateStorage } from "./kv-state.js";
 

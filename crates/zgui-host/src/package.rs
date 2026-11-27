@@ -267,6 +267,9 @@ pub struct Capabilities {
     /// Allows the session to expose a host control channel.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub control_channel: bool,
+    /// Coordinates launch invocations with the already-running application.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub single_instance: bool,
     /// Clipboard read authorization outside user gestures.
     #[serde(skip_serializing_if = "ClipboardCapabilities::is_empty")]
     pub clipboard: ClipboardCapabilities,
@@ -293,6 +296,7 @@ impl Capabilities {
             && self.named_sockets.is_empty()
             && self.commands.is_empty()
             && !self.control_channel
+            && !self.single_instance
             && self.clipboard.is_empty()
             && self.sqlite.is_empty()
             && self.files.is_empty()
@@ -339,7 +343,7 @@ impl Capabilities {
     }
 
     /// Losslessly combines base capabilities with an extension overlay's effective capabilities.
-    /// Never escalates `sessionLock` or `shellSurfaces`, and never leaks per-origin network flags.
+    /// Never escalates `sessionLock`, `shellSurfaces` or `singleInstance`, or widens per-origin flags.
     pub(crate) fn merge_overlay(&self, overlay: &Self) -> std::result::Result<Self, String> {
         self.validate().map_err(|e| e.to_string())?;
         overlay.validate().map_err(|e| e.to_string())?;
@@ -348,6 +352,9 @@ impl Capabilities {
         }
         if overlay.shell_surfaces && !self.shell_surfaces {
             return Err("overlay cannot grant capabilities.shellSurfaces".into());
+        }
+        if overlay.single_instance && !self.single_instance {
+            return Err("overlay cannot grant capabilities.singleInstance".into());
         }
         let merge_vec = |a: &[String], b: &[String]| -> Vec<String> {
             let mut set = std::collections::BTreeSet::new();
@@ -395,6 +402,7 @@ impl Capabilities {
             named_sockets: merge_vec(&self.named_sockets, &overlay.named_sockets),
             commands: merge_vec(&self.commands, &overlay.commands),
             control_channel: self.control_channel || overlay.control_channel,
+            single_instance: self.single_instance,
             clipboard: ClipboardCapabilities {
                 read: self.clipboard.read || overlay.clipboard.read,
             },
@@ -2046,6 +2054,7 @@ mod tests {
             "namedSockets",
             "commands",
             "controlChannel",
+            "singleInstance",
             "clipboard",
             "sqlite",
             "files",
@@ -2090,6 +2099,7 @@ mod tests {
                 named_sockets: vec!["bus".into()],
                 commands: vec!["echo".into()],
                 control_channel: true,
+                single_instance: true,
                 clipboard: ClipboardCapabilities { read: true },
                 sqlite: SqliteCapabilities { databases: vec!["main_db".into()] },
                 files: FilesCapabilities {

@@ -237,6 +237,7 @@ function parseCapabilities(input: unknown, source: string): Capabilities {
       case "shellSurfaces":
       case "sessionLock":
       case "controlChannel":
+      case "singleInstance":
         if (typeof value !== "boolean") throw new Error(`${field} must be a boolean`);
         if (value) capabilities[key] = true;
         break;
@@ -434,18 +435,16 @@ function parseCapabilities(input: unknown, source: string): Capabilities {
 
 /**
  * Build-time overlays may grant `shellSurfaces: true`, sealing that grant into the package.
- * Only the base package may grant `sessionLock: true`. Runtime `--extensions-overlay` is
- * intentionally stricter: it may escalate neither shell surfaces nor session lock.
+ * Only the base package may enable `sessionLock` or `singleInstance`. A runtime
+ * `--extensions-overlay` cannot add those flags or shell surface authority.
  */
 function capabilityOverlay(input: unknown, source: string): Capabilities {
-  if (
-    input !== null &&
-    typeof input === "object" &&
-    "sessionLock" in input &&
-    input.sessionLock === true
-  )
-    throw new Error(`${source}.sessionLock: true may only be declared in base package.json`);
-  return parseCapabilities(input, source);
+  const capabilities = parseCapabilities(input, source);
+  for (const key of ["sessionLock", "singleInstance"] as const) {
+    if (capabilities[key])
+      throw new Error(`${source}.${key}: true may only be declared in base package.json`);
+  }
+  return capabilities;
 }
 
 async function mergeCapabilities(
@@ -470,6 +469,7 @@ async function mergeCapabilities(
   for (const key of ["shellSurfaces", "controlChannel"] as const)
     if (sources.some(source => source[key])) merged[key] = true;
   if (base.sessionLock) merged.sessionLock = true;
+  if (base.singleInstance) merged.singleInstance = true;
   for (const key of ["imagePrefixes", "unixSockets", "namedSockets", "commands"] as const) {
     const union = new Set(sources.flatMap(source => source[key] ?? []));
     if (union.size) merged[key] = [...union].sort();

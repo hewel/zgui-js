@@ -77,6 +77,63 @@ export function mount(root) {
 "#;
 
 #[test]
+fn locale_service_resolves_civil_gaps_and_folds_without_ambient_defaults() {
+    let fixture = Fixture::new(r#"
+        export const hostApiVersion = 1;
+        const api = __zguiServices;
+        let preflightBlocked = false;
+        try { api.getSystemTimeZone(); }
+        catch (error) { if (error instanceof TypeError) preflightBlocked = true; else throw error; }
+        if (!preflightBlocked) throw Error('system time zone was available at module top level');
+
+        export function mount() {
+            const equal = (actual, expected) => {
+                if (actual !== expected) throw Error(`${actual} != ${expected}`);
+            };
+            const rangeError = fn => {
+                try { fn(); } catch (error) { if (error instanceof RangeError) return; throw error; }
+                throw Error('expected a RangeError');
+            };
+            const timeZone = 'America/New_York';
+            const from = (month, day, hour, disambiguation = 'compatible') =>
+                api.fromZonedDateTime({year: 2026, month, day, hour, minute: 30}, timeZone, {disambiguation});
+            equal(api.getSystemTimeZone(), 'UTC');
+            equal(api.getSystemLocale(), 'en-US');
+            equal(api.isValidTimeZone(timeZone), true);
+            equal(api.isValidTimeZone('../../etc/passwd'), false);
+            equal(api.isValidTimeZone('+01:00'), false);
+            equal(from(3, 8, 2), Date.UTC(2026, 2, 8, 7, 30));
+            equal(from(3, 8, 2, 'earlier'), Date.UTC(2026, 2, 8, 6, 30));
+            equal(from(11, 1, 1, 'earlier'), Date.UTC(2026, 10, 1, 5, 30));
+            equal(from(11, 1, 1, 'later'), Date.UTC(2026, 10, 1, 6, 30));
+            rangeError(() => from(3, 8, 2, 'reject'));
+            rangeError(() => from(11, 1, 1, 'reject'));
+            rangeError(() => from(2, 30, 0));
+            rangeError(() => api.toZonedDateTime(NaN));
+            const parts = api.toZonedDateTime(from(3, 8, 2) + 42, timeZone);
+            equal(parts.hour, 3);
+            equal(parts.millisecond, 42);
+            equal(parts.dayOfWeek, 7);
+            equal(parts.offsetSeconds, -14400);
+            equal(parts.inDst, true);
+            equal(parts.timeZone, timeZone);
+            const beforeGap = from(3, 7, 2);
+            equal(api.addZonedDuration(beforeGap, {days: 1, minutes: 15}, {timeZone, disambiguation: 'earlier'}),
+                  Date.UTC(2026, 2, 8, 6, 45));
+            equal(api.addZonedDuration(beforeGap, {hours: 24}, {timeZone}), from(3, 8, 2));
+            rangeError(() => api.addZonedDuration(beforeGap, {days: 1}, {timeZone, disambiguation: 'reject'}));
+            const laterFold = from(11, 1, 1, 'later');
+            equal(api.addZonedDuration(laterFold, {milliseconds: 1}, {timeZone, disambiguation: 'reject'}), laterFold + 1);
+            return () => {};
+        }
+    "#, "");
+    let native = Native::new();
+    let deadline = Rc::new(Cell::new(Instant::now() + Duration::from_secs(5)));
+    let session = native.preview(fixture.package(), RuntimeLimits::default(), deadline).unwrap();
+    session.mount().unwrap();
+}
+
+#[test]
 fn rejected_shell_stylesheets_fault_strictly_without_replacing_the_previous_sheet() {
     let fixture = Fixture::new(r#"
         export const hostApiVersion = 1;

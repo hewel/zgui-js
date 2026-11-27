@@ -5,19 +5,33 @@ import {
   Combobox,
   CommandPalette,
   CommandPaletteProvider,
+  DataTable,
   Kbd,
   KbdGroup,
   Select,
   SplitPane,
   SplitPaneHandle,
   SplitPanePanel,
+  Table,
+  TableBody,
+  TableCaption,
+  TableCell,
+  TableFooter,
+  TableHead,
+  TableHeader,
+  TableRow,
   ToastProvider,
   TreeItem,
   TreeView,
   toast,
   useCommandPalette,
 } from "@hewel/zgui/components";
-import type { CommandItem, SelectOption, TreeNodeData } from "@hewel/zgui/components";
+import type {
+  CommandItem,
+  DataTableColumn,
+  SelectOption,
+  TreeNodeData,
+} from "@hewel/zgui/components";
 import { DemoRow, Panel } from "../shell.js";
 
 const FRAMEWORK_OPTIONS: readonly SelectOption[] = [
@@ -46,6 +60,34 @@ const WORKSPACE_TREE: readonly TreeNodeData[] = [
     ],
   },
   { id: "README.md", label: "README.md" },
+];
+
+const WORK_ITEMS = Array.from({ length: 600 }, (_, index) => ({
+  name: `Build ${index + 1}`,
+  duration: 12 + ((index * 37) % 120),
+  status: index % 8 === 0 ? "Retry" : "Passed",
+}));
+
+const WORK_COLUMNS: readonly DataTableColumn<(typeof WORK_ITEMS)[number]>[] = [
+  {
+    id: "name",
+    header: "Job",
+    cell: item => item.name,
+    width: 144,
+    maxWidth: 260,
+    resizable: true,
+  },
+  {
+    id: "duration",
+    header: "Duration",
+    cell: item => `${item.duration} ms`,
+    sortable: true,
+    resizable: true,
+    sortAccessor: item => item.duration,
+    width: 124,
+    align: "end",
+  },
+  { id: "status", header: "Status", cell: item => item.status, width: 112 },
 ];
 
 function CommandPaletteShowcase(props: {
@@ -310,6 +352,48 @@ export function WorkbenchSection(props: { onAction: (label: string) => void }) {
             props.onAction(`Command ${cmd.id}`);
           }}
         />
+        <Panel title="Table" note="Aligned columns and a summary footer">
+          <Table testId="workbench-table" columns="minmax(120px, 1fr) 88px" stickyHeader>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Target</TableHead>
+                <TableHead align="end">Jobs</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              <TableRow>
+                <TableCell>Linux x64</TableCell>
+                <TableCell align="end">360</TableCell>
+              </TableRow>
+              <TableRow>
+                <TableCell>Linux arm64</TableCell>
+                <TableCell align="end">240</TableCell>
+              </TableRow>
+            </TableBody>
+            <TableFooter>
+              <TableRow>
+                <TableCell>Total</TableCell>
+                <TableCell align="end">600</TableCell>
+              </TableRow>
+            </TableFooter>
+            <TableCaption>Build activity by target</TableCaption>
+          </Table>
+        </Panel>
+        <Panel
+          title="DataTable"
+          note="Sort by duration, drag column grips, or focus the grid and use arrow keys"
+        >
+          <DataTable
+            testId="workbench-data-table"
+            ariaLabel="Build history"
+            data={WORK_ITEMS}
+            columns={WORK_COLUMNS}
+            height={188}
+            itemHeight={34}
+            toolbar={<text class="muted-caption">600 recent builds</text>}
+            onRowActivate={item => props.onAction(`Opened ${item.name}`)}
+          />
+        </Panel>
         <ToastProvider />
       </row>
     </CommandPaletteProvider>

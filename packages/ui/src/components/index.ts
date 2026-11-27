@@ -202,6 +202,19 @@ export type {
   DialogDismissProps,
 } from "./dialog.js";
 export {
+  AlertDialog,
+  AlertDialogTrigger,
+  AlertDialogContent,
+  AlertDialogHeader,
+  AlertDialogMedia,
+  AlertDialogTitle,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogAction,
+  AlertDialogCancel,
+} from "./alert-dialog.js";
+export type { AlertDialogProps, AlertDialogContentProps } from "./alert-dialog.js";
+export {
   Popover,
   PopoverTrigger,
   PopoverContent,
@@ -361,3 +374,21 @@ export type {
   CommandPaletteProviderProps,
   CommandPaletteProps,
 } from "./command-palette.js";
+export {
+  Table,
+  TableHeader,
+  TableBody,
+  TableFooter,
+  TableRow,
+  TableHead,
+  TableCell,
+  TableCaption,
+} from "./table.js";
+export type { TableProps, TableCellProps } from "./table.js";
+export { DataTable } from "./data-table.js";
+export type {
+  DataTableColumn,
+  DataTableSort,
+  DataTableSortDirection,
+  DataTableProps,
+} from "./data-table.js";

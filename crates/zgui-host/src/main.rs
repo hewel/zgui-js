@@ -8,6 +8,8 @@ mod dnd;
 mod extensions;
 mod handoff;
 mod inspector;
+mod instance;
+mod invocation;
 mod package;
 mod runtime_capabilities;
 mod runtime_paths;
@@ -49,6 +51,7 @@ struct Application {
     native: zgui::runtime::Runtime,
     host: SessionHost,
     control: control_cli::Control,
+    instance: Option<instance::Primary>,
     harness: IntegrationHarness,
     sender: mpsc::SyncSender<Completion>,
     inbox: mpsc::Receiver<Completion>,
@@ -82,6 +85,7 @@ impl Application {
         Ok(Self {
             native, host, harness: IntegrationHarness::new(),
             control: control_cli::Control::default(),
+            instance: None,
             sender, inbox, exit_after: None, exit_armed: false, failure,
             watch_path: None, watcher: None,
             overlay_path: None, overlay_watcher: None,
@@ -274,6 +278,15 @@ impl Application {
         };
         match publication {
             Ok(package) => {
+                let launch_package = self.host.module().as_package();
+                let original_instance = launch_package.filter(|p| p.manifest.capabilities.single_instance).map(|p| p.manifest.id.as_str());
+                let next_instance = package.manifest.capabilities.single_instance.then_some(package.manifest.id.as_str());
+                if original_instance != next_instance {
+                    let outcome = ReloadOutcome::Rejected("changing single-instance launch policy requires a restart".into());
+                    let document = self.host.region_documents().next();
+                    self.host.record_outcome(&SessionModule::package(Rc::new(package)), document, &outcome);
+                    return;
+                }
                 let module = SessionModule::package(Rc::new(package));
                 if self.layer_primary && !module.as_package().is_some_and(|package| package.manifest.capabilities.shell_surfaces) {
                     let outcome = ReloadOutcome::Rejected(assets::ContractFailure {
@@ -364,6 +377,7 @@ impl Application {
 impl AppHandler for Application {
     fn surfaces_available(&mut self, cx: &dyn PlatformCx) {
         self.native.surfaces_available(cx);
+        if let Some(primary) = &self.instance { primary.set_waker(cx.waker()); }
         self.monitors = shell::Monitor::snapshot(self.native.monitors());
         self.host.set_monitor_snapshot(&self.monitors);
         if self.dev_inspect_server.is_none()
@@ -498,6 +512,11 @@ impl AppHandler for Application {
         if let Err(error) = self.control.close() {
             self.record_failure(format_args!("control socket: {error}"));
         }
+        if let Some(primary) = self.instance.take()
+            && let Err(error) = primary.close()
+        {
+            self.record_failure(format_args!("instance socket: {error}"));
+        }
         self.stop_sessions(cx);
         self.native.shutting_down(cx);
     }
@@ -509,7 +528,7 @@ pub(crate) const PURE_SHELL_STYLESHEET: &str =
     ":root { background: transparent; color: #edf2fa; font-family: sans-serif; padding: 0; }";
 
 const USAGE: &str = "\
-Usage: zgui-host [OPTIONS]
+Usage: zgui-host [OPTIONS] [-- APP_ARGS...]
        zgui-host preview <COMMAND> [OPTIONS]
        zgui-host msg <APP_ID> [ARGS...]
        zgui-host inspect --socket <PATH> [--op snapshot|tree|profile] [--surface <NAME>]
@@ -640,24 +659,23 @@ fn run_compile_bytecode(args: &[String]) -> Result<(), Box<dyn Error>> {
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
+    // SAFETY: capture and removal run at binary entry, before any worker,
+    // renderer or runtime is created. Only this thread can access the environment.
+    let token = std::env::var("XDG_ACTIVATION_TOKEN").ok();
+    unsafe { std::env::remove_var("XDG_ACTIVATION_TOKEN") };
+    let token = token.filter(|token| invocation::valid_token(token));
     if std::env::args_os().nth(1).is_some_and(|arg| arg == "msg") {
         return control_cli::command(std::env::args_os().skip(2));
     }
-    let mut args = std::env::args().skip(1).peekable();
-    if args.peek().is_some_and(|arg| arg == "preview") {
-        args.next();
-        std::process::exit(i32::from(preview::command(args)));
+    match std::env::args_os().nth(1).as_deref().and_then(std::ffi::OsStr::to_str) {
+        Some("preview") => std::process::exit(i32::from(preview::command(std::env::args().skip(2)))),
+        Some("inspect") => return inspector::run_cli_inspect(&std::env::args().skip(2).collect::<Vec<_>>()),
+        Some("compile-bytecode") => return run_compile_bytecode(&std::env::args().skip(2).collect::<Vec<_>>()),
+        _ => {}
     }
-    if args.peek().is_some_and(|arg| arg == "inspect") {
-        args.next();
-        let rest: Vec<String> = args.collect();
-        return inspector::run_cli_inspect(&rest);
-    }
-    if args.peek().is_some_and(|arg| arg == "compile-bytecode") {
-        args.next();
-        let rest: Vec<String> = args.collect();
-        return run_compile_bytecode(&rest);
-    }
+    let mut raw = std::env::args_os().skip(1);
+    let mut args = raw.by_ref().take_while(|arg| arg != "--")
+        .map(|arg| arg.into_string().map_err(|_| "host options must be valid UTF-8"));
     let mut exit_after = None;
     let mut bundle: Option<PathBuf> = None;
     let mut exercise = false;
@@ -674,7 +692,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut control_socket = None;
     let mut dev_inspect_path: Option<PathBuf> = None;
     let mut socket_bindings = BTreeMap::new();
-    while let Some(arg) = args.next() {
+    while let Some(arg) = args.next().transpose()? {
         match arg.as_str() {
             "-h" | "--help" => {
                 println!("{USAGE}");
@@ -683,7 +701,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             "-V" | "--version" => {
                 let mut json_mode = false;
                 for extra in args {
-                    match extra.as_str() {
+                    match extra?.as_str() {
                         "--json" => json_mode = true,
                         other => return Err(format!("unknown argument for --version: {other}").into()),
                     }
@@ -692,66 +710,67 @@ fn main() -> Result<(), Box<dyn Error>> {
                 return Ok(());
             }
             "--smoke-module" => {
-                let path = args.next().ok_or("--smoke-module requires a path")?;
+                let path = args.next().transpose()?.ok_or("--smoke-module requires a path")?;
                 let mut engine = JsRuntime::new(RuntimeLimits::default())?;
                 let result = engine.run_smoke_module_file(path)?;
                 if result != "solid-smoke:ok" { return Err(format!("unexpected smoke result: {result}").into()); }
                 println!("{result}");
                 return Ok(());
             }
-            "--exit-after-ms" => { exit_after = Some(Duration::from_millis(args.next().ok_or("--exit-after-ms requires milliseconds")?.parse()?)); }
-            "--bundle" => { bundle = Some(args.next().ok_or("--bundle requires a directory")?.into()); }
+            "--exit-after-ms" => { exit_after = Some(Duration::from_millis(args.next().transpose()?.ok_or("--exit-after-ms requires milliseconds")?.parse()?)); }
+            "--bundle" => { bundle = Some(args.next().transpose()?.ok_or("--bundle requires a directory")?.into()); }
             "--exercise" => { exercise = true; }
             "--watch" => { watch = true; }
             "--pure-shell" => { pure_shell = true; }
             "--extensions-overlay" => {
                 if extensions_overlay.is_some() { return Err("--extensions-overlay can only be specified once".into()); }
-                extensions_overlay = Some(args.next().ok_or("--extensions-overlay requires a file path")?.into());
+                extensions_overlay = Some(args.next().transpose()?.ok_or("--extensions-overlay requires a file path")?.into());
             }
             "--bytecode-cache-dir" => {
                 if bytecode_cache_dir.is_some() { return Err("--bytecode-cache-dir can only be specified once".into()); }
-                bytecode_cache_dir = Some(args.next().ok_or("--bytecode-cache-dir requires a directory path")?.into());
+                bytecode_cache_dir = Some(args.next().transpose()?.ok_or("--bytecode-cache-dir requires a directory path")?.into());
             }
             "--reduced-motion" => { reduced_motion = true; }
             "--width" => {
-                let raw = args.next().ok_or("--width requires logical pixels")?;
+                let raw = args.next().transpose()?.ok_or("--width requires logical pixels")?;
                 width_override = Some(parse_window_dim("--width", &raw)?);
             }
             "--height" => {
-                let raw = args.next().ok_or("--height requires logical pixels")?;
+                let raw = args.next().transpose()?.ok_or("--height requires logical pixels")?;
                 height_override = Some(parse_window_dim("--height", &raw)?);
             }
             "--title" => {
-                let title = args.next().ok_or("--title requires a window title")?;
+                let title = args.next().transpose()?.ok_or("--title requires a window title")?;
                 if title.trim().is_empty() || title.chars().any(char::is_control) {
                     return Err("--title must be a non-empty string without control characters".into());
                 }
                 title_override = Some(title);
             }
             "--max-js-stack-bytes" => {
-                let bytes: usize = args.next().ok_or("--max-js-stack-bytes requires a byte count")?.parse()?;
+                let bytes: usize = args.next().transpose()?.ok_or("--max-js-stack-bytes requires a byte count")?.parse()?;
                 if bytes == 0 { return Err("--max-js-stack-bytes must be positive".into()); }
                 max_js_stack_bytes = Some(bytes);
             }
             "--bind-socket" => {
-                let binding = args.next().ok_or("--bind-socket requires name=path")?;
+                let binding = args.next().transpose()?.ok_or("--bind-socket requires name=path")?;
                 runtime_capabilities::add_socket_binding(&mut socket_bindings, &binding)?;
             }
             "--control-socket" => {
                 if control_socket.is_some() { return Err("--control-socket can only be specified once".into()); }
-                control_socket = Some(args.next().ok_or("--control-socket requires a path")?.into());
+                control_socket = Some(args.next().transpose()?.ok_or("--control-socket requires a path")?.into());
             }
             "--dev-inspect" => {
                 if dev_inspect_path.is_some() { return Err("--dev-inspect can only be specified once".into()); }
-                dev_inspect_path = Some(args.next().ok_or("--dev-inspect requires a socket path")?.into());
+                dev_inspect_path = Some(args.next().transpose()?.ok_or("--dev-inspect requires a socket path")?.into());
             }
             "--layer-config" => {
-                let path: PathBuf = args.next().ok_or("--layer-config requires a JSON file")?.into();
+                let path: PathBuf = args.next().transpose()?.ok_or("--layer-config requires a JSON file")?.into();
                 layer_config = Some(shell::LayerConfig::load(&path)?);
             }
             _ => return Err(format!("unknown argument: {arg} (run with --help for usage)").into()),
         }
     }
+    let activation = invocation::Activation { info: invocation::ActivationInfo::launch(raw)?, token };
     if watch && bundle.is_none() { return Err("--watch requires --bundle".into()); }
     if extensions_overlay.is_some() && bundle.is_none() { return Err("--extensions-overlay requires --bundle".into()); }
     if layer_config.is_some() && bundle.is_none() { return Err("--layer-config requires --bundle".into()); }
@@ -766,9 +785,18 @@ fn main() -> Result<(), Box<dyn Error>> {
     if pure_shell && !capabilities.is_some_and(|capabilities| capabilities.shell_surfaces || capabilities.session_lock) {
         return Err("E_CAPABILITY: --pure-shell requires capabilities.shellSurfaces or capabilities.sessionLock".into());
     }
+    let instance = if let Some(package) = package.as_ref().filter(|package| package.manifest.capabilities.single_instance) {
+        let primary = instance::coordinate(&package.manifest.id, &activation)
+            .map_err(|error| format!("instance socket for {}: {error}", package.manifest.id))?;
+        let Some(primary) = primary else { return Ok(()); };
+        Some(primary)
+    } else {
+        None
+    };
     let pending = Rc::new(RefCell::new(Vec::new()));
     let roots = pending.clone();
-    let namespace = layer_config.as_ref().map_or("dev.zgui.js", |config| config.namespace.as_str());
+    let app_id = package.as_ref().map_or("dev.zgui.js", |pkg| pkg.manifest.id.as_str());
+    let namespace = layer_config.as_ref().map_or(app_id, |config| config.namespace.as_str());
     let stylesheet = if pure_shell || layer_config.as_ref().is_some_and(shell::LayerConfig::is_transparent) {
         PURE_SHELL_STYLESHEET
     } else {
@@ -816,6 +844,9 @@ fn main() -> Result<(), Box<dyn Error>> {
         .expect("the native application provides a font collection"));
     let native_failure = native.failure();
     let mut application = Application::new(native, pending, package, socket_bindings)?;
+    application.host.set_launch(activation, instance.as_ref().map(instance::Primary::inbox));
+    application.control.recover_default_stale = instance.is_some();
+    application.instance = instance;
     application.layer_primary = layer_config.is_some();
     application.dev_inspector = dev_inspector;
     application.dev_inspect_path = dev_inspect_path;

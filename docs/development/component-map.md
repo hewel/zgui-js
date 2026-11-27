@@ -101,6 +101,16 @@ parser in `crates/ui-bridge/tests/sdk_resources.rs`. Pinned native adaptations l
 | `DialogFooter`           | `packages/ui/src/components/dialog.ts`           | Overlays                           | `tests/preview/dialog.test.mjs`               |
 | `DialogClose`            | `packages/ui/src/components/dialog.ts`           | Overlays                           | `tests/preview/dialog.test.mjs`               |
 | `DialogDismiss`          | `packages/ui/src/components/dialog.ts`           | Overlays                           | `tests/build/dialog.test.mjs`                 |
+| `AlertDialog`            | `packages/ui/src/components/alert-dialog.ts`     | Overlays                           | `tests/preview/wave4a-components.test.mjs`    |
+| `AlertDialogTrigger`     | `packages/ui/src/components/alert-dialog.ts`     | Overlays                           | `tests/preview/wave4a-components.test.mjs`    |
+| `AlertDialogContent`     | `packages/ui/src/components/alert-dialog.ts`     | Overlays                           | `tests/preview/wave4a-components.test.mjs`    |
+| `AlertDialogHeader`      | `packages/ui/src/components/alert-dialog.ts`     | Overlays                           | `tests/preview/wave4a-components.test.mjs`    |
+| `AlertDialogMedia`       | `packages/ui/src/components/alert-dialog.ts`     | Overlays                           | `tests/preview/wave4a-components.test.mjs`    |
+| `AlertDialogTitle`       | `packages/ui/src/components/alert-dialog.ts`     | Overlays                           | `tests/preview/wave4a-components.test.mjs`    |
+| `AlertDialogDescription` | `packages/ui/src/components/alert-dialog.ts`     | Overlays                           | `tests/preview/wave4a-components.test.mjs`    |
+| `AlertDialogFooter`      | `packages/ui/src/components/alert-dialog.ts`     | Overlays                           | `tests/preview/wave4a-components.test.mjs`    |
+| `AlertDialogAction`      | `packages/ui/src/components/alert-dialog.ts`     | Overlays                           | `tests/preview/wave4a-components.test.mjs`    |
+| `AlertDialogCancel`      | `packages/ui/src/components/alert-dialog.ts`     | Overlays                           | `tests/preview/wave4a-components.test.mjs`    |
 | `Popover`                | `packages/ui/src/components/popover.ts`          | Overlays                           | `tests/preview/popover.test.mjs`              |
 | `PopoverTrigger`         | `packages/ui/src/components/popover.ts`          | Overlays                           | `tests/preview/popover.test.mjs`              |
 | `PopoverContent`         | `packages/ui/src/components/popover.ts`          | Overlays                           | `tests/preview/popover.test.mjs`              |
@@ -166,6 +176,15 @@ parser in `crates/ui-bridge/tests/sdk_resources.rs`. Pinned native adaptations l
 | `CommandPaletteProvider` | `packages/ui/src/components/command-palette.ts`  | Workbench                          | `tests/preview/command-palette.test.mjs`      |
 | `useCommandPalette`      | `packages/ui/src/components/command-palette.ts`  | Workbench                          | `tests/preview/command-palette.test.mjs`      |
 | `scoreCommandMatch`      | `packages/ui/src/components/command-palette.ts`  | Helper                             | `tests/preview/command-palette.test.mjs`      |
+| `Table`                  | `packages/ui/src/components/table.ts`            | Workbench                          | `tests/preview/wave4a-components.test.mjs`    |
+| `TableHeader`            | `packages/ui/src/components/table.ts`            | Workbench                          | `tests/build/components.test.mjs`             |
+| `TableBody`              | `packages/ui/src/components/table.ts`            | Workbench                          | `tests/build/components.test.mjs`             |
+| `TableFooter`            | `packages/ui/src/components/table.ts`            | Workbench                          | `tests/build/components.test.mjs`             |
+| `TableRow`               | `packages/ui/src/components/table.ts`            | Workbench                          | `tests/build/components.test.mjs`             |
+| `TableHead`              | `packages/ui/src/components/table.ts`            | Workbench                          | `tests/preview/wave4a-components.test.mjs`    |
+| `TableCell`              | `packages/ui/src/components/table.ts`            | Workbench                          | `tests/preview/wave4a-components.test.mjs`    |
+| `TableCaption`           | `packages/ui/src/components/table.ts`            | Workbench                          | `tests/build/components.test.mjs`             |
+| `DataTable`              | `packages/ui/src/components/data-table.ts`       | Workbench                          | `tests/preview/wave4a-components.test.mjs`    |
 
 ## Gallery `testId` Vocabulary
 
@@ -212,6 +231,10 @@ Dynamic preset items also expose `preset-${name}` (`preset-base`, `preset-ocean`
 | `overlay-dialog-input`          | `apps/examples/gallery/src/sections/overlays.tsx`   | Autofocused input inside dialog         |
 | `overlay-custom-dialog-trigger` | `apps/examples/gallery/src/sections/overlays.tsx`   | Custom DialogDismiss dialog trigger     |
 | `overlay-custom-dismiss`        | `apps/examples/gallery/src/sections/overlays.tsx`   | Custom close action via DialogDismiss   |
+| `overlay-alert-trigger`         | `apps/examples/gallery/src/sections/overlays.tsx`   | Opens destructive confirmation          |
+| `overlay-alert-content`         | `apps/examples/gallery/src/sections/overlays.tsx`   | AlertDialog surface                     |
+| `overlay-alert-cancel`          | `apps/examples/gallery/src/sections/overlays.tsx`   | Keeps the demo history                  |
+| `overlay-alert-confirm`         | `apps/examples/gallery/src/sections/overlays.tsx`   | Confirms clearing the demo history      |
 | `overlay-popover-trigger`       | `apps/examples/gallery/src/sections/overlays.tsx`   | Anchored popover trigger                |
 | `overlay-popover-content`       | `apps/examples/gallery/src/sections/overlays.tsx`   | Anchored popover surface                |
 | `section-menus`                 | `apps/examples/gallery/src/sections/menus.tsx`      | Menus tab section grid                  |
@@ -242,17 +265,17 @@ Dynamic preset items also expose `preset-${name}` (`preset-base`, `preset-ocean`
 | `workbench-command-trigger`     | `apps/examples/gallery/src/sections/workbench.tsx`  | CommandPalette modal trigger button     |
 | `workbench-command-last`        | `apps/examples/gallery/src/sections/workbench.tsx`  | Last executed command readout badge     |
 | `workbench-command-palette`     | `apps/examples/gallery/src/sections/workbench.tsx`  | Workbench CommandPalette dialog surface |
+| `workbench-table`               | `apps/examples/gallery/src/sections/workbench.tsx`  | Static build summary table              |
+| `workbench-data-table`          | `apps/examples/gallery/src/sections/workbench.tsx`  | Virtualized sortable build history      |
 
 ## Unported Upstream Stylesheets
 
 Upstream stylesheets synced into `packages/ui/src/components/generated/` that are not yet wrapped by components:
 
-- `AlertDialogStyle`
 - `BreadcrumbStyle`
 - `CalendarStyle`
 - `CarouselStyle`
 - `ChartStyle`
-- `DataTableStyle`
 - `DatePickerStyle`
 - `FieldGroupStyle`
 - `FieldStyle`
@@ -267,7 +290,6 @@ Upstream stylesheets synced into `packages/ui/src/components/generated/` that ar
 - `SidebarBandStyle`
 - `SidebarMenuStyle`
 - `SidebarStyle`
-- `TableStyle`
 - `VirtualListStyle`
 
 ## Interactive Statecharts

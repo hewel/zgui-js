@@ -9,6 +9,7 @@
   "properties": {
     "schemaVersion": { "type": "integer", "const": 1 },
     "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "\\S" },
+    "activation": { "$ref": "#/$defs/activation" },
     "runtimeEnvironment": {
       "type": "object",
       "additionalProperties": false,
@@ -105,12 +106,32 @@
               "channel": { "const": "control.message" },
               "value": { "$ref": "#/$defs/controlMessage" }
             }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["atMs", "channel", "value"],
+            "properties": {
+              "atMs": { "$ref": "#/$defs/milliseconds" },
+              "channel": { "const": "activation" },
+              "value": { "$ref": "#/$defs/activation" }
+            }
           }
         ]
       }
     }
   },
   "$defs": {
+    "activation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["args"],
+      "properties": {
+        "args": { "type": "array", "maxItems": 64, "items": { "type": "string" } },
+        "cwd": { "type": ["string", "null"], "pattern": "^/[^\\u0000]*$" }
+      },
+      "description": "Application arguments total at most 64 KiB of UTF-8. An omitted cwd is null."
+    },
     "milliseconds": { "type": "integer", "minimum": 0, "maximum": 4294967295 },
     "error": {
       "type": "object",

@@ -167,6 +167,8 @@ pub(crate) struct Shared {
     /// first configure has to be answered with a frame or the surface is never shown, and every
     /// later restatement is a frame identical to the one already on the screen.
     pub(crate) mapped: bool,
+    /// Inbound activation tokens awaiting the first buffer of this mapping.
+    pub(crate) launch_tokens: Vec<zgui_platform::ActivationToken>,
     /// The extent, scale, and window geometry whose buffer metadata the compositor was last given.
     ///
     /// A buffer scale, a viewport destination and a window geometry are sent only with a buffer
@@ -270,6 +272,7 @@ impl Shared {
             exact_owed: false,
             answering_resize: false,
             mapped: false,
+            launch_tokens: Vec::new(),
             declared: None,
             window_geometry_insets: Edges::new(0, 0, 0, 0),
             configured_visual: None,

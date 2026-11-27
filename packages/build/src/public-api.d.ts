@@ -36,6 +36,8 @@ export type Capabilities = {
   namedSockets?: string[];
   commands?: string[];
   controlChannel?: boolean;
+  /** Base package launch policy; overlays cannot enable this. */
+  singleInstance?: boolean;
   clipboard?: ClipboardCapabilities;
   sqlite?: SqliteCapabilities;
   files?: FilesCapabilities;
@@ -151,6 +153,8 @@ export type DevMode = "desktop" | "preview";
 export interface DevApplicationOptions extends Omit<BuildApplicationOptions, "development"> {
   strictTypecheck?: boolean | undefined;
   hostArgs?: string[];
+  /** Working directory for the native process, independent of bundle and Cargo paths. */
+  hostCwd?: string;
   hostRoot?: string;
   hostExecutable?: string;
   mode?: DevMode;

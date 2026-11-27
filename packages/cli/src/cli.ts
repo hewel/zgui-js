@@ -39,6 +39,7 @@ Relative file and directory flags are resolved from the current working director
   --host-root DIR        Build the host from this Cargo checkout and run it there
   --host-executable PATH Run this prebuilt host instead of resolving packages/Cargo
   dev --exit-after-ms N  Close the native app after N milliseconds
+  dev [DIR] -- APP_ARGS...  Pass arguments to the application, not the host
   dev --width N          Override initial window width in logical pixels
   dev --height N         Override initial window height in logical pixels
   dev --title TEXT       Override initial window title
@@ -94,6 +95,7 @@ type Command =
       devInspect?: string;
       pureShell: boolean;
       strictTypecheck: boolean;
+      appArgs: string[];
     } & HostOptions)
   | ({
       command: "preview";
@@ -239,6 +241,9 @@ function parse(args: string[]): Command {
   ) {
     throw new Error(usage);
   }
+  const delimiter = command === "dev" ? args.indexOf("--") : -1;
+  const appArgs = delimiter < 0 ? [] : args.splice(delimiter + 1);
+  if (delimiter >= 0) args.pop();
   const flags = new Map<string, string | true>();
   const allowed = new Set([
     ...(command === "doctor" || command === "smoke" ? [] : ["--app", "--capabilities-file"]),
@@ -361,6 +366,7 @@ function parse(args: string[]): Command {
         devInspect: pathValue("--dev-inspect"),
         pureShell: flags.has("--pure-shell"),
         strictTypecheck: flags.has("--strict-typecheck"),
+        appArgs,
       };
     case "preview":
       return {
@@ -566,12 +572,14 @@ export async function runCli(rawArgs: readonly string[]): Promise<number> {
     if (selected.layerConfig !== undefined) hostArgs.push("--layer-config", selected.layerConfig);
     if (selected.devInspect !== undefined) hostArgs.push("--dev-inspect", selected.devInspect);
     if (selected.pureShell) hostArgs.push("--pure-shell");
+    if (selected.appArgs.length) hostArgs.push("--", ...selected.appArgs);
     return withInterrupt(signal =>
       devApplication(application.app, {
         ...application,
         strictTypecheck: selected.strictTypecheck,
         ...host,
         hostArgs,
+        hostCwd: process.cwd(),
         signal,
       }),
     );

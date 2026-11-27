@@ -10,3 +10,4 @@ workspace = true
 
 [dependencies]
 rquickjs.workspace = true
+url.workspace = true

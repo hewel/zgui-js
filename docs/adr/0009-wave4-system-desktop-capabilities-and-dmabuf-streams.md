@@ -9,8 +9,8 @@ We will deliver **Wave 4** in three ordered stages (`4a` → `4b` → `4c`) lock
 ## Stage 1 (`Wave 4a` — Unblocking `z-logs`)
 
 1. **Single-instance `Activation` (`crates/zgui-host` + `@hewel/zgui-services`):**
-   - Add opt-in single-instance coordination over `$XDG_RUNTIME_DIR/zgui-js/<appId>.sock` (`0600`).
-   - Cold starts expose the initial `Activation` (`args`, `cwd`, optional `activationToken`); subsequent launches forward `Activation` to the running session and hand off compositor focus instead of failing with `AlreadyExists` or rejecting application positional arguments.
+   - Add base-manifest opt-in `capabilities.singleInstance` over `$XDG_RUNTIME_DIR/zgui-js/<appId>.instance.sock` (`0600`, separate from `controlChannel`).
+   - Cold starts expose `args` and `cwd`; subsequent launches forward those fields to the running session. Wayland `activationToken` remains host-only and is redeemed on the target window.
    - Simulate cold and live `Activation` events deterministically in `zgui-host preview`.
 2. **Host Time/Locale Bridge & Standard Runtime Globals (`crates/js-runtime` + `crates/host-services` + `@hewel/zgui-services`):**
    - Integrate `jiff` + `jiff-icu` + `icu4x` (`datetime` + `collator`) on the Rust host (~1.5 MiB baked data, reading system `/usr/share/zoneinfo` / `TZDIR` at runtime with deterministic timezone/locale pinning in `Fixture runtime`) to expose IANA timezone/DST civil arithmetic, localized date/time formatting, and multi-language natural string collation (`img2.png < img10.png`).

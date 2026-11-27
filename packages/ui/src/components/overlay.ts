@@ -272,6 +272,10 @@ export function modalSurface(
       const scrim = element("box", {
         class: classes(sheet.className, "zui-overlay-scrim"),
         ariaHidden: true,
+        onPointerDown(event) {
+          // A non-dismissing backdrop must not blur the focused modal control.
+          if (props.dismissOnOutsidePress === false) event.preventDefault();
+        },
         get "data-state"() {
           return presenceState();
         },

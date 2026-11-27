@@ -12,6 +12,8 @@
 
 #![deny(unsafe_code)]
 
+mod web_globals;
+
 use rquickjs::{
     Context, Ctx, Function, Module, Object, Persistent, Runtime, Value, WriteOptions,
     loader::{ImportAttributes, Loader, Resolver},
@@ -621,6 +623,16 @@ impl JsRuntime {
         })));
         let context = Context::full(&runtime).map_err(|e| {
             Diagnostic::new(DiagnosticKind::Engine, "context creation", e.to_string())
+        })?;
+        context.with(|ctx| {
+            web_globals::install(&ctx).map_err(|error| {
+                let message = if error.is_exception() {
+                    format!("{:?}", ctx.catch())
+                } else {
+                    error.to_string()
+                };
+                Diagnostic::new(DiagnosticKind::Engine, "web globals installation", message)
+            })
         })?;
         let rejections = Rc::new(RefCell::new(RejectionTracker::default()));
         let tracker = rejections.clone();

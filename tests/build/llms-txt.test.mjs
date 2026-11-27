@@ -51,8 +51,10 @@ test("llms.txt covers every @hewel/zgui/components, @hewel/zgui/primitives, @hew
     readFile(path.join(workspaceRoot, "packages/ui/src/router/index.ts"), "utf8"),
     Promise.all([
       readFile(path.join(workspaceRoot, "packages/services/src/index.ts"), "utf8"),
+      readFile(path.join(workspaceRoot, "packages/services/src/activation.ts"), "utf8"),
       readFile(path.join(workspaceRoot, "packages/services/src/network.ts"), "utf8"),
       readFile(path.join(workspaceRoot, "packages/services/src/files.ts"), "utf8"),
+      readFile(path.join(workspaceRoot, "packages/services/src/locale.ts"), "utf8"),
       readFile(path.join(workspaceRoot, "packages/services/src/sqlite.ts"), "utf8"),
       readFile(path.join(workspaceRoot, "packages/services/src/worker.ts"), "utf8"),
     ]),

@@ -23,12 +23,22 @@ function sanitizeDesktopField(value: string): string {
   return value.replace(/[\r\n]+/g, " ").trim();
 }
 
-function buildLauncherScript(app: string, { pureShell = false }: { pureShell?: boolean }): string {
+function buildLauncherScript({ pureShell = false }: { pureShell?: boolean }): string {
   const extraFlags = pureShell ? " --pure-shell" : "";
   return `#!/usr/bin/env sh
 set -eu
 DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-exec "$DIR/bin/zgui-host" --bundle "$DIR/bundle"${extraFlags} "$@"
+# Preserve the launcher diagnostics. A leading -- forces literal app arguments.
+case "\${1-}:$#" in
+  --help:1|-h:1|--version:1|-V:1)
+    exec "$DIR/bin/zgui-host" "$@" ;;
+  --version:2|-V:2)
+    if [ "$2" = --json ]; then exec "$DIR/bin/zgui-host" "$@"; fi ;;
+  --exit-after-ms:2)
+    exec "$DIR/bin/zgui-host" --bundle "$DIR/bundle"${extraFlags} "$@" ;;
+  --:*) shift ;;
+esac
+exec "$DIR/bin/zgui-host" --bundle "$DIR/bundle"${extraFlags} -- "$@"
 `;
 }
 
@@ -41,11 +51,19 @@ function buildDesktopEntry({
   id: string;
   execPath: string;
 }): string {
+  // Desktop Entry escaping precedes Exec's quoted-argument escaping.
+  const executable = execPath
+    .replaceAll("%", "%%")
+    .replace(/["`$\\]/g, "\\$&")
+    .replaceAll("\\", "\\\\")
+    .replaceAll("\n", "\\n")
+    .replaceAll("\r", "\\r")
+    .replaceAll("\t", "\\t");
   return `[Desktop Entry]
 Type=Application
 Version=1.0
 Name=${sanitizeDesktopField(name)}
-Exec=${sanitizeDesktopField(execPath)}
+Exec="${executable}" -- %F
 Terminal=false
 Categories=Utility;
 StartupWMClass=${sanitizeDesktopField(id)}
@@ -121,7 +139,7 @@ export async function packageApplication(
       await copyFile(source, path.join(licensesDir, filename));
       licensePaths.push(`licenses/${filename}`);
     }
-    await writeFile(launcherPath, buildLauncherScript(app, { pureShell }), "utf8");
+    await writeFile(launcherPath, buildLauncherScript({ pureShell }), "utf8");
     await chmod(launcherPath, 0o755);
 
     if (desktopEntry) {

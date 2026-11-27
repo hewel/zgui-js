@@ -110,6 +110,7 @@ export type {
   VirtualGridProps,
   VirtualListController,
   VirtualListProps,
+  VirtualListRowSizing,
   VirtualScrollAlign,
   VirtualScrollToIndexOptions,
 } from "./virtual-list.js";

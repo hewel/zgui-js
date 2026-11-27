@@ -6,8 +6,9 @@
     "lib": ["ES2022"],
     "types": [],
     "strict": true,
+    "exactOptionalPropertyTypes": true,
     "noEmit": true,
     "skipLibCheck": false
   },
-  "include": ["services.ts"]
+  "include": ["services.ts", "locale.ts"]
 }

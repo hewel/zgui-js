@@ -262,3 +262,114 @@ test("scrollTo, scrollBy, scrollIntoView, and VirtualList.scrollToIndex update r
     undefined,
   );
 });
+
+test("measured rows align on jump and keep the viewport steady as upward overscan grows", async t => {
+  const temp = await createTempWorkspace("preview-measured-list-");
+  t.after(() => temp.cleanup());
+  const bundle = await buildFixtureApp(
+    path.join(temp.dir, "app"),
+    "measured-list",
+    `
+    import { VirtualList, createSignal, renderApp, scrollBy } from "@hewel/zgui";
+    import type { NativeNode, VirtualListController } from "@hewel/zgui";
+    const rows = Array.from({ length: 2000 }, (_, i) => i);
+    export const hostApiVersion = 1;
+    export function mount(root: NativeNode) {
+      let handle: VirtualListController;
+      let scroller: NativeNode;
+      const [rowHeight, setRowHeight] = createSignal(60);
+      return renderApp(() => <column>
+        <row>
+          <control role="button" testId="jump" onClick={() => handle.scrollToIndex(1000, { align: "center" })}>Jump</control>
+          <control role="button" testId="up" onClick={() => scrollBy(scroller, { top: -34 })}>Scroll up</control>
+          <control role="button" testId="smooth" onClick={() => handle.scrollToIndex(1500, { align: "center", behavior: "smooth" })}>Glide</control>
+          <control role="button" testId="revisit" onClick={() => {
+            setRowHeight(96);
+            handle.scrollToIndex(1000, { align: "center" });
+          }}>Revisit</control>
+        </row>
+        <VirtualList ref={node => { scroller = node; }} testId="measured" each={rows} estimatedItemHeight={30} gap={4} overscan={1}
+          initialHeight={160} style={{ height: "160px" }} controller={value => { handle = value; }}>
+          {row => <box testId={"row-" + row}
+            style={{ height: row === 1000 ? rowHeight() + "px" : row === 996 || (row > 1005 && row % 4 === 0) ? "60px" : row === 1001 ? "20px" : "30px" }}>
+            <text>Row {row}</text>
+          </box>}
+        </VirtualList>
+      </column>, root);
+    }
+    `,
+    { rawSource: true },
+  );
+  const { out } = await runScenario({
+    projectDir: temp.dir,
+    bundle,
+    name: "measured-list",
+    requiredCapabilities: [],
+    width: 480,
+    height: 260,
+    scale: 1,
+    steps: [
+      {
+        id: "jump",
+        op: "pointer.click",
+        button: "primary",
+        target: { surface: "main", testId: "jump" },
+      },
+      { id: "settle-jump", op: "clock.advance", byMs: 200 },
+      { id: "cap-jump", op: "capture", captureId: "jump" },
+      {
+        id: "up",
+        op: "pointer.click",
+        button: "primary",
+        target: { surface: "main", testId: "up" },
+      },
+      { id: "settle-up", op: "clock.advance", byMs: 200 },
+      { id: "cap-up", op: "capture", captureId: "up" },
+      {
+        id: "smooth",
+        op: "pointer.click",
+        button: "primary",
+        target: { surface: "main", testId: "smooth" },
+      },
+      { id: "settle-smooth", op: "clock.advance", byMs: 1500 },
+      { id: "cap-smooth", op: "capture", captureId: "smooth" },
+      {
+        id: "revisit",
+        op: "pointer.click",
+        button: "primary",
+        target: { surface: "main", testId: "revisit" },
+      },
+      { id: "settle-revisit", op: "clock.advance", byMs: 200 },
+      { id: "cap-revisit", op: "capture", captureId: "revisit" },
+    ],
+  });
+  const jumped = await readTree(out, "jump");
+  const up = await readTree(out, "up");
+  const viewport = getNode(jumped, "measured").boundsLogical;
+  const before = getNode(jumped, "row-1000").boundsLogical;
+  const next = getNode(jumped, "row-1001").boundsLogical;
+  assert.equal(before.height, 60);
+  assert.equal(next.height, 20);
+  assert.ok(Math.abs(next.y - before.y - before.height - 4) <= 1, "measured rows do not overlap");
+  assert.ok(Math.abs(before.y + 30 - (viewport.y + 80)) <= 1, "target centers after measurement");
+  assert.ok(!jumped.nodes.some(node => node.testId === "row-996"));
+  assert.ok(getNode(up, "row-996"));
+  assert.ok(!up.nodes.some(node => node.testId === "row-0"));
+  const after = getNode(up, "row-1000").boundsLogical;
+  assert.ok(
+    Math.abs(after.y - before.y - 34) <= 2,
+    `expected 34px anchor movement, got ${after.y - before.y}`,
+  );
+  const smooth = await readTree(out, "smooth");
+  const smoothTarget = getNode(smooth, "row-1500").boundsLogical;
+  assert.ok(
+    Math.abs(smoothTarget.y + smoothTarget.height / 2 - (viewport.y + 80)) <= 1,
+    "measurements along a glide do not cancel or misalign the destination",
+  );
+  const revisited = getNode(await readTree(out, "revisit"), "row-1000").boundsLogical;
+  assert.equal(revisited.height, 96);
+  assert.ok(
+    Math.abs(revisited.y + 48 - (viewport.y + 80)) <= 1,
+    "a previously measured row is re-aligned if its height changed offscreen",
+  );
+});

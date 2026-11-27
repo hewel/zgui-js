@@ -18,6 +18,7 @@ pub mod command;
 pub mod compute_worker;
 pub mod control;
 pub mod files;
+pub mod locale;
 pub mod network;
 pub mod sqlite;
 pub mod unix_socket;

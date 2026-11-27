@@ -469,7 +469,7 @@ struct AdvanceInput { id:String,by_ms:u64 }
 struct BlurSupportedInput { id: String, supported: bool }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct EmitInput { id:String,channel:String,value:serde_json::Value }
+struct EmitInput { id:String, #[serde(alias = "service")] channel:String, value:serde_json::Value }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ResizeInput { id:String,surface:String,width:u32,height:u32 }

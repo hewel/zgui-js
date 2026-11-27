@@ -30,6 +30,10 @@ use zgui_platform::{
 };
 use zgui_platform_wayland::WaylandApp;
 use zgui_vocab::{KeyState, NamedKey, PointerAction};
+use wayland_client::{Connection, QueueHandle, globals::registry_queue_init, protocol::{
+    wl_buffer::WlBuffer, wl_shm::{self, WlShm}, wl_shm_pool::WlShmPool,
+}};
+use zgui_platform::ActivationToken;
 
 const CLIENT_ENV: &str = "ZGUI_ACTIVATION_TOKEN_PROTOCOL_CLIENT";
 const TIMEOUT: Duration = Duration::from_secs(5);
@@ -182,6 +186,94 @@ fn activation_token_minting_wire_order_and_cancellation_on_the_wire() {
     assert_eq!(t3.app_id, None);
     assert!(t3.committed);
     assert_eq!(t3.destroy_count, 1, "cancelled token #3 must be destroyed exactly once");
+}
+
+#[test]
+fn inbound_activation_redeems_startup_and_live_tokens_on_the_mapped_toplevel() {
+    const TEST_NAME: &str = "inbound_activation_redeems_startup_and_live_tokens_on_the_mapped_toplevel";
+    if std::env::var(CLIENT_ENV).as_deref() == Ok("redeem") {
+        let mut app = WaylandApp::new(RedeemClient::default()).expect("connect to private Wayland compositor");
+        let lookup = app.wl_surface_lookup();
+        let conn = app.connection().clone();
+        let (globals, queue) = registry_queue_init::<ShmClient>(&conn).expect("sidecar registry");
+        let qh = queue.handle();
+        let shm: WlShm = globals.bind(&qh, 1..=1, ()).expect("sidecar shm");
+        let path = std::env::temp_dir().join(format!("zgui-redeem-shm-{}", std::process::id()));
+        let file = std::fs::OpenOptions::new().read(true).write(true).create_new(true).open(&path).expect("shm file");
+        std::fs::remove_file(path).expect("unlink shm file");
+        file.set_len(16 * 16 * 4).expect("size shm");
+        let pool = shm.create_pool(file.as_fd(), 16 * 16 * 4, &qh, ());
+        let buffer = pool.create_buffer(0, 16, 16, 64, wl_shm::Format::Argb8888, &qh, ());
+        pool.destroy();
+        app.handler_mut().draw = Some(Box::new(move |id| {
+            let wl = lookup(id).expect("mapped Wayland surface");
+            wl.attach(Some(&buffer), 0, 0);
+            wl.commit();
+            buffer.destroy();
+        }));
+        app.run().expect("Wayland client loop");
+        return;
+    }
+
+    let (_socket, mut child, stream) = spawn_client(TEST_NAME, "redeem");
+    let mut server = MintCompositor::new(stream);
+    server.run();
+    let status = child.wait().expect("wait for client");
+    assert!(status.success(), "Wayland client exited with {status}");
+    let (_, wl, _) = server.toplevel.expect("toplevel");
+    let mapped = server.buffer_commit.expect("first content commit");
+    assert_eq!(
+        server.redeemed.iter().map(|(_, token, target)| (token.as_str(), *target)).collect::<Vec<_>>(),
+        [("cold-token", wl), ("forwarded-token", wl)],
+    );
+    assert!(server.redeemed.iter().all(|(seq, _, _)| *seq > mapped), "do not redeem before mapping");
+    assert!(server.tokens.is_empty(), "inbound activation must not mint token objects");
+}
+
+struct ShmClient;
+wayland_client::delegate_noop!(ShmClient: ignore WlShm);
+wayland_client::delegate_noop!(ShmClient: ignore WlShmPool);
+wayland_client::delegate_noop!(ShmClient: ignore WlBuffer);
+impl wayland_client::Dispatch<wayland_client::protocol::wl_registry::WlRegistry, wayland_client::globals::GlobalListContents> for ShmClient {
+    fn event(
+        _: &mut Self, _: &wayland_client::protocol::wl_registry::WlRegistry,
+        _: wayland_client::protocol::wl_registry::Event, _: &wayland_client::globals::GlobalListContents,
+        _: &Connection, _: &QueueHandle<Self>,
+    ) {}
+}
+
+#[derive(Default)]
+struct RedeemClient {
+    draw: Option<Box<dyn FnOnce(SurfaceId)>>,
+    id: Option<SurfaceId>,
+}
+
+impl AppHandler for RedeemClient {
+    fn surfaces_available(&mut self, cx: &dyn PlatformCx) {
+        let mut attrs = SurfaceAttributes::new("activation-test");
+        attrs.size = Some(Size::new(CssPx(16.0), CssPx(16.0)));
+        let surface = cx.create_surface(&attrs).expect("open toplevel");
+        self.id = Some(surface.id());
+        surface.activate_with_token(ActivationToken::new("cold-token")).expect("accept startup token");
+    }
+
+    fn surface_event(&mut self, cx: &dyn PlatformCx, id: SurfaceId, event: SurfaceEvent) {
+        if matches!(event, SurfaceEvent::RedrawRequested) && let Some(draw) = self.draw.take() {
+            cx.surface(id).expect("toplevel").pre_present_frame(Size::new(16, 16), 1.0);
+            draw(id);
+        } else if matches!(event, SurfaceEvent::CloseRequested) {
+            // The in-test compositor sends this wake only after observing cold redemption.
+            cx.waker().wake(WakeReason::AppWork);
+        }
+    }
+
+    fn wake(&mut self, cx: &dyn PlatformCx, reason: WakeReason) {
+        if matches!(reason, WakeReason::AppWork) {
+            cx.surface(self.id.expect("toplevel id")).expect("toplevel")
+                .activate_with_token(ActivationToken::new("forwarded-token")).expect("accept live token");
+            cx.request_exit();
+        }
+    }
 }
 
 #[derive(Default)]
@@ -363,6 +455,7 @@ enum MintObject {
     Layer,
     Positioner,
     XdgSurface(u32),
+    Toplevel,
     Popup,
     Region,
 }
@@ -409,6 +502,10 @@ struct MintCompositor {
     tokens: Vec<RecordedToken>,
     pending_popup_token: Option<usize>,
     activate_calls: u32,
+    toplevel: Option<(u32, u32, u32)>,
+    toplevel_buffer: bool,
+    buffer_commit: Option<usize>,
+    redeemed: Vec<(usize, String, u32)>,
 }
 
 impl MintCompositor {
@@ -430,6 +527,10 @@ impl MintCompositor {
             tokens: Vec::new(),
             pending_popup_token: None,
             activate_calls: 0,
+            toplevel: None,
+            toplevel_buffer: false,
+            buffer_commit: None,
+            redeemed: Vec::new(),
         }
     }
 
@@ -566,6 +667,11 @@ impl MintCompositor {
             (MintObject::XdgShell, 2) => {
                 self.objects.insert(arg(0), MintObject::XdgSurface(arg(1)));
             }
+            (MintObject::XdgSurface(wl), 1) => {
+                let role = arg(0);
+                self.objects.insert(role, MintObject::Toplevel);
+                self.toplevel = Some((role, wl, id));
+            }
             (MintObject::XdgSurface(wl), 2) => {
                 let role = arg(0);
                 self.objects.insert(role, MintObject::Popup);
@@ -582,6 +688,9 @@ impl MintCompositor {
                     self.popup_ready = true;
                     self.maybe_send_pointer_1();
                 }
+            }
+            (MintObject::Surface, 1) if self.toplevel.is_some_and(|(_, wl, _)| wl == id) => {
+                self.toplevel_buffer = arg(0) != 0;
             }
             (MintObject::Surface, 3) => {
                 // wl_surface.frame(callback) -> used by client pre_present_notify()
@@ -600,6 +709,15 @@ impl MintCompositor {
                 }
             }
             (MintObject::Surface, 6) => {
+                if let Some((role, _, xdg)) = self.toplevel.filter(|(_, wl, _)| *wl == id) {
+                    if self.toplevel_buffer {
+                        self.buffer_commit.get_or_insert(self.seq);
+                    } else {
+                        self.event(role, 0, &[16, 16, 0]);
+                        self.event(xdg, 0, &[1]);
+                    }
+                    return;
+                }
                 if let Some(layer) = self.layer
                     && id == layer.wl
                     && !self.layer_committed
@@ -648,6 +766,13 @@ impl MintCompositor {
             }
             (MintObject::Activation, 2) => {
                 self.activate_calls += 1;
+                let len = arg(0) as usize;
+                let token = std::str::from_utf8(&body[4..4 + len - 1]).expect("activation token").to_owned();
+                let target = arg(1 + len.div_ceil(4));
+                self.redeemed.push((self.seq, token, target));
+                if self.redeemed.len() == 1 && let Some((role, _, _)) = self.toplevel {
+                    self.event(role, 1, &[]);
+                }
             }
             (MintObject::ActivationToken(idx), 0) => {
                 self.tokens[idx].serial_and_seat = Some((arg(0), arg(1)));
