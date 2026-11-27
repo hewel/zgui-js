@@ -10,6 +10,7 @@ use std::{
     path::{Component, Path, PathBuf},
 };
 
+use super::EntryKind;
 use crate::{
     ServiceError,
     files::{FileMode, map_io_error},
@@ -20,6 +21,8 @@ use crate::{
 pub struct Root {
     path: Arc<Path>,
     mode: FileMode,
+    user_authorized: bool,
+    entry_only: Option<Arc<OsStr>>,
 }
 
 impl Root {
@@ -38,10 +41,7 @@ impl Root {
             ));
         }
         pin(&path, libc::O_DIRECTORY | libc::O_PATH).map_err(path_error)?;
-        Ok(Self {
-            path: path.into(),
-            mode,
-        })
+        Ok(Self::virtual_root(path, mode))
     }
 
     /// Construct authority for a canonical path verified by a virtual filesystem.
@@ -49,6 +49,8 @@ impl Root {
         Self {
             path: path.into(),
             mode,
+            user_authorized: false,
+            entry_only: None,
         }
     }
 
@@ -61,6 +63,88 @@ impl Root {
     pub fn mode(&self) -> FileMode {
         self.mode
     }
+
+    /// Mark an entire directory authorized by user selection, directory drop, or grant restore.
+    pub fn with_user_authorization(mut self) -> Self {
+        debug_assert!(self.entry_only.is_none());
+        self.user_authorized = true;
+        self
+    }
+
+    /// Reject persistence when this handle did not receive whole-directory user authorization.
+    pub fn require_user_authorization(&self) -> Result<(), ServiceError> {
+        if self.is_entry_only() {
+            return Err(entry_only_denied());
+        }
+        if !self.user_authorized {
+            return Err(ServiceError::new(
+                "E_CAPABILITY",
+                "manifest-declared system directories cannot mint persistent user grants",
+            ));
+        }
+        Ok(())
+    }
+
+    /// Restrict a dropped non-directory to exactly one child of this root.
+    pub fn confine_to_entry(mut self, name: &OsStr) -> Self {
+        self.mode = FileMode::Read;
+        self.user_authorized = false;
+        self.entry_only = Some(name.into());
+        self
+    }
+
+    /// Whether this handle grants a child rather than its containing directory.
+    pub fn is_entry_only(&self) -> bool {
+        self.entry_only.is_some()
+    }
+
+    /// Encode an entry relative to this whole-directory grant.
+    pub fn relative_path(&self, path: &Path) -> Option<String> {
+        if self.is_entry_only() {
+            return None;
+        }
+        let mut relative = String::new();
+        for part in path.strip_prefix(self.path()).ok()?.components() {
+            if !relative.is_empty() {
+                relative.push('/');
+            }
+            push_encoded_name(&mut relative, part.as_os_str());
+        }
+        Some(relative)
+    }
+}
+
+/// Locate the dropped name under a canonical parent, without following a final symlink.
+pub fn locate_dropped_entry(path: &Path) -> Result<(PathBuf, EntryKind), ServiceError> {
+    locate_drop(
+        path,
+        |parent| fs::canonicalize(parent).map_err(map_io_error),
+        |path| {
+            fs::symlink_metadata(path)
+                .map(|meta| EntryKind::of(&meta))
+                .map_err(map_io_error)
+        },
+    )
+}
+
+pub(super) fn locate_drop(
+    path: &Path,
+    resolve: impl FnOnce(&Path) -> Result<PathBuf, ServiceError>,
+    kind: impl FnOnce(&Path) -> Result<EntryKind, ServiceError>,
+) -> Result<(PathBuf, EntryKind), ServiceError> {
+    if path == Path::new("/") {
+        return Ok((path.to_owned(), EntryKind::Dir));
+    }
+    let (Some(parent), Some(name)) = (path.parent().filter(|p| p.is_absolute()), path.file_name())
+    else {
+        return Err(ServiceError::new(
+            "InvalidPath",
+            "invalid dropped file path",
+        ));
+    };
+    let path = resolve(parent)?.join(name);
+    let kind = kind(&path)?;
+    Ok((path, kind))
 }
 
 /// Snapshot of a handle and the additional active roots it can traverse.
@@ -102,13 +186,22 @@ impl Scope {
 
     pub(super) fn lexical(&self, relative: &str, access: Access) -> Result<PathBuf, ServiceError> {
         authorize_mode(self.root.mode, access)?;
-        Ok(self.root.path.join(decode_relative(relative)?))
+        let relative = decode_relative(relative)?;
+        if self
+            .root
+            .entry_only
+            .as_deref()
+            .is_some_and(|name| relative != Path::new(name))
+        {
+            return Err(entry_only_denied());
+        }
+        Ok(self.root.path.join(relative))
     }
 
     pub(super) fn authorize(&self, path: &Path, access: Access) -> Result<(), ServiceError> {
         let mut covered = false;
         for root in std::iter::once(&self.root).chain(self.other.iter()) {
-            if path.starts_with(&root.path) {
+            if !root.is_entry_only() && path.starts_with(&root.path) {
                 covered = true;
                 if authorize_mode(root.mode, access).is_ok() {
                     return Ok(());
@@ -142,6 +235,21 @@ impl Scope {
         flags: i32,
     ) -> Result<(PathBuf, File), ServiceError> {
         let path = self.lexical(relative, access)?;
+        if self.root.is_entry_only() {
+            // Opening the exact name without following any link avoids both target probes
+            // and accepting a directory substituted for a dropped regular file.
+            let file = pin(&path, flags).map_err(|error| {
+                if error.raw_os_error() == Some(libc::ELOOP) {
+                    entry_only_denied()
+                } else {
+                    path_error(error)
+                }
+            })?;
+            if !file.metadata().map_err(map_io_error)?.is_file() {
+                return Err(entry_only_denied());
+            }
+            return Ok((path, file));
+        }
         let path = self.canonical_inside(&path, access)?;
         let file = pin(&path, flags).map_err(path_error)?;
         Ok((path, file))
@@ -176,6 +284,14 @@ impl Scope {
                 "authorized directory was replaced by a symlink",
             ));
         }
+        if self.root.is_entry_only() {
+            // The parent is only an anchor for the name, never an authorized target.
+            return if relative.as_os_str().is_empty() {
+                Ok(canonical)
+            } else {
+                Err(entry_only_denied())
+            };
+        }
         self.authorize(&canonical, access)?;
         // A link can leave the granted roots and later link back to an authorized path.
         for component in relative.components() {
@@ -198,6 +314,20 @@ impl Scope {
         let canonical = self.canonical_inside(parent, access)?;
         Leaf::new(&canonical, name)
     }
+
+    pub(super) fn require_listable(&self) -> Result<(), ServiceError> {
+        if self.root.is_entry_only() {
+            return Err(entry_only_denied());
+        }
+        Ok(())
+    }
+
+    pub(super) fn check_leaf_kind(&self, kind: EntryKind) -> Result<(), ServiceError> {
+        if self.root.is_entry_only() && !matches!(kind, EntryKind::File | EntryKind::Symlink) {
+            return Err(entry_only_denied());
+        }
+        Ok(())
+    }
 }
 
 fn authorize_mode(mode: FileMode, access: Access) -> Result<(), ServiceError> {
@@ -210,6 +340,13 @@ fn authorize_mode(mode: FileMode, access: Access) -> Result<(), ServiceError> {
 
 pub(super) fn denied() -> ServiceError {
     ServiceError::new("E_CAPABILITY", "system directory grant is read-only")
+}
+
+pub(super) fn entry_only_denied() -> ServiceError {
+    ServiceError::new(
+        "E_CAPABILITY",
+        "external drop grants only the named entry, not its directory or symlink target",
+    )
 }
 
 pub(super) fn path_error(error: io::Error) -> ServiceError {
@@ -283,11 +420,22 @@ pub(super) fn pin(path: &Path, flags: i32) -> io::Result<File> {
 // Backslash escaping keeps non-UTF-8 POSIX names addressable without aliasing a
 // different file whose actual name happens to contain replacement characters.
 pub(super) fn encode_name(name: &OsStr) -> String {
+    let mut encoded = String::with_capacity(name.len());
+    push_encoded_name(&mut encoded, name);
+    encoded
+}
+
+fn push_encoded_name(encoded: &mut String, name: &OsStr) {
     if let Some(name) = name.to_str() {
-        return name.replace('\\', "\\\\");
+        for (index, part) in name.split('\\').enumerate() {
+            if index != 0 {
+                encoded.push_str("\\\\");
+            }
+            encoded.push_str(part);
+        }
+        return;
     }
     use std::fmt::Write as _;
-    let mut encoded = String::new();
     for &byte in name.as_bytes() {
         if byte.is_ascii() && byte != b'\\' {
             encoded.push(char::from(byte));
@@ -295,7 +443,6 @@ pub(super) fn encode_name(name: &OsStr) -> String {
             write!(encoded, "\\x{byte:02x}").expect("writing to String cannot fail");
         }
     }
-    encoded
 }
 
 pub(super) fn decode_relative(relative: &str) -> Result<PathBuf, ServiceError> {

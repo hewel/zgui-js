@@ -1510,6 +1510,7 @@ impl FixtureRuntime {
                         | "revokeBookmark"
                         | "listGrants"
                         | "revokeGrant"
+                        | "clearGrants"
                 )
                 | ("system-files", "openExternal")
                 | (

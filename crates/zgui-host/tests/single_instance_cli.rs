@@ -257,6 +257,7 @@ fn secondary_forwards_only_a_valid_activation_token_to_the_primary() {
             }
         };
         stream.set_read_timeout(Some(DEADLINE)).unwrap();
+        stream.write_all(format!("zgui-activation-v1:hello:{APP_ID}\n").as_bytes()).unwrap();
         let mut size = [0; 4];
         stream.read_exact(&mut size).unwrap();
         let mut body = vec![0; u32::from_be_bytes(size) as usize];
@@ -267,6 +268,37 @@ fn secondary_forwards_only_a_valid_activation_token_to_the_primary() {
             serde_json::from_slice::<Value>(&body).unwrap(),
             json!({"appId":APP_ID,"args":["a file.txt"],"cwd":workspace.0,"activationToken":expected}),
         );
+    }
+    for hello in [
+        Some(format!("zgui-activation-v2:hello:{APP_ID}\n")),
+        Some("zgui-activation-v1:hello:another-app\n".to_owned()),
+        None,
+    ] {
+        let mut child = workspace
+            .command(&bundle)
+            .env("XDG_ACTIVATION_TOKEN", "private-token")
+            .args(["--", "private-argument"])
+            .spawn()
+            .unwrap();
+        let end = Instant::now() + DEADLINE;
+        let mut stream = loop {
+            match listener.accept() {
+                Ok((stream, _)) => break stream,
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock && Instant::now() < end => {
+                    assert!(child.try_wait().unwrap().is_none(), "secondary exited before connecting");
+                    thread::sleep(Duration::from_millis(2));
+                }
+                Err(error) => panic!("accept activation connection: {error}"),
+            }
+        };
+        stream.set_read_timeout(Some(DEADLINE)).unwrap();
+        if let Some(hello) = &hello {
+            stream.write_all(hello.as_bytes()).unwrap();
+            stream.shutdown(std::net::Shutdown::Write).unwrap();
+        }
+        let mut byte = [0];
+        assert_eq!(stream.read(&mut byte).unwrap(), 0, "sent activation data to {hello:?}");
+        assert!(!child.wait().unwrap().success());
     }
 }
 

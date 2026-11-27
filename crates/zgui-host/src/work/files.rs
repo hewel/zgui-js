@@ -15,7 +15,8 @@ use host_services::{
         HandleKind, MAX_READ_BYTES, MAX_WATCH_DEBOUNCE_MS, MAX_WRITE_BYTES, MIN_WATCH_DEBOUNCE_MS,
         WatchEvent, atomic_write_bytes,
         grants::{
-            GrantKind, WorkspaceGrantCeiling, list_grants, persist_grant, resolve_grant_store_path,
+            GrantKind, WorkspaceGrantCeiling, clear_grants, list_grants, persist_grant,
+            resolve_grant_store_path,
             restore_workspace_grant, revoke_grant, revoke_workspace_grant,
         },
         mkdir_scoped,
@@ -25,6 +26,7 @@ use host_services::{
         vfs::{PreviewFs, ScriptedDialogKind},
         watcher::DirectoryWatcher,
     },
+    system_files::EntryKind,
 };
 use rquickjs::{
     Array, Class, Ctx, Exception, Function, IntoJs, JsLifetime, Object, Persistent, TypedArray,
@@ -78,6 +80,7 @@ pub(crate) enum FileCompletionValue {
     Void,
     Bool(bool),
     Text(String),
+    Count(usize),
     Bytes(Vec<u8>),
     Stat(FileStat),
     DirEntries(Vec<DirEntry>),
@@ -111,6 +114,12 @@ pub(crate) struct GrantInfo {
     label: String,
     mode: FileMode,
     created_ms: u64,
+}
+
+pub(crate) struct DroppedEntries<'js> {
+    pub(crate) files: Array<'js>,
+    pub(crate) directories: Array<'js>,
+    pub(crate) system_entries: Array<'js>,
 }
 
 pub(crate) enum FileEvent {
@@ -364,6 +373,13 @@ impl Work {
         )?;
         let weak = Rc::downgrade(self);
         services.prop(
+            "clearGrants",
+            data_property(Func::from(move |ctx: Ctx<'js>| {
+                owner(&weak, &ctx)?.clear_file_grants(&ctx)
+            })),
+        )?;
+        let weak = Rc::downgrade(self);
+        services.prop(
             "watchDirectory",
             data_property(Func::from(
                 move |ctx: Ctx<'js>,
@@ -610,45 +626,35 @@ impl Work {
         ctx: &Ctx<'js>,
         paths: &[PathBuf],
         action: zgui::platform::DragAction,
-    ) -> rquickjs::Result<Option<(Array<'js>, Array<'js>)>> {
+    ) -> rquickjs::Result<Option<DroppedEntries<'js>>> {
         let slots = MAX_FILE_HANDLES - self.files.handles.borrow().len();
+        let system_slots = self.system_files.dropped_root_slots();
+        let mut system = Vec::new();
+        let mut represented = 0;
         let mut handles = Vec::new();
         for raw_path in paths {
-            let (path, kind) = match &self.files.backend {
-                FilesBackend::Preview { vfs, .. } => {
-                    let Some(path) = raw_path.to_str() else { continue };
-                    let Ok(stat) = vfs.borrow().stat(path) else { continue };
-                    let kind = if stat.is_file {
-                        HandleKind::File
-                    } else if stat.is_dir {
-                        HandleKind::Dir
-                    } else {
-                        continue;
-                    };
-                    (path.to_owned(), kind)
-                }
-                FilesBackend::Live { .. } => {
-                    let Ok(path) = std::fs::canonicalize(raw_path) else { continue };
-                    let Ok(metadata) = std::fs::symlink_metadata(&path) else { continue };
-                    let kind = if metadata.is_file() {
-                        HandleKind::File
-                    } else if metadata.is_dir() && self.dropped_path_is_directory(raw_path) {
-                        HandleKind::Dir
-                    } else {
-                        continue;
-                    };
-                    let Ok(path) = path.into_os_string().into_string() else { continue };
-                    (path, kind)
-                }
-            };
-            if handles.len() == slots {
-                return Ok(None);
+            let located = self.system_files.locate_drop(raw_path);
+            let legacy = self.dropped_workspace_handle(raw_path, located.as_ref());
+            let root = located.and_then(|(path, kind)| self.system_files.dropped_root(path, kind));
+            if legacy.is_some() || root.is_some() {
+                represented += 1;
             }
-            handles.push(OpenHandle { kind, path, mode: FileMode::Read, dropped: true });
+            if let Some(handle) = legacy {
+                if handles.len() == slots {
+                    return Ok(None);
+                }
+                handles.push(handle);
+            }
+            if let Some(entry) = root {
+                if system.len() == system_slots {
+                    return Ok(None);
+                }
+                system.push(entry);
+            }
         }
         // A Move must never acknowledge a partial list: the source can discard its data
         // after receiving the compositor's successful finish.
-        if handles.is_empty() || (action == zgui::platform::DragAction::Move && handles.len() != paths.len()) {
+        if represented == 0 || (action == zgui::platform::DragAction::Move && represented != paths.len()) {
             return Ok(None);
         }
         let files = Array::new(ctx.clone())?;
@@ -662,7 +668,45 @@ impl Work {
             array.set(*index, self.register_handle(ctx, handle)?)?;
             *index += 1;
         }
-        Ok(Some((files, directories)))
+        let system_entries = Array::new(ctx.clone())?;
+        for (index, (root, relative)) in system.into_iter().enumerate() {
+            let entry = Object::new(ctx.clone())?;
+            entry.prop("dir", data_property(self.system_handle(ctx, root)?))?;
+            entry.prop("relativePath", data_property(relative))?;
+            system_entries.set(index, entry)?;
+        }
+        Ok(Some(DroppedEntries { files, directories, system_entries }))
+    }
+
+    fn dropped_workspace_handle(
+        &self,
+        raw_path: &Path,
+        located: Option<&(PathBuf, EntryKind)>,
+    ) -> Option<OpenHandle> {
+        let (path, kind) = match &self.files.backend {
+            FilesBackend::Preview { vfs, .. } => {
+                let path = raw_path.to_str()?;
+                let stat = vfs.borrow().stat(path).ok()?;
+                let kind = if stat.is_file {
+                    HandleKind::File
+                } else if stat.is_dir {
+                    HandleKind::Dir
+                } else {
+                    return None;
+                };
+                (path.to_owned(), kind)
+            }
+            FilesBackend::Live { .. } => {
+                let (path, kind) = located?;
+                let kind = match kind {
+                    EntryKind::File => HandleKind::File,
+                    EntryKind::Dir => HandleKind::Dir,
+                    EntryKind::Symlink | EntryKind::Other => return None,
+                };
+                (path.to_str()?.to_owned(), kind)
+            }
+        };
+        Some(OpenHandle { kind, path, mode: FileMode::Read, dropped: true })
     }
 
     pub(super) fn dropped_directory_path(&self, ctx: &Ctx<'_>, handle: Value<'_>) -> rquickjs::Result<String> {
@@ -1436,6 +1480,28 @@ impl Work {
         Ok(req)
     }
 
+    fn clear_file_grants<'js>(
+        self: &Rc<Self>,
+        ctx: &Ctx<'js>,
+    ) -> rquickjs::Result<Object<'js>> {
+        let (op_id, request) = self.create_file_request(ctx)?;
+        match &self.files.backend {
+            FilesBackend::Preview { vfs, fixture, .. } => {
+                let result = fixture.files_call(self.generation, "clearGrants", || {
+                    Ok(FileCompletionValue::Count(vfs.borrow_mut().clear_grants()))
+                });
+                self.push_preview_completion(op_id, result);
+            }
+            FilesBackend::Live { app_id, .. } => {
+                let app_id = app_id.clone();
+                self.spawn_live_op(op_id, move || {
+                    clear_grants(&resolve_grant_store_path(&app_id)?).map(FileCompletionValue::Count)
+                });
+            }
+        }
+        Ok(request)
+    }
+
     fn start_watch_directory<'js>(
         self: &Rc<Self>,
         ctx: &Ctx<'js>,
@@ -1525,6 +1591,7 @@ impl Work {
                         let js_val = match value {
                             FileCompletionValue::Void => Value::new_undefined(ctx.clone()),
                             FileCompletionValue::Bool(b) => b.into_js(ctx)?,
+                            FileCompletionValue::Count(count) => count.into_js(ctx)?,
                             FileCompletionValue::Text(s) => s.into_js(ctx)?,
                             FileCompletionValue::Bytes(b) => {
                                 TypedArray::<u8>::new(ctx.clone(), b)?.into_value()

@@ -1,8 +1,8 @@
 //! Web primitives in every QuickJS context, including compute workers.
 
 use rquickjs::{
-    Array, Class, Ctx, Exception, Function, IntoJs, JsLifetime, TypedArray, Value, class::Trace,
-    function::Opt,
+    Array, Class, Ctx, Exception, Function, IntoJs, JsLifetime, Object, TypedArray, Value,
+    class::Trace, function::Opt,
 };
 use url::{Url, form_urlencoded, quirks};
 
@@ -13,9 +13,38 @@ struct NativeUrl {
     url: Url,
 }
 
+const HREF: u8 = 0;
+const ORIGIN: u8 = 1;
+const PROTOCOL: u8 = 2;
+const USERNAME: u8 = 3;
+const PASSWORD: u8 = 4;
+const HOST: u8 = 5;
+const HOSTNAME: u8 = 6;
+const PORT: u8 = 7;
+const PATHNAME: u8 = 8;
+const SEARCH: u8 = 9;
+const HASH: u8 = 10;
+const MAX_PARAM_PAIRS: u32 = 65_536;
+
 pub(super) fn install<'js>(ctx: &Ctx<'js>) -> rquickjs::Result<()> {
     // Each bootstrap script's completion value is its installer function.
     let initialize: Function<'js> = ctx.eval(include_str!("web_url.js"))?;
+    let component = Object::new(ctx.clone())?;
+    for (name, id) in [
+        ("href", HREF),
+        ("origin", ORIGIN),
+        ("protocol", PROTOCOL),
+        ("username", USERNAME),
+        ("password", PASSWORD),
+        ("host", HOST),
+        ("hostname", HOSTNAME),
+        ("port", PORT),
+        ("pathname", PATHNAME),
+        ("search", SEARCH),
+        ("hash", HASH),
+    ] {
+        component.set(name, id)?;
+    }
     initialize.call::<_, ()>((
         Function::new(ctx.clone(), parse_url)?,
         Function::new(ctx.clone(), can_parse_url)?,
@@ -23,6 +52,7 @@ pub(super) fn install<'js>(ctx: &Ctx<'js>) -> rquickjs::Result<()> {
         Function::new(ctx.clone(), set_url)?,
         Function::new(ctx.clone(), parse_params)?,
         Function::new(ctx.clone(), serialize_params)?,
+        component,
     ))?;
     let initialize: Function<'js> = ctx.eval(include_str!("web_text.js"))?;
     initialize.call((Function::new(ctx.clone(), encode_utf8)?,))
@@ -61,17 +91,17 @@ fn get_url<'js>(
 ) -> rquickjs::Result<Value<'js>> {
     let url = &url.borrow().url;
     let value = match key {
-        0 => quirks::href(url),
-        1 => return quirks::origin(url).into_js(&ctx),
-        2 => quirks::protocol(url),
-        3 => quirks::username(url),
-        4 => quirks::password(url),
-        5 => quirks::host(url),
-        6 => quirks::hostname(url),
-        7 => quirks::port(url),
-        8 => quirks::pathname(url),
-        9 => quirks::search(url),
-        10 => quirks::hash(url),
+        HREF => quirks::href(url),
+        ORIGIN => return quirks::origin(url).into_js(&ctx),
+        PROTOCOL => quirks::protocol(url),
+        USERNAME => quirks::username(url),
+        PASSWORD => quirks::password(url),
+        HOST => quirks::host(url),
+        HOSTNAME => quirks::hostname(url),
+        PORT => quirks::port(url),
+        PATHNAME => quirks::pathname(url),
+        SEARCH => quirks::search(url),
+        HASH => quirks::hash(url),
         _ => return Err(Exception::throw_internal(&ctx, "unknown URL component")),
     };
     value.into_js(&ctx)
@@ -85,25 +115,25 @@ fn set_url<'js>(
 ) -> rquickjs::Result<()> {
     let url = &mut url.borrow_mut().url;
     let _ = match key {
-        0 => {
+        HREF => {
             return quirks::set_href(url, &value)
                 .map_err(|_| Exception::throw_type(&ctx, "Invalid URL"));
         }
-        2 => quirks::set_protocol(url, &value),
-        3 => quirks::set_username(url, &value),
-        4 => quirks::set_password(url, &value),
-        5 => quirks::set_host(url, &value),
-        6 => quirks::set_hostname(url, &value),
-        7 => quirks::set_port(url, &value),
-        8 => {
+        PROTOCOL => quirks::set_protocol(url, &value),
+        USERNAME => quirks::set_username(url, &value),
+        PASSWORD => quirks::set_password(url, &value),
+        HOST => quirks::set_host(url, &value),
+        HOSTNAME => quirks::set_hostname(url, &value),
+        PORT => quirks::set_port(url, &value),
+        PATHNAME => {
             quirks::set_pathname(url, &value);
             return Ok(());
         }
-        9 => {
+        SEARCH => {
             quirks::set_search(url, &value);
             return Ok(());
         }
-        10 => {
+        HASH => {
             quirks::set_hash(url, &value);
             return Ok(());
         }
@@ -129,9 +159,16 @@ fn parse_params(ctx: Ctx<'_>, query: String) -> rquickjs::Result<Array<'_>> {
 }
 
 fn serialize_params(pairs: Array<'_>) -> rquickjs::Result<String> {
+    let len: u32 = pairs.as_object().get("length")?;
+    if len > MAX_PARAM_PAIRS {
+        return Err(Exception::throw_range(
+            pairs.ctx(),
+            "too many URLSearchParams pairs",
+        ));
+    }
     let mut query = form_urlencoded::Serializer::new(String::new());
-    for pair in pairs.iter::<Array<'_>>() {
-        let pair = pair?;
+    for index in 0..len as usize {
+        let pair: Array = pairs.get(index)?;
         let key: String = pair.get(0)?;
         let value: String = pair.get(1)?;
         query.append_pair(&key, &value);

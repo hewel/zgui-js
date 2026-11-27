@@ -20,7 +20,7 @@ import { renderApp } from "@hewel/zgui";
 import { Button } from "@hewel/zgui/components";
 import type { NativeNode } from "@hewel/zgui";
 import { createSignal } from "solid-js";
-import { listGrants, listBookmarks, openAuthorizedDirectory, persistHandle, restoreBookmark, revokeGrant, revokeBookmark } from "@hewel/zgui-services";
+import { clearGrants, listGrants, listBookmarks, openAuthorizedDirectory, persistHandle, restoreBookmark, revokeGrant, revokeBookmark } from "@hewel/zgui-services";
 
 export const hostApiVersion = 1;
 export function mount(root: NativeNode) {
@@ -45,7 +45,9 @@ export function mount(root: NativeNode) {
     const removed = await revokeGrant(token).promise;
     const revoked = await restore(token);
     const remaining = await listGrants().promise;
-    setStatus([grants.map(g => g.kind).join(","), legacy.map(g => g.kind).join(","), workspace, write, system, legacySystem, removed, revoked, remaining.map(g => g.token).join(",")].join("|"));
+    const cleared = await clearGrants().promise;
+    const empty = await listGrants().promise;
+    setStatus([grants.map(g => g.kind).join(","), legacy.map(g => g.kind).join(","), workspace, write, system, legacySystem, removed, revoked, remaining.map(g => g.token).join(","), cleared, empty.length].join("|"));
   }
   return renderApp(() => <column><Button testId="run" onClick={() => void run().catch(e => setStatus(String(e)))}>Run</Button><text testId="status">{status()}</text></column>, root);
 }
@@ -102,7 +104,8 @@ test("fixture grants share the legacy bookmark ledger without bypassing the seal
         target: { surface: "main", testId: "run" },
       },
       { id: "settled", op: "clock.advance", byMs: 32 },
-      service("listGrants", 2),
+      service("listGrants", 3),
+      service("clearGrants", 1),
       service("revokeGrant", 1),
       service("restoreBookmark", 4, "E_CAPABILITY"),
       { id: "done", op: "capture", captureId: "done", surface: "main" },
@@ -110,7 +113,7 @@ test("fixture grants share the legacy bookmark ledger without bypassing the seal
   });
   assert.equal(
     getNode(await readTree(out, "done"), "status").text,
-    "workspace-dir,system-dir,workspace-dir|dir,dir|dir|E_CAPABILITY|E_CAPABILITY|false|true|NotFound|old-write,system",
+    "workspace-dir,system-dir,workspace-dir|dir,dir|dir|E_CAPABILITY|E_CAPABILITY|false|true|NotFound|old-write,system|2|0",
   );
 });
 

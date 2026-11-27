@@ -7,7 +7,7 @@ mod support;
 use ash::vk;
 use std::os::fd::{AsFd, FromRawFd, OwnedFd};
 use zgui_geom::{DevicePx, Size, Vec2};
-use zgui_render_wgpu::{Dmabuf, DmabufFormat, DmabufPlane, Gpu, wgpu};
+use zgui_render_wgpu::{Dmabuf, DmabufFormat, DmabufPlane, Gpu, Nv12Target, wgpu};
 use zgui_scene::{ClipLink, ExternalQuad, ExternalTextureId, Scene};
 
 const WIDTH: u32 = 16;
@@ -29,11 +29,16 @@ fn imported_vulkan_frames_draw_exact_clipped_rgb_pixels() {
     if !capable {
         return;
     }
+    let mut nv12_target = Nv12Target::default();
 
     for (format, vk_format) in [
         (DmabufFormat::Rgba8, vk::Format::R8G8B8A8_UNORM),
         (
             DmabufFormat::Nv12Bt601,
+            vk::Format::G8_B8R8_2PLANE_420_UNORM,
+        ),
+        (
+            DmabufFormat::Nv12Bt709,
             vk::Format::G8_B8R8_2PLANE_420_UNORM,
         ),
     ] {
@@ -60,6 +65,7 @@ fn imported_vulkan_frames_draw_exact_clipped_rgb_pixels() {
                     modifier: 0,
                     planes: &planes,
                 },
+                &mut nv12_target,
                 move || {
                     let _ = release.send(());
                 },
@@ -80,7 +86,12 @@ fn imported_vulkan_frames_draw_exact_clipped_rgb_pixels() {
         );
         scene.finish(&zgui_bits::DamageSet::full());
         let pixels = support::present(&mut renderer, &scene);
-        assert_eq!(pixels.rgba(50, 50), [255, 0, 0, 255], "{format:?}");
+        let green = if format == DmabufFormat::Nv12Bt709 {
+            24
+        } else {
+            0
+        };
+        assert_eq!(pixels.rgba(50, 50), [255, green, 0, 255], "{format:?}");
         assert_eq!(
             pixels.rgba(13, 13),
             [0, 0, 0, 0],

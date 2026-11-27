@@ -51,7 +51,8 @@ export function DatePicker(props: DatePickerProps = {}): NativeNode {
   const open = createMemo(() => readOpen() && !props.disabled);
   let trigger: NativeNode | undefined;
   createEffect(open, (isOpen, wasOpen) => {
-    if (!isOpen && wasOpen && trigger && !props.disabled) focus(trigger, { reveal: true });
+    if (!isOpen && wasOpen && trigger && !untrack(() => props.disabled))
+      focus(trigger, { reveal: true });
   });
 
   const label = createMemo(() => {
@@ -184,7 +185,6 @@ export function DatePicker(props: DatePickerProps = {}): NativeNode {
             mountPopoverContent(
               {
                 class: "zui-date-picker__surface",
-                style: { width: "max-content", padding: "0px" },
                 get testId() {
                   return props.contentTestId;
                 },

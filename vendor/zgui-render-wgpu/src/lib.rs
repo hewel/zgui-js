@@ -73,6 +73,8 @@ pub use crate::effect::{
     EffectProgram, Effects, ParamsField, ParamsLayout, check_params as check_effect, declare,
 };
 pub use crate::frame_texture::FrameTexture;
+#[cfg(all(target_os = "linux", vulkan_hal))]
+pub use crate::frame_texture::Nv12Target;
 #[cfg(target_arch = "wasm32")]
 pub use crate::gpu::canvas::Canvas;
 pub use crate::gpu::device::Gpu;

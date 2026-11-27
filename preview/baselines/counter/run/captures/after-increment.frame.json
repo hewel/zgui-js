@@ -2,7 +2,7 @@
   "actionSequence": 5,
   "allowedPendingAssets": [],
   "blurRegion": "none",
-  "buildId": "sha256:9f67d8e09494b51d3758fd991135e948e6b8fac7121b79eb6bac916917f27269",
+  "buildId": "sha256:069c2fe7656af62cf883618dc6fd13d72620221f67760abf8a0ce7cc3e3e5584",
   "captureId": "after-increment",
   "configurationId": 2,
   "documentIdentity": "DocumentId(0)",
@@ -36,7 +36,7 @@
     "generation": 1,
     "nativeAcceptance": {
       "candidate": {
-        "buildId": "sha256:9f67d8e09494b51d3758fd991135e948e6b8fac7121b79eb6bac916917f27269",
+        "buildId": "sha256:069c2fe7656af62cf883618dc6fd13d72620221f67760abf8a0ce7cc3e3e5584",
         "id": "dev.example.counter",
         "styleSystem": {
           "configDigest": "sha256:864ab49f77e8240f0abc9c85c23764f2eb766d29c61091c83c908d47e69f1ee1",
@@ -47,7 +47,7 @@
       "diagnostic": null,
       "document": "DocumentId(0)",
       "generation": 1,
-      "lastSuccessfulBuildId": "sha256:9f67d8e09494b51d3758fd991135e948e6b8fac7121b79eb6bac916917f27269",
+      "lastSuccessfulBuildId": "sha256:069c2fe7656af62cf883618dc6fd13d72620221f67760abf8a0ce7cc3e3e5584",
       "schemaVersion": 1,
       "status": "accepted"
     },
@@ -65,6 +65,7 @@
     "timeUs": 20000,
     "validatedStyleRevision": 3
   },
+  "relayouts": 2,
   "renderer": {
     "adapter": "AMD Radeon RX 7900 XTX (RADV NAVI31)",
     "additionalTransferConversion": false,
@@ -75,7 +76,7 @@
     "device": 29772,
     "deviceType": "DiscreteGpu",
     "driver": "radv",
-    "driverInfo": "Mesa 26.3.1-arch3.4",
+    "driverInfo": "Mesa 26.3.1-arch3.5",
     "pngColor": "straight-alpha-gamma-encoded",
     "sceneFormat": "Bgra8Unorm",
     "scratchFormat": "Rgba8Unorm",
@@ -101,11 +102,12 @@
   },
   "scale": 1.75,
   "schemaVersion": 1,
+  "stylePasses": 1,
   "styleRevision": 3,
   "surface": "main",
   "surfaceConfiguration": 0,
   "timingDeterministic": true,
-  "treeDigest": "sha256:c212e4f442b8bad878720c5eaf1634b6a98e032020deea820501520f92eee0d1",
+  "treeDigest": "sha256:6fe994f425be07cc59cabd66c5e550d1f4ecf804ad12fbc8a46b54f4538ef88e",
   "validatedStateRevision": 45,
   "validationFrame": {
     "drawId": 4,

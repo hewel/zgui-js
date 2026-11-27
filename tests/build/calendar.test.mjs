@@ -7,13 +7,14 @@ import { renderApp, createSignal } from "@hewel/zgui";
 import type { NativeNode } from "@hewel/zgui";
 import { Calendar } from "@hewel/zgui/components";
 
-export function validate(field: string, value: string) {
+export function validate(field: string, value: string | readonly [number, number]) {
   Calendar({ [field]: value });
 }
-export function mount(root: NativeNode) {
+export function mount(root: NativeNode, yearRange?: readonly [number, number]) {
   const [value, setValue] = createSignal<string | null>(null);
   return renderApp(() => <column>
     <Calendar testId="calendar" value={value()} onValueChange={setValue} defaultMonth="2024-02"
+      captionLayout={yearRange ? "dropdown" : "label"} yearRange={yearRange}
       minDate="2024-02-27" maxDate="2024-03-05" isDateDisabled={day => day === "2024-02-28"}/>
     <text testId="chosen">{value() ?? "none"}</text>
   </column>, root);
@@ -35,8 +36,9 @@ test("standalone Calendar validates civil input and cannot select disabled dates
     assert.throws(() => mod.validate(field, "2026-02-29"), RangeError);
   for (const field of ["month", "defaultMonth"])
     assert.throws(() => mod.validate(field, "2024-13"), RangeError);
+  assert.throws(() => mod.validate("yearRange", [1800, 2201]), RangeError);
 
-  const dispose = h.runTurn(() => mod.mount(h.makeNode("root")));
+  const dispose = h.runTurn(() => mod.mount(h.makeNode("root"), [1800, 2200]));
   t.after(() => h.runTurn(dispose));
   assert.throws(() => mod.validate("value", "1900-02-29"), RangeError);
   const leap = day(h, "2024-02-29");

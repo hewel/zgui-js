@@ -20,6 +20,9 @@ const MAX_PENDING: usize = 64;
 // Worst-case JSON escaping of argv and a Linux pathname, plus one Linux
 // environment string (tokens reject control characters, so at most 2x escaping).
 const MAX_FRAME_BYTES: usize = 6 * (MAX_ARG_BYTES + 4096) + 2 * 128 * 1024 + 512;
+const HELLO_PREFIX: &str = "zgui-activation-v1:hello:";
+// App IDs are limited to 128 UTF-8 bytes by instance socket admission.
+const MAX_HELLO_BYTES: usize = HELLO_PREFIX.len() + 128 + 1;
 const ACK: &[u8] = b"zgui-activation-v1:ok\n";
 
 #[derive(Default)]
@@ -132,6 +135,7 @@ pub(crate) fn coordinate(app_id: &str, activation: &Activation) -> io::Result<Op
 
 
 fn serve(app_id: &str, listener: &UnixListener, stopped: &UnixStream, inbox: &Inbox) -> io::Result<()> {
+    let hello = hello(app_id);
     let mut poll = [
         libc::pollfd { fd: stopped.as_raw_fd(), events: libc::POLLIN, revents: 0 },
         libc::pollfd { fd: listener.as_raw_fd(), events: libc::POLLIN, revents: 0 },
@@ -150,6 +154,9 @@ fn serve(app_id: &str, listener: &UnixListener, stopped: &UnixStream, inbox: &In
             Err(error) => return Err(error),
         };
         let deadline = Instant::now() + TIMEOUT;
+        if write_until(&mut stream, hello.as_bytes(), deadline).is_err() {
+            continue;
+        }
         let accepted = receive(&mut stream, app_id, deadline).is_ok_and(|activation| inbox.admit(activation));
         let _ = write_until(&mut stream, if accepted { ACK } else { b"zgui-activation-v1:no\n" }, deadline);
     }
@@ -174,6 +181,15 @@ fn receive(socket: &mut UnixStream, app_id: &str, deadline: Instant) -> io::Resu
 }
 
 fn forward(socket: &mut UnixStream, app_id: &str, activation: &Activation) -> io::Result<()> {
+    let deadline = Instant::now() + TIMEOUT;
+    let expected = hello(app_id);
+    let mut received = [0; MAX_HELLO_BYTES];
+    let received = received.get_mut(..expected.len()).ok_or_else(invalid_frame)?;
+    read_until(socket, received, deadline)?;
+    if received != expected.as_bytes() {
+        return Err(invalid_frame());
+    }
+
     let frame = Frame {
         app_id,
         args: &activation.info.args,
@@ -182,12 +198,15 @@ fn forward(socket: &mut UnixStream, app_id: &str, activation: &Activation) -> io
     };
     let bytes = serde_json::to_vec(&frame)?;
     let size = u32::try_from(bytes.len()).ok().filter(|_| bytes.len() <= MAX_FRAME_BYTES).ok_or_else(invalid_frame)?;
-    let deadline = Instant::now() + TIMEOUT;
     write_until(socket, &size.to_be_bytes(), deadline)?;
     write_until(socket, &bytes, deadline)?;
     let mut ack = [0; ACK.len()];
     read_until(socket, &mut ack, deadline)?;
     if ack == ACK { Ok(()) } else { Err(io::Error::other("primary rejected activation")) }
+}
+
+fn hello(app_id: &str) -> String {
+    format!("{HELLO_PREFIX}{app_id}\n")
 }
 
 fn invalid_frame() -> io::Error { io::Error::new(io::ErrorKind::InvalidData, "invalid activation frame") }

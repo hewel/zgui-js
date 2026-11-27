@@ -6,6 +6,8 @@ import {
   createTempWorkspace,
   functionalProfile,
   getNode,
+  pixelAt,
+  readPng,
   readTree,
   runScenario,
 } from "./harness.mjs";
@@ -117,7 +119,7 @@ test("Table aligns its native columns; virtual DataTable sorts, resizes and keep
     `
     import { createSignal, renderApp } from "@hewel/zgui";
     import type { NativeNode } from "@hewel/zgui";
-    import { DataTable, Table, TableBody, TableCell, TableHead, TableHeader, TableRow, ThemeProvider } from "@hewel/zgui/components";
+    import { DataTable, Table, TableBody, TableCell, TableFooter, TableHead, TableHeader, TableRow, ThemeProvider } from "@hewel/zgui/components";
     import type { DataTableColumn } from "@hewel/zgui/components";
     export const hostApiVersion = 1;
     const rows = Array.from({ length: 1000 }, (_, i) => ({ id: 999 - i, rank: ((999 - i) * 7) % 1000 }));
@@ -131,9 +133,17 @@ test("Table aligns its native columns; virtual DataTable sorts, resizes and keep
     export function mount(root: NativeNode) {
       const [activated, setActivated] = createSignal("None");
       return renderApp(() => <ThemeProvider><column style={{ gap: "12px" }}>
-        <Table testId="static-table" columns="84px 1fr" stickyHeader>
+        <Table testId="static-table" columns="84px 1fr" stickyHeader style="--zui-color-muted: #ff0000">
           <TableHeader><TableRow><TableHead>Unit</TableHead><TableHead testId="static-head">State</TableHead></TableRow></TableHeader>
           <TableBody><TableRow><TableCell>Network</TableCell><TableCell testId="static-cell">Ready</TableCell></TableRow></TableBody>
+          <TableFooter><TableRow>
+            <TableCell testId="footer-cell">Total</TableCell>
+            <TableCell><Table style="width: 160px">
+              <TableBody><TableRow><TableCell testId="nested-cell">
+                <box testId="nested-marker" style="width: 8px; height: 8px; background-color: #0000ff" />
+              </TableCell></TableRow></TableBody>
+            </Table></TableCell>
+          </TableRow></TableFooter>
         </Table>
         <DataTable testId="table-grid" data={rows} columns={columns} height={168} itemHeight={28}
           toolbar={<text testId="activated">{activated()}</text>}
@@ -188,6 +198,20 @@ test("Table aligns its native columns; virtual DataTable sorts, resizes and keep
     getNode(initial, "static-head").boundsLogical.x,
     getNode(initial, "static-cell").boundsLogical.x,
   );
+  const png = await readPng(path.join(out, "captures", "initial.png"));
+  const sample = (id, inset = 3) => {
+    const { x, y, width, height } = getNode(initial, id).boundsDevice;
+    return pixelAt(png, Math.floor(x + width - inset), Math.floor(y + height / 2));
+  };
+  const footer = sample("footer-cell");
+  const [footerRed, footerGreen] = footer;
+  const [bodyRed, bodyGreen] = sample("static-cell");
+  assert.ok(
+    footerRed - footerGreen > bodyRed - bodyGreen + 40,
+    "the footer cell paints the muted tint",
+  );
+  assert.deepEqual(sample("nested-marker"), [0, 0, 255, 255], "the inner table is visible");
+  assert.deepEqual(sample("nested-cell", 30), footer, "the inner cell adds no footer tint");
   assert.equal(width(initial, "rank-0"), 112);
   assert.equal(width(resized, "rank-0"), 172);
   assert.equal(width(nudged, "rank-0"), 164);

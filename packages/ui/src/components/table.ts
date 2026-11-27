@@ -1,8 +1,8 @@
-import { omit } from "#solid";
+import { createContext, omit, useContext } from "#solid";
 import { mergeProps } from "../renderer/index.js";
 import type { NativeElementProps, NativeNode } from "../types.js";
 import { sheet } from "./generated/TableStyle.js";
-import { element, part, useStylesheet, withDefaults } from "./shared.js";
+import { element, part, provide, slot, useStylesheet, withDefaults } from "./shared.js";
 
 export interface TableProps extends NativeElementProps {
   readonly columns?: string | undefined;
@@ -13,21 +13,27 @@ export interface TableCellProps extends NativeElementProps {
   readonly align?: "start" | "center" | "end" | undefined;
 }
 
+interface TableScope {
+  readonly sticky?: (() => boolean | undefined) | undefined;
+  readonly selected?: () => boolean | null | undefined;
+}
+
+export const TableContext = createContext<TableScope>({});
+
 export function Table(props: TableProps = {}): NativeNode {
   useStylesheet(sheet);
-  const rest = omit(props, "columns", "stickyHeader");
-  return element(
+  const rest = omit(props, "columns", "stickyHeader", "children");
+  const node = element(
     "scroll",
     mergeProps(rest, withDefaults({ role: "table" as const }, rest), {
       __zguiClass: `${sheet.className} zui-table-container`,
       get __zguiStyle() {
         return { "--zui-table-columns": props.columns };
       },
-      get "data-sticky-header"() {
-        return props.stickyHeader ? "true" : undefined;
-      },
     }),
   );
+  slot(node, provide(TableContext, { sticky: () => props.stickyHeader }, props));
+  return node;
 }
 
 export const TableHeader = part("box", sheet, "zui-table__section", { role: "rowGroup" });
@@ -44,13 +50,10 @@ const head = part("box", sheet, "zui-table__head", { role: "columnHeader" });
 const cell = part("box", sheet, "zui-table__cell", { role: "cell" });
 
 export function TableRow(props: NativeElementProps = {}): NativeNode {
-  return row(
-    mergeProps(props, {
-      get "data-selected"() {
-        return props.selected ? "true" : undefined;
-      },
-    }),
-  );
+  const { sticky } = useContext(TableContext);
+  const node = row(omit(props, "children"));
+  slot(node, provide(TableContext, { sticky, selected: () => props.selected }, props));
+  return node;
 }
 
 function aligned(props: TableCellProps): NativeElementProps {
@@ -62,9 +65,23 @@ function aligned(props: TableCellProps): NativeElementProps {
 }
 
 export function TableHead(props: TableCellProps = {}): NativeNode {
-  return head(aligned(props));
+  const { sticky } = useContext(TableContext);
+  return head(
+    mergeProps(aligned(props), {
+      get "data-sticky"() {
+        return sticky?.() ? "true" : undefined;
+      },
+    }),
+  );
 }
 
 export function TableCell(props: TableCellProps = {}): NativeNode {
-  return cell(aligned(props));
+  const { selected } = useContext(TableContext);
+  return cell(
+    mergeProps(aligned(props), {
+      get "data-selected"() {
+        return selected?.() ? "true" : undefined;
+      },
+    }),
+  );
 }

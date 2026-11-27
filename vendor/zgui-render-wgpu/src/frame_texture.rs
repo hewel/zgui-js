@@ -11,6 +11,8 @@ mod nv12;
 use crate::ImportedFrame;
 #[cfg(all(target_os = "linux", vulkan_hal))]
 pub(crate) use nv12::Nv12Pipelines;
+#[cfg(all(target_os = "linux", vulkan_hal))]
+pub use nv12::Nv12Target;
 
 /// A renderer-local binding for a streamed frame.
 #[derive(Debug)]
@@ -126,9 +128,4 @@ fn upload(gpu: &Gpu, texture: &wgpu::Texture, size: Size<u32, Device>, bytes: &[
         },
         extent(size),
     );
-}
-
-#[cfg(all(target_os = "linux", vulkan_hal))]
-pub(crate) fn nv12(gpu: &Gpu, texture: &wgpu::Texture, bt709: bool) -> wgpu::Texture {
-    nv12::convert(gpu, texture, bt709)
 }

@@ -38,7 +38,7 @@ export interface CalendarDateOptions {
   readonly maxDate?: string | undefined;
   readonly isDateDisabled?: ((date: string) => boolean) | undefined;
   readonly captionLayout?: "label" | "dropdown" | undefined;
-  /** Inclusive year choices for the dropdown. Does not limit arrow navigation. */
+  /** Inclusive dropdown years, at most 400 years apart. Does not limit arrow navigation. */
   readonly yearRange?: readonly [number, number] | undefined;
   readonly disabled?: boolean | undefined;
 }
@@ -62,6 +62,16 @@ export function dateBounds(minDate: string | undefined, maxDate: string | undefi
 const clamp = (n: number, min: number, max: number) => Math.max(min, Math.min(n, max));
 const dayMonth = (day: number) => monthOf(civilDate(day));
 
+function validateYearRange(range: CalendarDateOptions["yearRange"]): void {
+  if (range === undefined) return;
+  const [from, to] = range;
+  if (!Number.isInteger(from) || !Number.isInteger(to) || to < from || to - from > 400) {
+    throw new RangeError(
+      "Invalid Calendar yearRange: expected ascending integer years at most 400 years apart",
+    );
+  }
+}
+
 /** A Gregorian date grid with controlled or uncontrolled selection and visible month. */
 export function Calendar(props?: CalendarOptions & SingleDateSelectionProps): NativeNode;
 export function Calendar(props: CalendarOptions & RangeDateSelectionProps): NativeNode;
@@ -75,6 +85,7 @@ export function mountCalendar(props: CalendarProps, autoFocus?: () => boolean): 
     dateBounds(props.minDate, props.maxDate);
     if (props.month !== undefined) monthIndex(props.month);
     if (props.defaultMonth !== undefined) monthIndex(props.defaultMonth);
+    validateYearRange(props.yearRange);
   });
   const [value, setValue] = createDateSelection(props);
   useStylesheet(sheet);
@@ -141,7 +152,7 @@ export function mountCalendar(props: CalendarProps, autoFocus?: () => boolean): 
           : previous?.[2] === undefined
             ? initial
             : undefined;
-      if (day !== undefined && !isDisabled(day)) {
+      if (day !== undefined && !untrack(() => isDisabled(day))) {
         const node = nodes.get(day);
         if (node) focus(node, { reveal: true });
       }
@@ -354,9 +365,9 @@ export function mountCalendar(props: CalendarProps, autoFocus?: () => boolean): 
     );
     const yearOptions = createMemo(() => {
       const { minMonth, maxMonth } = limits();
-      const [from, to] = props.yearRange ?? [year - 100, year + 100];
-      if (!Number.isInteger(from) || !Number.isInteger(to) || to < from)
-        throw new RangeError("Invalid Calendar yearRange");
+      const range = props.yearRange;
+      validateYearRange(range);
+      const [from, to] = range ?? [year - 100, year + 100];
       const first = Math.max(Math.floor(minMonth / 12), from);
       const last = Math.min(Math.floor(maxMonth / 12), to);
       const options: SelectOption[] = Array.from(

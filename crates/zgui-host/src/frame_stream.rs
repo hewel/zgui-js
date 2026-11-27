@@ -23,7 +23,7 @@ use zgui_dom::{
     host::{Intrinsic, ReplacedId},
 };
 use zgui_render_wgpu::{
-    Dmabuf, DmabufFormat, DmabufPlane, FrameTexture, Gpu, ImportedFrame, WgpuRenderer,
+    Dmabuf, DmabufFormat, DmabufPlane, FrameTexture, Gpu, ImportedFrame, Nv12Target, WgpuRenderer,
 };
 
 const MAX_STREAMS: usize = 8;
@@ -139,6 +139,7 @@ struct Stream {
     stream_id: u64,
     frame: Option<Frame>,
     live: Option<Arc<FrameStream>>,
+    nv12_target: Nv12Target,
 }
 
 impl Drop for Stream {
@@ -215,6 +216,7 @@ impl Streams {
                 stream_id,
                 frame: None,
                 live: Some(live),
+                nv12_target: Nv12Target::default(),
             },
         );
         token
@@ -255,6 +257,7 @@ impl Streams {
                 socket,
                 stream_id,
                 live: None,
+                nv12_target: Nv12Target::default(),
                 frame: Some(Frame {
                     revision: 1,
                     size,
@@ -420,7 +423,7 @@ impl EmbedHost for Embed {
             }
             if let Some(claim) = stream.live.as_ref().and_then(FrameStream::take_presentable) {
                 let revision = stream.frame.as_ref().map_or(1, |frame| frame.revision + 1);
-                if let Some(frame) = prepared(renderer, claim, revision) {
+                if let Some(frame) = prepared(renderer, claim, revision, &mut stream.nv12_target) {
                     stream.frame = Some(frame);
                 }
             }
@@ -517,7 +520,12 @@ impl EmbedHost for Embed {
     }
 }
 
-fn prepared(renderer: &WgpuRenderer, mut claim: Submission, revision: u64) -> Option<Frame> {
+fn prepared(
+    renderer: &WgpuRenderer,
+    mut claim: Submission,
+    revision: u64,
+    nv12_target: &mut Nv12Target,
+) -> Option<Frame> {
     let header = claim.header();
     let size = Size::new(header.width, header.height);
     let pixels = match header.transport {
@@ -554,6 +562,7 @@ fn prepared(renderer: &WgpuRenderer, mut claim: Submission, revision: u64) -> Op
                     modifier: header.modifier()?,
                     planes: &planes[..header.planes.len()],
                 },
+                nv12_target,
                 move || drop(credit),
             );
             match result {

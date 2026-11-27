@@ -8,7 +8,10 @@
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 use rquickjs::{Ctx, Exception, FromJs, Value};
-use zgui::{view::{AttrName, ClassName, CustomPropertyName, DomHandle, NodeId, PropKey, PropValue, Semantics, UiState}, vocab::{AriaCurrent, HasPopup, Invalid, Live, Orientation, Role, SemanticFlags, Toggled}};
+use zgui::{
+    view::{AttrName, ClassName, CustomPropertyName, DomHandle, NodeId, PropKey, PropValue, Semantics, UiState},
+    vocab::{AriaCurrent, HasPopup, Invalid, Live, Orientation, Role, SemanticFlags, SortDirection, Toggled},
+};
 use zgui::vocab::prop::drawing;
 
 #[derive(Clone, Default, PartialEq)]
@@ -31,6 +34,7 @@ pub(crate) enum Mutation {
     Role(Role),
     Label(Option<String>),
     Description(Option<String>),
+    Sort(Option<SortDirection>),
     Current(Option<AriaCurrent>),
     KeyShortcuts(Option<String>),
     Custom(String, Option<String>),
@@ -253,6 +257,13 @@ impl Mutation {
             }
             "ariaLabel" => Ok(Self::Label(string(value)?)),
             "ariaDescription" => Ok(Self::Description(string(value)?)),
+            "ariaSort" => Ok(Self::Sort(match string(value)?.as_deref() {
+                None | Some("none") => None,
+                Some("ascending") => Some(SortDirection::Ascending),
+                Some("descending") => Some(SortDirection::Descending),
+                Some("other") => Some(SortDirection::Other),
+                Some(_) => return Err(Exception::throw_type(ctx, "unsupported ariaSort value")),
+            })),
             "ariaCurrent" => Ok(Self::Current(match string(value)?.as_deref() {
                 None => None,
                 Some("false") => Some(AriaCurrent::False),
@@ -491,6 +502,7 @@ impl Properties {
                     Mutation::Level(level) => semantics.position.level = level,
                     Mutation::Label(label) => semantics.label = label.map(Into::into),
                     Mutation::Description(description) => semantics.description = description.map(Into::into),
+                    Mutation::Sort(direction) => semantics.sort_direction = direction,
                     Mutation::Current(current) => semantics.current = current,
                     Mutation::KeyShortcuts(shortcuts) => semantics.keyboard_shortcut = shortcuts.map(Into::into),
                     _ => unreachable!(),

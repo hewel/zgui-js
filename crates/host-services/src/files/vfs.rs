@@ -14,7 +14,7 @@ use crate::{
         WatchEvent, WatchEventKind,
         grants::{
             GrantKind, GrantRecord, GrantScope, MAX_GRANTS_PER_APP, WorkspaceGrantCeiling, grant_limit,
-            grant_not_found,
+            grant_not_found, matching_grant,
         },
         parse_relative_segments,
     },
@@ -493,14 +493,7 @@ impl PreviewFs {
     ) -> Result<String, ServiceError> {
         let kind = kind.into();
         let normalized = normalize_abs(path);
-        if let Some(existing) = self
-            .bookmarks
-            .iter_mut()
-            .find(|b| b.kind == kind && b.scope.path == normalized && (kind != GrantKind::SystemDir || b.mode == mode))
-        {
-            if mode.can_write() {
-                existing.mode = FileMode::ReadWrite;
-            }
+        if let Some((_, existing)) = matching_grant(&mut self.bookmarks, kind, &normalized, mode) {
             return Ok(existing.token.clone());
         }
         if self.bookmarks.len() >= MAX_GRANTS_PER_APP {
@@ -547,6 +540,13 @@ impl PreviewFs {
 
     pub fn list_grants(&self) -> &[GrantRecord] {
         &self.bookmarks
+    }
+
+    /// Clear the fixture application's persisted grant ledger.
+    pub fn clear_grants(&mut self) -> usize {
+        let removed = self.bookmarks.len();
+        self.bookmarks.clear();
+        removed
     }
 
     pub fn revoke_grant(&mut self, token: &str) -> bool {

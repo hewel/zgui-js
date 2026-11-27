@@ -60,6 +60,23 @@ fn url_and_search_params_follow_whatwg_mutation_rules() {
 }
 
 #[test]
+fn url_search_params_serialization_rejects_an_oversized_array() {
+    let mut runtime = JsRuntime::new(RuntimeLimits::default()).unwrap();
+    let name = runtime
+        .with_context(|ctx| {
+            ctx.eval::<String, _>(
+                r#"
+                const pairs = new URLSearchParams('a=b&'.repeat(65_537));
+                try { pairs.toString(); 'unbounded'; }
+                catch (error) { error.name; }
+                "#,
+            )
+        })
+        .unwrap();
+    assert_eq!(name, "RangeError");
+}
+
+#[test]
 fn utf8_encoding_preserves_scalar_boundaries_and_decoder_stream_state() {
     let mut runtime = JsRuntime::new(RuntimeLimits::default()).unwrap();
     runtime

@@ -1,5 +1,5 @@
 import { For, createEffect, createMemo, createSignal, omit, untrack } from "#solid";
-import { focus, scrollIntoView } from "../nodes.js";
+import { focus } from "../nodes.js";
 import { createElement, mergeProps, spread } from "../renderer/index.js";
 import type {
   Accessor,
@@ -14,9 +14,9 @@ import type { VirtualListController, VirtualListRowSizing } from "../virtual-lis
 import { sheet as dataSheet } from "./generated/DataTableStyle.js";
 import { sheet as tableSheet } from "./generated/TableStyle.js";
 import { ARROW_DOWN, ARROW_UP, Icon } from "./icons.js";
-import { element, useStylesheet, withDefaults } from "./shared.js";
+import { element, provide, useStylesheet, withDefaults } from "./shared.js";
 import { callHandler, createControllable } from "./state.js";
-import { TableCell, TableHead, TableRow } from "./table.js";
+import { TableCell, TableContext, TableHead, TableRow } from "./table.js";
 import type { TableCellProps } from "./table.js";
 
 export type DataTableSortDirection = "asc" | "desc";
@@ -50,7 +50,7 @@ interface DataTableBaseProps<T> extends Omit<NativeElementProps, "children"> {
   readonly columnWidths?: Readonly<Record<string, number>> | undefined;
   readonly defaultColumnWidths?: Readonly<Record<string, number>> | undefined;
   readonly onColumnWidthsChange?: ((widths: Record<string, number>) => void) | undefined;
-  /** Maximum height of the scrolling body in logical pixels (320 when virtualized). */
+  /** Maximum height of the scrolling body in logical pixels (default 320). */
   readonly height?: number | undefined;
   readonly empty?: NativeChild;
   readonly toolbar?: NativeChild;
@@ -58,8 +58,7 @@ interface DataTableBaseProps<T> extends Omit<NativeElementProps, "children"> {
   readonly onRowActivate?: ((item: T, index: number) => void) | undefined;
 }
 
-export type DataTableProps<T> = DataTableBaseProps<T> &
-  (VirtualListRowSizing | { readonly itemHeight?: never; readonly estimatedItemHeight?: never });
+export type DataTableProps<T> = DataTableBaseProps<T> & VirtualListRowSizing;
 
 const RESIZE_STEP = 8;
 const DEFAULT_BODY_HEIGHT = 320;
@@ -143,9 +142,12 @@ function resizeGrip<T>(
 }
 
 export function DataTable<T>(props: DataTableProps<T>): NativeNode {
-  const fixed = untrack(() => props.itemHeight !== undefined);
-  const measured = untrack(() => props.estimatedItemHeight !== undefined);
-  if (fixed && measured) throw new TypeError("DataTable accepts only one row height mode");
+  const [fixed, measured] = untrack(() => [
+    props.itemHeight !== undefined,
+    props.estimatedItemHeight !== undefined,
+  ]);
+  if (fixed === measured)
+    throw new TypeError("DataTable requires exactly one of itemHeight or estimatedItemHeight");
   useStylesheet(dataSheet);
   useStylesheet(tableSheet);
   const [sort, setSort] = createControllable(
@@ -197,15 +199,10 @@ export function DataTable<T>(props: DataTableProps<T>): NativeNode {
       return (left < right ? -1 : left > right ? 1 : 0) * direction;
     });
   });
-  const hasRows = createMemo(() => rows().length > 0);
   const [active, setActive] = createSignal(0);
   const activeIndex = createMemo(() => Math.min(active(), rows().length - 1));
-  const [activeRow, setActiveRow] = createSignal<{
-    readonly semantic: NativeNode;
-    readonly layout: NativeNode;
-  } | null>(null);
+  const [activeRow, setActiveRow] = createSignal<NativeNode | null>(null);
   let controller: VirtualListController | undefined;
-  let reveal: number | undefined;
   const root = createElement("column");
   const rest = omit(
     props,
@@ -229,7 +226,7 @@ export function DataTable<T>(props: DataTableProps<T>): NativeNode {
   const rootProps = mergeProps(rest, withDefaults({ role: "grid" as const, tabIndex: 0 }, rest), {
     __zguiClass: dataSheet.className,
     get ariaActiveDescendant() {
-      return activeRow()?.semantic ?? null;
+      return activeRow();
     },
     onKeyDown(event: NativeKeyEvent) {
       if (!callHandler(event, props.onKeyDown) || event.target !== root || event.isComposing)
@@ -252,11 +249,7 @@ export function DataTable<T>(props: DataTableProps<T>): NativeNode {
       } else return;
       event.preventDefault();
       setActive(next);
-      if (controller) controller.scrollToIndex(next);
-      else if (next === index) {
-        const layoutRow = activeRow()?.layout;
-        if (layoutRow) scrollIntoView(layoutRow, { block: "nearest" });
-      } else reveal = next;
+      controller?.scrollToIndex(next);
     },
     get children() {
       return [toolbar(), frame];
@@ -265,64 +258,68 @@ export function DataTable<T>(props: DataTableProps<T>): NativeNode {
 
   const header = element("box", {
     __zguiClass: tableSheet.className,
-    children: TableRow({
-      children: For({
-        get each() {
-          return props.columns;
-        },
-        children: column => {
-          let sortButton = column.header;
-          if (column.sortable) {
-            const direction = createMemo(() => {
-              const current = sort();
-              return current?.columnId === column.id ? current.direction : undefined;
-            });
-            const arrow = createMemo(() => {
-              const state = direction();
-              return state
-                ? Icon({
-                    icon: state === "asc" ? ARROW_UP : ARROW_DOWN,
-                    size: "sm",
-                    class: "zui-data-table__arrow",
-                  })
+    children: () =>
+      provide(TableContext, {}, () =>
+        TableRow({
+          children: For({
+            get each() {
+              return props.columns;
+            },
+            children: column => {
+              const direction = () => {
+                const current = sort();
+                return current?.columnId === column.id ? current.direction : undefined;
+              };
+              let sortButton = column.header;
+              if (column.sortable) {
+                const arrow = createMemo(() => {
+                  const state = direction();
+                  return state
+                    ? Icon({
+                        icon: state === "asc" ? ARROW_UP : ARROW_DOWN,
+                        size: "sm",
+                        class: "zui-data-table__arrow",
+                      })
+                    : null;
+                });
+                sortButton = element("control", {
+                  class: "zui-data-table__sort",
+                  role: "button",
+                  tabIndex: 0,
+                  onClick() {
+                    const state = direction();
+                    setSort(
+                      state === "desc"
+                        ? null
+                        : { columnId: column.id, direction: state === "asc" ? "desc" : "asc" },
+                    );
+                  },
+                  children: [column.header, arrow],
+                });
+              }
+              const grip = column.resizable
+                ? resizeGrip(
+                    column,
+                    () => columnWidth(column),
+                    next => {
+                      if (next !== columnWidth(column))
+                        setWidths({ ...widths(), [column.id]: next });
+                    },
+                  )
                 : null;
-            });
-            sortButton = element("control", {
-              class: "zui-data-table__sort",
-              role: "button",
-              tabIndex: 0,
-              get ariaDescription() {
-                const state = direction();
-                return state === "asc"
-                  ? "Sorted ascending"
-                  : state === "desc"
-                    ? "Sorted descending"
-                    : "Not sorted";
-              },
-              onClick() {
-                const state = direction();
-                setSort(
-                  state === "desc"
-                    ? null
-                    : { columnId: column.id, direction: state === "asc" ? "desc" : "asc" },
-                );
-              },
-              children: [column.header, arrow],
-            });
-          }
-          const grip = column.resizable
-            ? resizeGrip(
-                column,
-                () => columnWidth(column),
-                next => {
-                  if (next !== columnWidth(column)) setWidths({ ...widths(), [column.id]: next });
+              return TableHead({
+                align: column.align,
+                get ariaSort() {
+                  if (!column.sortable) return undefined;
+                  const state = direction();
+                  return state === "asc" ? "ascending" : state === "desc" ? "descending" : "none";
                 },
-              )
-            : null;
-          return TableHead({ align: column.align, children: [sortButton, grip] });
-        },
-      }),
-    }),
+                children: [sortButton, grip],
+              });
+            },
+          }),
+        }),
+      ),
   });
 
   const renderRow = (item: T, index: Accessor<number>) => {
@@ -331,27 +328,29 @@ export function DataTable<T>(props: DataTableProps<T>): NativeNode {
       get selected() {
         return selected();
       },
-      children: For({
-        get each() {
-          return props.columns;
-        },
-        children: column =>
-          TableCell({ role: "gridCell", align: column.align, children: column.cell(item, index) }),
-      }),
+      get children() {
+        return For({
+          get each() {
+            return props.columns;
+          },
+          children: column =>
+            TableCell({
+              role: "gridCell",
+              align: column.align,
+              children: column.cell(item, index),
+            }),
+        });
+      },
     });
     const layoutRow = element("box", {
-      __zguiClass: `${tableSheet.className} zui-table__body`,
-      __zguiStyle: { flexShrink: 0 },
+      __zguiClass: `${tableSheet.className} zui-data-table__layout-row`,
+      "data-fixed": fixed ? "true" : undefined,
       children: row,
     });
     createEffect(selected, isActive => {
       if (!isActive) return;
-      setActiveRow({ semantic: row, layout: layoutRow });
-      if (reveal !== undefined && reveal === untrack(index)) {
-        reveal = undefined;
-        scrollIntoView(layoutRow, { block: "nearest" });
-      }
-      return () => setActiveRow(current => (current?.semantic === row ? null : current));
+      setActiveRow(row);
+      return () => setActiveRow(current => (current === row ? null : current));
     });
     return layoutRow;
   };
@@ -366,15 +365,12 @@ export function DataTable<T>(props: DataTableProps<T>): NativeNode {
   const bodyProps = {
     class: "zui-data-table__grid",
     role: "rowGroup" as const,
-    style: { border: "none", "--zgui-scrollbar-mode": "overlay" },
     get "--zui-data-table-height"() {
-      const height = props.height ?? (fixed || measured ? DEFAULT_BODY_HEIGHT : undefined);
-      return height === undefined ? undefined : `${height}px`;
+      return `${props.height ?? DEFAULT_BODY_HEIGHT}px`;
     },
     get "--zui-data-table-row"() {
       return fixed ? `${props.itemHeight}px` : undefined;
     },
-    "data-virtualized": fixed ? "true" : undefined,
   } as const;
   const listProps = mergeProps(bodyProps, {
     get each() {
@@ -397,39 +393,16 @@ export function DataTable<T>(props: DataTableProps<T>): NativeNode {
           },
         }),
       )
-    : measured
-      ? VirtualList<T>(
-          mergeProps(listProps, {
-            get estimatedItemHeight() {
-              return props.estimatedItemHeight!;
-            },
-          }),
-        )
-      : element(
-          "scroll",
-          mergeProps(bodyProps, {
-            get children() {
-              return hasRows()
-                ? For({
-                    get each() {
-                      return rows();
-                    },
-                    children: renderRow,
-                  })
-                : empty();
-            },
-          }),
-        );
+    : VirtualList<T>(
+        mergeProps(listProps, {
+          get estimatedItemHeight() {
+            return props.estimatedItemHeight!;
+          },
+        }),
+      );
 
   const frame = element("scroll", {
-    __zguiStyle: {
-      width: "100%",
-      minWidth: "0px",
-      overflowX: "auto",
-      overflowY: "hidden",
-      border: "1px solid var(--zui-color-border)",
-      borderRadius: "var(--zui-radius-md)",
-    },
+    class: "zui-data-table__frame",
     children: element("column", {
       get __zguiStyle() {
         return layout();

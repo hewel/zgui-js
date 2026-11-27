@@ -383,7 +383,7 @@ export type {
   WatchEventKind,
 } from "./files.js";
 
-export { listGrants, revokeGrant } from "./grants.js";
+export { clearGrants, listGrants, revokeGrant } from "./grants.js";
 export type { GrantToken, GrantKind, GrantAccessMode, GrantInfo } from "./grants.js";
 
 export {

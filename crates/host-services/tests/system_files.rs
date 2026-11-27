@@ -119,6 +119,36 @@ fn recursive_removal_unlinks_only_the_symlink() {
 }
 
 #[test]
+fn recursive_removal_cancels_between_unlinks_in_one_tree() {
+    use host_services::system_files::{EntryRef, Job, run_job};
+    use std::sync::atomic::AtomicBool;
+
+    let temp = Temp::new();
+    let nested = temp.0.join("tree/nested");
+    fs::create_dir_all(&nested).unwrap();
+    fs::write(nested.join("first"), b"first").unwrap();
+    fs::write(nested.join("second"), b"second").unwrap();
+    let scope = Scope::new(Root::open(&temp.0, FileMode::ReadWrite).unwrap());
+    let cancelled = AtomicBool::new(false);
+    let result = run_job(
+        Job::RemovePermanent {
+            entries: vec![EntryRef::new(scope, "tree".into())],
+            recursive: true,
+        },
+        None,
+        &cancelled,
+        |_| panic!("unexpected conflict"),
+        |progress| {
+            if progress.items_completed == 0 {
+                cancelled.store(true, Ordering::Release);
+            }
+        },
+    );
+    assert_eq!(result.unwrap_err().code, "Cancelled");
+    assert_eq!(fs::read_dir(nested).unwrap().count(), 1);
+}
+
+#[test]
 fn copy_streams_large_files_and_cancels_without_publishing_partial_data() {
     use host_services::system_files::{EntryRef, Job, Progress, run_job};
     use sha2::{Digest, Sha256};
@@ -412,20 +442,13 @@ fn unsafe_home_trash_is_unavailable_without_deleting_source() {
     assert_eq!(fs::read_dir(temp.0.join("other")).unwrap().count(), 0);
 }
 
-#[test]
-fn cross_device_move_streams_and_preserves_mode_and_mtime() {
-    use host_services::system_files::{EntryRef, Job, run_job};
-    use std::{
-        os::unix::fs::{MetadataExt, PermissionsExt},
-        path::Path,
-        sync::atomic::AtomicBool,
-    };
+fn cross_device_destination(from: &Temp) -> Option<Temp> {
+    use std::{os::unix::fs::MetadataExt, path::Path};
 
-    let from = Temp::new();
     let shm = Path::new("/dev/shm");
     let source_device = fs::metadata(&from.0).unwrap().dev();
     if !fs::metadata(shm).is_ok_and(|meta| meta.dev() != source_device) {
-        return; // No second filesystem in this test environment.
+        return None;
     }
     let dest = shm.join(from.0.file_name().unwrap());
     match fs::create_dir(&dest) {
@@ -435,11 +458,25 @@ fn cross_device_move_streams_and_preserves_mode_and_mtime() {
                 std::io::ErrorKind::PermissionDenied | std::io::ErrorKind::ReadOnlyFilesystem
             ) =>
         {
-            return;
+            return None;
         }
         result => result.unwrap(),
     }
-    let dest = Temp(dest);
+    Some(Temp(dest))
+}
+
+#[test]
+fn cross_device_move_streams_and_preserves_mode_and_mtime() {
+    use host_services::system_files::{EntryRef, Job, run_job};
+    use std::{
+        os::unix::fs::{MetadataExt, PermissionsExt},
+        sync::atomic::AtomicBool,
+    };
+
+    let from = Temp::new();
+    let Some(dest) = cross_device_destination(&from) else {
+        return; // No writable second filesystem in this test environment.
+    };
     let path = from.0.join("payload");
     fs::write(&path, b"cross device").unwrap();
     fs::set_permissions(&path, fs::Permissions::from_mode(0o640)).unwrap();
@@ -470,4 +507,81 @@ fn cross_device_move_streams_and_preserves_mode_and_mtime() {
         (after.mtime(), after.mtime_nsec()),
         (before.mtime(), before.mtime_nsec())
     );
+}
+
+#[test]
+fn cross_device_move_preserves_a_modified_source_file() {
+    use host_services::system_files::{EntryRef, Job, run_job};
+    use std::{fs::FileTimes, sync::atomic::AtomicBool, time::SystemTime};
+
+    let from = Temp::new();
+    let Some(dest) = cross_device_destination(&from) else {
+        return;
+    };
+    let source = from.0.join("payload");
+    fs::write(&source, b"before").unwrap();
+    fs::File::open(&source)
+        .unwrap()
+        .set_times(FileTimes::new().set_modified(SystemTime::UNIX_EPOCH))
+        .unwrap();
+    let src = Scope::new(Root::open(&from.0, FileMode::ReadWrite).unwrap());
+    let dst = Scope::new(Root::open(&dest.0, FileMode::ReadWrite).unwrap());
+    let result = run_job(
+        Job::Move {
+            sources: vec![EntryRef::new(src, "payload".into())],
+            destination: EntryRef::new(dst, String::new()),
+        },
+        None,
+        &AtomicBool::new(false),
+        |_| panic!("unexpected conflict"),
+        |progress| {
+            if progress.items_completed == 0 {
+                fs::write(&source, b"edited").unwrap(); // Same length and inode; only mtime differs.
+            }
+        },
+    );
+    assert_eq!(result.unwrap_err().code, "Io");
+    assert_eq!(fs::read(source).unwrap(), b"edited");
+    assert_eq!(fs::read(dest.0.join("payload")).unwrap(), b"before");
+}
+
+#[test]
+fn cross_device_directory_move_preserves_entries_added_after_copying_a_subdirectory() {
+    use host_services::system_files::{EntryRef, Job, run_job};
+    use std::sync::atomic::AtomicBool;
+
+    let from = Temp::new();
+    let Some(dest) = cross_device_destination(&from) else {
+        return;
+    };
+    let source = from.0.join("tree");
+    fs::create_dir_all(source.join("left")).unwrap();
+    fs::create_dir_all(source.join("right")).unwrap();
+    fs::write(source.join("left/copied"), b"L").unwrap();
+    fs::write(source.join("right/copied"), b"RR").unwrap();
+    let src = Scope::new(Root::open(&from.0, FileMode::ReadWrite).unwrap());
+    let dst = Scope::new(Root::open(&dest.0, FileMode::ReadWrite).unwrap());
+    let mut first = None;
+    let result = run_job(
+        Job::Move {
+            sources: vec![EntryRef::new(src, "tree".into())],
+            destination: EntryRef::new(dst, String::new()),
+        },
+        None,
+        &AtomicBool::new(false),
+        |_| panic!("unexpected conflict"),
+        |progress| match progress.bytes_completed {
+            1 => first = Some("left"),
+            2 => first = Some("right"),
+            3 => fs::write(source.join(first.unwrap()).join("new"), b"keep").unwrap(),
+            _ => unreachable!(),
+        },
+    );
+    assert_eq!(result.unwrap_err().code, "Io");
+    let first = first.unwrap();
+    assert_eq!(fs::read(source.join(first).join("new")).unwrap(), b"keep");
+    assert!(!source.join(first).join("copied").exists());
+    assert!(!dest.0.join("tree").join(first).join("new").exists());
+    assert_eq!(fs::read(dest.0.join("tree/left/copied")).unwrap(), b"L");
+    assert_eq!(fs::read(dest.0.join("tree/right/copied")).unwrap(), b"RR");
 }

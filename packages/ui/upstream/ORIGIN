@@ -12,3 +12,8 @@ generated theme declarations:
 - InputGroupPartStyle omits browser-only resize: none; native editors have no
   user resize affordance. Native layout/sizing declarations remain unchanged.
 No unsupported native declaration is silently dropped during installation.
+
+TableStyle scopes sticky and selected presentation to the receiving table parts.
+DataTableStyle and DatePickerStyle carry the static native layout for their
+virtualized body and popover respectively. These adaptations run in
+packages/build/src/sync-ui-resources.ts.

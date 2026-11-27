@@ -2,6 +2,14 @@ import { getOwner, onCleanup } from "#solid";
 import type { NativeNode } from "./native-node.js";
 
 export type { NativeNode } from "./native-node.js";
+export type {
+  DroppedSystemEntry,
+  ReadSystemDirOptions,
+  SystemDirHandle,
+  SystemDirPage,
+  SystemEntryInfo,
+  SystemEntryKind,
+} from "./events.js";
 
 /** Drop effect negotiated synchronously during `onDragOver`. */
 export type DragEffect = "copy" | "move" | "none";

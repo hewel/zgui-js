@@ -17,6 +17,7 @@ export interface GrantInfo {
 interface HostGrantBinding {
   readonly listGrants: () => HostRequest<readonly GrantInfo[]>;
   readonly revokeGrant: (token: GrantToken) => HostRequest<boolean>;
+  readonly clearGrants: () => HostRequest<number>;
 }
 // The native host owns this binding; read the service lazily at call time.
 const runtime = globalThis as typeof globalThis & { readonly __zguiServices: HostGrantBinding };
@@ -29,4 +30,9 @@ export function listGrants(): HostRequest<readonly GrantInfo[]> {
 /** Revoke a persisted grant; existing live handles are not closed. */
 export function revokeGrant(token: GrantToken): HostRequest<boolean> {
   return runtime.__zguiServices.revokeGrant(token);
+}
+
+/** Remove all persisted grants for this app and return the count. Live handles stay open. */
+export function clearGrants(): HostRequest<number> {
+  return runtime.__zguiServices.clearGrants();
 }

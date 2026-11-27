@@ -43,6 +43,7 @@ mod sqlite;
 mod system_files;
 mod workers;
 
+pub(crate) use files::DroppedEntries;
 pub(crate) use invocation::Launch;
 pub(crate) use workers::WorkerStep;
 

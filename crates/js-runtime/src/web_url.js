@@ -1,5 +1,13 @@
 Object(
-  function installUrlGlobals(parseUrl, canParseUrl, getUrl, setUrl, parseParams, serializeParams) {
+  function installUrlGlobals(
+    parseUrl,
+    canParseUrl,
+    getUrl,
+    setUrl,
+    parseParams,
+    serializeParams,
+    component,
+  ) {
     const wellFormed = Function.call.bind(String.prototype.toWellFormed);
     const usv = value => wellFormed(`${value}`);
     const objectLike = value =>
@@ -201,86 +209,86 @@ Object(
         return parsed ? new URL(parsed, nativeUrl) : null;
       }
       get href() {
-        return getUrl(this.#url, 0);
+        return getUrl(this.#url, component.href);
       }
       set href(value) {
-        this.#setQueryComponent(0, value);
+        this.#setQueryComponent(component.href, value);
       }
       get origin() {
-        return getUrl(this.#url, 1);
+        return getUrl(this.#url, component.origin);
       }
       get protocol() {
-        return getUrl(this.#url, 2);
+        return getUrl(this.#url, component.protocol);
       }
       set protocol(value) {
-        setUrl(this.#url, 2, usv(value));
+        setUrl(this.#url, component.protocol, usv(value));
       }
       get username() {
-        return getUrl(this.#url, 3);
+        return getUrl(this.#url, component.username);
       }
       set username(value) {
-        setUrl(this.#url, 3, usv(value));
+        setUrl(this.#url, component.username, usv(value));
       }
       get password() {
-        return getUrl(this.#url, 4);
+        return getUrl(this.#url, component.password);
       }
       set password(value) {
-        setUrl(this.#url, 4, usv(value));
+        setUrl(this.#url, component.password, usv(value));
       }
       get host() {
-        return getUrl(this.#url, 5);
+        return getUrl(this.#url, component.host);
       }
       set host(value) {
-        setUrl(this.#url, 5, usv(value));
+        setUrl(this.#url, component.host, usv(value));
       }
       get hostname() {
-        return getUrl(this.#url, 6);
+        return getUrl(this.#url, component.hostname);
       }
       set hostname(value) {
-        setUrl(this.#url, 6, usv(value));
+        setUrl(this.#url, component.hostname, usv(value));
       }
       get port() {
-        return getUrl(this.#url, 7);
+        return getUrl(this.#url, component.port);
       }
       set port(value) {
-        setUrl(this.#url, 7, usv(value));
+        setUrl(this.#url, component.port, usv(value));
       }
       get pathname() {
-        return getUrl(this.#url, 8);
+        return getUrl(this.#url, component.pathname);
       }
       set pathname(value) {
-        setUrl(this.#url, 8, usv(value));
+        setUrl(this.#url, component.pathname, usv(value));
       }
       get search() {
-        return getUrl(this.#url, 9);
+        return getUrl(this.#url, component.search);
       }
       set search(value) {
-        this.#setQueryComponent(9, value);
+        this.#setQueryComponent(component.search, value);
       }
       get hash() {
-        return getUrl(this.#url, 10);
+        return getUrl(this.#url, component.hash);
       }
       set hash(value) {
-        setUrl(this.#url, 10, usv(value));
+        setUrl(this.#url, component.hash, usv(value));
       }
       #setQueryComponent(key, value) {
         const url = this.#url;
         setUrl(url, key, usv(value));
-        if (this.#params) replaceParams(this.#params, getUrl(url, 9));
+        if (this.#params) replaceParams(this.#params, getUrl(url, component.search));
       }
       get searchParams() {
         if (!this.#params) {
           const url = this.#url;
-          this.#params = new URLSearchParams(getUrl(url, 9));
-          bindParams(this.#params, query => setUrl(url, 9, query));
+          this.#params = new URLSearchParams(getUrl(url, component.search));
+          bindParams(this.#params, query => setUrl(url, component.search, query));
         }
         return this.#params;
       }
       toString() {
-        return getUrl(this.#url, 0);
+        return getUrl(this.#url, component.href);
       }
       toJSON() {
-        return getUrl(this.#url, 0);
+        return getUrl(this.#url, component.href);
       }
     }
 

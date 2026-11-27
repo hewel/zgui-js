@@ -12,7 +12,7 @@ use ash::vk;
 use zgui_geom::{Device, Size};
 use zgui_scene::ExternalTextureId;
 
-use crate::{FrameTexture, Gpu, WgpuRenderer};
+use crate::{FrameTexture, Gpu, Nv12Target, WgpuRenderer};
 
 pub(crate) const FOREIGN: &std::ffi::CStr = ash::ext::queue_family_foreign::NAME;
 const DMA_BUF: vk::ExternalMemoryHandleTypeFlags = vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT;
@@ -256,14 +256,18 @@ impl WgpuRenderer {
     /// after the last attachment is retired, the release barrier completes, and Vulkan
     /// no longer owns the image. On rejection the callback is dropped without calling it.
     ///
+    /// Use a separate `nv12_target` per stream. Successive NV12 frames on the same
+    /// device and extent share its RGB texture, with writes ordered on the GPU queue.
+    ///
     /// # Errors
     /// Refuses incompatible formats, invalid descriptors and unsignalled DMA-BUF fences.
     pub fn import_dmabuf(
         &self,
         frame: Dmabuf<'_>,
+        nv12_target: &mut Nv12Target,
         release: impl FnOnce() + Send + Sync + 'static,
     ) -> Result<ImportedFrame, DmabufError> {
-        import(self.gpu(), frame, Box::new(release))
+        import(self.gpu(), frame, nv12_target, Box::new(release))
     }
 
     /// Registers an imported texture on a renderer sharing its device. Returns no binding
@@ -439,6 +443,7 @@ impl Drop for Allocation {
 fn import(
     gpu: &Arc<Gpu>,
     frame: Dmabuf<'_>,
+    nv12_target: &mut Nv12Target,
     release: wgpu::hal::DropCallback,
 ) -> Result<ImportedFrame, DmabufError> {
     let device = vulkan(gpu).ok_or(DmabufError::Unsupported)?;
@@ -591,7 +596,7 @@ fn import(
         release: Some(release),
     };
     if count == 2 {
-        imported.converted = Some(crate::frame_texture::nv12(
+        imported.converted = Some(nv12_target.convert(
             gpu,
             &imported.texture,
             frame.format == DmabufFormat::Nv12Bt709,

@@ -579,7 +579,7 @@ export async function runCli(rawArgs: readonly string[]): Promise<number> {
         strictTypecheck: selected.strictTypecheck,
         ...host,
         hostArgs,
-        hostCwd: process.cwd(),
+        ...(selected.hostRoot === undefined ? { hostCwd: process.cwd() } : {}),
         signal,
       }),
     );

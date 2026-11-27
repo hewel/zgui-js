@@ -5,7 +5,7 @@ mod worker;
 use std::{
     cell::{Cell, OnceCell, RefCell},
     collections::{BTreeMap, VecDeque},
-    path::Path,
+    path::{Path, PathBuf},
     rc::Rc,
     sync::{
         Arc,
@@ -47,7 +47,7 @@ use crate::{
     package::SystemFilesCapabilities,
 };
 pub(crate) use worker::Event;
-use worker::{Control, IoPool};
+use worker::{Control, IoPool, PreviewWorker};
 
 const MAX_OPERATIONS: usize = 128;
 const MAX_HANDLES: usize = 256;
@@ -139,6 +139,7 @@ pub(super) struct SystemFilesState {
     rx: Receiver<Event>,
     ready: RefCell<VecDeque<Event>>,
     pool: OnceCell<IoPool>,
+    preview_worker: OnceCell<PreviewWorker>,
 }
 
 impl SystemFilesState {
@@ -165,6 +166,7 @@ impl SystemFilesState {
             rx,
             ready: RefCell::default(),
             pool: OnceCell::new(),
+            preview_worker: OnceCell::new(),
         }
     }
 
@@ -181,8 +183,66 @@ impl SystemFilesState {
         self.fixture.as_ref().map(|fixture| fixture.system_files())
     }
 
+    pub(super) fn dropped_root_slots(&self) -> usize {
+        MAX_HANDLES - self.roots.borrow().len()
+    }
+
+    fn reopen(&self, path: PathBuf, mode: FileMode) -> Result<Root, ServiceError> {
+        match self.preview() {
+            Some(fs) => fs.reopen(&path, mode),
+            None => Root::reopen(path, mode),
+        }
+    }
+
+    pub(super) fn locate_drop(&self, path: &Path) -> Option<(PathBuf, fs::EntryKind)> {
+        match self.preview() {
+            Some(fs) if self.capabilities.read => fs.locate_dropped_entry(path).ok(),
+            Some(_) => None,
+            None => fs::locate_dropped_entry(path).ok(),
+        }
+    }
+
+    pub(super) fn dropped_root(
+        &self,
+        path: PathBuf,
+        kind: fs::EntryKind,
+    ) -> Option<(Root, String)> {
+        if !self.capabilities.read {
+            return None;
+        }
+        if kind == fs::EntryKind::Other {
+            return None;
+        }
+        if let Some(root) = self
+            .roots
+            .borrow()
+            .values()
+            .filter(|root| !root.is_entry_only() && path.starts_with(root.path()))
+            .max_by_key(|root| (root.mode().can_write(), root.path().as_os_str().len()))
+        {
+            return Some((root.clone(), root.relative_path(&path)?));
+        }
+        if kind == fs::EntryKind::Dir {
+            let root = self
+                .reopen(path, FileMode::Read)
+                .ok()?
+                .with_user_authorization();
+            return Some((root, String::new()));
+        }
+        let parent = self
+            .reopen(path.parent()?.to_owned(), FileMode::Read)
+            .ok()?;
+        let relative = parent.relative_path(&path)?;
+        Some((parent.confine_to_entry(path.file_name()?), relative))
+    }
+
     fn active_roots(&self) -> Vec<Root> {
-        self.roots.borrow().values().cloned().collect()
+        self.roots
+            .borrow()
+            .values()
+            .filter(|root| !root.is_entry_only())
+            .cloned()
+            .collect()
     }
 
     fn scope(
@@ -226,10 +286,12 @@ impl SystemFilesState {
     }
 
     pub(super) fn has_inflight(&self) -> bool {
-        self.pending
-            .borrow()
+        let pending = self.pending.borrow();
+        let paused = self.preview_worker.get().is_some()
+            && pending.values().any(|request| request.control.waiting());
+        pending
             .values()
-            .any(|request| !request.control.waiting())
+            .any(|request| !(paused && request.job) && !request.control.waiting())
     }
 
     pub(super) fn has_events(&self) -> bool {
@@ -256,9 +318,21 @@ impl SystemFilesState {
             pending.control.cancel();
         }
         self.pending.borrow_mut().clear();
+        if let Some(worker) = self.preview_worker.get() {
+            worker.stop();
+        }
         for watch in self.watches.borrow().values() {
             watch.control.cancel();
         }
+    }
+
+    fn job_count(&self) -> usize {
+        self.workers
+            .borrow()
+            .iter()
+            .filter(|worker| worker.job)
+            .count()
+            + self.preview_worker.get().map_or(0, PreviewWorker::jobs)
     }
 
     pub(super) fn counts(&self) -> Counts {
@@ -266,7 +340,7 @@ impl SystemFilesState {
         let workers = self.workers.borrow();
         Counts {
             handles: self.roots.borrow().len(),
-            jobs: workers.iter().filter(|worker| worker.job).count(),
+            jobs: self.job_count(),
             conflicts: self
                 .pending
                 .borrow()
@@ -285,7 +359,13 @@ impl SystemFilesState {
         loop {
             while self.rx.try_recv().is_ok() {}
             self.reap();
-            if self.workers.borrow().is_empty() || Instant::now() >= end {
+            if (self.workers.borrow().is_empty()
+                && self
+                    .preview_worker
+                    .get()
+                    .is_none_or(PreviewWorker::is_finished))
+                || Instant::now() >= end
+            {
                 break;
             }
             thread::sleep(Duration::from_millis(1));
@@ -298,6 +378,18 @@ impl SystemFilesState {
         self.watches.borrow_mut().clear();
         self.ready.borrow_mut().clear();
         while self.rx.try_recv().is_ok() {}
+    }
+
+    fn preview_worker(&self) -> std::io::Result<&PreviewWorker> {
+        if self.preview_worker.get().is_none() {
+            self.preview_worker
+                .set(PreviewWorker::new()?)
+                .unwrap_or_else(|_| unreachable!("owner-thread fixture worker admission"));
+        }
+        Ok(self
+            .preview_worker
+            .get()
+            .expect("fixture worker initialized"))
     }
 
     fn spawn(&self, task: worker::Task, tracked: Option<bool>) -> std::io::Result<()> {
@@ -367,11 +459,11 @@ impl Work {
                 work.require_creation(&ctx)?;
                 work.system_files.require_mode(&ctx, FileMode::Read)?;
                 let path = work.dropped_directory_path(&ctx, handle)?;
-                let dir = match work.system_files.preview() {
-                    Some(fs) => fs.reopen(Path::new(&path), FileMode::Read),
-                    None => Root::reopen(path.into(), FileMode::Read),
-                }
-                .map_err(|error| throw(&ctx, error))?;
+                let dir = work
+                    .system_files
+                    .reopen(path.into(), FileMode::Read)
+                    .map_err(|error| throw(&ctx, error))?
+                    .with_user_authorization();
                 work.system_handle(&ctx, dir)
             })),
         )?;
@@ -665,24 +757,39 @@ impl Work {
         run: impl FnOnce(Option<&PreviewSystemFiles>) -> Outcome + Send + 'static,
     ) -> rquickjs::Result<Object<'js>> {
         let (id, control, request) = self.system_request(ctx, None, false)?;
-        let preview = self.system_files.preview().cloned();
-        let tx = self.system_files.tx.clone();
+        self.dispatch_system_read(id, control, run);
+        Ok(request)
+    }
+
+    fn dispatch_system_read(
+        &self,
+        id: u64,
+        control: Arc<Control>,
+        run: impl FnOnce(Option<&PreviewSystemFiles>) -> Outcome + Send + 'static,
+    ) {
+        let state = &self.system_files;
+        let preview = state.preview().cloned();
+        let deterministic = preview.is_some();
+        let tx = state.tx.clone();
         let wake = self.wake.clone();
-        let result = self.system_files.spawn(
-            Box::new(move || {
-                if !control.cancelled() {
-                    let result = run(preview.as_deref());
-                    if !control.cancelled() && tx.send(Event::Done(id, result)).is_ok() {
-                        wake();
-                    }
+        let task = Box::new(move || {
+            if !control.cancelled() {
+                let result = run(preview.as_deref());
+                if !control.cancelled() && tx.send(Event::Done(id, result)).is_ok() {
+                    wake();
                 }
-            }),
-            None,
-        );
+            }
+        });
+        let result = if deterministic {
+            state
+                .preview_worker()
+                .and_then(|worker| worker.submit(id, false, task))
+        } else {
+            state.spawn(task, None)
+        };
         if let Err(error) = result {
             self.queue_system_result(id, Err(error.into()));
         }
-        Ok(request)
     }
 
     fn queue_system_result(&self, id: u64, result: Outcome) {
@@ -693,7 +800,7 @@ impl Work {
         (self.wake)();
     }
 
-    fn system_handle<'js>(
+    pub(super) fn system_handle<'js>(
         self: &Rc<Self>,
         ctx: &Ctx<'js>,
         root: Root,
@@ -865,28 +972,34 @@ impl Work {
         } else {
             FileMode::ReadWrite
         };
-        self.system_read(ctx, move |preview| {
+        let (id, control, request) = self.system_request(ctx, None, false)?;
+        let scripted = self.system_files.preview().map(|fs| {
+            fs.dialogs
+                .lock()
+                .expect("fixture system directory dialog queue poisoned")
+                .pop_front()
+                .ok_or_else(|| {
+                    fault(
+                        "E_FIXTURE_MISSING_SERVICE",
+                        "fixture has no system directory dialog response",
+                    )
+                })
+        });
+        self.dispatch_system_read(id, control, move |preview| {
             let root = match preview {
-                Some(fs) => {
-                    let path = fs
-                        .dialogs
-                        .lock()
-                        .expect("fixture system directory dialog queue poisoned")
-                        .pop_front()
-                        .ok_or_else(|| {
-                            fault(
-                                "E_FIXTURE_MISSING_SERVICE",
-                                "fixture has no system directory dialog response",
-                            )
-                        })?;
-                    path.map(|path| fs.open(&path, mode)).transpose()?
-                }
+                Some(fs) => scripted
+                    .expect("fixture dialog admitted with a scripted response")?
+                    .map(|path| fs.open(&path, mode))
+                    .transpose()?,
                 None => run_file_chooser(PortalDialogKind::OpenDirectory, &options)?
                     .map(|path| Root::open(&path, mode))
                     .transpose()?,
             };
-            Ok(Completed::Directory(root))
-        })
+            Ok(Completed::Directory(
+                root.map(Root::with_user_authorization),
+            ))
+        });
+        Ok(request)
     }
 
     fn persist_system_grant<'js>(
@@ -902,6 +1015,8 @@ impl Work {
                 throw_file_error(ctx, "InvalidState", "system directory is closed")
             })?;
         state.require_mode(ctx, root.mode())?;
+        root.require_user_authorization()
+            .map_err(|error| throw(ctx, error))?;
         if let Some(vfs) = self.preview_workspace_files() {
             let (id, _, request) = self.system_request(ctx, None, false)?;
             let result = vfs
@@ -952,7 +1067,8 @@ impl Work {
                 let root = state
                     .preview()
                     .expect("workspace and system files use the same fixture run")
-                    .reopen(Path::new(&record.scope.path), record.mode)?;
+                    .reopen(Path::new(&record.scope.path), record.mode)?
+                    .with_user_authorization();
                 Ok(Completed::Directory(Some(root)))
             })();
             self.queue_system_result(id, result);
@@ -962,10 +1078,9 @@ impl Work {
         self.system_read(ctx, move |_| {
             let record =
                 restore_system_grant(&resolve_grant_store_path(&app_id)?, &token, allow_write)?;
-            Ok(Completed::Directory(Some(Root::reopen(
-                record.scope.path.into(),
-                record.mode,
-            )?)))
+            Ok(Completed::Directory(Some(
+                Root::reopen(record.scope.path.into(), record.mode)?.with_user_authorization(),
+            )))
         })
     }
 
@@ -989,14 +1104,7 @@ impl Work {
             state.require_mode(ctx, write)?;
         }
         state.reap();
-        if state
-            .workers
-            .borrow()
-            .iter()
-            .filter(|worker| worker.job)
-            .count()
-            >= MAX_JOBS
-        {
+        if state.job_count() >= MAX_JOBS {
             return Err(throw_file_error(
                 ctx,
                 "E_LIMIT",
@@ -1059,53 +1167,68 @@ impl Work {
             (pending.on_conflict.is_some(), pending.on_progress.is_some())
         };
         let preview = state.preview().cloned();
+        let deterministic = preview.is_some();
+        let fixture_worker = if deterministic {
+            match state.preview_worker() {
+                Ok(worker) => Some(worker),
+                Err(error) => {
+                    self.queue_system_result(id, Err(error.into()));
+                    return Ok(request);
+                }
+            }
+        } else {
+            None
+        };
+        let fixture_tasks = fixture_worker.map(|worker| worker.tasks.clone());
         let tx = state.tx.clone();
         let wake = self.wake.clone();
-        let result = state.spawn(
-            Box::new(move || {
-                let conflict = |info| {
-                    if conflict_handler {
-                        control.ask(info, id, &tx, &wake)
-                    } else {
-                        ConflictResolution::CANCEL
-                    }
-                };
-                let mut last = None::<Instant>;
-                let progress = |progress: &fs::Progress| {
-                    if !progress_handler {
-                        return;
-                    }
-                    if progress.items_completed == progress.items_total {
-                        if tx.send(Event::Progress(id, progress.clone())).is_ok() {
-                            wake();
-                        }
-                    } else if last.is_none_or(|sent| sent.elapsed() >= PROGRESS_INTERVAL)
-                        && tx.try_send(Event::Progress(id, progress.clone())).is_ok()
-                    {
-                        last = Some(Instant::now());
+        let task = Box::new(move || {
+            let conflict = |info| {
+                if conflict_handler {
+                    control.ask(info, id, &tx, &wake, fixture_tasks.as_ref())
+                } else {
+                    ConflictResolution::CANCEL
+                }
+            };
+            let mut last = None::<Instant>;
+            let progress = |progress: &fs::Progress| {
+                if !progress_handler {
+                    return;
+                }
+                if deterministic || progress.items_completed == progress.items_total {
+                    if tx.send(Event::Progress(id, progress.clone())).is_ok() {
                         wake();
                     }
-                };
-                let result = match preview {
-                    Some(fs) => fs.run_job(job, control.flag(), conflict, progress),
-                    None => fs::run_job(
-                        job,
-                        Trash::from_environment().as_ref(),
-                        control.flag(),
-                        conflict,
-                        progress,
-                    ),
-                }
-                .and_then(|result| match result {
-                    JobResult::Done => Ok(Completed::Void),
-                    JobResult::Trash(entries) => json(&entries),
-                });
-                if tx.send(Event::Done(id, result)).is_ok() {
+                } else if last.is_none_or(|sent| sent.elapsed() >= PROGRESS_INTERVAL)
+                    && tx.try_send(Event::Progress(id, progress.clone())).is_ok()
+                {
+                    last = Some(Instant::now());
                     wake();
                 }
-            }),
-            Some(true),
-        );
+            };
+            let result = match preview {
+                Some(fs) => fs.run_job(job, control.flag(), conflict, progress),
+                None => fs::run_job(
+                    job,
+                    Trash::from_environment().as_ref(),
+                    control.flag(),
+                    conflict,
+                    progress,
+                ),
+            }
+            .and_then(|result| match result {
+                JobResult::Done => Ok(Completed::Void),
+                JobResult::Trash(entries) => json(&entries),
+            });
+            if tx.send(Event::Done(id, result)).is_ok() {
+                wake();
+            }
+        });
+        let result = if let Some(worker) = fixture_worker {
+            worker.submit(id, true, task)
+        } else {
+            state.spawn(task, Some(true))
+        };
         if let Err(error) = result {
             self.queue_system_result(id, Err(error.into()));
         }
@@ -1352,7 +1475,7 @@ fn follow(
     preview: Option<&PreviewSystemFiles>,
     entry: &EntryRef,
     mode: FileMode,
-) -> Result<std::path::PathBuf, ServiceError> {
+) -> Result<PathBuf, ServiceError> {
     match preview {
         Some(fs) => fs.follow(entry, mode),
         None if mode.can_write() => entry.scope.follow_for_move(&entry.relative_path),

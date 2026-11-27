@@ -12,7 +12,7 @@ use super::{
     JobResult, Progress, ReadOptions, Root, Scope, ThumbnailSize, TrashEntry, Volume,
     jobs::{Run, alternate_name, append_name},
     mime, paginate,
-    path::{Access, denied, encode_name},
+    path::{Access, denied, encode_name, entry_only_denied, locate_drop},
     trash::unavailable,
 };
 use crate::{ServiceError, files::FileMode, locale::LocaleContext};
@@ -193,6 +193,16 @@ impl PreviewSystemFiles {
         Ok(root)
     }
 
+    /// Locate a drop in the fixture without following the final symlink.
+    pub fn locate_dropped_entry(&self, path: &Path) -> Result<(PathBuf, EntryKind), ServiceError> {
+        let data = self.data();
+        locate_drop(
+            path,
+            |parent| data.resolve(parent),
+            |path| Ok(data.node(path)?.body.kind()),
+        )
+    }
+
     /// Resolve a granted virtual entry for a drag offer or external open.
     pub fn follow(&self, entry: &EntryRef, mode: FileMode) -> Result<PathBuf, ServiceError> {
         self.data().follow(
@@ -223,6 +233,7 @@ impl PreviewSystemFiles {
         options: &ReadOptions,
         locale: &LocaleContext,
     ) -> Result<DirPage, ServiceError> {
+        entry.scope.require_listable()?;
         let (path, entries) = {
             let data = self.data();
             let path = data.follow(entry, Access::Read)?;
@@ -394,7 +405,7 @@ impl PreviewSystemFiles {
                 } else {
                     data.leaf(&entry, Access::Read)?
                 };
-                data.node(&from)?;
+                entry.scope.check_leaf_kind(data.node(&from)?.body.kind())?;
                 if dest.starts_with(&from) {
                     return Err(ServiceError::new(
                         "InvalidPath",
@@ -409,11 +420,12 @@ impl PreviewSystemFiles {
                     })
                     .fold(0, u64::saturating_add);
                 run.state.bytes_total = run.state.bytes_total.saturating_add(size);
-                entries.push((from, entry.relative_path, size));
+                entries.push((from, entry, size));
             }
             dest
         };
-        for (from, relative, size) in entries {
+        for (from, entry, size) in entries {
+            let relative = entry.relative_path;
             run.check()?;
             let name = from.file_name().ok_or_else(invalid)?;
             let new = dest_dir.join(name);
@@ -429,7 +441,7 @@ impl PreviewSystemFiles {
                 }
                 run.check()?;
                 let mut data = self.data();
-                data.node(&from)?;
+                entry.scope.check_leaf_kind(data.node(&from)?.body.kind())?;
                 data.require_dir(&dest_dir)?;
                 data.prepare_destination(&target, overwrite)?;
                 let tree = if mode.can_write() {
@@ -607,6 +619,16 @@ impl Data {
 
     fn follow(&self, entry: &EntryRef, access: Access) -> Result<PathBuf, ServiceError> {
         let path = entry.scope.lexical(&entry.relative_path, access)?;
+        if entry.scope.root().is_entry_only() {
+            let parent = path.parent().ok_or_else(invalid)?;
+            entry
+                .scope
+                .resolve_with(parent, access, |parent| self.resolve(parent))?;
+            if !matches!(self.node(&path)?.body, Body::File(_)) {
+                return Err(entry_only_denied());
+            }
+            return Ok(path);
+        }
         entry
             .scope
             .resolve_with(&path, access, |path| self.resolve(path))
@@ -624,7 +646,11 @@ impl Data {
                     self.resolve(path)
                 })?;
         self.require_dir(&parent)?;
-        Ok(parent.join(path.file_name().ok_or_else(invalid)?))
+        let path = parent.join(path.file_name().ok_or_else(invalid)?);
+        if entry.scope.root().is_entry_only() {
+            entry.scope.check_leaf_kind(self.node(&path)?.body.kind())?;
+        }
+        Ok(path)
     }
 
     fn named(&self, entry: &EntryRef) -> Result<PathBuf, ServiceError> {

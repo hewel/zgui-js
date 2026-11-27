@@ -184,6 +184,28 @@ fn semantic_fields_clear_independently_and_release_the_final_native_record() {
 }
 
 #[test]
+fn aria_sort_sets_and_clears_native_column_header_direction() {
+    use zgui::vocab::SortDirection;
+
+    let mut native = NativeProperties::new();
+    native.script("__zgui.setProperty(node, 'role', 'columnHeader'); 'header'");
+    for (value, expected) in [
+        ("'ascending'", Some(SortDirection::Ascending)),
+        ("'descending'", Some(SortDirection::Descending)),
+        ("'none'", None),
+        ("'other'", Some(SortDirection::Other)),
+        ("null", None),
+        ("'ascending'", Some(SortDirection::Ascending)),
+        ("undefined", None),
+    ] {
+        native.script(&format!("__zgui.setProperty(node, 'ariaSort', {value}); 'sort'"));
+        let semantics = native.backend.semantics(native.node).unwrap();
+        assert_eq!(semantics.role, Role::ColumnHeader);
+        assert_eq!(semantics.sort_direction, expected, "{value}");
+    }
+}
+
+#[test]
 fn object_updates_remove_disappeared_keys_and_preserve_css_enumeration_order() {
     let mut native = NativeProperties::new();
     native.script("__zgui.setProperty(node, 'style', {width: '10px', height: '20px', '--Accent': '7px'}); 'initial'");

@@ -109,6 +109,7 @@ export function mount(root: NativeNode) {
                       }
                     }}
                     onDrop={e => {
+                      if (e.systemEntries.length !== 0) throw Error("internal drag exposed system entries");
                       const data = e.payload as { item?: string } | undefined;
                       if (e.source === "internal" && data?.item) {
                         reorder(data.item, item);
@@ -136,7 +137,7 @@ export function mount(root: NativeNode) {
               testId="scrolled-drop-zone"
               style="height: 48px; flex-shrink: 0; background-color: #1f3328; padding: 6px"
               onDragEnter={e => {
-                const leakedKeys = "files" in e || "paths" in e || "directories" in e;
+                const leakedKeys = "files" in e || "paths" in e || "directories" in e || "systemEntries" in e;
                 setHoverLog(
                   \`enter:\${e.source}:\${e.types.join(",")}:n=\${e.fileCount}:leak=\${String(leakedKeys)}\`,
                 );
@@ -148,6 +149,7 @@ export function mount(root: NativeNode) {
                 }
               }}
               onDrop={e => {
+                if (e.systemEntries.length !== 0) throw Error("drop exposed undeclared system authority");
                 const dir = e.directories[0];
                 if (dir) {
                   openHandles.push(dir, ...e.files);

@@ -9,7 +9,7 @@
     "generation": 1,
     "nativeAcceptance": {
       "candidate": {
-        "buildId": "sha256:9f67d8e09494b51d3758fd991135e948e6b8fac7121b79eb6bac916917f27269",
+        "buildId": "sha256:069c2fe7656af62cf883618dc6fd13d72620221f67760abf8a0ce7cc3e3e5584",
         "id": "dev.example.counter",
         "styleSystem": {
           "configDigest": "sha256:864ab49f77e8240f0abc9c85c23764f2eb766d29c61091c83c908d47e69f1ee1",
@@ -20,7 +20,7 @@
       "diagnostic": null,
       "document": "DocumentId(0)",
       "generation": 1,
-      "lastSuccessfulBuildId": "sha256:9f67d8e09494b51d3758fd991135e948e6b8fac7121b79eb6bac916917f27269",
+      "lastSuccessfulBuildId": "sha256:069c2fe7656af62cf883618dc6fd13d72620221f67760abf8a0ce7cc3e3e5584",
       "schemaVersion": 1,
       "status": "accepted"
     },
@@ -78,5 +78,5 @@
   },
   "sequence": 2,
   "status": "passed",
-  "wallDurationUs": 3195
+  "wallDurationUs": 5897
 }

@@ -441,7 +441,13 @@ test("Table keeps semantic parts and caller class on the visible table root", as
     export function mount(root: NativeNode) {
       return renderApp(() => <Table testId="table" class="caller" columns="80px 1fr" stickyHeader>
         <TableHeader testId="header"><TableRow><TableHead testId="head">Name</TableHead><TableHead>Size</TableHead></TableRow></TableHeader>
-        <TableBody><TableRow testId="row" selected><TableCell>Archive</TableCell><TableCell testId="cell" align="end">32 MB</TableCell></TableRow></TableBody>
+        <TableBody><TableRow testId="row" selected>
+          <TableCell>
+            <Table><TableHeader><TableRow><TableHead testId="inner-head">Inner</TableHead></TableRow></TableHeader>
+              <TableBody><TableRow><TableCell testId="inner-cell">Archive</TableCell></TableRow></TableBody></Table>
+          </TableCell>
+          <TableCell testId="cell" align="end">32 MB</TableCell>
+        </TableRow></TableBody>
         <TableFooter><TableRow><TableCell>Total</TableCell><TableCell>32 MB</TableCell></TableRow></TableFooter>
         <TableCaption testId="caption">Storage report</TableCaption>
       </Table>, root);
@@ -465,8 +471,10 @@ test("Table keeps semantic parts and caller class on the visible table root", as
     assert.equal(h.byTestId(testId).props.get("role"), role);
   const table = h.byTestId("table");
   assert.match(table.props.get("class"), /\bcaller\b/);
-  assert.equal(table.props.get("data-sticky-header"), "true");
-  assert.equal(h.byTestId("row").props.get("data-selected"), "true");
+  assert.equal(h.byTestId("head").props.get("data-sticky"), "true");
+  assert.equal(h.byTestId("cell").props.get("data-selected"), "true");
+  assert.equal(h.byTestId("inner-head").props.get("data-sticky"), undefined);
+  assert.equal(h.byTestId("inner-cell").props.get("data-selected"), undefined);
   assert.equal(h.byTestId("cell").props.get("data-align"), "end");
 });
 
@@ -493,7 +501,7 @@ test("controlled DataTable requests sort and width updates without changing rows
     export const acceptWidth = () => setWidths({ name: changes.widths.at(-1)!.name! });
     export const clear = () => setData([]);
     export function mount(root: NativeNode) {
-      return renderApp(() => <DataTable columns={columns} data={data()} sort={sort()} columnWidths={widths()}
+      return renderApp(() => <DataTable itemHeight={32} columns={columns} data={data()} sort={sort()} columnWidths={widths()}
         onSortChange={next => changes.sorts.push(next)} onColumnWidthsChange={next => changes.widths.push(next)}
         empty={<text testId="empty-data">No logs</text>} />, root);
     }
@@ -507,16 +515,25 @@ test("controlled DataTable requests sort and width updates without changing rows
     delete globalThis.__zgui;
   });
   const sort = h.parents.get(h.byTestId("sort-label"));
-  const grip = h.parents.get(sort).children.find(node => node.props.get("role") === "splitter");
+  const head = h.parents.get(sort);
+  assert.equal(head.props.get("role"), "columnHeader");
+  const grip = head.children.find(node => node.props.get("role") === "splitter");
   const first = () => h.host.getTextContent(h.byTestId("at-0"));
   assert.equal(first(), "Zulu");
-  assert.equal(sort.props.get("ariaDescription"), "Not sorted");
+  assert.equal(head.props.get("ariaSort"), "none");
   h.dispatch(sort, "Click");
   assert.deepEqual(mod.changes.sorts, [{ columnId: "name", direction: "asc" }]);
   assert.equal(first(), "Zulu");
+  assert.equal(head.props.get("ariaSort"), "none");
   h.runTurn(mod.acceptSort);
   assert.equal(first(), "Alpha");
-  assert.equal(sort.props.get("ariaDescription"), "Sorted ascending");
+  assert.equal(head.props.get("ariaSort"), "ascending");
+  h.dispatch(sort, "Click");
+  h.runTurn(mod.acceptSort);
+  assert.equal(head.props.get("ariaSort"), "descending");
+  h.dispatch(sort, "Click");
+  h.runTurn(mod.acceptSort);
+  assert.equal(head.props.get("ariaSort"), "none");
 
   h.dispatch(grip, "KeyDown", { key: "ArrowRight" });
   assert.equal(grip.props.get("ariaValueNow"), 120);

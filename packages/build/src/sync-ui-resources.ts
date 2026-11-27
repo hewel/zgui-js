@@ -96,6 +96,56 @@ export function adaptUpstreamCss(name: string, className: string, css: string): 
         );
     case "CollapsibleStyle":
       return `${css}\n.zui-collapsible__content[data-collapsed] { visibility: hidden; }`;
+    case "TableStyle":
+      return css
+        .replace(
+          `.${className}[data-sticky-header="true"] .zui-table__head`,
+          '.zui-table__head[data-sticky="true"]',
+        )
+        .replace(
+          `.${className} .zui-table__row[data-selected="true"] .zui-table__cell`,
+          '.zui-table__cell[data-selected="true"]',
+        )
+        .replace(
+          ".zui-table__row:hover .zui-table__cell",
+          ".zui-table__row:hover > .zui-table__cell",
+        )
+        .replace(
+          ".zui-table__footer .zui-table__cell",
+          ".zui-table__footer > .zui-table__row > .zui-table__cell",
+        )
+        .replaceAll(
+          /(\.zui-table__(?:body|footer)) (\.zui-table__row:(?:first|last)-child)/g,
+          "$1 > $2",
+        )
+        .replaceAll(
+          /(\.zui-table__row:(?:first|last)-child) \.zui-table__cell/g,
+          "$1 > .zui-table__cell",
+        );
+    case "DataTableStyle":
+      return `${css
+        .replace(
+          "border: 1px solid var(--zui-color-border);\n        border-radius: var(--zui-radius-md);\n        max-height:",
+          "border: none;\n        --zgui-scrollbar-mode: overlay;\n        max-height:",
+        )
+        .replace(
+          '.zui-data-table__grid[data-virtualized="true"] .zui-table__body .zui-table__cell',
+          '.zui-data-table__layout-row[data-fixed="true"] > .zui-table__row > .zui-table__cell',
+        )}
+.zui-data-table__layout-row { flex-shrink: 0; }
+.zui-data-table__frame {
+    width: 100%;
+    min-width: 0;
+    overflow-x: auto;
+    overflow-y: hidden;
+    border: 1px solid var(--zui-color-border);
+    border-radius: var(--zui-radius-md);
+}`;
+    case "DatePickerStyle":
+      return css.replace(
+        ".zui-date-picker__surface {\n        width: auto;",
+        ".zui-popover.zui-date-picker__surface {\n        width: max-content;",
+      );
     default:
       return css;
   }

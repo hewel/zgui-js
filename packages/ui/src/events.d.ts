@@ -1,4 +1,4 @@
-import type { NativeNode } from "./index.js";
+import type { NativeNode } from "./native-node.js";
 
 /** Snapshot data is retainable; cancellation methods expire when the handler returns. */
 export interface NativeEvent {
@@ -132,6 +132,59 @@ export interface DroppedDirectoryHandle {
   readonly close: () => void;
 }
 
+export type SystemEntryKind = "file" | "dir" | "symlink" | "other";
+
+/** The entry itself, not the target of a final symlink. */
+export interface SystemEntryInfo {
+  readonly name: string;
+  readonly relativePath: string;
+  readonly kind: SystemEntryKind;
+  readonly size: number;
+  readonly modifiedMs: number | null;
+  readonly mode: number;
+  readonly isHidden: boolean;
+  readonly symlinkTarget: string | null;
+  readonly symlinkBroken: boolean;
+  readonly symlinkTargetKind: Exclude<SystemEntryKind, "symlink"> | null;
+  readonly mimeType: string;
+}
+
+export interface ReadSystemDirOptions {
+  readonly cursor?: string;
+  readonly pageSize?: number;
+  readonly includeHidden?: boolean;
+  readonly directoriesFirst?: boolean;
+  readonly sortBy?: "name" | "size" | "modifiedMs" | "kind";
+  readonly sortDirection?: "asc" | "desc";
+  readonly numericCollation?: boolean;
+  readonly locale?: string;
+}
+
+/** One page in the current sorted listing; a cursor is not a filesystem snapshot. */
+export interface SystemDirPage {
+  readonly entries: readonly SystemEntryInfo[];
+  readonly nextCursor: string | null;
+  readonly totalEntries: number;
+}
+
+/** Opaque session authority for a directory or a single dropped entry. */
+export interface SystemDirHandle {
+  readonly kind: "system-dir";
+  readonly name: string;
+  readonly mode: "read" | "readwrite";
+  readonly lstat: (relativePath?: string) => DroppedRequest<SystemEntryInfo>;
+  readonly readDir: (
+    relativePath?: string,
+    options?: ReadSystemDirOptions,
+  ) => DroppedRequest<SystemDirPage>;
+  readonly close: () => void;
+}
+
+export interface DroppedSystemEntry {
+  readonly dir: SystemDirHandle;
+  readonly relativePath: string;
+}
+
 /** Hit-tested drag hover event (`onDragEnter`, `onDragOver`, `onDragLeave`). External drags expose MIME types and fileCount only — never raw paths or handles. */
 export interface NativeDragEvent {
   readonly dragId: number;
@@ -167,6 +220,10 @@ export interface NativeDropEvent {
   readonly files: readonly DroppedFileHandle[];
   /** Read-only directories scoped to their dropped roots; empty for internal or file-only drops. */
   readonly directories: readonly DroppedDirectoryHandle[];
+  /** Entries from external drops with systemFiles.read; empty otherwise. Close each handle when done. */
+  readonly systemEntries: readonly DroppedSystemEntry[];
+  /** Reject the drop synchronously so the native platform does not commit the action. */
+  preventDefault(): void;
   stopPropagation(): void;
 }
 interface EventMap {

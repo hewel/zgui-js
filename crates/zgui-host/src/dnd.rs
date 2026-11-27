@@ -20,7 +20,10 @@ use zgui::{
     vocab::{Key, KeyEvent, KeyState, NamedKey, PointerAction},
 };
 
-use crate::session::{Result as SessionResult, Session};
+use crate::{
+    session::{Result as SessionResult, Session},
+    work::DroppedEntries,
+};
 
 const MAX_OUTBOUND_DRAG_ITEMS: usize = 16;
 const MAX_OUTBOUND_DRAG_BYTES: usize = 4 * 1024 * 1024;
@@ -875,7 +878,7 @@ impl Session {
                     };
                     if let Some((target_node, effect)) = accepted {
                         let drop_payload = drag.payload.restore(&ctx)?;
-                        self.dispatch_drop(
+                        let dropped = self.dispatch_drop(
                             &ctx,
                             &bridge,
                             Some(window),
@@ -891,9 +894,9 @@ impl Session {
                         )?;
                         if let Some(on_end) = drag.on_end {
                             let res = Object::new(ctx.clone())?;
-                            res.prop("dropped", data_prop(true))?;
-                            res.prop("effect", data_prop(effect.as_str()))?;
-                            res.prop("reason", data_prop("drop"))?;
+                            res.prop("dropped", data_prop(dropped))?;
+                            res.prop("effect", data_prop(if dropped { effect.as_str() } else { "none" }))?;
+                            res.prop("reason", data_prop(if dropped { "drop" } else { "cancel" }))?;
                             on_end.restore(&ctx)?.call::<_, ()>((res,))?;
                         }
                     } else {
@@ -1040,11 +1043,12 @@ impl Session {
                             && chain[..=index].iter().any(|&node| bridge.dnd_callback(node, DndEventKind::Drop).is_some())
                             && let Some(entries) = self.work.mint_dropped_handles(&ctx, paths, action)?
                         {
-                            self.dispatch_drop(
+                            if self.dispatch_drop(
                                 &ctx, &bridge, Some(window), drag_id, "external", &types, *position,
                                 effect, target, &chain, None, Some(entries),
-                            )?;
-                            reply = Some(action);
+                            )? {
+                                reply = Some(action);
+                            }
                         } else {
                             for node in hovered {
                                 if let Some(cb) = bridge.dnd_callback(node, DndEventKind::DragLeave) {
@@ -1205,16 +1209,17 @@ impl Session {
         target_node: NodeId,
         chain: &[NodeId],
         payload: Option<Value<'js>>,
-        entries: Option<(Array<'js>, Array<'js>)>,
-    ) -> rquickjs::Result<()> {
+        entries: Option<DroppedEntries<'js>>,
+    ) -> rquickjs::Result<bool> {
         let stopped = Rc::new(Cell::new(false));
+        let cancelled = Rc::new(Cell::new(false));
         // Bubble from the accepting target up through its ancestors in `chain`.
         let target_idx = chain.iter().position(|&n| n == target_node);
         let slice = match target_idx {
             Some(idx) => &chain[..=idx],
             None => chain,
         };
-        let files_len = entries.as_ref().map_or(0, |(files, _)| files.len());
+        let files_len = entries.as_ref().map_or(0, |entries| entries.files.len());
         for &node in slice.iter().rev() {
             if stopped.get() {
                 break;
@@ -1238,12 +1243,18 @@ impl Session {
                 } else {
                     ev.prop("payload", data_prop(Value::new_undefined(ctx.clone())))?;
                 }
-                let (files, directories) = match &entries {
-                    Some((files, directories)) => (files.clone(), directories.clone()),
-                    None => (Array::new(ctx.clone())?, Array::new(ctx.clone())?),
+                let (files, directories, system_entries) = match &entries {
+                    Some(entries) => (entries.files.clone(), entries.directories.clone(), entries.system_entries.clone()),
+                    None => (Array::new(ctx.clone())?, Array::new(ctx.clone())?, Array::new(ctx.clone())?),
                 };
                 ev.prop("files", data_prop(files))?;
                 ev.prop("directories", data_prop(directories))?;
+                ev.prop("systemEntries", data_prop(system_entries))?;
+                let cancelled = Rc::clone(&cancelled);
+                ev.prop(
+                    "preventDefault",
+                    data_prop(Func::from(move || cancelled.set(true))),
+                )?;
                 let stop_cell = stopped.clone();
                 ev.prop(
                     "stopPropagation",
@@ -1254,6 +1265,6 @@ impl Session {
                 cb.restore(ctx)?.call::<_, ()>((ev,))?;
             }
         }
-        Ok(())
+        Ok(!cancelled.get())
     }
 }

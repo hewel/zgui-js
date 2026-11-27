@@ -606,6 +606,8 @@ and that redemption creates no token objects.
 
 ## Frame streams
 
-`zgui-render-wgpu/` is copied from `ee29c7dc66206eb04ba7bcf514058a278c9070ba` with its Apache-2.0 LICENSE and NOTICE. The standalone lock pins the same wgpu/Naga/ash versions as the host. The Linux import module validates explicit DRM plane layouts and transfers Vulkan queue ownership without a CPU pixel copy. It returns a producer credit only after the final GPU use and release barrier. NV12 is converted on the GPU; unsupported devices negotiate memfd.
+`zgui-render-wgpu/` is copied from `ee29c7dc66206eb04ba7bcf514058a278c9070ba` with its Apache-2.0 LICENSE and NOTICE. The standalone lock pins the same wgpu/Naga/ash versions as the host. The Linux import module validates explicit DRM plane layouts and transfers Vulkan queue ownership without a CPU pixel copy. It returns a producer credit only after the final GPU use and release barrier. NV12 conversion reuses one GPU RGB texture and render view per stream while the device and extent match, avoiding per-frame target allocations; unsupported devices negotiate memfd.
 
-`zgui-paint` fits external frame extents and composes them with rounded and ancestor clips without entering the image atlas. The runtime embed hook retires its renderer bindings when a mount region is replaced. The public renderer readback gate is `vendor/zgui-render-wgpu/tests/dmabuf_import.rs`; run it with `bun run test:vendor zgui-render-wgpu`.
+`zgui-paint` fits external frame extents and composes them with rounded and ancestor clips without entering the image atlas. The runtime embed hook retires its renderer bindings when a mount region is replaced. The frame probe in [`zgui-runtime/src/probe.rs`](zgui-runtime/src/probe.rs) exposes style-pass and relayout counters so [`tests/preview/frame-stream.test.mjs`](../tests/preview/frame-stream.test.mjs) can verify that same-size frame updates paint new pixels without rerunning the cascade or layout.
+
+The public renderer import and readback gate is [`vendor/zgui-render-wgpu/tests/dmabuf_import.rs`](zgui-render-wgpu/tests/dmabuf_import.rs) (`bun run test:vendor zgui-render-wgpu`).

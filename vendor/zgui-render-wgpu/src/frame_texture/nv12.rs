@@ -1,5 +1,7 @@
 //! GPU conversion of studio-range NV12 planes into the renderer's RGB external texture.
 
+use std::sync::{Arc, Weak};
+
 use crate::Gpu;
 
 #[derive(Debug)]
@@ -32,18 +34,54 @@ fn convert(p: vec4<f32>, coefficients: vec4<f32>) -> vec4<f32> {
 }
 "#;
 
-pub(super) fn convert(gpu: &Gpu, texture: &wgpu::Texture, bt709: bool) -> wgpu::Texture {
+/// A stream's reusable RGB render target, replaced on extent or device changes.
+#[derive(Debug, Default)]
+pub struct Nv12Target(Option<Target>);
+
+#[derive(Debug)]
+struct Target {
+    gpu: Weak<Gpu>,
+    texture: wgpu::Texture,
+    view: wgpu::TextureView,
+}
+
+impl Nv12Target {
+    pub(crate) fn convert(
+        &mut self,
+        gpu: &Arc<Gpu>,
+        source: &wgpu::Texture,
+        bt709: bool,
+    ) -> wgpu::Texture {
+        let size = source.size();
+        if self.0.as_ref().is_none_or(|target| {
+            target.texture.size() != size || target.gpu.as_ptr() != Arc::as_ptr(gpu)
+        }) {
+            let texture = gpu.device().create_texture(&wgpu::TextureDescriptor {
+                label: Some("zgui.nv12.rgb"),
+                size,
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING
+                    | wgpu::TextureUsages::RENDER_ATTACHMENT,
+                view_formats: &[],
+            });
+            let view = texture.create_view(&Default::default());
+            self.0 = Some(Target {
+                gpu: Arc::downgrade(gpu),
+                texture,
+                view,
+            });
+        }
+        let target = self.0.as_ref().expect("NV12 target allocated");
+        convert(gpu, source, &target.view, bt709);
+        target.texture.clone()
+    }
+}
+
+fn convert(gpu: &Gpu, texture: &wgpu::Texture, target: &wgpu::TextureView, bt709: bool) {
     let device = gpu.device();
-    let rgb = device.create_texture(&wgpu::TextureDescriptor {
-        label: Some("zgui.nv12.rgb"),
-        size: texture.size(),
-        mip_level_count: 1,
-        sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        format: wgpu::TextureFormat::Rgba8Unorm,
-        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::RENDER_ATTACHMENT,
-        view_formats: &[],
-    });
     let Nv12Pipelines(pipelines) = gpu.nv12_pipelines.get_or_init(|| {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("zgui.nv12"),
@@ -94,13 +132,12 @@ pub(super) fn convert(gpu: &Gpu, texture: &wgpu::Texture, bt709: bool) -> wgpu::
             },
         ],
     });
-    let target = rgb.create_view(&Default::default());
     let mut encoder = device.create_command_encoder(&Default::default());
     {
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("zgui.nv12.convert"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: &target,
+                view: target,
                 depth_slice: None,
                 resolve_target: None,
                 ops: wgpu::Operations {
@@ -115,5 +152,4 @@ pub(super) fn convert(gpu: &Gpu, texture: &wgpu::Texture, bt709: bool) -> wgpu::
         pass.draw(0..3, 0..1);
     }
     gpu.queue().submit([encoder.finish()]);
-    rgb
 }

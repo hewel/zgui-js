@@ -26,7 +26,7 @@ pub enum EntryKind {
 }
 
 impl EntryKind {
-    fn of(meta: &Metadata) -> Self {
+    pub(super) fn of(meta: &Metadata) -> Self {
         if meta.is_dir() {
             Self::Dir
         } else if meta.is_file() {
@@ -230,6 +230,7 @@ impl Scope {
         let name = leaf.name.to_string_lossy().into_owned();
         let at = leaf.at();
         let mut info = inspect(&at, name, relative.to_owned())?;
+        self.check_leaf_kind(info.kind)?;
         if info.kind == EntryKind::File && info.mime_type == "application/octet-stream" {
             info.mime_type = sniff(&at);
         }
@@ -243,6 +244,7 @@ impl Scope {
         options: &ReadOptions,
         locale: &LocaleContext,
     ) -> Result<DirPage, ServiceError> {
+        self.require_listable()?;
         let (path, dir) =
             self.follow_with(relative, Access::Read, libc::O_DIRECTORY | libc::O_PATH)?;
         let at = fd_path(&dir);

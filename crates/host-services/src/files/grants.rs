@@ -110,6 +110,23 @@ pub struct GrantScope {
     pub path: String,
 }
 
+pub(super) fn matching_grant<'a>(
+    grants: &'a mut [GrantRecord],
+    kind: GrantKind,
+    path: &str,
+    mode: FileMode,
+) -> Option<(usize, &'a mut GrantRecord)> {
+    let (index, grant) = grants.iter_mut().enumerate().find(|(_, grant)| {
+        grant.kind == kind
+            && grant.scope.path == path
+            && (kind != GrantKind::SystemDir || grant.mode == mode)
+    })?;
+    if mode.can_write() {
+        grant.mode = mode;
+    }
+    Some((index, grant))
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct GrantHeader {
@@ -300,14 +317,7 @@ pub fn persist_grant(
         return Err(ServiceError::new("InvalidPath", "system grants require a UTF-8 root path"));
     }
     let path_str = canonical_path.to_string_lossy();
-    let index = if let Some(index) = file
-        .grants
-        .iter()
-        .position(|b| b.kind == kind && b.scope.path == path_str && (kind != GrantKind::SystemDir || b.mode == mode))
-    {
-        if mode.can_write() {
-            file.grants[index].mode = FileMode::ReadWrite;
-        }
+    let index = if let Some((index, _)) = matching_grant(&mut file.grants, kind, &path_str, mode) {
         index
     } else {
         let index = file.grants.len();
@@ -393,6 +403,20 @@ pub fn list_grants(store_path: &Path) -> Result<Vec<GrantRecord>, ServiceError> 
         save_grant_file(store_path, &mut file)?;
     }
     Ok(file.grants)
+}
+
+/// Clear this app's persisted grants without touching active handles or their targets.
+pub fn clear_grants(store_path: &Path) -> Result<usize, ServiceError> {
+    let Some(_lock) = lock_grant_directory(grant_parent(store_path)?)? else {
+        return Ok(0);
+    };
+    let mut file = load_grant_file(store_path)?;
+    let removed = file.grants.len();
+    if removed != 0 || file.schema_version == 1 {
+        file.grants.clear();
+        save_grant_file(store_path, &mut file)?;
+    }
+    Ok(removed)
 }
 
 /// Revokes a grant by opaque token, returning `true` if it existed.
@@ -531,6 +555,31 @@ mod tests {
         );
 
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn clear_removes_both_kinds_for_only_one_app() {
+        let dir = env::temp_dir().join(format!(
+            "zgui-grants-clear-{}-{}",
+            std::process::id(),
+            TOKEN_COUNTER.fetch_add(1, Ordering::Relaxed)
+        ));
+        let app_a = dir.join("app-a.json");
+        let app_b = dir.join("app-b.json");
+        assert_eq!(clear_grants(&app_a).unwrap(), 0);
+        let workspace =
+            persist_grant(&app_a, "app-a", HandleKind::Dir, &dir, FileMode::Read).unwrap();
+        let system =
+            persist_grant(&app_a, "app-a", GrantKind::SystemDir, &dir, FileMode::Read).unwrap();
+        let other =
+            persist_grant(&app_b, "app-b", GrantKind::SystemDir, &dir, FileMode::Read).unwrap();
+        assert_eq!(clear_grants(&app_a).unwrap(), 2);
+        assert_eq!(clear_grants(&app_a).unwrap(), 0);
+        assert!(list_grants(&app_a).unwrap().is_empty());
+        assert_eq!(list_grants(&app_b).unwrap(), [other]);
+        assert!(restore_workspace_grant(&app_a, &workspace.token, WorkspaceGrantCeiling::ReadWrite).is_err());
+        assert!(restore_system_grant(&app_a, &system.token, true).is_err());
+        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

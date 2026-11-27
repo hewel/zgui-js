@@ -1,4 +1,4 @@
-import { For, createMemo, createSignal, omit } from "#solid";
+import { For, createMemo, createSignal, omit, untrack } from "#solid";
 import { createElement, mergeProps, setProp, spread } from "./renderer/index.js";
 import { append, slot, withDefaults } from "./components/shared.js";
 import { callHandler } from "./components/state.js";
@@ -158,11 +158,28 @@ function computeTargetScrollTop(
   const totalHeight = Math.max(0, totalRows * stride - gap);
   const maxScroll = Math.max(0, totalHeight - viewportHeight);
   const rowTop = rowIndex * stride;
-  const rowBottom = rowTop + rowHeight;
+  return alignScrollTop(
+    rowTop,
+    rowTop + rowHeight,
+    currentScrollTop,
+    viewportHeight,
+    maxScroll,
+    align,
+  );
+}
+
+function alignScrollTop(
+  rowTop: number,
+  rowBottom: number,
+  currentScrollTop: number,
+  viewportHeight: number,
+  maxScroll: number,
+  align: VirtualScrollAlign,
+): number | null {
   let target: number;
   if (align === "start") target = rowTop;
   else if (align === "end") target = rowBottom - viewportHeight;
-  else if (align === "center") target = rowTop - (viewportHeight - rowHeight) / 2;
+  else if (align === "center") target = (rowTop + rowBottom - viewportHeight) / 2;
   else if (align === "auto") {
     if (rowTop < currentScrollTop) target = rowTop;
     else if (rowBottom > currentScrollTop + viewportHeight) target = rowBottom - viewportHeight;
@@ -284,7 +301,8 @@ function mountMeasuredList<T>(
   const [version, invalidate] = createSignal(0);
   const realign = createDelay();
   let heights = new Map<unknown, number>();
-  const keyed = typeof props.keyed === "function" ? props.keyed : undefined;
+  const keyedProp = untrack(() => props.keyed);
+  const keyed = typeof keyedProp === "function" ? keyedProp : undefined;
   const keyAt = (items: readonly T[], index: number) => (keyed ? keyed(items[index]!) : index);
   const model = createMemo<MeasuredListModel<T>>(() => {
     const items = props.each;
@@ -314,8 +332,8 @@ function mountMeasuredList<T>(
     realign.cancel();
     pending = undefined;
   };
-  const maxScroll = ({ items, gap, offsets }: MeasuredListModel<T>) =>
-    Math.max(0, offsets.before(items.length) - gap - viewportHeight());
+  const maxScroll = ({ items, gap, offsets }: MeasuredListModel<T>, viewport = viewportHeight()) =>
+    Math.max(0, offsets.before(items.length) - gap - viewport);
   const jump = (top: number, behavior: ScrollBehavior) => {
     if (behavior === "instant" || getReducedMotion()) setScrollTop(top);
     scrollTo(scroller, { top, behavior });
@@ -328,18 +346,7 @@ function mountMeasuredList<T>(
     const top = current.offsets.before(index);
     const bottom = current.offsets.before(index + 1) - current.gap;
     const viewport = viewportHeight();
-    let next: number;
-    if (align === "start") next = top;
-    else if (align === "end") next = bottom - viewport;
-    else if (align === "center") next = (top + bottom - viewport) / 2;
-    else if (align === "auto") {
-      if (top < scrollTop()) next = top;
-      else if (bottom > scrollTop() + viewport) next = bottom - viewport;
-      else return null;
-    } else {
-      throw new TypeError(`unsupported VirtualList scrollToIndex align: ${String(align)}`);
-    }
-    return Math.max(0, Math.min(maxScroll(current), next));
+    return alignScrollTop(top, bottom, scrollTop(), viewport, maxScroll(current, viewport), align);
   };
   const scheduleRealignment = (request: MeasuredScrollRequest) => {
     // Other rows in this layout can report after the target. Align once after those samples.
@@ -407,7 +414,8 @@ function mountMeasuredList<T>(
 
   const needsSample = (current: MeasuredListModel<T>, row: number) =>
     row < start() || row >= end() || !heights.has(keyAt(current.items, row));
-  props.controller?.({
+  const onController = untrack(() => props.controller);
+  onController?.({
     scrollToIndex(index, options) {
       if (!Number.isFinite(index)) {
         throw new RangeError("VirtualList scrollToIndex index must be a finite number");
@@ -500,11 +508,14 @@ function mountMeasuredList<T>(
 export function VirtualList<T>(props: VirtualListIdentityProps<T>): NativeNode;
 export function VirtualList<T>(props: VirtualListKeyedProps<T>): NativeNode;
 export function VirtualList<T>(props: VirtualListProps<T>): NativeNode {
-  const estimated = props.estimatedItemHeight;
-  if ((props.itemHeight === undefined) === (estimated === undefined)) {
+  const [fixed, estimated, initial] = untrack(
+    () => [props.itemHeight, props.estimatedItemHeight, props.initialHeight] as const,
+  );
+  if ((fixed === undefined) === (estimated === undefined)) {
     throw new TypeError("VirtualList requires exactly one of itemHeight or estimatedItemHeight");
   }
   if (estimated !== undefined) validatePositive(estimated, "VirtualList estimatedItemHeight");
+  const initialHeight = validatePositive(initial ?? 480, "VirtualList initialHeight");
   const rest = omit(
     props,
     "each",
@@ -521,19 +532,12 @@ export function VirtualList<T>(props: VirtualListProps<T>): NativeNode {
   const scroller = createElement("scroll");
   const nativeProps = mergeProps(rest, withDefaults({ role: "list" as const }, rest));
   if (estimated !== undefined) {
-    return mountMeasuredList(
-      scroller,
-      props,
-      nativeProps,
-      validatePositive(props.initialHeight ?? 480, "VirtualList initialHeight"),
-    );
+    return mountMeasuredList(scroller, props, nativeProps, initialHeight);
   }
   spread(scroller, nativeProps, true);
 
   const [scrollTop, setScrollTop] = createSignal(0);
-  const [viewportHeight, setViewportHeight] = createSignal(
-    validatePositive(props.initialHeight ?? 480, "VirtualList initialHeight"),
-  );
+  const [viewportHeight, setViewportHeight] = createSignal(initialHeight);
 
   observeGeometry(scroller, "scrollPosition", pos => {
     const nextTop = Math.max(0, pos.offset.y);
@@ -556,7 +560,8 @@ export function VirtualList<T>(props: VirtualListProps<T>): NativeNode {
     };
   });
 
-  props.controller?.({
+  const onController = untrack(() => props.controller);
+  onController?.({
     scrollToIndex(index, options) {
       if (!Number.isFinite(index)) {
         throw new RangeError("VirtualList scrollToIndex index must be a finite number");

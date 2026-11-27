@@ -152,9 +152,12 @@ pub fn run_job(
             run.state.items_total = entries.len();
             for entry in entries {
                 run.check()?;
+                run.state.current_path.clone_from(&entry.relative_path);
                 entry
                     .scope
-                    .remove_permanent(&entry.relative_path, recursive)?;
+                    .remove_entry(&entry.relative_path, recursive, cancelled, || {
+                        (run.progress)(&run.state)
+                    })?;
                 run.item_done(entry.relative_path);
             }
         }
@@ -185,11 +188,24 @@ pub fn run_job(
 impl Scope {
     /// Remove a named entry. Recursive removal never descends into a symlink.
     pub fn remove_permanent(&self, relative: &str, recursive: bool) -> Result<(), ServiceError> {
+        self.remove_entry(relative, recursive, &AtomicBool::new(false), || {})
+    }
+
+    fn remove_entry(
+        &self,
+        relative: &str,
+        recursive: bool,
+        cancelled: &AtomicBool,
+        mut progress: impl FnMut(),
+    ) -> Result<(), ServiceError> {
         if relative.is_empty() {
             return Err(root_mutation());
         }
         let leaf = self.leaf(relative, Access::Write)?;
-        remove(&leaf.at(), recursive).map_err(map_io_error)
+        let path = leaf.at();
+        let meta = fs::symlink_metadata(&path).map_err(map_io_error)?;
+        self.check_leaf_kind(super::EntryKind::of(&meta))?;
+        remove_tree(&path, &meta, recursive, cancelled, &mut progress)
     }
 }
 
@@ -301,6 +317,9 @@ impl Run<'_> {
             let leaf = named(&entry, access)?;
             let at = leaf.at();
             let metadata = fs::symlink_metadata(&at).map_err(map_io_error)?;
+            entry
+                .scope
+                .check_leaf_kind(super::EntryKind::of(&metadata))?;
             let parent = fs::read_link(fd_path(&leaf.parent)).map_err(map_io_error)?;
             let source_path = parent.join(&leaf.name);
             if metadata.is_dir() && dest_path.starts_with(&source_path) {
@@ -413,21 +432,14 @@ impl Run<'_> {
         let parent = target.parent().expect("target has a parent");
         let stage = Stage::new(parent).map_err(map_io_error)?;
         let staged = fd_path(&stage.dir).join("entry");
-        copy_tree(at, &staged, meta, self)?;
+        let copied = copy_tree(at, &staged, meta, self, transfer == Transfer::Move)?;
         self.check()?;
         publish(&staged, &target, overwrite).map_err(map_io_error)?;
         File::open(parent)
             .and_then(|dir| dir.sync_all())
             .map_err(map_io_error)?;
-        if transfer == Transfer::Move {
-            let current = fs::symlink_metadata(at).map_err(map_io_error)?;
-            if !same_inode(meta, &current) {
-                return Err(ServiceError::new(
-                    "Io",
-                    "move source changed before removal",
-                ));
-            }
-            remove(at, true).map_err(map_io_error)?;
+        if let Some(copied) = copied {
+            copied.remove(at, self.cancelled)?;
         }
         Ok(true)
     }
@@ -484,15 +496,41 @@ pub(super) fn exists(path: &Path) -> io::Result<bool> {
     }
 }
 
-pub(super) fn remove(path: &Path, recursive: bool) -> io::Result<()> {
-    let metadata = fs::symlink_metadata(path)?;
-    if metadata.is_dir() && recursive {
-        fs::remove_dir_all(path)
-    } else if metadata.is_dir() {
+fn remove_tree(
+    path: &Path,
+    meta: &Metadata,
+    recursive: bool,
+    cancelled: &AtomicBool,
+    progress: &mut impl FnMut(),
+) -> Result<(), ServiceError> {
+    check_cancelled(cancelled)?;
+    if meta.is_dir() && recursive {
+        // Pin each directory before opening it so a replacement link cannot
+        // redirect traversal, even between symlink_metadata and read_dir.
+        let dir = open_entry(path, meta)?;
+        for entry in fs::read_dir(fd_path(&dir)).map_err(map_io_error)? {
+            check_cancelled(cancelled)?;
+            let entry = entry.map_err(map_io_error)?;
+            remove_tree(
+                &entry.path(),
+                &entry.metadata().map_err(map_io_error)?,
+                true,
+                cancelled,
+                progress,
+            )?;
+            progress();
+        }
+        if !same_inode(meta, &fs::symlink_metadata(path).map_err(map_io_error)?) {
+            return Err(ServiceError::new("Io", "directory changed during removal"));
+        }
+    }
+    check_cancelled(cancelled)?;
+    if meta.is_dir() {
         fs::remove_dir(path)
     } else {
         fs::remove_file(path)
     }
+    .map_err(map_io_error)
 }
 
 pub(super) fn rename_noreplace(from: &Path, to: &Path) -> io::Result<()> {
@@ -535,7 +573,8 @@ pub(super) fn publish(from: &Path, to: &Path, overwrite: bool) -> io::Result<()>
     // Exchange handles non-empty directories and type conflicts without deleting
     // the old destination until the replacement has been published.
     match rename_flags(from, to, libc::RENAME_EXCHANGE) {
-        Ok(()) => remove(from, true),
+        Ok(()) if fs::symlink_metadata(from)?.is_dir() => fs::remove_dir_all(from),
+        Ok(()) => fs::remove_file(from),
         Err(error) if error.kind() == io::ErrorKind::NotFound => rename_noreplace(from, to),
         Err(error) => Err(error),
     }
@@ -617,15 +656,76 @@ fn tree_size(path: &Path, meta: &Metadata, cancelled: &AtomicBool) -> Result<u64
     Ok(size)
 }
 
+struct CopiedTree {
+    inode: (u64, u64),
+    contents: CopiedContents,
+}
+
+enum CopiedContents {
+    Leaf { len: u64, modified: (i64, i64) },
+    Directory(Vec<(OsString, CopiedTree)>),
+}
+
+impl CopiedTree {
+    fn new(meta: &Metadata, contents: CopiedContents) -> Self {
+        Self {
+            inode: (meta.dev(), meta.ino()),
+            contents,
+        }
+    }
+
+    fn remove(self, path: &Path, cancelled: &AtomicBool) -> Result<(), ServiceError> {
+        check_cancelled(cancelled)?;
+        let changed = || ServiceError::new("Io", "move source changed before removal");
+        let current = fs::symlink_metadata(path).map_err(map_io_error)?;
+        if self.inode != (current.dev(), current.ino()) {
+            return Err(changed());
+        }
+        match self.contents {
+            CopiedContents::Leaf { len, modified } => {
+                if (len, modified) != (current.len(), (current.mtime(), current.mtime_nsec())) {
+                    return Err(changed());
+                }
+                check_cancelled(cancelled)?;
+                fs::remove_file(path).map_err(map_io_error)
+            }
+            CopiedContents::Directory(children) => {
+                let dir = open_entry(path, &current)?;
+                let pinned = fd_path(&dir);
+                for (name, child) in children {
+                    child.remove(&pinned.join(name), cancelled)?;
+                }
+                if !same_inode(&current, &fs::symlink_metadata(path).map_err(map_io_error)?) {
+                    return Err(changed());
+                }
+                check_cancelled(cancelled)?;
+                // Do not enumerate here: any name not copied must stay at the source.
+                fs::remove_dir(path).map_err(map_io_error)
+            }
+        }
+    }
+}
+
 fn copy_tree(
     from: &Path,
     to: &Path,
     meta: &Metadata,
     run: &mut Run<'_>,
-) -> Result<(), ServiceError> {
+    record_source: bool,
+) -> Result<Option<CopiedTree>, ServiceError> {
     run.check()?;
+    let leaf = || {
+        CopiedTree::new(
+            meta,
+            CopiedContents::Leaf {
+                len: meta.len(),
+                modified: (meta.mtime(), meta.mtime_nsec()),
+            },
+        )
+    };
     if meta.is_symlink() {
-        return symlink(fs::read_link(from).map_err(map_io_error)?, to).map_err(map_io_error);
+        symlink(fs::read_link(from).map_err(map_io_error)?, to).map_err(map_io_error)?;
+        return Ok(record_source.then(leaf));
     }
     if !meta.is_file() && !meta.is_dir() {
         return Err(ServiceError::new(
@@ -635,6 +735,7 @@ fn copy_tree(
     }
     let fd = open_entry(from, meta)?;
     let from = fd_path(&fd);
+    let mut copied_children = (record_source && meta.is_dir()).then(Vec::new);
     let output = if meta.is_dir() {
         DirBuilder::new()
             .mode(0o700)
@@ -642,12 +743,17 @@ fn copy_tree(
             .map_err(map_io_error)?;
         for entry in fs::read_dir(&from).map_err(map_io_error)? {
             let entry = entry.map_err(map_io_error)?;
-            copy_tree(
-                &entry.path(),
-                &to.join(entry.file_name()),
+            let name = entry.file_name();
+            let copied = copy_tree(
+                &from.join(&name),
+                &to.join(&name),
                 &entry.metadata().map_err(map_io_error)?,
                 run,
+                record_source,
             )?;
+            if let (Some(children), Some(copied)) = (&mut copied_children, copied) {
+                children.push((name, copied));
+            }
         }
         File::open(to).map_err(map_io_error)?
     } else {
@@ -691,5 +797,9 @@ fn copy_tree(
     output
         .set_times(times)
         .and_then(|()| output.sync_all())
-        .map_err(map_io_error)
+        .map_err(map_io_error)?;
+    Ok(record_source.then(|| match copied_children {
+        Some(children) => CopiedTree::new(meta, CopiedContents::Directory(children)),
+        None => leaf(),
+    }))
 }

@@ -1,13 +1,13 @@
 {
   "schemaVersion": 1,
   "run": "run",
-  "artifactsDigest": "sha256:9f9b484f575f988b18d8f1d16e95899849c925063f6c1be7190e83fb1f41e502",
+  "artifactsDigest": "sha256:094011172d6d3be183a9a654f0f34a14d5c03c9c0fc86b624a053a3824b1d3dc",
   "policyDigest": "sha256:618dc201dcc2cc976d3b0ff41d440eca02b71b68c79b01d10814734b044bbeb9",
   "review": {
     "by": "coding-assistant",
-    "at": "2026-11-23T04:59:28Z",
-    "summary": "Counter baseline metadata refresh after #95 Cargo.lock update (vendored zgui-input & zgui-a11y for native inert). Verified initial.png (61b1c8d636...) and after-increment.png (0de971968a...) remain byte-for-byte identical.",
-    "buildId": "sha256:9f67d8e09494b51d3758fd991135e948e6b8fac7121b79eb6bac916917f27269",
+    "at": "2026-11-27T20:39:50Z",
+    "summary": "Counter baseline resealed after Wave 4. Verified initial.png (61b1c8d636...) and after-increment.png (0de971968a...) are byte-for-byte identical to the previously reviewed captures, with zero differing RGBA pixels.",
+    "buildId": "sha256:069c2fe7656af62cf883618dc6fd13d72620221f67760abf8a0ce7cc3e3e5584",
     "captures": [
       {
         "captureId": "initial",

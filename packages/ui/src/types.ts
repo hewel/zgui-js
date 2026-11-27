@@ -6,6 +6,7 @@ import type { NativeEventProps } from "./events.js";
 export type {
   DroppedDirectoryHandle,
   DroppedFileHandle,
+  DroppedSystemEntry,
   NativeAnimationEvent,
   NativeContextMenuEvent,
   NativeDragEvent,
@@ -391,6 +392,7 @@ export interface NativeElementProps extends NativeEventProps {
   role?: NativeRole | null | undefined;
   ariaLabel?: string | null | undefined;
   ariaDescription?: string | null | undefined;
+  ariaSort?: "none" | "ascending" | "descending" | "other" | null | undefined;
   ariaCurrent?:
     | "false"
     | "true"

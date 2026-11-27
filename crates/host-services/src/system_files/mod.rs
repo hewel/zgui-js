@@ -16,7 +16,7 @@ pub use jobs::{
 };
 use metadata::paginate;
 pub use metadata::{DirPage, EntryInfo, EntryKind, ReadOptions, SortBy, SortDirection, mime};
-pub use path::{Root, Scope};
+pub use path::{Root, Scope, locate_dropped_entry};
 pub use preview::{PreviewSystemFiles, valid_preview_path};
 pub use thumbnail::{
     ThumbnailSize, cache_home, cached_thumbnail, file_uri, thumbnail_key, thumbnail_mtime,

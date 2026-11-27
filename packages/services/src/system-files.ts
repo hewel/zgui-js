@@ -1,56 +1,21 @@
 import { getOwner, onCleanup } from "#solid";
-import type { DragHandle, NativeNode, OutboundDragEndResult } from "@hewel/zgui/dnd";
-import type { DirHandle, FileAccessMode, OpenDirectoryDialogOptions } from "./files.js";
+import type {
+  DragHandle,
+  NativeNode,
+  OutboundDragEndResult,
+  SystemDirHandle,
+} from "@hewel/zgui/dnd";
+import type { DirHandle, OpenDirectoryDialogOptions } from "./files.js";
 import type { GrantToken } from "./grants.js";
 import type { HostRequest, ImageHandle } from "./index.js";
 
-export type SystemEntryKind = "file" | "dir" | "symlink" | "other";
-
-/** The entry itself, not the target of a final symlink. */
-export interface SystemEntryInfo {
-  readonly name: string;
-  readonly relativePath: string;
-  readonly kind: SystemEntryKind;
-  readonly size: number;
-  readonly modifiedMs: number | null;
-  readonly mode: number;
-  readonly isHidden: boolean;
-  readonly symlinkTarget: string | null;
-  readonly symlinkBroken: boolean;
-  readonly symlinkTargetKind: Exclude<SystemEntryKind, "symlink"> | null;
-  readonly mimeType: string;
-}
-
-export interface ReadSystemDirOptions {
-  readonly cursor?: string;
-  readonly pageSize?: number;
-  readonly includeHidden?: boolean;
-  readonly directoriesFirst?: boolean;
-  readonly sortBy?: "name" | "size" | "modifiedMs" | "kind";
-  readonly sortDirection?: "asc" | "desc";
-  readonly numericCollation?: boolean;
-  readonly locale?: string;
-}
-
-/** One page in the current sorted listing; a cursor is not a filesystem snapshot. */
-export interface SystemDirPage {
-  readonly entries: readonly SystemEntryInfo[];
-  readonly nextCursor: string | null;
-  readonly totalEntries: number;
-}
-
-/** Opaque session authority. Use the returned `relativePath` to address entries. */
-export interface SystemDirHandle {
-  readonly kind: "system-dir";
-  readonly name: string;
-  readonly mode: FileAccessMode;
-  readonly lstat: (relativePath?: string) => HostRequest<SystemEntryInfo>;
-  readonly readDir: (
-    relativePath?: string,
-    options?: ReadSystemDirOptions,
-  ) => HostRequest<SystemDirPage>;
-  readonly close: () => void;
-}
+export type {
+  ReadSystemDirOptions,
+  SystemDirHandle,
+  SystemDirPage,
+  SystemEntryInfo,
+  SystemEntryKind,
+} from "@hewel/zgui/dnd";
 
 /** A path beneath a live handle. An omitted path names the directory itself. */
 export interface SystemEntryRef {
@@ -205,7 +170,7 @@ export function openDroppedSystemDirectory(
   return ownedDirectory(runtime.__zguiServices.openDroppedSystemDirectory(directory));
 }
 
-/** Persist this handle as a system-dir grant, subject to the sealed authority ceiling. */
+/** Persist a user-authorized directory, not a manifest root or a single dropped file. */
 export function persistSystemGrant(handle: SystemDirHandle): HostRequest<GrantToken> {
   return runtime.__zguiServices.persistSystemGrant(handle);
 }

@@ -298,6 +298,8 @@ opaque; `GrantKind` is `workspace-file`, `workspace-dir` or `system-dir`,
 and `GrantAccessMode` is `read` or `readwrite`. `revokeGrant(token)` returns
 whether the entry existed. It prevents future restoration without closing
 existing live handles or touching the underlying filesystem resource.
+`clearGrants()` removes all of this application's workspace and system grants
+and resolves to the number removed, also without closing live handles.
 
 `persistHandle`, `restoreBookmark`, `listBookmarks` and `revokeBookmark` use the
 same ledger. The bookmark inventory and revocation API remain workspace-only and
@@ -335,13 +337,19 @@ add system-file flags or expand roots beyond the base manifest.
   `readOnly` is not set. `openDroppedSystemDirectory(ev.directories[i])` redeems
   an accepted drop as a read-only system root. It does not convert arbitrary
   workspace handles. A Solid owner closes the system handle on cleanup.
+- With `capabilities.systemFiles.read`, external drops also deliver
+  `ev.systemEntries`. Use these as `SystemEntryRef` values and close each
+  handle when done. Existing roots retain their mode; outside those roots,
+  directories are read-only and files or symlinks grant only the named entry.
+  Call `ev.preventDefault()` synchronously to reject the negotiated action.
 - `lstat` and `readDir` expose symlink metadata without following the final link
   for `lstat`. Traversal requires an active root covering the resolved target;
   mutations require write authority at both ends. Use an entry's returned
   `relativePath` verbatim. Pages default to 2,000 entries (max 5,000); cursors
   continue the same sort and filter on the current listing, not a snapshot.
 - `persistSystemGrant` and `restoreSystemGrant` use the same per-app ledger as
-  workspace grants, without promoting either kind. `restoreSystemGrant` rejects
+  workspace grants, without promoting either kind. Manifest-declared roots and
+  single-entry drop handles cannot be persisted. `restoreSystemGrant` rejects
   a stored readwrite grant if the current manifest no longer declares write.
 - `startFileJob` copies or moves each source into the destination directory and
   never reads file contents into JavaScript. It also supports Trash, permanent
@@ -349,6 +357,9 @@ add system-file flags or expand roots beyond the base manifest.
   until `onConflict` returns `overwrite`, `skip`, `autoRename`, or `cancel`;
   no handler means cancel. Cancelling stops further work without rolling back
   entries already committed. Trash never falls back to permanent removal.
+  Recursive removal can leave a partially removed tree on cancellation. If a
+  cross-filesystem move finds a changed source file or a new source entry, it
+  leaves that entry in place and reports an error; the published copy remains.
   `listTrash` shows entries within active roots; restoration needs a writable root.
 - `listVolumes` inventories Linux mounts, and `watchVolumes` delivers an initial
   inventory and later changes until stopped or the Solid owner is disposed.
@@ -365,6 +376,9 @@ add system-file flags or expand roots beyond the base manifest.
 The separate `services.systemFiles` preview fixture supplies a virtual desktop
 filesystem, generated entries, scripted directory dialogs, volumes, Trash
 availability, and cached PNGs. It cannot grant authority or access host paths.
+Preview file jobs and metadata requests run in call order. During a conflict,
+metadata reads may inspect the paused state; later file jobs wait for the
+conflict to be answered or cancelled.
 
 ## Reactive persistence and query adapters
 

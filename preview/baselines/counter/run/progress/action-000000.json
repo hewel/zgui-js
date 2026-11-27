@@ -3,16 +3,16 @@
   "build": {
     "artifactDigests": {
       "app.css": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "app.mjs": "sha256:ed0f9c3f2ce05909e4c96d24cd7bd472770c954b8f90e6c2e00a3765b534297b",
-      "app.mjs.map": "sha256:dd69cfdfc21025f7509f8841614d6b6449ecb6d84b6e465fd93bc7ceefe6ccf7",
-      "build-info.json": "sha256:7f3d5071f9aa53258a2991cc25f6da97691d071642250369e3330b3ea97e3fc2"
+      "app.mjs": "sha256:eb30bfcba396080082abfbcf127e5d7d51ee97e6cc88498dbc3ad0527e3e37be",
+      "app.mjs.map": "sha256:9e0e8432107781dfe541ebb00c0c519f879d7474931b3876588bccc5fbe74405",
+      "build-info.json": "sha256:064a92f53f682c38fee6be99267fe079c63b553e8972cc86086aaf281c43dc6a"
     },
-    "buildId": "sha256:9f67d8e09494b51d3758fd991135e948e6b8fac7121b79eb6bac916917f27269",
-    "entryDigest": "sha256:ed0f9c3f2ce05909e4c96d24cd7bd472770c954b8f90e6c2e00a3765b534297b",
+    "buildId": "sha256:069c2fe7656af62cf883618dc6fd13d72620221f67760abf8a0ce7cc3e3e5584",
+    "entryDigest": "sha256:eb30bfcba396080082abfbcf127e5d7d51ee97e6cc88498dbc3ad0527e3e37be",
     "fonts": [],
     "id": "dev.example.counter",
     "sourceMap": "app.mjs.map",
-    "sourceMapDigest": "sha256:dd69cfdfc21025f7509f8841614d6b6449ecb6d84b6e465fd93bc7ceefe6ccf7",
+    "sourceMapDigest": "sha256:9e0e8432107781dfe541ebb00c0c519f879d7474931b3876588bccc5fbe74405",
     "styleSystem": {
       "configDigest": "sha256:864ab49f77e8240f0abc9c85c23764f2eb766d29c61091c83c908d47e69f1ee1",
       "name": "lightningcss",

@@ -1,7 +1,7 @@
 {
   "actionSequence": 5,
   "blurRegion": "none",
-  "buildId": "sha256:9f67d8e09494b51d3758fd991135e948e6b8fac7121b79eb6bac916917f27269",
+  "buildId": "sha256:069c2fe7656af62cf883618dc6fd13d72620221f67760abf8a0ce7cc3e3e5584",
   "configurationId": 2,
   "documentIdentity": "DocumentId(0)",
   "generation": 1,
@@ -24,6 +24,7 @@
     "sequence": 2,
     "styleRevision": 3
   },
+  "relayouts": 2,
   "renderer": {
     "adapter": "AMD Radeon RX 7900 XTX (RADV NAVI31)",
     "additionalTransferConversion": false,
@@ -34,7 +35,7 @@
     "device": 29772,
     "deviceType": "DiscreteGpu",
     "driver": "radv",
-    "driverInfo": "Mesa 26.3.1-arch3.4",
+    "driverInfo": "Mesa 26.3.1-arch3.5",
     "pngColor": "straight-alpha-gamma-encoded",
     "sceneFormat": "Bgra8Unorm",
     "scratchFormat": "Rgba8Unorm",
@@ -60,6 +61,7 @@
   },
   "scale": 1.75,
   "schemaVersion": 1,
+  "stylePasses": 1,
   "styleRevision": 3,
   "surface": "main",
   "surfaceConfiguration": 0,
