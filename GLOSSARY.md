@@ -47,6 +47,15 @@ _Avoid_: Panel window, popup window
 
 **Session lock**: An exclusive compositor lock under which only lock surfaces are presented across outputs until explicitly unlocked.
 
-**Capability**: A package-declared authority permitting a session to open shell surfaces, lock the desktop, connect to external endpoints, or read host media.
+**Capability**: A package-declared ceiling on the categories of host authority a session may exercise or request.
+_Avoid_: Runtime permission, user grant
+
+**Grant**: A user-authorized, application-scoped authority persisted by the host for a specific external resource within the bounds of the package's capabilities.
+_Avoid_: Capability, ambient permission
+
+**Activation**: An external invocation delivered to an application's single-instance session—at cold start or while already running—carrying launch arguments, working context, and focus handoff.
 
 **Image handle**: A session-scoped opaque reference to host-held image bytes outside the JavaScript heap.
+
+**Frame stream**: A session-scoped sequence of host-held visual frames updating a single presentation target outside the JavaScript heap.
+_Avoid_: Image handle
