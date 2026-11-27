@@ -35,14 +35,24 @@ pub(crate) struct Queued {
     pub(crate) event: SurfaceEvent,
     /// The moves this one stands for, oldest first, not including itself.
     pub(crate) samples: Vec<zgui_vocab::PointerSample>,
+    /// Lock keys (`CAPS_LOCK`, `NUM_LOCK`) snapshotted when `queue()` accepted the event.
+    pub(crate) lock_keys: Modifiers,
+    /// Unforgeable physical press grant paired with this press event, if any.
+    pub(crate) grant: Option<zgui_platform::InputGrant>,
 }
 
 impl Queued {
     /// A queue entry for `event`, standing for nothing else yet.
-    pub(crate) fn new(event: SurfaceEvent) -> Self {
+    pub(crate) fn new(
+        event: SurfaceEvent,
+        lock_keys: Modifiers,
+        grant: Option<zgui_platform::InputGrant>,
+    ) -> Self {
         Self {
             event,
             samples: Vec::new(),
+            lock_keys,
+            grant,
         }
     }
 
@@ -66,7 +76,7 @@ impl Queued {
     }
 
     /// Replaces the held move with `event`, keeping the held one as a sample.
-    pub(crate) fn fold(&mut self, event: SurfaceEvent) {
+    pub(crate) fn fold(&mut self, event: SurfaceEvent, lock_keys: Modifiers) {
         if let SurfaceEvent::Pointer {
             event: held,
             timestamp,
@@ -76,7 +86,16 @@ impl Queued {
             self.samples.push(held.sample(*timestamp));
         }
         self.event = event;
+        self.lock_keys = lock_keys;
     }
+}
+
+fn to_gesture_grant(grant: zgui_platform::InputGrant) -> zgui_view::GestureGrant {
+    zgui_view::GestureGrant::new(zgui_view::RawGestureGrant {
+        seat_generation: grant.seat_generation(),
+        surface_raw: grant.surface().raw(),
+        serial_raw: grant.serial().raw(),
+    })
 }
 
 impl Window {
@@ -117,7 +136,13 @@ impl Window {
             // without a stamp carry the frame's moment.
             let stamp = queued.event.timestamp().unwrap_or(timestamp);
             self.reconcile_inert(stamp);
-            self.dispatch_one(&queued.event, &queued.samples, stamp);
+            self.dispatch_one(
+                &queued.event,
+                &queued.samples,
+                queued.lock_keys,
+                queued.grant,
+                stamp,
+            );
             if position < last {
                 owed |= self.settle_between_events(stamp);
             }
@@ -148,8 +173,14 @@ impl Window {
         &mut self,
         event: &SurfaceEvent,
         samples: &[zgui_vocab::PointerSample],
+        lock_keys: Modifiers,
+        grant: Option<zgui_platform::InputGrant>,
         timestamp: Timestamp,
     ) {
+        if matches!(event, SurfaceEvent::CancelPressGrants) {
+            self.press_grants.clear();
+            return;
+        }
         // The surface's own keyboard focus reaches no element and dispatches nothing, so it is
         // taken before the routing: what it changes is what the window is holding on the document's
         // behalf — a composition, a value nobody has been told about, a pointer's leavings.
@@ -209,11 +240,19 @@ impl Window {
                 event,
                 ..
             } => self.lifted.push(event.id),
+            SurfaceEvent::Pointer {
+                action: zgui_vocab::PointerAction::Left,
+                event,
+                ..
+            } => {
+                self.press_grants.retain(|(id, _)| *id != event.id);
+            }
             _ => {}
         }
         // A drag's motion is tracked first, so a drop's listeners already see the drag-over
         // state cleared. Only the drop itself goes on to the dispatch below.
         if let SurfaceEvent::Drag(drag) = event {
+            self.press_grants.clear();
             self.drag_moved(drag, timestamp);
             if !drag.is_drop() {
                 return;
@@ -310,6 +349,51 @@ impl Window {
         let composing = self.ime.is_composing();
         let key_composing = composing && matches!(event, SurfaceEvent::Key { .. });
 
+        let live_grant = match event {
+            SurfaceEvent::Pointer {
+                action: zgui_vocab::PointerAction::Pressed,
+                event: ptr,
+                ..
+            } => {
+                self.press_grants.retain(|(id, _)| *id != ptr.id);
+                let scrollbar_took = matches!(
+                    default,
+                    Some(
+                        zgui_input::FrameworkDefault::ScrollAlong { .. }
+                            | zgui_input::FrameworkDefault::ScrollPage { .. }
+                    )
+                );
+                let cell = (!scrollbar_took).then(|| grant.map(to_gesture_grant)).flatten();
+                if let Some(ref cell) = cell {
+                    self.press_grants.push((ptr.id, cell.clone()));
+                }
+                cell
+            }
+            SurfaceEvent::Pointer {
+                action: zgui_vocab::PointerAction::Released,
+                event: ptr,
+                ..
+            } => self
+                .press_grants
+                .iter()
+                .position(|(id, _)| *id == ptr.id)
+                .map(|idx| self.press_grants.swap_remove(idx).1),
+            SurfaceEvent::Pointer {
+                action: zgui_vocab::PointerAction::Cancelled,
+                event: ptr,
+                ..
+            } => {
+                self.press_grants.retain(|(id, _)| *id != ptr.id);
+                None
+            }
+            SurfaceEvent::Key {
+                state: zgui_vocab::KeyState::Pressed,
+                event: key,
+                ..
+            } if !key.repeat && !key_composing => grant.map(to_gesture_grant),
+            _ => None,
+        };
+
         let dispatched = {
             let host = std::rc::Rc::clone(&self.host);
             let pointer = match event {
@@ -317,7 +401,7 @@ impl Window {
                 _ => zgui_vocab::PointerId::MOUSE,
             };
             let mut sink = HostSink::for_pointer(&host, pointer);
-            dispatch::run_with_composing(
+            dispatch::run_with_context(
                 self,
                 &steps,
                 kind,
@@ -326,7 +410,11 @@ impl Window {
                 samples,
                 modifiers,
                 timestamp,
-                key_composing,
+                dispatch::DispatchContext {
+                    composing: key_composing,
+                    lock_keys,
+                    grant: live_grant.clone(),
+                },
                 &mut sink,
             )
         };
@@ -359,7 +447,15 @@ impl Window {
             && !held
             && let Some(default) = default
         {
-            self.carry_out_default(default, modifiers, Self::button_of(event), timestamp, event);
+            self.carry_out_default(
+                default,
+                modifiers,
+                lock_keys,
+                live_grant,
+                Self::button_of(event),
+                timestamp,
+                event,
+            );
         }
         if !defaulted
             && let SurfaceEvent::Wheel {
@@ -381,6 +477,7 @@ impl Window {
                 ..
             } = event
         {
+            self.press_grants.retain(|(id, _)| *id != pointer.id);
             self.router.forget_press(pointer.id);
         }
         // After the focus default rather than before it, because a press on a field that did not
@@ -736,10 +833,13 @@ impl Window {
     }
 
     /// Carries out the framework's own behaviour for one event, when no handler refused it.
+    #[allow(clippy::too_many_arguments)]
     fn carry_out_default(
         &mut self,
         default: zgui_input::FrameworkDefault,
         modifiers: Modifiers,
+        lock_keys: Modifiers,
+        grant: Option<zgui_view::GestureGrant>,
         button: Option<zgui_vocab::PointerButton>,
         timestamp: Timestamp,
         event: &SurfaceEvent,
@@ -765,11 +865,13 @@ impl Window {
                     })
                 };
                 if !enabled { return; }
-                self.synthesize_pointer(
+                self.synthesize_pointer_with_context(
                     zgui_view_dom::id::to_view(node),
                     EventKind::Click,
                     modifiers,
+                    lock_keys,
                     button,
+                    grant,
                     timestamp,
                 );
                 // A second press of the pointer on the same element, soon and near, is a double
@@ -786,11 +888,13 @@ impl Window {
                     }
                 };
                 if double {
-                    self.synthesize_pointer(
+                    self.synthesize_pointer_with_context(
                         zgui_view_dom::id::to_view(node),
                         EventKind::DoubleClick,
                         modifiers,
+                        lock_keys,
                         button,
+                        None,
                         timestamp,
                     );
                 }
@@ -901,6 +1005,8 @@ impl Window {
             self.router.cancel_inert(&document, &filter)
         };
         if !affected_pointers.is_empty() {
+            self.press_grants
+                .retain(|(pointer, _)| !affected_pointers.contains(pointer));
             self.command_captures
                 .retain(|pointer| !affected_pointers.contains(pointer));
             for pointer in &affected_pointers {
@@ -1108,6 +1214,22 @@ impl Window {
             Command::InstallStylesheet { name, css } => self.install_view_sheet(&name, &css),
             Command::RemoveStylesheet { name } => self.remove_view_sheet(&name),
             Command::Synthesize { node, event } => self.synthesize(node, event, timestamp),
+            Command::SynthesizeWithContext {
+                node,
+                event,
+                lock_keys,
+                grant,
+            } => {
+                self.synthesize_pointer_with_context(
+                    node,
+                    event,
+                    Modifiers::NONE,
+                    lock_keys,
+                    None,
+                    grant,
+                    timestamp,
+                );
+            }
             Command::Scroll {
                 node,
                 target,
@@ -1370,6 +1492,26 @@ impl Window {
         button: Option<zgui_vocab::PointerButton>,
         timestamp: Timestamp,
     ) {
+        let lock_keys = {
+            use zgui_reactive::prelude::GetUntracked;
+            self.handle.lock_keys().get_untracked()
+        };
+        self.synthesize_pointer_with_context(
+            node, event, modifiers, lock_keys, button, None, timestamp,
+        );
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn synthesize_pointer_with_context(
+        &mut self,
+        node: zgui_view::NodeId,
+        event: EventKind,
+        modifiers: Modifiers,
+        lock_keys: Modifiers,
+        button: Option<zgui_vocab::PointerButton>,
+        grant: Option<zgui_view::GestureGrant>,
+        timestamp: Timestamp,
+    ) {
         let Some(key) = zgui_view_dom::id::to_document(node) else {
             return;
         };
@@ -1396,7 +1538,18 @@ impl Window {
         let mut pointer = zgui_vocab::PointerEvent::mouse(position);
         pointer.button = button;
         let payload = Payload::Pointer(pointer);
-        self.dispatch_with(key, event, payload, modifiers, timestamp);
+        self.dispatch_with_context(
+            key,
+            event,
+            payload,
+            modifiers,
+            dispatch::DispatchContext {
+                composing: false,
+                lock_keys,
+                grant,
+            },
+            timestamp,
+        );
     }
 
     /// Dispatches an event this process produced, down the path a real one would have taken.
@@ -1424,6 +1577,33 @@ impl Window {
         modifiers: Modifiers,
         timestamp: Timestamp,
     ) {
+        let lock_keys = {
+            use zgui_reactive::prelude::GetUntracked;
+            self.handle.lock_keys().get_untracked()
+        };
+        self.dispatch_with_context(
+            key,
+            event,
+            payload,
+            modifiers,
+            dispatch::DispatchContext {
+                composing: false,
+                lock_keys,
+                grant: None,
+            },
+            timestamp,
+        );
+    }
+
+    pub(crate) fn dispatch_with_context(
+        &mut self,
+        key: zgui_dom::NodeKey,
+        event: EventKind,
+        payload: Payload,
+        modifiers: Modifiers,
+        context: dispatch::DispatchContext,
+        timestamp: Timestamp,
+    ) {
         let steps = {
             let document = self.document.borrow();
             // An element that left the document between the ask and the dispatch has nothing left
@@ -1438,7 +1618,7 @@ impl Window {
             zgui_input::dispatch::resolve(document.store(), &chain, event, &mut plan);
             plan.steps().to_vec()
         };
-        dispatch::run_discarding(
+        dispatch::run_discarding_with_context(
             self,
             &steps,
             event,
@@ -1446,6 +1626,7 @@ impl Window {
             &payload,
             modifiers,
             timestamp,
+            context,
         );
     }
 }

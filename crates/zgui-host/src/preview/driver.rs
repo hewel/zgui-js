@@ -171,6 +171,9 @@ impl AppHandler for PreviewHost {
                     self.native.wake(cx, WakeReason::ClipboardRead { serial, result });
                 }
             }
+            WakeReason::ActivationToken { serial, token } => {
+                self.host.resolve_activation_token(serial, token);
+            }
             other => self.native.wake(cx, other),
         }
         self.after_native(cx);

@@ -29,7 +29,10 @@ pub use crate::surface::role::{
     Anchor, Constrain, ExclusiveZone, KeyboardInteractivity, Layer, LayerPatch, LayerPlacement,
     PopupPlacement, SurfaceRole,
 };
-pub use crate::surface::serial::InputSerial;
+pub use crate::surface::serial::{
+    ActivationToken, ActivationTokenSerial, ActivationTokenSerials, InputGrant, InputSerial,
+    PendingActivationToken,
+};
 pub use crate::surface::subpixel::SubpixelLayout;
 pub use crate::surface::text_input::{TextInput, TextInputPurpose};
 pub use crate::surface::timing::{ComposeAhead, PresentPacing, PresentationTiming};
@@ -464,6 +467,19 @@ pub trait Surface: Send + Sync + 'static {
 
     /// Cancels any active outbound drag initiated from this surface.
     fn cancel_outbound_drag(&self) {}
+
+    /// Requests a single-use external activation token quoting `grant` on this surface.
+    ///
+    /// Enqueues the protocol request synchronously before returning so closing this surface later
+    /// in the same turn still quotes a live surface on the wire. Returns `None` when unsupported
+    /// or when `grant` or this surface is no longer eligible.
+    fn request_activation_token(
+        &self,
+        _grant: InputGrant,
+        _app_id: Option<&str>,
+    ) -> Option<PendingActivationToken> {
+        None
+    }
 
     /// Tells the platform where text is being typed and what kind, or that none is.
     ///

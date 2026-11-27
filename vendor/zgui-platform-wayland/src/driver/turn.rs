@@ -162,6 +162,7 @@ impl<A: AppHandler> WaylandApp<A> {
         let result = self.run_until_exit();
         // An exit can bypass the turn's retirement point, including when requested from
         // surfaces_available, a frame, or shutting_down.
+        self.state.activation_link.destroy_all();
         self.state.live.close_all();
         self.state.live.retire();
         result.and(shutdown_flush(self.state.conn.flush()))

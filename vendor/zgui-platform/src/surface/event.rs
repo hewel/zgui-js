@@ -7,6 +7,7 @@ use zgui_vocab::{
 };
 
 use crate::surface::drag::DragEvent;
+use crate::surface::serial::InputGrant;
 use crate::theme::ColorScheme;
 
 /// Something that happened to a surface.
@@ -140,6 +141,10 @@ pub enum SurfaceEvent {
     Ime(ImeEvent),
     /// Content from outside the application was dragged over or dropped on the surface.
     Drag(DragEvent),
+    /// Physical press provenance accompanying the immediately following press event on this surface.
+    InputGrant(InputGrant),
+    /// Revokes any armed press provenance on this surface before a synthesized cancellation release.
+    CancelPressGrants,
 }
 
 impl SurfaceEvent {
@@ -155,6 +160,8 @@ impl SurfaceEvent {
                 | Self::ModifiersChanged(_)
                 | Self::Ime(_)
                 | Self::Drag(_)
+                | Self::InputGrant(_)
+                | Self::CancelPressGrants
         )
     }
 

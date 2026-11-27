@@ -3,6 +3,7 @@
 use core::cell::Cell;
 use core::marker::PhantomData;
 use core::ops::Deref;
+use std::rc::Rc;
 
 use zgui_geom::{Device, DevicePx, Rect};
 use zgui_vocab::{
@@ -12,6 +13,54 @@ use zgui_vocab::{
 use crate::event::sink::EventSink;
 use crate::event::view::{AnyEvent, EventType, EventView};
 use crate::id::NodeId;
+
+/// Raw unforgeable identity of a live physical press grant at the view seam.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RawGestureGrant {
+    /// Monotonic seat attachment generation when the physical press arrived.
+    pub seat_generation: u64,
+    /// Raw `SurfaceId` bits of the surface that received the physical press.
+    pub surface_raw: u64,
+    /// Raw protocol serial of the physical press.
+    pub serial_raw: u32,
+}
+
+/// Shared single-use physical-input grant cell threaded across a press and its synchronous
+/// derived activation (`Click`).
+///
+/// Cloning shares the same underlying cell so consuming the grant in `onPointerDown`
+/// automatically exhausts it for capture/bubble listeners and for any derived `onClick`
+/// produced by [`EventCx::activate_now`] or matching release/key activation.
+#[derive(Clone, Debug, Default)]
+pub struct GestureGrant(Rc<Cell<Option<RawGestureGrant>>>);
+
+impl GestureGrant {
+    /// Wraps `raw` in a fresh single-use grant cell.
+    #[must_use]
+    pub fn new(raw: RawGestureGrant) -> Self {
+        Self(Rc::new(Cell::new(Some(raw))))
+    }
+
+    /// Consumes and returns the grant if it has not yet been taken.
+    #[must_use]
+    pub fn take(&self) -> Option<RawGestureGrant> {
+        self.0.take()
+    }
+
+    /// Returns the unconsumed grant without taking it.
+    #[must_use]
+    pub fn peek(&self) -> Option<RawGestureGrant> {
+        self.0.get()
+    }
+}
+
+impl PartialEq for GestureGrant {
+    fn eq(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+impl Eq for GestureGrant {}
 
 /// What a handler may say about the event it has just seen.
 ///
@@ -104,6 +153,10 @@ pub struct EventCx<'a, E: EventView = AnyEvent> {
     samples: &'a [PointerSample],
     /// Whether an input-method composition (preedit) was active when this event arrived.
     composing: bool,
+    /// Which lock keys (`CAPS_LOCK`, `NUM_LOCK`) were active when this event was queued.
+    lock_keys: Modifiers,
+    /// Shared single-use physical press grant carried by this dispatch, if any.
+    grant: Option<GestureGrant>,
     /// Which event this context is typed for.
     event: PhantomData<fn() -> E>,
 }
@@ -138,6 +191,8 @@ impl<'a, E: EventView> EventCx<'a, E> {
             bounds: None,
             samples: &[],
             composing: false,
+            lock_keys: Modifiers::NONE,
+            grant: None,
             event: PhantomData,
         }
     }
@@ -161,6 +216,32 @@ impl<'a, E: EventView> EventCx<'a, E> {
     pub fn with_composing(mut self, composing: bool) -> Self {
         self.composing = composing;
         self
+    }
+
+    /// Records the lock-key state (`CAPS_LOCK`, `NUM_LOCK`) snapshotted when the event arrived.
+    #[must_use]
+    pub fn with_lock_keys(mut self, lock_keys: Modifiers) -> Self {
+        self.lock_keys = lock_keys.locks();
+        self
+    }
+
+    /// Lock keys (`CAPS_LOCK`, `NUM_LOCK`) active when this event was queued.
+    #[must_use]
+    pub fn lock_keys(&self) -> Modifiers {
+        self.lock_keys
+    }
+
+    /// Attaches a shared single-use physical gesture grant to this dispatch.
+    #[must_use]
+    pub fn with_gesture_grant(mut self, grant: Option<GestureGrant>) -> Self {
+        self.grant = grant;
+        self
+    }
+
+    /// Shared single-use physical gesture grant carried by this dispatch, if any.
+    #[must_use]
+    pub fn gesture_grant(&self) -> Option<&GestureGrant> {
+        self.grant.as_ref()
     }
 
     /// Whether an input-method composition (preedit) was active when this event arrived.
@@ -262,7 +343,12 @@ impl<'a, E: EventView> EventCx<'a, E> {
     pub fn activate_now(&mut self) {
         self.control.activation_claimed.set(true);
         let node = self.current;
-        self.sink.synthesize(node, EventKind::Click);
+        self.sink.synthesize_with_context(
+            node,
+            EventKind::Click,
+            self.lock_keys,
+            self.grant.clone(),
+        );
     }
 
     /// Re-types this context for a different view of the same payload.
@@ -284,6 +370,8 @@ impl<'a, E: EventView> EventCx<'a, E> {
             bounds: self.bounds,
             samples: self.samples,
             composing: self.composing,
+            lock_keys: self.lock_keys,
+            grant: self.grant.clone(),
             event: PhantomData,
         }
     }

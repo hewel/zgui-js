@@ -56,9 +56,11 @@ import {
   VirtualGrid,
   VirtualList,
   getSessionGeneration,
+  requestActivationToken,
   requestSessionLock,
   beginWindowMoveDrag,
   closeWindow,
+  getCapsLock,
   getWindowState,
   onCloseRequest,
   setWindowDecorations,
@@ -66,9 +68,11 @@ import {
   setWindowMaximized,
   setWindowMinimized,
   setWindowTitle,
+  useCapsLock,
   useWindowState,
 } from "@hewel/zgui";
 import type {
+  ActivationTokenOptions,
   BlurRegion,
   BlurRegionNodes,
   CanvasCommand,
@@ -82,6 +86,7 @@ import type {
   NativeChild,
   NativeContextMenuEvent,
   NativeFocusOptions,
+  NativeKeyEvent,
   NativeNode,
   NativePointerBoundaryEvent,
   NativeRole,
@@ -1125,6 +1130,19 @@ const isHeading: boolean = headingToward(
   { x: 200, y: 100, width: 140, height: 180 },
 );
 void isHeading;
+const activationOpts: ActivationTokenOptions = { appId: "org.gnome.Ptyxis" };
+const emptyActivationOpts: ActivationTokenOptions = {};
+const tokenPromiseA: Promise<string | null> = requestActivationToken();
+const tokenPromiseB: Promise<string | null> = requestActivationToken(activationOpts);
+const tokenPromiseC: Promise<string | null> = requestActivationToken(emptyActivationOpts);
+const capsSnap: boolean = getCapsLock();
+const capsAccessorProbe = (): Accessor<boolean> => useCapsLock();
+const checkLockModifiers = (ev: NativeKeyEvent): [boolean, boolean] => [
+  ev.modifiers.capsLock,
+  ev.modifiers.numLock,
+];
+void [tokenPromiseA, tokenPromiseB, tokenPromiseC, capsSnap, capsAccessorProbe, checkLockModifiers];
+
 void (
   <MenuRootPrimitive>
     <MenuListPrimitive>

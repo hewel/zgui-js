@@ -11,6 +11,7 @@ import {
 } from "#solid";
 import type { Owner } from "#solid";
 import type {
+  ActivationTokenOptions,
   CanvasScene,
   CloseRequestEvent,
   DocumentSelection,
@@ -143,6 +144,8 @@ interface RegionBridge extends SessionPreferenceBridge {
   closeWindow(force?: boolean): void;
   getWindowState(): WindowState;
   subscribeWindowState(callback: (state: WindowState) => void): () => void;
+  getCapsLock(): boolean;
+  subscribeCapsLock(callback: (capsLock: boolean) => void): () => void;
   onCloseRequest(callback: (event: CloseRequestEvent) => void): () => void;
   getWindowRect(node: NativeNode): NativeWindowRect | null;
   getTextContent(node: NativeNode): string;
@@ -165,6 +168,7 @@ export interface NativeHost {
   readonly __zgui: UiBridge;
   readonly __zguiShell: SessionPreferenceBridge & {
     getSessionGeneration(): number;
+    requestActivationToken(options?: ActivationTokenOptions): Promise<string | null>;
     installStylesheet(name: string, css: string): void;
     removeStylesheet(name: string): void;
     subscribeMonitors(callback: (monitors: readonly Monitor[]) => void): () => void;

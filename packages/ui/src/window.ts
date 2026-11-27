@@ -68,6 +68,37 @@ export function getWindowState(): WindowState {
   return bridgeFor().getWindowState();
 }
 
+/** Read a point-in-time snapshot of the active mount region surface's Caps Lock state (`false` when unavailable). */
+export function getCapsLock(): boolean {
+  return bridgeFor().getCapsLock?.() ?? false;
+}
+
+/**
+ * Observe the active mount region surface's Caps Lock state reactively for the lifetime of the
+ * current Solid owner. Automatically unsubscribes via `onCleanup`.
+ */
+export function useCapsLock(): Accessor<boolean> {
+  if (!getOwner()) throw new Error("useCapsLock requires a Solid owner");
+  const bridge = bridgeFor();
+  const [capsLock, setCapsLock] = createSignal<boolean>(bridge.getCapsLock?.() ?? false, {
+    ownedWrite: true,
+  });
+  if (!bridge.subscribeCapsLock) return capsLock;
+  let active = true;
+  const unsubscribe = bridge.subscribeCapsLock(next => {
+    if (!active) return;
+    withCallbackBridge(bridge, () => {
+      setCapsLock(next);
+      flush();
+    });
+  });
+  onCleanup(() => {
+    active = false;
+    unsubscribe();
+  });
+  return capsLock;
+}
+
 /** Observe the active toplevel window's state reactively for the lifetime of the current Solid owner. */
 export function useWindowState(): Accessor<WindowState> {
   if (!getOwner()) throw new Error("useWindowState requires a Solid owner");

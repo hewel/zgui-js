@@ -113,12 +113,20 @@ impl Window {
         // about this surface — each says the buffers are being consumed again. The request is
         // what turns the cleared latch back into frames: the parked deadlines re-arm at the end
         // of the frame it buys.
+        if let zgui_platform::SurfaceEvent::InputGrant(grant) = event {
+            self.pending_grant = Some(grant);
+            return false;
+        }
+        if matches!(event, zgui_platform::SurfaceEvent::CancelPressGrants) {
+            self.pending_grant = None;
+        }
         if self.starved && Self::clears_starvation(&event) {
             self.starved = false;
             self.starve_backoff = crate::window::STARVE_BACKOFF_START;
             self.request_frame();
         }
         let wants_a_frame = match &event {
+            zgui_platform::SurfaceEvent::CancelPressGrants => false,
             zgui_platform::SurfaceEvent::Resized(size) => self.resized(*size, self.scale),
             zgui_platform::SurfaceEvent::ScaleFactorChanged { scale_factor, size } => {
                 self.resized(*size, *scale_factor as f32)
@@ -178,19 +186,40 @@ impl Window {
             }
             _ => true,
         };
+        let grant = match &event {
+            zgui_platform::SurfaceEvent::Pointer {
+                action: zgui_vocab::PointerAction::Pressed,
+                ..
+            } => self.pending_grant.take(),
+            zgui_platform::SurfaceEvent::Key {
+                state: zgui_vocab::KeyState::Pressed,
+                event: key,
+                ..
+            } if !key.repeat => self.pending_grant.take(),
+            _ => {
+                self.pending_grant = None;
+                None
+            }
+        };
         // Focus is not input from a person, but what it does — ending a composition, announcing a
         // settled value — runs handlers, and handlers run in a frame rather than where an event
         // arrives. So it is queued with the input and drained with it.
         if event.is_input() || (wants_a_frame && Self::surface_focus_of(&event).is_some()) {
+            let lock_keys = {
+                use zgui_reactive::prelude::GetUntracked;
+                self.handle.lock_keys().get_untracked()
+            };
             // A move behind a move of the same pointer takes its place: a frame routes and
             // settles one move per pointer, and the folded positions ride along as samples for
             // the handler that wants the path rather than the destination.
             match self.queued.last_mut() {
                 Some(last) if last.folds(&event) => {
-                    last.fold(event);
+                    last.fold(event, lock_keys);
                     counter::bump(Counter::PointerMovesCoalesced);
                 }
-                _ => self.queued.push(crate::window::input::Queued::new(event)),
+                _ => self
+                    .queued
+                    .push(crate::window::input::Queued::new(event, lock_keys, grant)),
             }
         }
         wants_a_frame

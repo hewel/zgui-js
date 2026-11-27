@@ -367,6 +367,7 @@ impl Session {
         }
 
         let drag_id = self.dnd.alloc_id();
+        let _ = self.bridges.take_active_gesture_grant();
         *self.dnd.outbound.borrow_mut() = Some(OutboundDrag {
             id: drag_id,
             surface: surface_id,
@@ -455,6 +456,7 @@ impl Session {
         let payload_val: Value = options.get("payload")?;
         let on_end: Option<Function> = options.get("onEnd")?;
         let drag_id = self.dnd.alloc_id();
+        let _ = self.bridges.take_active_gesture_grant();
         *self.dnd.internal.borrow_mut() = Some(InternalDrag {
             id: drag_id,
             surface,

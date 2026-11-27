@@ -55,6 +55,22 @@ pub trait EventSink {
     /// same path an inbound accessibility action takes, so a control written this way is operable
     /// by an assistive technology without any further work.
     fn synthesize(&mut self, node: NodeId, event: EventKind);
+
+    /// Dispatches `event` on `node`, propagating lock-key state and an optional shared
+    /// [`GestureGrant`](crate::GestureGrant) from a press-activated control
+    /// ([`EventCx::activate_now`](crate::EventCx::activate_now)).
+    ///
+    /// Defaults to [`EventSink::synthesize`] so lightweight test sinks need no extra boilerplate.
+    fn synthesize_with_context(
+        &mut self,
+        node: NodeId,
+        event: EventKind,
+        lock_keys: zgui_vocab::Modifiers,
+        grant: Option<crate::event::GestureGrant>,
+    ) {
+        let _ = (lock_keys, grant);
+        self.synthesize(node, event);
+    }
 }
 
 /// An [`EventSink`] that drops every command.

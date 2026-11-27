@@ -48,12 +48,14 @@ export {
   WindowSurface,
   getSessionGeneration,
   mountShellStylesheet,
+  requestActivationToken,
   requestSessionLock,
   useMonitors,
 } from "./shell.js";
 export {
   beginWindowMoveDrag,
   closeWindow,
+  getCapsLock,
   getWindowState,
   onCloseRequest,
   setWindowDecorations,
@@ -61,6 +63,7 @@ export {
   setWindowMaximized,
   setWindowMinimized,
   setWindowTitle,
+  useCapsLock,
   useWindowState,
 } from "./window.js";
 export { createSpring } from "./spring.js";

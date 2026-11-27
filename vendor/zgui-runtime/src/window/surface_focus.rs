@@ -131,6 +131,8 @@ impl Window {
 
     /// Lets go of whatever the pointer is holding down, leaving focus and hover where they are.
     pub(crate) fn cancel_press(&mut self) {
+        self.pending_grant = None;
+        self.press_grants.clear();
         self.selecting = None;
         self.text_clicks.forget();
         let filter = self.engine.filter();

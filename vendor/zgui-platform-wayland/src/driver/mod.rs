@@ -1,6 +1,6 @@
 //! The loop, and the state every protocol handler is written on.
 
-mod activation;
+pub(crate) mod activation;
 pub(crate) mod background_effect;
 mod data;
 mod failure;
@@ -106,6 +106,8 @@ pub struct WaylandState {
     pub(crate) ime: Ime,
     /// How a window asks the desktop to bring it forward.
     pub(crate) activation: Option<ActivationState>,
+    /// Shared link for synchronous external `xdg_activation_v1` token requests.
+    pub(crate) activation_link: activation::ActivationLink,
     /// What each surface asked the desktop for, until its token arrives.
     pub(crate) wanted: std::collections::HashMap<SurfaceId, activation::Wanted>,
     /// The factory the input method is made from, when the compositor offers one.
@@ -175,6 +177,7 @@ impl WaylandState {
         let presentation = Presentation::bind(globals, &qh);
         let text_input: Option<ZwpTextInputManagerV3> = globals.bind(&qh, 1..=1, GlobalData).ok();
         let activation = ActivationState::bind(globals, &qh).ok();
+        let activation_link = activation::ActivationLink::new(activation.as_ref());
         let data = DataDeviceManagerState::bind(globals, &qh).ok();
         let primary = PrimarySelectionManagerState::bind(globals, &qh).ok();
         let session_lock = session_lock::SessionLock::bind(globals, &qh, &compositor);
@@ -216,6 +219,7 @@ impl WaylandState {
             drag: Drag::default(),
             ime: Ime::default(),
             activation,
+            activation_link,
             wanted: std::collections::HashMap::new(),
             text_input_manager: text_input,
             data,

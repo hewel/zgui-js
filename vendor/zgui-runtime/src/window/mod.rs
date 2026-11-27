@@ -474,6 +474,10 @@ pub struct Window {
     ime: zgui_input::Ime,
     /// Platform events that arrived since the last frame.
     queued: Vec<crate::window::input::Queued>,
+    /// Physical press grant emitted immediately ahead of the next press event in `queue()`.
+    pending_grant: Option<zgui_platform::InputGrant>,
+    /// Active single-use press grants keyed by pointer ID while a non-scrollbar press is held.
+    press_grants: Vec<(zgui_vocab::PointerId, zgui_view::GestureGrant)>,
     /// The window's own reactive scope.
     scope: Option<zgui_reactive::Mounted>,
     /// The mounted view, held because dropping it unmounts the tree.
@@ -888,6 +892,8 @@ impl Window {
             pastes: Vec::new(),
             ime: zgui_input::Ime::new(),
             queued: Vec::new(),
+            pending_grant: None,
+            press_grants: Vec::new(),
             scope: Some(scope),
             view: Some(built),
             _sheets: sheets,
@@ -1650,6 +1656,13 @@ impl Window {
         pool: std::sync::Arc<zgui_layout::tree::parallel::LayoutPool>,
     ) {
         self.layout_pool = Some(pool);
+    }
+
+    /// Revokes any pending or held physical press grants on this window (for instance when a
+    /// press transitions into an internal or outbound drag operation).
+    pub fn clear_press_grants(&mut self) {
+        self.pending_grant = None;
+        self.press_grants.clear();
     }
 }
 

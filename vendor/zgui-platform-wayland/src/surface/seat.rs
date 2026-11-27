@@ -38,6 +38,8 @@ pub struct SeatLink {
 struct State {
     /// The seat itself, once one exists.
     seat: Option<WlSeat>,
+    /// Incarnation counter matching [`crate::input::Seat::generation`].
+    seat_generation: u64,
     /// The pointer, with the cursor theme attached to it.
     pointer: Option<ThemedPointer<PointerData>>,
     /// The connection the cursor's own surface is committed on.
@@ -78,10 +80,19 @@ impl core::fmt::Debug for State {
 
 impl SeatLink {
     /// Records the seat and the connection its requests are made on.
-    pub(crate) fn attach(&self, conn: Connection, seat: Option<WlSeat>) {
+    pub(crate) fn attach(&self, conn: Connection, seat: Option<WlSeat>, seat_generation: u64) {
         let mut inner = self.lock();
         inner.conn = Some(conn);
         inner.seat = seat;
+        inner.seat_generation = seat_generation;
+    }
+
+    /// Returns the adopted `WlSeat` when `expected_generation` still matches the live seat.
+    pub(crate) fn seat_for_generation(&self, expected_generation: u64) -> Option<WlSeat> {
+        let inner = self.lock();
+        (expected_generation != 0 && inner.seat_generation == expected_generation)
+            .then(|| inner.seat.clone())
+            .flatten()
     }
 
     /// Takes ownership of the seat's pointer.

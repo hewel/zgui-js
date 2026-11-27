@@ -109,6 +109,18 @@ pub enum Command {
         /// Which event.
         event: zgui_vocab::EventKind,
     },
+    /// Dispatch an event on this node, carrying lock-key state and an optional shared
+    /// [`GestureGrant`](zgui_view::GestureGrant) from `activate_now`.
+    SynthesizeWithContext {
+        /// The node to aim it at.
+        node: NodeId,
+        /// Which event.
+        event: zgui_vocab::EventKind,
+        /// Lock keys (`CAPS_LOCK`, `NUM_LOCK`) inherited from the initiating press.
+        lock_keys: zgui_vocab::Modifiers,
+        /// Shared single-use physical press grant, if any.
+        grant: Option<zgui_view::GestureGrant>,
+    },
     /// Set the active read-only cross-block document selection inside `container`.
     SetDocumentSelection {
         /// The opt-in document selection container.
@@ -176,6 +188,17 @@ impl core::fmt::Debug for Command {
                 .debug_struct("Synthesize")
                 .field("node", node)
                 .field("event", event)
+                .finish(),
+            Self::SynthesizeWithContext {
+                node,
+                event,
+                lock_keys,
+                ..
+            } => formatter
+                .debug_struct("SynthesizeWithContext")
+                .field("node", node)
+                .field("event", event)
+                .field("lock_keys", lock_keys)
                 .finish(),
             Self::SetDocumentSelection {
                 container,

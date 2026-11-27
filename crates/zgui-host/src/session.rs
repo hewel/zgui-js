@@ -1,3 +1,4 @@
+pub(crate) mod activation;
 pub(crate) mod window_control;
 
 use std::{cell::{Cell, RefCell}, collections::BTreeMap, rc::{Rc, Weak}, sync::Arc, time::{Duration, Instant}};
@@ -22,6 +23,7 @@ use crate::{
     work::{Arguments, Work, WorkSession},
 };
 use crate::runtime_capabilities::ResolvedCapabilities;
+use activation::ActivationTokens;
 use window_control::{WindowCommand, WindowControls, WindowState};
 
 /// Typed session failure: engine diagnostics, sticky provider contracts, and
@@ -397,6 +399,8 @@ pub(crate) struct Session {
     window_controls: Rc<WindowControls>,
     pub(crate) work: Rc<Work>,
     pub(crate) dnd: crate::dnd::DndState,
+    activation: ActivationTokens,
+    surface_caps_lock: RefCell<std::collections::HashMap<SurfaceId, bool>>,
     dev_state: Option<Rc<RefCell<DevStateStore>>>,
     shell_host: Option<Rc<ShellHostBridge>>,
     effective_capabilities: Arc<crate::package::Capabilities>,
@@ -408,6 +412,7 @@ pub(crate) struct Session {
     telemetry: Cell<Option<RuntimeTelemetry>>,
     pub(crate) shutdown_started: Cell<bool>,
     mount_started: Cell<bool>,
+    staged: Cell<bool>,
     stylesheet_installed: Cell<bool>,
     contract_reported: Cell<bool>,
     pub(crate) generation: u64,
@@ -528,7 +533,7 @@ impl Session {
             };
             let initial_reduced_motion = policy.reduced_motion.unwrap_or(false);
             shell.seed_reduced_motion(initial_reduced_motion);
-            let (primary, work) = match startup {
+            let (primary, work, activation) = match startup {
                 Startup::Primary { region, surface } => {
                     let initial_title = module
                         .as_package()
@@ -548,9 +553,13 @@ impl Session {
                     };
                     let region = Rc::new(Self::build_region(region, "main".into(), surface, generation, options, waker.clone(), weak.clone()));
                     bridges.add(&region.bridge);
-                    (Some(region), work)
+                    (Some(region), work, ActivationTokens::new(None))
                 }
-                Startup::Shell { timers, .. } => (None, Work::new_shell(work_session, timers, waker.clone())),
+                Startup::Shell { timers, .. } => (
+                    None,
+                    Work::new_shell(work_session, timers.clone(), waker.clone()),
+                    ActivationTokens::new(Some(timers)),
+                ),
             };
             work.guard_cleanup_with(shell.clone());
             work.set_gesture_source(bridges.clone());
@@ -585,11 +594,11 @@ impl Session {
                 bridge
             });
             Self {
-                disposer: RefCell::new(None), primary, layers: RefCell::new(BTreeMap::new()), bridges, shell, window_controls, work, dnd: crate::dnd::DndState::new(), dev_state, shell_host, effective_capabilities: Arc::clone(&effective_capabilities), platform_surfaces: RefCell::new(std::collections::HashMap::new()), engine: RefCell::new(None),
+                disposer: RefCell::new(None), primary, layers: RefCell::new(BTreeMap::new()), bridges, shell, window_controls, work, dnd: crate::dnd::DndState::new(), activation, surface_caps_lock: RefCell::new(std::collections::HashMap::new()), dev_state, shell_host, effective_capabilities: Arc::clone(&effective_capabilities), platform_surfaces: RefCell::new(std::collections::HashMap::new()), engine: RefCell::new(None),
                 shell_surfaces: Cell::new(0), retirement_reported: Cell::new(false),
                 shell_stylesheets: RefCell::new(Vec::new()),
                 telemetry: Cell::new(None), shutdown_started: Cell::new(false),
-                mount_started: Cell::new(false), stylesheet_installed: Cell::new(false),
+                mount_started: Cell::new(false), staged: Cell::new(false), stylesheet_installed: Cell::new(false),
                 contract_reported: Cell::new(false),
                 font_leases: RefCell::new(Vec::new()),
                 reported_unregistered_fonts: RefCell::new(std::collections::BTreeSet::new()),
@@ -615,6 +624,7 @@ impl Session {
             }
             let shell_api = session.shell.install(&ctx)?;
             session.shell.install_stylesheet_api(&shell_api, &session)?;
+            session.install_activation_api(&shell_api)?;
             session.install_dnd(&ctx)?;
             if let Some(dev_state) = &session.dev_state {
                 DevStateStore::install(dev_state, &ctx)?;
@@ -715,12 +725,46 @@ impl Session {
 
     /// Publish compositor state to this generation in a bounded bridge turn.
     pub(crate) fn update_lock_state(&self, state: SessionLockState) -> Result<bool> {
-        if self.shutdown_started.get() || !self.shell.update_lock_state(state) { return Ok(false); }
+        if self.shutdown_started.get() { return Ok(false); }
+        let revoked = state.is_retained() && self.activation.revoke_all_to_null();
+        let notify_lock = self.shell.update_lock_state(state);
+        if revoked {
+            self.wake_owner();
+        }
+        if !notify_lock { return Ok(revoked); }
         let mut engine = self.engine.borrow_mut();
         let engine = engine.as_mut().ok_or("session disposed")?;
         let result = self.bridges.run(engine.turn(), |js| js.with_context(|ctx| self.shell.dispatch_lock_state(&ctx)));
         self.mark_reported(self.check_contract())?;
         result.map(|()| true).map_err(|error| self.diagnostic(error).into())
+    }
+
+    pub(crate) fn seed_surface_caps_lock(&self, surface: SurfaceId, caps_lock: bool) {
+        self.surface_caps_lock.borrow_mut().insert(surface, caps_lock);
+        if let Some(owned) = self.region_for_surface(surface) {
+            owned.bridge.seed_caps_lock(caps_lock);
+        }
+    }
+
+    pub(crate) fn sync_surface_caps_lock(&self, surface: SurfaceId, caps_lock: bool) -> Result<bool> {
+        self.surface_caps_lock.borrow_mut().insert(surface, caps_lock);
+        if self.shutdown_started.get() {
+            return Ok(false);
+        }
+        let Some(owned) = self.region_for_surface(surface) else {
+            return Ok(false);
+        };
+        if !self.mount_started.get() {
+            owned.bridge.seed_caps_lock(caps_lock);
+            return Ok(false);
+        }
+        let mut engine = self.engine.borrow_mut();
+        let engine = engine.as_mut().ok_or("session disposed")?;
+        let result = self.bridges.run(engine.turn(), |js| {
+            js.with_context(|ctx| owned.bridge.set_caps_lock(&ctx, caps_lock))
+        });
+        self.mark_reported(self.check_contract())?;
+        result.map_err(|error| self.diagnostic(error).into())
     }
 
     /// Synchronize desktop reduced-motion preference into all live bridges unless overridden by policy.
@@ -871,6 +915,13 @@ impl Session {
         let is_lock = lock_claim.is_some();
         let mut owned = Self::build_region(region, name, surface, self.generation, options, self.waker.clone(), Rc::downgrade(self));
         owned.lock_claim = lock_claim;
+        owned.bridge.seed_caps_lock(
+            self.surface_caps_lock
+                .borrow()
+                .get(&surface)
+                .copied()
+                .unwrap_or(false),
+        );
         let owned = Rc::new(owned);
         self.bridges.add(&owned.bridge);
         self.layers.borrow_mut().insert(id, owned.clone());
@@ -992,7 +1043,7 @@ impl Session {
 
     fn deliverable_work(&self, jobs_pending: bool) -> Result<bool> {
         let notifications = self.has_queued_notifications()?;
-        Ok(jobs_pending || notifications || self.work.has_deliverable_work())
+        Ok(jobs_pending || notifications || self.activation.has_ready() || self.work.has_deliverable_work())
     }
 
     pub(crate) fn has_inflight_host_ops(&self) -> bool {
@@ -1002,12 +1053,14 @@ impl Session {
     /// Marks the session as a staged mount candidate so irreversible outbound network
     /// requests and background workers are deferred until native acceptance.
     pub(crate) fn begin_staged_mount(&self) {
+        self.staged.set(true);
         self.work.begin_staged_network();
         self.work.begin_staged_workers();
     }
 
     /// Releases deferred outbound network operations and workers once the session is accepted.
     pub(crate) fn commit_staged_mount(&self) {
+        self.staged.set(false);
         self.work.commit_staged_network();
         self.work.commit_staged_workers();
     }
@@ -1080,6 +1133,7 @@ impl Session {
         let disposer = owned.disposer.borrow_mut().take();
         let cleanup = self.cleanup(disposer);
         self.window_controls.remove_surface(owned.surface);
+        self.surface_caps_lock.borrow_mut().remove(&owned.surface);
         self.bridges.remove(&owned.bridge);
         let scenes = owned.bridge.canvas_scene_count();
         owned.bridge.dispose();
@@ -1239,7 +1293,11 @@ impl Session {
             if remaining[phase] == 0 { continue; }
             remaining[phase] -= 1;
             let attempted = match phase {
-                0 => if let Some(completion) = self.work.next_completion() {
+                0 => if self.activation.has_ready() {
+                    self.bridges.run(engine.turn(), |js| js.with_context(|ctx| self.settle_next_activation_token(&ctx)))
+                        .map_err(|error| self.diagnostic(error))?;
+                    true
+                } else if let Some(completion) = self.work.next_completion() {
                     self.bridges.run(engine.turn(), |js| js.with_context(|ctx| self.work.settle(&ctx, completion)))
                         .map_err(|error| self.diagnostic(error))?;
                     true
@@ -1657,7 +1715,7 @@ impl Session {
             let bridge = &owned.bridge;
             counts.nodes += bridge.live_count();
             counts.wrappers += bridge.wrapper_count();
-            counts.callbacks += bridge.callback_count();
+            counts.callbacks += bridge.callback_count() + bridge.caps_lock_subscriber_count();
             counts.focus_traps += bridge.focus_trap_count();
             counts.scroll_locks += bridge.scroll_lock_count();
             counts.canvas_scenes += bridge.canvas_scene_count();
@@ -1745,6 +1803,8 @@ impl Session {
         let active_drags = self.dnd.active_count();
         self.cancel_outbound_drag_on_platform();
         self.dnd.clear();
+        self.activation.clear();
+        self.surface_caps_lock.borrow_mut().clear();
         if let Some(dev_state) = &self.dev_state {
             dev_state.borrow_mut().clear();
         }
@@ -1756,6 +1816,8 @@ impl Session {
         // Report remaining leases before forced disposal releases the native scenes.
         let canvas_scenes = self.primary.iter().chain(self.layers.borrow().values())
             .map(|owned| owned.bridge.canvas_scene_count()).sum();
+        let caps_lock_callbacks: usize = self.primary.iter().chain(self.layers.borrow().values())
+            .map(|owned| owned.bridge.caps_lock_subscriber_count()).sum();
         let window_callbacks = self.window_controls.callback_count();
         self.window_controls.clear();
         self.bridges.dispose();
@@ -1773,7 +1835,7 @@ impl Session {
         self.telemetry.set(RuntimeTelemetry::merge(self.telemetry.get(), snapshot));
         drop(self.engine.borrow_mut().take());
         let mut counts = self.counts_with_work(leaked_work);
-        counts.callbacks += window_callbacks;
+        counts.callbacks += window_callbacks + caps_lock_callbacks;
         counts.canvas_scenes = canvas_scenes;
         counts.active_drags = active_drags;
         self.work.clear_images();

@@ -148,8 +148,13 @@ impl SeatHandler for WaylandState {
         for capability in [Capability::Keyboard, Capability::Pointer, Capability::Touch] {
             self.remove_capability(conn, qh, seat.clone(), capability);
         }
+        self.seat.generation = self.seat.generation.wrapping_add(1);
+        if self.seat.generation == 0 {
+            self.seat.generation = 1;
+        }
         self.seat.serials = Default::default();
-        self.link.attach(self.conn.clone(), None);
+        self.link
+            .attach(self.conn.clone(), None, self.seat.generation);
     }
 }
 
@@ -202,6 +207,16 @@ impl KeyboardHandler for WaylandState {
         event: WaylandKey,
     ) {
         self.pressed(serial);
+        if let Some(id) = self.seat.keyboard_focus {
+            self.report(
+                id,
+                SurfaceEvent::InputGrant(zgui_platform::InputGrant::new(
+                    self.seat.generation,
+                    id,
+                    zgui_platform::InputSerial::new(serial),
+                )),
+            );
+        }
         self.key(KeyState::Pressed, &event, false);
     }
 
@@ -300,6 +315,14 @@ impl TouchHandler for WaylandState {
         self.link.press_started(target, serial);
         let at = crate::input::pointer::position(position.0, position.1);
         self.contacts.down(id, target, at);
+        self.report(
+            target,
+            SurfaceEvent::InputGrant(zgui_platform::InputGrant::new(
+                self.seat.generation,
+                target,
+                zgui_platform::InputSerial::new(serial),
+            )),
+        );
         self.contact(target, id, at, PointerAction::Pressed);
     }
 
@@ -373,7 +396,8 @@ impl WaylandState {
     pub(crate) fn take_seat(&mut self, seat: &WlSeat) -> Adopted {
         let adopted = self.seat.adopt(seat);
         if adopted == Adopted::Now {
-            self.link.attach(self.conn.clone(), Some(seat.clone()));
+            self.link
+                .attach(self.conn.clone(), Some(seat.clone()), self.seat.generation);
             self.open_data_devices(seat);
         }
         adopted
@@ -455,15 +479,23 @@ impl WaylandState {
 
     pub(super) fn refresh_lock_keyboard_focus(&mut self) {
         if let Some(parent) = &self.seat.lock_keyboard_surface {
-            self.focus_moved(self.lock_keyboard_target(parent).flatten());
+            let next = self.lock_keyboard_target(parent).flatten();
+            let previous = self.seat.keyboard_focus;
+            self.focus_moved(next);
+            if let Some(id) = next.filter(|&id| Some(id) != previous) {
+                self.report(
+                    id,
+                    SurfaceEvent::ModifiersChanged(self.seat.held | self.seat.locks),
+                );
+            }
         }
     }
 
     /// Ends every live contact, for a gesture the compositor took away.
     fn cancel_contacts(&mut self) {
         for (id, target, at) in self.contacts.cancel() {
-            // Reported as a release rather than dropped: a contact left down is a control that
-            // stays pressed for ever.
+            // Revoke armed press grants before reporting the synthetic release that clears `:active`.
+            self.report(target, SurfaceEvent::CancelPressGrants);
             self.contact(target, id, at, PointerAction::Released);
         }
     }
@@ -521,6 +553,14 @@ impl WaylandState {
             } => {
                 self.seat.serials.pressed(*serial);
                 self.link.press_started(id, *serial);
+                self.report(
+                    id,
+                    SurfaceEvent::InputGrant(zgui_platform::InputGrant::new(
+                        self.seat.generation,
+                        id,
+                        zgui_platform::InputSerial::new(*serial),
+                    )),
+                );
                 Some((PointerAction::Pressed, Some(button::button(*code))))
             }
             PointerEventKind::Release {

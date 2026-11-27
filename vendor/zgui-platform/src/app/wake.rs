@@ -5,7 +5,7 @@ use accesskit::ActionRequest;
 use crate::app::event::AppEvent;
 use crate::clipboard::{ClipboardData, ClipboardError, ClipboardSerial};
 use crate::grab::FocusGrabId;
-use crate::surface::SurfaceId;
+use crate::surface::{ActivationToken, ActivationTokenSerial, SurfaceId};
 
 /// Why the loop was woken by something that is not a surface event.
 ///
@@ -42,6 +42,13 @@ pub enum WakeReason {
         serial: ClipboardSerial,
         /// What was on the clipboard, or why it could not be read.
         result: Result<ClipboardData, ClipboardError>,
+    },
+    /// An external activation token request started earlier has finished.
+    ActivationToken {
+        /// Which token request this answers.
+        serial: ActivationTokenSerial,
+        /// The exported single-use token, redacted in debug output.
+        token: ActivationToken,
     },
     /// The application queued work for its own runtime: a window to open, one to close, or a
     /// request to quit.

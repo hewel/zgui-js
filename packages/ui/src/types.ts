@@ -173,6 +173,12 @@ export interface CloseWindowOptions {
   readonly force?: boolean | undefined;
 }
 
+/** Optional metadata accepted by `requestActivationToken(options)`. */
+export interface ActivationTokenOptions {
+  /** Target application desktop/Wayland `app_id` hint (1–256 UTF-8 bytes, no control characters; `""` omits `set_app_id`). */
+  readonly appId?: string | undefined;
+}
+
 /** An independently mounted compositor-managed toplevel window (xdg_toplevel). */
 export interface WindowSurfaceProps {
   readonly name: string;

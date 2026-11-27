@@ -193,6 +193,35 @@ set `services.sessionLock.outcome` to `"finished"` in the fixture to refuse
 the next request (default: `"locked"`). Preview records covered and fallback
 outputs and explicit unlock counts in readiness and `services.json`.
 
+## External activation tokens and Caps Lock state
+
+`requestActivationToken(options?: ActivationTokenOptions): Promise<string | null>`
+mints a single-use external Wayland `xdg_activation_v1` token from the active
+trusted physical press or non-repeat, non-composing key press (for example inside
+`Button` `onClick`, `MenuItem` / `MenuItemPrimitive` `onSelect`,
+`CommandPalette` `onSelect`, or `<field onKeyDown={...}>`). No extra
+`zgui.capabilities` flag is required.
+
+- `options.appId` (`1..=256` UTF-8 bytes without ASCII/Unicode control characters)
+  populates `xdg_activation_token_v1.set_app_id`; omitting `appId` or passing `""`
+  omits `set_app_id` without falling back to the host's own application ID.
+  Malformed `options` or `appId` values throw a synchronous `TypeError`.
+- Each physical press grants at most one token across capture, target, bubble,
+  and derived `Click` dispatch. Calling `requestActivationToken` synchronously
+  snapshots `(seat, wl_surface, press_serial)` and flushes the Wayland wire
+  request before returning, so unmounting a `PopupSurface` or `LayerSurface`
+  immediately afterward in the same handler never races surface destruction or
+  cancels the returned Promise.
+- Unavailable backends (including headless preview), non-gesture/post-`await`
+  calls, drag-consumed presses, `SessionLockSurface` or retained session locks,
+  and 500 ms compositor timeouts resolve cleanly to `null` without rejecting.
+
+Every `NativeEvent.modifiers` snapshot also carries non-optional boolean
+`capsLock` and `numLock` fields captured when the input event was queued, while
+`getCapsLock(): boolean` and `useCapsLock(): Accessor<boolean>` read or subscribe
+to the active mount region surface's Caps Lock state (including initial focus
+replay on `SessionLockSurface`).
+
 ## Node queries
 
 `getWindowRect(node)` reads the last completed native frame and returns a copied

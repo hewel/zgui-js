@@ -65,6 +65,8 @@ pub struct Seat {
     pub(crate) touch: Option<WlTouch>,
     /// The serials a request may quote.
     pub(crate) serials: Serials,
+    /// Monotonic incarnation counter incremented each time a seat is adopted or removed.
+    pub(crate) generation: u64,
     /// Which modifiers are held.
     ///
     /// A level rather than an event: the compositor reports a change, and everything above the
@@ -110,6 +112,10 @@ impl Seat {
             // focus, a second held set and a second pointer position everywhere those are read.
             Some(_) => Adopted::Another,
             None => {
+                self.generation = self.generation.wrapping_add(1);
+                if self.generation == 0 {
+                    self.generation = 1;
+                }
                 self.serials.seat = Some(seat.clone());
                 Adopted::Now
             }

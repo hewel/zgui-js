@@ -9,7 +9,13 @@ import {
   useContext,
 } from "#solid";
 import type { Owner } from "#solid";
-import { bridgeFor, bridgeForTarget, knownBridgeForNode, shellBridge } from "./host.js";
+import {
+  bridgeFor,
+  bridgeForTarget,
+  knownBridgeForNode,
+  shellBridge,
+  tryBridgeFor,
+} from "./host.js";
 import { ThemeCssContext } from "./theme-sync.js";
 import type {
   LayerPlacement,
@@ -23,6 +29,7 @@ import type {
 import { flush, renderRegion } from "./renderer/index.js";
 import type {
   Accessor,
+  ActivationTokenOptions,
   BlurRegion,
   LayerAnchor,
   LayerInputRegion,
@@ -68,6 +75,76 @@ function subscribeMonitors(shell: ShellBridge): MonitorSubscription {
 /** Read the current session's generation, including during module preflight. */
 export function getSessionGeneration(): number {
   return shellBridge().getSessionGeneration();
+}
+
+const MAX_ACTIVATION_APP_ID_BYTES = 256;
+
+function validateActivationAppIdBytes(value: string): number {
+  let bytes = 0;
+  for (let i = 0; i < value.length; i += 1) {
+    const code = value.charCodeAt(i);
+    if (code <= 0x1f || (code >= 0x7f && code <= 0x9f)) {
+      throw new TypeError("requestActivationToken appId must not contain control characters");
+    }
+    if (code < 0x80) {
+      bytes += 1;
+    } else if (code < 0x800) {
+      bytes += 2;
+    } else if (code >= 0xd800 && code <= 0xdbff) {
+      const next = i + 1 < value.length ? value.charCodeAt(i + 1) : 0;
+      if (next >= 0xdc00 && next <= 0xdfff) {
+        bytes += 4;
+        i += 1;
+      } else {
+        throw new TypeError("requestActivationToken appId must be valid Unicode");
+      }
+    } else if (code >= 0xdc00 && code <= 0xdfff) {
+      throw new TypeError("requestActivationToken appId must be valid Unicode");
+    } else {
+      bytes += 3;
+    }
+  }
+  return bytes;
+}
+
+function normalizeActivationTokenOptions(
+  options: ActivationTokenOptions | undefined,
+): ActivationTokenOptions | undefined {
+  if (options === undefined) return undefined;
+  if (typeof options !== "object" || options === null || Array.isArray(options)) {
+    throw new TypeError("requestActivationToken options must be a plain object");
+  }
+  const proto: unknown = Object.getPrototypeOf(options);
+  if (proto !== null && proto !== Object.prototype) {
+    throw new TypeError("requestActivationToken options must be a plain object");
+  }
+  const { appId } = options;
+  if (appId === undefined) return undefined;
+  if (typeof appId !== "string") {
+    throw new TypeError("requestActivationToken appId must be a string");
+  }
+  if (validateActivationAppIdBytes(appId) > MAX_ACTIVATION_APP_ID_BYTES) {
+    throw new TypeError("requestActivationToken appId exceeds 256 UTF-8 bytes");
+  }
+  return appId.length === 0 ? undefined : { appId };
+}
+
+/**
+ * Mint a gesture-bound single-use external `xdg_activation_v1` token from the active trusted
+ * press/key gesture. Synchronously snapshots `(seat, wl_surface, press_serial)` and commits the
+ * Wayland token request before returning, resolving to `null` when unavailable, denied, revoked by
+ * session lock, or timed out.
+ */
+export function requestActivationToken(options?: ActivationTokenOptions): Promise<string | null> {
+  const normalized = normalizeActivationTokenOptions(options);
+  const shell = (globalThis as unknown as Partial<NativeHost>).__zguiShell;
+  if (shell) {
+    return normalized === undefined
+      ? shell.requestActivationToken()
+      : shell.requestActivationToken(normalized);
+  }
+  if (tryBridgeFor()) return Promise.resolve(null);
+  return shellBridge().requestActivationToken(normalized);
 }
 
 /** Mount a session-wide stylesheet in current and future regions. */

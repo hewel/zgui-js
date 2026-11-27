@@ -92,14 +92,27 @@ export function createEvent(nameOrType, target, extras = {}) {
   let immediate = false;
   let phase = "target";
   let currentTarget = target;
-  const modifiers = extras.modifiers ?? { shift: false, control: false, alt: false, meta: false };
+  const modifiers =
+    extras.modifiers === undefined
+      ? { shift: false, control: false, alt: false, meta: false, capsLock: false, numLock: false }
+      : typeof extras.modifiers === "object" && extras.modifiers !== null
+        ? {
+            shift: false,
+            control: false,
+            alt: false,
+            meta: false,
+            capsLock: false,
+            numLock: false,
+            ...extras.modifiers,
+          }
+        : extras.modifiers;
   const snapshot = (current, dispatchPhase, isActive) => ({
     type,
     timestamp: extras.timestamp ?? 0,
     target,
-    modifiers,
     ...eventFamilyDefaults(type, extras),
     ...extras,
+    modifiers,
     phase: dispatchPhase,
     currentTarget: current,
     get defaultPrevented() {
@@ -229,6 +242,22 @@ export function createHost({
   const scrollCommands = [];
   const windowCommands = [];
   const regionWindows = new WeakMap();
+  const regionCapsLock = new WeakMap();
+  const capsLockStateFor = region => {
+    if (!regionCapsLock.has(region)) {
+      regionCapsLock.set(region, { value: false, subscribers: new Set() });
+    }
+    return regionCapsLock.get(region);
+  };
+  let activationTokenHandler = null;
+  const activationTokenRequests = [];
+  const grantStack = [];
+  const takeActiveGrant = () => {
+    const top = grantStack[grantStack.length - 1];
+    if (!top || top.consumed) return null;
+    top.consumed = true;
+    return top;
+  };
   const windowStateFor = region => {
     if (!regionWindows.has(region)) {
       regionWindows.set(region, {
@@ -456,23 +485,35 @@ export function createHost({
       const carrier = createEvent(nameOrType, target, extras);
       const { spec } = carrier;
       const bubbles = extras.bubbles ?? spec.bubbles;
-      for (let i = path.length - 1; i >= 1 && !carrier.isStopped(); i -= 1) {
-        carrier.invoke(path[i].callbacks[spec.captureProp], "capture", path[i]);
-      }
-      if (!carrier.isStopped()) {
-        for (const name of Object.keys(target.callbacks)) {
-          if (name === spec.prop || name === spec.captureProp) {
-            carrier.invoke(target.callbacks[name], "target", target);
-            if (carrier.isImmediate()) break;
+      const targetRegion = nodeRegions.get(target);
+      const isGrantedGesture =
+        extras.grant !== false &&
+        (spec.type === "pointerdown" ||
+          spec.type === "click" ||
+          (spec.type === "keydown" && !extras.repeat && !extras.isComposing));
+      const grant = isGrantedGesture ? { region: targetRegion, consumed: false } : null;
+      grantStack.push(grant);
+      try {
+        for (let i = path.length - 1; i >= 1 && !carrier.isStopped(); i -= 1) {
+          carrier.invoke(path[i].callbacks[spec.captureProp], "capture", path[i]);
+        }
+        if (!carrier.isStopped()) {
+          for (const name of Object.keys(target.callbacks)) {
+            if (name === spec.prop || name === spec.captureProp) {
+              carrier.invoke(target.callbacks[name], "target", target);
+              if (carrier.isImmediate()) break;
+            }
           }
         }
-      }
-      if (bubbles) {
-        for (let i = 1; i < path.length && !carrier.isStopped(); i += 1) {
-          carrier.invoke(path[i].callbacks[spec.prop], "bubble", path[i]);
+        if (bubbles) {
+          for (let i = 1; i < path.length && !carrier.isStopped(); i += 1) {
+            carrier.invoke(path[i].callbacks[spec.prop], "bubble", path[i]);
+          }
         }
+        return carrier.event;
+      } finally {
+        grantStack.pop();
       }
-      return carrier.event;
     });
 
   const moveFocus = (node, reveal = false, cause = "programmatic") =>
@@ -911,6 +952,15 @@ export function createHost({
         win.stateSubscribers.delete(callback);
       };
     },
+    getCapsLock: () => capsLockStateFor(region).value,
+    subscribeCapsLock: callback => {
+      assertActiveHost("subscribeCapsLock");
+      const state = capsLockStateFor(region);
+      state.subscribers.add(callback);
+      return () => {
+        state.subscribers.delete(callback);
+      };
+    },
     onCloseRequest: callback => {
       assertActiveHost("onCloseRequest");
       const win = windowStateFor(region);
@@ -1071,7 +1121,12 @@ export function createHost({
   };
   const attachSurface = surface => {
     if (surface.closing || surface.root || !present(surface)) return;
-    const region = { stylesheets: new Map(), installs: [], scenes: [] };
+    const region = {
+      stylesheets: new Map(),
+      installs: [],
+      scenes: [],
+      lock: Boolean(surface.lock),
+    };
     for (const { key, css } of shellStylesheets.values()) installRegionStylesheet(region, key, css);
     surface.region = region;
     surface.root = makeNode("root", region);
@@ -1124,6 +1179,52 @@ export function createHost({
 
   const shell = {
     getSessionGeneration: () => generation,
+    requestActivationToken(options) {
+      if (options !== undefined) {
+        if (typeof options !== "object" || options === null || Array.isArray(options)) {
+          throw new TypeError("requestActivationToken options must be a plain object");
+        }
+        const proto = Object.getPrototypeOf(options);
+        if (proto !== null && proto !== Object.prototype) {
+          throw new TypeError("requestActivationToken options must be a plain object");
+        }
+        if (options.appId !== undefined) {
+          if (typeof options.appId !== "string") {
+            throw new TypeError("requestActivationToken appId must be a string");
+          }
+          for (let i = 0; i < options.appId.length; i += 1) {
+            const code = options.appId.charCodeAt(i);
+            if (code <= 0x1f || (code >= 0x7f && code <= 0x9f)) {
+              throw new TypeError(
+                "requestActivationToken appId must not contain control characters",
+              );
+            }
+          }
+          if (Buffer.byteLength(options.appId, "utf8") > 256) {
+            throw new TypeError("requestActivationToken appId exceeds 256 UTF-8 bytes");
+          }
+        }
+      }
+      const grant = takeActiveGrant();
+      const appId = options?.appId && options.appId.length > 0 ? options.appId : undefined;
+      if (
+        stopping ||
+        inCleanup ||
+        cleanupJobsPending ||
+        lockState === "pending" ||
+        lockState === "locked" ||
+        lockState === "unlocking" ||
+        !grant ||
+        grant.region?.lock
+      ) {
+        return Promise.resolve(null);
+      }
+      activationTokenRequests.push({ appId, region: grant.region });
+      if (activationTokenHandler) {
+        return Promise.resolve(activationTokenHandler({ appId, region: grant.region }));
+      }
+      return Promise.resolve(null);
+    },
     ...(shellReducedMotion
       ? {
           getReducedMotion: host.getReducedMotion,
@@ -1540,6 +1641,23 @@ export function createHost({
     reducedMotionSubscribers,
     emitBackgroundBlurSupported,
     backgroundBlurSubscribers,
+    emitCapsLock: (next, name = "main") => {
+      const region = name === "main" ? primary : surfaces.get(name)?.region;
+      if (!region) throw new ReferenceError(`no live region named ${name}`);
+      const state = capsLockStateFor(region);
+      const value = Boolean(next);
+      if (state.value === value) return;
+      state.value = value;
+      runTurn(() => {
+        for (const cb of [...state.subscribers]) {
+          if (state.subscribers.has(cb)) cb(value);
+        }
+      }, false);
+    },
+    activationTokenRequests,
+    setActivationTokenHandler: handler => {
+      activationTokenHandler = handler;
+    },
     monitorSubscribers,
     popupDone,
     windowClose,

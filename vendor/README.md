@@ -577,3 +577,15 @@ Adds an inherited CSS custom property `--zgui-scrollbar-mode: classic | overlay`
 Regression gate:
 
     bun run test:vendor zgui-layout zgui-paint zgui-input zgui-runtime && bun test --isolate tests/preview/overlay-scrollbar.test.mjs
+
+## Gesture-bound external `xdg_activation_v1` token export & Caps Lock state (`#101`)
+
+`zgui-platform` adds unforgeable `InputGrant` (`seat_generation`, `SurfaceId`, `InputSerial`), `ActivationTokenSerial` / `ActivationTokenSerials`, `Debug`-redacting `ActivationToken`, single-destroy `PendingActivationToken`, `SurfaceEvent::InputGrant` / `SurfaceEvent::CancelPressGrants`, `Surface::request_activation_token`, and `WakeReason::ActivationToken`.
+
+`zgui-platform-wayland` tracks monotonic seat generations on `Seat` / `SeatLink`, emits `SurfaceEvent::InputGrant` ahead of physical pointer button presses, non-cancelled touch downs, and non-repeat key presses (`wl_touch.cancel` emits `SurfaceEvent::CancelPressGrants`), replays `SurfaceEvent::ModifiersChanged` with latched lock keys when `refresh_lock_keyboard_focus` focuses a newly claimed `SessionLock` surface, and adds `ActivationLink` (`driver/activation.rs`) to commit `get_activation_token + set_surface + set_serial + optional set_app_id + commit` synchronously on `conn` (never calling internal `xdg_activation_v1.activate`, rejecting dismissed popups and lock surfaces, and destroying `XdgActivationTokenV1` once across `done`, cancellation, or shutdown, verified by `vendor/zgui-platform-wayland/tests/activation_token_protocol.rs`).
+
+`zgui-view` and `zgui-runtime` carry queue-time `lock_keys` (`Modifiers`) and single-consumption `GestureGrant` on `EventCx` (`synthesize_with_context` preserves both across `activateNow()` press activation), pair `SurfaceEvent::InputGrant` with queued physical presses in `Window::queue`, revoke press grants on `CancelPressGrants`, pointer leave/cancel, scrollbar press, drag events, and `reconcile_inert`, and keep `EventCx::modifiers` held-only so native keyboard shortcuts remain unaffected while `Caps_Lock` / `Num_Lock` are latched.
+
+Regression gate:
+
+    bun run test:vendor zgui-platform zgui-platform-wayland zgui-runtime && cargo test -p ui-bridge --offline && cargo test -p zgui-host session_host::activation_tests --offline

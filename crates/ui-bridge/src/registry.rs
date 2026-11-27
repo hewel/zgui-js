@@ -19,6 +19,11 @@ impl Handle {
     pub fn token(self) -> u64 {
         self.token
     }
+
+    /// The native document this handle belongs to.
+    pub fn document(self) -> DocumentId {
+        self.document
+    }
 }
 
 /// An owned bridge-tree record for Rust-side inspection, not a JavaScript value.

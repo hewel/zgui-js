@@ -13,6 +13,8 @@ export interface NativeEvent {
     readonly control: boolean;
     readonly alt: boolean;
     readonly meta: boolean;
+    readonly capsLock: boolean;
+    readonly numLock: boolean;
   };
   preventDefault(): void;
   stopPropagation(): void;

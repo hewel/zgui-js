@@ -13,7 +13,7 @@ mod listener;
 mod sink;
 mod view;
 
-pub use crate::event::cx::{EventControl, EventCx};
+pub use crate::event::cx::{EventControl, EventCx, GestureGrant, RawGestureGrant};
 pub use crate::event::handler::handler;
 pub use crate::event::listener::{ListenerRegistration, erase};
 pub use crate::event::sink::{DiscardCommands, EventSink};

@@ -29,12 +29,13 @@ use wayland_client::protocol::wl_region::WlRegion;
 use wayland_client::protocol::wl_surface::WlSurface;
 use zgui_geom::{Css, CssPx, Device, DevicePx, Edges, Point, Rect, Size};
 use zgui_platform::{
-    BlurRegion, BlurShape, CursorStyle, Decorations, FullscreenMode, GpuSurface, InputRegion, LayerPlacement,
-    PlatformError, PopupPlacement, PresentPacing, PresentationTiming, Surface, SurfaceId,
-    TextInput, Unsupported,
+    BlurRegion, BlurShape, CursorStyle, Decorations, FullscreenMode, GpuSurface, InputGrant,
+    InputRegion, LayerPlacement, PendingActivationToken, PlatformError, PopupPlacement,
+    PresentPacing, PresentationTiming, Surface, SurfaceId, TextInput, Unsupported,
 };
 
 use crate::driver::WaylandState;
+use crate::driver::activation::ActivationLink;
 use crate::driver::background_effect::{ActiveBlurProtocol, BackgroundEffectLink};
 use crate::frame::Presentation;
 use crate::surface::region::{BlurBeforePresent, CommittedBlurSnapshot, OwnedBlurRegion};
@@ -69,6 +70,8 @@ pub struct Links {
     pub selections: Arc<crate::clipboard::Selections>,
     /// Shared handle to the live `ext_background_effect_manager_v1` global and blur capability.
     pub background_effect: Arc<BackgroundEffectLink>,
+    /// Shared handle for synchronous external `xdg_activation_v1` token requests.
+    pub activation: ActivationLink,
 }
 
 impl core::fmt::Debug for Links {
@@ -188,6 +191,8 @@ pub struct WaylandSurface {
     selections: Arc<crate::clipboard::Selections>,
     /// Shared handle to the live `ext_background_effect_manager_v1` global and blur capability.
     background_effect: Arc<BackgroundEffectLink>,
+    /// Shared handle for synchronous external `xdg_activation_v1` token requests.
+    activation: ActivationLink,
 }
 
 impl WaylandSurface {
@@ -228,6 +233,7 @@ impl WaylandSurface {
             seat: links.seat,
             selections: links.selections,
             background_effect: links.background_effect,
+            activation: links.activation,
         })
     }
 
@@ -1418,6 +1424,27 @@ impl Surface for WaylandSurface {
 
     fn cancel_outbound_drag(&self) {
         self.selections.cancel_outbound_drag(self.id);
+    }
+
+    fn request_activation_token(
+        &self,
+        grant: InputGrant,
+        app_id: Option<&str>,
+    ) -> Option<PendingActivationToken> {
+        if !self.active() || self.popup_dismissed() || self.role.lock().is_some() {
+            return None;
+        }
+        let pending = self.activation.request_token(
+            &self.conn,
+            &self.qh,
+            self.wl_surface(),
+            &self.seat,
+            self.id,
+            grant,
+            app_id,
+        )?;
+        self.ping.ping();
+        Some(pending)
     }
 
     fn set_text_input(&self, state: Option<TextInput>) {

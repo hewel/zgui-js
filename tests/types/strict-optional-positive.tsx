@@ -6,9 +6,13 @@ import {
   createSpring,
   createStore,
   cx,
+  getCapsLock,
   renderApp,
+  requestActivationToken,
+  useCapsLock,
 } from "@hewel/zgui";
 import type {
+  ActivationTokenOptions,
   BlurRegion,
   BlurRegionNodes,
   NativeNode,
@@ -57,6 +61,8 @@ const maybeBlurNodes: BlurRegionNodes = { nodes: [], minOpacity: undefined };
 const maybeBlurAsRegion: BlurRegion = maybeBlurNodes;
 void maybeBlurAsRegion;
 const maybeInsets: SurfaceInsets | undefined = { top: undefined, left: 24 };
+const maybeActivationOpts: ActivationTokenOptions = { appId: undefined };
+void [maybeActivationOpts, requestActivationToken, getCapsLock, useCapsLock];
 
 export function strictOptionalProbe(root: NativeNode) {
   const router = createRouter([{ path: "/", component: () => <text>home</text> }]);

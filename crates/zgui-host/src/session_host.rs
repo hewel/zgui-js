@@ -198,9 +198,15 @@ impl SessionSurface for RuntimeSurface<'_> {
         self.runtime.windows().iter().find(|window| window.document_id() == document).map(|window| window.surface().id())
     }
     fn bind(&mut self, document: DocumentId, session: &Rc<Session>) {
+        session.set_app_timers(self.runtime.app_timers());
         let window = self.runtime.windows_mut().iter_mut().find(|window| window.document_id() == document)
             .expect("pure preflight cannot destroy its native window");
         let surface_id = window.surface().id();
+        let caps_lock = {
+            use zgui::reactive::prelude::GetUntracked;
+            window.handle().lock_keys().get_untracked().caps_lock()
+        };
+        session.seed_surface_caps_lock(surface_id, caps_lock);
         if let Some(native) = self.cx.surface(surface_id) {
             session.register_platform_surface(surface_id, &native);
         }
@@ -476,6 +482,17 @@ impl SessionHost {
         }
     }
 
+    /// Route a completed external `xdg_activation_v1` token to the owning session.
+    pub(crate) fn resolve_activation_token(
+        &self,
+        serial: zgui::platform::ActivationTokenSerial,
+        token: zgui::platform::ActivationToken,
+    ) {
+        if let Some(session) = self.sessions().find(|session| session.owns_activation_token(serial)) {
+            session.finish_activation_token(serial, token);
+        }
+    }
+
     /// Deliver a platform event, retiring shell windows before their primary window closes.
     pub(crate) fn surface_event(
         &mut self,
@@ -555,6 +572,13 @@ impl SessionHost {
             }
             SurfaceEvent::Pointer { action, event: ptr, .. } => {
                 let pos = ptr.position;
+                if self
+                    .sessions()
+                    .any(|s| s.bridge_for_surface(surface).is_some() && s.dnd.active_count() > 0)
+                    && let Some(window) = runtime.windows_mut().iter_mut().find(|w| w.surface().id() == surface)
+                {
+                    window.clear_press_grants();
+                }
                 runtime.surface_event(cx, surface, event);
                 let sessions: Vec<Rc<Session>> = self.sessions().cloned().collect();
                 if let Some(window) = runtime.windows().iter().find(|w| w.surface().id() == surface) {
@@ -563,6 +587,18 @@ impl SessionHost {
                             session.reconcile_inert_drags()?;
                             session.handle_internal_drag_pointer(window, surface, action, pos)?;
                         }
+                    }
+                }
+            }
+            SurfaceEvent::ModifiersChanged(modifiers) => {
+                runtime.surface_event(cx, surface, event);
+                let caps_lock = modifiers.caps_lock();
+                let sessions: Vec<Rc<Session>> = self.sessions().cloned().collect();
+                for session in sessions {
+                    if session.sync_surface_caps_lock(surface, caps_lock)?
+                        && let Some(window) = runtime.windows_mut().iter_mut().find(|w| w.surface().id() == surface)
+                    {
+                        window.request_frame();
                     }
                 }
             }
@@ -1026,3 +1062,6 @@ mod tests;
 
 #[cfg(test)]
 mod overlay_tests;
+
+#[cfg(test)]
+mod activation_tests;

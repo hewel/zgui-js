@@ -77,6 +77,21 @@ impl EventSink for HostSink<'_> {
     fn synthesize(&mut self, node: NodeId, event: EventKind) {
         self.host.issue(Command::Synthesize { node, event });
     }
+
+    fn synthesize_with_context(
+        &mut self,
+        node: NodeId,
+        event: EventKind,
+        lock_keys: Modifiers,
+        grant: Option<zgui_view::GestureGrant>,
+    ) {
+        self.host.issue(Command::SynthesizeWithContext {
+            node,
+            event,
+            lock_keys,
+            grant,
+        });
+    }
 }
 
 /// Where a listener's body is found, given the identity the document handed back.
@@ -117,6 +132,17 @@ pub fn run(
     )
 }
 
+/// Extra per-dispatch metadata carried into [`EventCx`] alongside the vocabulary event.
+#[derive(Clone, Debug, Default)]
+pub struct DispatchContext {
+    /// Whether an IME composition was active on entry.
+    pub composing: bool,
+    /// Lock-key state (`CAPS_LOCK`, `NUM_LOCK`) snapshotted when the event was queued.
+    pub lock_keys: Modifiers,
+    /// Shared single-use physical gesture grant, if this dispatch is backed by a live press.
+    pub grant: Option<zgui_view::GestureGrant>,
+}
+
 /// Runs the listeners `steps` names, carrying whether an IME composition was active on entry.
 #[allow(clippy::too_many_arguments)]
 pub fn run_with_composing(
@@ -129,6 +155,37 @@ pub fn run_with_composing(
     modifiers: Modifiers,
     timestamp: Timestamp,
     composing: bool,
+    sink: &mut dyn EventSink,
+) -> Dispatched {
+    run_with_context(
+        handlers,
+        steps,
+        kind,
+        target,
+        payload,
+        samples,
+        modifiers,
+        timestamp,
+        DispatchContext {
+            composing,
+            ..DispatchContext::default()
+        },
+        sink,
+    )
+}
+
+/// Runs the listeners `steps` names with full [`DispatchContext`] metadata.
+#[allow(clippy::too_many_arguments)]
+pub fn run_with_context(
+    handlers: &dyn Handlers,
+    steps: &[zgui_input::Step],
+    kind: EventKind,
+    target: Option<zgui_dom::NodeKey>,
+    payload: &Payload,
+    samples: &[zgui_vocab::PointerSample],
+    modifiers: Modifiers,
+    timestamp: Timestamp,
+    context: DispatchContext,
     sink: &mut dyn EventSink,
 ) -> Dispatched {
     let Some(target) = target else {
@@ -167,7 +224,9 @@ pub fn run_with_composing(
             kind, target, current, step.phase, modifiers, timestamp, payload, &control, sink,
         )
         .with_samples(samples)
-        .with_composing(composing);
+        .with_composing(context.composing)
+        .with_lock_keys(context.lock_keys)
+        .with_gesture_grant(context.grant.clone());
         handler(&mut cx);
         called += 1;
     }
@@ -191,8 +250,32 @@ pub fn run_discarding(
     modifiers: Modifiers,
     timestamp: Timestamp,
 ) -> Dispatched {
+    run_discarding_with_context(
+        handlers,
+        steps,
+        kind,
+        target,
+        payload,
+        modifiers,
+        timestamp,
+        DispatchContext::default(),
+    )
+}
+
+/// Runs a synthesized dispatch whose commands are discarded, carrying [`DispatchContext`] metadata.
+#[allow(clippy::too_many_arguments)]
+pub fn run_discarding_with_context(
+    handlers: &dyn Handlers,
+    steps: &[zgui_input::Step],
+    kind: EventKind,
+    target: Option<zgui_dom::NodeKey>,
+    payload: &Payload,
+    modifiers: Modifiers,
+    timestamp: Timestamp,
+    context: DispatchContext,
+) -> Dispatched {
     let mut sink = DiscardCommands;
-    run(
+    run_with_context(
         handlers,
         steps,
         kind,
@@ -201,6 +284,7 @@ pub fn run_discarding(
         &[],
         modifiers,
         timestamp,
+        context,
         &mut sink,
     )
 }

@@ -418,6 +418,9 @@ impl AppHandler for Application {
                     self.native.wake(cx, WakeReason::ClipboardRead { serial, result });
                 }
             }
+            WakeReason::ActivationToken { serial, token } => {
+                self.host.resolve_activation_token(serial, token);
+            }
             WakeReason::MonitorsChanged => {
                 self.native.wake(cx, WakeReason::MonitorsChanged);
                 self.monitors = shell::Monitor::snapshot(self.native.monitors());

@@ -300,6 +300,7 @@ impl WaylandState {
             shell: std::sync::Arc::clone(&self.xdg),
             selections: std::sync::Arc::clone(self.clipboard.selections()),
             background_effect: std::sync::Arc::clone(&self.background_effect),
+            activation: self.activation_link.clone(),
             waker: std::sync::Arc::clone(&self.live.waker)
                 as std::sync::Arc<dyn zgui_platform::Waker>,
         }

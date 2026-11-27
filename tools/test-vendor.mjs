@@ -99,6 +99,8 @@ const SUITES = [
       "dnd_source_protocol",
       "--test",
       "background_effect_protocol",
+      "--test",
+      "activation_token_protocol",
     ],
   },
   {

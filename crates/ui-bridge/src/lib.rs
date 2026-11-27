@@ -82,6 +82,7 @@ enum DispatchPayload<'a> {
     LiveEvent {
         id: u64,
         snapshot: &'a mut Option<events::EventSnapshot>,
+        grant: Option<zgui::view::GestureGrant>,
         apply: &'a mut dyn FnMut(events::DispatchControl),
     },
     QueuedEvent(DeferredEvent),
@@ -104,12 +105,12 @@ impl<'a> BridgeCallback<'a> {
     /// Dispatches the notification into JavaScript inside the active structural turn.
     pub fn call<'js>(self, ctx: &Ctx<'js>) -> rquickjs::Result<()> {
         match self.payload {
-            DispatchPayload::LiveEvent { id, snapshot, apply } => {
+            DispatchPayload::LiveEvent { id, snapshot, grant, apply } => {
                 let snapshot = snapshot.take().expect("live event snapshot consumed twice");
-                self.bridge.invoke_snapshot(ctx, id, snapshot, Some(apply))
+                self.bridge.invoke_snapshot(ctx, id, snapshot, grant, Some(apply))
             }
             DispatchPayload::QueuedEvent(event) => {
-                self.bridge.invoke_snapshot(ctx, event.id, event.snapshot, None)
+                self.bridge.invoke_snapshot(ctx, event.id, event.snapshot, None, None)
             }
             DispatchPayload::Geometry { id, slot, scale } => {
                 let value = slot.take().expect("geometry observation consumed twice");
@@ -178,7 +179,7 @@ impl<'turn> BridgeTurn<'turn> {
         };
         match item {
             QueuedNotification::Event(event) => {
-                self.bridge.invoke_snapshot(ctx, event.id, event.snapshot, None)?;
+                self.bridge.invoke_snapshot(ctx, event.id, event.snapshot, None, None)?;
             }
             QueuedNotification::Geometry { id, value, scale } => {
                 self.bridge.invoke_geometry_inner(ctx, id, value, scale)?;
@@ -290,6 +291,48 @@ impl Drop for GestureGuard<'_> {
     }
 }
 
+type GrantStackEntry = Option<(zgui::view::DocumentId, zgui::view::GestureGrant)>;
+
+struct GrantScopeGuard<'a> {
+    bridge: &'a UiBridge,
+    group: Option<Rc<BridgeGroup>>,
+}
+
+impl<'a> GrantScopeGuard<'a> {
+    fn enter(bridge: &'a UiBridge, entry: GrantStackEntry) -> Self {
+        let group = bridge.group.borrow().upgrade();
+        bridge.grant_stack.borrow_mut().push(entry.clone());
+        if let Some(group) = &group {
+            group.grant_stack.borrow_mut().push(entry);
+        }
+        Self { bridge, group }
+    }
+}
+
+impl Drop for GrantScopeGuard<'_> {
+    fn drop(&mut self) {
+        self.bridge.grant_stack.borrow_mut().pop();
+        if let Some(group) = &self.group {
+            group.grant_stack.borrow_mut().pop();
+        }
+    }
+}
+
+fn take_grant_from_stack(
+    stack: &[GrantStackEntry],
+) -> Option<(zgui::view::DocumentId, zgui::platform::InputGrant)> {
+    let (doc, grant) = stack.last()?.as_ref()?;
+    let raw = grant.take()?;
+    Some((
+        *doc,
+        zgui::platform::InputGrant::new(
+            raw.seat_generation,
+            zgui::platform::SurfaceId::new(raw.surface_raw),
+            zgui::platform::InputSerial::new(raw.serial_raw),
+        ),
+    ))
+}
+
 /// The structural-turn boundary shared by every mount region in one JS engine.
 ///
 /// The group owns its member bridges. Dispose and drop it before destroying the
@@ -299,6 +342,7 @@ pub struct BridgeGroup {
     bridges: RefCell<Vec<Rc<UiBridge>>>,
     active: Cell<bool>,
     user_gesture_depth: Cell<u32>,
+    grant_stack: RefCell<Vec<GrantStackEntry>>,
 }
 
 impl fmt::Debug for BridgeGroup {
@@ -313,6 +357,15 @@ impl BridgeGroup {
 
     /// Whether a user-initiated input event handler is currently executing in this group.
     pub fn in_user_gesture(&self) -> bool { self.user_gesture_depth.get() > 0 }
+
+    /// Consumes the innermost unmasked physical gesture grant, if any live gesture handler is
+    /// currently on top of the active dispatch stack.
+    #[must_use]
+    pub fn take_active_gesture_grant(
+        &self,
+    ) -> Option<(zgui::view::DocumentId, zgui::platform::InputGrant)> {
+        take_grant_from_stack(&self.grant_stack.borrow())
+    }
 
     /// Joins a live standalone bridge to this group's turns.
     ///
@@ -362,6 +415,7 @@ impl BridgeGroup {
 
     /// Revokes all current regions and releases their persistent JavaScript roots.
     pub fn dispose(&self) {
+        self.grant_stack.borrow_mut().clear();
         for bridge in &*self.bridges.borrow() { bridge.dispose(); }
     }
 
@@ -423,6 +477,9 @@ pub struct UiBridge {
     background_blur_supported: Cell<bool>,
     background_blur_subscribers: RefCell<HashMap<u64, Persistent<rquickjs::Function<'static>>>>,
     next_background_blur_id: Cell<u64>,
+    caps_lock: Cell<bool>,
+    caps_lock_subscribers: RefCell<HashMap<u64, Persistent<rquickjs::Function<'static>>>>,
+    next_caps_lock_id: Cell<u64>,
     style_diagnostics: RefCell<Vec<StyleDiagnostic>>,
     stylesheets: RefCell<Vec<(String, String)>>,
     stylesheet_install_deferred: Cell<bool>,
@@ -441,6 +498,7 @@ pub struct UiBridge {
     group: RefCell<Weak<BridgeGroup>>,
     active: Cell<bool>,
     user_gesture_depth: Cell<u32>,
+    grant_stack: RefCell<Vec<GrantStackEntry>>,
     stopping: Cell<bool>,
     disposed: Cell<bool>,
 }
@@ -488,6 +546,9 @@ impl UiBridge {
                 background_blur_supported: Cell::new(options.background_blur_supported),
                 background_blur_subscribers: RefCell::new(HashMap::new()),
                 next_background_blur_id: Cell::new(1),
+                caps_lock: Cell::new(false),
+                caps_lock_subscribers: RefCell::new(HashMap::new()),
+                next_caps_lock_id: Cell::new(1),
                 style_diagnostics: RefCell::new(Vec::new()),
                 stylesheets: RefCell::new(Vec::new()),
                 stylesheet_install_deferred: Cell::new(options.defer_stylesheet_install),
@@ -506,6 +567,7 @@ impl UiBridge {
                 group: RefCell::new(Weak::new()),
                 active: Cell::new(false),
                 user_gesture_depth: Cell::new(0),
+                grant_stack: RefCell::new(Vec::new()),
                 stopping: Cell::new(false),
                 disposed: Cell::new(false),
             }
@@ -774,6 +836,7 @@ impl UiBridge {
             return;
         }
         let mut snapshot_slot = Some(events::EventSnapshot::capture(event));
+        let grant = event.gesture_grant().cloned();
         let mut native_slot = Some(event);
         let mut apply = |control: events::DispatchControl| {
             if let Some(native) = native_slot.take() {
@@ -783,6 +846,7 @@ impl UiBridge {
         let payload = DispatchPayload::LiveEvent {
             id,
             snapshot: &mut snapshot_slot,
+            grant,
             apply: &mut apply,
         };
         if !self.try_dispatch_synchronously(payload)
@@ -810,6 +874,7 @@ impl UiBridge {
         let prepared = self.geometry.borrow_mut().prepare(ctx, id, value, scale)?;
         let Some((callback, measurement)) = prepared else { return Ok(()); };
         let object = measurement.into_js(ctx)?;
+        let _grant_scope = GrantScopeGuard::enter(self, None);
         callback.restore(ctx)?.call::<_, Value>((object,)).map(|_| ())
     }
 
@@ -819,6 +884,7 @@ impl UiBridge {
             // Earlier callbacks may cancel a lease or mutate the tree before this one runs.
             let change = self.geometry.borrow_mut().prepare_attachment(id, &self.registry.borrow());
             if let Some((callback, attached)) = change {
+                let _grant_scope = GrantScopeGuard::enter(self, None);
                 callback.restore(ctx)?.call::<_, Value>((attached,))?;
             }
         }
@@ -830,6 +896,7 @@ impl UiBridge {
         ctx: &Ctx<'js>,
         id: u64,
         snapshot: events::EventSnapshot,
+        grant: Option<zgui::view::GestureGrant>,
         apply: Option<&mut dyn FnMut(events::DispatchControl)>,
     ) -> rquickjs::Result<()> {
         self.require_turn(ctx)?;
@@ -840,13 +907,18 @@ impl UiBridge {
         let Some(callback) = callback else { return Ok(()); };
         if dismiss {
             if let Some(reason) = snapshot.dismiss_reason() {
+                let _grant_scope = GrantScopeGuard::enter(self, None);
                 callback.restore(ctx)?.call::<_, Value>((reason.name(),))?;
             }
             return Ok(());
         }
-        let (target, current) = {
+        let (document, target, current) = {
             let registry = self.registry.borrow();
-            (registry.event_handle(snapshot.target), registry.event_handle(snapshot.current_target))
+            (
+                registry.root().document(),
+                registry.event_handle(snapshot.target),
+                registry.event_handle(snapshot.current_target),
+            )
         };
         let (Some(target), Some(current)) = (target, current) else { return Ok(()); };
         let target = self.wrap(ctx, target)?;
@@ -854,6 +926,7 @@ impl UiBridge {
         let (object, control) = snapshot.to_js(ctx, &target, &current)?;
         let callback = callback.restore(ctx)?;
         let _gesture = snapshot.is_user_gesture().then(|| self.enter_user_gesture());
+        let _grant_scope = GrantScopeGuard::enter(self, grant.map(|cell| (document, cell)));
         if let Some(apply) = apply {
             let result = callback.call::<_, Value>((object,));
             apply(control);
@@ -862,6 +935,17 @@ impl UiBridge {
             drop(control);
             callback.call::<_, Value>((object,)).map(|_| ())
         }
+    }
+
+    /// Consumes the innermost unmasked physical gesture grant on this bridge (or its group).
+    #[must_use]
+    pub fn take_active_gesture_grant(
+        &self,
+    ) -> Option<(zgui::view::DocumentId, zgui::platform::InputGrant)> {
+        if let Some(group) = self.group.borrow().upgrade() {
+            return group.take_active_gesture_grant();
+        }
+        take_grant_from_stack(&self.grant_stack.borrow())
     }
 
     /// Whether a user-initiated input event handler is currently executing on this bridge.
@@ -899,6 +983,8 @@ impl UiBridge {
         self.canvas_scenes.borrow_mut().clear();
         self.reduced_motion_subscribers.borrow_mut().clear();
         self.background_blur_subscribers.borrow_mut().clear();
+        self.caps_lock_subscribers.borrow_mut().clear();
+        self.grant_stack.borrow_mut().clear();
         self.wrappers.borrow_mut().clear();
         self.properties.borrow_mut().clear();
     }
@@ -911,6 +997,17 @@ impl UiBridge {
     /// Sets the initial background-blur capability before JS mounts (no subscriber dispatch).
     pub fn seed_background_blur_supported(&self, value: bool) {
         self.background_blur_supported.set(value);
+    }
+
+    /// Sets the initial Caps Lock state before JS mounts (no subscriber dispatch).
+    pub fn seed_caps_lock(&self, value: bool) {
+        self.caps_lock.set(value);
+    }
+
+    /// Current Caps Lock state last reported to this mount region's surface.
+    #[must_use]
+    pub fn caps_lock(&self) -> bool {
+        self.caps_lock.get()
     }
 
     /// Updates the bridge's live reduced-motion preference and notifies JS subscribers.
@@ -958,6 +1055,33 @@ impl UiBridge {
     #[must_use]
     pub fn background_blur_subscriber_count(&self) -> usize {
         self.background_blur_subscribers.borrow().len()
+    }
+
+    /// Updates the bridge's live Caps Lock state and notifies JS subscribers in registration order.
+    ///
+    /// # Errors
+    ///
+    /// Propagates any JavaScript exception thrown by a subscriber callback.
+    pub fn set_caps_lock(&self, ctx: &Ctx<'_>, value: bool) -> rquickjs::Result<bool> {
+        if self.caps_lock.get() == value {
+            return Ok(false);
+        }
+        self.caps_lock.set(value);
+        let mut ids: Vec<u64> = self.caps_lock_subscribers.borrow().keys().copied().collect();
+        ids.sort_unstable();
+        for id in ids {
+            let callback = self.caps_lock_subscribers.borrow().get(&id).cloned();
+            if let Some(callback) = callback {
+                callback.restore(ctx)?.call::<_, ()>((value,))?;
+            }
+        }
+        Ok(true)
+    }
+
+    /// Number of currently active Caps Lock subscribers on this bridge.
+    #[must_use]
+    pub fn caps_lock_subscriber_count(&self) -> usize {
+        self.caps_lock_subscribers.borrow().len()
     }
 
     fn require_turn(&self, ctx: &Ctx<'_>) -> rquickjs::Result<()> {
@@ -1172,6 +1296,29 @@ impl UiBridge {
             rquickjs::Function::new(ctx, move || {
                 if let Some(bridge) = unsub_weak.upgrade() {
                     bridge.background_blur_subscribers.borrow_mut().remove(&id);
+                }
+            })
+        }))?;
+        let weak = Rc::downgrade(self);
+        api.set("getCapsLock", Func::from(move |ctx: Ctx<'js>| -> rquickjs::Result<bool> {
+            Ok(owner(&weak, &ctx)?.caps_lock.get())
+        }))?;
+        let weak = Rc::downgrade(self);
+        api.set("subscribeCapsLock", Func::from(move |ctx: Ctx<'js>, callback: rquickjs::Function<'js>| {
+            let bridge = owner(&weak, &ctx)?;
+            bridge.require_creation(&ctx)?;
+            let mut subs = bridge.caps_lock_subscribers.borrow_mut();
+            if subs.len() >= 128 {
+                return Err(Exception::throw_range(&ctx, "caps-lock subscription limit reached"));
+            }
+            let id = bridge.next_caps_lock_id.get();
+            bridge.next_caps_lock_id.set(id.checked_add(1).ok_or_else(|| Exception::throw_range(&ctx, "caps-lock subscriber IDs exhausted"))?);
+            subs.insert(id, Persistent::save(&ctx, callback));
+            drop(subs);
+            let unsub_weak = weak.clone();
+            rquickjs::Function::new(ctx, move || {
+                if let Some(bridge) = unsub_weak.upgrade() {
+                    bridge.caps_lock_subscribers.borrow_mut().remove(&id);
                 }
             })
         }))?;

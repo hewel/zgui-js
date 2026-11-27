@@ -112,7 +112,7 @@ pub use crate::dom::{
 };
 pub use crate::event::{
     AnyEvent, DiscardCommands, EventControl, EventCx, EventSink, EventType, EventView,
-    ListenerRegistration, erase, events, handler,
+    GestureGrant, ListenerRegistration, RawGestureGrant, erase, events, handler,
 };
 pub use crate::flow::{
     Await, Dynamic, ErrorBoundary, ErrorBoundaryState, For, ForProps, ForPropsBuilder, Portal,

@@ -181,6 +181,7 @@ pub(crate) struct EventSnapshot {
     timestamp: Timestamp,
     phase: Phase,
     modifiers: Modifiers,
+    locks: Modifiers,
     composing: bool,
     payload: Payload,
     coalesced: Vec<PointerSample>,
@@ -189,9 +190,15 @@ pub(crate) struct EventSnapshot {
 impl EventSnapshot {
     pub(crate) fn capture(event: &EventCx<'_>) -> Self {
         Self {
-            target: event.target, current_target: event.current, kind: event.kind,
-            timestamp: event.timestamp, phase: event.phase, modifiers: event.modifiers,
-            composing: event.is_composing(), payload: event.payload().clone(),
+            target: event.target,
+            current_target: event.current,
+            kind: event.kind,
+            timestamp: event.timestamp,
+            phase: event.phase,
+            modifiers: event.modifiers,
+            locks: event.lock_keys(),
+            composing: event.is_composing(),
+            payload: event.payload().clone(),
             coalesced: event.coalesced().to_vec(),
         }
     }
@@ -224,6 +231,8 @@ impl EventSnapshot {
         modifiers.set("control", self.modifiers.control())?;
         modifiers.set("alt", self.modifiers.alt())?;
         modifiers.set("meta", self.modifiers.meta())?;
+        modifiers.set("capsLock", self.locks.caps_lock())?;
+        modifiers.set("numLock", self.locks.num_lock())?;
         object.set("modifiers", modifiers)?;
         match &self.payload {
             Payload::Pointer(pointer) => {
