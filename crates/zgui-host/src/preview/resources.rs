@@ -4,7 +4,8 @@ use crate::package::Package;
 use super::Error;
 
 pub(crate) fn configure(app: zgui::runtime::App, package: &Package) -> zgui::runtime::App {
-    app.with_image_policy(zgui::runtime::ImagePolicy::package_only(package.image_assets()))
+    app.with_application_id(package.manifest.id.as_str())
+        .with_image_policy(zgui::runtime::ImagePolicy::package_only(package.image_assets()))
 }
 
 /// Pending allowances are exact current request IDs, never sources or stale generations.

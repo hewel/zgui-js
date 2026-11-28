@@ -32,8 +32,10 @@ import type {
   WindowState,
 } from "./types.js";
 
-export type LayerPlacement = Required<Omit<LayerSurfacePlacement, "output" | "margin">> &
-  Pick<LayerSurfacePlacement, "output"> & {
+export type LayerPlacement = Required<
+  Omit<LayerSurfacePlacement, "output" | "namespace" | "margin">
+> &
+  Pick<LayerSurfacePlacement, "output" | "namespace"> & {
     readonly margin: Readonly<Record<LayerAnchor, number>>;
   };
 export type PopupPlacement = Required<PopupSurfacePlacement> &

@@ -91,9 +91,13 @@ text, or document factories. It refuses mutation while open or permanently close
 `zgui-platform-wayland/` is also copied from the same pinned revision, with its
 LICENSE and NOTICE and standalone manifest. Four focused protocol changes apply:
 
-- The layer namespace comes from `SurfaceAttributes.application_id`, retaining
-  `zgui` only when no application ID was supplied. This permits compositor rules
-  to identify a native layer surface.
+- The layer namespace resolves via `LayerPlacement::effective_namespace`:
+  `LayerPlacement.namespace` when non-empty, else `SurfaceAttributes.application_id`,
+  retaining `zgui` only when neither was supplied (`OffscreenSurface::layer_namespace`
+  exposes the same resolution for headless preview evidence). This permits compositor
+  layer rules to distinguish multiple shell surfaces within one application. Live
+  `reconfigure_layer` rejects changes to `namespace` as well as `monitor`, requiring
+  the surface to reopen.
 - Explicit zero width/height remains zero in `set_size`, as required to stretch
   between opposite anchors. Positive dimensions retain upstream rounding.
 - One initial roundtrip completes bound output descriptions before

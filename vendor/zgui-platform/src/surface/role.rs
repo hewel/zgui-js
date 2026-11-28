@@ -297,6 +297,9 @@ pub struct LayerPlacement {
 }
 
 impl LayerPlacement {
+    /// The namespace a layer surface uses when neither it nor the application names one.
+    pub const DEFAULT_NAMESPACE: &str = "zgui";
+
     /// A surface on `layer`, anchored to no edge, that avoids the room other surfaces reserve.
     pub fn new(layer: Layer) -> Self {
         Self {
@@ -339,6 +342,18 @@ impl LayerPlacement {
     pub fn with_namespace(mut self, namespace: impl Into<String>) -> Self {
         self.namespace = Some(namespace.into());
         self
+    }
+
+    /// The namespace the surface uses: its own when non-empty, else `application_id` when
+    /// non-empty, else [`LayerPlacement::DEFAULT_NAMESPACE`].
+    #[must_use]
+    pub fn effective_namespace<'a>(&'a self, application_id: Option<&'a str>) -> &'a str {
+        let named = |name: &&str| !name.is_empty();
+        self.namespace
+            .as_deref()
+            .filter(named)
+            .or(application_id.filter(named))
+            .unwrap_or(Self::DEFAULT_NAMESPACE)
     }
 }
 
@@ -582,6 +597,40 @@ mod tests {
         assert_eq!(first.exclusive_zone, Some(ExclusiveZone::Ignore));
         assert!(!first.is_empty());
         assert!(LayerPatch::new().is_empty());
+    }
+
+    #[test]
+    fn effective_namespace_prefers_layer_then_application_then_default() {
+        let named = LayerPlacement::default().with_namespace("z-shell-bar");
+        assert_eq!(
+            named.effective_namespace(Some("dev.example.Shell")),
+            "z-shell-bar"
+        );
+        assert_eq!(named.effective_namespace(None), "z-shell-bar");
+
+        let unnamed = LayerPlacement::default();
+        assert_eq!(
+            unnamed.effective_namespace(Some("dev.example.Shell")),
+            "dev.example.Shell"
+        );
+        assert_eq!(
+            unnamed.effective_namespace(Some("")),
+            LayerPlacement::DEFAULT_NAMESPACE
+        );
+        assert_eq!(
+            unnamed.effective_namespace(None),
+            LayerPlacement::DEFAULT_NAMESPACE
+        );
+
+        let empty = LayerPlacement::default().with_namespace("");
+        assert_eq!(
+            empty.effective_namespace(Some("dev.example.Shell")),
+            "dev.example.Shell"
+        );
+        assert_eq!(
+            empty.effective_namespace(None),
+            LayerPlacement::DEFAULT_NAMESPACE
+        );
     }
 
     #[test]

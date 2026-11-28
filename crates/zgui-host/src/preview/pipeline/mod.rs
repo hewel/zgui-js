@@ -846,6 +846,9 @@ impl ObserverInner {
                 "decorations": crate::session::window_control::decorations_str(surface.decorations()),
                 "moveDragCount": surface.move_drag_count(),
             }));
+            if let Some(layer) = serialize_layer_metadata(surface) {
+                extra.insert("layer".into(), layer);
+            }
             blur_revision = surface.blur_revision();
             let blur = surface.blur_region();
             extra.insert("blurRegion".into(), serialize_blur_region(&blur));
@@ -940,6 +943,64 @@ impl ObserverInner {
             self.context.graphics.replace(self.capture.metadata());
         }
     }
+}
+
+fn serialize_layer_metadata(surface: &OffscreenSurface) -> Option<Value> {
+    let attrs = surface.requested_attributes();
+    let zgui::platform::SurfaceRole::Layer(placement) = &attrs.role else {
+        return None;
+    };
+    let namespace = placement.effective_namespace(attrs.application_id.as_deref());
+    let layer = match placement.layer {
+        zgui::platform::Layer::Background => "background",
+        zgui::platform::Layer::Bottom => "bottom",
+        zgui::platform::Layer::Top => "top",
+        zgui::platform::Layer::Overlay => "overlay",
+        _ => "top",
+    };
+    let keyboard = match placement.keyboard {
+        zgui::platform::KeyboardInteractivity::None => "none",
+        zgui::platform::KeyboardInteractivity::OnDemand => "on-demand",
+        zgui::platform::KeyboardInteractivity::Exclusive => "exclusive",
+        _ => "none",
+    };
+    let exclusive_zone = match placement.exclusive_zone {
+        zgui::platform::ExclusiveZone::Ignore => json!(-1),
+        zgui::platform::ExclusiveZone::Avoid => json!(0),
+        zgui::platform::ExclusiveZone::Reserve(px) => json!(f64::from(px.0)),
+        _ => json!(0),
+    };
+    let output = match &placement.monitor {
+        Some(zgui::platform::MonitorTarget::Name(name)) => json!(name),
+        _ => Value::Null,
+    };
+    let mut anchor = Vec::with_capacity(4);
+    if placement.anchors.top {
+        anchor.push("top");
+    }
+    if placement.anchors.right {
+        anchor.push("right");
+    }
+    if placement.anchors.bottom {
+        anchor.push("bottom");
+    }
+    if placement.anchors.left {
+        anchor.push("left");
+    }
+    Some(json!({
+        "namespace": namespace,
+        "output": output,
+        "layer": layer,
+        "anchor": anchor,
+        "margin": {
+            "top": f64::from(placement.margin.top.0),
+            "right": f64::from(placement.margin.right.0),
+            "bottom": f64::from(placement.margin.bottom.0),
+            "left": f64::from(placement.margin.left.0),
+        },
+        "exclusiveZone": exclusive_zone,
+        "keyboard": keyboard,
+    }))
 }
 
 fn serialize_blur_region(region: &RecordedBlurRegion) -> Value {

@@ -51,6 +51,8 @@ export interface Monitor extends NativeViewport {
 export type LayerAnchor = "top" | "right" | "bottom" | "left";
 export interface LayerSurfacePlacement {
   readonly output?: string | undefined;
+  /** Wayland `zwlr_layer_shell_v1` namespace (1–256 UTF-8 bytes, no control characters; defaults to the package `application_id`). */
+  readonly namespace?: string | undefined;
   readonly layer?: "background" | "bottom" | "top" | "overlay";
   readonly anchor?: readonly LayerAnchor[];
   readonly width?: number;

@@ -535,6 +535,25 @@ impl OffscreenSurface {
         }
     }
 
+    /// The effective layer-shell namespace for a layer surface, resolving `placement.namespace`
+    /// with fallback to `application_id` and [`LayerPlacement::DEFAULT_NAMESPACE`], or `None` for
+    /// non-layer roles.
+    #[must_use]
+    pub fn layer_namespace(&self) -> Option<String> {
+        let attrs = self
+            .requested_attributes
+            .lock()
+            .expect("the attributes are not poisoned");
+        let SurfaceRole::Layer(placement) = &attrs.role else {
+            return None;
+        };
+        Some(
+            placement
+                .effective_namespace(attrs.application_id.as_deref())
+                .to_owned(),
+        )
+    }
+
     /// Where the pop-up was asked to sit, for a surface made as one.
     pub fn popup_placement(&self) -> Option<PopupPlacement> {
         match self.role() {
@@ -1040,6 +1059,7 @@ impl Surface for OffscreenSurface {
             return Err(Unsupported);
         };
         patch.apply_to(placement);
+        self.window_geometry_revision.fetch_add(1, Ordering::Release);
         self.layer_log
             .lock()
             .expect("the log is not poisoned")
@@ -1228,6 +1248,11 @@ impl Surface for OffscreenSurface {
             if old.monitor != placement.monitor {
                 return Err(PlatformError::Backend(
                     "moving a layer surface to another output requires reopening it".to_owned(),
+                ));
+            }
+            if old.namespace != placement.namespace {
+                return Err(PlatformError::Backend(
+                    "changing a layer surface's namespace requires reopening it".to_owned(),
                 ));
             }
             // A fixture has no compositor to assign stretched dimensions.

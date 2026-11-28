@@ -8,7 +8,7 @@ use zgui_geom::{Css, CssPx, Edges, Size};
 use zgui_platform::{ExclusiveZone, LayerPlacement, PlatformError, Unsupported};
 
 /// The namespace a layer surface is made under when neither it nor the application names one.
-pub const DEFAULT_NAMESPACE: &str = "zgui";
+pub const DEFAULT_NAMESPACE: &str = LayerPlacement::DEFAULT_NAMESPACE;
 
 /// Which layer of the desktop, in the shell's numbering.
 pub const fn layer(layer: zgui_platform::Layer) -> Layer {
@@ -78,13 +78,7 @@ pub fn size(size: Size<CssPx, Css>, anchors: Edges<bool>) -> (u32, u32) {
 ///
 /// An empty name counts as no name.
 pub fn namespace<'a>(placement: &'a LayerPlacement, application: Option<&'a str>) -> &'a str {
-    let named = |name: &&str| !name.is_empty();
-    placement
-        .namespace
-        .as_deref()
-        .filter(named)
-        .or(application.filter(named))
-        .unwrap_or(DEFAULT_NAMESPACE)
+    placement.effective_namespace(application)
 }
 
 /// Applies the placement fields shared by initial creation and live reconfiguration.
@@ -171,6 +165,11 @@ pub(crate) fn reconfigure(
     if current.monitor != next.monitor {
         return Err(PlatformError::Backend(
             "moving a layer surface to another output requires reopening it".to_owned(),
+        ));
+    }
+    if current.namespace != next.namespace {
+        return Err(PlatformError::Backend(
+            "changing a layer surface's namespace requires reopening it".to_owned(),
         ));
     }
     let version = version(surface);

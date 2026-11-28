@@ -113,6 +113,11 @@ fn live_layer_changes_input_regions_and_output_hotplug() {
         "(10, 16) below the first rectangle must pass through"
     );
     assert_eq!(server.output_binds, [FIRST, SECOND], "one layer on each named output");
+    assert_eq!(
+        server.layer_namespaces,
+        ["dev.example.Shell", "z-shell-bar"],
+        "unnamed layer falls back to application_id while explicit layer namespace overrides it"
+    );
 }
 
 struct SocketFile(std::path::PathBuf);
@@ -142,9 +147,13 @@ fn size(width: f32, height: f32) -> Size<CssPx, Css> {
     Size::new(CssPx(width), CssPx(height))
 }
 
-fn open(cx: &dyn PlatformCx, output: &str) -> Arc<dyn Surface> {
-    let mut attrs = SurfaceAttributes::default();
-    attrs.role = SurfaceRole::Layer(horizontal(output));
+fn open(cx: &dyn PlatformCx, output: &str, namespace: Option<&str>) -> Arc<dyn Surface> {
+    let mut placement = horizontal(output);
+    if let Some(ns) = namespace {
+        placement = placement.with_namespace(ns);
+    }
+    let mut attrs = SurfaceAttributes::default().with_application_id("dev.example.Shell");
+    attrs.role = SurfaceRole::Layer(placement);
     attrs.size = Some(size(0.0, 32.0));
     cx.create_surface(&attrs).expect("open a bar on a named output")
 }
@@ -157,7 +166,7 @@ impl AppHandler for Bar {
             Some("TEST-1"),
             "the initial output name must be available before opening the bar"
         );
-        self.primary = Some(open(cx, "TEST-1"));
+        self.primary = Some(open(cx, "TEST-1", None));
     }
 
     fn surface_event(&mut self, _cx: &dyn PlatformCx, id: SurfaceId, event: SurfaceEvent) {
@@ -188,6 +197,12 @@ impl AppHandler for Bar {
         primary.reconfigure_layer(&vertical, size(44.0, 0.0)).expect("flip to the right edge");
         primary.reconfigure_layer(&horizontal("TEST-1"), size(0.0, 32.0)).expect("flip back to the top edge");
         assert!(primary.reconfigure_layer(&horizontal("TEST-2"), size(0.0, 32.0)).is_err(), "an existing surface cannot move to another output");
+        assert!(
+            primary
+                .reconfigure_layer(&horizontal("TEST-1").with_namespace("changed"), size(0.0, 32.0))
+                .is_err(),
+            "an existing surface cannot change its layer namespace"
+        );
         primary.set_shell_input_region(&InputRegion::Rects(RECTANGLES.map(|[x, y, width, height]| InputRect { x, y, width, height }).to_vec())).expect("commit two hit rectangles");
         primary.set_shell_input_region(&InputRegion::Empty).expect("commit pointer passthrough");
         primary.set_shell_input_region(&InputRegion::Full).expect("restore compositor-default input");
@@ -207,7 +222,7 @@ impl AppHandler for Bar {
                     monitor.size.width.0, 1280.0,
                     "TEST-2 publishes its initial mode width"
                 );
-                self.second = Some(open(cx, "TEST-2").id());
+                self.second = Some(open(cx, "TEST-2", Some("z-shell-bar")).id());
             }
             (1, Some(monitor)) => {
                 assert_eq!(
@@ -270,6 +285,7 @@ struct Compositor {
     layer_commits: Vec<LayerState>,
     input_commits: Vec<Option<Vec<[i32; 4]>>>,
     output_binds: Vec<u32>,
+    layer_namespaces: Vec<String>,
 }
 
 impl Compositor {
@@ -284,6 +300,7 @@ impl Compositor {
             layer_commits: Vec::new(),
             input_commits: Vec::new(),
             output_binds: Vec::new(),
+            layer_namespaces: Vec::new(),
         }
     }
 
@@ -355,6 +372,12 @@ impl Compositor {
             }
             (Object::LayerShell, 0) => {
                 let Object::Output(global) = self.objects[&arg(2)] else { panic!("layer must be bound to the requested output"); };
+                let ns_len = arg(4) as usize;
+                assert!(ns_len >= 1, "Wayland string length includes NUL terminator");
+                let ns = std::str::from_utf8(&body[20..20 + ns_len - 1])
+                    .expect("valid UTF-8 layer namespace")
+                    .to_owned();
+                self.layer_namespaces.push(ns);
                 self.output_binds.push(global);
                 self.objects.insert(arg(0), Object::Layer(self.layers.len()));
                 self.layers.push(LayerObject {

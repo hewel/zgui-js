@@ -99,8 +99,11 @@ evidence (`*.frame.json`) also exposes the backend's recorded normalized
 frame-synchronous rounded/superellipse/clipped strip resolution and exact
 logical viewport mapping once `!window.blur_pending()` converges) and
 `windowGeometry` (`{ x, y, width, height }` in whole surface-local CSS pixels,
-capturing `PopupSurface` `geometryInsets` offsets and visual extent) from
-`OffscreenSurface` without synthesizing blurred pixels;
+capturing `PopupSurface` `geometryInsets` offsets and visual extent), and
+`layer` on `LayerSurface` captures (`{ namespace, output, layer, anchor, margin,
+exclusiveZone, keyboard }`, where `namespace` resolves `LayerPlacement.namespace`
+falling back to `application_id`) from `OffscreenSurface` without synthesizing
+blurred pixels;
 `renderer.compositorTransparencyValidated` remains `false`.
 
 The `blur-region.test.mjs` gate also enables `blurShapes` and checks exact squircle

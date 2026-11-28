@@ -1021,6 +1021,11 @@ impl Runtime {
                 "moving a layer surface to another output requires reopening it".to_owned(),
             ));
         }
+        if current.namespace != placement.namespace {
+            return Err(PlatformError::Backend(
+                "changing a layer surface's namespace requires reopening it".to_owned(),
+            ));
+        }
         if let Some(surface) = live.surface {
             let window = self.window_mut(surface).ok_or(PlatformError::NoSuchSurface)?;
             let previous = window.surface().size();

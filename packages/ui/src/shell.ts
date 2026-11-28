@@ -208,8 +208,10 @@ function normalizeInsets(insets: SurfaceInsets | undefined): Readonly<Record<Lay
 function placementOf(props: LayerSurfaceProps): LayerPlacement {
   const anchor = props.anchor === undefined ? noAnchors : [...props.anchor];
   const margin = props.margin;
+  const namespace = props.namespace;
   return {
     output: props.output,
+    ...(namespace !== undefined ? { namespace } : {}),
     layer: props.layer ?? "top",
     anchor,
     width: props.width ?? (anchor.includes("left") && anchor.includes("right") ? 0 : 1),
@@ -542,6 +544,7 @@ function mountManagedSurface(
 interface LayerRequest extends SurfaceRequest {
   readonly name: string;
   readonly output: string | undefined;
+  readonly namespace: string | undefined;
 }
 
 /** Own a named compositor surface without inserting a node in the parent region. */
@@ -561,13 +564,23 @@ export function LayerSurface(props: LayerSurfaceProps): null {
   createEffect(
     () => ({ name: props.name, placement: placementOf(props) }),
     ({ name, placement }) => {
-      if (current && current.name === name && current.output === placement.output) {
+      if (
+        current &&
+        current.name === name &&
+        current.output === placement.output &&
+        current.namespace === placement.namespace
+      ) {
         shell.updateLayer(current.id, placement);
         return;
       }
       close();
       const request = mountManagedSurface(owner, shell, name, props, { kind: "layer", placement });
-      current = { ...request, name, output: placement.output };
+      current = {
+        ...request,
+        name,
+        output: placement.output,
+        namespace: placement.namespace,
+      };
     },
   );
   return null;

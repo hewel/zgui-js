@@ -17,6 +17,7 @@ pub(crate) use window::ShellWindowSpec;
 use window::WantedWindow;
 
 pub(crate) const MAX_LAYERS: usize = 32;
+const MAX_LAYER_NAMESPACE_BYTES: usize = 256;
 const MAX_SUBSCRIPTIONS: usize = 64;
 const MAX_INPUT_RECTS: u32 = 256;
 const MAX_BLUR_RECTS: u32 = 256;
@@ -134,7 +135,7 @@ impl Monitor {
     }
 }
 
-/// Desired native configuration. The output of a live role cannot change.
+/// Desired native configuration. The output and namespace of a live role cannot change.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct LayerSpec {
     pub name: String,
@@ -582,6 +583,7 @@ impl Shell {
             let mut layers = shell.layers.borrow_mut();
             let layer = layers.get_mut(&id).ok_or_else(|| Exception::throw_reference(&ctx, "shell surface is no longer owned"))?;
             if layer.spec.placement.monitor != placement.monitor { return Err(Exception::throw_type(&ctx, "changing an output requires a new shell surface")); }
+            if layer.spec.placement.namespace != placement.namespace { return Err(Exception::throw_type(&ctx, "changing a layer namespace requires a new shell surface")); }
             if layer.spec.placement != placement || layer.spec.size != size {
                 layer.spec.placement = placement;
                 layer.spec.size = size;
@@ -841,6 +843,14 @@ fn placement<'js>(ctx: &Ctx<'js>, value: Value<'js>) -> rquickjs::Result<(LayerP
         }
         Some(name)
     };
+    let raw_namespace: Value = value.get("namespace")?;
+    let namespace = if raw_namespace.is_undefined() { None } else {
+        let ns = string(ctx, &raw_namespace, "namespace")?;
+        if ns.is_empty() || ns.len() > MAX_LAYER_NAMESPACE_BYTES || ns.chars().any(char::is_control) {
+            return Err(Exception::throw_type(ctx, "invalid layer namespace"));
+        }
+        Some(ns)
+    };
     let layer = match optional_string(ctx, &value, "layer", "top")?.as_str() {
         "background" => Layer::Background, "bottom" => Layer::Bottom, "top" => Layer::Top, "overlay" => Layer::Overlay,
         _ => return Err(Exception::throw_type(ctx, "invalid shell layer")),
@@ -891,6 +901,9 @@ fn placement<'js>(ctx: &Ctx<'js>, value: Value<'js>) -> rquickjs::Result<(LayerP
         .with_keyboard(keyboard);
     if let Some(name) = monitor {
         placement = placement.with_monitor(MonitorTarget::Name(name));
+    }
+    if let Some(ns) = namespace {
+        placement = placement.with_namespace(ns);
     }
     Ok((placement, Size::new(width, height)))
 }
@@ -1938,6 +1951,167 @@ mod tests {
             );
         });
 
+        shell.clear();
+    }
+
+    #[test]
+    fn layer_namespace_parses_validates_atomically_and_rejects_live_mutation() {
+        let runtime = rquickjs::Runtime::new().expect("create QuickJS runtime");
+        let context = rquickjs::Context::full(&runtime).expect("create QuickJS context");
+        let waker = zgui::platform::PlatformCx::waker(&zgui_platform_headless::Headless::new());
+        let shell = Shell::new(
+            ShellConfig {
+                generation: 1,
+                authority: Authority::Allowed,
+                window_authority: Authority::Allowed,
+                lock_authority: Authority::Denied,
+                lock_state: SessionLockState::Unlocked,
+                contract: ContractPolicy::Throw,
+            },
+            waker,
+        );
+        shell.activate();
+        context.with(|ctx| {
+            shell.install(&ctx).expect("install shell bridge");
+            ctx.eval::<(), _>(
+                r#"
+                const s = __zguiShell;
+                const defaultId = s.openLayer('default-layer', { width: 120, height: 32 }, () => {});
+                const undefId = s.openLayer('undef-layer', { namespace: undefined, width: 120, height: 32 }, () => {});
+                const barId = s.openLayer('bar', {
+                    output: 'DP-1',
+                    namespace: 'z-shell-bar',
+                    layer: 'top',
+                    anchor: ['top', 'left', 'right'],
+                    width: 0,
+                    height: 36,
+                    exclusiveZone: 36,
+                }, () => {});
+                const wallId = s.openLayer('wallpaper', {
+                    output: 'DP-1',
+                    namespace: 'z-shell-wallpaper',
+                    layer: 'background',
+                    anchor: ['top', 'right', 'bottom', 'left'],
+                    width: 0,
+                    height: 0,
+                    exclusiveZone: -1,
+                }, () => {});
+                const maxUtf8 = '界'.repeat(85); // 255 UTF-8 bytes
+                const maxAscii = 'a'.repeat(256); // 256 UTF-8 bytes
+                const utf8Id = s.openLayer('utf8-ns', { namespace: maxUtf8, width: 40, height: 40 }, () => {});
+                const asciiId = s.openLayer('ascii-ns', { namespace: maxAscii, width: 40, height: 40 }, () => {});
+
+                // In-place update with identical namespace succeeds and preserves blur.
+                s.setBlurRegion(barId, 'full');
+                s.updateLayer(barId, {
+                    output: 'DP-1',
+                    namespace: 'z-shell-bar',
+                    layer: 'overlay',
+                    anchor: ['top', 'left', 'right'],
+                    width: 0,
+                    height: 44,
+                    exclusiveZone: 44,
+                    keyboard: 'on-demand',
+                });
+                s.updateLayer(defaultId, { width: 140, height: 32 });
+
+                const expectTypeError = (fn, label, matchText) => {
+                    let caught = null;
+                    try { fn(); } catch (err) { caught = err; }
+                    if (!(caught instanceof TypeError)) {
+                        throw new Error(`${label}: expected TypeError, got ${caught}`);
+                    }
+                    if (matchText && !String(caught.message).includes(matchText)) {
+                        throw new Error(`${label}: expected '${matchText}' in '${caught.message}'`);
+                    }
+                };
+
+                // Reject invalid namespaces on both openLayer and updateLayer atomically.
+                for (const bad of [
+                    '',
+                    null,
+                    123,
+                    false,
+                    {},
+                    ['z-shell-bar'],
+                    'bad\0ns',
+                    'bad\nns',
+                    'bad\tns',
+                    'bad\x7fns',
+                    'bad\u0085ns',
+                    'a'.repeat(257),
+                    '界'.repeat(86), // 258 UTF-8 bytes
+                ]) {
+                    expectTypeError(
+                        () => s.openLayer('bad-open', { namespace: bad, width: 40, height: 40 }, () => {}),
+                        `openLayer(${JSON.stringify(bad)})`,
+                    );
+                    expectTypeError(
+                        () => s.updateLayer(barId, {
+                            output: 'DP-1',
+                            namespace: bad,
+                            layer: 'top',
+                            anchor: ['top', 'left', 'right'],
+                            width: 0,
+                            height: 44,
+                        }),
+                        `updateLayer(${JSON.stringify(bad)})`,
+                    );
+                }
+
+                // Reject live namespace changes on updateLayer (requiring surface recreation).
+                expectTypeError(
+                    () => s.updateLayer(defaultId, { namespace: 'z-shell-bar', width: 140, height: 32 }),
+                    'None -> Some',
+                    'changing a layer namespace requires a new shell surface',
+                );
+                expectTypeError(
+                    () => s.updateLayer(barId, {
+                        output: 'DP-1',
+                        layer: 'overlay',
+                        anchor: ['top', 'left', 'right'],
+                        width: 0,
+                        height: 44,
+                    }),
+                    'Some -> None',
+                    'changing a layer namespace requires a new shell surface',
+                );
+                expectTypeError(
+                    () => s.updateLayer(barId, {
+                        output: 'DP-1',
+                        namespace: 'z-shell-dock',
+                        layer: 'overlay',
+                        anchor: ['top', 'left', 'right'],
+                        width: 0,
+                        height: 44,
+                    }),
+                    'Some(a) -> Some(b)',
+                    'changing a layer namespace requires a new shell surface',
+                );
+
+                s.closeLayer(utf8Id);
+                s.closeLayer(asciiId);
+                s.closeLayer(undefId);
+                "#,
+            )
+            .expect("validate layer namespace contract");
+        });
+
+        let specs = shell.specs();
+        let by_name = |name: &str| {
+            specs
+                .values()
+                .find(|spec| spec.name == name)
+                .unwrap_or_else(|| panic!("missing layer spec {name}"))
+        };
+        assert_eq!(by_name("default-layer").placement.namespace, None);
+        assert_eq!(by_name("default-layer").size, Size::new(CssPx(140.0), CssPx(32.0)));
+        let bar = by_name("bar");
+        assert_eq!(bar.placement.namespace.as_deref(), Some("z-shell-bar"));
+        assert_eq!(bar.placement.layer, Layer::Overlay);
+        assert_eq!(bar.size, Size::new(CssPx(0.0), CssPx(44.0)));
+        assert_eq!(bar.blur, DesiredBlur::Full, "rejected updates must preserve blur and placement");
+        assert_eq!(by_name("wallpaper").placement.namespace.as_deref(), Some("z-shell-wallpaper"));
         shell.clear();
     }
 }

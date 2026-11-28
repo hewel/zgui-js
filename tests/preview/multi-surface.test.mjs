@@ -139,6 +139,7 @@ test("a pure-shell Session captures independent outputs and retains shared state
     assert.equal(tree.surface, surface);
     assert.equal(frame.generation, 1);
     assert.equal(frame.scale, scale);
+    assert.equal(frame.layer?.namespace, "dev.example.multi-surface");
     documents.set(file, frame.documentIdentity);
     const node = getNode(tree, "counter");
     assert.equal(node.text, text);
@@ -506,4 +507,195 @@ test("a shell effect releases its targeted sheet after the output retires", asyn
   );
   await checkTheme(out, "left", "installed", [255, 0, 0, 255]);
   await checkTheme(out, "left", "retired", [0, 0, 255, 255]);
+});
+
+test("LayerSurface exposes distinct explicit and fallback namespaces in preview metadata, recreates on reactive namespace change, and rejects invalid namespaces", async () => {
+  const nsSource = `
+    import { createSignal, LayerSurface, onCleanup, renderShell } from "@hewel/zgui";
+    import { onControlMessage } from "@hewel/zgui-services";
+    export const hostApiVersion = 1;
+    let mounts = 0;
+    let cleanups = 0;
+    function BarProbe() {
+      const instance = ++mounts;
+      onCleanup(() => { cleanups += 1; });
+      return <text testId="bar-probe">{\`mount=\${instance} cleanups=\${cleanups}\`}</text>;
+    }
+    export function mount() {
+      return renderShell(() => {
+        const [barNs, setBarNs] = createSignal<string | undefined>("z-shell-bar");
+        const [barLayer, setBarLayer] = createSignal<"top" | "overlay">("top");
+        onControlMessage(([cmd, arg]) => {
+          if (cmd === "promote-layer") setBarLayer("overlay");
+          if (cmd === "set-ns") setBarNs(arg);
+          if (cmd === "clear-ns") setBarNs(undefined);
+        });
+        return <>
+          <LayerSurface
+            name="wallpaper"
+            output="left"
+            namespace="z-shell-wallpaper"
+            layer="background"
+            anchor={["top", "right", "bottom", "left"]}
+            exclusiveZone={-1}
+          >
+            <box style="position: fixed; left: 0; top: 0; width: 100%; height: 100%; background: #102030;" />
+          </LayerSurface>
+          <LayerSurface
+            name="bar"
+            output="left"
+            namespace={barNs()}
+            layer={barLayer()}
+            anchor={["top", "left", "right"]}
+            height={32}
+            exclusiveZone={32}
+          >
+            <box style="position: fixed; left: 0; top: 0; width: 100%; height: 100%; background: #204060;" />
+            <BarProbe />
+          </LayerSurface>
+          <LayerSurface
+            name="fallback"
+            output="left"
+            layer="overlay"
+            anchor={["bottom", "left", "right"]}
+            height={24}
+          >
+            <box style="position: fixed; left: 0; top: 0; width: 100%; height: 100%; background: #305070;" />
+          </LayerSurface>
+        </>;
+      });
+    }
+  `;
+  const nsBundle = await buildFixtureApp(path.join(temp.dir, "ns-shell"), "zshell-ns", nsSource, {
+    rawSource: true,
+    capabilities: themeCapabilities,
+  });
+  const nsFixture = path.join(temp.dir, "ns-shell-fixture.json");
+  await writeJson(nsFixture, {
+    schemaVersion: 1,
+    id: "ns-shell",
+    services: { control: {} },
+    events: [],
+  });
+  const send = (id, ...args) => ({
+    id,
+    op: "service.emit",
+    channel: "control.message",
+    value: { args, reply: { text: "" } },
+  });
+
+  const { out, result } = await run(
+    "layer-namespaces",
+    [
+      monitors("plug-left", left),
+      capture("wall-init", "wallpaper"),
+      capture("bar-init", "bar"),
+      capture("fallback-init", "fallback"),
+      send("promote-bar", "promote-layer"),
+      { id: "settle-promote", op: "settle" },
+      capture("bar-promoted", "bar"),
+      send("retarget-ns", "set-ns", "z-shell-dock"),
+      { id: "settle-dock", op: "settle" },
+      capture("bar-dock", "bar"),
+      send("reset-ns", "clear-ns"),
+      { id: "settle-fallback", op: "settle" },
+      capture("bar-fallback", "bar"),
+    ],
+    {
+      bundle: nsBundle,
+      fixture: nsFixture,
+      requiredCapabilities: ["pixels", "surface.multiple", "services.fixtures", "tree.inspect"],
+      assertEmptyResources: true,
+    },
+  );
+  assert.equal(result.firstError, null);
+  assert.equal(result.teardown.clean, true);
+
+  const wallFrame = await readFrame(out, "surfaces/wallpaper/wall-init");
+  assert.deepEqual(wallFrame.layer, {
+    namespace: "z-shell-wallpaper",
+    output: "left",
+    layer: "background",
+    anchor: ["top", "right", "bottom", "left"],
+    margin: { top: 0, right: 0, bottom: 0, left: 0 },
+    exclusiveZone: -1,
+    keyboard: "none",
+  });
+
+  const barInitFrame = await readFrame(out, "surfaces/bar/bar-init");
+  const barInitTree = await readTree(out, "surfaces/bar/bar-init");
+  assert.equal(barInitFrame.layer.namespace, "z-shell-bar");
+  assert.equal(barInitFrame.layer.layer, "top");
+  assert.equal(getNode(barInitTree, "bar-probe").text, "mount=1 cleanups=0");
+
+  const fallbackFrame = await readFrame(out, "surfaces/fallback/fallback-init");
+  assert.equal(fallbackFrame.layer.namespace, "dev.example.zshell-ns");
+
+  // Changing `layer` while keeping `namespace` updates in place without recreating the document.
+  const barPromotedFrame = await readFrame(out, "surfaces/bar/bar-promoted");
+  const barPromotedTree = await readTree(out, "surfaces/bar/bar-promoted");
+  assert.equal(barPromotedFrame.documentIdentity, barInitFrame.documentIdentity);
+  assert.equal(barPromotedFrame.layer.namespace, "z-shell-bar");
+  assert.equal(barPromotedFrame.layer.layer, "overlay");
+  assert.equal(getNode(barPromotedTree, "bar-probe").text, "mount=1 cleanups=0");
+
+  // Changing `namespace` closes the old surface and opens a fresh native surface & Solid subtree.
+  const barDockFrame = await readFrame(out, "surfaces/bar/bar-dock");
+  const barDockTree = await readTree(out, "surfaces/bar/bar-dock");
+  assert.notEqual(barDockFrame.documentIdentity, barPromotedFrame.documentIdentity);
+  assert.equal(barDockFrame.layer.namespace, "z-shell-dock");
+  assert.equal(getNode(barDockTree, "bar-probe").text, "mount=2 cleanups=1");
+
+  // Clearing `namespace` back to undefined recreates again and falls back to `application_id`.
+  const barFallbackFrame = await readFrame(out, "surfaces/bar/bar-fallback");
+  const barFallbackTree = await readTree(out, "surfaces/bar/bar-fallback");
+  assert.notEqual(barFallbackFrame.documentIdentity, barDockFrame.documentIdentity);
+  assert.equal(barFallbackFrame.layer.namespace, "dev.example.zshell-ns");
+  assert.equal(getNode(barFallbackTree, "bar-probe").text, "mount=3 cleanups=2");
+
+  // Invalid empty namespace throws and retires the session cleanly with zero leaked resources.
+  // Reactive invalid empty namespace throws and releases all native surfaces and resources.
+  const { result: badResult } = await run(
+    "layer-invalid-namespace",
+    [monitors("plug-left", left), send("bad-ns", "set-ns", ""), { id: "settle-bad", op: "settle" }],
+    {
+      bundle: nsBundle,
+      fixture: nsFixture,
+      requiredCapabilities: ["pixels", "surface.multiple", "services.fixtures"],
+      allowFailure: true,
+    },
+  );
+  assert.equal(badResult.exitCode, 3);
+  assert.equal(badResult.firstError?.code, "E_JS_EXCEPTION");
+  assert.match(badResult.firstError?.message ?? "", /invalid layer namespace/);
+  assert.deepEqual(badResult.teardown.resources, emptyResources);
+
+  // Initial mount with NUL/control character in namespace fails immediately with clean teardown.
+  const badMountBundle = await buildFixtureApp(
+    path.join(temp.dir, "bad-mount-ns"),
+    "bad-mount-ns",
+    `
+      import { LayerSurface, renderShell } from "@hewel/zgui";
+      export const hostApiVersion = 1;
+      export function mount() {
+        return renderShell(() => (
+          <LayerSurface name="bad" output="left" namespace={"z-shell\\u0000bar"} />
+        ));
+      }
+    `,
+    { rawSource: true, capabilities: { shellSurfaces: true } },
+  );
+  const { result: badMount } = await run(
+    "layer-bad-mount-namespace",
+    [{ id: "s0", op: "settle" }],
+    {
+      bundle: badMountBundle,
+      allowFailure: true,
+    },
+  );
+  assert.equal(badMount.exitCode, 3);
+  assert.equal(badMount.firstError?.code, "E_JS_EXCEPTION");
+  assert.match(badMount.firstError?.message ?? "", /invalid layer namespace/);
+  assert.equal(badMount.teardown.clean, true);
+  assert.deepEqual(badMount.teardown.resources, emptyResources);
 });

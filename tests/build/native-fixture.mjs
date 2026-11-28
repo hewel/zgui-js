@@ -195,6 +195,20 @@ let nextCanvasToken = 0;
 let nextSessionGeneration = 1;
 let nextLockRequestId = 1;
 
+function validateLayerNamespace(namespace) {
+  if (namespace === undefined) return;
+  if (typeof namespace !== "string") throw new TypeError("namespace must be a string");
+  if (namespace.length === 0 || Buffer.byteLength(namespace, "utf8") > 256) {
+    throw new TypeError("invalid layer namespace");
+  }
+  for (let i = 0; i < namespace.length; i += 1) {
+    const code = namespace.charCodeAt(i);
+    if (code <= 0x1f || (code >= 0x7f && code <= 0x9f)) {
+      throw new TypeError("invalid layer namespace");
+    }
+  }
+}
+
 export function createHost({
   strictStyles = false,
   reducedMotion = false,
@@ -1360,6 +1374,7 @@ export function createHost({
       requireShell();
       if (name === "main" || !/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$/.test(name))
         throw new TypeError("invalid or reserved shell surface name");
+      validateLayerNamespace(placement.namespace);
       if (
         [
           ...layerIds.values(),
@@ -1385,10 +1400,13 @@ export function createHost({
     },
     updateLayer(id, placement) {
       assertActiveHost("updateLayer");
+      validateLayerNamespace(placement.namespace);
       const surface = layerIds.get(id);
       if (!surface || surface.closing) throw new ReferenceError("closed shell surface");
       if (surface.placement.output !== placement.output)
         throw new TypeError("changing an output requires a new shell surface");
+      if (surface.placement.namespace !== placement.namespace)
+        throw new TypeError("changing a layer namespace requires a new shell surface");
       surface.placement = structuredClone(placement);
       shellLog.push({ op: "update", id, placement: surface.placement });
     },

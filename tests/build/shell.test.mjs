@@ -1130,3 +1130,91 @@ test("mount entry points retain host preferences until the last mount is dispose
   assert.equal(h.reducedMotionSubscribers.size, 0);
   assert.equal(h.backgroundBlurSubscribers.size, 0);
 });
+
+test("LayerSurface forwards optional namespace, updates in place when unchanged, and recreates on namespace change", async t => {
+  const { harness, mod, stop } = await mounted(t, {
+    monitors: [desk],
+    source: `
+      import { LayerSurface, createSignal, getTextContent, onCleanup, renderShell } from "@hewel/zgui";
+      import type { NativeNode } from "@hewel/zgui";
+      const [barNs, setBarNs] = createSignal<string | undefined>("z-shell-bar");
+      const [barHeight, setBarHeight] = createSignal(36);
+      export { setBarNs, setBarHeight };
+      export const read = (node: NativeNode) => getTextContent(node);
+      export let barCleanups = 0;
+      function BarBody() {
+        onCleanup(() => { barCleanups += 1; });
+        return <text testId="bar-label">{String(barNs() ?? "default")}:{barHeight()}</text>;
+      }
+      export function mount() {
+        return renderShell(() => <>
+          <LayerSurface name="wallpaper" output="DP-1" namespace="z-shell-wallpaper" layer="background" exclusiveZone={-1}>
+            <text testId="wall-label">wallpaper</text>
+          </LayerSurface>
+          <LayerSurface name="bar" output="DP-1" namespace={barNs()} height={barHeight()} exclusiveZone={36}>
+            <BarBody />
+          </LayerSurface>
+          <LayerSurface name="osd" output="DP-1">
+            <text testId="osd-label">osd</text>
+          </LayerSurface>
+        </>);
+      }
+    `,
+  });
+
+  const wall = harness.surfaces.get("wallpaper");
+  const bar1 = harness.surfaces.get("bar");
+  const osd = harness.surfaces.get("osd");
+  const wallNode = harness.byTestId("wall-label");
+  const barNode1 = harness.byTestId("bar-label");
+  assert.equal(wall.placement.namespace, "z-shell-wallpaper");
+  assert.equal(bar1.placement.namespace, "z-shell-bar");
+  assert.equal("namespace" in osd.placement, false);
+  assert.equal(textOf(harness, "bar-label"), "z-shell-bar:36");
+
+  // Same namespace -> in-place updateLayer without detaching subtree.
+  harness.runTurn(() => mod.setBarHeight(44));
+  harness.flush();
+  assert.equal(harness.surfaces.get("bar"), bar1);
+  assert.equal(harness.byTestId("bar-label"), barNode1);
+  assert.equal(bar1.placement.height, 44);
+  assert.equal(bar1.placement.namespace, "z-shell-bar");
+  assert.equal(mod.barCleanups, 0);
+
+  // Reactive namespace change -> closes old surface and recreates with fresh subtree; siblings untouched.
+  harness.runTurn(() => mod.setBarNs("z-shell-dock"));
+  harness.flush();
+  const bar2 = harness.surfaces.get("bar");
+  const barNode2 = harness.byTestId("bar-label");
+  assert.notEqual(bar2.id, bar1.id);
+  assert.equal(bar2.placement.namespace, "z-shell-dock");
+  assert.notEqual(barNode2, barNode1);
+  assert.throws(() => harness.runTurn(() => mod.read(barNode1)), /stale detached/);
+  assert.equal(mod.barCleanups, 1);
+  assert.equal(harness.surfaces.get("wallpaper"), wall);
+  assert.equal(harness.byTestId("wall-label"), wallNode);
+
+  // Clearing namespace back to undefined also recreates cleanly.
+  harness.runTurn(() => mod.setBarNs(undefined));
+  harness.flush();
+  const bar3 = harness.surfaces.get("bar");
+  assert.notEqual(bar3.id, bar2.id);
+  assert.equal("namespace" in bar3.placement, false);
+  assert.equal(textOf(harness, "bar-label"), "default:44");
+  assert.equal(mod.barCleanups, 2);
+
+  // Direct bridge rejects invalid namespaces and live namespace changes.
+  for (const bad of ["", "bad\0ns", "bad\nns", "a".repeat(257), 42]) {
+    assert.throws(
+      () => harness.shell.openLayer("bad", { namespace: bad }, () => {}),
+      /TypeError|invalid layer namespace|namespace must be a string/,
+    );
+  }
+  assert.throws(
+    () => harness.shell.updateLayer(bar3.id, { ...bar3.placement, namespace: "z-shell-bar" }),
+    /changing a layer namespace requires a new shell surface/,
+  );
+
+  stop();
+  assert.equal(harness.surfaces.size, 0);
+});

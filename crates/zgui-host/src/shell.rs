@@ -63,6 +63,9 @@ impl LayerConfig {
 
     fn validate(&self) -> Result<()> {
         if self.namespace.is_empty() || self.monitor.is_empty() { return Err("layer namespace and monitor must be nonempty".into()); }
+        if self.namespace.len() > 256 || self.namespace.chars().any(char::is_control) {
+            return Err("layer namespace must be 1..=256 UTF-8 bytes without control characters".into());
+        }
         let edges = self.edges()?;
         if self.width == 0 && !(edges.left && edges.right) { return Err("zero layer width requires left and right anchors".into()); }
         if self.height == 0 && !(edges.top && edges.bottom) { return Err("zero layer height requires top and bottom anchors".into()); }
@@ -90,7 +93,8 @@ impl LayerConfig {
                 .with_margin(Edges::new(CssPx(f32::from(self.margins.top)), CssPx(f32::from(self.margins.right)), CssPx(f32::from(self.margins.bottom)), CssPx(f32::from(self.margins.left))))
                 .with_exclusive_zone(exclusive_zone)
                 .with_keyboard(keyboard)
-                .with_monitor(MonitorTarget::Name(self.monitor.clone())),
+                .with_monitor(MonitorTarget::Name(self.monitor.clone()))
+                .with_namespace(self.namespace.clone()),
         );
         attributes.size = Some(Size::new(CssPx(f32::from(self.width)), CssPx(f32::from(self.height))));
         attributes.transparent = self.transparent;
@@ -203,5 +207,19 @@ mod tests {
         invalid = config();
         invalid.height = 0;
         assert!(invalid.validate().unwrap_err().to_string().contains("zero layer height"));
+        for bad_ns in ["", "bad\0ns", "bad\nns", &"a".repeat(257)] {
+            invalid = config();
+            invalid.namespace = bad_ns.to_owned();
+            assert!(invalid.validate().is_err(), "expected invalid namespace {bad_ns:?} to fail");
+        }
+        let mut valid = config();
+        valid.namespace = "z-shell-bar".into();
+        valid.validate().expect("valid namespace");
+        let mut attrs = SurfaceAttributes::default();
+        valid.configure(&mut attrs).expect("configure layer attributes");
+        let SurfaceRole::Layer(placement) = attrs.role else {
+            panic!("expected SurfaceRole::Layer");
+        };
+        assert_eq!(placement.namespace.as_deref(), Some("z-shell-bar"));
     }
 }
