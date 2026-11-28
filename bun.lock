@@ -161,7 +161,7 @@
     },
     "packages/build": {
       "name": "@hewel/zgui-build",
-      "version": "0.1.3",
+      "version": "0.1.4",
       "dependencies": {
         "@solidjs/compiler": "2.0.1",
         "lightningcss": "1.33.0",
@@ -176,7 +176,7 @@
     },
     "packages/cli": {
       "name": "@hewel/zgui-cli",
-      "version": "0.1.3",
+      "version": "0.1.4",
       "bin": {
         "zgui-js": "./src/cli.ts",
       },
@@ -192,7 +192,7 @@
     },
     "packages/create-zgui-js": {
       "name": "create-zgui-js",
-      "version": "0.1.3",
+      "version": "0.1.4",
       "bin": {
         "create-zgui-js": "./src/cli.ts",
       },
@@ -205,15 +205,15 @@
     },
     "packages/host-linux-arm64": {
       "name": "@hewel/zgui-host-linux-arm64",
-      "version": "0.1.3",
+      "version": "0.1.4",
     },
     "packages/host-linux-x64": {
       "name": "@hewel/zgui-host-linux-x64",
-      "version": "0.1.3",
+      "version": "0.1.4",
     },
     "packages/services": {
       "name": "@hewel/zgui-services",
-      "version": "0.1.3",
+      "version": "0.1.4",
       "dependencies": {
         "@hewel/zgui": "workspace:*",
         "solid-js": "2.0.1",
@@ -221,7 +221,7 @@
     },
     "packages/ui": {
       "name": "@hewel/zgui",
-      "version": "0.1.3",
+      "version": "0.1.4",
       "dependencies": {
         "@solidjs/signals": "2.0.1",
         "@solidjs/universal": "2.0.1",

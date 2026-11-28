@@ -7,6 +7,36 @@ packages version in lockstep using [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.1.4] - 2026-11-28
+
+### Added
+
+- Add optional `namespace` passthrough on `<LayerSurface>` (`LayerSurfacePlacement` /
+  `LayerSurfaceProps`) in `@hewel/zgui` through `zgui-host` (`openLayer`, `updateLayer`, and
+  `--layer-config`) to Wayland `zwlr_layer_shell_v1.get_layer_surface` (falling back to
+  `application_id`), recreating the shell surface on reactive `namespace` changes and exposing
+  `frame.layer` metadata (including effective `namespace`) in headless preview `*.frame.json`.
+- Vendor `zgui-render-wgpu` and add Linux Vulkan DMA-BUF zero-copy `FrameStreamHandle` binding on
+  `<Image>`/`<image>` (RGBA8, BGRA8, and GPU-converted NV12 with memfd/Fixture software fallback)
+  plus opt-in `SCM_RIGHTS` frame submission and GPU-completion release credits over Unix sockets.
+- Add capability-gated `systemFiles` service (`lstat`, paginated ICU4X-collated `readDir`,
+  streaming file/trash jobs with interactive `onConflict`, volume discovery, Freedesktop thumbnail
+  `ImageHandle` lookup, and `openExternal`), Wayland `Copy | Move` and directory/outbound file DnD,
+  `Breadcrumb`, and headless `createSelectionModel` / `createMarqueeSelection` primitives.
+- Upgrade per-app grant store to schema v2 (`listGrants`, `revokeGrant`, `clearGrants`), add
+  `Calendar` and `DatePicker` components, add single-instance Activation forwarding with inbound
+  Wayland `XDG_ACTIVATION_TOKEN` redemption (`getInitialActivation`, `onActivation`), bridge
+  Jiff/ICU4X timezone/locale/collation APIs and `URL`/`URLSearchParams`/`TextEncoder`/`TextDecoder`
+  globals, and add variable-height `VirtualList`, `AlertDialog`, `Table`, and `DataTable`.
+
+### Fixed
+
+- Harden Wave 4 host, service, and UI contracts: preserve explicit `--host-root` working directory
+  in `zgui-js dev`, verify primary `appId` greeting before single-instance Activation handoff,
+  enforce runtime user-authorization provenance on `persistSystemGrant`, deliver confined
+  `ev.systemEntries` on external drops, wire native `ariaSort` and scoped `Table` selectors, and
+  reseal `preview/baselines/counter` metadata.
+
 ## [0.1.3] - 2026-11-27
 
 ### Added
@@ -118,7 +148,8 @@ All 6 public packages publish in lockstep at `0.1.0`:
   Rust/vendor verification, `ldd`/glibc audit, isolated clean-runner installation verification,
   idempotent fail-closed SRI publishing, and npm Trusted Publishing (OIDC `--provenance`).
 
-[Unreleased]: https://github.com/hewel/zgui-js/compare/v0.1.3...HEAD
+[Unreleased]: https://github.com/hewel/zgui-js/compare/v0.1.4...HEAD
+[0.1.4]: https://github.com/hewel/zgui-js/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/hewel/zgui-js/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/hewel/zgui-js/compare/v0.1.0...v0.1.2
 [0.1.0]: https://github.com/hewel/zgui-js/releases/tag/v0.1.0
